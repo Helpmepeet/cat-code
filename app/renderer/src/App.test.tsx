@@ -360,8 +360,8 @@ test('P4-24: the active session pane renders the multi-line composer + transcrip
   )
   // P4-24: the scaffold <h1>Transcript</h1> heading is dropped (full-bleed).
   expect(html).not.toContain('Transcript</h1>')
-  // Idle (inputEnabled) session shows no activity indicator / Stop control.
-  expect(html).not.toContain('■ Stop')
+  // Idle (inputEnabled) session mounts no activity indicator at all.
+  expect(html).not.toContain('Working')
   // P4-24: the raw-SDKMessage inspector is hidden by default (opt-in dev flag),
   // absent under `bun test`. With the Permissions <details> box now a chip, a
   // clean idle pane has NO disclosure box at all.
@@ -874,7 +874,7 @@ test('P4-24: the composer bar forwards the REAL active account + model override'
   expect(html).toContain('gpt-5.6-terra')
 })
 
-test('P4-18c: a generating session (ready + input disabled) shows the activity indicator + Stop', () => {
+test('P4-18c: a generating session (ready + input disabled) shows the activity indicator', () => {
   const html = renderToStaticMarkup(
     <SessionPane
       accountsSnapshot={null}
@@ -935,8 +935,12 @@ test('P4-18c: a generating session (ready + input disabled) shows the activity i
     />,
   )
 
-  expect(html).toContain('■ Stop') // interrupt control wired to app.abort
   expect(html).toContain('Working') // derived verb (empty transcript tail)
+  // The Stop button was removed; Escape (composer keydown) is the interrupt.
+  expect(html).not.toContain('■ Stop')
+  // No fill and no seam on the row: it reads as a byline over the pane, not a
+  // band between the transcript and the composer.
+  expect(html).not.toContain('gap-2.5 border-b border-shell-seam')
 })
 
 // ── P4-18c activity helpers ─────────────────────────────────────────────────

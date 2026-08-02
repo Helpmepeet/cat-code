@@ -3629,8 +3629,9 @@ export function SessionPane({
           return
       }
     }
-    // No typeahead open — Escape interrupts an in-flight turn (the keybinding
-    // for the Stop control; mirrors the TUI Ctrl+C/Esc cancel).
+    // No typeahead open — Escape interrupts an in-flight turn. Since the
+    // activity row dropped its Stop button this is the ONLY interrupt path in
+    // the pane, so it must stay wired; mirrors the TUI Ctrl+C/Esc cancel.
     if (event.key === 'Escape' && generating) {
       event.preventDefault()
       stopTurn()
@@ -3847,7 +3848,6 @@ export function SessionPane({
           elapsedMs={elapsedMs}
           liveTokens={liveTokens}
           paused={paused}
-          onStop={stopTurn}
           stopError={stopError}
         />
       ) : null}
@@ -4102,12 +4102,16 @@ const SHOW_TOKENS_AFTER_MS = 30_000
 
 /**
  * P4-18c activity indicator (`Chat.jsx` SpinnerWithVerb): pulse dots + verb +
- * active target + elapsed clock + optional per-turn token byline + a Stop
- * control wired to the real `app.abort`. Paused (a pending permission request)
- * tints amber and reads "Waiting for approval". The token byline is the
- * renderer-side `displayedResponseLength / 4` estimate (`selectLiveTokenEstimate`),
- * gated on `elapsed > 30s && tokens > 0` like the engine — an estimate, never a
- * mocked exact count.
+ * active target + elapsed clock + optional per-turn token byline. Paused (a
+ * pending permission request) tints amber and reads "Waiting for approval". The
+ * token byline is the renderer-side `displayedResponseLength / 4` estimate
+ * (`selectLiveTokenEstimate`), gated on `elapsed > 30s && tokens > 0` like the
+ * engine — an estimate, never a mocked exact count.
+ *
+ * No fill and no seam: the row floats on the pane background so it reads as a
+ * byline over the conversation rather than a band separating it from the
+ * composer. Interrupting the turn is Escape (handled on the composer, not
+ * here); `stopError` stays so a failed interrupt is never silent.
  */
 function ActivityIndicator({
   verb,
@@ -4115,7 +4119,6 @@ function ActivityIndicator({
   elapsedMs,
   liveTokens,
   paused,
-  onStop,
   stopError,
 }: {
   verb: string
@@ -4123,14 +4126,13 @@ function ActivityIndicator({
   elapsedMs: number
   liveTokens: number
   paused: boolean
-  onStop: () => void
   stopError: string | null
 }) {
   const tone = paused ? 'text-tone-warn' : 'text-accent'
   const dot = paused ? 'bg-tone-warn' : 'bg-accent'
   const showTokens = liveTokens > 0 && elapsedMs > SHOW_TOKENS_AFTER_MS
   return (
-    <div className="flex items-center gap-2.5 border-b border-shell-seam px-1 py-1.5 text-xs">
+    <div className="flex items-center gap-2.5 bg-transparent px-1 py-1.5 text-xs">
       <span className="flex items-center gap-1" aria-hidden>
         <span className={`h-1.5 w-1.5 animate-pulse rounded-full ${dot}`} />
         <span
@@ -4161,15 +4163,6 @@ function ActivityIndicator({
           </span>
         ) : null}
       </span>
-      <button
-        type="button"
-        onClick={onStop}
-        aria-keyshortcuts="Escape"
-        title="Stop the turn (Esc)"
-        className="shrink-0 rounded border border-tone-danger/40 px-2 py-0.5 text-[11px] font-semibold text-tone-danger transition-colors hover:bg-tone-danger/10"
-      >
-        ■ Stop
-      </button>
       {stopError ? (
         <span className="shrink-0 text-[11px] text-tone-danger">{stopError}</span>
       ) : null}
