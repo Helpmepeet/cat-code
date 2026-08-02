@@ -958,8 +958,20 @@ function blockRow(
 
 test('P4-18c deriveActivity: pending tool → Running <tool>, thinking → Thinking, streaming → Responding', () => {
   expect(deriveActivity([])).toEqual({ verb: 'Working', target: null })
+  // A pending tool is now reported only INSIDE an operator turn. Unscoped, an
+  // aborted turn's tool-use row stays `pending` forever and would pin the verb
+  // to it for the rest of the session, so this case grew a `user-text` row —
+  // which every real turn has, since the sidecar echoes the prompt back
+  // (`sidecarServer.ts:1067`). Turn-scoping and the parallel-tool scan live in
+  // `appModelActivity.test.ts`, projected from real messages.
   expect(
     deriveActivity([
+      blockRow({
+        kind: 'user-text',
+        role: 'user',
+        content: 'run it',
+        isReplay: false,
+      }),
       blockRow({
         kind: 'tool-use',
         toolUseId: 'u',

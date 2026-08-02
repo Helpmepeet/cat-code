@@ -52,20 +52,79 @@ export function shouldShowAnthropicPoolAccount(
   )
 }
 
+/**
+ * The operator's own turn boundary. Deliberately NOT `TURN_BOUNDARY_KINDS`
+ * below, which also counts `task-notification`.
+ *
+ * A background agent's completion is injected MID-TURN — the drain is the live
+ * path by which an engine-injected turn reaches an out-of-process UI
+ * (`src/QueryEngine.ts:995`, drained at `src/query.ts:1605`). Counting it as a
+ * boundary would start a fresh window in the middle of real work, orphan every
+ * tool still running, and report the session as idle while it works: exactly
+ * the defect the scan below exists to fix.
+ *
+ * Injected turns project to their own row kinds (`task-notification`,
+ * `injected-turn`) rather than to `user-text`, so these three are precisely the
+ * rows an operator authored.
+ */
+const OPERATOR_TURN_BOUNDARY_KINDS: ReadonlySet<NestedTranscriptRow['kind']> =
+  new Set(['user-text', 'user-image', 'command-echo'])
+
+function lastOperatorTurnStart(rows: readonly NestedTranscriptRow[]): number {
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (OPERATOR_TURN_BOUNDARY_KINDS.has(rows[i].kind)) return i
+  }
+  return -1
+}
+
+/**
+ * What the activity row says while a turn runs.
+ *
+ * Reports the state of the TURN, not of the last row. Reading only the tail
+ * (the original shape) got this wrong whenever more than one tool ran: three
+ * parallel calls whose last row finished first flipped the verb to "Working"
+ * with two tools still executing.
+ *
+ * A pending tool outranks everything else because it is the most specific true
+ * statement available. The scan is scoped to the current operator turn for a
+ * second reason beyond parallelism: an aborted turn leaves its `tool-use` row
+ * `pending` forever, since no `tool_result` ever arrives, so an unscoped search
+ * would pin the verb to that dead tool for every later turn.
+ *
+ * `Thinking` stays tail-driven and is close to unreachable today, because
+ * thinking deltas project no row and the thinking row is never last within its
+ * own message. It is deliberately NOT synthesized from the absence of other
+ * activity, which would assert a state the renderer cannot observe; it becomes
+ * real once thinking streams.
+ */
 export function deriveActivity(rows: NestedTranscriptRow[]): {
   verb: string
   target: string | null
 } {
+  const working = { verb: 'Working', target: null }
   const last = rows[rows.length - 1]
-  if (!last) return { verb: 'Working', target: null }
-  if (last.kind === 'tool-use' && last.status === 'pending') {
-    return { verb: 'Running', target: last.toolName }
+  if (!last) return working
+
+  const start = lastOperatorTurnStart(rows)
+  if (start !== -1) {
+    for (let i = start + 1; i < rows.length; i++) {
+      const row = rows[i]
+      // The FIRST pending tool in the turn, so the target stays put while
+      // siblings finish out of order instead of flickering between names.
+      // Naming several at once is a user-visible text decision that has not
+      // been made; until it is, this reports one tool that is genuinely running
+      // rather than inventing a format.
+      if (row.kind === 'tool-use' && row.status === 'pending') {
+        return { verb: 'Running', target: row.toolName }
+      }
+    }
   }
+
   if (last.kind === 'thinking') return { verb: 'Thinking', target: null }
   if (last.kind === 'assistant-text' && last.isStreaming === true) {
     return { verb: 'Responding', target: null }
   }
-  return { verb: 'Working', target: null }
+  return working
 }
 
 export function fmtElapsed(ms: number): string {
@@ -84,6 +143,13 @@ export function fmtTok(n: number): string {
   return `${k >= 100 ? Math.round(k) : k.toFixed(1).replace(/\.0$/, '')}k`
 }
 
+/**
+ * KNOWN DEFECT, pre-existing and not owned here: `task-notification` is
+ * injected mid-turn (see `OPERATOR_TURN_BOUNDARY_KINDS` above), so a background
+ * agent finishing while the turn runs restarts this estimate from zero. Use
+ * `OPERATOR_TURN_BOUNDARY_KINDS` for anything new; this set is left as-is
+ * because changing it changes a number already on screen.
+ */
 const TURN_BOUNDARY_KINDS: ReadonlySet<NestedTranscriptRow['kind']> = new Set([
   'user-text',
   'user-image',

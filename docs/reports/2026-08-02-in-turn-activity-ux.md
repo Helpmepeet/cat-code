@@ -28,7 +28,7 @@ demonstrably incorrect verb whenever more than one tool runs at once.
 | Finding | Severity | State |
 |---|---|---|
 | F1 · Turn state was an attach-only handshake value, so the whole activity surface was dead | High | **Fixed**, committed |
-| F2 · `deriveActivity` reads only the last row, so parallel tools report the wrong verb | Medium | Open, fix designed |
+| F2 · `deriveActivity` reads only the last row, so parallel tools report the wrong verb | Medium | **Fixed**, committed |
 | F3 · Thinking never streams, so the reasoning phase renders nothing at all | Medium | Open, blocked on a file another session holds |
 
 ---
@@ -231,7 +231,7 @@ It never fires in the trace above. Thinking deltas produce no row (see F3), and 
 message finally lands, the thinking row is never last, because the text or `tool_use` block in the
 same message follows it.
 
-### Proposed fix
+### Fix (landed)
 
 Derive from the turn, not the tail:
 
@@ -262,9 +262,41 @@ only, defined separately from `TURN_BOUNDARY_KINDS` rather than shared with it.
 the per-turn token estimate already resets mid-turn whenever a background agent notification lands.
 Same root cause, different symptom, and it predates this work.
 
-Before implementing, add an interaction test covering pending tools plus an injected notification
-arriving mid-turn. That case is what makes the difference between the two boundary definitions
-observable, and neither definition is safe to ship on reasoning alone.
+### What shipped
+
+`OPERATOR_TURN_BOUNDARY_KINDS` (`user-text`, `user-image`, `command-echo`) is defined separately in
+`appModel.ts`, with the hazard documented at both sites: on the new set, explaining why
+`task-notification` is absent, and on `TURN_BOUNDARY_KINDS`, marking the pre-existing token-estimate
+defect and directing new code to the operator set. `selectLiveTokenEstimate` is deliberately
+unchanged, because altering it changes a number already on screen and that is a separate decision.
+
+`deriveActivity` now scans the whole operator turn for a pending tool before falling back to the
+tail. Verified against the real projector, same probe that demonstrated the bug:
+
+```
+all three dispatched           verb=Running Grep   actually pending: [Grep, Glob, Read]
+Read finishes (the LAST row)   verb=Running Grep   actually pending: [Grep, Glob]
+Glob finishes                  verb=Running Grep   actually pending: [Grep]
+Grep finishes                  verb=Working        actually pending: []
+```
+
+Tests are in `appModelActivity.test.ts`, **projected from real SDK messages rather than hand-built
+rows**, each asserting the row kinds it produced so a wrong message shape fails loudly. The first
+draft did hand-build them and drifted from the real shape; only `tsc` caught it, which is the same
+class of gap as the original bug. The interaction case the review required — pending tools plus an
+injected notification mid-turn — is covered, and was confirmed to bite by temporarily restoring
+`task-notification` to the boundary set: exactly one test failed, that one.
+
+### Still open, and deliberately not decided here
+
+Two user-visible text questions were raised and have not been answered, so nothing was invented:
+
+- **Several tools running at once.** The row names the FIRST pending tool, which keeps the target
+  stable while siblings finish out of order. Naming them all (`Grep, Glob`) or counting them
+  (`3 tools`) is a text-format decision for the operator.
+- **The target is still the tool name**, not the real command or path (§5). Folding that in is a
+  separate change and should reuse the per-family target the tool cards already derive rather than
+  add a second extractor.
 
 `Thinking` should **not** be synthesized from the absence of other activity. That would assert a
 state the renderer cannot observe. It becomes real once F3 is fixed.
@@ -334,7 +366,8 @@ further unported behavior, and the full open list is:
 | Playful verb rotation ("Pouncing", "Prowling", …) | `PARITY-LEDGER.md:504`; prototype `Chat.jsx:32` |
 | Per-tool tone colours; desktop uses accent/warn only | `PARITY-LEDGER.md:504,506`; prototype `Chat.jsx:31` |
 | `↑` during the requesting phase; desktop always shows `↓` | `PARITY-LEDGER.md:504`; prototype `Chat.jsx:196` |
-| Verb vocabulary reports a row, not the turn | F2, this report |
+| ~~Verb vocabulary reports a row, not the turn~~ | closed by F2 |
+| Multi-tool text format undecided; the row names one running tool | §3, open operator decision |
 | Target is the tool name, not the real command or path | §5, this report |
 | Live activity row never confirmed on a running window | `PARITY-LEDGER.md:504` records this as UNVERIFIED |
 
@@ -376,7 +409,7 @@ four and both nits held.
 | Finding | Disposition |
 |---|---|
 | F1 · the socket probe bypasses production `app.submit`, so the report's ordering claim was probe-mode-only | **Fixed.** Added a production `app.submit` ordering test to `sidecarServer.test.ts` pinning `message(user) → turn.status(true) → message(assistant) → turn.status(false)`; annotated the probe test with its true scope; corrected §2. |
-| F2 · the proposed algorithm reuses `TURN_BOUNDARY_KINDS`, which includes mid-turn `task-notification` | **Design corrected before implementation**, §3. A separate operator-turn boundary is specified, the interaction test is named as a precondition, and the same pre-existing bug in `selectLiveTokenEstimate` is recorded. |
+| F2 · the proposed algorithm reuses `TURN_BOUNDARY_KINDS`, which includes mid-turn `task-notification` | **Design corrected, then implemented**, §3. A separate `OPERATOR_TURN_BOUNDARY_KINDS` shipped, the required interaction test exists and was proven to bite by bounded mutation, and the pre-existing `selectLiveTokenEstimate` defect is recorded at its own site rather than silently changed. |
 | F3 · `91aa79f` swept five rows belonging to other sessions | **Recorded, not rewritten**, §7. |
 | F4 · the prototype comparison understated the open fidelity gap | **Fixed**, §6: every open mismatch enumerated, fidelity marked pending, banner added at the head of the report. |
 | Nit · "no frame carried turn state at all" | **Fixed**, §2: `app.ready` carried `activeTurn`; what was missing was a live change event. |
