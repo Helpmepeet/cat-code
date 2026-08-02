@@ -154,6 +154,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * restates the message's usage SO FAR, so the newest present reading wins. It
  * is not a sum. Only `output_tokens` is read here — the byline reports what the
  * model produced, and the input buckets belong to the context gauge.
+ *
+ * DELIBERATE DUPLICATION, pending: `contextUsage.ts` holds the four-bucket
+ * version of this fold and its own `isRecord`. It was mid-rewrite in another
+ * session when this landed, so importing from it would have meant depending on a
+ * file being restructured. Dedupe both once that settles; a shared helper needs
+ * the four-bucket shape, since this one reads output only.
  */
 function foldOutputTokens(prior: number, part: unknown): number {
   if (!isRecord(part)) return prior
@@ -183,7 +189,7 @@ function foldOutputTokens(prior: number, part: unknown): number {
  * (`src/QueryEngine.ts:908-936`).
  *
  * Bounded gap: the raw log evicts oldest-first past its retention caps
- * (`rawMessageLog.ts:14`), so a single turn long enough to outrun them can lose
+ * (`rawMessageLog.ts:35`), so a single turn long enough to outrun them can lose
  * a `message_start` and leave that message with no entry. It then falls through
  * to the character estimate below, which is the pre-existing behaviour, never a
  * zero.

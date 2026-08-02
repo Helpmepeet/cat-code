@@ -10,18 +10,20 @@ import { isAppReadyFrame } from './connectionState.js'
  * Nothing ever clears `error`, so displaying it pinned an undismissable red line
  * above the composer for the rest of the session.
  *
- * Dropped at DISPLAY only, and only for this one id. The frame still reaches
- * `app/main/attachmentGate.ts` and `app/main/transcriptCache.ts`, which key off
- * it, and `replayBuffer.ts` still logs the retained/total counts. The sibling
- * `HISTORY_REPLAY_TRUNCATION_REQUEST_ID` is deliberately NOT filtered: the
- * preview/restore surface shows its own boundary message and owns that call.
+ * Dropped at DISPLAY only, and only for this one id. The frame is still minted
+ * (`replayBuffer.ts:279`, carrying the retained count) and still kept in the
+ * transcript cache by `app/main/transcriptCache.ts:129`, which keys off it. The
+ * sibling `HISTORY_REPLAY_TRUNCATION_REQUEST_ID` is deliberately NOT filtered:
+ * the preview/restore surface shows its own boundary message and owns that call.
  *
- * The constant is private to `app/main/replayBuffer.ts:76` and lives across a
- * process boundary the renderer cannot import from. Promote it to
- * `shared/protocol.ts` beside its sibling and import it here once that file
- * settles.
+ * The id is minted at exactly one site but declared privately in
+ * `app/main/replayBuffer.ts:76`, across a process boundary the renderer cannot
+ * import from, so this is a second copy. Exported so tests bind to it rather
+ * than adding a third. Promote it to `shared/protocol.ts` beside its sibling
+ * (whose doc comment there already names it) and import it here once that file
+ * is no longer being rewritten.
  */
-const REPLAY_BUFFER_TRUNCATION_REQUEST_ID = 'catcode.replay-truncated'
+export const REPLAY_BUFFER_TRUNCATION_REQUEST_ID = 'catcode.replay-truncated'
 
 /**
  * Sized so the BYTE budget below is what binds, the same correction

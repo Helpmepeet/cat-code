@@ -3456,10 +3456,16 @@ export function SessionPane({
   // supply the turn boundary and the raw log supplies the usage; the two join
   // on the API message id. Recomputed when the transcript slice changes
   // (streaming deltas) or the 1s elapsed tick fires, so its cadence matches the
-  // elapsed clock without a second timer. Only while a turn is running; the
-  // gauge is gated behind 30s in `ActivityIndicator`.
+  // elapsed clock without a second timer. Gated on the SAME 30s threshold the
+  // byline itself uses, so the two cannot drift: `ActivityIndicator` shows this
+  // only past `SHOW_TOKENS_AFTER_MS`, and computing it earlier walked the whole
+  // retained raw log once per streaming delta to produce a number nothing could
+  // display yet.
   const liveTokens = useMemo(
-    () => (generating ? selectLiveTokenEstimate(nestedRows, activeLog.messages) : 0),
+    () =>
+      generating && elapsedMs > SHOW_TOKENS_AFTER_MS
+        ? selectLiveTokenEstimate(nestedRows, activeLog.messages)
+        : 0,
     [generating, nestedRows, activeLog.messages, elapsedMs],
   )
 
@@ -3644,9 +3650,11 @@ export function SessionPane({
           return
       }
     }
-    // No typeahead open — Escape interrupts an in-flight turn. Since the
-    // activity row dropped its Stop button this is the ONLY interrupt path in
-    // the pane, so it must stay wired; mirrors the TUI Ctrl+C/Esc cancel.
+    // No typeahead open — Escape interrupts an in-flight turn. It is the
+    // keyboard path only: it is bound on this form, so it is unreachable once
+    // focus leaves the composer, and a focused permission card consumes Escape
+    // as its own dismiss. The always-visible mount is the send-slot Stop below.
+    // Mirrors the TUI Ctrl+C/Esc cancel.
     if (event.key === 'Escape' && generating) {
       event.preventDefault()
       stopTurn()

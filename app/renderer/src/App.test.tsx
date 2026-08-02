@@ -988,7 +988,12 @@ test('P4-18c: a generating session (ready + input disabled) shows the activity i
   expect(html).not.toContain('aria-label="Send prompt"')
   // No fill and no seam on the row: it reads as a byline over the pane, not a
   // band between the transcript and the composer.
-  expect(html).not.toContain('gap-2.5 border-b border-shell-seam')
+  // Scoped to the activity row itself: a bare `not.toContain('border-shell-seam')`
+  // passes or fails on unrelated chrome, and matching the exact class run passes
+  // as soon as someone reorders it.
+  const activityRow = html.match(/<div class="[^"]*gap-2\.5[^"]*text-xs"/)?.[0] ?? ''
+  expect(activityRow).not.toBe('')
+  expect(activityRow).not.toContain('border-b')
 })
 
 // ── P4-18c activity helpers ─────────────────────────────────────────────────

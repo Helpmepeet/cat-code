@@ -7,6 +7,7 @@ import {
 } from '../../shared/protocol.js'
 import type { SDKMessage } from '@cat-code/engine/sdk'
 import { selectContextUsage, type ContextUsage } from './contextUsage.js'
+import { REPLAY_BUFFER_TRUNCATION_REQUEST_ID } from './rawMessageLog.js'
 import {
   batch,
   withBatch,
@@ -126,8 +127,18 @@ export function projectPreviewTranscriptCache(
     previewReadyFrame(cache),
   )
   transcript = projectServerFrameBatched(transcript, batch(cacheFrames))
-  const truncationMessage =
-    cacheFrames.find(frame => frame.kind === 'error')?.message ?? null
+  // The replay buffer's retention notice is not a boundary message: retention is
+  // working as designed and there is nothing for the user to act on, which is
+  // why the live pane drops it too (`rawMessageLog.ts`). `transcriptCache.ts:129`
+  // keeps the frame deliberately, so it has to be excluded here rather than
+  // upstream. The history-replay sibling IS a real boundary and still shows.
+  let truncationMessage: string | null = null
+  for (const frame of cacheFrames) {
+    if (frame.kind !== 'error') continue
+    if (frame.requestId === REPLAY_BUFFER_TRUNCATION_REQUEST_ID) continue
+    truncationMessage = frame.message
+    break
+  }
   return {
     transcript,
     truncationMessage,

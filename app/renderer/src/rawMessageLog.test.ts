@@ -6,6 +6,7 @@ import {
   reduceServerFrame,
   reduceServerFrameWithLimits,
   selectRawMessageLog,
+  REPLAY_BUFFER_TRUNCATION_REQUEST_ID,
 } from './rawMessageLog.js'
 
 test('captures the ready session and appends every raw SDKMessage in arrival order', () => {
@@ -139,7 +140,7 @@ test('the replay-buffer retention notice never reaches the error line', () => {
     protocolVersion: 1,
     sessionId: 'session-1',
     // app/main/replayBuffer.ts:76, N = DEFAULT_MAX_BUFFERED_FRAMES (8,000).
-    requestId: 'catcode.replay-truncated',
+    requestId: REPLAY_BUFFER_TRUNCATION_REQUEST_ID,
     code: 'internal_error',
     message: 'Only the 8000 most recent messages are shown.',
     retryable: false,
