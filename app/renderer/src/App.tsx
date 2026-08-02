@@ -4112,6 +4112,12 @@ const SHOW_TOKENS_AFTER_MS = 30_000
  * byline over the conversation rather than a band separating it from the
  * composer. Interrupting the turn is Escape (handled on the composer, not
  * here); `stopError` stays so a failed interrupt is never silent.
+ *
+ * Everything sits left-packed with no `flex-1` spacer. The spacer only earned
+ * its keep while the Stop button anchored the right edge; without it the
+ * elapsed clock stranded itself against the far side of the 740px column with
+ * a hole in the middle. `target` keeps `min-w-0 truncate` so a long tool name
+ * shrinks instead of pushing the clock out of the row.
  */
 function ActivityIndicator({
   verb,
@@ -4146,12 +4152,10 @@ function ActivityIndicator({
         {paused ? 'Waiting for approval' : verb}
       </span>
       {target ? (
-        <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-text-subtle">
+        <span className="min-w-0 truncate font-mono text-[11.5px] text-text-subtle">
           {target}
         </span>
-      ) : (
-        <span className="flex-1" />
-      )}
+      ) : null}
       <span className="shrink-0 font-mono text-[11px] tabular-nums text-text-subtle">
         {fmtElapsed(elapsedMs)}
         {showTokens ? (
