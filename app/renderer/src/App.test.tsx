@@ -625,6 +625,19 @@ test('a prompt queued mid-turn says which wait it is in, and is not lost', () =>
     />,
   )
   expect(spawning).toContain('Sends when the session is ready.')
+
+  // The copy reads the same gate the composer does, NOT `generating`: a
+  // previewed pane is waiting on its spawn even though a turn is technically
+  // running behind it, so it must not promise the response is what unblocks it.
+  const preview = renderToStaticMarkup(
+    <SessionPane
+      {...base}
+      preview
+      activeConnection={{ status: 'ready', inputEnabled: false }}
+      pendingSubmit="run the tests"
+    />,
+  )
+  expect(preview).toContain('Sends when the session is ready.')
 })
 
 test('CC-16: a dead session stays read-only and does not pretend to be typeable', () => {
@@ -683,7 +696,7 @@ test('CC-16: a dead session stays read-only and does not pretend to be typeable'
   expect(sendButton).toContain('disabled=""')
 })
 
-test('P4-58: composer read-only and placeholder decisions cover every session state', () => {
+test('composer read-only and placeholder decisions cover every session state', () => {
   const base = idleSessionPaneProps()
   const ordinaryPlaceholder = 'Ask Cat Code anything or describe a task…'
   const cases: Array<{

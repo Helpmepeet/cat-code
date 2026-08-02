@@ -199,7 +199,7 @@ test('turn.status crosses the real socket and brackets the turn', async () => {
   // renderer suite renders `SessionPane` from hand-fed props, so it happily
   // passed for months while NOTHING on the wire ever flipped `inputEnabled`
   // after the `ready` handshake — the whole in-turn activity surface (the
-  // indicator, Stop, Esc, the mid-turn composer lock) was dead in the app and
+  // indicator, Stop, Esc, the mid-turn composer queue) was dead in the app and
   // green in CI.
   supervisor = new SidecarSupervisor({
     sidecarCommand: 'bun',

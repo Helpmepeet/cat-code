@@ -415,9 +415,11 @@ export function selectComposerGate(input: ComposerGateInput): ComposerGate {
     (input.preview ||
       input.connectionStatus === 'connecting' ||
       input.connectionStatus === 'starting')
-  // Attached (`ready`) but input is closed: a turn is running. Nothing else can
-  // produce this — `ready` means the engine's own `app.ready` arrived — so the
-  // wait is bounded by the turn, and the park drains on `turn.status`.
+  // Attached (`ready`) but not accepting input: all but always a turn running,
+  // which is what the copy says. The one other producer is a transient skew
+  // where the connection store has reduced `ready` and the log store has not
+  // yet; treating that as a queue is safe because the drain resolves from the
+  // CONNECTION snapshot, so it flushes on the next pass rather than waiting.
   const turnPending =
     input.hasSession &&
     !engineInputEnabled &&

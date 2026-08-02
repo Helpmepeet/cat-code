@@ -407,7 +407,7 @@ function gateInput(overrides: Partial<ComposerGateInput> = {}): ComposerGateInpu
   }
 }
 
-describe('CC-16 composer gate — "not connected" is not "engine disabled input"', () => {
+describe('composer gate — three reasons the engine cannot take a submit YET', () => {
   test('a live, idle session is editable and engine-enabled', () => {
     const gate = selectComposerGate(gateInput())
     expect(gate).toEqual({

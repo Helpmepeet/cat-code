@@ -153,7 +153,7 @@ export function reduceConnectionState(
   // Without it `inputEnabled` would only ever hold the value the `ready`
   // handshake carried at attach, so a session that started a turn afterwards
   // still read as idle — which is what silently disabled the whole in-turn
-  // activity surface (indicator, Stop, Esc, mid-turn composer lock).
+  // activity surface (indicator, Stop, Esc, the mid-turn composer queue).
   //
   // Only `inputEnabled` moves: `status` stays whatever the lifecycle/error
   // frames last said, so a turn event can never resurrect a dead session.

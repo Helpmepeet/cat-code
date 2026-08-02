@@ -1852,7 +1852,19 @@ export function App() {
       logInputEnabled: sessionLog.inputEnabled,
       alreadyParked: selectPendingSubmit(pendingSubmits, sessionId) !== null,
     })
-    if (action.type === 'ignore') return
+    if (action.type === 'ignore') {
+      // The one `ignore` the user can act on: they typed something and pressed
+      // Enter, and it stayed put because a prompt is already waiting. Mid-turn
+      // the send slot holds Stop, so there is no greyed-out arrow to explain
+      // that — without this the keystroke reads as swallowed.
+      if (
+        selectPendingSubmit(pendingSubmits, sessionId) !== null &&
+        selectPromptDraft(promptDrafts, sessionId).trim().length > 0
+      ) {
+        toast('Only one message can be queued at a time.', { tone: 'info' })
+      }
+      return
+    }
     const text = action.text
     // Both paths retire the draft the same way: the prompt has left the
     // composer, so the pastes it expanded are spent and it joins ↑/↓ history.
@@ -3391,10 +3403,9 @@ export function SessionPane({
   // previewed, connecting and mid-turn panes are all editable with the ordinary
   // prompt; only terminal/no-session states keep the separate connection copy.
   const composerReadOnly = !composerGate.editable
-  const composerPlaceholder =
-    composerGate.editable || activeConnection.status === 'ready'
-      ? 'Ask Cat Code anything or describe a task…'
-      : 'Connecting…'
+  const composerPlaceholder = composerGate.editable
+    ? 'Ask Cat Code anything or describe a task…'
+    : 'Connecting…'
   const paused = permissionQueue.length > 0 || askQuestion !== null
   // Slice-cached: stable ref while the session's rows are unchanged, so both
   // `deriveActivity` and the token estimate share one projection.
@@ -3841,7 +3852,7 @@ export function SessionPane({
             {pendingSubmit}
           </span>
           <span className="shrink-0 text-text-subtle">
-            {generating
+            {composerGate.turnPending
               ? 'Sends when this response finishes.'
               : 'Sends when the session is ready.'}
           </span>

@@ -224,7 +224,7 @@ test('a live turn closes and reopens input across the turn boundary', () => {
   // The regression this pins: `inputEnabled` used to come ONLY from the
   // `ready` handshake, so it held its attach-time value for the whole session
   // and `generating` (App.tsx) was false for the entire turn — the activity
-  // indicator, Stop, Esc-to-interrupt and the mid-turn composer lock all
+  // indicator, Stop, Esc-to-interrupt and the mid-turn composer queue all
   // rendered as if nothing were running.
   let state = reduceConnectionState(
     createConnectionState(),
