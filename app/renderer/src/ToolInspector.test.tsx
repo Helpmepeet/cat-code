@@ -18,6 +18,7 @@ function mkToolRow(overrides: Partial<ToolUseRow>): ToolUseRow {
     toolFamily: 'read',
     input: {},
     status: 'pending',
+    agentCompletion: null,
     result: null,
     ...overrides,
   }

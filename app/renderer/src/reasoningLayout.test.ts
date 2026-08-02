@@ -56,6 +56,7 @@ function toolRow(id: string): NestedToolUseRow {
     toolFamily: 'read',
     input: {},
     status: 'success',
+    agentCompletion: null,
     result: null,
     children: [],
   }

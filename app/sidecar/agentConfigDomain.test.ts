@@ -107,6 +107,7 @@ function mkToolRow(toolName: string, input: Record<string, unknown>): ToolUseRow
     toolUseId: `toolu_${toolName}`,
     toolName,
     toolFamily: 'other',
+    agentCompletion: null,
     input,
     status: 'pending',
     result: null,
