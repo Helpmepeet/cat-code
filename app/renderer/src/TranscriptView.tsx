@@ -45,6 +45,7 @@ import { useToast } from './toastContext.js'
 import {
   groupAgentDelegates,
   selectNestedTranscriptRows,
+  type AgentCompletionProjection,
   type NestedToolUseRow,
   type NestedTranscriptRow,
   type TranscriptDisplayItem,
@@ -447,7 +448,7 @@ const TranscriptRowView = memo(function TranscriptRowView({
       )
 
     case 'task-notification':
-      return <TaskNotificationBox status={row.status} content={row.content} />
+      return <TaskNotificationBox status={row.status} summary={row.summary} />
 
     case 'injected-turn':
       return (
@@ -510,16 +511,14 @@ const TranscriptRowView = memo(function TranscriptRowView({
  * source, never a React crash — display = degrade gracefully). Fenced code
  * blocks render in a framed panel with a per-block copy button and
  * `rehype-highlight` syntax tokens (highlight.js `hljs-*` classes, colored by the
- * FIXED Dracula stylesheet in `theme.css` — never dynamic Tailwind). Long bodies
- * (>60 lines) collapse behind a "Show N more lines" control. A streaming body
- * carries a blinking caret.
+ * FIXED Dracula stylesheet in `theme.css` — never dynamic Tailwind). A
+ * streaming body carries a blinking caret.
  *
  * Raw HTML stays OFF (react-markdown v10 default — no `rehype-raw`,
  * no `allowDangerousHtml`): a transcript can carry untrusted model/tool output.
  * `rehype-highlight` emits React <span> elements (not injected HTML), so
  * highlighting adds no raw-HTML surface.
  */
-const PROSE_COLLAPSE_LINES = 60
 
 // Stable module-scope plugin config. `remark-gfm` adds pipe tables (+ autolinks/
 // strikethrough). `rehype-highlight` tokenizes fenced ```lang blocks into
@@ -540,23 +539,17 @@ function AssistantProse({
   content: string
   streaming?: true
 }) {
-  const [expanded, setExpanded] = useState(false)
-  const totalLines = content.split('\n').length
-  const collapsible = totalLines > PROSE_COLLAPSE_LINES
-  const shown =
-    collapsible && !expanded
-      ? content.split('\n').slice(0, PROSE_COLLAPSE_LINES).join('\n')
-      : content
   // The prototype's `showCopy` gate (Messages.jsx:2068): no chip while the reply
   // is still arriving (there is no settled answer to take yet, and the caret owns
   // that corner), and none on an empty turn.
   const copyable = !streaming && content.trim().length > 0
   return (
     // P4-38 host contract for `BubbleCopyChip`: `group relative` makes this body
-    // the hover/focus group the absolute chip anchors to, and `pr-8` reserves the
-    // corner so the revealed glyph never lands on the last line's text. Without
-    // all three the chip anchors to a distant ancestor and stays invisible.
-    <div className="group relative pr-8">
+    // the hover/focus group the absolute chip anchors to. No reserved right
+    // gutter (operator call, 2026-08-02): the prototype's chip overlays the
+    // last line rather than narrowing the column (Messages.jsx:2064-2091), and
+    // the app's own reserved-gutter version read as an unexplained gap.
+    <div className="group relative">
       <MarkdownErrorBoundary fallback={content}>
         <div className="font-sans font-light text-sm leading-relaxed [&>*+*]:mt-2 [&_a]:text-accent [&_blockquote]:border-l-2 [&_blockquote]:border-shell-seam [&_blockquote]:pl-3 [&_blockquote]:text-text-muted [&_h1]:text-base [&_h1]:font-semibold [&_h2]:font-semibold [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5 [&_:not(pre)>code]:font-mono [&_:not(pre)>code]:text-accent-soft">
           <Markdown
@@ -564,7 +557,7 @@ function AssistantProse({
             rehypePlugins={REHYPE_PLUGINS}
             components={MARKDOWN_COMPONENTS}
           >
-            {shown}
+            {content}
           </Markdown>
         </div>
       </MarkdownErrorBoundary>
@@ -574,21 +567,6 @@ function AssistantProse({
           aria-hidden
         />
       ) : null}
-      {collapsible ? (
-        <button
-          type="button"
-          onClick={() => setExpanded(value => !value)}
-          className="mt-1 font-mono text-[11px] text-accent hover:underline"
-        >
-          {expanded
-            ? 'Collapse'
-            : `Show ${totalLines - PROSE_COLLAPSE_LINES} more lines`}
-        </button>
-      ) : null}
-      {/* Payload is the RAW markdown `content`, never the truncated `shown`: a
-          collapsed body still copies the whole reply. The chip sits at the
-          wrapper's bottom-right, which in the collapsed branch is the reveal
-          button's own row, opposite edge, inside the reserved gutter. */}
       {copyable ? (
         <BubbleCopyChip content={content} subject="response" />
       ) : null}
@@ -1099,11 +1077,34 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
     ? AGENT_TYPE_TONE_CLASS[vocab.type.tone]
     : AGENT_TYPE_TONE_CLASS.neutral
   const childCount = row.children.length
+  const completion = row.agentCompletion
+  // ONE expression, so `ToolCardShell`'s `hasBody` stays null when there is
+  // genuinely no body — two sibling expressions would make it an array and give
+  // every childless agent card a body that expands to nothing.
+  const body =
+    childCount === 0 && completion === null ? null : (
+      <div className="flex flex-col gap-2">
+        {childCount > 0 ? (
+          <div className="flex flex-col gap-2 border-l border-accent/20 pl-3">
+            <NestedRowList rows={row.children} />
+          </div>
+        ) : null}
+        {/* A background agent's real outcome, joined in from its
+            task-notification turn. Null for a foreground agent, whose answer
+            is the correlated tool result the shell already renders. */}
+        {completion !== null ? (
+          <AgentCompletionBody completion={completion} />
+        ) : null}
+      </div>
+    )
   return (
     <ToolCardShell
       family="agent"
       target={deriveTarget(row)}
       status={row.status}
+      // A finished background agent's result is the ONLY place its output
+      // exists, so it opens; a foreground card keeps the C4 collapsed default.
+      defaultExpanded={completion !== null}
       headerBadge={
         childCount > 0 ? (
           <span className="shrink-0 rounded-[5px] border border-shell-seam bg-white/[0.03] px-1.5 py-px font-mono text-[10px] text-text-subtle">
@@ -1126,11 +1127,7 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
         </>
       }
     >
-      {childCount > 0 ? (
-        <div className="flex flex-col gap-2 border-l border-accent/20 pl-3">
-          <NestedRowList rows={row.children} />
-        </div>
-      ) : null}
+      {body}
     </ToolCardShell>
   )
 }
@@ -1609,17 +1606,9 @@ function InlineRevealBand({
 }
 
 /**
- * Per-host wording. The prototype splits it: the assistant side toasts `Copied
- * response` (Messages.jsx:2067) and the user twin `Copied message` (`:2097`).
- * P4-38 parameterizes rather than forks `BubbleCopyChip`, so the reveal, tick,
- * timing and colour grammar stay ONE implementation across both hosts.
+ * Wording for the assistant-response copy chip's idle/done/toast states.
  */
 const COPY_CHIP_TEXT = {
-  message: {
-    idle: 'Copy message',
-    done: 'Message copied',
-    toast: 'Copied message',
-  },
   response: {
     idle: 'Copy response',
     done: 'Response copied',
@@ -1628,15 +1617,15 @@ const COPY_CHIP_TEXT = {
 } as const
 
 /**
- * P4-33 — the hover-reveal copy chip inside a user bubble (Messages.jsx:2094);
- * P4-38 mounts the same chip on the assistant body (`:2077`).
+ * The hover-reveal copy chip mounted on the assistant body (Messages.jsx:2077).
  * Quiet until the host is hovered or something inside it takes focus, then a
  * small clipboard glyph in the bottom-right corner; the tick pins itself visible
  * for a beat so the confirmation survives the pointer leaving.
  *
  * HOST CONTRACT: the chip is `absolute`, so its host must be the positioned
- * hover group AND reserve the corner — `group relative … pr-8`. Mounted under a
- * host that is neither, it anchors to a distant ancestor and never reveals.
+ * hover group — `group relative`. Mounted under a host that is neither, it
+ * anchors to a distant ancestor and never reveals. It overlays the corner
+ * rather than reserving space for it, matching the prototype.
  *
  * `group-focus-within` is a real-added a11y fix: the prototype reveals on hover
  * ONLY, which leaves the control unreachable by keyboard. Icons are drawn inline
@@ -1717,18 +1706,14 @@ function BubbleCopyChip({
  * "User side" grammar (Messages.jsx UserBubble): right-aligned, accent-tinted,
  * bottom-right-notched bubble. Shared shape with the command echo + image rows
  * so a user's own turns read as one column against the assistant's left body.
+ * No copy affordance (operator call, 2026-08-02): unlike the prototype, own
+ * messages carry no chip, so the bubble keeps uniform padding on every side.
  */
 function UserBubble({ content }: { content: string }) {
-  // No chip on an empty turn — there would be nothing to put on the clipboard
-  // (the prototype's `showCopy` gate, Messages.jsx:2098).
-  const copyable = content.trim().length > 0
   return (
     <div className="flex justify-end">
-      <div className="group relative max-w-[82%] whitespace-pre-wrap break-words rounded-2xl rounded-br border border-accent/20 bg-accent/10 px-4 py-2.5 pr-8 text-sm leading-relaxed text-text-primary">
+      <div className="max-w-[82%] whitespace-pre-wrap break-words rounded-2xl rounded-br border border-accent/20 bg-accent/10 px-4 py-2.5 text-sm leading-relaxed text-text-primary">
         {content}
-        {copyable ? (
-          <BubbleCopyChip content={content} subject="message" />
-        ) : null}
       </div>
     </div>
   )
@@ -1842,8 +1827,7 @@ function ThinkingBlock({ content }: { content: string }) {
 const REASONING_TITLE =
   'Short summary headings the model exposes about its reasoning, not the reasoning itself.'
 
-/** Steps kept visible before the older ones fold away, mirroring the
- * "Show N more lines" idiom `AssistantProse` uses for long bodies. */
+/** Steps kept visible before the older ones fold away. */
 const REASONING_RUN_VISIBLE_STEPS = 4
 
 /**
@@ -2116,42 +2100,112 @@ const NOTICE_STYLE: Record<
   account_diagnostic: { glyph: '!', glyphTone: 'text-tone-warn' },
 }
 
+/** Status → dot tone, shared by the standalone row and the agent card's finish. */
+function agentCompletionTone(status: string | null): string {
+  return status === 'failed' || status === 'killed'
+    ? 'bg-tone-danger'
+    : status === 'completed'
+      ? 'bg-tone-good'
+      : 'bg-text-subtle'
+}
+
 /**
- * TaskNotificationRow: an engine-injected agent-completion banner. Rendered
- * system-side (left, notice grammar) — NOT the right-aligned user bubble it used
- * to fall into (bug-sweep #4, 2026-07-21). Status tints a small badge; the full
- * banner text is preserved verbatim so nothing the operator saw before is lost.
+ * TaskNotificationRow: a background agent's finish that could NOT be folded
+ * into its agent card (no join key on the wire, or the card never arrived).
+ * One line, the way both references render it: the prototype's `AgentEventRow`
+ * (`Messages.jsx:843-870`) is a pip plus a name plus a state word, and the
+ * terminal's `UserAgentNotificationMessage.tsx:46` is `● {summary}` and nothing
+ * else.
+ *
+ * The banner text this row rides is MODEL-facing — it carries the task id, the
+ * output-file path and the tool-use id — so it is never printed; only the
+ * engine's own one-line `summary` is (bug, 2026-08-01). No summary means no
+ * row, exactly as the terminal returns null without one: an empty banner shell
+ * tells the operator less than nothing.
+ *
+ * No status word rides alongside: every summary the engine mints already ends
+ * in its outcome (`Agent @Ada completed`, `… failed: …`, `… was stopped`,
+ * `LocalAgentTask.tsx:325`), so a chip would print the same word twice. The
+ * dot carries it as tone.
  */
 function TaskNotificationBox({
   status,
-  content,
+  summary,
 }: {
   status: string | null
-  content: string
+  summary: string | null
 }) {
-  const statusTone =
-    status === 'failed' || status === 'killed'
-      ? 'text-tone-danger'
-      : status === 'completed'
-        ? 'text-tone-good'
-        : 'text-text-subtle'
+  if (summary === null) return null
   return (
-    <div className="flex items-start gap-2 rounded-lg border border-shell-seam bg-shell-hover/40 px-3 py-1.5">
-      <span className="text-[12px] leading-5 text-accent" aria-hidden>
-        ⤷
+    <div className="flex items-center gap-2.5 rounded-lg border border-shell-seam bg-shell-hover/40 px-3 py-1.5">
+      <span
+        className={`size-1.5 shrink-0 rounded-full ${agentCompletionTone(status)}`}
+        aria-hidden
+      />
+      <span className="min-w-0 flex-1 truncate text-xs text-text-muted">
+        {summary}
       </span>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 text-xs">
-          <span className="font-medium text-text-muted">Agent task</span>
-          {status ? (
-            <span className={`font-mono text-[10px] ${statusTone}`}>{status}</span>
-          ) : null}
-        </div>
-        <div className="mt-0.5 whitespace-pre-wrap break-words text-xs text-text-muted">
-          {content}
-        </div>
-      </div>
-      <span className="shrink-0 font-mono text-[9.5px] text-text-subtle/70">task</span>
+    </div>
+  )
+}
+
+/** `1234` → `1.2k`; the agent card's stat line has no room for full counts. */
+function compactCount(value: number): string {
+  return value >= 1000 ? `${(value / 1000).toFixed(1)}k` : `${value}`
+}
+
+/** `93000` → `1m 33s`; sub-minute stays in seconds. */
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`
+}
+
+/**
+ * A background agent's finish, shown INSIDE its own agent card rather than as a
+ * second transcript row. This is the prototype's disposition: `data.js:153-165`
+ * joins the completion to the named spawn card on the task id and drops the
+ * duplicate row, because the notification is a `role:'user'` message upstream
+ * and "rendering it as a human turn would misread the conversation".
+ *
+ * Mirrors `AgentTranscriptCard`'s own result grammar (`Messages.jsx:826-832`):
+ * a labelled result body plus a stats line. The summary is NOT repeated here —
+ * the card header already names the agent and shows its state, so the line
+ * would say what the operator can already read (§7 "say only what is
+ * surprising").
+ */
+function AgentCompletionBody({
+  completion,
+}: {
+  completion: AgentCompletionProjection
+}) {
+  const { result, usage } = completion
+  const stats = usage
+    ? [
+        `~${compactCount(usage.totalTokens)} tokens`,
+        `${usage.toolUses} ${usage.toolUses === 1 ? 'tool' : 'tools'}`,
+        formatDuration(usage.durationMs),
+      ]
+    : []
+  if (result === null && stats.length === 0) return null
+  return (
+    <div className="flex flex-col gap-1.5">
+      {result !== null ? (
+        <>
+          <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-subtle">
+            Result
+          </span>
+          <div className="whitespace-pre-wrap break-words text-xs leading-relaxed text-text-muted">
+            {result}
+          </div>
+        </>
+      ) : null}
+      {stats.length > 0 ? (
+        <span className="font-mono text-[10px] text-text-subtle">
+          {stats.join(' · ')}
+        </span>
+      ) : null}
     </div>
   )
 }

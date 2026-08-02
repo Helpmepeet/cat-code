@@ -1,5 +1,4 @@
 import { expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { SDKMessage } from '@cat-code/engine/session-events'
 import {
@@ -16,6 +15,7 @@ import {
   selectNestedTranscriptRows,
 } from './transcriptProjector.js'
 import type {
+  AgentCompletionProjection,
   NestedTranscriptRow,
   NestedToolUseRow,
   ToolCardStatus,
@@ -168,21 +168,6 @@ test('P4-18c: a streaming assistant row renders a caret', () => {
   expect(html).toContain('animate-pulse') // the blinking streaming caret
 })
 
-test('P4-18c: a >60-line assistant body collapses behind a Show-more control', () => {
-  const long = Array.from({ length: 80 }, (_, i) => `line ${i}`).join('\n')
-  const html = render({
-    ...blockSource,
-    id: 's:m:0:long',
-    kind: 'assistant-text',
-    role: 'assistant',
-    content: long,
-  })
-
-  expect(html).toContain('Show 20 more lines')
-  expect(html).toContain('line 0')
-  expect(html).not.toContain('line 79') // tail hidden while collapsed
-})
-
 // P4-18b tool-card family helper: builds a tool-use nested row. Cards collapse
 // by default (prototype FrameEShell), so header assertions (family WORD + target
 // + state) are the per-family proof; bodies are asserted where they render
@@ -202,6 +187,7 @@ function toolRow(fields: {
     toolUseId: `toolu_${fields.toolName}`,
     toolName: fields.toolName,
     toolFamily: fields.toolFamily,
+    agentCompletion: null,
     input: fields.input ?? {},
     status: fields.status ?? 'pending',
     result: fields.result ?? null,
@@ -576,6 +562,7 @@ function agentRow(
   input: Record<string, unknown>,
   status: ToolCardStatus,
   children: NestedTranscriptRow[] = [],
+  agentCompletion: AgentCompletionProjection | null = null,
 ): NestedTranscriptRow {
   return {
     ...blockSource,
@@ -584,6 +571,7 @@ function agentRow(
     toolUseId: `toolu_agent_${suffix}`,
     toolName: 'Agent',
     toolFamily: 'agent',
+    agentCompletion,
     input,
     status,
     result: null,
@@ -608,6 +596,91 @@ test('P4-8c: a completed Agent card shows the Completed agent state', () => {
   )
 
   expect(html).toContain('Completed') // deriveAgentToolState: success → completed
+})
+
+/* ── the finished background agent (leak fix, 2026-08-01) ─────────────────── */
+
+const ADA_COMPLETION: AgentCompletionProjection = {
+  status: 'completed',
+  summary: 'Agent @Ada completed',
+  result: 'Sidebar lives in app/renderer/src/Sidebar.tsx',
+  usage: { totalTokens: 12400, toolUses: 3, durationMs: 48000 },
+}
+
+test('a finished background agent shows its result and stats on its own card, opened', () => {
+  const html = render(
+    agentRow(
+      'bg',
+      { subagent_type: 'Explore', description: 'find the sidebar owner' },
+      'success',
+      [],
+      ADA_COMPLETION,
+    ),
+  )
+
+  expect(html).toContain('Result')
+  expect(html).toContain('Sidebar lives in app/renderer/src/Sidebar.tsx')
+  // Stats read compactly, the way the prototype's card footer does.
+  expect(html).toContain('~12.4k tokens')
+  expect(html).toContain('3 tools')
+  expect(html).toContain('48s')
+  // The card is the ONLY place this appears: no second banner row, and the
+  // summary is not repeated inside a card that already names the agent.
+  expect(html).not.toContain('Agent @Ada completed')
+})
+
+test('a foreground agent card keeps the C4 collapsed default and grows no result section', () => {
+  const html = render(
+    agentRow('fg', { subagent_type: 'Explore', description: 'inline work' }, 'success'),
+  )
+  expect(html).not.toContain('Result')
+  expect(html).toContain('aria-expanded="false"')
+})
+
+test('an unmergeable completion renders one line, never the model-facing banner', () => {
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[
+        {
+          ...blockSource,
+          id: 's:m:0:task-notification',
+          kind: 'task-notification',
+          status: 'completed',
+          summary: 'Agent @Ada completed',
+          toolUseId: null,
+          isReplay: false,
+          children: [],
+        },
+      ]}
+    />,
+  )
+  expect(html).toContain('Agent @Ada completed')
+  // The words the operator should never see again.
+  for (const leaked of ['Task notification', 'Task ID', 'Output file', 'Tool use ID', 'Agent task']) {
+    expect(html).not.toContain(leaked)
+  }
+  // No status chip beside a summary that already ends in its outcome.
+  expect(html).not.toContain('>completed<')
+})
+
+test('a summary-less completion draws nothing at all', () => {
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[
+        {
+          ...blockSource,
+          id: 's:m:0:task-notification',
+          kind: 'task-notification',
+          status: 'completed',
+          summary: null,
+          toolUseId: null,
+          isReplay: false,
+          children: [],
+        },
+      ]}
+    />,
+  )
+  expect(html).not.toContain('completed')
 })
 
 test('D2/C4: an owning Agent card nests its subagent COLLAPSED by default with a child-count affordance', () => {
@@ -1356,7 +1429,9 @@ test('P4-1/F1: findNestedToolUseRow re-derives the row by id, or null when gone'
 })
 
 /* --------------------------------------------------------------------------- *
- * P4-33 — the user bubble's hover-reveal copy chip (Messages.jsx:2094).
+ * User bubble: no copy affordance (operator call, 2026-08-02) — deviates from
+ * the prototype's UserBubble hover chip (Messages.jsx:2094); the assistant
+ * twin below keeps it.
  * --------------------------------------------------------------------------- */
 
 function userRow(content: string): NestedTranscriptRow {
@@ -1370,28 +1445,14 @@ function userRow(content: string): NestedTranscriptRow {
   }
 }
 
-test('P4-33 — a user turn carries a copy control, revealed on hover', () => {
+test('a user turn carries no copy control', () => {
   const html = render(userRow('restart the sidecar please'))
-  expect(html).toContain('aria-label="Copy message"')
-  // Quiet by default; the bubble is the hover group that reveals it.
-  expect(html).toContain('opacity-0')
-  expect(html).toContain('group-hover:opacity-100')
-})
-
-test('P4-33 — the chip is keyboard-reachable, not hover-only', () => {
-  // The prototype reveals on hover ALONE, which hides the control from keyboard
-  // users entirely. Focus reveals it here too.
-  const html = render(userRow('restart the sidecar please'))
-  expect(html).toContain('group-focus-within:opacity-100')
-})
-
-test('P4-33 — an empty user turn gets no copy chip', () => {
-  // Nothing to put on the clipboard (the prototype's showCopy gate).
-  expect(render(userRow('   '))).not.toContain('aria-label="Copy message"')
+  expect(html).not.toContain('aria-label="Copy message"')
+  expect(html).not.toContain('Copy message')
 })
 
 /* --------------------------------------------------------------------------- *
- * P4-38 — the same chip on the assistant body (Messages.jsx:2064-2091).
+ * P4-38 — the hover-reveal copy chip on the assistant body (Messages.jsx:2064-2091).
  *
  * SSR-ONLY LIMIT: `renderToStaticMarkup` produces no document, so the hover
  * reveal and the clipboard round-trip are structurally untestable here. What
@@ -1418,19 +1479,18 @@ test('P4-38 — a settled assistant reply carries a copy control, worded for a r
   const html = render(assistantRow('Here is the answer.'))
   expect(html).toContain('aria-label="Copy response"')
   expect(html).toContain('title="Copy response"')
-  // The user twin's wording must not leak onto the assistant side.
-  expect(html).not.toContain('Copy message')
 })
 
 test('P4-38 — the assistant body is the positioned hover group the chip needs', () => {
   // The chip is `absolute` + `opacity-0`; without `group relative` on the host it
-  // anchors to a distant ancestor and never reveals, and without the reserved
-  // right gutter the revealed glyph lands on the last line's text.
+  // anchors to a distant ancestor and never reveals. No reserved right gutter:
+  // the revealed glyph overlays the last line, matching the prototype.
   const html = render(assistantRow('Here is the answer.'))
-  expect(html).toContain('group relative pr-8')
+  expect(html).toContain('group relative')
+  expect(html).not.toContain('pr-8')
   expect(html).toContain('opacity-0')
   expect(html).toContain('group-hover:opacity-100')
-  // Same real-added keyboard reach as the user twin; the prototype is hover-only.
+  // Real-added keyboard reach; the prototype reveals on hover only.
   expect(html).toContain('group-focus-within:opacity-100')
 })
 
@@ -1442,33 +1502,6 @@ test('P4-38 — no copy chip while the reply is still streaming', () => {
 
 test('P4-38 — an empty assistant turn gets no copy chip', () => {
   expect(render(assistantRow('   \n  '))).not.toContain('Copy response')
-})
-
-test('P4-38 — a collapsed reply still offers the copy control', () => {
-  const long = Array.from({ length: 80 }, (_, i) => `line ${i}`).join('\n')
-  const html = render(assistantRow(long))
-  expect(html).toContain('Show 20 more lines') // the body IS truncated
-  expect(html).not.toContain('line 79') // the tail is not rendered
-  expect(html).toContain('aria-label="Copy response"')
-})
-
-test('P4-38 — the copy payload is the whole markdown source, not the visible part', () => {
-  // The clipboard payload is a prop, never markup, so SSR cannot observe it.
-  // Pinned at the source instead (the `App.test.tsx` / `userVisibleText.test.ts`
-  // precedent): copying the truncated `shown` is the failure mode this guards.
-  const source = readFileSync(
-    new URL('./TranscriptView.tsx', import.meta.url),
-    'utf8',
-  )
-  const start = source.indexOf('function AssistantProse(')
-  expect(start).toBeGreaterThan(-1)
-  const prose = source.slice(start, source.indexOf('\n}\n', start))
-  const flat = prose.replace(/\s+/g, ' ')
-
-  expect(flat).toContain('<BubbleCopyChip content={content} subject="response" />')
-  expect(flat).not.toContain('content={shown}')
-  // `shown` is still what gets RENDERED, so the contrast above is meaningful.
-  expect(flat).toContain('{shown}')
 })
 
 /* --------------------------------------------------------------------------- *

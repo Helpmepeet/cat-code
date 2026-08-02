@@ -3311,17 +3311,27 @@ export function SessionPane({
     previewEngageRef.current?.()
   }
   // Auto-resize the textarea to its content, capped at ~38vh, then let it scroll
-  // (prototype `resizeComposer`, `Chat.jsx:437-441`). Imperative height/overflow
+  // (prototype `resizeComposer`, `Chat.jsx:437-444`). Imperative height/overflow
   // is the only way to size a textarea to its content — it is NOT a JSX inline
   // `style={{}}` (the static cap `max-h-[38vh]` stays a class). Effects never run
   // under `renderToStaticMarkup`, so the SSR pane snapshot is unaffected.
+  //
+  // rAF-deferred, matching the prototype's own fix (`Chat.jsx:443` "rAF so we
+  // measure after the DOM reflects the new value, not before"): reading
+  // `scrollHeight` synchronously in the effect body can measure a layout that
+  // hasn't settled yet (e.g. before web fonts finish loading on first mount),
+  // baking a too-tall height into the textarea that never self-corrects until
+  // the next keystroke — the empty composer's dead gap below the placeholder.
   useEffect(() => {
-    const el = composerRef.current
-    if (!el) return
-    el.style.height = 'auto'
-    const max = Math.round(window.innerHeight * 0.38)
-    el.style.height = `${Math.min(el.scrollHeight, max)}px`
-    el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden'
+    const id = requestAnimationFrame(() => {
+      const el = composerRef.current
+      if (!el) return
+      el.style.height = 'auto'
+      const max = Math.round(window.innerHeight * 0.38)
+      el.style.height = `${Math.min(el.scrollHeight, max)}px`
+      el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden'
+    })
+    return () => cancelAnimationFrame(id)
   }, [prompt])
 
   // Put the caret back where the programmatic rewrite left off (see
@@ -3686,7 +3696,7 @@ export function SessionPane({
   }
 
   return (
-    <main className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden p-8">
+    <main className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden px-8 pb-8">
       {/* No chat header row: the prototype's ChatView has none (the session
        * title lives in the TabBar; the title + actions overflow menu is the
        * P4-6b `SessionActionsMenu`, a separate surface). The cwd/status debug
