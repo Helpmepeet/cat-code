@@ -608,7 +608,7 @@ test('the "Unknown workspace" bucket gets no project ⋮ (it is not a project)',
   expect(html).not.toContain('Project actions for')
 })
 
-test('the project menu offers Hide project and says what it does not do', () => {
+test('the project menu offers Hide project and nothing else', () => {
   const html = renderToStaticMarkup(
     <WorkspaceActionsMenu
       workspaceName="proj"
@@ -618,7 +618,6 @@ test('the project menu offers Hide project and says what it does not do', () => 
     />,
   )
   expect(html).toContain('Hide project')
-  expect(html).toContain('Sessions stay on the Sessions page.')
   expect(html).toContain('aria-label="Project actions for proj"')
   // No em dash in user-visible text (CLAUDE.md §7).
   expect(html).not.toContain('—')

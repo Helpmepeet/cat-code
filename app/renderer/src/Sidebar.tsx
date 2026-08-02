@@ -1254,10 +1254,6 @@ export function WorkspaceActionsMenu({
         >
           Hide project
         </button>
-        {/* Says the surprising part only: what hiding does NOT do. */}
-        <p className="px-2.5 pb-0.5 pt-1 text-[10.5px] leading-[1.35] text-text-faint">
-          Sessions stay on the Sessions page.
-        </p>
       </div>
     </>
   )
