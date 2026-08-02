@@ -3318,10 +3318,12 @@ export function SessionPane({
   //
   // rAF-deferred, matching the prototype's own fix (`Chat.jsx:443` "rAF so we
   // measure after the DOM reflects the new value, not before"): reading
-  // `scrollHeight` synchronously in the effect body can measure a layout that
-  // hasn't settled yet (e.g. before web fonts finish loading on first mount),
-  // baking a too-tall height into the textarea that never self-corrects until
-  // the next keystroke — the empty composer's dead gap below the placeholder.
+  // `scrollHeight` synchronously can measure a layout that hasn't settled yet.
+  //
+  // This is NOT what sized the idle composer's dead gap, despite being changed
+  // once on that theory. On an empty draft this measures 36px whether or not it
+  // is deferred; the gap was the textarea's `inline-block` line box (see the
+  // `block` note on the textarea itself).
   useEffect(() => {
     const id = requestAnimationFrame(() => {
       const el = composerRef.current
@@ -3909,7 +3911,11 @@ export function SessionPane({
           submit(event)
         }}
       >
-        <div className="peer relative flex items-end gap-[14px] px-1 pb-[11px]">
+        {/* No bottom padding, deliberately. The prototype has 11px here
+         * (Chat.jsx:1395 `padding: '0 4px 11px'`); the operator chose 0 on
+         * 2026-08-02 to close the idle composer's dead band. A parity sweep
+         * should not restore it without asking. */}
+        <div className="peer relative flex items-end gap-[14px] px-1">
           <div className="relative min-w-0 flex-1">
             <SlashCommandPicker
               open={slashOpen}
@@ -3928,12 +3934,22 @@ export function SessionPane({
             {/* Multi-line, auto-resizing, BORDERLESS (Chat.jsx:1407): transparent,
              * 16px light text, accent caret. Enter submits, Shift/Alt/Meta+Enter
              * insert a newline; grows to ~38vh then scrolls (auto-resize effect).
-             * `max-h-[38vh]` is a STATIC arbitrary class so Tailwind emits it. */}
+             * `max-h-[38vh]` is a STATIC arbitrary class so Tailwind emits it.
+             *
+             * `block` is load-bearing, not tidying. Preflight leaves a textarea
+             * `inline-block`, so it sits on a line box and this wrapper picks up
+             * the baseline descender strip under it: wrapper 43px around a 36px
+             * textarea. The `self-end` send arrow then bottom-aligns to 43 while
+             * the placeholder's text line ends at 30, leaving the arrow floating
+             * in ~7px of dead space below the text. The prototype never shows
+             * this because its composer is a contentEditable DIV (Chat.jsx:1402),
+             * already block-level. Measured: block gives wrapper 36 / row 47,
+             * matching the prototype exactly. */}
             <textarea
               ref={composerRef}
               aria-label="Prompt"
               rows={1}
-              className="max-h-[38vh] w-full resize-none overflow-hidden border-none bg-transparent py-1.5 text-base font-light leading-normal text-text-primary caret-accent outline-none placeholder:text-[#52525b] placeholder:font-light"
+              className="block max-h-[38vh] w-full resize-none overflow-hidden border-none bg-transparent py-1.5 text-base font-light leading-normal text-text-primary caret-accent outline-none placeholder:text-[#52525b] placeholder:font-light"
               disabled={!activeSessionId}
               readOnly={composerReadOnly}
               onFocus={engagePreviewPane}
