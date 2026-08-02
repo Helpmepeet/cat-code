@@ -148,6 +148,13 @@ export function reduceServerFrameWithLimits(
     if (uuid !== null && session.messages.some(m => messageUuid(m) === uuid)) {
       return state
     }
+    // An evicted uuid is NOT held, so it passes the check above and re-appends
+    // behind newer rows. That inversion is real but strictly transient: the
+    // replay arrives oldest-first, so the last messages processed are the true
+    // newest ones, and the window converges on the correct chronological tail by
+    // the end of the burst. Deliberately NOT guarded — see the convergence test,
+    // which pins the property that a mid-burst reader is the only thing that
+    // could observe the inversion.
   }
 
   const messageBytes = serializedUtf8Bytes(frame.event.message)
