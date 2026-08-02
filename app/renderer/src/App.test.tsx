@@ -536,10 +536,11 @@ test('CC-16: a connecting session accepts typing and can arm the send arrow', ()
   expect(attachButton).not.toContain('disabled=""')
 })
 
-test('CC-16 REGRESSION GUARD: a mid-turn composer is still blocked — the engine owns that', () => {
-  // `ready` + `inputEnabled: false` is the engine's own "input is closed" (a
-  // turn is running). CC-16 unblocked "not connected yet"; widening it into
-  // this state is the regression this test exists to catch.
+test('a mid-turn composer stays typeable: the turn gates the SEND, not the input', () => {
+  // `ready` + `inputEnabled: false` is a turn running. The engine takes one
+  // turn at a time, but the terminal REPL has always accepted input mid-turn
+  // and run it at the turn boundary; the desktop composer now matches, parking
+  // the submit instead of refusing the keystroke.
   const props = {
     accountsSnapshot: null,
     accountsLastResult: null,
@@ -591,15 +592,39 @@ test('CC-16 REGRESSION GUARD: a mid-turn composer is still blocked — the engin
   const sendButton =
     html.match(/<button[^>]*aria-label="Send prompt"[^>]*>/)?.[0] ?? ''
 
-  expect(textarea).toContain('readOnly=""')
+  expect(textarea).not.toContain('readOnly=""')
+  expect(textarea).not.toContain('disabled=""')
   expect(textarea).toContain(
-    'placeholder="Input is unavailable until the current response finishes."',
+    'placeholder="Ask Cat Code anything or describe a task…"',
   )
-  // Non-empty draft, yet this turn cannot be submitted. The guarantee is now
-  // stronger than a disabled arrow: mid-turn the send slot holds Stop, so the
-  // submit control does not exist at all. The engine, not the draft, decides.
+  // The send slot still holds Stop mid-turn (prototype `isGenerating ? Stop :
+  // Send`), so Enter is the submit path here — App parks what it submits.
   expect(sendButton).toBe('')
   expect(html).toContain('aria-label="Stop the turn"')
+})
+
+test('a prompt queued mid-turn says which wait it is in, and is not lost', () => {
+  const base = idleSessionPaneProps()
+  const midTurn = renderToStaticMarkup(
+    <SessionPane
+      {...base}
+      activeConnection={{ status: 'ready', inputEnabled: false }}
+      pendingSubmit="run the tests"
+    />,
+  )
+  expect(midTurn).toContain('run the tests')
+  expect(midTurn).toContain('Sends when this response finishes.')
+
+  // The spawn wait keeps its own copy: a different event is being waited on.
+  const spawning = renderToStaticMarkup(
+    <SessionPane
+      {...base}
+      activeConnection={{ status: 'connecting', inputEnabled: false }}
+      activeLog={{ ...base.activeLog, inputEnabled: false }}
+      pendingSubmit="run the tests"
+    />,
+  )
+  expect(spawning).toContain('Sends when the session is ready.')
 })
 
 test('CC-16: a dead session stays read-only and does not pretend to be typeable', () => {
@@ -661,8 +686,6 @@ test('CC-16: a dead session stays read-only and does not pretend to be typeable'
 test('P4-58: composer read-only and placeholder decisions cover every session state', () => {
   const base = idleSessionPaneProps()
   const ordinaryPlaceholder = 'Ask Cat Code anything or describe a task…'
-  const unavailablePlaceholder =
-    'Input is unavailable until the current response finishes.'
   const cases: Array<{
     name: string
     props: ComponentProps<typeof SessionPane>
@@ -683,9 +706,9 @@ test('P4-58: composer read-only and placeholder decisions cover every session st
         ...base,
         activeConnection: { status: 'ready', inputEnabled: false },
       },
-      readOnly: true,
+      readOnly: false,
       disabled: false,
-      placeholder: unavailablePlaceholder,
+      placeholder: ordinaryPlaceholder,
     },
     {
       name: 'connecting',

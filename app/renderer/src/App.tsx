@@ -1840,9 +1840,9 @@ export function App() {
     // Collapsed-paste tokens are expanded back to their full text before submit
     // — the engine receives plain prompt text, never a `[Pasted text #N]` ref
     // (parity `expandPastedTextRefs`, src/history.ts:81 / handlePromptSubmit.ts:216).
-    // CC-16 — `engineInputEnabled` (mid-turn) still refuses the submit exactly
-    // as before; `connectPending` (a preview pane or an in-flight spawn) parks
-    // it instead of dropping it. The two are never collapsed back into one flag.
+    // CC-16 — a submit the engine cannot take YET is parked, never dropped:
+    // `connectPending` (a preview pane or an in-flight spawn) and `turnPending`
+    // (a turn is running) both park. Only a terminal session refuses outright.
     const action = planSessionSubmit({
       draft: selectPromptDraft(promptDrafts, sessionId),
       pasteEntries: selectSessionPasteState(pasteState, sessionId).entries,
@@ -1883,9 +1883,11 @@ export function App() {
   }
 
   // CC-16 drain — the parked prompt rides the SAME `app.submit` the moment the
-  // session accepts input, so the ~0.6 s spawn is hidden behind the typing the
-  // user was already doing. A terminal status releases it back into the
-  // composer instead: a queued prompt must never disappear on a failed spawn.
+  // session accepts input, whether that is the end of the ~0.6 s spawn or the
+  // end of the running turn (`turn.status` moves `inputEnabled`, so this effect
+  // re-runs on both). A terminal status releases it back into the composer
+  // instead: a queued prompt must never disappear on a spawn or a turn that
+  // never finishes.
   useEffect(() => {
     for (const sessionId of Object.keys(pendingSubmits)) {
       const parked = pendingSubmits[sessionId]
@@ -3372,11 +3374,12 @@ export function SessionPane({
     !!activeSessionId &&
     activeConnection.status === 'ready' &&
     !activeConnection.inputEnabled
-  // CC-16 — the composer's two gates, kept apart: `engineInputEnabled` is the
-  // engine's own "input is closed" (mid-turn), `connectPending` is "no engine
-  // attached yet, and your own focus/keystroke is what attaches one". Typing,
-  // sending and attaching are all allowed while connect-pending; the SUBMIT is
-  // what waits (parked by `submitSession`, drained in App's CC-16 effect).
+  // CC-16 — the composer's three gates, kept apart: `engineInputEnabled` sends
+  // now, `connectPending` is "no engine attached yet, and your own
+  // focus/keystroke is what attaches one", `turnPending` is "attached, a turn is
+  // running". Typing and attaching are allowed in all three; only the SUBMIT
+  // waits (parked by `submitSession`, drained in App's CC-16 effect) — the same
+  // mid-turn queueing the terminal REPL has always had.
   const composerGate = selectComposerGate({
     hasSession: !!activeSessionId,
     preview,
@@ -3384,17 +3387,14 @@ export function SessionPane({
     connectionInputEnabled: activeConnection.inputEnabled,
     logInputEnabled: activeLog.inputEnabled,
   })
-  // One decision drives both the textarea attribute and its copy. A ready
-  // session that is mid-turn stays read-only and says why; previewed/connecting
-  // panes remain editable with the ordinary prompt, while terminal/no-session
-  // states keep their separate connection copy.
+  // One decision drives both the textarea attribute and its copy. Ready,
+  // previewed, connecting and mid-turn panes are all editable with the ordinary
+  // prompt; only terminal/no-session states keep the separate connection copy.
   const composerReadOnly = !composerGate.editable
   const composerPlaceholder =
-    composerReadOnly && generating
-      ? 'Input is unavailable until the current response finishes.'
-      : composerGate.editable || activeConnection.status === 'ready'
-        ? 'Ask Cat Code anything or describe a task…'
-        : 'Connecting…'
+    composerGate.editable || activeConnection.status === 'ready'
+      ? 'Ask Cat Code anything or describe a task…'
+      : 'Connecting…'
   const paused = permissionQueue.length > 0 || askQuestion !== null
   // Slice-cached: stable ref while the session's rows are unchanged, so both
   // `deriveActivity` and the token estimate share one projection.
@@ -3832,7 +3832,8 @@ export function SessionPane({
 
       {/* CC-16 — the parked prompt is the only sign the message still exists:
        * the composer was cleared on submit, so without this row the text looks
-       * lost until the session finishes connecting. */}
+       * lost until it is sent. The two waits it can be in are different events,
+       * so it says which one it is waiting for. */}
       {pendingSubmit ? (
         <div className="flex items-baseline gap-2 text-xs" role="status">
           <span className="shrink-0 font-medium text-text-muted">Queued</span>
@@ -3840,7 +3841,9 @@ export function SessionPane({
             {pendingSubmit}
           </span>
           <span className="shrink-0 text-text-subtle">
-            Sends when the session is ready.
+            {generating
+              ? 'Sends when this response finishes.'
+              : 'Sends when the session is ready.'}
           </span>
         </div>
       ) : null}

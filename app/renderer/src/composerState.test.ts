@@ -413,6 +413,7 @@ describe('CC-16 composer gate — "not connected" is not "engine disabled input"
     expect(gate).toEqual({
       engineInputEnabled: true,
       connectPending: false,
+      turnPending: false,
       editable: true,
     })
   })
@@ -441,24 +442,31 @@ describe('CC-16 composer gate — "not connected" is not "engine disabled input"
     }
   })
 
-  test('REGRESSION GUARD: a mid-turn session stays blocked — the engine owns that', () => {
-    // `ready` + `inputEnabled: false` is the engine's own "input is closed"
-    // (a turn is running). Widening CC-16 into this state is the failure this
-    // test exists to catch: it must remain non-editable AND non-connect-pending.
+  test('a mid-turn session accepts typing and queues the submit', () => {
+    // `ready` + `inputEnabled: false` is a turn running. The ENGINE takes one
+    // turn at a time; the composer does not have to go dead for that, and in
+    // the terminal REPL it never did. This is the turn-pending gate, and it is
+    // NOT connect-pending: the engine is already attached.
     const gate = selectComposerGate(
       gateInput({ connectionInputEnabled: false }),
     )
     expect(gate).toEqual({
       engineInputEnabled: false,
       connectPending: false,
-      editable: false,
+      turnPending: true,
+      editable: true,
     })
   })
 
-  test('REGRESSION GUARD: a log that has not enabled input stays blocked', () => {
+  test('an attached session whose log has not enabled input queues too', () => {
+    // The two stores move together (both reduce `ready` and `turn.status`), so
+    // this is a transient skew, not a state of its own. Queueing it is safe:
+    // the drain reads the CONNECTION snapshot, so it flushes on the next tick.
     const gate = selectComposerGate(gateInput({ logInputEnabled: false }))
-    expect(gate.editable).toBe(false)
+    expect(gate.editable).toBe(true)
+    expect(gate.turnPending).toBe(true)
     expect(gate.connectPending).toBe(false)
+    expect(gate.engineInputEnabled).toBe(false)
   })
 
   test('terminal statuses are neither pending nor editable — no spawn is coming', () => {
@@ -477,6 +485,7 @@ describe('CC-16 composer gate — "not connected" is not "engine disabled input"
       )
       expect(gate.editable).toBe(false)
       expect(gate.connectPending).toBe(false)
+      expect(gate.turnPending).toBe(false)
     }
   })
 
@@ -500,6 +509,7 @@ describe('CC-16 composer gate — "not connected" is not "engine disabled input"
     expect(gate).toEqual({
       engineInputEnabled: false,
       connectPending: false,
+      turnPending: false,
       editable: false,
     })
   })
@@ -549,15 +559,28 @@ describe('CC-16 submit planning — only the submit waits for the engine', () =>
     })
   })
 
-  test('REGRESSION GUARD: a mid-turn submit is still refused, never parked', () => {
-    // Parking a mid-turn submit would be the out-of-scope "queue during a turn"
-    // feature. `ready` + `inputEnabled: false` is exactly the mid-turn gate.
+  test('a mid-turn submit HOLDS — it waits for the turn, it is not dropped', () => {
+    // `ready` + `inputEnabled: false` is exactly the mid-turn gate. The park is
+    // the same one the spawn case uses, and `resolvePendingSubmit` already
+    // answers 'wait' here, so the drain flushes it at the turn boundary.
     expect(
       planSessionSubmit(submitInput({ connectionInputEnabled: false })),
-    ).toEqual({ type: 'ignore' })
+    ).toEqual({ type: 'hold', text: 'hello' })
     expect(planSessionSubmit(submitInput({ logInputEnabled: false }))).toEqual({
-      type: 'ignore',
+      type: 'hold',
+      text: 'hello',
     })
+  })
+
+  test('one queued prompt at a time: a second mid-turn submit keeps its draft', () => {
+    // 'ignore' leaves the text in the composer (submitSession returns before
+    // retiring the draft), so the second prompt is visibly still there rather
+    // than silently replacing the one already waiting on the turn.
+    expect(
+      planSessionSubmit(
+        submitInput({ connectionInputEnabled: false, alreadyParked: true }),
+      ),
+    ).toEqual({ type: 'ignore' })
   })
 
   test('a terminal (dead) session neither sends nor parks', () => {

@@ -358,32 +358,39 @@ export function caretAtHistoryEdge(
 // ── Connect-then-type gating + the parked submit (CC-16) ─────────────────────
 
 /**
- * The composer's single `composerEnabled` flag used to conflate TWO different
- * reasons it could be unusable. They are separated here because only one of
- * them is the user's to resolve:
+ * The composer's single `composerEnabled` flag used to conflate THREE different
+ * reasons it could be unusable. They are separated here because none of them
+ * means "stop typing":
  *
- *  - `engineInputEnabled` — the ENGINE says input is closed: a ready session
- *    mid-turn (`inputEnabled: false`), or a log that has not enabled input.
- *    Real engine-authored state; nothing in this module relaxes it.
+ *  - `engineInputEnabled` — attached and accepting input right now: the submit
+ *    goes straight out over `app.submit`.
  *  - `connectPending` — no engine process is attached YET, and the user's own
  *    intent is what starts one: a preview pane (composer focus/pointer-down
  *    runs `engagePreviewPane` → the existing lazy-restore spawn) or an
  *    in-flight spawn (`connecting` / `starting`).
+ *  - `turnPending` — attached, but a turn is running. The ENGINE takes one turn
+ *    at a time (`AppSessionController.submit` throws on a second,
+ *    `src/app-runtime/AppSessionController.ts:139`), so the SUBMIT waits for
+ *    the turn boundary. Typing never did: the terminal REPL accepts input
+ *    mid-turn and runs it when the query completes (`useCommandQueue` →
+ *    `executeQueuedInput`, `src/screens/REPL.tsx:652,4428-4430`). This is the
+ *    desktop's equivalent, through the SAME park the two cases above use.
  *
- * Typing is accepted whenever EITHER holds (`editable`); only the SUBMIT waits
- * for the engine (`planComposerSubmit` → `hold`, drained by
+ * Typing is accepted whenever ANY of the three holds (`editable`); only the
+ * SUBMIT waits for the engine (`planSessionSubmit` → `hold`, drained by
  * `resolvePendingSubmit`). This does NOT make browsing spawn an engine: the
  * spawn still fires on focus/pointer-down/submit intent, it just stops blocking
  * that intent (the 300 ms dwell auto-spawn stays removed, cut-list §I.1 #3).
  *
- * The terminal statuses — `dead`, `failed`, `exited`, `disconnected` — are
- * neither: no spawn is in flight and no keystroke starts one, so the composer
- * stays read-only there exactly as it was.
+ * The terminal statuses — `dead`, `failed`, `exited`, `disconnected` — are none
+ * of the three: no spawn is in flight, no turn will end, and no keystroke
+ * starts one, so the composer stays read-only there exactly as it was.
  */
 export type ComposerGate = {
   engineInputEnabled: boolean
   connectPending: boolean
-  /** Typing / attach are accepted: the union of the two reasons above. */
+  turnPending: boolean
+  /** Typing / attach are accepted: the union of the three reasons above. */
   editable: boolean
 }
 
@@ -408,19 +415,29 @@ export function selectComposerGate(input: ComposerGateInput): ComposerGate {
     (input.preview ||
       input.connectionStatus === 'connecting' ||
       input.connectionStatus === 'starting')
+  // Attached (`ready`) but input is closed: a turn is running. Nothing else can
+  // produce this — `ready` means the engine's own `app.ready` arrived — so the
+  // wait is bounded by the turn, and the park drains on `turn.status`.
+  const turnPending =
+    input.hasSession &&
+    !engineInputEnabled &&
+    !connectPending &&
+    input.connectionStatus === 'ready'
   return {
     engineInputEnabled,
     connectPending,
-    editable: engineInputEnabled || connectPending,
+    turnPending,
+    editable: engineInputEnabled || connectPending || turnPending,
   }
 }
 
 /**
  * What Enter / the send arrow does.
  *  - `send`   — the engine is attached and accepting input (today's path).
- *  - `hold`   — still spawning: park the text and drain it on ready. Reachable
- *               ONLY while `connectPending`; a mid-turn composer is not
- *               editable, so nothing is ever parked for an engine-disabled turn.
+ *  - `hold`   — the engine cannot take it YET: park the text and drain it the
+ *               moment input opens. Reachable while `connectPending` (still
+ *               spawning) and while `turnPending` (a turn is running); both
+ *               resolve through the same `resolvePendingSubmit` outcome.
  *  - `ignore` — nothing to send, or the composer is not accepting submissions.
  *               The caller leaves the draft alone, so an ignored submit is
  *               visible as "my text is still there", never a swallowed prompt.
@@ -455,7 +472,9 @@ export function planSessionSubmit(input: {
     logInputEnabled: input.logInputEnabled,
   })
   if (gate.engineInputEnabled) return { type: 'send', text }
-  if (gate.connectPending && !input.alreadyParked) return { type: 'hold', text }
+  if ((gate.connectPending || gate.turnPending) && !input.alreadyParked) {
+    return { type: 'hold', text }
+  }
   return { type: 'ignore' }
 }
 
@@ -531,9 +550,14 @@ export function resolvePendingSubmit(connection: {
   }
 }
 
-/** Shown when a parked prompt is released — the text is visibly back, not gone. */
+/**
+ * Shown when a parked prompt is released — the text is visibly back, not gone.
+ * Cause-free on purpose: a park is released both by a spawn that never
+ * connected and by a session that dies while a queued prompt waits out its
+ * turn, and the user's next move is the same either way.
+ */
 export const PENDING_SUBMIT_RELEASED_MESSAGE =
-  'The session did not connect, so your message was not sent. It is back in the composer.'
+  'Your message was not sent, so it is back in the composer.'
 
 /**
  * Give a released prompt back to the composer without clobbering whatever the
