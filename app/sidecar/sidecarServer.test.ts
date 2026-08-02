@@ -5857,11 +5857,18 @@ test('production app.submit order: the echoed user message, THEN turn.status(tru
 
   const timeline = received
     .filter((f): f is Extract<ServerFrame, { kind: 'event' }> => f.kind === 'event')
-    .map(f =>
-      f.event.type === 'turn.status'
-        ? `turn.status(${f.event.activeTurn})`
-        : `message(${(f.event.message as { type?: string }).type})`,
-    )
+    .map(f => {
+      // Every member of the event union gets a branch: the ternary this
+      // replaces assumed "not turn.status" meant "message", which the goal and
+      // permission members disprove.
+      if (f.event.type === 'turn.status') {
+        return `turn.status(${f.event.activeTurn})`
+      }
+      if (f.event.type === 'message') {
+        return `message(${(f.event.message as { type?: string }).type})`
+      }
+      return f.event.type
+    })
 
   expect(timeline).toEqual([
     'message(user)',
