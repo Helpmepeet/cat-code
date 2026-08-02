@@ -94,10 +94,21 @@ import {
   type ReactNode,
 } from 'react'
 import type { SessionId } from '../../shared/protocol.js'
+import { usePopoverFocus } from './overlayFocus.js'
 import {
   SESSION_ACTIONS_MENU_WIDTH,
+  placeSessionActionsMenu,
   type SessionActionsAnchor,
 } from './sessionActions.js'
+import {
+  createHiddenWorkspaces,
+  readHiddenWorkspacesFromStorage,
+  reduceHiddenWorkspacesCleared,
+  reduceWorkspaceHidden,
+  selectVisibleWorkspaceGroups,
+  writeHiddenWorkspacesToStorage,
+  type HiddenWorkspaces,
+} from './sidebarHiddenWorkspaces.js'
 import {
   deriveMergedRowVisual,
   isSidebarVisibleRow,
@@ -354,6 +365,16 @@ export function Sidebar({
   const [sessionOrder, setSessionOrder] = useState<SessionOrder>(
     () => readSessionOrderFromStorage(orderStore) ?? createSessionOrder(),
   )
+  const [hiddenWorkspaces, setHiddenWorkspaces] = useState<HiddenWorkspaces>(
+    () => readHiddenWorkspacesFromStorage(orderStore) ?? createHiddenWorkspaces(),
+  )
+  /** The open project menu: which workspace, and the trigger rect its panel is
+   * placed against. One at a time, like the row ⋮. */
+  const [workspaceMenu, setWorkspaceMenu] = useState<{
+    cwd: string
+    name: string
+    anchor: SessionActionsAnchor
+  } | null>(null)
   /** The in-flight header drag: the group being dragged and the one under the
    * pointer. Only the indicator reads it; the order itself changes on drop. */
   const [headerDrag, setHeaderDrag] = useState<{
@@ -515,9 +536,30 @@ export function Sidebar({
     )
   }, [allGroups, groupRows, query, activeCwd, workspaceOrder, sessionOrder])
 
+  // ➕ Projects the operator has hidden are held back HERE, after ordering and
+  // filtering, so unhiding one drops it straight back into its ranked slot
+  // (`allGroups`, which feeds the reorder freeze list, deliberately still counts
+  // it). A group reports the CC-2 warp-free activity of its newest row, which is
+  // what lets a hidden project resurface on real work but not on a mere open.
+  // A PINNED session from a hidden project still shows in Pinned: an explicit
+  // pin is a stronger statement than a hidden group.
+  const { visible: visibleGroups, hidden: hiddenGroups } = useMemo(
+    () =>
+      selectVisibleWorkspaceGroups(groups, hiddenWorkspaces, group =>
+        group.rows.reduce(
+          (newest, row) => Math.max(newest, sidebarActivityKey(row)),
+          0,
+        ),
+      ),
+    [groups, hiddenWorkspaces],
+  )
+
   // The rendered sequence a reorder is expressed against (what the operator is
-  // looking at, search filter included).
-  const groupCwds = useMemo(() => groups.map(group => group.cwd), [groups])
+  // looking at, search filter and hidden projects included).
+  const groupCwds = useMemo(
+    () => visibleGroups.map(group => group.cwd),
+    [visibleGroups],
+  )
   const allGroupCwds = useMemo(
     () => allGroups.map(group => group.cwd),
     [allGroups],
@@ -537,6 +579,12 @@ export function Sidebar({
     if (next === pinnedSessions) return
     setPinnedSessions(next)
     writePinnedSessionsToStorage(orderStore, next)
+  }
+
+  const commitHiddenWorkspaces = (next: HiddenWorkspaces) => {
+    if (next === hiddenWorkspaces) return
+    setHiddenWorkspaces(next)
+    writeHiddenWorkspacesToStorage(orderStore, next)
   }
 
   const reorderHandlers: WorkspaceReorderHandlers = {
@@ -917,16 +965,16 @@ export function Sidebar({
                  * operator cannot see why. Nothing at all, and a search that
                  * matched no project, both need a line; everything having been
                  * lifted into Pinned does not — that list is right above it. */}
-                {groups.length === 0 && rows.length === 0 ? (
+                {visibleGroups.length === 0 && rows.length === 0 ? (
                   <p className="px-2 py-2 text-xs text-text-subtle">
                     No sessions yet.
                   </p>
-                ) : groups.length === 0 && query ? (
+                ) : visibleGroups.length === 0 && query ? (
                   <p className="px-2 py-2 text-xs text-text-subtle">
                     No matches.
                   </p>
-                ) : groups.length === 0 ? null : (
-                  groups.map(group => (
+                ) : visibleGroups.length === 0 ? null : (
+                  visibleGroups.map(group => (
                     <SessionGroup
                       key={group.cwd}
                       group={group}
@@ -968,10 +1016,39 @@ export function Sidebar({
                           ? rowDrag
                           : null
                       }
+                      onOpenWorkspaceActions={
+                        group.cwd.trim().length > 0
+                          ? anchor =>
+                              setWorkspaceMenu({
+                                cwd: group.cwd,
+                                name: group.name,
+                                anchor,
+                              })
+                          : undefined
+                      }
                       {...rowProps}
                     />
                   ))
                 )}
+
+                {/* The only way back. Hiding is not destructive and must not
+                 * feel one-way, so the rail says how many projects it is
+                 * holding and brings them all back in one click. */}
+                {hiddenGroups.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      commitHiddenWorkspaces(
+                        reduceHiddenWorkspacesCleared(hiddenWorkspaces),
+                      )
+                    }
+                    className="flex w-full items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-text-faint transition-colors hover:bg-shell-hover hover:text-text-muted"
+                  >
+                    {hiddenGroups.length === 1
+                      ? 'Show 1 hidden project'
+                      : `Show ${hiddenGroups.length} hidden projects`}
+                  </button>
+                ) : null}
               </section>
             </div>
 
@@ -1073,6 +1150,27 @@ export function Sidebar({
             ))}
           </nav>
         )}
+
+        {/* Kept INSIDE the aside's React subtree even though it paints as a
+         * fixed overlay: focus moving into it bubbles as `focusWithin`, which is
+         * what stops the rail collapsing out from under the menu the moment the
+         * pointer leaves it. */}
+        {workspaceMenu ? (
+          <WorkspaceActionsMenu
+            workspaceName={workspaceMenu.name}
+            anchor={workspaceMenu.anchor}
+            onHide={() =>
+              commitHiddenWorkspaces(
+                reduceWorkspaceHidden(
+                  hiddenWorkspaces,
+                  workspaceMenu.cwd,
+                  Date.now(),
+                ),
+              )
+            }
+            onClose={() => setWorkspaceMenu(null)}
+          />
+        ) : null}
       </aside>
     </>
   )
@@ -1082,6 +1180,88 @@ export function Sidebar({
 // "Unknown workspace" bucket) is the shared `groupByWorkspace` from
 // `sessionsCatalogState` — the SAME selector the Sessions page uses, so both
 // surfaces group AND label the unified roster identically (no local dup).
+
+/**
+ * The one-row panel behind a project header's ⋮ (operator, 2026-08-02). Hiding
+ * sits behind a menu rather than on a bare ✕ because the ✕ would land a click
+ * away from the group's own "+", and a mis-hit would sweep a project off the
+ * rail.
+ *
+ * Deliberately NOT `SessionActionsMenu`: that menu renders the closed
+ * `SessionActionKind` union for one SESSION, and widening it with a workspace
+ * verb would put two different subjects in one vocabulary. Only the placement
+ * (`placeSessionActionsMenu`, incl. the bottom-flip) and the scrim/panel shape
+ * are shared.
+ */
+export function WorkspaceActionsMenu({
+  workspaceName,
+  anchor,
+  onHide,
+  onClose,
+}: {
+  workspaceName: string
+  anchor: SessionActionsAnchor
+  onHide: () => void
+  onClose: () => void
+}) {
+  const menuRef = useRef<HTMLDivElement>(null)
+  const { restoreTriggerFocus } = usePopoverFocus({
+    open: true,
+    containerRef: menuRef,
+    onEscape: onClose,
+  })
+  // One row (`px-2.5 py-1.5` + a 15px line ≈ 30) plus the panel's own chrome
+  // (`p-1.5` + 1px border top and bottom = 14) — the height model
+  // `estimateSessionActionsMenuHeight` states for the session menu, at this
+  // panel's single row. Only the flip threshold reads it.
+  const placement = placeSessionActionsMenu(
+    anchor,
+    typeof window === 'undefined'
+      ? { width: 1280, height: 800 }
+      : { width: window.innerWidth, height: window.innerHeight },
+    44,
+  )
+
+  return (
+    <>
+      <div
+        className="fixed inset-0 z-[70]"
+        aria-hidden="true"
+        onClick={onClose}
+      />
+      {/* §0 EXCEPTION: data-driven geometry Tailwind can't express — the
+          measured anchor of the ⋮ that opened this menu. */}
+      <div
+        ref={menuRef}
+        role="menu"
+        aria-label={`Project actions for ${workspaceName}`}
+        className="animate-sa-pop fixed z-[71] w-[232px] rounded-[11px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[0_18px_44px_rgba(0,0,0,0.6)]"
+        style={
+          placement.placeAbove
+            ? { bottom: placement.bottom, left: placement.left }
+            : { top: placement.top, left: placement.left }
+        }
+      >
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            restoreTriggerFocus()
+            onHide()
+            onClose()
+          }}
+          className="flex w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left text-[12.5px] text-text-muted transition-colors hover:bg-shell-hover hover:text-text-primary"
+        >
+          Hide project
+        </button>
+        {/* Says the surprising part only: what hiding does NOT do. */}
+        <p className="px-2.5 pb-0.5 pt-1 text-[10.5px] leading-[1.35] text-text-faint">
+          Sessions stay on the Sessions page.
+        </p>
+      </div>
+    </>
+  )
+}
 
 // Exported for SSR tests: the sidebar collapses to the rail by default
 // (all four open sources are false under renderToStaticMarkup), so the
@@ -1097,6 +1277,7 @@ export function SessionGroup({
   onOpenHistory,
   onOpenRowActions,
   onNewSessionInWorkspace,
+  onOpenWorkspaceActions,
   onTogglePin,
   pinnedSessions = [],
   modelForSession,
@@ -1120,6 +1301,11 @@ export function SessionGroup({
     anchor: SessionActionsAnchor,
   ) => void
   onNewSessionInWorkspace?: (repId: SessionId) => void
+  /** ➕ Project menu (operator, 2026-08-02: the Projects header could add a
+   * project but nothing could remove one). Optional + additive: without it the
+   * header carries no ⋮. The caller withholds it for the "Unknown workspace"
+   * bucket, which is not a project and cannot be hidden. */
+  onOpenWorkspaceActions?: (anchor: SessionActionsAnchor) => void
   /** Pin toggle for this group's rows. Optional + additive: without it a row
    * shows only its ⋮ (the pre-Pinned-section markup). */
   onTogglePin?: (sessionId: string) => void
@@ -1320,6 +1506,30 @@ export function SessionGroup({
             className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded text-text-faint opacity-0 transition-[opacity,color,background-color] hover:bg-accent/[0.12] hover:text-accent group-hover/head:opacity-100 focus-visible:opacity-100"
           >
             <PlusIcon />
+          </button>
+        ) : null}
+        {onOpenWorkspaceActions ? (
+          <button
+            type="button"
+            onClick={event => {
+              // The trigger's rect, right-aligned to the ⋮ — the row kebab's
+              // arrangement (`SidebarRowItem`); the menu owns the gap, the clamp
+              // and the bottom-flip.
+              const rect = event.currentTarget.getBoundingClientRect()
+              onOpenWorkspaceActions({
+                top: rect.top,
+                bottom: rect.bottom,
+                left: rect.right - SESSION_ACTIONS_MENU_WIDTH,
+              })
+            }}
+            // The header is the collapse toggle AND the drag handle; keep this
+            // button's own keys off both.
+            onKeyDown={event => event.stopPropagation()}
+            title="Project actions"
+            aria-label={`Project actions for ${group.name}`}
+            className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded text-text-faint opacity-0 transition-[opacity,color,background-color] hover:bg-accent/[0.12] hover:text-accent group-hover/head:opacity-100 focus-visible:opacity-100"
+          >
+            <KebabIcon />
           </button>
         ) : null}
       </div>

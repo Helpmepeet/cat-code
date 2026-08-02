@@ -5,8 +5,10 @@ import {
   SessionGroup,
   Sidebar,
   SidebarRowItem,
+  WorkspaceActionsMenu,
   type WorkspaceReorderHandlers,
 } from './Sidebar.js'
+import { SIDEBAR_HIDDEN_WORKSPACES_STORAGE_KEY } from './sidebarHiddenWorkspaces.js'
 import type { MergedSessionRow, WorkspaceGroup } from './sessionsCatalogState.js'
 import {
   PINNED_SESSION_DRAG_MIME,
@@ -114,6 +116,7 @@ function renderGroup(
   {
     onNewSessionInWorkspace,
     onOpenRowActions,
+    onOpenWorkspaceActions,
     reorder,
     dragging,
     dropEdge,
@@ -124,6 +127,7 @@ function renderGroup(
       sessionId: SessionId,
       anchor: { top: number; left: number },
     ) => void
+    onOpenWorkspaceActions?: () => void
     reorder?: WorkspaceReorderHandlers
     dragging?: boolean
     dropEdge?: WorkspaceDropEdge | null
@@ -141,6 +145,7 @@ function renderGroup(
       onOpenHistory={noop}
       onNewSessionInWorkspace={onNewSessionInWorkspace}
       onOpenRowActions={onOpenRowActions}
+      onOpenWorkspaceActions={onOpenWorkspaceActions}
       reorder={reorder}
       dragging={dragging}
       dropEdge={dropEdge}
@@ -535,6 +540,16 @@ function pinning(...sessionIds: string[]) {
   })
 }
 
+/** Projects the operator has hidden, as the project menu would have left them. */
+function hiding(...workspaces: { cwd: string; hiddenAt: number }[]) {
+  return storage({
+    [SIDEBAR_HIDDEN_WORKSPACES_STORAGE_KEY]: JSON.stringify({
+      version: 1,
+      workspaces,
+    }),
+  })
+}
+
 /** A stored per-project row arrangement, as a drag would have left it. */
 function ordering(cwd: string, ...sessionIds: string[]) {
   return storage({
@@ -569,6 +584,83 @@ test('the Projects section header is always present, empty roster included', () 
   expect(empty).toContain('No sessions yet.')
   // Nothing is pinned, so the section that would hold pins never renders.
   expect(empty).not.toContain('>Pinned<')
+})
+
+// ── Hide project ─────────────────────────────────────────────────────────────
+
+test('a project header carries a ⋮ only when wired for project actions', () => {
+  const wired = renderGroup([registryRow('a')], {
+    onOpenWorkspaceActions: noop,
+  })
+  expect(wired).toContain('aria-label="Project actions for proj"')
+  expect(wired).toContain('title="Project actions"')
+  expect(renderGroup([registryRow('a')])).not.toContain('Project actions')
+})
+
+test('the "Unknown workspace" bucket gets no project ⋮ (it is not a project)', () => {
+  // The rail withholds the callback for the empty-cwd bucket, the same rule that
+  // makes it non-reorderable.
+  const html = renderSidebar({
+    menuActive: true,
+    rows: [registryRow('s1', { cwd: '', displayLabel: 'Alpha' })],
+  })
+  expect(html).toContain('Unknown workspace')
+  expect(html).not.toContain('Project actions for')
+})
+
+test('the project menu offers Hide project and says what it does not do', () => {
+  const html = renderToStaticMarkup(
+    <WorkspaceActionsMenu
+      workspaceName="proj"
+      anchor={{ top: 100, bottom: 118, left: 40 }}
+      onHide={noop}
+      onClose={noop}
+    />,
+  )
+  expect(html).toContain('Hide project')
+  expect(html).toContain('Sessions stay on the Sessions page.')
+  expect(html).toContain('aria-label="Project actions for proj"')
+  // No em dash in user-visible text (CLAUDE.md §7).
+  expect(html).not.toContain('—')
+})
+
+test('a hidden project leaves the rail, and the roster says how to get it back', () => {
+  const html = renderSidebar({
+    menuActive: true,
+    rows: [
+      registryRow('s1', { cwd: '/w/keep', displayLabel: 'Alpha' }),
+      registryRow('s2', { cwd: '/w/gone', displayLabel: 'Beta' }),
+    ],
+    activeSessionId: null,
+    storage: hiding({ cwd: '/w/gone', hiddenAt: Date.now() }),
+  })
+  expect(html).toContain('>keep<')
+  expect(html).not.toContain('>gone<')
+  expect(html).not.toContain('>Beta<')
+  expect(html).toContain('Show 1 hidden project')
+})
+
+test('a project with work newer than the hide comes back on its own', () => {
+  // Why `hiddenAt` exists: picking a hidden project's folder from "Add project"
+  // creates a session there, and the group must not swallow it.
+  const html = renderSidebar({
+    menuActive: true,
+    rows: [
+      registryRow('s2', {
+        cwd: '/w/gone',
+        displayLabel: 'Beta',
+        lastMessageSentAt: 5_000,
+      }),
+    ],
+    activeSessionId: null,
+    storage: hiding({ cwd: '/w/gone', hiddenAt: 1_000 }),
+  })
+  expect(html).toContain('>gone<')
+  expect(html).not.toContain('hidden project')
+})
+
+test('nothing hidden means no restore line at all', () => {
+  expect(renderSidebar({ menuActive: true })).not.toContain('hidden project')
 })
 
 // ── Pinned section ───────────────────────────────────────────────────────────
