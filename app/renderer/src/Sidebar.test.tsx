@@ -15,10 +15,6 @@ import {
   SIDEBAR_PINNED_SESSIONS_STORAGE_KEY,
 } from './sidebarPinnedSessions.js'
 import {
-  SESSION_ORDER_DRAG_MIME,
-  SIDEBAR_SESSION_ORDER_STORAGE_KEY,
-} from './sidebarSessionOrder.js'
-import {
   WORKSPACE_ORDER_DRAG_MIME,
   type WorkspaceDropEdge,
 } from './sidebarWorkspaceOrder.js'
@@ -550,10 +546,11 @@ function hiding(...workspaces: { cwd: string; hiddenAt: number }[]) {
   })
 }
 
-/** A stored per-project row arrangement, as a drag would have left it. */
-function ordering(cwd: string, ...sessionIds: string[]) {
+/** A per-project row arrangement left behind by the reverted 2026-08-01 in-group
+ * drag. Nothing reads this key any more; the fixture exists to prove it. */
+function staleOrdering(cwd: string, ...sessionIds: string[]) {
   return storage({
-    [SIDEBAR_SESSION_ORDER_STORAGE_KEY]: JSON.stringify({
+    'catcode.sidebarSessionOrder.v1': JSON.stringify({
       version: 1,
       byWorkspace: { [cwd]: sessionIds },
     }),
@@ -685,23 +682,23 @@ test('the Pinned section is absent when nothing is pinned', () => {
   expect(renderSidebar({ menuActive: true })).not.toContain('>Pinned<')
 })
 
-test('every session row is a reorder drag handle, pinned or in its project', () => {
+test('a project row is NOT a drag handle; only a pinned row is', () => {
   const rows = [
     registryRow('s1', { displayLabel: 'Alpha' }),
     registryRow('s2', { displayLabel: 'Beta' }),
   ]
-  // One workspace header carries ⌥↑/⌥↓, and so does each of the two rows.
+  // Only the workspace HEADER carries ⌥↑/⌥↓ — its two project rows do not.
   const html = renderSidebar({ menuActive: true, rows })
   expect(
     html.match(/aria-keyshortcuts="Alt\+ArrowUp Alt\+ArrowDown"/g),
-  ).toHaveLength(3)
-  // Exactly one cursor class on the row: `cursor-pointer cursor-grab` together
-  // would be resolved by Tailwind's emit order, not by the order written.
-  expect(html).toContain('transition-colors cursor-grab ')
-  expect(html).not.toContain('cursor-pointer cursor-grab')
+  ).toHaveLength(1)
+  // Scoped to ROWS: the workspace header is still a grab handle (2026-07-26
+  // workspace reordering), and only a row carries the `transition-colors` prefix.
+  expect(html).toContain('transition-colors cursor-pointer')
+  expect(html).not.toContain('transition-colors cursor-grab')
 
-  // Pinning one moves it to the Pinned section, where it stays a handle — the
-  // count is unchanged, only which list it belongs to.
+  // Pinning one lifts it into the Pinned section, which IS reorderable, so the
+  // handle count goes up by exactly one and that row becomes a grab handle.
   const withPin = renderSidebar({
     menuActive: true,
     rows,
@@ -709,39 +706,25 @@ test('every session row is a reorder drag handle, pinned or in its project', () 
   })
   expect(
     withPin.match(/aria-keyshortcuts="Alt\+ArrowUp Alt\+ArrowDown"/g),
-  ).toHaveLength(3)
+  ).toHaveLength(2)
+  expect(withPin).toContain('transition-colors cursor-grab')
 })
 
-test('the two row lists accept only their own drag type', () => {
-  // Both are reorderable, but a pinned row dragged over a project row must not
-  // light up a drop edge it would never land on, so the payload types differ.
-  expect(PINNED_SESSION_DRAG_MIME).not.toBe(SESSION_ORDER_DRAG_MIME)
-  // ...and neither collides with the workspace-header drag or the tab→panel
-  // split's `text/sessionId`.
-  for (const mime of [PINNED_SESSION_DRAG_MIME, SESSION_ORDER_DRAG_MIME]) {
-    expect(mime).not.toBe(WORKSPACE_ORDER_DRAG_MIME)
-    expect(mime).not.toBe('text/sessionid')
-  }
+test('the pinned drag type collides with no other list in the rail', () => {
+  // Pinned is the only reorderable row list, but its payload must still not be
+  // accepted by the workspace-header drag or the tab→panel split.
+  expect(PINNED_SESSION_DRAG_MIME).not.toBe(WORKSPACE_ORDER_DRAG_MIME)
+  expect(PINNED_SESSION_DRAG_MIME).not.toBe('text/sessionid')
 })
 
-test('a row in the "Unknown workspace" bucket is not a drag handle', () => {
-  // That bucket is a catch-all for transcripts whose workspace could not be
-  // reconciled, not a project, so there is no order to persist against it.
-  const html = renderSidebar({
-    menuActive: true,
-    rows: [
-      historyRow('h1', { displayLabel: 'Orphan one', cwd: '' }),
-      historyRow('h2', { displayLabel: 'Orphan two', cwd: '' }),
-    ],
-  })
-  expect(html).toContain('Orphan one')
-  expect(html).not.toContain('aria-keyshortcuts')
-  expect(html).not.toContain('draggable')
-})
-
-test('a hand-arranged group holds its slots, and a new session lands on top', () => {
-  // Stored order is Beta, Alpha. The roster arrives in CC-2 activity order
-  // (Gamma newest), and Gamma has never been dragged.
+test('a group ignores a stale hand-arrangement and stays in activity order', () => {
+  // REGRESSION (2026-08-02). In-group ordering stored the group's whole id list
+  // capped at 64, and rendered un-stored rows ABOVE the stored block. Any project
+  // past the cap therefore surfaced its OLDEST rows: cat-code had 168 sessions, so
+  // the rail's top row read 22 days old while the newest sat far below.
+  //
+  // Here the arrangement names the two NEWEST rows, which is exactly the shape
+  // that inverted. Activity order must win outright.
   const html = renderSidebar({
     menuActive: true,
     rows: [
@@ -749,7 +732,7 @@ test('a hand-arranged group holds its slots, and a new session lands on top', ()
       registryRow('s2', { displayLabel: 'Beta', lastMessageSentAt: 2 }),
       registryRow('s1', { displayLabel: 'Alpha', lastMessageSentAt: 1 }),
     ],
-    storage: ordering('/tmp/proj', 'engine-s2', 'engine-s1'),
+    storage: staleOrdering('/tmp/proj', 'engine-s3', 'engine-s2'),
   })
   const order = ['Gamma', 'Beta', 'Alpha'].map(name => html.indexOf(`>${name}<`))
   expect(order.every(at => at > -1)).toBe(true)

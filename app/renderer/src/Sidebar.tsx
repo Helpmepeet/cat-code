@@ -83,6 +83,19 @@
  *    `groupByWorkspace` so the Sessions page keeps frozen-alphabetical, and it
  *    never consults `activeCwd` — CC-2 warp-freedom is intact. The Pinned
  *    section's order works the same way (`sidebarPinnedSessions.ts`).
+ *  - Session ROWS inside a project group are NOT reorderable, deliberately. A
+ *    group is an unbounded, auto-generated activity feed, so a manual order over
+ *    it cannot be stored: persisting the whole sequence needs a cap, and a cap
+ *    splits the list into remembered and forgotten halves. That shipped on
+ *    2026-08-01 with a 64-id cap and inverted the rail on the first project to
+ *    exceed it — 168 sessions meant the 64 newest were held in an arrangement
+ *    below the 104 oldest, so the group read "22d" at the top while the real
+ *    newest row sat far below. Raising the cap defers that; it cannot fix it.
+ *    Manual sequencing therefore lives in exactly ONE place, the Pinned section
+ *    (`sidebarPinnedSessions.ts` — "the one place in the rail where the operator,
+ *    not activity, decides the sequence"), whose list is short and operator-
+ *    authored, so a total order over it is legitimate. Inside a group, CC-2
+ *    activity order is the only rule. Reverted 2026-08-02.
  */
 
 import {
@@ -135,17 +148,6 @@ import {
   writePinnedSessionsToStorage,
   type PinnedSessions,
 } from './sidebarPinnedSessions.js'
-import {
-  createSessionOrder,
-  readSessionOrderFromStorage,
-  reduceSessionOrderMoved,
-  reduceSessionOrderStepped,
-  selectOrderedGroupRows,
-  selectSessionDropEdge,
-  SESSION_ORDER_DRAG_MIME,
-  writeSessionOrderToStorage,
-  type SessionOrder,
-} from './sidebarSessionOrder.js'
 import {
   createWorkspaceOrder,
   readWorkspaceOrderFromStorage,
@@ -207,14 +209,16 @@ export type WorkspaceReorderHandlers = {
 
 /**
  * The same shape for a session ROW, keyed on the merge id instead of a cwd, plus
- * the drag type that scopes it. One shape serves both reorderable row lists —
- * the Pinned section and a workspace group — and the `mime` is what keeps them
- * from accepting each other's drags: a pinned row dragged over a project row
- * must not light up a drop edge it would never land on. The caller binds the
- * list; the row only reports what happened to it.
+ * the drag type that scopes it. The Pinned section is the only reorderable row
+ * list; `mime` still scopes the drag so a pinned row never lights up a drop edge
+ * on a project row, which it would never land on. The caller binds the list; the
+ * row only reports what happened to it.
+ *
+ * Project groups are deliberately NOT reorderable — see the header note on
+ * activity order being the single rule inside a group.
  */
-/** Which side of the hovered row the dragged row would land on. Shared by both
- * reorderable row lists (`sidebarPinnedSessions` / `sidebarSessionOrder`). */
+/** Which side of the hovered row the dragged row would land on
+ * (`sidebarPinnedSessions`). */
 export type RowDropEdge = 'before' | 'after'
 
 export type RowReorderHandlers = {
@@ -362,9 +366,6 @@ export function Sidebar({
   const [pinnedSessions, setPinnedSessions] = useState<PinnedSessions>(
     () => readPinnedSessionsFromStorage(orderStore) ?? createPinnedSessions(),
   )
-  const [sessionOrder, setSessionOrder] = useState<SessionOrder>(
-    () => readSessionOrderFromStorage(orderStore) ?? createSessionOrder(),
-  )
   const [hiddenWorkspaces, setHiddenWorkspaces] = useState<HiddenWorkspaces>(
     () => readHiddenWorkspacesFromStorage(orderStore) ?? createHiddenWorkspaces(),
   )
@@ -385,14 +386,6 @@ export function Sidebar({
   const [pinDrag, setPinDrag] = useState<{ from: string; over: string } | null>(
     null,
   )
-  /** The same, for a row being dragged within its workspace group. `cwd` is what
-   * makes a cross-project drop impossible: a row only reacts to a drag that
-   * started in its own group. */
-  const [rowDrag, setRowDrag] = useState<{
-    cwd: string
-    from: string
-    over: string
-  } | null>(null)
   const showTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** The rail element, so the backdrop-close re-collapse can ask whether the
@@ -498,43 +491,32 @@ export function Sidebar({
     [railRows, pinnedSessions],
   )
 
-  // ➕ The operator's custom order is applied HERE, on the sidebar side of the
-  // shared selector — `groupByWorkspace` itself stays frozen-alphabetical for
-  // the Sessions page, which uses the same call.
+  // ➕ The operator's custom WORKSPACE order is applied HERE, on the sidebar side
+  // of the shared selector — `groupByWorkspace` itself stays frozen-alphabetical
+  // for the Sessions page, which uses the same call.
   //
   // The UNFILTERED group sequence. A reorder is expressed against what is on
   // screen, but it FREEZES this one, so groups the search box is hiding keep
   // their current position instead of falling behind the two that were dragged.
   //
-  // Each group's ROWS then take the operator's per-project order on top of the
-  // CC-2 activity sort they arrive in (`sidebarSessionOrder.ts` — unranked rows
-  // stay on top in activity order, the hand-arranged block holds its slots
-  // below).
-  const orderGroups = (list: WorkspaceGroup[]) =>
-    list.map(group => ({
-      ...group,
-      rows: selectOrderedGroupRows(group.rows, sessionOrder, group.cwd),
-    }))
-
+  // A group's ROWS take no manual order at all: inside a project, CC-2 activity
+  // order is the only rule (see the header note). Manual sequencing lives solely
+  // in the Pinned section.
   const allGroups = useMemo(
     () =>
-      orderGroups(
-        selectOrderedWorkspaceGroups(
-          groupByWorkspace(groupRows, activeCwd),
-          workspaceOrder,
-        ),
+      selectOrderedWorkspaceGroups(
+        groupByWorkspace(groupRows, activeCwd),
+        workspaceOrder,
       ),
-    [groupRows, activeCwd, workspaceOrder, sessionOrder],
+    [groupRows, activeCwd, workspaceOrder],
   )
   const groups = useMemo(() => {
     if (!query) return allGroups
-    return orderGroups(
-      selectOrderedWorkspaceGroups(
-        groupByWorkspace(groupRows.filter(matchesQuery), activeCwd),
-        workspaceOrder,
-      ),
+    return selectOrderedWorkspaceGroups(
+      groupByWorkspace(groupRows.filter(matchesQuery), activeCwd),
+      workspaceOrder,
     )
-  }, [allGroups, groupRows, query, activeCwd, workspaceOrder, sessionOrder])
+  }, [allGroups, groupRows, query, activeCwd, workspaceOrder])
 
   // ➕ Projects the operator has hidden are held back HERE, after ordering and
   // filtering, so unhiding one drops it straight back into its ranked slot
@@ -670,82 +652,6 @@ export function Sidebar({
     },
   }
 
-  const commitSessionOrder = (next: SessionOrder) => {
-    if (next === sessionOrder) return
-    setSessionOrder(next)
-    writeSessionOrderToStorage(orderStore, next)
-  }
-
-  /**
-   * One workspace group's row-reorder handlers. Built per group so the drag is
-   * scoped to it by construction: `rowDrag.cwd` gates every callback, which is
-   * how a cross-project drop is refused rather than faked (a session's project
-   * IS its cwd, so "moving" it between groups would mean moving its working
-   * directory).
-   *
-   * The rendered ids decide the drop; the group's FULL id list is what gets
-   * frozen on the first drag — see `sidebarSessionOrder.ts`.
-   */
-  const rowReorderHandlersFor = (cwd: string): RowReorderHandlers => {
-    const renderedIds = (
-      groups.find(group => group.cwd === cwd)?.rows ?? []
-    ).map(row => row.sessionId)
-    const allIds = (
-      allGroups.find(group => group.cwd === cwd)?.rows ?? []
-    ).map(row => row.sessionId)
-    const inThisGroup = (drag: typeof rowDrag) => drag != null && drag.cwd === cwd
-    return {
-      mime: SESSION_ORDER_DRAG_MIME,
-      onDragStart: id => setRowDrag({ cwd, from: id, over: id }),
-      onDragOver: id =>
-        setRowDrag(drag =>
-          !inThisGroup(drag) || drag!.over === id
-            ? drag
-            : { ...drag!, over: id },
-        ),
-      // Park the indicator back on the dragged row itself (which draws none, a
-      // row cannot drop onto itself), so it is never left promising a landing
-      // spot the pointer has already left.
-      onDragLeave: id =>
-        setRowDrag(drag =>
-          !inThisGroup(drag) || drag!.over !== id
-            ? drag
-            : { ...drag!, over: drag!.from },
-        ),
-      onDrop: id => {
-        if (inThisGroup(rowDrag)) {
-          commitSessionOrder(
-            reduceSessionOrderMoved(
-              sessionOrder,
-              cwd,
-              renderedIds,
-              rowDrag!.from,
-              id,
-              allIds,
-            ),
-          )
-        }
-        setRowDrag(null)
-      },
-      onDragEnd: () => setRowDrag(null),
-      onStep: (id, direction) => {
-        const next = reduceSessionOrderStepped(
-          sessionOrder,
-          cwd,
-          renderedIds,
-          id,
-          direction,
-          allIds,
-        )
-        if (next === sessionOrder) return
-        // React's keyed diff moves the stepped row by re-inserting its node,
-        // which drops focus to the body — so a second ⌥↓ would go nowhere.
-        refocusRowId.current = id
-        commitSessionOrder(next)
-      },
-    }
-  }
-
   const togglePin = (sessionId: string) =>
     commitPinnedSessions(
       reducePinnedSessionsToggled(pinnedSessions, sessionId),
@@ -758,14 +664,13 @@ export function Sidebar({
     headerRefs.current.get(cwd)?.focus()
   }, [workspaceOrder])
 
-  // Both row lists hand focus back the same way; whichever order changed, the
-  // stepped row is the one that just moved.
+  // The Pinned list hands focus back to the row a keyboard step just moved.
   useLayoutEffect(() => {
     const id = refocusRowId.current
     if (id == null) return
     refocusRowId.current = null
     rowRefs.current.get(id)?.focus()
-  }, [pinnedSessions, sessionOrder])
+  }, [pinnedSessions])
 
   useLayoutEffect(() => {
     const navId = refocusNavId.current
@@ -1002,20 +907,10 @@ export function Sidebar({
                           : null
                       }
                       pinnedSessions={pinnedSessions}
-                      rowReorder={
-                        group.cwd.trim().length > 0
-                          ? rowReorderHandlersFor(group.cwd)
-                          : undefined
-                      }
                       rowRef={(sessionId, element) => {
                         if (element) rowRefs.current.set(sessionId, element)
                         else rowRefs.current.delete(sessionId)
                       }}
-                      rowDrag={
-                        rowDrag != null && rowDrag.cwd === group.cwd
-                          ? rowDrag
-                          : null
-                      }
                       onOpenWorkspaceActions={
                         group.cwd.trim().length > 0
                           ? anchor =>
@@ -1278,9 +1173,7 @@ export function SessionGroup({
   pinnedSessions = [],
   modelForSession,
   reorder,
-  rowReorder,
   rowRef,
-  rowDrag = null,
   headerRef,
   dragging = false,
   dropEdge = null,
@@ -1313,15 +1206,9 @@ export function SessionGroup({
   /** ➕ workspace reordering (operator, 2026-07-26). Optional + additive: the
    * header is a plain, non-draggable header when this is absent. */
   reorder?: WorkspaceReorderHandlers
-  /** Row reordering WITHIN this group (operator, 2026-08-01). Already scoped to
-   * this group's cwd by the caller, which is what refuses a cross-project drop.
-   * Optional + additive: without it the rows are not drag handles. */
-  rowReorder?: RowReorderHandlers
   /** Each row element, so a keyboard step can put focus back on the row it just
    * moved. Keyed on the merge id (the caller keeps one map for the whole rail). */
   rowRef?: (sessionId: string, element: HTMLDivElement | null) => void
-  /** The in-flight row drag, already filtered to this group by the caller. */
-  rowDrag?: { from: string; over: string } | null
   /** The header button, so a keyboard step can put focus back on the workspace
    * it just moved (the TabBar's per-tab `ref` idiom). */
   headerRef?: (element: HTMLButtonElement | null) => void
@@ -1547,21 +1434,10 @@ export function SessionGroup({
               onOpenRowActions={onOpenRowActions}
               onTogglePin={onTogglePin}
               modelForSession={modelForSession}
-              reorder={rowReorder}
               rowRef={
                 rowRef
                   ? element => rowRef(row.sessionId, element)
                   : undefined
-              }
-              dragging={rowDrag?.from === row.sessionId}
-              dropEdge={
-                rowDrag != null && rowDrag.over === row.sessionId
-                  ? selectSessionDropEdge(
-                      visibleRows.map(r => r.sessionId),
-                      rowDrag.from,
-                      row.sessionId,
-                    )
-                  : null
               }
             />
           ))}
