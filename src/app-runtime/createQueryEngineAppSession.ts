@@ -43,6 +43,8 @@ export function createQueryEngineAppSession(
         yield* engine.submitMessage(prompt, {
           uuid: options?.uuid,
           isMeta: options?.isMeta,
+          origin: options?.origin,
+          onInputPersisted: options?.onInputPersisted,
         })
       } finally {
         currentPermissionHandler = undefined

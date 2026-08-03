@@ -39,7 +39,7 @@ import type { AppState } from './state/AppState.js'
 import { type Tools, type ToolUseContext, toolMatchesName } from './Tool.js'
 import type { AgentDefinition } from './tools/AgentTool/loadAgentsDir.js'
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from './tools/SyntheticOutputTool/SyntheticOutputTool.js'
-import type { Message } from './types/message.js'
+import type { Message, MessageOrigin } from './types/message.js'
 import type { OrphanedPermission } from './types/textInputTypes.js'
 import { createAbortController } from './utils/abortController.js'
 import type { AttributionState } from './utils/commitAttribution.js'
@@ -230,7 +230,12 @@ export class QueryEngine {
 
   async *submitMessage(
     prompt: string | ContentBlockParam[],
-    options?: { uuid?: string; isMeta?: boolean },
+    options?: {
+      uuid?: string
+      isMeta?: boolean
+      origin?: MessageOrigin
+      onInputPersisted?: () => void
+    },
   ): AsyncGenerator<SDKMessage, void, unknown> {
     const {
       cwd,
@@ -470,6 +475,14 @@ export class QueryEngine {
 
     // Push new messages, including user input and any attachments
     this.mutableMessages.push(...messagesFromUserInput)
+    // Autonomous app-runtime turns carry trusted engine provenance through the
+    // same persisted UserMessage path as normal input. This option is never
+    // populated by the renderer-side app.submit protocol.
+    if (options?.origin) {
+      for (const message of messagesFromUserInput) {
+        if (message.type === 'user') message.origin = options.origin
+      }
+    }
     if (deferredAttemptUuid && deferredJobId) {
       for (const message of messagesFromUserInput) {
         if (message.type === 'user' && message.uuid === deferredAttemptUuid) {
@@ -499,12 +512,14 @@ export class QueryEngine {
     // kill-mid-request. The await is ~4ms on SSD, ~30ms under disk contention
     // — the single largest controllable critical-path cost after module eval.
     // Transcript is still written (for post-hoc debugging); just not blocking.
+    let inputPersisted = false
     if (persistSession && messagesFromUserInput.length > 0) {
       const transcriptPromise = recordTranscriptFn(messages)
       if (isBareMode()) {
         void transcriptPromise
       } else {
         await transcriptPromise
+        inputPersisted = true
         if (
           isEnvTruthy(process.env.CLAUDE_CODE_EAGER_FLUSH) ||
           isEnvTruthy(process.env.CLAUDE_CODE_IS_COWORK)
@@ -513,6 +528,7 @@ export class QueryEngine {
         }
       }
     }
+    if (inputPersisted) options?.onInputPersisted?.()
 
     if (deferredAttemptUuid) {
       const accepted = messagesFromUserInput.some(

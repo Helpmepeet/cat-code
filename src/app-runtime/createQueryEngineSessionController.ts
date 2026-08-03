@@ -1,4 +1,5 @@
 import type { SDKMessage } from '../entrypoints/agentSdkTypes.js'
+import type { MessageOrigin } from '../types/message.js'
 import {
   AppSessionController,
   type AppSessionPrompt,
@@ -12,6 +13,8 @@ import type {
 export type QueryEngineSessionOptions = {
   uuid?: string
   isMeta?: boolean
+  origin?: MessageOrigin
+  onInputPersisted?: () => void
   onPermissionRequest?: (
     request: AppPermissionRequest,
   ) => Promise<AppPermissionResponse>

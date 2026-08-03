@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { getDefaultAppState, type AppState } from './state/AppStateStore.js'
 import { createFileStateCacheWithSizeLimit } from './utils/fileStateCache.js'
 import { createUserMessage } from './utils/messages.js'
+import type { Message } from './types/message.js'
 
 const calls: string[] = []
 
@@ -136,4 +137,54 @@ test('a public deferred submit cannot enter the provider before UUID durability 
 
   expect(calls).toEqual(['record', 'durability-barrier'])
   expect(calls).not.toContain('provider')
+})
+
+test('a task notification origin is persisted before the sidecar acknowledgement', async () => {
+  let state: AppState = getDefaultAppState()
+  let persisted: Message[] = []
+  let acknowledgementSawPersistedOrigin = false
+  const engine = new QueryEngine({
+    cwd: process.cwd(),
+    tools: [],
+    commands: [],
+    mcpClients: [],
+    agents: [],
+    canUseTool: async () => ({ behavior: 'allow', updatedInput: {} }),
+    getAppState: () => state,
+    setAppState: update => {
+      state = update(state)
+    },
+    initialMessages: [],
+    readFileCache: createFileStateCacheWithSizeLimit(20),
+    customSystemPrompt: '',
+    recordTranscript: async messages => {
+      persisted = messages
+      return null
+    },
+  })
+
+  try {
+    for await (const _message of engine.submitMessage('worker result', {
+      origin: {
+        kind: 'task-notification',
+        taskId: 'worker-1',
+        summary: 'Agent @Ada completed',
+        result: 'done',
+      },
+      onInputPersisted: () => {
+        acknowledgementSawPersistedOrigin = persisted.some(
+          message =>
+            message.type === 'user' &&
+            message.origin?.kind === 'task-notification' &&
+            message.origin.taskId === 'worker-1',
+        )
+      },
+    })) {
+      // The test needs only the pre-provider persistence boundary.
+    }
+  } catch {
+    // This isolated engine fixture deliberately has no provider credentials.
+  }
+
+  expect(acknowledgementSawPersistedOrigin).toBe(true)
 })

@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto'
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
 import type { SDKMessage } from '../entrypoints/agentSdkTypes.js'
+import type { MessageOrigin } from '../types/message.js'
 import { withStreamJsonAccountDiagnosticHook } from '../services/api/accountDiagnostics.js'
 import {
   createAbortStatusEvent,
@@ -20,6 +21,10 @@ export type AppSessionSubmitOptions = {
   uuid?: string
   isMeta?: boolean
   goalSnapshot?: AppGoalSnapshot
+  /** Engine-owned provenance for autonomous turns (never renderer input). */
+  origin?: MessageOrigin
+  /** Sidecar-only acknowledgement after the input is durably persisted. */
+  onInputPersisted?: () => void
 }
 
 export type AppSessionPrompt = string | ContentBlockParam[]
@@ -30,6 +35,8 @@ export type AppSessionControllerAdapter = {
     options?: {
       uuid?: string
       isMeta?: boolean
+      origin?: MessageOrigin
+      onInputPersisted?: () => void
     }
     signal: AbortSignal
     onPermissionRequest: (
@@ -158,6 +165,8 @@ export class AppSessionController {
             options: {
               uuid: options?.uuid,
               isMeta: options?.isMeta,
+              origin: options?.origin,
+              onInputPersisted: options?.onInputPersisted,
             },
             signal: this.abortController.signal,
             onPermissionRequest: request => this.waitForPermissionResponse(request),

@@ -45,11 +45,20 @@ describe('createQueryEngineSessionController', () => {
     const submitPromise = controller.submit('read the file', {
       uuid: 'prompt-1',
       isMeta: true,
+      origin: {
+        kind: 'task-notification',
+        taskId: 'worker-1',
+        summary: 'Agent @Ada completed',
+      },
     })
 
     expect(receivedPrompt).toBe('read the file')
     expect(receivedOptions?.uuid).toBe('prompt-1')
     expect(receivedOptions?.isMeta).toBe(true)
+    expect(receivedOptions?.origin).toMatchObject({
+      kind: 'task-notification',
+      taskId: 'worker-1',
+    })
     expect(typeof receivedOptions?.onPermissionRequest).toBe('function')
 
     controller.respondToPermissionRequest('perm-1', {
