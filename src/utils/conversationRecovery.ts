@@ -18,6 +18,14 @@ import type {
   NormalizedUserMessage,
 } from '../types/message.js'
 import { PERMISSION_MODES } from '../types/permissions.js'
+import {
+  COMMAND_ARGS_TAG,
+  COMMAND_MESSAGE_TAG,
+  COMMAND_NAME_TAG,
+  LOCAL_COMMAND_CAVEAT_TAG,
+  LOCAL_COMMAND_STDERR_TAG,
+  LOCAL_COMMAND_STDOUT_TAG,
+} from '../constants/xml.js'
 import { suppressNextSkillListing } from './attachments.js'
 import {
   copyFileHistoryForResume,
@@ -236,12 +244,16 @@ export function deserializeMessagesWithInterruptDetection(
       lastRelevantIdx !== -1 &&
       filteredMessages[lastRelevantIdx]!.type === 'user'
     ) {
+      const sentinel = createAssistantMessage({
+        content: NO_RESPONSE_REQUESTED,
+      }) as NormalizedMessage
+      if (sentinel.type === 'assistant') {
+        sentinel.isInternalNoResponseSentinel = true
+      }
       filteredMessages.splice(
         lastRelevantIdx + 1,
         0,
-        createAssistantMessage({
-          content: NO_RESPONSE_REQUESTED,
-        }) as NormalizedMessage,
+        sentinel,
       )
     }
 
@@ -277,16 +289,22 @@ function detectTurnInterruption(
     return { kind: 'none' }
   }
 
-  // Find the last turn-relevant message, skipping system/progress and
-  // synthetic API error assistants. Error assistants are already filtered
-  // before API send (normalizeMessagesForAPI) — skipping them here lets
-  // auto-resume fire after retry exhaustion instead of reading the error as
-  // a completed turn.
+  // Find the last semantic turn message. Recovery/API bookkeeping can trail a
+  // real prompt, especially after /compact, but it is not user intent. Error
+  // assistants are already filtered before API send (normalizeMessagesForAPI)
+  // — skipping them here lets auto-resume fire after retry exhaustion instead
+  // of reading the error as a completed turn.
   const lastMessageIdx = messages.findLastIndex(
     m =>
       m.type !== 'system' &&
       m.type !== 'progress' &&
-      !(m.type === 'assistant' && m.isApiErrorMessage),
+      !(m.type === 'assistant' && m.isApiErrorMessage) &&
+      !(
+        m.type === 'user' &&
+        (m.isMeta ||
+          m.isCompactSummary ||
+          isLocalCommandBookkeepingMessage(m))
+      ),
   )
   const lastMessage =
     lastMessageIdx !== -1 ? messages[lastMessageIdx] : undefined
@@ -305,9 +323,6 @@ function detectTurnInterruption(
   }
 
   if (lastMessage.type === 'user') {
-    if (lastMessage.isMeta || lastMessage.isCompactSummary) {
-      return { kind: 'none' }
-    }
     if (isToolUseResultMessage(lastMessage)) {
       // Brief mode (#20467) drops the trailing assistant text block, so a
       // completed brief-mode turn legitimately ends on SendUserMessage's
@@ -331,6 +346,32 @@ function detectTurnInterruption(
   }
 
   return { kind: 'none' }
+}
+
+const LOCAL_COMMAND_BOOKKEEPING_TAGS = [
+  COMMAND_NAME_TAG,
+  COMMAND_MESSAGE_TAG,
+  COMMAND_ARGS_TAG,
+  LOCAL_COMMAND_CAVEAT_TAG,
+  LOCAL_COMMAND_STDOUT_TAG,
+  LOCAL_COMMAND_STDERR_TAG,
+] as const
+
+/** Local slash-command records are transcript bookkeeping, not user intent. */
+function isLocalCommandBookkeepingMessage(
+  message: NormalizedUserMessage,
+): boolean {
+  const content = message.message.content
+  const texts =
+    typeof content === 'string'
+      ? [content]
+      : content.flatMap(block => (block.type === 'text' ? [block.text] : []))
+  return texts.some(rawText => {
+    const text = rawText.trimStart()
+    return LOCAL_COMMAND_BOOKKEEPING_TAGS.some(tag =>
+      text.startsWith(`<${tag}`),
+    )
+  })
 }
 
 /**
