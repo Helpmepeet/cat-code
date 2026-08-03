@@ -1,6 +1,6 @@
 # Query Provider Runtime Map
 
-Last refreshed: 2026-07-27
+Last refreshed: 2026-08-03
 
 ## Purpose
 
@@ -21,18 +21,13 @@ Read in this order for most provider-neutral query work:
 
 | Order | File | Why first |
 |---|---|---|
-| 1 | [`WORKSPACE_MAP.md`](WORKSPACE_MAP.md) | Current map index and adjacent domain maps. |
-| 2 | [`../../src/QueryEngine.ts`](../../src/QueryEngine.ts) | SDK/headless turn owner: input processing, prompt/context refresh, model switches, transcript writes, and query invocation. |
-| 3 | [`../../src/query.ts`](../../src/query.ts) | Main query state machine: compaction gates, provider instruction assembly, model calls, tool loops, retries, and terminal reasons. |
-| 4 | [`../../src/utils/queryContext.ts`](../../src/utils/queryContext.ts) | Shared fetcher for system prompt parts, user context, system context, and side-question fallback cache-safe params. |
-| 5 | [`../../src/context.ts`](../../src/context.ts) | User/system context builders, memoization, git-status snapshot, date injection, and cache-breaker hooks. |
-| 6 | [`../../src/utils/systemPrompt.ts`](../../src/utils/systemPrompt.ts) | Effective system prompt branch selection after context fetch. |
-| 7 | [`../../src/services/api/instructionAssembly.ts`](../../src/services/api/instructionAssembly.ts) | Provider-neutral boundary that places prompt/context/messages for OpenAI vs Claude-style providers. |
-| 8 | [`../../src/services/api/claude.ts`](../../src/services/api/claude.ts) | Shared model-call path: tool schema shaping, message normalization, beta/cache headers, retry wrapper, and streaming parse. |
-| 9 | [`../../src/services/api/client.ts`](../../src/services/api/client.ts) | Provider-aware client factory and auth/client routing. |
-| 10 | [`../../src/utils/model/providers.ts`](../../src/utils/model/providers.ts) | Session/env/model-derived provider resolution. |
-| 11 | [`../../src/utils/model/model.ts`](../../src/utils/model/model.ts) | Main-loop model defaults, runtime plan-mode adjustment, aliases, display, and API normalization. |
-| 12 | [`../../src/utils/model/validateModel.ts`](../../src/utils/model/validateModel.ts) | User-facing model validation path and API-probe fallback. |
+| 1 | [`../../src/QueryEngine.ts`](../../src/QueryEngine.ts) | SDK/headless turn owner: input processing, prompt/context refresh, model switches, transcript writes, and query invocation. |
+| 2 | [`../../src/screens/REPL.tsx`](../../src/screens/REPL.tsx) | Interactive turn owner; computes the same runtime model before prompt construction and query launch. |
+| 3 | [`../../src/query.ts`](../../src/query.ts) | Main query state machine: compaction gates, runtime model, instruction assembly, calls, and retries. |
+| 4 | [`../../src/utils/queryContext.ts`](../../src/utils/queryContext.ts) | Shared fetcher for prompt parts, user/system context, and cache-safe side-question params. |
+| 5 | [`../../src/utils/systemPrompt.ts`](../../src/utils/systemPrompt.ts) | Effective system-prompt branch selection after context fetch. |
+| 6 | [`../../src/services/api/instructionAssembly.ts`](../../src/services/api/instructionAssembly.ts) | Provider-neutral placement of prompt/context/messages for OpenAI vs Claude-style providers. |
+| 7 | [`../../src/utils/model/model.ts`](../../src/utils/model/model.ts) | Defaults, runtime plan-mode adjustment, aliases, display, and API normalization. |
 
 ## Runtime Flow
 
@@ -76,9 +71,10 @@ src/services/api/client.ts
 | Change provider instruction placement | `src/services/api/instructionAssembly.ts` | `src/query.ts`, `src/services/api/claude.ts`, [`prompt-system.md`](prompt-system.md) | OpenAI receives stable instructions and optional developer context. Claude-style providers receive system-context-appended prompts and user-context-prepended messages. |
 | Change model selection defaults, aliases, or catalog options | `src/utils/model/model.ts` | `src/utils/model/modelStrings.ts`, `src/utils/model/aliases.ts`, `src/utils/model/configs.ts`, `src/utils/model/modelOptions.ts`, `src/utils/context.ts`, `src/utils/effort.ts` | Defaults depend on subscription/provider. `parseUserSpecifiedModel()` resolves aliases and `[1m]`; `normalizeModelStringForAPI()` strips context suffixes at API time. New model launches need config keys, picker entries, display/canonical names, context-window budgeting, and default effort checked together. |
 | Change provider selection | `src/utils/model/providers.ts` | `src/QueryEngine.ts`, `src/query.ts`, `src/services/api/client.ts`, `app/sidecar/runControlsDomain.ts` | `getAPIProvider()` reads session provider, env, and startup preference. `resolveModelSelectionProvider()` handles interactive cross-provider selection; `resolveRequestProvider()` performs request-time GPT routing. |
-| Change runtime model adjustment | `src/utils/model/model.ts` | `src/query.ts`, `src/utils/context.ts` | `getRuntimeMainLoopModel()` can adjust plan-mode behavior before each API iteration. The request provider is resolved again after this runtime model is chosen. |
+| Change runtime model adjustment | `src/utils/model/model.ts` | `src/query.ts`, `src/screens/REPL.tsx`, `src/utils/context.ts` | `getRuntimeMainLoopModel()` adjusts plan-mode behavior before each API iteration and before REPL builds normal or background prompt sections. The request provider is resolved again after this runtime model is chosen. |
 | Change API request shaping | `src/services/api/claude.ts` | `src/utils/api.ts`, `src/utils/messages.ts`, `src/services/api/instructionAssembly.ts` | Despite the filename, this is the shared Anthropic-SDK-shaped request path for all providers, including providers reached through adapters. |
 | Change cheap secondary model calls | `src/utils/model/model.ts:getSmallFastModelForProvider()` | `src/services/api/claude.ts:queryHaiku()`, `src/services/compact/compact.ts`, `src/services/awaySummary.ts`, `src/utils/hooks/apiQueryHookHelper.ts`, `src/utils/hooks/skillImprovement.ts` | Codex subscribers route provider-aware side-calls to GPT mini. OpenAI-bound callers must build provider instruction assembly; cheap calls explicitly request low reasoning effort. Anthropic-only callers such as `/insights` pin `provider: 'firstParty'`. |
+| Change first-party model defaults or retirement migration | `src/utils/model/model.ts` | `src/utils/model/{configs,modelOptions,aliases}.ts`, `src/migrations/migrateRetiredClaude46ModelsToClaude5.ts`, `src/main.tsx`, `src/constants/prompts.ts` | Model parsing and defaults distinguish first-party availability from third-party lag. Retired first-party Claude 4.6 pins migrate to Claude 5 and drop the obsolete `[1m]` suffix; the on-disk migration uses literal third-party/base-URL configuration rather than session provider state, which has not settled when startup migrations run. |
 | Change client/auth routing | `src/services/api/client.ts` | `src/utils/auth.ts`, `src/utils/model/providers.ts`, [`codex-core.md`](codex-core.md) | Provider-specific clients are selected here. OpenAI/Codex fetch-adapter and account lease details are intentionally routed to `codex-core.md`. |
 | Change retry/fallback behavior | `src/services/api/withRetry.ts` | `src/query.ts`, `src/services/api/claude.ts`, [`codex-core.md`](codex-core.md) | `claude.ts` wraps requests with `withRetry()`. `query.ts` handles model fallback by switching model/provider and replaying the whole attempt. |
 | Change compaction/collapse hooks | `src/query.ts` | `src/services/compact/autoCompact.ts`, `src/services/compact/compact.ts`, `src/services/compact/microCompact.ts`, `src/services/contextCollapse/index.ts` | Query loop order matters: tool-result budget, snip, microcompact, context collapse, autocompact, blocking-limit check, API call, reactive recovery. `compact.ts` also owns the provider-aware streaming fallback request and its instruction assembly. |
@@ -106,7 +102,7 @@ src/services/api/client.ts
 | Interactive selection provider | `src/utils/model/providers.ts:resolveModelSelectionProvider()` | GPT selections route to OpenAI. Only an explicit Claude ID/alias crosses an OpenAI-started session to the configured Anthropic provider; Default/null and ambiguous custom IDs stay provider-local. `canApplyModelSelection()` rejects provider-family changes after the first turn. |
 | Startup provider | `src/utils/model/providers.ts:resolveStartupProvider()` | An explicit CLI/settings/agent model may select a provider. An implicit default preserves environment/provider precedence, so `CLAUDE_CODE_USE_OPENAI` cannot be overwritten by a stale Anthropic preference. |
 | Default main-loop model | `src/utils/model/model.ts:getDefaultMainLoopModelSetting()` | Codex subscribers default to a GPT model; other defaults depend on ant/user subscription and provider. |
-| Model catalog and picker entries | `src/utils/model/configs.ts`, `src/utils/model/modelOptions.ts` | Codex/OpenAI and Claude options are assembled separately from adapter request translation. Before the first turn, a credentialed session may expose both provider families; after tokens are spent, the picker stays provider-local to preserve prompt/cache invariants. Keep picker labels/descriptions, `ALL_MODEL_CONFIGS`, and display/canonicalization in `model.ts` aligned. |
+| Model catalog and picker entries | `src/utils/model/configs.ts`, `src/utils/model/modelOptions.ts` | Codex/OpenAI and Claude options are assembled separately from adapter request translation. Before the first turn, a credentialed session may expose both provider families; after tokens are spent, the picker stays provider-local to preserve prompt/cache invariants. First-party rows omit redundant `[1m]` variants when the base frontier model already has a 1M context window; third-party model IDs remain distinct. Keep picker labels/descriptions, `ALL_MODEL_CONFIGS`, and display/canonicalization in `model.ts` aligned. |
 | User-selected model | `src/utils/model/model.ts:getMainLoopModel()` | Session override, startup flag, `CAT_CODE_MODEL` (falls back to upstream `ANTHROPIC_MODEL` via `getModelEnvOverride()`), settings, then default. Disallowed configured models are ignored. |
 | Runtime model | `src/utils/model/model.ts:getRuntimeMainLoopModel()` | Per-iteration adjustment based on permission mode and token state, notably plan-mode aliases. |
 | API model string | `src/utils/model/model.ts:normalizeModelStringForAPI()` | Removes `[1m]`/`[2m]` suffixes before API dispatch. |

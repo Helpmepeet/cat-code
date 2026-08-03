@@ -1,6 +1,6 @@
 # Prompt System Map
 
-Last refreshed: 2026-07-12
+Last refreshed: 2026-07-31
 
 ## Purpose
 
@@ -16,27 +16,23 @@ Read in this order for most prompt or instruction work:
 
 | Order | File | Why first |
 |---|---|---|
-| 1 | [`WORKSPACE_MAP.md`](WORKSPACE_MAP.md) | Current map index. Use focused maps before broad search. |
-| 2 | [`../prompts/2026-04-30-prompt-surfaces.md`](../prompts/2026-04-30-prompt-surfaces.md) | Older prompt-specific index. Useful background, but verify against code. |
-| 3 | [`../../src/constants/prompts.ts`](../../src/constants/prompts.ts) | Main prompt corpus and system-prompt section builders. |
+| 1 | [`../../src/constants/prompts.ts`](../../src/constants/prompts.ts) | Main prompt corpus, provider sections, and default/Agent Mode builders. |
+| 2 | [`../../src/constants/corePolicy.ts`](../../src/constants/corePolicy.ts) | Shared policy core for cyber, provenance, instruction authority, outcome reporting, and retry budget. |
+| 3 | [`../../src/constants/systemPromptSections.ts`](../../src/constants/systemPromptSections.ts) | Section registration and input-keyed prompt cache behavior. |
 | 4 | [`../../src/utils/systemPrompt.ts`](../../src/utils/systemPrompt.ts) | Runtime branch selection and append/replace rules. |
-| 5 | [`../../src/context.ts`](../../src/context.ts) | Auto-injected user and system context. |
-| 6 | [`../../src/utils/claudemd.ts`](../../src/utils/claudemd.ts) | Instruction file discovery, wrapping, includes, excludes, and priority. |
-| 7 | [`../../src/utils/queryContext.ts`](../../src/utils/queryContext.ts) | Shared cache-prefix prompt/context fetcher and side-question fallback. |
-| 8 | [`../../src/QueryEngine.ts`](../../src/QueryEngine.ts) | SDK/headless query setup and prompt refresh after model/provider changes. |
-| 9 | [`../../src/query.ts`](../../src/query.ts) | Final query loop before provider request assembly. |
-| 10 | [`../../src/services/api/instructionAssembly.ts`](../../src/services/api/instructionAssembly.ts) | Provider-specific placement of system, user, and volatile context. |
-| 11 | [`../../src/services/api/claude.ts`](../../src/services/api/claude.ts) | API request prompt blocks, cache boundary handling, and extra API-time prompt prefixes. |
-| 12 | [`../../src/tools/AgentTool/runAgent.ts`](../../src/tools/AgentTool/runAgent.ts) | Subagent prompt assembly and context trimming. |
+| 5 | [`../../src/utils/claudemd.ts`](../../src/utils/claudemd.ts) | Instruction-file discovery, source-tier wrapper, includes, excludes, and priority. |
+| 6 | [`../../src/utils/queryContext.ts`](../../src/utils/queryContext.ts) | Shared prompt/context fetcher and side-question fallback. |
+| 7 | [`../../src/services/api/instructionAssembly.ts`](../../src/services/api/instructionAssembly.ts) | Provider-specific placement of system, user, and volatile context. |
 
 ## Prompt Routing By Goal
 
 | Goal | Owner | Fallback order | Notes |
 |---|---|---|---|
-| Change normal default assistant behavior | `src/constants/prompts.ts` | `src/constants/promptStyles/gpt.ts`, `src/constants/systemPromptSections.ts`, `src/utils/systemPrompt.ts`, `src/QueryEngine.ts` | `getSystemPrompt()` builds the default prompt array. GPT-specific safety rules and session guidance live in `promptStyles/gpt.ts`; shared transcript guidance remains in `prompts.ts`. |
-| Change Agent Mode system prompt behavior | `src/constants/prompts.ts` | `src/agent-mode/agentMode.ts`, `src/agent-mode/orchestratorPrompt.ts`, `src/agent-mode/rolePrompts.ts`, `src/utils/systemPrompt.ts` | Agent Mode is active via `CLAUDE_CODE_AGENT_MODE`. It uses dedicated sections from `getAgentModeSystemPromptSections()` when available. |
+| Change normal default assistant behavior | `src/constants/prompts.ts` | `src/constants/{corePolicy,systemPromptSections}.ts`, `src/constants/promptStyles/gpt.ts`, `src/utils/systemPrompt.ts`, `src/QueryEngine.ts` | `getSystemPrompt()` builds the default prompt array. `corePolicy.ts` supplies the provider/mode-neutral action policy; GPT-specific sections remain in `promptStyles/gpt.ts`. |
+| Change Agent Mode system prompt behavior | `src/constants/prompts.ts` | `src/constants/corePolicy.ts`, `src/agent-mode/{agentMode,orchestratorPrompt,rolePrompts}.ts`, `src/utils/systemPrompt.ts` | Agent Mode is active via `CLAUDE_CODE_AGENT_MODE`; its sections select the same provider policy core and actions as the default path, then add Agent Mode doctrine. |
+| Change prompt-section cache correctness | `src/constants/systemPromptSections.ts` | `src/constants/prompts.ts`, `src/utils/queryContext.ts`, `src/screens/REPL.tsx` | Cache entries are keyed by each section's captured inputs. Cache-breaking sections must not populate that cache; language intentionally remains session-stable until a cache-clearing transition. |
 | Change runtime prompt precedence | `src/utils/systemPrompt.ts` | `src/utils/queryContext.ts`, `src/QueryEngine.ts`, `src/query.ts` | Effective branch order is override, Agent Mode, coordinator, main-thread agent, custom, default. `appendSystemPrompt` appends unless override replaces everything. |
-| Change repo/user instruction and recalled-memory loading | `src/utils/claudemd.ts` | `src/context.ts`, `src/utils/settings/constants.ts`, `src/utils/config.ts`, `src/bootstrap/state.ts` | This path controls managed, user, project, and local instruction inputs plus separately framed auto-memory and team-memory indexes. |
+| Change repo/user instruction and recalled-memory loading | `src/utils/claudemd.ts` | `src/constants/corePolicy.ts`, `src/context.ts`, `src/utils/settings/constants.ts`, `src/utils/config.ts` | This path controls managed, user, project, and local instruction inputs plus separately framed auto-memory and team-memory indexes. Its source-tier wrapper grants workflow/repository authority, never permission authority. |
 | Change generated context injection | `src/context.ts` | `src/utils/claudemd.ts`, `src/utils/queryContext.ts`, `src/QueryEngine.ts`, `src/services/api/instructionAssembly.ts` | User context and system context are separate channels until provider assembly. |
 | Change SDK or custom-system-prompt behavior | `src/QueryEngine.ts` | `src/utils/queryContext.ts`, `src/utils/systemPrompt.ts`, `src/query.ts` | Custom prompts skip default prompt construction and skip `getSystemContext()` in `fetchSystemPromptParts()`. |
 | Change final provider placement | `src/services/api/instructionAssembly.ts` | `src/query.ts`, `src/services/api/claude.ts`, `src/services/api/codex-fetch-adapter.ts`, `src/utils/providerPromptRegressions.test.ts` | OpenAI keeps volatile `gitStatus` and `cacheBreaker` in developer context instead of user input messages. Claude-style providers append system context and prepend user context. |
@@ -137,7 +133,7 @@ Use focused checks first, then the documented build:
 
 | Area | Command |
 |---|---|
-| Main prompt and Agent Mode prompt sections | `bun test src/constants/prompts.test.ts` |
+| Main prompt, policy core, and Agent Mode prompt sections | `bun test src/constants/corePolicy.test.ts src/constants/prompts.test.ts src/constants/systemPromptSections.test.ts` |
 | Instruction and recalled-memory framing | `bun test src/utils/claudemd.test.ts` |
 | Save-side memory evaluator wiring | `bun test scripts/memory-behavior-eval/save-side.test.ts` |
 | Provider instruction placement and prompt regressions | `bun test src/utils/providerPromptRegressions.test.ts` |

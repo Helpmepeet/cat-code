@@ -1,6 +1,6 @@
 # Config And Persistence Routing Map
 
-Last refreshed: 2026-07-29
+Last refreshed: 2026-08-03
 
 ## Purpose
 
@@ -32,7 +32,7 @@ for the config and persistence slice.
 | Which settings files exist | `src/utils/settings/settings.ts` | `src/utils/envUtils.ts`, `src/utils/settings/managedPath.ts` | User settings are under `getClaudeConfigHomeDir()` as `settings.json` or `cowork_settings.json`; project settings are `.cat-code/settings.json`; local settings are `.cat-code/settings.local.json`. |
 | `--setting-sources` behavior | `src/utils/settings/constants.ts` | `src/bootstrap/state.ts`, `src/main.tsx` | The flag can narrow user/project/local loading. It does not exclude `flagSettings` or `policySettings`. |
 | Inline or file-backed flag settings | `src/utils/settings/settings.ts` | `src/bootstrap/state.ts` | `flagSettings` can come from a `--settings` path and inline SDK settings. Inline settings merge on top of the flag file. |
-| Editable settings writes | `src/utils/settings/settings.ts` | `src/utils/settings/internalWrites.ts`, `src/utils/settings/changeDetector.ts` | `updateSettingsForSource()` writes only user/project/local sources. Arrays replace during source writes but concat/dedupe during normal merged reads. |
+| Editable settings writes | `src/utils/settings/settings.ts` | `src/utils/settings/settingsCache.ts`, `src/utils/settings/internalWrites.ts`, `src/utils/settings/changeDetector.ts` | `updateSettingsForSource()` writes only user/project/local sources. It holds a cross-process lock and invalidates that file's parsed cache before its under-lock read, so another desktop engine's completed write is merged rather than replaced by stale cached state. Arrays replace during source writes but concat/dedupe during normal merged reads. |
 | Hot reload of settings | `src/utils/settings/changeDetector.ts` | `src/utils/settings/applySettingsChange.ts`, `src/utils/hooks.ts` | File watcher changes run `ConfigChange` hooks first. `fanOut()` owns cache reset before subscribers read fresh settings, and `applySettingsChange()` is shared by both interactive AppState updates and the headless/SDK subscribe path. MDM/plist/registry changes are polled. |
 | Initial merged settings snapshot | `src/utils/settings/settings.ts` | `src/utils/settings/settingsCache.ts` | `getInitialSettings()`/`getSettings_DEPRECATED()` use a session cache. Reset that cache through the established change paths, not per listener. |
 | Session-only fast mode state | `src/utils/fastMode.ts` | `src/commands/fast/fast.tsx`, `src/components/Settings/Config.tsx`, `src/state/AppState.tsx` | Fast mode availability and cooldown live in runtime/AppState. `/fast` and the Settings Config toggle update the current session and model, not `userSettings.fastMode`; startup defaults to off after availability/model checks. |
