@@ -57,7 +57,7 @@ test('every fact is read from the record shape the engine really writes', () => 
       assistant('claude-sonnet-5'),
       user('acceptEdits'),
       sendPath('xhigh'),
-      // The live donut's sum: input + both cache buckets.
+      // The live donut's sum: every input bucket plus output.
       assistant('gpt-5.6-terra', {
         input_tokens: 1_163,
         cache_read_input_tokens: 186_368,
@@ -71,6 +71,44 @@ test('every fact is read from the record shape the engine really writes', () => 
   expect(facts.permissionMode).toBe('acceptEdits')
   expect(facts.effort).toBe('xhigh')
   expect(facts.usedTokens).toBe(187_531)
+})
+
+/**
+ * The numerator is the engine's `getTokenCountFromUsage` (`src/utils/tokens.ts:52-59`):
+ * all three input buckets PLUS `output_tokens`. Dropping output undercounts by one
+ * response, and would put this path out of step with the renderer's live gauge —
+ * the same session would read two different sizes previewed vs attached.
+ */
+test('output_tokens counts toward context, matching the engine numerator', () => {
+  const facts = readTranscriptRunFacts(
+    transcriptOf([
+      assistant('gpt-5.6-sol', {
+        input_tokens: 654,
+        cache_read_input_tokens: 29_184,
+        cache_creation_input_tokens: 0,
+        output_tokens: 123,
+      }),
+    ]),
+    noWindow,
+  )
+  // Input buckets alone would read 29,838; the engine's own measurement of this
+  // reference turn was 29,961 (reviews/2026-08-02-context-gauge-accumulator.md).
+  expect(facts.usedTokens).toBe(29_961)
+})
+
+test('a turn whose ONLY nonzero field is output still reports context', () => {
+  const facts = readTranscriptRunFacts(
+    transcriptOf([
+      assistant('m', {
+        input_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+        output_tokens: 40,
+      }),
+    ]),
+    noWindow,
+  )
+  expect(facts.usedTokens).toBe(40)
 })
 
 test('an engine-internal mode survives, since it is what the session ran under', () => {

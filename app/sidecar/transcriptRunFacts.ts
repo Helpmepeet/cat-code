@@ -186,12 +186,24 @@ function readContextWindow(
 }
 
 /** The live donut's sum (`contextUsage.ts`): input + both cache buckets. */
+/**
+ * The engine's context-size numerator, `getTokenCountFromUsage`
+ * (`src/utils/tokens.ts:52-59`): all three input buckets PLUS `output_tokens`.
+ * The renderer's live gauge uses the same four fields (`contextUsage.ts`) so a
+ * previewed session and a live one cannot disagree. Dropping `output_tokens`
+ * here undercounts by one response, since the next request carries it.
+ *
+ * Reading an ASSISTANT frame is correct on this path and only this path: the
+ * transcript on disk was written after the engine's late usage write-back, so
+ * these numbers are final. The live wire's assistant frames are not (S1 §4).
+ */
 function readUsedTokens(usage: unknown): number | null {
   if (!isRecord(usage)) return null
   const total =
     readNumber(usage.input_tokens) +
     readNumber(usage.cache_read_input_tokens) +
-    readNumber(usage.cache_creation_input_tokens)
+    readNumber(usage.cache_creation_input_tokens) +
+    readNumber(usage.output_tokens)
   // A turn that reported all zeros carries no information about context, and a
   // 0-token reading would render as an empty donut on a session that plainly
   // used context. Keep scanning for a turn that actually reported.

@@ -269,7 +269,17 @@ test('wholesale swap leaves one live copy and zero-history swaps to empty', () =
 
 /* ── run facts: what the composer rail can say with no engine ─────────────── */
 
-function assistantFrame(model: string, index: number): ServerFrame {
+/** A cached assistant frame. `usage` is optional because only some of these
+ * fixtures care about context size, but it is where a REPLAYED session's context
+ * legitimately comes from: the cache was written after the engine's late usage
+ * write-back, so these numbers are final (the live wire's are not, S1 §4). The
+ * `result` frame's own usage is the session-lifetime accumulator and is never a
+ * context reading. */
+function assistantFrame(
+  model: string,
+  index: number,
+  usage?: Record<string, number>,
+): ServerFrame {
   return {
     kind: 'event',
     protocolVersion: PROTOCOL_VERSION,
@@ -282,6 +292,7 @@ function assistantFrame(model: string, index: number): ServerFrame {
           role: 'assistant',
           model,
           content: [{ type: 'text', text: `body ${index}` }],
+          ...(usage ? { usage } : {}),
         },
         uuid: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
       } as unknown as SDKMessage,
@@ -349,9 +360,13 @@ function resultFrame(inputTokens: number): ServerFrame {
 test('run facts come from the cached session: newest model, real context', () => {
   const entry = projectPreviewTranscriptCache(
     cache([
-      assistantFrame('claude-sonnet-5', 0),
-      assistantFrame('gpt-5.6-terra', 1),
-      resultFrame(42_000),
+      assistantFrame('claude-sonnet-5', 0, { input_tokens: 8_000 }),
+      assistantFrame('gpt-5.6-terra', 1, {
+        input_tokens: 2_000,
+        cache_read_input_tokens: 39_000,
+        output_tokens: 1_000,
+      }),
+      resultFrame(999_999),
     ]),
   )
 
@@ -520,7 +535,14 @@ test('a header window other than 200k drives the donut, not the fallback', () =>
  */
 test('with no header, the frame scan still answers what the frames can', () => {
   const entry = projectPreviewTranscriptCache(
-    cache([assistantFrame('claude-sonnet-5', 0), resultFrame(42_000)]),
+    cache([
+      assistantFrame('claude-sonnet-5', 0, {
+        input_tokens: 2_000,
+        cache_read_input_tokens: 39_000,
+        output_tokens: 1_000,
+      }),
+      resultFrame(999_999),
+    ]),
   )
   expect(entry.runFacts.model).toBe('claude-sonnet-5')
   expect(entry.runFacts.contextUsage?.usedTokens).toBe(42_000)
