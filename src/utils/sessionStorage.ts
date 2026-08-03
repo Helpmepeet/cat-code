@@ -110,6 +110,13 @@ type Transcript = (
   | SystemMessage
 )[]
 
+function setLatestMapValue<K, V>(map: Map<K, V>, key: K, value: V): void {
+  // Map.set does not move an existing key. Delete first so iteration order
+  // continues to represent transcript append order across legacy ID rotations.
+  map.delete(key)
+  map.set(key, value)
+}
+
 function applyThreadGoalEntry(
   threadGoals: Map<UUID, ThreadGoal | null>,
   entry: Entry,
@@ -119,12 +126,12 @@ function applyThreadGoalEntry(
     if (!goal || goal.threadId !== entry.sessionId) {
       return
     }
-    threadGoals.set(entry.sessionId, goal)
+    setLatestMapValue(threadGoals, entry.sessionId, goal)
     return
   }
 
   if (entry.type === 'thread-goal-cleared') {
-    threadGoals.set(entry.sessionId, null)
+    setLatestMapValue(threadGoals, entry.sessionId, null)
   }
 }
 
@@ -2474,6 +2481,103 @@ function applyPreservedSegmentRelinks(
 }
 
 /**
+ * Rebuild preserved-segment topology for archival display without pruning the
+ * pre-compact prefix. Preserved messages keep their old parents on disk, so a
+ * raw walk bypasses the compact boundary. Move the segment to its post-compact
+ * anchor and retarget the boundary's logical parent to the segment's former
+ * predecessor; this keeps every archival UUID exactly once around the seam.
+ */
+function applyDisplayPreservedSegmentRelinks(
+  messages: Map<UUID, TranscriptMessage>,
+): void {
+  for (const candidate of messages.values()) {
+    if (!isCompactBoundaryMessage(candidate)) continue
+    const segment = candidate.compactMetadata?.preservedSegment
+    if (!segment) continue
+
+    const head = messages.get(segment.headUuid)
+    if (!head || !messages.has(segment.anchorUuid)) continue
+
+    const preservedUuids = new Set<UUID>()
+    let current = messages.get(segment.tailUuid)
+    let reachedHead = false
+    while (current && !preservedUuids.has(current.uuid)) {
+      preservedUuids.add(current.uuid)
+      if (current.uuid === segment.headUuid) {
+        reachedHead = true
+        break
+      }
+      current = current.parentUuid
+        ? messages.get(current.parentUuid)
+        : undefined
+    }
+    if (!reachedHead) continue
+
+    const archivalReverse: TranscriptMessage[] = []
+    const archivalSeen = new Set<UUID>()
+    let archivalCurrent = candidate.logicalParentUuid
+      ? messages.get(candidate.logicalParentUuid)
+      : undefined
+    while (archivalCurrent && !archivalSeen.has(archivalCurrent.uuid)) {
+      archivalSeen.add(archivalCurrent.uuid)
+      archivalReverse.push(archivalCurrent)
+      const parentUuid =
+        archivalCurrent.parentUuid ??
+        (isCompactBoundaryMessage(archivalCurrent)
+          ? archivalCurrent.logicalParentUuid
+          : undefined)
+      archivalCurrent = parentUuid ? messages.get(parentUuid) : undefined
+    }
+    if (
+      [...preservedUuids].some(uuid => !archivalSeen.has(uuid))
+    ) {
+      continue
+    }
+
+    const archivalChain = archivalReverse.reverse()
+    const firstArchival = archivalChain[0]
+    let previousUuid: UUID | null = firstArchival
+      ? (firstArchival.parentUuid ??
+          (isCompactBoundaryMessage(firstArchival)
+            ? firstArchival.logicalParentUuid
+            : null)) ?? null
+      : null
+    for (const message of archivalChain) {
+      if (preservedUuids.has(message.uuid)) continue
+      if (isCompactBoundaryMessage(message)) {
+        messages.set(message.uuid, {
+          ...message,
+          parentUuid: null,
+          logicalParentUuid: previousUuid,
+        })
+      } else {
+        messages.set(message.uuid, {
+          ...message,
+          parentUuid: previousUuid,
+        })
+      }
+      previousUuid = message.uuid
+    }
+    messages.set(candidate.uuid, {
+      ...candidate,
+      logicalParentUuid: previousUuid,
+    })
+    messages.set(head.uuid, {
+      ...head,
+      parentUuid: segment.anchorUuid,
+    })
+    for (const [uuid, message] of messages) {
+      if (
+        uuid !== head.uuid &&
+        message.parentUuid === segment.anchorUuid
+      ) {
+        messages.set(uuid, { ...message, parentUuid: segment.tailUuid })
+      }
+    }
+  }
+}
+
+/**
  * Delete messages that Snip executions removed from the in-memory array,
  * and relink parentUuid across the gaps.
  *
@@ -2587,6 +2691,7 @@ function findLatestMessage<T extends { timestamp: string }>(
 export function buildConversationChain(
   messages: Map<UUID, TranscriptMessage>,
   leafMessage: TranscriptMessage,
+  options?: { followCompactLogicalParents?: boolean },
 ): TranscriptMessage[] {
   const transcript: TranscriptMessage[] = []
   const seen = new Set<UUID>()
@@ -2603,12 +2708,26 @@ export function buildConversationChain(
     }
     seen.add(currentMsg.uuid)
     transcript.push(currentMsg)
-    currentMsg = currentMsg.parentUuid
-      ? messages.get(currentMsg.parentUuid)
-      : undefined
+    const parentUuid =
+      currentMsg.parentUuid ??
+      (options?.followCompactLogicalParents &&
+      isCompactBoundaryMessage(currentMsg)
+        ? currentMsg.logicalParentUuid
+        : undefined)
+    currentMsg = parentUuid ? messages.get(parentUuid) : undefined
   }
   transcript.reverse()
   return recoverOrphanedParallelToolResults(messages, transcript, seen)
+}
+
+/** Display-only chain walk that preserves archival history across compaction. */
+export function buildDisplayConversationChain(
+  messages: Map<UUID, TranscriptMessage>,
+  leafMessage: TranscriptMessage,
+): TranscriptMessage[] {
+  return buildConversationChain(messages, leafMessage, {
+    followCompactLogicalParents: true,
+  })
 }
 
 /**
@@ -4044,7 +4163,11 @@ function walkChainBeforeParse(buf: Buffer): Buffer {
  */
 export async function loadTranscriptFile(
   filePath: string,
-  opts?: { keepAllLeaves?: boolean },
+  opts?: {
+    keepAllLeaves?: boolean
+    keepCompactedHistory?: boolean
+    maxReadBytes?: number
+  },
 ): Promise<{
   messages: Map<UUID, TranscriptMessage>
   summaries: Map<UUID, string>
@@ -4062,10 +4185,12 @@ export async function loadTranscriptFile(
   fileHistorySnapshots: Map<UUID, FileHistorySnapshotMessage>
   attributionSnapshots: Map<UUID, AttributionSnapshotMessage>
   contentReplacements: Map<UUID, ContentReplacementRecord[]>
+  orderedContentReplacements: ContentReplacementRecord[]
   agentContentReplacements: Map<AgentId, ContentReplacementRecord[]>
   contextCollapseCommits: ContextCollapseCommitEntry[]
   contextCollapseSnapshot: ContextCollapseSnapshotEntry | undefined
   leafUuids: Set<UUID>
+  sourceTruncated: boolean
 }> {
   const messages = new Map<UUID, TranscriptMessage>()
   const summaries = new Map<UUID, string>()
@@ -4083,6 +4208,7 @@ export async function loadTranscriptFile(
   const fileHistorySnapshots = new Map<UUID, FileHistorySnapshotMessage>()
   const attributionSnapshots = new Map<UUID, AttributionSnapshotMessage>()
   const contentReplacements = new Map<UUID, ContentReplacementRecord[]>()
+  const orderedContentReplacements: ContentReplacementRecord[] = []
   const agentContentReplacements = new Map<
     AgentId,
     ContentReplacementRecord[]
@@ -4091,6 +4217,7 @@ export async function loadTranscriptFile(
   const contextCollapseCommits: ContextCollapseCommitEntry[] = []
   // Last-wins — later entries supersede.
   let contextCollapseSnapshot: ContextCollapseSnapshotEntry | undefined
+  let sourceTruncated = false
 
   try {
     // For large transcripts, avoid materializing megabytes of stale content.
@@ -4108,7 +4235,45 @@ export async function loadTranscriptFile(
     let buf: Buffer | null = null
     let metadataLines: string[] | null = null
     let hasPreservedSegment = false
-    if (!isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP)) {
+    if (opts?.keepCompactedHistory) {
+      const { size } = await stat(filePath)
+      const maxReadBytes = Math.max(1, opts.maxReadBytes ?? size)
+      const start = Math.max(0, size - maxReadBytes)
+      const length = size - start
+      const tail = Buffer.allocUnsafe(length)
+      const fd = await fsOpen(filePath, 'r')
+      let offset = 0
+      let startsAtLineBoundary = start === 0
+      try {
+        if (start > 0) {
+          const precedingByte = Buffer.allocUnsafe(1)
+          const { bytesRead } = await fd.read(precedingByte, 0, 1, start - 1)
+          startsAtLineBoundary = bytesRead === 1 && precedingByte[0] === 0x0a
+        }
+        while (offset < length) {
+          const { bytesRead } = await fd.read(
+            tail,
+            offset,
+            length - offset,
+            start + offset,
+          )
+          if (bytesRead === 0) break
+          offset += bytesRead
+        }
+      } finally {
+        await fd.close()
+      }
+      buf = tail.subarray(0, offset)
+      if (start > 0) {
+        sourceTruncated = true
+        if (!startsAtLineBoundary) {
+          const firstNewline = buf.indexOf(0x0a)
+          buf = firstNewline >= 0
+            ? buf.subarray(firstNewline + 1)
+            : Buffer.alloc(0)
+        }
+      }
+    } else if (!isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP)) {
       const { size } = await stat(filePath)
       if (size > SKIP_PRECOMPACT_THRESHOLD) {
         const scan = await readTranscriptForLoad(filePath, size)
@@ -4145,6 +4310,7 @@ export async function loadTranscriptFile(
     // optimization and the scan it depends on for hasPreservedSegment did
     // not run).
     if (
+      !opts?.keepCompactedHistory &&
       !opts?.keepAllLeaves &&
       !hasPreservedSegment &&
       !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP) &&
@@ -4165,28 +4331,28 @@ export async function loadTranscriptFile(
         if (entry.type === 'summary' && entry.leafUuid) {
           summaries.set(entry.leafUuid, entry.summary)
         } else if (entry.type === 'custom-title' && entry.sessionId) {
-          customTitles.set(entry.sessionId, entry.customTitle)
+          setLatestMapValue(customTitles, entry.sessionId, entry.customTitle)
         } else if (entry.type === 'tag' && entry.sessionId) {
-          tags.set(entry.sessionId, entry.tag)
+          setLatestMapValue(tags, entry.sessionId, entry.tag)
         } else if (entry.type === 'agent-name' && entry.sessionId) {
-          agentNames.set(entry.sessionId, entry.agentName)
+          setLatestMapValue(agentNames, entry.sessionId, entry.agentName)
         } else if (entry.type === 'agent-color' && entry.sessionId) {
-          agentColors.set(entry.sessionId, entry.agentColor)
+          setLatestMapValue(agentColors, entry.sessionId, entry.agentColor)
         } else if (entry.type === 'agent-setting' && entry.sessionId) {
-          agentSettings.set(entry.sessionId, entry.agentSetting)
+          setLatestMapValue(agentSettings, entry.sessionId, entry.agentSetting)
         } else if (entry.type === 'mode' && entry.sessionId) {
-          modes.set(entry.sessionId, entry.mode)
+          setLatestMapValue(modes, entry.sessionId, entry.mode)
         } else if (
           entry.type === 'thread-goal-updated' ||
           entry.type === 'thread-goal-cleared'
         ) {
           applyThreadGoalEntry(threadGoals, entry)
         } else if (entry.type === 'worktree-state' && entry.sessionId) {
-          worktreeStates.set(entry.sessionId, entry.worktreeSession)
+          setLatestMapValue(worktreeStates, entry.sessionId, entry.worktreeSession)
         } else if (entry.type === 'pr-link' && entry.sessionId) {
-          prNumbers.set(entry.sessionId, entry.prNumber)
-          prUrls.set(entry.sessionId, entry.prUrl)
-          prRepositories.set(entry.sessionId, entry.prRepository)
+          setLatestMapValue(prNumbers, entry.sessionId, entry.prNumber)
+          setLatestMapValue(prUrls, entry.sessionId, entry.prUrl)
+          setLatestMapValue(prRepositories, entry.sessionId, entry.prRepository)
         }
       }
     }
@@ -4238,28 +4404,28 @@ export async function loadTranscriptFile(
       } else if (entry.type === 'summary' && entry.leafUuid) {
         summaries.set(entry.leafUuid, entry.summary)
       } else if (entry.type === 'custom-title' && entry.sessionId) {
-        customTitles.set(entry.sessionId, entry.customTitle)
+        setLatestMapValue(customTitles, entry.sessionId, entry.customTitle)
       } else if (entry.type === 'tag' && entry.sessionId) {
-        tags.set(entry.sessionId, entry.tag)
+        setLatestMapValue(tags, entry.sessionId, entry.tag)
       } else if (entry.type === 'agent-name' && entry.sessionId) {
-        agentNames.set(entry.sessionId, entry.agentName)
+        setLatestMapValue(agentNames, entry.sessionId, entry.agentName)
       } else if (entry.type === 'agent-color' && entry.sessionId) {
-        agentColors.set(entry.sessionId, entry.agentColor)
+        setLatestMapValue(agentColors, entry.sessionId, entry.agentColor)
       } else if (entry.type === 'agent-setting' && entry.sessionId) {
-        agentSettings.set(entry.sessionId, entry.agentSetting)
+        setLatestMapValue(agentSettings, entry.sessionId, entry.agentSetting)
       } else if (entry.type === 'mode' && entry.sessionId) {
-        modes.set(entry.sessionId, entry.mode)
+        setLatestMapValue(modes, entry.sessionId, entry.mode)
       } else if (
         entry.type === 'thread-goal-updated' ||
         entry.type === 'thread-goal-cleared'
       ) {
         applyThreadGoalEntry(threadGoals, entry)
       } else if (entry.type === 'worktree-state' && entry.sessionId) {
-        worktreeStates.set(entry.sessionId, entry.worktreeSession)
+        setLatestMapValue(worktreeStates, entry.sessionId, entry.worktreeSession)
       } else if (entry.type === 'pr-link' && entry.sessionId) {
-        prNumbers.set(entry.sessionId, entry.prNumber)
-        prUrls.set(entry.sessionId, entry.prUrl)
-        prRepositories.set(entry.sessionId, entry.prRepository)
+        setLatestMapValue(prNumbers, entry.sessionId, entry.prNumber)
+        setLatestMapValue(prUrls, entry.sessionId, entry.prUrl)
+        setLatestMapValue(prRepositories, entry.sessionId, entry.prRepository)
       } else if (entry.type === 'file-history-snapshot') {
         fileHistorySnapshots.set(entry.messageId, entry)
       } else if (entry.type === 'attribution-snapshot') {
@@ -4275,6 +4441,7 @@ export async function loadTranscriptFile(
           const existing = contentReplacements.get(entry.sessionId) ?? []
           contentReplacements.set(entry.sessionId, existing)
           existing.push(...entry.replacements)
+          orderedContentReplacements.push(...entry.replacements)
         }
       } else if (entry.type === 'marble-origami-commit') {
         contextCollapseCommits.push(entry)
@@ -4286,7 +4453,11 @@ export async function loadTranscriptFile(
     // File doesn't exist or can't be read
   }
 
-  applyPreservedSegmentRelinks(messages)
+  if (opts?.keepCompactedHistory) {
+    applyDisplayPreservedSegmentRelinks(messages)
+  } else {
+    applyPreservedSegmentRelinks(messages)
+  }
   applySnipRemovals(messages)
 
   // Compute leaf UUIDs once at load time
@@ -4391,10 +4562,56 @@ export async function loadTranscriptFile(
     fileHistorySnapshots,
     attributionSnapshots,
     contentReplacements,
+    orderedContentReplacements,
     agentContentReplacements,
     contextCollapseCommits,
     contextCollapseSnapshot,
     leafUuids,
+    sourceTruncated,
+  }
+}
+
+export async function loadDisplayTranscriptFromJsonlPath(
+  filePath: string,
+  options: { maxMessages: number; maxBytes: number },
+): Promise<{ messages: SerializedMessage[]; truncated: boolean }> {
+  const loaded = await loadTranscriptFile(filePath, {
+    keepCompactedHistory: true,
+    maxReadBytes: options.maxBytes,
+  })
+  let tip: TranscriptMessage | undefined
+  let tipTimestamp = -Infinity
+  for (const message of loaded.messages.values()) {
+    if (
+      message.isSidechain ||
+      !loaded.leafUuids.has(message.uuid) ||
+      (message.type !== 'user' && message.type !== 'assistant')
+    ) {
+      continue
+    }
+    const timestamp = Date.parse(message.timestamp)
+    if (timestamp >= tipTimestamp) {
+      tip = message
+      tipTimestamp = timestamp
+    }
+  }
+  if (!tip) return { messages: [], truncated: loaded.sourceTruncated }
+
+  const chain = buildDisplayConversationChain(loaded.messages, tip)
+  const root = chain[0]
+  const rootParentUuid = root
+    ? root.parentUuid ??
+      (isCompactBoundaryMessage(root) ? root.logicalParentUuid : undefined)
+    : undefined
+  const missingPredecessor = Boolean(
+    rootParentUuid && !loaded.messages.has(rootParentUuid),
+  )
+  const capped = chain.length > options.maxMessages
+  const retained = capped ? chain.slice(-options.maxMessages) : chain
+  return {
+    messages: removeExtraFields(retained),
+    truncated:
+      capped || (loaded.sourceTruncated && missingPredecessor),
   }
 }
 
@@ -4413,6 +4630,7 @@ async function loadSessionFile(sessionId: UUID): Promise<{
   fileHistorySnapshots: Map<UUID, FileHistorySnapshotMessage>
   attributionSnapshots: Map<UUID, AttributionSnapshotMessage>
   contentReplacements: Map<UUID, ContentReplacementRecord[]>
+  orderedContentReplacements: ContentReplacementRecord[]
   contextCollapseCommits: ContextCollapseCommitEntry[]
   contextCollapseSnapshot: ContextCollapseSnapshotEntry | undefined
 }> {
@@ -4442,6 +4660,12 @@ export async function doesMessageExistInSession(
   return messageSet.has(messageUuid)
 }
 
+function getLatestSessionScopedValue<T>(values: Map<UUID, T>): T | undefined {
+  let latest: T | undefined
+  for (const value of values.values()) latest = value
+  return latest
+}
+
 export async function getLastSessionLog(
   sessionId: UUID,
 ): Promise<LogOption | null> {
@@ -4457,7 +4681,7 @@ export async function getLastSessionLog(
     modes,
     fileHistorySnapshots,
     attributionSnapshots,
-    contentReplacements,
+    orderedContentReplacements,
     contextCollapseCommits,
     contextCollapseSnapshot,
   } = await loadSessionFile(sessionId)
@@ -4490,9 +4714,21 @@ export async function getLastSessionLog(
   const transcript = buildConversationChain(messages, lastMessage)
 
   const summary = summaries.get(lastMessage.uuid)
-  const customTitle = customTitles.get(lastMessage.sessionId as UUID)
-  const tag = tags.get(lastMessage.sessionId as UUID)
-  const agentSetting = agentSettings.get(sessionId)
+  const leafSessionId = lastMessage.sessionId as UUID | undefined
+  if (leafSessionId && leafSessionId !== sessionId) {
+    logForDebugging(
+      `Transcript identity drift: file ${sessionId} contains latest message stamped ${leafSessionId}`,
+      { level: 'warn' },
+    )
+  }
+  const customTitle = getLatestSessionScopedValue(customTitles)
+  const tag = getLatestSessionScopedValue(tags)
+  const agentSetting = getLatestSessionScopedValue(agentSettings)
+  const threadGoal = getLatestSessionScopedValue(threadGoals)
+  const mixedSessionIds = new Set<UUID>([sessionId])
+  for (const message of messages.values()) {
+    if (message.sessionId) mixedSessionIds.add(message.sessionId as UUID)
+  }
   return {
     ...convertToLogOption(
       transcript,
@@ -4504,18 +4740,22 @@ export async function getLastSessionLog(
       getTranscriptPathForSession(sessionId),
       buildAttributionSnapshotChain(attributionSnapshots, transcript),
       agentSetting,
-      contentReplacements.get(sessionId) ?? [],
-      threadGoals.has(sessionId)
-        ? (threadGoals.get(sessionId) ?? null)
+      orderedContentReplacements,
+      threadGoal !== undefined
+        ? (threadGoal ?? null)
         : undefined,
     ),
-    mode: messages.values().next().value?.type ? modes.get(sessionId) as LogOption['mode'] : undefined,
-    worktreeSession: worktreeStates.get(sessionId),
+    mode: messages.values().next().value?.type
+      ? (getLatestSessionScopedValue(modes) as
+          | LogOption['mode']
+          | undefined)
+      : undefined,
+    worktreeSession: getLatestSessionScopedValue(worktreeStates),
     contextCollapseCommits: contextCollapseCommits.filter(
-      e => e.sessionId === sessionId,
+      e => mixedSessionIds.has(e.sessionId),
     ),
     contextCollapseSnapshot:
-      contextCollapseSnapshot?.sessionId === sessionId
+      contextCollapseSnapshot && mixedSessionIds.has(contextCollapseSnapshot.sessionId)
         ? contextCollapseSnapshot
         : undefined,
   }

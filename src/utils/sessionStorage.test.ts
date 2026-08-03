@@ -4,11 +4,12 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync } f
 import { writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
-import { getSessionId, getSessionProjectDir, switchSession } from '../bootstrap/state.js'
+import { getAPISessionId, getSessionId, getSessionProjectDir, switchSession } from '../bootstrap/state.js'
+import { applyPostCodexAccountSwitchRefresh } from '../services/api/codexAccountPool.js'
 import { asAgentId, asSessionId } from '../types/ids.js'
 import { registerActiveSubagent, unregisterActiveSubagent } from './cleanupRegistry.js'
 import { createUserMessage } from './messages.js'
-import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, flushSessionStorage, getAgentTranscriptPath, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordPromptCacheBreak, recordRunFacts, recordTranscript, resetProjectForTesting, resetRunFactsDedupeForTest } from './sessionStorage.js'
+import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, flushSessionStorage, getAgentTranscriptPath, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, loadDisplayTranscriptFromJsonlPath, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordPromptCacheBreak, recordRunFacts, recordTranscript, resetProjectForTesting, resetRunFactsDedupeForTest } from './sessionStorage.js'
 
 describe('session storage', () => {
   const originalSessionId = getSessionId()
@@ -128,6 +129,538 @@ describe('session storage', () => {
     // Tip is the user/assistant turn, not the lone system frame.
     expect(log!.firstPrompt).toBe('The magic word is NONCE-XYZ.')
     expect(JSON.stringify(log!.messages)).toContain('Acknowledged: NONCE-XYZ.')
+  })
+
+  test('last session log restores metadata across legacy mixed session stamps', async () => {
+    const intermediateSessionId = randomUUID()
+    const leafSessionId = randomUUID()
+    const userUuid = randomUUID()
+    const assistantUuid = randomUUID()
+    const transcript = [
+      { type: 'custom-title', sessionId, customTitle: 'title before login' },
+      { type: 'tag', sessionId, tag: 'before-login' },
+      { type: 'agent-setting', sessionId, agentSetting: 'plan' },
+      { type: 'mode', sessionId, mode: 'plan' },
+      {
+        type: 'content-replacement',
+        sessionId,
+        replacements: [
+          { kind: 'tool-result', toolUseId: 'before', replacement: 'old stub' },
+        ],
+      },
+      {
+        type: 'user',
+        uuid: userUuid,
+        parentUuid: null,
+        isSidechain: false,
+        sessionId,
+        cwd: tempDir,
+        userType: 'external',
+        version: 'test',
+        timestamp: '2026-07-31T09:11:24.000Z',
+        message: { role: 'user', content: 'before login' },
+      },
+      { type: 'custom-title', sessionId: intermediateSessionId, customTitle: 'title after login' },
+      { type: 'tag', sessionId: intermediateSessionId, tag: 'after-login' },
+      { type: 'mode', sessionId: intermediateSessionId, mode: 'agent' },
+      {
+        type: 'content-replacement',
+        sessionId: intermediateSessionId,
+        replacements: [
+          { kind: 'tool-result', toolUseId: 'after', replacement: 'new stub' },
+        ],
+      },
+      {
+        type: 'content-replacement',
+        sessionId,
+        replacements: [
+          { kind: 'tool-result', toolUseId: 'latest', replacement: 'latest stub' },
+        ],
+      },
+      {
+        type: 'assistant',
+        uuid: assistantUuid,
+        parentUuid: userUuid,
+        isSidechain: false,
+        sessionId: leafSessionId,
+        cwd: tempDir,
+        version: 'test',
+        timestamp: '2026-07-31T09:11:25.000Z',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'after login' }],
+        },
+      },
+    ]
+      .map(entry => JSON.stringify(entry))
+      .join('\n')
+
+    await writeFile(getTranscriptPathForSession(sessionId), `${transcript}\n`)
+
+    const log = await getLastSessionLog(sessionId as UUID)
+    expect(log).toMatchObject({
+      customTitle: 'title after login',
+      tag: 'after-login',
+      agentSetting: 'plan',
+      mode: 'agent',
+    })
+    expect(log?.contentReplacements).toEqual([
+      { kind: 'tool-result', toolUseId: 'before', replacement: 'old stub' },
+      { kind: 'tool-result', toolUseId: 'after', replacement: 'new stub' },
+      { kind: 'tool-result', toolUseId: 'latest', replacement: 'latest stub' },
+    ])
+  })
+
+  test('provider account refresh keeps the owned transcript path and record stamps stable', async () => {
+    const beforeUuid = randomUUID()
+    const afterUuid = randomUUID()
+    const initialApiSessionId = getAPISessionId()
+    const transcriptPath = getTranscriptPathForSession(sessionId)
+
+    await recordTranscript([
+      createUserMessage({ content: 'before account refresh', uuid: beforeUuid }),
+    ])
+    await flushSessionStorage()
+
+    applyPostCodexAccountSwitchRefresh()
+    expect(getSessionId()).toBe(sessionId)
+    expect(getAPISessionId()).not.toBe(initialApiSessionId)
+    expect(getTranscriptPathForSession(getSessionId())).toBe(transcriptPath)
+
+    await recordTranscript([
+      createUserMessage({ content: 'after account refresh', uuid: afterUuid }),
+    ])
+    await flushSessionStorage()
+
+    const entries = (await Bun.file(transcriptPath).text())
+      .split('\n')
+      .filter(Boolean)
+      .map(line => JSON.parse(line) as Record<string, unknown>)
+    const writtenTurns = entries.filter(
+      entry => entry.uuid === beforeUuid || entry.uuid === afterUuid,
+    )
+    expect(writtenTurns).toHaveLength(2)
+    expect(writtenTurns.map(entry => entry.sessionId)).toEqual([
+      sessionId,
+      sessionId,
+    ])
+    expect(
+      readdirSync(dirname(transcriptPath)).filter(name => name.endsWith('.jsonl')),
+    ).toEqual([`${sessionId}.jsonl`])
+  })
+
+  test('display history crosses compact boundaries without changing the resume chain', async () => {
+    const beforeUserUuid = randomUUID()
+    const beforeAssistantUuid = randomUUID()
+    const boundaryUuid = randomUUID()
+    const summaryUuid = randomUUID()
+    const commandUuid = randomUUID()
+    const transcript = [
+      {
+        type: 'user',
+        uuid: beforeUserUuid,
+        parentUuid: null,
+        isSidechain: false,
+        sessionId,
+        cwd: tempDir,
+        userType: 'external',
+        version: 'test',
+        timestamp: '2026-07-31T17:59:00.000Z',
+        message: { role: 'user', content: 'recognizable archival prompt' },
+      },
+      {
+        type: 'assistant',
+        uuid: beforeAssistantUuid,
+        parentUuid: beforeUserUuid,
+        isSidechain: false,
+        sessionId,
+        cwd: tempDir,
+        version: 'test',
+        timestamp: '2026-07-31T17:59:01.000Z',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'recognizable archival response' }],
+        },
+      },
+      {
+        type: 'system',
+        subtype: 'compact_boundary',
+        content: 'Conversation compacted',
+        level: 'info',
+        isMeta: false,
+        uuid: boundaryUuid,
+        parentUuid: null,
+        logicalParentUuid: beforeAssistantUuid,
+        isSidechain: false,
+        sessionId,
+        cwd: tempDir,
+        version: 'test',
+        timestamp: '2026-07-31T18:00:16.000Z',
+        compactMetadata: { trigger: 'manual', preTokens: 316_672 },
+      },
+      {
+        type: 'user',
+        uuid: summaryUuid,
+        parentUuid: boundaryUuid,
+        isSidechain: false,
+        sessionId,
+        cwd: tempDir,
+        userType: 'external',
+        version: 'test',
+        timestamp: '2026-07-31T18:00:17.000Z',
+        isCompactSummary: true,
+        message: { role: 'user', content: 'compact model summary' },
+      },
+      {
+        type: 'user',
+        uuid: commandUuid,
+        parentUuid: summaryUuid,
+        isSidechain: false,
+        sessionId,
+        cwd: tempDir,
+        userType: 'external',
+        version: 'test',
+        timestamp: '2026-07-31T18:00:18.000Z',
+        message: { role: 'user', content: '<command-name>/compact</command-name>' },
+      },
+    ]
+      .map(entry => JSON.stringify(entry))
+      .join('\n')
+    const path = getTranscriptPathForSession(sessionId)
+    await writeFile(path, `${transcript}\n`)
+
+    const resume = await getLastSessionLog(sessionId as UUID)
+    expect(JSON.stringify(resume?.messages)).not.toContain(
+      'recognizable archival prompt',
+    )
+
+    const display = await loadDisplayTranscriptFromJsonlPath(path, {
+      maxMessages: 100,
+      maxBytes: 1024 * 1024,
+    })
+    expect(display.truncated).toBe(false)
+    expect(display.messages.map(message => message.uuid)).toEqual([
+      beforeUserUuid,
+      beforeAssistantUuid,
+      boundaryUuid,
+      summaryUuid,
+      commandUuid,
+    ])
+  })
+
+  test('display history keeps preserved segments once and places them after the compact seam', async () => {
+    const archivalUuid = randomUUID()
+    const preservedHeadUuid = randomUUID()
+    const preservedTailUuid = randomUUID()
+    const boundaryUuid = randomUUID()
+    const summaryUuid = randomUUID()
+    const postCompactUuid = randomUUID()
+    const transcript = [
+      {
+        type: 'user',
+        uuid: archivalUuid,
+        parentUuid: null,
+        isSidechain: false,
+        sessionId,
+        cwd: tempDir,
+        userType: 'external',
+        version: 'test',
+        timestamp: '2026-07-31T17:59:00.000Z',
+        message: { role: 'user', content: 'archival prefix' },
+      },
+      {
+        type: 'user',
+        uuid: preservedHeadUuid,
+        parentUuid: archivalUuid,
+        isSidechain: false,
+        sessionId,
+        cwd: tempDir,
+        userType: 'external',
+        version: 'test',
+        timestamp: '2026-07-31T17:59:01.000Z',
+        message: { role: 'user', content: 'preserved head' },
+      },
+      {
+        type: 'assistant',
+        uuid: preservedTailUuid,
+        parentUuid: preservedHeadUuid,
+        isSidechain: false,
+        sessionId,
+        cwd: tempDir,
+        version: 'test',
+        timestamp: '2026-07-31T17:59:02.000Z',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'preserved tail' }],
+        },
+      },
+      {
+        type: 'system',
+        subtype: 'compact_boundary',
+        content: 'Conversation compacted',
+        level: 'info',
+        isMeta: false,
+        uuid: boundaryUuid,
+        parentUuid: null,
+        logicalParentUuid: preservedTailUuid,
+        isSidechain: false,
+        sessionId,
+        cwd: tempDir,
+        version: 'test',
+        timestamp: '2026-07-31T18:00:16.000Z',
+        compactMetadata: {
+          trigger: 'auto',
+          preTokens: 180_000,
+          preservedSegment: {
+            headUuid: preservedHeadUuid,
+            anchorUuid: summaryUuid,
+            tailUuid: preservedTailUuid,
+          },
+        },
+      },
+      {
+        type: 'user',
+        uuid: summaryUuid,
+        parentUuid: boundaryUuid,
+        isSidechain: false,
+        sessionId,
+        cwd: tempDir,
+        userType: 'external',
+        version: 'test',
+        timestamp: '2026-07-31T18:00:17.000Z',
+        isCompactSummary: true,
+        message: { role: 'user', content: 'compact model summary' },
+      },
+      {
+        type: 'user',
+        uuid: postCompactUuid,
+        parentUuid: preservedTailUuid,
+        isSidechain: false,
+        sessionId,
+        cwd: tempDir,
+        userType: 'external',
+        version: 'test',
+        timestamp: '2026-07-31T18:00:18.000Z',
+        message: { role: 'user', content: 'post compact turn' },
+      },
+    ]
+      .map(entry => JSON.stringify(entry))
+      .join('\n')
+    const path = getTranscriptPathForSession(sessionId)
+    await writeFile(path, `${transcript}\n`)
+
+    const resume = await getLastSessionLog(sessionId as UUID)
+    expect(resume?.messages.map(message => message.uuid)).toEqual([
+      boundaryUuid,
+      summaryUuid,
+      preservedHeadUuid,
+      preservedTailUuid,
+      postCompactUuid,
+    ])
+
+    const display = await loadDisplayTranscriptFromJsonlPath(path, {
+      maxMessages: 100,
+      maxBytes: 1024 * 1024,
+    })
+    expect(display.truncated).toBe(false)
+    expect(display.messages.map(message => message.uuid)).toEqual([
+      archivalUuid,
+      boundaryUuid,
+      summaryUuid,
+      preservedHeadUuid,
+      preservedTailUuid,
+      postCompactUuid,
+    ])
+  })
+
+  test('display history retains summarized rows around a prefix-preserved compact seam', async () => {
+    const preservedUuid = randomUUID()
+    const summarizedUuid = randomUUID()
+    const boundaryUuid = randomUUID()
+    const summaryUuid = randomUUID()
+    const postCompactUuid = randomUUID()
+    const transcript = [
+      {
+        type: 'user',
+        uuid: preservedUuid,
+        parentUuid: null,
+        isSidechain: false,
+        sessionId,
+        cwd: tempDir,
+        userType: 'external',
+        version: 'test',
+        timestamp: '2026-07-31T17:58:00.000Z',
+        message: { role: 'user', content: 'prefix retained by the model' },
+      },
+      {
+        type: 'assistant',
+        uuid: summarizedUuid,
+        parentUuid: preservedUuid,
+        isSidechain: false,
+        sessionId,
+        cwd: tempDir,
+        version: 'test',
+        timestamp: '2026-07-31T17:58:01.000Z',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'row summarized by compaction' }],
+        },
+      },
+      {
+        type: 'system',
+        subtype: 'compact_boundary',
+        content: 'Conversation compacted',
+        level: 'info',
+        isMeta: false,
+        uuid: boundaryUuid,
+        parentUuid: null,
+        logicalParentUuid: summarizedUuid,
+        isSidechain: false,
+        sessionId,
+        cwd: tempDir,
+        version: 'test',
+        timestamp: '2026-07-31T18:00:16.000Z',
+        compactMetadata: {
+          trigger: 'manual',
+          preTokens: 180_000,
+          preservedSegment: {
+            headUuid: preservedUuid,
+            anchorUuid: boundaryUuid,
+            tailUuid: preservedUuid,
+          },
+        },
+      },
+      {
+        type: 'user',
+        uuid: summaryUuid,
+        parentUuid: boundaryUuid,
+        isSidechain: false,
+        sessionId,
+        cwd: tempDir,
+        userType: 'external',
+        version: 'test',
+        timestamp: '2026-07-31T18:00:17.000Z',
+        isCompactSummary: true,
+        message: { role: 'user', content: 'summary after retained prefix' },
+      },
+      {
+        type: 'user',
+        uuid: postCompactUuid,
+        parentUuid: summaryUuid,
+        isSidechain: false,
+        sessionId,
+        cwd: tempDir,
+        userType: 'external',
+        version: 'test',
+        timestamp: '2026-07-31T18:00:18.000Z',
+        message: { role: 'user', content: 'post compact turn' },
+      },
+    ]
+      .map(entry => JSON.stringify(entry))
+      .join('\n')
+    const path = getTranscriptPathForSession(sessionId)
+    await writeFile(path, `${transcript}\n`)
+
+    const display = await loadDisplayTranscriptFromJsonlPath(path, {
+      maxMessages: 100,
+      maxBytes: 1024 * 1024,
+    })
+    expect(display.truncated).toBe(false)
+    expect(display.messages.map(message => message.uuid)).toEqual([
+      summarizedUuid,
+      boundaryUuid,
+      preservedUuid,
+      summaryUuid,
+      postCompactUuid,
+    ])
+    expect(new Set(display.messages.map(message => message.uuid)).size).toBe(
+      display.messages.length,
+    )
+  })
+
+  test('display history keeps a newest contiguous tail when message-capped', async () => {
+    const uuids = Array.from({ length: 5 }, () => randomUUID())
+    const transcript = uuids
+      .map((uuid, index) =>
+        JSON.stringify({
+          type: 'user',
+          uuid,
+          parentUuid: index === 0 ? null : uuids[index - 1],
+          isSidechain: false,
+          sessionId,
+          cwd: tempDir,
+          userType: 'external',
+          version: 'test',
+          timestamp: `2026-07-31T18:00:0${index}.000Z`,
+          message: { role: 'user', content: `message ${index}` },
+        }),
+      )
+      .join('\n')
+    const path = getTranscriptPathForSession(sessionId)
+    await writeFile(path, `${transcript}\n`)
+
+    const display = await loadDisplayTranscriptFromJsonlPath(path, {
+      maxMessages: 2,
+      maxBytes: 1024 * 1024,
+    })
+    expect(display.truncated).toBe(true)
+    expect(display.messages.map(message => message.uuid)).toEqual(uuids.slice(-2))
+  })
+
+  test('display history bounds the JSONL read and announces a missing predecessor', async () => {
+    const uuids = Array.from({ length: 5 }, () => randomUUID())
+    const lines = uuids.map((uuid, index) =>
+      JSON.stringify({
+        type: 'user',
+        uuid,
+        parentUuid: index === 0 ? null : uuids[index - 1],
+        isSidechain: false,
+        sessionId,
+        cwd: tempDir,
+        userType: 'external',
+        version: 'test',
+        timestamp: `2026-07-31T18:01:0${index}.000Z`,
+        message: { role: 'user', content: `bounded message ${index}` },
+      }),
+    )
+    const path = getTranscriptPathForSession(sessionId)
+    await writeFile(path, `${lines.join('\n')}\n`)
+    const newestTwoBytes = Buffer.byteLength(`${lines.slice(-2).join('\n')}\n`)
+
+    const display = await loadDisplayTranscriptFromJsonlPath(path, {
+      maxMessages: 100,
+      maxBytes: newestTwoBytes + 5,
+    })
+    expect(display.truncated).toBe(true)
+    expect(display.messages.map(message => message.uuid)).toEqual(uuids.slice(-2))
+  })
+
+  test('display history retains the first complete record at an exact byte boundary', async () => {
+    const uuids = Array.from({ length: 3 }, () => randomUUID())
+    const lines = uuids.map((uuid, index) =>
+      JSON.stringify({
+        type: 'user',
+        uuid,
+        parentUuid: index === 0 ? null : uuids[index - 1],
+        isSidechain: false,
+        sessionId,
+        cwd: tempDir,
+        userType: 'external',
+        version: 'test',
+        timestamp: `2026-07-31T18:02:0${index}.000Z`,
+        message: { role: 'user', content: `aligned message ${index}` },
+      }),
+    )
+    const path = getTranscriptPathForSession(sessionId)
+    await writeFile(path, `${lines.join('\n')}\n`)
+
+    const display = await loadDisplayTranscriptFromJsonlPath(path, {
+      maxMessages: 100,
+      maxBytes: Buffer.byteLength(`${lines.slice(-2).join('\n')}\n`),
+    })
+
+    expect(display.truncated).toBe(true)
+    expect(display.messages.map(message => message.uuid)).toEqual(uuids.slice(-2))
   })
 
   test('enriched modified tracks last in-file timestamp, not drifted mtime', async () => {
