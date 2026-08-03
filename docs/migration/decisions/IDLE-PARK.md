@@ -244,13 +244,24 @@ module mirroring the existing `sessionsCatalogDriver` lifecycle
 
 - **Cap:** keep at most `MAX_LIVE_ENGINES` sessions live; when the live count
   (`host.listSessions()` filtered to `status ∈ {spawning,ready}`) exceeds the
-  cap, park the least-recently-active live sessions (recency = `lastMessageSentAt`
-  ?? `lastAttachedAt` ?? `createdAt`, all on the descriptor,
+  cap, park the least-recently-active live sessions (recency = the NEWEST of
+  `lastMessageSentAt` / `lastAttachedAt` / `createdAt`, all on the descriptor,
   `hostApi.ts:85-95`) until at the cap. Re-evaluated on each `session-added` /
   `session-status` host event (event-driven, no polling needed for the cap).
 - **TTL (optional):** a session idle for `PARK_IDLE_TTL_MS` (generous, e.g.
   20–30 min) is parked even under the cap, to reclaim genuinely-abandoned tabs.
   This needs a low-frequency timer in the driver.
+
+> **Corrected 2026-08-03.** This clause originally specified recency as
+> `lastMessageSentAt ?? lastAttachedAt ?? createdAt`, and `idleParkDriver.ts`
+> implemented that faithfully. `??` is precedence, not recency: it returns the
+> first non-null stamp, so for any session that has ever run a turn the
+> `lastAttachedAt` bump this same section relies on below was unreachable. A
+> restored session therefore inherited its PREVIOUS run's idleness and was parked
+> seconds after going ready, presenting to the user as a session that stopped by
+> itself. Now a max over the three stamps; regression tests in
+> `idleParkDriver.test.ts` pin both the restored-session case and that a restored
+> session still parks once genuinely idle.
 
 **The one unresolved policy question (operator decision, § Open decisions):**
 main does **not** know which tab the renderer has focused — `activeSessionId` is

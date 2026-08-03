@@ -89,9 +89,32 @@ export type IdleParkDriverDeps = {
 
 type SessionId = SessionDescriptor['appSessionId']
 
-/** recency = last message sent ?? last attached ?? created (IDLE-PARK.md §4). */
+/**
+ * recency = the MOST RECENT of the three stamps (IDLE-PARK.md §4).
+ *
+ * Deliberately a max, not the `lastMessageSentAt ?? lastAttachedAt ?? createdAt`
+ * chain §4 originally specified: `??` is PRECEDENCE, not recency. It returns the
+ * first non-null stamp, so any session that has ever run a turn is scored purely
+ * on `lastMessageSentAt` and its `lastAttachedAt` is dead weight — which defeats
+ * §4's own premise that "`lastAttachedAt` moves on attach/restore/spawn".
+ *
+ * A RESTORE is exactly where those two disagree. `registry.upsert` stamps
+ * `lastAttachedAt = now` on the restored row (`app/host/registry.ts:684`) but
+ * deliberately leaves `lastMessageSentAt` at whatever the session's last turn
+ * wrote, possibly in a previous run days ago. Under `??` the driver read that
+ * stale stamp, scored a session the user had just reopened as idle for the whole
+ * gap, and parked it seconds after it went ready. The user sees a session stop on
+ * its own; with nothing but `markMessageSent` able to refresh recency, and a turn
+ * impossible to complete before the next sweep, Restart just re-entered the loop.
+ * (2026-08-03: a row resumed 1 minute earlier carried an 18.6-hour-old
+ * `lastMessageSentAt` against a 20-minute TTL, and reached `restartCount: 3`.)
+ */
 function recencyOf(session: SessionDescriptor): number {
-  return session.lastMessageSentAt ?? session.lastAttachedAt ?? session.createdAt
+  return Math.max(
+    session.lastMessageSentAt ?? 0,
+    session.lastAttachedAt,
+    session.createdAt,
+  )
 }
 
 export function createIdleParkDriver(deps: IdleParkDriverDeps): IdleParkDriver {

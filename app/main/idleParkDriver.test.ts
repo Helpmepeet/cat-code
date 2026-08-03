@@ -81,7 +81,7 @@ test('idle-TTL — parks a session idle beyond the TTL even while under the cap;
   expect(parked).toEqual(['idle'])
 })
 
-test('recency falls back lastMessageSentAt → lastAttachedAt → createdAt', () => {
+test('recency is the newest of lastMessageSentAt / lastAttachedAt / createdAt', () => {
   // A session with no message sent uses lastAttachedAt for recency.
   const byAttach = desc({
     appSessionId: 'attach',
@@ -101,6 +101,54 @@ test('recency falls back lastMessageSentAt → lastAttachedAt → createdAt', ()
   driver.evaluate()
 
   expect(parked).toEqual(['attach'])
+})
+
+test('a just-restored session is NOT parked, however old its last turn', () => {
+  // The real registry row behind the 2026-08-03 report, verbatim: restored one
+  // minute ago (lastAttachedAt), last turn 18.6 hours earlier
+  // (lastMessageSentAt), created the day before. Under the old `??` chain the
+  // stale turn stamp won and this session was parked seconds after going ready.
+  const restored = desc({
+    appSessionId: '9d74a6cc',
+    createdAt: 1785667012145,
+    lastMessageSentAt: 1785667397906,
+    lastAttachedAt: 1785734279860,
+  })
+  const parked: string[] = []
+  const driver = createIdleParkDriver({
+    listSessions: () => [restored],
+    park: id => parked.push(id),
+    // Cap far above 1 so ONLY the TTL can fire, at its shipped 20 minutes.
+    maxLiveEngines: 100,
+    now: () => 1785734279860 + 60_000,
+  })
+
+  driver.evaluate()
+
+  expect(parked).toEqual([])
+})
+
+test('a restored session still parks once genuinely idle past the TTL', () => {
+  // The same row, swept 21 minutes after the restore rather than 1: the attach
+  // stamp is now itself beyond the TTL, so the fix must not make a restored
+  // session permanently unparkable.
+  const restored = desc({
+    appSessionId: '9d74a6cc',
+    createdAt: 1785667012145,
+    lastMessageSentAt: 1785667397906,
+    lastAttachedAt: 1785734279860,
+  })
+  const parked: string[] = []
+  const driver = createIdleParkDriver({
+    listSessions: () => [restored],
+    park: id => parked.push(id),
+    maxLiveEngines: 100,
+    now: () => 1785734279860 + 21 * 60_000,
+  })
+
+  driver.evaluate()
+
+  expect(parked).toEqual(['9d74a6cc'])
 })
 
 test('never parks a non-live (disconnected / exited) session, however old', () => {
