@@ -27,7 +27,11 @@ import {
   createFileStateCacheWithSizeLimit,
   type FileStateCache,
 } from './fileStateCache.js'
-import { isNotEmptyMessage, normalizeMessages } from './messages.js'
+import {
+  isInternalNoResponseSentinel,
+  isNotEmptyMessage,
+  normalizeMessages,
+} from './messages.js'
 import { expandPath } from './path.js'
 import type {
   inputSchema as permissionToolInputSchema,
@@ -102,6 +106,7 @@ const toolProgressLastSentTime = new Map<string, number>()
 export function* normalizeMessage(message: Message): Generator<SDKMessage> {
   switch (message.type) {
     case 'assistant':
+      if (isInternalNoResponseSentinel(message)) return
       for (const _ of normalizeMessages([message])) {
         // Skip empty messages (e.g., "(no content)") that shouldn't be output to SDK
         if (!isNotEmptyMessage(_)) {

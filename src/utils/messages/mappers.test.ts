@@ -9,6 +9,11 @@ import {
   toSDKMessageOrigin,
   toSDKMessages,
 } from './mappers.js'
+import {
+  createAssistantAPIErrorMessage,
+  createAssistantMessage,
+  NO_RESPONSE_REQUESTED,
+} from '../messages.js'
 
 /**
  * `MessageOrigin` (src/types/message.ts:10) has six kinds; five are engine
@@ -31,22 +36,36 @@ describe('toSDKMessageOrigin', () => {
     ).toEqual({ kind: 'deferred-continuation' })
   })
 
-  test('task-notification keeps only status + summary', () => {
+  test('task-notification keeps the display fields and DROPS the internals', () => {
+    // A display that reprints `formatTaskNotificationText`'s banner puts the
+    // task id and the output path on the user's screen (leak, 2026-08-01). The
+    // fix is structured fields, so what crosses is exactly what a UI renders:
+    // the outcome, the agent's answer, its accounting, and the join key back to
+    // the spawning tool_use. `taskId`/`outputFile` have no display meaning and
+    // stay engine-side.
     const projected = toSDKMessageOrigin({
       kind: 'task-notification',
       status: 'completed',
       summary: 'refactored the parser',
-      // Free text + accounting the banner content already carries — deliberately
-      // NOT forwarded (it would only double the frame).
       result: 'a very long agent result',
       usage: { totalTokens: 1000, toolUses: 3, durationMs: 42 },
+      toolUseId: 'toolu_agent_1',
+      taskId: 'ae916c961d15ead2f',
+      outputFile: '/private/tmp/tasks/ae916c961d15ead2f.output',
       worktreePath: '/repo/.worktrees/x',
     })
     expect(projected).toEqual({
       kind: 'task-notification',
       status: 'completed',
       summary: 'refactored the parser',
+      result: 'a very long agent result',
+      usage: { totalTokens: 1000, toolUses: 3, durationMs: 42 },
+      toolUseId: 'toolu_agent_1',
     })
+    const serialized = JSON.stringify(projected)
+    expect(serialized).not.toContain('ae916c961d15ead2f')
+    expect(serialized).not.toContain('/private/tmp/tasks')
+    expect(serialized).not.toContain('.worktrees')
   })
 
   test('channel keeps server/user and DROPS meta (third-party-authored keys)', () => {
@@ -104,6 +123,29 @@ describe('toSDKMessages carries provenance', () => {
   test('an operator turn carries no origin key at all (byte-identical to pre-field)', () => {
     const [sdk] = toSDKMessages([userMessage()])
     expect(sdk).not.toHaveProperty('origin')
+  })
+})
+
+describe('toSDKMessages hides internal no-response sentinels', () => {
+  test('drops current and legacy silent API fallback records', () => {
+    const current = createAssistantAPIErrorMessage({
+      content: NO_RESPONSE_REQUESTED,
+    })
+    const legacy = {
+      ...current,
+      isInternalNoResponseSentinel: undefined,
+    }
+
+    expect(toSDKMessages([current])).toEqual([])
+    expect(toSDKMessages([legacy])).toEqual([])
+  })
+
+  test('keeps genuine assistant-authored text with the same words', () => {
+    const genuine = createAssistantMessage({ content: NO_RESPONSE_REQUESTED })
+
+    expect(JSON.stringify(toSDKMessages([genuine]))).toContain(
+      NO_RESPONSE_REQUESTED,
+    )
   })
 })
 

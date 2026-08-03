@@ -324,6 +324,24 @@ export function isSyntheticMessage(message: Message): boolean {
   )
 }
 
+/**
+ * True only for internal bookkeeping that deliberately means “emit no visible
+ * assistant response.” The API-error shape check keeps older persisted
+ * fallback records suppressible without hiding genuine assistant-authored text
+ * that happens to use the same words.
+ */
+export function isInternalNoResponseSentinel(
+  message: Message,
+): message is AssistantMessage {
+  if (message.type !== 'assistant') return false
+  if (message.isInternalNoResponseSentinel) return true
+  if (!message.isApiErrorMessage || message.message.content.length !== 1) {
+    return false
+  }
+  const block = message.message.content[0]
+  return block?.type === 'text' && block.text === NO_RESPONSE_REQUESTED
+}
+
 function isSyntheticApiErrorMessage(
   message: Message,
 ): message is AssistantMessage & { isApiErrorMessage: true } {
@@ -454,7 +472,7 @@ export function createAssistantAPIErrorMessage({
   errorDetails?: string
   deferredTerminalFailure?: AssistantMessage['deferredTerminalFailure']
 }): AssistantMessage {
-  return baseCreateAssistantMessage({
+  const message = baseCreateAssistantMessage({
     content: [
       {
         type: 'text' as const,
@@ -467,6 +485,10 @@ export function createAssistantAPIErrorMessage({
     errorDetails,
     deferredTerminalFailure,
   })
+  if (content === NO_RESPONSE_REQUESTED) {
+    message.isInternalNoResponseSentinel = true
+  }
+  return message
 }
 
 export function createUserMessage({
@@ -813,6 +835,8 @@ export function normalizeMessages(messages: Message[]): NormalizedMessage[] {
             uuid,
             error: message.error,
             isApiErrorMessage: message.isApiErrorMessage,
+            isInternalNoResponseSentinel:
+              message.isInternalNoResponseSentinel,
             advisorModel: message.advisorModel,
             ...(shouldAttachReasoningDisplayMetadata
               ? { hasRawReasoning }
@@ -4824,6 +4848,7 @@ export function shouldShowUserMessage(
   message: NormalizedMessage,
   isTranscriptMode: boolean,
 ): boolean {
+  if (isInternalNoResponseSentinel(message)) return false
   if (message.type !== 'user') return true
   if (message.isMeta) {
     // Channel messages stay isMeta (for snip-tag/turn-boundary/brief-mode
