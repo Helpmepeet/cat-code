@@ -6,7 +6,10 @@ import {
   type TaskType,
 } from '../../Task.js'
 import type { TaskState } from '../../tasks/types.js'
-import { enqueuePendingNotification } from '../messageQueueManager.js'
+import {
+  enqueuePendingNotification,
+  hasPendingTaskNotification,
+} from '../messageQueueManager.js'
 import { enqueueSdkEvent } from '../sdkEventQueue.js'
 import { getTaskOutputDelta, getTaskOutputPath } from './diskOutput.js'
 
@@ -123,6 +126,7 @@ export function evictTerminalTask(
     if (!task) return prev
     if (!isTerminalTaskStatus(task.status)) return prev
     if (!task.notified) return prev
+    if (hasPendingTaskNotification(taskId)) return prev
     // Panel grace period — blocks eviction until deadline passes.
     // 'retain' in task narrows to LocalAgentTaskState (the only type with
     // that field); evictAfter is optional so 'evictAfter' in task would
@@ -167,7 +171,9 @@ export async function generateTaskAttachments(state: AppState): Promise<{
         case 'failed':
         case 'killed':
           // Evict terminal tasks — they've been consumed and can be GC'd
-          evictedTaskIds.push(taskState.id)
+          if (!hasPendingTaskNotification(taskState.id)) {
+            evictedTaskIds.push(taskState.id)
+          }
           continue
         case 'pending':
           // Keep in map — hasn't run yet, but parent already knows about it
@@ -230,6 +236,7 @@ export function applyTaskOffsetsAndEvictions(
       if (!fresh || !isTerminalTaskStatus(fresh.status) || !fresh.notified) {
         continue
       }
+      if (hasPendingTaskNotification(id)) continue
       if ('retain' in fresh && (fresh.evictAfter ?? Infinity) > Date.now()) {
         continue
       }

@@ -330,6 +330,10 @@ export type SDKMessageOrigin =
       kind: 'task-notification'
       status?: 'completed' | 'failed' | 'killed' | 'running' | 'pending'
       summary?: string
+      /** Join key back to the spawning `tool_use` block. */
+      toolUseId?: string
+      result?: string
+      usage?: { totalTokens: number; toolUses: number; durationMs: number }
     }
   | { kind: 'coordinator' }
   | { kind: 'channel'; server: string; user?: string }
