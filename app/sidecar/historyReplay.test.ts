@@ -64,7 +64,10 @@ function historyUserMessage(uuid: string, text: string): SDKMessage {
 }
 
 let servers: SidecarServer[] = []
-function makeServer(history: readonly SDKMessage[]): SidecarServer {
+function makeServer(
+  history: readonly SDKMessage[],
+  historySourceTruncated = false,
+): SidecarServer {
   const server = new SidecarServer({
     sessionId: SESSION,
     engineSessionId: ENGINE_SESSION,
@@ -74,6 +77,7 @@ function makeServer(history: readonly SDKMessage[]): SidecarServer {
       },
     }),
     history,
+    historySourceTruncated,
     log: () => {},
   })
   servers.push(server)
@@ -172,4 +176,22 @@ test('byte cap: oversized history retains only the newest frames that fit, loss 
   expect(events.length).toBe(2)
   expect(JSON.stringify(events[0])).toContain('mid ')
   expect(JSON.stringify(events[1])).toContain('newest small restored message')
+})
+
+test('a loader-truncated archival prefix is announced even when retained frames fit', () => {
+  const server = makeServer(
+    [historyUserMessage('u-new', 'newest retained display message')],
+    true,
+  )
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+
+  expect(received[0]!.kind).toBe('ready')
+  expect(received[1]).toMatchObject({
+    kind: 'error',
+    requestId: HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
+  })
+  expect(JSON.stringify(received[2])).toContain(
+    'newest retained display message',
+  )
 })

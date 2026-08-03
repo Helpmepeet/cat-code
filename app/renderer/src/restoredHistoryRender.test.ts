@@ -80,6 +80,37 @@ test('replayed history frames project into normal transcript rows', () => {
   expect(rows.every(r => r.sessionId === SESSION)).toBe(true)
 })
 
+test('a replayed compact boundary stays between its archival prefix and compacted tail', () => {
+  const { user, assistant } = fixtureMessages()
+  const boundary: SDKMessage = {
+    type: 'system',
+    subtype: 'compact_boundary',
+    session_id: 'engine-restored',
+    uuid: 'compact-boundary-fixture',
+    compact_metadata: {
+      trigger: 'manual',
+      pre_tokens: 316_672,
+    },
+  }
+
+  let state = createTranscriptState()
+  for (const f of [
+    ready(),
+    frame(user, true),
+    frame(boundary, true),
+    frame(assistant, true),
+  ]) {
+    state = projectServerFrame(state, f)
+  }
+
+  const rows = selectTranscriptRows(state, SESSION)
+  expect(rows.map(row => row.kind)).toEqual([
+    'user-text',
+    'compact-boundary',
+    'assistant-text',
+  ])
+})
+
 test('the replay flag is invisible to the projector and the raw log (additive field, rows identical)', () => {
   const { user, assistant } = fixtureMessages()
 

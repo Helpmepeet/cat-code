@@ -97,6 +97,8 @@ test('serialized bare worker switches two sessions, suppresses a real SessionSta
     engineSessionId: string
     appSessionId: string
     nonce: string
+    compacted?: boolean
+    unresolvedToolTail?: boolean
     transcriptPath?: string
   }> = [
     {
@@ -104,6 +106,8 @@ test('serialized bare worker switches two sessions, suppresses a real SessionSta
       engineSessionId: randomUUID(),
       appSessionId: randomUUID(),
       nonce: `plb-first-${randomUUID()}`,
+      compacted: true,
+      unresolvedToolTail: true,
     },
     {
       cwd: secondCwd,
@@ -130,8 +134,11 @@ test('serialized bare worker switches two sessions, suppresses a real SessionSta
   )
 
   for (const session of sessions) {
+    const mintArgs = ['bun', 'run', minter, session.engineSessionId, session.nonce]
+    if (session.compacted) mintArgs.push('--compacted')
+    if (session.unresolvedToolTail) mintArgs.push('--unresolved-tool-tail')
     const mint = await spawnAndCollect(
-      ['bun', 'run', minter, session.engineSessionId, session.nonce],
+      mintArgs,
       {
         cwd: session.cwd,
         env: {
@@ -150,6 +157,24 @@ test('serialized bare worker switches two sessions, suppresses a real SessionSta
       'MINTED_TRANSCRIPT_PATH='.length,
     )
   }
+
+  // Legacy auth refreshes could rotate the stamped session identity without
+  // moving the transcript file pointer. The filename remains canonical for
+  // catalog/backfill addressing; a drifted leaf stamp must not poison the row.
+  const mixedPath = sessions[0]!.transcriptPath!
+  const mixedEntries = readFileSync(mixedPath, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map(line => JSON.parse(line) as Record<string, unknown>)
+  const mixedLeaf = mixedEntries.findLast(
+    entry => entry.type === 'user' || entry.type === 'assistant',
+  )
+  expect(mixedLeaf).toBeDefined()
+  mixedLeaf!.sessionId = randomUUID()
+  writeFileSync(
+    mixedPath,
+    `${mixedEntries.map(entry => JSON.stringify(entry)).join('\n')}\n`,
+  )
 
   const control = await spawnAndCollect(
     ['bun', 'run', hookControl, sessions[0]!.engineSessionId],
@@ -190,6 +215,7 @@ test('serialized bare worker switches two sessions, suppresses a real SessionSta
   expect(run.code).toBe(0)
   expect(run.elapsedMs).toBeLessThan(30_000)
   expect(existsSync(markerPath)).toBe(false)
+  expect(run.stderr).toContain('transcript identity drift')
   // NOTE: this run shares its config home with the two `init()`-running
   // fixtures above, so it cannot also assert the worker's observation-only
   // bootstrap. `sessionsCatalogWorker.probe.test.ts` proves that on a clean
@@ -210,6 +236,14 @@ test('serialized bare worker switches two sessions, suppresses a real SessionSta
     expect(result).toBeDefined()
     expect(result!.engineSessionId).toBe(expected.engineSessionId)
     expect(JSON.stringify(result)).toContain(expected.nonce)
+    if (expected.compacted) {
+      expect(JSON.stringify(result)).toContain('compact_boundary')
+    }
+    if (expected.unresolvedToolTail) {
+      expect(JSON.stringify(result)).not.toContain(
+        `unresolved-${expected.nonce}`,
+      )
+    }
     // Nothing in a transcript states the context window, so the worker resolves
     // it from the model through the engine's real `getContextWindowForModel`.
     // Only a real process proves that import is reachable under bare/SIMPLE

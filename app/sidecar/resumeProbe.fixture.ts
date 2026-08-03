@@ -31,6 +31,9 @@ async function main(): Promise<void> {
     engineSessionId: result.engineSessionId,
     count: result.messages.length,
     hasMarker: JSON.stringify(result.messages).includes(marker),
+    hasCompactBoundary: result.messages.some(
+      message => message.type === 'system' && message.subtype === 'compact_boundary',
+    ),
   }
   process.stdout.write(`RESUME_RESULT=${JSON.stringify(payload)}\n`)
   // Flush stdout before exit so the parent reliably reads the line.

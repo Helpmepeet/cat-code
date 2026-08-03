@@ -19,6 +19,7 @@ import { switchSession } from '../../src/bootstrap/state.js'
 import { asAgentId, asSessionId } from '../../src/types/ids.js'
 import {
   createAssistantMessage,
+  createCompactBoundaryMessage,
   createSystemMessage,
   createUserMessage,
 } from '../../src/utils/messages.js'
@@ -34,6 +35,8 @@ async function main(): Promise<void> {
   const sessionId = process.argv[2]
   const marker = process.argv[3] ?? 'p3-1-fixture-marker'
   const realisticTail = process.argv.includes('--realistic-tail')
+  const compacted = process.argv.includes('--compacted')
+  const unresolvedToolTail = process.argv.includes('--unresolved-tool-tail')
   if (!sessionId) {
     throw new Error('usage: mintTranscript.fixture.ts <sessionId> [marker]')
   }
@@ -48,7 +51,45 @@ async function main(): Promise<void> {
   const assistant = createAssistantMessage({
     content: `acknowledged the nonce ${marker}`,
   })
-  await recordTranscript([user, assistant])
+  if (compacted) {
+    user.timestamp = '2026-07-31T17:59:00.000Z'
+    assistant.timestamp = '2026-07-31T17:59:01.000Z'
+    const boundary = createCompactBoundaryMessage('manual', 316_672)
+    boundary.timestamp = '2026-07-31T18:00:16.000Z'
+    const summary = createUserMessage({
+      content: 'compacted model seed summary',
+      isCompactSummary: true,
+    })
+    summary.timestamp = '2026-07-31T18:00:17.000Z'
+    const command = createUserMessage({
+      content: '<command-name>/compact</command-name>',
+    })
+    command.timestamp = '2026-07-31T18:00:18.000Z'
+    const compactedMessages = [
+      user,
+      assistant,
+      boundary,
+      summary,
+      command,
+    ]
+    if (unresolvedToolTail) {
+      compactedMessages.push(
+        createAssistantMessage({
+          content: [
+            {
+              type: 'tool_use',
+              id: `unresolved-${marker}`,
+              name: 'Read',
+              input: { file_path: `/tmp/${marker}` },
+            },
+          ],
+        }),
+      )
+    }
+    await recordTranscript(compactedMessages)
+  } else {
+    await recordTranscript([user, assistant])
+  }
   if (realisticTail) {
     // Reproduce the P3-8 live shape through production persistence: a
     // sidechain record and then a later, dangling system diagnostic. The latter
@@ -60,6 +101,9 @@ async function main(): Promise<void> {
     await recordTranscript([
       createSystemMessage(`diagnostic after ${marker}`, 'info'),
     ])
+  }
+  if (compacted) {
+    process.stdout.write('MINTED_TRANSCRIPT_SHAPE=compacted\n')
   }
   // Writes are queued on a flush timer; force them to disk before exit (the
   // graceful-shutdown flush we bypass with process.exit would otherwise do it).

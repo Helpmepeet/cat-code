@@ -94,9 +94,17 @@ async function mintTranscript(opts: {
   cwd: string
   engineSessionId: string
   marker: string
+  compacted?: boolean
 }): Promise<void> {
   const proc = Bun.spawn(
-    ['bun', 'run', minter, opts.engineSessionId, opts.marker],
+    [
+      'bun',
+      'run',
+      minter,
+      opts.engineSessionId,
+      opts.marker,
+      ...(opts.compacted ? ['--compacted'] : []),
+    ],
     {
       cwd: opts.cwd,
       env: {
@@ -202,8 +210,9 @@ test('(b) a resumed sidecar echoes the id in ready AND replays the restored hist
   }
 
   // F2 (RESTORE-HISTORY): the REAL wiring — resume → toSDKMessages → server →
-  // socket → supervisor decode — delivers the minted transcript (2 messages)
-  // as replay-flagged event frames, in order, before any live event.
+  // socket → supervisor decode — delivers the visible portion of the minted
+  // transcript as replay-flagged event frames before any live event. The
+  // engine-only API-validity sentinel is deliberately absent.
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(
       () => reject(new Error('timed out waiting for history replay frames')),
@@ -211,7 +220,7 @@ test('(b) a resumed sidecar echoes the id in ready AND replays the restored hist
     )
     const check = () => {
       if (
-        frames.filter(f => f.kind === 'event' && f.replay === true).length >= 2
+        frames.filter(f => f.kind === 'event' && f.replay === true).length >= 1
       ) {
         clearTimeout(timer)
         resolve()
@@ -221,30 +230,105 @@ test('(b) a resumed sidecar echoes the id in ready AND replays the restored hist
     }
     check()
   })
-  const replayFrames = frames.filter(
+  let replayFrames = frames.filter(
     (f): f is Extract<ServerFrame, { kind: 'event' }> =>
       f.kind === 'event' && f.replay === true,
   )
-  expect(replayFrames.length).toBe(2)
+  // Give a leaked second frame time to arrive before taking the final count.
+  await Bun.sleep(100)
+  replayFrames = frames.filter(
+    (f): f is Extract<ServerFrame, { kind: 'event' }> =>
+      f.kind === 'event' && f.replay === true,
+  )
+  expect(replayFrames.length).toBe(1)
   for (const frame of replayFrames) {
     expect(frame.event.type).toBe('message')
     expect(frame.sessionId).toBe('p31-resume-echo')
   }
-  // The replay carries what the ENGINE resumed (one source): the user nonce
-  // prompt verbatim, then an assistant message. NOTE the assistant is the
-  // engine's own API-validity sentinel, not the minted ack — recovery filters
-  // the hand-minted trailing assistant and appends "No response requested."
-  // (conversationRecovery.ts:243). The renderer history matching the ENGINE's
-  // restored state — sentinel included — is exactly the F2 same-source
-  // contract; uuid-level equality with the seeded engine state is asserted in
-  // resumeSeedProbe.fixture.ts.
+  // An ordinary non-compacted replay still aligns exactly with the visible
+  // engine seed; the explicitly tagged recovery sentinel stays engine-only.
   expect(JSON.stringify(replayFrames[0])).toContain(`remember this nonce: ${marker}`)
-  const second = replayFrames[1]!
-  if (second.event.type === 'message') {
-    expect(second.event.message.type).toBe('assistant')
-  } else {
-    throw new Error('second replay frame is not a message event')
+  expect(JSON.stringify(replayFrames)).not.toContain('No response requested.')
+}, TEST_TIMEOUT_MS)
+
+test('(b) compacted resume replays archival prefix plus seam while the model seed stays compacted', async () => {
+  const configHome = freshConfigHome()
+  const cwd = tmp('catcode-p31-compact-wd-')
+  const engineSessionId = randomUUID()
+  const marker = `compact-archive-${randomUUID()}`
+  await mintTranscript({
+    configHome,
+    cwd,
+    engineSessionId,
+    marker,
+    compacted: true,
+  })
+
+  const sup = makeSupervisor(configHome)
+  const frames: ServerFrame[] = []
+  sup.subscribe(event => {
+    if (event.type === 'frame') frames.push(event.frame)
+  })
+  sup.spawnSession('p31-compact-replay', {
+    cwd,
+    resumeEngineSessionId: engineSessionId,
+  })
+  await waitForFrame(sup, frame => frame.kind === 'ready')
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error('timed out waiting for compact history replay')),
+      45_000,
+    )
+    const check = () => {
+      const serialized = JSON.stringify(
+        frames.filter(frame => frame.kind === 'event' && frame.replay === true),
+      )
+      if (
+        serialized.includes(marker) &&
+        serialized.includes('compact_boundary')
+      ) {
+        clearTimeout(timer)
+        resolve()
+      } else {
+        setTimeout(check, 25)
+      }
+    }
+    check()
+  })
+
+  const replay = frames.filter(
+    frame => frame.kind === 'event' && frame.replay === true,
+  )
+  expect(JSON.stringify(replay)).toContain(`remember this nonce: ${marker}`)
+  expect(JSON.stringify(replay)).toContain('compact_boundary')
+
+  // The engine's ordinary resume projection remains post-boundary only. This
+  // independently guards against feeding the archival prefix back to the model.
+  const probe = Bun.spawn(
+    ['bun', 'run', resumeProbe, engineSessionId, marker],
+    {
+      cwd,
+      env: { ...process.env, CLAUDE_CONFIG_DIR: configHome },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+  )
+  const [code, stdout] = await Promise.all([
+    probe.exited,
+    new Response(probe.stdout).text(),
+    new Response(probe.stderr).text(),
+  ])
+  expect(code).toBe(0)
+  const resultLine = stdout
+    .split('\n')
+    .find(line => line.startsWith('RESUME_RESULT='))
+  expect(resultLine).toBeDefined()
+  const result = JSON.parse(resultLine!.slice('RESUME_RESULT='.length)) as {
+    hasMarker: boolean
+    hasCompactBoundary: boolean
   }
+  expect(result.hasMarker).toBe(false)
+  expect(result.hasCompactBoundary).toBe(true)
 }, TEST_TIMEOUT_MS)
 
 test('(b) the resumed session state actually contains the prior messages (engine-side, not JSONL)', async () => {

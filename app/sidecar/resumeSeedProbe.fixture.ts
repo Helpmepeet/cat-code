@@ -33,7 +33,8 @@ import { init } from '../../src/entrypoints/init.js'
 import { QueryEngine } from '../../src/QueryEngine.js'
 import { createQueryEngineAppSession } from '../../src/app-runtime/createQueryEngineAppSession.js'
 import type { Message } from '../../src/types/message.js'
-import { toSDKMessages } from '../../src/utils/messages/mappers.js'
+import { isInternalNoResponseSentinel } from '../../src/utils/messages.js'
+import { projectResumedHistory } from './historyProjection.js'
 import { resumeEngineSession } from './sessionResume.js'
 import {
   createNormalSidecarQueryEngineConfig,
@@ -82,11 +83,13 @@ async function main(): Promise<void> {
   const held = (captured as unknown as { mutableMessages: Message[] })
     .mutableMessages
 
-  // F2 same-source proof: the renderer's history is toSDKMessages over the
-  // SAME resumed array that seeded the engine (index.ts uses one variable for
-  // both) — so the mapper output must match the engine-held turn context
-  // uuid-for-uuid, in order.
-  const replayUuids = toSDKMessages(resumed.messages).map(m => m.uuid)
+  // F2 tail proof: the visible seed projection is byte-for-byte the tail that
+  // index.ts appends after any archival prefix. Internal no-response records
+  // remain engine-only, including legacy API-error-shaped fallbacks.
+  const replayUuids = projectResumedHistory(resumed.messages).map(m => m.uuid)
+  const visibleHeld = held.filter(
+    message => !isInternalNoResponseSentinel(message),
+  )
 
   const payload = {
     engineSessionId: resumed.engineSessionId,
@@ -99,9 +102,9 @@ async function main(): Promise<void> {
     engineHeldUuidsMatchResumed:
       held.length === resumed.messages.length &&
       held.every((m, i) => m.uuid === resumed.messages[i]?.uuid),
-    replayMatchesEngineSeed:
-      replayUuids.length === held.length &&
-      replayUuids.every((uuid, i) => uuid === held[i]?.uuid),
+    replayMatchesVisibleEngineSeed:
+      replayUuids.length === visibleHeld.length &&
+      replayUuids.every((uuid, i) => uuid === visibleHeld[i]?.uuid),
   }
   process.stdout.write(`SEED_RESULT=${JSON.stringify(payload)}\n`)
   await new Promise<void>(resolve => {

@@ -20,12 +20,21 @@ import { statSync } from 'node:fs'
 import { FrameDecoder } from '../shared/framing.js'
 import {
   MAX_FRAME_BYTES,
+  MAX_HISTORY_REPLAY_BYTES,
+  MAX_HISTORY_REPLAY_FRAMES,
   PARKED_EXIT_CODE,
   RESUME_FAILED_EXIT_CODE,
 } from '../shared/limits.js'
 import { getSessionId } from '../../src/bootstrap/state.js'
 import type { Message } from '../../src/types/message.js'
-import { toSDKMessages } from '../../src/utils/messages/mappers.js'
+import {
+  getTranscriptPath,
+  loadDisplayTranscriptFromJsonlPath,
+} from '../../src/utils/sessionStorage.js'
+import {
+  mergeDisplayHistoryWithSeed,
+  projectResumedHistory,
+} from './historyProjection.js'
 import { initializeSidecarRuntime } from './initializeRuntime.js'
 import { createSidecarSessionController } from './sessionController.js'
 import { resumeEngineSession, SidecarResumeError } from './sessionResume.js'
@@ -167,14 +176,30 @@ async function main(): Promise<void> {
     ...(resumedMessages !== undefined ? { initialMessages: resumedMessages } : {}),
   })
 
-  // F2 (decisions/RESTORE-HISTORY.md): the renderer's restored history is the
-  // SAME resumedMessages array that seeded the engine above — one source, no
-  // drift — converted by the engine's own toSDKMessages (the mapper the remote
-  // bridge uses for exactly this replay-to-a-late-display job). Converted AFTER
-  // resume so getSessionId() stamps the adopted engine session id.
-  const historyEvents = resumedMessages !== undefined
-    ? toSDKMessages(resumedMessages)
-    : undefined
+  // F2 (decisions/RESTORE-HISTORY.md): display history is an archival prefix
+  // plus the exact visible model-seed tail. The compacted seed itself stays
+  // unchanged; only the display loader follows logicalParentUuid across seams.
+  // Both projections run AFTER resume so getSessionId() stamps the adopted id.
+  let historyEvents: ReturnType<typeof projectResumedHistory> | undefined
+  let historySourceTruncated = false
+  if (resumedMessages !== undefined) {
+    const seedHistoryEvents = projectResumedHistory(resumedMessages)
+    const display = await loadDisplayTranscriptFromJsonlPath(
+      getTranscriptPath(),
+      {
+        maxMessages: MAX_HISTORY_REPLAY_FRAMES,
+        // JSONL has persistence-only fields stripped by toSDKMessages. Keep a
+        // bounded 2x read window, then apply the exact 4 MiB wire cap below.
+        maxBytes: MAX_HISTORY_REPLAY_BYTES * 2,
+      },
+    )
+    const merged = mergeDisplayHistoryWithSeed(
+      display.messages,
+      seedHistoryEvents,
+    )
+    historyEvents = merged.history
+    historySourceTruncated = display.truncated || merged.truncated
+  }
 
   const idleTtlMs = parseIdleTtlMs(process.env.CATCODE_SIDECAR_IDLE_TTL_MS)
 
@@ -199,6 +224,7 @@ async function main(): Promise<void> {
     ...(sessionActions ? { sessionActions } : {}),
     ...(slashCatalog.length > 0 ? { slashCatalog } : {}),
     ...(historyEvents !== undefined ? { history: historyEvents } : {}),
+    ...(historySourceTruncated ? { historySourceTruncated: true } : {}),
     // P4-6 title-rider: a resumed session already has its title + history, so its
     // first turn this run is a continuation — never retitle it from that prompt.
     resumed: resumedMessages !== undefined,

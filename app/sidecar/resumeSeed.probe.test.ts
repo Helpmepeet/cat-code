@@ -110,7 +110,7 @@ test('F1: the resumed transcript is the live turn context of the engine the side
     engineHeldCount: number
     engineHasMarker: boolean
     engineHeldUuidsMatchResumed: boolean
-    replayMatchesEngineSeed: boolean
+    replayMatchesVisibleEngineSeed: boolean
   }
 
   // Id adoption (the old, insufficient claim) still holds…
@@ -123,17 +123,20 @@ test('F1: the resumed transcript is the live turn context of the engine the side
   expect(result.engineHeldCount).toBe(2)
   expect(result.engineHasMarker).toBe(true)
   expect(result.engineHeldUuidsMatchResumed).toBe(true)
-  // F2 same-source: the renderer-history conversion (toSDKMessages) over the
-  // same resumed array matches the engine-seeded state uuid-for-uuid.
-  expect(result.replayMatchesEngineSeed).toBe(true)
+  // The visible replay may carry an archival prefix, but its aligned tail is
+  // still the exact visible model seed; recovery sentinels stay internal.
+  expect(result.replayMatchesVisibleEngineSeed).toBe(true)
 }, TEST_TIMEOUT_MS)
 
-test('F1/F2 one-source wiring: index.ts feeds the SAME resumed array to the engine seed and the history replay', () => {
-  // Source-level guarantee (mainSource.test idiom): both consumers read the
-  // one `resumedMessages` variable — no second load, no divergent copy.
+test('F1/F2 projection wiring: archival display replay preserves the exact visible engine-seed tail', () => {
+  // Source-level guarantee (mainSource.test idiom): model context is seeded
+  // only from resumedMessages. Display history is loaded separately, then the
+  // visible resumedMessages projection replaces its aligned tail byte-for-byte.
   const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8')
   expect(source).toContain('initialMessages: resumedMessages')
-  expect(source).toContain('toSDKMessages(resumedMessages)')
+  expect(source).toContain('projectResumedHistory(resumedMessages)')
+  expect(source).toContain('loadDisplayTranscriptFromJsonlPath(')
+  expect(source).toContain('mergeDisplayHistoryWithSeed(')
   // And resumedMessages has exactly one assignment site (the resume result).
   const assignments = source.match(/resumedMessages =/g) ?? []
   expect(assignments.length).toBe(1)

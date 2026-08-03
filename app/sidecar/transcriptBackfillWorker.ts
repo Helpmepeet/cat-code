@@ -10,7 +10,7 @@
  */
 
 import { statSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { basename, dirname } from 'node:path'
 
 import {
   MAX_TRANSCRIPT_BACKFILL_INPUT_BYTES,
@@ -58,7 +58,8 @@ async function main(): Promise<void> {
   const [
     { switchSession, getSdkBetas },
     { loadConversationForResume },
-    { toSDKMessages },
+    { loadDisplayTranscriptFromJsonlPath },
+    { mergeDisplayHistoryWithSeed, projectResumedHistory },
     { createMessageEvent },
     { ensureEngineMacro },
     { enableConfigs },
@@ -66,7 +67,8 @@ async function main(): Promise<void> {
   ] = await Promise.all([
     import('../../src/bootstrap/state.js'),
     import('../../src/utils/conversationRecovery.js'),
-    import('../../src/utils/messages/mappers.js'),
+    import('../../src/utils/sessionStorage.js'),
+    import('./historyProjection.js'),
     import('../../src/app-runtime/sessionEvents.js'),
     import('./initializeRuntime.js'),
     import('../../src/utils/config.js'),
@@ -128,7 +130,8 @@ async function main(): Promise<void> {
         await emit({ ...failureIdentity(item), type: 'failure', reason: 'invalid' })
         continue
       }
-      if (loaded.sessionId !== item.engineSessionId) {
+      const fileSessionId = basename(item.transcriptPath, '.jsonl')
+      if (fileSessionId !== item.engineSessionId) {
         await emit({
           ...failureIdentity(item),
           type: 'failure',
@@ -136,18 +139,37 @@ async function main(): Promise<void> {
         })
         continue
       }
+      if (
+        loaded.sessionId !== undefined &&
+        loaded.sessionId !== item.engineSessionId
+      ) {
+        process.stderr.write(
+          `[backfill-worker] transcript identity drift: file=${item.engineSessionId} latest_stamp=${loaded.sessionId}\n`,
+        )
+      }
 
-      const history = toSDKMessages(loaded.messages)
+      const display = await loadDisplayTranscriptFromJsonlPath(
+        item.transcriptPath,
+        {
+          maxMessages: MAX_HISTORY_REPLAY_FRAMES,
+          maxBytes: MAX_HISTORY_REPLAY_BYTES * 2,
+        },
+      )
+      const merged = mergeDisplayHistoryWithSeed(
+        display.messages,
+        projectResumedHistory(loaded.messages),
+      )
       const frames = buildBoundedFrames(
         item.appSessionId,
-        history.map(createMessageEvent),
+        merged.history.map(createMessageEvent),
+        display.truncated || merged.truncated,
       )
       const result: TranscriptBackfillSessionResult = {
         type: 'session',
         appSessionId: item.appSessionId,
         engineSessionId: item.engineSessionId,
         frames,
-        // Read from the RAW transcript, not from `history` above: the
+        // Read from the RAW transcript, not from the projected frames above: the
         // `toSDKMessages` conversion keeps conversation turns and drops the
         // telemetry these come from, so by that point they no longer exist.
         //
@@ -202,10 +224,11 @@ async function main(): Promise<void> {
 function buildBoundedFrames(
   appSessionId: string,
   events: Array<{ type: 'message'; message: unknown }>,
+  sourceTruncated = false,
 ): ServerFrame[] {
   const retained: ServerFrame[] = []
   let retainedBytes = 0
-  let truncated = false
+  let truncated = sourceTruncated
   for (let i = events.length - 1; i >= 0; i--) {
     let event: (typeof events)[number]
     try {
