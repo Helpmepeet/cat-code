@@ -18,7 +18,7 @@ import { hostname } from 'os'
 
 import {
   getIsNonInteractiveSession,
-  regenerateSessionId,
+  regenerateAPISessionId,
   resetCostState,
 } from '../../bootstrap/state.js'
 import { logForDebugging } from '../../utils/debug.js'
@@ -164,7 +164,7 @@ export function shouldRunStartupCodexTouchAll(): boolean {
 }
 
 export function applyPostCodexAccountSwitchRefresh(): void {
-  regenerateSessionId()
+  regenerateAPISessionId()
   resetUserCache()
   resetCostState()
 }

@@ -43,6 +43,7 @@ import {
 } from 'src/utils/model/providers.js'
 import { getProxyFetchOptions } from 'src/utils/proxy.js'
 import {
+  getAPISessionId,
   getIsNonInteractiveSession,
   getSessionId,
 } from '../../bootstrap/state.js'
@@ -418,7 +419,7 @@ export async function getAnthropicClient({
   const defaultHeaders: { [key: string]: string } = {
     'x-app': 'cli',
     'User-Agent': getUserAgent(),
-    'X-Claude-Code-Session-Id': getSessionId(),
+    'X-Claude-Code-Session-Id': getAPISessionId(),
     ...customHeaders,
     ...(containerId ? { 'x-claude-remote-container-id': containerId } : {}),
     ...(remoteSessionId

@@ -104,6 +104,11 @@ type State = {
   codeEditToolDecisionCounter: AttributedCounter | null
   activeTimeCounter: AttributedCounter | null
   statsStore: { observe(name: string, value: number): void } | null
+  /**
+   * Provider-facing request identity. Auth changes rotate this without moving
+   * the transcript identity or its persistence path.
+   */
+  apiSessionId: SessionId
   sessionId: SessionId
   // Parent session ID for tracking session lineage (e.g., plan mode -> implementation)
   parentSessionId: SessionId | undefined
@@ -281,6 +286,7 @@ function getInitialState(): State {
       resolvedCwd = rawCwd.normalize('NFC')
     }
   }
+  const sessionId = randomUUID() as SessionId
   const state: State = {
     originalCwd: resolvedCwd,
     projectRoot: resolvedCwd,
@@ -337,7 +343,8 @@ function getInitialState(): State {
     codeEditToolDecisionCounter: null,
     activeTimeCounter: null,
     statsStore: null,
-    sessionId: randomUUID() as SessionId,
+    apiSessionId: sessionId,
+    sessionId,
     parentSessionId: undefined,
     // Logger state
     loggerProvider: null,
@@ -441,6 +448,15 @@ export function getSessionId(): SessionId {
   return STATE.sessionId
 }
 
+export function getAPISessionId(): SessionId {
+  return STATE.apiSessionId
+}
+
+export function regenerateAPISessionId(): SessionId {
+  STATE.apiSessionId = randomUUID() as SessionId
+  return STATE.apiSessionId
+}
+
 export function regenerateSessionId(
   options: { setCurrentAsParent?: boolean } = {},
 ): SessionId {
@@ -453,7 +469,9 @@ export function regenerateSessionId(
   STATE.planSlugCache.delete(STATE.sessionId)
   // Regenerated sessions live in the current project: reset projectDir to
   // null so getTranscriptPath() derives from originalCwd.
-  STATE.sessionId = randomUUID() as SessionId
+  const sessionId = randomUUID() as SessionId
+  STATE.apiSessionId = sessionId
+  STATE.sessionId = sessionId
   STATE.sessionProjectDir = null
   return STATE.sessionId
 }
@@ -482,6 +500,7 @@ export function switchSession(
   // across repeated /resume. Only the current session's slug is ever read
   // (plans.ts getPlanSlug defaults to getSessionId()).
   STATE.planSlugCache.delete(STATE.sessionId)
+  STATE.apiSessionId = sessionId
   STATE.sessionId = sessionId
   STATE.sessionProjectDir = projectDir
   sessionSwitched.emit(sessionId)

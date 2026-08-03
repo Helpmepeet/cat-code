@@ -147,6 +147,7 @@ import {
   getCacheEditingHeaderLatched,
   getFastModeHeaderLatched,
   getLastApiCompletionTimestamp,
+  getAPISessionId,
   getPromptCache1hAllowlist,
   getPromptCache1hEligible,
   getSessionId,
@@ -579,7 +580,7 @@ export function getAPIMetadata() {
       device_id: getOrCreateUserID(),
       // Only include OAuth account UUID when actively using OAuth authentication
       account_uuid: getOauthAccountInfo()?.accountUuid ?? '',
-      session_id: getSessionId(),
+      session_id: getAPISessionId(),
     }),
   }
 }

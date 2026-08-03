@@ -1,6 +1,6 @@
 import { feature } from 'bun:bundle';
 import * as React from 'react';
-import { regenerateSessionId, resetCostState } from '../../bootstrap/state.js';
+import { regenerateAPISessionId, resetCostState } from '../../bootstrap/state.js';
 import { clearTrustedDeviceToken, enrollTrustedDevice } from '../../bridge/trustedDevice.js';
 import type { LocalJSXCommandContext } from '../../commands.js';
 import { ConfigurableShortcutHint } from '../../components/ConfigurableShortcutHint.js';
@@ -33,8 +33,9 @@ export function applyPostLoginStateRefresh(
   context.setMessages(stripSignatureBlocks)
   // Post-login refresh logic. Keep in sync with onboarding in src/interactiveHelpers.tsx
   
-  // Regenerate session ID so the API sees a fresh session for the new account
-  regenerateSessionId()
+  // Rotate only the provider-facing identity. The transcript id and its file
+  // pointer stay stable across an auth change.
+  regenerateAPISessionId()
   // Reset cost state when switching accounts
   resetCostState()
   // Refresh remotely managed settings after login (non-blocking)
