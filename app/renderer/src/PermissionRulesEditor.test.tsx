@@ -49,7 +49,12 @@ test('showModes=true: the pill AND the interactive selector both render', () => 
   expect(html).toContain('Current permission mode: Plan')
   // The mode buttons read as labels too, not as `dontAsk`/`acceptEdits`.
   expect(html).toContain('>Accept edits<')
+  expect(html).toContain('>Auto<')
+  expect(html).toContain('>Don&#x27;t ask<')
   expect(html).not.toContain('>acceptEdits<')
+  // This fixture reports the classifier unavailable, so Auto is visible but
+  // cannot issue a mode transition.
+  expect(html).toContain('disabled=""')
   // …plus the interactive selector (aria-pressed mode buttons).
   expect(html).toContain('aria-pressed')
 })

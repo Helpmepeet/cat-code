@@ -5,6 +5,7 @@ import { PROTOCOL_VERSION, type ServerFrame } from '../shared/protocol.js'
 import type { SupervisorEvent } from '../supervisor/supervisor.js'
 import {
   CWD_TOKEN_TTL_MS,
+  SIDECAR_RUNTIME_ARGS,
   createCwdTokenStore,
   isTerminalLifecycleFrame,
   selectTranscriptBackfillCandidates,
@@ -12,6 +13,13 @@ import {
 } from './mainDecisions.js'
 
 const SID = 'app-session-1'
+
+test('the production sidecar runtime enables the classifier feature', () => {
+  expect(SIDECAR_RUNTIME_ARGS).toEqual([
+    '--feature=TRANSCRIPT_CLASSIFIER',
+    'run',
+  ])
+})
 
 function pongFrame(sessionId = SID): ServerFrame {
   return {

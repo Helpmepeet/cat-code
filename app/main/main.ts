@@ -54,6 +54,7 @@ import {
 import {
   createCwdTokenStore,
   isTerminalLifecycleFrame,
+  SIDECAR_RUNTIME_ARGS,
   selectTranscriptBackfillCandidates,
   supervisorEventToServerFrame,
 } from './mainDecisions.js'
@@ -591,11 +592,12 @@ const ACCOUNTS_POOL_WORKER_ENTRY = join(
 )
 
 function createSupervisor(): SidecarSupervisor {
-  // Dev: `bun run <repo>/app/sidecar/index.ts`. Packaged: the --compile'd Bun
-  // binary path (W5). Injected so the supervisor stays runtime-agnostic.
+  // The sidecar runs the same default classifier feature as the engine bundle
+  // (`scripts/build.ts`). Without the Bun runtime flag every `feature(...)`
+  // branch is compiled false and genuine auto mode cannot run.
   return new SidecarSupervisor({
     sidecarCommand: process.env.CATCODE_BUN_BIN ?? 'bun',
-    sidecarArgs: ['run', SIDECAR_ENTRY],
+    sidecarArgs: [...SIDECAR_RUNTIME_ARGS, SIDECAR_ENTRY],
     // Default boot cwd for the single startup session. Per-session cwd now flows
     // through the host API (createSession → native picker, HC1); this stays only
     // as the supervisor-wide default for probe/legacy callers.

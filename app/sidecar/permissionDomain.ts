@@ -14,6 +14,7 @@
  * stay in `sidecarServer.ts`.
  */
 
+import { feature } from 'bun:bundle'
 import type { AppState } from '../../src/state/AppStateStore.js'
 import type { Store } from '../../src/state/store.js'
 import type { ToolPermissionContext } from '../../src/Tool.js'
@@ -30,14 +31,12 @@ export type PermissionDisplayFacts = {
 }
 
 /**
- * `permissionClassifierEnabled` used to be `feature('TRANSCRIPT_CLASSIFIER') &&
- * isAutoModeGateEnabled()`. `feature(...)` is a BUILD-TIME macro resolved by
- * `scripts/build.ts`, and the sidecar is spawned unbundled (`bun run
- * app/sidecar/index.ts`, `app/main/main.ts`), where every `feature(...)` call
- * evaluates false — so the flag was a hard-coded false and the rules viewer told
- * the user the classifier was unavailable even when the engine's gate said
- * otherwise. `isAutoModeGateEnabled()` is the live engine gate and is already
- * null-safe on the optional auto-mode module, so ask it directly.
+ * The desktop launches this unbundled module with Bun's
+ * `--feature=TRANSCRIPT_CLASSIFIER`, matching the engine build's default feature
+ * set. Requiring that runtime feature here is the fail-closed backstop: an
+ * incorrectly launched sidecar must not advertise Auto when its classifier
+ * branches were compiled out. `isAutoModeGateEnabled()` then applies the live
+ * model, settings, and circuit-breaker checks.
  *
  * It is NOT throw-free, though: it resolves the main-loop model, which reaches
  * credential discovery and can raise. This runs on every app-state notification
@@ -47,7 +46,9 @@ export type PermissionDisplayFacts = {
 function readPermissionDisplayFacts(): PermissionDisplayFacts {
   let permissionClassifierEnabled = false
   try {
-    permissionClassifierEnabled = isAutoModeGateEnabled()
+    if (feature('TRANSCRIPT_CLASSIFIER')) {
+      permissionClassifierEnabled = isAutoModeGateEnabled()
+    }
   } catch {
     permissionClassifierEnabled = false
   }
@@ -94,10 +95,10 @@ export function createSidecarPermissionDomain(
       // `transitionPermissionMode` so prePlanMode stash/clear, the plan-exit
       // flag, and auto-mode strip/restore all fire. NOT a bare
       // `applyPermissionUpdate({type:'setMode'})`, which skips that cleanup.
-      // Policy guards already ran at the boundary: `auto` is always rejected,
-      // and `bypassPermissions` reaches here ONLY when the trusted launch flag
-      // enabled it (isBypassPermissionsModeAvailable) — otherwise the boundary
-      // rejected it. `transitionPermissionMode` applies the resulting mode.
+      // Policy guards already ran at the boundary: `auto` reaches here only
+      // while the classifier feature and live gate are enabled, and
+      // `bypassPermissions` reaches here only when the trusted launch flag
+      // enabled it. `transitionPermissionMode` applies the resulting mode.
       appStateStore.setState(prev => {
         const current = prev.toolPermissionContext.mode
         if (current === mode) return prev

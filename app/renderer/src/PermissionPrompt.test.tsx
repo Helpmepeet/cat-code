@@ -284,7 +284,7 @@ test('describeSuggestion never puts a settings-file identifier in the button tex
     'mode → Ask permissions · This session',
     'mode → Accept edits · This session',
     'mode → Plan mode · This session',
-    'mode → Auto mode · This session',
+    "mode → Don't ask · This session",
     'mode → Bypass permissions · This session',
   ])
 })

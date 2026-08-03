@@ -11,12 +11,13 @@ import {
  * the prototype's `PermChip`, `Surfaces.jsx:302`, replacing the fat `<details>`
  * box). Shows the current engine mode tinted; a click opens a small upward
  * popover of the wire-allowlisted modes (`PERMISSION_SET_MODE_MODES`), presented
- * with the prototype's five labels — Plan · Ask · Accept edits · Auto · Bypass
- * (engine keys `plan`/`default`/`acceptEdits`/`dontAsk`/`bypassPermissions`).
+ * with truthful names for the engine's distinct classifier-backed `auto` and
+ * restrictive `dontAsk` policies.
  * `bypassPermissions` is shown disabled unless the session was launched with the
  * trusted opt-in (`CATCODE_ALLOW_BYPASS=1` → `isBypassPermissionsModeAvailable`);
  * the sidecar re-checks that flag and rejects otherwise (C2, PERMISSION-BOUNDARY.md
- * §3). `auto` stays excluded — engine-internal, not renderer-addressable.
+ * §3). Auto is disabled when the sidecar reports that its live classifier gate
+ * is unavailable.
  * The popover shows ONLY the mode list (the prototype's `PermChip`,
  * Surfaces.jsx:338-363) — NOT the Always-allow/deny/ask rules, which the
  * prototype relegates to a separate "Manage rules" surface (a future desktop
@@ -67,16 +68,19 @@ const MODE_META = {
     toneText: 'text-sky-400',
     toneDot: 'bg-sky-400',
   },
-  // The engine mode is `dontAsk` (title "Don't Ask", PermissionMode.ts:73); the
-  // prototype presents this 4th-by-escalation settable mode as "Auto mode". The
-  // engine's own `auto` mode is INTERNAL (not user-settable, `permissions.ts:28`),
-  // so `dontAsk` is what a picker can actually select here.
-  dontAsk: {
+  auto: {
     label: 'Auto',
     title: 'Auto mode',
-    desc: 'Auto-accept edits and commands',
+    desc: 'Use the safety classifier for unapproved actions',
     toneText: 'text-accent',
     toneDot: 'bg-accent',
+  },
+  dontAsk: {
+    label: "Don't ask",
+    title: "Don't ask",
+    desc: 'Deny anything that needs approval',
+    toneText: 'text-red-400',
+    toneDot: 'bg-red-400',
   },
   // The prototype's 5th mode. Selectable ONLY when the session was launched with
   // the trusted opt-in (`CATCODE_ALLOW_BYPASS=1` → context
@@ -99,6 +103,7 @@ const MODE_DISPLAY_ORDER = [
   'plan',
   'default',
   'acceptEdits',
+  'auto',
   'dontAsk',
   'bypassPermissions',
 ] as const satisfies readonly PermissionSetModeMode[]
@@ -184,11 +189,10 @@ export function PermissionModeChip({
           {MODE_DISPLAY_ORDER.map(mode => {
             const meta = MODE_META[mode]
             const active = context.mode === mode
-            // Bypass is grantable only when the trusted launch flag enabled it;
-            // otherwise the row is shown (parity) but disabled with a hint.
             const unavailable =
-              mode === 'bypassPermissions' &&
-              !context.isBypassPermissionsModeAvailable
+              (mode === 'auto' && !context.permissionClassifierEnabled) ||
+              (mode === 'bypassPermissions' &&
+                !context.isBypassPermissionsModeAvailable)
             return (
               <button
                 key={mode}
@@ -197,7 +201,9 @@ export function PermissionModeChip({
                 aria-checked={active}
                 disabled={unavailable}
                 title={
-                  unavailable
+                  mode === 'auto' && unavailable
+                    ? 'Auto mode is unavailable for this model or has been disabled in settings.'
+                    : unavailable
                     ? 'Bypass mode has to be turned on when Cat Code starts. Enable it from the command line, then open a new session.'
                     : undefined
                 }

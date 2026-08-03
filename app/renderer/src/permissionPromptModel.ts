@@ -106,7 +106,7 @@ const MODE_LABEL: Record<SuggestionMode, string> = {
   default: 'Ask permissions',
   acceptEdits: 'Accept edits',
   plan: 'Plan mode',
-  dontAsk: 'Auto mode',
+  dontAsk: "Don't ask",
   bypassPermissions: 'Bypass permissions',
 }
 

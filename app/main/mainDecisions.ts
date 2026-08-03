@@ -4,13 +4,14 @@
  * `main.ts` is the Electron entry point: importing it starts an Electron app, so
  * nothing inside it can be exercised by a unit test. What was left there could
  * only be checked by grepping its own source, which proves the TEXT of a call
- * and never its behaviour. These three decisions need no Electron API, so they
+ * and never its behaviour. These decisions need no Electron API, so they
  * live here and are tested directly, the same shape as `replayBuffer.ts` and
  * `attachmentGate.ts`:
  *
  *   - translating a `SupervisorEvent` into the `ServerFrame` the renderer sees;
  *   - the HC1 one-time directory-token store;
- *   - choosing which rows a PL-B transcript backfill should read.
+ *   - choosing which rows a PL-B transcript backfill should read;
+ *   - the Bun runtime flags required by the real engine sidecar.
  *
  * `main.ts` keeps the Electron wiring and calls in here.
  */
@@ -25,6 +26,15 @@ import {
 } from '../shared/protocol.js'
 import type { TranscriptBackfillItem } from '../shared/transcriptBackfill.js'
 import type { SupervisorEvent } from '../supervisor/supervisor.js'
+
+/**
+ * Keep the unbundled desktop sidecar on the engine build's default classifier
+ * feature. Without this runtime flag Bun folds every classifier branch away.
+ */
+export const SIDECAR_RUNTIME_ARGS = [
+  '--feature=TRANSCRIPT_CLASSIFIER',
+  'run',
+] as const
 
 /**
  * The renderer-visible frame a supervisor event becomes, or null when the event

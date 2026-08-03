@@ -29,9 +29,23 @@ import type {
   AppPermissionResponse,
   AppSessionEvent,
 } from '../../src/app-runtime/sessionEvents.js'
-import type { SDKMessage } from '../../src/entrypoints/agentSdkTypes.js'
+import type {
+  SDKMessage,
+  SDKUserMessage,
+} from '../../src/entrypoints/agentSdkTypes.js'
 import type { ToolPermissionContext, ToolPermissionRulesBySource } from '../../src/Tool.js'
+import type { MessageOrigin } from '../../src/types/message.js'
 import type { PermissionUpdate } from '../../src/types/permissions.js'
+import {
+  dequeue,
+  enqueuePendingNotification,
+  getCommandQueueSnapshot,
+  releaseTaskNotificationReservation,
+  reserveTaskNotification,
+  subscribeToCommandQueue,
+} from '../../src/utils/messageQueueManager.js'
+import { queuedCommandOrigin } from '../../src/utils/taskNotification.js'
+import { toSDKMessageOriginProp } from '../../src/utils/messages/mappers.js'
 import { permissionRuleValueFromString } from '../../src/utils/permissions/permissionRuleParser.js'
 import { appClientMessageSchema } from '../../src/web/appSessionProtocol.js'
 // C5 (P4-20) — the wire tool-name literal, imported from the ENGINE source the
@@ -228,14 +242,15 @@ export type SidecarServerOptions = {
    */
   slashCatalog?: readonly SlashCatalogEntry[]
   /**
-   * Restored-session history (F2 — decisions/RESTORE-HISTORY.md): the resumed
-   * transcript, already converted by the engine's `toSDKMessages` (index.ts
-   * converts the SAME `resumeEngineSession().messages` array that seeded the
-   * engine — one source, no drift). Replayed to each attaching connection as
-   * `replay: true` event frames after `ready`, capped + truncation-signalled.
-   * Absent for fresh sessions.
+   * Restored-session display history (F2 — decisions/RESTORE-HISTORY.md): an
+   * archival prefix followed by the exact visible projection of the engine's
+   * compacted seed. Replayed to each attaching connection as `replay: true`
+   * event frames after `ready`, capped + truncation-signalled. Absent for fresh
+   * sessions.
    */
   history?: readonly SDKMessage[]
+  /** Display loader omitted an older archival prefix before wire capping. */
+  historySourceTruncated?: boolean
   /**
    * Idle self-exit TTL in ms (CC-3, docs O1 / SESSION-LIFETIME §2). When no
    * supervisor connection has been active for this long, `onIdle` fires so the
@@ -309,6 +324,7 @@ export class SidecarServer {
   private readonly remoteSettings: SidecarRemoteSettingsDomain | null
   private readonly slashCatalog: readonly SlashCatalogEntry[]
   private readonly history: readonly SDKMessage[]
+  private readonly historySourceTruncated: boolean
   private readonly idleTtlMs: number
   private readonly onIdle: (() => void) | null
   /** IDLE-PARK — the gated self-exit closure (null ⇒ park unwired, see options). */
@@ -324,7 +340,14 @@ export class SidecarServer {
   private unsubscribeTasksSnapshot: (() => void) | null = null
   private unsubscribeAgentModeSnapshot: (() => void) | null = null
   private unsubscribeRunControlsSnapshot: (() => void) | null = null
+  private unsubscribeTaskNotificationQueue: (() => void) | null = null
   private activeTurn = false
+  /** Queue listeners are synchronous; drain only from a later microtask. */
+  private taskNotificationDrainScheduled = false
+  /** Set before unsubscription so an already-scheduled queue microtask is inert. */
+  private closed = false
+  /** A non-QueryEngine adapter completed without durable-input acknowledgement. */
+  private taskNotificationAwaitingDurableAcceptance = false
   /**
    * IDLE-PARK (decisions/IDLE-PARK.md §3, R2-F2) — the parking latch. Set
    * synchronously in `handlePark` once the gate passes; a submit arriving AFTER
@@ -376,6 +399,7 @@ export class SidecarServer {
     this.remoteSettings = options.remoteSettings ?? null
     this.slashCatalog = options.slashCatalog ?? []
     this.history = options.history ?? []
+    this.historySourceTruncated = options.historySourceTruncated ?? false
     this.idleTtlMs = options.idleTtlMs ?? 0
     this.onIdle = options.onIdle ?? null
     this.onPark = options.onPark ?? null
@@ -391,6 +415,12 @@ export class SidecarServer {
     // server's broadcast model.)
     this.unsubscribe = this.controller.subscribe(event => {
       this.broadcastEvent(event)
+    })
+    // The terminal REPL owns an equivalent between-turn drain. Desktop submits
+    // straight to this sidecar, so this process owns the idle wake-up for its
+    // single engine session. Never submit from this synchronous listener.
+    this.unsubscribeTaskNotificationQueue = subscribeToCommandQueue(() => {
+      this.scheduleTaskNotificationDrain()
     })
 
     // C3 (PERMISSION-BOUNDARY.md §4) — emit a fresh snapshot on EVERY live
@@ -439,6 +469,7 @@ export class SidecarServer {
     // connecting) must not linger forever — arm the idle timer now. A real
     // supervisor attach cancels it well within the (generous) TTL.
     this.armIdleTimer()
+    this.scheduleTaskNotificationDrain()
 
     // Catalog owner (decision #4): the sidecar no longer enumerates or broadcasts
     // the sessions catalog. A single main-supervised worker owns it and delivers
@@ -608,11 +639,11 @@ export class SidecarServer {
    * cap) — the replay adds no security bypass.
    */
   private sendHistoryReplay(connection: Connection): void {
-    if (this.history.length === 0) return
+    if (this.history.length === 0 && !this.historySourceTruncated) return
 
     const retained: ServerFrame[] = []
     let retainedBytes = 0
-    let truncated = false
+    let truncated = this.historySourceTruncated
     // Walk newest → oldest so the cap keeps the most recent history. Stop (not
     // skip) at the first frame that would overflow: a contiguous newest tail,
     // never a mid-history hole.
@@ -704,6 +735,7 @@ export class SidecarServer {
 
   /** Tear down the controller + permission-context subscriptions. */
   close(): void {
+    this.closed = true
     this.clearIdleTimer()
     this.unsubscribe?.()
     this.unsubscribe = null
@@ -719,6 +751,8 @@ export class SidecarServer {
     this.unsubscribeAgentModeSnapshot = null
     this.unsubscribeRunControlsSnapshot?.()
     this.unsubscribeRunControlsSnapshot = null
+    this.unsubscribeTaskNotificationQueue?.()
+    this.unsubscribeTaskNotificationQueue = null
     for (const connection of this.connections) {
       connection.socket.end()
     }
@@ -960,6 +994,176 @@ export class SidecarServer {
     }
   }
 
+  /** True when the main parent queue has a desktop-deliverable worker result. */
+  private hasQueuedParentTaskNotification(): boolean {
+    return getCommandQueueSnapshot().some(
+      command =>
+        command.mode === 'task-notification' &&
+        command.agentId === undefined &&
+        typeof command.value === 'string',
+    )
+  }
+
+  /**
+   * Schedule rather than start immediately: queue signals are synchronous and
+   * AppSessionController announces turn completion before its own finalizer has
+   * cleared its abort controller. The sidecar turn finalizer is the safe edge.
+   */
+  private scheduleTaskNotificationDrain(): void {
+    if (this.closed) return
+    if (this.taskNotificationAwaitingDurableAcceptance) return
+    if (this.taskNotificationDrainScheduled) return
+    this.taskNotificationDrainScheduled = true
+    queueMicrotask(() => {
+      this.taskNotificationDrainScheduled = false
+      if (this.closed) return
+      this.drainOneTaskNotification()
+    })
+  }
+
+  private drainOneTaskNotification(): void {
+    if (
+      this.closed ||
+      this.parking ||
+      this.activeTurn ||
+      this.taskNotificationAwaitingDurableAcceptance
+    ) {
+      return
+    }
+    if (
+      this.workspaceTrust &&
+      this.workspaceTrust.getSnapshot()?.trusted !== true
+    ) {
+      return
+    }
+
+    // Re-read at drain time. A live QueryEngine turn may have consumed this
+    // notification through its normal mid-turn queue drain after we scheduled.
+    const command = dequeue(
+      queued =>
+        queued.mode === 'task-notification' &&
+        queued.agentId === undefined &&
+        typeof queued.value === 'string',
+    )
+    if (!command || typeof command.value !== 'string') return
+    const reservationTaskId = reserveTaskNotification(command)
+    let persisted = false
+
+    const origin: MessageOrigin =
+      queuedCommandOrigin(command) ?? { kind: 'task-notification' }
+    const started = this.startTurn({
+      prompt: command.value,
+      origin,
+      generateTitle: false,
+      onInputPersisted: () => {
+        persisted = true
+        releaseTaskNotificationReservation(reservationTaskId)
+      },
+      onSettled: error => {
+        if (!persisted) {
+          // Do not silently lose a result if an adapter completes before the
+          // QueryEngine's durable acknowledgement. Hold the requeued report
+          // until a later human turn supplies a fresh safe boundary.
+          this.taskNotificationAwaitingDurableAcceptance = true
+          releaseTaskNotificationReservation(reservationTaskId)
+          enqueuePendingNotification(command)
+          this.log(
+            `[sidecar] task-notification was not durably accepted; handoff deferred${
+              error ? `: ${error.message}` : ''
+            }`,
+          )
+        } else {
+          if (error) {
+            this.log(
+              `[sidecar] task-notification turn failed after acceptance: ${error.message}`,
+            )
+          }
+        }
+      },
+    })
+    if (!started) {
+      releaseTaskNotificationReservation(reservationTaskId)
+      enqueuePendingNotification(command)
+    }
+  }
+
+  /**
+   * The one sidecar-owned turn-start path. Human frames and internal worker
+   * notifications differ only in validation/error handling performed before
+   * reaching this method; both use the same active-turn and raw-event path.
+   */
+  private startTurn({
+    prompt,
+    uuid = randomUUID(),
+    isMeta,
+    goalSnapshot,
+    origin,
+    onInputPersisted,
+    generateTitle,
+    onRejected,
+    onSettled,
+  }: {
+    prompt: string
+    uuid?: string
+    isMeta?: boolean
+    goalSnapshot?: ReturnType<typeof parseThreadGoal>
+    origin?: MessageOrigin
+    onInputPersisted?: () => void
+    generateTitle: boolean
+    onRejected?: (error: Error) => void
+    onSettled?: (error?: Error) => void
+  }): boolean {
+    if (this.parking || this.activeTurn) return false
+    this.runControls?.lockProviderSwitches()
+    this.activeTurn = true
+    this.broadcastEvent(
+      createMessageEvent({
+        type: 'user',
+        message: { role: 'user', content: prompt },
+        session_id: this.engineSessionId,
+        parent_tool_use_id: null,
+        uuid: uuid as SDKUserMessage['uuid'],
+        timestamp: new Date().toISOString(),
+        ...(isMeta ? { isSynthetic: true } : {}),
+        ...toSDKMessageOriginProp(origin),
+      }),
+    )
+
+    let submitPromise: Promise<void>
+    try {
+      submitPromise = this.controller.submit(prompt, {
+        uuid,
+        isMeta,
+        ...(goalSnapshot !== undefined ? { goalSnapshot } : {}),
+        ...(origin !== undefined ? { origin } : {}),
+        ...(onInputPersisted !== undefined ? { onInputPersisted } : {}),
+      })
+    } catch (error) {
+      this.activeTurn = false
+      this.scheduleTaskNotificationDrain()
+      return false
+    }
+
+    let rejection: Error | undefined
+    void submitPromise
+      .catch(error => {
+        const normalized = error instanceof Error ? error : new Error(String(error))
+        rejection = normalized
+        onRejected?.(normalized)
+      })
+      .finally(() => {
+        this.activeTurn = false
+        onSettled?.(rejection)
+        if (generateTitle) {
+          void this.titleGenerator.maybeGenerate(prompt, title =>
+            this.broadcastSessionTitle(title),
+          )
+        }
+        this.scheduleTaskNotificationDrain()
+      })
+    return true
+  }
+
   private handleSubmit(connection: Connection, message: AppSubmitMessage): void {
     // IDLE-PARK (decisions/IDLE-PARK.md §3, R2-F2) — a submit that arrives AFTER
     // the parking latch is rejected before `activeTurn` is touched: the turn
@@ -1056,51 +1260,35 @@ export class SidecarServer {
       return
     }
 
-    const turnUuid = randomUUID()
-    // Provider-specific prompt/cache state is about to be constructed. Lock
-    // cross-provider model choices now, not later when usage accounting settles.
-    this.runControls?.lockProviderSwitches()
-    this.activeTurn = true
-    this.broadcastEvent(createMessageEvent({
-      type: 'user',
-      message: { role: 'user', content: message.prompt },
-      session_id: this.engineSessionId,
-      parent_tool_use_id: null,
-      uuid: turnUuid,
-      timestamp: new Date().toISOString(),
-      isSynthetic: message.options?.isMeta === true,
-    }))
-    void this.controller
-      .submit(message.prompt, {
-        uuid: turnUuid,
-        isMeta: message.options?.isMeta,
-        // Only pass goalSnapshot through if the client supplied the key, so the
-        // controller's `'goalSnapshot' in options` check keeps its meaning.
-        ...(goalSnapshot !== undefined ? { goalSnapshot } : {}),
-      })
-      .catch(error => {
-        const errorMessage = error instanceof Error ? error.message : String(error)
+    // A previous fallback adapter may have left a completion queued without a
+    // durable ack. A human turn is a new, explicitly accepted safe boundary.
+    this.taskNotificationAwaitingDurableAcceptance = false
+    const started = this.startTurn({
+      prompt: message.prompt,
+      isMeta: message.options?.isMeta,
+      goalSnapshot,
+      generateTitle: true,
+      onRejected: error => {
         this.sendError(
           connection,
           message.requestId,
-          errorMessage === 'Session turn already running'
+          error.message === 'Session turn already running'
             ? 'turn_already_running'
             : 'internal_error',
-          errorMessage,
-          errorMessage === 'Session turn already running',
+          error.message,
+          error.message === 'Session turn already running',
         )
-      })
-      .finally(() => {
-        this.activeTurn = false
-        // P4-6 title-rider: after the first turn of a fresh session, generate +
-        // persist an AI title (the same machinery the TUI uses) and push it live.
-        // One-shot and self-guarding — a resumed session, an existing title, or an
-        // empty prompt is a no-op inside the generator. Fire-and-forget: a title
-        // never gates or delays the turn.
-        void this.titleGenerator.maybeGenerate(message.prompt, title =>
-          this.broadcastSessionTitle(title),
-        )
-      })
+      },
+    })
+    if (!started) {
+      this.sendError(
+        connection,
+        message.requestId,
+        'turn_already_running',
+        'Session turn already running',
+        true,
+      )
+    }
   }
 
   /**
@@ -1180,6 +1368,7 @@ export class SidecarServer {
    */
   private isParkGateOpen(): boolean {
     if (this.activeTurn) return false
+    if (this.hasQueuedParentTaskNotification()) return false
     if (this.controller.getPendingPermissionRequests().length > 0) return false
     if (this.tasks && this.tasks.hasLiveWork()) return false
     if (this.inFlightDurableWrites > 0) return false
@@ -1221,13 +1410,17 @@ export class SidecarServer {
       )
       return
     }
-    // `auto` is engine-internal and feature-gated; not renderer-addressable.
-    if (raw.mode === 'auto') {
+    // Auto remains fail-closed: the sidecar asks the live engine gate, which
+    // covers model support, settings disablement and the circuit breaker.
+    if (
+      raw.mode === 'auto' &&
+      this.permissions?.getDisplayFacts().permissionClassifierEnabled !== true
+    ) {
       this.sendError(
         connection,
         requestId,
         'bad_request',
-        'mode "auto" is engine-internal and not addressable over IPC',
+        'mode "auto" is not available for this session',
         false,
       )
       return
@@ -1396,6 +1589,7 @@ export class SidecarServer {
     })
     if (result.changed) {
       this.broadcastWorkspaceTrustSnapshot()
+      this.scheduleTaskNotificationDrain()
     }
   }
 
@@ -3024,8 +3218,8 @@ function checkStrictKeys(message: unknown): string | null {
  * C2 — sidecar-LOCAL schema for `permission.setMode`
  * (PERMISSION-BOUNDARY.md §3). Deliberately NOT part of the engine's shared
  * `appClientMessageSchema` (the WS server shares that and has no handler for
- * this frame). The mode allowlist is the wire constant; `bypassPermissions`
- * and `auto` are rejected with explicit messages before this parse runs.
+ * this frame). The mode allowlist is the wire constant; availability checks
+ * for `bypassPermissions` and classifier-backed `auto` run before this parse.
  */
 const permissionSetModeMessageSchema = z.object({
   type: z.literal('permission.setMode'),

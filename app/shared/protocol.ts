@@ -91,15 +91,17 @@ export type SessionId = string
  * the trusted opt-in (`CATCODE_ALLOW_BYPASS=1` → the context's
  * `isBypassPermissionsModeAvailable`), mirroring the CLI's
  * `--dangerously-skip-permissions` trusted-surface model. A renderer alone
- * (a browser-like surface) can never escalate to it. `auto` is engine-internal/
- * feature-gated and excluded. There is NO `destination` on the wire — the
- * sidecar pins `session` scope; a renderer must never persist
- * `permissions.defaultMode`.
+ * (a browser-like surface) can never escalate to it. `auto` is classifier-backed
+ * and may be selected only while the sidecar's live engine gate reports it
+ * available; the sidecar re-checks that gate before applying the transition.
+ * There is NO `destination` on the wire — the sidecar pins `session` scope; a
+ * renderer must never persist `permissions.defaultMode`.
  */
 export const PERMISSION_SET_MODE_MODES = [
   'default',
   'acceptEdits',
   'plan',
+  'auto',
   'dontAsk',
   'bypassPermissions',
 ] as const
@@ -2575,7 +2577,9 @@ export type CatCodeBridge = {
   ): void
   /**
    * C2 — switch the addressed session's permission mode. Session-scoped only
-   * (never persisted); `bypassPermissions`/`auto` are rejected at the sidecar.
+   * (never persisted). The sidecar conditionally allows classifier-backed
+   * `auto` and trusted-launch `bypassPermissions`, rejecting either when its
+   * engine-owned availability gate is closed.
    * The updated `permission.context` snapshot frame is the acknowledgement.
    */
   setPermissionMode(sessionId: SessionId, mode: PermissionSetModeMode): void

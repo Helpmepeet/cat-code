@@ -184,11 +184,15 @@ and a standalone mode switcher has no pending request to select from.
 { "type": "permission.setMode", "requestId": "<client-request-id>", "mode": "acceptEdits" }
 ```
 
-- **`mode` allowlist: `default | acceptEdits | plan | dontAsk`.** All four are within T5b's
+- **`mode` allowlist: `default | acceptEdits | plan | auto | dontAsk`.** These modes are within T5b's
   already-conceded surface: `acceptEdits` only removes prompts a compromised renderer could
   auto-approve anyway; `dontAsk` is strictly restrictive (converts ask → deny,
-  `src/utils/permissions/permissions.ts:521-531`). `auto` is internal/feature-gated
-  (`src/types/permissions.ts:28-36`) — excluded.
+  `src/utils/permissions/permissions.ts:521-531`). **Amended 2026-08-02 by operator ruling:**
+  classifier-backed `auto` is addressable only when the sidecar's live engine gate reports it
+  available. The sidecar is launched with Bun's `TRANSCRIPT_CLASSIFIER` feature, re-checks model,
+  settings, and circuit-breaker availability before applying the session-scoped transition, and
+  otherwise rejects it fail-closed. This replaces the incorrect desktop mapping that presented
+  restrictive `dontAsk` as “Auto.”
 - **`bypassPermissions` is grantable ONLY from a trusted launch surface** (the "separate future
   decision" below, taken 2026-07-13, operator-authorized). It escalates beyond T5b: no per-action
   prompt is ever raised, killing both the round-trip and its audit trail. The desktop's trusted

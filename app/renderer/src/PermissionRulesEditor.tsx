@@ -18,7 +18,8 @@ const MODE_LABEL: Record<string, string> = {
   default: 'Ask',
   acceptEdits: 'Accept edits',
   plan: 'Plan',
-  dontAsk: 'Auto',
+  auto: 'Auto',
+  dontAsk: "Don't ask",
   bypassPermissions: 'Bypass',
 }
 
@@ -87,9 +88,9 @@ const MATCH_TYPE_LABEL: Record<string, string> = {
  * session-derived half says so plainly instead of waiting forever.
  *
  * Write paths, deliberately narrow:
- *   - mode switching via `permission.setMode` (C2 — the 4 wire-allowlisted
- *     modes; `bypassPermissions`/`auto` are not offered and would be rejected
- *     at the sidecar anyway). It sets THIS SESSION's mode only; it has no
+ *   - mode switching via `permission.setMode` (C2). Classifier-backed `auto`
+ *     is offered only while the engine gate is available; `bypassPermissions`
+ *     still requires its trusted launch opt-in. It sets THIS SESSION's mode only; it has no
  *     destination for `permissions.defaultMode` (PERMISSION-BOUNDARY.md §3),
  *     which is why the default is read-only here;
  *   - "always allow" lives on the QUEUE cards as C1 suggestion selection.
@@ -189,7 +190,7 @@ export function PermissionRulesEditor({
             >
               This session
             </h3>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="text-text-muted">Current permission mode</span>
               {/* Read-only current-mode pill — a PURE display of the engine's
                * resolved `context.mode`. It emits no set-mode verb and is never a
@@ -203,21 +204,36 @@ export function PermissionRulesEditor({
                 {modeLabel(context.mode)}
               </span>
               {showModes
-                ? PERMISSION_SET_MODE_MODES.map(mode => (
-                    <button
-                      aria-pressed={context.mode === mode}
-                      className={
-                        context.mode === mode
-                          ? 'rounded bg-accent px-2 py-1 font-medium text-app-bg'
-                          : 'rounded border border-text-subtle px-2 py-1 text-text-primary'
-                      }
-                      key={mode}
-                      onClick={() => onSetMode(mode)}
-                      type="button"
-                    >
-                      {modeLabel(mode)}
-                    </button>
-                  ))
+                ? PERMISSION_SET_MODE_MODES.map(mode => {
+                    const unavailable =
+                      (mode === 'auto' &&
+                        !context.permissionClassifierEnabled) ||
+                      (mode === 'bypassPermissions' &&
+                        !context.isBypassPermissionsModeAvailable)
+                    return (
+                      <button
+                        aria-pressed={context.mode === mode}
+                        className={
+                          context.mode === mode
+                            ? 'rounded bg-accent px-2 py-1 font-medium text-app-bg'
+                            : 'rounded border border-text-subtle px-2 py-1 text-text-primary disabled:cursor-not-allowed disabled:opacity-40'
+                        }
+                        disabled={unavailable}
+                        key={mode}
+                        onClick={() => onSetMode(mode)}
+                        title={
+                          mode === 'auto' && unavailable
+                            ? 'Auto mode is unavailable for this model or has been disabled in settings.'
+                            : mode === 'bypassPermissions' && unavailable
+                              ? 'Bypass mode has to be turned on when Cat Code starts.'
+                              : undefined
+                        }
+                        type="button"
+                      >
+                        {modeLabel(mode)}
+                      </button>
+                    )
+                  })
                 : null}
             </div>
 

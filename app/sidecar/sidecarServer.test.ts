@@ -95,6 +95,11 @@ import {
 } from './extensionsDomain.js'
 import type { SidecarSettingsDomain } from './settingsDomain.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
+import {
+  enqueuePendingNotification,
+  getCommandQueueSnapshot,
+  resetCommandQueue,
+} from '../../src/utils/messageQueueManager.js'
 
 const SESSION = 'test-session'
 const ENGINE_SESSION = 'engine-test-session'
@@ -249,6 +254,7 @@ function makePermissionStore(context?: Partial<ToolPermissionContext>) {
 afterEach(() => {
   for (const s of servers) s.close()
   servers = []
+  resetCommandQueue()
 })
 
 test('on attach, the server sends the canonical controller-derived app.ready payload', () => {
@@ -930,6 +936,135 @@ test('app.submit emits the live user event before the assistant and the projecto
   state = projectServerFrame(state, { ...events[0]!, replay: true })
   rows = selectTranscriptRows(state, SESSION)
   expect(rows.filter(row => row.kind === 'user-text')).toHaveLength(1)
+})
+
+test('queued parent task notifications start autonomous FIFO turns after an active human turn', async () => {
+  const releases: Array<() => void> = []
+  const prompts: string[] = []
+  const controller = new AppSessionController({
+    async *runTurn({ prompt, options }) {
+      prompts.push(String(prompt))
+      options?.onInputPersisted?.()
+      await new Promise<void>(resolve => releases.push(resolve))
+      yield buildProbeToolUseMessage()
+    },
+  })
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  // A directly accepted human submit wins over the queued background result.
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'human-1', prompt: 'human first' }),
+  )
+  await waitFor(() => prompts.length === 1)
+
+  enqueuePendingNotification({
+    mode: 'task-notification',
+    value: 'Task notification\nTask ID: worker-1\nSummary: Agent @Ada completed\nResult:\nfirst result',
+  })
+  enqueuePendingNotification({
+    mode: 'task-notification',
+    value: 'Task notification\nTask ID: worker-2\nSummary: Agent @Grace completed\nResult:\nsecond result',
+  })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  expect(prompts).toEqual(['human first'])
+
+  releases.shift()?.()
+  await waitFor(() => prompts.length === 2)
+  expect(prompts).toEqual([
+    'human first',
+    'Task notification\nTask ID: worker-1\nSummary: Agent @Ada completed\nResult:\nfirst result',
+  ])
+  // The live event is structured as a task notification, not an operator prompt.
+  const notificationEvent = received.find(
+    frame =>
+      frame.kind === 'event' &&
+      frame.event.type === 'message' &&
+      frame.event.message.type === 'user' &&
+      frame.event.message.origin?.kind === 'task-notification',
+  )
+  expect(notificationEvent).toBeDefined()
+  if (
+    notificationEvent?.kind === 'event' &&
+    notificationEvent.event.type === 'message' &&
+    notificationEvent.event.message.type === 'user'
+  ) {
+    expect(notificationEvent.event.message.origin).toMatchObject({
+      kind: 'task-notification',
+      summary: 'Agent @Ada completed',
+      result: 'first result',
+    })
+  }
+
+  releases.shift()?.()
+  await waitFor(() => prompts.length === 3)
+  expect(prompts[2]).toContain('Task ID: worker-2')
+  expect(getCommandQueueSnapshot()).toHaveLength(0)
+  releases.shift()?.()
+})
+
+test('queued parent task notification prevents idle park before the drain runs', () => {
+  const { server, parkCount } = makeParkServer(
+    new AppSessionController(probeAdapter()),
+  )
+  const { socket } = makeSocket()
+  const conn = server.addConnection(socket)
+  enqueuePendingNotification({
+    mode: 'task-notification',
+    value: 'Task notification\nTask ID: worker-park\nSummary: Agent @Ada completed',
+  })
+
+  server.handleData(conn, clientFrame({ type: 'app.park', requestId: 'park-queued' }))
+
+  expect(parkCount()).toBe(0)
+})
+
+test('a completion without durable acknowledgement is requeued instead of dropped', async () => {
+  let starts = 0
+  const server = makeServer(
+    new AppSessionController({
+      async *runTurn() {
+        starts += 1
+        yield buildProbeToolUseMessage()
+      },
+    }),
+  )
+  const { socket } = makeSocket()
+  server.addConnection(socket)
+  enqueuePendingNotification({
+    mode: 'task-notification',
+    value: 'Task notification\nTask ID: worker-unacked\nSummary: Agent @Ada completed',
+  })
+
+  await waitFor(() => starts === 1)
+  await new Promise(resolve => setTimeout(resolve, 0))
+  expect(starts).toBe(1)
+  expect(getCommandQueueSnapshot()).toHaveLength(1)
+  expect(getCommandQueueSnapshot()[0]?.value).toContain('worker-unacked')
+})
+
+test('closing a sidecar makes an already-scheduled queue drain inert', async () => {
+  let starts = 0
+  const server = makeServer(
+    new AppSessionController({
+      async *runTurn() {
+        starts += 1
+      },
+    }),
+  )
+  // Construction schedules an idle queue check. Close before that microtask
+  // runs, then enqueue work that must remain for a live server/session.
+  server.close()
+  enqueuePendingNotification({
+    mode: 'task-notification',
+    value: 'Task notification\nTask ID: worker-closed\nSummary: Agent @Ada completed',
+  })
+
+  await new Promise(resolve => setTimeout(resolve, 0))
+  expect(starts).toBe(0)
+  expect(getCommandQueueSnapshot()).toHaveLength(1)
 })
 
 test('fresh-session slash catalog — rich slash-catalog.snapshot is delivered on attach and populates the picker before any turn', () => {
@@ -3546,11 +3681,19 @@ test('C2 — bypassPermissions is GRANTED when the trusted launch flag enabled i
   expect(store.getState().toolPermissionContext.mode).toBe('bypassPermissions')
 })
 
-test('C2 — auto is engine-internal and REJECTED at the boundary', () => {
+test('C2 — auto is REJECTED when the live classifier gate is unavailable', () => {
   const store = makePermissionStore()
+  const realDomain = createSidecarPermissionDomain(store)
+  const permissions: SidecarPermissionDomain = {
+    ...realDomain,
+    getDisplayFacts: () => ({
+      managedRulesOnly: false,
+      permissionClassifierEnabled: false,
+    }),
+  }
   const server = makeServer(
     new AppSessionController(probeAdapter()),
-    createSidecarPermissionDomain(store),
+    permissions,
   )
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
@@ -3573,6 +3716,37 @@ test('C2 — auto is engine-internal and REJECTED at the boundary', () => {
     ),
   ).toBe(true)
   expect(store.getState().toolPermissionContext.mode).toBe('default')
+})
+
+test('C2 — auto reaches the engine transition when the live classifier gate is available', () => {
+  const store = makePermissionStore()
+  const realDomain = createSidecarPermissionDomain(store)
+  const permissions: SidecarPermissionDomain = {
+    ...realDomain,
+    getDisplayFacts: () => ({
+      managedRulesOnly: false,
+      permissionClassifierEnabled: true,
+    }),
+  }
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    permissions,
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'permission.setMode',
+      requestId: 'm-auto-enabled',
+      mode: 'auto',
+    }),
+  )
+
+  expect(store.getState().toolPermissionContext.mode).toBe('auto')
+  expect(contextFrames(received).at(-1)?.context.mode).toBe('auto')
+  expect(received.some(frame => frame.kind === 'error')).toBe(false)
 })
 
 test('C2 — an unknown mode string fails the sidecar-local schema', () => {
@@ -5103,6 +5277,59 @@ function makeWorkspaceTrustServer(
     fakeWorkspaceTrust(snapshot, acceptTrust),
   )
 }
+
+test('queued task notifications fail closed on false/null trust and drain after workspace.trust accepts', async () => {
+  for (const initialSnapshot of [
+    { trusted: false, detectedRepo: null, trustRoot: '/repo' },
+    null,
+  ] as const) {
+    let trusted = false
+    let starts = 0
+    const workspaceTrust: SidecarWorkspaceTrustDomain = {
+      getSnapshot: () =>
+        trusted
+          ? { trusted: true, detectedRepo: null, trustRoot: '/repo' }
+          : initialSnapshot,
+      acceptTrust: () => {
+        trusted = true
+        return { ok: true, message: 'Workspace trusted.', changed: true }
+      },
+    }
+    const controller = new AppSessionController({
+      async *runTurn({ options }) {
+        starts += 1
+        options?.onInputPersisted?.()
+      },
+    })
+    const server = makeServer(
+      controller,
+      undefined,
+      undefined,
+      undefined,
+      workspaceTrust,
+    )
+    const { socket } = makeSocket()
+    const conn = server.addConnection(socket)
+    enqueuePendingNotification({
+      mode: 'task-notification',
+      value: `Task notification\nTask ID: worker-trust-${String(initialSnapshot?.trusted)}\nSummary: Agent @Ada completed`,
+    })
+
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(starts).toBe(0)
+    expect(getCommandQueueSnapshot()).toHaveLength(1)
+
+    server.handleData(
+      conn,
+      clientFrame({ type: 'workspace.trust', requestId: 'trust-queued' }),
+    )
+    await waitFor(() => starts === 1)
+    expect(getCommandQueueSnapshot()).toHaveLength(0)
+
+    server.close()
+    resetCommandQueue()
+  }
+})
 
 test('P4-15 — a valid workspace.trust accept produces an ok result and re-broadcasts the trust snapshot', () => {
   let called = 0

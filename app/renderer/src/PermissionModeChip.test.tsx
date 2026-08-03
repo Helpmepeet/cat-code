@@ -61,6 +61,24 @@ test('no context yet → the chip renders nothing at all', () => {
   expect(html).toBe('')
 })
 
+test('classifier-backed auto renders as Auto rather than the restrictive dontAsk policy', () => {
+  const html = renderToStaticMarkup(
+    <PermissionModeChip context={ctx('auto')} onSetMode={() => {}} />,
+  )
+  expect(html).toContain('Auto')
+  expect(html).toContain('aria-label="Permission mode: Auto"')
+  expect(html).not.toContain("Don't ask")
+})
+
+test('dontAsk is presented under its truthful restrictive name', () => {
+  const html = renderToStaticMarkup(
+    <PermissionModeChip context={ctx('dontAsk')} onSetMode={() => {}} />,
+  )
+  expect(html).toContain("Don&#x27;t ask")
+  expect(html).toContain('aria-label="Permission mode: Don&#x27;t ask"')
+  expect(html).not.toContain('Permission mode: Auto')
+})
+
 test('bypassPermissions renders as "Bypass" (amber) — the prototype 5th mode', () => {
   const html = renderToStaticMarkup(
     <PermissionModeChip context={ctx('bypassPermissions')} onSetMode={() => {}} />,
@@ -120,15 +138,9 @@ test('no context but a cached mode → a read-only face, not a picker', () => {
   expect(html).not.toContain('aria-haspopup')
 })
 
-/**
- * `auto` is engine-internal and cannot be selected in the picker
- * (`permissions.ts:28`), but real transcripts are full of it. It is what the
- * session ran under, so it must reach the rail rather than being dropped for
- * failing the settable-mode test.
- */
-test('an engine-internal mode still renders, under its own name', () => {
+test('a cached auto session uses the same friendly label as a live session', () => {
   const html = renderToStaticMarkup(
     <PermissionModeChip context={null} readOnlyMode="auto" onSetMode={() => {}} />,
   )
-  expect(html).toContain('auto')
+  expect(html).toContain('Auto')
 })
