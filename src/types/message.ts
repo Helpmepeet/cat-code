@@ -88,6 +88,11 @@ export type AssistantMessage<TContentBlock = BetaContentBlock | ContentBlock | C
   type: 'assistant'
   uuid: UUID | string
   timestamp?: string
+  /**
+   * Internal no-response marker. Kept in model context/transcript bookkeeping,
+   * never rendered as assistant-authored transcript content.
+   */
+  isInternalNoResponseSentinel?: true
   advisorModel?: string
   /** Provider-message-scoped raw reasoning availability, preserved across normalization. */
   hasRawReasoning?: boolean

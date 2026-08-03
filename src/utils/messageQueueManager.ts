@@ -52,6 +52,10 @@ function logOperation(operation: QueueOperation, content?: string): void {
 // ============================================================================
 
 const commandQueue: QueuedCommand[] = []
+// A sidecar removes a notification just before starting its autonomous parent
+// turn. Keep that handoff visible to task GC until QueryEngine has durably
+// written the resulting user message (or the sidecar rolls it back).
+const reservedTaskNotificationIds = new Set<string>()
 /** Frozen snapshot — recreated on every mutation for useSyncExternalStore. */
 let snapshot: readonly QueuedCommand[] = Object.freeze([])
 const queueChanged = createSignal()
@@ -104,6 +108,38 @@ export function getCommandQueueLength(): number {
  */
 export function hasCommandsInQueue(): boolean {
   return commandQueue.length > 0
+}
+
+/** A terminal task remains addressable until its queued report is handed off. */
+export function hasPendingTaskNotification(taskId: string): boolean {
+  if (reservedTaskNotificationIds.has(taskId)) return true
+  return commandQueue.some(command => {
+    if (command.mode !== 'task-notification') return false
+    const origin =
+      command.origin ??
+      (typeof command.value === 'string'
+        ? taskNotificationOriginFromText(command.value)
+        : undefined)
+    return origin?.kind === 'task-notification' && origin.taskId === taskId
+  })
+}
+
+/** Reserve a dequeued completion notification until its parent input persists. */
+export function reserveTaskNotification(command: QueuedCommand): string | undefined {
+  if (command.mode !== 'task-notification') return undefined
+  const origin =
+    command.origin ??
+    (typeof command.value === 'string'
+      ? taskNotificationOriginFromText(command.value)
+      : undefined)
+  if (origin?.kind !== 'task-notification' || !origin.taskId) return undefined
+  reservedTaskNotificationIds.add(origin.taskId)
+  return origin.taskId
+}
+
+/** Release a sidecar handoff reservation after persistence or rollback. */
+export function releaseTaskNotificationReservation(taskId: string | undefined): void {
+  if (taskId) reservedTaskNotificationIds.delete(taskId)
 }
 
 /**
@@ -350,6 +386,7 @@ export function clearCommandQueue(): void {
  */
 export function resetCommandQueue(): void {
   commandQueue.length = 0
+  reservedTaskNotificationIds.clear()
   snapshot = Object.freeze([])
 }
 
