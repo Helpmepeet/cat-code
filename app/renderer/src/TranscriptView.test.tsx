@@ -195,7 +195,7 @@ function toolRow(fields: {
   }
 }
 
-test('P4-18b: a tool card renders the family word, real target, and running state', () => {
+test('P4-18b: a Read tool card renders the filename, not its full path', () => {
   const html = render(
     toolRow({
       toolName: 'Read',
@@ -206,7 +206,8 @@ test('P4-18b: a tool card renders the family word, real target, and running stat
   )
 
   expect(html).toContain('Read') // family word
-  expect(html).toContain('/etc/hosts') // real target from input.file_path
+  expect(html).toContain('hosts') // filename from input.file_path
+  expect(html).not.toContain('/etc/hosts')
   expect(html).toContain('running') // pending → running state word
 })
 
@@ -1615,4 +1616,172 @@ test('P4-36 — bash keeps its band too, so the four bodies share one grammar', 
   expect(html).toContain('864 lines hidden')
   // The old one-line note is gone from every body.
   expect(html).not.toContain('Open the full-output inspector to view all')
+})
+
+/* --------------------------------------------------------------------------- *
+ * The file-READ body over the payload the engine actually sends.
+ *
+ * The fixtures above are plain strings, which is why two defects survived them:
+ * a real read arrives in `cat -n` form (`FileReadTool.ts:721` →
+ * `addLineNumbers`, `src/utils/file.ts:290-318`), so the card drew its own
+ * 1..N gutter on top of the engine's numbers and fed the prefixed lines to
+ * nothing that could color them. These rows use the real shape.
+ * --------------------------------------------------------------------------- */
+
+function readRow(content: string, filePath: string): NestedTranscriptRow {
+  return toolRow({
+    toolName: 'Read',
+    toolFamily: 'read',
+    input: { file_path: filePath },
+    // `error` is the one status that expands a read card by default.
+    status: 'error',
+    result: { content, isError: true, diff: null },
+  })
+}
+
+test('a real read paints ONE gutter, not the engine numbers plus its own', () => {
+  const html = render(
+    readRow('1\timport os\n2\t\n3\tdef f():\n4\t    return 1', '/w/a.py'),
+  )
+
+  // The prefix is gone from the source column (the keyword is tokenized, so
+  // the rest of the line is what survives as plain text beside it)…
+  expect(html).not.toContain('1\timport os')
+  expect(html).toContain('>import</span> os')
+  // …and each number appears once, in the gutter.
+  expect(occurrences(html, '>1</div>')).toBe(1)
+  expect(occurrences(html, '>4</div>')).toBe(1)
+})
+
+test('an offset read is numbered with the file lines it really is', () => {
+  const html = render(readRow('812\tconst x = 1\n813\tconst y = 2', '/w/a.ts'))
+
+  expect(html).toContain('>812</div>')
+  expect(html).toContain('>813</div>')
+  expect(html).not.toContain('>1</div>') // the old gutter restarted at 1 here
+})
+
+test('read source is syntax-colored by the theme the transcript already uses', () => {
+  const html = render(readRow('1\tdef f():\n2\t    return 1', '/w/a.py'))
+
+  // `hljs-*` classes, not a private palette: `theme.css` colors these under the
+  // operator's chosen code theme (`codeTheme.ts`).
+  expect(html).toContain('class="hljs-keyword"')
+  expect(html).toContain('hljs')
+})
+
+test('a file we cannot name a language for stays uncolored rather than guessed', () => {
+  const html = render(readRow('1\tsome notes\n2\tmore notes', '/w/notes.wat'))
+
+  expect(html).not.toContain('hljs')
+  expect(html).toContain('some notes')
+  expect(html).toContain('>1</div>') // still numbered from the payload
+})
+
+test('a read result that is not a numbered file keeps the plain rendering', () => {
+  const html = render(readRow('EISDIR: illegal operation', '/w/a.ts'))
+
+  expect(html).not.toContain('hljs')
+  expect(html).toContain('EISDIR: illegal operation')
+  expect(html).toContain('>1</div>') // counted, since the payload carried none
+})
+
+test('a truncated real read numbers its tail with the file lines, not 1..6', () => {
+  const content = Array.from(
+    { length: 900 },
+    (_, index) => `${index + 1}\tconst v${index + 1} = ${index + 1}`,
+  ).join('\n')
+  const html = render(readRow(content, '/w/big.ts'))
+
+  expect(html).toContain('864 lines hidden')
+  expect(html).toContain('>895</div>')
+  expect(html).toContain('>900</div>')
+  expect(html).not.toContain('>500</div>') // the gap really is hidden
+})
+
+/* --------------------------------------------------------------------------- *
+ * The file-WRITE body over the payload the engine actually sends.
+ *
+ * `FileWriteTool` returns one of exactly two sentences and never the file
+ * (`src/tools/FileWriteTool/FileWriteTool.ts:418-433`), so an additions view fed
+ * `result.content` painted an English sentence, or a failure, as green `+` added
+ * lines. The file is the tool's INPUT (`content`, `FileWriteTool.ts:63`).
+ *
+ * SSR-ONLY LIMIT: a card opens by default only on `status: 'error'`, and these
+ * rows need an OPEN card whose result is not an error. The two are independent
+ * inputs to different decisions — `status` drives `defaultExpanded`, the body
+ * path reads `result.isError` — so the successful-write rows below set them
+ * apart purely to get the body into the markup. The genuinely-failed row keeps
+ * both.
+ * --------------------------------------------------------------------------- */
+
+const WRITE_ACK = 'File created successfully at: /w/hello.ts'
+
+function writeRow(
+  input: Record<string, unknown>,
+  result: { content: string; isError: boolean },
+): NestedTranscriptRow {
+  return toolRow({
+    toolName: 'Write',
+    toolFamily: 'write',
+    input,
+    status: 'error',
+    result: { ...result, diff: null },
+  })
+}
+
+test('a write shows the file it wrote, not the engine sentence about it', () => {
+  const html = render(
+    writeRow(
+      { file_path: '/w/hello.ts', content: 'const greeting = "hi"\nexport default greeting' },
+      { content: WRITE_ACK, isError: false },
+    ),
+  )
+
+  expect(html).toContain('const greeting = &quot;hi&quot;')
+  expect(html).toContain('export default greeting')
+  // Painted as additions, which is now true of what it is painting.
+  expect(html).toContain('text-tone-success')
+  // The ack never reaches the body; the card's own status already reports it.
+  expect(html).not.toContain('File created successfully at')
+})
+
+test('a failed write reports the failure instead of claiming additions', () => {
+  const html = render(
+    writeRow(
+      { file_path: '/w/hello.ts', content: 'const greeting = "hi"' },
+      { content: 'EACCES: permission denied', isError: true },
+    ),
+  )
+
+  expect(html).toContain('EACCES: permission denied')
+  expect(html).toContain('text-tone-danger')
+  // Nothing was written, so nothing is painted as an addition.
+  expect(html).not.toContain('const greeting')
+  expect(html).not.toContain('text-tone-success')
+})
+
+test('a write whose input carries no content falls back to the result text', () => {
+  const html = render(
+    writeRow({ file_path: '/w/hello.ts' }, { content: WRITE_ACK, isError: false }),
+  )
+
+  expect(html).toContain('File created successfully at')
+  // …as plain text, never as a green added line.
+  expect(html).not.toContain('text-tone-success')
+})
+
+test('a long written file still bands, and the band counts the FILE', () => {
+  const written = Array.from({ length: 900 }, (_, i) => `line ${i + 1}`).join('\n')
+  const html = render(
+    writeRow(
+      { file_path: '/w/big.ts', content: written },
+      { content: WRITE_ACK, isError: false },
+    ),
+  )
+
+  expect(html).toContain('864 lines hidden') // 900 - 30 head - 6 tail
+  expect(html).toContain('line 1')
+  expect(html).toContain('line 900')
+  expect(html).not.toContain('line 500')
 })

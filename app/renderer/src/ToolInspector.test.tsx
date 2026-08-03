@@ -260,3 +260,110 @@ test('no em dash reaches the drawer (CLAUDE.md §7)', () => {
   )
   expect(html).not.toContain('—')
 })
+
+/* --------------------------------------------------------------------------- *
+ * The drawer over a file READ, whose payload arrives already numbered
+ * (`readSource.ts`; `FileReadTool.ts:721` → `addLineNumbers`).
+ * --------------------------------------------------------------------------- */
+
+function readRowWithOutput(content: string, filePath = '/w/a.ts'): ToolUseRow {
+  return mkToolRow({
+    toolName: 'Read',
+    toolFamily: 'read',
+    input: { file_path: filePath },
+    status: 'success',
+    result: { isError: false, content, diff: null },
+  })
+}
+
+test('the drawer shows the file line numbers, not its own count beside them', () => {
+  const html = renderToStaticMarkup(
+    <ToolInspector row={readRowWithOutput('812\tconst x = 1\n813\tconst y = 2')} />,
+  )
+
+  // The engine prefix is gone from the body…
+  expect(html).not.toContain('812\tconst x = 1')
+  expect(html).toContain('const x = 1')
+  // …and the gutter carries the file's real lines, not 1 and 2.
+  expect(html).toContain('>812</span>')
+  expect(html).toContain('>813</span>')
+  expect(html).not.toContain('>1</span>')
+})
+
+test('output that is not a numbered read passes through the drawer untouched', () => {
+  const html = renderToStaticMarkup(
+    <ToolInspector row={bashRowWithOutput('total 4\ndrwxr-xr-x  2 pt')} />,
+  )
+
+  expect(html).toContain('total 4')
+  expect(html).toContain('>1</span>') // counted, as it always was
+  expect(html).toContain('>2</span>')
+})
+
+/* --------------------------------------------------------------------------- *
+ * The drawer over a file WRITE. The card's reveal band sends a windowed write
+ * here saying `Open full output`, so this panel has to answer with the file the
+ * card was showing, not the engine's one-sentence ack.
+ * --------------------------------------------------------------------------- */
+
+function writeToolRow(
+  input: Record<string, unknown>,
+  result: { content: string; isError: boolean },
+): ToolUseRow {
+  return mkToolRow({
+    toolName: 'Write',
+    toolFamily: 'write',
+    input,
+    status: result.isError ? 'error' : 'success',
+    result: { ...result, diff: null },
+  })
+}
+
+test('a write drawer opens on the file that was written, not the ack', () => {
+  const model = describeToolForInspector(
+    writeToolRow(
+      { file_path: '/w/a.ts', content: 'const x = 1\nconst y = 2' },
+      { content: 'File created successfully at: /w/a.ts', isError: false },
+    ),
+  )
+
+  expect(model.output).toBe('const x = 1\nconst y = 2')
+  // Nothing is hidden: the raw input panel still carries it verbatim.
+  expect(model.input.content).toBe('const x = 1\nconst y = 2')
+})
+
+test('a failed write keeps its error in the drawer, since no file was written', () => {
+  const model = describeToolForInspector(
+    writeToolRow(
+      { file_path: '/w/a.ts', content: 'const x = 1' },
+      { content: 'EACCES: permission denied', isError: true },
+    ),
+  )
+
+  expect(model.output).toBe('EACCES: permission denied')
+})
+
+test('a write with no usable input content falls back to the result', () => {
+  const model = describeToolForInspector(
+    writeToolRow(
+      { file_path: '/w/a.ts', content: '' },
+      { content: 'File created successfully at: /w/a.ts', isError: false },
+    ),
+  )
+
+  expect(model.output).toBe('File created successfully at: /w/a.ts')
+})
+
+test('no other family reads its output from the input', () => {
+  const model = describeToolForInspector(
+    mkToolRow({
+      toolName: 'Bash',
+      toolFamily: 'bash',
+      input: { command: 'ls', content: 'not the output' },
+      status: 'success',
+      result: { isError: false, content: 'a\nb', diff: null },
+    }),
+  )
+
+  expect(model.output).toBe('a\nb')
+})

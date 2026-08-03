@@ -26,7 +26,7 @@
  * report).
  */
 
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type {
   ToolUseRow,
 } from './transcriptProjector.js'
@@ -36,6 +36,7 @@ import {
   splitLineByQuery,
   stepMatchIndex,
 } from './outputSearchModel.js'
+import { parseReadSource } from './readSource.js'
 import { useToast } from './toastContext.js'
 import { toneClasses } from './tone.js'
 
@@ -144,6 +145,20 @@ const STEP_BUTTON_CLASS = {
  * The output body plus its toolbar (prototype `OutputInspector`,
  * Messages.jsx:325-352). A separate component because the drawer returns early
  * on a null row: hooks live under that guard, never beside it.
+ *
+ * A file READ arrives already numbered (`readSource.ts`), so this drawer had the
+ * same double-gutter the read card had: the engine's `N\t` prefix inside every
+ * line, and this panel's own `index + 1` beside it. The prefix is parsed off
+ * here for the same three reasons it is on the card. The gutter can then show
+ * the file's real lines rather than a count that restarts at 1 on an offset
+ * read; a search for `1` no longer matches every line's number; and copy hands
+ * over the file rather than the file plus a column of digits. Any output that
+ * is NOT the engine's numbered shape passes through byte for byte.
+ *
+ * Syntax coloring stops at the card and does not come in here: this body paints
+ * matched runs by splitting each line into segments, and a highlighter returns
+ * ONE token tree for the whole block whose spans cross line boundaries. The two
+ * cannot both own the text. Search is what a drawer is for, so search wins.
  */
 function OutputPanel({ text }: { text: string }) {
   const [query, setQuery] = useState('')
@@ -153,7 +168,14 @@ function OutputPanel({ text }: { text: string }) {
   const toast = useToast()
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const activeRef = useRef<HTMLDivElement | null>(null)
-  const search = describeOutputSearch(text, query, matchIndex)
+  // Memoized against the search below, which re-runs on every keystroke while
+  // this depends only on the output itself.
+  const source = useMemo(() => parseReadSource(text), [text])
+  const body = useMemo(
+    () => (source.numbers === null ? text : source.lines.join('\n')),
+    [source, text],
+  )
+  const search = describeOutputSearch(body, query, matchIndex)
   const matchCount = search.matches.length
 
   // Park the active match in the vertical middle of the scroller, like the
@@ -175,7 +197,7 @@ function OutputPanel({ text }: { text: string }) {
       typeof navigator !== 'undefined' ? navigator.clipboard : undefined
     if (!clipboard) return
     void clipboard
-      .writeText(text)
+      .writeText(body)
       .then(() => {
         setCopied(true)
         setTimeout(() => setCopied(false), 1200)
@@ -268,8 +290,12 @@ function OutputPanel({ text }: { text: string }) {
       >
         <div className={wrap ? 'min-w-full' : 'min-w-max'}>
           {search.lines.map((line, index) => {
-            const lineNumber = index + 1
-            const active = search.activeLine === lineNumber
+            // Two different numbers. The search model tracks POSITION in the
+            // painted body; the gutter shows the file's own line when the
+            // payload carried one.
+            const position = index + 1
+            const lineNumber = source.numbers?.[index] ?? position
+            const active = search.activeLine === position
             return (
               <div
                 key={index}

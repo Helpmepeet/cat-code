@@ -80,6 +80,13 @@ import {
 } from './agentChromeModel.js'
 import { ToolInspector } from './ToolInspector.js'
 import { parseToolAck, type ToolAck } from './toolAck.js'
+import { ReadSourceLines } from './ReadSourceLines.js'
+import {
+  parseReadSource,
+  readLineNumbers,
+  readSourceLanguage,
+} from './readSource.js'
+import { basename } from './pathUtils.js'
 import {
   findNestedToolUseRow,
   resolveToolCardExpanded,
@@ -790,7 +797,10 @@ function deriveTarget(row: ToolUseNestedRow): string {
   switch (row.toolFamily) {
     case 'bash':
       return str('command') ?? row.toolName
-    case 'read':
+    case 'read': {
+      const filePath = str('file_path')
+      return filePath === null ? row.toolName : basename(filePath) || filePath
+    }
     case 'write':
       return str('file_path') ?? row.toolName
     case 'edit':
@@ -1226,9 +1236,22 @@ function ToolCardBody({
     case 'bash':
       return <BashBody content={content} isError={errorTone} onOpenFull={openFull} />
     case 'read':
-      return <NumberedBody content={content} onOpenFull={openFull} />
+      return (
+        <NumberedBody
+          content={content}
+          filePath={row.input['file_path']}
+          onOpenFull={openFull}
+        />
+      )
     case 'write':
-      return <AdditionsBody content={content} onOpenFull={openFull} />
+      return (
+        <WriteBody
+          written={row.input['content']}
+          result={content}
+          isError={errorTone}
+          onOpenFull={openFull}
+        />
+      )
     case 'imagegen':
       return <ImageResultBody content={content} isError={errorTone} />
     default:
@@ -1413,37 +1436,33 @@ function BashTailPeek({ content }: { content: string }) {
 }
 
 /**
- * The file-READ body. `startLine` exists because the tail is not the head: after
- * the window splits, numbering the tail from 1 would label the last lines of a
- * 900-line file as its first six.
+ * The file-READ body: the file's own line numbers beside its syntax-colored
+ * source (`readSource.ts` for why the numbers come out of the content, and
+ * `ReadSourceLines.tsx` for why the color comes from the transcript's own
+ * highlighter). A payload that is not the engine's numbered shape falls back to
+ * counting positions and no color, which is what this body always did.
  */
-function NumberedLines({ lines, startLine }: { lines: string[]; startLine: number }) {
-  return (
-    <pre className="whitespace-pre font-mono text-[11.5px] leading-relaxed text-text-muted">
-      {lines.map((line, index) => (
-        <div key={index} className="flex">
-          <span className="mr-3 w-8 shrink-0 select-none text-right tabular-nums text-text-subtle/60">
-            {startLine + index}
-          </span>
-          <span className="min-w-0">{line || ' '}</span>
-        </div>
-      ))}
-    </pre>
-  )
-}
-
 function NumberedBody({
   content,
+  filePath,
   onOpenFull,
 }: {
   content: string
+  filePath: unknown
   onOpenFull: (() => void) | null
 }) {
-  const lines = content.split('\n')
-  const { window, revealMore } = useInlineOutputWindow(lines)
+  const source = parseReadSource(content)
+  // No numbers means we could not recognise the payload as a file read, so we
+  // cannot claim to know what language it is in either.
+  const lang = source.numbers === null ? null : readSourceLanguage(filePath)
+  const { window, revealMore } = useInlineOutputWindow(source.lines)
   return (
     <div className={INLINE_OUTPUT_SCROLLER}>
-      <NumberedLines lines={window.head} startLine={1} />
+      <ReadSourceLines
+        lines={window.head}
+        numbers={readLineNumbers(source, 0, window.head.length)}
+        lang={lang}
+      />
       {window.truncated ? (
         <>
           <InlineRevealBand
@@ -1452,7 +1471,15 @@ function NumberedBody({
             onReveal={revealMore}
             onOpenFull={onOpenFull}
           />
-          <NumberedLines lines={window.tail} startLine={window.tailStartLine} />
+          <ReadSourceLines
+            lines={window.tail}
+            numbers={readLineNumbers(
+              source,
+              window.tailStartLine - 1,
+              window.tail.length,
+            )}
+            lang={lang}
+          />
         </>
       ) : null}
     </div>
@@ -1498,6 +1525,49 @@ function AdditionsBody({
       ) : null}
     </div>
   )
+}
+
+/**
+ * The file-WRITE body: the file that was written, as additions.
+ *
+ * WHICH STRING IS THE FILE. Not the result. `FileWriteTool` returns exactly two
+ * sentences and no third shape — `File created successfully at: {path}` or
+ * `The file {path} has been updated successfully.`
+ * (`src/tools/FileWriteTool/FileWriteTool.ts:418-433`) — so feeding
+ * `result.content` to an additions view painted one English sentence as a green
+ * `+` added line, and painted a FAILURE the same way. The file itself is the
+ * tool's INPUT (`content`, `FileWriteTool.ts:63` "The content to write to the
+ * file"), which is on this row already and which `ToolCardBody` already renders
+ * for a write that has not resolved yet. Reading it here needs no projector
+ * change: it makes the `+` mean what it says, and it is the prototype's own
+ * intent (`FileWriteCard`, `Messages.jsx:614-634`, whose fixtures put the
+ * written file in `toolOutput`).
+ *
+ * A failed write has no file to show, so it falls back to the result text in
+ * error tone rather than claiming additions that never landed.
+ */
+function WriteBody({
+  written,
+  result,
+  isError,
+  onOpenFull,
+}: {
+  /** Raw `input.content`, narrowed here rather than trusted. */
+  written: unknown
+  result: string
+  isError: boolean
+  onOpenFull: (() => void) | null
+}) {
+  if (isError || typeof written !== 'string' || written.length === 0) {
+    return (
+      <PlainLinesBody
+        content={result}
+        isError={isError}
+        onOpenFull={onOpenFull}
+      />
+    )
+  }
+  return <AdditionsBody content={written} onOpenFull={onOpenFull} />
 }
 
 function PlainLinesBody({

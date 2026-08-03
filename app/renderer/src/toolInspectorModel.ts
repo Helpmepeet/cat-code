@@ -54,8 +54,33 @@ export function describeToolForInspector(row: ToolUseRow): ToolInspectorModel {
     statusTone: STATUS_TONE[row.status] ?? 'default',
     input,
     diff: row.result?.diff ?? null,
-    output: nonEmpty(row.result?.content),
+    output: selectOutput(row, input),
   }
+}
+
+/**
+ * What the drawer's Output panel shows: the tool's result, except for a WRITE.
+ *
+ * A Write result is one of two fixed sentences and never the file
+ * (`src/tools/FileWriteTool/FileWriteTool.ts:418-433`); the file is the tool's
+ * input (`content`, `:63`). The card's body already reads it there
+ * (`WriteBody`, `TranscriptView.tsx`), and the card's reveal band sends a
+ * windowed write HERE under the label `Open full output`. Answering that with a
+ * one-line sentence instead of the rest of the file breaks the promise the band
+ * made, so the two surfaces read the same string.
+ *
+ * A FAILED write keeps its result: that one carries the error, and there is no
+ * written file to show. So does a write whose input has no usable `content`.
+ * The raw input panel is untouched either way, so nothing is hidden by this.
+ */
+function selectOutput(
+  row: ToolUseRow,
+  input: Record<string, unknown>,
+): string | null {
+  const result = nonEmpty(row.result?.content)
+  if (row.toolFamily !== 'write' || row.result?.isError === true) return result
+  const written = input['content']
+  return typeof written === 'string' && written.length > 0 ? written : result
 }
 
 function deriveSummary(input: Record<string, unknown>): string {
