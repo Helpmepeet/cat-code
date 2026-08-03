@@ -425,6 +425,30 @@ test('LIVE: the snapshot carries the engine display name and context window for 
   }
 })
 
+test('LIVE: the desktop Fast control is not supported for Anthropic models', () => {
+  const previousOverride = getMainLoopModelOverride()
+  const previousProvider = getSessionProvider()
+  const previousApiKey = process.env.ANTHROPIC_API_KEY
+  try {
+    setSessionProvider('firstParty')
+    process.env.ANTHROPIC_API_KEY = 'test-anthropic-api-key'
+    setMainLoopModelOverride('claude-opus-5')
+
+    const snapshot = buildRunControlsSnapshot({
+      ...getDefaultAppState(),
+      fastMode: true,
+    })
+    expect(snapshot.model.provider).toBe('anthropic')
+    expect(snapshot.fast.active).toBe(true)
+    expect(snapshot.fast.supportedByModel).toBe(false)
+  } finally {
+    setMainLoopModelOverride(previousOverride)
+    setSessionProvider(previousProvider)
+    if (previousApiKey === undefined) delete process.env.ANTHROPIC_API_KEY
+    else process.env.ANTHROPIC_API_KEY = previousApiKey
+  }
+})
+
 test('LIVE: the real executor wires the engine setters — model override flips, effort + fast take effect', () => {
   const prevOverride = getMainLoopModelOverride()
   const prevProvider = getSessionProvider()
@@ -460,6 +484,8 @@ test('LIVE: the real executor wires the engine setters — model override flips,
     expect(store.getState().fastMode).toBe(true)
     domain.setFast(false)
     expect(store.getState().fastMode).toBe(false)
+    domain.setFast(true)
+    expect(store.getState().fastMode).toBe(true)
 
     // A raw selection unsupported by the next model must return to Auto rather
     // than leaving a clamped effective face with no checked picker row.
@@ -483,6 +509,8 @@ test('LIVE: the real executor wires the engine setters — model override flips,
     expect(opusResult).toMatchObject({ ok: true, changed: true })
     expect(getMainLoopModelOverride()).toBe('opus')
     expect(getSessionProvider()).toBe('firstParty')
+    expect(store.getState().fastMode).toBe(false)
+    expect(crossProviderDomain.getSnapshot().fast.supportedByModel).toBe(false)
   } finally {
     setProviderSwitchLocked(previousLock)
     setMainLoopModelOverride(prevOverride)

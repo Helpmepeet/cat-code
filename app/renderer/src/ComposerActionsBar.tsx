@@ -93,6 +93,8 @@ export type ComposerFaceProps = {
 // text, no border/background, 12.5px medium, ellipsised, brightening on hover.
 const RAIL_FACE =
   'inline-flex max-w-[170px] shrink-0 items-center overflow-hidden text-ellipsis whitespace-nowrap rounded-md px-[5px] py-[3px] text-[12.5px] font-medium transition-colors'
+const FAST_FACE =
+  'inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[5px] p-0 transition-colors'
 
 /** The prototype's faint `·` divider (Surfaces.jsx:751 `Sep`, colour #3f3f46). */
 function RailSep() {
@@ -119,14 +121,30 @@ function formatEffort(effort: string): string {
 function FastFace() {
   return (
     <span
-      className={`${RAIL_FACE} text-accent`}
+      className={`${FAST_FACE} text-tone-warn`}
       title="Fast mode on"
       aria-label="Fast mode on"
     >
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-        <path d="M13 2 3 14h7l-1 8 10-12h-7z" />
-      </svg>
+      <FastGlyph active />
     </span>
+  )
+}
+
+function FastGlyph({ active }: { active: boolean }) {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill={active ? 'currentColor' : 'none'}
+      stroke={active ? 'none' : 'currentColor'}
+      strokeWidth={active ? 0 : 2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M13 2 3 14h7l-1 8 10-12h-7z" />
+    </svg>
   )
 }
 
@@ -346,7 +364,7 @@ function ReasoningChip({
 }
 
 /** Interactive FAST ⚡ toggle (`fast.set`) — gated on the engine's real support +
- * availability. Hidden when off AND the model can't run fast; disabled (with the
+ * availability. Hidden whenever the model can't run fast; disabled (with the
  * real unavailable reason) when supported but org/runtime-unavailable. */
 function FastChip({
   active,
@@ -363,8 +381,8 @@ function FastChip({
   onToggle: (active: boolean) => void
   faceProps?: ComposerFaceProps
 }) {
-  if (!active && !supportedByModel) return null
-  const canEnable = supportedByModel && available
+  if (!supportedByModel) return null
+  const canEnable = available
   const disabled = !active && !canEnable
   const title = active
     ? 'Fast mode on, click to turn off'
@@ -380,11 +398,9 @@ function FastChip({
       title={title}
       disabled={disabled}
       onClick={() => onToggle(!active)}
-      className={`${RAIL_FACE} ${active ? 'text-accent' : 'text-text-subtle'} hover:text-text-primary disabled:opacity-40`}
+      className={`${FAST_FACE} ${active ? 'text-tone-warn hover:text-[#fde68a]' : 'text-[#3f3f46] hover:text-[#71717a]'} disabled:opacity-40`}
     >
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-        <path d="M13 2 3 14h7l-1 8 10-12h-7z" />
-      </svg>
+      <FastGlyph active={active} />
     </button>
   )
 }

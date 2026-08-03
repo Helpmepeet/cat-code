@@ -353,6 +353,30 @@ test('P4-24c — the FAST toggle offers an enable affordance when off but suppor
   expect(html).toContain('Enable fast mode')
 })
 
+test('P4-24c — the FAST toggle visibly distinguishes off from on', () => {
+  const off = render({
+    runControls: runControls({ fast: { active: false, supportedByModel: true, available: true } }),
+    onSetFast: () => {},
+  })
+  const offFast = off.match(/<button[^>]*data-composer-face="fast"[^>]*>[\s\S]*?<\/button>/)?.[0] ?? ''
+  expect(offFast).toContain('data-composer-face="fast"')
+  expect(offFast).toContain('h-[22px] w-[22px]')
+  expect(offFast).toContain('fill="none"')
+  expect(offFast).toContain('stroke="currentColor"')
+  expect(offFast).toContain('text-[#3f3f46]')
+
+  const on = render({
+    runControls: runControls({ fast: { active: true, supportedByModel: true, available: true } }),
+    onSetFast: () => {},
+  })
+  const onFast = on.match(/<button[^>]*data-composer-face="fast"[^>]*>[\s\S]*?<\/button>/)?.[0] ?? ''
+  expect(onFast).toContain('data-composer-face="fast"')
+  expect(onFast).toContain('h-[22px] w-[22px]')
+  expect(onFast).toContain('fill="currentColor"')
+  expect(onFast).toContain('stroke="none"')
+  expect(onFast).toContain('text-tone-warn')
+})
+
 test('P4-24c — the FAST toggle is disabled with the real reason when unavailable', () => {
   const html = render({
     fastMode: false,
@@ -377,6 +401,25 @@ test('P4-24c — the FAST toggle is hidden when off AND the model cannot run fas
     onSetFast: () => {},
   })
   expect(html).not.toContain('Enable fast mode')
+  expect(html).not.toContain('Fast mode on')
+})
+
+test('P4-24c — the FAST toggle is hidden for Anthropic model snapshots', () => {
+  const html = render({
+    model: 'claude-opus-5',
+    runControls: runControls({
+      model: {
+        current: 'claude-opus-5',
+        currentLabel: 'Opus 5',
+        selected: 'claude-opus-5',
+        provider: 'anthropic',
+      },
+      fast: { active: false, supportedByModel: false },
+    }),
+    onSetFast: () => {},
+  })
+  expect(html).toContain('claude-opus-5')
+  expect(html).not.toContain('data-composer-face="fast"')
   expect(html).not.toContain('Fast mode on')
 })
 

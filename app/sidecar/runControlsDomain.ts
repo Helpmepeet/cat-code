@@ -101,6 +101,16 @@ export type RunControlExecutor = {
   activateProvider?(provider: 'anthropic' | 'openai'): void
 }
 
+/** The desktop composer advertises Fast only for the OpenAI/GPT route. The
+ * engine's shared predicate also knows about Anthropic Fast mode for the CLI;
+ * keep that broader engine capability out of this desktop control seam. */
+function isDesktopFastModeSupportedByModel(model: string | null): boolean {
+  return (
+    resolveModelSelectionProvider(model) === 'openai' &&
+    isFastModeSupportedByModel(model)
+  )
+}
+
 export function createRealRunControlExecutor(
   store: Store<AppState>,
 ): RunControlExecutor {
@@ -121,7 +131,8 @@ export function createRealRunControlExecutor(
       store.setState(prev => {
         // Mirror the `/model` picker's fast reconciliation (`model.tsx:79-90`): a
         // model that cannot run fast turns fast OFF rather than leaving a stale ⚡.
-        const fastOff = prev.fastMode && !isFastModeSupportedByModel(model)
+        const fastOff =
+          prev.fastMode && !isDesktopFastModeSupportedByModel(model)
         return {
           ...prev,
           mainLoopModel: model,
@@ -470,7 +481,8 @@ export function buildRunControlsSnapshot(state: AppState): RunControlsSnapshot {
 
   const fastActive = state.fastMode ?? false
   const fastSupportedByModel = safe(
-    () => isFastModeSupportedByModel(current ?? state.mainLoopModel ?? null),
+    () =>
+      isDesktopFastModeSupportedByModel(current ?? state.mainLoopModel ?? null),
     false,
   )
   const fastAvailable = safe(() => isFastModeAvailable(), false)
