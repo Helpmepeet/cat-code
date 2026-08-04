@@ -75,11 +75,17 @@ export const outputSchema = lazySchema(() =>
       .describe('Error message if the operation failed'),
     // Fields for attribution tracking
     notebook_path: z.string().describe('The path to the notebook file'),
+    // Legacy: pre-2026-08 transcripts persisted the whole notebook TWICE here,
+    // before and after, on every cell edit. Nothing ever read either one, so
+    // they are no longer written. Still declared because the read-back parse
+    // strips undeclared keys, which keeps a resumed record intact.
     original_file: z
       .string()
+      .optional()
       .describe('The original notebook content before modification'),
     updated_file: z
       .string()
+      .optional()
       .describe('The updated notebook content after modification'),
   }),
 )
@@ -341,8 +347,6 @@ export const NotebookEditTool = buildTool({
             error: 'Notebook is not valid JSON.',
             cell_id,
             notebook_path: fullPath,
-            original_file: '',
-            updated_file: '',
           },
         }
       }
@@ -448,8 +452,6 @@ export const NotebookEditTool = buildTool({
         cell_id: new_cell_id || undefined,
         error: '',
         notebook_path: fullPath,
-        original_file: content,
-        updated_file: updatedContent,
       }
       return {
         data,
@@ -464,8 +466,6 @@ export const NotebookEditTool = buildTool({
           error: error.message,
           cell_id,
           notebook_path: fullPath,
-          original_file: '',
-          updated_file: '',
         }
         return {
           data,
@@ -479,8 +479,6 @@ export const NotebookEditTool = buildTool({
         error: 'Unknown error occurred while editing notebook',
         cell_id,
         notebook_path: fullPath,
-        original_file: '',
-        updated_file: '',
       }
       return {
         data,
