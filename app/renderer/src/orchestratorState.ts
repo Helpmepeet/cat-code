@@ -199,6 +199,67 @@ export function selectPromotedWorker(
   return lead
 }
 
+/* ── roster line model (the docked "whisper" one-liner above the composer) ──── */
+
+/**
+ * One neutral count in the roster's tail (`CountTail`, OrchestratorMode.jsx:224).
+ * `tone` is a KEY, not a colour: the host maps it to a literal Tailwind class, so
+ * no interpolated arbitrary value can silently no-op (the P4-9 bug).
+ */
+export type RosterCount = {
+  text: string
+  tone: 'working' | 'waiting' | 'done'
+}
+
+export type OrchestratorRosterLine = {
+  /** The single news-bearing worker promoted onto the line, or null at rest. */
+  lead: { worker: AgentModeWorkerItem; priority: number } | null
+  /** Honest tally of every worker carrying no news, in prototype order. */
+  tail: RosterCount[]
+  /** Any worker actually running — drives the pulsing rest-state dot. */
+  anyWorking: boolean
+}
+
+/**
+ * The multi-worker roster line: promote at most ONE worker with news, and stay
+ * honest about the rest as neutral counts (`OrchestratorMode.jsx:274-296`).
+ *
+ * The prototype also treats a promoted `working` lead as "any working". That
+ * branch is unreachable in this derivation and in the prototype's own: a priority
+ * above 0 requires owner `user`, `attention`, or `result-ready`, and none of those
+ * is `running`. So `anyWorking` reads only the counted workers.
+ */
+export function selectOrchestratorRosterLine(
+  workers: readonly AgentModeWorkerItem[],
+  active: boolean,
+): OrchestratorRosterLine {
+  let working = 0
+  let waiting = 0
+  let done = 0
+  let news = 0
+  for (const worker of workers) {
+    if (workerEventPriority(worker, active) > 0) {
+      news += 1
+      continue
+    }
+    const state = orchestratorWorkerState(worker, active)
+    if (state === 'running') working += 1
+    else if (state === 'waiting') waiting += 1
+    else done += 1
+  }
+  const tail: RosterCount[] = []
+  if (working > 0) tail.push({ text: `${working} working`, tone: 'working' })
+  if (waiting > 0) tail.push({ text: `${waiting} needs input`, tone: 'waiting' })
+  if (done > 0) tail.push({ text: `${done} done`, tone: 'done' })
+  // Every news-bearing worker beyond the promoted lead stays visible as a count.
+  if (news > 1) tail.push({ text: `+${news - 1} more`, tone: 'done' })
+  return {
+    lead: selectPromotedWorker(workers, active),
+    tail,
+    anyWorking: working > 0,
+  }
+}
+
 /** Strip a leading `@` from a handle for display; null-safe. */
 export function displayHandle(handle: string | null): string | null {
   if (!handle) return null

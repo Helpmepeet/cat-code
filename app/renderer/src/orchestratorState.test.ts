@@ -8,10 +8,12 @@ import type {
 import {
   createOrchestratorState,
   deriveWorkerOwner,
+  displayHandle,
   orchestratorPill,
   orchestratorWorkerState,
   reduceOrchestratorState,
   selectAgentModeSnapshot,
+  selectOrchestratorRosterLine,
   selectPromotedWorker,
   selectWorkerById,
   summarizeOrchestratorWorkers,
@@ -116,6 +118,81 @@ test('roster promotes the news-bearing worker (failure over a ready result over 
   expect(selectPromotedWorker(workers, true)?.worker.agentId).toBe('w-fail')
   // A quiet swarm promotes nobody — the roster shows neutral counts only.
   expect(selectPromotedWorker([worker({ status: 'running' })], true)).toBeNull()
+})
+
+test('roster line: at rest it names nobody and tallies the swarm honestly', () => {
+  const line = selectOrchestratorRosterLine(
+    [
+      worker({ agentId: 'w-1', status: 'running' }),
+      worker({ agentId: 'w-2', status: 'running' }),
+      worker({ agentId: 'w-3', status: 'completed', handoffStatus: 'blocked' }),
+      worker({ agentId: 'w-4', status: 'completed', synthesisStatus: 'synthesized' }),
+    ],
+    true,
+  )
+  expect(line.lead).toBeNull()
+  expect(line.anyWorking).toBe(true)
+  expect(line.tail).toEqual([
+    { text: '2 working', tone: 'working' },
+    { text: '1 needs input', tone: 'waiting' },
+    { text: '1 done', tone: 'done' },
+  ])
+})
+
+test('roster line: a promoted lead is excluded from the tail, extra news becomes "+N more"', () => {
+  const line = selectOrchestratorRosterLine(
+    [
+      worker({ agentId: 'w-fail', status: 'failed' }),
+      worker({ agentId: 'w-result', status: 'completed', synthesisStatus: 'pending' }),
+      worker({ agentId: 'w-run', status: 'running' }),
+    ],
+    true,
+  )
+  expect(line.lead?.worker.agentId).toBe('w-fail')
+  expect(line.tail).toEqual([
+    { text: '1 working', tone: 'working' },
+    { text: '+1 more', tone: 'done' },
+  ])
+})
+
+test('roster line: a quiet-but-stalled swarm still reports its blocked workers, never as news', () => {
+  // The D2 C2 invariant, at the line level: blocked under an active orchestrator
+  // promotes nobody and stays a NEUTRAL count.
+  const active = selectOrchestratorRosterLine(
+    [
+      worker({ agentId: 'w-1', status: 'completed', handoffStatus: 'blocked' }),
+      worker({ agentId: 'w-2', status: 'completed', handoffStatus: 'blocked' }),
+    ],
+    true,
+  )
+  expect(active.lead).toBeNull()
+  expect(active.anyWorking).toBe(false)
+  expect(active.tail).toEqual([{ text: '2 needs input', tone: 'waiting' }])
+
+  // Solo: the same workers own the human's attention, so one is promoted.
+  const solo = selectOrchestratorRosterLine(
+    [
+      worker({ agentId: 'w-1', status: 'completed', handoffStatus: 'blocked' }),
+      worker({ agentId: 'w-2', status: 'completed', handoffStatus: 'blocked' }),
+    ],
+    false,
+  )
+  expect(solo.lead?.priority).toBe(3)
+  expect(solo.tail).toEqual([{ text: '+1 more', tone: 'done' }])
+})
+
+test('roster line: an empty swarm has no lead and no counts', () => {
+  expect(selectOrchestratorRosterLine([], true)).toEqual({
+    lead: null,
+    tail: [],
+    anyWorking: false,
+  })
+})
+
+test('displayHandle strips the mention sigil for display', () => {
+  expect(displayHandle('@Turing')).toBe('Turing')
+  expect(displayHandle('Turing')).toBe('Turing')
+  expect(displayHandle(null)).toBeNull()
 })
 
 test('selectWorkerById finds a worker or degrades to null (drilldown/focus lookup)', () => {

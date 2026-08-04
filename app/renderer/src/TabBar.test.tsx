@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { SessionDescriptor } from '../../shared/hostApi.js'
+import { OrchestratorBadge } from './AgentChrome.js'
 import { TabBar, type TabModel } from './TabBar.js'
 import { tabLabel } from './tabBarModel.js'
 import type { TabVisualState } from './tabStatus.js'
@@ -162,6 +163,95 @@ test('no session-actions ⋯ renders when the TabBar is not wired for it', () =>
   // keeping the additive prop from leaking into unrelated tabs.
   const html = render([tab('a'), tab('b')], 'a')
   expect(html).not.toContain('Session actions for')
+})
+
+test('P4-32a — the mode switch rides the ACTIVE tab and stays reachable there', () => {
+  // B1 + M1: the tab is the app's real session-title host, and the switch must be
+  // reachable regardless of transcript contents (the empty-state reflect was not).
+  const html = renderToStaticMarkup(
+    <TabBar
+      tabs={[tab('a'), tab('b')]}
+      activeSessionId="a"
+      onSelect={noop}
+      onClose={noop}
+      onRestart={noop}
+      onNewTab={noop}
+      onToggleOrchestrator={noop}
+    />,
+  )
+  // Exactly one interactive switch: the active tab's.
+  expect(html.match(/aria-pressed=/g)).toHaveLength(1)
+  expect(html).toContain('aria-label="Turn on Orchestrator mode for session')
+  // Off collapses to the glyph — no lit pill naming a mode nobody chose.
+  expect(html).not.toContain('>Orchestrator<')
+})
+
+test('P4-32a — an active session labels the switch and reads as on', () => {
+  const html = renderToStaticMarkup(
+    <TabBar
+      tabs={[{ ...tab('a'), orchestratorActive: true }]}
+      activeSessionId="a"
+      onSelect={noop}
+      onClose={noop}
+      onRestart={noop}
+      onNewTab={noop}
+      onToggleOrchestrator={noop}
+    />,
+  )
+  expect(html).toContain('aria-pressed="true"')
+  expect(html).toContain('Orchestrator')
+  expect(html).toContain('aria-label="Turn off Orchestrator mode for session')
+})
+
+test('P4-32a — a BACKGROUND session in the mode shows a passive marker, not a switch', () => {
+  const html = renderToStaticMarkup(
+    <TabBar
+      tabs={[tab('a'), { ...tab('b'), orchestratorActive: true }]}
+      activeSessionId="a"
+      onSelect={noop}
+      onClose={noop}
+      onRestart={noop}
+      onNewTab={noop}
+      onToggleOrchestrator={noop}
+    />,
+  )
+  // One switch (the active tab) plus one non-interactive marker (the background one).
+  expect(html.match(/aria-pressed=/g)).toHaveLength(1)
+  expect(html).toContain('title="Orchestrator mode is on"')
+})
+
+test('P4-32a — an unwired TabBar draws no mode chrome at all', () => {
+  // The default helper omits `onToggleOrchestrator` and every tab is out of the
+  // mode, so the additive prop leaks nothing into unrelated tabs.
+  const html = render([tab('a'), tab('b')], 'a')
+  expect(html).not.toContain('Orchestrator')
+})
+
+test('P4-32a — the switch negates the mode and never re-selects the host tab', () => {
+  // No DOM click harness in this package (the OrchestratorReflect convention): call
+  // the hook-free component and read its onClick off the returned element, which is
+  // the exact code path a real click runs. The stopPropagation assertion matters:
+  // the tab row is itself clickable, so without it toggling would also select.
+  const calls: boolean[] = []
+  let stopped = 0
+  const event = { stopPropagation: () => { stopped += 1 } }
+
+  const off = OrchestratorBadge({ active: false, onToggle: next => calls.push(next) })
+  expect(off).not.toBeNull()
+  off?.props.onClick(event)
+  expect(calls).toEqual([true])
+  expect(stopped).toBe(1)
+
+  const on = OrchestratorBadge({ active: true, onToggle: next => calls.push(next) })
+  on?.props.onClick(event)
+  expect(calls).toEqual([true, false])
+  expect(stopped).toBe(2)
+})
+
+test('P4-32a — a session out of the mode with no callback renders nothing', () => {
+  // Otherwise every ordinary tab would carry dead orchestrator chrome.
+  expect(OrchestratorBadge({ active: false })).toBeNull()
+  expect(OrchestratorBadge({ active: true })).not.toBeNull()
 })
 
 test('the first nine tabs advertise a ⌘<n> jump hint', () => {
