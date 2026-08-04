@@ -98,19 +98,58 @@ async function countTokensWithFallback(
 
   try {
     const fallbackResult = await countTokensViaHaikuFallback(messages, tools)
-    if (fallbackResult === null) {
-      logForDebugging(
-        `countTokensWithFallback: haiku fallback also returned null (${tools.length} tools)`,
-      )
+    if (fallbackResult !== null) {
+      return fallbackResult
     }
-    return fallbackResult
+    logForDebugging(
+      `countTokensWithFallback: haiku fallback also returned null (${tools.length} tools)`,
+    )
   } catch (err) {
     logForDebugging(
       `countTokensWithFallback: haiku fallback failed: ${errorMessage(err)}`,
     )
     logError(err)
-    return null
   }
+
+  return estimateTokensLocally(messages, tools)
+}
+
+/**
+ * Last-resort LOCAL estimate, so a category is never silently dropped.
+ *
+ * Both counters above need Anthropic: the primary resolves its client from
+ * `getMainLoopModel()` (`src/services/tokenEstimation.ts:151`), which on a `gpt-*`
+ * session routes to Codex, where `count_tokens` does not exist; the Haiku fallback
+ * then needs working Anthropic auth of its own. On a Codex-only setup BOTH fail,
+ * and returning null made every caller's `if (tokens > 0)` guard drop the category
+ * entirely. `/context` and the desktop popover then rendered a breakdown listing
+ * only `Skills` — the one category counted locally — beside a header correctly
+ * reporting 262k used. A visibly wrong breakdown is worse than an approximate one.
+ *
+ * chars/4 is the engine's own rough basis elsewhere (the live token byline uses
+ * `displayedResponseLength / 4`). It is an ESTIMATE and will not match the API's
+ * count; it is reached only when the exact paths are unavailable.
+ */
+function estimateTokensLocally(
+  messages: Anthropic.Beta.Messages.BetaMessageParam[],
+  tools: Anthropic.Beta.Messages.BetaToolUnion[],
+): number {
+  let chars = 0
+  try {
+    for (const message of messages) {
+      chars +=
+        typeof message.content === 'string'
+          ? message.content.length
+          : JSON.stringify(message.content ?? '').length
+    }
+    for (const tool of tools) {
+      chars += JSON.stringify(tool ?? '').length
+    }
+  } catch {
+    // A non-serialisable payload estimates from whatever was counted so far,
+    // which still beats dropping the category.
+  }
+  return Math.round(chars / 4)
 }
 
 interface ContextCategory {

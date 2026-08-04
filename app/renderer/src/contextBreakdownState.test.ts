@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import {
   createContextBreakdownState,
+  isBreakdownTrustworthy,
   reduceContextBreakdownState,
   selectBreakdownRows,
   selectContextBreakdown,
@@ -104,7 +105,9 @@ test('segment widths are a share of the window, not of the used total', () => {
 test('free space is the engine remainder, never negative, null when absent', () => {
   expect(selectFreeTokens(BREAKDOWN)).toBe(185_500)
   // A changed usedTokens must NOT move Free — that was the old subtraction bug.
-  expect(selectFreeTokens({ ...BREAKDOWN, usedTokens: 999_999 })).toBe(185_500)
+  // Kept within the trust guard's range: a usedTokens far above what the
+  // categories account for is, by definition, a collapsed analysis.
+  expect(selectFreeTokens({ ...BREAKDOWN, usedTokens: 20_000 })).toBe(185_500)
   expect(selectFreeTokens({ ...BREAKDOWN, freeTokens: -5 })).toBe(0)
   expect(selectFreeTokens({ ...BREAKDOWN, freeTokens: null })).toBeNull()
   expect(selectFreeTokens(null)).toBeNull()
@@ -112,4 +115,52 @@ test('free space is the engine remainder, never negative, null when absent', () 
 
 test('no snapshot yields no rows (the popover keeps its aggregate row alone)', () => {
   expect(selectBreakdownRows(null)).toEqual([])
+})
+
+/**
+ * The shape the engine actually returned on a Codex-only session: every
+ * API-counted category dropped, leaving only the locally-counted Skills, while
+ * the headline still reported 262k used. Rendering that produced a panel whose
+ * three numbers contradicted each other.
+ */
+const COLLAPSED: ContextBreakdownSnapshot = {
+  categories: [
+    { label: 'Skills', tokens: 2_600, colorKey: 'warning', deferred: false },
+  ],
+  usedTokens: 262_000,
+  freeTokens: 318_000,
+  contextWindow: 372_000,
+  model: 'gpt-5.6-terra',
+}
+
+test('a collapsed analysis renders no rows and no Free, rather than a wrong panel', () => {
+  expect(isBreakdownTrustworthy(COLLAPSED)).toBe(false)
+  expect(selectBreakdownRows(COLLAPSED)).toEqual([])
+  expect(selectFreeTokens(COLLAPSED)).toBeNull()
+})
+
+test('a complete analysis is trusted even when the estimate undershoots the header', () => {
+  // A local estimate legitimately disagrees with the API-derived headline; the
+  // guard catches collapse, not imprecision.
+  const estimated: ContextBreakdownSnapshot = {
+    ...COLLAPSED,
+    categories: [
+      { label: 'System prompt', tokens: 40_000, colorKey: 'promptBorder', deferred: false },
+      { label: 'Messages', tokens: 150_000, colorKey: 'purple_FOR_SUBAGENTS_ONLY', deferred: false },
+    ],
+  }
+  expect(isBreakdownTrustworthy(estimated)).toBe(true)
+  expect(selectBreakdownRows(estimated)).toHaveLength(2)
+})
+
+test('a fresh session with no usage yet is still shown', () => {
+  expect(
+    isBreakdownTrustworthy({ ...COLLAPSED, usedTokens: 0 }),
+  ).toBe(true)
+})
+
+test('an analysis accounting for nothing is never shown', () => {
+  expect(
+    isBreakdownTrustworthy({ ...COLLAPSED, categories: [] }),
+  ).toBe(false)
 })

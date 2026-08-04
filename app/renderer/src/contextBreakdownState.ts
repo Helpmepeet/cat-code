@@ -112,7 +112,41 @@ const CATEGORY_SWATCH: Record<string, string> = {
 const FALLBACK_SWATCH = 'bg-white/25'
 
 /**
- * Legend rows for a snapshot, in the engine's own order.
+ * Below this share of the reported usage, the breakdown is treated as FAILED and
+ * rendered as nothing at all.
+ *
+ * The engine drops any category whose token count came back empty, so when its
+ * counters are unavailable the analysis does not error — it returns a technically
+ * valid snapshot that accounts for almost none of the context. That shipped as a
+ * panel reading `Skills 2.6k` and `Free 318k` under a header of `71% · 262k`,
+ * three mutually contradictory numbers. Showing nothing is the honest degrade.
+ *
+ * Deliberately loose: an estimate legitimately disagrees with the API-derived
+ * header by a wide margin, and a partial breakdown is still useful. This catches
+ * collapse, not imprecision.
+ */
+const MIN_ACCOUNTED_SHARE = 0.5
+
+/**
+ * Whether the analysis accounted for enough of the reported usage to be worth
+ * showing. `usedTokens` is the engine's own headline for the same analysis, so
+ * the comparison is internal to the snapshot.
+ */
+export function isBreakdownTrustworthy(
+  snapshot: ContextBreakdownSnapshot | null,
+): boolean {
+  if (!snapshot || snapshot.contextWindow <= 0) return false
+  const accounted = snapshot.categories
+    .filter(category => !category.deferred)
+    .reduce((sum, category) => sum + category.tokens, 0)
+  if (accounted <= 0) return false
+  if (snapshot.usedTokens <= 0) return true
+  return accounted >= snapshot.usedTokens * MIN_ACCOUNTED_SHARE
+}
+
+/**
+ * Legend rows for a snapshot, in the engine's own order. Empty when the analysis
+ * collapsed ({@link isBreakdownTrustworthy}).
  *
  * Deferred categories are DROPPED, not dimmed: they do not occupy the window
  * (`analyzeContext.ts:1075-1092`), so a bar segment or a legend row for them
@@ -121,7 +155,7 @@ const FALLBACK_SWATCH = 'bg-white/25'
 export function selectBreakdownRows(
   snapshot: ContextBreakdownSnapshot | null,
 ): ContextBreakdownRow[] {
-  if (!snapshot || snapshot.contextWindow <= 0) return []
+  if (!snapshot || !isBreakdownTrustworthy(snapshot)) return []
   return snapshot.categories
     .filter(category => !category.deferred && category.tokens > 0)
     .map(category => ({
@@ -147,5 +181,8 @@ export function selectFreeTokens(
   snapshot: ContextBreakdownSnapshot | null,
 ): number | null {
   if (!snapshot || snapshot.freeTokens == null) return null
+  // A collapsed analysis reports a `Free` that contradicts the header; suppress
+  // it with the rows it belongs to.
+  if (!isBreakdownTrustworthy(snapshot)) return null
   return Math.max(0, snapshot.freeTokens)
 }
