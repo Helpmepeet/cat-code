@@ -73,6 +73,10 @@ import {
   type SidecarAgentModeDomain,
 } from './agentModeDomain.js'
 import {
+  createSidecarLeaseDomain,
+  type SidecarLeaseDomain,
+} from './leaseDomain.js'
+import {
   createSidecarTaskControlDomain,
   type SidecarTaskControlDomain,
 } from './taskControlDomain.js'
@@ -465,6 +469,12 @@ export type SidecarSession = {
    */
   agentMode: SidecarAgentModeDomain | null
   /**
+   * Codex lease read-seam (P4-32b, L1) — which account each agent in THIS
+   * session's swarm is leasing, projected from the engine's own lease manager.
+   * Read-only (there is no lease verb); null in probe mode (no app-state store).
+   */
+  leases: SidecarLeaseDomain | null
+  /**
    * Task-control write-seam (P4-8b) — the deferred worker Stop/kill verb over the
    * engine's own `stopTask`, against the SAME app-state store the runtime mutates.
    * Read-only capability (no snapshot); null in probe mode (no engine app-state).
@@ -535,6 +545,7 @@ export async function createSidecarSessionController({
       extensions: null,
       remoteSettings: null,
       agentMode: null,
+      leases: null,
       taskControl: null,
       runControls: null,
       sessionActions: null,
@@ -590,6 +601,9 @@ export async function createSidecarSessionController({
     extensions: createSidecarExtensionsDomain(extensionsSnapshot),
     remoteSettings: createSidecarRemoteSettingsDomain({ appStateStore, cwd, commands }),
     agentMode: createSidecarAgentModeDomain(appStateStore),
+    // P4-32b — the session-scoped Codex lease read seam (L1). Same store as
+    // agent-mode: a worker spawn/finish is exactly when leases move.
+    leases: createSidecarLeaseDomain(appStateStore),
     taskControl: createSidecarTaskControlDomain(appStateStore),
     runControls,
     sessionActions: createSidecarSessionActionsDomain({ tools }),

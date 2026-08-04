@@ -14,11 +14,70 @@
  *
  * Visual grammar adapted from `~/catcode_prototype/cat-app/TasksPage.jsx`
  * (`BgTasksDialog`), rebuilt on the P0-2 tokens, zero ported code.
+ *
+ * P4-32b adds the prototype's `TasksPanel` tab structure
+ * (`OrchestratorMode.jsx:713`) as ruled on 2026-07-30
+ * (`decisions/ORCHESTRATOR-IN-SESSION.md` §10): inspection **D1** puts a READ-ONLY
+ * worker drilldown here and nowhere else, and lease option **L1** adds the
+ * session-scoped Codex lease roster. Consequences that shape this file:
+ *
+ *  - **D1 waives `WorkerFocusView` entirely.** There is no main-column focus swap,
+ *    no "Open thread" control and no worker composer: the user talks only to the
+ *    orchestrator (`OrchestratorMode.jsx:1-15`). The waiver is recorded in
+ *    `PARITY-LEDGER.md` §20 rather than left as a silent omission.
+ *  - **Result policy Q2** puts a worker's real conclusion HERE and never in the
+ *    transcript or a focus column (`selectWorkerResult`, `workerInspection.ts`).
+ *  - The tab row is three items, not the prototype's two (🔁 adapted): this dialog
+ *    is the real `/tasks` manager, whose list is a SUPERSET of orchestrator workers
+ *    (background bash, dreams, monitors, remote agents). Folding workers into that
+ *    list would either hide those tasks or drop the prototype's role grouping, so
+ *    Tasks keeps the built list and Workers is the role-grouped worker view.
+ *
+ * The three panel components are exported because this package's renderer suite is
+ * SSR-only (no DOM harness — see `AccountsPage.test.tsx`'s header), so a tab click
+ * cannot be simulated; rendering a panel directly is how its real fields are
+ * asserted. They are React components, so the Fast Refresh boundary still holds.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { TaskSnapshotItem, TasksSnapshot } from '../../shared/protocol.js'
+import type {
+  AgentModeSnapshot,
+  AgentModeWorkerItem,
+  LeaseOwnerRow,
+  LeaseSnapshot,
+  TaskSnapshotItem,
+  TasksSnapshot,
+} from '../../shared/protocol.js'
 import { agentStateMeta } from './agentIdentity.js'
 import { useModalFocus } from './overlayFocus.js'
+import {
+  AgentActionButton,
+  AgentHandle,
+  AgentPip,
+  AgentSectionLabel,
+  AgentStateLabel,
+  AgentStateWord,
+  AgentTypeChip,
+  Baton,
+} from './AgentChrome.js'
+import {
+  deriveWorkerOwner,
+  displayHandle,
+  orchestratorWorkerState,
+  selectWorkerById,
+  summarizeOrchestratorWorkers,
+} from './orchestratorState.js'
+import {
+  LEASE_STATE_META,
+  leaseAccountLabel,
+  leaseHeldLabel,
+  selectActiveLeaseCount,
+  selectLeaseForOwner,
+} from './leaseState.js'
+import {
+  groupWorkersByRole,
+  selectWorkerResult,
+  selectWorkerStopTargetId,
+} from './workerInspection.js'
 import {
   groupTaskItems,
   isTerminalTaskStatus,
@@ -29,12 +88,17 @@ import {
   tasksDialogKeyAction,
 } from './tasksState.js'
 
+type DialogTab = 'tasks' | 'workers' | 'leases'
+
 export function TasksDialog({
   open,
   onClose,
   snapshot,
   hasActiveSession,
   onStopTask,
+  agentMode = null,
+  leases = null,
+  now,
 }: {
   open: boolean
   onClose: () => void
@@ -49,19 +113,33 @@ export function TasksDialog({
    * gates `K` on a non-terminal row (`TasksPage.jsx:109`); we match that.
    */
   onStopTask?: (taskId: string) => void
+  /** P4-32b — the active session's orchestrator roster, source of the Workers tab. */
+  agentMode?: AgentModeSnapshot | null
+  /** P4-32b — the active session's Codex lease snapshot, source of the Leases tab. */
+  leases?: LeaseSnapshot | null
+  /** Injected clock for held-duration display; defaults to now at render time. */
+  now?: number
 }) {
   const [selected, setSelected] = useState(0)
   const dialogRef = useRef<HTMLDivElement>(null)
+  const [tab, setTab] = useState<DialogTab>('tasks')
+  const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null)
 
   const { active, completed } = useMemo(
     () => groupTaskItems(snapshot),
     [snapshot],
   )
   const flat = useMemo(() => [...active, ...completed], [active, completed])
+  const workers = agentMode?.workers ?? []
+  // A focused worker that vanished from the snapshot degrades back to the list
+  // rather than rendering a stale row (`selectWorkerById`'s contract).
+  const selectedWorker = selectWorkerById(agentMode, selectedWorkerId)
 
   useEffect(() => {
     if (!open) return
     setSelected(0)
+    setTab('tasks')
+    setSelectedWorkerId(null)
   }, [open])
 
   useEffect(() => {
@@ -76,6 +154,10 @@ export function TasksDialog({
         onClose()
         return
       }
+      // Selection and stop address the TASK list, so they are inert on the
+      // Workers/Leases tabs: there is no selected task to move or kill there, and
+      // a worker is stopped from its own detail button (P4-32b).
+      if (tab !== 'tasks') return
       if (action === 'next') {
         event.preventDefault()
         setSelected(index => Math.min(flat.length - 1, index + 1))
@@ -100,7 +182,7 @@ export function TasksDialog({
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [open, flat, selected, onClose, onStopTask])
+  }, [open, tab, flat, selected, onClose, onStopTask])
 
   useModalFocus({
     open,
@@ -144,8 +226,53 @@ export function TasksDialog({
           </button>
         </div>
 
+        {/* Workers | Leases tabs (prototype `TasksPanel`, `OrchestratorMode.jsx:744`).
+            Hidden inside the worker drilldown, as the prototype hides them there. */}
+        {selectedWorker ? null : (
+          <div className="flex shrink-0 gap-1 border-b border-shell-seam px-3.5 pt-2">
+            <DialogTabButton
+              active={tab === 'tasks'}
+              count={flat.length}
+              label="Tasks"
+              onSelect={() => setTab('tasks')}
+              tone="neutral"
+            />
+            <DialogTabButton
+              active={tab === 'workers'}
+              count={workers.length}
+              label="Workers"
+              onSelect={() => setTab('workers')}
+              tone="worker"
+            />
+            <DialogTabButton
+              active={tab === 'leases'}
+              count={selectActiveLeaseCount(leases)}
+              label="Leases"
+              onSelect={() => setTab('leases')}
+              tone="lease"
+            />
+          </div>
+        )}
+
         <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {flat.length === 0 ? (
+          {selectedWorker ? (
+            <WorkerDetailPanel
+              lease={selectLeaseForOwner(leases, selectedWorker.agentId)}
+              nowMs={now}
+              onBack={() => setSelectedWorkerId(null)}
+              orchestratorActive={agentMode?.active ?? false}
+              {...(onStopTask ? { onStopTask } : {})}
+              worker={selectedWorker}
+            />
+          ) : tab === 'leases' ? (
+            <LeaseRosterPanel nowMs={now} snapshot={leases} />
+          ) : tab === 'workers' ? (
+            <WorkerRosterPanel
+              onSelect={setSelectedWorkerId}
+              orchestratorActive={agentMode?.active ?? false}
+              workers={workers}
+            />
+          ) : flat.length === 0 ? (
             <div className="px-4 py-10 text-center">
               <div className="mb-1 text-[13px] font-medium text-text-subtle">
                 {hasActiveSession ? 'No tasks in this session' : 'No background tasks'}
@@ -167,19 +294,462 @@ export function TasksDialog({
           )}
         </div>
 
+        {/* Footer hint, contextual per panel (prototype `OrchestratorMode.jsx:810`).
+            The task-list chords are only advertised where they do something. */}
         <div className="flex gap-3.5 border-t border-shell-seam px-4 py-2 font-mono text-[10.5px] text-text-subtle">
-          <span>
-            <span className="text-text-muted">↑↓</span> select
-          </span>
-          {onStopTask ? (
-            <span>
-              <span className="text-text-muted">K</span> stop
-            </span>
-          ) : null}
-          <span>
+          {selectedWorker ? (
+            <span>read only, the orchestrator relays this worker&apos;s outcome</span>
+          ) : tab === 'leases' ? (
+            <span>which account each agent is leasing in this session</span>
+          ) : tab === 'workers' ? (
+            <span>click a worker to inspect it</span>
+          ) : (
+            <>
+              <span>
+                <span className="text-text-muted">↑↓</span> select
+              </span>
+              {onStopTask ? (
+                <span>
+                  <span className="text-text-muted">K</span> stop
+                </span>
+              ) : null}
+            </>
+          )}
+          <span className="ml-auto">
             <span className="text-text-muted">esc</span> close
           </span>
         </div>
+      </div>
+    </div>
+  )
+}
+
+const TAB_TONE_CLASS: Record<
+  'neutral' | 'worker' | 'lease',
+  { border: string; count: string }
+> = {
+  neutral: { border: 'border-text-muted', count: 'text-text-muted' },
+  worker: { border: 'border-purple-400', count: 'text-purple-400' },
+  lease: { border: 'border-teal-300', count: 'text-teal-300' },
+}
+
+function DialogTabButton({
+  label,
+  count,
+  active,
+  tone,
+  onSelect,
+}: {
+  label: string
+  count: number
+  active: boolean
+  tone: 'neutral' | 'worker' | 'lease'
+  onSelect: () => void
+}) {
+  const toneClass = TAB_TONE_CLASS[tone]
+  return (
+    <button
+      aria-pressed={active}
+      className={
+        'inline-flex items-center gap-1.5 border-b-[1.5px] px-2.5 py-1.5 text-xs ' +
+        (active
+          ? `${toneClass.border} font-semibold text-text-primary`
+          : 'border-transparent font-medium text-text-subtle hover:text-text-muted')
+      }
+      onClick={onSelect}
+      type="button"
+    >
+      {label}
+      {count > 0 ? (
+        <span
+          className={`font-mono text-[10px] ${active ? toneClass.count : 'text-text-subtle/70'}`}
+        >
+          {count}
+        </span>
+      ) : null}
+    </button>
+  )
+}
+
+/**
+ * Workers tab — the role-grouped roster (prototype `OrchestratorMode.jsx:786-800`)
+ * over the REAL `agent-mode.snapshot` workers. The counts strip above it uses the
+ * two-axis summary (`summarizeOrchestratorWorkers`), so a worker blocked under an
+ * active orchestrator counts as orchestrator-owned and never alarms the user.
+ */
+export function WorkerRosterPanel({
+  workers,
+  orchestratorActive,
+  onSelect,
+}: {
+  workers: readonly AgentModeWorkerItem[]
+  orchestratorActive: boolean
+  onSelect: (agentId: string) => void
+}) {
+  const summary = summarizeOrchestratorWorkers(workers, orchestratorActive)
+  const groups = groupWorkersByRole(workers)
+
+  if (workers.length === 0) {
+    return (
+      <div className="px-4 py-10 text-center">
+        <div className="mb-1 text-[13px] font-medium text-text-subtle">
+          No workers yet
+        </div>
+        <div className="text-[11.5px] text-text-subtle/70">
+          They appear as the assistant delegates
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <>
+      <div className="flex flex-wrap gap-3 px-2.5 pb-2 pt-2.5 text-[11px] text-text-muted">
+        {summary.working > 0 ? (
+          <span className="inline-flex items-center gap-1.5">
+            <AgentPip size="xs" state="running" />
+            {summary.working} working
+          </span>
+        ) : null}
+        {summary.orchestrator > 0 ? (
+          <span className="inline-flex items-center gap-1.5 text-purple-400">
+            <AgentPip size="xs" state="waiting" />
+            {summary.orchestrator} on the assistant
+          </span>
+        ) : null}
+        {summary.user > 0 ? (
+          <span className="inline-flex items-center gap-1.5 text-tone-warn">
+            <AgentPip size="xs" state="needs-you" />
+            {summary.user} needs you
+          </span>
+        ) : null}
+        {summary.done > 0 ? (
+          <span className="inline-flex items-center gap-1.5">
+            <AgentPip size="xs" state="completed" />
+            {summary.done} done
+          </span>
+        ) : null}
+      </div>
+      {groups.map(group => (
+        <div className="mb-1.5" key={group.role}>
+          <div className="px-2.5 pb-1 pt-2">
+            <AgentSectionLabel>
+              {group.label} · {group.workers.length}
+            </AgentSectionLabel>
+          </div>
+          {group.workers.map(worker => (
+            <WorkerRow
+              key={worker.agentId}
+              onSelect={() => onSelect(worker.agentId)}
+              orchestratorActive={orchestratorActive}
+              worker={worker}
+            />
+          ))}
+        </div>
+      ))}
+    </>
+  )
+}
+
+/** One worker row: lifecycle dot, handle, task text, compressed state word. */
+function WorkerRow({
+  worker,
+  orchestratorActive,
+  onSelect,
+}: {
+  worker: AgentModeWorkerItem
+  orchestratorActive: boolean
+  onSelect: () => void
+}) {
+  const state = orchestratorWorkerState(worker, orchestratorActive)
+  const handle = displayHandle(worker.handle)
+  return (
+    <button
+      className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left hover:bg-shell-hover"
+      onClick={onSelect}
+      type="button"
+    >
+      <AgentPip size="sm" state={state} />
+      <AgentHandle name={handle ?? 'Subagent'} />
+      <span className="min-w-0 flex-1 truncate text-[11.5px] text-text-subtle">
+        {worker.description ?? ''}
+      </span>
+      <AgentStateWord state={state} />
+    </button>
+  )
+}
+
+/**
+ * Read-only worker detail (inspection ruling **D1**). Every field traces to a real
+ * engine seam; the fields the prototype's `WMeta` fabricated (model, elapsed, tool
+ * count, traffic, cost) are WAIVED rather than mocked (§9 waiver 7, approved), and
+ * the account/failover half of that line renders here from the real lease.
+ *
+ * The only control is Stop, which rides the existing `task.stop` verb.
+ */
+export function WorkerDetailPanel({
+  worker,
+  orchestratorActive,
+  lease,
+  onBack,
+  onStopTask,
+  nowMs,
+}: {
+  worker: AgentModeWorkerItem
+  orchestratorActive: boolean
+  lease: LeaseOwnerRow | null
+  onBack: () => void
+  onStopTask?: (taskId: string) => void
+  nowMs?: number
+}) {
+  const state = orchestratorWorkerState(worker, orchestratorActive)
+  const handle = displayHandle(worker.handle)
+  const result = selectWorkerResult(worker)
+  const stopTargetId = selectWorkerStopTargetId(worker)
+
+  return (
+    <div className="px-2 pb-3 pt-1">
+      <button
+        className="mb-2.5 inline-flex items-center gap-1.5 px-0.5 text-[11.5px] text-text-muted hover:text-text-primary"
+        onClick={onBack}
+        type="button"
+      >
+        <span aria-hidden="true">‹</span>All workers
+      </button>
+      <div className="flex flex-wrap items-center gap-2 border-b border-shell-seam pb-3">
+        <AgentHandle name={handle ?? 'Subagent'} />
+        <AgentTypeChip role={worker.role} />
+        <AgentStateLabel state={state} />
+        <Baton owner={deriveWorkerOwner(worker, orchestratorActive)} />
+      </div>
+
+      <div className="flex flex-col gap-3.5 px-0.5 pt-3.5">
+        <WorkerMetaLine lease={lease} nowMs={nowMs} worker={worker} />
+
+        {worker.description ? (
+          <div>
+            <AgentSectionLabel>Prompt</AgentSectionLabel>
+            <div className="mt-1 text-[12.5px] leading-relaxed text-text-muted">
+              {worker.description}
+            </div>
+          </div>
+        ) : null}
+
+        {/* The real handoff gate: `handoffStatus: 'blocked'` + its `blockReason`
+            (`LocalAgentTask.tsx:184`). Neutral-purple, because an active
+            orchestrator owns this handoff and the user has nothing to do (D2 C2). */}
+        {worker.handoffStatus === 'blocked' && worker.blockReason ? (
+          <div className="rounded-lg border border-purple-400/30 bg-purple-400/[0.08] px-3 py-2.5">
+            <AgentSectionLabel tone="accent">
+              {orchestratorActive ? 'Waiting on the assistant' : 'Waiting on you'}
+            </AgentSectionLabel>
+            <div className="mt-1.5 text-[12.5px] leading-relaxed text-purple-200">
+              {worker.blockReason}
+            </div>
+            {orchestratorActive ? (
+              <div className="mt-1.5 text-[10.5px] text-text-subtle">
+                The assistant resolves this or relays it to you in its own turn.
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {/* Result policy Q2: a worker's own conclusion appears HERE only. */}
+        {result ? (
+          <div>
+            <AgentSectionLabel>{result.label}</AgentSectionLabel>
+            <div className="mt-1 rounded-md border border-shell-seam bg-white/[0.02] px-3 py-2.5 text-[12.5px] leading-relaxed text-text-muted">
+              {result.text}
+            </div>
+          </div>
+        ) : null}
+
+        {onStopTask && stopTargetId ? (
+          <div className="flex flex-wrap items-center gap-2.5 pt-0.5">
+            <AgentActionButton
+              label="Stop"
+              onClick={() => onStopTask(stopTargetId)}
+              tone="danger"
+            />
+          </div>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The surviving half of the prototype's `WMeta` line (`OrchestratorMode.jsx:53`).
+ * WAIVED, not mocked: model, elapsed, tool count, token traffic and cost have no
+ * field on `AgentModeWorkerItem` and no engine seam behind them. What renders is
+ * real: the lease's account, its failover count, and the worker's own origin /
+ * background flags.
+ */
+function WorkerMetaLine({
+  worker,
+  lease,
+  nowMs,
+}: {
+  worker: AgentModeWorkerItem
+  lease: LeaseOwnerRow | null
+  nowMs?: number
+}) {
+  const bits: string[] = []
+  if (lease) bits.push(`acct ${leaseAccountLabel(lease)}`)
+  if (lease && lease.state === 'active') {
+    bits.push(`held ${leaseHeldLabel(lease.createdAt, nowMs ?? Date.now())}`)
+  }
+  if (worker.isBackgrounded) bits.push('backgrounded')
+  if (worker.origin === 'prior') {
+    bits.push(worker.resumable ? 'resumable' : 'from an earlier session')
+  }
+  const failover = lease && lease.failoverCount > 0 ? lease : null
+  if (bits.length === 0 && !failover) return null
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[10.5px] text-text-subtle">
+      {bits.map((bit, index) => (
+        <span className="whitespace-nowrap" key={bit}>
+          {index > 0 ? <span className="pr-2 text-zinc-700">·</span> : null}
+          {bit}
+        </span>
+      ))}
+      {failover ? (
+        <span
+          className="whitespace-nowrap text-tone-warn"
+          {...(failover.lastFailureReason ? { title: failover.lastFailureReason } : {})}
+        >
+          {bits.length > 0 ? <span className="pr-2 text-zinc-700">·</span> : null}
+          failed over ×{failover.failoverCount}
+        </span>
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * Leases tab (option **L1**) — the session-scoped Codex lease roster
+ * (prototype `LeaseRoster`, `OrchestratorMode.jsx:643`) over the real
+ * `lease.snapshot`. The prototype's failover/rotation EVENT strip is CUT: the
+ * engine exposes current lease state, not an event history (§10).
+ */
+export function LeaseRosterPanel({
+  snapshot,
+  nowMs,
+}: {
+  snapshot: LeaseSnapshot | null
+  nowMs?: number
+}) {
+  const owners = snapshot?.owners ?? []
+  const accounts = snapshot?.accounts ?? []
+
+  return (
+    <div className="pb-2">
+      <div className="border-b border-shell-seam px-3 pb-3 pt-2.5 text-[11px] leading-relaxed text-text-muted">
+        Subagent strategy this session:{' '}
+        <span className="font-mono font-semibold text-teal-300">
+          {snapshot?.strategy ?? 'spread'}
+        </span>
+        . Leases are not locks, so several agents can share one account.
+      </div>
+
+      {accounts.length > 0 ? (
+        <div className="px-3 pb-1.5 pt-3">
+          <AgentSectionLabel tone="lease">
+            Accounts in use · {accounts.length}
+          </AgentSectionLabel>
+          <div className="mt-2 flex flex-col gap-1.5">
+            {accounts.map(account => (
+              <div className="flex items-center gap-2.5" key={account.accountId}>
+                <span className="w-24 shrink-0 truncate font-mono text-[11.5px] font-medium text-teal-300">
+                  {leaseAccountLabel(account)}
+                </span>
+                <span className="shrink-0 rounded bg-white/5 px-1.5 py-px font-mono text-[10px] text-text-muted">
+                  {account.leaseCount} {account.leaseCount === 1 ? 'lease' : 'leases'}
+                </span>
+                <span className="min-w-0 truncate text-[10.5px] text-text-subtle">
+                  {account.holders.join(', ')}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="px-3 pt-3">
+        <AgentSectionLabel>Owners · {owners.length}</AgentSectionLabel>
+      </div>
+      {owners.length === 0 ? (
+        <div className="px-3 py-3 text-[11.5px] italic text-text-subtle/70">
+          No active leases. Agents lease an account when they run.
+        </div>
+      ) : (
+        owners.map(owner => (
+          <LeaseRow key={owner.leaseId} nowMs={nowMs} owner={owner} />
+        ))
+      )}
+    </div>
+  )
+}
+
+/** One owner→account lease row (prototype `LeaseRow`, `OrchestratorMode.jsx:614`). */
+function LeaseRow({ owner, nowMs }: { owner: LeaseOwnerRow; nowMs?: number }) {
+  const meta = LEASE_STATE_META[owner.state]
+  const isMain = owner.ownerType === 'main'
+  return (
+    <div
+      className={
+        'flex items-center gap-2.5 px-3 py-2.5 ' +
+        (owner.state === 'released' ? 'opacity-55' : '')
+      }
+    >
+      <span
+        aria-hidden="true"
+        className={`inline-block h-[7px] w-[7px] shrink-0 rounded-full ${meta.dot}`}
+      />
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span
+            className={
+              'font-mono text-[12.5px] font-semibold ' +
+              (isMain ? 'text-text-primary' : 'text-purple-200')
+            }
+          >
+            {owner.ownerLabel}
+          </span>
+          <span
+            className={
+              'rounded px-1.5 py-px text-[8.5px] font-bold uppercase tracking-[0.05em] ' +
+              (isMain
+                ? 'bg-white/[0.06] text-text-muted'
+                : 'bg-purple-400/10 text-purple-400')
+            }
+          >
+            {isMain ? 'main' : 'subagent'}
+          </span>
+          {owner.failoverCount > 0 ? (
+            <span
+              className="rounded bg-tone-warn/[0.12] px-1.5 py-px text-[8.5px] font-bold uppercase tracking-[0.04em] text-tone-warn"
+              {...(owner.lastFailureReason ? { title: owner.lastFailureReason } : {})}
+            >
+              failed over ×{owner.failoverCount}
+            </span>
+          ) : null}
+        </div>
+        <div className="mt-0.5 truncate text-[10.5px] text-text-subtle">
+          {owner.selectionReason}
+        </div>
+      </div>
+      <div className="flex shrink-0 flex-col items-end gap-0.5">
+        <span className="font-mono text-xs font-medium text-teal-300">
+          {leaseAccountLabel(owner)}
+        </span>
+        <span className={`font-mono text-[9.5px] ${meta.text}`}>
+          {owner.strategy} · {meta.label}
+          {owner.state === 'active'
+            ? ` · ${leaseHeldLabel(owner.createdAt, nowMs ?? Date.now())}`
+            : ''}
+        </span>
       </div>
     </div>
   )

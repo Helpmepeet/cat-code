@@ -11,14 +11,20 @@
  * (the P4-9 colourless-badge bug). Every class below is a literal; the colocated
  * test asserts the maps carry no interpolated/arbitrary classes.
  */
+import type { ReactNode } from 'react'
 import {
   agentStateMeta,
+  agentTranscriptStateWord,
   agentTypeMeta,
   type AgentStateKey,
 } from './agentIdentity.js'
 import {
+  ACTION_BUTTON_TONE_CLASS,
   AGENT_STATE_TONE_CLASS,
   AGENT_TYPE_TONE_CLASS,
+  SECTION_LABEL_TONE_CLASS,
+  type ActionButtonTone,
+  type SectionLabelTone,
 } from './agentChromeModel.js'
 
 type PipSize = 'xs' | 'sm'
@@ -105,6 +111,79 @@ export function AgentStateLabel({
       <AgentPip state={state} size={size} />
       {meta.label}
     </span>
+  )
+}
+
+/**
+ * Compressed lifecycle word for crowded rows (P4-32b) — the prototype's
+ * `agentTranscriptStateWord` output in mono, toned by the same state vocabulary
+ * `AgentStateLabel` uses. Pairs with a leading `AgentPip` where the host wants a
+ * dot; on its own it is just the word.
+ */
+export function AgentStateWord({ state }: { state: AgentStateKey }) {
+  const tone = AGENT_STATE_TONE_CLASS[agentStateMeta(state).tone]
+  return (
+    <span className={`shrink-0 whitespace-nowrap font-mono text-[10.5px] ${tone.text}`}>
+      {agentTranscriptStateWord(state)}
+    </span>
+  )
+}
+
+/**
+ * Uppercase section caption (P4-32b) — the prototype's `WLabel`
+ * (`OrchestratorMode.jsx:90`) and `AgentTranscriptLabel`
+ * (`AgentIdentity.jsx:160`), which are the same primitive at the same size in two
+ * files. One component serves both so a caption cannot drift between the
+ * inspection panel and an agent card.
+ *
+ * `tone` picks the caption colour for the sections that carry one in the
+ * prototype (purple for the orchestrator-owned block note, teal for the lease
+ * rollup); default is the muted caption.
+ */
+export function AgentSectionLabel({
+  children,
+  tone = 'muted',
+}: {
+  children: ReactNode
+  tone?: SectionLabelTone
+}) {
+  const toneClass = SECTION_LABEL_TONE_CLASS[tone]
+  return (
+    <div
+      className={`text-[9.5px] font-bold uppercase tracking-[0.1em] ${toneClass}`}
+    >
+      {children}
+    </div>
+  )
+}
+
+/**
+ * Outline action button (P4-32b) — the prototype's `WBtn`
+ * (`OrchestratorMode.jsx:93`). The only production tone in use is `danger`
+ * (the worker Stop control); `neutral`/`accent` exist because the primitive is
+ * shared and the prototype defines all three.
+ */
+export function AgentActionButton({
+  label,
+  tone = 'neutral',
+  title,
+  onClick,
+}: {
+  label: string
+  tone?: ActionButtonTone
+  title?: string
+  onClick: () => void
+}) {
+  const toneClass = ACTION_BUTTON_TONE_CLASS[tone]
+  return (
+    <button
+      className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[7px] border bg-transparent px-[11px] py-1 text-[11.5px] font-medium hover:bg-white/5 ${toneClass}`}
+      onClick={onClick}
+      type="button"
+      {...(title ? { title } : {})}
+    >
+      {label}
+    </button>
   )
 }
 

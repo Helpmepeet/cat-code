@@ -269,6 +269,11 @@ import {
   reduceOrchestratorState,
   selectAgentModeSnapshot,
 } from './orchestratorState.js'
+import {
+  createLeaseState,
+  reduceLeaseState,
+  selectLeaseSnapshot,
+} from './leaseState.js'
 import { GoalsPage } from './GoalsPage.js'
 import { AccountsPage } from './AccountsPage.js'
 import {
@@ -377,6 +382,7 @@ const reduceExtensionsStateBatched = withBatch(reduceExtensionsState)
 const reduceGoalMemoryStateBatched = withBatch(reduceGoalMemoryState)
 const reduceTasksStateBatched = withBatch(reduceTasksState)
 const reduceOrchestratorStateBatched = withBatch(reduceOrchestratorState)
+const reduceLeaseStateBatched = withBatch(reduceLeaseState)
 const reduceAccountsStateBatched = withBatch(reduceAccountsState)
 const reduceWorkspaceTrustStateBatched = withBatch(reduceWorkspaceTrustState)
 const reduceDiagnosticsStateBatched = withBatch(reduceDiagnosticsState)
@@ -625,6 +631,13 @@ export function App() {
     undefined,
     createOrchestratorState,
   )
+  // P4-32b — the read-only Codex lease seam (L1). Session-scoped: which account
+  // each agent in this session's swarm is leasing right now.
+  const [leases, dispatchLease] = useReducer(
+    reduceLeaseStateBatched,
+    undefined,
+    createLeaseState,
+  )
   const [tasksOpen, setTasksOpen] = useState(false)
   // P4-34 — cosmetic palette recents are derived from real invocations in this
   // renderer lifetime. No disk store: the prompt explicitly forbids inventing
@@ -783,6 +796,7 @@ export function App() {
         dispatchGoalMemory,
         dispatchTasks,
         dispatchOrchestrator,
+        dispatchLease,
         dispatchAccounts,
         dispatchWorkspaceTrust,
         dispatchDiagnostics,
@@ -3230,6 +3244,11 @@ export function App() {
         snapshot={selectTasksSnapshot(tasks, activeSessionId)}
         hasActiveSession={activeSessionId !== null}
         onStopTask={activeSessionId ? sendStopTask : undefined}
+        /* P4-32b — the Workers + Leases tabs of the same dialog: the read-only
+         * worker drilldown (inspection ruling D1) and the session-scoped Codex
+         * lease roster (L1). Both are read seams; no verb rides them. */
+        agentMode={selectAgentModeSnapshot(orchestrator, activeSessionId)}
+        leases={selectLeaseSnapshot(leases, activeSessionId)}
       />
     </div>
   )
