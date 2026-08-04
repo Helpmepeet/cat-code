@@ -1,4 +1,5 @@
 import type { SDKMessage } from '@cat-code/engine/sdk'
+import type { Tone } from './tone.js'
 
 /**
  * Context-window fullness for the composer donut (the desktop analog of the
@@ -79,6 +80,21 @@ export type ContextUsage = {
   contextWindow: number
   /** 0–100, clamped. Context-window fullness = usedTokens ÷ contextWindow. */
   percentUsed: number
+}
+
+/**
+ * Context pressure → tone, on the prototype's OWN ladder (`ContextChip`,
+ * `Surfaces.jsx:474`): `>= 90` danger, `>= 70` warn, otherwise the pink brand
+ * hue. Deliberately NOT `usageTone` (`accountsPageModel.ts:94`), which is the
+ * ACCOUNT-quota ladder and paints its healthy band green at a 65% break — using
+ * it here printed a green `34%` inside the popover opened by a pink donut.
+ * Every surface reading context fullness shares this one function so the face
+ * and its popover can never disagree.
+ */
+export function contextTone(percentUsed: number): Tone {
+  if (percentUsed >= 90) return 'danger'
+  if (percentUsed >= 70) return 'warn'
+  return 'accent'
 }
 
 /** Prototype default when no turn has reported a real window yet (`Surfaces.jsx:472`). */

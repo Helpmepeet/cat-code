@@ -1,4 +1,5 @@
-import type { ContextUsage } from './contextUsage.js'
+import { contextTone, type ContextUsage } from './contextUsage.js'
+import { toneClasses } from './tone.js'
 
 /**
  * The composer's context-window donut (P4-24 fidelity — the prototype's
@@ -10,25 +11,24 @@ import type { ContextUsage } from './contextUsage.js'
  *
  * Tailwind discipline: the tone is a STATIC class map (no interpolated
  * `text-[${…}]` — the v4 dynamic-class trap); the arc rides `stroke="currentColor"`
- * off that tone class. The faint track and the arc geometry
- * (`strokeDasharray`/`strokeDashoffset`) are computed SVG presentation attributes,
- * not `style={{}}` objects or classNames.
+ * off that tone class. The faint track and the arc geometry are computed SVG
+ * presentation attributes, not `style={{}}` objects or classNames.
+ *
+ * The arc is `arcLength CIRCUMFERENCE`, the prototype's exact dash form, and NOT
+ * the equivalent-looking `strokeDasharray={CIRCUMFERENCE}` +
+ * `strokeDashoffset={…}` pair. The two agree at every percentage except 0: a
+ * zero-length dash under `strokeLinecap="round"` renders a DOT at 12 o'clock,
+ * which is the prototype's empty state, whereas the offset form starts mid-dash
+ * and renders nothing at all. Verified by difference-blending both against the
+ * running prototype.
  */
 const RADIUS = 6.5
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS
 
-function contextToneClass(percentUsed: number): string {
-  if (percentUsed >= 90) return 'text-tone-danger'
-  if (percentUsed >= 65) return 'text-tone-warn'
-  // The prototype's donut is the pink brand hue while there is headroom
-  // (`ContextChip`, Surfaces.jsx:474 `#f472b6`), not a neutral grey.
-  return 'text-accent'
-}
-
 export function ContextGauge({ usage }: { usage: ContextUsage }) {
   const { percentUsed, usedTokens, contextWindow } = usage
-  const tone = contextToneClass(percentUsed)
-  const offset = CIRCUMFERENCE * (1 - percentUsed / 100)
+  const tone = toneClasses(contextTone(percentUsed)).text
+  const arcLength = (percentUsed / 100) * CIRCUMFERENCE
   return (
     <span
       className={`flex shrink-0 items-center gap-1.5 self-center ${tone}`}
@@ -52,8 +52,7 @@ export function ContextGauge({ usage }: { usage: ContextUsage }) {
           stroke="currentColor"
           strokeWidth="3"
           strokeLinecap="round"
-          strokeDasharray={CIRCUMFERENCE}
-          strokeDashoffset={offset}
+          strokeDasharray={`${arcLength} ${CIRCUMFERENCE}`}
         />
       </svg>
       <span className="text-[12.5px] font-semibold tabular-nums">{percentUsed}%</span>

@@ -11,7 +11,7 @@ import {
 } from './accountsPageModel.js'
 import { handleMenuRovingKeyDown, usePopover } from './composerPopover.js'
 import { ContextGauge } from './ContextGauge.js'
-import type { ContextUsage } from './contextUsage.js'
+import { contextTone, type ContextUsage } from './contextUsage.js'
 import { PermissionModeChip } from './PermissionModeChip.js'
 import { toneClasses } from './tone.js'
 import { selectTokenWarning, type TokenWarning } from './tokenWarning.js'
@@ -686,7 +686,8 @@ export function ContextUsagePanel({
   account: AccountStatus | null
 }) {
   const { percentUsed, usedTokens, contextWindow } = usage
-  const t = toneClasses(usageTone(percentUsed))
+  // Context fullness, NOT account quota — the same ladder the donut face reads.
+  const t = toneClasses(contextTone(percentUsed))
   const showPlan =
     account != null &&
     (account.usagePrimary != null || account.usageWeekly != null)
