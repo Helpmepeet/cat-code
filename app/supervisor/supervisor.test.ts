@@ -102,7 +102,16 @@ test('starts the sidecar process in the configured session cwd', async () => {
   supervisors.push(supervisor)
   supervisor.spawnSession('cwd-session')
 
-  await waitFor(() => existsSync(observedCwdPath), 'sidecar did not report its cwd')
+  // Wait for CONTENT, not mere existence: `writeFileSync` creates the file
+  // before it finishes writing, so under full-suite load `existsSync` went true
+  // while the read still returned '' — and `realpathSync('')` resolves to the
+  // test process's own cwd, failing the assertion about once in six runs.
+  await waitFor(
+    () =>
+      existsSync(observedCwdPath) &&
+      readFileSync(observedCwdPath, 'utf8').length > 0,
+    'sidecar did not report its cwd',
+  )
   expect(realpathSync(readFileSync(observedCwdPath, 'utf8'))).toBe(
     realpathSync(sessionCwd),
   )
