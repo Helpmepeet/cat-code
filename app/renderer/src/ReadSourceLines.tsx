@@ -102,6 +102,54 @@ export function ReadSourceLines({
   )
 }
 
+/**
+ * The search body's locator gutter: `path:line:` per row, receded so the matched
+ * source reads first. `whitespace-pre` and no truncation, because a locator that
+ * is silently cut is worse than one that makes the row wide.
+ */
+const LOCATOR_GUTTER_CLASS = `${SOURCE_TYPE} mr-3 shrink-0 select-none text-text-faint`
+
+/**
+ * One run of syntax-colored search results from a single file (prototype
+ * `Messages.jsx:695`, which runs every grep line through its own `hl()`).
+ *
+ * Carrying `hljs` here IS correct, unlike the write body next door: these rows
+ * are source being quoted, with no additions semantics to preserve, so they take
+ * the code theme's own foreground exactly as a read body does.
+ */
+export function GrepSourceLines({
+  locators,
+  bodies,
+  lang,
+}: {
+  locators: string[]
+  bodies: string[]
+  /** null when the file's language is unknown: the run renders uncolored. */
+  lang: string | null
+}) {
+  const code = bodies.join('\n')
+  // A FRAGMENT of two cells, not a self-contained row: the caller owns one grid
+  // for the whole body so that every run's source starts at the same x. Sized
+  // per run instead, a short path in the second file pulled its source left and
+  // the result read as two unrelated tables.
+  return (
+    <>
+      <pre className={LOCATOR_GUTTER_CLASS}>
+        {locators.map((locator, index) => (
+          <div key={index}>{locator}</div>
+        ))}
+      </pre>
+      {lang === null ? (
+        <pre className={`${SOURCE_TYPE} text-text-muted`}>{code}</pre>
+      ) : (
+        <Markdown components={SOURCE_COMPONENTS} rehypePlugins={REHYPE_PLUGINS}>
+          {sourceFence(code, lang)}
+        </Markdown>
+      )}
+    </>
+  )
+}
+
 /** The prototype's `+` gutter: 14px wide, add-green, one marker per line. */
 const ADDITION_GUTTER_CLASS = `${SOURCE_TYPE} w-3.5 shrink-0 select-none text-[#86efac]`
 

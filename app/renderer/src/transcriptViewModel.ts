@@ -70,10 +70,58 @@ export function resolveToolCardExpanded(
  * The locator is matched non-greedily up to the FIRST `<sep><digits><sep>`, so a
  * path containing a dash or a colon does not swallow the line number.
  */
-export function splitGrepLine(line: string): { locator: string; body: string } | null {
-  const match = /^(.*?[:-]\d+[:-])(.*)$/.exec(line)
-  if (match === null || match[1].length === 0) return null
-  return { locator: match[1], body: match[2] }
+export function splitGrepLine(
+  line: string,
+): { locator: string; path: string; body: string } | null {
+  const match = /^((.*?)[:-]\d+[:-])(.*)$/.exec(line)
+  if (match === null || match[1].length === 0 || match[2].length === 0) return null
+  return { locator: match[1], path: match[2], body: match[3] }
+}
+
+/**
+ * One run of the search body: either source from a single file, or lines that
+ * carry no locator at all (a `--` group separator, a bare `-l` filename).
+ */
+export type GrepSegment =
+  | { kind: 'source'; path: string; locators: string[]; bodies: string[] }
+  | { kind: 'plain'; lines: string[] }
+
+/**
+ * Group search output into runs that can each be syntax-colored as one block.
+ *
+ * WHY GROUP AT ALL. The highlighter takes a block and a language. A search
+ * result spans many files, so there is no single language for the whole body —
+ * which is why this was long recorded as blocked. But every line names its OWN
+ * file in its locator, and real search output arrives in runs from the same
+ * file, so consecutive same-path lines can share one block and one language.
+ *
+ * Grouping is by CONSECUTIVE path, never by path globally: reordering a search
+ * result would misrepresent it. The worst case (every line a different file)
+ * degrades to one block per line, which is still correct, just less efficient.
+ */
+export function groupGrepLines(lines: string[]): GrepSegment[] {
+  const segments: GrepSegment[] = []
+  for (const line of lines) {
+    const split = splitGrepLine(line)
+    const last = segments[segments.length - 1]
+    if (split === null) {
+      if (last?.kind === 'plain') last.lines.push(line)
+      else segments.push({ kind: 'plain', lines: [line] })
+      continue
+    }
+    if (last?.kind === 'source' && last.path === split.path) {
+      last.locators.push(split.locator)
+      last.bodies.push(split.body)
+      continue
+    }
+    segments.push({
+      kind: 'source',
+      path: split.path,
+      locators: [split.locator],
+      bodies: [split.body],
+    })
+  }
+  return segments
 }
 
 export function logLineClass(line: string): string {

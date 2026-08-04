@@ -9,6 +9,7 @@ import {
   findNestedToolUseRow,
   logLineClass,
   resolveToolCardExpanded,
+  groupGrepLines,
   splitGrepLine,
 } from './transcriptViewModel.js'
 import {
@@ -1256,16 +1257,19 @@ test('output lines take the prototype logLineColor pastel for their own semantic
 test('splitGrepLine takes both separators and leaves everything else alone', () => {
   expect(splitGrepLine('src/a.ts:25:const x = 1')).toEqual({
     locator: 'src/a.ts:25:',
+    path: 'src/a.ts',
     body: 'const x = 1',
   })
   // Context lines from -A/-B/-C use `-`, and are most of a search with context.
   expect(splitGrepLine('src/a.ts-26-  return x')).toEqual({
     locator: 'src/a.ts-26-',
+    path: 'src/a.ts',
     body: '  return x',
   })
   // Non-greedy: a path with its own dash must not swallow the line number.
   expect(splitGrepLine('src/my-file.ts:9:hit')).toEqual({
     locator: 'src/my-file.ts:9:',
+    path: 'src/my-file.ts',
     body: 'hit',
   })
   // Shapes that are not a locator render untouched.
@@ -1402,7 +1406,7 @@ test('the COLLAPSED bash peek tints too, since that is the default view', () => 
   expect(html).toContain('text-[#86efac]') // pass line, in the closed card
 })
 
-test('search results dim the path:line locator and keep the match readable', () => {
+test('search results are syntax-colored, with the locator receding beside them', () => {
   const html = render(
     toolRow({
       toolName: 'Grep',
@@ -1417,14 +1421,61 @@ test('search results dim the path:line locator and keep the match readable', () 
     }),
   )
 
-  // Locator recedes…
+  // Locator recedes into its own column…
   expect(html).toContain('>src/a.ts:25:<')
   // …and a CONTEXT line (`-` separator) splits too, not just a match line.
   expect(html).toContain('>src/a.ts-26-<')
   expect(html).toContain('text-text-faint')
-  // …while the matched source keeps the prototype's own body colour.
+  // …while the matched source is colored as the source it is. This is what
+  // "still lacks color" meant: receding the locator alone left the body grey.
+  expect(html).toContain('hljs-keyword') // `const`, `return`
   expect(visibleText(html)).toContain('const isError = true')
-  expect(html).toContain('text-text-muted')
+})
+
+test('search results from ONE file share a block; a new file starts another', () => {
+  const html = render(
+    toolRow({
+      toolName: 'Grep',
+      toolFamily: 'grep',
+      input: { pattern: 'x' },
+      status: 'error',
+      result: {
+        isError: false,
+        content: 'src/a.ts:1:const x = 1\nsrc/a.ts:2:const y = 2\nsrc/b.py:9:x = 3',
+        diff: null,
+      },
+    }),
+  )
+
+  // Grouping is by CONSECUTIVE path, so this is two runs, not one merged block
+  // and not three. Each takes its OWN language from its own extension.
+  expect(occurrences(html, 'hljs')).toBeGreaterThan(0)
+  expect(visibleText(html)).toContain('const x = 1')
+  expect(visibleText(html)).toContain('x = 3')
+  expect(html).toContain('>src/b.py:9:<')
+})
+
+test('a failed search shows its error whole, never parsed for locators', () => {
+  const html = render(
+    toolRow({
+      toolName: 'Grep',
+      toolFamily: 'grep',
+      input: { pattern: '[' },
+      status: 'error',
+      result: { isError: true, content: 'regex parse error at 1:1', diff: null },
+    }),
+  )
+
+  expect(html).toContain('text-tone-danger')
+  expect(visibleText(html)).toContain('regex parse error')
+})
+
+test('groupGrepLines keeps unlocatable lines as their own plain run', () => {
+  expect(groupGrepLines(['src/a.ts:1:hit', '--', 'src/a.ts:2:hit2'])).toEqual([
+    { kind: 'source', path: 'src/a.ts', locators: ['src/a.ts:1:'], bodies: ['hit'] },
+    { kind: 'plain', lines: ['--'] },
+    { kind: 'source', path: 'src/a.ts', locators: ['src/a.ts:2:'], bodies: ['hit2'] },
+  ])
 })
 
 test('a NON-bash body keeps the prototype flat base, NOT the bash line heuristic', () => {

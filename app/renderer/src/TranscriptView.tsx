@@ -80,7 +80,11 @@ import {
 } from './agentChromeModel.js'
 import { ToolInspector } from './ToolInspector.js'
 import { parseToolAck, type ToolAck } from './toolAck.js'
-import { AdditionSourceLines, ReadSourceLines } from './ReadSourceLines.js'
+import {
+  AdditionSourceLines,
+  GrepSourceLines,
+  ReadSourceLines,
+} from './ReadSourceLines.js'
 import {
   parseReadSource,
   readLineNumbers,
@@ -91,7 +95,7 @@ import {
   findNestedToolUseRow,
   logLineClass,
   resolveToolCardExpanded,
-  splitGrepLine,
+  groupGrepLines,
 } from './transcriptViewModel.js'
 import {
   INLINE_HEAD_LINES,
@@ -1659,39 +1663,56 @@ function GrepBody({
 }) {
   const lines = content.split('\n')
   const { window, revealMore } = useInlineOutputWindow(lines)
-  const renderLines = (slice: string[]) => (
-    <pre className="whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed">
-      {slice.map((line, index) => {
-        const split = isError ? null : splitGrepLine(line)
-        return (
-          <div key={index} className={isError ? 'text-tone-danger' : 'text-text-muted'}>
-            {split === null ? (
-              line || ' '
-            ) : (
-              <>
-                <span className="text-text-faint">{split.locator}</span>
-                {split.body}
-              </>
-            )}
-          </div>
-        )
-      })}
-    </pre>
-  )
+  const renderSegments = (slice: string[], keyPrefix: string) =>
+    groupGrepLines(slice).map((segment, index) =>
+      segment.kind === 'plain' ? (
+        <pre
+          key={`${keyPrefix}:${index}`}
+          className="col-span-2 whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-text-muted"
+        >
+          {segment.lines.join('\n')}
+        </pre>
+      ) : (
+        <GrepSourceLines
+          key={`${keyPrefix}:${index}`}
+          locators={segment.locators}
+          bodies={segment.bodies}
+          lang={readSourceLanguage(segment.path)}
+        />
+      ),
+    )
+  // A failed search has no results to color — it has an error message, which
+  // takes the error tone whole rather than being parsed for locators.
+  if (isError) {
+    return (
+      <div className={INLINE_OUTPUT_SCROLLER}>
+        <pre className="whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-tone-danger">
+          {content}
+        </pre>
+      </div>
+    )
+  }
   return (
     <div className={INLINE_OUTPUT_SCROLLER}>
-      {renderLines(window.head)}
-      {window.truncated ? (
-        <>
-          <InlineRevealBand
-            hidden={window.hidden}
-            revealStep={window.revealStep}
-            onReveal={revealMore}
-            onOpenFull={onOpenFull}
-          />
-          {renderLines(window.tail)}
-        </>
-      ) : null}
+      {/* ONE grid for the whole body, head and tail alike: `max-content` sizes
+       * the locator column to the widest locator anywhere in it, so every run's
+       * source starts at the same x instead of each file group sizing its own. */}
+      <div className="grid grid-cols-[max-content_1fr]">
+        {renderSegments(window.head, 'head')}
+        {window.truncated ? (
+          <>
+            <div className="col-span-2">
+              <InlineRevealBand
+                hidden={window.hidden}
+                revealStep={window.revealStep}
+                onReveal={revealMore}
+                onOpenFull={onOpenFull}
+              />
+            </div>
+            {renderSegments(window.tail, 'tail')}
+          </>
+        ) : null}
+      </div>
     </div>
   )
 }
