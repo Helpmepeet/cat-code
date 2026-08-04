@@ -9,7 +9,11 @@ import type { ToolProgressData, Tools } from '../../Tool.js'
 import type { ProgressMessage } from '../../types/message.js'
 import { extractTag } from '../../utils/messages.js'
 import { getDisplayPath } from '../../utils/file.js'
-import type { FilePatchToolInput, FilePatchToolOutput } from './types.js'
+import {
+  type FilePatchToolInput,
+  type FilePatchToolOutput,
+  firstLineForLanguageDetection,
+} from './types.js'
 
 export function userFacingName(input?: Partial<FilePatchToolInput>): string {
   if (!input) return 'Update'
@@ -65,13 +69,13 @@ export function renderToolUseMessage(
 
 // Language detection only ever needed the file's first line. New results carry
 // it directly; transcripts written before that still carry the full
-// before/after text, so fall back to those with the same precedence.
+// before/after text, so fall back to those with the same precedence. The bound
+// applies on this path too: it is display-only, so nothing is persisted, but a
+// legacy result holding a one-line minified bundle would otherwise re-scan the
+// whole file for shebang markers on every render.
 function firstLineOf(file: FilePatchToolOutput['files'][number]): string | null {
-  return (
-    file.firstLine ??
-    file.before?.split('\n')[0] ??
-    file.after?.split('\n')[0] ??
-    null
+  return firstLineForLanguageDetection(
+    file.firstLine ?? file.before ?? file.after,
   )
 }
 

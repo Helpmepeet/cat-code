@@ -5,6 +5,25 @@ import type { LineEndingType } from '../../utils/fileRead.js'
 
 export type FilePatchOperationType = 'update' | 'add' | 'delete'
 
+// Language detection reads only a short prefix of the first line: a shebang, or
+// a `<?php`/`<?xml` marker (src/native-ts/color-diff/index.ts:437-449). 256 is
+// the kernel's own shebang limit (Linux BINPRM_BUF_SIZE), so a longer line can
+// never be a working shebang, and the markers need six characters at most.
+// Without the cap a minified bundle or single-line JSON puts the whole file on
+// line one and back onto the transcript, which is what firstLine replaced.
+export const MAX_PERSISTED_FIRST_LINE_LENGTH = 256
+
+// Reads the first line without splitting the whole file: `split('\n')` on an
+// 886 KB single-line file allocates every line just to drop them.
+export function firstLineForLanguageDetection(
+  content: string | null | undefined,
+): string | null {
+  if (content == null) return null
+  const newline = content.indexOf('\n')
+  const line = newline === -1 ? content : content.slice(0, newline)
+  return line.slice(0, MAX_PERSISTED_FIRST_LINE_LENGTH)
+}
+
 export type FilePatchLine = {
   kind: 'context' | 'delete' | 'add'
   text: string

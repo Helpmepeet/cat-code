@@ -1954,11 +1954,13 @@ test('FileEditTool tool_use_result narrows to a DiffView/MultiDiffCard hunk shap
 })
 
 test('Apply_patch tool_use_result (files[] envelope) narrows to a diff — primary file when many', () => {
-  // Real FilePatchTool output shape: `{ files: [{ path, type, before, after,
-  // structuredPatch }] }` (src/tools/FilePatchTool/types.ts:138-172, emitted
-  // FilePatchTool.tsx:453-464) — a MULTI-file envelope, unlike FileEditTool's
-  // top-level `filePath`+`structuredPatch`. The single-file ToolDiffProjection
-  // names one path, so the primary (first file with hunks) is projected.
+  // Current FilePatchTool output shape: `{ files: [{ path, type, firstLine,
+  // structuredPatch }] }` (src/tools/FilePatchTool/types.ts, emitted
+  // FilePatchTool.tsx) — a MULTI-file envelope, unlike FileEditTool's
+  // top-level `filePath`+`structuredPatch`. Whole-file `before`/`after` are no
+  // longer written; the legacy test below covers transcripts that still have
+  // them. The single-file ToolDiffProjection names one path, so the primary
+  // (first file with hunks) is projected.
   let state = createTranscriptState()
   state = projectServerFrame(state, ready('session-1'))
   state = projectServerFrame(
@@ -2013,8 +2015,7 @@ test('Apply_patch tool_use_result (files[] envelope) narrows to a diff — prima
           {
             path: '/repo/src/a.ts',
             type: 'update',
-            before: 'export const a = {\n  x: 1,\n}\n',
-            after: 'export const a = {\n  x: 2,\n}\n',
+            firstLine: 'export const a = {',
             structuredPatch: [
               {
                 oldStart: 1,
@@ -2028,8 +2029,7 @@ test('Apply_patch tool_use_result (files[] envelope) narrows to a diff — prima
           {
             path: '/repo/src/b.ts',
             type: 'update',
-            before: 'const b = false\n',
-            after: 'const b = true\n',
+            firstLine: 'const b = false',
             structuredPatch: [
               {
                 oldStart: 1,
@@ -2066,6 +2066,97 @@ test('Apply_patch tool_use_result (files[] envelope) narrows to a diff — prima
   })
   // Every touched path still shows in the result content (nothing hidden).
   expect(row.result?.content).toContain('/repo/src/b.ts')
+})
+
+test('legacy Apply_patch result with whole-file before/after still narrows to a diff', () => {
+  // Transcripts written before FilePatchTool stopped persisting file contents
+  // are still on disk and still resumed, so the projector must keep reading
+  // them by `path` + `structuredPatch` and ignore the extra fields.
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_patch_legacy',
+        model: 'claude-sonnet-5',
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_patch_legacy',
+            name: 'Apply_patch',
+            input: {
+              input:
+                '*** Begin Patch\n*** Update File: /repo/src/a.ts\n@@\n export const a = {\n-  x: 1,\n+  x: 2,\n }\n*** End Patch',
+            },
+          },
+        ],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 900, output_tokens: 30, service_tier: null },
+      },
+      parent_tool_use_id: null,
+      session_id: 'session-1',
+      uuid: '00000000-0000-4000-8000-0000000c000b',
+    }),
+  )
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'toolu_patch_legacy',
+            content: 'Applied patch to 1 file: /repo/src/a.ts',
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+      isSynthetic: true,
+      tool_use_result: {
+        files: [
+          {
+            path: '/repo/src/a.ts',
+            type: 'update',
+            before: 'export const a = {\n  x: 1,\n}\n',
+            after: 'export const a = {\n  x: 2,\n}\n',
+            structuredPatch: [
+              {
+                oldStart: 1,
+                oldLines: 3,
+                newStart: 1,
+                newLines: 3,
+                lines: [' export const a = {', '-  x: 1,', '+  x: 2,', ' }'],
+              },
+            ],
+          },
+        ],
+      },
+      session_id: 'session-1',
+      uuid: '00000000-0000-4000-8000-0000000c000c',
+    }),
+  )
+
+  const row = selectTranscriptRows(state, 'session-1')[0]
+  if (row?.kind !== 'tool-use') throw new Error('expected tool-use row')
+  expect(row.status).toBe('success')
+  expect(row.result?.diff).toEqual({
+    filePath: '/repo/src/a.ts',
+    hunks: [
+      {
+        oldStart: 1,
+        oldLines: 3,
+        newStart: 1,
+        newLines: 3,
+        lines: [' export const a = {', '-  x: 1,', '+  x: 2,', ' }'],
+      },
+    ],
+  })
 })
 
 test('a foreign/malformed tool_use_result never crashes and yields diff: null', () => {

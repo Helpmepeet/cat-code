@@ -16,7 +16,7 @@ import {
 } from './applier.js'
 import { renderToolResultMessage } from './UI.js'
 import type { ApplyPatchFileState, FilePatchHunk, FilePatchOperation } from './types.js'
-import { outputSchema } from './types.js'
+import { MAX_PERSISTED_FIRST_LINE_LENGTH, outputSchema } from './types.js'
 
 const tempDirs: string[] = []
 
@@ -889,6 +889,54 @@ describe('FilePatchTool.call transcript payload', () => {
 
     expect(JSON.stringify(result.data)).not.toContain('UNTOUCHED_SENTINEL')
   })
+
+  test('bounds firstLine so a one-line file cannot land whole on the transcript', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'file-patch-tool-'))
+    tempDirs.push(tempDir)
+
+    // A minified bundle: the whole file sits on line one, so an unbounded
+    // firstLine persists all of it even though the hunk is a few bytes.
+    const bundlePath = join(tempDir, 'bundle.min.js')
+    const longFirstLine = `var a=1;/*${'BULK_SENTINEL'.repeat(20_000)}*/`
+    // The edit sits far enough down that no diff context line reaches line one,
+    // so firstLine is the only route by which the bulk could be persisted.
+    writeFileSync(
+      bundlePath,
+      `${longFirstLine}\n${'filler\n'.repeat(10)}trailer\n`,
+    )
+
+    const result = await FilePatchTool.call(
+      {
+        ops: [
+          {
+            type: 'update',
+            path: bundlePath,
+            hunks: [
+              hunk({
+                lines: [
+                  { kind: 'context', text: 'trailer' },
+                  { kind: 'add', text: 'appended' },
+                ],
+              }),
+            ],
+          },
+        ],
+      },
+      {
+        readFileState: createFileStateCacheWithSizeLimit(10),
+        updateFileHistoryState: () => undefined,
+      } as never,
+      undefined,
+      { uuid: 'test-parent' } as never,
+    )
+
+    const file = result.data.files[0]!
+    expect(file.firstLine).toHaveLength(MAX_PERSISTED_FIRST_LINE_LENGTH)
+    expect(longFirstLine.startsWith(file.firstLine!)).toBe(true)
+    // The serialized result must stay near the size of the diff itself, not
+    // near the size of the file.
+    expect(JSON.stringify(result.data).length).toBeLessThan(1_000)
+  })
 })
 
 describe('FilePatchTool result rendering', () => {
@@ -936,6 +984,28 @@ describe('FilePatchTool result rendering', () => {
     ) as { props: Record<string, unknown> }
 
     expect(element.props.firstLine).toBe('#!/usr/bin/env node')
+  })
+
+  test('bounds the first line it hands the language detector', () => {
+    const element = renderToolResultMessage(
+      {
+        files: [
+          {
+            path: '/x/bundle.min.js',
+            type: 'update',
+            before: `var a=1;${'x'.repeat(500_000)}\n`,
+            after: `var a=2;${'x'.repeat(500_000)}\n`,
+            structuredPatch,
+          },
+        ],
+      },
+      [],
+      renderOptions,
+    ) as { props: Record<string, unknown> }
+
+    expect(element.props.firstLine).toHaveLength(
+      MAX_PERSISTED_FIRST_LINE_LENGTH,
+    )
   })
 })
 

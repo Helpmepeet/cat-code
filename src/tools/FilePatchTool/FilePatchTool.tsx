@@ -31,6 +31,7 @@ import {
   type FilePatchOperation,
   type FilePatchToolInput,
   type FilePatchToolOutput,
+  firstLineForLanguageDetection,
   inputSchema,
   outputSchema,
 } from './types.js'
@@ -452,13 +453,13 @@ export const FilePatchTool = buildTool({
 
     // Built field by field, never spread from the applier result: `before`/
     // `after` hold the whole file twice and this object is serialized verbatim
-    // onto the transcript. structuredPatch plus firstLine is everything any
-    // reader uses.
+    // onto the transcript. structuredPatch plus a bounded firstLine is
+    // everything any reader uses.
     const output: FilePatchToolOutput = {
       files: applied.files.map(file => ({
         path: file.path,
         type: file.type,
-        firstLine: (file.before ?? file.after)?.split('\n')[0] ?? null,
+        firstLine: firstLineForLanguageDetection(file.before ?? file.after),
         structuredPatch: getPatchFromContents({
           filePath: file.path,
           oldContent: file.before ?? '',
