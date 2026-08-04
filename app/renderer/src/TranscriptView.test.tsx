@@ -1279,6 +1279,33 @@ test('splitGrepLine takes both separators and leaves everything else alone', () 
   expect(splitGrepLine('3 files matched')).toBeNull()
 })
 
+// The prototype's fixtures never contained a COUNT line, so the ported rules
+// missed the summary every real runner ends with. These are verbatim `bun test`
+// lines — the exact case the operator reported as "still looks the same".
+test('a real test summary is colored: counts, not keywords', () => {
+  expect(logLineClass(' 18 pass')).toBe('text-[#86efac]')
+  expect(logLineClass(' 3 fail')).toBe('text-[#fca5a5]')
+  expect(logLineClass('2 passed')).toBe('text-[#86efac]')
+  expect(logLineClass('1 failure')).toBe('text-[#fca5a5]')
+  expect(logLineClass('4 errors')).toBe('text-[#fca5a5]')
+})
+
+test('a ZERO count is good news and must never read as a failure', () => {
+  // The whole reason counts are checked before the keyword branch: `0 failed`
+  // contains `failed`, and painting a clean run red is worse than not coloring.
+  expect(logLineClass(' 0 fail')).toBe('text-text-muted')
+  expect(logLineClass('0 failed')).toBe('text-text-muted')
+  expect(logLineClass('0 errors')).toBe('text-text-muted')
+  // A zero PASS count is not success either.
+  expect(logLineClass('0 pass')).toBe('text-text-muted')
+})
+
+test('count matching does not swallow ordinary lines that merely start with a number', () => {
+  expect(logLineClass(' 28 expect() calls')).toBe('text-text-muted')
+  expect(logLineClass('Ran 18 tests across 1 file. [355.00ms]')).toBe('text-text-muted')
+  expect(logLineClass('3 files changed')).toBe('text-text-muted')
+})
+
 test('output-line tint keeps the prototype branch ORDER, so a failed pass reads failed', () => {
   // Both the error and the pass branch match this line; the prototype tests
   // error FIRST, and a line saying a test suite failed must not read green.

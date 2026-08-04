@@ -125,6 +125,23 @@ export function groupGrepLines(lines: string[]): GrepSegment[] {
 }
 
 export function logLineClass(line: string): string {
+  // COUNT LINES FIRST — and this branch is NOT from the prototype.
+  //
+  // Real runners report outcomes as counts, and the prototype's fixtures never
+  // contained one. `bun test` ends with ` 18 pass` / ` 0 fail`: no `PASS`, no
+  // `✓`, no `passed`, so every branch below misses and a whole test summary
+  // renders grey — which is exactly what the operator kept reporting. The
+  // prototype is a UX spec; its mock data is not the contract.
+  //
+  // A count also carries meaning no keyword match can see: ZERO IS GOOD NEWS.
+  // `0 fail` must not read as a failure, and `failed` in the branch below would
+  // paint `0 failed` red, so this has to run first.
+  const count = /^\s*(\d+)\s+(pass(?:ed|ing)?|fail(?:ed|ures?|ing)?|errors?)\b/i.exec(line)
+  if (count !== null) {
+    const total = Number(count[1])
+    if (total === 0) return 'text-text-muted'
+    return /^pass/i.test(count[2]) ? 'text-[#86efac]' : 'text-[#fca5a5]'
+  }
   if (/(^\s*FAIL\b|\bERROR\b|\berror\b|npm ERR!|✕|✘|UnhandledPromise|failed)/.test(line)) {
     return 'text-[#fca5a5]'
   }

@@ -69,15 +69,33 @@ function tool(fields: {
   } as unknown as NestedTranscriptRow
 }
 
+/**
+ * VERBATIM real `bun test` output, pasted from a terminal — do NOT hand-write
+ * fixtures here. The first version of this file was invented, and every line in
+ * it happened to match a tint rule (`✓ 118 pass`, `WARNING:`, `ERROR:`), so the
+ * page looked colourful while the real thing rendered flat grey: actual output
+ * says ` 18 pass` / ` 0 fail`, which matched nothing. A preview fed agreeable
+ * data is worse than no preview, because it manufactures confidence.
+ */
 const BASH_OUT = [
   'bun test v1.3.11 (af24e281)',
   '',
-  'src/thing.test.ts:',
-  'WARNING: slow suite detected',
-  'ERROR: probe refused connection',
-  '  at Object.<anonymous> (src/probe.ts:14)',
-  '✓ 118 pass',
-  '0 fail',
+  ' 18 pass',
+  ' 0 fail',
+  ' 28 expect() calls',
+  'Ran 18 tests across 1 file. [355.00ms]',
+].join('\n')
+
+/** Real output from a FAILING run, same source, same rule. */
+const BASH_FAIL_OUT = [
+  'bun test v1.3.11 (af24e281)',
+  '',
+  '# Unhandled error between tests',
+  'error: Cannot find package \'react\'',
+  '',
+  ' 2 pass',
+  ' 3 fail',
+  'Ran 5 tests across 1 file. [412.00ms]',
 ].join('\n')
 
 const GREP_OUT = [
@@ -91,7 +109,7 @@ const GREP_OUT = [
 
 const rows: NestedTranscriptRow[] = [
   tool({ toolName: 'Bash', toolFamily: 'bash', input: { command: 'bun test app/' }, content: BASH_OUT }),
-  tool({ toolName: 'Bash', toolFamily: 'bash', input: { command: 'bun test app/' }, status: 'error', content: BASH_OUT }),
+  tool({ toolName: 'Bash', toolFamily: 'bash', input: { command: 'bun test app/' }, status: 'error', content: BASH_FAIL_OUT }),
   tool({ toolName: 'Grep', toolFamily: 'grep', input: { pattern: 'isError' }, status: 'error', content: GREP_OUT }),
   tool({
     toolName: 'Write',
