@@ -439,12 +439,18 @@ export class SidecarServer {
     // server's broadcast model.)
     this.unsubscribe = this.controller.subscribe(event => {
       this.broadcastEvent(event)
-      // The context breakdown can only move across a turn, and re-analysing
-      // mid-stream would tokenize the whole transcript on every token. The
-      // falling edge of `turn.status` is the one moment worth paying for.
-      if (event.type === 'turn.status' && !event.activeTurn) {
-        void this.broadcastContextBreakdown()
-      }
+      // NO per-turn context-breakdown refresh. The analysis is not cheap enough
+      // to be automatic: `analyzeContextUsage` fans out to ~10
+      // `countTokensWithFallback` calls (system prompt, tool schemas, each memory
+      // file, each agent, skills, messages), each a real
+      // `anthropic.beta.messages.countTokens`, and on failure a HAIKU SAMPLING
+      // fallback (`src/services/tokenEstimation.ts:82-112,177`). Worse on a
+      // `gpt-*` session: `getAnthropicClient` re-derives the provider from the
+      // MODEL STRING, so count_tokens takes the Codex path, fails, and bills the
+      // Anthropic fallback instead. Per turn, per session, that is a real cost for
+      // a panel nobody may open. `/context` pays it only on explicit user demand.
+      // The breakdown is therefore attach-scoped until an on-demand request verb
+      // exists; a turn-boundary refresh belongs on that verb, not here.
     })
     // The terminal REPL owns an equivalent between-turn drain. Desktop submits
     // straight to this sidecar, so this process owns the idle wake-up for its
