@@ -9,6 +9,7 @@ import {
   findNestedToolUseRow,
   logLineClass,
   resolveToolCardExpanded,
+  splitGrepLine,
 } from './transcriptViewModel.js'
 import {
   createTranscriptState,
@@ -1252,6 +1253,27 @@ test('output lines take the prototype logLineColor pastel for their own semantic
   expect(logLineClass('src/index.ts')).toBe('text-text-muted')
 })
 
+test('splitGrepLine takes both separators and leaves everything else alone', () => {
+  expect(splitGrepLine('src/a.ts:25:const x = 1')).toEqual({
+    locator: 'src/a.ts:25:',
+    body: 'const x = 1',
+  })
+  // Context lines from -A/-B/-C use `-`, and are most of a search with context.
+  expect(splitGrepLine('src/a.ts-26-  return x')).toEqual({
+    locator: 'src/a.ts-26-',
+    body: '  return x',
+  })
+  // Non-greedy: a path with its own dash must not swallow the line number.
+  expect(splitGrepLine('src/my-file.ts:9:hit')).toEqual({
+    locator: 'src/my-file.ts:9:',
+    body: 'hit',
+  })
+  // Shapes that are not a locator render untouched.
+  expect(splitGrepLine('--')).toBeNull()
+  expect(splitGrepLine('src/a.ts')).toBeNull()
+  expect(splitGrepLine('3 files matched')).toBeNull()
+})
+
 test('output-line tint keeps the prototype branch ORDER, so a failed pass reads failed', () => {
   // Both the error and the pass branch match this line; the prototype tests
   // error FIRST, and a line saying a test suite failed must not read green.
@@ -1357,6 +1379,52 @@ test('an errored bash body stays one danger tone rather than tinting its trace',
 
   expect(html).toContain('text-tone-danger')
   expect(html).not.toContain('text-[#fca5a5]') // no per-line heuristic on a known failure
+})
+
+test('the COLLAPSED bash peek tints too, since that is the default view', () => {
+  // The regression this pins: a successful card is collapsed by default, so the
+  // peek is all most commands ever show. It painted one flat grey while the
+  // expanded body underneath was fully tinted, which made a wall of finished
+  // commands read as colourless. `status: 'success'` — no expanding here, this
+  // is deliberately the closed card.
+  const html = render(
+    toolRow({
+      toolName: 'Bash',
+      toolFamily: 'bash',
+      input: { command: 'bun test' },
+      status: 'success',
+      result: { isError: false, content: 'ok\nWARNING: slow\n✓ 3 pass', diff: null },
+    }),
+  )
+
+  expect(html).not.toContain('864 lines hidden') // sanity: this is the peek
+  expect(html).toContain('text-[#fcd34d]') // warn line, in the closed card
+  expect(html).toContain('text-[#86efac]') // pass line, in the closed card
+})
+
+test('search results dim the path:line locator and keep the match readable', () => {
+  const html = render(
+    toolRow({
+      toolName: 'Grep',
+      toolFamily: 'grep',
+      input: { pattern: 'isError' },
+      status: 'error',
+      result: {
+        isError: false,
+        content: 'src/a.ts:25:const isError = true\nsrc/a.ts-26-  return isError',
+        diff: null,
+      },
+    }),
+  )
+
+  // Locator recedes…
+  expect(html).toContain('>src/a.ts:25:<')
+  // …and a CONTEXT line (`-` separator) splits too, not just a match line.
+  expect(html).toContain('>src/a.ts-26-<')
+  expect(html).toContain('text-text-faint')
+  // …while the matched source keeps the prototype's own body colour.
+  expect(visibleText(html)).toContain('const isError = true')
+  expect(html).toContain('text-text-muted')
 })
 
 test('a NON-bash body keeps the prototype flat base, NOT the bash line heuristic', () => {

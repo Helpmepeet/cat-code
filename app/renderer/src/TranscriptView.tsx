@@ -91,6 +91,7 @@ import {
   findNestedToolUseRow,
   logLineClass,
   resolveToolCardExpanded,
+  splitGrepLine,
 } from './transcriptViewModel.js'
 import {
   INLINE_HEAD_LINES,
@@ -1263,6 +1264,8 @@ function ToolCardBody({
   switch (row.toolFamily) {
     case 'bash':
       return <BashBody content={content} isError={errorTone} onOpenFull={openFull} />
+    case 'grep':
+      return <GrepBody content={content} isError={errorTone} onOpenFull={openFull} />
     case 'read':
       return (
         <NumberedBody
@@ -1486,9 +1489,18 @@ function BashTailPeek({ content }: { content: string }) {
   const tail = lines.slice(-3)
   return (
     <div className="border-t border-shell-seam bg-black/20 px-3 py-1.5">
-      <pre className="overflow-hidden whitespace-pre font-mono text-[11px] leading-relaxed text-text-subtle/80">
+      {/* Tinted by the SAME rule as the expanded body. This peek is the only
+       * thing a successful card shows until it is opened, and a collapsed card
+       * is the default (the prototype's `toolsExpandedByDefault` is false), so
+       * painting it one flat grey is what made a wall of finished commands read
+       * as colourless no matter what the body underneath did. Nothing in the
+       * prototype constrains this: it reserved a `collapsedExtra` slot and never
+       * built a peek, so this component is ours. */}
+      <pre className="overflow-hidden whitespace-pre font-mono text-[11px] leading-relaxed">
         {tail.map((line, index) => (
-          <div key={index}>{line}</div>
+          <div key={index} className={logLineClass(line)}>
+            {line}
+          </div>
         ))}
       </pre>
     </div>
@@ -1621,6 +1633,66 @@ function WriteBody({
   }
   return (
     <AdditionsBody content={written} filePath={filePath} onOpenFull={onOpenFull} />
+  )
+}
+
+/**
+ * Search results: the `path:line:` locator recedes, the matched source stays at
+ * the prototype's own body colour.
+ *
+ * 🔁 An adaptation of the prototype's flat `FE_T.t2` grep body
+ * (`Messages.jsx:695`), and a deliberately conservative one: the MATCH keeps
+ * exactly the colour the prototype gives it, and only the locator changes. In
+ * real output the same long path repeats on every line and outweighs the match
+ * it is pointing at, which the prototype's short fixture paths never showed. The
+ * prototype's own `hl()` is still uncarried here (no single language to name
+ * across a multi-file result).
+ */
+function GrepBody({
+  content,
+  isError,
+  onOpenFull,
+}: {
+  content: string
+  isError: boolean
+  onOpenFull: (() => void) | null
+}) {
+  const lines = content.split('\n')
+  const { window, revealMore } = useInlineOutputWindow(lines)
+  const renderLines = (slice: string[]) => (
+    <pre className="whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed">
+      {slice.map((line, index) => {
+        const split = isError ? null : splitGrepLine(line)
+        return (
+          <div key={index} className={isError ? 'text-tone-danger' : 'text-text-muted'}>
+            {split === null ? (
+              line || ' '
+            ) : (
+              <>
+                <span className="text-text-faint">{split.locator}</span>
+                {split.body}
+              </>
+            )}
+          </div>
+        )
+      })}
+    </pre>
+  )
+  return (
+    <div className={INLINE_OUTPUT_SCROLLER}>
+      {renderLines(window.head)}
+      {window.truncated ? (
+        <>
+          <InlineRevealBand
+            hidden={window.hidden}
+            revealStep={window.revealStep}
+            onReveal={revealMore}
+            onOpenFull={onOpenFull}
+          />
+          {renderLines(window.tail)}
+        </>
+      ) : null}
+    </div>
   )
 }
 

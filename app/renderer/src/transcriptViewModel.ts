@@ -57,6 +57,25 @@ export function resolveToolCardExpanded(
  * branch table is worth asserting directly rather than only through whichever
  * lines a rendered fixture happens to contain.
  */
+/**
+ * Split a grep output line into its `path:line:` locator and the matched source.
+ * Returns null for any line that is not in that shape (a `--` group separator, a
+ * bare filename from `-l`, a summary), which then renders unchanged.
+ *
+ * Both separators are real and mean different things in the same payload: `:`
+ * marks a MATCH line, `-` a context line from `-A`/`-B`/`-C`. Accepting only `:`
+ * would leave every context line unsplit, which is most of the output of a
+ * search run with context.
+ *
+ * The locator is matched non-greedily up to the FIRST `<sep><digits><sep>`, so a
+ * path containing a dash or a colon does not swallow the line number.
+ */
+export function splitGrepLine(line: string): { locator: string; body: string } | null {
+  const match = /^(.*?[:-]\d+[:-])(.*)$/.exec(line)
+  if (match === null || match[1].length === 0) return null
+  return { locator: match[1], body: match[2] }
+}
+
 export function logLineClass(line: string): string {
   if (/(^\s*FAIL\b|\bERROR\b|\berror\b|npm ERR!|✕|✘|UnhandledPromise|failed)/.test(line)) {
     return 'text-[#fca5a5]'
