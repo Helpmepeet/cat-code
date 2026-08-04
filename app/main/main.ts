@@ -25,6 +25,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { existsSync, realpathSync, statSync } from 'node:fs'
+import { writeFile } from 'node:fs/promises'
 
 import {
   isSidecarSendError,
@@ -39,6 +40,7 @@ import { Host, type CwdValidation } from '../host/host.js'
 import type {
   HostEvent,
   HostResult,
+  SaveTextResult,
   SessionDescriptor,
 } from '../shared/hostApi.js'
 import {
@@ -57,6 +59,7 @@ import {
   SIDECAR_RUNTIME_ARGS,
   selectTranscriptBackfillCandidates,
   supervisorEventToServerFrame,
+  validateSaveTextRequest,
 } from './mainDecisions.js'
 import {
   deleteCache,
@@ -170,6 +173,9 @@ const CH_HOST_PICK_DIR = 'catcode:host:pick-directory'
 const CH_HOST_PREVIEW = 'catcode:host:preview'
 const CH_HOST_SESSIONS_CATALOG = 'catcode:host:sessions-catalog'
 const CH_HOST_OPEN_HISTORY = 'catcode:host:open-history'
+// P4-35 — the file sink. Mirrors `pick-directory`: the renderer REQUESTS a native
+// dialog it cannot answer, and main owns the destination (HC1).
+const CH_HOST_SAVE_TEXT = 'catcode:host:save-text'
 const CH_HOST_EVENT = 'catcode:host:event'
 
 const APP_ORIGIN_DEV = process.env.CATCODE_RENDERER_URL ?? 'http://localhost:5173'
@@ -1399,6 +1405,53 @@ function registerHostControlPlane(): void {
         })
       openHistoryInFlight.set(engineId, promise)
       return promise
+    },
+  )
+
+  // P4-35 (operator ruling 2026-07-30) — the app's ONLY file sink, and the exact
+  // mirror of CH_HOST_PICK_DIR above. The renderer hands over TEXT plus a name
+  // SUGGESTION and can express nothing else: `SaveTextInput` has no path field, so
+  // there is no destination for it to author (HC1). Main decides where the bytes
+  // go by asking the USER in its own native dialog, sanitizes the suggestion to a
+  // basename it never joins to a directory itself, bounds the text, and performs
+  // the write. Nothing about the chosen path travels back (HC1) — the result says
+  // only whether a file was written.
+  //
+  // Deliberately NOT a host method and NOT a socket frame: it names no session,
+  // reads no registry row and spawns nothing, so it adds zero inbound wire
+  // vocabulary and never reaches a sidecar (SECURITY-MINIMUM, Addendum §control
+  // plane). It is a main-owned capability like the picker.
+  ipcMain.handle(
+    CH_HOST_SAVE_TEXT,
+    async (_e, input: unknown): Promise<SaveTextResult> => {
+      const validated = validateSaveTextRequest(input)
+      if (!validated.ok) {
+        return {
+          ok: false,
+          error: { code: validated.code, message: validated.message },
+        }
+      }
+      const parent = mainWindow ?? undefined
+      const result = parent
+        ? await dialog.showSaveDialog(parent, { defaultPath: validated.fileName })
+        : await dialog.showSaveDialog({ defaultPath: validated.fileName })
+      // A dismissal is a normal outcome the user chose, not an error to report.
+      if (result.canceled || !result.filePath) return { ok: true, saved: false }
+      try {
+        await writeFile(result.filePath, validated.text, 'utf8')
+      } catch (error) {
+        // The path is main's, not the renderer's: log it here, and hand back a
+        // message that does not carry it across the boundary.
+        process.stderr.write(`[main] save-text write failed: ${errText(error)}\n`)
+        return {
+          ok: false,
+          error: {
+            code: 'write_failed',
+            message: 'The file could not be written. Try another location.',
+          },
+        }
+      }
+      return { ok: true, saved: true }
     },
   )
 }

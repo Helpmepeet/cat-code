@@ -4,6 +4,7 @@ import {
   estimateSessionActionsMenuHeight,
   placeSessionActionsMenu,
   resolveSessionActions,
+  selectSessionsPageActions,
   SESSION_ACTION_SECTIONS,
   type SessionActionItem,
   type SessionActionKind,
@@ -246,5 +247,46 @@ describe('P4-39 — estimateSessionActionsMenuHeight', () => {
         resolveSessionActions(row(), { isActiveOpen: true }),
       ),
     ).toBeGreaterThan(estimateSessionActionsMenuHeight([first!]))
+  })
+})
+
+describe('selectSessionsPageActions (P4-35 — the Sessions-page entry point)', () => {
+  test('hides ONLY metadata, as the prototype does', () => {
+    const all = resolveSessionActions(row(), { isActiveOpen: true })
+    const page = selectSessionsPageActions(all)
+    expect(page.map(item => item.kind)).not.toContain('metadata')
+    expect(page).toHaveLength(all.length - 1)
+    // Order is otherwise untouched, so this page's menu reads like the others.
+    expect(page.map(item => item.kind)).toEqual(
+      all.map(item => item.kind).filter(kind => kind !== 'metadata'),
+    )
+  })
+
+  test('Branch and Export SURVIVE the filter for a live row', () => {
+    // The two rows P4-29 deferred: the Sessions page reaches P4-30's dialogs by
+    // reaching the shared menu's branch/export verbs, with no second menu and no
+    // second dialog layer. If this filter ever swallowed them the page would
+    // silently lose both dialogs again.
+    const page = byKind(selectSessionsPageActions(resolveSessionActions(row(), { isActiveOpen: true })))
+    expect(page.get('branch')!.enabled).toBe(true)
+    expect(page.get('export')!.enabled).toBe(true)
+  })
+
+  test('a closed row still offers both, disabled with the actionable reason', () => {
+    const page = byKind(
+      selectSessionsPageActions(
+        resolveSessionActions(row({ live: false, status: 'exited', restorable: true }), {
+          isActiveOpen: false,
+        }),
+      ),
+    )
+    for (const kind of ['branch', 'export'] as const) {
+      expect(page.get(kind)!.enabled).toBe(false)
+      expect(page.get(kind)!.reason).toContain('Open or restore this session first.')
+    }
+  })
+
+  test('an empty menu filters to an empty menu, never a throw', () => {
+    expect(selectSessionsPageActions([])).toEqual([])
   })
 })

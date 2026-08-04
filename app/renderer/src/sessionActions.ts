@@ -196,6 +196,22 @@ export function resolveSessionActions(
   ]
 }
 
+/**
+ * The prototype's `hide=['metadata']` for the Sessions-page entry point
+ * (`SessionsPage.jsx:656`). The inspector reads the ATTACHED tab, so on a manager
+ * page listing every session it would be disabled for all rows but one.
+ *
+ * A function rather than an inline filter at the mount site (where P4-29 left it),
+ * so what the Sessions page actually offers is assertable: Branch and Export
+ * SURVIVE this filter, which is how that page reaches P4-30's dialogs without a
+ * second menu or a second dialog layer (the P4-29 rows P4-35 closed).
+ */
+export function selectSessionsPageActions(
+  items: readonly SessionActionItem[],
+): SessionActionItem[] {
+  return items.filter(item => item.kind !== 'metadata')
+}
+
 /** The section order the menu renders, so dividers are stable + tested. */
 export const SESSION_ACTION_SECTIONS: readonly SessionActionSection[] = [
   'primary',

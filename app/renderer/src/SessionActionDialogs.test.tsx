@@ -104,13 +104,15 @@ test('ExportDialog: a failed export surfaces the sidecar message, never a blank 
   expect(html).not.toContain('<pre')
 })
 
-test('ExportDialog: Copy is wired to the transcript that actually arrived', () => {
+test('ExportDialog: Copy and Download are wired to the transcript that actually arrived', () => {
   let copied = 0
+  let downloaded = 0
   const el = ExportDialog({
     title: 'Refactor auth',
     fileName: 'refactor-auth.txt',
     preview: { status: 'ready', text: 'body' },
     onCopy: () => (copied += 1),
+    onDownload: () => (downloaded += 1),
     onClose: () => {},
   }) as never as { props: { footer: { props: { children: { props: Record<string, unknown> }[] } } } }
   const [, copy, download] = el.props.footer.props.children
@@ -118,34 +120,70 @@ test('ExportDialog: Copy is wired to the transcript that actually arrived', () =
   ;(copy.props.onClick as () => void)()
   expect(copied).toBe(1)
 
-  // §0 — Download is the flagged capability gap: no renderer-reachable file
-  // write exists, so it ships DISABLED with an honest reason, never as a
-  // Potemkin primary that silently does nothing.
+  // P4-35 — Download is live now that a file sink exists (`saveTextToFile`), and
+  // it is the PRIMARY, as the prototype has it.
   expect(download.props.label).toBe('Download')
-  expect(download.props.disabled).toBe(true)
-  expect(download.props.onClick).toBeUndefined()
-  expect(String(download.props.reason)).toContain('not available')
+  expect(download.props.variant).toBe('primary')
+  expect(download.props.disabled).toBeUndefined()
+  ;(download.props.onClick as () => void)()
+  expect(downloaded).toBe(1)
+  // The disabled reason and its `soon` marker are gone with the gap.
+  expect(download.props.reason).toBeUndefined()
+  expect(download.props.marker).toBeUndefined()
 })
 
-test('ExportDialog: Download stays disabled in every preview state', () => {
+test('ExportDialog: neither action is live before a transcript arrives', () => {
+  // The Potemkin case: a primary that looks pressable and saves nothing. Both
+  // buttons wait on the SAME condition and say the same honest thing.
   for (const preview of [
     { status: 'pending' } as const,
-    { status: 'ready', text: 'x' } as const,
     { status: 'failed', message: 'nope' } as const,
   ]) {
-    const html = renderToStaticMarkup(
-      <ExportDialog
-        title="T"
-        fileName="t.txt"
-        preview={preview}
-        onCopy={() => {}}
-        onClose={() => {}}
-      />,
-    )
-    expect(html).toContain('Saving to a file is not available')
-    // Visible state marker, not a hover-only tooltip.
-    expect(html).toContain('>soon<')
+    const el = ExportDialog({
+      title: 'T',
+      fileName: 't.txt',
+      preview,
+      onCopy: () => {},
+      onDownload: () => {},
+      onClose: () => {},
+    }) as never as {
+      props: { footer: { props: { children: { props: Record<string, unknown> }[] } } }
+    }
+    const [, copy, download] = el.props.footer.props.children
+    for (const button of [copy, download]) {
+      expect(button.props.disabled).toBe(true)
+      expect(button.props.onClick).toBeUndefined()
+      expect(String(button.props.reason)).toContain('still rendering')
+    }
   }
+
+  // And a ready transcript with no handler supplied stays disabled rather than
+  // rendering a live button over a missing callback.
+  const orphan = ExportDialog({
+    title: 'T',
+    fileName: 't.txt',
+    preview: { status: 'ready', text: 'x' },
+    onClose: () => {},
+  }) as never as {
+    props: { footer: { props: { children: { props: Record<string, unknown> }[] } } }
+  }
+  const [, , orphanDownload] = orphan.props.footer.props.children
+  expect(orphanDownload.props.disabled).toBe(true)
+})
+
+test('ExportDialog: the export gap marker is gone from the rendered footer', () => {
+  const html = renderToStaticMarkup(
+    <ExportDialog
+      title="T"
+      fileName="t.txt"
+      preview={{ status: 'ready', text: 'x' }}
+      onCopy={() => {}}
+      onDownload={() => {}}
+      onClose={() => {}}
+    />,
+  )
+  expect(html).not.toContain('>soon<')
+  expect(html).not.toContain('not available')
 })
 
 test('ExportDialog: the subtitle carries the title only — no invented message count', () => {

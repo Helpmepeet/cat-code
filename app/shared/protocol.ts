@@ -60,6 +60,8 @@ import type {
   CreateSessionInput,
   HostEvent,
   HostResult,
+  SaveTextInput,
+  SaveTextResult,
   SessionDescriptor,
 } from './hostApi.js'
 import type { DebugRendererSnapshot } from './debugState.js'
@@ -1515,12 +1517,13 @@ export type RunControlsSnapshotFrame = {
  *    resume uses) → `Message[]`, rendered with the session's REAL `tools`
  *    (`getTools`, not `[]` — the P1-3 defect). The rendered text rides BACK on the
  *    result frame (`exportText`) and the renderer shows it in the Export dialog
- *    (P4-30) with a Copy action. **The clipboard is the only sink**: there is no
- *    renderer-reachable file-write path in `app/`, so "save to a file" is NOT
- *    available and the dialog's Download button ships disabled. Wiring it is a
- *    control-plane change (main-process `showSaveDialog` + write behind an HC3
- *    fixed-sender channel, main validating a basename — HC1 forbids a
- *    renderer-authored path), §0-flagged to the operator by P4-30, not assumed.
+ *    (P4-30) with Copy and Download actions. **Two sinks as of P4-35** (operator
+ *    ruling 2026-07-30, `decisions/FILE-SINK.md`): the clipboard, and a file via
+ *    the `saveTextToFile` control-plane channel — main's own `showSaveDialog` plus
+ *    the write, behind an HC3 fixed sender, with main sanitizing the renderer's
+ *    name SUGGESTION to a basename because HC1 forbids a renderer-authored path.
+ *    Nothing about that changes THIS frame: the export result is unchanged, and the
+ *    file sink is a main-owned capability that adds no wire vocabulary.
  *  - `session.branch` → the engine's OWN `createFork` (`src/commands/branch/branch.ts:61`,
  *    forks the whole conversation at HEAD — no from-message-N, so the menu label
  *    ADAPTS to "Branch from HEAD…"). It writes a real fork transcript on disk and
@@ -2769,6 +2772,19 @@ export type CatCodeBridge = {
   openHistorySession(
     engineSessionId: string,
   ): Promise<HostResult<SessionDescriptor>>
+  /**
+   * P4-35 (operator ruling 2026-07-30) — write text to a file the USER chooses.
+   * The app's only file sink, and the mirror of `pickDirectory`: the renderer may
+   * REQUEST main's native save dialog, never answer it. It supplies the text plus
+   * a name SUGGESTION and cannot express a destination (HC1 — `SaveTextInput` has
+   * no path field); main sanitizes the suggestion to a basename, asks the user,
+   * writes, and returns whether a file was written. The chosen path never crosses
+   * back. `ok: true, saved: false` is a dismissed dialog, not a failure.
+   *
+   * Bounded by `MAX_SAVE_TEXT_BYTES`, its own cap — see `limits.ts` for why this
+   * channel does not ride `MAX_FRAME_BYTES` and why that cap is unchanged.
+   */
+  saveTextToFile(input: SaveTextInput): Promise<SaveTextResult>
   /**
    * Subscribe to the host's row-change stream (the session list is a projection
    * of this, never a poll loop). Returns an unsubscribe function.

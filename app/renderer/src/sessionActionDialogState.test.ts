@@ -1,7 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import {
   branchPreviewLines,
+  buildBulkExportDocument,
+  bulkExportSavedMessage,
+  describeSaveOutcome,
   exportFileName,
+  selectBulkExportOutcome,
   selectExportPreview,
   selectLatchedExportPreview,
 } from './sessionActionDialogState.js'
@@ -137,5 +141,205 @@ describe('branchPreviewLines', () => {
     const { detail } = branchPreviewLines('Refactor auth')
     expect(detail).toContain('Every message is copied')
     expect(detail).not.toMatch(/drops/i)
+  })
+})
+
+describe('describeSaveOutcome (P4-35)', () => {
+  test('a written file is reported once, in the caller-supplied wording', () => {
+    expect(describeSaveOutcome({ ok: true, saved: true }, 'Transcript saved')).toEqual({
+      message: 'Transcript saved',
+      tone: 'success',
+    })
+    expect(
+      describeSaveOutcome({ ok: true, saved: true }, 'Saved 4 sessions to one file'),
+    ).toEqual({ message: 'Saved 4 sessions to one file', tone: 'success' })
+  })
+
+  test('a dismissed save dialog says NOTHING', () => {
+    // Cancelling IS the state the user just chose; restating it back is noise.
+    expect(describeSaveOutcome({ ok: true, saved: false }, 'Transcript saved')).toBeNull()
+  })
+
+  test('a failure carries the message main sent, never a renderer guess', () => {
+    expect(
+      describeSaveOutcome(
+        {
+          ok: false,
+          error: { code: 'write_failed', message: 'The file could not be written.' },
+        },
+        'Transcript saved',
+      ),
+    ).toEqual({ message: 'The file could not be written.', tone: 'warn' })
+    expect(
+      describeSaveOutcome(
+        {
+          ok: false,
+          error: { code: 'invalid_name', message: 'That name cannot be used.' },
+        },
+        'Transcript saved',
+      ),
+    ).toEqual({ message: 'That name cannot be used.', tone: 'warn' })
+  })
+})
+
+describe('buildBulkExportDocument (P4-35)', () => {
+  test('each section is the engine text under its real title', () => {
+    expect(
+      buildBulkExportDocument([
+        { title: 'Refactor auth', text: 'User: a\nAssistant: b' },
+        { title: 'Fix the parser', text: 'User: c' },
+      ]),
+    ).toBe(
+      '=== Refactor auth ===\n\nUser: a\nAssistant: b\n\n=== Fix the parser ===\n\nUser: c',
+    )
+  })
+
+  test('the engine text is framed, never rewritten', () => {
+    const text = 'line 1\n\n  indented\ntrailing   \n'
+    expect(buildBulkExportDocument([{ title: 'T', text }])).toContain(text)
+  })
+
+  test('a session with no title gets an honest stand-in, not an empty heading', () => {
+    for (const title of [null, '', '   ']) {
+      expect(buildBulkExportDocument([{ title, text: 'x' }])).toBe(
+        '=== Untitled session ===\n\nx',
+      )
+    }
+  })
+
+  test('one section produces no separator, and none produces nothing', () => {
+    expect(buildBulkExportDocument([{ title: 'Only', text: 'x' }])).toBe(
+      '=== Only ===\n\nx',
+    )
+    expect(buildBulkExportDocument([])).toBe('')
+  })
+})
+
+describe('selectBulkExportOutcome (P4-35)', () => {
+  const request = (sessionId: string, requestId: string, title: string | null = null) => ({
+    sessionId,
+    requestId,
+    title,
+  })
+  const done = (requestId: string, exportText: string) => ({
+    requestId,
+    verb: 'export' as const,
+    ok: true,
+    message: 'Exported',
+    exportText,
+  })
+
+  test('waits while ANY leg is still unsettled', () => {
+    const requests = [request('s1', 'r1'), request('s2', 'r2')]
+    expect(selectBulkExportOutcome(requests, {})).toEqual({ status: 'waiting' })
+    expect(selectBulkExportOutcome(requests, { s1: done('r1', 'a') })).toEqual({
+      status: 'waiting',
+    })
+  })
+
+  test('settles into one section per session, in the order dispatched', () => {
+    const outcome = selectBulkExportOutcome(
+      [request('s1', 'r1', 'First'), request('s2', 'r2', 'Second')],
+      { s2: done('r2', 'b'), s1: done('r1', 'a') },
+    )
+    expect(outcome).toEqual({
+      status: 'settled',
+      failed: 0,
+      sections: [
+        { title: 'First', text: 'a' },
+        { title: 'Second', text: 'b' },
+      ],
+    })
+  })
+
+  test('a leg the sidecar could not render is COUNTED, not written into the file', () => {
+    const outcome = selectBulkExportOutcome(
+      [request('s1', 'r1', 'First'), request('s2', 'r2', 'Second')],
+      {
+        s1: done('r1', 'a'),
+        s2: {
+          requestId: 'r2',
+          verb: 'export',
+          ok: false,
+          message: 'Transcript unreadable.',
+        },
+      },
+    )
+    expect(outcome.status).toBe('settled')
+    if (outcome.status === 'settled') {
+      expect(outcome.failed).toBe(1)
+      expect(outcome.sections).toEqual([{ title: 'First', text: 'a' }])
+    }
+  })
+
+  test('a leg whose engine died counts as failed instead of stranding the batch', () => {
+    // An explicit null is the reducer recording a lifecycle reset. Waiting on it
+    // would mean the other four transcripts never reach a file.
+    const outcome = selectBulkExportOutcome(
+      [request('s1', 'r1', 'First'), request('s2', 'r2')],
+      { s1: done('r1', 'a'), s2: null },
+    )
+    expect(outcome).toEqual({
+      status: 'settled',
+      failed: 1,
+      sections: [{ title: 'First', text: 'a' }],
+    })
+  })
+
+  test('another action finishing mid-flight is never mistaken for this export', () => {
+    // The runtime state keeps only the latest result per session. A rename result
+    // landing in a leg's slot must read as pending, not as that leg completing.
+    const requests = [request('s1', 'r1')]
+    expect(
+      selectBulkExportOutcome(requests, {
+        s1: { requestId: 'other', verb: 'export', ok: true, message: 'ok', exportText: 'x' },
+      }),
+    ).toEqual({ status: 'waiting' })
+    expect(
+      selectBulkExportOutcome(requests, {
+        s1: { requestId: 'r1', verb: 'rename', ok: true, message: 'Renamed' },
+      }),
+    ).toEqual({ status: 'waiting' })
+  })
+
+  test('every leg failing settles with no sections, so the caller can say so', () => {
+    const outcome = selectBulkExportOutcome([request('s1', 'r1')], {
+      s1: { requestId: 'r1', verb: 'export', ok: false, message: 'nope' },
+    })
+    expect(outcome).toEqual({ status: 'settled', failed: 1, sections: [] })
+  })
+
+  test('an empty batch is already settled', () => {
+    expect(selectBulkExportOutcome([], {})).toEqual({
+      status: 'settled',
+      failed: 0,
+      sections: [],
+    })
+  })
+})
+
+describe('bulkExportSavedMessage (P4-35)', () => {
+  test('reports the count, and pluralizes it', () => {
+    expect(bulkExportSavedMessage(1, 0)).toBe('Saved 1 session to one file')
+    expect(bulkExportSavedMessage(4, 0)).toBe('Saved 4 sessions to one file')
+  })
+
+  test('names a shortfall only when there is one', () => {
+    expect(bulkExportSavedMessage(4, 0)).not.toContain('of')
+    expect(bulkExportSavedMessage(2, 3)).toBe(
+      'Saved 2 of 5 sessions: the rest could not be read',
+    )
+  })
+
+  test('carries no em dash and no engineering vocabulary (operator rules)', () => {
+    for (const [ok, failed] of [
+      [1, 0],
+      [4, 0],
+      [2, 3],
+    ]) {
+      const message = bulkExportSavedMessage(ok, failed)
+      expect(message).not.toContain('—')
+      expect(message).not.toMatch(/verb|frame|sidecar|requestId/i)
+    }
   })
 })
