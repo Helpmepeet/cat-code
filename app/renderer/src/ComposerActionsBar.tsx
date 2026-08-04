@@ -901,11 +901,13 @@ function ContextChip({
   usage,
   account,
   breakdown,
+  onRequestBreakdown,
   faceProps,
 }: {
   usage: ContextUsage
   account: AccountStatus | null
   breakdown: ContextBreakdownSnapshot | null
+  onRequestBreakdown?: () => void
   faceProps?: ComposerFaceProps
 }) {
   const { open, setOpen, ref, triggerRef } = usePopover()
@@ -918,7 +920,15 @@ function ContextChip({
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={`Context ${usage.percentUsed}% used, open usage`}
-        onClick={() => setOpen(value => !value)}
+        onClick={() => {
+          setOpen(value => {
+            // Recompute on the OPENING edge only. The analysis costs ~10
+            // token-count requests, so it is paid when the panel is actually
+            // being read, never on a close and never on a turn nobody watched.
+            if (!value) onRequestBreakdown?.()
+            return !value
+          })
+        }}
         className="flex shrink-0 items-center rounded-md"
       >
         <ContextGauge usage={usage} />
@@ -954,6 +964,7 @@ export function ComposerActionsBar({
   onManageAccounts,
   contextUsage,
   contextBreakdown = null,
+  onRequestContextBreakdown,
   toolbarRef,
   onFocusComposer,
 }: {
@@ -998,6 +1009,8 @@ export function ComposerActionsBar({
    * sidecar's first `context-breakdown.snapshot` (one turn boundary).
    */
   contextBreakdown?: ContextBreakdownSnapshot | null
+  /** Opening the usage popover asks the sidecar to recompute the breakdown. */
+  onRequestContextBreakdown?: () => void
   /** Feature #4 — the toolbar's DOM node, so the composer keydown (App.tsx) can
    * move focus into the first face via {@link focusFirstComposerFace}. */
   toolbarRef?: Ref<HTMLDivElement>
@@ -1274,6 +1287,7 @@ export function ComposerActionsBar({
               usage={contextUsage}
               account={account}
               breakdown={contextBreakdown}
+              onRequestBreakdown={onRequestContextBreakdown}
               faceProps={faceProps('context')}
             />
           ) : null}

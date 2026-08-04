@@ -24,6 +24,7 @@ import type {
   RemoteVerbMessage,
   RunControlVerbMessage,
   SessionActionVerbMessage,
+  ContextBreakdownVerbMessage,
   ServerFrame,
   SessionId,
   SessionsCatalogSnapshot,
@@ -58,6 +59,7 @@ const CH_WORKSPACE_TRUST_VERB = 'catcode:workspace-trust-verb'
 const CH_AGENT_MODE_SET = 'catcode:agent-mode-set'
 const CH_TASK_CONTROL_VERB = 'catcode:task-control-verb'
 const CH_RUN_CONTROL_VERB = 'catcode:run-control-verb'
+const CH_CONTEXT_BREAKDOWN_VERB = 'catcode:context-breakdown-verb'
 const CH_SESSION_ACTION_VERB = 'catcode:session-action-verb'
 const CH_REMOTE_SETTINGS_VERB = 'catcode:remote-settings-verb'
 const CH_SETTINGS_VERB = 'catcode:settings-verb'
@@ -165,6 +167,19 @@ const bridge: CatCodeBridge = {
     const payload = { sessionId, verb }
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_RUN_CONTROL_VERB, payload)
+  },
+  contextBreakdownVerb(
+    sessionId: SessionId,
+    verb: ContextBreakdownVerbMessage,
+  ): void {
+    // HC3 fixed sender for the on-demand context-breakdown refresh. The lightest
+    // of the verbs: the payload is a requestId and nothing else, because the
+    // analysis reads engine-side state only. main light-coerces the type and the
+    // sidecar is the trust boundary (Zod schema). Nothing crosses back but the
+    // existing read-only snapshot broadcast.
+    const payload = { sessionId, verb }
+    sendGuard.assertAllowed(payload)
+    ipcRenderer.send(CH_CONTEXT_BREAKDOWN_VERB, payload)
   },
   sessionActionVerb(sessionId: SessionId, verb: SessionActionVerbMessage): void {
     // P4-6b — HC3 fixed sender for the Sessions ⋯ mutating verbs (rename / export /

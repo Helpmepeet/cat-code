@@ -422,6 +422,37 @@ export type SettingsSetValueMessage = {
 export type SettingsVerbMessage = SettingsSetValueMessage
 
 /**
+ * Ask the sidecar to (re)compute this session's context breakdown, answered by a
+ * `context-breakdown.snapshot` (there is no dedicated result frame — the snapshot
+ * IS the answer, and it broadcasts, so every attached pane refreshes together).
+ *
+ * ON DEMAND because the analysis is genuinely expensive: `analyzeContextUsage`
+ * fans out to ~10 `count_tokens` requests with a Haiku sampling fallback, and on
+ * a `gpt-*` session `getAnthropicClient` re-derives the provider from the model
+ * string, so those fail to the Codex path and bill the Anthropic fallback. Paying
+ * that per turn, for a panel that may never be opened, is what this frame exists
+ * to avoid — the terminal's `/context` is likewise user-initiated.
+ *
+ * Carries NO renderer-authored state beyond a correlation id: the analysis reads
+ * only engine-side session state, so there is nothing here for the sidecar to
+ * trust. Rate limiting is the generic inbound cap (T7) plus the sidecar's own
+ * in-flight coalescing, so a renderer that spams this cannot multiply the work.
+ */
+export const CONTEXT_BREAKDOWN_VERB_TYPES = [
+  'context-breakdown.request',
+] as const
+
+export type ContextBreakdownVerbType =
+  (typeof CONTEXT_BREAKDOWN_VERB_TYPES)[number]
+
+export type ContextBreakdownRequestMessage = {
+  type: 'context-breakdown.request'
+  requestId: string
+}
+
+export type ContextBreakdownVerbMessage = ContextBreakdownRequestMessage
+
+/**
  * IDLE-PARK inbound frame (decisions/IDLE-PARK.md §2/§3). App-owned vocabulary
  * (NOT part of the engine's shared `appClientMessageSchema`); the sidecar
  * validates it with its own local schema and OWNS the park gate + latch. It is
@@ -455,6 +486,7 @@ export type SidecarClientMessage =
   | TaskControlVerbMessage
   | RunControlVerbMessage
   | SessionActionVerbMessage
+  | ContextBreakdownVerbMessage
   | AppParkMessage
 
 /**
@@ -2840,6 +2872,11 @@ export type CatCodeBridge = {
    * engine session id. No engine object, no path, no token crosses.
    */
   sessionActionVerb(sessionId: SessionId, verb: SessionActionVerbMessage): void
+  /** Ask for a fresh context breakdown; answered by a `context-breakdown.snapshot`. */
+  contextBreakdownVerb(
+    sessionId: SessionId,
+    verb: ContextBreakdownVerbMessage,
+  ): void
   /**
    * P4-13 — request a RemoteSettings verb (bridge toggle or direct-connect) on
    * the addressed session's sidecar. The outcome arrives as a

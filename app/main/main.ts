@@ -115,6 +115,7 @@ import {
   REMOTE_VERB_TYPES,
   RUN_CONTROL_VERB_TYPES,
   SESSION_ACTION_VERB_TYPES,
+  CONTEXT_BREAKDOWN_VERB_TYPES,
   SETTINGS_VERB_TYPES,
   TASK_CONTROL_VERB_TYPES,
   WORKSPACE_TRUST_VERB_TYPES,
@@ -129,6 +130,8 @@ import {
   type ServerFrame,
   type SessionActionVerbMessage,
   type SessionActionVerbType,
+  type ContextBreakdownVerbType,
+  type ContextBreakdownVerbMessage,
   type SessionId,
   type SessionsCatalogSnapshot,
   type SettingsVerbMessage,
@@ -153,6 +156,7 @@ const CH_WORKSPACE_TRUST_VERB = 'catcode:workspace-trust-verb'
 const CH_AGENT_MODE_SET = 'catcode:agent-mode-set'
 const CH_TASK_CONTROL_VERB = 'catcode:task-control-verb'
 const CH_RUN_CONTROL_VERB = 'catcode:run-control-verb'
+const CH_CONTEXT_BREAKDOWN_VERB = 'catcode:context-breakdown-verb'
 const CH_SESSION_ACTION_VERB = 'catcode:session-action-verb'
 const CH_REMOTE_SETTINGS_VERB = 'catcode:remote-settings-verb'
 const CH_SETTINGS_VERB = 'catcode:settings-verb'
@@ -1049,6 +1053,28 @@ function registerIpcHandlers(): void {
         return
       }
       forward(arg.sessionId, arg.verb as RunControlVerbMessage)
+    },
+  )
+
+  ipcMain.on(
+    CH_CONTEXT_BREAKDOWN_VERB,
+    (_e, arg: { sessionId: SessionId; verb: unknown }) => {
+      if (typeof arg?.sessionId !== 'string') return
+      // Light UX coercion only; the SIDECAR is the trust boundary and fully
+      // re-validates. Drop any frame whose `type` is not the breakdown request
+      // fail-closed. The renderer authors the `requestId` for correlation (a UX
+      // field, not a security one; the sidecar bounds it), and there is no other
+      // field to coerce — the analysis takes no renderer input.
+      const verb = arg.verb as { type?: unknown } | null | undefined
+      if (
+        typeof verb?.type !== 'string' ||
+        !CONTEXT_BREAKDOWN_VERB_TYPES.includes(
+          verb.type as ContextBreakdownVerbType,
+        )
+      ) {
+        return
+      }
+      forward(arg.sessionId, arg.verb as ContextBreakdownVerbMessage)
     },
   )
 

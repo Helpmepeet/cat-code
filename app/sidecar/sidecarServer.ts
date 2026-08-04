@@ -84,6 +84,7 @@ import {
   PROTOCOL_VERSION,
   RUN_CONTROL_VERB_TYPES,
   SESSION_ACTION_VERB_TYPES,
+  CONTEXT_BREAKDOWN_VERB_TYPES,
   TASK_CONTROL_VERB_TYPES,
   type AccountVerbMessage,
   type AskUserQuestionAnswerMessage,
@@ -971,6 +972,17 @@ export class SidecarServer {
       (RUN_CONTROL_VERB_TYPES as readonly string[]).includes(messageType)
     ) {
       this.handleRunControlVerb(connection, frame.message)
+      return
+    }
+
+    // The context-breakdown request — app-owned vocabulary, validated by a
+    // sidecar-LOCAL schema. It takes no renderer input, so acceptance decides
+    // only WHETHER to spend the analysis, never what it computes over.
+    if (
+      typeof messageType === 'string' &&
+      (CONTEXT_BREAKDOWN_VERB_TYPES as readonly string[]).includes(messageType)
+    ) {
+      this.handleContextBreakdownRequest(frame.message)
       return
     }
 
@@ -2803,6 +2815,24 @@ export class SidecarServer {
    * sends nothing at all rather than an empty breakdown, so the popover keeps its
    * aggregate row instead of rendering a zeroed legend.
    */
+  /**
+   * Renderer asked for a fresh breakdown (the popover was opened). Validate,
+   * then run the same broadcast the attach path uses — the snapshot IS the
+   * answer, so there is no separate result frame to correlate.
+   *
+   * Fails SILENTLY on an invalid frame rather than erroring back: this is a
+   * read-only refresh with no user-visible commitment, and the popover already
+   * degrades gracefully to its aggregate row when no snapshot arrives.
+   */
+  private handleContextBreakdownRequest(message: unknown): void {
+    const parsed = contextBreakdownMessageSchema.safeParse(message)
+    if (!parsed.success) {
+      this.log('[sidecar] context-breakdown.request rejected (invalid frame)')
+      return
+    }
+    void this.broadcastContextBreakdown()
+  }
+
   private async broadcastContextBreakdown(): Promise<void> {
     if (!this.contextBreakdown || this.connections.size === 0) {
       return
@@ -3306,6 +3336,10 @@ function checkStrictKeys(message: unknown): string | null {
     // P4-19 settings write verb (app-owned; see SETTINGS_VERB_TYPES). The exact
     // renderer-facing contract; any other key is rejected before the Zod parse.
     ['settings.setValue', new Set(['type', 'requestId', 'source', 'key', 'value'])],
+    // Context-breakdown refresh (app-owned; see CONTEXT_BREAKDOWN_VERB_TYPES).
+    // The renderer authors NOTHING but a correlation id: the analysis reads
+    // engine-side session state only. Any other key is rejected fail-closed.
+    ['context-breakdown.request', new Set(['type', 'requestId'])],
     ['app.ping', new Set(['type', 'nonce'])],
   ])
   const allowedOptionKeys = new Set(['isMeta', 'goalSnapshot'])
@@ -3490,6 +3524,18 @@ const accountVerbMessageSchema = z.discriminatedUnion('type', [
  */
 const workspaceTrustMessageSchema = z.object({
   type: z.literal('workspace.trust'),
+  requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+})
+
+/**
+ * Sidecar-LOCAL schema for the context-breakdown request (protocol.ts:
+ * CONTEXT_BREAKDOWN_VERB_TYPES). App-owned, NOT part of the engine's shared
+ * schema. Structural only, and there is nothing else to check: the frame carries
+ * no renderer-authored state at all — the analysis reads engine-side session
+ * state exclusively — so a bounded `requestId` is the whole surface.
+ */
+const contextBreakdownMessageSchema = z.object({
+  type: z.literal('context-breakdown.request'),
   requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
 })
 

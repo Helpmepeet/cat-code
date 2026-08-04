@@ -2443,6 +2443,20 @@ export function App() {
 	            fastMode={panelRunControls?.fast.active ?? false}
 	            runControls={panelRunControls}
 	            contextBreakdown={panelContextBreakdown}
+	            onRequestContextBreakdown={() => {
+	              // Fired when the usage popover opens. Best-effort: the analysis is
+	              // expensive and its absence degrades to the aggregate row, so a
+	              // transport failure here must not raise a transport-error banner
+	              // the way a user-initiated WRITE verb does.
+	              try {
+	                getBridge().contextBreakdownVerb(sessionId, {
+	                  type: 'context-breakdown.request',
+	                  requestId: newRequestId(),
+	                })
+	              } catch {
+	                // no-op: the popover keeps whatever snapshot it already has
+	              }
+	            }}
             slashCatalog={panelSlashCatalog}
 	            onSetModel={model => {
 	              try {
@@ -3466,6 +3480,7 @@ export function SessionPane({
   fastMode,
   runControls,
   contextBreakdown = null,
+  onRequestContextBreakdown,
   slashCatalog = EMPTY_SLASH_CATALOG,
   onSetModel,
   onSetEffort,
@@ -4432,6 +4447,7 @@ export function SessionPane({
           onManageAccounts={onManageAccounts}
           contextUsage={contextUsage}
           contextBreakdown={contextBreakdown}
+          onRequestContextBreakdown={onRequestContextBreakdown}
           toolbarRef={actionBarRef}
           onFocusComposer={() => composerRef.current?.focus()}
         />
@@ -4718,8 +4734,10 @@ type SessionPaneProps = {
   fastMode: boolean
   /** P4-24c — the live run-controls snapshot (current + real picker options + availability). */
   runControls?: RunControlsSnapshot | null
-  /** Per-category context occupancy for the donut popover (turn-boundary seam). */
+  /** Per-category context occupancy for the donut popover. */
   contextBreakdown?: ContextBreakdownSnapshot | null
+  /** Ask the sidecar to recompute the breakdown (the popover was opened). */
+  onRequestContextBreakdown?: () => void
   /** The session's rich slash-command catalog (name + description + arg hint) for
    * the composer picker; empty/absent falls the picker back to the names-only list. */
   slashCatalog?: readonly SlashCatalogEntry[]
