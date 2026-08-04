@@ -1,4 +1,4 @@
-import { contextTone, type ContextUsage } from './contextUsage.js'
+import { pressureTone, type ContextUsage } from './contextUsage.js'
 import { toneClasses } from './tone.js'
 
 /**
@@ -27,7 +27,7 @@ const CIRCUMFERENCE = 2 * Math.PI * RADIUS
 
 export function ContextGauge({ usage }: { usage: ContextUsage }) {
   const { percentUsed, usedTokens, contextWindow } = usage
-  const tone = toneClasses(contextTone(percentUsed)).text
+  const tone = toneClasses(pressureTone(percentUsed)).text
   const arcLength = (percentUsed / 100) * CIRCUMFERENCE
   return (
     <span

@@ -80,19 +80,33 @@ export type ContextBreakdownRow = {
 }
 
 /**
- * Engine theme key → the prototype's legend hue (`Surfaces.jsx:517-531` paints
- * one colour per category). Unknown keys fall back to a neutral swatch rather
- * than dropping the row: a category the engine adds later must still be visible
- * and still counted, just uncoloured.
+ * Engine theme key → the prototype's legend hue, matched CATEGORY BY CATEGORY
+ * against its fixture (`data.js:3316-3322`), which is the one place the
+ * prototype states a colour per context category:
+ *
+ *   System prompt #a1a1aa · Tool definitions #60a5fa · Messages #f472b6 ·
+ *   Memory #c084fc · MCP tools #22d3ee · Agents #5eead4 · Skills #fbbf24
+ *
+ * These are CATEGORY IDENTITY colours, not status or brand tones, which is why
+ * they are fixed hexes rather than `--tone-*` / `--accent` tokens: they must not
+ * repaint when the operator switches accent, and three of them (purple, cyan,
+ * teal) have no token at all. Static arbitrary classes are the sanctioned form
+ * here — only INTERPOLATED ones silently no-op under Tailwind v4.
+ *
+ * Reading a status token instead is what made `Messages` render alarm-red on
+ * first draft, for a category that is simply the conversation.
+ *
+ * Unknown keys fall back to a neutral swatch rather than dropping the row: a
+ * category the engine adds later must still be visible and still counted.
  */
 const CATEGORY_SWATCH: Record<string, string> = {
-  promptBorder: 'bg-tone-info',
-  inactive: 'bg-white/25',
-  cyan_FOR_SUBAGENTS_ONLY: 'bg-tone-good',
-  permission: 'bg-accent-soft',
-  claude: 'bg-accent',
-  warning: 'bg-tone-warn',
-  purple_FOR_SUBAGENTS_ONLY: 'bg-tone-danger',
+  promptBorder: 'bg-[#a1a1aa]', // System prompt
+  inactive: 'bg-[#60a5fa]', // System tools (the prototype's "Tool definitions")
+  purple_FOR_SUBAGENTS_ONLY: 'bg-[#f472b6]', // Messages
+  claude: 'bg-[#c084fc]', // Memory files
+  cyan_FOR_SUBAGENTS_ONLY: 'bg-[#22d3ee]', // MCP tools
+  permission: 'bg-[#5eead4]', // Custom agents
+  warning: 'bg-[#fbbf24]', // Skills
 }
 
 const FALLBACK_SWATCH = 'bg-white/25'

@@ -83,17 +83,22 @@ export type ContextUsage = {
 }
 
 /**
- * Context pressure → tone, on the prototype's OWN ladder (`ContextChip`,
- * `Surfaces.jsx:474`): `>= 90` danger, `>= 70` warn, otherwise the pink brand
- * hue. Deliberately NOT `usageTone` (`accountsPageModel.ts:94`), which is the
- * ACCOUNT-quota ladder and paints its healthy band green at a 65% break — using
- * it here printed a green `34%` inside the popover opened by a pink donut.
- * Every surface reading context fullness shares this one function so the face
- * and its popover can never disagree.
+ * Pressure → tone on the prototype's ladder: `>= 90` danger, `>= 70` warn,
+ * otherwise the pink brand hue.
+ *
+ * ONE ladder serves the whole context chip. `ContextChip` (`Surfaces.jsx:474`,
+ * the donut + its Context row) and `PlanUsageRow` (`:386`, the 5-hour and weekly
+ * rows) are the identical expression in the prototype, so the popover never
+ * shows two percentages coloured by different rules.
+ *
+ * Deliberately NOT `usageTone` (`accountsPageModel.ts:94`), the ACCOUNT-quota
+ * ladder, whose healthy band is green and whose break is 65. Reading it here
+ * printed a green `34%` inside a popover opened by a pink donut, and green plan
+ * rows under a pink context row.
  */
-export function contextTone(percentUsed: number): Tone {
-  if (percentUsed >= 90) return 'danger'
-  if (percentUsed >= 70) return 'warn'
+export function pressureTone(percent: number): Tone {
+  if (percent >= 90) return 'danger'
+  if (percent >= 70) return 'warn'
   return 'accent'
 }
 

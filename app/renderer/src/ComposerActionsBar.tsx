@@ -11,7 +11,7 @@ import {
 } from './accountsPageModel.js'
 import { handleMenuRovingKeyDown, usePopover } from './composerPopover.js'
 import { ContextGauge } from './ContextGauge.js'
-import { contextTone, type ContextUsage } from './contextUsage.js'
+import { pressureTone, type ContextUsage } from './contextUsage.js'
 import {
   selectBreakdownRows,
   selectFreeTokens,
@@ -655,7 +655,11 @@ function PlanUsageRow({
   reset: string | null
 }) {
   const p = pct ?? 0
-  const t = toneClasses(usageTone(pct))
+  // This popover paints every percentage on ONE ladder (Surfaces.jsx:386 and
+  // :474 are the same expression), so a plan row cannot read green under a pink
+  // Context row. The accounts PAGE keeps `usageTone` — the prototype gives that
+  // surface its own scheme (`AcctUsageBar`, Surfaces.jsx:548).
+  const t = toneClasses(pressureTone(p))
   return (
     <div className="flex flex-col gap-1.5">
       <div className="text-[12px] font-semibold text-text-primary">{label}</div>
@@ -697,7 +701,7 @@ export function ContextUsagePanel({
 }) {
   const { percentUsed, usedTokens, contextWindow } = usage
   // Context fullness, NOT account quota — the same ladder the donut face reads.
-  const t = toneClasses(contextTone(percentUsed))
+  const t = toneClasses(pressureTone(percentUsed))
   const rows = selectBreakdownRows(breakdown)
   const freeTokens = selectFreeTokens(breakdown)
   const showPlan =
@@ -762,7 +766,7 @@ export function ContextUsagePanel({
                 <span className="flex items-center gap-1.5 text-[11px] text-text-muted">
                   <span
                     aria-hidden
-                    className={`size-[7px] shrink-0 rounded-sm ${row.swatch}`}
+                    className={`size-[7px] shrink-0 rounded-[2px] ${row.swatch}`}
                   />
                   {row.label}
                 </span>

@@ -84,7 +84,8 @@ test('an unknown colour key falls back to a static swatch class', () => {
   const rows = selectBreakdownRows(BREAKDOWN)
   const future = rows.find(r => r.label === 'Future thing')
   expect(future?.swatch).toBe('bg-white/25')
-  expect(rows.find(r => r.label === 'System prompt')?.swatch).toBe('bg-tone-info')
+  // The prototype's per-category identity hue (data.js:3316), not a status tone.
+  expect(rows.find(r => r.label === 'System prompt')?.swatch).toBe('bg-[#a1a1aa]')
   for (const row of rows) {
     expect(row.swatch).not.toContain('${')
   }

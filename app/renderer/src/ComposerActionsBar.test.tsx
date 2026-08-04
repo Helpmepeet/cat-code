@@ -635,6 +635,22 @@ test('ContextUsagePanel shows Plan usage (5h + weekly) plus the real Context tot
   expect(html).not.toContain('Free')
 })
 
+// One ladder for the whole popover (Surfaces.jsx:386 == :474). A plan row toned
+// by the account-quota ladder read green under a pink Context row.
+test('ContextUsagePanel tones plan rows on the same ladder as the Context row', () => {
+  const html = renderToStaticMarkup(
+    <ContextUsagePanel
+      usage={USAGE}
+      account={account({ usagePrimary: 10, usageWeekly: 75, usageResetAt: null })}
+    />,
+  )
+  expect(html).not.toContain('tone-good')
+  // 10% and the 21% Context row sit in the accent band; 75% crosses into warn.
+  expect(html).toContain('text-accent')
+  expect(html).toContain('bg-accent')
+  expect(html).toContain('tone-warn')
+})
+
 test('ContextUsagePanel renders the per-category breakdown, legend and Free row', () => {
   const html = renderToStaticMarkup(
     <ContextUsagePanel
