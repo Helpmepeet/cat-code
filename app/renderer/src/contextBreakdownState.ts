@@ -4,9 +4,9 @@
  * recipe this copies): a reducer over the read-only frame plus a read-time
  * selector, kept OUT of `transcriptProjector.ts`.
  *
- * The seam is live but coarse: the sidecar re-broadcasts once per turn boundary,
- * because that is the only moment per-category occupancy can move. Between turns
- * the popover reads the last snapshot rather than an estimate.
+ * The seam is coarse on purpose: the sidecar computes on attach and when the
+ * popover asks, not per turn, because the analysis is expensive. Between those
+ * points the popover reads the last snapshot rather than an estimate.
  */
 
 import type {
@@ -112,20 +112,33 @@ const CATEGORY_SWATCH: Record<string, string> = {
 const FALLBACK_SWATCH = 'bg-white/25'
 
 /**
+ * Categories that are RESERVED space rather than a content type. The engine reuses
+ * the `inactive` colour key for both `System tools` and `Compact buffer`, so keying
+ * on the colour alone painted two unrelated legend rows the same blue. Reserved
+ * space gets the neutral swatch instead.
+ */
+const RESERVED_CATEGORY_LABELS = new Set(['Compact buffer'])
+
+/**
  * Below this share of the reported usage, the breakdown is treated as FAILED and
  * rendered as nothing at all.
  *
- * The engine drops any category whose token count came back empty, so when its
- * counters are unavailable the analysis does not error — it returns a technically
- * valid snapshot that accounts for almost none of the context. That shipped as a
- * panel reading `Skills 2.6k` and `Free 318k` under a header of `71% · 262k`,
- * three mutually contradictory numbers. Showing nothing is the honest degrade.
+ * This is a BACKSTOP, not the primary defence. The original collapse — every
+ * API-counted category dropped, leaving a panel reading `Skills 2.6k` and
+ * `Free 318k` under a header of `71% · 262k` — is fixed at the source: the engine
+ * now falls back to a local estimate rather than returning nothing
+ * (`countTokensForDisplay`, `src/utils/analyzeContext.ts`). What remains is the
+ * possibility of a future counter failing in a way that empties categories again.
  *
- * Deliberately loose: an estimate legitimately disagrees with the API-derived
- * header by a wide margin, and a partial breakdown is still useful. This catches
- * collapse, not imprecision.
+ * The threshold is deliberately FAR below 1, because the two numbers have
+ * different bases and are expected to disagree: `usedTokens` is the API's
+ * fresh-input count (input + cache_creation, EXCLUDING cache reads,
+ * `analyzeContext.ts` → `getFreshInputTokens`), while the categories may be local
+ * estimates. An earlier 0.5 sat right where a Codex session legitimately lands,
+ * so a correct breakdown flickered in and out depending on how JSON-heavy the
+ * transcript was. Only a near-total collapse should suppress the panel.
  */
-const MIN_ACCOUNTED_SHARE = 0.5
+const MIN_ACCOUNTED_SHARE = 0.15
 
 /**
  * Whether the analysis accounted for enough of the reported usage to be worth
@@ -161,7 +174,9 @@ export function selectBreakdownRows(
     .map(category => ({
       label: category.label,
       tokens: category.tokens,
-      swatch: CATEGORY_SWATCH[category.colorKey] ?? FALLBACK_SWATCH,
+      swatch: RESERVED_CATEGORY_LABELS.has(category.label)
+        ? FALLBACK_SWATCH
+        : (CATEGORY_SWATCH[category.colorKey] ?? FALLBACK_SWATCH),
       percentOfWindow: Math.min(
         100,
         (category.tokens / snapshot.contextWindow) * 100,

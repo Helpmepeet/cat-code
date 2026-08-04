@@ -403,7 +403,7 @@ function FastChip({
       title={title}
       disabled={disabled}
       onClick={() => onToggle(!active)}
-      className={`${FAST_FACE} ${active ? 'text-tone-warn hover:text-[#fde68a]' : 'text-[#3f3f46] hover:text-[#71717a]'} disabled:opacity-40`}
+      className={`${FAST_FACE} border ${active ? 'border-tone-warn/30 bg-tone-warn/10 text-tone-warn hover:bg-tone-warn/15 hover:text-[#fde68a]' : 'border-transparent text-[#3f3f46] hover:text-[#71717a]'} disabled:opacity-40`}
     >
       <FastGlyph active={active} />
     </button>
@@ -686,9 +686,9 @@ function PlanUsageRow({
  * The per-category BREAKDOWN below the aggregate row (the prototype's stacked bar +
  * legend + Free, Surfaces.jsx:517-537) is the `context-breakdown.snapshot` seam,
  * carrying the engine's OWN `analyzeContextUsage` output. It was deferred until
- * 2026-08-04 for want of exactly that frame. It arrives at the turn boundary, so a
- * session that has not completed a turn renders the aggregate row alone — absent,
- * never fabricated. */
+ * 2026-08-04 for want of exactly that frame. It arrives on attach and whenever this
+ * popover is opened, so a session with nothing to analyse yet renders the aggregate
+ * row alone — absent, never fabricated. */
 export function ContextUsagePanel({
   usage,
   account,
@@ -696,7 +696,7 @@ export function ContextUsagePanel({
 }: {
   usage: ContextUsage
   account: AccountStatus | null
-  /** Per-category occupancy, absent until the first turn boundary reports one. */
+  /** Per-category occupancy, absent until the sidecar has produced one. */
   breakdown?: ContextBreakdownSnapshot | null
 }) {
   const { percentUsed, usedTokens, contextWindow } = usage
@@ -921,13 +921,14 @@ function ContextChip({
         aria-expanded={open}
         aria-label={`Context ${usage.percentUsed}% used, open usage`}
         onClick={() => {
-          setOpen(value => {
-            // Recompute on the OPENING edge only. The analysis costs ~10
-            // token-count requests, so it is paid when the panel is actually
-            // being read, never on a close and never on a turn nobody watched.
-            if (!value) onRequestBreakdown?.()
-            return !value
-          })
+          // Recompute on the OPENING edge only: the analysis costs ~10 token
+          // counts, so it is paid when the panel is actually being read, never on
+          // a close. Deliberately OUTSIDE the `setOpen` updater — React 19
+          // StrictMode double-invokes updaters in dev (`main.tsx:24`), which fired
+          // two requests per open, and the second landed mid-analysis and queued a
+          // full rerun.
+          if (!open) onRequestBreakdown?.()
+          setOpen(value => !value)
         }}
         className="flex shrink-0 items-center rounded-md"
       >
@@ -1006,7 +1007,7 @@ export function ComposerActionsBar({
   contextUsage: ContextUsage | null
   /**
    * Per-category context occupancy for the donut popover. Null until the
-   * sidecar's first `context-breakdown.snapshot` (one turn boundary).
+   * sidecar's first `context-breakdown.snapshot`.
    */
   contextBreakdown?: ContextBreakdownSnapshot | null
   /** Opening the usage popover asks the sidecar to recompute the breakdown. */

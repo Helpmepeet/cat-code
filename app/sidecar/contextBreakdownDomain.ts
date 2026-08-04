@@ -17,11 +17,10 @@
  * rather than the raw transcript. Skipping them overcounts by however much was
  * compacted away.
  *
- * The one deliberate difference from `/context`: messages come from
- * `loadConversationForResume` (the loader the sidecar's resume and its export
- * verb already use) rather than a live REPL array, because the sidecar has no
- * REPL. That is a turn-boundary read of the same transcript the engine just
- * wrote, which is why this seam is computed at turn end and not mid-stream.
+ * The one deliberate difference from `/context`: messages are re-read from the
+ * persisted transcript rather than a live REPL array, because the sidecar has no
+ * REPL. That is a read of the same transcript the engine just wrote, so it is
+ * current as of the last completed turn.
  *
  * Failure posture: display = degrade gracefully. `snapshot()` returns null on any
  * failure (no transcript yet, an analyzer throw) and the popover simply renders
@@ -32,7 +31,6 @@ import type { UUID } from 'crypto'
 import type { ContextBreakdownSnapshot } from '../shared/protocol.js'
 import { getSessionId } from '../../src/bootstrap/state.js'
 import type { Tools, ToolPermissionContext } from '../../src/Tool.js'
-import type { ToolUseContext } from '../../src/Tool.js'
 import type { AgentDefinitionsResult } from '../../src/tools/AgentTool/loadAgentsDir.js'
 import { analyzeContextUsage } from '../../src/utils/analyzeContext.js'
 import { deserializeMessages } from '../../src/utils/conversationRecovery.js'
@@ -111,14 +109,13 @@ export function createRealContextBreakdownExecutor(deps: {
         deps.tools,
         deps.agentDefinitions,
         undefined, // terminalWidth — grid layout only, unused here
-        // `analyzeContextUsage` reads exactly three fields off this argument:
-        // `options.mcpClients` (analyzeContext.ts:958) plus
-        // `options.customSystemPrompt` (:960, :971) and `options.appendSystemPrompt`
-        // (:977), which it forwards into `buildEffectiveSystemPrompt`. The sidecar's
-        // engine config sets none of them (`sessionController.ts:373-393`, and
-        // `mcpClients` is `[]` there), so an empty options object is the honest
-        // value for all three rather than a stub that disagrees with the runtime.
-        { options: {} as ToolUseContext['options'] },
+        // Omitted, not stubbed. `analyzeContextUsage` reads exactly three fields off
+        // this argument — `options.mcpClients`, `options.customSystemPrompt` and
+        // `options.appendSystemPrompt` — all through `?.`, and substitutes the same
+        // empty defaults when the argument is absent. The sidecar's engine config
+        // sets none of them (`sessionController.ts:373-393`, `mcpClients: []`), so
+        // `undefined` is exactly as faithful as an empty object and costs no cast.
+        undefined,
         undefined, // mainThreadAgentDefinition
         apiView, // originals, for API-usage extraction
       )

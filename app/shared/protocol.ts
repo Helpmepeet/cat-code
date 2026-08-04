@@ -1009,12 +1009,13 @@ export type MemorySnapshotFrame = {
  * (`src/utils/analyzeContext.ts:923`) over this session's real messages, tools,
  * agent definitions and permission context — never re-derived in the sidecar.
  *
- * OUTBOUND ONLY, and deliberately so. The obvious shape for "open the popover,
- * ask for a breakdown" is a request verb, but that would widen the inbound
- * vocabulary (SECURITY-MINIMUM §2 R2) to buy nothing: the analysis takes no
- * renderer input, so a push carries exactly the same information with no new
- * frame to validate. It rides the turn boundary, which is also the only moment
- * the numbers can change.
+ * Pushed on attach, and on request thereafter (`CONTEXT_BREAKDOWN_VERB_TYPES`).
+ * It was outbound-only at first, on the argument that a push carries the same
+ * information with no new frame to validate. That was wrong on cost, which is what
+ * decides here: the analysis is expensive enough that pushing it per turn spends
+ * real money on a panel that may never be opened, so the trigger has to be the
+ * user opening it. The request frame carries no renderer state, so the inbound
+ * surface it adds is a bounded id and nothing else.
  *
  * Category `label` and `tokens` are the engine's own (`analyzeContext.ts:1039`
  * onward) and are passed through verbatim — the sidecar never renames a category

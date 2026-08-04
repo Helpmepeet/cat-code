@@ -140,13 +140,14 @@ test('a collapsed analysis renders no rows and no Free, rather than a wrong pane
 })
 
 test('a complete analysis is trusted even when the estimate undershoots the header', () => {
-  // A local estimate legitimately disagrees with the API-derived headline; the
-  // guard catches collapse, not imprecision.
+  // A local estimate legitimately disagrees with the API-derived headline (they
+  // have different bases: fresh-input vs estimate), so the guard must not fire on
+  // a wide but honest gap. It catches near-total collapse only.
   const estimated: ContextBreakdownSnapshot = {
     ...COLLAPSED,
     categories: [
-      { label: 'System prompt', tokens: 40_000, colorKey: 'promptBorder', deferred: false },
-      { label: 'Messages', tokens: 150_000, colorKey: 'purple_FOR_SUBAGENTS_ONLY', deferred: false },
+      { label: 'System prompt', tokens: 20_000, colorKey: 'promptBorder', deferred: false },
+      { label: 'Messages', tokens: 30_000, colorKey: 'purple_FOR_SUBAGENTS_ONLY', deferred: false },
     ],
   }
   expect(isBreakdownTrustworthy(estimated)).toBe(true)
@@ -163,4 +164,19 @@ test('an analysis accounting for nothing is never shown', () => {
   expect(
     isBreakdownTrustworthy({ ...COLLAPSED, categories: [] }),
   ).toBe(false)
+})
+
+// The engine reuses the `inactive` colour key for both `System tools` and the
+// manual `Compact buffer`, so keying on colour alone painted two unrelated legend
+// rows and bar segments the same blue.
+test('reserved space does not borrow the System tools hue', () => {
+  const rows = selectBreakdownRows({
+    ...BREAKDOWN,
+    categories: [
+      { label: 'System tools', tokens: 8_600, colorKey: 'inactive', deferred: false },
+      { label: 'Compact buffer', tokens: 3_000, colorKey: 'inactive', deferred: false },
+    ],
+  })
+  expect(rows.find(r => r.label === 'System tools')?.swatch).toBe('bg-[#60a5fa]')
+  expect(rows.find(r => r.label === 'Compact buffer')?.swatch).toBe('bg-white/25')
 })

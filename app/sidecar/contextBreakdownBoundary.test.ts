@@ -106,12 +106,11 @@ function countingDomain(
 const flush = () => new Promise(resolve => setTimeout(resolve, 0))
 
 test('accepts a valid request and answers with a context-breakdown.snapshot', async () => {
-  const { domain, calls } = countingDomain()
+  const { domain } = countingDomain()
   const server = makeServer(domain)
   const { socket, received } = makeSocket()
   const connection = server.addConnection(socket)
   await flush()
-  const beforeCalls = calls()
   received.length = 0
 
   server.handleData(
@@ -120,7 +119,6 @@ test('accepts a valid request and answers with a context-breakdown.snapshot', as
   )
   await flush()
 
-  expect(calls()).toBe(beforeCalls + 1)
   const snapshot = received.find(f => f.kind === 'context-breakdown.snapshot')
   expect(snapshot).toBeDefined()
   expect(
@@ -128,6 +126,34 @@ test('accepts a valid request and answers with a context-breakdown.snapshot', as
       .breakdown,
   ).toEqual(BREAKDOWN)
   expect(received.find(f => f.kind === 'error')).toBeUndefined()
+})
+
+// The freshness floor: the analysis costs a whole-transcript read plus ~10 token
+// counts, and the numbers only move when a turn completes, so a reopen moments
+// later is answered from the last snapshot rather than recomputed.
+test('a request inside the freshness floor is answered without recomputing', async () => {
+  const { domain, calls } = countingDomain()
+  const server = makeServer(domain)
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  await flush()
+  const afterAttach = calls()
+  expect(afterAttach).toBe(1)
+  received.length = 0
+
+  for (let i = 0; i < 5; i++) {
+    server.handleData(
+      connection,
+      clientFrame({ type: 'context-breakdown.request', requestId: `req-${i}` }),
+    )
+  }
+  await flush()
+
+  // Still exactly the attach analysis, but every request was answered.
+  expect(calls()).toBe(afterAttach)
+  expect(
+    received.filter(f => f.kind === 'context-breakdown.snapshot'),
+  ).toHaveLength(5)
 })
 
 // Fail closed: a malformed frame must not reach the (expensive) analysis.

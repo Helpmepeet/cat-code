@@ -116,6 +116,7 @@ import type { SidecarTaskControlDomain } from './taskControlDomain.js'
 import type { SidecarRunControlsDomain } from './runControlsDomain.js'
 import type { SidecarSessionActionsDomain } from './sessionActionsDomain.js'
 import type { SidecarContextBreakdownDomain } from './contextBreakdownDomain.js'
+import type { ContextBreakdownSnapshot } from '../shared/protocol.js'
 import {
   createSessionTitleGenerator,
   type SessionTitleDeps,
@@ -339,6 +340,10 @@ export class SidecarServer {
   private contextBreakdownInFlight = false
   /** A trigger that arrived mid-analysis, re-run once the current one settles. */
   private contextBreakdownPending = false
+  /** When the last analysis completed, for the freshness floor below. */
+  private contextBreakdownComputedAt = 0
+  /** The last snapshot, re-broadcast instead of recomputing inside the floor. */
+  private contextBreakdownLast: ContextBreakdownSnapshot | null = null
   private readonly accounts: SidecarAccountsDomain | null
   private readonly workspaceTrust: SidecarWorkspaceTrustDomain | null
   private readonly diagnostics: SidecarDiagnosticsDomain | null
@@ -2810,8 +2815,8 @@ export class SidecarServer {
   /**
    * Context-breakdown snapshot → every attached connection. Async because the
    * analysis re-reads this session's transcript and tokenizes it; serialised by
-   * `contextBreakdownInFlight` so a burst of turn boundaries can never stack up
-   * several full analyses. A null snapshot (no transcript yet, analyzer failure)
+   * `contextBreakdownInFlight` so a burst of requests can never stack up several
+   * full analyses, and rate-limited by the freshness floor in the request handler. A null snapshot (no transcript yet, analyzer failure)
    * sends nothing at all rather than an empty breakdown, so the popover keeps its
    * aggregate row instead of rendering a zeroed legend.
    */
@@ -2830,7 +2835,37 @@ export class SidecarServer {
       this.log('[sidecar] context-breakdown.request rejected (invalid frame)')
       return
     }
+    // Freshness floor. Coalescing bounds how many analyses run AT ONCE, not how
+    // often: a popover reopened faster than the analysis completes would keep one
+    // running continuously, and each costs a full transcript read plus ~10 token
+    // counts. Inside the floor, answer from the last snapshot instead. The numbers
+    // can only move when a turn completes, so a few seconds of staleness is not
+    // observable, while the spend is.
+    const age = Date.now() - this.contextBreakdownComputedAt
+    if (this.contextBreakdownLast && age < CONTEXT_BREAKDOWN_MIN_INTERVAL_MS) {
+      this.sendContextBreakdown(this.contextBreakdownLast)
+      return
+    }
     void this.broadcastContextBreakdown()
+  }
+
+  /** Frame + send one breakdown snapshot to every attached connection. */
+  private sendContextBreakdown(raw: ContextBreakdownSnapshot): void {
+    const breakdown = this.prepareOutboundPayload(
+      raw,
+      'context-breakdown.snapshot',
+    )
+    if (!breakdown) {
+      return
+    }
+    for (const connection of this.connections) {
+      this.send(connection, {
+        kind: 'context-breakdown.snapshot',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        breakdown,
+      })
+    }
   }
 
   private async broadcastContextBreakdown(): Promise<void> {
@@ -2847,24 +2882,15 @@ export class SidecarServer {
     this.contextBreakdownInFlight = true
     try {
       const raw = await this.contextBreakdown.snapshot()
-      if (!raw || this.connections.size === 0) {
+      if (!raw) {
         return
       }
-      const breakdown = this.prepareOutboundPayload(
-        raw,
-        'context-breakdown.snapshot',
-      )
-      if (!breakdown) {
+      this.contextBreakdownLast = raw
+      this.contextBreakdownComputedAt = Date.now()
+      if (this.connections.size === 0) {
         return
       }
-      for (const connection of this.connections) {
-        this.send(connection, {
-          kind: 'context-breakdown.snapshot',
-          protocolVersion: PROTOCOL_VERSION,
-          sessionId: this.sessionId,
-          breakdown,
-        })
-      }
+      this.sendContextBreakdown(raw)
     } catch (error) {
       this.log(
         `[sidecar] context-breakdown.snapshot send skipped (${
@@ -3534,6 +3560,13 @@ const workspaceTrustMessageSchema = z.object({
  * no renderer-authored state at all — the analysis reads engine-side session
  * state exclusively — so a bounded `requestId` is the whole surface.
  */
+/**
+ * Minimum gap between two real context analyses. Chosen against what the analysis
+ * costs (a whole-transcript read plus ~10 token counts), not against how fast the
+ * numbers move — they can only change when a turn completes.
+ */
+const CONTEXT_BREAKDOWN_MIN_INTERVAL_MS = 15_000
+
 const contextBreakdownMessageSchema = z.object({
   type: z.literal('context-breakdown.request'),
   requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),

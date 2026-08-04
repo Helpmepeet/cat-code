@@ -2402,8 +2402,8 @@ export function App() {
 	      // this session's current state with no respawn. Supersedes the P4-24 read
 	      // from the spawn-frozen diagnostics snapshot for the composer faces.
 	      const panelRunControls = selectRunControlsSnapshot(runControls, sessionId)
-	      // Per-category context occupancy for the donut popover; null until this
-	      // session's first turn boundary reports one.
+	      // Per-category context occupancy for the donut popover; null until the
+	      // sidecar has produced one for this session.
 	      const panelContextBreakdown = selectContextBreakdown(
 	        contextBreakdown,
 	        sessionId,

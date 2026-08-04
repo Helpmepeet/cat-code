@@ -20,6 +20,7 @@ import {
   countMessagesTokensWithAPI,
   countTokensViaHaikuFallback,
   roughTokenCountEstimation,
+  roughTokenCountEstimationForContent,
 } from '../services/tokenEstimation.js'
 import { estimateSkillFrontmatterTokens } from '../skills/loadSkillsDir.js'
 import {
@@ -98,58 +99,83 @@ async function countTokensWithFallback(
 
   try {
     const fallbackResult = await countTokensViaHaikuFallback(messages, tools)
-    if (fallbackResult !== null) {
-      return fallbackResult
+    if (fallbackResult === null) {
+      logForDebugging(
+        `countTokensWithFallback: haiku fallback also returned null (${tools.length} tools)`,
+      )
     }
-    logForDebugging(
-      `countTokensWithFallback: haiku fallback also returned null (${tools.length} tools)`,
-    )
+    return fallbackResult
   } catch (err) {
     logForDebugging(
       `countTokensWithFallback: haiku fallback failed: ${errorMessage(err)}`,
     )
     logError(err)
+    return null
   }
-
-  return estimateTokensLocally(messages, tools)
 }
 
 /**
- * Last-resort LOCAL estimate, so a category is never silently dropped.
+ * Token count for a DISPLAY category, never null.
  *
- * Both counters above need Anthropic: the primary resolves its client from
+ * Both exact counters need Anthropic: the primary resolves its client from
  * `getMainLoopModel()` (`src/services/tokenEstimation.ts:151`), which on a `gpt-*`
- * session routes to Codex, where `count_tokens` does not exist; the Haiku fallback
- * then needs working Anthropic auth of its own. On a Codex-only setup BOTH fail,
- * and returning null made every caller's `if (tokens > 0)` guard drop the category
- * entirely. `/context` and the desktop popover then rendered a breakdown listing
- * only `Skills` — the one category counted locally — beside a header correctly
- * reporting 262k used. A visibly wrong breakdown is worse than an approximate one.
+ * session routes to Codex where `count_tokens` does not exist, and the Haiku
+ * fallback then needs Anthropic auth of its own. On a Codex-only setup both fail
+ * and every caller's `if (tokens > 0)` guard dropped the category, so `/context`
+ * and the desktop popover listed only `Skills` — the one category counted
+ * locally — beside a header correctly reporting the real usage.
  *
- * chars/4 is the engine's own rough basis elsewhere (the live token byline uses
- * `displayedResponseLength / 4`). It is an ESTIMATE and will not match the API's
- * count; it is reached only when the exact paths are unavailable.
+ * The estimate is applied HERE rather than inside {@link countTokensWithFallback}
+ * on purpose. That helper's `null` is a load-bearing sentinel elsewhere:
+ * `countToolDefinitionTokens` wraps it, and `toolSearch.ts:141` reads a `0` result
+ * as "token API unavailable" before falling back to its own char heuristic, which
+ * deliberately uses a denser 2.5 chars/token for tool JSON. Returning an estimate
+ * from the shared helper silently suppressed that sentinel and changed when tool
+ * search auto-enables — model behaviour, from a display fix.
  */
-function estimateTokensLocally(
+async function countTokensForDisplay(
+  messages: Anthropic.Beta.Messages.BetaMessageParam[],
+  tools: Anthropic.Beta.Messages.BetaToolUnion[],
+): Promise<number> {
+  const exact = await countTokensWithFallback(messages, tools)
+  if (exact !== null && exact > 0) {
+    return exact
+  }
+  return estimateTokensForDisplay(messages, tools)
+}
+
+/**
+ * Last-resort LOCAL estimate, delegating per content block to the engine's OWN
+ * estimator (`roughTokenCountEstimationForContent`) rather than stringifying the
+ * message. That helper already prices `image` / `document` blocks at a flat 2000
+ * and explains why: a 1MB base64 PDF is ~1.33M chars, which a chars/4 pass would
+ * report as ~325k tokens against the ~2000 the API actually charges.
+ *
+ * Tool schemas are dense JSON, so they use the 2 bytes/token ratio the repo
+ * applies to JSON, not the 4 that suits prose.
+ */
+function estimateTokensForDisplay(
   messages: Anthropic.Beta.Messages.BetaMessageParam[],
   tools: Anthropic.Beta.Messages.BetaToolUnion[],
 ): number {
-  let chars = 0
-  try {
-    for (const message of messages) {
-      chars +=
-        typeof message.content === 'string'
-          ? message.content.length
-          : JSON.stringify(message.content ?? '').length
+  let tokens = 0
+  for (const message of messages) {
+    try {
+      tokens += roughTokenCountEstimationForContent(
+        message.content as Parameters<typeof roughTokenCountEstimationForContent>[0],
+      )
+    } catch {
+      // One unreadable message costs its own row, not the whole estimate.
     }
-    for (const tool of tools) {
-      chars += JSON.stringify(tool ?? '').length
-    }
-  } catch {
-    // A non-serialisable payload estimates from whatever was counted so far,
-    // which still beats dropping the category.
   }
-  return Math.round(chars / 4)
+  for (const tool of tools) {
+    try {
+      tokens += roughTokenCountEstimation(jsonStringify(tool), 2)
+    } catch {
+      // Same per-item isolation as above.
+    }
+  }
+  return tokens
 }
 
 interface ContextCategory {
@@ -275,11 +301,22 @@ export interface ContextData {
   } | null
 }
 
+/**
+ * Tokens for the tool definitions.
+ *
+ * Returns 0 when the token API is unavailable, and that 0 is LOAD-BEARING:
+ * `toolSearch.ts:141` reads it as "API unavailable" and falls back to its own
+ * char heuristic (a denser 2.5 chars/token, since tool JSON is not prose). Callers
+ * that only DISPLAY the number pass `estimateWhenUnavailable` to get a local
+ * estimate instead, so the category is not silently dropped on a provider with no
+ * count_tokens endpoint. Never make the estimate the default here.
+ */
 export async function countToolDefinitionTokens(
   tools: Tools,
   getToolPermissionContext: () => Promise<ToolPermissionContext>,
   agentInfo: AgentDefinitionsResult | null,
   model?: string,
+  options?: { estimateWhenUnavailable?: boolean },
 ): Promise<number> {
   const toolSchemas = await Promise.all(
     tools.map(tool =>
@@ -297,6 +334,9 @@ export async function countToolDefinitionTokens(
     logForDebugging(
       `countToolDefinitionTokens returned ${result} for ${tools.length} tools: ${toolNames.slice(0, 100)}${toolNames.length > 100 ? '...' : ''}`,
     )
+    if (options?.estimateWhenUnavailable) {
+      return estimateTokensForDisplay([], toolSchemas)
+    }
   }
   return result ?? 0
 }
@@ -342,7 +382,7 @@ async function countSystemTokens(
 
   const systemTokenCounts = await Promise.all(
     namedEntries.map(({ content }) =>
-      countTokensWithFallback([{ role: 'user', content }], []),
+      countTokensForDisplay([{ role: 'user', content }], []),
     ),
   )
 
@@ -383,7 +423,7 @@ async function countMemoryFileTokens(): Promise<{
 
   const claudeMdTokenCounts = await Promise.all(
     memoryFilesData.map(async file => {
-      const tokens = await countTokensWithFallback(
+      const tokens = await countTokensForDisplay(
         [{ role: 'user', content: file.content }],
         [],
       )
@@ -449,6 +489,7 @@ async function countBuiltInToolTokens(
           getToolPermissionContext,
           agentInfo,
           model,
+          { estimateWhenUnavailable: true },
         )
       : 0
 
@@ -513,6 +554,7 @@ async function countBuiltInToolTokens(
           getToolPermissionContext,
           agentInfo,
           model,
+          { estimateWhenUnavailable: true },
         ),
       ),
     )
@@ -540,6 +582,7 @@ async function countBuiltInToolTokens(
       getToolPermissionContext,
       agentInfo,
       model,
+      { estimateWhenUnavailable: true },
     )
     return {
       builtInToolTokens: alwaysLoadedTokens + deferredTokens,
@@ -584,6 +627,8 @@ async function countSlashCommandTokens(
     [slashCommandTool],
     getToolPermissionContext,
     agentInfo,
+    undefined,
+    { estimateWhenUnavailable: true },
   )
 
   return {
@@ -626,6 +671,8 @@ async function countSkillTokens(
       [slashCommandTool],
       getToolPermissionContext,
       agentInfo,
+      undefined,
+      { estimateWhenUnavailable: true },
     )
 
     // Calculate per-skill token estimates based on frontmatter only
@@ -677,6 +724,7 @@ export async function countMcpToolTokens(
     getToolPermissionContext,
     agentInfo,
     model,
+    { estimateWhenUnavailable: true },
   )
   // Subtract the single overhead since we made one bulk call
   const totalTokens = Math.max(
@@ -787,7 +835,7 @@ async function countCustomAgentTokens(agentDefinitions: {
 
   const tokenCounts = await Promise.all(
     customAgents.map(agent =>
-      countTokensWithFallback(
+      countTokensForDisplay(
         [
           {
             role: 'user',
@@ -941,7 +989,7 @@ async function approximateMessageTokens(
   }
 
   // Calculate total tokens using the API for accuracy
-  const approximateMessageTokens = await countTokensWithFallback(
+  const approximateMessageTokens = await countTokensForDisplay(
     normalizeMessagesForAPI(microcompactResult.messages).map(_ => {
       if (_.type === 'assistant') {
         return {
