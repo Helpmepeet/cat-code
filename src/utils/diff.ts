@@ -140,9 +140,10 @@ export function firstLineForLanguageDetection(
   return line.slice(0, MAX_PERSISTED_FIRST_LINE_LENGTH)
 }
 
-// Counts the 1-char +/-/space marker, so this is the whole persisted string.
-// An edit ADJACENT to a long line pulls that line in as context, so a single
-// 260 KB minified line lands on the transcript even when the edit was tiny.
+// Counts the 1-char +/-/space marker, so a bounded line persists as this plus
+// the one-character ellipsis. An edit ADJACENT to a long line pulls that line
+// in as context, so a single 260 KB minified line lands on the transcript even
+// when the edit itself was tiny.
 export const MAX_PERSISTED_PATCH_LINE_LENGTH = 2_000
 
 /**

@@ -88,8 +88,14 @@ describe('FileEditTool persisted result size', () => {
     })
 
     const lines = result.data.structuredPatch.flatMap(hunk => hunk.lines)
-    expect(lines.filter(line => line.startsWith('+'))).toHaveLength(1)
-    expect(lines.filter(line => line.startsWith('-'))).toHaveLength(1)
+    const added = lines.filter(line => line.startsWith('+'))
+    const removed = lines.filter(line => line.startsWith('-'))
+    expect(added).toHaveLength(1)
+    expect(removed).toHaveLength(1)
+    // Tie the counts to the bounded case: a wrong implementation that split a
+    // long line into several would still satisfy the counts above.
+    expect(added[0]).toHaveLength(MAX_PERSISTED_PATCH_LINE_LENGTH + 1)
+    expect(removed[0]).toHaveLength(MAX_PERSISTED_PATCH_LINE_LENGTH + 1)
   })
 })
 

@@ -719,7 +719,7 @@ export const SDK_MESSAGE_FIXTURE: {
     {
       name: 'user: FileEditTool tool_result carrying structuredPatch (P2-2 DiffView/MultiDiffCard source data)',
       anchor:
-        'src/tools/FileEditTool/types.ts:63-80 output schema; src/tools/FileEditTool/utils.ts (diff npm structuredPatch shape); real mapper emits string content, no is_error field, FileEditTool.ts:427-446',
+        'src/tools/FileEditTool/types.ts output schema; src/tools/FileEditTool/utils.ts (diff npm structuredPatch shape); real mapper emits string content, no is_error field. The whole pre-edit file is no longer persisted, so this carries the compact firstLine instead of originalFile',
       reach: 'app-seam',
       expectRows: 0,
       message: {
@@ -740,7 +740,7 @@ export const SDK_MESSAGE_FIXTURE: {
           filePath: '/repo/src/config.ts',
           oldString: 'port: 3000',
           newString: 'port: 4000',
-          originalFile: 'export const config = {\n  port: 3000,\n}\n',
+          firstLine: 'export const config = {',
           structuredPatch: [
             {
               oldStart: 1,

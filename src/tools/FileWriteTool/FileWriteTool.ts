@@ -82,7 +82,8 @@ const outputSchema = lazySchema(() =>
       .array(hunkSchema())
       .describe('Diff patch showing the changes'),
     // Legacy: pre-2026-08 transcripts persisted the whole pre-write file here.
-    // Kept optional so resuming one still passes the read-back safeParse.
+    // Still declared because the read-back parse strips undeclared keys, so
+    // this keeps a resumed record intact; no renderer reads it any more.
     originalFile: z
       .string()
       .nullable()
