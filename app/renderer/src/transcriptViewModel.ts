@@ -57,6 +57,52 @@ export function resolveToolCardExpanded(
  * branch table is worth asserting directly rather than only through whichever
  * lines a rendered fixture happens to contain.
  */
+/** The peek's normal size, and the most it will ever grow to. */
+const PEEK_LINES = 3
+const PEEK_MAX_LINES = 5
+
+/**
+ * The three OUTCOME tints. `text-text-faint` (stack/trace continuation) is
+ * deliberately excluded: a trace line is context, not a result, and letting it
+ * extend the peek would grow the card for the least informative lines there are.
+ */
+const OUTCOME_CLASSES: ReadonlySet<string> = new Set([
+  'text-[#fca5a5]',
+  'text-[#fcd34d]',
+  'text-[#86efac]',
+])
+
+/**
+ * Which lines a COLLAPSED bash card previews.
+ *
+ * Last-three is the obvious rule and it drops the one line that matters. Real
+ * `bun test` ends:
+ *
+ *     18 pass  ←  the outcome, and the only line that carries a colour
+ *     0 fail
+ *     28 expect() calls
+ *     Ran 18 tests across 1 file. [355.00ms]
+ *
+ * so a three-line window shows the three least informative lines and cuts the
+ * result. Observed directly in the running app (2026-08-04).
+ *
+ * The window therefore EXTENDS BACKWARDS to reach the most recent outcome line,
+ * capped. It never picks lines out of order or skips over one to reach a
+ * colourful one further back — a peek with a hole in it misrepresents the output
+ * it is previewing. Contiguous tail, just sometimes a slightly longer one.
+ */
+export function selectPeekLines(lines: string[]): string[] {
+  const nonEmpty = lines.filter(line => line.length > 0)
+  if (nonEmpty.length === 0) return []
+  const window = nonEmpty.slice(-PEEK_MAX_LINES)
+  let lastOutcome = -1
+  window.forEach((line, index) => {
+    if (OUTCOME_CLASSES.has(logLineClass(line))) lastOutcome = index
+  })
+  const reach = lastOutcome === -1 ? PEEK_LINES : window.length - lastOutcome
+  return nonEmpty.slice(-Math.min(Math.max(reach, PEEK_LINES), PEEK_MAX_LINES))
+}
+
 /**
  * Split a grep output line into its `path:line:` locator and the matched source.
  * Returns null for any line that is not in that shape (a `--` group separator, a

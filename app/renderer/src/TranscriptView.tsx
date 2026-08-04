@@ -97,6 +97,7 @@ import {
   logLineClass,
   resolveToolCardExpanded,
   groupGrepLines,
+  selectPeekLines,
 } from './transcriptViewModel.js'
 import {
   INLINE_HEAD_LINES,
@@ -1495,9 +1496,8 @@ function AckBody({
 }
 
 function BashTailPeek({ content }: { content: string }) {
-  const lines = content.split('\n').filter(line => line.length > 0)
-  if (lines.length === 0) return null
-  const tail = lines.slice(-3)
+  const tail = selectPeekLines(content.split('\n'))
+  if (tail.length === 0) return null
   return (
     <div className="border-t border-shell-seam bg-black/20 px-3 py-1.5">
       {/* Tinted by the SAME rule as the expanded body. This peek is the only

@@ -10,6 +10,7 @@ import {
   logLineClass,
   resolveToolCardExpanded,
   groupGrepLines,
+  selectPeekLines,
   splitGrepLine,
 } from './transcriptViewModel.js'
 import { ToolsExpandedContext } from './toolsExpanded.js'
@@ -1465,6 +1466,36 @@ test('the preference is the WEAKEST expansion input: a failure still opens itsel
 
   expect(html).toContain('ERROR: boom')
   expect(html).toContain('text-tone-danger')
+})
+
+// Verbatim `bun test` tail. The last-three rule showed the three least
+// informative lines and cut the result — observed in the running app.
+const BUN_TAIL = [' 18 pass', ' 0 fail', ' 28 expect() calls', 'Ran 18 tests. [355ms]']
+
+test('the peek reaches back for the outcome line instead of cutting it', () => {
+  expect(selectPeekLines(BUN_TAIL)).toEqual(BUN_TAIL)
+  // …and that really is a change: last-three would have dropped ` 18 pass`.
+  expect(BUN_TAIL.slice(-3)).not.toContain(' 18 pass')
+})
+
+test('the peek stays THREE lines when the tail carries no outcome', () => {
+  const plain = ['alpha', 'beta', 'gamma', 'delta', 'epsilon']
+  expect(selectPeekLines(plain)).toEqual(['gamma', 'delta', 'epsilon'])
+})
+
+test('the peek is always a CONTIGUOUS tail, never lines picked out of order', () => {
+  // An outcome further back than the cap is left behind rather than reached for
+  // across a gap — a preview with a hole in it misrepresents its output.
+  const far = [' 9 pass', 'a', 'b', 'c', 'd', 'e', 'f']
+  const peek = selectPeekLines(far)
+  expect(peek).toEqual(['d', 'e', 'f'])
+  expect(peek.length).toBeLessThanOrEqual(5)
+})
+
+test('a stack trace does not stretch the peek: context is not an outcome', () => {
+  // `text-text-faint` trace lines are excluded from the outcome set on purpose.
+  const trace = ['x', '  at Object.<anonymous> (a.ts:1)', 'y', 'z', 'w']
+  expect(selectPeekLines(trace)).toEqual(['y', 'z', 'w'])
 })
 
 test('the COLLAPSED bash peek tints too, since that is the default view', () => {
