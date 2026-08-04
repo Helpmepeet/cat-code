@@ -5,6 +5,7 @@ import { App } from './App.js'
 import { CodeThemeProvider } from './CodeThemeProvider.js'
 import { ReasoningLayoutProvider } from './ReasoningLayoutProvider.js'
 import { ToastHost } from './ToastHost.js'
+import { ToolsExpandedProvider } from './ToolsExpandedProvider.js'
 import './theme.css'
 
 const root = document.getElementById('root')
@@ -25,7 +26,9 @@ createRoot(root).render(
       <ToastHost>
         <ReasoningLayoutProvider>
           <CodeThemeProvider>
-            <App />
+            <ToolsExpandedProvider>
+              <App />
+            </ToolsExpandedProvider>
           </CodeThemeProvider>
         </ReasoningLayoutProvider>
       </ToastHost>

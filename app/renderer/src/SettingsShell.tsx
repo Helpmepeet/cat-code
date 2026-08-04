@@ -74,8 +74,12 @@ import {
   REASONING_LAYOUT_MODES,
   REASONING_LAYOUT_LABELS,
 } from './reasoningLayout.js'
+import {
+  DEFAULT_TOOLS_EXPANDED,
+  ToolsExpandedContext,
+} from './toolsExpanded.js'
 import { RemoteSettingsPage } from './RemoteSettingsPage.js'
-import { SelectControl, SettingsPane } from './SettingsEditors.js'
+import { SelectControl, SettingsPane, ToggleSwitch } from './SettingsEditors.js'
 import type { SettingWriteInput } from './SettingsEditors.js'
 import type { SettingsProjectBinding } from './settingsProjectBinding.js'
 import {
@@ -849,6 +853,8 @@ function TranscriptDisplaySection({
 }) {
   const { mode, setMode } = useContext(ReasoningLayoutContext)
   const { theme, setTheme } = useContext(CodeThemeContext)
+  const { expanded: toolsExpanded, setExpanded: setToolsExpanded } =
+    useContext(ToolsExpandedContext)
   // `EditableSettingValue` is `boolean | string | number`, so the identity test
   // both narrows it and keeps an unread snapshot (null) on the enabled path —
   // the key's built-in default is highlighting ON (`settingsEditable.ts:201`).
@@ -857,6 +863,18 @@ function TranscriptDisplaySection({
   const codeThemeNote = selectCodeThemeNote(highlightingOff)
   return (
     <PaneSection title="Transcript">
+      <Field
+        desc="Open every tool card as it arrives, instead of showing a preview you click to expand. Stored in this app, not in your settings files."
+        label="Tools open by default"
+        modified={toolsExpanded !== DEFAULT_TOOLS_EXPANDED}
+        onReset={() => setToolsExpanded(DEFAULT_TOOLS_EXPANDED)}
+      >
+        <ToggleSwitch
+          label="Tools open by default"
+          onChange={setToolsExpanded}
+          value={toolsExpanded}
+        />
+      </Field>
       <Field
         desc="How reasoning summaries are laid out. Stored in this app, not in your settings files."
         label="Reasoning layout"

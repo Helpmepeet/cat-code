@@ -55,6 +55,7 @@ import {
   type ToolFamily,
   type UserImageSource,
 } from './transcriptProjector.js'
+import { ToolsExpandedContext } from './toolsExpanded.js'
 import {
   groupReasoningRuns,
   ReasoningLayoutContext,
@@ -991,6 +992,10 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
   // Read before the early return so the Agent branch doesn't skip the hook; the
   // Agent card has its own body and does not carry the inspector affordance.
   const openInspector = useContext(ToolInspectorContext)
+  // The weakest of the three expansion inputs: a user's own click still wins
+  // (`resolveToolCardExpanded`), and a failed or finished-image card still opens
+  // itself, for reasons this preference knows nothing about.
+  const { expanded: toolsExpanded } = useContext(ToolsExpandedContext)
   // D2/C2: the Agent tool_use is rendered as the Agent member of this same
   // tool-card family (specialized body + C4 child nesting), not a sibling row.
   if (row.toolFamily === 'agent') return <AgentToolCard row={row} />
@@ -1005,7 +1010,9 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
         target={deriveTarget(row)}
         status={row.status}
         sub={deriveSub(row)}
-        defaultExpanded={row.status === 'error' || isImageDone}
+        defaultExpanded={
+          toolsExpanded || row.status === 'error' || isImageDone
+        }
         collapsedExtra={
           ack !== null ? (
             <AckPeek ack={ack} />

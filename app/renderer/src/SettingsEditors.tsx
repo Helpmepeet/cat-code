@@ -336,7 +336,7 @@ function SettingControl({
 
 /* ── controls ─────────────────────────────────────────────────────────────── */
 
-function ToggleSwitch({
+export function ToggleSwitch({
   value,
   onChange,
   disabled,

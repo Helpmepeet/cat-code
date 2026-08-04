@@ -15,7 +15,8 @@
     "test": "cd .. && bun test app/",
     "typecheck:sidecar": "bun run scripts/sidecar-typecheck.ts",
     "test:hardening": "bun run scripts/run-hardening-smoke.ts",
-    "reap:orphans": "bun run scripts/reap-orphan-sidecars.ts"
+    "reap:orphans": "bun run scripts/reap-orphan-sidecars.ts",
+    "preview:transcript": "bun run scripts/preview-transcript.tsx"
   },
   "devDependencies": {
     "@tailwindcss/vite": "4.2.2",

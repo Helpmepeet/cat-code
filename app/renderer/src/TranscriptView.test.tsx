@@ -12,6 +12,7 @@ import {
   groupGrepLines,
   splitGrepLine,
 } from './transcriptViewModel.js'
+import { ToolsExpandedContext } from './toolsExpanded.js'
 import {
   createTranscriptState,
   projectServerFrame,
@@ -1383,6 +1384,60 @@ test('an errored bash body stays one danger tone rather than tinting its trace',
 
   expect(html).toContain('text-tone-danger')
   expect(html).not.toContain('text-[#fca5a5]') // no per-line heuristic on a known failure
+})
+
+test('"Tools open by default" opens a card that would otherwise be closed', () => {
+  // The prototype's `toolsExpandedByDefault` (AppV2.jsx:19), which this app had
+  // never exposed. Proof it reaches the card: the full body renders on a
+  // SUCCESSFUL card, which is otherwise collapsed to a 3-line peek.
+  const row = toolRow({
+    toolName: 'Bash',
+    toolFamily: 'bash',
+    input: { command: 'ls' },
+    status: 'success',
+    result: { isError: false, content: 'alpha\nbeta\ngamma\ndelta', diff: null },
+  })
+
+  const closed = renderToStaticMarkup(<TranscriptRowsView rows={[row]} />)
+  const open = renderToStaticMarkup(
+    <ToolsExpandedContext.Provider
+      value={{ expanded: true, setExpanded: () => {} }}
+    >
+      <TranscriptRowsView rows={[row]} />
+    </ToolsExpandedContext.Provider>,
+  )
+
+  // Closed: the peek shows only the LAST three lines, and no gutter.
+  expect(closed).not.toContain('alpha')
+  expect(closed).not.toContain('>1<')
+  // Open: the whole body, numbered.
+  expect(open).toContain('alpha')
+  expect(open).toContain('>1<')
+})
+
+test('the preference is the WEAKEST expansion input: a failure still opens itself', () => {
+  // An errored card must not close just because the preference says closed —
+  // it opens for a reason the preference knows nothing about.
+  const html = renderToStaticMarkup(
+    <ToolsExpandedContext.Provider
+      value={{ expanded: false, setExpanded: () => {} }}
+    >
+      <TranscriptRowsView
+        rows={[
+          toolRow({
+            toolName: 'Bash',
+            toolFamily: 'bash',
+            input: { command: 'ls' },
+            status: 'error',
+            result: { isError: true, content: 'ERROR: boom', diff: null },
+          }),
+        ]}
+      />
+    </ToolsExpandedContext.Provider>,
+  )
+
+  expect(html).toContain('ERROR: boom')
+  expect(html).toContain('text-tone-danger')
 })
 
 test('the COLLAPSED bash peek tints too, since that is the default view', () => {
