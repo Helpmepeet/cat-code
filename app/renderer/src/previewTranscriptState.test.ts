@@ -14,7 +14,9 @@ import {
   selectRawMessageLog,
 } from './rawMessageLog.js'
 import { batch } from './serverFrameBatch.js'
+import { AttachmentGate } from '../../main/attachmentGate.js'
 import {
+  applyPreviewHandover,
   claimLazyRestore,
   createPreviewTranscriptState,
   claimPreviewSwaps,
@@ -194,50 +196,151 @@ test('swap observations cover replay batches and ready zero-history batches', ()
   expect(selectPreviewSwapSessions([messageFrame(0, false)], previewing)).toEqual([])
 })
 
-// The restore that does not fit one batch (2026-08-05). Main coalesces the
-// bootstrap window for 50 ms only, so a 2 MB history flushes as `ready` + a
-// first slice and then bare replay batches. Each later batch names the same
-// still-previewing session, and an unclaimed second `preview-live-reset` wipes
-// the live state only `ready` creates — after which `projectServerFrame` drops
-// every remaining history frame and the pane shows the empty-session Welcome
-// with the cache already discarded. Reported live: 346 messages replayed, none
-// displayed. Drop `claimPreviewSwaps` below and the row count goes to 0.
-test('a restore split across batches keeps its history', () => {
-  const first = messageFrame(0)
-  const rest = [messageFrame(1), messageFrame(2)]
+/* ── the preview→live handover, driven the way App's subscription drives it ── */
+
+/**
+ * The production ordering under test is `applyPreviewHandover`; only the store
+ * wiring is local. Deliberately NOT a hand-rolled copy of App's loop — a
+ * reconstruction stays green when the real subscription stops calling it.
+ * `previewing` is mutable so a test can change preview membership BETWEEN
+ * deliveries, which is what separates the sequences below.
+ */
+function handover(cached?: TranscriptCache) {
   const claimed = new Set<string>()
-  const previewing = new Set([SID])
-
-  let preview = reducePreviewTranscriptState(createPreviewTranscriptState(), {
-    type: 'preview-load',
-    cache: cache([first, ...rest]),
-  })
-  let live = createTranscriptState()
-
-  // Batch 1: main's window expires mid-replay, so only ready + one frame land.
-  for (const batchFrames of [[ready(), first], rest]) {
-    const swaps = claimPreviewSwaps(
-      claimed,
-      selectPreviewSwapSessions(batchFrames, previewing),
-    )
-    for (const sessionId of swaps) {
-      live = reduceLiveTranscriptState(live, {
-        type: 'preview-live-reset',
-        sessionId,
-      })
-    }
-    live = reduceLiveTranscriptState(live, batch(batchFrames))
-    for (const sessionId of swaps) {
-      preview = reducePreviewTranscriptState(preview, {
-        type: 'preview-reset',
-        sessionId,
-      })
-    }
+  const previewing = new Set<string>()
+  let preview = createPreviewTranscriptState()
+  if (cached) {
+    preview = reducePreviewTranscriptState(preview, {
+      type: 'preview-load',
+      cache: cached,
+    })
   }
+  let live = createTranscriptState()
+  return {
+    claimed,
+    previewing,
+    deliver(frames: readonly ServerFrame[]) {
+      applyPreviewHandover(frames, previewing, claimed, {
+        resetLiveSession: sessionId => {
+          live = reduceLiveTranscriptState(live, {
+            type: 'preview-live-reset',
+            sessionId,
+          })
+        },
+        applyFrames: () => {
+          live = reduceLiveTranscriptState(live, batch(frames))
+        },
+        resetPreview: sessionId => {
+          preview = reducePreviewTranscriptState(preview, {
+            type: 'preview-reset',
+            sessionId,
+          })
+        },
+      })
+    },
+    loadPreview(next: TranscriptCache) {
+      // What App does on every `preview-load`: a new cache is a new generation,
+      // so the handover claim made against the old one is released.
+      claimed.delete(SID)
+      preview = reducePreviewTranscriptState(preview, {
+        type: 'preview-load',
+        cache: next,
+      })
+    },
+    rows: () => selectTranscriptRows(live, SID),
+    cached: () => selectPreviewTranscript(preview, SID),
+  }
+}
 
-  expect(claimed.has(SID)).toBe(true)
-  expect(selectPreviewTranscript(preview, SID)).toBeNull()
-  expect(selectTranscriptRows(live, SID)).toHaveLength(3)
+/**
+ * The batches main ACTUALLY delivers, from the real gate: coalescing is armed
+ * by the restore IPC and the 50 ms timer flushes whatever has arrived, so a
+ * replay bigger than one window lands as a head batch plus bare replay batches.
+ * `flushAfter` is the frame index the timer fires on.
+ */
+function deliveredBatches(
+  frames: readonly ServerFrame[],
+  flushAfter: number,
+): ServerFrame[][] {
+  const gate = new AttachmentGate()
+  gate.onRendererReady()
+  gate.startReplayCoalescing(SID)
+  const batches: ServerFrame[][] = []
+  const push = (delivered: ServerFrame[]): void => {
+    if (delivered.length > 0) batches.push(delivered)
+  }
+  frames.forEach((frame, index) => {
+    push(gate.onFrame(SID, frame))
+    if (index === flushAfter) push(gate.flushReplayCoalescing(SID))
+  })
+  push(gate.flushReplayCoalescing(SID))
+  return batches
+}
+
+// The restore that does not fit one batch (2026-08-05, reported live: 346
+// messages replayed, none displayed). An unclaimed second `preview-live-reset`
+// empties the live session that only `ready` refills, so every later history
+// frame projects into nothing while the cache has already been dropped.
+test("a restore outrunning main's coalescing window keeps its history", () => {
+  const history = [messageFrame(0), messageFrame(1), messageFrame(2)]
+  const batches = deliveredBatches([ready(), ...history], 1)
+  expect(batches.length).toBeGreaterThan(1) // the premise: more than one batch
+
+  const h = handover(cache(history))
+  h.previewing.add(SID)
+  for (const frames of batches) h.deliver(frames)
+
+  expect(h.cached()).toBeNull()
+  expect(h.rows()).toHaveLength(3)
+})
+
+// The FIRST handover can itself land on a replay-only batch, when `ready` was
+// delivered before preview membership was visible. The claim does nothing here
+// — nothing has been claimed yet — so the session must survive being emptied.
+test('a handover with no ready frame beside it does not strand the session', () => {
+  const h = handover(cache([messageFrame(0)]))
+  h.deliver([ready()]) // not previewing yet: no handover
+  expect(h.rows()).toHaveLength(0)
+
+  h.previewing.add(SID)
+  h.deliver([messageFrame(0), messageFrame(1)])
+  expect(h.rows()).toHaveLength(2)
+
+  // And the session stays projectable afterwards — the live turn that followed
+  // the reported failure also never appeared.
+  h.deliver([messageFrame(2)])
+  expect(h.rows()).toHaveLength(3)
+})
+
+// A zero-history head batch hands over to an empty pane by design, so the
+// conversation blinks. It must not stay gone once the replay lands.
+test('history arriving after a ready-only batch still fills the pane', () => {
+  const h = handover(cache([messageFrame(0)]))
+  h.previewing.add(SID)
+
+  h.deliver([ready()])
+  expect(h.cached()).toBeNull()
+  expect(h.rows()).toHaveLength(0) // the blink
+
+  h.deliver([messageFrame(0), messageFrame(1)])
+  expect(h.rows()).toHaveLength(2)
+})
+
+// A session can be previewed, restored, die, and be previewed again from a
+// fresh cache. The claim is scoped to the preview generation, not the session,
+// or the second pane stays pinned to stale cached rows over a live engine.
+test('a second preview generation hands over again', () => {
+  const h = handover(cache([messageFrame(0)]))
+  h.previewing.add(SID)
+  h.deliver([ready(), messageFrame(0)])
+  expect(h.cached()).toBeNull()
+
+  h.loadPreview(cache([messageFrame(0), messageFrame(1)]))
+  expect(h.cached()).not.toBeNull()
+  h.deliver([ready(), messageFrame(0), messageFrame(1)])
+
+  expect(h.cached()).toBeNull()
+  expect(h.rows()).toHaveLength(2)
 })
 
 test('claimPreviewSwaps hands over once per session', () => {

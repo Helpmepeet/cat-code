@@ -16,6 +16,7 @@ import {
 import {
   createTranscriptState,
   projectServerFrame,
+  resetTranscriptSession,
   type TranscriptState,
 } from './transcriptProjector.js'
 
@@ -86,10 +87,10 @@ export function reduceLiveTranscriptState(
   action: LiveTranscriptAction,
 ): TranscriptState {
   if ('type' in action && action.type === 'preview-live-reset') {
-    if (!state.sessions[action.sessionId]) return state
-    const sessions = { ...state.sessions }
-    delete sessions[action.sessionId]
-    return { sessions }
+    // Empty, never forget: the batch carrying this handover may not carry the
+    // `ready` frame that would rebuild the session, and the projector discards
+    // events for an unknown session. See `resetTranscriptSession`.
+    return resetTranscriptSession(state, action.sessionId)
   }
   return projectServerFrameBatched(state, action)
 }
@@ -349,6 +350,44 @@ export function claimPreviewSwaps(
     claimed.add(sessionId)
     return true
   })
+}
+
+/** The three ordered effects one delivered batch can have on the handover. */
+export type PreviewHandoverPorts = {
+  /** Empty the live rows of a session handing over (`preview-live-reset`). */
+  resetLiveSession: (sessionId: SessionId) => void
+  /** Project the batch into every store — always runs, swap or not. */
+  applyFrames: () => void
+  /** Drop the now-superseded cache (`preview-reset`). */
+  resetPreview: (sessionId: SessionId) => void
+}
+
+/**
+ * Apply one delivered batch's preview→live handover, in the order that matters.
+ *
+ * This lives here rather than inline in App's `subscribe` callback because the
+ * ORDER is the load-bearing part and a callback that only works by React
+ * batching happenstance cannot be tested (the renderer suite renders to static
+ * markup, so no subscription ever runs). Clearing the live rows must precede
+ * the batch — the batch is what refills them — and dropping the cache must
+ * follow it, so the pane is never between two empty sources.
+ *
+ * Returns the sessions that handed over, for the caller's own bookkeeping.
+ */
+export function applyPreviewHandover(
+  frames: readonly ServerFrame[],
+  previewing: ReadonlySet<SessionId>,
+  claimed: Set<SessionId>,
+  ports: PreviewHandoverPorts,
+): SessionId[] {
+  const swapped = claimPreviewSwaps(
+    claimed,
+    selectPreviewSwapSessions(frames, previewing),
+  )
+  for (const sessionId of swapped) ports.resetLiveSession(sessionId)
+  ports.applyFrames()
+  for (const sessionId of swapped) ports.resetPreview(sessionId)
+  return swapped
 }
 
 /** First engagement wins across composer focus, pointer-down, and pane dwell. */

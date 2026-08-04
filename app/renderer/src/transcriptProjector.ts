@@ -434,6 +434,31 @@ export function createTranscriptState(): TranscriptState {
 }
 
 /**
+ * Empty one session's rows while keeping the session KNOWN to the projector.
+ *
+ * `projectServerFrame` creates session state from `ready` alone and drops any
+ * `event` frame for a session it does not know, so forgetting a session mid-
+ * stream is unrecoverable: nothing after it projects until another `ready`
+ * arrives, and a resumed sidecar sends exactly one. The preview→live handover
+ * needs the rows gone, not the session gone (2026-08-05: a handover landing in
+ * a batch with no `ready` stranded a restored session, discarding its replayed
+ * history AND every later live turn).
+ */
+export function resetTranscriptSession(
+  state: TranscriptState,
+  sessionId: SessionId,
+): TranscriptState {
+  if (!state.sessions[sessionId]) return state
+  return {
+    ...state,
+    sessions: {
+      ...state.sessions,
+      [sessionId]: createTranscriptSessionState(),
+    },
+  }
+}
+
+/**
  * Rows are stored as pure producer facts; tool status/result are joined in
  * HERE from the correlation map on every read, never mutated onto a stored
  * row. A `tool-use` row with no matching entry yet reads as `pending`.

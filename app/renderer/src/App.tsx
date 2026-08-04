@@ -84,15 +84,14 @@ import {
   type TranscriptState,
 } from './transcriptProjector.js'
 import {
+  applyPreviewHandover,
   claimLazyRestore,
-  claimPreviewSwaps,
   createPreviewTranscriptState,
   hasPreviewTranscript,
   openPreloadedPreview,
   previewClosePlan,
   reduceLiveTranscriptState,
   reducePreviewTranscriptState,
-  selectPreviewSwapSessions,
   selectPreviewRunFactsFor,
   selectPreviewTranscript,
   selectPreviewTruncationMessage,
@@ -795,6 +794,12 @@ export function App() {
                 cache.header.appSessionId,
                 estimateProjectedPreviewBytes(projected),
               )
+              // A new cache is a new preview generation, and this path reaches
+              // one without `openPreviewPane` (a live row that became restorable
+              // again re-preloads through the host-event stream). The handover
+              // claim belongs to the generation, not the session: leaving it set
+              // would pin the pane to this cache while a live engine ran under it.
+              swappedPreviewsRef.current.delete(cache.header.appSessionId)
               dispatchPreviewTranscript({
                 type: 'preview-load',
                 cache,
@@ -841,42 +846,47 @@ export function App() {
       for (const sessionId in shellRef.current.previews) {
         previewing.add(sessionId)
       }
-      // Claimed synchronously: React commits `shell.previews` and the preview
-      // store a render later, so every batch of a multi-batch restore would
-      // otherwise observe the same still-previewing session and swap again.
-      const swapSessions = claimPreviewSwaps(
+      // The claim is read and written synchronously here: React commits
+      // `shell.previews` and the preview store a render later, so every batch of
+      // a multi-batch restore would otherwise see the same still-previewing
+      // session and hand over again. Ordering lives in `applyPreviewHandover`.
+      const swapSessions = applyPreviewHandover(
+        frames,
+        previewing,
         swappedPreviewsRef.current,
-        selectPreviewSwapSessions(frames, previewing),
+        {
+          resetLiveSession: sessionId =>
+            dispatchSessionEvent({ type: 'preview-live-reset', sessionId }),
+          applyFrames: () =>
+            applyServerFrameBatch(frames, {
+              getRosterById: () => shellRef.current.byId,
+              setActiveSessionId,
+              dispatchRawLog: dispatch,
+              dispatchPermission,
+              dispatchConnection,
+              dispatchSettings,
+              dispatchAgentConfig,
+              dispatchExtensions,
+              dispatchGoalMemory,
+              dispatchTasks,
+              dispatchOrchestrator,
+              dispatchLease,
+              dispatchAccounts,
+              dispatchWorkspaceTrust,
+              dispatchDiagnostics,
+              dispatchRunControls,
+              dispatchContextBreakdown,
+              dispatchSlashCatalog,
+              dispatchRemoteSettings,
+              dispatchSessionActionRuntime,
+              dispatchVerbAckResult,
+              dispatchTranscript: dispatchSessionEvent,
+            }),
+          resetPreview: sessionId =>
+            dispatchPreviewTranscript({ type: 'preview-reset', sessionId }),
+        },
       )
       for (const sessionId of swapSessions) {
-        dispatchSessionEvent({ type: 'preview-live-reset', sessionId })
-      }
-      applyServerFrameBatch(frames, {
-        getRosterById: () => shellRef.current.byId,
-        setActiveSessionId,
-        dispatchRawLog: dispatch,
-        dispatchPermission,
-        dispatchConnection,
-        dispatchSettings,
-        dispatchAgentConfig,
-        dispatchExtensions,
-        dispatchGoalMemory,
-        dispatchTasks,
-        dispatchOrchestrator,
-        dispatchLease,
-        dispatchAccounts,
-        dispatchWorkspaceTrust,
-        dispatchDiagnostics,
-        dispatchRunControls,
-        dispatchContextBreakdown,
-        dispatchSlashCatalog,
-        dispatchRemoteSettings,
-        dispatchSessionActionRuntime,
-        dispatchVerbAckResult,
-        dispatchTranscript: dispatchSessionEvent,
-      })
-      for (const sessionId of swapSessions) {
-        dispatchPreviewTranscript({ type: 'preview-reset', sessionId })
         preloadReservedBytesRef.current.delete(sessionId)
       }
     })
