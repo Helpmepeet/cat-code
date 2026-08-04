@@ -6,6 +6,10 @@ import type {
   RunControlsSnapshot,
   SessionId,
 } from '../../shared/protocol.js'
+import type {
+  ConnectionSnapshot,
+  ConnectionState,
+} from './connectionState.js'
 import type { RawMessageSessionLog } from './rawMessageLog.js'
 import type {
   NestedTranscriptRow,
@@ -126,6 +130,55 @@ export function deriveActivity(rows: NestedTranscriptRow[]): {
     return { verb: 'Responding', target: null }
   }
   return working
+}
+
+/** A turn is running in this session: the engine is attached and it has taken
+ * the input away. The same gate the composer and the activity byline read, in
+ * one place so the elapsed clock below cannot disagree with them. */
+export function isTurnRunning(snapshot: ConnectionSnapshot): boolean {
+  return snapshot.status === 'ready' && !snapshot.inputEnabled
+}
+
+/**
+ * When each session's current turn started, keyed by session.
+ *
+ * This lives above the panes on purpose. A pane is mounted only while its
+ * session is on screen, so a clock owned by the pane restamped its start on
+ * every tab switch: the elapsed count restarted at 0s, and the token byline
+ * (gated on 30s of turn time) disappeared with it. Connection frames arrive for
+ * background sessions too, so a start recorded here is stamped once, when that
+ * session's turn begins, and held until the turn ends whatever is on screen.
+ *
+ * Returns the map it was given when nothing moved, so the caller's `setState`
+ * is a no-op on the frames that change something else.
+ */
+export function reduceTurnStarts(
+  starts: ReadonlyMap<SessionId, number>,
+  connection: ConnectionState,
+  now: number,
+): ReadonlyMap<SessionId, number> {
+  const next = new Map(starts)
+  let changed = false
+  for (const sessionId of next.keys()) {
+    if (!(sessionId in connection.sessions)) {
+      next.delete(sessionId)
+      changed = true
+    }
+  }
+  for (const [sessionId, snapshot] of Object.entries(connection.sessions) as [
+    SessionId,
+    ConnectionSnapshot,
+  ][]) {
+    if (isTurnRunning(snapshot)) {
+      if (!next.has(sessionId)) {
+        next.set(sessionId, now)
+        changed = true
+      }
+    } else if (next.delete(sessionId)) {
+      changed = true
+    }
+  }
+  return changed ? next : starts
 }
 
 export function fmtElapsed(ms: number): string {

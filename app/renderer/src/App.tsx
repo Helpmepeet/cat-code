@@ -369,7 +369,9 @@ import {
   deriveActivity,
   fmtElapsed,
   fmtTok,
+  isTurnRunning,
   reducePromptDrafts,
+  reduceTurnStarts,
   selectLiveTokenEstimate,
   selectPromptDraft,
   sendPermissionResponse,
@@ -405,6 +407,8 @@ const EMPTY_SLASH_CATALOG: readonly SlashCatalogEntry[] = []
 const EMPTY_BANNERS: readonly BannerNotice[] = []
 /** Stable identity so a session with no orchestrator snapshot never re-renders. */
 const EMPTY_WORKERS: readonly AgentModeWorkerItem[] = []
+/** Stable identity for the pre-first-turn map, so the initial state is one object. */
+const EMPTY_TURN_STARTS: ReadonlyMap<SessionId, number> = new Map()
 
 /**
  * Elements that already act on Enter/Escape themselves. The plain-key permission
@@ -588,6 +592,15 @@ export function App() {
     undefined,
     createConnectionState,
   )
+  // When each session's turn started, held above the panes because a pane only
+  // exists while its session is on screen (`reduceTurnStarts`). The panes read
+  // their own start from here to tick the activity clock.
+  const [turnStarts, setTurnStarts] = useState<ReadonlyMap<SessionId, number>>(
+    EMPTY_TURN_STARTS,
+  )
+  useEffect(() => {
+    setTurnStarts(prev => reduceTurnStarts(prev, connection, Date.now()))
+  }, [connection])
   const [settings, dispatchSettings] = useReducer(
     reduceSettingsStateBatched,
     undefined,
@@ -2392,6 +2405,7 @@ export function App() {
 	            activeAccount={panelActiveCodexAccount}
 	            activeAnthropicAccount={panelActiveAnthropicAccount}
 	            accountsLastResult={accounts.lastResult}
+            turnStartedAt={turnStarts.get(sessionId) ?? null}
             onSwitchAccount={panelProvider === 'openai' ? verb => {
               // The composer profile popover's switch — the engine's own
               // `account.switch` verb to THIS pane's sidecar (its sessionId, not
@@ -3440,6 +3454,7 @@ export function SessionPane({
   onManageAccounts,
   accountsLastResult,
   activeConnection,
+  turnStartedAt = null,
   activeDescriptor,
   branch,
   sandboxed,
@@ -3697,10 +3712,7 @@ export function SessionPane({
   const transcriptScrollRef = useRef<HTMLDivElement>(null)
   const [atBottom, setAtBottom] = useState(true)
   const [stopError, setStopError] = useState<string | null>(null)
-  const generating =
-    !!activeSessionId &&
-    activeConnection.status === 'ready' &&
-    !activeConnection.inputEnabled
+  const generating = !!activeSessionId && isTurnRunning(activeConnection)
   // CC-16 — the composer's three gates, kept apart: `engineInputEnabled` sends
   // now, `connectPending` is "no engine attached yet, and your own
   // focus/keystroke is what attaches one", `turnPending` is "attached, a turn is
@@ -3746,24 +3758,22 @@ export function SessionPane({
       ? 'connecting'
       : null
 
-  // Elapsed clock: reset and tick once per second while a turn runs.
+  // Elapsed clock: tick once per second from the turn start App recorded for
+  // this session. The start is NOT stamped here — a pane is mounted only while
+  // its session is on screen, so owning it here restamped it on every tab
+  // switch: the count restarted at 0s and took the token byline (gated on 30s
+  // of turn time) with it.
   const [elapsedMs, setElapsedMs] = useState(0)
-  const turnStartRef = useRef<number | null>(null)
   useEffect(() => {
-    if (!generating) {
-      turnStartRef.current = null
+    if (!generating || turnStartedAt === null) {
       setElapsedMs(0)
       return
     }
-    turnStartRef.current = Date.now()
-    setElapsedMs(0)
-    const id = setInterval(() => {
-      if (turnStartRef.current !== null) {
-        setElapsedMs(Date.now() - turnStartRef.current)
-      }
-    }, 1000)
+    const tick = (): void => setElapsedMs(Date.now() - turnStartedAt)
+    tick()
+    const id = setInterval(tick, 1000)
     return () => clearInterval(id)
-  }, [generating, activeSessionId])
+  }, [generating, turnStartedAt])
 
   // Live per-turn token count for the activity byline: real output tokens for
   // the turn's finished messages, a character estimate for the one still
@@ -4681,6 +4691,10 @@ type SessionPaneProps = {
    * the real outcome; no optimistic UI, mirrors AccountsPage's `pendingRef`. */
   accountsLastResult: AccountResultFrame | null
   activeConnection: ConnectionSnapshot
+  /** When this session's running turn started, or null when no turn is running.
+   * Owned by App (`reduceTurnStarts`) because a pane is unmounted while its
+   * session is off screen, and the elapsed clock must survive that. */
+  turnStartedAt?: number | null
   activeDescriptor: SessionDescriptor | undefined
   activeLog: RawMessageSessionLog
   /** Read-only git branch for the empty-state meta strip — this session's own
