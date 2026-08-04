@@ -114,6 +114,7 @@ import type { SidecarLeaseDomain } from './leaseDomain.js'
 import type { SidecarTaskControlDomain } from './taskControlDomain.js'
 import type { SidecarRunControlsDomain } from './runControlsDomain.js'
 import type { SidecarSessionActionsDomain } from './sessionActionsDomain.js'
+import type { SidecarContextBreakdownDomain } from './contextBreakdownDomain.js'
 import {
   createSessionTitleGenerator,
   type SessionTitleDeps,
@@ -207,6 +208,13 @@ export type SidecarServerOptions = {
    * verbs fail closed with an internal_error.
    */
   sessionActions?: SidecarSessionActionsDomain
+  /**
+   * Context-breakdown read-seam — the per-category occupancy behind the composer
+   * donut's popover. Optional because the P1-0 probe fixture has no engine; when
+   * absent, no `context-breakdown.snapshot` frame is emitted and the popover
+   * renders its aggregate row alone.
+   */
+  contextBreakdown?: SidecarContextBreakdownDomain
   /**
    * Accounts read-seam + lifecycle verbs (P4-5). Optional because the P1-0 probe
    * fixture has no engine; when absent, no `accounts.snapshot` frame is emitted
@@ -325,6 +333,9 @@ export class SidecarServer {
   private readonly taskControl: SidecarTaskControlDomain | null
   private readonly runControls: SidecarRunControlsDomain | null
   private readonly sessionActions: SidecarSessionActionsDomain | null
+  private readonly contextBreakdown: SidecarContextBreakdownDomain | null
+  /** Serialises the (transcript-reading, tokenizing) breakdown analysis. */
+  private contextBreakdownInFlight = false
   private readonly accounts: SidecarAccountsDomain | null
   private readonly workspaceTrust: SidecarWorkspaceTrustDomain | null
   private readonly diagnostics: SidecarDiagnosticsDomain | null
@@ -394,6 +405,7 @@ export class SidecarServer {
     this.taskControl = options.taskControl ?? null
     this.runControls = options.runControls ?? null
     this.sessionActions = options.sessionActions ?? null
+    this.contextBreakdown = options.contextBreakdown ?? null
     this.accounts = options.accounts ?? null
     // P4-15 — the OAuth login controller pushes progress through this sink; the
     // server frames it as an `oauth.login.progress` broadcast (and re-broadcasts
@@ -425,6 +437,12 @@ export class SidecarServer {
     // server's broadcast model.)
     this.unsubscribe = this.controller.subscribe(event => {
       this.broadcastEvent(event)
+      // The context breakdown can only move across a turn, and re-analysing
+      // mid-stream would tokenize the whole transcript on every token. The
+      // falling edge of `turn.status` is the one moment worth paying for.
+      if (event.type === 'turn.status' && !event.activeTurn) {
+        void this.broadcastContextBreakdown()
+      }
     })
     // The terminal REPL owns an equivalent between-turn drain. Desktop submits
     // straight to this sidecar, so this process owns the idle wake-up for its
@@ -596,6 +614,11 @@ export class SidecarServer {
     // selectable options + availability). Read-at-call + re-broadcast on change; no
     // renderer-authored state (the value/selection rides the app-owned write verbs).
     this.sendRunControlsSnapshot(connection)
+    // The donut popover's per-category breakdown. Async + fire-and-forget (it
+    // tokenizes the transcript), so a resumed session's popover fills in shortly
+    // after attach rather than holding up replay. Broadcast, not per-connection:
+    // one analysis serves every attached pane.
+    void this.broadcastContextBreakdown()
     // P4-5 — redacted Codex account pool snapshot (the canonical domain read-seam),
     // after the other snapshots and before replay. Read-only + secretGuard-clean by
     // construction; re-broadcast after any pool-mutating account verb.
@@ -2761,6 +2784,53 @@ export class SidecarServer {
     }
     for (const connection of this.connections) {
       this.sendRunControlsSnapshot(connection)
+    }
+  }
+
+  /**
+   * Context-breakdown snapshot → every attached connection. Async because the
+   * analysis re-reads this session's transcript and tokenizes it; serialised by
+   * `contextBreakdownInFlight` so a burst of turn boundaries can never stack up
+   * several full analyses. A null snapshot (no transcript yet, analyzer failure)
+   * sends nothing at all rather than an empty breakdown, so the popover keeps its
+   * aggregate row instead of rendering a zeroed legend.
+   */
+  private async broadcastContextBreakdown(): Promise<void> {
+    if (!this.contextBreakdown || this.connections.size === 0) {
+      return
+    }
+    if (this.contextBreakdownInFlight) {
+      return
+    }
+    this.contextBreakdownInFlight = true
+    try {
+      const raw = await this.contextBreakdown.snapshot()
+      if (!raw || this.connections.size === 0) {
+        return
+      }
+      const breakdown = this.prepareOutboundPayload(
+        raw,
+        'context-breakdown.snapshot',
+      )
+      if (!breakdown) {
+        return
+      }
+      for (const connection of this.connections) {
+        this.send(connection, {
+          kind: 'context-breakdown.snapshot',
+          protocolVersion: PROTOCOL_VERSION,
+          sessionId: this.sessionId,
+          breakdown,
+        })
+      }
+    } catch (error) {
+      this.log(
+        `[sidecar] context-breakdown.snapshot send skipped (${
+          error instanceof Error ? error.message : String(error)
+        })`,
+      )
+    } finally {
+      this.contextBreakdownInFlight = false
     }
   }
 

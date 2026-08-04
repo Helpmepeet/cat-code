@@ -968,6 +968,63 @@ export type MemorySnapshotFrame = {
 }
 
 /* ------------------------------------------------------------------------- *
+ * Context breakdown read-seam — per-category context occupancy
+ * ------------------------------------------------------------------------- *
+ *
+ * What the terminal's `/context` visualizes, for the composer donut's popover
+ * (the prototype's `ContextChip` stacked bar + legend, `Surfaces.jsx:517-537`).
+ * Built by the engine's OWN `analyzeContextUsage`
+ * (`src/utils/analyzeContext.ts:923`) over this session's real messages, tools,
+ * agent definitions and permission context — never re-derived in the sidecar.
+ *
+ * OUTBOUND ONLY, and deliberately so. The obvious shape for "open the popover,
+ * ask for a breakdown" is a request verb, but that would widen the inbound
+ * vocabulary (SECURITY-MINIMUM §2 R2) to buy nothing: the analysis takes no
+ * renderer input, so a push carries exactly the same information with no new
+ * frame to validate. It rides the turn boundary, which is also the only moment
+ * the numbers can change.
+ *
+ * Category `label` and `tokens` are the engine's own (`analyzeContext.ts:1039`
+ * onward) and are passed through verbatim — the sidecar never renames a category
+ * to match the prototype's cosmetic labels, because the engine's names are what
+ * `/context` prints for the same session.
+ */
+export type ContextBreakdownCategory = {
+  /** The engine's category name, verbatim (`ContextCategory.name`). */
+  label: string
+  tokens: number
+  /**
+   * The engine's theme colour key (`ContextCategory.color`, a `keyof Theme`).
+   * Carried as an opaque string: the renderer owns the key → static Tailwind
+   * class map, since terminal theme keys have no meaning in the DOM.
+   */
+  colorKey: string
+  /**
+   * Deferred categories (tool-search) are shown for visibility but do NOT count
+   * toward usage (`analyzeContext.ts:1075-1092`), so they must be excluded from
+   * any total the reader compares against the window.
+   */
+  deferred: boolean
+}
+
+export type ContextBreakdownSnapshot = {
+  categories: ContextBreakdownCategory[]
+  /** `ContextData.totalTokens` — non-deferred occupancy. */
+  usedTokens: number
+  /** `ContextData.maxTokens` — the engine-resolved window for `model`. */
+  contextWindow: number
+  /** The model the analysis ran against, so a stale snapshot is detectable. */
+  model: string
+}
+
+export type ContextBreakdownSnapshotFrame = {
+  kind: 'context-breakdown.snapshot'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  breakdown: ContextBreakdownSnapshot
+}
+
+/* ------------------------------------------------------------------------- *
  * Tasks read-seam (P4-9) — read-only background-task snapshot
  * ------------------------------------------------------------------------- *
  *
@@ -2552,6 +2609,7 @@ export type ServerFrame =
   | AgentConfigSnapshotFrame
   | ThreadGoalSnapshotFrame
   | MemorySnapshotFrame
+  | ContextBreakdownSnapshotFrame
   | TasksSnapshotFrame
   | AgentModeSnapshotFrame
   | LeaseSnapshotFrame

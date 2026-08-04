@@ -38,6 +38,7 @@ const ATTACH_BURST_KINDS = [
   'agent-mode.snapshot',
   'lease.snapshot',
   'run-controls.snapshot',
+  'context-breakdown.snapshot',
   'accounts.snapshot',
   'workspace-trust.snapshot',
   'diagnostics.snapshot',

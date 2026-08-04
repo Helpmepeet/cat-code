@@ -110,6 +110,7 @@ const FRAME_RETENTION: Record<ServerFrame['kind'], FrameRetention> = {
   'agent-mode.snapshot': 'sticky',
   'lease.snapshot': 'sticky',
   'run-controls.snapshot': 'sticky',
+  'context-breakdown.snapshot': 'sticky',
   'accounts.snapshot': 'sticky',
   'workspace-trust.snapshot': 'sticky',
   'diagnostics.snapshot': 'sticky',

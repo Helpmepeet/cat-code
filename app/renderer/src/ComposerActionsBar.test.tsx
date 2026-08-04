@@ -628,9 +628,59 @@ test('ContextUsagePanel shows Plan usage (5h + weekly) plus the real Context tot
   expect(html).toContain('20%')
   // The 5h row carries the pool's single reset hint; null → the canonical "soon".
   expect(html).toContain('resets soon')
-  // Aggregate Context row: real percent + "42k / 200k" (fmt), never a per-category bar.
+  // Aggregate Context row: real percent + "42k / 200k" (fmt). No breakdown was
+  // passed, so no per-category bar rides under it.
   expect(html).toContain('Context')
   expect(html).toContain('42k / 200k')
+  expect(html).not.toContain('Free')
+})
+
+test('ContextUsagePanel renders the per-category breakdown, legend and Free row', () => {
+  const html = renderToStaticMarkup(
+    <ContextUsagePanel
+      usage={USAGE}
+      account={null}
+      breakdown={{
+        categories: [
+          {
+            label: 'System prompt',
+            tokens: 4_200,
+            colorKey: 'promptBorder',
+            deferred: false,
+          },
+          { label: 'Messages', tokens: 21_000, colorKey: 'claude', deferred: false },
+          {
+            label: 'MCP tools (deferred)',
+            tokens: 9_000,
+            colorKey: 'inactive',
+            deferred: true,
+          },
+        ],
+        usedTokens: 25_200,
+        contextWindow: 200_000,
+        model: 'gpt-5.6-luna',
+      }}
+    />,
+  )
+  // The engine's own category names, not the prototype's cosmetic labels.
+  expect(html).toContain('System prompt')
+  expect(html).toContain('Messages')
+  expect(html).toContain('4.2k')
+  expect(html).toContain('21k')
+  // Free = window - used.
+  expect(html).toContain('Free')
+  expect(html).toContain('175k')
+  // A deferred category occupies nothing, so it earns neither a row nor a segment.
+  expect(html).not.toContain('MCP tools (deferred)')
+})
+
+test('ContextUsagePanel without a breakdown keeps the aggregate row alone', () => {
+  const html = renderToStaticMarkup(
+    <ContextUsagePanel usage={USAGE} account={null} breakdown={null} />,
+  )
+  expect(html).toContain('42k / 200k')
+  expect(html).not.toContain('Free')
+  expect(html).not.toContain('System prompt')
 })
 
 test('ContextUsagePanel with no account shows the Context total only (no plan usage)', () => {

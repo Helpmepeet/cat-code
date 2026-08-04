@@ -12,6 +12,10 @@ import {
 import { handleMenuRovingKeyDown, usePopover } from './composerPopover.js'
 import { ContextGauge } from './ContextGauge.js'
 import { contextTone, type ContextUsage } from './contextUsage.js'
+import {
+  selectBreakdownRows,
+  selectFreeTokens,
+} from './contextBreakdownState.js'
 import { PermissionModeChip } from './PermissionModeChip.js'
 import { toneClasses } from './tone.js'
 import { selectTokenWarning, type TokenWarning } from './tokenWarning.js'
@@ -23,6 +27,7 @@ import type {
   RunControlModelOption,
   RunControlProvider,
   RunControlsSnapshot,
+  ContextBreakdownSnapshot,
 } from '../../shared/protocol.js'
 
 /**
@@ -674,20 +679,27 @@ function PlanUsageRow({
  * {@link AccountSwitcherPanel}. Shows the active account's 5h/weekly PLAN USAGE (when a
  * pool snapshot is present) + the real Context total, all from data already on the wire.
  *
- * DEFERRED (agreed 2026-07-14; ledger P4-0): the per-category context BREAKDOWN — the
- * prototype's stacked `contextBreakdown` bar (Surfaces.jsx:517) — needs an
- * `analyzeContextUsage` outbound frame that `contextUsage.ts` does not carry yet. Until
- * then this shows the aggregate Context row only, never a fabricated breakdown. */
+ * The per-category BREAKDOWN below the aggregate row (the prototype's stacked bar +
+ * legend + Free, Surfaces.jsx:517-537) is the `context-breakdown.snapshot` seam,
+ * carrying the engine's OWN `analyzeContextUsage` output. It was deferred until
+ * 2026-08-04 for want of exactly that frame. It arrives at the turn boundary, so a
+ * session that has not completed a turn renders the aggregate row alone — absent,
+ * never fabricated. */
 export function ContextUsagePanel({
   usage,
   account,
+  breakdown = null,
 }: {
   usage: ContextUsage
   account: AccountStatus | null
+  /** Per-category occupancy, absent until the first turn boundary reports one. */
+  breakdown?: ContextBreakdownSnapshot | null
 }) {
   const { percentUsed, usedTokens, contextWindow } = usage
   // Context fullness, NOT account quota — the same ladder the donut face reads.
   const t = toneClasses(contextTone(percentUsed))
+  const rows = selectBreakdownRows(breakdown)
+  const freeTokens = selectFreeTokens(breakdown)
   const showPlan =
     account != null &&
     (account.usagePrimary != null || account.usageWeekly != null)
@@ -717,13 +729,58 @@ export function ContextUsagePanel({
       <div
         className={`px-3.5 pb-3.5 ${showPlan ? 'border-t border-shell-seam pt-3' : 'pt-3'}`}
       >
-        <div className="flex items-center justify-between">
+        <div
+          className={`flex items-center justify-between ${rows.length > 0 ? 'mb-2.5' : ''}`}
+        >
           <span className="text-[11.5px] text-text-subtle">Context</span>
           <span className="text-[11.5px] tabular-nums text-text-muted">
             <span className={`font-semibold ${t.text}`}>{percentUsed}%</span> ·{' '}
             {fmtTokens(usedTokens)} / {fmtTokens(contextWindow)}
           </span>
         </div>
+        {rows.length > 0 ? (
+          <>
+            {/* The stacked occupancy bar (Surfaces.jsx:519-523): one segment per
+              * category, each sized by its share of the WINDOW, over a faint
+              * track that shows through as the unused remainder. */}
+            <div className="mb-2 flex h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
+              {rows.map(row => (
+                // §0 EXCEPTION: data-driven percent width (see PlanUsageRow).
+                <div
+                  key={row.label}
+                  className={row.swatch}
+                  style={{ width: `${row.percentOfWindow}%` }}
+                  title={`${row.label}, ${row.tokens.toLocaleString()} tokens`}
+                />
+              ))}
+            </div>
+            {rows.map(row => (
+              <div
+                key={row.label}
+                className="flex items-center justify-between py-[2.5px]"
+              >
+                <span className="flex items-center gap-1.5 text-[11px] text-text-muted">
+                  <span
+                    aria-hidden
+                    className={`size-[7px] shrink-0 rounded-sm ${row.swatch}`}
+                  />
+                  {row.label}
+                </span>
+                <span className="text-[11px] tabular-nums text-text-subtle">
+                  {fmtTokens(row.tokens)}
+                </span>
+              </div>
+            ))}
+            {freeTokens != null ? (
+              <div className="mt-0.5 flex items-center justify-between border-t border-shell-seam py-[2.5px]">
+                <span className="text-[11px] text-text-subtle">Free</span>
+                <span className="text-[11px] tabular-nums text-text-subtle">
+                  {fmtTokens(freeTokens)}
+                </span>
+              </div>
+            ) : null}
+          </>
+        ) : null}
       </div>
     </div>
   )
@@ -836,10 +893,12 @@ function TokenWarningChip({
 function ContextChip({
   usage,
   account,
+  breakdown,
   faceProps,
 }: {
   usage: ContextUsage
   account: AccountStatus | null
+  breakdown: ContextBreakdownSnapshot | null
   faceProps?: ComposerFaceProps
 }) {
   const { open, setOpen, ref, triggerRef } = usePopover()
@@ -857,7 +916,13 @@ function ContextChip({
       >
         <ContextGauge usage={usage} />
       </button>
-      {open ? <ContextUsagePanel usage={usage} account={account} /> : null}
+      {open ? (
+        <ContextUsagePanel
+          usage={usage}
+          account={account}
+          breakdown={breakdown}
+        />
+      ) : null}
     </div>
   )
 }
@@ -881,6 +946,7 @@ export function ComposerActionsBar({
   onSwitchAccount,
   onManageAccounts,
   contextUsage,
+  contextBreakdown = null,
   toolbarRef,
   onFocusComposer,
 }: {
@@ -920,6 +986,11 @@ export function ComposerActionsBar({
   onManageAccounts?: () => void
   /** Real context-window fullness, or null before the first result frame. */
   contextUsage: ContextUsage | null
+  /**
+   * Per-category context occupancy for the donut popover. Null until the
+   * sidecar's first `context-breakdown.snapshot` (one turn boundary).
+   */
+  contextBreakdown?: ContextBreakdownSnapshot | null
   /** Feature #4 — the toolbar's DOM node, so the composer keydown (App.tsx) can
    * move focus into the first face via {@link focusFirstComposerFace}. */
   toolbarRef?: Ref<HTMLDivElement>
@@ -1195,6 +1266,7 @@ export function ComposerActionsBar({
             <ContextChip
               usage={contextUsage}
               account={account}
+              breakdown={contextBreakdown}
               faceProps={faceProps('context')}
             />
           ) : null}

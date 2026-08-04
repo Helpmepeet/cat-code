@@ -170,6 +170,7 @@ async function main(): Promise<void> {
     taskControl,
     runControls,
     sessionActions,
+    contextBreakdown,
     slashCatalog,
   } = await createSidecarSessionController({
     probe: args.probeOnAttach,
@@ -224,6 +225,7 @@ async function main(): Promise<void> {
     ...(taskControl ? { taskControl } : {}),
     ...(runControls ? { runControls } : {}),
     ...(sessionActions ? { sessionActions } : {}),
+    ...(contextBreakdown ? { contextBreakdown } : {}),
     ...(slashCatalog.length > 0 ? { slashCatalog } : {}),
     ...(historyEvents !== undefined ? { history: historyEvents } : {}),
     ...(historySourceTruncated ? { historySourceTruncated: true } : {}),

@@ -235,6 +235,11 @@ import {
   selectRunControlsSnapshot,
 } from './runControlsState.js'
 import {
+  createContextBreakdownState,
+  reduceContextBreakdownState,
+  selectContextBreakdown,
+} from './contextBreakdownState.js'
+import {
   createSlashCatalogState,
   reduceSlashCatalogState,
   selectSlashCatalog,
@@ -348,6 +353,7 @@ import type {
   PermissionSetModeMode,
   RemoteVerbMessage,
   RunControlsSnapshot,
+  ContextBreakdownSnapshot,
   SessionActionVerbMessage,
   SessionId,
   SlashCatalogEntry,
@@ -391,6 +397,7 @@ const reduceAccountsStateBatched = withBatch(reduceAccountsState)
 const reduceWorkspaceTrustStateBatched = withBatch(reduceWorkspaceTrustState)
 const reduceDiagnosticsStateBatched = withBatch(reduceDiagnosticsState)
 const reduceRunControlsStateBatched = withBatch(reduceRunControlsState)
+const reduceContextBreakdownStateBatched = withBatch(reduceContextBreakdownState)
 const reduceSlashCatalogStateBatched = withBatch(reduceSlashCatalogState)
 /** Stable empty catalog so an omitted `slashCatalog` prop keeps one identity. */
 const EMPTY_SLASH_CATALOG: readonly SlashCatalogEntry[] = []
@@ -621,6 +628,11 @@ export function App() {
     undefined,
     createRunControlsState,
   )
+  const [contextBreakdown, dispatchContextBreakdown] = useReducer(
+    reduceContextBreakdownStateBatched,
+    undefined,
+    createContextBreakdownState,
+  )
   const [slashCatalog, dispatchSlashCatalog] = useReducer(
     reduceSlashCatalogStateBatched,
     undefined,
@@ -832,6 +844,7 @@ export function App() {
         dispatchWorkspaceTrust,
         dispatchDiagnostics,
         dispatchRunControls,
+        dispatchContextBreakdown,
         dispatchSlashCatalog,
         dispatchRemoteSettings,
         dispatchSessionActionRuntime,
@@ -2364,6 +2377,12 @@ export function App() {
 	      // this session's current state with no respawn. Supersedes the P4-24 read
 	      // from the spawn-frozen diagnostics snapshot for the composer faces.
 	      const panelRunControls = selectRunControlsSnapshot(runControls, sessionId)
+	      // Per-category context occupancy for the donut popover; null until this
+	      // session's first turn boundary reports one.
+	      const panelContextBreakdown = selectContextBreakdown(
+	        contextBreakdown,
+	        sessionId,
+	      )
 	      const panelProvider = panelRunControls?.model.provider ?? null
 	      const panelActiveCodexAccount =
 	        panelProvider === 'openai' ? selectActiveAccount(panelAccounts) : null
@@ -2423,6 +2442,7 @@ export function App() {
 	            reasoningEffort={panelRunControls?.effort.current ?? null}
 	            fastMode={panelRunControls?.fast.active ?? false}
 	            runControls={panelRunControls}
+	            contextBreakdown={panelContextBreakdown}
             slashCatalog={panelSlashCatalog}
 	            onSetModel={model => {
 	              try {
@@ -3445,6 +3465,7 @@ export function SessionPane({
   reasoningEffort,
   fastMode,
   runControls,
+  contextBreakdown = null,
   slashCatalog = EMPTY_SLASH_CATALOG,
   onSetModel,
   onSetEffort,
@@ -4410,6 +4431,7 @@ export function SessionPane({
           onSwitchAccount={handleSwitchAccount}
           onManageAccounts={onManageAccounts}
           contextUsage={contextUsage}
+          contextBreakdown={contextBreakdown}
           toolbarRef={actionBarRef}
           onFocusComposer={() => composerRef.current?.focus()}
         />
@@ -4696,6 +4718,8 @@ type SessionPaneProps = {
   fastMode: boolean
   /** P4-24c — the live run-controls snapshot (current + real picker options + availability). */
   runControls?: RunControlsSnapshot | null
+  /** Per-category context occupancy for the donut popover (turn-boundary seam). */
+  contextBreakdown?: ContextBreakdownSnapshot | null
   /** The session's rich slash-command catalog (name + description + arg hint) for
    * the composer picker; empty/absent falls the picker back to the names-only list. */
   slashCatalog?: readonly SlashCatalogEntry[]

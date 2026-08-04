@@ -22,6 +22,12 @@ import {
   setSessionProvider,
 } from '../../src/bootstrap/state.js'
 import { getTools } from '../../src/tools.js'
+import { getMainLoopModel } from '../../src/utils/model/model.js'
+import {
+  createRealContextBreakdownExecutor,
+  createSidecarContextBreakdownDomain,
+  type SidecarContextBreakdownDomain,
+} from './contextBreakdownDomain.js'
 import { getCommands, type Command } from '../../src/commands.js'
 import type { SlashCatalogEntry } from '../shared/protocol.js'
 import {
@@ -493,6 +499,12 @@ export type SidecarSession = {
    */
   sessionActions: SidecarSessionActionsDomain | null
   /**
+   * Context-breakdown read-seam — the per-category occupancy `/context`
+   * visualizes, for the composer donut's popover. Read-only; null in probe mode
+   * (no engine tools/agents to analyse against).
+   */
+  contextBreakdown: SidecarContextBreakdownDomain | null
+  /**
    * The session's real user-invocable slash commands WITH display metadata (name
    * + description + optional arg hint), built at spawn from the SAME `getCommands`
    * catalog that feeds `slash_commands`. The server pushes it on connect as a
@@ -549,6 +561,7 @@ export async function createSidecarSessionController({
       taskControl: null,
       runControls: null,
       sessionActions: null,
+      contextBreakdown: null,
       slashCatalog: [],
     }
   }
@@ -607,6 +620,25 @@ export async function createSidecarSessionController({
     taskControl: createSidecarTaskControlDomain(appStateStore),
     runControls,
     sessionActions: createSidecarSessionActionsDomain({ tools }),
+    // The composer donut's popover breakdown. Fed the SAME tools / agent
+    // definitions / permission context the query engine above runs with, and the
+    // SAME `getMainLoopModel()` resolver run-controls reads, so `/context` and
+    // the popover describe one session rather than two.
+    contextBreakdown: createSidecarContextBreakdownDomain({
+      executor: createRealContextBreakdownExecutor({
+        tools,
+        agentDefinitions,
+        getToolPermissionContext: () =>
+          appStateStore.getState().toolPermissionContext,
+        getMainLoopModel: () => getMainLoopModel(),
+        // The sidecar configures the engine with no MCP clients
+        // (`mcpClients: []` above), so the analysis is told the same.
+        getMcpClients: () => [],
+      }),
+      onError: error => {
+        console.error('[sidecar] context breakdown failed', error)
+      },
+    }),
     slashCatalog,
   }
 }
