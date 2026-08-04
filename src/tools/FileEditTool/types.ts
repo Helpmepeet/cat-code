@@ -65,8 +65,16 @@ const outputSchema = lazySchema(() =>
     filePath: z.string().describe('The file path that was edited'),
     oldString: z.string().describe('The original string that was replaced'),
     newString: z.string().describe('The new string that replaced it'),
+    firstLine: z
+      .string()
+      .nullable()
+      .optional()
+      .describe('First line of the original file, for language detection'),
+    // Legacy: pre-2026-08 transcripts persisted the whole pre-edit file here.
+    // Kept optional so resuming one still passes the read-back safeParse.
     originalFile: z
       .string()
+      .optional()
       .describe('The original file contents before editing'),
     structuredPatch: z
       .array(hunkSchema())

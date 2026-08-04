@@ -17,7 +17,7 @@ import { Box, Text } from '../../ink.js';
 import type { ToolProgressData } from '../../Tool.js';
 import type { ProgressMessage } from '../../types/message.js';
 import { getCwd } from '../../utils/cwd.js';
-import { getPatchForDisplay } from '../../utils/diff.js';
+import { firstLineForLanguageDetection, getPatchForDisplay } from '../../utils/diff.js';
 import { getDisplayPath } from '../../utils/file.js';
 import { logError } from '../../utils/log.js';
 import { getPlansDirectory } from '../../utils/plans.js';
@@ -363,8 +363,7 @@ export function renderToolResultMessage({
   filePath,
   content,
   structuredPatch,
-  type,
-  originalFile
+  type
 }: Output, _progressMessagesForMessage: ProgressMessage<ToolProgressData>[], {
   style,
   verbose
@@ -398,7 +397,7 @@ export function renderToolResultMessage({
     case 'update':
       {
         const isPlanFile = filePath.startsWith(getPlansDirectory());
-        return <FileEditToolUpdatedMessage filePath={filePath} structuredPatch={structuredPatch} firstLine={content.split('\n')[0] ?? null} fileContent={originalFile ?? undefined} style={style} verbose={verbose} previewHint={isPlanFile ? '/plan to preview' : undefined} />;
+        return <FileEditToolUpdatedMessage filePath={filePath} structuredPatch={structuredPatch} firstLine={firstLineForLanguageDetection(content)} style={style} verbose={verbose} previewHint={isPlanFile ? '/plan to preview' : undefined} />;
       }
   }
 }
