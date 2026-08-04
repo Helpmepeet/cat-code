@@ -450,9 +450,15 @@ export const FilePatchTool = buildTool({
       }
     }
 
+    // Built field by field, never spread from the applier result: `before`/
+    // `after` hold the whole file twice and this object is serialized verbatim
+    // onto the transcript. structuredPatch plus firstLine is everything any
+    // reader uses.
     const output: FilePatchToolOutput = {
       files: applied.files.map(file => ({
-        ...file,
+        path: file.path,
+        type: file.type,
+        firstLine: (file.before ?? file.after)?.split('\n')[0] ?? null,
         structuredPatch: getPatchFromContents({
           filePath: file.path,
           oldContent: file.before ?? '',

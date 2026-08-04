@@ -63,6 +63,18 @@ export function renderToolUseMessage(
   return summary
 }
 
+// Language detection only ever needed the file's first line. New results carry
+// it directly; transcripts written before that still carry the full
+// before/after text, so fall back to those with the same precedence.
+function firstLineOf(file: FilePatchToolOutput['files'][number]): string | null {
+  return (
+    file.firstLine ??
+    file.before?.split('\n')[0] ??
+    file.after?.split('\n')[0] ??
+    null
+  )
+}
+
 export function renderToolResultMessage(
   output: FilePatchToolOutput,
   _progressMessagesForMessage: ProgressMessage<ToolProgressData>[],
@@ -82,8 +94,7 @@ export function renderToolResultMessage(
       <FileEditToolUpdatedMessage
         filePath={file.path}
         structuredPatch={file.structuredPatch}
-        firstLine={file.before?.split('\n')[0] ?? file.after?.split('\n')[0] ?? null}
-        fileContent={file.before ?? undefined}
+        firstLine={firstLineOf(file)}
         style={style}
         verbose={verbose}
       />
@@ -97,8 +108,7 @@ export function renderToolResultMessage(
           key={`${file.type}:${file.path}`}
           filePath={file.path}
           structuredPatch={file.structuredPatch}
-          firstLine={file.before?.split('\n')[0] ?? file.after?.split('\n')[0] ?? null}
-          fileContent={file.before ?? undefined}
+          firstLine={firstLineOf(file)}
           style={style}
           verbose={verbose}
         />

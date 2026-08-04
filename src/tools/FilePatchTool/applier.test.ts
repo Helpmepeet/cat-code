@@ -14,7 +14,9 @@ import {
   applyUpdateHunks,
   serializeBuffer,
 } from './applier.js'
+import { renderToolResultMessage } from './UI.js'
 import type { ApplyPatchFileState, FilePatchHunk, FilePatchOperation } from './types.js'
+import { outputSchema } from './types.js'
 
 const tempDirs: string[] = []
 
@@ -787,5 +789,191 @@ describe('FilePatchTool.mapToolResultToToolResultBlockParam', () => {
     expect(content).toContain('Updated /x/a.ts')
     expect(content).toContain('Added /x/new.ts')
     expect(content).toContain('Deleted /x/gone.ts')
+  })
+})
+
+describe('FilePatchTool.call transcript payload', () => {
+  test('carries firstLine + structuredPatch and never the full file contents', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'file-patch-tool-'))
+    tempDirs.push(tempDir)
+
+    const updatePath = join(tempDir, 'update.txt')
+    const addPath = join(tempDir, 'add.txt')
+    const deletePath = join(tempDir, 'delete.txt')
+    const movePath = join(tempDir, 'move-src.txt')
+    const moveDest = join(tempDir, 'move-dst.txt')
+
+    // The sentinel sits far enough from the edited hunk that no diff context
+    // line can reach it, so finding it in the serialized result would mean the
+    // whole file was persisted again.
+    writeFileSync(
+      updatePath,
+      `header one\nbody\n${'filler\n'.repeat(10)}UNTOUCHED_SENTINEL\n`,
+    )
+    writeFileSync(deletePath, 'header two\ngone\n')
+    writeFileSync(movePath, 'header three\nmoved\n')
+
+    const result = await FilePatchTool.call(
+      {
+        ops: [
+          {
+            type: 'update',
+            path: updatePath,
+            hunks: [
+              hunk({
+                lines: [
+                  { kind: 'context', text: 'header one' },
+                  { kind: 'delete', text: 'body' },
+                  { kind: 'add', text: 'body updated' },
+                ],
+              }),
+            ],
+          },
+          {
+            type: 'add',
+            path: addPath,
+            lines: ['header four', 'created'],
+            noNewlineAtEndOfFile: false,
+          },
+          { type: 'delete', path: deletePath },
+          {
+            type: 'update',
+            path: movePath,
+            moveTo: moveDest,
+            hunks: [
+              hunk({
+                lines: [
+                  { kind: 'context', text: 'header three' },
+                  { kind: 'add', text: 'appended' },
+                ],
+              }),
+            ],
+          },
+        ],
+      },
+      {
+        readFileState: createFileStateCacheWithSizeLimit(10),
+        updateFileHistoryState: () => undefined,
+      } as never,
+      undefined,
+      { uuid: 'test-parent' } as never,
+    )
+
+    // A rename is applied as a delete of the source plus an add of the target.
+    const files = result.data.files
+    expect(files.map(file => [file.path, file.type])).toEqual([
+      [updatePath, 'update'],
+      [addPath, 'add'],
+      [deletePath, 'delete'],
+      [movePath, 'delete'],
+      [moveDest, 'add'],
+    ])
+
+    for (const file of files) {
+      expect(Object.keys(file).sort()).toEqual([
+        'firstLine',
+        'path',
+        'structuredPatch',
+        'type',
+      ])
+      expect(file.structuredPatch.length).toBeGreaterThan(0)
+    }
+
+    expect(files.map(file => file.firstLine)).toEqual([
+      'header one',
+      'header four',
+      'header two',
+      'header three',
+      'header three',
+    ])
+
+    expect(JSON.stringify(result.data)).not.toContain('UNTOUCHED_SENTINEL')
+  })
+})
+
+describe('FilePatchTool result rendering', () => {
+  const structuredPatch = [
+    {
+      oldStart: 1,
+      oldLines: 1,
+      newStart: 1,
+      newLines: 1,
+      lines: ['-const a = 1', '+const a = 2'],
+    },
+  ]
+  const renderOptions = { verbose: false, tools: [] } as never
+
+  test('uses the persisted firstLine for language detection', () => {
+    const element = renderToolResultMessage(
+      {
+        files: [
+          { path: '/x/a.ts', type: 'update', firstLine: '#!/usr/bin/env node', structuredPatch },
+        ],
+      },
+      [],
+      renderOptions,
+    ) as { props: Record<string, unknown> }
+
+    expect(element.props.firstLine).toBe('#!/usr/bin/env node')
+    expect(element.props.fileContent).toBeUndefined()
+  })
+
+  test('falls back to a legacy result that only has before/after', () => {
+    const element = renderToolResultMessage(
+      {
+        files: [
+          {
+            path: '/x/a.ts',
+            type: 'update',
+            before: '#!/usr/bin/env node\nconst a = 1\n',
+            after: '#!/usr/bin/env node\nconst a = 2\n',
+            structuredPatch,
+          },
+        ],
+      },
+      [],
+      renderOptions,
+    ) as { props: Record<string, unknown> }
+
+    expect(element.props.firstLine).toBe('#!/usr/bin/env node')
+  })
+})
+
+describe('FilePatchTool.outputSchema back-compat', () => {
+  const base = {
+    path: '/x/a.ts',
+    type: 'update' as const,
+    structuredPatch: [
+      {
+        oldStart: 1,
+        oldLines: 1,
+        newStart: 1,
+        newLines: 1,
+        lines: ['-const a = 1', '+const a = 2'],
+      },
+    ],
+  }
+
+  test('accepts a legacy result that still carries full before/after', () => {
+    // Old transcripts are re-validated on resume; a reject blanks the row.
+    expect(
+      outputSchema().safeParse({
+        files: [{ ...base, before: 'const a = 1\n', after: 'const a = 2\n' }],
+      }).success,
+    ).toBe(true)
+  })
+
+  test('accepts a current result that carries firstLine instead', () => {
+    expect(
+      outputSchema().safeParse({
+        files: [{ ...base, firstLine: 'const a = 1' }],
+      }).success,
+    ).toBe(true)
+  })
+
+  test('still rejects an unknown field', () => {
+    expect(
+      outputSchema().safeParse({ files: [{ ...base, bogus: 1 }] }).success,
+    ).toBe(false)
   })
 })

@@ -139,8 +139,12 @@ const outputFileSchema = lazySchema(() =>
   z.strictObject({
     path: z.string(),
     type: z.enum(['update', 'add', 'delete']),
-    before: z.string().nullable(),
-    after: z.string().nullable(),
+    firstLine: z.string().nullable().optional(),
+    // Legacy: builds before firstLine persisted the whole file twice per edit.
+    // Still accepted so resumed transcripts keep rendering — the read-back
+    // components drop the whole result when safeParse fails.
+    before: z.string().nullable().optional(),
+    after: z.string().nullable().optional(),
     structuredPatch: z
       .array(
         z.strictObject({
@@ -163,12 +167,20 @@ const outputSchema = lazySchema(() =>
 
 export type FilePatchToolInput = z.infer<ReturnType<typeof inputSchema>>
 
+// Persisted verbatim as `toolUseResult` on the transcript JSONL line, so it
+// carries only what a reader needs: the compact diff plus the one line of
+// content language detection keys off. `before`/`after` full file text is not
+// written any more (a single edit to an 886 KB file wrote a 1.7 MB result);
+// both stay optional here because old transcripts still carry them.
 export type FilePatchToolOutput = {
-  files: Array<
-    ApplyPatchSuccess & {
-      structuredPatch: StructuredPatchHunk[]
-    }
-  >
+  files: Array<{
+    path: string
+    type: FilePatchOperationType
+    firstLine?: string | null
+    structuredPatch: StructuredPatchHunk[]
+    before?: string | null
+    after?: string | null
+  }>
 }
 
 export { inputSchema, operationSchema, outputSchema }
