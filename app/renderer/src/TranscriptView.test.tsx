@@ -114,6 +114,19 @@ function occurrences(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1
 }
 
+/**
+ * The rendered text with its tags removed, entities left escaped.
+ *
+ * For asserting that some source is ON SCREEN in a syntax-colored body. The
+ * highlighter splits a line into token spans, so `const greeting` is no longer
+ * one contiguous run in the markup even though it is one contiguous run to the
+ * reader. Asserting through this says "the file's text is visible" instead of
+ * pinning which tokenizer ran.
+ */
+function visibleText(html: string): string {
+  return html.replace(/<[^>]*>/g, '')
+}
+
 test('renders an assistant text row as markdown, not raw source', () => {
   const html = renderToStaticMarkup(
     <TranscriptRowsView
@@ -1371,6 +1384,47 @@ test('a NON-bash body keeps the prototype flat base, NOT the bash line heuristic
   expect(html).not.toContain('text-[#86efac]')
 })
 
+test('a written file is syntax-colored AND still reads as additions', () => {
+  // The prototype's `hl()` colors only the tokens it recognizes and lets every
+  // untouched character inherit the surrounding `FE_T.add` (`Messages.jsx:626`).
+  // Reproduced by NOT putting `hljs` on the source element: `.hljs` sets an
+  // explicit base color that would repaint the file in the code theme's
+  // foreground, while the per-token `.hljs-*` rules are independent selectors
+  // and still apply. Both halves are asserted, because either alone would pass
+  // while the body looked wrong.
+  const html = render(
+    writeRow(
+      { file_path: '/w/hello.ts', content: 'const greeting = "hi"' },
+      { content: WRITE_ACK, isError: false },
+    ),
+  )
+
+  expect(html).toContain('hljs-keyword') // `const` tokenized
+  expect(html).toContain('hljs-string') // the quoted literal tokenized
+  expect(html).toContain('text-[#86efac]') // …over the add-green base
+  // `hljs` must appear ONLY as the `hljs-<token>` prefix, never as a class of
+  // its own — that bare class is what carries the base color. Matched as a
+  // whole class token: a plain `toContain('hljs')` cannot tell the two apart,
+  // and `toContain('"hljs"')` silently never matches, since the class would sit
+  // mid-list rather than alone in the attribute.
+  expect(html).not.toMatch(/class="[^"]*\bhljs\b(?!-)/)
+})
+
+test('a written file whose extension names no language stays plain green', () => {
+  // `detect: false` is the house rule: color only what we can name. An unknown
+  // extension must not be guessed at, and must not lose the additions green.
+  const html = render(
+    writeRow(
+      { file_path: '/w/notes.xyz', content: 'const greeting = "hi"' },
+      { content: WRITE_ACK, isError: false },
+    ),
+  )
+
+  expect(visibleText(html)).toContain('const greeting = &quot;hi&quot;')
+  expect(html).toContain('text-[#86efac]')
+  expect(html).not.toContain('hljs')
+})
+
 test('a written file uses the prototype add-green on both the + and the line', () => {
   // `FE_T.add` `#86efac` on the row AND the marker (`Messages.jsx:625-627`).
   // NOT `tone-success` `#4ade80`, which is the prototype's DIFF sign green
@@ -1957,8 +2011,8 @@ test('a write shows the file it wrote, not the engine sentence about it', () => 
     ),
   )
 
-  expect(html).toContain('const greeting = &quot;hi&quot;')
-  expect(html).toContain('export default greeting')
+  expect(visibleText(html)).toContain('const greeting = &quot;hi&quot;')
+  expect(visibleText(html)).toContain('export default greeting')
   // Painted as additions, which is now true of what it is painting.
   expect(html).toContain('text-[#86efac]')
   // The ack never reaches the body; the card's own status already reports it.
@@ -2000,7 +2054,7 @@ test('a long written file still bands, and the band counts the FILE', () => {
   )
 
   expect(html).toContain('864 lines hidden') // 900 - 30 head - 6 tail
-  expect(html).toContain('line 1')
-  expect(html).toContain('line 900')
-  expect(html).not.toContain('line 500')
+  expect(visibleText(html)).toContain('line 1')
+  expect(visibleText(html)).toContain('line 900')
+  expect(visibleText(html)).not.toContain('line 500')
 })

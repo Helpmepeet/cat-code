@@ -80,7 +80,7 @@ import {
 } from './agentChromeModel.js'
 import { ToolInspector } from './ToolInspector.js'
 import { parseToolAck, type ToolAck } from './toolAck.js'
-import { ReadSourceLines } from './ReadSourceLines.js'
+import { AdditionSourceLines, ReadSourceLines } from './ReadSourceLines.js'
 import {
   parseReadSource,
   readLineNumbers,
@@ -1275,6 +1275,7 @@ function ToolCardBody({
       return (
         <WriteBody
           written={row.input['content']}
+          filePath={row.input['file_path']}
           result={content}
           isError={errorTone}
           onOpenFull={openFull}
@@ -1545,43 +1546,21 @@ function NumberedBody({
   )
 }
 
-/**
- * File-write additions view: every line prefixed with a green `+`.
- *
- * The green is the prototype's `FE_T.add` `#86efac` (`Messages.jsx:8-13`), which
- * it puts on BOTH the `+` and the line (`:625-627`) — not the saturated
- * `tone-success` `#4ade80` this used to paint the whole body with. That 400 is
- * the prototype's SIGN green for a DIFF row (`:186`); borrowing it here made a
- * written file read as one dense green slab rather than as added lines.
- *
- * Literal arbitrary-value class for the `DIFF_ROW_CLASS` reason: Tailwind v4's
- * oklch palette drifts the named utilities off the prototype's exact hexes.
- */
-function AdditionLines({ lines }: { lines: string[] }) {
-  return (
-    <pre className="whitespace-pre font-mono text-[11.5px] leading-relaxed text-[#86efac]">
-      {lines.map((line, index) => (
-        <div key={index} className="flex">
-          <span className="mr-2 w-3 shrink-0 select-none text-right">+</span>
-          <span className="min-w-0">{line || ' '}</span>
-        </div>
-      ))}
-    </pre>
-  )
-}
-
 function AdditionsBody({
   content,
+  filePath,
   onOpenFull,
 }: {
   content: string
+  filePath: unknown
   onOpenFull: (() => void) | null
 }) {
   const lines = content.split('\n')
+  const lang = readSourceLanguage(filePath)
   const { window, revealMore } = useInlineOutputWindow(lines)
   return (
     <div className={INLINE_OUTPUT_SCROLLER}>
-      <AdditionLines lines={window.head} />
+      <AdditionSourceLines lines={window.head} lang={lang} />
       {window.truncated ? (
         <>
           <InlineRevealBand
@@ -1590,7 +1569,7 @@ function AdditionsBody({
             onReveal={revealMore}
             onOpenFull={onOpenFull}
           />
-          <AdditionLines lines={window.tail} />
+          <AdditionSourceLines lines={window.tail} lang={lang} />
         </>
       ) : null}
     </div>
@@ -1618,12 +1597,15 @@ function AdditionsBody({
  */
 function WriteBody({
   written,
+  filePath,
   result,
   isError,
   onOpenFull,
 }: {
   /** Raw `input.content`, narrowed here rather than trusted. */
   written: unknown
+  /** Raw `input.file_path`; only the extension is read, for the language. */
+  filePath: unknown
   result: string
   isError: boolean
   onOpenFull: (() => void) | null
@@ -1637,7 +1619,9 @@ function WriteBody({
       />
     )
   }
-  return <AdditionsBody content={written} onOpenFull={onOpenFull} />
+  return (
+    <AdditionsBody content={written} filePath={filePath} onOpenFull={onOpenFull} />
+  )
 }
 
 function PlainLinesBody({

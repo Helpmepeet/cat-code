@@ -1,7 +1,9 @@
 /**
- * One numbered, syntax-colored slice of a file-READ card's body (the prototype's
- * `FileReadCard` contents, `~/catcode_prototype/cat-app/Messages.jsx:598-607`,
- * where every line goes through the prototype's own `hl()`).
+ * The two gutter-beside-source card bodies: a file READ (`ReadSourceLines`,
+ * numbered) and a file WRITE (`AdditionSourceLines`, `+`-prefixed). Both are
+ * prototype bodies whose every line goes through its own `hl()`
+ * (`~/catcode_prototype/cat-app/Messages.jsx:598-607` and `:624-630`), and both
+ * share the highlighter setup and the two-column geometry below.
  *
  * WHY A HIGHLIGHTER AND NOT THE PROTOTYPE'S `hl()`. The prototype hand-rolls a
  * regex colorer with a fixed One-Dark-ish palette and says so
@@ -93,6 +95,69 @@ export function ReadSourceLines({
         <pre className={`${SOURCE_TYPE} text-text-muted`}>{code}</pre>
       ) : (
         <Markdown components={SOURCE_COMPONENTS} rehypePlugins={REHYPE_PLUGINS}>
+          {sourceFence(code, lang)}
+        </Markdown>
+      )}
+    </div>
+  )
+}
+
+/** The prototype's `+` gutter: 14px wide, add-green, one marker per line. */
+const ADDITION_GUTTER_CLASS = `${SOURCE_TYPE} w-3.5 shrink-0 select-none text-[#86efac]`
+
+/**
+ * The write body's source column. Identical to `SOURCE_COMPONENTS` except that
+ * it deliberately does NOT carry the `hljs` class.
+ *
+ * That one omission is what lets a written file read as ADDITIONS and as source
+ * at the same time, which is what the prototype does: its `hl()` colors only the
+ * tokens it recognizes and every untouched character inherits the surrounding
+ * `FE_T.add` (`Messages.jsx:626-627`). `.hljs` sets an explicit base color
+ * (`theme.css:325`), so carrying it here would repaint the whole file in the
+ * code theme's foreground and the green would survive only on the `+` markers.
+ * The per-token rules (`.hljs-keyword`, `.hljs-string`, …) are independent
+ * selectors on the inner spans, so they still apply, and still follow whichever
+ * of the five code themes is selected. No new CSS, and no specificity fight with
+ * the `[data-code-theme]` blocks.
+ */
+const ADDITION_COMPONENTS = {
+  pre: ({ children }: ComponentPropsWithoutRef<'pre'>) => <>{children}</>,
+  code: ({ children }: ComponentPropsWithoutRef<'code'>) => (
+    <pre className={`${SOURCE_TYPE} text-[#86efac]`}>
+      {trimTrailingNewline(children)}
+    </pre>
+  ),
+}
+
+/**
+ * One `+`-prefixed, syntax-colored slice of a file-WRITE card's body (prototype
+ * `Messages.jsx:624-630`).
+ *
+ * The ledger declined this on 2026-08-03 because "there is no source here to
+ * color" — a Write RESULT is a one-sentence ack. That premise stopped holding
+ * the same day: the written file is the tool's INPUT (`input.content`) and is
+ * what `WriteBody` already renders, so the source was on the row all along.
+ */
+export function AdditionSourceLines({
+  lines,
+  lang,
+}: {
+  lines: string[]
+  /** null when the file's language is unknown: the slice stays plain green. */
+  lang: string | null
+}) {
+  const code = lines.join('\n')
+  return (
+    <div className="flex">
+      <pre className={ADDITION_GUTTER_CLASS}>
+        {lines.map((_, index) => (
+          <div key={index}>+</div>
+        ))}
+      </pre>
+      {lang === null ? (
+        <pre className={`${SOURCE_TYPE} text-[#86efac]`}>{code}</pre>
+      ) : (
+        <Markdown components={ADDITION_COMPONENTS} rehypePlugins={REHYPE_PLUGINS}>
           {sourceFence(code, lang)}
         </Markdown>
       )}
