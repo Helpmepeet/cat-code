@@ -15,6 +15,11 @@ import {
 } from './transcriptViewModel.js'
 import { ToolsExpandedContext } from './toolsExpanded.js'
 import {
+  createToolCardExpansionStore,
+  ToolCardExpansionContext,
+  type ToolCardExpansionStore,
+} from './toolCardExpansion.js'
+import {
   createTranscriptState,
   projectServerFrame,
   selectNestedTranscriptRows,
@@ -197,12 +202,14 @@ function toolRow(fields: {
   status?: ToolCardStatus
   result?: ToolResultProjection | null
   children?: NestedTranscriptRow[]
+  /** Only needed when a test renders more than one row of the same tool. */
+  id?: string
 }): NestedTranscriptRow {
   return {
     ...blockSource,
-    id: `s:m:0:${fields.toolName}`,
+    id: fields.id ?? `s:m:0:${fields.toolName}`,
     kind: 'tool-use',
-    toolUseId: `toolu_${fields.toolName}`,
+    toolUseId: `toolu_${fields.id ?? fields.toolName}`,
     toolName: fields.toolName,
     toolFamily: fields.toolFamily,
     agentCompletion: null,
@@ -1034,7 +1041,7 @@ test('trail mode: an all-withheld run draws bare lines — no head asserting ste
   expect(html).not.toContain('ENCRYPTED')
 })
 
-test('trail mode: a long run folds its older steps behind a control', () => {
+test('trail mode: a long run shows every step, with nothing folded away', () => {
   const html = renderRows(
     Array.from({ length: 7 }, (_, index) =>
       thinkingRow(`s:m:${index}:thinking`, `Step number ${index}`),
@@ -1043,11 +1050,10 @@ test('trail mode: a long run folds its older steps behind a control', () => {
   )
 
   expect(html).toContain('7 steps')
-  expect(html).toContain('3 earlier steps')
-  // The oldest three are folded away; the last four remain.
-  expect(html).not.toContain('Step number 0')
-  expect(html).toContain('Step number 3')
-  expect(html).toContain('Step number 6')
+  expect(html).not.toContain('earlier')
+  for (let index = 0; index < 7; index += 1) {
+    expect(html).toContain(`Step number ${index}`)
+  }
 })
 
 test('trail mode: a long member inside a run keeps its prose under its own step', () => {
@@ -2289,4 +2295,459 @@ test('a long written file still bands, and the band counts the FILE', () => {
   expect(visibleText(html)).toContain('line 1')
   expect(visibleText(html)).toContain('line 900')
   expect(visibleText(html)).not.toContain('line 500')
+})
+
+// ─── grouped tool runs (prototype GroupedToolGroup: FileReadCard + GrepCard) ──
+
+/** Render a row list, optionally with tool cards opened by default so a run's
+ * member rows are on screen (a successful run is collapsed, like every card). */
+function renderMany(rows: NestedTranscriptRow[], expanded = false): string {
+  return renderToStaticMarkup(
+    <ToolsExpandedContext.Provider value={{ expanded, setExpanded: () => {} }}>
+      <TranscriptRowsView rows={rows} />
+    </ToolsExpandedContext.Provider>,
+  )
+}
+
+function runReadRow(
+  id: string,
+  filePath: string,
+  over: { content?: string; status?: ToolCardStatus; isError?: boolean } = {},
+): NestedTranscriptRow {
+  const content = over.content ?? '1\tconst a = 1\n2\tconst b = 2'
+  return toolRow({
+    id,
+    toolName: 'Read',
+    toolFamily: 'read',
+    input: { file_path: filePath },
+    status: over.status ?? 'success',
+    result: { content, isError: over.isError ?? false, diff: null },
+  })
+}
+
+test('adjacent reads collapse into ONE card that counts the files', () => {
+  const html = renderMany([
+    runReadRow('r1', '/repo/app/renderer/src/TranscriptView.tsx'),
+    runReadRow('r2', '/repo/app/shared/protocol.ts'),
+    runReadRow('r3', '/repo/app/sidecar/sidecarServer.ts'),
+  ])
+
+  expect(html).toContain('3 files')
+  // One shell, not three: the family word is drawn once, by the group head.
+  expect(occurrences(html, '>Read</span>')).toBe(1)
+})
+
+test('the run hoists the shared directory onto the head and shortens its rows', () => {
+  const html = renderMany(
+    [
+      runReadRow('r1', '/repo/app/shared/protocol.ts'),
+      runReadRow('r2', '/repo/app/sidecar/protocol.ts'),
+    ],
+    true,
+  )
+  const text = visibleText(html)
+
+  // Stated once on the head, not repeated down every row.
+  expect(text).toContain('/repo/app/')
+  expect(occurrences(text, '/repo/app/')).toBe(1)
+  // The whole point of the run: two files that share a basename stay distinct.
+  expect(text).toContain('shared/protocol.ts')
+  expect(text).toContain('sidecar/protocol.ts')
+  expect(occurrences(text, 'protocol.ts')).toBe(2)
+})
+
+test('a run whose files share no directory keeps whole paths on its rows', () => {
+  const html = renderMany(
+    [runReadRow('r1', '/etc/hosts'), runReadRow('r2', '/var/log/app.log')],
+    true,
+  )
+  const text = visibleText(html)
+
+  // Sharing only the root is not worth a badge, and hoisting '/' would make both
+  // rows read as relative when they are absolute.
+  expect(text).toContain('/etc/hosts')
+  expect(text).toContain('/var/log/app.log')
+})
+
+test('a ranged read states its range, a whole-file read says nothing', () => {
+  const ranged = toolRow({
+    id: 'r1',
+    toolName: 'Read',
+    toolFamily: 'read',
+    input: { file_path: '/w/big.ts', offset: 811, limit: 50 },
+    status: 'success',
+    result: { content: '811\tconst x = 1', isError: false, diff: null },
+  })
+  const html = renderMany([ranged, runReadRow('r2', '/w/small.ts')], true)
+  const text = visibleText(html)
+
+  // `offset` is ONE-based and becomes the engine's `startLine`, so the label must
+  // read the same number the body's gutter prints right below it. An earlier
+  // version added one and contradicted its own gutter.
+  expect(text).toContain('lines 811 to 860')
+  expect(text).not.toContain('lines 812')
+  // The neighbouring whole-file read claims no range at all.
+  expect(occurrences(text, 'lines 811 to 860')).toBe(1)
+})
+
+test('a successful read that returned no file reports NO line count', () => {
+  // An empty file, an offset past EOF and an unchanged file all succeed while
+  // carrying no numbered body. Counting the raw split would claim `Read 1 line`.
+  const html = renderMany(
+    [
+      runReadRow('r1', '/w/empty.ts', {
+        content:
+          '<system-reminder>Warning: the file exists but the contents are empty.</system-reminder>',
+      }),
+      runReadRow('r2', '/w/real.ts', { content: '1\tone\n2\ttwo' }),
+    ],
+    true,
+  )
+  const text = visibleText(html)
+
+  expect(text).toContain('Read 2 lines') // the real one still counts
+  expect(text).not.toContain('Read 1 line') // the empty one says nothing
+})
+
+test('each member reports its own line count from the real numbered payload', () => {
+  const html = renderMany(
+    [
+      runReadRow('r1', '/w/a.ts', { content: '1\tone\n2\ttwo\n3\tthree' }),
+      runReadRow('r2', '/w/b.ts', { content: '1\tonly' }),
+    ],
+    true,
+  )
+  const text = visibleText(html)
+
+  expect(text).toContain('Read 3 lines')
+  expect(text).toContain('Read 1 line') // singular, not '1 lines'
+})
+
+test('a lone read is NOT grouped — it keeps the single-card basename framing', () => {
+  const html = renderMany([runReadRow('r1', '/repo/app/shared/protocol.ts')])
+
+  expect(html).not.toContain('1 files')
+  expect(visibleText(html)).toContain('protocol.ts')
+  expect(visibleText(html)).not.toContain('/repo/app/shared/')
+})
+
+test('one failed member fails the whole run and says so on the member too', () => {
+  const html = renderMany([
+    runReadRow('r1', '/w/a.ts'),
+    runReadRow('r2', '/w/b.ts'),
+    runReadRow('r3', '/w/gone.ts', {
+      status: 'error',
+      isError: true,
+      content: 'File does not exist: /w/gone.ts',
+    }),
+  ])
+
+  // Head reports the worst outcome, and the failed member opens itself so the
+  // reason is on screen without a click.
+  expect(occurrences(html, 'failed')).toBe(2)
+  expect(html).not.toContain('>done<')
+  expect(visibleText(html)).toContain('File does not exist: /w/gone.ts')
+})
+
+test('a still-running member holds the run at running, not done', () => {
+  const html = renderMany([
+    runReadRow('r1', '/w/a.ts'),
+    toolRow({
+      id: 'r2',
+      toolName: 'Read',
+      toolFamily: 'read',
+      input: { file_path: '/w/b.ts' },
+      status: 'pending',
+    }),
+  ])
+
+  expect(html).toContain('running')
+  expect(html).not.toContain('>done<')
+})
+
+test('a non-read row between reads splits them into two runs', () => {
+  const html = renderMany([
+    runReadRow('r1', '/w/a.ts'),
+    runReadRow('r2', '/w/b.ts'),
+    toolRow({
+      id: 'cmd',
+      toolName: 'Bash',
+      toolFamily: 'bash',
+      input: { command: 'rg foo' },
+      status: 'success',
+      result: { content: 'ok', isError: false, diff: null },
+    }),
+    runReadRow('r3', '/w/c.ts'),
+    runReadRow('r4', '/w/d.ts'),
+  ])
+
+  // Two group heads, each counting its own side of the break.
+  expect(occurrences(html, '2 files')).toBe(2)
+})
+
+test('the run survives the blocks reasoning mode — it is not a reasoning setting', () => {
+  const rows = [runReadRow('r1', '/w/a.ts'), runReadRow('r2', '/w/b.ts')]
+
+  expect(renderRows(rows, 'blocks')).toContain('2 files')
+  expect(renderRows(rows, 'trail')).toContain('2 files')
+})
+
+function grepRow(
+  id: string,
+  pattern: string,
+  content: string,
+  over: { status?: ToolCardStatus; isError?: boolean } = {},
+): NestedTranscriptRow {
+  return toolRow({
+    id,
+    toolName: 'Grep',
+    toolFamily: 'grep',
+    input: { pattern },
+    status: over.status ?? 'success',
+    result: { content, isError: over.isError ?? false, diff: null },
+  })
+}
+
+test('adjacent searches collapse into ONE card that counts the patterns', () => {
+  const html = renderMany([
+    grepRow('g1', 'ToolCardShell', 'Found 2 files\na.ts\nb.ts'),
+    grepRow('g2', 'FrameEShell', 'Found 1 file\nc.ts'),
+  ])
+
+  expect(html).toContain('2 patterns')
+  expect(occurrences(html, '>Search</span>')).toBe(1)
+})
+
+test('the search run lists each pattern with what its own mode reported', () => {
+  const html = renderMany(
+    [
+      grepRow('g1', 'ToolCardShell', 'Found 2 files\na.ts\nb.ts'),
+      grepRow('g2', 'FrameEShell', 'app/a.ts:12:hit\napp/b.ts:9:hit'),
+    ],
+    true,
+  )
+  const text = visibleText(html)
+
+  expect(text).toContain('ToolCardShell')
+  expect(text).toContain('FrameEShell')
+  expect(text).toContain('2 files') // mode reported files
+  expect(text).toContain('2 matches') // mode reported matches
+})
+
+test('a search run sums its members only when they agree on the unit', () => {
+  // The sub line lives in the card BODY, so both need the card open.
+  const agreeing = renderMany(
+    [
+      grepRow('g1', 'alpha', 'app/a.ts:1:x\napp/a.ts:2:x'),
+      grepRow('g2', 'beta', 'app/b.ts:3:x'),
+    ],
+    true,
+  )
+  const mixed = renderMany(
+    [
+      grepRow('g1', 'alpha', 'Found 2 files\na.ts\nb.ts'),
+      grepRow('g2', 'beta', 'app/b.ts:3:x'),
+    ],
+    true,
+  )
+
+  // Agreeing: the prototype's own `M matches · N patterns`.
+  expect(agreeing).toContain('3 matches · 2 patterns')
+  // Mixed: no invented total, just the pattern count.
+  expect(mixed).toContain('>2 patterns<')
+  expect(mixed).not.toContain('·')
+})
+
+test('a lone search is NOT grouped', () => {
+  const html = renderMany([grepRow('g1', 'alpha', 'Found 2 files\na.ts\nb.ts')])
+
+  expect(html).not.toContain('1 patterns')
+  expect(visibleText(html)).toContain('alpha')
+})
+
+test('reads and searches do not merge under one head', () => {
+  const html = renderMany([
+    runReadRow('r1', '/w/a.ts'),
+    runReadRow('r2', '/w/b.ts'),
+    grepRow('g1', 'alpha', 'Found 1 file\na.ts'),
+    grepRow('g2', 'beta', 'Found 1 file\nb.ts'),
+  ])
+
+  expect(html).toContain('2 files')
+  expect(html).toContain('2 patterns')
+  expect(occurrences(html, '>Read</span>')).toBe(1)
+  expect(occurrences(html, '>Search</span>')).toBe(1)
+})
+
+test('a search member expands to its own results, unlike the inert prototype row', () => {
+  const html = renderMany(
+    [
+      grepRow('g1', 'alpha', 'app/a.ts:12:const found = 1'),
+      grepRow('g2', 'beta', 'Found 1 file\nb.ts'),
+    ],
+    true,
+  )
+
+  // Grouping must never become a way to lose every search result.
+  expect(visibleText(html)).toContain('const found = 1')
+})
+
+test('a failed search fails the run and reports no count for that member', () => {
+  const html = renderMany([
+    grepRow('g1', 'alpha', 'Found 1 file\na.ts'),
+    grepRow('g2', 'bad(', 'rg: unclosed group', { status: 'error', isError: true }),
+  ])
+
+  expect(occurrences(html, 'failed')).toBe(2)
+  expect(html).not.toContain('>done<')
+})
+
+// ─── expansion survives a regroup (the deferred CC-27 review finding) ─────────
+
+function renderWithStore(
+  rows: NestedTranscriptRow[],
+  store: ToolCardExpansionStore,
+): string {
+  return renderToStaticMarkup(
+    <ToolCardExpansionContext.Provider value={store}>
+      <TranscriptRowsView rows={rows} />
+    </ToolCardExpansionContext.Provider>,
+  )
+}
+
+test('a read the user opened stays open when the next read folds it into a run', () => {
+  // The regression: a lone read is a ToolCard keyed by its row id; the moment a
+  // second adjacent read arrives it becomes a ToolRunRow inside a run keyed
+  // `read-run:<row id>`. Key AND component type change, so React remounts and
+  // local state would die — mid-turn that reads as the file snapping shut.
+  const store = createToolCardExpansionStore()
+  const first = runReadRow('r1', '/w/a.ts', { content: '1\tDISTINCTIVE_BODY_A' })
+  const second = runReadRow('r2', '/w/b.ts', { content: '1\tbody b' })
+
+  const lone = renderWithStore([first], store)
+  expect(lone).toContain('aria-expanded="false"')
+
+  // The user opens it.
+  store.set(first.kind === 'tool-use' ? first.toolUseId : '', true)
+  expect(renderWithStore([first], store)).toContain('aria-expanded="true"')
+
+  // The next read arrives and the pair regroups. The same call is now a run
+  // MEMBER, drawn by a different component under a different key.
+  const grouped = renderWithStore([first, second], store)
+  expect(grouped).toContain('2 files') // it really did regroup
+  // And the file the user opened is STILL ON SCREEN: the run opened to hold it.
+  expect(visibleText(grouped)).toContain('DISTINCTIVE_BODY_A')
+})
+
+test('expansion is keyed by the engine tool_use id, not by row or display key', () => {
+  const store = createToolCardExpansionStore()
+  const row = runReadRow('r1', '/w/a.ts', { content: '1\tKEYED_BY_TOOL_USE_ID' })
+  const toolUseId = row.kind === 'tool-use' ? row.toolUseId : ''
+
+  store.set(toolUseId, true)
+
+  // Same call, two different display shapes, one remembered answer.
+  expect(visibleText(renderWithStore([row], store))).toContain('KEYED_BY_TOOL_USE_ID')
+  expect(
+    visibleText(renderWithStore([row, runReadRow('r2', '/w/b.ts')], store)),
+  ).toContain('KEYED_BY_TOOL_USE_ID')
+})
+
+test('a run head keeps its own expansion as the run grows', () => {
+  const store = createToolCardExpansionStore()
+  const a = runReadRow('r1', '/w/a.ts')
+  const b = runReadRow('r2', '/w/b.ts')
+  const c = runReadRow('r3', '/w/c.ts')
+
+  const two = renderWithStore([a, b], store)
+  expect(two).toContain('2 files')
+  expect(two).not.toContain('2 files read') // collapsed: no sub line
+
+  // The user opens the run head, then a third read lands.
+  store.set(`run:${a.kind === 'tool-use' ? a.toolUseId : ''}`, true)
+  const three = renderWithStore([a, b, c], store)
+
+  expect(three).toContain('3 files read') // still open, now counting three
+})
+
+test('a pinned run stays open when a member is closed, siblings intact', () => {
+  // The regression this nearly shipped with: the head opened ONLY because a member
+  // was open, and that was re-derived every render — so shutting that one file
+  // folded the whole group a frame later, siblings and all. The same visible
+  // snap-shut the store exists to remove, one level up.
+  //
+  // The guard is that touching any member pins its run (`ToolRunRow`'s toggle
+  // writes `run:<first member id>`), which is what this asserts. The CLICK that
+  // does the pinning is an event handler, so it belongs to operator GUI
+  // acceptance; what is provable here is that a pinned run survives a closed
+  // member, which is the property the user actually feels.
+  const store = createToolCardExpansionStore()
+  const a = runReadRow('r1', '/w/a.ts', { content: '1\tHELD_OPEN_BODY' })
+  const b = runReadRow('r2', '/w/b.ts')
+  const idA = a.kind === 'tool-use' ? a.toolUseId : ''
+
+  store.set(idA, true)
+  expect(visibleText(renderWithStore([a, b], store))).toContain('HELD_OPEN_BODY')
+
+  // The user shuts that one file; their click pinned the run on the way through.
+  store.set(idA, false)
+  store.set(`run:${idA}`, true)
+  const after = renderWithStore([a, b], store)
+
+  expect(after).toContain('2 files read') // sub line present: head still open
+  expect(visibleText(after)).toContain('b.ts') // the sibling did not vanish
+  expect(visibleText(after)).not.toContain('HELD_OPEN_BODY') // that file did close
+})
+
+test('without the pin, a closed member WOULD have collapsed the run', () => {
+  // Pins the reason the pin exists. If `defaultExpanded` ever goes back to being
+  // derived from member state alone, the test above would still pass while the
+  // user-visible bug returned; this one fails the moment the pin stops mattering.
+  const store = createToolCardExpansionStore()
+  const a = runReadRow('r1', '/w/a.ts', { content: '1\tHELD_OPEN_BODY' })
+  const b = runReadRow('r2', '/w/b.ts')
+  const idA = a.kind === 'tool-use' ? a.toolUseId : ''
+
+  store.set(idA, false) // closed, and nothing pinned the run
+
+  expect(renderWithStore([a, b], store)).not.toContain('2 files read')
+})
+
+test('a member the user CLOSED does not drag the run head open', () => {
+  // The head opens for an explicit `true` only. Storing a `false` (the user shut
+  // that member) must not read as "there is something open in here".
+  const store = createToolCardExpansionStore()
+  const a = runReadRow('r1', '/w/a.ts', { content: '1\tSHUT_BODY' })
+  const b = runReadRow('r2', '/w/b.ts')
+
+  store.set(a.kind === 'tool-use' ? a.toolUseId : '', false)
+  const html = renderWithStore([a, b], store)
+
+  expect(html).toContain('2 files')
+  expect(html).not.toContain('2 files read') // sub line absent: head collapsed
+  expect(visibleText(html)).not.toContain('SHUT_BODY')
+})
+
+test('the reasoning ceiling renders the newest steps and the head says so', () => {
+  // The user asked for "unlimit (max 1000)". Past the ceiling the head must not
+  // keep asserting the raw total over a list that no longer contains it.
+  const rows = Array.from({ length: 1010 }, (_, index) =>
+    thinkingRow(`s:m:${index}:thinking`, `Step number ${index}`),
+  )
+  const html = renderRows(rows, 'trail')
+
+  expect(html).toContain('1000 of 1010 steps')
+  expect(html).not.toContain('>1010 steps<')
+  expect(html).toContain('Step number 1009') // newest kept
+  expect(html).toContain('Step number 10') // the oldest kept
+  expect(html).not.toContain('Step number 9<') // the oldest dropped
+})
+
+test('a run under the ceiling states its plain count', () => {
+  const rows = Array.from({ length: 5 }, (_, index) =>
+    thinkingRow(`s:m:${index}:thinking`, `Step ${index}`),
+  )
+
+  expect(renderRows(rows, 'trail')).toContain('5 steps')
+  expect(renderRows(rows, 'trail')).not.toContain('of 5 steps')
 })

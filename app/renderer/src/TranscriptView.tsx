@@ -53,6 +53,7 @@ import {
   type ToolCardStatus,
   type ToolDiffProjection,
   type ToolFamily,
+  type ToolResultProjection,
   type UserImageSource,
 } from './transcriptProjector.js'
 import { ToolsExpandedContext } from './toolsExpanded.js'
@@ -91,7 +92,27 @@ import {
   readLineNumbers,
   readSourceLanguage,
 } from './readSource.js'
-import { basename } from './pathUtils.js'
+import { basename, commonDirPrefix, dirname } from './pathUtils.js'
+import {
+  createToolCardExpansionStore,
+  ToolCardExpansionContext,
+  type ToolCardExpansionStore,
+  useAnyToolCardOpened,
+  useToolCardExpanded,
+  useToolCardExpansionStore,
+} from './toolCardExpansion.js'
+import {
+  groupToolRuns,
+  type ToolRunFamily,
+  type ToolRunMember,
+  type TranscriptLayoutItem,
+} from './toolRunLayout.js'
+import {
+  formatGrepDigest,
+  grepDigest,
+  totalGrepDigest,
+  type GrepDigest,
+} from './grepResult.js'
 import {
   findNestedToolUseRow,
   logLineClass,
@@ -215,6 +236,20 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   const openInspector = useCallback((row: ToolUseNestedRow) => setInspectedId(row.id), [])
   const closeInspector = useCallback(() => setInspectedId(null), [])
   const { mode: reasoningMode } = useContext(ReasoningLayoutContext)
+  // Owned ABOVE the derivations below, which is the whole point: a card that gets
+  // re-keyed or re-typed when rows regroup finds its own expansion again through
+  // the engine's `toolUseId` (`toolCardExpansion.ts`). A ref, not state — a toggle
+  // must re-render the clicked card, never the whole transcript.
+  //
+  // An ancestor's store WINS when there is one. This is a TEST SEAM, not a planned
+  // lift: the renderer suite is SSR-only, so "the user's content survives a
+  // regroup" can only be shown by driving ONE store through two different row
+  // shapes, and without an injection point the fix would ship with no evidence for
+  // the property it exists for. Nothing mounts a store today.
+  const inheritedStore = useContext(ToolCardExpansionContext)
+  const expansionRef = useRef<ToolCardExpansionStore | null>(null)
+  expansionRef.current ??= createToolCardExpansionStore()
+  const expansionStore = inheritedStore ?? expansionRef.current
   // Re-derive from the LIVE rows so a late tool_result updates the drawer and a
   // vanished row closes it, instead of pinning the open-time snapshot (F1).
   const inspected = inspectedId === null ? null : findNestedToolUseRow(rows, inspectedId)
@@ -252,9 +287,11 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     // new frame or message type (C3). Non-agent rows and lone agents pass through.
     // The `trail` reasoning mode layers a second read-time derivation on top
     // (adjacent reasoning rows → one run); `blocks` leaves the rows alone.
-    const items: readonly ReasoningLayoutItem[] = groupDisplayItems(
-      groupAgentDelegates(rows),
-      reasoningMode,
+    // The tool-run fold runs LAST and outside the reasoning-mode switch: a run of
+    // reads or searches is a tool-card concern, not a reasoning-display
+    // preference, so it must survive `blocks` mode too.
+    const items: readonly TranscriptLayoutItem[] = groupToolRuns(
+      groupDisplayItems(groupAgentDelegates(rows), reasoningMode),
     )
     // Intentional: cached/restoring transcripts render without a divider or pulse.
     // The operator rejected the startup pink hairline + dot (2026-07-29).
@@ -284,10 +321,12 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   }
 
   return (
-    <ToolInspectorContext.Provider value={openInspector}>
-      {content}
-      <ToolInspectorOverlay row={inspected} onClose={closeInspector} />
-    </ToolInspectorContext.Provider>
+    <ToolCardExpansionContext.Provider value={expansionStore}>
+      <ToolInspectorContext.Provider value={openInspector}>
+        {content}
+        <ToolInspectorOverlay row={inspected} onClose={closeInspector} />
+      </ToolInspectorContext.Provider>
+    </ToolCardExpansionContext.Provider>
   )
 })
 
@@ -379,30 +418,34 @@ function groupDisplayItems(
   return mode === 'trail' ? groupReasoningRuns(items) : items
 }
 
-function displayItemKey(item: ReasoningLayoutItem): string {
+function displayItemKey(item: TranscriptLayoutItem): string {
   return item.kind === 'single' ? item.row.id : item.id
 }
 
 /**
  * P4-36 — is this item a revealed hidden-tier row? Only single rows can be:
  * the hidden tier is user frames, and every grouped item (agent DelegateGroup,
- * reasoning run) is built from assistant rows, which the engine never hides.
+ * reasoning run, tool run) is built from assistant rows, which the engine never
+ * hides.
  */
-function isRevealedHiddenItem(item: ReasoningLayoutItem): boolean {
+function isRevealedHiddenItem(item: TranscriptLayoutItem): boolean {
   return item.kind === 'single' && item.row.isHidden === true
 }
 
 /**
- * One display item — an agent DelegateGroup, a reasoning run, or a single row.
- * The `default` branch carries the same compile-time `never` tripwire as the row
- * switch: a new display-item kind breaks the build here until it gets a case.
+ * One display item — an agent DelegateGroup, a reasoning run, a tool run, or a
+ * single row. The `default` branch carries the same compile-time `never` tripwire
+ * as the row switch: a new display-item kind breaks the build here until it gets
+ * a case.
  */
-function DisplayItemView({ item }: { item: ReasoningLayoutItem }) {
+function DisplayItemView({ item }: { item: TranscriptLayoutItem }) {
   switch (item.kind) {
     case 'agent-group':
       return <DelegateGroup members={item.members} />
     case 'reasoning-run':
       return <ReasoningRun steps={item.steps} />
+    case 'tool-run':
+      return <ToolRunCard family={item.family} members={item.members} />
     case 'single':
       return <TranscriptRowView row={item.row} />
     default: {
@@ -417,12 +460,12 @@ function DisplayItemView({ item }: { item: ReasoningLayoutItem }) {
  * A nested row list (subagent children under an Agent card, tool-card children).
  * These never carry agent grouping — co-spawned siblings are a TOP-LEVEL
  * derivation (C4 keeps children under their owning card) — but their reasoning
- * runs group exactly like the top level, so a delegated GPT turn reads the same
- * inside a card as outside one.
+ * and tool runs group exactly like the top level, so a delegated GPT turn reads
+ * the same inside a card as outside one.
  */
 function NestedRowList({ rows }: { rows: NestedTranscriptRow[] }) {
   const { mode } = useContext(ReasoningLayoutContext)
-  const items = groupDisplayItems(toDisplayItems(rows), mode)
+  const items = groupToolRuns(groupDisplayItems(toDisplayItems(rows), mode))
   return (
     <>
       {items.map(item => (
@@ -912,6 +955,7 @@ function ToolCardShell({
   alwaysExtra,
   collapsedExtra,
   defaultExpanded,
+  expansionKey,
   children,
 }: {
   family: ToolFamily
@@ -924,10 +968,19 @@ function ToolCardShell({
   alwaysExtra?: ReactNode
   collapsedExtra?: ReactNode
   defaultExpanded?: boolean
+  /**
+   * The engine's `toolUseId`, so the user's expansion outlives this component.
+   * A card can be re-keyed and re-typed underneath them when rows regroup
+   * (`toolCardExpansion.ts`); without an identity here that click is lost. Null
+   * for a shell with no single tool behind it, which then remembers per instance.
+   */
+  expansionKey?: string | null
   children?: ReactNode
 }) {
-  const [userExpanded, setUserExpanded] = useState<boolean | null>(null)
-  const expanded = resolveToolCardExpanded(userExpanded, defaultExpanded ?? false)
+  const [expanded, setExpanded] = useToolCardExpanded(
+    expansionKey ?? null,
+    defaultExpanded ?? false,
+  )
   const fam = FAMILY_STYLE[family]
   const st = STATE_STYLE[status]
   const hasBody = children !== undefined && children !== null
@@ -935,7 +988,7 @@ function ToolCardShell({
     <div className="w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.025] font-sans">
       <button
         type="button"
-        onClick={() => setUserExpanded(!expanded)}
+        onClick={() => setExpanded(!expanded)}
         aria-expanded={expanded}
         className="flex w-full items-center gap-2.5 px-3 py-2 text-left"
       >
@@ -1011,6 +1064,7 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
         target={deriveTarget(row)}
         status={row.status}
         sub={deriveSub(row)}
+        expansionKey={row.toolUseId}
         defaultExpanded={
           toolsExpanded || row.status === 'error' || isImageDone
         }
@@ -1037,6 +1091,400 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
       ) : null}
     </div>
   )
+}
+
+/**
+ * The grouped tool card — ONE shell over a run, its body the list of member rows.
+ * This is the prototype's `GroupedToolGroup`, which dispatches the same two kinds
+ * on `groupKind` (`Messages.jsx:1088-1091`): the grouped `FileReadCard` branch
+ * (`:580-597`) and the grouped `GrepCard` branch (`:672-698`). Derivation and its
+ * rationale live in `toolRunLayout.ts`.
+ *
+ * The shell is the SAME `ToolCardShell` every tool card uses, exactly as the
+ * prototype reuses `FrameEShell` for both — a run must not grow a second card
+ * grammar.
+ */
+function ToolRunCard({
+  family,
+  members,
+}: {
+  family: ToolRunFamily
+  members: ToolRunMember[]
+}) {
+  const { expanded: toolsExpanded } = useContext(ToolsExpandedContext)
+  const status = deriveToolRunStatus(members)
+  // A member the user opened while it was still a LONE card keeps its content on
+  // screen through the regroup. Without this the head would be collapsed by
+  // default and their file would vanish anyway, remembered but invisible.
+  //
+  // This only has to survive the FIRST render after the regroup. From then on the
+  // run has its own stored answer, because a member toggle pins its run open
+  // (`ToolRunRow`) — otherwise closing the one member that held the run open would
+  // collapse the entire run, siblings and all, which is the same snap-shut this
+  // store exists to remove, one level up.
+  const holdsOpenedMember = useAnyToolCardOpened(
+    members.map(member => member.toolUseId),
+  )
+  const runKey = `run:${members[0]?.toolUseId ?? ''}`
+  // Every payload is parsed ONCE PER RESULT, not once per render. The cache is what
+  // makes that true (`digestByResult`): the head totals the members' digests and
+  // each row shows its own, and rows are rebuilt every frame during streaming
+  // (`attachChildren` spreads, `transcriptProjector.ts:617`) so component memo
+  // alone would not stop a collapsed run re-parsing whole files on every frame.
+  const digests = members.map(member => toolRunDigest(family, member))
+  const head = toolRunHead(family, members)
+  return (
+    <ToolCardShell
+      family={family}
+      target={head.target}
+      status={status}
+      sub={head.sub}
+      headerBadge={head.badge}
+      defaultExpanded={toolsExpanded || status === 'error' || holdsOpenedMember}
+      // The run's head is keyed off its FIRST member, which does not move as the
+      // run grows — so opening a two-read run and watching it become a six-read
+      // run keeps it open.
+      expansionKey={runKey}
+    >
+      <div className="flex flex-col">
+        {members.map((member, index) => (
+          <ToolRunRow
+            key={member.id}
+            family={family}
+            row={member}
+            digest={digests[index]}
+            hoistedPrefix={head.hoistedPrefix}
+            runKey={runKey}
+          />
+        ))}
+      </div>
+    </ToolCardShell>
+  )
+}
+
+/**
+ * The head's target and sub, per family, in the prototype's own words:
+ * `N files` / `N files read` (`Messages.jsx:585-590`) and
+ * `N patterns` / `M matches · N patterns` (`:677-680`).
+ *
+ * A READ run also hoists the directory its files share into `badge`, so the shared
+ * part is stated once on the head instead of repeating down every row. That is the
+ * design the operator picked from a side-by-side comparison, and it is what makes
+ * the rows narrow enough to read. `commonDirPrefix` hoists nothing unless the run
+ * really shares a full directory segment, so a run spanning two roots keeps whole
+ * paths on its rows rather than being told they share `/`.
+ *
+ * The search total degrades rather than lying. A pattern run can mix output modes
+ * (`grepResult.ts`), and summing a file count into a match count would print a
+ * figure that means nothing, so `totalGrepDigest` returns null for a mixed run and
+ * the sub falls back to the pattern count alone.
+ */
+function toolRunHead(
+  family: ToolRunFamily,
+  members: ToolRunMember[],
+): {
+  target: string
+  sub: string
+  badge: ReactNode
+  hoistedPrefix: string
+} {
+  if (family === 'read') {
+    const target = `${members.length} ${members.length === 1 ? 'file' : 'files'}`
+    const hoistedPrefix = commonDirPrefix(members.map(memberReadPath))
+    return {
+      target,
+      sub: `${target} read`,
+      hoistedPrefix,
+      badge:
+        hoistedPrefix.length > 0 ? (
+          <span className="shrink-0 truncate font-mono text-[11px] text-text-faint">
+            {hoistedPrefix}
+          </span>
+        ) : undefined,
+    }
+  }
+  const target = `${members.length} ${members.length === 1 ? 'pattern' : 'patterns'}`
+  const total = totalGrepDigest(members.map(memberGrepDigest))
+  return {
+    target,
+    sub: total === null ? target : `${formatGrepDigest(total)} · ${target}`,
+    hoistedPrefix: '',
+    badge: undefined,
+  }
+}
+
+/** The file a read row names, or its tool name when the input carries no path. */
+function memberReadPath(row: ToolRunMember): string {
+  const filePath = row.input['file_path']
+  return typeof filePath === 'string' && filePath.length > 0
+    ? filePath
+    : row.toolName
+}
+
+/**
+ * Parsed digests, cached on the RESULT object.
+ *
+ * `row` identity is useless as a key — `selectNestedTranscriptRows` rebuilds every
+ * row each frame (`attachChildren`, `transcriptProjector.ts:617`) — but the spread
+ * copies `result` by reference, so a settled result is the same object frame after
+ * frame. Keying here turns a per-frame full-file parse into one parse per tool
+ * result, which matters because the parse runs even for a COLLAPSED run (the head
+ * needs the totals) on a render path with no virtualization. WeakMap ⇒ entries die
+ * with the result.
+ */
+const grepDigestByResult = new WeakMap<ToolResultProjection, GrepDigest | null>()
+const readDigestByResult = new WeakMap<ToolResultProjection, string | null>()
+
+/** One member's search digest, or null when it has no result to read one from. */
+function memberGrepDigest(row: ToolRunMember): GrepDigest | null {
+  const result = row.result
+  if (result === null || result === undefined) return null
+  if (result.isError === true) return null
+  const cached = grepDigestByResult.get(result)
+  if (cached !== undefined) return cached
+  const digest = result.content.length === 0 ? null : grepDigest(result.content)
+  grepDigestByResult.set(result, digest)
+  return digest
+}
+
+/**
+ * The run's own state. A run reports the worst outcome it contains, so a single
+ * failed member inside six successes can never be hidden behind a green head: any
+ * error wins, then any still-running member, and only an all-succeeded run reads
+ * as done. The prototype's grouped cards have no per-item state to fold (their
+ * items are fixtures with `path`/`lines`/`content` and `pattern`/`matches` only,
+ * `Messages.jsx:1060`, `:686-690`), so this rule is 🔁 adapted to the real row's
+ * `status`, not ported.
+ */
+function deriveToolRunStatus(members: ToolRunMember[]): ToolCardStatus {
+  if (members.some(member => member.status === 'error')) return 'error'
+  if (members.some(member => member.status === 'pending')) return 'pending'
+  // Closed-union tripwire (house rule): a fourth `ToolCardStatus` must be ranked
+  // here deliberately, not silently fold into `success` on a run head.
+  const remaining: Exclude<ToolCardStatus, 'error' | 'pending'> = 'success'
+  return remaining
+}
+
+/**
+ * One read inside a run (prototype `ReadGroupRow`, `Messages.jsx:1060-1084`):
+ * caret · family mark · label · digest, expanding to that call's own body. A read
+ * member reads `path` + `Read N lines` (`Messages.jsx:1070-1071`); a search member
+ * reads `pattern` + its match count (`:688-689`).
+ *
+ * Three adaptations over the prototype rows, each because the real row carries
+ * something its fixture did not:
+ *
+ *  1. A member that is not `success` shows the shared state cluster. A failed call
+ *     must say so where it happened, not only on the head.
+ *  2. The expanded body is the SHARED `ToolCardBody`, not a local line printer, so
+ *     a member inherits the numbered/highlighted read body, the per-file search
+ *     coloring, the truncation reveal band and the inspector route that the
+ *     standalone card has.
+ *  3. SEARCH members expand at all. The prototype's grep rows are inert — pattern
+ *     and count, no caret, no click (`:686-691`) — because its fixture carries no
+ *     output to open. Real search rows do, and their results are the entire point
+ *     of running a search, so an inert row would make grouping a way to LOSE every
+ *     result. Reads already had this level; searches now match it.
+ *
+ * The `memo` is worth little DURING a turn and is not what keeps the run cheap:
+ * rows are rebuilt every frame, so the shallow compare misses. It helps only on a
+ * re-render that does not touch the rows (opening the inspector, switching
+ * reasoning mode). The parse cost is handled by `digestByResult` instead.
+ */
+const ToolRunRow = memo(function ToolRunRow({
+  family,
+  row,
+  digest,
+  hoistedPrefix,
+  runKey,
+}: {
+  family: ToolRunFamily
+  row: ToolRunMember
+  digest: string | null
+  hoistedPrefix: string
+  runKey: string
+}) {
+  // Same three-input rule as the card, over the SAME three inputs: a failed member
+  // opens itself, a live pending→error flip is reflected immediately, and the
+  // user's own click beats both. The choice is kept by `toolUseId`, so a read the
+  // user opened as a LONE card is still open once it folds into a run.
+  //
+  // `toolsExpanded` is threaded down deliberately. "Tools open by default" has to
+  // reach the member or it stops meaning what it says: before grouping, each of
+  // these calls was its own card and the preference opened it. It also decides
+  // whether a search run is useful — the counts are on the member rows, but the
+  // RESULTS only exist inside them.
+  const { expanded: toolsExpanded } = useContext(ToolsExpandedContext)
+  const [open, setOpen] = useToolCardExpanded(
+    row.toolUseId,
+    toolsExpanded || row.status === 'error',
+  )
+  const store = useToolCardExpansionStore()
+  // Touching a member pins its RUN open. You can only reach a member row while the
+  // run is open, so the click is itself evidence the run should stay open — and
+  // without it, closing the member that auto-opened the run would fold the whole
+  // group on the next render.
+  const toggle = (next: boolean): void => {
+    setOpen(next)
+    store?.set(runKey, true)
+  }
+  const openInspector = useContext(ToolInspectorContext)
+  const content = row.result?.content ?? ''
+  const st = STATE_STYLE[row.status]
+  const fam = FAMILY_STYLE[family]
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => toggle(!open)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2.5 rounded py-0.5 text-left hover:bg-white/[0.04]"
+      >
+        <span
+          className={`w-2.5 shrink-0 text-[9px] leading-none text-text-ghost transition-transform duration-100 ease-out ${
+            open ? 'rotate-90' : ''
+          }`}
+          aria-hidden
+        >
+          ▸
+        </span>
+        <span
+          className={`w-3.5 shrink-0 text-center text-[13px] ${fam.color}`}
+          aria-hidden
+        >
+          {fam.mark}
+        </span>
+        <ToolRunRowLabel family={family} row={row} hoistedPrefix={hoistedPrefix} />
+        {digest !== null ? (
+          <span className="shrink-0 font-mono text-[11px] text-text-subtle">
+            {digest}
+          </span>
+        ) : null}
+        {row.status !== 'success' ? (
+          <span className="flex shrink-0 items-center gap-1.5">
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${st.dot} ${st.pulse ? 'animate-pulse' : ''}`}
+              aria-hidden
+            />
+            <span className={`text-[10.5px] ${st.color}`}>{st.word}</span>
+          </span>
+        ) : null}
+      </button>
+      {open ? (
+        <div className="mb-1.5 ml-6 mt-0.5 border-l border-shell-seam pl-3">
+          <ToolCardBody row={row} content={content} />
+          {openInspector ? (
+            <ToolInspectorLaunch onOpen={() => openInspector(row)} />
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  )
+})
+
+/**
+ * The member's identifying text.
+ *
+ * A read drops the directory the whole run shares (the head states it once) and
+ * splits what remains so the DIRECTORY is what truncates and the filename never
+ * does: a run exists to tell two same-named files apart, and ellipsizing from the
+ * right would eat the one part that does that. A ranged read also states its range,
+ * as the prototype's row does (`Messages.jsx:1070` `· lines {item.range}`).
+ *
+ * A search has no such structure, so its pattern is one truncating run, and it
+ * reuses `deriveTarget` rather than re-deriving which input field names a search.
+ */
+function ToolRunRowLabel({
+  family,
+  row,
+  hoistedPrefix,
+}: {
+  family: ToolRunFamily
+  row: ToolRunMember
+  hoistedPrefix: string
+}) {
+  if (family !== 'read') {
+    return (
+      <span className="min-w-0 flex-1 truncate font-mono text-xs text-text-primary">
+        {deriveTarget(row)}
+      </span>
+    )
+  }
+  const path = memberReadPath(row)
+  const shown = path.startsWith(hoistedPrefix)
+    ? path.slice(hoistedPrefix.length)
+    : path
+  const range = readRangeLabel(row)
+  return (
+    <span className="flex min-w-0 flex-1 font-mono text-xs text-text-primary">
+      <span className="truncate text-text-ghost">{dirname(shown)}</span>
+      <span className="shrink-0">{basename(shown) || shown}</span>
+      {range === null ? null : (
+        <span className="shrink-0 text-text-ghost">{range}</span>
+      )}
+    </span>
+  )
+}
+
+/**
+ * The range segment for a partial read, or null for a whole-file one.
+ *
+ * `offset` is ONE-BASED: the schema calls it "The line number to start reading
+ * from", the tool defaults it to 1, and it becomes `startLine` verbatim, which is
+ * the number the body's own gutter prints
+ * (`src/tools/FileReadTool/FileReadTool.ts:229,496,1036` →
+ * `addLineNumbers`, `src/utils/file.ts:290-306`). So the label states `offset`
+ * itself. An earlier version added one to it and printed a number that
+ * contradicted the gutter directly beneath it.
+ *
+ * A row with no `offset` and no `limit` read the whole file and says nothing,
+ * rather than claiming a range it did not ask for, and a non-positive `limit`
+ * (which the schema forbids) says nothing rather than inventing a one-line range.
+ */
+function readRangeLabel(row: ToolRunMember): string | null {
+  const offset = row.input['offset']
+  const limit = row.input['limit']
+  const hasOffset = typeof offset === 'number' && Number.isFinite(offset)
+  const hasLimit = typeof limit === 'number' && Number.isFinite(limit)
+  if (!hasOffset && !hasLimit) return null
+  const start = hasOffset ? Math.max(0, Math.trunc(offset)) : 1
+  if (!hasLimit) return `, from line ${start}`
+  const count = Math.trunc(limit)
+  if (count <= 0) return `, from line ${start}`
+  const end = start + count - 1
+  return end <= start ? `, line ${start}` : `, lines ${start} to ${end}`
+}
+
+/**
+ * The right-hand digest, or null when the payload cannot supply one (an error, a
+ * call still running, an unrecognised shape). Null renders nothing rather than a
+ * zero, so a row never asserts a count it did not measure.
+ *
+ * A read reports a line count ONLY when the payload really was the engine's
+ * numbered shape. Several SUCCESSFUL reads carry no file at all — an empty file and
+ * an offset past EOF both return a `<system-reminder>` warning, and an unchanged
+ * file returns a one-sentence stub (`FileReadTool.ts:685-703`) — and a memory-file
+ * read prepends a freshness line that breaks the numbering (`:695`). Counting the
+ * raw split there would report `Read 1 line` for an empty file and overcount a
+ * memory file by its prefix, which is exactly the claim this doc comment forbids.
+ */
+function toolRunDigest(family: ToolRunFamily, row: ToolRunMember): string | null {
+  if (family !== 'read') {
+    const digest = memberGrepDigest(row)
+    return digest === null ? null : formatGrepDigest(digest)
+  }
+  const result = row.result
+  if (result === null || result === undefined) return null
+  if (result.isError === true || result.content.length === 0) return null
+  const cached = readDigestByResult.get(result)
+  if (cached !== undefined) return cached
+  const source = parseReadSource(result.content)
+  const label =
+    source.numbers === null
+      ? null
+      : `Read ${source.lines.length} ${source.lines.length === 1 ? 'line' : 'lines'}`
+  readDigestByResult.set(result, label)
+  return label
 }
 
 /**
@@ -1153,6 +1601,7 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
       family="agent"
       target={deriveTarget(row)}
       status={row.status}
+      expansionKey={row.toolUseId}
       // A finished background agent's result is the ONLY place its output
       // exists, so it opens; a foreground card keeps the C4 collapsed default.
       defaultExpanded={completion !== null}
@@ -1812,15 +2261,15 @@ function InlineRevealBand({
   onOpenFull: (() => void) | null
 }) {
   return (
-    <div className="flex items-center gap-2.5 border-y border-shell-seam bg-white/[0.015] px-3 py-1.5">
-      <span className="shrink-0 font-mono text-[11px] text-text-subtle">
+    <div className="flex items-center gap-2 px-3 py-1 font-mono text-[10.5px] leading-none">
+      <span className="shrink-0 text-text-subtle">
         {hidden} {hidden === 1 ? 'line' : 'lines'} hidden
       </span>
-      <span className="flex-1" />
+      <span className="h-px flex-1 bg-shell-seam" />
       <button
         type="button"
         onClick={onReveal}
-        className="shrink-0 rounded-md border border-white/10 px-2.5 py-0.5 font-mono text-[11px] text-text-muted hover:bg-white/[0.04]"
+        className="shrink-0 rounded px-1 py-0.5 text-text-subtle hover:bg-white/[0.05] hover:text-text-muted"
       >
         Show {revealStep} more
       </button>
@@ -1828,7 +2277,7 @@ function InlineRevealBand({
         <button
           type="button"
           onClick={onOpenFull}
-          className="inline-flex shrink-0 items-center gap-1 rounded-md border border-accent/25 bg-accent/[0.06] px-2.5 py-0.5 font-mono text-[11px] text-accent-soft hover:bg-accent/10"
+          className="inline-flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-accent-soft/70 hover:bg-accent/10 hover:text-accent-soft"
         >
           Open full output
           <span aria-hidden>↗</span>
@@ -2060,19 +2509,21 @@ function ThinkingBlock({ content }: { content: string }) {
 const REASONING_TITLE =
   'Short summary headings the model exposes about its reasoning, not the reasoning itself.'
 
-/** Steps kept visible before the older ones fold away. */
-const REASONING_RUN_VISIBLE_STEPS = 4
+/**
+ * Render ceiling for one run. The run shows every step it has; this only stops a
+ * pathological run from mounting an unbounded list, and no real run reaches it.
+ */
+const REASONING_RUN_MAX_STEPS = 1000
 
 /**
  * A run of reasoning steps. One step draws as a single line (no head, no count,
  * nothing to collapse); an all-withheld run draws as bare lines, because a head
  * asserting "N steps" over rows with no readable content would imply content
- * that does not exist. Everything else gets the head + rail + steps, with the
- * older steps folded once the run grows past `REASONING_RUN_VISIBLE_STEPS`.
+ * that does not exist. Everything else gets the head + rail + steps. The whole
+ * run collapses from its head; individual steps never fold away.
  */
 function ReasoningRun({ steps }: { steps: ReasoningStepModel[] }) {
   const [collapsed, setCollapsed] = useState(false)
-  const [showAll, setShowAll] = useState(false)
   const listId = useId()
 
   if (steps.length === 0) return null
@@ -2091,8 +2542,10 @@ function ReasoningRun({ steps }: { steps: ReasoningStepModel[] }) {
     )
   }
 
-  const hidden = showAll ? 0 : Math.max(0, steps.length - REASONING_RUN_VISIBLE_STEPS)
-  const shown = hidden > 0 ? steps.slice(hidden) : steps
+  const shown =
+    steps.length > REASONING_RUN_MAX_STEPS
+      ? steps.slice(steps.length - REASONING_RUN_MAX_STEPS)
+      : steps
   return (
     <div className="group flex flex-col">
       <button
@@ -2116,7 +2569,12 @@ function ReasoningRun({ steps }: { steps: ReasoningStepModel[] }) {
         </span>
         {steps.length > 1 ? (
           <span className="text-[10.5px] text-text-faint transition-colors duration-100 ease-out group-hover:text-text-subtle">
-            {steps.length} steps
+            {/* Counts what is ON SCREEN. The ceiling below drops the oldest steps,
+                and a head that kept printing the raw total would assert a list
+                longer than the one it labels. */}
+            {shown.length === steps.length
+              ? `${steps.length} steps`
+              : `${shown.length} of ${steps.length} steps`}
           </span>
         ) : null}
       </button>
@@ -2125,17 +2583,6 @@ function ReasoningRun({ steps }: { steps: ReasoningStepModel[] }) {
           id={listId}
           className="ml-2 mt-0.5 border-l border-white/10 pl-[17px] transition-colors duration-100 ease-out group-hover:border-white/[0.16]"
         >
-          {hidden > 0 ? (
-            <li>
-              <button
-                type="button"
-                onClick={() => setShowAll(true)}
-                className="py-0.5 text-[11.5px] text-text-faint hover:text-text-subtle"
-              >
-                {hidden} earlier {hidden === 1 ? 'step' : 'steps'}
-              </button>
-            </li>
-          ) : null}
           {shown.map(step => (
             <ReasoningStep key={step.key} step={step} />
           ))}
