@@ -1306,17 +1306,40 @@ function stringifyInput(input: Record<string, unknown>): string {
  * per line: the outcome is already known, and running the heuristic over a stack
  * trace would paint most of it as ordinary output.
  */
-function LogLines({ lines, isError }: { lines: string[]; isError: boolean }) {
+function LogLines({
+  lines,
+  isError,
+  startNo,
+}: {
+  lines: string[]
+  isError: boolean
+  startNo: number
+}) {
   return (
     <pre className="whitespace-pre font-mono text-[11.5px] leading-relaxed">
       {lines.map((line, index) => (
-        <div key={index} className={isError ? 'text-tone-danger' : logLineClass(line)}>
-          {line || ' '}
+        <div key={index} className="flex">
+          <span className={LOG_GUTTER_CLASS}>{startNo + index}</span>
+          <span className={isError ? 'text-tone-danger' : logLineClass(line)}>
+            {line || ' '}
+          </span>
         </div>
       ))}
     </pre>
   )
 }
+
+/**
+ * The output gutter (prototype `OutputLines`, `Messages.jsx:233`): `#3f3f46` =
+ * `text-ghost`, right-aligned tabular numerals, 48px wide with 11px of padding.
+ *
+ * `sticky left-0` with an inherited background is the prototype's own, and it is
+ * load-bearing rather than decoration: this body does not wrap, so a wide line
+ * scrolls the box horizontally, and without it the numbers slide out of view
+ * exactly when a long line makes you want them.
+ */
+const LOG_GUTTER_CLASS =
+  'sticky left-0 w-12 shrink-0 select-none bg-inherit pr-[11px] text-right tabular-nums text-text-ghost'
 
 /**
  * The inner scroll box every inline body shares (prototype `Messages.jsx:546`
@@ -1352,10 +1375,9 @@ function BashBody({
 }) {
   const lines = content.split('\n')
   const { window, revealMore } = useInlineOutputWindow(lines)
-  const renderLines = (slice: string[]) => <LogLines lines={slice} isError={isError} />
   return (
     <div className={INLINE_OUTPUT_SCROLLER}>
-      {renderLines(window.head)}
+      <LogLines lines={window.head} isError={isError} startNo={1} />
       {window.truncated ? (
         <>
           <InlineRevealBand
@@ -1364,7 +1386,14 @@ function BashBody({
             onReveal={revealMore}
             onOpenFull={onOpenFull}
           />
-          {renderLines(window.tail)}
+          {/* The tail resumes at its TRUE output line, never restarting at 1
+           * (prototype `startNo={lines.length-TAIL+1}`, `Messages.jsx:552`) —
+           * the same rule P4-36 established for a truncated read. */}
+          <LogLines
+            lines={window.tail}
+            isError={isError}
+            startNo={window.tailStartLine}
+          />
         </>
       ) : null}
     </div>

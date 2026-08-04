@@ -1293,6 +1293,44 @@ test('a bash body tints each line by its own semantics, not one flat wash', () =
   expect(html).toContain('text-text-muted') // the unclassified first line
 })
 
+test('a bash body numbers its output lines', () => {
+  // The prototype runs bash output through `OutputLines`, which always draws a
+  // line-number gutter (`Messages.jsx:525,550-554`); this body had none.
+  const html = render(
+    toolRow({
+      toolName: 'Bash',
+      toolFamily: 'bash',
+      input: { command: 'ls' },
+      status: 'error',
+      result: { isError: false, content: 'alpha\nbeta\ngamma', diff: null },
+    }),
+  )
+
+  expect(html).toContain('>1<')
+  expect(html).toContain('>2<')
+  expect(html).toContain('>3<')
+})
+
+test('a truncated bash tail resumes at its TRUE line number, never restarting at 1', () => {
+  // Same rule P4-36 established for a truncated read: 900 lines, head 30,
+  // tail 6 → the tail is output lines 895..900, not 1..6.
+  const content = Array.from({ length: 900 }, (_, i) => `out ${i + 1}`).join('\n')
+  const html = render(
+    toolRow({
+      toolName: 'Bash',
+      toolFamily: 'bash',
+      input: { command: 'bun test' },
+      status: 'error',
+      result: { isError: false, content, diff: null },
+    }),
+  )
+
+  expect(html).toContain('864 lines hidden') // the window really did cut
+  expect(html).toContain('>30<') // last head line
+  expect(html).toContain('>895<') // first tail line, its real number
+  expect(html).toContain('>900<') // last tail line
+})
+
 test('an errored bash body stays one danger tone rather than tinting its trace', () => {
   const html = render(
     toolRow({
