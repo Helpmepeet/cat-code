@@ -28,14 +28,38 @@
  * without a breakdown, never a fabricated one and never a crashed connection.
  */
 
+import type { UUID } from 'crypto'
 import type { ContextBreakdownSnapshot } from '../shared/protocol.js'
 import { getSessionId } from '../../src/bootstrap/state.js'
 import type { Tools, ToolPermissionContext } from '../../src/Tool.js'
+import type { ToolUseContext } from '../../src/Tool.js'
 import type { AgentDefinitionsResult } from '../../src/tools/AgentTool/loadAgentsDir.js'
 import { analyzeContextUsage } from '../../src/utils/analyzeContext.js'
-import { loadConversationForResume } from '../../src/utils/conversationRecovery.js'
+import { deserializeMessages } from '../../src/utils/conversationRecovery.js'
+import {
+  getLastSessionLog,
+  isLiteLog,
+  loadFullLog,
+} from '../../src/utils/sessionStorage.js'
 import { getMessagesAfterCompactBoundary } from '../../src/utils/messages.js'
 import { microcompactMessages } from '../../src/services/compact/microCompact.js'
+
+/**
+ * Categories `analyzeContextUsage` appends that describe UNUSED window rather
+ * than occupancy, and so must never become a legend row or a bar segment:
+ * `Free space` (`src/utils/analyzeContext.ts:1183`, pushed unconditionally) and
+ * `Autocompact buffer` (`:1166`, the reserved headroom). This is the engine's
+ * OWN visibility rule, not an invention: its `/context` renderer filters on
+ * exactly these two names (`src/components/ContextVisualization.tsx`,
+ * `cat.tokens > 0 && cat.name !== 'Free space' && cat.name !== RESERVED_CATEGORY_NAME`).
+ *
+ * `Compact buffer` (`:1174`, manual-compact mode) is deliberately NOT here —
+ * `/context` shows it, because it is real reserved space the session gave up.
+ */
+const UNOCCUPIED_CATEGORY_NAMES = new Set(['Free space', 'Autocompact buffer'])
+
+/** The engine's name for the unused remainder (`analyzeContext.ts:1184`). */
+const FREE_SPACE_CATEGORY = 'Free space'
 
 /** The engine call this domain is a thin projection of. Injectable for tests. */
 export type ContextBreakdownExecutor = {
@@ -52,17 +76,30 @@ export function createRealContextBreakdownExecutor(deps: {
   getToolPermissionContext: () => ToolPermissionContext
   /** The session's current main-loop model (the run-controls truth). */
   getMainLoopModel: () => string
-  /** The same mcpClients the query engine was configured with. */
-  getMcpClients: () => unknown[]
 }): ContextBreakdownExecutor {
   return {
     async analyze() {
-      const loaded = await loadConversationForResume(getSessionId(), undefined)
-      const messages = loaded?.messages ?? []
+      // Deliberately NOT `loadConversationForResume`, which the export verb uses.
+      // Despite the name it is not a reader: it runs `processSessionStartHooks`
+      // ('resume') — the user's own SessionStart hooks, arbitrary shell — appends
+      // their output to the messages, trips `restoreSkillStateFromMessages`'s
+      // fire-once `suppressNextSkillListing` latch, and copies plan + file history
+      // to disk (`src/utils/conversationRecovery.ts:603-626`). Firing those from a
+      // read-only popover in the LIVE process would change what the model sees.
+      // `transcriptBackfillWorker.ts:39-42` sets `CLAUDE_CODE_SIMPLE=1` purely to
+      // neuter the hook branch for this same call; the live sidecar is not bare,
+      // so that mitigation is unavailable here. These three are the loader half of
+      // that function's own string-source branch (`:578-590`), with none of the tail.
+      const log = await getLastSessionLog(getSessionId() as UUID)
+      if (!log) return null
+      const full = isLiteLog(log) ? await loadFullLog(log) : log
+      const messages = deserializeMessages(full.messages ?? [])
       if (messages.length === 0) return null
 
       // `/context`'s `toApiView` + microcompact, so the totals describe the API
-      // view rather than the raw transcript (context.tsx:16-27, :43).
+      // view rather than the raw transcript (context.tsx:16-27, :43). `toApiView`
+      // also applies `projectView` under `feature('CONTEXT_COLLAPSE')`, which is
+      // absent from the dev-full feature list, so there is nothing to mirror.
       const apiView = getMessagesAfterCompactBoundary(messages)
       const { messages: compacted } = await microcompactMessages(apiView)
 
@@ -74,25 +111,69 @@ export function createRealContextBreakdownExecutor(deps: {
         deps.tools,
         deps.agentDefinitions,
         undefined, // terminalWidth — grid layout only, unused here
-        // Only `options.mcpClients` is read for the system-prompt build
-        // (analyzeContext.ts:958); the sidecar has no LocalJSXCommandContext.
-        { options: { mcpClients: deps.getMcpClients() } } as never,
+        // `analyzeContextUsage` reads exactly three fields off this argument:
+        // `options.mcpClients` (analyzeContext.ts:958) plus
+        // `options.customSystemPrompt` (:960, :971) and `options.appendSystemPrompt`
+        // (:977), which it forwards into `buildEffectiveSystemPrompt`. The sidecar's
+        // engine config sets none of them (`sessionController.ts:373-393`, and
+        // `mcpClients` is `[]` there), so an empty options object is the honest
+        // value for all three rather than a stub that disagrees with the runtime.
+        { options: {} as ToolUseContext['options'] },
         undefined, // mainThreadAgentDefinition
         apiView, // originals, for API-usage extraction
       )
 
-      return {
-        categories: data.categories.map(category => ({
-          label: category.name,
-          tokens: category.tokens,
-          colorKey: String(category.color),
-          deferred: category.isDeferred === true,
-        })),
-        usedTokens: data.totalTokens,
-        contextWindow: data.maxTokens,
-        model: data.model,
-      }
+      return projectContextBreakdown(data)
     },
+  }
+}
+
+/** The engine output this projection reads. A structural subset of `ContextData`
+ * so a fixture can exercise it without constructing the whole analysis. */
+export type ContextBreakdownInput = {
+  categories: readonly {
+    name: string
+    tokens: number
+    color: unknown
+    isDeferred?: boolean
+  }[]
+  totalTokens: number
+  maxTokens: number
+  model: string
+}
+
+/**
+ * `ContextData` → the wire snapshot. Exported and pure so the category filter is
+ * unit-testable against realistic engine output: the executor around it can only
+ * be exercised against a live engine, which is exactly how the `Free space` leak
+ * shipped unnoticed.
+ */
+export function projectContextBreakdown(
+  data: ContextBreakdownInput,
+): ContextBreakdownSnapshot {
+  const freeSpace = data.categories.find(
+    category => category.name === FREE_SPACE_CATEGORY,
+  )
+
+  return {
+    categories: data.categories
+      .filter(category => !UNOCCUPIED_CATEGORY_NAMES.has(category.name))
+      .map(category => ({
+        label: category.name,
+        tokens: category.tokens,
+        colorKey: String(category.color),
+        deferred: category.isDeferred === true,
+      })),
+    usedTokens: data.totalTokens,
+    // The engine's OWN remainder, not `contextWindow - usedTokens`: those two
+    // disagree, because `totalTokens` is the API's fresh-input count when one
+    // is available and only falls back to the category sum otherwise
+    // (`analyzeContext.ts:1199-1204`), while `Free space` is computed from the
+    // category sum and the reserved buffer (`:1181`). Subtracting would print a
+    // `Free` that does not reconcile with the bar beside it.
+    freeTokens: freeSpace?.tokens ?? null,
+    contextWindow: data.maxTokens,
+    model: data.model,
   }
 }
 

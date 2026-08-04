@@ -752,7 +752,10 @@ export function ContextUsagePanel({
                 // §0 EXCEPTION: data-driven percent width (see PlanUsageRow).
                 <div
                   key={row.label}
-                  className={row.swatch}
+                  // `shrink-0` so a total that somehow exceeds the window clips at
+                  // the edge instead of flexbox silently rescaling EVERY segment,
+                  // which would misreport all of them rather than just the overflow.
+                  className={`shrink-0 ${row.swatch}`}
                   style={{ width: `${row.percentOfWindow}%` }}
                   title={`${row.label}, ${row.tokens.toLocaleString()} tokens`}
                 />

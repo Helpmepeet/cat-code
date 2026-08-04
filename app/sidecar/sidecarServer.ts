@@ -336,6 +336,8 @@ export class SidecarServer {
   private readonly contextBreakdown: SidecarContextBreakdownDomain | null
   /** Serialises the (transcript-reading, tokenizing) breakdown analysis. */
   private contextBreakdownInFlight = false
+  /** A trigger that arrived mid-analysis, re-run once the current one settles. */
+  private contextBreakdownPending = false
   private readonly accounts: SidecarAccountsDomain | null
   private readonly workspaceTrust: SidecarWorkspaceTrustDomain | null
   private readonly diagnostics: SidecarDiagnosticsDomain | null
@@ -2799,7 +2801,11 @@ export class SidecarServer {
     if (!this.contextBreakdown || this.connections.size === 0) {
       return
     }
+    // Coalesce rather than drop. The analysis takes seconds, so a turn that ends
+    // inside one (or a second connection attaching) would otherwise be discarded
+    // and the popover would sit on pre-turn numbers until the NEXT boundary.
     if (this.contextBreakdownInFlight) {
+      this.contextBreakdownPending = true
       return
     }
     this.contextBreakdownInFlight = true
@@ -2831,6 +2837,10 @@ export class SidecarServer {
       )
     } finally {
       this.contextBreakdownInFlight = false
+      if (this.contextBreakdownPending) {
+        this.contextBreakdownPending = false
+        void this.broadcastContextBreakdown()
+      }
     }
   }
 

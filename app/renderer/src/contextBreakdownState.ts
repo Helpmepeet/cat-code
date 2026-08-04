@@ -135,10 +135,17 @@ export function selectBreakdownRows(
     }))
 }
 
-/** Unoccupied window (`Free`, `Surfaces.jsx:532-535`), never negative. */
+/**
+ * Unoccupied window (`Free`, `Surfaces.jsx:532-535`).
+ *
+ * The engine's own remainder, passed through — NOT `contextWindow - usedTokens`,
+ * which is a different number: `usedTokens` is the API's fresh-input count when
+ * one exists, while the bar segments are the category estimates. Subtracting
+ * would print a `Free` that fails to reconcile with the bar directly above it.
+ */
 export function selectFreeTokens(
   snapshot: ContextBreakdownSnapshot | null,
 ): number | null {
-  if (!snapshot) return null
-  return Math.max(0, snapshot.contextWindow - snapshot.usedTokens)
+  if (!snapshot || snapshot.freeTokens == null) return null
+  return Math.max(0, snapshot.freeTokens)
 }

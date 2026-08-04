@@ -26,6 +26,7 @@ const BREAKDOWN: ContextBreakdownSnapshot = {
     { label: 'Empty bucket', tokens: 0, colorKey: 'claude', deferred: false },
   ],
   usedTokens: 14_500,
+  freeTokens: 185_500,
   contextWindow: 200_000,
   model: 'gpt-5.6-luna',
 }
@@ -97,11 +98,15 @@ test('segment widths are a share of the window, not of the used total', () => {
   expect(systemPrompt?.percentOfWindow).toBeCloseTo((4_200 / 200_000) * 100, 6)
 })
 
-test('free space is the unused window, never negative', () => {
+// `Free` is the engine's own `Free space` category, passed through the wire —
+// NOT `contextWindow - usedTokens`, which is a different basis (usedTokens is the
+// API fresh-input count when one exists, the segments are estimates).
+test('free space is the engine remainder, never negative, null when absent', () => {
   expect(selectFreeTokens(BREAKDOWN)).toBe(185_500)
-  expect(
-    selectFreeTokens({ ...BREAKDOWN, usedTokens: 250_000 }),
-  ).toBe(0)
+  // A changed usedTokens must NOT move Free — that was the old subtraction bug.
+  expect(selectFreeTokens({ ...BREAKDOWN, usedTokens: 999_999 })).toBe(185_500)
+  expect(selectFreeTokens({ ...BREAKDOWN, freeTokens: -5 })).toBe(0)
+  expect(selectFreeTokens({ ...BREAKDOWN, freeTokens: null })).toBeNull()
   expect(selectFreeTokens(null)).toBeNull()
 })
 

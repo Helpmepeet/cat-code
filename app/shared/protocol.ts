@@ -1008,9 +1008,28 @@ export type ContextBreakdownCategory = {
 }
 
 export type ContextBreakdownSnapshot = {
+  /**
+   * OCCUPANCY only. The engine also appends `Free space` and, under auto-compact,
+   * `Autocompact buffer` (`src/utils/analyzeContext.ts:1166,1183`); both describe
+   * UNUSED window, and the sidecar strips them exactly as the engine's own
+   * `/context` renderer does. A consumer may therefore treat every category here
+   * as space the session is actually spending.
+   */
   categories: ContextBreakdownCategory[]
-  /** `ContextData.totalTokens` — non-deferred occupancy. */
+  /**
+   * `ContextData.totalTokens`. NOTE the basis: this is the API's fresh-input
+   * count when one is available, and only falls back to the sum of the categories
+   * otherwise (`analyzeContext.ts:1199-1204`). It is therefore NOT guaranteed to
+   * equal `Σ categories[].tokens`, and `contextWindow - usedTokens` is NOT the
+   * free space — read `freeTokens` for that.
+   */
   usedTokens: number
+  /**
+   * The engine's own `Free space` category (`analyzeContext.ts:1181`), which
+   * nets off both occupancy and the reserved compact buffer. Null when the
+   * analysis produced no such category.
+   */
+  freeTokens: number | null
   /** `ContextData.maxTokens` — the engine-resolved window for `model`. */
   contextWindow: number
   /** The model the analysis ran against, so a stale snapshot is detectable. */

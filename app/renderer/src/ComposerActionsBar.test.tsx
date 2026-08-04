@@ -673,6 +673,7 @@ test('ContextUsagePanel renders the per-category breakdown, legend and Free row'
           },
         ],
         usedTokens: 25_200,
+        freeTokens: 174_800,
         contextWindow: 200_000,
         model: 'gpt-5.6-luna',
       }}

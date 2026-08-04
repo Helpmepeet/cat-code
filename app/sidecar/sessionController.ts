@@ -630,10 +630,7 @@ export async function createSidecarSessionController({
         agentDefinitions,
         getToolPermissionContext: () =>
           appStateStore.getState().toolPermissionContext,
-        getMainLoopModel: () => getMainLoopModel(),
-        // The sidecar configures the engine with no MCP clients
-        // (`mcpClients: []` above), so the analysis is told the same.
-        getMcpClients: () => [],
+        getMainLoopModel,
       }),
       onError: error => {
         console.error('[sidecar] context breakdown failed', error)
