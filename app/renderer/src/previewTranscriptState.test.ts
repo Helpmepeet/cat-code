@@ -17,6 +17,7 @@ import { batch } from './serverFrameBatch.js'
 import {
   claimLazyRestore,
   createPreviewTranscriptState,
+  claimPreviewSwaps,
   projectPreviewTranscriptCache,
   previewClosePlan,
   reduceLiveTranscriptState,
@@ -191,6 +192,63 @@ test('swap observations cover replay batches and ready zero-history batches', ()
   expect(selectPreviewSwapSessions([ready(true)], previewing)).toEqual([SID])
   expect(selectPreviewSwapSessions([ready(false)], previewing)).toEqual([])
   expect(selectPreviewSwapSessions([messageFrame(0, false)], previewing)).toEqual([])
+})
+
+// The restore that does not fit one batch (2026-08-05). Main coalesces the
+// bootstrap window for 50 ms only, so a 2 MB history flushes as `ready` + a
+// first slice and then bare replay batches. Each later batch names the same
+// still-previewing session, and an unclaimed second `preview-live-reset` wipes
+// the live state only `ready` creates — after which `projectServerFrame` drops
+// every remaining history frame and the pane shows the empty-session Welcome
+// with the cache already discarded. Reported live: 346 messages replayed, none
+// displayed. Drop `claimPreviewSwaps` below and the row count goes to 0.
+test('a restore split across batches keeps its history', () => {
+  const first = messageFrame(0)
+  const rest = [messageFrame(1), messageFrame(2)]
+  const claimed = new Set<string>()
+  const previewing = new Set([SID])
+
+  let preview = reducePreviewTranscriptState(createPreviewTranscriptState(), {
+    type: 'preview-load',
+    cache: cache([first, ...rest]),
+  })
+  let live = createTranscriptState()
+
+  // Batch 1: main's window expires mid-replay, so only ready + one frame land.
+  for (const batchFrames of [[ready(), first], rest]) {
+    const swaps = claimPreviewSwaps(
+      claimed,
+      selectPreviewSwapSessions(batchFrames, previewing),
+    )
+    for (const sessionId of swaps) {
+      live = reduceLiveTranscriptState(live, {
+        type: 'preview-live-reset',
+        sessionId,
+      })
+    }
+    live = reduceLiveTranscriptState(live, batch(batchFrames))
+    for (const sessionId of swaps) {
+      preview = reducePreviewTranscriptState(preview, {
+        type: 'preview-reset',
+        sessionId,
+      })
+    }
+  }
+
+  expect(claimed.has(SID)).toBe(true)
+  expect(selectPreviewTranscript(preview, SID)).toBeNull()
+  expect(selectTranscriptRows(live, SID)).toHaveLength(3)
+})
+
+test('claimPreviewSwaps hands over once per session', () => {
+  const claimed = new Set<string>()
+  expect(claimPreviewSwaps(claimed, [SID, 'other-session'])).toEqual([
+    SID,
+    'other-session',
+  ])
+  expect(claimPreviewSwaps(claimed, [SID, 'other-session'])).toEqual([])
+  // A session that never swapped is unaffected by its neighbours' claims.
+  expect(claimPreviewSwaps(claimed, ['third-session'])).toEqual(['third-session'])
 })
 
 // LAYER HONESTY. This exercises the claim helper alone: the first call for a

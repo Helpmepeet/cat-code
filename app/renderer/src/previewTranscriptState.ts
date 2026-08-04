@@ -327,6 +327,30 @@ export function selectPreviewSwapSessions(
   return [...swap]
 }
 
+/**
+ * The handover is once per session, claimed synchronously by the caller.
+ *
+ * A restore does NOT always arrive in one batch: main coalesces the bootstrap
+ * window for `LAZY_REPLAY_FLUSH_MS` only (`app/main/attachmentGate.ts`), so a
+ * large history flushes as `ready` + a first slice, then bare replay batches.
+ * Those later batches carry a `replay: true` frame for a session still listed
+ * as previewing, so `selectPreviewSwapSessions` names it again — and a second
+ * `preview-live-reset` deletes the live session state that only the `ready`
+ * frame creates. `projectServerFrame` drops an `event` frame for a session with
+ * no state, so every remaining history frame was discarded and the pane fell
+ * back to the empty-session Welcome with the cache already gone.
+ */
+export function claimPreviewSwaps(
+  claimed: Set<SessionId>,
+  sessionIds: readonly SessionId[],
+): SessionId[] {
+  return sessionIds.filter(sessionId => {
+    if (claimed.has(sessionId)) return false
+    claimed.add(sessionId)
+    return true
+  })
+}
+
 /** First engagement wins across composer focus, pointer-down, and pane dwell. */
 export function claimLazyRestore(
   claimed: Set<SessionId>,

@@ -85,6 +85,7 @@ import {
 } from './transcriptProjector.js'
 import {
   claimLazyRestore,
+  claimPreviewSwaps,
   createPreviewTranscriptState,
   hasPreviewTranscript,
   openPreloadedPreview,
@@ -728,6 +729,10 @@ export function App() {
   shellRef.current = shell
   const lazyRestoreClaimsRef = useRef<Set<SessionId>>(new Set())
   const cancelledRestoresRef = useRef<Set<SessionId>>(new Set())
+  // Sessions whose cached preview has already handed over to its live engine.
+  // Released when a preview pane opens again (`openPreviewPane`) or the row is
+  // reaped, so a later preview→live cycle still swaps exactly once.
+  const swappedPreviewsRef = useRef<Set<SessionId>>(new Set())
   const startupPreloadStartedRef = useRef(false)
   const preloadCandidateIdsRef = useRef<Set<SessionId>>(new Set())
   const preloadQueuedIdsRef = useRef<Set<SessionId>>(new Set())
@@ -836,7 +841,13 @@ export function App() {
       for (const sessionId in shellRef.current.previews) {
         previewing.add(sessionId)
       }
-      const swapSessions = selectPreviewSwapSessions(frames, previewing)
+      // Claimed synchronously: React commits `shell.previews` and the preview
+      // store a render later, so every batch of a multi-batch restore would
+      // otherwise observe the same still-previewing session and swap again.
+      const swapSessions = claimPreviewSwaps(
+        swappedPreviewsRef.current,
+        selectPreviewSwapSessions(frames, previewing),
+      )
       for (const sessionId of swapSessions) {
         dispatchSessionEvent({ type: 'preview-live-reset', sessionId })
       }
@@ -955,6 +966,7 @@ export function App() {
         removedIdsRef.current.add(event.appSessionId)
         lazyRestoreClaimsRef.current.delete(event.appSessionId)
         cancelledRestoresRef.current.delete(event.appSessionId)
+        swappedPreviewsRef.current.delete(event.appSessionId)
         dispatchPreviewTranscript({
           type: 'preview-reset',
           sessionId: event.appSessionId,
@@ -1862,6 +1874,7 @@ export function App() {
   )
 
   const openPreviewPane = useCallback((sessionId: SessionId) => {
+    swappedPreviewsRef.current.delete(sessionId)
     dispatchShell({ type: 'preview-open', sessionId })
     setWorkspaceLayoutState(current =>
       focusOrAssignWorkspaceSession(current, sessionId).state,
