@@ -1243,16 +1243,31 @@ test('output-line tint keeps the prototype branch ORDER, so a failed pass reads 
   // Both the error and the pass branch match this line; the prototype tests
   // error FIRST, and a line saying a test suite failed must not read green.
   expect(logLineClass('1 failed, 3 passed')).toBe('text-[#fca5a5]')
-  // `FAIL`/`PASS`/`WARNING` are line-anchored in the prototype, so the words
-  // occurring mid-sentence do not hijack a line that is not a status line.
-  expect(logLineClass('the PASS threshold is configurable')).toBe('text-text-muted')
 })
 
-test('output-line tint carries the warn terms the first port dropped', () => {
-  // `not wrapped` and a lowercase `warn` are both in the prototype's warn branch
-  // and were missing here, so React's act() warning read as ordinary output.
+test('output-line tint anchors the bare FAIL/PASS words, so prose is not a status line', () => {
+  // `^\s*FAIL`/`^\s*PASS` — the prototype anchors these, and the earlier port
+  // used `\bFAIL\b`/`\bPASS\b`, so a sentence mentioning either was painted as
+  // an outcome. Nothing else in those branches rescues the uppercase word:
+  // `failed`/`passed` are separate lowercase alternatives.
+  expect(logLineClass('the PASS threshold is configurable')).toBe('text-text-muted')
+  expect(logLineClass('Tests: 1 FAIL out of 40')).toBe('text-text-muted')
+  // Anchored still means leading whitespace is fine — that is how real output
+  // indents its status lines.
+  expect(logLineClass('  FAIL src/thing.test.ts')).toBe('text-[#fca5a5]')
+})
+
+test('output-line tint carries `not wrapped`, the one warn term the first port dropped', () => {
+  // Only this one: the parent branch was `/\bWARN(ING)?\b|…/i`, so a lowercase
+  // `warn` ALREADY matched. Without `not wrapped`, React's act() warning read as
+  // ordinary output, which is the case that motivated re-checking the port.
   expect(logLineClass('An update was not wrapped in act(...)')).toBe('text-[#fcd34d]')
   expect(logLineClass('warn: peer dependency')).toBe('text-[#fcd34d]')
+  // `WARNING` carries a `^\s*` anchor in the prototype, but that alternative is
+  // unreachable: the branch's `\bwarn(ing)?\b` is unanchored and the whole regex
+  // is case-insensitive, so a mid-line `WARNING` still matches. Ported verbatim
+  // rather than "cleaned up", and pinned here so the quirk is not read as a bug.
+  expect(logLineClass('emitted a WARNING during the run')).toBe('text-[#fcd34d]')
 })
 
 test('a bash body tints each line by its own semantics, not one flat wash', () => {

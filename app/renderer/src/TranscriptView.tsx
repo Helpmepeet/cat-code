@@ -1622,12 +1622,15 @@ function PlainLinesBody({
 }) {
   const lines = content.split('\n')
   const { window, revealMore } = useInlineOutputWindow(lines)
-  // Flat `text-text-muted` is the prototype's own base for these bodies
-  // (`FE_T.t2` `#a1a1aa`, `Messages.jsx:695,715,734,788`) — NOT a gap. What the
-  // prototype adds on top is `hl()` syntax coloring, which this body still lacks
-  // (the open ledger gap under `FileReadCard`). Deliberately NOT the bash body's
-  // `logLineClass`: that heuristic belongs to `OutputLines`, which the prototype
-  // routes bash output through and these bodies never touch.
+  // Flat `text-text-muted` is the prototype's own base here (`FE_T.t2` `#a1a1aa`),
+  // and for Grep and Web it is the WHOLE colour rule (`Messages.jsx:695,715`).
+  // Deliberately NOT the bash body's `logLineClass`: that heuristic belongs to
+  // `OutputLines`, which the prototype routes bash output through and these
+  // bodies never touch, and it would tint any line merely containing `WARNING`
+  // or `✓`. Two prototype rules ARE still uncarried here, both pre-existing:
+  // `hl()` syntax coloring (the open ledger gap under `FileReadCard`), and the
+  // per-prefix tints Mcp and Skill add on top of the flat base — `→` lines in
+  // `FE_T.add` and `›`/`skill` lines in `FE_T.t3` (`:734,788`).
   const toneClass = isError ? 'text-tone-danger' : 'text-text-muted'
   const renderLines = (slice: string[]) => (
     <pre

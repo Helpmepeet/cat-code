@@ -22,10 +22,23 @@ export function resolveToolCardExpanded(
 }
 
 /**
- * Semantic output-line tint — an exact port of the prototype's `logLineColor`
- * (`Messages.jsx:212-218`), which the prototype applies to EVERY tool output via
- * `OutputLines` (`Messages.jsx:241`, and its soft-wrap variant `:348`), not to
- * bash alone. `BashBody` and `PlainLinesBody` both render through it.
+ * Semantic output-line tint — a port of the prototype's `logLineColor`
+ * (`Messages.jsx:212-218`), carrying BASH OUTPUT ONLY. That is the prototype's
+ * own split: `logLineColor` reaches the screen through `OutputLines`, which
+ * `BashOutputCard` (`Messages.jsx:381-556`) and the output drawer use, while the
+ * Grep/Web/Mcp/Skill bodies take flat `FE_T.t2` plus `hl()` syntax coloring
+ * (`:695,715,734,788`). `BashBody` is the single call site, and
+ * `PlainLinesBody` deliberately does NOT use this — a guard test in
+ * `TranscriptView.test.tsx` pins that, because applying these heuristics to a
+ * grep or MCP body would tint any line that merely contains `WARNING` or `✓`.
+ *
+ * 🔁 ONE DEVIATION, deliberate and unapproved: the unclassified fallback. The
+ * prototype returns a bespoke `#9b9ba3` (`:217`); this returns `text-text-muted`
+ * `#a1a1aa`. That is the prototype's OWN `FE_T.t2` (`:11`), the colour it gives
+ * ordinary lines in every other tool body, so the token keeps a plain bash line
+ * the same weight as a plain grep line and keeps the theme in one place. The
+ * `#9b9ba3` one-off looks like prototype-local drift rather than intent. Swap to
+ * `text-[#9b9ba3]` if the operator rules the other way; nothing else depends on it.
  *
  * The hues are the prototype's own, and they are deliberately the 300-level
  * pastels — NOT the `--tone-*` tokens this once returned. The prototype runs a
