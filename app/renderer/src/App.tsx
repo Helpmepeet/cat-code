@@ -1033,10 +1033,6 @@ export function App() {
           shell.previews[sessionId] === true && shell.tabs[sessionId] !== true
         return {
           descriptor,
-          // P4-32a (B1) — per-tab agent-mode flag, so the mode marker is visible
-          // on a BACKGROUND orchestrator session too, not only the active pane.
-          orchestratorActive:
-            selectAgentModeSnapshot(orchestrator, sessionId)?.active ?? false,
           visual: previewOnly
             ? {
                 // Label + tone come from the ONE shared vocabulary
@@ -1057,14 +1053,7 @@ export function App() {
               }),
         }
       }),
-    [
-      shell,
-      connection,
-      permissions,
-      activeSessionId,
-      sessionCatalogSnapshot,
-      orchestrator,
-    ],
+    [shell, connection, permissions, activeSessionId, sessionCatalogSnapshot],
   )
   // P4-32a — the active session's orchestrator snapshot, read once for the docked
   // roster and the footer strip so both read one truth (never two derivations of
@@ -2865,19 +2854,6 @@ export function App() {
           canAddPanel={paneSessionIds.length > workspaceLayout.panels.length}
           onAddPanel={addWorkspacePanel}
           onRemovePanel={removeWorkspacePanel}
-          onToggleOrchestrator={(sessionId, next) => {
-            // Same P4-8b verb the empty-state reflect dispatches: the sidecar
-            // calls the engine's own `matchSessionMode` and re-broadcasts
-            // agent-mode.snapshot, which flips the badge. No respawn.
-            try {
-              getBridge().setAgentMode(sessionId, next)
-              setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))
-            } catch (error) {
-              setTransportErrors(prev =>
-                reduceTransportErrorSet(prev, sessionId, errorMessage(error)),
-              )
-            }
-          }}
         />
 
         {/* P4-6b — the tab ⋯ actions overflow + its MetadataInspector drawer +

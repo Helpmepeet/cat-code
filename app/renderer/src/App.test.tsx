@@ -1659,30 +1659,24 @@ test('P4-32a — a session with no delegated workers leaves the dock untouched',
   expect(html).not.toContain('subagents')
 })
 
-test('P4-32a — WIRING TRIPWIRE (source text, NOT reachability) for the per-tab mode joins', () => {
+test('P4-32a — WIRING TRIPWIRE (source text, NOT reachability) for the mode joins', () => {
   // Read this for what it is: a source-TEXT assertion. It fires if someone deletes
   // or renames these joins, and it proves NOTHING about whether the handler can be
-  // reached at runtime — it would still pass if the TabBar were never rendered.
-  // Reachability of the mode switch is GUI-gated (operator step 2); the roster's
-  // reachability, by contrast, is covered by the real render test above.
-  //
-  // The joins pinned here are the App-level ones the SSR harness cannot reach: each
-  // tab reads ITS OWN agent-mode snapshot (so a background orchestrator session is
-  // visible), the memo depends on `orchestrator` (or the badge would freeze on
-  // first paint), and the switch dispatches the existing P4-8b verb, not a new one.
+  // reached at runtime.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
 
+  // The tab bar carries NO orchestrator chrome: a tab names a session, and the
+  // mode belongs to the surfaces that own it. Pinned so the badge and its
+  // per-tab snapshot read cannot drift back onto the tab.
   const tabsStart = source.indexOf('const tabs: TabModel[] = useMemo(')
   const tabsEnd = source.indexOf('const activeAgentModeSnapshot', tabsStart)
   const tabsBody = source.slice(tabsStart, tabsEnd)
-  expect(tabsBody).toContain('orchestratorActive:')
-  expect(tabsBody).toContain('selectAgentModeSnapshot(orchestrator, sessionId)')
-  expect(/orchestrator,\s*\],/.test(tabsBody)).toBe(true)
+  expect(tabsBody).not.toContain('orchestratorActive:')
+  expect(tabsBody).not.toContain('selectAgentModeSnapshot(orchestrator, sessionId)')
 
   const barStart = source.indexOf('<TabBar')
   const barBody = source.slice(barStart, source.indexOf('/>', barStart))
-  expect(barBody).toContain('onToggleOrchestrator={(sessionId, next)')
-  expect(barBody).toContain('getBridge().setAgentMode(sessionId, next)')
+  expect(barBody).not.toContain('Orchestrator')
 
   // Each pane docks ITS panel's workers, not the globally-active session's.
   expect(source).toContain('orchestratorWorkers={panelOrchestratorWorkers}')

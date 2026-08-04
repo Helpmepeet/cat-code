@@ -1,7 +1,6 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { SessionDescriptor } from '../../shared/hostApi.js'
-import { OrchestratorBadge } from './AgentChrome.js'
 import { TabBar, type TabModel } from './TabBar.js'
 import { tabLabel } from './tabBarModel.js'
 import type { TabVisualState } from './tabStatus.js'
@@ -104,17 +103,20 @@ test('roving tabindex falls back to the first tab when nothing is active', () =>
   expect(order).toEqual(['0', '-1'])
 })
 
-test('a non-nominal status shows its chip; a plain ready tab does not', () => {
+test('no status word is printed on a tab, whatever the status', () => {
   const html = render(
     [
       tab('a', { label: 'ready', tone: 'live' }),
-      tab('b', { label: 'exited', tone: 'dead', restartable: true }),
+      tab('b', { label: 'disconnected', tone: 'dead', restartable: true }),
     ],
     'a',
   )
-  expect(html).toContain('exited')
-  // The healthy active tab shows the quiet dot, not a "ready" text chip.
+  // The tone dot is the whole visual signal; the word survives only inside the
+  // tab's accessible name.
+  expect(html).not.toContain('>disconnected<')
   expect(html).not.toContain('>ready<')
+  expect(html).toContain('bg-tone-danger')
+  expect(html).toContain('aria-label="Session b, disconnected"')
 })
 
 test('a restartable (dead) tab renders the restart affordance', () => {
@@ -165,93 +167,13 @@ test('no session-actions ⋯ renders when the TabBar is not wired for it', () =>
   expect(html).not.toContain('Session actions for')
 })
 
-test('P4-32a — the mode switch rides the ACTIVE tab and stays reachable there', () => {
-  // B1 + M1: the tab is the app's real session-title host, and the switch must be
-  // reachable regardless of transcript contents (the empty-state reflect was not).
-  const html = renderToStaticMarkup(
-    <TabBar
-      tabs={[tab('a'), tab('b')]}
-      activeSessionId="a"
-      onSelect={noop}
-      onClose={noop}
-      onRestart={noop}
-      onNewTab={noop}
-      onToggleOrchestrator={noop}
-    />,
-  )
-  // Exactly one interactive switch: the active tab's.
-  expect(html.match(/aria-pressed=/g)).toHaveLength(1)
-  expect(html).toContain('aria-label="Turn on Orchestrator mode for session')
-  // Off collapses to the glyph — no lit pill naming a mode nobody chose.
-  expect(html).not.toContain('>Orchestrator<')
-})
-
-test('P4-32a — an active session labels the switch and reads as on', () => {
-  const html = renderToStaticMarkup(
-    <TabBar
-      tabs={[{ ...tab('a'), orchestratorActive: true }]}
-      activeSessionId="a"
-      onSelect={noop}
-      onClose={noop}
-      onRestart={noop}
-      onNewTab={noop}
-      onToggleOrchestrator={noop}
-    />,
-  )
-  expect(html).toContain('aria-pressed="true"')
-  expect(html).toContain('Orchestrator')
-  expect(html).toContain('aria-label="Turn off Orchestrator mode for session')
-})
-
-test('P4-32a — a BACKGROUND session in the mode shows a passive marker, not a switch', () => {
-  const html = renderToStaticMarkup(
-    <TabBar
-      tabs={[tab('a'), { ...tab('b'), orchestratorActive: true }]}
-      activeSessionId="a"
-      onSelect={noop}
-      onClose={noop}
-      onRestart={noop}
-      onNewTab={noop}
-      onToggleOrchestrator={noop}
-    />,
-  )
-  // One switch (the active tab) plus one non-interactive marker (the background one).
-  expect(html.match(/aria-pressed=/g)).toHaveLength(1)
-  expect(html).toContain('title="Orchestrator mode is on"')
-})
-
-test('P4-32a — an unwired TabBar draws no mode chrome at all', () => {
-  // The default helper omits `onToggleOrchestrator` and every tab is out of the
-  // mode, so the additive prop leaks nothing into unrelated tabs.
+test('no tab carries Orchestrator-mode chrome', () => {
+  // The mode switch was removed from the tab: a tab names a session, and the
+  // mode belongs to the surfaces that own it (the empty-state reflect and the
+  // footer strip), not to every tab in the bar.
   const html = render([tab('a'), tab('b')], 'a')
   expect(html).not.toContain('Orchestrator')
-})
-
-test('P4-32a — the switch negates the mode and never re-selects the host tab', () => {
-  // No DOM click harness in this package (the OrchestratorReflect convention): call
-  // the hook-free component and read its onClick off the returned element, which is
-  // the exact code path a real click runs. The stopPropagation assertion matters:
-  // the tab row is itself clickable, so without it toggling would also select.
-  const calls: boolean[] = []
-  let stopped = 0
-  const event = { stopPropagation: () => { stopped += 1 } }
-
-  const off = OrchestratorBadge({ active: false, onToggle: next => calls.push(next) })
-  expect(off).not.toBeNull()
-  off?.props.onClick(event)
-  expect(calls).toEqual([true])
-  expect(stopped).toBe(1)
-
-  const on = OrchestratorBadge({ active: true, onToggle: next => calls.push(next) })
-  on?.props.onClick(event)
-  expect(calls).toEqual([true, false])
-  expect(stopped).toBe(2)
-})
-
-test('P4-32a — a session out of the mode with no callback renders nothing', () => {
-  // Otherwise every ordinary tab would carry dead orchestrator chrome.
-  expect(OrchestratorBadge({ active: false })).toBeNull()
-  expect(OrchestratorBadge({ active: true })).not.toBeNull()
+  expect(html).not.toContain('aria-pressed=')
 })
 
 test('the first nine tabs advertise a ⌘<n> jump hint', () => {
@@ -268,21 +190,17 @@ test('tabLabel prefers title, falls back to cwd basename, then a default', () =>
   )
 })
 
-test('the title outranks the status chip it sits beside', () => {
-  // The chip QUALIFIES the tab; the title IDENTIFIES it. A bar of preview tabs
-  // used to read as PREVIEW PREVIEW PREVIEW because the chip ran saturated and
-  // uppercase against a #52525b title.
+test('a previewed tab shows its title alone, never the word preview', () => {
+  // A bar of previewed tabs used to read as PREVIEW PREVIEW PREVIEW: the status
+  // word out-shouted the session names it was only qualifying.
   const html = render(
     [tab('a', { label: 'preview', tone: 'busy' }, { title: 'say hi' })],
     null,
   )
 
   expect(html).toContain('say hi')
-  expect(html).toContain('preview')
-  // Chip: quiet, plain, unshouted.
-  expect(html).toContain('text-[10px] text-text-faint')
-  expect(html).not.toContain('uppercase tracking-wide')
-  // Inactive title sits above the chip, not at the ghost token.
+  expect(html).not.toContain('>preview<')
+  // The title carries the tab, at the subtle token rather than the ghost one.
   expect(html).toContain('text-text-subtle')
 })
 

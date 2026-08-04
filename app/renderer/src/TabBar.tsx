@@ -11,7 +11,6 @@
 import { useRef, type KeyboardEvent } from 'react'
 import type { SessionDescriptor } from '../../shared/hostApi.js'
 import type { SessionId } from '../../shared/protocol.js'
-import { OrchestratorBadge } from './AgentChrome.js'
 import {
   SESSION_ACTIONS_MENU_WIDTH,
   type SessionActionsAnchor,
@@ -23,12 +22,6 @@ import { MAX_WORKSPACE_PANELS } from './workspaceLayout.js'
 export type TabModel = {
   descriptor: SessionDescriptor
   visual: TabVisualState
-  /**
-   * P4-32a (B1) — this session's live agent-mode flag from
-   * `agent-mode.snapshot`. Optional + additive so existing TabModel builders and
-   * headless tests are untouched; absent reads as "not in the mode".
-   */
-  orchestratorActive?: boolean
 }
 
 export function TabBar({
@@ -43,7 +36,6 @@ export function TabBar({
   canAddPanel = false,
   onAddPanel,
   onRemovePanel,
-  onToggleOrchestrator,
 }: {
   tabs: TabModel[]
   activeSessionId: SessionId | null
@@ -76,14 +68,6 @@ export function TabBar({
   canAddPanel?: boolean
   onAddPanel?: () => void
   onRemovePanel?: () => void
-  /**
-   * P4-32a (B1 + M1) — flip the ACTIVE tab's session in or out of Orchestrator
-   * mode. The tab is the app's real session-title host (the chat pane has no
-   * header by design), so putting the switch here is what keeps it reachable
-   * after the transcript has messages; the empty-state reflect could not.
-   * Optional + additive: without it the badge stays a passive marker.
-   */
-  onToggleOrchestrator?: (sessionId: SessionId, next: boolean) => void
 }) {
   // Roving-tabindex focus targets — one entry per tab, so arrow keys can move
   // DOM focus to the neighbouring tab.
@@ -151,7 +135,6 @@ export function TabBar({
             onClose={onClose}
             onRestart={onRestart}
             onOpenActions={onOpenActions}
-            onToggleOrchestrator={onToggleOrchestrator}
             onKeyDown={event => onTabKeyDown(event, index)}
           />
         ))}
@@ -241,7 +224,6 @@ function Tab({
   onClose,
   onRestart,
   onOpenActions,
-  onToggleOrchestrator,
   onKeyDown,
 }: {
   ref: (element: HTMLDivElement | null) => void
@@ -256,7 +238,6 @@ function Tab({
     sessionId: SessionId,
     anchor: SessionActionsAnchor,
   ) => void
-  onToggleOrchestrator?: (sessionId: SessionId, next: boolean) => void
   onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void
 }) {
   const { descriptor, visual } = tab
@@ -319,19 +300,6 @@ function Tab({
       >
         {title}
       </span>
-
-      {/* P4-32a — the mode marker sits with the title it belongs to. Interactive
-       * on the tab you are in (so the mode stays changeable mid-conversation),
-       * a passive marker on a background session that is in the mode. */}
-      <OrchestratorBadge
-        active={tab.orchestratorActive ?? false}
-        sessionLabel={title}
-        {...(isActive && onToggleOrchestrator
-          ? { onToggle: (next: boolean) => onToggleOrchestrator(id, next) }
-          : {})}
-      />
-
-      <StatusChip visual={visual} />
 
       {visual.restartable ? (
         <button
@@ -396,27 +364,12 @@ function Tab({
 }
 
 /**
- * The status chip — a small text token QUALIFYING the tab, so it is quieter than
- * the title it sits beside: plain weight at `text-text-faint`, no mono, no
- * uppercase, no tone colour. The tone lives on the dot, which is the one thing
- * that should carry colour here.
- *
- * It used to paint `font-mono uppercase tracking-wide` in a saturated tone
- * colour against a `text-text-faint` title, which inverted the hierarchy: a row
- * of preview tabs read as PREVIEW PREVIEW PREVIEW rather than as session names.
- *
- * Suppressed for a plain healthy `ready` tab (`tone === 'live'` is produced ONLY
- * for a nominal ready tab — spawning is `warn`, every terminal state is `dead`),
- * so a bar of healthy tabs carries no chips at all.
+ * A solid tone dot — the tab's ONLY status signal. The status word that used to
+ * sit beside the title (`preview`, `disconnected`, `closed`, …) was removed:
+ * the operator's target for a tab is live vs not-live, and a row of tabs reading
+ * PREVIEW PREVIEW PREVIEW buried the session names it qualified. The word still
+ * reaches assistive tech through the tab's `aria-label`.
  */
-function StatusChip({ visual }: { visual: TabVisualState }) {
-  if (visual.tone === 'live') return null
-  return (
-    <span className="shrink-0 text-[10px] text-text-faint">{visual.label}</span>
-  )
-}
-
-/** A solid tone dot — the quiet health indicator on a nominal tab. */
 function StatusDot({ tone }: { tone: TabTone }) {
   return (
     <span
