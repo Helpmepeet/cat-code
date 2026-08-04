@@ -89,6 +89,7 @@ import {
 import { basename } from './pathUtils.js'
 import {
   findNestedToolUseRow,
+  logLineClass,
   resolveToolCardExpanded,
 } from './transcriptViewModel.js'
 import {
@@ -1294,17 +1295,27 @@ function stringifyInput(input: Record<string, unknown>): string {
   }
 }
 
-/** Semantic bash line tint (prototype `logLineColor`), mapped to tone tokens. */
-function bashLineClass(line: string): string {
-  if (/(\bFAIL\b|\bERROR\b|\berror\b|npm ERR!|✕|✘|UnhandledPromise|failed)/.test(line)) {
-    return 'text-tone-danger'
-  }
-  if (/(\bWARN(ING)?\b|exceed|collision)/i.test(line)) return 'text-tone-warn'
-  if (/(\bPASS\b|✓|compiled|succeeded|\bpassed\b)/.test(line)) {
-    return 'text-tone-success'
-  }
-  if (/^\s*(>|@ |at )/.test(line)) return 'text-text-subtle'
-  return 'text-text-muted'
+/**
+ * The prototype's `OutputLines` body (`Messages.jsx:232-244`): one semantically
+ * tinted div per line. Bash output is the only body routed through it, which is
+ * the prototype's own split — `OutputLines` carries the bash card and the output
+ * drawer (`:423,491,525,550-554`), while the Grep/Web/Mcp/Skill bodies take flat
+ * `FE_T.t2` plus `hl()` syntax coloring (`:695,715,734,788`) instead.
+ *
+ * An errored result overrides every line to the danger tint rather than tinting
+ * per line: the outcome is already known, and running the heuristic over a stack
+ * trace would paint most of it as ordinary output.
+ */
+function LogLines({ lines, isError }: { lines: string[]; isError: boolean }) {
+  return (
+    <pre className="whitespace-pre font-mono text-[11.5px] leading-relaxed">
+      {lines.map((line, index) => (
+        <div key={index} className={isError ? 'text-tone-danger' : logLineClass(line)}>
+          {line || ' '}
+        </div>
+      ))}
+    </pre>
+  )
 }
 
 /**
@@ -1341,15 +1352,7 @@ function BashBody({
 }) {
   const lines = content.split('\n')
   const { window, revealMore } = useInlineOutputWindow(lines)
-  const renderLines = (slice: string[]) => (
-    <pre className="whitespace-pre font-mono text-[11.5px] leading-relaxed">
-      {slice.map((line, index) => (
-        <div key={index} className={isError ? 'text-tone-danger' : bashLineClass(line)}>
-          {line || ' '}
-        </div>
-      ))}
-    </pre>
-  )
+  const renderLines = (slice: string[]) => <LogLines lines={slice} isError={isError} />
   return (
     <div className={INLINE_OUTPUT_SCROLLER}>
       {renderLines(window.head)}
@@ -1513,10 +1516,21 @@ function NumberedBody({
   )
 }
 
-/** File-write additions view: every line prefixed with a green `+`. */
+/**
+ * File-write additions view: every line prefixed with a green `+`.
+ *
+ * The green is the prototype's `FE_T.add` `#86efac` (`Messages.jsx:8-13`), which
+ * it puts on BOTH the `+` and the line (`:625-627`) — not the saturated
+ * `tone-success` `#4ade80` this used to paint the whole body with. That 400 is
+ * the prototype's SIGN green for a DIFF row (`:186`); borrowing it here made a
+ * written file read as one dense green slab rather than as added lines.
+ *
+ * Literal arbitrary-value class for the `DIFF_ROW_CLASS` reason: Tailwind v4's
+ * oklch palette drifts the named utilities off the prototype's exact hexes.
+ */
 function AdditionLines({ lines }: { lines: string[] }) {
   return (
-    <pre className="whitespace-pre font-mono text-[11.5px] leading-relaxed text-tone-success">
+    <pre className="whitespace-pre font-mono text-[11.5px] leading-relaxed text-[#86efac]">
       {lines.map((line, index) => (
         <div key={index} className="flex">
           <span className="mr-2 w-3 shrink-0 select-none text-right">+</span>
@@ -1608,6 +1622,12 @@ function PlainLinesBody({
 }) {
   const lines = content.split('\n')
   const { window, revealMore } = useInlineOutputWindow(lines)
+  // Flat `text-text-muted` is the prototype's own base for these bodies
+  // (`FE_T.t2` `#a1a1aa`, `Messages.jsx:695,715,734,788`) — NOT a gap. What the
+  // prototype adds on top is `hl()` syntax coloring, which this body still lacks
+  // (the open ledger gap under `FileReadCard`). Deliberately NOT the bash body's
+  // `logLineClass`: that heuristic belongs to `OutputLines`, which the prototype
+  // routes bash output through and these bodies never touch.
   const toneClass = isError ? 'text-tone-danger' : 'text-text-muted'
   const renderLines = (slice: string[]) => (
     <pre

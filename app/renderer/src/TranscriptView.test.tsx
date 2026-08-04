@@ -7,6 +7,7 @@ import {
 } from './TranscriptView.js'
 import {
   findNestedToolUseRow,
+  logLineClass,
   resolveToolCardExpanded,
 } from './transcriptViewModel.js'
 import {
@@ -1219,6 +1220,119 @@ test('P4-REVIEW B3: resolveToolCardExpanded lets a user override win over either
   expect(resolveToolCardExpanded(false, true)).toBe(false)
 })
 
+// ── Output-line tint: the prototype's `logLineColor`, and the two drifts off it
+// that made tool output read as colorless. The hues are the prototype's 300-level
+// pastels (`Messages.jsx:212-218`), NOT the `--tone-*` 400s this returned before:
+// the prototype reserves those for signs/dots (`Messages.jsx:182` body vs `:186`
+// sign), so painting body text with them read muddy against `#09090b`.
+
+test('output lines take the prototype logLineColor pastel for their own semantics', () => {
+  expect(logLineClass('ERROR: boom')).toBe('text-[#fca5a5]')
+  expect(logLineClass('npm ERR! install failed')).toBe('text-[#fca5a5]')
+  expect(logLineClass('WARNING: cache exceeded')).toBe('text-[#fcd34d]')
+  expect(logLineClass('PASS src/thing.test.ts')).toBe('text-[#86efac]')
+  expect(logLineClass('✓ 100 pass')).toBe('text-[#86efac]')
+  // Stack/trace continuation lines recede rather than reading as ordinary output.
+  expect(logLineClass('    at Object.<anonymous>')).toBe('text-text-faint')
+  expect(logLineClass('  > bun run build')).toBe('text-text-faint')
+  // Anything unclassified stays the resting body grey.
+  expect(logLineClass('src/index.ts')).toBe('text-text-muted')
+})
+
+test('output-line tint keeps the prototype branch ORDER, so a failed pass reads failed', () => {
+  // Both the error and the pass branch match this line; the prototype tests
+  // error FIRST, and a line saying a test suite failed must not read green.
+  expect(logLineClass('1 failed, 3 passed')).toBe('text-[#fca5a5]')
+  // `FAIL`/`PASS`/`WARNING` are line-anchored in the prototype, so the words
+  // occurring mid-sentence do not hijack a line that is not a status line.
+  expect(logLineClass('the PASS threshold is configurable')).toBe('text-text-muted')
+})
+
+test('output-line tint carries the warn terms the first port dropped', () => {
+  // `not wrapped` and a lowercase `warn` are both in the prototype's warn branch
+  // and were missing here, so React's act() warning read as ordinary output.
+  expect(logLineClass('An update was not wrapped in act(...)')).toBe('text-[#fcd34d]')
+  expect(logLineClass('warn: peer dependency')).toBe('text-[#fcd34d]')
+})
+
+test('a bash body tints each line by its own semantics, not one flat wash', () => {
+  // `status: 'error'` only EXPANDS the card; `isError: false` is what keeps the
+  // per-line tinting path (a known failure paints one danger tone instead).
+  const html = render(
+    toolRow({
+      toolName: 'Bash',
+      toolFamily: 'bash',
+      input: { command: 'bun test' },
+      status: 'error',
+      result: {
+        isError: false,
+        content: 'bun test v1.3\nWARNING: slow suite\nERROR: probe refused\n✓ 1 pass',
+        diff: null,
+      },
+    }),
+  )
+
+  expect(html).toContain('text-[#fcd34d]') // the warn line
+  expect(html).toContain('text-[#fca5a5]') // the error line
+  expect(html).toContain('text-[#86efac]') // the passing line
+  expect(html).toContain('text-text-muted') // the unclassified first line
+})
+
+test('an errored bash body stays one danger tone rather than tinting its trace', () => {
+  const html = render(
+    toolRow({
+      toolName: 'Bash',
+      toolFamily: 'bash',
+      input: { command: 'bun test' },
+      status: 'error',
+      result: { isError: true, content: 'ERROR: refused\n    at probe.ts:4', diff: null },
+    }),
+  )
+
+  expect(html).toContain('text-tone-danger')
+  expect(html).not.toContain('text-[#fca5a5]') // no per-line heuristic on a known failure
+})
+
+test('a NON-bash body keeps the prototype flat base, NOT the bash line heuristic', () => {
+  // Parity guard, and the reason this file does not simply reuse `logLineClass`
+  // everywhere: the prototype gives Grep/Web/Mcp/Skill bodies flat `FE_T.t2`
+  // (`#a1a1aa` = `text-text-muted`) plus `hl()` syntax coloring
+  // (`Messages.jsx:695,715,734,788`), and routes only bash output through
+  // `OutputLines`/`logLineColor`. Tinting these by log semantics would be drift.
+  const html = render(
+    toolRow({
+      toolName: 'mcp__probe__scan',
+      toolFamily: 'mcp',
+      input: { query: 'scan' },
+      status: 'error',
+      result: {
+        isError: false,
+        content: 'scanning\nWARNING: slow probe\n✓ 1 recovered',
+        diff: null,
+      },
+    }),
+  )
+
+  expect(html).toContain('text-text-muted')
+  expect(html).not.toContain('text-[#fcd34d]')
+  expect(html).not.toContain('text-[#86efac]')
+})
+
+test('a written file uses the prototype add-green on both the + and the line', () => {
+  // `FE_T.add` `#86efac` on the row AND the marker (`Messages.jsx:625-627`).
+  // NOT `tone-success` `#4ade80`, which is the prototype's DIFF sign green
+  // (`:186`); painting the body with it made a write read as a green slab.
+  const html = render(
+    writeRow(
+      { file_path: '/w/hello.ts', content: 'const greeting = "hi"' },
+      { content: WRITE_ACK, isError: false },
+    ),
+  )
+
+  expect(html).toContain('text-[#86efac]')
+  expect(html).not.toContain('text-tone-success')
+})
+
 // ── P4-18c dep-gated deferrals resolved: GFM tables + syntax highlight + word-diff
 
 function proseRow(content: string, id: string): NestedTranscriptRow {
@@ -1793,7 +1907,7 @@ test('a write shows the file it wrote, not the engine sentence about it', () => 
   expect(html).toContain('const greeting = &quot;hi&quot;')
   expect(html).toContain('export default greeting')
   // Painted as additions, which is now true of what it is painting.
-  expect(html).toContain('text-tone-success')
+  expect(html).toContain('text-[#86efac]')
   // The ack never reaches the body; the card's own status already reports it.
   expect(html).not.toContain('File created successfully at')
 })
@@ -1810,7 +1924,7 @@ test('a failed write reports the failure instead of claiming additions', () => {
   expect(html).toContain('text-tone-danger')
   // Nothing was written, so nothing is painted as an addition.
   expect(html).not.toContain('const greeting')
-  expect(html).not.toContain('text-tone-success')
+  expect(html).not.toContain('text-[#86efac]')
 })
 
 test('a write whose input carries no content falls back to the result text', () => {
@@ -1820,7 +1934,7 @@ test('a write whose input carries no content falls back to the result text', () 
 
   expect(html).toContain('File created successfully at')
   // …as plain text, never as a green added line.
-  expect(html).not.toContain('text-tone-success')
+  expect(html).not.toContain('text-[#86efac]')
 })
 
 test('a long written file still bands, and the band counts the FILE', () => {
