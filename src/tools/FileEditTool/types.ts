@@ -65,8 +65,18 @@ const outputSchema = lazySchema(() =>
     filePath: z.string().describe('The file path that was edited'),
     oldString: z.string().describe('The original string that was replaced'),
     newString: z.string().describe('The new string that replaced it'),
+    firstLine: z
+      .string()
+      .nullable()
+      .optional()
+      .describe('First line of the original file, for language detection'),
+    // Legacy: pre-2026-08 transcripts persisted the whole pre-edit file here.
+    // Still declared because the read-back parse STRIPS undeclared keys, and
+    // UI.tsx falls back to this field for language detection on a resumed
+    // transcript. (An undeclared key would not fail the parse, just vanish.)
     originalFile: z
       .string()
+      .optional()
       .describe('The original file contents before editing'),
     structuredPatch: z
       .array(hunkSchema())

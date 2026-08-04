@@ -12,7 +12,7 @@ import { FilePathLink } from '../../components/FilePathLink.js';
 import { Text } from '../../ink.js';
 import type { Tools } from '../../Tool.js';
 import type { Message, ProgressMessage } from '../../types/message.js';
-import { adjustHunkLineNumbers, CONTEXT_LINES } from '../../utils/diff.js';
+import { adjustHunkLineNumbers, CONTEXT_LINES, firstLineForLanguageDetection } from '../../utils/diff.js';
 import { FILE_NOT_FOUND_CWD_NOTE, getDisplayPath } from '../../utils/file.js';
 import { logError } from '../../utils/log.js';
 import { getPlansDirectory } from '../../utils/plans.js';
@@ -77,6 +77,7 @@ export function renderToolUseMessage({
 export function renderToolResultMessage({
   filePath,
   structuredPatch,
+  firstLine,
   originalFile
 }: FileEditOutput, _progressMessagesForMessage: ProgressMessage[], {
   style,
@@ -87,7 +88,9 @@ export function renderToolResultMessage({
 }): React.ReactNode {
   // For plan files, show /plan hint above the diff
   const isPlanFile = filePath.startsWith(getPlansDirectory());
-  return <FileEditToolUpdatedMessage filePath={filePath} structuredPatch={structuredPatch} firstLine={originalFile.split('\n')[0] ?? null} fileContent={originalFile} style={style} verbose={verbose} previewHint={isPlanFile ? '/plan to preview' : undefined} />;
+  // originalFile is the pre-2026-08 transcript shape; bounding it here keeps a
+  // one-line minified file from being re-scanned on every render.
+  return <FileEditToolUpdatedMessage filePath={filePath} structuredPatch={structuredPatch} firstLine={firstLine ?? firstLineForLanguageDetection(originalFile)} style={style} verbose={verbose} previewHint={isPlanFile ? '/plan to preview' : undefined} />;
 }
 export function renderToolUseRejectedMessage(input: {
   file_path: string;

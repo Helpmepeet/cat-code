@@ -113,6 +113,71 @@ export function getPatchFromContents({
   }))
 }
 
+// ---------------------------------------------------------------------------
+// Bounds for patches that get persisted as `toolUseResult` on the transcript
+// JSONL. Only the persist sites in FileEditTool/FileWriteTool/FilePatchTool
+// apply these: getPatchFromContents itself must stay lossless because
+// useDiffInIDE.ts:178 builds the IDE diff from it and getPatchForEdits round-
+// trips it back into file content.
+// ---------------------------------------------------------------------------
+
+// Language detection reads only a short prefix of the first line: a shebang, or
+// a `<?php`/`<?xml` marker (src/native-ts/color-diff/index.ts:437-449). 256 is
+// the kernel's own shebang limit (Linux BINPRM_BUF_SIZE), so a longer line can
+// never be a working shebang, and the markers need six characters at most.
+// Without the cap a minified bundle or single-line JSON puts the whole file on
+// line one and back onto the transcript, which is what firstLine replaced.
+export const MAX_PERSISTED_FIRST_LINE_LENGTH = 256
+
+// Reads the first line without splitting the whole file: `split('\n')` on an
+// 886 KB single-line file allocates every line just to drop them.
+export function firstLineForLanguageDetection(
+  content: string | null | undefined,
+): string | null {
+  if (content == null) return null
+  const newline = content.indexOf('\n')
+  const line = newline === -1 ? content : content.slice(0, newline)
+  return line.slice(0, MAX_PERSISTED_FIRST_LINE_LENGTH)
+}
+
+// Counts the 1-char +/-/space marker, so a bounded line persists as this plus
+// the one-character ellipsis. An edit ADJACENT to a long line pulls that line
+// in as context, so a single 260 KB minified line lands on the transcript even
+// when the edit itself was tiny.
+export const MAX_PERSISTED_PATCH_LINE_LENGTH = 2_000
+
+/**
+ * Bound each diff line before the patch is persisted. Safe because no reader
+ * reconstructs a file from a persisted patch: every consumer either renders it
+ * (StructuredDiff, the desktop DiffView) or counts +/- markers
+ * (useTurnDiffs.ts:62, MessageSelector.tsx:751, FileEditToolUpdatedMessage) —
+ * and this keeps both the marker and the line count intact, so counts stay
+ * exact. Past this width both renderers already degrade anyway: ColorDiff wraps
+ * (src/native-ts/color-diff/index.ts:923).
+ *
+ * Returns the input untouched when nothing exceeded the bound, which is the
+ * overwhelmingly common case (99% of real diff lines are under 256 chars).
+ */
+export function boundPatchLinesForPersistence(
+  hunks: StructuredPatchHunk[],
+): StructuredPatchHunk[] {
+  if (
+    !hunks.some(hunk =>
+      hunk.lines.some(line => line.length > MAX_PERSISTED_PATCH_LINE_LENGTH),
+    )
+  ) {
+    return hunks
+  }
+  return hunks.map(hunk => ({
+    ...hunk,
+    lines: hunk.lines.map(line =>
+      line.length > MAX_PERSISTED_PATCH_LINE_LENGTH
+        ? line.slice(0, MAX_PERSISTED_PATCH_LINE_LENGTH) + '…'
+        : line,
+    ),
+  }))
+}
+
 /**
  * Get a patch for display with edits applied
  * @param filePath The path to the file

@@ -10,7 +10,11 @@ import type { ToolUseContext } from '../../Tool.js'
 import { buildTool, type ToolDef } from '../../Tool.js'
 import { getCwd } from '../../utils/cwd.js'
 import { logForDebugging } from '../../utils/debug.js'
-import { countLinesChanged } from '../../utils/diff.js'
+import {
+  boundPatchLinesForPersistence,
+  countLinesChanged,
+  firstLineForLanguageDetection,
+} from '../../utils/diff.js'
 import { isEnvTruthy } from '../../utils/envUtils.js'
 import {
   FILE_NOT_FOUND_CWD_NOTE,
@@ -410,12 +414,17 @@ export const FileEditTool = buildTool({
     }
 
     // 8. Yield result
+    // This object is serialized verbatim onto the transcript JSONL, so it
+    // carries the compact diff plus the one line language detection keys off,
+    // never the whole pre-edit file: `originalFile` held a full copy of every
+    // edited file and only ever reached ColorDiff's prefixContent, which the
+    // renderer voids (src/native-ts/color-diff/index.ts:868).
     const data = {
       filePath: file_path,
       oldString: actualOldString,
       newString: new_string,
-      originalFile: originalFileContents,
-      structuredPatch: patch,
+      firstLine: firstLineForLanguageDetection(originalFileContents),
+      structuredPatch: boundPatchLinesForPersistence(patch),
       userModified: userModified ?? false,
       replaceAll: replace_all,
       ...(gitDiff && { gitDiff }),

@@ -16,7 +16,11 @@ import type { ToolUseContext } from '../../Tool.js'
 import { buildTool, type ToolDef } from '../../Tool.js'
 import { getCwd } from '../../utils/cwd.js'
 import { logForDebugging } from '../../utils/debug.js'
-import { countLinesChanged, getPatchForDisplay } from '../../utils/diff.js'
+import {
+  boundPatchLinesForPersistence,
+  countLinesChanged,
+  getPatchForDisplay,
+} from '../../utils/diff.js'
 import { isEnvTruthy } from '../../utils/envUtils.js'
 import { isENOENT } from '../../utils/errors.js'
 import { getFileModificationTime, writeTextContent } from '../../utils/file.js'
@@ -77,9 +81,13 @@ const outputSchema = lazySchema(() =>
     structuredPatch: z
       .array(hunkSchema())
       .describe('Diff patch showing the changes'),
+    // Legacy: pre-2026-08 transcripts persisted the whole pre-write file here.
+    // Still declared because the read-back parse strips undeclared keys, so
+    // this keeps a resumed record intact; no renderer reads it any more.
     originalFile: z
       .string()
       .nullable()
+      .optional()
       .describe(
         'The original file content before the write (null for new files)',
       ),
@@ -369,12 +377,15 @@ export const FileWriteTool = buildTool({
         ],
       })
 
+      // Serialized verbatim onto the transcript JSONL, so the whole pre-write
+      // file is not written: `originalFile` only ever reached ColorDiff's
+      // prefixContent, which the renderer voids
+      // (src/native-ts/color-diff/index.ts:868).
       const data = {
         type: 'update' as const,
         filePath: file_path,
         content,
-        structuredPatch: patch,
-        originalFile: oldContent,
+        structuredPatch: boundPatchLinesForPersistence(patch),
         ...(gitDiff && { gitDiff }),
       }
       // Track lines added and removed for file updates, right before yielding result
@@ -397,7 +408,6 @@ export const FileWriteTool = buildTool({
       filePath: file_path,
       content,
       structuredPatch: [],
-      originalFile: null,
       ...(gitDiff && { gitDiff }),
     }
 

@@ -2,7 +2,11 @@ import { logFileOperation } from '../../utils/fileOperationAnalytics.js'
 import { logError } from '../../utils/log.js'
 import type { ToolUseContext } from '../../Tool.js'
 import { buildTool, type ToolDef, type ValidationResult } from '../../Tool.js'
-import { getPatchFromContents } from '../../utils/diff.js'
+import {
+  boundPatchLinesForPersistence,
+  firstLineForLanguageDetection,
+  getPatchFromContents,
+} from '../../utils/diff.js'
 import { expandPath } from '../../utils/path.js'
 import { validateInputForSettingsFileEdit } from '../../utils/settings/validateEditTool.js'
 import { NOTEBOOK_EDIT_TOOL_NAME } from '../NotebookEditTool/constants.js'
@@ -31,7 +35,6 @@ import {
   type FilePatchOperation,
   type FilePatchToolInput,
   type FilePatchToolOutput,
-  firstLineForLanguageDetection,
   inputSchema,
   outputSchema,
 } from './types.js'
@@ -460,11 +463,13 @@ export const FilePatchTool = buildTool({
         path: file.path,
         type: file.type,
         firstLine: firstLineForLanguageDetection(file.before ?? file.after),
-        structuredPatch: getPatchFromContents({
-          filePath: file.path,
-          oldContent: file.before ?? '',
-          newContent: file.after ?? '',
-        }),
+        structuredPatch: boundPatchLinesForPersistence(
+          getPatchFromContents({
+            filePath: file.path,
+            oldContent: file.before ?? '',
+            newContent: file.after ?? '',
+          }),
+        ),
       })),
     }
 

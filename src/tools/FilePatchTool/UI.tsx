@@ -9,10 +9,10 @@ import type { ToolProgressData, Tools } from '../../Tool.js'
 import type { ProgressMessage } from '../../types/message.js'
 import { extractTag } from '../../utils/messages.js'
 import { getDisplayPath } from '../../utils/file.js'
+import { firstLineForLanguageDetection } from '../../utils/diff.js'
 import {
   type FilePatchToolInput,
   type FilePatchToolOutput,
-  firstLineForLanguageDetection,
 } from './types.js'
 
 export function userFacingName(input?: Partial<FilePatchToolInput>): string {

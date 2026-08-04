@@ -16,7 +16,12 @@ import {
 } from './applier.js'
 import { renderToolResultMessage } from './UI.js'
 import type { ApplyPatchFileState, FilePatchHunk, FilePatchOperation } from './types.js'
-import { MAX_PERSISTED_FIRST_LINE_LENGTH, outputSchema } from './types.js'
+import {
+  boundPatchLinesForPersistence,
+  MAX_PERSISTED_FIRST_LINE_LENGTH,
+  MAX_PERSISTED_PATCH_LINE_LENGTH,
+} from '../../utils/diff.js'
+import { outputSchema } from './types.js'
 
 const tempDirs: string[] = []
 
@@ -936,6 +941,67 @@ describe('FilePatchTool.call transcript payload', () => {
     // The serialized result must stay near the size of the diff itself, not
     // near the size of the file.
     expect(JSON.stringify(result.data).length).toBeLessThan(1_000)
+  })
+
+  test('bounds a long line pulled into the hunk as diff context', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'file-patch-tool-'))
+    tempDirs.push(tempDir)
+
+    // firstLine cannot catch this one: the bulk is NOT on line one, it is on a
+    // line ADJACENT to the edit, so the differ pulls it in as a context line.
+    const bundlePath = join(tempDir, 'data.js')
+    const longLine = `var data=[${'BULK_SENTINEL'.repeat(20_000)}]`
+    writeFileSync(bundlePath, `header\n${longLine}\ntrailer\n`)
+
+    const result = await FilePatchTool.call(
+      {
+        ops: [
+          {
+            type: 'update',
+            path: bundlePath,
+            hunks: [
+              hunk({
+                lines: [
+                  { kind: 'delete', text: 'header' },
+                  { kind: 'add', text: 'header edited' },
+                ],
+              }),
+            ],
+          },
+        ],
+      },
+      {
+        readFileState: createFileStateCacheWithSizeLimit(10),
+        updateFileHistoryState: () => undefined,
+      } as never,
+      undefined,
+      { uuid: 'test-parent' } as never,
+    )
+
+    const file = result.data.files[0]!
+    const contextLine = file.structuredPatch
+      .flatMap(patchHunk => patchHunk.lines)
+      .find(line => line.includes('BULK_SENTINEL'))!
+    // Still present and still marked as context, just bounded.
+    expect(contextLine.startsWith(' ')).toBe(true)
+    expect(contextLine).toHaveLength(MAX_PERSISTED_PATCH_LINE_LENGTH + 1)
+    expect(contextLine.endsWith('…')).toBe(true)
+
+    expect(JSON.stringify(result.data).length).toBeLessThan(4_000)
+  })
+
+  test('leaves a patch whose lines are all short untouched', () => {
+    const hunks = [
+      {
+        oldStart: 1,
+        oldLines: 1,
+        newStart: 1,
+        newLines: 1,
+        lines: ['-const a = 1', '+const a = 2'],
+      },
+    ]
+
+    expect(boundPatchLinesForPersistence(hunks)).toBe(hunks)
   })
 })
 
