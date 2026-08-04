@@ -75,6 +75,7 @@ import {
 } from './rawMessageLog.js'
 import {
   createTranscriptState,
+  selectHasHiddenRows,
   selectNestedTranscriptRows,
   selectSlashCommands,
   selectTranscriptRows,
@@ -519,6 +520,15 @@ export function App() {
     origin: SessionActionsOrigin
   } | null>(null)
   const [metadataOpen, setMetadataOpen] = useState(false)
+  // P4-36 — transcript mode, PER SESSION: which sessions currently reveal their
+  // hidden tier. Per-session rather than one global flag because tabs persist
+  // here, so switching away and back must not silently re-hide what you asked to
+  // see (the prototype's single chat view resets on switch, `Chat.jsx:339`,
+  // because it has nowhere else to keep it). A view preference only: the rows
+  // are already in projector state either way.
+  const [revealHiddenSessions, setRevealHiddenSessions] = useState<
+    Record<SessionId, true>
+  >({})
   // P4-30 — the two SAModal dialogs the ⋯ menu opens (PARITY-LEDGER §17). Both
   // are bound to the row the menu was opened for, like the menu itself.
   //
@@ -2579,6 +2589,7 @@ export function App() {
 	                requestId,
 	              })
 	            }}
+	            revealHidden={revealHiddenSessions[sessionId] === true}
 	            setPermissionMode={mode => {
 	              try {
 	                getBridge().setPermissionMode(sessionId, mode)
@@ -2855,6 +2866,12 @@ export function App() {
                     // (`selectSessionsPageActions`, which is where it is tested).
                     const items = resolveSessionActions(targetRow, {
                       isActiveOpen: targetId === activeSessionId,
+                      // P4-36 — read the tier straight off the transcript slice, so
+                      // the row appears only for a session that really has hidden
+                      // messages (and only while the menu is open, which is the
+                      // only time this is computed).
+                      hasHiddenRows: selectHasHiddenRows(transcript, targetId),
+                      hiddenRevealed: revealHiddenSessions[targetId] === true,
                     })
                     return sessionActionsTarget.fromSessionsPage
                       ? selectSessionsPageActions(items)
@@ -2866,6 +2883,19 @@ export function App() {
                     // `copy` is the flyout HOST and is never dispatched; P4-30
                     // split the real action out as `copy-text`.
                     else if (kind === 'copy-text') copyForLlm(targetId)
+                    // P4-36 — transcript mode for THIS session. Purely a read
+                    // preference; nothing is sent to the engine.
+                    else if (kind === 'reveal-hidden')
+                      setRevealHiddenSessions(current => ({
+                        ...current,
+                        [targetId]: true,
+                      }))
+                    else if (kind === 'hide-hidden')
+                      setRevealHiddenSessions(current => {
+                        const next = { ...current }
+                        delete next[targetId]
+                        return next
+                      })
                     // P4-29 — was a bare `selectTab`, which merely re-focused a
                     // stale pane for the very rows whose menu says "Restore".
                     else if (kind === 'open') openCatalogRow(targetRow)
@@ -3444,6 +3474,7 @@ export function SessionPane({
   prompt,
   releasePendingSubmit,
   restorePermission,
+  revealHidden = false,
   setPermissionMode,
   setPrompt,
   submit,
@@ -4047,6 +4078,7 @@ export function SessionPane({
             orchestratorActive={orchestratorActive}
             onToggleOrchestrator={onToggleOrchestrator}
             restorePhase={restorePhase}
+            revealHidden={revealHidden}
             state={transcript}
           />
         </div>
@@ -4707,6 +4739,12 @@ type SessionPaneProps = {
   onCancelQuestions: () => void
   prompt: string
   restorePermission: (requestId: string) => void
+  /**
+   * P4-36 transcript mode: show THIS pane's hidden tier (`isSynthetic` rows),
+   * dimmed. Owned by App per session and toggled from the session actions menu;
+   * defaults to the ordinary transcript.
+   */
+  revealHidden?: boolean
   setPermissionMode: (mode: PermissionSetModeMode) => void
   setPrompt: (value: string, reason?: DraftWriteReason) => void
   submit: (event: FormEvent<HTMLFormElement>) => void

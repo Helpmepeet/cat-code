@@ -150,6 +150,44 @@ describe('resolveSessionActions', () => {
     expect(items.get('rewind')!.reason).toContain('not available in the desktop app yet')
   })
 
+  test('P4-36: the hidden-row reveal appears ONLY when the tier exists', () => {
+    // No hidden tier ⇒ no row at all (not a disabled one): the prototype's
+    // `messages.some(m => m.meta)` guard, Chat.jsx:1200.
+    const none = resolveSessionActions(row(), { isActiveOpen: true }).map(i => i.kind)
+    expect(none).not.toContain('reveal-hidden' as SessionActionKind)
+    expect(none).not.toContain('hide-hidden' as SessionActionKind)
+
+    // Hidden tier, not revealed ⇒ the "show" variant, enabled, no reason.
+    const show = byKind(
+      resolveSessionActions(row(), { isActiveOpen: true, hasHiddenRows: true }),
+    )
+    expect(show.get('reveal-hidden')!.label).toBe('Show hidden messages')
+    expect(show.get('reveal-hidden')!.enabled).toBe(true)
+    expect(show.get('reveal-hidden')!.reason).toBeUndefined()
+    expect(show.get('reveal-hidden')!.section).toBe('history')
+    expect(show.has('hide-hidden')).toBe(false)
+
+    // Revealed ⇒ the "hide" variant replaces it (one row, never both).
+    const hide = byKind(
+      resolveSessionActions(row(), {
+        isActiveOpen: true,
+        hasHiddenRows: true,
+        hiddenRevealed: true,
+      }),
+    )
+    expect(hide.get('hide-hidden')!.label).toBe('Hide hidden messages')
+    expect(hide.has('reveal-hidden')).toBe(false)
+  })
+
+  test('P4-36: the reveal is active-open gated (it changes the attached pane)', () => {
+    const kinds = resolveSessionActions(row(), {
+      isActiveOpen: false,
+      hasHiddenRows: true,
+    }).map(i => i.kind)
+    expect(kinds).not.toContain('reveal-hidden' as SessionActionKind)
+    expect(kinds).not.toContain('hide-hidden' as SessionActionKind)
+  })
+
   test('every item belongs to a known section', () => {
     for (const item of resolveSessionActions(row(), { isActiveOpen: true })) {
       expect(SESSION_ACTION_SECTIONS).toContain(item.section)

@@ -4,6 +4,7 @@ import {
   createTranscriptState,
   groupAgentDelegates,
   projectServerFrame,
+  selectHasHiddenRows,
   selectNestedTranscriptRows,
   selectSlashCommands,
   selectTranscriptDisplayItems,
@@ -2429,4 +2430,225 @@ test('S1 §4: stop_reason/usage are never read off an assistant frame — only m
   expect(afterResult.at(-1)).toMatchObject({ kind: 'result' })
   expect(afterResult.at(-1)).not.toHaveProperty('stop_reason')
   expect(afterResult.at(-1)).not.toHaveProperty('usage')
+})
+
+/* ── P4-36 hidden tier ──────────────────────────────────────────────────────
+ * The engine keeps `isMeta`/`isVisibleInTranscriptOnly` user messages out of the
+ * default transcript (`shouldShowUserMessage`, src/utils/messages.ts:4823) and
+ * the sidecar forwards that as ONE flag, `isSynthetic`
+ * (src/utils/messages/mappers.ts:203). The projector used to DISCARD those
+ * frames outright, which left a reveal control with nothing to reveal. */
+
+/** Frame uuids are UUID-shaped at the type level, so these are real uuid strings. */
+const HIDDEN = {
+  first: '00000000-0000-4000-8000-0000000036a1',
+  hidden: '00000000-0000-4000-8000-0000000036b2',
+  second: '00000000-0000-4000-8000-0000000036c3',
+  toolUse: '00000000-0000-4000-8000-0000000036d4',
+  carrier: '00000000-0000-4000-8000-0000000036e5',
+  resultOnly: '00000000-0000-4000-8000-0000000036f6',
+} as const
+
+function userTextFrame(
+  uuid: `${string}-${string}-${string}-${string}-${string}`,
+  text: string,
+  isSynthetic?: true,
+) {
+  return messageFrame('session-1', {
+    type: 'user',
+    message: { role: 'user', content: text },
+    parent_tool_use_id: null,
+    session_id: 'session-1',
+    uuid,
+    ...(isSynthetic === undefined ? {} : { isSynthetic }),
+  })
+}
+
+test('hidden tier: a synthetic user frame is retained and revealed IN PLACE', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(state, userTextFrame(HIDDEN.first, 'first real turn'))
+  state = projectServerFrame(
+    state,
+    userTextFrame(HIDDEN.hidden, '<system-reminder>budget</system-reminder>', true),
+  )
+  state = projectServerFrame(state, userTextFrame(HIDDEN.second, 'second real turn'))
+
+  // Default view is EXACTLY what it was before retention existed.
+  const visible = selectTranscriptRows(state, 'session-1')
+  expect(visible.map(row => row.frameId)).toEqual([HIDDEN.first, HIDDEN.second])
+  expect(visible.every(row => row.isHidden === undefined)).toBe(true)
+
+  // Revealed view restores the row to its ARRIVAL position (not appended at the
+  // end), which is only possible because it was stored, not re-derived.
+  const revealed = selectTranscriptRows(state, 'session-1', true)
+  expect(revealed.map(row => row.frameId)).toEqual([HIDDEN.first, HIDDEN.hidden, HIDDEN.second])
+  expect(revealed.map(row => row.isHidden)).toEqual([undefined, true, undefined])
+  expect(revealed[1]).toMatchObject({
+    kind: 'user-text',
+    content: '<system-reminder>budget</system-reminder>',
+  })
+  expect(selectHasHiddenRows(state, 'session-1')).toBe(true)
+})
+
+test('hidden tier: the mark is READ-TIME ONLY, never stored on a row', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    userTextFrame(HIDDEN.hidden, 'engine bookkeeping', true),
+  )
+  // Reading the revealed view first must not leak the mark into the default one.
+  expect(selectTranscriptRows(state, 'session-1', true)[0]?.isHidden).toBe(true)
+  expect(selectTranscriptRows(state, 'session-1')).toEqual([])
+  expect(selectTranscriptRows(state, 'session-1', true)[0]?.isHidden).toBe(true)
+})
+
+test('hidden tier: absent by default, so no session grows an empty reveal', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(state, userTextFrame(HIDDEN.first, 'ordinary turn'))
+  expect(selectHasHiddenRows(state, 'session-1')).toBe(false)
+  expect(selectHasHiddenRows(state, 'session-missing')).toBe(false)
+  expect(selectHasHiddenRows(state, null)).toBe(false)
+  // No hidden frames ⇒ the revealed read matches the default one (the selector
+  // skips both branches).
+  expect(selectTranscriptRows(state, 'session-1', true)).toEqual(
+    selectTranscriptRows(state, 'session-1'),
+  )
+})
+
+test('hidden tier: a synthetic frame correlates its tool_result EXACTLY ONCE', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_hidden_corr',
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'toolu_hidden', name: 'Read', input: {} },
+        ],
+      },
+      parent_tool_use_id: null,
+      session_id: 'session-1',
+      uuid: HIDDEN.toolUse,
+    }),
+  )
+  expect(selectTranscriptRows(state, 'session-1')[0]).toMatchObject({
+    kind: 'tool-use',
+    status: 'pending',
+  })
+
+  // ONE frame that is BOTH hidden AND a result carrier: exactly the shape the
+  // ordering comment above `correlateToolResults` protects.
+  const hiddenCarrier = messageFrame('session-1', {
+    type: 'user',
+    message: {
+      role: 'user',
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 'toolu_hidden',
+          content: 'file contents',
+        },
+        { type: 'text', text: 'Caveat: local command output follows' },
+      ],
+    },
+    parent_tool_use_id: null,
+    session_id: 'session-1',
+    uuid: HIDDEN.carrier,
+    isSynthetic: true,
+  })
+
+  state = projectServerFrame(state, hiddenCarrier)
+  const afterFirst = selectTranscriptRows(state, 'session-1')
+  expect(afterFirst[0]).toMatchObject({ kind: 'tool-use', status: 'success' })
+  // Its text row is retained but hidden, and the tool_result block still
+  // projects no row of its own.
+  expect(afterFirst).toHaveLength(1)
+  expect(selectTranscriptRows(state, 'session-1', true)).toHaveLength(2)
+
+  // Replay: dedupe now covers this frame (retention marks `seenFrameIds`), so
+  // the whole projection is a total no-op and the correlation CANNOT re-fold.
+  // Re-folding would mint a fresh ToolResultProjection and force every read to
+  // clone its tool-use rows.
+  const replayed = projectServerFrame(state, hiddenCarrier)
+  expect(replayed).toBe(state)
+  expect(selectTranscriptRows(replayed, 'session-1', true)).toEqual(
+    selectTranscriptRows(state, 'session-1', true),
+  )
+})
+
+test('hidden tier: a tool_result-only synthetic frame correlates and reveals nothing', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_hidden_only',
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'toolu_only', name: 'Bash', input: {} },
+        ],
+      },
+      parent_tool_use_id: null,
+      session_id: 'session-1',
+      uuid: HIDDEN.toolUse,
+    }),
+  )
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 'toolu_only', content: 'ok' },
+        ],
+      },
+      parent_tool_use_id: null,
+      session_id: 'session-1',
+      uuid: HIDDEN.resultOnly,
+      isSynthetic: true,
+    }),
+  )
+  expect(selectTranscriptRows(state, 'session-1')[0]).toMatchObject({
+    kind: 'tool-use',
+    status: 'success',
+  })
+  // No visible row ⇒ no hidden row either: the reveal control must not appear
+  // for a frame that has nothing to show.
+  expect(selectHasHiddenRows(state, 'session-1')).toBe(false)
+  expect(selectTranscriptRows(state, 'session-1', true)).toHaveLength(1)
+})
+
+test('hidden tier: the two views cache separately and each stays identity-stable', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(state, userTextFrame(HIDDEN.first, 'ordinary turn'))
+  state = projectServerFrame(
+    state,
+    userTextFrame(HIDDEN.hidden, 'engine bookkeeping', true),
+  )
+
+  const defaultRows = selectNestedTranscriptRows(state, 'session-1')
+  const revealedRows = selectNestedTranscriptRows(state, 'session-1', true)
+  // Slice-stable per view (memoized consumers keep identity across unrelated
+  // re-renders) and never the SAME array — one shared cache line would serve the
+  // wrong view the moment the toggle flips.
+  expect(selectNestedTranscriptRows(state, 'session-1')).toBe(defaultRows)
+  expect(selectNestedTranscriptRows(state, 'session-1', true)).toBe(revealedRows)
+  expect(revealedRows).not.toBe(defaultRows)
+  expect(defaultRows).toHaveLength(1)
+  expect(revealedRows).toHaveLength(2)
+  // The grouping pass rides the same array identity, so display items stay
+  // stable per view too.
+  expect(selectTranscriptDisplayItems(state, 'session-1', true)).toBe(
+    selectTranscriptDisplayItems(state, 'session-1', true),
+  )
 })
