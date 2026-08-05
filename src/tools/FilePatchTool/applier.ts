@@ -15,6 +15,29 @@ export function applyPatchToBuffers(
   currentFiles: Map<string, ApplyPatchFileState>,
   cachedFiles?: Map<string, string>,
 ): ApplyPatchResult {
+  // Every failure below is raised while the result is still being built in
+  // memory, before the caller writes anything (FilePatchTool.tsx keeps that
+  // ordering deliberately). State it in the message: a multi-file patch that
+  // aborts partway through the operation list otherwise reads as partially
+  // applied, and the model re-reads every earlier target to find out.
+  try {
+    return applyOperations(operations, currentFiles, cachedFiles)
+  } catch (error) {
+    if (error instanceof FilePatchError) {
+      throw new FilePatchError(
+        `${error.message} No files were changed by this patch.`,
+        { code: error.code, path: error.path },
+      )
+    }
+    throw error
+  }
+}
+
+function applyOperations(
+  operations: FilePatchOperation[],
+  currentFiles: Map<string, ApplyPatchFileState>,
+  cachedFiles?: Map<string, string>,
+): ApplyPatchResult {
   const workingFiles = new Map<string, ApplyPatchFileState>()
   const results: ApplyPatchResult['files'] = []
 
@@ -289,6 +312,18 @@ function findHunkPosition(
         )
       }
     }
+  }
+
+  // Staleness is only a live possibility when we have nothing to compare
+  // against. With a cached read in hand the loop above already proved the
+  // fingerprint matches neither the file nor what was last read from it, so
+  // naming staleness here sends the model hunting a concurrent editor that
+  // does not exist — a costly wrong turn on a shared tree.
+  if (cachedLines !== undefined) {
+    throw new FilePatchError(
+      `Patch anchor not found in ${path} — the hunk's context and delete lines match neither the current file nor the content you last read from it, so they were most likely transcribed inaccurately. Compare them against the file line for line: wording, whitespace, and where each line wraps must all match. To append to the end of the file, use "${END_OF_FILE_MARKER}" after the hunk body.`,
+      { code: 'PATCH_ANCHOR_NOT_FOUND', path },
+    )
   }
 
   throw new FilePatchError(

@@ -1113,3 +1113,83 @@ describe('FilePatchTool.outputSchema back-compat', () => {
     ).toBe(false)
   })
 })
+
+describe('patch failure diagnostics', () => {
+  const TARGET = '/tmp/wrapped.txt'
+  const OTHER = '/tmp/other.txt'
+  const CONTENT = ' * a wrapped sentence that ends here\n * with a second line.\n'
+
+  // Reproduces the prose exactly but moves a word across the line break, which
+  // is how these anchors actually fail in the wild.
+  const reflowed: FilePatchOperation = {
+    type: 'update',
+    path: TARGET,
+    hunks: [
+      hunk({
+        lines: [
+          { kind: 'context', text: ' * a wrapped sentence that ends' },
+          { kind: 'delete', text: ' * here with a second line.' },
+          { kind: 'add', text: ' * rewritten.' },
+        ],
+      }),
+    ],
+  }
+
+  function failureMessage(run: () => unknown): string {
+    try {
+      run()
+    } catch (error) {
+      return (error as Error).message
+    }
+    throw new Error('expected the patch to fail')
+  }
+
+  test('blames transcription, not staleness, when a cached read rules staleness out', () => {
+    const message = failureMessage(() =>
+      applyPatchToBuffers(
+        [reflowed],
+        new Map([[TARGET, fileState(TARGET, CONTENT)]]),
+        new Map([[TARGET, CONTENT]]),
+      ),
+    )
+
+    expect(message).toContain('transcribed inaccurately')
+    expect(message).not.toContain('may be stale')
+  })
+
+  test('keeps the staleness wording when there is no cached read to compare', () => {
+    const message = failureMessage(() =>
+      applyPatchToBuffers([reflowed], new Map([[TARGET, fileState(TARGET, CONTENT)]])),
+    )
+
+    expect(message).toContain('may be stale')
+    expect(message).not.toContain('transcribed inaccurately')
+  })
+
+  test('states nothing was written when a later file in the patch fails', () => {
+    const earlierFileApplies: FilePatchOperation = {
+      type: 'update',
+      path: OTHER,
+      hunks: [
+        hunk({
+          lines: [
+            { kind: 'delete', text: 'alpha' },
+            { kind: 'add', text: 'beta' },
+          ],
+        }),
+      ],
+    }
+
+    const message = failureMessage(() =>
+      applyPatchToBuffers(
+        [earlierFileApplies, reflowed],
+        new Map([
+          [OTHER, fileState(OTHER, 'alpha\n')],
+          [TARGET, fileState(TARGET, CONTENT)],
+        ]),
+      ),
+    )
+
+    expect(message).toContain('No files were changed by this patch.')
+  })
+})
