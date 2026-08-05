@@ -112,7 +112,7 @@ export function PermissionPrompt({
   // from the real `activeElement`, and every later focus move re-derives it.
   const [keysLive, setKeysLive] = useState(keyboardTarget === true)
 
-  // Nothing moved focus when a card appeared, so the composer textarea kept it
+  // Nothing moved focus when a card appeared, so the composer field kept it
   // and every advertised key was swallowed by the focused-control guard. Take
   // the keyboard the way the app's other keyboard-owning card already does
   // (`PlanPanel.tsx:99-110`): focus after the commit that produced the card, and

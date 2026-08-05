@@ -63,7 +63,7 @@ function isKeyTarget(value: unknown): value is KeyTargetLike {
  *
  * Live when focus is on nothing element-like (`document`, `window`, `null`), on
  * an element that owns no keys of its own, or on the marked host card. Dead
- * everywhere else — the composer textarea it starts in, every button on the
+ * everywhere else — the composer field it starts in, every button on the
  * card including the show/hide-input disclosure, and the deny-feedback field,
  * where typing the letter `n` must never deny.
  *

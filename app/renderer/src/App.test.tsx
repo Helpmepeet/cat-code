@@ -33,6 +33,16 @@ import type {
   TasksSnapshot,
 } from '../../shared/protocol.js'
 
+/**
+ * The composer field's opening tag. It is a contentEditable `<div>` (so a
+ * collapsed paste can render as an inline pill), which is why its state reads
+ * from ARIA rather than the `readOnly`/`disabled`/`placeholder` attributes a
+ * `<textarea>` carried.
+ */
+function composerField(html: string): string {
+  return html.match(/<div[^>]*aria-label="Prompt"[^>]*>/)?.[0] ?? ''
+}
+
 function emptyAccountsSnapshotForTest(): AccountsSnapshot {
   return {
     accounts: [],
@@ -382,9 +392,12 @@ test('P4-24: the active session pane renders the multi-line composer + transcrip
   )
 
   expect(html).toContain('aria-label="Prompt"')
-  // P4-24: the composer is a multi-line auto-resizing <textarea>, not the old
-  // single-line <input>.
-  expect(html).toContain('<textarea')
+  // P4-24: the composer is a multi-line auto-growing field, not the old
+  // single-line <input>. It is a contentEditable rather than a <textarea> so a
+  // collapsed paste renders as an inline pill at its token.
+  expect(html).not.toContain('<textarea')
+  expect(composerField(html)).toContain('contentEditable="true"')
+  expect(composerField(html)).toContain('aria-multiline="true"')
   // P4-24 reflow: "Copy for LLM" is a developer affordance, now DEV-gated
   // (mirrors the raw-events panel) — absent from a default/production pane.
   expect(html).not.toContain('Copy for LLM')
@@ -417,8 +430,11 @@ test('P4-24: the active session pane renders the multi-line composer + transcrip
   expect(html).toContain('Welcome back')
   expect(html).toContain('/tmp/project')
   // P4-24: the composer is borderless (Chat.jsx:1407) with a pink send-ARROW
-  // icon button, not a bordered box with a labelled "Send" button.
-  expect(html).toContain('bg-transparent')
+  // icon button, not a bordered box with a labelled "Send" button. The field
+  // carries no box of its own: no border, no background, no focus ring (the
+  // focus rule under the row is the only focus signal).
+  expect(composerField(html)).not.toMatch(/class="[^"]*\b(border|bg)-/)
+  expect(composerField(html)).toContain('outline-none')
   expect(html).toContain('aria-label="Send prompt"')
 })
 
@@ -487,17 +503,17 @@ test('CC-16: a preview pane paints cached rows and its composer accepts typing',
     />,
   )
 
-  const textarea = html.match(/<textarea[^>]*aria-label="Prompt"[^>]*>/)?.[0] ?? ''
+  const field = composerField(html)
   // CC-16 — the composer no longer refuses keystrokes or instructs the user to
   // act. Focus/pointer-down still fires the spawn (`engagePreviewPane`); it
   // just stops blocking the typing that triggers it.
-  expect(textarea).not.toContain('readOnly=""')
-  expect(textarea).not.toContain('disabled=""')
-  expect(textarea).toContain(
-    'placeholder="Ask Cat Code anything or describe a task…"',
+  expect(field).not.toContain('aria-readonly="true"')
+  expect(field).not.toContain('aria-disabled="true"')
+  expect(field).toContain(
+    'aria-placeholder="Ask Cat Code anything or describe a task…"',
   )
-  expect(textarea).not.toContain('Focus to reconnect')
-  expect(textarea).not.toContain('Connecting')
+  expect(field).not.toContain('Focus to reconnect')
+  expect(field).not.toContain('Connecting')
   expect(html).toContain('Earlier restored history was omitted.')
   // The send arrow is still quiet for an EMPTY draft (prototype parity,
   // `Chat.jsx:1419` — `disabled={!input.trim()}`).
@@ -554,13 +570,13 @@ test('CC-16: a connecting session accepts typing and can arm the send arrow', ()
     transportError: null,
   } satisfies ComponentProps<typeof SessionPane>
   const html = renderToStaticMarkup(<SessionPane {...props} />)
-  const textarea = html.match(/<textarea[^>]*aria-label="Prompt"[^>]*>/)?.[0] ?? ''
+  const field = composerField(html)
 
   // The ~0.6 s spawn is hidden behind the typing, not announced.
-  expect(textarea).not.toContain('readOnly=""')
-  expect(textarea).not.toContain('disabled=""')
-  expect(textarea).toContain(
-    'placeholder="Ask Cat Code anything or describe a task…"',
+  expect(field).not.toContain('aria-readonly="true"')
+  expect(field).not.toContain('aria-disabled="true"')
+  expect(field).toContain(
+    'aria-placeholder="Ask Cat Code anything or describe a task…"',
   )
 
   // With a draft in hand the send arrow is live, so Enter/click can issue the
@@ -630,14 +646,14 @@ test('a mid-turn composer stays typeable: the turn gates the SEND, not the input
     transportError: null,
   } satisfies ComponentProps<typeof SessionPane>
   const html = renderToStaticMarkup(<SessionPane {...props} />)
-  const textarea = html.match(/<textarea[^>]*aria-label="Prompt"[^>]*>/)?.[0] ?? ''
+  const field = composerField(html)
   const sendButton =
     html.match(/<button[^>]*aria-label="Send prompt"[^>]*>/)?.[0] ?? ''
 
-  expect(textarea).not.toContain('readOnly=""')
-  expect(textarea).not.toContain('disabled=""')
-  expect(textarea).toContain(
-    'placeholder="Ask Cat Code anything or describe a task…"',
+  expect(field).not.toContain('aria-readonly="true"')
+  expect(field).not.toContain('aria-disabled="true"')
+  expect(field).toContain(
+    'aria-placeholder="Ask Cat Code anything or describe a task…"',
   )
   // The send slot still holds Stop mid-turn (prototype `isGenerating ? Stop :
   // Send`), so Enter is the submit path here — App parks what it submits.
@@ -731,11 +747,11 @@ test('CC-16: a dead session stays read-only and does not pretend to be typeable'
     transportError: null,
   } satisfies ComponentProps<typeof SessionPane>
   const html = renderToStaticMarkup(<SessionPane {...props} />)
-  const textarea = html.match(/<textarea[^>]*aria-label="Prompt"[^>]*>/)?.[0] ?? ''
+  const field = composerField(html)
   const sendButton =
     html.match(/<button[^>]*aria-label="Send prompt"[^>]*>/)?.[0] ?? ''
 
-  expect(textarea).toContain('readOnly=""')
+  expect(field).toContain('aria-readonly="true"')
   expect(sendButton).toContain('disabled=""')
 })
 
@@ -814,14 +830,13 @@ test('composer read-only and placeholder decisions cover every session state', (
 
   for (const state of cases) {
     const html = renderToStaticMarkup(<SessionPane {...state.props} />)
-    const textarea =
-      html.match(/<textarea[^>]*aria-label="Prompt"[^>]*>/)?.[0] ?? ''
+    const field = composerField(html)
 
     expect({
       name: state.name,
-      readOnly: textarea.includes('readOnly=""'),
-      disabled: textarea.includes('disabled=""'),
-      placeholder: textarea.match(/placeholder="([^"]*)"/)?.[1] ?? '',
+      readOnly: field.includes('aria-readonly="true"'),
+      disabled: field.includes('aria-disabled="true"'),
+      placeholder: field.match(/aria-placeholder="([^"]*)"/)?.[1] ?? '',
     }).toEqual({
       name: state.name,
       readOnly: state.readOnly,
@@ -1219,7 +1234,7 @@ test('composer form owns the ↑/↓ history key scope', () => {
   expect(html).toContain('aria-keyshortcuts="ArrowUp ArrowDown"')
 })
 
-test('P4-24: collapsed-paste pills render with token label, remove control, and preview body', () => {
+test('collapsed pastes are rendered by the field, not parked in a strip above it', () => {
   const html = renderToStaticMarkup(
     <SessionPane
       accountsSnapshot={null}
@@ -1281,15 +1296,15 @@ test('P4-24: collapsed-paste pills render with token label, remove control, and 
     />,
   )
 
-  // The re-skinned pill strip (replaces the old <details>-beside adaptation).
-  expect(html).toContain('aria-label="Collapsed pastes"')
-  // Pill label = the exact [Pasted text #N +M lines] token.
-  expect(html).toContain('[Pasted text #1 +2 lines]')
-  // Per-pill × remove control, and a hover/keyboard-focus full-text preview.
-  expect(html).toContain('aria-label="Remove paste"')
-  expect(html).toContain('role="tooltip"')
-  expect(html).toContain('line A') // preview body is in the DOM (revealed on hover/focus)
-  expect(html).toContain('line C')
+  // The pill lives INLINE in the field, where its token sits (prototype
+  // `Chat.jsx:1060-1097`) — there is no out-of-band strip above the composer
+  // any more, and the raw token is never shown as literal text.
+  expect(html).not.toContain('aria-label="Collapsed pastes"')
+  expect(html).not.toContain('[Pasted text #1 +2 lines]')
+  // The field's content is built imperatively from the draft (`composerDom`),
+  // so a static render is empty: the pill's own shape is covered by
+  // `composerDom.test.ts` and its behaviour needs the live app.
+  expect(composerField(html)).toContain('contentEditable="true"')
   // Honest attach affordance: a labelled control, not a silent dead button and
   // not an invented file picker (no engine attachment capability on the wire).
   expect(html).toContain('aria-label="Add attachment"')

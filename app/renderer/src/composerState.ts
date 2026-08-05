@@ -41,7 +41,7 @@ import type { AgentConfigSnapshot, SessionId } from '../../shared/protocol.js'
  * (unchanged by the P4-24 multi-line composer). A mention typed mid-text with
  * the caret moved away — or an `@token` that is not the final token in a
  * multi-line draft — is not detected (flagged §0). Caret-aware detection would
- * need to read the live textarea selection here, which this pure parser avoids.
+ * need to read the live field selection here, which this pure parser avoids.
  */
 export function parseMentionQuery(draft: string): string | null {
   const match = /(?:^|\s)@([\w/.\-]*)$/.exec(draft)
@@ -119,8 +119,12 @@ export function formatPasteRef(id: number, numLines: number): string {
     : `[Pasted text #${id}]`
 }
 
-/** Global matcher for paste tokens (mirrors the engine's `parseReferences` regex). */
-export const PASTE_REF_RE = /\[Pasted text #(\d+)(?: \+\d+ lines)?\]/g
+/**
+ * Global matcher for paste tokens (mirrors the engine's `parseReferences`
+ * regex). Group 1 is the id, group 2 the line count when the token carries one
+ * — the composer needs both to rebuild a pill from the draft alone.
+ */
+export const PASTE_REF_RE = /\[Pasted text #(\d+)(?: \+(\d+) lines)?\]/g
 
 export function selectSessionPasteState(
   state: PasteState,
@@ -130,7 +134,7 @@ export function selectSessionPasteState(
   return state[sessionId] ?? { entries: {}, nextId: 1 }
 }
 
-/** Paste entries for a session, oldest id first (render order for the chip strip). */
+/** Paste entries for a session, oldest id first (the order the pills are built in). */
 export function selectSessionPasteList(
   state: PasteState,
   sessionId: SessionId | null,
@@ -248,11 +252,13 @@ export function expandPasteRefs(
 /**
  * P4-24: with a collapsed selection sitting immediately AFTER a paste token,
  * return the `[start, end)` range of that token so Backspace deletes the WHOLE
- * pill in one keystroke — the atomic-pill delete the prototype's contentEditable
- * gets for free (`Chat.jsx:766-777`). Returns `null` when the caret is not right
- * after a token. Anchored to the caret with `$`, so only the token abutting the
- * caret matches. The multi-line composer is a plain `<textarea>`, so the token is
- * literal text; this makes its deletion feel atomic without contentEditable.
+ * pill in one keystroke (`Chat.jsx:766-777`). Returns `null` when the caret is
+ * not right after a token. Anchored to the caret with `$`, so only the token
+ * abutting the caret matches.
+ *
+ * The field is a contentEditable and the pill is `contenteditable="false"`, so
+ * browsers mostly delete it atomically already; this keeps the DRAFT the single
+ * source of that edit rather than depending on per-browser behaviour.
  */
 export function pasteTokenBeforeCaret(
   value: string,
@@ -262,6 +268,23 @@ export function pasteTokenBeforeCaret(
   const match = /\[Pasted text #\d+(?: \+\d+ lines)?\]$/.exec(before)
   if (!match) return null
   return { start: caret - match[0].length, end: caret }
+}
+
+/**
+ * The paste whose token the caret is touching (either edge counts), so parking
+ * the caret on a pill opens its preview the same way hovering does
+ * (`Chat.jsx:854-867`). Null when the caret is clear of every token.
+ */
+export function pasteIdAtCaret(value: string, caret: number): number | null {
+  const pattern = new RegExp(PASTE_REF_RE.source, 'g')
+  let match = pattern.exec(value)
+  while (match) {
+    if (caret >= match.index && caret <= match.index + match[0].length) {
+      return Number(match[1])
+    }
+    match = pattern.exec(value)
+  }
+  return null
 }
 
 // ── Input history (↑/↓ recall) ───────────────────────────────────────────────

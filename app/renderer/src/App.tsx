@@ -19,6 +19,8 @@ import { PermissionQueue } from './PermissionQueue.js'
 import { selectContextUsage } from './contextUsage.js'
 import { ComposerActionsBar } from './ComposerActionsBar.js'
 import { focusFirstComposerFace } from './composerActionsBarModel.js'
+import { ComposerInput } from './ComposerInput.js'
+import type { ComposerInputHandle } from './ComposerInput.js'
 import {
   buildAllowResponse,
   buildDenyResponse,
@@ -3662,13 +3664,15 @@ export function SessionPane({
   // P4-24 multi-line composer. `composerRef` gives the keydown/paste handlers the
   // live caret (for at-caret paste, whole-token Backspace, and edge-gated ↑/↓
   // history); `isComposingRef` guards Enter/arrows during IME composition
-  // (parity `Chat.jsx:716`, `src/hooks/useTextInput.ts`).
-  const composerRef = useRef<HTMLTextAreaElement>(null)
+  // (parity `Chat.jsx:716`, `src/hooks/useTextInput.ts`). The field is a
+  // contentEditable (`ComposerInput`) so a collapsed paste renders as an inline
+  // pill; the handle keeps the textarea-shaped selection API these handlers use.
+  const composerRef = useRef<ComposerInputHandle>(null)
   // P4-24 — where the caret belongs after a PROGRAMMATIC draft rewrite (at-caret
-  // paste, whole-token Backspace). Reassigning a controlled textarea's `value`
-  // drops the selection to the end of the text, so without this the next
-  // keystroke lands at the end of the draft instead of where the edit happened —
-  // and a second Backspace eats the last character rather than continuing.
+  // paste, whole-token Backspace). A rewritten draft rebuilds the field's nodes,
+  // so without this the next keystroke lands at the end of the draft instead of
+  // where the edit happened — and a second Backspace eats the last character
+  // rather than continuing.
   // `base` is the offset the edit ends at in the OLD draft; the new caret is that
   // offset shifted by however much the rewrite changed the length.
   const pendingCaretRef = useRef<{ base: number; prevLength: number } | null>(
@@ -3693,31 +3697,11 @@ export function SessionPane({
     setPreviewEngaged(true)
     previewEngageRef.current?.()
   }
-  // Auto-resize the textarea to its content, capped at ~38vh, then let it scroll
-  // (prototype `resizeComposer`, `Chat.jsx:437-444`). Imperative height/overflow
-  // is the only way to size a textarea to its content — it is NOT a JSX inline
-  // `style={{}}` (the static cap `max-h-[38vh]` stays a class). Effects never run
-  // under `renderToStaticMarkup`, so the SSR pane snapshot is unaffected.
-  //
-  // rAF-deferred, matching the prototype's own fix (`Chat.jsx:443` "rAF so we
-  // measure after the DOM reflects the new value, not before"): reading
-  // `scrollHeight` synchronously can measure a layout that hasn't settled yet.
-  //
-  // This is NOT what sized the idle composer's dead gap, despite being changed
-  // once on that theory. On an empty draft this measures 36px whether or not it
-  // is deferred; the gap was the textarea's `inline-block` line box (see the
-  // `block` note on the textarea itself).
-  useEffect(() => {
-    const id = requestAnimationFrame(() => {
-      const el = composerRef.current
-      if (!el) return
-      el.style.height = 'auto'
-      const max = Math.round(window.innerHeight * 0.38)
-      el.style.height = `${Math.min(el.scrollHeight, max)}px`
-      el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden'
-    })
-    return () => cancelAnimationFrame(id)
-  }, [prompt])
+  // No auto-resize effect: a contentEditable already grows with its content, so
+  // the field needs only the static `max-h-[38vh]` cap and its own scroll
+  // (`ComposerInput`). The measured-height dance a textarea required is gone
+  // with the textarea (prototype `Chat.jsx:1402` is a contentEditable for the
+  // same reason).
 
   // Put the caret back where the programmatic rewrite left off (see
   // `pendingCaretRef`). Same passive-effect DOM write as the auto-resize above.
@@ -3940,21 +3924,30 @@ export function SessionPane({
     setAtBottom(true)
   }
 
-  // A large paste collapses to a chip (App holds the full text aside and inserts
-  // the `[Pasted text #N]` token); a small paste falls through to the browser's
-  // default plain-text insert. P4-24: the token is spliced in at the caret (the
-  // selection the paste replaced), not appended at the end.
-  const handlePaste = (
-    event: ReactClipboardEvent<HTMLTextAreaElement>,
-  ): void => {
-    const text = event.clipboardData.getData('text')
-    if (!text || !shouldCollapsePaste(text)) return
+  // A large paste collapses to a pill (App holds the full text aside and inserts
+  // the `[Pasted text #N]` token); a small one is inserted as literal text. Both
+  // land at the caret, replacing whatever the paste selected.
+  //
+  // The default is ALWAYS prevented, unlike the textarea version that let small
+  // pastes through: the browser's own paste into a contentEditable carries the
+  // clipboard's rich HTML (and images) into the field, and the draft is a plain
+  // string. An empty text/plain payload therefore inserts nothing rather than
+  // dropping foreign markup in.
+  const handlePaste = (event: ReactClipboardEvent<HTMLFormElement>): void => {
+    const composer = composerRef.current
+    if (!composer || event.target !== composer.element) return
     event.preventDefault()
-    pendingCaretRef.current = {
-      base: event.currentTarget.selectionEnd,
-      prevLength: prompt.length,
+    const text = event.clipboardData.getData('text')
+    if (!text) return
+    const start = composer.selectionStart
+    const end = composer.selectionEnd
+    pendingCaretRef.current = { base: end, prevLength: prompt.length }
+    setHistoryNav(EMPTY_HISTORY_NAV)
+    if (shouldCollapsePaste(text)) {
+      onPaste(text, start, end)
+      return
     }
-    onPaste(text, event.currentTarget.selectionStart, event.currentTarget.selectionEnd)
+    setPrompt(prompt.slice(0, start) + text + prompt.slice(end))
   }
 
   const onComposerKeyDown = (event: ReactKeyboardEvent<HTMLFormElement>): void => {
@@ -3964,8 +3957,8 @@ export function SessionPane({
     // Feature #4 — keydowns bubbling from the composer action bar (a focused chip
     // face) are owned by that toolbar's own handler; never treat them as textarea
     // input here (Enter on a face must not submit, Backspace must not edit the
-    // draft, ↑/↓ must not recall). This form handler is textarea-only.
-    if (event.target !== composerRef.current) return
+    // draft, ↑/↓ must not recall). This form handler is composer-field-only.
+    if (event.target !== composerRef.current?.element) return
     if (slashOpen) {
       switch (event.key) {
         case 'ArrowDown':
@@ -4083,6 +4076,15 @@ export function SessionPane({
       if (result) {
         event.preventDefault()
         setHistoryNav(result.nav)
+        // A recalled entry puts the caret at its END, ready to keep typing
+        // (prototype `Chat.jsx:762` `setInputAtCaret(next, next.length)`). Base
+        // = the old length, so the shift by the length delta lands on the new
+        // one; the field rebuilds around a recalled draft and would otherwise
+        // restore the caret to wherever it happened to sit.
+        pendingCaretRef.current = {
+          base: prompt.length,
+          prevLength: prompt.length,
+        }
         // history-nav: this draft swap must not prune the live paste held aside.
         setPrompt(result.value, 'history-nav')
         return
@@ -4266,55 +4268,19 @@ export function SessionPane({
         />
       ) : null}
 
-      {/* P4-24: collapsed-paste PILLS, attached directly above the composer (the
-       * `[Pasted text #N]` token lives inline in the textarea at the caret; the
-       * textarea can't host styled DOM, so the pill re-skin sits here — §0 flag).
-       * Each pill: label + count + × remove, with a hover/keyboard-focus full-text
-       * preview popover (parity `Chat.jsx:1379`). Reuses the exact P4-0 paste
-       * model — expand-on-submit is unchanged; this only re-skins the chip. */}
-      {pastes.length > 0 ? (
-        <div className="flex flex-wrap gap-2" aria-label="Collapsed pastes">
-          {pastes.map(entry => (
-            <span
-              key={entry.id}
-              className="group relative inline-flex min-w-0 items-center gap-1.5 rounded-md border border-accent/40 bg-accent/10 px-2 py-1 text-[11px] text-accent"
-            >
-              <span className="truncate font-mono text-[10.5px]">
-                {formatPasteRef(entry.id, entry.numLines)}
-              </span>
-              <button
-                type="button"
-                aria-label="Remove paste"
-                title="Remove"
-                className="shrink-0 rounded text-text-subtle transition-colors hover:text-tone-danger"
-                onClick={() => onRemovePaste(entry)}
-              >
-                ×
-              </button>
-              {/* Full-text preview: revealed on hover OR keyboard focus (the ×
-               * button focusing drives `group-focus-within`). Always in the DOM
-               * (hidden), exactly like the old <details><pre> body. */}
-              <span
-                role="tooltip"
-                className="pointer-events-none absolute bottom-full left-0 z-40 mb-1.5 hidden max-h-[40vh] w-[min(560px,80vw)] overflow-auto whitespace-pre-wrap rounded-md border border-shell-seam bg-surface-raised px-3 py-2 font-mono text-[10.5px] text-text-subtle shadow-lg group-hover:block group-focus-within:block"
-              >
-                {entry.content}
-              </span>
-            </span>
-          ))}
-        </div>
-      ) : null}
-
       {/* P4-24 composer, trued to Chat.jsx:1318's "minimal, borderless" input:
-       * a transparent auto-resizing textarea (no box), a pink up-arrow SEND icon
+       * a transparent auto-growing field (no box), a pink up-arrow SEND icon
        * (not a "Send" button), a focus-rule underline that lights on focus, and
-       * an icon-only actions row (attach + the context donut). All handlers are
-       * unchanged — this is a visual re-skin only. */}
+       * an icon-only actions row (attach + the context donut).
+       *
+       * Paste is handled here rather than on the field itself so the guard that
+       * keeps this form's key handling composer-only covers it too. */}
       <form
         aria-keyshortcuts="ArrowUp ArrowDown"
         aria-label="Composer"
         className="flex flex-col"
         onKeyDown={onComposerKeyDown}
+        onPaste={handlePaste}
         onSubmit={event => {
           // CC-16 — a submit is intent too. Focus/pointer-down normally fired
           // the spawn already (`claimLazyRestore` makes a repeat a no-op), but
@@ -4345,30 +4311,22 @@ export function SessionPane({
               activeIndex={mentionIndex}
               onPick={pickMention}
             />
-            {/* Multi-line, auto-resizing, BORDERLESS (Chat.jsx:1407): transparent,
-             * 16px light text, accent caret. Enter submits, Shift/Alt/Meta+Enter
-             * insert a newline; grows to ~38vh then scrolls (auto-resize effect).
-             * `max-h-[38vh]` is a STATIC arbitrary class so Tailwind emits it.
-             *
-             * `block` is load-bearing, not tidying. Preflight leaves a textarea
-             * `inline-block`, so it sits on a line box and this wrapper picks up
-             * the baseline descender strip under it: wrapper 43px around a 36px
-             * textarea. The `self-end` send arrow then bottom-aligns to 43 while
-             * the placeholder's text line ends at 30, leaving the arrow floating
-             * in ~7px of dead space below the text. The prototype never shows
-             * this because its composer is a contentEditable DIV (Chat.jsx:1402),
-             * already block-level. Measured: block gives wrapper 36 / row 47,
-             * matching the prototype exactly. */}
-            <textarea
+            {/* Multi-line, auto-growing, BORDERLESS (Chat.jsx:1402-1409):
+             * transparent, 16px light text, accent caret. Enter submits,
+             * Shift/Alt/Meta+Enter insert a newline; grows to ~38vh then
+             * scrolls. A contentEditable, matching the prototype, so a
+             * collapsed paste can render as an inline pill at its token —
+             * which also makes the field block-level, closing the descender
+             * strip a textarea's `inline-block` line box left under it (the
+             * gap that used to float the send arrow ~7px low). */}
+            <ComposerInput
               ref={composerRef}
-              aria-label="Prompt"
-              rows={1}
-              className="block max-h-[38vh] w-full resize-none overflow-hidden border-none bg-transparent py-1.5 text-base font-light leading-normal text-text-primary caret-accent outline-none placeholder:text-[#52525b] placeholder:font-light"
+              ariaLabel="Prompt"
               disabled={!activeSessionId}
               readOnly={composerReadOnly}
               onFocus={engagePreviewPane}
               onPointerDown={engagePreviewPane}
-              onChange={event => {
+              onValueChange={next => {
                 // A genuine keystroke abandons any active ↑/↓ recall cursor
                 // (parity with the prototype resetting historyIdx on input) and
                 // prunes pastes whose token was actually deleted (reason 'edit').
@@ -4376,7 +4334,7 @@ export function SessionPane({
                 // rewrite was about to restore: the browser already placed it.
                 pendingCaretRef.current = null
                 setHistoryNav(EMPTY_HISTORY_NAV)
-                setPrompt(event.target.value)
+                setPrompt(next)
               }}
               onCompositionStart={() => {
                 isComposingRef.current = true
@@ -4384,7 +4342,8 @@ export function SessionPane({
               onCompositionEnd={() => {
                 isComposingRef.current = false
               }}
-              onPaste={handlePaste}
+              onRemovePaste={onRemovePaste}
+              pastes={pastes}
               placeholder={composerPlaceholder}
               value={prompt}
             />

@@ -13,6 +13,7 @@ import {
   HISTORY_CAP,
   navigateHistory,
   parseMentionQuery,
+  pasteIdAtCaret,
   pasteTokenBeforeCaret,
   PASTE_MAX_LINES,
   PASTE_THRESHOLD,
@@ -396,6 +397,24 @@ describe('P4-24 multi-line composer helpers', () => {
     const draft = `x${token}`
     const range = pasteTokenBeforeCaret(draft, draft.length)
     expect(range).toEqual({ start: 1, end: draft.length })
+  })
+
+  test('pasteIdAtCaret: both edges of a token count as touching it', () => {
+    const token = formatPasteRef(4, 9)
+    const draft = `see ${token} ok`
+    expect(pasteIdAtCaret(draft, 4)).toBe(4) // caret just before the token
+    expect(pasteIdAtCaret(draft, 4 + token.length)).toBe(4) // just after it
+    expect(pasteIdAtCaret(draft, 4 + 3)).toBe(4) // inside it
+    expect(pasteIdAtCaret(draft, 3)).toBeNull()
+    expect(pasteIdAtCaret(draft, draft.length)).toBeNull()
+  })
+
+  test('pasteIdAtCaret: picks the token the caret is in, not the first one', () => {
+    const first = formatPasteRef(1, 2)
+    const second = formatPasteRef(2, 3)
+    const draft = `${first} and ${second}`
+    expect(pasteIdAtCaret(draft, draft.length)).toBe(2)
+    expect(pasteIdAtCaret(draft, first.length + 2)).toBeNull() // in " and "
   })
 })
 
