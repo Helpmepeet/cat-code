@@ -55,6 +55,7 @@ import {
 } from './attachmentGate.js'
 import {
   createCwdTokenStore,
+  createStartupTimers,
   isTerminalLifecycleFrame,
   SIDECAR_RUNTIME_ARGS,
   selectTranscriptBackfillCandidates,
@@ -243,6 +244,18 @@ let transcriptBackfillStarted = false
 let transcriptBackfillAbort: AbortController | null = null
 let registryLaunchSettled: Promise<unknown> | null = null
 const TRANSCRIPT_BACKFILL_START_DELAY_MS = 250
+
+/**
+ * The post-paint driver-arming window (`ready-to-show`), cancellable so teardown
+ * can drop an arm that has not fired yet. Mechanism + rationale live in
+ * `mainDecisions.ts`, where they are testable without Electron. Declared after
+ * the delay it reads: this initializer runs at module evaluation.
+ */
+const startupTimers = createStartupTimers({
+  delayMs: TRANSCRIPT_BACKFILL_START_DELAY_MS,
+  setTimer: (run, ms) => setTimeout(run, ms),
+  clearTimer: handle => clearTimeout(handle),
+})
 
 /**
  * Catalog owner (decision #4 shape (b)): one main-supervised, single-flight
@@ -566,7 +579,9 @@ function startIdleParkDriver(): void {
 // a batch is just the delivery envelope, so no protocol version bump.
 function deliver(frames: ServerFrame[]): void {
   const contents = mainWindow?.webContents
-  if (!contents) return
+  // `isDestroyed` because a send is only ever scheduled, never immediate: an
+  // in-flight frame can land after the window went away.
+  if (!contents || contents.isDestroyed()) return
   if (frames.length === 0) return
   contents.send(CH_SERVER_FRAME, frames satisfies ServerFrame[])
 }
@@ -740,6 +755,13 @@ function createWindow(): void {
   })
   mainWindow = window
 
+  // Drop the reference the moment the window is gone. Without this, `deliver`
+  // and `sendHostEvent` keep addressing a destroyed `webContents` for anything
+  // still in flight during teardown.
+  window.on('closed', () => {
+    if (mainWindow === window) mainWindow = null
+  })
+
   if (IS_DEV) {
     window.webContents.on('page-title-updated', event => {
       event.preventDefault()
@@ -784,19 +806,20 @@ function createWindow(): void {
     window.show()
     readinessLatch.windowReady()
     // Paint first. The worker import is the ~189 MB engine-graph cost; never pay
-    // it on the launch/first-window critical path.
-    setTimeout(() => void backfillTranscriptCaches(), TRANSCRIPT_BACKFILL_START_DELAY_MS)
+    // it on the launch/first-window critical path. Every one of these is armed
+    // through `startupTimers` so teardown can cancel an arm that has not fired.
+    startupTimers.schedule(() => void backfillTranscriptCaches())
     // Catalog owner (decision #4): arm the main-supervised catalog refresh here,
     // off the launch critical path, so its first run fills the sidebar and it
     // then self-reschedules — replacing the per-sidecar catalog enumeration.
-    setTimeout(startSessionsCatalogRefresh, TRANSCRIPT_BACKFILL_START_DELAY_MS)
+    startupTimers.schedule(startSessionsCatalogRefresh)
     // Accounts owner (decisions/ACCOUNTS-OWNERSHIP.md): arm the pool refresh the
     // same way, so the Accounts page has live data with no session open.
-    setTimeout(startAccountsPoolRefresh, TRANSCRIPT_BACKFILL_START_DELAY_MS)
+    startupTimers.schedule(startAccountsPoolRefresh)
     // IDLE-PARK (decisions/IDLE-PARK.md §4): arm the RAM-reclaim policy driver
     // here too, off the launch critical path; it self-reschedules its TTL sweep
     // and re-evaluates the cap on host events.
-    setTimeout(startIdleParkDriver, TRANSCRIPT_BACKFILL_START_DELAY_MS)
+    startupTimers.schedule(startIdleParkDriver)
   })
 
   if (IS_DEV) {
@@ -884,7 +907,7 @@ function wireHostEvents(h: Host): void {
 
 function sendHostEvent(event: HostEvent): void {
   const contents = mainWindow?.webContents
-  if (contents) contents.send(CH_HOST_EVENT, event)
+  if (contents && !contents.isDestroyed()) contents.send(CH_HOST_EVENT, event)
 }
 
 /**
@@ -1788,36 +1811,75 @@ if (!gotSingleInstanceLock) {
   })
 }
 
-app.on('window-all-closed', () => {
-  // D6: die-with-window for v1 — tear down every sidecar via the supervisor's
-  // kill API (NOT by welding the sidecar to the window's lifecycle). `activate`
-  // rebuilds a fresh host on reopen (F5). B3 — go through host.shutdownAll so
-  // live rows are marked CLEAN before the kill; a clean quit must not resurface
-  // as crash recovery on the next launch. Fall back to a bare supervisor
-  // shutdown if the host never came up.
+/**
+ * B3 — mark live rows CLEAN, then kill the sidecars. A clean quit must not
+ * resurface as crash recovery on the next launch. Falls back to a bare
+ * supervisor shutdown if the host never came up. Synchronous throughout
+ * (`markLiveCleanSync`), so it is safe on a path that exits immediately after.
+ */
+function shutdownRuntime(): void {
   if (host) {
     host.shutdownAll()
   } else {
     supervisor?.shutdown()
   }
+}
+
+/**
+ * Stop every post-paint driver and abort any worker already in flight. Shared by
+ * all three teardown routes (window-all-closed, before-quit, signal) so a driver
+ * added to one can never be forgotten in the others. Idempotent.
+ *
+ * `stop()` cancels only the NEXT scheduled run, so each abort controller rides
+ * beside it to reach a worker child that is already spawned; `startupTimers.cancelAll`
+ * covers the window where a driver has not been armed yet.
+ */
+function stopBackgroundDrivers(): void {
+  startupTimers.cancelAll()
   transcriptBackfillAbort?.abort()
   transcriptBackfillAbort = null
-  // Catalog owner (decision #4): stop the refresh driver with the window; a fresh
-  // `activate` re-arms it after the next paint. `stop()` cancels only the NEXT
-  // run, so abort beside it to kill a worker already in flight.
   sessionsCatalogDriver?.stop()
   sessionsCatalogDriver = null
   sessionsCatalogAbort?.abort()
   sessionsCatalogAbort = null
-  // Accounts owner: same window-scoped lifetime as the catalog driver.
   accountsPoolDriver?.stop()
   accountsPoolDriver = null
   accountsPoolAbort?.abort()
   accountsPoolAbort = null
-  // IDLE-PARK: stop the policy driver with the window (it holds the now-dead host/
-  // supervisor); a fresh `activate` re-arms it against the rebuilt host.
   idleParkDriver?.stop()
   idleParkDriver = null
+}
+
+/**
+ * Ctrl-C in the dev launcher — and any other SIGTERM — kills Electron outright:
+ * neither `window-all-closed` nor `before-quit` runs, so `host.shutdownAll()`
+ * never marks live rows clean and the NEXT launch's orphan sweep
+ * (`host/registry.ts` sweepOrphans) reports every session of this run as
+ * `crashed`. Marking is synchronous, so it completes before the exit below.
+ *
+ * `app.exit` rather than `app.quit`: the teardown has already run here, and
+ * `quit` would re-enter it through `before-quit`.
+ */
+let signalTeardownStarted = false
+function teardownOnSignal(signal: 'SIGINT' | 'SIGTERM'): void {
+  if (signalTeardownStarted) return
+  signalTeardownStarted = true
+  stopBackgroundDrivers()
+  shutdownRuntime()
+  cancelAllReplayFlushes()
+  app.exit(signal === 'SIGINT' ? 130 : 143)
+}
+
+process.on('SIGINT', () => teardownOnSignal('SIGINT'))
+process.on('SIGTERM', () => teardownOnSignal('SIGTERM'))
+
+app.on('window-all-closed', () => {
+  // D6: die-with-window for v1 — tear down every sidecar via the supervisor's
+  // kill API (NOT by welding the sidecar to the window's lifecycle). `activate`
+  // rebuilds a fresh host on reopen (F5).
+  shutdownRuntime()
+  // Drivers are window-scoped: a fresh `activate` re-arms them after the next paint.
+  stopBackgroundDrivers()
   supervisor = null
   // Drop the host too so `ensureHost` rebuilds supervisor + registry + host as a
   // unit on the next `activate` (a fresh registry re-reads the file and re-runs
@@ -1838,21 +1900,6 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   // B3 — same clean-marking on ⌘Q; idempotent if window-all-closed already ran
   // (no live rows left to mark).
-  if (host) {
-    host.shutdownAll()
-  } else {
-    supervisor?.shutdown()
-  }
-  transcriptBackfillAbort?.abort()
-  transcriptBackfillAbort = null
-  sessionsCatalogDriver?.stop()
-  sessionsCatalogDriver = null
-  sessionsCatalogAbort?.abort()
-  sessionsCatalogAbort = null
-  accountsPoolDriver?.stop()
-  accountsPoolDriver = null
-  accountsPoolAbort?.abort()
-  accountsPoolAbort = null
-  idleParkDriver?.stop()
-  idleParkDriver = null
+  shutdownRuntime()
+  stopBackgroundDrivers()
 })

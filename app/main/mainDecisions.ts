@@ -12,7 +12,8 @@
  *   - the HC1 one-time directory-token store;
  *   - choosing which rows a PL-B transcript backfill should read;
  *   - the Bun runtime flags required by the real engine sidecar;
- *   - the HC1 validation of a `saveTextToFile` request (P4-35).
+ *   - the HC1 validation of a `saveTextToFile` request (P4-35);
+ *   - the cancellable post-paint window that arms the background drivers.
  *
  * `main.ts` keeps the Electron wiring and calls in here.
  */
@@ -256,4 +257,52 @@ export function selectTranscriptBackfillCandidates(
         },
       ]
     })
+}
+
+/* ------------------------------------------------------------------------- *
+ * Startup timers — the post-paint driver-arming window
+ * ------------------------------------------------------------------------- */
+
+export type StartupTimers = {
+  /** Arm `run` to fire after the configured delay. */
+  schedule: (run: () => void) => void
+  /** Cancel every armed-but-unfired callback. Idempotent. */
+  cancelAll: () => void
+  /** Armed callbacks that have not fired or been cancelled. */
+  pending: () => number
+}
+
+/**
+ * The `ready-to-show` + delay window, made cancellable.
+ *
+ * Main arms four drivers a fixed delay after first paint so the engine-graph
+ * worker imports stay off the launch critical path. A window closed inside that
+ * delay used to leave the timers running: `window-all-closed` stopped drivers
+ * that were not armed YET, then the timers fired and armed them against a host
+ * that had just been torn down, and two of those drivers re-schedule themselves
+ * forever. Teardown calls `cancelAll`, so an unfired arm is dropped rather than
+ * resurrecting work after the window is gone.
+ */
+export function createStartupTimers<Handle>(deps: {
+  delayMs: number
+  setTimer: (run: () => void, ms: number) => Handle
+  clearTimer: (handle: Handle) => void
+}): StartupTimers {
+  const armed = new Set<Handle>()
+  return {
+    schedule(run) {
+      // Self-removal before `run` so a callback that fires normally does not
+      // leak a spent handle into the cancel set.
+      const handle = deps.setTimer(() => {
+        armed.delete(handle)
+        run()
+      }, deps.delayMs)
+      armed.add(handle)
+    },
+    cancelAll() {
+      for (const handle of armed) deps.clearTimer(handle)
+      armed.clear()
+    },
+    pending: () => armed.size,
+  }
 }

@@ -143,6 +143,17 @@ export class SidecarSupervisor {
   /** Monotonic counter → short, collision-free socket filenames. */
   private socketSeq = 0
 
+  /**
+   * Terminal once `shutdown()` has run. A supervisor is never reused after
+   * teardown (main nulls it and `ensureHost` builds a fresh one on reactivate),
+   * so this only ever catches a spawn that was ALREADY IN FLIGHT when the window
+   * closed — the fire-and-forget primary-session create, which awaits the
+   * registry launch gate and can resume after `shutdownAll()`. Without it that
+   * continuation spawns an unreachable sidecar into a torn-down supervisor,
+   * outliving the window it was supposed to die with (D6).
+   */
+  private closed = false
+
   constructor(options: SupervisorOptions) {
     this.options = options
     // A Unix-domain socket path is bounded by the platform's `sun_path` (104
@@ -185,6 +196,12 @@ export class SidecarSupervisor {
    * supervisor's `sidecarCwd` option is used and no resume is requested.
    */
   spawnSession(sessionId: SessionId = randomUUID(), config?: SpawnConfig): SessionId {
+    // Throwing (rather than returning) matches the other refusals here; the
+    // host's spawn already converts a synchronous throw into a typed
+    // `spawn_failed` and cleans up the row it just wrote (`host.ts` spawn).
+    if (this.closed) {
+      throw new Error('supervisor has shut down; refusing to spawn')
+    }
     if (this.registry.has(sessionId)) {
       throw new Error(`session ${sessionId} already exists`)
     }
@@ -335,8 +352,9 @@ export class SidecarSupervisor {
     this.spawnSession(sessionId, config)
   }
 
-  /** Kill every sidecar and clear the registry. */
+  /** Kill every sidecar and clear the registry. Terminal: no further spawns. */
   shutdown(): void {
+    this.closed = true
     for (const sessionId of [...this.registry.keys()]) {
       this.killSession(sessionId)
     }

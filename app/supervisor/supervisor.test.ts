@@ -413,3 +413,28 @@ test('F11 — a stale old-child exit after restart does not mark the new session
   expect(hasUnexpectedExit).toBe(false)
 })
 
+
+/**
+ * Terminal state after shutdown. Main tears the supervisor down on
+ * window-all-closed/before-quit/signal, but the primary session's
+ * fire-and-forget `createSession` can still be waiting on the registry launch
+ * gate at that moment; when it resumes it calls straight through to here. A
+ * spawn accepted after shutdown produces a sidecar with no supervisor to reach
+ * it, breaking die-with-window (D6).
+ */
+test('spawnSession after shutdown throws instead of starting an unowned sidecar', () => {
+  const socketDir = makeTempDir('catcode-supervisor-closed-')
+  const supervisor = new SidecarSupervisor({
+    sidecarCommand: process.execPath,
+    sidecarArgs: ['-e', 'process.exit(0)'],
+    socketDir,
+  })
+  supervisors.push(supervisor)
+
+  supervisor.shutdown()
+
+  expect(() => supervisor.spawnSession('after-shutdown-session')).toThrow(
+    /shut down/,
+  )
+  expect(supervisor.listSessions()).toHaveLength(0)
+})
