@@ -181,6 +181,7 @@ import {
   connectionRecoveryMessage,
   connectionTone,
   createConnectionState,
+  isTerminalConnectionStatus,
   reduceConnectionState,
   selectConnection,
   type ConnectionSnapshot,
@@ -2469,20 +2470,35 @@ export function App() {
 	            fastMode={panelRunControls?.fast.active ?? false}
 	            runControls={panelRunControls}
 	            contextBreakdown={panelContextBreakdown}
-	            onRequestContextBreakdown={() => {
-	              // Fired when the usage popover opens. Best-effort: the analysis is
-	              // expensive and its absence degrades to the aggregate row, so a
-	              // transport failure here must not raise a transport-error banner
-	              // the way a user-initiated WRITE verb does.
-	              try {
-	                getBridge().contextBreakdownVerb(sessionId, {
-	                  type: 'context-breakdown.request',
-	                  requestId: newRequestId(),
-	                })
-	              } catch {
-	                // no-op: the popover keeps whatever snapshot it already has
-	              }
-	            }}
+	            // Only a pane with an engine behind it can be asked. The donut is
+	            // the one composer face that renders without one: it reads cached
+	            // run facts on a preview, where every sibling face is blank because
+	            // its live seam is null. So it is the only face that could send a
+	            // verb to a session the supervisor does not have, and that reply is
+	            // a `session_not_found` error frame, which the connection reducer
+	            // maps to `dead`. Opening the popover on a previewed or finished
+	            // session therefore raised "This session is no longer available"
+	            // over a good cached transcript and released any parked prompt. The
+	            // percentage still shows; only the recompute is withheld.
+	            onRequestContextBreakdown={
+	              panelIsPreview ||
+	              isTerminalConnectionStatus(sessionConnection.status)
+	                ? undefined
+	                : () => {
+	                    // Best-effort: the analysis is expensive and its absence
+	                    // degrades to the aggregate row, so a transport failure
+	                    // must not raise a transport-error banner the way a
+	                    // user-initiated WRITE verb does.
+	                    try {
+	                      getBridge().contextBreakdownVerb(sessionId, {
+	                        type: 'context-breakdown.request',
+	                        requestId: newRequestId(),
+	                      })
+	                    } catch {
+	                      // no-op: the popover keeps the snapshot it already has
+	                    }
+	                  }
+	            }
             slashCatalog={panelSlashCatalog}
 	            onSetModel={model => {
 	              try {

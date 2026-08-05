@@ -144,6 +144,12 @@ test('PL-A wiring tripwire: the startup preload and restore call the parts they 
   expect(admissionBody).toContain('preloadQueueRef.current.then(')
   expect(admissionBody).toContain('runStartupTranscriptPreload')
   expect(admissionBody).toContain("type: 'preview-load'")
+  // A new cache is a new preview generation, so the handover claim made against
+  // the old one is released HERE — this path reaches a fresh preview without
+  // `openPreviewPane`. Pinned in source because the reducer-level test can only
+  // model the release, never prove this line performs it: drop it and a second
+  // generation silently stops handing over, with the whole suite still green.
+  expect(admissionBody).toContain('swappedPreviewsRef.current.delete(')
   expect(admissionBody).toContain('preloadReservedBytesRef.current.set(')
   expect(admissionBody).toContain('calculateStartupPreloadCapacity(')
   expect(admissionBody).toContain('maxSessions: remainingSessions')
@@ -167,6 +173,34 @@ test('PL-A wiring tripwire: the startup preload and restore call the parts they 
   expect(source).toContain(
     "type: 'preview-reset',\n          sessionId: event.appSessionId",
   )
+})
+
+test('wiring tripwire: the usage popover asks no engine that is not there', () => {
+  // The defect this pins (2026-08-05, operator-reported): the context donut is
+  // the ONE composer face that renders with no engine behind it — it reads the
+  // cached preview run facts, where every sibling face is blank because its live
+  // seam is null. Opening its popover fired a `context-breakdown.request` at a
+  // session the supervisor does not have, main answered `session_not_found`, and
+  // `reduceConnectionState` maps that code to `dead` — so a previewed session's
+  // pane raised "This session is no longer available" over a perfectly good
+  // cached transcript, and any prompt parked in the composer was released.
+  //
+  // LAYER HONESTY: the renderer suite is SSR-only, so no popover can be opened
+  // and no handler fired. This asserts the CALL SITE gate, which is the thing
+  // that was missing. The slice is anchored on code, never on a comment.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+
+  const gateStart = source.indexOf('onRequestContextBreakdown={')
+  const gateEnd = source.indexOf('slashCatalog={panelSlashCatalog}', gateStart)
+  expect(gateStart).toBeGreaterThan(-1)
+  expect(gateEnd).toBeGreaterThan(gateStart)
+  const gateBody = source.slice(gateStart, gateEnd)
+
+  // Both halves: a cache-only pane, and a live pane whose engine has finished.
+  expect(gateBody).toContain('panelIsPreview')
+  expect(gateBody).toContain('isTerminalConnectionStatus(sessionConnection.status)')
+  expect(gateBody).toContain('? undefined')
+  expect(gateBody).toContain('contextBreakdownVerb(sessionId')
 })
 
 test('P4-29 wiring tripwire: the ⋯ menu Open verb restores instead of focusing a dead pane', () => {
