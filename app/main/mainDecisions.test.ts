@@ -13,6 +13,7 @@ import {
   CWD_TOKEN_TTL_MS,
   SIDECAR_RUNTIME_ARGS,
   createCwdTokenStore,
+  createStartupTimers,
   isTerminalLifecycleFrame,
   sanitizeSaveFileName,
   selectTranscriptBackfillCandidates,
@@ -459,5 +460,97 @@ describe('validateSaveTextRequest', () => {
     expect(MAX_SAVE_TEXT_BYTES).toBeLessThan(MAX_OUTBOUND_FRAME_BYTES)
     expect(MAX_FRAME_BYTES).toBe(128 * 1024)
     expect(MAX_OUTBOUND_FRAME_BYTES).toBe(32 * 1024 * 1024)
+  })
+})
+
+describe('createStartupTimers', () => {
+  /** A hand-driven clock: `fire()` runs what is due, exactly like the real timer. */
+  function fakeTimers() {
+    const armed = new Map<number, () => void>()
+    let seq = 0
+    return {
+      deps: {
+        delayMs: 250,
+        setTimer: (run: () => void) => {
+          const handle = ++seq
+          armed.set(handle, run)
+          return handle
+        },
+        clearTimer: (handle: number) => {
+          armed.delete(handle)
+        },
+      },
+      // One-shot, like the real timer: a fired callback is spent.
+      fire: () => {
+        for (const [handle, run] of [...armed.entries()]) {
+          armed.delete(handle)
+          run()
+        }
+      },
+      armedCount: () => armed.size,
+    }
+  }
+
+  test('runs every scheduled callback when the delay elapses', () => {
+    const timers = fakeTimers()
+    const startup = createStartupTimers(timers.deps)
+    const ran: string[] = []
+
+    startup.schedule(() => ran.push('backfill'))
+    startup.schedule(() => ran.push('catalog'))
+    expect(startup.pending()).toBe(2)
+
+    timers.fire()
+    expect(ran).toEqual(['backfill', 'catalog'])
+    expect(startup.pending()).toBe(0)
+  })
+
+  /**
+   * The teardown race: a window closed inside the post-paint delay must not let
+   * the drivers arm afterwards. Two of them re-schedule themselves forever, so a
+   * single leaked arm outlives the window that owned it.
+   */
+  test('cancelAll drops arms that have not fired yet', () => {
+    const timers = fakeTimers()
+    const startup = createStartupTimers(timers.deps)
+    const ran: string[] = []
+
+    startup.schedule(() => ran.push('catalog'))
+    startup.schedule(() => ran.push('accounts'))
+    startup.cancelAll()
+
+    timers.fire()
+    expect(ran).toEqual([])
+    expect(startup.pending()).toBe(0)
+    expect(timers.armedCount()).toBe(0)
+  })
+
+  test('cancelAll is idempotent and leaves the set reusable after reactivate', () => {
+    const timers = fakeTimers()
+    const startup = createStartupTimers(timers.deps)
+    startup.schedule(() => {})
+    startup.cancelAll()
+    startup.cancelAll()
+
+    const ran: string[] = []
+    startup.schedule(() => ran.push('rearmed'))
+    timers.fire()
+    expect(ran).toEqual(['rearmed'])
+  })
+
+  test('a fired callback leaves no handle behind for a later cancel', () => {
+    const timers = fakeTimers()
+    const startup = createStartupTimers(timers.deps)
+    let runs = 0
+    startup.schedule(() => {
+      runs += 1
+    })
+
+    timers.fire()
+    expect(startup.pending()).toBe(0)
+
+    startup.cancelAll()
+    timers.fire()
+    expect(runs).toBe(1)
   })
 })

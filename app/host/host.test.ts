@@ -52,6 +52,9 @@ class FakeSupervisor {
   /** If set, the NEXT spawnSession throws (spawn_failed path). */
   throwOnNextSpawn: Error | null = null
 
+  /** Mirrors the real supervisor's terminal state after `shutdown()`. */
+  private closed = false
+
   subscribe(listener: (e: SupervisorEvent) => void): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
@@ -61,6 +64,9 @@ class FakeSupervisor {
     sessionId: SessionId,
     config?: { cwd: string; resumeEngineSessionId?: string },
   ): SessionId {
+    if (this.closed) {
+      throw new Error('supervisor has shut down; refusing to spawn')
+    }
     if (this.throwOnNextSpawn) {
       const err = this.throwOnNextSpawn
       this.throwOnNextSpawn = null
@@ -111,6 +117,7 @@ class FakeSupervisor {
   }
 
   shutdown(): void {
+    this.closed = true
     const ids = [...this.records.keys()]
     this.records.clear()
     for (const sessionId of ids) {
@@ -1772,4 +1779,45 @@ test('canPreview is true only for a not-live restorable row; false for live/unkn
   await h.registry.upsertOnSpawn({ appSessionId: orphan, cwd: h.cwd })
   await h.registry.markClean(orphan)
   expect(h.host.canPreview(orphan)).toBe(false)
+})
+
+/**
+ * Create-after-shutdown. `ensureHost` fires the primary `createSession` as
+ * fire-and-forget, and it awaits the registry launch gate before spawning — so a
+ * window closed during launch lets that continuation resume AFTER
+ * `shutdownAll()` has already killed everything. Without a terminal state on the
+ * supervisor it spawns a sidecar nothing owns, which then outlives the window it
+ * was supposed to die with (D6).
+ */
+test('createSession that resumes after shutdownAll fails closed instead of spawning', async () => {
+  const h = makeHost()
+
+  // Start the create, then tear down before awaiting it — the launch-gate race.
+  const pending = h.host.createSession({ cwd: h.cwd })
+  h.host.shutdownAll()
+  const result = await pending
+
+  expect(result.ok).toBe(false)
+  if (result.ok) return
+  expect(result.error.code).toBe('spawn_failed')
+
+  // Nothing was spawned, and the row written before the spawn attempt is not
+  // left masquerading as live for the next launch's orphan sweep.
+  expect(h.supervisor.records.size).toBe(0)
+  for (const row of h.registry.sessions) {
+    expect(row.shutdown).not.toBeNull()
+  }
+})
+
+test('shutdownAll marks every live row clean so the next launch sweep sees no crash', async () => {
+  const h = makeHost()
+  const first = await h.host.createSession({ cwd: h.cwd })
+  const second = await h.host.createSession({ cwd: h.cwd })
+  expect(first.ok && second.ok).toBe(true)
+  expect(h.registry.sessions.every(row => row.shutdown === null)).toBe(true)
+
+  h.host.shutdownAll()
+
+  expect(h.registry.sessions.length).toBe(2)
+  expect(h.registry.sessions.every(row => row.shutdown === 'clean')).toBe(true)
 })
