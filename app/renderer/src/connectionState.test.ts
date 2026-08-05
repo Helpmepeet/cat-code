@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import {
+  connectionHasEngine,
   connectionRecoveryMessage,
   connectionTone,
   createConnectionState,
@@ -22,6 +23,7 @@ const STATUS_COVERAGE: Record<ConnectionSnapshot['status'], true> = {
   disconnected: true,
   failed: true,
   exited: true,
+  parked: true,
 }
 const ALL_STATUSES = Object.keys(
   STATUS_COVERAGE,
@@ -162,6 +164,226 @@ test('classifies the spawn-in-flight statuses as transient and the rest as termi
     isTerminalConnectionStatus(status),
   )
   expect(terminal.sort()).toEqual(['dead', 'disconnected', 'exited', 'failed'])
+})
+
+/* ------------------------------------------------------------------------- *
+ * IDLE-PARK — an intentional park is not a crash (decisions/IDLE-PARK.md)
+ * ------------------------------------------------------------------------- */
+
+function parkExitFrame(sessionId: string): ServerFrame {
+  return {
+    kind: 'lifecycle',
+    protocolVersion: 1,
+    sessionId,
+    status: 'exited',
+    // PARKED_EXIT_CODE — the sidecar's gated self-exit code, the same signal the
+    // host classifies on. Written literally so a silent change to the shared
+    // constant has to be re-stated here rather than sliding through.
+    exit: { code: 5, signal: null },
+  } as ServerFrame
+}
+
+test('an intentional park is read off the exit code, not treated as a crash', () => {
+  let state = reduceConnectionState(
+    createConnectionState(),
+    validReady as ServerFrame,
+  )
+  state = reduceConnectionState(state, parkExitFrame('session-1'))
+
+  expect(selectConnection(state, 'session-1')).toEqual({
+    status: 'parked',
+    inputEnabled: false,
+  })
+  // The three things the operator rejected, all absent.
+  expect(isTerminalConnectionStatus('parked')).toBe(false)
+  expect(connectionTone('parked')).toBe('neutral')
+  expect(connectionRecoveryMessage('parked')).toBeNull()
+})
+
+test('only the park exit code is a park; every other death stays honest', () => {
+  const readyFor = (sessionId: string): ServerFrame =>
+    ({ ...validReady, sessionId }) as ServerFrame
+  const exitWith = (sessionId: string, code: number | null): ServerFrame =>
+    ({
+      kind: 'lifecycle',
+      protocolVersion: 1,
+      sessionId,
+      status: 'exited',
+      exit: { code, signal: null },
+    }) as ServerFrame
+
+  let state = createConnectionState()
+  for (const sessionId of ['crash', 'resume-failed', 'signalled', 'clean']) {
+    state = reduceConnectionState(state, readyFor(sessionId))
+  }
+  // A real crash, the RESUME_FAILED_EXIT_CODE death of an unloadable transcript,
+  // a signal kill, and a plain zero exit are all still `exited` — the honest
+  // "this stopped" reading with its danger tone and recovery sentence.
+  state = reduceConnectionState(state, exitWith('crash', 1))
+  state = reduceConnectionState(state, exitWith('resume-failed', 4))
+  state = reduceConnectionState(state, exitWith('signalled', null))
+  state = reduceConnectionState(state, exitWith('clean', 0))
+
+  for (const sessionId of ['crash', 'resume-failed', 'signalled', 'clean']) {
+    expect(selectConnection(state, sessionId).status).toBe('exited')
+  }
+  expect(connectionTone('exited')).toBe('danger')
+  expect(connectionRecoveryMessage('exited')).toBe(
+    'This session stopped unexpectedly. Restart it to keep working.',
+  )
+})
+
+test('a park exit code cannot smuggle a park reading into a non-exit lifecycle status', () => {
+  // `disconnected` / `failed` are transport and spawn failures with no exit
+  // behind them. Reclassifying on the code alone would let a socket death that
+  // happened to carry one read as a deliberate park.
+  for (const status of ['disconnected', 'failed'] as const) {
+    const state = reduceConnectionState(createConnectionState(), {
+      kind: 'lifecycle',
+      protocolVersion: 1,
+      sessionId: 'session-1',
+      status,
+      exit: { code: 5, signal: null },
+    } as ServerFrame)
+    expect(selectConnection(state, 'session-1').status).toBe(status)
+  }
+})
+
+test('parked is the first status where "not terminal" stops meaning "reachable"', () => {
+  // The trap this predicate exists for: before `parked`, every non-terminal
+  // status had a process behind it, so a caller could ask "is it terminal?" and
+  // mean "can I send to it?". A verb sent to a parked session comes back
+  // `session_not_found`, which the reducer maps to `dead` — a false failure over
+  // a healthy session (the context-breakdown popover bug, once already).
+  expect(isTerminalConnectionStatus('parked')).toBe(false)
+  expect(connectionHasEngine('parked')).toBe(false)
+
+  for (const status of ALL_STATUSES) {
+    if (status === 'parked') continue
+    expect(connectionHasEngine(status)).toBe(!isTerminalConnectionStatus(status))
+  }
+})
+
+test('a parked session holds its queued prompt and asks for its engine back', () => {
+  // The whole point of the non-terminal classification: `release` would put the
+  // text back in the composer and demand a manual Restart, which is the
+  // behaviour being removed. `restore` re-spawns and keeps holding.
+  expect(
+    resolvePendingSubmit({ status: 'parked', inputEnabled: false }),
+  ).toBe('restore')
+})
+
+test('restoring a parked session leaves the parked reading behind', () => {
+  let state = reduceConnectionState(
+    createConnectionState(),
+    validReady as ServerFrame,
+  )
+  state = reduceConnectionState(state, parkExitFrame('session-1'))
+  expect(selectConnection(state, 'session-1').status).toBe('parked')
+
+  // The resumed sidecar's own ready frame is the generation change; nothing
+  // sticky may survive it.
+  state = reduceConnectionState(state, validReady as ServerFrame)
+  expect(selectConnection(state, 'session-1')).toEqual({
+    status: 'ready',
+    inputEnabled: true,
+  })
+  expect(resolvePendingSubmit(selectConnection(state, 'session-1'))).toBe('send')
+})
+
+test('a stray verb from a parked pane cannot turn the park back into a crash', () => {
+  // The composer is deliberately LIVE on a parked session, so a control that
+  // dispatches to the engine is reachable. `supervisor.send` answers
+  // `session_disconnected` for the tombstone record (or `session_not_found` once
+  // deregistered), and mapping either one would have restored the entire defect
+  // in a single click: danger banner, Restart button, read-only composer, and a
+  // released prompt. Neither reply carries news — we reclaimed the engine on
+  // purpose.
+  for (const code of ['session_disconnected', 'session_not_found'] as const) {
+    let state = reduceConnectionState(
+      createConnectionState(),
+      validReady as ServerFrame,
+    )
+    state = reduceConnectionState(state, parkExitFrame('session-1'))
+    expect(selectConnection(state, 'session-1').status).toBe('parked')
+
+    state = reduceConnectionState(state, {
+      kind: 'error',
+      protocolVersion: 1,
+      sessionId: 'session-1',
+      code,
+      message: 'no engine',
+      retryable: false,
+    } as ServerFrame)
+
+    expect(selectConnection(state, 'session-1').status).toBe('parked')
+    expect(connectionTone(selectConnection(state, 'session-1').status)).toBe(
+      'neutral',
+    )
+  }
+})
+
+test('the unpark in progress is still allowed to move a parked session', () => {
+  // `session_not_ready` is minted ONLY while a child is genuinely spawning, so
+  // for a parked session it means the restore is under way. Absorbing it too
+  // would have made `'parked'` sticky and hidden a spawn that then failed.
+  let state = reduceConnectionState(
+    createConnectionState(),
+    validReady as ServerFrame,
+  )
+  state = reduceConnectionState(state, parkExitFrame('session-1'))
+  state = reduceConnectionState(state, {
+    kind: 'error',
+    protocolVersion: 1,
+    sessionId: 'session-1',
+    code: 'session_not_ready',
+    message: 'still spawning',
+    retryable: true,
+  } as ServerFrame)
+
+  expect(selectConnection(state, 'session-1').status).toBe('starting')
+})
+
+test('a session that never parked still reports a send failure honestly', () => {
+  // The guard is keyed on the session ALREADY being parked; it must not soften
+  // the ordinary transport-failure path.
+  let state = reduceConnectionState(
+    createConnectionState(),
+    validReady as ServerFrame,
+  )
+  state = reduceConnectionState(state, {
+    kind: 'error',
+    protocolVersion: 1,
+    sessionId: 'session-1',
+    code: 'session_disconnected',
+    message: 'gone',
+    retryable: false,
+  } as ServerFrame)
+
+  expect(selectConnection(state, 'session-1').status).toBe('disconnected')
+  expect(isTerminalConnectionStatus('disconnected')).toBe(true)
+})
+
+test('a restore that dies after a park is reported, not hidden by the park', () => {
+  // The failure mode a "once parked, stay parked" latch would have created: a
+  // re-spawn that fails must still reach the user honestly.
+  let state = reduceConnectionState(
+    createConnectionState(),
+    validReady as ServerFrame,
+  )
+  state = reduceConnectionState(state, parkExitFrame('session-1'))
+  state = reduceConnectionState(state, {
+    kind: 'lifecycle',
+    protocolVersion: 1,
+    sessionId: 'session-1',
+    status: 'failed',
+  } as ServerFrame)
+
+  expect(selectConnection(state, 'session-1').status).toBe('failed')
+  expect(connectionTone('failed')).toBe('danger')
+  expect(resolvePendingSubmit(selectConnection(state, 'session-1'))).toBe(
+    'release',
+  )
 })
 
 test('the terminal partition agrees with the parked-prompt classifier', () => {

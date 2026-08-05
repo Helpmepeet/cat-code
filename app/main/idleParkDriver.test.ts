@@ -81,6 +81,113 @@ test('idle-TTL — parks a session idle beyond the TTL even while under the cap;
   expect(parked).toEqual(['idle'])
 })
 
+/* ------------------------------------------------------------------------- *
+ * Visible-pane protection (§4 open decision 4, resolved 2026-08-05 to option b)
+ * ------------------------------------------------------------------------- */
+
+test('idle-TTL — a session the user is looking at is never parked under them', () => {
+  // Both are idle past the TTL; only the background one may be reclaimed.
+  const onScreen = desc({ appSessionId: 'on-screen', lastMessageSentAt: 5_000 })
+  const background = desc({ appSessionId: 'background', lastMessageSentAt: 5_000 })
+  const parked: string[] = []
+  const driver = createIdleParkDriver({
+    listSessions: () => [onScreen, background],
+    park: id => parked.push(id),
+    protectedSessions: () => new Set(['on-screen']),
+    maxLiveEngines: 100,
+    idleTtlMs: 1_000,
+    now: () => 10_000,
+  })
+
+  driver.evaluate()
+
+  expect(parked).toEqual(['background'])
+})
+
+test('cap — protection redirects the victim, it does not raise the engine ceiling', () => {
+  // 3 live against a cap of 2: one must go. The least-recent (s1) is on screen,
+  // so the cap takes the next least-recent instead of skipping the sweep or
+  // letting 3 engines stand.
+  const sessions = [
+    desc({ appSessionId: 's1', lastMessageSentAt: 100 }),
+    desc({ appSessionId: 's2', lastMessageSentAt: 200 }),
+    desc({ appSessionId: 's3', lastMessageSentAt: 300 }),
+  ]
+  const parked: string[] = []
+  const driver = createIdleParkDriver({
+    listSessions: () => sessions,
+    park: id => parked.push(id),
+    protectedSessions: () => new Set(['s1']),
+    maxLiveEngines: 2,
+    idleTtlMs: 1e12,
+    now: () => 1_000,
+  })
+
+  driver.evaluate()
+
+  expect(parked).toEqual(['s2'])
+})
+
+test('cap — a fully protected live set parks nothing rather than picking a victim anyway', () => {
+  // Everything over the cap is on screen (a wide split). Reclaiming memory never
+  // outranks not killing a session under the user; the next sweep re-evaluates.
+  const sessions = [
+    desc({ appSessionId: 's1', lastMessageSentAt: 100 }),
+    desc({ appSessionId: 's2', lastMessageSentAt: 200 }),
+    desc({ appSessionId: 's3', lastMessageSentAt: 300 }),
+  ]
+  const parked: string[] = []
+  const driver = createIdleParkDriver({
+    listSessions: () => sessions,
+    park: id => parked.push(id),
+    protectedSessions: () => new Set(['s1', 's2', 's3']),
+    maxLiveEngines: 1,
+    idleTtlMs: 1_000,
+    now: () => 1e9,
+  })
+
+  driver.evaluate()
+
+  expect(parked).toEqual([])
+})
+
+test('protection is re-read every sweep, so closing a pane un-protects it at once', () => {
+  const session = desc({ appSessionId: 'pane', lastMessageSentAt: 5_000 })
+  let visible = new Set(['pane'])
+  const parked: string[] = []
+  const driver = createIdleParkDriver({
+    listSessions: () => [session],
+    park: id => parked.push(id),
+    protectedSessions: () => visible,
+    maxLiveEngines: 100,
+    idleTtlMs: 1_000,
+    now: () => 10_000,
+  })
+
+  driver.evaluate()
+  expect(parked).toEqual([])
+
+  visible = new Set()
+  driver.evaluate()
+  expect(parked).toEqual(['pane'])
+})
+
+test('no protection reported ⇒ the pre-2026-08-05 selection, unchanged', () => {
+  const session = desc({ appSessionId: 'idle', lastMessageSentAt: 5_000 })
+  const parked: string[] = []
+  const driver = createIdleParkDriver({
+    listSessions: () => [session],
+    park: id => parked.push(id),
+    maxLiveEngines: 100,
+    idleTtlMs: 1_000,
+    now: () => 10_000,
+  })
+
+  driver.evaluate()
+
+  expect(parked).toEqual(['idle'])
+})
+
 test('recency is the newest of lastMessageSentAt / lastAttachedAt / createdAt', () => {
   // A session with no message sent uses lastAttachedAt for recency.
   const byAttach = desc({

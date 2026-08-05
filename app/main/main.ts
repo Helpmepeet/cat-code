@@ -57,6 +57,7 @@ import {
   createCwdTokenStore,
   createStartupTimers,
   isTerminalLifecycleFrame,
+  parseVisibleSessions,
   SIDECAR_RUNTIME_ARGS,
   selectTranscriptBackfillCandidates,
   supervisorEventToServerFrame,
@@ -182,6 +183,7 @@ const CH_HOST_OPEN_HISTORY = 'catcode:host:open-history'
 // dialog it cannot answer, and main owns the destination (HC1).
 const CH_HOST_SAVE_TEXT = 'catcode:host:save-text'
 const CH_HOST_EVENT = 'catcode:host:event'
+const CH_HOST_VISIBLE_SESSIONS = 'catcode:host:visible-sessions'
 
 const APP_ORIGIN_DEV = process.env.CATCODE_RENDERER_URL ?? 'http://localhost:5173'
 const IS_DEV = !app.isPackaged
@@ -294,6 +296,18 @@ let accountsPoolAbort: AbortController | null = null
  * over-cap engines via a host-initiated `app.park`. Null until armed.
  */
 let idleParkDriver: IdleParkDriver | null = null
+
+/**
+ * IDLE-PARK §4(b) — the sessions the renderer currently shows in a workspace
+ * pane, as last reported over `CH_HOST_VISIBLE_SESSIONS`. The park driver reads
+ * this to keep an on-screen session off its victim list.
+ *
+ * Latest-wins and never accumulates: each report REPLACES the set, so a closed
+ * pane stops being protected on the very next report rather than lingering. Ids
+ * are shape-validated on arrival and matched against the live set only at
+ * selection time, so a stale id protects nothing.
+ */
+let visibleSessions: ReadonlySet<SessionId> = new Set()
 
 /**
  * Persist one session's transcript cache (IS-A). Called at every eviction point
@@ -563,6 +577,7 @@ function startIdleParkDriver(): void {
       })
     },
     subscribeHostEvents: listener => activeHost.subscribe(() => listener()),
+    protectedSessions: () => visibleSessions,
     log: line => process.stderr.write(`${line}\n`),
   })
   idleParkDriver.start()
@@ -1201,6 +1216,16 @@ function registerIpcHandlers(): void {
   ipcMain.on(CH_RENDERER_READY, () => {
     deliver(attachmentGate.onRendererReady())
     readinessLatch.rendererReady()
+  })
+
+  // IDLE-PARK §4(b) — the renderer reports which sessions are on screen so the
+  // park policy skips them. Validated HERE, at the boundary, not at the preload
+  // (`parseVisibleSessions` in mainDecisions.ts carries the trust reasoning). A
+  // malformed payload yields an empty set, which protects nothing and parks
+  // normally: this hint may only ever SUPPRESS a park, never cause one, and never
+  // reaches a sidecar.
+  ipcMain.on(CH_HOST_VISIBLE_SESSIONS, (_e, payload: unknown) => {
+    visibleSessions = parseVisibleSessions(payload)
   })
 
   registerHostControlPlane()
@@ -1848,6 +1873,9 @@ function stopBackgroundDrivers(): void {
   accountsPoolAbort = null
   idleParkDriver?.stop()
   idleParkDriver = null
+  // The window that reported them is going away; a stale visible set must not
+  // outlive it and protect sessions in a re-armed driver after reactivate.
+  visibleSessions = new Set()
 }
 
 /**

@@ -76,6 +76,81 @@ test('a disconnected descriptor is dead + restartable', () => {
   expect(visual.restartable).toBe(true)
 })
 
+test('an idle-PARKED tab is neither a failure nor a restart prompt', () => {
+  // IDLE-PARK — the host descriptor here is the crash descriptor verbatim
+  // (disconnected + restorable), because the descriptor deliberately cannot carry
+  // the distinction (§11). Left to that alone the tab painted the danger dot and
+  // offered a Restart button for an engine the app itself reclaimed on purpose.
+  const visual = deriveTabVisualState({
+    descriptor: descriptor({ status: 'disconnected', restorable: true }),
+    connection: { status: 'parked', inputEnabled: false },
+    pendingPermissionCount: 0,
+    isActive: false,
+  })
+  expect(visual.tone).not.toBe('dead')
+  expect(visual.tone).toBe('busy')
+  expect(visual.restartable).toBe(false)
+  // The word only reaches assistive tech (the TabBar renders a dot, not a chip),
+  // and it must not be a failure word.
+  expect(visual.label).toBe('idle')
+})
+
+test('a crash is still a crash — the same descriptor without the parked connection', () => {
+  // The control for the case above: identical host descriptor, ordinary terminal
+  // connection. A real crash must keep its danger dot and its restart affordance.
+  const visual = deriveTabVisualState({
+    descriptor: descriptor({ status: 'disconnected', restorable: true }),
+    connection: { status: 'exited', inputEnabled: false },
+    pendingPermissionCount: 0,
+    isActive: false,
+  })
+  expect(visual.tone).toBe('dead')
+  expect(visual.restartable).toBe(true)
+})
+
+test('a parked session that can never come back is not dressed up as resting', () => {
+  // A session parked before it ever ran a turn has no transcript on disk, so
+  // `canResume` refuses it and BOTH restore and restart fail. `restorable:false`
+  // is how that reaches the tab. Painting it `idle` with no affordance would
+  // convert a visible failure into a silent one: the user could type into it
+  // forever, losing their paste pills to `retireDraft` on every attempt.
+  const visual = deriveTabVisualState({
+    descriptor: descriptor({ status: 'disconnected', restorable: false }),
+    connection: { status: 'parked', inputEnabled: false },
+    pendingPermissionCount: 0,
+    isActive: false,
+  })
+  expect(visual.label).not.toBe('idle')
+  expect(visual.tone).toBe('dead')
+})
+
+test('unparking shows starting, not idle, while the engine actually boots', () => {
+  // The connection snapshot stays `parked` until the resumed sidecar's `ready`
+  // frame, but the host reports `spawning` the moment the restore starts. The
+  // descriptor is the authority on liveness, so the real boot must be visible
+  // rather than hidden behind the parked reading for several seconds.
+  const visual = deriveTabVisualState({
+    descriptor: descriptor({ status: 'spawning', restorable: false }),
+    connection: { status: 'parked', inputEnabled: false },
+    pendingPermissionCount: 0,
+    isActive: true,
+  })
+  expect(visual.label).toBe('starting')
+  expect(visual.tone).toBe('warn')
+})
+
+test('a parked background tab still raises a pending-permission badge', () => {
+  // Park is gated on no pending permission, so this is a belt-and-braces case:
+  // the early return must not drop the "never silently queued" signal.
+  const visual = deriveTabVisualState({
+    descriptor: descriptor({ status: 'disconnected', restorable: true }),
+    connection: { status: 'parked', inputEnabled: false },
+    pendingPermissionCount: 1,
+    isActive: false,
+  })
+  expect(visual.needsAttention).toBe(true)
+})
+
 test('a background tab whose transport already died escalates to dead before the host status catches up', () => {
   // Host still says ready, but the P3-4 connection view saw a send fail (dead).
   const visual = deriveTabVisualState({

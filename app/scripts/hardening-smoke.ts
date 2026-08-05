@@ -270,6 +270,11 @@ async function runProductionHardeningSmoke(
       // P4-35 — the file sink (operator ruling 2026-07-30). The renderer requests
       // main's native save dialog and cannot name a destination (HC1/HC3).
       'saveTextToFile',
+      // IDLE-PARK §4(b) (2026-08-05) — the visible-pane hint. HC3 fixed one-way
+      // sender; it names sessions to EXEMPT from an optimisation, so it can start
+      // nothing and reach no sidecar, and main re-validates shape + bounds
+      // (`parseVisibleSessions`) because the preload is not the boundary.
+      'reportVisibleSessions',
       'subscribeHost',
     ].sort()
     const links = probe.links as Array<{

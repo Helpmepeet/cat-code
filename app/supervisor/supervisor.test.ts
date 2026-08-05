@@ -196,6 +196,69 @@ test('remote FIN transitions ready to disconnected and the session can restart',
   )
 })
 
+test('a self-exiting sidecar reports its exit, never a transport failure first', async () => {
+  // A socket close and a process death are the SAME event seen twice: a dying
+  // child FINs and is reaped a few milliseconds later. Reporting `disconnected`
+  // synchronously announced a transport FAILURE for every ordinary exit, and any
+  // consumer that classifies on the exit CODE then had to overwrite it. That is
+  // what made an intentional idle-park (a gated `process.exit(PARKED_EXIT_CODE)`)
+  // flash "This session lost its connection" and a Restart button before settling
+  // (IDLE-PARK.md §1a). This mimics the park: end the socket, then exit 5.
+  const socketDir = makeTempDir('catcode-supervisor-selfexit-')
+  const script = readyScript({
+    afterOpen: 'setTimeout(() => { socket.end(); process.exit(5) }, 50)',
+  })
+  const supervisor = new SidecarSupervisor({
+    sidecarCommand: process.execPath,
+    sidecarArgs: ['-e', script],
+    socketDir,
+    disconnectSettleMs: 250,
+  })
+  supervisors.push(supervisor)
+
+  const statuses: string[] = []
+  let exitCode: number | null | undefined
+  supervisor.subscribe(event => {
+    if (event.type === 'status') statuses.push(event.status)
+    if (event.type === 'exit') exitCode = event.code
+  })
+  supervisor.spawnSession('self-exit-session')
+
+  await waitFor(() => statuses.includes('exited'), 'self-exit was never reported')
+  expect(exitCode).toBe(5)
+  // Wait out the settle window: a dropped report must stay dropped.
+  await new Promise(resolve => setTimeout(resolve, 400))
+  expect(statuses).not.toContain('disconnected')
+})
+
+test('a socket that drops under a LIVING child still reports disconnected', async () => {
+  // The other half of the settle: the grace period must not silence a genuine
+  // transport loss. Here the child ends the socket and stays alive, so nothing
+  // moves the record to a terminal state and the report survives the re-check.
+  const socketDir = makeTempDir('catcode-supervisor-livedrop-')
+  const script = readyScript({
+    afterOpen: 'setTimeout(() => socket.end(), 50); setInterval(() => {}, 1000)',
+  })
+  const supervisor = new SidecarSupervisor({
+    sidecarCommand: process.execPath,
+    sidecarArgs: ['-e', script],
+    socketDir,
+    disconnectSettleMs: 20,
+  })
+  supervisors.push(supervisor)
+
+  const statuses: string[] = []
+  supervisor.subscribe(event => {
+    if (event.type === 'status') statuses.push(event.status)
+  })
+  supervisor.spawnSession('live-drop-session')
+
+  await waitFor(
+    () => statuses.includes('disconnected'),
+    'a live child’s socket drop was swallowed by the settle window',
+  )
+})
+
 test('F7 — spawn error transitions session status to failed without throwing', async () => {
   const socketDir = makeTempDir('catcode-supervisor-err-')
   const supervisor = new SidecarSupervisor({

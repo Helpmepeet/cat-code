@@ -180,10 +180,10 @@ import {
   type WorkspaceSplitEdge,
 } from './workspaceLayout.js'
 import {
+  connectionHasEngine,
   connectionRecoveryMessage,
   connectionTone,
   createConnectionState,
-  isTerminalConnectionStatus,
   reduceConnectionState,
   selectConnection,
   type ConnectionSnapshot,
@@ -980,6 +980,10 @@ export function App() {
         lazyRestoreClaimsRef.current.delete(event.appSessionId)
         cancelledRestoresRef.current.delete(event.appSessionId)
         swappedPreviewsRef.current.delete(event.appSessionId)
+        // A queued prompt must not outlive its session. It is otherwise cleared
+        // only by a send or a release, so a row that leaves the roster with one
+        // still held would leave the drain acting on a session that is gone.
+        releasePendingSubmit(event.appSessionId)
         dispatchPreviewTranscript({
           type: 'preview-reset',
           sessionId: event.appSessionId,
@@ -1785,7 +1789,32 @@ export function App() {
     closeWorkspacePanelAt(workspaceLayout.panels.length - 1)
   }, [closeWorkspacePanelAt, workspaceLayout])
 
+  // CC-16 — hand a parked prompt back to the composer. Called on every terminal
+  // outcome of the spawn the user's keystroke started (a rejected/thrown
+  // restore here, a terminal connection status in the drain effect below), so a
+  // failed reconnect surfaces the text plus an error instead of eating it.
+  const releasePendingSubmit = useCallback((sessionId: SessionId) => {
+    const parked = selectPendingSubmit(pendingSubmitsRef.current, sessionId)
+    if (parked === null) return
+    setPendingSubmits(prev => reducePendingSubmitCleared(prev, sessionId))
+    setPromptDrafts(drafts =>
+      reducePromptDrafts(
+        drafts,
+        sessionId,
+        restoreDraftWithPending(selectPromptDraft(drafts, sessionId), parked),
+      ),
+    )
+    setTransportErrors(prev =>
+      reduceTransportErrorSet(prev, sessionId, PENDING_SUBMIT_RELEASED_MESSAGE),
+    )
+  }, [])
+
   const closeTab = useCallback(async (sessionId: SessionId) => {
+    // Closing is the user saying they are done with this session, so a prompt
+    // still queued for it is handed back rather than left to drain into a
+    // session that is going away. The text lands in this session's draft, which
+    // is renderer-local and survives the close, so reopening finds it intact.
+    releasePendingSubmit(sessionId)
     if (shellRef.current.previews[sessionId]) {
       const plan = previewClosePlan(
         shellRef.current.tabs[sessionId] === true,
@@ -1814,7 +1843,7 @@ export function App() {
     } catch (error) {
       setShellError(errorMessage(error))
     }
-  }, [])
+  }, [releasePendingSubmit])
 
   const restartTab = useCallback((sessionId: SessionId) => {
     // The dead-tab affordance: re-spawn over the existing CH_RESTART channel.
@@ -1825,28 +1854,8 @@ export function App() {
     }
   }, [])
 
-  // CC-16 — hand a parked prompt back to the composer. Called on every terminal
-  // outcome of the spawn the user's keystroke started (a rejected/thrown
-  // restore here, a terminal connection status in the drain effect below), so a
-  // failed reconnect surfaces the text plus an error instead of eating it.
-  const releasePendingSubmit = useCallback((sessionId: SessionId) => {
-    const parked = selectPendingSubmit(pendingSubmitsRef.current, sessionId)
-    if (parked === null) return
-    setPendingSubmits(prev => reducePendingSubmitCleared(prev, sessionId))
-    setPromptDrafts(drafts =>
-      reducePromptDrafts(
-        drafts,
-        sessionId,
-        restoreDraftWithPending(selectPromptDraft(drafts, sessionId), parked),
-      ),
-    )
-    setTransportErrors(prev =>
-      reduceTransportErrorSet(prev, sessionId, PENDING_SUBMIT_RELEASED_MESSAGE),
-    )
-  }, [])
-
   const restoreLiveSession = useCallback(
-    async (sessionId: SessionId) => {
+    async (sessionId: SessionId, options: { focus?: boolean } = {}) => {
       const bridge = getBridge()
       try {
         const result = await bridge.restoreSession(sessionId)
@@ -1860,8 +1869,14 @@ export function App() {
             }
             return
           }
-          setActiveSessionId(result.value.appSessionId)
-          setActiveView('chat')
+          // `focus: false` is the idle-park drain: the user typed into a pane
+          // they were already reading, and by the time a ~seconds-long engine
+          // boot finishes they may have moved on. Every OTHER caller is a click
+          // on the session, where taking focus is the point.
+          if (options.focus !== false) {
+            setActiveSessionId(result.value.appSessionId)
+            setActiveView('chat')
+          }
         } else {
           lazyRestoreClaimsRef.current.delete(sessionId)
           cancelledRestoresRef.current.delete(sessionId)
@@ -1884,6 +1899,35 @@ export function App() {
       void restoreLiveSession(sessionId)
     },
     [restoreLiveSession],
+  )
+
+  // IDLE-PARK — bring back the engine behind a parked session so its held prompt
+  // can drain. Deliberately DELEGATES to `restoreLiveSession` rather than making
+  // the same host call itself: the first version did, and immediately drifted
+  // from its sibling, losing both the `cancelledRestoresRef` handshake (closing a
+  // pane mid-restore could no longer cancel it) and the release-on-failure paths.
+  // The only difference this path is entitled to is not stealing focus.
+  //
+  // The pane guard is the other half of the fix. A queued prompt outlives the
+  // session it was typed into — nothing clears `pendingSubmits` on close — and a
+  // parked session never receives a lifecycle frame when it is closed (the host
+  // deregisters the record before the child dies, so the exit is dropped). So the
+  // connection snapshot stays `'parked'` for a session that no longer has a pane,
+  // the drain keeps answering `'restore'`, and without this the app would re-spawn
+  // a real engine for a tab the user closed and send the message into it. Before
+  // park existed the same stale entry was harmless: `'exited'` is terminal, so the
+  // drain released it on the first pass.
+  const restoreParkedSession = useCallback(
+    (sessionId: SessionId) => {
+      const shell = shellRef.current
+      if (shell.tabs[sessionId] !== true && shell.previews[sessionId] !== true) {
+        releasePendingSubmit(sessionId)
+        return
+      }
+      if (!claimLazyRestore(lazyRestoreClaimsRef.current, sessionId)) return
+      void restoreLiveSession(sessionId, { focus: false })
+    },
+    [releasePendingSubmit, restoreLiveSession],
   )
 
   const openPreviewPane = useCallback((sessionId: SessionId) => {
@@ -2082,12 +2126,21 @@ export function App() {
   // re-runs on both). A terminal status releases it back into the composer
   // instead: a queued prompt must never disappear on a spawn or a turn that
   // never finishes.
+  //
+  // IDLE-PARK adds the `restore` arm: an idle-parked session has no spawn coming
+  // and no turn to end, so the drain ASKS for the engine back and keeps holding.
+  // That is what makes a reclaimed engine invisible — the user's Enter restores
+  // and sends, and no Restart button is involved.
   useEffect(() => {
     for (const sessionId of Object.keys(pendingSubmits)) {
       const parked = pendingSubmits[sessionId]
       if (parked === undefined) continue
       const outcome = resolvePendingSubmit(selectConnection(connection, sessionId))
       if (outcome === 'wait') continue
+      if (outcome === 'restore') {
+        restoreParkedSession(sessionId)
+        continue
+      }
       if (outcome === 'release') {
         releasePendingSubmit(sessionId)
         continue
@@ -2103,7 +2156,58 @@ export function App() {
         )
       }
     }
-  }, [connection, pendingSubmits, releasePendingSubmit])
+  }, [connection, pendingSubmits, releasePendingSubmit, restoreParkedSession])
+
+  // IDLE-PARK §4(b) — tell main which sessions are on screen so its park policy
+  // leaves them alone. The workspace panels ARE the visible set (one session per
+  // panel, so a split shows several at once); `activeSessionId` rides along for
+  // the window between a focus change and the layout catching up. Latest-wins at
+  // main, so closing a pane un-protects it immediately.
+  //
+  // Sent only when the SET changes, not whenever the layout object does: dragging
+  // a panel divider rewrites `workspaceLayout` on every mouse-move while the
+  // visible sessions stay put, and those sends would burn the preload's shared
+  // rate budget (`rendererIpcGuard`) to re-state a fact main already has.
+  // `null`, not `''`: the empty set is a real, reportable state (every pane
+  // closed, or the user on a non-chat page) and its key IS the empty string, so
+  // seeding with `''` would make the one report that un-protects everything the
+  // one report that can never be sent.
+  const reportedVisibleRef = useRef<string | null>(null)
+  useEffect(() => {
+    // Panes render only under the chat view (`activeView === 'chat'` below), so
+    // while the user is on Settings/Sessions/Accounts nothing is on screen and
+    // nothing is protected. Without this, leaving the app parked on a non-chat
+    // page would exempt every session from the TTL indefinitely, which is the
+    // abandoned-tab case the TTL exists for.
+    const visible = new Set<SessionId>()
+    if (activeView === 'chat') {
+      for (const panel of workspaceLayout.panels) visible.add(panel.sessionId)
+      if (activeSessionId) visible.add(activeSessionId)
+    }
+    const sessionIds = [...visible].sort()
+    const key = sessionIds.join(' ')
+    if (key === reportedVisibleRef.current) return
+    try {
+      getBridge().reportVisibleSessions(sessionIds)
+      // Recorded only once the send actually returned. `reportVisibleSessions`
+      // throws through the preload's SHARED rate guard, and marking the key sent
+      // before the call meant a throttled call was remembered as delivered — so
+      // main stayed pinned to the previous set even after the user settled on a
+      // new pane, which is the precise failure this hint exists to prevent.
+      reportedVisibleRef.current = key
+    } catch {
+      // A hint, not a dependency: if it cannot be delivered the policy simply
+      // runs as it did before this existed. Never break the render for it.
+      //
+      // Leaving the ref alone means the NEXT visible-set change re-sends; it is
+      // not a retry of this one, because the effect re-runs only on its deps. A
+      // report lost to the rate guard therefore leaves main on the previous set
+      // until the user next moves. Accepted rather than papered over with a
+      // timer: the guard is 120 renderer sends per second and every one of them
+      // is a deliberate user action, so this is a bound, not a working regime,
+      // and the failure direction is less protection, never a wrongful park.
+    }
+  }, [workspaceLayout, activeSessionId, activeView])
 
   const setSessionPrompt = useCallback(
     (
@@ -2494,9 +2598,13 @@ export function App() {
 	            // session therefore raised "This session is no longer available"
 	            // over a good cached transcript and released any parked prompt. The
 	            // percentage still shows; only the recompute is withheld.
+	            //
+	            // The gate asks `connectionHasEngine`, not "is it terminal": an
+	            // idle-PARKED session is deliberately non-terminal and still has no
+	            // process, so the terminal test alone would have re-opened this exact
+	            // bug on the one state that most looks fine.
 	            onRequestContextBreakdown={
-	              panelIsPreview ||
-	              isTerminalConnectionStatus(sessionConnection.status)
+	              panelIsPreview || !connectionHasEngine(sessionConnection.status)
 	                ? undefined
 	                : () => {
 	                    // Best-effort: the analysis is expensive and its absence
@@ -2564,6 +2672,14 @@ export function App() {
 		              // the globally-active one), mirroring setPermissionMode's
 		              // per-panel dispatch. The sidecar re-broadcasts
 		              // agent-mode.snapshot, which flips the reflected `active`.
+		              //
+		              // Gated on there being an engine to ask. Every sibling control
+		              // is gated implicitly, by going dead when its per-session
+		              // snapshot nulls out on the lifecycle frame; this one is
+		              // supplied unconditionally, so on an idle-PARKED pane (whose
+		              // composer is deliberately live) it was the one click that
+		              // could still reach a session with no process behind it.
+		              if (!connectionHasEngine(sessionConnection.status)) return
 		              try {
 		                getBridge().setAgentMode(sessionId, next)
 		                setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))

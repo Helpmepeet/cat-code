@@ -206,11 +206,53 @@ test('wiring tripwire: the usage popover asks no engine that is not there', () =
   expect(gateEnd).toBeGreaterThan(gateStart)
   const gateBody = source.slice(gateStart, gateEnd)
 
-  // Both halves: a cache-only pane, and a live pane whose engine has finished.
+  // Both halves: a cache-only pane, and a pane with no engine behind it.
+  //
+  // The second half must ask `connectionHasEngine`, NOT `isTerminalConnectionStatus`
+  // (2026-08-05, CC-28). Those two agreed on every status until idle-park added
+  // `'parked'`, which is deliberately non-terminal — its composer stays open and
+  // its prompt is held — while having no process at all. A terminal test would
+  // therefore have re-opened this exact defect on the one state that most looks
+  // fine, so the gate is pinned to the question it actually means.
   expect(gateBody).toContain('panelIsPreview')
-  expect(gateBody).toContain('isTerminalConnectionStatus(sessionConnection.status)')
+  expect(gateBody).toContain('!connectionHasEngine(sessionConnection.status)')
+  expect(gateBody).not.toContain('isTerminalConnectionStatus')
   expect(gateBody).toContain('? undefined')
   expect(gateBody).toContain('contextBreakdownVerb(sessionId')
+})
+
+test('wiring tripwire: the park policy is told which panes are on screen', () => {
+  // IDLE-PARK §4(b) — main cannot derive this (workspace panels are renderer
+  // state and switching panes bumps no registry stamp), so if this effect stops
+  // reporting, sessions silently become parkable while the user is reading them
+  // and nothing else in the suite notices. SSR cannot run the effect, so the
+  // wiring is pinned as source.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const start = source.indexOf('  const reportedVisibleRef = useRef')
+  expect(start).toBeGreaterThan(-1)
+  // Comments are STRIPPED before asserting. The first version of this test
+  // checked for `activeView === 'chat'`, which the explanatory comment directly
+  // above the code also contains — so replacing the real condition with `true`
+  // left every assertion green. A tripwire that cannot fail is worse than none.
+  const body = source
+    .slice(start, source.indexOf('\n  }, [', start))
+    .split('\n')
+    .filter(line => !line.trim().startsWith('//'))
+    .join('\n')
+
+  // The visible set is the workspace panels, not the tab bar: every live session
+  // has a tab, so reporting tabs would exempt every possible park victim.
+  expect(body).toContain('for (const panel of workspaceLayout.panels)')
+  expect(body).toContain('visible.add(panel.sessionId)')
+  // Panes only exist under the chat view; a non-chat page protects nothing.
+  expect(body).toContain("if (activeView === 'chat') {")
+  expect(body).toContain('getBridge().reportVisibleSessions(sessionIds)')
+  // The dedupe key is recorded only AFTER a delivered send, so a call throttled
+  // by the preload's shared rate guard retries instead of pinning main to a
+  // stale set.
+  const sendIndex = body.indexOf('reportVisibleSessions(sessionIds)')
+  const recordIndex = body.indexOf('reportedVisibleRef.current = key')
+  expect(recordIndex).toBeGreaterThan(sendIndex)
 })
 
 test('P4-29 wiring tripwire: the ⋯ menu Open verb restores instead of focusing a dead pane', () => {
@@ -876,6 +918,14 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
   expect(submitBody).toContain("if (outcome === 'wait') continue")
   expect(submitBody).toContain("if (outcome === 'release') {\n        releasePendingSubmit(sessionId)")
   expect(submitBody).toContain('getBridge().submit(sessionId, parked)')
+  // IDLE-PARK (CC-28) — the arm that makes a reclaimed engine invisible. Nothing
+  // is spawning and no turn will end for a parked session, so without this the
+  // held prompt would wait forever. It is pinned here for the same reason as its
+  // siblings: this effect cannot be executed by an SSR suite, so unhooking
+  // `restoreParkedSession` would otherwise go green everywhere.
+  expect(submitBody).toContain(
+    "if (outcome === 'restore') {\n        restoreParkedSession(sessionId)",
+  )
 
   // A failed spawn releases the parked text back into the composer on every
   // terminal restore path, not only on the connection status.

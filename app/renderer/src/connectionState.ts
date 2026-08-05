@@ -1,3 +1,4 @@
+import { PARKED_EXIT_CODE } from '../../shared/limits.js'
 import type {
   LifecycleFrame,
   ReadyFrame,
@@ -11,6 +12,20 @@ export type ConnectionSnapshot = {
     | 'starting'
     | 'ready'
     | 'dead'
+    /**
+     * IDLE-PARK (decisions/IDLE-PARK.md) — the engine process behind this session
+     * was reclaimed ON PURPOSE because the session sat idle, and the transcript is
+     * still on disk. Renderer-local: nothing on the wire says "parked", and the
+     * host descriptor stays byte-identical to a crash by design (§11). The
+     * classifier is the EXIT CODE the lifecycle frame already carries, so this
+     * costs no protocol change and no new inbound vocabulary.
+     *
+     * It is not a failure and it is not terminal: no danger tone, no recovery
+     * sentence, no Restart requirement. It is the "no engine attached yet, and the
+     * user's own intent starts one" state the composer already models for a
+     * preview pane, reached from the other direction.
+     */
+    | 'parked'
     | LifecycleFrame['status']
   inputEnabled: boolean
 }
@@ -59,12 +74,55 @@ export function isTerminalConnectionStatus(
     case 'connecting':
     case 'starting':
     case 'ready':
+    // A parked session is the opposite of terminal: its transcript is intact, its
+    // row is restorable, and the next submit brings the engine back under the
+    // user. Classifying it here is what keeps the tone neutral, the recovery
+    // sentence absent, and the parked prompt held instead of released.
+    case 'parked':
       return false
     case 'dead':
     case 'disconnected':
     case 'failed':
     case 'exited':
       return true
+    default: {
+      const exhaustive: never = status
+      return exhaustive
+    }
+  }
+}
+
+/**
+ * Is there an engine process behind this session that a verb could reach — either
+ * attached, or on its way up?
+ *
+ * Deliberately NOT derived from `isTerminalConnectionStatus`, and the reason is
+ * the whole point of this predicate: those two questions used to have the same
+ * answer for every status, and `'parked'` is the first member where they come
+ * apart. A parked session is not terminal (its prompt is held, its composer stays
+ * open) and yet has no process at all, so a caller that asked "is it terminal?"
+ * to mean "can I send to it?" would send into the void. That reply is a
+ * `session_not_found` error frame, which the reducer below maps to `dead` — a
+ * false terminal state raised over a perfectly good session, which is the exact
+ * defect the context-breakdown popover was fixed for once already.
+ *
+ * The exhaustive switch is the tripwire: a new status has to answer this question
+ * explicitly rather than inherit an answer that happens to be right today.
+ */
+export function connectionHasEngine(
+  status: ConnectionSnapshot['status'],
+): boolean {
+  switch (status) {
+    case 'connecting':
+    case 'starting':
+    case 'ready':
+      return true
+    case 'parked':
+    case 'dead':
+    case 'disconnected':
+    case 'failed':
+    case 'exited':
+      return false
     default: {
       const exhaustive: never = status
       return exhaustive
@@ -105,6 +163,11 @@ export function connectionRecoveryMessage(
     case 'connecting':
     case 'starting':
     case 'ready':
+    // Nothing to say. Parking is backend housekeeping the user did not ask for
+    // and cannot act on; the composer stays usable and the next message brings
+    // the engine back, so a sentence here would be reporting our own bookkeeping
+    // as if it were the user's problem.
+    case 'parked':
       return null
     case 'dead':
       return 'This session is no longer available. Restart it to keep working.'
@@ -119,6 +182,30 @@ export function connectionRecoveryMessage(
       return exhaustive
     }
   }
+}
+
+/**
+ * IDLE-PARK — read the death's REASON off the frame that reports it.
+ *
+ * `PARKED_EXIT_CODE` is the sidecar's self-exit code for a gated, host-requested
+ * park (`app/sidecar/index.ts` `onPark`), and the same code the host classifies on
+ * (`app/host/host.ts` `onSupervisorEvent`). Main already forwards it inside
+ * `LifecycleFrame.exit`, so the renderer reads the identical signal from the
+ * identical source rather than inferring park-ness from a descriptor that is
+ * deliberately indistinguishable from a crash.
+ *
+ * Only an `exited` frame is reclassified. A `disconnected` or `failed` frame is a
+ * transport/spawn failure with no exit code behind it and stays exactly as honest
+ * as it was; so does an `exited` frame carrying any other code, including the
+ * `RESUME_FAILED_EXIT_CODE` death of a restore that could not load its transcript.
+ */
+function lifecycleConnectionStatus(
+  frame: LifecycleFrame,
+): ConnectionSnapshot['status'] {
+  if (frame.status === 'exited' && frame.exit?.code === PARKED_EXIT_CODE) {
+    return 'parked'
+  }
+  return frame.status
 }
 
 export function reduceConnectionState(
@@ -143,7 +230,7 @@ export function reduceConnectionState(
       sessions: {
         ...state.sessions,
         [frame.sessionId]: {
-          status: frame.status,
+          status: lifecycleConnectionStatus(frame),
           inputEnabled: false,
         },
       },
@@ -181,6 +268,28 @@ export function reduceConnectionState(
             ? 'disconnected'
             : null
     if (!status) return state
+    // IDLE-PARK — a send failure tells a PARKED session nothing it does not
+    // already know. We reclaimed its engine on purpose, so "there is no engine"
+    // is the state, not news; both `session_disconnected` (the tombstone record)
+    // and `session_not_found` (already deregistered) are the expected replies.
+    //
+    // Without this guard a single stray verb from a parked pane converted an
+    // intentional park straight back into a terminal `disconnected`/`dead`: the
+    // danger banner and Restart button returned, the composer went read-only, and
+    // any held prompt was released. That is the whole defect, restored by one
+    // click, and the composer is deliberately LIVE on a parked session now, so
+    // such a click is reachable rather than hypothetical.
+    //
+    // Only these two no-engine codes are absorbed. `session_not_ready` still
+    // moves the session to `starting`, because that one is minted only while a
+    // child is genuinely spawning — which is exactly the unpark in progress.
+    const existing = state.sessions[frame.sessionId]
+    if (
+      existing?.status === 'parked' &&
+      (frame.code === 'session_disconnected' || frame.code === 'session_not_found')
+    ) {
+      return state
+    }
     return {
       ...state,
       sessions: {

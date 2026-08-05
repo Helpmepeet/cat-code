@@ -83,7 +83,13 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   // previewSession/readSessionsCatalog/openHistorySession/P4-35 saveTextToFile).
   // subscribe / subscribeHost register a listener and send no payload, so they do
   // NOT (and must not) call the guard.
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(28)
+  // IDLE-PARK §4(b) — the visible-pane hint is a fixed one-way sender like the
+  // rest, guarded here and re-validated at main (`parseVisibleSessions`).
+  expect(source).toContain(
+    "const CH_HOST_VISIBLE_SESSIONS = 'catcode:host:visible-sessions'",
+  )
+  expect(source).toContain('reportVisibleSessions(sessionIds: SessionId[]): void')
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(29)
   expect(source).toContain("const CH_DEBUG_SHELL_STATE = 'catcode:debug:shell-state'")
   expect(source).toContain('reportDebugShellState')
   expect(source).toContain('pickDirectory(activeSessionId?: SessionId | null)')

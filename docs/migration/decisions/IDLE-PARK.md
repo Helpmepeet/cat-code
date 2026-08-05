@@ -2,7 +2,9 @@
 
 > **STATUS: RATIFIED (operator-delegated) + BUILT + MERGED 2026-07-22** — CC-5
 > audit ruling #7 (`docs/migration/reviews/2026-07-21-app-cutlist-ram-audit.md`
-> Part III). Merged to `migration` as `ea5558c` (backend only, zero renderer/
+> Part III). **Superseded in part by the 2026-08-05 amendment below — the
+> "backend only / zero renderer" line describes `ea5558c` as it merged, not the
+> current design.** Merged to `migration` as `ea5558c` (backend only, zero renderer/
 > preload; battery on merged tree: `bun test app/` 1323/0 · tsc clean · sidecar
 > 0 owned · hardening 19/19 · renderer:build ok). **Open decisions §10 resolved:**
 > host-initiated cap+TTL shape (§2); DIE-list accepted, no persistence (§7);
@@ -18,6 +20,29 @@
 > `file:line` re-verified against source 2026-07-22. **Remaining: operator GUI
 > acceptance** (§9 step 5) — not claimable headlessly.
 
+> **AMENDED 2026-08-05 (operator ruling) — §1's accepted consequence is
+> WITHDRAWN, and §10 decision 4 is re-resolved from (a) to (b).** Live use
+> answered both open questions the other way:
+>
+> 1. **A park must not present as a failure.** §1 asked the operator to accept
+>    that a parked session is indistinguishable from a crashed one, "including
+>    the word **crashed**". In practice that surfaced as
+>    `This session stopped unexpectedly. Restart it to keep working.` over a
+>    session nothing had gone wrong with, a danger dot on its tab, a Restart
+>    button, and a read-only composer. Ruling: intentional reclamation is not an
+>    unexpected stop, and must not be drawn as one. See §1a.
+> 2. **A session on screen is not a park victim.** §4's recommendation to "ship
+>    (a), accept it" is replaced by the one-way renderer→main visible-pane hint
+>    it named as (b). See §4a.
+> 3. **Restoring is the user's next message, not a button.** A parked session
+>    keeps a usable composer; submitting restores the engine and delivers the
+>    prompt. See §3a.
+>
+> Real crashes, failed starts and unresumable rows are unchanged and still say
+> so. Everything in §2, §3, §5–§8 (the frame, the gate, the latch, the exit-code
+> classification, the registry state, the DIE-list) is untouched — this amendment
+> changes what the app DRAWS and which sessions it picks, not how park works.
+
 ## 0. What this is
 
 N-process means every open session tab holds a full engine process (~230 MB
@@ -28,6 +53,12 @@ it restores the session on click from the on-disk transcript. Parking reuses the
 projected by the host as a `(status:'disconnected', restorable:true)` descriptor,
 i.e. it is *byte-for-byte the crash descriptor*, so no renderer, no descriptor,
 and no visual code is aware that "park" exists.
+
+> **Narrowed 2026-08-05 (§1a).** The DESCRIPTOR half still holds and is still
+> load-bearing: park is invisible to `SessionDescriptor` and to every surface
+> keyed on it. The renderer half does not — it now classifies park from the exit
+> code already on the lifecycle frame, because reusing the crash presentation
+> meant telling the user a crash had happened.
 
 Locked decisions honoured (never reopened): N-process · UDS transport · raw
 `AppSessionEvent` · die-with-window v1 · two-id model. Security baseline
@@ -73,6 +104,146 @@ design choice — it is entailed by the constraint "reuse the EXISTING
 crash/disconnect→restorable UX / no parked badge." If a distinct-but-quiet
 "parked" reading is ever wanted, that is a separate, operator-gated UI decision
 and is explicitly **out of scope here**.
+
+> **WITHDRAWN 2026-08-05.** The operator did not accept it. That paragraph is
+> kept as the record of what was proposed; §1a below is what ships.
+
+## 1a. Park is not a failure (operator ruling 2026-08-05)
+
+The premise above was that park could be free by reusing the crash presentation.
+It could not: the crash presentation *says something untrue*. The three surfaces
+a user meets in the chat view are fixed **without** touching the descriptor —
+§11's "the renderer is provably unaware park exists" is preserved at the
+DESCRIPTOR level, which is where it was load-bearing. The distinction is carried
+by the renderer's own connection snapshot instead.
+
+> **This is NOT yet complete, and the gap is structural — see §1b.** Four further
+> surfaces are descriptor-derived and still read a park as `crashed`. They are
+> listed there rather than left to be discovered.
+
+**Where the distinction comes from.** `LifecycleFrame.exit.code`, which main
+already forwarded and nothing read. The renderer classifies on the SAME
+`PARKED_EXIT_CODE` the host does (`app/renderer/src/connectionState.ts`
+`lifecycleConnectionStatus`), giving a renderer-local `'parked'` connection
+status. No protocol change, no new frame kind, no new descriptor field, no
+inbound vocabulary.
+
+**The bug that made this invisible until now.** The classification was correct
+and was then overwritten. `supervisorEventToServerFrame` minted a lifecycle frame
+for BOTH the supervisor's `exit` event and its subsequent `status:'exited'`, and
+the supervisor sets that status inside its own `child.on('exit')` handler right
+after emitting the exit (`supervisor.ts:280-281`). So every death produced two
+frames: the informative one carrying the code, then a code-less copy — which
+always landed last in a last-write-wins reducer. The second frame is now not
+minted at all (it never carried information the first lacked, and it also made
+main run its terminal persist + replay-evict twice). `idleParkLifecycle.probe.test.ts`
+pins the real frame order against a real sidecar; restoring the branch turns it
+red with `Expected: "parked" / Received: "exited"`.
+
+| Surface | Was | Is |
+|---|---|---|
+| Connection bar | danger tone + `This session stopped unexpectedly. Restart it to keep working.` | neutral, no sentence (`'parked'` is classified non-terminal, and both tone and copy derive from that one partition) |
+| Tab | danger dot + Restart button | `busy` tone, no restart affordance (`tabStatus.ts`; `busy` is the tone a preview pane already uses — same situation, opposite direction) |
+| Composer | read-only | editable; the submit is held (§3a) |
+
+**A second, earlier copy of the same defect** (found by review round 2, proved with
+a real sidecar): the sidecar closes its socket inside `cleanup()` *before*
+`process.exit`, so the supervisor saw FIN ~7 ms ahead of the reap and minted a
+transport `disconnected` — a real lifecycle frame — which the renderer committed
+as a full danger presentation for one render before the code-5 frame corrected it.
+Every park flashed "This session lost its connection. Restart it to reconnect."
+A socket close and a process death are the same event seen twice, so
+`supervisor.reportSocketLoss` now SETTLES the status briefly and drops it if the
+record reached a terminal state meanwhile (`disconnectSettleMs`, default 250 ms).
+`record.socket` is still cleared synchronously, so `send` fails fast exactly as
+before, and a genuine drop under a living child still reports one interval later.
+The probe asserts the whole death now produces EXACTLY ONE lifecycle frame;
+setting the settle to 0 turns it red with `Expected: 1 / Received: 2`.
+
+**Two send-failure codes are absorbed while parked.** A parked session has no
+engine by definition, so `session_disconnected` (the tombstone record) and
+`session_not_found` (already deregistered) tell it nothing — and mapping either
+one restored the whole defect in a single click, because the composer is now
+deliberately live. `reduceConnectionState` therefore refuses to downgrade
+`'parked'` on those two codes. `session_not_ready` is NOT absorbed: it is minted
+only while a child is genuinely spawning, which is the unpark in progress.
+
+Two things this does NOT do: it does not add a "parked" badge or any new colour
+vocabulary, and it does not change how a genuine crash, a failed spawn, or a
+`RESUME_FAILED_EXIT_CODE` death reads. Only exit code 5 on an `exited` frame is a
+park; a `disconnected`/`failed` frame is never reclassified whatever it carries.
+
+## 1b. OPEN — four surfaces still say "crashed" (found by review 2026-08-05)
+
+§1a fixed the surfaces that read the renderer's CONNECTION snapshot. Every other
+session surface reads the **descriptor** through the one shared vocabulary
+(`app/renderer/src/sessionStatusVisual.ts`), which has no parked input and maps
+`disconnected` + `restorable:true` to `{tone:'dead', label:'crashed'}` — exactly
+what a park produces. So the same session whose tab now reads neutral is still
+listed as a red **crashed** row here:
+
+| Surface | What a parked session shows |
+|---|---|
+| `app/renderer/src/SessionsPage.tsx` (`StatusBadge`) | a visible `crashed` chip |
+| `app/renderer/src/commandPaletteModel.ts` | ⌘K row reads `CRASHED` in the dead tone, and its aria-label says "crashed, restorable" |
+| `app/renderer/src/sidebarState.ts` (`deriveMergedRowVisual`) | row aria-label says "crashed" (the rail paints a dot, so this one is assistive-tech only) |
+| `app/renderer/src/debugStateReport.ts` | the debug export disagrees with itself: `sidebar[]` says `crashed`/`dead` while `tabs[]` says `idle`/`busy` for the SAME session — and that export is the GUI-VERIFICATION cross-check source |
+
+**Why it was missed, and why the fix is not a one-liner.** `tabStatus.ts` returns
+its parked visual *before* calling `sessionStatusVisual`, so a fifth label+tone
+decision now lives outside the module that exists to stop exactly this drift
+(that module's own header says it "replaces FOUR drifted copies of the same
+switch"). The four surfaces above did not inherit the fix because they never see
+the connection snapshot at all — they are descriptor-derived by design.
+
+**The fork, unresolved on purpose.** Closing it is one of:
+
+- **(A) Thread a parked signal through the renderer.** Add `'parked'` to
+  `sessionStatusVisual`'s synthetic-status parameter beside `'preview'`, move
+  `tabStatus.ts` back behind it, and carry the connection-derived status into
+  the four builders (which means `MergedSessionRow` too, since the sidebar and
+  the Sessions page both key on it). No contract change; ~7 modules; fights the
+  grain, because these surfaces are deliberately descriptor-only.
+- **(B) Put `parked` on `SessionDescriptor`.** One field, set in
+  `host.descriptorFromRow` where `row.shutdown === 'parked'` is *already*
+  computed, and all five surfaces inherit it. Smaller and with the grain — but it
+  reverses §11, which rejected exactly this.
+
+**§11's rejection no longer stands on its own reasoning.** It rejected the
+descriptor field "as unnecessary … keeps the descriptor byte-identical to a
+crash, which is what makes the renderer provably unaware park exists (zero-UI
+proof by construction)." The 2026-08-05 ruling *withdrew* that goal: the renderer
+must now be aware. So (B) is no longer barred by its own premise — but reversing
+a recorded decision is an operator call, not a reviewer's, which is why this is
+written down rather than done.
+
+Until one is chosen, the honest statement is: **a park no longer presents as a
+failure in the chat view; it still does in the Sessions page, the ⌘K palette, and
+the debug export.**
+
+## 1c. OPEN — a session with no transcript should never be parked at all
+
+Found by review round 2, demonstrated against a real `Host` + registry + driver.
+The engine materializes a session's `.jsonl` on its FIRST message
+(`src/utils/sessionStorage.ts`), while `engineSessionId` is stamped from the ready
+frame at spawn. So a session opened and never typed in holds an id pointing at a
+file that does not exist: `hasTranscript` is false, `canResume` refuses it, and
+**both `restoreSession` and `restartSession` fail**. Nothing gates park on this —
+neither `selectVictims` (which cannot see it: a live descriptor always reports
+`restorable:false`) nor the sidecar's `isParkGateOpen` (turn / permission / task /
+durable write / OAuth). Leave such a tab off-screen for the TTL and it is parked
+into a permanently unrecoverable state.
+
+This is **pre-existing** (it shipped with `ea5558c`); park has always been able to
+strand such a session. What §1a changed is how it LOOKS, so the presentation half
+is fixed here: `tabStatus.ts` gates its parked visual on `descriptor.restorable`,
+and an unrestorable park falls through to the honest dead presentation instead of
+reading as a resting `idle` tab with no affordance.
+
+The root fix is not done: **do not park what cannot come back.** It needs the
+`canResume` predicate the host already owns privately (`host.ts`) exposed to the
+park path, since neither the driver nor the sidecar can derive it. That is a host
+control-plane addition, so it is written down rather than slipped in.
 
 ## 2. Chosen shape (recommended)
 
@@ -232,6 +403,54 @@ papercut in a few-ms window on a background tab; it is **not** turn loss.
 the draft on `session_disconnected` would erase even that papercut, at the cost
 of a small renderer change — flagged, not designed in.)*
 
+## 3a. Unpark is the next message, not a button (operator ruling 2026-08-05)
+
+§8's "unpark = the existing restore machinery" is unchanged as a MECHANISM. What
+changes is the trigger: requiring a Restart click makes the user pay for
+bookkeeping they did not ask for and cannot see the reason for.
+
+A parked session keeps its transcript (it was never torn down) and a usable
+composer (`'parked'` joins preview and in-flight-spawn as the third
+`connectPending` reason, `composerState.ts`). Submitting HOLDS the prompt through
+the existing CC-16 park, and the drain gains one arm: `resolvePendingSubmit`
+answers `'restore'` for a parked session, so the drain calls the SAME
+`bridge.restoreSession` a click would (`App.tsx` `restoreParkedSession`) and keeps
+holding. The resumed sidecar's `ready` frame then drives the existing
+`'wait' → 'send'` course, and the prompt rides the ordinary `app.submit`.
+
+Delivery is exactly-once by the mechanisms already there, not by new ones:
+
+- **Two prompts cannot queue.** `planSessionSubmit`'s `alreadyParked` returns
+  `ignore` and leaves the draft in the composer.
+- **Two restores cannot spawn.** `claimLazyRestore` — the same claim the preview
+  path uses — is once-per-session, and a park clears it (every `session-status`
+  carrying `restorable` does), so park N+1 can restore again while repeated drain
+  passes within one park cannot.
+- **Nothing is lost when it fails.** A refused restore, a throw, or a terminal
+  frame releases the prompt back into the composer with `restoreDraftWithPending`
+  plus the typed reason; the text is visible, not swallowed.
+- **A restore that dies is still honest.** `'parked'` is not sticky: a `failed`
+  or `exited` frame from the re-spawn wins, with its danger tone and its
+  sentence. There is deliberately no "once parked, stay parked" latch — that
+  would have hidden exactly this case.
+- **A queued prompt never outlives its session.** Found by review round 2, and it
+  was the sharpest edge of making park non-terminal. `pendingSubmits` was cleared
+  only by a send or a release, and a session closed while parked emits NO
+  lifecycle frame (the host deregisters the supervisor record before the child
+  dies, so the exit is dropped) — so its connection snapshot stayed `'parked'`
+  forever. The drain kept answering `'restore'` on every pass, and the app
+  re-spawned a real engine for a tab the user had CLOSED and sent the message into
+  it. Before park existed the same stale entry was inert: `'exited'` is terminal,
+  so the drain released it on the first pass. Now `closeTab` and the
+  `session-removed` handler both release, and `restoreParkedSession` refuses a
+  session that owns neither a tab nor a preview pane.
+- **The parked restore does not fork the restore protocol.** It delegates to
+  `restoreLiveSession` with `focus: false` rather than making its own host call.
+  The first version made its own, and immediately drifted: it lost the
+  `cancelledRestoresRef` handshake (so closing a pane mid-restore no longer
+  cancelled it) and one of the release-on-failure paths. The ONLY difference this
+  path is entitled to is not stealing focus.
+
 ## 4. Idle policy + owner
 
 **Owner: main** (it holds the supervisor, runs the periodic drivers, and sees
@@ -276,6 +495,44 @@ excludes the focused tab from victim selection — a small, bounded renderer
 change (a single fixed-sender, no engine state). Recommendation: ship (a);
 add (b) only if live use shows focused-idle parking is annoying.
 
+## 4a. Option (b), funded (operator ruling 2026-08-05)
+
+Live use showed it. **The protected set is every session in a VISIBLE WORKSPACE
+PANEL**, not merely the selected one: `workspaceLayout.panels` holds one session
+per panel, so a split shows two or more at once and "the tab I am reading" is not
+the same set as "the tab that is focused". `activeSessionId` rides along for the
+window between a focus change and the layout catching up.
+
+Ruled out: **every open tab.** Tab membership is granted to any descriptor that
+is `!restorable` (`shellState.ts` `foldTabMembership`) and a live session is never
+restorable (`host.ts` `isRestorable` forces false while a process lives) — so
+every live session has a tab, and exempting tabs would exempt every possible
+victim. Both triggers would stop firing and the measured ~223 MB/session reclaim
+would be gone. That is not a weaker policy, it is the feature switched off.
+
+**Shape.** `reportVisibleSessions(sessionIds)` — a fixed one-way preload sender
+(`CH_HOST_VISIBLE_SESSIONS`) on the HOST control plane, sent on every change to
+the visible set, latest-wins at main, cleared with the window. Validated at main
+(`mainDecisions.ts` `parseVisibleSessions`: array-of-strings, per-id length bound,
+capped at `MAX_LIVE_SESSIONS`); a malformed payload yields an empty set, i.e.
+less protection, never a failed IPC.
+
+**Why the security tax is small enough to state in a sentence.** The hint names
+sessions to EXEMPT from an optimisation. It starts nothing, addresses nothing,
+reaches no sidecar, and carries no path, policy, permission id, or engine object;
+ids main does not recognise are inert. The worst a hostile renderer achieves is
+that main declines to park sessions it would otherwise park — it retains its own
+RAM, recoverable by closing a tab or relaunching. This is why it is a control-plane
+sender and NOT sidecar vocabulary: no inbound frame kind, no `checkStrictKeys`
+entry, no schema at the socket boundary. Inventory entry added to
+`app/scripts/hardening-smoke.ts`.
+
+**Protection removes a session from the victim POOL only.** It is still counted
+as live for the cap, so a protected session pushes background sessions out rather
+than raising the effective engine ceiling; if everything over the cap is on
+screen, the sweep parks nothing and re-evaluates later. Not killing a session
+under the user outranks reclaiming its memory.
+
 ## 5. Per-plane change list
 
 | Plane | Change | New inbound surface? |
@@ -286,8 +543,10 @@ add (b) only if live use shows focused-idle parking is annoying.
 | **host/registry.ts** | `ShutdownState` gains `'parked'` (`:85`); `normalizeShutdown` maps a **persisted** `'parked'` → `'crashed'` on read (`:961-969`) so `'parked'` is an in-memory-only state for the current run; `enforceBound` excludes `'parked'` rows from the terminal reap (`:570-609`, filter `:578`); new `markParked()` (like `markCrashed`, `:777-786`, transitions `null → 'parked'`). | no |
 | **host/host.ts** | `onSupervisorEvent` exit branch (`:186-199`): `event.code === PARKED_EXIT_CODE ⇒ registry.markParked` else `markCrashed`; `descriptorFromRow` status map (`:705-709`): treat `'parked'` like `'crashed'` → `'disconnected'` so the tab is kept + `restorable` stays true (`isRestorable` already returns true for a dead row with an `engineSessionId` — and, since 2026-07-26, a transcript that actually exists; a session parked before it ever ran a turn has none, so it reads `disconnected` + NOT restorable, which keeps its tab just the same). | no (host sends no frame) |
 | **main/main.ts** | `createIdleParkDriver` (policy §4) sending `app.park` via `supervisor.send`; started/stopped with the window (mirror `sessionsCatalogDriver`, `:374-388,1562,1591`). The exit→`lifecycle{exited}` synth (`:671-695`) and the terminal-frame persist+evict (`:636-644`) need **no change** — a parked exit rides them exactly like a crash. | no |
-| **preload** | **none.** | — |
-| **renderer** | **none** (unless the operator picks focus-hint (b) in §4, or the optional draft-restore hardening in §3). | — |
+| **preload** | ~~**none.**~~ **2026-08-05:** `reportVisibleSessions` — one fixed one-way sender + `CH_HOST_VISIBLE_SESSIONS` (§4a). | no (host control plane; never reaches a sidecar) |
+| **renderer** | ~~**none**~~ **2026-08-05:** the `'parked'` connection status + its non-terminal/neutral/no-sentence classification (§1a), the `connectPending` + `resolvePendingSubmit('restore')` arms (§3a), the tab's parked visual (§1a), and the visible-pane report (§4a). | — |
+| **main/mainDecisions.ts** | **2026-08-05:** stop minting the duplicate code-less `exited` lifecycle frame that overwrote the classification (§1a); `parseVisibleSessions` boundary validation (§4a). | no |
+| **main/idleParkDriver.ts** | **2026-08-05:** `protectedSessions` excluded from the victim pool on both triggers, still counted for the cap (§4a). | no |
 
 ## 6. Security-baseline additions (the `app.park` tax)
 
@@ -414,6 +673,7 @@ Before ratification-close, prove — through the real path, not this table:
    by main like `session-title` at `main.ts:626-629`) for policy telemetry.
 4. **Focus protection** (§4): accept that a focused-idle tab may be parked
    (restore-on-click), OR fund the one-way renderer→main active-session hint (b).
+   **RE-RESOLVED 2026-08-05 → (b), scoped to visible workspace panels (§4a).**
 5. **Policy knobs** (§4): `MAX_LIVE_ENGINES` value; whether the idle-TTL
    secondary trigger ships in v1 or the cap alone suffices.
 

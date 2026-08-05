@@ -20,7 +20,11 @@
 
 import { randomUUID } from 'node:crypto'
 
-import type { SaveTextErrorCode, SessionDescriptor } from '../shared/hostApi.js'
+import {
+  MAX_LIVE_SESSIONS,
+  type SaveTextErrorCode,
+  type SessionDescriptor,
+} from '../shared/hostApi.js'
 import { MAX_SAVE_NAME_CHARS, MAX_SAVE_TEXT_BYTES } from '../shared/limits.js'
 import {
   PROTOCOL_VERSION,
@@ -44,6 +48,19 @@ export const SIDECAR_RUNTIME_ARGS = [
  * says nothing the renderer needs. A process `exit` and a terminal transport
  * status both surface as a `lifecycle` frame so the renderer learns the session
  * is gone from one frame shape.
+ *
+ * A `status:'exited'` event is deliberately NOT one of them. The supervisor moves
+ * a record to `'exited'` in exactly one place — inside its `child.on('exit')`
+ * handler, immediately AFTER emitting the `exit` event for that same death
+ * (`app/supervisor/supervisor.ts:280-281`) — so this branch could only ever mint
+ * a second, strictly poorer copy of the frame the `exit` arm just produced: same
+ * status, no `exit` payload. Emitting it cost real behaviour rather than mere
+ * duplication: the exit CODE is the only signal that separates an intentional
+ * park from a crash (IDLE-PARK.md §2), the renderer folds lifecycle frames
+ * last-write-wins (`app/renderer/src/connectionState.ts`), and this code-less
+ * copy always landed last — so every parked session was re-labelled a crash one
+ * frame after being classified correctly. Dropping it also stops main running the
+ * terminal persist + replay-evict twice per death.
  */
 export function supervisorEventToServerFrame(
   event: SupervisorEvent,
@@ -58,11 +75,7 @@ export function supervisorEventToServerFrame(
       exit: { code: event.code, signal: event.signal },
     }
   }
-  if (
-    event.status === 'disconnected' ||
-    event.status === 'failed' ||
-    event.status === 'exited'
-  ) {
+  if (event.status === 'disconnected' || event.status === 'failed') {
     return {
       kind: 'lifecycle',
       protocolVersion: PROTOCOL_VERSION,
@@ -212,6 +225,54 @@ export function validateSaveTextRequest(payload: unknown): SaveTextValidation {
   }
   return { ok: true, text, fileName }
 }
+
+/* ------------------------------------------------------------------------- *
+ * IDLE-PARK visible-pane hint (decisions/IDLE-PARK.md §4, option (b), resolved
+ * 2026-08-05).
+ *
+ * The one fact the park policy needs and main structurally cannot derive: which
+ * sessions the user is looking at. Workspace panels are renderer state by design
+ * (`shellState.ts` keeps `activeSessionId` out of the roster so a background frame
+ * can never steal focus), and switching panes bumps no registry stamp, so main's
+ * only view of "visible" is what the renderer tells it.
+ *
+ * Trust posture — this is a HINT, and a deliberately weak one. It names sessions
+ * to EXEMPT from an optimisation; it can start nothing, address nothing, and
+ * carries no path, policy, permission id, or engine object. Ids that match no live
+ * session are inert. The worst a hostile renderer achieves by naming every id it
+ * can invent is that main declines to park sessions it would otherwise park — it
+ * retains its own RAM, recoverable by closing a tab or relaunching. That is why
+ * this rides the host control plane and never becomes sidecar vocabulary: no
+ * inbound frame kind, no engine reachability, no `checkStrictKeys` entry.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Validate a renderer-supplied visible-pane hint at MAIN, the trust boundary.
+ *
+ * Shape-only by intent: ids are matched against the live set at USE time by the
+ * driver, so this rejects the things that would make the payload dangerous as a
+ * data structure rather than trying to authenticate its contents. Non-array,
+ * non-string entries, and anything past `MAX_LIVE_SESSIONS` (already the ceiling
+ * on live engines, so a longer list cannot protect anything real) are dropped
+ * rather than throwing — a malformed hint degrades to less protection, never to a
+ * failed IPC or a park that skips its own gate.
+ */
+export function parseVisibleSessions(payload: unknown): Set<SessionId> {
+  const ids = new Set<SessionId>()
+  if (typeof payload !== 'object' || payload === null) return ids
+  const { sessionIds } = payload as Record<string, unknown>
+  if (!Array.isArray(sessionIds)) return ids
+  for (const candidate of sessionIds) {
+    if (ids.size >= MAX_LIVE_SESSIONS) break
+    if (typeof candidate !== 'string' || candidate.length === 0) continue
+    if (candidate.length > MAX_SESSION_ID_CHARS) continue
+    ids.add(candidate)
+  }
+  return ids
+}
+
+/** A UUID is 36 chars; the bound just stops an unbounded string being retained. */
+const MAX_SESSION_ID_CHARS = 128
 
 export type TranscriptBackfillCandidateSources = {
   sessions: SessionDescriptor[]

@@ -18,6 +18,10 @@
  *     even under the cap. At a typical 2–3 live sessions the cap never fires, so
  *     the TTL is the everyday reclaim.
  *
+ * Both triggers skip the sessions the user can currently SEE (`protectedSessions`
+ * — §4 open decision 4, resolved to option (b) on 2026-08-05): a pane on screen is
+ * never reclaimed out from under its reader.
+ *
  * A refused park is a silent no-op at the sidecar (the gate declined, or the
  * victim already exited → `supervisor.send` throws, caught here): the driver
  * simply re-evaluates on its next trigger.
@@ -66,6 +70,19 @@ export type IdleParkDriverDeps = {
   /** The host's live∪restorable view; the driver filters it to live engines. */
   listSessions: () => SessionDescriptor[]
   /**
+   * IDLE-PARK §4 open decision 4, resolved 2026-08-05 as option (b): the sessions
+   * the user is LOOKING AT are never park victims. Main cannot derive this — the
+   * workspace layout is renderer-only state and merely switching panes bumps no
+   * registry recency — so the renderer reports its visible pane ids over a fixed
+   * one-way channel and main hands the validated set in here.
+   *
+   * Protection removes a session from the VICTIM POOL only; it stays counted as
+   * live for the cap, so a protected session still pushes background sessions out
+   * rather than raising the effective engine ceiling. Absent ⇒ nothing protected
+   * (the pre-2026-08-05 behaviour, and what every unit test that omits it gets).
+   */
+  protectedSessions?: () => ReadonlySet<SessionId>
+  /**
    * Park one session (main sends `app.park` via `supervisor.send`). May throw a
    * `SidecarSendError` if the victim is no longer `ready` (it raced to exit); the
    * driver catches that — a park refusal is expected, not an error.
@@ -88,6 +105,8 @@ export type IdleParkDriverDeps = {
 }
 
 type SessionId = SessionDescriptor['appSessionId']
+
+const EMPTY_PROTECTED: ReadonlySet<SessionId> = new Set()
 
 /**
  * recency = the MOST RECENT of the three stamps (IDLE-PARK.md §4).
@@ -131,15 +150,23 @@ export function createIdleParkDriver(deps: IdleParkDriverDeps): IdleParkDriver {
 
   const selectVictims = (live: SessionDescriptor[]): Set<SessionId> => {
     const victims = new Set<SessionId>()
+    // The user's visible panes are off the table for BOTH triggers. `live` keeps
+    // them (they are real engine processes the cap must still count); only the
+    // candidate pool below drops them, so an over-cap sweep parks the next
+    // least-recent background session instead of the one being read.
+    const protectedIds = deps.protectedSessions?.() ?? EMPTY_PROTECTED
+    const candidates = live.filter(
+      session => !protectedIds.has(session.appSessionId),
+    )
     // Idle-TTL: any live session idle beyond the TTL, regardless of the cap.
     const cutoff = now() - idleTtlMs
-    for (const session of live) {
+    for (const session of candidates) {
       if (recencyOf(session) <= cutoff) victims.add(session.appSessionId)
     }
     // Soft-LRU cap: when over the cap, park the least-recently-active live
     // sessions until at the cap. Least-recent first; the top-K recent are kept.
     if (live.length > maxLiveEngines) {
-      const leastRecentFirst = [...live].sort(
+      const leastRecentFirst = [...candidates].sort(
         (a, b) => recencyOf(a) - recencyOf(b),
       )
       const overCount = live.length - maxLiveEngines

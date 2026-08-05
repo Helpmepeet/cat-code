@@ -567,6 +567,25 @@ describe('composer gate — three reasons the engine cannot take a submit YET', 
     expect(gate.connectPending).toBe(true)
   })
 
+  test('an idle-PARKED session stays editable — the reclaim is not the user’s problem', () => {
+    // IDLE-PARK: the engine behind this session was reclaimed on purpose while it
+    // sat idle. Before this, the park arrived as a terminal `exited` and the
+    // composer went read-only behind an unexpected-stop banner, so continuing a
+    // conversation meant pressing Restart. It is the third connect-pending
+    // reason, not a fourth terminal one.
+    const gate = selectComposerGate(
+      gateInput({
+        connectionStatus: 'parked',
+        connectionInputEnabled: false,
+        logInputEnabled: false,
+      }),
+    )
+    expect(gate.editable).toBe(true)
+    expect(gate.connectPending).toBe(true)
+    expect(gate.turnPending).toBe(false)
+    expect(gate.engineInputEnabled).toBe(false)
+  })
+
   test('no session at all: nothing is editable', () => {
     const gate = selectComposerGate(
       gateInput({ hasSession: false, connectionStatus: 'connecting' }),
@@ -635,6 +654,36 @@ describe('CC-16 submit planning — only the submit waits for the engine', () =>
       type: 'hold',
       text: 'hello',
     })
+  })
+
+  test('a submit into a PARKED session HOLDS rather than being refused', () => {
+    // The user pressed Enter, not Restart. The prompt is held and the drain's
+    // `restore` arm fetches the engine back under it.
+    expect(
+      planSessionSubmit(
+        submitInput({
+          connectionStatus: 'parked',
+          connectionInputEnabled: false,
+          logInputEnabled: false,
+        }),
+      ),
+    ).toEqual({ type: 'hold', text: 'hello' })
+  })
+
+  test('one queued prompt at a time: a second parked-session submit keeps its draft', () => {
+    // The duplicate-delivery guard for the park path: a second Enter while a
+    // prompt is already queued is ignored and leaves the draft in the composer,
+    // so a readiness race cannot turn one intent into two turns.
+    expect(
+      planSessionSubmit(
+        submitInput({
+          connectionStatus: 'parked',
+          connectionInputEnabled: false,
+          logInputEnabled: false,
+          alreadyParked: true,
+        }),
+      ),
+    ).toEqual({ type: 'ignore' })
   })
 
   test('one queued prompt at a time: a second mid-turn submit keeps its draft', () => {
@@ -748,6 +797,16 @@ describe('CC-16 drain — flushed on ready, given back on failure', () => {
         'release',
       )
     }
+  })
+
+  test('a parked session asks for its engine back instead of waiting or failing', () => {
+    // IDLE-PARK: `wait` would hold the prompt forever (nothing is spawning and
+    // no turn will end), and `release` would demand a manual Restart. `restore`
+    // is what makes the reclaim invisible — the drain re-spawns and keeps
+    // holding, then sends off the resumed session's own `ready` frame.
+    expect(resolvePendingSubmit({ status: 'parked', inputEnabled: false })).toBe(
+      'restore',
+    )
   })
 
   test('a released prompt is restored without clobbering a newer draft', () => {

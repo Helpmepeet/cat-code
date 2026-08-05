@@ -43,6 +43,12 @@ import {
 
 export type SupervisorOptions = {
   /**
+   * Grace period before a closed socket is reported as `disconnected`, so an
+   * ordinary process exit is not first announced as a transport failure
+   * (`reportSocketLoss`). Defaults to 250 ms; tests inject a small value.
+   */
+  disconnectSettleMs?: number
+  /**
    * How to launch the sidecar. In dev this is `bun run <sidecar entry>`; in a
    * packaged app it is the `--compile`d standalone binary. Injected so the
    * supervisor stays runtime-agnostic and testable.
@@ -154,8 +160,25 @@ export class SidecarSupervisor {
    */
   private closed = false
 
+  /**
+   * Pending `reportSocketLoss` settles. Held so teardown can drop them: a timer
+   * that fired after `shutdown()` would emit a `disconnected` for a session the
+   * supervisor no longer manages.
+   */
+  private readonly disconnectTimers = new Set<ReturnType<typeof setTimeout>>()
+
+  /**
+   * How long a socket close waits to see whether the child was simply exiting
+   * (`reportSocketLoss`). Long enough to cover the observed few-millisecond gap
+   * between FIN and reap with headroom, short enough that a genuine drop with a
+   * living child is still reported promptly. Injectable so tests need no wall
+   * clock.
+   */
+  private readonly disconnectSettleMs: number
+
   constructor(options: SupervisorOptions) {
     this.options = options
+    this.disconnectSettleMs = options.disconnectSettleMs ?? 250
     // A Unix-domain socket path is bounded by the platform's `sun_path` (104
     // bytes on Darwin, 108 on Linux). The macOS `$TMPDIR` (/var/folders/…) plus
     // a UUID filename overflows it, so default to a SHORT base and use short
@@ -355,6 +378,8 @@ export class SidecarSupervisor {
   /** Kill every sidecar and clear the registry. Terminal: no further spawns. */
   shutdown(): void {
     this.closed = true
+    for (const timer of this.disconnectTimers) clearTimeout(timer)
+    this.disconnectTimers.clear()
     for (const sessionId of [...this.registry.keys()]) {
       this.killSession(sessionId)
     }
@@ -486,9 +511,7 @@ export class SidecarSupervisor {
         return
       }
       record.socket = null
-      if (record.status === 'ready' || record.status === 'connecting') {
-        this.setStatus(record, 'disconnected')
-      }
+      this.reportSocketLoss(record)
       socket.destroy()
     })
 
@@ -497,13 +520,42 @@ export class SidecarSupervisor {
         return // a newer socket already replaced this one
       }
       record.socket = null
-      // F13 — the socket closed. Do NOT keep reporting 'ready'. If the child is
-      // gone the 'exit' handler will move to 'exited'; otherwise reflect the
-      // disconnected state so send() fails fast and a UI/policy can react.
-      if (record.status === 'ready' || record.status === 'connecting') {
-        this.setStatus(record, 'disconnected')
-      }
+      this.reportSocketLoss(record)
     })
+  }
+
+  /**
+   * F13 — the socket closed. Do NOT keep reporting 'ready'. If the child is gone
+   * the 'exit' handler will move to 'exited'; otherwise reflect the disconnected
+   * state so a UI/policy can react.
+   *
+   * SETTLED, not immediate, because a socket close and a process death are the
+   * same event seen twice. A dying child FINs first and is reaped a few
+   * milliseconds later (measured ~7 ms for an idle-park self-exit), so reporting
+   * `disconnected` synchronously announced a transport FAILURE for every ordinary
+   * process exit, and consumers that classify on the exit CODE then had to
+   * overwrite it. Downstream that read as a crash: an intentional idle-park
+   * flashed "This session lost its connection" and a Restart button before
+   * settling (IDLE-PARK.md §1a).
+   *
+   * `record.socket` is cleared SYNCHRONOUSLY above, so `send` still fails fast
+   * during the settle window — only the status EVENT waits. If the child really
+   * is gone, `child.on('exit')` moves the record to `'exited'` inside the window
+   * and the re-check below drops the redundant event; a genuine drop with a
+   * living child still reports, one settle-interval later.
+   */
+  private reportSocketLoss(record: SidecarRecord): void {
+    if (record.status !== 'ready' && record.status !== 'connecting') return
+    const timer = setTimeout(() => {
+      this.disconnectTimers.delete(timer)
+      // Re-checked at fire time: the record may have been replaced, killed, or
+      // already moved to a terminal state by the exit this close belonged to.
+      if (this.registry.get(record.sessionId) !== record) return
+      if (record.status !== 'ready' && record.status !== 'connecting') return
+      this.setStatus(record, 'disconnected')
+    }, this.disconnectSettleMs)
+    timer.unref?.()
+    this.disconnectTimers.add(timer)
   }
 
   private cleanupSocketFile(record: SidecarRecord): void {

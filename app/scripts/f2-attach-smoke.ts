@@ -93,11 +93,14 @@ function supervisorEventToServerFrame(event: SupervisorEvent): ServerFrame | nul
       exit: { code: event.code, signal: event.signal },
     } satisfies LifecycleFrame
   }
-  if (
-    event.status === 'disconnected' ||
-    event.status === 'failed' ||
-    event.status === 'exited'
-  ) {
+  // Kept in step with the production mapper (`app/main/mainDecisions.ts`), which
+  // this harness mirrors rather than imports: `status:'exited'` mints NO frame,
+  // because the supervisor sets that status inside its own `child.on('exit')`
+  // handler right after emitting the `exit` event above, so it could only ever
+  // restate that death without the `exit` payload (CC-28 / IDLE-PARK §1a). This
+  // harness asserts on `ready`/`pong` replay and never on lifecycle frames, so the
+  // sync is for the reader, not for its own result.
+  if (event.status === 'disconnected' || event.status === 'failed') {
     return {
       kind: 'lifecycle',
       protocolVersion: PROTOCOL_VERSION,

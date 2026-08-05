@@ -80,6 +80,7 @@ const CH_HOST_SESSIONS_CATALOG = 'catcode:host:sessions-catalog'
 const CH_HOST_OPEN_HISTORY = 'catcode:host:open-history'
 const CH_HOST_SAVE_TEXT = 'catcode:host:save-text'
 const CH_HOST_EVENT = 'catcode:host:event'
+const CH_HOST_VISIBLE_SESSIONS = 'catcode:host:visible-sessions'
 
 const sendGuard = createRendererIpcGuard()
 
@@ -234,6 +235,15 @@ const bridge: CatCodeBridge = {
   rendererReady(): void {
     sendGuard.assertAllowed({ rendererReady: true })
     ipcRenderer.send(CH_RENDERER_READY)
+  },
+  reportVisibleSessions(sessionIds: SessionId[]): void {
+    // IDLE-PARK §4(b) — a one-way hint naming the panes on screen so main's park
+    // policy skips them. Fixed channel, guarded like every other sender; main
+    // re-validates shape + bounds (`parseVisibleSessions`) because the preload
+    // runs in the renderer's process and is never the boundary.
+    const payload = { sessionIds }
+    sendGuard.assertAllowed(payload)
+    ipcRenderer.send(CH_HOST_VISIBLE_SESSIONS, payload)
   },
 
   // --- Control plane (HC3 — fixed per-method senders; no generic invoke, no

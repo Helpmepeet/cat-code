@@ -409,8 +409,9 @@ export function caretAtHistoryEdge(
  *    goes straight out over `app.submit`.
  *  - `connectPending` — no engine process is attached YET, and the user's own
  *    intent is what starts one: a preview pane (composer focus/pointer-down
- *    runs `engagePreviewPane` → the existing lazy-restore spawn) or an
- *    in-flight spawn (`connecting` / `starting`).
+ *    runs `engagePreviewPane` → the existing lazy-restore spawn), an in-flight
+ *    spawn (`connecting` / `starting`), or an idle-PARKED session, whose spawn is
+ *    asked for when the held prompt drains (`resolvePendingSubmit` → 'restore').
  *  - `turnPending` — attached, but a turn is running. The ENGINE takes one turn
  *    at a time (`AppSessionController.submit` throws on a second,
  *    `src/app-runtime/AppSessionController.ts:139`), so the SUBMIT waits for
@@ -457,7 +458,14 @@ export function selectComposerGate(input: ComposerGateInput): ComposerGate {
     !engineInputEnabled &&
     (input.preview ||
       input.connectionStatus === 'connecting' ||
-      input.connectionStatus === 'starting')
+      input.connectionStatus === 'starting' ||
+      // IDLE-PARK — a parked session is the third way to be "no engine yet, and
+      // the user's own intent starts one". It differs from the two above only in
+      // WHEN the spawn is asked for: a preview pane and an in-flight spawn already
+      // have one coming, a parked session asks for one when the prompt is held
+      // (`resolvePendingSubmit` → 'restore'). Typing must stay open either way, or
+      // the reclaim the user never asked for turns into a composer they cannot use.
+      input.connectionStatus === 'parked')
   // Attached (`ready`) but not accepting input: all but always a turn running,
   // which is what the copy says. The one other producer is a transient skew
   // where the connection store has reduced `ready` and the log store has not
@@ -567,11 +575,23 @@ export function reducePendingSubmitCleared(
  * What to do with a parked prompt on the session's current connection snapshot.
  *  - `send`    — attached and accepting input: flush it through `app.submit`.
  *  - `wait`    — still spawning, or ready but mid-turn: keep holding.
+ *  - `restore` — IDLE-PARK: the engine was reclaimed while the session sat idle,
+ *                so nothing is coming unless we ask. The caller re-spawns through
+ *                the EXISTING restore path and keeps holding; the drain then runs
+ *                the `wait` → `send` course above off the resumed session's own
+ *                `ready` frame. This is the arm that makes park/restore invisible:
+ *                the user pressed Enter, not Restart.
  *  - `release` — terminal: this spawn will never complete. The text goes BACK
  *                into the composer (`restoreDraftWithPending`) with an error,
  *                so a failed reconnect can never eat a prompt silently.
+ *
+ * `restore` is deliberately an OUTCOME rather than something the submit handler
+ * decides once: the drain re-runs on every connection change, so a prompt that
+ * somehow ends up held on a parked session with no restore in flight asks again
+ * on the next pass instead of waiting forever. The caller's own in-flight claim
+ * (`claimLazyRestore`) is what keeps that idempotent.
  */
-export type PendingSubmitOutcome = 'send' | 'wait' | 'release'
+export type PendingSubmitOutcome = 'send' | 'wait' | 'restore' | 'release'
 
 export function resolvePendingSubmit(connection: {
   status: ConnectionSnapshot['status']
@@ -583,6 +603,8 @@ export function resolvePendingSubmit(connection: {
     case 'connecting':
     case 'starting':
       return 'wait'
+    case 'parked':
+      return 'restore'
     case 'dead':
     case 'disconnected':
     case 'failed':

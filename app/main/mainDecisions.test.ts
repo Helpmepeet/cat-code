@@ -8,13 +8,16 @@ import {
   MAX_OUTBOUND_FRAME_BYTES,
   MAX_SAVE_NAME_CHARS,
   MAX_SAVE_TEXT_BYTES,
+  PARKED_EXIT_CODE,
 } from '../shared/limits.js'
+import { MAX_LIVE_SESSIONS } from '../shared/hostApi.js'
 import {
   CWD_TOKEN_TTL_MS,
   SIDECAR_RUNTIME_ARGS,
   createCwdTokenStore,
   createStartupTimers,
   isTerminalLifecycleFrame,
+  parseVisibleSessions,
   sanitizeSaveFileName,
   selectTranscriptBackfillCandidates,
   supervisorEventToServerFrame,
@@ -84,8 +87,8 @@ describe('supervisorEventToServerFrame', () => {
     })
   })
 
-  test('reports every terminal transport status as a lifecycle frame', () => {
-    for (const status of ['disconnected', 'failed', 'exited'] as const) {
+  test('reports a terminal transport status as a lifecycle frame', () => {
+    for (const status of ['disconnected', 'failed'] as const) {
       expect(
         supervisorEventToServerFrame({ type: 'status', sessionId: SID, status }),
       ).toEqual({
@@ -97,12 +100,82 @@ describe('supervisorEventToServerFrame', () => {
     }
   })
 
+  test('says nothing for the exited STATUS — the exit event already said it, with the code', () => {
+    // The supervisor emits `exit` and then moves the record to `'exited'` inside
+    // the same `child.on('exit')` handler, so this status can only ever restate a
+    // death already reported — but without the `exit` payload. That code is the
+    // only thing separating an intentional park from a crash (IDLE-PARK §2), and
+    // this code-less copy always landed LAST into a last-write-wins reducer, so
+    // it re-labelled every parked session a crash one frame after the exit frame
+    // classified it correctly.
+    expect(
+      supervisorEventToServerFrame({
+        type: 'status',
+        sessionId: SID,
+        status: 'exited',
+      }),
+    ).toBeNull()
+  })
+
+  test('the park exit code survives onto the frame the renderer classifies on', () => {
+    expect(
+      supervisorEventToServerFrame({
+        type: 'exit',
+        sessionId: SID,
+        code: PARKED_EXIT_CODE,
+        signal: null,
+      }),
+    ).toEqual({
+      kind: 'lifecycle',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SID,
+      status: 'exited',
+      exit: { code: PARKED_EXIT_CODE, signal: null },
+    })
+  })
+
   test('says nothing for a status that is still on its way up', () => {
     for (const status of ['spawning', 'connecting', 'ready'] as const) {
       expect(
         supervisorEventToServerFrame({ type: 'status', sessionId: SID, status }),
       ).toBeNull()
     }
+  })
+})
+
+describe('parseVisibleSessions — the IDLE-PARK visible-pane hint at the boundary', () => {
+  test('keeps the reported ids', () => {
+    expect([...parseVisibleSessions({ sessionIds: ['a', 'b'] })]).toEqual([
+      'a',
+      'b',
+    ])
+  })
+
+  test('a malformed payload protects nothing instead of throwing', () => {
+    // Degrading to "protect nothing" is the safe direction: this hint may only
+    // ever SUPPRESS a park, so an empty set means the policy runs exactly as it
+    // did before the hint existed.
+    for (const payload of [null, undefined, 'x', 42, [], {}, { sessionIds: 'a' }]) {
+      expect(parseVisibleSessions(payload).size).toBe(0)
+    }
+  })
+
+  test('drops non-string, empty, and absurdly long entries but keeps the rest', () => {
+    const ids = parseVisibleSessions({
+      sessionIds: [1, null, '', 'x'.repeat(500), { evil: true }, 'good'],
+    })
+    expect([...ids]).toEqual(['good'])
+  })
+
+  test('cannot be used to retain an unbounded set', () => {
+    const ids = parseVisibleSessions({
+      sessionIds: Array.from({ length: MAX_LIVE_SESSIONS * 10 }, (_v, i) => `s${i}`),
+    })
+    expect(ids.size).toBe(MAX_LIVE_SESSIONS)
+  })
+
+  test('a duplicated id is one protection, not many', () => {
+    expect(parseVisibleSessions({ sessionIds: ['a', 'a', 'a'] }).size).toBe(1)
   })
 })
 
