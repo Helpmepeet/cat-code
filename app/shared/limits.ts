@@ -38,6 +38,20 @@ export const RATE_WINDOW_MS = 1_000
  */
 export const MAX_PROMPT_BYTES = 96 * 1024
 
+/**
+ * Max prompts that may be waiting for the RUNNING turn at once (T7).
+ *
+ * A submit arriving mid-turn is handed to the engine's command queue instead of
+ * being refused, so the per-frame and per-window caps above no longer bound what
+ * ACCUMULATES: they bound arrival rate, and the refusal used to bound depth. A
+ * flooding renderer could otherwise pile unbounded prompt text into a queue the
+ * next tool round injects into the turn's context wholesale. This is the depth
+ * bound. Well above anything a person types during one response (the terminal's
+ * own queue is unbounded because its only writer is a keyboard), and combined
+ * with `MAX_PROMPT_BYTES` it caps the accumulation at ~3 MiB.
+ */
+export const MAX_QUEUED_PROMPTS = 32
+
 /** Max length for free-text fields (abort reason, ping nonce), in chars. */
 export const MAX_TEXT_FIELD_CHARS = 4_096
 

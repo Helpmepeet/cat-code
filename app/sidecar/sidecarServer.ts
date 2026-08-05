@@ -75,6 +75,7 @@ import {
   MAX_HISTORY_REPLAY_FRAMES,
   MAX_OUTBOUND_FRAME_BYTES,
   MAX_PROMPT_BYTES,
+  MAX_QUEUED_PROMPTS,
   MAX_QUESTION_ANSWER_CHARS,
   MAX_SUGGESTION_SELECTIONS,
   MAX_TEXT_FIELD_CHARS,
@@ -379,6 +380,12 @@ export class SidecarServer {
   /** A non-QueryEngine adapter completed without durable-input acknowledgement. */
   private taskNotificationAwaitingDurableAcceptance = false
   /**
+   * Queued prompts already requeued once after a turn refused them. Bounds the
+   * boundary-drain retry to one attempt per prompt; entries are removed as soon
+   * as a turn durably accepts the prompt, so this only ever holds failures.
+   */
+  private readonly retriedQueuedPromptKeys = new Set<string>()
+  /**
    * IDLE-PARK (decisions/IDLE-PARK.md §3, R2-F2) — the parking latch. Set
    * synchronously in `handlePark` once the gate passes; a submit arriving AFTER
    * the latch is rejected `session_disconnected` before `activeTurn` is touched,
@@ -464,7 +471,7 @@ export class SidecarServer {
     // straight to this sidecar, so this process owns the idle wake-up for its
     // single engine session. Never submit from this synchronous listener.
     this.unsubscribeTaskNotificationQueue = subscribeToCommandQueue(() => {
-      this.scheduleTaskNotificationDrain()
+      this.scheduleBoundaryDrain()
     })
 
     // C3 (PERMISSION-BOUNDARY.md §4) — emit a fresh snapshot on EVERY live
@@ -521,7 +528,7 @@ export class SidecarServer {
     // connecting) must not linger forever — arm the idle timer now. A real
     // supervisor attach cancels it well within the (generous) TTL.
     this.armIdleTimer()
-    this.scheduleTaskNotificationDrain()
+    this.scheduleBoundaryDrain()
 
     // Catalog owner (decision #4): the sidecar no longer enumerates or broadcasts
     // the sessions catalog. A single main-supervised worker owns it and delivers
@@ -1070,12 +1077,7 @@ export class SidecarServer {
 
   /** True when the main parent queue has a desktop-deliverable worker result. */
   private hasQueuedParentTaskNotification(): boolean {
-    return getCommandQueueSnapshot().some(
-      command =>
-        command.mode === 'task-notification' &&
-        command.agentId === undefined &&
-        typeof command.value === 'string',
-    )
+    return getCommandQueueSnapshot().some(isDeliverableParentTaskNotification)
   }
 
   /**
@@ -1086,16 +1088,23 @@ export class SidecarServer {
     return getCommandQueueSnapshot().some(isDeliverableParentPrompt)
   }
 
+  private countQueuedParentPrompts(): number {
+    return getCommandQueueSnapshot().filter(isDeliverableParentPrompt).length
+  }
+
   /**
    * Schedule rather than start immediately: queue signals are synchronous and
    * AppSessionController announces turn completion before its own finalizer has
    * cleared its abort controller. The sidecar turn finalizer is the safe edge.
    *
    * The awaiting-durable-acceptance latch is NOT checked here, only inside
-   * `drainOneTaskNotification`: it holds back worker results, and a queued human
-   * prompt is the very thing that clears it (`handleSubmit`).
+   * `drainOneTaskNotification`: it holds back worker RESULTS specifically, and
+   * every path out of a queued human prompt supplies the durable boundary it is
+   * waiting for. Either the running turn consumed the prompt (so that turn
+   * persisted it), or it did not and `drainOneQueuedPrompt` below starts a human
+   * turn for it right here, ahead of any worker result.
    */
-  private scheduleTaskNotificationDrain(): void {
+  private scheduleBoundaryDrain(): void {
     if (this.closed) return
     if (this.taskNotificationDrainScheduled) return
     this.taskNotificationDrainScheduled = true
@@ -1133,6 +1142,16 @@ export class SidecarServer {
     const command = dequeue(isDeliverableParentPrompt)
     if (!command || typeof command.value !== 'string') return false
 
+    // The user already watched this leave the composer and saw it in the
+    // transcript, so a turn that never accepts it must not end in silence.
+    // `onInputPersisted` is the durable-acceptance signal: past it the turn
+    // genuinely ran, and a later rejection is an ordinary turn failure the
+    // engine reports itself. Before it, nothing took the prompt, so requeue for
+    // the next boundary. Retry ONCE per prompt: `startTurn`'s finalizer
+    // schedules the next drain, so an unconditional requeue on a turn that
+    // always rejects would spin at microtask speed.
+    const retryKey = command.uuid ?? command.value
+    let persisted = false
     const started = this.startTurn({
       prompt: command.value,
       ...(command.uuid !== undefined ? { uuid: command.uuid } : {}),
@@ -1140,9 +1159,27 @@ export class SidecarServer {
       generateTitle: true,
       // Broadcast already happened at `enqueueMidTurnPrompt`.
       announcePrompt: false,
+      onInputPersisted: () => {
+        persisted = true
+        this.retriedQueuedPromptKeys.delete(retryKey)
+      },
+      onSettled: error => {
+        if (!error || persisted) return
+        if (this.retriedQueuedPromptKeys.has(retryKey)) {
+          this.log(
+            `[sidecar] queued prompt was refused twice; giving up: ${error.message}`,
+          )
+          return
+        }
+        this.retriedQueuedPromptKeys.add(retryKey)
+        enqueue(command)
+      },
     })
     if (!started) {
-      // Put it back rather than dropping it; the next boundary retries.
+      // Put it back rather than dropping it; the next boundary retries. Note
+      // this appends, so with several queued prompts a refused one loses its
+      // place. Unreachable today: nothing awaits between the gate above and
+      // `startTurn`, so the two conditions it refuses on cannot have changed.
       enqueue(command)
     }
     return started
@@ -1166,12 +1203,7 @@ export class SidecarServer {
 
     // Re-read at drain time. A live QueryEngine turn may have consumed this
     // notification through its normal mid-turn queue drain after we scheduled.
-    const command = dequeue(
-      queued =>
-        queued.mode === 'task-notification' &&
-        queued.agentId === undefined &&
-        typeof queued.value === 'string',
-    )
+    const command = dequeue(isDeliverableParentTaskNotification)
     if (!command || typeof command.value !== 'string') return
     const reservationTaskId = reserveTaskNotification(command)
     let persisted = false
@@ -1265,7 +1297,7 @@ export class SidecarServer {
       })
     } catch (error) {
       this.activeTurn = false
-      this.scheduleTaskNotificationDrain()
+      this.scheduleBoundaryDrain()
       return false
     }
 
@@ -1284,7 +1316,7 @@ export class SidecarServer {
             this.broadcastSessionTitle(title),
           )
         }
-        this.scheduleTaskNotificationDrain()
+        this.scheduleBoundaryDrain()
       })
     return true
   }
@@ -1442,6 +1474,39 @@ export class SidecarServer {
     // cross-session leak; `agentId: undefined` addresses the main thread, which
     // is what the drain's `isMainThread` branch reads.
     if (this.activeTurn) {
+      // T7 depth bound. The per-frame and per-window caps above bound arrival
+      // RATE; the old refusal was what bounded how much could pile up. Queueing
+      // restores the terminal's behaviour, so the depth needs its own cap or a
+      // flooding renderer fills the running turn's context wholesale.
+      if (this.countQueuedParentPrompts() >= MAX_QUEUED_PROMPTS) {
+        this.sendError(
+          connection,
+          message.requestId,
+          'bad_request',
+          'Too many messages are already waiting for this response.',
+          false,
+        )
+        return
+      }
+      // Fail closed rather than dropping a field we just validated. A goal
+      // snapshot is session identity applied by `controller.submit`, and the
+      // queue has nowhere to carry it: the engine's drain turns a queued command
+      // into an attachment, not a submit. No renderer sends one on this path
+      // today, so this rejects nothing that exists; it exists so the first
+      // caller that does gets told, instead of losing it silently.
+      if (goalSnapshot !== undefined) {
+        this.sendError(
+          connection,
+          message.requestId,
+          'bad_request',
+          // Phrased as an identifier diagnostic, like the `goalSnapshot is not
+          // a valid ThreadGoal` rejection above it: no legitimate renderer takes
+          // this branch, so it addresses whoever wrote the caller, not a reader.
+          'goalSnapshot cannot ride a submit sent during a running turn',
+          false,
+        )
+        return
+      }
       this.enqueueMidTurnPrompt(message.prompt, message.options?.isMeta)
       return
     }
@@ -1755,7 +1820,7 @@ export class SidecarServer {
     })
     if (result.changed) {
       this.broadcastWorkspaceTrustSnapshot()
-      this.scheduleTaskNotificationDrain()
+      this.scheduleBoundaryDrain()
     }
   }
 
@@ -3367,6 +3432,15 @@ const MAX_ERROR_MESSAGE_CHARS = 1_000
 function isDeliverableParentPrompt(command: QueuedCommand): boolean {
   return (
     command.mode === 'prompt' &&
+    command.agentId === undefined &&
+    typeof command.value === 'string'
+  )
+}
+
+/** Its twin for worker results: same addressing rule, different mode. */
+function isDeliverableParentTaskNotification(command: QueuedCommand): boolean {
+  return (
+    command.mode === 'task-notification' &&
     command.agentId === undefined &&
     typeof command.value === 'string'
   )

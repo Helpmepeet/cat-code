@@ -33,6 +33,7 @@ import {
   MAX_FRAME_BYTES,
   MAX_OUTBOUND_FRAME_BYTES,
   MAX_PROMPT_BYTES,
+  MAX_QUEUED_PROMPTS,
   MAX_TEXT_FIELD_CHARS,
 } from '../shared/limits.js'
 import {
@@ -1141,6 +1142,139 @@ test('a queued prompt no tool round drained still gets its own turn, announced o
   expect(secondCount).toBe(1)
 
   releases.shift()?.()
+})
+
+test('T7 — the mid-turn queue has a DEPTH cap, not just a rate cap', async () => {
+  // Refusing a mid-turn submit used to bound how much could pile up. Queueing
+  // removed that bound, so a flooding renderer could fill the running turn's
+  // context wholesale. Depth is capped explicitly instead.
+  let release: (() => void) | undefined
+  const controller = new AppSessionController({
+    async *runTurn({ options }) {
+      options?.onInputPersisted?.()
+      await new Promise<void>(resolve => {
+        release = resolve
+      })
+      yield buildProbeToolUseMessage()
+    },
+  })
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'turn', prompt: 'start' }),
+  )
+  await new Promise(resolve => setTimeout(resolve, 0))
+
+  for (let i = 0; i < MAX_QUEUED_PROMPTS; i += 1) {
+    server.handleData(
+      conn,
+      clientFrame({ type: 'app.submit', requestId: `q${i}`, prompt: `queued ${i}` }),
+    )
+  }
+  expect(getCommandQueueSnapshot()).toHaveLength(MAX_QUEUED_PROMPTS)
+  expect(received.filter(frame => frame.kind === 'error')).toHaveLength(0)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'overflow', prompt: 'one too many' }),
+  )
+  const errors = received.filter(frame => frame.kind === 'error')
+  expect(errors).toHaveLength(1)
+  expect(getCommandQueueSnapshot()).toHaveLength(MAX_QUEUED_PROMPTS)
+  // The refusal is readable, and it never reached the transcript.
+  const overflowed = received.some(
+    frame =>
+      frame.kind === 'event' &&
+      frame.event.type === 'message' &&
+      frame.event.message.type === 'user' &&
+      frame.event.message.message?.content === 'one too many',
+  )
+  expect(overflowed).toBe(false)
+
+  release?.()
+})
+
+test('T4 — a mid-turn submit carrying a goalSnapshot is refused, not silently stripped', async () => {
+  // The queue turns a command into an ATTACHMENT, not a submit, so there is
+  // nowhere for session identity to ride. Validating the field and then dropping
+  // it would be the worst of both.
+  let release: (() => void) | undefined
+  const controller = new AppSessionController({
+    async *runTurn({ options }) {
+      options?.onInputPersisted?.()
+      await new Promise<void>(resolve => {
+        release = resolve
+      })
+      yield buildProbeToolUseMessage()
+    },
+  })
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'turn', prompt: 'start' }),
+  )
+  await new Promise(resolve => setTimeout(resolve, 0))
+
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'app.submit',
+      requestId: 'mid',
+      prompt: 'with a goal',
+      options: { goalSnapshot: { threadId: 'thread-1', name: 'Goal' } },
+    }),
+  )
+  expect(received.filter(frame => frame.kind === 'error')).toHaveLength(1)
+  expect(getCommandQueueSnapshot()).toHaveLength(0)
+
+  release?.()
+})
+
+test('a queued prompt a turn refuses is retried once, then given up loudly', async () => {
+  // The user watched this leave the composer and saw it in the transcript, so a
+  // turn that never durably accepts it must not end in silence. One retry, not
+  // an unbounded one: `startTurn`'s finalizer schedules the next drain, so an
+  // always-failing turn would otherwise spin at microtask speed.
+  const attempts: string[] = []
+  const logs: string[] = []
+  const controller = new AppSessionController({
+    async *runTurn({ prompt, options }) {
+      attempts.push(String(prompt))
+      if (String(prompt) === 'doomed') throw new Error('engine refused')
+      options?.onInputPersisted?.()
+      yield buildProbeToolUseMessage()
+    },
+  })
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
+    controller,
+    log: line => logs.push(line),
+  })
+  const { socket } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'turn', prompt: 'first' }),
+  )
+  await waitFor(() => attempts.length === 1)
+  enqueue({ mode: 'prompt', value: 'doomed', uuid: crypto.randomUUID() })
+
+  await waitFor(() => attempts.length === 3, 2000)
+  // One initial attempt plus exactly one retry, then it stops.
+  expect(attempts.slice(1)).toEqual(['doomed', 'doomed'])
+  await new Promise(resolve => setTimeout(resolve, 10))
+  expect(attempts).toHaveLength(3)
+  expect(getCommandQueueSnapshot()).toHaveLength(0)
+  expect(logs.some(line => line.includes('giving up'))).toBe(true)
+  server.close()
 })
 
 test('a queued prompt prevents idle park before the drain runs', () => {
