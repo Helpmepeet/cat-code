@@ -18,6 +18,7 @@ import { prepareDevElectron } from './prepare-dev-electron.js'
 import {
   describeChildExit,
   describeReadinessFailure,
+  isCleanExit,
   resolveLauncherExitCode,
   terminateChild,
   waitForRendererReady,
@@ -147,7 +148,9 @@ async function shutdown(exitCode: number): Promise<void> {
 // status, so a main-process crash at startup can no longer be read as success.
 electron.child.on('exit', (code, signal) => {
   const exit: ChildExit = { code, signal }
-  if (exit.code !== 0 || exit.signal !== null) {
+  // Only when it ended on its OWN: a teardown we started signalled it, so its
+  // non-zero status there is the expected outcome, not something to report.
+  if (!shuttingDown && !isCleanExit(exit)) {
     console.error(`[dev] ${describeChildExit(electron.name, exit)}`)
   }
   void shutdown(resolveLauncherExitCode(exit))

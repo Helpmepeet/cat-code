@@ -3,6 +3,11 @@ import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import {
+  describeReadinessFailure,
+  waitForRendererReady,
+  type ChildExit,
+} from './devLauncher.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const appRoot = join(here, '..')
@@ -57,7 +62,22 @@ async function main(): Promise<void> {
     )
     viteProcess.stdout?.on('data', chunk => process.stdout.write(chunk))
     viteProcess.stderr?.on('data', chunk => process.stderr.write(chunk))
-    await waitForServer(rendererUrl, 15_000)
+    const readiness = await waitForRendererReady({
+      probe: async () => {
+        try {
+          await fetch(rendererUrl)
+          return true
+        } catch {
+          return false
+        }
+      },
+      childExit: viteExit,
+      now: () => Date.now(),
+      sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+      timeoutMs: 15_000,
+      pollMs: 150,
+    })
+    if (!readiness.ok) throw new Error(describeReadinessFailure(readiness, rendererUrl))
 
     let sawReady = false
     const electron = spawn(electronBin, ['--require', driverOut, appRoot], {
@@ -127,17 +147,16 @@ function terminateChild(child: ReturnType<typeof spawn>): Promise<void> {
   })
 }
 
-async function waitForServer(url: string, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    try {
-      await fetch(url)
-      return
-    } catch {
-      await new Promise(resolve => setTimeout(resolve, 150))
-    }
-  }
-  throw new Error(`Vite did not come up at ${url}`)
+/**
+ * Our Vite child's exit, or null while it runs. `strictPort` means a leftover
+ * server from an earlier run makes OUR child exit while the stale one keeps
+ * answering the probe, so readiness has to follow the child we own.
+ */
+function viteExit(): ChildExit | null {
+  const vite = viteProcess
+  if (!vite) return null
+  if (vite.exitCode === null && vite.signalCode === null) return null
+  return { code: vite.exitCode, signal: vite.signalCode }
 }
 
 function waitForExit(child: ReturnType<typeof spawn>, timeoutMs: number): Promise<number | null> {
