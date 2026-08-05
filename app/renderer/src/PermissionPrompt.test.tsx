@@ -487,7 +487,7 @@ function focusTarget(owner: 'host' | 'control' | null) {
 }
 
 test('the four shortcuts are live only where no control owns the key', () => {
-  // The defect: focus sits in the composer textarea after sending, so the guard
+  // The defect: focus sits in the composer field after sending, so the guard
   // bailed and all four advertised keys did nothing.
   expect(permissionKeysAreLive(focusTarget('control'))).toBe(false)
   // The trap: the card's own <section> is role="alertdialog", which IS in the

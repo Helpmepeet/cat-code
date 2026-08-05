@@ -132,11 +132,11 @@ import {
   planSessionSubmit,
   reduceHistoryPushed,
   reducePasteAdded,
-  reducePasteRemoved,
   reducePasteStateForDraftWrite,
   reducePendingSubmitCleared,
   reducePendingSubmitHeld,
   reduceSessionPastesCleared,
+  removePasteOccurrence,
   reduceTransportErrorCleared,
   reduceTransportErrorSet,
   resolvePendingSubmit,
@@ -2149,10 +2149,22 @@ export function App() {
   )
 
   const removeSessionPaste = useCallback(
-    (sessionId: SessionId, currentDraft: string, entry: PasteEntry): void => {
-      setPasteState(prev => reducePasteRemoved(prev, sessionId, entry.id))
+    (
+      sessionId: SessionId,
+      currentDraft: string,
+      entry: PasteEntry,
+      at: number,
+    ): void => {
       const token = formatPasteRef(entry.id, entry.numLines)
-      setSessionPrompt(sessionId, currentDraft.replace(token, ''))
+      // Cut the clicked occurrence only, and let the ordinary 'edit' prune
+      // decide the stored text's fate: it drops the entry when no reference is
+      // left, and keeps it while a duplicate token still stands. Dropping the
+      // entry here outright would strand that surviving pill with nothing
+      // behind it, so it would submit as the literal token.
+      setSessionPrompt(
+        sessionId,
+        removePasteOccurrence(currentDraft, token, at),
+      )
     },
     [setSessionPrompt],
   )
@@ -2697,11 +2709,12 @@ export function App() {
 	                selectionEnd,
 	              )
 	            }
-	            onRemovePaste={entry =>
+	            onRemovePaste={(entry, at) =>
 	              removeSessionPaste(
 	                sessionId,
 	                selectPromptDraft(promptDrafts, sessionId),
 	                entry,
+	                at,
 	              )
 	            }
 		            transcript={panelPreviewTranscript ?? transcript}
@@ -4036,19 +4049,36 @@ export function SessionPane({
       if (focusFirstComposerFace(actionBarRef.current)) event.preventDefault()
       return
     }
-    // Enter submits; Shift/Alt/Meta+Enter insert a newline (the multi-line
-    // textarea does NOT submit a form on Enter the way the old `<input>` did, so
-    // submit is driven explicitly via the form's own `requestSubmit`). Parity:
-    // Shift+Enter and Alt/Meta+Enter → newline (`src/hooks/useTextInput.ts:257-264`).
+    // Enter submits; Shift/Alt/Meta+Enter insert a newline (the field does not
+    // submit a form on Enter the way the old `<input>` did, so submit is driven
+    // explicitly via the form's own `requestSubmit`). Parity: Shift+Enter and
+    // Alt/Meta+Enter → newline (`src/hooks/useTextInput.ts:257-264`).
+    //
+    // The newline is written into the DRAFT rather than left to the browser.
+    // Letting the default run was right for a textarea, but a contentEditable
+    // answers a modified Enter by authoring block containers (`<div>`/`<p>`),
+    // and the serializer emits a newline only for `<br>` — so the line break
+    // would render once and then vanish from the draft. Shift+Enter usually
+    // does produce a `<br>`; Alt/Meta+Enter is where it silently did not.
     if (event.key === 'Enter') {
-      if (event.shiftKey || event.altKey || event.metaKey) return // newline (default)
+      const el = composerRef.current
+      if (event.shiftKey || event.altKey || event.metaKey) {
+        if (!el) return
+        event.preventDefault()
+        const start = el.selectionStart
+        const end = el.selectionEnd
+        pendingCaretRef.current = { base: end, prevLength: prompt.length }
+        setPrompt(`${prompt.slice(0, start)}\n${prompt.slice(end)}`)
+        return
+      }
       event.preventDefault()
       event.currentTarget.requestSubmit()
       return
     }
     // Backspace immediately after a `[Pasted text #N]` token deletes the WHOLE
-    // token in one keystroke — the atomic-pill delete a contentEditable would get
-    // for free. A genuine 'edit' write, so the paste entry is pruned with it.
+    // token in one keystroke. `contenteditable="false"` makes browsers mostly do
+    // this already; keeping it explicit makes the DRAFT the single source of the
+    // edit. A genuine 'edit' write, so the paste entry is pruned with it.
     if (event.key === 'Backspace') {
       const el = composerRef.current
       if (el && el.selectionStart === el.selectionEnd) {
@@ -4799,8 +4829,10 @@ type SessionPaneProps = {
     selectionStart?: number,
     selectionEnd?: number,
   ) => void
-  /** Remove a collapsed paste (strip its token + drop the stored content). */
-  onRemovePaste: (entry: PasteEntry) => void
+  /** Remove ONE collapsed paste: cut the occurrence starting at `at` (the live
+   * position of the pill the user clicked, so a duplicated token removes the
+   * right one). Pruning drops the stored text once no reference is left. */
+  onRemovePaste: (entry: PasteEntry, at: number) => void
   transcript: TranscriptState
   transportError: string | null
 }

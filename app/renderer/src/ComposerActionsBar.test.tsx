@@ -770,7 +770,7 @@ test('the attach button reflects the disabled gate (echo-only stub)', () => {
 // ── Feature #4: keyboard entry + roving faces ─────────────────────────────────
 // Static-markup only (this package has no keydown-simulation harness): assert the
 // faces are focusable with correct roles + roving tabindex. Live keyboard behavior
-// (arrow roving, ArrowDown-to-open, Escape-to-textarea, the App.tsx entry points)
+// (arrow roving, ArrowDown-to-open, Escape-to-composer, the App.tsx entry points)
 // is operator-GUI verified — SSR cannot fire a keydown.
 
 test('the action bar is an ARIA toolbar (keyboard-navigable face group)', () => {

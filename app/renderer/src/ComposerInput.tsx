@@ -24,6 +24,8 @@ import {
 } from 'react'
 import {
   buildPastePill,
+  composerOffsetFromPoint,
+  composerOffsetOf,
   composerSelectionOffsets,
   placeComposerSelection,
   readComposerText,
@@ -49,7 +51,8 @@ type ComposerInputProps = {
   onCompositionStart: () => void
   onFocus: () => void
   onPointerDown: () => void
-  onRemovePaste: (entry: PasteEntry) => void
+  /** `at` is the live start offset of the occurrence the user clicked. */
+  onRemovePaste: (entry: PasteEntry, at: number) => void
   onValueChange: (next: string) => void
   placeholder: string
   /** Collapsed pastes for this session, oldest first. */
@@ -80,6 +83,19 @@ export function ComposerInput({
 }: ComposerInputProps) {
   const rootRef = useRef<HTMLDivElement>(null)
   const isComposingRef = useRef(false)
+  // A pill's DOM listeners are attached once, when the field is rebuilt, and
+  // ordinary typing deliberately does NOT rebuild it — that is the whole reason
+  // the nodes survive keystrokes. So a listener that closed over the props of
+  // the render that built it would keep acting on a draft frozen at that
+  // moment: removing a pill would write back text from before everything the
+  // user typed afterwards. These refs are what the listeners read instead, and
+  // they are refreshed on every render.
+  const onRemovePasteRef = useRef(onRemovePaste)
+  onRemovePasteRef.current = onRemovePaste
+  const pastesRef = useRef(pastes)
+  pastesRef.current = pastes
+  const onValueChangeRef = useRef(onValueChange)
+  onValueChangeRef.current = onValueChange
   // Last known caret, so a handler that runs when the selection has already
   // moved out of the field (a pill's own click) still has a sane offset.
   const caretRef = useRef(0)
@@ -153,6 +169,9 @@ export function ComposerInput({
     .map(entry => `${entry.id}:${entry.content.length}`)
     .join(',')
   const renderedPastesRef = useRef<string | null>(null)
+  // Where the caret belongs after an edit this component itself made (a drop).
+  // The pane owns the same idea for the edits IT makes, through the handle.
+  const pendingCaretRef = useRef<number | null>(null)
   useLayoutEffect(() => {
     const root = rootRef.current
     if (!root) return
@@ -174,20 +193,37 @@ export function ComposerInput({
           charCount: entry ? entry.content.length : null,
           onPreviewOpen: () => openPreview(segment.id, 'hover'),
           onPreviewClose: closePreviewSoon,
-          onRemove: () => {
-            if (entry) onRemovePaste(entry)
+          onRemove: node => {
+            const live = rootRef.current
+            const current = pastesRef.current.find(item => item.id === segment.id)
+            if (!live || !current) return
+            // Which occurrence this pill IS, read from the live DOM. Typing
+            // before it moves it, so a position captured at build time would
+            // point at the wrong text by the time the button is clicked.
+            const parent = node.parentNode
+            const at = parent
+              ? composerOffsetOf(
+                  live,
+                  parent,
+                  Array.prototype.indexOf.call(parent.childNodes, node),
+                )
+              : 0
+            onRemovePasteRef.current(current, at)
           },
         })
       },
       pastesChanged,
+      id => pastes.some(entry => entry.id === id),
     )
     // A rewrite replaced every node, so a caret that was inside the field is
     // gone. Put it back where it was; a programmatic edit that wants it
     // elsewhere sets it afterwards through the handle.
-    if (rewritten && selection && document.activeElement === root) {
-      placeComposerSelection(root, selection.start, selection.end)
-    }
-  }, [closePreviewSoon, onRemovePaste, openPreview, pastes, pastesSignature, value])
+    const pendingCaret = pendingCaretRef.current
+    pendingCaretRef.current = null
+    if (!rewritten || document.activeElement !== root) return
+    if (pendingCaret !== null) placeComposerSelection(root, pendingCaret, pendingCaret)
+    else if (selection) placeComposerSelection(root, selection.start, selection.end)
+  }, [closePreviewSoon, openPreview, pastes, pastesSignature, value])
 
   // Park the caret on a pill and its preview opens, the same as hovering it.
   const syncCaretPreview = (): void => {
@@ -209,6 +245,32 @@ export function ComposerInput({
     const root = rootRef.current
     if (!root || isComposingRef.current) return
     onValueChange(readComposerText(root))
+  }
+
+  /**
+   * A contentEditable accepts a rich drop natively, which would put links,
+   * images, and styled nodes into a field whose draft is a plain string. The
+   * serializer would then read only their text, and the rebuild is skipped
+   * while serialized text matches the draft, so the foreign DOM would sit there
+   * visible and unaccounted for. Same rule as paste: take the plain text, place
+   * it ourselves, let nothing else in.
+   */
+  const handleDrop = (event: React.DragEvent<HTMLDivElement>): void => {
+    event.preventDefault()
+    if (!editable) return
+    const root = rootRef.current
+    if (!root) return
+    const text = event.dataTransfer.getData('text')
+    if (!text) return
+    const at =
+      composerOffsetFromPoint(root, event.clientX, event.clientY) ??
+      caretRef.current
+    const bounded = Math.max(0, Math.min(value.length, at))
+    pendingCaretRef.current = bounded + text.length
+    root.focus()
+    onValueChangeRef.current(
+      value.slice(0, bounded) + text + value.slice(bounded),
+    )
   }
 
   const preview = previewId === null
@@ -271,6 +333,8 @@ export function ComposerInput({
           isComposingRef.current = true
           onCompositionStart()
         }}
+        onDragOver={event => event.preventDefault()}
+        onDrop={handleDrop}
         onFocus={() => {
           onFocus()
           syncCaretPreview()

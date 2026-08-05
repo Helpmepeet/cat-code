@@ -146,29 +146,46 @@ export type ComposerSegment =
  * Cut a draft into the runs the composer renders: literal text, and each
  * `[Pasted text #N]` token as a pill. Adjacent tokens produce adjacent pills
  * with no empty text run between them.
+ *
+ * `hasEntry` is what keeps token SYNTAX from being mistaken for a real paste. A
+ * user can type or paste the characters `[Pasted text #9]` with nothing held
+ * aside behind them; rendering that as a pill would give them a chip whose
+ * preview is empty and whose remove button does nothing. Tokens with no backing
+ * entry stay literal text, and merge into the surrounding run.
  */
-export function splitComposerText(text: string): ComposerSegment[] {
+export function splitComposerText(
+  text: string,
+  hasEntry: (id: number) => boolean = () => true,
+): ComposerSegment[] {
   const segments: ComposerSegment[] = []
+  let pending = ''
   let cursor = 0
+  const flush = (): void => {
+    if (pending) segments.push({ kind: 'text', text: pending })
+    pending = ''
+  }
   // A fresh regex per call: PASTE_REF_RE is global, so its lastIndex is shared.
   const pattern = new RegExp(PASTE_REF_RE.source, 'g')
   let match = pattern.exec(text)
   while (match) {
-    if (match.index > cursor) {
-      segments.push({ kind: 'text', text: text.slice(cursor, match.index) })
+    pending += text.slice(cursor, match.index)
+    const id = Number(match[1])
+    if (hasEntry(id)) {
+      flush()
+      segments.push({
+        kind: 'pill',
+        token: match[0],
+        id,
+        numLines: Number(match[2] ?? 0),
+      })
+    } else {
+      pending += match[0]
     }
-    segments.push({
-      kind: 'pill',
-      token: match[0],
-      id: Number(match[1]),
-      numLines: Number(match[2] ?? 0),
-    })
     cursor = match.index + match[0].length
     match = pattern.exec(text)
   }
-  if (cursor < text.length) {
-    segments.push({ kind: 'text', text: text.slice(cursor) })
-  }
+  pending += text.slice(cursor)
+  flush()
   return segments
 }
 
@@ -181,7 +198,9 @@ export type PastePillOptions = {
   charCount: number | null
   onPreviewOpen: () => void
   onPreviewClose: () => void
-  onRemove: () => void
+  /** Handed its OWN node, so the caller can locate the live occurrence it
+   * stands for rather than a position captured when the pill was built. */
+  onRemove: (node: HTMLElement) => void
 }
 
 const PILL_CLASS =
@@ -249,7 +268,7 @@ export function buildPastePill(options: PastePillOptions): HTMLElement {
   remove.addEventListener('click', event => {
     event.preventDefault()
     event.stopPropagation()
-    options.onRemove()
+    options.onRemove(pill)
   })
   pill.appendChild(remove)
 
@@ -271,10 +290,11 @@ export function renderComposerDom(
   text: string,
   buildPill: (segment: { token: string; id: number; numLines: number }) => HTMLElement,
   force = false,
+  hasEntry?: (id: number) => boolean,
 ): boolean {
   if (!force && readComposerText(root) === text) return false
   const fragment = document.createDocumentFragment()
-  for (const segment of splitComposerText(text)) {
+  for (const segment of splitComposerText(text, hasEntry)) {
     if (segment.kind === 'text') {
       fragment.appendChild(document.createTextNode(segment.text))
     } else {
@@ -312,6 +332,23 @@ export function composerSelectionOffsets(
     start: composerOffsetOf(root, range.startContainer, range.startOffset),
     end: composerOffsetOf(root, range.endContainer, range.endOffset),
   }
+}
+
+/**
+ * The flat-string offset under a viewport point, for a drop: it lands where the
+ * pointer is, not where the caret happened to be. Null when the point is
+ * outside the field or the browser cannot resolve it.
+ */
+export function composerOffsetFromPoint(
+  root: HTMLElement,
+  x: number,
+  y: number,
+): number | null {
+  const fromPoint = root.ownerDocument.caretRangeFromPoint
+  if (typeof fromPoint !== 'function') return null
+  const range = fromPoint.call(root.ownerDocument, x, y)
+  if (!range || !root.contains(range.startContainer)) return null
+  return composerOffsetOf(root, range.startContainer, range.startOffset)
 }
 
 /** Where a flat-string offset lands in the DOM, for building a Range. */

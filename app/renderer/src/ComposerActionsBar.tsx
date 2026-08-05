@@ -88,7 +88,7 @@ export type ComposerFaceProps = {
 
 /**
  * Feature #4 — focus the first enabled face of a composer action bar (pass its
- * `toolbarRef` node). This is the keyboard ENTRY POINT from the composer textarea:
+ * `toolbarRef` node). This is the keyboard ENTRY POINT from the composer field:
  * `App.tsx`'s composer keydown calls it for Tab and for ArrowDown-when-empty to
  * move focus into the chip row. Skips disabled / `aria-disabled` faces (a disabled
  * attach or fast toggle is not a landing spot); returns whether a face actually
@@ -1015,8 +1015,8 @@ export function ComposerActionsBar({
   /** Feature #4 — the toolbar's DOM node, so the composer keydown (App.tsx) can
    * move focus into the first face via {@link focusFirstComposerFace}. */
   toolbarRef?: Ref<HTMLDivElement>
-  /** Feature #4 — return focus to the composer textarea (Escape, or Shift+Tab off
-   * the first face). Owned by App.tsx, which holds the textarea ref. */
+  /** Feature #4 — return focus to the composer field (Escape, or Shift+Tab off
+   * the first face). Owned by App.tsx, which holds the field ref. */
   onFocusComposer?: () => void
 }) {
   // Interactive when the live snapshot AND the setter handler are both present;
@@ -1043,7 +1043,7 @@ export function ComposerActionsBar({
 
   // Feature #4 — roving tabindex across the faces (ARIA toolbar). The tab stop
   // follows the last-focused face; when nothing in the bar is focused it rests on
-  // the first face ('attach', always rendered), so Tab from the textarea has a
+  // the first face ('attach', always rendered), so Tab from the field has a
   // deterministic landing spot. Faces read their tabIndex from `faceProps(id)`.
   const [activeFace, setActiveFace] = useState<string | null>(null)
   // The warning glyph is the one face that can vanish mid-session (it unmounts
@@ -1102,7 +1102,7 @@ export function ComposerActionsBar({
         return
       case 'Tab':
         // Tab/Shift+Tab also walk the faces (the operator's request). Shift+Tab off
-        // the first face returns to the textarea; Tab off the last face falls
+        // the first face returns to the composer; Tab off the last face falls
         // through to the browser so focus can leave the bar forward.
         if (event.shiftKey) {
           event.preventDefault()

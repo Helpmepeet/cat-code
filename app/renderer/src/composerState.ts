@@ -271,6 +271,26 @@ export function pasteTokenBeforeCaret(
 }
 
 /**
+ * Cut ONE occurrence of a paste token out of a draft: the one starting at `at`,
+ * which is the live position of the pill the user clicked.
+ *
+ * The occurrence matters because a draft can carry the same token twice (the
+ * user copied the token text itself). Removing "the first match" would then
+ * delete a pill the user did not click and leave the one they did. Falls back
+ * to the first match when `at` no longer lines up, so a stale position removes
+ * something sensible rather than nothing.
+ */
+export function removePasteOccurrence(
+  draft: string,
+  token: string,
+  at: number,
+): string {
+  const index = draft.startsWith(token, at) ? at : draft.indexOf(token)
+  if (index < 0) return draft
+  return draft.slice(0, index) + draft.slice(index + token.length)
+}
+
+/**
  * The paste whose token the caret is touching (either edge counts), so parking
  * the caret on a pill opens its preview the same way hovering does
  * (`Chat.jsx:854-867`). Null when the caret is clear of every token.

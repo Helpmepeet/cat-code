@@ -2035,10 +2035,53 @@ test('FIX-5 wiring tripwire: the inspector, the meta strip, the accounts page an
     "dispatchAccounts({ type: 'pool', pool: snapshot })",
   )
 
-  // Reassigning a controlled textarea's value drops the selection to the end,
-  // so an at-caret paste and the atomic pill-delete both threw the caret away.
+  // Rebuilding the field's nodes drops the selection, so an at-caret paste and
+  // the atomic pill-delete both threw the caret away.
   expect(source).toContain('el.setSelectionRange(caret, caret)')
   expect(source).toContain('pendingCaretRef.current = {')
+})
+
+/**
+ * Three composer behaviours a contentEditable does NOT inherit from the
+ * textarea it replaced. None is reachable from an SSR render: they live in a
+ * keydown branch, a DOM listener, and a drop handler. Pinned structurally so a
+ * later edit cannot quietly hand any of them back to the browser's default,
+ * which is exactly how each one broke the first time.
+ */
+test('the composer authors newlines, drops, and pill removal itself', () => {
+  const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const field = readFileSync(
+    new URL('./ComposerInput.tsx', import.meta.url),
+    'utf8',
+  )
+
+  // (1) A modified Enter writes "\n" into the DRAFT. Left to the browser, a
+  // contentEditable answers Alt/Meta+Enter with a block container rather than
+  // the <br> the serializer reads, so the line break rendered once and then
+  // vanished from the draft.
+  const enterBranch = app.slice(app.indexOf("if (event.key === 'Enter') {"))
+  expect(enterBranch).toContain('event.shiftKey || event.altKey || event.metaKey')
+  expect(enterBranch.slice(0, enterBranch.indexOf('requestSubmit'))).toContain(
+    '\\n${prompt.slice(end)}',
+  )
+
+  // (2) A pill's remove listener is attached once and survives every keystroke
+  // after it, so it must read the CURRENT callback and pastes, never the render
+  // that built it. A captured draft would undo everything typed since the paste.
+  expect(field).toContain('onRemovePasteRef.current = onRemovePaste')
+  expect(field).toContain('pastesRef.current = pastes')
+  const removeStart = field.indexOf('onRemove: node =>')
+  expect(removeStart).toBeGreaterThan(-1)
+  const removeListener = field.slice(removeStart, removeStart + 1200)
+  expect(removeListener).toContain('onRemovePasteRef.current(')
+  expect(removeListener).toContain('pastesRef.current.find(')
+
+  // (3) A drop is normalized like a paste. The native drop would put links,
+  // images, and styled nodes into a field whose draft is a plain string.
+  expect(field).toContain('const handleDrop =')
+  const dropHandler = field.slice(field.indexOf('const handleDrop ='))
+  expect(dropHandler.slice(0, 800)).toContain('event.preventDefault()')
+  expect(dropHandler.slice(0, 800)).toContain("event.dataTransfer.getData('text')")
 })
 
 test('P4-50: the account-health bar sits above the workspace and cannot gate a send', () => {

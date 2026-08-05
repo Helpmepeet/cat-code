@@ -23,6 +23,7 @@ import {
   reducePastesPruned,
   reducePasteStateForDraftWrite,
   reduceSessionPastesCleared,
+  removePasteOccurrence,
   selectAgentMentionItems,
   selectHistory,
   selectSessionPasteList,
@@ -397,6 +398,46 @@ describe('P4-24 multi-line composer helpers', () => {
     const draft = `x${token}`
     const range = pasteTokenBeforeCaret(draft, draft.length)
     expect(range).toEqual({ start: 1, end: draft.length })
+  })
+
+  test('removePasteOccurrence: cuts the occurrence at the given position', () => {
+    const token = formatPasteRef(1, 2)
+    const draft = `${token} and ${token}`
+    const secondAt = token.length + ' and '.length
+    // The SECOND pill was clicked, so the first must survive intact.
+    expect(removePasteOccurrence(draft, token, secondAt)).toBe(`${token} and `)
+    expect(removePasteOccurrence(draft, token, 0)).toBe(` and ${token}`)
+  })
+
+  test('removePasteOccurrence: a stale position falls back to the first match', () => {
+    const token = formatPasteRef(1, 2)
+    const draft = `x ${token}`
+    expect(removePasteOccurrence(draft, token, 999)).toBe('x ')
+    expect(removePasteOccurrence('nothing here', token, 0)).toBe('nothing here')
+  })
+
+  test('a duplicated token keeps its entry until the LAST copy is cut', () => {
+    // Removing one pill must not strand the other: pruning is what decides the
+    // stored text's fate, and it keeps the entry while a reference remains.
+    const state = createPasteState()
+    const added = reducePasteAdded(state, S1, 'x\ny\nz')
+    const token = added.token
+    const draft = `${token} ${token}`
+
+    const afterFirst = removePasteOccurrence(draft, token, 0)
+    const stillHeld = reducePastesPruned(added.state, S1, afterFirst)
+    expect(selectSessionPasteList(stillHeld, S1)).toHaveLength(1)
+    // The surviving pill still expands to real text, not the literal token.
+    expect(
+      expandPasteRefs(
+        afterFirst,
+        selectSessionPasteState(stillHeld, S1).entries,
+      ),
+    ).toBe(' x\ny\nz')
+
+    const afterSecond = removePasteOccurrence(afterFirst, token, 1)
+    const dropped = reducePastesPruned(stillHeld, S1, afterSecond)
+    expect(selectSessionPasteList(dropped, S1)).toHaveLength(0)
   })
 
   test('pasteIdAtCaret: both edges of a token count as touching it', () => {

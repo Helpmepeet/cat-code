@@ -66,6 +66,35 @@ describe('splitComposerText', () => {
     expect(splitComposerText('')).toEqual([])
   })
 
+  test('token syntax with no paste behind it stays literal text', () => {
+    // Typing or pasting the characters `[Pasted text #9]` must not conjure a
+    // pill: it would preview nothing and its remove button would do nothing.
+    const draft = 'see [Pasted text #9] here'
+    expect(splitComposerText(draft, () => false)).toEqual([
+      { kind: 'text', text: draft },
+    ])
+  })
+
+  test('an unbacked token merges into ONE run with the text around it', () => {
+    // Not three adjacent text runs: the rebuilt DOM would then hold three text
+    // nodes where the browser expects one, splitting the caret's home.
+    const draft = `a ${formatPasteRef(9, 3)} b`
+    expect(splitComposerText(draft, () => false)).toEqual([
+      { kind: 'text', text: draft },
+    ])
+  })
+
+  test('backed and unbacked tokens in one draft are told apart', () => {
+    const backed = formatPasteRef(1, 4)
+    const unbacked = formatPasteRef(9, 0)
+    expect(
+      splitComposerText(`${backed} ${unbacked}`, id => id === 1),
+    ).toEqual([
+      { kind: 'pill', token: backed, id: 1, numLines: 4 },
+      { kind: 'text', text: ` ${unbacked}` },
+    ])
+  })
+
   test('successive calls are independent (the shared regex lastIndex cannot leak)', () => {
     const draft = `a ${formatPasteRef(1, 1)} b`
     expect(splitComposerText(draft)).toEqual(splitComposerText(draft))
