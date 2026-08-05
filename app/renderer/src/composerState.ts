@@ -412,16 +412,17 @@ export function caretAtHistoryEdge(
  *    runs `engagePreviewPane` → the existing lazy-restore spawn), an in-flight
  *    spawn (`connecting` / `starting`), or an idle-PARKED session, whose spawn is
  *    asked for when the held prompt drains (`resolvePendingSubmit` → 'restore').
- *  - `turnPending` — attached, but a turn is running. The ENGINE takes one turn
- *    at a time (`AppSessionController.submit` throws on a second,
- *    `src/app-runtime/AppSessionController.ts:139`), so the SUBMIT waits for
- *    the turn boundary. Typing never did: the terminal REPL accepts input
- *    mid-turn and runs it when the query completes (`useCommandQueue` →
- *    `executeQueuedInput`, `src/screens/REPL.tsx:652,4428-4430`). This is the
- *    desktop's equivalent, through the SAME park the two cases above use.
+ *  - `turnPending` — attached, but a turn is running. The submit still goes
+ *    STRAIGHT OUT over `app.submit`: the sidecar hands a mid-turn prompt to the
+ *    engine's own command queue and the running turn drains it at its next tool
+ *    round (`src/query.ts:1636-1645` → `getQueuedCommandAttachments`,
+ *    `src/utils/attachments.ts:1056`), which is how the terminal REPL has always
+ *    behaved. Nothing waits for the turn boundary; the between-turn drain
+ *    (`useQueueProcessor`) is only the fallback for a turn that ends before any
+ *    tool round consumed the queue.
  *
- * Typing is accepted whenever ANY of the three holds (`editable`); only the
- * SUBMIT waits for the engine (`planSessionSubmit` → `hold`, drained by
+ * Typing is accepted whenever ANY of the three holds (`editable`); only a submit
+ * with NO engine attached yet waits (`planSessionSubmit` → `hold`, drained by
  * `resolvePendingSubmit`). This does NOT make browsing spawn an engine: the
  * spawn still fires on focus/pointer-down/submit intent, it just stops blocking
  * that intent (the 300 ms dwell auto-spawn stays removed, cut-list §I.1 #3).
@@ -486,11 +487,13 @@ export function selectComposerGate(input: ComposerGateInput): ComposerGate {
 
 /**
  * What Enter / the send arrow does.
- *  - `send`   — the engine is attached and accepting input (today's path).
- *  - `hold`   — the engine cannot take it YET: park the text and drain it the
- *               moment input opens. Reachable while `connectPending` (still
- *               spawning) and while `turnPending` (a turn is running); both
- *               resolve through the same `resolvePendingSubmit` outcome.
+ *  - `send`   — an engine is attached: it takes the prompt now (idle) or queues
+ *               it into the running turn (`turnPending`). Both are one
+ *               `app.submit`; which one it is, is the sidecar's call, not the
+ *               renderer's.
+ *  - `hold`   — no engine is attached YET: park the text and drain it the
+ *               moment one is. Reachable only while `connectPending` (a preview
+ *               pane, an in-flight spawn, or an idle-parked session).
  *  - `ignore` — nothing to send, or the composer is not accepting submissions.
  *               The caller leaves the draft alone, so an ignored submit is
  *               visible as "my text is still there", never a swallowed prompt.
@@ -524,8 +527,8 @@ export function planSessionSubmit(input: {
     connectionInputEnabled: input.connectionInputEnabled,
     logInputEnabled: input.logInputEnabled,
   })
-  if (gate.engineInputEnabled) return { type: 'send', text }
-  if ((gate.connectPending || gate.turnPending) && !input.alreadyParked) {
+  if (gate.engineInputEnabled || gate.turnPending) return { type: 'send', text }
+  if (gate.connectPending && !input.alreadyParked) {
     return { type: 'hold', text }
   }
   return { type: 'ignore' }
@@ -573,8 +576,13 @@ export function reducePendingSubmitCleared(
 
 /**
  * What to do with a parked prompt on the session's current connection snapshot.
- *  - `send`    — attached and accepting input: flush it through `app.submit`.
- *  - `wait`    — still spawning, or ready but mid-turn: keep holding.
+ *  - `send`    — attached: flush it through `app.submit`. `inputEnabled` is NOT
+ *                a condition. A spawn that completes into a session already
+ *                mid-turn still takes the prompt, because the sidecar queues a
+ *                mid-turn submit into the engine's own queue rather than
+ *                refusing it. Holding on for the turn boundary would delay the
+ *                prompt past the round that should have seen it.
+ *  - `wait`    — still spawning: keep holding.
  *  - `restore` — IDLE-PARK: the engine was reclaimed while the session sat idle,
  *                so nothing is coming unless we ask. The caller re-spawns through
  *                the EXISTING restore path and keeps holding; the drain then runs
@@ -599,7 +607,7 @@ export function resolvePendingSubmit(connection: {
 }): PendingSubmitOutcome {
   switch (connection.status) {
     case 'ready':
-      return connection.inputEnabled ? 'send' : 'wait'
+      return 'send'
     case 'connecting':
     case 'starting':
       return 'wait'
@@ -627,10 +635,10 @@ export function resolvePendingSubmit(connection: {
  * turn the instant that frame lands.
  *
  * `stopTurn` (`App.tsx`, inside `SessionPane`) is only reachable while the
- * session is `generating` (`ready` + `inputEnabled:false`), so a prompt
- * parked for THIS session at the moment Stop is clicked was queued because
- * of the very turn Stop is cancelling — never a coincidence from some other
- * park. This lets Stop resolve the ambiguity itself, synchronously, before
+ * session is `generating` (`ready` + `inputEnabled:false`). A mid-turn submit
+ * no longer parks at all — it goes out and the engine queues it — so what is
+ * left here is the narrow race where a spawn-time park has not yet met the
+ * drain effect that would flush it. Stop resolves that synchronously, before
  * the abort round-trip can produce the frame that would otherwise re-arm the
  * drain: the caller releases the parked prompt back to the composer (via the
  * existing `releasePendingSubmit` path) up front, so by the time

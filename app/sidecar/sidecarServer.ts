@@ -35,9 +35,11 @@ import type {
 } from '../../src/entrypoints/agentSdkTypes.js'
 import type { ToolPermissionContext, ToolPermissionRulesBySource } from '../../src/Tool.js'
 import type { MessageOrigin } from '../../src/types/message.js'
+import type { QueuedCommand } from '../../src/types/textInputTypes.js'
 import type { PermissionUpdate } from '../../src/types/permissions.js'
 import {
   dequeue,
+  enqueue,
   enqueuePendingNotification,
   getCommandQueueSnapshot,
   releaseTaskNotificationReservation,
@@ -1077,20 +1079,73 @@ export class SidecarServer {
   }
 
   /**
+   * True when a prompt the user sent mid-turn is still queued. Its turn may
+   * have ended without draining it, so it is owed one of its own.
+   */
+  private hasQueuedParentPrompt(): boolean {
+    return getCommandQueueSnapshot().some(isDeliverableParentPrompt)
+  }
+
+  /**
    * Schedule rather than start immediately: queue signals are synchronous and
    * AppSessionController announces turn completion before its own finalizer has
    * cleared its abort controller. The sidecar turn finalizer is the safe edge.
+   *
+   * The awaiting-durable-acceptance latch is NOT checked here, only inside
+   * `drainOneTaskNotification`: it holds back worker results, and a queued human
+   * prompt is the very thing that clears it (`handleSubmit`).
    */
   private scheduleTaskNotificationDrain(): void {
     if (this.closed) return
-    if (this.taskNotificationAwaitingDurableAcceptance) return
     if (this.taskNotificationDrainScheduled) return
     this.taskNotificationDrainScheduled = true
     queueMicrotask(() => {
       this.taskNotificationDrainScheduled = false
       if (this.closed) return
+      // A user prompt outranks a worker result, the same way the engine's own
+      // queue orders 'next' ahead of 'later'.
+      if (this.drainOneQueuedPrompt()) return
       this.drainOneTaskNotification()
     })
+  }
+
+  /**
+   * The fallback half of the mid-turn queue. A prompt queued into a running turn
+   * is normally drained BY that turn (`src/query.ts:1636-1645`), but a turn that
+   * ends without another tool round never reaches that drain, so the prompt is
+   * still sitting there. Start a turn for it, exactly as the terminal REPL's
+   * between-turn processor does (`src/hooks/useQueueProcessor.ts:48-60`).
+   *
+   * Returns true when a turn was started, so the caller knows not to also start
+   * a task-notification turn on the same boundary.
+   */
+  private drainOneQueuedPrompt(): boolean {
+    if (this.closed || this.parking || this.activeTurn) return false
+    if (
+      this.workspaceTrust &&
+      this.workspaceTrust.getSnapshot()?.trusted !== true
+    ) {
+      return false
+    }
+
+    // Re-read at drain time: the turn we were scheduled behind may have drained
+    // this prompt itself on its way out.
+    const command = dequeue(isDeliverableParentPrompt)
+    if (!command || typeof command.value !== 'string') return false
+
+    const started = this.startTurn({
+      prompt: command.value,
+      ...(command.uuid !== undefined ? { uuid: command.uuid } : {}),
+      ...(command.isMeta !== undefined ? { isMeta: command.isMeta } : {}),
+      generateTitle: true,
+      // Broadcast already happened at `enqueueMidTurnPrompt`.
+      announcePrompt: false,
+    })
+    if (!started) {
+      // Put it back rather than dropping it; the next boundary retries.
+      enqueue(command)
+    }
+    return started
   }
 
   private drainOneTaskNotification(): void {
@@ -1172,6 +1227,7 @@ export class SidecarServer {
     origin,
     onInputPersisted,
     generateTitle,
+    announcePrompt = true,
     onRejected,
     onSettled,
   }: {
@@ -1182,24 +1238,21 @@ export class SidecarServer {
     origin?: MessageOrigin
     onInputPersisted?: () => void
     generateTitle: boolean
+    /**
+     * False for a prompt whose user message was already broadcast when it was
+     * queued mid-turn: the turn it was queued into ended without draining it,
+     * so it starts a turn of its own. Announcing again would print it twice.
+     */
+    announcePrompt?: boolean
     onRejected?: (error: Error) => void
     onSettled?: (error?: Error) => void
   }): boolean {
     if (this.parking || this.activeTurn) return false
     this.runControls?.lockProviderSwitches()
     this.activeTurn = true
-    this.broadcastEvent(
-      createMessageEvent({
-        type: 'user',
-        message: { role: 'user', content: prompt },
-        session_id: this.engineSessionId,
-        parent_tool_use_id: null,
-        uuid: uuid as SDKUserMessage['uuid'],
-        timestamp: new Date().toISOString(),
-        ...(isMeta ? { isSynthetic: true } : {}),
-        ...toSDKMessageOriginProp(origin),
-      }),
-    )
+    if (announcePrompt) {
+      this.broadcastPromptMessage(prompt, uuid, isMeta, origin)
+    }
 
     let submitPromise: Promise<void>
     try {
@@ -1234,6 +1287,56 @@ export class SidecarServer {
         this.scheduleTaskNotificationDrain()
       })
     return true
+  }
+
+  /**
+   * The transcript row for a prompt the user sent. Raw-fidelity `user` event,
+   * identical whether the prompt starts a turn or is queued into a running one,
+   * so the renderer needs no new frame kind and no new variant to display it.
+   */
+  private broadcastPromptMessage(
+    prompt: string,
+    uuid: string,
+    isMeta?: boolean,
+    origin?: MessageOrigin,
+  ): void {
+    this.broadcastEvent(
+      createMessageEvent({
+        type: 'user',
+        message: { role: 'user', content: prompt },
+        session_id: this.engineSessionId,
+        parent_tool_use_id: null,
+        uuid: uuid as SDKUserMessage['uuid'],
+        timestamp: new Date().toISOString(),
+        ...(isMeta ? { isSynthetic: true } : {}),
+        ...toSDKMessageOriginProp(origin),
+      }),
+    )
+  }
+
+  /**
+   * Hand a mid-turn prompt to the engine's own command queue. The running
+   * turn's next tool round drains it (`src/query.ts:1636-1645`) and injects it
+   * as an attachment, so the model sees it DURING the response rather than in a
+   * turn afterwards. `mode: 'prompt'` and the default `'next'` priority are what
+   * that drain filters on; `agentId` stays undefined so it addresses the main
+   * thread and never a subagent.
+   *
+   * The user message is broadcast NOW, not on consumption: the prompt has left
+   * the composer, and the queue offers no consumption signal the sidecar can
+   * observe without reaching into engine internals. If the turn ends before any
+   * tool round drains it, `drainOneQueuedPrompt` starts a turn for it with
+   * `announcePrompt: false` so it is never printed twice.
+   */
+  private enqueueMidTurnPrompt(prompt: string, isMeta?: boolean): void {
+    const uuid = randomUUID()
+    this.broadcastPromptMessage(prompt, uuid, isMeta)
+    enqueue({
+      value: prompt,
+      mode: 'prompt',
+      uuid,
+      ...(isMeta ? { isMeta: true } : {}),
+    })
   }
 
   private handleSubmit(connection: Connection, message: AppSubmitMessage): void {
@@ -1321,20 +1424,28 @@ export class SidecarServer {
       }
     }
 
-    if (this.activeTurn) {
-      this.sendError(
-        connection,
-        message.requestId,
-        'turn_already_running',
-        'Session turn already running',
-        true,
-      )
-      return
-    }
-
     // A previous fallback adapter may have left a completion queued without a
     // durable ack. A human turn is a new, explicitly accepted safe boundary.
     this.taskNotificationAwaitingDurableAcceptance = false
+
+    // MID-TURN SUBMIT — the engine takes one turn at a time
+    // (`AppSessionController.submit` throws on a second,
+    // `src/app-runtime/AppSessionController.ts:139`), but that is not the same
+    // as refusing the prompt. The engine's query loop drains the process-global
+    // command queue at every tool round and injects what it finds into the
+    // RUNNING turn (`src/query.ts:1636-1645` → `getQueuedCommandAttachments`,
+    // `src/utils/attachments.ts:1056`), which is how the terminal REPL has
+    // always handled typing mid-response. Queue it there rather than answering
+    // `turn_already_running`, so the desktop reaches the model at the same
+    // point the terminal would. The queue is process-global and this process
+    // owns exactly one engine session (N-process model), so there is no
+    // cross-session leak; `agentId: undefined` addresses the main thread, which
+    // is what the drain's `isMainThread` branch reads.
+    if (this.activeTurn) {
+      this.enqueueMidTurnPrompt(message.prompt, message.options?.isMeta)
+      return
+    }
+
     const started = this.startTurn({
       prompt: message.prompt,
       isMeta: message.options?.isMeta,
@@ -1441,6 +1552,10 @@ export class SidecarServer {
   private isParkGateOpen(): boolean {
     if (this.activeTurn) return false
     if (this.hasQueuedParentTaskNotification()) return false
+    // Same rule for a prompt the user sent mid-turn that no tool round drained:
+    // parking over it would strand a message the user has already watched leave
+    // the composer.
+    if (this.hasQueuedParentPrompt()) return false
     if (this.controller.getPendingPermissionRequests().length > 0) return false
     if (this.tasks && this.tasks.hasLiveWork()) return false
     if (this.inFlightDurableWrites > 0) return false
@@ -1461,27 +1576,6 @@ export class SidecarServer {
     const requestId =
       typeof raw.requestId === 'string' ? raw.requestId : undefined
 
-    // bypassPermissions escalates beyond T5b (no per-action prompt is ever
-    // raised again, killing the round-trip and its audit trail), so it is
-    // grantable ONLY when a TRUSTED surface enabled it: the launch opt-in
-    // `CATCODE_ALLOW_BYPASS=1`, read at session construction into the context's
-    // `isBypassPermissionsModeAvailable` (sessionController.ts). The renderer
-    // alone can never reach it — a browser-like surface must not self-escalate.
-    // Fail closed: a missing domain or unset flag rejects (`!== true`).
-    if (
-      raw.mode === 'bypassPermissions' &&
-      this.permissions?.getToolPermissionContext()
-        .isBypassPermissionsModeAvailable !== true
-    ) {
-      this.sendError(
-        connection,
-        requestId,
-        'bad_request',
-        'mode "bypassPermissions" is not available (launch with CATCODE_ALLOW_BYPASS=1)',
-        false,
-      )
-      return
-    }
     // Auto remains fail-closed: the sidecar asks the live engine gate, which
     // covers model support, settings disablement and the circuit breaker.
     if (
@@ -2690,7 +2784,7 @@ export class SidecarServer {
   /**
    * P4-8 — read-only orchestrator worker snapshot (D2 `decisions/AGENT-CHROME.md`).
    * Async because the session plane is a file-backed engine read
-   * (`readSessionStateWithContinuity`); the shared send path still applies
+   * (`readSessionState`); the shared send path still applies
    * clone/JSON checks, secretGuard, and size caps.
    */
   private async sendAgentModeSnapshot(connection: Connection): Promise<void> {
@@ -3265,6 +3359,20 @@ export class SidecarServer {
 const MAX_ERROR_MESSAGE_CHARS = 1_000
 
 /**
+ * A user prompt on the engine's command queue that THIS session owes a turn.
+ * `agentId === undefined` addresses the main thread, matching the filter the
+ * engine's own mid-turn drain applies (`src/query.ts:1641`), so a subagent's
+ * queued work is never mistaken for the user's.
+ */
+function isDeliverableParentPrompt(command: QueuedCommand): boolean {
+  return (
+    command.mode === 'prompt' &&
+    command.agentId === undefined &&
+    typeof command.value === 'string'
+  )
+}
+
+/**
  * An absolute POSIX path appearing anywhere in an error string, optionally
  * wrapped in the quotes/brackets Node's `EACCES: … unlink '<path>'` messages
  * use. Requires a second `/` so a bare root token is not matched, and stops at
@@ -3432,8 +3540,8 @@ function checkStrictKeys(message: unknown): string | null {
  * C2 — sidecar-LOCAL schema for `permission.setMode`
  * (PERMISSION-BOUNDARY.md §3). Deliberately NOT part of the engine's shared
  * `appClientMessageSchema` (the WS server shares that and has no handler for
- * this frame). The mode allowlist is the wire constant; availability checks
- * for `bypassPermissions` and classifier-backed `auto` run before this parse.
+ * this frame). The mode allowlist is the wire constant; the classifier-backed
+ * `auto` availability check runs before this parse.
  */
 const permissionSetModeMessageSchema = z.object({
   type: z.literal('permission.setMode'),

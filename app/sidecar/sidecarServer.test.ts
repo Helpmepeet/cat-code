@@ -101,6 +101,7 @@ import {
 import type { SidecarSettingsDomain } from './settingsDomain.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 import {
+  enqueue,
   enqueuePendingNotification,
   getCommandQueueSnapshot,
   resetCommandQueue,
@@ -1028,6 +1029,135 @@ test('queued parent task notification prevents idle park before the drain runs',
   expect(parkCount()).toBe(0)
 })
 
+test('a mid-turn submit is queued INTO the running turn, not refused', async () => {
+  // The desktop used to answer `turn_already_running` and make the renderer sit
+  // on the prompt until the turn ended. The terminal never did: the query loop
+  // drains the command queue at every tool round and injects what it finds into
+  // the turn already running (`src/query.ts:1636-1645`). Prove the sidecar now
+  // puts the prompt where that drain will find it.
+  let release: (() => void) | undefined
+  const prompts: string[] = []
+  const controller = new AppSessionController({
+    async *runTurn({ prompt, options }) {
+      prompts.push(String(prompt))
+      options?.onInputPersisted?.()
+      await new Promise<void>(resolve => {
+        release = resolve
+      })
+      yield buildProbeToolUseMessage()
+    },
+  })
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'human-1', prompt: 'first' }),
+  )
+  await waitFor(() => prompts.length === 1)
+
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'app.submit',
+      requestId: 'human-2',
+      prompt: 'and also check the logs',
+    }),
+  )
+
+  // No refusal, and no second turn: it went to the queue.
+  expect(received.filter(frame => frame.kind === 'error')).toHaveLength(0)
+  expect(prompts).toEqual(['first'])
+  const queued = getCommandQueueSnapshot()
+  expect(queued).toHaveLength(1)
+  expect(queued[0]).toMatchObject({
+    mode: 'prompt',
+    value: 'and also check the logs',
+  })
+  // Undefined addresses the main thread; a stamped id would route it to a
+  // subagent and the user's prompt would never be seen.
+  expect(queued[0]?.agentId).toBeUndefined()
+  // 'next' is what the engine's mid-turn drain filters on; 'later' would only
+  // be reached by a Sleep round.
+  expect(queued[0]?.priority).toBe('next')
+
+  // The user sees it land immediately — the composer has already cleared.
+  const userTexts = received.flatMap(frame => {
+    if (
+      frame.kind !== 'event' ||
+      frame.event.type !== 'message' ||
+      frame.event.message.type !== 'user'
+    ) {
+      return []
+    }
+    const content = frame.event.message.message?.content
+    return typeof content === 'string' ? [content] : []
+  })
+  expect(userTexts).toEqual(['first', 'and also check the logs'])
+
+  release?.()
+})
+
+test('a queued prompt no tool round drained still gets its own turn, announced once', async () => {
+  // The fallback half. A turn that ends without another tool round never runs
+  // the engine's drain, so the sidecar owes the prompt a turn — the terminal's
+  // `useQueueProcessor` boundary. It must not print the message a second time.
+  const prompts: string[] = []
+  const releases: Array<() => void> = []
+  const controller = new AppSessionController({
+    async *runTurn({ prompt, options }) {
+      prompts.push(String(prompt))
+      options?.onInputPersisted?.()
+      await new Promise<void>(resolve => releases.push(resolve))
+    },
+  })
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'human-1', prompt: 'first' }),
+  )
+  await waitFor(() => prompts.length === 1)
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'human-2', prompt: 'second' }),
+  )
+
+  releases.shift()?.()
+  await waitFor(() => prompts.length === 2)
+  expect(prompts).toEqual(['first', 'second'])
+  expect(getCommandQueueSnapshot()).toHaveLength(0)
+
+  const secondCount = received.filter(
+    frame =>
+      frame.kind === 'event' &&
+      frame.event.type === 'message' &&
+      frame.event.message.type === 'user' &&
+      frame.event.message.message?.content === 'second',
+  ).length
+  expect(secondCount).toBe(1)
+
+  releases.shift()?.()
+})
+
+test('a queued prompt prevents idle park before the drain runs', () => {
+  // Same rule the queued worker result already had: parking here would strand a
+  // message the user has already watched leave the composer.
+  const { server, parkCount } = makeParkServer(
+    new AppSessionController(probeAdapter()),
+  )
+  const { socket } = makeSocket()
+  const conn = server.addConnection(socket)
+  enqueue({ mode: 'prompt', value: 'do not lose me' })
+
+  server.handleData(conn, clientFrame({ type: 'app.park', requestId: 'park-prompt' }))
+
+  expect(parkCount()).toBe(0)
+})
+
 test('a completion without durable acknowledgement is requeued instead of dropped', async () => {
   let starts = 0
   const server = makeServer(
@@ -1410,12 +1540,12 @@ test('P4-8 — emits a joined agent-mode.snapshot on attach that is secretGuard-
 
   const snapshot = findFrame()
   expect(snapshot?.kind).toBe('agent-mode.snapshot')
-  // Assert MY live worker is present rather than an exact count: `getSessionId()`
-  // is a process global shared across tests in this harness, so the persisted
-  // plane may add foreign continuity workers here (a real sidecar owns one
-  // session, so this is a test-harness artifact, not a production shape).
-  const liveWorker = snapshot?.agentMode.workers.find(worker => worker.agentId === 'w-blocked')
+  // The desktop sidecar must read only the current engine session. A continuity
+  // union here would leak workers from another session sharing this project.
+  expect(snapshot?.agentMode.workers).toHaveLength(1)
+  const liveWorker = snapshot?.agentMode.workers[0]
   expect(liveWorker).toMatchObject({
+    agentId: 'w-blocked',
     handle: 'Turing',
     role: 'implementor',
     status: 'completed',
@@ -3616,9 +3746,8 @@ test('C2 — setMode to the CURRENT mode is a no-op and emits no snapshot', () =
   expect(received.some(frame => frame.kind === 'error')).toBe(false)
 })
 
-test('C2 — bypassPermissions is REJECTED when the trusted launch flag is NOT set; mode unchanged, no snapshot', () => {
-  // Default store → isBypassPermissionsModeAvailable false (Tool.ts:152), the
-  // desktop default (no CATCODE_ALLOW_BYPASS). A renderer alone cannot escalate.
+test('C2 — bypassPermissions is available without a launch flag', () => {
+  // A normal desktop session exposes bypass directly in the mode picker.
   const store = makePermissionStore()
   const server = makeServer(
     new AppSessionController(probeAdapter()),
@@ -3641,21 +3770,14 @@ test('C2 — bypassPermissions is REJECTED when the trusted launch flag is NOT s
     }),
   )
 
-  expect(
-    received.some(
-      frame =>
-        frame.kind === 'error' &&
-        frame.code === 'bad_request' &&
-        frame.message.includes('bypassPermissions'),
-    ),
-  ).toBe(true)
-  expect(store.getState().toolPermissionContext.mode).toBe('default')
-  expect(contextFrames(received)).toHaveLength(before)
+  expect(received.some(frame => frame.kind === 'error')).toBe(false)
+  expect(store.getState().toolPermissionContext.mode).toBe('bypassPermissions')
+  expect(contextFrames(received)).toHaveLength(before + 1)
 })
 
-test('C2 — bypassPermissions is GRANTED when the trusted launch flag enabled it (isBypassPermissionsModeAvailable)', () => {
-  // The trusted launch surface (CATCODE_ALLOW_BYPASS=1) sets availability at
-  // session construction; the boundary then honours a bypass request.
+test('C2 — bypassPermissions is accepted when the context marks it available', () => {
+  // The session context reports that the desktop mode is available; the
+  // boundary honours the bypass request.
   const store = makePermissionStore({ isBypassPermissionsModeAvailable: true })
   const server = makeServer(
     new AppSessionController(probeAdapter()),

@@ -2064,9 +2064,10 @@ export function App() {
     // Collapsed-paste tokens are expanded back to their full text before submit
     // — the engine receives plain prompt text, never a `[Pasted text #N]` ref
     // (parity `expandPastedTextRefs`, src/history.ts:81 / handlePromptSubmit.ts:216).
-    // CC-16 — a submit the engine cannot take YET is parked, never dropped:
-    // `connectPending` (a preview pane or an in-flight spawn) and `turnPending`
-    // (a turn is running) both park. Only a terminal session refuses outright.
+    // CC-16 — a submit with no engine attached YET is parked, never dropped
+    // (`connectPending`: a preview pane, an in-flight spawn, an idle park). A
+    // mid-turn submit is NOT parked: it goes out and the engine queues it into
+    // the running turn. Only a terminal session refuses outright.
     const action = planSessionSubmit({
       draft: selectPromptDraft(promptDrafts, sessionId),
       pasteEntries: selectSessionPasteState(pasteState, sessionId).entries,
@@ -2078,9 +2079,9 @@ export function App() {
     })
     if (action.type === 'ignore') {
       // The one `ignore` the user can act on: they typed something and pressed
-      // Enter, and it stayed put because a prompt is already waiting. Mid-turn
-      // the send slot holds Stop, so there is no greyed-out arrow to explain
-      // that — without this the keystroke reads as swallowed.
+      // Enter, and it stayed put because a prompt is already waiting on the
+      // spawn. The arrow greys out to say so, but Enter bypasses the arrow, so
+      // without this the keystroke reads as swallowed.
       if (
         selectPendingSubmit(pendingSubmits, sessionId) !== null &&
         selectPromptDraft(promptDrafts, sessionId).trim().length > 0
@@ -2120,12 +2121,12 @@ export function App() {
     }
   }
 
-  // CC-16 drain — the parked prompt rides the SAME `app.submit` the moment the
-  // session accepts input, whether that is the end of the ~0.6 s spawn or the
-  // end of the running turn (`turn.status` moves `inputEnabled`, so this effect
-  // re-runs on both). A terminal status releases it back into the composer
-  // instead: a queued prompt must never disappear on a spawn or a turn that
-  // never finishes.
+  // CC-16 drain — the parked prompt rides the SAME `app.submit` the moment an
+  // engine is attached, which is the end of the ~0.6 s spawn. It does NOT wait
+  // for a turn boundary: a spawn that lands on a session already mid-turn still
+  // flushes, because the sidecar queues a mid-turn prompt into the engine.
+  // A terminal status releases it back into the composer instead: a queued
+  // prompt must never disappear on a spawn that never finishes.
   //
   // IDLE-PARK adds the `restore` arm: an idle-parked session has no spawn coming
   // and no turn to end, so the drain ASKS for the engine back and keeps holding.
@@ -4387,8 +4388,9 @@ export function SessionPane({
 
       {/* CC-16 — the parked prompt is the only sign the message still exists:
        * the composer was cleared on submit, so without this row the text looks
-       * lost until it is sent. The two waits it can be in are different events,
-       * so it says which one it is waiting for. */}
+       * lost until it is sent. Only ONE wait can produce it now: no engine is
+       * attached yet. A mid-turn submit is not parked here at all, it is sent
+       * and the engine queues it into the running turn. */}
       {pendingSubmit ? (
         <div className="flex items-baseline gap-2 text-xs" role="status">
           <span className="shrink-0 font-medium text-text-muted">Queued</span>
@@ -4396,9 +4398,7 @@ export function SessionPane({
             {pendingSubmit}
           </span>
           <span className="shrink-0 text-text-subtle">
-            {composerGate.turnPending
-              ? 'Sends when this response finishes.'
-              : 'Sends when the session is ready.'}
+            Sends when the session is ready.
           </span>
         </div>
       ) : null}

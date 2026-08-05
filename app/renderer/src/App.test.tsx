@@ -703,19 +703,10 @@ test('a mid-turn composer stays typeable: the turn gates the SEND, not the input
   expect(html).toContain('aria-label="Stop the turn"')
 })
 
-test('a prompt queued mid-turn says which wait it is in, and is not lost', () => {
+test('a parked prompt names the only wait there is: the spawn', () => {
   const base = idleSessionPaneProps()
-  const midTurn = renderToStaticMarkup(
-    <SessionPane
-      {...base}
-      activeConnection={{ status: 'ready', inputEnabled: false }}
-      pendingSubmit="run the tests"
-    />,
-  )
-  expect(midTurn).toContain('run the tests')
-  expect(midTurn).toContain('Sends when this response finishes.')
 
-  // The spawn wait keeps its own copy: a different event is being waited on.
+  // The spawn wait is what the row exists for.
   const spawning = renderToStaticMarkup(
     <SessionPane
       {...base}
@@ -724,11 +715,11 @@ test('a prompt queued mid-turn says which wait it is in, and is not lost', () =>
       pendingSubmit="run the tests"
     />,
   )
+  expect(spawning).toContain('run the tests')
   expect(spawning).toContain('Sends when the session is ready.')
 
-  // The copy reads the same gate the composer does, NOT `generating`: a
-  // previewed pane is waiting on its spawn even though a turn is technically
-  // running behind it, so it must not promise the response is what unblocks it.
+  // A previewed pane is waiting on its spawn even though a turn may be running
+  // behind it, so it gets the same copy.
   const preview = renderToStaticMarkup(
     <SessionPane
       {...base}
@@ -738,6 +729,18 @@ test('a prompt queued mid-turn says which wait it is in, and is not lost', () =>
     />,
   )
   expect(preview).toContain('Sends when the session is ready.')
+
+  // The row must never promise a wait for the response again. A mid-turn submit
+  // is not parked at all now: it is sent, and the engine drains it into the
+  // running turn, so this copy would be a lie in every state that can show it.
+  const midTurn = renderToStaticMarkup(
+    <SessionPane
+      {...base}
+      activeConnection={{ status: 'ready', inputEnabled: false }}
+      pendingSubmit="run the tests"
+    />,
+  )
+  expect(midTurn).not.toContain('Sends when this response finishes.')
 })
 
 test('CC-16: a dead session stays read-only and does not pretend to be typeable', () => {

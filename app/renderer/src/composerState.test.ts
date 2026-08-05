@@ -643,15 +643,17 @@ describe('CC-16 submit planning — only the submit waits for the engine', () =>
     })
   })
 
-  test('a mid-turn submit HOLDS — it waits for the turn, it is not dropped', () => {
-    // `ready` + `inputEnabled: false` is exactly the mid-turn gate. The park is
-    // the same one the spawn case uses, and `resolvePendingSubmit` already
-    // answers 'wait' here, so the drain flushes it at the turn boundary.
+  test('a mid-turn submit SENDS — the engine queues it into the running turn', () => {
+    // `ready` + `inputEnabled: false` is exactly the mid-turn gate. It does NOT
+    // park: the sidecar hands a mid-turn prompt to the engine's command queue
+    // and the running turn drains it at its next tool round
+    // (`src/query.ts:1636-1645`), which is the terminal REPL's behavior. Parking
+    // would delay it to a turn afterwards.
     expect(
       planSessionSubmit(submitInput({ connectionInputEnabled: false })),
-    ).toEqual({ type: 'hold', text: 'hello' })
+    ).toEqual({ type: 'send', text: 'hello' })
     expect(planSessionSubmit(submitInput({ logInputEnabled: false }))).toEqual({
-      type: 'hold',
+      type: 'send',
       text: 'hello',
     })
   })
@@ -686,15 +688,16 @@ describe('CC-16 submit planning — only the submit waits for the engine', () =>
     ).toEqual({ type: 'ignore' })
   })
 
-  test('one queued prompt at a time: a second mid-turn submit keeps its draft', () => {
-    // 'ignore' leaves the text in the composer (submitSession returns before
-    // retiring the draft), so the second prompt is visibly still there rather
-    // than silently replacing the one already waiting on the turn.
+  test('mid-turn there is no one-at-a-time limit: every Enter is sent', () => {
+    // The cap belongs to the PARK (one held prompt per session), and mid-turn
+    // nothing is parked. The engine's queue is N-deep, so a second mid-turn
+    // Enter goes out too — matching the terminal, where each queued line is its
+    // own command. `alreadyParked` is irrelevant here and must not gate it.
     expect(
       planSessionSubmit(
         submitInput({ connectionInputEnabled: false, alreadyParked: true }),
       ),
-    ).toEqual({ type: 'ignore' })
+    ).toEqual({ type: 'send', text: 'hello' })
   })
 
   test('a terminal (dead) session neither sends nor parks', () => {
@@ -785,9 +788,13 @@ describe('CC-16 drain — flushed on ready, given back on failure', () => {
     ).toBe('wait')
   })
 
-  test('ready but mid-turn keeps holding — it is not a failure', () => {
+  test('a spawn that lands mid-turn still flushes — it does not wait for the boundary', () => {
+    // The park exists for "no engine yet". Once one is attached, `inputEnabled`
+    // stops mattering: the sidecar queues a mid-turn prompt into the running
+    // turn, so holding on for the boundary would push it past the tool round
+    // that should have seen it.
     expect(resolvePendingSubmit({ status: 'ready', inputEnabled: false })).toBe(
-      'wait',
+      'send',
     )
   })
 
