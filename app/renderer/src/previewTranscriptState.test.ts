@@ -312,6 +312,36 @@ test('a handover with no ready frame beside it does not strand the session', () 
   expect(h.rows()).toHaveLength(3)
 })
 
+// What the reset is FOR: a session that already ran this launch, died, and is
+// now previewed carries its old rows in the projector. The handover must drop
+// them, or the resumed history renders under a stale copy of itself. No-op the
+// reset and this test reports 3.
+test('the handover drops rows a previous connection left behind', () => {
+  const h = handover(cache([messageFrame(0)]))
+  h.deliver([ready(), messageFrame(9)]) // an earlier connection, not previewing
+  expect(h.rows()).toHaveLength(1)
+
+  h.previewing.add(SID)
+  h.deliver([ready(), messageFrame(0), messageFrame(1)])
+  expect(h.rows()).toHaveLength(2)
+})
+
+// The mirror image, and the reason the reset is scoped to `ready`: a handover
+// firing on a LATER batch of one replay must keep what earlier batches of that
+// same replay already projected. Resetting unconditionally reports 3 of 5.
+test('a late handover keeps the history its earlier batches projected', () => {
+  const h = handover(cache([messageFrame(0)]))
+  h.deliver([ready(), messageFrame(0), messageFrame(1)]) // not previewing yet
+
+  h.previewing.add(SID)
+  h.deliver([messageFrame(2)])
+  h.deliver([messageFrame(3)])
+  h.deliver([messageFrame(4)])
+
+  expect(h.cached()).toBeNull()
+  expect(h.rows()).toHaveLength(5)
+})
+
 // A zero-history head batch hands over to an empty pane by design, so the
 // conversation blinks. It must not stay gone once the replay lands.
 test('history arriving after a ready-only batch still fills the pane', () => {

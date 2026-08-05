@@ -366,11 +366,20 @@ export type PreviewHandoverPorts = {
  * Apply one delivered batch's preview→live handover, in the order that matters.
  *
  * This lives here rather than inline in App's `subscribe` callback because the
- * ORDER is the load-bearing part and a callback that only works by React
+ * ORDER is the load-bearing part, and a callback that only works by React
  * batching happenstance cannot be tested (the renderer suite renders to static
  * markup, so no subscription ever runs). Clearing the live rows must precede
- * the batch — the batch is what refills them — and dropping the cache must
- * follow it, so the pane is never between two empty sources.
+ * the batch: both go to the SAME reducer, so reversing them wipes the batch.
+ * Dropping the cache targets a different reducer and is order-free — it is kept
+ * last because that is the sequence the pane reads as, not because an
+ * intermediate state would render (all three land in one React commit).
+ *
+ * The reset is scoped to sessions whose `ready` frame is in THIS batch. Its job
+ * is to drop rows a previous connection left behind, and `ready` is the only
+ * frame that marks a new connection starting. A handover firing on a later
+ * batch of the same replay must not empty what earlier batches of that same
+ * replay already projected — that would be silent partial history loss, the
+ * exact failure this module exists to prevent.
  *
  * Returns the sessions that handed over, for the caller's own bookkeeping.
  */
@@ -384,7 +393,13 @@ export function applyPreviewHandover(
     claimed,
     selectPreviewSwapSessions(frames, previewing),
   )
-  for (const sessionId of swapped) ports.resetLiveSession(sessionId)
+  const connectionStarts = new Set<SessionId>()
+  for (const frame of frames) {
+    if (frame.kind === 'ready') connectionStarts.add(frame.sessionId)
+  }
+  for (const sessionId of swapped) {
+    if (connectionStarts.has(sessionId)) ports.resetLiveSession(sessionId)
+  }
   ports.applyFrames()
   for (const sessionId of swapped) ports.resetPreview(sessionId)
   return swapped
