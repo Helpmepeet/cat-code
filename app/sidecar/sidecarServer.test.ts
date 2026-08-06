@@ -289,6 +289,41 @@ test('on attach, the server sends the canonical controller-derived app.ready pay
   })
 })
 
+test('production delivery envelope adds metadata beside, never inside, the raw ServerFrame', () => {
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
+    controller: new AppSessionController(probeAdapter()),
+    wrapOutboundFrame: (frame, deliveryTrace) => ({
+      kind: 'sidecar.delivery-envelope',
+      frame,
+      deliveryTrace,
+    }),
+    log: () => {},
+  })
+  servers.push(server)
+  const decoder = new FrameDecoder(MAX_FRAME_BYTES)
+  const received: unknown[] = []
+  server.addConnection({
+    write(data) {
+      for (const result of decoder.push(Buffer.from(data))) {
+        if (result.kind === 'frame') received.push(result.payload)
+      }
+    },
+    end() {},
+  })
+  const envelope = received[0] as {
+    kind?: unknown
+    frame?: ServerFrame
+    deliveryTrace?: { sequence?: unknown; sourceProcessInstanceId?: unknown }
+  }
+  expect(envelope.kind).toBe('sidecar.delivery-envelope')
+  expect(envelope.frame?.kind).toBe('ready')
+  expect(envelope.frame).not.toHaveProperty('deliveryTrace')
+  expect(envelope.deliveryTrace?.sequence).toBe(1)
+  expect(typeof envelope.deliveryTrace?.sourceProcessInstanceId).toBe('string')
+})
+
 test('rejects a frame with the wrong protocolVersion', () => {
   const server = makeServer(new AppSessionController(probeAdapter()))
   const { socket, received } = makeSocket()

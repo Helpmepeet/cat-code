@@ -2649,7 +2649,7 @@ export type SlashCatalogSnapshotFrame = {
   commands: SlashCatalogEntry[]
 }
 
-export type ServerFrame =
+export type ServerFramePayload =
   | ReadyFrame
   | SessionTitleFrame
   | EventFrame
@@ -2682,6 +2682,14 @@ export type ServerFrame =
   | SessionsCatalogSnapshotFrame
   | SlashCatalogSnapshotFrame
   | SettingsResultFrame
+
+/**
+ * Metadata-only delivery envelope. Optional so an older sidecar remains
+ * compatible; it sits beside the raw event and never changes its fidelity.
+ */
+export type ServerFrame = ServerFramePayload & {
+  deliveryTrace?: import('./deliveryTrace.js').DeliveryTrace
+}
 
 /* ------------------------------------------------------------------------- *
  * Transcript cache — the at-rest "instant session open" artifact
@@ -2913,6 +2921,20 @@ export type CatCodeBridge = {
    * send.
    */
   rendererReady(): void
+  /** Metadata-only receipt/apply/commit acknowledgement for a delivered frame. */
+  deliveryAck(
+    sessionId: SessionId,
+    sequence: number,
+    deliveryAttempt: number,
+    streamEpoch: string,
+    traceId: string,
+    stage: import('./deliveryTrace.js').DeliveryAcknowledgement['stage'],
+  ): void
+  /** Fixed, bounded renderer fault signal; never a console/log forwarding API. */
+  reportRendererFault(kind: 'javascript' | 'promise' | 'component', message: string): void
+  /** Main-owned local diagnostics retrieval; the renderer never supplies a path. */
+  openLogsFolder(): void
+  saveDiagnosticsBundle(): Promise<boolean>
   /**
    * IDLE-PARK (decisions/IDLE-PARK.md §4, option (b)) — report which sessions the
    * user can currently SEE, so main's park policy never reclaims an engine out

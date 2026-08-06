@@ -62,6 +62,7 @@ import type {
 } from '../../src/web/appSessionProtocol.js'
 import { parseThreadGoal } from '../../src/utils/threadGoal.js'
 import { encodeFrame, FrameDecoder } from '../shared/framing.js'
+import { mintDeliveryTrace, type DeliveryTrace } from '../shared/deliveryTrace.js'
 import {
   checkJsonSafe,
   omitUndefinedObjectProperties,
@@ -143,12 +144,19 @@ type Connection = {
   decoder: FrameDecoder
   rateWindowStart: number
   rateCount: number
+  deliveryConnectionEpoch: number
 }
 
 export type SidecarServerOptions = {
   sessionId: SessionId
   engineSessionId: string
   controller: AppSessionController
+  /**
+   * Optional socket-only wrapper. Production uses this to carry metadata-only
+   * delivery identity without changing the raw `ServerFrame` schema observed by
+   * server tests and other in-process consumers.
+   */
+  wrapOutboundFrame?: (frame: ServerFrame, trace: DeliveryTrace) => unknown
   /**
    * Permissions domain capability (P2-4). Optional because the P1-0 probe
    * fixture has no engine app-state store; when absent, `permission.setMode`
@@ -362,6 +370,11 @@ export class SidecarServer {
   /** P4-6 title-rider — the one-shot AI-title generator for this session. */
   private readonly titleGenerator: SessionTitleGenerator
   private readonly log: (line: string) => void
+  private readonly wrapOutboundFrame: ((frame: ServerFrame, trace: DeliveryTrace) => unknown) | null
+  private readonly deliveryStreamEpoch = randomUUID()
+  private readonly deliveryProcessInstanceId = randomUUID()
+  private deliverySequence = 0
+  private deliveryConnectionEpoch = 0
   private readonly connections = new Set<Connection>()
   private unsubscribe: (() => void) | null = null
   private unsubscribePermissionContext: (() => void) | null = null
@@ -448,6 +461,7 @@ export class SidecarServer {
       ...(options.titleDeps ? { deps: options.titleDeps } : {}),
     })
     this.log = options.log ?? (line => process.stderr.write(`${line}\n`))
+    this.wrapOutboundFrame = options.wrapOutboundFrame ?? null
 
     // Subscribe once; broadcast every event to all connected clients as a raw
     // `event` frame. (P1-0 has one client, but the fan-out matches the WS
@@ -580,6 +594,7 @@ export class SidecarServer {
       decoder: new FrameDecoder(MAX_FRAME_BYTES),
       rateWindowStart: Date.now(),
       rateCount: 0,
+      deliveryConnectionEpoch: ++this.deliveryConnectionEpoch,
     }
     this.connections.add(connection)
     // Re-home the `app.ready` handshake onto IPC (AppSessionWebSocketServer.ts
@@ -3348,7 +3363,17 @@ export class SidecarServer {
 
     let encoded: Buffer
     try {
-      encoded = encodeFrame(frame)
+      const payload = this.wrapOutboundFrame
+        ? this.wrapOutboundFrame(frame, mintDeliveryTrace(
+          ++this.deliverySequence,
+          this.deliveryStreamEpoch,
+          this.deliveryProcessInstanceId,
+          undefined,
+          undefined,
+          connection.deliveryConnectionEpoch,
+        ))
+        : frame
+      encoded = encodeFrame(payload)
     } catch (error) {
       this.log(
         `[sidecar] failed to encode frame kind=${frame.kind}: ${

@@ -39,8 +39,17 @@ export type TranscriptBackfillRunOptions = {
   timeoutMs?: number
   spawnWorker?: typeof spawn
   onSession: (result: TranscriptBackfillSessionResult) => void
+  /** Metadata-only process lifecycle hook; it never receives worker output. */
+  onWorkerLifecycle?: (event: WorkerProcessLifecycle) => void
   log?: (line: string) => void
 }
+
+export type WorkerProcessLifecycle = Readonly<{
+  phase: 'started' | 'exited'
+  pid: number
+  code?: number | null
+  signal?: NodeJS.Signals | null
+}>
 
 export type TranscriptBackfillRunSummary = {
   attempted: number
@@ -148,6 +157,7 @@ export async function runTranscriptBackfill(
     },
     stdio: ['pipe', 'pipe', 'pipe'],
   }) as ChildProcessWithoutNullStreams
+  options.onWorkerLifecycle?.({ phase: 'started', pid: child.pid ?? 0 })
 
   const expected = new Map(
     request.items.map(item => [
@@ -273,6 +283,7 @@ export async function runTranscriptBackfill(
   try {
     child.stdin.end(input)
     ;({ code, signal } = await closed)
+    options.onWorkerLifecycle?.({ phase: 'exited', pid: child.pid ?? 0, code, signal })
   } finally {
     clearTimeout(timeout)
     options.signal?.removeEventListener('abort', onAbort)

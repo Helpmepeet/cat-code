@@ -6,6 +6,8 @@ import { CodeThemeProvider } from './CodeThemeProvider.js'
 import { ReasoningLayoutProvider } from './ReasoningLayoutProvider.js'
 import { ToastHost } from './ToastHost.js'
 import { ToolsExpandedProvider } from './ToolsExpandedProvider.js'
+import { RendererErrorBoundary } from './RendererErrorBoundary.js'
+import { getBridge } from './bridge.js'
 import './theme.css'
 
 const root = document.getElementById('root')
@@ -27,7 +29,9 @@ createRoot(root).render(
         <ReasoningLayoutProvider>
           <CodeThemeProvider>
             <ToolsExpandedProvider>
-              <App />
+              <RendererErrorBoundary>
+                <App />
+              </RendererErrorBoundary>
             </ToolsExpandedProvider>
           </CodeThemeProvider>
         </ReasoningLayoutProvider>
@@ -35,3 +39,11 @@ createRoot(root).render(
     </AccentThemeProvider>
   </StrictMode>,
 )
+
+window.addEventListener('error', event => {
+  getBridge().reportRendererFault('javascript', event.message)
+})
+window.addEventListener('unhandledrejection', event => {
+  const message = event.reason instanceof Error ? event.reason.message : String(event.reason)
+  getBridge().reportRendererFault('promise', message)
+})

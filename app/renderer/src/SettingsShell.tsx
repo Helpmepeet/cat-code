@@ -138,6 +138,8 @@ export function SettingsShell({
   projects,
   initialScope = 'user',
   initialCategory = 'general',
+  onOpenLogs,
+  onSaveDiagnostics,
 }: {
   snapshot: SettingsSnapshot | null
   agentsSnapshot?: AgentConfigSnapshot | null
@@ -169,6 +171,8 @@ export function SettingsShell({
    */
   initialScope?: SettingsScopeKind
   initialCategory?: string
+  onOpenLogs?: () => void
+  onSaveDiagnostics?: () => void
 
   /* Accepted but no longer rendered here — all four feed LIVE session state,
    * which Law 1 moves to the session inspector (`MetadataInspector.tsx` already
@@ -351,9 +355,20 @@ export function SettingsShell({
           {rail.length === 0 ? (
             <div className="px-2 text-xs text-text-subtle">No matches</div>
           ) : null}
+          {onOpenLogs || onSaveDiagnostics ? (
+            <div className="mt-auto border-t border-shell-seam px-2 pt-4">
+              <p className="mb-2 text-[10.5px] font-bold uppercase tracking-[0.1em] text-text-subtle">
+                Diagnostics
+              </p>
+              <div className="flex flex-col gap-1.5">
+                {onOpenLogs ? <button className="rounded-md border border-shell-seam px-2 py-1.5 text-left text-[11.5px] text-text-muted hover:bg-shell-hover" onClick={onOpenLogs} type="button">Open logs folder</button> : null}
+                {onSaveDiagnostics ? <button className="rounded-md border border-shell-seam px-2 py-1.5 text-left text-[11.5px] text-text-muted hover:bg-shell-hover" onClick={onSaveDiagnostics} type="button">Save diagnostics bundle</button> : null}
+              </div>
+            </div>
+          ) : null}
           {/* Where the categories that left this page went. Rendered in the rail
            * because that is where someone looks for a missing one. */}
-          <p className="mt-auto px-2 pt-6 text-[10.5px] leading-relaxed text-text-subtle">
+          <p className="px-2 pt-6 text-[10.5px] leading-relaxed text-text-subtle">
             {SETTINGS_SESSION_STATE_NOTE}
           </p>
         </nav>
@@ -979,4 +994,3 @@ function ManagedPanel({
     </>
   )
 }
-

@@ -1,0 +1,37 @@
+import { expect, test } from 'bun:test'
+import { createOperationalRecord, parseOperationalRecord } from './operationalLog.js'
+
+test('operational records redact paths, URL secrets, and token-shaped values', () => {
+  const record = createOperationalRecord(
+    {
+      level: 'error',
+      event: 'app.fatal',
+      process: 'main',
+      fields: { reason: 'failed at /Users/alice/project?token=sk_abcdefghijklmnopqrstuvwxyz' },
+    },
+    { launchId: 'launch', processInstanceId: 'process', now: () => new Date('2026-08-06T00:00:00Z') },
+  )
+  expect(record.fields.reason).not.toContain('/Users/alice')
+  expect(record.fields.reason).not.toContain('sk_')
+  expect(parseOperationalRecord({ ...record, fields: { apiKey: 'nope' } })).toBeNull()
+  expect(parseOperationalRecord({ ...record, fields: { message: 'nope' } })).toBeNull()
+  expect(parseOperationalRecord({ ...record, payload: 'nope' })).toBeNull()
+})
+
+test('operational events accept only their declared metadata fields', () => {
+  const appStart = createOperationalRecord(
+    {
+      level: 'info',
+      event: 'app.start',
+      process: 'main',
+      fields: { packaged: false, platform: 'darwin', arch: 'arm64' },
+    },
+    { launchId: 'launch', processInstanceId: 'process' },
+  )
+  expect(appStart.fields.platform).toBe('darwin')
+  expect(() => createOperationalRecord(
+    { level: 'info', event: 'app.start', process: 'main', fields: { reason: 'not valid for startup' } },
+    { launchId: 'launch', processInstanceId: 'process' },
+  )).toThrow('unsafe field reason')
+  expect(parseOperationalRecord({ ...appStart, fields: { reason: 'not valid for startup' } })).toBeNull()
+})
