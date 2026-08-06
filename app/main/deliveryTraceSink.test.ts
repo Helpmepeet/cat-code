@@ -41,7 +41,21 @@ test('delivery trace records sequence gaps and preserves every stage record', ()
   const text = readFileSync(join(root, 'logs', file), 'utf8')
   expect(text).toContain('trace.sequence.gap')
   expect(text).toContain('trace.sequence.duplicate')
-  expect(sink.summary('session')).toMatchObject({ produced: 3, nextExpected: 4 })
+  // Later observations cannot advance a contiguous source watermark over the
+  // missing second sequence.
+  expect(sink.summary('session')).toMatchObject({ produced: 1, nextExpected: 2 })
+})
+
+test('contiguous acknowledgements expose an earlier missing frame despite a later complete frame', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-contiguous-'))
+  const sink = createDeliveryTraceSink({ configDir: root, launchId: 'launch' })
+  const first = mintDeliveryTrace(1, 'stream')
+  const second = mintDeliveryTrace(2, 'stream')
+  for (const stage of ['engine.produced', 'sidecar.socket.sent', 'host.received', 'main.ipc.sent'] as const) sink.mark({ sessionId: 'session', trace: first, stage })
+  for (const stage of ['engine.produced', 'sidecar.socket.sent', 'host.received', 'main.ipc.sent', 'preload.received', 'renderer.state.applied', 'renderer.ui.committed'] as const) sink.mark({ sessionId: 'session', trace: second, stage })
+  expect(sink.summary('session')).toMatchObject({ produced: 2, ipcSent: 2, preloadReceived: 0, applied: 0, committed: 0 })
+  expect(sink.stuckSessionSummaries()[0]?.firstMissingStage).toBe('preload.received')
+  sink.close()
 })
 
 test('delivery acknowledgement lookup cannot cross a recreated stream epoch', () => {

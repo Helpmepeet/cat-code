@@ -42,7 +42,6 @@ import { SidecarServer } from './sidecarServer.js'
 import { createBackpressuredSocket } from './backpressuredSocket.js'
 import { createSidecarOperationalLogger } from './operationalLogger.js'
 import type { SidecarOperationalLogger } from './operationalLogger.js'
-import { cleanupOldDebugLogs } from '../../src/utils/cleanup.js'
 
 /**
  * CC-3 — idle self-exit TTL (docs O1 / SESSION-LIFETIME §2). A sidecar whose
@@ -58,7 +57,6 @@ import { cleanupOldDebugLogs } from '../../src/utils/cleanup.js'
  * `host.restoreSession` → `sessionResume.ts`, never attaching to an orphan).
  */
 const DEFAULT_SIDECAR_IDLE_TTL_MS = 15 * 60 * 1000
-const DEBUG_CLEANUP_DELAY_MS = 10 * 60 * 1000
 
 let activeOperationalLogger: SidecarOperationalLogger | null = null
 let activeAppSessionId: string | undefined
@@ -169,13 +167,6 @@ async function main(): Promise<void> {
     appSessionId: args.sessionId,
     fields: { role: 'sidecar', pid: process.pid },
   })
-  // Desktop owns one engine process per session, so it must schedule the engine
-  // debug retention that the terminal normally arms after startup. This is
-  // intentionally best-effort and never touches operational/delivery streams.
-  setTimeout(() => {
-    void cleanupOldDebugLogs().catch(() => {})
-  }, DEBUG_CLEANUP_DELAY_MS)
-
   if (!args.probeOnAttach) {
     await initializeSidecarRuntime()
   }
@@ -299,6 +290,14 @@ async function main(): Promise<void> {
       frame,
       deliveryTrace,
     }),
+    onDeliveryStage: (trace, stage, frameKind) => {
+      operational.deliveryStage({
+        sessionId: args.sessionId,
+        trace,
+        stage,
+        frameKind,
+      })
+    },
     log: line => operational.legacy(line),
     // CC-3 — the idle janitor: clean up the socket like the signal handlers do,
     // then exit 0 (a clean, expected shutdown — not a crash). `cleanup` is the

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { createOperationalRecord, parseOperationalRecord } from './operationalLog.js'
+import { createOperationalRecord, parseOperationalRecord, sanitizeOperationalText } from './operationalLog.js'
 
 test('operational records redact paths, URL secrets, and token-shaped values', () => {
   const record = createOperationalRecord(
@@ -34,4 +34,9 @@ test('operational events accept only their declared metadata fields', () => {
     { launchId: 'launch', processInstanceId: 'process' },
   )).toThrow('unsafe field reason')
   expect(parseOperationalRecord({ ...appStart, fields: { reason: 'not valid for startup' } })).toBeNull()
+})
+
+test('operational text removes every rooted path and URL path/query', () => {
+  expect(sanitizeOperationalText('/var/db/private.txt C:\\Users\\alice\\secret https://user:pw@example.com/private/customer?a=1#x'))
+    .not.toMatch(/var\/db|Users\\alice|private\/customer|user:pw|\?a=/)
 })

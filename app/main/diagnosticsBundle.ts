@@ -1,6 +1,6 @@
 /** Local-only support export assembled from closed, redacted JSONL records. */
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { release as osRelease } from 'node:os'
 import { parseOperationalRecord } from '../shared/operationalLog.js'
@@ -11,6 +11,7 @@ import {
   MAX_DELIVERY_TRACE_RECORD_BYTES,
   MAX_DELIVERY_TRACE_TOTAL_BYTES,
 } from './deliveryTraceSink.js'
+import { isDeliveryStage, isSafeDeliveryIdentifier } from '../shared/deliveryTrace.js'
 import {
   MAX_OPERATIONAL_LOG_AGE_MS,
   MAX_OPERATIONAL_LOG_BYTES,
@@ -40,7 +41,18 @@ export function buildDiagnosticsBundle({
   const streams: { operational: unknown[]; deliveryTrace: TraceRecord[] } = { operational: [], deliveryTrace: [] }
   let includedBytes = 0
   if (existsSync(logsDirectory)) {
-    for (const name of readdirSync(logsDirectory).sort()) {
+    const now = Date.now()
+    const candidates: Array<{ name: string; mtimeMs: number }> = []
+    for (const name of readdirSync(logsDirectory)) {
+      try {
+        const stat = statSync(join(logsDirectory, name))
+        if (stat.isFile() && now - stat.mtimeMs <= Math.max(MAX_OPERATIONAL_LOG_AGE_MS, MAX_DELIVERY_TRACE_AGE_MS)) {
+          candidates.push({ name, mtimeMs: stat.mtimeMs })
+        }
+      } catch {}
+    }
+    candidates.sort((a, b) => b.mtimeMs - a.mtimeMs)
+    for (const { name } of candidates) {
       const target = name.startsWith('operational-')
         ? streams.operational
         : name.startsWith('delivery-trace-')
@@ -48,8 +60,10 @@ export function buildDiagnosticsBundle({
           : null
       if (!target) continue
       try {
-        const text = readFileSync(join(logsDirectory, name), 'utf8').slice(0, MAX_FILE_BYTES)
-        for (const line of text.split('\n')) {
+        // Take the tail and parse newest complete records first, so an incident
+        // immediately before export wins admission over old retained history.
+        const text = readFileSync(join(logsDirectory, name), 'utf8').slice(-MAX_FILE_BYTES)
+        for (const line of text.split('\n').reverse()) {
           if (!line) continue
           const value = JSON.parse(line) as unknown
           const safe = target === streams.operational
@@ -138,28 +152,30 @@ export function parseDeliveryTraceRecord(value: unknown): TraceRecord | null {
     if (
       !['engine', 'sidecar', 'supervisor', 'host', 'attachment-gate', 'ipc-bridge', 'preload', 'renderer'].includes(item.component as string) ||
       !['bun-sidecar', 'electron-main', 'electron-renderer'].includes(item.processName as string) ||
-      typeof item.sessionId !== 'string' || typeof item.streamEpoch !== 'string' ||
-      !positiveInteger(item.sequence) || typeof item.traceId !== 'string' ||
+      !opaqueId(item.launchId) || !opaqueId(item.processInstanceId) ||
+      !opaqueId(item.sessionId) || !isSafeDeliveryIdentifier(item.streamEpoch) ||
+      !positiveInteger(item.sequence) || !isSafeDeliveryIdentifier(item.traceId) ||
       !positiveInteger(item.deliveryAttempt) || typeof item.replay !== 'boolean' || typeof item.stage !== 'string' ||
+      !isDeliveryStage(item.stage) ||
       !positiveInteger(item.connectionEpoch) ||
       (item.frameKind !== undefined && (typeof item.frameKind !== 'string' || !/^[a-z][a-z0-9.-]{0,95}$/.test(item.frameKind))) ||
       (item.processStartedAt !== undefined && (typeof item.processStartedAt !== 'string' || Number.isNaN(Date.parse(item.processStartedAt)))) ||
-      (item.documentId !== undefined && typeof item.documentId !== 'string') ||
+      (item.documentId !== undefined && !opaqueId(item.documentId)) ||
       (item.subscriptionEpoch !== undefined && !positiveInteger(item.subscriptionEpoch))
     ) return null
   } else if (kind === 'trace.loss') {
     if (
       !positiveInteger(item.sequenceStart) || !positiveInteger(item.sequenceEnd) ||
       !positiveInteger(item.droppedCount) || typeof item.reason !== 'string' ||
-      (item.sessionId !== undefined && typeof item.sessionId !== 'string') ||
-      (item.streamEpoch !== undefined && typeof item.streamEpoch !== 'string')
+      (item.sessionId !== undefined && !opaqueId(item.sessionId)) ||
+      (item.streamEpoch !== undefined && !isSafeDeliveryIdentifier(item.streamEpoch))
     ) return null
   } else if (kind === 'trace.ack.rejected') {
     if (
-      typeof item.sessionId !== 'string' || typeof item.streamEpoch !== 'string' ||
+      !opaqueId(item.sessionId) || !isSafeDeliveryIdentifier(item.streamEpoch) ||
       !positiveInteger(item.sequence) || typeof item.reason !== 'string'
     ) return null
-  } else if (typeof item.sessionId !== 'string' || typeof item.streamEpoch !== 'string' || !positiveInteger(item.sequence) || typeof item.stage !== 'string') {
+  } else if (!opaqueId(item.sessionId) || !isSafeDeliveryIdentifier(item.streamEpoch) || !positiveInteger(item.sequence) || !isDeliveryStage(item.stage)) {
     return null
   }
   return item as TraceRecord
@@ -169,7 +185,7 @@ export function deriveStuckSessionSummaries(records: readonly TraceRecord[]): Ar
   const sessions = new Map<string, {
     sessionId: string; streamEpoch: string; produced: number; lastProducedFrameKind: string | null; socketSent: number; hostReceived: number;
     ipcSent: number; preloadReceived: number; applied: number; committed: number; anomalies: Record<string, number>;
-    traceLossCount: number;
+    traceLossCount: number; coverage: Map<number, Set<string>>;
   }>()
   let unassociatedTraceLossCount = 0
   for (const record of records) {
@@ -179,7 +195,7 @@ export function deriveStuckSessionSummaries(records: readonly TraceRecord[]): Ar
         const key = `${record.sessionId}\u0000${record.streamEpoch}`
         const state = sessions.get(key) ?? {
           sessionId: record.sessionId, streamEpoch: record.streamEpoch, produced: 0, lastProducedFrameKind: null, socketSent: 0,
-          hostReceived: 0, ipcSent: 0, preloadReceived: 0, applied: 0, committed: 0, anomalies: {}, traceLossCount: 0,
+          hostReceived: 0, ipcSent: 0, preloadReceived: 0, applied: 0, committed: 0, anomalies: {} as Record<string, number>, traceLossCount: 0, coverage: new Map(),
         }
         state.traceLossCount = (state.traceLossCount ?? 0) + droppedCount
         sessions.set(key, state)
@@ -192,7 +208,7 @@ export function deriveStuckSessionSummaries(records: readonly TraceRecord[]): Ar
     const key = `${record.sessionId}\u0000${record.streamEpoch}`
     const state = sessions.get(key) ?? {
       sessionId: record.sessionId, streamEpoch: record.streamEpoch, produced: 0, lastProducedFrameKind: null, socketSent: 0,
-      hostReceived: 0, ipcSent: 0, preloadReceived: 0, applied: 0, committed: 0, anomalies: {}, traceLossCount: 0,
+      hostReceived: 0, ipcSent: 0, preloadReceived: 0, applied: 0, committed: 0, anomalies: {} as Record<string, number>, traceLossCount: 0, coverage: new Map(),
     }
     const recordKind = record.recordKind
     if (typeof recordKind !== 'string') continue
@@ -202,6 +218,9 @@ export function deriveStuckSessionSummaries(records: readonly TraceRecord[]): Ar
       continue
     }
     const sequence = record.sequence as number
+    const coverage = state.coverage.get(sequence) ?? new Set<string>()
+    coverage.add(record.stage as string)
+    state.coverage.set(sequence, coverage)
     switch (record.stage) {
       case 'engine.produced':
         if (sequence >= state.produced) {
@@ -220,15 +239,44 @@ export function deriveStuckSessionSummaries(records: readonly TraceRecord[]): Ar
     sessions.set(key, state)
   }
   return [...sessions.values()].map(state => ({
-    ...state,
+    ...withoutCoverage(state),
+    watermarks: contiguousBundleWatermarks(state.coverage),
     traceLossCount: state.traceLossCount + unassociatedTraceLossCount,
-    firstMissingStage: state.produced > state.socketSent ? 'sidecar.socket.sent'
-      : state.socketSent > state.hostReceived ? 'host.received'
-      : state.hostReceived > state.ipcSent ? 'main.ipc.sent'
-      : state.ipcSent > state.preloadReceived ? 'preload.received'
-      : state.preloadReceived > state.applied ? 'renderer.state.applied'
-      : state.applied > state.committed ? 'renderer.ui.committed' : null,
+    firstMissingStage: firstMissingFromCoverage(state.coverage),
   }))
+}
+
+function withoutCoverage<T extends { coverage: unknown }>(state: T): Omit<T, 'coverage'> {
+  const { coverage: _coverage, ...rest } = state
+  return rest
+}
+
+function contiguousBundleWatermarks(coverage: ReadonlyMap<number, ReadonlySet<string>>): Record<string, number> {
+  const through = (stages: readonly string[]): number => {
+    let sequence = 1
+    while (stages.some(stage => coverage.get(sequence)?.has(stage))) sequence++
+    return sequence - 1
+  }
+  return {
+    produced: through(['engine.produced']), socketSent: through(['sidecar.socket.sent']),
+    hostReceived: through(['host.received']), ipcSent: through(['main.ipc.sent']),
+    preloadReceived: through(['preload.received', 'renderer.subscription.received']),
+    applied: through(['renderer.state.applied']), committed: through(['renderer.ui.committed']),
+  }
+}
+
+function firstMissingFromCoverage(coverage: ReadonlyMap<number, ReadonlySet<string>>): string | null {
+  const produced = contiguousBundleWatermarks(coverage).produced
+  for (let sequence = 1; sequence <= produced; sequence++) {
+    const stages = coverage.get(sequence) ?? new Set<string>()
+    if (!stages.has('sidecar.socket.sent')) return 'sidecar.socket.sent'
+    if (!stages.has('host.received')) return 'host.received'
+    if (!stages.has('main.ipc.sent')) return 'main.ipc.sent'
+    if (!stages.has('preload.received') && !stages.has('renderer.subscription.received')) return 'preload.received'
+    if (!stages.has('renderer.state.applied')) return 'renderer.state.applied'
+    if (!stages.has('renderer.ui.committed')) return 'renderer.ui.committed'
+  }
+  return null
 }
 
 export function deriveProcessInstances(
@@ -278,6 +326,10 @@ export function deriveProcessInstances(
 
 function positiveInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+}
+
+function opaqueId(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value)
 }
 
 function bounded(value: string): string {

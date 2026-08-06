@@ -6,9 +6,11 @@ import {
   createOperationalRecord,
   type OperationalRecordInput,
 } from '../shared/operationalLog.js'
+import type { DeliveryTrace, SidecarDeliveryStageRecord } from '../shared/deliveryTrace.js'
 
 export type SidecarOperationalLogger = {
   write(input: Omit<OperationalRecordInput, 'process'>): void
+  deliveryStage(input: Omit<SidecarDeliveryStageRecord, 'recordKind' | 'wallTimestamp' | 'monotonicTimestampMs' | 'processInstanceId' | 'processStartedAt'>): void
   legacy(line: string): void
 }
 
@@ -59,8 +61,28 @@ export function createSidecarOperationalLogger({
       // The pipe is diagnostics-only. Backpressure/error must not alter session IO.
     }
   }
+  const deliveryStage = (input: Omit<SidecarDeliveryStageRecord, 'recordKind' | 'wallTimestamp' | 'monotonicTimestampMs' | 'processInstanceId' | 'processStartedAt'>): void => {
+    if (!writable) return
+    try {
+      // The caller supplies only closed delivery metadata.  This is deliberately
+      // synchronous: a process death after a socket failure must not erase the
+      // causal marker that identifies the failed hop.
+      const record: SidecarDeliveryStageRecord = {
+        recordKind: 'delivery.trace',
+        ...input,
+        wallTimestamp: new Date().toISOString(),
+        monotonicTimestampMs: performance.now(),
+        processInstanceId,
+        processStartedAt,
+      }
+      writeSync(fd as number, `${JSON.stringify(record)}\n`)
+    } catch {
+      // Descriptor evidence is best effort and cannot alter engine IO.
+    }
+  }
   return {
     write,
+    deliveryStage,
     legacy(line) {
       write({
         level: /fatal|fail|error|invalid|overflow/i.test(line) ? 'warn' : 'info',

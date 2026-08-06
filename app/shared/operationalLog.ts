@@ -130,7 +130,10 @@ export type OperationalRecordInput = Omit<
 }
 
 const SECRET_KEY = /(token|secret|password|credential|authorization|cookie|vault|api[_-]?key)/i
-const ABSOLUTE_PATH = /(?:^|[\s"'(])(?:[A-Za-z]:[\\/]|\/Users\/|\/home\/|\/private\/|\/tmp\/)/g
+// Any rooted POSIX or Windows path is personal/environmental information.  The
+// second-pass bundle parser only admits opaque identifiers, but operational
+// fields still need this broad first-pass protection.
+const ABSOLUTE_PATH = /(?:^|[\s"'(])(?:[A-Za-z]:[\\/][^\s"')]*|\\\\[^\s"']+|\/(?:[^\s"')]+))/g
 const URL_WITH_SENSITIVE_PARTS = /\bhttps?:\/\/[^\s]+/gi
 const TOKEN_SHAPE = /\b(?:bearer\s+)?(?:sk|rk|pk|ghp|eyJ)[A-Za-z0-9._-]{12,}\b/gi
 const CONTROL = /[\u0000-\u001f\u007f]/g
@@ -140,7 +143,7 @@ export function sanitizeOperationalText(value: string): string {
     .replace(URL_WITH_SENSITIVE_PARTS, raw => {
       try {
         const url = new URL(raw)
-        return `${url.protocol}//${url.host}${url.pathname}`
+        return `${url.protocol}//${url.host}`
       } catch {
         return '[redacted-url]'
       }

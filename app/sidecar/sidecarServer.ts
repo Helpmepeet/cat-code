@@ -62,7 +62,7 @@ import type {
 } from '../../src/web/appSessionProtocol.js'
 import { parseThreadGoal } from '../../src/utils/threadGoal.js'
 import { encodeFrame, FrameDecoder } from '../shared/framing.js'
-import { mintDeliveryTrace, type DeliveryTrace } from '../shared/deliveryTrace.js'
+import { mintDeliveryTrace, type DeliveryStage, type DeliveryTrace } from '../shared/deliveryTrace.js'
 import {
   checkJsonSafe,
   omitUndefinedObjectProperties,
@@ -134,7 +134,7 @@ import type { SidecarRemoteSettingsDomain } from './remoteSettingsDomain.js'
 import type { PermissionDisplayFacts } from './permissionDomain.js'
 
 export type SidecarSocketLike = {
-  write(data: Uint8Array): void
+  write(data: Uint8Array, onFlushed?: () => void): void
   end(): void
 }
 
@@ -157,6 +157,8 @@ export type SidecarServerOptions = {
    * server tests and other in-process consumers.
    */
   wrapOutboundFrame?: (frame: ServerFrame, trace: DeliveryTrace) => unknown
+  /** Causal descriptor emitted at the actual sidecar boundary, never frame data. */
+  onDeliveryStage?: (trace: DeliveryTrace, stage: Extract<DeliveryStage, 'engine.produced' | 'sidecar.received' | 'sidecar.socket.queued' | 'sidecar.socket.sent'>, frameKind: string) => void
   /**
    * Permissions domain capability (P2-4). Optional because the P1-0 probe
    * fixture has no engine app-state store; when absent, `permission.setMode`
@@ -371,6 +373,7 @@ export class SidecarServer {
   private readonly titleGenerator: SessionTitleGenerator
   private readonly log: (line: string) => void
   private readonly wrapOutboundFrame: ((frame: ServerFrame, trace: DeliveryTrace) => unknown) | null
+  private readonly onDeliveryStage: ((trace: DeliveryTrace, stage: Extract<DeliveryStage, 'engine.produced' | 'sidecar.received' | 'sidecar.socket.queued' | 'sidecar.socket.sent'>, frameKind: string) => void) | null
   private readonly deliveryStreamEpoch = randomUUID()
   private readonly deliveryProcessInstanceId = randomUUID()
   private deliverySequence = 0
@@ -462,6 +465,7 @@ export class SidecarServer {
     })
     this.log = options.log ?? (line => process.stderr.write(`${line}\n`))
     this.wrapOutboundFrame = options.wrapOutboundFrame ?? null
+    this.onDeliveryStage = options.onDeliveryStage ?? null
 
     // Subscribe once; broadcast every event to all connected clients as a raw
     // `event` frame. (P1-0 has one client, but the fan-out matches the WS
@@ -3361,17 +3365,28 @@ export class SidecarServer {
       }
     }
 
+    const trace = this.wrapOutboundFrame
+      ? mintDeliveryTrace(
+        ++this.deliverySequence,
+        this.deliveryStreamEpoch,
+        this.deliveryProcessInstanceId,
+        undefined,
+        undefined,
+        connection.deliveryConnectionEpoch,
+      )
+      : null
+    // These are emitted before encoding and write, respectively.  They are not
+    // reconstructed by Electron after receipt, so a failed encode/write leaves
+    // an honest causal trail.
+    if (trace) {
+      this.onDeliveryStage?.(trace, 'engine.produced', frame.kind)
+      this.onDeliveryStage?.(trace, 'sidecar.received', frame.kind)
+    }
+
     let encoded: Buffer
     try {
       const payload = this.wrapOutboundFrame
-        ? this.wrapOutboundFrame(frame, mintDeliveryTrace(
-          ++this.deliverySequence,
-          this.deliveryStreamEpoch,
-          this.deliveryProcessInstanceId,
-          undefined,
-          undefined,
-          connection.deliveryConnectionEpoch,
-        ))
+        ? this.wrapOutboundFrame(frame, trace!)
         : frame
       encoded = encodeFrame(payload)
     } catch (error) {
@@ -3393,7 +3408,10 @@ export class SidecarServer {
     }
 
     try {
-      connection.socket.write(encoded)
+      if (trace) this.onDeliveryStage?.(trace, 'sidecar.socket.queued', frame.kind)
+      connection.socket.write(encoded, () => {
+        if (trace) this.onDeliveryStage?.(trace, 'sidecar.socket.sent', frame.kind)
+      })
     } catch (error) {
       this.log(
         `[sidecar] write failed, dropping connection: ${

@@ -49,6 +49,23 @@ export type DeliveryAcknowledgement = Readonly<{
   rendererProcessStartedAt: string
 }>
 
+/**
+ * A sidecar-originated, metadata-only causal marker.  It travels on the
+ * dedicated diagnostics descriptor rather than in the frame payload, so a
+ * frame that never reaches main can still leave truthful evidence.
+ */
+export type SidecarDeliveryStageRecord = Readonly<{
+  recordKind: 'delivery.trace'
+  sessionId: string
+  trace: DeliveryTrace
+  stage: Extract<DeliveryStage, 'engine.produced' | 'sidecar.received' | 'sidecar.socket.queued' | 'sidecar.socket.sent'>
+  frameKind: string
+  wallTimestamp: string
+  monotonicTimestampMs: number
+  processInstanceId: string
+  processStartedAt: string
+}>
+
 export function mintDeliveryTrace(
   sequence: number,
   streamEpoch: string = randomUUID(),
@@ -76,4 +93,8 @@ export function replayDeliveryTrace(trace: DeliveryTrace): DeliveryTrace {
 
 export function isDeliveryStage(value: unknown): value is DeliveryStage {
   return typeof value === 'string' && (DELIVERY_STAGES as readonly string[]).includes(value)
+}
+
+export function isSafeDeliveryIdentifier(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
 }

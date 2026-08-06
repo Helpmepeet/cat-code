@@ -5,6 +5,7 @@ import {
   closeSync,
   existsSync,
   fstatSync,
+  fsyncSync,
   mkdirSync,
   openSync,
   readdirSync,
@@ -99,9 +100,9 @@ export function createOperationalLogSink({
       }
       writeSync(fd, line)
       if (sync) {
-        // `fsyncSync` is intentionally avoided for normal records. Closing the
-        // descriptor after the bounded write forces the fatal record out without
-        // making every lifecycle breadcrumb a synchronous disk stall.
+        // `fsyncSync` is intentionally avoided for normal records. Fatal
+        // evidence pays one bounded durability sync before close.
+        fsyncSync(fd)
         closeSync(fd)
         fd = null
       }

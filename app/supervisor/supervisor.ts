@@ -47,7 +47,7 @@ import {
   type OperationalLogLevel,
   type OperationalRecord,
 } from '../shared/operationalLog.js'
-import type { DeliveryTrace } from '../shared/deliveryTrace.js'
+import { isDeliveryStage, isSafeDeliveryIdentifier, type DeliveryTrace, type SidecarDeliveryStageRecord } from '../shared/deliveryTrace.js'
 
 export type SupervisorOptions = {
   /**
@@ -76,6 +76,8 @@ export type SupervisorOptions = {
   log?: (line: string) => void
   /** Dedicated sanitized descriptor records. Raw stderr never enters this path. */
   onOperationalRecord?: (record: OperationalRecord) => void
+  /** Sidecar-originated causal evidence from FD 3; raw frame data never enters. */
+  onDeliveryTraceRecord?: (record: SidecarDeliveryStageRecord) => void
   /** Closed lifecycle events emitted without string-prefix parsing. */
   onOperationalEvent?: (input: {
     event: OperationalEvent
@@ -236,7 +238,17 @@ export class SidecarSupervisor {
     for (const line of lines) {
       if (line.length === 0) continue
       try {
-        const parsed = parseOperationalRecord(JSON.parse(line))
+        const value = JSON.parse(line)
+        const traceRecord = parseSidecarDeliveryStageRecord(value)
+        if (traceRecord) {
+          if (traceRecord.sessionId !== record.sessionId) {
+            this.log(`[supervisor] dropped invalid delivery trace for ${record.sessionId}`)
+            continue
+          }
+          this.options.onDeliveryTraceRecord?.(traceRecord)
+          continue
+        }
+        const parsed = parseOperationalRecord(value)
         if (!parsed || parsed.process !== 'sidecar' || parsed.appSessionId !== record.sessionId) {
           this.log(`[supervisor] dropped invalid operational record for ${record.sessionId}`)
           continue
@@ -684,6 +696,21 @@ function isDeliveryTrace(value: unknown): value is DeliveryTrace {
 
 function isTraceUuid(value: unknown): value is string {
   return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+}
+
+function parseSidecarDeliveryStageRecord(value: unknown): SidecarDeliveryStageRecord | null {
+  if (!isObjectRecord(value) || Object.keys(value).length !== 9 || value.recordKind !== 'delivery.trace') return null
+  if (
+    typeof value.sessionId !== 'string' || value.sessionId.length < 1 || value.sessionId.length > 128 ||
+    !isDeliveryTrace(value.trace) ||
+    !['engine.produced', 'sidecar.received', 'sidecar.socket.queued', 'sidecar.socket.sent'].includes(value.stage as string) ||
+    typeof value.frameKind !== 'string' || !/^[a-z][a-z0-9.-]{0,95}$/.test(value.frameKind) ||
+    typeof value.wallTimestamp !== 'string' || Number.isNaN(Date.parse(value.wallTimestamp)) ||
+    typeof value.monotonicTimestampMs !== 'number' || !Number.isFinite(value.monotonicTimestampMs) || value.monotonicTimestampMs < 0 ||
+    !isSafeDeliveryIdentifier(value.processInstanceId) ||
+    typeof value.processStartedAt !== 'string' || Number.isNaN(Date.parse(value.processStartedAt))
+  ) return null
+  return value as SidecarDeliveryStageRecord
 }
 
 function sendFailureCodeForStatus(status: SidecarStatus): SendFailureCode {

@@ -24,19 +24,19 @@ if (!root) {
 // a toast is exactly the kind of chrome that would silently miss the accent.
 createRoot(root).render(
   <StrictMode>
-    <AccentThemeProvider>
-      <ToastHost>
-        <ReasoningLayoutProvider>
-          <CodeThemeProvider>
-            <ToolsExpandedProvider>
-              <RendererErrorBoundary>
+    <RendererErrorBoundary>
+      <AccentThemeProvider>
+        <ToastHost>
+          <ReasoningLayoutProvider>
+            <CodeThemeProvider>
+              <ToolsExpandedProvider>
                 <App />
-              </RendererErrorBoundary>
-            </ToolsExpandedProvider>
-          </CodeThemeProvider>
-        </ReasoningLayoutProvider>
-      </ToastHost>
-    </AccentThemeProvider>
+              </ToolsExpandedProvider>
+            </CodeThemeProvider>
+          </ReasoningLayoutProvider>
+        </ToastHost>
+      </AccentThemeProvider>
+    </RendererErrorBoundary>
   </StrictMode>,
 )
 

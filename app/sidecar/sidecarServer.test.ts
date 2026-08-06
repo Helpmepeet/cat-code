@@ -290,6 +290,7 @@ test('on attach, the server sends the canonical controller-derived app.ready pay
 })
 
 test('production delivery envelope adds metadata beside, never inside, the raw ServerFrame', () => {
+  const stages: string[] = []
   const server = new SidecarServer({
     sessionId: SESSION,
     engineSessionId: ENGINE_SESSION,
@@ -299,16 +300,18 @@ test('production delivery envelope adds metadata beside, never inside, the raw S
       frame,
       deliveryTrace,
     }),
+    onDeliveryStage: (_trace, stage) => stages.push(stage),
     log: () => {},
   })
   servers.push(server)
   const decoder = new FrameDecoder(MAX_FRAME_BYTES)
   const received: unknown[] = []
   server.addConnection({
-    write(data) {
+    write(data, onFlushed) {
       for (const result of decoder.push(Buffer.from(data))) {
         if (result.kind === 'frame') received.push(result.payload)
       }
+      onFlushed?.()
     },
     end() {},
   })
@@ -318,6 +321,7 @@ test('production delivery envelope adds metadata beside, never inside, the raw S
     deliveryTrace?: { sequence?: unknown; sourceProcessInstanceId?: unknown }
   }
   expect(envelope.kind).toBe('sidecar.delivery-envelope')
+  expect(stages).toEqual(['engine.produced', 'sidecar.received', 'sidecar.socket.queued', 'sidecar.socket.sent'])
   expect(envelope.frame?.kind).toBe('ready')
   expect(envelope.frame).not.toHaveProperty('deliveryTrace')
   expect(envelope.deliveryTrace?.sequence).toBe(1)

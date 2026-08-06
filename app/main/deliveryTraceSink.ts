@@ -13,6 +13,9 @@ export const MAX_DELIVERY_TRACE_FILE_BYTES = 20 * 1024 * 1024
 export const MAX_DELIVERY_TRACE_TOTAL_BYTES = 100 * 1024 * 1024
 export const MAX_DELIVERY_TRACE_FILES = 6
 export const MAX_DELIVERY_TRACE_AGE_MS = 72 * 60 * 60 * 1000
+/** In-memory evidence is a bounded diagnostic ring, never a session history. */
+export const MAX_DELIVERY_TRACE_SEQUENCES_PER_STREAM = 2_048
+export const MAX_DELIVERY_TRACE_STREAMS = 128
 
 export type DeliveryComponent =
   | 'engine' | 'sidecar' | 'supervisor' | 'host' | 'attachment-gate'
@@ -48,9 +51,11 @@ export type DeliveryTraceSink = {
     /** Closed ServerFrame discriminant only; never the frame payload. */
     frameKind?: string
     documentId?: string
-    subscriptionEpoch?: number
-    processInstanceId?: string
-    processStartedAt?: string
+  subscriptionEpoch?: number
+  processInstanceId?: string
+  processStartedAt?: string
+  wallTimestamp?: string
+  monotonicTimestampMs?: number
   }): void
   accepts(sessionId: string, streamEpoch: string, sequence: number, documentId: string, subscriptionEpoch: number): boolean
   traceFor(sessionId: string, streamEpoch: string, sequence: number): DeliveryTrace | null
@@ -73,6 +78,7 @@ type StreamState = {
   watermarks: DeliveryWatermarks
   losses: number
   anomalies: Map<string, number>
+  lastTouched: number
 }
 
 export function createDeliveryTraceSink({
@@ -195,6 +201,26 @@ export function createDeliveryTraceSink({
     if (!appendLine(record)) noteLoss(sequence, 'writer_unavailable_or_record_oversize', attribution)
   }
 
+  const flushPendingLoss = (): void => {
+    if (!pendingLoss) return
+    const loss = pendingLoss
+    if (appendLine({
+      schemaVersion: 1,
+      recordKind: 'trace.loss',
+      wallTimestamp: now().toISOString(),
+      monotonicTimestampMs: monotonicNow(),
+      launchId,
+      processName: 'electron-main',
+      processInstanceId,
+      sequenceStart: loss.first,
+      sequenceEnd: loss.last,
+      droppedCount: loss.count,
+      reason: loss.reason,
+      ...(loss.sessionId ? { sessionId: loss.sessionId } : {}),
+      ...(loss.streamEpoch ? { streamEpoch: loss.streamEpoch } : {}),
+    })) pendingLoss = null
+  }
+
   const stateFor = (sessionId: string, streamEpoch: string): StreamState => {
     const key = `${sessionId}\u0000${streamEpoch}`
     let state = streams.get(key)
@@ -210,6 +236,7 @@ export function createDeliveryTraceSink({
         },
         losses: 0,
         anomalies: new Map(),
+        lastTouched: Date.now(),
       }
       streams.set(key, state)
     }
@@ -243,8 +270,9 @@ export function createDeliveryTraceSink({
 
   return {
     processInstanceId,
-    mark({ sessionId, trace, stage, frameKind, documentId, subscriptionEpoch, processInstanceId: stageInstanceId, processStartedAt: stageStartedAt }) {
+    mark({ sessionId, trace, stage, frameKind, documentId, subscriptionEpoch, processInstanceId: stageInstanceId, processStartedAt: stageStartedAt, wallTimestamp: stageWallTimestamp, monotonicTimestampMs: stageMonotonicTimestampMs }) {
       const state = stateFor(sessionId, trace.streamEpoch)
+      state.lastTouched = Date.now()
       const seenStages = state.stages.get(trace.sequence) ?? new Set<string>()
       const stageKey = `${trace.deliveryAttempt}:${stage}`
       if (seenStages.has(stageKey)) {
@@ -262,23 +290,18 @@ export function createDeliveryTraceSink({
         if (trace.sequence > state.watermarks.nextExpected) {
           appendAnomaly(state, sessionId, trace, stage, 'trace.sequence.gap', state.watermarks.nextExpected)
         }
-        state.watermarks = {
-          ...state.watermarks,
-          produced: Math.max(state.watermarks.produced, trace.sequence),
-          nextExpected: Math.max(state.watermarks.nextExpected, trace.sequence + 1),
-        }
       }
       state.traces.set(trace.sequence, trace)
       if (frameKind && isSafeFrameKind(frameKind)) state.frameKinds.set(trace.sequence, frameKind)
-      state.watermarks = updateWatermarks(state.watermarks, stage, trace.sequence)
+      state.watermarks = updateWatermarks(state, state.watermarks)
 
       const component = componentFor(stage)
       const sourceStage = component === 'engine' || component === 'sidecar'
       write({
         schemaVersion: 1,
         recordKind: 'delivery.trace',
-        wallTimestamp: sourceStage ? trace.sourceWallTimestamp : now().toISOString(),
-        monotonicTimestampMs: sourceStage ? trace.sourceMonotonicTimestampMs : monotonicNow(),
+        wallTimestamp: stageWallTimestamp ?? (sourceStage ? trace.sourceWallTimestamp : now().toISOString()),
+        monotonicTimestampMs: stageMonotonicTimestampMs ?? (sourceStage ? trace.sourceMonotonicTimestampMs : monotonicNow()),
         launchId,
         component,
         processName: sourceStage ? 'bun-sidecar' : component === 'preload' || component === 'renderer' ? 'electron-renderer' : 'electron-main',
@@ -296,6 +319,16 @@ export function createDeliveryTraceSink({
         ...(documentId ? { documentId } : {}),
         ...(subscriptionEpoch === undefined ? {} : { subscriptionEpoch }),
       }, trace.sequence, { state, sessionId, streamEpoch: trace.streamEpoch })
+      trimState(state, sessionId, trace.streamEpoch, trace.sequence, noteLoss)
+      if (streams.size > MAX_DELIVERY_TRACE_STREAMS) {
+        const oldest = [...streams.entries()].sort((a, b) => a[1].lastTouched - b[1].lastTouched)[0]
+        if (oldest && oldest[0] !== `${sessionId}\u0000${trace.streamEpoch}`) {
+          const [oldSession, oldEpoch] = oldest[0].split('\u0000')
+          const sequence = Math.max(...oldest[1].traces.keys(), 1)
+          noteLoss(sequence, 'stream_evicted', { state: oldest[1], sessionId: oldSession!, streamEpoch: oldEpoch! })
+          streams.delete(oldest[0])
+        }
+      }
     },
     accepts(sessionId, streamEpoch, sequence, _documentId, _subscriptionEpoch) {
       return streams.get(`${sessionId}\u0000${streamEpoch}`)?.traces.has(sequence) ?? false
@@ -343,6 +376,7 @@ export function createDeliveryTraceSink({
       })
     },
     close() {
+      flushPendingLoss()
       if (fd !== null) {
         try { closeSync(fd) } catch {}
         fd = null
@@ -351,15 +385,49 @@ export function createDeliveryTraceSink({
   }
 }
 
-function updateWatermarks(watermarks: DeliveryWatermarks, stage: DeliveryStage, sequence: number): DeliveryWatermarks {
-  const next = { ...watermarks }
-  if (stage === 'sidecar.socket.sent') next.socketSent = Math.max(next.socketSent, sequence)
-  if (stage === 'host.received') next.hostReceived = Math.max(next.hostReceived, sequence)
-  if (stage === 'main.ipc.sent') next.ipcSent = Math.max(next.ipcSent, sequence)
-  if (stage === 'preload.received' || stage === 'renderer.subscription.received') next.preloadReceived = Math.max(next.preloadReceived, sequence)
-  if (stage === 'renderer.state.applied') next.applied = Math.max(next.applied, sequence)
-  if (stage === 'renderer.ui.committed') next.committed = Math.max(next.committed, sequence)
-  return next
+function updateWatermarks(state: StreamState, watermarks: DeliveryWatermarks): DeliveryWatermarks {
+  const contiguous = (stage: DeliveryStage, current: number): number => {
+    let next = current + 1
+    while (hasStage(state, next, stage)) next++
+    return next - 1
+  }
+  const produced = contiguous('engine.produced', watermarks.produced)
+  return {
+    produced,
+    socketSent: contiguous('sidecar.socket.sent', watermarks.socketSent),
+    hostReceived: contiguous('host.received', watermarks.hostReceived),
+    ipcSent: contiguous('main.ipc.sent', watermarks.ipcSent),
+    preloadReceived: contiguousEither(state, ['preload.received', 'renderer.subscription.received'], watermarks.preloadReceived),
+    applied: contiguous('renderer.state.applied', watermarks.applied),
+    committed: contiguous('renderer.ui.committed', watermarks.committed),
+    nextExpected: produced + 1,
+  }
+}
+
+function contiguousEither(state: StreamState, stages: readonly DeliveryStage[], current: number): number {
+  let next = current + 1
+  while (stages.some(stage => hasStage(state, next, stage))) next++
+  return next - 1
+}
+
+function hasStage(state: StreamState, sequence: number, stage: DeliveryStage): boolean {
+  return [...(state.stages.get(sequence) ?? [])].some(value => value.endsWith(`:${stage}`))
+}
+
+function trimState(
+  state: StreamState,
+  sessionId: string,
+  streamEpoch: string,
+  sequence: number,
+  noteLoss: (sequence: number, reason: string, attribution?: { state: StreamState; sessionId: string; streamEpoch: string }) => void,
+): void {
+  while (state.traces.size > MAX_DELIVERY_TRACE_SEQUENCES_PER_STREAM) {
+    const oldest = Math.min(...state.traces.keys())
+    state.traces.delete(oldest)
+    state.frameKinds.delete(oldest)
+    state.stages.delete(oldest)
+    noteLoss(oldest, 'in_memory_eviction', { state, sessionId, streamEpoch })
+  }
 }
 
 function componentFor(stage: DeliveryStage): DeliveryComponent {

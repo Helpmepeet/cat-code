@@ -24,6 +24,7 @@ import {
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { spawn } from 'node:child_process'
 import { existsSync, realpathSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 
@@ -304,19 +305,11 @@ function traceFrame(frame: ServerFrame, stage: DeliveryStage): ServerFrame {
     ? replayDeliveryTrace(frame.deliveryTrace)
     : frame.deliveryTrace ?? mintDeliveryTrace((deliverySequences.get(frame.sessionId) ?? 0) + 1)
   if (created) deliverySequences.set(frame.sessionId, trace.sequence)
-  // A production frame carries identity minted in the sidecar's socket-only
-  // envelope. Keep a metadata-only fallback for older/test peers; never alter
-  // the raw event itself.
+  // Sidecar stages arrive independently on FD 3 at their actual process-clock
+  // boundaries.  Do not infer or backfill them here after a socket receipt.
   if (stage === 'supervisor.socket.received') {
     if (created) {
       logOperational('diagnostic', 'warn', { source: 'deliveryTrace', reason: 'missing_source_envelope' }, frame.sessionId)
-    } else {
-      // The source-minted envelope proves these causal boundaries occurred
-      // before this socket read. Persist their metadata only; no frame content
-      // is copied into the trace.
-      for (const prior of ['engine.produced', 'sidecar.received', 'sidecar.socket.queued', 'sidecar.socket.sent'] as const) {
-        deliveryTrace.mark({ sessionId: frame.sessionId, trace, stage: prior })
-      }
     }
   }
   deliveryTrace.mark({
@@ -860,6 +853,21 @@ const ACCOUNTS_POOL_WORKER_ENTRY = join(
   'sidecar',
   'accountsPoolWorker.ts',
 )
+const DEBUG_CLEANUP_WORKER_ENTRY = join(__dirname, '..', '..', 'app', 'sidecar', 'debugCleanupWorker.ts')
+
+function scheduleDebugCleanup(): void {
+  // A disposable, main-supervised worker gives all session sidecars one shared
+  // daily lock/marker.  Its result is intentionally non-fatal diagnostics.
+  try {
+    const child = spawn(process.env.CATCODE_BUN_BIN ?? 'bun', [...SIDECAR_RUNTIME_ARGS, DEBUG_CLEANUP_WORKER_ENTRY], {
+      stdio: 'ignore', detached: false,
+      env: { ...process.env, CATCODE_DEBUG_CLEANUP_MARKER_DIR: defaultRegistryDir() },
+    })
+    child.unref()
+  } catch {
+    logOperational('diagnostic', 'warn', { source: 'debugCleanup', reason: 'worker_spawn_failed' })
+  }
+}
 
 function createSupervisor(): SidecarSupervisor {
   // The sidecar runs the same default classifier feature as the engine bundle
@@ -874,6 +882,16 @@ function createSupervisor(): SidecarSupervisor {
     sidecarCwd: process.cwd(),
     log: line => logLegacyDiagnostic(line, 'supervisor', 'supervisor'),
     onOperationalRecord: record => operationalLog.writeRecord(record),
+    onDeliveryTraceRecord: record => deliveryTrace.mark({
+      sessionId: record.sessionId,
+      trace: record.trace,
+      stage: record.stage,
+      frameKind: record.frameKind,
+      processInstanceId: record.processInstanceId,
+      processStartedAt: record.processStartedAt,
+      wallTimestamp: record.wallTimestamp,
+      monotonicTimestampMs: record.monotonicTimestampMs,
+    }),
     onOperationalEvent: input => operationalLog.write({
       ...input,
       process: 'supervisor',
@@ -1178,8 +1196,11 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
       logOperational('sidecar.ready', 'info', { frame: 'ready' }, event.sessionId)
     }
     const traced = traceFrame(frame, 'supervisor.socket.received')
+    // Receipt is true whether the attachment gate forwards immediately or
+    // buffers for replay; record that before deciding its outcome.
+    traceFrame(traced, 'host.received')
     const gated = attachmentGate.onFrame(event.sessionId, traced)
-    traceFrame(traced, gated.length === 0 ? 'attachment.buffered' : 'host.received')
+    if (gated.length === 0) traceFrame(traced, 'attachment.buffered')
     deliver(gated)
     if (attachmentGate.hasPendingReplayCoalescing(event.sessionId)) {
       scheduleReplayFlush(event.sessionId)
@@ -2267,6 +2288,7 @@ if (!gotSingleInstanceLock) {
       app.dock?.setIcon(nativeImage.createFromPath(APP_ICON_PATH))
     }
     applySecurityBaseline()
+    scheduleDebugCleanup()
     registerIpcHandlers() // once — handlers read the module-level host/supervisor
     // Host construction (and thus the registry's launch sweep) runs only after we
     // hold the single-instance lock, so the sweep is never raced by a sibling.

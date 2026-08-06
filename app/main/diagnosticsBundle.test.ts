@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildDiagnosticsBundle } from './diagnosticsBundle.js'
+import { parseDeliveryTraceRecord } from './diagnosticsBundle.js'
 
 test('diagnostics bundle exports only closed operational and trace schemas', () => {
   const root = mkdtempSync(join(tmpdir(), 'cat-code-diagnostics-bundle-'))
@@ -21,8 +22,8 @@ test('diagnostics bundle exports only closed operational and trace schemas', () 
     `${JSON.stringify({
       schemaVersion: 1, recordKind: 'delivery.trace', wallTimestamp: '2026-08-06T00:00:00.000Z',
       monotonicTimestampMs: 1, launchId: 'launch', component: 'engine', processName: 'bun-sidecar',
-      processInstanceId: 'process', sessionId: 'session', streamEpoch: 'epoch', sequence: 1,
-      traceId: 'trace', deliveryAttempt: 1, replay: false, connectionEpoch: 1, frameKind: 'lifecycle', stage: 'engine.produced',
+      processInstanceId: 'process', sessionId: 'session', streamEpoch: '018f0000-0000-4000-8000-000000000001', sequence: 1,
+      traceId: '018f0000-0000-4000-8000-000000000002', deliveryAttempt: 1, replay: false, connectionEpoch: 1, frameKind: 'lifecycle', stage: 'engine.produced',
     })}\n${JSON.stringify({ recordKind: 'delivery.trace', content: 'must not be exported' })}\n`,
   )
 
@@ -44,4 +45,15 @@ test('diagnostics bundle exports only closed operational and trace schemas', () 
     configuration: { packaged: true },
   })
   expect(JSON.stringify(bundle)).not.toContain('must not be exported')
+})
+
+test('second-pass trace parser rejects path-bearing stages and unbounded identifiers', () => {
+  const base = {
+    schemaVersion: 1, recordKind: 'delivery.trace', wallTimestamp: '2026-08-06T00:00:00.000Z', monotonicTimestampMs: 1,
+    launchId: 'launch', component: 'engine', processName: 'bun-sidecar', processInstanceId: 'process', sessionId: 'session',
+    streamEpoch: '018f0000-0000-4000-8000-000000000001', sequence: 1, traceId: '018f0000-0000-4000-8000-000000000002',
+    deliveryAttempt: 1, replay: false, connectionEpoch: 1, frameKind: 'lifecycle', stage: 'engine.produced',
+  }
+  expect(parseDeliveryTraceRecord({ ...base, stage: '/Users/alice/secret' })).toBeNull()
+  expect(parseDeliveryTraceRecord({ ...base, sessionId: '/var/db/private' })).toBeNull()
 })

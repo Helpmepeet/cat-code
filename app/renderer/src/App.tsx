@@ -184,6 +184,7 @@ import {
   connectionRecoveryMessage,
   connectionTone,
   createConnectionState,
+  isTerminalConnectionStatus,
   reduceConnectionState,
   selectConnection,
   type ConnectionSnapshot,
@@ -606,6 +607,12 @@ export function App() {
     }
     const pending = pendingDeliveryCommitAcksRef.current.splice(0)
     for (const entry of pending) {
+      // A terminal UI acknowledgement is stronger than a generic React commit:
+      // the *active, rendered* session must expose the terminal connection
+      // projection produced by its reducer. Background tabs intentionally retain
+      // only `renderer.state.applied` evidence instead of claiming visible UI.
+      const projected = connection.sessions[entry.sessionId]
+      if (activeSessionId !== entry.sessionId || !projected || !isTerminalConnectionStatus(projected.status)) continue
       getBridge().deliveryAck(entry.sessionId, entry.sequence, entry.deliveryAttempt, entry.streamEpoch, entry.traceId, 'renderer.ui.committed')
     }
   })
@@ -928,7 +935,7 @@ export function App() {
         })
         // Streaming frames receive/apply proof but do not create one React-commit
         // IPC per token. Terminal/lifecycle outcomes receive the stronger proof.
-        if (frame.kind === 'ready' || frame.kind === 'lifecycle' || frame.kind === 'error') {
+        if (frame.kind === 'lifecycle' && ['disconnected', 'failed', 'exited'].includes(frame.status)) {
           pendingDeliveryCommitAcksRef.current.push({
             sessionId: frame.sessionId,
             sequence: frame.deliveryTrace.sequence,
