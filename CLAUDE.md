@@ -147,6 +147,13 @@ tears down all three (`app/scripts/dev.ts`). Facts that follow from that:
   new owned diagnostic is a regression.
 - Root `bun run lint` does not cover `app/**` (Phase-5 CI item). Do not cite a
   clean root lint as evidence for an `app/` change.
+- **Private desktop diagnostics:** Electron main owns bounded, local operational
+  and delivery-trace JSONL under the desktop config directory. They are support
+  evidence, not model context: never feed raw logs, transcripts, settings, or
+  debug output into a prompt. Users export only the allowlisted, redacted bundle
+  through **Save diagnostics bundle**; preserve the closed schemas and retention
+  caps in `app/shared/operationalLog.ts`, `app/main/deliveryTraceSink.ts`, and
+  `app/main/diagnosticsBundle.ts` when changing this path.
 
 ### Web (`web/`)
 
