@@ -1,10 +1,10 @@
 # Migration-branch code review — 2026-08-08
 
-Full-branch review of `migration`, run as 30 parallel scoped reviews (29 in one
-session plus one dispatched to a separate session). Findings are correctness AND
+Full-branch review of `migration`, run as 31 parallel scoped reviews (29 in one
+session plus two dispatched to a separate session). Findings are correctness AND
 code quality, weighted equally, per `00-review-contract.md`.
 
-**Totals: 60 HIGH · 180 MED · 165 LOW across 30 scopes.**
+**Totals: 61 HIGH · 181 MED · 167 LOW across 31 scopes.**
 
 Branch size at review time: 710 commits vs `main`; `app/` is 146,289 insertions
 / 0 deletions (entirely new), `src/` is 39,774 / 4,651.
@@ -63,6 +63,12 @@ is exposed to comes from engine modules the sidecar calls into.
    replaces the live in-process pool; Codex cap state is memory-only, so every
    capped account reads `healthy` and `/continue-after-limit` reports a usable
    account to a fully-exhausted user. (`S05`, `S01`)
+5. **`--bare` bypasses the entire policy core.** `prompts.ts:696` early-returns
+   identity + CWD + date, omitting prompt-injection handling, tool-output
+   provenance, instruction authority, risky-action consent, and truthful outcome
+   reporting. `corePolicy.test.ts:56` deletes `CLAUDE_CODE_SIMPLE` in its shared
+   helper, so no policy test can reach the path. `CLAUDE.md` §12 makes this the
+   documented GPT second-opinion path, piping diffs into it. (`S08`)
 
 ## Other HIGH findings by theme
 
@@ -144,8 +150,12 @@ from a grep.
 ## Files
 
 `00-review-contract.md` is the shared brief every scope worked from.
+`01-synthesis-and-verification.md` holds the cross-scope analysis: first-hand
+verification log, correction log, compounding chains, convergence map, fix plan.
 `A*` = desktop app · `S*` = engine · `X*` = cross-cutting.
-`S06-settings-reset-peer-session.md` came from a separate session.
+`S06-settings-reset-peer-session.md` and `S08-prompts-policy-peer-session.md`
+came from a separate session; both had their HIGH re-verified by the lead.
 
-Two scopes were never run: engine prompts/policy (provider keying, prompt-cache
-stability) and a second pass on `src/` provenance tagging.
+Every planned scope has now been run. Outstanding follow-up work is listed in
+`01-synthesis-and-verification.md` §6 (provenance tagging, and an adversarial
+second pass on the HIGHs before fixing).

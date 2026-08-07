@@ -224,6 +224,29 @@ demonstrates the correlation pattern to copy.
 
 ---
 
+### 3.7 Guards that are unreachable by construction — S08 × X01
+
+A distinct failure shape from "the test is weak": here the test helper deletes
+the condition that would exercise the guard.
+
+`S08`: `prompts.ts:696` returns a 59-byte prompt under `CLAUDE_CODE_SIMPLE`,
+omitting every policy invariant — and `corePolicy.test.ts:56` runs
+`delete process.env.CLAUDE_CODE_SIMPLE` in the shared `withPromptEnv` helper, so
+no policy test in the file can ever observe that branch.
+
+`X01`: 752 renderer tests render to a string with no DOM, so 77 effects, 17
+global listeners and ~274 handlers are never executed by anything.
+
+Same shape, different mechanism: in both cases a green suite is structurally
+incapable of reaching the code it appears to cover. When triaging any "this is
+tested" claim in this repo, check whether the harness can reach the branch at
+all before checking whether the assertion is strong.
+
+Amplifier specific to this repo: `CLAUDE.md` §12 makes `cat-code -p --bare` the
+documented GPT second-opinion path, piping diffs into the unprotected assembly.
+The default command uses `--tools ""`, but §12 also documents a
+`--permission-mode plan --add-dir .` variant that restores Read.
+
 ## 4. Convergence map — what is independent corroboration
 
 This matters for confidence. Wave 1 agents ran with no shared context. From wave
@@ -243,6 +266,10 @@ faster but means later agreement is partly anchoring.
   never covered here, and independently named `atomicWriteJson` from
   `codexTokenRefresh.ts` as the fix pattern. Its tautological-test finding is
   also the same shape `X01` found repeatedly.
+- The same session's `S08` independently landed on the review's other systemic
+  theme — tests that cannot reach what they claim to cover — via a mechanism no
+  scope here had seen (a test helper deleting the env var that selects the
+  branch). Two sessions, two scopes, no shared context, same two root causes.
 
 **Cross-fed (treat as blast-radius confirmation, not discovery):**
 - the plan-mode bypass (A13 then A12)
@@ -314,8 +341,11 @@ fixes rather than ports.
 2. **Adversarial second pass on the ~10 HIGHs you intend to fix.** Nothing in
    this review was re-reviewed by a second agent. That is the cheapest available
    confidence upgrade, far cheaper than re-running scopes.
-3. **The one unrun scope**: engine prompts/policy (`src/constants/prompts.ts`,
-   `corePolicy.ts`, `systemPromptSections.ts`, `promptStyles/`) — provider
-   keying against `resolveRequestProvider`, prompt-cache stability (this project
-   measured ~19M excess uncached tokens from warm-cache busts), and whether
-   `corePolicy.ts` is wired and internally consistent.
+3. **Prompt-cache stability** — the one question no scope answered. `S08` covered
+   the prompts/policy surface and confirmed provider keying is correct and
+   `corePolicy.ts` is genuinely wired, but it did not audit per-request variance
+   in the assembled prompt. This project measured ~19M excess uncached tokens
+   (3.1% of warm calls) from warm-cache busts, so the varying field is worth
+   finding. `S08` notes the section-cache keys capture model/tools/skills/mode/
+   directories/output-style and that volatile sections neither read nor seed
+   cached entries — which narrows where to look.
