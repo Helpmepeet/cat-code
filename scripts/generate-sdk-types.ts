@@ -72,3 +72,66 @@ for (const path of effortSnapshotPaths) {
     console.log(`Updated ${path.slice(repoRoot.length + 1)}.`)
   }
 }
+
+/**
+ * `agent_name` is schema-owned transcript identity on nested subagent frames.
+ * Keep the generated public type and both isolated-renderer snapshots in lock
+ * step with the schema source, just as supportedEffortLevels above does.
+ */
+const hasAgentNameSchema = /agent_name:\s*z\.string\(\)\.optional\(\)/.test(schemas)
+const agentNameTypes = [
+  'SDKAssistantMessage',
+  'SDKUserMessage',
+]
+
+function syncAgentNameField(contents: string): string {
+  const field = '  agent_name?: string\n'
+  // Remove the field from every declaration it has ever targeted before adding
+  // the current schema-backed set. This keeps a removed wire field from
+  // lingering in generated artifacts.
+  const withoutStaleFields = [
+    'SDKPartialAssistantMessage',
+    'SDKAssistantMessage',
+    'SDKToolProgressMessage',
+    'SDKUserMessage',
+  ].reduce(
+    (next, typeName) =>
+      replaceTypeDeclaration(next, typeName, declaration => declaration.replace(field, '')),
+    contents,
+  )
+  if (!hasAgentNameSchema) return withoutStaleFields
+  return agentNameTypes.reduce(
+    (next, typeName) =>
+      replaceTypeDeclaration(next, typeName, declaration => {
+        if (declaration.includes(field)) return declaration
+        return declaration.replace(
+          '  parent_tool_use_id?: string | null\n',
+          `  parent_tool_use_id?: string | null\n${field}`,
+        )
+      }),
+    withoutStaleFields,
+  )
+}
+
+function replaceTypeDeclaration(
+  contents: string,
+  typeName: string,
+  update: (declaration: string) => string,
+): string {
+  const start = contents.indexOf(`export type ${typeName} =`)
+  if (start < 0) return contents
+  const end = contents.indexOf('\n}\n\n', start)
+  if (end < 0) return contents
+  const declarationEnd = end + 3
+  const declaration = contents.slice(start, declarationEnd)
+  return `${contents.slice(0, start)}${update(declaration)}${contents.slice(declarationEnd)}`
+}
+
+for (const path of effortSnapshotPaths) {
+  const contents = readFileSync(path, 'utf-8')
+  const nextContents = syncAgentNameField(contents)
+  if (nextContents !== contents) {
+    writeFileSync(path, nextContents, 'utf-8')
+    console.log(`Synced subagent frame identity in ${path.slice(repoRoot.length + 1)}.`)
+  }
+}

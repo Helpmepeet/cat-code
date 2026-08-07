@@ -1365,6 +1365,9 @@ const SDKUserMessageContentSchema = lazySchema(() =>
     type: z.literal('user'),
     message: APIUserMessagePlaceholder(),
     parent_tool_use_id: z.string().nullable(),
+    // The engine-minted identity of the subagent that emitted this nested
+    // transcript frame. Absent on ordinary main-session turns.
+    agent_name: z.string().optional(),
     isSynthetic: z.boolean().optional(),
     tool_use_result: z.unknown().optional(),
     priority: z.enum(['now', 'next', 'later']).optional(),
@@ -1444,6 +1447,9 @@ export const SDKAssistantMessageSchema = lazySchema(() =>
     type: z.literal('assistant'),
     message: APIAssistantMessagePlaceholder(),
     parent_tool_use_id: z.string().nullable(),
+    // See SDKUserMessageContentSchema: this stays with the replayable nested
+    // frame rather than being joined from live task state by a consumer.
+    agent_name: z.string().optional(),
     error: SDKAssistantMessageErrorSchema().optional(),
     uuid: UUIDPlaceholder(),
     session_id: z.string(),
