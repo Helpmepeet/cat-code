@@ -1,7 +1,21 @@
 import { diffLines } from 'diff'
 import type { PermissionUpdate } from '@cat-code/engine/sdk'
+import type { PermissionRequest } from './permissionState.js'
 
-export type PermissionKeyboardAction = 'allow' | 'deny' | 'dismiss'
+/**
+ * What a key press does to the card's option list. The card is a keyboard-driven
+ * SELECT LIST (`Permissions.jsx:10-13`), so a key either moves the cursor, picks
+ * a row outright, confirms the row under the cursor, or refuses.
+ *
+ * `deny` is its own intent rather than "pick the last row" because two keys
+ * reach it without touching the cursor: Escape, which the deny row advertises
+ * with its `esc` chip, and the `n`/⌫ pair this app added.
+ */
+export type PermissionKeyIntent =
+  | { kind: 'move'; delta: 1 | -1 }
+  | { kind: 'pick'; index: number }
+  | { kind: 'confirm' }
+  | { kind: 'deny' }
 
 type KeyLike = {
   key: string
@@ -10,13 +24,31 @@ type KeyLike = {
   metaKey?: boolean
 }
 
-export function permissionActionForKey(
-  event: KeyLike,
-): PermissionKeyboardAction | null {
-  if (event.altKey || event.ctrlKey || event.metaKey) return null
-  if (event.key === 'Enter') return 'allow'
-  if (event.key.toLowerCase() === 'n' || event.key === 'Backspace') return 'deny'
-  if (event.key === 'Escape') return 'dismiss'
+/**
+ * The prototype's key map (`Permissions.jsx:385-398`): ↑/↓ · j/k · ⌃P/⌃N move,
+ * 1–9 pick directly, Enter confirms the highlighted row, Esc refuses.
+ *
+ * Ctrl is allowed through for exactly the ⌃P/⌃N pair, which is why this cannot
+ * simply reject every modified key: Cmd and Alt still bail, so the shell's own
+ * ⌘-chords (⌘T/⌘W/⌘1-9) never collide.
+ */
+export function permissionKeyIntent(event: KeyLike): PermissionKeyIntent | null {
+  if (event.altKey || event.metaKey) return null
+  const key = event.key
+  if (event.ctrlKey) {
+    if (key === 'n') return { kind: 'move', delta: 1 }
+    if (key === 'p') return { kind: 'move', delta: -1 }
+    return null
+  }
+  if (key === 'ArrowDown' || key === 'j') return { kind: 'move', delta: 1 }
+  if (key === 'ArrowUp' || key === 'k') return { kind: 'move', delta: -1 }
+  if (/^[1-9]$/.test(key)) return { kind: 'pick', index: Number(key) - 1 }
+  if (key === 'Enter') return { kind: 'confirm' }
+  // Escape is the prototype's reject (`Permissions.jsx:13`), NOT a hide: the
+  // hide-for-later lane is the footer's "Keep pending", which leaves the request
+  // live engine-side.
+  if (key === 'Escape') return { kind: 'deny' }
+  if (key.toLowerCase() === 'n' || key === 'Backspace') return { kind: 'deny' }
   return null
 }
 
@@ -63,9 +95,9 @@ function isKeyTarget(value: unknown): value is KeyTargetLike {
  *
  * Live when focus is on nothing element-like (`document`, `window`, `null`), on
  * an element that owns no keys of its own, or on the marked host card. Dead
- * everywhere else — the composer field it starts in, every button on the
- * card including the show/hide-input disclosure, and the deny-feedback field,
- * where typing the letter `n` must never deny.
+ * everywhere else: the composer field it starts in, and every button on the
+ * card, including each option row and the footer's own controls, where Enter
+ * must click the thing under focus rather than confirm the cursor's row.
  *
  * One predicate serves both consumers so they can never disagree: App's keydown
  * handler decides whether to act, and the card decides whether to advertise.
@@ -110,18 +142,20 @@ const MODE_LABEL: Record<SuggestionMode, string> = {
   bypassPermissions: 'Bypass permissions',
 }
 
+function formatRules(update: Extract<PermissionUpdate, { rules: unknown }>): string {
+  return update.rules
+    .map(rule =>
+      rule.ruleContent ? `${rule.toolName}(${rule.ruleContent})` : rule.toolName,
+    )
+    .join(', ')
+}
+
 export function describeSuggestion(update: PermissionUpdate): string {
   switch (update.type) {
     case 'addRules':
     case 'replaceRules':
     case 'removeRules': {
-      const rules = update.rules
-        .map(rule =>
-          rule.ruleContent
-            ? `${rule.toolName}(${rule.ruleContent})`
-            : rule.toolName,
-        )
-        .join(', ')
+      const rules = formatRules(update)
       return `${update.behavior} ${rules} · ${destinationLabel(update.destination)}`
     }
     case 'setMode':
@@ -134,6 +168,185 @@ export function describeSuggestion(update: PermissionUpdate): string {
       void _exhaustive
       return 'this permission change'
     }
+  }
+}
+
+/**
+ * The suggestion phrased as an option row. The prototype writes this line as
+ * "Yes, and don't ask again for `<scope>`" (`Permissions.jsx:112`), where its
+ * mock derived `<scope>` client-side; here the chip is the ENGINE's own
+ * serialization and the trailing text says where the rule would be kept, which
+ * the prototype's mock had no concept of.
+ *
+ * A suggestion on an ask is an allow-rule in practice, so that phrasing leads.
+ * The other update types keep the engine's own vocabulary rather than a phrasing
+ * invented for a case the prototype never had.
+ */
+function describeSuggestionOption(update: PermissionUpdate): {
+  pre: string
+  code: string
+  post: string
+} {
+  const post = ` · ${destinationLabel(update.destination)}`
+  switch (update.type) {
+    case 'addRules':
+    case 'replaceRules':
+      return update.behavior === 'allow'
+        ? { pre: "Yes, and don't ask again for ", code: formatRules(update), post }
+        : { pre: `Yes, and ${update.behavior} `, code: formatRules(update), post }
+    case 'removeRules':
+      return { pre: 'Yes, and stop applying ', code: formatRules(update), post }
+    case 'setMode':
+      return {
+        pre: 'Yes, and switch to ',
+        code: MODE_LABEL[update.mode] ?? update.mode,
+        post,
+      }
+    case 'addDirectories':
+      return {
+        pre: 'Yes, and add directory ',
+        code: update.directories.join(', '),
+        post,
+      }
+    case 'removeDirectories':
+      return {
+        pre: 'Yes, and remove directory ',
+        code: update.directories.join(', '),
+        post,
+      }
+    default: {
+      const _exhaustive: never = update
+      void _exhaustive
+      return { pre: 'Yes, and apply this permission change', code: '', post: '' }
+    }
+  }
+}
+
+/**
+ * One row of the card's select list, in the prototype's option grammar
+ * (`Permissions.jsx:86-133`): leading text, an optional mono chip carrying the
+ * scope, then trailing text.
+ *
+ * The chip is always ENGINE-authored. The prototype synthesised it client-side
+ * (`scopeFromRule`, `dirOf`), which this app cannot do: a row that names a scope
+ * different from the one that would actually persist is a correctness bug, so
+ * rule rows exist only where the engine minted a suggestion, and answering one
+ * selects it BY INDEX (decisions/PERMISSION-BOUNDARY.md §2, C1).
+ */
+export type PermissionOption = {
+  id: string
+  pre: string
+  code?: string
+  post?: string
+  effect: 'allow' | 'rule' | 'deny'
+  /** Index into this request's `permission_suggestions`; `rule` rows only. */
+  suggestionIndex?: number
+  /** Escape picks this row, and the row advertises that with an `esc` chip. */
+  esc?: boolean
+}
+
+/**
+ * The rows for one request, in the prototype's order: allow-once, then one row
+ * per rule the engine offered, then refuse.
+ *
+ * `denyOnly` drops every allow path. An AskUserQuestion whose questions cannot
+ * be read falls back to this card, and a bare allow there would run the tool
+ * with NO answers (decisions/ASK-USER-QUESTION-ANSWER.md). Mouse and keyboard
+ * both read this list, so they cannot disagree about what row 1 does.
+ */
+export function buildPermissionOptions(
+  request: PermissionRequest['request'],
+  denyOnly = false,
+): PermissionOption[] {
+  const deny: PermissionOption = {
+    id: 'deny',
+    pre: 'No, and tell Cat Code what to do differently',
+    effect: 'deny',
+    esc: true,
+  }
+  if (denyOnly) return [deny]
+  const suggestions = Array.isArray(request.permission_suggestions)
+    ? request.permission_suggestions
+    : []
+  return [
+    { id: 'allow', pre: 'Yes', effect: 'allow' },
+    ...suggestions.map((suggestion, index): PermissionOption => {
+      const { pre, code, post } = describeSuggestionOption(suggestion)
+      return {
+        id: `rule-${index}`,
+        pre,
+        code,
+        post,
+        effect: 'rule',
+        suggestionIndex: index,
+      }
+    }),
+    deny,
+  ]
+}
+
+/**
+ * The card's uppercase kicker, keyed on the same `tool_name` families the
+ * preview switch uses. The prototype carries one per variant
+ * (`Permissions.jsx:61-75` `kicker`); these are its words for the families that
+ * survived, and `Permission` is its fallback's.
+ */
+export function permissionKickerForTool(toolName: string): string {
+  switch (toolName) {
+    case 'Read':
+    case 'Glob':
+    case 'Grep':
+      return 'Filesystem'
+    case 'WebFetch':
+      return 'Web access'
+    case 'Skill':
+      return 'Skill'
+    default:
+      return 'Permission'
+  }
+}
+
+/**
+ * Whether the command itself is the card's headline rather than its body.
+ *
+ * The prototype inlines the preview into the title for its pure-command variants
+ * only (`Permissions.jsx:411-412`: bash, powershell, worker), and shows every
+ * other family a labelled body block. These are the two command families in the
+ * preview switch below.
+ */
+export function permissionTitleIsInlineCommand(toolName: string): boolean {
+  return toolName === 'Bash' || toolName === 'PowerShell'
+}
+
+/** Longest command a headline carries whole. Past this it is summarised, and the
+ * body block below the headline shows the command in full. */
+export const PERMISSION_TITLE_COMMAND_MAX = 120
+
+/**
+ * The command as a headline, plus whether that headline is the whole command.
+ *
+ * The prototype could inline its preview unconditionally because its mock
+ * commands were short one-liners; real `Bash` input is arbitrary-length and
+ * frequently multi-line (`src/tools/BashTool/BashTool.tsx:228`), and a title
+ * line cannot hold a heredoc. So a long or multi-line command is cut to its
+ * first line here and reported as truncated, which is the caller's cue to keep
+ * rendering the body block. Nothing is ever hidden by shortening: `truncated`
+ * has exactly one consumer and it re-shows the full text.
+ */
+export function summariseCommandForTitle(command: string): {
+  text: string
+  truncated: boolean
+} {
+  const firstLine = command.split('\n')[0] ?? ''
+  const multiLine = firstLine.length < command.length
+  if (firstLine.length <= PERMISSION_TITLE_COMMAND_MAX) {
+    return multiLine
+      ? { text: `${firstLine} …`, truncated: true }
+      : { text: firstLine, truncated: false }
+  }
+  return {
+    text: `${firstLine.slice(0, PERMISSION_TITLE_COMMAND_MAX)} …`,
+    truncated: true,
   }
 }
 

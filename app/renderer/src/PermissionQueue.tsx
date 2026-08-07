@@ -8,17 +8,21 @@ import {
  * The pending-permission queue (P2-4, adapts the prototype's
  * `Permissions.jsx` PermissionQueue). Reality per S2 §1–§2: the queue is the
  * set of `permission.requested` minus `permission.resolved`, arrival-ordered,
- * with NO timeout. Every card stays until the engine resolves it; Esc only
- * snoozes a card locally (it remains pending engine-side and can be
- * re-opened). `permission.resolved` removes the card no matter WHO answered —
+ * with NO timeout. Every card stays until the engine resolves it. Esc is the
+ * prototype's REFUSE (`Permissions.jsx:13`); the hide-for-later lane is the
+ * card's "Keep pending", which snoozes locally and leaves the request live
+ * engine-side. `permission.resolved` removes the card no matter WHO answered —
  * this window, another surface, or an abort mass-deny.
  */
 export function PermissionQueue({
   items,
   keyboardTargetRequestId = null,
+  cursor,
+  onCursorChange,
   onAllow,
   onDeny,
   onRestore,
+  onSnooze,
 }: {
   items: PermissionQueueItem[]
   /**
@@ -27,9 +31,14 @@ export function PermissionQueue({
    * Stacked cards mean the focus must land on THAT card, not the last rendered.
    */
   keyboardTargetRequestId?: string | null
+  /** App's option cursor, handed to the keyboard card alone so a mouse hover and
+   * an Enter can never disagree about which row is highlighted. */
+  cursor?: number
+  onCursorChange?: (index: number) => void
   onAllow: (requestId: string, applySuggestions: number[]) => void
   onDeny: (requestId: string, message?: string) => void
   onRestore: (requestId: string) => void
+  onSnooze?: (requestId: string) => void
 }) {
   if (items.length === 0) return null
 
@@ -38,29 +47,36 @@ export function PermissionQueue({
 
   return (
     <div aria-label="Permission requests" className="flex flex-col gap-2">
-      {items.length > 1 ? (
-        <p className="text-xs text-text-muted">
-          {items.length} permission requests pending
-        </p>
-      ) : null}
-
-      {active.map(item => (
-        <PermissionPrompt
-          // An AskUserQuestion only reaches this generic queue when its questions
-          // could not be read, so there is nothing to answer and an allow would
-          // run the tool with empty answers. Deny is the only honest control, and
-          // it is already the only one the keyboard offers for these requests.
-          denyOnly={isAskUserQuestionRequest(item.request)}
-          key={item.request.requestId}
-          keyboardTarget={item.request.requestId === keyboardTargetRequestId}
-          onAllow={applySuggestions =>
-            onAllow(item.request.requestId, applySuggestions)
-          }
-          onDeny={message => onDeny(item.request.requestId, message)}
-          request={item.request}
-          submitted={item.submitted}
-        />
-      ))}
+      {active.map(item => {
+        const isKeyboardTarget =
+          item.request.requestId === keyboardTargetRequestId
+        return (
+          <PermissionPrompt
+            // Only the keyboard card has a cursor: it is the only one whose rows
+            // a key press can move through.
+            {...(isKeyboardTarget && cursor !== undefined ? { cursor } : {})}
+            // An AskUserQuestion only reaches this generic queue when its
+            // questions could not be read, so there is nothing to answer and an
+            // allow would run the tool with empty answers. Deny is the only
+            // honest control, and it is already the only one the keyboard offers
+            // for these requests.
+            denyOnly={isAskUserQuestionRequest(item.request)}
+            key={item.request.requestId}
+            keyboardTarget={isKeyboardTarget}
+            onAllow={applySuggestions =>
+              onAllow(item.request.requestId, applySuggestions)
+            }
+            {...(isKeyboardTarget && onCursorChange ? { onCursorChange } : {})}
+            onDeny={message => onDeny(item.request.requestId, message)}
+            {...(onSnooze
+              ? { onSnooze: () => onSnooze(item.request.requestId) }
+              : {})}
+            pendingCount={items.length}
+            request={item.request}
+            submitted={item.submitted}
+          />
+        )
+      })}
 
       {snoozed.map(item => (
         <div

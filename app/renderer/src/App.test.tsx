@@ -1964,6 +1964,12 @@ test('FIX-5 keyboard tripwire: the permission shortcuts yield to a focused contr
   expect(effectBody).not.toContain("target.tagName === 'INPUT'")
   expect(effectBody).toContain('if (!permissionKeysAreLive(event.target)) return')
 
+  // The card is a select list, and BOTH the keys and the rendered rows must come
+  // from one list: a second copy would let `1` and a click on row 1 disagree.
+  expect(source).toContain('buildPermissionOptions(pendingPermission.request)')
+  expect(effectBody).toContain('const intent = permissionKeyIntent(event)')
+  expect(effectBody).toContain('const count = permissionOptions.length')
+
   const model = readFileSync(
     new URL('./permissionPromptModel.ts', import.meta.url),
     'utf8',
@@ -1998,6 +2004,13 @@ test('FIX-5 keyboard tripwire: the permission shortcuts yield to a focused contr
   expect(queueBody).toContain(
     'keyboardTargetRequestId={permissionKeyTargetRequestId}',
   )
+  // `setPermissionCursor` and `snoozePermission` are OPTIONAL on SessionPaneProps
+  // (a pane may legitimately have neither), so tsc cannot catch App dropping the
+  // wiring. These two lines are what catches it.
+  expect(queueBody).toContain('onCursorChange={setPermissionCursor}')
+  expect(queueBody).toContain('onSnooze={snoozePermission}')
+  expect(source).toContain('setPermissionCursor={setPermissionCursor}')
+  expect(source).toContain('snoozePermission={requestId => {')
   // Split workspace: one queue per pane, and only the active pane's card may
   // take focus — the handler acts solely on the activeSessionId's request.
   expect(source).toContain(
@@ -2025,7 +2038,15 @@ test('FIX-5 keyboard tripwire: the permission shortcuts yield to a focused contr
   // focus fell to `document.body`, which `permissionKeysAreLive` reads as
   // live, so Enter/Escape acted on an invisible request.
   expect(effectBody).toContain("if (activeView !== 'chat') return")
-  expect(source).toContain('    dedicatedFlowOwnsKeyboard,\n    activeView,\n  ])')
+  // The option list and the cursor are read inside the handler, so a stale
+  // closure would answer with the row the user was on two keys ago.
+  expect(source).toContain(
+    '    dedicatedFlowOwnsKeyboard,\n' +
+      '    activeView,\n' +
+      '    permissionOptions,\n' +
+      '    permissionCursor,\n' +
+      '  ])',
+  )
 
   // One answer per request: a second response is rejected by the sidecar as
   // unknown, and that rejection un-marks the card, re-enabling Allow/Deny on an
