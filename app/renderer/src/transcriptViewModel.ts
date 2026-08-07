@@ -170,6 +170,32 @@ export function groupGrepLines(lines: string[]): GrepSegment[] {
   return segments
 }
 
+export type QuotePosition = { start: { offset?: number }; end: { offset?: number } }
+
+/**
+ * Recover the plain text a rendered blockquote wraps by stripping `>` from
+ * the RAW markdown source at the node's position, rather than flattening the
+ * already-parsed tree — paragraph and list line breaks survive intact this
+ * way, where reconstructing them from `<p>`/`<li>` elements would run every
+ * line together. Lives here rather than in `TranscriptView.tsx` because it is
+ * a plain helper, which that module may not export under the Fast Refresh
+ * boundary rule, and the line-splitting is worth asserting directly.
+ */
+export function dequote(
+  rawSource: string,
+  position: QuotePosition | undefined,
+): string {
+  const start = position?.start.offset
+  const end = position?.end.offset
+  if (typeof start !== 'number' || typeof end !== 'number') return ''
+  return rawSource
+    .slice(start, end)
+    .split('\n')
+    .map(line => line.replace(/^>\s?/, ''))
+    .join('\n')
+    .trim()
+}
+
 export function logLineClass(line: string): string {
   // COUNT LINES FIRST — and this branch is NOT from the prototype.
   //

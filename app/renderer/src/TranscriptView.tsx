@@ -114,11 +114,13 @@ import {
   type GrepDigest,
 } from './grepResult.js'
 import {
+  dequote,
   findNestedToolUseRow,
   logLineClass,
   resolveToolCardExpanded,
   groupGrepLines,
   selectPeekLines,
+  type QuotePosition,
 } from './transcriptViewModel.js'
 import {
   INLINE_HEAD_LINES,
@@ -628,6 +630,15 @@ function AssistantProse({
   // is still arriving (there is no settled answer to take yet, and the caret owns
   // that corner), and none on an empty turn.
   const copyable = !streaming && content.trim().length > 0
+  // Built fresh per render — cheap next to the remark/rehype parse
+  // react-markdown already redoes on every content change. The blockquote
+  // renderer closes over this message's raw source so its own copy control
+  // can dequote by source position rather than re-deriving text from the
+  // parsed tree (see `createBlockquoteComponent`).
+  const components = {
+    ...MARKDOWN_COMPONENTS,
+    blockquote: createBlockquoteComponent(content),
+  }
   return (
     // P4-38 host contract for `BubbleCopyChip`: `group relative` makes this body
     // the hover/focus group the absolute chip anchors to. No reserved right
@@ -640,7 +651,7 @@ function AssistantProse({
           <Markdown
             remarkPlugins={REMARK_PLUGINS}
             rehypePlugins={REHYPE_PLUGINS}
-            components={MARKDOWN_COMPONENTS}
+            components={components}
           >
             {content}
           </Markdown>
@@ -742,6 +753,106 @@ const MARKDOWN_COMPONENTS = {
       {children}
     </td>
   ),
+}
+
+/**
+ * Per-quote copy control: a tab in the message's own left margin, outside the
+ * quote's text column entirely, so it can never land on top of the quoted
+ * prose the way a corner-anchored control did (operator-reviewed against a
+ * standalone options page after two corner placements both read poorly:
+ * anchored to the border's own bottom-right it collided with
+ * `BubbleCopyChip`'s bottom-right anchor on the whole message, and anchored
+ * top-right-inside it drew over the first line's own words). Always visible,
+ * not hover-gated — nothing to reveal it over, since it never overlaps
+ * content by construction.
+ *
+ * Tinted with the app's own accent token, the same one `[&_a]:text-accent`
+ * already uses for links, dim at rest and full strength on hover/copied,
+ * rather than a neutral gray.
+ */
+function QuoteCopyChip({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  const copy = (): void => {
+    const clipboard =
+      typeof navigator !== 'undefined' ? navigator.clipboard : undefined
+    if (!clipboard) return
+    void clipboard
+      .writeText(text)
+      .then(() => {
+        setCopied(true)
+        setTimeout(() => setCopied(false), 600)
+      })
+      .catch(() => {})
+  }
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      aria-label={copied ? 'Quote copied' : 'Copy quote'}
+      title="Copy quote"
+      className={`absolute -left-6 top-0 flex h-5 w-5 items-center justify-center rounded border transition-colors ${
+        copied
+          ? 'border-[#86efac] text-[#86efac]'
+          : 'border-accent/30 text-accent/55 hover:border-accent hover:text-accent'
+      }`}
+    >
+      {copied ? (
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden
+        >
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+      ) : (
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden
+        >
+          <rect x="9" y="9" width="13" height="13" rx="2" />
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+        </svg>
+      )}
+    </button>
+  )
+}
+
+/**
+ * Blockquote renderer, built fresh per `AssistantProse` render closing over
+ * that message's raw markdown `rawSource` — `node.position` offsets are into
+ * that string. `[&_blockquote]` in `AssistantProse`'s wrapper still supplies
+ * the border/color styling by tag-name selector regardless of this
+ * component's own className. `ml-7` reserves the left margin `QuoteCopyChip`
+ * sits in.
+ */
+function createBlockquoteComponent(rawSource: string) {
+  return function Blockquote({
+    node,
+    children,
+  }: ComponentPropsWithoutRef<'blockquote'> & {
+    node?: { position?: QuotePosition }
+  }) {
+    const text = dequote(rawSource, node?.position)
+    return (
+      <blockquote className="relative ml-7">
+        {children}
+        {text.length > 0 ? <QuoteCopyChip text={text} /> : null}
+      </blockquote>
+    )
+  }
 }
 
 /**

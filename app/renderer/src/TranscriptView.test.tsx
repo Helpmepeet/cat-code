@@ -6,6 +6,7 @@ import {
   TranscriptRowsView,
 } from './TranscriptView.js'
 import {
+  dequote,
   findNestedToolUseRow,
   logLineClass,
   resolveToolCardExpanded,
@@ -175,6 +176,34 @@ test('P4-18c: a fenced code block renders framed + copyable with syntax highligh
   expect(html).toContain('const') // code content still present, tokenized
   expect(html).toContain('copy') // per-block copy control
   expect(html).toContain('ts') // floating language label
+})
+
+test('a blockquote gets its own per-quote copy control', () => {
+  const html = render({
+    ...blockSource,
+    id: 's:m:0:quote',
+    kind: 'assistant-text',
+    role: 'assistant',
+    content: 'Here is the message I would send:\n\n> Ship the fix today.\n',
+  })
+
+  expect(html).toContain('<blockquote')
+  expect(html).toContain('Ship the fix today.')
+  expect(html).toContain('aria-label="Copy quote"') // per-quote copy control
+})
+
+test('prose with no blockquote gets no per-quote copy control', () => {
+  const html = render({
+    ...blockSource,
+    id: 's:m:0:no-quote',
+    kind: 'assistant-text',
+    role: 'assistant',
+    content: 'Just a plain answer, no quoted message inside it.',
+  })
+
+  expect(html).not.toContain('<blockquote')
+  expect(html).not.toContain('aria-label="Copy quote"')
+  expect(html).not.toContain('copy')
 })
 
 test('P4-18c: a streaming assistant row renders a caret', () => {
@@ -1241,6 +1270,42 @@ test('P4-REVIEW B3: resolveToolCardExpanded defaults to defaultExpanded until th
 test('P4-REVIEW B3: resolveToolCardExpanded lets a user override win over either default', () => {
   expect(resolveToolCardExpanded(true, false)).toBe(true)
   expect(resolveToolCardExpanded(false, true)).toBe(false)
+})
+
+// Per-quote copy control: `dequote` recovers the plain, paste-ready message a
+// blockquote wraps from the RAW markdown source at the node's position, not
+// from the parsed <p>/<li> tree — the case that motivated it is a suggested
+// message with a bulleted list embedded in the quote, where flattening
+// already-rendered elements would run every line together.
+
+test('dequote strips the leading marker off a single-paragraph quote', () => {
+  const source = 'Here:\n\n> Ship the fix today.\n'
+  const start = source.indexOf('>')
+  const end = source.indexOf('\n', start)
+  expect(dequote(source, { start: { offset: start }, end: { offset: end } })).toBe(
+    'Ship the fix today.',
+  )
+})
+
+test('dequote preserves paragraph breaks and list bullets, not just the quote markers', () => {
+  const source = [
+    '> First paragraph.',
+    '>',
+    '> Please record:',
+    '>',
+    '> - one item',
+    '> - two item',
+  ].join('\n')
+  expect(dequote(source, { start: { offset: 0 }, end: { offset: source.length } })).toBe(
+    ['First paragraph.', '', 'Please record:', '', '- one item', '- two item'].join(
+      '\n',
+    ),
+  )
+})
+
+test('dequote returns empty text when the node carries no position', () => {
+  expect(dequote('> quoted', undefined)).toBe('')
+  expect(dequote('> quoted', { start: {}, end: {} })).toBe('')
 })
 
 // ── Output-line tint: the prototype's `logLineColor`, and the two drifts off it
