@@ -117,6 +117,7 @@ export type SDKAssistantMessage = SDKBaseMessage & {
     [key: string]: unknown
   }
   parent_tool_use_id?: string | null
+  agent_name?: string
   error?: SDKAssistantMessageError
   requestId?: string | null
   timestamp?: string
@@ -348,6 +349,7 @@ export type SDKUserMessage = SDKBaseMessage & {
     [key: string]: unknown
   }
   parent_tool_use_id?: string | null
+  agent_name?: string
   isSynthetic?: boolean
   tool_use_result?: unknown
   priority?: 'now' | 'next' | 'later'
