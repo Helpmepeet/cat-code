@@ -4,8 +4,8 @@
  * `AccountsPage`/`CodexPool`/`HeadroomBar`/`AccountLifecycle`
  * (Pages.jsx:354-471,506-575 + AccountLifecycle.jsx) in TS/Tailwind on the P0-2
  * tokens. Every inline `style` in the prototype was translated to its nearest
- * theme token/arbitrary utility: resting greys use `text-faint` (#52525b) /
- * `text-ghost` (#3f3f46), bar tracks use `bg-white/[0.07]`, the status-dot tones
+ * theme token/arbitrary utility: resting greys use `text-faint` /
+ * `text-ghost`, bar tracks use `bg-white/[0.07]`, the status-dot tones
  * mirror POOL_STATUS (capped=danger, dead=warn, quarantined=grey), and the hero
  * row + active dot carry the prototype's pink glow.
  *

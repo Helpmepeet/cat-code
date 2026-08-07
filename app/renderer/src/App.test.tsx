@@ -1751,7 +1751,7 @@ test('P4-32a — real workers reach the composer dock, above the permission stac
   )
   expect(html).toContain('Turing')
   expect(html).toContain('Wire the dock')
-  const dockIndex = html.indexOf('max-w-[740px] shrink-0')
+  const dockIndex = html.indexOf('max-w-[1000px] shrink-0')
   expect(dockIndex).toBeGreaterThan(-1)
   expect(html.indexOf('Wire the dock')).toBeGreaterThan(dockIndex)
 })

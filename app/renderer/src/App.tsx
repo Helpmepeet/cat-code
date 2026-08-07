@@ -4239,7 +4239,7 @@ export function SessionPane({
         >
           {previewTruncationMessage ? (
             <div
-              className="mx-auto mb-3 w-full max-w-[740px] border-l-2 border-tone-warn px-3 py-2 text-xs text-tone-warn"
+              className="mx-auto mb-3 w-full max-w-[1000px] border-l-2 border-tone-warn px-3 py-2 text-xs text-tone-warn"
               role="status"
             >
               {previewTruncationMessage}
@@ -4309,7 +4309,7 @@ export function SessionPane({
        * auto'`) so the input aligns under the message column; a top seam
        * separates it from the scrolling transcript above. Inner blocks keep
        * their existing indent (wrapped without re-indentation). */}
-      <div className="mx-auto flex w-full max-w-[740px] shrink-0 flex-col gap-4">
+      <div className="mx-auto flex w-full max-w-[1000px] shrink-0 flex-col gap-4">
       {/* P4-32a (R1) — the orchestrator worker roster is the prototype's declared
        * host for this block: above the composer, in the transcript's own measure,
        * ahead of the permission/question stack. It dims while the orchestrator is
@@ -4485,7 +4485,7 @@ export function SessionPane({
             <button
               aria-label="Send prompt"
               title="Send"
-              className="flex h-[30px] w-[30px] shrink-0 items-center justify-center self-end rounded-lg text-accent transition-colors disabled:text-[#3f3f46]"
+              className="flex h-[30px] w-[30px] shrink-0 items-center justify-center self-end rounded-lg text-accent transition-colors disabled:text-text-ghost"
               disabled={
                 !composerGate.editable ||
                 prompt.trim().length === 0 ||

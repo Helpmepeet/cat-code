@@ -289,8 +289,8 @@ function Tab({
       )}
 
       {/* The tab's IDENTITY, so it is the brightest thing on the tab. An
-          inactive title used to sit at `text-text-faint` (#52525b, the token
-          reserved for resting/ghost text) while the status chip beside it ran
+          inactive title used to sit at `text-text-faint` (the token reserved
+          for resting/ghost text) while the status chip beside it ran
           saturated and uppercase — the qualifier out-shouting the name. */}
       <span
         className={

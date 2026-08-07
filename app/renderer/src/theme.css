@@ -126,14 +126,26 @@
   --color-surface-panel: #0a0a0c;
   --color-text-primary: #f4f4f5;
   --color-text-muted: #a1a1aa;
-  --color-text-subtle: #71717a;
-  /* Two darker greys the prototype leans on for resting / ghost / disabled text
-   * (t4 #52525b, t5 #3f3f46). Absent before 2026-07-13, so quiet labels fell
-   * back to --text-subtle (#71717a) and read a shade too bright across the UI
-   * (tab bar, pickers, welcome, plan, transcript sub-labels). Adopt where a
-   * label is RESTING/ghost — not as a swap for primary/muted text. */
-  --color-text-faint: #52525b;
-  --color-text-ghost: #3f3f46;
+  /*
+   * LIGHTENED 2026-08-07 (operator, settled on a live tuner). The prototype's
+   * values were #71717a / #52525b / #3f3f46, and against this near-black body
+   * they measured 4.12 : 2.57 : 1.91 against #09090b — the first below WCAG AA
+   * 4.5:1 and the other two below even the 3:1 non-text floor, on the app's
+   * MOST-used text colour (`text-text-subtle` outnumbers primary and muted
+   * combined). Every value here is the prototype's moved 30% of the way toward
+   * `--color-text-primary`, which is what the operator picked by eye; the
+   * ratios are now 6.94 : 5.28 : 4.35.
+   *
+   * A deliberate deviation from prototype parity, NOT a porting error — do not
+   * "restore" these to the prototype hexes. Same root cause as the transcript
+   * width: values tuned for a browser mockup, not a maximized desktop window.
+   *
+   * Meaning is unchanged: faint/ghost are for RESTING / ghost / disabled text,
+   * never a swap for primary or muted.
+   */
+  --color-text-subtle: #98989f;
+  --color-text-faint: #838389;
+  --color-text-ghost: #75757b;
   --color-accent: var(--accent);
   --color-accent-soft: var(--accent-soft);
 

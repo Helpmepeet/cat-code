@@ -305,7 +305,7 @@ export function ComposerInput({
       {value.length === 0 ? (
         <div
           aria-hidden
-          className="pointer-events-none absolute left-0 top-1.5 text-base font-light leading-normal text-[#52525b]"
+          className="pointer-events-none absolute left-0 top-1.5 text-base font-medium leading-normal text-text-faint"
         >
           {placeholder}
         </div>
@@ -321,7 +321,7 @@ export function ComposerInput({
         aria-multiline="true"
         aria-placeholder={placeholder}
         aria-readonly={readOnly ? true : undefined}
-        className="block max-h-[38vh] w-full min-h-6 overflow-y-auto whitespace-pre-wrap break-words py-1.5 text-base font-light leading-normal text-text-primary caret-accent outline-none"
+        className="block max-h-[38vh] w-full min-h-6 overflow-y-auto whitespace-pre-wrap break-words py-1.5 text-base font-medium leading-normal text-text-primary caret-accent outline-none"
         contentEditable={editable}
         onBlur={syncCaretPreview}
         onCompositionEnd={() => {

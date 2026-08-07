@@ -298,12 +298,22 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     // Intentional: cached/restoring transcripts render without a divider or pulse.
     // The operator rejected the startup pink hairline + dot (2026-07-29).
     content = (
-      // P4-24 fidelity: content is centered in a max-740px column (Chat.jsx:1282
-      // `maxWidth: MSG_MAX, margin: '0 auto'`), full-bleed (no bordered box), with
-      // 24px top / 32px side padding. The prototype's light body weight is scoped
-      // to assistant prose (AssistantProse), NOT the whole column, so tool-card /
-      // code / mono text stays at a crisp, readable weight.
-      <div className="mx-auto flex w-full max-w-[740px] flex-col gap-2.5 px-8 pt-6">
+      // P4-24 fidelity: content is centered, full-bleed (no bordered box), with
+      // 24px top / 32px side padding (Chat.jsx:1282 `margin: '0 auto'`).
+      //
+      // WIDTH IS A DELIBERATE DEVIATION (operator, 2026-08-07). The prototype
+      // caps this at 740 (`Chat.jsx:402` MSG_MAX) and `px-8` sits INSIDE that,
+      // so the real content column was 676px — on a maximized window that left
+      // ~60% of the screen empty while tool rows, paths and diffs truncated
+      // against it. 1000px was settled on a live tuner. Keep this in lockstep
+      // with the composer dock in `App.tsx`, which carries the same value; the
+      // two are what align the transcript's edges with the input's. Do not
+      // "restore" either to 740 as a parity fix.
+      //
+      // Prose weight also moved (light to medium) at `AssistantProse` below,
+      // for legibility on this near-black background. It stays scoped to
+      // assistant prose, NOT the whole column.
+      <div className="mx-auto flex w-full max-w-[1000px] flex-col gap-2.5 px-8 pt-6">
         {items.map(item =>
           // P4-36 — a revealed hidden row reads dimmed (`Chat.jsx:1285`
           // `opacity: 0.55`), so transcript mode never passes engine bookkeeping
@@ -387,7 +397,7 @@ const SKELETON_BAR_WIDTHS = ['w-3/4', 'w-full', 'w-5/6', 'w-2/3', 'w-4/5'] as co
 function PreviewSkeleton() {
   return (
     <div
-      className="mx-auto flex w-full max-w-[740px] flex-col gap-3 px-8 pt-6"
+      className="mx-auto flex w-full max-w-[1000px] flex-col gap-3 px-8 pt-6"
       role="status"
       aria-live="polite"
       aria-busy="true"
@@ -647,7 +657,7 @@ function AssistantProse({
     // the app's own reserved-gutter version read as an unexplained gap.
     <div className="group relative">
       <MarkdownErrorBoundary fallback={content}>
-        <div className="font-sans font-light text-sm leading-relaxed [&>*+*]:mt-2 [&_a]:text-accent [&_blockquote]:border-l-2 [&_blockquote]:border-shell-seam [&_blockquote]:pl-3 [&_blockquote]:text-text-muted [&_h1]:text-base [&_h1]:font-semibold [&_h2]:font-semibold [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5 [&_:not(pre)>code]:font-mono [&_:not(pre)>code]:text-accent-soft">
+        <div className="font-sans font-medium text-sm leading-relaxed [&>*+*]:mt-2 [&_a]:text-accent [&_blockquote]:border-l-2 [&_blockquote]:border-shell-seam [&_blockquote]:pl-3 [&_blockquote]:text-text-muted [&_h1]:text-base [&_h1]:font-semibold [&_h2]:font-semibold [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5 [&_:not(pre)>code]:font-mono [&_:not(pre)>code]:text-accent-soft">
           <Markdown
             remarkPlugins={REMARK_PLUGINS}
             rehypePlugins={REHYPE_PLUGINS}

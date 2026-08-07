@@ -403,7 +403,7 @@ function FastChip({
       title={title}
       disabled={disabled}
       onClick={() => onToggle(!active)}
-      className={`${FAST_FACE} border ${active ? 'border-tone-warn/30 bg-tone-warn/10 text-tone-warn hover:bg-tone-warn/15 hover:text-[#fde68a]' : 'border-transparent text-[#3f3f46] hover:text-[#71717a]'} disabled:opacity-40`}
+      className={`${FAST_FACE} border ${active ? 'border-tone-warn/30 bg-tone-warn/10 text-tone-warn hover:bg-tone-warn/15 hover:text-[#fde68a]' : 'border-transparent text-text-ghost hover:text-text-subtle'} disabled:opacity-40`}
     >
       <FastGlyph active={active} />
     </button>
@@ -1156,7 +1156,7 @@ export function ComposerActionsBar({
         {...faceProps('attach')}
         aria-label="Add attachment"
         title="Add attachment. Paste a large block to attach it as a collapsed chip"
-        className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[5px] text-[#3f3f46] transition-colors hover:text-text-muted disabled:opacity-50"
+        className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[5px] text-text-ghost transition-colors hover:text-text-muted disabled:opacity-50"
         disabled={attachDisabled}
         onClick={onAttach}
         type="button"

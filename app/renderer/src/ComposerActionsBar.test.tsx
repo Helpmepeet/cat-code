@@ -363,7 +363,8 @@ test('P4-24c — the FAST toggle visibly distinguishes off from on', () => {
   expect(offFast).toContain('h-[22px] w-[22px]')
   expect(offFast).toContain('fill="none"')
   expect(offFast).toContain('stroke="currentColor"')
-  expect(offFast).toContain('text-[#3f3f46]')
+  expect(offFast).toContain('border-transparent')
+  expect(offFast).toContain('text-text-ghost')
 
   const on = render({
     runControls: runControls({ fast: { active: true, supportedByModel: true, available: true } }),
