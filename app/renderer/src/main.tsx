@@ -6,7 +6,6 @@ import { CodeThemeProvider } from './CodeThemeProvider.js'
 import { ReasoningLayoutProvider } from './ReasoningLayoutProvider.js'
 import { ToastHost } from './ToastHost.js'
 import { ToolsExpandedProvider } from './ToolsExpandedProvider.js'
-import { TypeTuner } from './TypeTuner.js'
 import './theme.css'
 
 const root = document.getElementById('root')
@@ -29,10 +28,6 @@ createRoot(root).render(
           <CodeThemeProvider>
             <ToolsExpandedProvider>
               <App />
-              {/* TEMPORARY (2026-08-07, operator request). DELETE ME with
-                * `TypeTuner.tsx`. Dev-only, so Vite drops both from a
-                * production build. */}
-              {import.meta.env.DEV ? <TypeTuner /> : null}
             </ToolsExpandedProvider>
           </CodeThemeProvider>
         </ReasoningLayoutProvider>
