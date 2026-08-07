@@ -64,6 +64,7 @@ async function main(): Promise<void> {
     { ensureEngineMacro },
     { enableConfigs },
     { getContextWindowForModel },
+    { withRestoredSubagentHistory },
   ] = await Promise.all([
     import('../../src/bootstrap/state.js'),
     import('../../src/utils/conversationRecovery.js'),
@@ -73,6 +74,7 @@ async function main(): Promise<void> {
     import('./initializeRuntime.js'),
     import('../../src/utils/config.js'),
     import('../../src/utils/context.js'),
+    import('./subagentHistory.js'),
   ])
   // OBSERVATION-ONLY BOOTSTRAP, same reasoning as `accountsPoolWorker.ts`: the
   // full `init()` this used to run fires `void initAccountPool()`
@@ -159,9 +161,17 @@ async function main(): Promise<void> {
         display.messages,
         projectResumedHistory(loaded.messages),
       )
+      // Same nesting join the live restore applies (`index.ts`). Without it a
+      // cached preview shows Agent cards with no children while the live
+      // session shows the same cards with children — one session, two
+      // transcripts, depending only on which path produced the frames.
+      const nested = await withRestoredSubagentHistory(
+        item.engineSessionId,
+        merged.history,
+      )
       const frames = buildBoundedFrames(
         item.appSessionId,
-        merged.history.map(createMessageEvent),
+        nested.map(createMessageEvent),
         display.truncated || merged.truncated,
       )
       const result: TranscriptBackfillSessionResult = {

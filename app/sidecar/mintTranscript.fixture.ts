@@ -29,6 +29,7 @@ import {
   getTranscriptPathForSession,
   recordSidechainTranscript,
   recordTranscript,
+  writeAgentMetadata,
 } from '../../src/utils/sessionStorage.js'
 
 async function main(): Promise<void> {
@@ -37,6 +38,7 @@ async function main(): Promise<void> {
   const realisticTail = process.argv.includes('--realistic-tail')
   const compacted = process.argv.includes('--compacted')
   const unresolvedToolTail = process.argv.includes('--unresolved-tool-tail')
+  const subagentBranch = process.argv.includes('--subagent-branch')
   if (!sessionId) {
     throw new Error('usage: mintTranscript.fixture.ts <sessionId> [marker]')
   }
@@ -46,6 +48,35 @@ async function main(): Promise<void> {
   // getSessionId()); the transcript lands under the project dir derived from the
   // process cwd — exactly where the resuming sidecar (same cwd + config) looks.
   switchSession(asSessionId(sessionId))
+
+  // The parent half of a subagent spawn: an Agent tool_use plus its result.
+  // Recorded in the SAME `recordTranscript` call as the nonce pair — each call
+  // starts a fresh parentUuid chain, and the display loader walks that chain
+  // back from the leaf, so a separate call would leave these orphaned and
+  // invisible to restore.
+  const subagentId = asAgentId(`branch-agent-${marker}`)
+  const subagentToolUseId = `branch-tu-${marker}`
+  const subagentBranchMessages = !subagentBranch ? [] : [
+    createAssistantMessage({
+      content: [
+        {
+          type: 'tool_use',
+          id: subagentToolUseId,
+          name: 'Agent',
+          input: { description: `delegate ${marker}`, subagent_type: 'Explore' },
+        },
+      ],
+    }),
+    createUserMessage({
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: subagentToolUseId,
+          content: `delegate ${marker} finished`,
+        },
+      ],
+    }),
+  ]
 
   const user = createUserMessage({ content: `remember this nonce: ${marker}` })
   const assistant = createAssistantMessage({
@@ -88,7 +119,33 @@ async function main(): Promise<void> {
     }
     await recordTranscript(compactedMessages)
   } else {
-    await recordTranscript([user, assistant])
+    // Branch BEFORE the nonce pair: the display projection keeps the prefix
+    // ahead of the resumable seed anchor and replaces everything from the
+    // anchor onward with the seed itself (`mergeDisplayHistoryWithSeed`), so a
+    // branch recorded after the anchor is dropped before restore ever sees it.
+    await recordTranscript(
+      [...subagentBranchMessages, user, assistant],
+    )
+  }
+  if (subagentBranch) {
+    // The worker's own turns go to its OWN sidechain file, and the meta sidecar
+    // carries the join key back to the parent's Agent tool_use
+    // (`src/tools/AgentTool/runAgent.ts:818`). Both through production
+    // persistence, so the probe exercises the real three-artifact shape.
+    await recordSidechainTranscript(
+      [createAssistantMessage({ content: `subagent turn for ${marker}` })],
+      subagentId,
+    )
+    await writeAgentMetadata(subagentId, {
+      agentType: 'Explore',
+      agentName: `Ada-${marker}`,
+      description: `delegate ${marker}`,
+      parentSessionId: sessionId,
+      parentToolUseId: subagentToolUseId,
+      spawnedAt: new Date().toISOString(),
+    })
+    process.stdout.write(`MINTED_SUBAGENT_TOOL_USE_ID=${subagentToolUseId}\n`)
+    process.stdout.write(`MINTED_SUBAGENT_NAME=Ada-${marker}\n`)
   }
   if (realisticTail) {
     // Reproduce the P3-8 live shape through production persistence: a
