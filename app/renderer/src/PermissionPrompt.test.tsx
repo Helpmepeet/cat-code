@@ -32,7 +32,6 @@ const REQUEST: PermissionRequest = {
 test('the command is the headline, and the answer is a numbered select list', () => {
   const html = renderToStaticMarkup(
     <PermissionPrompt
-      cursor={0}
       keyboardTarget
       onAllow={() => {}}
       onDeny={() => {}}
@@ -865,39 +864,25 @@ test('the cursor marks the row the keyboard would confirm, and only that row', (
       ],
     },
   }
-  const onRow2 = renderToStaticMarkup(
+  const html = renderToStaticMarkup(
     <PermissionPrompt
-      cursor={1}
       keyboardTarget
       onAllow={() => {}}
       onDeny={() => {}}
       request={request}
     />,
   )
-  // The ↵ chip rides the cursor, so it appears exactly once.
-  expect(onRow2.split('>↵<').length - 1).toBe(1)
-  // The refuse row keeps its own esc chip regardless of where the cursor is.
-  expect(onRow2).toContain('>esc<')
+  // The cursor starts on row 1 and the ↵ chip rides it, so it appears once.
+  expect(html.split('>↵<').length - 1).toBe(1)
+  // The refuse row keeps its own esc chip regardless of where the cursor is,
+  // and never shows ↵ as well.
+  expect(html).toContain('>esc<')
   // The cursor is exposed to assistive tech, not conveyed by colour alone.
-  expect(onRow2).toContain('aria-current="true"')
-  expect(onRow2.split('aria-current="true"').length - 1).toBe(1)
-})
+  expect(html.split('aria-current="true"').length - 1).toBe(1)
 
-test('a cursor out of range never highlights a row that is not there', () => {
-  // The cursor is keyed to its request, but a defensive clamp keeps a stale or
-  // oversized index from selecting nothing (or, in the handler, resolving
-  // `undefined` after preventDefault).
-  const html = renderToStaticMarkup(
-    <PermissionPrompt
-      cursor={7}
-      keyboardTarget
-      onAllow={() => {}}
-      onDeny={() => {}}
-      request={REQUEST}
-    />,
-  )
-  // Two rows on this request, so the clamp lands on the last one, which is the
-  // refusal — and the refusal shows `esc`, never `↵`.
-  expect(html).toContain('aria-current="true"')
-  expect(html).not.toContain('>↵<')
+  // LAYER HONESTY: the cursor is now card-local state moved only by this card's
+  // own keydown listener, so no prop can drive it here and this SSR suite can
+  // only ever observe its initial position. Cursor MOVEMENT, the clamp on a
+  // shrunk list, and every key binding are unreachable without a DOM harness;
+  // `permissionKeyIntent` is unit-tested above, and the rest is operator-GUI.
 })

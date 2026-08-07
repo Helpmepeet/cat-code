@@ -17,8 +17,6 @@ import {
 export function PermissionQueue({
   items,
   keyboardTargetRequestId = null,
-  cursor,
-  onCursorChange,
   onAllow,
   onDeny,
   onRestore,
@@ -26,15 +24,12 @@ export function PermissionQueue({
 }: {
   items: PermissionQueueItem[]
   /**
-   * The request App's keydown handler acts on, or null when no card owns the
-   * keyboard here (a background pane, or a dedicated flow holding the keys).
-   * Stacked cards mean the focus must land on THAT card, not the last rendered.
+   * The request the shortcuts act on, or null when no card owns the keyboard
+   * here (a background pane, or a dedicated flow holding the keys). That card
+   * takes focus, shows a cursor, and registers the keydown listener; stacked
+   * cards mean it must be THAT card, not the last rendered.
    */
   keyboardTargetRequestId?: string | null
-  /** App's option cursor, handed to the keyboard card alone so a mouse hover and
-   * an Enter can never disagree about which row is highlighted. */
-  cursor?: number
-  onCursorChange?: (index: number) => void
   onAllow: (requestId: string, applySuggestions: number[]) => void
   onDeny: (requestId: string, message?: string) => void
   onRestore: (requestId: string) => void
@@ -60,9 +55,6 @@ export function PermissionQueue({
           item.request.requestId === keyboardTargetRequestId
         return (
           <PermissionPrompt
-            // Only the keyboard card has a cursor: it is the only one whose rows
-            // a key press can move through.
-            cursor={isKeyboardTarget ? cursor : undefined}
             // An AskUserQuestion only reaches this generic queue when its
             // questions could not be read, so there is nothing to answer and an
             // allow would run the tool with empty answers. Deny is the only
@@ -74,7 +66,6 @@ export function PermissionQueue({
             onAllow={applySuggestions =>
               onAllow(item.request.requestId, applySuggestions)
             }
-            onCursorChange={isKeyboardTarget ? onCursorChange : undefined}
             onDeny={message => onDeny(item.request.requestId, message)}
             onSnooze={
               onSnooze ? () => onSnooze(item.request.requestId) : undefined

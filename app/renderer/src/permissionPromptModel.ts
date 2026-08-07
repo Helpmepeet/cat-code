@@ -99,8 +99,9 @@ function isKeyTarget(value: unknown): value is KeyTargetLike {
  * card, including each option row and the footer's own controls, where Enter
  * must click the thing under focus rather than confirm the cursor's row.
  *
- * One predicate serves both consumers so they can never disagree: App's keydown
- * handler decides whether to act, and the card decides whether to advertise.
+ * One predicate serves both consumers on the card so they can never disagree:
+ * its keydown listener decides whether to act, and its footer decides whether to
+ * advertise.
  */
 export function permissionKeysAreLive(target: unknown): boolean {
   if (!isKeyTarget(target)) return true

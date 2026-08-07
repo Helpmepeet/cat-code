@@ -1937,25 +1937,29 @@ test('a live pane with no turns yet names the selected model and sizes the donut
 })
 
 test('FIX-5 keyboard tripwire: the permission shortcuts yield to a focused control and to a dedicated flow', () => {
-  // LAYER HONESTY: these two defects live in a `document` keydown listener
-  // registered by an App effect. The renderer suite is SSR-only (no DOM — see
-  // AccountsPage.test.tsx) and App cannot be mounted, so the handler cannot be
-  // executed here and no test in this package can press a key. This asserts only
-  // what source text can decide — which guard the handler applies, and that the
-  // listener is not attached while another surface owns the keyboard. The guard
-  // itself is now an executable predicate (`permissionKeysAreLive`, unit-tested
-  // in PermissionPrompt.test.tsx); a DOM harness is still flagged in the report.
-  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
-  const effectStart = source.indexOf(
-    'const dedicatedFlowOwnsKeyboard =',
+  // LAYER HONESTY: these defects live in a `document` keydown listener and in
+  // focus behaviour. The renderer suite is SSR-only (no DOM — see
+  // AccountsPage.test.tsx), so no test in this package can press a key or move
+  // focus. This asserts only what source text can decide. The guard itself is an
+  // executable predicate (`permissionKeysAreLive`, unit-tested in
+  // PermissionPrompt.test.tsx); a DOM harness is still flagged in the report.
+  //
+  // The listener MOVED into the card (2026-08-07). It was App state plus an App
+  // listener, which made a mouse hover over a row re-render the whole shell to
+  // move one border. Every guard survived the move, and three became structural
+  // rather than conditional — see the doc-comment on the effect.
+  const card = readFileSync(
+    new URL('./PermissionPrompt.tsx', import.meta.url),
+    'utf8',
   )
-  const effectEnd = source.indexOf(
-    "document.addEventListener('keydown', handleKeyDown)",
+  const effectStart = card.indexOf('    if (!keyboardTarget) return')
+  const effectEnd = card.indexOf(
+    "document.addEventListener('keydown', onKeyDown)",
     effectStart,
   )
   expect(effectStart).toBeGreaterThan(-1)
   expect(effectEnd).toBeGreaterThan(effectStart)
-  const effectBody = source.slice(effectStart, effectEnd)
+  const effectBody = card.slice(effectStart, effectEnd)
 
   // A tag-name test let Enter on the card's own Deny button bubble to document
   // and be answered as an ALLOW, because preventDefault() suppressed the
@@ -1963,22 +1967,13 @@ test('FIX-5 keyboard tripwire: the permission shortcuts yield to a focused contr
   // key itself, buttons above all.
   expect(effectBody).not.toContain("target.tagName === 'INPUT'")
   expect(effectBody).toContain('if (!permissionKeysAreLive(event.target)) return')
-
-  // The card is a select list, and BOTH the keys and the rendered rows must come
-  // from one list: a second copy would let `1` and a click on row 1 disagree.
-  // App and PermissionQueue each call `buildPermissionOptions`, so the guarantee
-  // is that they pass the SAME arguments — the request, and a `denyOnly` derived
-  // by the same predicate. App assumed `false` here, which held only for as long
-  // as `selectVisiblePermission` kept excluding AskUserQuestion; the day it does
-  // not, `1` would allow a card whose row 1 is the refusal.
-  expect(source).toContain('isAskUserQuestionRequest(pendingPermission)')
-  const queuePredicate = readFileSync(
-    new URL('./PermissionQueue.tsx', import.meta.url),
-    'utf8',
-  )
-  expect(queuePredicate).toContain('isAskUserQuestionRequest(item.request)')
-  expect(effectBody).toContain('const intent = permissionKeyIntent(event)')
-  expect(effectBody).toContain('const count = permissionOptions.length')
+  // One answer per request: the rows are disabled in flight, and the keyboard
+  // must not fire a second decision before the resolve lands.
+  expect(effectBody).toContain('if (submitted) return')
+  // Only the card the shortcuts act on may register a listener at all. This is
+  // what replaces App's explicit dedicated-flow and activeView guards: a card
+  // that is not the target never attaches, and the card only mounts under chat.
+  expect(effectBody).toContain('if (!keyboardTarget) return')
 
   const model = readFileSync(
     new URL('./permissionPromptModel.ts', import.meta.url),
@@ -1994,15 +1989,16 @@ test('FIX-5 keyboard tripwire: the permission shortcuts yield to a focused contr
     '[role="menuitem"]',
     '[role="menuitemradio"]',
     // Load-bearing for the marker: the card's own section carries this role, so
-    // without the host exemption, focusing the card kills all four keys.
+    // without the host exemption, focusing the card kills every key.
     '[role="alertdialog"]',
   ]) {
     expect(selector).toContain(owner)
   }
 
-  // P4-43 — the card that takes focus and advertises the keys must be exactly
-  // the request the handler answers. A card advertising keys the listener does
-  // not deliver is the dead affordance this session removed.
+  // The card that takes focus, shows a cursor, hosts the keys and now OWNS the
+  // listener must be exactly the request App means to answer. One value decides
+  // all four, so a card can never claim keys that act on something else.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
   expect(source).toContain(
     'const permissionKeyTargetRequestId =\n' +
       '    pendingPermission && !dedicatedFlowOwnsKeyboard\n' +
@@ -2014,15 +2010,8 @@ test('FIX-5 keyboard tripwire: the permission shortcuts yield to a focused contr
   expect(queueBody).toContain(
     'keyboardTargetRequestId={permissionKeyTargetRequestId}',
   )
-  // `setPermissionCursor` and `snoozePermission` are OPTIONAL on SessionPaneProps
-  // (a pane may legitimately have neither), so tsc cannot catch App dropping the
-  // wiring. These two lines are what catches it.
-  expect(queueBody).toContain('onCursorChange={setPermissionCursor}')
-  expect(queueBody).toContain('onSnooze={snoozePermission}')
-  expect(source).toContain('setPermissionCursor={setPermissionCursor}')
-  expect(source).toContain('snoozePermission={requestId => {')
   // Split workspace: one queue per pane, and only the active pane's card may
-  // take focus — the handler acts solely on the activeSessionId's request.
+  // take the keyboard.
   expect(source).toContain(
     'permissionKeyTargetRequestId={\n' +
       '\t              sessionId === activeSessionId\n' +
@@ -2030,36 +2019,33 @@ test('FIX-5 keyboard tripwire: the permission shortcuts yield to a focused contr
       '\t                : null\n' +
       '\t            }',
   )
-
-  // Propagation is target → document → window, so this document listener fires
-  // BEFORE AskQuestionFlow's and PlanPanel's own window listeners: one Enter
-  // would allow a parallel Bash call and answer the question.
-  expect(effectBody).toContain(
+  // A dedicated flow (AskQuestionFlow / PlanPanel) registers its own `window`
+  // listener. Propagation is target → document → window, so a permission
+  // listener alive at the same time would let ONE Enter resolve two unrelated
+  // requests. It cannot be: the flows null out the target above.
+  expect(source).toContain(
     'selectAskQuestion(permissions, activeSessionId) !== null',
   )
-  expect(effectBody).toContain(
+  expect(source).toContain(
     'selectPlanReview(permissions, activeSessionId) !== null',
   )
-  expect(effectBody).toContain('if (dedicatedFlowOwnsKeyboard) return')
+  // App no longer owns permission keys or the cursor; a re-introduced copy here
+  // is the two-sources-of-truth bug this move removed. Asserted on the IMPORT
+  // and the PROP, not on the bare names, which also appear in prose explaining
+  // why the shell chord handler does not collide with the card's Ctrl pair.
+  expect(source).not.toContain("from './permissionPromptModel.js'")
+  expect(source).not.toContain('setPermissionCursor=')
+  expect(source).not.toContain('permissionCursor=')
 
-  // Bug fix — the card these shortcuts act on renders only in the 'chat'
-  // view. Navigating to Accounts/Settings/... while a permission is pending
-  // used to leave this listener attached with nothing on screen to answer:
-  // focus fell to `document.body`, which `permissionKeysAreLive` reads as
-  // live, so Enter/Escape acted on an invisible request.
-  expect(effectBody).toContain("if (activeView !== 'chat') return")
-  // The option list and the cursor are read inside the handler, so a stale
-  // closure would answer with the row the user was on two keys ago.
-  expect(source).toContain(
-    '    dedicatedFlowOwnsKeyboard,\n' +
-      '    activeView,\n' +
-      '    permissionOptions,\n' +
-      '    permissionCursor,\n' +
-      '  ])',
-  )
+  // The card is a select list, and BOTH the keys and the rendered rows must come
+  // from ONE list. There is now exactly one `buildPermissionOptions` call in the
+  // app, in the card, so `1` and a click on row 1 cannot disagree.
+  expect(card).toContain('buildPermissionOptions(request.request, denyOnly === true)')
+  expect(source).not.toContain('buildPermissionOptions')
+  expect(card.split('buildPermissionOptions(').length - 1).toBe(1)
 
   // One answer per request: a second response is rejected by the sidecar as
-  // unknown, and that rejection un-marks the card, re-enabling Allow/Deny on an
+  // unknown, and that rejection un-marks the card, re-enabling the rows on an
   // already-decided request.
   const respondStart = source.indexOf('const respondToPermission = useCallback(')
   const respondBody = source.slice(

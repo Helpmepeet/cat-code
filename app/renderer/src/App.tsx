@@ -11,12 +11,6 @@ import {
 } from 'react'
 import { getBridge } from './bridge.js'
 import { buildDebugShellStateSnapshot } from './debugStateReport.js'
-import {
-  buildPermissionOptions,
-  permissionKeyIntent,
-  permissionKeysAreLive,
-  type PermissionOption,
-} from './permissionPromptModel.js'
 import { PermissionQueue } from './PermissionQueue.js'
 import { selectContextUsage } from './contextUsage.js'
 import { ComposerActionsBar } from './ComposerActionsBar.js'
@@ -27,7 +21,6 @@ import {
   buildAllowResponse,
   buildDenyResponse,
   createPermissionState,
-  isAskUserQuestionRequest,
   reducePermissionState,
   selectAdditionalWorkingDirectories,
   selectPendingPermissionCount,
@@ -415,10 +408,6 @@ const EMPTY_BANNERS: readonly BannerNotice[] = []
 const EMPTY_WORKERS: readonly AgentModeWorkerItem[] = []
 /** Stable identity for the pre-first-turn map, so the initial state is one object. */
 const EMPTY_TURN_STARTS: ReadonlyMap<SessionId, number> = new Map()
-/** Stable identity so the permission keydown effect, which takes the option list
- * as a dependency, does not re-register on every render of a session that has no
- * card up at all. */
-const EMPTY_PERMISSION_OPTIONS: PermissionOption[] = []
 
 /**
  * Elements that already act on Enter/Escape themselves. The plain-key permission
@@ -2364,137 +2353,12 @@ export function App() {
       ? pendingPermission.requestId
       : null
 
-  // The highlighted row of the visible card's select list. It lives here, not in
-  // the card, because this handler is what moves it: two copies would let a
-  // mouse hover and an Enter disagree about which row is about to fire.
-  //
-  // Stored WITH the request it belongs to, and read only for that request, so a
-  // new card can never inherit the previous one's index. Resetting it from an
-  // effect instead left a window of one commit in which the incoming card
-  // painted with the outgoing card's cursor, and in which a confirm resolved
-  // `options[staleIndex]` — a wrong row, or silently nothing.
-  const [permissionCursorState, setPermissionCursorState] = useState<{
-    requestId: string
-    index: number
-  } | null>(null)
-  const permissionCursor =
-    permissionCursorState &&
-    permissionCursorState.requestId === permissionKeyTargetRequestId
-      ? permissionCursorState.index
-      : 0
-  const setPermissionCursor = useCallback(
-    (index: number) => {
-      if (!permissionKeyTargetRequestId) return
-      setPermissionCursorState({
-        requestId: permissionKeyTargetRequestId,
-        index,
-      })
-    },
-    [permissionKeyTargetRequestId],
-  )
-
-  // Both the keyboard below and the card itself read THIS list, so row 1 cannot
-  // mean one thing to a click and another to a `1`. `denyOnly` is derived from
-  // the SAME predicate `PermissionQueue` hands the card, rather than assumed
-  // false here: the two calls are then the same pure function over the same
-  // arguments and cannot disagree, instead of agreeing only for as long as
-  // `selectVisiblePermission` keeps excluding AskUserQuestion.
-  const permissionOptions = useMemo(
-    () =>
-      pendingPermission
-        ? buildPermissionOptions(
-            pendingPermission.request,
-            isAskUserQuestionRequest(pendingPermission),
-          )
-        : EMPTY_PERMISSION_OPTIONS,
-    [pendingPermission],
-  )
-
-  useEffect(() => {
-    if (!pendingPermission || !activeSessionId) return
-    if (dedicatedFlowOwnsKeyboard) return
-    // Bug fix — the card these shortcuts act on renders only in the 'chat'
-    // view (the final branch of the view switch below, e.g. `activeView ===
-    // 'chat' && activeSessionId` at the TasksStrip mount just below it). On
-    // any other view (Accounts, Settings, ...) the card is unmounted, focus
-    // has nowhere to land but `document.body`, and `permissionKeysAreLive`
-    // reads that as live — so Enter/Escape would allow/snooze a request the
-    // user cannot see.
-    if (activeView !== 'chat') return
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      // Never hijack a key the focused element already acts on: every
-      // button/menu item whose own Enter this would otherwise suppress,
-      // including each option row. The one exemption is the card the shortcuts
-      // act on, which hosts them rather than owning them
-      // (`permissionKeysAreLive`).
-      if (!permissionKeysAreLive(event.target)) return
-      const intent = permissionKeyIntent(event)
-      if (!intent) return
-      const count = permissionOptions.length
-      if (count === 0) return
-      // Auto-repeat may walk the list, but must never answer: holding Enter or
-      // Escape would fire a decision per repeat tick, and the guard used to
-      // block both, which also meant a held arrow key did not scroll the list.
-      if (event.repeat && intent.kind !== 'move') return
-
-      // A row answers the request; the prototype's own list does the same, and
-      // both mouse and keyboard resolve through this one option list.
-      const choose = (option: PermissionOption | undefined) => {
-        if (!option) return
-        if (option.effect === 'deny') {
-          denyPermission(pendingPermission.requestId)
-          return
-        }
-        allowPermission(
-          pendingPermission.requestId,
-          option.suggestionIndex === undefined ? [] : [option.suggestionIndex],
-        )
-      }
-
-      // A digit past the end of the list is not this card's key: claiming it
-      // with preventDefault and then declining to act swallows it from whatever
-      // else might want it.
-      if (intent.kind === 'pick' && intent.index >= count) return
-
-      event.preventDefault()
-      switch (intent.kind) {
-        case 'move':
-          setPermissionCursor((permissionCursor + intent.delta + count) % count)
-          return
-        case 'pick':
-          setPermissionCursor(intent.index)
-          choose(permissionOptions[intent.index])
-          return
-        case 'confirm':
-          // Clamped: the cursor is read for THIS request only, but a list that
-          // shrank under a held cursor must still resolve a row that exists.
-          choose(permissionOptions[Math.min(permissionCursor, count - 1)])
-          return
-        case 'deny':
-          // Escape and n/⌫ refuse without touching the cursor: the deny row is
-          // the one row two keys can reach directly.
-          denyPermission(pendingPermission.requestId)
-          return
-        default: {
-          const exhaustive: never = intent
-          void exhaustive
-        }
-      }
-    }
-
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [
-    allowPermission,
-    denyPermission,
-    pendingPermission,
-    activeSessionId,
-    dedicatedFlowOwnsKeyboard,
-    activeView,
-    permissionOptions,
-    permissionCursor,
-  ])
+  // The select list's cursor and its keyboard both live on the card that owns
+  // them (`PermissionPrompt.tsx`), not here. They were App state + an App
+  // `document` listener, which meant moving a highlight one row re-rendered the
+  // whole shell. `permissionKeyTargetRequestId` above is the entire contract
+  // between the two: exactly one card is ever handed it, so exactly one
+  // listener exists, and it is never registered beside a dedicated flow's.
 
   // Shell keyboard: keyboard-first tab switching + create/close, matching the
   // prototype's chords (⌘T new · ⌘W close · ⌘1..9 jump-to-tab). Only fires on a
@@ -2875,16 +2739,12 @@ export function App() {
 	            }}
 	            partialCount={panelPartialCount}
 	            permissionContext={selectPermissionContext(permissions, sessionId)}
-	            permissionCursor={
-	              sessionId === activeSessionId ? permissionCursor : undefined
-	            }
 	            permissionKeyTargetRequestId={
 	              sessionId === activeSessionId
 	                ? permissionKeyTargetRequestId
 	                : null
 	            }
 	            permissionQueue={sessionDisplayQueue}
-	            setPermissionCursor={setPermissionCursor}
 	            snoozePermission={requestId => {
 	              dispatchPermission({
 	                type: 'dismissed',
@@ -3771,10 +3631,8 @@ export function SessionPane({
   pastes,
   pendingSubmit = null,
   permissionContext,
-  permissionCursor,
   permissionKeyTargetRequestId = null,
   permissionQueue,
-  setPermissionCursor,
   snoozePermission,
   planReview,
   prompt,
@@ -4479,11 +4337,9 @@ export function SessionPane({
       ) : null}
 
       <PermissionQueue
-        cursor={permissionCursor}
         items={permissionQueue}
         keyboardTargetRequestId={permissionKeyTargetRequestId}
         onAllow={allowPermission}
-        onCursorChange={setPermissionCursor}
         onDeny={denyPermission}
         onRestore={restorePermission}
         onSnooze={snoozePermission}
@@ -5008,17 +4864,10 @@ type SessionPaneProps = {
   permissionContext: ReturnType<typeof selectPermissionContext>
   /** P4-43 — the request the shortcuts act on in THIS pane, or null. A split
    * workspace renders one queue per pane, and only the active pane's card may
-   * take focus: App's keydown handler acts solely on the activeSessionId.
+   * take focus and register the listener, which acts solely on that request.
    * Absent = no card here owns the keyboard, which is the safe default. */
   permissionKeyTargetRequestId?: string | null
-  /** The highlighted row of the keyboard card's select list, for the active pane
-   * only. App owns it because App's keydown handler is what moves it. */
-  permissionCursor?: number
   permissionQueue: ReturnType<typeof selectPermissionQueue>
-  /** Absent = this pane tracks no cursor, the safe default (as with
-   * `permissionKeyTargetRequestId`). The App wiring is pinned by source in
-   * App.test.tsx's FIX-5 tripwire, which tsc cannot do for an optional prop. */
-  setPermissionCursor?: (index: number) => void
   /** Hide a card locally, keeping the request live engine-side (the card's
    * "Keep pending" footer lane). Esc refuses instead, per the prototype.
    * Absent = the card offers no such lane. */

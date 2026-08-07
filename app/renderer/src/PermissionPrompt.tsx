@@ -3,6 +3,7 @@ import type { PermissionRequest } from './permissionState.js'
 import {
   buildPermissionOptions,
   formatPermissionInput,
+  permissionKeyIntent,
   permissionKeysAreLive,
   permissionKickerForTool,
   permissionTitleIsInlineCommand,
@@ -72,21 +73,22 @@ function isEditableElement(element: Element | null): boolean {
  * with NO answers — the thing `permissionState.ts`'s `selectVisiblePermission`
  * comment forbids and the keyboard path already refuses
  * (decisions/ASK-USER-QUESTION-ANSWER.md). Mouse and keyboard must agree, which
- * is why both read the SAME `buildPermissionOptions` list.
+ * is why they read one list: `buildPermissionOptions` is called exactly once in
+ * this app, here, and both the rows below and the keydown listener consume that
+ * single array.
  *
- * The cursor is owned by App, not by this card: App's keydown handler is the
- * one that moves it, and a card holding its own copy would let a mouse hover
- * and an Enter disagree about which row is highlighted. Only the card the keys
- * act on gets one at all.
+ * The cursor and the keyboard both live here for the same reason. They were
+ * App-level, which took two copies of the option list to keep in step and made
+ * a hover over a row re-render the whole shell. `keyboardTarget` is the entire
+ * contract with App: exactly one card is ever given it, so exactly one listener
+ * exists and only that card shows a cursor.
  */
 export function PermissionPrompt({
   request,
   submitted,
   denyOnly,
   keyboardTarget,
-  cursor,
   pendingCount = 1,
-  onCursorChange,
   onAllow,
   onDeny,
   onSnooze,
@@ -99,14 +101,12 @@ export function PermissionPrompt({
   /**
    * This is the card `selectVisiblePermission` picked AND no dedicated flow owns
    * the keyboard, so the shortcuts act on THIS request. Only such a card takes
-   * focus, hosts the keys, advertises them, and shows a cursor.
+   * focus, hosts the keys, advertises them, shows a cursor, and registers the
+   * listener below.
    */
   keyboardTarget?: boolean
-  /** The highlighted row, for the keyboard card only. */
-  cursor?: number
   /** How many requests are pending in this session, for the header count. */
   pendingCount?: number
-  onCursorChange?: (index: number) => void
   onAllow: (applySuggestions: number[]) => void
   onDeny: (message?: string) => void
   /** Hide this card but keep the request live engine-side (footer, and Esc's
@@ -142,6 +142,13 @@ export function PermissionPrompt({
   // hides the only description of what it is about to allow.
   const [inputShown, setInputShown] = useState(preview === null)
   const titleId = `permission-title-${request.requestId}`
+
+  // The highlighted row. Card-local, and it can be: the keys that move it are
+  // this card's own listener below, so there is exactly one copy and a hover
+  // cannot disagree with an Enter. It lived in App while the listener did, which
+  // made every hover re-render the entire shell (tabs, sidebar, transcript,
+  // composer) to move a border one row.
+  const [cursor, setCursor] = useState(0)
 
   const sectionRef = useRef<HTMLElement>(null)
   // Optimistic: the effect below is about to focus this card. It corrects itself
@@ -186,6 +193,84 @@ export function PermissionPrompt({
   // A deny-only request is skipped by the shortcuts upstream
   // (`selectVisiblePermission`), so such a card never advertises them even if it
   // were somehow handed the keyboard.
+  function pickAt(index: number) {
+    const option = options[index]
+    if (!option || submitted) return
+    if (option.effect === 'deny') {
+      onDeny()
+      return
+    }
+    onAllow(option.suggestionIndex === undefined ? [] : [option.suggestionIndex])
+  }
+
+  /**
+   * The select list's keyboard, owned by the ONE card the shortcuts act on.
+   *
+   * It lives here rather than in App for the same reason the cursor does: the
+   * two must not be able to disagree. Every guard App applied survives the move,
+   * and two of them get stronger by becoming structural:
+   *  - a dedicated flow (AskQuestionFlow / PlanPanel) holding the keyboard makes
+   *    `keyboardTargetRequestId` null, so this listener is never registered
+   *    alongside theirs and one Enter cannot resolve two requests;
+   *  - a background pane's card is never the target either, so a split
+   *    workspace still answers only the active session;
+   *  - the card is mounted only under the chat view, so navigating away now
+   *    UNMOUNTS the listener instead of leaving it attached over an invisible
+   *    request, which App had to exclude with an explicit `activeView` test.
+   *
+   * Still `document`, not `window`, keeping the propagation order the siblings'
+   * listeners were reasoned against (target → document → window).
+   */
+  useEffect(() => {
+    if (!keyboardTarget) return
+    function onKeyDown(event: KeyboardEvent) {
+      // Never hijack a key the focused element already acts on: every button on
+      // this card, and the composer. The one exemption is the card itself, which
+      // HOSTS the keys rather than owning them (`permissionKeysAreLive`).
+      if (!permissionKeysAreLive(event.target)) return
+      // In flight: the answer is already sent and the rows are disabled, so the
+      // keyboard must not fire a second one before the resolve lands.
+      if (submitted) return
+      const intent = permissionKeyIntent(event)
+      if (!intent) return
+      const count = options.length
+      if (count === 0) return
+      // Auto-repeat may walk the list, but must never answer: holding Enter or
+      // Escape would fire a decision per repeat tick.
+      if (event.repeat && intent.kind !== 'move') return
+      // A digit past the end of the list is not this card's key, so it must not
+      // be swallowed from whatever else might want it.
+      if (intent.kind === 'pick' && intent.index >= count) return
+
+      event.preventDefault()
+      switch (intent.kind) {
+        case 'move':
+          setCursor(c => (c + intent.delta + count) % count)
+          return
+        case 'pick':
+          setCursor(intent.index)
+          pickAt(intent.index)
+          return
+        case 'confirm':
+          // Clamped: a list that shrank under a held cursor must still resolve a
+          // row that exists.
+          pickAt(Math.min(cursor, count - 1))
+          return
+        case 'deny':
+          // Escape and n/⌫ refuse without touching the cursor: the deny row is
+          // the one row two keys reach directly.
+          onDeny()
+          return
+        default: {
+          const exhaustive: never = intent
+          void exhaustive
+        }
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  })
+
   const hintVisible = keyboardTarget === true && keysLive && !denyOnly
   // Gated on `keysLive` for the SAME reason the hint is: while focus sits in the
   // composer the shortcuts do not fire, and a highlighted row wearing an `↵`
@@ -193,17 +278,8 @@ export function PermissionPrompt({
   // removed from the hint strip, one element over.
   const activeIndex =
     keyboardTarget === true && keysLive
-      ? Math.min(cursor ?? 0, options.length - 1)
+      ? Math.min(cursor, options.length - 1)
       : undefined
-
-  function pick(option: PermissionOption) {
-    if (submitted) return
-    if (option.effect === 'deny') {
-      onDeny()
-      return
-    }
-    onAllow(option.suggestionIndex === undefined ? [] : [option.suggestionIndex])
-  }
 
   return (
     <section
@@ -315,8 +391,8 @@ export function PermissionPrompt({
             disabled={submitted === true}
             key={option.id}
             number={index + 1}
-            onHover={() => onCursorChange?.(index)}
-            onPick={() => pick(option)}
+            onHover={() => setCursor(index)}
+            onPick={() => pickAt(index)}
             option={option}
           />
         ))}

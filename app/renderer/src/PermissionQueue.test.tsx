@@ -89,11 +89,9 @@ test('a mixed queue restricts only the AskUserQuestion card', () => {
 test('only the keyboard card gets the cursor, and only the head card counts', () => {
   const html = renderToStaticMarkup(
     <PermissionQueue
-      cursor={0}
       items={[queueItem(BASH), queueItem(MALFORMED_ASK)]}
       keyboardTargetRequestId={BASH.requestId}
       onAllow={() => {}}
-      onCursorChange={() => {}}
       onDeny={() => {}}
       onRestore={() => {}}
     />,
