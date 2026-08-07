@@ -114,6 +114,8 @@ export function PermissionPrompt({
   onSnooze?: () => void
 }) {
   const toolName = request.request.tool_name
+  const engineTitle = request.request.title
+  const workerId = request.request.agent_id
   const preview = selectPermissionPreview(toolName, request.request.input)
   const options = buildPermissionOptions(request.request, denyOnly === true)
 
@@ -121,16 +123,25 @@ export function PermissionPrompt({
   // prototype writes it (`Permissions.jsx:465-471`). Real `Bash` input is not
   // the prototype's short mock, so a headline that cannot hold it says so and
   // the body block below carries the whole thing.
-  const inlineCommand =
-    permissionTitleIsInlineCommand(toolName) && preview?.kind === 'field'
+  //
+  // An engine-supplied title outranks it. The desktop producer never sets one
+  // (`src/app-runtime/appRuntimeCanUseTool.ts:64-73`), but this branch used to
+  // ignore `title` outright, which made "a supplied title wins" true for every
+  // family EXCEPT the two this card is mostly about.
+  const summary =
+    engineTitle === undefined &&
+    permissionTitleIsInlineCommand(toolName) &&
+    preview?.kind === 'field'
       ? summariseCommandForTitle(preview.value)
       : null
+  // A summariser that found no non-blank line has no headline to offer, so the
+  // card falls back to naming the tool rather than printing an empty chip.
+  const inlineCommand = summary && summary.text.length > 0 ? summary : null
 
   // Opened by default exactly when nothing could be promoted, so a card never
   // hides the only description of what it is about to allow.
   const [inputShown, setInputShown] = useState(preview === null)
   const titleId = `permission-title-${request.requestId}`
-  const workerId = request.request.agent_id
 
   const sectionRef = useRef<HTMLElement>(null)
   // Optimistic: the effect below is about to focus this card. It corrects itself
@@ -176,7 +187,14 @@ export function PermissionPrompt({
   // (`selectVisiblePermission`), so such a card never advertises them even if it
   // were somehow handed the keyboard.
   const hintVisible = keyboardTarget === true && keysLive && !denyOnly
-  const activeIndex = keyboardTarget === true ? cursor : undefined
+  // Gated on `keysLive` for the SAME reason the hint is: while focus sits in the
+  // composer the shortcuts do not fire, and a highlighted row wearing an `↵`
+  // chip states that Enter confirms it. That is the dead affordance P4-43
+  // removed from the hint strip, one element over.
+  const activeIndex =
+    keyboardTarget === true && keysLive
+      ? Math.min(cursor ?? 0, options.length - 1)
+      : undefined
 
   function pick(option: PermissionOption) {
     if (submitted) return
@@ -206,7 +224,7 @@ export function PermissionPrompt({
           <KickerIcon toolName={toolName} />
         </span>
         <span className="text-[9.5px] font-bold uppercase tracking-[0.1em] text-accent">
-          {permissionKickerForTool(toolName)}
+          {permissionKickerForTool(toolName, workerId !== undefined)}
         </span>
         {workerId ? (
           <span className="rounded bg-violet-400/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.05em] text-violet-300">
@@ -226,7 +244,10 @@ export function PermissionPrompt({
           className="mt-2 flex flex-wrap items-baseline gap-1.5 text-sm font-semibold text-text-primary"
           id={titleId}
         >
-          <span className="shrink-0">Allow</span>
+          {/* The prototype's own verb for a relayed request
+           * (`Permissions.jsx:467`): what is being approved is another agent's
+           * command, and this card is where you decide it. */}
+          <span className="shrink-0">{workerId ? 'Run' : 'Allow'}</span>
           <span className="min-w-0">
             <code className="break-all rounded bg-accent/10 px-1.5 py-0.5 font-mono text-xs text-accent">
               {inlineCommand.text}
@@ -239,8 +260,8 @@ export function PermissionPrompt({
           className="mt-2 text-sm font-semibold leading-snug text-text-primary"
           id={titleId}
         >
-          {request.request.title ??
-            `Allow ${request.request.display_name ?? toolName}?`}
+          {engineTitle ??
+            `${workerId ? 'Run' : 'Allow'} ${request.request.display_name ?? toolName}?`}
         </h2>
       )}
 
@@ -281,7 +302,13 @@ export function PermissionPrompt({
       ) : null}
 
       {/* The select list — "don't ask again" is a row here, not a side button */}
-      <div aria-label="Response options" className="mt-3 flex flex-col gap-0.5">
+      {/* `role` is load-bearing, not decoration: an `aria-label` on a bare div
+       * is not exposed at all, so the group had no accessible name. */}
+      <div
+        aria-label="Response options"
+        className="mt-3 flex flex-col gap-0.5"
+        role="group"
+      >
         {options.map((option, index) => (
           <OptionRow
             active={index === activeIndex}
@@ -349,6 +376,9 @@ function OptionRow({
   const refuse = option.effect === 'deny'
   return (
     <button
+      // The cursor is otherwise conveyed only by colour, so a screen reader got
+      // no signal about which row Enter would confirm.
+      aria-current={active ? true : undefined}
       className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
         active
           ? 'border border-accent/45 bg-accent/10'

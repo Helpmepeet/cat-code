@@ -1966,7 +1966,17 @@ test('FIX-5 keyboard tripwire: the permission shortcuts yield to a focused contr
 
   // The card is a select list, and BOTH the keys and the rendered rows must come
   // from one list: a second copy would let `1` and a click on row 1 disagree.
-  expect(source).toContain('buildPermissionOptions(pendingPermission.request)')
+  // App and PermissionQueue each call `buildPermissionOptions`, so the guarantee
+  // is that they pass the SAME arguments — the request, and a `denyOnly` derived
+  // by the same predicate. App assumed `false` here, which held only for as long
+  // as `selectVisiblePermission` kept excluding AskUserQuestion; the day it does
+  // not, `1` would allow a card whose row 1 is the refusal.
+  expect(source).toContain('isAskUserQuestionRequest(pendingPermission)')
+  const queuePredicate = readFileSync(
+    new URL('./PermissionQueue.tsx', import.meta.url),
+    'utf8',
+  )
+  expect(queuePredicate).toContain('isAskUserQuestionRequest(item.request)')
   expect(effectBody).toContain('const intent = permissionKeyIntent(event)')
   expect(effectBody).toContain('const count = permissionOptions.length')
 

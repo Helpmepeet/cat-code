@@ -11,6 +11,7 @@ import {
   permissionKeyIntent,
   permissionKeysAreLive,
   permissionKickerForTool,
+  permissionTitleIsInlineCommand,
   PERMISSION_KEY_HOST_ATTR,
   PERMISSION_TITLE_COMMAND_MAX,
   selectPermissionPreview,
@@ -99,6 +100,33 @@ test('summariseCommandForTitle cuts only what a headline cannot hold', () => {
     text: 'a …',
     truncated: true,
   })
+  // A trailing newline is not a second line. Measuring against the raw string
+  // reported every one of these as truncated, which put a misleading ellipsis in
+  // the headline and re-rendered the body block for a command that fitted.
+  expect(summariseCommandForTitle('ls -la\n')).toEqual({
+    text: 'ls -la',
+    truncated: false,
+  })
+  expect(summariseCommandForTitle('ls -la\n\n  \n')).toEqual({
+    text: 'ls -la',
+    truncated: false,
+  })
+  // A command that OPENS with a newline used to yield an empty headline chip
+  // reading "Allow  …?", naming nothing: the defect the headline exists to fix.
+  expect(summariseCommandForTitle('\ngit status')).toEqual({
+    text: 'git status …',
+    truncated: true,
+  })
+  // CRLF must not leave a stray carriage return in the chip.
+  expect(summariseCommandForTitle('ls -la\r\necho hi')).toEqual({
+    text: 'ls -la …',
+    truncated: true,
+  })
+  // Nothing but whitespace has no headline to offer at all.
+  expect(summariseCommandForTitle('  \n\t\n')).toEqual({
+    text: '',
+    truncated: false,
+  })
   const long = 'x'.repeat(PERMISSION_TITLE_COMMAND_MAX + 5)
   const summary = summariseCommandForTitle(long)
   expect(summary.truncated).toBe(true)
@@ -157,6 +185,70 @@ test('an engine-supplied title still wins over the derived one', () => {
   expect(html).not.toContain('Allow Read?')
 })
 
+test('an engine title outranks the inline command headline too', () => {
+  // The previous shape read `title` only in the NON-command branch, so "a
+  // supplied title wins" was true for every family except the two the card is
+  // mostly about.
+  const html = renderToStaticMarkup(
+    <PermissionPrompt
+      onAllow={() => {}}
+      onDeny={() => {}}
+      request={{
+        ...REQUEST,
+        request: { ...REQUEST.request, title: 'Run a release script' },
+      }}
+    />,
+  )
+  expect(html).toContain('Run a release script')
+  // The command is still shown, in the body block, so nothing is lost.
+  expect(html).toContain('Command')
+  expect(html).toContain('>date<')
+})
+
+test('a relayed request reads as running another agent command', () => {
+  const html = renderToStaticMarkup(
+    <PermissionPrompt
+      onAllow={() => {}}
+      onDeny={() => {}}
+      request={{
+        ...REQUEST,
+        request: { ...REQUEST.request, agent_id: 'worker-42' },
+      }}
+    />,
+  )
+  // The prototype's own verb and kicker for a relayed ask
+  // (`Permissions.jsx:467`, `PV.worker`).
+  expect(html).toContain('Run')
+  expect(html).not.toContain('>Allow<')
+  expect(html).toContain('Worker request')
+})
+
+test('a rule row never prints a raw engine behavior word', () => {
+  const html = renderToStaticMarkup(
+    <PermissionPrompt
+      onAllow={() => {}}
+      onDeny={() => {}}
+      request={{
+        ...REQUEST,
+        request: {
+          ...REQUEST.request,
+          permission_suggestions: [
+            {
+              type: 'addRules',
+              rules: [{ toolName: 'Bash', ruleContent: 'rm:*' }],
+              behavior: 'deny',
+              destination: 'userSettings',
+            },
+          ],
+        },
+      }}
+    />,
+  )
+  // It used to read "Yes, and deny `Bash(rm:*)`".
+  expect(html).toContain('Yes, and always block ')
+  expect(html).not.toContain('Yes, and deny ')
+})
+
 test('kickers key on the same families as the preview switch', () => {
   expect(permissionKickerForTool('Bash')).toBe('Permission')
   expect(permissionKickerForTool('Edit')).toBe('Permission')
@@ -166,6 +258,25 @@ test('kickers key on the same families as the preview switch', () => {
   expect(permissionKickerForTool('WebFetch')).toBe('Web access')
   expect(permissionKickerForTool('Skill')).toBe('Skill')
   expect(permissionKickerForTool('mcp__x__y')).toBe('Permission')
+  // A relayed request takes the prototype's worker kicker whatever the tool is.
+  expect(permissionKickerForTool('Bash', true)).toBe('Worker request')
+  expect(permissionKickerForTool('WebFetch', true)).toBe('Worker request')
+})
+
+test('the inline-command headline is derived from the preview table', () => {
+  // These two used to be hand-kept parallel lists, so adding a command family to
+  // `previewShapeForTool` silently regressed its headline with no test failing.
+  for (const tool of ['Bash', 'PowerShell']) {
+    expect(permissionTitleIsInlineCommand(tool)).toBe(true)
+    expect(selectPermissionPreview(tool, { command: 'x' })).toEqual({
+      kind: 'field',
+      label: 'Command',
+      value: 'x',
+    })
+  }
+  for (const tool of ['Read', 'Grep', 'WebFetch', 'Skill', 'mcp__x__y']) {
+    expect(permissionTitleIsInlineCommand(tool)).toBe(false)
+  }
 })
 
 test('a tool with no recognised family shows its input, opened', () => {
@@ -767,4 +878,26 @@ test('the cursor marks the row the keyboard would confirm, and only that row', (
   expect(onRow2.split('>↵<').length - 1).toBe(1)
   // The refuse row keeps its own esc chip regardless of where the cursor is.
   expect(onRow2).toContain('>esc<')
+  // The cursor is exposed to assistive tech, not conveyed by colour alone.
+  expect(onRow2).toContain('aria-current="true"')
+  expect(onRow2.split('aria-current="true"').length - 1).toBe(1)
+})
+
+test('a cursor out of range never highlights a row that is not there', () => {
+  // The cursor is keyed to its request, but a defensive clamp keeps a stale or
+  // oversized index from selecting nothing (or, in the handler, resolving
+  // `undefined` after preventDefault).
+  const html = renderToStaticMarkup(
+    <PermissionPrompt
+      cursor={7}
+      keyboardTarget
+      onAllow={() => {}}
+      onDeny={() => {}}
+      request={REQUEST}
+    />,
+  )
+  // Two rows on this request, so the clamp lands on the last one, which is the
+  // refusal — and the refusal shows `esc`, never `↵`.
+  expect(html).toContain('aria-current="true"')
+  expect(html).not.toContain('>↵<')
 })

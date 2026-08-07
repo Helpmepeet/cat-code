@@ -27,6 +27,7 @@ import {
   buildAllowResponse,
   buildDenyResponse,
   createPermissionState,
+  isAskUserQuestionRequest,
   reducePermissionState,
   selectAdditionalWorkingDirectories,
   selectPendingPermissionCount,
@@ -414,6 +415,10 @@ const EMPTY_BANNERS: readonly BannerNotice[] = []
 const EMPTY_WORKERS: readonly AgentModeWorkerItem[] = []
 /** Stable identity for the pre-first-turn map, so the initial state is one object. */
 const EMPTY_TURN_STARTS: ReadonlyMap<SessionId, number> = new Map()
+/** Stable identity so the permission keydown effect, which takes the option list
+ * as a dependency, does not re-register on every render of a session that has no
+ * card up at all. */
+const EMPTY_PERMISSION_OPTIONS: PermissionOption[] = []
 
 /**
  * Elements that already act on Enter/Escape themselves. The plain-key permission
@@ -2362,18 +2367,48 @@ export function App() {
   // The highlighted row of the visible card's select list. It lives here, not in
   // the card, because this handler is what moves it: two copies would let a
   // mouse hover and an Enter disagree about which row is about to fire.
-  const [permissionCursor, setPermissionCursor] = useState(0)
-  useEffect(() => {
-    setPermissionCursor(0)
-  }, [permissionKeyTargetRequestId])
+  //
+  // Stored WITH the request it belongs to, and read only for that request, so a
+  // new card can never inherit the previous one's index. Resetting it from an
+  // effect instead left a window of one commit in which the incoming card
+  // painted with the outgoing card's cursor, and in which a confirm resolved
+  // `options[staleIndex]` — a wrong row, or silently nothing.
+  const [permissionCursorState, setPermissionCursorState] = useState<{
+    requestId: string
+    index: number
+  } | null>(null)
+  const permissionCursor =
+    permissionCursorState &&
+    permissionCursorState.requestId === permissionKeyTargetRequestId
+      ? permissionCursorState.index
+      : 0
+  const setPermissionCursor = useCallback(
+    (index: number) => {
+      if (!permissionKeyTargetRequestId) return
+      setPermissionCursorState({
+        requestId: permissionKeyTargetRequestId,
+        index,
+      })
+    },
+    [permissionKeyTargetRequestId],
+  )
 
   // Both the keyboard below and the card itself read THIS list, so row 1 cannot
-  // mean one thing to a click and another to a `1`. `selectVisiblePermission`
-  // already excludes the deny-only requests (AskUserQuestion, plan), so the
-  // options here always carry their allow rows.
-  const permissionOptions = pendingPermission
-    ? buildPermissionOptions(pendingPermission.request)
-    : []
+  // mean one thing to a click and another to a `1`. `denyOnly` is derived from
+  // the SAME predicate `PermissionQueue` hands the card, rather than assumed
+  // false here: the two calls are then the same pure function over the same
+  // arguments and cannot disagree, instead of agreeing only for as long as
+  // `selectVisiblePermission` keeps excluding AskUserQuestion.
+  const permissionOptions = useMemo(
+    () =>
+      pendingPermission
+        ? buildPermissionOptions(
+            pendingPermission.request,
+            isAskUserQuestionRequest(pendingPermission),
+          )
+        : EMPTY_PERMISSION_OPTIONS,
+    [pendingPermission],
+  )
 
   useEffect(() => {
     if (!pendingPermission || !activeSessionId) return
@@ -2394,11 +2429,14 @@ export function App() {
       // act on, which hosts them rather than owning them
       // (`permissionKeysAreLive`).
       if (!permissionKeysAreLive(event.target)) return
-      if (event.repeat) return
       const intent = permissionKeyIntent(event)
       if (!intent) return
       const count = permissionOptions.length
       if (count === 0) return
+      // Auto-repeat may walk the list, but must never answer: holding Enter or
+      // Escape would fire a decision per repeat tick, and the guard used to
+      // block both, which also meant a held arrow key did not scroll the list.
+      if (event.repeat && intent.kind !== 'move') return
 
       // A row answers the request; the prototype's own list does the same, and
       // both mouse and keyboard resolve through this one option list.
@@ -2414,18 +2452,24 @@ export function App() {
         )
       }
 
+      // A digit past the end of the list is not this card's key: claiming it
+      // with preventDefault and then declining to act swallows it from whatever
+      // else might want it.
+      if (intent.kind === 'pick' && intent.index >= count) return
+
       event.preventDefault()
       switch (intent.kind) {
         case 'move':
-          setPermissionCursor(c => (c + intent.delta + count) % count)
+          setPermissionCursor((permissionCursor + intent.delta + count) % count)
           return
         case 'pick':
-          if (intent.index >= count) return
           setPermissionCursor(intent.index)
           choose(permissionOptions[intent.index])
           return
         case 'confirm':
-          choose(permissionOptions[permissionCursor])
+          // Clamped: the cursor is read for THIS request only, but a list that
+          // shrank under a held cursor must still resolve a row that exists.
+          choose(permissionOptions[Math.min(permissionCursor, count - 1)])
           return
         case 'deny':
           // Escape and n/⌫ refuse without touching the cursor: the deny row is
@@ -4435,7 +4479,7 @@ export function SessionPane({
       ) : null}
 
       <PermissionQueue
-        {...(permissionCursor === undefined ? {} : { cursor: permissionCursor })}
+        cursor={permissionCursor}
         items={permissionQueue}
         keyboardTargetRequestId={permissionKeyTargetRequestId}
         onAllow={allowPermission}

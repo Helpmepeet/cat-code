@@ -172,6 +172,21 @@ export function describeSuggestion(update: PermissionUpdate): string {
 }
 
 /**
+ * How a non-allow rule suggestion leads its row. `behavior` is the one engine
+ * enum this module used to print raw, which produced rows reading "Yes, and
+ * deny `Bash(rm:*)`" next to a row whose effect is an allow. The total `Record`
+ * is the tripwire: a new behavior fails to compile until it gets a phrasing.
+ */
+const BEHAVIOR_LEAD: Record<
+  Extract<PermissionUpdate, { behavior: string }>['behavior'],
+  string
+> = {
+  allow: "Yes, and don't ask again for ",
+  deny: 'Yes, and always block ',
+  ask: 'Yes, and always ask for ',
+}
+
+/**
  * The suggestion phrased as an option row. The prototype writes this line as
  * "Yes, and don't ask again for `<scope>`" (`Permissions.jsx:112`), where its
  * mock derived `<scope>` client-side; here the chip is the ENGINE's own
@@ -193,7 +208,7 @@ function describeSuggestionOption(update: PermissionUpdate): {
     case 'replaceRules':
       return update.behavior === 'allow'
         ? { pre: "Yes, and don't ask again for ", code: formatRules(update), post }
-        : { pre: `Yes, and ${update.behavior} `, code: formatRules(update), post }
+        : { pre: BEHAVIOR_LEAD[update.behavior], code: formatRules(update), post }
     case 'removeRules':
       return { pre: 'Yes, and stop applying ', code: formatRules(update), post }
     case 'setMode':
@@ -291,7 +306,14 @@ export function buildPermissionOptions(
  * (`Permissions.jsx:61-75` `kicker`); these are its words for the families that
  * survived, and `Permission` is its fallback's.
  */
-export function permissionKickerForTool(toolName: string): string {
+export function permissionKickerForTool(
+  toolName: string,
+  relayed = false,
+): string {
+  // The prototype gives a relayed request its own kicker word
+  // (`Permissions.jsx:73` `PV.worker`), because what is being approved is
+  // another agent's request, not this session's.
+  if (relayed) return 'Worker request'
   switch (toolName) {
     case 'Read':
     case 'Glob':
@@ -311,11 +333,17 @@ export function permissionKickerForTool(toolName: string): string {
  *
  * The prototype inlines the preview into the title for its pure-command variants
  * only (`Permissions.jsx:411-412`: bash, powershell, worker), and shows every
- * other family a labelled body block. These are the two command families in the
- * preview switch below.
+ * other family a labelled body block.
+ *
+ * Derived from `previewShapeForTool` rather than re-listing the command tools:
+ * the two lists were identical by hand, so adding a command family to the
+ * preview switch silently regressed its headline to "Allow &lt;tool&gt;?" with no
+ * test failing. One table owns family knowledge now, and `COMMAND_LABEL` is
+ * what ties the two together instead of a repeated string literal.
  */
 export function permissionTitleIsInlineCommand(toolName: string): boolean {
-  return toolName === 'Bash' || toolName === 'PowerShell'
+  const shape = previewShapeForTool(toolName)
+  return shape !== null && shape.kind === 'field' && shape.label === COMMAND_LABEL
 }
 
 /** Longest command a headline carries whole. Past this it is summarised, and the
@@ -337,10 +365,21 @@ export function summariseCommandForTitle(command: string): {
   text: string
   truncated: boolean
 } {
-  const firstLine = command.split('\n')[0] ?? ''
-  const multiLine = firstLine.length < command.length
+  // Trailing whitespace is not content: a model-emitted command very often ends
+  // in a newline, and measuring against the raw string reported every one of
+  // those as multi-line — a headline with a misleading ellipsis and a body block
+  // re-rendering a command that fitted perfectly.
+  const content = command.replace(/\s+$/, '')
+  // The FIRST NON-BLANK line, because a command that opens with a newline gave
+  // `firstLine === ''` and rendered `Allow  …?`, naming no command at all: the
+  // exact defect the inline headline exists to fix.
+  const lines = content.split('\n')
+  const firstIndex = lines.findIndex(line => line.trim().length > 0)
+  if (firstIndex === -1) return { text: '', truncated: false }
+  const firstLine = (lines[firstIndex] ?? '').replace(/\r$/, '')
+  const more = firstIndex > 0 || firstIndex < lines.length - 1
   if (firstLine.length <= PERMISSION_TITLE_COMMAND_MAX) {
-    return multiLine
+    return more
       ? { text: `${firstLine} …`, truncated: true }
       : { text: firstLine, truncated: false }
   }
@@ -367,6 +406,10 @@ export type PermissionPreview =
   | { kind: 'field'; label: string; value: string }
   | { kind: 'content'; path: string; body: string }
   | { kind: 'change'; path: string; lines: PermissionPreviewLine[] }
+
+/** The one label that also decides the headline form; see
+ * `permissionTitleIsInlineCommand`. Named so the two cannot drift apart. */
+const COMMAND_LABEL = 'Command'
 
 type PreviewShape =
   | { kind: 'field'; label: string; field: string }
@@ -408,7 +451,7 @@ function previewShapeForTool(toolName: string): PreviewShape | null {
   switch (toolName) {
     case 'Bash':
     case 'PowerShell':
-      return { kind: 'field', label: 'Command', field: 'command' }
+      return { kind: 'field', label: COMMAND_LABEL, field: 'command' }
     case 'Edit':
       return {
         kind: 'change',

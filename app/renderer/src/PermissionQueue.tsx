@@ -45,16 +45,24 @@ export function PermissionQueue({
   const active = items.filter(item => !item.dismissed)
   const snoozed = items.filter(item => item.dismissed)
 
+  // What "pending" means on this header: requests in THIS stack that still need
+  // an answer. `items.length` counted the already-submitted ones too, so a card
+  // could read "2 pending" with one of them answered and merely awaiting its
+  // `permission.resolved`. This is deliberately not `selectPendingPermissionCount`,
+  // which measures the whole session (including the plan and question surfaces
+  // that have their own cards) and drives the tab badge.
+  const awaitingAnswer = items.filter(item => !item.submitted).length
+
   return (
     <div aria-label="Permission requests" className="flex flex-col gap-2">
-      {active.map(item => {
+      {active.map((item, index) => {
         const isKeyboardTarget =
           item.request.requestId === keyboardTargetRequestId
         return (
           <PermissionPrompt
             // Only the keyboard card has a cursor: it is the only one whose rows
             // a key press can move through.
-            {...(isKeyboardTarget && cursor !== undefined ? { cursor } : {})}
+            cursor={isKeyboardTarget ? cursor : undefined}
             // An AskUserQuestion only reaches this generic queue when its
             // questions could not be read, so there is nothing to answer and an
             // allow would run the tool with empty answers. Deny is the only
@@ -66,12 +74,16 @@ export function PermissionQueue({
             onAllow={applySuggestions =>
               onAllow(item.request.requestId, applySuggestions)
             }
-            {...(isKeyboardTarget && onCursorChange ? { onCursorChange } : {})}
+            onCursorChange={isKeyboardTarget ? onCursorChange : undefined}
             onDeny={message => onDeny(item.request.requestId, message)}
-            {...(onSnooze
-              ? { onSnooze: () => onSnooze(item.request.requestId) }
-              : {})}
-            pendingCount={items.length}
+            onSnooze={
+              onSnooze ? () => onSnooze(item.request.requestId) : undefined
+            }
+            // The prototype puts the count on the ONE head card
+            // (`Permissions.jsx:452-456`). Stacking is this app's deviation, and
+            // repeating "2 pending" beside each of two visible cards is an
+            // artefact of it rather than anything the prototype asks for.
+            pendingCount={index === 0 ? awaitingAnswer : 1}
             request={item.request}
             submitted={item.submitted}
           />

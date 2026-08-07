@@ -86,7 +86,7 @@ test('a mixed queue restricts only the AskUserQuestion card', () => {
   expect(html.split(REFUSE_ROW).length - 1).toBe(2)
 })
 
-test('only the keyboard card gets the cursor, and every card gets the count', () => {
+test('only the keyboard card gets the cursor, and only the head card counts', () => {
   const html = renderToStaticMarkup(
     <PermissionQueue
       cursor={0}
@@ -100,10 +100,29 @@ test('only the keyboard card gets the cursor, and every card gets the count', ()
   )
   // The ↵ chip rides the cursor, and only one card has one.
   expect(html.split('>↵<').length - 1).toBe(1)
-  // The prototype puts the pending count in each card's own header row
-  // (`Permissions.jsx:452-456`), not in a line above the stack.
-  expect(html.split('pending').length - 1).toBe(2)
+  // The count is the prototype's per-card header element (`Permissions.jsx:452-456`),
+  // not a line above the stack — but it belongs to the ONE head card. Printing
+  // "2 pending" beside each of two visible cards is an artefact of stacking.
+  expect(html.split('pending').length - 1).toBe(1)
   expect(html).not.toContain('permission requests pending')
+})
+
+test('the header count excludes requests that are already answered', () => {
+  // `items` carries submitted requests until `permission.resolved` lands, so
+  // counting the raw list said "2 pending" with one of them already decided.
+  const html = renderToStaticMarkup(
+    <PermissionQueue
+      items={[
+        queueItem(BASH),
+        { ...queueItem(MALFORMED_ASK), submitted: true },
+      ]}
+      onAllow={() => {}}
+      onDeny={() => {}}
+      onRestore={() => {}}
+    />,
+  )
+  // One request still needs an answer, and the count hides itself at 1.
+  expect(html).not.toContain('pending')
 })
 
 test('the Keep pending lane appears only when the queue offers it', () => {
