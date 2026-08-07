@@ -262,7 +262,9 @@ test('P4-18b: a Read tool card renders the filename, not its full path', () => {
   expect(html).toContain('Read') // family word
   expect(html).toContain('hosts') // filename from input.file_path
   expect(html).not.toContain('/etc/hosts')
-  expect(html).toContain('running') // pending → running state word
+  // The state word is dropped from the header pill (operator call, 2026-08-05):
+  // a colour-coded dot carries it, labelled for a11y rather than printed.
+  expect(html).toContain('aria-label="running"')
 })
 
 test('renders the rich WelcomeScreen (hero + real Codex table + cwd) when no rows are projected yet', () => {
@@ -410,7 +412,7 @@ test('P4-18b: a resolved bash card shows the collapsed tail-peek output and done
     }),
   )
 
-  expect(html).toContain('done') // success → done state word
+  expect(html).toContain('aria-label="done"') // success → done state, dot-only
   expect(html).toContain('hi') // tail-peek surfaces output even collapsed
 })
 
@@ -425,7 +427,7 @@ test('P4-18b: a bash card tints an error line and expands failed results', () =>
     }),
   )
 
-  expect(html).toContain('failed')
+  expect(html).toContain('aria-label="failed"')
   expect(html).toContain('ERROR: boom') // errored card is expanded by default
   expect(html).toContain('text-tone-danger')
 })
@@ -481,8 +483,8 @@ test('ack card: a FAILED ack tints the peek while the header still reports the c
 
   expect(html).toContain('No subagent found')
   expect(html).toContain('text-tone-danger') // ack tone, from `success:false`
-  expect(html).toContain('done') // call status, unchanged and still true
-  expect(html).not.toContain('failed')
+  expect(html).toContain('aria-label="done"') // call status, unchanged and still true
+  expect(html).not.toContain('aria-label="failed"')
 })
 
 test('ack card: the expanded body labels the result and the prompt that was sent', () => {
@@ -618,6 +620,7 @@ function agentRow(
   status: ToolCardStatus,
   children: NestedTranscriptRow[] = [],
   agentCompletion: AgentCompletionProjection | null = null,
+  result: ToolResultProjection | null = null,
 ): NestedTranscriptRow {
   return {
     ...blockSource,
@@ -629,7 +632,7 @@ function agentRow(
     agentCompletion,
     input,
     status,
-    result: null,
+    result,
     children,
   }
 }
@@ -692,6 +695,81 @@ test('a foreground agent card keeps the C4 collapsed default and grows no result
   expect(html).toContain('aria-expanded="false"')
 })
 
+/* ── a backgrounded agent's launch ack is not its finish (bug, 2026-08-05) ── */
+
+test('a backgrounded agent with no completion yet reads as In background, not Completed', () => {
+  // Its `tool_result` (status: 'success') only ever says the launch started —
+  // the real outcome is a separate task-notification that hasn't landed
+  // (agentCompletion: null). Showing "Completed"/"done" here is a fake label.
+  const html = render(
+    agentRow(
+      'launched',
+      { subagent_type: 'Explore', description: 'audit launcher lifecycle claims', run_in_background: true },
+      'success',
+    ),
+  )
+  expect(html).toContain('In background')
+  expect(html).not.toContain('Completed')
+})
+
+test('a backgrounded agent shows Completed once its real completion lands', () => {
+  const html = render(
+    agentRow(
+      'settled',
+      { subagent_type: 'Explore', description: 'audit restore startup claims', run_in_background: true },
+      'success',
+      [],
+      ADA_COMPLETION,
+    ),
+  )
+  expect(html).toContain('Completed')
+})
+
+test('a DelegateGroup of backgrounded members reads Running, not finished, before completion lands', () => {
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[
+        agentRow(
+          'a',
+          { subagent_type: 'Explore', description: 'audit A', run_in_background: true },
+          'success',
+        ),
+        agentRow(
+          'b',
+          { subagent_type: 'Explore', description: 'audit B', run_in_background: true },
+          'success',
+        ),
+      ]}
+    />,
+  )
+  expect(html).toContain('Running 2 Explore agents')
+  expect(html).not.toContain('agents finished')
+})
+
+test('a DelegateGroup of backgrounded members reads finished once both complete', () => {
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[
+        agentRow(
+          'a',
+          { subagent_type: 'Explore', description: 'audit A', run_in_background: true },
+          'success',
+          [],
+          ADA_COMPLETION,
+        ),
+        agentRow(
+          'b',
+          { subagent_type: 'Explore', description: 'audit B', run_in_background: true },
+          'success',
+          [],
+          ADA_COMPLETION,
+        ),
+      ]}
+    />,
+  )
+  expect(html).toContain('2 Explore agents finished')
+})
+
 test('an unmergeable completion renders one line, never the model-facing banner', () => {
   const html = renderToStaticMarkup(
     <TranscriptRowsView
@@ -751,11 +829,160 @@ test('D2/C4: an owning Agent card nests its subagent COLLAPSED by default with a
   )
 
   expect(html).toContain('Agent') // parent family word (always-visible header)
-  expect(html).toContain('1 nested') // child-count expand affordance in the header
-  // C4: children are COLLAPSED by default — the nested subagent content is not
-  // rendered until the card is expanded, so it must not leak top-level.
+  // The header digests the children rather than counting them: while the worker
+  // runs, that digest is its most recent nested tool call.
+  expect(html).toContain('Grep foo')
+  // C4: the child ROWS stay COLLAPSED — the header summarising them is not the
+  // same as rendering them, so no nested row may leak top-level.
   expect(html).not.toContain('Search') // nested grep family word hidden
-  expect(html).not.toContain('foo') // nested target hidden
+})
+
+test('a finished Agent card leads with the worker NAME, taken from its own result frame', () => {
+  const html = render(
+    agentRow('owner', { subagent_type: 'Explore', description: 'investigate' }, 'success', [], null, {
+      isError: false,
+      content: 'done',
+      diff: null,
+      agentName: 'Ada',
+    }),
+  )
+  expect(html).toContain('Ada')
+  // The type stays as the qualifier beside it, never replaced by the name.
+  expect(html).toContain('Explore')
+})
+
+test('a running Agent card shows no name, because the transcript has not been told one', () => {
+  const html = render(
+    agentRow('owner', { subagent_type: 'Explore', description: 'investigate' }, 'pending'),
+  )
+  expect(html).toContain('Explore')
+  expect(html).not.toContain('Ada')
+})
+
+test('a running Agent card leads with the worker name carried by its nested progress frame', () => {
+  const child = {
+    ...toolRow({
+      toolName: 'Grep',
+      toolFamily: 'grep',
+      input: { pattern: 'projectServerFrame' },
+      status: 'pending',
+    }),
+    agentName: 'Ada',
+  }
+  const html = render(
+    agentRow(
+      'owner',
+      { subagent_type: 'Explore', description: 'investigate' },
+      'pending',
+      [child],
+    ),
+  )
+  expect(html).toContain('Ada')
+  expect(html).toContain('Explore')
+})
+
+test('a leading @ on the engine name is stripped before display', () => {
+  const html = render(
+    agentRow('owner', { subagent_type: 'Explore', description: 'investigate' }, 'success', [], null, {
+      isError: false,
+      content: 'done',
+      diff: null,
+      agentName: '@Ada',
+    }),
+  )
+  expect(html).toContain('Ada')
+  expect(html).not.toContain('@Ada')
+})
+
+test('a running Agent card with no nested call yet says so instead of going blank', () => {
+  const html = render(
+    agentRow('owner', { subagent_type: 'Explore', description: 'investigate' }, 'pending', []),
+  )
+  expect(html).toContain('starting')
+})
+
+test('a backgrounded agent never claims to be "starting" for its whole run', () => {
+  // The async branch returns its launch ack before the code that yields nested
+  // progress, so a background card has no children and nothing truthful to say.
+  const html = render(
+    agentRow('owner', { subagent_type: 'Explore', description: 'investigate', run_in_background: true }, 'success'),
+  )
+  expect(html).not.toContain('starting')
+})
+
+test('a finished agent reports real token usage even with zero tool calls', () => {
+  const html = render(
+    agentRow('owner', { subagent_type: 'Explore', description: 'investigate' }, 'success', [], {
+      status: 'completed',
+      summary: null,
+      result: null,
+      usage: { totalTokens: 12000, toolUses: 0, durationMs: 1000 },
+    }),
+  )
+  expect(html).toContain('12.0k tokens')
+  // The badge's own phrasing. `AgentCompletionBody` separately prints "0 tools",
+  // which is its business, not this badge's.
+  expect(html).not.toContain('0 tool call')
+})
+
+test('a missing token count is omitted, never printed as "0 tokens"', () => {
+  const html = render(
+    agentRow('owner', { subagent_type: 'Explore', description: 'investigate' }, 'success', [], {
+      status: 'completed',
+      summary: null,
+      result: null,
+      // The engine persists an ABSENT count as a literal zero
+      // (`totalTokensOverride ?? 0`, agentToolUtils.ts:694), so a real worker
+      // that made 55 tool calls arrives here claiming zero tokens.
+      usage: { totalTokens: 0, toolUses: 55, durationMs: 1000 },
+    }),
+  )
+  expect(html).toContain('55 tool calls')
+  expect(html).not.toContain('0 tokens')
+})
+
+test('a finished FOREGROUND agent reports the totals off its own result', () => {
+  // A foreground worker never produces a task-notification, so `agentCompletion`
+  // is null and its own structured result is the only place its totals exist.
+  // Counting nested rows cannot supply tokens at all, and supplies no calls
+  // once a restore lands the branch outside the replayed window.
+  const html = render(
+    agentRow('owner', { subagent_type: 'Explore', description: 'investigate' }, 'success', [], null, {
+      isError: false,
+      content: 'done',
+      diff: null,
+      agentUsage: { totalTokens: 12000, toolUses: 7 },
+    }),
+  )
+  expect(html).toContain('7 tool calls')
+  expect(html).toContain('12.0k tokens')
+})
+
+test('the activity line never prints a tool name twice', () => {
+  const html = render(
+    agentRow('owner', { subagent_type: 'Explore', description: 'investigate' }, 'pending', [
+      // `deriveTarget` falls back to the tool's own name for this family.
+      toolRow({ toolName: 'TodoWrite', toolFamily: 'other', input: {}, status: 'pending' }),
+    ]),
+  )
+  expect(html).toContain('TodoWrite')
+  expect(html).not.toContain('TodoWrite TodoWrite')
+})
+
+test('a finished Agent card digests TOOL CALLS, never the prose rows mixed in', () => {
+  const html = render(
+    agentRow('owner', { subagent_type: 'Explore', description: 'investigate' }, 'success', [
+      toolRow({
+        toolName: 'Grep',
+        toolFamily: 'grep',
+        input: { pattern: 'foo' },
+        status: 'success',
+      }),
+    ]),
+  )
+  expect(html).toContain('1 tool call')
+  expect(html).not.toContain('1 tool calls')
+  expect(html).not.toContain('nested')
 })
 
 test('D2/§3: two co-spawned Agent rows (same messageId) render as ONE DelegateGroup with both members', () => {
@@ -983,7 +1210,7 @@ test('trail mode: adjacent reasoning rows coalesce into ONE run with a step coun
   expect(html).toContain('Planning a focused test run')
 })
 
-test('trail mode: a run mixes readable summaries with an encrypted-only step, payload never printed', () => {
+test('trail mode: an encrypted-only step drops out of a mixed run, payload never printed', () => {
   const html = renderRows(
     [
       thinkingRow('s:m:0:thinking', 'Acknowledging correction on summary display'),
@@ -997,13 +1224,14 @@ test('trail mode: a run mixes readable summaries with an encrypted-only step, pa
     'trail',
   )
 
-  expect(html).toContain('2 steps')
+  // Only the readable step is left, so it draws as a lone line with no count.
+  expect(html).not.toContain('steps')
   expect(html).toContain('Acknowledging correction on summary display')
-  expect(html).toContain('reasoning not shared by the provider')
+  expect(html).not.toContain('reasoning not shared by the provider')
   expect(html).not.toContain('ENCRYPTED')
 })
 
-test('trail mode: a lone encrypted-only block is one row with no label and no payload', () => {
+test('trail mode: a lone encrypted-only block renders nothing, no placeholder and no payload', () => {
   const html = render({
     ...blockSource,
     id: 's:m:0:redacted-thinking',
@@ -1011,9 +1239,10 @@ test('trail mode: a lone encrypted-only block is one row with no label and no pa
     data: 'ENCRYPTED',
   })
 
-  expect(html).toContain('reasoning not shared by the provider')
+  expect(html).not.toContain('reasoning not shared by the provider')
   expect(html).not.toContain('ENCRYPTED')
   expect(html).not.toContain('steps')
+  expect(html).not.toContain('Reasoning')
 })
 
 test('trail mode: a long-form reasoning body keeps its prose, on the trail', () => {
@@ -1044,18 +1273,20 @@ test('trail mode: the adapter\'s "\\n\\n"-merged headings become one step each',
   expect(html).toContain('Planning a test run')
 })
 
-test('an empty-bodied thinking row is withheld in BOTH modes, never an empty card or label', () => {
+test('an empty-bodied thinking row renders nothing in trail, redacted in blocks', () => {
   // Encrypted-only reasoning reaches the app as `thinking` with an empty body
-  // carrying the signature (codex-fetch-adapter.ts:2229).
+  // carrying the signature (codex-fetch-adapter.ts:2229). Trail has nothing
+  // readable to draw, so it draws nothing; blocks keeps its own placeholder card.
   const trail = render(thinkingRow('s:m:0:thinking', ''))
-  expect(trail).toContain('reasoning not shared by the provider')
+  expect(trail).not.toContain('reasoning not shared by the provider')
   expect(trail).not.toContain('steps')
+  expect(trail).not.toContain('Reasoning')
 
   const blocks = renderRows([thinkingRow('s:m:0:thinking', '')], 'blocks')
   expect(blocks).toContain('redacted by the model provider')
 })
 
-test('trail mode: an all-withheld run draws bare lines — no head asserting steps', () => {
+test('trail mode: an all-withheld run renders nothing — no head asserting steps', () => {
   const html = renderRows(
     [
       { ...blockSource, id: 's:m:0:r', kind: 'redacted-thinking', data: 'ENCRYPTED' },
@@ -1064,10 +1295,11 @@ test('trail mode: an all-withheld run draws bare lines — no head asserting ste
     'trail',
   )
 
-  expect(occurrences(html, 'reasoning not shared by the provider')).toBe(2)
+  expect(html).not.toContain('reasoning not shared by the provider')
   expect(html).not.toContain('steps')
   expect(html).not.toContain('aria-expanded')
   expect(html).not.toContain('ENCRYPTED')
+  expect(html).not.toContain('Reasoning')
 })
 
 test('trail mode: a long run shows every step, with nothing folded away', () => {

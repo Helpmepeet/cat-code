@@ -69,9 +69,11 @@ import {
 } from './reasoningLayout.js'
 import {
   deriveAgentDisplayVocabulary,
+  type AgentStateKey,
   type AgentToolSource,
 } from './agentIdentity.js'
 import {
+  AgentHandle,
   AgentRoleDot,
   AgentStateLabel,
   Baton,
@@ -1125,13 +1127,21 @@ function ToolCardShell({
           {target}
         </span>
         {headerBadge}
-        <span className="flex shrink-0 items-center gap-1.5">
+        {/* An agent card's `alwaysExtra` row always carries its own
+            `AgentStateLabel` (the real, richer lifecycle word) — this generic
+            3-state pill would just repeat it with a different, coarser word
+            (e.g. "done" beside "Completed") and, for a backgrounded agent
+            whose tool_result only says it started, an outright wrong one. */}
+        {family === 'agent' ? null : (
+          // The word ("done"/"failed"/"running") next to a dot that already
+          // carries the same state in color is redundant chrome; the dot
+          // alone, colour-coded, is enough (operator call).
           <span
-            className={`h-1.5 w-1.5 rounded-full ${st.dot} ${st.pulse ? 'animate-pulse' : ''}`}
-            aria-hidden
+            className={`h-1.5 w-1.5 shrink-0 rounded-full ${st.dot} ${st.pulse ? 'animate-pulse' : ''}`}
+            role="img"
+            aria-label={st.word}
           />
-          <span className={`text-[10.5px] ${st.color}`}>{st.word}</span>
-        </span>
+        )}
       </button>
       {alwaysExtra ? (
         <div className="flex flex-wrap items-center gap-2 border-t border-shell-seam px-3 py-1.5">
@@ -1653,14 +1663,109 @@ function agentToolSourceOf(row: ToolUseNestedRow): AgentToolSource {
   const subagentType = str('subagent_type')
   const description = str('description')
   const prompt = str('prompt')
+  // Identity is transcript-owned in either state: the completed result carries
+  // it on the parent correlation, while a running worker carries it on its
+  // nested progress frames. No live task snapshot joins this card.
+  let nestedAgentName: string | undefined
+  for (const child of row.children) {
+    if (!('agentName' in child) || child.agentName === undefined) continue
+    nestedAgentName = child.agentName
+    break
+  }
+  const agentName =
+    row.result?.agentName ??
+    nestedAgentName
   return {
     toolName: row.toolName === 'Task' ? 'Task' : 'Agent',
     status: row.status,
+    ...(agentName !== undefined ? { agentName } : {}),
     ...(input.run_in_background === true ? { run_in_background: true } : {}),
     ...(subagentType !== undefined ? { subagent_type: subagentType } : {}),
     ...(description !== undefined ? { description } : {}),
     ...(prompt !== undefined ? { prompt } : {}),
+    ...(row.agentCompletion !== null
+      ? { hasCompletion: true, completionStatus: row.agentCompletion.status }
+      : {}),
   }
+}
+
+/**
+ * The running card's live signal: the subagent's most recent nested tool call.
+ * Only full frames arrive for subagents (§4/S1 — no nested streaming), so the
+ * LAST tool-use child IS what the worker is doing right now. Null until the
+ * first one lands, which is the real "spawned but nothing yet" moment.
+ */
+function agentActivityOf(row: ToolUseNestedRow): string | null {
+  for (let index = row.children.length - 1; index >= 0; index -= 1) {
+    const child = row.children[index]
+    if (child === undefined || child.kind !== 'tool-use') continue
+    const target = deriveTarget(child)
+    // `deriveTarget` falls back to the tool's OWN name for several families, and
+    // already spells MCP as `server › tool`. Prefixing either prints the name
+    // twice ("TodoWrite TodoWrite") and pushes the badge past its truncation.
+    return target === child.toolName || child.toolFamily === 'mcp'
+      ? target
+      : `${child.toolName} ${target}`
+  }
+  return null
+}
+
+/**
+ * Nested TOOL CALLS only. The count this replaced ("N nested") counted every
+ * child row, mixing the worker's prose turns in with its tool calls, so two
+ * agents that did identical work could report different numbers.
+ */
+function agentToolCallCount(row: ToolUseNestedRow): number {
+  return row.children.reduce(
+    (total, child) => (child.kind === 'tool-use' ? total + 1 : total),
+    0,
+  )
+}
+
+/**
+ * What the header says about progress: live activity while the worker runs, a
+ * settled digest once it stops.
+ *
+ * Three sources, in falling order of authority. `agentCompletion.usage` is a
+ * backgrounded worker's real totals. `result.agentUsage` is a FOREGROUND
+ * worker's own totals off its structured result, which is the only place they
+ * exist for it and, unlike nested rows, replays from history. Counting the
+ * nested rows is the last resort: it works live, but a restored card whose
+ * branch fell outside the replayed window has none.
+ */
+function agentProgressBadge(
+  row: ToolUseNestedRow,
+  state: AgentStateKey,
+  usage: AgentCompletionProjection['usage'],
+): string | null {
+  const activity = agentActivityOf(row)
+  if (state === 'running') return activity ?? 'starting'
+  // A BACKGROUNDED agent yields no nested progress to this card: the async
+  // branch returns its launch ack (`AgentTool.tsx:1279`) before the branch that
+  // calls `onProgress` (`:1320`). So it has no activity to report, and
+  // `starting` would sit there for the worker's entire life. Its state word
+  // already reads "In background", which is the honest thing to say.
+  if (state === 'background') return activity
+  const settledUsage = usage ?? row.result?.agentUsage ?? null
+  const toolCalls = settledUsage?.toolUses ?? agentToolCallCount(row)
+  const parts: string[] = []
+  if (toolCalls > 0) {
+    parts.push(`${toolCalls} tool ${toolCalls === 1 ? 'call' : 'calls'}`)
+  }
+  // Built independently of the call count: an agent that answered from context
+  // has real token usage and zero tool calls, and gating both on the count
+  // threw the engine's own totals away.
+  //
+  // `> 0`, not merely present: a missing count is persisted as a literal zero
+  // engine-side (`totalTokensOverride ?? 0`,
+  // `src/tools/AgentTool/agentToolUtils.ts:694`, whose sibling branch logs
+  // `finalize_missing_usage`), and that zero survives the projector's
+  // all-or-nothing narrowing as a valid number. Printing it renders "we never
+  // got usage" as the claim "0 tokens", beside a worker that made 55 tool calls.
+  if (settledUsage && settledUsage.totalTokens > 0) {
+    parts.push(`${compactCount(settledUsage.totalTokens)} tokens`)
+  }
+  return parts.length === 0 ? null : parts.join(' · ')
 }
 
 /**
@@ -1698,6 +1803,8 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
     : AGENT_TYPE_TONE_CLASS.neutral
   const childCount = row.children.length
   const completion = row.agentCompletion
+  const isLive = vocab.state.key === 'running' || vocab.state.key === 'background'
+  const progress = agentProgressBadge(row, vocab.state.key, completion?.usage ?? null)
   // ONE expression, so `ToolCardShell`'s `hasBody` stays null when there is
   // genuinely no body — two sibling expressions would make it an array and give
   // every childless agent card a body that expands to nothing.
@@ -1727,17 +1834,28 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
       // exists, so it opens; a foreground card keeps the C4 collapsed default.
       defaultExpanded={completion !== null}
       headerBadge={
-        childCount > 0 ? (
-          <span className="shrink-0 rounded-[5px] border border-shell-seam bg-white/[0.03] px-1.5 py-px font-mono text-[10px] text-text-subtle">
-            {childCount} nested
+        progress === null ? undefined : (
+          <span
+            className={`min-w-0 max-w-[240px] truncate font-mono text-[10px] ${
+              isLive ? 'text-blue-400' : 'text-text-subtle'
+            }`}
+          >
+            {progress}
           </span>
-        ) : undefined
+        )
       }
       // The identity strip is ALWAYS visible; only the subagent child rows
       // collapse (C4). Reuses the 8a chrome primitives, all fed from this row.
       alwaysExtra={
         <>
           <AgentRoleDot role={vocab.identity.type} />
+          {/* The name leads when the row knows it: a worker is referred to by
+              name, and the type is the qualifier. Still absent until the agent's
+              first nested frame lands, so the type has to stand alone until
+              then (see `agentToolSourceOf`). */}
+          {vocab.identity.name !== null ? (
+            <AgentHandle name={vocab.identity.name} />
+          ) : null}
           <span className={`shrink-0 text-[12.5px] font-semibold ${typeTone.text}`}>
             {workerType}
           </span>
@@ -1765,11 +1883,16 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
  * or message type (C3).
  */
 function DelegateGroup({ members }: { members: NestedToolUseRow[] }) {
-  const anyPending = members.some(member => member.status === 'pending')
-  const anyError = members.some(member => member.status === 'error')
-  const types = members.map(member =>
-    agentWorkerType(deriveAgentDisplayVocabulary(agentToolSourceOf(member))),
+  const vocabs = members.map(member => deriveAgentDisplayVocabulary(agentToolSourceOf(member)))
+  // Member state, not raw `status`: a backgrounded member's `tool_result` only
+  // says it started (`deriveAgentToolState`), so the group header must track
+  // the same real-completion signal the member cards show, or it reads
+  // "finished" while a background member is still running.
+  const anyPending = vocabs.some(
+    vocab => vocab.state.key === 'running' || vocab.state.key === 'background',
   )
+  const anyError = vocabs.some(vocab => vocab.state.key === 'failed')
+  const types = vocabs.map(vocab => agentWorkerType(vocab))
   const commonType =
     types.length > 0 && types.every(type => type === types[0]) && types[0] !== 'Agent'
       ? types[0]
@@ -2636,37 +2759,37 @@ const REASONING_TITLE =
  */
 const REASONING_RUN_MAX_STEPS = 1000
 
+/** A step with actual content to draw — `withheld` steps carry nothing and are
+ * dropped before a run ever reaches render. */
+type VisibleReasoningStep = Exclude<ReasoningStepModel, { kind: 'withheld' }>
+
+function isVisibleStep(step: ReasoningStepModel): step is VisibleReasoningStep {
+  return step.kind !== 'withheld'
+}
+
 /**
- * A run of reasoning steps. One step draws as a single line (no head, no count,
- * nothing to collapse); an all-withheld run draws as bare lines, because a head
- * asserting "N steps" over rows with no readable content would imply content
- * that does not exist. Everything else gets the head + rail + steps. The whole
- * run collapses from its head; individual steps never fold away.
+ * A run of reasoning steps. `withheld` steps (nothing the provider shared) are
+ * dropped rather than drawn as a placeholder line — an all-withheld run has
+ * nothing left to show and renders nothing. One remaining step draws as a
+ * single line (no head, no count, nothing to collapse); everything else gets
+ * the head + rail + steps. The whole run collapses from its head; individual
+ * steps never fold away.
  */
 function ReasoningRun({ steps }: { steps: ReasoningStepModel[] }) {
   const [collapsed, setCollapsed] = useState(false)
   const listId = useId()
 
-  if (steps.length === 0) return null
-  if (steps.length === 1) {
-    const [step] = steps
-    if (step.kind === 'withheld') return <WithheldReasoningLine />
+  const visible = steps.filter(isVisibleStep)
+  if (visible.length === 0) return null
+  if (visible.length === 1) {
+    const [step] = visible
     if (step.kind === 'heading') return <ReasoningLine content={step.text} />
-  }
-  if (steps.every(step => step.kind === 'withheld')) {
-    return (
-      <div className="flex flex-col">
-        {steps.map(step => (
-          <WithheldReasoningLine key={step.key} />
-        ))}
-      </div>
-    )
   }
 
   const shown =
-    steps.length > REASONING_RUN_MAX_STEPS
-      ? steps.slice(steps.length - REASONING_RUN_MAX_STEPS)
-      : steps
+    visible.length > REASONING_RUN_MAX_STEPS
+      ? visible.slice(visible.length - REASONING_RUN_MAX_STEPS)
+      : visible
   return (
     <div className="group flex flex-col">
       <button
@@ -2688,14 +2811,14 @@ function ReasoningRun({ steps }: { steps: ReasoningStepModel[] }) {
         <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-text-subtle transition-colors duration-100 ease-out group-hover:text-text-muted">
           Reasoning
         </span>
-        {steps.length > 1 ? (
+        {visible.length > 1 ? (
           <span className="text-[10.5px] text-text-faint transition-colors duration-100 ease-out group-hover:text-text-subtle">
             {/* Counts what is ON SCREEN. The ceiling below drops the oldest steps,
                 and a head that kept printing the raw total would assert a list
                 longer than the one it labels. */}
-            {shown.length === steps.length
-              ? `${steps.length} steps`
-              : `${shown.length} of ${steps.length} steps`}
+            {shown.length === visible.length
+              ? `${visible.length} steps`
+              : `${shown.length} of ${visible.length} steps`}
           </span>
         ) : null}
       </button>
@@ -2722,16 +2845,8 @@ function ReasoningRun({ steps }: { steps: ReasoningStepModel[] }) {
 const ReasoningStep = memo(function ReasoningStep({
   step,
 }: {
-  step: ReasoningStepModel
+  step: VisibleReasoningStep
 }) {
-  if (step.kind === 'withheld') {
-    return (
-      <li className="relative py-0.5 text-[12.5px] leading-normal text-text-faint">
-        <ReasoningNode placement="rail" withheld />
-        {REASONING_WITHHELD_TEXT}
-      </li>
-    )
-  }
   return (
     <li
       className="relative py-0.5 text-[12.5px] leading-normal text-text-subtle"
@@ -2984,7 +3099,12 @@ function AgentCompletionBody({
   const { result, usage } = completion
   const stats = usage
     ? [
-        `~${compactCount(usage.totalTokens)} tokens`,
+        // Dropped rather than shown as `~0 tokens`: an absent count persists as
+        // a literal zero engine-side (see `agentProgressBadge`), so zero here
+        // means "no usage was reported", not "this worker used none".
+        ...(usage.totalTokens > 0
+          ? [`~${compactCount(usage.totalTokens)} tokens`]
+          : []),
         `${usage.toolUses} ${usage.toolUses === 1 ? 'tool' : 'tools'}`,
         formatDuration(usage.durationMs),
       ]
