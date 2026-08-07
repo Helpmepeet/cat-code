@@ -40,12 +40,14 @@ export function PermissionQueue({
   const active = items.filter(item => !item.dismissed)
   const snoozed = items.filter(item => item.dismissed)
 
-  // What "pending" means on this header: requests in THIS stack that still need
-  // an answer. `items.length` counted the already-submitted ones too, so a card
-  // could read "2 pending" with one of them answered and merely awaiting its
-  // `permission.resolved`. This is deliberately not `selectPendingPermissionCount`,
-  // which measures the whole session (including the plan and question surfaces
-  // that have their own cards) and drives the tab badge.
+  // What "pending" means on this header: requests in this queue that still need
+  // an answer, INCLUDING the snoozed ones, which are listed right below and are
+  // still live engine-side. `items.length` counted the already-submitted ones
+  // too, so a card could read "2 pending" with one of them answered and merely
+  // awaiting its `permission.resolved`. Deliberately not
+  // `selectPendingPermissionCount`, which measures the whole session (including
+  // the plan and question surfaces that own their own cards) and drives the
+  // tab badge.
   const awaitingAnswer = items.filter(item => !item.submitted).length
 
   return (
@@ -74,7 +76,9 @@ export function PermissionQueue({
             // (`Permissions.jsx:452-456`). Stacking is this app's deviation, and
             // repeating "2 pending" beside each of two visible cards is an
             // artefact of it rather than anything the prototype asks for.
-            pendingCount={index === 0 ? awaitingAnswer : 1}
+            // `undefined` says "no count here", rather than leaning on `1`
+            // happening to fall under the card's own render threshold.
+            pendingCount={index === 0 ? awaitingAnswer : undefined}
             request={item.request}
             submitted={item.submitted}
           />

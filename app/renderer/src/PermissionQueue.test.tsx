@@ -123,6 +123,24 @@ test('the header count excludes requests that are already answered', () => {
   expect(html).not.toContain('pending')
 })
 
+test('the head-card count includes snoozed requests, which are still live', () => {
+  // A snoozed request is hidden from the stack but NOT answered: it sits in the
+  // lane below and is still pending engine-side, so the header counts it.
+  const html = renderToStaticMarkup(
+    <PermissionQueue
+      items={[
+        queueItem(BASH),
+        { ...queueItem(MALFORMED_ASK), dismissed: true },
+      ]}
+      onAllow={() => {}}
+      onDeny={() => {}}
+      onRestore={() => {}}
+    />,
+  )
+  expect(html).toContain('2</b> pending')
+  expect(html).toContain('Snoozed:')
+})
+
 test('the Keep pending lane appears only when the queue offers it', () => {
   const withLane = renderToStaticMarkup(
     <PermissionQueue

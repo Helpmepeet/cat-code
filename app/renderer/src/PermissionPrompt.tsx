@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { PermissionRequest } from './permissionState.js'
 import {
   buildPermissionOptions,
@@ -88,7 +88,7 @@ export function PermissionPrompt({
   submitted,
   denyOnly,
   keyboardTarget,
-  pendingCount = 1,
+  pendingCount,
   onAllow,
   onDeny,
   onSnooze,
@@ -105,7 +105,9 @@ export function PermissionPrompt({
    * listener below.
    */
   keyboardTarget?: boolean
-  /** How many requests are pending in this session, for the header count. */
+  /** Requests still awaiting an answer in this queue, for the header count.
+   * Absent on every card but the head one, which is the only one that carries
+   * it (`Permissions.jsx:452-456`). */
   pendingCount?: number
   onAllow: (applySuggestions: number[]) => void
   onDeny: (message?: string) => void
@@ -114,10 +116,28 @@ export function PermissionPrompt({
   onSnooze?: () => void
 }) {
   const toolName = request.request.tool_name
-  const engineTitle = request.request.title
-  const workerId = request.request.agent_id
-  const preview = selectPermissionPreview(toolName, request.request.input)
-  const options = buildPermissionOptions(request.request, denyOnly === true)
+  // Both fields are optional on the wire AND may arrive empty
+  // (`sdk-types.snapshot.d.ts` `title?: string`, `agent_id?: string`). An
+  // outbound engine frame has no inbound allowlist, so display degrades:
+  // `''` means absent. Untreated, `title: ''` beat the derived headline with
+  // `??` (nullish, not falsy) and rendered a blank <h2>, and `agent_id: ''`
+  // made the kicker say relayed while the badge, the verb and the relay line
+  // all said otherwise.
+  const engineTitle = request.request.title || undefined
+  const workerId = request.request.agent_id || undefined
+  const relayed = workerId !== undefined
+  // Memoised because this card re-renders on every App render (once per
+  // streamed frame during a turn) as well as on hover and every disclosure
+  // toggle, and an `Edit` preview runs `diffLines` over the whole change.
+  // Both inputs are stable for the life of a request.
+  const preview = useMemo(
+    () => selectPermissionPreview(toolName, request.request.input),
+    [toolName, request.request.input],
+  )
+  const options = useMemo(
+    () => buildPermissionOptions(request.request, denyOnly === true),
+    [request.request, denyOnly],
+  )
 
   // The command IS the headline for the command families, exactly as the
   // prototype writes it (`Permissions.jsx:465-471`). Real `Bash` input is not
@@ -297,17 +317,17 @@ export function PermissionPrompt({
       {/* Kicker row — glyph + uppercase family word, worker badge, pending count */}
       <div className="flex items-center gap-2">
         <span className="flex text-accent">
-          <KickerIcon toolName={toolName} />
+          <KickerIcon relayed={relayed} toolName={toolName} />
         </span>
         <span className="text-[9.5px] font-bold uppercase tracking-[0.1em] text-accent">
-          {permissionKickerForTool(toolName, workerId !== undefined)}
+          {permissionKickerForTool(toolName, relayed)}
         </span>
-        {workerId ? (
+        {relayed ? (
           <span className="rounded bg-violet-400/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.05em] text-violet-300">
             worker
           </span>
         ) : null}
-        {pendingCount > 1 ? (
+        {pendingCount !== undefined && pendingCount > 1 ? (
           <span className="ml-auto font-mono text-[10px] tabular-nums text-text-faint">
             <b className="text-text-muted">{pendingCount}</b> pending
           </span>
@@ -323,7 +343,7 @@ export function PermissionPrompt({
           {/* The prototype's own verb for a relayed request
            * (`Permissions.jsx:467`): what is being approved is another agent's
            * command, and this card is where you decide it. */}
-          <span className="shrink-0">{workerId ? 'Run' : 'Allow'}</span>
+          <span className="shrink-0">{relayed ? 'Run' : 'Allow'}</span>
           <span className="min-w-0">
             <code className="break-all rounded bg-accent/10 px-1.5 py-0.5 font-mono text-xs text-accent">
               {inlineCommand.text}
@@ -337,11 +357,11 @@ export function PermissionPrompt({
           id={titleId}
         >
           {engineTitle ??
-            `${workerId ? 'Run' : 'Allow'} ${request.request.display_name ?? toolName}?`}
+            `${relayed ? 'Run' : 'Allow'} ${request.request.display_name ?? toolName}?`}
         </h2>
       )}
 
-      {workerId ? (
+      {relayed ? (
         <p className="mt-1 text-[11px] text-text-subtle">
           Relayed from worker{' '}
           <span className="font-mono text-violet-300">{workerId}</span>. You
@@ -391,7 +411,15 @@ export function PermissionPrompt({
             disabled={submitted === true}
             key={option.id}
             number={index + 1}
-            onHover={() => setCursor(index)}
+            // Gated on the same condition as the highlight. Ungated, a pointer
+            // crossing the rows on its way to the footer moved a cursor NOTHING
+            // was painting, and the row it landed on became the one Enter
+            // confirmed the moment the keys woke up — an always-allow the user
+            // never saw selected. The invariant: the highlighted row is always
+            // the last row the user was shown as highlighted.
+            onHover={() => {
+              if (keyboardTarget === true && keysLive) setCursor(index)
+            }}
             onPick={() => pickAt(index)}
             option={option}
           />
@@ -507,8 +535,28 @@ function OptionRow({
  * (`Permissions.jsx:32-46`) reduced to the families the preview switch knows;
  * everything else takes the shield its fallback uses.
  */
-function KickerIcon({ toolName }: { toolName: string }): ReactNode {
-  switch (permissionKickerForTool(toolName)) {
+function KickerIcon({
+  relayed,
+  toolName,
+}: {
+  relayed: boolean
+  toolName: string
+}): ReactNode {
+  // Fed the SAME predicate as the kicker word. Told only the tool name, it kept
+  // drawing the family glyph under a "Worker request" caption, so a relayed
+  // WebFetch read as a globe labelled WORKER REQUEST.
+  switch (permissionKickerForTool(toolName, relayed)) {
+    case 'Worker request':
+      // The prototype's worker glyph (`Permissions.jsx:41`): a branch, the same
+      // vocabulary the orchestrator surfaces use for a delegated agent.
+      return (
+        <Glyph>
+          <line x1="6" y1="3" x2="6" y2="15" />
+          <circle cx="18" cy="6" r="3" />
+          <circle cx="6" cy="18" r="3" />
+          <path d="M18 9a9 9 0 0 1-9 9" />
+        </Glyph>
+      )
     case 'Filesystem':
       return (
         <Glyph>

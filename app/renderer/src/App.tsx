@@ -409,22 +409,6 @@ const EMPTY_WORKERS: readonly AgentModeWorkerItem[] = []
 /** Stable identity for the pre-first-turn map, so the initial state is one object. */
 const EMPTY_TURN_STARTS: ReadonlyMap<SessionId, number> = new Map()
 
-/**
- * Elements that already act on Enter/Escape themselves. The plain-key permission
- * shortcuts are a shortcut for "focus is on nothing"; whenever focus sits inside
- * one of these the focused control decides, so Enter on the card's own Deny
- * button denies instead of being swallowed and answered as an allow.
- *
- * A tag-name test is not enough: buttons, menu items and dialog contents all
- * carry their own Enter semantics, and `preventDefault()` here suppresses the
- * browser's Enter → click.
- */
-const FOCUSED_KEY_OWNER_SELECTOR =
-  'a[href], button, input, select, textarea, [contenteditable], ' +
-  '[role="button"], [role="menu"], [role="menuitem"], [role="menuitemradio"], ' +
-  '[role="menuitemcheckbox"], [role="option"], [role="listbox"], ' +
-  '[role="dialog"], [role="alertdialog"]'
-
 /** Renderer-minted correlation id for a run-control verb (T5a-analog; echoed on
  * `run-control.result`). A UX field, not a security one — the sidecar bounds it. */
 const newRequestId = (): string => crypto.randomUUID()
@@ -2270,10 +2254,6 @@ export function App() {
     [setSessionPrompt],
   )
 
-  const permissionQueue =
-    activeConnection.status === 'ready'
-      ? selectPermissionQueue(permissions, activeSessionId)
-      : []
   // The card the keyboard shortcuts act on: first un-answered, un-snoozed.
   const pendingPermission =
     activeConnection.status === 'ready'
@@ -2310,36 +2290,13 @@ export function App() {
     [permissions],
   )
 
-  const allowPermission = useCallback(
-    (requestId: string, applySuggestions: number[] = []) => {
-      const sessionId = activeSessionId
-      if (!sessionId) return
-      const item = permissionQueue.find(
-        candidate => candidate.request.requestId === requestId,
-      )
-      if (!item) return
-      respondToPermission(
-        sessionId,
-        requestId,
-        buildAllowResponse(item.request, applySuggestions),
-      )
-    },
-    [activeSessionId, permissionQueue, respondToPermission],
-  )
-
-  const denyPermission = useCallback(
-    (requestId: string, message?: string) => {
-      if (!activeSessionId) return
-      respondToPermission(activeSessionId, requestId, buildDenyResponse(message))
-    },
-	    [activeSessionId, respondToPermission],
-  )
-
   // A request with its OWN dedicated renderer owns the keyboard while it is up:
-  // AskQuestionFlow and PlanPanel each register a `window` keydown listener, and
-  // a key event reaches `document` BEFORE `window`. Leaving this listener
-  // attached alongside one of them makes a single Enter resolve two unrelated
-  // requests — answering a question would also allow a parallel Bash call.
+  // AskQuestionFlow registers a `window` keydown listener (`AskQuestionFlow.tsx`),
+  // and PlanPanel registers a `document` one through `useModalFocus`
+  // (`overlayFocus.ts:345`). Either way, a permission card live alongside one of
+  // them would let a single Enter resolve two unrelated requests — answering a
+  // question would also allow a parallel Bash call. Nulling the target below is
+  // what prevents it: the card never registers a listener at all.
   const dedicatedFlowOwnsKeyboard =
     selectAskQuestion(permissions, activeSessionId) !== null ||
     selectPlanReview(permissions, activeSessionId) !== null

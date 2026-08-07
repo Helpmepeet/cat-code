@@ -366,11 +366,13 @@ export function summariseCommandForTitle(command: string): {
   text: string
   truncated: boolean
 } {
-  // Trailing whitespace is not content: a model-emitted command very often ends
-  // in a newline, and measuring against the raw string reported every one of
-  // those as multi-line — a headline with a misleading ellipsis and a body block
-  // re-rendering a command that fitted perfectly.
-  const content = command.replace(/\s+$/, '')
+  // Surrounding whitespace is not content, at EITHER end. A model-emitted
+  // command very often ends in a newline, and measuring against the raw string
+  // reported every one of those as multi-line: a headline with a misleading
+  // ellipsis over a body block re-rendering a command that fitted perfectly.
+  // Stripping only the tail left the same false report for a command that
+  // OPENS with a blank line.
+  const content = command.replace(/^\s+|\s+$/g, '')
   // The FIRST NON-BLANK line, because a command that opens with a newline gave
   // `firstLine === ''` and rendered `Allow  …?`, naming no command at all: the
   // exact defect the inline headline exists to fix.

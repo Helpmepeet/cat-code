@@ -112,7 +112,18 @@ test('summariseCommandForTitle cuts only what a headline cannot hold', () => {
   })
   // A command that OPENS with a newline used to yield an empty headline chip
   // reading "Allow  …?", naming nothing: the defect the headline exists to fix.
+  // Surrounding whitespace is stripped at BOTH ends, so this is not truncation
+  // either — reporting it as such put an ellipsis on a command that fitted.
   expect(summariseCommandForTitle('\ngit status')).toEqual({
+    text: 'git status',
+    truncated: false,
+  })
+  expect(summariseCommandForTitle('\n\n  git status  \n\n')).toEqual({
+    text: 'git status',
+    truncated: false,
+  })
+  // A leading blank line before a genuinely multi-line command still truncates.
+  expect(summariseCommandForTitle('\ngit status\ngit log')).toEqual({
     text: 'git status …',
     truncated: true,
   })
@@ -246,6 +257,63 @@ test('a rule row never prints a raw engine behavior word', () => {
   // It used to read "Yes, and deny `Bash(rm:*)`".
   expect(html).toContain('Yes, and always block ')
   expect(html).not.toContain('Yes, and deny ')
+})
+
+test('an empty title or agent_id is treated as absent, not as present', () => {
+  // Both are optional on the wire and may arrive empty. `??` is nullish, not
+  // falsy, so `title: ''` used to beat the derived headline and render a blank
+  // <h2>; `agent_id: ''` used to make the kicker say relayed while the badge,
+  // the verb and the relay line all said otherwise.
+  const emptyTitle = renderToStaticMarkup(
+    <PermissionPrompt
+      onAllow={() => {}}
+      onDeny={() => {}}
+      request={{ ...REQUEST, request: { ...REQUEST.request, title: '' } }}
+    />,
+  )
+  expect(emptyTitle).toContain('>date<')
+  expect(emptyTitle).not.toContain('<h2 class="mt-2 text-sm font-semibold leading-snug text-text-primary" id="permission-title-perm-1"></h2>')
+
+  const emptyAgent = renderToStaticMarkup(
+    <PermissionPrompt
+      onAllow={() => {}}
+      onDeny={() => {}}
+      request={{ ...REQUEST, request: { ...REQUEST.request, agent_id: '' } }}
+    />,
+  )
+  // Every relayed surface agrees: not relayed.
+  expect(emptyAgent).not.toContain('Worker request')
+  expect(emptyAgent).not.toContain('>worker<')
+  expect(emptyAgent).not.toContain('Relayed from worker')
+  expect(emptyAgent).toContain('Allow')
+})
+
+test('a relayed card agrees with itself across all four surfaces', () => {
+  const html = renderToStaticMarkup(
+    <PermissionPrompt
+      onAllow={() => {}}
+      onDeny={() => {}}
+      request={{
+        requestId: 'perm-relay-web',
+        request: {
+          subtype: 'can_use_tool',
+          tool_name: 'WebFetch',
+          input: { url: 'https://a.dev' },
+          tool_use_id: 'toolu-relay',
+          agent_id: 'worker-7',
+        },
+      }}
+    />,
+  )
+  // Kicker, badge, verb and relay line all say relayed…
+  expect(html).toContain('Worker request')
+  expect(html).toContain('>worker<')
+  expect(html).toContain('Run WebFetch?')
+  expect(html).toContain('worker-7')
+  // …and so does the GLYPH. Fed only the tool name it drew the globe under a
+  // "Worker request" caption.
+  expect(html).toContain('<circle cx="18" cy="6" r="3">')
+  expect(html).not.toContain('<line x1="2" y1="12" x2="22" y2="12">')
 })
 
 test('kickers key on the same families as the preview switch', () => {
