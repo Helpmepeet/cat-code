@@ -82,11 +82,11 @@ export function workerRoleGroupLabel(role: string, count: number): string {
  * (`createTaskStateBase(agentId, 'local_agent', …)`,
  * `src/tasks/LocalAgentTask/LocalAgentTask.tsx:618`;
  * `agentId: task.agentId ?? task.id`, `app/sidecar/agentModeDomain.ts:212`), so
- * no extra wire field is needed. Prior-session continuity workers
- * (`origin === 'prior'`) have no live task in this process, and a terminal worker
- * has nothing to kill — both return null so the control is absent rather than
- * dead. The sidecar re-resolves the id against the live store regardless and
- * fails closed on an unknown target (`sidecarServer.ts` `handleTaskControlVerb`).
+ * no extra wire field is needed. Workers marked `origin === 'prior'` have no
+ * live task in this process, and a terminal worker has nothing to kill — both
+ * return null so the control is absent rather than dead. The sidecar re-resolves
+ * the id against the live store regardless and fails closed on an unknown target
+ * (`sidecarServer.ts` `handleTaskControlVerb`).
  */
 export function selectWorkerStopTargetId(
   worker: AgentModeWorkerItem,

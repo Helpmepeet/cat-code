@@ -16,7 +16,9 @@ import {
   selectOrchestratorRosterLine,
   selectPromotedWorker,
   selectWorkerById,
+  selectWorkerDisplayName,
   summarizeOrchestratorWorkers,
+  workerAccessibleLabel,
   workerEventPriority,
 } from './orchestratorState.js'
 
@@ -80,6 +82,47 @@ test('non-blocked lifecycle reuses the shared agent-mode vocabulary', () => {
     orchestratorWorkerState(worker({ origin: 'prior', resumable: true, status: 'completed' }), true),
   ).toBe('resumable')
   expect(orchestratorWorkerState(worker({ status: 'failed' }), true)).toBe('attention')
+})
+
+test('a backgrounded worker reads BACKGROUND, and only while it is genuinely running', () => {
+  expect(
+    orchestratorWorkerState(worker({ status: 'running', isBackgrounded: true }), true),
+  ).toBe('background')
+  // Foreground stays running — the two spawns rendered identically before this.
+  expect(
+    orchestratorWorkerState(worker({ status: 'running', isBackgrounded: false }), true),
+  ).toBe('running')
+  // Outranked: a settled worker is not "in background" just because it was spawned that way.
+  expect(
+    orchestratorWorkerState(
+      worker({ status: 'completed', synthesisStatus: 'pending', isBackgrounded: true }),
+      true,
+    ),
+  ).toBe('result-ready')
+})
+
+test('the roster counts background separately, and still calls it in flight', () => {
+  const line = selectOrchestratorRosterLine(
+    [
+      worker({ agentId: 'w1', status: 'running' }),
+      worker({ agentId: 'w2', status: 'running', isBackgrounded: true }),
+    ],
+    true,
+  )
+  expect(line.tail.map(count => count.text)).toEqual(['1 working', '1 in background'])
+  expect(line.anyWorking).toBe(true)
+  // A lone background worker still counts as an active subagent, not as done.
+  const summary = summarizeOrchestratorWorkers(
+    [worker({ status: 'running', isBackgrounded: true })],
+    true,
+  )
+  // Counted apart from `working` so the Workers list and the roster agree, but
+  // still "active" for the pill rather than folded into done.
+  expect(summary).toEqual({ working: 0, background: 1, orchestrator: 0, user: 0, done: 0 })
+  expect(orchestratorPill([worker({ status: 'running', isBackgrounded: true })], true)).toEqual({
+    label: '1 subagent active',
+    attention: false,
+  })
 })
 
 test('summary + pill: a solo escalation is amber, a busy swarm is neutral, a settled swarm is silent', () => {
@@ -193,6 +236,34 @@ test('displayHandle strips the mention sigil for display', () => {
   expect(displayHandle('@Turing')).toBe('Turing')
   expect(displayHandle('Turing')).toBe('Turing')
   expect(displayHandle(null)).toBeNull()
+})
+
+test('selectWorkerDisplayName omits legacy ids and unnamed handles', () => {
+  expect(selectWorkerDisplayName({ agentId: 'agent-a', handle: 'Turing' })).toBe('Turing')
+  expect(selectWorkerDisplayName({ agentId: 'agent-a', handle: '@Turing' })).toBe('Turing')
+  expect(selectWorkerDisplayName({ agentId: 'agent-a', handle: 'agent-a' })).toBeNull()
+  expect(selectWorkerDisplayName({ agentId: 'agent-a', handle: '@agent-a' })).toBeNull()
+  expect(selectWorkerDisplayName({ agentId: 'agent-a', handle: '  ' })).toBeNull()
+  expect(selectWorkerDisplayName({ agentId: 'agent-a', handle: null })).toBeNull()
+})
+
+test('workerAccessibleLabel preserves normalized type and lifecycle without exposing the id', () => {
+  const label = workerAccessibleLabel(
+    worker({
+      agentId: 'agent-a',
+      handle: 'agent-a',
+      role: 'Explore',
+      description: 'Inspect the repository',
+      origin: 'prior',
+      resumable: true,
+      status: 'completed',
+    }),
+    true,
+  )
+  expect(label).toContain('Inspect the repository')
+  expect(label).toContain('type Explore')
+  expect(label).toContain('status Resumable')
+  expect(label).not.toContain('agent-a')
 })
 
 test('selectWorkerById finds a worker or degrades to null (drilldown/focus lookup)', () => {

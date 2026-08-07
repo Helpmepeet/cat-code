@@ -55,16 +55,16 @@ import {
   AgentPip,
   AgentSectionLabel,
   AgentStateLabel,
-  AgentStateWord,
-  AgentTypeChip,
+  AgentTypeLabel,
   Baton,
 } from './AgentChrome.js'
 import {
   deriveWorkerOwner,
-  displayHandle,
   orchestratorWorkerState,
   selectWorkerById,
+  selectWorkerDisplayName,
   summarizeOrchestratorWorkers,
+  workerAccessibleLabel,
 } from './orchestratorState.js'
 import {
   LEASE_STATE_META,
@@ -411,6 +411,12 @@ export function WorkerRosterPanel({
             {summary.working} working
           </span>
         ) : null}
+        {summary.background > 0 ? (
+          <span className="inline-flex items-center gap-1.5">
+            <AgentPip size="xs" state="background" />
+            {summary.background} in background
+          </span>
+        ) : null}
         {summary.orchestrator > 0 ? (
           <span className="inline-flex items-center gap-1.5 text-purple-400">
             <AgentPip size="xs" state="waiting" />
@@ -451,7 +457,7 @@ export function WorkerRosterPanel({
   )
 }
 
-/** One worker row: lifecycle dot, handle, task text, compressed state word. */
+/** One worker row: lifecycle pip, genuine name when available, task text, type. */
 function WorkerRow({
   worker,
   orchestratorActive,
@@ -462,19 +468,20 @@ function WorkerRow({
   onSelect: () => void
 }) {
   const state = orchestratorWorkerState(worker, orchestratorActive)
-  const handle = displayHandle(worker.handle)
+  const name = selectWorkerDisplayName(worker)
   return (
     <button
+      aria-label={workerAccessibleLabel(worker, orchestratorActive)}
       className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left hover:bg-shell-hover"
       onClick={onSelect}
       type="button"
     >
       <AgentPip size="sm" state={state} />
-      <AgentHandle name={handle ?? 'Subagent'} />
+      {name ? <AgentHandle name={name} /> : null}
       <span className="min-w-0 flex-1 truncate text-[11.5px] text-text-subtle">
         {worker.description ?? ''}
       </span>
-      <AgentStateWord state={state} />
+      <AgentTypeLabel role={worker.role} />
     </button>
   )
 }
@@ -503,7 +510,7 @@ export function WorkerDetailPanel({
   nowMs?: number
 }) {
   const state = orchestratorWorkerState(worker, orchestratorActive)
-  const handle = displayHandle(worker.handle)
+  const name = selectWorkerDisplayName(worker)
   const result = selectWorkerResult(worker)
   const stopTargetId = selectWorkerStopTargetId(worker)
 
@@ -517,8 +524,8 @@ export function WorkerDetailPanel({
         <span aria-hidden="true">‹</span>All workers
       </button>
       <div className="flex flex-wrap items-center gap-2 border-b border-shell-seam pb-3">
-        <AgentHandle name={handle ?? 'Subagent'} />
-        <AgentTypeChip role={worker.role} />
+        {name ? <AgentHandle name={name} /> : null}
+        <AgentTypeLabel role={worker.role} />
         <AgentStateLabel state={state} />
         <Baton owner={deriveWorkerOwner(worker, orchestratorActive)} />
       </div>

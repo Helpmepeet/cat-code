@@ -33,18 +33,18 @@ import {
   AgentHandle,
   AgentPip,
   AgentRoleDot,
-  AgentStateLabel,
+  AgentTypeLabel,
   Baton,
 } from './AgentChrome.js'
 import {
   deriveWorkerOwner,
-  displayHandle,
   orchestratorWorkerState,
   selectOrchestratorRosterLine,
+  selectWorkerDisplayName,
+  workerAccessibleLabel,
   type RosterCount,
 } from './orchestratorState.js'
-import { agentStateMeta, agentTypeMeta } from './agentIdentity.js'
-import { AGENT_STATE_TONE_CLASS } from './agentChromeModel.js'
+import { agentTypeMeta } from './agentIdentity.js'
 import type { AgentModeWorkerItem } from '../../shared/protocol.js'
 
 /** Count tones as literal classes — never an interpolated arbitrary value. */
@@ -109,6 +109,7 @@ export function OrchestratorRoster({
       <button
         type="button"
         className={ROW_CLASS}
+        aria-label={rosterAccessibleLabel(lead?.worker ?? null, tail, workers.length, active)}
         // A promoted lead raises ITS id (the prototype's "promoted handle opens
         // its thread"); the consumer is P4-32b's `TasksDialog` drilldown, so today
         // App opens the workers list and drops the id.
@@ -117,7 +118,6 @@ export function OrchestratorRoster({
         {lead ? (
           <PromotedLead
             active={active}
-            priority={lead.priority}
             tail={tail}
             worker={lead.worker}
           />
@@ -155,32 +155,24 @@ export function OrchestratorRoster({
 function PromotedLead({
   worker,
   active,
-  priority,
   tail,
 }: {
   worker: AgentModeWorkerItem
   active: boolean
-  priority: number
   tail: RosterCount[]
 }) {
   const state = orchestratorWorkerState(worker, active)
-  const meta = agentStateMeta(state)
+  const name = selectWorkerDisplayName(worker)
   return (
     <>
       <AgentPip state={state} />
       <WorkerName worker={worker} />
-      {/* The tone already carries the escalation (a solo handoff derives the amber
-       * `needs-you` state); priority 3 only adds the heavier weight. */}
-      <span
-        className={
-          'shrink-0 whitespace-nowrap font-mono text-[11.5px] ' +
-          (priority === 3 ? 'font-bold' : 'font-medium') +
-          ' ' +
-          AGENT_STATE_TONE_CLASS[meta.tone].text
-        }
-      >
-        {meta.label}
-      </span>
+      {!name && worker.description ? (
+        <span className="min-w-0 flex-1 truncate text-[11.5px] text-text-subtle">
+          {worker.description}
+        </span>
+      ) : null}
+      <AgentTypeLabel role={worker.role} />
       {tail.length > 0 ? <Separator /> : null}
       <CountTail items={tail} />
       <Baton owner={deriveWorkerOwner(worker, active)} />
@@ -189,7 +181,8 @@ function PromotedLead({
 }
 
 /**
- * One full roster row: role dot, handle, the delegated task, lifecycle, baton.
+ * One full roster row: role dot, genuine handle, delegated task, lifecycle pip,
+ * normalized worker type, and baton.
  * The prototype's `elapsed` subfield is a ruled waiver (§10 waiver 8): no
  * elapsed field crosses `AgentModeWorkerItem`, and inventing one would be a mock.
  */
@@ -207,6 +200,7 @@ function WorkerRow({
     <button
       type="button"
       className={ROW_CLASS}
+      aria-label={workerAccessibleLabel(worker, active)}
       // The id is raised for P4-32b's read-only `TasksDialog` worker drilldown
       // (ruling D1); App currently opens the dialog and drops it, so a click
       // lands on the workers list rather than this worker. Not broken, deferred.
@@ -222,7 +216,8 @@ function WorkerRow({
       ) : (
         <span className="flex-1" />
       )}
-      <AgentStateLabel state={orchestratorWorkerState(worker, active)} />
+      <AgentPip state={orchestratorWorkerState(worker, active)} />
+      <AgentTypeLabel role={worker.role} />
       <Baton owner={deriveWorkerOwner(worker, active)} />
     </button>
   )
@@ -232,22 +227,27 @@ function WorkerRow({
  * How a worker is named on the line. `handle` is null whenever the Agent tool ran
  * unnamed, which is the COMMON case, so there are three honest faces and no
  * invented one:
- *   - a real handle → the mono `@handle` vocabulary;
- *   - no handle but a role → the role label, deliberately NOT in handle styling,
- *     so a type is never mistaken for a name the engine supplied;
- *   - neither → nothing. The role dot, task text and lifecycle still identify the
- *     row, which is better than printing a word no engine field contains.
+ *   - a genuine handle → the mono `@handle` vocabulary;
+ *   - null, blank, or legacy `handle === agentId` → nothing;
+ *   - the task description and normalized type remain separate row fields.
  */
 function WorkerName({ worker }: { worker: AgentModeWorkerItem }) {
-  const handle = displayHandle(worker.handle)
-  if (handle) return <AgentHandle name={handle} />
-  const role = agentTypeMeta(worker.role)
-  if (!role) return null
-  return (
-    <span className="shrink-0 whitespace-nowrap text-[12px] font-medium text-text-muted">
-      {role.label}
-    </span>
-  )
+  const name = selectWorkerDisplayName(worker)
+  return name ? <AgentHandle name={name} /> : null
+}
+
+function rosterAccessibleLabel(
+  lead: AgentModeWorkerItem | null,
+  tail: readonly RosterCount[],
+  workerCount: number,
+  active: boolean,
+): string {
+  const subject = lead
+    ? workerAccessibleLabel(lead, active)
+    : `${workerCount} subagents`
+  const counts = tail.map(item => item.text)
+  if (!lead && counts.length === 0) counts.push('idle')
+  return [subject, ...counts].join(', ')
 }
 
 function CountTail({ items }: { items: readonly RosterCount[] }) {

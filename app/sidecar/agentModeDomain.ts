@@ -6,11 +6,13 @@
  * worker object — D2 C5):
  *
  *   1. Session plane (D2 §4.2) — the engine's PERSISTED agent-mode state, read
- *      through the engine's OWN entry point `readSessionStateWithContinuity`
- *      (`src/agent-mode/sessionState.ts:691`), NOT a hand-rolled file parse. It
- *      supplies the objective, run phase, prior-session continuity workers
- *      (resumable/stale) and the synthesis lifecycle. Best-effort: a non-agent-mode
- *      session has no `.agent-mode-state.json`, so this degrades to empty.
+ *      through the engine's OWN exact-session entry point `readSessionState`
+ *      (`src/agent-mode/sessionState.ts`), NOT a hand-rolled file parse. It
+ *      supplies the objective, run phase, and persisted workers for THIS engine
+ *      session. Best-effort: a non-agent-mode session has no
+ *      `.agent-mode-state.json`, so this degrades to empty. Engine continuity
+ *      discovery remains an engine-only concern and is not imported into the
+ *      desktop snapshot.
  *   2. Live plane — the `local_agent` workers this session delegated via the Agent
  *      tool (`AppState.tasks`, the SAME store P4-9's tasks domain reads). Reading
  *      the raw `LocalAgentTaskState` here (not the P4-9 wire item) also surfaces
@@ -23,7 +25,7 @@
  */
 import { isAgentMode, matchSessionMode } from '../../src/agent-mode/agentMode.js'
 import {
-  readSessionStateWithContinuity,
+  readSessionState,
   type AgentModeSessionState,
   type AgentModeWorkerSession,
 } from '../../src/agent-mode/sessionState.js'
@@ -79,7 +81,7 @@ export function createRealAgentModeExecutor(): AgentModeExecutor {
 export type SidecarAgentModeDomain = {
   /**
    * Live read-only orchestrator snapshot. Async because the session plane is a
-   * file-backed engine read (`readSessionStateWithContinuity`); the live plane is
+   * file-backed engine read (`readSessionState`); the live plane is
    * a sync read over the same app-state store the runtime mutates.
    */
   getSnapshot(): Promise<AgentModeSnapshot>
@@ -152,7 +154,7 @@ async function readPersistedAgentModeState(): Promise<AgentModeSessionState | nu
   try {
     const sessionId = getSessionId()
     if (!sessionId) return null
-    return await readSessionStateWithContinuity(sessionId)
+    return await readSessionState(sessionId)
   } catch {
     // Absent/unreadable state file (the common non-agent-mode case) → degrade to
     // empty, never throw (display = degrade gracefully; the live plane still fills).
@@ -166,10 +168,11 @@ async function readPersistedAgentModeState(): Promise<AgentModeSessionState | nu
  *
  * Union policy: the live `local_agent` workers are authoritative for CURRENT
  * workers (they carry the real handoff gate + block reason + verdict). Persisted
- * workers are added only when NOT already represented live (matched by handle) —
- * this is where prior-session continuity workers (resumable/stale) and any
- * agent-mode worker with a synthesis lifecycle but no live task come from. A plain
- * de-dupe union, never a field-merge, so no fragile overlay of two shapes.
+ * workers from this same engine session are added only when NOT already
+ * represented live (matched by handle). A plain de-dupe union, never a
+ * field-merge, so no fragile overlay of two shapes. Cross-session continuity is
+ * intentionally left to the engine's resume machinery and does not enter this
+ * desktop snapshot.
  */
 export function agentModeSnapshot(
   tasks: Record<string, TaskState> | undefined,

@@ -1,7 +1,9 @@
 import { expect, test } from 'bun:test'
 import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { createTaskStateBase } from '../../src/Task.js'
 import {
   buildAgentModeSessionState,
@@ -128,7 +130,7 @@ test('a live verifier surfaces its real verdict; a running task folds pending→
   expect(byId['w-pending']).toMatchObject({ status: 'running' })
 })
 
-test('persisted continuity workers (prior/resumable + synthesis) fill in what the live plane lacks', () => {
+test('persisted workers retain resumability and synthesis metadata in the pure builder', () => {
   const state = persisted([
     worker({
       agentId: 'w-prior',
@@ -216,6 +218,44 @@ test('LIVE PATH: a real persisted .agent-mode-state.json read via the engine flo
     status: 'running',
     origin: 'current',
   })
+})
+
+test('LIVE PATH: exact session snapshots do not import workers from another session in the same project', async () => {
+  const projectDir = mkdtempSync(join(tmpdir(), 'p4-8-agentmode-project-'))
+  const configHome = mkdtempSync(join(tmpdir(), 'p4-8-agentmode-config-'))
+  const fixture = join(dirname(fileURLToPath(import.meta.url)), 'agentModeDomain.fixture.ts')
+  try {
+    const proc = Bun.spawn(
+      ['bun', 'run', fixture, projectDir, 'session-a', 'session-b'],
+      {
+        cwd: join(dirname(fileURLToPath(import.meta.url)), '..', '..'),
+        env: { ...process.env, CLAUDE_CONFIG_DIR: configHome },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      },
+    )
+    const [code, stdout, stderr] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ])
+    expect(code, stderr).toBe(0)
+
+    const result = JSON.parse(stdout.trim()) as {
+      a: AgentModeSnapshotFrame['agentMode']
+      b: AgentModeSnapshotFrame['agentMode']
+    }
+    expect(result.a.workers).toHaveLength(1)
+    expect(result.a.workers[0]).toMatchObject({
+      agentId: 'worker-a',
+      handle: 'Turing',
+      origin: 'current',
+    })
+    expect(result.b.workers).toEqual([])
+  } finally {
+    rmSync(projectDir, { recursive: true, force: true })
+    rmSync(configHome, { recursive: true, force: true })
+  }
 })
 
 test('P4-8b setActive(true) switches on via the executor; snapshot reflects it; idempotent no-op', async () => {

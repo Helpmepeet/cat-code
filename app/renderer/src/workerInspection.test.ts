@@ -68,7 +68,7 @@ test('stop targets a RUNNING current-session worker only, by its agentId', () =>
   expect(selectWorkerStopTargetId(worker({ status: 'completed' }))).toBeNull()
   expect(selectWorkerStopTargetId(worker({ status: 'failed' }))).toBeNull()
   expect(selectWorkerStopTargetId(worker({ status: 'killed' }))).toBeNull()
-  // A prior-session continuity worker has no live task in this process.
+  // A worker marked prior has no live task in this process.
   expect(selectWorkerStopTargetId(worker({ origin: 'prior' }))).toBeNull()
 })
 

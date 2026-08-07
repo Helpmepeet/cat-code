@@ -391,9 +391,21 @@ export function deriveTaskAgentState(task: TaskAgentSource): AgentStateKey {
 }
 
 export function deriveAgentToolState(tool: AgentToolSource): AgentStateKey {
+  // A background launch's `tool_result` only ever says it started — the launch
+  // ack, not a finish — so `status: 'success'` here does NOT mean completed.
+  // Its real outcome is the separate task-notification (`hasCompletion`);
+  // until that lands, a backgrounded agent reads as still running.
+  if (tool.run_in_background === true && !tool.hasCompletion) {
+    return tool.status === 'error' ? 'failed' : 'background'
+  }
+  if (tool.hasCompletion) {
+    if (tool.completionStatus === 'failed') return 'failed'
+    if (tool.completionStatus === 'killed') return 'stopped'
+    return 'completed'
+  }
   if (tool.status === 'error') return 'failed'
   if (tool.status === 'success') return 'completed'
-  return tool.run_in_background === true ? 'background' : 'running'
+  return 'running'
 }
 
 export function deriveAgentState(source: AgentDisplaySource): AgentStateKey {
@@ -479,6 +491,17 @@ export type AgentToolSource = AgentIdentitySource & {
   toolName: 'Agent' | 'Task'
   status: 'pending' | 'success' | 'error'
   run_in_background?: boolean
+  /**
+   * A background agent's `tool_result` only says it started (the launch ack),
+   * not that the agent finished (`transcriptProjector.ts` `ToolUseRow.agentCompletion`
+   * doc comment). Its real outcome lands later on a separate task-notification;
+   * `hasCompletion` is whether that notification has arrived, `completionStatus`
+   * its reported outcome (`completed` | `failed` | `killed` | …, or null when the
+   * engine sent none). Both undefined for a foreground agent, whose `tool_result`
+   * genuinely is the answer.
+   */
+  hasCompletion?: boolean
+  completionStatus?: string | null
 }
 
 export type AgentDisplaySource =

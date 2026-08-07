@@ -327,6 +327,66 @@ test('maps Agent tool cards from real tool input and correlation status only', (
   ).toBe('failed')
 })
 
+test('a backgrounded agent stays background until its real completion lands, never fake-completed off the launch ack', () => {
+  // The launch itself resolves with a `success` tool_result the instant the
+  // background run is scheduled (`AgentTool.tsx` "Return async_launched result
+  // immediately") — that is NOT the agent finishing.
+  expect(
+    deriveAgentToolState({
+      toolName: 'Agent',
+      status: 'success',
+      subagent_type: 'Explore',
+      description: 'Map files',
+      run_in_background: true,
+    }),
+  ).toBe('background')
+  // A launch that fails synchronously still reports failed immediately.
+  expect(
+    deriveAgentToolState({
+      toolName: 'Agent',
+      status: 'error',
+      subagent_type: 'Explore',
+      description: 'Map files',
+      run_in_background: true,
+    }),
+  ).toBe('failed')
+  // Once the real task-notification lands, the completion's own outcome wins,
+  // regardless of the stale launch-ack tool status.
+  expect(
+    deriveAgentToolState({
+      toolName: 'Agent',
+      status: 'success',
+      subagent_type: 'Explore',
+      description: 'Map files',
+      run_in_background: true,
+      hasCompletion: true,
+      completionStatus: 'completed',
+    }),
+  ).toBe('completed')
+  expect(
+    deriveAgentToolState({
+      toolName: 'Agent',
+      status: 'success',
+      subagent_type: 'Explore',
+      description: 'Map files',
+      run_in_background: true,
+      hasCompletion: true,
+      completionStatus: 'failed',
+    }),
+  ).toBe('failed')
+  expect(
+    deriveAgentToolState({
+      toolName: 'Agent',
+      status: 'success',
+      subagent_type: 'Explore',
+      description: 'Map files',
+      run_in_background: true,
+      hasCompletion: true,
+      completionStatus: 'killed',
+    }),
+  ).toBe('stopped')
+})
+
 test('returns complete display vocabulary for P4-8 and P4-9 consumers', () => {
   const display = deriveAgentDisplayVocabulary({
     agentId: 'agent-a',

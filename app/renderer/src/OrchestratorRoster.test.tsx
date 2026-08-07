@@ -30,13 +30,22 @@ test('no workers renders nothing (the roster never occupies the composer dock id
   ).toBe('')
 })
 
-test('one worker renders the named row: handle, delegated task, lifecycle', () => {
+test('one worker renders the named row: handle, task, normalized type, and lifecycle pip', () => {
   const html = renderToStaticMarkup(
     <OrchestratorRoster active workers={[worker()]} />,
   )
   expect(html).toContain('Turing')
   expect(html).toContain('Port the roster')
-  expect(html).toContain('Running')
+  expect(html).toContain('Coding worker')
+  expect(html).toContain('status Running')
+  expect(html).not.toContain('>Running<')
+  // One leading role dot + one trailing lifecycle pip. The type is text only,
+  // so the reviewed double-ring regression cannot return.
+  expect(html.match(/rounded-full/g)).toHaveLength(2)
+  expect(html).not.toContain('border-[1.4px]')
+  expect(html.indexOf('h-1.5 w-1.5')).toBeLessThan(html.indexOf('>Turing<'))
+  expect(html.indexOf('h-2 w-2')).toBeGreaterThan(html.indexOf('>Port the roster<'))
+  expect(html.indexOf('>Coding worker<')).toBeGreaterThan(html.indexOf('h-2 w-2'))
   // A running worker needs nobody, so no baton is drawn at all.
   expect(html).not.toContain(BATON_ORCHESTRATOR)
   expect(html).not.toContain(BATON_YOU)
@@ -78,12 +87,35 @@ test('a swarm with news promotes one worker and keeps the rest as neutral counts
     />,
   )
   expect(html).toContain('Hopper')
-  expect(html).toContain('Attention')
+  expect(html).toContain('status Attention')
+  expect(html).not.toContain('>Attention<')
   expect(html).toContain('1 working')
-  // A failure awaits the ORCHESTRATOR, so the baton is the neutral one even though
-  // the lifecycle word itself is an amber "Attention" (two independent axes).
+  // A failure awaits the ORCHESTRATOR, so the baton is the neutral one while the
+  // lifecycle remains available through the pip and accessible status text.
   expect(html).toContain(BATON_ORCHESTRATOR)
   expect(html).not.toContain(BATON_YOU)
+})
+
+test('an unnamed promoted worker leads with its task description and keeps count context accessible', () => {
+  const html = renderToStaticMarkup(
+    <OrchestratorRoster
+      active
+      workers={[
+        worker({ agentId: 'w-run', handle: null, role: 'general-purpose' }),
+        worker({
+          agentId: 'w-fail',
+          handle: 'w-fail',
+          role: 'general-purpose',
+          status: 'failed',
+          description: 'Investigate the failing handoff',
+        }),
+      ]}
+    />,
+  )
+  expect(html).toContain('Investigate the failing handoff')
+  expect(html).toContain('General-purpose')
+  expect(html).toContain('aria-label="Investigate the failing handoff, type General-purpose, status Attention, 1 working"')
+  expect(html).not.toContain('>Attention<')
 })
 
 test('a blocked worker stays neutral under an active orchestrator and escalates only when solo', () => {
@@ -92,7 +124,8 @@ test('a blocked worker stays neutral under an active orchestrator and escalates 
   const withOrchestrator = renderToStaticMarkup(
     <OrchestratorRoster active workers={blocked} />,
   )
-  expect(withOrchestrator).toContain('Waiting on orchestrator')
+  expect(withOrchestrator).toContain('status Waiting on orchestrator')
+  expect(withOrchestrator).not.toContain('>Waiting on orchestrator<')
   expect(withOrchestrator).toContain(BATON_ORCHESTRATOR)
   expect(withOrchestrator).not.toContain(BATON_YOU)
   expect(withOrchestrator).not.toContain('text-tone-warn')
@@ -100,7 +133,8 @@ test('a blocked worker stays neutral under an active orchestrator and escalates 
   const solo = renderToStaticMarkup(
     <OrchestratorRoster active={false} workers={blocked} />,
   )
-  expect(solo).toContain('Needs you')
+  expect(solo).toContain('status Needs you')
+  expect(solo).not.toContain('>Needs you<')
   expect(solo).toContain(BATON_YOU)
   expect(solo).not.toContain(BATON_ORCHESTRATOR)
 })
@@ -118,15 +152,18 @@ test('the compact state dims the resting header only (the counts stay legible)',
   expect(compact).toContain('2 working')
 })
 
-test('an unnamed worker shows its ROLE, never an invented handle', () => {
+test('an unnamed worker omits its name and puts the normalized type on the right', () => {
   // `handle` is null whenever the Agent tool ran unnamed (the common case). The row
   // must not print a word the engine never supplied, and must not dress a role up
   // in the `@handle` styling.
   const html = renderToStaticMarkup(
-    <OrchestratorRoster active workers={[worker({ handle: null, description: null })]} />,
+    <OrchestratorRoster
+      active
+      workers={[worker({ handle: null, role: 'Explore', description: null })]}
+    />,
   )
-  expect(html).toContain('Coding worker')
-  expect(html).not.toContain('subagent')
+  expect(html).toContain('Explore')
+  expect(html).not.toContain('>Unnamed worker<')
   expect(html).not.toContain('text-purple-200')
 })
 
@@ -139,8 +176,43 @@ test('a worker with neither handle nor role still renders an honest row', () => 
   )
   // No name at all is correct: the task text and lifecycle carry the row.
   expect(html).toContain('Do the thing')
-  expect(html).toContain('Running')
-  expect(html).not.toContain('subagent')
+  expect(html).toContain('status Running')
+  expect(html).not.toContain('>Running<')
+})
+
+test('a legacy handle equal to the worker id never leaks through the roster', () => {
+  const html = renderToStaticMarkup(
+    <OrchestratorRoster
+      active
+      workers={[worker({ agentId: 'internal-agent-id', handle: 'internal-agent-id' })]}
+    />
+  )
+  expect(html).not.toContain('internal-agent-id')
+  expect(html).toContain('Port the roster')
+  expect(html).toContain('Coding worker')
+})
+
+test('compact rows hide Resumable as a word while retaining it in accessible status text', () => {
+  const html = renderToStaticMarkup(
+    <OrchestratorRoster
+      active
+      workers={[
+        worker({
+          agentId: 'legacy-resumable-id',
+          handle: 'legacy-resumable-id',
+          role: 'general-purpose',
+          status: 'completed',
+          origin: 'prior',
+          resumable: true,
+          description: 'Resume the investigation',
+        }),
+      ]}
+    />,
+  )
+  expect(html).toContain('General-purpose')
+  expect(html).toContain('status Resumable')
+  expect(html).not.toContain('>Resumable<')
+  expect(html).not.toContain('legacy-resumable-id')
 })
 
 test('the mention sigil is stripped from a handle for display', () => {

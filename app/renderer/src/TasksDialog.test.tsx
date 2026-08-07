@@ -216,7 +216,7 @@ test('the dialog offers Tasks, Workers and Leases tabs with real counts', () => 
   expect(html).toContain('>2<')
 })
 
-test('the Workers panel groups by role and shows the compressed state word', () => {
+test('the Workers panel groups by role, shows normalized types, and keeps lifecycle compact', () => {
   const html = renderToStaticMarkup(
     <WorkerRosterPanel
       onSelect={noop}
@@ -237,9 +237,11 @@ test('the Workers panel groups by role and shows the compressed state word', () 
   expect(html).toContain('scout')
   expect(html).toContain('judge')
   expect(html).toContain('audit the auth path')
-  // Compressed list vocabulary, not the full "Completed" chip label.
-  expect(html).toContain('running')
-  expect(html).toContain('done')
+  // Lifecycle is a pip plus accessible status, not a competing right-side word.
+  expect(html).toContain('status Running')
+  expect(html).toContain('1 done')
+  expect(html).not.toContain('>running<')
+  expect(html).not.toContain('>done<')
 })
 
 test('the Workers panel counts a blocked worker as the assistant’s, never as yours', () => {
@@ -317,6 +319,76 @@ test('worker detail hides Stop for a terminal worker and for a prior-session one
   )
   expect(prior).not.toContain('Stop')
   expect(prior).toContain('resumable')
+})
+
+test('Workers rows and detail headers omit null and legacy-id names without inventing Subagent', () => {
+  const worker = workerFixture({
+    agentId: 'internal-agent-id',
+    handle: 'internal-agent-id',
+    role: 'Explore',
+    description: 'Inspect the repository',
+  })
+  const roster = renderToStaticMarkup(
+    <WorkerRosterPanel
+      onSelect={noop}
+      orchestratorActive={true}
+      workers={[worker, { ...worker, agentId: 'unnamed', handle: null }]}
+    />,
+  )
+  expect(roster).not.toContain('internal-agent-id')
+  expect(roster).not.toContain('>Unnamed worker<')
+  expect(roster).not.toContain('Subagent')
+  expect(roster).toContain('Inspect the repository')
+  expect(roster).toContain('Explore')
+
+  const detail = renderToStaticMarkup(
+    <WorkerDetailPanel
+      lease={null}
+      onBack={noop}
+      orchestratorActive={true}
+      worker={worker}
+    />,
+  )
+  expect(detail).not.toContain('internal-agent-id')
+  expect(detail).not.toContain('Subagent')
+  expect(detail).toContain('Explore')
+})
+
+test('Workers compact rows normalize general-purpose and keep Resumable accessible but not visible', () => {
+  const worker = workerFixture({
+    agentId: 'legacy-resumable-id',
+    handle: 'legacy-resumable-id',
+    role: 'general-purpose',
+    status: 'completed',
+    origin: 'prior',
+    resumable: true,
+    description: 'Resume the investigation',
+  })
+  const roster = renderToStaticMarkup(
+    <WorkerRosterPanel onSelect={noop} orchestratorActive={true} workers={[worker]} />,
+  )
+  expect(roster).toContain('General-purpose')
+  expect(roster).toContain('status Resumable')
+  expect(roster).not.toContain('>Resumable<')
+  expect(roster).not.toContain('legacy-resumable-id')
+  const compactRow = roster.match(
+    /<button aria-label="Resume the investigation, type General-purpose, status Resumable"[\s\S]*?<\/button>/,
+  )?.[0]
+  expect(compactRow).toBeDefined()
+  // The row owns one lifecycle pip. AgentTypeLabel is text-only and must not
+  // manufacture a second status-like ring beside it.
+  expect(compactRow?.match(/rounded-full/g)).toHaveLength(1)
+  expect(compactRow).not.toContain('border-[1.4px]')
+
+  const detail = renderToStaticMarkup(
+    <WorkerDetailPanel
+      lease={null}
+      onBack={noop}
+      orchestratorActive={true}
+      worker={worker}
+    />,
+  )
+  expect(detail).toContain('Resumable')
 })
 
 test('worker detail fabricates no WMeta field when there is no lease (waiver 7)', () => {

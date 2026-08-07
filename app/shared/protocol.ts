@@ -88,14 +88,11 @@ export type SessionId = string
 /**
  * C2 — the modes a renderer may request via `permission.setMode`
  * (decisions/PERMISSION-BOUNDARY.md §3). The first four sit inside T5b's
- * already-conceded surface. `bypassPermissions` is on the wire but is NOT
- * freely grantable: the sidecar rejects it UNLESS the session was launched with
- * the trusted opt-in (`CATCODE_ALLOW_BYPASS=1` → the context's
- * `isBypassPermissionsModeAvailable`), mirroring the CLI's
- * `--dangerously-skip-permissions` trusted-surface model. A renderer alone
- * (a browser-like surface) can never escalate to it. `auto` is classifier-backed
- * and may be selected only while the sidecar's live engine gate reports it
- * available; the sidecar re-checks that gate before applying the transition.
+ * already-conceded surface. `bypassPermissions` is available directly in the
+ * app mode picker; the engine's own bypass killswitch remains authoritative.
+ * `auto` is classifier-backed and may be selected only while the sidecar's live
+ * engine gate reports it available; the sidecar re-checks that gate before
+ * applying the transition.
  * There is NO `destination` on the wire — the sidecar pins `session` scope; a
  * renderer must never persist `permissions.defaultMode`.
  */
@@ -1183,9 +1180,10 @@ export type TasksSnapshotFrame = {
  * redacted display snapshot (never a mock worker object — D2 C5):
  *   1. Session plane (D2 §4.2) — the engine's PERSISTED agent-mode state
  *      (`<transcript>.agent-mode-state.json`, `src/agent-mode/sessionState.ts:68`),
- *      read through the engine's OWN `readSessionStateWithContinuity` entry point
- *      (`sessionState.ts:691`) — objective, run phase, and continuity workers
- *      (prior-session `resumable`/`stale`) + synthesis lifecycle.
+ *      read through the engine's OWN exact-session `readSessionState` entry point
+ *      (`sessionState.ts`) — objective, run phase, and persisted workers for the
+ *      current engine session. Cross-session continuity stays inside the engine's
+ *      resume machinery and is not part of this desktop snapshot.
  *   2. Live plane — the `local_agent` workers the current session delegated via the
  *      Agent tool (`AppState.tasks`, the SAME store P4-9's tasks domain reads),
  *      carrying the real handoff gate: `handoffStatus:'blocked'` is the "waiting on
@@ -1218,7 +1216,7 @@ export type AgentModeWorkerItem = {
   description: string | null
   /** Persisted synthesis gate (result-ready / reviewed) — agent-mode session plane only. */
   synthesisStatus?: 'pending' | 'synthesized'
-  /** `current` = this session; `prior` = a continuity worker from a prior session. */
+  /** Engine-origin metadata; the desktop sidecar's exact-session read normally yields `current`. */
   origin?: 'current' | 'prior'
   /** Persisted resumability (meaningful for `prior`-origin workers). */
   resumable?: boolean
@@ -1244,7 +1242,7 @@ export type AgentModeSnapshot = {
   objective: string
   /** Derived run phase from the persisted state; 'planning' when none. */
   phase: AgentModeRunPhase
-  /** Unified worker list: live `local_agent` workers ∪ persisted continuity workers. */
+  /** Unified worker list: live `local_agent` workers ∪ this session's persisted workers. */
   workers: AgentModeWorkerItem[]
 }
 
@@ -2795,8 +2793,8 @@ export type CatCodeBridge = {
   /**
    * C2 — switch the addressed session's permission mode. Session-scoped only
    * (never persisted). The sidecar conditionally allows classifier-backed
-   * `auto` and trusted-launch `bypassPermissions`, rejecting either when its
-   * engine-owned availability gate is closed.
+   * `auto`; `bypassPermissions` is available directly in the app while the
+   * engine's own bypass killswitch remains authoritative.
    * The updated `permission.context` snapshot frame is the acknowledgement.
    */
   setPermissionMode(sessionId: SessionId, mode: PermissionSetModeMode): void

@@ -12,6 +12,8 @@
  * (no orchestrator to pick up the handoff) escalates to the amber "needs you".
  */
 import {
+  agentStateMeta,
+  agentTypeMeta,
   deriveAgentModeWorkerState,
   type AgentStateKey,
 } from './agentIdentity.js'
@@ -81,7 +83,7 @@ export function orchestratorWorkerState(
   if (worker.handoffStatus === 'blocked') {
     return active ? 'waiting' : 'needs-you'
   }
-  return deriveAgentModeWorkerState({
+  const state = deriveAgentModeWorkerState({
     status: worker.status,
     synthesisStatus: worker.synthesisStatus,
     origin: worker.origin,
@@ -89,6 +91,12 @@ export function orchestratorWorkerState(
     role: worker.role ?? '',
     description: worker.description ?? '',
   })
+  // `isBackgrounded` reaches the renderer on every live worker
+  // (`agentModeDomain.ts` `toLiveWorkerItem`) but was dropped here, so a
+  // background spawn and a foreground one rendered identically on the roster and
+  // in the Workers list. Applied LAST because only a genuinely running worker can
+  // be backgrounded: the prior-session and synthesis states outrank it.
+  return state === 'running' && worker.isBackgrounded === true ? 'background' : state
 }
 
 /**
@@ -111,8 +119,14 @@ export function deriveWorkerOwner(
 }
 
 export type OrchestratorWorkerSummary = {
-  /** Actively running, nobody owns the next action. */
+  /** Actively running in the foreground, nobody owns the next action. */
   working: number
+  /**
+   * Running without the turn. Counted apart from `working` so the Workers list
+   * and the docked roster tell the same story; folding it in made one surface
+   * say "2 working" while the other said "1 working, 1 in background".
+   */
+  background: number
   /** Awaiting the orchestrator (blocked/result-ready/failed under an active orchestrator). */
   orchestrator: number
   /** Awaiting the human (the solo blocked case). */
@@ -127,6 +141,7 @@ export function summarizeOrchestratorWorkers(
 ): OrchestratorWorkerSummary {
   const summary: OrchestratorWorkerSummary = {
     working: 0,
+    background: 0,
     orchestrator: 0,
     user: 0,
     done: 0,
@@ -135,8 +150,12 @@ export function summarizeOrchestratorWorkers(
     const owner = deriveWorkerOwner(worker, active)
     if (owner === 'user') summary.user += 1
     else if (owner === 'orchestrator') summary.orchestrator += 1
-    else if (orchestratorWorkerState(worker, active) === 'running') summary.working += 1
-    else summary.done += 1
+    else {
+      const state = orchestratorWorkerState(worker, active)
+      if (state === 'running') summary.working += 1
+      else if (state === 'background') summary.background += 1
+      else summary.done += 1
+    }
   }
   return summary
 }
@@ -160,7 +179,9 @@ export function orchestratorPill(
   if (summary.user > 0) {
     return { label: `${summary.user} needs you`, attention: true }
   }
-  const busy = summary.working + summary.orchestrator
+  // Background workers are in flight, so they belong in "N subagents active"
+  // even though the two counts are reported separately elsewhere.
+  const busy = summary.working + summary.background + summary.orchestrator
   if (busy > 0) {
     return { label: `${busy} subagent${busy > 1 ? 's' : ''} active`, attention: false }
   }
@@ -234,6 +255,7 @@ export function selectOrchestratorRosterLine(
   active: boolean,
 ): OrchestratorRosterLine {
   let working = 0
+  let background = 0
   let waiting = 0
   let done = 0
   let news = 0
@@ -244,11 +266,15 @@ export function selectOrchestratorRosterLine(
     }
     const state = orchestratorWorkerState(worker, active)
     if (state === 'running') working += 1
+    else if (state === 'background') background += 1
     else if (state === 'waiting') waiting += 1
     else done += 1
   }
   const tail: RosterCount[] = []
   if (working > 0) tail.push({ text: `${working} working`, tone: 'working' })
+  // Its own count, not folded into `working`: a background worker keeps going
+  // without the turn, which is the distinction the roster previously hid.
+  if (background > 0) tail.push({ text: `${background} in background`, tone: 'working' })
   if (waiting > 0) tail.push({ text: `${waiting} needs input`, tone: 'waiting' })
   if (done > 0) tail.push({ text: `${done} done`, tone: 'done' })
   // Every news-bearing worker beyond the promoted lead stays visible as a count.
@@ -256,7 +282,7 @@ export function selectOrchestratorRosterLine(
   return {
     lead: selectPromotedWorker(workers, active),
     tail,
-    anyWorking: working > 0,
+    anyWorking: working > 0 || background > 0,
   }
 }
 
@@ -264,6 +290,39 @@ export function selectOrchestratorRosterLine(
 export function displayHandle(handle: string | null): string | null {
   if (!handle) return null
   return handle.replace(/^@/, '')
+}
+
+/**
+ * The one display-name selector shared by the docked roster, Workers list, and
+ * worker detail header. A persisted handle equal to the engine's stable id is
+ * the legacy unnamed fallback, not a user-facing name, so it must disappear.
+ */
+export function selectWorkerDisplayName(
+  worker: Pick<AgentModeWorkerItem, 'agentId' | 'handle'>,
+): string | null {
+  const name = displayHandle(worker.handle)?.trim() ?? ''
+  if (!name || name === worker.agentId) return null
+  return name
+}
+
+/**
+ * Accessible compact-row label: the visible row stays concise, while its
+ * lifecycle and normalized type remain available to assistive technology.
+ */
+export function workerAccessibleLabel(
+  worker: AgentModeWorkerItem,
+  active: boolean,
+): string {
+  const name = selectWorkerDisplayName(worker)
+  const type = agentTypeMeta(worker.role)?.label
+  const status = agentStateMeta(orchestratorWorkerState(worker, active)).label
+  return [
+    name ?? (worker.description?.trim() || 'Unnamed worker'),
+    type ? `type ${type}` : null,
+    `status ${status}`,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(', ')
 }
 
 /**

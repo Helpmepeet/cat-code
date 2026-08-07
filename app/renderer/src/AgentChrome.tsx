@@ -64,6 +64,20 @@ export function AgentRoleDot({ role }: { role: string | null }) {
   return <span className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${tone.dot}`} />
 }
 
+/** Compact normalized worker type text for roster/list rows. */
+export function AgentTypeLabel({ role }: { role: string | null }) {
+  const meta = agentTypeMeta(role)
+  if (!meta) return null
+  const tone = AGENT_TYPE_TONE_CLASS[meta.tone]
+  return (
+    <span
+      className={`shrink-0 whitespace-nowrap font-mono text-[10.5px] font-medium ${tone.text}`}
+    >
+      {meta.label}
+    </span>
+  )
+}
+
 /**
  * Type/role chip (the prototype's `AgentTypeChip`, AgentIdentity.jsx) — the
  * worker's agent type as a soft-tinted pill.
