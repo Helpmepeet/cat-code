@@ -1,10 +1,15 @@
 /**
- * Read tool output limits.  Two caps apply to text reads:
+ * Read tool output limits.  Three caps apply to text reads:
  *
- *   | limit         | default | checks                    | cost          | on overflow     |
- *   |---------------|---------|---------------------------|---------------|-----------------|
- *   | maxSizeBytes  | 256 KB  | TOTAL FILE SIZE (not out) | 1 stat        | throws pre-read |
- *   | maxTokens     | 25000   | actual output tokens      | API roundtrip | throws post-read|
+ *   | limit             | default | checks                    | cost          | on overflow     |
+ *   |-------------------|---------|---------------------------|---------------|-----------------|
+ *   | MAX_LINES_TO_READ | 2000    | lines selected            | none          | marks partial   |
+ *   | maxSizeBytes      | 256 KB  | TOTAL FILE SIZE (not out) | 1 stat        | throws pre-read |
+ *   | maxTokens         | 25000   | actual output tokens      | API roundtrip | throws post-read|
+ *
+ * The line cap applies only when the caller passes no explicit limit, and is
+ * what keeps a default read off the two throwing caps.  maxSizeBytes likewise
+ * applies only to no-limit reads, so an explicit range still reads any size.
  *
  * Known mismatch: maxSizeBytes gates on total file size, not the slice.
  * Tested truncating instead of throwing for explicit-limit reads that
@@ -78,10 +83,14 @@ export const getDefaultFileReadingLimits = memoize((): FileReadingLimits => {
       ? override.includeMaxSizeInPrompt
       : undefined
 
+  // Defaults true: GrowthBook is inert in this fork (is1PEventLoggingEnabled
+  // returns false, so getFeatureValue always yields the default), and the
+  // upstream flag resolved this arm to true. Without it the prompt tells the
+  // model to read whole files, which is what trips maxTokens.
   const targetedRangeNudge =
     typeof override?.targetedRangeNudge === 'boolean'
       ? override.targetedRangeNudge
-      : undefined
+      : true
 
   return {
     maxSizeBytes,
