@@ -49,6 +49,31 @@ function runningWorker(id: string): TaskState {
   } as unknown as TaskState
 }
 
+/**
+ * Finished but NOT yet `notified`, which is a real refusal in the engine's own
+ * guard (`framework.ts:128`). The reaper must keep retrying rather than give up
+ * or spin.
+ */
+function refusedWorker(id: string, evictAfter: number): TaskState {
+  return {
+    ...(finishedWorker(id, evictAfter) as unknown as Record<string, unknown>),
+    notified: false,
+  } as unknown as TaskState
+}
+
+/** Poll instead of sleeping a fixed span, so a slow machine doesn't go red. */
+async function until(
+  predicate: () => boolean,
+  capMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + capMs
+  while (Date.now() < deadline) {
+    if (predicate()) return true
+    await Bun.sleep(10)
+  }
+  return predicate()
+}
+
 test('a finished worker leaves the store AND the roster snapshot once its evictAfter deadline passes', async () => {
   const store = createStore(getDefaultAppState())
   const stop = createSidecarPanelTaskReaper(store).start()
@@ -80,21 +105,28 @@ test('a still-running worker (no deadline stamped) is never evicted', async () =
   stop()
 })
 
-test('the disposer stops the sweep — a deadline that passes afterwards is not acted on', async () => {
+test('the disposer stops the sweep — proven live first, so a no-op reaper cannot pass this', async () => {
   const store = createStore(getDefaultAppState())
   const stop = createSidecarPanelTaskReaper(store).start()
 
+  // Phase 1: the reaper is demonstrably working.
   store.setState(prev => ({
     ...prev,
-    tasks: { w1: finishedWorker('w1', Date.now() + 50) },
+    tasks: { w1: finishedWorker('w1', Date.now() + 25) },
   }))
-  stop()
-  await Bun.sleep(150)
+  expect(await until(() => store.getState().tasks.w1 === undefined, 1_000)).toBe(true)
 
-  expect(store.getState().tasks.w1).toBeDefined()
+  // Phase 2: after disposal the same deadline is ignored.
+  stop()
+  store.setState(prev => ({
+    ...prev,
+    tasks: { w2: finishedWorker('w2', Date.now() + 25) },
+  }))
+  await Bun.sleep(200)
+  expect(store.getState().tasks.w2).toBeDefined()
 })
 
-test('a worker whose deadline already passed at start-up is swept without waiting for a store change', async () => {
+test('a worker whose deadline already passed at start-up is swept immediately, not a retry interval later', async () => {
   const store = createStore(getDefaultAppState())
   store.setState(prev => ({
     ...prev,
@@ -102,10 +134,38 @@ test('a worker whose deadline already passed at start-up is swept without waitin
   }))
 
   const stop = createSidecarPanelTaskReaper(store).start()
-  // Past-due tasks are retried on the panel's own 1s cadence, matching
-  // `CoordinatorTaskPanel`'s tick rather than spinning.
-  await Bun.sleep(1_200)
-
-  expect(store.getState().tasks.w1).toBeUndefined()
+  // Well under RETRY_INTERVAL_MS: an already-due deadline has not earned a wait.
+  expect(await until(() => store.getState().tasks.w1 === undefined, 500)).toBe(true)
   stop()
+})
+
+test('a refused eviction still gets swept under sustained store churn (no retry starvation)', async () => {
+  const store = createStore(getDefaultAppState())
+  // Past-due but NOT notified: the engine refuses, so the reaper must retry.
+  store.setState(prev => ({
+    ...prev,
+    tasks: { w1: refusedWorker('w1', Date.now() - 1_000) },
+  }))
+  const stop = createSidecarPanelTaskReaper(store).start()
+
+  // Churn faster than the retry interval, exactly as a live turn's progress
+  // updates do. Re-arming the timer on every change used to postpone the sweep
+  // forever, so the row never left the dock.
+  const churn = setInterval(() => {
+    store.setState(prev => ({ ...prev, statusLineRefreshKey: prev.statusLineRefreshKey + 1 }))
+  }, 20)
+
+  // The guard clears the way a delivered notification would.
+  setTimeout(() => {
+    store.setState(prev => {
+      const task = prev.tasks.w1
+      if (!task) return prev
+      return { ...prev, tasks: { ...prev.tasks, w1: { ...task, notified: true } } }
+    })
+  }, 150)
+
+  const evicted = await until(() => store.getState().tasks.w1 === undefined, 4_000)
+  clearInterval(churn)
+  stop()
+  expect(evicted).toBe(true)
 })
