@@ -2292,3 +2292,45 @@ test('P4-55: initial roster reads and launcher retries share one truthful hydrat
     "const hostSnapshotReady = rosterBootstrap.status === 'ready'",
   )
 })
+
+test('the composer rail reads DISPLAY from the last-known seams and CAPABILITY from the live ones', () => {
+  // App takes no props and its data arrives only through effects, so the
+  // renderer suite cannot mount this pane and press it. The wiring is therefore
+  // pinned at the source, the same way the breakdown gate above is: the four
+  // display props must come from the selectors that outlive the process, and the
+  // account switch must be gated on there being an engine, not on a snapshot
+  // happening to be non-null. Swapping either back reproduces the blank rail a
+  // parked session showed.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+
+  const start = source.indexOf('model={panelLastRunControls?.model.current ?? null}')
+  const end = source.indexOf('contextBreakdown={panelContextBreakdown}', start)
+  expect(start).toBeGreaterThan(-1)
+  expect(end).toBeGreaterThan(start)
+  const railProps = source.slice(start, end)
+
+  for (const displayProp of [
+    'model={panelLastRunControls',
+    'reasoningEffort={panelLastRunControls',
+    'fastMode={panelLastRunControls',
+    'contextWindow={panelLastRunControls',
+    'lastPermissionMode={selectLastPermissionMode(',
+  ]) {
+    expect(railProps).toContain(displayProp)
+  }
+  // The capability seam stays live-only, which is what turns each face
+  // read-only instead of blank.
+  expect(railProps).toContain('runControls={panelRunControls}')
+  expect(railProps).not.toContain('runControls={panelLastRunControls}')
+
+  // The one verb the rail can send needs an engine, and `panelProvider` now
+  // comes from the retained snapshot, so the provider check alone would arm it
+  // on a dead session.
+  const switchStart = source.indexOf('onSwitchAccount={')
+  const switchEnd = source.indexOf('onManageAccounts={', switchStart)
+  expect(switchStart).toBeGreaterThan(-1)
+  expect(switchEnd).toBeGreaterThan(switchStart)
+  expect(source.slice(switchStart, switchEnd)).toContain(
+    'panelHasEngine && panelProvider === ',
+  )
+})

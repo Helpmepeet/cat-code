@@ -23,6 +23,7 @@ import {
   createPermissionState,
   reducePermissionState,
   selectAdditionalWorkingDirectories,
+  selectLastPermissionMode,
   selectPendingPermissionCount,
   selectPermissionContext,
   selectPermissionQueue,
@@ -213,6 +214,7 @@ import {
   selectActiveAccount,
   selectActiveAnthropicAccount,
   selectFirstAccountsSnapshot,
+  selectLastAccountsSnapshot,
   selectGlobalAccountsSnapshot,
   selectOAuthProgress,
 } from './accountsState.js'
@@ -232,6 +234,7 @@ import {
 import {
   createRunControlsState,
   reduceRunControlsState,
+  selectLastRunControlsSnapshot,
   selectRunControlsSnapshot,
 } from './runControlsState.js'
 import {
@@ -2408,7 +2411,7 @@ export function App() {
 	      // the launcher precedent) + its agent-mode active flag. Both are the SAME
 	      // domain seams the reauth banner / WelcomeScreen already read.
 	      const panelAccounts =
-	        selectAccountsSnapshot(accounts, sessionId) ??
+	        selectLastAccountsSnapshot(accounts, sessionId) ??
 	        selectFirstAccountsSnapshot(accounts)
 	      const panelAgentMode = selectAgentModeSnapshot(orchestrator, sessionId)
 	      const panelOrchestratorActive = panelAgentMode?.active ?? false
@@ -2438,13 +2441,27 @@ export function App() {
 	      // this session's current state with no respawn. Supersedes the P4-24 read
 	      // from the spawn-frozen diagnostics snapshot for the composer faces.
 	      const panelRunControls = selectRunControlsSnapshot(runControls, sessionId)
+	      // The DISPLAY half of the same seam, which outlives the process: a
+	      // disconnected or parked session still ran on a model, at an effort, with
+	      // an account, and its context is still the size it is. The live snapshot
+	      // above going null is what disarms the pickers; it must not also erase
+	      // the answer, which is what blanked the whole rail on a park.
+	      const panelLastRunControls = selectLastRunControlsSnapshot(
+	        runControls,
+	        sessionId,
+	      )
+	      // Whether there is an engine to receive a verb at all. Every interactive
+	      // control below is gated on THIS, rather than on a snapshot happening to
+	      // be null — the conflation that made "no process" and "nothing to say"
+	      // the same state.
+	      const panelHasEngine = connectionHasEngine(sessionConnection.status)
 	      // Per-category context occupancy for the donut popover; null until the
 	      // sidecar has produced one for this session.
 	      const panelContextBreakdown = selectContextBreakdown(
 	        contextBreakdown,
 	        sessionId,
 	      )
-	      const panelProvider = panelRunControls?.model.provider ?? null
+	      const panelProvider = panelLastRunControls?.model.provider ?? null
 	      const panelActiveCodexAccount =
 	        panelProvider === 'openai' ? selectActiveAccount(panelAccounts) : null
 	      const panelActiveAnthropicAccount =
@@ -2465,7 +2482,7 @@ export function App() {
 	            activeAnthropicAccount={panelActiveAnthropicAccount}
 	            accountsLastResult={accounts.lastResult}
             turnStartedAt={turnStarts.get(sessionId) ?? null}
-            onSwitchAccount={panelProvider === 'openai' ? verb => {
+            onSwitchAccount={panelHasEngine && panelProvider === 'openai' ? verb => {
               // The composer profile popover's switch — the engine's own
               // `account.switch` verb to THIS pane's sidecar (its sessionId, not
               // the globally-active one), mirroring the run-control verbs. The
@@ -2500,9 +2517,11 @@ export function App() {
                 )}
 	            branch={panelBranch}
 	            sandboxed={panelSandboxed}
-	            model={panelRunControls?.model.current ?? null}
-	            reasoningEffort={panelRunControls?.effort.current ?? null}
-	            fastMode={panelRunControls?.fast.active ?? false}
+	            model={panelLastRunControls?.model.current ?? null}
+	            reasoningEffort={panelLastRunControls?.effort.current ?? null}
+	            fastMode={panelLastRunControls?.fast.active ?? false}
+	            contextWindow={panelLastRunControls?.model.contextWindow ?? null}
+	            lastPermissionMode={selectLastPermissionMode(permissions, sessionId)}
 	            runControls={panelRunControls}
 	            contextBreakdown={panelContextBreakdown}
 	            // Only a pane with an engine behind it can be asked. The donut is
@@ -3618,6 +3637,8 @@ export function SessionPane({
   model,
   reasoningEffort,
   fastMode,
+  contextWindow = null,
+  lastPermissionMode = null,
   runControls,
   contextBreakdown = null,
   onRequestContextBreakdown,
@@ -3991,27 +4012,40 @@ export function SessionPane({
   // reads this model's real window instead of a flat 200k. Depending on the
   // number rather than the snapshot object keeps the memo from re-running on
   // every unrelated re-broadcast.
-  const runControlsContextWindow = runControls?.model.contextWindow ?? null
+  // The live snapshot leads and the retained one is the FALLBACK, rather than
+  // the other way round: a caller that passes `runControls` without the retained
+  // prop must still get its denominator, or the donut silently drops to the flat
+  // 200k default. (It did — a pre-existing test caught exactly that.) The
+  // retained value then covers the case the live one cannot: a session whose
+  // engine went away keeps its real window instead of having the percentage move
+  // under a transcript that has not changed.
+  const runControlsContextWindow =
+    runControls?.model.contextWindow ?? contextWindow ?? null
   const liveContextUsage = useMemo(
     () => selectContextUsage(activeLog.messages, model, runControlsContextWindow),
     [activeLog.messages, model, runControlsContextWindow],
   )
   /*
-   * The rail under a PREVIEWED session reads the cache, not the engine.
+   * The rail answers from whatever source still knows, in this order.
    *
-   * A preview has no sidecar, so `runControls` / `diagnostics` are absent and
-   * every live value above is empty: the model face vanishes and the donut
-   * reports 0% for a session that plainly used context. Both are answerable
-   * from the session's own cached traffic (`previewRunFacts`), so the rail
-   * shows what it really ran on. Where the cache is silent the value stays
-   * null and the face renders nothing, which is the same rule the live rail
+   * A PREVIEWED session never had a sidecar in this window, so its facts come
+   * from its own cached traffic (`previewRunFacts`). A session that HAD one and
+   * lost it — disconnected, parked, crashed — keeps reporting from the last
+   * snapshot its engine sent (the `model`/`reasoningEffort`/`lastPermissionMode`
+   * props, sourced from the display selectors). Only where no source says
+   * anything does a face render nothing, which is the same rule the live rail
    * follows before its first snapshot lands.
+   *
+   * What none of them do is turn a face into a CONTROL. That is `runControls` /
+   * `permissionContext`, which do not outlive the process, so each face falls
+   * back to its read-only form rather than offering a picker with no engine
+   * behind it.
    */
   const railModel = preview ? (previewRunFacts?.model ?? null) : model
   const railEffort = preview ? (previewRunFacts?.effort ?? null) : reasoningEffort
   const railPermissionMode = preview
     ? (previewRunFacts?.permissionMode ?? null)
-    : null
+    : lastPermissionMode
   const contextUsage = preview
     ? (previewRunFacts?.contextUsage ?? null)
     : liveContextUsage
@@ -4868,13 +4902,27 @@ type SessionPaneProps = {
    * no engine exists to report it live. */
   previewRunFacts?: PreviewRunFacts | null
   allowPermission: (requestId: string, applySuggestions?: number[]) => void
-  /** The RESOLVED model this session runs (`RunControlsSnapshot.model.current`,
-   * the live seam); null before the snapshot. */
+  /**
+   * The RESOLVED model this session runs, or last ran
+   * (`RunControlsSnapshot.model.current`); null before the first snapshot.
+   *
+   * These four are the DISPLAY seam and deliberately survive the session's
+   * engine: they come from `selectLastRunControlsSnapshot`, not the live one, so
+   * a disconnected or parked pane still says what it ran on. `runControls` below
+   * is the capability seam and does NOT survive it, which is what turns each
+   * face read-only instead of blank.
+   */
   model: string | null
   /** The session's reasoning-effort tier, or null when running at the provider default. */
   reasoningEffort: string | null
   /** The fast-mode toggle; the ⚡ face renders when on OR togglable (P4-24c interactive). */
   fastMode: boolean
+  /** The engine-resolved window for `model`, the donut's denominator before any
+   * turn reports one. Null falls back to `contextUsage.ts`'s default. */
+  contextWindow?: number | null
+  /** The mode this session is in, or was last in. Display only — the picker is
+   * armed by `permissionContext`, which a dead session does not have. */
+  lastPermissionMode?: string | null
   /** P4-24c — the live run-controls snapshot (current + real picker options + availability). */
   runControls?: RunControlsSnapshot | null
   /** Per-category context occupancy for the donut popover. */

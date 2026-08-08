@@ -64,6 +64,7 @@ test('debug snapshot mirrors tab/sidebar selectors and visible permission string
         dismissedRequestIds: [],
         submittedRequestIds: [],
         context: null,
+        lastMode: null,
       },
     },
   }

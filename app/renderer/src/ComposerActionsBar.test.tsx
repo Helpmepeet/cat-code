@@ -1001,3 +1001,62 @@ test('P4-33 — no thresholds on the wire keeps the glyph hidden at any usage', 
   expect(html).not.toContain('until auto-compact')
   expect(html).not.toContain('data-composer-face="token-warning"')
 })
+
+/* --------------------------------------------------------------------- *
+ * a session whose engine went away (disconnect / park / crash)
+ * --------------------------------------------------------------------- *
+ *
+ * The bug this pins: the rail read ONE seam for both "what is this session" and
+ * "may I change it", so losing the process blanked the model, effort, fast,
+ * account and mode faces at once. The pane now passes the last-known values as
+ * the read-only props while `runControls`/`permissionContext` stay null, and
+ * these assert what that actually renders.
+ */
+
+function renderDetached(props: Partial<Parameters<typeof ComposerActionsBar>[0]> = {}) {
+  return render({
+    // No engine: neither seam that arms a control is present.
+    runControls: null,
+    permissionContext: null,
+    onSwitchAccount: undefined,
+    // What the session last reported, which none of the above changes.
+    model: 'gpt-5.6-sol',
+    reasoningEffort: 'high',
+    fastMode: true,
+    permissionModeReadOnly: 'auto',
+    account: account({ alias: 'hiby' }),
+    contextUsage: { usedTokens: 143_841, contextWindow: 372_000, percentUsed: 39 },
+    ...props,
+  })
+}
+
+test('a detached session still names its model, effort, mode, fast and account', () => {
+  const html = renderDetached()
+  expect(html).toContain('gpt-5.6-sol')
+  expect(html).toContain('Model: gpt-5.6-sol')
+  expect(html).toContain('Reasoning effort: high')
+  expect(html).toContain('Permission mode: Auto mode')
+  expect(html).toContain('Active account: hiby · Available')
+  // The context donut keeps the session's EXACT window, not the 200k default.
+  expect(html).toContain('Context 39% used')
+})
+
+test('none of those faces is a control while there is no engine to take the verb', () => {
+  const html = renderDetached()
+  // A picker announces itself with aria-haspopup; the read-only faces are spans.
+  expect(html).not.toContain('aria-label="Model"')
+  expect(html).not.toContain('aria-label="Reasoning effort"')
+  expect(html).not.toContain('aria-label="Permission mode: Auto"')
+  expect(countOccurrences(html, 'aria-haspopup="menu"')).toBe(0)
+  // The donut is the one face that stays clickable without an engine: it opens a
+  // read-only popover, and its recompute is gated by the pane, not by this bar.
+  expect(html).toContain('aria-haspopup="dialog"')
+})
+
+test('a face whose value was never reported still renders nothing', () => {
+  // Retaining the last snapshot must not become "invent a value": a session that
+  // never reported an effort (an Anthropic run) shows no effort face at all.
+  const html = renderDetached({ reasoningEffort: null, fastMode: false })
+  expect(html).not.toContain('Reasoning effort')
+  expect(html).toContain('gpt-5.6-sol')
+})

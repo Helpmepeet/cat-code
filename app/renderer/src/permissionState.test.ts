@@ -6,6 +6,7 @@ import {
   createPermissionState,
   reducePermissionState,
   selectAdditionalWorkingDirectories,
+  selectLastPermissionMode,
   selectPermissionContext,
   selectPermissionQueue,
   selectVisiblePermission,
@@ -224,6 +225,87 @@ test('terminal lifecycle clears permissions owned by the dead sidecar', () => {
 
   expect(state.sessions['session-1']?.pending).toEqual([])
   expect(selectVisiblePermission(state, 'session-1')).toBeNull()
+})
+
+test('a dead sidecar keeps the MODE for display while losing every actionable request', () => {
+  // The two halves must part company here: the rail's mode face has to survive a
+  // disconnect (it went blank on a park), and nothing actionable may.
+  let state = reducePermissionState(createPermissionState(), {
+    type: 'frame',
+    frame: readyFrame([REQUEST], 'session-1'),
+  })
+  state = reducePermissionState(state, {
+    type: 'frame',
+    frame: {
+      kind: 'permission.context',
+      protocolVersion: 1,
+      sessionId: 'session-1',
+      context: CONTEXT_SNAPSHOT,
+    },
+  })
+  state = reducePermissionState(state, {
+    type: 'frame',
+    frame: {
+      kind: 'lifecycle',
+      protocolVersion: 1,
+      sessionId: 'session-1',
+      status: 'disconnected',
+    },
+  })
+
+  // Capability gone: no context to arm the picker, no queue to resurrect.
+  expect(selectPermissionContext(state, 'session-1')).toBeNull()
+  expect(state.sessions['session-1']?.pending).toEqual([])
+  expect(state.sessions['session-1']?.submittedRequestIds).toEqual([])
+  expect(state.sessions['session-1']?.dismissedRequestIds).toEqual([])
+  expect(selectVisiblePermission(state, 'session-1')).toBeNull()
+  // Display survives, and is the mode only — never the whole context.
+  expect(selectLastPermissionMode(state, 'session-1')).toBe(CONTEXT_SNAPSHOT.mode)
+})
+
+test('selectLastPermissionMode prefers the live context and answers null when nothing said', () => {
+  let state = reducePermissionState(createPermissionState(), {
+    type: 'frame',
+    frame: readyFrame([], 'session-1'),
+  })
+  expect(selectLastPermissionMode(state, 'session-1')).toBeNull()
+  expect(selectLastPermissionMode(state, null)).toBeNull()
+
+  state = reducePermissionState(state, {
+    type: 'frame',
+    frame: {
+      kind: 'permission.context',
+      protocolVersion: 1,
+      sessionId: 'session-1',
+      context: CONTEXT_SNAPSHOT,
+    },
+  })
+  expect(selectLastPermissionMode(state, 'session-1')).toBe(CONTEXT_SNAPSHOT.mode)
+
+  // A restored session reports its FRESH mode, not the retained one.
+  state = reducePermissionState(state, {
+    type: 'frame',
+    frame: {
+      kind: 'lifecycle',
+      protocolVersion: 1,
+      sessionId: 'session-1',
+      status: 'exited',
+    },
+  })
+  state = reducePermissionState(state, {
+    type: 'frame',
+    frame: readyFrame([], 'session-1'),
+  })
+  state = reducePermissionState(state, {
+    type: 'frame',
+    frame: {
+      kind: 'permission.context',
+      protocolVersion: 1,
+      sessionId: 'session-1',
+      context: { ...CONTEXT_SNAPSHOT, mode: 'plan' },
+    },
+  })
+  expect(selectLastPermissionMode(state, 'session-1')).toBe('plan')
 })
 
 test('dismiss hides a request without resolving it', () => {
