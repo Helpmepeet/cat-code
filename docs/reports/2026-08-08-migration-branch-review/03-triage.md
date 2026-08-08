@@ -58,10 +58,28 @@ Committed thirteen additional confirmed local repairs:
 
 Evidence: focused engine tests (156 pass), focused desktop tests (301 pass),
 both app typechecks, renderer build, and `bun run build:dev:full` passed.
-The full app suite currently fails in the clean, reproducible
-`spawnConfig.probe.test.ts` sibling-sidecar liveness probe, which times out
-before these owner files are involved. It was not changed in this batch.
+At the time, the full app suite failed in the clean, reproducible
+`spawnConfig.probe.test.ts` sibling-sidecar liveness probe; that blocker was
+subsequently fixed in `4d2a186`.
 `bun run --cwd app test:hardening` remains GUI-gated and was not run.
+
+#### 2026-08-08 — fresh sidecar launch isolation (`4d2a186`)
+
+Fixed the remaining full-suite blocker. A fresh `SidecarSupervisor` launch now
+clears inherited `CATCODE_SIDECAR_RESUME_SESSION_ID` unless its `SpawnConfig`
+explicitly requests a resume. Without that clearing, a supervisor launched from
+within a sidecar inherited the parent conversation id: two sibling children both
+attempted to resume that unavailable transcript, exited before emitting `ready`,
+and the real sibling-liveness probe timed out.
+
+The supervisor-boundary regression proves an inherited id cannot reach a fresh
+child. The real F5 probe again starts two independent sidecars, `SIGKILL`s one,
+and receives the survivor's framed ping response.
+
+Evidence: focused supervisor + spawn-config probes (21 pass), full `bun test
+app/` (2,811 pass), both app typechecks, and renderer build passed. No sidecar
+process remained after the focused probe. `bun run --cwd app test:hardening`
+remains GUI-gated and was not run.
 
 **Agreed scope for the fix session: everything that survived verification, except
 LOW — filtered on verdict and fix-safety, not on the severity label.**
