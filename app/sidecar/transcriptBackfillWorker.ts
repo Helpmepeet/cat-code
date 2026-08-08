@@ -34,7 +34,7 @@ import {
 } from '../shared/protocol.js'
 import { checkJsonSafe, omitUndefinedObjectProperties } from '../shared/jsonSafe.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
-import { readTranscriptRunFacts } from './transcriptRunFacts.js'
+import { readTranscriptRunFacts } from '../shared/transcriptRunFacts.js'
 
 // Set the one-switch minimal mode before ANY engine module is dynamically
 // imported. conversationRecovery always calls processSessionStartHooks('resume'),

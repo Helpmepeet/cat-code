@@ -1,15 +1,24 @@
 /**
  * Run facts read straight from a session's transcript JSONL.
  *
- * Its own module, not part of the worker, for two reasons: the worker invokes
- * `main()` at import time (so importing it from a test would start a real
- * backfill run), and this function touches nothing but the filesystem, so it
- * is worth testing without the engine graph the worker pulls in.
+ * In `shared/` because it has TWO callers in different trust domains and must
+ * stay ONE implementation: the PL-B backfill worker (which injects the engine's
+ * real window resolver) and main's close/park/crash persist path (which injects
+ * none — see below). A second copy would be free to drift into writing a header
+ * the other half cannot honour, which is exactly the failure this closes.
+ *
+ * It is not part of the worker module for two further reasons: the worker
+ * invokes `main()` at import time (so importing it from a test would start a
+ * real backfill run), and this function touches nothing but the filesystem, so
+ * it is worth testing without the engine graph the worker pulls in.
+ *
+ * `node:fs` in `shared/` follows `transcriptBackfill.ts` (`node:path`): these
+ * are the main/sidecar-side shared modules. The renderer imports neither.
  */
 
 import { readFileSync } from 'node:fs'
 
-import type { TranscriptRunFacts } from '../shared/protocol.js'
+import type { TranscriptRunFacts } from './protocol.js'
 
 /**
  * Derive a session's run facts by scanning its transcript JSONL directly.
@@ -55,6 +64,12 @@ import type { TranscriptRunFacts } from '../shared/protocol.js'
  * would reproduce the exact defect this closes, a field declared and never
  * populated with nothing failing. Pass `() => null` to deliberately claim no
  * window and leave the renderer its fallback.
+ *
+ * Main's close path passes exactly that, because main is engine-free and has no
+ * resolver to give. It is not a degradation there: the `run_facts` record
+ * carries the window the run ACTUALLY used, and a session with no such record
+ * fails main's completeness gate and is left to the frame fallback rather than
+ * written with a guessed window (`transcriptCache.ts` `resolveCacheRunFacts`).
  *
  * Best-effort by construction: an unreadable or malformed transcript yields all
  * nulls rather than failing the backfill, since the transcript FRAMES are the

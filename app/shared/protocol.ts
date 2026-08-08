@@ -2754,11 +2754,15 @@ export type TranscriptRunFacts = {
   /** Context tokens at the newest turn that reported usage. */
   usedTokens: number | null
   /**
-   * The context window for `model`, RESOLVED at write time by the engine's
-   * `getContextWindowForModel` rather than read: no transcript record states a
-   * window (the live donut's comes off a `result` frame, which is never
-   * persisted). Null when the transcript named no model, or the resolver was
-   * unavailable, in which case the renderer falls back to its default window.
+   * The context window for `model`. Preferably the one the engine RECORDED with
+   * the run (`system`/`run_facts`); for a transcript written before that record
+   * existed, resolved at write time by the engine's `getContextWindowForModel`
+   * instead, since no other record states a window (the live donut's comes off a
+   * `result` frame, which is never persisted). Null when the transcript named no
+   * model, or the writer had no recorded window and no resolver — main's close
+   * path is engine-free and deliberately has none. A cache is written with no
+   * `runFacts` at all rather than with a null window, so the renderer's frame
+   * fallback keeps the exact window a cached `result` still states.
    */
   contextWindow: number | null
 }
