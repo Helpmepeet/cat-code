@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { getBuiltInAgents } from './builtInAgents.js'
+import { VERIFICATION_WHEN_TO_USE } from './built-in/verificationAgent.js'
 import { getPrompt } from './prompt.js'
 
 describe('Agent tool prompt in Agent Mode', () => {
@@ -56,7 +57,7 @@ describe('Agent tool prompt in Agent Mode', () => {
     expect(prompt).toContain('- implementor:')
     expect(prompt).toContain('- verification:')
     expect(prompt).toContain('Read-only async verification tools')
-    expect(prompt).not.toContain('- verification: Use this agent to verify that implementation work is correct before reporting completion. Invoke after non-trivial tasks (3+ file edits, backend/API changes, infrastructure changes). Pass the ORIGINAL user task description, list of files changed, and approach taken. The agent runs builds, tests, linters, and checks to produce a PASS/FAIL/PARTIAL verdict with evidence. (Tools: All tools except')
+    expect(prompt).not.toContain(`- verification: ${VERIFICATION_WHEN_TO_USE} (Tools: All tools except`)
     expect(prompt).not.toContain('- agent-mode-coding-worker:')
     expect(prompt).not.toContain('- agent-mode-verifier:')
   })
