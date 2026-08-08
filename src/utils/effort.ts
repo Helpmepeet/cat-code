@@ -222,6 +222,41 @@ export function resolveAppliedEffort(
 }
 
 /**
+ * Resolve the effort a spawned subagent runs at, in precedence order:
+ *   per-call override → agent definition's `effort:` pin → parent's current effort
+ *
+ * The per-call override is what the calling agent selected on this spawn, so it
+ * is the most specific signal and outranks the definition pin — mirroring how a
+ * tool-specified model outranks `agentModel` in getAgentModel().
+ *
+ * No clamping happens here: resolveAppliedEffort() clamps whatever lands in
+ * AppState.effortValue against the subagent's own resolved model at request
+ * time, so a level the subagent's model doesn't support falls back to 'high'
+ * there rather than being silently rewritten at spawn time.
+ *
+ * cacheIdenticalRun suppresses the override entirely. Effort is part of the
+ * billing prompt cache key, so a run that exists to reuse the parent's cached
+ * prefix (the fork paths, which pass useExactTools) must not diverge on it —
+ * an effort override on such a fork caused a 45x cache-write spike once
+ * already (see promptSuggestion.ts). The definition pin and the parent's
+ * effort are left alone: they are the pre-existing behavior on those paths.
+ */
+export function resolveSubagentEffort({
+  requestedEffort,
+  agentDefinitionEffort,
+  parentEffortValue,
+  cacheIdenticalRun,
+}: {
+  requestedEffort: EffortLevel | undefined
+  agentDefinitionEffort: EffortValue | undefined
+  parentEffortValue: EffortValue | undefined
+  cacheIdenticalRun?: boolean
+}): EffortValue | undefined {
+  const override = cacheIdenticalRun ? undefined : requestedEffort
+  return override ?? agentDefinitionEffort ?? parentEffortValue
+}
+
+/**
  * Resolve the effort level to show the user. Wraps resolveAppliedEffort
  * with the 'high' fallback (what the API uses when no effort param is sent).
  * Single source of truth for the status bar and /effort output (CC-1088).

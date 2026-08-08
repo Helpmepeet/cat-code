@@ -22,6 +22,7 @@ import {
   buildAgentSessionStateTracking,
   deriveSessionStateTrackingObjective,
   finalizeFailedAgentLaunch,
+  inputSchema,
   resolveSystemSubagentName,
 } from './AgentTool.js'
 import { renderGroupedAgentToolUse, renderToolResultMessage } from './UI.js'
@@ -97,6 +98,33 @@ afterEach(() => {
       originalSdkDisableBuiltins
   }
   resetStateForTests()
+})
+
+describe('AgentTool effort input', () => {
+  const baseInput = { description: 'do a thing', prompt: 'go' }
+
+  test('accepts a named effort level from the calling agent', () => {
+    const parsed = inputSchema().safeParse({ ...baseInput, effort: 'max' })
+    expect(parsed.success).toBe(true)
+    expect(parsed.success && parsed.data.effort).toBe('max')
+  })
+
+  test('leaves effort unset when the caller omits it', () => {
+    const parsed = inputSchema().safeParse(baseInput)
+    expect(parsed.success).toBe(true)
+    expect(parsed.success && parsed.data.effort).toBeUndefined()
+  })
+
+  // Numeric effort values are model-specific token budgets (effort.ts), not
+  // something a calling agent has any basis to pick.
+  test('rejects values that are not named effort levels', () => {
+    expect(inputSchema().safeParse({ ...baseInput, effort: 8000 }).success).toBe(
+      false,
+    )
+    expect(
+      inputSchema().safeParse({ ...baseInput, effort: 'turbo' }).success,
+    ).toBe(false)
+  })
 })
 
 describe('AgentTool UI', () => {
