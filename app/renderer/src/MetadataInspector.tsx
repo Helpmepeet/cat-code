@@ -473,7 +473,7 @@ function EffectiveSettings({ state }: { state: SessionInspectorState }) {
  */
 function SessionFlags({ state }: { state: SessionInspectorState }) {
   const flags = selectFlagLayer(state.settings)
-  const run = selectRunControls(state.diagnostics)
+  const run = selectRunControls(state.diagnostics, state.runControls)
   return (
     <Section title="Flags & run controls">
       {state.settings ? (

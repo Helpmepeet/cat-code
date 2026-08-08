@@ -2116,6 +2116,33 @@ test('FIX-5 wiring tripwire: the inspector, the meta strip, the accounts page an
 })
 
 /**
+ * The two surfaces that print a session's model must read the LIVE run-controls
+ * seam, not the spawn-frozen `diagnostics` snapshot. Reading diagnostics alone
+ * made every session that used the model picker report the model it STARTED
+ * with: the sidebar subtitle and the inspector's "Resolved model" both sat on
+ * the frozen value while the composer face (already on run controls) moved. Both
+ * call sites are in App's render body, unreachable from this SSR-only suite;
+ * source text can still decide which selector each one reads.
+ */
+test('the model a session displays comes from the live run-controls seam', () => {
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+
+  const sidebarStart = source.indexOf('modelForSession={id =>')
+  expect(sidebarStart).toBeGreaterThan(-1)
+  const sidebarBody = source.slice(sidebarStart, source.indexOf('}', sidebarStart + 1))
+  expect(sidebarBody).toContain(
+    'selectRunControlsSnapshot(runControls, id)?.model.current',
+  )
+
+  const inspectorStart = source.indexOf('<MetadataInspector')
+  const inspectorBody = source.slice(
+    inspectorStart,
+    source.indexOf('/>', inspectorStart),
+  )
+  expect(inspectorBody).toContain('runControls: selectRunControlsSnapshot(')
+})
+
+/**
  * Three composer behaviours a contentEditable does NOT inherit from the
  * textarea it replaced. None is reachable from an SSR render: they live in a
  * keydown branch, a DOM listener, and a drop handler. Pinned structurally so a

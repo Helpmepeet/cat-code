@@ -2974,7 +2974,13 @@ export function App() {
           selectActiveAccount(selectGlobalAccountsSnapshot(accounts))?.alias ??
           null
         }
+        /* The row subtitle's "· model" reads the LIVE run-controls seam, which is
+         * re-broadcast on every model change (P4-24c). The diagnostics snapshot is
+         * spawn-frozen, so on its own it kept printing the model a session started
+         * with after the picker moved it — it stays only as the pre-snapshot
+         * fallback. */
         modelForSession={id =>
+          selectRunControlsSnapshot(runControls, id)?.model.current ??
           selectDiagnosticsSnapshot(diagnostics, id)?.mainLoopModelForSession ??
           null
         }
@@ -3194,6 +3200,10 @@ export function App() {
                 activeSessionId,
               ),
               diagnostics: selectDiagnosticsSnapshot(diagnostics, activeSessionId),
+              runControls: selectRunControlsSnapshot(
+                runControls,
+                activeSessionId,
+              ),
             })}
             log={selectRawMessageLog(state, activeSessionId)}
             tasks={selectTasksSnapshot(tasks, activeSessionId)}
@@ -4846,7 +4856,8 @@ type SessionPaneProps = {
    * no engine exists to report it live. */
   previewRunFacts?: PreviewRunFacts | null
   allowPermission: (requestId: string, applySuggestions?: number[]) => void
-  /** The RESOLVED model this session runs (`mainLoopModelForSession`); null before the snapshot. */
+  /** The RESOLVED model this session runs (`RunControlsSnapshot.model.current`,
+   * the live seam); null before the snapshot. */
   model: string | null
   /** The session's reasoning-effort tier, or null when running at the provider default. */
   reasoningEffort: string | null
