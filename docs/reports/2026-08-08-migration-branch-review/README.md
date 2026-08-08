@@ -27,14 +27,19 @@ Six subsystems persist shared state unsafely. The repo owns the correct
 technique in four places and applies it inconsistently; the durability of a
 given write is decided by which implementation its author happened to see.
 
-| Site | Defect | Consequence |
+Consequences below are **post-verification**. Several were narrower than first
+reported, and two pillars collapsed entirely — the thesis survives, weakened.
+
+| Site | Defect | Consequence *after verification* |
 |---|---|---|
-| ~~`persistNextQuarantineProbe`~~ **INVALID — see `verification/V24`** | unlocked RMW, guard skips `in_flight`, but the write spreads `...refreshState` so `attempt_id` survives, and it uses `atomicWriteJson` | **no rotation loss.** Repro ends healthy with the new token committed. Residual: can clobber a concurrent process's `state`/`reason` — a lost verdict, MED not HIGH |
-| `saveClaudeTokenToVault` (`claudeAccountPool.ts`) | truncate-then-write, error swallowed, returns `void` | account silently vanishes on next start |
-| `sessionStorage.ts` | no atomic-write story | failed append discards entries **and** poisons every later flush for the process |
-| `teammateMailbox.ts` | lock + read + truncate-in-place | one crash bricks the mailbox permanently; `clearMailbox` has zero call sites |
-| `updateSettingsForSource` object form | stale nested arrays overwrite fresh state under the lock | the historical `persistPermissionUpdates` lost-update, via a different call form |
-| plugin registry | truncating write + catch-all loader | one bad shutdown → silent total uninstall |
+| ~~`persistNextQuarantineProbe`~~ | — | **INVALID (`V24`).** The write spreads `...refreshState` so `attempt_id` survives, and it uses `atomicWriteJson`. Repro ends healthy with the new token committed. Residual: a clobbered verdict. MED. |
+| ~~`settingsSync`~~ | — | **INVALID (`V30`).** Whole path sits behind `feature('DOWNLOAD_USER_SETTINGS')`, a name in neither list in `scripts/build.ts`. Dead in every build this repo can produce. |
+| `saveClaudeTokenToVault` | truncate-then-write, error swallowed, returns `void` | **Narrowed (`V24`)**: keychain fallback re-adds the account and `initClaudeAccountPool` repairs the file. The real loss is the **alias**, not the account. |
+| `sessionStorage.ts` | no atomic-write story | **Narrowed (`V27`)**: "permanent poisoning" is false — `scheduleDrain` recovers. The **silent batch loss is real** and proven on disk. |
+| `teammateMailbox.ts` | lock + read + truncate-in-place | **Narrowed (`V22`)**: corruption **self-heals** via the lenient read. True cost is bounded loss of unread messages — *and* a worse bug underneath: a transient parse failure silently discards the whole mailbox. |
+| `updateSettingsForSource` object form | stale nested arrays overwrite fresh state under the lock | See `V26`. The `persistPermissionUpdates` lost-update shape, via a different call form. |
+| plugin registry | truncating write + catch-all loader | **Narrowed (`V30`)**: `migrateFromEnabledPlugins()` rebuilds on a later launch, so not permanent. Worse thing missed: the degraded-empty load makes the orphan sweeper **delete every cached plugin version** after 7 days. |
+| **`app/host/registry.ts`** | atomic write, but last-writer-wins | **Proven (`V29`)**: 25 rows written, all of writer B's lost — and **every existing assertion passes with the advisory lock replaced by a no-op.** |
 
 Correct references already in-tree: `codexAccountPool.ts:761`,
 `atomicWriteJson` (`codexTokenRefresh.ts`), `setClaudeAccountAlias`,
@@ -81,11 +86,18 @@ is exposed to comes from engine modules the sidecar calls into.
    tool call with no prompt. The replacement comment cites a bypass killswitch
    that does not exist anywhere in `app/`. **Uncommitted at review time.**
    (`A13`, `A12`)
-3. **The six atomic-write sites above** — one pattern, six applications.
+3. **The surviving atomic-write sites** — one pattern, ~five applications after
+   verification killed two. **Order matters**: mailbox atomicity without a
+   rename-aside *creates* the brick it prevents, and the credential `{mode}` fix
+   is a no-op on the in-place writer. See `03-triage.md`.
 4. **`buildCodexStatus` inverts its own verdict.** `loadPoolForObservation()`
    replaces the live in-process pool; Codex cap state is memory-only, so every
    capped account reads `healthy` and `/continue-after-limit` reports a usable
-   account to a fully-exhausted user. (`S05`, `S01`)
+   account to a fully-exhausted user. Reproduced (`V25`): `wait`/`schedule`
+   becomes `delegate`/`run_now`, and the emitted JSON says
+   `routing_state=candidate` beside `usage.allowed=false`. **Branch-new** —
+   `codexStatus.ts` does not exist on `main`. Fix is `loadPool: false` at the two
+   in-process callers, **not** the report's racy `pool.initialized` gate.
 5. **`--bare` bypasses the entire policy core.** `prompts.ts:696` early-returns
    identity + CWD + date, omitting prompt-injection handling, tool-output
    provenance, instruction authority, risky-action consent, and truthful outcome

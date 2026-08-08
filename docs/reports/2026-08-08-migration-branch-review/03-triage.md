@@ -1,5 +1,69 @@
 # Triage — what is worth doing
 
+## Decision (2026-08-08) — start here next session
+
+**No fixes were applied. This is a review-and-triage artifact only.** One thing
+was changed outside the repo: the operator ran `chmod 700` on both vault
+directories and `chmod 600` on the seven token files. Verified: zero group- or
+world-readable JSON remains in `~/claude-vault` or `~/codex-vault`.
+
+**Agreed scope for the fix session: everything that survived verification, except
+LOW — filtered on verdict and fix-safety, not on the severity label.**
+
+Two filters per finding, both already answered in `verification/V*.md`:
+
+1. **Did it survive?** CONFIRMED or PARTIALLY CONFIRMED — not INVALID,
+   OVERSTATED, or DUPLICATE.
+2. **Is the fix safe as written?** Not one of the ten in
+   `02-verification-results.md`.
+
+That admits roughly **~210 of the 242 HIGH+MED**, plus ~15 LOW one-liners that
+meet the operator's criteria, and excludes ~40 that are dead or harmful.
+
+**Why not cut on severity alone**: the labels were assigned by 31 different
+agents with no shared standard, ~31 findings are already dead across all
+severities, and the ten dangerous fixes are spread through HIGH and MED — so a
+severity cut keeps every one of them.
+
+### Operator's stated criteria for "interesting"
+
+Asked directly. In priority order:
+
+1. **Confidently wrong output** — the system states something false with no
+   error. This is the top category and it is the one **logs cannot catch**: the
+   gate prints green, the gauge shows 84%, the pool says `healthy`, the spawn
+   tool says "Spawned successfully". Nothing crashes, so nothing is logged.
+2. **Destroys something** — transcripts, credentials, plugins, messages.
+3. **Cheap and closes a hole** — one or two lines, verifiable.
+
+Explicitly **not** a criterion: "teaches me something about the system." Insight
+for its own sake is out. That removes the naming collisions, the dead
+`TeammateExecutor` layer, the god-file splits, and the perf chains.
+
+Context that shapes the cut: **nobody is hitting any of this yet** (pre-release,
+no user pain today), and the operator does not read the code directly — agents
+review it for them. **So four items matter more than their severity suggests,
+because they are the operator's tooling lying to their agents**: the hardening
+gate that prints green while hanging, the registry test that asserts a lost
+update is fine, the three comments claiming a bypass gate that does not exist,
+and the "Spawned successfully" string on a failed delivery.
+
+### The one thing still missing
+
+An **ordered wave plan**. Selection is settled; sequence is not. Four known traps
+where fixing A before B makes things worse:
+
+- mailbox atomicity before the ack guard → widens duplicate delivery ~10 s → ~60 s
+- raising the stale-lock threshold before the ack guard → same
+- the export-slot fix without its inverse → breaks nearly every session
+- credential `{mode}` alone → no-op on the in-place writer; looks fixed, is not
+
+At 200+ fixes across a tree three sessions write to, expect more that only appear
+in sequence. Batch in waves, gate each on `bun test app/` + both typechecks +
+hardening, **commit per wave**, and bind paired fixes into single units.
+
+---
+
 409 findings, ~424 verification verdicts. Nobody is fixing all of them, and most
 should never be fixed. This file groups them by **whether the work pays for
 itself**, not by severity label.
