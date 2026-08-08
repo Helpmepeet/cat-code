@@ -409,14 +409,41 @@
    * levels of them, loose lists, or a 400-word paragraph. So the values below
    * assume nothing about the shape and degrade in place — an unstyled level
    * inherits a sane one, and every level of nesting has a rule. */
+  /* A three-column grid, not a `max-width` on the text blocks. The first attempt
+   * capped each block's width and left it in normal flow, which keeps the
+   * container's LEFT edge and piles every pixel it reclaims on the right — the
+   * text ends up visibly off-centre in the window while the composer below it is
+   * centred (operator, 2026-08-09). Centre column = the measure, side columns
+   * absorb the slack symmetrically, and anything that needs the full width says
+   * so by spanning `1 / -1` instead of fighting a max-width. */
   .md-prose {
+    display: grid;
+    grid-template-columns: 1fr min(var(--prose-measure), 100%) 1fr;
     /* A bare path, URL or identifier is not rare in this content, and unbroken
      * it forces the whole column to scroll sideways. */
     overflow-wrap: break-word;
   }
 
-  .md-prose > :is(p, ul, ol, h1, h2, h3, h4, h5, h6, blockquote) {
-    max-width: var(--prose-measure);
+  /* `2 / 3`, not a bare `2`. For an in-flow item the two are identical, but an
+   * ABSOLUTELY-positioned child (the response copy chip) resolves an `auto` end
+   * line to the grid container's padding edge — so a bare `2` left the chip
+   * anchored to the far right of the full column again, which is the bug this
+   * grid exists to fix. Naming both lines pins it to the measure. */
+  .md-prose > * {
+    grid-column: 2 / 3;
+  }
+
+  /* The breakout set. `div` is a fenced block (`CodeBlock`) or a table's scroll
+   * wrapper in the assistant renderer; bare `pre`/`table` is the same content in
+   * the reasoning bodies, which render Markdown without those component
+   * overrides. They keep the full column on purpose — the width exists for
+   * exactly this, and narrowing it was the problem it was widened to fix.
+   *
+   * Grid items do not collapse margins, so nothing in this set may carry a
+   * BOTTOM margin: it would add to the next block's top margin instead of
+   * merging with it. Both wrappers use `mt-3` alone for that reason. */
+  .md-prose > :is(div, pre, table) {
+    grid-column: 1 / -1;
   }
 
   /* Baseline rhythm between top-level blocks. Headings override it below. */
@@ -544,7 +571,6 @@
   .md-prose hr {
     border: 0;
     border-top: 1px solid var(--color-shell-seam);
-    max-width: var(--prose-measure);
   }
 
   .md-prose > * + hr,

@@ -669,21 +669,28 @@ function AssistantProse({
     // gutter (operator call, 2026-08-02): the prototype's chip overlays the
     // last line rather than narrowing the column (Messages.jsx:2064-2091), and
     // the app's own reserved-gutter version read as an unexplained gap.
-    <div className="group relative">
+    //
+    // The group and the prose grid are the SAME element rather than nested ones.
+    // The chip is absolutely positioned, so it takes its containing block from
+    // whichever ancestor is `relative` — and against the full-width column it
+    // parked itself hundreds of pixels right of where the text ends. As a grid
+    // child it inherits `grid-column: 2` from `.md-prose > *` and anchors to the
+    // measure instead, which is the last line it is meant to overlay.
+    <div className="md-prose group relative font-sans font-medium text-sm leading-relaxed">
       <MarkdownErrorBoundary fallback={content}>
-        <div className="md-prose font-sans font-medium text-sm leading-relaxed">
-          <Markdown
-            remarkPlugins={REMARK_PLUGINS}
-            rehypePlugins={REHYPE_PLUGINS}
-            components={components}
-          >
-            {content}
-          </Markdown>
-        </div>
+        <Markdown
+          remarkPlugins={REMARK_PLUGINS}
+          rehypePlugins={REHYPE_PLUGINS}
+          components={components}
+        >
+          {content}
+        </Markdown>
       </MarkdownErrorBoundary>
       {streaming ? (
+        // `mt-0` opts the caret out of the grid's block rhythm: it trails the
+        // answer, it is not another block in it.
         <span
-          className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-accent align-text-bottom"
+          className="ml-0.5 mt-0 inline-block h-3.5 w-1.5 animate-pulse bg-accent align-text-bottom"
           aria-hidden
         />
       ) : null}
@@ -763,7 +770,7 @@ const MARKDOWN_COMPONENTS = {
   // left-aligned throughout and this keeps zero inline style. Static arbitrary
   // classes only (the FAMILY_STYLE precedent for palette values with no token).
   table: ({ children }: ComponentPropsWithoutRef<'table'>) => (
-    <div className="my-3 overflow-x-auto rounded-lg border border-white/[0.08]">
+    <div className="mt-3 overflow-x-auto rounded-lg border border-white/[0.08]">
       <table className="w-full border-collapse text-[13px]">{children}</table>
     </div>
   ),
@@ -859,7 +866,14 @@ function QuoteCopyChip({ text }: { text: string }) {
  * that message's raw markdown `rawSource` — `node.position` offsets are into
  * that string. `.md-prose blockquote` (theme.css) still supplies the
  * border/color styling by tag-name selector regardless of this component's own
- * className. `ml-7` reserves the left margin `QuoteCopyChip` sits in.
+ * className.
+ *
+ * No reserved left margin any more: the quote sits in the prose grid's centre
+ * column like every other text block, and `QuoteCopyChip` hangs into the gutter
+ * beside it. An `ml-7` here would both indent the quote out of line with the
+ * surrounding paragraphs and beat the grid's centring, since a utility outranks
+ * the component layer whatever the specificity. On a window too narrow for a
+ * gutter the chip still clears the transcript's own 32px side padding.
  */
 function createBlockquoteComponent(rawSource: string) {
   return function Blockquote({
@@ -870,7 +884,7 @@ function createBlockquoteComponent(rawSource: string) {
   }) {
     const text = dequote(rawSource, node?.position)
     return (
-      <blockquote className="relative ml-7">
+      <blockquote className="relative">
         {children}
         {text.length > 0 ? <QuoteCopyChip text={text} /> : null}
       </blockquote>
@@ -915,7 +929,7 @@ export function CodeBlock({
       .catch(() => {})
   }
   return (
-    <div className="relative my-3 overflow-hidden rounded-lg border border-shell-seam bg-app-bg">
+    <div className="relative mt-3 overflow-hidden rounded-lg border border-shell-seam bg-app-bg">
       <span className="absolute left-3.5 top-2 z-[1] inline-flex items-center gap-1.5 font-mono text-[10px] font-semibold tracking-[0.06em] text-accent">
         <span className="opacity-70">&lt;/&gt;</span>
         {lang || 'code'}
