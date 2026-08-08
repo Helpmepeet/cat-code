@@ -41,6 +41,13 @@
 }
 
 :root {
+  /* Without this, Chromium paints its LIGHT-mode form controls and scrollbars on
+   * this near-black shell: a white scrollbar track down the side of every scroller
+   * (visible whenever the OS is set to always-show scroll bars, or a mouse is
+   * attached), plus light-mode focus rings and text-field chrome. `web/src/index.css`
+   * has carried this since it shipped; the desktop renderer never got it. */
+  color-scheme: dark;
+
   --accent: #f472b6;
   /* The same colour as bare channels, for the decorative glows and hairlines
    * that need it at an alpha (`rgb(var(--accent-rgb) / 0.25)`). Without it those
@@ -214,6 +221,39 @@
   textarea {
     font: inherit;
   }
+
+  /* Global scrollbar grammar, ported from the design source's own global block
+   * ("CatCode Web App.html":46-48). Applies to EVERY scroller in the app rather
+   * than being opted into per-surface, which is the point: the ~30 scroll
+   * containers that do not hide their bar were all showing Chromium's default
+   * chrome. Hairline-thin with a transparent track, so a scroller reads as the
+   * content moving rather than as a widget with a gutter.
+   *
+   * In `@layer base` on purpose: the per-surface hide
+   * (`[&::-webkit-scrollbar]:hidden`, and `.no-scrollbar` below) must still win. */
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
+  }
+
+  /* The square where a vertical and a horizontal bar meet. Left alone it is the
+   * one patch Chromium still fills with its own default. */
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
 }
 
 /* P4-1 ToastHost entrance — transient toasts fade+rise in (Surfaces.jsx:876
@@ -261,6 +301,19 @@
 }
 
 @layer components {
+  /* The design source's own opt-out class (`no-scrollbar`, "CatCode Web App.html":49-50)
+   * for a scroller that should not advertise itself: a short inline list, a tab
+   * strip. `SessionsPage.tsx` already asks for it, and until now the class existed
+   * nowhere in the renderer, so that one silently no-opped while every other
+   * surface spelled the same thing out as an arbitrary-variant pair. */
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
   .animate-toast-in {
     animation: catcode-toast-in 0.18s ease-out both;
   }
