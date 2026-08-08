@@ -243,8 +243,9 @@ export const AGENT_STATE_META = {
 
 export function agentTypeMeta(type: string | null | undefined): AgentTypeMeta | null {
   if (!type) return null
-  return (
-    AGENT_TYPE_META[type as AgentTypeKey] ?? {
+  return Object.hasOwn(AGENT_TYPE_META, type)
+    ? AGENT_TYPE_META[type as AgentTypeKey]
+    : {
       key: type,
       label: type,
       tone: 'neutral',
@@ -252,7 +253,6 @@ export function agentTypeMeta(type: string | null | undefined): AgentTypeMeta | 
       soft: 'rgba(161,161,170,0.08)',
       line: 'rgba(161,161,170,0.22)',
     }
-  )
 }
 
 export function agentStateMeta(state: AgentStateKey): AgentStateMeta {

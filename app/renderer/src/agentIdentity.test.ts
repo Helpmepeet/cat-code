@@ -51,6 +51,30 @@ test('maps known real agent types and leaves fixture-only or future types neutra
   expect(agentTypeMeta(undefined)).toBeNull()
 })
 
+test('treats prototype-chain agent types as neutral without changing known metadata', () => {
+  expect(agentTypeMeta('verification')).toMatchObject({
+    label: 'Verification',
+    tone: 'teal',
+    color: '#5eead4',
+  })
+  expect(agentTypeMeta('toString')).toEqual({
+    key: 'toString',
+    label: 'toString',
+    tone: 'neutral',
+    color: '#a1a1aa',
+    soft: 'rgba(161,161,170,0.08)',
+    line: 'rgba(161,161,170,0.22)',
+  })
+  expect(agentTypeMeta('__proto__')).toEqual({
+    key: '__proto__',
+    label: '__proto__',
+    tone: 'neutral',
+    color: '#a1a1aa',
+    soft: 'rgba(161,161,170,0.08)',
+    line: 'rgba(161,161,170,0.22)',
+  })
+})
+
 test('resolves identity from real worker, local-agent task, teammate, and Agent tool fields', () => {
   expect(
     resolveAgentIdentity({
