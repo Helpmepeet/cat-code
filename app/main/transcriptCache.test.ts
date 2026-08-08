@@ -445,6 +445,21 @@ test('an enriched cache fills what a legacy transcript cannot derive, for the SA
   })
 })
 
+test('a silent derivation borrows NOTHING, even from a complete cache', () => {
+  // No transcript read (unreadable file, or the row is gone) means no evidence.
+  // Borrowing the prior header wholesale would write a complete-LOOKING one
+  // whose usedTokens predates the cache's own frames, and the renderer trusts a
+  // header wholesale — so the donut would report a count older than the
+  // transcript beside it. No header at all is correct: the frame fallback is
+  // derived from those very frames.
+  expect(resolveCacheRunFacts(EMPTY, COMPLETE_FACTS)).toBeUndefined()
+  // Same for a run-facts record that names no model: its window cannot be
+  // attributed, so it may not inherit the previous model's.
+  expect(
+    resolveCacheRunFacts({ ...COMPLETE_FACTS, model: null }, COMPLETE_FACTS),
+  ).toBeUndefined()
+})
+
 test('facts for a different model are never borrowed — above all the window', () => {
   const derived = {
     model: 'claude-opus-5',

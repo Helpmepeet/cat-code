@@ -207,6 +207,7 @@ import {
   selectMemorySnapshot,
   selectThreadGoalSnapshot,
 } from './goalMemoryState.js'
+import { selectComposerRail } from './composerRailModel.js'
 import {
   createAccountsState,
   reduceAccountsState,
@@ -2405,14 +2406,23 @@ export function App() {
 	      const panelPartialCount = sessionLog.messages.filter(
 	        message => message.type === 'stream_event',
 	      ).length
-	      // In-session empty-state Welcome context (read-only): THIS session's
-	      // Codex pool snapshot (the pool is process-global, so the first-reported
-	      // snapshot is a valid fallback before this session's own frame lands —
-	      // the launcher precedent) + its agent-mode active flag. Both are the SAME
-	      // domain seams the reauth banner / WelcomeScreen already read.
-	      const panelAccounts =
-	        selectLastAccountsSnapshot(accounts, sessionId) ??
-	        selectFirstAccountsSnapshot(accounts)
+	      // The whole composer rail's display-vs-capability split, derived in one
+	      // testable place (`composerRailModel.ts`) rather than as a dozen
+	      // expressions here. It owns which values outlive the session's engine
+	      // and which controls stay armed.
+	      const rail = selectComposerRail({
+	        runControls,
+	        permissions,
+	        accounts,
+	        connectionStatus: sessionConnection.status,
+	        sessionId,
+	      })
+	      // In-session empty-state Welcome context (read-only): the pool view for
+	      // THIS pane, freshest-first (see `railAccounts` for why a pane with no
+	      // engine reads the polled global feed rather than its own frozen copy) +
+	      // its agent-mode active flag. Both are the SAME domain seams the reauth
+	      // banner / WelcomeScreen already read.
+	      const panelAccounts = rail.accountsSnapshot
 	      const panelAgentMode = selectAgentModeSnapshot(orchestrator, sessionId)
 	      const panelOrchestratorActive = panelAgentMode?.active ?? false
 	      // P4-32a — this panel's OWN workers (never the globally-active session's),
@@ -2440,28 +2450,16 @@ export function App() {
 	      // real picker options), re-broadcast on every change so the faces reflect
 	      // this session's current state with no respawn. Supersedes the P4-24 read
 	      // from the spawn-frozen diagnostics snapshot for the composer faces.
-	      const panelRunControls = selectRunControlsSnapshot(runControls, sessionId)
-	      // The DISPLAY half of the same seam, which outlives the process: a
-	      // disconnected or parked session still ran on a model, at an effort, with
-	      // an account, and its context is still the size it is. The live snapshot
-	      // above going null is what disarms the pickers; it must not also erase
-	      // the answer, which is what blanked the whole rail on a park.
-	      const panelLastRunControls = selectLastRunControlsSnapshot(
-	        runControls,
-	        sessionId,
-	      )
-	      // Whether there is an engine to receive a verb at all. Every interactive
-	      // control below is gated on THIS, rather than on a snapshot happening to
-	      // be null — the conflation that made "no process" and "nothing to say"
-	      // the same state.
-	      const panelHasEngine = connectionHasEngine(sessionConnection.status)
+	      // LIVE, so it disarms with the process; the values the faces DISPLAY come
+	      // off `rail`, which does not.
+	      const panelRunControls = rail.liveRunControls
 	      // Per-category context occupancy for the donut popover; null until the
 	      // sidecar has produced one for this session.
 	      const panelContextBreakdown = selectContextBreakdown(
 	        contextBreakdown,
 	        sessionId,
 	      )
-	      const panelProvider = panelLastRunControls?.model.provider ?? null
+	      const panelProvider = rail.provider
 	      const panelActiveCodexAccount =
 	        panelProvider === 'openai' ? selectActiveAccount(panelAccounts) : null
 	      const panelActiveAnthropicAccount =
@@ -2482,7 +2480,7 @@ export function App() {
 	            activeAnthropicAccount={panelActiveAnthropicAccount}
 	            accountsLastResult={accounts.lastResult}
             turnStartedAt={turnStarts.get(sessionId) ?? null}
-            onSwitchAccount={panelHasEngine && panelProvider === 'openai' ? verb => {
+            onSwitchAccount={rail.canSwitchAccount ? verb => {
               // The composer profile popover's switch — the engine's own
               // `account.switch` verb to THIS pane's sidecar (its sessionId, not
               // the globally-active one), mirroring the run-control verbs. The
@@ -2517,11 +2515,12 @@ export function App() {
                 )}
 	            branch={panelBranch}
 	            sandboxed={panelSandboxed}
-	            model={panelLastRunControls?.model.current ?? null}
-	            reasoningEffort={panelLastRunControls?.effort.current ?? null}
-	            fastMode={panelLastRunControls?.fast.active ?? false}
-	            contextWindow={panelLastRunControls?.model.contextWindow ?? null}
-	            lastPermissionMode={selectLastPermissionMode(permissions, sessionId)}
+	            model={rail.model}
+	            modelLabel={rail.modelLabel}
+	            reasoningEffort={rail.reasoningEffort}
+	            fastMode={rail.fastMode}
+	            contextWindow={rail.contextWindow}
+	            lastPermissionMode={rail.lastPermissionMode}
 	            runControls={panelRunControls}
 	            contextBreakdown={panelContextBreakdown}
 	            // Only a pane with an engine behind it can be asked. The donut is
@@ -3635,6 +3634,7 @@ export function SessionPane({
   previewRunFacts = null,
   allowPermission,
   model,
+  modelLabel = null,
   reasoningEffort,
   fastMode,
   contextWindow = null,
@@ -4042,6 +4042,9 @@ export function SessionPane({
    * behind it.
    */
   const railModel = preview ? (previewRunFacts?.model ?? null) : model
+  // The cache stores only the id, so a PREVIEW has no label to show and falls
+  // back to the id exactly as before. A detached live session does have one.
+  const railModelLabel = preview ? null : modelLabel
   const railEffort = preview ? (previewRunFacts?.effort ?? null) : reasoningEffort
   const railPermissionMode = preview
     ? (previewRunFacts?.permissionMode ?? null)
@@ -4600,6 +4603,7 @@ export function SessionPane({
             })
           }
           model={railModel}
+          modelLabel={railModelLabel}
           reasoningEffort={railEffort}
           permissionModeReadOnly={railPermissionMode}
           fastMode={fastMode}
@@ -4913,6 +4917,10 @@ type SessionPaneProps = {
    * face read-only instead of blank.
    */
   model: string | null
+  /** The model's product name, when the engine gave one. The face shows THIS;
+   * `model` above stays the resolved id, which is what `selectContextUsage`
+   * matches `modelUsage` on. */
+  modelLabel?: string | null
   /** The session's reasoning-effort tier, or null when running at the provider default. */
   reasoningEffort: string | null
   /** The fast-mode toggle; the ⚡ face renders when on OR togglable (P4-24c interactive). */

@@ -1076,6 +1076,7 @@ export function ComposerActionsBar({
   attachDisabled,
   onAttach,
   model,
+  modelLabel = null,
   reasoningEffort,
   fastMode,
   runControls,
@@ -1101,6 +1102,9 @@ export function ComposerActionsBar({
   onAttach: () => void
   /** The RESOLVED model this session runs; null before the snapshot → face omitted. */
   model: string | null
+  /** Its product name, when one was reported. The read-only face shows this and
+   * falls back to the id; the interactive `ModelChip` already had its own. */
+  modelLabel?: string | null
   /** The session's reasoning-effort tier; null when running at the provider default → face omitted. */
   reasoningEffort: string | null
   /** Fast-mode toggle — the ⚡ face renders when on OR togglable (P4-24c interactive). */
@@ -1326,11 +1330,16 @@ export function ComposerActionsBar({
           </>
         ) : model ? (
           <>
+            {/* The LABEL, falling back to the id only when no name was reported
+              * (a preview reads a cache, which stores the id alone). Rendering
+              * the id here turned `Sonnet 4.5` into
+              * `claude-sonnet-4-5-20250929` the moment a session parked — the
+              * same defect `ModelChip` fixed for the live face above. */}
             <span
               className={`${RAIL_FACE} text-[#22d3ee]`}
-              title={`Model: ${model}`}
+              title={`Model: ${modelLabel ?? model}`}
             >
-              {model}
+              {modelLabel ?? model}
             </span>
             <RailSep />
           </>

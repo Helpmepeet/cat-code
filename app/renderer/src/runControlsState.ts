@@ -95,5 +95,10 @@ export function selectLastRunControlsSnapshot(
   sessionId: SessionId | null,
 ): RunControlsSnapshot | null {
   if (!sessionId) return null
-  return state.sessions[sessionId] ?? state.last[sessionId] ?? null
+  // `last` alone, not `sessions[id] ?? last[id]`: every snapshot frame writes
+  // BOTH, so the live term could never differ — and reading it first masked the
+  // reducer from its own test. A review proved that by making `last` a
+  // first-write-wins map (so a restored session kept reporting its pre-restore
+  // model) with the whole suite still green.
+  return state.last[sessionId] ?? null
 }

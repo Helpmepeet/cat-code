@@ -327,6 +327,11 @@ function sessionTranscriptPath(
     ?.listSessions()
     .find(session => session.appSessionId === appSessionId)
   if (!row) return null
+  // The row's id must be the one the frames carry. Pairing this row's `cwd`
+  // with a DIFFERENT engine session's id would read a neighbouring transcript
+  // and attribute its facts here — the row is re-keyed on restart, so the two
+  // can genuinely disagree.
+  if (row.engineSessionId !== engineSessionId) return null
   return defaultTranscriptPath(row.cwd, engineSessionId)
 }
 

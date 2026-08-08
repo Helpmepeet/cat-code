@@ -98,6 +98,24 @@ export function readTranscriptRunFacts(
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i]
     if (!line) continue
+    // Parse only what can still contribute.
+    //
+    // `run_facts` is written once per process and again only on change, so on a
+    // long session it sits near the TOP of the file: the walk cannot stop early
+    // and would otherwise `JSON.parse` every record on the way there. That cost
+    // lands on Electron's main thread during an idle-park (a park is a terminal
+    // lifecycle frame, which is a persist), not just at quit. Once the byproduct
+    // facts are all known, a substring test replaces the parse for every
+    // remaining line. Measured on the largest transcript here (13 MB, no
+    // `run_facts` record, so the walk runs to the top): 22.9 ms to 17.1 ms,
+    // identical output. The remainder is `readFileSync` + `split`, not parsing,
+    // so this is the whole win available without changing how the file is read.
+    const needsByproducts =
+      facts.model === null ||
+      facts.permissionMode === null ||
+      facts.effort === null ||
+      facts.usedTokens === null
+    if (!needsByproducts && !line.includes(RUN_FACTS_MARKER)) continue
     let record: unknown
     try {
       record = JSON.parse(line)
@@ -168,6 +186,16 @@ export function readTranscriptRunFacts(
       : null)
   return facts
 }
+
+/**
+ * The cheap pre-test for the authoritative record. Deliberately the SUBTYPE
+ * value alone, with no JSON punctuation: `recordRunFacts` writes the object
+ * through `JSON.stringify` (`src/utils/sessionStorage.ts`), but a marker that
+ * assumed `"subtype":"run_facts"` byte-for-byte would silently stop matching if
+ * that writer ever spaced its output differently, and the failure mode is a
+ * fact quietly going missing. A false positive only costs one `JSON.parse`.
+ */
+const RUN_FACTS_MARKER = 'run_facts'
 
 /** One request's coherent facts, as the engine recorded them (`run_facts`). */
 type RunFactsSnapshot = {

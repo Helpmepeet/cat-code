@@ -263,6 +263,43 @@ test('a dead sidecar keeps the MODE for display while losing every actionable re
   expect(selectLastPermissionMode(state, 'session-1')).toBe(CONTEXT_SNAPSHOT.mode)
 })
 
+test('a re-attach carries the mode across the gap before the fresh context lands', () => {
+  // `ready` rebuilds the session from the engine's pending snapshot, and the
+  // `permission.context` frame follows it rather than arriving with it. Dropping
+  // the carry here blanks the mode face for that window — the same flash the
+  // context field's own carry exists to prevent, and invisible to every other
+  // test because the full suite stays green without it.
+  let state = reducePermissionState(createPermissionState(), {
+    type: 'frame',
+    frame: readyFrame([], 'session-1'),
+  })
+  state = reducePermissionState(state, {
+    type: 'frame',
+    frame: {
+      kind: 'permission.context',
+      protocolVersion: 1,
+      sessionId: 'session-1',
+      context: CONTEXT_SNAPSHOT,
+    },
+  })
+  state = reducePermissionState(state, {
+    type: 'frame',
+    frame: {
+      kind: 'lifecycle',
+      protocolVersion: 1,
+      sessionId: 'session-1',
+      status: 'disconnected',
+    },
+  })
+  // The restore's ready frame, with no context frame behind it yet.
+  state = reducePermissionState(state, {
+    type: 'frame',
+    frame: readyFrame([], 'session-1'),
+  })
+  expect(selectPermissionContext(state, 'session-1')).toBeNull()
+  expect(selectLastPermissionMode(state, 'session-1')).toBe(CONTEXT_SNAPSHOT.mode)
+})
+
 test('selectLastPermissionMode prefers the live context and answers null when nothing said', () => {
   let state = reducePermissionState(createPermissionState(), {
     type: 'frame',

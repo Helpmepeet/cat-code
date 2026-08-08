@@ -23,7 +23,11 @@
  *   - Reads are FAIL-CLOSED: size-bounded BEFORE parse, runtime schema-validated,
  *     then re-scanned with the CURRENT `scanForSecrets` (`app/shared/secretGuard.ts`).
  *     Any oversize / corruption / schema drift / version mismatch / secret hit ⇒
- *     the cache is discarded AND the file deleted. The read-time re-scan closes
+ *     the cache is discarded AND the file deleted. The re-scan walks the FRAMES,
+ *     not the header: the header is a closed set of scalars, schema-validated
+ *     field by field on every read and holding nothing the key-name guard could
+ *     match, but it is NOT guarded, so a new header field must be judged on that
+ *     basis rather than assumed covered. The read-time re-scan closes
  *     guard-drift completely (design Q3 resolution): a frame the current guard
  *     would block can never replay from an old cache, with no engine import (main
  *     stays engine-free — `scanForSecrets` is a pure shared-layer module).
@@ -162,12 +166,18 @@ export function createTranscriptCache(
   engineSessionId: string | null,
   frames: ServerFrame[],
   /**
-   * Supplied by whichever writer read the raw transcript, which still carries
-   * the mode/effort/usage records the engine's message conversion drops: the
-   * PL-B worker, or the close path via `buildClosedSessionCache`. Omitted when
-   * neither could derive a COMPLETE set, and the renderer then falls back to
-   * reading what the FRAMES still carry (model, mode, and usage plus the exact
-   * window from a live `result`).
+   * Supplied by whichever writer read the raw transcript: the PL-B worker, or
+   * the close path via `buildClosedSessionCache`. Omitted when neither could
+   * derive a COMPLETE set, and the renderer then falls back to reading what the
+   * FRAMES still carry (model, mode, usage, and the exact window off a live
+   * `result`).
+   *
+   * The frames are not structurally incapable of naming an effort:
+   * `selectRunFactsFromFrames` reads one off a `system`/`codex_send_path`
+   * message, and the distill allowlist keeps those. They just very often do not
+   * have one — it rides Codex WS completions only, and the bounded replay buffer
+   * may have dropped it. The cache behind the reported defect held zero such
+   * records against a transcript that recorded `effort: high`.
    */
   runFacts?: TranscriptRunFacts,
 ): TranscriptCache {
@@ -220,16 +230,28 @@ export function createTranscriptCache(
  * fill the gaps instead — but only when they describe the SAME model, since
  * that is what makes the window they carry the right one, and only from the
  * current derivation version.
+ *
+ * So the guarantee is narrower than "a close never flattens an enriched cache":
+ * a legacy transcript whose model CHANGED since that cache was written still
+ * writes a headerless one. It degrades safely (the frame fallback answers, and
+ * `cacheHasCurrentRunFacts` then queues the row for re-backfill on the next
+ * launch), but it is a real gap, not a covered case.
  */
 export function resolveCacheRunFacts(
   derived: TranscriptRunFacts,
   existing: TranscriptRunFacts | null,
 ): TranscriptRunFacts | undefined {
-  // Same-model or silent-derivation only: a cache written for a different model
-  // says nothing usable about this one, above all its context window.
+  // A POSITIVE model match, never merely "the derivation said nothing".
+  //
+  // Allowing a null derived model to borrow was wrong in a way the renderer
+  // makes expensive: with the transcript unreadable or its row gone, EVERY
+  // field came from the prior header, so a complete-looking one was written
+  // whose `usedTokens` predates the cache's own frames — and the renderer
+  // trusts a header wholesale, so the donut would report a count older than the
+  // transcript beside it. With no evidence, write no header and let the frame
+  // fallback answer; it is derived from those very frames.
   const prior =
-    existing !== null &&
-    (derived.model === null || derived.model === existing.model)
+    existing !== null && derived.model !== null && derived.model === existing.model
       ? existing
       : null
   const merged: TranscriptRunFacts = {
@@ -345,6 +367,17 @@ export function readCachedRunFacts(
 ): TranscriptRunFacts | null {
   const header = readCachedHeader(dir, id)
   if (header === null) return null
+  // The same three gates `readCache` applies, because this value is about to be
+  // COPIED into a freshly written header: facts from a cache the current guard
+  // or protocol would reject must not outlive it by being carried forward, and
+  // a file served under the wrong id speaks for a different session.
+  if (
+    header.appSessionId !== id ||
+    header.protocolVersion !== PROTOCOL_VERSION ||
+    header.guardVersion !== TRANSCRIPT_CACHE_GUARD_VERSION
+  ) {
+    return null
+  }
   if ((header.runFactsVersion ?? 0) < TRANSCRIPT_CACHE_RUN_FACTS_VERSION) return null
   return header.runFacts ?? null
 }
