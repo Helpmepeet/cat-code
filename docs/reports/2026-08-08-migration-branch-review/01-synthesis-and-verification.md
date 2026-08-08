@@ -70,14 +70,38 @@ there.
 99 `/tmp/catcode-*` directories are `drwxr-xr-x`. The count itself is evidence
 that `shutdown()`'s `rmSync` routinely does not run (see §3.2).
 
-### 1.4 `persistNextQuarantineProbe`'s missing guard
+### 1.4 `persistNextQuarantineProbe`'s missing guard — AND THE LEAD'S ERROR
 
 `codexTokenRefresh.ts:892` — the sole guard is
 `if (refreshState.state === 'reauth_required') return`. It does not skip
-`in_flight`. The comment immediately above it describes the function as "an
-unlocked read-modify-write that overwrites `state` and `reason`" and reasons
-about clobbering a concurrent process's verdict. The author identified the
-hazard and guarded one state short of the destructive case.
+`in_flight`. That much is true and was verified.
+
+**The conclusion drawn from it was wrong, and this is the most instructive
+mistake in the review.** Line 913 writes
+`vault.refresh = { ...refreshState, state: 'unknown', … }` — the spread
+**preserves `attempt_id`** — and persists via `atomicWriteJson`. So the
+correlation check the entire "rotation lost → account permanently dead" chain
+depended on never fails. `V24` built the exact interleaving (refresh parked in
+`fetch` under the lock, 1 Hz probe tick fires) and the account ended **healthy
+with the new refresh token committed**, costing one wasted fetch.
+
+The lead verified the *premise* (the missing guard) and then reasoned forward to
+the consequence without reading the write payload eight lines below, then
+repeated it as "the headline finding of the entire review". Every one of the
+chain's four sub-links checked out — `touchAll` does not skip quarantined
+accounts, the probe does run concurrently with init, the single-flight is
+bypassed, the recovery arm's condition would be false — which is exactly what
+made it feel proven. A chain of true links ending in a false conclusion is the
+failure mode to watch for in this review.
+
+**What survives**: the unlocked read-modify-write can still clobber `state`,
+`reason`, and `consecutive_failures` written by a concurrent process. That is a
+lost *verdict*, not a lost rotation. MED, not HIGH.
+
+**Provenance**: `V24` established that **all 11 account-pool findings are
+pre-existing on `main`**; `codexIdentityReconciliation.ts` is the only
+branch-new file and the branch merely extracted existing logic verbatim. This
+scope does not block the branch.
 
 ### 1.5 `agentTypeMeta` prototype index
 
@@ -122,6 +146,7 @@ a bug actually lives.
 | `app.abort` has no reject-direction boundary test | It does — `sidecarServer.test.ts:381`, and the test's comment records that gap in past tense. Relayed from A06 without checking. | X01 agent |
 | `attachments.ts` +212 needs a path-traversal and NUL audit | That +212 is entirely teammate-mailbox work; there are no changes to attachment path handling. NUL introduction is a **verified negative** — every write path goes through `JSON.stringify`, which escapes U+0000. | S07 agent |
 | Renderer self-escalation via `permission.setMode` follows from the bypass diff | Caught before reporting. Neither `handleSetMode` nor `permissionDomain.setMode` gates on the flag at all, so that gap is **pre-existing and independent** of the diff. It also means the removed comment's own claim ("handleSetMode reads this same context flag") was already inaccurate. | lead, pre-report |
+| `persistNextQuarantineProbe` loses the rotation and kills the account — "the headline finding of the entire review" | **INVALID.** Line 913 spreads `...refreshState`, preserving `attempt_id`, and writes via `atomicWriteJson`. Repro ends healthy with the new token committed. The lead verified the missing guard and reasoned forward without reading the write payload. Residual issue is a clobbered verdict, MED. | `V24` verifier |
 
 Pattern worth noting: four of six corrections were the lead over-reading, and
 the agents caught them. One was the lead catching itself. None were an agent

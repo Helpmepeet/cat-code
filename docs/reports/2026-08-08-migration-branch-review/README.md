@@ -29,7 +29,7 @@ given write is decided by which implementation its author happened to see.
 
 | Site | Defect | Consequence |
 |---|---|---|
-| `persistNextQuarantineProbe` (`codexTokenRefresh.ts`) | unlocked whole-vault RMW, guard skips `in_flight` | rotation lost → account permanently dead |
+| ~~`persistNextQuarantineProbe`~~ **INVALID — see `verification/V24`** | unlocked RMW, guard skips `in_flight`, but the write spreads `...refreshState` so `attempt_id` survives, and it uses `atomicWriteJson` | **no rotation loss.** Repro ends healthy with the new token committed. Residual: can clobber a concurrent process's `state`/`reason` — a lost verdict, MED not HIGH |
 | `saveClaudeTokenToVault` (`claudeAccountPool.ts`) | truncate-then-write, error swallowed, returns `void` | account silently vanishes on next start |
 | `sessionStorage.ts` | no atomic-write story | failed append discards entries **and** poisons every later flush for the process |
 | `teammateMailbox.ts` | lock + read + truncate-in-place | one crash bricks the mailbox permanently; `clearMailbox` has zero call sites |
@@ -45,11 +45,24 @@ is exposed to comes from engine modules the sidecar calls into.
 
 ## Highest priority
 
+> **Verification is in progress and has already overturned one headline finding.**
+> Read `verification/V<NN>-*.md` alongside any scope report before acting. The
+> `persistNextQuarantineProbe` "vault death" claim is **INVALID** (`V24`); the
+> account-pool scope is **entirely pre-existing on `main`** and blocks nothing;
+> and `V24` proved a HIGH the original review missed (see item 1b).
+
 1. **Credential vault is world-readable.** `~/claude-vault/accounts/*.json` at
    `0644` inside a `0755` directory, holding live access and refresh tokens.
-   Verified on the operator's machine at review time. The durable fix is
-   creating them `mode: 0o600` / `0o700` at the writer; anything else reverts on
-   the next rewrite. (`X02a-atomic-writes-duplication.md`)
+   Verified on the operator's machine at review time, and re-verified by `V24`
+   (five files exposed across both vaults). The durable fix is creating them
+   `mode: 0o600` / `0o700` at the writer, plus a chmod-on-load, or existing
+   exposure is never repaired. (`X02a`, `V24` F6)
+1b. **Rotated credentials can be written to the wrong account.** Found and proven
+   by repro during verification, not in the original review:
+   `updateActiveClaudeAccountTokens` writes to `pool.activeIndex` **at call
+   time** rather than to the account whose refresh token was spent, so account
+   U's rotated credentials land in account V's vault file and pool entry. Fix:
+   take an explicit `accountUuid`. (`V24`)
 2. **Plan mode is a full permission bypass.** `app/sidecar/sessionController.ts`
    replaced a `PERMISSION-BOUNDARY.md` §3 trusted-surface gate
    (`CATCODE_ALLOW_BYPASS === '1'`, off by default, read from launch env so a
