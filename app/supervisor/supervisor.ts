@@ -458,9 +458,16 @@ export class SidecarSupervisor {
           socket.destroy()
           return
         }
-        const frame = result.payload as ServerFrame
-        if (frame.kind === 'ready') {
-          const readyError = validateReadyFrame(record.sessionId, frame)
+        const frame = result.payload
+        if (!isObjectRecord(frame)) {
+          this.log(
+            `[supervisor] dropped frame from ${record.sessionId}: frame was not an object`,
+          )
+          continue
+        }
+        const serverFrame = frame as ServerFrame
+        if (serverFrame.kind === 'ready') {
+          const readyError = validateReadyFrame(record.sessionId, serverFrame)
           if (readyError) {
             this.log(
               `[supervisor] invalid ready frame from ${record.sessionId}: ${readyError}`,
@@ -473,22 +480,22 @@ export class SidecarSupervisor {
           this.emit({
             type: 'frame',
             sessionId: record.sessionId,
-            frame,
+            frame: serverFrame,
           })
           continue
         }
 
-        if (!isObjectRecord(frame) || frame.sessionId !== record.sessionId) {
+        if (serverFrame.sessionId !== record.sessionId) {
           this.log(
             `[supervisor] dropped frame from ${record.sessionId}: frame sessionId ${String(
-              isObjectRecord(frame) ? frame.sessionId : undefined,
+              serverFrame.sessionId,
             )} did not match connection`,
           )
           continue
         }
         if (record.status !== 'ready') {
           this.log(
-            `[supervisor] dropped ${String(frame.kind)} frame from ${record.sessionId} before a valid ready frame`,
+            `[supervisor] dropped ${String(serverFrame.kind)} frame from ${record.sessionId} before a valid ready frame`,
           )
           this.setStatus(record, 'failed')
           socket.destroy()
@@ -497,7 +504,7 @@ export class SidecarSupervisor {
         this.emit({
           type: 'frame',
           sessionId: record.sessionId,
-          frame,
+          frame: serverFrame,
         })
       }
     })

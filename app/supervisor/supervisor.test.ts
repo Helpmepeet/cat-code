@@ -428,6 +428,41 @@ test('outbound frame sessionId tripwire drops and logs a mis-stamped frame', asy
   ).toBe(false)
 })
 
+test('a decoded null frame is dropped without disrupting the ready session', async () => {
+  const socketDir = makeTempDir('catcode-supervisor-null-frame-')
+  const logs: string[] = []
+  const supervisor = new SidecarSupervisor({
+    sidecarCommand: process.execPath,
+    sidecarArgs: ['-e', readyScript({ afterOpen: 'writeFrame(socket, null)' })],
+    socketDir,
+    log: line => logs.push(line),
+  })
+  supervisors.push(supervisor)
+  const events: SupervisorEvent[] = []
+  supervisor.subscribe(event => events.push(event))
+  const sessionId = supervisor.spawnSession('null-frame-session')
+
+  await waitFor(
+    () =>
+      events.some(
+        event =>
+          event.type === 'frame' &&
+          event.sessionId === sessionId &&
+          event.frame.kind === 'ready',
+      ),
+    'valid ready frame was not emitted',
+  )
+  await waitFor(
+    () => logs.some(line => line.includes('frame was not an object')),
+    'decoded null frame was not dropped',
+  )
+
+  expect(supervisor.listSessions()).toContainEqual({
+    sessionId,
+    status: 'ready',
+  })
+})
+
 test('F11 — a stale old-child exit after restart does not mark the new session dead', async () => {
   const socketDir = makeTempDir('catcode-supervisor-stale-')
   const script = readyScript()

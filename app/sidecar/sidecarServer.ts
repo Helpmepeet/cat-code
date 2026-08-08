@@ -1169,6 +1169,7 @@ export class SidecarServer {
           this.log(
             `[sidecar] queued prompt was refused twice; giving up: ${error.message}`,
           )
+          this.retriedQueuedPromptKeys.delete(retryKey)
           return
         }
         this.retriedQueuedPromptKeys.add(retryKey)

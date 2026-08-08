@@ -1265,7 +1265,8 @@ test('a queued prompt a turn refuses is retried once, then given up loudly', asy
     clientFrame({ type: 'app.submit', requestId: 'turn', prompt: 'first' }),
   )
   await waitFor(() => attempts.length === 1)
-  enqueue({ mode: 'prompt', value: 'doomed', uuid: crypto.randomUUID() })
+  const retryKey = crypto.randomUUID()
+  enqueue({ mode: 'prompt', value: 'doomed', uuid: retryKey })
 
   await waitFor(() => attempts.length === 3, 2000)
   // One initial attempt plus exactly one retry, then it stops.
@@ -1274,6 +1275,13 @@ test('a queued prompt a turn refuses is retried once, then given up loudly', asy
   expect(attempts).toHaveLength(3)
   expect(getCommandQueueSnapshot()).toHaveLength(0)
   expect(logs.some(line => line.includes('giving up'))).toBe(true)
+  expect(
+    (
+      server as unknown as {
+        retriedQueuedPromptKeys: ReadonlySet<string>
+      }
+    ).retriedQueuedPromptKeys.has(retryKey),
+  ).toBe(false)
   server.close()
 })
 

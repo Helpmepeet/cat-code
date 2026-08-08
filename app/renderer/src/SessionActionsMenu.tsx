@@ -325,6 +325,7 @@ function MenuRow({
         role="menuitem"
         aria-disabled="true"
         title={item.reason}
+        aria-label={item.reason ? `${item.label}, ${item.reason}` : item.label}
         className="flex cursor-default items-center gap-2 rounded-md px-2.5 py-1.5 text-[12.5px] text-text-subtle/70"
       >
         <span className="flex shrink-0">

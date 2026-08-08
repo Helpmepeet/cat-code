@@ -517,6 +517,19 @@ export function Sidebar({
       workspaceOrder,
     )
   }, [allGroups, groupRows, query, activeCwd, workspaceOrder])
+  const activityByWorkspace = useMemo(
+    () =>
+      new Map(
+        allGroups.map(group => [
+          group.cwd,
+          group.rows.reduce(
+            (newest, row) => Math.max(newest, sidebarActivityKey(row)),
+            0,
+          ),
+        ]),
+      ),
+    [allGroups],
+  )
 
   // ➕ Projects the operator has hidden are held back HERE, after ordering and
   // filtering, so unhiding one drops it straight back into its ranked slot
@@ -528,12 +541,9 @@ export function Sidebar({
   const { visible: visibleGroups, hidden: hiddenGroups } = useMemo(
     () =>
       selectVisibleWorkspaceGroups(groups, hiddenWorkspaces, group =>
-        group.rows.reduce(
-          (newest, row) => Math.max(newest, sidebarActivityKey(row)),
-          0,
-        ),
+        activityByWorkspace.get(group.cwd) ?? 0,
       ),
-    [groups, hiddenWorkspaces],
+    [groups, hiddenWorkspaces, activityByWorkspace],
   )
 
   // The rendered sequence a reorder is expressed against (what the operator is
