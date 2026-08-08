@@ -43,12 +43,13 @@ import type {
  * · [active account] · context donut.
  *
  * REAL DATA ONLY (the prototype's chip values are mock fixtures — source wins):
- *  - MODEL renders the RESOLVED session model (`DiagnosticsSnapshot`
- *    `mainLoopModelForSession`, the sidecar's `getMainLoopModel()` — the same
- *    resolver the QueryEngine uses at request time), under the engine's own
- *    display name for it (`RunControlsSnapshot.model.currentLabel`, from
- *    `getMarketingNameForModel`) so the face reads as the picker row does.
- *    Absent only before the snapshot arrives; never a fabricated label.
+ *  - MODEL renders the RESOLVED session model (`RunControlsSnapshot.model.current`,
+ *    the sidecar's `getMainLoopModel()` — the same resolver the QueryEngine uses
+ *    at request time), under the engine's own display name for it
+ *    (`.currentLabel`, from `getMarketingNameForModel`) so the face reads as the
+ *    picker row does. It comes off the LIVE run-controls seam, re-broadcast on
+ *    every model change, not the spawn-frozen `DiagnosticsSnapshot`. Absent only
+ *    before the snapshot arrives; never a fabricated label.
  *  - REASONING renders the session's real effort tier (`reasoningEffort` ←
  *    `AppState.effortValue`, seeded from `getInitialEffortSetting()` in the
  *    sidecar). Absent when no explicit effort is set (running at the provider

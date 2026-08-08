@@ -271,6 +271,24 @@ describe('selectRunControls', () => {
     )
   })
 
+  // A live null is an ANSWER, so it must not fall through to the frozen value:
+  // picking "Default (recommended)" clears the override, and moving onto a model
+  // with no effort knob clears the tier. Borrowing either from spawn time prints
+  // a setting the session no longer has.
+  test('a null live field stays null instead of resurrecting the spawn value', () => {
+    const defaulted = selectRunControls(diagnostics, {
+      ...runControls,
+      model: { ...runControls.model, selected: null },
+      effort: { ...runControls.effort, current: null, supported: false, options: [] },
+      fast: { ...runControls.fast, active: false },
+    })
+    expect(defaulted?.modelOverride).toBeNull()
+    expect(defaulted?.effort).toBeNull()
+    expect(defaulted?.fastMode).toBe(false)
+    // The resolved model still answers, so the row never blanks out.
+    expect(defaulted?.resolvedModel).toBe('claude-opus-5')
+  })
+
   test('neither snapshot yields nothing to state', () => {
     expect(selectRunControls(null, null)).toBeNull()
   })

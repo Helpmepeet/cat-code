@@ -306,15 +306,27 @@ export function selectRunControls(
   diagnostics: DiagnosticsSnapshot | null,
   runControls: RunControlsSnapshot | null,
 ): RunControlsView | null {
-  if (!diagnostics && !runControls) return null
-  // The live seam wins field by field: a session whose model, effort, or fast
-  // toggle moved after spawn has a current run-controls snapshot and a stale
-  // diagnostics one, and only the former is still true.
+  // The live seam wins WHOLE, never field by field, because its nulls are
+  // ANSWERS rather than gaps: `model.selected: null` MEANS this session runs the
+  // provider default, and `effort.current: null` means the current model takes no
+  // effort knob at all. Borrowing the spawn-time value for either one prints a
+  // fact the session no longer has, which is the same staleness this pair exists
+  // to avoid. The two are not interchangeable per field either — live `effort`
+  // is the APPLIED tier, the frozen one is the raw selection.
+  if (runControls) {
+    return {
+      modelOverride: runControls.model.selected,
+      resolvedModel: runControls.model.current,
+      effort: runControls.effort.current,
+      fastMode: runControls.fast.active,
+    }
+  }
+  if (!diagnostics) return null
   return {
-    modelOverride: runControls?.model.selected ?? diagnostics?.mainLoopModel ?? null,
-    resolvedModel: runControls?.model.current ?? diagnostics?.mainLoopModelForSession ?? null,
-    effort: runControls?.effort.current ?? diagnostics?.reasoningEffort ?? null,
-    fastMode: runControls?.fast.active ?? diagnostics?.fastMode ?? false,
+    modelOverride: diagnostics.mainLoopModel,
+    resolvedModel: diagnostics.mainLoopModelForSession,
+    effort: diagnostics.reasoningEffort,
+    fastMode: diagnostics.fastMode,
   }
 }
 

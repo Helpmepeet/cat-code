@@ -2127,14 +2127,17 @@ test('FIX-5 wiring tripwire: the inspector, the meta strip, the accounts page an
 test('the model a session displays comes from the live run-controls seam', () => {
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
 
+  // Fixed windows, not brace-matching: an added object literal inside either
+  // call site must not truncate the slice into a spurious failure.
   const sidebarStart = source.indexOf('modelForSession={id =>')
   expect(sidebarStart).toBeGreaterThan(-1)
-  const sidebarBody = source.slice(sidebarStart, source.indexOf('}', sidebarStart + 1))
+  const sidebarBody = source.slice(sidebarStart, sidebarStart + 400)
   expect(sidebarBody).toContain(
     'selectRunControlsSnapshot(runControls, id)?.model.current',
   )
 
   const inspectorStart = source.indexOf('<MetadataInspector')
+  expect(inspectorStart).toBeGreaterThan(-1)
   const inspectorBody = source.slice(
     inspectorStart,
     source.indexOf('/>', inspectorStart),

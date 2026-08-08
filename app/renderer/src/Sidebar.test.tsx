@@ -85,6 +85,7 @@ function renderRow(
     sessionId: SessionId,
     anchor: { top: number; left: number },
   ) => void,
+  modelForSession?: (id: SessionId) => string | null,
 ): string {
   return renderToStaticMarkup(
     <SidebarRowItem
@@ -94,6 +95,7 @@ function renderRow(
       onRestore={noop}
       onOpenHistory={noop}
       onOpenRowActions={onOpenRowActions}
+      modelForSession={modelForSession}
     />,
   )
 }
@@ -192,6 +194,35 @@ test('CC-2: registry-row recency derives from lastMessageSentAt (createdAt fallb
     }),
   )
   expect(neverSent).toContain('<span class="shrink-0">3d</span>')
+})
+
+/**
+ * The `time · model` subtitle. `modelForSession` is asked for the LIVE model
+ * (App reads the re-broadcast run-controls seam, not the spawn-frozen
+ * diagnostics snapshot), and only a row with an `appSessionId` can be asked at
+ * all — a history row has no session to resolve.
+ */
+test('the subtitle shortens the resolved model, and asks only for rows that have a session', () => {
+  const asked: (SessionId | null)[] = []
+  const model = (id: SessionId) => {
+    asked.push(id)
+    return 'gpt-5.6-terra'
+  }
+
+  const live = renderRow(registryRow('a', { displayLabel: 'Alpha' }), undefined, model)
+  expect(live).toContain('<span class="truncate">terra</span>')
+  expect(asked).toEqual(['a'])
+
+  // A history row carries no appSessionId, so the resolver is never called and
+  // the subtitle is recency alone — never a borrowed model from another row.
+  asked.length = 0
+  const history = renderRow(historyRow('h'), undefined, model)
+  expect(history).not.toContain('terra')
+  expect(asked).toEqual([])
+
+  // An unknown model is omitted rather than printed as a placeholder.
+  const unknown = renderRow(registryRow('c'), undefined, () => null)
+  expect(unknown).not.toContain('class="truncate"')
 })
 
 test('every registry row in a group gets its own action kebab (target-session-bound)', () => {
