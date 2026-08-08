@@ -34,11 +34,34 @@ declared metadata table. Model-supplied prototype-chain names such as
 of throwing in transcript and agent-chrome tone rendering.
 
 Evidence: `agentIdentity.test.ts` (11 pass / 45 assertions), both app
-typechecks, and renderer build passed. The full app suite is currently blocked
-by the unrelated, reproducible non-hermetic `roundtrip.probe.test.ts`: its
-real sidecar inherits the live `CLAUDE_CONFIG_DIR` and replays the active
-session, violating its own expected-empty-events assertion. The probe needs an
-isolated config home; it was not changed in this focused fix.
+typechecks, and renderer build passed. The contemporaneous non-hermetic
+`roundtrip.probe.test.ts` failure was subsequently fixed in `d816ed8`.
+
+#### 2026-08-08 — isolated engine and app waves (`f697c60`, `d816ed8`)
+
+Committed thirteen additional confirmed local repairs:
+
+1. Codex status observation preserves the live cap state instead of replacing
+   the in-memory account pool.
+2. A foreground deferred-continuation claim that is unavailable re-arms polling.
+3. Background-continuation setup shows the actual installer failure.
+4. Non-macOS launch-agent status and uninstall paths do not call `getuid`.
+5. Task assignment notifications use the real team mailbox.
+6. Idle HTTP streams no longer call `body.cancel()` after locking the reader.
+7. Context usage includes cached tokens while retaining the raw-window denominator.
+8. The real-sidecar round-trip probe isolates its config home from the active session.
+9. A twice-refused queued prompt clears its retry bookkeeping.
+10. Filtered sidebar activity retains a workspace whose hidden rows are newer.
+11. The supervisor drops decoded non-object frames before reading `kind`.
+12. Untracked lifecycle frames preserve goal-memory state identity.
+13. Disabled session actions expose their label and reason to assistive technology.
+
+Evidence: focused engine tests (156 pass), focused desktop tests (301 pass),
+both app typechecks, renderer build, and `bun run build:dev:full` passed.
+The full app suite currently fails in the clean, reproducible
+`spawnConfig.probe.test.ts` sibling-sidecar liveness probe, which times out
+before these owner files are involved. It was not changed in this batch.
+`bun run --cwd app test:hardening` remains GUI-gated and was not run.
 
 **Agreed scope for the fix session: everything that survived verification, except
 LOW — filtered on verdict and fix-safety, not on the severity label.**
