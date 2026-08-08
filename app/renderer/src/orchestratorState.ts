@@ -115,10 +115,19 @@ export function orchestratorWorkerState(
  * needs nobody.
  */
 export function deriveWorkerOwner(worker: AgentModeWorkerItem): WorkerOwner {
-  if (worker.handoffStatus === 'blocked') return 'orchestrator'
-  const state = orchestratorWorkerState(worker)
-  if (state === 'result-ready' || state === 'attention') return 'orchestrator'
-  return 'none'
+  return ownerForState(orchestratorWorkerState(worker))
+}
+
+/**
+ * The owner axis reads purely off the lifecycle state now that no worker can be
+ * user-owned, which lets every caller derive the state once and branch on it.
+ * `waiting` is the blocked handoff; the other two are a result the assistant has
+ * not synthesised and a worker that died on it.
+ */
+function ownerForState(state: AgentStateKey): WorkerOwner {
+  return state === 'waiting' || state === 'result-ready' || state === 'attention'
+    ? 'orchestrator'
+    : 'none'
 }
 
 export type OrchestratorWorkerSummary = {
@@ -145,14 +154,15 @@ export function summarizeOrchestratorWorkers(
     orchestrator: 0,
     done: 0,
   }
+  // One derivation per worker: with the user bucket gone, the owner axis is a
+  // function of the state alone, so asking `deriveWorkerOwner` first (which
+  // derives the state internally) and then deriving it again was pure rework.
   for (const worker of workers) {
-    if (deriveWorkerOwner(worker) === 'orchestrator') summary.orchestrator += 1
-    else {
-      const state = orchestratorWorkerState(worker)
-      if (state === 'running') summary.working += 1
-      else if (state === 'background') summary.background += 1
-      else summary.done += 1
-    }
+    const state = orchestratorWorkerState(worker)
+    if (ownerForState(state) === 'orchestrator') summary.orchestrator += 1
+    else if (state === 'running') summary.working += 1
+    else if (state === 'background') summary.background += 1
+    else summary.done += 1
   }
   return summary
 }
@@ -181,11 +191,15 @@ export function orchestratorPill(
 
 /**
  * News priority for the roster one-liner (the "whisper" model): a failure (2)
- * outranks a ready result (1). Working / needs-input / reviewed carry no news (0)
- * — they stay a neutral count.
+ * outranks a ready result (1). Working / waiting / reviewed carry no news (0) —
+ * they stay a neutral count.
  */
 export function workerEventPriority(worker: AgentModeWorkerItem): number {
-  const state = orchestratorWorkerState(worker)
+  return priorityForState(orchestratorWorkerState(worker))
+}
+
+/** Its state-only half, so a caller holding the state need not re-derive it. */
+function priorityForState(state: AgentStateKey): number {
   if (state === 'attention') return 2
   if (state === 'result-ready') return 1
   return 0
@@ -244,11 +258,11 @@ export function selectOrchestratorRosterLine(
   let done = 0
   let news = 0
   for (const worker of workers) {
-    if (workerEventPriority(worker) > 0) {
+    const state = orchestratorWorkerState(worker)
+    if (priorityForState(state) > 0) {
       news += 1
       continue
     }
-    const state = orchestratorWorkerState(worker)
     if (state === 'running') working += 1
     else if (state === 'background') background += 1
     else if (state === 'waiting') waiting += 1
@@ -259,7 +273,10 @@ export function selectOrchestratorRosterLine(
   // Its own count, not folded into `working`: a background worker keeps going
   // without the turn, which is the distinction the roster previously hid.
   if (background > 0) tail.push({ text: `${background} in background`, tone: 'working' })
-  if (waiting > 0) tail.push({ text: `${waiting} needs input`, tone: 'waiting' })
+  // Same words the Workers tab's counts strip uses for the same state. "N needs
+  // input" read as an unattributed ask on the surface closest to the composer,
+  // which is the reading this whole state exists to avoid.
+  if (waiting > 0) tail.push({ text: `${waiting} on the assistant`, tone: 'waiting' })
   if (done > 0) tail.push({ text: `${done} done`, tone: 'done' })
   // Every news-bearing worker beyond the promoted lead stays visible as a count.
   if (news > 1) tail.push({ text: `+${news - 1} more`, tone: 'done' })

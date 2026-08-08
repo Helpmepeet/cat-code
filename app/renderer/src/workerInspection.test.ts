@@ -123,6 +123,8 @@ test('the compressed state word covers every AgentStateKey and stays lowercase',
   expect(agentTranscriptStateWord('completed')).toBe('done')
   expect(agentTranscriptStateWord('reviewed')).toBe('done')
   expect(agentTranscriptStateWord('result-ready')).toBe('done')
-  expect(agentTranscriptStateWord('waiting')).toBe('needs input')
+  // Not "needs input": the compressed word must not read as an ask either, since
+  // a blocked worker's handoff is owed by the assistant, not by the reader.
+  expect(agentTranscriptStateWord('waiting')).toBe('waiting')
   expect(agentTranscriptStateWord('background')).toBe('running')
 })

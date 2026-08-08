@@ -295,7 +295,7 @@ export function TasksDialog({
             The task-list chords are only advertised where they do something. */}
         <div className="flex gap-3.5 border-t border-shell-seam px-4 py-2 font-mono text-[10.5px] text-text-subtle">
           {selectedWorker ? (
-            <span>read only, the orchestrator relays this worker&apos;s outcome</span>
+            <span>read only, the assistant relays this worker&apos;s outcome</span>
           ) : tab === 'leases' ? null : tab === 'workers' ? (
             <span>click a worker to inspect it</span>
           ) : (
@@ -369,8 +369,8 @@ function DialogTabButton({
 /**
  * Workers tab — the role-grouped roster (prototype `OrchestratorMode.jsx:786-800`)
  * over the REAL `agent-mode.snapshot` workers. The counts strip above it uses the
- * two-axis summary (`summarizeOrchestratorWorkers`), so a worker blocked under an
- * active orchestrator counts as orchestrator-owned and never alarms the user.
+ * two-axis summary (`summarizeOrchestratorWorkers`), so a blocked worker counts as
+ * assistant-owned and never alarms the user.
  */
 export function WorkerRosterPanel({
   workers,

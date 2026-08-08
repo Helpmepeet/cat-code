@@ -266,8 +266,11 @@ export function agentStateMeta(state: AgentStateKey): AgentStateMeta {
  *
  * A row in a list has no room for "Result ready" or "In background", and the
  * distinctions those labels draw are not the ones a scanning reader needs: every
- * settled outcome reads "done", every in-flight one "running", and both handoff
- * states "needs input". The full `agentStateMeta().label` stays the vocabulary
+ * settled outcome reads "done" and every in-flight one "running". The two handoff
+ * states stay APART here, though, because they differ in who owes the next move:
+ * `waiting` is on the assistant, `needs-you` is on the reader. Compressing them
+ * to one word is what let a blocked subagent read as an ask on the user.
+ * The full `agentStateMeta().label` stays the vocabulary
  * for a standalone state chip; this is only the crowded case. Tone still comes
  * from `agentStateMeta`, so nothing about the colour vocabulary forks here.
  */
@@ -278,7 +281,7 @@ export function agentTranscriptStateWord(state: AgentStateKey): string {
     case 'resumed':
       return 'running'
     case 'waiting':
-      return 'needs input'
+      return 'waiting'
     case 'needs-you':
       return 'needs you'
     case 'completed':

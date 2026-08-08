@@ -170,7 +170,7 @@ test('roster line: at rest it names nobody and tallies the swarm honestly', () =
   expect(line.anyWorking).toBe(true)
   expect(line.tail).toEqual([
     { text: '2 working', tone: 'working' },
-    { text: '1 needs input', tone: 'waiting' },
+    { text: '1 on the assistant', tone: 'waiting' },
     { text: '1 done', tone: 'done' },
   ])
 })
@@ -200,7 +200,7 @@ test('roster line: a quiet-but-stalled swarm still reports its blocked workers, 
   ])
   expect(line.lead).toBeNull()
   expect(line.anyWorking).toBe(false)
-  expect(line.tail).toEqual([{ text: '2 needs input', tone: 'waiting' }])
+  expect(line.tail).toEqual([{ text: '2 on the assistant', tone: 'waiting' }])
 })
 
 test('roster line: an empty swarm has no lead and no counts', () => {
