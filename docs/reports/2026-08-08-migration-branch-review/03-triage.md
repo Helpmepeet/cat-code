@@ -2,10 +2,29 @@
 
 ## Decision (2026-08-08) — start here next session
 
-**No fixes were applied. This is a review-and-triage artifact only.** One thing
-was changed outside the repo: the operator ran `chmod 700` on both vault
-directories and `chmod 600` on the seven token files. Verified: zero group- or
-world-readable JSON remains in `~/claude-vault` or `~/codex-vault`.
+**At the time of this decision, no repo fixes had been applied.** One thing was
+changed outside the repo: the operator ran `chmod 700` on both vault directories
+and `chmod 600` on the seven token files. Verified: zero group- or world-readable
+JSON remains in `~/claude-vault` or `~/codex-vault`.
+
+### Remediation log
+
+#### 2026-08-08 — first safe stabilization wave (`b8d9c6e`)
+
+Committed six confirmed, verified-safe findings from Group B:
+
+1. `run-hardening-smoke.ts` now fails if Electron's `spawnSync` reports an
+   error, including `ETIMEDOUT`.
+2. `.gitignore` now anchors `/cli` and `/cli-dev`, so `src/cli/**` is not ignored.
+3. `liveCount()` excludes terminal supervisor tombstones from the live-session cap.
+4. An empty tag query no longer writes the first matching tag.
+5. `primeCodexEvents` closes its source iterator after an initial
+   `response.failed`, releasing the queued WebSocket turn.
+6. `AskQuestionFlow` ignores key events from `contentEditable` composer targets.
+
+Evidence: `bun test app/` (2,802 pass), both app typechecks, renderer build,
+the focused Codex adapter suite (70 pass), and `bun run build:dev:full` all
+passed. `bun run --cwd app test:hardening` remains GUI-gated and was not run.
 
 **Agreed scope for the fix session: everything that survived verification, except
 LOW — filtered on verdict and fix-safety, not on the severity label.**
