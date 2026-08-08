@@ -656,7 +656,7 @@ export function LeaseRosterPanel({
   nowMs?: number
 }) {
   const groups = selectLeaseGroups(snapshot, workers, nowMs ?? Date.now())
-  const note = selectLeaseConcentrationNote(snapshot, groups)
+  const note = selectLeaseConcentrationNote(snapshot?.strategy ?? null, groups)
 
   return (
     <div className="pb-2">
@@ -689,7 +689,7 @@ function LeaseAccountBlock({ group }: { group: LeaseAccountGroup }) {
   return (
     <div className="px-3.5 pb-0.5 pt-3">
       <div className="border-l border-shell-seam pl-3">
-        <div className="-ml-3 flex items-baseline gap-2 pb-1 pl-3">
+        <div className="flex items-baseline gap-2 pb-1">
           {group.isStranded ? (
             <span
               aria-hidden="true"
@@ -698,7 +698,7 @@ function LeaseAccountBlock({ group }: { group: LeaseAccountGroup }) {
           ) : null}
           <span
             className={
-              'truncate font-mono text-[12.5px] ' +
+              'min-w-0 truncate font-mono text-[12.5px] ' +
               (group.isStranded
                 ? 'text-text-muted'
                 : 'font-semibold text-text-primary')
@@ -728,9 +728,6 @@ function LeaseAgentRowView({ agent }: { agent: LeaseAgentRow }) {
             <span className="shrink-0 text-[12.5px] font-medium text-text-primary">
               {agent.name}
             </span>
-          ) : null}
-          {agent.isMain ? (
-            <span className="shrink-0 text-[11px] text-text-subtle">main</span>
           ) : null}
           {agent.task ? (
             <span className="min-w-0 truncate text-[11.5px] text-text-subtle">

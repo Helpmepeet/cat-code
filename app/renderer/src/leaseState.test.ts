@@ -200,13 +200,87 @@ test('no account id ever reaches display text', () => {
   })
   const [group] = selectLeaseGroups(snap, [], 0)
   const agent = group?.agents[0]
-  const visible = [group?.label, agent?.name, agent?.task, agent?.note?.text]
+  // `detail` is included: CLAUDE.md §7 counts a `title` as a text surface too.
+  const visible = [
+    group?.label,
+    agent?.name,
+    agent?.task,
+    agent?.note?.text,
+    agent?.note?.detail,
+  ]
   for (const text of visible) {
     expect(text ?? '').not.toContain(rawId)
   }
   expect(agent?.name).toBe('Unnamed worker')
-  // The engine's own text survives for the hover detail, and only there.
-  expect(agent?.note?.detail).toContain(rawId)
+  // The reason itself survives redaction, which is the point of keeping it.
+  expect(agent?.note?.detail).toBe('Codex account is capped')
+})
+
+test('an account with no alias heads its group with a short id, not a 36-char one', () => {
+  // The pool's alias is optional, set only by an explicit rename, so this is the
+  // ORDINARY case and it is the panel's most prominent text.
+  const rawId = 'ca889574-256c-4f04-8d5f-f80004f1a8e1'
+  const snap = snapshot({
+    owners: [owner({ accountId: rawId, accountAlias: null })],
+  })
+  const [group] = selectLeaseGroups(snap, [], 0)
+  expect(group?.label).toBe('ca889574')
+  expect(group?.label).not.toBe(rawId)
+
+  // Two un-aliased accounts must still read as two different groups.
+  const second = 'f0e1d2c3-1111-2222-3333-444455556666'
+  const both = selectLeaseGroups(
+    snapshot({
+      owners: [
+        owner({ ownerId: 'a', accountId: rawId, accountAlias: null }),
+        owner({ ownerId: 'b', accountId: second, accountAlias: null }),
+      ],
+    }),
+    [],
+    0,
+  )
+  expect(both).toHaveLength(2)
+  expect(both[0]?.label).not.toBe(both[1]?.label)
+})
+
+test('the main thread is named by the renderer, not by whichever engine path minted it', () => {
+  // The synthesised lease says 'main thread' and the registered one 'Main thread'
+  // (`codexAccountLeaseManager.ts:432` vs `src/query.ts:328`).
+  for (const engineLabel of ['main thread', 'Main thread', '']) {
+    const snap = snapshot({
+      owners: [
+        owner({ ownerId: 'main-thread', ownerType: 'main', ownerLabel: engineLabel }),
+      ],
+    })
+    const [group] = selectLeaseGroups(snap, [], 0)
+    expect(group?.agents[0]?.name).toBe('Main thread')
+    // The main thread has no delegated task, so nothing trails the name.
+    expect(group?.agents[0]?.task).toBeNull()
+  }
+})
+
+test('an empty engine label never yields a row with no identity at all', () => {
+  const snap = snapshot({
+    owners: [owner({ ownerId: 'agent_a', ownerLabel: '' })],
+  })
+  const [group] = selectLeaseGroups(snap, [], 0)
+  const agent = group?.agents[0]
+  expect(agent?.task).toBeNull()
+  expect(agent?.name).toBe('Unnamed worker')
+})
+
+test('a released lease renders no row and is not counted', () => {
+  // Unreachable today (`releaseCodexLease` deletes the entry), but the union still
+  // carries the state, so the panel has to say what it means rather than assume.
+  const snap = snapshot({
+    owners: [
+      owner({ ownerId: 'a', state: 'active' }),
+      owner({ ownerId: 'b', state: 'released' }),
+    ],
+  })
+  const groups = selectLeaseGroups(snap, [], 0)
+  expect(groups.flatMap(group => group.agents)).toHaveLength(1)
+  expect(selectLeaseAgentCount(snap)).toBe(1)
 })
 
 test('engine selection prose never renders as body text', () => {
@@ -239,13 +313,13 @@ test('the concentration note fires only when a spread session did not spread', (
     })
 
   const four = oneAccount(4)
-  expect(selectLeaseConcentrationNote(four, selectLeaseGroups(four, [], 0))).toBe(
+  expect(selectLeaseConcentrationNote(four.strategy, selectLeaseGroups(four, [], 0))).toBe(
     'All 4 agents landed on one account.',
   )
 
   // One agent on one account is not a failure to spread.
   const one = oneAccount(1)
-  expect(selectLeaseConcentrationNote(one, selectLeaseGroups(one, [], 0))).toBeNull()
+  expect(selectLeaseConcentrationNote(one.strategy, selectLeaseGroups(one, [], 0))).toBeNull()
 
   // follow-main is SUPPOSED to pile up, so saying so would be noise.
   const followMain = snapshot({
@@ -253,7 +327,7 @@ test('the concentration note fires only when a spread session did not spread', (
     owners: [owner({ ownerId: 'a' }), owner({ ownerId: 'b' })],
   })
   expect(
-    selectLeaseConcentrationNote(followMain, selectLeaseGroups(followMain, [], 0)),
+    selectLeaseConcentrationNote(followMain.strategy, selectLeaseGroups(followMain, [], 0)),
   ).toBeNull()
 
   // Genuinely spread across two accounts: nothing surprising to report.
@@ -263,7 +337,22 @@ test('the concentration note fires only when a spread session did not spread', (
       owner({ ownerId: 'b', accountId: 'acct-2' }),
     ],
   })
-  expect(selectLeaseConcentrationNote(spread, selectLeaseGroups(spread, [], 0))).toBeNull()
+  expect(selectLeaseConcentrationNote(spread.strategy, selectLeaseGroups(spread, [], 0))).toBeNull()
+
+  // With an agent stranded alongside, "All N agents" would contradict the tab
+  // count on the same screen, so it stays silent rather than print a false total.
+  const withStranded = snapshot({
+    owners: [
+      owner({ ownerId: 'a' }),
+      owner({ ownerId: 'b' }),
+      owner({ ownerId: 'c', state: 'failed' }),
+    ],
+  })
+  const strandedGroups = selectLeaseGroups(withStranded, [], 0)
+  expect(selectLeaseAgentCount(withStranded)).toBe(3)
+  expect(
+    selectLeaseConcentrationNote(withStranded.strategy, strandedGroups),
+  ).toBeNull()
 })
 
 test('held duration reads as a duration, not a relative time', () => {
@@ -301,7 +390,7 @@ test('no user-visible account string contains an em dash or engine vocabulary', 
     expect((text ?? '').toLowerCase()).not.toContain('lease')
   }
   expect(
-    selectLeaseConcentrationNote(snap, groups) ?? '',
+    selectLeaseConcentrationNote(snap.strategy, groups) ?? '',
   ).not.toContain('—')
   expect(leaseHeldLabel(0, 0)).not.toContain('—')
 })

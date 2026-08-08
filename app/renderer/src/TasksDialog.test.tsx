@@ -214,8 +214,14 @@ test('the dialog offers Tasks, Workers and Accounts tabs with real counts', () =
   // "Leases" is the engine's noun and the operator rejected it on screen.
   expect(html).toContain('Accounts')
   expect(html).not.toContain('Leases')
-  // Counts: 1 task, 2 workers, 1 agent holding an account.
-  expect(html).toContain('>2<')
+  // Counts read off their OWN chip, not anywhere in the document: a bare
+  // `toContain('>2<')` was satisfied by the Workers chip and asserted nothing
+  // about the Accounts count.
+  const chip = (label: string) =>
+    html.match(new RegExp(`${label}<span[^>]*>(\\d+)</span>`))?.[1]
+  expect(chip('Tasks')).toBe('1')
+  expect(chip('Workers')).toBe('2')
+  expect(chip('Accounts')).toBe('1')
 })
 
 test('the Workers panel groups by role, shows normalized types, and keeps lifecycle compact', () => {
@@ -469,7 +475,9 @@ test('the Accounts panel groups agents under the account each one holds', () => 
   // Both accounts head their own group, each with its own count.
   expect(html).toContain('work-laptop')
   expect(html).toContain('aurora')
-  expect(html).toContain('1 agent')
+  // `'1 agents'.includes('1 agent')` is true, so the closing bracket is what
+  // actually pins the singular branch.
+  expect(html).toContain('1 agent<')
   // The worker's real name leads its row; its task text follows.
   expect(html).toContain('Hopper')
   expect(html).toContain('audit the auth path')
@@ -545,6 +553,49 @@ test('no user-visible string on the Accounts panel says "lease"', () => {
   // Class names are not user-visible text; the rendered text nodes are.
   const text = html.replace(/<[^>]*>/g, ' ')
   expect(text.toLowerCase()).not.toContain('lease')
+})
+
+test('the hover detail is a text surface too, so no account id survives in it', () => {
+  const rawId = 'ca889574-256c-4f04-8d5f-f80004f1a8e1'
+  const html = renderToStaticMarkup(
+    <LeaseRosterPanel
+      nowMs={0}
+      snapshot={{
+        strategy: 'spread',
+        owners: [
+          leaseOwnerFixture({
+            failoverCount: 1,
+            selectionReason: `failover from ${rawId}: Codex account ${rawId} is capped`,
+            lastFailureReason: `Codex account ${rawId} is capped`,
+          }),
+        ],
+        accounts: [],
+      }}
+    />,
+  )
+  // Stripping tags would drop attributes by construction, so assert on the whole
+  // document: CLAUDE.md §7 lists `title` alongside JSX text.
+  expect(html).not.toContain(rawId)
+  expect(html).toContain('title="Codex account is capped"')
+})
+
+test('the rail brackets the group heading together with its rows', () => {
+  // The single-account state is the one the operator rejected: with the rail
+  // starting below the heading, a lone group read as a plain list under a label.
+  // SSR markup is the only evidence available here, so the nesting is asserted.
+  const html = renderToStaticMarkup(
+    <LeaseRosterPanel
+      nowMs={0}
+      snapshot={{ strategy: 'spread', owners: [leaseOwnerFixture()], accounts: [] }}
+    />,
+  )
+  const rail = html.match(/<div class="border-l [^"]*">([\s\S]*?)$/)?.[1] ?? ''
+  expect(rail).toContain('work-laptop')
+  expect(rail).toContain('audit the auth path')
+  // The count sits beside the account name, not pushed to the far edge. Asserted
+  // as adjacency rather than "no ml-auto anywhere": the concentration note above
+  // legitimately uses ml-auto, so the looser check would false-fail later.
+  expect(html).toMatch(/work-laptop<\/span><span[^>]*>1 agent</)
 })
 
 test('no P4-32b surface renders an em dash (operator rule)', () => {
