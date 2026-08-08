@@ -504,3 +504,73 @@ test('a turn frame before the ready frame is a no-op', () => {
     } as unknown as ServerFrame),
   ).toBe(state)
 })
+
+/* Slash-command replay identity (bug, 2026-08-08). This store dedupes replayed
+ * frames by uuid independently of the transcript projector, so the producer fix
+ * (src/utils/processUserInput/processSlashCommand.tsx `case 'local'` carrying
+ * the submitted uuid onto the persisted breadcrumb) has to hold here too. */
+
+function slashMessageFrame(
+  content: string,
+  uuid: string,
+  replay?: true,
+): ServerFrame {
+  return {
+    kind: 'event',
+    protocolVersion: 1,
+    sessionId: 'session-1',
+    ...(replay ? { replay: true } : {}),
+    event: {
+      type: 'message',
+      message: {
+        type: 'user',
+        message: { role: 'user', content },
+        parent_tool_use_id: null,
+        session_id: 'engine-session-1',
+        uuid,
+      },
+    },
+  } as ServerFrame
+}
+
+test('a replayed slash breadcrumb sharing the submit uuid is not logged twice', () => {
+  const uuid = '00000000-0000-4000-8000-0000000009f1'
+  let state = createRawMessageLogState()
+  state = reduceServerFrame(state, {
+    kind: 'ready',
+    protocolVersion: 1,
+    sessionId: 'session-1',
+    engineSessionId: 'engine-session-1',
+    payload: {
+      type: 'app.ready',
+      protocolVersion: 1,
+      inputEnabled: true,
+      activeTurn: false,
+      abort: { status: 'idle' },
+      goalSnapshot: null,
+      pendingPermissionRequests: [],
+    },
+  })
+  // Live echo, then the resumed sidecar's persisted breadcrumb for the same
+  // submission. Different CONTENT, same identity.
+  state = reduceServerFrame(state, slashMessageFrame('/compact', uuid))
+  state = reduceServerFrame(
+    state,
+    slashMessageFrame(
+      '<command-name>/compact</command-name>\n' +
+        '<command-message>compact</command-message>\n' +
+        '<command-args></command-args>',
+      uuid,
+      true,
+    ),
+  )
+
+  const log = selectRawMessageLog(state, 'session-1')
+  const held = log.messages.filter(
+    message =>
+      typeof message === 'object' &&
+      message !== null &&
+      (message as { uuid?: string }).uuid === uuid,
+  )
+  expect(held).toHaveLength(1)
+})
