@@ -175,7 +175,8 @@ from a grep.
 `00-review-contract.md` is the shared brief every scope worked from.
 `01-synthesis-and-verification.md` holds the cross-scope analysis: first-hand
 verification log, correction log, compounding chains, convergence map, fix plan.
-**`02-verification-results.md` is what survived adversarial re-testing — read it
+**`02-verification-results.md` is what survived adversarial re-testing.**
+**`03-triage.md` is what is actually worth fixing — start there.** Read them
 first.** `verification/V*.md` holds the per-scope verdicts.
 `A*` = desktop app · `S*` = engine · `X*` = cross-cutting.
 `S06-settings-reset-peer-session.md` and `S08-prompts-policy-peer-session.md`
