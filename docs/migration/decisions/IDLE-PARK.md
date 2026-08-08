@@ -145,6 +145,15 @@ red with `Expected: "parked" / Received: "exited"`.
 | Connection bar | danger tone + `This session stopped unexpectedly. Restart it to keep working.` | neutral, no sentence (`'parked'` is classified non-terminal, and both tone and copy derive from that one partition) |
 | Tab | danger dot + Restart button | `busy` tone, no restart affordance (`tabStatus.ts`; `busy` is the tone a preview pane already uses — same situation, opposite direction) |
 | Composer | read-only | editable; the submit is held (§3a) |
+| Composer rail (added 2026-08-09, CC-33) | model, effort, fast, account and mode faces ALL blank, and the context percentage moved as the donut lost its real window | the last values the engine reported, as read-only faces; the pickers disarm on the live seam alone (`composerRailModel.ts`) |
+
+> **§1a was written as if the chat view had three surfaces. It has four.** The
+> composer rail was the fourth, and it failed in the loudest way available: a
+> parked session claimed to be running on nothing at all. The cause is the same
+> shape as the rest of this section — one signal doing two jobs. Each per-session
+> snapshot nulls on the `lifecycle` frame, which correctly disarms every picker
+> and incorrectly erases every answer. Display and capability are now separate
+> reads, so losing the process disarms without blanking.
 
 **A second, earlier copy of the same defect** (found by review round 2, proved with
 a real sidecar): the sidecar closes its socket inside `cleanup()` *before*
@@ -244,6 +253,38 @@ The root fix is not done: **do not park what cannot come back.** It needs the
 `canResume` predicate the host already owns privately (`host.ts`) exposed to the
 park path, since neither the driver nor the sidecar can derive it. That is a host
 control-plane addition, so it is written down rather than slipped in.
+
+## 1d. OPEN — park is now invisible, and the run controls are silently inert
+
+Raised by the review of CC-33 (2026-08-09), and created BY it. Needs an operator
+ruling, so it is written down rather than decided.
+
+With the rail populated, a parked pane has no banner (§1a), a neutral tab, a live
+composer and a complete rail. Nothing on screen says the engine is gone — which
+is exactly what §1a asked for. But the model, effort, fast and account faces are
+now read-only `<span>`s at the same geometry, same colour and same position as
+the buttons they replace. A user who wants to switch model before typing clicks
+one and nothing happens, with no hover change and no cursor change to warn them.
+
+Before CC-33 the blank rail at least signalled that something was different. That
+signal was accidental and it cost the user every fact on the rail, so removing it
+was right; but it was the last one, and no deliberate signal replaced it.
+
+The options, none taken:
+
+- **(a) Do nothing.** The pickers come back on the next submit, which is the
+  §3a recovery path anyway. Cost: a dead click with no feedback, on a surface
+  where every neighbouring face is live.
+- **(b) Route the click to the composer.** The read-only faces call
+  `onFocusComposer`, a prop that already exists and is already passed. It lands
+  the user on the exact action that restores the session. Cost: a click that does
+  something other than what the face looks like it does.
+- **(c) Give the read-only faces a tooltip** naming the recovery ("Send a message
+  to resume this session"). §7-compliant and cheap, but nobody hovers before
+  clicking.
+
+Related: §1b's four descriptor-derived surfaces are NOT affected by CC-33 and
+still read a park as `crashed`. That fork is untouched and still open.
 
 ## 2. Chosen shape (recommended)
 
