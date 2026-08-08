@@ -75,29 +75,6 @@
   --tone-warn: #fbbf24;
   --tone-danger: #f87171;
   --tone-info: #60a5fa;
-
-  /*
-   * Reading measure for model-authored prose (`.md-prose`, see @layer
-   * components). Declared here, not inside the class, because it is a
-   * live-tuning knob like the transcript width and the text tones — one value,
-   * one place.
-   *
-   * MEASURED, not assumed. In DM Sans a `0` is 0.69em, so the usual `ch`-based
-   * rule of thumb runs ~40% wide here: 72ch measured 696px, still 103 characters
-   * a line. `em` is the honest unit for this font — it tracks the size and
-   * ignores the digit glyph. At 14px, 42em is 588px, which measured 87
-   * characters of ordinary sentence text.
-   *
-   * 87 is deliberately at the WIDE end of the comfortable band rather than the
-   * 65 an article would take: this content is dense with file paths,
-   * identifiers and inline code, and a narrow column breaks those badly. Being
-   * `em`, the same token gives the 13px reasoning bodies their own proportional
-   * width.
-   *
-   * It caps TEXT only. Code blocks, tables and images still get the full 1000px
-   * column; narrowing those was the problem the wide column was chosen to fix.
-   */
-  --prose-measure: 42em;
 }
 
 /*
@@ -397,53 +374,30 @@
    * EVERY length is `em`, so the same class serves the 14px assistant column and
    * the 13px reasoning bodies without a second scale.
    *
-   * The transcript column is 1000px wide by operator decision (see
-   * `TranscriptView.tsx` — tool rows, paths and diffs need it). Running text
-   * does not: at 14px, 936px is ~130 characters a line, well past the return
-   * sweep a reader can track. So the MEASURE is capped on text-level blocks
-   * only. Code blocks, tables and images keep the full column, which is the
-   * whole reason the column is wide. `--prose-measure` is here to be tuned live,
-   * like the width and the text tones were.
+   * NO READING MEASURE HERE, deliberately. Prose runs the full transcript
+   * column, ~139 characters a line at 1000px, which is past what a reader
+   * tracks comfortably. Two attempts to cap it were rejected on sight (operator,
+   * 2026-08-09): capped-and-left-aligned stranded the reclaimed space on one
+   * side, capped-and-centred indented the answer ~230px off every other row.
+   * Both failed for the same structural reason — this transcript's grammar is
+   * full-width rows (tool cards, reasoning, seams, notices), so a narrower text
+   * column can only read as a seam inside it, whatever its alignment.
+   *
+   * The tension is real and has no width that resolves it: at 6.73px per
+   * average character, a column wide enough for tool paths and diffs is already
+   * ~100 characters even at the prototype's own 740px. Fixing it properly means
+   * choosing which of the two to sacrifice, which is a product decision, not a
+   * stylesheet one. What IS fixed below is the other axis — the structure of a
+   * long answer, so it can be navigated even where a single line is long.
    *
    * The model's structure is not ours to trust: it may emit no headings, six
    * levels of them, loose lists, or a 400-word paragraph. So the values below
    * assume nothing about the shape and degrade in place — an unstyled level
    * inherits a sane one, and every level of nesting has a rule. */
-  /* A three-column grid, not a `max-width` on the text blocks. The first attempt
-   * capped each block's width and left it in normal flow, which keeps the
-   * container's LEFT edge and piles every pixel it reclaims on the right — the
-   * text ends up visibly off-centre in the window while the composer below it is
-   * centred (operator, 2026-08-09). Centre column = the measure, side columns
-   * absorb the slack symmetrically, and anything that needs the full width says
-   * so by spanning `1 / -1` instead of fighting a max-width. */
   .md-prose {
-    display: grid;
-    grid-template-columns: 1fr min(var(--prose-measure), 100%) 1fr;
     /* A bare path, URL or identifier is not rare in this content, and unbroken
      * it forces the whole column to scroll sideways. */
     overflow-wrap: break-word;
-  }
-
-  /* `2 / 3`, not a bare `2`. For an in-flow item the two are identical, but an
-   * ABSOLUTELY-positioned child (the response copy chip) resolves an `auto` end
-   * line to the grid container's padding edge — so a bare `2` left the chip
-   * anchored to the far right of the full column again, which is the bug this
-   * grid exists to fix. Naming both lines pins it to the measure. */
-  .md-prose > * {
-    grid-column: 2 / 3;
-  }
-
-  /* The breakout set. `div` is a fenced block (`CodeBlock`) or a table's scroll
-   * wrapper in the assistant renderer; bare `pre`/`table` is the same content in
-   * the reasoning bodies, which render Markdown without those component
-   * overrides. They keep the full column on purpose — the width exists for
-   * exactly this, and narrowing it was the problem it was widened to fix.
-   *
-   * Grid items do not collapse margins, so nothing in this set may carry a
-   * BOTTOM margin: it would add to the next block's top margin instead of
-   * merging with it. Both wrappers use `mt-3` alone for that reason. */
-  .md-prose > :is(div, pre, table) {
-    grid-column: 1 / -1;
   }
 
   /* Baseline rhythm between top-level blocks. Headings override it below. */
