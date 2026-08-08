@@ -66,12 +66,14 @@ import {
   summarizeOrchestratorWorkers,
   workerAccessibleLabel,
 } from './orchestratorState.js'
+import type { LeaseAccountGroup, LeaseAgentRow } from './leaseState.js'
 import {
-  LEASE_STATE_META,
   leaseAccountLabel,
   leaseHeldLabel,
-  selectActiveLeaseCount,
+  selectLeaseAgentCount,
+  selectLeaseConcentrationNote,
   selectLeaseForOwner,
+  selectLeaseGroups,
 } from './leaseState.js'
 import {
   groupWorkersByRole,
@@ -246,8 +248,8 @@ export function TasksDialog({
             />
             <DialogTabButton
               active={tab === 'leases'}
-              count={selectActiveLeaseCount(leases)}
-              label="Leases"
+              count={selectLeaseAgentCount(leases)}
+              label="Accounts"
               onSelect={() => setTab('leases')}
               tone="lease"
             />
@@ -265,7 +267,7 @@ export function TasksDialog({
               worker={selectedWorker}
             />
           ) : tab === 'leases' ? (
-            <LeaseRosterPanel nowMs={now} snapshot={leases} />
+            <LeaseRosterPanel nowMs={now} snapshot={leases} workers={workers} />
           ) : tab === 'workers' ? (
             <WorkerRosterPanel
               onSelect={setSelectedWorkerId}
@@ -299,9 +301,7 @@ export function TasksDialog({
         <div className="flex gap-3.5 border-t border-shell-seam px-4 py-2 font-mono text-[10.5px] text-text-subtle">
           {selectedWorker ? (
             <span>read only, the orchestrator relays this worker&apos;s outcome</span>
-          ) : tab === 'leases' ? (
-            <span>which account each agent is leasing in this session</span>
-          ) : tab === 'workers' ? (
+          ) : tab === 'leases' ? null : tab === 'workers' ? (
             <span>click a worker to inspect it</span>
           ) : (
             <>
@@ -635,129 +635,132 @@ function WorkerMetaLine({
 }
 
 /**
- * Leases tab (option **L1**) — the session-scoped Codex lease roster
- * (prototype `LeaseRoster`, `OrchestratorMode.jsx:643`) over the real
- * `lease.snapshot`. The prototype's failover/rotation EVENT strip is CUT: the
- * engine exposes current lease state, not an event history (§10).
+ * Accounts tab (lease option **L1**) — this session's Codex agents, grouped by the
+ * account each one holds (prototype `LeaseRoster`, `OrchestratorMode.jsx:643`, over
+ * the real `lease.snapshot`). The prototype's failover/rotation EVENT strip is CUT:
+ * the engine exposes current lease state, not an event history (§10).
+ *
+ * Grouped by account rather than listed flat because the question the panel answers
+ * is whether a `spread` session actually spread; the engine's own per-account
+ * rollup is deliberately not the source (`selectLeaseGroups`). The word "lease" is
+ * engine vocabulary and appears nowhere the user can read it.
  */
 export function LeaseRosterPanel({
   snapshot,
+  workers = [],
   nowMs,
 }: {
   snapshot: LeaseSnapshot | null
+  /** The orchestrator roster, joined on `ownerId === agentId` for real worker names. */
+  workers?: readonly AgentModeWorkerItem[]
   nowMs?: number
 }) {
-  const owners = snapshot?.owners ?? []
-  const accounts = snapshot?.accounts ?? []
+  const groups = selectLeaseGroups(snapshot, workers, nowMs ?? Date.now())
+  const note = selectLeaseConcentrationNote(snapshot, groups)
 
   return (
     <div className="pb-2">
-      <div className="border-b border-shell-seam px-3 pb-3 pt-2.5 text-[11px] leading-relaxed text-text-muted">
-        Subagent strategy this session:{' '}
-        <span className="font-mono font-semibold text-teal-300">
+      <div className="flex items-baseline gap-2 border-b border-shell-seam px-3.5 py-2.5">
+        <span className="text-[11.5px] text-text-subtle">Strategy</span>
+        <span className="font-mono text-[11.5px] font-medium text-text-primary">
           {snapshot?.strategy ?? 'spread'}
         </span>
-        . Leases are not locks, so several agents can share one account.
+        {note ? <span className="ml-auto text-[11.5px] text-text-muted">{note}</span> : null}
       </div>
 
-      {accounts.length > 0 ? (
-        <div className="px-3 pb-1.5 pt-3">
-          <AgentSectionLabel tone="lease">
-            Accounts in use · {accounts.length}
-          </AgentSectionLabel>
-          <div className="mt-2 flex flex-col gap-1.5">
-            {accounts.map(account => (
-              <div className="flex items-center gap-2.5" key={account.accountId}>
-                <span className="w-24 shrink-0 truncate font-mono text-[11.5px] font-medium text-teal-300">
-                  {leaseAccountLabel(account)}
-                </span>
-                <span className="shrink-0 rounded bg-white/5 px-1.5 py-px font-mono text-[10px] text-text-muted">
-                  {account.leaseCount} {account.leaseCount === 1 ? 'lease' : 'leases'}
-                </span>
-                <span className="min-w-0 truncate text-[10.5px] text-text-subtle">
-                  {account.holders.join(', ')}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      <div className="px-3 pt-3">
-        <AgentSectionLabel>Owners · {owners.length}</AgentSectionLabel>
-      </div>
-      {owners.length === 0 ? (
-        <div className="px-3 py-3 text-[11.5px] italic text-text-subtle/70">
-          No active leases. Agents lease an account when they run.
+      {groups.length === 0 ? (
+        <div className="px-3.5 py-3 text-[11.5px] italic text-text-subtle/70">
+          No accounts in use. Agents take one when they run.
         </div>
       ) : (
-        owners.map(owner => (
-          <LeaseRow key={owner.leaseId} nowMs={nowMs} owner={owner} />
-        ))
+        groups.map(group => <LeaseAccountBlock group={group} key={group.key} />)
       )}
     </div>
   )
 }
 
-/** One owner→account lease row (prototype `LeaseRow`, `OrchestratorMode.jsx:614`). */
-function LeaseRow({ owner, nowMs }: { owner: LeaseOwnerRow; nowMs?: number }) {
-  const meta = LEASE_STATE_META[owner.state]
-  const isMain = owner.ownerType === 'main'
+/**
+ * One account and its agents. The rail brackets the heading AND the rows so a lone
+ * group still reads as a group: with the rail starting below the heading, a
+ * single-account session (the common case) looked like a plain list under a section
+ * label, and the panel's whole organising idea disappeared in exactly that state.
+ */
+function LeaseAccountBlock({ group }: { group: LeaseAccountGroup }) {
   return (
-    <div
-      className={
-        'flex items-center gap-2.5 px-3 py-2.5 ' +
-        (owner.state === 'released' ? 'opacity-55' : '')
-      }
-    >
-      <span
-        aria-hidden="true"
-        className={`inline-block h-[7px] w-[7px] shrink-0 rounded-full ${meta.dot}`}
-      />
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span
-            className={
-              'font-mono text-[12.5px] font-semibold ' +
-              (isMain ? 'text-text-primary' : 'text-purple-200')
-            }
-          >
-            {owner.ownerLabel}
-          </span>
-          <span
-            className={
-              'rounded px-1.5 py-px text-[8.5px] font-bold uppercase tracking-[0.05em] ' +
-              (isMain
-                ? 'bg-white/[0.06] text-text-muted'
-                : 'bg-purple-400/10 text-purple-400')
-            }
-          >
-            {isMain ? 'main' : 'subagent'}
-          </span>
-          {owner.failoverCount > 0 ? (
+    <div className="px-3.5 pb-0.5 pt-3">
+      <div className="border-l border-shell-seam pl-3">
+        <div className="-ml-3 flex items-baseline gap-2 pb-1 pl-3">
+          {group.isStranded ? (
             <span
-              className="rounded bg-tone-warn/[0.12] px-1.5 py-px text-[8.5px] font-bold uppercase tracking-[0.04em] text-tone-warn"
-              {...(owner.lastFailureReason ? { title: owner.lastFailureReason } : {})}
-            >
-              failed over ×{owner.failoverCount}
+              aria-hidden="true"
+              className="inline-block h-1.5 w-1.5 self-center shrink-0 rounded-full bg-tone-danger"
+            />
+          ) : null}
+          <span
+            className={
+              'truncate font-mono text-[12.5px] ' +
+              (group.isStranded
+                ? 'text-text-muted'
+                : 'font-semibold text-text-primary')
+            }
+          >
+            {group.label}
+          </span>
+          <span className="shrink-0 text-[11px] text-text-subtle">
+            {group.agents.length} {group.agents.length === 1 ? 'agent' : 'agents'}
+          </span>
+        </div>
+        {group.agents.map(agent => (
+          <LeaseAgentRowView agent={agent} key={agent.ownerId} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/** One agent under its account. The note is INSIDE the row, not a sibling of it. */
+function LeaseAgentRowView({ agent }: { agent: LeaseAgentRow }) {
+  return (
+    <div className="flex items-baseline gap-2.5 py-1.5">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-2">
+          {agent.name ? (
+            <span className="shrink-0 text-[12.5px] font-medium text-text-primary">
+              {agent.name}
+            </span>
+          ) : null}
+          {agent.isMain ? (
+            <span className="shrink-0 text-[11px] text-text-subtle">main</span>
+          ) : null}
+          {agent.task ? (
+            <span className="min-w-0 truncate text-[11.5px] text-text-subtle">
+              {agent.task}
             </span>
           ) : null}
         </div>
-        <div className="mt-0.5 truncate text-[10.5px] text-text-subtle">
-          {owner.selectionReason}
-        </div>
+        {agent.note ? (
+          <div
+            className={
+              'mt-0.5 flex items-center gap-1.5 text-[11px] ' +
+              (agent.note.tone === 'stranded' ? 'text-tone-danger' : 'text-text-subtle')
+            }
+            title={agent.note.detail}
+          >
+            {agent.note.tone === 'moved' ? (
+              <span
+                aria-hidden="true"
+                className="inline-block h-1 w-1 shrink-0 rounded-full bg-zinc-500"
+              />
+            ) : null}
+            {agent.note.text}
+          </div>
+        ) : null}
       </div>
-      <div className="flex shrink-0 flex-col items-end gap-0.5">
-        <span className="font-mono text-xs font-medium text-teal-300">
-          {leaseAccountLabel(owner)}
+      {agent.held ? (
+        <span className="shrink-0 font-mono text-[11px] text-text-subtle">
+          {agent.held}
         </span>
-        <span className={`font-mono text-[9.5px] ${meta.text}`}>
-          {owner.strategy} · {meta.label}
-          {owner.state === 'active'
-            ? ` · ${leaseHeldLabel(owner.createdAt, nowMs ?? Date.now())}`
-            : ''}
-        </span>
-      </div>
+      ) : null}
     </div>
   )
 }

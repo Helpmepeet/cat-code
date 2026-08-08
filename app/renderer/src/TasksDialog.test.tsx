@@ -197,7 +197,7 @@ function leaseOwnerFixture(over: Partial<LeaseOwnerRow> = {}): LeaseOwnerRow {
   }
 }
 
-test('the dialog offers Tasks, Workers and Leases tabs with real counts', () => {
+test('the dialog offers Tasks, Workers and Accounts tabs with real counts', () => {
   const html = renderToStaticMarkup(
     <TasksDialog
       agentMode={agentModeSnapshotFixture({
@@ -211,8 +211,10 @@ test('the dialog offers Tasks, Workers and Leases tabs with real counts', () => 
     />,
   )
   expect(html).toContain('Workers')
-  expect(html).toContain('Leases')
-  // Counts: 1 task, 2 workers, 1 active lease.
+  // "Leases" is the engine's noun and the operator rejected it on screen.
+  expect(html).toContain('Accounts')
+  expect(html).not.toContain('Leases')
+  // Counts: 1 task, 2 workers, 1 agent holding an account.
   expect(html).toContain('>2<')
 })
 
@@ -425,12 +427,12 @@ test('worker detail offers no focus/open-thread affordance (D1 waives WorkerFocu
   expect(html).not.toContain('<input')
 })
 
-test('the Leases panel renders strategy, the account rollup and owner rows', () => {
+test('the Accounts panel groups agents under the account each one holds', () => {
   const html = renderToStaticMarkup(
     <LeaseRosterPanel
       nowMs={90 * 60_000}
       snapshot={{
-        strategy: 'follow-main',
+        strategy: 'spread',
         owners: [
           leaseOwnerFixture({
             leaseId: 'main',
@@ -440,40 +442,109 @@ test('the Leases panel renders strategy, the account rollup and owner rows', () 
             strategy: 'follow-main',
             selectionReason: 'main lease pinned to pool activeIndex',
           }),
-          leaseOwnerFixture({ failoverCount: 1, lastFailureReason: 'usage cap' }),
+          leaseOwnerFixture({
+            ownerId: 'agent_a',
+            accountId: 'acct-2222',
+            accountAlias: 'aurora',
+            failoverCount: 1,
+            selectionReason: 'failover from acct-1111: Codex account acct-1111 is capped',
+            lastFailureReason: 'Codex account acct-1111 is capped',
+          }),
         ],
-        accounts: [
-          {
-            accountId: 'acct-1111',
-            accountAlias: 'work-laptop',
-            leaseCount: 2,
-            holders: ['Main thread', 'audit the auth path'],
-          },
+        accounts: [],
+      }}
+      workers={[
+        {
+          agentId: 'agent_a',
+          handle: 'Hopper',
+          role: 'general-purpose',
+          status: 'running',
+          description: 'audit the auth path',
+        },
+      ]}
+    />,
+  )
+  expect(html).toContain('Strategy')
+  expect(html).toContain('spread')
+  // Both accounts head their own group, each with its own count.
+  expect(html).toContain('work-laptop')
+  expect(html).toContain('aurora')
+  expect(html).toContain('1 agent')
+  // The worker's real name leads its row; its task text follows.
+  expect(html).toContain('Hopper')
+  expect(html).toContain('audit the auth path')
+  expect(html).toContain('Main thread')
+  expect(html).toContain('1h 30m')
+  expect(html).toContain('moved here from another account')
+  // The engine's own prose and ids stay out of the body text.
+  expect(html).not.toContain('main lease pinned to pool activeIndex')
+  expect(html).not.toContain('failover from')
+  expect(html).not.toContain('Owners')
+  expect(html).not.toContain('Accounts in use')
+  // The failover/rotation EVENT strip is CUT: the engine exposes no event history.
+  expect(html).not.toContain('rotation')
+})
+
+test('a spread session that landed on one account says so, and otherwise says nothing', () => {
+  const onOneAccount = (count: number) =>
+    renderToStaticMarkup(
+      <LeaseRosterPanel
+        nowMs={0}
+        snapshot={{
+          strategy: 'spread',
+          owners: Array.from({ length: count }, (_, index) =>
+            leaseOwnerFixture({ ownerId: `agent_${index}`, leaseId: `agent_${index}` }),
+          ),
+          accounts: [],
+        }}
+      />,
+    )
+  expect(onOneAccount(3)).toContain('All 3 agents landed on one account.')
+  expect(onOneAccount(1)).not.toContain('landed on one account')
+})
+
+test('an agent that could not get an account is stranded above the working ones', () => {
+  const html = renderToStaticMarkup(
+    <LeaseRosterPanel
+      nowMs={0}
+      snapshot={{
+        strategy: 'spread',
+        owners: [
+          leaseOwnerFixture({ ownerId: 'agent_ok', leaseId: 'agent_ok' }),
+          leaseOwnerFixture({
+            ownerId: 'agent_bad',
+            leaseId: 'agent_bad',
+            state: 'failed',
+            failoverCount: 2,
+            lastFailureReason: 'account is capped',
+          }),
         ],
+        accounts: [],
       }}
     />,
   )
-  expect(html).toContain('follow-main')
-  expect(html).toContain('Accounts in use')
-  expect(html).toContain('work-laptop')
-  expect(html).toContain('2 leases')
-  expect(html).toContain('Owners')
-  expect(html).toContain('Main thread')
-  expect(html).toContain('main lease pinned to pool activeIndex')
-  expect(html).toContain('subagent')
-  expect(html).toContain('failed over ×1')
-  expect(html).toContain('1h 30m')
-  // The failover/rotation EVENT strip is CUT: the engine exposes no event history.
-  expect(html).not.toContain('rotation')
-  expect(html).not.toContain('moved')
+  expect(html).toContain('No account')
+  expect(html).toContain('every account was capped or unavailable')
+  expect(html.indexOf('No account')).toBeLessThan(html.indexOf('work-laptop'))
 })
 
-test('the Leases panel empty state tells the user what makes a lease appear', () => {
+test('the Accounts panel empty state tells the user what makes an account appear', () => {
   const html = renderToStaticMarkup(<LeaseRosterPanel snapshot={null} />)
-  expect(html).toContain('No active leases')
-  expect(html).toContain('Agents lease an account when they run')
+  expect(html).toContain('No accounts in use')
+  expect(html).toContain('Agents take one when they run')
   // The default strategy is stated rather than left blank.
   expect(html).toContain('spread')
+})
+
+test('no user-visible string on the Accounts panel says "lease"', () => {
+  const html = renderToStaticMarkup(
+    <LeaseRosterPanel
+      snapshot={{ strategy: 'spread', owners: [leaseOwnerFixture()], accounts: [] }}
+    />,
+  )
+  // Class names are not user-visible text; the rendered text nodes are.
+  const text = html.replace(/<[^>]*>/g, ' ')
+  expect(text.toLowerCase()).not.toContain('lease')
 })
 
 test('no P4-32b surface renders an em dash (operator rule)', () => {
