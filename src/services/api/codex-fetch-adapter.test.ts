@@ -8,6 +8,7 @@ import {
 import {
   _hasStickyHttpFallbackForTest,
   _markStickyHttpFallbackForTest,
+  _primeCodexEventsForTest,
   _setStickyFallbackNowForTest,
   CodexAccountAuthError,
   CodexAccountCapError,
@@ -1833,6 +1834,66 @@ describe('codex-fetch-adapter', () => {
     expect(thrown).not.toBeInstanceOf(CodexAccountCapError)
     expect((thrown as Error).message).toContain('usage_limit_reached')
     expect((thrown as Error).message).toContain('usage limit reached')
+  })
+
+  test('primeCodexEvents returns a failed iterator before a queued turn can proceed', async () => {
+    let firstIteratorReturnCalls = 0
+    let releaseQueuedTurn: () => void = () => {}
+    const firstIteratorReturned = new Promise<void>(resolve => {
+      releaseQueuedTurn = resolve
+    })
+
+    const failedTurn: AsyncIterable<Record<string, unknown>> = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next() {
+            return {
+              done: false,
+              value: {
+                type: 'response.failed',
+                response: {
+                  error: {
+                    code: 'invalid_request_error',
+                    message: 'bad request',
+                  },
+                },
+              },
+            }
+          },
+          async return() {
+            firstIteratorReturnCalls += 1
+            releaseQueuedTurn()
+            return { done: true, value: undefined }
+          },
+        }
+      },
+    }
+    const queuedTurn: AsyncIterable<Record<string, unknown>> = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next() {
+            await firstIteratorReturned
+            return {
+              done: false,
+              value: completedWsResponse('resp_queued_turn'),
+            }
+          },
+        }
+      },
+    }
+
+    const queuedTurnPrime = _primeCodexEventsForTest(queuedTurn, undefined, 'websocket')
+
+    await expect(
+      _primeCodexEventsForTest(failedTurn, undefined, 'websocket'),
+    ).rejects.toThrow(/invalid_request_error.*bad request/)
+
+    expect(firstIteratorReturnCalls).toBe(1)
+    const primedQueuedTurn = await queuedTurnPrime
+    expect(await primedQueuedTurn[Symbol.asyncIterator]().next()).toEqual({
+      done: false,
+      value: completedWsResponse('resp_queued_turn'),
+    })
   })
 
   test('translateCodexStreamToAnthropic surfaces non-account response.failed instead of completing', async () => {

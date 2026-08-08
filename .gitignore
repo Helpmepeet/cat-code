@@ -1,7 +1,7 @@
 node_modules/
 dist/
-cli
-cli-dev
+/cli
+/cli-dev
 openclaw/
 .DS_Store
 .worktrees/

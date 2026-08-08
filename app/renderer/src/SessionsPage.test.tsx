@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { BulkBar, SessionsPage } from './SessionsPage.js'
@@ -30,6 +31,12 @@ function row(partial: Partial<MergedSessionRow> & { sessionId: string }): Merged
 }
 
 const noop = () => {}
+
+test('tag popover Enter applies only a value resolved from the query', () => {
+  const source = readFileSync(new URL('./SessionsPage.tsx', import.meta.url), 'utf8')
+  expect(source).toContain('if (resolved) apply(resolved)')
+  expect(source).not.toContain('else if (matches[0]) apply(matches[0])')
+})
 
 test('renders the header, count subtitle and real session titles', () => {
   const html = renderToStaticMarkup(

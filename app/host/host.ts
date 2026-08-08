@@ -737,7 +737,9 @@ export class Host implements HostApi {
   }
 
   private liveCount(): number {
-    return this.supervisor.listSessions().length
+    return this.supervisor
+      .listSessions()
+      .filter(session => !isTerminalStatus(session.status)).length
   }
 
   /* --------------------------------------------------------------------- *

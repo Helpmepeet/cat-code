@@ -639,6 +639,61 @@ test('createSession enforces the live-process bound (HC4 → session_limit)', as
   if (!result.ok) expect(result.error.code).toBe('session_limit')
 })
 
+test('HC4: terminal tombstones do not consume the live-session cap', async () => {
+  const { MAX_LIVE_SESSIONS } = await import('../shared/hostApi.js')
+
+  const createHarness = makeHost()
+  for (let i = 0; i < MAX_LIVE_SESSIONS - 1; i++) {
+    createHarness.supervisor.records.set(`live-${i}`, {
+      sessionId: `live-${i}`,
+      status: 'ready',
+      pid: 1000 + i,
+      socketPath: `/tmp/s${i}`,
+      cwd: createHarness.cwd,
+    })
+  }
+  createHarness.supervisor.records.set('dead-tombstone', {
+    sessionId: 'dead-tombstone',
+    status: 'failed',
+    pid: 2000,
+    socketPath: '/tmp/dead.sock',
+    cwd: createHarness.cwd,
+  })
+
+  const created = await createHarness.host.createSession({ cwd: createHarness.cwd })
+  expect(created.ok).toBe(true)
+
+  const restoreHarness = makeHost()
+  for (let i = 0; i < MAX_LIVE_SESSIONS - 1; i++) {
+    restoreHarness.supervisor.records.set(`live-${i}`, {
+      sessionId: `live-${i}`,
+      status: 'ready',
+      pid: 3000 + i,
+      socketPath: `/tmp/restore-${i}`,
+      cwd: restoreHarness.cwd,
+    })
+  }
+  const appSessionId = randomUUID()
+  writeTranscript(restoreHarness.storageDir, 'engine-parked')
+  await restoreHarness.registry.upsertOnSpawn({
+    appSessionId,
+    cwd: restoreHarness.cwd,
+  })
+  await restoreHarness.registry.fillEngineSessionId(appSessionId, 'engine-parked')
+  await restoreHarness.registry.markParked(appSessionId)
+  restoreHarness.supervisor.records.set(appSessionId, {
+    sessionId: appSessionId,
+    status: 'exited',
+    pid: 4000,
+    socketPath: '/tmp/parked.sock',
+    cwd: restoreHarness.cwd,
+  })
+
+  const restored = await restoreHarness.host.restoreSession(appSessionId)
+  expect(restored.ok).toBe(true)
+  if (restored.ok) expect(restored.value.appSessionId).toBe(appSessionId)
+})
+
 test('HC4: the live-process cap is independent of the registry row bound', async () => {
   // These were ONE constant until 2026-07-26, so raising the registry's
   // file-growth bound silently raised the fork-bomb cap. The row bound must be

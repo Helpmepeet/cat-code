@@ -1077,7 +1077,6 @@ function TagPopover({
               event.preventDefault()
               const resolved = resolveTagCommit(query, knownTags)
               if (resolved) apply(resolved)
-              else if (matches[0]) apply(matches[0])
             } else if (event.key === 'Escape') {
               event.preventDefault()
               restoreTriggerFocus()

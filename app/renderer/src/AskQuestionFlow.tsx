@@ -147,7 +147,13 @@ export function AskQuestionFlow({
       }
 
       // Never hijack keys typed into an unrelated field (e.g. the composer).
-      if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA') return
+      if (
+        target?.isContentEditable ||
+        target?.tagName === 'INPUT' ||
+        target?.tagName === 'TEXTAREA'
+      ) {
+        return
+      }
 
       if (key === 'Escape') {
         event.preventDefault()

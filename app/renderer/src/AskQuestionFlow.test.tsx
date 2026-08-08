@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { AskQuestionFlow } from './AskQuestionFlow.js'
@@ -40,11 +41,9 @@ const MULTI: AskQuestion[] = [
   },
 ]
 
-// `renderToStaticMarkup` never runs effects, so these tests cover MARKUP only —
-// the window keydown handler (and its `isActivePane` gate, which stops one
-// keypress from resolving every flow in a split workspace) is NOT exercised
-// here. The renderer suite is SSR-only by construction; closing that gap needs
-// operator sign-off for a DOM harness. Until then it is a GUI-verified surface.
+// `renderToStaticMarkup` never runs effects, so these tests cover MARKUP only.
+// The source pin below covers the contentEditable guard, but event dispatch
+// remains a GUI-verified surface until the renderer has a DOM harness.
 function render(questions: AskQuestion[], isActivePane = true) {
   return renderToStaticMarkup(
     <AskQuestionFlow
@@ -56,6 +55,11 @@ function render(questions: AskQuestion[], isActivePane = true) {
     />,
   )
 }
+
+test('the window key handler leaves contentEditable targets to their editor', () => {
+  const source = readFileSync(new URL('./AskQuestionFlow.tsx', import.meta.url), 'utf8')
+  expect(source).toContain('target?.isContentEditable')
+})
 
 test('renders the question, header chip, option rows with numbers + descriptions', () => {
   const html = render(SINGLE)
