@@ -117,6 +117,31 @@ test('starts the sidecar process in the configured session cwd', async () => {
   )
 })
 
+test('clears an inherited resume id when the session does not request a resume', async () => {
+  const socketDir = makeTempDir('catcode-supervisor-resume-')
+  const sessionCwd = makeTempDir('catcode-supervisor-cwd-')
+  const observedResumePath = join(socketDir, 'observed-resume.txt')
+  const script = [
+    "const { writeFileSync } = require('node:fs')",
+    "writeFileSync(process.argv[1], process.env.CATCODE_SIDECAR_RESUME_SESSION_ID ?? 'missing')",
+  ].join(';')
+  const supervisor = new SidecarSupervisor({
+    sidecarCommand: process.execPath,
+    sidecarArgs: ['-e', script, observedResumePath],
+    sidecarCwd: sessionCwd,
+    sidecarEnv: { CATCODE_SIDECAR_RESUME_SESSION_ID: 'inherited-resume-id' },
+    socketDir,
+  })
+  supervisors.push(supervisor)
+  supervisor.spawnSession('fresh-session')
+
+  await waitFor(
+    () => existsSync(observedResumePath),
+    'sidecar did not report its resume environment',
+  )
+  expect(readFileSync(observedResumePath, 'utf8')).toBe('')
+})
+
 test('rejects an oversized prompt before writing it and keeps the session usable', async () => {
   const socketDir = makeTempDir('catcode-supervisor-live-')
   const supervisor = new SidecarSupervisor({

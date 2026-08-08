@@ -265,7 +265,7 @@ export class SidecarSupervisor {
         ...(spawnCwd !== undefined ? { CATCODE_SIDECAR_CWD: spawnCwd } : {}),
         ...(config?.resumeEngineSessionId !== undefined
           ? { CATCODE_SIDECAR_RESUME_SESSION_ID: config.resumeEngineSessionId }
-          : {}),
+          : { CATCODE_SIDECAR_RESUME_SESSION_ID: '' }),
       },
     })
 
