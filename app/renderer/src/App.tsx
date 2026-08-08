@@ -2978,12 +2978,24 @@ export function App() {
          * re-broadcast on every model change (P4-24c). The diagnostics snapshot is
          * spawn-frozen, so on its own it kept printing the model a session started
          * with after the picker moved it — it stays only as the pre-snapshot
-         * fallback. */
-        modelForSession={id =>
-          selectRunControlsSnapshot(runControls, id)?.model.current ??
-          selectDiagnosticsSnapshot(diagnostics, id)?.mainLoopModelForSession ??
-          null
-        }
+         * fallback.
+         *
+         * `currentLabel` before `current`: the engine's own marketing name
+         * ("Opus 5", "GPT-5.6 Sol"), the same string the composer face and the
+         * picker row show, so a row and the chip above it never disagree. Only a
+         * model the engine has no name for (a custom model, a Foundry deployment
+         * id) falls back to the raw id. Operator ruling 2026-08-09: the row used
+         * to print the id's last hyphen segment, which reads as a bare "5" for
+         * every claude-* model. */
+        modelForSession={id => {
+          const live = selectRunControlsSnapshot(runControls, id)?.model
+          return (
+            live?.currentLabel ??
+            live?.current ??
+            selectDiagnosticsSnapshot(diagnostics, id)?.mainLoopModelForSession ??
+            null
+          )
+        }}
       />
 
       <div className="relative flex min-w-0 flex-1 flex-col">

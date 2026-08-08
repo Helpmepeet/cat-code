@@ -2132,8 +2132,12 @@ test('the model a session displays comes from the live run-controls seam', () =>
   const sidebarStart = source.indexOf('modelForSession={id =>')
   expect(sidebarStart).toBeGreaterThan(-1)
   const sidebarBody = source.slice(sidebarStart, sidebarStart + 400)
-  expect(sidebarBody).toContain(
-    'selectRunControlsSnapshot(runControls, id)?.model.current',
+  expect(sidebarBody).toContain('selectRunControlsSnapshot(runControls, id)?.model')
+  // The engine's display name first, the raw id only when it has none, and the
+  // frozen snapshot last.
+  expect(sidebarBody).toContain('live?.currentLabel ??')
+  expect(sidebarBody.indexOf('live?.currentLabel')).toBeLessThan(
+    sidebarBody.indexOf('mainLoopModelForSession'),
   )
 
   const inspectorStart = source.indexOf('<MetadataInspector')

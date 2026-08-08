@@ -202,16 +202,23 @@ test('CC-2: registry-row recency derives from lastMessageSentAt (createdAt fallb
  * diagnostics snapshot), and only a row with an `appSessionId` can be asked at
  * all — a history row has no session to resolve.
  */
-test('the subtitle shortens the resolved model, and asks only for rows that have a session', () => {
+test('the subtitle renders the model name verbatim, and asks only for rows that have a session', () => {
   const asked: (SessionId | null)[] = []
   const model = (id: SessionId) => {
     asked.push(id)
-    return 'gpt-5.6-terra'
+    return 'GPT-5.6 Sol'
   }
 
+  // Verbatim: a display name carries its own spaces and dots, and the row used
+  // to cut it at the last hyphen (leaving "5.6 Sol", and a bare "5" for Opus 5).
   const live = renderRow(registryRow('a', { displayLabel: 'Alpha' }), undefined, model)
-  expect(live).toContain('<span class="truncate">terra</span>')
+  expect(live).toContain('<span class="truncate">GPT-5.6 Sol</span>')
   expect(asked).toEqual(['a'])
+
+  // A model the engine has no marketing name for arrives as its raw id, and is
+  // shown as-is rather than trimmed to a meaningless fragment.
+  const raw = renderRow(registryRow('b'), undefined, () => 'claude-opus-5')
+  expect(raw).toContain('<span class="truncate">claude-opus-5</span>')
 
   // A history row carries no appSessionId, so the resolver is never called and
   // the subtitle is recency alone — never a borrowed model from another row.
