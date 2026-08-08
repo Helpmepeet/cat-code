@@ -51,6 +51,7 @@ function lease(over: Partial<CodexLease> = {}): CodexLease {
     createdAt: 1_000,
     updatedAt: 1_000,
     failoverCount: 0,
+    selectionKind: 'initial',
     selectionReason: 'spread selected least crowded healthy account',
     ...over,
   }
@@ -100,6 +101,78 @@ function localAgentTask(over: Partial<LocalAgentTaskState> = {}): TaskState {
 }
 
 describe('lease projection', () => {
+  test('the account a lease moved OFF is resolved to its alias here, or omitted', () => {
+    // Only this side can do it: `accountAliases()` reads the WHOLE pool, while the
+    // snapshot's `accounts` rollup carries just the accounts currently holding a
+    // lease — and an account an agent left has by definition lost its own.
+    const moved = lease({
+      ownerId: 'agent_worker',
+      leaseId: 'agent_worker',
+      accountId: 'acct-2222',
+      failoverCount: 1,
+      selectionKind: 'failover',
+      previousAccountId: 'acct-1111',
+    })
+    const projected = leaseSnapshot(
+      fakeReader({
+        leases: [moved],
+        // acct-1111 holds no lease any more, yet the pool still knows its alias.
+        accounts: [{ accountId: 'acct-2222', leaseCount: 1, holders: ['audit the auth path'] }],
+        aliases: { 'acct-1111': 'aurora', 'acct-2222': 'bluesky' },
+      }),
+      { agent_worker: localAgentTask({ agentId: 'agent_worker' }) },
+    )
+    expect(projected.owners[0]?.selectionKind).toBe('failover')
+    expect(projected.owners[0]?.movedFrom).toEqual({
+      accountId: 'acct-1111',
+      accountAlias: 'aurora',
+    })
+    // The rollup genuinely does not contain it, which is why the renderer cannot.
+    expect(projected.accounts.map(account => account.accountId)).toEqual(['acct-2222'])
+  })
+
+  test('movedFrom is omitted when the pool no longer knows that account', () => {
+    // /delete-account: the lease still remembers the id, the pool does not. Emitting
+    // a bare id here would put it back on screen, which is what this change removed.
+    const projected = leaseSnapshot(
+      fakeReader({
+        leases: [
+          lease({
+            ownerId: 'agent_worker',
+            leaseId: 'agent_worker',
+            selectionKind: 'repaired',
+            previousAccountId: 'acct-deleted',
+          }),
+        ],
+        aliases: { 'acct-1111': 'work-laptop' },
+      }),
+      { agent_worker: localAgentTask({ agentId: 'agent_worker' }) },
+    )
+    expect(projected.owners[0]?.movedFrom).toBeUndefined()
+    expect(JSON.stringify(projected)).not.toContain('acct-deleted')
+  })
+
+  test('an un-aliased source account crosses as a null alias, never as bare text', () => {
+    const projected = leaseSnapshot(
+      fakeReader({
+        leases: [
+          lease({
+            ownerId: 'agent_worker',
+            leaseId: 'agent_worker',
+            selectionKind: 'failover',
+            previousAccountId: 'acct-3333',
+          }),
+        ],
+        aliases: { 'acct-3333': null },
+      }),
+      { agent_worker: localAgentTask({ agentId: 'agent_worker' }) },
+    )
+    expect(projected.owners[0]?.movedFrom).toEqual({
+      accountId: 'acct-3333',
+      accountAlias: null,
+    })
+  })
+
   test('main lease leads, then the live workers that hold one', () => {
     const main = lease({
       leaseId: 'lease:main:acct-1111',

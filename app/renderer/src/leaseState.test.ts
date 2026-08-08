@@ -42,6 +42,7 @@ function owner(over: Partial<LeaseOwnerRow> = {}): LeaseOwnerRow {
     createdAt: 1_000,
     updatedAt: 1_000,
     failoverCount: 0,
+    selectionKind: 'initial',
     selectionReason: 'spread selected least crowded healthy account',
     ...over,
   }
@@ -193,6 +194,7 @@ test('no account id ever reaches display text', () => {
         // `claude.ts:1177` labels this lease with the raw agent id.
         ownerLabel: `Subagent ${rawId}`,
         failoverCount: 1,
+        selectionKind: 'failover',
         selectionReason: `failover from ${rawId}: Codex account ${rawId} is capped`,
         lastFailureReason: `Codex account ${rawId} is capped`,
       }),
@@ -290,6 +292,7 @@ test('engine selection prose never renders as body text', () => {
       owner({ ownerId: 'b', selectionReason: 'synthetic main lease from active pool account' }),
       owner({
         ownerId: 'c',
+        selectionKind: 'repaired',
         selectionReason: 'repaired from non-selectable account acct-9: spread selected least crowded healthy account',
       }),
     ],
@@ -375,7 +378,12 @@ test('no user-visible account string contains an em dash or engine vocabulary', 
   const snap = snapshot({
     owners: [
       owner({ ownerId: 'main-thread', ownerType: 'main', ownerLabel: 'Main thread' }),
-      owner({ ownerId: 'a', failoverCount: 1, selectionReason: 'failover from acct-9: capped' }),
+      owner({
+        ownerId: 'a',
+        failoverCount: 1,
+        selectionKind: 'failover',
+        selectionReason: 'failover from acct-9: capped',
+      }),
       owner({ ownerId: 'b', state: 'failed' }),
     ],
   })
@@ -393,4 +401,67 @@ test('no user-visible account string contains an em dash or engine vocabulary', 
     selectLeaseConcentrationNote(snap.strategy, groups) ?? '',
   ).not.toContain('—')
   expect(leaseHeldLabel(0, 0)).not.toContain('—')
+})
+
+test('a moved agent names the account it came from, when the sidecar could resolve one', () => {
+  const moved = (over: Partial<LeaseOwnerRow>) =>
+    selectLeaseGroups(snapshot({ owners: [owner(over)] }), [], 0)[0]?.agents[0]?.note?.text
+
+  // Resolved alias: the whole point of carrying `movedFrom` across the seam.
+  expect(
+    moved({
+      selectionKind: 'failover',
+      movedFrom: { accountId: 'acct-9', accountAlias: 'aurora' },
+    }),
+  ).toBe('moved here from aurora')
+  expect(
+    moved({
+      selectionKind: 'repaired',
+      movedFrom: { accountId: 'acct-9', accountAlias: 'aurora' },
+    }),
+  ).toBe('moved here, aurora could not be used')
+
+  // The sidecar omits `movedFrom` when the pool no longer knows that account (it
+  // was deleted). The wording goes anonymous rather than inventing a name.
+  expect(moved({ selectionKind: 'failover' })).toBe('moved here from another account')
+  expect(moved({ selectionKind: 'repaired' })).toBe(
+    'moved here, its account could not be used',
+  )
+
+  // An un-aliased source account is an id we must not print, so it reads anonymous.
+  expect(
+    moved({
+      selectionKind: 'failover',
+      movedFrom: { accountId: 'ca889574-256c-4f04-8d5f-f80004f1a8e1', accountAlias: null },
+    }),
+  ).toBe('moved here from another account')
+})
+
+test('the note branches on selectionKind, never on the reason prose', () => {
+  // The engine is free to reword `selectionReason`; a renderer that parsed it
+  // would silently stop noticing. Same prose, opposite outcomes.
+  const prose = 'failover from acct-9: Codex account acct-9 is capped'
+  const withKind = selectLeaseGroups(
+    snapshot({ owners: [owner({ selectionKind: 'failover', selectionReason: prose })] }),
+    [],
+    0,
+  )
+  expect(withKind[0]?.agents[0]?.note?.text).toBe('moved here from another account')
+
+  const withoutKind = selectLeaseGroups(
+    snapshot({ owners: [owner({ selectionKind: 'initial', selectionReason: prose })] }),
+    [],
+    0,
+  )
+  expect(withoutKind[0]?.agents[0]?.note).toBeNull()
+
+  // `/switch-account` is the user's own doing, so saying it back is noise.
+  const manual = selectLeaseGroups(
+    snapshot({
+      owners: [owner({ selectionKind: 'manual', movedFrom: { accountId: 'acct-9', accountAlias: 'aurora' } })],
+    }),
+    [],
+    0,
+  )
+  expect(manual[0]?.agents[0]?.note).toBeNull()
 })

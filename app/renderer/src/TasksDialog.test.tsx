@@ -192,6 +192,7 @@ function leaseOwnerFixture(over: Partial<LeaseOwnerRow> = {}): LeaseOwnerRow {
     createdAt: 0,
     updatedAt: 0,
     failoverCount: 0,
+    selectionKind: 'initial',
     selectionReason: 'spread selected least crowded healthy account',
     ...over,
   }
@@ -453,6 +454,7 @@ test('the Accounts panel groups agents under the account each one holds', () => 
             accountId: 'acct-2222',
             accountAlias: 'aurora',
             failoverCount: 1,
+            selectionKind: 'failover',
             selectionReason: 'failover from acct-1111: Codex account acct-1111 is capped',
             lastFailureReason: 'Codex account acct-1111 is capped',
           }),
@@ -565,6 +567,7 @@ test('the hover detail is a text surface too, so no account id survives in it', 
         owners: [
           leaseOwnerFixture({
             failoverCount: 1,
+            selectionKind: 'failover',
             selectionReason: `failover from ${rawId}: Codex account ${rawId} is capped`,
             lastFailureReason: `Codex account ${rawId} is capped`,
           }),

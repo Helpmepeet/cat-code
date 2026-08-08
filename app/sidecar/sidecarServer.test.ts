@@ -6398,6 +6398,7 @@ function fakeLeaseReader(over: Partial<LeaseReader> = {}): LeaseReader {
         createdAt: 0,
         updatedAt: 0,
         failoverCount: 0,
+        selectionKind: 'initial',
         selectionReason: 'main lease pinned to pool activeIndex',
       },
       strategy: 'spread',

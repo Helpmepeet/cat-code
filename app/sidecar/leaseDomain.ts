@@ -215,6 +215,20 @@ function toOwnerRow(
     createdAt: lease.createdAt,
     updatedAt: lease.updatedAt,
     failoverCount: lease.failoverCount,
+    selectionKind: lease.selectionKind,
+    // Resolved HERE because only this side can: `accountAliases()` reads the whole
+    // pool, while the snapshot's `accounts` rollup carries only accounts currently
+    // holding a lease — and the account an agent moved off has lost its own.
+    // Omitted when the id is unknown to the pool (a deleted account), which is
+    // exactly the case the renderer must not try to name.
+    ...(lease.previousAccountId && aliases.has(lease.previousAccountId)
+      ? {
+        movedFrom: {
+          accountId: lease.previousAccountId,
+          accountAlias: aliases.get(lease.previousAccountId) ?? null,
+        },
+      }
+      : {}),
     selectionReason: capReason(lease.selectionReason),
     ...(lease.lastFailureReason
       ? { lastFailureReason: capReason(lease.lastFailureReason) }

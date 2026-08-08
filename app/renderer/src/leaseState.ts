@@ -11,6 +11,7 @@
 import type {
   AgentModeWorkerItem,
   LeaseOwnerRow,
+  LeaseSelectionKind,
   LeaseSnapshot,
   LeaseState,
   LeaseStrategy,
@@ -124,11 +125,11 @@ export function leaseAccountLabel(row: {
  * ("spread selected least crowded healthy account", `:551`). The engine's own
  * text survives as `detail`, which the panel surfaces only on hover.
  *
- * The wording never names the account an agent came FROM: that account has lost
- * its lease, so it is usually absent from `LeaseSnapshot.accounts` (which lists
- * only accounts currently holding one, `protocol.ts:1343`) and its alias cannot
- * be resolved renderer-side. Naming it would require projecting the alias at the
- * sidecar.
+ * The account an agent moved FROM is named when `movedFrom` carries an alias. It
+ * cannot be derived here: that account has lost its lease, so it is absent from
+ * `LeaseSnapshot.accounts`, and only the sidecar can see the whole pool. When the
+ * sidecar could not resolve it either (a deleted account), the wording stays
+ * anonymous rather than inventing a name.
  */
 export type LeaseAgentNote = {
   text: string
@@ -169,6 +170,22 @@ const STRANDED_LABEL = 'No account'
 const NOTE_STRANDED = 'every account was capped or unavailable'
 const NOTE_MOVED = 'moved here from another account'
 const NOTE_REPAIRED = 'moved here, its account could not be used'
+
+/**
+ * The note text for a lease that moved. Names the account it came from when the
+ * sidecar could resolve one; falls back to the anonymous wording when it could
+ * not, which happens when that account has since been deleted from the pool.
+ */
+function movedNoteText(owner: LeaseOwnerRow): string {
+  const from = owner.movedFrom
+  const name = from?.accountAlias ?? null
+  if (!name) {
+    return owner.selectionKind === 'repaired' ? NOTE_REPAIRED : NOTE_MOVED
+  }
+  return owner.selectionKind === 'repaired'
+    ? `moved here, ${name} could not be used`
+    : `moved here from ${name}`
+}
 /** `claude.ts:1177` labels a lease `Subagent <agentId>`; that id is not display text. */
 const OWNER_LABEL_ID_PREFIX = 'Subagent '
 const UNNAMED = 'Unnamed worker'
@@ -205,24 +222,26 @@ function redactAccountIds(reason: string): string {
   return reason.replace(ACCOUNT_ID_PATTERN, '').replace(/\s+/g, ' ').trim()
 }
 
+/**
+ * Which selection kinds are worth telling the user about. `manual` is the user's
+ * own `/switch-account`, so saying it back is the noise the operator rules forbid;
+ * `initial` is the ordinary case. Exhaustive, so a new engine kind must be
+ * classified here rather than silently falling through as unremarkable.
+ */
+const SELECTION_KIND_IS_NEWS: Record<LeaseSelectionKind, boolean> = {
+  initial: false,
+  manual: false,
+  failover: true,
+  repaired: true,
+}
+
 function leaseAgentNote(owner: LeaseOwnerRow): LeaseAgentNote | null {
   const detail = redactAccountIds(owner.lastFailureReason ?? owner.selectionReason)
   if (LEASE_STATE_ROLE[owner.state] === 'stranded') {
     return { text: NOTE_STRANDED, tone: 'stranded', detail }
   }
-  // `failoverCount` is a structural field, so it is checked before any prose. The
-  // `repaired` variants are only distinguishable from the reason text
-  // (`codexAccountLeaseManager.ts:229,392,462`); a typed reason code at the sidecar
-  // would remove that coupling.
-  if (owner.failoverCount > 0) {
-    return { text: NOTE_MOVED, tone: 'moved', detail }
-  }
-  if (owner.selectionReason.includes('repaired ')) {
-    return {
-      text: NOTE_REPAIRED,
-      tone: 'moved',
-      detail: redactAccountIds(owner.selectionReason),
-    }
+  if (SELECTION_KIND_IS_NEWS[owner.selectionKind]) {
+    return { text: movedNoteText(owner), tone: 'moved', detail }
   }
   return null
 }

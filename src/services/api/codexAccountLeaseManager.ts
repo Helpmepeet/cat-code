@@ -21,6 +21,14 @@ export type CodexLeaseStrategy = 'spread' | 'follow-main'
 export type CodexLeaseOwnerType = 'main' | 'subagent'
 export type CodexLeaseState = 'active' | 'released' | 'failed'
 
+/**
+ * WHY a lease sits on the account it does, as a value rather than as prose.
+ * `selectionReason` stays the human/log string, but it is not parseable: it
+ * interpolates account ids and is free to be reworded. Consumers that need to
+ * BRANCH on the cause read this instead.
+ */
+export type CodexLeaseSelectionKind = 'initial' | 'failover' | 'repaired' | 'manual'
+
 export type CodexLease = {
   leaseId: string
   ownerId: string
@@ -32,6 +40,13 @@ export type CodexLease = {
   createdAt: number
   updatedAt: number
   failoverCount: number
+  selectionKind: CodexLeaseSelectionKind
+  /**
+   * The account this lease sat on before it moved, when it moved. Kept as an id
+   * because `selectionReason` only ever had it interpolated into a sentence, which
+   * left every consumer either parsing prose or unable to name the account at all.
+   */
+  previousAccountId?: string
   selectionReason: string
   lastFailureReason?: string
 }
@@ -70,6 +85,7 @@ export function seedCodexLeaseForTest({
   strategy = 'spread',
   state = 'active',
   selectionReason = 'seeded lease',
+  selectionKind = 'initial',
   failoverCount = 0,
 }: {
   ownerId: string
@@ -79,6 +95,7 @@ export function seedCodexLeaseForTest({
   strategy?: CodexLeaseStrategy
   state?: CodexLeaseState
   selectionReason?: string
+  selectionKind?: CodexLeaseSelectionKind
   failoverCount?: number
 }): CodexLease {
   const now = Date.now()
@@ -93,6 +110,7 @@ export function seedCodexLeaseForTest({
     createdAt: now,
     updatedAt: now,
     failoverCount,
+    selectionKind,
     selectionReason,
   }
 
@@ -152,6 +170,7 @@ export function registerCodexLease({
     createdAt: now,
     updatedAt: now,
     failoverCount: 0,
+    selectionKind: 'initial',
     selectionReason: selection.reason,
   }
 
@@ -226,6 +245,8 @@ export function repairCodexLeaseIfNonSelectable(
     ...existingLease,
     accountId: selection.account.accountId,
     state: 'active',
+    selectionKind: 'repaired',
+    previousAccountId: existingLease.accountId,
     selectionReason: `repaired from non-selectable account ${existingLease.accountId}: ${selection.reason}`,
     updatedAt: Date.now(),
   }
@@ -266,6 +287,8 @@ export function reassignCodexLeaseToActiveAccount(ownerId: string): void {
     ...existing,
     accountId: account.accountId,
     state: 'active',
+    selectionKind: 'manual',
+    previousAccountId: existing.accountId,
     selectionReason: 'manual /switch-account',
     updatedAt: Date.now(),
   })
@@ -330,6 +353,8 @@ export function failoverCodexLease(
       accountId: selection.account.accountId,
       state: 'active',
       failoverCount: existingLease.failoverCount + 1,
+      selectionKind: 'failover',
+      previousAccountId: failedAccountId,
       selectionReason: `failover from ${failedAccountId}: ${reason}`,
       lastFailureReason: reason,
       updatedAt: Date.now(),
@@ -389,6 +414,8 @@ export function repairLeasesForDeletedAccount(deletedAccountId: string): void {
         ...lease,
         accountId: selection.account.accountId,
         state: 'active',
+        selectionKind: 'repaired',
+        previousAccountId: deletedAccountId,
         selectionReason: `repaired after deletion of ${deletedAccountId}`,
         updatedAt: now,
       })
@@ -436,6 +463,7 @@ function synthesizeMainLease(
     createdAt: now,
     updatedAt: now,
     failoverCount: 0,
+    selectionKind: 'initial',
     selectionReason: 'synthetic main lease from active pool account',
   }
 }

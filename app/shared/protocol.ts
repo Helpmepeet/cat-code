@@ -1296,6 +1296,26 @@ export type LeaseState = 'active' | 'released' | 'failed'
 /** Subagent account strategy, mirrored from `CodexLeaseStrategy` (`codexAccountLeaseManager.ts:20`). */
 export type LeaseStrategy = 'spread' | 'follow-main'
 
+/**
+ * WHY a lease sits where it does, mirrored from the engine's
+ * `CodexLeaseSelectionKind`. Additive in protocol v1: the renderer previously had
+ * to recover this by prefix-matching `selectionReason`, which is a log string that
+ * interpolates account ids and is free to be reworded on either side of the seam.
+ */
+export type LeaseSelectionKind = 'initial' | 'failover' | 'repaired' | 'manual'
+
+/**
+ * The account a lease moved OFF, resolved to its display alias at the sidecar.
+ * Cannot be derived renderer-side: `LeaseSnapshot.accounts` lists only accounts
+ * currently HOLDING a lease, and the account an agent left has by definition lost
+ * its own. Same disclosure policy as the row's `accountId`/`accountAlias`: an
+ * identifier plus the pool's redacted alias, never an email, never a token.
+ */
+export type LeaseMovedFrom = {
+  accountId: string
+  accountAlias: string | null
+}
+
 /** One owner→account lease row, projected from the engine's `CodexLease` (`codexAccountLeaseManager.ts:24-37`). */
 export type LeaseOwnerRow = {
   leaseId: string
@@ -1314,7 +1334,11 @@ export type LeaseOwnerRow = {
   createdAt: number
   updatedAt: number
   failoverCount: number
-  /** Engine `selectionReason`, length-capped at the sidecar. */
+  /** Engine `selectionKind` — branch on THIS, never on the reason text. */
+  selectionKind: LeaseSelectionKind
+  /** Present when `selectionKind` describes a move and the source account is still known. */
+  movedFrom?: LeaseMovedFrom
+  /** Engine `selectionReason`, length-capped at the sidecar. Display/diagnostic text only. */
   selectionReason: string
   /** Engine `lastFailureReason` when a failover happened, length-capped at the sidecar. */
   lastFailureReason?: string

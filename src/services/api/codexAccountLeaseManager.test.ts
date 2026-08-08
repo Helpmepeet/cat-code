@@ -2689,4 +2689,61 @@ describe('codexAccountLeaseManager', () => {
     expect(moduleUnderTest.getCodexLeaseForOwner('main-thread')?.accountId).toBe('new-main')
     expect(moduleUnderTest.getCodexLeaseForOwner('follow-worker')?.accountId).toBe('new-main')
   })
+
+  test('a lease records WHY it moved as values, not only as prose', () => {
+    // `selectionReason` interpolates account ids into a sentence, which left every
+    // consumer either parsing prose or unable to name the account at all.
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'main-account', alias: 'main' }),
+        buildPoolAccount({ accountId: 'worker-a', alias: 'worker' }),
+      ],
+    })
+
+    const fresh = moduleUnderTest.createCodexLeaseForTest({
+      ownerId: 'subagent-kind',
+      ownerType: 'subagent',
+      ownerLabel: 'Subagent Kind',
+      strategy: 'spread',
+    })
+    expect(fresh.selectionKind).toBe('initial')
+    expect(fresh.previousAccountId).toBeUndefined()
+
+    const movedFrom = fresh.accountId
+    const replacement = moduleUnderTest.failoverCodexLease(
+      'subagent-kind',
+      movedFrom,
+      'usage cap 429',
+    )
+    expect(replacement.selectionKind).toBe('failover')
+    expect(replacement.previousAccountId).toBe(movedFrom)
+    expect(replacement.accountId).not.toBe(movedFrom)
+    // The prose is unchanged, so nothing that logs it regresses.
+    expect(replacement.selectionReason).toContain('failover from')
+  })
+
+  test('a manual switch-account records itself as manual, with the account it left', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'main-account', alias: 'main' }),
+        buildPoolAccount({ accountId: 'worker-a', alias: 'worker' }),
+      ],
+    })
+    moduleUnderTest.seedCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'Main thread',
+      accountId: 'worker-a',
+      strategy: 'follow-main',
+    })
+
+    moduleUnderTest.reassignCodexLeaseToActiveAccount('main-thread')
+
+    const lease = moduleUnderTest.getCodexLeaseForOwner('main-thread')
+    expect(lease?.selectionKind).toBe('manual')
+    expect(lease?.previousAccountId).toBe('worker-a')
+    expect(lease?.accountId).toBe('main-account')
+  })
 })
