@@ -115,6 +115,7 @@ import type { SidecarMemoryDomain } from './memoryDomain.js'
 import type { SidecarTasksDomain } from './tasksDomain.js'
 import type { SidecarAgentModeDomain } from './agentModeDomain.js'
 import type { SidecarLeaseDomain } from './leaseDomain.js'
+import type { SidecarPanelTaskReaper } from './panelTaskReaper.js'
 import type { SidecarTaskControlDomain } from './taskControlDomain.js'
 import type { SidecarRunControlsDomain } from './runControlsDomain.js'
 import type { SidecarSessionActionsDomain } from './sessionActionsDomain.js'
@@ -199,6 +200,13 @@ export type SidecarServerOptions = {
    * own — the kill's store mutation drives the `tasks`/`agent-mode` re-broadcasts.
    */
   taskControl?: SidecarTaskControlDomain
+  /**
+   * Terminal-worker eviction deadline owner. When present, it is started with the
+   * server and stopped on `close()`, so a finished worker leaves `AppState.tasks`
+   * at its `evictAfter` stamp instead of lingering on the docked roster; when
+   * absent, terminal workers are only evicted on the next turn boundary.
+   */
+  panelTaskReaper?: SidecarPanelTaskReaper
   /**
    * Composer run-controls read-seam + write verbs (P4-24c). When present, a
    * `run-controls.snapshot` frame is emitted on attach and re-broadcast on the
@@ -336,6 +344,7 @@ export class SidecarServer {
   private readonly agentMode: SidecarAgentModeDomain | null
   private readonly leases: SidecarLeaseDomain | null
   private readonly taskControl: SidecarTaskControlDomain | null
+  private readonly panelTaskReaper: SidecarPanelTaskReaper | null
   private readonly runControls: SidecarRunControlsDomain | null
   private readonly sessionActions: SidecarSessionActionsDomain | null
   private readonly contextBreakdown: SidecarContextBreakdownDomain | null
@@ -372,6 +381,7 @@ export class SidecarServer {
   private unsubscribeLeaseSnapshot: (() => void) | null = null
   private unsubscribeRunControlsSnapshot: (() => void) | null = null
   private unsubscribeTaskNotificationQueue: (() => void) | null = null
+  private stopPanelTaskReaper: (() => void) | null = null
   private activeTurn = false
   /** Queue listeners are synchronous; drain only from a later microtask. */
   private taskNotificationDrainScheduled = false
@@ -420,6 +430,7 @@ export class SidecarServer {
     this.agentMode = options.agentMode ?? null
     this.leases = options.leases ?? null
     this.taskControl = options.taskControl ?? null
+    this.panelTaskReaper = options.panelTaskReaper ?? null
     this.runControls = options.runControls ?? null
     this.sessionActions = options.sessionActions ?? null
     this.contextBreakdown = options.contextBreakdown ?? null
@@ -512,6 +523,13 @@ export class SidecarServer {
       this.unsubscribeLeaseSnapshot = this.leases.subscribe(() => {
         this.broadcastLeaseSnapshot()
       })
+    }
+    // A finished worker's roster row is removed by the engine EVICTING its task,
+    // not by a display filter — and until this owner existed nothing came back at
+    // the engine's `evictAfter` deadline in the desktop, so the row stayed above
+    // the composer for the rest of the session (`panelTaskReaper.ts`).
+    if (this.panelTaskReaper) {
+      this.stopPanelTaskReaper = this.panelTaskReaper.start()
     }
     // P4-24c — re-broadcast the run-controls snapshot whenever the session's
     // model/effort/fast actually changes. The domain's subscribe is change-detected
@@ -823,6 +841,8 @@ export class SidecarServer {
     this.unsubscribeRunControlsSnapshot = null
     this.unsubscribeTaskNotificationQueue?.()
     this.unsubscribeTaskNotificationQueue = null
+    this.stopPanelTaskReaper?.()
+    this.stopPanelTaskReaper = null
     for (const connection of this.connections) {
       connection.socket.end()
     }
