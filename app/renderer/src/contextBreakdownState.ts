@@ -75,6 +75,14 @@ export type ContextBreakdownRow = {
   tokens: number
   /** Static `bg-*` class for the swatch + its stacked-bar segment. */
   swatch: string
+  /** Same hue as `swatch`, as a raw value for the donut chart's SVG `stroke`
+   * attribute (an SVG presentation attribute, not a Tailwind class, so it
+   * carries no dynamic-class risk). */
+  colorHex: string
+  /** Same hue again as a static `text-*` class, for the donut's center readout
+   * while this category is hovered. A class rather than an inline colour so the
+   * center number is styled the same way every other label on the panel is. */
+  textClass: string
   /** Share of the window, 0–100, for the segment's width. */
   percentOfWindow: number
 }
@@ -109,7 +117,37 @@ const CATEGORY_SWATCH: Record<string, string> = {
   warning: 'bg-[#fbbf24]', // Skills
 }
 
+/** The same hues as {@link CATEGORY_SWATCH}, as raw values for the donut
+ * chart's SVG `stroke` (never derived from the class string — that would
+ * mean parsing a Tailwind literal back apart, fragile for no reason when the
+ * source hex is right here). */
+const CATEGORY_COLOR_HEX: Record<string, string> = {
+  promptBorder: '#a1a1aa',
+  inactive: '#60a5fa',
+  purple_FOR_SUBAGENTS_ONLY: '#f472b6',
+  claude: '#c084fc',
+  cyan_FOR_SUBAGENTS_ONLY: '#22d3ee',
+  permission: '#5eead4',
+  warning: '#fbbf24',
+}
+
+/** The same hues once more as static `text-*` classes (see `textClass`). Written
+ * out rather than derived from {@link CATEGORY_SWATCH} for the same reason
+ * {@link CATEGORY_COLOR_HEX} is: `bg-` → `text-` string surgery on a Tailwind
+ * literal is fragile, and the source hex is right here. */
+const CATEGORY_TEXT: Record<string, string> = {
+  promptBorder: 'text-[#a1a1aa]',
+  inactive: 'text-[#60a5fa]',
+  purple_FOR_SUBAGENTS_ONLY: 'text-[#f472b6]',
+  claude: 'text-[#c084fc]',
+  cyan_FOR_SUBAGENTS_ONLY: 'text-[#22d3ee]',
+  permission: 'text-[#5eead4]',
+  warning: 'text-[#fbbf24]',
+}
+
 const FALLBACK_SWATCH = 'bg-white/25'
+const FALLBACK_COLOR_HEX = 'rgba(255,255,255,0.25)'
+const FALLBACK_TEXT = 'text-white/25'
 
 /**
  * Categories that are RESERVED space rather than a content type. The engine reuses
@@ -177,11 +215,138 @@ export function selectBreakdownRows(
       swatch: RESERVED_CATEGORY_LABELS.has(category.label)
         ? FALLBACK_SWATCH
         : (CATEGORY_SWATCH[category.colorKey] ?? FALLBACK_SWATCH),
+      colorHex: RESERVED_CATEGORY_LABELS.has(category.label)
+        ? FALLBACK_COLOR_HEX
+        : (CATEGORY_COLOR_HEX[category.colorKey] ?? FALLBACK_COLOR_HEX),
+      textClass: RESERVED_CATEGORY_LABELS.has(category.label)
+        ? FALLBACK_TEXT
+        : (CATEGORY_TEXT[category.colorKey] ?? FALLBACK_TEXT),
       percentOfWindow: Math.min(
         100,
         (category.tokens / snapshot.contextWindow) * 100,
       ),
     }))
+}
+
+/* ---------------------------------------------------------------------------
+ * The donut's hover view
+ *
+ * Ring geometry AND hover emphasis live here, not in the component, for one
+ * reason: the renderer suite has no DOM (`SettingsEditors.test.tsx:3` — adding
+ * happy-dom needs sign-off), so anything left inside the JSX is untestable. The
+ * component keeps only the two `onMouseEnter`/`onMouseLeave` wires and paints
+ * what this returns.
+ *
+ * The ring and the legend are ONE hover target set: both call the same setter
+ * with the same index, and both read their appearance from this one view, so
+ * hovering a legend row emphasises its arc and vice versa without either side
+ * knowing about the other.
+ * ------------------------------------------------------------------------- */
+
+const DONUT_RADIUS = 30
+const DONUT_CIRCUMFERENCE = 2 * Math.PI * DONUT_RADIUS
+/** Segments are notched apart rather than butted: each arc gives up GAP units of
+ * its own length and starts a half-gap later, so the notch sits centred between
+ * neighbours and the ring's total sweep still reads as the used fraction. */
+const SEGMENT_GAP = 3
+/** Thin enough that the notches stay legible at 76px, and that the center
+ * readout has room. Hover thickens the one arc under the pointer. */
+const SEGMENT_STROKE = 6
+const SEGMENT_STROKE_HOVER = 9
+/** Unhovered arcs and their legend rows recede rather than vanish. */
+const DIMMED_OPACITY = 0.3
+
+export type DonutSegment = {
+  label: string
+  tokens: number
+  colorHex: string
+  /** Dash length in circumference units, already shortened by the gap. */
+  dash: number
+  /** Negative offset that walks each arc to its slot, plus the half-gap. */
+  offset: number
+  strokeWidth: number
+  opacity: number
+}
+
+export type DonutLegendRow = ContextBreakdownRow & {
+  /** Row fill while this row is the hover target. */
+  rowClass: string
+  labelClass: string
+  valueClass: string
+}
+
+export type DonutView = {
+  circumference: number
+  segments: DonutSegment[]
+  legend: DonutLegendRow[]
+  /**
+   * Tokens for the hovered category, or null for the resting view — which is the
+   * panel's own aggregate percent, in the panel's own pressure tone. Formatting
+   * stays with the caller, which owns the token formatter.
+   */
+  centerTokens: number | null
+  /** The hovered category's hue as a static `text-*` class, null at rest. */
+  centerClass: string | null
+}
+
+/**
+ * The ring + legend as they should paint for a given hover target.
+ *
+ * `hoveredIndex` is null when nothing is hovered; an out-of-range index is
+ * treated as null rather than throwing, because it can legitimately go stale for
+ * one render when a fresh snapshot arrives with fewer categories than the one
+ * the pointer entered.
+ */
+export function selectDonutView(
+  rows: readonly ContextBreakdownRow[],
+  hoveredIndex: number | null,
+): DonutView {
+  const hovered =
+    hoveredIndex != null && hoveredIndex >= 0 && hoveredIndex < rows.length
+      ? hoveredIndex
+      : null
+
+  let drawn = 0
+  const segments = rows.map((row, index) => {
+    const arcLength = (row.percentOfWindow / 100) * DONUT_CIRCUMFERENCE
+    const segment: DonutSegment = {
+      label: row.label,
+      tokens: row.tokens,
+      colorHex: row.colorHex,
+      dash: Math.max(0, arcLength - SEGMENT_GAP),
+      offset: -(drawn + SEGMENT_GAP / 2),
+      strokeWidth: hovered === index ? SEGMENT_STROKE_HOVER : SEGMENT_STROKE,
+      opacity: hovered === null || hovered === index ? 1 : DIMMED_OPACITY,
+    }
+    drawn += arcLength
+    return segment
+  })
+
+  const legend = rows.map((row, index) => ({
+    ...row,
+    rowClass: hovered === index ? 'bg-white/5' : 'bg-transparent',
+    labelClass:
+      hovered === null
+        ? 'text-text-muted'
+        : hovered === index
+          ? 'text-text-primary'
+          : 'text-text-ghost',
+    valueClass:
+      hovered === null
+        ? 'text-text-subtle'
+        : hovered === index
+          ? 'text-text-primary'
+          : 'text-text-ghost',
+  }))
+
+  const hoveredRow = hovered === null ? null : (rows[hovered] ?? null)
+  return {
+    circumference: DONUT_CIRCUMFERENCE,
+    segments,
+    legend,
+    centerTokens: hoveredRow ? hoveredRow.tokens : null,
+    centerClass: hoveredRow ? hoveredRow.textClass : null,
+  }
 }
 
 /**

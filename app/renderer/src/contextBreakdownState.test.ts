@@ -5,6 +5,7 @@ import {
   reduceContextBreakdownState,
   selectBreakdownRows,
   selectContextBreakdown,
+  selectDonutView,
   selectFreeTokens,
 } from './contextBreakdownState.js'
 import type {
@@ -179,4 +180,105 @@ test('reserved space does not borrow the System tools hue', () => {
   })
   expect(rows.find(r => r.label === 'System tools')?.swatch).toBe('bg-[#60a5fa]')
   expect(rows.find(r => r.label === 'Compact buffer')?.swatch).toBe('bg-white/25')
+})
+
+/* ---------------------------------------------------------------------------
+ * The donut's hover view. This is where the hover BEHAVIOUR is covered: the
+ * renderer suite has no DOM, so a mouse event cannot be dispatched, and the
+ * component deliberately holds nothing but the two pointer wires.
+ * ------------------------------------------------------------------------- */
+
+const CIRCUMFERENCE = 2 * Math.PI * 30
+
+test('at rest every arc is drawn at full opacity and the base stroke', () => {
+  const view = selectDonutView(selectBreakdownRows(BREAKDOWN), null)
+  expect(view.segments).toHaveLength(4)
+  for (const segment of view.segments) {
+    expect(segment.opacity).toBe(1)
+    expect(segment.strokeWidth).toBe(6)
+  }
+  // Center shows the aggregate, so the caller keeps its own percent and tone.
+  expect(view.centerTokens).toBeNull()
+  expect(view.centerClass).toBeNull()
+})
+
+// The gap is taken out of each arc's own length and paid back as a half-gap of
+// offset, so the notch sits between neighbours instead of shortening the ring.
+test('arcs are notched apart without moving where the next one starts', () => {
+  const rows = selectBreakdownRows(BREAKDOWN)
+  const view = selectDonutView(rows, null)
+  const firstArc = (rows[0]!.percentOfWindow / 100) * CIRCUMFERENCE
+  expect(view.segments[0]!.dash).toBeCloseTo(firstArc - 3, 6)
+  expect(view.segments[0]!.offset).toBeCloseTo(-1.5, 6)
+  // The second arc still begins where the first one's FULL share ended.
+  expect(view.segments[1]!.offset).toBeCloseTo(-(firstArc + 1.5), 6)
+})
+
+// An arc shorter than the gap must not invert into a negative dash, which SVG
+// renders as a full ring.
+test('a category smaller than the gap collapses to nothing, never to a full ring', () => {
+  const view = selectDonutView(
+    selectBreakdownRows({
+      ...BREAKDOWN,
+      categories: [
+        { label: 'System prompt', tokens: 14_000, colorKey: 'promptBorder', deferred: false },
+        { label: 'Sliver', tokens: 1, colorKey: 'warning', deferred: false },
+      ],
+    }),
+    null,
+  )
+  expect(view.segments[1]!.dash).toBe(0)
+})
+
+test('hovering a category emphasises its arc and dims the others', () => {
+  const view = selectDonutView(selectBreakdownRows(BREAKDOWN), 1)
+  expect(view.segments[1]!.strokeWidth).toBe(9)
+  expect(view.segments[1]!.opacity).toBe(1)
+  expect(view.segments[0]!.strokeWidth).toBe(6)
+  expect(view.segments[0]!.opacity).toBe(0.3)
+  expect(view.segments[2]!.opacity).toBe(0.3)
+})
+
+// The center readout is the whole point of the hover: it answers "how much is
+// that slice?" without a tooltip, tinted in the slice's own hue.
+test('hovering swaps the center readout to that category, in its own colour', () => {
+  const view = selectDonutView(selectBreakdownRows(BREAKDOWN), 1)
+  expect(view.centerTokens).toBe(8_600)
+  expect(view.centerClass).toBe('text-[#60a5fa]')
+})
+
+test('an unknown colour key still tints the center readout with something static', () => {
+  const view = selectDonutView(selectBreakdownRows(BREAKDOWN), 3)
+  expect(view.centerClass).toBe('text-white/25')
+  expect(view.centerClass).not.toContain('${')
+})
+
+// Ring and legend are ONE target set: the same index drives both, which is what
+// makes hovering a legend row light up its arc.
+test('the hovered legend row lifts while its siblings recede', () => {
+  const view = selectDonutView(selectBreakdownRows(BREAKDOWN), 1)
+  expect(view.legend[1]!.rowClass).toBe('bg-white/5')
+  expect(view.legend[1]!.labelClass).toBe('text-text-primary')
+  expect(view.legend[1]!.valueClass).toBe('text-text-primary')
+  expect(view.legend[0]!.rowClass).toBe('bg-transparent')
+  expect(view.legend[0]!.labelClass).toBe('text-text-ghost')
+  expect(view.legend[0]!.valueClass).toBe('text-text-ghost')
+})
+
+test('leaving restores the resting legend, dimming nothing', () => {
+  const view = selectDonutView(selectBreakdownRows(BREAKDOWN), null)
+  for (const row of view.legend) {
+    expect(row.rowClass).toBe('bg-transparent')
+    expect(row.labelClass).toBe('text-text-muted')
+    expect(row.valueClass).toBe('text-text-subtle')
+  }
+})
+
+// A snapshot with fewer categories can land while the pointer is inside a row
+// that no longer exists. That must read as "nothing hovered", not throw or dim
+// the whole ring against a hover target that is gone.
+test('a hover index left over from a bigger snapshot reads as no hover', () => {
+  const view = selectDonutView(selectBreakdownRows(BREAKDOWN), 9)
+  expect(view.centerTokens).toBeNull()
+  for (const segment of view.segments) expect(segment.opacity).toBe(1)
 })

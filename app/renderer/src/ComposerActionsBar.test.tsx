@@ -375,6 +375,8 @@ test('P4-24c — the FAST toggle visibly distinguishes off from on', () => {
   expect(onFast).toContain('h-[22px] w-[22px]')
   expect(onFast).toContain('fill="currentColor"')
   expect(onFast).toContain('stroke="none"')
+  expect(onFast).toContain('border-tone-warn/30')
+  expect(onFast).toContain('bg-tone-warn/10')
   expect(onFast).toContain('text-tone-warn')
 })
 
@@ -615,48 +617,22 @@ test('the context donut is an interactive dialog trigger when usage is present (
   expect(html).toContain('Context 21% used')
 })
 
-test('ContextUsagePanel shows Plan usage (5h + weekly) plus the real Context total', () => {
-  const html = renderToStaticMarkup(
-    <ContextUsagePanel
-      usage={USAGE}
-      account={account({ usagePrimary: 10, usageWeekly: 20, usageResetAt: null })}
-    />,
-  )
-  expect(html).toContain('Plan usage')
-  expect(html).toContain('5-hour limit')
-  expect(html).toContain('Weekly · all models')
-  expect(html).toContain('10%')
-  expect(html).toContain('20%')
-  // The 5h row carries the pool's single reset hint; null → the canonical "soon".
-  expect(html).toContain('resets soon')
-  // Aggregate Context row: real percent + "42k / 200k" (fmt). No breakdown was
-  // passed, so no per-category bar rides under it.
+// Plan usage (5h/weekly quota) was dropped from this popover entirely
+// (operator call, 2026-08-05): it is about the context WINDOW, not the
+// account's rate limits, and the quota is visible elsewhere.
+test('ContextUsagePanel never shows Plan usage, only the real Context total', () => {
+  const html = renderToStaticMarkup(<ContextUsagePanel usage={USAGE} />)
+  expect(html).not.toContain('Plan usage')
+  expect(html).not.toContain('5-hour limit')
+  expect(html).not.toContain('Weekly · all models')
   expect(html).toContain('Context')
   expect(html).toContain('42k / 200k')
-  expect(html).not.toContain('Free')
 })
 
-// One ladder for the whole popover (Surfaces.jsx:386 == :474). A plan row toned
-// by the account-quota ladder read green under a pink Context row.
-test('ContextUsagePanel tones plan rows on the same ladder as the Context row', () => {
+test('ContextUsagePanel draws a per-category donut, legend and Free row', () => {
   const html = renderToStaticMarkup(
     <ContextUsagePanel
       usage={USAGE}
-      account={account({ usagePrimary: 10, usageWeekly: 75, usageResetAt: null })}
-    />,
-  )
-  expect(html).not.toContain('tone-good')
-  // 10% and the 21% Context row sit in the accent band; 75% crosses into warn.
-  expect(html).toContain('text-accent')
-  expect(html).toContain('bg-accent')
-  expect(html).toContain('tone-warn')
-})
-
-test('ContextUsagePanel renders the per-category breakdown, legend and Free row', () => {
-  const html = renderToStaticMarkup(
-    <ContextUsagePanel
-      usage={USAGE}
-      account={null}
       breakdown={{
         categories: [
           {
@@ -690,42 +666,137 @@ test('ContextUsagePanel renders the per-category breakdown, legend and Free row'
   expect(html).toContain('175k')
   // A deferred category occupies nothing, so it earns neither a row nor a segment.
   expect(html).not.toContain('MCP tools (deferred)')
+  // The donut ring: one arc per category, coloured by its own hue, an SVG
+  // presentation attribute rather than a Tailwind class.
+  expect(html).toContain('stroke="#a1a1aa"') // System prompt
+  expect(html).toContain('stroke="#c084fc"') // Messages
+  // Segments are notched apart, not butted: the ring is drawn at the thinner
+  // stroke that keeps the notches readable, and the first arc already starts a
+  // half-gap in (nothing drawn before it, so the offset is the half-gap alone).
+  expect(html).toContain('stroke-width="6"')
+  expect(html).toContain('stroke-dashoffset="-1.5"')
+  // Center readout: the same percent the header line states.
+  expect(countOccurrences(html, '21%')).toBeGreaterThanOrEqual(2)
 })
 
-test('ContextUsagePanel without a breakdown keeps the aggregate row alone', () => {
+test('ContextUsagePanel without a breakdown keeps the aggregate row alone, no donut', () => {
   const html = renderToStaticMarkup(
-    <ContextUsagePanel usage={USAGE} account={null} breakdown={null} />,
+    <ContextUsagePanel usage={USAGE} breakdown={null} />,
   )
   expect(html).toContain('42k / 200k')
   expect(html).not.toContain('Free')
   expect(html).not.toContain('System prompt')
+  expect(html).not.toContain('<svg')
 })
 
-test('ContextUsagePanel with no account shows the Context total only (no plan usage)', () => {
-  const html = renderToStaticMarkup(
-    <ContextUsagePanel usage={USAGE} account={null} />,
+/**
+ * The Compact row. `onCompact` is absent whenever no engine can take the submit
+ * (preview pane, spawning, dead, or a session whose composer gate is not
+ * sendable), and the row is then not drawn at all — a permanently dead button on
+ * a popover with no room to explain itself is worse than no button.
+ */
+test('ContextUsagePanel draws the Compact row only when a submit can land', () => {
+  const withAction = renderToStaticMarkup(
+    <ContextUsagePanel usage={USAGE} onCompact={() => {}} />,
   )
-  expect(html).not.toContain('Plan usage')
-  expect(html).toContain('Context')
-  expect(html).toContain('42k / 200k')
+  expect(withAction).toContain('Compact')
+  // Accent-tinted and inset in its own footer well, so the panel's one action
+  // reads as a button rather than as another row of the readout.
+  expect(withAction).toContain('bg-accent/[0.12]')
+  expect(withAction).toContain('text-accent')
+
+  const without = renderToStaticMarkup(<ContextUsagePanel usage={USAGE} />)
+  expect(without).not.toContain('Compact')
 })
 
-test('ContextUsagePanel with an account whose usage is not yet fetched suppresses Plan usage (ACCT-10)', () => {
-  // A real pre-poll state: the account exists but both usage fields are still
-  // null (usage snapshot broadcast before refreshAccountsUsageOnce completes).
-  // The gate is `account != null && (usagePrimary != null || usageWeekly != null)`
-  // — this exercises the untested "account present, both usages null" branch.
+/**
+ * The action escalates past the pressure threshold, and the two forms are
+ * mutually exclusive: an accent button offering the action, or a strip in the
+ * pressure tone telling the operator to take it. Two footers at once would give
+ * the panel two competing actions.
+ */
+test('past the pressure threshold the accent button becomes a warning strip', () => {
+  const calm = renderToStaticMarkup(
+    <ContextUsagePanel usage={USAGE} onCompact={() => {}} />,
+  )
+  expect(calm).toContain('bg-accent/[0.12]')
+  expect(calm).not.toContain('Running low')
+
+  const pressed = renderToStaticMarkup(
+    <ContextUsagePanel
+      usage={{ usedTokens: 172_000, contextWindow: 200_000, percentUsed: 86 }}
+      onCompact={() => {}}
+    />,
+  )
+  expect(pressed).toContain('Running low, compact now')
+  expect(pressed).toContain('bg-tone-warn/10')
+  expect(pressed).not.toContain('bg-accent/[0.12]')
+
+  // The ladder is `pressureTone`'s, so the strip follows the percent above it all
+  // the way to danger rather than stopping at the warn band.
+  const critical = renderToStaticMarkup(
+    <ContextUsagePanel
+      usage={{ usedTokens: 190_000, contextWindow: 200_000, percentUsed: 95 }}
+      onCompact={() => {}}
+    />,
+  )
+  expect(critical).toContain('bg-tone-danger/10')
+})
+
+// Every user-visible string on this panel, checked against the operator's
+// no-em-dash rule for on-screen text (CLAUDE.md §7).
+test('the escalated strip states the ask without an em dash', () => {
+  const html = renderToStaticMarkup(
+    <ContextUsagePanel
+      usage={{ usedTokens: 172_000, contextWindow: 200_000, percentUsed: 86 }}
+      onCompact={() => {}}
+    />,
+  )
+  expect(html).not.toContain('—')
+})
+
+// The arcs are stroked circles with no fill, so without this the hit area is the
+// whole 76px disc and the topmost segment answers for every pointer position.
+test('donut arcs take the pointer on the stroke, not the disc', () => {
   const html = renderToStaticMarkup(
     <ContextUsagePanel
       usage={USAGE}
-      account={account({ usagePrimary: null, usageWeekly: null })}
+      breakdown={{
+        categories: [
+          { label: 'System prompt', tokens: 4_200, colorKey: 'promptBorder', deferred: false },
+          { label: 'Messages', tokens: 21_000, colorKey: 'claude', deferred: false },
+        ],
+        usedTokens: 25_200,
+        freeTokens: 174_800,
+        contextWindow: 200_000,
+        model: 'gpt-5.6-luna',
+      }}
     />,
   )
-  expect(html).not.toContain('Plan usage')
-  expect(html).not.toContain('5-hour limit')
-  expect(html).not.toContain('Weekly · all models')
-  expect(html).toContain('Context')
-  expect(html).toContain('42k / 200k')
+  expect(html).toContain('[pointer-events:stroke]')
+})
+
+// The footer well already pads the panel's bottom edge; a body padding underneath
+// the last row would stack with it and float `Free` clear of the seam.
+test('the breakdown sits directly on the footer seam, with no padding between', () => {
+  const withFooter = renderToStaticMarkup(
+    <ContextUsagePanel usage={USAGE} onCompact={() => {}} />,
+  )
+  expect(withFooter).not.toContain('pb-3.5')
+
+  // With no footer there is no well to borrow padding from, so the body keeps its own.
+  const alone = renderToStaticMarkup(<ContextUsagePanel usage={USAGE} />)
+  expect(alone).toContain('pb-3.5')
+})
+
+// The breakdown is a separate seam that may never arrive; the aggregate percent
+// alone is already reason enough to compact, so the row must not ride on it.
+test('the Compact row survives a session with no breakdown snapshot yet', () => {
+  const html = renderToStaticMarkup(
+    <ContextUsagePanel usage={USAGE} breakdown={null} onCompact={() => {}} />,
+  )
+  expect(html).toContain('Compact')
+  expect(html).not.toContain('System prompt')
 })
 
 /**
@@ -753,7 +824,6 @@ test('the Context readout compacts millions ("1M") without changing sub-million 
     const html = renderToStaticMarkup(
       <ContextUsagePanel
         usage={{ usedTokens: tokens, contextWindow: tokens, percentUsed: 100 }}
-        account={null}
       />,
     )
     expect(html).toContain(`${expected} / ${expected}`)
