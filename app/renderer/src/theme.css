@@ -75,6 +75,22 @@
   --tone-warn: #fbbf24;
   --tone-danger: #f87171;
   --tone-info: #60a5fa;
+
+  /*
+   * The session column: transcript rows, the restore skeleton, the composer dock
+   * and the dock's banner. All four MUST carry the same value — it is what makes
+   * a transcript row's edges line up with the input below it — so they read this
+   * token rather than repeating a literal, which is how they would drift apart.
+   * The accounts page keeps its own literal on purpose; it is a different
+   * surface, not part of this alignment.
+   *
+   * Tunable by eye, like the text tones. What it trades: at 6.73px per average
+   * character in 14px DM Sans, the content width is this value minus the 64px of
+   * side padding, so 900px is ~124 characters a line and 1000px was ~139. Going
+   * lower keeps buying readability until tool-row paths and diffs start
+   * truncating, which is the wall the original 740px hit.
+   */
+  --transcript-width: 900px;
 }
 
 /*

@@ -201,7 +201,11 @@ test('wiring tripwire: the usage popover asks no engine that is not there', () =
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
 
   const gateStart = source.indexOf('onRequestContextBreakdown={')
-  const gateEnd = source.indexOf('slashCatalog={panelSlashCatalog}', gateStart)
+  // Anchored on the NEXT prop, not on `slashCatalog` further down: the donut's
+  // Compact row was later wired in between the two, so the wider anchor silently
+  // grew this slice over a second prop and armed the negative assertions below
+  // against code they were never written to police.
+  const gateEnd = source.indexOf('onCompact={', gateStart)
   expect(gateStart).toBeGreaterThan(-1)
   expect(gateEnd).toBeGreaterThan(gateStart)
   const gateBody = source.slice(gateStart, gateEnd)
@@ -1739,7 +1743,7 @@ test('P4-32a — a plain background task keeps the original strip wording', () =
 
 test('P4-32a — real workers reach the composer dock, above the permission stack', () => {
   // The live path, not the component in isolation: SessionPane must actually mount
-  // the roster inside the 740px composer column, or the wiring is invisible.
+  // the roster inside the composer column, or the wiring is invisible.
   const html = renderToStaticMarkup(
     <SessionPane
       {...idleSessionPaneProps()}
@@ -1751,7 +1755,7 @@ test('P4-32a — real workers reach the composer dock, above the permission stac
   )
   expect(html).toContain('Turing')
   expect(html).toContain('Wire the dock')
-  const dockIndex = html.indexOf('max-w-[1000px] shrink-0')
+  const dockIndex = html.indexOf('max-w-[var(--transcript-width)] shrink-0')
   expect(dockIndex).toBeGreaterThan(-1)
   expect(html.indexOf('Wire the dock')).toBeGreaterThan(dockIndex)
 })

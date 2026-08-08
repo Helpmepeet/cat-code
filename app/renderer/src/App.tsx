@@ -117,6 +117,7 @@ import {
   caretAtHistoryEdge,
   createHistoryState,
   createPasteState,
+  canSendUntypedSubmit,
   createPendingSubmitState,
   createTransportErrorState,
   EMPTY_HISTORY_NAV,
@@ -2537,6 +2538,39 @@ export function App() {
 	                    }
 	                  }
 	            }
+            // The donut's Compact row. `/compact` is an ordinary slash submit:
+            // the sidecar loads the real command catalog and the engine parses
+            // and runs it (`sessionController.ts:306`), and the composer's own
+            // picker only ever fills draft TEXT (`pickSlashCommand`), so this
+            // string is byte-identical to a typed one.
+            //
+            // It deliberately does NOT go through the composer draft.
+            // `submitSession` sends whatever the draft holds and then retires it
+            // — clearing the text, DROPPING that session's collapsed-paste
+            // entries, and pushing the sent string into ↑/↓ history. Routing a
+            // button through it would destroy a half-typed prompt and its
+            // attachments to send a word the user never typed. Appending is not
+            // an option either: `parseSlashDraft` matches a whole-draft `/token`
+            // only, so `text /compact` would reach the model as prose.
+            //
+            // Unconditional here: the pane gates it on the same `composerGate`
+            // the send arrow reads, which is strictly tighter than the
+            // preview/has-engine test its sibling `onRequestContextBreakdown`
+            // needs (that one is reachable on a preview pane; this is not).
+            onCompact={() => {
+              try {
+                getBridge().submit(sessionId, '/compact')
+                setTransportErrors(prev =>
+                  reduceTransportErrorCleared(prev, sessionId),
+                )
+              } catch (error) {
+                // User-initiated, so a failure surfaces the way a failed send
+                // does rather than vanishing.
+                setTransportErrors(prev =>
+                  reduceTransportErrorSet(prev, sessionId, errorMessage(error)),
+                )
+              }
+            }}
             slashCatalog={panelSlashCatalog}
 	            onSetModel={model => {
 	              try {
@@ -3565,6 +3599,7 @@ export function SessionPane({
   runControls,
   contextBreakdown = null,
   onRequestContextBreakdown,
+  onCompact,
   slashCatalog = EMPTY_SLASH_CATALOG,
   onSetModel,
   onSetEffort,
@@ -3641,6 +3676,19 @@ export function SessionPane({
   // log (up to 8 MiB) was the dominant DOM reflow on every switch/frame/keystroke;
   // gated + capped to the last 20 messages, it costs nothing until asked for.
   const [rawDebugOpen, setRawDebugOpen] = useState(false)
+  // The raw-log `error` field (rawMessageLog.ts) is never cleared by the store
+  // itself — the retention notice it carries (e.g. history-replay truncation)
+  // is informational, not a live fault, but nothing re-derives it false once
+  // set. Dismissal is display-only and local to this pane, keyed by the exact
+  // message so a genuinely NEW notice (different text) still shows.
+  const [dismissedLogError, setDismissedLogError] = useState<string | null>(
+    null,
+  )
+  useEffect(() => {
+    setDismissedLogError(null)
+  }, [activeSessionId])
+  const showLogError =
+    activeLog.error !== null && activeLog.error !== dismissedLogError
   // The picker renders rich rows (name + arg-hint + description, prototype
   // parity) from the `slash-catalog.snapshot` read seam (the `slashCatalog`
   // prop). It falls back to the names-only `slash_commands` catalog (from the
@@ -4196,7 +4244,7 @@ export function SessionPane({
         >
           {previewTruncationMessage ? (
             <div
-              className="mx-auto mb-3 w-full max-w-[1000px] border-l-2 border-tone-warn px-3 py-2 text-xs text-tone-warn"
+              className="mx-auto mb-3 w-full max-w-[var(--transcript-width)] border-l-2 border-tone-warn px-3 py-2 text-xs text-tone-warn"
               role="status"
             >
               {previewTruncationMessage}
@@ -4266,7 +4314,7 @@ export function SessionPane({
        * auto'`) so the input aligns under the message column; a top seam
        * separates it from the scrolling transcript above. Inner blocks keep
        * their existing indent (wrapped without re-indentation). */}
-      <div className="mx-auto flex w-full max-w-[1000px] shrink-0 flex-col gap-4">
+      <div className="mx-auto flex w-full max-w-[var(--transcript-width)] shrink-0 flex-col gap-4">
       {/* P4-32a (R1) — the orchestrator worker roster is the prototype's declared
        * host for this block: above the composer, in the transcript's own measure,
        * ahead of the permission/question stack. It dims while the orchestrator is
@@ -4302,8 +4350,19 @@ export function SessionPane({
         onSnooze={snoozePermission}
       />
 
-      {activeLog.error ? (
-        <div className="text-sm text-tone-danger">{activeLog.error}</div>
+      {showLogError ? (
+        <div className="flex items-center gap-3 text-sm text-tone-danger">
+          <span className="min-w-0 flex-1">{activeLog.error}</span>
+          <button
+            type="button"
+            onClick={() => setDismissedLogError(activeLog.error)}
+            title="Dismiss"
+            aria-label="Dismiss message log notice"
+            className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded text-sm leading-none text-text-subtle transition-colors hover:text-text-primary"
+          >
+            ×
+          </button>
+        </div>
       ) : null}
 
       {transportError ? (
@@ -4502,6 +4561,9 @@ export function SessionPane({
           contextUsage={contextUsage}
           contextBreakdown={contextBreakdown}
           onRequestContextBreakdown={onRequestContextBreakdown}
+          // No engine to take it, no row. `canSendUntypedSubmit` owns which gate
+          // arms qualify and why `editable` is not one of them.
+          onCompact={canSendUntypedSubmit(composerGate) ? onCompact : undefined}
           toolbarRef={actionBarRef}
           onFocusComposer={() => composerRef.current?.focus()}
         />
@@ -4796,6 +4858,8 @@ type SessionPaneProps = {
   contextBreakdown?: ContextBreakdownSnapshot | null
   /** Ask the sidecar to recompute the breakdown (the popover was opened). */
   onRequestContextBreakdown?: () => void
+  /** Submit `/compact` for this session. Gated again below by `composerGate`. */
+  onCompact?: () => void
   /** The session's rich slash-command catalog (name + description + arg hint) for
    * the composer picker; empty/absent falls the picker back to the names-only list. */
   slashCatalog?: readonly SlashCatalogEntry[]

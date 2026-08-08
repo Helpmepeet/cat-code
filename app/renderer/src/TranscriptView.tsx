@@ -307,25 +307,26 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
       // caps this at 740 (`Chat.jsx:402` MSG_MAX) and `px-8` sits INSIDE that,
       // so the real content column was 676px — on a maximized window that left
       // ~60% of the screen empty while tool rows, paths and diffs truncated
-      // against it. 1000px was settled on a live tuner. Keep this in lockstep
-      // with the composer dock in `App.tsx`, which carries the same value; the
-      // two are what align the transcript's edges with the input's. Do not
-      // "restore" either to 740 as a parity fix.
+      // against it. Do not "restore" it to 740 as a parity fix.
+      //
+      // The value now lives in `--transcript-width` (theme.css), which the
+      // composer dock and its banner in `App.tsx` read too: those edges have to
+      // line up with these, and two hand-synced literals is how they stop.
       //
       // EVERY row shares this width, prose included, and that is load-bearing:
       // two attempts to give running text its own narrower measure inside this
       // column were both rejected on sight (2026-08-09), because a transcript
       // built from full-width rows reads a narrower text column as a seam no
-      // matter how it is aligned. At 1000px a line of prose is ~139 characters,
-      // which is genuinely too long — but no width fixes both that and the
-      // truncation this column was widened for, so the cost is taken here
-      // knowingly rather than paid for with a mismatched edge. See the
-      // `.md-prose` header in `theme.css`.
+      // matter how it is aligned. A line of prose is therefore as long as the
+      // column allows, which is still longer than is comfortable — but no width
+      // fixes both that and the truncation this column was widened for, so the
+      // cost is taken here knowingly rather than paid for with a mismatched
+      // edge. See the `.md-prose` header in `theme.css`.
       //
       // Prose weight also moved (light to medium) at `AssistantProse` below,
       // for legibility on this near-black background. It stays scoped to
       // assistant prose, NOT the whole column.
-      <div className="mx-auto flex w-full max-w-[1000px] flex-col gap-2.5 px-8 pt-6">
+      <div className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-2.5 px-8 pt-6">
         {items.map(item =>
           // P4-36 — a revealed hidden row reads dimmed (`Chat.jsx:1285`
           // `opacity: 0.55`), so transcript mode never passes engine bookkeeping
@@ -409,7 +410,7 @@ const SKELETON_BAR_WIDTHS = ['w-3/4', 'w-full', 'w-5/6', 'w-2/3', 'w-4/5'] as co
 function PreviewSkeleton() {
   return (
     <div
-      className="mx-auto flex w-full max-w-[1000px] flex-col gap-3 px-8 pt-6"
+      className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-3 px-8 pt-6"
       role="status"
       aria-live="polite"
       aria-busy="true"
