@@ -305,7 +305,7 @@ export function ComposerInput({
       {value.length === 0 ? (
         <div
           aria-hidden
-          className="pointer-events-none absolute left-0 top-1.5 text-base font-medium leading-normal text-text-faint"
+          className="pointer-events-none absolute left-0 top-1.5 text-[15px] font-medium leading-normal text-text-faint"
         >
           {placeholder}
         </div>
@@ -313,7 +313,18 @@ export function ComposerInput({
 
       {/* `block` and the explicit min-height keep the empty field the same 36px
        * the textarea measured, so the send arrow does not float in dead space.
-       * Content is built by the layout effect above, never by React. */}
+       * Content is built by the layout effect above, never by React.
+       *
+       * 15px, not the prototype's 16 (`Chat.jsx:1407`). That 16 was drawn at
+       * `fontWeight: 300`, and this field went to `font-medium` on a live tuner
+       * (f9f9f0f) for legibility on the near-black dock — 500 carries far more
+       * visual mass at the same size, and the size was never re-examined after.
+       * The result was the only 16px body text in an app whose transcript reads
+       * at 14, which is what made it look oversized (operator, 2026-08-09). One
+       * step above the transcript keeps the field reading as the active surface;
+       * matching 14 exactly would let it recede into its own dock. Keep this in
+       * sync with the placeholder overlay above, which must measure identically
+       * or the text jumps as you start typing. */}
       <div
         ref={rootRef}
         aria-disabled={disabled ? true : undefined}
@@ -321,7 +332,7 @@ export function ComposerInput({
         aria-multiline="true"
         aria-placeholder={placeholder}
         aria-readonly={readOnly ? true : undefined}
-        className="block max-h-[38vh] w-full min-h-6 overflow-y-auto whitespace-pre-wrap break-words py-1.5 text-base font-medium leading-normal text-text-primary caret-accent outline-none"
+        className="block max-h-[38vh] w-full min-h-6 overflow-y-auto whitespace-pre-wrap break-words py-1.5 text-[15px] font-medium leading-normal text-text-primary caret-accent outline-none"
         contentEditable={editable}
         onBlur={syncCaretPreview}
         onCompositionEnd={() => {
