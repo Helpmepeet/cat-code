@@ -26,6 +26,20 @@ Evidence: `bun test app/` (2,802 pass), both app typechecks, renderer build,
 the focused Codex adapter suite (70 pass), and `bun run build:dev:full` all
 passed. `bun run --cwd app test:hardening` remains GUI-gated and was not run.
 
+#### 2026-08-08 — agent metadata fallback (`b5637c0`)
+
+Fixed A17-F1: `agentTypeMeta()` now uses `Object.hasOwn` before reading the
+declared metadata table. Model-supplied prototype-chain names such as
+`toString` and `__proto__` now receive the existing neutral fallback instead
+of throwing in transcript and agent-chrome tone rendering.
+
+Evidence: `agentIdentity.test.ts` (11 pass / 45 assertions), both app
+typechecks, and renderer build passed. The full app suite is currently blocked
+by the unrelated, reproducible non-hermetic `roundtrip.probe.test.ts`: its
+real sidecar inherits the live `CLAUDE_CONFIG_DIR` and replays the active
+session, violating its own expected-empty-events assertion. The probe needs an
+isolated config home; it was not changed in this focused fix.
+
 **Agreed scope for the fix session: everything that survived verification, except
 LOW — filtered on verdict and fix-safety, not on the severity label.**
 
