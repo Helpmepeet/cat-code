@@ -12,7 +12,6 @@ import { getSystemContext } from '../context.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../services/analytics/growthbook.js'
 import {
   getAutoCompactThreshold,
-  getEffectiveContextWindowSize,
   isAutoCompactEnabled,
   MANUAL_COMPACT_BUFFER_TOKENS,
 } from '../services/compact/autoCompact.js'
@@ -65,7 +64,7 @@ import type { Theme } from './theme.js'
 import {
   doesMostRecentAssistantMessageExceed200k,
   getCurrentUsage,
-  getFreshInputTokens,
+  getTokenCountFromUsage,
 } from './tokens.js'
 
 const RESERVED_CATEGORY_NAME = 'Autocompact buffer'
@@ -1280,11 +1279,8 @@ export async function analyzeContextUsage(
   // This uses the same source of truth as the status line for consistency
   const apiUsage = getCurrentUsage(originalMessages ?? messages)
 
-  // When API usage is available, use the same fresh-input basis as the status line.
-  // Cache reads are reported separately and should not inflate the headline
-  // "context used" percentage.
   const totalFromAPI = apiUsage
-    ? getFreshInputTokens(apiUsage)
+    ? getTokenCountFromUsage(apiUsage)
     : null
 
   // Use API total if available, otherwise fall back to estimated total

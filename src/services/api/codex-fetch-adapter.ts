@@ -1562,7 +1562,6 @@ async function* httpSseToEvents(
         { level: 'error' },
       )
       cancelReader(idleTimeoutError)
-      codexResponse.body?.cancel(idleTimeoutError).catch(() => {})
     }, IDLE_TIMEOUT_MS)
   }
   const clearIdleTimer = () => {

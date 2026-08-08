@@ -272,9 +272,9 @@ Moving or deleting this executable disables background continuation.
 Remove it with /continue-after-limit disable-background.`,
         { display: 'system' },
       )
-    } catch {
+    } catch (error) {
       onDone(
-        'Background continuation requires a stable installed Cat Code executable. Install Cat Code normally, then run /continue-after-limit enable-background again.',
+        error instanceof Error ? error.message : String(error),
         { display: 'system' },
       )
     }

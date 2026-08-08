@@ -3,6 +3,13 @@ import { chmod, lstat, mkdir, mkdtemp, rm, stat, symlink, utimes, writeFile } fr
 import { join } from 'node:path'
 import type { CodexStatus, CodexStatusDecisionAction } from './api/codexStatus.js'
 import {
+  getPoolStatus,
+  resetCodexAccountPoolForTest,
+  seedCodexAccountPoolForTest,
+  type PoolAccount,
+} from './api/codexAccountPool.js'
+import { invalidateUsageCache } from './api/codexUsage.js'
+import {
   evaluateDeferredContinuationEligibility,
   findLatestMainTerminalFailure,
   parseDeferredTerminalFailure,
@@ -42,6 +49,8 @@ const cleanup: string[] = []
 
 afterEach(async () => {
   deferredRunnerForTest.clearForegroundRegistrations()
+  resetCodexAccountPoolForTest()
+  invalidateUsageCache()
   await Promise.all(cleanup.splice(0).map(path => rm(path, { recursive: true, force: true })))
 })
 
@@ -136,6 +145,45 @@ describe('deferred continuation eligibility', () => {
     expect((await evaluateDeferredContinuationEligibility({ messages: [terminalMessage()], model: 'gpt-5.6-terra', buildStatus: build(status('attempt')) })).reason).toBe('observation_uncertain')
     expect((await evaluateDeferredContinuationEligibility({ messages: [terminalMessage()], model: 'gpt-5.6-terra', buildStatus: build(status('recheck')) })).reason).toBe('quota_reset_unknown')
     expect((await evaluateDeferredContinuationEligibility({ messages: [terminalMessage()], model: 'gpt-5.6-terra', buildStatus: build(status('human_recovery')) })).reason).toBe('account_recovery')
+  })
+
+  test('keeps a capped in-memory pool while observing eligibility', async () => {
+    const now = Date.now()
+    const resetAtSeconds = Math.floor((now + 3_600_000) / 1000)
+    const account: PoolAccount = {
+      accountId: 'capped-account',
+      accessToken: 'test-access-token',
+      refreshToken: 'test-refresh-token',
+      expiresAt: now + 60_000,
+      source: 'config',
+      status: 'capped',
+      statusReason: 'usage_cap',
+      lastUsedAt: 0,
+      cappedAt: now - 1,
+      usageResetAt: resetAtSeconds,
+    }
+    seedCodexAccountPoolForTest({ accounts: [account] })
+    invalidateUsageCache()
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => {
+      throw new Error('test must not reach a provider endpoint')
+    }) as typeof globalThis.fetch
+
+    try {
+      const eligibility = await evaluateDeferredContinuationEligibility({
+        messages: [{ ...terminalMessage(), deferredTerminalFailure: {
+          ...terminalMessage().deferredTerminalFailure,
+          observedAt: now - 1,
+        } }],
+        model: 'gpt-5.6-terra',
+        now,
+      })
+
+      expect(eligibility).toMatchObject({ action: 'schedule' })
+      expect(getPoolStatus().accounts[0]?.status).toBe('capped')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 
   test('rejects stale, malformed, and zero reset observations and starts past resets now', async () => {

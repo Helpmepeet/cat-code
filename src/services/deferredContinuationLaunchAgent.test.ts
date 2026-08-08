@@ -101,6 +101,32 @@ describe('deferred continuation LaunchAgent', () => {
     expect(await getDeferredContinuationBackgroundStatus(plistPath)).toEqual({ state: 'needs_repair', executablePath: '/missing/cat-code' })
   })
 
+  test('treats background continuation as disabled when getuid is unavailable off macOS', async () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
+    const getuidDescriptor = Object.getOwnPropertyDescriptor(process, 'getuid')
+    const root = await mkdtemp('/tmp/cat-code-launch-agent-non-darwin-')
+    cleanup.push(root)
+    const { run, calls } = fakeLaunchctl({
+      bootout: { outcome: 'ok' },
+      print: { outcome: 'ok' },
+    })
+
+    try {
+      Object.defineProperty(process, 'platform', { value: 'win32' })
+      Object.defineProperty(process, 'getuid', { value: undefined })
+
+      expect(await getDeferredContinuationBackgroundStatus(join(root, 'agent.plist'))).toEqual({
+        state: 'disabled',
+      })
+      expect(await uninstallDeferredContinuationLaunchAgent(join(root, 'agent.plist'), run)).toBe(false)
+      expect(calls).toEqual([])
+    } finally {
+      if (platformDescriptor) Object.defineProperty(process, 'platform', platformDescriptor)
+      if (getuidDescriptor) Object.defineProperty(process, 'getuid', getuidDescriptor)
+      else delete (process as { getuid?: unknown }).getuid
+    }
+  })
+
   test('install keeps the previous plist when unload cannot be confirmed', async () => {
     const fixture = await installFixture()
     const calls: string[][] = []

@@ -299,7 +299,7 @@ export const TaskUpdateTool = buildTool({
           payloadClass: 'notification',
           notification: assignmentMessage,
         },
-        taskListId,
+        getTeamName(),
       )
     }
 
