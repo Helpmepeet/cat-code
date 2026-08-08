@@ -1673,13 +1673,7 @@ function renderStrip(
   props: Partial<ComponentProps<typeof TasksStrip>> = {},
 ): string {
   return renderToStaticMarkup(
-    <TasksStrip
-      snapshot={null}
-      workers={[]}
-      orchestratorActive={false}
-      onOpen={() => {}}
-      {...props}
-    />,
+    <TasksStrip snapshot={null} workers={[]} onOpen={() => {}} {...props} />,
   )
 }
 
@@ -1688,10 +1682,8 @@ test('P4-32a — an idle session with no workers still renders no strip', () => 
 })
 
 test('P4-32a — a busy swarm reads as a neutral accent count, never an alert', () => {
-  // D2 C2: workers waiting on an ACTIVE orchestrator are that orchestrator's
-  // problem. Only a solo escalation is allowed to go amber.
+  // D2 C2: workers waiting on the assistant are the assistant's problem.
   const html = renderStrip({
-    orchestratorActive: true,
     workers: [
       agentWorkerForTest(),
       agentWorkerForTest({
@@ -1705,20 +1697,21 @@ test('P4-32a — a busy swarm reads as a neutral accent count, never an alert', 
   expect(html).not.toContain('tone-warn')
 })
 
-test('P4-32a — a solo escalation turns the strip amber and says who owns it', () => {
+test('P4-32a — a blocked worker never turns the strip amber', () => {
+  // It used to read "1 needs you" whenever this session was not in agent mode,
+  // which is every ordinary session. The handoff goes to the assistant.
   const html = renderStrip({
-    orchestratorActive: false,
     workers: [agentWorkerForTest({ status: 'completed', handoffStatus: 'blocked' })],
   })
-  expect(html).toContain('1 needs you')
-  expect(html).toContain('text-tone-warn')
+  expect(html).toContain('1 subagent active')
+  expect(html).not.toContain('needs you')
+  expect(html).not.toContain('tone-warn')
 })
 
 test('P4-32a — the same delegated worker is never counted twice across the two feeds', () => {
   // A backgrounded `local_agent` appears in BOTH tasks.snapshot and the worker
   // list; the task half must therefore count only non-worker task types.
   const html = renderStrip({
-    orchestratorActive: true,
     snapshot: tasksSnapshotForTest([
       { id: 'w-1', type: 'local_agent' },
       { id: 'sh-1', type: 'local_bash' },

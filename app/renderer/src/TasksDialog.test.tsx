@@ -80,7 +80,7 @@ test('renders active and completed task rows with their labels and kind badge', 
   expect(html).toContain('1 completed')
 })
 
-test('a needs-input local_agent row surfaces the real handoffStatus-derived state label', () => {
+test('a blocked local_agent row names the assistant as the one who owes the answer', () => {
   const snapshot: TasksSnapshot = {
     items: [
       item({
@@ -96,7 +96,10 @@ test('a needs-input local_agent row surfaces the real handoffStatus-derived stat
     <TasksDialog hasActiveSession={true} onClose={noop} open={true} snapshot={snapshot} />,
   )
   expect(html).toContain('Fix the flaky test')
-  expect(html).toContain('Needs you')
+  // Was 'Needs you' on every ordinary session: this row has no orchestrator axis
+  // at all, so it escalated unconditionally.
+  expect(html).toContain('Waiting on the assistant')
+  expect(html).not.toContain('Needs you')
 })
 
 test('P4-8b — the "K stop" footer hint appears ONLY when a stop handler is wired (no dead affordance)', () => {
@@ -229,7 +232,6 @@ test('the Workers panel groups by role, shows normalized types, and keeps lifecy
   const html = renderToStaticMarkup(
     <WorkerRosterPanel
       onSelect={noop}
-      orchestratorActive={true}
       workers={[
         workerFixture(),
         workerFixture({
@@ -254,23 +256,20 @@ test('the Workers panel groups by role, shows normalized types, and keeps lifecy
 })
 
 test('the Workers panel counts a blocked worker as the assistant’s, never as yours', () => {
-  // D2 C2: an active orchestrator owns the handoff, so nothing alarms the user.
+  // D2 C2, now unconditional: the handoff is queued to the delegating
+  // conversation whether or not this session runs the agent-mode persona, so
+  // nothing here alarms the user.
   const blocked = workerFixture({ handoffStatus: 'blocked', blockReason: 'pick a schema' })
-  const withOrchestrator = renderToStaticMarkup(
-    <WorkerRosterPanel onSelect={noop} orchestratorActive={true} workers={[blocked]} />,
+  const html = renderToStaticMarkup(
+    <WorkerRosterPanel onSelect={noop} workers={[blocked]} />,
   )
-  expect(withOrchestrator).toContain('1 on the assistant')
-  expect(withOrchestrator).not.toContain('needs you')
-
-  const solo = renderToStaticMarkup(
-    <WorkerRosterPanel onSelect={noop} orchestratorActive={false} workers={[blocked]} />,
-  )
-  expect(solo).toContain('1 needs you')
+  expect(html).toContain('1 on the assistant')
+  expect(html).not.toContain('needs you')
 })
 
 test('the Workers panel empty state names the real cause', () => {
   const html = renderToStaticMarkup(
-    <WorkerRosterPanel onSelect={noop} orchestratorActive={true} workers={[]} />,
+    <WorkerRosterPanel onSelect={noop} workers={[]} />,
   )
   expect(html).toContain('No workers yet')
 })
@@ -282,7 +281,6 @@ test('worker detail renders prompt, block reason and the Q2 result, and offers S
       nowMs={4 * 60_000}
       onBack={noop}
       onStopTask={noop}
-      orchestratorActive={true}
       worker={workerFixture({
         handoffStatus: 'blocked',
         blockReason: 'pick a schema',
@@ -311,7 +309,6 @@ test('worker detail hides Stop for a terminal worker and for a prior-session one
       lease={null}
       onBack={noop}
       onStopTask={noop}
-      orchestratorActive={true}
       worker={workerFixture({ status: 'completed' })}
     />,
   )
@@ -322,7 +319,6 @@ test('worker detail hides Stop for a terminal worker and for a prior-session one
       lease={null}
       onBack={noop}
       onStopTask={noop}
-      orchestratorActive={true}
       worker={workerFixture({ origin: 'prior', resumable: true })}
     />,
   )
@@ -340,7 +336,6 @@ test('Workers rows and detail headers omit null and legacy-id names without inve
   const roster = renderToStaticMarkup(
     <WorkerRosterPanel
       onSelect={noop}
-      orchestratorActive={true}
       workers={[worker, { ...worker, agentId: 'unnamed', handle: null }]}
     />,
   )
@@ -354,7 +349,6 @@ test('Workers rows and detail headers omit null and legacy-id names without inve
     <WorkerDetailPanel
       lease={null}
       onBack={noop}
-      orchestratorActive={true}
       worker={worker}
     />,
   )
@@ -374,7 +368,7 @@ test('Workers compact rows normalize general-purpose and keep Resumable accessib
     description: 'Resume the investigation',
   })
   const roster = renderToStaticMarkup(
-    <WorkerRosterPanel onSelect={noop} orchestratorActive={true} workers={[worker]} />,
+    <WorkerRosterPanel onSelect={noop} workers={[worker]} />,
   )
   expect(roster).toContain('General-purpose')
   expect(roster).toContain('status Resumable')
@@ -393,7 +387,6 @@ test('Workers compact rows normalize general-purpose and keep Resumable accessib
     <WorkerDetailPanel
       lease={null}
       onBack={noop}
-      orchestratorActive={true}
       worker={worker}
     />,
   )
@@ -405,7 +398,6 @@ test('worker detail fabricates no WMeta field when there is no lease (waiver 7)'
     <WorkerDetailPanel
       lease={null}
       onBack={noop}
-      orchestratorActive={true}
       worker={workerFixture()}
     />,
   )
@@ -423,7 +415,6 @@ test('worker detail offers no focus/open-thread affordance (D1 waives WorkerFocu
       lease={null}
       onBack={noop}
       onStopTask={noop}
-      orchestratorActive={true}
       worker={workerFixture()}
     />,
   )
@@ -606,7 +597,6 @@ test('no P4-32b surface renders an em dash (operator rule)', () => {
     renderToStaticMarkup(
       <WorkerRosterPanel
         onSelect={noop}
-        orchestratorActive={true}
         workers={[workerFixture()]}
       />,
     ),
@@ -616,7 +606,6 @@ test('no P4-32b surface renders an em dash (operator rule)', () => {
         nowMs={0}
         onBack={noop}
         onStopTask={noop}
-        orchestratorActive={true}
         worker={workerFixture({ handoffStatus: 'blocked', blockReason: 'pick a schema' })}
       />,
     ),

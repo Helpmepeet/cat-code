@@ -262,18 +262,13 @@ export function TasksDialog({
               lease={selectLeaseForOwner(leases, selectedWorker.agentId)}
               nowMs={now}
               onBack={() => setSelectedWorkerId(null)}
-              orchestratorActive={agentMode?.active ?? false}
               {...(onStopTask ? { onStopTask } : {})}
               worker={selectedWorker}
             />
           ) : tab === 'leases' ? (
             <LeaseRosterPanel nowMs={now} snapshot={leases} workers={workers} />
           ) : tab === 'workers' ? (
-            <WorkerRosterPanel
-              onSelect={setSelectedWorkerId}
-              orchestratorActive={agentMode?.active ?? false}
-              workers={workers}
-            />
+            <WorkerRosterPanel onSelect={setSelectedWorkerId} workers={workers} />
           ) : flat.length === 0 ? (
             <div className="px-4 py-10 text-center">
               <div className="mb-1 text-[13px] font-medium text-text-subtle">
@@ -379,14 +374,12 @@ function DialogTabButton({
  */
 export function WorkerRosterPanel({
   workers,
-  orchestratorActive,
   onSelect,
 }: {
   workers: readonly AgentModeWorkerItem[]
-  orchestratorActive: boolean
   onSelect: (agentId: string) => void
 }) {
-  const summary = summarizeOrchestratorWorkers(workers, orchestratorActive)
+  const summary = summarizeOrchestratorWorkers(workers)
   const groups = groupWorkersByRole(workers)
 
   if (workers.length === 0) {
@@ -423,12 +416,6 @@ export function WorkerRosterPanel({
             {summary.orchestrator} on the assistant
           </span>
         ) : null}
-        {summary.user > 0 ? (
-          <span className="inline-flex items-center gap-1.5 text-tone-warn">
-            <AgentPip size="xs" state="needs-you" />
-            {summary.user} needs you
-          </span>
-        ) : null}
         {summary.done > 0 ? (
           <span className="inline-flex items-center gap-1.5">
             <AgentPip size="xs" state="completed" />
@@ -447,7 +434,6 @@ export function WorkerRosterPanel({
             <WorkerRow
               key={worker.agentId}
               onSelect={() => onSelect(worker.agentId)}
-              orchestratorActive={orchestratorActive}
               worker={worker}
             />
           ))}
@@ -460,18 +446,16 @@ export function WorkerRosterPanel({
 /** One worker row: lifecycle pip, genuine name when available, task text, type. */
 function WorkerRow({
   worker,
-  orchestratorActive,
   onSelect,
 }: {
   worker: AgentModeWorkerItem
-  orchestratorActive: boolean
   onSelect: () => void
 }) {
-  const state = orchestratorWorkerState(worker, orchestratorActive)
+  const state = orchestratorWorkerState(worker)
   const name = selectWorkerDisplayName(worker)
   return (
     <button
-      aria-label={workerAccessibleLabel(worker, orchestratorActive)}
+      aria-label={workerAccessibleLabel(worker)}
       className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left hover:bg-shell-hover"
       onClick={onSelect}
       type="button"
@@ -496,20 +480,18 @@ function WorkerRow({
  */
 export function WorkerDetailPanel({
   worker,
-  orchestratorActive,
   lease,
   onBack,
   onStopTask,
   nowMs,
 }: {
   worker: AgentModeWorkerItem
-  orchestratorActive: boolean
   lease: LeaseOwnerRow | null
   onBack: () => void
   onStopTask?: (taskId: string) => void
   nowMs?: number
 }) {
-  const state = orchestratorWorkerState(worker, orchestratorActive)
+  const state = orchestratorWorkerState(worker)
   const name = selectWorkerDisplayName(worker)
   const result = selectWorkerResult(worker)
   const stopTargetId = selectWorkerStopTargetId(worker)
@@ -527,7 +509,7 @@ export function WorkerDetailPanel({
         {name ? <AgentHandle name={name} /> : null}
         <AgentTypeLabel role={worker.role} />
         <AgentStateLabel state={state} />
-        <Baton owner={deriveWorkerOwner(worker, orchestratorActive)} />
+        <Baton owner={deriveWorkerOwner(worker)} />
       </div>
 
       <div className="flex flex-col gap-3.5 px-0.5 pt-3.5">
@@ -543,21 +525,19 @@ export function WorkerDetailPanel({
         ) : null}
 
         {/* The real handoff gate: `handoffStatus: 'blocked'` + its `blockReason`
-            (`LocalAgentTask.tsx:184`). Neutral-purple, because an active
-            orchestrator owns this handoff and the user has nothing to do (D2 C2). */}
+            (`LocalAgentTask.tsx:184`). Neutral-purple, because the delegating
+            assistant owns this handoff and the user has nothing to do (D2 C2). */}
         {worker.handoffStatus === 'blocked' && worker.blockReason ? (
           <div className="rounded-lg border border-purple-400/30 bg-purple-400/[0.08] px-3 py-2.5">
             <AgentSectionLabel tone="accent">
-              {orchestratorActive ? 'Waiting on the assistant' : 'Waiting on you'}
+              Waiting on the assistant
             </AgentSectionLabel>
             <div className="mt-1.5 text-[12.5px] leading-relaxed text-purple-200">
               {worker.blockReason}
             </div>
-            {orchestratorActive ? (
-              <div className="mt-1.5 text-[10.5px] text-text-subtle">
-                The assistant resolves this or relays it to you in its own turn.
-              </div>
-            ) : null}
+            <div className="mt-1.5 text-[10.5px] text-text-subtle">
+              The assistant resolves this or relays it to you in its own turn.
+            </div>
           </div>
         ) : null}
 

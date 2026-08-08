@@ -153,7 +153,11 @@ describe('Notifications', () => {
     await new Promise(resolve => setTimeout(resolve, 30))
     instance.unmount()
     const plain = stripAnsi(output)
-    expect(plain).toContain('@Curie (implementor) needs your input')
+    // The blocker goes back to this conversation's own queue, so the line
+    // reports the state and offers the transcript rather than claiming the
+    // user owes an answer.
+    expect(plain).toContain('@Curie (implementor) is blocked')
+    expect(plain).not.toContain('needs your input')
     expect(plain).toContain('↵ to open')
   })
 

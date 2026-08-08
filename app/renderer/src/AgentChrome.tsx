@@ -18,6 +18,7 @@ import {
   agentTypeMeta,
   type AgentStateKey,
 } from './agentIdentity.js'
+import type { WorkerOwner } from './orchestratorState.js'
 import {
   ACTION_BUTTON_TONE_CLASS,
   AGENT_STATE_TONE_CLASS,
@@ -110,7 +111,7 @@ export function AgentHandle({ name, className }: { name: string; className?: str
   )
 }
 
-/** Pip + lifecycle word (e.g. a purple "Waiting on orchestrator"). */
+/** Pip + lifecycle word (e.g. a purple "Waiting on the assistant"). */
 export function AgentStateLabel({
   state,
   size = 'sm',
@@ -291,21 +292,15 @@ function OrchestratorGlyph() {
 }
 
 /**
- * Attention baton — the owner chip. Neutral (→orchestrator) unless the human owns
- * the next action (→you), the only amber case (D2 C2).
+ * Attention baton — the owner chip. Always neutral (→assistant): no worker on
+ * this seam can put the next action on the human, so the amber →you face was
+ * removed with the `user` owner it rendered (see `orchestratorState.ts`).
  */
-export function Baton({ owner }: { owner: 'none' | 'orchestrator' | 'user' }) {
+export function Baton({ owner }: { owner: WorkerOwner }) {
   if (owner === 'none') return null
-  if (owner === 'user') {
-    return (
-      <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[5px] border border-tone-warn/30 bg-tone-warn/10 px-1.5 py-px font-mono text-[10px] font-semibold text-tone-warn">
-        <span className="opacity-80">→</span>you
-      </span>
-    )
-  }
   return (
     <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[5px] border border-purple-400/30 bg-transparent px-1.5 py-px font-mono text-[10px] font-semibold text-purple-400">
-      <span className="opacity-80">→</span>orchestrator
+      <span className="opacity-80">→</span>assistant
     </span>
   )
 }

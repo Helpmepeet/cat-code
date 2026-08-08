@@ -201,7 +201,7 @@ test('compresses durable Agent Mode worker sessions using workerUxSummary semant
   expect(deriveAgentModeWorkerState({ ...base, status: 'killed' })).toBe('attention')
 })
 
-test('maps a blocked local_agent task to the solo needs-you state (no orchestrator context here)', () => {
+test('maps a blocked local_agent task to waiting-on-the-assistant, never to needs-you', () => {
   const blockedTask = {
     type: 'local_agent' as const,
     id: 'task-a1',
@@ -214,12 +214,11 @@ test('maps a blocked local_agent task to the solo needs-you state (no orchestrat
     handoffStatus: 'blocked' as const,
   }
 
-  // B6 (2026-07-12 review): this function has no `active`/orchestrator
-  // context, so a blocked local_agent task always reads the solo 'needs-you'.
-  // The orchestrator-owned neutral 'waiting' state is derived separately by
-  // `orchestratorState.ts`'s `orchestratorWorkerState`, which HAS the
-  // `active` flag (see orchestratorState.test.ts).
-  expect(deriveTaskAgentState(blockedTask)).toBe('needs-you')
+  // A blocked subagent waits on the assistant that delegated it: its result text
+  // is queued to the parent conversation and drained into a fresh turn with no
+  // human action. This returned the amber 'needs-you' until 2026-08-09, which
+  // told the user to answer a handoff already addressed to the model.
+  expect(deriveTaskAgentState(blockedTask)).toBe('waiting')
 })
 
 test('maps real task lifecycle and attention fields without prototype activity fixtures', () => {

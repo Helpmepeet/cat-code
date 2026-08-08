@@ -112,13 +112,12 @@ test('groups active vs completed, sorted within each group', () => {
 })
 
 test('taskDisplayState reuses P4-2 deriveTaskAgentState for local_agent/teammate/remote_agent', () => {
-  // B6 (2026-07-12 review): the /tasks dialog has no orchestrator-active
-  // context, so a blocked local_agent task always reads the solo 'needs-you'
-  // here — the orchestrator-owned neutral 'waiting' is derived elsewhere
-  // (`orchestratorState.ts`'s `orchestratorWorkerState`, which has `active`).
+  // A blocked local_agent waits on the assistant, not on the user: the handoff
+  // is queued to the delegating conversation. `remote_agent`'s ultraplan gates
+  // below are the genuine user-owned states and stay 'needs-you'.
   expect(
     taskDisplayState(item({ type: 'local_agent', status: 'running', handoffStatus: 'blocked' })),
-  ).toBe('needs-you')
+  ).toBe('waiting')
   expect(
     taskDisplayState(item({ type: 'local_agent', status: 'running', isBackgrounded: true })),
   ).toBe('background')

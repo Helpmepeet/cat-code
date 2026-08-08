@@ -3498,7 +3498,6 @@ export function App() {
           <TasksStrip
             snapshot={selectTasksSnapshot(tasks, activeSessionId)}
             workers={activeAgentModeSnapshot?.workers ?? EMPTY_WORKERS}
-            orchestratorActive={activeAgentModeSnapshot?.active ?? false}
             onOpen={() => setTasksOpen(true)}
           />
         ) : null}
@@ -3560,39 +3559,28 @@ export function App() {
 export function TasksStrip({
   snapshot,
   workers,
-  orchestratorActive,
   onOpen,
 }: {
   snapshot: ReturnType<typeof selectTasksSnapshot>
   workers: readonly AgentModeWorkerItem[]
-  orchestratorActive: boolean
   onOpen: () => void
 }) {
-  const pill = orchestratorPill(workers, orchestratorActive)
+  const pill = orchestratorPill(workers)
   const backgroundTasks = groupTaskItems(snapshot).active.filter(
     item => item.type !== 'local_agent',
   )
   if (!pill && backgroundTasks.length === 0) return null
-  const attention = pill?.attention === true
   return (
     <button
-      className={
-        'absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs shadow-[0_10px_30px_rgba(0,0,0,0.5)] ' +
-        (attention
-          ? 'border-tone-warn/30 bg-tone-warn/10 font-semibold text-tone-warn hover:bg-tone-warn/20'
-          : 'border-shell-seam bg-shell-chrome text-text-muted hover:text-text-primary')
-      }
+      className="absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-full border border-shell-seam bg-shell-chrome px-3 py-1.5 text-xs text-text-muted shadow-[0_10px_30px_rgba(0,0,0,0.5)] hover:text-text-primary"
       onClick={onOpen}
       type="button"
     >
       <span
-        className={
-          'h-1.5 w-1.5 animate-pulse rounded-full ' +
-          (attention ? 'bg-tone-warn' : 'bg-accent')
-        }
+        className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent"
         aria-hidden="true"
       />
-      {pill ? <span className={attention ? '' : 'text-accent'}>{pill.label}</span> : null}
+      {pill ? <span className="text-accent">{pill.label}</span> : null}
       {pill && backgroundTasks.length > 0 ? (
         <span aria-hidden="true" className="text-text-ghost">
           ·
@@ -4376,10 +4364,9 @@ export function SessionPane({
       <div className="mx-auto flex w-full max-w-[var(--transcript-width)] shrink-0 flex-col gap-4">
       {/* P4-32a (R1) — the orchestrator worker roster is the prototype's declared
        * host for this block: above the composer, in the transcript's own measure,
-       * ahead of the permission/question stack. It dims while the orchestrator is
+       * ahead of the permission/question stack. It dims while the assistant is
        * itself generating, and renders nothing when there are no workers. */}
       <OrchestratorRoster
-        active={orchestratorActive}
         compact={generating}
         onOpen={onOpenTasks}
         workers={orchestratorWorkers}

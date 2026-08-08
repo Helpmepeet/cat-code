@@ -17,17 +17,16 @@
  * have no field on this seam and are ruled cut/waived (§10) — they are not mocked.
  *
  * Lifecycle vs owner stay two independent axes (D2 §1): a blocked worker is
- * NEUTRAL while an orchestrator is active, and only the solo case raises the
- * amber baton.
+ * NEUTRAL and its baton points at the assistant, never at the user.
  *
- * KNOWN DRIFT, flagged for a ruling rather than resolved here: the "solo" axis is
- * `AgentModeSnapshot.active` (`isAgentMode()`), but a blocked worker's handoff is
- * queued to its PARENT loop unconditionally — `handoffStatus` is parsed from the
- * subagent's own result text (`src/tasks/LocalAgentTask/LocalAgentTask.tsx:501,520`)
- * and the notification goes to the spawning conversation whether or not that
- * session is in Agent Mode. So a normal delegating session reads a blocked worker
- * as user-owned when the assistant on that thread actually owns it. The derivation
- * is P4-8a's, shipped and test-pinned; this surface is the first to render it.
+ * The drift this header used to flag was ruled on 2026-08-09 and fixed in
+ * `orchestratorState.ts`: the escalation keyed on `AgentModeSnapshot.active`
+ * (`isAgentMode()`), but a blocked worker's handoff is queued to its PARENT loop
+ * unconditionally — `handoffStatus` is parsed from the subagent's own result text
+ * (`src/tasks/LocalAgentTask/LocalAgentTask.tsx:501,520`) and the notification goes
+ * to the spawning conversation whether or not that session is in Agent Mode. So a
+ * normal delegating session read a blocked worker as user-owned when the assistant
+ * on that thread actually owned it. There is no `active` axis on this surface now.
  */
 import {
   AgentHandle,
@@ -59,14 +58,11 @@ const ROW_CLASS =
 
 export function OrchestratorRoster({
   workers,
-  active,
   compact = false,
   onOpen,
 }: {
   workers: readonly AgentModeWorkerItem[]
-  /** Is an orchestrator running? Decides whether a blocked worker escalates. */
-  active: boolean
-  /** Dimmer resting header while the orchestrator itself is generating. */
+  /** Dimmer resting header while the assistant itself is generating. */
   compact?: boolean
   /** Open the workers list; carries the news-bearing worker's id when there is one. */
   onOpen?: (agentId?: string) => void
@@ -78,12 +74,12 @@ export function OrchestratorRoster({
     if (!worker) return null
     return (
       <div className="mx-1 mb-0.5 rounded-[10px] bg-app-bg px-1 py-[3px]">
-        <WorkerRow onOpen={onOpen} worker={worker} active={active} />
+        <WorkerRow onOpen={onOpen} worker={worker} />
       </div>
     )
   }
 
-  const { lead, tail, anyWorking } = selectOrchestratorRosterLine(workers, active)
+  const { lead, tail, anyWorking } = selectOrchestratorRosterLine(workers)
 
   return (
     <div className="group relative mx-1 mb-0.5 rounded-[10px] bg-app-bg px-1 py-[3px]">
@@ -96,12 +92,7 @@ export function OrchestratorRoster({
             {workers.length} SUBAGENTS
           </div>
           {workers.map(worker => (
-            <WorkerRow
-              key={worker.agentId}
-              onOpen={onOpen}
-              worker={worker}
-              active={active}
-            />
+            <WorkerRow key={worker.agentId} onOpen={onOpen} worker={worker} />
           ))}
         </div>
       </div>
@@ -109,18 +100,14 @@ export function OrchestratorRoster({
       <button
         type="button"
         className={ROW_CLASS}
-        aria-label={rosterAccessibleLabel(lead?.worker ?? null, tail, workers.length, active)}
+        aria-label={rosterAccessibleLabel(lead?.worker ?? null, tail, workers.length)}
         // A promoted lead raises ITS id (the prototype's "promoted handle opens
         // its thread"); the consumer is P4-32b's `TasksDialog` drilldown, so today
         // App opens the workers list and drops the id.
         onClick={() => onOpen?.(lead?.worker.agentId)}
       >
         {lead ? (
-          <PromotedLead
-            active={active}
-            tail={tail}
-            worker={lead.worker}
-          />
+          <PromotedLead tail={tail} worker={lead.worker} />
         ) : (
           <>
             <span
@@ -154,14 +141,12 @@ export function OrchestratorRoster({
 /** The news-bearing worker, promoted onto the line ahead of the neutral counts. */
 function PromotedLead({
   worker,
-  active,
   tail,
 }: {
   worker: AgentModeWorkerItem
-  active: boolean
   tail: RosterCount[]
 }) {
-  const state = orchestratorWorkerState(worker, active)
+  const state = orchestratorWorkerState(worker)
   const name = selectWorkerDisplayName(worker)
   return (
     <>
@@ -175,7 +160,7 @@ function PromotedLead({
       <AgentTypeLabel role={worker.role} />
       {tail.length > 0 ? <Separator /> : null}
       <CountTail items={tail} />
-      <Baton owner={deriveWorkerOwner(worker, active)} />
+      <Baton owner={deriveWorkerOwner(worker)} />
     </>
   )
 }
@@ -188,11 +173,9 @@ function PromotedLead({
  */
 function WorkerRow({
   worker,
-  active,
   onOpen,
 }: {
   worker: AgentModeWorkerItem
-  active: boolean
   onOpen?: (agentId?: string) => void
 }) {
   const role = agentTypeMeta(worker.role)
@@ -200,7 +183,7 @@ function WorkerRow({
     <button
       type="button"
       className={ROW_CLASS}
-      aria-label={workerAccessibleLabel(worker, active)}
+      aria-label={workerAccessibleLabel(worker)}
       // The id is raised for P4-32b's read-only `TasksDialog` worker drilldown
       // (ruling D1); App currently opens the dialog and drops it, so a click
       // lands on the workers list rather than this worker. Not broken, deferred.
@@ -216,9 +199,9 @@ function WorkerRow({
       ) : (
         <span className="flex-1" />
       )}
-      <AgentPip state={orchestratorWorkerState(worker, active)} />
+      <AgentPip state={orchestratorWorkerState(worker)} />
       <AgentTypeLabel role={worker.role} />
-      <Baton owner={deriveWorkerOwner(worker, active)} />
+      <Baton owner={deriveWorkerOwner(worker)} />
     </button>
   )
 }
@@ -240,10 +223,9 @@ function rosterAccessibleLabel(
   lead: AgentModeWorkerItem | null,
   tail: readonly RosterCount[],
   workerCount: number,
-  active: boolean,
 ): string {
   const subject = lead
-    ? workerAccessibleLabel(lead, active)
+    ? workerAccessibleLabel(lead)
     : `${workerCount} subagents`
   const counts = tail.map(item => item.text)
   if (!lead && counts.length === 0) counts.push('idle')

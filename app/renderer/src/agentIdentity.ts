@@ -162,7 +162,7 @@ export const AGENT_STATE_META = {
   },
   waiting: {
     key: 'waiting',
-    label: 'Waiting on orchestrator',
+    label: 'Waiting on the assistant',
     tone: 'purple',
     color: '#c084fc',
     icon: 'pip-ring',
@@ -349,20 +349,15 @@ export function deriveTaskAgentState(task: TaskAgentSource): AgentStateKey {
   if (task.type === 'local_agent') {
     if (task.handoffStatus === 'blocked') {
       // A local_agent's blocked handoff (D2 `decisions/AGENT-CHROME.md`,
-      // prototype OrchestratorMode.jsx `workerStateKey`:163) is two-axis:
-      // orchestrator-owned blocked is NEUTRAL ("Waiting on orchestrator"),
-      // solo (no orchestrator to pick it up) escalates to amber 'needs-you'.
-      // This function has no `active`/orchestrator context — its only
-      // production caller (`tasksState.ts` `taskDisplayState` →
-      // `TasksDialog.tsx:172`, the cross-session /tasks dialog) doesn't have
-      // that context either, so it always reads the solo 'needs-you' here.
-      // The orchestrator-owned 'waiting' state IS wired — by
-      // `orchestratorState.ts`'s `orchestratorWorkerState`, which HAS the
-      // `active` flag (the P4-8 roster). B6 (2026-07-12 review) deleted the
-      // `blockedOwner`-gated arm this function used to carry: it required an
-      // option no production caller ever passed, so it was dead — only
-      // `agentIdentity.test.ts` reached it.
-      return 'needs-you'
+      // prototype OrchestratorMode.jsx `workerStateKey`:163) waits on the
+      // assistant that delegated it, never on the user. The subagent's own
+      // result text carries the blocker back to the parent conversation, which
+      // is drained into a fresh turn with no human action
+      // (`src/tasks/LocalAgentTask/LocalAgentTask.tsx:273` →
+      // `app/sidecar/sidecarServer.ts:1209` / `src/hooks/useQueueProcessor.ts:48`).
+      // This used to return the amber 'needs-you' unconditionally, which told
+      // the user to act on a handoff already addressed to the model.
+      return 'waiting'
     }
     if (task.status === 'running' && task.isBackgrounded === true) {
       return 'background'

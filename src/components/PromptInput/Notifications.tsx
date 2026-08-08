@@ -385,9 +385,14 @@ function getLocalAgentNotification(
 
   const identity = formatLocalAgentNotificationIdentity(task)
   if (task.handoffStatus === 'blocked') {
+    // Not "needs your input": the subagent's blocker is queued back to THIS
+    // conversation and picked up on the next turn without you
+    // (`src/tasks/LocalAgentTask/LocalAgentTask.tsx:273` →
+    // `src/hooks/useQueueProcessor.ts:48`). The line reports the state and
+    // offers the transcript; it does not hand the user the next move.
     const statusOptions = { awaitingApproval: true }
     return {
-      text: `${getTaskStatusIcon(task.status, statusOptions)} ${identity} needs your input        ↵ to open`,
+      text: `${getTaskStatusIcon(task.status, statusOptions)} ${identity} is blocked        ↵ to open`,
       color: getTaskStatusColor(task.status, statusOptions),
     }
   }
