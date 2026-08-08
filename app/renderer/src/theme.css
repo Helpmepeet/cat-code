@@ -68,6 +68,29 @@
   --tone-warn: #fbbf24;
   --tone-danger: #f87171;
   --tone-info: #60a5fa;
+
+  /*
+   * Reading measure for model-authored prose (`.md-prose`, see @layer
+   * components). Declared here, not inside the class, because it is a
+   * live-tuning knob like the transcript width and the text tones — one value,
+   * one place.
+   *
+   * MEASURED, not assumed. In DM Sans a `0` is 0.69em, so the usual `ch`-based
+   * rule of thumb runs ~40% wide here: 72ch measured 696px, still 103 characters
+   * a line. `em` is the honest unit for this font — it tracks the size and
+   * ignores the digit glyph. At 14px, 42em is 588px, which measured 87
+   * characters of ordinary sentence text.
+   *
+   * 87 is deliberately at the WIDE end of the comfortable band rather than the
+   * 65 an article would take: this content is dense with file paths,
+   * identifiers and inline code, and a narrow column breaks those badly. Being
+   * `em`, the same token gives the 13px reasoning bodies their own proportional
+   * width.
+   *
+   * It caps TEXT only. Code blocks, tables and images still get the full 1000px
+   * column; narrowing those was the problem the wide column was chosen to fix.
+   */
+  --prose-measure: 42em;
 }
 
 /*
@@ -308,6 +331,186 @@
   .welcome-cat-glow {
     filter: drop-shadow(0 0 12px rgb(var(--accent-rgb) / 0.5))
       drop-shadow(0 0 26px rgb(var(--accent-rgb) / 0.24));
+  }
+
+  /* ── Model-prose typography ────────────────────────────────────────────────
+   * One grammar for every body of model-authored Markdown: assistant answers,
+   * long-form reasoning, thinking blocks. Written as CSS rather than the
+   * arbitrary-variant className it replaces (`[&>*+*]:mt-2 [&_h1]:… [&_ul]:…`)
+   * because the rules it needs are structural — sibling combinators, `::marker`,
+   * `:is()` groups, per-level heading spacing — and a utility string can only
+   * reach descendants by tag name. Still zero inline style, still static.
+   *
+   * EVERY length is `em`, so the same class serves the 14px assistant column and
+   * the 13px reasoning bodies without a second scale.
+   *
+   * The transcript column is 1000px wide by operator decision (see
+   * `TranscriptView.tsx` — tool rows, paths and diffs need it). Running text
+   * does not: at 14px, 936px is ~130 characters a line, well past the return
+   * sweep a reader can track. So the MEASURE is capped on text-level blocks
+   * only. Code blocks, tables and images keep the full column, which is the
+   * whole reason the column is wide. `--prose-measure` is here to be tuned live,
+   * like the width and the text tones were.
+   *
+   * The model's structure is not ours to trust: it may emit no headings, six
+   * levels of them, loose lists, or a 400-word paragraph. So the values below
+   * assume nothing about the shape and degrade in place — an unstyled level
+   * inherits a sane one, and every level of nesting has a rule. */
+  .md-prose {
+    /* A bare path, URL or identifier is not rare in this content, and unbroken
+     * it forces the whole column to scroll sideways. */
+    overflow-wrap: break-word;
+  }
+
+  .md-prose > :is(p, ul, ol, h1, h2, h3, h4, h5, h6, blockquote) {
+    max-width: var(--prose-measure);
+  }
+
+  /* Baseline rhythm between top-level blocks. Headings override it below. */
+  .md-prose > * + * {
+    margin-top: 0.85em;
+  }
+
+  .md-prose > :first-child {
+    margin-top: 0;
+  }
+
+  .md-prose p {
+    /* Chromium: shortens the last line rather than leaving a one-word orphan. */
+    text-wrap: pretty;
+  }
+
+  /* Headings. Preflight flattens h1–h6 to `font-size: inherit; font-weight:
+   * inherit`, so before this rule an `###` was byte-identical to a paragraph and
+   * `##` differed by weight alone — the exact structure a long answer relies on
+   * to be skimmable was invisible. Sizes stay close together on purpose: this is
+   * a chat transcript, not an article, and a 2em h1 in a 14px column reads as a
+   * banner. The hierarchy is carried mostly by SPACE, not size. */
+  .md-prose :is(h1, h2, h3, h4, h5, h6) {
+    font-weight: 600;
+    line-height: 1.3;
+    text-wrap: balance;
+  }
+
+  .md-prose h1 {
+    font-size: 1.35em;
+  }
+
+  .md-prose h2 {
+    font-size: 1.18em;
+  }
+
+  .md-prose h3 {
+    font-size: 1.05em;
+  }
+
+  /* h4+ has no size left to spend in a 14px column, so it separates by weight
+   * and by the space above it alone. It deliberately does NOT recede into a
+   * muted colour: plenty of answers use `####` as their TOP level, and a muted
+   * h4 in one of those renders every heading quieter than the body it
+   * introduces — worse than the flat baseline this replaces. Deep levels
+   * collapsing toward h3 is the honest degradation when the level numbering is
+   * not ours to choose. */
+  .md-prose :is(h4, h5, h6) {
+    font-size: 1em;
+  }
+
+  /* The scannability lever: a heading owns the gap ABOVE it, and sits tight to
+   * the text it introduces. Equal margins on both sides (what `> * + *` gave)
+   * leave a heading floating between two blocks, belonging to neither. */
+  .md-prose > * + :is(h1, h2) {
+    margin-top: 1.5em;
+  }
+
+  .md-prose > * + :is(h3, h4, h5, h6) {
+    margin-top: 1.35em;
+  }
+
+  /* Also collapses a stacked h2-under-h1 back to a tight pair — this rule comes
+   * last, and at equal specificity that is what decides it. */
+  .md-prose > :is(h1, h2, h3, h4, h5, h6) + * {
+    margin-top: 0.5em;
+  }
+
+  /* Lists. Preflight strips markers and padding from `ul`/`ol`, so every level
+   * here is explicit. Depth gets its own marker rather than an indent alone,
+   * because at 1.5em the indent is easy to lose across a page of nesting. */
+  .md-prose :is(ul, ol) {
+    padding-left: 1.5em;
+  }
+
+  .md-prose ul {
+    list-style-type: disc;
+  }
+
+  .md-prose ol {
+    list-style-type: decimal;
+  }
+
+  .md-prose ul ul {
+    list-style-type: circle;
+  }
+
+  .md-prose ul ul ul {
+    list-style-type: square;
+  }
+
+  .md-prose li::marker {
+    color: var(--color-text-muted);
+  }
+
+  /* Items need to separate from the lines INSIDE an item. With no rule at all, a
+   * wrapped item and a new item were the same distance apart. */
+  .md-prose li + li {
+    margin-top: 0.3em;
+  }
+
+  .md-prose li > :is(ul, ol) {
+    margin-top: 0.3em;
+  }
+
+  /* A blank line between items makes remark wrap each one in `<p>` (a "loose"
+   * list — common in model output). Those paragraphs are not top-level, so the
+   * sibling rule above never reached them and they ran together. */
+  .md-prose li > p + p {
+    margin-top: 0.6em;
+  }
+
+  .md-prose blockquote {
+    border-left: 2px solid var(--color-shell-seam);
+    padding-left: 0.9em;
+    color: var(--color-text-muted);
+  }
+
+  .md-prose blockquote > * + * {
+    margin-top: 0.7em;
+  }
+
+  /* Preflight leaves `hr` a 1px rule in currentColor — a near-white line across
+   * the column, louder than any heading on the page. */
+  .md-prose hr {
+    border: 0;
+    border-top: 1px solid var(--color-shell-seam);
+    max-width: var(--prose-measure);
+  }
+
+  .md-prose > * + hr,
+  .md-prose > hr + * {
+    margin-top: 1.6em;
+  }
+
+  /* Inline code only — a fenced block is `pre > code` and belongs to
+   * `CodeBlock`. DM Mono runs visibly larger than DM Sans at a shared size, so
+   * it is scaled down to sit on the same optical line. */
+  .md-prose :not(pre) > code {
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+    color: var(--color-accent-soft);
+    overflow-wrap: anywhere;
+  }
+
+  .md-prose a {
+    color: var(--color-accent);
   }
 }
 

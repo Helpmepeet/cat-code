@@ -2033,6 +2033,53 @@ test('P4-18c: an unknown code language degrades to plain framed code, never thro
   expect(html).toContain('notalang') // language label passthrough
 })
 
+// ── Model-prose typography (`.md-prose`, theme.css)
+//
+// This suite renders to static markup with no stylesheet, so it can prove the
+// class REACHES each prose body and that the elements the class styles are
+// really emitted. It cannot prove the computed measure, spacing or scale —
+// those are operator-verifiable in a live window only.
+
+test('every model-authored prose body carries the shared typography class', () => {
+  const html = render(proseRow('An ordinary answer.', 'plain'))
+
+  expect(html).toContain('md-prose')
+  // Typography moved OUT of the className; the old per-tag utility string must
+  // not come back alongside it and win by layer order.
+  expect(html).not.toContain('[&>*+*]:mt-2')
+})
+
+test('deep heading levels reach the DOM as real heading elements to be styled', () => {
+  // Preflight flattens h1-h6 to inherited size and weight, so `.md-prose` is the
+  // only thing that distinguishes them. Models emit ### and #### freely.
+  const html = render(
+    proseRow('# One\n\n## Two\n\n### Three\n\n#### Four\n\nBody.\n', 'headings'),
+  )
+
+  expect(html).toContain('<h1>One</h1>')
+  expect(html).toContain('<h2>Two</h2>')
+  expect(html).toContain('<h3>Three</h3>')
+  expect(html).toContain('<h4>Four</h4>')
+})
+
+test('a loose list keeps its per-item paragraphs, which the class spaces', () => {
+  // Blank lines between items make remark wrap each item in <p>. Those are not
+  // top-level siblings, so they need `.md-prose li > p + p` to separate at all.
+  const html = render(
+    proseRow('- first item\n\n  still first\n\n- second item\n', 'loose'),
+  )
+
+  expect(html).toContain('<li>')
+  expect(html).toContain('<p>first item</p>')
+  expect(html).toContain('<p>still first</p>')
+})
+
+test('a thematic break renders an <hr> rather than being dropped', () => {
+  const html = render(proseRow('Before.\n\n---\n\nAfter.\n', 'rule'))
+
+  expect(html).toContain('<hr/>')
+})
+
 function diffToolRow(lines: string[], filePath: string, id: string): NestedTranscriptRow {
   return toolRow({
     toolName: `Edit_${id}`,

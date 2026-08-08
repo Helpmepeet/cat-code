@@ -312,6 +312,12 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
       // two are what align the transcript's edges with the input's. Do not
       // "restore" either to 740 as a parity fix.
       //
+      // The column stays 1000px; RUNNING TEXT inside it does not use all of it.
+      // `.md-prose` (theme.css) caps paragraphs, lists and headings at
+      // `--prose-measure` while code blocks, tables and tool rows keep the full
+      // width. The two are not in tension: the wide column exists for the things
+      // that were truncating, and a 130-character line was never one of them.
+      //
       // Prose weight also moved (light to medium) at `AssistantProse` below,
       // for legibility on this near-black background. It stays scoped to
       // assistant prose, NOT the whole column.
@@ -617,6 +623,12 @@ const TranscriptRowView = memo(function TranscriptRowView({
  * no `allowDangerousHtml`): a transcript can carry untrusted model/tool output.
  * `rehype-highlight` emits React <span> elements (not injected HTML), so
  * highlighting adds no raw-HTML surface.
+ *
+ * TYPOGRAPHY IS NOT HERE. Measure, block rhythm, heading scale, list and quote
+ * spacing all live in `.md-prose` (theme.css @layer components), shared with the
+ * reasoning bodies below so one Markdown grammar covers every model-authored
+ * body. This component keeps only what is per-instance: family, size, weight,
+ * colour.
  */
 
 // Stable module-scope plugin config. `remark-gfm` adds pipe tables (+ autolinks/
@@ -659,7 +671,7 @@ function AssistantProse({
     // the app's own reserved-gutter version read as an unexplained gap.
     <div className="group relative">
       <MarkdownErrorBoundary fallback={content}>
-        <div className="font-sans font-medium text-sm leading-relaxed [&>*+*]:mt-2 [&_a]:text-accent [&_blockquote]:border-l-2 [&_blockquote]:border-shell-seam [&_blockquote]:pl-3 [&_blockquote]:text-text-muted [&_h1]:text-base [&_h1]:font-semibold [&_h2]:font-semibold [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5 [&_:not(pre)>code]:font-mono [&_:not(pre)>code]:text-accent-soft">
+        <div className="md-prose font-sans font-medium text-sm leading-relaxed">
           <Markdown
             remarkPlugins={REMARK_PLUGINS}
             rehypePlugins={REHYPE_PLUGINS}
@@ -751,7 +763,7 @@ const MARKDOWN_COMPONENTS = {
   // left-aligned throughout and this keeps zero inline style. Static arbitrary
   // classes only (the FAMILY_STYLE precedent for palette values with no token).
   table: ({ children }: ComponentPropsWithoutRef<'table'>) => (
-    <div className="my-2 overflow-x-auto rounded-lg border border-white/[0.08]">
+    <div className="my-3 overflow-x-auto rounded-lg border border-white/[0.08]">
       <table className="w-full border-collapse text-[13px]">{children}</table>
     </div>
   ),
@@ -778,9 +790,9 @@ const MARKDOWN_COMPONENTS = {
  * not hover-gated — nothing to reveal it over, since it never overlaps
  * content by construction.
  *
- * Tinted with the app's own accent token, the same one `[&_a]:text-accent`
- * already uses for links, dim at rest and full strength on hover/copied,
- * rather than a neutral gray.
+ * Tinted with the app's own accent token, the same one `.md-prose a` already
+ * uses for links, dim at rest and full strength on hover/copied, rather than a
+ * neutral gray.
  */
 function QuoteCopyChip({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
@@ -845,10 +857,9 @@ function QuoteCopyChip({ text }: { text: string }) {
 /**
  * Blockquote renderer, built fresh per `AssistantProse` render closing over
  * that message's raw markdown `rawSource` — `node.position` offsets are into
- * that string. `[&_blockquote]` in `AssistantProse`'s wrapper still supplies
- * the border/color styling by tag-name selector regardless of this
- * component's own className. `ml-7` reserves the left margin `QuoteCopyChip`
- * sits in.
+ * that string. `.md-prose blockquote` (theme.css) still supplies the
+ * border/color styling by tag-name selector regardless of this component's own
+ * className. `ml-7` reserves the left margin `QuoteCopyChip` sits in.
  */
 function createBlockquoteComponent(rawSource: string) {
   return function Blockquote({
@@ -904,7 +915,7 @@ export function CodeBlock({
       .catch(() => {})
   }
   return (
-    <div className="relative my-2 overflow-hidden rounded-lg border border-shell-seam bg-app-bg">
+    <div className="relative my-3 overflow-hidden rounded-lg border border-shell-seam bg-app-bg">
       <span className="absolute left-3.5 top-2 z-[1] inline-flex items-center gap-1.5 font-mono text-[10px] font-semibold tracking-[0.06em] text-accent">
         <span className="opacity-70">&lt;/&gt;</span>
         {lang || 'code'}
@@ -2716,7 +2727,7 @@ function ThinkingBlock({ content }: { content: string }) {
           Thinking
         </span>
       </div>
-      <div className="border-t border-accent/10 px-3.5 py-2.5 text-[13px] italic leading-relaxed text-text-subtle [&>*+*]:mt-2">
+      <div className="md-prose border-t border-accent/10 px-3.5 py-2.5 text-[13px] italic leading-relaxed text-text-subtle">
         <MarkdownErrorBoundary fallback={content}>
           <Markdown remarkPlugins={REMARK_PLUGINS}>{content}</Markdown>
         </MarkdownErrorBoundary>
@@ -2896,7 +2907,7 @@ function ReasoningProse({ content }: { content: string }) {
   return (
     <>
       {hidden ? null : (
-        <div className="mb-1.5 mt-1 border-l border-shell-seam pl-2.5 text-[13px] leading-relaxed text-text-subtle [&>*+*]:mt-2">
+        <div className="md-prose mb-1.5 mt-1 border-l border-shell-seam pl-2.5 text-[13px] leading-relaxed text-text-subtle">
           <MarkdownErrorBoundary fallback={content}>
             <Markdown remarkPlugins={REMARK_PLUGINS}>{content}</Markdown>
           </MarkdownErrorBoundary>
