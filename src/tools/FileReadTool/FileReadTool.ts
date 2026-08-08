@@ -705,7 +705,7 @@ export const FileReadTool = buildTool({
           content =
             memoryFileFreshnessPrefix(data) +
             formatFileLines(data.file) +
-            partialReadNotice(data.file)
+            partialReadNotice(data)
         } else {
           // Determine the appropriate warning message
           content =
@@ -737,17 +737,16 @@ function formatFileLines(file: { content: string; startLine: number }): string {
  * Tells the model when it did not receive the whole file. Load-bearing: a
  * no-limit read is capped at MAX_LINES_TO_READ lines, so without this the
  * model would read the first 2000 lines of a longer file and reasonably
- * conclude it had seen all of it.
+ * conclude it had seen all of it. Whether the read was cut short is decided
+ * in callInner (see truncatedReads), not re-derived from the line totals.
  */
-function partialReadNotice(file: {
-  startLine: number
-  numLines: number
-  totalLines: number
+function partialReadNotice(data: {
+  file: { startLine: number; numLines: number; totalLines: number }
 }): string {
-  const firstLine = Math.max(file.startLine, 1)
-  const lastLine = firstLine + file.numLines - 1
-  if (file.numLines === 0 || lastLine >= file.totalLines) return ''
-  return `\n\n<system-reminder>Showing lines ${firstLine} to ${lastLine} of ${file.totalLines}. This is a partial view. Read again with offset ${lastLine + 1} to continue.</system-reminder>`
+  if (!truncatedReads.has(data)) return ''
+  const firstLine = Math.max(data.file.startLine, 1)
+  const lastLine = firstLine + data.file.numLines - 1
+  return `\n\n<system-reminder>Showing lines ${firstLine} to ${lastLine} of ${data.file.totalLines}. This is a partial view. Read again with offset ${lastLine + 1} to continue.</system-reminder>`
 }
 
 /**
@@ -758,6 +757,9 @@ function partialReadNotice(file: {
  * when the data object becomes unreachable after rendering.
  */
 const memoryFileMtimes = new WeakMap<object, number>()
+
+/** Same side-channel, for "this read stopped short of the end of the file". */
+const truncatedReads = new WeakSet<object>()
 
 function memoryFileFreshnessPrefix(data: object): string {
   const mtimeMs = memoryFileMtimes.get(data)
@@ -781,25 +783,40 @@ async function validateContentTokens(
   const effectiveCount = tokenCount ?? tokenEstimate
 
   if (effectiveCount > effectiveMaxTokens) {
+    const suggestedLimit = range
+      ? suggestedRetryLimit(range.lineCount, effectiveMaxTokens, effectiveCount)
+      : 0
     throw new MaxFileReadTokenExceededError(
       effectiveCount,
       effectiveMaxTokens,
-      range && range.lineCount > 0
+      range && suggestedLimit > 0
         ? {
             startLine: Math.max(range.startLine, 1),
             totalLines: range.totalLines,
-            // Scale the line count by the token overshoot, with headroom so
-            // the retry lands under the cap instead of just under it.
-            suggestedLimit: Math.max(
-              1,
-              Math.floor(
-                (range.lineCount * effectiveMaxTokens * 0.9) / effectiveCount,
-              ),
-            ),
+            suggestedLimit,
           }
         : undefined,
     )
   }
+}
+
+/**
+ * How many lines of the attempted range would have fit under the cap, scaled
+ * by the token overshoot with headroom so the retry lands under the cap
+ * rather than exactly at it.
+ *
+ * Returns 0 when no line-based retry can fit — a single line already blows
+ * the budget, as in a minified bundle. Suggesting `limit: 1` there would loop
+ * the model on the identical failure, so the caller falls back to the generic
+ * advice, which points at searching instead of reading.
+ */
+export function suggestedRetryLimit(
+  lineCount: number,
+  maxTokens: number,
+  tokenCount: number,
+): number {
+  if (lineCount <= 0 || tokenCount <= 0) return 0
+  return Math.floor((lineCount * maxTokens * 0.9) / tokenCount)
 }
 
 type ImageResult = {
@@ -1053,14 +1070,40 @@ async function callInner(
   // read selects the whole file and only then discovers it blew maxTokens,
   // having already paid for the read plus a token-count roundtrip.
   const effectiveLimit = limit ?? MAX_LINES_TO_READ
-  const { content, lineCount, totalLines, totalBytes, readBytes, mtimeMs } =
-    await readFileInRange(
-      resolvedFilePath,
-      lineOffset,
-      effectiveLimit,
-      limit === undefined ? maxSizeBytes : undefined,
-      context.abortController.signal,
-    )
+  // For a default read, fetch one line past the cap. That probe line is the
+  // only way to tell a genuinely longer file from one that merely ends in a
+  // newline, for which readFileInRange counts a phantom empty final line.
+  const isDefaultRead = limit === undefined
+  const {
+    content: selected,
+    lineCount: selectedLines,
+    totalLines,
+    totalBytes,
+    readBytes: selectedBytes,
+    mtimeMs,
+  } = await readFileInRange(
+    resolvedFilePath,
+    lineOffset,
+    isDefaultRead ? effectiveLimit + 1 : effectiveLimit,
+    isDefaultRead ? maxSizeBytes : undefined,
+    context.abortController.signal,
+  )
+
+  let content = selected
+  let lineCount = selectedLines
+  let readBytes = selectedBytes
+  let truncated = false
+  if (isDefaultRead && selectedLines > effectiveLimit) {
+    const cutAt = selected.lastIndexOf('\n')
+    const probeLine = cutAt === -1 ? selected : selected.slice(cutAt + 1)
+    // A blank probe line is the phantom, unless the file continues past it —
+    // a genuinely empty line at the cap boundary still means more to read.
+    truncated =
+      probeLine !== '' || totalLines > lineOffset + effectiveLimit + 1
+    content = cutAt === -1 ? '' : selected.slice(0, cutAt)
+    lineCount = effectiveLimit
+    readBytes = Buffer.byteLength(content, 'utf8')
+  }
 
   await validateContentTokens(content, ext, maxTokens, {
     startLine: offset,
@@ -1073,6 +1116,9 @@ async function callInner(
     timestamp: Math.floor(mtimeMs),
     offset,
     limit,
+    // Only a capped default read is a surprise; an explicit range means the
+    // caller already knows it asked for part of the file.
+    ...(truncated ? { isTruncatedView: true } : {}),
   })
   context.nestedMemoryAttachmentTriggers?.add(fullFilePath)
 
@@ -1094,6 +1140,9 @@ async function callInner(
   }
   if (isAutoMemFile(fullFilePath)) {
     memoryFileMtimes.set(data, mtimeMs)
+  }
+  if (truncated) {
+    truncatedReads.add(data)
   }
 
   logFileOperation({

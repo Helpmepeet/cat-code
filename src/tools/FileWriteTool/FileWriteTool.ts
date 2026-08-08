@@ -212,6 +212,17 @@ export const FileWriteTool = buildTool({
         errorCode: 2,
       }
     }
+    // A write replaces the whole file, so seeing only its head is not enough.
+    // Reachable without an explicit range: Read caps a no-limit read at
+    // MAX_LINES_TO_READ, so a long file comes back truncated by default.
+    if (readTimestamp.isTruncatedView) {
+      return {
+        result: false,
+        message:
+          'Only the beginning of this file has been read, and writing replaces the whole file. Read the rest of it first, using offset to continue from where the last read stopped.',
+        errorCode: 2,
+      }
+    }
 
     // Reuse mtime from the stat above — avoids a redundant statSync via
     // getFileModificationTime. The readTimestamp guard above ensures this

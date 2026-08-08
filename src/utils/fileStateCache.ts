@@ -12,6 +12,11 @@ export type FileState = {
   // Edit/Write must require an explicit Read first. `content` here holds the
   // RAW disk bytes (for getChangedFiles diffing), not what the model saw.
   isPartialView?: boolean
+  // True when a no-limit Read was cut short by the default line cap, so
+  // `content` holds only the head of a longer file. Kept separate from
+  // isPartialView, which also gates Read's dedup — a line-capped read is
+  // still a valid dedup target, it just isn't proof the model saw the file.
+  isTruncatedView?: boolean
 }
 
 // Default max entries for read file state caches

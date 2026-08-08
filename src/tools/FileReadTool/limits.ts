@@ -7,9 +7,12 @@
  *   | maxSizeBytes      | 256 KB  | TOTAL FILE SIZE (not out) | 1 stat        | throws pre-read |
  *   | maxTokens         | 25000   | actual output tokens      | API roundtrip | throws post-read|
  *
- * The line cap applies only when the caller passes no explicit limit, and is
- * what keeps a default read off the two throwing caps.  maxSizeBytes likewise
- * applies only to no-limit reads, so an explicit range still reads any size.
+ * The line cap applies only when the caller passes no explicit limit, and it
+ * relieves maxTokens only.  It cannot relieve maxSizeBytes, which gates on
+ * total file size rather than on the selected slice (see the mismatch note
+ * below), so a default read of a 300 KB file still throws pre-read.
+ * maxSizeBytes likewise applies only to no-limit reads, so an explicit range
+ * still reads a file of any size.
  *
  * Known mismatch: maxSizeBytes gates on total file size, not the slice.
  * Tested truncating instead of throwing for explicit-limit reads that

@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -7,8 +7,9 @@ import {
   FileReadTool,
   MaxFileReadTokenExceededError,
   type Output,
+  suggestedRetryLimit,
 } from './FileReadTool.js'
-import { MAX_LINES_TO_READ } from './prompt.js'
+import { MAX_LINES_TO_READ, OFFSET_INSTRUCTION_TARGETED } from './prompt.js'
 
 let tmpDir: string
 let priorSimple: string | undefined
@@ -26,41 +27,50 @@ afterAll(() => {
   else process.env.CLAUDE_CODE_SIMPLE = priorSimple
 })
 
-const contexts: { abortController: AbortController }[] = []
-
-afterEach(() => {
-  for (const c of contexts) c.abortController.abort()
-  contexts.length = 0
-})
-
-function writeLines(name: string, count: number): string {
+/**
+ * Real source files end with a newline, and readFileInRange counts a phantom
+ * empty final line for those. Fixtures default to that shape so the tests see
+ * what production sees.
+ */
+function writeLines(
+  name: string,
+  count: number,
+  options: { trailingNewline?: boolean } = {},
+): string {
   const filePath = join(tmpDir, name)
   const lines = Array.from({ length: count }, (_, i) => `line ${i + 1}`)
-  writeFileSync(filePath, lines.join('\n'), 'utf-8')
+  const trailing = options.trailingNewline === false ? '' : '\n'
+  writeFileSync(filePath, lines.join('\n') + trailing, 'utf-8')
   return filePath
 }
 
-function createContext() {
-  const context = {
+function createContext(maxTokens?: number) {
+  return {
     readFileState: createFileStateCacheWithSizeLimit(100),
     abortController: new AbortController(),
-    options: { isNonInteractiveSession: false },
+    ...(maxTokens === undefined ? {} : { fileReadingLimits: { maxTokens } }),
   }
-  contexts.push(context)
-  return context as never
+}
+
+async function readWith(
+  context: ReturnType<typeof createContext>,
+  filePath: string,
+  input: { offset?: number; limit?: number } = {},
+): Promise<Extract<Output, { type: 'text' }>> {
+  const result = await FileReadTool.call(
+    { file_path: filePath, ...input },
+    context as never,
+  )
+  const data = result.data as Output
+  if (data.type !== 'text') throw new Error(`expected text, got ${data.type}`)
+  return data
 }
 
 async function readFile(
   filePath: string,
   input: { offset?: number; limit?: number } = {},
 ): Promise<Extract<Output, { type: 'text' }>['file']> {
-  const result = await FileReadTool.call(
-    { file_path: filePath, ...input },
-    createContext(),
-  )
-  const data = result.data as Output
-  if (data.type !== 'text') throw new Error(`expected text, got ${data.type}`)
-  return data.file
+  return (await readWith(createContext(), filePath, input)).file
 }
 
 describe('default line limit', () => {
@@ -72,8 +82,11 @@ describe('default line limit', () => {
     // Before the clamp existed this returned every line, so the read only
     // discovered it had blown maxTokens after paying for the whole file.
     expect(file.numLines).toBe(MAX_LINES_TO_READ)
-    expect(file.totalLines).toBe(MAX_LINES_TO_READ + 500)
     expect(file.content.endsWith(`line ${MAX_LINES_TO_READ}`)).toBe(true)
+    // +1: readFileInRange counts a phantom empty line for the trailing
+    // newline. Pre-existing, and why the notice cannot derive truncation
+    // from these totals.
+    expect(file.totalLines).toBe(MAX_LINES_TO_READ + 500 + 1)
   })
 
   test('an explicit limit still wins over the default', async () => {
@@ -85,19 +98,20 @@ describe('default line limit', () => {
   })
 
   test('a file shorter than the default is returned whole', async () => {
-    const filePath = writeLines('short.txt', 12)
+    const filePath = writeLines('short.txt', 12, { trailingNewline: false })
 
     const file = await readFile(filePath)
 
     expect(file.numLines).toBe(12)
     expect(file.totalLines).toBe(12)
+    expect(file.content.endsWith('line 12')).toBe(true)
   })
 })
 
 describe('partial read notice', () => {
-  function render(file: Extract<Output, { type: 'text' }>['file']): string {
+  function render(data: Extract<Output, { type: 'text' }>): string {
     const block = FileReadTool.mapToolResultToToolResultBlockParam(
-      { type: 'text', file },
+      data,
       'toolu-file-read',
     )
     return typeof block.content === 'string'
@@ -105,32 +119,143 @@ describe('partial read notice', () => {
       : JSON.stringify(block.content)
   }
 
+  async function renderRead(
+    filePath: string,
+    input: { offset?: number; limit?: number } = {},
+  ): Promise<string> {
+    return render(await readWith(createContext(), filePath, input))
+  }
+
   test('a clamped read is marked partial and names the next offset', async () => {
     const filePath = writeLines('notice.txt', MAX_LINES_TO_READ + 500)
 
-    const rendered = render(await readFile(filePath))
+    const rendered = await renderRead(filePath)
 
     // Without this the model sees 2000 numbered lines and no signal that the
     // file continues, so it concludes it read the whole thing.
     expect(rendered).toContain('partial view')
     expect(rendered).toContain(`offset ${MAX_LINES_TO_READ + 1}`)
-    expect(rendered).toContain(`of ${MAX_LINES_TO_READ + 500}`)
   })
 
   test('a complete read carries no notice', async () => {
     const filePath = writeLines('complete.txt', 12)
 
-    const rendered = render(await readFile(filePath))
-
-    expect(rendered).not.toContain('partial view')
+    expect(await renderRead(filePath)).not.toContain('partial view')
   })
 
   test('a range ending exactly at the last line carries no notice', async () => {
     const filePath = writeLines('exact.txt', 12)
 
-    const rendered = render(await readFile(filePath, { offset: 3, limit: 10 }))
+    const rendered = await renderRead(filePath, { offset: 3, limit: 10 })
 
     expect(rendered).not.toContain('partial view')
+  })
+
+  test('a file of exactly the cap length is not called partial', async () => {
+    // The trailing newline makes readFileInRange report totalLines = 2001, so
+    // deriving truncation from the line totals alone claims a 2001st line the
+    // model can never read.
+    const filePath = writeLines('exactly-cap.txt', MAX_LINES_TO_READ)
+
+    const rendered = await renderRead(filePath)
+
+    expect(rendered).not.toContain('partial view')
+  })
+
+  test('a real line beyond the cap is still called partial', async () => {
+    const filePath = writeLines('cap-plus-one.txt', MAX_LINES_TO_READ + 1, {
+      trailingNewline: false,
+    })
+
+    const rendered = await renderRead(filePath)
+
+    expect(rendered).toContain('partial view')
+  })
+})
+
+describe('truncated reads are not proof the file was read', () => {
+  test('a clamped read records isTruncatedView', async () => {
+    const filePath = writeLines('write-gate.txt', MAX_LINES_TO_READ + 500)
+    const context = createContext()
+
+    await readWith(context, filePath)
+
+    // FileWriteTool rejects on this flag: a write replaces the whole file, so
+    // having seen only its head must not satisfy the read-before-write gate.
+    expect(context.readFileState.get(filePath)?.isTruncatedView).toBe(true)
+  })
+
+  test('a complete read does not', async () => {
+    const filePath = writeLines('write-gate-full.txt', 12)
+    const context = createContext()
+
+    await readWith(context, filePath)
+
+    expect(context.readFileState.get(filePath)?.isTruncatedView).toBeUndefined()
+  })
+
+  test('an explicit range does not, since the caller chose it', async () => {
+    const filePath = writeLines('write-gate-explicit.txt', 500)
+    const context = createContext()
+
+    await readWith(context, filePath, { limit: 10 })
+
+    expect(context.readFileState.get(filePath)?.isTruncatedView).toBeUndefined()
+  })
+})
+
+describe('byte cap applies only to no-limit reads', () => {
+  // 300 KB spread over many short lines, so a small explicit range stays well
+  // under maxTokens and the byte cap is the only thing under test.
+  function writeOversizedFile(name: string): string {
+    const filePath = join(tmpDir, name)
+    const line = 'x'.repeat(99)
+    writeFileSync(filePath, `${line}\n`.repeat(3200), 'utf-8')
+    return filePath
+  }
+
+  test('an explicit range reads a file past the byte cap', async () => {
+    // This bypass is what makes huge files (session transcripts) readable at
+    // all, and the line clamp had to leave it intact, so it is pinned here.
+    const file = await readFile(writeOversizedFile('huge.txt'), { limit: 5 })
+
+    expect(file.numLines).toBe(5)
+  })
+
+  test('a no-limit read of the same file still throws pre-read', async () => {
+    const filePath = writeOversizedFile('huge-nolimit.txt')
+
+    await expect(readFile(filePath)).rejects.toThrow(/exceeds maximum/i)
+  })
+})
+
+describe('prompt steers the model to targeted ranges', () => {
+  test('the default prompt asks for the needed range, not the whole file', async () => {
+    // GrowthBook is inert in this fork, so this arm is a hardcoded default. A
+    // future upstream merge of limits.ts is what would silently revert it.
+    const prompt = await FileReadTool.prompt()
+
+    expect(prompt).toContain(OFFSET_INSTRUCTION_TARGETED)
+    expect(prompt).not.toContain('recommended to read the whole file')
+  })
+})
+
+describe('suggestedRetryLimit', () => {
+  test('scales the line count down by the token overshoot', () => {
+    // 1000 lines cost 50k tokens against a 25k cap, so about half fit, less
+    // the 10% headroom.
+    expect(suggestedRetryLimit(1000, 25_000, 50_000)).toBe(450)
+  })
+
+  test('returns 0 when even one line cannot fit', () => {
+    // A minified bundle: one line, far over the cap. Suggesting limit 1 would
+    // send the model back into the identical failure.
+    expect(suggestedRetryLimit(1, 25_000, 125_000)).toBe(0)
+  })
+
+  test('returns 0 for a degenerate range instead of dividing by zero', () => {
+    expect(suggestedRetryLimit(0, 25_000, 50_000)).toBe(0)
+    expect(suggestedRetryLimit(10, 25_000, 0)).toBe(0)
   })
 })
 
