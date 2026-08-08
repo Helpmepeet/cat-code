@@ -45,11 +45,21 @@ is exposed to comes from engine modules the sidecar calls into.
 
 ## Highest priority
 
-> **Verification is in progress and has already overturned one headline finding.**
-> Read `verification/V<NN>-*.md` alongside any scope report before acting. The
-> `persistNextQuarantineProbe` "vault death" claim is **INVALID** (`V24`); the
-> account-pool scope is **entirely pre-existing on `main`** and blocks nothing;
-> and `V24` proved a HIGH the original review missed (see item 1b).
+> ## ⚠ Read `02-verification-results.md` before acting on anything here
+>
+> **All 31 scopes have now been adversarially verified** (`verification/V*.md`).
+> ~424 verdicts: roughly 66% confirmed, 24% narrowed, 7% dead.
+>
+> The findings below are substantially right. **The proposed fixes are not** —
+> at least **ten would have caused harm if applied as written**, including three
+> that would create the exact bug they were meant to prevent. Do not act on a
+> scope report's "Fix" line without reading its verification counterpart.
+>
+> Overturned headlines: the `persistNextQuarantineProbe` "vault death" claim is
+> **INVALID**; the desktop N-writers amplification is **INVALID**; `settingsSync`
+> is **dead code behind an unregistered feature flag**; `A06`'s
+> rejection-invisibility HIGH and its inbound audit table are **INVALID**.
+> Verification also found **ten findings the original review missed**.
 
 1. **Credential vault is world-readable.** `~/claude-vault/accounts/*.json` at
    `0644` inside a `0755` directory, holding live access and refresh tokens.
@@ -165,6 +175,8 @@ from a grep.
 `00-review-contract.md` is the shared brief every scope worked from.
 `01-synthesis-and-verification.md` holds the cross-scope analysis: first-hand
 verification log, correction log, compounding chains, convergence map, fix plan.
+**`02-verification-results.md` is what survived adversarial re-testing — read it
+first.** `verification/V*.md` holds the per-scope verdicts.
 `A*` = desktop app · `S*` = engine · `X*` = cross-cutting.
 `S06-settings-reset-peer-session.md` and `S08-prompts-policy-peer-session.md`
 came from a separate session; both had their HIGH re-verified by the lead.
