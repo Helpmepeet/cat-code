@@ -1,6 +1,6 @@
 # Auth, Accounts, And OAuth Map
 
-Last refreshed: 2026-08-02
+Last refreshed: 2026-08-08
 
 ## Purpose
 
@@ -41,7 +41,7 @@ observation, structured diagnostics, secure storage).
 | Anthropic API key source | `src/utils/auth.ts:getAnthropicApiKeyWithSource()` | `src/utils/secureStorage/keychainPrefetch.ts`, `src/utils/authPortable.ts` | Order differs for bare/CI/print flows. User-approved env keys, FD keys, apiKeyHelper, and managed Console-login keychain/config keys are separate sources. |
 | Provider-specific request routing | `src/services/api/client.ts:getAnthropicClient()` | `src/utils/model/providers.ts`, `src/services/api/codex-fetch-adapter.ts` | OpenAI provider injects Codex fetch with async Codex OAuth token resolution. The adapter gets a resolver callback so every request re-derives lease-aware, refresh-on-use tokens instead of reusing a stale construction-time token. Anthropic/Bedrock/Vertex/Foundry use their own auth branches. |
 | Account summary/status | `src/utils/auth.ts:getAccountInformation()` | `src/cli/handlers/auth.ts:authStatus()` | OpenAI summary reads the legacy Codex config token mirror; pooled display lives in `/accounts`. |
-| Token freshness | `src/utils/auth.ts:checkAndRefreshOAuthTokenIfNeeded()` | `src/services/oauth/client.ts:refreshOAuthToken()`, `src/services/api/claudeAccountPool.ts:updateActiveClaudeAccountTokens()` | Anthropic refresh uses a config-dir lock and writes refreshed tokens back to secure storage and the active Claude vault account. |
+| Token freshness | `src/utils/auth.ts:checkAndRefreshOAuthTokenIfNeeded()` | `src/services/oauth/client.ts:refreshOAuthToken()`, `src/services/api/claudeAccountPool.ts:updateClaudeAccountTokens()` | Anthropic refresh uses a config-dir lock and writes refreshed tokens back to secure storage and the Claude vault account that supplied the refresh token. |
 | Codex refresh state and retry safety | `src/codex-core/accounts.ts:maybeRefreshAccount()` | `src/services/api/codexTokenRefresh.ts`, `src/services/api/codexAccountPool.ts:getCodexAccountAvailability()`, `src/services/api/withRetry.ts` | Codex callers should use `maybeRefreshAccount()` as the single refresh-on-use entry point. It routes vault-backed accounts through the persisted refresh state machine and raw/no-vault accounts through the cross-process ledger path, so later processes can distinguish retry-safe offline failures from ambiguous or reauth-required states. A persisted terminal verdict is token-scoped: login clears it when the refresh token changes; a missing/malformed correlation is probed rather than trusted healthy. |
 
 ## OAuth And Login Flows

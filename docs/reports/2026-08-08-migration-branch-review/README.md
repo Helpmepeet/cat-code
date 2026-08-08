@@ -72,12 +72,11 @@ is exposed to comes from engine modules the sidecar calls into.
    (five files exposed across both vaults). The durable fix is creating them
    `mode: 0o600` / `0o700` at the writer, plus a chmod-on-load, or existing
    exposure is never repaired. (`X02a`, `V24` F6)
-1b. **Rotated credentials can be written to the wrong account.** Found and proven
-   by repro during verification, not in the original review:
-   `updateActiveClaudeAccountTokens` writes to `pool.activeIndex` **at call
-   time** rather than to the account whose refresh token was spent, so account
-   U's rotated credentials land in account V's vault file and pool entry. Fix:
-   take an explicit `accountUuid`. (`V24`)
+1b. **Rotated credentials were written to the wrong account.** This verified
+   multi-account refresh defect was fixed in `9731197`: the refresh path now
+   captures the source account UUID before awaiting the provider and writes
+   returned credentials back to that UUID rather than to the current active
+   index. (`V24`)
 2. **Plan mode is a full permission bypass.** `app/sidecar/sessionController.ts`
    replaced a `PERMISSION-BOUNDARY.md` §3 trusted-surface gate
    (`CATCODE_ALLOW_BYPASS === '1'`, off by default, read from launch env so a

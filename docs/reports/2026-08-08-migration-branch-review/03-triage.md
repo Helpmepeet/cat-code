@@ -81,6 +81,18 @@ app/` (2,811 pass), both app typechecks, and renderer build passed. No sidecar
 process remained after the focused probe. `bun run --cwd app test:hardening`
 remains GUI-gated and was not run.
 
+#### 2026-08-08 — Claude refresh account targeting (`9731197`)
+
+Fixed D3 from the verification review. A Claude OAuth refresh now captures the
+pool account that supplied its refresh token before awaiting the provider, then
+writes returned credentials back by that stable UUID. An account switch or
+failover during the await can no longer place one account's rotated credentials
+into another account's vault profile.
+
+Evidence: `claudeAccountPool.test.ts` (13 pass) proves a refresh for an
+inactive account cannot alter the active account's tokens. `bun run
+build:dev:full` passed. No live refresh or credential operation was run.
+
 **Agreed scope for the fix session: everything that survived verification, except
 LOW — filtered on verdict and fix-safety, not on the severity label.**
 
@@ -231,7 +243,7 @@ says why.
 
 ---
 
-## Group D — Safety and hygiene, not urgent (4)
+## Group D — Safety and hygiene, not urgent (3)
 
 - **D1 — The orphan reaper.** `--marker bun` — its own documented override —
   selects **15 processes to SIGTERM**, including `powerd`, four
@@ -241,10 +253,6 @@ says why.
   but the blast radius is the worst in the review.
 - **D2 — `handleSetMode` never enforces `isBypassPermissionsModeAvailable`**
   despite three HEAD comments claiming it does. Independent of A1; fix both.
-- **D3 — `updateActiveClaudeAccountTokens` writes to `pool.activeIndex`** at call
-  time, not the account whose token was spent — one account's rotated credentials
-  land in another's vault. Pre-existing, multi-account only. → take an explicit
-  `accountUuid`.
 - **D4 — Harness `app.exit()` orphans a 282 MB sidecar** (self-exits at the
   15-min idle TTL, so bounded). Fix alongside B1, which is what makes it visible.
 
