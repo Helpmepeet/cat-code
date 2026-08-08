@@ -27,7 +27,19 @@ export type CodexLeaseState = 'active' | 'released' | 'failed'
  * interpolates account ids and is free to be reworded. Consumers that need to
  * BRANCH on the cause read this instead.
  */
-export type CodexLeaseSelectionKind = 'initial' | 'failover' | 'repaired' | 'manual'
+export type CodexLeaseSelectionKind =
+  | 'initial'
+  | 'failover'
+  | 'repaired'
+  | 'manual'
+  /**
+   * Nothing leased this account. The row is `synthesizeMainLease` reporting the
+   * pool's ACTIVE account when the main thread holds no Codex lease of its own,
+   * which is every session whose main thread runs on Anthropic (`query.ts:324`
+   * registers one only under `getAPIProvider() === 'openai'`). Its timestamps are
+   * minted fresh on each snapshot, so they measure nothing.
+   */
+  | 'synthetic'
 
 export type CodexLease = {
   leaseId: string
@@ -463,7 +475,7 @@ function synthesizeMainLease(
     createdAt: now,
     updatedAt: now,
     failoverCount: 0,
-    selectionKind: 'initial',
+    selectionKind: 'synthetic',
     selectionReason: 'synthetic main lease from active pool account',
   }
 }

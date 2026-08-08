@@ -1305,6 +1305,15 @@ export type LeaseStrategy = 'spread' | 'follow-main'
 export type LeaseSelectionKind = 'initial' | 'failover' | 'repaired' | 'manual'
 
 /**
+ * Engine kinds the sidecar refuses to project as owner rows. `synthetic` is
+ * `synthesizeMainLease` reporting the pool's ACTIVE account when the main thread
+ * holds no Codex lease at all: nothing leased it, and its timestamps are minted
+ * per snapshot, so a row built from it would assert both an account the main
+ * thread is not using and a held duration that measures nothing.
+ */
+export const NON_LEASE_SELECTION_KINDS = ['synthetic'] as const
+
+/**
  * The account a lease moved OFF, resolved to its display alias at the sidecar.
  * Cannot be derived renderer-side: `LeaseSnapshot.accounts` lists only accounts
  * currently HOLDING a lease, and the account an agent left has by definition lost

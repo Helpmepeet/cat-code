@@ -662,7 +662,7 @@ export function LeaseRosterPanel({
     <div className="pb-2">
       <div className="flex items-baseline gap-2 border-b border-shell-seam px-3.5 py-2.5">
         <span className="text-[11.5px] text-text-subtle">Strategy</span>
-        <span className="font-mono text-[11.5px] font-medium text-text-primary">
+        <span className="font-mono text-[11.5px] font-medium text-teal-300">
           {snapshot?.strategy ?? 'spread'}
         </span>
         {note ? <span className="ml-auto text-[11.5px] text-text-muted">{note}</span> : null}
@@ -699,9 +699,13 @@ function LeaseAccountBlock({ group }: { group: LeaseAccountGroup }) {
           <span
             className={
               'min-w-0 truncate font-mono text-[12.5px] ' +
+              // Chroma sits on the account NAME and nowhere else in the body: it
+              // is the one identity the panel is organised by. Agent names, task
+              // text and durations stay neutral, which is what keeps this from
+              // becoming the field of competing colour the operator rejected.
               (group.isStranded
                 ? 'text-text-muted'
-                : 'font-semibold text-text-primary')
+                : 'font-medium text-teal-300')
             }
           >
             {group.label}

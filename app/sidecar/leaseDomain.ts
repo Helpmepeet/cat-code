@@ -54,8 +54,10 @@ import type { TaskState } from '../../src/tasks/types.js'
 import type {
   LeaseAccountRow,
   LeaseOwnerRow,
+  LeaseSelectionKind,
   LeaseSnapshot,
 } from '../shared/protocol.js'
+import { NON_LEASE_SELECTION_KINDS } from '../shared/protocol.js'
 
 /**
  * The owner id the engine registers for the main thread's lease
@@ -158,7 +160,14 @@ export function leaseSnapshot(
   const seen = new Set<string>()
   const mainLease =
     engineSnapshot.mainLease ?? reader.leaseForOwner(MAIN_LEASE_OWNER_ID)
-  if (mainLease) {
+  // A SYNTHESISED main lease is dropped, not projected. `synthesizeMainLease`
+  // reports the pool's active account when the main thread holds no Codex lease
+  // (every session whose main thread runs on Anthropic — `src/query.ts:324`
+  // registers one only under `getAPIProvider() === 'openai'`), and it re-mints
+  // `createdAt` on every snapshot. Projecting it put a row on screen claiming an
+  // account the main thread was not using, with a held duration permanently
+  // reading `0s`, and inflated every count derived from `owners`.
+  if (mainLease && isProjectableLease(mainLease)) {
     owners.push(toOwnerRow(mainLease, aliases))
     seen.add(mainLease.ownerId)
   }
@@ -166,7 +175,9 @@ export function leaseSnapshot(
   for (const ownerId of liveWorkerOwnerIds(tasks)) {
     if (seen.has(ownerId)) continue
     const lease = reader.leaseForOwner(ownerId)
-    if (!lease) continue
+    // Guarded here too: only `synthesizeMainLease` mints a synthetic lease today,
+    // but the drop is a property of the boundary, not of one call site.
+    if (!lease || !isProjectableLease(lease)) continue
     owners.push(toOwnerRow(lease, aliases))
     seen.add(ownerId)
   }
@@ -199,8 +210,23 @@ function liveWorkerOwnerIds(
     .map(task => task.id)
 }
 
+/**
+ * A lease that may cross the wire. The engine's `CodexLeaseSelectionKind` is a
+ * SUPERSET of the protocol's: `synthetic` describes a row nothing actually leased,
+ * so it has no wire representation and this guard is what keeps it that way. The
+ * narrowing is the enforcement — `toOwnerRow` cannot be called on a synthetic
+ * lease, rather than merely being expected not to be.
+ */
+type ProjectableLease = CodexLease & { selectionKind: LeaseSelectionKind }
+
+function isProjectableLease(lease: CodexLease): lease is ProjectableLease {
+  return !(NON_LEASE_SELECTION_KINDS as readonly string[]).includes(
+    lease.selectionKind,
+  )
+}
+
 function toOwnerRow(
-  lease: CodexLease,
+  lease: ProjectableLease,
   aliases: Map<string, string | null>,
 ): LeaseOwnerRow {
   return {

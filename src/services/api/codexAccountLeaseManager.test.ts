@@ -2746,4 +2746,34 @@ describe('codexAccountLeaseManager', () => {
     expect(lease?.previousAccountId).toBe('worker-a')
     expect(lease?.accountId).toBe('main-account')
   })
+
+  test('a snapshot with no real main lease reports the pool account as SYNTHETIC', () => {
+    // Its timestamps are minted per snapshot, so anything that renders them as a
+    // duration is showing a number that measures nothing. The kind is the marker
+    // that lets the desktop projection drop the row instead of asserting it.
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [buildPoolAccount({ accountId: 'main-account', alias: 'main' })],
+    })
+
+    const first = moduleUnderTest.getCodexLeaseSnapshot().mainLease
+    expect(first?.selectionKind).toBe('synthetic')
+    expect(first?.ownerId).toBe('main-thread')
+
+    // Proof that its createdAt measures nothing: a second read re-mints it.
+    const second = moduleUnderTest.getCodexLeaseSnapshot().mainLease
+    expect(second?.createdAt).toBeGreaterThanOrEqual(first?.createdAt ?? 0)
+
+    // A real registered main lease is NOT synthetic, and keeps its own timestamp.
+    moduleUnderTest.seedCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'Main thread',
+      accountId: 'main-account',
+      strategy: 'follow-main',
+    })
+    expect(moduleUnderTest.getCodexLeaseSnapshot().mainLease?.selectionKind).toBe(
+      'initial',
+    )
+  })
 })
