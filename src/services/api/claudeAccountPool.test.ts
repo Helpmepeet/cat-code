@@ -14,6 +14,7 @@ import {
   seedClaudeAccountPoolForTest,
   setClaudeConfigAccountForTest,
   setClaudeVaultPathForTest,
+  updateClaudeAccountTokens,
   type ClaudePoolAccount,
 } from './claudeAccountPool.js'
 
@@ -180,6 +181,45 @@ describe('resolveClaudeAccountByPrefix', () => {
     if (filtered.kind === 'unique') {
       expect(filtered.account.accountUuid).toBe('uuid-1')
     }
+  })
+})
+
+describe('updateClaudeAccountTokens', () => {
+  beforeEach(() => {
+    resetClaudeAccountPoolForTest()
+  })
+
+  test('updates the refresh source account when another account is active', () => {
+    seedClaudeAccountPoolForTest({
+      activeAccountUuid: 'account-b',
+      accounts: [
+        buildClaudeAccount({
+          accountUuid: 'account-a',
+          accessToken: 'access-a',
+          refreshToken: 'refresh-a',
+        }),
+        buildClaudeAccount({
+          accountUuid: 'account-b',
+          accessToken: 'access-b',
+          refreshToken: 'refresh-b',
+        }),
+      ],
+    })
+
+    updateClaudeAccountTokens('account-a', {
+      accessToken: 'refreshed-access-a',
+      refreshToken: 'refreshed-refresh-a',
+    })
+
+    const accounts = getClaudePoolStatus().accounts
+    expect(accounts.find(account => account.accountUuid === 'account-a')).toMatchObject({
+      accessToken: 'refreshed-access-a',
+      refreshToken: 'refreshed-refresh-a',
+    })
+    expect(accounts.find(account => account.accountUuid === 'account-b')).toMatchObject({
+      accessToken: 'access-b',
+      refreshToken: 'refresh-b',
+    })
   })
 })
 
