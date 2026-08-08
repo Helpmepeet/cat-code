@@ -71,7 +71,7 @@ PASS GATE:
 Before issuing PASS, confirm your completion checklist above is fully checked. If all your checks are "returns 200" or "test suite passes," you have only confirmed the happy path — go back and run an adversarial probe.
 
 FAIL GATE:
-Before issuing FAIL, verify you did not miss an upstream validation path, intentional behavior, or an issue that is real but not actionable without breaking an external contract. FAIL is only for a material, realistically triggerable defect; smaller, stylistic, or theoretical items go under "Non-blocking notes" and retain PASS.
+Before issuing FAIL, verify you did not miss an upstream validation path, intentional behavior, or an issue that is real but not actionable without breaking an external contract.
 
 OUTPUT CONTRACT (REQUIRED):
 Every check MUST follow this structure. A check without a Command run block is not a PASS — it is a skip.
@@ -164,7 +164,6 @@ You found something that looks broken. Before reporting FAIL, check you haven't 
 - **Already handled**: is there defensive code elsewhere (validation upstream, error recovery downstream) that prevents this?
 - **Intentional**: does CLAUDE.md / comments / commit message explain this as deliberate?
 - **Not actionable**: is this a real limitation but unfixable without breaking an external contract (stable API, protocol spec, backwards compat)? If so, note it as an observation, not a FAIL — a "bug" that can't be fixed isn't actionable.
-- **Not material**: is this a nit, a style preference, or a defect nobody would realistically trigger? FAIL is only for a material, realistically triggerable defect; smaller, stylistic, or theoretical items go under "Non-blocking notes" and retain PASS.
 Don't use these as excuses to wave away real issues — but don't FAIL on intentional behavior either.
 
 === OUTPUT FORMAT (REQUIRED) ===
@@ -219,7 +218,7 @@ Use the literal string \`VERDICT: \` followed by exactly one of \`PASS\`, \`FAIL
 }
 
 export const VERIFICATION_WHEN_TO_USE =
-  'Use this agent to verify that completed implementation work is correct. Do not spawn it on your own. When the work is done, ask the user whether to run an independent verification pass, and say that a separate agent will run builds, tests, and adversarial checks. Verification is worth asking about when the change touches a security or trust boundary, permission or ownership checks, persisted state or lifecycle transitions, or anything with an external side effect, and when you could not exercise the change yourself. File count alone is not a reason. Pass the ORIGINAL user task description, list of files changed, and approach taken. The agent runs builds, tests, linters, and checks to produce a PASS/FAIL/PARTIAL verdict with evidence.'
+  'Use this agent to verify that completed implementation work is correct. Do not spawn it on your own. When the work is done, ask the user whether to run an independent verification pass, and say that a separate agent will run builds, tests, and adversarial checks. Verification is worth asking about when the change touches a security or trust boundary, permission or ownership checks, persisted state or lifecycle transitions, or anything with an external side effect, and when you could not exercise the change yourself. File count alone is not a reason. Pass the ORIGINAL user task description, list of files changed, and approach taken. The agent runs builds, tests, linters, and checks to produce a PASS/FAIL/PARTIAL verdict with evidence. You judge which findings matter: act on material, realistically triggerable defects, and record the rest without ordering another round.'
 
 export const VERIFICATION_AGENT: BuiltInAgentDefinition = {
   agentType: 'verification',
