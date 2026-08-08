@@ -134,26 +134,76 @@ doing reactively.
 
 ---
 
-## Group F — Do not do
+## Group F — Batchable to agents (most of the remaining ~310)
 
-- **The ten dangerous fixes**, listed in `02-verification-results.md`. Three
-  create the exact bug they were meant to prevent.
-- **Anything killed by verification**: `persistNextQuarantineProbe` vault death,
-  the desktop N-writers amplification, `settingsSync` (dead behind an
-  unregistered feature flag), `A06`'s rejection-invisibility HIGH and its inbound
-  audit table, and the "`describeSuggestion` is dead" deletion (it is live;
-  deleting it breaks the typecheck).
-- **The 167 LOW findings**, except where one happens to sit in a file you are
-  already editing. They are real and they are not worth a pass of their own.
-- **Most of the 181 MED**, for the same reason. Verification narrowed a large
-  share of them, and the ones that mattered were promoted into Groups A–D above.
+**An earlier draft of this file said "do not do" here. That was wrong** — it
+priced the work in human hours. With agent capacity the marginal cost of a small
+fix is near zero, and this review's own evidence refutes dismissing LOWs
+wholesale: `.gitignore`'s bare `cli` and the `spawnSync` error check are both
+small findings with outsized effect.
+
+**The binding constraint is not effort. It is detectability.** ~10 proposed fixes
+would have caused harm, 7% of findings were invalid, the renderer suite
+dispatches zero events, and the hardening gate prints green while hanging. So the
+question per finding is not "is it worth the time" but **"if an agent gets this
+wrong, does anything tell us?"**
+
+Group by oracle strength, then batch.
+
+### F1 — Strong oracle, batch freely
+
+A wrong fix fails a check that already exists. Send these to agents in waves,
+gate each wave on `bun run --cwd app typecheck` + `bun test app/` +
+`bun run --cwd app typecheck:sidecar`, and commit per wave.
+
+- **Dead-export and dead-file removal.** The oracle is the typecheck itself —
+  verification proved it works, by catching `describeSuggestion` (claimed dead,
+  actually live, deletion breaks the build). Trust the compiler, not the grep.
+- **Type tightening**: `as` casts, `any`, non-null `!`, missing `never`
+  exhaustiveness tripwires. Compiler-checked by construction.
+- **User-visible text**: em dashes, engineering vocabulary, raw ids and internal
+  plane words rendered to users. Mechanically greppable, visually checkable.
+- **Missing reject-invalid boundary tests** for inbound frame kinds. The new test
+  *is* the oracle. Note `A06`'s audit table is INVALID as a blanket claim, so
+  derive the gap list from source, not from that table.
+- **Duplication extraction** where the affected code already has tests: the ten
+  byte-identical snapshot senders, the seven near-identical snapshot domains, the
+  ~12 copy-pasted verb-dispatch try/catch blocks.
+- **Naming and convention drift**: `create/reduce/select` outliers,
+  `createSidecar<X>Domain` non-conformance, Fast Refresh boundary violations
+  (`lint:fast-refresh` is the oracle).
+
+### F2 — Weak oracle, one at a time with a written argument
+
+Nothing in this repo will catch a wrong fix here. Agent effort is still fine —
+agent *autonomy* is not. Require a repro before and after, and treat the absence
+of a failing test as the default state rather than a reason to proceed.
+
+- Anything touching concurrency or shared-file state (the suite cannot see a lost
+  update — proven: every assertion passes with the lock replaced by a no-op).
+- Anything interaction-shaped: keyboard, focus, scroll, effect ordering. **Zero
+  events are dispatched anywhere in the package.**
+- Anything permission-, credential-, or policy-related.
+- Any finding whose proposed fix verification flagged as wrong — Groups C and F3.
+
+### F3 — Genuinely do not do (~41)
+
+- **The ten dangerous fixes** in `02-verification-results.md`. Three create the
+  exact bug they were meant to prevent.
+- **Everything verification killed**: `persistNextQuarantineProbe` vault death,
+  the desktop N-writers amplification, `settingsSync` (dead behind an unregistered
+  feature flag), `A06`'s rejection-invisibility HIGH and its inbound audit table,
+  the `describeSuggestion` deletion, and the rest of the ~31 INVALID/OVERSTATED.
+
+Before batching anything from a scope report, check its `verification/V*.md`
+entry first — that is where the ~41 are marked.
 
 ---
 
 ## The one-line summary
 
-**Do Group A before merging. Do Group B this week — it is six lines and closes
-two user-visible bugs plus a lying test gate. Schedule Group C and E. Leave the
-rest.**
+**Do Group A before merging. Do Group B this week — six lines, two user-visible
+bugs, one lying test gate. Schedule C and E. Batch F1 to agents in oracle-gated
+waves. Hand-hold F2. Skip the ~41 in F3.**
 
 Most of this review is inherited debt from `main`, not a verdict on the branch.
