@@ -521,3 +521,31 @@ test('PERMISSION-BOUNDARY §8 fix — settings rules and defaultMode actually lo
     rmSync(configDir, { recursive: true, force: true })
   }
 })
+
+test('PERMISSION-BOUNDARY §3 — managed bypass policy still wins over the trusted launch flag', async () => {
+  const configDir = mkdtempSync(join(tmpdir(), 'catcode-bypass-policy-'))
+  const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+  const previousAllowBypass = process.env.CATCODE_ALLOW_BYPASS
+  try {
+    writeFileSync(
+      join(configDir, 'settings.json'),
+      JSON.stringify({
+        permissions: { disableBypassPermissionsMode: 'disable' },
+      }),
+    )
+    process.env.CLAUDE_CONFIG_DIR = configDir
+    process.env.CATCODE_ALLOW_BYPASS = '1'
+    resetSettingsCache()
+
+    const context = await loadSidecarToolPermissionContext()
+
+    expect(context.isBypassPermissionsModeAvailable).toBe(false)
+  } finally {
+    if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+    if (previousAllowBypass === undefined) delete process.env.CATCODE_ALLOW_BYPASS
+    else process.env.CATCODE_ALLOW_BYPASS = previousAllowBypass
+    resetSettingsCache()
+    rmSync(configDir, { recursive: true, force: true })
+  }
+})

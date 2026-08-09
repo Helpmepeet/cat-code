@@ -165,12 +165,13 @@ export async function loadSidecarToolPermissionContext(): Promise<ToolPermission
     // PERMISSION-BOUNDARY.md §3: bypass is only grantable from a TRUSTED
     // surface. The desktop's trusted surface is the launch env var
     // `CATCODE_ALLOW_BYPASS=1` (the operator sets it before the renderer loads,
-    // mirroring the CLI's --dangerously-skip-permissions launch flag). Read
-    // here at session construction — NEVER from a renderer frame — so a
-    // browser-like renderer cannot self-escalate. Off by default; when set, the
-    // sidecar's `permission.setMode` boundary honours a bypass request
-    // (`sidecarServer.ts` handleSetMode reads this same context flag).
+    // mirroring the CLI's --dangerously-skip-permissions launch flag). Both this
+    // trusted capability AND the engine's settings/Statsig policy must allow
+    // bypass; a launch env var must never override managed policy. Read here at
+    // session construction — NEVER from a renderer frame — so a browser-like
+    // renderer cannot self-escalate.
     isBypassPermissionsModeAvailable:
+      toolPermissionContext.isBypassPermissionsModeAvailable &&
       process.env.CATCODE_ALLOW_BYPASS === '1',
   }
 }
