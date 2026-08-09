@@ -3398,8 +3398,12 @@ export class SidecarServer {
           encoded = bare
           // Main mints a fresh trace for an envelope-less frame, so the stages
           // already emitted here and the ones recorded there describe the same
-          // delivery under two ids. Say so at the source; the receiving side
-          // only sees a frame that never carried an envelope.
+          // delivery under two ids. Main records that distinctly when it mints
+          // one. This line is live-debugging detail only: it reaches the
+          // descriptor through the legacy path, which keeps a category and drops
+          // the text, so the durable record does not distinguish this from any
+          // other sidecar failure. Source-side attribution needs its own
+          // category or delivery stage, which neither vocabulary has yet.
           this.log(
             `[sidecar] delivery envelope dropped for oversize frame kind=${frame.kind}: trace overflow, source and host stages will not share a trace id`,
           )
