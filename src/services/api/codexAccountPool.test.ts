@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { createHash } from 'crypto'
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { chmodSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
@@ -1059,6 +1059,21 @@ describe('loadVaultAccounts correlates a terminal verdict with the token it name
     )
   }
 
+  test('loadVaultAccounts repairs permissive credential modes', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-pool-mode-'))
+    writeProfile(dir, undefined)
+    const accountsDir = join(dir, 'accounts')
+    const filePath = join(accountsDir, `${ACCOUNT_ID}.json`)
+    chmodSync(accountsDir, 0o755)
+    chmodSync(filePath, 0o644)
+
+    expect(loadVaultAccountsForTest(dir)).toHaveLength(1)
+
+    expect(statSync(accountsDir).mode & 0o777).toBe(0o700)
+    expect(statSync(filePath).mode & 0o777).toBe(0o600)
+    rmSync(dir, { recursive: true, force: true })
+  })
+
   // The reported bug: a login replaces the refresh token but the preserved
   // verdict still names the old one, so the fresh credential loaded as dead.
   test('ignores a reauth verdict that names a token the profile no longer holds', () => {
@@ -1225,6 +1240,7 @@ describe('loadVaultAccounts correlates a terminal verdict with the token it name
     expect(saved?.filePath).toBe(filePath)
     expect(saved?.metadataAction).toBe('created')
     expect(JSON.parse(readFileSync(filePath, 'utf-8')).tokens.access_token).toBe('access')
+    expect(statSync(filePath).mode & 0o777).toBe(0o600)
     expect(readdirSync(join(dir, 'accounts')).filter((f) => f.endsWith('.tmp'))).toHaveLength(0)
     rmSync(dir, { recursive: true, force: true })
   })

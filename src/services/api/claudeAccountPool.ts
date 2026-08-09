@@ -9,7 +9,7 @@
  * Switching is manual only via /switch-account.
  */
 
-import { readFileSync, readdirSync, existsSync, mkdirSync, writeFileSync, renameSync, unlinkSync } from 'fs'
+import { chmodSync, readFileSync, readdirSync, existsSync, mkdirSync, writeFileSync, renameSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 
@@ -601,8 +601,12 @@ export function setClaudeAccountAlias(accountUuid: string, alias: string): boole
     existing.alias = alias
     const dir = acct.vaultFilePath.split('/').slice(0, -1).join('/')
     const tmp = `${dir}/.${Date.now()}.${process.pid}.tmp`
-    writeFileSync(tmp, JSON.stringify(existing, null, 2) + '\n', 'utf-8')
+    writeFileSync(tmp, JSON.stringify(existing, null, 2) + '\n', {
+      encoding: 'utf-8',
+      mode: 0o600,
+    })
     renameSync(tmp, acct.vaultFilePath)
+    chmodSync(acct.vaultFilePath, 0o600)
     acct.alias = alias
     logForDebugging(`[claude-pool] Set alias "${alias}" for ${acct.emailAddress}`)
     return true
@@ -628,7 +632,8 @@ function getVaultAccountsDir(): string {
 function saveClaudeTokenToVault(account: ClaudePoolAccount): void {
   try {
     const accountsDir = getVaultAccountsDir()
-    mkdirSync(accountsDir, { recursive: true })
+    mkdirSync(accountsDir, { recursive: true, mode: 0o700 })
+    chmodSync(accountsDir, 0o700)
 
     const filePath = join(accountsDir, `${account.accountUuid}.json`)
     const data: Record<string, unknown> = {
@@ -656,7 +661,13 @@ function saveClaudeTokenToVault(account: ClaudePoolAccount): void {
       last_refresh: new Date().toISOString(),
     }
     if (account.alias) data.alias = account.alias
-    writeFileSync(filePath, JSON.stringify(data, null, 2) + '\n', 'utf-8')
+    writeFileSync(filePath, JSON.stringify(data, null, 2) + '\n', {
+      encoding: 'utf-8',
+      mode: 0o600,
+    })
+    // `mode` applies only to newly created files, so also repair a permissive
+    // pre-existing credential file after each write.
+    chmodSync(filePath, 0o600)
     logForDebugging(`[claude-pool] Saved account ${account.emailAddress} to vault`)
   } catch (err) {
     logForDebugging(
@@ -673,6 +684,15 @@ function loadVaultAccounts(): ClaudePoolAccount[] {
     return []
   }
 
+  try {
+    chmodSync(accountsDir, 0o700)
+  } catch (err) {
+    logForDebugging(
+      `[claude-pool] Failed to restrict vault directory: ${err instanceof Error ? err.message : String(err)}`,
+      { level: 'warn' },
+    )
+  }
+
   const results: ClaudePoolAccount[] = []
   let files: string[]
   try {
@@ -686,6 +706,14 @@ function loadVaultAccounts(): ClaudePoolAccount[] {
       const filePath = join(accountsDir, file)
       const raw = readFileSync(filePath, 'utf-8')
       const data = JSON.parse(raw) as Record<string, unknown>
+      try {
+        chmodSync(filePath, 0o600)
+      } catch (err) {
+        logForDebugging(
+          `[claude-pool] Failed to restrict vault file ${file}: ${err instanceof Error ? err.message : String(err)}`,
+          { level: 'warn' },
+        )
+      }
       const tokens = data.tokens as Record<string, unknown> | undefined
       const profile = data.profile as Record<string, unknown> | undefined
 

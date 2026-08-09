@@ -11,7 +11,7 @@
  */
 
 import { createHash } from 'crypto'
-import { readFileSync, readdirSync, existsSync, mkdirSync, writeFileSync, renameSync, unlinkSync } from 'fs'
+import { chmodSync, readFileSync, readdirSync, existsSync, mkdirSync, writeFileSync, renameSync, unlinkSync } from 'fs'
 import { join, basename, dirname } from 'path'
 import { homedir } from 'os'
 import { hostname } from 'os'
@@ -715,7 +715,10 @@ export function saveCodexTokenToVault(tokens: {
     // vault: a caller that redirects `filePath` must not have its temp file
     // land in the real vault and rename across directories.
     const targetDir = dirname(filePath)
-    mkdirSync(targetDir, { recursive: true })
+    mkdirSync(targetDir, { recursive: true, mode: 0o700 })
+    // An explicit target may be a broader user-owned directory, but the normal
+    // vault accounts directory is entirely credential-private.
+    if (targetDir === accountsDir) chmodSync(targetDir, 0o700)
 
     const existed = existsSync(filePath)
     const existing = existed
@@ -759,8 +762,12 @@ export function saveCodexTokenToVault(tokens: {
     }
 
     const tmpPath = join(targetDir, `.${Date.now()}.${process.pid}.tmp`)
-    writeFileSync(tmpPath, JSON.stringify(data, null, 2) + '\n', 'utf-8')
+    writeFileSync(tmpPath, JSON.stringify(data, null, 2) + '\n', {
+      encoding: 'utf-8',
+      mode: 0o600,
+    })
     renameSync(tmpPath, filePath)
+    chmodSync(filePath, 0o600)
 
     const metadataAction: 'created' | 'preserved' | 'replaced' = !existed
       ? 'created'
@@ -803,8 +810,12 @@ export function setAccountAlias(accountId: string, alias: string, writer = 'rena
     // atomic write via temp+rename
     const dir = acct.vaultFilePath.split('/').slice(0, -1).join('/')
     const tmp = `${dir}/.${Date.now()}.${process.pid}.tmp`
-    writeFileSync(tmp, JSON.stringify(existing, null, 2) + '\n', 'utf-8')
+    writeFileSync(tmp, JSON.stringify(existing, null, 2) + '\n', {
+      encoding: 'utf-8',
+      mode: 0o600,
+    })
     renameSync(tmp, acct.vaultFilePath)
+    chmodSync(acct.vaultFilePath, 0o600)
     const oldAlias = acct.alias
     acct.alias = alias
     logForDebugging(
@@ -938,6 +949,15 @@ function loadVaultAccounts(vaultPath: string): PoolAccount[] {
     return []
   }
 
+  try {
+    chmodSync(accountsDir, 0o700)
+  } catch (err) {
+    logForDebugging(
+      `[codex-pool] Failed to restrict vault directory: ${err instanceof Error ? err.message : String(err)}`,
+      { level: 'warn' },
+    )
+  }
+
   const results: PoolAccount[] = []
   let files: string[]
   try {
@@ -948,8 +968,17 @@ function loadVaultAccounts(vaultPath: string): PoolAccount[] {
 
   for (const file of files) {
     try {
-      const raw = readFileSync(join(accountsDir, file), 'utf-8')
+      const filePath = join(accountsDir, file)
+      const raw = readFileSync(filePath, 'utf-8')
       const data = JSON.parse(raw) as Record<string, unknown>
+      try {
+        chmodSync(filePath, 0o600)
+      } catch (err) {
+        logForDebugging(
+          `[codex-pool] Failed to restrict vault file ${file}: ${err instanceof Error ? err.message : String(err)}`,
+          { level: 'warn' },
+        )
+      }
       const tokens = data.tokens as
         | Record<string, unknown>
         | undefined
@@ -1004,7 +1033,7 @@ function loadVaultAccounts(vaultPath: string): PoolAccount[] {
         status,
         lastUsedAt: 0,
         lastRefreshIso: lastRefresh,
-        vaultFilePath: join(accountsDir, file),
+        vaultFilePath: filePath,
         alias: typeof data.alias === 'string' && data.alias ? data.alias : undefined,
         planType: planMetadata.planType,
         planExpiresAt: planMetadata.planExpiresAt,
