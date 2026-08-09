@@ -947,8 +947,8 @@ test('atomic writes under a simulated concurrent writer never produce torn JSON'
   const a = new SessionRegistry({ storageDir, log: l => logsA.push(l) })
   const b = new SessionRegistry({ storageDir, log: l => logsB.push(l) })
 
-  // Interleave many writes from both. The advisory lock + atomic rename means
-  // any reader between writes sees a consistent snapshot, last-writer-wins.
+  // Interleave many writes from both. The advisory lock + atomic rename keeps
+  // reads untorn, and the merge-under-lock preserves both writers' rows.
   // (upsertOnSpawn returns reaped ids since F5; this test ignores them.)
   const work: Promise<string[]>[] = []
   for (let i = 0; i < 25; i++) {
@@ -961,12 +961,35 @@ test('atomic writes under a simulated concurrent writer never produce torn JSON'
   const doc = readDoc(registryPath)
   expect(doc.registryVersion).toBe(REGISTRY_VERSION)
   expect(Array.isArray(doc.sessions)).toBe(true)
+  expect(doc.sessions).toHaveLength(50)
   // Every row is a well-formed row (no partial write bled through).
   for (const row of doc.sessions) {
     expect(typeof row.appSessionId).toBe('string')
     expect(row.appSessionId.length).toBeGreaterThan(0)
     expect(typeof row.cwd).toBe('string')
   }
+})
+
+test('a failed registry read preserves the existing document and disables writes', async () => {
+  const storageDir = tempDir()
+  const registryPath = join(storageDir, 'registry.json')
+  const seededRow = baseRow({ appSessionId: 'app-preserved' })
+  seed(registryPath, [seededRow])
+
+  const { registry, logs } = makeRegistry({
+    storageDir,
+    readRegistryFile: () => {
+      throw new Error('EACCES (simulated)')
+    },
+  })
+
+  await registry.launch()
+
+  expect(readDoc(registryPath).sessions).toEqual([seededRow])
+  expect(registry.lastWriteFailed).toBe(true)
+  expect(logs.some(line => line.includes('disabling registry writes'))).toBe(
+    true,
+  )
 })
 
 test('a held lock fails the WRITE, not the session (in-memory doc still advances)', async () => {

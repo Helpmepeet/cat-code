@@ -162,6 +162,12 @@ export type RegistryOptions = {
   /** Structured logger. Defaults to stderr. */
   log?: (line: string) => void
   /**
+   * Read the registry document. Injected so read-failure behavior is testable;
+   * a failed read must preserve the existing file rather than overwrite it with
+   * an empty document on this run.
+   */
+  readRegistryFile?: (path: string) => string
+  /**
    * Resolve the transcript file path for a session, given its `cwd` and
    * `engineSessionId`. INJECTED so tests can control transcript existence
    * without materializing the engine's project-dir layout. Default:
@@ -200,6 +206,8 @@ export type RegistryOptions = {
    * tests can simulate a held lock deterministically.
    */
   acquireLock?: (file: string) => Promise<() => Promise<void>>
+  /** Synchronous counterpart for the quit path, which cannot await a lock. */
+  acquireLockSync?: (file: string) => () => void
 }
 
 /* ------------------------------------------------------------------------- *
@@ -349,9 +357,17 @@ export class SessionRegistry {
   private readonly sidecarCommandMarker: string | undefined
   private readonly killProcess: (pid: number) => void
   private readonly acquireLock: (file: string) => Promise<() => Promise<void>>
+  private readonly acquireLockSync: (file: string) => () => void
+  private readonly readRegistryFile: (path: string) => string
 
   /** In-memory mirror of the on-disk document; the write points mutate it. */
   private doc: RegistryDocument
+
+  /** Last document known to have reached disk; used to derive a local delta. */
+  private persistedDoc: RegistryDocument
+
+  /** A failed startup read makes all writes fail closed for the current run. */
+  private readFailed = false
 
   /**
    * Whether the LAST `persist()` failed to write (held lock or IO error). The
@@ -371,7 +387,10 @@ export class SessionRegistry {
     this.sidecarCommandMarker = options.sidecarCommandMarker
     this.killProcess = options.killProcess ?? ((pid: number) => process.kill(pid, 'SIGTERM'))
     this.acquireLock = options.acquireLock ?? defaultAcquireLock
+    this.acquireLockSync = options.acquireLockSync ?? defaultAcquireLockSync
+    this.readRegistryFile = options.readRegistryFile ?? (path => readFileSync(path, 'utf8'))
     this.doc = emptyDoc()
+    this.persistedDoc = cloneDocument(this.doc)
   }
 
   /** Where the registry file lives (advisory; for logs/tests). */
@@ -434,6 +453,7 @@ export class SessionRegistry {
   async launch(): Promise<RegistrySession[]> {
     // (1) read + validate — corrupt/unknown-version → move aside, start empty.
     this.doc = this.readOrRecover()
+    this.persistedDoc = cloneDocument(this.doc)
     // (2) liveness sweep for rows with shutdown == null.
     this.sweepOrphans()
     // (3) reap over-bound + missing-transcript + null-engineSessionId-clean rows.
@@ -455,9 +475,14 @@ export class SessionRegistry {
 
     let raw: string
     try {
-      raw = readFileSync(this.path, 'utf8')
+      raw = this.readRegistryFile(this.path)
     } catch (error) {
-      this.log(`[registry] could not read ${this.path}: ${errText(error)}; starting empty`)
+      this.readFailed = true
+      this.writeFailed = true
+      this.log(
+        `[registry] could not read ${this.path}: ${errText(error)}; ` +
+          'preserving the existing file and disabling registry writes for this run',
+      )
       return emptyDoc()
     }
 
@@ -848,12 +873,11 @@ export class SessionRegistry {
   /**
    * SYNCHRONOUS clean-marking for the exit path (B3 / die-with-window). Marks
    * every currently-live row (`shutdown == null`) clean, retaining advisory fields
-   * for restore-time prior-writer checks, and writes ONCE atomically — bypassing
-   * the async advisory lock because this
-   * runs on `window-all-closed`/`before-quit`, where (a) we hold the OS
-   * single-instance lock so we are the only writer, and (b) the process may exit
-   * before an async persist could settle. A write failure is swallowed (the row
-   * state is re-derivable; a launch sweep would just mark them crashed instead).
+   * for restore-time prior-writer checks, and writes ONCE atomically under the
+   * synchronous advisory lock. This runs on `window-all-closed`/`before-quit`,
+   * where the process may exit before an async persist could settle. A write
+   * failure is swallowed (the row state is re-derivable; a launch sweep would
+   * just mark them crashed instead).
    * Returns the ids it marked.
    */
   markLiveCleanSync(): string[] {
@@ -866,13 +890,37 @@ export class SessionRegistry {
     if (marked.length === 0) return marked
     this.doc.hostPid = process.pid
     this.doc.updatedAt = Date.now()
+    if (this.readFailed) {
+      this.writeFailed = true
+      this.log('[registry] markLiveCleanSync skipped because the registry could not be read this run')
+      return marked
+    }
+
+    let release: (() => void) | undefined
     try {
       ensureDir(this.dir)
-      atomicWriteJson(this.path, this.doc)
+      release = this.acquireLockSync(this.path)
+      const latest = readDocumentForMerge(this.path, this.readRegistryFile)
+      const merged = mergeRegistryDocuments(
+        latest,
+        this.persistedDoc,
+        this.doc,
+      )
+      merged.hostPid = process.pid
+      merged.updatedAt = Date.now()
+      atomicWriteJson(this.path, merged)
+      this.doc = merged
+      this.persistedDoc = cloneDocument(merged)
       this.writeFailed = false
     } catch (error) {
       this.writeFailed = true
       this.log(`[registry] markLiveCleanSync write failed (${errText(error)})`)
+    } finally {
+      try {
+        release?.()
+      } catch {
+        // best-effort unlock during process teardown
+      }
     }
     return marked
   }
@@ -890,6 +938,12 @@ export class SessionRegistry {
    * source of truth for this run.
    */
   private async persist(): Promise<void> {
+    if (this.readFailed) {
+      this.writeFailed = true
+      this.log('[registry] skipping write because the registry could not be read this run')
+      return
+    }
+
     this.doc.hostPid = process.pid
     this.doc.updatedAt = Date.now()
 
@@ -916,12 +970,43 @@ export class SessionRegistry {
       return
     }
 
+    let latest: RegistryDocument
     try {
-      atomicWriteJson(this.path, this.doc)
+      latest = readDocumentForMerge(this.path, this.readRegistryFile)
+    } catch (error) {
+      this.writeFailed = true
+      this.readFailed = true
+      this.log(
+        `[registry] could not read current registry for merge (${errText(error)}); ` +
+          'preserving the existing file for this run',
+      )
+      try {
+        await release()
+      } catch {
+        // best-effort unlock
+      }
+      return
+    }
+
+    try {
+      // The lock prevents torn writes, but not stale snapshots. Apply only this
+      // instance's delta since its last successful persist so concurrent writers
+      // retain each other's unrelated rows instead of last-writer-wins replacing
+      // the whole file.
+      const merged = mergeRegistryDocuments(
+        latest,
+        this.persistedDoc,
+        this.doc,
+      )
+      merged.hostPid = process.pid
+      merged.updatedAt = Date.now()
+      atomicWriteJson(this.path, merged)
+      this.doc = merged
+      this.persistedDoc = cloneDocument(merged)
       this.writeFailed = false
     } catch (error) {
       this.writeFailed = true
-      this.log(`[registry] atomic write failed (${errText(error)}); session unaffected`)
+      this.log(`[registry] could not merge and persist registry (${errText(error)}); session unaffected`)
     } finally {
       try {
         await release()
@@ -943,6 +1028,136 @@ function emptyDoc(): RegistryDocument {
     updatedAt: Date.now(),
     sessions: [],
   }
+}
+
+function cloneDocument(doc: RegistryDocument): RegistryDocument {
+  return {
+    ...doc,
+    sessions: doc.sessions.map(row => ({ ...row })),
+  }
+}
+
+/** Read a valid current document for a locked merge, never a recovery fallback. */
+function readDocumentForMerge(
+  filePath: string,
+  reader: (path: string) => string,
+): RegistryDocument {
+  if (!existsSync(filePath)) return emptyDoc()
+  const validated = validateDocument(JSON.parse(reader(filePath)))
+  if (!validated) {
+    throw new Error('registry document is malformed or has an unknown version')
+  }
+  return validated
+}
+
+/**
+ * Apply only local changes since `baseline` to a newly read disk document.
+ * This is intentionally row-oriented: another host may have written a new
+ * session while this instance was waiting for the advisory lock.
+ */
+function mergeRegistryDocuments(
+  latest: RegistryDocument,
+  baseline: RegistryDocument,
+  local: RegistryDocument,
+): RegistryDocument {
+  const baselineById = new Map(
+    baseline.sessions.map(row => [row.appSessionId, row]),
+  )
+  const localById = new Map(local.sessions.map(row => [row.appSessionId, row]))
+  const mergedById = new Map(
+    latest.sessions.map(row => [row.appSessionId, { ...row }]),
+  )
+
+  // A row that existed in our baseline but is absent locally was deliberately
+  // reaped. Preserve that removal even when another writer touched other rows.
+  for (const appSessionId of baselineById.keys()) {
+    if (!localById.has(appSessionId)) mergedById.delete(appSessionId)
+  }
+
+  for (const [appSessionId, localRow] of localById) {
+    const baselineRow = baselineById.get(appSessionId)
+    const latestRow = mergedById.get(appSessionId)
+    if (baselineRow && rowsEqual(localRow, baselineRow)) {
+      // `'parked'` is intentionally normalised to `'crashed'` on a NEW
+      // launch, but this read is part of the same live process's write merge.
+      // Preserve its in-memory-only meaning until that process exits.
+      if (baselineRow.shutdown === 'parked' && latestRow) {
+        mergedById.set(appSessionId, { ...latestRow, shutdown: 'parked' })
+      }
+      continue
+    }
+
+    mergedById.set(
+      appSessionId,
+      latestRow ? mergeRegistryRow(latestRow, localRow) : { ...localRow },
+    )
+  }
+
+  return {
+    ...latest,
+    sessions: [...mergedById.values()],
+  }
+}
+
+function rowsEqual(left: RegistrySession, right: RegistrySession): boolean {
+  return (
+    left.appSessionId === right.appSessionId &&
+    left.engineSessionId === right.engineSessionId &&
+    left.cwd === right.cwd &&
+    left.title === right.title &&
+    left.titleUpdatedAt === right.titleUpdatedAt &&
+    left.createdAt === right.createdAt &&
+    left.lastAttachedAt === right.lastAttachedAt &&
+    left.lastMessageSentAt === right.lastMessageSentAt &&
+    left.shutdown === right.shutdown &&
+    left.enginePid === right.enginePid &&
+    left.socketPath === right.socketPath &&
+    left.restartCount === right.restartCount
+  )
+}
+
+/** Merge concurrent edits to one row without rolling a newer attachment back. */
+function mergeRegistryRow(
+  latest: RegistrySession,
+  local: RegistrySession,
+): RegistrySession {
+  const useLocalRuntime = local.lastAttachedAt >= latest.lastAttachedAt
+  const runtime = useLocalRuntime ? local : latest
+  const useLocalTitle =
+    (local.titleUpdatedAt ?? Number.NEGATIVE_INFINITY) >=
+    (latest.titleUpdatedAt ?? Number.NEGATIVE_INFINITY)
+  const titleSource = useLocalTitle ? local : latest
+
+  return {
+    appSessionId: local.appSessionId,
+    engineSessionId: runtime.engineSessionId,
+    cwd: runtime.cwd,
+    ...(titleSource.title !== undefined ? { title: titleSource.title } : {}),
+    ...(titleSource.titleUpdatedAt !== undefined
+      ? { titleUpdatedAt: titleSource.titleUpdatedAt }
+      : {}),
+    createdAt: Math.min(latest.createdAt, local.createdAt),
+    lastAttachedAt: Math.max(latest.lastAttachedAt, local.lastAttachedAt),
+    lastMessageSentAt: maxNullableTimestamp(
+      latest.lastMessageSentAt,
+      local.lastMessageSentAt,
+    ),
+    shutdown: runtime.shutdown,
+    ...(runtime.enginePid !== undefined ? { enginePid: runtime.enginePid } : {}),
+    ...(runtime.socketPath !== undefined
+      ? { socketPath: runtime.socketPath }
+      : {}),
+    restartCount: Math.max(latest.restartCount ?? 0, local.restartCount ?? 0),
+  }
+}
+
+function maxNullableTimestamp(
+  left: number | null,
+  right: number | null,
+): number | null {
+  if (left === null) return right
+  if (right === null) return left
+  return Math.max(left, right)
 }
 
 /**
@@ -1101,6 +1316,13 @@ type ProperLockfile = {
       }
     },
   ) => Promise<() => Promise<void>>
+  lockSync: (
+    file: string,
+    options?: {
+      realpath?: boolean
+      stale?: number
+    },
+  ) => () => void
 }
 
 /**
@@ -1126,6 +1348,15 @@ async function defaultAcquireLock(file: string): Promise<() => Promise<void>> {
       maxTimeout: 500,
       randomize: true,
     },
+    stale: 20_000,
+  })
+}
+
+function defaultAcquireLockSync(file: string): () => void {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const lockfile = require('proper-lockfile') as ProperLockfile
+  return lockfile.lockSync(file, {
+    realpath: false,
     stale: 20_000,
   })
 }
