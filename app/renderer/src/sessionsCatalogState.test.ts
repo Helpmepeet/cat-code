@@ -729,6 +729,14 @@ describe('resolveSessionOpenRoute (P4-29 — one open decision, no per-caller co
     })
   })
 
+  test('a history row whose workspace no longer exists stays browse-only', () => {
+    expect(
+      resolveSessionOpenRoute(
+        row({ sessionId: 'gone', cwd: '/w/gone', cwdExists: false }),
+      ),
+    ).toEqual({ kind: 'none' })
+  })
+
   test('a history row with no recorded workspace stays browse-only', () => {
     expect(resolveSessionOpenRoute(row({ sessionId: 'a', cwd: '   ' }))).toEqual({
       kind: 'none',

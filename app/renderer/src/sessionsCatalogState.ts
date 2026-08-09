@@ -415,7 +415,7 @@ export type SessionOpenRoute =
 export function resolveSessionOpenRoute(
   row: Pick<
     MergedSessionRow,
-    'appSessionId' | 'live' | 'cwd' | 'sessionId' | 'inRegistry'
+    'appSessionId' | 'live' | 'cwd' | 'cwdExists' | 'sessionId' | 'inRegistry'
   >,
 ): SessionOpenRoute {
   if (row.appSessionId != null) {
@@ -423,7 +423,7 @@ export function resolveSessionOpenRoute(
       ? { kind: 'focus', appSessionId: row.appSessionId }
       : { kind: 'restore', appSessionId: row.appSessionId }
   }
-  if (!row.inRegistry && row.cwd.trim().length > 0) {
+  if (!row.inRegistry && row.cwd.trim().length > 0 && row.cwdExists) {
     return { kind: 'history', engineSessionId: row.sessionId }
   }
   return { kind: 'none' }
@@ -728,6 +728,9 @@ export function resolveRecentOpenRoute(recent: RecentWorkspace): SessionOpenRout
     appSessionId: recent.appSessionId,
     live: recent.live,
     cwd: recent.cwd,
+    // `historySessionId` is produced only by `openableHistoryId`, which already
+    // excludes history rows whose workspace no longer exists.
+    cwdExists: recent.historySessionId != null,
     sessionId: recent.historySessionId ?? '',
     // A recent carrying an app id was adopted from a registry row, and one
     // carrying only an engine id from a history row (the merge gives registry
