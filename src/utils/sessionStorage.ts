@@ -4189,6 +4189,7 @@ export async function loadTranscriptFile(
   agentContentReplacements: Map<AgentId, ContentReplacementRecord[]>
   contextCollapseCommits: ContextCollapseCommitEntry[]
   contextCollapseSnapshot: ContextCollapseSnapshotEntry | undefined
+  queueOperations: SessionQueueOperation[]
   leafUuids: Set<UUID>
   sourceTruncated: boolean
 }> {
@@ -4217,6 +4218,7 @@ export async function loadTranscriptFile(
   const contextCollapseCommits: ContextCollapseCommitEntry[] = []
   // Last-wins — later entries supersede.
   let contextCollapseSnapshot: ContextCollapseSnapshotEntry | undefined
+  const queueOperations: SessionQueueOperation[] = []
   let sourceTruncated = false
 
   try {
@@ -4447,6 +4449,15 @@ export async function loadTranscriptFile(
         contextCollapseCommits.push(entry)
       } else if (entry.type === 'marble-origami-snapshot') {
         contextCollapseSnapshot = entry
+      } else if (entry.type === 'queue-operation') {
+        queueOperations.push({
+          operation: entry.operation,
+          timestamp: entry.timestamp,
+          sessionId: entry.sessionId,
+          ...(entry.uuid !== undefined ? { uuid: entry.uuid } : {}),
+          ...(entry.mode !== undefined ? { mode: entry.mode } : {}),
+          ...(entry.content !== undefined ? { content: entry.content } : {}),
+        })
       }
     }
   } catch {
@@ -4566,6 +4577,7 @@ export async function loadTranscriptFile(
     agentContentReplacements,
     contextCollapseCommits,
     contextCollapseSnapshot,
+    queueOperations,
     leafUuids,
     sourceTruncated,
   }
@@ -4618,7 +4630,10 @@ export async function loadDisplayTranscriptFromJsonlPath(
 /**
  * Loads all messages, summaries, file history snapshots, and attribution snapshots from a specific session file.
  */
-async function loadSessionFile(sessionId: UUID): Promise<{
+async function loadSessionFile(
+  sessionId: UUID,
+  options?: { keepAllLeaves?: boolean },
+): Promise<{
   messages: Map<UUID, TranscriptMessage>
   summaries: Map<UUID, string>
   customTitles: Map<UUID, string>
@@ -4633,12 +4648,37 @@ async function loadSessionFile(sessionId: UUID): Promise<{
   orderedContentReplacements: ContentReplacementRecord[]
   contextCollapseCommits: ContextCollapseCommitEntry[]
   contextCollapseSnapshot: ContextCollapseSnapshotEntry | undefined
+  queueOperations: SessionQueueOperation[]
 }> {
   const sessionFile = join(
     getSessionProjectDir() ?? getProjectDir(getOriginalCwd()),
     `${sessionId}.jsonl`,
   )
-  return loadTranscriptFile(sessionFile)
+  return loadTranscriptFile(sessionFile, options)
+}
+
+export type SessionQueueOperation = {
+  operation: 'enqueue' | 'dequeue' | 'remove'
+  timestamp: string
+  sessionId: string
+  uuid?: UUID
+  mode?: string
+  content?: string
+}
+
+export async function getSessionQueueOperations(
+  sessionId: string,
+): Promise<{
+  operations: SessionQueueOperation[]
+  messageUuids: Set<UUID>
+}> {
+  const loaded = await loadSessionFile(sessionId as UUID, {
+    keepAllLeaves: true,
+  })
+  return {
+    operations: loaded.queueOperations,
+    messageUuids: new Set(loaded.messages.keys()),
+  }
 }
 
 /**

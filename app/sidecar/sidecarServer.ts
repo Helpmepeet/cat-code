@@ -297,6 +297,8 @@ export type SidecarServerOptions = {
   history?: readonly SDKMessage[]
   /** Display loader omitted an older archival prefix before wire capping. */
   historySourceTruncated?: boolean
+  /** True when resume detected a turn that ended before an assistant response. */
+  turnInterrupted?: boolean
   /**
    * Idle self-exit TTL in ms (CC-3, docs O1 / SESSION-LIFETIME §2). When no
    * supervisor connection has been active for this long, `onIdle` fires so the
@@ -384,6 +386,7 @@ export class SidecarServer {
   private readonly slashCatalog: readonly SlashCatalogEntry[]
   private readonly history: readonly SDKMessage[]
   private readonly historySourceTruncated: boolean
+  private readonly turnInterrupted: boolean
   private readonly idleTtlMs: number
   private readonly onIdle: (() => void) | null
   /** IDLE-PARK — the gated self-exit closure (null ⇒ park unwired, see options). */
@@ -480,6 +483,7 @@ export class SidecarServer {
     this.slashCatalog = options.slashCatalog ?? []
     this.history = options.history ?? []
     this.historySourceTruncated = options.historySourceTruncated ?? false
+    this.turnInterrupted = options.turnInterrupted ?? false
     this.idleTtlMs = options.idleTtlMs ?? 0
     this.onIdle = options.onIdle ?? null
     this.onPark = options.onPark ?? null
@@ -654,6 +658,7 @@ export class SidecarServer {
         protocolVersion: PROTOCOL_VERSION,
         sessionId: this.sessionId,
         engineSessionId: this.engineSessionId,
+        ...(this.turnInterrupted ? { turnInterrupted: true } : {}),
         payload: preparedPayload,
       })
     }

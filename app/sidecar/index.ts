@@ -33,6 +33,7 @@ import {
 } from '../../src/utils/sessionStorage.js'
 import {
   mergeDisplayHistoryWithSeed,
+  projectUndeliveredPrompts,
   projectResumedHistory,
 } from './historyProjection.js'
 import { initializeSidecarRuntime } from './initializeRuntime.js'
@@ -181,9 +182,15 @@ async function main(): Promise<void> {
   // 2026-07-05): they MUST reach the session controller below — id adoption
   // alone restores the transcript key, not the conversation.
   let resumedMessages: Message[] | undefined
+  let turnInterrupted = false
+  let undeliveredPrompts: Awaited<
+    ReturnType<typeof resumeEngineSession>
+  >['undeliveredPrompts'] = []
   if (!args.probeOnAttach && args.resumeEngineSessionId) {
     const resumed = await resumeEngineSession(args.resumeEngineSessionId, args.cwd)
     resumedMessages = resumed.messages
+    turnInterrupted = resumed.turnInterrupted
+    undeliveredPrompts = resumed.undeliveredPrompts
     process.stderr.write(
       `[sidecar] resume-seeded messages=${resumed.messages.length} engineSessionId=${resumed.engineSessionId}\n`,
     )
@@ -258,6 +265,9 @@ async function main(): Promise<void> {
       merged.history,
       message => process.stderr.write(`${message}\n`),
     )
+    historyEvents.push(
+      ...projectUndeliveredPrompts(undeliveredPrompts, getSessionId()),
+    )
     historySourceTruncated = display.truncated || merged.truncated
   }
 
@@ -288,6 +298,7 @@ async function main(): Promise<void> {
     ...(slashCatalog.length > 0 ? { slashCatalog } : {}),
     ...(historyEvents !== undefined ? { history: historyEvents } : {}),
     ...(historySourceTruncated ? { historySourceTruncated: true } : {}),
+    ...(turnInterrupted ? { turnInterrupted: true } : {}),
     // P4-6 title-rider: a resumed session already has its title + history, so its
     // first turn this run is a continuation — never retitle it from that prompt.
     resumed: resumedMessages !== undefined,

@@ -1,4 +1,7 @@
-import type { SDKMessage } from '../../src/entrypoints/agentSdkTypes.js'
+import type {
+  SDKMessage,
+  SDKUserMessage,
+} from '../../src/entrypoints/agentSdkTypes.js'
 import type { Message } from '../../src/types/message.js'
 import { isInternalNoResponseSentinel } from '../../src/utils/messages.js'
 import { toSDKMessages } from '../../src/utils/messages/mappers.js'
@@ -16,6 +19,21 @@ export function projectResumedHistory(messages: Message[]): SDKMessage[] {
       message => !isInternalNoResponseSentinel(message),
     ),
   )
+}
+
+export function projectUndeliveredPrompts(
+  prompts: readonly { uuid: string; content: string; timestamp: string }[],
+  engineSessionId: string,
+): SDKMessage[] {
+  return prompts.map(prompt => ({
+    type: 'user',
+    message: { role: 'user', content: prompt.content },
+    session_id: engineSessionId,
+    parent_tool_use_id: null,
+    uuid: prompt.uuid as SDKUserMessage['uuid'],
+    timestamp: prompt.timestamp,
+    isReplay: true,
+  }))
 }
 
 /**

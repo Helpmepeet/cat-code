@@ -14,9 +14,11 @@
  * path on stdout as a machine-readable line and exits 0 on success.
  */
 
+import { randomUUID } from 'node:crypto'
 import { init } from '../../src/entrypoints/init.js'
 import { switchSession } from '../../src/bootstrap/state.js'
 import { asAgentId, asSessionId } from '../../src/types/ids.js'
+import { enqueue } from '../../src/utils/messageQueueManager.js'
 import {
   createAssistantMessage,
   createCompactBoundaryMessage,
@@ -39,6 +41,7 @@ async function main(): Promise<void> {
   const compacted = process.argv.includes('--compacted')
   const unresolvedToolTail = process.argv.includes('--unresolved-tool-tail')
   const subagentBranch = process.argv.includes('--subagent-branch')
+  const interruptedQueued = process.argv.includes('--interrupted-queued')
   if (!sessionId) {
     throw new Error('usage: mintTranscript.fixture.ts <sessionId> [marker]')
   }
@@ -158,6 +161,38 @@ async function main(): Promise<void> {
     await recordTranscript([
       createSystemMessage(`diagnostic after ${marker}`, 'info'),
     ])
+  }
+  if (interruptedQueued) {
+    const interruptedToolUseId = `interrupted-${marker}`
+    await recordTranscript([
+      createAssistantMessage({
+        content: [
+          {
+            type: 'tool_use',
+            id: interruptedToolUseId,
+            name: 'Read',
+            input: { file_path: `/tmp/${marker}` },
+          },
+        ],
+      }),
+      createUserMessage({
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: interruptedToolUseId,
+            content: `partial result ${marker}`,
+          },
+        ],
+      }),
+    ])
+    const queuedUuid = randomUUID()
+    enqueue({
+      value: `queued input ${marker}`,
+      mode: 'prompt',
+      uuid: queuedUuid,
+    })
+    await Bun.sleep(0)
+    process.stdout.write(`MINTED_QUEUED_UUID=${queuedUuid}\n`)
   }
   if (compacted) {
     process.stdout.write('MINTED_TRANSCRIPT_SHAPE=compacted\n')

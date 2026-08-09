@@ -19,12 +19,13 @@ import {
   SDK_MESSAGE_FIXTURE,
 } from './sdkMessageFixtures.js'
 
-function ready(sessionId: string) {
+function ready(sessionId: string, turnInterrupted = false) {
   return {
     kind: 'ready' as const,
     protocolVersion: 1 as const,
     sessionId,
     engineSessionId: `engine-${sessionId}`,
+    ...(turnInterrupted ? { turnInterrupted: true } : {}),
     payload: {
       type: 'app.ready' as const,
       protocolVersion: 1 as const,
@@ -48,6 +49,37 @@ function messageFrame(
     event: { type: 'message' as const, message },
   }
 }
+
+test('restored interrupted turns stay idle and show a notice after replayed rows', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1', true))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'user',
+      message: { role: 'user', content: 'accepted before close' },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-000000000902',
+      isReplay: true,
+    }),
+  )
+
+  expect(selectTranscriptRows(state, 'session-1')).toMatchObject([
+    {
+      kind: 'user-text',
+      frameId: '00000000-0000-4000-8000-000000000902',
+      content: 'accepted before close',
+    },
+    {
+      kind: 'system-notice',
+      noticeType: 'turn_interrupted',
+      content: 'The previous turn was interrupted. Send a message to continue.',
+    },
+  ])
+
+  state = projectServerFrame(state, ready('session-1'))
+  expect(selectTranscriptRows(state, 'session-1')).toHaveLength(1)
+})
 
 test('preserves real per-block producer identity, grouping, and order', () => {
   let state = createTranscriptState()
