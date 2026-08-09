@@ -162,7 +162,7 @@ export const AGENT_STATE_META = {
   },
   waiting: {
     key: 'waiting',
-    label: 'Waiting on orchestrator',
+    label: 'Waiting on the assistant',
     tone: 'purple',
     color: '#c084fc',
     icon: 'pip-ring',
@@ -243,8 +243,9 @@ export const AGENT_STATE_META = {
 
 export function agentTypeMeta(type: string | null | undefined): AgentTypeMeta | null {
   if (!type) return null
-  return (
-    AGENT_TYPE_META[type as AgentTypeKey] ?? {
+  return Object.hasOwn(AGENT_TYPE_META, type)
+    ? AGENT_TYPE_META[type as AgentTypeKey]
+    : {
       key: type,
       label: type,
       tone: 'neutral',
@@ -252,7 +253,6 @@ export function agentTypeMeta(type: string | null | undefined): AgentTypeMeta | 
       soft: 'rgba(161,161,170,0.08)',
       line: 'rgba(161,161,170,0.22)',
     }
-  )
 }
 
 export function agentStateMeta(state: AgentStateKey): AgentStateMeta {
@@ -266,8 +266,11 @@ export function agentStateMeta(state: AgentStateKey): AgentStateMeta {
  *
  * A row in a list has no room for "Result ready" or "In background", and the
  * distinctions those labels draw are not the ones a scanning reader needs: every
- * settled outcome reads "done", every in-flight one "running", and both handoff
- * states "needs input". The full `agentStateMeta().label` stays the vocabulary
+ * settled outcome reads "done" and every in-flight one "running". The two handoff
+ * states stay APART here, though, because they differ in who owes the next move:
+ * `waiting` is on the assistant, `needs-you` is on the reader. Compressing them
+ * to one word is what let a blocked subagent read as an ask on the user.
+ * The full `agentStateMeta().label` stays the vocabulary
  * for a standalone state chip; this is only the crowded case. Tone still comes
  * from `agentStateMeta`, so nothing about the colour vocabulary forks here.
  */
@@ -278,7 +281,7 @@ export function agentTranscriptStateWord(state: AgentStateKey): string {
     case 'resumed':
       return 'running'
     case 'waiting':
-      return 'needs input'
+      return 'waiting'
     case 'needs-you':
       return 'needs you'
     case 'completed':
@@ -349,20 +352,15 @@ export function deriveTaskAgentState(task: TaskAgentSource): AgentStateKey {
   if (task.type === 'local_agent') {
     if (task.handoffStatus === 'blocked') {
       // A local_agent's blocked handoff (D2 `decisions/AGENT-CHROME.md`,
-      // prototype OrchestratorMode.jsx `workerStateKey`:163) is two-axis:
-      // orchestrator-owned blocked is NEUTRAL ("Waiting on orchestrator"),
-      // solo (no orchestrator to pick it up) escalates to amber 'needs-you'.
-      // This function has no `active`/orchestrator context — its only
-      // production caller (`tasksState.ts` `taskDisplayState` →
-      // `TasksDialog.tsx:172`, the cross-session /tasks dialog) doesn't have
-      // that context either, so it always reads the solo 'needs-you' here.
-      // The orchestrator-owned 'waiting' state IS wired — by
-      // `orchestratorState.ts`'s `orchestratorWorkerState`, which HAS the
-      // `active` flag (the P4-8 roster). B6 (2026-07-12 review) deleted the
-      // `blockedOwner`-gated arm this function used to carry: it required an
-      // option no production caller ever passed, so it was dead — only
-      // `agentIdentity.test.ts` reached it.
-      return 'needs-you'
+      // prototype OrchestratorMode.jsx `workerStateKey`:163) waits on the
+      // assistant that delegated it, never on the user. The subagent's own
+      // result text carries the blocker back to the parent conversation, which
+      // is drained into a fresh turn with no human action
+      // (`src/tasks/LocalAgentTask/LocalAgentTask.tsx:273` →
+      // `app/sidecar/sidecarServer.ts:1209` / `src/hooks/useQueueProcessor.ts:48`).
+      // This used to return the amber 'needs-you' unconditionally, which told
+      // the user to act on a handoff already addressed to the model.
+      return 'waiting'
     }
     if (task.status === 'running' && task.isBackgrounded === true) {
       return 'background'
@@ -391,9 +389,21 @@ export function deriveTaskAgentState(task: TaskAgentSource): AgentStateKey {
 }
 
 export function deriveAgentToolState(tool: AgentToolSource): AgentStateKey {
+  // A background launch's `tool_result` only ever says it started — the launch
+  // ack, not a finish — so `status: 'success'` here does NOT mean completed.
+  // Its real outcome is the separate task-notification (`hasCompletion`);
+  // until that lands, a backgrounded agent reads as still running.
+  if (tool.run_in_background === true && !tool.hasCompletion) {
+    return tool.status === 'error' ? 'failed' : 'background'
+  }
+  if (tool.hasCompletion) {
+    if (tool.completionStatus === 'failed') return 'failed'
+    if (tool.completionStatus === 'killed') return 'stopped'
+    return 'completed'
+  }
   if (tool.status === 'error') return 'failed'
   if (tool.status === 'success') return 'completed'
-  return tool.run_in_background === true ? 'background' : 'running'
+  return 'running'
 }
 
 export function deriveAgentState(source: AgentDisplaySource): AgentStateKey {
@@ -479,6 +489,17 @@ export type AgentToolSource = AgentIdentitySource & {
   toolName: 'Agent' | 'Task'
   status: 'pending' | 'success' | 'error'
   run_in_background?: boolean
+  /**
+   * A background agent's `tool_result` only says it started (the launch ack),
+   * not that the agent finished (`transcriptProjector.ts` `ToolUseRow.agentCompletion`
+   * doc comment). Its real outcome lands later on a separate task-notification;
+   * `hasCompletion` is whether that notification has arrived, `completionStatus`
+   * its reported outcome (`completed` | `failed` | `killed` | …, or null when the
+   * engine sent none). Both undefined for a foreground agent, whose `tool_result`
+   * genuinely is the answer.
+   */
+  hasCompletion?: boolean
+  completionStatus?: string | null
 }
 
 export type AgentDisplaySource =

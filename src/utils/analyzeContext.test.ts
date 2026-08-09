@@ -1,6 +1,45 @@
-import { expect, test } from 'bun:test'
+import { expect, mock, test } from 'bun:test'
 
 const source = await Bun.file(new URL('./analyzeContext.ts', import.meta.url)).text()
+const usage = {
+  input_tokens: 2_000,
+  output_tokens: 3_000,
+  cache_creation_input_tokens: 1_000,
+  cache_read_input_tokens: 150_000,
+}
+const actualTokens = await import('./tokens.js')
+const actualTokenEstimation = await import('../services/tokenEstimation.js')
+
+mock.module('./tokens.js', () => ({
+  ...actualTokens,
+  getCurrentUsage: () => usage,
+}))
+mock.module('../services/tokenEstimation.js', () => ({
+  ...actualTokenEstimation,
+  countMessagesTokensWithAPI: async () => null,
+  countTokensViaHaikuFallback: async () => null,
+}))
+mock.module('./claudemd.js', () => ({
+  filterInjectedMemoryFiles: <T>(files: T[]) => files,
+  getMemoryFiles: async () => [],
+}))
+mock.module('../context.js', () => ({
+  getSystemContext: async () => ({}),
+}))
+mock.module('../tools/SkillTool/prompt.js', () => ({
+  getLimitedSkillToolCommands: async () => [],
+  getSkillToolInfo: async () => ({
+    totalCommands: 0,
+    includedCommands: 0,
+  }),
+}))
+mock.module('src/constants/prompts.js', () => ({
+  getSystemPrompt: async () => [],
+  getAgentModeSystemPromptSections: async () => [],
+  SYSTEM_PROMPT_DYNAMIC_BOUNDARY: '__dynamic_boundary__',
+}))
+
+const { analyzeContextUsage } = await import('./analyzeContext.js')
 
 test('/context resolves the Plan-mode runtime model with the request path\'s 200k condition', () => {
   expect(source).toMatch(
@@ -56,4 +95,26 @@ test('the display estimate is opt-in, so the tool-search sentinel survives', () 
 test('the local estimate delegates per content block instead of stringifying', () => {
   expect(source).toContain('roughTokenCountEstimationForContent')
   expect(source).not.toMatch(/JSON\.stringify\(message\.content/)
+})
+
+test('/context headline includes cached usage on the raw context window basis', async () => {
+  const result = await analyzeContextUsage(
+    [],
+    'gpt-5.6-terra',
+    async () => ({
+      mode: 'default',
+      additionalWorkingDirectories: new Map(),
+      alwaysAllowRules: {},
+      alwaysDenyRules: {},
+      alwaysAskRules: {},
+      isBypassPermissionsModeAvailable: false,
+    }),
+    [],
+    { activeAgents: [] } as never,
+  )
+
+  expect(result.totalTokens).toBe(156_000)
+  expect(result.maxTokens).toBe(372_000)
+  expect(result.rawMaxTokens).toBe(372_000)
+  expect(result.percentage).toBe(42)
 })

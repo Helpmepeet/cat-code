@@ -9,6 +9,7 @@ import { PROTOCOL_VERSION } from '../shared/protocol.js'
 import type { TranscriptBackfillSessionResult } from '../shared/transcriptBackfill.js'
 import {
   TRANSCRIPT_CACHE_RUN_FACTS_VERSION,
+  cacheHasCurrentRunFacts,
   readCache,
   writeCache,
 } from './transcriptCache.js'
@@ -17,8 +18,21 @@ import {
   runTranscriptBackfill,
 } from './transcriptBackfill.js'
 
-/** Worker results always carry run facts; these fixtures exercise other
- * concerns, so they use the all-null value the boundary requires. */
+/**
+ * What a real worker result carries for a transcript it could read. Fixtures
+ * that exercise other concerns use this rather than the all-null object: an
+ * all-null result now writes NO header (see the dedicated test below), so using
+ * it here would silently stop testing the idempotence it was written for.
+ */
+const SOME_RUN_FACTS = {
+  model: 'gpt-5.6-terra',
+  permissionMode: null,
+  effort: null,
+  usedTokens: null,
+  contextWindow: 372_000,
+}
+
+/** The boundary's all-null value — a transcript the worker could not read. */
 const NO_RUN_FACTS = {
   model: null,
   permissionMode: null,
@@ -54,6 +68,7 @@ function descriptor(restorable: boolean): SessionDescriptor {
     titleUpdatedAt: null,
     status: restorable ? 'exited' : 'ready',
     restorable,
+    parked: false,
     createdAt: 1,
     lastAttachedAt: 2,
     lastMessageSentAt: null,
@@ -83,7 +98,7 @@ function result(): TranscriptBackfillSessionResult {
         } as never,
       },
     ],
-    runFacts: NO_RUN_FACTS,
+    runFacts: SOME_RUN_FACTS,
   }
 }
 
@@ -299,4 +314,45 @@ test('runner contains a throwing cache-writer callback and rejects after reaping
       },
     }),
   ).rejects.toThrow('result callback failed')
+})
+
+test('an all-null worker result writes NO header, and stays re-queueable', () => {
+  // The floor both writers share. An all-null header cannot beat any frame
+  // fallback, and the renderer stops reading frames the moment a header exists,
+  // so stamping one as current is pure loss — and it used to be PERMANENT loss,
+  // because `cacheHasCurrentRunFacts` then counted the row as done forever.
+  const dir = cacheDir()
+  expect(
+    persistTranscriptBackfillResult(
+      {
+        cacheDir: dir,
+        getCurrentSession: () => descriptor(true),
+        transcriptExists: () => true,
+      },
+      { ...result(), runFacts: NO_RUN_FACTS },
+    ),
+  ).toBe('written')
+  const cache = readCache(dir, APP_ID)
+  expect(cache?.header.runFacts).toBeUndefined()
+  expect(cache?.header.runFactsVersion).toBeUndefined()
+  // The transcript stays a candidate, so a later launch can try again.
+  expect(cacheHasCurrentRunFacts(dir, APP_ID)).toBe(false)
+})
+
+test('a PARTIAL worker result is kept, because its frames can answer nothing', () => {
+  // Deliberately NOT the close path's completeness rule. A backfilled cache's
+  // frames come from `toSDKMessages`, which drops telemetry — measured on real
+  // caches: zero `result` frames and zero frame-level `permissionMode`. So the
+  // fallback names the model and nothing else, and discarding a partial header
+  // would throw away the window and effort only this worker can resolve.
+  const dir = cacheDir()
+  persistTranscriptBackfillResult(
+    {
+      cacheDir: dir,
+      getCurrentSession: () => descriptor(true),
+      transcriptExists: () => true,
+    },
+    { ...result(), runFacts: { ...NO_RUN_FACTS, effort: 'high' } },
+  )
+  expect(readCache(dir, APP_ID)?.header.runFacts?.effort).toBe('high')
 })

@@ -1,6 +1,6 @@
 # Prompt System Map
 
-Last refreshed: 2026-07-31
+Last refreshed: 2026-08-06
 
 ## Purpose
 
@@ -126,6 +126,7 @@ Watch these trims before debugging "missing" instructions in a worker:
 - Explore and Plan agents drop inherited `gitStatus`; they can run git commands when they need fresh state.
 - Built-in agents can receive extra Agent Mode prompt injections.
 - Fork children that use exact tools preserve more parent context to maximize cache compatibility.
+- The default Agent-tool guidance says to work inline unless delegation has a named advantage: parallel work, an independent perspective, or isolating a raw-output-heavy sweep.
 
 ## Tests And Validation
 
@@ -163,3 +164,4 @@ For emitted-prompt inspection, use prompt dumps when available:
 - Do not debug MCP prompt churn only in `prompts.ts`; MCP instruction delta behavior can move instructions out of the normal prompt section.
 - Do not forget API-time additions in `src/services/api/claude.ts`, such as CLI prompt prefixes and tool-search related instructions.
 - Do not assume safety or orchestration guidance is shared across providers. GPT-specific tool-output handling, risky-action policy, verification bounds, and Explore delegation rules are assembled in `src/constants/promptStyles/gpt.ts`.
+- Do not treat a single subagent as a neutral pass-through. The default and GPT prompt styles both require a concrete reason delegation beats doing that work in the current thread.

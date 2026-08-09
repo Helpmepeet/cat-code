@@ -510,19 +510,23 @@ export function syncClaudeAccountToStorage(): void {
 }
 
 /**
- * Update the active pool account's tokens after a refresh.
+ * Update one pool account's tokens after a refresh.
  * Keeps the in-memory pool and vault in sync with the keychain.
- * Called by the token refresh path in auth.ts after saveOAuthTokensIfNeeded.
+ * The caller must identify the account before awaiting the refresh, because the
+ * active account may change while the refresh request is in flight.
  */
-export function updateActiveClaudeAccountTokens(tokens: {
-  accessToken: string
-  refreshToken?: string | null
-  expiresAt?: number | null
-  subscriptionType?: string | null
-  rateLimitTier?: string | null
-}): void {
-  if (!pool.initialized || pool.activeIndex < 0) return
-  const acct = pool.accounts[pool.activeIndex]
+export function updateClaudeAccountTokens(
+  accountUuid: string,
+  tokens: {
+    accessToken: string
+    refreshToken?: string | null
+    expiresAt?: number | null
+    subscriptionType?: string | null
+    rateLimitTier?: string | null
+  },
+): void {
+  if (!pool.initialized) return
+  const acct = pool.accounts.find(account => account.accountUuid === accountUuid)
   if (!acct) return
 
   acct.accessToken = tokens.accessToken
@@ -533,7 +537,7 @@ export function updateActiveClaudeAccountTokens(tokens: {
 
   // Write updated tokens to vault
   saveClaudeTokenToVault(acct)
-  logForDebugging(`[claude-pool] Updated active account tokens after refresh`)
+  logForDebugging(`[claude-pool] Updated account tokens after refresh`)
 }
 
 /**

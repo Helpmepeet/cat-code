@@ -54,11 +54,20 @@ projected by the host as a `(status:'disconnected', restorable:true)` descriptor
 i.e. it is *byte-for-byte the crash descriptor*, so no renderer, no descriptor,
 and no visual code is aware that "park" exists.
 
-> **Narrowed 2026-08-05 (§1a).** The DESCRIPTOR half still holds and is still
-> load-bearing: park is invisible to `SessionDescriptor` and to every surface
-> keyed on it. The renderer half does not — it now classifies park from the exit
-> code already on the lifecycle frame, because reusing the crash presentation
-> meant telling the user a crash had happened.
+> **NO LONGER TRUE as of 2026-08-09 (§1b).** The descriptor now carries one
+> extra bit, `parked`, and four descriptor-derived surfaces read it. Every
+> other word above still holds — same `disconnected` + `restorable` status, same
+> tab membership, same restore path — but the "byte-for-byte" and "no descriptor
+> is aware" claims are the part §1b had to reverse. The paragraph is kept
+> because §11 and §12 below still argue from it.
+
+> **Narrowed 2026-08-05 (§1a), then narrowed again 2026-08-09 (§1b).** As of
+> 2026-08-05 the DESCRIPTOR half still held: park was invisible to
+> `SessionDescriptor`, and only the renderer classified it, from the exit code on
+> the lifecycle frame. §1b ended that too — the descriptor carries `parked` and
+> the surfaces keyed on it read it. What survives is narrower and still worth
+> stating: park changes no descriptor STATUS, so tab membership, restorability
+> and the restore path are untouched by it.
 
 Locked decisions honoured (never reopened): N-process · UDS transport · raw
 `AppSessionEvent` · die-with-window v1 · two-id model. Security baseline
@@ -111,11 +120,15 @@ and is explicitly **out of scope here**.
 ## 1a. Park is not a failure (operator ruling 2026-08-05)
 
 The premise above was that park could be free by reusing the crash presentation.
-It could not: the crash presentation *says something untrue*. The three surfaces
-a user meets in the chat view are fixed **without** touching the descriptor —
-§11's "the renderer is provably unaware park exists" is preserved at the
-DESCRIPTOR level, which is where it was load-bearing. The distinction is carried
-by the renderer's own connection snapshot instead.
+It could not: the crash presentation *says something untrue*. The five surfaces
+a user meets in the chat view are fixed **without** touching the descriptor, from
+the renderer's own connection snapshot.
+
+> That was as far as this section could reach. The surfaces which never see that
+> snapshot needed the descriptor itself, and §1b adds the one bit for them —
+> so §11's "the renderer is provably unaware park exists" no longer holds at any
+> level. It was withdrawn as a goal on 2026-08-05; §1b is where it stopped being
+> true in code.
 
 > **This is NOT yet complete, and the gap is structural — see §1b.** Four further
 > surfaces are descriptor-derived and still read a park as `crashed`. They are
@@ -145,6 +158,18 @@ red with `Expected: "parked" / Received: "exited"`.
 | Connection bar | danger tone + `This session stopped unexpectedly. Restart it to keep working.` | neutral, no sentence (`'parked'` is classified non-terminal, and both tone and copy derive from that one partition) |
 | Tab | danger dot + Restart button | `busy` tone, no restart affordance (`tabStatus.ts`; `busy` is the tone a preview pane already uses — same situation, opposite direction) |
 | Composer | read-only | editable; the submit is held (§3a) |
+| Composer rail (added 2026-08-09, CC-33) | model, effort, fast, account and mode faces ALL blank, and the context percentage moved as the donut lost its real window | the last values the engine reported, as read-only faces; the pickers disarm on the live seam alone (`composerRailModel.ts`) |
+| Pending-submit row (added 2026-08-09, CC-35) | `Queued — <text> — Sends when the session is ready.` narrated the restore until the resumed engine attached | absent for an idle-park restore; the pending-submit record retains that origin through `connecting`, while a genuine first cold spawn keeps the existing row unchanged |
+
+> **§1a was written as if the chat view had three surfaces. It has five.** The
+> composer rail was the fourth, and it failed in the loudest way available: a
+> parked session claimed to be running on nothing at all. The cause is the same
+> shape as the rest of this section — one signal doing two jobs. Each per-session
+> snapshot nulls on the `lifecycle` frame, which correctly disarms every picker
+> and incorrectly erases every answer. Display and capability are now separate
+> reads, so losing the process disarms without blanking. The pending-submit row
+> was the fifth: its text remains held for delivery and failure recovery, but
+> only a first cold spawn advertises that hold as a queue. A park restore does not.
 
 **A second, earlier copy of the same defect** (found by review round 2, proved with
 a real sidecar): the sidecar closes its socket inside `cleanup()` *before*
@@ -173,7 +198,27 @@ vocabulary, and it does not change how a genuine crash, a failed spawn, or a
 `RESUME_FAILED_EXIT_CODE` death reads. Only exit code 5 on an `exited` frame is a
 park; a `disconnected`/`failed` frame is never reclassified whatever it carries.
 
-## 1b. OPEN — four surfaces still say "crashed" (found by review 2026-08-05)
+## 1b. RESOLVED 2026-08-09 — four surfaces said "crashed" (found by review 2026-08-05)
+
+> **CLOSED by option (B), on the operator's call (CC-36, `396bebc`).**
+> `SessionDescriptor` gains `parked`, set in `host.descriptorFromRow` where the
+> row's shutdown marking is already computed, and all four surfaces inherit it
+> through `sessionStatusVisual`. **This reverses §11**, which rejected exactly
+> this field — its stated reason was to keep the renderer provably unaware park
+> exists, and the 2026-08-05 ruling withdrew that goal, so the premise no longer
+> held. The descriptor is otherwise unchanged: still `disconnected` +
+> `restorable`, so `foldTabMembership` and every status branch behave as before.
+>
+> Two gates were kept and are pinned by mutation tests: `restorable` (§1c — an
+> unrestorable park stays dead, never dressed up as resting) and
+> `liveStatus === null` (an unpark spawns BEFORE `upsertOnSpawn` clears the row's
+> mark, so reading the mark alone would paint a booting engine as resting).
+> `tabStatus.ts`'s own parked branch was folded back behind the shared module,
+> closing the fifth-copy drift this section named.
+>
+> The description below is kept as the record of what was wrong.
+
+
 
 §1a fixed the surfaces that read the renderer's CONNECTION snapshot. Every other
 session surface reads the **descriptor** through the one shared vocabulary
@@ -196,7 +241,7 @@ decision now lives outside the module that exists to stop exactly this drift
 switch"). The four surfaces above did not inherit the fix because they never see
 the connection snapshot at all — they are descriptor-derived by design.
 
-**The fork, unresolved on purpose.** Closing it is one of:
+**The fork, resolved 2026-08-09 as (B).** It was one of:
 
 - **(A) Thread a parked signal through the renderer.** Add `'parked'` to
   `sessionStatusVisual`'s synthetic-status parameter beside `'preview'`, move
@@ -217,11 +262,12 @@ must now be aware. So (B) is no longer barred by its own premise — but reversi
 a recorded decision is an operator call, not a reviewer's, which is why this is
 written down rather than done.
 
-Until one is chosen, the honest statement is: **a park no longer presents as a
-failure in the chat view; it still does in the Sessions page, the ⌘K palette, and
-the debug export.**
+(B) was chosen. The honest statement is now: **a park no longer presents as a
+failure anywhere** — not in the chat view, and not in the Sessions page, the ⌘K
+palette, the sidebar row's assistive-tech label, or the debug export, which no
+longer disagrees with itself.
 
-## 1c. OPEN — a session with no transcript should never be parked at all
+## 1c. RESOLVED 2026-08-09 — a session with no transcript is never parked
 
 Found by review round 2, demonstrated against a real `Host` + registry + driver.
 The engine materializes a session's `.jsonl` on its FIRST message
@@ -240,10 +286,48 @@ is fixed here: `tabStatus.ts` gates its parked visual on `descriptor.restorable`
 and an unrestorable park falls through to the honest dead presentation instead of
 reading as a resting `idle` tab with no affordance.
 
-The root fix is not done: **do not park what cannot come back.** It needs the
-`canResume` predicate the host already owns privately (`host.ts`) exposed to the
-park path, since neither the driver nor the sidecar can derive it. That is a host
-control-plane addition, so it is written down rather than slipped in.
+**Fix:** the host exposes its existing `canResume` predicate to the idle-park
+driver, which filters victims before both the TTL and cap selection. The host
+checks the transcript at read time and its in-memory resume-failure verdict, so
+it covers both the never-materialized transcript and a transcript deleted after
+a completed turn. A null `lastMessageSentAt` would identify the first case and
+legacy rows conservatively, but it cannot see a later deletion; it is therefore
+not the park gate. This is a read-only host-control-plane method, not a socket
+frame, so the sidecar allowlist, preload surface, and security baseline are
+unchanged.
+
+## 1d. OPEN — park is now invisible, and the run controls are silently inert
+
+Raised by the review of CC-33 (2026-08-09), and created BY it. Needs an operator
+ruling, so it is written down rather than decided.
+
+With the rail populated, a parked pane has no banner (§1a), a neutral tab, a live
+composer and a complete rail. Nothing on screen says the engine is gone — which
+is exactly what §1a asked for. But the model, effort, fast and account faces are
+now read-only `<span>`s at the same geometry, same colour and same position as
+the buttons they replace. A user who wants to switch model before typing clicks
+one and nothing happens, with no hover change and no cursor change to warn them.
+
+Before CC-33 the blank rail at least signalled that something was different. That
+signal was accidental and it cost the user every fact on the rail, so removing it
+was right; but it was the last one, and no deliberate signal replaced it.
+
+The options, none taken:
+
+- **(a) Do nothing.** The pickers come back on the next submit, which is the
+  §3a recovery path anyway. Cost: a dead click with no feedback, on a surface
+  where every neighbouring face is live.
+- **(b) Route the click to the composer.** The read-only faces call
+  `onFocusComposer`, a prop that already exists and is already passed. It lands
+  the user on the exact action that restores the session. Cost: a click that does
+  something other than what the face looks like it does.
+- **(c) Give the read-only faces a tooltip** naming the recovery ("Send a message
+  to resume this session"). §7-compliant and cheap, but nobody hovers before
+  clicking.
+
+Related: §1b's four descriptor-derived surfaces were NOT affected by CC-33 and
+read a park as `crashed` until §1b was closed separately on 2026-08-09. This
+section is about a different surface and remains open.
 
 ## 2. Chosen shape (recommended)
 
@@ -541,6 +625,7 @@ under the user outranks reclaiming its memory.
 | **sidecar/sidecarServer.ts** | `checkStrictKeys` allowlist entry `['app.park', new Set(['type','requestId'])]` (`:2711-2765`); a sidecar-local Zod schema for `app.park`; a `dispatch` case (`:875-916`) → `handlePark`; the `parking` field + `handlePark` (§3); the one-line `if (this.parking)` guard in `handleSubmit` (`:918`); an `onPark` option (mirrors `onIdle`, `:302,350,429-442`). | yes — full security tax |
 | **sidecar/index.ts** | `PARKED_EXIT_CODE = 5` const; pass `onPark: () => { cleanup(); process.exit(PARKED_EXIT_CODE) }` into `SidecarServer` (mirrors `onIdle`, `:204-214`). | no |
 | **host/registry.ts** | `ShutdownState` gains `'parked'` (`:85`); `normalizeShutdown` maps a **persisted** `'parked'` → `'crashed'` on read (`:961-969`) so `'parked'` is an in-memory-only state for the current run; `enforceBound` excludes `'parked'` rows from the terminal reap (`:570-609`, filter `:578`); new `markParked()` (like `markCrashed`, `:777-786`, transitions `null → 'parked'`). | no |
+| **shared/hostApi.ts** | **2026-08-09 (§1b):** `SessionDescriptor` gains `parked: boolean` — required, so every construction site must answer. Host control-plane shape, not a wire frame: no `PROTOCOL_VERSION` bump. | no |
 | **host/host.ts** | `onSupervisorEvent` exit branch (`:186-199`): `event.code === PARKED_EXIT_CODE ⇒ registry.markParked` else `markCrashed`; `descriptorFromRow` status map (`:705-709`): treat `'parked'` like `'crashed'` → `'disconnected'` so the tab is kept + `restorable` stays true (`isRestorable` already returns true for a dead row with an `engineSessionId` — and, since 2026-07-26, a transcript that actually exists; a session parked before it ever ran a turn has none, so it reads `disconnected` + NOT restorable, which keeps its tab just the same). | no (host sends no frame) |
 | **main/main.ts** | `createIdleParkDriver` (policy §4) sending `app.park` via `supervisor.send`; started/stopped with the window (mirror `sessionsCatalogDriver`, `:374-388,1562,1591`). The exit→`lifecycle{exited}` synth (`:671-695`) and the terminal-frame persist+evict (`:636-644`) need **no change** — a parked exit rides them exactly like a crash. | no |
 | **preload** | ~~**none.**~~ **2026-08-05:** `reportVisibleSessions` — one fixed one-way sender + `CH_HOST_VISIBLE_SESSIONS` (§4a). | no (host control plane; never reaches a sidecar) |
@@ -649,17 +734,24 @@ Before ratification-close, prove — through the real path, not this table:
 2. **Gate refusals:** `app.park` is declined (no exit) while a turn is active,
    while a permission is pending, and while a task is running/pending.
 3. **Public park→restore:** spawn → run one turn (transcript has content) →
-   trigger park (driver or direct) → assert the tab stays, chip reads "crashed",
-   composer disabled, engine process gone (registry `'parked'`, `liveCount`
-   dropped) → click restore → assert the conversation replays (P4-28), a new
-   turn runs, and the DIE-list items reset as in §7 (goal null, mode default).
+   trigger park (driver or direct) → assert the tab stays, engine process gone
+   (registry `'parked'`, `liveCount` dropped) → restore → assert the conversation
+   replays (P4-28), a new turn runs, and the DIE-list items reset as in §7 (goal
+   null, mode default).
+   > **AMENDED.** This step originally read "chip reads *crashed*, composer
+   > disabled, click restore". All three were the pre-2026-08-05 presentation
+   > and are now WRONG to assert: the chip reads `idle` (§1a, §1b), the composer
+   > stays editable, and the restore is the user's next message rather than a
+   > button (§3a). Do not follow the original wording.
 4. **enforceBound:** with more than `MAX_REGISTRY_SESSIONS` rows including a
    parked open tab, a new spawn reaps an oldest *clean/crashed* row and **never**
    the parked one.
 5. **Battery:** `bun test app/`, `bun run --cwd app typecheck` +
    `typecheck:sidecar` (0 owned), `bun run --cwd app test:hardening` (all pass),
-   `renderer:build`. GUI acceptance (operator): park a background tab, confirm it
-   reads exactly as a crashed tab and restores on click with full history.
+   `renderer:build`. GUI acceptance (operator): park a background tab, confirm
+   it reads as a resting `idle` tab with no failure vocabulary anywhere (chat
+   view, Sessions page, ⌘K, debug export), and that typing a message restores it
+   with full history.
 
 ## 10. Open decisions (operator must ratify before build)
 
@@ -699,6 +791,10 @@ Before ratification-close, prove — through the real path, not this table:
   Rejected as unnecessary: putting the distinction in the *registry row* (not the
   descriptor) keeps the descriptor byte-identical to a crash, which is what makes
   the renderer provably unaware of park (zero-UI proof by construction).
+  > **REVERSED 2026-08-09 (§1b, CC-36).** This rejection rested entirely on
+  > "the renderer must stay unaware of park", a goal the 2026-08-05 ruling
+  > withdrew. The field now exists and is the mechanism §1b closes on. Do not
+  > read this bullet as current policy.
 
 ## 12. Ordered build spec (dependency order, sized for subagents)
 

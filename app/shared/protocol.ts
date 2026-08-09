@@ -88,14 +88,11 @@ export type SessionId = string
 /**
  * C2 — the modes a renderer may request via `permission.setMode`
  * (decisions/PERMISSION-BOUNDARY.md §3). The first four sit inside T5b's
- * already-conceded surface. `bypassPermissions` is on the wire but is NOT
- * freely grantable: the sidecar rejects it UNLESS the session was launched with
- * the trusted opt-in (`CATCODE_ALLOW_BYPASS=1` → the context's
- * `isBypassPermissionsModeAvailable`), mirroring the CLI's
- * `--dangerously-skip-permissions` trusted-surface model. A renderer alone
- * (a browser-like surface) can never escalate to it. `auto` is classifier-backed
- * and may be selected only while the sidecar's live engine gate reports it
- * available; the sidecar re-checks that gate before applying the transition.
+ * already-conceded surface. `bypassPermissions` is available directly in the
+ * app mode picker; the engine's own bypass killswitch remains authoritative.
+ * `auto` is classifier-backed and may be selected only while the sidecar's live
+ * engine gate reports it available; the sidecar re-checks that gate before
+ * applying the transition.
  * There is NO `destination` on the wire — the sidecar pins `session` scope; a
  * renderer must never persist `permissions.defaultMode`.
  */
@@ -1183,9 +1180,10 @@ export type TasksSnapshotFrame = {
  * redacted display snapshot (never a mock worker object — D2 C5):
  *   1. Session plane (D2 §4.2) — the engine's PERSISTED agent-mode state
  *      (`<transcript>.agent-mode-state.json`, `src/agent-mode/sessionState.ts:68`),
- *      read through the engine's OWN `readSessionStateWithContinuity` entry point
- *      (`sessionState.ts:691`) — objective, run phase, and continuity workers
- *      (prior-session `resumable`/`stale`) + synthesis lifecycle.
+ *      read through the engine's OWN exact-session `readSessionState` entry point
+ *      (`sessionState.ts`) — objective, run phase, and persisted workers for the
+ *      current engine session. Cross-session continuity stays inside the engine's
+ *      resume machinery and is not part of this desktop snapshot.
  *   2. Live plane — the `local_agent` workers the current session delegated via the
  *      Agent tool (`AppState.tasks`, the SAME store P4-9's tasks domain reads),
  *      carrying the real handoff gate: `handoffStatus:'blocked'` is the "waiting on
@@ -1218,7 +1216,7 @@ export type AgentModeWorkerItem = {
   description: string | null
   /** Persisted synthesis gate (result-ready / reviewed) — agent-mode session plane only. */
   synthesisStatus?: 'pending' | 'synthesized'
-  /** `current` = this session; `prior` = a continuity worker from a prior session. */
+  /** Engine-origin metadata; the desktop sidecar's exact-session read normally yields `current`. */
   origin?: 'current' | 'prior'
   /** Persisted resumability (meaningful for `prior`-origin workers). */
   resumable?: boolean
@@ -1244,7 +1242,7 @@ export type AgentModeSnapshot = {
   objective: string
   /** Derived run phase from the persisted state; 'planning' when none. */
   phase: AgentModeRunPhase
-  /** Unified worker list: live `local_agent` workers ∪ persisted continuity workers. */
+  /** Unified worker list: live `local_agent` workers ∪ this session's persisted workers. */
   workers: AgentModeWorkerItem[]
 }
 
@@ -1298,6 +1296,35 @@ export type LeaseState = 'active' | 'released' | 'failed'
 /** Subagent account strategy, mirrored from `CodexLeaseStrategy` (`codexAccountLeaseManager.ts:20`). */
 export type LeaseStrategy = 'spread' | 'follow-main'
 
+/**
+ * WHY a lease sits where it does, mirrored from the engine's
+ * `CodexLeaseSelectionKind`. Additive in protocol v1: the renderer previously had
+ * to recover this by prefix-matching `selectionReason`, which is a log string that
+ * interpolates account ids and is free to be reworded on either side of the seam.
+ */
+export type LeaseSelectionKind = 'initial' | 'failover' | 'repaired' | 'manual'
+
+/**
+ * Engine kinds the sidecar refuses to project as owner rows. `synthetic` is
+ * `synthesizeMainLease` reporting the pool's ACTIVE account when the main thread
+ * holds no Codex lease at all: nothing leased it, and its timestamps are minted
+ * per snapshot, so a row built from it would assert both an account the main
+ * thread is not using and a held duration that measures nothing.
+ */
+export const NON_LEASE_SELECTION_KINDS = ['synthetic'] as const
+
+/**
+ * The account a lease moved OFF, resolved to its display alias at the sidecar.
+ * Cannot be derived renderer-side: `LeaseSnapshot.accounts` lists only accounts
+ * currently HOLDING a lease, and the account an agent left has by definition lost
+ * its own. Same disclosure policy as the row's `accountId`/`accountAlias`: an
+ * identifier plus the pool's redacted alias, never an email, never a token.
+ */
+export type LeaseMovedFrom = {
+  accountId: string
+  accountAlias: string | null
+}
+
 /** One owner→account lease row, projected from the engine's `CodexLease` (`codexAccountLeaseManager.ts:24-37`). */
 export type LeaseOwnerRow = {
   leaseId: string
@@ -1316,7 +1343,11 @@ export type LeaseOwnerRow = {
   createdAt: number
   updatedAt: number
   failoverCount: number
-  /** Engine `selectionReason`, length-capped at the sidecar. */
+  /** Engine `selectionKind` — branch on THIS, never on the reason text. */
+  selectionKind: LeaseSelectionKind
+  /** Present when `selectionKind` describes a move and the source account is still known. */
+  movedFrom?: LeaseMovedFrom
+  /** Engine `selectionReason`, length-capped at the sidecar. Display/diagnostic text only. */
   selectionReason: string
   /** Engine `lastFailureReason` when a failover happened, length-capped at the sidecar. */
   lastFailureReason?: string
@@ -1437,8 +1468,36 @@ export type AgentModeSetResultFrame = {
  *  - No new snapshot frame: `stopTask`'s store mutation drives the existing
  *    `tasks.snapshot` / `agent-mode.snapshot` re-broadcasts (the store-subscription
  *    path, the SAME live path any engine-side kill takes — not a synthetic frame).
+ *
+ * `task.dismiss` (2026-08-09) is the TERMINAL half of the same family, and it
+ * exists because a finished worker does not always leave on its own. The engine
+ * stamps NO `evictAfter` when a worker's report carries a `status: blocked`
+ * handoff line (`src/tasks/LocalAgentTask/LocalAgentTask.tsx:540,548`), so the
+ * shared eviction guard `(evictAfter ?? Infinity) > Date.now()`
+ * (`src/utils/task/framework.ts:134,240`) refuses forever and the desktop's
+ * deadline owner skips it by design (`app/sidecar/panelTaskReaper.ts`
+ * `earliestDeadline`). Keeping the row is INTENDED engine semantics — blocked
+ * means unresolved — but the terminal REPL pairs it with an escape hatch the
+ * desktop lacked: the `x` key runs `stopOrDismissAgent`
+ * (`src/state/teammateViewHelpers.ts:116`, wired at
+ * `src/components/PromptInput/PromptInput.tsx:1872`), which sets `evictAfter: 0`.
+ * This verb is that same escape hatch, reached from the worker detail's controls
+ * (`decisions/AGENT-CHROME.md` §2 `WorkerDetail` adapt; PARITY-LEDGER §20 sits the
+ * Stop control there already). The full diagnosis is the CC-32 row in
+ * `docs/migration/STATUS.md`.
+ *
+ *  - Same trust shape as `task.stop`: the renderer authors ONLY the target
+ *    `taskId`, the sidecar re-resolves it against the LIVE store, and a target
+ *    that is unknown / still running / not a panel worker fails closed with
+ *    `ok:false` and no side effect (T6-analog). T5a-analog `requestId`; T7 caps
+ *    unchanged.
+ *  - It calls the engine's OWN `stopOrDismissAgent` + `evictTerminalTask`
+ *    (`framework.ts:120`), never a store delete in `app/` code, so the engine
+ *    keeps every eviction guard (terminal status, `notified`, no pending
+ *    notification). A worker whose completion notification is still in flight is
+ *    marked and then evicted by the panel reaper on its next beat.
  */
-export const TASK_CONTROL_VERB_TYPES = ['task.stop'] as const
+export const TASK_CONTROL_VERB_TYPES = ['task.stop', 'task.dismiss'] as const
 
 export type TaskControlVerbType = (typeof TASK_CONTROL_VERB_TYPES)[number]
 
@@ -1450,7 +1509,19 @@ export type TaskStopMessage = {
   taskId: string
 }
 
-export type TaskControlVerbMessage = TaskStopMessage
+/**
+ * Dismiss a FINISHED worker row that the engine's own grace deadline will never
+ * retire (the blocked-handoff shape above). Terminal-only by design: a running
+ * worker is `task.stop`'s target, not this one.
+ */
+export type TaskDismissMessage = {
+  type: 'task.dismiss'
+  requestId: string
+  /** The target `AppState.tasks` key (a live `local_agent` worker's id). */
+  taskId: string
+}
+
+export type TaskControlVerbMessage = TaskStopMessage | TaskDismissMessage
 
 /**
  * P4-8b outbound result echoing the verb's `requestId` (T5a-analog). The updated
@@ -2780,11 +2851,15 @@ export type TranscriptRunFacts = {
   /** Context tokens at the newest turn that reported usage. */
   usedTokens: number | null
   /**
-   * The context window for `model`, RESOLVED at write time by the engine's
-   * `getContextWindowForModel` rather than read: no transcript record states a
-   * window (the live donut's comes off a `result` frame, which is never
-   * persisted). Null when the transcript named no model, or the resolver was
-   * unavailable, in which case the renderer falls back to its default window.
+   * The context window for `model`. Preferably the one the engine RECORDED with
+   * the run (`system`/`run_facts`); for a transcript written before that record
+   * existed, resolved at write time by the engine's `getContextWindowForModel`
+   * instead, since no other record states a window (the live donut's comes off a
+   * `result` frame, which is never persisted). Null when the transcript named no
+   * model, or the writer had no recorded window and no resolver — main's close
+   * path is engine-free and deliberately has none. A cache is written with no
+   * `runFacts` at all rather than with a null window, so the renderer's frame
+   * fallback keeps the exact window a cached `result` still states.
    */
   contextWindow: number | null
 }
@@ -2852,8 +2927,8 @@ export type CatCodeBridge = {
   /**
    * C2 — switch the addressed session's permission mode. Session-scoped only
    * (never persisted). The sidecar conditionally allows classifier-backed
-   * `auto` and trusted-launch `bypassPermissions`, rejecting either when its
-   * engine-owned availability gate is closed.
+   * `auto`; `bypassPermissions` is available directly in the app while the
+   * engine's own bypass killswitch remains authoritative.
    * The updated `permission.context` snapshot frame is the acknowledgement.
    */
   setPermissionMode(sessionId: SessionId, mode: PermissionSetModeMode): void
@@ -2908,6 +2983,11 @@ export type CatCodeBridge = {
    * engine object, no token crosses. The outcome arrives as a `task-control.result`
    * frame echoing `requestId` (`ok:false` when the task was gone/terminal), and the
    * kill's store mutation drives the existing `tasks.snapshot` re-broadcast.
+   *
+   * The same channel carries `task.dismiss`, the terminal counterpart: it retires a
+   * FINISHED worker row the engine's grace deadline will never retire on its own
+   * (see TASK_CONTROL_VERB_TYPES above), through the engine's own
+   * `stopOrDismissAgent` + `evictTerminalTask`.
    */
   taskControlVerb(sessionId: SessionId, verb: TaskControlVerbMessage): void
   /**

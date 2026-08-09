@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Leases panel — current vs proposed</title>
+<style>
+/* ── real app faces, loaded from the renderer's own files ─────────────────── */
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;font-display:swap;
+  src:url('../../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:swap;
+  src:url('../../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:500;font-display:swap;
+  src:url('../../../app/renderer/src/assets/fonts/DMMono-Medium.woff2') format('woff2')}
+
+/* ── app tokens, copied from app/renderer/src/theme.css ───────────────────── */
+:root{
+  --font-sans:"DM Sans",-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+  --font-mono:"DM Mono",ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
+  --shell-seam:rgba(255,255,255,0.06);
+  --shell-hover:rgba(255,255,255,0.045);
+  --surface-panel:#0a0a0c;
+  --text-primary:#f4f4f5;
+  --text-muted:#a1a1aa;
+  --text-subtle:#98989f;
+  --tone-good:#4ade80;
+  --tone-warn:#fbbf24;
+  --tone-danger:#f87171;
+  --teal-300:#5eead4;
+  --purple-200:#e9d5ff;
+  --purple-400:#c084fc;
+  --zinc-600:#52525b;
+}
+*{box-sizing:border-box}
+body{margin:0;background:#050506;padding:44px 40px 80px}
+
+/* ── page chrome — never inside a specimen ────────────────────────────────── */
+.x-lab{font:500 10px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,sans-serif;
+  letter-spacing:.2em;text-transform:uppercase;color:#5a5a62}
+.x-band{max-width:1424px;margin:0 auto 12px;padding-bottom:9px;border-bottom:1px solid #17171a}
+.x-grid{max-width:1424px;margin:0 auto 56px;display:grid;grid-template-columns:repeat(2,640px);
+  gap:64px;justify-content:center}
+@media (max-width:1420px){.x-grid{grid-template-columns:640px}}
+.x-col-head{margin-bottom:11px}
+
+/* ── SPECIMEN ─────────────────────────────────────────────────────────────── */
+.cell{width:640px}
+.dlg{display:flex;flex-direction:column;overflow:hidden;border-radius:14px;
+  border:1px solid var(--shell-seam);background:var(--surface-panel);
+  box-shadow:0 30px 80px rgba(0,0,0,.6);font-family:var(--font-sans);
+  -webkit-font-smoothing:antialiased}
+.dhead{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  border-bottom:1px solid var(--shell-seam);padding:14px 18px}
+.dtitle{font-size:14px;font-weight:600;color:var(--text-primary)}
+.dsub{margin-top:2px;font-size:12px;color:var(--text-subtle)}
+.dx{display:flex;height:28px;width:28px;align-items:center;justify-content:center;
+  border:0;background:none;border-radius:6px;font-size:18px;color:var(--text-subtle);
+  cursor:pointer;font-family:inherit}
+.dx:hover{background:var(--shell-hover);color:var(--text-muted)}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--shell-seam);padding:8px 14px 0}
+.tab{display:inline-flex;align-items:center;gap:6px;border:0;border-bottom:1.5px solid transparent;
+  background:none;padding:6px 10px;font-family:inherit;font-size:12px;font-weight:500;
+  color:var(--text-subtle);cursor:pointer}
+.tab .n{font-family:var(--font-mono);font-size:10px;color:rgba(152,152,159,.7)}
+.tab.on{font-weight:600;color:var(--text-primary)}
+.tab.on.t-lease{border-bottom-color:var(--teal-300)}
+.tab.on.t-lease .n{color:var(--teal-300)}
+.body{flex:1;min-height:0;overflow-y:auto;padding:6px 8px}
+.foot{display:flex;gap:14px;border-top:1px solid var(--shell-seam);padding:8px 16px;
+  font-family:var(--font-mono);font-size:10.5px;color:var(--text-subtle)}
+.foot .k{color:var(--text-muted)}
+.foot .r{margin-left:auto}
+.slab{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--zinc-600)}
+.slab.lease{color:var(--teal-300)}
+
+/* current-only */
+.a-intro{border-bottom:1px solid var(--shell-seam);padding:10px 12px 12px;font-size:11px;
+  line-height:1.625;color:var(--text-muted)}
+.a-intro b{font-family:var(--font-mono);font-weight:600;color:var(--teal-300)}
+.a-acct{padding:12px 12px 6px}
+.a-acct-list{margin-top:8px;display:flex;flex-direction:column;gap:6px}
+.a-acct-row{display:flex;align-items:center;gap:10px}
+.a-alias{width:96px;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:var(--font-mono);font-size:11.5px;font-weight:500;color:var(--teal-300)}
+.a-chip{flex-shrink:0;border-radius:4px;background:rgba(255,255,255,.05);padding:1px 6px;
+  font-family:var(--font-mono);font-size:10px;color:var(--text-muted)}
+.a-hold{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:10.5px;color:var(--text-subtle)}
+.a-own{padding:12px 12px 0}
+.a-row{display:flex;align-items:center;gap:10px;padding:10px 12px}
+.a-dot{display:inline-block;height:7px;width:7px;flex-shrink:0;border-radius:9999px}
+.a-dot.good{background:var(--tone-good)}
+.a-dot.bad{background:var(--tone-danger)}
+.a-main{min-width:0;flex:1}
+.a-name-line{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.a-name{font-family:var(--font-mono);font-size:12.5px;font-weight:600;color:var(--purple-200)}
+.a-name.is-main{color:var(--text-primary)}
+.a-badge{border-radius:4px;padding:1px 6px;font-size:8.5px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.05em;background:rgba(192,132,252,.1);color:var(--purple-400)}
+.a-badge.is-main{background:rgba(255,255,255,.06);color:var(--text-muted)}
+.a-badge.warn{letter-spacing:.04em;background:rgba(251,191,36,.12);color:var(--tone-warn)}
+.a-reason{margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:10.5px;color:var(--text-subtle)}
+.a-right{display:flex;flex-shrink:0;flex-direction:column;align-items:flex-end;gap:2px}
+.a-acctname{font-family:var(--font-mono);font-size:12px;font-weight:500;color:var(--teal-300)}
+.a-meta{font-family:var(--font-mono);font-size:9.5px;color:var(--tone-good)}
+.a-meta.bad{color:var(--tone-danger)}
+
+/* proposed-only */
+.b-intro{display:flex;align-items:baseline;gap:8px;border-bottom:1px solid var(--shell-seam);
+  padding:11px 14px}
+.b-intro-k{font-size:11.5px;color:var(--text-subtle)}
+.b-intro-v{font-family:var(--font-mono);font-size:11.5px;font-weight:500;color:var(--teal-300)}
+.b-note{margin-left:auto;font-size:11.5px;color:var(--text-muted)}
+.b-group{padding:14px 14px 2px}
+.b-group-head{display:flex;align-items:baseline;gap:8px;padding-bottom:2px}
+.b-acct{font-family:var(--font-mono);font-size:12.5px;font-weight:500;color:var(--teal-300)}
+.b-acct.none{color:var(--text-muted)}
+.b-gdot{align-self:center;display:inline-block;height:6px;width:6px;flex-shrink:0;
+  border-radius:9999px;background:var(--tone-danger)}
+.b-count{margin-left:auto;font-size:11px;color:var(--text-subtle)}
+.b-list{margin-top:6px;border-left:1px solid var(--shell-seam);padding-left:13px}
+.b-row{display:flex;align-items:baseline;gap:10px;padding:6px 0}
+.b-rowmain{min-width:0;flex:1;display:flex;align-items:baseline;gap:8px}
+.b-name{flex-shrink:0;font-size:12.5px;font-weight:500;color:var(--text-primary)}
+.b-task{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:11.5px;color:var(--text-subtle)}
+.b-tag{flex-shrink:0;font-size:11px;color:var(--text-subtle)}
+.b-held{flex-shrink:0;font-family:var(--font-mono);font-size:11px;color:var(--text-subtle)}
+.b-sub{margin:3px 0 1px;display:flex;align-items:center;gap:6px;font-size:11px;
+  color:var(--text-subtle)}
+.b-sub.bad{color:var(--tone-danger)}
+.b-mark{display:inline-block;height:5px;width:5px;flex-shrink:0;border-radius:9999px;
+  background:var(--tone-warn)}
+</style>
+</head>
+<body>
+
+<div class="x-band"><span class="x-lab">One account</span></div>
+<div class="x-grid">
+
+  <div>
+    <div class="x-col-head"><span class="x-lab">Current</span></div>
+    <div class="cell">
+      <div class="dlg">
+        <div class="dhead">
+          <div>
+            <div class="dtitle">Tasks</div>
+            <div class="dsub">3 active · 0 completed</div>
+          </div>
+          <button class="dx" type="button">×</button>
+        </div>
+        <div class="tabs">
+          <button class="tab" type="button">Tasks <span class="n">3</span></button>
+          <button class="tab" type="button">Workers <span class="n">3</span></button>
+          <button class="tab on t-lease" type="button">Leases <span class="n">4</span></button>
+        </div>
+        <div class="body">
+          <div class="a-intro">
+            Subagent strategy this session: <b>spread</b>. Leases are not locks, so several
+            agents can share one account.
+          </div>
+          <div class="a-acct">
+            <div class="slab lease">Accounts in use · 1</div>
+            <div class="a-acct-list">
+              <div class="a-acct-row">
+                <span class="a-alias">bluesky</span>
+                <span class="a-chip">3 leases</span>
+                <span class="a-hold">Inventory small engine fixes, Inventory small app fixes, Audit small-fix shortlist</span>
+              </div>
+            </div>
+          </div>
+          <div class="a-own"><div class="slab">Owners · 4</div></div>
+
+          <div class="a-row">
+            <span class="a-dot good"></span>
+            <div class="a-main">
+              <div class="a-name-line">
+                <span class="a-name is-main">main thread</span>
+                <span class="a-badge is-main">main</span>
+              </div>
+              <div class="a-reason">synthetic main lease from active pool account</div>
+            </div>
+            <div class="a-right">
+              <span class="a-acctname">bluesky</span>
+              <span class="a-meta">follow-main · active · 0s</span>
+            </div>
+          </div>
+
+          <div class="a-row">
+            <span class="a-dot good"></span>
+            <div class="a-main">
+              <div class="a-name-line">
+                <span class="a-name">Inventory small engine fixes</span>
+                <span class="a-badge">subagent</span>
+                <span class="a-badge warn">failed over ×1</span>
+              </div>
+              <div class="a-reason">failover from 14f2f119-e9ba-42df-8327-34dc03fd66ea: Codex account 14f2f119-e9ba-42df-8327-34dc03fd66ea is capped</div>
+            </div>
+            <div class="a-right">
+              <span class="a-acctname">bluesky</span>
+              <span class="a-meta">spread · active · 2m</span>
+            </div>
+          </div>
+
+          <div class="a-row">
+            <span class="a-dot good"></span>
+            <div class="a-main">
+              <div class="a-name-line">
+                <span class="a-name">Inventory small app fixes</span>
+                <span class="a-badge">subagent</span>
+                <span class="a-badge warn">failed over ×1</span>
+              </div>
+              <div class="a-reason">failover from ca889574-256c-4f04-8d5f-f80004f1a8e1: Codex account ca889574-256c-4f04-8d5f-f80004f1a8e1 is capped</div>
+            </div>
+            <div class="a-right">
+              <span class="a-acctname">bluesky</span>
+              <span class="a-meta">spread · active · 2m</span>
+            </div>
+          </div>
+
+          <div class="a-row">
+            <span class="a-dot good"></span>
+            <div class="a-main">
+              <div class="a-name-line">
+                <span class="a-name">Audit small-fix shortlist</span>
+                <span class="a-badge">subagent</span>
+                <span class="a-badge warn">failed over ×1</span>
+              </div>
+              <div class="a-reason">repaired from non-selectable account ca889574-256c-4f04-8d5f-f80004f1a8e1: spread selected least crowded healthy account</div>
+            </div>
+            <div class="a-right">
+              <span class="a-acctname">bluesky</span>
+              <span class="a-meta">spread · active · 2m</span>
+            </div>
+          </div>
+        </div>
+        <div class="foot">
+          <span>which account each agent is leasing in this session</span>
+          <span class="r"><span class="k">esc</span> close</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="x-col-head"><span class="x-lab">Proposed</span></div>
+    <div class="cell">
+      <div class="dlg">
+        <div class="dhead">
+          <div>
+            <div class="dtitle">Tasks</div>
+            <div class="dsub">3 active · 0 completed</div>
+          </div>
+          <button class="dx" type="button">×</button>
+        </div>
+        <div class="tabs">
+          <button class="tab" type="button">Tasks <span class="n">3</span></button>
+          <button class="tab" type="button">Workers <span class="n">3</span></button>
+          <button class="tab on t-lease" type="button">Accounts <span class="n">4</span></button>
+        </div>
+        <div class="body">
+          <div class="b-intro">
+            <span class="b-intro-k">Strategy</span>
+            <span class="b-intro-v">spread</span>
+            <span class="b-note">All 4 agents landed on one account.</span>
+          </div>
+
+          <div class="b-group">
+            <div class="b-group-head">
+              <span class="b-acct">bluesky</span>
+              <span class="b-count">4 agents</span>
+            </div>
+            <div class="b-list">
+              <div class="b-row">
+                <div class="b-rowmain">
+                  <span class="b-name">Main thread</span>
+                  <span class="b-tag">main</span>
+                </div>
+                <span class="b-held">0s</span>
+              </div>
+              <div class="b-row">
+                <div class="b-rowmain">
+                  <span class="b-name">Hopper</span>
+                  <span class="b-task">Inventory small engine fixes</span>
+                </div>
+                <span class="b-held">2m</span>
+              </div>
+              <div class="b-sub" title="failover from 14f2f119-e9ba-42df-8327-34dc03fd66ea: Codex account 14f2f119-e9ba-42df-8327-34dc03fd66ea is capped">
+                <span class="b-mark"></span>moved here after another account hit its cap
+              </div>
+              <div class="b-row">
+                <div class="b-rowmain">
+                  <span class="b-name">Curie</span>
+                  <span class="b-task">Inventory small app fixes</span>
+                </div>
+                <span class="b-held">2m</span>
+              </div>
+              <div class="b-sub" title="failover from ca889574-256c-4f04-8d5f-f80004f1a8e1: Codex account ca889574-256c-4f04-8d5f-f80004f1a8e1 is capped">
+                <span class="b-mark"></span>moved here after another account hit its cap
+              </div>
+              <div class="b-row">
+                <div class="b-rowmain">
+                  <span class="b-name">Noether</span>
+                  <span class="b-task">Audit small-fix shortlist</span>
+                </div>
+                <span class="b-held">2m</span>
+              </div>
+              <div class="b-sub" title="repaired from non-selectable account ca889574-256c-4f04-8d5f-f80004f1a8e1: spread selected least crowded healthy account">
+                <span class="b-mark"></span>moved here, its account could not be used
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="foot">
+          <span class="r"><span class="k">esc</span> close</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="x-band"><span class="x-lab">Three accounts, one agent stranded</span></div>
+<div class="x-grid">
+
+  <div>
+    <div class="x-col-head"><span class="x-lab">Current</span></div>
+    <div class="cell">
+      <div class="dlg">
+        <div class="dhead">
+          <div>
+            <div class="dtitle">Tasks</div>
+            <div class="dsub">4 active · 2 completed</div>
+          </div>
+          <button class="dx" type="button">×</button>
+        </div>
+        <div class="tabs">
+          <button class="tab" type="button">Tasks <span class="n">6</span></button>
+          <button class="tab" type="button">Workers <span class="n">5</span></button>
+          <button class="tab on t-lease" type="button">Leases <span class="n">4</span></button>
+        </div>
+        <div class="body">
+          <div class="a-intro">
+            Subagent strategy this session: <b>spread</b>. Leases are not locks, so several
+            agents can share one account.
+          </div>
+          <div class="a-acct">
+            <div class="slab lease">Accounts in use · 3</div>
+            <div class="a-acct-list">
+              <div class="a-acct-row">
+                <span class="a-alias">bluesky</span>
+                <span class="a-chip">2 leases</span>
+                <span class="a-hold">Main thread, Trace the resume path</span>
+              </div>
+              <div class="a-acct-row">
+                <span class="a-alias">aurora</span>
+                <span class="a-chip">1 lease</span>
+                <span class="a-hold">Inventory small engine fixes</span>
+              </div>
+              <div class="a-acct-row">
+                <span class="a-alias">harbor</span>
+                <span class="a-chip">1 lease</span>
+                <span class="a-hold">Audit small-fix shortlist</span>
+              </div>
+            </div>
+          </div>
+          <div class="a-own"><div class="slab">Owners · 5</div></div>
+
+          <div class="a-row">
+            <span class="a-dot good"></span>
+            <div class="a-main">
+              <div class="a-name-line">
+                <span class="a-name is-main">main thread</span>
+                <span class="a-badge is-main">main</span>
+              </div>
+              <div class="a-reason">main lease pinned to pool activeIndex</div>
+            </div>
+            <div class="a-right">
+              <span class="a-acctname">bluesky</span>
+              <span class="a-meta">follow-main · active · 12m</span>
+            </div>
+          </div>
+
+          <div class="a-row">
+            <span class="a-dot good"></span>
+            <div class="a-main">
+              <div class="a-name-line">
+                <span class="a-name">Inventory small engine fixes</span>
+                <span class="a-badge">subagent</span>
+              </div>
+              <div class="a-reason">spread selected least crowded healthy account</div>
+            </div>
+            <div class="a-right">
+              <span class="a-acctname">aurora</span>
+              <span class="a-meta">spread · active · 4m</span>
+            </div>
+          </div>
+
+          <div class="a-row">
+            <span class="a-dot good"></span>
+            <div class="a-main">
+              <div class="a-name-line">
+                <span class="a-name">Audit small-fix shortlist</span>
+                <span class="a-badge">subagent</span>
+              </div>
+              <div class="a-reason">spread selected least crowded healthy account</div>
+            </div>
+            <div class="a-right">
+              <span class="a-acctname">harbor</span>
+              <span class="a-meta">spread · active · 4m</span>
+            </div>
+          </div>
+
+          <div class="a-row">
+            <span class="a-dot good"></span>
+            <div class="a-main">
+              <div class="a-name-line">
+                <span class="a-name">Trace the resume path</span>
+                <span class="a-badge">subagent</span>
+              </div>
+              <div class="a-reason">spread selected least crowded healthy account</div>
+            </div>
+            <div class="a-right">
+              <span class="a-acctname">bluesky</span>
+              <span class="a-meta">spread · active · 1m</span>
+            </div>
+          </div>
+
+          <div class="a-row">
+            <span class="a-dot bad"></span>
+            <div class="a-main">
+              <div class="a-name-line">
+                <span class="a-name">Summarize the changed files</span>
+                <span class="a-badge">subagent</span>
+                <span class="a-badge warn">failed over ×2</span>
+              </div>
+              <div class="a-reason">spread selected least crowded healthy account</div>
+            </div>
+            <div class="a-right">
+              <span class="a-acctname">harbor</span>
+              <span class="a-meta bad">spread · failed</span>
+            </div>
+          </div>
+        </div>
+        <div class="foot">
+          <span>which account each agent is leasing in this session</span>
+          <span class="r"><span class="k">esc</span> close</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="x-col-head"><span class="x-lab">Proposed</span></div>
+    <div class="cell">
+      <div class="dlg">
+        <div class="dhead">
+          <div>
+            <div class="dtitle">Tasks</div>
+            <div class="dsub">4 active · 2 completed</div>
+          </div>
+          <button class="dx" type="button">×</button>
+        </div>
+        <div class="tabs">
+          <button class="tab" type="button">Tasks <span class="n">6</span></button>
+          <button class="tab" type="button">Workers <span class="n">5</span></button>
+          <button class="tab on t-lease" type="button">Accounts <span class="n">4</span></button>
+        </div>
+        <div class="body">
+          <div class="b-intro">
+            <span class="b-intro-k">Strategy</span>
+            <span class="b-intro-v">spread</span>
+          </div>
+
+          <div class="b-group">
+            <div class="b-group-head">
+              <span class="b-gdot"></span>
+              <span class="b-acct none">No account</span>
+              <span class="b-count">1 agent</span>
+            </div>
+            <div class="b-list">
+              <div class="b-row">
+                <div class="b-rowmain">
+                  <span class="b-name">Shannon</span>
+                  <span class="b-task">Summarize the changed files</span>
+                </div>
+                <span class="b-held">4m</span>
+              </div>
+              <div class="b-sub bad" title="Codex account ca889574-256c-4f04-8d5f-f80004f1a8e1 is capped">
+                every account was capped or unavailable
+              </div>
+            </div>
+          </div>
+
+          <div class="b-group">
+            <div class="b-group-head">
+              <span class="b-acct">bluesky</span>
+              <span class="b-count">2 agents</span>
+            </div>
+            <div class="b-list">
+              <div class="b-row">
+                <div class="b-rowmain">
+                  <span class="b-name">Main thread</span>
+                  <span class="b-tag">main</span>
+                </div>
+                <span class="b-held">12m</span>
+              </div>
+              <div class="b-row">
+                <div class="b-rowmain">
+                  <span class="b-name">Ada</span>
+                  <span class="b-task">Trace the resume path</span>
+                </div>
+                <span class="b-held">1m</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="b-group">
+            <div class="b-group-head">
+              <span class="b-acct">aurora</span>
+              <span class="b-count">1 agent</span>
+            </div>
+            <div class="b-list">
+              <div class="b-row">
+                <div class="b-rowmain">
+                  <span class="b-name">Hopper</span>
+                  <span class="b-task">Inventory small engine fixes</span>
+                </div>
+                <span class="b-held">4m</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="b-group">
+            <div class="b-group-head">
+              <span class="b-acct">harbor</span>
+              <span class="b-count">1 agent</span>
+            </div>
+            <div class="b-list">
+              <div class="b-row">
+                <div class="b-rowmain">
+                  <span class="b-task">Audit small-fix shortlist</span>
+                </div>
+                <span class="b-held">4m</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="foot">
+          <span class="r"><span class="k">esc</span> close</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>

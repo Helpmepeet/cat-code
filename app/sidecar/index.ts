@@ -37,6 +37,7 @@ import {
 } from './historyProjection.js'
 import { initializeSidecarRuntime } from './initializeRuntime.js'
 import { createSidecarSessionController } from './sessionController.js'
+import { withRestoredSubagentHistory } from './subagentHistory.js'
 import { resumeEngineSession, SidecarResumeError } from './sessionResume.js'
 import { SidecarServer } from './sidecarServer.js'
 import { createBackpressuredSocket } from './backpressuredSocket.js'
@@ -216,6 +217,7 @@ async function main(): Promise<void> {
     agentMode,
     leases,
     taskControl,
+    panelTaskReaper,
     runControls,
     sessionActions,
     contextBreakdown,
@@ -247,7 +249,15 @@ async function main(): Promise<void> {
       display.messages,
       seedHistoryEvents,
     )
-    historyEvents = merged.history
+    // Subagent conversations live in their own sidechain transcripts, so the
+    // display load above cannot see them. Splice each one back under the Agent
+    // tool_use that spawned it (subagentHistory.ts) — without this a restored
+    // Agent card has no child rows at all.
+    historyEvents = await withRestoredSubagentHistory(
+      getSessionId(),
+      merged.history,
+      message => process.stderr.write(`${message}\n`),
+    )
     historySourceTruncated = display.truncated || merged.truncated
   }
 
@@ -271,6 +281,7 @@ async function main(): Promise<void> {
     ...(agentMode ? { agentMode } : {}),
     ...(leases ? { leases } : {}),
     ...(taskControl ? { taskControl } : {}),
+    ...(panelTaskReaper ? { panelTaskReaper } : {}),
     ...(runControls ? { runControls } : {}),
     ...(sessionActions ? { sessionActions } : {}),
     ...(contextBreakdown ? { contextBreakdown } : {}),

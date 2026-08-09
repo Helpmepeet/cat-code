@@ -44,6 +44,7 @@ function descriptor(over: Partial<SessionDescriptor> = {}): SessionDescriptor {
     titleUpdatedAt: null,
     status: 'ready',
     restorable: false,
+    parked: false,
     createdAt: 1,
     lastAttachedAt: 2,
     lastMessageSentAt: null,
@@ -161,6 +162,7 @@ describe('resolveOpenHistorySession (open-from-history boundary)', () => {
       engineSessionId: ENGINE_ID,
       status: 'exited',
       restorable: true,
+      parked: false,
     })
     const result = resolveOpenHistorySession(
       ENGINE_ID,

@@ -153,6 +153,42 @@ describe('/continue-after-limit dispatch gate', () => {
 // The uninstall path throws when it cannot verify the launchd job unloaded
 // (it keeps the plist rather than claim a disable it did not achieve). The
 // command must surface that actionable text, not reject unhandled.
+describe('/continue-after-limit enable-background failure', () => {
+  test('surfaces the installer error instead of misdiagnosing the executable', async () => {
+    const message =
+      'Background continuation is only supported on macOS'
+    mock.module('../../services/deferredContinuationLaunchAgent.js', () => ({
+      uninstallDeferredContinuationLaunchAgent: async () => false,
+      installDeferredContinuationLaunchAgent: async () => {
+        throw new Error(message)
+      },
+      getDeferredContinuationBackgroundStatus: async () => ({
+        state: 'disabled' as const,
+      }),
+    }))
+    const { call: freshCall } = await import('./continue-after-limit.js')
+
+    let text: string | null = null
+    const dialog = await freshCall(
+      result => {
+        text = typeof result === 'string' ? result : null
+      },
+      { isQueryActive: false } as never,
+      'enable-background',
+    )
+    const confirmation = dialog as {
+      type: (props: unknown) => {
+        props: { children: { props: { onChange: (choice: 'enable') => Promise<void> } } }
+      }
+      props: unknown
+    }
+    const select = confirmation.type(confirmation.props).props.children
+    await select.props.onChange('enable')
+
+    expect(text).toBe(message)
+  })
+})
+
 describe('/continue-after-limit disable-background failure', () => {
   test('surfaces the actionable error instead of rejecting', async () => {
     const message =

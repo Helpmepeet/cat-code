@@ -65,16 +65,18 @@ import {
   validateSaveTextRequest,
 } from './mainDecisions.js'
 import {
+  buildClosedSessionCache,
   deleteCache,
-  distill,
   cacheHasCurrentRunFacts,
   cacheWrittenAt,
   listCachedSessionIds,
   readCache,
+  readCachedRunFacts,
   resolvePreview,
   transcriptCacheDir,
   writeCache,
 } from './transcriptCache.js'
+import { readTranscriptRunFacts } from '../shared/transcriptRunFacts.js'
 import { readSessionsCatalogCache } from './sessionsCatalogBaseline.js'
 import { resolveOpenHistorySession } from './openHistorySession.js'
 import {
@@ -523,26 +525,63 @@ let idleParkDriver: IdleParkDriver | null = null
 let visibleSessions: ReadonlySet<SessionId> = new Set()
 
 /**
+ * Where a session's engine transcript lives, or null when the row is gone.
+ *
+ * The cwd is the row's, never a renderer string, and the row survives every
+ * eviction point (close/restart/quit all KEEP the row restorable; only a reap
+ * removes it, and that deletes the cache anyway). A missing row means there is
+ * nothing to enrich from, not that a path should be guessed.
+ */
+function sessionTranscriptPath(
+  appSessionId: SessionId,
+  engineSessionId: string,
+): string | null {
+  const row = host
+    ?.listSessions()
+    .find(session => session.appSessionId === appSessionId)
+  if (!row) return null
+  // The row's id must be the one the frames carry. Pairing this row's `cwd`
+  // with a DIFFERENT engine session's id would read a neighbouring transcript
+  // and attribute its facts here — the row is re-keyed on restart, so the two
+  // can genuinely disagree.
+  if (row.engineSessionId !== engineSessionId) return null
+  return defaultTranscriptPath(row.cwd, engineSessionId)
+}
+
+/**
  * Persist one session's transcript cache (IS-A). Called at every eviction point
  * in **snapshot → atomic persist → evict** order (the caller evicts AFTER this):
  * snapshot the session's buffered frames, distill to the transcript-only cache,
- * and atomically write it. Skips a session with no buffered frames or no
- * engineSessionId (never restorable, so a cache would never be served). Wrapped
- * fail-safe: a persist error degrades to the no-cache path, never breaks
- * eviction or the synchronous quit.
+ * enrich the header from the session's own transcript, and atomically write it.
+ * Skips a session with no buffered frames or no engineSessionId (never
+ * restorable, so a cache would never be served). Wrapped fail-safe: a persist
+ * error degrades to the no-cache path, never breaks eviction or the synchronous
+ * quit.
+ *
+ * The enrichment is what makes a cache written AFTER the once-per-process
+ * startup backfill complete anyway. Without it, every session closed during a
+ * run reverted to a headerless cache whose effort could not be recovered from
+ * frames at all, and stayed that way until a later launch re-backfilled it.
+ * `buildClosedSessionCache` owns the decision (and refuses to write a header
+ * that would be thinner than what the frames already say).
  */
 function persistTranscriptCache(appSessionId: SessionId): void {
   try {
     const frames = attachmentGate.snapshotSession(appSessionId)
     if (frames.length === 0) return
-    const cache = distill(frames)
-    if (cache.header.engineSessionId === null) return
-    // The pre-distill snapshot always has a head plus state snapshots, so the
-    // check above never catches a session closed before its first turn. Distilling
-    // drops all of those, and a cache with no transcript frames is worse than no
-    // cache: the renderer treats a readable cache as a preview and shows a
-    // loading placeholder for a transcript that will never arrive.
-    if (cache.frames.length === 0) return
+    const cache = buildClosedSessionCache(
+      {
+        transcriptPath: engineSessionId =>
+          sessionTranscriptPath(appSessionId, engineSessionId),
+        // No resolver: main is engine-free, so a window here is only ever one
+        // the engine itself recorded in `run_facts`.
+        readRunFacts: path => readTranscriptRunFacts(path, () => null),
+        readCachedRunFacts: (id, engineSessionId) =>
+          readCachedRunFacts(TRANSCRIPT_CACHE_DIR, id, engineSessionId),
+      },
+      frames,
+    )
+    if (cache === null) return
     writeCache(TRANSCRIPT_CACHE_DIR, cache)
   } catch (error) {
     process.stderr.write(
@@ -788,6 +827,7 @@ function startIdleParkDriver(): void {
   if (!activeHost || !activeSupervisor) return
   idleParkDriver = createIdleParkDriver({
     listSessions: () => activeHost.listSessions(),
+    canResume: appSessionId => activeHost.canResume(appSessionId),
     park: appSessionId => {
       // Host-originated, gated at the sidecar. No renderer authored this — the
       // requestId is minted here purely to satisfy the frame contract (there is
@@ -1258,8 +1298,13 @@ function registerIpcHandlers(): void {
   // Renderer → supervisor: the four allowlisted channels. Main does light shape
   // coercion for UX, but the SIDECAR is the trust boundary (R2) — it re-validates
   // everything with the allowlist schema and applies T4/T6/T6b.
-  ipcMain.on(CH_SUBMIT, (_e, arg: { sessionId: SessionId; prompt: string; options?: unknown }) => {
-    if (typeof arg?.sessionId !== 'string' || typeof arg?.prompt !== 'string') return
+  ipcMain.on(CH_SUBMIT, (_e, arg: { sessionId: SessionId; prompt: unknown; options?: unknown }) => {
+    if (
+      typeof arg?.sessionId !== 'string' ||
+      (typeof arg?.prompt !== 'string' && !Array.isArray(arg?.prompt))
+    ) {
+      return
+    }
     forward(arg.sessionId, {
       type: 'app.submit',
       requestId: generateRequestId(),
@@ -1322,9 +1367,8 @@ function registerIpcHandlers(): void {
     (_e, arg: { sessionId: SessionId; mode: unknown }) => {
       if (typeof arg?.sessionId !== 'string') return
       // C2 — light UX coercion only; the SIDECAR is the trust boundary and
-      // re-validates (`auto` rejected there explicitly; `bypassPermissions`
-      // honoured only when the trusted launch flag enabled it). A value outside
-      // the wire allowlist drops the whole message fail-closed rather than
+      // re-validates (`auto` rejected there explicitly). A value outside the
+      // wire allowlist drops the whole message fail-closed rather than
       // forwarding a frame that is guaranteed to be rejected.
       if (
         !PERMISSION_SET_MODE_MODES.includes(arg.mode as PermissionSetModeMode)

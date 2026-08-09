@@ -38,6 +38,9 @@ export function reduceGoalMemoryState(
   }
 
   if (frame.kind === 'lifecycle') {
+    if (!(frame.sessionId in state.goals) && !(frame.sessionId in state.memory)) {
+      return state
+    }
     const nextGoals = { ...state.goals, [frame.sessionId]: null }
     const nextMemory = { ...state.memory, [frame.sessionId]: null }
     return { goals: nextGoals, memory: nextMemory }

@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type {
   DiagnosticsSnapshot,
   PermissionContextSnapshot,
+  RunControlsSnapshot,
   SettingsSnapshot,
 } from '../../shared/protocol.js'
 import {
@@ -69,6 +70,23 @@ const diagnostics: DiagnosticsSnapshot = {
   memoryWarnings: [],
 }
 
+// A session the picker moved to Opus 5 after it spawned on Luna: the live seam
+// and the frozen `diagnostics` above disagree on every run-control field.
+const runControls: RunControlsSnapshot = {
+  model: {
+    current: 'claude-opus-5',
+    currentLabel: 'Opus 5',
+    contextWindow: 1_000_000,
+    selected: 'claude-opus-5',
+    provider: 'anthropic',
+    providerSwitchLocked: false,
+    options: [{ value: 'claude-opus-5', label: 'Opus 5', provider: 'anthropic' }],
+  },
+  effort: { current: 'high', selected: 'high', supported: true, options: ['low', 'high'] },
+  fast: { active: true, supportedByModel: true, available: true, unavailableReason: null },
+  autoCompact: { enabled: true, threshold: null, warningThreshold: null },
+}
+
 describe('selectSeamState', () => {
   test('separates an unwired drawer from a wired one with nothing to show', () => {
     expect(selectSeamState(undefined, state => state.settings)).toBe('unwired')
@@ -79,6 +97,7 @@ describe('selectSeamState', () => {
       permissionContext: null,
       workspaceTrust: null,
       diagnostics: null,
+      runControls: null,
     })
     expect(selectSeamState(wired, state => state.settings)).toBe('unread')
     expect(selectSeamState(wired, state => state.diagnostics)).toBe('unread')
@@ -91,6 +110,7 @@ describe('selectSeamState', () => {
       permissionContext: null,
       workspaceTrust: null,
       diagnostics,
+      runControls: null,
     })
     expect(selectSeamState(bundle, state => state.settings)).toBe('read')
     expect(selectSeamState(bundle, state => state.diagnostics)).toBe('read')
@@ -105,6 +125,7 @@ describe('selectSeamState', () => {
       permissionContext: null,
       workspaceTrust: null,
       diagnostics: null,
+      runControls: null,
     })
     // The bundle exists, so the drawer HAS been told about the cwd — the answer
     // is simply "the roster records none". Only `undefined` is unwired.
@@ -209,7 +230,7 @@ describe('selectFlagLayer', () => {
 
 describe('selectRunControls', () => {
   test('carries the override and the resolved model as separate facts', () => {
-    expect(selectRunControls(diagnostics)).toEqual({
+    expect(selectRunControls(diagnostics, null)).toEqual({
       modelOverride: 'gpt-5.6-luna',
       resolvedModel: 'gpt-5.6-luna',
       effort: 'low',
@@ -218,19 +239,58 @@ describe('selectRunControls', () => {
   })
 
   test('an absent override stays null rather than borrowing the resolved model', () => {
-    const noOverride = selectRunControls({
-      ...diagnostics,
-      mainLoopModel: null,
-      mainLoopModelForSession: 'claude-opus-5',
-      reasoningEffort: null,
-    })
+    const noOverride = selectRunControls(
+      {
+        ...diagnostics,
+        mainLoopModel: null,
+        mainLoopModelForSession: 'claude-opus-5',
+        reasoningEffort: null,
+      },
+      null,
+    )
     expect(noOverride?.modelOverride).toBeNull()
     expect(noOverride?.resolvedModel).toBe('claude-opus-5')
     expect(noOverride?.effort).toBeNull()
   })
 
-  test('no diagnostics snapshot yields nothing to state', () => {
-    expect(selectRunControls(null)).toBeNull()
+  // The diagnostics snapshot is spawn-frozen, so a session whose model moved
+  // after spawn carries a stale one. The live run-controls seam must win, or the
+  // drawer prints the model the session STARTED with under a note promising the
+  // values in effect now.
+  test('the live run-controls seam wins over the spawn-frozen diagnostics', () => {
+    const view = selectRunControls(diagnostics, runControls)
+    expect(view?.modelOverride).toBe('claude-opus-5')
+    expect(view?.resolvedModel).toBe('claude-opus-5')
+    expect(view?.effort).toBe('high')
+    expect(view?.fastMode).toBe(true)
+  })
+
+  test('run controls alone are enough, before any diagnostics snapshot', () => {
+    expect(selectRunControls(null, runControls)?.resolvedModel).toBe(
+      'claude-opus-5',
+    )
+  })
+
+  // A live null is an ANSWER, so it must not fall through to the frozen value:
+  // picking "Default (recommended)" clears the override, and moving onto a model
+  // with no effort knob clears the tier. Borrowing either from spawn time prints
+  // a setting the session no longer has.
+  test('a null live field stays null instead of resurrecting the spawn value', () => {
+    const defaulted = selectRunControls(diagnostics, {
+      ...runControls,
+      model: { ...runControls.model, selected: null },
+      effort: { ...runControls.effort, current: null, supported: false, options: [] },
+      fast: { ...runControls.fast, active: false },
+    })
+    expect(defaulted?.modelOverride).toBeNull()
+    expect(defaulted?.effort).toBeNull()
+    expect(defaulted?.fastMode).toBe(false)
+    // The resolved model still answers, so the row never blanks out.
+    expect(defaulted?.resolvedModel).toBe('claude-opus-5')
+  })
+
+  test('neither snapshot yields nothing to state', () => {
+    expect(selectRunControls(null, null)).toBeNull()
   })
 })
 

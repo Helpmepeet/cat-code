@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { BulkBar, SessionsPage } from './SessionsPage.js'
@@ -12,6 +13,7 @@ function row(partial: Partial<MergedSessionRow> & { sessionId: string }): Merged
     displayLabel: partial.sessionId,
     live: false,
     restorable: false,
+    parked: false,
     status: 'history',
     inRegistry: false,
     modifiedAtMs: Date.now(),
@@ -30,6 +32,12 @@ function row(partial: Partial<MergedSessionRow> & { sessionId: string }): Merged
 }
 
 const noop = () => {}
+
+test('tag popover Enter applies only a value resolved from the query', () => {
+  const source = readFileSync(new URL('./SessionsPage.tsx', import.meta.url), 'utf8')
+  expect(source).toContain('if (resolved) apply(resolved)')
+  expect(source).not.toContain('else if (matches[0]) apply(matches[0])')
+})
 
 test('renders the header, count subtitle and real session titles', () => {
   const html = renderToStaticMarkup(
@@ -227,6 +235,7 @@ test('P4-29 — a CLOSED row cannot be tagged, and says what would make it possi
           inRegistry: true,
           live: false,
           restorable: true,
+          parked: false,
           status: 'exited',
           displayLabel: 'Closed one',
         }),

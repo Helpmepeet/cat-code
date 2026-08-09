@@ -201,7 +201,11 @@ test('wiring tripwire: the usage popover asks no engine that is not there', () =
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
 
   const gateStart = source.indexOf('onRequestContextBreakdown={')
-  const gateEnd = source.indexOf('slashCatalog={panelSlashCatalog}', gateStart)
+  // Anchored on the NEXT prop, not on `slashCatalog` further down: the donut's
+  // Compact row was later wired in between the two, so the wider anchor silently
+  // grew this slice over a second prop and armed the negative assertions below
+  // against code they were never written to police.
+  const gateEnd = source.indexOf('onCompact={', gateStart)
   expect(gateStart).toBeGreaterThan(-1)
   expect(gateEnd).toBeGreaterThan(gateStart)
   const gateBody = source.slice(gateStart, gateEnd)
@@ -373,6 +377,7 @@ test('P4-24: the active session pane renders the multi-line composer + transcrip
         titleUpdatedAt: null,
         status: 'ready',
         restorable: false,
+        parked: false,
         createdAt: 0,
         lastAttachedAt: 0,
         lastMessageSentAt: null,
@@ -495,6 +500,7 @@ test('CC-16: a preview pane paints cached rows and its composer accepts typing',
         titleUpdatedAt: null,
         status: 'exited',
         restorable: true,
+        parked: false,
         createdAt: 0,
         lastAttachedAt: 0,
         lastMessageSentAt: null,
@@ -703,8 +709,12 @@ test('a mid-turn composer stays typeable: the turn gates the SEND, not the input
   expect(html).toContain('aria-label="Stop the turn"')
 })
 
-test('a parked prompt names the only wait there is: the spawn', () => {
+test('a cold-spawn prompt announces its wait, while a park restore stays silent', () => {
   const base = idleSessionPaneProps()
+  const coldSpawnPending = {
+    text: 'run the tests',
+    showQueuedRow: true,
+  }
 
   // The spawn wait is what the row exists for.
   const spawning = renderToStaticMarkup(
@@ -712,7 +722,7 @@ test('a parked prompt names the only wait there is: the spawn', () => {
       {...base}
       activeConnection={{ status: 'connecting', inputEnabled: false }}
       activeLog={{ ...base.activeLog, inputEnabled: false }}
-      pendingSubmit="run the tests"
+      pendingSubmit={coldSpawnPending}
     />,
   )
   expect(spawning).toContain('run the tests')
@@ -725,7 +735,7 @@ test('a parked prompt names the only wait there is: the spawn', () => {
       {...base}
       preview
       activeConnection={{ status: 'ready', inputEnabled: false }}
-      pendingSubmit="run the tests"
+      pendingSubmit={coldSpawnPending}
     />,
   )
   expect(preview).toContain('Sends when the session is ready.')
@@ -737,10 +747,30 @@ test('a parked prompt names the only wait there is: the spawn', () => {
     <SessionPane
       {...base}
       activeConnection={{ status: 'ready', inputEnabled: false }}
-      pendingSubmit="run the tests"
+      pendingSubmit={coldSpawnPending}
     />,
   )
   expect(midTurn).not.toContain('Sends when this response finishes.')
+
+  const parkRestorePending = {
+    text: 'resume without machinery',
+    showQueuedRow: false,
+  }
+  for (const status of ['parked', 'connecting'] as const) {
+    const restoring = renderToStaticMarkup(
+      <SessionPane
+        {...base}
+        activeConnection={{ status, inputEnabled: false }}
+        activeLog={{ ...base.activeLog, inputEnabled: false }}
+        pendingSubmit={parkRestorePending}
+      />,
+    )
+    expect(restoring).not.toContain('Queued')
+    expect(restoring).not.toContain('resume without machinery')
+    const sendButton =
+      restoring.match(/<button[^>]*aria-label="Send prompt"[^>]*>/)?.[0] ?? ''
+    expect(sendButton).toContain('disabled=""')
+  }
 })
 
 test('CC-16: a dead session stays read-only and does not pretend to be typeable', () => {
@@ -912,7 +942,7 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
   // Park, and retire the draft exactly like a real send (so nothing is left
   // half-submitted), then return WITHOUT touching the bridge.
   expect(submitBody).toContain(
-    "if (action.type === 'hold') {\n      setPendingSubmits(prev => reducePendingSubmitHeld(prev, sessionId, text))\n      retireDraft()",
+    "if (action.type === 'hold') {\n      setPendingSubmits(prev =>\n        reducePendingSubmitHeld(prev, sessionId, {\n          text,\n          images,\n          showQueuedRow: action.showQueuedRow,\n        }),\n      )\n      retireDraft()",
   )
   // The drain rides the EXISTING app.submit — no new frame kind or channel.
   expect(submitBody).toContain(
@@ -920,7 +950,9 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
   )
   expect(submitBody).toContain("if (outcome === 'wait') continue")
   expect(submitBody).toContain("if (outcome === 'release') {\n        releasePendingSubmit(sessionId)")
-  expect(submitBody).toContain('getBridge().submit(sessionId, parked)')
+  expect(submitBody).toContain(
+    'buildSubmitPrompt(pending.text, pending.images ?? [])',
+  )
   // IDLE-PARK (CC-28) — the arm that makes a reclaimed engine invisible. Nothing
   // is spawning and no turn will end for a parked session, so without this the
   // held prompt would wait forever. It is pinned here for the same reason as its
@@ -946,9 +978,11 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
   // reads, not how deeply it happens to be indented. It broke once when the
   // button moved inside the send/stop ternary without its logic changing.
   expect(source.replace(/\s+/g, ' ')).toContain(
-    'disabled={ !composerGate.editable || prompt.trim().length === 0 || pendingSubmit !== null }',
+    'disabled={ !composerGate.editable || (prompt.trim().length === 0 && images.length === 0) || pendingSubmit !== null }',
   )
-  expect(source).toContain('attachDisabled={!composerGate.editable}')
+  expect(source).toContain(
+    'attachDisabled={!composerGate.editable || preparingImage}',
+  )
   // …and nothing instructs the user to act on a not-yet-connected session.
   expect(source).not.toContain('Focus to reconnect')
 })
@@ -1044,6 +1078,7 @@ test('P4-18c: a generating session (ready + input disabled) shows the activity i
         titleUpdatedAt: null,
         status: 'ready',
         restorable: false,
+        parked: false,
         createdAt: 0,
         lastAttachedAt: 0,
         lastMessageSentAt: null,
@@ -1236,6 +1271,7 @@ test('composer form owns the ↑/↓ history key scope', () => {
         titleUpdatedAt: null,
         status: 'ready',
         restorable: false,
+        parked: false,
         createdAt: 0,
         lastAttachedAt: 0,
         lastMessageSentAt: null,
@@ -1302,6 +1338,7 @@ test('collapsed pastes are rendered by the field, not parked in a strip above it
         titleUpdatedAt: null,
         status: 'ready',
         restorable: false,
+        parked: false,
         createdAt: 0,
         lastAttachedAt: 0,
         lastMessageSentAt: null,
@@ -1358,9 +1395,26 @@ test('collapsed pastes are rendered by the field, not parked in a strip above it
   // so a static render is empty: the pill's own shape is covered by
   // `composerDom.test.ts` and its behaviour needs the live app.
   expect(composerField(html)).toContain('contentEditable="true"')
-  // Honest attach affordance: a labelled control, not a silent dead button and
-  // not an invented file picker (no engine attachment capability on the wire).
+  // The attachment control stays labelled beside the inline paste affordance.
+  // Its file-picker and image-submit wiring are pinned in the App source test.
   expect(html).toContain('aria-label="Add attachment"')
+})
+
+test('image attachment wiring reaches both clipboard paste and the file picker', () => {
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+
+  expect(source).toContain(
+    'const image = Array.from(event.clipboardData.files).find',
+  )
+  expect(source).toContain("if (image) {\n      void attachImage(image)")
+  expect(source).toContain('ref={imageInputRef}')
+  expect(source).toContain('if (file) void attachImage(file)')
+  expect(source).toContain(
+    'onAttach={() => imageInputRef.current?.click()}',
+  )
+  expect(source).toContain(
+    'reduceImageAttachmentAdded(prev, sessionId, attachment)',
+  )
 })
 
 test('debug export explicitly marks lossy raw-message retention', () => {
@@ -1669,13 +1723,7 @@ function renderStrip(
   props: Partial<ComponentProps<typeof TasksStrip>> = {},
 ): string {
   return renderToStaticMarkup(
-    <TasksStrip
-      snapshot={null}
-      workers={[]}
-      orchestratorActive={false}
-      onOpen={() => {}}
-      {...props}
-    />,
+    <TasksStrip snapshot={null} workers={[]} onOpen={() => {}} {...props} />,
   )
 }
 
@@ -1684,10 +1732,8 @@ test('P4-32a — an idle session with no workers still renders no strip', () => 
 })
 
 test('P4-32a — a busy swarm reads as a neutral accent count, never an alert', () => {
-  // D2 C2: workers waiting on an ACTIVE orchestrator are that orchestrator's
-  // problem. Only a solo escalation is allowed to go amber.
+  // D2 C2: workers waiting on the assistant are the assistant's problem.
   const html = renderStrip({
-    orchestratorActive: true,
     workers: [
       agentWorkerForTest(),
       agentWorkerForTest({
@@ -1701,20 +1747,21 @@ test('P4-32a — a busy swarm reads as a neutral accent count, never an alert', 
   expect(html).not.toContain('tone-warn')
 })
 
-test('P4-32a — a solo escalation turns the strip amber and says who owns it', () => {
+test('P4-32a — a blocked worker never turns the strip amber', () => {
+  // It used to read "1 needs you" whenever this session was not in agent mode,
+  // which is every ordinary session. The handoff goes to the assistant.
   const html = renderStrip({
-    orchestratorActive: false,
     workers: [agentWorkerForTest({ status: 'completed', handoffStatus: 'blocked' })],
   })
-  expect(html).toContain('1 needs you')
-  expect(html).toContain('text-tone-warn')
+  expect(html).toContain('1 subagent active')
+  expect(html).not.toContain('needs you')
+  expect(html).not.toContain('tone-warn')
 })
 
 test('P4-32a — the same delegated worker is never counted twice across the two feeds', () => {
   // A backgrounded `local_agent` appears in BOTH tasks.snapshot and the worker
   // list; the task half must therefore count only non-worker task types.
   const html = renderStrip({
-    orchestratorActive: true,
     snapshot: tasksSnapshotForTest([
       { id: 'w-1', type: 'local_agent' },
       { id: 'sh-1', type: 'local_bash' },
@@ -1739,7 +1786,7 @@ test('P4-32a — a plain background task keeps the original strip wording', () =
 
 test('P4-32a — real workers reach the composer dock, above the permission stack', () => {
   // The live path, not the component in isolation: SessionPane must actually mount
-  // the roster inside the 740px composer column, or the wiring is invisible.
+  // the roster inside the composer column, or the wiring is invisible.
   const html = renderToStaticMarkup(
     <SessionPane
       {...idleSessionPaneProps()}
@@ -1751,7 +1798,7 @@ test('P4-32a — real workers reach the composer dock, above the permission stac
   )
   expect(html).toContain('Turing')
   expect(html).toContain('Wire the dock')
-  const dockIndex = html.indexOf('max-w-[740px] shrink-0')
+  const dockIndex = html.indexOf('max-w-[var(--transcript-width)] shrink-0')
   expect(dockIndex).toBeGreaterThan(-1)
   expect(html.indexOf('Wire the dock')).toBeGreaterThan(dockIndex)
 })
@@ -1835,7 +1882,7 @@ test('the autoscroll signature tracks the RENDERED transcript, not the capped ra
   expect(line).toContain('renderedRowCount')
 })
 
-test('a parked prompt is visible, and the send arrow says so', () => {
+test('a cold-spawn prompt is visible, and the send arrow says so', () => {
   // CC-16 parks a prompt submitted before the engine can take it, and clears the
   // composer as if it had been sent. Nothing rendered the parked text, so the
   // message simply vanished; and a second Enter was a silent no-op while the
@@ -1847,7 +1894,7 @@ test('a parked prompt is visible, and the send arrow says so', () => {
     <SessionPane
       {...idleSessionPaneProps()}
       prompt="ship it"
-      pendingSubmit="run the migration"
+      pendingSubmit={{ text: 'run the migration', showQueuedRow: true }}
     />,
   )
   expect(parked).toContain('run the migration')
@@ -1937,25 +1984,29 @@ test('a live pane with no turns yet names the selected model and sizes the donut
 })
 
 test('FIX-5 keyboard tripwire: the permission shortcuts yield to a focused control and to a dedicated flow', () => {
-  // LAYER HONESTY: these two defects live in a `document` keydown listener
-  // registered by an App effect. The renderer suite is SSR-only (no DOM — see
-  // AccountsPage.test.tsx) and App cannot be mounted, so the handler cannot be
-  // executed here and no test in this package can press a key. This asserts only
-  // what source text can decide — which guard the handler applies, and that the
-  // listener is not attached while another surface owns the keyboard. The guard
-  // itself is now an executable predicate (`permissionKeysAreLive`, unit-tested
-  // in PermissionPrompt.test.tsx); a DOM harness is still flagged in the report.
-  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
-  const effectStart = source.indexOf(
-    'const dedicatedFlowOwnsKeyboard =',
+  // LAYER HONESTY: these defects live in a `document` keydown listener and in
+  // focus behaviour. The renderer suite is SSR-only (no DOM — see
+  // AccountsPage.test.tsx), so no test in this package can press a key or move
+  // focus. This asserts only what source text can decide. The guard itself is an
+  // executable predicate (`permissionKeysAreLive`, unit-tested in
+  // PermissionPrompt.test.tsx); a DOM harness is still flagged in the report.
+  //
+  // The listener MOVED into the card (2026-08-07). It was App state plus an App
+  // listener, which made a mouse hover over a row re-render the whole shell to
+  // move one border. Every guard survived the move, and three became structural
+  // rather than conditional — see the doc-comment on the effect.
+  const card = readFileSync(
+    new URL('./PermissionPrompt.tsx', import.meta.url),
+    'utf8',
   )
-  const effectEnd = source.indexOf(
-    "document.addEventListener('keydown', handleKeyDown)",
+  const effectStart = card.indexOf('    if (!keyboardTarget) return')
+  const effectEnd = card.indexOf(
+    "document.addEventListener('keydown', onKeyDown)",
     effectStart,
   )
   expect(effectStart).toBeGreaterThan(-1)
   expect(effectEnd).toBeGreaterThan(effectStart)
-  const effectBody = source.slice(effectStart, effectEnd)
+  const effectBody = card.slice(effectStart, effectEnd)
 
   // A tag-name test let Enter on the card's own Deny button bubble to document
   // and be answered as an ALLOW, because preventDefault() suppressed the
@@ -1963,6 +2014,13 @@ test('FIX-5 keyboard tripwire: the permission shortcuts yield to a focused contr
   // key itself, buttons above all.
   expect(effectBody).not.toContain("target.tagName === 'INPUT'")
   expect(effectBody).toContain('if (!permissionKeysAreLive(event.target)) return')
+  // One answer per request: the rows are disabled in flight, and the keyboard
+  // must not fire a second decision before the resolve lands.
+  expect(effectBody).toContain('if (submitted) return')
+  // Only the card the shortcuts act on may register a listener at all. This is
+  // what replaces App's explicit dedicated-flow and activeView guards: a card
+  // that is not the target never attaches, and the card only mounts under chat.
+  expect(effectBody).toContain('if (!keyboardTarget) return')
 
   const model = readFileSync(
     new URL('./permissionPromptModel.ts', import.meta.url),
@@ -1978,15 +2036,16 @@ test('FIX-5 keyboard tripwire: the permission shortcuts yield to a focused contr
     '[role="menuitem"]',
     '[role="menuitemradio"]',
     // Load-bearing for the marker: the card's own section carries this role, so
-    // without the host exemption, focusing the card kills all four keys.
+    // without the host exemption, focusing the card kills every key.
     '[role="alertdialog"]',
   ]) {
     expect(selector).toContain(owner)
   }
 
-  // P4-43 — the card that takes focus and advertises the keys must be exactly
-  // the request the handler answers. A card advertising keys the listener does
-  // not deliver is the dead affordance this session removed.
+  // The card that takes focus, shows a cursor, hosts the keys and now OWNS the
+  // listener must be exactly the request App means to answer. One value decides
+  // all four, so a card can never claim keys that act on something else.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
   expect(source).toContain(
     'const permissionKeyTargetRequestId =\n' +
       '    pendingPermission && !dedicatedFlowOwnsKeyboard\n' +
@@ -1999,7 +2058,7 @@ test('FIX-5 keyboard tripwire: the permission shortcuts yield to a focused contr
     'keyboardTargetRequestId={permissionKeyTargetRequestId}',
   )
   // Split workspace: one queue per pane, and only the active pane's card may
-  // take focus — the handler acts solely on the activeSessionId's request.
+  // take the keyboard.
   expect(source).toContain(
     'permissionKeyTargetRequestId={\n' +
       '\t              sessionId === activeSessionId\n' +
@@ -2007,28 +2066,33 @@ test('FIX-5 keyboard tripwire: the permission shortcuts yield to a focused contr
       '\t                : null\n' +
       '\t            }',
   )
-
-  // Propagation is target → document → window, so this document listener fires
-  // BEFORE AskQuestionFlow's and PlanPanel's own window listeners: one Enter
-  // would allow a parallel Bash call and answer the question.
-  expect(effectBody).toContain(
+  // A dedicated flow (AskQuestionFlow / PlanPanel) registers its own `window`
+  // listener. Propagation is target → document → window, so a permission
+  // listener alive at the same time would let ONE Enter resolve two unrelated
+  // requests. It cannot be: the flows null out the target above.
+  expect(source).toContain(
     'selectAskQuestion(permissions, activeSessionId) !== null',
   )
-  expect(effectBody).toContain(
+  expect(source).toContain(
     'selectPlanReview(permissions, activeSessionId) !== null',
   )
-  expect(effectBody).toContain('if (dedicatedFlowOwnsKeyboard) return')
+  // App no longer owns permission keys or the cursor; a re-introduced copy here
+  // is the two-sources-of-truth bug this move removed. Asserted on the IMPORT
+  // and the PROP, not on the bare names, which also appear in prose explaining
+  // why the shell chord handler does not collide with the card's Ctrl pair.
+  expect(source).not.toContain("from './permissionPromptModel.js'")
+  expect(source).not.toContain('setPermissionCursor=')
+  expect(source).not.toContain('permissionCursor=')
 
-  // Bug fix — the card these shortcuts act on renders only in the 'chat'
-  // view. Navigating to Accounts/Settings/... while a permission is pending
-  // used to leave this listener attached with nothing on screen to answer:
-  // focus fell to `document.body`, which `permissionKeysAreLive` reads as
-  // live, so Enter/Escape acted on an invisible request.
-  expect(effectBody).toContain("if (activeView !== 'chat') return")
-  expect(source).toContain('    dedicatedFlowOwnsKeyboard,\n    activeView,\n  ])')
+  // The card is a select list, and BOTH the keys and the rendered rows must come
+  // from ONE list. There is now exactly one `buildPermissionOptions` call in the
+  // app, in the card, so `1` and a click on row 1 cannot disagree.
+  expect(card).toContain('buildPermissionOptions(request.request, denyOnly === true)')
+  expect(source).not.toContain('buildPermissionOptions')
+  expect(card.split('buildPermissionOptions(').length - 1).toBe(1)
 
   // One answer per request: a second response is rejected by the sidecar as
-  // unknown, and that rejection un-marks the card, re-enabling Allow/Deny on an
+  // unknown, and that rejection un-marks the card, re-enabling the rows on an
   // already-decided request.
   const respondStart = source.indexOf('const respondToPermission = useCallback(')
   const respondBody = source.slice(
@@ -2092,6 +2156,40 @@ test('FIX-5 wiring tripwire: the inspector, the meta strip, the accounts page an
   // the atomic pill-delete both threw the caret away.
   expect(source).toContain('el.setSelectionRange(caret, caret)')
   expect(source).toContain('pendingCaretRef.current = {')
+})
+
+/**
+ * The two surfaces that print a session's model must read the LIVE run-controls
+ * seam, not the spawn-frozen `diagnostics` snapshot. Reading diagnostics alone
+ * made every session that used the model picker report the model it STARTED
+ * with: the sidebar subtitle and the inspector's "Resolved model" both sat on
+ * the frozen value while the composer face (already on run controls) moved. Both
+ * call sites are in App's render body, unreachable from this SSR-only suite;
+ * source text can still decide which selector each one reads.
+ */
+test('the model a session displays comes from the live run-controls seam', () => {
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+
+  // Fixed windows, not brace-matching: an added object literal inside either
+  // call site must not truncate the slice into a spurious failure.
+  const sidebarStart = source.indexOf('modelForSession={id =>')
+  expect(sidebarStart).toBeGreaterThan(-1)
+  const sidebarBody = source.slice(sidebarStart, sidebarStart + 400)
+  expect(sidebarBody).toContain('selectRunControlsSnapshot(runControls, id)?.model')
+  // The engine's display name first, the raw id only when it has none, and the
+  // frozen snapshot last.
+  expect(sidebarBody).toContain('live?.currentLabel ??')
+  expect(sidebarBody.indexOf('live?.currentLabel')).toBeLessThan(
+    sidebarBody.indexOf('mainLoopModelForSession'),
+  )
+
+  const inspectorStart = source.indexOf('<MetadataInspector')
+  expect(inspectorStart).toBeGreaterThan(-1)
+  const inspectorBody = source.slice(
+    inspectorStart,
+    source.indexOf('/>', inspectorStart),
+  )
+  expect(inspectorBody).toContain('runControls: selectRunControlsSnapshot(')
 })
 
 /**

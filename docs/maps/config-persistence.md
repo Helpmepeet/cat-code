@@ -1,6 +1,6 @@
 # Config And Persistence Routing Map
 
-Last refreshed: 2026-08-03
+Last refreshed: 2026-08-09
 
 ## Purpose
 
@@ -55,7 +55,7 @@ for the config and persistence slice.
 | Settings validation and diagnostics | `src/utils/settings/validation.ts` | `src/utils/settings/allErrors.ts`, `src/utils/settings/validationTips.ts`, `src/screens/Doctor.tsx` | Invalid permission rules can be filtered before schema validation. Use the validation surfaces before inventing new diagnostics. |
 | Transcript file path | `src/utils/sessionStorage.ts` | `src/bootstrap/state.ts`, `src/utils/path.ts` | Transcripts live under `getClaudeConfigHomeDir()/projects/<sanitized-project>/<sessionId>.jsonl`. `sessionProjectDir` can override path derivation for resumed sessions. |
 | Transcript write path | `src/utils/sessionStorage.ts` | `src/types/logs.ts`, `src/utils/sessionStoragePortable.ts` | `recordTranscript()` dedupes by UUID and maintains parent chains. Progress messages are not chain participants. |
-| Transcript metadata entries | `src/utils/sessionStorage.ts` | `src/types/logs.ts`, `app/sidecar/transcriptRunFacts.ts` | Titles, tags, agent metadata, mode, worktree state, thread goals, content replacements, file history, attribution, context-collapse, and `system`/`run_facts` entries are separate JSONL entry types. A main-thread run-facts record atomically captures the model, permission mode, effort, and actual context window used for a turn; preview backfill retains legacy derivation for transcripts that predate it. |
+| Transcript metadata entries | `src/utils/sessionStorage.ts` | `src/types/logs.ts`, `app/shared/transcriptRunFacts.ts` | Titles, tags, agent metadata, mode, worktree state, thread goals, content replacements, file history, attribution, context-collapse, and `system`/`run_facts` entries are separate JSONL entry types. A main-thread run-facts record atomically captures the model, permission mode, effort, and actual context window used for a turn; preview backfill retains legacy derivation for transcripts that predate it. |
 | Resume loading | `src/utils/conversationRecovery.ts` | `src/utils/sessionStorage.ts`, `src/commands/resume/`, `src/screens/ResumeConversation.tsx` | `loadConversationForResume()` loads the latest, a session ID, a `LogOption`, or a JSONL path, then deserializes and runs resume session-start hooks. |
 | Resume state restoration | `src/utils/sessionRestore.ts` | `src/screens/REPL.tsx`, `src/main.tsx` | Restore is split between transcript loading and process state: cwd/worktree, mode, cost state, file history, attribution, todos, agent setting, context collapse, and metadata adoption. |
 | Forked resume | `src/utils/sessionRestore.ts` | `src/utils/sessionStorage.ts` | `--fork-session` keeps the fresh session ID but must seed content replacements into the new transcript. It should not adopt the source worktree state. |

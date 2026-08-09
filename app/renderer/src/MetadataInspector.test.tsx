@@ -187,6 +187,7 @@ const fullState = buildSessionInspectorState({
   permissionContext,
   workspaceTrust,
   diagnostics,
+  runControls: null,
 })
 
 function renderInspector(sessionState?: Parameters<typeof MetadataInspector>[0]['sessionState']) {
@@ -224,6 +225,7 @@ test('a wired drawer with nothing read states each seam as unavailable, not the 
       permissionContext: null,
       workspaceTrust: null,
       diagnostics: null,
+      runControls: null,
     }),
   )
   expect(html).not.toContain('App passes no sessionState')

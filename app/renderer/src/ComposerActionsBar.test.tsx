@@ -7,6 +7,7 @@ import {
   ContextUsagePanel,
 } from './ComposerActionsBar.js'
 import { handleMenuRovingKeyDown } from './composerPopover.js'
+import { toneClasses } from './tone.js'
 import type { ContextUsage } from './contextUsage.js'
 import type {
   AccountStatus,
@@ -363,7 +364,8 @@ test('P4-24c — the FAST toggle visibly distinguishes off from on', () => {
   expect(offFast).toContain('h-[22px] w-[22px]')
   expect(offFast).toContain('fill="none"')
   expect(offFast).toContain('stroke="currentColor"')
-  expect(offFast).toContain('text-[#3f3f46]')
+  expect(offFast).toContain('border-transparent')
+  expect(offFast).toContain('text-text-ghost')
 
   const on = render({
     runControls: runControls({ fast: { active: true, supportedByModel: true, available: true } }),
@@ -374,6 +376,8 @@ test('P4-24c — the FAST toggle visibly distinguishes off from on', () => {
   expect(onFast).toContain('h-[22px] w-[22px]')
   expect(onFast).toContain('fill="currentColor"')
   expect(onFast).toContain('stroke="none"')
+  expect(onFast).toContain('border-tone-warn/30')
+  expect(onFast).toContain('bg-tone-warn/10')
   expect(onFast).toContain('text-tone-warn')
 })
 
@@ -614,48 +618,22 @@ test('the context donut is an interactive dialog trigger when usage is present (
   expect(html).toContain('Context 21% used')
 })
 
-test('ContextUsagePanel shows Plan usage (5h + weekly) plus the real Context total', () => {
-  const html = renderToStaticMarkup(
-    <ContextUsagePanel
-      usage={USAGE}
-      account={account({ usagePrimary: 10, usageWeekly: 20, usageResetAt: null })}
-    />,
-  )
-  expect(html).toContain('Plan usage')
-  expect(html).toContain('5-hour limit')
-  expect(html).toContain('Weekly · all models')
-  expect(html).toContain('10%')
-  expect(html).toContain('20%')
-  // The 5h row carries the pool's single reset hint; null → the canonical "soon".
-  expect(html).toContain('resets soon')
-  // Aggregate Context row: real percent + "42k / 200k" (fmt). No breakdown was
-  // passed, so no per-category bar rides under it.
+// Plan usage (5h/weekly quota) was dropped from this popover entirely
+// (operator call, 2026-08-05): it is about the context WINDOW, not the
+// account's rate limits, and the quota is visible elsewhere.
+test('ContextUsagePanel never shows Plan usage, only the real Context total', () => {
+  const html = renderToStaticMarkup(<ContextUsagePanel usage={USAGE} />)
+  expect(html).not.toContain('Plan usage')
+  expect(html).not.toContain('5-hour limit')
+  expect(html).not.toContain('Weekly · all models')
   expect(html).toContain('Context')
   expect(html).toContain('42k / 200k')
-  expect(html).not.toContain('Free')
 })
 
-// One ladder for the whole popover (Surfaces.jsx:386 == :474). A plan row toned
-// by the account-quota ladder read green under a pink Context row.
-test('ContextUsagePanel tones plan rows on the same ladder as the Context row', () => {
+test('ContextUsagePanel draws a per-category donut, legend and Free row', () => {
   const html = renderToStaticMarkup(
     <ContextUsagePanel
       usage={USAGE}
-      account={account({ usagePrimary: 10, usageWeekly: 75, usageResetAt: null })}
-    />,
-  )
-  expect(html).not.toContain('tone-good')
-  // 10% and the 21% Context row sit in the accent band; 75% crosses into warn.
-  expect(html).toContain('text-accent')
-  expect(html).toContain('bg-accent')
-  expect(html).toContain('tone-warn')
-})
-
-test('ContextUsagePanel renders the per-category breakdown, legend and Free row', () => {
-  const html = renderToStaticMarkup(
-    <ContextUsagePanel
-      usage={USAGE}
-      account={null}
       breakdown={{
         categories: [
           {
@@ -689,42 +667,140 @@ test('ContextUsagePanel renders the per-category breakdown, legend and Free row'
   expect(html).toContain('175k')
   // A deferred category occupies nothing, so it earns neither a row nor a segment.
   expect(html).not.toContain('MCP tools (deferred)')
+  // The donut ring: one arc per category, coloured by its own hue, an SVG
+  // presentation attribute rather than a Tailwind class.
+  expect(html).toContain('stroke="#a1a1aa"') // System prompt
+  expect(html).toContain('stroke="#c084fc"') // Messages
+  // Segments are notched apart, not butted: the ring is drawn at the thinner
+  // stroke that keeps the notches readable, and the first arc already starts a
+  // half-gap in (nothing drawn before it, so the offset is the half-gap alone).
+  expect(html).toContain('stroke-width="6"')
+  expect(html).toContain('stroke-dashoffset="-1.5"')
+  // Center readout: the same percent the header line states — the ACCOUNTED
+  // total (4.2k + 21k = 25.2k of the snapshot's own 200k), not `usage`'s 21%
+  // (42k/200k): once a breakdown exists the header reconciles with the rows
+  // printed below it instead of the composer's separately-clocked live figure.
+  expect(countOccurrences(html, '13%')).toBeGreaterThanOrEqual(2)
 })
 
-test('ContextUsagePanel without a breakdown keeps the aggregate row alone', () => {
+test('ContextUsagePanel without a breakdown keeps the aggregate row alone, no donut', () => {
   const html = renderToStaticMarkup(
-    <ContextUsagePanel usage={USAGE} account={null} breakdown={null} />,
+    <ContextUsagePanel usage={USAGE} breakdown={null} />,
   )
   expect(html).toContain('42k / 200k')
   expect(html).not.toContain('Free')
   expect(html).not.toContain('System prompt')
+  expect(html).not.toContain('<svg')
 })
 
-test('ContextUsagePanel with no account shows the Context total only (no plan usage)', () => {
-  const html = renderToStaticMarkup(
-    <ContextUsagePanel usage={USAGE} account={null} />,
+/**
+ * The Compact row. `onCompact` is absent whenever no engine can take the submit
+ * (preview pane, spawning, dead, or a session whose composer gate is not
+ * sendable), and the row is then not drawn at all — a permanently dead button on
+ * a popover with no room to explain itself is worse than no button.
+ */
+test('ContextUsagePanel draws the Compact row only when a submit can land', () => {
+  const withAction = renderToStaticMarkup(
+    <ContextUsagePanel usage={USAGE} onCompact={() => {}} />,
   )
-  expect(html).not.toContain('Plan usage')
-  expect(html).toContain('Context')
-  expect(html).toContain('42k / 200k')
+  expect(withAction).toContain('Compact')
+  // Accent-tinted and inset in its own footer well, so the panel's one action
+  // reads as a button rather than as another row of the readout.
+  expect(withAction).toContain('bg-accent/[0.12]')
+  expect(withAction).toContain('text-accent')
+
+  const without = renderToStaticMarkup(<ContextUsagePanel usage={USAGE} />)
+  expect(without).not.toContain('Compact')
 })
 
-test('ContextUsagePanel with an account whose usage is not yet fetched suppresses Plan usage (ACCT-10)', () => {
-  // A real pre-poll state: the account exists but both usage fields are still
-  // null (usage snapshot broadcast before refreshAccountsUsageOnce completes).
-  // The gate is `account != null && (usagePrimary != null || usageWeekly != null)`
-  // — this exercises the untested "account present, both usages null" branch.
+/**
+ * The action escalates past the pressure threshold, and the two forms are
+ * mutually exclusive: an accent button offering the action, or a strip in the
+ * pressure tone telling the operator to take it. Two footers at once would give
+ * the panel two competing actions.
+ */
+test('past the pressure threshold the accent button becomes a warning strip', () => {
+  const calm = renderToStaticMarkup(
+    <ContextUsagePanel usage={USAGE} onCompact={() => {}} />,
+  )
+  expect(calm).toContain('bg-accent/[0.12]')
+  expect(calm).not.toContain('Running low')
+
+  const pressed = renderToStaticMarkup(
+    <ContextUsagePanel
+      usage={{ usedTokens: 172_000, contextWindow: 200_000, percentUsed: 86 }}
+      onCompact={() => {}}
+    />,
+  )
+  expect(pressed).toContain('Running low, compact now')
+  expect(pressed).toContain('bg-tone-warn/10')
+  expect(pressed).not.toContain('bg-accent/[0.12]')
+
+  // The ladder is `pressureTone`'s, so the strip follows the percent above it all
+  // the way to danger rather than stopping at the warn band.
+  const critical = renderToStaticMarkup(
+    <ContextUsagePanel
+      usage={{ usedTokens: 190_000, contextWindow: 200_000, percentUsed: 95 }}
+      onCompact={() => {}}
+    />,
+  )
+  expect(critical).toContain('bg-tone-danger/10')
+})
+
+// Every user-visible string on this panel, checked against the operator's
+// no-em-dash rule for on-screen text (CLAUDE.md §7).
+test('the escalated strip states the ask without an em dash', () => {
+  const html = renderToStaticMarkup(
+    <ContextUsagePanel
+      usage={{ usedTokens: 172_000, contextWindow: 200_000, percentUsed: 86 }}
+      onCompact={() => {}}
+    />,
+  )
+  expect(html).not.toContain('—')
+})
+
+// The arcs are stroked circles with no fill, so without this the hit area is the
+// whole 76px disc and the topmost segment answers for every pointer position.
+test('donut arcs take the pointer on the stroke, not the disc', () => {
   const html = renderToStaticMarkup(
     <ContextUsagePanel
       usage={USAGE}
-      account={account({ usagePrimary: null, usageWeekly: null })}
+      breakdown={{
+        categories: [
+          { label: 'System prompt', tokens: 4_200, colorKey: 'promptBorder', deferred: false },
+          { label: 'Messages', tokens: 21_000, colorKey: 'claude', deferred: false },
+        ],
+        usedTokens: 25_200,
+        freeTokens: 174_800,
+        contextWindow: 200_000,
+        model: 'gpt-5.6-luna',
+      }}
     />,
   )
-  expect(html).not.toContain('Plan usage')
-  expect(html).not.toContain('5-hour limit')
-  expect(html).not.toContain('Weekly · all models')
-  expect(html).toContain('Context')
-  expect(html).toContain('42k / 200k')
+  expect(html).toContain('[pointer-events:stroke]')
+})
+
+// The footer well already pads the panel's bottom edge; a body padding underneath
+// the last row would stack with it and float `Free` clear of the seam.
+test('the breakdown sits directly on the footer seam, with no padding between', () => {
+  const withFooter = renderToStaticMarkup(
+    <ContextUsagePanel usage={USAGE} onCompact={() => {}} />,
+  )
+  expect(withFooter).not.toContain('pb-3.5')
+
+  // With no footer there is no well to borrow padding from, so the body keeps its own.
+  const alone = renderToStaticMarkup(<ContextUsagePanel usage={USAGE} />)
+  expect(alone).toContain('pb-3.5')
+})
+
+// The breakdown is a separate seam that may never arrive; the aggregate percent
+// alone is already reason enough to compact, so the row must not ride on it.
+test('the Compact row survives a session with no breakdown snapshot yet', () => {
+  const html = renderToStaticMarkup(
+    <ContextUsagePanel usage={USAGE} breakdown={null} onCompact={() => {}} />,
+  )
+  expect(html).toContain('Compact')
+  expect(html).not.toContain('System prompt')
 })
 
 /**
@@ -752,14 +828,13 @@ test('the Context readout compacts millions ("1M") without changing sub-million 
     const html = renderToStaticMarkup(
       <ContextUsagePanel
         usage={{ usedTokens: tokens, contextWindow: tokens, percentUsed: 100 }}
-        account={null}
       />,
     )
     expect(html).toContain(`${expected} / ${expected}`)
   }
 })
 
-test('the attach button reflects the disabled gate (echo-only stub)', () => {
+test('the attach button reflects the image-picker disabled gate', () => {
   const enabled = render({ attachDisabled: false })
   expect(enabled).toContain('aria-label="Add attachment"')
   expect(enabled).not.toContain('disabled=""')
@@ -929,4 +1004,95 @@ test('P4-33 — no thresholds on the wire keeps the glyph hidden at any usage', 
   })
   expect(html).not.toContain('until auto-compact')
   expect(html).not.toContain('data-composer-face="token-warning"')
+})
+
+/* --------------------------------------------------------------------- *
+ * a session whose engine went away (disconnect / park / crash)
+ * --------------------------------------------------------------------- *
+ *
+ * The bug this pins: the rail read ONE seam for both "what is this session" and
+ * "may I change it", so losing the process blanked the model, effort, fast,
+ * account and mode faces at once. The pane now passes the last-known values as
+ * the read-only props while `runControls`/`permissionContext` stay null, and
+ * these assert what that actually renders.
+ */
+
+function renderDetached(props: Partial<Parameters<typeof ComposerActionsBar>[0]> = {}) {
+  return render({
+    // No engine: neither seam that arms a control is present.
+    runControls: null,
+    permissionContext: null,
+    onSwitchAccount: undefined,
+    // What the session last reported, which none of the above changes.
+    model: 'gpt-5.6-sol',
+    reasoningEffort: 'high',
+    fastMode: true,
+    permissionModeReadOnly: 'auto',
+    account: account({ alias: 'hiby' }),
+    contextUsage: { usedTokens: 143_841, contextWindow: 372_000, percentUsed: 39 },
+    ...props,
+  })
+}
+
+test('a detached session still names its model, effort, mode, fast and account', () => {
+  const html = renderDetached()
+  expect(html).toContain('gpt-5.6-sol')
+  expect(html).toContain('Model: gpt-5.6-sol')
+  expect(html).toContain('Reasoning effort: high')
+  expect(html).toContain('Permission mode: Auto mode')
+  expect(html).toContain('Active account: hiby · Available')
+  // The context donut keeps the session's EXACT window, not the 200k default.
+  expect(html).toContain('Context 39% used')
+})
+
+test('none of those faces is a control while there is no engine to take the verb', () => {
+  const html = renderDetached()
+  // A picker announces itself with aria-haspopup; the read-only faces are spans.
+  expect(html).not.toContain('aria-label="Model"')
+  expect(html).not.toContain('aria-label="Reasoning effort"')
+  expect(html).not.toContain('aria-label="Permission mode: Auto"')
+  expect(countOccurrences(html, 'aria-haspopup="menu"')).toBe(0)
+  // The donut is the one face that stays clickable without an engine: it opens a
+  // read-only popover, and its recompute is gated by the pane, not by this bar.
+  expect(html).toContain('aria-haspopup="dialog"')
+})
+
+test('a face whose value was never reported still renders nothing', () => {
+  // Retaining the last snapshot must not become "invent a value": a session that
+  // never reported an effort (an Anthropic run) shows no effort face at all.
+  const html = renderDetached({ reasoningEffort: null, fastMode: null })
+  expect(html).not.toContain('Reasoning effort')
+  expect(html).toContain('gpt-5.6-sol')
+})
+
+test('the fast face survives a park with fast mode OFF, and says so', () => {
+  // Operator report (2026-08-09): parking made the ⚡ vanish. `false` is a real
+  // answer and must render, exactly as the live chip renders its off state;
+  // only "nothing knows" may drop the face.
+  const off = renderDetached({ fastMode: false })
+  expect(off).toContain('Fast mode off')
+  const on = renderDetached({ fastMode: true })
+  expect(on).toContain('Fast mode on')
+  const unknown = renderDetached({ fastMode: null })
+  expect(unknown).not.toContain('Fast mode')
+})
+
+test('the detached account face keeps its status dot', () => {
+  // Operator report (2026-08-09): the dot disappeared on park. The alias text is
+  // deliberately never health-tinted, so the dot is the only thing carrying the
+  // account's identity-and-health — and a detached pane cannot open the
+  // switcher to go looking for it.
+  const active = renderDetached({ account: account({ alias: 'hiby', isDefault: true }) })
+  // `accent` is the active account's tone (`statusDotTone`), the pink dot the
+  // interactive chip shows in the same position.
+  expect(active).toContain(toneClasses('accent').dot)
+  // A REACHABLE unhealthy state. Production selects the active account only by
+  // `isDefault` (`selectActiveAccount`), and `statusDotTone` checks
+  // usage-limited BEFORE `isDefault`, so this is the shape a detached pane can
+  // actually show. An `isDefault:false` account was the wrong fixture: it can
+  // never be the active one, so the assertion proved nothing about production.
+  const limited = renderDetached({
+    account: account({ alias: 'hiby', isDefault: true, usageLimitReached: true }),
+  })
+  expect(limited).toContain(toneClasses('warn').dot)
 })

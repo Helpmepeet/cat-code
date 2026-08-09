@@ -110,6 +110,17 @@ test('clears known snapshots on lifecycle reset', () => {
   expect(selectMemorySnapshot(state, 'a')).toBeNull()
 })
 
+test('preserves state identity for an untracked lifecycle session', () => {
+  const state = createGoalMemoryState()
+
+  expect(
+    reduceGoalMemoryState(state, {
+      type: 'frame',
+      frame: lifecycleFrame('untracked'),
+    }),
+  ).toBe(state)
+})
+
 test('selects memory counts and groups', () => {
   expect(selectMemoryInstructionCounts(MEMORY)).toEqual({
     total: 3,

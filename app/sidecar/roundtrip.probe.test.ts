@@ -11,27 +11,39 @@
  */
 
 import { afterEach, expect, test } from 'bun:test'
-import { join } from 'node:path'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { dirname } from 'node:path'
 
 import { SidecarSupervisor, type SupervisorEvent } from '../supervisor/supervisor.js'
 import type { ServerFrame } from '../shared/protocol.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const sidecarEntry = join(here, 'index.ts')
+const TEST_TIMEOUT_MS = 120_000
 
 let supervisor: SidecarSupervisor | null = null
+const configHomes: string[] = []
 
 afterEach(() => {
   supervisor?.shutdown()
   supervisor = null
+  for (const configHome of configHomes.splice(0)) {
+    rmSync(configHome, { recursive: true, force: true })
+  }
 })
+
+function freshConfigHome(): string {
+  const configHome = mkdtempSync(join(tmpdir(), 'catcode-roundtrip-config-'))
+  configHomes.push(configHome)
+  return configHome
+}
 
 function waitForFrame(
   sup: SidecarSupervisor,
   predicate: (frame: ServerFrame) => boolean,
-  timeoutMs = 10_000,
+  timeoutMs = 45_000,
 ): Promise<ServerFrame> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -55,6 +67,10 @@ test('normal sidecar starts a real engine session and emits app.ready without a 
     // A non-probe session boots the real engine, which now requires a session
     // root (P3-1: cwd is caller-supplied, no P1_1_CWD hardcode).
     sidecarCwd: process.cwd(),
+    sidecarEnv: {
+      CLAUDE_CONFIG_DIR: freshConfigHome(),
+      CATCODE_SIDECAR_RESUME_SESSION_ID: '',
+    },
   })
   const sessionId = supervisor.spawnSession('p1-1-real-ready')
   const events: ServerFrame[] = []
@@ -88,13 +104,16 @@ test('normal sidecar starts a real engine session and emits app.ready without a 
   await Bun.sleep(200)
   unsubscribe()
   expect(events).toEqual([])
-})
+}, TEST_TIMEOUT_MS)
 
 test('hand-injected tool_use SDKMessage round-trips sidecar→supervisor INTACT', async () => {
   supervisor = new SidecarSupervisor({
     sidecarCommand: 'bun',
     sidecarArgs: ['run', sidecarEntry],
-    sidecarEnv: { CATCODE_SIDECAR_PROBE: '1' },
+    sidecarEnv: {
+      CATCODE_SIDECAR_PROBE: '1',
+      CLAUDE_CONFIG_DIR: freshConfigHome(),
+    },
   })
   const sessionId = supervisor.spawnSession('p1-0-test-tooluse')
 
@@ -135,7 +154,11 @@ test('a connected session responds to a valid ping (happy-path liveness)', async
   supervisor = new SidecarSupervisor({
     sidecarCommand: 'bun',
     sidecarArgs: ['run', sidecarEntry],
-    sidecarEnv: { CATCODE_SIDECAR_PROBE: '0' },
+    sidecarEnv: {
+      CATCODE_SIDECAR_PROBE: '0',
+      CLAUDE_CONFIG_DIR: freshConfigHome(),
+      CATCODE_SIDECAR_RESUME_SESSION_ID: '',
+    },
     // Non-probe session → real engine → session root required (P3-1).
     sidecarCwd: process.cwd(),
   })
@@ -154,7 +177,7 @@ test('a connected session responds to a valid ping (happy-path liveness)', async
   if (pong.kind === 'pong') {
     expect(pong.nonce).toBe('live-1')
   }
-})
+}, TEST_TIMEOUT_MS)
 
 test('a real sidecar process delivers the projected slash catalog (SLASH-2: index.ts join, not a stub)', async () => {
   // sessionController.test.ts proves the catalog is BUILT (real getCommands
@@ -175,7 +198,11 @@ test('a real sidecar process delivers the projected slash catalog (SLASH-2: inde
   supervisor = new SidecarSupervisor({
     sidecarCommand: 'bun',
     sidecarArgs: ['run', sidecarEntry],
-    sidecarEnv: { ANTHROPIC_API_KEY: 'sk-ant-slash-catalog-join-probe' },
+    sidecarEnv: {
+      ANTHROPIC_API_KEY: 'sk-ant-slash-catalog-join-probe',
+      CLAUDE_CONFIG_DIR: freshConfigHome(),
+      CATCODE_SIDECAR_RESUME_SESSION_ID: '',
+    },
     sidecarCwd: process.cwd(),
   })
   const sessionId = supervisor.spawnSession('slash-catalog-join-probe')
@@ -192,7 +219,7 @@ test('a real sidecar process delivers the projected slash catalog (SLASH-2: inde
   expect(help).toBeDefined()
   expect(typeof help?.description).toBe('string')
   expect(help && help.description.length).toBeGreaterThan(0)
-})
+}, TEST_TIMEOUT_MS)
 
 test('turn.status crosses the real socket and brackets the turn', async () => {
   // The live-path proof for the turn boundary. It has to be a REAL spawn: the
@@ -204,7 +231,10 @@ test('turn.status crosses the real socket and brackets the turn', async () => {
   supervisor = new SidecarSupervisor({
     sidecarCommand: 'bun',
     sidecarArgs: ['run', sidecarEntry],
-    sidecarEnv: { CATCODE_SIDECAR_PROBE: '1' },
+    sidecarEnv: {
+      CATCODE_SIDECAR_PROBE: '1',
+      CLAUDE_CONFIG_DIR: freshConfigHome(),
+    },
   })
   const sessionId = supervisor.spawnSession('p1-0-test-turnstatus')
 

@@ -49,6 +49,11 @@ Locked unless a status line inside the doc says otherwise. Grouped by the phase 
 - `STARTUP-GATES.md` — D4: are the startup GUI gates real requirements (**product call pending operator**).
 - `WELCOME-LAUNCHER.md` — D5: does welcome-launcher state persist (**product call pending operator**).
 
+**Operator rulings on shipped surfaces:**
+- `TEXT-LEGIBILITY.md` — L1/L2: the resting greys and the transcript column width ship
+  DIFFERENT from the prototype on purpose (DECIDED 2026-08-07). Read before "fixing" either
+  back to a prototype value.
+
 ## Where the code is
 
 - Scaffold + walking skeleton: [`app/`](../../app/)

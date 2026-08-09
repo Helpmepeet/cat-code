@@ -1166,7 +1166,9 @@ export async function evaluateDeferredContinuationEligibility(options: {
     return { action: 'refuse', reason: 'not_terminal_quota' }
   }
 
-  const status = await (options.buildStatus ?? (() => buildCodexStatus({ refresh: 'auto' })))()
+  const status = await (
+    options.buildStatus ?? (() => buildCodexStatus({ refresh: 'auto', loadPool: false }))
+  )()
   const observedAt = Date.parse(status.observed_at)
   if (!Number.isFinite(observedAt) || observedAt < failure.observedAt) {
     return { action: 'refuse', reason: 'observation_uncertain' }

@@ -90,6 +90,7 @@ let pendingJob: DeferredContinuationJobV1 | null = null
 let enqueued: QueuedCommand[] = []
 let beginCalls = 0
 let finishAttempt: (() => void) | null = null
+let returnNullAttempt = false
 // Consumed in order, one per takeDeferredContinuationNotice() call, so a test
 // can place a notice on the poll that follows the mount rather than the mount
 // itself — which is exactly when a background worker publishes one.
@@ -146,6 +147,7 @@ mock.module('../services/deferredContinuationRunner.js', () => ({
   ) => {
     if (!stubsActive) return realBeginForeground(...args)
     beginCalls++
+    if (returnNullAttempt) return null
     const finished = new Promise<void>(resolve => {
       finishAttempt = resolve
     })
@@ -192,6 +194,7 @@ beforeEach(() => {
   notices = []
   noticeError = null
   finishAttempt = null
+  returnNullAttempt = false
   runEffect = undefined
   cleanupEffect = undefined
 })
@@ -261,6 +264,20 @@ describe('useDeferredContinuation', () => {
 
     expect(beginCalls).toBe(0)
     expect(enqueued).toEqual([])
+  })
+
+  test('retries polling when another owner ends the job before foreground claim', async () => {
+    pendingJob = job()
+    returnNullAttempt = true
+
+    await mountAndSettle()
+    expect(beginCalls).toBe(1)
+
+    returnNullAttempt = false
+    await new Promise(resolve => setTimeout(resolve, 1_100))
+
+    expect(beginCalls).toBe(2)
+    expect(enqueued).toHaveLength(1)
   })
 
   // F12: a background worker can finish the job and publish the outcome while

@@ -17,6 +17,7 @@ function descriptor(
     titleUpdatedAt: null,
     status: 'ready',
     restorable: false,
+    parked: false,
     createdAt: 0,
     lastAttachedAt: 0,
     lastMessageSentAt: null,

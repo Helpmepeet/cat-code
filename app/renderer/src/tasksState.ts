@@ -81,7 +81,7 @@ export type TasksDialogKeyAction = 'close' | 'next' | 'previous' | 'stop'
  * A chord is NEVER ours: ⌘K reopens the command palette, and `event.key` is
  * still `'k'` while Meta is held, so an unguarded `k` test destroys the first
  * running task on the way to the palette. Same shape and same modifier bail as
- * `permissionActionForKey` (`permissionPromptModel.ts`), and pure for the same
+ * `permissionKeyIntent` (`permissionPromptModel.ts`), and pure for the same
  * reason as `stoppableTaskIdAt` above: the renderer suite is SSR-only and can
  * never press a key.
  */

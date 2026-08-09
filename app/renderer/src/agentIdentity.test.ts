@@ -51,6 +51,30 @@ test('maps known real agent types and leaves fixture-only or future types neutra
   expect(agentTypeMeta(undefined)).toBeNull()
 })
 
+test('treats prototype-chain agent types as neutral without changing known metadata', () => {
+  expect(agentTypeMeta('verification')).toMatchObject({
+    label: 'Verification',
+    tone: 'teal',
+    color: '#5eead4',
+  })
+  expect(agentTypeMeta('toString')).toEqual({
+    key: 'toString',
+    label: 'toString',
+    tone: 'neutral',
+    color: '#a1a1aa',
+    soft: 'rgba(161,161,170,0.08)',
+    line: 'rgba(161,161,170,0.22)',
+  })
+  expect(agentTypeMeta('__proto__')).toEqual({
+    key: '__proto__',
+    label: '__proto__',
+    tone: 'neutral',
+    color: '#a1a1aa',
+    soft: 'rgba(161,161,170,0.08)',
+    line: 'rgba(161,161,170,0.22)',
+  })
+})
+
 test('resolves identity from real worker, local-agent task, teammate, and Agent tool fields', () => {
   expect(
     resolveAgentIdentity({
@@ -177,7 +201,7 @@ test('compresses durable Agent Mode worker sessions using workerUxSummary semant
   expect(deriveAgentModeWorkerState({ ...base, status: 'killed' })).toBe('attention')
 })
 
-test('maps a blocked local_agent task to the solo needs-you state (no orchestrator context here)', () => {
+test('maps a blocked local_agent task to waiting-on-the-assistant, never to needs-you', () => {
   const blockedTask = {
     type: 'local_agent' as const,
     id: 'task-a1',
@@ -190,12 +214,11 @@ test('maps a blocked local_agent task to the solo needs-you state (no orchestrat
     handoffStatus: 'blocked' as const,
   }
 
-  // B6 (2026-07-12 review): this function has no `active`/orchestrator
-  // context, so a blocked local_agent task always reads the solo 'needs-you'.
-  // The orchestrator-owned neutral 'waiting' state is derived separately by
-  // `orchestratorState.ts`'s `orchestratorWorkerState`, which HAS the
-  // `active` flag (see orchestratorState.test.ts).
-  expect(deriveTaskAgentState(blockedTask)).toBe('needs-you')
+  // A blocked subagent waits on the assistant that delegated it: its result text
+  // is queued to the parent conversation and drained into a fresh turn with no
+  // human action. This returned the amber 'needs-you' until 2026-08-09, which
+  // told the user to answer a handoff already addressed to the model.
+  expect(deriveTaskAgentState(blockedTask)).toBe('waiting')
 })
 
 test('maps real task lifecycle and attention fields without prototype activity fixtures', () => {
@@ -325,6 +348,66 @@ test('maps Agent tool cards from real tool input and correlation status only', (
       description: 'Map files',
     }),
   ).toBe('failed')
+})
+
+test('a backgrounded agent stays background until its real completion lands, never fake-completed off the launch ack', () => {
+  // The launch itself resolves with a `success` tool_result the instant the
+  // background run is scheduled (`AgentTool.tsx` "Return async_launched result
+  // immediately") — that is NOT the agent finishing.
+  expect(
+    deriveAgentToolState({
+      toolName: 'Agent',
+      status: 'success',
+      subagent_type: 'Explore',
+      description: 'Map files',
+      run_in_background: true,
+    }),
+  ).toBe('background')
+  // A launch that fails synchronously still reports failed immediately.
+  expect(
+    deriveAgentToolState({
+      toolName: 'Agent',
+      status: 'error',
+      subagent_type: 'Explore',
+      description: 'Map files',
+      run_in_background: true,
+    }),
+  ).toBe('failed')
+  // Once the real task-notification lands, the completion's own outcome wins,
+  // regardless of the stale launch-ack tool status.
+  expect(
+    deriveAgentToolState({
+      toolName: 'Agent',
+      status: 'success',
+      subagent_type: 'Explore',
+      description: 'Map files',
+      run_in_background: true,
+      hasCompletion: true,
+      completionStatus: 'completed',
+    }),
+  ).toBe('completed')
+  expect(
+    deriveAgentToolState({
+      toolName: 'Agent',
+      status: 'success',
+      subagent_type: 'Explore',
+      description: 'Map files',
+      run_in_background: true,
+      hasCompletion: true,
+      completionStatus: 'failed',
+    }),
+  ).toBe('failed')
+  expect(
+    deriveAgentToolState({
+      toolName: 'Agent',
+      status: 'success',
+      subagent_type: 'Explore',
+      description: 'Map files',
+      run_in_background: true,
+      hasCompletion: true,
+      completionStatus: 'killed',
+    }),
+  ).toBe('stopped')
 })
 
 test('returns complete display vocabulary for P4-8 and P4-9 consumers', () => {

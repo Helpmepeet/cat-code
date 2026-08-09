@@ -16,7 +16,9 @@ import {
   selectOrchestratorRosterLine,
   selectPromotedWorker,
   selectWorkerById,
+  selectWorkerDisplayName,
   summarizeOrchestratorWorkers,
+  workerAccessibleLabel,
   workerEventPriority,
 } from './orchestratorState.js'
 
@@ -59,50 +61,85 @@ test('reduce folds an agent-mode.snapshot per session and clears it on lifecycle
   expect(selectAgentModeSnapshot(state, 's1')).toBeNull()
 })
 
-test('a blocked worker is neutral WAITING under an active orchestrator, amber NEEDS-YOU when solo', () => {
+test('a blocked worker waits on the assistant, never on the user', () => {
+  // The handoff is queued to the delegating conversation and drained into a fresh
+  // turn with no human action, so there is no "solo" case to escalate: agent mode
+  // decides which persona the parent runs, not whether a parent exists.
   const blocked = worker({ status: 'completed', handoffStatus: 'blocked' })
-  expect(orchestratorWorkerState(blocked, true)).toBe('waiting')
-  expect(deriveWorkerOwner(blocked, true)).toBe('orchestrator')
-  // Solo case — no orchestrator to pick up the handoff → escalates to the human.
-  expect(orchestratorWorkerState(blocked, false)).toBe('needs-you')
-  expect(deriveWorkerOwner(blocked, false)).toBe('user')
+  expect(orchestratorWorkerState(blocked)).toBe('waiting')
+  expect(deriveWorkerOwner(blocked)).toBe('orchestrator')
 })
 
 test('non-blocked lifecycle reuses the shared agent-mode vocabulary', () => {
-  expect(orchestratorWorkerState(worker({ status: 'running' }), true)).toBe('running')
+  expect(orchestratorWorkerState(worker({ status: 'running' }))).toBe('running')
   expect(
-    orchestratorWorkerState(worker({ status: 'completed', synthesisStatus: 'pending' }), true),
+    orchestratorWorkerState(worker({ status: 'completed', synthesisStatus: 'pending' })),
   ).toBe('result-ready')
   expect(
-    orchestratorWorkerState(worker({ status: 'completed', synthesisStatus: 'synthesized' }), true),
+    orchestratorWorkerState(worker({ status: 'completed', synthesisStatus: 'synthesized' })),
   ).toBe('reviewed')
   expect(
-    orchestratorWorkerState(worker({ origin: 'prior', resumable: true, status: 'completed' }), true),
+    orchestratorWorkerState(worker({ origin: 'prior', resumable: true, status: 'completed' })),
   ).toBe('resumable')
-  expect(orchestratorWorkerState(worker({ status: 'failed' }), true)).toBe('attention')
+  expect(orchestratorWorkerState(worker({ status: 'failed' }))).toBe('attention')
 })
 
-test('summary + pill: a solo escalation is amber, a busy swarm is neutral, a settled swarm is silent', () => {
-  const solo = summarizeOrchestratorWorkers(
-    [worker({ status: 'completed', handoffStatus: 'blocked' })],
-    false,
+test('a backgrounded worker reads BACKGROUND, and only while it is genuinely running', () => {
+  expect(
+    orchestratorWorkerState(worker({ status: 'running', isBackgrounded: true })),
+  ).toBe('background')
+  // Foreground stays running — the two spawns rendered identically before this.
+  expect(
+    orchestratorWorkerState(worker({ status: 'running', isBackgrounded: false })),
+  ).toBe('running')
+  // Outranked: a settled worker is not "in background" just because it was spawned that way.
+  expect(
+    orchestratorWorkerState(
+      worker({ status: 'completed', synthesisStatus: 'pending', isBackgrounded: true }),
+    ),
+  ).toBe('result-ready')
+})
+
+test('the roster counts background separately, and still calls it in flight', () => {
+  const line = selectOrchestratorRosterLine(
+    [
+      worker({ agentId: 'w1', status: 'running' }),
+      worker({ agentId: 'w2', status: 'running', isBackgrounded: true }),
+    ],
   )
-  expect(solo).toMatchObject({ user: 1 })
-  expect(orchestratorPill([worker({ status: 'completed', handoffStatus: 'blocked' })], false)).toEqual({
-    label: '1 needs you',
-    attention: true,
+  expect(line.tail.map(count => count.text)).toEqual(['1 working', '1 in background'])
+  expect(line.anyWorking).toBe(true)
+  // A lone background worker still counts as an active subagent, not as done.
+  const summary = summarizeOrchestratorWorkers([
+    worker({ status: 'running', isBackgrounded: true }),
+  ])
+  // Counted apart from `working` so the Workers list and the roster agree, but
+  // still "active" for the pill rather than folded into done.
+  expect(summary).toEqual({ working: 0, background: 1, orchestrator: 0, done: 0 })
+  expect(orchestratorPill([worker({ status: 'running', isBackgrounded: true })])).toEqual({
+    label: '1 subagent active',
+  })
+})
+
+test('summary + pill: a blocked worker is counted on the assistant and never alerts', () => {
+  const blocked = summarizeOrchestratorWorkers([
+    worker({ status: 'completed', handoffStatus: 'blocked' }),
+  ])
+  expect(blocked).toMatchObject({ orchestrator: 1 })
+  // The old amber "1 needs you" pill: a blocked worker is in flight, not owed to you.
+  expect(orchestratorPill([worker({ status: 'completed', handoffStatus: 'blocked' })])).toEqual({
+    label: '1 subagent active',
   })
 
-  const busy = orchestratorPill(
-    [worker({ status: 'running' }), worker({ agentId: 'w-2', handle: 'Bell', status: 'running' })],
-    true,
-  )
-  expect(busy).toEqual({ label: '2 subagents active', attention: false })
+  const busy = orchestratorPill([
+    worker({ status: 'running' }),
+    worker({ agentId: 'w-2', handle: 'Bell', status: 'running' }),
+  ])
+  expect(busy).toEqual({ label: '2 subagents active' })
 
-  const settled = orchestratorPill(
-    [worker({ status: 'completed', synthesisStatus: 'synthesized' })],
-    true,
-  )
+  const settled = orchestratorPill([
+    worker({ status: 'completed', synthesisStatus: 'synthesized' }),
+  ])
   expect(settled).toBeNull()
 })
 
@@ -112,12 +149,12 @@ test('roster promotes the news-bearing worker (failure over a ready result over 
     worker({ agentId: 'w-result', handle: 'Hopper', status: 'completed', synthesisStatus: 'pending' }),
     worker({ agentId: 'w-fail', handle: 'Turing', status: 'failed' }),
   ]
-  expect(workerEventPriority(workers[0], true)).toBe(0)
-  expect(workerEventPriority(workers[1], true)).toBe(1)
-  expect(workerEventPriority(workers[2], true)).toBe(2)
-  expect(selectPromotedWorker(workers, true)?.worker.agentId).toBe('w-fail')
+  expect(workerEventPriority(workers[0])).toBe(0)
+  expect(workerEventPriority(workers[1])).toBe(1)
+  expect(workerEventPriority(workers[2])).toBe(2)
+  expect(selectPromotedWorker(workers)?.worker.agentId).toBe('w-fail')
   // A quiet swarm promotes nobody — the roster shows neutral counts only.
-  expect(selectPromotedWorker([worker({ status: 'running' })], true)).toBeNull()
+  expect(selectPromotedWorker([worker({ status: 'running' })])).toBeNull()
 })
 
 test('roster line: at rest it names nobody and tallies the swarm honestly', () => {
@@ -128,13 +165,12 @@ test('roster line: at rest it names nobody and tallies the swarm honestly', () =
       worker({ agentId: 'w-3', status: 'completed', handoffStatus: 'blocked' }),
       worker({ agentId: 'w-4', status: 'completed', synthesisStatus: 'synthesized' }),
     ],
-    true,
   )
   expect(line.lead).toBeNull()
   expect(line.anyWorking).toBe(true)
   expect(line.tail).toEqual([
     { text: '2 working', tone: 'working' },
-    { text: '1 needs input', tone: 'waiting' },
+    { text: '1 on the assistant', tone: 'waiting' },
     { text: '1 done', tone: 'done' },
   ])
 })
@@ -146,7 +182,6 @@ test('roster line: a promoted lead is excluded from the tail, extra news becomes
       worker({ agentId: 'w-result', status: 'completed', synthesisStatus: 'pending' }),
       worker({ agentId: 'w-run', status: 'running' }),
     ],
-    true,
   )
   expect(line.lead?.worker.agentId).toBe('w-fail')
   expect(line.tail).toEqual([
@@ -156,33 +191,20 @@ test('roster line: a promoted lead is excluded from the tail, extra news becomes
 })
 
 test('roster line: a quiet-but-stalled swarm still reports its blocked workers, never as news', () => {
-  // The D2 C2 invariant, at the line level: blocked under an active orchestrator
-  // promotes nobody and stays a NEUTRAL count.
-  const active = selectOrchestratorRosterLine(
-    [
-      worker({ agentId: 'w-1', status: 'completed', handoffStatus: 'blocked' }),
-      worker({ agentId: 'w-2', status: 'completed', handoffStatus: 'blocked' }),
-    ],
-    true,
-  )
-  expect(active.lead).toBeNull()
-  expect(active.anyWorking).toBe(false)
-  expect(active.tail).toEqual([{ text: '2 needs input', tone: 'waiting' }])
-
-  // Solo: the same workers own the human's attention, so one is promoted.
-  const solo = selectOrchestratorRosterLine(
-    [
-      worker({ agentId: 'w-1', status: 'completed', handoffStatus: 'blocked' }),
-      worker({ agentId: 'w-2', status: 'completed', handoffStatus: 'blocked' }),
-    ],
-    false,
-  )
-  expect(solo.lead?.priority).toBe(3)
-  expect(solo.tail).toEqual([{ text: '+1 more', tone: 'done' }])
+  // The D2 C2 invariant at the line level, now unconditional: a blocked worker
+  // promotes nobody and stays a NEUTRAL count, because the assistant owns the
+  // handoff whether or not this session runs the agent-mode persona.
+  const line = selectOrchestratorRosterLine([
+    worker({ agentId: 'w-1', status: 'completed', handoffStatus: 'blocked' }),
+    worker({ agentId: 'w-2', status: 'completed', handoffStatus: 'blocked' }),
+  ])
+  expect(line.lead).toBeNull()
+  expect(line.anyWorking).toBe(false)
+  expect(line.tail).toEqual([{ text: '2 on the assistant', tone: 'waiting' }])
 })
 
 test('roster line: an empty swarm has no lead and no counts', () => {
-  expect(selectOrchestratorRosterLine([], true)).toEqual({
+  expect(selectOrchestratorRosterLine([])).toEqual({
     lead: null,
     tail: [],
     anyWorking: false,
@@ -193,6 +215,33 @@ test('displayHandle strips the mention sigil for display', () => {
   expect(displayHandle('@Turing')).toBe('Turing')
   expect(displayHandle('Turing')).toBe('Turing')
   expect(displayHandle(null)).toBeNull()
+})
+
+test('selectWorkerDisplayName omits legacy ids and unnamed handles', () => {
+  expect(selectWorkerDisplayName({ agentId: 'agent-a', handle: 'Turing' })).toBe('Turing')
+  expect(selectWorkerDisplayName({ agentId: 'agent-a', handle: '@Turing' })).toBe('Turing')
+  expect(selectWorkerDisplayName({ agentId: 'agent-a', handle: 'agent-a' })).toBeNull()
+  expect(selectWorkerDisplayName({ agentId: 'agent-a', handle: '@agent-a' })).toBeNull()
+  expect(selectWorkerDisplayName({ agentId: 'agent-a', handle: '  ' })).toBeNull()
+  expect(selectWorkerDisplayName({ agentId: 'agent-a', handle: null })).toBeNull()
+})
+
+test('workerAccessibleLabel preserves normalized type and lifecycle without exposing the id', () => {
+  const label = workerAccessibleLabel(
+    worker({
+      agentId: 'agent-a',
+      handle: 'agent-a',
+      role: 'Explore',
+      description: 'Inspect the repository',
+      origin: 'prior',
+      resumable: true,
+      status: 'completed',
+    }),
+  )
+  expect(label).toContain('Inspect the repository')
+  expect(label).toContain('type Explore')
+  expect(label).toContain('status Resumable')
+  expect(label).not.toContain('agent-a')
 })
 
 test('selectWorkerById finds a worker or degrades to null (drilldown/focus lookup)', () => {

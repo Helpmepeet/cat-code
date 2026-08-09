@@ -158,12 +158,18 @@ export function projectPreviewTranscriptCache(
 export function selectPreviewRunFacts(cache: TranscriptCache): PreviewRunFacts {
   const sessionId = cache.header.appSessionId
   const frames = cache.frames.filter(frame => frame.sessionId === sessionId)
-  // The HEADER wins when present. A backfilled cache is written by the worker,
-  // which read the raw transcript and so still had the mode/effort/usage the
-  // engine's message conversion drops; the frames below cannot recover those at
-  // all. A cache written on session close carries no header facts, and its
-  // frames DO still hold a live `result`, so the scan is the fallback rather
-  // than dead code.
+  // The HEADER wins when present, WHOLESALE — it is one coherent snapshot, and
+  // merging a frame-derived value into it would rebuild the incoherence the
+  // snapshot exists to remove. Both writers read the raw transcript, which still
+  // carries the mode/effort/usage the engine's message conversion drops, and the
+  // frames below cannot recover effort at all.
+  //
+  // Because this trusts it wholesale, a header is written ONLY when it is
+  // complete on every field the scan below could otherwise supply
+  // (`transcriptCache.ts` `resolveCacheRunFacts`). A cache whose session ran
+  // before the engine recorded run facts still arrives headerless, and its
+  // frames DO hold a live `result`, so the scan is the fallback rather than
+  // dead code.
   const header = cache.header.runFacts
   if (header) {
     return {

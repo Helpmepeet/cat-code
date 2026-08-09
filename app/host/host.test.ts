@@ -639,6 +639,61 @@ test('createSession enforces the live-process bound (HC4 → session_limit)', as
   if (!result.ok) expect(result.error.code).toBe('session_limit')
 })
 
+test('HC4: terminal tombstones do not consume the live-session cap', async () => {
+  const { MAX_LIVE_SESSIONS } = await import('../shared/hostApi.js')
+
+  const createHarness = makeHost()
+  for (let i = 0; i < MAX_LIVE_SESSIONS - 1; i++) {
+    createHarness.supervisor.records.set(`live-${i}`, {
+      sessionId: `live-${i}`,
+      status: 'ready',
+      pid: 1000 + i,
+      socketPath: `/tmp/s${i}`,
+      cwd: createHarness.cwd,
+    })
+  }
+  createHarness.supervisor.records.set('dead-tombstone', {
+    sessionId: 'dead-tombstone',
+    status: 'failed',
+    pid: 2000,
+    socketPath: '/tmp/dead.sock',
+    cwd: createHarness.cwd,
+  })
+
+  const created = await createHarness.host.createSession({ cwd: createHarness.cwd })
+  expect(created.ok).toBe(true)
+
+  const restoreHarness = makeHost()
+  for (let i = 0; i < MAX_LIVE_SESSIONS - 1; i++) {
+    restoreHarness.supervisor.records.set(`live-${i}`, {
+      sessionId: `live-${i}`,
+      status: 'ready',
+      pid: 3000 + i,
+      socketPath: `/tmp/restore-${i}`,
+      cwd: restoreHarness.cwd,
+    })
+  }
+  const appSessionId = randomUUID()
+  writeTranscript(restoreHarness.storageDir, 'engine-parked')
+  await restoreHarness.registry.upsertOnSpawn({
+    appSessionId,
+    cwd: restoreHarness.cwd,
+  })
+  await restoreHarness.registry.fillEngineSessionId(appSessionId, 'engine-parked')
+  await restoreHarness.registry.markParked(appSessionId)
+  restoreHarness.supervisor.records.set(appSessionId, {
+    sessionId: appSessionId,
+    status: 'exited',
+    pid: 4000,
+    socketPath: '/tmp/parked.sock',
+    cwd: restoreHarness.cwd,
+  })
+
+  const restored = await restoreHarness.host.restoreSession(appSessionId)
+  expect(restored.ok).toBe(true)
+  if (restored.ok) expect(restored.value.appSessionId).toBe(appSessionId)
+})
+
 test('HC4: the live-process cap is independent of the registry row bound', async () => {
   // These were ONE constant until 2026-07-26, so raising the registry's
   // file-growth bound silently raised the fork-bomb cap. The row bound must be
@@ -955,6 +1010,7 @@ test('IDLE-PARK — a PARKED_EXIT_CODE exit marks parked → disconnected+restor
   const liveDescriptor = h.host.listSessions().find(s => s.appSessionId === parkedId)
   expect(liveDescriptor?.status).toBe('ready')
   expect(liveDescriptor?.restorable).toBe(false)
+  expect(liveDescriptor?.parked).toBe(false)
 
   h.events.length = 0
   h.supervisor.emitPark(parkedId)
@@ -965,6 +1021,22 @@ test('IDLE-PARK — a PARKED_EXIT_CODE exit marks parked → disconnected+restor
   const parkedDescriptor = h.host.listSessions().find(s => s.appSessionId === parkedId)
   expect(parkedDescriptor?.status).toBe('disconnected')
   expect(parkedDescriptor?.restorable).toBe(true)
+  // §1b — the ONE bit that separates this from a crash, and the reason four
+  // descriptor-derived surfaces stopped calling an intentional reclaim
+  // `crashed`. Everything else about the descriptor stays byte-identical.
+  expect(parkedDescriptor?.parked).toBe(true)
+
+  // The live gate: an unpark spawns BEFORE `upsertOnSpawn` clears the row's
+  // `shutdown` mark (`registry.ts` sets it to null only inside that upsert), so
+  // for that window a live child coexists with a `'parked'` row. Reading the
+  // mark alone would paint a booting engine as resting and swallow `starting`.
+  h.supervisor.emitReady(parkedId, 'engine-parked')
+  const respawning = h.host.listSessions().find(s => s.appSessionId === parkedId)
+  expect(h.registry.findSession(parkedId)?.shutdown).toBe('parked')
+  expect(respawning?.status).toBe('ready')
+  expect(respawning?.parked).toBe(false)
+  h.supervisor.emitPark(parkedId)
+  await settle(() => h.registry.findSession(parkedId)?.shutdown === 'parked')
   const statusEvent = h.events.find(e => e.type === 'session-status')
   expect(statusEvent).toBeDefined()
   if (statusEvent?.type === 'session-status') {
@@ -1779,6 +1851,30 @@ test('canPreview is true only for a not-live restorable row; false for live/unkn
   await h.registry.upsertOnSpawn({ appSessionId: orphan, cwd: h.cwd })
   await h.registry.markClean(orphan)
   expect(h.host.canPreview(orphan)).toBe(false)
+})
+
+test('canResume reads transcript truth for a live idle-park candidate', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  if (!created.ok) throw new Error('create failed')
+  const { appSessionId } = created.value
+  h.supervisor.emitReady(appSessionId, 'engine-park-candidate')
+  await settle(
+    () =>
+      h.registry.findSession(appSessionId)?.engineSessionId ===
+      'engine-park-candidate',
+  )
+
+  // Ready stamps an id before any message has materialized its transcript.
+  expect(h.host.canResume(appSessionId)).toBe(false)
+
+  writeTranscript(h.storageDir, 'engine-park-candidate')
+  expect(h.host.canResume(appSessionId)).toBe(true)
+
+  // The predicate is read-time, so it also catches a transcript pruned after a
+  // completed turn instead of inferring resumability from message recency.
+  rmSync(join(h.storageDir, 'transcripts', 'engine-park-candidate.jsonl'))
+  expect(h.host.canResume(appSessionId)).toBe(false)
 })
 
 /**

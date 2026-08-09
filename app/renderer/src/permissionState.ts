@@ -42,6 +42,16 @@ type SessionPermissionState = {
   submittedRequestIds: string[]
   /** C3 — latest engine context snapshot; null until the first frame. */
   context: PermissionContextSnapshot | null
+  /**
+   * The mode this session last ran under, KEPT when its engine goes away.
+   *
+   * Only the mode, and only for display. `context` going null on a lifecycle
+   * frame is what makes the MODE picker inert, and every pending/submitted
+   * request is still cleared with it — a dead session must resurrect no
+   * actionable prompt. But a session does not stop having had a mode because
+   * its process ended, and blanking the rail's mode face said it did.
+   */
+  lastMode: string | null
 }
 
 export type PermissionState = {
@@ -54,6 +64,8 @@ export type PermissionAction =
   | { type: 'submissionFailed'; sessionId: SessionId; requestId: string }
   | { type: 'dismissed'; sessionId: SessionId; requestId: string }
   | { type: 'restored'; sessionId: SessionId; requestId: string }
+  /** The row is gone for good — drop its entry, retained mode included. */
+  | { type: 'session-removed'; sessionId: SessionId }
 
 export function createPermissionState(): PermissionState {
   return { sessions: {} }
@@ -65,6 +77,7 @@ function createSessionPermissionState(): SessionPermissionState {
     dismissedRequestIds: [],
     submittedRequestIds: [],
     context: null,
+    lastMode: null,
   }
 }
 
@@ -72,6 +85,13 @@ export function reducePermissionState(
   state: PermissionState,
   action: PermissionAction,
 ): PermissionState {
+  if (action.type === 'session-removed') {
+    if (!(action.sessionId in state.sessions)) return state
+    const sessions = { ...state.sessions }
+    delete sessions[action.sessionId]
+    return { sessions }
+  }
+
   if (action.type === 'submitted' || action.type === 'dismissed') {
     const session = state.sessions[action.sessionId]
     if (!session) return state
@@ -132,6 +152,9 @@ export function reducePermissionState(
           // The context snapshot is re-emitted right after every ready frame;
           // keep the previous one meanwhile rather than flashing to null.
           context: previous.context,
+          // A re-attach is exactly when the last-known mode is still the only
+          // answer the rail has, until that snapshot lands.
+          lastMode: previous.context?.mode ?? previous.lastMode,
         },
       },
     }
@@ -145,6 +168,7 @@ export function reducePermissionState(
     return updateSession(state, frame.sessionId, {
       ...session,
       context: frame.context,
+      lastMode: frame.context.mode,
     })
   }
 
@@ -152,11 +176,10 @@ export function reducePermissionState(
   if (!session) return state
 
   if (frame.kind === 'lifecycle') {
-    return updateSession(
-      state,
-      frame.sessionId,
-      createSessionPermissionState(),
-    )
+    return updateSession(state, frame.sessionId, {
+      ...createSessionPermissionState(),
+      lastMode: session.context?.mode ?? session.lastMode,
+    })
   }
 
   if (frame.kind === 'error' && frame.requestId) {
@@ -299,13 +322,33 @@ export function selectPendingPermissionCount(
   ).length
 }
 
-/** C3 — the latest engine context snapshot (null before the first frame). */
+/**
+ * C3 — the LIVE engine context snapshot (null before the first frame, and again
+ * once the session's engine goes away).
+ *
+ * The capability answer: holding it means there is a sidecar to take a
+ * `permission.setMode`. For the mode a dead session ran under, which is display
+ * only, read {@link selectLastPermissionMode}.
+ */
 export function selectPermissionContext(
   state: PermissionState,
   sessionId: SessionId | null,
 ): PermissionContextSnapshot | null {
   const session = sessionId ? state.sessions[sessionId] : undefined
   return session?.context ?? null
+}
+
+/**
+ * The mode a session is in, or was last in. Display only — it answers for a
+ * session with no engine, so it can never stand in for the context snapshot
+ * when deciding whether a mode may be CHANGED.
+ */
+export function selectLastPermissionMode(
+  state: PermissionState,
+  sessionId: SessionId | null,
+): string | null {
+  const session = sessionId ? state.sessions[sessionId] : undefined
+  return session?.context?.mode ?? session?.lastMode ?? null
 }
 
 /**

@@ -171,6 +171,23 @@ test('activity newer than the hide brings the project back on its own', () => {
   expect(hidden).toEqual([])
 })
 
+test('a search-filtered group uses its unfiltered workspace activity to self-heal', () => {
+  const allGroups = [group('/w/a', 150)]
+  const searchedGroups = [group('/w/a', 50)]
+  const activityByWorkspace = new Map(
+    allGroups.map(workspace => [workspace.cwd, workspace.activityAtMs]),
+  )
+
+  const { visible, hidden } = selectVisibleWorkspaceGroups(
+    searchedGroups,
+    [{ cwd: '/w/a', hiddenAt: 100 }],
+    workspace => activityByWorkspace.get(workspace.cwd) ?? 0,
+  )
+
+  expect(cwdsOf(visible)).toEqual(['/w/a'])
+  expect(hidden).toEqual([])
+})
+
 test('activity older than the hide keeps the project hidden', () => {
   const { visible, hidden } = selectVisibleWorkspaceGroups(
     [group('/w/a', 50)],

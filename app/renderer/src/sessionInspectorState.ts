@@ -35,6 +35,7 @@
 import type {
   DiagnosticsSnapshot,
   PermissionContextSnapshot,
+  RunControlsSnapshot,
   SettingSourceId,
   SettingsSnapshot,
   WorkspaceTrustSnapshot,
@@ -65,6 +66,13 @@ export type SessionInspectorState = {
   readonly permissionContext: PermissionContextSnapshot | null
   readonly workspaceTrust: WorkspaceTrustSnapshot | null
   readonly diagnostics: DiagnosticsSnapshot | null
+  /**
+   * The LIVE run-controls seam (P4-24c), re-broadcast on every model/effort/fast
+   * change. It exists here because `diagnostics` is spawn-frozen, so the run
+   * controls below cannot honour their own "values in effect now" promise from it
+   * alone once the picker moves the model.
+   */
+  readonly runControls: RunControlsSnapshot | null
 }
 
 /** Assemble the bundle from the selectors App already calls (no new feed). */
@@ -74,6 +82,7 @@ export function buildSessionInspectorState(input: {
   permissionContext: PermissionContextSnapshot | null
   workspaceTrust: WorkspaceTrustSnapshot | null
   diagnostics: DiagnosticsSnapshot | null
+  runControls: RunControlsSnapshot | null
 }): SessionInspectorState {
   return {
     cwd: input.cwd,
@@ -81,6 +90,7 @@ export function buildSessionInspectorState(input: {
     permissionContext: input.permissionContext,
     workspaceTrust: input.workspaceTrust,
     diagnostics: input.diagnostics,
+    runControls: input.runControls,
   }
 }
 
@@ -276,11 +286,13 @@ export function selectFlagLayer(
 
 export type RunControlsView = {
   /**
-   * The engine's model OVERRIDE (`AppState.mainLoopModel`, "alias, full name (as
-   * with --model or env var), or null (default)" —
-   * `src/state/AppStateStore.ts:503`). Mutable in-session: the desktop's model
-   * picker writes the same field (`app/sidecar/runControlsDomain.ts:124`), so
-   * this is the override IN EFFECT, not proof of a launch flag.
+   * The engine's model OVERRIDE: "alias, full name (as with --model or env var),
+   * or null (default)" (`src/state/AppStateStore.ts:503`). Mutable in-session:
+   * the desktop's model picker writes the same field
+   * (`app/sidecar/runControlsDomain.ts:124`), so this is the override IN EFFECT,
+   * not proof of a launch flag. Read from the live seam
+   * (`RunControlsSnapshot.model.selected`), which spells it as the matching
+   * picker option when the setting and the option are two spellings of one model.
    */
   readonly modelOverride: string | null
   /** The model the session actually runs (`getMainLoopModel()` resolution). */
@@ -292,7 +304,23 @@ export type RunControlsView = {
 
 export function selectRunControls(
   diagnostics: DiagnosticsSnapshot | null,
+  runControls: RunControlsSnapshot | null,
 ): RunControlsView | null {
+  // The live seam wins WHOLE, never field by field, because its nulls are
+  // ANSWERS rather than gaps: `model.selected: null` MEANS this session runs the
+  // provider default, and `effort.current: null` means the current model takes no
+  // effort knob at all. Borrowing the spawn-time value for either one prints a
+  // fact the session no longer has, which is the same staleness this pair exists
+  // to avoid. The two are not interchangeable per field either — live `effort`
+  // is the APPLIED tier, the frozen one is the raw selection.
+  if (runControls) {
+    return {
+      modelOverride: runControls.model.selected,
+      resolvedModel: runControls.model.current,
+      effort: runControls.effort.current,
+      fastMode: runControls.fast.active,
+    }
+  }
   if (!diagnostics) return null
   return {
     modelOverride: diagnostics.mainLoopModel,

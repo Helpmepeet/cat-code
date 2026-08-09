@@ -1,6 +1,6 @@
 # Tools And Permissions Map
 
-Last refreshed: 2026-07-13 against the current source tree.
+Last refreshed: 2026-08-06 against the current source tree.
 
 ## Purpose
 
@@ -231,7 +231,7 @@ authority-checked boundary. Start with `src/utils/teammateMailbox.ts`.
 | Resource tools | `src/tools/ListMcpResourcesTool/`, `src/tools/ReadMcpResourceTool/` | Separate from normal MCP call tools; still part of the tool pool and can be deferred. |
 | Agent orchestration tools | `src/tools/AgentTool/`, worker-control tool dirs, `src/services/tools/toolOrchestration.ts` | These shape subagent behavior and can change the global tool pool seen by workers. |
 | Shell tools | `src/tools/BashTool/`, `src/tools/PowerShellTool/`, `src/tools/REPLTool/` | These have the deepest permission logic and mode-specific behavior. |
-| Apply-patch file mutation | `src/tools/FilePatchTool/FilePatchTool.tsx` | `src/tools/FilePatchTool/applier.test.ts`, `src/tools/FilePatchTool/FilePatchTool.permissions.test.ts`, `src/utils/fileOperationAnalytics.ts` | Validate every destination, including move destinations, before mutation; rollback and result enumeration are part of the tool's safety contract. |
+| File mutation and persisted result bounds | `src/tools/{FileEditTool,FileWriteTool,FilePatchTool,NotebookEditTool}/` | `src/utils/{diff,analyzeContext}.ts`, the tool-specific tests, `src/utils/fileOperationAnalytics.ts` | Validate every destination, including move destinations, before mutation. The tool result must retain bounded, useful diff/line context rather than whole edited files or notebooks; rollback and result enumeration remain part of the safety contract. |
 
 ## Tool Search And Deferred Loading
 
@@ -297,6 +297,7 @@ Use focused checks first, then the documented build:
 | Permission suggestions and filesystem safety | `bun test src/utils/permissions/filesystemSuggestions.test.ts` and nearby permission tests |
 | Auto-mode classifier fallback | `bun test src/utils/permissions/enableAutoModeFlag.test.ts` |
 | Agent tool and worker-control integration | `bun test src/tools/AgentTool/AgentTool.test.ts` plus worker-control tool tests |
+| File-edit result bounds | `bun test src/tools/FileEditTool/FileEditTool.test.ts src/tools/FileWriteTool/FileWriteTool.test.ts src/tools/FilePatchTool/applier.test.ts src/tools/NotebookEditTool/NotebookEditTool.test.ts` |
 | Mailbox control authority (closed union, authority matrix, request correlation) | `bun test src/utils/teammateMailbox.test.ts src/utils/attachments.test.ts src/hooks/useInboxPoller.test.ts src/utils/swarm/inProcessRunner.test.ts src/tools/SendMessageTool/SendMessageTool.test.ts src/tools/ExitPlanModeTool/ExitPlanModeV2Tool.test.ts` |
 | Tool search behavior | `bun test` for `src/tools/ToolSearchTool/` and `src/utils/toolSearch.ts` if present in current snapshot |
 | MCP configuration and client behavior | MCP-related tests under `src/services/mcp/` and integration checks through connected server flows |
@@ -314,6 +315,7 @@ Use focused checks first, then the documented build:
   use `mcp__server__tool` even when the displayed name is unprefixed.
 - Do not assume `isReadOnly()` alone controls concurrency. Actual batching uses
   `isConcurrencySafe()`.
+- Do not assume a file-mutating tool result can safely retain the full source input. Route transcript-size or persistence changes through the four file-tool owners and their bounded-result tests.
 - Do not assume tool search is off unless explicitly enabled. In this snapshot,
   unset `ENABLE_TOOL_SEARCH` still defaults to deferred-tool mode unless other
   gates disable it.

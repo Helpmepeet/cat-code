@@ -30,7 +30,7 @@ import type { OAuthTokens, SubscriptionType } from '../services/oauth/types.js'
 import {
   shouldUseClaudePoolTokenSource,
   getActiveClaudeAccount,
-  updateActiveClaudeAccountTokens,
+  updateClaudeAccountTokens,
 } from '../services/api/claudeAccountPool.js'
 import { getActiveAccount, hasAnyPoolAccount } from '../services/api/codexAccountPool.js'
 import {
@@ -1626,6 +1626,11 @@ async function checkAndRefreshOAuthTokenIfNeededImpl(
     // Check one more time after acquiring lock
     getClaudeAIOAuthTokens.cache?.clear?.()
     clearKeychainCache()
+    // The refresh must update the account that supplied this refresh token, not
+    // whichever account happens to be active after the network await below.
+    const lockedPoolAccount = shouldUseClaudePoolTokenSource()
+      ? getActiveClaudeAccount()
+      : null
     const lockedTokens = await getClaudeAIOAuthTokensAsync()
     if (
       !lockedTokens?.refreshToken ||
@@ -1648,7 +1653,9 @@ async function checkAndRefreshOAuthTokenIfNeededImpl(
 
     // Write refreshed tokens back to the Claude pool + vault so the
     // in-memory pool doesn't serve stale tokens on the next read.
-    updateActiveClaudeAccountTokens(refreshedTokens)
+    if (lockedPoolAccount) {
+      updateClaudeAccountTokens(lockedPoolAccount.accountUuid, refreshedTokens)
+    }
 
     // Clear the cache after refreshing token
     getClaudeAIOAuthTokens.cache?.clear?.()

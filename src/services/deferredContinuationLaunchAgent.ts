@@ -43,6 +43,7 @@ const defaultLaunchctlExecutor: LaunchctlExecutor = async args => {
 async function getDeferredContinuationLoadState(
   run: LaunchctlExecutor,
 ): Promise<'loaded' | 'not_loaded' | 'unknown'> {
+  if (process.platform !== 'darwin') return 'not_loaded'
   const result = await run([
     'print',
     `gui/${process.getuid!()}/${DEFERRED_CONTINUATION_LAUNCH_AGENT_LABEL}`,
@@ -180,6 +181,7 @@ export type DeferredContinuationBackgroundStatus =
 export async function getDeferredContinuationBackgroundStatus(
   plistPath = getDeferredContinuationLaunchAgentPath(),
 ): Promise<DeferredContinuationBackgroundStatus> {
+  if (process.platform !== 'darwin') return { state: 'disabled' }
   let contents: string
   try {
     const info = await lstat(plistPath)
@@ -285,6 +287,7 @@ export async function uninstallDeferredContinuationLaunchAgent(
   plistPath = getDeferredContinuationLaunchAgentPath(),
   run: LaunchctlExecutor = defaultLaunchctlExecutor,
 ): Promise<boolean> {
+  if (process.platform !== 'darwin') return false
   try {
     await lstat(plistPath)
   } catch (error) {

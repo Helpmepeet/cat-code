@@ -83,6 +83,10 @@ import {
   type SidecarLeaseDomain,
 } from './leaseDomain.js'
 import {
+  createSidecarPanelTaskReaper,
+  type SidecarPanelTaskReaper,
+} from './panelTaskReaper.js'
+import {
   createSidecarTaskControlDomain,
   type SidecarTaskControlDomain,
 } from './taskControlDomain.js'
@@ -487,6 +491,13 @@ export type SidecarSession = {
    */
   taskControl: SidecarTaskControlDomain | null
   /**
+   * Terminal-worker eviction deadline owner — honours the engine's `evictAfter`
+   * stamp so a finished worker leaves `AppState.tasks` (and with it the docked
+   * roster) the way it does under the terminal REPL's panel tick. Null in probe
+   * mode (no engine app-state store).
+   */
+  panelTaskReaper: SidecarPanelTaskReaper | null
+  /**
    * Composer run-controls domain (P4-24c) — the live Model/effort/fast read seam +
    * the per-session `/model`, `/effort`, `/fast` write verbs over the engine's own
    * setters. Over the SAME app-state store the runtime enforces. Null in probe mode.
@@ -559,6 +570,7 @@ export async function createSidecarSessionController({
       agentMode: null,
       leases: null,
       taskControl: null,
+      panelTaskReaper: null,
       runControls: null,
       sessionActions: null,
       contextBreakdown: null,
@@ -618,6 +630,7 @@ export async function createSidecarSessionController({
     // agent-mode: a worker spawn/finish is exactly when leases move.
     leases: createSidecarLeaseDomain(appStateStore),
     taskControl: createSidecarTaskControlDomain(appStateStore),
+    panelTaskReaper: createSidecarPanelTaskReaper(appStateStore),
     runControls,
     sessionActions: createSidecarSessionActionsDomain({ tools }),
     // The composer donut's popover breakdown. Fed the SAME tools / agent

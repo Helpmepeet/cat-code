@@ -17,6 +17,7 @@ const sessionA: SessionDescriptor = {
   titleUpdatedAt: null,
   status: 'ready',
   restorable: false,
+  parked: false,
   createdAt: 1,
   lastAttachedAt: 2,
   lastMessageSentAt: null,
@@ -30,6 +31,7 @@ const sessionB: SessionDescriptor = {
   title: null,
   status: 'disconnected',
   restorable: true,
+  parked: false,
   createdAt: 3,
   lastAttachedAt: 9,
 }
@@ -64,6 +66,7 @@ test('debug snapshot mirrors tab/sidebar selectors and visible permission string
         dismissedRequestIds: [],
         submittedRequestIds: [],
         context: null,
+        lastMode: null,
       },
     },
   }

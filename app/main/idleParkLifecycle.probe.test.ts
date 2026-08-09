@@ -200,6 +200,7 @@ test(
     let visible = new Set<string>([appSessionId])
     const driver = createIdleParkDriver({
       listSessions: () => host.listSessions(),
+      canResume: id => host.canResume(id),
       park: id => {
         supervisor.send(id, { type: 'app.park', requestId: randomUUID() })
       },

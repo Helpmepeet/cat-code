@@ -38,7 +38,10 @@ const MALFORMED_ASK: PermissionRequest = {
   },
 }
 
-test('an ordinary request keeps both controls', () => {
+const ALLOW_ROW = '>Yes<'
+const REFUSE_ROW = 'No, and tell Cat Code what to do differently'
+
+test('an ordinary request keeps both rows', () => {
   const html = renderToStaticMarkup(
     <PermissionQueue
       items={[queueItem(BASH)]}
@@ -47,15 +50,15 @@ test('an ordinary request keeps both controls', () => {
       onRestore={() => {}}
     />,
   )
-  expect(html).toContain('>Allow<')
-  expect(html).toContain('>Deny<')
+  expect(html).toContain(ALLOW_ROW)
+  expect(html).toContain(REFUSE_ROW)
 })
 
 test('an unreadable AskUserQuestion card cannot be allowed by mouse either', () => {
   // The keyboard path already refuses these (`selectVisiblePermission` excludes
   // AskUserQuestion), but the card's own Allow button used to send
   // `{behavior:'allow', updatedInput:{}}`, running the tool with NO answers.
-  // Mouse and keyboard must agree.
+  // Mouse and keyboard must agree, and they now read the same option list.
   const html = renderToStaticMarkup(
     <PermissionQueue
       items={[queueItem(MALFORMED_ASK)]}
@@ -64,8 +67,8 @@ test('an unreadable AskUserQuestion card cannot be allowed by mouse either', () 
       onRestore={() => {}}
     />,
   )
-  expect(html).not.toContain('>Allow<')
-  expect(html).toContain('>Deny<')
+  expect(html).not.toContain(ALLOW_ROW)
+  expect(html).toContain(REFUSE_ROW)
   expect(html).toContain('it can only be denied')
 })
 
@@ -78,7 +81,85 @@ test('a mixed queue restricts only the AskUserQuestion card', () => {
       onRestore={() => {}}
     />,
   )
-  // Exactly one Allow (the Bash card) and two Deny buttons.
-  expect(html.split('>Allow<').length - 1).toBe(1)
-  expect(html.split('>Deny<').length - 1).toBe(2)
+  // Exactly one allow row (the Bash card) and two refusals.
+  expect(html.split(ALLOW_ROW).length - 1).toBe(1)
+  expect(html.split(REFUSE_ROW).length - 1).toBe(2)
+})
+
+test('only the keyboard card gets the cursor, and only the head card counts', () => {
+  const html = renderToStaticMarkup(
+    <PermissionQueue
+      items={[queueItem(BASH), queueItem(MALFORMED_ASK)]}
+      keyboardTargetRequestId={BASH.requestId}
+      onAllow={() => {}}
+      onDeny={() => {}}
+      onRestore={() => {}}
+    />,
+  )
+  // The ↵ chip rides the cursor, and only one card has one.
+  expect(html.split('>↵<').length - 1).toBe(1)
+  // The count is the prototype's per-card header element (`Permissions.jsx:452-456`),
+  // not a line above the stack — but it belongs to the ONE head card. Printing
+  // "2 pending" beside each of two visible cards is an artefact of stacking.
+  expect(html.split('pending').length - 1).toBe(1)
+  expect(html).not.toContain('permission requests pending')
+})
+
+test('the header count excludes requests that are already answered', () => {
+  // `items` carries submitted requests until `permission.resolved` lands, so
+  // counting the raw list said "2 pending" with one of them already decided.
+  const html = renderToStaticMarkup(
+    <PermissionQueue
+      items={[
+        queueItem(BASH),
+        { ...queueItem(MALFORMED_ASK), submitted: true },
+      ]}
+      onAllow={() => {}}
+      onDeny={() => {}}
+      onRestore={() => {}}
+    />,
+  )
+  // One request still needs an answer, and the count hides itself at 1.
+  expect(html).not.toContain('pending')
+})
+
+test('the head-card count includes snoozed requests, which are still live', () => {
+  // A snoozed request is hidden from the stack but NOT answered: it sits in the
+  // lane below and is still pending engine-side, so the header counts it.
+  const html = renderToStaticMarkup(
+    <PermissionQueue
+      items={[
+        queueItem(BASH),
+        { ...queueItem(MALFORMED_ASK), dismissed: true },
+      ]}
+      onAllow={() => {}}
+      onDeny={() => {}}
+      onRestore={() => {}}
+    />,
+  )
+  expect(html).toContain('2</b> pending')
+  expect(html).toContain('Snoozed:')
+})
+
+test('the Keep pending lane appears only when the queue offers it', () => {
+  const withLane = renderToStaticMarkup(
+    <PermissionQueue
+      items={[queueItem(BASH)]}
+      onAllow={() => {}}
+      onDeny={() => {}}
+      onRestore={() => {}}
+      onSnooze={() => {}}
+    />,
+  )
+  expect(withLane).toContain('Keep pending')
+
+  const withoutLane = renderToStaticMarkup(
+    <PermissionQueue
+      items={[queueItem(BASH)]}
+      onAllow={() => {}}
+      onDeny={() => {}}
+      onRestore={() => {}}
+    />,
+  )
+  expect(withoutLane).not.toContain('Keep pending')
 })

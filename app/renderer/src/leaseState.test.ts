@@ -1,20 +1,33 @@
 import { expect, test } from 'bun:test'
 import type {
+  AgentModeWorkerItem,
   LeaseOwnerRow,
   LeaseSnapshot,
   LeaseSnapshotFrame,
   LifecycleFrame,
 } from '../../shared/protocol.js'
 import {
-  LEASE_STATE_META,
   createLeaseState,
   leaseAccountLabel,
   leaseHeldLabel,
   reduceLeaseState,
-  selectActiveLeaseCount,
+  selectLeaseAgentCount,
+  selectLeaseConcentrationNote,
   selectLeaseForOwner,
+  selectLeaseGroups,
   selectLeaseSnapshot,
 } from './leaseState.js'
+
+function workerFixture(over: Partial<AgentModeWorkerItem> = {}): AgentModeWorkerItem {
+  return {
+    agentId: 'agent_a',
+    handle: 'Hopper',
+    role: 'general-purpose',
+    status: 'running',
+    description: 'audit the auth path',
+    ...over,
+  }
+}
 
 function owner(over: Partial<LeaseOwnerRow> = {}): LeaseOwnerRow {
   return {
@@ -29,6 +42,7 @@ function owner(over: Partial<LeaseOwnerRow> = {}): LeaseOwnerRow {
     createdAt: 1_000,
     updatedAt: 1_000,
     failoverCount: 0,
+    selectionKind: 'initial',
     selectionReason: 'spread selected least crowded healthy account',
     ...over,
   }
@@ -88,16 +102,260 @@ test('selectLeaseForOwner joins by the roster agentId, null-safe', () => {
   expect(selectLeaseForOwner(null, 'agent_b')).toBeNull()
 })
 
-test('the tab count counts ACTIVE leases only', () => {
+test('the tab count equals the number of rows the panel prints', () => {
+  const snap = snapshot({
+    owners: [
+      owner({ ownerId: 'a', state: 'active' }),
+      owner({ ownerId: 'c', state: 'failed' }),
+    ],
+    // The engine rollup omits a synthesised main lease, so it is NOT the source:
+    // when it was, the tab, the rollup and the list printed three different counts.
+    accounts: [
+      { accountId: 'acct-1111', accountAlias: 'work', leaseCount: 1, holders: ['a'] },
+    ],
+  })
+  const total = selectLeaseGroups(snap, [], 0).reduce(
+    (sum, group) => sum + group.agents.length,
+    0,
+  )
+  expect(selectLeaseAgentCount(snap)).toBe(2)
+  expect(selectLeaseAgentCount(snap)).toBe(total)
+  expect(selectLeaseAgentCount(null)).toBe(0)
+})
+
+test('agents group under the account they hold, main thread first', () => {
+  const snap = snapshot({
+    owners: [
+      owner({
+        ownerId: 'main-thread',
+        ownerType: 'main',
+        ownerLabel: 'Main thread',
+        accountId: 'acct-1111',
+        accountAlias: 'bluesky',
+      }),
+      owner({ ownerId: 'agent_a', accountId: 'acct-2222', accountAlias: 'aurora' }),
+      owner({ ownerId: 'agent_b', accountId: 'acct-1111', accountAlias: 'bluesky' }),
+    ],
+  })
+  const groups = selectLeaseGroups(snap, [], 0)
+  expect(groups.map(group => group.label)).toEqual(['bluesky', 'aurora'])
+  expect(groups[0]?.agents).toHaveLength(2)
+  expect(groups[0]?.agents[0]?.isMain).toBe(true)
+})
+
+test('a failed lease is stranded at the top, not filed under the account it could not use', () => {
+  const snap = snapshot({
+    owners: [
+      owner({ ownerId: 'agent_a', accountId: 'acct-1111', accountAlias: 'bluesky' }),
+      // `failoverCodexLease` keeps the old accountId on the failed lease
+      // (`codexAccountLeaseManager.ts:356-362`).
+      owner({
+        ownerId: 'agent_b',
+        state: 'failed',
+        accountId: 'acct-1111',
+        accountAlias: 'bluesky',
+        failoverCount: 2,
+        lastFailureReason: 'account is capped',
+      }),
+    ],
+  })
+  const groups = selectLeaseGroups(snap, [], 0)
+  expect(groups[0]?.isStranded).toBe(true)
+  expect(groups[0]?.label).toBe('No account')
+  expect(groups[0]?.agents[0]?.note?.tone).toBe('stranded')
+  // The healthy group keeps only the agent that really is on that account.
+  expect(groups[1]?.label).toBe('bluesky')
+  expect(groups[1]?.agents).toHaveLength(1)
+  // A stranded agent holds nothing, so it shows no held duration.
+  expect(groups[0]?.agents[0]?.held).toBeNull()
+})
+
+test('a row leads with the worker handle and falls back to its task text', () => {
+  const snap = snapshot({
+    owners: [
+      owner({ ownerId: 'agent_a' }),
+      owner({ ownerId: 'agent_b', ownerLabel: 'trace the resume path' }),
+    ],
+  })
+  const [group] = selectLeaseGroups(snap, [workerFixture({ agentId: 'agent_a' })], 0)
+  expect(group?.agents[0]?.name).toBe('Hopper')
+  expect(group?.agents[0]?.task).toBe('audit the auth path')
+  // No handle minted yet: the row leads with the task rather than an empty slot.
+  expect(group?.agents[1]?.name).toBeNull()
+  expect(group?.agents[1]?.task).toBe('trace the resume path')
+})
+
+test('no account id ever reaches display text', () => {
+  const rawId = 'ca889574-256c-4f04-8d5f-f80004f1a8e1'
+  const snap = snapshot({
+    owners: [
+      owner({
+        ownerId: 'agent_a',
+        // `claude.ts:1177` labels this lease with the raw agent id.
+        ownerLabel: `Subagent ${rawId}`,
+        failoverCount: 1,
+        selectionKind: 'failover',
+        selectionReason: `failover from ${rawId}: Codex account ${rawId} is capped`,
+        lastFailureReason: `Codex account ${rawId} is capped`,
+      }),
+    ],
+  })
+  const [group] = selectLeaseGroups(snap, [], 0)
+  const agent = group?.agents[0]
+  // `detail` is included: CLAUDE.md §7 counts a `title` as a text surface too.
+  const visible = [
+    group?.label,
+    agent?.name,
+    agent?.task,
+    agent?.note?.text,
+    agent?.note?.detail,
+  ]
+  for (const text of visible) {
+    expect(text ?? '').not.toContain(rawId)
+  }
+  expect(agent?.name).toBe('Unnamed worker')
+  // The reason itself survives redaction, which is the point of keeping it.
+  expect(agent?.note?.detail).toBe('Codex account is capped')
+})
+
+test('an account with no alias heads its group with a short id, not a 36-char one', () => {
+  // The pool's alias is optional, set only by an explicit rename, so this is the
+  // ORDINARY case and it is the panel's most prominent text.
+  const rawId = 'ca889574-256c-4f04-8d5f-f80004f1a8e1'
+  const snap = snapshot({
+    owners: [owner({ accountId: rawId, accountAlias: null })],
+  })
+  const [group] = selectLeaseGroups(snap, [], 0)
+  expect(group?.label).toBe('ca889574')
+  expect(group?.label).not.toBe(rawId)
+
+  // Two un-aliased accounts must still read as two different groups.
+  const second = 'f0e1d2c3-1111-2222-3333-444455556666'
+  const both = selectLeaseGroups(
+    snapshot({
+      owners: [
+        owner({ ownerId: 'a', accountId: rawId, accountAlias: null }),
+        owner({ ownerId: 'b', accountId: second, accountAlias: null }),
+      ],
+    }),
+    [],
+    0,
+  )
+  expect(both).toHaveLength(2)
+  expect(both[0]?.label).not.toBe(both[1]?.label)
+})
+
+test('the main thread is named by the renderer, not by whichever engine path minted it', () => {
+  // The synthesised lease says 'main thread' and the registered one 'Main thread'
+  // (`codexAccountLeaseManager.ts:432` vs `src/query.ts:328`).
+  for (const engineLabel of ['main thread', 'Main thread', '']) {
+    const snap = snapshot({
+      owners: [
+        owner({ ownerId: 'main-thread', ownerType: 'main', ownerLabel: engineLabel }),
+      ],
+    })
+    const [group] = selectLeaseGroups(snap, [], 0)
+    expect(group?.agents[0]?.name).toBe('Main thread')
+    // The main thread has no delegated task, so nothing trails the name.
+    expect(group?.agents[0]?.task).toBeNull()
+  }
+})
+
+test('an empty engine label never yields a row with no identity at all', () => {
+  const snap = snapshot({
+    owners: [owner({ ownerId: 'agent_a', ownerLabel: '' })],
+  })
+  const [group] = selectLeaseGroups(snap, [], 0)
+  const agent = group?.agents[0]
+  expect(agent?.task).toBeNull()
+  expect(agent?.name).toBe('Unnamed worker')
+})
+
+test('a released lease renders no row and is not counted', () => {
+  // Unreachable today (`releaseCodexLease` deletes the entry), but the union still
+  // carries the state, so the panel has to say what it means rather than assume.
   const snap = snapshot({
     owners: [
       owner({ ownerId: 'a', state: 'active' }),
       owner({ ownerId: 'b', state: 'released' }),
+    ],
+  })
+  const groups = selectLeaseGroups(snap, [], 0)
+  expect(groups.flatMap(group => group.agents)).toHaveLength(1)
+  expect(selectLeaseAgentCount(snap)).toBe(1)
+})
+
+test('engine selection prose never renders as body text', () => {
+  const snap = snapshot({
+    owners: [
+      owner({ ownerId: 'a', selectionReason: 'spread selected least crowded healthy account' }),
+      owner({ ownerId: 'b', selectionReason: 'synthetic main lease from active pool account' }),
+      owner({
+        ownerId: 'c',
+        selectionKind: 'repaired',
+        selectionReason: 'repaired from non-selectable account acct-9: spread selected least crowded healthy account',
+      }),
+    ],
+  })
+  const agents = selectLeaseGroups(snap, [], 0).flatMap(group => group.agents)
+  // An ordinary selection is not news, so it prints nothing at all.
+  expect(agents[0]?.note).toBeNull()
+  expect(agents[1]?.note).toBeNull()
+  expect(agents[2]?.note?.text).toBe('moved here, its account could not be used')
+  for (const agent of agents) {
+    expect(agent.note?.text ?? '').not.toContain('spread selected')
+  }
+})
+
+test('the concentration note fires only when a spread session did not spread', () => {
+  const oneAccount = (count: number) =>
+    snapshot({
+      owners: Array.from({ length: count }, (_, index) =>
+        owner({ ownerId: `agent_${index}` }),
+      ),
+    })
+
+  const four = oneAccount(4)
+  expect(selectLeaseConcentrationNote(four.strategy, selectLeaseGroups(four, [], 0))).toBe(
+    'All 4 agents landed on one account.',
+  )
+
+  // One agent on one account is not a failure to spread.
+  const one = oneAccount(1)
+  expect(selectLeaseConcentrationNote(one.strategy, selectLeaseGroups(one, [], 0))).toBeNull()
+
+  // follow-main is SUPPOSED to pile up, so saying so would be noise.
+  const followMain = snapshot({
+    strategy: 'follow-main',
+    owners: [owner({ ownerId: 'a' }), owner({ ownerId: 'b' })],
+  })
+  expect(
+    selectLeaseConcentrationNote(followMain.strategy, selectLeaseGroups(followMain, [], 0)),
+  ).toBeNull()
+
+  // Genuinely spread across two accounts: nothing surprising to report.
+  const spread = snapshot({
+    owners: [
+      owner({ ownerId: 'a', accountId: 'acct-1' }),
+      owner({ ownerId: 'b', accountId: 'acct-2' }),
+    ],
+  })
+  expect(selectLeaseConcentrationNote(spread.strategy, selectLeaseGroups(spread, [], 0))).toBeNull()
+
+  // With an agent stranded alongside, "All N agents" would contradict the tab
+  // count on the same screen, so it stays silent rather than print a false total.
+  const withStranded = snapshot({
+    owners: [
+      owner({ ownerId: 'a' }),
+      owner({ ownerId: 'b' }),
       owner({ ownerId: 'c', state: 'failed' }),
     ],
   })
-  expect(selectActiveLeaseCount(snap)).toBe(1)
-  expect(selectActiveLeaseCount(null)).toBe(0)
+  const strandedGroups = selectLeaseGroups(withStranded, [], 0)
+  expect(selectLeaseAgentCount(withStranded)).toBe(3)
+  expect(
+    selectLeaseConcentrationNote(withStranded.strategy, strandedGroups),
+  ).toBeNull()
 })
 
 test('held duration reads as a duration, not a relative time', () => {
@@ -116,20 +374,94 @@ test('the account label prefers the redacted alias and falls back to the identif
   )
 })
 
-test('every lease-state class is a static Tailwind utility', () => {
-  // Tailwind v4 only emits literals it can statically see: an interpolated
-  // arbitrary value renders colourless (the P4-9 bug).
-  for (const meta of Object.values(LEASE_STATE_META)) {
-    for (const token of [meta.dot, meta.text]) {
-      expect(token).not.toContain('${')
-      expect(token).not.toContain('[#')
-    }
+test('no user-visible account string contains an em dash or engine vocabulary', () => {
+  const snap = snapshot({
+    owners: [
+      owner({ ownerId: 'main-thread', ownerType: 'main', ownerLabel: 'Main thread' }),
+      owner({
+        ownerId: 'a',
+        failoverCount: 1,
+        selectionKind: 'failover',
+        selectionReason: 'failover from acct-9: capped',
+      }),
+      owner({ ownerId: 'b', state: 'failed' }),
+    ],
+  })
+  const groups = selectLeaseGroups(snap, [], 0)
+  const strings = groups.flatMap(group => [
+    group.label,
+    ...group.agents.flatMap(agent => [agent.name, agent.task, agent.note?.text]),
+  ])
+  for (const text of strings) {
+    expect(text ?? '').not.toContain('—')
+    // "lease" is the engine's noun for this, and the operator rejected it on screen.
+    expect((text ?? '').toLowerCase()).not.toContain('lease')
   }
+  expect(
+    selectLeaseConcentrationNote(snap.strategy, groups) ?? '',
+  ).not.toContain('—')
+  expect(leaseHeldLabel(0, 0)).not.toContain('—')
 })
 
-test('no user-visible lease string contains an em dash (operator rule)', () => {
-  for (const meta of Object.values(LEASE_STATE_META)) {
-    expect(meta.label).not.toContain('—')
-  }
-  expect(leaseHeldLabel(0, 0)).not.toContain('—')
+test('a moved agent names the account it came from, when the sidecar could resolve one', () => {
+  const moved = (over: Partial<LeaseOwnerRow>) =>
+    selectLeaseGroups(snapshot({ owners: [owner(over)] }), [], 0)[0]?.agents[0]?.note?.text
+
+  // Resolved alias: the whole point of carrying `movedFrom` across the seam.
+  expect(
+    moved({
+      selectionKind: 'failover',
+      movedFrom: { accountId: 'acct-9', accountAlias: 'aurora' },
+    }),
+  ).toBe('moved here from aurora')
+  expect(
+    moved({
+      selectionKind: 'repaired',
+      movedFrom: { accountId: 'acct-9', accountAlias: 'aurora' },
+    }),
+  ).toBe('moved here, aurora could not be used')
+
+  // The sidecar omits `movedFrom` when the pool no longer knows that account (it
+  // was deleted). The wording goes anonymous rather than inventing a name.
+  expect(moved({ selectionKind: 'failover' })).toBe('moved here from another account')
+  expect(moved({ selectionKind: 'repaired' })).toBe(
+    'moved here, its account could not be used',
+  )
+
+  // An un-aliased source account is an id we must not print, so it reads anonymous.
+  expect(
+    moved({
+      selectionKind: 'failover',
+      movedFrom: { accountId: 'ca889574-256c-4f04-8d5f-f80004f1a8e1', accountAlias: null },
+    }),
+  ).toBe('moved here from another account')
+})
+
+test('the note branches on selectionKind, never on the reason prose', () => {
+  // The engine is free to reword `selectionReason`; a renderer that parsed it
+  // would silently stop noticing. Same prose, opposite outcomes.
+  const prose = 'failover from acct-9: Codex account acct-9 is capped'
+  const withKind = selectLeaseGroups(
+    snapshot({ owners: [owner({ selectionKind: 'failover', selectionReason: prose })] }),
+    [],
+    0,
+  )
+  expect(withKind[0]?.agents[0]?.note?.text).toBe('moved here from another account')
+
+  const withoutKind = selectLeaseGroups(
+    snapshot({ owners: [owner({ selectionKind: 'initial', selectionReason: prose })] }),
+    [],
+    0,
+  )
+  expect(withoutKind[0]?.agents[0]?.note).toBeNull()
+
+  // `/switch-account` is the user's own doing, so saying it back is noise.
+  const manual = selectLeaseGroups(
+    snapshot({
+      owners: [owner({ selectionKind: 'manual', movedFrom: { accountId: 'acct-9', accountAlias: 'aurora' } })],
+    }),
+    [],
+    0,
+  )
+  expect(manual[0]?.agents[0]?.note).toBeNull()
 })

@@ -1,0 +1,503 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Grouped by account — visual options</title>
+<style>
+/* ── real app faces, loaded from the renderer's own files ─────────────────── */
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;font-display:swap;
+  src:url('../../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:swap;
+  src:url('../../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:500;font-display:swap;
+  src:url('../../../app/renderer/src/assets/fonts/DMMono-Medium.woff2') format('woff2')}
+
+/* ── app tokens, copied from app/renderer/src/theme.css ───────────────────── */
+:root{
+  --font-sans:"DM Sans",-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+  --font-mono:"DM Mono",ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
+  --shell-seam:rgba(255,255,255,0.06);
+  --shell-hover:rgba(255,255,255,0.045);
+  --surface-panel:#0a0a0c;
+  --text-primary:#f4f4f5;
+  --text-muted:#a1a1aa;
+  --text-subtle:#98989f;
+  --tone-warn:#fbbf24;
+  --tone-danger:#f87171;
+  --teal-300:#5eead4;
+  --zinc-600:#52525b;
+
+  /* the swappable colour layer — every scheme below sets exactly these */
+  --acct-c:#5eead4;   /* account name */
+  --acct-w:500;       /* account name weight */
+  --dot-d:none;       /* account dot: none | inline-block */
+  --dot-c:#5eead4;
+  --mark-c:#fbbf24;   /* the "moved here" marker */
+  --bad-c:#f87171;    /* stranded agent */
+  --tab-c:#5eead4;    /* active tab accent */
+}
+body.sch-2{--acct-c:#3fa294;--acct-w:500;--dot-d:none;--mark-c:#a37b2c;--bad-c:#c96a6a;--tab-c:#3fa294}
+body.sch-3{--acct-c:#e4e4e7;--acct-w:500;--dot-d:inline-block;--dot-c:#5eead4;--mark-c:#fbbf24;
+  --bad-c:#f87171;--tab-c:#5eead4}
+body.sch-4{--acct-c:#f4f4f5;--acct-w:600;--dot-d:none;--mark-c:#71717a;--bad-c:#f87171;--tab-c:#a1a1aa}
+*{box-sizing:border-box}
+body{margin:0;background:#050506;padding:0 40px 96px}
+
+/* ── page chrome — never inside a specimen ────────────────────────────────── */
+.x-lab{font:500 10px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,sans-serif;
+  letter-spacing:.2em;text-transform:uppercase;color:#5a5a62}
+.x-key{color:#8a8a94}
+.x-band{max-width:1424px;margin:0 auto 14px;padding-bottom:9px;border-bottom:1px solid #17171a}
+.x-bar{position:sticky;top:0;z-index:5;margin:0 -40px 40px;display:flex;gap:22px;
+  background:#050506;border-bottom:1px solid #17171a;padding:16px 40px}
+.x-bar label{display:inline-flex;align-items:center;gap:7px;cursor:pointer}
+.x-bar input{accent-color:#6b6b72;margin:0}
+.x-grid{max-width:1424px;margin:0 auto 64px;display:grid;grid-template-columns:repeat(2,640px);
+  gap:64px;justify-content:center}
+@media (max-width:1420px){.x-grid{grid-template-columns:640px}}
+.x-col-head{margin-bottom:11px}
+
+/* ── SPECIMEN — identical in every option ─────────────────────────────────── */
+.cell{width:640px}
+.dlg{display:flex;flex-direction:column;overflow:hidden;border-radius:14px;
+  border:1px solid var(--shell-seam);background:var(--surface-panel);
+  box-shadow:0 30px 80px rgba(0,0,0,.6);font-family:var(--font-sans);
+  -webkit-font-smoothing:antialiased}
+.dhead{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  border-bottom:1px solid var(--shell-seam);padding:14px 18px}
+.dtitle{font-size:14px;font-weight:600;color:var(--text-primary)}
+.dsub{margin-top:2px;font-size:12px;color:var(--text-subtle)}
+.dx{display:flex;height:28px;width:28px;align-items:center;justify-content:center;
+  border:0;background:none;border-radius:6px;font-size:18px;color:var(--text-subtle);
+  cursor:pointer;font-family:inherit}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--shell-seam);padding:8px 14px 0}
+.tab{display:inline-flex;align-items:center;gap:6px;border:0;border-bottom:1.5px solid transparent;
+  background:none;padding:6px 10px;font-family:inherit;font-size:12px;font-weight:500;
+  color:var(--text-subtle);cursor:pointer}
+.tab .n{font-family:var(--font-mono);font-size:10px;color:rgba(152,152,159,.7)}
+.tab.on{font-weight:600;color:var(--text-primary);border-bottom-color:var(--tab-c)}
+.tab.on .n{color:var(--tab-c)}
+.body{flex:1;min-height:0;overflow-y:auto}
+.foot{display:flex;gap:14px;border-top:1px solid var(--shell-seam);padding:8px 16px;
+  font-family:var(--font-mono);font-size:10.5px;color:var(--text-subtle)}
+.foot .k{color:var(--text-muted)}
+.foot .r{margin-left:auto}
+.intro{display:flex;align-items:baseline;gap:8px;border-bottom:1px solid var(--shell-seam);
+  padding:11px 14px}
+.intro-k{font-size:11.5px;color:var(--text-subtle)}
+.intro-v{font-family:var(--font-mono);font-size:11.5px;font-weight:500;color:var(--acct-c)}
+.intro-note{margin-left:auto;font-size:11.5px;color:var(--text-muted)}
+
+/* row vocabulary — byte-identical across the four options */
+.acct{font-family:var(--font-mono);font-size:12.5px;font-weight:var(--acct-w);color:var(--acct-c)}
+.acct::before{content:'';display:var(--dot-d);height:6px;width:6px;border-radius:9999px;
+  background:var(--dot-c);margin-right:7px;vertical-align:middle}
+.acct.none{color:var(--text-muted)}
+.acct.none::before{display:none}
+.gdot{align-self:center;display:inline-block;height:6px;width:6px;flex-shrink:0;
+  border-radius:9999px;background:var(--bad-c)}
+.gcount{font-size:11px;color:var(--text-subtle)}
+.row{display:flex;align-items:baseline;gap:10px;padding:6px 0}
+.rowmain{min-width:0;flex:1;display:flex;align-items:baseline;gap:8px}
+.name{flex-shrink:0;font-size:12.5px;font-weight:500;color:var(--text-primary)}
+.task{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:11.5px;color:var(--text-subtle)}
+.tag{flex-shrink:0;font-size:11px;color:var(--text-subtle)}
+.held{flex-shrink:0;font-family:var(--font-mono);font-size:11px;color:var(--text-subtle)}
+.sub{margin:3px 0 1px;display:flex;align-items:center;gap:6px;font-size:11px;
+  color:var(--text-subtle)}
+.sub.bad{color:var(--bad-c)}
+.mark{display:inline-block;height:5px;width:5px;flex-shrink:0;border-radius:9999px;
+  background:var(--mark-c)}
+
+/* ── the one axis: how a group is delimited ───────────────────────────────── */
+
+/* 1 — hairline rail */
+.v1 .grp{padding:14px 14px 2px}
+.v1 .ghead{display:flex;align-items:baseline;gap:8px;padding-bottom:2px}
+.v1 .gcount{margin-left:auto}
+.v1 .glist{margin-top:6px;border-left:1px solid var(--shell-seam);padding-left:13px}
+
+/* 2 — header band */
+.v2 .grp{padding-bottom:6px}
+.v2 .ghead{display:flex;align-items:baseline;gap:8px;background:rgba(255,255,255,.022);
+  border-bottom:1px solid var(--shell-seam);padding:7px 14px}
+.v2 .gcount{margin-left:auto}
+.v2 .glist{padding:4px 14px 0}
+
+/* 3 — left gutter */
+.v3 .grp{display:flex;gap:14px;border-bottom:1px solid var(--shell-seam);padding:12px 14px}
+.v3 .grp:last-child{border-bottom:0}
+.v3 .ghead{display:flex;width:104px;flex-shrink:0;flex-wrap:wrap;align-items:baseline;
+  gap:6px;padding-top:5px}
+.v3 .gcount{width:100%}
+.v3 .glist{min-width:0;flex:1}
+
+/* 4 — boxed group */
+.v4 .grp{padding:0 12px 8px}
+.v4 .gbox{border-radius:10px;border:1px solid var(--shell-seam);background:rgba(255,255,255,.02);
+  padding:9px 12px 10px}
+.v4 .ghead{display:flex;align-items:baseline;gap:8px;padding-bottom:4px}
+.v4 .gcount{margin-left:auto}
+.v4 .gtop{padding-top:12px}
+</style>
+</head>
+<body class="sch-1">
+
+<div class="x-bar">
+  <label><input checked name="sch" type="radio" value="1"><span class="x-lab">Teal accent</span></label>
+  <label><input name="sch" type="radio" value="2"><span class="x-lab">Dimmed teal</span></label>
+  <label><input name="sch" type="radio" value="3"><span class="x-lab">Dots only</span></label>
+  <label><input name="sch" type="radio" value="4"><span class="x-lab">Mono</span></label>
+</div>
+
+<!-- ══ 1 ══════════════════════════════════════════════════════════════════ -->
+<div class="x-band"><span class="x-lab"><span class="x-key">1</span> &nbsp; Hairline rail</span></div>
+<div class="x-grid">
+
+  <div>
+    <div class="x-col-head"><span class="x-lab">One account</span></div>
+    <div class="cell"><div class="dlg v1">
+      <div class="dhead">
+        <div><div class="dtitle">Tasks</div><div class="dsub">3 active · 0 completed</div></div>
+        <button class="dx" type="button">×</button>
+      </div>
+      <div class="tabs">
+        <button class="tab" type="button">Tasks <span class="n">3</span></button>
+        <button class="tab" type="button">Workers <span class="n">3</span></button>
+        <button class="tab on" type="button">Accounts <span class="n">4</span></button>
+      </div>
+      <div class="body">
+        <div class="intro">
+          <span class="intro-k">Strategy</span><span class="intro-v">spread</span>
+          <span class="intro-note">All 4 agents landed on one account.</span>
+        </div>
+        <div class="grp">
+          <div class="ghead"><span class="acct">bluesky</span><span class="gcount">4 agents</span></div>
+          <div class="glist">
+            <div class="row"><div class="rowmain"><span class="name">Main thread</span><span class="tag">main</span></div><span class="held">0s</span></div>
+            <div class="row"><div class="rowmain"><span class="name">Hopper</span><span class="task">Inventory small engine fixes</span></div><span class="held">2m</span></div>
+            <div class="sub"><span class="mark"></span>moved here after another account hit its cap</div>
+            <div class="row"><div class="rowmain"><span class="name">Curie</span><span class="task">Inventory small app fixes</span></div><span class="held">2m</span></div>
+            <div class="sub"><span class="mark"></span>moved here after another account hit its cap</div>
+            <div class="row"><div class="rowmain"><span class="name">Noether</span><span class="task">Audit small-fix shortlist</span></div><span class="held">2m</span></div>
+            <div class="sub"><span class="mark"></span>moved here, its account could not be used</div>
+          </div>
+        </div>
+      </div>
+      <div class="foot"><span class="r"><span class="k">esc</span> close</span></div>
+    </div></div>
+  </div>
+
+  <div>
+    <div class="x-col-head"><span class="x-lab">Three accounts</span></div>
+    <div class="cell"><div class="dlg v1">
+      <div class="dhead">
+        <div><div class="dtitle">Tasks</div><div class="dsub">4 active · 2 completed</div></div>
+        <button class="dx" type="button">×</button>
+      </div>
+      <div class="tabs">
+        <button class="tab" type="button">Tasks <span class="n">6</span></button>
+        <button class="tab" type="button">Workers <span class="n">5</span></button>
+        <button class="tab on" type="button">Accounts <span class="n">4</span></button>
+      </div>
+      <div class="body">
+        <div class="intro"><span class="intro-k">Strategy</span><span class="intro-v">spread</span></div>
+        <div class="grp">
+          <div class="ghead"><span class="gdot"></span><span class="acct none">No account</span><span class="gcount">1 agent</span></div>
+          <div class="glist">
+            <div class="row"><div class="rowmain"><span class="name">Shannon</span><span class="task">Summarize the changed files</span></div><span class="held">4m</span></div>
+            <div class="sub bad">every account was capped or unavailable</div>
+          </div>
+        </div>
+        <div class="grp">
+          <div class="ghead"><span class="acct">bluesky</span><span class="gcount">2 agents</span></div>
+          <div class="glist">
+            <div class="row"><div class="rowmain"><span class="name">Main thread</span><span class="tag">main</span></div><span class="held">12m</span></div>
+            <div class="row"><div class="rowmain"><span class="name">Ada</span><span class="task">Trace the resume path</span></div><span class="held">1m</span></div>
+          </div>
+        </div>
+        <div class="grp">
+          <div class="ghead"><span class="acct">aurora</span><span class="gcount">1 agent</span></div>
+          <div class="glist">
+            <div class="row"><div class="rowmain"><span class="name">Hopper</span><span class="task">Inventory small engine fixes</span></div><span class="held">4m</span></div>
+          </div>
+        </div>
+        <div class="grp">
+          <div class="ghead"><span class="acct">harbor</span><span class="gcount">1 agent</span></div>
+          <div class="glist">
+            <div class="row"><div class="rowmain"><span class="task">Audit small-fix shortlist</span></div><span class="held">4m</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="foot"><span class="r"><span class="k">esc</span> close</span></div>
+    </div></div>
+  </div>
+
+</div>
+
+<!-- ══ 2 ══════════════════════════════════════════════════════════════════ -->
+<div class="x-band"><span class="x-lab"><span class="x-key">2</span> &nbsp; Header band</span></div>
+<div class="x-grid">
+
+  <div>
+    <div class="x-col-head"><span class="x-lab">One account</span></div>
+    <div class="cell"><div class="dlg v2">
+      <div class="dhead">
+        <div><div class="dtitle">Tasks</div><div class="dsub">3 active · 0 completed</div></div>
+        <button class="dx" type="button">×</button>
+      </div>
+      <div class="tabs">
+        <button class="tab" type="button">Tasks <span class="n">3</span></button>
+        <button class="tab" type="button">Workers <span class="n">3</span></button>
+        <button class="tab on" type="button">Accounts <span class="n">4</span></button>
+      </div>
+      <div class="body">
+        <div class="intro">
+          <span class="intro-k">Strategy</span><span class="intro-v">spread</span>
+          <span class="intro-note">All 4 agents landed on one account.</span>
+        </div>
+        <div class="grp">
+          <div class="ghead"><span class="acct">bluesky</span><span class="gcount">4 agents</span></div>
+          <div class="glist">
+            <div class="row"><div class="rowmain"><span class="name">Main thread</span><span class="tag">main</span></div><span class="held">0s</span></div>
+            <div class="row"><div class="rowmain"><span class="name">Hopper</span><span class="task">Inventory small engine fixes</span></div><span class="held">2m</span></div>
+            <div class="sub"><span class="mark"></span>moved here after another account hit its cap</div>
+            <div class="row"><div class="rowmain"><span class="name">Curie</span><span class="task">Inventory small app fixes</span></div><span class="held">2m</span></div>
+            <div class="sub"><span class="mark"></span>moved here after another account hit its cap</div>
+            <div class="row"><div class="rowmain"><span class="name">Noether</span><span class="task">Audit small-fix shortlist</span></div><span class="held">2m</span></div>
+            <div class="sub"><span class="mark"></span>moved here, its account could not be used</div>
+          </div>
+        </div>
+      </div>
+      <div class="foot"><span class="r"><span class="k">esc</span> close</span></div>
+    </div></div>
+  </div>
+
+  <div>
+    <div class="x-col-head"><span class="x-lab">Three accounts</span></div>
+    <div class="cell"><div class="dlg v2">
+      <div class="dhead">
+        <div><div class="dtitle">Tasks</div><div class="dsub">4 active · 2 completed</div></div>
+        <button class="dx" type="button">×</button>
+      </div>
+      <div class="tabs">
+        <button class="tab" type="button">Tasks <span class="n">6</span></button>
+        <button class="tab" type="button">Workers <span class="n">5</span></button>
+        <button class="tab on" type="button">Accounts <span class="n">4</span></button>
+      </div>
+      <div class="body">
+        <div class="intro"><span class="intro-k">Strategy</span><span class="intro-v">spread</span></div>
+        <div class="grp">
+          <div class="ghead"><span class="gdot"></span><span class="acct none">No account</span><span class="gcount">1 agent</span></div>
+          <div class="glist">
+            <div class="row"><div class="rowmain"><span class="name">Shannon</span><span class="task">Summarize the changed files</span></div><span class="held">4m</span></div>
+            <div class="sub bad">every account was capped or unavailable</div>
+          </div>
+        </div>
+        <div class="grp">
+          <div class="ghead"><span class="acct">bluesky</span><span class="gcount">2 agents</span></div>
+          <div class="glist">
+            <div class="row"><div class="rowmain"><span class="name">Main thread</span><span class="tag">main</span></div><span class="held">12m</span></div>
+            <div class="row"><div class="rowmain"><span class="name">Ada</span><span class="task">Trace the resume path</span></div><span class="held">1m</span></div>
+          </div>
+        </div>
+        <div class="grp">
+          <div class="ghead"><span class="acct">aurora</span><span class="gcount">1 agent</span></div>
+          <div class="glist">
+            <div class="row"><div class="rowmain"><span class="name">Hopper</span><span class="task">Inventory small engine fixes</span></div><span class="held">4m</span></div>
+          </div>
+        </div>
+        <div class="grp">
+          <div class="ghead"><span class="acct">harbor</span><span class="gcount">1 agent</span></div>
+          <div class="glist">
+            <div class="row"><div class="rowmain"><span class="task">Audit small-fix shortlist</span></div><span class="held">4m</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="foot"><span class="r"><span class="k">esc</span> close</span></div>
+    </div></div>
+  </div>
+
+</div>
+
+<!-- ══ 3 ══════════════════════════════════════════════════════════════════ -->
+<div class="x-band"><span class="x-lab"><span class="x-key">3</span> &nbsp; Left gutter</span></div>
+<div class="x-grid">
+
+  <div>
+    <div class="x-col-head"><span class="x-lab">One account</span></div>
+    <div class="cell"><div class="dlg v3">
+      <div class="dhead">
+        <div><div class="dtitle">Tasks</div><div class="dsub">3 active · 0 completed</div></div>
+        <button class="dx" type="button">×</button>
+      </div>
+      <div class="tabs">
+        <button class="tab" type="button">Tasks <span class="n">3</span></button>
+        <button class="tab" type="button">Workers <span class="n">3</span></button>
+        <button class="tab on" type="button">Accounts <span class="n">4</span></button>
+      </div>
+      <div class="body">
+        <div class="intro">
+          <span class="intro-k">Strategy</span><span class="intro-v">spread</span>
+          <span class="intro-note">All 4 agents landed on one account.</span>
+        </div>
+        <div class="grp">
+          <div class="ghead"><span class="acct">bluesky</span><span class="gcount">4 agents</span></div>
+          <div class="glist">
+            <div class="row"><div class="rowmain"><span class="name">Main thread</span><span class="tag">main</span></div><span class="held">0s</span></div>
+            <div class="row"><div class="rowmain"><span class="name">Hopper</span><span class="task">Inventory small engine fixes</span></div><span class="held">2m</span></div>
+            <div class="sub"><span class="mark"></span>moved here after another account hit its cap</div>
+            <div class="row"><div class="rowmain"><span class="name">Curie</span><span class="task">Inventory small app fixes</span></div><span class="held">2m</span></div>
+            <div class="sub"><span class="mark"></span>moved here after another account hit its cap</div>
+            <div class="row"><div class="rowmain"><span class="name">Noether</span><span class="task">Audit small-fix shortlist</span></div><span class="held">2m</span></div>
+            <div class="sub"><span class="mark"></span>moved here, its account could not be used</div>
+          </div>
+        </div>
+      </div>
+      <div class="foot"><span class="r"><span class="k">esc</span> close</span></div>
+    </div></div>
+  </div>
+
+  <div>
+    <div class="x-col-head"><span class="x-lab">Three accounts</span></div>
+    <div class="cell"><div class="dlg v3">
+      <div class="dhead">
+        <div><div class="dtitle">Tasks</div><div class="dsub">4 active · 2 completed</div></div>
+        <button class="dx" type="button">×</button>
+      </div>
+      <div class="tabs">
+        <button class="tab" type="button">Tasks <span class="n">6</span></button>
+        <button class="tab" type="button">Workers <span class="n">5</span></button>
+        <button class="tab on" type="button">Accounts <span class="n">4</span></button>
+      </div>
+      <div class="body">
+        <div class="intro"><span class="intro-k">Strategy</span><span class="intro-v">spread</span></div>
+        <div class="grp">
+          <div class="ghead"><span class="gdot"></span><span class="acct none">No account</span><span class="gcount">1 agent</span></div>
+          <div class="glist">
+            <div class="row"><div class="rowmain"><span class="name">Shannon</span><span class="task">Summarize the changed files</span></div><span class="held">4m</span></div>
+            <div class="sub bad">every account was capped or unavailable</div>
+          </div>
+        </div>
+        <div class="grp">
+          <div class="ghead"><span class="acct">bluesky</span><span class="gcount">2 agents</span></div>
+          <div class="glist">
+            <div class="row"><div class="rowmain"><span class="name">Main thread</span><span class="tag">main</span></div><span class="held">12m</span></div>
+            <div class="row"><div class="rowmain"><span class="name">Ada</span><span class="task">Trace the resume path</span></div><span class="held">1m</span></div>
+          </div>
+        </div>
+        <div class="grp">
+          <div class="ghead"><span class="acct">aurora</span><span class="gcount">1 agent</span></div>
+          <div class="glist">
+            <div class="row"><div class="rowmain"><span class="name">Hopper</span><span class="task">Inventory small engine fixes</span></div><span class="held">4m</span></div>
+          </div>
+        </div>
+        <div class="grp">
+          <div class="ghead"><span class="acct">harbor</span><span class="gcount">1 agent</span></div>
+          <div class="glist">
+            <div class="row"><div class="rowmain"><span class="task">Audit small-fix shortlist</span></div><span class="held">4m</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="foot"><span class="r"><span class="k">esc</span> close</span></div>
+    </div></div>
+  </div>
+
+</div>
+
+<!-- ══ 4 ══════════════════════════════════════════════════════════════════ -->
+<div class="x-band"><span class="x-lab"><span class="x-key">4</span> &nbsp; Boxed group</span></div>
+<div class="x-grid">
+
+  <div>
+    <div class="x-col-head"><span class="x-lab">One account</span></div>
+    <div class="cell"><div class="dlg v4">
+      <div class="dhead">
+        <div><div class="dtitle">Tasks</div><div class="dsub">3 active · 0 completed</div></div>
+        <button class="dx" type="button">×</button>
+      </div>
+      <div class="tabs">
+        <button class="tab" type="button">Tasks <span class="n">3</span></button>
+        <button class="tab" type="button">Workers <span class="n">3</span></button>
+        <button class="tab on" type="button">Accounts <span class="n">4</span></button>
+      </div>
+      <div class="body">
+        <div class="intro">
+          <span class="intro-k">Strategy</span><span class="intro-v">spread</span>
+          <span class="intro-note">All 4 agents landed on one account.</span>
+        </div>
+        <div class="grp gtop"><div class="gbox">
+          <div class="ghead"><span class="acct">bluesky</span><span class="gcount">4 agents</span></div>
+          <div class="glist">
+            <div class="row"><div class="rowmain"><span class="name">Main thread</span><span class="tag">main</span></div><span class="held">0s</span></div>
+            <div class="row"><div class="rowmain"><span class="name">Hopper</span><span class="task">Inventory small engine fixes</span></div><span class="held">2m</span></div>
+            <div class="sub"><span class="mark"></span>moved here after another account hit its cap</div>
+            <div class="row"><div class="rowmain"><span class="name">Curie</span><span class="task">Inventory small app fixes</span></div><span class="held">2m</span></div>
+            <div class="sub"><span class="mark"></span>moved here after another account hit its cap</div>
+            <div class="row"><div class="rowmain"><span class="name">Noether</span><span class="task">Audit small-fix shortlist</span></div><span class="held">2m</span></div>
+            <div class="sub"><span class="mark"></span>moved here, its account could not be used</div>
+          </div>
+        </div></div>
+      </div>
+      <div class="foot"><span class="r"><span class="k">esc</span> close</span></div>
+    </div></div>
+  </div>
+
+  <div>
+    <div class="x-col-head"><span class="x-lab">Three accounts</span></div>
+    <div class="cell"><div class="dlg v4">
+      <div class="dhead">
+        <div><div class="dtitle">Tasks</div><div class="dsub">4 active · 2 completed</div></div>
+        <button class="dx" type="button">×</button>
+      </div>
+      <div class="tabs">
+        <button class="tab" type="button">Tasks <span class="n">6</span></button>
+        <button class="tab" type="button">Workers <span class="n">5</span></button>
+        <button class="tab on" type="button">Accounts <span class="n">4</span></button>
+      </div>
+      <div class="body">
+        <div class="intro"><span class="intro-k">Strategy</span><span class="intro-v">spread</span></div>
+        <div class="grp gtop"><div class="gbox">
+          <div class="ghead"><span class="gdot"></span><span class="acct none">No account</span><span class="gcount">1 agent</span></div>
+          <div class="glist">
+            <div class="row"><div class="rowmain"><span class="name">Shannon</span><span class="task">Summarize the changed files</span></div><span class="held">4m</span></div>
+            <div class="sub bad">every account was capped or unavailable</div>
+          </div>
+        </div></div>
+        <div class="grp"><div class="gbox">
+          <div class="ghead"><span class="acct">bluesky</span><span class="gcount">2 agents</span></div>
+          <div class="glist">
+            <div class="row"><div class="rowmain"><span class="name">Main thread</span><span class="tag">main</span></div><span class="held">12m</span></div>
+            <div class="row"><div class="rowmain"><span class="name">Ada</span><span class="task">Trace the resume path</span></div><span class="held">1m</span></div>
+          </div>
+        </div></div>
+        <div class="grp"><div class="gbox">
+          <div class="ghead"><span class="acct">aurora</span><span class="gcount">1 agent</span></div>
+          <div class="glist">
+            <div class="row"><div class="rowmain"><span class="name">Hopper</span><span class="task">Inventory small engine fixes</span></div><span class="held">4m</span></div>
+          </div>
+        </div></div>
+        <div class="grp"><div class="gbox">
+          <div class="ghead"><span class="acct">harbor</span><span class="gcount">1 agent</span></div>
+          <div class="glist">
+            <div class="row"><div class="rowmain"><span class="task">Audit small-fix shortlist</span></div><span class="held">4m</span></div>
+          </div>
+        </div></div>
+      </div>
+      <div class="foot"><span class="r"><span class="k">esc</span> close</span></div>
+    </div></div>
+  </div>
+
+</div>
+
+<script>
+for (const input of document.querySelectorAll('.x-bar input')) {
+  input.addEventListener('change', function () {
+    document.body.className = 'sch-' + this.value
+  })
+}
+</script>
+
+</body>
+</html>

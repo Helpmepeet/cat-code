@@ -486,6 +486,26 @@ export function selectComposerGate(input: ComposerGateInput): ComposerGate {
 }
 
 /**
+ * Whether a submit the user did not type can be sent right now: the donut's
+ * Compact row, which puts `/compact` on the wire without going through the draft.
+ *
+ * The two arms the send arrow already treats as sendable. `connectPending` is
+ * deliberately NOT one of them: it would have to park the text, and there is one
+ * parked slot per session, so a button press would either swallow the prompt the
+ * user parked or bounce off the one-message-queued toast.
+ *
+ * Its own function, rather than the expression inline at the call site, because
+ * `editable` sits right next to it in the same JSX and reads like the obvious
+ * simplification — and `editable` INCLUDES `connectPending`, which includes
+ * `preview`. That substitution re-opens CC-28 (a verb sent to a session the
+ * supervisor does not have answers `session_not_found`, which the connection
+ * reducer maps to `dead`) on the one face that renders without an engine.
+ */
+export function canSendUntypedSubmit(gate: ComposerGate): boolean {
+  return gate.engineInputEnabled || gate.turnPending
+}
+
+/**
  * What Enter / the send arrow does.
  *  - `send`   — an engine is attached: it takes the prompt now (idle) or queues
  *               it into the running turn (`turnPending`). Both are one
@@ -500,7 +520,7 @@ export function selectComposerGate(input: ComposerGateInput): ComposerGate {
  */
 export type ComposerSubmitAction =
   | { type: 'ignore' }
-  | { type: 'hold'; text: string }
+  | { type: 'hold'; text: string; showQueuedRow: boolean }
   | { type: 'send'; text: string }
 
 /**
@@ -529,7 +549,11 @@ export function planSessionSubmit(input: {
   })
   if (gate.engineInputEnabled || gate.turnPending) return { type: 'send', text }
   if (gate.connectPending && !input.alreadyParked) {
-    return { type: 'hold', text }
+    return {
+      type: 'hold',
+      text,
+      showQueuedRow: input.connectionStatus !== 'parked',
+    }
   }
   return { type: 'ignore' }
 }
@@ -539,9 +563,16 @@ export function planSessionSubmit(input: {
  * spawning, already paste-expanded (`expandPasteRefs`) so the drain hands the
  * sidecar exactly what a live submit would have. Renderer-local: it rides the
  * EXISTING `app.submit` when it flushes, so no frame kind, preload method or
- * inbound vocabulary is added (SECURITY-MINIMUM §2).
+ * inbound vocabulary is added (SECURITY-MINIMUM §2). `showQueuedRow` preserves
+ * whether this wait began as a real cold spawn. A parked-session restore keeps
+ * holding the text through its later `connecting` state without announcing the
+ * restore machinery as a queue.
  */
-export type PendingSubmitState = Record<SessionId, string>
+export type PendingSubmit = {
+  text: string
+  showQueuedRow: boolean
+}
+export type PendingSubmitState = Record<SessionId, PendingSubmit>
 
 export function createPendingSubmitState(): PendingSubmitState {
   return {}
@@ -550,7 +581,7 @@ export function createPendingSubmitState(): PendingSubmitState {
 export function selectPendingSubmit(
   state: PendingSubmitState,
   sessionId: SessionId | null,
-): string | null {
+): PendingSubmit | null {
   if (!sessionId) return null
   return state[sessionId] ?? null
 }
@@ -558,10 +589,10 @@ export function selectPendingSubmit(
 export function reducePendingSubmitHeld(
   state: PendingSubmitState,
   sessionId: SessionId,
-  text: string,
+  pending: PendingSubmit,
 ): PendingSubmitState {
-  if (text.length === 0) return state
-  return { ...state, [sessionId]: text }
+  if (pending.text.length === 0) return state
+  return { ...state, [sessionId]: pending }
 }
 
 export function reducePendingSubmitCleared(
@@ -645,7 +676,7 @@ export function resolvePendingSubmit(connection: {
  * `turn.status(false)` arrives there is nothing left for the drain to find.
  */
 export function shouldReleasePendingSubmitOnStop(
-  pendingSubmit: string | null,
+  pendingSubmit: PendingSubmit | null,
 ): boolean {
   return pendingSubmit !== null
 }

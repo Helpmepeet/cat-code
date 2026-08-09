@@ -829,7 +829,12 @@ function StatusBadge({ row }: { row: MergedSessionRow }) {
   // both a spawning row AND a live socket-drop, `sessionsCatalogState.ts:209`),
   // so both wrongly badged "live" while the TabBar showed starting/disconnected
   // (§I.2 #8 fix). Routing through the shared mapping corrects both.
-  const { tone, label } = sessionStatusVisual(row.status, row.restorable, row.inRegistry)
+  const { tone, label } = sessionStatusVisual(
+    row.status,
+    row.restorable,
+    row.inRegistry,
+    row.parked,
+  )
   return <Chip tone={statusChipTone(tone)} label={label} />
 }
 
@@ -1077,7 +1082,6 @@ function TagPopover({
               event.preventDefault()
               const resolved = resolveTagCommit(query, knownTags)
               if (resolved) apply(resolved)
-              else if (matches[0]) apply(matches[0])
             } else if (event.key === 'Escape') {
               event.preventDefault()
               restoreTriggerFocus()

@@ -385,9 +385,18 @@ function getLocalAgentNotification(
 
   const identity = formatLocalAgentNotificationIdentity(task)
   if (task.handoffStatus === 'blocked') {
+    // Not "needs your input": the subagent's blocker is queued back to THIS
+    // conversation and picked up on the next turn without you
+    // (`src/tasks/LocalAgentTask/LocalAgentTask.tsx:273` →
+    // `src/hooks/useQueueProcessor.ts:48`), so the line reports the state
+    // rather than handing the user the next move. `awaitingApproval` stays: it
+    // is what marks a stalled delegation as worth the `↵ to open` glance, and
+    // it keeps this line's glyph and colour agreeing with the footer pill's
+    // (`src/tasks/pillLabel.ts` `localAgentStatusIcon`). The highlight is the
+    // affordance, not an obligation.
     const statusOptions = { awaitingApproval: true }
     return {
-      text: `${getTaskStatusIcon(task.status, statusOptions)} ${identity} needs your input        ↵ to open`,
+      text: `${getTaskStatusIcon(task.status, statusOptions)} ${identity} is blocked        ↵ to open`,
       color: getTaskStatusColor(task.status, statusOptions),
     }
   }

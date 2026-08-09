@@ -69,9 +69,11 @@ import {
 } from './reasoningLayout.js'
 import {
   deriveAgentDisplayVocabulary,
+  type AgentStateKey,
   type AgentToolSource,
 } from './agentIdentity.js'
 import {
+  AgentHandle,
   AgentRoleDot,
   AgentStateLabel,
   Baton,
@@ -114,11 +116,13 @@ import {
   type GrepDigest,
 } from './grepResult.js'
 import {
+  dequote,
   findNestedToolUseRow,
   logLineClass,
   resolveToolCardExpanded,
   groupGrepLines,
   selectPeekLines,
+  type QuotePosition,
 } from './transcriptViewModel.js'
 import {
   INLINE_HEAD_LINES,
@@ -296,12 +300,33 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     // Intentional: cached/restoring transcripts render without a divider or pulse.
     // The operator rejected the startup pink hairline + dot (2026-07-29).
     content = (
-      // P4-24 fidelity: content is centered in a max-740px column (Chat.jsx:1282
-      // `maxWidth: MSG_MAX, margin: '0 auto'`), full-bleed (no bordered box), with
-      // 24px top / 32px side padding. The prototype's light body weight is scoped
-      // to assistant prose (AssistantProse), NOT the whole column, so tool-card /
-      // code / mono text stays at a crisp, readable weight.
-      <div className="mx-auto flex w-full max-w-[740px] flex-col gap-2.5 px-8 pt-6">
+      // P4-24 fidelity: content is centered, full-bleed (no bordered box), with
+      // 24px top / 32px side padding (Chat.jsx:1282 `margin: '0 auto'`).
+      //
+      // WIDTH IS A DELIBERATE DEVIATION (operator, 2026-08-07). The prototype
+      // caps this at 740 (`Chat.jsx:402` MSG_MAX) and `px-8` sits INSIDE that,
+      // so the real content column was 676px — on a maximized window that left
+      // ~60% of the screen empty while tool rows, paths and diffs truncated
+      // against it. Do not "restore" it to 740 as a parity fix.
+      //
+      // The value now lives in `--transcript-width` (theme.css), which the
+      // composer dock and its banner in `App.tsx` read too: those edges have to
+      // line up with these, and two hand-synced literals is how they stop.
+      //
+      // EVERY row shares this width, prose included, and that is load-bearing:
+      // two attempts to give running text its own narrower measure inside this
+      // column were both rejected on sight (2026-08-09), because a transcript
+      // built from full-width rows reads a narrower text column as a seam no
+      // matter how it is aligned. A line of prose is therefore as long as the
+      // column allows, which is still longer than is comfortable — but no width
+      // fixes both that and the truncation this column was widened for, so the
+      // cost is taken here knowingly rather than paid for with a mismatched
+      // edge. See the `.md-prose` header in `theme.css`.
+      //
+      // Prose weight also moved (light to medium) at `AssistantProse` below,
+      // for legibility on this near-black background. It stays scoped to
+      // assistant prose, NOT the whole column.
+      <div className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-2.5 px-8 pt-6">
         {items.map(item =>
           // P4-36 — a revealed hidden row reads dimmed (`Chat.jsx:1285`
           // `opacity: 0.55`), so transcript mode never passes engine bookkeeping
@@ -385,7 +410,7 @@ const SKELETON_BAR_WIDTHS = ['w-3/4', 'w-full', 'w-5/6', 'w-2/3', 'w-4/5'] as co
 function PreviewSkeleton() {
   return (
     <div
-      className="mx-auto flex w-full max-w-[740px] flex-col gap-3 px-8 pt-6"
+      className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-3 px-8 pt-6"
       role="status"
       aria-live="polite"
       aria-busy="true"
@@ -603,6 +628,12 @@ const TranscriptRowView = memo(function TranscriptRowView({
  * no `allowDangerousHtml`): a transcript can carry untrusted model/tool output.
  * `rehype-highlight` emits React <span> elements (not injected HTML), so
  * highlighting adds no raw-HTML surface.
+ *
+ * TYPOGRAPHY IS NOT HERE. Block rhythm, heading scale, list and quote spacing
+ * all live in `.md-prose` (theme.css @layer components), shared with the
+ * reasoning bodies below so one Markdown grammar covers every model-authored
+ * body. This component keeps only what is per-instance: family, size, weight,
+ * colour.
  */
 
 // Stable module-scope plugin config. `remark-gfm` adds pipe tables (+ autolinks/
@@ -628,6 +659,15 @@ function AssistantProse({
   // is still arriving (there is no settled answer to take yet, and the caret owns
   // that corner), and none on an empty turn.
   const copyable = !streaming && content.trim().length > 0
+  // Built fresh per render — cheap next to the remark/rehype parse
+  // react-markdown already redoes on every content change. The blockquote
+  // renderer closes over this message's raw source so its own copy control
+  // can dequote by source position rather than re-deriving text from the
+  // parsed tree (see `createBlockquoteComponent`).
+  const components = {
+    ...MARKDOWN_COMPONENTS,
+    blockquote: createBlockquoteComponent(content),
+  }
   return (
     // P4-38 host contract for `BubbleCopyChip`: `group relative` makes this body
     // the hover/focus group the absolute chip anchors to. No reserved right
@@ -636,11 +676,11 @@ function AssistantProse({
     // the app's own reserved-gutter version read as an unexplained gap.
     <div className="group relative">
       <MarkdownErrorBoundary fallback={content}>
-        <div className="font-sans font-light text-sm leading-relaxed [&>*+*]:mt-2 [&_a]:text-accent [&_blockquote]:border-l-2 [&_blockquote]:border-shell-seam [&_blockquote]:pl-3 [&_blockquote]:text-text-muted [&_h1]:text-base [&_h1]:font-semibold [&_h2]:font-semibold [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5 [&_:not(pre)>code]:font-mono [&_:not(pre)>code]:text-accent-soft">
+        <div className="md-prose font-sans font-medium text-sm leading-relaxed">
           <Markdown
             remarkPlugins={REMARK_PLUGINS}
             rehypePlugins={REHYPE_PLUGINS}
-            components={MARKDOWN_COMPONENTS}
+            components={components}
           >
             {content}
           </Markdown>
@@ -728,7 +768,7 @@ const MARKDOWN_COMPONENTS = {
   // left-aligned throughout and this keeps zero inline style. Static arbitrary
   // classes only (the FAMILY_STYLE precedent for palette values with no token).
   table: ({ children }: ComponentPropsWithoutRef<'table'>) => (
-    <div className="my-2 overflow-x-auto rounded-lg border border-white/[0.08]">
+    <div className="my-3 overflow-x-auto rounded-lg border border-white/[0.08]">
       <table className="w-full border-collapse text-[13px]">{children}</table>
     </div>
   ),
@@ -742,6 +782,105 @@ const MARKDOWN_COMPONENTS = {
       {children}
     </td>
   ),
+}
+
+/**
+ * Per-quote copy control: a tab in the message's own left margin, outside the
+ * quote's text column entirely, so it can never land on top of the quoted
+ * prose the way a corner-anchored control did (operator-reviewed against a
+ * standalone options page after two corner placements both read poorly:
+ * anchored to the border's own bottom-right it collided with
+ * `BubbleCopyChip`'s bottom-right anchor on the whole message, and anchored
+ * top-right-inside it drew over the first line's own words). Always visible,
+ * not hover-gated — nothing to reveal it over, since it never overlaps
+ * content by construction.
+ *
+ * Tinted with the app's own accent token, the same one `.md-prose a` already
+ * uses for links, dim at rest and full strength on hover/copied, rather than a
+ * neutral gray.
+ */
+function QuoteCopyChip({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  const copy = (): void => {
+    const clipboard =
+      typeof navigator !== 'undefined' ? navigator.clipboard : undefined
+    if (!clipboard) return
+    void clipboard
+      .writeText(text)
+      .then(() => {
+        setCopied(true)
+        setTimeout(() => setCopied(false), 600)
+      })
+      .catch(() => {})
+  }
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      aria-label={copied ? 'Quote copied' : 'Copy quote'}
+      title="Copy quote"
+      className={`absolute -left-6 top-0 flex h-5 w-5 items-center justify-center rounded border transition-colors ${
+        copied
+          ? 'border-[#86efac] text-[#86efac]'
+          : 'border-accent/30 text-accent/55 hover:border-accent hover:text-accent'
+      }`}
+    >
+      {copied ? (
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden
+        >
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+      ) : (
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden
+        >
+          <rect x="9" y="9" width="13" height="13" rx="2" />
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+        </svg>
+      )}
+    </button>
+  )
+}
+
+/**
+ * Blockquote renderer, built fresh per `AssistantProse` render closing over
+ * that message's raw markdown `rawSource` — `node.position` offsets are into
+ * that string. `.md-prose blockquote` (theme.css) still supplies the
+ * border/color styling by tag-name selector regardless of this component's own
+ * className. `ml-7` reserves the left margin `QuoteCopyChip` sits in.
+ */
+function createBlockquoteComponent(rawSource: string) {
+  return function Blockquote({
+    node,
+    children,
+  }: ComponentPropsWithoutRef<'blockquote'> & {
+    node?: { position?: QuotePosition }
+  }) {
+    const text = dequote(rawSource, node?.position)
+    return (
+      <blockquote className="relative ml-7">
+        {children}
+        {text.length > 0 ? <QuoteCopyChip text={text} /> : null}
+      </blockquote>
+    )
+  }
 }
 
 /**
@@ -781,7 +920,7 @@ export function CodeBlock({
       .catch(() => {})
   }
   return (
-    <div className="relative my-2 overflow-hidden rounded-lg border border-shell-seam bg-app-bg">
+    <div className="relative my-3 overflow-hidden rounded-lg border border-shell-seam bg-app-bg">
       <span className="absolute left-3.5 top-2 z-[1] inline-flex items-center gap-1.5 font-mono text-[10px] font-semibold tracking-[0.06em] text-accent">
         <span className="opacity-70">&lt;/&gt;</span>
         {lang || 'code'}
@@ -1004,13 +1143,21 @@ function ToolCardShell({
           {target}
         </span>
         {headerBadge}
-        <span className="flex shrink-0 items-center gap-1.5">
+        {/* An agent card's `alwaysExtra` row always carries its own
+            `AgentStateLabel` (the real, richer lifecycle word) — this generic
+            3-state pill would just repeat it with a different, coarser word
+            (e.g. "done" beside "Completed") and, for a backgrounded agent
+            whose tool_result only says it started, an outright wrong one. */}
+        {family === 'agent' ? null : (
+          // The word ("done"/"failed"/"running") next to a dot that already
+          // carries the same state in color is redundant chrome; the dot
+          // alone, colour-coded, is enough (operator call).
           <span
-            className={`h-1.5 w-1.5 rounded-full ${st.dot} ${st.pulse ? 'animate-pulse' : ''}`}
-            aria-hidden
+            className={`h-1.5 w-1.5 shrink-0 rounded-full ${st.dot} ${st.pulse ? 'animate-pulse' : ''}`}
+            role="img"
+            aria-label={st.word}
           />
-          <span className={`text-[10.5px] ${st.color}`}>{st.word}</span>
-        </span>
+        )}
       </button>
       {alwaysExtra ? (
         <div className="flex flex-wrap items-center gap-2 border-t border-shell-seam px-3 py-1.5">
@@ -1532,14 +1679,109 @@ function agentToolSourceOf(row: ToolUseNestedRow): AgentToolSource {
   const subagentType = str('subagent_type')
   const description = str('description')
   const prompt = str('prompt')
+  // Identity is transcript-owned in either state: the completed result carries
+  // it on the parent correlation, while a running worker carries it on its
+  // nested progress frames. No live task snapshot joins this card.
+  let nestedAgentName: string | undefined
+  for (const child of row.children) {
+    if (!('agentName' in child) || child.agentName === undefined) continue
+    nestedAgentName = child.agentName
+    break
+  }
+  const agentName =
+    row.result?.agentName ??
+    nestedAgentName
   return {
     toolName: row.toolName === 'Task' ? 'Task' : 'Agent',
     status: row.status,
+    ...(agentName !== undefined ? { agentName } : {}),
     ...(input.run_in_background === true ? { run_in_background: true } : {}),
     ...(subagentType !== undefined ? { subagent_type: subagentType } : {}),
     ...(description !== undefined ? { description } : {}),
     ...(prompt !== undefined ? { prompt } : {}),
+    ...(row.agentCompletion !== null
+      ? { hasCompletion: true, completionStatus: row.agentCompletion.status }
+      : {}),
   }
+}
+
+/**
+ * The running card's live signal: the subagent's most recent nested tool call.
+ * Only full frames arrive for subagents (§4/S1 — no nested streaming), so the
+ * LAST tool-use child IS what the worker is doing right now. Null until the
+ * first one lands, which is the real "spawned but nothing yet" moment.
+ */
+function agentActivityOf(row: ToolUseNestedRow): string | null {
+  for (let index = row.children.length - 1; index >= 0; index -= 1) {
+    const child = row.children[index]
+    if (child === undefined || child.kind !== 'tool-use') continue
+    const target = deriveTarget(child)
+    // `deriveTarget` falls back to the tool's OWN name for several families, and
+    // already spells MCP as `server › tool`. Prefixing either prints the name
+    // twice ("TodoWrite TodoWrite") and pushes the badge past its truncation.
+    return target === child.toolName || child.toolFamily === 'mcp'
+      ? target
+      : `${child.toolName} ${target}`
+  }
+  return null
+}
+
+/**
+ * Nested TOOL CALLS only. The count this replaced ("N nested") counted every
+ * child row, mixing the worker's prose turns in with its tool calls, so two
+ * agents that did identical work could report different numbers.
+ */
+function agentToolCallCount(row: ToolUseNestedRow): number {
+  return row.children.reduce(
+    (total, child) => (child.kind === 'tool-use' ? total + 1 : total),
+    0,
+  )
+}
+
+/**
+ * What the header says about progress: live activity while the worker runs, a
+ * settled digest once it stops.
+ *
+ * Three sources, in falling order of authority. `agentCompletion.usage` is a
+ * backgrounded worker's real totals. `result.agentUsage` is a FOREGROUND
+ * worker's own totals off its structured result, which is the only place they
+ * exist for it and, unlike nested rows, replays from history. Counting the
+ * nested rows is the last resort: it works live, but a restored card whose
+ * branch fell outside the replayed window has none.
+ */
+function agentProgressBadge(
+  row: ToolUseNestedRow,
+  state: AgentStateKey,
+  usage: AgentCompletionProjection['usage'],
+): string | null {
+  const activity = agentActivityOf(row)
+  if (state === 'running') return activity ?? 'starting'
+  // A BACKGROUNDED agent yields no nested progress to this card: the async
+  // branch returns its launch ack (`AgentTool.tsx:1279`) before the branch that
+  // calls `onProgress` (`:1320`). So it has no activity to report, and
+  // `starting` would sit there for the worker's entire life. Its state word
+  // already reads "In background", which is the honest thing to say.
+  if (state === 'background') return activity
+  const settledUsage = usage ?? row.result?.agentUsage ?? null
+  const toolCalls = settledUsage?.toolUses ?? agentToolCallCount(row)
+  const parts: string[] = []
+  if (toolCalls > 0) {
+    parts.push(`${toolCalls} tool ${toolCalls === 1 ? 'call' : 'calls'}`)
+  }
+  // Built independently of the call count: an agent that answered from context
+  // has real token usage and zero tool calls, and gating both on the count
+  // threw the engine's own totals away.
+  //
+  // `> 0`, not merely present: a missing count is persisted as a literal zero
+  // engine-side (`totalTokensOverride ?? 0`,
+  // `src/tools/AgentTool/agentToolUtils.ts:694`, whose sibling branch logs
+  // `finalize_missing_usage`), and that zero survives the projector's
+  // all-or-nothing narrowing as a valid number. Printing it renders "we never
+  // got usage" as the claim "0 tokens", beside a worker that made 55 tool calls.
+  if (settledUsage && settledUsage.totalTokens > 0) {
+    parts.push(`${compactCount(settledUsage.totalTokens)} tokens`)
+  }
+  return parts.length === 0 ? null : parts.join(' · ')
 }
 
 /**
@@ -1577,6 +1819,8 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
     : AGENT_TYPE_TONE_CLASS.neutral
   const childCount = row.children.length
   const completion = row.agentCompletion
+  const isLive = vocab.state.key === 'running' || vocab.state.key === 'background'
+  const progress = agentProgressBadge(row, vocab.state.key, completion?.usage ?? null)
   // ONE expression, so `ToolCardShell`'s `hasBody` stays null when there is
   // genuinely no body — two sibling expressions would make it an array and give
   // every childless agent card a body that expands to nothing.
@@ -1606,17 +1850,28 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
       // exists, so it opens; a foreground card keeps the C4 collapsed default.
       defaultExpanded={completion !== null}
       headerBadge={
-        childCount > 0 ? (
-          <span className="shrink-0 rounded-[5px] border border-shell-seam bg-white/[0.03] px-1.5 py-px font-mono text-[10px] text-text-subtle">
-            {childCount} nested
+        progress === null ? undefined : (
+          <span
+            className={`min-w-0 max-w-[240px] truncate font-mono text-[10px] ${
+              isLive ? 'text-blue-400' : 'text-text-subtle'
+            }`}
+          >
+            {progress}
           </span>
-        ) : undefined
+        )
       }
       // The identity strip is ALWAYS visible; only the subagent child rows
       // collapse (C4). Reuses the 8a chrome primitives, all fed from this row.
       alwaysExtra={
         <>
           <AgentRoleDot role={vocab.identity.type} />
+          {/* The name leads when the row knows it: a worker is referred to by
+              name, and the type is the qualifier. Still absent until the agent's
+              first nested frame lands, so the type has to stand alone until
+              then (see `agentToolSourceOf`). */}
+          {vocab.identity.name !== null ? (
+            <AgentHandle name={vocab.identity.name} />
+          ) : null}
           <span className={`shrink-0 text-[12.5px] font-semibold ${typeTone.text}`}>
             {workerType}
           </span>
@@ -1644,11 +1899,16 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
  * or message type (C3).
  */
 function DelegateGroup({ members }: { members: NestedToolUseRow[] }) {
-  const anyPending = members.some(member => member.status === 'pending')
-  const anyError = members.some(member => member.status === 'error')
-  const types = members.map(member =>
-    agentWorkerType(deriveAgentDisplayVocabulary(agentToolSourceOf(member))),
+  const vocabs = members.map(member => deriveAgentDisplayVocabulary(agentToolSourceOf(member)))
+  // Member state, not raw `status`: a backgrounded member's `tool_result` only
+  // says it started (`deriveAgentToolState`), so the group header must track
+  // the same real-completion signal the member cards show, or it reads
+  // "finished" while a background member is still running.
+  const anyPending = vocabs.some(
+    vocab => vocab.state.key === 'running' || vocab.state.key === 'background',
   )
+  const anyError = vocabs.some(vocab => vocab.state.key === 'failed')
+  const types = vocabs.map(vocab => agentWorkerType(vocab))
   const commonType =
     types.length > 0 && types.every(type => type === types[0]) && types[0] !== 'Agent'
       ? types[0]
@@ -2472,7 +2732,7 @@ function ThinkingBlock({ content }: { content: string }) {
           Thinking
         </span>
       </div>
-      <div className="border-t border-accent/10 px-3.5 py-2.5 text-[13px] italic leading-relaxed text-text-subtle [&>*+*]:mt-2">
+      <div className="md-prose border-t border-accent/10 px-3.5 py-2.5 text-[13px] italic leading-relaxed text-text-subtle">
         <MarkdownErrorBoundary fallback={content}>
           <Markdown remarkPlugins={REMARK_PLUGINS}>{content}</Markdown>
         </MarkdownErrorBoundary>
@@ -2515,37 +2775,37 @@ const REASONING_TITLE =
  */
 const REASONING_RUN_MAX_STEPS = 1000
 
+/** A step with actual content to draw — `withheld` steps carry nothing and are
+ * dropped before a run ever reaches render. */
+type VisibleReasoningStep = Exclude<ReasoningStepModel, { kind: 'withheld' }>
+
+function isVisibleStep(step: ReasoningStepModel): step is VisibleReasoningStep {
+  return step.kind !== 'withheld'
+}
+
 /**
- * A run of reasoning steps. One step draws as a single line (no head, no count,
- * nothing to collapse); an all-withheld run draws as bare lines, because a head
- * asserting "N steps" over rows with no readable content would imply content
- * that does not exist. Everything else gets the head + rail + steps. The whole
- * run collapses from its head; individual steps never fold away.
+ * A run of reasoning steps. `withheld` steps (nothing the provider shared) are
+ * dropped rather than drawn as a placeholder line — an all-withheld run has
+ * nothing left to show and renders nothing. One remaining step draws as a
+ * single line (no head, no count, nothing to collapse); everything else gets
+ * the head + rail + steps. The whole run collapses from its head; individual
+ * steps never fold away.
  */
 function ReasoningRun({ steps }: { steps: ReasoningStepModel[] }) {
   const [collapsed, setCollapsed] = useState(false)
   const listId = useId()
 
-  if (steps.length === 0) return null
-  if (steps.length === 1) {
-    const [step] = steps
-    if (step.kind === 'withheld') return <WithheldReasoningLine />
+  const visible = steps.filter(isVisibleStep)
+  if (visible.length === 0) return null
+  if (visible.length === 1) {
+    const [step] = visible
     if (step.kind === 'heading') return <ReasoningLine content={step.text} />
-  }
-  if (steps.every(step => step.kind === 'withheld')) {
-    return (
-      <div className="flex flex-col">
-        {steps.map(step => (
-          <WithheldReasoningLine key={step.key} />
-        ))}
-      </div>
-    )
   }
 
   const shown =
-    steps.length > REASONING_RUN_MAX_STEPS
-      ? steps.slice(steps.length - REASONING_RUN_MAX_STEPS)
-      : steps
+    visible.length > REASONING_RUN_MAX_STEPS
+      ? visible.slice(visible.length - REASONING_RUN_MAX_STEPS)
+      : visible
   return (
     <div className="group flex flex-col">
       <button
@@ -2567,14 +2827,14 @@ function ReasoningRun({ steps }: { steps: ReasoningStepModel[] }) {
         <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-text-subtle transition-colors duration-100 ease-out group-hover:text-text-muted">
           Reasoning
         </span>
-        {steps.length > 1 ? (
+        {visible.length > 1 ? (
           <span className="text-[10.5px] text-text-faint transition-colors duration-100 ease-out group-hover:text-text-subtle">
             {/* Counts what is ON SCREEN. The ceiling below drops the oldest steps,
                 and a head that kept printing the raw total would assert a list
                 longer than the one it labels. */}
-            {shown.length === steps.length
-              ? `${steps.length} steps`
-              : `${shown.length} of ${steps.length} steps`}
+            {shown.length === visible.length
+              ? `${visible.length} steps`
+              : `${shown.length} of ${visible.length} steps`}
           </span>
         ) : null}
       </button>
@@ -2601,16 +2861,8 @@ function ReasoningRun({ steps }: { steps: ReasoningStepModel[] }) {
 const ReasoningStep = memo(function ReasoningStep({
   step,
 }: {
-  step: ReasoningStepModel
+  step: VisibleReasoningStep
 }) {
-  if (step.kind === 'withheld') {
-    return (
-      <li className="relative py-0.5 text-[12.5px] leading-normal text-text-faint">
-        <ReasoningNode placement="rail" withheld />
-        {REASONING_WITHHELD_TEXT}
-      </li>
-    )
-  }
   return (
     <li
       className="relative py-0.5 text-[12.5px] leading-normal text-text-subtle"
@@ -2660,7 +2912,7 @@ function ReasoningProse({ content }: { content: string }) {
   return (
     <>
       {hidden ? null : (
-        <div className="mb-1.5 mt-1 border-l border-shell-seam pl-2.5 text-[13px] leading-relaxed text-text-subtle [&>*+*]:mt-2">
+        <div className="md-prose mb-1.5 mt-1 border-l border-shell-seam pl-2.5 text-[13px] leading-relaxed text-text-subtle">
           <MarkdownErrorBoundary fallback={content}>
             <Markdown remarkPlugins={REMARK_PLUGINS}>{content}</Markdown>
           </MarkdownErrorBoundary>
@@ -2863,7 +3115,12 @@ function AgentCompletionBody({
   const { result, usage } = completion
   const stats = usage
     ? [
-        `~${compactCount(usage.totalTokens)} tokens`,
+        // Dropped rather than shown as `~0 tokens`: an absent count persists as
+        // a literal zero engine-side (see `agentProgressBadge`), so zero here
+        // means "no usage was reported", not "this worker used none".
+        ...(usage.totalTokens > 0
+          ? [`~${compactCount(usage.totalTokens)} tokens`]
+          : []),
         `${usage.toolUses} ${usage.toolUses === 1 ? 'tool' : 'tools'}`,
         formatDuration(usage.durationMs),
       ]

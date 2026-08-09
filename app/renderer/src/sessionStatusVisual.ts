@@ -38,6 +38,14 @@ export function sessionStatusVisual(
   status: SessionDescriptor['status'] | 'history' | 'preview',
   restorable: boolean,
   inRegistry: boolean,
+  /**
+   * IDLE-PARK §1b — the engine was reclaimed on purpose. Descriptor-derived
+   * (`SessionDescriptor.parked`), so every surface keyed on the descriptor gets
+   * it, including the four that have no connection snapshot to consult.
+   * Defaulted so a caller that genuinely cannot know (the `preview` synthetic
+   * status) reads unchanged.
+   */
+  parked = false,
 ): SessionStatusVisual {
   // A PREVIEWED pane (`shell.previews`, never promoted to a real tab) is a
   // shell-layout fact rather than a control-plane status, which is why it used
@@ -49,6 +57,21 @@ export function sessionStatusVisual(
   // tone, but its distinct `history` label reads apart from a restorable row's
   // `closed`/`crashed` and a live row's no-chip.
   if (!inRegistry) return { tone: 'dead', label: 'history' }
+  // A parked session is not a failure (§1a): the engine was reclaimed to save
+  // memory and comes back on the user's next message. `busy` is the tone a
+  // PREVIEW already uses, and for the same reason — a readable transcript with
+  // no engine behind it, which re-engages when used. No new tone, no new colour.
+  //
+  // `restorable` is the honesty gate (§1c): a session parked before it ever ran
+  // a turn has no transcript on disk, so `canResume` refuses it and both restore
+  // and restart fail. Painting that as a resting `idle` row would turn a visible
+  // failure into a silent one, so it falls through to the dead presentation.
+  //
+  // This lives HERE rather than at each call site because `tabStatus.ts` proved
+  // the alternative: its own parked branch was a FIFTH label+tone decision
+  // outside the module that exists to stop exactly this drift, and the four
+  // surfaces below could not inherit it.
+  if (parked && restorable) return { tone: 'busy', label: 'idle' }
 
   switch (status) {
     case 'spawning':

@@ -14,7 +14,10 @@ import { ContextGauge } from './ContextGauge.js'
 import { pressureTone, type ContextUsage } from './contextUsage.js'
 import {
   selectBreakdownRows,
+  selectDonutView,
   selectFreeTokens,
+  selectPanelUsage,
+  type DonutView,
 } from './contextBreakdownState.js'
 import { PermissionModeChip } from './PermissionModeChip.js'
 import { toneClasses } from './tone.js'
@@ -41,25 +44,26 @@ import type {
  * · [active account] · context donut.
  *
  * REAL DATA ONLY (the prototype's chip values are mock fixtures — source wins):
- *  - MODEL renders the RESOLVED session model (`DiagnosticsSnapshot`
- *    `mainLoopModelForSession`, the sidecar's `getMainLoopModel()` — the same
- *    resolver the QueryEngine uses at request time), under the engine's own
- *    display name for it (`RunControlsSnapshot.model.currentLabel`, from
- *    `getMarketingNameForModel`) so the face reads as the picker row does.
- *    Absent only before the snapshot arrives; never a fabricated label.
+ *  - MODEL renders the RESOLVED session model (`RunControlsSnapshot.model.current`,
+ *    the sidecar's `getMainLoopModel()` — the same resolver the QueryEngine uses
+ *    at request time), under the engine's own display name for it
+ *    (`.currentLabel`, from `getMarketingNameForModel`) so the face reads as the
+ *    picker row does. It comes off the LIVE run-controls seam, re-broadcast on
+ *    every model change, not the spawn-frozen `DiagnosticsSnapshot`. Absent only
+ *    before the snapshot arrives; never a fabricated label.
  *  - REASONING renders the session's real effort tier (`reasoningEffort` ←
  *    `AppState.effortValue`, seeded from `getInitialEffortSetting()` in the
  *    sidecar). Absent when no explicit effort is set (running at the provider
  *    default) — not fabricated into a "High".
- *  - FAST ⚡ renders only when fast mode is actually ON (`fastMode` ←
- *    `AppState.fastMode`). It is a toggle that is off until explicitly enabled,
- *    so this READ-ONLY bar shows it when true; flipping it is a follow-up
- *    session (a new inbound verb, like the agent-mode toggle).
+ *  - FAST ⚡ renders whenever the state is KNOWN and the model supports it, on
+ *    or off (`fastMode` ← `AppState.fastMode`), matching the interactive chip.
+ *    Absent means only that nothing has reported it.
  *  - ACCOUNT renders the real active alias (`selectActiveAccount`,
- *    `accountsState.ts:88`) as the prototype's quiet grey face — ALWAYS
- *    `text-text-muted`, never health-tinted (the prototype's `AccountChip` face
- *    is unconditionally `#a1a1aa`; health lives in the title + the future
- *    switcher popover, P4-5). The renderer never invents a switcher here.
+ *    `accountsState.ts:88`) as the prototype's quiet grey face — the TEXT is
+ *    ALWAYS `text-text-muted`, never health-tinted (the prototype's `AccountChip`
+ *    face is unconditionally `#a1a1aa`). Health rides the status dot beside it
+ *    and the title; both read-only and interactive faces carry the dot, so a
+ *    pane with no engine does not silently lose the signal.
  *  - CONTEXT donut is ALWAYS shown (the prototype's `ContextChip` never hides,
  *    `Surfaces.jsx:471-473`): `selectContextUsage` returns real result-frame usage
  *    once a turn provides it, and a 0% / default-window gauge before then.
@@ -121,16 +125,26 @@ function formatEffort(effort: string): string {
   return effort.charAt(0).toUpperCase() + effort.slice(1)
 }
 
-/** The prototype's fast-mode ⚡ (Surfaces.jsx:694 `FastChip`) — the READ-ONLY face,
- * shown only when fast mode is on (the no-interactive-handler fallback). */
-function FastFace() {
+/**
+ * The prototype's fast-mode ⚡ (Surfaces.jsx:694 `FastChip`) — the READ-ONLY face,
+ * for a pane with no engine to toggle it.
+ *
+ * Renders for a KNOWN state, on or off, matching the live chip's two looks. It
+ * used to render only when fast was ON, which was right while the only caller
+ * was a preview (a cache says nothing about fast, so "not on" and "unknown" were
+ * the same thing) and wrong the moment a detached live session could answer:
+ * parking a session with fast off made the face vanish, while every other face
+ * stayed. Absent now means only that nothing knows.
+ */
+function FastFace({ active }: { active: boolean }) {
+  const label = active ? 'Fast mode on' : 'Fast mode off'
   return (
     <span
-      className={`${FAST_FACE} text-tone-warn`}
-      title="Fast mode on"
-      aria-label="Fast mode on"
+      className={`${FAST_FACE} border ${active ? 'border-tone-warn/30 bg-tone-warn/10 text-tone-warn' : 'border-transparent text-text-ghost'}`}
+      title={label}
+      aria-label={label}
     >
-      <FastGlyph active />
+      <FastGlyph active={active} />
     </span>
   )
 }
@@ -171,6 +185,18 @@ const POPOVER_HEADING =
 // per section (no panel-wide `p-1.5`), matching the prototype's sectioned popovers.
 const POPOVER_PANEL_RIGHT =
   'absolute bottom-full right-0 z-40 mb-2 overflow-hidden rounded-lg border border-shell-seam bg-surface-raised shadow-lg'
+
+/**
+ * The escalated usage footer's tint, at rest and on hover. `ToneClasses.hoverTint`
+ * is the hover form of `softBg` at the SAME strength, which would leave this strip
+ * with no visible hover step at all, so both strengths are written out here —
+ * literal, per the tone kit's own Tailwind-JIT rule. Only the two tones above
+ * `accent` on the pressure ladder can reach it.
+ */
+const ESCALATED_ACTION_TINT: Record<'warn' | 'danger', string> = {
+  warn: 'bg-tone-warn/10 hover:bg-tone-warn/[0.18]',
+  danger: 'bg-tone-danger/10 hover:bg-tone-danger/[0.18]',
+}
 
 /**
  * A Claude account reports only healthy/dead, with no `availabilityLabel` of its
@@ -403,7 +429,7 @@ function FastChip({
       title={title}
       disabled={disabled}
       onClick={() => onToggle(!active)}
-      className={`${FAST_FACE} border ${active ? 'border-tone-warn/30 bg-tone-warn/10 text-tone-warn hover:bg-tone-warn/15 hover:text-[#fde68a]' : 'border-transparent text-[#3f3f46] hover:text-[#71717a]'} disabled:opacity-40`}
+      className={`${FAST_FACE} border ${active ? 'border-tone-warn/30 bg-tone-warn/10 text-tone-warn hover:bg-tone-warn/15 hover:text-[#fde68a]' : 'border-transparent text-text-ghost hover:text-text-subtle'} disabled:opacity-40`}
     >
       <FastGlyph active={active} />
     </button>
@@ -641,38 +667,87 @@ function fmtTokens(n: number): string {
   return String(n)
 }
 
-/** One plan-usage row (the prototype's `PlanUsageRow`, Surfaces.jsx:385): a label, a
- * tone-filled bar, then "{pct}% · resets {reset}". `reset` is the pool's single native
- * reset hint — the app carries ONE `usageResetAt`, not a separate weekly reset, so only
- * the row handed `reset` shows it (the weekly row omits it rather than fake a value). */
-function PlanUsageRow({
-  label,
-  pct,
-  reset,
+/**
+ * The context-breakdown donut (replaces the old stacked bar, operator call
+ * 2026-08-05): one ring segment per category, sized by its share of the
+ * window, over a faint full-circle track for the unused remainder — the same
+ * data {@link selectBreakdownRows} already computed for the bar/legend, drawn
+ * as arcs instead of stacked rectangles. Geometry mirrors {@link ContextGauge}
+ * (12 o'clock start via `-rotate-90`, `arcLength CIRCUMFERENCE` dash form).
+ *
+ * `colorHex` rides a plain SVG `stroke` attribute, not a class, so it is
+ * exempt from the Tailwind v4 dynamic-class trap the `swatch` classes must
+ * dodge (`contextBreakdownState.ts`).
+ *
+ * Every number this paints — dash, offset, stroke width, opacity, the center
+ * readout — comes from `selectDonutView`, so the hover behaviour is testable in
+ * a suite with no DOM. All this component owns is the two pointer wires.
+ *
+ * The center reads two different questions depending on hover state: at rest
+ * it is `percentUsed`, the panel's own overall figure (share of the full
+ * window); hovering a category swaps it to that category's share of the
+ * ACCOUNTED total (`view.centerPercent`, share of what is actually used, not
+ * of window capacity) — the arcs underneath never change basis, only the
+ * number printed in the middle does.
+ */
+function ContextBreakdownDonut({
+  view,
+  percentUsed,
+  tone,
+  onHover,
 }: {
-  label: string
-  pct: number | null
-  reset: string | null
+  view: DonutView
+  percentUsed: number
+  tone: string
+  onHover: (index: number | null) => void
 }) {
-  const p = pct ?? 0
-  // This popover paints every percentage on ONE ladder (Surfaces.jsx:386 and
-  // :474 are the same expression), so a plan row cannot read green under a pink
-  // Context row. The accounts PAGE keeps `usageTone` — the prototype gives that
-  // surface its own scheme (`AcctUsageBar`, Surfaces.jsx:548).
-  const t = toneClasses(pressureTone(p))
+  const radius = 30
   return (
-    <div className="flex flex-col gap-1.5">
-      <div className="text-[12px] font-semibold text-text-primary">{label}</div>
-      <div className="h-1.5 overflow-hidden rounded-full bg-shell-hover">
-        {/* §0 EXCEPTION: data-driven percent width (see AccountUsageBar). */}
-        <div
-          className={`h-full rounded-full ${t.dot}`}
-          style={{ width: `${Math.min(100, p)}%` }}
+    <div className="relative mx-auto my-1 h-[76px] w-[76px] shrink-0">
+      <svg width="76" height="76" viewBox="0 0 76 76" className="-rotate-90" aria-hidden>
+        <circle
+          cx="38"
+          cy="38"
+          r={radius}
+          fill="none"
+          stroke="rgba(255,255,255,0.06)"
+          strokeWidth="6"
         />
-      </div>
-      <div className="text-[11.5px] text-text-subtle">
-        <span className={`font-semibold ${t.text}`}>{p}%</span>
-        {reset ? ` · resets ${reset}` : ''}
+        {view.segments.map((segment, index) => (
+          // §0 EXCEPTION: data-driven arc geometry and emphasis, the same class
+          // of computed SVG presentation attribute `ContextGauge`'s own arc
+          // already uses. The values come from `selectDonutView`, not from here.
+          <circle
+            key={segment.label}
+            cx="38"
+            cy="38"
+            r={radius}
+            fill="none"
+            stroke={segment.colorHex}
+            strokeWidth={segment.strokeWidth}
+            strokeLinecap="butt"
+            strokeDasharray={`${segment.dash} ${view.circumference}`}
+            strokeDashoffset={segment.offset}
+            opacity={segment.opacity}
+            // The arc is a stroked circle with no fill, so the default hit area
+            // is the whole 76px disc and every segment would answer for the
+            // pointer. `stroke` narrows the target to the drawn band itself.
+            className="[pointer-events:stroke] transition-[opacity,stroke-width] duration-100"
+            onMouseEnter={() => onHover(index)}
+            onMouseLeave={() => onHover(null)}
+          >
+            <title>{`${segment.label}, ${segment.tokens.toLocaleString()} tokens`}</title>
+          </circle>
+        ))}
+      </svg>
+      <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+        <span
+          className={`text-[16px] font-semibold tabular-nums ${view.centerClass ?? tone}`}
+        >
+          {view.centerPercent == null
+            ? `${percentUsed}%`
+            : `${Math.round(view.centerPercent)}%`}
+        </span>
       </div>
     </div>
   )
@@ -680,61 +755,72 @@ function PlanUsageRow({
 
 /** The context-donut popover BODY (the prototype's `ContextChip` popover,
  * Surfaces.jsx:497). Exported + pure (open-state-free) for headless coverage, like
- * {@link AccountSwitcherPanel}. Shows the active account's 5h/weekly PLAN USAGE (when a
- * pool snapshot is present) + the real Context total, all from data already on the wire.
+ * {@link AccountSwitcherPanel}. Shows the real Context total, from data already on
+ * the wire — plan/quota usage is deliberately NOT here (operator call, 2026-08-05:
+ * it is visible elsewhere and this popover is about the context WINDOW, not the
+ * account's rate limits).
  *
  * The per-category BREAKDOWN below the aggregate row (the prototype's stacked bar +
- * legend + Free, Surfaces.jsx:517-537) is the `context-breakdown.snapshot` seam,
- * carrying the engine's OWN `analyzeContextUsage` output. It was deferred until
- * 2026-08-04 for want of exactly that frame. It arrives on attach and whenever this
- * popover is opened, so a session with nothing to analyse yet renders the aggregate
- * row alone — absent, never fabricated. */
+ * legend + Free, Surfaces.jsx:517-537, now drawn as {@link ContextBreakdownDonut}) is
+ * the `context-breakdown.snapshot` seam, carrying the engine's OWN
+ * `analyzeContextUsage` output. It arrives on attach and whenever this popover is
+ * opened, so a session with nothing to analyse yet renders the aggregate row alone —
+ * absent, never fabricated.
+ *
+ * The header row reads {@link selectPanelUsage}, NOT `usage` directly, once a
+ * breakdown is present: `usage` is the composer's own live, per-message number,
+ * while the rows below are a coarse snapshot recomputed only on attach/open. The
+ * two are different pipelines on different cadences, so printing them together
+ * could show a header total the rows didn't sum to. `selectPanelUsage` sums the
+ * SAME rows the legend prints instead, so the header always reconciles with what
+ * is on screen below it. */
 export function ContextUsagePanel({
   usage,
-  account,
   breakdown = null,
+  onCompact,
 }: {
   usage: ContextUsage
-  account: AccountStatus | null
   /** Per-category occupancy, absent until the sidecar has produced one. */
   breakdown?: ContextBreakdownSnapshot | null
+  /**
+   * Submits `/compact` for this session. Absent (and the row unrendered) when no
+   * engine can take it: a preview pane, or a spawning, parked, or terminal
+   * session (`canSendUntypedSubmit`; `parked` is deliberately non-terminal yet
+   * has no process, so it is excluded too). It does NOT route through the
+   * composer draft — see the handler in `App.tsx` for why.
+   */
+  onCompact?: () => void
 }) {
-  const { percentUsed, usedTokens, contextWindow } = usage
+  const { percentUsed, usedTokens, contextWindow } = selectPanelUsage(
+    usage,
+    breakdown,
+  )
   // Context fullness, NOT account quota — the same ladder the donut face reads.
-  const t = toneClasses(pressureTone(percentUsed))
+  const tone = pressureTone(percentUsed)
+  const t = toneClasses(tone)
+  // Past the pressure threshold the panel's action escalates. The threshold is
+  // `pressureTone`'s OWN ladder (warn at 70, danger at 90), deliberately not a
+  // new number of this footer's own: the popover paints every percentage on that
+  // one ladder, so a footer escalating on a separate threshold could shout under
+  // a percent still coloured calm.
+  const escalated = tone === 'warn' || tone === 'danger' ? tone : null
   const rows = selectBreakdownRows(breakdown)
   const freeTokens = selectFreeTokens(breakdown)
-  const showPlan =
-    account != null &&
-    (account.usagePrimary != null || account.usageWeekly != null)
+  // ONE hover target for the ring and the legend together, which is why it is
+  // held here rather than inside the donut: a legend row and its arc are the
+  // same category, so they must emphasise as one.
+  const [hovered, setHovered] = useState<number | null>(null)
+  const view = selectDonutView(rows, hovered)
   return (
     // ACCT-3: informational content only (no menu items) — `role="menu"`
     // asserted an arrow-navigable contract this panel never fulfilled.
     <div role="dialog" aria-label="Usage" className={`${POPOVER_PANEL_RIGHT} w-[268px]`}>
-      {showPlan && account ? (
-        <>
-          <div className="px-3.5 pb-1 pt-3 text-[9.5px] font-bold uppercase tracking-[0.13em] text-text-subtle">
-            Plan usage
-          </div>
-          <div className="flex flex-col gap-3.5 px-3.5 pb-3.5 pt-2">
-            <PlanUsageRow
-              label="5-hour limit"
-              pct={account.usagePrimary}
-              reset={formatResetLabel(account.usageResetAt)}
-            />
-            <PlanUsageRow
-              label="Weekly · all models"
-              pct={account.usageWeekly}
-              reset={null}
-            />
-          </div>
-        </>
-      ) : null}
-      <div
-        className={`px-3.5 pb-3.5 ${showPlan ? 'border-t border-shell-seam pt-3' : 'pt-3'}`}
-      >
+      {/* No bottom padding when the footer follows: the footer well brings its
+        * own, and doubling them left the Free row floating well clear of the
+        * seam. Without a footer the body owns the panel's bottom edge again. */}
+      <div className={`px-3.5 pt-3 ${onCompact ? '' : 'pb-3.5'}`}>
         <div
-          className={`flex items-center justify-between ${rows.length > 0 ? 'mb-2.5' : ''}`}
+          className={`flex items-center justify-between ${rows.length > 0 ? 'mb-1' : ''}`}
         >
           <span className="text-[11.5px] text-text-subtle">Context</span>
           <span className="text-[11.5px] tabular-nums text-text-muted">
@@ -744,36 +830,37 @@ export function ContextUsagePanel({
         </div>
         {rows.length > 0 ? (
           <>
-            {/* The stacked occupancy bar (Surfaces.jsx:519-523): one segment per
-              * category, each sized by its share of the WINDOW, over a faint
-              * track that shows through as the unused remainder. */}
-            <div className="mb-2 flex h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
-              {rows.map(row => (
-                // §0 EXCEPTION: data-driven percent width (see PlanUsageRow).
-                <div
-                  key={row.label}
-                  // `shrink-0` so a total that somehow exceeds the window clips at
-                  // the edge instead of flexbox silently rescaling EVERY segment,
-                  // which would misreport all of them rather than just the overflow.
-                  className={`shrink-0 ${row.swatch}`}
-                  style={{ width: `${row.percentOfWindow}%` }}
-                  title={`${row.label}, ${row.tokens.toLocaleString()} tokens`}
-                />
-              ))}
-            </div>
-            {rows.map(row => (
+            <ContextBreakdownDonut
+              view={view}
+              percentUsed={percentUsed}
+              tone={t.text}
+              onHover={setHovered}
+            />
+            {/* Hovering a legend row drives the ring, and vice versa: both ends
+             * write the same index. Pointer-only by design — every label and
+             * value here is already on screen at rest, so the emphasis reveals
+             * nothing a keyboard or touch user would otherwise miss, and making
+             * seven readout rows focusable would bury the Compact button behind
+             * them in the tab order. */}
+            {view.legend.map((row, index) => (
               <div
                 key={row.label}
-                className="flex items-center justify-between py-[2.5px]"
+                onMouseEnter={() => setHovered(index)}
+                onMouseLeave={() => setHovered(null)}
+                className={`-mx-1 flex items-center justify-between rounded px-1 py-[2.5px] transition-colors duration-100 ${row.rowClass}`}
               >
-                <span className="flex items-center gap-1.5 text-[11px] text-text-muted">
+                <span
+                  className={`flex items-center gap-1.5 text-[11px] transition-colors duration-100 ${row.labelClass}`}
+                >
                   <span
                     aria-hidden
                     className={`size-[7px] shrink-0 rounded-[2px] ${row.swatch}`}
                   />
                   {row.label}
                 </span>
-                <span className="text-[11px] tabular-nums text-text-subtle">
+                <span
+                  className={`text-[11px] tabular-nums transition-colors duration-100 ${row.valueClass}`}
+                >
                   {fmtTokens(row.tokens)}
                 </span>
               </div>
@@ -789,7 +876,66 @@ export function ContextUsagePanel({
           </>
         ) : null}
       </div>
+      {/* The panel's ONE action, in one of two forms and never both. Outside the
+       * padded body, and outside the `rows.length` gate: the aggregate row alone
+       * is already reason enough to compact, and the breakdown may never arrive.
+       *
+       * Resting form — an inset button in a separated well, accent-tinted to mark
+       * it as the action while the well's own seam keeps that tint off the panel
+       * edge. Escalated form — a full-bleed strip in the pressure tone, which is
+       * a different sentence, not a recoloured button: past the threshold the
+       * panel is telling the operator something rather than offering it. */}
+      {onCompact ? (
+        escalated == null ? (
+          <div className="border-t border-shell-seam px-3.5 py-2">
+            <button
+              type="button"
+              onClick={onCompact}
+              // The engine's own words for what the command does (commands/compact/index.ts:8).
+              title="Clear conversation history but keep a summary in context"
+              className="inline-flex w-full items-center justify-center gap-[5px] rounded-md border border-accent/[0.28] bg-accent/[0.12] px-2.5 py-[5px] text-[11px] font-medium text-accent transition-colors hover:border-accent/[0.42] hover:bg-accent/20"
+            >
+              <CompactIcon />
+              Compact
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={onCompact}
+            title="Clear conversation history but keep a summary in context"
+            className={`flex w-full items-center gap-2 border-t px-3.5 py-[9px] text-left text-[11.5px] font-medium transition-colors ${t.text} ${t.softBorder} ${ESCALATED_ACTION_TINT[escalated]}`}
+          >
+            <WarningTriangle size={12} />
+            <span className="flex-1">Running low, compact now</span>
+          </button>
+        )
+      ) : null}
     </div>
+  )
+}
+
+/** The compact action's glyph: four arrows pulling inward, at the 11px the usage
+ * panel's footer button asks for. Inherits the button's accent via
+ * `stroke="currentColor"`, so it tracks the accent theme with the label. */
+function CompactIcon() {
+  return (
+    <svg
+      width="11"
+      height="11"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M4 14h6v6" />
+      <path d="M20 10h-6V4" />
+      <path d="M14 10l7-7" />
+      <path d="M3 21l7-7" />
+    </svg>
   )
 }
 
@@ -899,18 +1045,18 @@ function TokenWarningChip({
  * command→openSignal wire, ledger P4-0.) */
 function ContextChip({
   usage,
-  account,
   breakdown,
   onRequestBreakdown,
+  onCompact,
   faceProps,
 }: {
   usage: ContextUsage
-  account: AccountStatus | null
   breakdown: ContextBreakdownSnapshot | null
   onRequestBreakdown?: () => void
+  onCompact?: () => void
   faceProps?: ComposerFaceProps
 }) {
-  const { open, setOpen, ref, triggerRef } = usePopover()
+  const { open, setOpen, close, ref, triggerRef } = usePopover()
   return (
     <div ref={ref} className="relative flex shrink-0">
       <button
@@ -937,8 +1083,20 @@ function ContextChip({
       {open ? (
         <ContextUsagePanel
           usage={usage}
-          account={account}
           breakdown={breakdown}
+          // Dismiss on submit: the panel is a readout of a number the compaction
+          // is about to change, so leaving it open would show a stale one.
+          // `close`, not `setOpen(false)` — a selection owes the trigger its
+          // focus back BEFORE the panel unmounts, or a keyboard user who
+          // activated this row lands on `<body>` (ACCT-2, `composerPopover.ts`).
+          onCompact={
+            onCompact
+              ? () => {
+                  close()
+                  onCompact()
+                }
+              : undefined
+          }
         />
       ) : null}
     </div>
@@ -949,6 +1107,7 @@ export function ComposerActionsBar({
   attachDisabled,
   onAttach,
   model,
+  modelLabel = null,
   reasoningEffort,
   fastMode,
   runControls,
@@ -966,6 +1125,7 @@ export function ComposerActionsBar({
   contextUsage,
   contextBreakdown = null,
   onRequestContextBreakdown,
+  onCompact,
   toolbarRef,
   onFocusComposer,
 }: {
@@ -973,10 +1133,18 @@ export function ComposerActionsBar({
   onAttach: () => void
   /** The RESOLVED model this session runs; null before the snapshot → face omitted. */
   model: string | null
+  /** Its product name, when one was reported. The read-only face shows this and
+   * falls back to the id; the interactive `ModelChip` already had its own. */
+  modelLabel?: string | null
   /** The session's reasoning-effort tier; null when running at the provider default → face omitted. */
   reasoningEffort: string | null
-  /** Fast-mode toggle — the ⚡ face renders when on OR togglable (P4-24c interactive). */
-  fastMode: boolean
+  /**
+   * Fast-mode state for the READ-ONLY face: true/false when it is known, null
+   * when nothing has reported it (a preview) or the model cannot do fast at all,
+   * in which case no face renders — the live chip's own `supportedByModel`
+   * behaviour.
+   */
+  fastMode: boolean | null
   /**
    * P4-24c — the LIVE run-controls snapshot (current + real picker options +
    * availability). When present WITH the matching `onSet*` handler, a face becomes
@@ -1012,6 +1180,8 @@ export function ComposerActionsBar({
   contextBreakdown?: ContextBreakdownSnapshot | null
   /** Opening the usage popover asks the sidecar to recompute the breakdown. */
   onRequestContextBreakdown?: () => void
+  /** Submits `/compact`. Absent when no engine can take it, which hides the row. */
+  onCompact?: () => void
   /** Feature #4 — the toolbar's DOM node, so the composer keydown (App.tsx) can
    * move focus into the first face via {@link focusFirstComposerFace}. */
   toolbarRef?: Ref<HTMLDivElement>
@@ -1148,15 +1318,14 @@ export function ComposerActionsBar({
       onBlur={onToolbarBlur}
       className="mt-3 flex items-center gap-4 px-1"
     >
-      {/* Attach (§10 ❓, Chat.jsx:1435): quiet #3f3f46 glyph brightening to
-       * #a1a1aa on hover — a real file picker needs an engine attachment
-       * capability that is NOT on the wire; the working attach path today is a
-       * large paste, which the toast + title spell out. */}
+      {/* Attach (§10, Chat.jsx:1435): quiet #3f3f46 glyph brightening to
+       * #a1a1aa on hover. The owner opens the image picker; clipboard images
+       * use the same attachment path from the composer paste handler. */}
       <button
         {...faceProps('attach')}
         aria-label="Add attachment"
-        title="Add attachment. Paste a large block to attach it as a collapsed chip"
-        className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[5px] text-[#3f3f46] transition-colors hover:text-text-muted disabled:opacity-50"
+        title="Add image"
+        className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[5px] text-text-ghost transition-colors hover:text-text-muted disabled:opacity-50"
         disabled={attachDisabled}
         onClick={onAttach}
         type="button"
@@ -1196,11 +1365,16 @@ export function ComposerActionsBar({
           </>
         ) : model ? (
           <>
+            {/* The LABEL, falling back to the id only when no name was reported
+              * (a preview reads a cache, which stores the id alone). Rendering
+              * the id here turned `Sonnet 4.5` into
+              * `claude-sonnet-4-5-20250929` the moment a session parked — the
+              * same defect `ModelChip` fixed for the live face above. */}
             <span
               className={`${RAIL_FACE} text-[#22d3ee]`}
-              title={`Model: ${model}`}
+              title={`Model: ${modelLabel ?? model}`}
             >
-              {model}
+              {modelLabel ?? model}
             </span>
             <RailSep />
           </>
@@ -1242,8 +1416,8 @@ export function ComposerActionsBar({
             onToggle={onSetFast}
             faceProps={faceProps('fast')}
           />
-        ) : fastMode ? (
-          <FastFace />
+        ) : fastMode !== null ? (
+          <FastFace active={fastMode} />
         ) : null}
 
         <div className="ml-auto flex min-w-0 items-center gap-[7px]">
@@ -1256,10 +1430,20 @@ export function ComposerActionsBar({
               faceProps={faceProps('account')}
             />
           ) : showAccount ? (
+            /* The same status dot the interactive chip shows, for the same
+             * reason: the alias text is deliberately never health-tinted, so the
+             * dot is the ONLY thing carrying which account this is and how it is
+             * doing. Dropping it on a detached pane silently removed the health
+             * signal from the one state where the user cannot open the switcher
+             * to go looking for it. */
             <span
-              className={`${RAIL_FACE} text-text-muted`}
+              className={`${RAIL_FACE} gap-1.5 text-text-muted`}
               title={`Active account: ${accountAlias} · ${account.availabilityLabel}`}
             >
+              <span
+                className={`h-[7px] w-[7px] shrink-0 rounded-full ${toneClasses(statusDotTone(account)).dot}`}
+                aria-hidden
+              />
               {accountAlias}
             </span>
           ) : anthropicAccount && anthropicAccountLabel ? (
@@ -1286,9 +1470,9 @@ export function ComposerActionsBar({
           {contextUsage ? (
             <ContextChip
               usage={contextUsage}
-              account={account}
               breakdown={contextBreakdown}
               onRequestBreakdown={onRequestContextBreakdown}
+              onCompact={onCompact}
               faceProps={faceProps('context')}
             />
           ) : null}

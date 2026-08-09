@@ -6,11 +6,13 @@
  * worker object — D2 C5):
  *
  *   1. Session plane (D2 §4.2) — the engine's PERSISTED agent-mode state, read
- *      through the engine's OWN entry point `readSessionStateWithContinuity`
- *      (`src/agent-mode/sessionState.ts:691`), NOT a hand-rolled file parse. It
- *      supplies the objective, run phase, prior-session continuity workers
- *      (resumable/stale) and the synthesis lifecycle. Best-effort: a non-agent-mode
- *      session has no `.agent-mode-state.json`, so this degrades to empty.
+ *      through the engine's OWN exact-session entry point `readSessionState`
+ *      (`src/agent-mode/sessionState.ts`), NOT a hand-rolled file parse. It
+ *      supplies the objective, run phase, and persisted workers for THIS engine
+ *      session. Best-effort: a non-agent-mode session has no
+ *      `.agent-mode-state.json`, so this degrades to empty. Engine continuity
+ *      discovery remains an engine-only concern and is not imported into the
+ *      desktop snapshot.
  *   2. Live plane — the `local_agent` workers this session delegated via the Agent
  *      tool (`AppState.tasks`, the SAME store P4-9's tasks domain reads). Reading
  *      the raw `LocalAgentTaskState` here (not the P4-9 wire item) also surfaces
@@ -23,7 +25,7 @@
  */
 import { isAgentMode, matchSessionMode } from '../../src/agent-mode/agentMode.js'
 import {
-  readSessionStateWithContinuity,
+  readSessionState,
   type AgentModeSessionState,
   type AgentModeWorkerSession,
 } from '../../src/agent-mode/sessionState.js'
@@ -79,7 +81,7 @@ export function createRealAgentModeExecutor(): AgentModeExecutor {
 export type SidecarAgentModeDomain = {
   /**
    * Live read-only orchestrator snapshot. Async because the session plane is a
-   * file-backed engine read (`readSessionStateWithContinuity`); the live plane is
+   * file-backed engine read (`readSessionState`); the live plane is
    * a sync read over the same app-state store the runtime mutates.
    */
   getSnapshot(): Promise<AgentModeSnapshot>
@@ -89,6 +91,15 @@ export type SidecarAgentModeDomain = {
    * Idempotent (already in the requested mode → ok, unchanged). Throw-free.
    */
   setActive(active: boolean): AgentModeSetResult
+  /**
+   * Record that this worker was dismissed, so the session plane stops re-supplying
+   * the row the live plane gave up (see `agentModeSnapshot`). Process-local and
+   * session-scoped, exactly like the live plane it shadows — nothing is written to
+   * the engine's persisted state, which stays the engine's own record. A worker
+   * that becomes live again un-marks itself on the next snapshot, so this is a
+   * record of "the operator retired this row", not a permanent blocklist.
+   */
+  noteWorkerDismissed(agentId: string): void
   subscribe(listener: () => void): () => void
 }
 
@@ -97,13 +108,23 @@ export function createSidecarAgentModeDomain(
   options: { executor?: AgentModeExecutor } = {},
 ): SidecarAgentModeDomain {
   const executor = options.executor ?? createRealAgentModeExecutor()
+  let dismissed: ReadonlySet<string> = new Set()
   return {
     async getSnapshot() {
       const persisted = await readPersistedAgentModeState()
       const state = appStateStore.getState()
+      dismissed = dismissedStillPending(dismissed, state.tasks)
       // Read `active` through the executor so the spawn snapshot, the set path,
       // and any injected test fake all share ONE truth source (real: isAgentMode()).
-      return agentModeSnapshot(state.tasks, persisted, executor.isActive())
+      return agentModeSnapshot(
+        state.tasks,
+        persisted,
+        executor.isActive(),
+        dismissed,
+      )
+    },
+    noteWorkerDismissed(agentId) {
+      dismissed = new Set(dismissed).add(agentId)
     },
     setActive(active) {
       const wasActive = executor.isActive()
@@ -152,7 +173,7 @@ async function readPersistedAgentModeState(): Promise<AgentModeSessionState | nu
   try {
     const sessionId = getSessionId()
     if (!sessionId) return null
-    return await readSessionStateWithContinuity(sessionId)
+    return await readSessionState(sessionId)
   } catch {
     // Absent/unreadable state file (the common non-agent-mode case) → degrade to
     // empty, never throw (display = degrade gracefully; the live plane still fills).
@@ -161,20 +182,56 @@ async function readPersistedAgentModeState(): Promise<AgentModeSessionState | nu
 }
 
 /**
+ * The dismissal marks that still describe something.
+ *
+ * A dismissed worker that is LIVE again is no longer dismissed: resume reuses the
+ * same agentId (`recordWorkerSessionSpawn` keys `knownWorkers[agentId]`,
+ * `src/agent-mode/sessionState.ts:489`), so a mark left standing would suppress the
+ * persisted twin forever once the resumed run finished — a genuine current worker
+ * missing from the roster with no way to get it back. Dropping the mark while the
+ * worker is live is free, because a live worker already masks its own twin by
+ * handle. It also stops the set outliving what it describes.
+ */
+export function dismissedStillPending(
+  dismissed: ReadonlySet<string>,
+  tasks: Record<string, TaskState> | undefined,
+): ReadonlySet<string> {
+  if (dismissed.size === 0) return dismissed
+  const live = new Set<string>()
+  for (const task of Object.values(tasks ?? {})) {
+    if (task.type !== 'local_agent') continue
+    live.add(task.agentId ?? task.id)
+  }
+  const pending = new Set([...dismissed].filter(id => !live.has(id)))
+  return pending.size === dismissed.size ? dismissed : pending
+}
+
+/**
  * Pure snapshot builder over the two real feeds — no I/O, so it is unit-testable
  * with hand-built `TaskState` / persisted-state fixtures.
  *
  * Union policy: the live `local_agent` workers are authoritative for CURRENT
  * workers (they carry the real handoff gate + block reason + verdict). Persisted
- * workers are added only when NOT already represented live (matched by handle) —
- * this is where prior-session continuity workers (resumable/stale) and any
- * agent-mode worker with a synthesis lifecycle but no live task come from. A plain
- * de-dupe union, never a field-merge, so no fragile overlay of two shapes.
+ * workers from this same engine session are added only when NOT already
+ * represented live (matched by handle). A plain de-dupe union, never a
+ * field-merge, so no fragile overlay of two shapes. Cross-session continuity is
+ * intentionally left to the engine's resume machinery and does not enter this
+ * desktop snapshot.
+ *
+ * `dismissed` is the counterweight to that union (CC-32 follow-up). Handle-based
+ * de-dupe means a live worker MASKS its own persisted twin, so evicting the live
+ * task un-masks the twin and the row the operator just dismissed reappears from
+ * the other plane — the dismiss would visibly self-cancel in exactly the agent-mode
+ * sessions that have a state file. Suppressing the twin here keeps the dismissal
+ * effective. It is deliberately scoped to the PERSISTED plane: a live worker is
+ * removed by the engine's own eviction, and hiding one the engine still holds
+ * would be a display lie about a row that is genuinely still there.
  */
 export function agentModeSnapshot(
   tasks: Record<string, TaskState> | undefined,
   persisted: AgentModeSessionState | null,
   active: boolean,
+  dismissed: ReadonlySet<string> = new Set(),
 ): AgentModeSnapshot {
   const liveWorkers = Object.values(tasks ?? {})
     .filter((task): task is Extract<TaskState, { type: 'local_agent' }> =>
@@ -190,6 +247,7 @@ export function agentModeSnapshot(
 
   const persistedExtra = (persisted?.knownWorkers ?? [])
     .filter(worker => {
+      if (dismissed.has(worker.agentId)) return false
       const handle = normalizeHandle(worker.handle ?? null)
       return handle === null || !liveHandles.has(handle)
     })

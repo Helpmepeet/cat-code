@@ -74,6 +74,14 @@ type RowSource = FrameRowSource & {
    * their stream deltas are dropped engine-side (S1 spec §1).
    */
   parentToolUseId: string | null
+  /**
+   * Engine-minted subagent identity carried by this nested transcript frame.
+   * It is absent for ordinary main-session frames and is never read from the
+   * live task snapshot. Restore replays it too: the sidecar reads each
+   * subagent's own sidechain transcript and stamps the branch with its meta
+   * sidecar's name (`app/sidecar/subagentHistory.ts`).
+   */
+  agentName?: string
 }
 
 export type AssistantTextRow = RowSource & {
@@ -168,6 +176,39 @@ export type ToolResultProjection = {
   isError: boolean
   content: string
   diff: ToolDiffProjection | null
+  /**
+   * The Agent tool's own worker name, from the SAME structured `tool_use_result`
+   * `diff` is narrowed out of (`AgentToolResult.agentName`,
+   * `src/tools/AgentTool/agentToolUtils.ts:727`). Transcript plane: it is this
+   * row's own result frame, so it replays from history like every other field
+   * here, and no session-plane read is involved (`decisions/AGENT-CHROME.md` §4).
+   *
+   * OPTIONAL rather than nullable, unlike `diff`: any tool can produce a diff,
+   * but only the Agent tool ever produces a name, so absence is the ordinary
+   * case and every other family would otherwise have to declare it null.
+   * Extracted from ANY tool result that carries a string `agentName`, not
+   * gated to the Agent family — only the Agent card reads it, and gating would
+   * mean teaching this narrowing about tool families it otherwise ignores.
+   *
+   * Absent while an agent is still RUNNING: the RESULT reaches the transcript
+   * only at completion. A running worker is named from the `agent_name` its
+   * nested frames carry instead (see `projectAssistantFrame`).
+   */
+  agentName?: string
+  /**
+   * The finished Agent tool's own totals, from that same structured result
+   * (`totalTokens` / `totalToolUseCount`, `agentToolUtils.ts:734-735`).
+   *
+   * This is the only usage a FOREGROUND worker ever reports: `agentCompletion`
+   * is minted from a task-notification turn, which only a backgrounded worker
+   * produces. Counting its nested rows instead works live but not after a
+   * restore that landed outside the replayed window, and never yields tokens
+   * at all.
+   *
+   * All-or-nothing, matching `AgentCompletionProjection['usage']`: a partial
+   * object would render a stat line with holes in it.
+   */
+  agentUsage?: { totalTokens: number; toolUses: number }
 }
 
 /**
@@ -934,6 +975,7 @@ function projectAssistantFrame(
     message.parent_tool_use_id.length > 0
       ? message.parent_tool_use_id
       : null
+  const agentName = normalizeAgentName(message.agent_name)
 
   // NB: `message.error` (SDKAssistantMessageError) may ride this frame with
   // empty content — P2-1's ApiErrorRow scope; blocks below still project.
@@ -953,6 +995,7 @@ function projectAssistantFrame(
       frameId: stableFrameId,
       blockIndex,
       parentToolUseId,
+      ...(agentName ? { agentName } : {}),
     })
     return row === null ? [] : [row]
   })
@@ -1034,6 +1077,7 @@ function projectUserFrame(
 
   const messageId = nonEmptyString(body.id) ?? frameId
   const parentToolUseId = nonEmptyString(message.parent_tool_use_id)
+  const agentName = normalizeAgentName(message.agent_name)
   const timestamp =
     message.timestamp === undefined
       ? undefined
@@ -1051,6 +1095,7 @@ function projectUserFrame(
       frameId,
       blockIndex,
       parentToolUseId,
+      ...(agentName ? { agentName } : {}),
     }, {
       isReplay: message.isReplay === true,
       timestamp: timestamp ?? undefined,
@@ -1350,11 +1395,58 @@ function projectToolResultBlock(
   block: Record<string, unknown>,
   toolUseResult: unknown,
 ): ToolResultProjection {
+  const agentName = extractAgentName(toolUseResult)
+  const agentUsage = extractAgentUsage(toolUseResult)
   return {
     isError: block.is_error === true,
     content: flattenToolResultContent(block.content),
     diff: extractDiffProjection(toolUseResult),
+    ...(agentName !== null ? { agentName } : {}),
+    ...(agentUsage !== null ? { agentUsage } : {}),
   }
+}
+
+/**
+ * A finished Agent tool's own totals. Both numbers or neither, and a
+ * non-finite value reads as no usage rather than rendering as `NaN tokens`.
+ * `totalTokens` is NOT rejected at zero here: zero is a real persisted value
+ * whose meaning ("no usage was reported") belongs to the card that decides
+ * whether to print it, not to this narrowing.
+ */
+function extractAgentUsage(
+  toolUseResult: unknown,
+): { totalTokens: number; toolUses: number } | null {
+  if (!isRecord(toolUseResult)) return null
+  const { totalTokens, totalToolUseCount } = toolUseResult
+  if (
+    typeof totalTokens !== 'number' ||
+    typeof totalToolUseCount !== 'number' ||
+    !Number.isFinite(totalTokens) ||
+    !Number.isFinite(totalToolUseCount)
+  ) {
+    return null
+  }
+  return { totalTokens, toolUses: totalToolUseCount }
+}
+
+/**
+ * The worker name off a finished Agent tool's structured result. Read from the
+ * STRUCTURED field, never parsed back out of the result text: the same result
+ * also spells the name into model-facing continuation prose ("agentName: Ada",
+ * `AgentTool.tsx` `mapToolResultToToolResultBlockParam`), and reconstructing
+ * display identity from a banner is the mistake `AgentCompletionProjection`
+ * already documents avoiding.
+ */
+function extractAgentName(toolUseResult: unknown): string | null {
+  if (!isRecord(toolUseResult)) return null
+  return normalizeAgentName(toolUseResult.agentName)
+}
+
+/** Canonical display form for names from both live frames and result objects. */
+function normalizeAgentName(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const normalized = value.trim().replace(/^@/, '').trim()
+  return normalized.length === 0 ? null : normalized
 }
 
 function flattenToolResultContent(content: unknown): string {

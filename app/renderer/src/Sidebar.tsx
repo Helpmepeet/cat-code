@@ -331,8 +331,10 @@ export function Sidebar({
    * resolved yet — in which case the footer shows only the nav toggle rather
    * than an empty avatar. */
   accountAlias?: string | null
-  /** Resolved model for a session (the subtitle's "· model"); null when unknown
-   * — e.g. a restorable row that never attached this run. */
+  /** The DISPLAY NAME of the model a session is running (the subtitle's
+   * "· model"), rendered verbatim: the engine's own marketing name for it, or the
+   * raw model id when it has none. null when unknown, e.g. a restorable row that
+   * never attached this run. */
   modelForSession?: (id: SessionId) => string | null
   /**
    * P4-33 — true while an overlay ANCHORED TO A ROW HERE is open (the ⋮ actions
@@ -517,6 +519,19 @@ export function Sidebar({
       workspaceOrder,
     )
   }, [allGroups, groupRows, query, activeCwd, workspaceOrder])
+  const activityByWorkspace = useMemo(
+    () =>
+      new Map(
+        allGroups.map(group => [
+          group.cwd,
+          group.rows.reduce(
+            (newest, row) => Math.max(newest, sidebarActivityKey(row)),
+            0,
+          ),
+        ]),
+      ),
+    [allGroups],
+  )
 
   // ➕ Projects the operator has hidden are held back HERE, after ordering and
   // filtering, so unhiding one drops it straight back into its ranked slot
@@ -528,12 +543,9 @@ export function Sidebar({
   const { visible: visibleGroups, hidden: hiddenGroups } = useMemo(
     () =>
       selectVisibleWorkspaceGroups(groups, hiddenWorkspaces, group =>
-        group.rows.reduce(
-          (newest, row) => Math.max(newest, sidebarActivityKey(row)),
-          0,
-        ),
+        activityByWorkspace.get(group.cwd) ?? 0,
       ),
-    [groups, hiddenWorkspaces],
+    [groups, hiddenWorkspaces, activityByWorkspace],
   )
 
   // The rendered sequence a reorder is expressed against (what the operator is
@@ -1526,9 +1538,10 @@ export function SidebarRowItem({
   // never `lastAttachedAt` (open/attach bumps that; see `sidebarState.ts`).
   const recency = formatRecency(sidebarActivityKey(row))
   // The subtitle is `time · model`. Only a registry row that attached this run
-  // has a known model; a history row shows none.
+  // has a known model; a history row shows none. Rendered verbatim: the caller
+  // hands over the engine's own display NAME for the model ("Opus 5"), so
+  // shortening it here would cut a real name apart ("GPT-5.6 Sol" → "5.6 Sol").
   const model = appSessionId != null ? modelForSession?.(appSessionId) ?? null : null
-  const shortModel = model ? model.split('-').slice(-1)[0] : null
 
   const openable = visual.openable
   const showActions = openable && (onOpenRowActions != null || onTogglePin != null)
@@ -1742,13 +1755,17 @@ export function SidebarRowItem({
             {title}
           </span>
         </div>
-        {recency || shortModel ? (
-          <div className="flex items-center gap-[5px] text-[10px] text-text-faint">
+        {recency || model ? (
+          /* `min-w-0` so the model name's `truncate` can actually shrink: a flex
+           * child's automatic minimum size is its content, so without it a long
+           * name ("Opus 5 (with 1M context)") widens the row instead of
+           * ellipsing. Recency keeps its `shrink-0` and is never the part cut. */
+          <div className="flex min-w-0 items-center gap-[5px] text-[10px] text-text-faint">
             {recency ? <span className="shrink-0">{recency}</span> : null}
-            {recency && shortModel ? (
-              <span className="text-text-ghost">·</span>
+            {recency && model ? (
+              <span className="shrink-0 text-text-ghost">·</span>
             ) : null}
-            {shortModel ? <span className="truncate">{shortModel}</span> : null}
+            {model ? <span className="truncate">{model}</span> : null}
           </div>
         ) : null}
       </div>

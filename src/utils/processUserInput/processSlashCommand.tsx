@@ -559,7 +559,8 @@ async function getMessagesForSlashCommand(commandName: string, args: string, set
         content: prepareUserContent({
           inputString: `/${commandName}`,
           precedingInputBlocks
-        })
+        }),
+        uuid
       }), createUserMessage({
         content: `This skill cannot be invoked directly by users. Ask the assistant to use the "${commandName}" skill for you.`
       })],
@@ -620,7 +621,12 @@ async function getMessagesForSlashCommand(commandName: string, args: string, set
                   content: prepareUserContent({
                     inputString: formatCommandInput(command, args),
                     precedingInputBlocks
-                  })
+                  }),
+                  // Same uuid carry as the `local` branch below: the persisted
+                  // breadcrumb must keep the submitted identity or it replays as
+                  // a duplicate row. The `display: 'system'` arm above needs no
+                  // carry — mappers.ts drops command-input metadata on replay.
+                  uuid
                 }), result ? createUserMessage({
                   content: `<local-command-stdout>${result}</local-command-stdout>`
                 }) : createUserMessage({
@@ -692,7 +698,13 @@ async function getMessagesForSlashCommand(commandName: string, args: string, set
             content: prepareUserContent({
               inputString: formatCommandInput(command, displayArgs),
               precedingInputBlocks
-            })
+            }),
+            // Carry the submitted uuid onto the persisted breadcrumb, as the
+            // prompt branch already does. A desktop client broadcasts its live
+            // echo under this same uuid, so minting a fresh one here makes the
+            // command replay as a SECOND row after a sidecar restart (renderer
+            // replay dedupe is uuid-keyed).
+            uuid
           });
           try {
             const syntheticCaveatMessage = createSyntheticUserCaveatMessage();

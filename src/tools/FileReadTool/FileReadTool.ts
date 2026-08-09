@@ -79,6 +79,7 @@ import {
   FILE_READ_TOOL_NAME,
   FILE_UNCHANGED_STUB,
   LINE_FORMAT_INSTRUCTION,
+  MAX_LINES_TO_READ,
   OFFSET_INSTRUCTION_DEFAULT,
   OFFSET_INSTRUCTION_TARGETED,
   renderPromptTemplate,
@@ -175,9 +176,18 @@ export class MaxFileReadTokenExceededError extends Error {
   constructor(
     public tokenCount: number,
     public maxTokens: number,
+    /**
+     * Line range of the attempted read. Present for text reads, absent for
+     * notebooks (cells, not lines). Lets the message name a concrete retry
+     * instead of leaving the model to guess a limit and fail again.
+     */
+    range?: { startLine: number; totalLines: number; suggestedLimit: number },
   ) {
     super(
-      `File content (${tokenCount} tokens) exceeds maximum allowed tokens (${maxTokens}). Use offset and limit parameters to read specific portions of the file, or search for specific content instead of reading the whole file.`,
+      `File content (${tokenCount} tokens) exceeds maximum allowed tokens (${maxTokens}). ` +
+        (range
+          ? `The file has ${range.totalLines} lines. Retry with offset ${range.startLine} and limit ${range.suggestedLimit}, then continue from where that ends.`
+          : 'Use offset and limit parameters to read specific portions of the file, or search for specific content instead of reading the whole file.'),
     )
     this.name = 'MaxFileReadTokenExceededError'
   }
@@ -693,7 +703,9 @@ export const FileReadTool = buildTool({
 
         if (data.file.content) {
           content =
-            memoryFileFreshnessPrefix(data) + formatFileLines(data.file)
+            memoryFileFreshnessPrefix(data) +
+            formatFileLines(data.file) +
+            partialReadNotice(data)
         } else {
           // Determine the appropriate warning message
           content =
@@ -722,6 +734,22 @@ function formatFileLines(file: { content: string; startLine: number }): string {
 }
 
 /**
+ * Tells the model when it did not receive the whole file. Load-bearing: a
+ * no-limit read is capped at MAX_LINES_TO_READ lines, so without this the
+ * model would read the first 2000 lines of a longer file and reasonably
+ * conclude it had seen all of it. Whether the read was cut short is decided
+ * in callInner (see truncatedReads), not re-derived from the line totals.
+ */
+function partialReadNotice(data: {
+  file: { startLine: number; numLines: number; totalLines: number }
+}): string {
+  if (!truncatedReads.has(data)) return ''
+  const firstLine = Math.max(data.file.startLine, 1)
+  const lastLine = firstLine + data.file.numLines - 1
+  return `\n\n<system-reminder>Showing lines ${firstLine} to ${lastLine} of ${data.file.totalLines}. This is a partial view. Read again with offset ${lastLine + 1} to continue.</system-reminder>`
+}
+
+/**
  * Side-channel from call() to mapToolResultToToolResultBlockParam: mtime
  * of auto-memory files, keyed by the `data` object identity. Avoids
  * adding a presentation-only field to the output schema (which flows
@@ -729,6 +757,9 @@ function formatFileLines(file: { content: string; startLine: number }): string {
  * when the data object becomes unreachable after rendering.
  */
 const memoryFileMtimes = new WeakMap<object, number>()
+
+/** Same side-channel, for "this read stopped short of the end of the file". */
+const truncatedReads = new WeakSet<object>()
 
 function memoryFileFreshnessPrefix(data: object): string {
   const mtimeMs = memoryFileMtimes.get(data)
@@ -740,6 +771,7 @@ async function validateContentTokens(
   content: string,
   ext: string,
   maxTokens?: number,
+  range?: { startLine: number; lineCount: number; totalLines: number },
 ): Promise<void> {
   const effectiveMaxTokens =
     maxTokens ?? getDefaultFileReadingLimits().maxTokens
@@ -751,8 +783,40 @@ async function validateContentTokens(
   const effectiveCount = tokenCount ?? tokenEstimate
 
   if (effectiveCount > effectiveMaxTokens) {
-    throw new MaxFileReadTokenExceededError(effectiveCount, effectiveMaxTokens)
+    const suggestedLimit = range
+      ? suggestedRetryLimit(range.lineCount, effectiveMaxTokens, effectiveCount)
+      : 0
+    throw new MaxFileReadTokenExceededError(
+      effectiveCount,
+      effectiveMaxTokens,
+      range && suggestedLimit > 0
+        ? {
+            startLine: Math.max(range.startLine, 1),
+            totalLines: range.totalLines,
+            suggestedLimit,
+          }
+        : undefined,
+    )
   }
+}
+
+/**
+ * How many lines of the attempted range would have fit under the cap, scaled
+ * by the token overshoot with headroom so the retry lands under the cap
+ * rather than exactly at it.
+ *
+ * Returns 0 when no line-based retry can fit — a single line already blows
+ * the budget, as in a minified bundle. Suggesting `limit: 1` there would loop
+ * the model on the identical failure, so the caller falls back to the generic
+ * advice, which points at searching instead of reading.
+ */
+export function suggestedRetryLimit(
+  lineCount: number,
+  maxTokens: number,
+  tokenCount: number,
+): number {
+  if (lineCount <= 0 || tokenCount <= 0) return 0
+  return Math.floor((lineCount * maxTokens * 0.9) / tokenCount)
 }
 
 type ImageResult = {
@@ -1002,22 +1066,59 @@ async function callInner(
 
   // --- Text file (single async read via readFileInRange) ---
   const lineOffset = offset === 0 ? 0 : offset - 1
-  const { content, lineCount, totalLines, totalBytes, readBytes, mtimeMs } =
-    await readFileInRange(
-      resolvedFilePath,
-      lineOffset,
-      limit,
-      limit === undefined ? maxSizeBytes : undefined,
-      context.abortController.signal,
-    )
+  // The prompt promises a default line cap; apply it. Without this a no-limit
+  // read selects the whole file and only then discovers it blew maxTokens,
+  // having already paid for the read plus a token-count roundtrip.
+  const effectiveLimit = limit ?? MAX_LINES_TO_READ
+  // For a default read, fetch one line past the cap. That probe line is the
+  // only way to tell a genuinely longer file from one that merely ends in a
+  // newline, for which readFileInRange counts a phantom empty final line.
+  const isDefaultRead = limit === undefined
+  const {
+    content: selected,
+    lineCount: selectedLines,
+    totalLines,
+    totalBytes,
+    readBytes: selectedBytes,
+    mtimeMs,
+  } = await readFileInRange(
+    resolvedFilePath,
+    lineOffset,
+    isDefaultRead ? effectiveLimit + 1 : effectiveLimit,
+    isDefaultRead ? maxSizeBytes : undefined,
+    context.abortController.signal,
+  )
 
-  await validateContentTokens(content, ext, maxTokens)
+  let content = selected
+  let lineCount = selectedLines
+  let readBytes = selectedBytes
+  let truncated = false
+  if (isDefaultRead && selectedLines > effectiveLimit) {
+    const cutAt = selected.lastIndexOf('\n')
+    const probeLine = cutAt === -1 ? selected : selected.slice(cutAt + 1)
+    // A blank probe line is the phantom, unless the file continues past it —
+    // a genuinely empty line at the cap boundary still means more to read.
+    truncated =
+      probeLine !== '' || totalLines > lineOffset + effectiveLimit + 1
+    content = cutAt === -1 ? '' : selected.slice(0, cutAt)
+    lineCount = effectiveLimit
+    readBytes = Buffer.byteLength(content, 'utf8')
+  }
+
+  await validateContentTokens(content, ext, maxTokens, {
+    startLine: offset,
+    lineCount,
+    totalLines,
+  })
 
   readFileState.set(fullFilePath, {
     content,
     timestamp: Math.floor(mtimeMs),
     offset,
     limit,
+    // Only a capped default read is a surprise; an explicit range means the
+    // caller already knows it asked for part of the file.
+    ...(truncated ? { isTruncatedView: true } : {}),
   })
   context.nestedMemoryAttachmentTriggers?.add(fullFilePath)
 
@@ -1039,6 +1140,9 @@ async function callInner(
   }
   if (isAutoMemFile(fullFilePath)) {
     memoryFileMtimes.set(data, mtimeMs)
+  }
+  if (truncated) {
+    truncatedReads.add(data)
   }
 
   logFileOperation({

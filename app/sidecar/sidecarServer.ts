@@ -116,7 +116,11 @@ import type { SidecarMemoryDomain } from './memoryDomain.js'
 import type { SidecarTasksDomain } from './tasksDomain.js'
 import type { SidecarAgentModeDomain } from './agentModeDomain.js'
 import type { SidecarLeaseDomain } from './leaseDomain.js'
-import type { SidecarTaskControlDomain } from './taskControlDomain.js'
+import type { SidecarPanelTaskReaper } from './panelTaskReaper.js'
+import type {
+  SidecarTaskControlDomain,
+  TaskDismissResult,
+} from './taskControlDomain.js'
 import type { SidecarRunControlsDomain } from './runControlsDomain.js'
 import type { SidecarSessionActionsDomain } from './sessionActionsDomain.js'
 import type { SidecarContextBreakdownDomain } from './contextBreakdownDomain.js'
@@ -209,6 +213,13 @@ export type SidecarServerOptions = {
    * own — the kill's store mutation drives the `tasks`/`agent-mode` re-broadcasts.
    */
   taskControl?: SidecarTaskControlDomain
+  /**
+   * Terminal-worker eviction deadline owner. When present, it is started with the
+   * server and stopped on `close()`, so a finished worker leaves `AppState.tasks`
+   * at its `evictAfter` stamp instead of lingering on the docked roster; when
+   * absent, terminal workers are only evicted on the next turn boundary.
+   */
+  panelTaskReaper?: SidecarPanelTaskReaper
   /**
    * Composer run-controls read-seam + write verbs (P4-24c). When present, a
    * `run-controls.snapshot` frame is emitted on attach and re-broadcast on the
@@ -346,6 +357,7 @@ export class SidecarServer {
   private readonly agentMode: SidecarAgentModeDomain | null
   private readonly leases: SidecarLeaseDomain | null
   private readonly taskControl: SidecarTaskControlDomain | null
+  private readonly panelTaskReaper: SidecarPanelTaskReaper | null
   private readonly runControls: SidecarRunControlsDomain | null
   private readonly sessionActions: SidecarSessionActionsDomain | null
   private readonly contextBreakdown: SidecarContextBreakdownDomain | null
@@ -388,6 +400,7 @@ export class SidecarServer {
   private unsubscribeLeaseSnapshot: (() => void) | null = null
   private unsubscribeRunControlsSnapshot: (() => void) | null = null
   private unsubscribeTaskNotificationQueue: (() => void) | null = null
+  private stopPanelTaskReaper: (() => void) | null = null
   private activeTurn = false
   /** Queue listeners are synchronous; drain only from a later microtask. */
   private taskNotificationDrainScheduled = false
@@ -436,6 +449,7 @@ export class SidecarServer {
     this.agentMode = options.agentMode ?? null
     this.leases = options.leases ?? null
     this.taskControl = options.taskControl ?? null
+    this.panelTaskReaper = options.panelTaskReaper ?? null
     this.runControls = options.runControls ?? null
     this.sessionActions = options.sessionActions ?? null
     this.contextBreakdown = options.contextBreakdown ?? null
@@ -530,6 +544,13 @@ export class SidecarServer {
       this.unsubscribeLeaseSnapshot = this.leases.subscribe(() => {
         this.broadcastLeaseSnapshot()
       })
+    }
+    // A finished worker's roster row is removed by the engine EVICTING its task,
+    // not by a display filter — and until this owner existed nothing came back at
+    // the engine's `evictAfter` deadline in the desktop, so the row stayed above
+    // the composer for the rest of the session (`panelTaskReaper.ts`).
+    if (this.panelTaskReaper) {
+      this.stopPanelTaskReaper = this.panelTaskReaper.start()
     }
     // P4-24c — re-broadcast the run-controls snapshot whenever the session's
     // model/effort/fast actually changes. The domain's subscribe is change-detected
@@ -842,6 +863,8 @@ export class SidecarServer {
     this.unsubscribeRunControlsSnapshot = null
     this.unsubscribeTaskNotificationQueue?.()
     this.unsubscribeTaskNotificationQueue = null
+    this.stopPanelTaskReaper?.()
+    this.stopPanelTaskReaper = null
     for (const connection of this.connections) {
       connection.socket.end()
     }
@@ -1188,6 +1211,7 @@ export class SidecarServer {
           this.log(
             `[sidecar] queued prompt was refused twice; giving up: ${error.message}`,
           )
+          this.retriedQueuedPromptKeys.delete(retryKey)
           return
         }
         this.retriedQueuedPromptKeys.add(retryKey)
@@ -1909,6 +1933,10 @@ export class SidecarServer {
    * `stopTask` is async; the result frame follows the awaited kill. The renderer
    * authors ONLY the target `taskId`; the engine re-resolves it against the live
    * store, so an unknown/terminal target fails closed with `ok:false` (no crash).
+   *
+   * `task.dismiss` (CC-32 follow-up) rides the identical path with the identical
+   * shape; only the domain call differs, and its refusals (unknown / still running
+   * / not a panel worker) are decided against the same live store.
    */
   private async handleTaskControlVerb(
     connection: Connection,
@@ -1941,7 +1969,10 @@ export class SidecarServer {
     }
 
     const verb = parsed.data as TaskControlVerbMessage
-    const result = await this.taskControl.stop(verb.taskId)
+    const result =
+      verb.type === 'task.dismiss'
+        ? await this.dismissWorker(verb.taskId)
+        : await this.taskControl.stop(verb.taskId)
     this.send(connection, {
       kind: 'task-control.result',
       protocolVersion: PROTOCOL_VERSION,
@@ -1954,6 +1985,42 @@ export class SidecarServer {
     // No explicit snapshot re-broadcast here — on a successful stop, `stopTask`
     // mutated the store, and the tasks/agent-mode store-subscriptions (constructor)
     // re-emit `tasks.snapshot` / `agent-mode.snapshot` with the task now `killed`.
+    // A dismiss needs one more step, which `dismissWorker` owns.
+  }
+
+  /**
+   * The two-plane half of a dismiss (CC-32 follow-up). `taskControl` can only see
+   * the LIVE `AppState.tasks`, but a worker's roster row has a second source: the
+   * persisted agent-mode plane, which `agentModeSnapshot` unions in whenever no
+   * live worker MASKS it by handle (`agentModeDomain.ts` union policy). Retiring
+   * the row therefore takes both planes, and only this layer sees both.
+   *
+   * `not_found` is consequently NOT a failed dismiss. It means nothing live holds
+   * the row, which leaves the persisted twin as the only thing still rendering it
+   * — exactly what the suppression below retires. Treating it as a refusal made
+   * the control dead on the commonest shape there is: `readSessionState` stamps
+   * `origin: worker.origin ?? 'current'` (`src/agent-mode/sessionState.ts:672`), so
+   * every worker the reaper has already evicted comes back as a persisted row that
+   * looks current, offers Dismiss, and refused it. `still_running` and
+   * `unsupported_type` stay refusals: there the engine holds real state, and
+   * hiding a row it still owns would be a display lie.
+   *
+   * The explicit re-broadcast is required rather than redundant: on this path no
+   * store mutation happens at all, so no subscription fires and nothing else would
+   * carry the suppression to the renderer.
+   */
+  private async dismissWorker(taskId: string): Promise<TaskDismissResult> {
+    if (!this.taskControl) {
+      return { ok: false, message: 'Could not dismiss the worker.' }
+    }
+    const result = await this.taskControl.dismiss(taskId)
+    const retiresRow = result.ok || result.refusal === 'not_found'
+    if (!retiresRow || !this.agentMode) {
+      return result
+    }
+    this.agentMode.noteWorkerDismissed(taskId)
+    void this.broadcastAgentModeSnapshot()
+    return result.ok ? result : { ok: true, message: 'Dismissed worker.' }
   }
 
   /**
@@ -2877,16 +2944,7 @@ export class SidecarServer {
     }
     try {
       const raw = await this.agentMode.getSnapshot()
-      const snapshot = this.prepareOutboundPayload(raw, 'agent-mode.snapshot')
-      if (!snapshot) {
-        return
-      }
-      this.send(connection, {
-        kind: 'agent-mode.snapshot',
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: this.sessionId,
-        agentMode: snapshot,
-      })
+      this.sendAgentModeSnapshotPayload(connection, raw)
     } catch (error) {
       this.log(
         `[sidecar] agent-mode.snapshot send skipped (${
@@ -2896,12 +2954,37 @@ export class SidecarServer {
     }
   }
 
-  private async broadcastAgentModeSnapshot(): Promise<void> {
-    if (this.connections.size === 0) {
+  private sendAgentModeSnapshotPayload(
+    connection: Connection,
+    raw: Awaited<ReturnType<SidecarAgentModeDomain['getSnapshot']>>,
+  ): void {
+    const snapshot = this.prepareOutboundPayload(raw, 'agent-mode.snapshot')
+    if (!snapshot) {
       return
     }
-    for (const connection of this.connections) {
-      await this.sendAgentModeSnapshot(connection)
+    this.send(connection, {
+      kind: 'agent-mode.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      agentMode: snapshot,
+    })
+  }
+
+  private async broadcastAgentModeSnapshot(): Promise<void> {
+    if (!this.agentMode || this.connections.size === 0) {
+      return
+    }
+    try {
+      const raw = await this.agentMode.getSnapshot()
+      for (const connection of this.connections) {
+        this.sendAgentModeSnapshotPayload(connection, raw)
+      }
+    } catch (error) {
+      this.log(
+        `[sidecar] agent-mode.snapshot send skipped (${
+          error instanceof Error ? error.message : String(error)
+        })`,
+      )
     }
   }
 
@@ -3583,6 +3666,9 @@ function checkStrictKeys(message: unknown): string | null {
     // P4-8b task-control STOP verb (app-owned; see TASK_CONTROL_VERB_TYPES). The
     // renderer authors ONLY the target taskId — any other key is rejected.
     ['task.stop', new Set(['type', 'requestId', 'taskId'])],
+    // The terminal counterpart (CC-32 follow-up): same single renderer-authored
+    // key, so a forged `evictAfter`/`retain` never reaches the engine's guards.
+    ['task.dismiss', new Set(['type', 'requestId', 'taskId'])],
     // P4-24c composer run-control verbs (app-owned; see RUN_CONTROL_VERB_TYPES). The
     // renderer authors ONLY the value/selection — any other key is rejected.
     ['model.set', new Set(['type', 'requestId', 'model'])],
@@ -3839,11 +3925,21 @@ const agentModeSetMessageSchema = z.object({
  * only, never trusting the frame. A non-string/absent `taskId` is rejected here
  * fail-closed before the domain runs any kill.
  */
-const taskControlVerbMessageSchema = z.object({
-  type: z.literal('task.stop'),
-  requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
-  taskId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
-})
+const taskControlVerbMessageSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('task.stop'),
+    requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+    taskId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  }),
+  // The dismiss half carries the SAME renderer-authored surface (a target id and
+  // nothing else); which of the two verbs is legal for a given task is the
+  // domain's live-store business check, never the boundary's.
+  z.object({
+    type: z.literal('task.dismiss'),
+    requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+    taskId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  }),
+])
 
 /**
  * P4-24c — sidecar-LOCAL schema for the composer run-control set verbs (protocol.ts:

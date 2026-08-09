@@ -19,6 +19,7 @@ function row(overrides: Partial<MergedSessionRow> = {}): MergedSessionRow {
     displayLabel: 'Refactor auth',
     live: true,
     restorable: false,
+    parked: false,
     status: 'ready',
     inRegistry: true,
     modifiedAtMs: 1,
@@ -128,13 +129,18 @@ test('P4-30: the menu renders leading icons, the History section label and the s
   expect(html).toContain('>History<')
 })
 
-test('a still-deferred verb (Rewind) renders disabled with a "soon" tag and the reason as a tooltip', () => {
+test('a still-deferred verb (Rewind) renders disabled with a "soon" tag and its reason', () => {
   const html = render(true)
   expect(html).toContain('aria-disabled="true"')
   expect(html).toContain('soon')
-  // Rewind stays deferred (no engine conversation-rewind verb); its source-cited
-  // reason rides the disabled row's title attribute.
+  // Rewind stays deferred (no engine conversation-rewind verb); the reason is
+  // available to both hovering and assistive-technology users.
   expect(html).toContain('not available in the desktop app yet')
+  expect(
+    html,
+  ).toContain(
+    'aria-label="Rewind…, Rewind is not available in the desktop app yet."',
+  )
 })
 
 test('P4-6b wired verbs (Rename/Export/Branch) render as live buttons for a LIVE row', () => {

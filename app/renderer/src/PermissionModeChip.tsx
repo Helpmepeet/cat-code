@@ -221,7 +221,7 @@ export function PermissionModeChip({
                  * filled dot when active; the ring rides `currentColor`. */}
                 <span
                   className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border-[1.5px] border-current ${
-                    active ? meta.toneText : 'text-[#3f3f46]'
+                    active ? meta.toneText : 'text-text-ghost'
                   }`}
                   aria-hidden
                 >

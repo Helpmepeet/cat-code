@@ -80,7 +80,7 @@ test('renders active and completed task rows with their labels and kind badge', 
   expect(html).toContain('1 completed')
 })
 
-test('a needs-input local_agent row surfaces the real handoffStatus-derived state label', () => {
+test('a blocked local_agent row names the assistant as the one who owes the answer', () => {
   const snapshot: TasksSnapshot = {
     items: [
       item({
@@ -96,7 +96,10 @@ test('a needs-input local_agent row surfaces the real handoffStatus-derived stat
     <TasksDialog hasActiveSession={true} onClose={noop} open={true} snapshot={snapshot} />,
   )
   expect(html).toContain('Fix the flaky test')
-  expect(html).toContain('Needs you')
+  // Was 'Needs you' on every ordinary session: this row has no orchestrator axis
+  // at all, so it escalated unconditionally.
+  expect(html).toContain('Waiting on the assistant')
+  expect(html).not.toContain('Needs you')
 })
 
 test('P4-8b — the "K stop" footer hint appears ONLY when a stop handler is wired (no dead affordance)', () => {
@@ -192,12 +195,13 @@ function leaseOwnerFixture(over: Partial<LeaseOwnerRow> = {}): LeaseOwnerRow {
     createdAt: 0,
     updatedAt: 0,
     failoverCount: 0,
+    selectionKind: 'initial',
     selectionReason: 'spread selected least crowded healthy account',
     ...over,
   }
 }
 
-test('the dialog offers Tasks, Workers and Leases tabs with real counts', () => {
+test('the dialog offers Tasks, Workers and Accounts tabs with real counts', () => {
   const html = renderToStaticMarkup(
     <TasksDialog
       agentMode={agentModeSnapshotFixture({
@@ -211,16 +215,23 @@ test('the dialog offers Tasks, Workers and Leases tabs with real counts', () => 
     />,
   )
   expect(html).toContain('Workers')
-  expect(html).toContain('Leases')
-  // Counts: 1 task, 2 workers, 1 active lease.
-  expect(html).toContain('>2<')
+  // "Leases" is the engine's noun and the operator rejected it on screen.
+  expect(html).toContain('Accounts')
+  expect(html).not.toContain('Leases')
+  // Counts read off their OWN chip, not anywhere in the document: a bare
+  // `toContain('>2<')` was satisfied by the Workers chip and asserted nothing
+  // about the Accounts count.
+  const chip = (label: string) =>
+    html.match(new RegExp(`${label}<span[^>]*>(\\d+)</span>`))?.[1]
+  expect(chip('Tasks')).toBe('1')
+  expect(chip('Workers')).toBe('2')
+  expect(chip('Accounts')).toBe('1')
 })
 
-test('the Workers panel groups by role and shows the compressed state word', () => {
+test('the Workers panel groups by role, shows normalized types, and keeps lifecycle compact', () => {
   const html = renderToStaticMarkup(
     <WorkerRosterPanel
       onSelect={noop}
-      orchestratorActive={true}
       workers={[
         workerFixture(),
         workerFixture({
@@ -237,29 +248,28 @@ test('the Workers panel groups by role and shows the compressed state word', () 
   expect(html).toContain('scout')
   expect(html).toContain('judge')
   expect(html).toContain('audit the auth path')
-  // Compressed list vocabulary, not the full "Completed" chip label.
-  expect(html).toContain('running')
-  expect(html).toContain('done')
+  // Lifecycle is a pip plus accessible status, not a competing right-side word.
+  expect(html).toContain('status Running')
+  expect(html).toContain('1 done')
+  expect(html).not.toContain('>running<')
+  expect(html).not.toContain('>done<')
 })
 
 test('the Workers panel counts a blocked worker as the assistant’s, never as yours', () => {
-  // D2 C2: an active orchestrator owns the handoff, so nothing alarms the user.
+  // D2 C2, now unconditional: the handoff is queued to the delegating
+  // conversation whether or not this session runs the agent-mode persona, so
+  // nothing here alarms the user.
   const blocked = workerFixture({ handoffStatus: 'blocked', blockReason: 'pick a schema' })
-  const withOrchestrator = renderToStaticMarkup(
-    <WorkerRosterPanel onSelect={noop} orchestratorActive={true} workers={[blocked]} />,
+  const html = renderToStaticMarkup(
+    <WorkerRosterPanel onSelect={noop} workers={[blocked]} />,
   )
-  expect(withOrchestrator).toContain('1 on the assistant')
-  expect(withOrchestrator).not.toContain('needs you')
-
-  const solo = renderToStaticMarkup(
-    <WorkerRosterPanel onSelect={noop} orchestratorActive={false} workers={[blocked]} />,
-  )
-  expect(solo).toContain('1 needs you')
+  expect(html).toContain('1 on the assistant')
+  expect(html).not.toContain('needs you')
 })
 
 test('the Workers panel empty state names the real cause', () => {
   const html = renderToStaticMarkup(
-    <WorkerRosterPanel onSelect={noop} orchestratorActive={true} workers={[]} />,
+    <WorkerRosterPanel onSelect={noop} workers={[]} />,
   )
   expect(html).toContain('No workers yet')
 })
@@ -271,7 +281,6 @@ test('worker detail renders prompt, block reason and the Q2 result, and offers S
       nowMs={4 * 60_000}
       onBack={noop}
       onStopTask={noop}
-      orchestratorActive={true}
       worker={workerFixture({
         handoffStatus: 'blocked',
         blockReason: 'pick a schema',
@@ -300,7 +309,6 @@ test('worker detail hides Stop for a terminal worker and for a prior-session one
       lease={null}
       onBack={noop}
       onStopTask={noop}
-      orchestratorActive={true}
       worker={workerFixture({ status: 'completed' })}
     />,
   )
@@ -311,7 +319,6 @@ test('worker detail hides Stop for a terminal worker and for a prior-session one
       lease={null}
       onBack={noop}
       onStopTask={noop}
-      orchestratorActive={true}
       worker={workerFixture({ origin: 'prior', resumable: true })}
     />,
   )
@@ -319,12 +326,133 @@ test('worker detail hides Stop for a terminal worker and for a prior-session one
   expect(prior).toContain('resumable')
 })
 
+/* CC-32 follow-up — Dismiss is the finished-worker escape hatch the desktop
+ * lacked. A blocked handoff gets no eviction deadline, so its row would otherwise
+ * sit above the composer until the session process exits. */
+test('CC-32 — worker detail offers Dismiss for a finished blocked worker, and Stop is absent there', () => {
+  const html = renderToStaticMarkup(
+    <WorkerDetailPanel
+      lease={null}
+      onBack={noop}
+      onDismissTask={noop}
+      onStopTask={noop}
+      worker={workerFixture({
+        status: 'completed',
+        handoffStatus: 'blocked',
+        blockReason: 'pick a schema',
+      })}
+    />,
+  )
+  expect(html).toContain('Dismiss')
+  expect(html).not.toContain('Stop')
+})
+
+test('CC-32 — Dismiss is absent while the worker runs, for a prior-session worker, and with no active session', () => {
+  const running = renderToStaticMarkup(
+    <WorkerDetailPanel
+      lease={null}
+      onBack={noop}
+      onDismissTask={noop}
+      onStopTask={noop}
+      worker={workerFixture({ status: 'running' })}
+    />,
+  )
+  expect(running).not.toContain('Dismiss')
+  expect(running).toContain('Stop')
+
+  const prior = renderToStaticMarkup(
+    <WorkerDetailPanel
+      lease={null}
+      onBack={noop}
+      onDismissTask={noop}
+      worker={workerFixture({ status: 'completed', origin: 'prior' })}
+    />,
+  )
+  expect(prior).not.toContain('Dismiss')
+
+  // No active session → no verb to send, so no dead affordance.
+  const noSession = renderToStaticMarkup(
+    <WorkerDetailPanel
+      lease={null}
+      onBack={noop}
+      worker={workerFixture({ status: 'completed' })}
+    />,
+  )
+  expect(noSession).not.toContain('Dismiss')
+})
+
+test('Workers rows and detail headers omit null and legacy-id names without inventing Subagent', () => {
+  const worker = workerFixture({
+    agentId: 'internal-agent-id',
+    handle: 'internal-agent-id',
+    role: 'Explore',
+    description: 'Inspect the repository',
+  })
+  const roster = renderToStaticMarkup(
+    <WorkerRosterPanel
+      onSelect={noop}
+      workers={[worker, { ...worker, agentId: 'unnamed', handle: null }]}
+    />,
+  )
+  expect(roster).not.toContain('internal-agent-id')
+  expect(roster).not.toContain('>Unnamed worker<')
+  expect(roster).not.toContain('Subagent')
+  expect(roster).toContain('Inspect the repository')
+  expect(roster).toContain('Explore')
+
+  const detail = renderToStaticMarkup(
+    <WorkerDetailPanel
+      lease={null}
+      onBack={noop}
+      worker={worker}
+    />,
+  )
+  expect(detail).not.toContain('internal-agent-id')
+  expect(detail).not.toContain('Subagent')
+  expect(detail).toContain('Explore')
+})
+
+test('Workers compact rows normalize general-purpose and keep Resumable accessible but not visible', () => {
+  const worker = workerFixture({
+    agentId: 'legacy-resumable-id',
+    handle: 'legacy-resumable-id',
+    role: 'general-purpose',
+    status: 'completed',
+    origin: 'prior',
+    resumable: true,
+    description: 'Resume the investigation',
+  })
+  const roster = renderToStaticMarkup(
+    <WorkerRosterPanel onSelect={noop} workers={[worker]} />,
+  )
+  expect(roster).toContain('General-purpose')
+  expect(roster).toContain('status Resumable')
+  expect(roster).not.toContain('>Resumable<')
+  expect(roster).not.toContain('legacy-resumable-id')
+  const compactRow = roster.match(
+    /<button aria-label="Resume the investigation, type General-purpose, status Resumable"[\s\S]*?<\/button>/,
+  )?.[0]
+  expect(compactRow).toBeDefined()
+  // The row owns one lifecycle pip. AgentTypeLabel is text-only and must not
+  // manufacture a second status-like ring beside it.
+  expect(compactRow?.match(/rounded-full/g)).toHaveLength(1)
+  expect(compactRow).not.toContain('border-[1.4px]')
+
+  const detail = renderToStaticMarkup(
+    <WorkerDetailPanel
+      lease={null}
+      onBack={noop}
+      worker={worker}
+    />,
+  )
+  expect(detail).toContain('Resumable')
+})
+
 test('worker detail fabricates no WMeta field when there is no lease (waiver 7)', () => {
   const html = renderToStaticMarkup(
     <WorkerDetailPanel
       lease={null}
       onBack={noop}
-      orchestratorActive={true}
       worker={workerFixture()}
     />,
   )
@@ -342,7 +470,6 @@ test('worker detail offers no focus/open-thread affordance (D1 waives WorkerFocu
       lease={null}
       onBack={noop}
       onStopTask={noop}
-      orchestratorActive={true}
       worker={workerFixture()}
     />,
   )
@@ -353,12 +480,12 @@ test('worker detail offers no focus/open-thread affordance (D1 waives WorkerFocu
   expect(html).not.toContain('<input')
 })
 
-test('the Leases panel renders strategy, the account rollup and owner rows', () => {
+test('the Accounts panel groups agents under the account each one holds', () => {
   const html = renderToStaticMarkup(
     <LeaseRosterPanel
       nowMs={90 * 60_000}
       snapshot={{
-        strategy: 'follow-main',
+        strategy: 'spread',
         owners: [
           leaseOwnerFixture({
             leaseId: 'main',
@@ -368,40 +495,156 @@ test('the Leases panel renders strategy, the account rollup and owner rows', () 
             strategy: 'follow-main',
             selectionReason: 'main lease pinned to pool activeIndex',
           }),
-          leaseOwnerFixture({ failoverCount: 1, lastFailureReason: 'usage cap' }),
+          leaseOwnerFixture({
+            ownerId: 'agent_a',
+            accountId: 'acct-2222',
+            accountAlias: 'aurora',
+            failoverCount: 1,
+            selectionKind: 'failover',
+            selectionReason: 'failover from acct-1111: Codex account acct-1111 is capped',
+            lastFailureReason: 'Codex account acct-1111 is capped',
+          }),
         ],
-        accounts: [
-          {
-            accountId: 'acct-1111',
-            accountAlias: 'work-laptop',
-            leaseCount: 2,
-            holders: ['Main thread', 'audit the auth path'],
-          },
+        accounts: [],
+      }}
+      workers={[
+        {
+          agentId: 'agent_a',
+          handle: 'Hopper',
+          role: 'general-purpose',
+          status: 'running',
+          description: 'audit the auth path',
+        },
+      ]}
+    />,
+  )
+  expect(html).toContain('Strategy')
+  expect(html).toContain('spread')
+  // Both accounts head their own group, each with its own count.
+  expect(html).toContain('work-laptop')
+  expect(html).toContain('aurora')
+  // `'1 agents'.includes('1 agent')` is true, so the closing bracket is what
+  // actually pins the singular branch.
+  expect(html).toContain('1 agent<')
+  // The worker's real name leads its row; its task text follows.
+  expect(html).toContain('Hopper')
+  expect(html).toContain('audit the auth path')
+  expect(html).toContain('Main thread')
+  expect(html).toContain('1h 30m')
+  expect(html).toContain('moved here from another account')
+  // The engine's own prose and ids stay out of the body text.
+  expect(html).not.toContain('main lease pinned to pool activeIndex')
+  expect(html).not.toContain('failover from')
+  expect(html).not.toContain('Owners')
+  expect(html).not.toContain('Accounts in use')
+  // The failover/rotation EVENT strip is CUT: the engine exposes no event history.
+  expect(html).not.toContain('rotation')
+})
+
+test('a spread session that landed on one account says so, and otherwise says nothing', () => {
+  const onOneAccount = (count: number) =>
+    renderToStaticMarkup(
+      <LeaseRosterPanel
+        nowMs={0}
+        snapshot={{
+          strategy: 'spread',
+          owners: Array.from({ length: count }, (_, index) =>
+            leaseOwnerFixture({ ownerId: `agent_${index}`, leaseId: `agent_${index}` }),
+          ),
+          accounts: [],
+        }}
+      />,
+    )
+  expect(onOneAccount(3)).toContain('All 3 agents landed on one account.')
+  expect(onOneAccount(1)).not.toContain('landed on one account')
+})
+
+test('an agent that could not get an account is stranded above the working ones', () => {
+  const html = renderToStaticMarkup(
+    <LeaseRosterPanel
+      nowMs={0}
+      snapshot={{
+        strategy: 'spread',
+        owners: [
+          leaseOwnerFixture({ ownerId: 'agent_ok', leaseId: 'agent_ok' }),
+          leaseOwnerFixture({
+            ownerId: 'agent_bad',
+            leaseId: 'agent_bad',
+            state: 'failed',
+            failoverCount: 2,
+            lastFailureReason: 'account is capped',
+          }),
         ],
+        accounts: [],
       }}
     />,
   )
-  expect(html).toContain('follow-main')
-  expect(html).toContain('Accounts in use')
-  expect(html).toContain('work-laptop')
-  expect(html).toContain('2 leases')
-  expect(html).toContain('Owners')
-  expect(html).toContain('Main thread')
-  expect(html).toContain('main lease pinned to pool activeIndex')
-  expect(html).toContain('subagent')
-  expect(html).toContain('failed over ×1')
-  expect(html).toContain('1h 30m')
-  // The failover/rotation EVENT strip is CUT: the engine exposes no event history.
-  expect(html).not.toContain('rotation')
-  expect(html).not.toContain('moved')
+  expect(html).toContain('No account')
+  expect(html).toContain('every account was capped or unavailable')
+  expect(html.indexOf('No account')).toBeLessThan(html.indexOf('work-laptop'))
 })
 
-test('the Leases panel empty state tells the user what makes a lease appear', () => {
+test('the Accounts panel empty state tells the user what makes an account appear', () => {
   const html = renderToStaticMarkup(<LeaseRosterPanel snapshot={null} />)
-  expect(html).toContain('No active leases')
-  expect(html).toContain('Agents lease an account when they run')
+  expect(html).toContain('No accounts in use')
+  expect(html).toContain('Agents take one when they run')
   // The default strategy is stated rather than left blank.
   expect(html).toContain('spread')
+})
+
+test('no user-visible string on the Accounts panel says "lease"', () => {
+  const html = renderToStaticMarkup(
+    <LeaseRosterPanel
+      snapshot={{ strategy: 'spread', owners: [leaseOwnerFixture()], accounts: [] }}
+    />,
+  )
+  // Class names are not user-visible text; the rendered text nodes are.
+  const text = html.replace(/<[^>]*>/g, ' ')
+  expect(text.toLowerCase()).not.toContain('lease')
+})
+
+test('the hover detail is a text surface too, so no account id survives in it', () => {
+  const rawId = 'ca889574-256c-4f04-8d5f-f80004f1a8e1'
+  const html = renderToStaticMarkup(
+    <LeaseRosterPanel
+      nowMs={0}
+      snapshot={{
+        strategy: 'spread',
+        owners: [
+          leaseOwnerFixture({
+            failoverCount: 1,
+            selectionKind: 'failover',
+            selectionReason: `failover from ${rawId}: Codex account ${rawId} is capped`,
+            lastFailureReason: `Codex account ${rawId} is capped`,
+          }),
+        ],
+        accounts: [],
+      }}
+    />,
+  )
+  // Stripping tags would drop attributes by construction, so assert on the whole
+  // document: CLAUDE.md §7 lists `title` alongside JSX text.
+  expect(html).not.toContain(rawId)
+  expect(html).toContain('title="Codex account is capped"')
+})
+
+test('the rail brackets the group heading together with its rows', () => {
+  // The single-account state is the one the operator rejected: with the rail
+  // starting below the heading, a lone group read as a plain list under a label.
+  // SSR markup is the only evidence available here, so the nesting is asserted.
+  const html = renderToStaticMarkup(
+    <LeaseRosterPanel
+      nowMs={0}
+      snapshot={{ strategy: 'spread', owners: [leaseOwnerFixture()], accounts: [] }}
+    />,
+  )
+  const rail = html.match(/<div class="border-l [^"]*">([\s\S]*?)$/)?.[1] ?? ''
+  expect(rail).toContain('work-laptop')
+  expect(rail).toContain('audit the auth path')
+  // The count sits beside the account name, not pushed to the far edge. Asserted
+  // as adjacency rather than "no ml-auto anywhere": the concentration note above
+  // legitimately uses ml-auto, so the looser check would false-fail later.
+  expect(html).toMatch(/work-laptop<\/span><span[^>]*>1 agent</)
 })
 
 test('no P4-32b surface renders an em dash (operator rule)', () => {
@@ -409,7 +652,6 @@ test('no P4-32b surface renders an em dash (operator rule)', () => {
     renderToStaticMarkup(
       <WorkerRosterPanel
         onSelect={noop}
-        orchestratorActive={true}
         workers={[workerFixture()]}
       />,
     ),
@@ -419,7 +661,6 @@ test('no P4-32b surface renders an em dash (operator rule)', () => {
         nowMs={0}
         onBack={noop}
         onStopTask={noop}
-        orchestratorActive={true}
         worker={workerFixture({ handoffStatus: 'blocked', blockReason: 'pick a schema' })}
       />,
     ),

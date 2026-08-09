@@ -1562,7 +1562,6 @@ async function* httpSseToEvents(
         { level: 'error' },
       )
       cancelReader(idleTimeoutError)
-      codexResponse.body?.cancel(idleTimeoutError).catch(() => {})
     }, IDLE_TIMEOUT_MS)
   }
   const clearIdleTimer = () => {
@@ -3104,6 +3103,11 @@ async function primeCodexEvents(
         requestCacheMetadata,
       )
       if (responseFailedError) {
+        try {
+          await iterator.return?.()
+        } catch {
+          // Preserve the response.failed error, matching the existing behavior.
+        }
         throw responseFailedError
       }
 
@@ -3143,6 +3147,14 @@ async function primeCodexEvents(
       }
     },
   }
+}
+
+export function _primeCodexEventsForTest(
+  events: AsyncIterable<Record<string, unknown>>,
+  requestCacheMetadata?: CodexRequestCacheMetadata,
+  transport: CodexStreamTransport = 'http',
+): Promise<AsyncIterable<Record<string, unknown>>> {
+  return primeCodexEvents(events, requestCacheMetadata, transport)
 }
 
 function normalizeInitialWebSocketError(

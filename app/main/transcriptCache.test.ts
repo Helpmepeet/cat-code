@@ -32,18 +32,25 @@ import {
   MAX_TRANSCRIPT_CACHE_BYTES,
   TRANSCRIPT_CACHE_GUARD_VERSION,
   TRANSCRIPT_CACHE_RUN_FACTS_VERSION,
+  buildClosedSessionCache,
   cacheHasCurrentRunFacts,
+  cacheWrittenAt,
   createTranscriptCache,
   deleteCache,
   distill,
   listCachedSessionIds,
   readCache,
+  readCachedHeader,
+  readCachedRunFacts,
+  resolveCacheRunFacts,
   resolvePreview,
   writeCache,
 } from './transcriptCache.js'
 import { FrameReplayBuffer, STICKY_FRAME_KINDS } from './replayBuffer.js'
 
 const SID: SessionId = '11111111-1111-4111-8111-111111111111'
+/** A session with no cache file at all. */
+const OTHER_SID: SessionId = '33333333-3333-4333-8333-333333333333'
 const REPLAY_TRUNCATION_REQUEST_ID = 'catcode.replay-truncated'
 
 const tempDirs: string[] = []
@@ -378,6 +385,176 @@ test('the refresh gate reads the run-facts version from the header prefix', () =
   expect(cacheHasCurrentRunFacts(dir, SID)).toBe(true)
 })
 
+/* ------------------------------------------------------------------------- *
+ * the close-path run-facts gate — a header must never be thinner than frames
+ * ------------------------------------------------------------------------- */
+
+const COMPLETE_FACTS = {
+  model: 'gpt-5.6-sol',
+  permissionMode: 'auto',
+  effort: 'high',
+  usedTokens: 143_841,
+  contextWindow: 372_000,
+}
+
+test('a complete derivation is written; an incomplete one writes no header at all', () => {
+  // The whole point of the gate: `selectPreviewRunFacts` trusts a header
+  // WHOLESALE, so a header naming only the effort would cost the preview the
+  // model, mode, usage and exact window its frames still carry.
+  expect(resolveCacheRunFacts(COMPLETE_FACTS, null)).toEqual(COMPLETE_FACTS)
+  expect(
+    resolveCacheRunFacts(
+      { ...COMPLETE_FACTS, contextWindow: null },
+      null,
+    ),
+  ).toBeUndefined()
+  expect(
+    resolveCacheRunFacts({ ...COMPLETE_FACTS, permissionMode: null }, null),
+  ).toBeUndefined()
+  expect(
+    resolveCacheRunFacts({ ...COMPLETE_FACTS, usedTokens: null }, null),
+  ).toBeUndefined()
+})
+
+test('effort is the one fact allowed to stay null: an Anthropic session records none', () => {
+  expect(resolveCacheRunFacts({ ...COMPLETE_FACTS, effort: null }, null)).toEqual({
+    ...COMPLETE_FACTS,
+    effort: null,
+  })
+})
+
+test('an enriched cache fills what a legacy transcript cannot derive, for the SAME model', () => {
+  // The clobber case: a transcript with no `run_facts` record yields no window
+  // (main has no resolver), so without the existing facts this close would drop
+  // back to a headerless write and lose what a previous launch established.
+  const derived = {
+    model: 'gpt-5.6-sol',
+    permissionMode: 'auto',
+    effort: null,
+    usedTokens: 200_000,
+    contextWindow: null,
+  }
+  expect(resolveCacheRunFacts(derived, COMPLETE_FACTS)).toEqual({
+    model: 'gpt-5.6-sol',
+    permissionMode: 'auto',
+    // Filled from the enriched cache…
+    effort: 'high',
+    // …while the FRESH reading of a fact the transcript does state wins.
+    usedTokens: 200_000,
+    contextWindow: 372_000,
+  })
+})
+
+test('a silent derivation borrows NOTHING, even from a complete cache', () => {
+  // No transcript read (unreadable file, or the row is gone) means no evidence.
+  // Borrowing the prior header wholesale would write a complete-LOOKING one
+  // whose usedTokens predates the cache's own frames, and the renderer trusts a
+  // header wholesale — so the donut would report a count older than the
+  // transcript beside it. No header at all is correct: the frame fallback is
+  // derived from those very frames.
+  expect(resolveCacheRunFacts(EMPTY, COMPLETE_FACTS)).toBeUndefined()
+  // Same for a run-facts record that names no model: its window cannot be
+  // attributed, so it may not inherit the previous model's.
+  expect(
+    resolveCacheRunFacts({ ...COMPLETE_FACTS, model: null }, COMPLETE_FACTS),
+  ).toBeUndefined()
+})
+
+test('facts for a different model are never borrowed — above all the window', () => {
+  const derived = {
+    model: 'claude-opus-5',
+    permissionMode: 'default',
+    effort: null,
+    usedTokens: 10_000,
+    contextWindow: null,
+  }
+  // 372k is gpt-5.6-sol's window; adopting it for another model would be a
+  // fabricated denominator. No window ⇒ no header ⇒ the frame fallback answers.
+  expect(resolveCacheRunFacts(derived, COMPLETE_FACTS)).toBeUndefined()
+})
+
+test('readCachedRunFacts ignores facts from an older derivation', () => {
+  const dir = tempDir()
+  const stamped = createTranscriptCache(SID, 'engine-abc', [eventFrame(0)], COMPLETE_FACTS)
+  writeCache(dir, stamped)
+  expect(readCachedRunFacts(dir, SID, 'engine-abc')).toEqual(COMPLETE_FACTS)
+
+  writeFileSync(
+    cachePath(dir),
+    JSON.stringify({
+      header: { ...stamped.header, runFactsVersion: undefined },
+      frames: stamped.frames,
+    }),
+  )
+  expect(readCachedRunFacts(dir, SID, 'engine-abc')).toBeNull()
+  expect(readCachedRunFacts(dir, OTHER_SID, 'engine-abc')).toBeNull()
+})
+
+test('the header prefix read survives a brace inside a header string', () => {
+  // Brace balance, not a regex: a cwd or title carrying `}` must not truncate
+  // the header, and every field after it must still be readable.
+  const dir = tempDir()
+  const cache = createTranscriptCache(SID, 'engine-}-abc', [eventFrame(0)], COMPLETE_FACTS)
+  writeCache(dir, cache)
+  const header = readCachedHeader(dir, SID)
+  expect(header?.engineSessionId).toBe('engine-}-abc')
+  expect(header?.runFacts).toEqual(COMPLETE_FACTS)
+  expect(cacheWrittenAt(dir, SID)).toBe(cache.header.writtenAt)
+})
+
+test('buildClosedSessionCache enriches a distilled close cache from the transcript', () => {
+  const cache = buildClosedSessionCache(
+    {
+      transcriptPath: engineSessionId => `/transcripts/${engineSessionId}.jsonl`,
+      readRunFacts: path => ({
+        facts: path === '/transcripts/engine-abc.jsonl' ? COMPLETE_FACTS : EMPTY,
+        authoritative: true,
+      }),
+      readCachedRunFacts: () => null,
+    },
+    [readyFrame(), permissionFrame(), eventFrame(0)],
+  )
+  expect(cache?.header.runFacts).toEqual(COMPLETE_FACTS)
+  expect(cache?.header.runFactsVersion).toBe(TRANSCRIPT_CACHE_RUN_FACTS_VERSION)
+  // The distill allowlist is unchanged by enrichment.
+  expect(cache?.frames).toHaveLength(1)
+})
+
+test('buildClosedSessionCache skips a session with no transcript frames or no engine id', () => {
+  const deps = {
+    transcriptPath: (engineSessionId: string) => `/t/${engineSessionId}`,
+    readRunFacts: () => ({ facts: COMPLETE_FACTS, authoritative: true }),
+    readCachedRunFacts: () => null,
+  }
+  // Ready + snapshots only: a session closed before its first turn. A readable
+  // cache here would leave the preview holding a loading placeholder forever.
+  expect(buildClosedSessionCache(deps, [readyFrame(), permissionFrame()])).toBeNull()
+  // Never ready ⇒ never restorable ⇒ the cache would never be served.
+  expect(buildClosedSessionCache(deps, [eventFrame(0)])).toBeNull()
+})
+
+test('an unknown transcript path degrades to the headerless cache, never a guess', () => {
+  const cache = buildClosedSessionCache(
+    {
+      // The row is gone: nothing to enrich from.
+      transcriptPath: () => null,
+      readRunFacts: () => ({ facts: COMPLETE_FACTS, authoritative: true }),
+      readCachedRunFacts: () => null,
+    },
+    [readyFrame(), eventFrame(0)],
+  )
+  expect(cache?.header.runFacts).toBeUndefined()
+  expect(cache?.frames).toHaveLength(1)
+})
+
+const EMPTY = {
+  model: null,
+  permissionMode: null,
+  effort: null,
+  usedTokens: null,
+  contextWindow: null,
+}
+
 test('a non-integer run-facts stamp is corrupt and fails the read', () => {
   const dir = tempDir()
   const path = cachePath(dir)
@@ -495,3 +672,31 @@ function fileExists(path: string): boolean {
     return false
   }
 }
+
+test('an authoritative provider-default effort is never patched from a cache', () => {
+  // The run_facts snapshot is one resolved request: `effort: null` there means
+  // this run used the PROVIDER DEFAULT, not "no record said". Borrowing a
+  // cached `high` over it reports an effort the run never used.
+  const authoritative = { ...COMPLETE_FACTS, effort: null }
+  expect(resolveCacheRunFacts(authoritative, COMPLETE_FACTS, true)).toEqual(
+    authoritative,
+  )
+  // The legacy tier means the opposite by the same null, so it still borrows.
+  expect(
+    resolveCacheRunFacts(authoritative, COMPLETE_FACTS, false)?.effort,
+  ).toBe('high')
+})
+
+test('carry-forward is refused across a re-keyed engine session', () => {
+  // An app session resumed into a NEW transcript keeps its appSessionId, so an
+  // older cache under that id describes a different run. Borrowing its effort
+  // and window would relabel that run as this one.
+  const dir = tempDir()
+  writeCache(
+    dir,
+    createTranscriptCache(SID, 'engine-old', [eventFrame(0)], COMPLETE_FACTS),
+  )
+  expect(readCachedRunFacts(dir, SID, 'engine-old')).toEqual(COMPLETE_FACTS)
+  expect(readCachedRunFacts(dir, SID, 'engine-new')).toBeNull()
+  expect(readCachedRunFacts(dir, SID, null)).toBeNull()
+})

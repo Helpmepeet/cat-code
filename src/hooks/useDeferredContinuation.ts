@@ -135,7 +135,11 @@ export function useDeferredContinuation({ setMessages }: Props): void {
         timer.unref?.()
         return
       }
-      if (!attempt) return
+      if (!attempt) {
+        timer = setTimeout(() => void check(), 1_000)
+        timer.unref?.()
+        return
+      }
       show(
         wasWaitingWithBackgroundOff
           ? 'Status: Running\nContinuation was waiting because this conversation was closed. Continuing now with a new reconciliation message. The failed request will not be replayed.'

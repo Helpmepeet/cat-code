@@ -575,7 +575,7 @@ async function applyAttemptResult(
     case 'quota_exhausted': {
       let status
       try {
-        status = await buildCodexStatus({ refresh: 'auto' })
+        status = await buildCodexStatus({ refresh: 'auto', loadPool: false })
       } catch {
         await stopDeferredContinuationForAttention(
           job,

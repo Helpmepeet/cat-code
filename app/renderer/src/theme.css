@@ -41,6 +41,13 @@
 }
 
 :root {
+  /* Without this, Chromium paints its LIGHT-mode form controls and scrollbars on
+   * this near-black shell: a white scrollbar track down the side of every scroller
+   * (visible whenever the OS is set to always-show scroll bars, or a mouse is
+   * attached), plus light-mode focus rings and text-field chrome. `web/src/index.css`
+   * has carried this since it shipped; the desktop renderer never got it. */
+  color-scheme: dark;
+
   --accent: #f472b6;
   /* The same colour as bare channels, for the decorative glows and hairlines
    * that need it at an alpha (`rgb(var(--accent-rgb) / 0.25)`). Without it those
@@ -68,6 +75,22 @@
   --tone-warn: #fbbf24;
   --tone-danger: #f87171;
   --tone-info: #60a5fa;
+
+  /*
+   * The session column: transcript rows, the restore skeleton, the composer dock
+   * and the dock's banner. All four MUST carry the same value — it is what makes
+   * a transcript row's edges line up with the input below it — so they read this
+   * token rather than repeating a literal, which is how they would drift apart.
+   * The accounts page keeps its own literal on purpose; it is a different
+   * surface, not part of this alignment.
+   *
+   * Tunable by eye, like the text tones. What it trades: at 6.73px per average
+   * character in 14px DM Sans, the content width is this value minus the 64px of
+   * side padding, so 900px is ~124 characters a line and 1000px was ~139. Going
+   * lower keeps buying readability until tool-row paths and diffs start
+   * truncating, which is the wall the original 740px hit.
+   */
+  --transcript-width: 900px;
 }
 
 /*
@@ -126,14 +149,26 @@
   --color-surface-panel: #0a0a0c;
   --color-text-primary: #f4f4f5;
   --color-text-muted: #a1a1aa;
-  --color-text-subtle: #71717a;
-  /* Two darker greys the prototype leans on for resting / ghost / disabled text
-   * (t4 #52525b, t5 #3f3f46). Absent before 2026-07-13, so quiet labels fell
-   * back to --text-subtle (#71717a) and read a shade too bright across the UI
-   * (tab bar, pickers, welcome, plan, transcript sub-labels). Adopt where a
-   * label is RESTING/ghost — not as a swap for primary/muted text. */
-  --color-text-faint: #52525b;
-  --color-text-ghost: #3f3f46;
+  /*
+   * LIGHTENED 2026-08-07 (operator, settled on a live tuner). The prototype's
+   * values were #71717a / #52525b / #3f3f46, and against this near-black body
+   * they measured 4.12 : 2.57 : 1.91 against #09090b — the first below WCAG AA
+   * 4.5:1 and the other two below even the 3:1 non-text floor, on the app's
+   * MOST-used text colour (`text-text-subtle` outnumbers primary and muted
+   * combined). Every value here is the prototype's moved 30% of the way toward
+   * `--color-text-primary`, which is what the operator picked by eye; the
+   * ratios are now 6.94 : 5.28 : 4.35.
+   *
+   * A deliberate deviation from prototype parity, NOT a porting error — do not
+   * "restore" these to the prototype hexes. Same root cause as the transcript
+   * width: values tuned for a browser mockup, not a maximized desktop window.
+   *
+   * Meaning is unchanged: faint/ghost are for RESTING / ghost / disabled text,
+   * never a swap for primary or muted.
+   */
+  --color-text-subtle: #98989f;
+  --color-text-faint: #838389;
+  --color-text-ghost: #75757b;
   --color-accent: var(--accent);
   --color-accent-soft: var(--accent-soft);
 
@@ -178,6 +213,39 @@
   select,
   textarea {
     font: inherit;
+  }
+
+  /* Global scrollbar grammar, ported from the design source's own global block
+   * ("CatCode Web App.html":46-48). Applies to EVERY scroller in the app rather
+   * than being opted into per-surface, which is the point: the ~30 scroll
+   * containers that do not hide their bar were all showing Chromium's default
+   * chrome. Hairline-thin with a transparent track, so a scroller reads as the
+   * content moving rather than as a widget with a gutter.
+   *
+   * In `@layer base` on purpose: the per-surface hide
+   * (`[&::-webkit-scrollbar]:hidden`, and `.no-scrollbar` below) must still win. */
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
+  }
+
+  /* The square where a vertical and a horizontal bar meet. Left alone it is the
+   * one patch Chromium still fills with its own default. */
+  ::-webkit-scrollbar-corner {
+    background: transparent;
   }
 }
 
@@ -226,6 +294,19 @@
 }
 
 @layer components {
+  /* The design source's own opt-out class (`no-scrollbar`, "CatCode Web App.html":49-50)
+   * for a scroller that should not advertise itself: a short inline list, a tab
+   * strip. `SessionsPage.tsx` already asks for it, and until now the class existed
+   * nowhere in the renderer, so that one silently no-opped while every other
+   * surface spelled the same thing out as an arbitrary-variant pair. */
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
   .animate-toast-in {
     animation: catcode-toast-in 0.18s ease-out both;
   }
@@ -296,6 +377,189 @@
   .welcome-cat-glow {
     filter: drop-shadow(0 0 12px rgb(var(--accent-rgb) / 0.5))
       drop-shadow(0 0 26px rgb(var(--accent-rgb) / 0.24));
+  }
+
+  /* ── Model-prose typography ────────────────────────────────────────────────
+   * One grammar for every body of model-authored Markdown: assistant answers,
+   * long-form reasoning, thinking blocks. Written as CSS rather than the
+   * arbitrary-variant className it replaces (`[&>*+*]:mt-2 [&_h1]:… [&_ul]:…`)
+   * because the rules it needs are structural — sibling combinators, `::marker`,
+   * `:is()` groups, per-level heading spacing — and a utility string can only
+   * reach descendants by tag name. Still zero inline style, still static.
+   *
+   * EVERY length is `em`, so the same class serves the 14px assistant column and
+   * the 13px reasoning bodies without a second scale.
+   *
+   * NO READING MEASURE HERE, deliberately. Prose runs the full transcript
+   * column, ~139 characters a line at 1000px, which is past what a reader
+   * tracks comfortably. Two attempts to cap it were rejected on sight (operator,
+   * 2026-08-09): capped-and-left-aligned stranded the reclaimed space on one
+   * side, capped-and-centred indented the answer ~230px off every other row.
+   * Both failed for the same structural reason — this transcript's grammar is
+   * full-width rows (tool cards, reasoning, seams, notices), so a narrower text
+   * column can only read as a seam inside it, whatever its alignment.
+   *
+   * The tension is real and has no width that resolves it: at 6.73px per
+   * average character, a column wide enough for tool paths and diffs is already
+   * ~100 characters even at the prototype's own 740px. Fixing it properly means
+   * choosing which of the two to sacrifice, which is a product decision, not a
+   * stylesheet one. What IS fixed below is the other axis — the structure of a
+   * long answer, so it can be navigated even where a single line is long.
+   *
+   * The model's structure is not ours to trust: it may emit no headings, six
+   * levels of them, loose lists, or a 400-word paragraph. So the values below
+   * assume nothing about the shape and degrade in place — an unstyled level
+   * inherits a sane one, and every level of nesting has a rule. */
+  .md-prose {
+    /* A bare path, URL or identifier is not rare in this content, and unbroken
+     * it forces the whole column to scroll sideways. */
+    overflow-wrap: break-word;
+  }
+
+  /* Baseline rhythm between top-level blocks. Headings override it below. */
+  .md-prose > * + * {
+    margin-top: 0.85em;
+  }
+
+  .md-prose > :first-child {
+    margin-top: 0;
+  }
+
+  .md-prose p {
+    /* Chromium: shortens the last line rather than leaving a one-word orphan. */
+    text-wrap: pretty;
+  }
+
+  /* Headings. Preflight flattens h1–h6 to `font-size: inherit; font-weight:
+   * inherit`, so before this rule an `###` was byte-identical to a paragraph and
+   * `##` differed by weight alone — the exact structure a long answer relies on
+   * to be skimmable was invisible. Sizes stay close together on purpose: this is
+   * a chat transcript, not an article, and a 2em h1 in a 14px column reads as a
+   * banner. The hierarchy is carried mostly by SPACE, not size. */
+  .md-prose :is(h1, h2, h3, h4, h5, h6) {
+    font-weight: 600;
+    line-height: 1.3;
+    text-wrap: balance;
+  }
+
+  .md-prose h1 {
+    font-size: 1.35em;
+  }
+
+  .md-prose h2 {
+    font-size: 1.18em;
+  }
+
+  .md-prose h3 {
+    font-size: 1.05em;
+  }
+
+  /* h4+ has no size left to spend in a 14px column, so it separates by weight
+   * and by the space above it alone. It deliberately does NOT recede into a
+   * muted colour: plenty of answers use `####` as their TOP level, and a muted
+   * h4 in one of those renders every heading quieter than the body it
+   * introduces — worse than the flat baseline this replaces. Deep levels
+   * collapsing toward h3 is the honest degradation when the level numbering is
+   * not ours to choose. */
+  .md-prose :is(h4, h5, h6) {
+    font-size: 1em;
+  }
+
+  /* The scannability lever: a heading owns the gap ABOVE it, and sits tight to
+   * the text it introduces. Equal margins on both sides (what `> * + *` gave)
+   * leave a heading floating between two blocks, belonging to neither. */
+  .md-prose > * + :is(h1, h2) {
+    margin-top: 1.5em;
+  }
+
+  .md-prose > * + :is(h3, h4, h5, h6) {
+    margin-top: 1.35em;
+  }
+
+  /* Also collapses a stacked h2-under-h1 back to a tight pair — this rule comes
+   * last, and at equal specificity that is what decides it. */
+  .md-prose > :is(h1, h2, h3, h4, h5, h6) + * {
+    margin-top: 0.5em;
+  }
+
+  /* Lists. Preflight strips markers and padding from `ul`/`ol`, so every level
+   * here is explicit. Depth gets its own marker rather than an indent alone,
+   * because at 1.5em the indent is easy to lose across a page of nesting. */
+  .md-prose :is(ul, ol) {
+    padding-left: 1.5em;
+  }
+
+  .md-prose ul {
+    list-style-type: disc;
+  }
+
+  .md-prose ol {
+    list-style-type: decimal;
+  }
+
+  .md-prose ul ul {
+    list-style-type: circle;
+  }
+
+  .md-prose ul ul ul {
+    list-style-type: square;
+  }
+
+  .md-prose li::marker {
+    color: var(--color-text-muted);
+  }
+
+  /* Items need to separate from the lines INSIDE an item. With no rule at all, a
+   * wrapped item and a new item were the same distance apart. */
+  .md-prose li + li {
+    margin-top: 0.3em;
+  }
+
+  .md-prose li > :is(ul, ol) {
+    margin-top: 0.3em;
+  }
+
+  /* A blank line between items makes remark wrap each one in `<p>` (a "loose"
+   * list — common in model output). Those paragraphs are not top-level, so the
+   * sibling rule above never reached them and they ran together. */
+  .md-prose li > p + p {
+    margin-top: 0.6em;
+  }
+
+  .md-prose blockquote {
+    border-left: 2px solid var(--color-shell-seam);
+    padding-left: 0.9em;
+    color: var(--color-text-muted);
+  }
+
+  .md-prose blockquote > * + * {
+    margin-top: 0.7em;
+  }
+
+  /* Preflight leaves `hr` a 1px rule in currentColor — a near-white line across
+   * the column, louder than any heading on the page. */
+  .md-prose hr {
+    border: 0;
+    border-top: 1px solid var(--color-shell-seam);
+  }
+
+  .md-prose > * + hr,
+  .md-prose > hr + * {
+    margin-top: 1.6em;
+  }
+
+  /* Inline code only — a fenced block is `pre > code` and belongs to
+   * `CodeBlock`. DM Mono runs visibly larger than DM Sans at a shared size, so
+   * it is scaled down to sit on the same optical line. */
+  .md-prose :not(pre) > code {
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+    color: var(--color-accent-soft);
+    overflow-wrap: anywhere;
+  }
+
+  .md-prose a {
+    color: var(--color-accent);
   }
 }
 

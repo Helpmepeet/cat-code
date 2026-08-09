@@ -34,6 +34,14 @@ export type AccountsState = {
    */
   pool: AccountsSnapshot | null
   sessions: Record<SessionId, AccountsSnapshot | null>
+  /**
+   * What each session's sidecar last reported, KEPT after its engine goes away,
+   * for the composer rail's account face. `sessions` still nulls on lifecycle so
+   * nothing treats a dead session as a live pool feed. Every field here is
+   * already secretGuard-clean, so retaining it holds no credential material that
+   * the live map did not.
+   */
+  lastSessions: Record<SessionId, AccountsSnapshot>
   lastResult: AccountResultFrame | null
   /**
    * P4-15 — the live OAuth login progress per session (the first-run surface +
@@ -50,9 +58,17 @@ export type AccountsAction =
   | { type: 'oauthReset'; sessionId: SessionId }
   /** The global `accounts-pool` host event (accounts owner). Session-independent. */
   | { type: 'pool'; pool: AccountsSnapshot }
+  /** The row is gone for good — drop its retained snapshot (see `lastSessions`). */
+  | { type: 'session-removed'; sessionId: SessionId }
 
 export function createAccountsState(): AccountsState {
-  return { pool: null, sessions: {}, lastResult: null, oauthProgress: {} }
+  return {
+    pool: null,
+    sessions: {},
+    lastSessions: {},
+    lastResult: null,
+    oauthProgress: {},
+  }
 }
 
 export function reduceAccountsState(
@@ -61,6 +77,24 @@ export function reduceAccountsState(
 ): AccountsState {
   if (action.type === 'pool') {
     return { ...state, pool: action.pool }
+  }
+
+  if (action.type === 'session-removed') {
+    const { sessionId } = action
+    if (
+      !(sessionId in state.sessions) &&
+      !(sessionId in state.lastSessions) &&
+      !(sessionId in state.oauthProgress)
+    ) {
+      return state
+    }
+    const sessions = { ...state.sessions }
+    const lastSessions = { ...state.lastSessions }
+    const oauthProgress = { ...state.oauthProgress }
+    delete sessions[sessionId]
+    delete lastSessions[sessionId]
+    delete oauthProgress[sessionId]
+    return { ...state, sessions, lastSessions, oauthProgress }
   }
 
   if (action.type === 'oauthReset') {
@@ -77,6 +111,7 @@ export function reduceAccountsState(
     return {
       ...state,
       sessions: { ...state.sessions, [frame.sessionId]: frame.accounts },
+      lastSessions: { ...state.lastSessions, [frame.sessionId]: frame.accounts },
     }
   }
 
@@ -109,6 +144,21 @@ export function selectAccountsSnapshot(
 ): AccountsSnapshot | null {
   const snapshot = sessionId ? state.sessions[sessionId] : undefined
   return snapshot ?? null
+}
+
+/**
+ * A session's own accounts view, INCLUDING one whose engine has gone away —
+ * what it was running on, for the composer rail's read-only account face.
+ *
+ * Display only. Never read it to decide whether an account may be SWITCHED:
+ * that needs a sidecar, which is exactly what this outlives.
+ */
+export function selectLastAccountsSnapshot(
+  state: AccountsState,
+  sessionId: SessionId | null,
+): AccountsSnapshot | null {
+  if (!sessionId) return null
+  return state.sessions[sessionId] ?? state.lastSessions[sessionId] ?? null
 }
 
 /** The active session's live OAuth login progress, or null when no flow is running. */

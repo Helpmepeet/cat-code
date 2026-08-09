@@ -11,10 +11,6 @@ import {
 } from 'react'
 import { getBridge } from './bridge.js'
 import { buildDebugShellStateSnapshot } from './debugStateReport.js'
-import {
-  permissionActionForKey,
-  permissionKeysAreLive,
-} from './permissionPromptModel.js'
 import { PermissionQueue } from './PermissionQueue.js'
 import { selectContextUsage } from './contextUsage.js'
 import { ComposerActionsBar } from './ComposerActionsBar.js'
@@ -27,6 +23,7 @@ import {
   createPermissionState,
   reducePermissionState,
   selectAdditionalWorkingDirectories,
+  selectLastPermissionMode,
   selectPendingPermissionCount,
   selectPermissionContext,
   selectPermissionQueue,
@@ -118,9 +115,12 @@ import { MentionPicker, type MentionItem } from './MentionPicker.js'
 import { filterMentionItems } from './mentionPickerModel.js'
 import {
   applyMention,
+  buildSubmitPrompt,
   caretAtHistoryEdge,
   createHistoryState,
+  createImageAttachmentState,
   createPasteState,
+  canSendUntypedSubmit,
   createPendingSubmitState,
   createTransportErrorState,
   EMPTY_HISTORY_NAV,
@@ -131,10 +131,13 @@ import {
   PENDING_SUBMIT_RELEASED_MESSAGE,
   planSessionSubmit,
   reduceHistoryPushed,
+  reduceImageAttachmentAdded,
+  reduceImageAttachmentRemoved,
   reducePasteAdded,
   reducePasteStateForDraftWrite,
   reducePendingSubmitCleared,
   reducePendingSubmitHeld,
+  reduceSessionImagesReplaced,
   reduceSessionPastesCleared,
   removePasteOccurrence,
   reduceTransportErrorCleared,
@@ -144,6 +147,7 @@ import {
   selectAgentMentionItems,
   selectComposerGate,
   selectHistory,
+  selectImageAttachments,
   selectPendingSubmit,
   selectSessionPasteList,
   selectSessionPasteState,
@@ -153,11 +157,18 @@ import {
   type DraftWriteReason,
   type HistoryNav,
   type HistoryState,
+  type ImageAttachment,
+  type ImageAttachmentState,
   type PasteEntry,
   type PasteState,
+  type PendingSubmit,
   type PendingSubmitState,
   type TransportErrorState,
 } from './composerState.js'
+import {
+  ACCEPTED_IMAGE_TYPES,
+  prepareImageAttachment,
+} from './imageAttachment.js'
 import {
   WorkspaceLayout,
   type WorkspacePanelView,
@@ -210,6 +221,7 @@ import {
   selectMemorySnapshot,
   selectThreadGoalSnapshot,
 } from './goalMemoryState.js'
+import { selectComposerRail } from './composerRailModel.js'
 import {
   createAccountsState,
   reduceAccountsState,
@@ -217,6 +229,7 @@ import {
   selectActiveAccount,
   selectActiveAnthropicAccount,
   selectFirstAccountsSnapshot,
+  selectLastAccountsSnapshot,
   selectGlobalAccountsSnapshot,
   selectOAuthProgress,
 } from './accountsState.js'
@@ -236,6 +249,7 @@ import {
 import {
   createRunControlsState,
   reduceRunControlsState,
+  selectLastRunControlsSnapshot,
   selectRunControlsSnapshot,
 } from './runControlsState.js'
 import {
@@ -414,22 +428,6 @@ const EMPTY_WORKERS: readonly AgentModeWorkerItem[] = []
 /** Stable identity for the pre-first-turn map, so the initial state is one object. */
 const EMPTY_TURN_STARTS: ReadonlyMap<SessionId, number> = new Map()
 
-/**
- * Elements that already act on Enter/Escape themselves. The plain-key permission
- * shortcuts are a shortcut for "focus is on nothing"; whenever focus sits inside
- * one of these the focused control decides, so Enter on the card's own Deny
- * button denies instead of being swallowed and answered as an allow.
- *
- * A tag-name test is not enough: buttons, menu items and dialog contents all
- * carry their own Enter semantics, and `preventDefault()` here suppresses the
- * browser's Enter → click.
- */
-const FOCUSED_KEY_OWNER_SELECTOR =
-  'a[href], button, input, select, textarea, [contenteditable], ' +
-  '[role="button"], [role="menu"], [role="menuitem"], [role="menuitemradio"], ' +
-  '[role="menuitemcheckbox"], [role="option"], [role="listbox"], ' +
-  '[role="dialog"], [role="alertdialog"]'
-
 /** Renderer-minted correlation id for a run-control verb (T5a-analog; echoed on
  * `run-control.result`). A UX field, not a security one — the sidecar bounds it. */
 const newRequestId = (): string => crypto.randomUUID()
@@ -479,6 +477,8 @@ export function App() {
   // switch (SessionPane unmounts for off-screen sessions). Renderer-local; never
   // crosses the wire.
   const [pasteState, setPasteState] = useState<PasteState>(createPasteState)
+  const [imageAttachmentState, setImageAttachmentState] =
+    useState<ImageAttachmentState>(createImageAttachmentState)
   const [historyState, setHistoryState] = useState<HistoryState>(createHistoryState)
   // CC-16 — a prompt submitted while the session was still spawning. Parked
   // per-session (same keying as `promptDrafts`) and drained through the SAME
@@ -1041,6 +1041,21 @@ export function App() {
           type: 'preview-reset',
           sessionId: event.appSessionId,
         })
+        // The per-session domain stores keep their last-known values across a
+        // LIFECYCLE frame on purpose — the rail must keep reading for a session
+        // whose engine is merely gone. A REMOVED row is the other case: there is
+        // nothing left to display it for, and the retained run-controls snapshot
+        // carries a full model option list, so it is dropped here rather than
+        // held until the renderer restarts.
+        dispatchRunControls({
+          type: 'session-removed',
+          sessionId: event.appSessionId,
+        })
+        dispatchAccounts({ type: 'session-removed', sessionId: event.appSessionId })
+        dispatchPermission({
+          type: 'session-removed',
+          sessionId: event.appSessionId,
+        })
         preloadReservedBytesRef.current.delete(event.appSessionId)
       }
       dispatchShell({ type: 'event', event })
@@ -1541,6 +1556,23 @@ export function App() {
     [activeSessionId],
   )
 
+  // Retire a FINISHED worker row the engine's grace deadline will never retire on
+  // its own (a blocked handoff carries no `evictAfter`). Same trust shape as the
+  // stop above: the renderer names only the taskId, and the sidecar runs the
+  // engine's own dismiss + eviction. The row's disappearance rides the resulting
+  // `agent-mode.snapshot` re-broadcast, not this call.
+  const sendDismissTask = useCallback(
+    (taskId: string) => {
+      if (!activeSessionId) return
+      getBridge().taskControlVerb(activeSessionId, {
+        type: 'task.dismiss',
+        requestId: crypto.randomUUID(),
+        taskId,
+      })
+    },
+    [activeSessionId],
+  )
+
   // P4-13 — dispatch a RemoteSettings verb (bridge toggle / direct-connect) to
   // the active session's sidecar. The outcome returns as a
   // `remoteSettings.result` frame (→ remoteSettings.lastResult).
@@ -1847,15 +1879,21 @@ export function App() {
   // restore here, a terminal connection status in the drain effect below), so a
   // failed reconnect surfaces the text plus an error instead of eating it.
   const releasePendingSubmit = useCallback((sessionId: SessionId) => {
-    const parked = selectPendingSubmit(pendingSubmitsRef.current, sessionId)
-    if (parked === null) return
+    const pending = selectPendingSubmit(pendingSubmitsRef.current, sessionId)
+    if (pending === null) return
     setPendingSubmits(prev => reducePendingSubmitCleared(prev, sessionId))
     setPromptDrafts(drafts =>
       reducePromptDrafts(
         drafts,
         sessionId,
-        restoreDraftWithPending(selectPromptDraft(drafts, sessionId), parked),
+        restoreDraftWithPending(
+          selectPromptDraft(drafts, sessionId),
+          pending.text,
+        ),
       ),
+    )
+    setImageAttachmentState(state =>
+      reduceSessionImagesReplaced(state, sessionId, pending.images ?? []),
     )
     setTransportErrors(prev =>
       reduceTransportErrorSet(prev, sessionId, PENDING_SUBMIT_RELEASED_MESSAGE),
@@ -2114,6 +2152,7 @@ export function App() {
     event.preventDefault()
     const sessionLog = selectRawMessageLog(state, sessionId)
     const sessionConnection = selectConnection(connection, sessionId)
+    const images = selectImageAttachments(imageAttachmentState, sessionId)
     // Collapsed-paste tokens are expanded back to their full text before submit
     // — the engine receives plain prompt text, never a `[Pasted text #N]` ref
     // (parity `expandPastedTextRefs`, src/history.ts:81 / handlePromptSubmit.ts:216).
@@ -2124,6 +2163,7 @@ export function App() {
     const action = planSessionSubmit({
       draft: selectPromptDraft(promptDrafts, sessionId),
       pasteEntries: selectSessionPasteState(pasteState, sessionId).entries,
+      hasImages: images.length > 0,
       preview: hasPreviewTranscript(previewTranscript, sessionId),
       connectionStatus: sessionConnection.status,
       connectionInputEnabled: sessionConnection.inputEnabled,
@@ -2144,6 +2184,7 @@ export function App() {
       return
     }
     const text = action.text
+    const submitPrompt = buildSubmitPrompt(text, images)
     // Both paths retire the draft the same way: the prompt has left the
     // composer, so the pastes it expanded are spent and it joins ↑/↓ history.
     // A parked prompt that is later released comes back as its expanded text
@@ -2151,10 +2192,19 @@ export function App() {
     const retireDraft = (): void => {
       setPromptDrafts(drafts => reducePromptDrafts(drafts, sessionId, ''))
       setPasteState(prev => reduceSessionPastesCleared(prev, sessionId))
+      setImageAttachmentState(prev =>
+        reduceSessionImagesReplaced(prev, sessionId, []),
+      )
       setHistoryState(prev => reduceHistoryPushed(prev, sessionId, text))
     }
     if (action.type === 'hold') {
-      setPendingSubmits(prev => reducePendingSubmitHeld(prev, sessionId, text))
+      setPendingSubmits(prev =>
+        reducePendingSubmitHeld(prev, sessionId, {
+          text,
+          images,
+          showQueuedRow: action.showQueuedRow,
+        }),
+      )
       retireDraft()
       setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))
       return
@@ -2164,7 +2214,7 @@ export function App() {
     // goalSnapshot unless the renderer actually owns one; if added later, the
     // sidecar's T4 parseThreadGoal validation remains the trust boundary.
     try {
-      getBridge().submit(sessionId, text)
+      getBridge().submit(sessionId, submitPrompt)
       retireDraft()
       setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))
     } catch (error) {
@@ -2187,8 +2237,8 @@ export function App() {
   // and sends, and no Restart button is involved.
   useEffect(() => {
     for (const sessionId of Object.keys(pendingSubmits)) {
-      const parked = pendingSubmits[sessionId]
-      if (parked === undefined) continue
+      const pending = pendingSubmits[sessionId]
+      if (pending === undefined) continue
       const outcome = resolvePendingSubmit(selectConnection(connection, sessionId))
       if (outcome === 'wait') continue
       if (outcome === 'restore') {
@@ -2200,7 +2250,10 @@ export function App() {
         continue
       }
       try {
-        getBridge().submit(sessionId, parked)
+        getBridge().submit(
+          sessionId,
+          buildSubmitPrompt(pending.text, pending.images ?? []),
+        )
         setPendingSubmits(prev => reducePendingSubmitCleared(prev, sessionId))
         setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))
       } catch (error) {
@@ -2327,10 +2380,6 @@ export function App() {
     [setSessionPrompt],
   )
 
-  const permissionQueue =
-    activeConnection.status === 'ready'
-      ? selectPermissionQueue(permissions, activeSessionId)
-      : []
   // The card the keyboard shortcuts act on: first un-answered, un-snoozed.
   const pendingPermission =
     activeConnection.status === 'ready'
@@ -2367,36 +2416,13 @@ export function App() {
     [permissions],
   )
 
-  const allowPermission = useCallback(
-    (requestId: string, applySuggestions: number[] = []) => {
-      const sessionId = activeSessionId
-      if (!sessionId) return
-      const item = permissionQueue.find(
-        candidate => candidate.request.requestId === requestId,
-      )
-      if (!item) return
-      respondToPermission(
-        sessionId,
-        requestId,
-        buildAllowResponse(item.request, applySuggestions),
-      )
-    },
-    [activeSessionId, permissionQueue, respondToPermission],
-  )
-
-  const denyPermission = useCallback(
-    (requestId: string, message?: string) => {
-      if (!activeSessionId) return
-      respondToPermission(activeSessionId, requestId, buildDenyResponse(message))
-    },
-	    [activeSessionId, respondToPermission],
-  )
-
   // A request with its OWN dedicated renderer owns the keyboard while it is up:
-  // AskQuestionFlow and PlanPanel each register a `window` keydown listener, and
-  // a key event reaches `document` BEFORE `window`. Leaving this listener
-  // attached alongside one of them makes a single Enter resolve two unrelated
-  // requests — answering a question would also allow a parallel Bash call.
+  // AskQuestionFlow registers a `window` keydown listener (`AskQuestionFlow.tsx`),
+  // and PlanPanel registers a `document` one through `useModalFocus`
+  // (`overlayFocus.ts:345`). Either way, a permission card live alongside one of
+  // them would let a single Enter resolve two unrelated requests — answering a
+  // question would also allow a parallel Bash call. Nulling the target below is
+  // what prevents it: the card never registers a listener at all.
   const dedicatedFlowOwnsKeyboard =
     selectAskQuestion(permissions, activeSessionId) !== null ||
     selectPlanReview(permissions, activeSessionId) !== null
@@ -2410,56 +2436,18 @@ export function App() {
       ? pendingPermission.requestId
       : null
 
-  useEffect(() => {
-    if (!pendingPermission || !activeSessionId) return
-    if (dedicatedFlowOwnsKeyboard) return
-    // Bug fix — the card these shortcuts act on renders only in the 'chat'
-    // view (the final branch of the view switch below, e.g. `activeView ===
-    // 'chat' && activeSessionId` at the TasksStrip mount just below it). On
-    // any other view (Accounts, Settings, ...) the card is unmounted, focus
-    // has nowhere to land but `document.body`, and `permissionKeysAreLive`
-    // reads that as live — so Enter/Escape would allow/snooze a request the
-    // user cannot see.
-    if (activeView !== 'chat') return
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      // Never hijack a key the focused element already acts on: the deny
-      // feedback field, and every button/menu item whose own Enter this would
-      // otherwise suppress. The one exemption is the card the shortcuts act on,
-      // which hosts them rather than owning them (`permissionKeysAreLive`).
-      if (!permissionKeysAreLive(event.target)) return
-      const action = permissionActionForKey(event)
-      if (!action) return
-
-      event.preventDefault()
-      if (action === 'allow') {
-        allowPermission(pendingPermission.requestId, [])
-      } else if (action === 'deny') {
-        denyPermission(pendingPermission.requestId)
-      } else {
-        dispatchPermission({
-          type: 'dismissed',
-          sessionId: activeSessionId,
-          requestId: pendingPermission.requestId,
-        })
-      }
-    }
-
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [
-    allowPermission,
-    denyPermission,
-    pendingPermission,
-    activeSessionId,
-    dedicatedFlowOwnsKeyboard,
-    activeView,
-  ])
+  // The select list's cursor and its keyboard both live on the card that owns
+  // them (`PermissionPrompt.tsx`), not here. They were App state + an App
+  // `document` listener, which meant moving a highlight one row re-rendered the
+  // whole shell. `permissionKeyTargetRequestId` above is the entire contract
+  // between the two: exactly one card is ever handed it, so exactly one
+  // listener exists, and it is never registered beside a dedicated flow's.
 
   // Shell keyboard: keyboard-first tab switching + create/close, matching the
   // prototype's chords (⌘T new · ⌘W close · ⌘1..9 jump-to-tab). Only fires on a
-  // meta/ctrl chord, so it never collides with the plain-key permission
-  // shortcuts above (permissionActionForKey ignores modified keys).
+  // meta/ctrl chord, and the permission card's own list claims Ctrl for exactly
+  // ⌃P/⌃N (`permissionKeyIntent`), which this handler does not use — so the two
+  // key maps stay disjoint even where both accept Ctrl.
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey) return
@@ -2539,14 +2527,23 @@ export function App() {
 	      const panelPartialCount = sessionLog.messages.filter(
 	        message => message.type === 'stream_event',
 	      ).length
-	      // In-session empty-state Welcome context (read-only): THIS session's
-	      // Codex pool snapshot (the pool is process-global, so the first-reported
-	      // snapshot is a valid fallback before this session's own frame lands —
-	      // the launcher precedent) + its agent-mode active flag. Both are the SAME
-	      // domain seams the reauth banner / WelcomeScreen already read.
-	      const panelAccounts =
-	        selectAccountsSnapshot(accounts, sessionId) ??
-	        selectFirstAccountsSnapshot(accounts)
+	      // The whole composer rail's display-vs-capability split, derived in one
+	      // testable place (`composerRailModel.ts`) rather than as a dozen
+	      // expressions here. It owns which values outlive the session's engine
+	      // and which controls stay armed.
+	      const rail = selectComposerRail({
+	        runControls,
+	        permissions,
+	        accounts,
+	        connectionStatus: sessionConnection.status,
+	        sessionId,
+	      })
+	      // In-session empty-state Welcome context (read-only): the pool view for
+	      // THIS pane, freshest-first (see `railAccounts` for why a pane with no
+	      // engine reads the polled global feed rather than its own frozen copy) +
+	      // its agent-mode active flag. Both are the SAME domain seams the reauth
+	      // banner / WelcomeScreen already read.
+	      const panelAccounts = rail.accountsSnapshot
 	      const panelAgentMode = selectAgentModeSnapshot(orchestrator, sessionId)
 	      const panelOrchestratorActive = panelAgentMode?.active ?? false
 	      // P4-32a — this panel's OWN workers (never the globally-active session's),
@@ -2574,14 +2571,16 @@ export function App() {
 	      // real picker options), re-broadcast on every change so the faces reflect
 	      // this session's current state with no respawn. Supersedes the P4-24 read
 	      // from the spawn-frozen diagnostics snapshot for the composer faces.
-	      const panelRunControls = selectRunControlsSnapshot(runControls, sessionId)
+	      // LIVE, so it disarms with the process; the values the faces DISPLAY come
+	      // off `rail`, which does not.
+	      const panelRunControls = rail.liveRunControls
 	      // Per-category context occupancy for the donut popover; null until the
 	      // sidecar has produced one for this session.
 	      const panelContextBreakdown = selectContextBreakdown(
 	        contextBreakdown,
 	        sessionId,
 	      )
-	      const panelProvider = panelRunControls?.model.provider ?? null
+	      const panelProvider = rail.provider
 	      const panelActiveCodexAccount =
 	        panelProvider === 'openai' ? selectActiveAccount(panelAccounts) : null
 	      const panelActiveAnthropicAccount =
@@ -2602,7 +2601,7 @@ export function App() {
 	            activeAnthropicAccount={panelActiveAnthropicAccount}
 	            accountsLastResult={accounts.lastResult}
             turnStartedAt={turnStarts.get(sessionId) ?? null}
-            onSwitchAccount={panelProvider === 'openai' ? verb => {
+            onSwitchAccount={rail.canSwitchAccount ? verb => {
               // The composer profile popover's switch — the engine's own
               // `account.switch` verb to THIS pane's sidecar (its sessionId, not
               // the globally-active one), mirroring the run-control verbs. The
@@ -2637,9 +2636,12 @@ export function App() {
                 )}
 	            branch={panelBranch}
 	            sandboxed={panelSandboxed}
-	            model={panelRunControls?.model.current ?? null}
-	            reasoningEffort={panelRunControls?.effort.current ?? null}
-	            fastMode={panelRunControls?.fast.active ?? false}
+	            model={rail.model}
+	            modelLabel={rail.modelLabel}
+	            reasoningEffort={rail.reasoningEffort}
+	            fastMode={rail.fastMode}
+	            contextWindow={rail.contextWindow}
+	            lastPermissionMode={rail.lastPermissionMode}
 	            runControls={panelRunControls}
 	            contextBreakdown={panelContextBreakdown}
 	            // Only a pane with an engine behind it can be asked. The donut is
@@ -2675,6 +2677,39 @@ export function App() {
 	                    }
 	                  }
 	            }
+            // The donut's Compact row. `/compact` is an ordinary slash submit:
+            // the sidecar loads the real command catalog and the engine parses
+            // and runs it (`sessionController.ts:306`), and the composer's own
+            // picker only ever fills draft TEXT (`pickSlashCommand`), so this
+            // string is byte-identical to a typed one.
+            //
+            // It deliberately does NOT go through the composer draft.
+            // `submitSession` sends whatever the draft holds and then retires it
+            // — clearing the text, DROPPING that session's collapsed-paste
+            // entries, and pushing the sent string into ↑/↓ history. Routing a
+            // button through it would destroy a half-typed prompt and its
+            // attachments to send a word the user never typed. Appending is not
+            // an option either: `parseSlashDraft` matches a whole-draft `/token`
+            // only, so `text /compact` would reach the model as prose.
+            //
+            // Unconditional here: the pane gates it on the same `composerGate`
+            // the send arrow reads, which is strictly tighter than the
+            // preview/has-engine test its sibling `onRequestContextBreakdown`
+            // needs (that one is reachable on a preview pane; this is not).
+            onCompact={() => {
+              try {
+                getBridge().submit(sessionId, '/compact')
+                setTransportErrors(prev =>
+                  reduceTransportErrorCleared(prev, sessionId),
+                )
+              } catch (error) {
+                // User-initiated, so a failure surfaces the way a failed send
+                // does rather than vanishing.
+                setTransportErrors(prev =>
+                  reduceTransportErrorSet(prev, sessionId, errorMessage(error)),
+                )
+              }
+            }}
             slashCatalog={panelSlashCatalog}
 	            onSetModel={model => {
 	              try {
@@ -2840,6 +2875,13 @@ export function App() {
 	                : null
 	            }
 	            permissionQueue={sessionDisplayQueue}
+	            snoozePermission={requestId => {
+	              dispatchPermission({
+	                type: 'dismissed',
+	                sessionId,
+	                requestId,
+	              })
+	            }}
 	            planReview={sessionPlanReview}
 	            prompt={selectPromptDraft(promptDrafts, sessionId)}
 	            restorePermission={requestId => {
@@ -2868,6 +2910,7 @@ export function App() {
 	              selectAgentConfigSnapshot(agentConfig, sessionId),
 	            )}
 	            pastes={selectSessionPasteList(pasteState, sessionId)}
+	            images={selectImageAttachments(imageAttachmentState, sessionId)}
 	            pendingSubmit={selectPendingSubmit(pendingSubmits, sessionId)}
 	            history={selectHistory(historyState, sessionId)}
 	            onPaste={(content, selectionStart, selectionEnd) =>
@@ -2885,6 +2928,16 @@ export function App() {
 	                selectPromptDraft(promptDrafts, sessionId),
 	                entry,
 	                at,
+	              )
+	            }
+	            onAttachImage={attachment =>
+	              setImageAttachmentState(prev =>
+	                reduceImageAttachmentAdded(prev, sessionId, attachment),
+	              )
+	            }
+	            onRemoveImage={id =>
+	              setImageAttachmentState(prev =>
+	                reduceImageAttachmentRemoved(prev, sessionId, id),
 	              )
 	            }
 		            transcript={panelPreviewTranscript ?? transcript}
@@ -3071,10 +3124,28 @@ export function App() {
           selectActiveAccount(selectGlobalAccountsSnapshot(accounts))?.alias ??
           null
         }
-        modelForSession={id =>
-          selectDiagnosticsSnapshot(diagnostics, id)?.mainLoopModelForSession ??
-          null
-        }
+        /* The row subtitle's "· model" reads the LIVE run-controls seam, which is
+         * re-broadcast on every model change (P4-24c). The diagnostics snapshot is
+         * spawn-frozen, so on its own it kept printing the model a session started
+         * with after the picker moved it — it stays only as the pre-snapshot
+         * fallback.
+         *
+         * `currentLabel` before `current`: the engine's own marketing name
+         * ("Opus 5", "GPT-5.6 Sol"), the same string the composer face and the
+         * picker row show, so a row and the chip above it never disagree. Only a
+         * model the engine has no name for (a custom model, a Foundry deployment
+         * id) falls back to the raw id. Operator ruling 2026-08-09: the row used
+         * to print the id's last hyphen segment, which reads as a bare "5" for
+         * every claude-* model. */
+        modelForSession={id => {
+          const live = selectRunControlsSnapshot(runControls, id)?.model
+          return (
+            live?.currentLabel ??
+            live?.current ??
+            selectDiagnosticsSnapshot(diagnostics, id)?.mainLoopModelForSession ??
+            null
+          )
+        }}
       />
 
       <div className="relative flex min-w-0 flex-1 flex-col">
@@ -3291,6 +3362,10 @@ export function App() {
                 activeSessionId,
               ),
               diagnostics: selectDiagnosticsSnapshot(diagnostics, activeSessionId),
+              runControls: selectRunControlsSnapshot(
+                runControls,
+                activeSessionId,
+              ),
             })}
             log={selectRawMessageLog(state, activeSessionId)}
             tasks={selectTasksSnapshot(tasks, activeSessionId)}
@@ -3557,7 +3632,6 @@ export function App() {
           <TasksStrip
             snapshot={selectTasksSnapshot(tasks, activeSessionId)}
             workers={activeAgentModeSnapshot?.workers ?? EMPTY_WORKERS}
-            orchestratorActive={activeAgentModeSnapshot?.active ?? false}
             onOpen={() => setTasksOpen(true)}
           />
         ) : null}
@@ -3583,6 +3657,7 @@ export function App() {
         snapshot={selectTasksSnapshot(tasks, activeSessionId)}
         hasActiveSession={activeSessionId !== null}
         onStopTask={activeSessionId ? sendStopTask : undefined}
+        onDismissTask={activeSessionId ? sendDismissTask : undefined}
         /* P4-32b — the Workers + Leases tabs of the same dialog: the read-only
          * worker drilldown (inspection ruling D1) and the session-scoped Codex
          * lease roster (L1). Both are read seams; no verb rides them. */
@@ -3619,39 +3694,28 @@ export function App() {
 export function TasksStrip({
   snapshot,
   workers,
-  orchestratorActive,
   onOpen,
 }: {
   snapshot: ReturnType<typeof selectTasksSnapshot>
   workers: readonly AgentModeWorkerItem[]
-  orchestratorActive: boolean
   onOpen: () => void
 }) {
-  const pill = orchestratorPill(workers, orchestratorActive)
+  const pill = orchestratorPill(workers)
   const backgroundTasks = groupTaskItems(snapshot).active.filter(
     item => item.type !== 'local_agent',
   )
   if (!pill && backgroundTasks.length === 0) return null
-  const attention = pill?.attention === true
   return (
     <button
-      className={
-        'absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs shadow-[0_10px_30px_rgba(0,0,0,0.5)] ' +
-        (attention
-          ? 'border-tone-warn/30 bg-tone-warn/10 font-semibold text-tone-warn hover:bg-tone-warn/20'
-          : 'border-shell-seam bg-shell-chrome text-text-muted hover:text-text-primary')
-      }
+      className="absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-full border border-shell-seam bg-shell-chrome px-3 py-1.5 text-xs text-text-muted shadow-[0_10px_30px_rgba(0,0,0,0.5)] hover:text-text-primary"
       onClick={onOpen}
       type="button"
     >
       <span
-        className={
-          'h-1.5 w-1.5 animate-pulse rounded-full ' +
-          (attention ? 'bg-tone-warn' : 'bg-accent')
-        }
+        className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent"
         aria-hidden="true"
       />
-      {pill ? <span className={attention ? '' : 'text-accent'}>{pill.label}</span> : null}
+      {pill ? <span className="text-accent">{pill.label}</span> : null}
       {pill && backgroundTasks.length > 0 ? (
         <span aria-hidden="true" className="text-text-ghost">
           ·
@@ -3693,11 +3757,15 @@ export function SessionPane({
   previewRunFacts = null,
   allowPermission,
   model,
+  modelLabel = null,
   reasoningEffort,
   fastMode,
+  contextWindow = null,
+  lastPermissionMode = null,
   runControls,
   contextBreakdown = null,
   onRequestContextBreakdown,
+  onCompact,
   slashCatalog = EMPTY_SLASH_CATALOG,
   onSetModel,
   onSetEffort,
@@ -3705,9 +3773,12 @@ export function SessionPane({
   copyForLlm,
   denyPermission,
   history,
+  images = [],
   mentionItems,
   onApprovePlan,
+  onAttachImage,
   onPaste,
+  onRemoveImage,
   onRemovePaste,
   onRevisePlan,
   askQuestion,
@@ -3723,6 +3794,7 @@ export function SessionPane({
   permissionContext,
   permissionKeyTargetRequestId = null,
   permissionQueue,
+  snoozePermission,
   planReview,
   prompt,
   releasePendingSubmit,
@@ -3773,6 +3845,19 @@ export function SessionPane({
   // log (up to 8 MiB) was the dominant DOM reflow on every switch/frame/keystroke;
   // gated + capped to the last 20 messages, it costs nothing until asked for.
   const [rawDebugOpen, setRawDebugOpen] = useState(false)
+  // The raw-log `error` field (rawMessageLog.ts) is never cleared by the store
+  // itself — the retention notice it carries (e.g. history-replay truncation)
+  // is informational, not a live fault, but nothing re-derives it false once
+  // set. Dismissal is display-only and local to this pane, keyed by the exact
+  // message so a genuinely NEW notice (different text) still shows.
+  const [dismissedLogError, setDismissedLogError] = useState<string | null>(
+    null,
+  )
+  useEffect(() => {
+    setDismissedLogError(null)
+  }, [activeSessionId])
+  const showLogError =
+    activeLog.error !== null && activeLog.error !== dismissedLogError
   // The picker renders rich rows (name + arg-hint + description, prototype
   // parity) from the `slash-catalog.snapshot` read seam (the `slashCatalog`
   // prop). It falls back to the names-only `slash_commands` catalog (from the
@@ -3853,6 +3938,23 @@ export function SessionPane({
   // contentEditable (`ComposerInput`) so a collapsed paste renders as an inline
   // pill; the handle keeps the textarea-shaped selection API these handlers use.
   const composerRef = useRef<ComposerInputHandle>(null)
+  const imageInputRef = useRef<HTMLInputElement>(null)
+  const [preparingImage, setPreparingImage] = useState(false)
+  const attachImage = async (file: File): Promise<void> => {
+    if (!onAttachImage) return
+    setPreparingImage(true)
+    try {
+      onAttachImage(await prepareImageAttachment(file))
+      setTransportErrorFromImage(null)
+    } catch (error) {
+      setTransportErrorFromImage(errorMessage(error))
+    } finally {
+      setPreparingImage(false)
+    }
+  }
+  const [transportErrorFromImage, setTransportErrorFromImage] = useState<
+    string | null
+  >(null)
   // P4-24 — where the caret belongs after a PROGRAMMATIC draft rewrite (at-caret
   // paste, whole-token Backspace). A rewritten draft rebuilds the field's nodes,
   // so without this the next keystroke lands at the end of the draft instead of
@@ -4053,27 +4155,43 @@ export function SessionPane({
   // reads this model's real window instead of a flat 200k. Depending on the
   // number rather than the snapshot object keeps the memo from re-running on
   // every unrelated re-broadcast.
-  const runControlsContextWindow = runControls?.model.contextWindow ?? null
+  // The live snapshot leads and the retained one is the FALLBACK, rather than
+  // the other way round: a caller that passes `runControls` without the retained
+  // prop must still get its denominator, or the donut silently drops to the flat
+  // 200k default. (It did — a pre-existing test caught exactly that.) The
+  // retained value then covers the case the live one cannot: a session whose
+  // engine went away keeps its real window instead of having the percentage move
+  // under a transcript that has not changed.
+  const runControlsContextWindow =
+    runControls?.model.contextWindow ?? contextWindow ?? null
   const liveContextUsage = useMemo(
     () => selectContextUsage(activeLog.messages, model, runControlsContextWindow),
     [activeLog.messages, model, runControlsContextWindow],
   )
   /*
-   * The rail under a PREVIEWED session reads the cache, not the engine.
+   * The rail answers from whatever source still knows, in this order.
    *
-   * A preview has no sidecar, so `runControls` / `diagnostics` are absent and
-   * every live value above is empty: the model face vanishes and the donut
-   * reports 0% for a session that plainly used context. Both are answerable
-   * from the session's own cached traffic (`previewRunFacts`), so the rail
-   * shows what it really ran on. Where the cache is silent the value stays
-   * null and the face renders nothing, which is the same rule the live rail
+   * A PREVIEWED session never had a sidecar in this window, so its facts come
+   * from its own cached traffic (`previewRunFacts`). A session that HAD one and
+   * lost it — disconnected, parked, crashed — keeps reporting from the last
+   * snapshot its engine sent (the `model`/`reasoningEffort`/`lastPermissionMode`
+   * props, sourced from the display selectors). Only where no source says
+   * anything does a face render nothing, which is the same rule the live rail
    * follows before its first snapshot lands.
+   *
+   * What none of them do is turn a face into a CONTROL. That is `runControls` /
+   * `permissionContext`, which do not outlive the process, so each face falls
+   * back to its read-only form rather than offering a picker with no engine
+   * behind it.
    */
   const railModel = preview ? (previewRunFacts?.model ?? null) : model
+  // The cache stores only the id, so a PREVIEW has no label to show and falls
+  // back to the id exactly as before. A detached live session does have one.
+  const railModelLabel = preview ? null : modelLabel
   const railEffort = preview ? (previewRunFacts?.effort ?? null) : reasoningEffort
   const railPermissionMode = preview
     ? (previewRunFacts?.permissionMode ?? null)
-    : null
+    : lastPermissionMode
   const contextUsage = preview
     ? (previewRunFacts?.contextUsage ?? null)
     : liveContextUsage
@@ -4122,6 +4240,13 @@ export function SessionPane({
     const composer = composerRef.current
     if (!composer || event.target !== composer.element) return
     event.preventDefault()
+    const image = Array.from(event.clipboardData.files).find(file =>
+      ACCEPTED_IMAGE_TYPES.some(type => type === file.type),
+    )
+    if (image) {
+      void attachImage(image)
+      return
+    }
     const text = event.clipboardData.getData('text')
     if (!text) return
     const start = composer.selectionStart
@@ -4328,7 +4453,7 @@ export function SessionPane({
         >
           {previewTruncationMessage ? (
             <div
-              className="mx-auto mb-3 w-full max-w-[740px] border-l-2 border-tone-warn px-3 py-2 text-xs text-tone-warn"
+              className="mx-auto mb-3 w-full max-w-[var(--transcript-width)] border-l-2 border-tone-warn px-3 py-2 text-xs text-tone-warn"
               role="status"
             >
               {previewTruncationMessage}
@@ -4398,13 +4523,12 @@ export function SessionPane({
        * auto'`) so the input aligns under the message column; a top seam
        * separates it from the scrolling transcript above. Inner blocks keep
        * their existing indent (wrapped without re-indentation). */}
-      <div className="mx-auto flex w-full max-w-[740px] shrink-0 flex-col gap-4">
+      <div className="mx-auto flex w-full max-w-[var(--transcript-width)] shrink-0 flex-col gap-4">
       {/* P4-32a (R1) — the orchestrator worker roster is the prototype's declared
        * host for this block: above the composer, in the transcript's own measure,
-       * ahead of the permission/question stack. It dims while the orchestrator is
+       * ahead of the permission/question stack. It dims while the assistant is
        * itself generating, and renders nothing when there are no workers. */}
       <OrchestratorRoster
-        active={orchestratorActive}
         compact={generating}
         onOpen={onOpenTasks}
         workers={orchestratorWorkers}
@@ -4431,26 +4555,40 @@ export function SessionPane({
         onAllow={allowPermission}
         onDeny={denyPermission}
         onRestore={restorePermission}
+        onSnooze={snoozePermission}
       />
 
-      {activeLog.error ? (
-        <div className="text-sm text-tone-danger">{activeLog.error}</div>
+      {showLogError ? (
+        <div className="flex items-center gap-3 text-sm text-tone-danger">
+          <span className="min-w-0 flex-1">{activeLog.error}</span>
+          <button
+            type="button"
+            onClick={() => setDismissedLogError(activeLog.error)}
+            title="Dismiss"
+            aria-label="Dismiss message log notice"
+            className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded text-sm leading-none text-text-subtle transition-colors hover:text-text-primary"
+          >
+            ×
+          </button>
+        </div>
       ) : null}
 
       {transportError ? (
         <div className="text-sm text-tone-danger">{transportError}</div>
       ) : null}
+      {transportErrorFromImage ? (
+        <div className="text-sm text-tone-danger">{transportErrorFromImage}</div>
+      ) : null}
 
-      {/* CC-16 — the parked prompt is the only sign the message still exists:
-       * the composer was cleared on submit, so without this row the text looks
-       * lost until it is sent. Only ONE wait can produce it now: no engine is
-       * attached yet. A mid-turn submit is not parked here at all, it is sent
-       * and the engine queues it into the running turn. */}
-      {pendingSubmit ? (
+      {/* CC-16 — a genuine cold-spawn prompt needs this row because the composer
+       * cleared before any engine was ready to receive it. IDLE-PARK restore is
+       * deliberately silent: it keeps the same held prompt and failure recovery,
+       * but must not narrate the reclaimed engine while it reconnects. */}
+      {pendingSubmit?.showQueuedRow ? (
         <div className="flex items-baseline gap-2 text-xs" role="status">
           <span className="shrink-0 font-medium text-text-muted">Queued</span>
           <span className="min-w-0 flex-1 truncate text-text-subtle">
-            {pendingSubmit}
+            {pendingSubmit.text || 'Image attachment'}
           </span>
           <span className="shrink-0 text-text-subtle">
             Sends when the session is ready.
@@ -4492,6 +4630,44 @@ export function SessionPane({
           submit(event)
         }}
       >
+        <input
+          ref={imageInputRef}
+          accept={ACCEPTED_IMAGE_TYPES.join(',')}
+          className="hidden"
+          onChange={event => {
+            const file = event.currentTarget.files?.[0]
+            event.currentTarget.value = ''
+            if (file) void attachImage(file)
+          }}
+          type="file"
+        />
+        {images.length > 0 ? (
+          <div
+            aria-label="Image attachments"
+            className="mb-2 flex items-center gap-2 px-1"
+          >
+            {images.map(image => (
+              <div
+                className="group relative overflow-hidden rounded-lg border border-accent/20 bg-accent/[0.06] p-1.5"
+                key={image.id}
+              >
+                <img
+                  alt={image.name}
+                  className="max-h-24 max-w-36 rounded-md object-contain"
+                  src={`data:${image.mediaType};base64,${image.data}`}
+                />
+                <button
+                  aria-label={`Remove ${image.name}`}
+                  className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-black/70 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                  onClick={() => onRemoveImage?.(image.id)}
+                  type="button"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
         {/* No bottom padding, deliberately. The prototype has 11px here
          * (Chat.jsx:1395 `padding: '0 4px 11px'`); the operator chose 0 on
          * 2026-08-02 to close the idle composer's dead band. A parity sweep
@@ -4573,10 +4749,10 @@ export function SessionPane({
             <button
               aria-label="Send prompt"
               title="Send"
-              className="flex h-[30px] w-[30px] shrink-0 items-center justify-center self-end rounded-lg text-accent transition-colors disabled:text-[#3f3f46]"
+              className="flex h-[30px] w-[30px] shrink-0 items-center justify-center self-end rounded-lg text-accent transition-colors disabled:text-text-ghost"
               disabled={
                 !composerGate.editable ||
-                prompt.trim().length === 0 ||
+                (prompt.trim().length === 0 && images.length === 0) ||
                 pendingSubmit !== null
               }
               type="submit"
@@ -4609,13 +4785,10 @@ export function SessionPane({
          * model override · permission MODE · —— · active account · context donut.
          * Real data only — see `ComposerActionsBar` for the per-chip backing. */}
         <ComposerActionsBar
-          attachDisabled={!composerGate.editable}
-          onAttach={() =>
-            toast('Paste a large block to attach it as a collapsed chip.', {
-              tone: 'info',
-            })
-          }
+          attachDisabled={!composerGate.editable || preparingImage}
+          onAttach={() => imageInputRef.current?.click()}
           model={railModel}
+          modelLabel={railModelLabel}
           reasoningEffort={railEffort}
           permissionModeReadOnly={railPermissionMode}
           fastMode={fastMode}
@@ -4633,6 +4806,9 @@ export function SessionPane({
           contextUsage={contextUsage}
           contextBreakdown={contextBreakdown}
           onRequestContextBreakdown={onRequestContextBreakdown}
+          // No engine to take it, no row. `canSendUntypedSubmit` owns which gate
+          // arms qualify and why `editable` is not one of them.
+          onCompact={canSendUntypedSubmit(composerGate) ? onCompact : undefined}
           toolbarRef={actionBarRef}
           onFocusComposer={() => composerRef.current?.focus()}
         />
@@ -4915,18 +5091,40 @@ type SessionPaneProps = {
    * no engine exists to report it live. */
   previewRunFacts?: PreviewRunFacts | null
   allowPermission: (requestId: string, applySuggestions?: number[]) => void
-  /** The RESOLVED model this session runs (`mainLoopModelForSession`); null before the snapshot. */
+  /**
+   * The RESOLVED model this session runs, or last ran
+   * (`RunControlsSnapshot.model.current`); null before the first snapshot.
+   *
+   * These four are the DISPLAY seam and deliberately survive the session's
+   * engine: they come from `selectLastRunControlsSnapshot`, not the live one, so
+   * a disconnected or parked pane still says what it ran on. `runControls` below
+   * is the capability seam and does NOT survive it, which is what turns each
+   * face read-only instead of blank.
+   */
   model: string | null
+  /** The model's product name, when the engine gave one. The face shows THIS;
+   * `model` above stays the resolved id, which is what `selectContextUsage`
+   * matches `modelUsage` on. */
+  modelLabel?: string | null
   /** The session's reasoning-effort tier, or null when running at the provider default. */
   reasoningEffort: string | null
-  /** The fast-mode toggle; the ⚡ face renders when on OR togglable (P4-24c interactive). */
-  fastMode: boolean
+  /** Fast state for the read-only face: true/false when known, null when nothing
+   * has reported it or the model cannot do fast (no face either way). */
+  fastMode: boolean | null
+  /** The engine-resolved window for `model`, the donut's denominator before any
+   * turn reports one. Null falls back to `contextUsage.ts`'s default. */
+  contextWindow?: number | null
+  /** The mode this session is in, or was last in. Display only — the picker is
+   * armed by `permissionContext`, which a dead session does not have. */
+  lastPermissionMode?: string | null
   /** P4-24c — the live run-controls snapshot (current + real picker options + availability). */
   runControls?: RunControlsSnapshot | null
   /** Per-category context occupancy for the donut popover. */
   contextBreakdown?: ContextBreakdownSnapshot | null
   /** Ask the sidecar to recompute the breakdown (the popover was opened). */
   onRequestContextBreakdown?: () => void
+  /** Submit `/compact` for this session. Gated again below by `composerGate`. */
+  onCompact?: () => void
   /** The session's rich slash-command catalog (name + description + arg hint) for
    * the composer picker; empty/absent falls the picker back to the names-only list. */
   slashCatalog?: readonly SlashCatalogEntry[]
@@ -4952,10 +5150,14 @@ type SessionPaneProps = {
   permissionContext: ReturnType<typeof selectPermissionContext>
   /** P4-43 — the request the shortcuts act on in THIS pane, or null. A split
    * workspace renders one queue per pane, and only the active pane's card may
-   * take focus: App's keydown handler acts solely on the activeSessionId.
+   * take focus and register the listener, which acts solely on that request.
    * Absent = no card here owns the keyboard, which is the safe default. */
   permissionKeyTargetRequestId?: string | null
   permissionQueue: ReturnType<typeof selectPermissionQueue>
+  /** Hide a card locally, keeping the request live engine-side (the card's
+   * "Keep pending" footer lane). Esc refuses instead, per the prototype.
+   * Absent = the card offers no such lane. */
+  snoozePermission?: (requestId: string) => void
   /** P4-11 — the pending ExitPlanMode review, or `null`; drives PlanBar/PlanPanel. */
   planReview: PlanReview | null
   /** Composes `setPermissionMode` + a C1 allow on the plan-review request. */
@@ -4983,9 +5185,13 @@ type SessionPaneProps = {
   mentionItems: MentionItem[]
   /** Collapsed pastes held aside for this session, oldest first. */
   pastes: PasteEntry[]
-  /** CC-16 — a prompt submitted before the engine could accept it, held until it
-   * can. Present = the composer is empty because the text is queued, not lost. */
-  pendingSubmit?: string | null
+  /** Images attached from the clipboard or picker for this session. */
+  images?: ImageAttachment[]
+  onAttachImage?: (attachment: Omit<ImageAttachment, 'id'>) => void
+  onRemoveImage?: (id: number) => void
+  /** CC-16 — a prompt submitted before the engine could accept it. The cold-spawn
+   * row is presentation metadata; every pending prompt still blocks a second hold. */
+  pendingSubmit?: PendingSubmit | null
   /** Bug fix — hands `pendingSubmit` back to the composer without sending it.
    * `stopTurn` calls this so Stop cancels a queued prompt along with the turn,
    * instead of the CC-16 drain firing it as a fresh turn the instant the

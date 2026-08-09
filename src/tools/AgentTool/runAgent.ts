@@ -67,6 +67,7 @@ import { createUserMessage } from '../../utils/messages.js'
 import { getAgentModel } from '../../utils/model/agent.js'
 import { resolveRequestProvider } from '../../utils/model/providers.js'
 import type { ModelAlias } from '../../utils/model/aliases.js'
+import { type EffortLevel, resolveSubagentEffort } from '../../utils/effort.js'
 import {
   clearAgentTranscriptSubdir,
   recordSidechainTranscript,
@@ -269,6 +270,7 @@ export async function* runAgent({
   querySource,
   override,
   model,
+  effort,
   maxTurns,
   outputFormat,
   preserveToolUseResults,
@@ -303,6 +305,11 @@ export async function* runAgent({
     agentId?: AgentId
   }
   model?: ModelAlias
+  /** Effort level the caller selected for this spawn. Outranks the agent
+   * definition's `effort:` pin and the parent's current effort; see
+   * resolveSubagentEffort() for the full chain and for why it is dropped on
+   * cache-identical (useExactTools) runs. */
+  effort?: EffortLevel
   maxTurns?: number
   outputFormat?: BetaJSONOutputFormat
   /** Preserve toolUseResult on messages for subagents with viewable transcripts */
@@ -548,11 +555,13 @@ export async function* runAgent({
       }
     }
 
-    // Override effort level if agent defines one
-    const effortValue =
-      agentDefinition.effort !== undefined
-        ? agentDefinition.effort
-        : state.effortValue
+    // Per-call override → agent definition pin → parent's current effort
+    const effortValue = resolveSubagentEffort({
+      requestedEffort: effort,
+      agentDefinitionEffort: agentDefinition.effort,
+      parentEffortValue: state.effortValue,
+      cacheIdenticalRun: useExactTools,
+    })
 
     if (
       toolPermissionContext === state.toolPermissionContext &&

@@ -2689,4 +2689,91 @@ describe('codexAccountLeaseManager', () => {
     expect(moduleUnderTest.getCodexLeaseForOwner('main-thread')?.accountId).toBe('new-main')
     expect(moduleUnderTest.getCodexLeaseForOwner('follow-worker')?.accountId).toBe('new-main')
   })
+
+  test('a lease records WHY it moved as values, not only as prose', () => {
+    // `selectionReason` interpolates account ids into a sentence, which left every
+    // consumer either parsing prose or unable to name the account at all.
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'main-account', alias: 'main' }),
+        buildPoolAccount({ accountId: 'worker-a', alias: 'worker' }),
+      ],
+    })
+
+    const fresh = moduleUnderTest.createCodexLeaseForTest({
+      ownerId: 'subagent-kind',
+      ownerType: 'subagent',
+      ownerLabel: 'Subagent Kind',
+      strategy: 'spread',
+    })
+    expect(fresh.selectionKind).toBe('initial')
+    expect(fresh.previousAccountId).toBeUndefined()
+
+    const movedFrom = fresh.accountId
+    const replacement = moduleUnderTest.failoverCodexLease(
+      'subagent-kind',
+      movedFrom,
+      'usage cap 429',
+    )
+    expect(replacement.selectionKind).toBe('failover')
+    expect(replacement.previousAccountId).toBe(movedFrom)
+    expect(replacement.accountId).not.toBe(movedFrom)
+    // The prose is unchanged, so nothing that logs it regresses.
+    expect(replacement.selectionReason).toContain('failover from')
+  })
+
+  test('a manual switch-account records itself as manual, with the account it left', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'main-account', alias: 'main' }),
+        buildPoolAccount({ accountId: 'worker-a', alias: 'worker' }),
+      ],
+    })
+    moduleUnderTest.seedCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'Main thread',
+      accountId: 'worker-a',
+      strategy: 'follow-main',
+    })
+
+    moduleUnderTest.reassignCodexLeaseToActiveAccount('main-thread')
+
+    const lease = moduleUnderTest.getCodexLeaseForOwner('main-thread')
+    expect(lease?.selectionKind).toBe('manual')
+    expect(lease?.previousAccountId).toBe('worker-a')
+    expect(lease?.accountId).toBe('main-account')
+  })
+
+  test('a snapshot with no real main lease reports the pool account as SYNTHETIC', () => {
+    // Its timestamps are minted per snapshot, so anything that renders them as a
+    // duration is showing a number that measures nothing. The kind is the marker
+    // that lets the desktop projection drop the row instead of asserting it.
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [buildPoolAccount({ accountId: 'main-account', alias: 'main' })],
+    })
+
+    const first = moduleUnderTest.getCodexLeaseSnapshot().mainLease
+    expect(first?.selectionKind).toBe('synthetic')
+    expect(first?.ownerId).toBe('main-thread')
+
+    // Proof that its createdAt measures nothing: a second read re-mints it.
+    const second = moduleUnderTest.getCodexLeaseSnapshot().mainLease
+    expect(second?.createdAt).toBeGreaterThanOrEqual(first?.createdAt ?? 0)
+
+    // A real registered main lease is NOT synthetic, and keeps its own timestamp.
+    moduleUnderTest.seedCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'Main thread',
+      accountId: 'main-account',
+      strategy: 'follow-main',
+    })
+    expect(moduleUnderTest.getCodexLeaseSnapshot().mainLease?.selectionKind).toBe(
+      'initial',
+    )
+  })
 })

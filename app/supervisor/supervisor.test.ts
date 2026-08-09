@@ -117,6 +117,31 @@ test('starts the sidecar process in the configured session cwd', async () => {
   )
 })
 
+test('clears an inherited resume id when the session does not request a resume', async () => {
+  const socketDir = makeTempDir('catcode-supervisor-resume-')
+  const sessionCwd = makeTempDir('catcode-supervisor-cwd-')
+  const observedResumePath = join(socketDir, 'observed-resume.txt')
+  const script = [
+    "const { writeFileSync } = require('node:fs')",
+    "writeFileSync(process.argv[1], process.env.CATCODE_SIDECAR_RESUME_SESSION_ID ?? 'missing')",
+  ].join(';')
+  const supervisor = new SidecarSupervisor({
+    sidecarCommand: process.execPath,
+    sidecarArgs: ['-e', script, observedResumePath],
+    sidecarCwd: sessionCwd,
+    sidecarEnv: { CATCODE_SIDECAR_RESUME_SESSION_ID: 'inherited-resume-id' },
+    socketDir,
+  })
+  supervisors.push(supervisor)
+  supervisor.spawnSession('fresh-session')
+
+  await waitFor(
+    () => existsSync(observedResumePath),
+    'sidecar did not report its resume environment',
+  )
+  expect(readFileSync(observedResumePath, 'utf8')).toBe('')
+})
+
 test('rejects an oversized prompt before writing it and keeps the session usable', async () => {
   const socketDir = makeTempDir('catcode-supervisor-live-')
   const supervisor = new SidecarSupervisor({
@@ -426,6 +451,41 @@ test('outbound frame sessionId tripwire drops and logs a mis-stamped frame', asy
         event.frame.nonce === 'bad',
     ),
   ).toBe(false)
+})
+
+test('a decoded null frame is dropped without disrupting the ready session', async () => {
+  const socketDir = makeTempDir('catcode-supervisor-null-frame-')
+  const logs: string[] = []
+  const supervisor = new SidecarSupervisor({
+    sidecarCommand: process.execPath,
+    sidecarArgs: ['-e', readyScript({ afterOpen: 'writeFrame(socket, null)' })],
+    socketDir,
+    log: line => logs.push(line),
+  })
+  supervisors.push(supervisor)
+  const events: SupervisorEvent[] = []
+  supervisor.subscribe(event => events.push(event))
+  const sessionId = supervisor.spawnSession('null-frame-session')
+
+  await waitFor(
+    () =>
+      events.some(
+        event =>
+          event.type === 'frame' &&
+          event.sessionId === sessionId &&
+          event.frame.kind === 'ready',
+      ),
+    'valid ready frame was not emitted',
+  )
+  await waitFor(
+    () => logs.some(line => line.includes('frame was not an object')),
+    'decoded null frame was not dropped',
+  )
+
+  expect(supervisor.listSessions()).toContainEqual({
+    sessionId,
+    status: 'ready',
+  })
 })
 
 test('F11 — a stale old-child exit after restart does not mark the new session dead', async () => {

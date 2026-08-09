@@ -75,6 +75,7 @@ rmSync(harnessOut, { force: true })
 if (smoke.stdout) process.stdout.write(smoke.stdout)
 if (smoke.stderr) process.stderr.write(smoke.stderr)
 if (
+  smoke.error !== undefined ||
   smoke.status !== 0 ||
   !smoke.stdout?.includes('[hardening-smoke] production path passed')
 ) {

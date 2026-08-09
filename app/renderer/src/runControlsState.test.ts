@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import {
   createRunControlsState,
   reduceRunControlsState,
+  selectLastRunControlsSnapshot,
   selectRunControlsSnapshot,
 } from './runControlsState.js'
 import type { RunControlsSnapshot, ServerFrame } from '../../shared/protocol.js'
@@ -65,4 +66,55 @@ test('a lifecycle frame clears a tracked session but leaves untracked ones alone
     frame: { kind: 'lifecycle', protocolVersion: 1, sessionId: 's1', status: 'disconnected' },
   })
   expect(selectRunControlsSnapshot(state, 's1')).toBeNull()
+})
+
+/* --------------------------------------------------------------------- *
+ * display outlives the process (the disconnect/park rail)
+ * --------------------------------------------------------------------- */
+
+test('a disconnected session still reports what it ran on', () => {
+  // The defect: losing the engine also erased the answer, so the composer rail's
+  // model, effort and fast faces went blank on a session nothing had changed.
+  let state = createRunControlsState()
+  state = reduceRunControlsState(state, { type: 'frame', frame: snapshotFrame('s1', SNAPSHOT) })
+  state = reduceRunControlsState(state, {
+    type: 'frame',
+    frame: { kind: 'lifecycle', protocolVersion: 1, sessionId: 's1', status: 'disconnected' },
+  })
+  // Capability: gone, so no picker can be armed.
+  expect(selectRunControlsSnapshot(state, 's1')).toBeNull()
+  // Display: unchanged, because none of it stopped being true.
+  expect(selectLastRunControlsSnapshot(state, 's1')).toEqual(SNAPSHOT)
+  expect(selectLastRunControlsSnapshot(state, 's1')?.model.contextWindow).toBe(372_000)
+})
+
+test('the display selector answers for every terminal status, and only for known sessions', () => {
+  for (const status of ['disconnected', 'failed', 'exited'] as const) {
+    let state = createRunControlsState()
+    state = reduceRunControlsState(state, { type: 'frame', frame: snapshotFrame('s1', SNAPSHOT) })
+    state = reduceRunControlsState(state, {
+      type: 'frame',
+      frame: { kind: 'lifecycle', protocolVersion: 1, sessionId: 's1', status },
+    })
+    expect(selectLastRunControlsSnapshot(state, 's1')?.effort.current).toBe('high')
+  }
+  const empty = createRunControlsState()
+  expect(selectLastRunControlsSnapshot(empty, 's1')).toBeNull()
+  expect(selectLastRunControlsSnapshot(empty, null)).toBeNull()
+})
+
+test('a re-attached session reports the FRESH snapshot, not the retained one', () => {
+  let state = createRunControlsState()
+  state = reduceRunControlsState(state, { type: 'frame', frame: snapshotFrame('s1', SNAPSHOT) })
+  state = reduceRunControlsState(state, {
+    type: 'frame',
+    frame: { kind: 'lifecycle', protocolVersion: 1, sessionId: 's1', status: 'disconnected' },
+  })
+  const restored: RunControlsSnapshot = {
+    ...SNAPSHOT,
+    model: { ...SNAPSHOT.model, current: 'claude-opus-5', selected: 'claude-opus-5' },
+  }
+  state = reduceRunControlsState(state, { type: 'frame', frame: snapshotFrame('s1', restored) })
+  expect(selectRunControlsSnapshot(state, 's1')?.model.current).toBe('claude-opus-5')
+  expect(selectLastRunControlsSnapshot(state, 's1')?.model.current).toBe('claude-opus-5')
 })

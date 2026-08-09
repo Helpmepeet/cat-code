@@ -28,6 +28,13 @@ import {
   validateForegroundDeferredOrigin,
 } from './deferredContinuationRunner.js'
 import {
+  getPoolStatus,
+  resetCodexAccountPoolForTest,
+  seedCodexAccountPoolForTest,
+  type PoolAccount,
+} from './api/codexAccountPool.js'
+import { invalidateUsageCache } from './api/codexUsage.js'
+import {
   createPendingDeferredContinuation,
   getLatestDeferredContinuationHistory,
   readPendingDeferredContinuation,
@@ -87,6 +94,8 @@ const cleanup: string[] = []
 
 afterEach(async () => {
   _forTest.clearForegroundRegistrations()
+  resetCodexAccountPoolForTest()
+  invalidateUsageCache()
   await Promise.all(cleanup.splice(0).map(path => rm(path, { recursive: true, force: true })))
 })
 
@@ -273,6 +282,86 @@ describe('deferred continuation runner', () => {
       if (fileHandlePrototype && originalSync) {
         fileHandlePrototype.sync = originalSync
       }
+      clearSessionMessagesCache()
+      resetProjectForTesting()
+      switchSession(asSessionId(previousSessionId), previousSessionProjectDir)
+      if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+      if (previousTestPersistence === undefined) {
+        delete process.env.TEST_ENABLE_SESSION_PERSISTENCE
+      } else {
+        process.env.TEST_ENABLE_SESSION_PERSISTENCE = previousTestPersistence
+      }
+    }
+  })
+
+  test('reschedules a quota-exhausted attempt from the capped in-memory pool', async () => {
+    const root = await mkdtemp('/tmp/cat-code-deferred-capped-reschedule-')
+    const sessionDir = await mkdtemp('/tmp/cat-code-deferred-capped-session-')
+    cleanup.push(root, sessionDir)
+    const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+    const previousTestPersistence = process.env.TEST_ENABLE_SESSION_PERSISTENCE
+    const previousSessionId = getSessionId()
+    const previousSessionProjectDir = getSessionProjectDir()
+    const originalFetch = globalThis.fetch
+    const now = Date.now()
+    const resetAtSeconds = Math.floor((now + 3_600_000) / 1000)
+    const account: PoolAccount = {
+      accountId: 'capped-account',
+      accessToken: 'test-access-token',
+      refreshToken: 'test-refresh-token',
+      expiresAt: now + 60_000,
+      source: 'config',
+      status: 'capped',
+      statusReason: 'usage_cap',
+      lastUsedAt: 0,
+      cappedAt: now - 1,
+      usageResetAt: resetAtSeconds,
+    }
+    try {
+      process.env.CLAUDE_CONFIG_DIR = root
+      process.env.TEST_ENABLE_SESSION_PERSISTENCE = '1'
+      globalThis.fetch = (async () => {
+        throw new Error('test must not reach a provider endpoint')
+      }) as typeof globalThis.fetch
+      invalidateUsageCache()
+      seedCodexAccountPoolForTest({ accounts: [account] })
+      const pending = {
+        ...pendingJob(),
+        createdAt: now,
+        statusObservedAt: now,
+        resetAt: now - 1,
+      }
+      resetProjectForTesting()
+      switchSession(asSessionId(pending.sessionId), sessionDir)
+      clearSessionMessagesCache()
+      await createPendingDeferredContinuation(pending)
+      await recordTranscript([
+        createUserMessage({
+          content: 'prepare continuation',
+          uuid: '44444444-4444-4444-8444-444444444444',
+        }),
+      ])
+      await flushSessionStorage()
+
+      const attempt = await beginForegroundDeferredContinuation(pending)
+      expect(attempt).not.toBeNull()
+      expect(settleForegroundDeferredAttempt(attempt!.command.origin, {
+        outcome: 'quota_exhausted',
+        observedAt: now,
+      })).toBe(true)
+      await attempt!.finished
+
+      const rescheduled = await readPendingDeferredContinuation(pending.sessionId)
+      expect(rescheduled).toMatchObject({
+        state: 'pending',
+        scheduleReason: 'hard_quota_reset',
+        resetAt: resetAtSeconds * 1000,
+      })
+      expect(rescheduled?.notBefore).toBe(resetAtSeconds * 1000 + 60_000)
+      expect(getPoolStatus().accounts[0]?.status).toBe('capped')
+    } finally {
+      globalThis.fetch = originalFetch
       clearSessionMessagesCache()
       resetProjectForTesting()
       switchSession(asSessionId(previousSessionId), previousSessionProjectDir)

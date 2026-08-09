@@ -7,11 +7,22 @@
  * P4-2 `agentIdentity` vocabulary — never stored, never a mock worker.
  *
  * The two axes are independent (D2 §1): a worker has a LIFECYCLE state (what it is
- * doing) AND an attention OWNER (who must act next). A blocked worker is neutral
- * ("Waiting on orchestrator") while an orchestrator is active — only the solo case
- * (no orchestrator to pick up the handoff) escalates to the amber "needs you".
+ * doing) AND an attention OWNER (who must act next). A blocked worker always waits
+ * on the assistant that delegated it, never on the user.
+ *
+ * That last point is a 2026-08-09 correction of the drift `OrchestratorRoster.tsx`
+ * had flagged for a ruling. The escalation used to key on `AgentModeSnapshot.active`
+ * (`isAgentMode()`), which answers "which persona is the parent running", not "is
+ * there a parent to receive this". A blocked worker's handoff is queued to its
+ * parent conversation unconditionally and drained into a fresh turn with no human
+ * action (`src/tasks/LocalAgentTask/LocalAgentTask.tsx:273`,
+ * `app/sidecar/sidecarServer.ts:1209`, `src/hooks/useQueueProcessor.ts:48`), so an
+ * ordinary delegating session was reading every blocked worker as user-owned while
+ * the assistant on that thread already owned it.
  */
 import {
+  agentStateMeta,
+  agentTypeMeta,
   deriveAgentModeWorkerState,
   type AgentStateKey,
 } from './agentIdentity.js'
@@ -63,25 +74,24 @@ export function selectAgentModeSnapshot(
 
 /* ── two-axis worker model (read-time derivation over real shapes) ─────────── */
 
-/** Who must act next on a worker. `user` = the reserved solo case (no orchestrator). */
-export type WorkerOwner = 'none' | 'orchestrator' | 'user'
+/** Who must act next on a worker. Never the user: see the module header. */
+export type WorkerOwner = 'none' | 'orchestrator'
 
 /**
  * Lifecycle display state (`AgentStateKey`) for one worker. The handoff gate is
  * overlaid on the shared agent-mode lifecycle derivation:
- *   - blocked (handoffStatus) → 'waiting' when an orchestrator owns it (active),
- *     else the solo 'needs-you' (the P4-8 wiring of the `waiting` state).
+ *   - blocked (handoffStatus) → 'waiting', always: the delegating assistant is
+ *     the one that receives the handoff.
  *   - otherwise the persisted lifecycle via `deriveAgentModeWorkerState`
  *     (resumable/stale/result-ready/reviewed/attention/completed/running).
  */
 export function orchestratorWorkerState(
   worker: AgentModeWorkerItem,
-  active: boolean,
 ): AgentStateKey {
   if (worker.handoffStatus === 'blocked') {
-    return active ? 'waiting' : 'needs-you'
+    return 'waiting'
   }
-  return deriveAgentModeWorkerState({
+  const state = deriveAgentModeWorkerState({
     status: worker.status,
     synthesisStatus: worker.synthesisStatus,
     origin: worker.origin,
@@ -89,53 +99,69 @@ export function orchestratorWorkerState(
     role: worker.role ?? '',
     description: worker.description ?? '',
   })
+  // `isBackgrounded` reaches the renderer on every live worker
+  // (`agentModeDomain.ts` `toLiveWorkerItem`) but was dropped here, so a
+  // background spawn and a foreground one rendered identically on the roster and
+  // in the Workers list. Applied LAST because only a genuinely running worker can
+  // be backgrounded: the prior-session and synthesis states outrank it.
+  return state === 'running' && worker.isBackgrounded === true ? 'background' : state
 }
 
 /**
- * Attention owner (the baton). Blocked workers are orchestrator-owned while an
- * orchestrator is active (they fed a question back via AskOrchestratorTool to the
- * orchestrator's queue — `AskOrchestratorTool.ts:83`), user-owned only in the solo
- * case. A pending-synthesis result and a failed/killed worker also await the
- * orchestrator. Everything else needs nobody.
+ * Attention owner (the baton). Blocked workers are always assistant-owned: they
+ * fed a question back through AskOrchestratorTool (`AskOrchestratorTool.ts:83`)
+ * and it lands in the delegating conversation's own queue. A pending-synthesis
+ * result and a failed/killed worker likewise await the assistant. Everything else
+ * needs nobody.
  */
-export function deriveWorkerOwner(
-  worker: AgentModeWorkerItem,
-  active: boolean,
-): WorkerOwner {
-  if (worker.handoffStatus === 'blocked') {
-    return active ? 'orchestrator' : 'user'
-  }
-  const state = orchestratorWorkerState(worker, active)
-  if (state === 'result-ready' || state === 'attention') return 'orchestrator'
-  return 'none'
+export function deriveWorkerOwner(worker: AgentModeWorkerItem): WorkerOwner {
+  return ownerForState(orchestratorWorkerState(worker))
+}
+
+/**
+ * The owner axis reads purely off the lifecycle state now that no worker can be
+ * user-owned, which lets every caller derive the state once and branch on it.
+ * `waiting` is the blocked handoff; the other two are a result the assistant has
+ * not synthesised and a worker that died on it.
+ */
+function ownerForState(state: AgentStateKey): WorkerOwner {
+  return state === 'waiting' || state === 'result-ready' || state === 'attention'
+    ? 'orchestrator'
+    : 'none'
 }
 
 export type OrchestratorWorkerSummary = {
-  /** Actively running, nobody owns the next action. */
+  /** Actively running in the foreground, nobody owns the next action. */
   working: number
-  /** Awaiting the orchestrator (blocked/result-ready/failed under an active orchestrator). */
+  /**
+   * Running without the turn. Counted apart from `working` so the Workers list
+   * and the docked roster tell the same story; folding it in made one surface
+   * say "2 working" while the other said "1 working, 1 in background".
+   */
+  background: number
+  /** Awaiting the assistant (blocked / result-ready / failed). */
   orchestrator: number
-  /** Awaiting the human (the solo blocked case). */
-  user: number
   /** Reviewed / settled — no news. */
   done: number
 }
 
 export function summarizeOrchestratorWorkers(
   workers: readonly AgentModeWorkerItem[],
-  active: boolean,
 ): OrchestratorWorkerSummary {
   const summary: OrchestratorWorkerSummary = {
     working: 0,
+    background: 0,
     orchestrator: 0,
-    user: 0,
     done: 0,
   }
+  // One derivation per worker: with the user bucket gone, the owner axis is a
+  // function of the state alone, so asking `deriveWorkerOwner` first (which
+  // derives the state internally) and then deriving it again was pure rework.
   for (const worker of workers) {
-    const owner = deriveWorkerOwner(worker, active)
-    if (owner === 'user') summary.user += 1
-    else if (owner === 'orchestrator') summary.orchestrator += 1
-    else if (orchestratorWorkerState(worker, active) === 'running') summary.working += 1
+    const state = orchestratorWorkerState(worker)
+    if (ownerForState(state) === 'orchestrator') summary.orchestrator += 1
+    else if (state === 'running') summary.working += 1
+    else if (state === 'background') summary.background += 1
     else summary.done += 1
   }
   return summary
@@ -143,42 +169,37 @@ export function summarizeOrchestratorWorkers(
 
 export type WorkerPill = {
   label: string
-  /** neutral accent (subagents active) vs amber attention (a worker needs YOU). */
-  attention: boolean
 } | null
 
 /**
- * Footer/summary pill. Amber ONLY when the human owns the next action (the solo
- * escalation). Workers waiting on the orchestrator do NOT alert (D2 C2).
+ * Footer/summary pill. Always neutral: no worker state on this seam puts the next
+ * action on the human, so nothing here alerts (D2 C2, and the module header).
  */
 export function orchestratorPill(
   workers: readonly AgentModeWorkerItem[],
-  active: boolean,
 ): WorkerPill {
   if (workers.length === 0) return null
-  const summary = summarizeOrchestratorWorkers(workers, active)
-  if (summary.user > 0) {
-    return { label: `${summary.user} needs you`, attention: true }
-  }
-  const busy = summary.working + summary.orchestrator
+  const summary = summarizeOrchestratorWorkers(workers)
+  // Background workers are in flight, so they belong in "N subagents active"
+  // even though the two counts are reported separately elsewhere.
+  const busy = summary.working + summary.background + summary.orchestrator
   if (busy > 0) {
-    return { label: `${busy} subagent${busy > 1 ? 's' : ''} active`, attention: false }
+    return { label: `${busy} subagent${busy > 1 ? 's' : ''} active` }
   }
   return null
 }
 
 /**
- * News priority for the roster one-liner (the "whisper" model): a solo escalation
- * (3) outranks a failure (2), which outranks a ready result (1). Working /
- * needs-input / reviewed carry no news (0) — they stay a neutral count.
+ * News priority for the roster one-liner (the "whisper" model): a failure (2)
+ * outranks a ready result (1). Working / waiting / reviewed carry no news (0) —
+ * they stay a neutral count.
  */
-export function workerEventPriority(
-  worker: AgentModeWorkerItem,
-  active: boolean,
-): number {
-  const owner = deriveWorkerOwner(worker, active)
-  if (owner === 'user') return 3
-  const state = orchestratorWorkerState(worker, active)
+export function workerEventPriority(worker: AgentModeWorkerItem): number {
+  return priorityForState(orchestratorWorkerState(worker))
+}
+
+/** Its state-only half, so a caller holding the state need not re-derive it. */
+function priorityForState(state: AgentStateKey): number {
   if (state === 'attention') return 2
   if (state === 'result-ready') return 1
   return 0
@@ -187,11 +208,10 @@ export function workerEventPriority(
 /** The single worker promoted to the roster one-liner, or null when the swarm is quiet. */
 export function selectPromotedWorker(
   workers: readonly AgentModeWorkerItem[],
-  active: boolean,
 ): { worker: AgentModeWorkerItem; priority: number } | null {
   let lead: { worker: AgentModeWorkerItem; priority: number } | null = null
   for (const worker of workers) {
-    const priority = workerEventPriority(worker, active)
+    const priority = workerEventPriority(worker)
     if (priority > 0 && (!lead || priority > lead.priority)) {
       lead = { worker, priority }
     }
@@ -226,37 +246,44 @@ export type OrchestratorRosterLine = {
  *
  * The prototype also treats a promoted `working` lead as "any working". That
  * branch is unreachable in this derivation and in the prototype's own: a priority
- * above 0 requires owner `user`, `attention`, or `result-ready`, and none of those
- * is `running`. So `anyWorking` reads only the counted workers.
+ * above 0 requires state `attention` or `result-ready`, and neither is `running`.
+ * So `anyWorking` reads only the counted workers.
  */
 export function selectOrchestratorRosterLine(
   workers: readonly AgentModeWorkerItem[],
-  active: boolean,
 ): OrchestratorRosterLine {
   let working = 0
+  let background = 0
   let waiting = 0
   let done = 0
   let news = 0
   for (const worker of workers) {
-    if (workerEventPriority(worker, active) > 0) {
+    const state = orchestratorWorkerState(worker)
+    if (priorityForState(state) > 0) {
       news += 1
       continue
     }
-    const state = orchestratorWorkerState(worker, active)
     if (state === 'running') working += 1
+    else if (state === 'background') background += 1
     else if (state === 'waiting') waiting += 1
     else done += 1
   }
   const tail: RosterCount[] = []
   if (working > 0) tail.push({ text: `${working} working`, tone: 'working' })
-  if (waiting > 0) tail.push({ text: `${waiting} needs input`, tone: 'waiting' })
+  // Its own count, not folded into `working`: a background worker keeps going
+  // without the turn, which is the distinction the roster previously hid.
+  if (background > 0) tail.push({ text: `${background} in background`, tone: 'working' })
+  // Same words the Workers tab's counts strip uses for the same state. "N needs
+  // input" read as an unattributed ask on the surface closest to the composer,
+  // which is the reading this whole state exists to avoid.
+  if (waiting > 0) tail.push({ text: `${waiting} on the assistant`, tone: 'waiting' })
   if (done > 0) tail.push({ text: `${done} done`, tone: 'done' })
   // Every news-bearing worker beyond the promoted lead stays visible as a count.
   if (news > 1) tail.push({ text: `+${news - 1} more`, tone: 'done' })
   return {
-    lead: selectPromotedWorker(workers, active),
+    lead: selectPromotedWorker(workers),
     tail,
-    anyWorking: working > 0,
+    anyWorking: working > 0 || background > 0,
   }
 }
 
@@ -264,6 +291,36 @@ export function selectOrchestratorRosterLine(
 export function displayHandle(handle: string | null): string | null {
   if (!handle) return null
   return handle.replace(/^@/, '')
+}
+
+/**
+ * The one display-name selector shared by the docked roster, Workers list, and
+ * worker detail header. A persisted handle equal to the engine's stable id is
+ * the legacy unnamed fallback, not a user-facing name, so it must disappear.
+ */
+export function selectWorkerDisplayName(
+  worker: Pick<AgentModeWorkerItem, 'agentId' | 'handle'>,
+): string | null {
+  const name = displayHandle(worker.handle)?.trim() ?? ''
+  if (!name || name === worker.agentId) return null
+  return name
+}
+
+/**
+ * Accessible compact-row label: the visible row stays concise, while its
+ * lifecycle and normalized type remain available to assistive technology.
+ */
+export function workerAccessibleLabel(worker: AgentModeWorkerItem): string {
+  const name = selectWorkerDisplayName(worker)
+  const type = agentTypeMeta(worker.role)?.label
+  const status = agentStateMeta(orchestratorWorkerState(worker)).label
+  return [
+    name ?? (worker.description?.trim() || 'Unnamed worker'),
+    type ? `type ${type}` : null,
+    `status ${status}`,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(', ')
 }
 
 /**

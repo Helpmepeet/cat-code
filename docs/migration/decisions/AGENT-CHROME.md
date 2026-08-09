@@ -95,6 +95,14 @@ Cross-plane consistency (a card says running, the roster says failed) resolves t
 session plane for roster surfaces and toward frame correlation for transcript surfaces; they
 are allowed to disagree transiently, same as the TUI.
 
+**Amendment 2026-08-07 — running-worker identity.** Nested subagent full frames may carry the
+optional, engine-minted `agent_name` alongside `parent_tool_use_id`. This is transcript-plane
+identity, not a task-snapshot join: the owning card derives its running name from that received
+frame while it is live. On restore, the sidecar splices the worker's sidechain transcript under
+the parent `tool_use` and stamps its `agent_name` from durable subagent metadata, so the same
+name rehydrates without a task-snapshot join. A completed Agent name also replays through its
+structured `tool_use_result`. The session plane remains roster-only.
+
 ## 5. Pressure test
 
 - **"The Agent-Mode substrate is TUI-process state — none of it flows over the desktop seam;

@@ -332,7 +332,7 @@ export class SidecarSupervisor {
         ...(spawnCwd !== undefined ? { CATCODE_SIDECAR_CWD: spawnCwd } : {}),
         ...(config?.resumeEngineSessionId !== undefined
           ? { CATCODE_SIDECAR_RESUME_SESSION_ID: config.resumeEngineSessionId }
-          : {}),
+          : { CATCODE_SIDECAR_RESUME_SESSION_ID: '' }),
         CATCODE_OPERATIONAL_FD: '3',
         CATCODE_OPERATIONAL_LAUNCH_ID: process.env.CATCODE_OPERATIONAL_LAUNCH_ID ?? '',
       },
@@ -544,13 +544,22 @@ export class SidecarSupervisor {
           socket.destroy()
           return
         }
-        const frame = unwrapServerFrame(result.payload)
-        if (!frame) {
+        // Two distinct drops: a payload that is not a frame at all, and a frame
+        // whose delivery envelope is malformed. unwrapServerFrame would collapse
+        // both, but they are not the same failure and are reported separately.
+        if (!isObjectRecord(result.payload)) {
+          this.log(
+            `[supervisor] dropped frame from ${record.sessionId}: frame was not an object`,
+          )
+          continue
+        }
+        const serverFrame = unwrapServerFrame(result.payload)
+        if (!serverFrame) {
           this.log(`[supervisor] dropped malformed outbound envelope from ${record.sessionId}`)
           continue
         }
-        if (frame.kind === 'ready') {
-          const readyError = validateReadyFrame(record.sessionId, frame)
+        if (serverFrame.kind === 'ready') {
+          const readyError = validateReadyFrame(record.sessionId, serverFrame)
           if (readyError) {
             this.log(
               `[supervisor] invalid ready frame from ${record.sessionId}: ${readyError}`,
@@ -563,22 +572,22 @@ export class SidecarSupervisor {
           this.emit({
             type: 'frame',
             sessionId: record.sessionId,
-            frame,
+            frame: serverFrame,
           })
           continue
         }
 
-        if (!isObjectRecord(frame) || frame.sessionId !== record.sessionId) {
+        if (serverFrame.sessionId !== record.sessionId) {
           this.log(
             `[supervisor] dropped frame from ${record.sessionId}: frame sessionId ${String(
-              isObjectRecord(frame) ? frame.sessionId : undefined,
+              serverFrame.sessionId,
             )} did not match connection`,
           )
           continue
         }
         if (record.status !== 'ready') {
           this.log(
-            `[supervisor] dropped ${String(frame.kind)} frame from ${record.sessionId} before a valid ready frame`,
+            `[supervisor] dropped ${String(serverFrame.kind)} frame from ${record.sessionId} before a valid ready frame`,
           )
           this.setStatus(record, 'failed')
           socket.destroy()
@@ -587,7 +596,7 @@ export class SidecarSupervisor {
         this.emit({
           type: 'frame',
           sessionId: record.sessionId,
-          frame,
+          frame: serverFrame,
         })
       }
     })

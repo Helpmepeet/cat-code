@@ -9,12 +9,16 @@
  * than on the global Accounts page.
  */
 import type {
+  AgentModeWorkerItem,
   LeaseOwnerRow,
+  LeaseSelectionKind,
   LeaseSnapshot,
-  LeaseState as LeaseLifecycle,
+  LeaseState,
+  LeaseStrategy,
   ServerFrame,
   SessionId,
 } from '../../shared/protocol.js'
+import { selectWorkerDisplayName } from './orchestratorState.js'
 
 export type LeaseStateStore = {
   bySession: Record<SessionId, LeaseSnapshot | undefined>
@@ -60,20 +64,6 @@ export function selectLeaseSnapshot(
 /* ── read-time derivations ─────────────────────────────────────────────────── */
 
 /**
- * Lease lifecycle vocabulary (the prototype's `LEASE_STATE`,
- * `OrchestratorMode.jsx:598-602`) mapped onto the P0-2 tone tokens. Static class
- * literals only: an interpolated arbitrary value silently no-ops under Tailwind v4.
- */
-export const LEASE_STATE_META: Record<
-  LeaseLifecycle,
-  { label: string; dot: string; text: string }
-> = {
-  active: { label: 'active', dot: 'bg-tone-good', text: 'text-tone-good' },
-  released: { label: 'released', dot: 'bg-zinc-600', text: 'text-text-subtle' },
-  failed: { label: 'failed', dot: 'bg-tone-danger', text: 'text-tone-danger' },
-}
-
-/**
  * The lease held by one owner, or null. `ownerId` is the subagent's `agentId`
  * (the roster's `AgentModeWorkerItem.agentId`) or `'main-thread'`; see the
  * protocol JOIN KEY note. Null is the ordinary case for an Anthropic-path
@@ -87,10 +77,18 @@ export function selectLeaseForOwner(
   return snapshot.owners.find(owner => owner.ownerId === ownerId) ?? null
 }
 
-/** Active-lease count — the Leases tab's count chip. */
-export function selectActiveLeaseCount(snapshot: LeaseSnapshot | null): number {
+/**
+ * The tab's count chip. Deliberately every owner row, not just the active ones:
+ * it has to equal the sum of the group counts the panel prints, and an agent that
+ * failed to get an account still occupies a row. The engine's own per-account
+ * rollup (`LeaseSnapshot.accounts`) is NOT the source here — it omits a
+ * synthesised main lease (`codexAccountLeaseManager.ts:168-170,438`), which is why
+ * the tab, the rollup and the owner list used to print three different numbers.
+ */
+export function selectLeaseAgentCount(snapshot: LeaseSnapshot | null): number {
   if (!snapshot) return 0
-  return snapshot.owners.filter(owner => owner.state === 'active').length
+  return snapshot.owners.filter(owner => LEASE_STATE_ROLE[owner.state] !== 'gone')
+    .length
 }
 
 /**
@@ -115,4 +113,239 @@ export function leaseAccountLabel(row: {
   accountAlias: string | null
 }): string {
   return row.accountAlias ?? row.accountId
+}
+
+/* ── the panel's own shape: accounts, each holding its agents ──────────────── */
+
+/**
+ * A humanised replacement for the engine's `selectionReason`, which is a log
+ * string and not display text: it embeds raw account UUIDs twice over
+ * (`failover from <uuid>: Codex account <uuid> …`,
+ * `codexAccountLeaseManager.ts:333`) and otherwise reads as internal vocabulary
+ * ("spread selected least crowded healthy account", `:551`). The engine's own
+ * text survives as `detail`, which the panel surfaces only on hover.
+ *
+ * The account an agent moved FROM is named when `movedFrom` carries an alias. It
+ * cannot be derived here: that account has lost its lease, so it is absent from
+ * `LeaseSnapshot.accounts`, and only the sidecar can see the whole pool. When the
+ * sidecar could not resolve it either (a deleted account), the wording stays
+ * anonymous rather than inventing a name.
+ */
+export type LeaseAgentNote = {
+  text: string
+  tone: 'moved' | 'stranded'
+  /** The engine's raw reason, for a title attribute. Never rendered as body text. */
+  detail: string
+}
+
+/** One agent, as it appears under its account. */
+export type LeaseAgentRow = {
+  ownerId: string
+  /**
+   * The worker's minted handle (`workerNames.ts` pools, surfaced by
+   * `selectWorkerDisplayName`), or null when it has none and the row leads with
+   * its task text instead.
+   */
+  name: string | null
+  /** Delegated task text. Null for the main thread, which has no task. */
+  task: string | null
+  isMain: boolean
+  /** Held duration, for an active lease only. */
+  held: string | null
+  note: LeaseAgentNote | null
+}
+
+/** One account and the agents on it. */
+export type LeaseAccountGroup = {
+  key: string
+  label: string
+  /** The bucket for agents holding no usable account, which leads the list. */
+  isStranded: boolean
+  agents: LeaseAgentRow[]
+}
+
+/** Safe as a map key beside real account ids: those are UUIDs, which cannot equal this. */
+const STRANDED_KEY = 'no-account'
+const STRANDED_LABEL = 'No account'
+const NOTE_STRANDED = 'every account was capped or unavailable'
+const NOTE_MOVED = 'moved here from another account'
+const NOTE_REPAIRED = 'moved here, its account could not be used'
+
+/**
+ * The note text for a lease that moved. Names the account it came from when the
+ * sidecar could resolve one; falls back to the anonymous wording when it could
+ * not, which happens when that account has since been deleted from the pool.
+ */
+function movedNoteText(owner: LeaseOwnerRow): string {
+  const from = owner.movedFrom
+  const name = from?.accountAlias ?? null
+  if (!name) {
+    return owner.selectionKind === 'repaired' ? NOTE_REPAIRED : NOTE_MOVED
+  }
+  return owner.selectionKind === 'repaired'
+    ? `moved here, ${name} could not be used`
+    : `moved here from ${name}`
+}
+/** `claude.ts:1177` labels a lease `Subagent <agentId>`; that id is not display text. */
+const OWNER_LABEL_ID_PREFIX = 'Subagent '
+const UNNAMED = 'Unnamed worker'
+/**
+ * The main thread's name is renderer-owned, never the engine's `ownerLabel`: the
+ * two engine paths disagree on casing (`'Main thread'`, `src/query.ts:328`, vs
+ * `'main thread'` on the synthesised lease, `codexAccountLeaseManager.ts:432`), so
+ * reading it would let an internal code path decide how a heading-weight name looks.
+ */
+const MAIN_THREAD_NAME = 'Main thread'
+/** How much of an account id to show when the pool has no alias for it (see `leaseGroupLabel`). */
+const ACCOUNT_ID_PREVIEW_CHARS = 8
+
+/**
+ * What a lease state means for this panel. Exhaustive by construction: extend
+ * `LeaseState` and this stops compiling, which is the tripwire a closed union is
+ * required to carry.
+ */
+type LeaseRole = 'holding' | 'stranded' | 'gone'
+const LEASE_STATE_ROLE: Record<LeaseState, LeaseRole> = {
+  active: 'holding',
+  failed: 'stranded',
+  // Unreachable today: `releaseCodexLease` DELETES the map entry rather than
+  // marking it (`codexAccountLeaseManager.ts:294-296`). Mapped rather than
+  // assumed away, and a lease that holds nothing has no row to render.
+  released: 'gone',
+}
+
+/** Strips account UUIDs out of engine text bound for a `title`, itself a §7 text surface. */
+const ACCOUNT_ID_PATTERN =
+  /\s*\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi
+
+function redactAccountIds(reason: string): string {
+  return reason.replace(ACCOUNT_ID_PATTERN, '').replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * Which selection kinds are worth telling the user about. `manual` is the user's
+ * own `/switch-account`, so saying it back is the noise the operator rules forbid;
+ * `initial` is the ordinary case. Exhaustive, so a new engine kind must be
+ * classified here rather than silently falling through as unremarkable.
+ */
+const SELECTION_KIND_IS_NEWS: Record<LeaseSelectionKind, boolean> = {
+  initial: false,
+  manual: false,
+  failover: true,
+  repaired: true,
+}
+
+function leaseAgentNote(owner: LeaseOwnerRow): LeaseAgentNote | null {
+  const detail = redactAccountIds(owner.lastFailureReason ?? owner.selectionReason)
+  if (LEASE_STATE_ROLE[owner.state] === 'stranded') {
+    return { text: NOTE_STRANDED, tone: 'stranded', detail }
+  }
+  if (SELECTION_KIND_IS_NEWS[owner.selectionKind]) {
+    return { text: movedNoteText(owner), tone: 'moved', detail }
+  }
+  return null
+}
+
+/**
+ * A group's heading. Falls back to a SHORT id rather than the whole one: an
+ * un-aliased account is the ordinary case (the pool's `alias` is optional and set
+ * only by an explicit rename), and this heading is the panel's most prominent text.
+ * Two un-aliased accounts still read as different groups, which `'Unnamed account'`
+ * would not give.
+ */
+function leaseGroupLabel(owner: LeaseOwnerRow): string {
+  return (
+    owner.accountAlias ?? owner.accountId.slice(0, ACCOUNT_ID_PREVIEW_CHARS)
+  )
+}
+
+function toLeaseAgentRow(
+  owner: LeaseOwnerRow,
+  workersById: ReadonlyMap<string, AgentModeWorkerItem>,
+  nowMs: number,
+): LeaseAgentRow {
+  const isMain = owner.ownerType === 'main'
+  const worker = workersById.get(owner.ownerId)
+  const handle = worker ? selectWorkerDisplayName(worker) : null
+  const ownerLabel = owner.ownerLabel.startsWith(OWNER_LABEL_ID_PREFIX)
+    ? null
+    : owner.ownerLabel
+  // `||` throughout, not `??`: an empty engine string is as absent as a missing
+  // one, and letting it through renders a row with no identity at all.
+  const task = isMain ? null : worker?.description?.trim() || ownerLabel || null
+  const name = isMain ? MAIN_THREAD_NAME : handle
+
+  return {
+    ownerId: owner.ownerId,
+    name: name || (task ? null : UNNAMED),
+    task,
+    isMain,
+    held:
+      LEASE_STATE_ROLE[owner.state] === 'holding'
+        ? leaseHeldLabel(owner.createdAt, nowMs)
+        : null,
+    note: leaseAgentNote(owner),
+  }
+}
+
+/**
+ * The panel's rows: one group per account, in first-appearance order (which puts
+ * the main thread's account first), with the stranded bucket pulled to the top.
+ * Grouping is derived from `owners`, never from the engine's `accounts` rollup —
+ * see `selectLeaseAgentCount` for why those two disagree.
+ */
+export function selectLeaseGroups(
+  snapshot: LeaseSnapshot | null,
+  workers: readonly AgentModeWorkerItem[],
+  nowMs: number,
+): LeaseAccountGroup[] {
+  if (!snapshot) return []
+
+  const workersById = new Map(workers.map(worker => [worker.agentId, worker]))
+  const byKey = new Map<string, LeaseAccountGroup>()
+  for (const owner of snapshot.owners) {
+    const role = LEASE_STATE_ROLE[owner.state]
+    if (role === 'gone') continue
+    // A failed lease keeps the account id it could not use
+    // (`codexAccountLeaseManager.ts:356-362`), so grouping it by that id would
+    // file a stranded agent under a healthy-looking account.
+    const isStranded = role === 'stranded'
+    const key = isStranded ? STRANDED_KEY : owner.accountId
+    let group = byKey.get(key)
+    if (!group) {
+      group = {
+        key,
+        label: isStranded ? STRANDED_LABEL : leaseGroupLabel(owner),
+        isStranded,
+        agents: [],
+      }
+      byKey.set(key, group)
+    }
+    group.agents.push(toLeaseAgentRow(owner, workersById, nowMs))
+  }
+
+  const groups = [...byKey.values()]
+  return [
+    ...groups.filter(group => group.isStranded),
+    ...groups.filter(group => !group.isStranded),
+  ]
+}
+
+/**
+ * The one line worth printing above the groups, or null. A `spread` session that
+ * put every agent on a single account has silently lost its spread, which the
+ * grouped list alone does not say out loud. Everything else about the state the
+ * user already chose is left unsaid (the `settingsRowNote` rule).
+ */
+export function selectLeaseConcentrationNote(
+  strategy: LeaseStrategy | null,
+  groups: readonly LeaseAccountGroup[],
+): string | null {
+  if (strategy !== 'spread') return null
+  // Every group, not just the held ones: with an agent stranded alongside, "All N
+  // agents" would contradict the tab count printed on the same screen.
+  if (groups.length !== 1) return null
+  const only = groups[0]
+  if (!only || only.isStranded || only.agents.length < 2) return null
+  return `All ${only.agents.length} agents landed on one account.`
 }

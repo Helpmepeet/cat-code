@@ -4,9 +4,10 @@
  * scoping in the companion implementation-plan, IS-A).
  *
  * On session close/quit, main distills a session's replay-buffer frames to a
- * transcript-only `TranscriptCache` and persists it here; the renderer fetches
- * one by id over the read-only `previewSession` bridge method to render a dead
- * session's transcript instantly, before any sidecar spawn.
+ * transcript-only `TranscriptCache`, enriches the header with the run facts the
+ * frames cannot carry (`buildClosedSessionCache`), and persists it here; the
+ * renderer fetches one by id over the read-only `previewSession` bridge method
+ * to render a dead session's transcript instantly, before any sidecar spawn.
  *
  * Security posture (approved 2026-07-14; SECURITY-MINIMUM trust-domain parity
  * with the transcript JSONL already at rest engine-side):
@@ -22,7 +23,11 @@
  *   - Reads are FAIL-CLOSED: size-bounded BEFORE parse, runtime schema-validated,
  *     then re-scanned with the CURRENT `scanForSecrets` (`app/shared/secretGuard.ts`).
  *     Any oversize / corruption / schema drift / version mismatch / secret hit ⇒
- *     the cache is discarded AND the file deleted. The read-time re-scan closes
+ *     the cache is discarded AND the file deleted. The re-scan walks the FRAMES,
+ *     not the header: the header is a closed set of scalars, schema-validated
+ *     field by field on every read and holding nothing the key-name guard could
+ *     match, but it is NOT guarded, so a new header field must be judged on that
+ *     basis rather than assumed covered. The read-time re-scan closes
  *     guard-drift completely (design Q3 resolution): a frame the current guard
  *     would block can never replay from an old cache, with no engine import (main
  *     stays engine-free — `scanForSecrets` is a pure shared-layer module).
@@ -48,12 +53,14 @@ import {
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
+import type { TranscriptRunFactsRead } from '../shared/transcriptRunFacts.js'
 import {
   HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
   PROTOCOL_VERSION,
   type ServerFrame,
   type SessionId,
   type TranscriptCache,
+  type TranscriptCacheHeader,
   type TranscriptRunFacts,
 } from '../shared/protocol.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
@@ -160,10 +167,18 @@ export function createTranscriptCache(
   engineSessionId: string | null,
   frames: ServerFrame[],
   /**
-   * Only the PL-B worker can supply these: it reads the raw transcript, which
-   * still carries the mode/effort/usage records the engine's message conversion
-   * drops. An on-close cache omits them, and the renderer falls back to reading
-   * what the FRAMES still carry (model, and usage from a live `result`).
+   * Supplied by whichever writer read the raw transcript: the PL-B worker, or
+   * the close path via `buildClosedSessionCache`. Omitted when neither could
+   * derive a COMPLETE set, and the renderer then falls back to reading what the
+   * FRAMES still carry (model, mode, usage, and the exact window off a live
+   * `result`).
+   *
+   * The frames are not structurally incapable of naming an effort:
+   * `selectRunFactsFromFrames` reads one off a `system`/`codex_send_path`
+   * message, and the distill allowlist keeps those. They just very often do not
+   * have one — it rides Codex WS completions only, and the bounded replay buffer
+   * may have dropped it. The cache behind the reported defect held zero such
+   * records against a transcript that recorded `effort: high`.
    */
   runFacts?: TranscriptRunFacts,
 ): TranscriptCache {
@@ -184,6 +199,177 @@ export function createTranscriptCache(
 }
 
 /**
+ * The run facts a close/park/crash write should carry, or `undefined` to write
+ * no header at all.
+ *
+ * ## Why a gate rather than "write whatever we derived"
+ *
+ * The renderer trusts a header WHOLESALE: `selectPreviewRunFacts` returns the
+ * header's five fields and never consults the frames again
+ * (`previewTranscriptState.ts`). That is correct — a header is one coherent
+ * snapshot and merging a frame-derived value into it rebuilds the incoherence
+ * the snapshot exists to remove — but it means a THIN header is worse than no
+ * header. An on-close cache's frames still carry a live `result`, so the
+ * fallback can name the model, the permission mode, the usage AND the exact
+ * context window the run reported. Writing `{effort}` with the rest null would
+ * trade all four of those for one, and swap a real 372k window for the 200k
+ * default.
+ *
+ * So the header is written only when it is complete on every field the frame
+ * fallback could otherwise supply: model, permissionMode, usedTokens,
+ * contextWindow. `effort` is deliberately NOT required — it is null for every
+ * provider-default (non-Codex) session, and it is the one fact frames can never
+ * recover, which is the whole reason this path exists.
+ *
+ * ## Why an existing cache is an input
+ *
+ * A close must not flatten a cache the backfill worker already enriched. That
+ * worker had the engine's window resolver; main does not. So a legacy
+ * transcript (no `run_facts` record, hence no recorded window) re-derived at
+ * close would fail the gate and drop back to a headerless write, losing the
+ * effort and window a previous launch had already established. Existing facts
+ * fill the gaps instead — but only when they describe the SAME model, since
+ * that is what makes the window they carry the right one, and only from the
+ * current derivation version.
+ *
+ * So the guarantee is narrower than "a close never flattens an enriched cache":
+ * a legacy transcript whose model CHANGED since that cache was written still
+ * writes a headerless one. It degrades safely (the frame fallback answers, and
+ * `cacheHasCurrentRunFacts` then queues the row for re-backfill on the next
+ * launch), but it is a real gap, not a covered case.
+ */
+export function resolveCacheRunFacts(
+  derived: TranscriptRunFacts,
+  existing: TranscriptRunFacts | null,
+  /**
+   * The derivation found a `system`/`run_facts` snapshot, so its fields are one
+   * coherent request and NOTHING may be patched into them. Above all `effort`:
+   * on this tier `null` means the run used the provider default, and borrowing
+   * a cached `high` over it reports an effort that run never used. Only the
+   * legacy byproduct tier, where `null` really does mean "no record said",
+   * permits the fill-the-gaps merge below.
+   */
+  authoritative = false,
+): TranscriptRunFacts | undefined {
+  // A POSITIVE model match, never merely "the derivation said nothing".
+  //
+  // Allowing a null derived model to borrow was wrong in a way the renderer
+  // makes expensive: with the transcript unreadable or its row gone, EVERY
+  // field came from the prior header, so a complete-looking one was written
+  // whose `usedTokens` predates the cache's own frames — and the renderer
+  // trusts a header wholesale, so the donut would report a count older than the
+  // transcript beside it. With no evidence, write no header and let the frame
+  // fallback answer; it is derived from those very frames.
+  const prior =
+    !authoritative &&
+    existing !== null &&
+    derived.model !== null &&
+    derived.model === existing.model
+      ? existing
+      : null
+  const merged: TranscriptRunFacts = {
+    model: derived.model ?? prior?.model ?? null,
+    permissionMode: derived.permissionMode ?? prior?.permissionMode ?? null,
+    effort: derived.effort ?? prior?.effort ?? null,
+    usedTokens: derived.usedTokens ?? prior?.usedTokens ?? null,
+    contextWindow: derived.contextWindow ?? prior?.contextWindow ?? null,
+  }
+  const complete =
+    merged.model !== null &&
+    merged.permissionMode !== null &&
+    merged.usedTokens !== null &&
+    merged.contextWindow !== null
+  return complete ? merged : undefined
+}
+
+/**
+ * Build the cache a close/park/crash persist should write, or null when there
+ * is nothing worth writing.
+ *
+ * The pure half of main's `persistTranscriptCache`, extracted so the run-facts
+ * decision is testable without Electron. Same order every eviction point uses:
+ * distill the snapshot, then enrich the header from the session's own transcript
+ * on disk.
+ *
+ * Reading that transcript is a synchronous full-file scan, on a path that
+ * includes the quit sequence. Measured 2026-08-09 on this machine: 1.9 ms for a
+ * 1.1 MB transcript, 22.9 ms for the largest one present (13 MB). That is the
+ * budget being spent, and it buys a cache that is complete the moment it is
+ * written rather than one that stays thin until the next launch's backfill.
+ *
+ * Main stays engine-free: the resolver the worker injects is deliberately
+ * absent here, so a window is only ever a number the ENGINE already recorded
+ * (`run_facts`) or one an enriched cache already holds.
+ */
+export function buildClosedSessionCache(
+  deps: {
+    /** The session's engine transcript, or null when its path is unknowable. */
+    transcriptPath: (engineSessionId: string) => string | null
+    readRunFacts: (transcriptPath: string) => TranscriptRunFactsRead
+    readCachedRunFacts: (
+      appSessionId: SessionId,
+      engineSessionId: string | null,
+    ) => TranscriptRunFacts | null
+  },
+  frames: ServerFrame[],
+): TranscriptCache | null {
+  const base = distill(frames)
+  // Never restorable without an engineSessionId, so a cache would never be
+  // served for it.
+  if (base.header.engineSessionId === null) return null
+  // The pre-distill snapshot always has a head plus state snapshots, so a frame
+  // count taken before distilling never catches a session closed before its
+  // first turn. Distilling drops all of those, and a cache with no transcript
+  // frames is worse than no cache: the renderer treats a readable cache as a
+  // preview and shows a loading placeholder for a transcript that never arrives.
+  if (base.frames.length === 0) return null
+
+  const path = deps.transcriptPath(base.header.engineSessionId)
+  const read =
+    path === null
+      ? { facts: EMPTY_RUN_FACTS, authoritative: false }
+      : deps.readRunFacts(path)
+  const runFacts = resolveCacheRunFacts(
+    read.facts,
+    deps.readCachedRunFacts(base.header.appSessionId, base.header.engineSessionId),
+    read.authoritative,
+  )
+  if (!runFacts) return base
+  return createTranscriptCache(
+    base.header.appSessionId,
+    base.header.engineSessionId,
+    base.frames,
+    runFacts,
+  )
+}
+
+/**
+ * Whether a facts object says ANYTHING. The floor both writers share.
+ *
+ * An all-null header is pure loss: it can beat no frame fallback anywhere, and
+ * the renderer stops consulting frames the moment a header exists. It is
+ * reachable — an unreadable transcript yields exactly this — so it is refused
+ * rather than stamped current.
+ */
+export function hasAnyRunFact(facts: TranscriptRunFacts): boolean {
+  return (
+    facts.model !== null ||
+    facts.permissionMode !== null ||
+    facts.effort !== null ||
+    facts.usedTokens !== null ||
+    facts.contextWindow !== null
+  )
+}
+
+const EMPTY_RUN_FACTS: TranscriptRunFacts = {
+  model: null,
+  permissionMode: null,
+  effort: null,
+  usedTokens: null,
+  contextWindow: null,
+}
+
+/**
  * Whether a cache carries CURRENT run facts.
  *
  * Backfill discovery uses this to REFRESH a cache whose facts predate the
@@ -197,11 +383,49 @@ export function createTranscriptCache(
  * `runFacts` object and so was never re-read.
  */
 export function cacheHasCurrentRunFacts(dir: string, id: SessionId): boolean {
-  const prefix = readHeaderPrefix(dir, id)
-  if (prefix === null) return false
-  const match = RUN_FACTS_VERSION_RE.exec(prefix.toString('utf8'))
+  const header = readCachedHeader(dir, id)
+  if (header === null) return false
   // `>=`, so a cache written by a NEWER build is not churned by an older one.
-  return match !== null && Number(match[1]) >= TRANSCRIPT_CACHE_RUN_FACTS_VERSION
+  return (header.runFactsVersion ?? 0) >= TRANSCRIPT_CACHE_RUN_FACTS_VERSION
+}
+
+/**
+ * The run facts an existing cache already carries, or null when it has none at
+ * the CURRENT version.
+ *
+ * This is the "do not downgrade an enriched cache" input to the close path: a
+ * cache the backfill worker enriched (engine-resolved window, effort read from
+ * the raw transcript) must not be flattened by a later close that re-derives
+ * less. Version-gated for the same reason discovery is — facts from an older
+ * derivation are not a floor worth defending.
+ */
+export function readCachedRunFacts(
+  dir: string,
+  id: SessionId,
+  /**
+   * The engine transcript the CURRENT facts describe. An app session is re-keyed
+   * when it resumes into a new transcript, and an older cache for the same app
+   * id then describes a different run — borrowing from it would relabel that
+   * run's effort and window as this one's.
+   */
+  engineSessionId: string | null,
+): TranscriptRunFacts | null {
+  const header = readCachedHeader(dir, id)
+  if (header === null) return null
+  if (header.engineSessionId !== engineSessionId) return null
+  // The same three gates `readCache` applies, because this value is about to be
+  // COPIED into a freshly written header: facts from a cache the current guard
+  // or protocol would reject must not outlive it by being carried forward, and
+  // a file served under the wrong id speaks for a different session.
+  if (
+    header.appSessionId !== id ||
+    header.protocolVersion !== PROTOCOL_VERSION ||
+    header.guardVersion !== TRANSCRIPT_CACHE_GUARD_VERSION
+  ) {
+    return null
+  }
+  if ((header.runFactsVersion ?? 0) < TRANSCRIPT_CACHE_RUN_FACTS_VERSION) return null
+  return header.runFacts ?? null
 }
 
 /**
@@ -216,10 +440,75 @@ export function cacheHasCurrentRunFacts(dir: string, id: SessionId): boolean {
  * pinned to the day the cache was written.
  */
 export function cacheWrittenAt(dir: string, id: SessionId): number | null {
+  return readCachedHeader(dir, id)?.writtenAt ?? null
+}
+
+/**
+ * Parse just the header out of a cache file, from a bounded prefix read.
+ *
+ * Never `readCache`: discovery and the synchronous close path both run on
+ * Electron's main thread for every restorable row, and parsing plus recursively
+ * secret-scanning multi-MB caches there is the exact cost this avoids. The
+ * header is the FIRST object in the file, so it is inside the probe window or
+ * the cache predates the field being asked about.
+ *
+ * The header object is extracted by brace balance and parsed as real JSON, so
+ * every caller reads the same validated shape. (Three field-regexes over a
+ * truncated buffer preceded this, and they could not answer a nested question
+ * like "what model did those facts describe" at all.) Null on any doubt: an
+ * unreadable or malformed header makes callers treat the cache as unknown,
+ * which is their existing degradation, and a genuinely broken file still fails
+ * the real read.
+ */
+export function readCachedHeader(
+  dir: string,
+  id: SessionId,
+): TranscriptCacheHeader | null {
   const prefix = readHeaderPrefix(dir, id)
   if (prefix === null) return null
-  const match = /"writtenAt"\s*:\s*(\d{1,15})/.exec(prefix.toString('utf8'))
-  return match ? Number(match[1]) : null
+  const text = prefix.toString('utf8')
+  const start = text.indexOf(HEADER_KEY)
+  if (start === -1) return null
+  const open = start + HEADER_KEY.length
+  const end = matchingBraceEnd(text, open)
+  if (end === null) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text.slice(open, end))
+  } catch {
+    return null
+  }
+  return parseTranscriptCacheHeader(parsed)
+}
+
+const HEADER_KEY = '"header":'
+
+/**
+ * Index just past the object opening at `open`, or null when it does not close
+ * inside the probe window. String-aware, so a brace inside a title or cwd
+ * cannot end the object early.
+ */
+function matchingBraceEnd(text: string, open: number): number | null {
+  if (text[open] !== '{') return null
+  let depth = 0
+  let inString = false
+  let escaped = false
+  for (let i = open; i < text.length; i++) {
+    const char = text[i]
+    if (inString) {
+      if (escaped) escaped = false
+      else if (char === '\\') escaped = true
+      else if (char === '"') inString = false
+      continue
+    }
+    if (char === '"') inString = true
+    else if (char === '{') depth += 1
+    else if (char === '}') {
+      depth -= 1
+      if (depth === 0) return i + 1
+    }
+  }
+  return null
 }
 
 /**
@@ -253,10 +542,9 @@ function readHeaderPrefix(dir: string, id: SessionId): Buffer | null {
   }
 }
 
-/** Header-sized window: the header is the first object of the file. */
+/** Header-sized window: the header is the first object of the file. Real
+ * headers run ~330 bytes, so the whole object is always inside it. */
 const HEADER_PROBE_BYTES = 4096
-/** Real headers run ~330 bytes, so the stamp is always inside the probe window. */
-const RUN_FACTS_VERSION_RE = /"runFactsVersion"\s*:\s*(\d{1,9})/
 
 /** `<registryDir>/transcript-cache` — main passes its real registry dir. */
 export function transcriptCacheDir(registryDir: string): string {
@@ -404,36 +692,8 @@ function discard(filePath: string): null {
 /** Runtime-narrow an unknown parse to `TranscriptCache`, or null. Fail-closed. */
 function parseTranscriptCache(value: unknown): TranscriptCache | null {
   if (!isRecord(value)) return null
-  const header = value.header
   const frames = value.frames
-  if (!isRecord(header)) return null
-  if (
-    typeof header.appSessionId !== 'string' ||
-    !(typeof header.engineSessionId === 'string' || header.engineSessionId === null) ||
-    typeof header.protocolVersion !== 'number' ||
-    typeof header.appVersion !== 'string' ||
-    typeof header.guardVersion !== 'number' ||
-    typeof header.writtenAt !== 'number'
-  ) {
-    return null
-  }
-  // Optional and additive: absent is a valid pre-field cache. PRESENT but
-  // malformed is a corrupt artifact, and fails the read like any other
-  // schema drift rather than being silently dropped.
-  if (
-    header.runFacts !== undefined &&
-    parseTranscriptRunFacts(header.runFacts) === null
-  ) {
-    return null
-  }
-  if (
-    header.runFactsVersion !== undefined &&
-    (typeof header.runFactsVersion !== 'number' ||
-      !Number.isInteger(header.runFactsVersion) ||
-      header.runFactsVersion < 0)
-  ) {
-    return null
-  }
+  if (parseTranscriptCacheHeader(value.header) === null) return null
   if (!Array.isArray(frames)) return null
   for (const frame of frames) {
     // Schema-drift gate: every frame must be a valid ServerFrame that is on the
@@ -442,6 +702,45 @@ function parseTranscriptCache(value: unknown): TranscriptCache | null {
     if (!isTranscriptCacheFrame(frame as unknown as ServerFrame)) return null
   }
   return value as unknown as TranscriptCache
+}
+
+/**
+ * Runtime-narrow an unknown parse to `TranscriptCacheHeader`, or null.
+ * Shared by the full read and the bounded prefix read so a header accepted by
+ * one is accepted by the other.
+ */
+function parseTranscriptCacheHeader(
+  value: unknown,
+): TranscriptCacheHeader | null {
+  if (!isRecord(value)) return null
+  if (
+    typeof value.appSessionId !== 'string' ||
+    !(typeof value.engineSessionId === 'string' || value.engineSessionId === null) ||
+    typeof value.protocolVersion !== 'number' ||
+    typeof value.appVersion !== 'string' ||
+    typeof value.guardVersion !== 'number' ||
+    typeof value.writtenAt !== 'number'
+  ) {
+    return null
+  }
+  // Optional and additive: absent is a valid pre-field cache. PRESENT but
+  // malformed is a corrupt artifact, and fails the read like any other
+  // schema drift rather than being silently dropped.
+  if (
+    value.runFacts !== undefined &&
+    parseTranscriptRunFacts(value.runFacts) === null
+  ) {
+    return null
+  }
+  if (
+    value.runFactsVersion !== undefined &&
+    (typeof value.runFactsVersion !== 'number' ||
+      !Number.isInteger(value.runFactsVersion) ||
+      value.runFactsVersion < 0)
+  ) {
+    return null
+  }
+  return value as unknown as TranscriptCacheHeader
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
