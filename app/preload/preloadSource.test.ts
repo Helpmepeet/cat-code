@@ -200,9 +200,12 @@ test('failure-path senders keep the rate guard but never let its rejection escap
   // `componentDidCatch` — and a throw from either unmounted the renderer. The
   // guard must still run, so an over-budget payload is DROPPED rather than sent
   // and T7's cap is unchanged; only the exception is contained.
+  // All THREE telemetry senders, including the health probe: the commit that
+  // wrapped it claimed parity with the other two, and only a pin makes that true.
   for (const [open, close] of [
     ['function flushDeliveryAcknowledgements(): void {', '\n}'],
     ['reportRendererFault(kind, message): void {', '\n  },'],
+    ['ipcRenderer.on(CH_DELIVERY_HEALTH_PROBE, () => {', '\n})'],
   ] as const) {
     const start = source.indexOf(open)
     expect(start).toBeGreaterThan(-1)
@@ -210,14 +213,44 @@ test('failure-path senders keep the rate guard but never let its rejection escap
     expect(body).toContain('sendGuard.assertAllowed')
     expect(body.indexOf('try {')).toBeGreaterThan(-1)
     expect(body.indexOf('try {')).toBeLessThan(body.indexOf('sendGuard.assertAllowed'))
-    expect(body).toContain('} catch {')
+    // `} catch` rather than `} catch {`: the ack flush binds the error so it can
+    // tell a rate rejection from a poison batch.
+    expect(body).toContain('} catch')
     // The send must sit INSIDE the same try, after the guard. Asserting only
     // that a try and a catch exist would pass this, which is the exact T7
     // regression the assertions above claim to prevent:
     //   try { sendGuard.assertAllowed(payload) } catch {}
     //   ipcRenderer.send(CH, payload)   // sends what the guard rejected
     expect(body.indexOf('ipcRenderer.send')).toBeGreaterThan(body.indexOf('sendGuard.assertAllowed'))
-    expect(body.indexOf('ipcRenderer.send')).toBeLessThan(body.indexOf('} catch {'))
+    expect(body.indexOf('ipcRenderer.send')).toBeLessThan(body.indexOf('} catch'))
+  }
+})
+
+test('only the acknowledgement flush is diagnostics class', () => {
+  const source = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
+
+  // The entire rate-budget reservation (IPC-RATE-BUDGET §4) is this one
+  // argument. Delete it and every suite stays green while the starvation that
+  // caused the 2026-08-09 black window comes straight back, so it is pinned
+  // here in both directions.
+  const flush = source.slice(
+    source.indexOf('function flushDeliveryAcknowledgements(): void {'),
+  )
+  expect(flush).toContain("sendGuard.assertAllowed(payload, 'diagnostics')")
+
+  const diagnosticsCallSites = [...source.matchAll(/assertAllowed\([^)]*'diagnostics'/g)]
+  expect(diagnosticsCallSites.length).toBe(1)
+
+  // The fault reporter and the health probe are telemetry too, but stay CONTROL
+  // class deliberately: the reporter matters most exactly when the window is
+  // saturating, and a starved health response manufactures a fake outage.
+  for (const open of [
+    'reportRendererFault(kind, message): void {',
+    'ipcRenderer.on(CH_DELIVERY_HEALTH_PROBE, () => {',
+  ]) {
+    const start = source.indexOf(open)
+    const body = source.slice(start, source.indexOf('\n}', start))
+    expect(body).not.toContain("'diagnostics'")
   }
 })
 

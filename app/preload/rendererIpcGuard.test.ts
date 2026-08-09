@@ -6,7 +6,7 @@ import {
   MAX_FRAMES_PER_WINDOW,
   RATE_WINDOW_MS,
 } from '../shared/limits.js'
-import { createRendererIpcGuard } from './rendererIpcGuard.js'
+import { createRendererIpcGuard, RendererIpcRejection } from './rendererIpcGuard.js'
 
 test('rejects renderer IPC payloads over the shared frame byte limit', () => {
   const guard = createRendererIpcGuard()
@@ -84,5 +84,56 @@ test('control traffic is not sub-capped', () => {
 
   for (let index = 0; index < MAX_FRAMES_PER_WINDOW; index++) {
     expect(() => guard.assertAllowed({ index })).not.toThrow()
+  }
+})
+
+test('the diagnostics sub-cap resets with the window, not once per process', () => {
+  // Without the counter reset the guard still passes every other test here, and
+  // diagnostics would be throttled after the first 80 for the life of the
+  // process while control traffic looked healthy.
+  let now = 1_000
+  const guard = createRendererIpcGuard({ now: () => now })
+
+  for (let index = 0; index < MAX_DIAGNOSTIC_FRAMES_PER_WINDOW; index++) {
+    guard.assertAllowed({ index }, 'diagnostics')
+  }
+  expect(() => guard.assertAllowed({ overflow: true }, 'diagnostics')).toThrow(
+    `renderer IPC diagnostics rate exceeds ${MAX_DIAGNOSTIC_FRAMES_PER_WINDOW} frames per ${RATE_WINDOW_MS}ms`,
+  )
+
+  now += RATE_WINDOW_MS
+  expect(() => guard.assertAllowed({ nextWindow: true }, 'diagnostics')).not.toThrow()
+})
+
+test('a rejection says whether it can clear on its own', () => {
+  // The acknowledgement queue retries a rate rejection and drops anything else.
+  // Without the distinction a size or serialization rejection would re-reject
+  // identical bytes every tick forever and the queue would never drain.
+  let now = 1_000
+  const guard = createRendererIpcGuard({ now: () => now })
+
+  const oversized = (() => {
+    try {
+      guard.assertAllowed('x'.repeat(MAX_FRAME_BYTES + 1))
+    } catch (error) {
+      return error
+    }
+  })()
+  expect(oversized).toBeInstanceOf(RendererIpcRejection)
+  expect((oversized as RendererIpcRejection).reason).toBe('size')
+
+  const cyclic: Record<string, unknown> = {}
+  cyclic.self = cyclic
+  try {
+    guard.assertAllowed(cyclic)
+  } catch (error) {
+    expect((error as RendererIpcRejection).reason).toBe('serialization')
+  }
+
+  for (let index = 0; index < MAX_FRAMES_PER_WINDOW; index++) guard.assertAllowed({ index })
+  try {
+    guard.assertAllowed({ overflow: true })
+  } catch (error) {
+    expect((error as RendererIpcRejection).reason).toBe('rate')
   }
 })

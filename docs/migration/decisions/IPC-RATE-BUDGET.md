@@ -8,7 +8,7 @@
 
 ## 1. The problem
 
-T7/R4 gives the renderer → main direction a single sliding-window rate cap,
+T7/R4 gives the renderer → main direction a single fixed-window rate cap,
 `MAX_FRAMES_PER_WINDOW = 120` per `RATE_WINDOW_MS = 1000` (`app/shared/limits.ts`),
 enforced for every fixed channel by one shared counter
 (`app/preload/rendererIpcGuard.ts`). One counter is the right shape for a flood
@@ -57,6 +57,13 @@ per T7 and still wrong for the user.
 The guarantee is one-directional and deliberately so. Diagnostics can be starved
 by user actions; user actions cannot be starved by diagnostics.
 
+**The reservation is per window, not per rolling second.** The guard implements a
+fixed (tumbling) window: counters zero on the first call after the boundary. So
+an interval straddling a boundary can carry up to 240 total and 160 diagnostics.
+That burst behaviour is pre-existing in the total cap and is not introduced here,
+and the ≥40 control reservation holds within every window, but a reader
+reasoning about the flood bound should not assume a rolling window.
+
 ### Sizing
 
 An acknowledgement flush carries up to `MAX_DELIVERY_ACKS_PER_BATCH = 64`
@@ -87,17 +94,39 @@ diagnostics but must not be throttled with them:**
   `renderer.health.missed` for a healthy renderer, converting a telemetry flood
   into a fake outage.
 
-## 5. Failure semantics (unchanged from CC-38)
+## 5. Failure semantics
 
-The asymmetry established by the incident fix stands and is load-bearing:
+**Budget class and failure class are separate axes, and conflating them is a
+mistake this document made in its first revision.** A sender's budget class
+(§4) decides how much of the window it may take. Its failure class decides what
+happens when it is refused. The two do not have to agree, and for the fault
+reporter and the health response they deliberately do not: both are control
+class *and* silent.
 
-- A **diagnostics** rejection is caught at the sender and the payload is dropped.
-  Evidence degrades; the session does not.
-- A **control** rejection still throws and stays visible. A silently dropped
-  submit or permission response is a worse outcome than a visible error, so no
-  user-action sender is wrapped.
+The rule that matters is about **user actions**, not about control class:
 
-In both classes the guard still runs and a rejected payload is never sent, so the
+- **No user-action sender is wrapped.** A submit, a permission response or a
+  verb still throws and stays visible, because a silently dropped user action is
+  a worse outcome than an error the user can see.
+- **All three telemetry senders swallow their rejection** — the acknowledgement
+  flush, the fault reporter, and the health response. Two of them are control
+  class; swallowing is about the cost of the loss, not the size of the budget.
+
+Rejection handling differs by what the rejection means:
+
+- A **rate** rejection clears when the window rolls, so the acknowledgement
+  flush retains the batch and retries it, bounded (§3 sizing). Dropping it
+  instead would be worse than losing evidence: `updateWatermarks` advances each
+  stage by a contiguous scan, so a discarded batch pins the watermark and
+  `firstMissing` then reports a renderer stall that never happened. Note the
+  honest limit: retention narrows fabricated evidence to starvation deeper than
+  the bound, it does not eliminate it, because any ack actually dropped still
+  pins the watermark.
+- A **size** or **serialization** rejection is a property of the payload and
+  would refuse identically forever, so it is dropped rather than retried. The
+  guard reports which kind it raised for exactly this reason.
+
+In every case the guard still runs and a rejected payload is never sent, so the
 cap remains strictly more restrictive than the traffic offered to it.
 
 ## 6. What this does not settle

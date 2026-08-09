@@ -46,7 +46,7 @@ import type {
 } from '../shared/hostApi.js'
 import type { DebugRendererSnapshot } from '../shared/debugState.js'
 import { MAX_SAVE_TEXT_BYTES } from '../shared/limits.js'
-import { createRendererIpcGuard } from './rendererIpcGuard.js'
+import { createRendererIpcGuard, RendererIpcRejection } from './rendererIpcGuard.js'
 
 declare const __CATCODE_DEV_HARNESS__: boolean
 
@@ -88,9 +88,10 @@ let deliveryAckFlushTimer: ReturnType<typeof setTimeout> | null = null
 let deliveryAckRetrying = false
 const MAX_DELIVERY_ACKS_PER_BATCH = 64
 /**
- * Ceiling on retained acknowledgements while the budget is spent. 16 batches is
- * far more than a rolling 1000ms window can withhold in practice, and bounds the
- * queue if it ever cannot drain at all.
+ * Retained acknowledgements are trimmed to this on each failed attempt, so the
+ * true peak is this plus whatever arrives before the next one. 16 batches is
+ * roughly 256 traced frames, which a fast stream can reach inside a second, so
+ * treat it as a bound on unbounded growth rather than as headroom.
  */
 const MAX_PENDING_DELIVERY_ACKS = 1024
 /**
@@ -185,18 +186,24 @@ function flushDeliveryAcknowledgements(): void {
       // output rather than by the user, and losing one costs evidence only.
       sendGuard.assertAllowed(payload, 'diagnostics')
       ipcRenderer.send(CH_DELIVERY_ACK, payload)
-    } catch {
+    } catch (error) {
+      // Only a rate rejection clears on its own. A size or serialization
+      // rejection is a property of the payload, so retrying it would re-reject
+      // the identical bytes every tick forever and the queue would never drain.
+      if (!(error instanceof RendererIpcRejection) || error.reason !== 'rate') {
+        return
+      }
       // Keep the batch and retry rather than dropping it. `updateWatermarks`
       // advances each stage by a CONTIGUOUS scan (`app/main/deliveryTraceSink.ts`),
-      // so one discarded batch pins `applied` below `produced` for the rest of
-      // the stream and `firstMissing` then reports a renderer stall that never
+      // so a discarded batch pins `applied` below `produced` for the rest of the
+      // stream and `firstMissing` then reports a renderer stall that never
       // happened — the same symptom the 2026-08-09 investigation was chasing.
-      // Late evidence is recoverable; invented evidence is not. The guard still
-      // runs on every retry, so nothing reaches main that the cap rejected.
+      // This narrows that to starvation deeper than the bound below rather than
+      // eliminating it: any ack actually dropped still pins the watermark.
       pendingDeliveryAcknowledgements.unshift(...acknowledgements)
-      // Sustained starvation must not grow this without bound. Drop the NEWEST
-      // beyond the bound: the contiguous scan resumes from the oldest retained
-      // sequence, so keeping the tail would strand everything behind the gap.
+      // Drop the NEWEST beyond the bound. `contiguous()` resumes from the
+      // current watermark, so keeping the head lets it advance through the
+      // retained sequences; keeping the tail would pin it immediately.
       if (pendingDeliveryAcknowledgements.length > MAX_PENDING_DELIVERY_ACKS) {
         pendingDeliveryAcknowledgements.splice(MAX_PENDING_DELIVERY_ACKS)
       }
@@ -217,15 +224,17 @@ ipcRenderer.on(CH_DELIVERY_HEALTH_PROBE, () => {
     eventLoopLagMs: lastMeasuredEventLoopLagMs,
     watermarks: [...deliveryWatermarks.entries()].slice(0, 32).map(([sessionId, value]) => ({ sessionId, ...value })),
   }
-  // Same class as the two senders above: telemetry, running inside an IPC
-  // listener. Under the flood this file now contains, an escaping rejection
-  // would lose the probe response and make main record `renderer.health.missed`
-  // for a renderer that is merely rate-limited, i.e. report a fake outage.
+  // Telemetry, and wrapped like the other telemetry senders, but deliberately
+  // CONTROL class for the budget (IPC-RATE-BUDGET §4): it is roughly one frame
+  // per five seconds, and starving it would make main record
+  // `renderer.health.missed` for a renderer that is merely rate-limited, i.e.
+  // manufacture a fake outage. Budget class and failure class are separate axes.
   try {
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_DELIVERY_HEALTH_RESPONSE, payload)
   } catch {
-    // Diagnostics only. The next probe carries the same watermarks.
+    // The next probe carries the same watermarks, so a lost response costs
+    // nothing beyond one sample.
   }
 })
 

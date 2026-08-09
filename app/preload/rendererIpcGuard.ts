@@ -16,6 +16,22 @@ import {
  */
 export type RendererIpcClass = 'control' | 'diagnostics'
 
+/**
+ * Why a payload was refused. `rate` clears on its own when the window rolls;
+ * the other two are properties of the payload and will refuse identically
+ * forever, so a caller that retries must be able to tell them apart or it spins.
+ */
+export type RendererIpcRejectionReason = 'serialization' | 'size' | 'rate'
+
+export class RendererIpcRejection extends Error {
+  readonly reason: RendererIpcRejectionReason
+  constructor(message: string, reason: RendererIpcRejectionReason) {
+    super(message)
+    this.name = 'RendererIpcRejection'
+    this.reason = reason
+  }
+}
+
 export type RendererIpcGuard = {
   assertAllowed(payload: unknown, kind?: RendererIpcClass): void
 }
@@ -35,13 +51,13 @@ export function createRendererIpcGuard({
       try {
         serialized = JSON.stringify(payload)
       } catch {
-        throw new Error('renderer IPC payload is not serializable')
+        throw new RendererIpcRejection('renderer IPC payload is not serializable', 'serialization')
       }
       if (serialized === undefined) {
-        throw new Error('renderer IPC payload is not serializable')
+        throw new RendererIpcRejection('renderer IPC payload is not serializable', 'serialization')
       }
       if (new TextEncoder().encode(serialized).byteLength > MAX_FRAME_BYTES) {
-        throw new Error(`renderer IPC payload exceeds ${MAX_FRAME_BYTES} bytes`)
+        throw new RendererIpcRejection(`renderer IPC payload exceeds ${MAX_FRAME_BYTES} bytes`, 'size')
       }
 
       const currentTime = now()
@@ -54,13 +70,15 @@ export function createRendererIpcGuard({
       // bound is exactly what it was. The sub-cap only decides who is turned
       // away first once the window fills.
       if (frameCount >= MAX_FRAMES_PER_WINDOW) {
-        throw new Error(
+        throw new RendererIpcRejection(
           `renderer IPC rate exceeds ${MAX_FRAMES_PER_WINDOW} frames per ${RATE_WINDOW_MS}ms`,
+          'rate',
         )
       }
       if (kind === 'diagnostics' && diagnosticFrameCount >= MAX_DIAGNOSTIC_FRAMES_PER_WINDOW) {
-        throw new Error(
+        throw new RendererIpcRejection(
           `renderer IPC diagnostics rate exceeds ${MAX_DIAGNOSTIC_FRAMES_PER_WINDOW} frames per ${RATE_WINDOW_MS}ms`,
+          'rate',
         )
       }
       if (kind === 'diagnostics') diagnosticFrameCount++

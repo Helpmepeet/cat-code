@@ -1158,14 +1158,19 @@ function createWindow(): void {
   })
 
   // These two land in the operational log only, which a dev run has no reason to
-  // be watching. A window that dies therefore reads exactly like a healthy one
-  // from the terminal the operator launched it in, and on 2026-08-09 that cost
-  // real time before the log was consulted. Dev only: a packaged build must not
-  // gain a stderr surface.
+  // be watching, so process death is invisible from the terminal the operator
+  // launched the app in. (The 2026-08-09 black window did NOT involve process
+  // death: the renderer stayed alive and React unmounted. Neither event below
+  // would have fired for it.) Dev only: a packaged build must not gain a stderr
+  // surface. Both stderr lines are filtered where the operational record is not,
+  // because a diagnostic that fires on routine events trains the reader to
+  // ignore it, while the record should still capture every case.
   window.webContents.on('did-fail-load', (_event, code, _description, _url, isMainFrame) => {
     if (isMainFrame) {
       logOperational('renderer.load.failed', 'error', { code, reason: 'did_fail_load' })
-      if (IS_DEV) {
+      // -3 is ERR_ABORTED: a load superseded or cancelled, which is what an
+      // ordinary dev reload looks like.
+      if (IS_DEV && code !== -3) {
         process.stderr.write(`[main] the window failed to load (code ${code}).\n`)
       }
     }
@@ -1175,9 +1180,10 @@ function createWindow(): void {
       reason: details.reason,
       exitCode: details.exitCode,
     })
-    if (IS_DEV) {
+    // `clean-exit` is a renderer that exited 0, which is what quitting looks like.
+    if (IS_DEV && details.reason !== 'clean-exit') {
       process.stderr.write(
-        `[main] the window closed unexpectedly (${details.reason}). Reopen it to keep working.\n`,
+        `[main] the window closed unexpectedly (${details.reason}, exit code ${details.exitCode}). Reopen it to keep working.\n`,
       )
     }
   })
