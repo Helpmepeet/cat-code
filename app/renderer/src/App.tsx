@@ -4910,8 +4910,9 @@ type SessionPaneProps = {
   modelLabel?: string | null
   /** The session's reasoning-effort tier, or null when running at the provider default. */
   reasoningEffort: string | null
-  /** The fast-mode toggle; the ⚡ face renders when on OR togglable (P4-24c interactive). */
-  fastMode: boolean
+  /** Fast state for the read-only face: true/false when known, null when nothing
+   * has reported it or the model cannot do fast (no face either way). */
+  fastMode: boolean | null
   /** The engine-resolved window for `model`, the donut's denominator before any
    * turn reports one. Null falls back to `contextUsage.ts`'s default. */
   contextWindow?: number | null

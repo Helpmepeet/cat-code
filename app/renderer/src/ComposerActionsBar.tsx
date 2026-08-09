@@ -54,15 +54,15 @@ import type {
  *    `AppState.effortValue`, seeded from `getInitialEffortSetting()` in the
  *    sidecar). Absent when no explicit effort is set (running at the provider
  *    default) — not fabricated into a "High".
- *  - FAST ⚡ renders only when fast mode is actually ON (`fastMode` ←
- *    `AppState.fastMode`). It is a toggle that is off until explicitly enabled,
- *    so this READ-ONLY bar shows it when true; flipping it is a follow-up
- *    session (a new inbound verb, like the agent-mode toggle).
+ *  - FAST ⚡ renders whenever the state is KNOWN and the model supports it, on
+ *    or off (`fastMode` ← `AppState.fastMode`), matching the interactive chip.
+ *    Absent means only that nothing has reported it.
  *  - ACCOUNT renders the real active alias (`selectActiveAccount`,
- *    `accountsState.ts:88`) as the prototype's quiet grey face — ALWAYS
- *    `text-text-muted`, never health-tinted (the prototype's `AccountChip` face
- *    is unconditionally `#a1a1aa`; health lives in the title + the future
- *    switcher popover, P4-5). The renderer never invents a switcher here.
+ *    `accountsState.ts:88`) as the prototype's quiet grey face — the TEXT is
+ *    ALWAYS `text-text-muted`, never health-tinted (the prototype's `AccountChip`
+ *    face is unconditionally `#a1a1aa`). Health rides the status dot beside it
+ *    and the title; both read-only and interactive faces carry the dot, so a
+ *    pane with no engine does not silently lose the signal.
  *  - CONTEXT donut is ALWAYS shown (the prototype's `ContextChip` never hides,
  *    `Surfaces.jsx:471-473`): `selectContextUsage` returns real result-frame usage
  *    once a turn provides it, and a 0% / default-window gauge before then.
@@ -124,16 +124,26 @@ function formatEffort(effort: string): string {
   return effort.charAt(0).toUpperCase() + effort.slice(1)
 }
 
-/** The prototype's fast-mode ⚡ (Surfaces.jsx:694 `FastChip`) — the READ-ONLY face,
- * shown only when fast mode is on (the no-interactive-handler fallback). */
-function FastFace() {
+/**
+ * The prototype's fast-mode ⚡ (Surfaces.jsx:694 `FastChip`) — the READ-ONLY face,
+ * for a pane with no engine to toggle it.
+ *
+ * Renders for a KNOWN state, on or off, matching the live chip's two looks. It
+ * used to render only when fast was ON, which was right while the only caller
+ * was a preview (a cache says nothing about fast, so "not on" and "unknown" were
+ * the same thing) and wrong the moment a detached live session could answer:
+ * parking a session with fast off made the face vanish, while every other face
+ * stayed. Absent now means only that nothing knows.
+ */
+function FastFace({ active }: { active: boolean }) {
+  const label = active ? 'Fast mode on' : 'Fast mode off'
   return (
     <span
-      className={`${FAST_FACE} text-tone-warn`}
-      title="Fast mode on"
-      aria-label="Fast mode on"
+      className={`${FAST_FACE} border ${active ? 'border-tone-warn/30 bg-tone-warn/10 text-tone-warn' : 'border-transparent text-text-ghost'}`}
+      title={label}
+      aria-label={label}
     >
-      <FastGlyph active />
+      <FastGlyph active={active} />
     </span>
   )
 }
@@ -1107,8 +1117,13 @@ export function ComposerActionsBar({
   modelLabel?: string | null
   /** The session's reasoning-effort tier; null when running at the provider default → face omitted. */
   reasoningEffort: string | null
-  /** Fast-mode toggle — the ⚡ face renders when on OR togglable (P4-24c interactive). */
-  fastMode: boolean
+  /**
+   * Fast-mode state for the READ-ONLY face: true/false when it is known, null
+   * when nothing has reported it (a preview) or the model cannot do fast at all,
+   * in which case no face renders — the live chip's own `supportedByModel`
+   * behaviour.
+   */
+  fastMode: boolean | null
   /**
    * P4-24c — the LIVE run-controls snapshot (current + real picker options +
    * availability). When present WITH the matching `onSet*` handler, a face becomes
@@ -1381,8 +1396,8 @@ export function ComposerActionsBar({
             onToggle={onSetFast}
             faceProps={faceProps('fast')}
           />
-        ) : fastMode ? (
-          <FastFace />
+        ) : fastMode !== null ? (
+          <FastFace active={fastMode} />
         ) : null}
 
         <div className="ml-auto flex min-w-0 items-center gap-[7px]">
@@ -1395,10 +1410,20 @@ export function ComposerActionsBar({
               faceProps={faceProps('account')}
             />
           ) : showAccount ? (
+            /* The same status dot the interactive chip shows, for the same
+             * reason: the alias text is deliberately never health-tinted, so the
+             * dot is the ONLY thing carrying which account this is and how it is
+             * doing. Dropping it on a detached pane silently removed the health
+             * signal from the one state where the user cannot open the switcher
+             * to go looking for it. */
             <span
-              className={`${RAIL_FACE} text-text-muted`}
+              className={`${RAIL_FACE} gap-1.5 text-text-muted`}
               title={`Active account: ${accountAlias} · ${account.availabilityLabel}`}
             >
+              <span
+                className={`h-[7px] w-[7px] shrink-0 rounded-full ${toneClasses(statusDotTone(account)).dot}`}
+                aria-hidden
+              />
               {accountAlias}
             </span>
           ) : anthropicAccount && anthropicAccountLabel ? (

@@ -86,6 +86,24 @@ function sources(over: {
   }
 }
 
+/** A detached session whose fast state is `active`, on a model that may or may
+ * not support fast at all. */
+function detachedWithFast(active: boolean, supportedByModel = true) {
+  const base = detached()
+  return {
+    ...base,
+    runControls: reduceRunControlsState(
+      base.runControls,
+      frame({
+        kind: 'run-controls.snapshot',
+        protocolVersion: 1,
+        sessionId: SID,
+        runControls: { ...SNAPSHOT, fast: { ...SNAPSHOT.fast, active, supportedByModel } },
+      }),
+    ),
+  }
+}
+
 /** A session that reported everything, then lost its engine. */
 function detached() {
   let runControls = reduceRunControlsState(
@@ -148,6 +166,18 @@ test('a session that lost its engine still reports every display fact', () => {
   expect(rail.reasoningEffort).toBe('high')
   expect(rail.fastMode).toBe(true)
   expect(rail.contextWindow).toBe(372_000)
+  // OFF is a real answer that must survive the park — the face vanishing on a
+  // fast-off session is the operator report from 2026-08-09. A model that cannot
+  // do fast at all reports null, so no face renders, as the live chip does.
+  expect(
+    selectComposerRail(sources({ ...detachedWithFast(false), connectionStatus: 'dead' }))
+      .fastMode,
+  ).toBe(false)
+  expect(
+    selectComposerRail(
+      sources({ ...detachedWithFast(true, false), connectionStatus: 'dead' }),
+    ).fastMode,
+  ).toBeNull()
   expect(rail.lastPermissionMode).toBe('auto')
   expect(rail.provider).toBe('openai')
 })
@@ -257,7 +287,9 @@ test('a session that never reported anything claims nothing', () => {
   expect(rail.model).toBeNull()
   expect(rail.modelLabel).toBeNull()
   expect(rail.reasoningEffort).toBeNull()
-  expect(rail.fastMode).toBe(false)
+  // null, not false: nothing reported, which is not the same as "fast is off".
+  // Only the first renders no face at all.
+  expect(rail.fastMode).toBeNull()
   expect(rail.contextWindow).toBeNull()
   expect(rail.lastPermissionMode).toBeNull()
   expect(rail.accountsSnapshot).toBeNull()

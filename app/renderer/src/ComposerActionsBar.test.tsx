@@ -7,6 +7,7 @@ import {
   ContextUsagePanel,
 } from './ComposerActionsBar.js'
 import { handleMenuRovingKeyDown } from './composerPopover.js'
+import { toneClasses } from './tone.js'
 import type { ContextUsage } from './contextUsage.js'
 import type {
   AccountStatus,
@@ -1056,7 +1057,34 @@ test('none of those faces is a control while there is no engine to take the verb
 test('a face whose value was never reported still renders nothing', () => {
   // Retaining the last snapshot must not become "invent a value": a session that
   // never reported an effort (an Anthropic run) shows no effort face at all.
-  const html = renderDetached({ reasoningEffort: null, fastMode: false })
+  const html = renderDetached({ reasoningEffort: null, fastMode: null })
   expect(html).not.toContain('Reasoning effort')
   expect(html).toContain('gpt-5.6-sol')
+})
+
+test('the fast face survives a park with fast mode OFF, and says so', () => {
+  // Operator report (2026-08-09): parking made the ⚡ vanish. `false` is a real
+  // answer and must render, exactly as the live chip renders its off state;
+  // only "nothing knows" may drop the face.
+  const off = renderDetached({ fastMode: false })
+  expect(off).toContain('Fast mode off')
+  const on = renderDetached({ fastMode: true })
+  expect(on).toContain('Fast mode on')
+  const unknown = renderDetached({ fastMode: null })
+  expect(unknown).not.toContain('Fast mode')
+})
+
+test('the detached account face keeps its status dot', () => {
+  // Operator report (2026-08-09): the dot disappeared on park. The alias text is
+  // deliberately never health-tinted, so the dot is the only thing carrying the
+  // account's identity-and-health — and a detached pane cannot open the
+  // switcher to go looking for it.
+  const active = renderDetached({ account: account({ alias: 'hiby', isDefault: true }) })
+  // `accent` is the active account's tone (`statusDotTone`), the pink dot the
+  // interactive chip shows in the same position.
+  expect(active).toContain(toneClasses('accent').dot)
+  const capped = renderDetached({
+    account: account({ alias: 'hiby', isDefault: false, status: 'capped' }),
+  })
+  expect(capped).toContain(toneClasses('danger').dot)
 })

@@ -72,7 +72,14 @@ export type ComposerRailModel = {
    */
   modelLabel: string | null
   reasoningEffort: string | null
-  fastMode: boolean
+  /**
+   * Fast state, or null when nothing knows: no snapshot yet, or a model that
+   * cannot do fast at all (the live chip renders nothing in that case, so the
+   * read-only one must not either). False is a real answer and DOES render —
+   * parking a session with fast off used to drop the face while every sibling
+   * stayed.
+   */
+  fastMode: boolean | null
   /** The engine-resolved window, so a parked donut keeps its real denominator. */
   contextWindow: number | null
   lastPermissionMode: string | null
@@ -151,7 +158,7 @@ export function selectComposerRail(
     model: last?.model.current ?? null,
     modelLabel: last?.model.currentLabel ?? null,
     reasoningEffort: last?.effort.current ?? null,
-    fastMode: last?.fast.active ?? false,
+    fastMode: last && last.fast.supportedByModel ? last.fast.active : null,
     contextWindow: last?.model.contextWindow ?? null,
     lastPermissionMode: selectLastPermissionMode(permissions, sessionId),
     accountsSnapshot: railAccounts(accounts, sessionId, ready),
