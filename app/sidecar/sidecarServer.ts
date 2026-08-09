@@ -2925,16 +2925,7 @@ export class SidecarServer {
     }
     try {
       const raw = await this.agentMode.getSnapshot()
-      const snapshot = this.prepareOutboundPayload(raw, 'agent-mode.snapshot')
-      if (!snapshot) {
-        return
-      }
-      this.send(connection, {
-        kind: 'agent-mode.snapshot',
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: this.sessionId,
-        agentMode: snapshot,
-      })
+      this.sendAgentModeSnapshotPayload(connection, raw)
     } catch (error) {
       this.log(
         `[sidecar] agent-mode.snapshot send skipped (${
@@ -2944,12 +2935,37 @@ export class SidecarServer {
     }
   }
 
-  private async broadcastAgentModeSnapshot(): Promise<void> {
-    if (this.connections.size === 0) {
+  private sendAgentModeSnapshotPayload(
+    connection: Connection,
+    raw: Awaited<ReturnType<SidecarAgentModeDomain['getSnapshot']>>,
+  ): void {
+    const snapshot = this.prepareOutboundPayload(raw, 'agent-mode.snapshot')
+    if (!snapshot) {
       return
     }
-    for (const connection of this.connections) {
-      await this.sendAgentModeSnapshot(connection)
+    this.send(connection, {
+      kind: 'agent-mode.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      agentMode: snapshot,
+    })
+  }
+
+  private async broadcastAgentModeSnapshot(): Promise<void> {
+    if (!this.agentMode || this.connections.size === 0) {
+      return
+    }
+    try {
+      const raw = await this.agentMode.getSnapshot()
+      for (const connection of this.connections) {
+        this.sendAgentModeSnapshotPayload(connection, raw)
+      }
+    } catch (error) {
+      this.log(
+        `[sidecar] agent-mode.snapshot send skipped (${
+          error instanceof Error ? error.message : String(error)
+        })`,
+      )
     }
   }
 

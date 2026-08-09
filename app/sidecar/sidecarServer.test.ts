@@ -1708,12 +1708,19 @@ test('P4-8 — emits a joined agent-mode.snapshot on attach that is secretGuard-
  */
 function fakeAgentModeDomain(
   override?: (active: boolean) => { ok: boolean; message: string; changed: boolean },
-): { domain: SidecarAgentModeDomain; calls: boolean[]; dismissed: string[] } {
+): {
+  domain: SidecarAgentModeDomain
+  calls: boolean[]
+  dismissed: string[]
+  snapshotReads: boolean[]
+} {
   const calls: boolean[] = []
   const dismissed: string[] = []
+  const snapshotReads: boolean[] = []
   let active = false
   const domain: SidecarAgentModeDomain = {
     async getSnapshot() {
+      snapshotReads.push(active)
       return { active, objective: '', phase: 'planning', workers: [] }
     },
     setActive(next: boolean) {
@@ -1730,7 +1737,7 @@ function fakeAgentModeDomain(
       return () => {}
     },
   }
-  return { domain, calls, dismissed }
+  return { domain, calls, dismissed, snapshotReads }
 }
 
 function makeAgentModeServer(
@@ -1797,6 +1804,72 @@ test('P4-8b — a valid agent-mode.set{active:true} switches the domain + re-bro
   // The freshly re-broadcast snapshot reflects the flipped mode.
   expect(after[after.length - 1]?.agentMode.active).toBe(true)
 })
+
+test('P4-8b — one agent-mode snapshot read fans out to every attached connection', async () => {
+  const { domain, snapshotReads } = fakeAgentModeDomain()
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    domain,
+  )
+  const first = makeSocket()
+  const second = makeSocket()
+  const firstConnection = server.addConnection(first.socket)
+  server.addConnection(second.socket)
+
+  for (
+    let i = 0;
+    i < 50 &&
+    (first.received.some(f => f.kind === 'agent-mode.snapshot') === false ||
+      second.received.some(f => f.kind === 'agent-mode.snapshot') === false);
+    i += 1
+  ) {
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  const readsBefore = snapshotReads.length
+  const firstBefore = first.received.filter(f => f.kind === 'agent-mode.snapshot').length
+  const secondBefore = second.received.filter(f => f.kind === 'agent-mode.snapshot').length
+
+  server.handleData(
+    firstConnection,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'agent-mode.set',
+        requestId: 'am-fanout',
+        active: true,
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  for (
+    let i = 0;
+    i < 50 &&
+    (snapshotReads.length <= readsBefore ||
+      first.received.filter(f => f.kind === 'agent-mode.snapshot').length <= firstBefore ||
+      second.received.filter(f => f.kind === 'agent-mode.snapshot').length <= secondBefore);
+    i += 1
+  ) {
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+
+  expect(snapshotReads).toHaveLength(readsBefore + 1)
+  expect(first.received.filter(f => f.kind === 'agent-mode.snapshot').length).toBeGreaterThan(
+    firstBefore,
+  )
+  expect(second.received.filter(f => f.kind === 'agent-mode.snapshot').length).toBeGreaterThan(
+    secondBefore,
+  )
+})
+
 
 test('P4-8b — an idempotent agent-mode.set (no change) acks ok but does NOT re-broadcast', async () => {
   const { server } = makeAgentModeServer(() => ({ ok: true, message: 'already off', changed: false }))
