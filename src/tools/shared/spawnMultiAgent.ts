@@ -496,15 +496,16 @@ async function handleSpawnSplitPane(
 
     // Send initial instructions to teammate via mailbox
     // The teammate's inbox poller will pick this up and submit it as their first turn
-    await writeToMailbox(
-      sanitizedName,
-      {
-        from: TEAM_LEAD_NAME,
-        text: prompt,
-        timestamp: new Date().toISOString(),
+    await writeToMailbox({
+      recipient: {
+        kind: 'teammate',
+        agentId: teammateId,
+        name: sanitizedName,
+        allocationId,
       },
+      message: { text: prompt },
       teamName,
-    )
+    })
 
     return {
       data: {
