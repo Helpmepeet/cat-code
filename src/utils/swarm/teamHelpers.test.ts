@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, readdirSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
 import {
   allocateTeamRecipient,
+  getTeamDir,
   readTeamSnapshot,
   recoverStartingRecipient,
   RecipientConflictError,
@@ -69,6 +70,21 @@ describe('teamHelpers versioned transactions', () => {
     }
     await writeTeamFileAsync(teamName, teamFile)
   }
+
+  test('publishes an async team-file replacement without leaving a temp file', async () => {
+    await seedTeam('review-team')
+    const before = await readTeamSnapshot('review-team')
+
+    await writeTeamFileAsync('review-team', {
+      ...before,
+      createdAt: before.createdAt + 1,
+    })
+
+    await expect(readTeamSnapshot('review-team')).resolves.toMatchObject({
+      createdAt: before.createdAt + 1,
+    })
+    expect(readdirSync(getTeamDir('review-team'))).toEqual(['config.json'])
+  })
 
   test('readTeamSnapshot and transactTeamFile reject a legacy (non-version-2) team file', async () => {
     await writeTeamFileAsync('legacy-team', {

@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto'
-import { mkdirSync, readFileSync, writeFileSync } from 'fs'
-import { mkdir, readFile, rm, writeFile } from 'fs/promises'
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
+import { mkdir, readFile, rename, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { z } from 'zod/v4'
 import { getSessionCreatedTeams } from '../../bootstrap/state.js'
@@ -232,7 +232,18 @@ export async function readTeamFileAsync(
 function writeTeamFile(teamName: string, teamFile: TeamFile): void {
   const teamDir = getTeamDir(teamName)
   mkdirSync(teamDir, { recursive: true })
-  writeFileSync(getTeamFilePath(teamName), jsonStringify(teamFile, null, 2))
+  const path = getTeamFilePath(teamName)
+  const tempPath = `${path}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    writeFileSync(tempPath, jsonStringify(teamFile, null, 2), {
+      encoding: 'utf-8',
+      mode: 0o600,
+      flag: 'wx',
+    })
+    renameSync(tempPath, path)
+  } finally {
+    rmSync(tempPath, { force: true })
+  }
 }
 
 /**
@@ -244,7 +255,18 @@ export async function writeTeamFileAsync(
 ): Promise<void> {
   const teamDir = getTeamDir(teamName)
   await mkdir(teamDir, { recursive: true })
-  await writeFile(getTeamFilePath(teamName), jsonStringify(teamFile, null, 2))
+  const path = getTeamFilePath(teamName)
+  const tempPath = `${path}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    await writeFile(tempPath, jsonStringify(teamFile, null, 2), {
+      encoding: 'utf-8',
+      mode: 0o600,
+      flag: 'wx',
+    })
+    await rename(tempPath, path)
+  } finally {
+    await rm(tempPath, { force: true }).catch(() => {})
+  }
 }
 
 // ============================================================================
