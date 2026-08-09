@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 49/242** — counted against the review's original 61 High and
+**Progress: Fix 51/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -53,6 +53,8 @@ count tracks individually verified findings, not commit count.
 | V15 MED dev debug snapshot fabricated/inverted permission-suggestion labels | fixed | `ae90352` | reused the visible option formatter and covered allow/deny labels (1 pass); renderer typecheck and production build |
 | V15 MED writable-row eligibility drifted across Sessions-page and App bulk-action paths | fixed | `5193cf5` | shared typed row selector regression; Sessions-page suites (40 pass); renderer typecheck and production build |
 | V15 HIGH consumed export frames retained up to 32 MiB per session in renderer state | fixed | `8032c7f` | request-correlated discard regression preserves newer results; session-action suites (42 pass); renderer typecheck and production build |
+| A07 HIGH Workspace-panel accessibility labels exposed raw host/connection plane values | fixed | `2ed7d32` | shared status-vocabulary regression; WorkspacePanels + status suites (13 pass); renderer typecheck and production build |
+| A07 MED Workspace-panel labels exposed raw session identifiers | fixed | `2ed7d32` | named-session and no-identifier regressions; WorkspacePanels + status suites (13 pass); renderer typecheck and production build |
 
 ## Known verification limitation
 
