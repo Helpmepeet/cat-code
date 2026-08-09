@@ -55,9 +55,20 @@ built-in ids cannot represent two real cases:
   schema validation or is forced into a wrong id. Under "unnameable block = no
   block", a validation failure degrades to an **unsafe allow**.
 
+**Root cause: this delta promoted category from advisory to load-bearing, and
+upstream never did.** Upstream parses the category with
+`k2d`: `y$o.has(r) ? r : void 0` — an unrecognized value is silently dropped and
+**the block still stands**. Category is telemetry there, not a gate. Making it a
+required schema enum in a forced tool call is what converts an unrepresentable
+category into a validation failure, and thence into an unsafe allow.
+
 Owed: a discriminated verdict where allows carry no category, and blocks carry
 either a built-in id or a validated runtime reference to a settings-authored or
-ordinary deny rule. The enum cannot be the only category channel.
+ordinary deny rule. Two constraints follow from the root cause: the enum cannot
+be the only category channel, and **category validation must never gate the block
+decision** — an unnameable category degrades to a block with no category, never
+to an allow. "Unnameable block = no block" is a rule for the model to apply
+inside its reasoning, not a parser behaviour.
 
 **Also missing, and not in the review:** cat-code's `autoMode` schema has
 `allow`, `soft_deny`, `environment`, and `deny` (ant-only back-compat). **There
