@@ -4,6 +4,10 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
+**Progress: Fix 23/242** — counted against the review's original 61 High and
+181 Medium findings. A checkpoint can resolve related findings together; the
+count tracks individually verified findings, not commit count.
+
 | Review finding(s) | Status | Implementation commit | Verification |
 |---|---|---|---|
 | A12 HIGH bypass-permissions launch gate | fixed | `82a43ae` | `sidecarServer` focused boundary tests |
@@ -22,6 +26,7 @@ and their verification. Entries are appended as checkpoints land.
 | A12/A14 MED catalog failure diagnostics and unbounded transcript run-facts reads | fixed | `7c885b0` | app typecheck; catalog + run-facts suites (48 pass) |
 | A03 HIGH removed sidecar connections can still submit late frames | fixed | `c4fa7c9` | app typecheck; focused regression passes (full boundary suite: 193 pass, 3 pre-existing account-snapshot failures) |
 | A15 HIGH rejected/undeliverable session actions are invisible | fixed | `a0485b0` | app typecheck; session-action state/dialog suites (40 pass); renderer build |
+| A05 HIGH replayed tool-result-only frame invalidates transcript projection caches | fixed | `f29949d` | app typecheck; full transcript-projector suite (74 pass) |
 
 ## Known verification limitation
 
