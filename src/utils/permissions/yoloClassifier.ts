@@ -109,9 +109,12 @@ function isUsingExternalPermissions(): boolean {
 }
 
 /**
- * Shape of the settings.autoMode config — the three classifier prompt
- * sections a user can customize. Required-field variant (empty arrays when
- * absent) for JSON output; settings.ts uses the optional-field variant.
+ * Shape of the settings.autoMode config — the four classifier prompt sections a
+ * user can customize. Required-field variant (empty arrays when absent) for
+ * JSON output; settings.ts uses the optional-field variant.
+ *
+ * `hard_deny` is only consumed by the ported upstream prompt
+ * (AUTO_MODE_UPSTREAM_PORT); the legacy template has no hard tier.
  */
 export type AutoModeRules = {
   allow: string[]
@@ -617,12 +620,16 @@ export async function buildYoloSystemPrompt(
     ...(autoMode?.soft_deny ?? []),
   ]
 
-  // All three sections use the same <foo_to_replace>...</foo_to_replace>
-  // delimiter pattern. The external template wraps its defaults inside the
-  // tags, so user-provided values REPLACE the defaults entirely. The
-  // anthropic template keeps its defaults outside the tags and uses an empty
-  // tag pair at the end of each section, so user-provided values are
-  // strictly ADDITIVE.
+  // Legacy path only. All three sections use the same
+  // <foo_to_replace>...</foo_to_replace> delimiter pattern. The external
+  // template wraps its defaults inside the tags, so user-provided values
+  // REPLACE the defaults entirely. The anthropic template keeps its defaults
+  // outside the tags and uses an empty tag pair at the end of each section, so
+  // user-provided values are strictly ADDITIVE.
+  //
+  // The ported path does neither: it splices on an explicit `$defaults`
+  // sentinel, so extending the shipped rules is a choice rather than a
+  // property of which template happened to load. See autoModeDefaultsSplice.ts.
   const userAllow = allowDescriptions.length
     ? allowDescriptions.map(d => `- ${d}`).join('\n')
     : undefined
@@ -1079,6 +1086,7 @@ export async function classifyYoloAction(
       // classifier is bigger than main loop — auto-compact won't save us).
       logAutoModeOutcome('success', model, {
         durationMs,
+        category: resolvedCategory.category,
         mainLoopTokens,
         classifierInputTokens,
         classifierTokensEst,
@@ -1294,6 +1302,12 @@ function logAutoModeOutcome(
   extra?: {
     classifierType?: string
     failureKind?: string
+    /**
+     * Resolved rule id only, never the model's raw string: this is a bounded
+     * value from the vendored inventory, whereas rawCategory is free text the
+     * model authored and must not reach analytics.
+     */
+    category?: string
     durationMs?: number
     mainLoopTokens?: number
     classifierInputTokens?: number
@@ -1302,12 +1316,16 @@ function logAutoModeOutcome(
     transcriptLimitTokens?: number
   },
 ): void {
-  const { classifierType, failureKind, ...rest } = extra ?? {}
+  const { classifierType, failureKind, category, ...rest } = extra ?? {}
   logEvent('tengu_auto_mode_outcome', {
     outcome:
       outcome as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
     classifierModel:
       model as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+    ...(category !== undefined && {
+      category:
+        category as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+    }),
     ...(classifierType !== undefined && {
       classifierType:
         classifierType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,

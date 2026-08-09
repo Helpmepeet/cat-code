@@ -17,6 +17,25 @@ Aug 6 carry the identical architecture and rule count, with only prose growth.
 **Status: contract review returned RED (2026-08-09). Five findings held and one
 was rejected on evidence. G1-G4 are now closed specifications below; the replay
 gate remains closed, so the atomic Steps 1+2 feature stays off by default.**
+
+**Implementation status (2026-08-09, all behind `AUTO_MODE_UPSTREAM_PORT`, which
+is deliberately NOT in `scripts/build.ts` `fullExperimentalFeatures`, so it
+compiles out of `build:dev:full` and is opt-in via
+`--feature=AUTO_MODE_UPSTREAM_PORT`):**
+
+| Step | State |
+|---|---|
+| Mechanics: model/retry settings, provider ladder, deny-rule seam | landed `776d638b` |
+| Vendored upstream prompt and rule inventory | landed `4df40d0c` |
+| `$defaults` splice and hard/soft tiers (closes B1) | landed `88a8e747` |
+| Advisory verdict category, fail-closed parser (closes G1) | landed `729a3c9e` |
+| Deny-seam hardening and circumvention coverage | landed `1bea2818` |
+| Classifier request/response dump, ungated | landed `537f88e5` |
+| **Machine-specific config content (delta 5)** | **not started; operator content decision** |
+| **Replay corpus and gate** | **not started; blocks enabling the flag** |
+
+Nothing is enabled. The remaining gate is the replay corpus: per F4 no policy
+change lands unreplayed, and the corpus is specified but unbuilt.
 Supporting evidence:
 `docs/reports/2026-08-09-auto-mode-denial-analysis.md` (what our classifier did)
 and `docs/reports/2026-08-09-claude-code-auto-mode-architecture.md` (what

@@ -1,5 +1,12 @@
 # Auto-mode remediation plan
 
+> **Superseded 2026-08-09.** The operator ruled to port upstream wholesale
+> instead; see `2026-08-09-auto-mode-design.md`. This file is kept as the record
+> of how B1 and B2 were found. **Both are now closed:** B1 by the `$defaults`
+> splice (`88a8e747`), B2 by the `autoMode.model` setting and the provider
+> ladder (`776d638b`). The blocker text below describes the state before those
+> landed; do not act on it.
+
 Implements the verdict reached against
 `docs/reports/2026-08-09-auto-mode-denial-analysis.md`. That report is neutral by
 construction; this plan is not — it assumes the operative goal established from
