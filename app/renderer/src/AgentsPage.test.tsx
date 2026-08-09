@@ -108,5 +108,10 @@ test('P4-57 wires the agent copy payload directly from the trusted definition pa
 
   expect(flat).toContain('<PathValue key="file-path" path={definition.filePath} />')
   expect(flat).toContain('<PathCopyButton label="agent definition file path" path={path} />')
-  expect(flat).toContain('.writeText(path)')
+  expect(flat).toContain("import { PathCopyButton } from './PathCopyButton.js'")
+  expect(flat).not.toContain('function PathCopyButton')
+
+  const copySource = readFileSync(new URL('./PathCopyButton.tsx', import.meta.url), 'utf8')
+  expect(copySource).toContain('.writeText(path)')
+  expect(copySource).toContain('Path copied to clipboard')
 })

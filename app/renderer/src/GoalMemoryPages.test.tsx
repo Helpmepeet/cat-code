@@ -134,7 +134,8 @@ test('P4-57 wires every memory copy payload directly from its trusted snapshot p
   expect(flat).toContain('path={file.path}')
   expect(flat).toContain('path={memory.filePath}')
   expect(flat).toContain('path={agent.directory}')
-  expect(flat).toContain('.writeText(path)')
+  expect(flat).toContain("import { PathCopyButton } from './PathCopyButton.js'")
+  expect(flat).not.toContain('function PathCopyButton')
 })
 
 test('renders every memory instruction and auto-memory type', () => {
