@@ -38,6 +38,11 @@ import {
   getBashPromptAllowDescriptions,
   getBashPromptDenyDescriptions,
 } from './bashClassifier.js'
+import {
+  AUTO_MODE_DEFAULTS_SENTINEL,
+  assembleUpstreamSystemPrompt,
+  autoModeSectionDropsDefaults,
+} from './autoModeDefaultsSplice.js'
 import { buildSettingsDenyRulesText } from './autoModeDenyRules.js'
 import { getAutoModeClassifierAttempts } from './autoModeProviderLadder.js'
 import {
@@ -69,6 +74,18 @@ const ANTHROPIC_PERMISSIONS_TEMPLATE: string =
   feature('TRANSCRIPT_CLASSIFIER') && process.env.USER_TYPE === 'ant'
     ? txtRequire(require('./yolo-classifier-prompts/permissions_anthropic.txt'))
     : ''
+
+// Vendored verbatim from upstream Claude Code 2.1.223; see
+// yolo-classifier-prompts/upstream/SOURCE.json for provenance and hashes.
+// Module 1 carries the classification process; module 2 carries the rule
+// inventory and the four <user_*_to_replace> blocks $defaults splices into.
+const UPSTREAM_BASE_PROMPT: string = feature('AUTO_MODE_UPSTREAM_PORT')
+  ? txtRequire(require('./yolo-classifier-prompts/upstream/system_prompt.txt'))
+  : ''
+
+const UPSTREAM_PERMISSIONS_TEMPLATE: string = feature('AUTO_MODE_UPSTREAM_PORT')
+  ? txtRequire(require('./yolo-classifier-prompts/upstream/permissions.txt'))
+  : ''
 /* eslint-enable custom-rules/no-process-env-top-level, @typescript-eslint/no-require-imports */
 
 function isUsingExternalPermissions(): boolean {
@@ -508,9 +525,45 @@ export function buildSettingsDenyRulesMessage(
  * Assembles the base prompt with the permissions template and substitutes
  * user allow/deny/environment values from settings.autoMode.
  */
+/**
+ * Assemble the ported upstream prompt.
+ *
+ * Differs from the legacy path in one way that matters: every section splices
+ * rather than replaces, so a user rule no longer silently deletes the shipped
+ * deny list. The tiers are upstream's own — one unconditional hard-deny rule and
+ * 65 soft ones the user's intent can clear.
+ */
+function buildUpstreamSystemPrompt(): string {
+  const autoMode = getAutoModeConfig()
+
+  for (const [section, entries] of [
+    ['allow', autoMode?.allow],
+    ['soft_deny', autoMode?.soft_deny],
+    ['hard_deny', autoMode?.hard_deny],
+    ['environment', autoMode?.environment],
+  ] as const) {
+    if (autoModeSectionDropsDefaults(entries)) {
+      logForDebugging(
+        `[auto-mode] settings.autoMode.${section} does not include "${AUTO_MODE_DEFAULTS_SENTINEL}", ` +
+          `so the ${entries?.length ?? 0} configured entries REPLACE the shipped rules for that section. ` +
+          `Add "${AUTO_MODE_DEFAULTS_SENTINEL}" to keep them.`,
+        { level: 'warn' },
+      )
+    }
+  }
+
+  return assembleUpstreamSystemPrompt(
+    UPSTREAM_BASE_PROMPT,
+    UPSTREAM_PERMISSIONS_TEMPLATE,
+    autoMode,
+  )
+}
+
 export async function buildYoloSystemPrompt(
   context: ToolPermissionContext,
 ): Promise<string> {
+  if (feature('AUTO_MODE_UPSTREAM_PORT')) return buildUpstreamSystemPrompt()
+
   const usingExternal = isUsingExternalPermissions()
   const systemPrompt = BASE_PROMPT.replace('<permissions_template>', () =>
     usingExternal
