@@ -30,6 +30,7 @@ import type {
   SessionId,
   SessionsCatalogSnapshot,
   SettingsVerbMessage,
+  SubmitPrompt,
   SubmitOptions,
   TaskControlVerbMessage,
   TranscriptCache,
@@ -183,7 +184,7 @@ const CH_HOST_VISIBLE_SESSIONS = 'catcode:host:visible-sessions'
 const sendGuard = createRendererIpcGuard()
 
 const bridge: CatCodeBridge = {
-  submit(sessionId: SessionId, prompt: string, options?: SubmitOptions): void {
+  submit(sessionId: SessionId, prompt: SubmitPrompt, options?: SubmitOptions): void {
     const payload = { sessionId, prompt, options }
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_SUBMIT, payload)

@@ -3,9 +3,11 @@ import { describe, expect, test } from 'bun:test'
 import type { AgentConfigSnapshot } from '../../shared/protocol.js'
 import {
   applyMention,
+  buildSubmitPrompt,
   caretAtHistoryEdge,
   countNewlines,
   createHistoryState,
+  createImageAttachmentState,
   createPasteState,
   canSendUntypedSubmit,
   EMPTY_HISTORY_NAV,
@@ -19,6 +21,8 @@ import {
   PASTE_MAX_LINES,
   PASTE_THRESHOLD,
   reduceHistoryPushed,
+  reduceImageAttachmentAdded,
+  reduceImageAttachmentRemoved,
   reducePasteAdded,
   reducePasteRemoved,
   reducePastesPruned,
@@ -27,6 +31,7 @@ import {
   removePasteOccurrence,
   selectAgentMentionItems,
   selectHistory,
+  selectImageAttachments,
   selectSessionPasteList,
   selectSessionPasteState,
   shouldCollapsePaste,
@@ -863,6 +868,55 @@ describe('CC-16 parked prompt store', () => {
   test('clearing an absent session is identity (no needless re-render)', () => {
     const state = createPendingSubmitState()
     expect(reducePendingSubmitCleared(state, S1)).toBe(state)
+  })
+})
+
+describe('image attachment submit state', () => {
+  const image = {
+    mediaType: 'image/png' as const,
+    data: 'AAAA',
+    name: 'paste.png',
+  }
+
+  test('stores one session-scoped image and builds the engine content blocks', () => {
+    let state = createImageAttachmentState()
+    state = reduceImageAttachmentAdded(state, S1, image)
+    const attachments = selectImageAttachments(state, S1)
+
+    expect(attachments).toEqual([{ ...image, id: 1 }])
+    expect(selectImageAttachments(state, S2)).toEqual([])
+    expect(buildSubmitPrompt('inspect this', attachments)).toEqual([
+      {
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: 'image/png',
+          data: 'AAAA',
+        },
+      },
+      { type: 'text', text: 'inspect this' },
+    ])
+  })
+
+  test('an image-only prompt is sendable and removal clears its session state', () => {
+    let state = reduceImageAttachmentAdded(createImageAttachmentState(), S1, image)
+    const attachments = selectImageAttachments(state, S1)
+    expect(
+      planSessionSubmit({
+        draft: '',
+        pasteEntries: {},
+        hasImages: true,
+        preview: false,
+        connectionStatus: 'ready',
+        connectionInputEnabled: true,
+        logInputEnabled: true,
+        alreadyParked: false,
+      }),
+    ).toEqual({ type: 'send', text: '' })
+    expect(buildSubmitPrompt('', attachments)).toHaveLength(1)
+
+    state = reduceImageAttachmentRemoved(state, S1, attachments[0]!.id)
+    expect(selectImageAttachments(state, S1)).toEqual([])
   })
 })
 

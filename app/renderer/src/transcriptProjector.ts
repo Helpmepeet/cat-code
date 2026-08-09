@@ -176,6 +176,18 @@ export type ToolResultProjection = {
   isError: boolean
   content: string
   diff: ToolDiffProjection | null
+  generatedImage?: {
+    filePath: string
+    model: string
+    size: string
+    outputFormat: 'png' | 'jpeg' | 'webp'
+    bytes: number
+    revisedPrompt?: string
+    preview?: {
+      mediaType: 'image/jpeg' | 'image/png' | 'image/webp'
+      data: string
+    }
+  }
   /**
    * The Agent tool's own worker name, from the SAME structured `tool_use_result`
    * `diff` is narrowed out of (`AgentToolResult.agentName`,
@@ -414,6 +426,10 @@ type TranscriptSessionState = {
    * place tool status lives — never written onto a `ToolUseRow` in `rows`.
    */
   toolResultsByUseId: Record<string, ToolResultProjection>
+  generatedImagePreviewsByUseId: Record<
+    string,
+    { mediaType: 'image/jpeg' | 'image/png' | 'image/webp'; data: string }
+  >
   /**
    * Correlation map for background-agent finishes: the spawning `tool_use_id`
    * → the completion carried by that agent's task-notification turn. Same
@@ -464,6 +480,7 @@ function createTranscriptSessionState(): TranscriptSessionState {
     nextBlockIndexByMessageId: {},
     seenFrameIds: {},
     toolResultsByUseId: {},
+    generatedImagePreviewsByUseId: {},
     agentCompletionsByToolUseId: {},
     slashCommands: [],
     hiddenFrameIds: {},
@@ -816,6 +833,35 @@ export function projectServerFrame(
         ...state.sessions,
         [frame.sessionId]:
           state.sessions[frame.sessionId] ?? createTranscriptSessionState(),
+      },
+    }
+  }
+
+  if (frame.kind === 'generated-image-preview') {
+    const session = state.sessions[frame.sessionId]
+    if (!session) return state
+    const preview = { mediaType: frame.mediaType, data: frame.data }
+    const result = session.toolResultsByUseId[frame.toolUseId]
+    return {
+      ...state,
+      sessions: {
+        ...state.sessions,
+        [frame.sessionId]: {
+          ...session,
+          generatedImagePreviewsByUseId: {
+            ...session.generatedImagePreviewsByUseId,
+            [frame.toolUseId]: preview,
+          },
+          toolResultsByUseId: result?.generatedImage
+            ? {
+                ...session.toolResultsByUseId,
+                [frame.toolUseId]: {
+                  ...result,
+                  generatedImage: { ...result.generatedImage, preview },
+                },
+              }
+            : session.toolResultsByUseId,
+        },
       },
     }
   }
@@ -1353,7 +1399,15 @@ function foldToolResultBlocks(
     if (typeof toolUseId !== 'string' || toolUseId.length === 0) continue
 
     const projection = projectToolResultBlock(block, toolUseResult)
-    next = { ...(next ?? state.toolResultsByUseId), [toolUseId]: projection }
+    const preview = state.generatedImagePreviewsByUseId[toolUseId]
+    const projected =
+      preview && projection.generatedImage
+        ? {
+            ...projection,
+            generatedImage: { ...projection.generatedImage, preview },
+          }
+        : projection
+    next = { ...(next ?? state.toolResultsByUseId), [toolUseId]: projected }
   }
   return next ? { ...state, toolResultsByUseId: next } : state
 }
@@ -1401,8 +1455,40 @@ function projectToolResultBlock(
     isError: block.is_error === true,
     content: flattenToolResultContent(block.content),
     diff: extractDiffProjection(toolUseResult),
+    ...extractGeneratedImageProjection(toolUseResult),
     ...(agentName !== null ? { agentName } : {}),
     ...(agentUsage !== null ? { agentUsage } : {}),
+  }
+}
+
+function extractGeneratedImageProjection(
+  toolUseResult: unknown,
+): Pick<ToolResultProjection, 'generatedImage'> | Record<string, never> {
+  if (!isRecord(toolUseResult)) return {}
+  const { filePath, model, size, outputFormat, bytes, revisedPrompt } =
+    toolUseResult
+  if (
+    typeof filePath !== 'string' ||
+    typeof model !== 'string' ||
+    typeof size !== 'string' ||
+    (outputFormat !== 'png' &&
+      outputFormat !== 'jpeg' &&
+      outputFormat !== 'webp') ||
+    typeof bytes !== 'number' ||
+    !Number.isFinite(bytes) ||
+    (revisedPrompt !== undefined && typeof revisedPrompt !== 'string')
+  ) {
+    return {}
+  }
+  return {
+    generatedImage: {
+      filePath,
+      model,
+      size,
+      outputFormat,
+      bytes,
+      ...(revisedPrompt === undefined ? {} : { revisedPrompt }),
+    },
   }
 }
 

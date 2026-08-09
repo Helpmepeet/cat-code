@@ -25,6 +25,12 @@ export const MAX_FRAME_BYTES = 128 * 1024
  */
 export const MAX_OUTBOUND_FRAME_BYTES = 32 * 1024 * 1024
 
+/**
+ * Largest generated-image file the sidecar will read back for an inline preview.
+ * Base64 expansion keeps this below the outbound frame sanity bound.
+ */
+export const MAX_GENERATED_IMAGE_PREVIEW_BYTES = 20 * 1024 * 1024
+
 /** Sliding-window rate cap: max inbound frames per window (T7). */
 export const MAX_FRAMES_PER_WINDOW = 120
 

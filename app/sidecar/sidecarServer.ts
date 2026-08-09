@@ -21,8 +21,12 @@
  */
 
 import { randomUUID } from 'crypto'
+import { open } from 'node:fs/promises'
 import z from 'zod/v4'
-import type { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
+import type {
+  AppSessionController,
+  AppSessionPrompt,
+} from '../../src/app-runtime/AppSessionController.js'
 import { createMessageEvent } from '../../src/app-runtime/sessionEvents.js'
 import type {
   AppPermissionRequest,
@@ -72,6 +76,7 @@ import {
   MAX_ANSWER_QUESTIONS,
   MAX_FRAME_BYTES,
   MAX_FRAMES_PER_WINDOW,
+  MAX_GENERATED_IMAGE_PREVIEW_BYTES,
   MAX_HISTORY_REPLAY_BYTES,
   MAX_HISTORY_REPLAY_FRAMES,
   MAX_OUTBOUND_FRAME_BYTES,
@@ -333,6 +338,8 @@ export type SidecarServerOptions = {
    * so production never injects and a test never needs the Haiku round-trip.
    */
   titleDeps?: SessionTitleDeps
+  /** Test seam for the live generated-image preview read. */
+  readGeneratedImage?: (filePath: string) => Promise<Uint8Array | null>
   /** Structured logger; defaults to stderr. Never logs secrets. */
   log?: (line: string) => void
 }
@@ -383,6 +390,10 @@ export class SidecarServer {
   private readonly onPark: (() => void) | null
   /** P4-6 title-rider — the one-shot AI-title generator for this session. */
   private readonly titleGenerator: SessionTitleGenerator
+  private readonly readGeneratedImage: (
+    filePath: string,
+  ) => Promise<Uint8Array | null>
+  private readonly generatedImageToolUseIds = new Set<string>()
   private readonly log: (line: string) => void
   private readonly wrapOutboundFrame: ((frame: ServerFrame, trace: DeliveryTrace) => unknown) | null
   private readonly onDeliveryStage: ((trace: DeliveryTrace, stage: Extract<DeliveryStage, 'engine.produced' | 'sidecar.received' | 'sidecar.socket.queued' | 'sidecar.socket.sent'>, frameKind: string) => void) | null
@@ -477,6 +488,8 @@ export class SidecarServer {
       resumed: options.resumed ?? false,
       ...(options.titleDeps ? { deps: options.titleDeps } : {}),
     })
+    this.readGeneratedImage =
+      options.readGeneratedImage ?? readGeneratedImageForPreview
     this.log = options.log ?? (line => process.stderr.write(`${line}\n`))
     this.wrapOutboundFrame = options.wrapOutboundFrame ?? null
     this.onDeliveryStage = options.onDeliveryStage ?? null
@@ -486,6 +499,7 @@ export class SidecarServer {
     // server's broadcast model.)
     this.unsubscribe = this.controller.subscribe(event => {
       this.broadcastEvent(event)
+      this.observeGeneratedImageEvent(event)
       // NO per-turn context-breakdown refresh. The analysis is not cheap enough
       // to be automatic: `analyzeContextUsage` fans out to ~10
       // `countTokensWithFallback` calls (system prompt, tool schemas, each memory
@@ -1182,7 +1196,7 @@ export class SidecarServer {
     // Re-read at drain time: the turn we were scheduled behind may have drained
     // this prompt itself on its way out.
     const command = dequeue(isDeliverableParentPrompt)
-    if (!command || typeof command.value !== 'string') return false
+    if (!command) return false
 
     // The user already watched this leave the composer and saw it in the
     // transcript, so a turn that never accepts it must not end in silence.
@@ -1192,7 +1206,7 @@ export class SidecarServer {
     // the next boundary. Retry ONCE per prompt: `startTurn`'s finalizer
     // schedules the next drain, so an unconditional requeue on a turn that
     // always rejects would spin at microtask speed.
-    const retryKey = command.uuid ?? command.value
+    const retryKey = command.uuid ?? promptText(command.value)
     let persisted = false
     const started = this.startTurn({
       prompt: command.value,
@@ -1306,7 +1320,7 @@ export class SidecarServer {
     onRejected,
     onSettled,
   }: {
-    prompt: string
+    prompt: AppSessionPrompt
     uuid?: string
     isMeta?: boolean
     goalSnapshot?: ReturnType<typeof parseThreadGoal>
@@ -1355,7 +1369,7 @@ export class SidecarServer {
         this.activeTurn = false
         onSettled?.(rejection)
         if (generateTitle) {
-          void this.titleGenerator.maybeGenerate(prompt, title =>
+          void this.titleGenerator.maybeGenerate(promptText(prompt), title =>
             this.broadcastSessionTitle(title),
           )
         }
@@ -1370,7 +1384,7 @@ export class SidecarServer {
    * so the renderer needs no new frame kind and no new variant to display it.
    */
   private broadcastPromptMessage(
-    prompt: string,
+    prompt: AppSessionPrompt,
     uuid: string,
     isMeta?: boolean,
     origin?: MessageOrigin,
@@ -1403,7 +1417,7 @@ export class SidecarServer {
    * tool round drains it, `drainOneQueuedPrompt` starts a turn for it with
    * `announcePrompt: false` so it is never printed twice.
    */
-  private enqueueMidTurnPrompt(prompt: string, isMeta?: boolean): void {
+  private enqueueMidTurnPrompt(prompt: AppSessionPrompt, isMeta?: boolean): void {
     const uuid = randomUUID()
     this.broadcastPromptMessage(prompt, uuid, isMeta)
     enqueue({
@@ -1461,7 +1475,12 @@ export class SidecarServer {
     // T7 (F4) — prompt cap in UTF-8 BYTES (not JS chars), consistent with the
     // frame byte cap so a multibyte prompt cannot advertise a size the frame
     // cannot carry.
-    const promptBytes = Buffer.byteLength(message.prompt, 'utf8')
+    const promptBytes = Buffer.byteLength(
+      typeof message.prompt === 'string'
+        ? message.prompt
+        : JSON.stringify(message.prompt),
+      'utf8',
+    )
     if (promptBytes > MAX_PROMPT_BYTES) {
       this.sendError(
         connection,
@@ -2656,6 +2675,41 @@ export class SidecarServer {
     }
   }
 
+  private observeGeneratedImageEvent(event: AppSessionEvent): void {
+    for (const toolUseId of generatedImageToolUseIds(event)) {
+      this.generatedImageToolUseIds.add(toolUseId)
+    }
+    const result = generatedImageResult(event)
+    if (!result || !this.generatedImageToolUseIds.delete(result.toolUseId)) return
+    void this.broadcastGeneratedImagePreview(result)
+  }
+
+  private async broadcastGeneratedImagePreview(result: {
+    toolUseId: string
+    filePath: string
+    mediaType: 'image/jpeg' | 'image/png' | 'image/webp'
+  }): Promise<void> {
+    try {
+      const bytes = await this.readGeneratedImage(result.filePath)
+      if (!bytes || bytes.byteLength === 0) return
+      const frame: ServerFrame = {
+        kind: 'generated-image-preview',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        toolUseId: result.toolUseId,
+        mediaType: result.mediaType,
+        data: Buffer.from(bytes).toString('base64'),
+      }
+      for (const connection of this.connections) this.send(connection, frame)
+    } catch (error) {
+      this.log(
+        `[sidecar] could not load generated image preview: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
+    }
+  }
+
   /** C3 — build + send one snapshot frame to a single connection (attach). */
   private sendPermissionContext(
     connection: Connection,
@@ -3611,6 +3665,98 @@ function redactErrorMessage(message: string): string {
   return stripped.length > MAX_ERROR_MESSAGE_CHARS
     ? `${stripped.slice(0, MAX_ERROR_MESSAGE_CHARS)}…`
     : stripped
+}
+
+function promptText(prompt: AppSessionPrompt): string {
+  if (typeof prompt === 'string') return prompt
+  return prompt
+    .flatMap(block => (block.type === 'text' ? [block.text] : []))
+    .join('\n')
+}
+
+async function readGeneratedImageForPreview(
+  filePath: string,
+): Promise<Uint8Array | null> {
+  const file = await open(filePath, 'r')
+  try {
+    const info = await file.stat()
+    if (!info.isFile() || info.size > MAX_GENERATED_IMAGE_PREVIEW_BYTES) return null
+    const bytes = Buffer.allocUnsafe(info.size)
+    let offset = 0
+    while (offset < bytes.length) {
+      const read = await file.read(bytes, offset, bytes.length - offset, offset)
+      if (read.bytesRead === 0) break
+      offset += read.bytesRead
+    }
+    const overflow = Buffer.allocUnsafe(1)
+    const extra = await file.read(overflow, 0, 1, offset)
+    if (extra.bytesRead > 0) return null
+    return bytes.subarray(0, offset)
+  } finally {
+    await file.close()
+  }
+}
+
+function generatedImageToolUseIds(event: AppSessionEvent): string[] {
+  if (event.type !== 'message' || event.message.type !== 'assistant') return []
+  const content = event.message.message?.content
+  if (!Array.isArray(content)) return []
+  return content.flatMap(block =>
+    typeof block === 'object' &&
+    block !== null &&
+    'type' in block &&
+    block.type === 'tool_use' &&
+    'name' in block &&
+    block.name === 'GenerateImage' &&
+    'id' in block &&
+    typeof block.id === 'string'
+      ? [block.id]
+      : [],
+  )
+}
+
+function generatedImageResult(event: AppSessionEvent): {
+  toolUseId: string
+  filePath: string
+  mediaType: 'image/jpeg' | 'image/png' | 'image/webp'
+} | null {
+  if (event.type !== 'message' || event.message.type !== 'user') return null
+  const content = event.message.message?.content
+  if (!Array.isArray(content)) return null
+  const toolUseResult = event.message.tool_use_result
+  if (
+    typeof toolUseResult !== 'object' ||
+    toolUseResult === null ||
+    Array.isArray(toolUseResult)
+  ) {
+    return null
+  }
+  const output = toolUseResult as Record<string, unknown>
+  const filePath = output['filePath']
+  const outputFormat = output['outputFormat']
+  if (typeof filePath !== 'string') return null
+  const mediaType =
+    outputFormat === 'png'
+      ? 'image/png'
+      : outputFormat === 'jpeg'
+        ? 'image/jpeg'
+        : outputFormat === 'webp'
+          ? 'image/webp'
+          : null
+  if (!mediaType) return null
+  for (const block of content) {
+    if (
+      typeof block === 'object' &&
+      block !== null &&
+      'type' in block &&
+      block.type === 'tool_result' &&
+      'tool_use_id' in block &&
+      typeof block.tool_use_id === 'string'
+    ) {
+      return { toolUseId: block.tool_use_id, filePath, mediaType }
+    }
+  }
+  return null
 }
 
 /**

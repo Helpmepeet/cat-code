@@ -9,11 +9,53 @@ import { outputSchema as permissionResponseSchema } from '../utils/permissions/P
 
 const requestIdSchema = z.string().min(1)
 const presentUnknownSchema = z.unknown().refine(value => value !== undefined)
+const appSubmitImageBase64Chars = 90_000
+
+const appSubmitImageBlockSchema = z.strictObject({
+  type: z.literal('image'),
+  source: z.strictObject({
+    type: z.literal('base64'),
+    media_type: z.enum(['image/jpeg', 'image/png', 'image/gif', 'image/webp']),
+    data: z
+      .string()
+      .min(1)
+      .max(appSubmitImageBase64Chars)
+      .regex(
+        /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/,
+      ),
+  }),
+})
+
+const appSubmitTextBlockSchema = z.strictObject({
+  type: z.literal('text'),
+  text: z.string().min(1),
+})
+
+const appSubmitPromptSchema = z.union([
+  z.string().min(1),
+  z
+    .array(z.union([appSubmitImageBlockSchema, appSubmitTextBlockSchema]))
+    .min(1)
+    .max(5)
+    .refine(
+      blocks => blocks.some(block => block.type === 'image'),
+      'content-block prompts must include an image',
+    )
+    .refine(
+      blocks =>
+        blocks.reduce(
+          (total, block) =>
+            total + (block.type === 'image' ? block.source.data.length : 0),
+          0,
+        ) <= appSubmitImageBase64Chars,
+      'image data exceeds the submit budget',
+    ),
+])
 
 const appSubmitMessageSchema = z.object({
   type: z.literal('app.submit'),
   requestId: requestIdSchema,
-  prompt: z.string().min(1),
+  prompt: appSubmitPromptSchema,
   options: z
     .object({
       uuid: z.string().optional(),
@@ -147,6 +189,7 @@ export const appServerMessageSchema = z.union([
 ])
 
 export type AppClientMessage = z.infer<typeof appClientMessageSchema>
+export type AppSubmitPrompt = z.infer<typeof appSubmitPromptSchema>
 export type AppSubmitMessage = z.infer<typeof appSubmitMessageSchema>
 export type PermissionResponseMessage = z.infer<
   typeof permissionResponseMessageSchema

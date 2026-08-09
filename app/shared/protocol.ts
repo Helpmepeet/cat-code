@@ -51,6 +51,7 @@ import type { AppSessionEvent } from '@cat-code/engine/session-events'
 import type {
   AppClientMessage,
   AppReadyPayload,
+  AppSubmitPrompt,
 } from '@cat-code/engine/session-events'
 // The host control-plane contract (P3-3). Kept in its own module (`hostApi.ts`)
 // because it is a SEPARATE plane from the wire frames — its `HostErrorCode` union
@@ -2720,6 +2721,22 @@ export type SlashCatalogSnapshotFrame = {
   commands: SlashCatalogEntry[]
 }
 
+/**
+ * Read-only generated-image preview derived by the sidecar from the structured
+ * output of a live `GenerateImage` tool call. The renderer receives an engine-
+ * minted tool id plus image bytes, never a filesystem path to read. This is an
+ * additive display frame under SECURITY-MINIMUM R5; raw `AppSessionEvent` frames
+ * remain unchanged.
+ */
+export type GeneratedImagePreviewFrame = {
+  kind: 'generated-image-preview'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  toolUseId: string
+  mediaType: 'image/jpeg' | 'image/png' | 'image/webp'
+  data: string
+}
+
 export type ServerFramePayload =
   | ReadyFrame
   | SessionTitleFrame
@@ -2752,6 +2769,7 @@ export type ServerFramePayload =
   | RemoteSettingsResultFrame
   | SessionsCatalogSnapshotFrame
   | SlashCatalogSnapshotFrame
+  | GeneratedImagePreviewFrame
   | SettingsResultFrame
 
 /**
@@ -2805,6 +2823,7 @@ const SERVER_FRAME_KINDS: Record<ServerFrameKind, true> = {
   'remoteSettings.result': true,
   'sessions.snapshot': true,
   'slash-catalog.snapshot': true,
+  'generated-image-preview': true,
 }
 
 export function isServerFrameKind(value: unknown): value is ServerFrameKind {
@@ -2915,7 +2934,7 @@ export type TranscriptCache = {
  */
 export type CatCodeBridge = {
   /** Send one prompt to the addressed session. */
-  submit(sessionId: SessionId, prompt: string, options?: SubmitOptions): void
+  submit(sessionId: SessionId, prompt: SubmitPrompt, options?: SubmitOptions): void
   /** Abort the named turn on the addressed session. */
   abort(sessionId: SessionId, requestId: string, reason?: string): void
   /** Answer a currently-pending permission request on the addressed session. */
@@ -3191,6 +3210,8 @@ export type SubmitOptions = {
   isMeta?: boolean
   goalSnapshot?: unknown
 }
+
+export type SubmitPrompt = AppSubmitPrompt
 
 /**
  * Renderer-supplied permission response. The renderer may confirm or deny a

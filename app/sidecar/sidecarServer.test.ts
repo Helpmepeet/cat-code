@@ -329,6 +329,198 @@ test('production delivery envelope adds metadata beside, never inside, the raw S
   expect(typeof envelope.deliveryTrace?.sourceProcessInstanceId).toBe('string')
 })
 
+test('image app.submit content blocks reach the real controller prompt unchanged', async () => {
+  let seenPrompt: unknown
+  const controller = new AppSessionController({
+    async *runTurn({ prompt }) {
+      seenPrompt = prompt
+    },
+  })
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  const prompt = [
+    {
+      type: 'image' as const,
+      source: {
+        type: 'base64' as const,
+        media_type: 'image/png' as const,
+        data: 'AAAA',
+      },
+    },
+    { type: 'text' as const, text: 'Inspect this image' },
+  ]
+
+  server.handleData(
+    connection,
+    clientFrame({
+      type: 'app.submit',
+      requestId: 'image-submit',
+      prompt,
+    }),
+  )
+  await waitFor(() => seenPrompt !== undefined)
+
+  expect(seenPrompt).toEqual(prompt)
+  expect(
+    received.find(
+      frame =>
+        frame.kind === 'event' &&
+        frame.event.type === 'message' &&
+        frame.event.message.type === 'user',
+    ),
+  ).toMatchObject({
+    kind: 'event',
+    event: {
+      type: 'message',
+      message: {
+        type: 'user',
+        message: { role: 'user', content: prompt },
+      },
+    },
+  })
+})
+
+test('a live GenerateImage result emits a read-only inline preview frame', async () => {
+  const controller = new AppSessionController({
+    async *runTurn() {
+      yield {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_image',
+              name: 'GenerateImage',
+              input: { prompt: 'a cat' },
+            },
+          ],
+        },
+      } as never
+      yield {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_image',
+              content: 'Generated image',
+            },
+          ],
+        },
+        tool_use_result: {
+          filePath: '/generated/cat.png',
+          model: 'gpt-image-2',
+          size: '1024x1024',
+          outputFormat: 'png',
+          bytes: 4,
+        },
+      } as never
+    },
+  })
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
+    controller,
+    readGeneratedImage: async filePath => {
+      expect(filePath).toBe('/generated/cat.png')
+      return new Uint8Array([0, 1, 2, 3])
+    },
+    log: () => {},
+  })
+  servers.push(server)
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+
+  server.handleData(
+    connection,
+    clientFrame({
+      type: 'app.submit',
+      requestId: 'generate',
+      prompt: 'make a cat',
+    }),
+  )
+  await waitFor(() =>
+    received.some(frame => frame.kind === 'generated-image-preview'),
+  )
+
+  expect(
+    received.find(frame => frame.kind === 'generated-image-preview'),
+  ).toEqual({
+    kind: 'generated-image-preview',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SESSION,
+    toolUseId: 'toolu_image',
+    mediaType: 'image/png',
+    data: 'AAECAw==',
+  })
+})
+
+test('a structured image result without a live GenerateImage tool id cannot trigger a file read', async () => {
+  const controller = new AppSessionController({
+    async *runTurn() {
+      yield {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_unobserved_image',
+              content: 'Generated image',
+            },
+          ],
+        },
+        tool_use_result: {
+          filePath: '/generated/unobserved.png',
+          model: 'gpt-image-2',
+          size: '1024x1024',
+          outputFormat: 'png',
+          bytes: 4,
+        },
+      } as never
+    },
+  })
+  let readCalls = 0
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
+    controller,
+    readGeneratedImage: async () => {
+      readCalls += 1
+      return new Uint8Array([0, 1, 2, 3])
+    },
+    log: () => {},
+  })
+  servers.push(server)
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+
+  server.handleData(
+    connection,
+    clientFrame({
+      type: 'app.submit',
+      requestId: 'unobserved-generate-result',
+      prompt: 'continue',
+    }),
+  )
+  await waitFor(() =>
+    received.some(
+      frame =>
+        frame.kind === 'event' &&
+        frame.event.type === 'message' &&
+        frame.event.message.type === 'user',
+    ),
+  )
+
+  expect(readCalls).toBe(0)
+  expect(
+    received.some(frame => frame.kind === 'generated-image-preview'),
+  ).toBe(false)
+})
+
 test('rejects a frame with the wrong protocolVersion', () => {
   const server = makeServer(new AppSessionController(probeAdapter()))
   const { socket, received } = makeSocket()
