@@ -12,6 +12,7 @@ import type { SessionDescriptor } from '../../shared/hostApi.js'
 import type { SessionId } from '../../shared/protocol.js'
 import type { ConnectionSnapshot } from './connectionState.js'
 import { basename } from './pathUtils.js'
+import { sessionStatusVisual } from './sessionStatusVisual.js'
 import { tabLabel } from './tabBarModel.js'
 import {
   MAX_WORKSPACE_PANELS,
@@ -294,7 +295,7 @@ function PanelHeader({
        * against, so every pill renders the neutral (same-project) blue. */}
       <span
         className="flex shrink-0 items-center gap-1 rounded border border-[#60a5fa]/25 bg-[#60a5fa]/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[#93c5fd]"
-        title={`Project: ${panel.descriptor?.cwd ?? panel.sessionId}`}
+        title={`Project: ${workspaceLabel(panel)}`}
       >
         <FolderIcon />
         {workspaceLabel(panel)}
@@ -426,24 +427,27 @@ function panelAriaLabel(
 }
 
 function sessionIdentity(panel: WorkspacePanelView): string {
-  return panel.descriptor
-    ? `${tabLabel(panel.descriptor)} (${panel.sessionId})`
-    : panel.sessionId
+  return panel.descriptor ? tabLabel(panel.descriptor) : 'New session'
 }
 
 function sessionState(panel: WorkspacePanelView): string {
-  const host = panel.descriptor?.status ?? 'missing'
-  return `host ${host}, connection ${panel.connection.status}`
+  return panel.descriptor
+    ? sessionStatusVisual(
+        panel.descriptor.status,
+        panel.descriptor.restorable,
+        true,
+      ).label
+    : 'loading'
 }
 
-/** The panel session's workspace name — its cwd basename, else a short id. */
+/** The panel session's workspace name — its cwd basename, else an honest word. */
 function workspaceLabel(panel: WorkspacePanelView): string {
   const cwd = panel.descriptor?.cwd
   if (cwd) {
     const base = basename(cwd)
     if (base) return base
   }
-  return panel.sessionId.slice(0, 8)
+  return 'No workspace'
 }
 
 /** Folder glyph for the project pill (prototype WorkspaceLayout.jsx). */

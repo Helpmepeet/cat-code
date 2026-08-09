@@ -37,15 +37,19 @@ test('renders panel, drop edge, and splitter aria labels with session identity a
 
   expect(html).toContain('Workspace layout, 2 panels')
   expect(html).toContain(
-    'Panel 1 session Alpha (session-a), host ready, connection ready, active',
+    'Panel 1 session Alpha, live, active',
   )
   expect(html).toContain(
-    'Drop tab on left edge of panel 1 showing Alpha (session-a), host ready, connection ready to split',
+    'Drop tab on left edge of panel 1 showing Alpha, live to split',
   )
   expect(html).toContain('role="separator"')
   expect(html).toContain(
-    'Resize split between panel 1 session Alpha (session-a), host ready, connection ready and panel 2 session Beta (session-b), host ready, connection ready',
+    'Resize split between panel 1 session Alpha, live and panel 2 session Beta, live',
   )
+  expect(html).not.toContain('host ready')
+  expect(html).not.toContain('connection ready')
+  expect(html).not.toContain('(session-a)')
+  expect(html).not.toContain('(session-b)')
 })
 
 test('panel selector exposes duplicate-session prevention affordance', () => {
