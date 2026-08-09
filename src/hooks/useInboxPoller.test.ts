@@ -10,7 +10,11 @@ import {
   type MailboxControlPayload,
   type TeamPrincipal,
 } from '../utils/teammateMailbox.js'
-import { classifyInboxMessages } from './useInboxPoller.js'
+import {
+  classifyInboxMessages,
+  mailboxMessageKey,
+  unreadMessagesNotYetDelivered,
+} from './useInboxPoller.js'
 
 const leader: TeamPrincipal = {
   kind: 'leader',
@@ -83,6 +87,48 @@ function buildSnapshot(pendingControls: PendingControlRecord[] = []): TeamFile {
     members: [],
   }
 }
+
+describe('unreadMessagesNotYetDelivered', () => {
+  test('suppresses a previously accepted message after its mailbox acknowledgement fails', () => {
+    const delivered = {
+      from: alice.name,
+      text: 'run the regression suite',
+      timestamp: '2026-08-09T00:00:00.000Z',
+      read: false,
+      messageId: 'delivery-1',
+    }
+    const later = {
+      from: bob.name,
+      text: 'I am still waiting',
+      timestamp: '2026-08-09T00:00:01.000Z',
+      read: false,
+      messageId: 'delivery-2',
+    }
+
+    const result = unreadMessagesNotYetDelivered(
+      [delivered, later],
+      new Set([mailboxMessageKey(delivered)]),
+    )
+
+    expect(result).toEqual([later])
+  })
+
+  test('uses the legacy identity when an older mailbox message has no message id', () => {
+    const legacy = {
+      from: alice.name,
+      text: 'legacy handoff',
+      timestamp: '2026-08-09T00:00:00.000Z',
+      read: false,
+    }
+
+    expect(
+      unreadMessagesNotYetDelivered(
+        [legacy],
+        new Set([mailboxMessageKey(legacy)]),
+      ),
+    ).toEqual([])
+  })
+})
 
 describe('classifyInboxMessages', () => {
   test('dispatches a leader-issued shutdown_request into shutdownRequests, addressed to the current teammate occupant', () => {

@@ -121,6 +121,24 @@ function getAgentNameToPoll(appState: AppState): string | undefined {
 const INBOX_POLL_INTERVAL_MS = 1000
 
 /**
+ * Mailbox writes before the v2 protocol may not have a message id. Keep the
+ * legacy identity aligned with the mailbox attachment bridge so a failed ack
+ * cannot make either shape reappear as a new delivery on the next poll.
+ */
+export function mailboxMessageKey(message: TeammateMessage): string {
+  return message.messageId ?? `${message.from} ${message.timestamp} ${message.text}`
+}
+
+export function unreadMessagesNotYetDelivered(
+  messages: readonly TeammateMessage[],
+  deliveredKeys: ReadonlySet<string>,
+): TeammateMessage[] {
+  return messages.filter(
+    message => !message.read && !deliveredKeys.has(mailboxMessageKey(message)),
+  )
+}
+
+/**
  * Authority-checked dispatch buckets for one poll's unread messages. Pure
  * and synchronous — takes an already-fetched team snapshot (or `null` for a
  * legacy/absent team or a session outside any team) so `useInboxPoller.test.ts`
@@ -307,10 +325,14 @@ export function useInboxPoller({
   const terminal = useTerminalNotification()
   const mailboxSignatureRef = useRef<MailboxSignature | undefined>(undefined)
   const mailboxKeyRef = useRef<string | undefined>(undefined)
+  const deliveredMessageKeysRef = useRef(new Set<string>())
+  const isPollingRef = useRef(false)
 
   const poll = useCallback(async () => {
-    if (!enabled) return
+    if (!enabled || isPollingRef.current) return
+    isPollingRef.current = true
 
+    try {
     // Use ref to avoid dependency on appState object (prevents infinite loop)
     const currentAppState = store.getState()
     const agentName = getAgentNameToPoll(currentAppState)
@@ -320,6 +342,7 @@ export function useInboxPoller({
     if (mailboxKeyRef.current !== mailboxKey) {
       mailboxKeyRef.current = mailboxKey
       mailboxSignatureRef.current = undefined
+      deliveredMessageKeysRef.current.clear()
     }
 
     const mailbox = await readMailboxIfChanged(
@@ -330,7 +353,10 @@ export function useInboxPoller({
     mailboxSignatureRef.current = mailbox.signature
     if (!mailbox.changed) return
 
-    const unread = mailbox.messages.filter(m => !m.read)
+    const unread = unreadMessagesNotYetDelivered(
+      mailbox.messages,
+      deliveredMessageKeysRef.current,
+    )
 
     if (unread.length === 0) return
 
@@ -429,11 +455,9 @@ export function useInboxPoller({
     // Keyed by messageId when present, else the same from/timestamp/text key
     // `getTeammateMailboxAttachments` uses — legacy call sites (still ~15
     // across the repo) write chat with no messageId at all.
-    const messageKey = (m: TeammateMessage): string =>
-      m.messageId ?? `${m.from} ${m.timestamp} ${m.text}`
     const consumedKeys = new Set<string>(dispatch.acknowledgeOnlyIds)
     const trackForAck = (m: TeammateMessage) => {
-      consumedKeys.add(messageKey(m))
+      consumedKeys.add(mailboxMessageKey(m))
     }
     for (const m of regularMessages) trackForAck(m)
 
@@ -441,11 +465,16 @@ export function useInboxPoller({
     // read. A brand-new message that arrived concurrently (after the
     // classification above) won't match any key here and stays unread for
     // the next poll — never silently swallowed.
-    const markRead = () => {
+    const markRead = async () => {
       if (consumedKeys.size === 0) return
-      void markMessagesAsReadByPredicate(
+      // Acknowledgements can fail after their lock retry budget (for example,
+      // while a dead process's lock is still stale). Record the accepted
+      // messages before awaiting the ack so retries never submit or dispatch
+      // the same mailbox entry again during this session.
+      for (const key of consumedKeys) deliveredMessageKeysRef.current.add(key)
+      await markMessagesAsReadByPredicate(
         agentName,
-        m => consumedKeys.has(messageKey(m)),
+        m => consumedKeys.has(mailboxMessageKey(m)),
         currentAppState.teamContext?.teamName,
       )
     }
@@ -1054,7 +1083,7 @@ export function useInboxPoller({
     if (regularMessages.length === 0) {
       // No regular messages, but we may have processed non-regular messages
       // (permissions, shutdown requests, etc.) above — mark those as read.
-      markRead()
+      await markRead()
       return
     }
 
@@ -1115,7 +1144,10 @@ export function useInboxPoller({
     // or reliably queued in AppState. This prevents permanent message loss
     // when the session is busy — if we crash before this point, the messages
     // will be re-read on the next poll cycle instead of being silently dropped.
-    markRead()
+    await markRead()
+    } finally {
+      isPollingRef.current = false
+    }
   }, [
     enabled,
     isLoading,

@@ -43,10 +43,19 @@ import { getAgentId, getAgentName, getTeammateColor, getTeamName } from './teamm
 // lockSync API blocked the event loop; the async API needs explicit retries
 // to achieve the same serialization semantics.
 const LOCK_OPTIONS = {
+  // A mailbox operation can legitimately span more than the library's
+  // 10-second default while another agent is scheduled out. Match the team
+  // file's 60-second stale window so a live writer is not silently overtaken.
+  stale: 60_000,
   retries: {
     retries: 10,
     minTimeout: 5,
     maxTimeout: 100,
+  },
+  onCompromised: (error: Error) => {
+    logForDebugging(`[TeammateMailbox] lock compromised: ${error}`, {
+      level: 'error',
+    })
   },
 }
 
