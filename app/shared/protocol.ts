@@ -1634,16 +1634,15 @@ export type RunControlsSnapshot = {
      */
     currentLabel: string | null
     /**
-     * The context window `current` runs with, resolved at the sidecar by the
-     * engine's own `getContextWindowForModel` (`src/utils/context.ts:68`) —
-     * the very function whose output the live gauge otherwise reads off a
-     * `result` frame's `modelUsage[…].contextWindow` (`src/cost-tracker.ts:107`).
+     * The effective context window `current` runs with, resolved at the sidecar
+     * by the engine's `getEffectiveContextWindowSize`
+     * (`src/services/compact/autoCompact.ts:40`). It accounts for the reserved
+     * summary allowance and optional compact-window cap that raw result metadata
+     * cannot express.
      *
-     * It is the gauge's denominator in the two states no `result` frame can
-     * cover: BEFORE the first turn, and right after a model switch, when the
-     * newest `result` frame only knows the model that already ran. Without it
-     * every model divided by the renderer's 200k default, which is wrong for
-     * Claude 5 (1M), GPT-5.6 (372k), and every other gpt model (272k).
+     * It is the gauge's preferred denominator; raw result metadata remains only
+     * a fallback for historical traffic with no live snapshot. Without it every
+     * model divided by the renderer's 200k default before a first turn.
      *
      * Re-resolved on each snapshot, so it follows a model change live. null
      * when resolution failed; the renderer keeps its default window then.
@@ -1691,10 +1690,9 @@ export type RunControlsSnapshot = {
    * `calculateTokenWarningState` inputs (`src/services/compact/autoCompact.ts:246`).
    *
    * They ship from the engine because the renderer CANNOT re-derive either one.
-   * The denominator is `getEffectiveContextWindowSize`
-   * (`autoCompact.ts:40`), which is NOT the gauge's `contextWindow`: it
-   * subtracts reserved summary tokens and honours a `CLAUDE_CODE_AUTO_COMPACT_WINDOW`
-   * cap. The auto-compact buffer is model-dependent too
+     * The denominator is `getEffectiveContextWindowSize` (`autoCompact.ts:40`),
+     * the same basis as the gauge's `contextWindow`. The auto-compact buffer is
+     * model-dependent too
    * (`getAutoCompactBufferTokens`, `autoCompact.ts:204`), not the flat 13k the
    * prototype hard-codes. Mirroring either in the renderer would print a
    * percentage that disagrees with the engine that actually compacts.

@@ -566,12 +566,14 @@ function positive(value: number | null): number | null {
 }
 
 /**
- * The window `model` runs with, or null. Guarded like the backfill worker's
+ * The effective window `model` runs with, or null. This matches the engine's
+ * compaction denominator, including its reserved-summary allowance and optional
+ * `CLAUDE_CODE_AUTO_COMPACT_WINDOW` cap. Guarded like the backfill worker's
  * resolver (`transcriptRunFacts.ts`): a nonsense answer costs the gauge its
  * exact denominator (the renderer keeps its default), never the whole snapshot.
  */
 function readContextWindow(model: string): number | null {
-  const window = safe(() => getContextWindowForModel(model, getSdkBetas()), null)
+  const window = safe(() => getEffectiveContextWindowSize(model), null)
   return typeof window === 'number' && Number.isFinite(window) && window > 0
     ? window
     : null

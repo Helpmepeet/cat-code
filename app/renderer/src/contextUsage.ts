@@ -56,20 +56,15 @@ import type { Tone } from './tone.js'
  *
  * ## `contextWindow`
  *
- * `modelUsage[model].contextWindow`, already computed by the engine's real
- * `getContextWindowForModel` (`src/cost-tracker.ts:107`, incl. the `[1m]` beta +
- * model-capability + env-override logic — valid for gpt/Codex too). The renderer
- * REUSES that value instead of re-deriving it (§10). The live run-controls
- * snapshot supplies the current main-loop model, so historical model entries
- * cannot leave the gauge on a stale larger window after a switch.
+ * The live run-controls snapshot's `model.contextWindow`, resolved by the
+ * sidecar with the engine's `getEffectiveContextWindowSize`. It is the same
+ * denominator the engine uses for auto-compaction; raw result metadata omits
+ * the reserved-summary allowance and optional auto-compact cap, so it is only a
+ * fallback for detached historical/preview traffic with no live snapshot.
  *
- * Before a turn completes there IS no result frame, and after a model switch the
- * newest one only knows the model that already ran, so in both states the window
- * comes from `modelContextWindow` instead: the live run-controls snapshot's
- * `model.contextWindow`, which the sidecar resolves with the engine's own
- * `getContextWindowForModel` — the same function that produced the number on the
- * result frame. That is what makes a fresh session read 1M on Claude 5 and 372k on
- * GPT-5.6 rather than 200k for everything.
+ * Before a turn completes there is no result frame, and after a model switch the
+ * newest one only knows the model that already ran. In both states the effective
+ * `modelContextWindow` is the only current-model truth.
  *
  * `DEFAULT_CONTEXT_WINDOW` remains the last resort, for a pane with no live
  * snapshot at all (a preview, or the moment before attach), exactly like the
@@ -332,9 +327,9 @@ export function selectContextUsage(
   messages: readonly SDKMessage[],
   currentModel?: string | null,
   /**
-   * The window the CURRENT model runs with (`RunControlsSnapshot.model.contextWindow`).
-   * Used whenever no result frame states one for that model, which is every
-   * pre-turn render and every render between a model switch and the next result.
+   * The effective window the CURRENT model runs with
+   * (`RunControlsSnapshot.model.contextWindow`). It is preferred over raw result
+   * metadata because it is the engine's auto-compaction denominator.
    */
   modelContextWindow?: number | null,
 ): ContextUsage {
@@ -342,8 +337,8 @@ export function selectContextUsage(
   // frame is the only carrier of the engine-resolved window, and its `usage` is
   // the session-lifetime accumulator that must never reach the numerator.
   const usedTokens = selectUsedTokens(messages)
-  let contextWindow = 0
-  for (let i = messages.length - 1; i >= 0; i--) {
+  let contextWindow = isPositive(modelContextWindow) ? modelContextWindow : 0
+  for (let i = messages.length - 1; contextWindow <= 0 && i >= 0; i--) {
     const message = messages[i]
     if (!message || message.type !== 'result') continue
 
@@ -359,16 +354,11 @@ export function selectContextUsage(
         }
       }
     }
-    break // the latest result frame states the window the session last ran on
+    break // the latest result frame states the historical fallback window
   }
 
-  // Always show the donut (the prototype's ContextChip never hides). Where no
-  // result frame stated a window for the current model, the engine-resolved one
-  // for that model answers instead, and only a pane with neither falls back to
-  // the constant.
-  if (contextWindow <= 0 && isPositive(modelContextWindow)) {
-    contextWindow = modelContextWindow
-  }
+  // Always show the donut (the prototype's ContextChip never hides). A pane
+  // with neither an effective snapshot nor a retained result uses the constant.
   if (contextWindow <= 0) contextWindow = DEFAULT_CONTEXT_WINDOW
   const percentUsed = Math.min(
     100,

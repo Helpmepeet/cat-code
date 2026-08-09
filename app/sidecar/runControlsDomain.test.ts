@@ -11,7 +11,7 @@ import {
   setProviderSwitchLocked,
   setSessionProvider,
 } from '../../src/bootstrap/state.js'
-import { getContextWindowForModel } from '../../src/utils/context.js'
+import { getEffectiveContextWindowSize } from '../../src/services/compact/autoCompact.js'
 import { getDefaultAppState } from '../../src/state/AppStateStore.js'
 import type { AppState } from '../../src/state/AppStateStore.js'
 import { createStore, type Store } from '../../src/state/store.js'
@@ -374,9 +374,9 @@ test('selected always names one of the offered options, so a row is always highl
  * table, and a window depends on betas, the model-capability cache, and env
  * overrides. So this asserts they come from the engine's OWN functions, on real
  * process state, not from a second table in app/ (§10). Comparing the window
- * against `getContextWindowForModel` is what pins the SOURCE; the literal 1M is
- * what pins the VALUE, since a Claude 5 model gets a 1M window with no `[1m]`
- * suffix (`src/utils/context.ts:56`) and 200k for it is simply wrong.
+ * against `getEffectiveContextWindowSize` is what pins the SOURCE; the literal
+ * 980k pins the VALUE, since a Claude 5 model reserves 20k summary tokens from
+ * its 1M raw window and 200k for it is simply wrong.
  */
 test('LIVE: the snapshot carries the engine display name and context window for the current model', () => {
   const prevOverride = getMainLoopModelOverride()
@@ -390,9 +390,9 @@ test('LIVE: the snapshot carries the engine display name and context window for 
     const opus = buildRunControlsSnapshot(getDefaultAppState()).model
     expect(opus.current).toBe('claude-opus-5')
     expect(opus.currentLabel).toBe('Opus 5')
-    expect(opus.contextWindow).toBe(1_000_000)
+    expect(opus.contextWindow).toBe(980_000)
     expect(opus.contextWindow).toBe(
-      getContextWindowForModel('claude-opus-5', getSdkBetas()),
+      getEffectiveContextWindowSize('claude-opus-5'),
     )
 
     // A family ALIAS is the case the operator hit: the picker offers `haiku`,
@@ -403,7 +403,7 @@ test('LIVE: the snapshot carries the engine display name and context window for 
     expect(haiku.current).toContain('claude-haiku-4-5')
     expect(haiku.currentLabel).toBe('Haiku 4.5')
     expect(haiku.contextWindow).toBe(
-      getContextWindowForModel(haiku.current ?? '', getSdkBetas()),
+      getEffectiveContextWindowSize(haiku.current ?? ''),
     )
     // …and the window genuinely MOVED with the selection. A snapshot that
     // reported one constant for every model is the reported bug.

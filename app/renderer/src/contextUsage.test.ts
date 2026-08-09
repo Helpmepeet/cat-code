@@ -524,18 +524,18 @@ test('after a model switch the window follows the new model while usage stays re
   })
 })
 
-test('a result frame that states the window for the current model still wins', () => {
-  // Same function resolved both, so they agree; the frame is the more specific
-  // statement (it is what that turn actually ran under) and stays authoritative.
+test('the effective current-model window wins over raw result metadata', () => {
+  // Result frames carry the raw context limit. The live snapshot is the engine's
+  // auto-compact denominator, after its summary reserve/cap, and must win.
   const usage = selectContextUsage(
     [
       ...anthropicTurn(50_000, 0, 0),
       result({ input_tokens: 9_999_999 }, { 'gpt-5.6-terra': { contextWindow: 372_000 } }),
     ],
     'gpt-5.6-terra',
-    1_000_000,
+    352_000,
   )
-  expect(usage.contextWindow).toBe(372_000)
+  expect(usage).toMatchObject({ contextWindow: 352_000, percentUsed: 14 })
 })
 
 test.each([0, -1, Number.NaN, null, undefined])(
