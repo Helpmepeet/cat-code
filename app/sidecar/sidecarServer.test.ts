@@ -4381,6 +4381,35 @@ test('P4-5 — rejects account.switch with a missing accountId (schema)', () => 
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
 })
 
+test('P4-5 — a valid account.rename passes the boundary and dispatches with its correlated result', async () => {
+  seedCodexAccountPoolForTest({ accounts: [acctFixture()], activeAccountId: 'acct-aaaa' })
+  let renamed: { accountId: string; alias: string } | null = null
+  const accounts = makeAccountsDomain({
+    executor: fakeExecutor({
+      rename: (accountId, alias) => {
+        renamed = { accountId, alias }
+        return { ok: true, message: 'renamed' }
+      },
+    }),
+  })
+  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    accountFrame({ type: 'account.rename', requestId: 'rename-1', accountId: 'acct-aaaa', alias: 'renamed' }),
+  )
+  await flush()
+
+  expect(renamed).toEqual({ accountId: 'acct-aaaa', alias: 'renamed' })
+  expect(
+    received.some(
+      f => f.kind === 'account.result' && f.requestId === 'rename-1' && f.ok,
+    ),
+  ).toBe(true)
+})
+
 test('P4-5 — rejects account.delete without confirm:true (destructive fail-closed)', () => {
   seedCodexAccountPoolForTest({ accounts: [acctFixture({ accountId: 'a' })], activeAccountId: 'a' })
   let deleted = false
