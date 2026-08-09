@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 79/242** — counted against the review's original 61 High and
+**Progress: Fix 80/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -83,6 +83,7 @@ count tracks individually verified findings, not commit count.
 | A20 MED hardening-harness success text implied coverage beyond its renderer/main-process checks | fixed | `9ef538a` | success and runner failure signals now name the renderer-document and main-policy scope; source regression (1 pass); app typecheck and renderer production build |
 | A20 MED `dev.ts` armed SIGINT/SIGTERM cleanup only after Vite readiness | fixed | `6883ce0` | shutdown is armed immediately after Vite spawn and tolerates absent Electron; dev-launcher suite (15 pass); app typecheck and renderer production build |
 | A20 MED `harness-demo.ts` duplicated child termination and left Electron alive on timeout | fixed | `6a4264a` | cleanup now owns both children and timeout awaits the shared bounded terminator; lifecycle source suites (17 pass); app typecheck and renderer production build |
+| A15 HIGH removed sessions left unprunable connection, lease, task, and action-result state (including export payloads) | fixed | `c3c7c1a` | host removal now deletes all four state slices; reducer regressions (65 pass); app typecheck and renderer production build |
 
 ## Known verification limitation
 
