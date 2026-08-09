@@ -92,7 +92,10 @@ diagnostics but must not be throttled with them:**
   liveness signal main uses to decide the renderer is alive
   (`app/main/main.ts`). Starving it would make main record a false
   `renderer.health.missed` for a healthy renderer, converting a telemetry flood
-  into a fake outage.
+  into a fake outage. Since CC-39 the cost is higher than one warning: sustained
+  starvation escalates to an error-level `renderer.health.unavailable` that then
+  repeats every minute, so a healthy renderer would be reported as a continuing
+  outage rather than a single blip.
 
 ## 5. Failure semantics
 

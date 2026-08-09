@@ -1,6 +1,6 @@
 /** Local-only support export assembled from closed, redacted JSONL records. */
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { release as osRelease } from 'node:os'
 import { parseOperationalRecord } from '../shared/operationalLog.js'
@@ -25,6 +25,19 @@ import {
   MAX_OPERATIONAL_LOG_TOTAL_BYTES,
   MAX_OPERATIONAL_RECORD_BYTES,
 } from './operationalLogSink.js'
+
+/** The last `MAX_FILE_BYTES` bytes of a file, without decoding the rest of it. */
+function readTail(path: string, size: number): string {
+  const length = Math.min(size, MAX_FILE_BYTES)
+  const handle = openSync(path, 'r')
+  try {
+    const buffer = Buffer.alloc(length)
+    readSync(handle, buffer, 0, length, Math.max(0, size - length))
+    return buffer.toString('utf8')
+  } finally {
+    closeSync(handle)
+  }
+}
 
 const MAX_BUNDLE_BYTES = 2 * 1024 * 1024
 const MAX_FILE_BYTES = 512 * 1024
@@ -81,7 +94,10 @@ export function buildDiagnosticsBundle({
         if (size > MAX_FILE_BYTES) sourceWindowTruncated = true
         // Take the tail and parse newest complete records first, so an incident
         // immediately before export wins admission over old retained history.
-        const text = readFileSync(join(logsDirectory, name), 'utf8').slice(-MAX_FILE_BYTES)
+        // Read only the tail: decoding a whole 20 MiB trace file to keep its last
+        // 512 KiB cost the main thread the entire file. Seeking also makes the
+        // truncation check exact, since both sides are now bytes.
+        const text = readTail(join(logsDirectory, name), size)
         for (const line of text.split('\n').reverse()) {
           if (!line) continue
           // Taking a tail almost always cuts the oldest line in half, so an
