@@ -14,9 +14,10 @@ maintenance problem, and buys upstream's continuing refinement for free. Evidenc
 that the design is settled rather than in flux: nine releases spanning Jul 18 to
 Aug 6 carry the identical architecture and rule count, with only prose growth.
 
-**Status: contract review returned RED (2026-08-09). Five findings hold and are
-folded in below; one was rejected on evidence. The gaps in "Contract gaps" must
-close before Step 1 starts.** Supporting evidence:
+**Status: contract review returned RED (2026-08-09). Five findings held and one
+was rejected on evidence. G1-G4 are now closed specifications below; the replay
+gate remains closed, so the atomic Steps 1+2 feature stays off by default.**
+Supporting evidence:
 `docs/reports/2026-08-09-auto-mode-denial-analysis.md` (what our classifier did)
 and `docs/reports/2026-08-09-claude-code-auto-mode-architecture.md` (what
 upstream's is, and how far each claim was verified).
@@ -38,9 +39,10 @@ upstream's is, and how far each claim was verified).
   Evaluation Rules, Classification Process, Output Format) comes from binary
   extraction, tracked per release.
 
-## Contract gaps to close before Step 1
+## Contract gaps closed before Step 1
 
-These came out of the RED review. Each is a specification owed before code.
+These came out of the RED review. All four specifications were closed on
+2026-08-09 before implementation started.
 
 ### G1 — The verdict schema needs a discriminated shape (was F1)
 
@@ -62,18 +64,37 @@ upstream never did.** Upstream parses the category with
 required schema enum in a forced tool call is what converts an unrepresentable
 category into a validation failure, and thence into an unsafe allow.
 
-Owed: a discriminated verdict where allows carry no category, and blocks carry
-either a built-in id or a validated runtime reference to a settings-authored or
-ordinary deny rule. Two constraints follow from the root cause: the enum cannot
-be the only category channel, and **category validation must never gate the block
-decision** — an unnameable category degrades to a block with no category, never
-to an allow. "Unnameable block = no block" is a rule for the model to apply
-inside its reasoning, not a parser behaviour.
+**Specification (closed):**
 
-**Also missing, and not in the review:** cat-code's `autoMode` schema has
-`allow`, `soft_deny`, `environment`, and `deny` (ant-only back-compat). **There
-is no `hard_deny` key.** Porting upstream's hard tier requires adding it, and
-whatever G1 settles about category representation must cover it.
+- The tool input is a union discriminated by `shouldBlock`:
+  - allow: `{thinking, shouldBlock: false, reason}`; category is absent;
+  - block: `{thinking, shouldBlock: true, reason, category?}`.
+- A block category, when present, is one of:
+  - `{kind: "built_in", id: <one of the 66 vendored block ids>}`;
+  - `{kind: "configured", source, index}`, where `source` is
+    `autoMode.hard_deny`, `autoMode.soft_deny`, or `permissions.deny`, and
+    `index` is the zero-based label emitted beside that exact effective runtime
+    rule in the assembled prompt.
+- Parsing is deliberately two-layered. First parse only `thinking`,
+  `shouldBlock`, and `reason`. If that core says block, the decision is already
+  final. Parse and validate `category` separately for telemetry. Missing,
+  malformed, stale, or out-of-range category data is dropped and logged; it
+  never changes `shouldBlock: true`. A malformed core still fails closed.
+- The JSON tool schema mirrors the union with `oneOf`, but the runtime parser,
+  not provider-side schema enforcement, owns the safety property above.
+  Provider-side rejection or omission therefore cannot turn a block into an
+  allow.
+- `YoloClassifierResult.category` carries only a successfully validated
+  category. It is optional on the runtime result and is never consulted by the
+  permission decision.
+
+"Unnameable block = no block" remains model reasoning guidance only. It is not
+parser behaviour.
+
+Cat Code's `autoMode` schema gains `hard_deny`. It has the same trusted-source
+and `$defaults` splice semantics as the other lists. The ant-only `deny`
+back-compat alias continues to append to `soft_deny`; it is not a second hard
+tier.
 
 ### G2 — Model decoupling does not decouple the provider (was F2)
 
@@ -87,11 +108,62 @@ session/env provider." The classifier's `sideQueryOpts`
 `autoMode.model = sonnet` sends `sonnet` down the OpenAI path — the outage class
 delta 2 exists to end, unfixed.
 
-Owed, as an explicit table rather than prose: ordered `(provider, model)`
-attempts; provider selection across first-party, Bedrock, Vertex, Foundry;
-symmetric fallback conditions in both directions (Anthropic→GPT as well as
-GPT→Anthropic); settings and env precedence; how retries are accounted across
-hops; and which errors are terminal.
+`sideQuery` already has a committed `provider?: APIProvider` override
+(`src/utils/sideQuery.ts:66-76`); the missing seam is classifier use of it, not
+a shared-API change.
+
+**Specification (closed):**
+
+Configuration precedence:
+
+1. `CLAUDE_CODE_AUTO_MODE_MODEL`, for every user type;
+2. trusted merged `autoMode.model`, in source order user → local → flag →
+   policy, with the last defined value winning;
+3. the Sonnet alias `sonnet`.
+
+`projectSettings` remains excluded. A `gpt-*` configured model selects OpenAI.
+Every other model id selects the configured Anthropic-side provider:
+`CLAUDE_CODE_USE_BEDROCK` → Bedrock, then `CLAUDE_CODE_USE_VERTEX` → Vertex,
+then `CLAUDE_CODE_USE_FOUNDRY` → Foundry, otherwise first-party. Persisted
+startup preference and the main-loop/session provider do not select the
+classifier's primary provider.
+
+The ordered attempts are:
+
+| Configured classifier family | Anthropic-side provider | Ordered `(provider, model)` attempts |
+|---|---|---|
+| Claude/custom | first-party | `(firstParty, configured)`, `(openai, gpt-5.6-sol)`, `(openai, gpt-5.6-terra)`, `(openai, gpt-5.6-luna)` |
+| Claude/custom | Bedrock | `(bedrock, configured)`, then the same three OpenAI attempts |
+| Claude/custom | Vertex | `(vertex, configured)`, then the same three OpenAI attempts |
+| Claude/custom | Foundry | `(foundry, configured)`, then the same three OpenAI attempts |
+| GPT | any | `(openai, configured)`, continue at the next untried member of Sol → Terra → Luna, then `(<configured Anthropic-side provider>, sonnet)` |
+
+For a configured GPT model outside Sol/Terra/Luna, the OpenAI portion is that
+model followed by Sol, Terra, Luna. Duplicate `(provider, model)` pairs are
+removed while preserving order. There is no automatic hopping among
+first-party, Bedrock, Vertex, and Foundry: only the configured Anthropic-side
+provider is known to have credentials and compatible model ids.
+
+Fallback is symmetric across the OpenAI/Anthropic boundary for provider
+unavailability: connection and timeout failures; HTTP 408, 429, 500, 502, 503,
+504, and 529; explicit overload/capacity/model-unavailable responses; and
+provider-local account-pool exhaustion or authentication failure. An auth or
+account failure advances to the other provider family but is not retried on
+another model in the same failed family.
+
+Terminal without another attempt: caller abort; prompt-too-long; invalid request
+or unsupported tool/schema response (HTTP 400/404/405/409/413/422 except an
+explicit model-unavailable signal); policy/permission rejection (403); and a
+classifier response that reached the API but failed the verdict contract.
+Exhausting the ladder returns `unavailable: true` and fails closed, preserving
+the final error plus all attempted `(provider, model)` pairs in diagnostics.
+
+`autoMode.maxRetries` is an integer setting with upstream's compiled default
+`4`. It is a **global additional-attempt budget**, not a per-hop SDK budget:
+the first request plus at most four subsequent ladder entries. Classifier calls
+set `sideQuery.maxRetries` to `0`, so hidden SDK retries cannot multiply the
+cross-provider budget. Every network request consumes one attempt. Parse
+failures do not retry. Telemetry records provider and model for every attempt.
 
 ### G3 — The ordinary deny-rule seam was dropped from the port (was F3)
 
@@ -110,22 +182,55 @@ Failure this permits: an operator denies an action for one tool; the direct call
 is still blocked by the permission system, but auto mode approves the equivalent
 Bash or scripting route because the classifier was never told the rule exists.
 
-Owed: source-to-slot mapping, precedence, escaping, a category representation
-consistent with G1, and tests that specifically exercise alternate-tool
-circumvention.
+**Specification (closed):**
+
+- Source: call `loadAllPermissionRulesFromDisk()` and retain effective
+  `ruleBehavior === "deny"` rules. This preserves its managed-only behaviour;
+  otherwise it includes all enabled sources. Denies are additive, so there is
+  no winner among sources and no lower-precedence deny can weaken another.
+- Canonicalize each entry with `permissionRuleValueToString`, deduplicate exact
+  canonical strings in first-seen order, then assign zero-based
+  `permissions.deny` indices. Category references use those emitted indices.
+- Slot: add one separate cached user message after the optional CLAUDE.md
+  message and before transcript/action content. Its exact wrapper is
+  `<settings_deny_rules>...</settings_deny_rules>`. It says the entries are
+  operator deny-rule data, not instructions; a direct permission match is
+  already enforced elsewhere; and this classifier must block attempts to
+  achieve the same denied effect through another tool or indirection. This is
+  not inserted into either module-1 slot.
+- Encode each rule as a JSON string on its own labelled line inside the wrapper,
+  for example `[permissions.deny:0] "Bash(git push:*)"`. JSON string encoding
+  prevents quotes, newlines, and tag text inside a rule from escaping its data
+  line. The wrapper's instruction fixes the semantic role of all enclosed text.
+- If there are no effective deny rules, omit the message. Because the content is
+  settings-stable, use the same cache-control treatment as the CLAUDE.md prefix.
+- A matched circumvention reports the configured category reference from G1.
+  Failure to return or validate that reference cannot clear the block.
+
+Tests cover: omission when empty; enabled-source and managed-only loading;
+canonicalization/deduplication; hostile quotes/newlines/tag text remaining data;
+and at least `Write` denied directly but attempted via Bash redirection, plus
+`Bash` denied directly but attempted through a scripting tool. The live-path
+test asserts the deny message precedes the action and the classifier's block
+survives a missing or malformed category.
 
 ### G4 — Delete the settings for architecture we are not shipping (was F5, residual)
 
-Delta 6 as originally written added stage-mode and severity-threshold settings
-while delta 8 defers the two-stage architecture. Settings for an unimplemented
-feature are dead config that later reads as capability. Ship retry counts only;
-add stage and severity settings with the architecture, not before.
+**Specification (closed):** the shipped settings surface is exactly
+`autoMode.model`, `autoMode.maxRetries`, `allow`, `soft_deny`, `hard_deny`, and
+`environment` (plus the ant-only `deny` alias). Do not add `twoStageClassifier`,
+`stage`, `t1`, `t2`, `severity`, or severity-threshold aliases to schemas,
+generated settings, environment handling, telemetry configuration, or tests.
+The existing stage/severity telemetry fields in `YoloClassifierResult` are
+runtime compatibility residue, not settings and not capability claims; this
+port neither reads nor writes them. Add those settings only in the future change
+that implements the two-stage architecture.
 
 ## Delta list (exhaustive)
 
 1. **Output contract.** Replace upstream's XML verdict with the fork's
    schema-backed forced tool call. The fork already uses one — see amendment F —
-   so this is an extension, not new machinery. Shape is owed by **G1**: a
+   so this is an extension, not new machinery. Shape is specified by **G1**: a
    discriminated verdict, not a flat 66-value enum. Note that G1 **withdraws**
    this delta's original rationale of enforcing "unnameable block = no block" at
    the API layer — upstream's own parser proves that is the wrong layer, and
@@ -134,7 +239,7 @@ add stage and severity settings with the architecture, not before.
 2. **Classifier model and provider.** New `autoMode.model` settings key;
    `CLAUDE_CODE_AUTO_MODE_MODEL` honoured for all user types (closes B2).
    Sonnet-class default. Keep the Sol → Terra → Luna chain
-   (`yoloClassifier.ts:629-639`). The cross-provider behaviour is owed by **G2**
+   (`yoloClassifier.ts:629-639`). The cross-provider behaviour is specified by **G2**
    and is the substance of this delta, not a rider on it.
 3. **Thinking/effort plumbing.** Keep `getClassifierThinkingConfig`
    (`yoloClassifier.ts:610`), extend for GPT-family effort. Upstream never runs
@@ -154,7 +259,7 @@ add stage and severity settings with the architecture, not before.
    default, no GrowthBook dependency. Stage mode and severity thresholds are
    **not** included; see G4.
 7. **Ordinary deny-rule injection.** Port upstream's `<settings_deny_rules>`
-   seam. Specification owed by **G3**. New delta, added by the review.
+   seam. Specification is closed in **G3**. New delta, added by the review.
 8. **Meta-injection staged by census value** — outcome codes first (addresses the
    repeat denials; carries "unavailable is NOT a policy decision"), then
    `gitStatus`, then `repoVisibility`. Each behind its own flag, each with a
@@ -272,7 +377,7 @@ reconstructed from JSONL. Size the harness against this path first.
 
 ## Sequencing and gates
 
-**Step 0 — specifications.** Close G1, G2, G3, G4. No code.
+**Step 0 — specifications: complete.** G1, G2, G3, and G4 are closed above.
 ~~Map the two unmapped injection slots~~ — **done**, see amendment B: module 1
 has one slot to fill, one that ships empty, and one wrapper that takes no input.
 No unknown inputs remain.
