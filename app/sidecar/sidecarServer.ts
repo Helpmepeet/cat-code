@@ -807,7 +807,7 @@ export class SidecarServer {
       if (!this.checkRate(connection)) {
         this.sendError(
           connection,
-          undefined,
+          requestIdForRejectedFrame(result.payload),
           'bad_request',
           'rate limit exceeded',
           true,
@@ -854,6 +854,11 @@ export class SidecarServer {
    * --------------------------------------------------------------------- */
 
   private handleFrame(connection: Connection, payload: unknown): void {
+    // A renderer-minted request id is safe to echo back on a boundary refusal,
+    // but only when it is already a bounded string. It never authorizes work;
+    // it lets the renderer retire the pending click instead of leaving it stuck.
+    const requestId = requestIdForRejectedFrame(payload)
+
     // Envelope check: protocol version + session addressing.
     if (
       typeof payload !== 'object' ||
@@ -862,7 +867,7 @@ export class SidecarServer {
     ) {
       this.sendError(
         connection,
-        undefined,
+        requestId,
         'bad_request',
         'missing or wrong protocolVersion',
         false,
@@ -876,7 +881,7 @@ export class SidecarServer {
       // routing bug or a forged frame. Reject rather than act on it.
       this.sendError(
         connection,
-        undefined,
+        requestId,
         'bad_request',
         'sessionId does not address this sidecar',
         false,
@@ -892,7 +897,7 @@ export class SidecarServer {
     const strictError = checkStrictKeys(frame.message)
     if (strictError) {
       this.log(`[sidecar] rejected frame with unexpected keys: ${strictError}`)
-      this.sendError(connection, undefined, 'bad_request', strictError, false)
+      this.sendError(connection, requestId, 'bad_request', strictError, false)
       return
     }
 
@@ -3454,6 +3459,24 @@ export class SidecarServer {
     connection.rateCount += 1
     return connection.rateCount <= MAX_FRAMES_PER_WINDOW
   }
+}
+
+/**
+ * Extract only the fixed-position correlation value from an otherwise rejected
+ * frame. This deliberately precedes schema validation, so malformed verbs can
+ * still settle their renderer-side pending state without trusting any action
+ * field they carry.
+ */
+function requestIdForRejectedFrame(payload: unknown): string | undefined {
+  if (typeof payload !== 'object' || payload === null) return undefined
+  const message = (payload as { message?: unknown }).message
+  if (typeof message !== 'object' || message === null) return undefined
+  const requestId = (message as { requestId?: unknown }).requestId
+  return typeof requestId === 'string' &&
+    requestId.length > 0 &&
+    requestId.length <= MAX_TEXT_FIELD_CHARS
+    ? requestId
+    : undefined
 }
 
 /**

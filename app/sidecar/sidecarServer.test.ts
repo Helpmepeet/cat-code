@@ -31,6 +31,7 @@ import {
 import { FrameDecoder, encodeFrame } from '../shared/framing.js'
 import {
   MAX_FRAME_BYTES,
+  MAX_FRAMES_PER_WINDOW,
   MAX_OUTBOUND_FRAME_BYTES,
   MAX_PROMPT_BYTES,
   MAX_QUEUED_PROMPTS,
@@ -289,30 +290,52 @@ test('on attach, the server sends the canonical controller-derived app.ready pay
   })
 })
 
-test('rejects a frame with the wrong protocolVersion', () => {
+test('rejects a frame with the wrong protocolVersion and echoes its bounded request id', () => {
   const server = makeServer(new AppSessionController(probeAdapter()))
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
-  server.handleData(conn, encodeFrame({ protocolVersion: 999, sessionId: SESSION, message: { type: 'app.ping', nonce: 'x' } }))
+  server.handleData(conn, encodeFrame({ protocolVersion: 999, sessionId: SESSION, message: { type: 'app.submit', requestId: 'wrong-version', prompt: 'x' } }))
   const err = received.find(f => f.kind === 'error')
   expect(err?.kind).toBe('error')
+  if (err?.kind === 'error') expect(err.requestId).toBe('wrong-version')
 })
 
-test('rejects a frame addressed to a different sessionId', () => {
+test('rejects a frame addressed to a different sessionId and echoes its bounded request id', () => {
   const server = makeServer(new AppSessionController(probeAdapter()))
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
-  server.handleData(conn, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId: 'other', message: { type: 'app.ping', nonce: 'x' } }))
+  server.handleData(conn, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId: 'other', message: { type: 'app.submit', requestId: 'wrong-session', prompt: 'x' } }))
   const err = received.find(f => f.kind === 'error' && f.message.includes('sessionId'))
   expect(err).toBeDefined()
+  if (err?.kind === 'error') expect(err.requestId).toBe('wrong-session')
 })
 
-test('rejects an unallowlisted message type', () => {
+test('rejects an unallowlisted message type and echoes its bounded request id', () => {
   const server = makeServer(new AppSessionController(probeAdapter()))
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
-  server.handleData(conn, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId: SESSION, message: { type: 'run-command', command: 'rm -rf /' } }))
-  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  server.handleData(conn, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId: SESSION, message: { type: 'run-command', requestId: 'unknown-verb', command: 'rm -rf /' } }))
+  const error = received.find(f => f.kind === 'error' && f.code === 'bad_request')
+  expect(error?.kind).toBe('error')
+  if (error?.kind === 'error') expect(error.requestId).toBe('unknown-verb')
+})
+
+test('rate-limit rejection echoes the rejected verb request id', () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  for (let i = 0; i < MAX_FRAMES_PER_WINDOW; i++) {
+    server.handleData(conn, clientFrame({ type: 'app.ping', nonce: `n-${i}` }))
+  }
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'rate-limited', prompt: 'x' }),
+  )
+  const error = received.find(
+    frame => frame.kind === 'error' && frame.message === 'rate limit exceeded',
+  )
+  expect(error?.kind).toBe('error')
+  if (error?.kind === 'error') expect(error.requestId).toBe('rate-limited')
 })
 
 test('app.ping is answered with a pong', () => {
