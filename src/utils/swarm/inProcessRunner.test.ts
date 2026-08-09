@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 
 import type { AppState } from '../../state/AppState.js'
 import type { TeammateIdentity } from '../../tasks/InProcessTeammateTask/types.js'
@@ -8,8 +8,18 @@ import { RESUME_AGENT_TOOL_NAME } from '../../tools/ResumeAgentTool/constants.js
 import { SEND_MESSAGE_TOOL_NAME } from '../../tools/SendMessageTool/constants.js'
 import { TEAM_LEAD_NAME } from './constants.js'
 import type { TeamFile } from './teamHelpers.js'
-import { _forTest, waitForNextPromptOrShutdownForTest } from './inProcessRunner.js'
 import { createShutdownRequestMessage } from '../teammateMailbox.js'
+
+const actualPermissionSync = await import('./permissionSync.js')
+let mailboxRequestDelivered = false
+mock.module('./permissionSync.js', () => ({
+  ...actualPermissionSync,
+  sendPermissionRequestViaMailbox: async () => mailboxRequestDelivered,
+}))
+
+const { _forTest, waitForNextPromptOrShutdownForTest } = await import(
+  './inProcessRunner.js'
+)
 
 const identity: TeammateIdentity = {
   agentId: 'alice@review-team',
@@ -423,5 +433,77 @@ describe('resolveInProcessRuntime (via _forTest)', () => {
 
     expect(systemPrompt).toBe('You are a narrow reviewer teammate.')
     expect(called).toBe(false)
+  })
+})
+
+describe('in-process mailbox permission fallback', () => {
+  beforeEach(() => {
+    mailboxRequestDelivered = false
+  })
+
+  test('settles when the request cannot be delivered to the leader', async () => {
+    const canUseTool = _forTest.createInProcessCanUseTool(
+      identity,
+      new AbortController(),
+    )
+    const toolUseContext = {
+      getAppState: () => ({ toolPermissionContext: {} }),
+      options: {
+        isNonInteractiveSession: false,
+        tools: [],
+      },
+    } as unknown as ToolUseContext
+
+    const decision = await canUseTool(
+      {
+        name: 'Bash',
+        description: async () => 'Run pwd',
+      } as unknown as Tool,
+      { command: 'pwd' },
+      toolUseContext,
+      {} as never,
+      'tool-use-delivery-failure',
+      { behavior: 'ask' },
+    )
+
+    expect(decision).toEqual({
+      behavior: 'ask',
+      message: 'Permission request could not be delivered to the team leader.',
+    })
+  })
+
+  test('bounds a delivered request with no leader response', async () => {
+    mailboxRequestDelivered = true
+    const canUseTool = _forTest.createInProcessCanUseTool(
+      identity,
+      new AbortController(),
+      undefined,
+      0,
+    )
+    const toolUseContext = {
+      getAppState: () => ({ toolPermissionContext: {} }),
+      options: {
+        isNonInteractiveSession: false,
+        tools: [],
+      },
+    } as unknown as ToolUseContext
+
+    const decision = await canUseTool(
+      {
+        name: 'Bash',
+        description: async () => 'Run pwd',
+      } as unknown as Tool,
+      { command: 'pwd' },
+      toolUseContext,
+      {} as never,
+      'tool-use-response-timeout',
+      { behavior: 'ask' },
+    )
+
+    expect(decision).toEqual({
+      behavior: 'ask',
+      message:
+        'Timed out waiting for the team leader to respond to the permission request.',
+    })
   })
 })

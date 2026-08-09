@@ -127,6 +127,11 @@ import { TEAMMATE_SYSTEM_PROMPT_ADDENDUM } from './teammatePromptAddendum.js'
 type SetAppStateFn = (updater: (prev: AppState) => AppState) => void
 
 const PERMISSION_POLL_INTERVAL_MS = 500
+const PERMISSION_RESPONSE_TIMEOUT_MS = 60_000
+const PERMISSION_REQUEST_DELIVERY_FAILURE_MESSAGE =
+  'Permission request could not be delivered to the team leader.'
+const PERMISSION_RESPONSE_TIMEOUT_MESSAGE =
+  'Timed out waiting for the team leader to respond to the permission request.'
 const IDLE_POLL_INTERVAL_MS = 500
 const IDLE_POLL_MAX_INTERVAL_MS = 2000
 const IDLE_POLL_FAST_EMPTY_POLLS = 2
@@ -147,6 +152,7 @@ function createInProcessCanUseTool(
   identity: TeammateIdentity,
   abortController: AbortController,
   onPermissionWaitMs?: (waitMs: number) => void,
+  permissionResponseTimeoutMs = PERMISSION_RESPONSE_TIMEOUT_MS,
 ): CanUseToolFn {
   return async (
     tool,
@@ -353,6 +359,17 @@ function createInProcessCanUseTool(
 
     // Fallback: use mailbox system when leader UI queue is unavailable
     return new Promise<PermissionDecision>(resolve => {
+      let settled = false
+      let pollInterval: ReturnType<typeof setInterval> | undefined
+      let responseTimeout: ReturnType<typeof setTimeout> | undefined
+
+      const settle = (decision: PermissionDecision) => {
+        if (settled) return
+        settled = true
+        cleanup()
+        resolve(decision)
+      }
+
       const request = createPermissionRequest({
         toolName: (tool as Tool).name,
         toolUseId: toolUseID,
@@ -375,13 +392,13 @@ function createInProcessCanUseTool(
           _feedback?: string,
           contentBlocks?: ContentBlockParam[],
         ) {
-          cleanup()
+          if (settled) return
           persistPermissionUpdates(permissionUpdates)
           const finalInput =
             updatedInput && Object.keys(updatedInput).length > 0
               ? updatedInput
               : input
-          resolve({
+          settle({
             behavior: 'allow',
             updatedInput: finalInput,
             userModified: false,
@@ -389,78 +406,85 @@ function createInProcessCanUseTool(
           })
         },
         onReject(feedback?: string, contentBlocks?: ContentBlockParam[]) {
-          cleanup()
+          if (settled) return
           const message = feedback
             ? `${SUBAGENT_REJECT_MESSAGE_WITH_REASON_PREFIX}${feedback}`
             : SUBAGENT_REJECT_MESSAGE
-          resolve({ behavior: 'ask', message, contentBlocks })
+          settle({ behavior: 'ask', message, contentBlocks })
         },
       })
 
-      // Send request to leader's mailbox
-      void sendPermissionRequestViaMailbox(request)
-
       // Poll teammate's mailbox for the response
-      const pollInterval = setInterval(
-        async (abortController, cleanup, resolve, identity, request) => {
-          if (abortController.signal.aborted) {
-            cleanup()
-            resolve({ behavior: 'ask', message: SUBAGENT_REJECT_MESSAGE })
-            return
-          }
+      pollInterval = setInterval(async () => {
+        if (abortController.signal.aborted) {
+          settle({ behavior: 'ask', message: SUBAGENT_REJECT_MESSAGE })
+          return
+        }
 
-          const allMessages = await readMailbox(
-            identity.agentName,
-            identity.teamName,
-          )
-          for (let i = 0; i < allMessages.length; i++) {
-            const msg = allMessages[i]
-            if (msg && !msg.read) {
-              const parsed = isPermissionResponse(msg.text)
-              if (parsed && parsed.request_id === request.id) {
-                await markMessageAsReadByIndex(
-                  identity.agentName,
-                  identity.teamName,
-                  i,
-                )
-                if (parsed.subtype === 'success') {
-                  processMailboxPermissionResponse({
-                    requestId: parsed.request_id,
-                    decision: 'approved',
-                    updatedInput: parsed.response?.updated_input,
-                    permissionUpdates: parsed.response?.permission_updates,
-                  })
-                } else {
-                  processMailboxPermissionResponse({
-                    requestId: parsed.request_id,
-                    decision: 'rejected',
-                    feedback: parsed.error,
-                  })
-                }
-                return // Callback already resolves the promise
+        const allMessages = await readMailbox(
+          identity.agentName,
+          identity.teamName,
+        )
+        for (let i = 0; i < allMessages.length; i++) {
+          const msg = allMessages[i]
+          if (msg && !msg.read) {
+            const parsed = isPermissionResponse(msg.text)
+            if (parsed && parsed.request_id === request.id) {
+              await markMessageAsReadByIndex(
+                identity.agentName,
+                identity.teamName,
+                i,
+              )
+              if (parsed.subtype === 'success') {
+                processMailboxPermissionResponse({
+                  requestId: parsed.request_id,
+                  decision: 'approved',
+                  updatedInput: parsed.response?.updated_input,
+                  permissionUpdates: parsed.response?.permission_updates,
+                })
+              } else {
+                processMailboxPermissionResponse({
+                  requestId: parsed.request_id,
+                  decision: 'rejected',
+                  feedback: parsed.error,
+                })
               }
+              return // Callback already resolves the promise
             }
           }
-        },
-        PERMISSION_POLL_INTERVAL_MS,
-        abortController,
-        cleanup,
-        resolve,
-        identity,
-        request,
-      )
+        }
+      }, PERMISSION_POLL_INTERVAL_MS)
 
       const onAbortListener = () => {
-        cleanup()
-        resolve({ behavior: 'ask', message: SUBAGENT_REJECT_MESSAGE })
+        settle({ behavior: 'ask', message: SUBAGENT_REJECT_MESSAGE })
       }
 
       abortController.signal.addEventListener('abort', onAbortListener, {
         once: true,
       })
 
+      responseTimeout = setTimeout(() => {
+        settle({
+          behavior: 'ask',
+          message: PERMISSION_RESPONSE_TIMEOUT_MESSAGE,
+        })
+      }, permissionResponseTimeoutMs)
+      responseTimeout.unref?.()
+
+      // Start delivery only after polling and cancellation are armed. If the
+      // control write fails, there is no mailbox record or retry path, so end
+      // the permission wait immediately instead of polling indefinitely.
+      void sendPermissionRequestViaMailbox(request).then(sent => {
+        if (sent) return
+        settle({
+          behavior: 'ask',
+          message: PERMISSION_REQUEST_DELIVERY_FAILURE_MESSAGE,
+        })
+      })
+
       function cleanup() {
-        clearInterval(pollInterval)
+        if (pollInterval) clearInterval(pollInterval)
+        if (responseTimeout) clearTimeout(responseTimeout)
         unregisterPermissionCallback(request.id)
         abortController.signal.removeEventListener('abort', onAbortListener)
       }
@@ -1173,6 +1197,7 @@ async function resolveInProcessRuntime(
 
 /** Test-only seam. Do not widen — see resolveInProcessRuntime's doc comment. */
 export const _forTest = {
+  createInProcessCanUseTool,
   resolveInProcessRuntime,
 }
 

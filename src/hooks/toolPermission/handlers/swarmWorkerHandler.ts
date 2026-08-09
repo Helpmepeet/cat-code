@@ -81,6 +81,22 @@ async function handleSwarmWorkerPermission(
 
       // Register callback BEFORE sending the request to avoid race condition
       // where leader responds before callback is registered
+      const onAbort = () => {
+        if (!claim()) return
+        cleanup()
+        ctx.logCancelled()
+        resolveOnce(ctx.cancelAndAbort(undefined, true))
+      }
+
+      const cleanup = () => {
+        unregisterPermissionCallback(request.id)
+        clearPendingRequest()
+        ctx.toolUseContext.abortController.signal.removeEventListener(
+          'abort',
+          onAbort,
+        )
+      }
+
       registerPermissionCallback({
         requestId: request.id,
         toolUseId: ctx.toolUseID,
@@ -91,7 +107,7 @@ async function handleSwarmWorkerPermission(
           contentBlocks?: ContentBlockParam[],
         ) {
           if (!claim()) return // atomic check-and-mark before await
-          clearPendingRequest()
+          cleanup()
 
           // Merge the updated input with the original input
           const finalInput =
@@ -111,7 +127,7 @@ async function handleSwarmWorkerPermission(
         },
         onReject(feedback?: string, contentBlocks?: ContentBlockParam[]) {
           if (!claim()) return
-          clearPendingRequest()
+          cleanup()
 
           ctx.logDecision({
             decision: 'reject',
@@ -121,9 +137,6 @@ async function handleSwarmWorkerPermission(
           resolveOnce(ctx.cancelAndAbort(feedback, undefined, contentBlocks))
         },
       })
-
-      // Now that callback is registered, send the request to the leader
-      void sendPermissionRequestViaMailbox(request)
 
       // Show visual indicator that we're waiting for leader approval
       ctx.toolUseContext.setAppState(prev => ({
@@ -137,17 +150,22 @@ async function handleSwarmWorkerPermission(
 
       // If the abort signal fires while waiting for the leader response,
       // resolve the promise with a cancel decision so it does not hang.
-      ctx.toolUseContext.abortController.signal.addEventListener(
-        'abort',
-        () => {
-          if (!claim()) return
-          unregisterPermissionCallback(request.id)
-          clearPendingRequest()
-          ctx.logCancelled()
-          resolveOnce(ctx.cancelAndAbort(undefined, true))
-        },
-        { once: true },
-      )
+      ctx.toolUseContext.abortController.signal.addEventListener('abort', onAbort, {
+        once: true,
+      })
+
+      // Start delivery only after the callback, pending state, and abort path
+      // are armed. A failed write has no pending-control record to recover from,
+      // so resolve the tool call instead of leaving this worker waiting forever.
+      void sendPermissionRequestViaMailbox(request).then(sent => {
+        if (sent || !claim()) return
+        cleanup()
+        resolveOnce(
+          ctx.cancelAndAbort(
+            'Permission request could not be delivered to the team leader.',
+          ),
+        )
+      })
     })
 
     return decision
