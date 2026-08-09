@@ -296,7 +296,11 @@ that implements the two-stage architecture.
    and is the substance of this delta, not a rider on it.
 3. **Thinking/effort plumbing.** Keep `getClassifierThinkingConfig`
    (`yoloClassifier.ts:610`), extend for GPT-family effort. Upstream never runs
-   this prompt on GPT models; our fallback path will.
+   this prompt on GPT models; our fallback path will. **Closed 2026-08-10:**
+   GPT-family classifier fallback calls use fixed medium reasoning effort. This
+   is the safety fallback when Anthropic is unavailable, so minimum effort is
+   insufficient; it is deliberately not configurable because G4 does not add
+   an effort setting.
 4. **Config splice.** `$defaults` with upstream's exact semantics (closes B1),
    plus one fork-only guard: a loud startup warning when a config list omits
    `$defaults`. One operator, no review gate, one typo from silently deleting

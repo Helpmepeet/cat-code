@@ -59,6 +59,8 @@ export type SideQueryOptions = {
   temperature?: number
   /** Thinking budget (enables thinking), or `false` to send `{ type: 'disabled' }`. */
   thinking?: number | false
+  /** OpenAI reasoning effort for GPT-family requests. */
+  reasoningEffort?: 'medium'
   /** Stop sequences — generation stops when any of these strings is emitted */
   stop_sequences?: string[]
   /** Attributes this call in tengu_api_success for COGS joining against reporting.sampling_calls. */
@@ -131,6 +133,7 @@ export async function sideQuery(opts: SideQueryOptions): Promise<BetaMessage> {
     skipSystemPromptPrefix,
     temperature,
     thinking,
+    reasoningEffort,
     stop_sequences,
   } = opts
 
@@ -212,7 +215,12 @@ export async function sideQuery(opts: SideQueryOptions): Promise<BetaMessage> {
       ...openAIInstructionAssembly,
       ...(tools && { tools }),
       ...(tool_choice && { tool_choice }),
-      ...(output_format && { output_config: { format: output_format } }),
+      ...((output_format || reasoningEffort) && {
+        output_config: {
+          ...(output_format && { format: output_format }),
+          ...(reasoningEffort && { effort: reasoningEffort }),
+        },
+      }),
       ...(temperature !== undefined && { temperature }),
       ...(stop_sequences && { stop_sequences }),
       ...(thinkingConfig && { thinking: thinkingConfig }),

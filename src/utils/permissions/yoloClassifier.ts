@@ -24,7 +24,11 @@ import type {
   YoloClassifierResult,
 } from '../../types/permissions.js'
 import { isDebugMode, logForDebugging } from '../debug.js'
-import { isEnvDefinedFalsy, isEnvTruthy } from '../envUtils.js'
+import {
+  getClaudeConfigHomeDir,
+  isEnvDefinedFalsy,
+  isEnvTruthy,
+} from '../envUtils.js'
 import { errorMessage } from '../errors.js'
 import { lazySchema } from '../lazySchema.js'
 import { extractTextContent } from '../messages.js'
@@ -203,7 +207,7 @@ export function buildDefaultExternalSystemPrompt(): string {
 }
 
 function getAutoModeDumpDir(): string {
-  return join(getClaudeTempDir(), 'auto-mode')
+  return join(getClaudeConfigHomeDir(), 'auto-mode-captures')
 }
 
 /**
@@ -823,14 +827,15 @@ function combineUsage(a: ClassifierUsage, b: ClassifierUsage): ClassifierUsage {
  */
 function getClassifierThinkingConfig(
   model: string,
-): [false | undefined, number] {
+): [false | undefined, number, 'medium' | undefined] {
+  if (model.startsWith('gpt-')) return [false, 0, 'medium']
   if (
     process.env.USER_TYPE === 'ant' &&
     resolveAntModel(model)?.alwaysOnThinking
   ) {
-    return [undefined, 2048]
+    return [undefined, 2048, undefined]
   }
-  return [false, 0]
+  return [false, 0, undefined]
 }
 
 export function getClassifierFallbackModel(
@@ -1062,7 +1067,7 @@ export async function classifyYoloAction(
     attemptedAttempts.push(`${provider ?? 'default'}/${model}`)
     // The classifier uses a single schema-backed tool contract and does not
     // emit or parse XML.
-    const [disableThinking, thinkingPadding] =
+    const [disableThinking, thinkingPadding, reasoningEffort] =
       getClassifierThinkingConfig(model)
     try {
       const start = Date.now()
@@ -1080,6 +1085,7 @@ export async function classifyYoloAction(
         skipSystemPromptPrefix: true,
         temperature: 0,
         thinking: disableThinking,
+        ...(reasoningEffort && { reasoningEffort }),
         messages: [
           ...prefixMessages,
           { role: 'user' as const, content: userContentBlocks },
