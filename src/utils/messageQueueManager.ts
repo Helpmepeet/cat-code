@@ -19,6 +19,7 @@ import { objectGroupBy } from './objectGroupBy.js'
 import { recordQueueOperation } from './sessionStorage.js'
 import { createSignal } from './signal.js'
 import { taskNotificationOriginFromText } from './taskNotification.js'
+import { abandonForegroundDeferredAttempt } from '../services/deferredContinuationRunner.js'
 
 export type SetAppState = (f: (prev: AppState) => AppState) => void
 
@@ -376,7 +377,14 @@ export function clearCommandQueue(): void {
   if (commandQueue.length === 0) {
     return
   }
+  const discarded = [...commandQueue]
   commandQueue.length = 0
+  // A queued deferred continuation owns lock-held completion state. Dropping it
+  // without settling that registration leaves the session unable to submit any
+  // later prompt, so queue ownership must explicitly abandon it here.
+  for (const command of discarded) {
+    abandonForegroundDeferredAttempt(command.origin)
+  }
   notifySubscribers()
 }
 

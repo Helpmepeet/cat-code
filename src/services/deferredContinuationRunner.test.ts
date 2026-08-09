@@ -14,6 +14,7 @@ import {
   resetProjectForTesting,
 } from '../utils/sessionStorage.js'
 import { createUserMessage } from '../utils/messages.js'
+import { clearCommandQueue, enqueue } from '../utils/messageQueueManager.js'
 import {
   ACCOUNT_AVAILABLE_CONTINUATION,
   RESET_ELAPSED_CONTINUATION,
@@ -161,6 +162,19 @@ describe('deferred continuation runner', () => {
     // An abandoned attempt has no terminal evidence, so it must never become
     // auto-retryable: 'aborted' stops for attention.
     expect(settled).not.toMatchObject({ outcome: 'completed' })
+  })
+
+  test('clearing a queued deferred continuation settles its lock-held registration', async () => {
+    const registration = registerForegroundDeferredAttempt(submittedJob())
+    enqueue(registration.command)
+
+    clearCommandQueue()
+
+    expect(await registration.result).toEqual({
+      outcome: 'aborted',
+      observedAt: expect.any(Number),
+    })
+    expect(_forTest.registrationCount()).toBe(0)
   })
 
   test('post-turn result-entry persistence failure leaves the job submitted for reconciliation', async () => {

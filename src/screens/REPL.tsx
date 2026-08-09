@@ -3283,10 +3283,16 @@ export function REPL({
       // Extract and enqueue user message text, skipping meta messages
       // (e.g. expanded skill content, tick prompts) that should not be
       // replayed as user-visible text.
-      newMessages.filter((m): m is UserMessage => m.type === 'user' && !m.isMeta).map(_ => getContentText(_.message.content)).filter(_ => _ !== null).forEach((msg, i) => {
+      newMessages
+        .filter((m): m is UserMessage => m.type === 'user' && !m.isMeta)
+        .map(message => ({ message, text: getContentText(message.message.content) }))
+        .filter((entry): entry is { message: UserMessage; text: string } => entry.text !== null)
+        .forEach(({ message, text }, i) => {
         enqueue({
-          value: msg,
-          mode: 'prompt'
+          value: text,
+          mode: 'prompt',
+          uuid: message.uuid,
+          origin: message.origin,
         });
         if (i === 0) {
           logEvent('tengu_concurrent_onquery_enqueued', {});
