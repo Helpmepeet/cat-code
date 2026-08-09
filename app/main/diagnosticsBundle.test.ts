@@ -219,3 +219,28 @@ test('an ordinary launch is not reported as incomplete, and real loss is not mas
   }]
   expect(deriveRecordingCoverage(broken, [], 'L1').status).toBe('incomplete')
 })
+
+test('deliberate dedupe is not reported as lost evidence', () => {
+  // Main collapses duplicates inside one second; the sidecar drops records it
+  // cannot keep up with. Both used to emit log.suppressed with only a count, so
+  // one counter meant two opposite things and lossObserved was true in any
+  // ordinary run.
+  const base = [
+    { launchId: 'L1', timestamp: '2026-08-09T12:00:00.000Z', event: 'app.start', fields: {} },
+    { launchId: 'L1', timestamp: '2026-08-09T12:00:02.000Z', event: 'app.shutdown.completed', fields: {} },
+  ]
+  const deduped = deriveRecordingCoverage([...base, {
+    launchId: 'L1', timestamp: '2026-08-09T12:00:01.000Z', event: 'log.suppressed',
+    fields: { count: 5937, reason: 'rate_dedupe' },
+  }], [], 'L1')
+  expect(deduped.status).toBe('complete')
+  expect(deduped.lossObserved).toBe(false)
+  expect(deduped.operationalRecordsDeduped).toBe(5937)
+
+  const dropped = deriveRecordingCoverage([...base, {
+    launchId: 'L1', timestamp: '2026-08-09T12:00:01.000Z', event: 'log.suppressed',
+    fields: { count: 12, reason: 'queue_saturated' },
+  }], [], 'L1')
+  expect(dropped.status).toBe('loss_observed')
+  expect(dropped.operationalRecordsSuppressed).toBe(12)
+})

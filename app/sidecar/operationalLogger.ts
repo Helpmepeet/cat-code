@@ -98,7 +98,7 @@ export function createSidecarOperationalLogger({
     droppedRecords = 0
     reportingDrops = true
     try {
-      write({ level: 'warn', event: 'log.suppressed', fields: { count } })
+      write({ level: 'warn', event: 'log.suppressed', fields: { count, reason: 'queue_saturated' } })
     } finally {
       reportingDrops = false
     }

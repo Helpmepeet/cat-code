@@ -305,6 +305,7 @@ export function deriveRecordingCoverage(
     completed: boolean
   }>()
   let operationalRecordsSuppressed = 0
+  let operationalRecordsDeduped = 0
   let deliveryTraceRecordsLost = 0
   let incompleteStreamCount = 0
   let currentLaunchIncomplete = 0
@@ -328,7 +329,14 @@ export function deriveRecordingCoverage(
     }
     if (item.event === 'log.suppressed') {
       const fields = item.fields as Record<string, unknown>
-      if (typeof fields.count === 'number') operationalRecordsSuppressed += fields.count
+      // Two very different things used to share this counter: main deliberately
+      // collapsing duplicates inside one second, and the sidecar dropping records
+      // it could not keep up with. Only the second is evidence going missing, so
+      // only the second may decide `lossObserved`.
+      if (typeof fields.count === 'number') {
+        if (fields.reason === 'rate_dedupe') operationalRecordsDeduped += fields.count
+        else operationalRecordsSuppressed += fields.count
+      }
     }
     launches.set(item.launchId, launch)
   }
@@ -379,6 +387,7 @@ export function deriveRecordingCoverage(
     status,
     lossObserved: knownLoss,
     operationalRecordsSuppressed,
+    operationalRecordsDeduped,
     deliveryTraceRecordsLost,
     incompleteStreamCount,
     currentLaunchIncompleteCount: currentLaunchIncomplete,

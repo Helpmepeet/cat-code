@@ -126,7 +126,7 @@ export function createOperationalLogSink({
       suppressed = 0
       append(
         createOperationalRecord(
-          { level: 'warn', event: 'log.suppressed', process: 'main', fields: { count } },
+          { level: 'warn', event: 'log.suppressed', process: 'main', fields: { count, reason: 'rate_dedupe' } },
           { launchId, processInstanceId, now, processStartedAt },
         ),
         false,
