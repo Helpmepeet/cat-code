@@ -40,10 +40,21 @@ createRoot(root).render(
   </StrictMode>,
 )
 
+// Both handlers run only after something has already failed, so neither may
+// raise a second fault of its own: a throw here re-enters `error` and turns one
+// failure into a loop.
+function reportFault(kind: 'javascript' | 'promise', message: string): void {
+  try {
+    getBridge().reportRendererFault(kind, message)
+  } catch {
+    // Diagnostics only.
+  }
+}
+
 window.addEventListener('error', event => {
-  getBridge().reportRendererFault('javascript', event.message)
+  reportFault('javascript', event.message)
 })
 window.addEventListener('unhandledrejection', event => {
   const message = event.reason instanceof Error ? event.reason.message : String(event.reason)
-  getBridge().reportRendererFault('promise', message)
+  reportFault('promise', message)
 })

@@ -191,3 +191,35 @@ test('P4-35: the file sink carries no destination the renderer could author (HC1
   expect(save).toContain('sendGuard.assertAllowed')
   expect(save).toContain('MAX_SAVE_TEXT_BYTES')
 })
+
+test('failure-path senders keep the rate guard but never let its rejection escape', () => {
+  const source = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
+
+  // 2026-08-09 black window: both of these run when something has ALREADY gone
+  // wrong — the ack flush on a React effect stack, the fault reporter from
+  // `componentDidCatch` — and a throw from either unmounted the renderer. The
+  // guard must still run, so an over-budget payload is DROPPED rather than sent
+  // and T7's cap is unchanged; only the exception is contained.
+  for (const [open, close] of [
+    ['function flushDeliveryAcknowledgements(): void {', '\n}'],
+    ['reportRendererFault(kind, message): void {', '\n  },'],
+  ] as const) {
+    const start = source.indexOf(open)
+    expect(start).toBeGreaterThan(-1)
+    const body = source.slice(start, source.indexOf(close, start))
+    expect(body).toContain('sendGuard.assertAllowed')
+    expect(body.indexOf('try {')).toBeGreaterThan(-1)
+    expect(body.indexOf('try {')).toBeLessThan(body.indexOf('sendGuard.assertAllowed'))
+    expect(body).toContain('} catch {')
+  }
+})
+
+test('acknowledgement flushing batches across tasks rather than per delivered frame', () => {
+  const source = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
+
+  // A microtask drains at the end of the current task and each frame arrives in
+  // its own task, so `queueMicrotask` coalesced nothing in steady state: one
+  // frame cost one guarded send against the budget real user actions draw on.
+  expect(source).not.toContain('queueMicrotask(flushDeliveryAcknowledgements)')
+  expect(source).toContain('setTimeout(flushDeliveryAcknowledgements, DELIVERY_ACK_FLUSH_MS)')
+})

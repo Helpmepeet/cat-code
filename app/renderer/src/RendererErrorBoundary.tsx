@@ -14,7 +14,16 @@ export class RendererErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, _info: ErrorInfo): void {
-    getBridge().reportRendererFault('component', error.message)
+    // Reporting must never be able to fail the boundary itself: React treats an
+    // error thrown from this lifecycle as unhandled, discards the fallback
+    // below, and unmounts the whole tree. The preload already swallows a
+    // rate-rejected report, so this covers the remaining case where the bridge
+    // is absent entirely.
+    try {
+      getBridge().reportRendererFault('component', error.message)
+    } catch {
+      // A boundary that cannot report is still a boundary.
+    }
   }
 
   render(): ReactNode {

@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSidecarOperationalLogger } from './operationalLogger.js'
+import { parseOperationalRecord } from '../shared/operationalLog.js'
 
 test('sidecar operational descriptor persists only a legacy category, never the raw stderr line', async () => {
   const root = mkdtempSync(join(tmpdir(), 'cat-code-sidecar-operational-'))
@@ -19,6 +20,42 @@ test('sidecar operational descriptor persists only a legacy category, never the 
   expect(text).not.toContain('secret transcript text')
   expect(text).toContain('legacy_failure')
   expect(text).toContain('uncaught_failure')
+})
+
+test('every sidecar record carries the session id the supervisor matches on', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-sidecar-operational-session-'))
+  const path = join(root, 'records.jsonl')
+  const fd = openSync(path, 'w', 0o600)
+  const appSessionId = '000638f7-9f2c-4527-9828-f7ecb082c938'
+  const logger = createSidecarOperationalLogger({
+    launchId: 'launch', processInstanceId: 'sidecar', fd, appSessionId,
+  })
+
+  // The two paths that never stamped a session id: the legacy diagnostic stream
+  // and the drop counter. The supervisor requires an exact match, so both were
+  // discarded at that boundary as "invalid" — including, worst of all, the
+  // record whose only job is to report that records are being dropped.
+  logger.legacy('engine failed while rendering prompt')
+  logger.write({ level: 'warn', event: 'log.suppressed', fields: { count: 3 } })
+  // An explicit id still wins, so a record about another session cannot be
+  // relabelled as this one.
+  logger.write({
+    level: 'info', event: 'process.started', appSessionId: 'other-session',
+    fields: { role: 'sidecar', pid: 1 },
+  })
+  await new Promise(resolve => setImmediate(resolve))
+  closeSync(fd)
+
+  const lines = readFileSync(path, 'utf8').trim().split('\n').map(line => JSON.parse(line))
+  expect(lines.length).toBe(3)
+  for (const line of lines.slice(0, 2)) {
+    const parsed = parseOperationalRecord(line)
+    expect(parsed).not.toBeNull()
+    // The three conditions `app/supervisor/supervisor.ts` rejects on.
+    expect(parsed!.process).toBe('sidecar')
+    expect(parsed!.appSessionId).toBe(appSessionId)
+  }
+  expect(parseOperationalRecord(lines[2])!.appSessionId).toBe('other-session')
 })
 
 test('a saturated sidecar descriptor queue accounts for what it dropped', () => {

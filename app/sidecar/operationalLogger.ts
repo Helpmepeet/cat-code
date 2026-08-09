@@ -23,10 +23,19 @@ export function createSidecarOperationalLogger({
   launchId = process.env.CATCODE_OPERATIONAL_LAUNCH_ID,
   fd = Number(process.env.CATCODE_OPERATIONAL_FD),
   processInstanceId = randomUUID(),
+  appSessionId,
 }: {
   launchId?: string
   fd?: number
   processInstanceId?: string
+  /**
+   * Stamped on every record that does not carry its own. The supervisor accepts
+   * a sidecar record only when `appSessionId` matches the session it spawned
+   * (`app/supervisor/supervisor.ts`), so a record without one is discarded at
+   * that boundary — which silently ate both the `legacy` stream and the
+   * `log.suppressed` counter that reports the dropping.
+   */
+  appSessionId?: string
 } = {}): SidecarOperationalLogger {
   const writable = typeof launchId === 'string' && launchId.length > 0 && Number.isInteger(fd) && fd >= 3
   const processStartedAt = new Date().toISOString()
@@ -98,7 +107,13 @@ export function createSidecarOperationalLogger({
     if (!writable) return
     try {
       const record = createOperationalRecord(
-        { ...input, process: 'sidecar' },
+        {
+          ...input,
+          process: 'sidecar',
+          ...(input.appSessionId ?? appSessionId
+            ? { appSessionId: input.appSessionId ?? appSessionId }
+            : {}),
+        },
         { launchId: launchId as string, processInstanceId, processStartedAt },
       )
       const line = `${JSON.stringify(record)}\n`

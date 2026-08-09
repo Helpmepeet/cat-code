@@ -159,7 +159,7 @@ function parseArgs(): SidecarArgs {
 
 async function main(): Promise<void> {
   const args = parseArgs()
-  const operational = createSidecarOperationalLogger()
+  const operational = createSidecarOperationalLogger({ appSessionId: args.sessionId })
   activeOperationalLogger = operational
   activeAppSessionId = args.sessionId
   operational.write({

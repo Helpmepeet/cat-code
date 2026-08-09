@@ -85,6 +85,14 @@ const deliveryWatermarks = new Map<string, { received: number; applied: number; 
 const pendingDeliveryAcknowledgements: DeliveryAcknowledgement[] = []
 let deliveryAcknowledgementFlushScheduled = false
 const MAX_DELIVERY_ACKS_PER_BATCH = 64
+/**
+ * A microtask drains at the end of the CURRENT task, and each delivered frame
+ * arrives in its own task, so a microtask flush coalesced nothing in steady
+ * state: one frame cost one guarded send. A short timer batches across tasks,
+ * which is what keeps diagnostics from spending the shared inbound budget
+ * (`MAX_FRAMES_PER_WINDOW`) that real user actions draw on.
+ */
+const DELIVERY_ACK_FLUSH_MS = 50
 let rendererFaultWindowStartedAt = Date.now()
 let rendererFaultCount = 0
 const MAX_RENDERER_FAULTS_PER_MINUTE = 12
@@ -135,7 +143,7 @@ function sendDeliveryAcknowledgement(
     flushDeliveryAcknowledgements()
   } else if (!deliveryAcknowledgementFlushScheduled) {
     deliveryAcknowledgementFlushScheduled = true
-    queueMicrotask(flushDeliveryAcknowledgements)
+    setTimeout(flushDeliveryAcknowledgements, DELIVERY_ACK_FLUSH_MS)
   }
   const current = deliveryWatermarks.get(sessionId) ?? { received: 0, applied: 0, committed: 0 }
   if (stage === 'preload.received' || stage === 'renderer.subscription.received') current.received = Math.max(current.received, sequence)
@@ -149,8 +157,21 @@ function flushDeliveryAcknowledgements(): void {
   while (pendingDeliveryAcknowledgements.length > 0) {
     const acknowledgements = pendingDeliveryAcknowledgements.splice(0, MAX_DELIVERY_ACKS_PER_BATCH)
     const payload = { acknowledgements }
-    sendGuard.assertAllowed(payload)
-    ipcRenderer.send(CH_DELIVERY_ACK, payload)
+    // These are diagnostics. The guard still rejects the batch when the shared
+    // inbound budget is spent — dropping it is strictly more restrictive than
+    // sending, so T7's cap is unchanged — but the rejection must not escape:
+    // this runs on a React effect stack whenever the 64-item branch above fires
+    // synchronously, and an exception there reaches the error boundary, whose
+    // own reporter is blocked by the same spent budget. That pair unmounted the
+    // renderer to a black window on 2026-08-09. The trace sink already accounts
+    // for missing stage records, so a dropped batch degrades evidence, not the
+    // session.
+    try {
+      sendGuard.assertAllowed(payload)
+      ipcRenderer.send(CH_DELIVERY_ACK, payload)
+    } catch {
+      return
+    }
   }
 }
 
@@ -358,8 +379,19 @@ const bridge: CatCodeBridge = {
   reportRendererFault(kind, message): void {
     if (!canReportRendererFault()) return
     const payload = { kind, message: message.slice(0, 512) }
-    sendGuard.assertAllowed(payload)
-    ipcRenderer.send(CH_RENDERER_FAULT, payload)
+    // The fault reporter runs from `componentDidCatch` and from the global
+    // error handlers, i.e. only ever while something has already failed. It
+    // shares the one inbound budget with every other channel, so the very
+    // condition worth reporting (a flood that spent the budget) is the
+    // condition under which the guard rejects this report. Throwing here
+    // escalated a caught error into a full React unmount. Losing the report is
+    // the acceptable failure; losing the window is not.
+    try {
+      sendGuard.assertAllowed(payload)
+      ipcRenderer.send(CH_RENDERER_FAULT, payload)
+    } catch {
+      // Diagnostics only. Never surfaces to the caller.
+    }
   },
   openLogsFolder(): void {
     sendGuard.assertAllowed({ openLogs: true })
