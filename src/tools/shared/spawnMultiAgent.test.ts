@@ -14,7 +14,11 @@ let nextSpawnResult: {
   agentId: string
   taskId?: string
   error?: string
+  teammateContext?: { parentSessionId: string }
+  abortController?: AbortController
 } = { success: true, agentId: 'unused@unused', taskId: 'task-1' }
+
+let startError: Error | null = null
 
 const realSpawnInProcess = await import('../../utils/swarm/spawnInProcess.js')
 mock.module('../../utils/swarm/spawnInProcess.js', () => ({
@@ -25,7 +29,9 @@ mock.module('../../utils/swarm/spawnInProcess.js', () => ({
 const realInProcessRunner = await import('../../utils/swarm/inProcessRunner.js')
 mock.module('../../utils/swarm/inProcessRunner.js', () => ({
   ...realInProcessRunner,
-  startInProcessTeammate: () => {},
+  startInProcessTeammate: () => {
+    if (startError) throw startError
+  },
 }))
 
 const { spawnTeammate } = await import('./spawnMultiAgent.js')
@@ -40,6 +46,7 @@ describe('spawnTeammate allocation lifecycle', () => {
     tempDir = mkdtempSync(join(tmpdir(), 'spawn-multi-agent-'))
     process.env.CLAUDE_CONFIG_DIR = tempDir
     nextSpawnResult = { success: true, agentId: 'unused@unused', taskId: 'task-1' }
+    startError = null
   })
 
   afterEach(() => {
@@ -144,5 +151,47 @@ describe('spawnTeammate allocation lifecycle', () => {
     )
     expect(record?.status).toBe('terminated')
     expect(snapshot.members).toHaveLength(0)
+  })
+
+  test('aborts an already-launched in-process teammate when setup fails afterwards', async () => {
+    await seedTeam('review-team')
+    const allocation = await allocateTeamRecipient({
+      teamName: 'review-team',
+      requestedName: 'researcher',
+      kind: 'teammate',
+      conflict: 'error',
+      forbiddenKeys: new Set(),
+      sessionId: 'session-1',
+    })
+    const abortController = new AbortController()
+    nextSpawnResult = {
+      success: true,
+      agentId: 'researcher@review-team',
+      taskId: 'task-after-launch',
+      teammateContext: { parentSessionId: 'session-1' },
+      abortController,
+    }
+    startError = new Error('post-launch setup failed')
+
+    const { context } = makeContext()
+    await expect(
+      spawnTeammate(
+        {
+          name: allocation.name,
+          prompt: 'do the thing',
+          team_name: 'review-team',
+          allocationId: allocation.allocationId,
+        },
+        context,
+      ),
+    ).rejects.toThrow('post-launch setup failed')
+
+    expect(abortController.signal.aborted).toBe(true)
+    const snapshot = await readTeamSnapshot('review-team')
+    expect(
+      snapshot.recipientRecords!.find(
+        record => record.allocationId === allocation.allocationId,
+      )?.status,
+    ).toBe('terminated')
   })
 })

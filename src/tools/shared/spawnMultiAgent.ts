@@ -47,6 +47,7 @@ import { It2SetupPrompt } from '../../utils/swarm/It2SetupPrompt.js'
 import { startInProcessTeammate } from '../../utils/swarm/inProcessRunner.js'
 import {
   type InProcessSpawnConfig,
+  killInProcessTeammate,
   spawnInProcessTeammate,
 } from '../../utils/swarm/spawnInProcess.js'
 import { buildInheritedEnvVars } from '../../utils/swarm/spawnUtils.js'
@@ -312,6 +313,9 @@ async function handleSpawnSplitPane(
     to: 'starting',
   })
 
+  let launchedPane:
+    | { paneId: string; backendType: BackendType; insideTmux: boolean }
+    | undefined
   try {
     // Detect the appropriate backend and check if setup is needed
     let detectionResult = await detectAndGetBackend()
@@ -366,6 +370,11 @@ async function handleSpawnSplitPane(
       sanitizedName,
       teammateColor,
     )
+    launchedPane = {
+      paneId,
+      backendType: detectionResult.backend.type,
+      insideTmux,
+    }
 
     // Enable pane border status on first teammate when inside tmux
     // (outside tmux, this is handled in createTeammatePaneInSwarmView)
@@ -514,6 +523,18 @@ async function handleSpawnSplitPane(
       },
     }
   } catch (error) {
+    if (launchedPane && isPaneBackend(launchedPane.backendType)) {
+      try {
+        await getBackendByType(launchedPane.backendType).killPane(
+          launchedPane.paneId,
+          !launchedPane.insideTmux,
+        )
+      } catch (cleanupError) {
+        logForDebugging(
+          `[handleSpawnSplitPane] Failed to clean up pane ${launchedPane.paneId}: ${errorMessage(cleanupError)}`,
+        )
+      }
+    }
     await tombstoneFailedRecipient(teamName, allocationId)
     throw error
   }
@@ -867,6 +888,9 @@ async function handleSpawnInProcess(
     // backendType is known immediately for in-process teammates.
   })
 
+  let spawnedTask:
+    | { taskId: string | undefined; abortController: AbortController | undefined }
+    | undefined
   try {
     // Assign a unique color to this teammate
     const teammateColor = assignTeammateColor(teammateId)
@@ -898,6 +922,10 @@ async function handleSpawnInProcess(
 
     if (!result.success) {
       throw new Error(result.error ?? 'Failed to spawn in-process teammate')
+    }
+    spawnedTask = {
+      taskId: result.taskId,
+      abortController: result.abortController,
     }
 
     // Debug: log what spawn returned
@@ -1028,6 +1056,18 @@ async function handleSpawnInProcess(
       },
     }
   } catch (error) {
+    if (spawnedTask?.taskId) {
+      try {
+        killInProcessTeammate(spawnedTask.taskId, setAppState)
+      } catch (cleanupError) {
+        logForDebugging(
+          `[handleSpawnInProcess] Failed to clean up task ${spawnedTask.taskId}: ${errorMessage(cleanupError)}`,
+        )
+      }
+    }
+    // A partial spawn may have registered an abort controller before it has a
+    // task visible to killInProcessTeammate. Always stop that execution too.
+    spawnedTask?.abortController?.abort()
     await tombstoneFailedRecipient(teamName, allocationId)
     throw error
   }
