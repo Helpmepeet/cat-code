@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 77/242** — counted against the review's original 61 High and
+**Progress: Fix 78/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -81,6 +81,7 @@ count tracks individually verified findings, not commit count.
 | A18 MED Agents/Memory duplicated `PathCopyButton`, and Agents/Sessions duplicated `EmptyState` | fixed | `ea7cc43`, `b9540f5` | both pairs now use shared controls while Sessions retains its page-specific message selection; affected renderer suites (45 pass); renderer typecheck and production build; GUI fidelity remains operator-verifiable |
 | A20 MED `scripts/preview-transcript.tsx` was outside every TypeScript program | fixed | `a84b22a` | app tsconfig now includes script TSX files; app typecheck and explicit compiler file-list inclusion pass; renderer production build |
 | A20 MED hardening-harness success text implied coverage beyond its renderer/main-process checks | fixed | `9ef538a` | success and runner failure signals now name the renderer-document and main-policy scope; source regression (1 pass); app typecheck and renderer production build |
+| A20 MED `dev.ts` armed SIGINT/SIGTERM cleanup only after Vite readiness | fixed | `6883ce0` | shutdown is armed immediately after Vite spawn and tolerates absent Electron; dev-launcher suite (15 pass); app typecheck and renderer production build |
 
 ## Known verification limitation
 
