@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 55/242** — counted against the review's original 61 High and
+**Progress: Fix 57/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -59,6 +59,8 @@ count tracks individually verified findings, not commit count.
 | A13 HIGH trusted bypass launch capability overrode the engine's settings/managed bypass-disable policy | fixed | `c4a661a` | real settings-file plus trusted-launch regression; focused controller test passes; sidecar boundary suite security cases pass (212 pass, 3 pre-existing account-snapshot failures); renderer typecheck; Electron hardening not authorized |
 | V15 MED `MergedSessionRow.messageCount` carried dead renderer state | fixed | `a0fb195` | removed only the renderer projection while retaining the wire catalog field; affected renderer suites (279 pass); renderer typecheck and production build |
 | A19 MED PermissionPrompt keyboard actions could target an unseen cursor row | fixed | `60a311c` | listener/cursor-state alignment regression (34 pass); renderer typecheck and production build; GUI behavior remains operator-verifiable |
+| A19 MED TasksDialog could stop a keyboard-selected task after it scrolled off-screen | fixed | `c2da0e8` | active-row scroll and accessibility regression (34 pass); renderer typecheck and production build; GUI behavior remains operator-verifiable |
+| A19 MED MentionPicker could insert an active mention after it scrolled off-screen | fixed | `c2da0e8` | active-row scroll regression (34 pass); renderer typecheck and production build; GUI behavior remains operator-verifiable |
 
 ## Known verification limitation
 
