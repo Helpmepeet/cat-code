@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 51/242** — counted against the review's original 61 High and
+**Progress: Fix 52/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -55,6 +55,7 @@ count tracks individually verified findings, not commit count.
 | V15 HIGH consumed export frames retained up to 32 MiB per session in renderer state | fixed | `8032c7f` | request-correlated discard regression preserves newer results; session-action suites (42 pass); renderer typecheck and production build |
 | A07 HIGH Workspace-panel accessibility labels exposed raw host/connection plane values | fixed | `2ed7d32` | shared status-vocabulary regression; WorkspacePanels + status suites (13 pass); renderer typecheck and production build |
 | A07 MED Workspace-panel labels exposed raw session identifiers | fixed | `2ed7d32` | named-session and no-identifier regressions; WorkspacePanels + status suites (13 pass); renderer typecheck and production build |
+| A16 HIGH context gauge divided by raw model windows instead of the engine's effective compaction window | fixed | `b3f514a` | effective-window source and renderer-priority regressions (42 pass); renderer typecheck and production build; sidecar wrapper retains five pre-existing unrelated diagnostics |
 
 ## Known verification limitation
 
