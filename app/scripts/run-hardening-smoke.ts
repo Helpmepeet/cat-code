@@ -77,9 +77,9 @@ if (smoke.stderr) process.stderr.write(smoke.stderr)
 if (
   smoke.error !== undefined ||
   smoke.status !== 0 ||
-  !smoke.stdout?.includes('[hardening-smoke] production path passed')
+  !smoke.stdout?.includes('[hardening-smoke] renderer document + main-process policy passed')
 ) {
-  process.stderr.write('[run-hardening-smoke] production-path assertions did not pass\n')
+  process.stderr.write('[run-hardening-smoke] renderer/main hardening assertions did not pass\n')
   rmSync(configHome, { recursive: true, force: true })
   process.exit(1)
 }
