@@ -138,6 +138,7 @@ test('recording coverage distinguishes known loss, active output, and interrupte
     ],
     [{ recordKind: 'trace.loss', droppedCount: 2 }],
     'current',
+    { sourceWindowTruncated: true },
   )
 
   expect(coverage).toMatchObject({
@@ -146,6 +147,7 @@ test('recording coverage distinguishes known loss, active output, and interrupte
     operationalRecordsSuppressed: 3,
     deliveryTraceRecordsLost: 2,
     incompleteStreamCount: 1,
+    sourceWindowTruncated: true,
     launches: [
       { launchId: 'current', status: 'active' },
       { launchId: 'prior', status: 'interrupted' },

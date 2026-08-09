@@ -47,19 +47,22 @@ export function buildDiagnosticsBundle({
 }): string {
   const streams: { operational: unknown[]; deliveryTrace: TraceRecord[] } = { operational: [], deliveryTrace: [] }
   let includedBytes = 0
+  let sourceWindowTruncated = false
+  let bundleLimitReached = false
+  let sourceReadFailures = 0
   if (existsSync(logsDirectory)) {
     const now = Date.now()
-    const candidates: Array<{ name: string; mtimeMs: number }> = []
+    const candidates: Array<{ name: string; mtimeMs: number; size: number }> = []
     for (const name of readdirSync(logsDirectory)) {
       try {
         const stat = statSync(join(logsDirectory, name))
         if (stat.isFile() && now - stat.mtimeMs <= Math.max(MAX_OPERATIONAL_LOG_AGE_MS, MAX_DELIVERY_TRACE_AGE_MS)) {
-          candidates.push({ name, mtimeMs: stat.mtimeMs })
+          candidates.push({ name, mtimeMs: stat.mtimeMs, size: stat.size })
         }
       } catch {}
     }
     candidates.sort((a, b) => b.mtimeMs - a.mtimeMs)
-    for (const { name } of candidates) {
+    for (const { name, size } of candidates) {
       const target = name.startsWith('operational-')
         ? streams.operational
         : name.startsWith('delivery-trace-')
@@ -67,6 +70,7 @@ export function buildDiagnosticsBundle({
           : null
       if (!target) continue
       try {
+        if (size > MAX_FILE_BYTES) sourceWindowTruncated = true
         // Take the tail and parse newest complete records first, so an incident
         // immediately before export wins admission over old retained history.
         const text = readFileSync(join(logsDirectory, name), 'utf8').slice(-MAX_FILE_BYTES)
@@ -78,12 +82,16 @@ export function buildDiagnosticsBundle({
             : parseDeliveryTraceRecord(value)
           if (!safe) continue
           const bytes = Buffer.byteLength(JSON.stringify(safe))
-          if (includedBytes + bytes > MAX_BUNDLE_BYTES / 2) break
+          if (includedBytes + bytes > MAX_BUNDLE_BYTES / 2) {
+            bundleLimitReached = true
+            break
+          }
           target.push(safe)
           includedBytes += bytes
         }
       } catch {
         // A concurrently rotated/broken log is omitted rather than failing export.
+        sourceReadFailures++
       }
     }
   }
@@ -111,6 +119,7 @@ export function buildDiagnosticsBundle({
       streams.operational,
       streams.deliveryTrace,
       currentLaunchId,
+      { sourceWindowTruncated, bundleLimitReached, sourceReadFailures },
     ),
     stuckSessions: deriveStuckSessionSummaries(streams.deliveryTrace),
     streams,
@@ -229,6 +238,11 @@ export function deriveRecordingCoverage(
   operationalRecords: readonly unknown[],
   traceRecords: readonly TraceRecord[],
   currentLaunchId?: string,
+  exportLimits: {
+    sourceWindowTruncated?: boolean
+    bundleLimitReached?: boolean
+    sourceReadFailures?: number
+  } = {},
 ): Record<string, unknown> {
   const launches = new Map<string, {
     launchId: string
@@ -280,6 +294,9 @@ export function deriveRecordingCoverage(
     .sort((a, b) => b.lastRecordAt.localeCompare(a.lastRecordAt))
   const knownLoss = operationalRecordsSuppressed + deliveryTraceRecordsLost > 0
   const incomplete = incompleteStreamCount > 0 ||
+    exportLimits.sourceWindowTruncated === true ||
+    exportLimits.bundleLimitReached === true ||
+    (exportLimits.sourceReadFailures ?? 0) > 0 ||
     launchCoverage.some(launch => launch.status === 'interrupted')
   const active = launchCoverage.some(launch => launch.status === 'active')
 
@@ -297,6 +314,9 @@ export function deriveRecordingCoverage(
     operationalRecordsSuppressed,
     deliveryTraceRecordsLost,
     incompleteStreamCount,
+    sourceWindowTruncated: exportLimits.sourceWindowTruncated ?? false,
+    bundleLimitReached: exportLimits.bundleLimitReached ?? false,
+    sourceReadFailures: exportLimits.sourceReadFailures ?? 0,
     launches: launchCoverage,
   }
 }
