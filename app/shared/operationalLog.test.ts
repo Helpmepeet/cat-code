@@ -68,6 +68,60 @@ test('renderer failure and incomplete coverage records keep closed metadata', ()
   })).toBeNull()
 })
 
+test('renderer health samples carry visibility and heap usage', () => {
+  const sample = createOperationalRecord(
+    {
+      level: 'info',
+      event: 'renderer.health.sample',
+      process: 'main',
+      fields: { sessions: 2, eventLoopLagMs: 12, visible: false, heapUsedBytes: 512_000_000 },
+    },
+    { launchId: 'launch', processInstanceId: 'process' },
+  )
+  expect(sample.fields.visible).toBe(false)
+  expect(sample.fields.heapUsedBytes).toBe(512_000_000)
+  expect(parseOperationalRecord(sample)).not.toBeNull()
+
+  // A renderer without the Chromium heap API reports no figure at all.
+  const withoutHeap = createOperationalRecord(
+    {
+      level: 'info',
+      event: 'renderer.health.sample',
+      process: 'main',
+      fields: { sessions: 0, eventLoopLagMs: 0, visible: true, heapUsedBytes: null },
+    },
+    { launchId: 'launch', processInstanceId: 'process' },
+  )
+  expect(withoutHeap.fields.heapUsedBytes).toBeNull()
+  expect(parseOperationalRecord(withoutHeap)).not.toBeNull()
+
+  // A missed probe has no payload to carry a heap figure, only the last known
+  // visibility, so heapUsedBytes stays out of that event's vocabulary.
+  const missed = createOperationalRecord(
+    {
+      level: 'warn',
+      event: 'renderer.health.missed',
+      process: 'main',
+      fields: { missed: 2, elapsedMs: 10_000, visible: false },
+    },
+    { launchId: 'launch', processInstanceId: 'process' },
+  )
+  expect(missed.fields.visible).toBe(false)
+  expect(() => createOperationalRecord(
+    {
+      level: 'warn',
+      event: 'renderer.health.missed',
+      process: 'main',
+      fields: { missed: 2, elapsedMs: 10_000, heapUsedBytes: 512_000_000 },
+    },
+    { launchId: 'launch', processInstanceId: 'process' },
+  )).toThrow('unsafe field heapUsedBytes')
+  expect(parseOperationalRecord({
+    ...missed,
+    fields: { ...missed.fields, heapUsedBytes: 512_000_000 },
+  })).toBeNull()
+})
+
 test('operational text removes every rooted path and URL path/query', () => {
   expect(sanitizeOperationalText('/var/db/private.txt C:\\Users\\alice\\secret https://user:pw@example.com/private/customer?a=1#x'))
     .not.toMatch(/var\/db|Users\\alice|private\/customer|user:pw|\?a=/)

@@ -224,6 +224,10 @@ let rendererDocumentId: string = randomUUID()
 let rendererSubscriptionEpoch = 0
 const rendererHealth = createRendererHealthMonitor()
 let rendererHealthTimer: ReturnType<typeof setInterval> | null = null
+// Last visibility a renderer response reported. A missed probe carries no
+// payload of its own, so this is the only way an outage record can say whether
+// the window was hidden (throttled timers) when it went quiet.
+let lastKnownRendererVisible: boolean | null = null
 // True from `render-process-gone` until the next document finishes loading.
 // `webContents.isDestroyed()` stays false for a crashed-but-open window, so any
 // send in that state throws "Render frame was disposed" (observed 2026-08-09:
@@ -382,6 +386,8 @@ type RendererHealthResponse = Readonly<{
   rendererProcessInstanceId: string
   monotonicTimestampMs: number
   eventLoopLagMs: number
+  visible: boolean
+  heapUsedBytes: number | null
   watermarks: ReadonlyArray<Readonly<{ sessionId: string; received: number; applied: number; committed: number }>>
 }>
 
@@ -389,12 +395,19 @@ function parseRendererHealthResponse(value: unknown): RendererHealthResponse | n
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const item = value as Record<string, unknown>
   if (
-    Object.keys(item).length !== 6 ||
+    Object.keys(item).length !== 8 ||
     typeof item.documentId !== 'string' || item.documentId.length < 1 || item.documentId.length > 128 ||
     !Number.isSafeInteger(item.subscriptionEpoch) || (item.subscriptionEpoch as number) < 1 ||
     typeof item.rendererProcessInstanceId !== 'string' || item.rendererProcessInstanceId.length < 1 || item.rendererProcessInstanceId.length > 128 ||
     typeof item.monotonicTimestampMs !== 'number' || !Number.isFinite(item.monotonicTimestampMs) ||
     typeof item.eventLoopLagMs !== 'number' || !Number.isFinite(item.eventLoopLagMs) || item.eventLoopLagMs < 0 || item.eventLoopLagMs > 60_000 ||
+    typeof item.visible !== 'boolean' ||
+    (item.heapUsedBytes !== null && (
+      typeof item.heapUsedBytes !== 'number' ||
+      !Number.isFinite(item.heapUsedBytes) ||
+      item.heapUsedBytes < 0 ||
+      item.heapUsedBytes > Number.MAX_SAFE_INTEGER
+    )) ||
     !Array.isArray(item.watermarks) || item.watermarks.length > 32
   ) return null
   for (const watermark of item.watermarks) {
@@ -1083,7 +1096,8 @@ function createWindow(): void {
   })
   const healthProbe = () => {
     const event = rendererHealth.probe()
-    if (event) logOperational(event.event, event.level, event.fields)
+    // Annotation only: the monitor's escalation logic never sees this.
+    if (event) logOperational(event.event, event.level, { ...event.fields, visible: lastKnownRendererVisible })
     if (!window.webContents.isDestroyed() && !rendererGone) {
       window.webContents.send(CH_DELIVERY_HEALTH_PROBE)
     }
@@ -1719,11 +1733,14 @@ function registerIpcHandlers(): void {
       item.subscriptionEpoch !== rendererSubscriptionEpoch ||
       item.rendererProcessInstanceId.length === 0
     ) return
+    lastKnownRendererVisible = item.visible
     const health = rendererHealth.response()
     if (health.shouldSample) {
       logOperational(health.recovered ? 'renderer.health.recovered' : 'renderer.health.sample', 'info', {
         sessions: item.watermarks.length,
         eventLoopLagMs: item.eventLoopLagMs,
+        visible: item.visible,
+        heapUsedBytes: item.heapUsedBytes,
         ...(health.recovered ? { missed: health.priorMisses, durationMs: health.outageDurationMs } : {}),
       })
     }

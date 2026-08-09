@@ -143,6 +143,13 @@ function sendDeliveryAcknowledgement(
 }
 
 
+// `performance.memory` is Chromium-only and absent from the DOM typings.
+function readHeapUsedBytes(): number | null {
+  const memory = (performance as Performance & { memory?: { usedJSHeapSize?: unknown } }).memory
+  const used = memory?.usedJSHeapSize
+  return typeof used === 'number' && Number.isFinite(used) && used >= 0 ? Math.round(used) : null
+}
+
 ipcRenderer.on(CH_DELIVERY_HEALTH_PROBE, () => {
   const payload = {
     documentId: deliveryDocumentId,
@@ -150,6 +157,10 @@ ipcRenderer.on(CH_DELIVERY_HEALTH_PROBE, () => {
     rendererProcessInstanceId: deliveryProcessInstanceId,
     monotonicTimestampMs: performance.now(),
     eventLoopLagMs: lastMeasuredEventLoopLagMs,
+    // A hidden window's timers are throttled, so lag and missed probes alone
+    // cannot tell an occluded renderer from a hung one (observed 2026-08-09).
+    visible: document.visibilityState === 'visible',
+    heapUsedBytes: readHeapUsedBytes(),
     watermarks: [...deliveryAckQueue.getWatermarks().entries()].slice(0, 32).map(([sessionId, value]) => ({ sessionId, ...value })),
   }
   // Telemetry, and wrapped like the other telemetry senders, but deliberately

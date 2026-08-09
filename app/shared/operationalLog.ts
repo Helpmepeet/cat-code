@@ -76,7 +76,7 @@ const OPERATIONAL_FIELD_KEYS = new Set([
   'arch', 'category', 'code', 'count', 'durationMs', 'elapsedMs', 'eventLoopLagMs', 'exitCode',
   'frame', 'messageCount', 'missed', 'navigation', 'packaged', 'pid',
   'platform', 'queuedBytes', 'reason', 'role', 'sessions', 'source', 'version',
-  'signal', 'expected',
+  'signal', 'expected', 'visible', 'heapUsedBytes',
 ])
 
 /**
@@ -99,10 +99,10 @@ const OPERATIONAL_EVENT_FIELD_KEYS: Partial<Record<OperationalEvent, readonly st
   'renderer.recovery.started': ['count', 'reason'],
   'renderer.recovery.exhausted': ['count', 'reason'],
   'renderer.responsive': ['durationMs'],
-  'renderer.health.sample': ['sessions', 'eventLoopLagMs'],
-  'renderer.health.missed': ['missed', 'elapsedMs'],
-  'renderer.health.unavailable': ['missed', 'elapsedMs'],
-  'renderer.health.recovered': ['sessions', 'missed', 'eventLoopLagMs', 'durationMs'],
+  'renderer.health.sample': ['sessions', 'eventLoopLagMs', 'visible', 'heapUsedBytes'],
+  'renderer.health.missed': ['missed', 'elapsedMs', 'visible'],
+  'renderer.health.unavailable': ['missed', 'elapsedMs', 'visible'],
+  'renderer.health.recovered': ['sessions', 'missed', 'eventLoopLagMs', 'durationMs', 'visible', 'heapUsedBytes'],
   'sidecar.spawn.started': ['pid'],
   'sidecar.spawn.failed': ['reason'],
   'sidecar.ready': ['frame', 'pid'],
