@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 94/242** — counted against the review's original 61 High and
+**Progress: Fix 95/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -98,6 +98,7 @@ count tracks individually verified findings, not commit count.
 | A18 HIGH pressing Enter on an empty tag query could apply the first matching tag, including across a bulk selection | fixed | `b8d9c6e` | tag Enter actions apply only `resolveTagCommit`'s explicit non-empty result; empty queries resolve to `null`; Sessions page/state regressions (41 pass); app typecheck and renderer production build |
 | A09 HIGH terminal supervisor tombstones consumed the live-session cap and could prevent new or restored sessions | fixed | `b8d9c6e` | host concurrency counting now excludes terminal supervisor statuses; the cap test covers both creation and restore with a retained tombstone (56 pass); app typecheck and renderer production build |
 | S05 HIGH a first-event `response.failed` abandoned the primed WebSocket iterator and wedged the conversation turn queue | fixed | `b8d9c6e` | the failure path awaits `iterator.return()` before throwing, releasing the queued turn; Codex adapter regression suite (70 pass); app typecheck and renderer production build |
+| S05 HIGH in-process deferred continuation reloaded the Codex pool and lost live capped-account state, inverting its eligibility verdict | fixed | `b8d9c6e` | both in-process status callers request `loadPool: false`, retaining the live pool’s cap state; Codex status/deferred-continuation regressions (43 pass); app typecheck and renderer production build |
 
 ## Known verification limitation
 
