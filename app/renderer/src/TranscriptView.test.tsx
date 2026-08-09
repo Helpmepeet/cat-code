@@ -549,6 +549,9 @@ test('P4-18b: an edit card renders a dual-gutter diff with +adds/−dels counts'
   expect(html).toContain('/repo/app.ts')
   expect(html).toContain('+1') // one addition
   expect(html).toContain('−1') // one deletion
+  // DiffView owns the rich file/count header; ToolCardShell must not repeat it.
+  expect(html.match(/>\+1</g)).toHaveLength(1)
+  expect(html.match(/>−1</g)).toHaveLength(1)
   // P4-18c word-level intra-line highlight: the replaced token (2 → 3) is washed
   // per side; the shared prefix dims. The line is no longer one contiguous string.
   expect(html).toContain('bg-tone-danger/28') // removed word wash

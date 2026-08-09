@@ -1056,10 +1056,6 @@ function mcpServerTool(toolName: string): string {
 /** Uppercase micro-label under the header, real data only (byte/line counts
  * the prototype shows are not projected — §5 flag, not mocked). */
 function deriveSub(row: ToolUseNestedRow): string | undefined {
-  if (row.result?.diff) {
-    const { adds, dels } = diffCountsForResult(row.result)
-    return `${row.result.diff.filePath} · +${adds} −${dels}`
-  }
   if (row.toolFamily === 'mcp') return row.toolName
   return undefined
 }
@@ -2232,10 +2228,6 @@ function BashTailPeek({ tail }: { tail: string[] }) {
  */
 const toolAckByResult = new WeakMap<ToolResultProjection, ToolAck | null>()
 const bashTailByResult = new WeakMap<ToolResultProjection, string[]>()
-const diffCountsByResult = new WeakMap<
-  ToolResultProjection,
-  { adds: number; dels: number }
->()
 
 function toolAckForResult(result: ToolResultProjection | null): ToolAck | null {
   if (result === null) return null
@@ -2255,15 +2247,6 @@ function bashTailForResult(result: ToolResultProjection | null): string[] {
   return tail
 }
 
-function diffCountsForResult(
-  result: ToolResultProjection,
-): { adds: number; dels: number } {
-  const cached = diffCountsByResult.get(result)
-  if (cached !== undefined) return cached
-  const counts = result.diff === null ? { adds: 0, dels: 0 } : countDiff(result.diff)
-  diffCountsByResult.set(result, counts)
-  return counts
-}
 
 /**
  * The file-READ body: the file's own line numbers beside its syntax-colored
