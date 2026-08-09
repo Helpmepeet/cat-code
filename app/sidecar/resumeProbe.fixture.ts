@@ -16,6 +16,7 @@
 
 import { init } from '../../src/entrypoints/init.js'
 import { resumeEngineSession } from './sessionResume.js'
+import { loadAgentDefinitionsForRuntime } from './sessionController.js'
 
 async function main(): Promise<void> {
   const engineSessionId = process.argv[2]
@@ -25,7 +26,12 @@ async function main(): Promise<void> {
   }
 
   await init()
-  const result = await resumeEngineSession(engineSessionId, process.cwd())
+  const cwd = process.cwd()
+  const result = await resumeEngineSession(
+    engineSessionId,
+    cwd,
+    await loadAgentDefinitionsForRuntime(cwd),
+  )
 
   const payload = {
     engineSessionId: result.engineSessionId,

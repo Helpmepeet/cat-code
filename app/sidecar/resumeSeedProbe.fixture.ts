@@ -39,6 +39,7 @@ import { resumeEngineSession } from './sessionResume.js'
 import {
   createNormalSidecarQueryEngineConfig,
   createSidecarSessionController,
+  loadAgentDefinitionsForRuntime,
 } from './sessionController.js'
 
 async function main(): Promise<void> {
@@ -50,7 +51,12 @@ async function main(): Promise<void> {
   const cwd = process.cwd()
 
   await init()
-  const resumed = await resumeEngineSession(engineSessionId, cwd)
+  const agentDefinitions = await loadAgentDefinitionsForRuntime(cwd)
+  const resumed = await resumeEngineSession(
+    engineSessionId,
+    cwd,
+    agentDefinitions,
+  )
 
   // (2) The production path, seed included — proves index.ts's exact
   // construction accepts and threads the resumed messages.
@@ -58,6 +64,8 @@ async function main(): Promise<void> {
     probe: false,
     cwd,
     initialMessages: resumed.messages,
+    agentDefinitions,
+    resumedInitialState: resumed.initialState,
   })
 
   // (3) The same assembly createRuntimeBackedWebAppSession performs, with the
@@ -66,6 +74,7 @@ async function main(): Promise<void> {
   const { queryEngineConfig } = await createNormalSidecarQueryEngineConfig(
     cwd,
     resumed.messages,
+    { agentDefinitions, resumedInitialState: resumed.initialState },
   )
   let captured: QueryEngine | null = null
   createQueryEngineAppSession({

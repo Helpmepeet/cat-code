@@ -200,7 +200,7 @@ async function loadCommandCatalog(cwd: string): Promise<Command[]> {
  * passed into QueryEngine and the same result is mirrored to the read-only UI
  * snapshot, so the page never claims agents that the session did not configure.
  */
-async function loadAgentDefinitionsForRuntime(
+export async function loadAgentDefinitionsForRuntime(
   cwd: string,
 ): Promise<AgentDefinitionsResult> {
   try {
@@ -280,6 +280,15 @@ export function selectResumedProviderModel(
 export async function createNormalSidecarQueryEngineConfig(
   cwd: string,
   initialMessages?: readonly Message[],
+  {
+    agentDefinitions: suppliedAgentDefinitions,
+    resumedInitialState,
+  }: {
+    /** One startup snapshot shared with resume, never a second disk read. */
+    agentDefinitions?: AgentDefinitionsResult
+    /** Durable state returned by processResumedConversation. */
+    resumedInitialState?: AppState
+  } = {},
 ) {
   // Must run before QueryEngine construction: it captures the initial provider
   // and model for prompt assembly and request routing.
@@ -290,6 +299,11 @@ export async function createNormalSidecarQueryEngineConfig(
   const toolPermissionContext = await loadSidecarToolPermissionContext()
   const appStateStore = createStore({
     ...getDefaultAppState(),
+    // processResumedConversation owns durable resume state (goal, selected
+    // agent, attribution, and the mode-adjusted agent catalog). Apply it
+    // before fresh runtime-only values below so today's trusted permission and
+    // provider settings remain authoritative.
+    ...resumedInitialState,
     toolPermissionContext,
     mainLoopModel: initialModelSetting,
     mainLoopModelForSession: null,
@@ -325,7 +339,8 @@ export async function createNormalSidecarQueryEngineConfig(
   // crashing session construction. `getCommands` is already internally fail-soft
   // for skill/plugin loads; this guards the remaining eager built-in factories.
   const commands = await loadCommandCatalog(cwd)
-  const agentDefinitions = await loadAgentDefinitionsForRuntime(cwd)
+  const agentDefinitions =
+    suppliedAgentDefinitions ?? await loadAgentDefinitionsForRuntime(cwd)
   const mcpClients: [] = []
   const availableMcpServers: string[] = []
 
@@ -530,6 +545,8 @@ export async function createSidecarSessionController({
   probe,
   cwd,
   initialMessages,
+  agentDefinitions: suppliedAgentDefinitions,
+  resumedInitialState,
 }: {
   probe: boolean
   /** Session root; the engine's QueryEngine is configured here. Ignored in probe mode. */
@@ -540,6 +557,10 @@ export async function createSidecarSessionController({
    * pre-quit history. Absent for a fresh session; ignored in probe mode.
    */
   initialMessages?: readonly Message[]
+  /** Shared startup catalog, including the definitions used to restore a session. */
+  agentDefinitions?: AgentDefinitionsResult
+  /** Durable engine state returned during resume, omitted for a fresh session. */
+  resumedInitialState?: AppState
 }): Promise<SidecarSession> {
   if (probe) {
     return {
@@ -592,7 +613,10 @@ export async function createSidecarSessionController({
     queryEngineConfig,
     slashCatalog,
     tools,
-  } = await createNormalSidecarQueryEngineConfig(cwd, initialMessages)
+  } = await createNormalSidecarQueryEngineConfig(cwd, initialMessages, {
+    agentDefinitions: suppliedAgentDefinitions,
+    resumedInitialState,
+  })
   const providerBoundHistory = initialMessages
     ? hasProviderBoundHistory(initialMessages)
     : false

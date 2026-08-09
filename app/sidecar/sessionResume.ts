@@ -28,6 +28,8 @@ import { loadConversationForResume } from '../../src/utils/conversationRecovery.
 import { processResumedConversation } from '../../src/utils/sessionRestore.js'
 import { getDefaultAppState } from '../../src/state/AppStateStore.js'
 import type { Message } from '../../src/types/message.js'
+import type { AppState } from '../../src/state/AppStateStore.js'
+import type { AgentDefinitionsResult } from '../../src/tools/AgentTool/loadAgentsDir.js'
 
 /** A resume that could not be performed — the id has no usable transcript. */
 export class SidecarResumeError extends Error {
@@ -51,6 +53,13 @@ export type SidecarResumeResult = {
    * assertion surface proving history was actually loaded (not re-read JSONL).
    */
   messages: Message[]
+  /**
+   * The engine-restored state that must seed the sidecar's runtime store. This
+   * carries durable resume data such as the active goal and restored agent;
+   * retaining messages alone would make the transcript and desktop read seams
+   * disagree after a restart.
+   */
+  initialState: AppState
 }
 
 /**
@@ -64,6 +73,7 @@ export type SidecarResumeResult = {
 export async function resumeEngineSession(
   resumeEngineSessionId: string,
   cwd: string,
+  agentDefinitions: AgentDefinitionsResult,
 ): Promise<SidecarResumeResult> {
   const loaded = await loadConversationForResume(
     resumeEngineSessionId,
@@ -86,13 +96,12 @@ export async function resumeEngineSession(
       sessionIdOverride: resumeEngineSessionId,
     },
     {
-      // Headless resume context. Agent restoration degrades to default behavior
-      // with an empty agent set (restoreAgentFromSession clears state when the
-      // session had no agent, and logs-then-defaults if the agent is gone);
-      // message + session-id restore — the P3-1 contract — does not depend on it.
+      // Use the same real definitions that configure the subsequent
+      // QueryEngine. restoreAgentFromSession needs this catalog to preserve a
+      // recorded custom agent (and its model) instead of silently defaulting.
       modeApi: null,
       mainThreadAgentDefinition: undefined,
-      agentDefinitions: { activeAgents: [], allAgents: [] },
+      agentDefinitions,
       currentCwd: cwd,
       cliAgents: [],
       initialState: getDefaultAppState(),
@@ -109,5 +118,9 @@ export async function resumeEngineSession(
     )
   }
 
-  return { engineSessionId, messages: processed.messages }
+  return {
+    engineSessionId,
+    messages: processed.messages,
+    initialState: processed.initialState,
+  }
 }

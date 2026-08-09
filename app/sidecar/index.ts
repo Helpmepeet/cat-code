@@ -26,6 +26,7 @@ import {
   RESUME_FAILED_EXIT_CODE,
 } from '../shared/limits.js'
 import { getSessionId } from '../../src/bootstrap/state.js'
+import { getCwd } from '../../src/utils/cwd.js'
 import type { Message } from '../../src/types/message.js'
 import {
   getTranscriptPath,
@@ -36,7 +37,10 @@ import {
   projectResumedHistory,
 } from './historyProjection.js'
 import { initializeSidecarRuntime } from './initializeRuntime.js'
-import { createSidecarSessionController } from './sessionController.js'
+import {
+  createSidecarSessionController,
+  loadAgentDefinitionsForRuntime,
+} from './sessionController.js'
 import { withRestoredSubagentHistory } from './subagentHistory.js'
 import { resumeEngineSession, SidecarResumeError } from './sessionResume.js'
 import { SidecarServer } from './sidecarServer.js'
@@ -140,14 +144,29 @@ async function main(): Promise<void> {
   // The loaded Message[] are the restored turn context (F1, host-plane review
   // 2026-07-05): they MUST reach the session controller below — id adoption
   // alone restores the transcript key, not the conversation.
+  // The resumed engine and the QueryEngine it seeds must share one catalog.
+  // Otherwise restoreAgentFromSession sees no custom agents while the new
+  // controller discovers them later, silently dropping the recorded agent.
+  const agentDefinitions = args.probeOnAttach
+    ? undefined
+    : await loadAgentDefinitionsForRuntime(args.cwd)
+  let resumed: Awaited<ReturnType<typeof resumeEngineSession>> | undefined
   let resumedMessages: Message[] | undefined
   if (!args.probeOnAttach && args.resumeEngineSessionId) {
-    const resumed = await resumeEngineSession(args.resumeEngineSessionId, args.cwd)
+    resumed = await resumeEngineSession(
+      args.resumeEngineSessionId,
+      args.cwd,
+      agentDefinitions,
+    )
     resumedMessages = resumed.messages
     process.stderr.write(
       `[sidecar] resume-seeded messages=${resumed.messages.length} engineSessionId=${resumed.engineSessionId}\n`,
     )
   }
+  // Resume may restore a persisted worktree and move the engine's cwd. All
+  // sidecar catalogs/domains must use that post-resume cwd, not the stale
+  // launch directory captured in args.
+  const runtimeCwd = resumed ? getCwd() : args.cwd
 
   const engineSessionId = args.probeOnAttach
     ? `probe:${args.sessionId}`
@@ -176,8 +195,10 @@ async function main(): Promise<void> {
     slashCatalog,
   } = await createSidecarSessionController({
     probe: args.probeOnAttach,
-    cwd: args.cwd,
+    cwd: runtimeCwd,
     ...(resumedMessages !== undefined ? { initialMessages: resumedMessages } : {}),
+    ...(agentDefinitions !== undefined ? { agentDefinitions } : {}),
+    ...(resumed !== undefined ? { resumedInitialState: resumed.initialState } : {}),
   })
 
   // F2 (decisions/RESTORE-HISTORY.md): display history is an archival prefix

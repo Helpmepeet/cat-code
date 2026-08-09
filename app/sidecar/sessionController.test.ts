@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
+import { getDefaultAppState } from '../../src/state/AppStateStore.js'
 import {
   getMainLoopModelOverride,
   getSessionProvider,
@@ -17,6 +18,7 @@ import {
   createNormalSidecarQueryEngineConfig,
   createSidecarSessionController,
   initializeSidecarModelProvider,
+  loadAgentDefinitionsForRuntime,
   loadSidecarToolPermissionContext,
   selectResumedProviderModel,
 } from './sessionController.js'
@@ -379,6 +381,66 @@ Review P4 changes.
         definition => definition.agentType === 'p4-reviewer' && definition.active,
       ),
     ).toBe(true)
+  } finally {
+    clearAgentDefinitionsCache()
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})
+
+test('resumed startup reuses its agent snapshot and preserves durable app state', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'catcode-resume-bootstrap-'))
+  mkdirSync(join(cwd, '.cat-code', 'agents'), { recursive: true })
+  writeFileSync(
+    join(cwd, '.cat-code', 'agents', 'resume-reviewer.md'),
+    `---
+name: resume-reviewer
+description: "Review a restored session"
+tools: Read, Grep
+---
+
+Review the restored session.
+`,
+  )
+  const goal = {
+    threadId: 'resume-thread',
+    goalId: 'resume-goal',
+    objective: 'Finish the restored task',
+    status: 'active' as const,
+    tokensUsed: 12,
+    timeUsedSeconds: 3,
+    createdAtMs: 1,
+    updatedAtMs: 2,
+  }
+  try {
+    clearAgentDefinitionsCache()
+    const agentDefinitions = await loadAgentDefinitionsForRuntime(cwd)
+    const resumedInitialState = {
+      ...getDefaultAppState(),
+      agent: 'resume-reviewer',
+      agentDefinitions,
+      threadGoal: goal,
+    }
+
+    const session = await createSidecarSessionController({
+      probe: false,
+      cwd,
+      agentDefinitions,
+      resumedInitialState,
+    })
+
+    // The supplied catalog is the one QueryEngine and the Agent read seam use;
+    // a resume must not reload an independently drifting set after restoration.
+    expect(
+      session.agentConfig?.getSnapshot().definitions.some(
+        definition => definition.agentType === 'resume-reviewer' && definition.active,
+      ),
+    ).toBe(true)
+    expect(session.goals?.getSnapshot()).toMatchObject({
+      threadId: goal.threadId,
+      goalId: goal.goalId,
+      objective: goal.objective,
+      status: goal.status,
+    })
   } finally {
     clearAgentDefinitionsCache()
     rmSync(cwd, { recursive: true, force: true })
