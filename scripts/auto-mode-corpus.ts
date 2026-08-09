@@ -28,20 +28,35 @@
  */
 
 import { createHash } from 'node:crypto'
-import { readFileSync, readdirSync, statSync, mkdirSync } from 'node:fs'
+import {
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 const args = process.argv.slice(2)
 const flag = (name: string): string | undefined => {
   const i = args.indexOf(name)
-  return i >= 0 ? args[i + 1] : undefined
+  if (i < 0) return undefined
+  const value = args[i + 1]
+  if (value === undefined || value.startsWith('--')) {
+    throw new Error(`${name} requires a value`)
+  }
+  return value
 }
 
 const ROOT = flag('--root') ?? join(homedir(), '.cat-code', 'projects')
 const OUT = flag('--out') ?? 'fixtures/auto-mode-corpus.json'
 /** Allows are plentiful; blocks are the scarce signal and are never sampled. */
 const MAX_ALLOW = Number(flag('--max-allow') ?? 400)
+if (!Number.isSafeInteger(MAX_ALLOW) || MAX_ALLOW < 1) {
+  throw new Error('--max-allow must be a positive safe integer')
+}
 
 const DECISION = 'Permission for this action has been denied. Reason:'
 const OUTAGE = 'temporarily unavailable, so auto mode cannot determine'
@@ -57,20 +72,10 @@ type Case = {
 }
 
 function* walk(dir: string): Generator<string> {
-  let entries: string[]
-  try {
-    entries = readdirSync(dir)
-  } catch {
-    return
-  }
+  const entries = readdirSync(dir)
   for (const entry of entries) {
     const p = join(dir, entry)
-    let s
-    try {
-      s = statSync(p)
-    } catch {
-      continue
-    }
+    const s = statSync(p)
     if (s.isDirectory()) yield* walk(p)
     else if (entry.endsWith('.jsonl')) yield p
   }
@@ -100,12 +105,7 @@ function actionText(tool: string, input: unknown): string {
 }
 
 function collect(path: string): Case[] {
-  let text: string
-  try {
-    text = readFileSync(path, 'utf-8')
-  } catch {
-    return []
-  }
+  const text = readFileSync(path, 'utf-8')
   const transcript = path.split('/').pop()!
   const calls = new Map<string, { name: string; input: unknown }>()
   const denied = new Map<string, string>()
@@ -224,11 +224,13 @@ const fileText = `${JSON.stringify(body, null, 2)}\n`
 const sha256 = createHash('sha256').update(fileText).digest('hex')
 
 mkdirSync(dirname(OUT), { recursive: true })
-Bun.write(OUT, fileText)
-Bun.write(
-  `${OUT.replace(/\.json$/, '')}.sha256`,
-  `${sha256}  ${OUT.split('/').pop()}\n`,
-)
+const shaPath = `${OUT.replace(/\.json$/, '')}.sha256`
+const corpusTempPath = `${OUT}.tmp-${process.pid}`
+const shaTempPath = `${shaPath}.tmp-${process.pid}`
+writeFileSync(corpusTempPath, fileText)
+writeFileSync(shaTempPath, `${sha256}  ${OUT.split('/').pop()}\n`)
+renameSync(corpusTempPath, OUT)
+renameSync(shaTempPath, shaPath)
 
 console.log(`wrote ${OUT}`)
 console.log(`  blocks ${blocks.length}`)

@@ -149,3 +149,42 @@ test('a torn line does not abort the transcript', () => {
   expect(run(root, out).code).toBe(0)
   expect(JSON.parse(readFileSync(out, 'utf-8')).cases.length).toBeGreaterThan(0)
 })
+
+test('rejects missing roots without replacing the existing corpus', () => {
+  const root = fixture()
+  const out = join(root, 'existing.json')
+  const sha = out.replace(/\.json$/, '.sha256')
+  writeFileSync(out, 'original corpus')
+  writeFileSync(sha, 'original checksum')
+
+  const result = run(join(root, 'missing'), out)
+
+  expect(result.code).not.toBe(0)
+  expect(readFileSync(out, 'utf-8')).toBe('original corpus')
+  expect(readFileSync(sha, 'utf-8')).toBe('original checksum')
+})
+
+test('rejects missing and invalid allow caps before writing output', () => {
+  const root = fixture()
+  const out = join(root, 'corpus.json')
+  for (const args of [
+    ['--max-allow'],
+    ['--max-allow', '0'],
+    ['--max-allow', '-1'],
+    ['--max-allow', '1.5'],
+    ['--max-allow', 'NaN'],
+  ]) {
+    const p = Bun.spawnSync([
+      'bun',
+      'run',
+      SCRIPT,
+      '--root',
+      root,
+      '--out',
+      out,
+      ...args,
+    ])
+    expect(p.exitCode).not.toBe(0)
+  }
+  expect(() => readFileSync(out, 'utf-8')).toThrow()
+})
