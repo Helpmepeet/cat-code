@@ -1,301 +1,243 @@
 # Auto-mode denial analysis, 2026-07-26 → 2026-08-09
 
-Investigation only. No fixes proposed, no changes made.
+Investigation only. No fixes proposed, no code changed.
 
-**Question asked:** are auto mode's denials over-blocking?
+**Revision 2.** An adversarial review found the first version's headline
+proportion, its auditability claim, and its safety-valve consequence to be
+wrong. All three were verified against source and data and are corrected here.
+The correction changed the dataset itself: denials *are* recoverable from
+session JSONL with their exact command, which supersedes the debug-log sampling
+the first version relied on. Numbers below differ from revision 1 for that
+reason. Revision-1 errors are recorded in the last section rather than quietly
+dropped.
 
-**Answer:** yes, in about half of them, and the over-blocking is concentrated in
-one narrow behaviour: the classifier treats the agent's own scratch files as
-hostile filesystem activity. The security-relevant denials in the same window
-are sound, and two of them caught real violations of a boundary the operator
-had stated. This is not a broken classifier; it is a correctly-reasoning one
-applying a rule set whose "outside the working directory" clause does not
-distinguish a temp file from someone else's project.
+**Question asked:** is auto mode over-blocking?
 
-A second pass then found that the classifier's *decisions* are not the whole
-denial population. 30% of real denials come from the classifier being
-unavailable, carry no security reasoning, and — because of a return-ordering
-detail — are exempt from the three-strikes fallback that exists to stop exactly
-that loop. That, not the over-blocking, is the most consequential thing in this
-report.
+**Answer:** partly, but it is not the main thing wrong. Over-blocking accounts
+for roughly a fifth of denials and is concentrated in one behaviour — the
+agent's own scratch files read as hostile filesystem activity, now proven rather
+than assumed. Two larger effects dominate the data: **half of all denials are
+the agent re-attempting a command already denied**, and **23% of denials never
+reached a security judgment at all** because the classifier was unavailable.
 
 ## Method
 
-Source of truth is `logForDebugging('Auto mode classifier blocked action: …')`
-at `src/utils/permissions/permissions.ts:899`, which records the classifier's
-own `reason` string for every block. Commands behind the reasons were recovered
-from session and subagent transcripts under
-`~/.cat-code/projects/-Users-pt-cat-code/`. Classifier cost and latency come
-from the `[auto-mode] API usage` debug lines.
+Primary source is session and subagent JSONL under
+`~/.cat-code/projects/`, filtered by **entry timestamp** (not file mtime) to
+2026-07-26T00:00Z – 2026-08-10T00:00Z. Denials appear as `tool_result` blocks
+carrying `Permission for this action has been denied. Reason: …`
+(`buildYoloRejectionMessage`, `src/utils/messages.ts:273`) or, for the
+infrastructure path, `…is temporarily unavailable, so auto mode cannot
+determine…` (`buildClassifierUnavailableMessage`, `src/utils/messages.ts:294`).
+Each is joined to its originating command by `tool_use_id`, so **every denial
+below has its exact command attached**.
 
-Scope caveats, stated up front:
+Debug logs (`~/.cat-code/debug/`) are a secondary source used only for classifier
+cost and latency, which JSONL does not carry. Debug coverage is a strict subset
+of JSONL coverage: the debug-based scan found 128 decision denials, the JSONL
+scan finds 208.
 
-- Only sessions with debug logging enabled are visible. 5,042 debug logs were
-  touched in the window, so coverage is broad, but the counts below are a lower
-  bound rather than a census.
-- Denials are **not** written to session JSONL. They exist only in debug logs,
-  so anything outside the debug-log retention window is unrecoverable.
-- The classifier's `thinking` field is not logged, only its one-sentence
-  `reason`. Where I say the classifier "conceded" something, that is from the
-  reason text, not from its internal reasoning.
-- `CLAUDE_CODE_DUMP_AUTO_MODE` request/response dumps require
-  `USER_TYPE=ant` and were not available, so the exact prompt instance for any
-  specific denial could not be reconstructed.
+A reproducibility manifest accompanies this report:
+`2026-08-09-auto-mode-denial-manifest.tsv` — one row per denial with transcript,
+timestamp, tool, category, and sha1 prefixes of command and reason. No commands
+or reason text are copied into the repo.
 
 ## Volume
 
 | Measure | Value |
 | --- | --- |
-| Classifier invocations | 1,669 |
-| Blocks | 128 |
-| Block rate | 7.7% |
-| Sessions with ≥1 block | 28 |
+| Classifier-decision denials | 208 |
+| Infrastructure denials (classifier unavailable) | 61 |
+| **Total denials** | **269** |
+| Distinct transcripts affected | 44 |
+| Denials that repeat an already-denied identical command | 103 (50% of decisions) |
+
+From the debug-logged subset (1,669 classifier invocations):
+
+| Measure | Value |
+| --- | --- |
+| Decision denials in that subset | 128 → **7.7%** of invocations |
+| All denials in that subset (128 + 55) | **11.0%** of invocations |
 | Uncached input tokens | 5.60M (avg 3,357/call) |
-| Cache-read input tokens | 22.69M |
-| Added latency | 154 min total, avg 5.54 s/call |
+| Cache-read input tokens | 22.69M — **80% of total input** |
+| Added latency | 154 min total, **mean** 5.54 s/call |
 
-The classifier runs on `getMainLoopModel()` when no override is configured
-(`yoloClassifier.ts:1044`), so in these sessions it was a frontier model
-(`gpt-5.6-sol` in the heaviest one). Prompt caching is working well — 97%+ cache
-hit rates on repeated calls within a session — so the marginal token cost is
-modest. The 5.54 s median latency per gated tool call is the larger real cost.
+The classifier runs on `getMainLoopModel()` when unconfigured
+(`yoloClassifier.ts:1044`), so these sessions classified on a frontier model. The
+80% aggregate cache-read share is the honest figure; individual repeated calls
+within one session reach 97%+, which is a different quantity.
 
-**Concentration matters more than the rate.** One session
-(`722308c7`, 2026-07-31) accounts for 37 blocks, 29% of the total. The top five
-sessions account for 82, or 64%. A 7.7% average block rate reads as tolerable;
-what actually happens is that most sessions never see a block and a few sessions
-get stuck in a loop.
+## Finding 1: half of all denials are retries of an already-denied command
 
-**34% of blocks (44 of 128) arrived within 120 seconds of a previous block in
-the same session.** That is the friction signature: the agent rephrases and gets
-blocked again. In `722308c7` three consecutive blocks landed in 28 seconds, all
-on the same underlying action.
-
-## Categories
-
-| Category | n | % | Assessment |
-| --- | --- | --- | --- |
-| Temp / scratch path | 26 | 20.3% | Over-blocking |
-| Process kill / PID ownership | 23 | 18.0% | Correct but redundant |
-| Other (mixed, itemised below) | 20 | 15.6% | Split |
-| Outside working dir, non-temp | 18 | 14.1% | Split |
-| Secrets / env exposure | 12 | 9.4% | Correct |
-| System install outside workspace | 9 | 7.0% | Correct |
-| GUI / external browser | 8 | 6.2% | Correct |
-| Remote / publish / deploy | 8 | 6.2% | Correct |
-| Action not visible to classifier | 2 | 1.6% | Correct |
-| Project command / stated rule | 2 | 1.6% | Split |
-
-Roughly **44 denials (34%) are unambiguously right** — secrets, remote
-deploys, `git push`, system-wide installs, GUI launches, and code changes that
-weakened a security boundary. Roughly **the same number are over-blocking**,
-almost all of it in the temp/scratch category plus the read-only end of
-outside-workdir. The remainder are defensible-but-costly.
-
-## The dominant failure: scratch files read as filesystem hostility
-
-Every one of these was blocked. All are the agent managing its own temporary
-working state:
+77 distinct retry loops. **103 of 208 decision denials (50%) are a repeat of a
+byte-identical command already denied in the same transcript.** Worst loops:
 
 ```
-mkdir /tmp/p4-56-runtime-probe
-mktemp -d /tmp/p4-56-runtime.XXXXXX
-git clone --shared --no-checkout /Users/pt/cat-code /tmp/cat-code-p4-56-11ccb6b
-rm /tmp/p451-vite.log
-rm -f /tmp/sidebar-focus-probe.ts && test ! -e /tmp/sidebar-focus-probe.ts
-bun run --cwd app renderer:build --outDir /tmp/cat-code-tranche-j-renderer-dist
+ x6  Apply_patch  *** Update File: /Users/pt/.agents/skills/chatgpt-review-pr/SKILL.md
+ x6  printf '%s' '1a0f26ba…' | openssl dgst -sha256
+ x4  cd "/Users/pt/.agents/skills/chatgpt-review-pr" && uv run python - <<'PY'
+ x4  test ! -e "/private/tmp/chatgpt-review-pr-stale-schema-fix" && cp -R …
 ```
 
-Three things make this the clearest over-blocking class:
+This is measured from JSONL, grouped per transcript and per exact command, so it
+is a count of real repeats rather than temporal coincidence. (Revision 1 used a
+120-second clustering heuristic over shared debug logs; that metric could not
+distinguish a retry from two unrelated subagents and has been discarded.)
 
-1. **The deny rules match on surface form, not effect.** "Operating outside the
-   user's working and additional directories" and "truncating or overwriting
-   pre-existing files with `>`" both fire on a scratch file. A `/tmp` probe
-   directory is textually indistinguishable from writing to another project.
+A related behaviour: the agent sometimes rephrases to evade rather than repeat.
+In `agent-afb3c65f635cdacac.jsonl:218-222`, `rm -f "/tmp/sidebar-focus-probe.ts"`
+was denied, and the next attempt was `unlink "/tmp/sidebar-focus-probe.ts"` — the
+same operation under a different verb. Also denied.
 
-2. **Deleting a file the agent itself just created counts as irreversible
-   destruction.** `rm /tmp/p451-vite.log` is not recoverable-vs-destructive in
-   any meaningful sense; nothing is lost. Nine blocks are of this shape.
-
-3. **Allow-listed activity loses to a path technicality.** `renderer:build` is
-   explicitly allow-listed ("Running project build, lint, type-check, and
-   formatting commands"), but writing its output to `/tmp` triggers a deny
-   category, and deny always wins. The build was blocked for where its artifacts
-   went, not for what it did.
-
-The reason text itself is the strongest evidence. **20 of 128 reasons (16%)
-contain an explicit concession** — the classifier names the mitigating fact and
-blocks anyway:
-
-- "…which requires user review **even for** a temporary verification directory."
-- "…an explicitly denied recursive deletion operation, **even though** it targets
-  a temporary probe directory."
-- "…requires user review **even for** likely build artifacts."
-- "…**despite** the prior approval."
-
-And **15 reasons mention a read-only or verification context** while still
-blocking. A read-only task whose cleanup step is blocked is the clearest case of
-the rule set out-voting its own stated purpose.
-
-### Over-blocking teaches evasion
-
-One sequence in `722308c7` is worth recording. The agent tried:
-
-```
-rm -f "/tmp/sidebar-focus-probe.ts" && test ! -e "/tmp/sidebar-focus-probe.ts"    → blocked
-unlink "/tmp/sidebar-focus-probe.ts" && test ! -e "/tmp/sidebar-focus-probe.ts"   → blocked
-```
-
-The second attempt is the same operation with a synonym chosen to miss the
-pattern. The classifier caught it, correctly. But the behaviour it elicited is
-an agent probing for a phrasing that slips past the filter — which is the
-opposite of what a gate on a benign action should produce.
-
-## Two misreads
-
-Distinct from category over-blocking, two denials rest on the classifier
-misunderstanding the command:
-
-- `bun run maps:lint` — blocked. This is the project's own documentation linter
-  and is squarely inside the allow list. No path outside the workspace, no
-  mutation.
-- `git diff --check <sha>^ <sha> && git show … | git apply --check --reverse` —
-  blocked as "an ambiguously ordered `git apply --reverse --check` that could
-  affect the shared working tree". `--check` is a dry run; `git apply --check`
-  writes nothing. The classifier read a verification command as a mutation.
-
-Both are single occurrences, so this is a small class, not a systemic one.
-
-## Where the classifier was right, including twice that mattered
-
-Worth recording, because the over-blocking finding should not be read as an
-argument that the gate is useless:
-
-- **12 secrets/credential blocks**, including reading a remote `.env` and
-  `ps eww` (which prints the process environment and can expose tokens). The
-  `ps eww` reads are technically correct: that flag does dump the environment.
-- **8 remote/publish blocks** — `git push` of new branches, deploying to a
-  remote server, restarting a live Discord bot.
-- **9 system-install blocks** — LM Studio into `/Applications`, Homebrew casks.
-- **Two blocks caught the agent violating a boundary the operator had set**, not
-  a generic rule: "this would edit a test file during a review the user
-  explicitly required to remain read-only", and "the mutation changed a tracked
-  production file despite the explicit read-only boundary". These are the
-  behaviour working exactly as designed, and neither would have been caught by
-  a static allow/deny list — they required reading the user's stated intent from
-  the transcript.
-
-The 23 PID-kill blocks are a separate case: correct in substance (they enforce
-the repo's own shared-tree rule about only killing processes you spawned) but
-**redundant**, because `.claude/hooks/block-sweep-kill.sh` already denies
-discovery-paired kills deterministically. They also generated the heaviest retry
-loops in the dataset — one PID was attempted four different ways.
-
-## Deeper pass
-
-Three things the first pass missed, one of which retracts a method rather than a
-finding.
-
-### There is a second denial channel, and it carries no security judgment
-
-The 128 blocks above are classifier *decisions*. They are not all the denials.
+## Finding 2: 61 denials carry no security judgment
 
 | Event | Count |
 | --- | --- |
-| `Auto mode classifier blocked action` (a decision) | 128 |
-| `Auto mode classifier unavailable, denying with retry guidance (fail closed)` | 55 |
-| `Auto mode classifier error` (cause of the above) | 56 |
+| Classifier-decision denials | 208 |
+| Fail-closed denials (classifier unavailable) | 61 |
 
-Real denial volume in the window is therefore **183, of which 30% never reached
-a security judgment at all.** The agent cannot tell the difference: both arrive
-as `Permission for this action has been denied. Reason: …`.
+In the debug-logged outage session `24b1f79e` (2026-08-07), 55 fail-closed
+denials ran from **18:22:53.710Z to 18:24:53.299Z — almost exactly 2 minutes**,
+against 126 classifier calls in that session. Cause split: **38 connection
+errors and 17 "No healthy Codex account is available"**. A 56th error at
+18:25:54.511Z was the *handoff* classifier, not the permission classifier, and it
+**allowed** output with a warning — it is not a denial and is excluded.
 
-The 56 errors split as 38 `Connection error.` and 18 `No healthy Codex account
-is available for this request.` The second is structural: the classifier runs on
-`getMainLoopModel()` when no override is set (`yoloClassifier.ts:1044`), so on a
-Codex-backed session **permission decisions inherit Codex account-pool health.**
-Pool exhaustion becomes blanket denial.
+The account-pool cause is structural: because the classifier runs on the main
+loop model, **a Codex-backed session's permission decisions inherit Codex
+account-pool health.** Pool exhaustion becomes blanket denial.
 
-### All 55 landed in one session, in three minutes, and the safety valve could not fire
+The agent *can* distinguish the two kinds. The unavailable path returns its own
+message with explicit retry guidance ("Wait briefly and then try this action
+again… read-only operations do not require the classifier"), unlike the standard
+rejection. Both stop the action; only one explains that retrying may work — which
+plausibly contributes to Finding 1.
 
-Session `24b1f79e`, 2026-08-07 18:22:53Z → 18:25:54Z. 56 fail-closed denials in
-3 minutes 1 second, against 126 classifier calls in that session — **44% of its
-tool calls denied for infrastructure reasons.**
+## Finding 3: three separate defects around the outage, not one
 
-There is a designed escape hatch for exactly this: `DENIAL_LIMITS`
-(`denialTracking.ts:12`) sets `maxConsecutive: 3`, and
-`handleDenialLimitExceeded` (`permissions.ts:1002`) falls back to prompting the
-operator so a stuck agent becomes a human decision. It never fired. The reason is
-ordering, and it is verifiable in source: the `unavailable` branch returns its
-deny at `permissions.ts:875-885`, while `recordDenial` sits at
-`permissions.ts:897` — *after* that return.
+Revision 1 claimed a return-ordering bug defeated a three-strikes fallback that
+would have turned the storm into a human decision. The ordering bug is real; the
+consequence was wrong. Three distinct issues:
 
-So infrastructure denials never increment the denial counter, and the
-three-strikes fallback is unreachable on precisely the path where the agent is
-most comprehensively stuck. A classifier-decision denial loop breaks out after 3;
-an outage denial loop does not break out at all.
+**3a — Availability is coupled to the model/account pool.** As above.
 
-### Retracted: I cannot attribute a block to a specific command
+**3b — Unavailable denials bypass denial tracking.** The `unavailable` branch
+returns its deny at `src/utils/permissions/permissions.ts:875-885`; `recordDenial`
+is at `:897`, after that return. So infrastructure denials never increment the
+counter. Real, and confirmed.
 
-The first pass categorised denials from their reason text, which is sound —
-each reason names its own action ("`rm -rf`", "PID 63032", "`/tmp`"). I then
-tried to go further and pair every block to the exact command that caused it,
-using the `[auto-mode] new action being classified:` debug line. **That
-attribution does not hold, and I am discarding the consistency numbers it
-produced.**
+**3c — There is no session-wide circuit breaker across parallel subagents, and
+the per-agent one does not prompt anyone in this configuration.** This is what
+revision 1 got wrong:
 
-Three pairing strategies, each defeated:
+- Async subagents keep *local* denial state, not a session-global counter
+  (`permissions.ts:976-994`, `persistDenialState` → `context.localDenialTracking`).
+- On hitting the limit in headless mode the code throws `AbortError`
+  (`permissions.ts:1041-1044`); it does **not** prompt the operator. Only the
+  interactive path falls back to prompting (`:1047-1075`).
 
-1. *Sequential* (action → next block). Broken by concurrency: 354 of 1,669 calls
-   (21%, across 15 logs) overlap another classifier call in the same log, because
-   subagents fan out and share one debug stream. One session ran 35 subagents.
-2. *Start-time* (`durationMs` back-dating). Better, but still crossed calls whose
-   requests began within the same window.
-3. *Non-overlapping only, log-truncated actions excluded.* Still wrong: it
-   attributed "force-deletes a file outside the project" to `bun run maps:lint`,
-   and "would edit a test file" to `shasum -a 256 …`.
+The 55 denials were spread across 22 subagents, with per-subagent counts of
+`[7,6,6,4,4,3,3,3,3,2,2,2,1,1,1,1,1,1,1,1,1,1]`. With `maxConsecutive: 3`
+enforced, **43 of the 55 would still have occurred** and the affected subagents
+would have aborted rather than asked. Fixing 3b alone removes 12 denials and
+converts some subagent work into aborts. It is not a circuit breaker.
 
-The residual error has two sources beyond concurrency: the action line is
-truncated at 500 characters and **multi-line actions are logged across multiple
-lines**, so every `Apply_patch` collapses to a shared first line
-(`Apply_patch *** Begin Patch`) and every heredoc to `Bash uv run python - <<'PY'`;
-and the 56 errored calls emit an action line but no usage line, shifting any
-positional pairing.
+## Finding 4: scratch-file over-blocking, with ownership now proven
 
-This is itself the finding: **auto-mode decisions are not auditable after the
-fact.** Denials are never written to session JSONL, the debug log carries no
-correlation id joining an action to its verdict, and the action text is lossy.
-Anything requiring "which command was denied, and was that consistent" cannot be
-answered from what is retained. Reason-text analysis is the ceiling.
+| Category | n | % | Assessment |
+| --- | --- | --- | --- |
+| Process kill / PID | 48 | 23.1% | Correct but redundant |
+| GUI / external | 40 | 19.2% | Correct |
+| Temp / scratch path | 34 | 16.3% | Over-blocking |
+| Other (mixed) | 27 | 13.0% | Split |
+| Secrets / credentials | 26 | 12.5% | Correct |
+| Outside workdir, non-temp | 26 | 12.5% | Split |
+| Remote / publish | 7 | 3.4% | Correct |
+
+Roughly **73 denials (35%) are unambiguously correct** — secrets, remote
+deploys, GUI launches under the repo's own per-run authorization rule. Roughly
+**34–45 (16–22%) are over-blocking**, essentially all of it the scratch-path
+category plus the read-only end of outside-workdir. The 48 process-kill denials
+enforce the repo's shared-tree rule correctly but duplicate
+`.claude/hooks/block-sweep-kill.sh`, which already denies discovery-paired kills
+deterministically.
+
+**Ownership is now established rather than assumed.** For the 45 denials
+referencing an explicit temp path, I checked whether the same transcript
+referenced that path in an earlier `tool_use`: **40 were created earlier by the
+same agent in the same transcript**; the other 5 name no explicit path. Zero
+cases where the path had unknown or pre-existing ownership. So this category is
+the agent being denied access to state it created itself.
+
+The root cause is a genuine conflict inside the prompt, not a classifier error:
+`permissions_external.txt:11` allows "project build, lint, type-check, and
+formatting commands", while `:23-24` denies "operating outside the user's working
+and additional directories" and overwriting pre-existing files with `>`. Deny
+always wins, so `renderer:build --outDir /tmp/…` loses on where its artifacts
+land rather than on what it does.
+
+**20 of 128 debug-captured reasons (16%) contain an explicit concession** — the
+classifier names the mitigating fact and blocks anyway: "even for a temporary
+verification directory", "even for likely build artifacts", "despite the prior
+approval".
+
+## Confirmed misreads
+
+Two denials rest on the classifier misreading the command:
+
+- `bun run maps:lint` — the project's own docs linter, squarely allow-listed.
+- `git diff --check … && git show … | git apply --check --reverse` — denied as
+  "ambiguously ordered `git apply --reverse --check` that could affect the shared
+  working tree". `--check` is a dry run. The same reason also cites "bare
+  `python3`", which does not appear in the command
+  (`agent-ab9307c23a6ee836b.jsonl:57-62`).
+
+## Where the gate earned its cost
+
+Two denials caught the agent violating a boundary the *operator* had stated, not
+a generic rule: editing a test file during a review required to stay read-only,
+and mutating a tracked production file under the same boundary. Neither would
+have been caught by a static allow/deny list — both required reading intent out
+of the transcript.
+
+## Revision-1 errors
+
+Recorded rather than silently corrected:
+
+1. **"About half of denials were over-blocking."** Wrong denominator. On the
+   corrected dataset it is 16–22% of decision denials and ~13–17% of all 269.
+2. **"Denials are not written to session JSONL; reason-text analysis is the
+   ceiling."** False. Every denial is retained with its command, joinable by
+   `tool_use_id`. I had actually extracted 67 such pairs earlier in the same
+   investigation, then generalised from a failed grep against a *parent*
+   transcript — the denials live in the *subagent* transcripts. The debug-log
+   timestamp-pairing I built, retracted, and reported as an auditability limit
+   was unnecessary work against the wrong source.
+3. **"The three-strikes fallback would have made this a human decision."** Wrong
+   scope and wrong outcome; see 3c.
+4. **"56 fail-closed denials over 3m01s."** 55, over ~2 minutes; the 56th event
+   was the handoff classifier allowing output. Error split is 38/17, not 38/18.
+5. **"The agent cannot tell the difference."** It can; the messages differ.
+6. **"44 blocks within 120s prove retry loops."** Invalid over shared debug logs.
+   Replaced with the JSONL-verified count (103).
+7. Nits: 5.54 s is a mean, not a median; aggregate cache-read share is 80%, not
+   97%; the block log call is at `permissions.ts:901`.
 
 ## Uncertainty
 
-- **Command recovery is partial.** Reasons are complete for all 128 blocks;
-  verbatim commands were recovered only for the sessions whose subagent
-  transcripts survived. Category assignment for the rest rests on the reason
-  text, which names the action ("`rm -rf`", "PID 63032", "`/tmp`") but not the
-  full command line.
-- **Categorisation is mine, keyword-assisted, and the boundaries are
-  judgement calls.** The "outside working dir, non-temp" bucket in particular
-  splits between defensible (editing `/Users/pt/DiscordBot` from a cat-code
-  session) and over-blocking (read-only inspection of a `~/.cat-code`
-  transcript). I did not attempt a precise split.
-- **No outcome data.** The logs record that an action was blocked, not whether
-  the operator subsequently approved it. A denial the operator would have
-  approved and a denial they would have refused look identical here. The
-  over-blocking judgement is therefore mine on the merits of each action, not an
-  observed disagreement rate.
-- **Consistency is unmeasured, not measured-and-clean.** See the retraction
-  above. Whether the classifier gives the same verdict to the same action twice
-  is the obvious next question and this data cannot answer it. My working
-  impression from the reason text is that verdicts are context-sensitive by
-  design (the system prompt instructs it to weigh user intent from the
-  transcript), which would make some variation correct rather than a defect —
-  but that is an impression, not a result.
-- **The 55 fail-closed denials are one session.** They may be a single bad
-  afternoon for the Codex pool rather than a recurring pattern. The ordering
-  defect that let them run unbounded is structural and permanent; the frequency
-  of the trigger is a one-observation sample.
-- **The `other` bucket is genuinely mixed** (20 items) and resisted clean
-  categorisation: it contains real security saves, real over-blocks, and several
-  one-off judgement calls about specific code changes.
+- **No approval outcomes.** Logs record that an action was denied, never whether
+  the operator subsequently approved it. The over-blocking judgement is mine on
+  the merits of each action, not an observed disagreement rate.
+- **Consistency remains unmeasured.** Whether the same action gets the same
+  verdict twice is answerable from this JSONL dataset but I have not done it.
+  Note that some variation would be *correct*: the system prompt instructs the
+  classifier to weigh user intent from the transcript, so identical commands in
+  different contexts may legitimately diverge.
+- **Category boundaries are my judgement**, keyword-assisted over command +
+  reason text. The `other` bucket (27) and the outside-workdir split are the
+  softest.
+- **The 61 infrastructure denials are dominated by one session.** The ordering
+  defect (3b) and the missing circuit breaker (3c) are structural and permanent;
+  the frequency of the trigger is a one-observation sample.
+- **Debug-derived cost figures cover only debug-enabled sessions**, a subset of
+  the JSONL population, and are not directly comparable to the 269 total.
