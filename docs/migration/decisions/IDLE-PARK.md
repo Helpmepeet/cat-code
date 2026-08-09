@@ -185,7 +185,27 @@ vocabulary, and it does not change how a genuine crash, a failed spawn, or a
 `RESUME_FAILED_EXIT_CODE` death reads. Only exit code 5 on an `exited` frame is a
 park; a `disconnected`/`failed` frame is never reclassified whatever it carries.
 
-## 1b. OPEN — four surfaces still say "crashed" (found by review 2026-08-05)
+## 1b. RESOLVED 2026-08-09 — four surfaces said "crashed" (found by review 2026-08-05)
+
+> **CLOSED by option (B), on the operator's call (CC-36, `396bebc`).**
+> `SessionDescriptor` gains `parked`, set in `host.descriptorFromRow` where the
+> row's shutdown marking is already computed, and all four surfaces inherit it
+> through `sessionStatusVisual`. **This reverses §11**, which rejected exactly
+> this field — its stated reason was to keep the renderer provably unaware park
+> exists, and the 2026-08-05 ruling withdrew that goal, so the premise no longer
+> held. The descriptor is otherwise unchanged: still `disconnected` +
+> `restorable`, so `foldTabMembership` and every status branch behave as before.
+>
+> Two gates were kept and are pinned by mutation tests: `restorable` (§1c — an
+> unrestorable park stays dead, never dressed up as resting) and
+> `liveStatus === null` (an unpark spawns BEFORE `upsertOnSpawn` clears the row's
+> mark, so reading the mark alone would paint a booting engine as resting).
+> `tabStatus.ts`'s own parked branch was folded back behind the shared module,
+> closing the fifth-copy drift this section named.
+>
+> The description below is kept as the record of what was wrong.
+
+
 
 §1a fixed the surfaces that read the renderer's CONNECTION snapshot. Every other
 session surface reads the **descriptor** through the one shared vocabulary
@@ -208,7 +228,7 @@ decision now lives outside the module that exists to stop exactly this drift
 switch"). The four surfaces above did not inherit the fix because they never see
 the connection snapshot at all — they are descriptor-derived by design.
 
-**The fork, unresolved on purpose.** Closing it is one of:
+**The fork, resolved 2026-08-09 as (B).** It was one of:
 
 - **(A) Thread a parked signal through the renderer.** Add `'parked'` to
   `sessionStatusVisual`'s synthetic-status parameter beside `'preview'`, move
@@ -229,9 +249,10 @@ must now be aware. So (B) is no longer barred by its own premise — but reversi
 a recorded decision is an operator call, not a reviewer's, which is why this is
 written down rather than done.
 
-Until one is chosen, the honest statement is: **a park no longer presents as a
-failure in the chat view; it still does in the Sessions page, the ⌘K palette, and
-the debug export.**
+(B) was chosen. The honest statement is now: **a park no longer presents as a
+failure anywhere** — not in the chat view, and not in the Sessions page, the ⌘K
+palette, the sidebar row's assistive-tech label, or the debug export, which no
+longer disagrees with itself.
 
 ## 1c. OPEN — a session with no transcript should never be parked at all
 
