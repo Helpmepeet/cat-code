@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 99/242** — counted against the review's original 61 High and
+**Progress: Fix 100/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -103,6 +103,7 @@ count tracks individually verified findings, not commit count.
 | S01 HIGH a null foreground continuation claim returned without re-arming the session poll loop | fixed | `f697c60` | the null-attempt race now retries after one second, including the competing-owner path; deferred-continuation hook regressions (8 pass); app typecheck and renderer production build |
 | S01 HIGH deferred-continuation eligibility reloaded the live Codex pool and erased in-memory cap state | fixed | `b8d9c6e` | eligibility observes the existing in-process pool with `loadPool: false`, preserving capped-account decisions; Codex status/deferred-continuation regressions (43 pass); app typecheck and renderer production build |
 | S07 HIGH a failed transcript append dropped its pending batch and left all later flushes poisoned | fixed | `d2d35bb` | failed batches are restored to the queue head for retry, while the scheduled drain logs the failure, clears its active promise, and re-arms if work remains; session-storage suite (25 pass); app typecheck and renderer production build |
+| S06 HIGH Config close paths discarded successful-redemption audit records | fixed | `2e626c2` | every Settings close, including Config's apply/Escape paths, now uses the audit-preserving wrapper without changing Config's normal result display; Settings regression (3 pass); app typecheck and renderer production build |
 
 ## Known verification limitation
 
