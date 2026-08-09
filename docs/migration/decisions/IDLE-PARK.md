@@ -267,7 +267,7 @@ failure anywhere** — not in the chat view, and not in the Sessions page, the �
 palette, the sidebar row's assistive-tech label, or the debug export, which no
 longer disagrees with itself.
 
-## 1c. OPEN — a session with no transcript should never be parked at all
+## 1c. RESOLVED 2026-08-09 — a session with no transcript is never parked
 
 Found by review round 2, demonstrated against a real `Host` + registry + driver.
 The engine materializes a session's `.jsonl` on its FIRST message
@@ -286,10 +286,15 @@ is fixed here: `tabStatus.ts` gates its parked visual on `descriptor.restorable`
 and an unrestorable park falls through to the honest dead presentation instead of
 reading as a resting `idle` tab with no affordance.
 
-The root fix is not done: **do not park what cannot come back.** It needs the
-`canResume` predicate the host already owns privately (`host.ts`) exposed to the
-park path, since neither the driver nor the sidecar can derive it. That is a host
-control-plane addition, so it is written down rather than slipped in.
+**Fix:** the host exposes its existing `canResume` predicate to the idle-park
+driver, which filters victims before both the TTL and cap selection. The host
+checks the transcript at read time and its in-memory resume-failure verdict, so
+it covers both the never-materialized transcript and a transcript deleted after
+a completed turn. A null `lastMessageSentAt` would identify the first case and
+legacy rows conservatively, but it cannot see a later deletion; it is therefore
+not the park gate. This is a read-only host-control-plane method, not a socket
+frame, so the sidecar allowlist, preload surface, and security baseline are
+unchanged.
 
 ## 1d. OPEN — park is now invisible, and the run controls are silently inert
 

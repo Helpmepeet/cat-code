@@ -606,6 +606,7 @@ function startIdleParkDriver(): void {
   if (!activeHost || !activeSupervisor) return
   idleParkDriver = createIdleParkDriver({
     listSessions: () => activeHost.listSessions(),
+    canResume: appSessionId => activeHost.canResume(appSessionId),
     park: appSessionId => {
       // Host-originated, gated at the sidecar. No renderer authored this — the
       // requestId is minted here purely to satisfy the frame contract (there is

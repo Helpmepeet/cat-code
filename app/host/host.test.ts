@@ -1853,6 +1853,30 @@ test('canPreview is true only for a not-live restorable row; false for live/unkn
   expect(h.host.canPreview(orphan)).toBe(false)
 })
 
+test('canResume reads transcript truth for a live idle-park candidate', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  if (!created.ok) throw new Error('create failed')
+  const { appSessionId } = created.value
+  h.supervisor.emitReady(appSessionId, 'engine-park-candidate')
+  await settle(
+    () =>
+      h.registry.findSession(appSessionId)?.engineSessionId ===
+      'engine-park-candidate',
+  )
+
+  // Ready stamps an id before any message has materialized its transcript.
+  expect(h.host.canResume(appSessionId)).toBe(false)
+
+  writeTranscript(h.storageDir, 'engine-park-candidate')
+  expect(h.host.canResume(appSessionId)).toBe(true)
+
+  // The predicate is read-time, so it also catches a transcript pruned after a
+  // completed turn instead of inferring resumability from message recency.
+  rmSync(join(h.storageDir, 'transcripts', 'engine-park-candidate.jsonl'))
+  expect(h.host.canResume(appSessionId)).toBe(false)
+})
+
 /**
  * Create-after-shutdown. `ensureHost` fires the primary `createSession` as
  * fire-and-forget, and it awaits the registry launch gate before spawning — so a

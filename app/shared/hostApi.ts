@@ -300,6 +300,14 @@ export type HostApi = {
   closeSession(appSessionId: SessionId): Promise<HostResult<void>>
   listSessions(): SessionDescriptor[]
   /**
+   * IDLE-PARK §1c — may this row's engine session id be resumed if its live
+   * process is reclaimed? Unlike `canPreview`, this deliberately permits a live
+   * row: the park driver asks before it sends a reclaim request. The host owns
+   * this read because it alone knows both transcript existence and this-run
+   * resume-failure verdicts.
+   */
+  canResume(appSessionId: SessionId): boolean
+  /**
    * IS-A — read-only restorability gate for the transcript-cache preview path.
    * True only for a not-live row with a non-null engineSessionId (the descriptor's
    * `restorable`); main calls it before reading a cache off disk.
