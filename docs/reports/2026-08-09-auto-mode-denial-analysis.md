@@ -10,9 +10,10 @@ state plus a goal, and revisions 1–2 never declared the goal they were measuri
 against, so the goal was smuggled in and the solution space narrowed silently.
 
 Sections 1–6 are observations: facts recoverable from data or source, stated
-without asserting anything should change. Section 7 is my assessment, kept
-separate, with its assumed goal stated so it can be rejected while the
-observations stand. Revision-2 numbers are unchanged; only framing moved.
+without asserting anything should change. Section 7 records which observations
+change meaning under which goal, without selecting a goal. Nothing here
+identifies a problem or proposes work; whether any of this warrants action is a
+separate decision, deliberately left open. Revision-2 numbers are unchanged.
 
 ## Method
 
@@ -159,46 +160,43 @@ Two denials carry reason text that does not match the command:
   no `python3`, and `git apply --check` performs no write
   (`agent-ab9307c23a6ee836b.jsonl:57-62`).
 
-**20 of the 128 debug-captured reasons (16%) state a mitigating fact and deny
-anyway** — "even for a temporary verification directory", "even for likely build
-artifacts", "despite the prior approval".
+**20 of the 128 debug-captured reasons (16%) state a mitigating fact alongside
+the denial** — "even for a temporary verification directory", "even for likely
+build artifacts", "despite the prior approval".
 
-## 7. Assessment — mine, and contestable
+## 7. What the reading depends on
 
-Everything above holds regardless of what auto mode is for. This section does
-not, so it is separated.
+The measurements above are stable. What they mean is not, because most of them
+change sign depending on what auto mode is for. Recorded here so the dependency
+is visible rather than assumed.
 
-**Goal I am judging against:** maximising useful unattended work per operator
-interruption, on a machine where the operator is often away and several agent
-sessions share one tree.
+**If the operative goal is unattended throughput** — maximum useful work per
+operator interruption — then §2 and §3 are the dominant quantities: half of all
+denials spent re-denying an already-denied command, and 61 issued with no verdict
+behind them. §5's temp-path group reads as denial of access to state the agent
+itself created, given the provenance result.
 
-Against that goal I read §2 and §3 as the largest costs — half of all denials
-spent re-denying something already denied, and 61 issued with no verdict behind
-them — and §5's temp-path group as the clearest case of a denial I would not
-have wanted, given §5's provenance result. I would call roughly 16–22% of
-decision denials unwanted on this goal, around 35% clearly wanted, and the
-process-kill group wanted but already covered by the hook.
+**If the operative goal is limiting blast radius** — an unsupervised agent on a
+tree shared with other sessions and the operator — then the same rows read
+differently. §5's temp-path denials are the rule set applying as written; §2's
+repeats are the expected cost of a conservative gate; §3's fail-closed behaviour
+is the designed response to an unevaluable action, with the retry guidance in
+`buildClassifierUnavailableMessage` as the intended recovery path.
 
-**Against a different goal the same data reads differently.** If the goal is
-minimising blast radius when an unsupervised agent operates on a shared tree,
-then §5's temp-path denials are the system working as intended, §2's repeats are
-the ordinary price of a conservative gate, and §3's fail-closed behaviour is
-correct by construction — denying when you cannot evaluate is the safe default,
-and the retry guidance in the message is the intended recovery path. On that
-reading the only items I would still call unwanted are the two mismatched
-reasons in §6, because those are factually wrong about the command rather than
-strict about it.
+The two readings diverge on §2, §3 and §5, and converge only on §6's two
+mismatched reason texts, which are inaccurate about the command under either
+goal.
 
-I have not established which goal is the operative one. That choice, not
-anything in §1–6, determines what if anything follows from this report.
+Which goal is operative is not established here, and nothing in §1–6 settles it.
 
 ## Revision history
 
 Revision 1 → 2 corrected seven errors found by adversarial review. Recorded
 rather than dropped:
 
-1. "About half of denials were over-blocking" — wrong denominator; 16–22% of
-   decision denials on the corrected dataset.
+1. "About half of denials were over-blocking" — a verdict, and on a denominator
+   that did not match the report's own counts. Revision 3 removes the verdict
+   rather than restating it at a corrected figure.
 2. "Denials are not written to session JSONL; reason-text analysis is the
    ceiling" — false. Every denial is retained with its command, joinable by
    `tool_use_id`. I had extracted 67 such pairs earlier in the same
