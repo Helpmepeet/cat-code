@@ -24,7 +24,7 @@
  * The live sections arrive as ONE optional `sessionState` bundle
  * (`sessionInspectorState.ts`) so that (a) App's wiring is a single prop and
  * (b) an unwired drawer makes one honest statement instead of five. Absent
- * bundle ≠ "this session has nothing": see `selectSeamState`.
+ * bundle ≠ "this session has nothing".
  *
  * §0 deferrals rendered as an HONEST note, never mocked: worktree-session
  * details, file-history backups, content-replacement records, and IDE/LSP status
@@ -91,8 +91,7 @@ export function MetadataInspector({
    * CC-19 §4 — the session's live seams, in one bundle. OPTIONAL with no default
    * on purpose: `undefined` means App has not handed this drawer anything, which
    * is a different fact from "this session has no snapshot" and must not be
-   * rendered as one (`sessionInspectorState.ts` `selectSeamState`, the
-   * `settingsReadState.ts` doctrine). App wires it in one line:
+   * rendered as one (the `settingsReadState.ts` doctrine). App wires it in one line:
    * `sessionState={buildSessionInspectorState({ … })}`.
    */
   sessionState?: SessionInspectorState

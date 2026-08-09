@@ -16,10 +16,10 @@
  *    the drawer can also have been handed nothing at all: `unwired` (App passes
  *    no `sessionState` — the drawer has been TOLD nothing), `unread` (wired, but
  *    no snapshot exists for this session), `read` (a snapshot arrived, so an
- *    empty result is a real answer). `selectSeamState` is the single place that
- *    branch is made, so no section re-remembers it — and none of the three notes
- *    is phrased as "waiting…", since with a dead/never-attached session nothing
- *    is in flight and nothing will arrive.
+ *    empty result is a real answer). The inspector's sections make the narrow
+ *    render-time distinction they need, and none of the notes is phrased as
+ *    "waiting…", since with a dead/never-attached session nothing is in flight
+ *    and nothing will arrive.
  *  - **No fact is invented to fill a gap.** Where the wire carries no answer
  *    (IDE/LSP state; whether an extra directory is durable or ephemeral; the
  *    session's launch argv) the selector reports the gap and the drawer states
@@ -57,7 +57,7 @@ import { SETTING_SOURCE_PRECEDENCE } from './settingsState.js'
  *
  * Each field is nullable INDEPENDENTLY of the bundle: a wired drawer whose
  * session has no `diagnostics.snapshot` yet is a different state from an unwired
- * one, and the two must not collapse (see `selectSeamState`).
+ * one, and the two must not collapse.
  */
 export type SessionInspectorState = {
   /** The session's workspace root, from the host roster (never re-derived here). */
@@ -92,27 +92,6 @@ export function buildSessionInspectorState(input: {
     diagnostics: input.diagnostics,
     runControls: input.runControls,
   }
-}
-
-/* ------------------------------------------------------------------------- *
- * Read state — three values, never two
- * ------------------------------------------------------------------------- */
-
-/**
- * `unwired` = the drawer was handed no bundle, so it knows nothing and the gap is
- * the app's (a one-line `App.tsx` change closes it). `unread` = it was handed the
- * bundle but this session carries no such snapshot, which is terminal for a dead
- * or never-attached session. `read` = a snapshot arrived; an empty result is now
- * a real answer.
- */
-export type SeamState = 'unwired' | 'unread' | 'read'
-
-export function selectSeamState(
-  bundle: SessionInspectorState | undefined,
-  pick: (state: SessionInspectorState) => unknown,
-): SeamState {
-  if (bundle === undefined) return 'unwired'
-  return pick(bundle) == null ? 'unread' : 'read'
 }
 
 /**

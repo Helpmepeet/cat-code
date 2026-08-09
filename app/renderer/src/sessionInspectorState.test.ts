@@ -12,7 +12,6 @@ import {
   selectEffectiveSettingRows,
   selectFlagLayer,
   selectRunControls,
-  selectSeamState,
   selectSessionDirectories,
   selectSettingsLayerViews,
   selectValuedSettingCount,
@@ -87,52 +86,7 @@ const runControls: RunControlsSnapshot = {
   autoCompact: { enabled: true, threshold: null, warningThreshold: null },
 }
 
-describe('selectSeamState', () => {
-  test('separates an unwired drawer from a wired one with nothing to show', () => {
-    expect(selectSeamState(undefined, state => state.settings)).toBe('unwired')
-
-    const wired = buildSessionInspectorState({
-      cwd: '/repo',
-      settings: null,
-      permissionContext: null,
-      workspaceTrust: null,
-      diagnostics: null,
-      runControls: null,
-    })
-    expect(selectSeamState(wired, state => state.settings)).toBe('unread')
-    expect(selectSeamState(wired, state => state.diagnostics)).toBe('unread')
-  })
-
-  test('a present snapshot reads, per seam independently', () => {
-    const bundle = buildSessionInspectorState({
-      cwd: null,
-      settings,
-      permissionContext: null,
-      workspaceTrust: null,
-      diagnostics,
-      runControls: null,
-    })
-    expect(selectSeamState(bundle, state => state.settings)).toBe('read')
-    expect(selectSeamState(bundle, state => state.diagnostics)).toBe('read')
-    // A null sibling must NOT be dragged to `read` by its neighbours.
-    expect(selectSeamState(bundle, state => state.permissionContext)).toBe('unread')
-  })
-
-  test('a null cwd is a read answer, not an unwired one', () => {
-    const bundle = buildSessionInspectorState({
-      cwd: null,
-      settings: null,
-      permissionContext: null,
-      workspaceTrust: null,
-      diagnostics: null,
-      runControls: null,
-    })
-    // The bundle exists, so the drawer HAS been told about the cwd — the answer
-    // is simply "the roster records none". Only `undefined` is unwired.
-    expect(selectSeamState(bundle, state => state.cwd)).toBe('unread')
-    expect(selectSeamState(undefined, state => state.cwd)).toBe('unwired')
-  })
-
+describe('inspector seam notes', () => {
   test('every unread note names a different seam', () => {
     const notes = Object.values(INSPECTOR_SEAM_UNREAD_NOTE)
     expect(new Set(notes).size).toBe(notes.length)
