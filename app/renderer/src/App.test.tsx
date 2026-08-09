@@ -2219,6 +2219,17 @@ test('the composer connects its focused textbox to the active slash or mention o
   expect(source).toContain('typeahead={composerTypeahead}')
 })
 
+test('SettingsShell receives the active session binding from the merged roster', () => {
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  expect(source).toContain(
+    'selectSettingsProjectBinding(sessionCatalogRows, activeSessionId)',
+  )
+  const shellStart = source.indexOf('<SettingsShell')
+  expect(shellStart).toBeGreaterThan(-1)
+  const shell = source.slice(shellStart, source.indexOf('/>', shellStart))
+  expect(shell).toContain('projectBinding={settingsProjectBinding}')
+})
+
 test('P4-50: the account-health bar sits above the workspace and cannot gate a send', () => {
   // The ruling's two hard constraints are structural, so they are pinned
   // structurally. (1) ONE bar, mounted as a sibling ABOVE the workspace, not

@@ -350,6 +350,7 @@ import {
   verbAckErrorToast,
 } from './verbAckResultState.js'
 import { SettingsShell } from './SettingsShell.js'
+import { selectSettingsProjectBinding } from './settingsProjectBinding.js'
 import type { SettingWriteInput } from './SettingsEditors.js'
 import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import type {
@@ -1135,6 +1136,15 @@ export function App() {
       ? sessionCatalogRows.find(row => row.appSessionId === activeSessionId) ??
         null
       : null
+
+  // Settings is resolved per active engine session, but its project label must
+  // be disambiguated against the whole merged roster (two workspaces can both
+  // end in `app`). Keep that binding in its dedicated selector rather than
+  // falling back to the cwd basename inside SettingsShell.
+  const settingsProjectBinding = useMemo(
+    () => selectSettingsProjectBinding(sessionCatalogRows, activeSessionId),
+    [activeSessionId, sessionCatalogRows],
+  )
 
   // P4-17 Welcome launcher — derived inputs, read from the SAME domain seams as
   // the other surfaces (no new feed, D5/WELCOME-LAUNCHER §6). Recents = a
@@ -3391,6 +3401,7 @@ export function App() {
             onSettingWrite={sendSettingWrite}
             remoteLastResult={remoteSettings.lastResult}
             remoteSnapshot={selectRemoteSettingsSnapshot(remoteSettings, activeSessionId)}
+            projectBinding={settingsProjectBinding}
             snapshot={selectSettingsSnapshot(settings, activeSessionId)}
             workspaceTrustSnapshot={selectWorkspaceTrustSnapshot(
               workspaceTrust,
