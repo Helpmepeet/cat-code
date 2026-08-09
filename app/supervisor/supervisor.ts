@@ -33,6 +33,7 @@ import {
   MAX_PROMPT_BYTES,
 } from '../shared/limits.js'
 import {
+  isServerFrameKind,
   PROTOCOL_VERSION,
   type ClientFrame,
   type ReadyFrame,
@@ -704,7 +705,7 @@ function parseSidecarDeliveryStageRecord(value: unknown): SidecarDeliveryStageRe
     typeof value.sessionId !== 'string' || value.sessionId.length < 1 || value.sessionId.length > 128 ||
     !isDeliveryTrace(value.trace) ||
     !['engine.produced', 'sidecar.received', 'sidecar.socket.queued', 'sidecar.socket.sent'].includes(value.stage as string) ||
-    typeof value.frameKind !== 'string' || !/^[a-z][a-z0-9.-]{0,95}$/.test(value.frameKind) ||
+    !isServerFrameKind(value.frameKind) ||
     typeof value.wallTimestamp !== 'string' || Number.isNaN(Date.parse(value.wallTimestamp)) ||
     typeof value.monotonicTimestampMs !== 'number' || !Number.isFinite(value.monotonicTimestampMs) || value.monotonicTimestampMs < 0 ||
     !isSafeDeliveryIdentifier(value.processInstanceId) ||

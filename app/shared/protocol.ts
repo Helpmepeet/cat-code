@@ -2691,6 +2691,55 @@ export type ServerFrame = ServerFramePayload & {
   deliveryTrace?: import('./deliveryTrace.js').DeliveryTrace
 }
 
+export type ServerFrameKind = ServerFramePayload['kind']
+
+/**
+ * The discriminant as a runtime vocabulary. A delivery-trace record carries its
+ * frame kind across a process boundary and is persisted and exported, so the
+ * parsers on that path must check membership here rather than string shape:
+ * an identifier-shaped regex admits arbitrary operator text. Typed as a total
+ * Record so tsc fails on a kind added to the union but not to this list, and on
+ * a list entry that no payload declares.
+ */
+const SERVER_FRAME_KINDS: Record<ServerFrameKind, true> = {
+  ready: true,
+  'session-title': true,
+  event: true,
+  pong: true,
+  error: true,
+  lifecycle: true,
+  'permission.context': true,
+  'settings.snapshot': true,
+  'settings.result': true,
+  'agent-config.snapshot': true,
+  'thread-goal.snapshot': true,
+  'memory.snapshot': true,
+  'context-breakdown.snapshot': true,
+  'tasks.snapshot': true,
+  'agent-mode.snapshot': true,
+  'agent-mode.set.result': true,
+  'lease.snapshot': true,
+  'task-control.result': true,
+  'run-controls.snapshot': true,
+  'run-control.result': true,
+  'session-action.result': true,
+  'accounts.snapshot': true,
+  'account.result': true,
+  'oauth.login.progress': true,
+  'workspace-trust.snapshot': true,
+  'workspace.trust.result': true,
+  'diagnostics.snapshot': true,
+  'extensions.snapshot': true,
+  'remoteSettings.snapshot': true,
+  'remoteSettings.result': true,
+  'sessions.snapshot': true,
+  'slash-catalog.snapshot': true,
+}
+
+export function isServerFrameKind(value: unknown): value is ServerFrameKind {
+  return typeof value === 'string' && Object.hasOwn(SERVER_FRAME_KINDS, value)
+}
+
 /* ------------------------------------------------------------------------- *
  * Transcript cache — the at-rest "instant session open" artifact
  * (docs/migration/specs/2026-07-14-instant-session-open-design.md — M1). NOT a

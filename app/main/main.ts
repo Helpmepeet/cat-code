@@ -863,6 +863,13 @@ function scheduleDebugCleanup(): void {
       stdio: 'ignore', detached: false,
       env: { ...process.env, CATCODE_DEBUG_CLEANUP_MARKER_DIR: defaultRegistryDir() },
     })
+    // F7 — a spawn failure (ENOENT: bun missing) arrives asynchronously as an
+    // 'error' event, which the try/catch cannot see. Without this listener Node
+    // treats it as unhandled, and the uncaughtException handler below exits the
+    // whole app over a deliberately non-fatal cleanup worker.
+    child.on('error', () => {
+      logOperational('diagnostic', 'warn', { source: 'debugCleanup', reason: 'worker_spawn_failed' })
+    })
     child.unref()
   } catch {
     logOperational('diagnostic', 'warn', { source: 'debugCleanup', reason: 'worker_spawn_failed' })

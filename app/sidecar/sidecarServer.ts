@@ -3389,6 +3389,13 @@ export class SidecarServer {
         ? this.wrapOutboundFrame(frame, trace!)
         : frame
       encoded = encodeFrame(payload)
+      // The delivery envelope is metadata-only and optional by contract, so it
+      // must never cost a frame its delivery. A raw frame that fits below the
+      // cap keeps its place on the wire; only the trace is dropped.
+      if (encoded.byteLength > MAX_OUTBOUND_FRAME_BYTES && payload !== frame) {
+        const bare = encodeFrame(frame)
+        if (bare.byteLength <= MAX_OUTBOUND_FRAME_BYTES) encoded = bare
+      }
     } catch (error) {
       this.log(
         `[sidecar] failed to encode frame kind=${frame.kind}: ${

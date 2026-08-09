@@ -40,3 +40,18 @@ test('operational text removes every rooted path and URL path/query', () => {
   expect(sanitizeOperationalText('/var/db/private.txt C:\\Users\\alice\\secret https://user:pw@example.com/private/customer?a=1#x'))
     .not.toMatch(/var\/db|Users\\alice|private\/customer|user:pw|\?a=/)
 })
+
+test('operational text redacts a rooted path behind any delimiter, a non-http scheme, and an address', () => {
+  // The path rule only anchored after whitespace or a quote, so a path behind
+  // any other delimiter reached the log and the exported bundle intact.
+  expect(sanitizeOperationalText('cwd=/Users/alice/private')).not.toContain('/Users/alice')
+  expect(sanitizeOperationalText('path:/Users/alice/secret')).not.toContain('/Users/alice')
+  // The URL rule matched http(s) only, so a file URL kept the whole home path.
+  expect(sanitizeOperationalText('file:///Users/alice/private')).not.toContain('/Users/alice')
+  expect(sanitizeOperationalText('reached alice@example.com')).not.toContain('alice@example.com')
+})
+
+test('operational text leaves a relative segment alone', () => {
+  // Widening the path rule must not start eating ordinary prose and counters.
+  expect(sanitizeOperationalText('and/or read 12/34 frames')).toBe('and/or read 12/34 frames')
+})

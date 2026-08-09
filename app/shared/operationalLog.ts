@@ -133,8 +133,15 @@ const SECRET_KEY = /(token|secret|password|credential|authorization|cookie|vault
 // Any rooted POSIX or Windows path is personal/environmental information.  The
 // second-pass bundle parser only admits opaque identifiers, but operational
 // fields still need this broad first-pass protection.
-const ABSOLUTE_PATH = /(?:^|[\s"'(])(?:[A-Za-z]:[\\/][^\s"')]*|\\\\[^\s"']+|\/(?:[^\s"')]+))/g
-const URL_WITH_SENSITIVE_PARTS = /\bhttps?:\/\/[^\s]+/gi
+// A leading-delimiter class only caught a path after whitespace or a quote, so
+// any other delimiter carried it through intact ("cwd=/Users/…"). Excluding the
+// characters a path segment is built from catches every rooted path while
+// leaving a relative segment ("and/or") alone; the inner guard stops the "//"
+// of an already-rewritten URL from reading as a rooted path.
+const ABSOLUTE_PATH = /(?<![A-Za-z0-9._\\/-])(?:[A-Za-z]:[\\/][^\s"')]*|\\\\[^\s"']+|\/(?!\/)[^\s"')]+)/g
+// Every scheme, not only http(s): a file:// URL names the same home directory.
+const URL_WITH_SENSITIVE_PARTS = /\b[a-z][a-z0-9+.-]*:\/\/[^\s]+/gi
+const EMAIL = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g
 const TOKEN_SHAPE = /\b(?:bearer\s+)?(?:sk|rk|pk|ghp|eyJ)[A-Za-z0-9._-]{12,}\b/gi
 const CONTROL = /[\u0000-\u001f\u007f]/g
 
@@ -148,6 +155,7 @@ export function sanitizeOperationalText(value: string): string {
         return '[redacted-url]'
       }
     })
+    .replace(EMAIL, '[redacted-email]')
     .replace(ABSOLUTE_PATH, ' [redacted-path]')
     .replace(TOKEN_SHAPE, '[redacted-token]')
     .replace(CONTROL, ' ')

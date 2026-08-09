@@ -12,6 +12,7 @@ import {
   MAX_DELIVERY_TRACE_TOTAL_BYTES,
 } from './deliveryTraceSink.js'
 import { isDeliveryStage, isSafeDeliveryIdentifier } from '../shared/deliveryTrace.js'
+import { isServerFrameKind } from '../shared/protocol.js'
 import {
   MAX_OPERATIONAL_LOG_AGE_MS,
   MAX_OPERATIONAL_LOG_BYTES,
@@ -147,7 +148,16 @@ export function parseDeliveryTraceRecord(value: unknown): TraceRecord | null {
     ],
   }
   if (typeof kind !== 'string' || !allowedByKind[kind] || Object.keys(item).some(key => !allowedByKind[kind]!.includes(key))) return null
-  if (item.schemaVersion !== 1 || typeof item.wallTimestamp !== 'string' || Number.isNaN(Date.parse(item.wallTimestamp)) || typeof item.monotonicTimestampMs !== 'number' || typeof item.launchId !== 'string' || typeof item.processName !== 'string' || typeof item.processInstanceId !== 'string') return null
+  // The bundle's promise is that a second pass re-validates every retained
+  // record, so the identifier grammar belongs here rather than only on the
+  // delivery.trace branch: an anomaly record carrying a path in its
+  // processInstanceId would otherwise be exported unchanged.
+  if (
+    item.schemaVersion !== 1 || typeof item.wallTimestamp !== 'string' || Number.isNaN(Date.parse(item.wallTimestamp)) ||
+    typeof item.monotonicTimestampMs !== 'number' || !Number.isFinite(item.monotonicTimestampMs) || item.monotonicTimestampMs < 0 ||
+    !opaqueId(item.launchId) || !opaqueId(item.processInstanceId) ||
+    !['bun-sidecar', 'electron-main', 'electron-renderer'].includes(item.processName as string)
+  ) return null
   if (kind === 'delivery.trace') {
     if (
       !['engine', 'sidecar', 'supervisor', 'host', 'attachment-gate', 'ipc-bridge', 'preload', 'renderer'].includes(item.component as string) ||
@@ -158,7 +168,7 @@ export function parseDeliveryTraceRecord(value: unknown): TraceRecord | null {
       !positiveInteger(item.deliveryAttempt) || typeof item.replay !== 'boolean' || typeof item.stage !== 'string' ||
       !isDeliveryStage(item.stage) ||
       !positiveInteger(item.connectionEpoch) ||
-      (item.frameKind !== undefined && (typeof item.frameKind !== 'string' || !/^[a-z][a-z0-9.-]{0,95}$/.test(item.frameKind))) ||
+      (item.frameKind !== undefined && !isServerFrameKind(item.frameKind)) ||
       (item.processStartedAt !== undefined && (typeof item.processStartedAt !== 'string' || Number.isNaN(Date.parse(item.processStartedAt)))) ||
       (item.documentId !== undefined && !opaqueId(item.documentId)) ||
       (item.subscriptionEpoch !== undefined && !positiveInteger(item.subscriptionEpoch))
@@ -166,14 +176,16 @@ export function parseDeliveryTraceRecord(value: unknown): TraceRecord | null {
   } else if (kind === 'trace.loss') {
     if (
       !positiveInteger(item.sequenceStart) || !positiveInteger(item.sequenceEnd) ||
-      !positiveInteger(item.droppedCount) || typeof item.reason !== 'string' ||
+      !positiveInteger(item.droppedCount) ||
+      !['writer_unavailable_or_record_oversize', 'stream_evicted', 'in_memory_eviction'].includes(item.reason as string) ||
       (item.sessionId !== undefined && !opaqueId(item.sessionId)) ||
       (item.streamEpoch !== undefined && !isSafeDeliveryIdentifier(item.streamEpoch))
     ) return null
   } else if (kind === 'trace.ack.rejected') {
     if (
       !opaqueId(item.sessionId) || !isSafeDeliveryIdentifier(item.streamEpoch) ||
-      !positiveInteger(item.sequence) || typeof item.reason !== 'string'
+      !positiveInteger(item.sequence) ||
+      !['invalid_shape', 'unknown_sequence', 'stale_document', 'stale_attempt'].includes(item.reason as string)
     ) return null
   } else if (!opaqueId(item.sessionId) || !isSafeDeliveryIdentifier(item.streamEpoch) || !positiveInteger(item.sequence) || !isDeliveryStage(item.stage)) {
     return null

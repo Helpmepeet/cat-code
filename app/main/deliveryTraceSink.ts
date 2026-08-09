@@ -7,6 +7,7 @@ import {
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { DeliveryStage, DeliveryTrace } from '../shared/deliveryTrace.js'
+import { isServerFrameKind } from '../shared/protocol.js'
 
 export const MAX_DELIVERY_TRACE_RECORD_BYTES = 2 * 1024
 export const MAX_DELIVERY_TRACE_FILE_BYTES = 20 * 1024 * 1024
@@ -453,7 +454,7 @@ function firstMissing(watermarks: DeliveryWatermarks): string | null {
 
 /** Server-frame kinds are fixed protocol discriminants, not user-authored text. */
 function isSafeFrameKind(value: string): boolean {
-  return /^[a-z][a-z0-9.-]{0,95}$/.test(value)
+  return isServerFrameKind(value)
 }
 
 function updateLatest(directory: string, activeFile: string): void {

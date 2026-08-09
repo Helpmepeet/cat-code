@@ -57,3 +57,32 @@ test('second-pass trace parser rejects path-bearing stages and unbounded identif
   expect(parseDeliveryTraceRecord({ ...base, stage: '/Users/alice/secret' })).toBeNull()
   expect(parseDeliveryTraceRecord({ ...base, sessionId: '/var/db/private' })).toBeNull()
 })
+
+test('second-pass trace parser admits only a real frame kind', () => {
+  const base = {
+    schemaVersion: 1, recordKind: 'delivery.trace', wallTimestamp: '2026-08-06T00:00:00.000Z', monotonicTimestampMs: 1,
+    launchId: 'launch', component: 'engine', processName: 'bun-sidecar', processInstanceId: 'process', sessionId: 'session',
+    streamEpoch: '018f0000-0000-4000-8000-000000000001', sequence: 1, traceId: '018f0000-0000-4000-8000-000000000002',
+    deliveryAttempt: 1, replay: false, connectionEpoch: 1, frameKind: 'lifecycle', stage: 'engine.produced',
+  }
+  expect(parseDeliveryTraceRecord(base)).not.toBeNull()
+  // An identifier-shaped regex accepted any lowercase token here, so a project
+  // or account label could be persisted and exported as a "frame kind".
+  expect(parseDeliveryTraceRecord({ ...base, frameKind: 'acme-holdings-migration' })).toBeNull()
+})
+
+test('second-pass trace parser closes anomaly records, not only delivery stages', () => {
+  const loss = {
+    schemaVersion: 1, recordKind: 'trace.loss', wallTimestamp: '2026-08-06T00:00:00.000Z', monotonicTimestampMs: 1,
+    launchId: 'launch', processName: 'electron-main', processInstanceId: 'process', sessionId: 'session',
+    streamEpoch: '018f0000-0000-4000-8000-000000000001',
+    sequenceStart: 1, sequenceEnd: 2, droppedCount: 1, reason: 'stream_evicted',
+  }
+  expect(parseDeliveryTraceRecord(loss)).not.toBeNull()
+  // The opaque-id grammar ran only on the delivery.trace branch, so an anomaly
+  // record carried a path or a free-form reason straight into the bundle.
+  expect(parseDeliveryTraceRecord({ ...loss, processInstanceId: '/Users/alice/private' })).toBeNull()
+  expect(parseDeliveryTraceRecord({ ...loss, launchId: '/var/db/private' })).toBeNull()
+  expect(parseDeliveryTraceRecord({ ...loss, reason: 'https://example.com/private' })).toBeNull()
+  expect(parseDeliveryTraceRecord({ ...loss, processName: 'whatever-i-like' })).toBeNull()
+})
