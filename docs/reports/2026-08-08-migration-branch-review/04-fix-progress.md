@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 104/242** — counted against the review's original 61 High and
+**Progress: Fix 105/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -108,6 +108,7 @@ count tracks individually verified findings, not commit count.
 | S06 MED shared settings could fall back to truncate-then-write | fixed | `fa1a54d` | settings writes now fail closed after a temp-file fsync and atomic rename, with best-effort directory fsync; no direct-write fallback remains; atomic-write and real contention regressions (3 pass); app typecheck and renderer production build |
 | S05 MED first-event HTTP `response.failed` abandoned the SSE reader, abort listener, and idle timer | fixed | `b8d9c6e` | `primeCodexEvents` returns any initial failed iterator before propagating the error, so HTTP and WebSocket generators both run their cleanup; Codex adapter suite (70 pass); app typecheck and renderer production build |
 | S05 MED failover account/model pairs received process-random prompt-cache identities | fixed | `636a237` | every non-overridden pair now derives a deterministic UUIDv5-shaped conversation identity from the stable session cache key, account, and model; adapter regression proves reset-stable distinct pairs (71 pass); app typecheck and renderer production build |
+| S05 MED deterministic initial `response.failed` errors consumed retries and triggered account failover | fixed | `6c343bd` | wrapped response-failure causes are unwrapped before retry classification and terminate immediately, rather than following connection retry/failover paths; account-recovery regression (17 pass); app typecheck and renderer production build |
 
 ## Known verification limitation
 
