@@ -72,7 +72,14 @@ Placement ground truth against what the model eventually committed:
   target at EOF line 4370) and the first `TranscriptView.tsx` clipboard retry
   (first of four identical handlers vs the intended one at ~line 2521).
 
-## The fix (commit `746005f7`)
+## The fix (commit `746005f7`, review fixes in `d50bcaae`)
+
+A post-implementation review pass (2 independent reviewers + validation) found
+one HIGH defect in the first commit — a scope hint that narrowed the match set
+without resolving it to one was discarded, letting the forward pick land
+outside the hinted scope — fixed in `d50bcaae` by carrying the hint-satisfying
+subset into the cursor rule. The same commit makes disclosure notes report
+lines in the coordinates of the file the model read.
 
 - A cursor threads across the hunks of an update. When a **non-first** hunk's
   fingerprint matches multiple locations and scope hints do not resolve it,
