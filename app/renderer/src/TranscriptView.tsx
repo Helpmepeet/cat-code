@@ -1057,7 +1057,7 @@ function mcpServerTool(toolName: string): string {
  * the prototype shows are not projected — §5 flag, not mocked). */
 function deriveSub(row: ToolUseNestedRow): string | undefined {
   if (row.result?.diff) {
-    const { adds, dels } = countDiff(row.result.diff)
+    const { adds, dels } = diffCountsForResult(row.result)
     return `${row.result.diff.filePath} · +${adds} −${dels}`
   }
   if (row.toolFamily === 'mcp') return row.toolName
@@ -1196,7 +1196,9 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
 
   const content = row.result?.content ?? ''
   const isImageDone = row.toolFamily === 'imagegen' && row.status === 'success'
-  const ack = parseToolAck(content)
+  const ack = toolAckForResult(row.result)
+  const bashTail =
+    row.toolFamily === 'bash' && ack === null ? bashTailForResult(row.result) : []
   return (
     <div className="w-full">
       <ToolCardShell
@@ -1211,12 +1213,12 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
         collapsedExtra={
           ack !== null ? (
             <AckPeek ack={ack} />
-          ) : row.toolFamily === 'bash' && content.length > 0 ? (
-            <BashTailPeek content={content} />
+          ) : row.toolFamily === 'bash' && bashTail.length > 0 ? (
+            <BashTailPeek tail={bashTail} />
           ) : null
         }
       >
-        <ToolCardBody row={row} content={content} />
+        <ToolCardBody row={row} content={content} ack={ack} />
         {/* P4-1 open-from-card affordance: hands THIS real projected row to the
             inspector drawer. Only present when a transcript provided the context
             (`openInspector`); a card mounted bare in a test shows none. */}
@@ -1364,10 +1366,8 @@ function memberReadPath(row: ToolRunMember): string {
 /**
  * Parsed digests, cached on the RESULT object.
  *
- * `row` identity is useless as a key — `selectNestedTranscriptRows` rebuilds every
- * row each frame (`attachChildren`, `transcriptProjector.ts:617`) — but the spread
- * copies `result` by reference, so a settled result is the same object frame after
- * frame. Keying here turns a per-frame full-file parse into one parse per tool
+ * The nested projector preserves unchanged row identity, but result identity is
+ * also stable across row reshaping. Keying here turns a per-frame full-file parse into one parse per tool
  * result, which matters because the parse runs even for a COLLAPSED run (the head
  * needs the totals) on a render path with no virtualization. WeakMap ⇒ entries die
  * with the result.
@@ -1512,7 +1512,11 @@ const ToolRunRow = memo(function ToolRunRow({
       </button>
       {open ? (
         <div className="mb-1.5 ml-6 mt-0.5 border-l border-shell-seam pl-3">
-          <ToolCardBody row={row} content={content} />
+          <ToolCardBody
+            row={row}
+            content={content}
+            ack={toolAckForResult(row.result)}
+          />
           {openInspector ? (
             <ToolInspectorLaunch onOpen={() => openInspector(row)} />
           ) : null}
@@ -1940,9 +1944,11 @@ function DelegateGroup({ members }: { members: NestedToolUseRow[] }) {
 function ToolCardBody({
   row,
   content,
+  ack,
 }: {
   row: ToolUseNestedRow
   content: string
+  ack: ToolAck | null
 }) {
   // Read before any early return so the hook order is stable across families.
   // The reveal band's escape hatch is the SAME `ToolInspectorContext` route the
@@ -1956,7 +1962,6 @@ function ToolCardBody({
   const errorTone = row.result?.isError === true
   // Only an EXACT ack replaces the body: a richer object's other fields would
   // vanish with no way to notice they were there (`toolAck.ts` `exact`).
-  const ack = parseToolAck(content)
   if (ack !== null && ack.exact) return <AckBody ack={ack} input={row.input} />
   if (!row.result) {
     // No correlated result yet: show the real input so a running/queued tool is
@@ -2197,8 +2202,7 @@ function AckBody({
   )
 }
 
-function BashTailPeek({ content }: { content: string }) {
-  const tail = selectPeekLines(content.split('\n'))
+function BashTailPeek({ tail }: { tail: string[] }) {
   if (tail.length === 0) return null
   return (
     <div className="border-t border-shell-seam bg-black/20 px-3 py-1.5">
@@ -2218,6 +2222,47 @@ function BashTailPeek({ content }: { content: string }) {
       </pre>
     </div>
   )
+}
+
+/**
+ * Whole-result card derivations are visible while collapsed, so they must not
+ * repeat on every streamed frame. A correlated result object is immutable and
+ * retained by reference until its row changes; WeakMap entries therefore die
+ * with the result and require no eviction path.
+ */
+const toolAckByResult = new WeakMap<ToolResultProjection, ToolAck | null>()
+const bashTailByResult = new WeakMap<ToolResultProjection, string[]>()
+const diffCountsByResult = new WeakMap<
+  ToolResultProjection,
+  { adds: number; dels: number }
+>()
+
+function toolAckForResult(result: ToolResultProjection | null): ToolAck | null {
+  if (result === null) return null
+  const cached = toolAckByResult.get(result)
+  if (cached !== undefined) return cached
+  const ack = parseToolAck(result.content)
+  toolAckByResult.set(result, ack)
+  return ack
+}
+
+function bashTailForResult(result: ToolResultProjection | null): string[] {
+  if (result === null || result.content.length === 0) return []
+  const cached = bashTailByResult.get(result)
+  if (cached !== undefined) return cached
+  const tail = selectPeekLines(result.content.split('\n'))
+  bashTailByResult.set(result, tail)
+  return tail
+}
+
+function diffCountsForResult(
+  result: ToolResultProjection,
+): { adds: number; dels: number } {
+  const cached = diffCountsByResult.get(result)
+  if (cached !== undefined) return cached
+  const counts = result.diff === null ? { adds: 0, dels: 0 } : countDiff(result.diff)
+  diffCountsByResult.set(result, counts)
+  return counts
 }
 
 /**
