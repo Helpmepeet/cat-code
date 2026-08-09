@@ -31,7 +31,7 @@ compiles out of `build:dev:full` and is opt-in via
 | Advisory verdict category, fail-closed parser (closes G1) | landed `729a3c9e` |
 | Deny-seam hardening and circumvention coverage | landed `1bea2818` |
 | Classifier request/response dump, ungated | landed `537f88e5` |
-| Frozen replay corpus (`scripts/auto-mode-corpus.ts`) | landed `39c13c0b` |
+| Frozen replay corpus (`scripts/auto-mode-corpus.ts`) | landed `239ccc7e` |
 | **Machine-specific config content (delta 5)** | **not started; operator content decision** |
 | **The replay run itself** | **not started; blocks enabling the flag** |
 
