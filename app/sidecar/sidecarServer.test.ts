@@ -3888,8 +3888,7 @@ test('C2 — setMode to the CURRENT mode is a no-op and emits no snapshot', () =
   expect(received.some(frame => frame.kind === 'error')).toBe(false)
 })
 
-test('C2 — bypassPermissions is available without a launch flag', () => {
-  // A normal desktop session exposes bypass directly in the mode picker.
+test('C2 — bypassPermissions is rejected without the trusted launch capability', () => {
   const store = makePermissionStore()
   const server = makeServer(
     new AppSessionController(probeAdapter()),
@@ -3912,9 +3911,17 @@ test('C2 — bypassPermissions is available without a launch flag', () => {
     }),
   )
 
-  expect(received.some(frame => frame.kind === 'error')).toBe(false)
-  expect(store.getState().toolPermissionContext.mode).toBe('bypassPermissions')
-  expect(contextFrames(received)).toHaveLength(before + 1)
+  expect(
+    received.some(
+      frame =>
+        frame.kind === 'error' &&
+        frame.code === 'bad_request' &&
+        frame.message.includes('bypassPermissions') &&
+        frame.requestId === 'm-bypass',
+    ),
+  ).toBe(true)
+  expect(store.getState().toolPermissionContext.mode).toBe('default')
+  expect(contextFrames(received)).toHaveLength(before)
 })
 
 test('C2 — bypassPermissions is accepted when the context marks it available', () => {

@@ -1701,6 +1701,24 @@ export class SidecarServer {
       return
     }
 
+    // `bypassPermissions` is an escalation beyond the renderer-mediated
+    // permission flow. The renderer may request it only when the trusted
+    // launch-time capability enabled it for this session; it must never be
+    // able to grant that capability by sending this frame.
+    if (
+      parsed.data.mode === 'bypassPermissions' &&
+      this.permissions.getToolPermissionContext().isBypassPermissionsModeAvailable !== true
+    ) {
+      this.sendError(
+        connection,
+        parsed.data.requestId,
+        'bad_request',
+        'mode "bypassPermissions" is not available for this session',
+        false,
+      )
+      return
+    }
+
     try {
       this.permissions.setMode(parsed.data.mode)
     } catch (error) {
