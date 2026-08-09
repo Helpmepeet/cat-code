@@ -649,6 +649,22 @@ const revealedNestedRowsCache = new WeakMap<
 >()
 const EMPTY_NESTED_ROWS: NestedTranscriptRow[] = []
 
+type NestedRowCacheEntry = {
+  /** Source children used to derive `row.children`, in their arrival order. */
+  childRows: TranscriptRow[]
+  nested: NestedTranscriptRow
+}
+
+// A session slice changes for every streamed delta, but `selectTranscriptRows`
+// preserves the source object for rows that did not change. Retain the nested
+// wrapper for those rows too, provided their direct child list is identical.
+// Weak keys keep this cross-slice cache bounded by the projector's row lifetime.
+const nestedRowBySource = new WeakMap<TranscriptRow, NestedRowCacheEntry>()
+
+function sameRowReferences(left: TranscriptRow[], right: TranscriptRow[]) {
+  return left.length === right.length && left.every((row, index) => row === right[index])
+}
+
 export function selectNestedTranscriptRows(
   state: TranscriptState,
   sessionId: SessionId | null,
@@ -680,12 +696,18 @@ export function selectNestedTranscriptRows(
     }
   }
 
-  const attachChildren = (row: TranscriptRow): NestedTranscriptRow => ({
-    ...row,
-    children: (
+  const attachChildren = (row: TranscriptRow): NestedTranscriptRow => {
+    const childRows =
       row.kind === 'tool-use' ? (childrenByParentId.get(row.toolUseId) ?? []) : []
-    ).map(attachChildren),
-  })
+    const cached = nestedRowBySource.get(row)
+    if (cached && sameRowReferences(cached.childRows, childRows)) {
+      return cached.nested
+    }
+
+    const nested = { ...row, children: childRows.map(attachChildren) }
+    nestedRowBySource.set(row, { childRows, nested })
+    return nested
+  }
   const result = topLevel.map(attachChildren)
   cache.set(session, result)
   return result

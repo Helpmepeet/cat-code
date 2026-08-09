@@ -220,6 +220,9 @@ test('selectNestedTranscriptRows is referentially stable per slice (memo)', () =
   const c = selectNestedTranscriptRows(next, SID)
   expect(c).not.toBe(a)
   expect(c).toHaveLength(FRAME_COUNT + 1)
+  // A changed session slice must not invalidate every unchanged row. This is
+  // the identity React.memo receives from TranscriptRowView.
+  expect(c[0]).toBe(a[0])
 
   // Null/missing session is a stable empty ⇒ no spurious re-render either.
   expect(selectNestedTranscriptRows(state, null)).toBe(
