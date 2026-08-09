@@ -144,6 +144,19 @@ describe('resolveSessionActions', () => {
     }
   })
 
+  test('Rename / Export / Branch are disabled when the host row is live but its sidecar disconnected', () => {
+    const items = byKind(
+      resolveSessionActions(row({ live: true, status: 'disconnected' }), {
+        isActiveOpen: true,
+        hasEngine: false,
+      }),
+    )
+    for (const kind of ['rename', 'export', 'branch'] as const) {
+      expect(items.get(kind)!.enabled).toBe(false)
+      expect(items.get(kind)!.reason).toContain('live engine')
+    }
+  })
+
   test('Rewind stays deferred (disabled) — no engine conversation-rewind verb', () => {
     const items = byKind(resolveSessionActions(row(), { isActiveOpen: true }))
     expect(items.get('rewind')!.enabled).toBe(false)

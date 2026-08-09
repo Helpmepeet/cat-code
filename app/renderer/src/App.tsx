@@ -3105,6 +3105,9 @@ export function App() {
                     // (`selectSessionsPageActions`, which is where it is tested).
                     const items = resolveSessionActions(targetRow, {
                       isActiveOpen: targetId === activeSessionId,
+                      hasEngine: connectionHasEngine(
+                        selectConnection(connection, targetId).status,
+                      ),
                       // P4-36 — read the tier straight off the transcript slice, so
                       // the row appears only for a session that really has hidden
                       // messages (and only while the menu is open, which is the

@@ -101,6 +101,13 @@ export type SessionActionsContext = {
    */
   isActiveOpen: boolean
   /**
+   * The frame-plane answer to whether this row's sidecar can receive a verb.
+   * A host row can remain `live` after its supervisor reports a disconnect, so
+   * write verbs require both planes to agree. Omitted only by static/test
+   * callers that deliberately exercise the row-only contract.
+   */
+  hasEngine?: boolean
+  /**
    * P4-36 — does this session's transcript hold hidden-tier rows
    * (`selectHasHiddenRows`)? The reveal row only exists when it does, matching
    * the prototype's `messages.some(m => m.meta)` guard: no toggle for an empty
@@ -132,8 +139,11 @@ export function resolveSessionActions(
 ): SessionActionItem[] {
   const openable = row.appSessionId != null
   // Rename / Export / Branch run inside the session's OWN live engine (the verb is
-  // dispatched to its sidecar), so they are reachable ONLY for a LIVE row.
-  const live = row.live === true
+  // dispatched to its sidecar), so both the host row AND the frame plane must
+  // confirm that an engine is reachable. A `disconnected` frame can arrive while
+  // the host still describes the row as live; sending in that state only returns
+  // an undeliverable result.
+  const live = row.live === true && ctx.hasEngine !== false
   // P4-36 — the reveal changes what the TRANSCRIPT PANE draws, so it is offered
   // only for the row that IS the attached tab (the same reason Copy and
   // Inspect-metadata are active-open gated), and only when that transcript
