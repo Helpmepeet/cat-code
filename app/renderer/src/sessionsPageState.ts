@@ -252,6 +252,19 @@ export function selectAllVisibleSelected(
  * that includes closed sessions writes only to the live part of it. Returning the
  * ids lets the bar say what will happen instead of silently doing less.
  */
+export function isWritableSessionRow(
+  row: MergedSessionRow,
+): row is MergedSessionRow & { appSessionId: SessionId } {
+  return row.live && row.appSessionId != null
+}
+
+/** The live catalog rows that can receive a session-action verb. */
+export function selectWritableRows(
+  rows: readonly MergedSessionRow[],
+): Array<MergedSessionRow & { appSessionId: SessionId }> {
+  return rows.filter(isWritableSessionRow)
+}
+
 export function selectWritableSelection(
   state: SessionsPageState,
   rows: readonly MergedSessionRow[],
@@ -259,7 +272,7 @@ export function selectWritableSelection(
   const writable: SessionId[] = []
   for (const row of rows) {
     if (!state.selected.includes(row.sessionId)) continue
-    if (row.live && row.appSessionId != null) writable.push(row.appSessionId)
+    if (isWritableSessionRow(row)) writable.push(row.appSessionId)
   }
   return writable
 }

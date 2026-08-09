@@ -70,6 +70,8 @@ import {
   selectKnownTags,
   selectMatchingTags,
   selectRowTag,
+  selectWritableRows,
+  isWritableSessionRow,
   type SessionsPageState,
   type TagPopoverState,
 } from './sessionsPageState.js'
@@ -204,6 +206,10 @@ export function SessionsPage({
     () => rows.filter(row => selectIsSelected(page, row.sessionId)),
     [page, rows],
   )
+  const writableSelectedRows = useMemo(
+    () => selectWritableRows(selectedRows),
+    [selectedRows],
+  )
 
   const rowActions: RowActions = {
     onOpen: onOpenRow,
@@ -235,7 +241,7 @@ export function SessionsPage({
       target.kind === 'bulk'
         ? selectedRows
         : rows.filter(row => row.sessionId === target.sessionId)
-    const writable = targets.filter(row => row.live && row.appSessionId != null)
+    const writable = selectWritableRows(targets)
     if (writable.length > 0) onTagRows?.(writable, tag)
     if (target.kind === 'bulk') dispatchPage({ type: 'clear-selection' })
     dispatchPage({ type: 'close-tag-popover' })
@@ -441,9 +447,7 @@ export function SessionsPage({
           selectedCount={page.selected.length}
           visibleCount={visibleIds.length}
           allSelected={selectAllVisibleSelected(page, visibleIds)}
-          writableCount={
-            selectedRows.filter(row => row.live && row.appSessionId != null).length
-          }
+          writableCount={writableSelectedRows.length}
           onSelectAll={() =>
             dispatchPage({ type: 'select-all', sessionIds: visibleIds })
           }
@@ -457,7 +461,7 @@ export function SessionsPage({
           {...(onExportRows
             ? {
                 onExport: () => {
-                  onExportRows(selectedRows)
+                  onExportRows(writableSelectedRows)
                   // The selection is spent, exactly as a bulk tag spends it.
                   dispatchPage({ type: 'clear-selection' })
                 },
@@ -603,7 +607,7 @@ function SessionRow({
   const tag = selectRowTag(page, row)
   // Rename and Tag are writes into this row's OWN live engine (sessionActions.ts):
   // a closed session has no sidecar to receive the verb.
-  const writable = row.live && row.appSessionId != null
+  const writable = isWritableSessionRow(row)
   // §0 adaptation: the ⋯ / right-click menu is offered for REGISTRY rows only. A
   // terminal-history row has no `appSessionId` for the menu to act on, and its one
   // reachable verb (Open) is the row click itself, so a menu there would be six

@@ -10,6 +10,7 @@ import {
   selectKnownTags,
   selectMatchingTags,
   selectRowTag,
+  selectWritableRows,
   selectWritableSelection,
   TAG_POPOVER_GAP,
   TAG_POPOVER_VIEWPORT_MARGIN,
@@ -100,6 +101,7 @@ describe('selection', () => {
       { type: 'toggle-selected', sessionId: 'closed' },
       { type: 'toggle-selected', sessionId: 'history' },
     ])
+    expect(selectWritableRows(rows).map(row => row.appSessionId)).toEqual(['app-live'])
     expect(selectWritableSelection(state, rows)).toEqual(['app-live'])
   })
 })

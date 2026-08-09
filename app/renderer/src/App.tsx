@@ -303,6 +303,7 @@ import {
   type StartupOAuthView,
 } from './StartupSurfaces.js'
 import { SessionsPage } from './SessionsPage.js'
+import { isWritableSessionRow } from './sessionsPageState.js'
 import { MetadataInspector } from './MetadataInspector.js'
 import { buildSessionInspectorState } from './sessionInspectorState.js'
 import { buildSessionMetadataView } from './messageMetadata.js'
@@ -3415,7 +3416,7 @@ export function App() {
               // engine (N-process, LOCKED). The ids are remembered so the
               // confirmed result can be echoed back to the page.
               for (const row of targets) {
-                if (row.appSessionId == null) continue
+                if (!isWritableSessionRow(row)) continue
                 const requestId = newRequestId()
                 pendingTagWritesRef.current.set(requestId, {
                   sessionIds: [row.sessionId],
@@ -3435,7 +3436,7 @@ export function App() {
               // folded into one file by the effect above.
               const requests: BulkExportRequest[] = []
               for (const row of targets) {
-                if (!row.live || row.appSessionId == null) continue
+                if (!isWritableSessionRow(row)) continue
                 const requestId = newRequestId()
                 requests.push({
                   sessionId: row.appSessionId,
