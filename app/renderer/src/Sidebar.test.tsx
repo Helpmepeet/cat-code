@@ -44,7 +44,6 @@ function registryRow(
     createdAtMs: 0,
     lastMessageSentAt: null,
     transcriptActivityAtMs: null,
-    messageCount: 0,
     gitBranch: null,
     tag: null,
     mode: null,

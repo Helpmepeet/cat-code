@@ -142,7 +142,6 @@ export type MergedSessionRow = {
    * the exact warp CC-2 removed.
    */
   transcriptActivityAtMs: number | null
-  messageCount: number
   gitBranch: string | null
   tag: string | null
   mode: 'agent' | 'coordinator' | 'normal' | null
@@ -205,7 +204,6 @@ export function selectMergedSessionRows(
       createdAtMs: entry?.createdAtMs ?? descriptor.createdAt,
       lastMessageSentAt: descriptor.lastMessageSentAt,
       transcriptActivityAtMs: entry?.modifiedAtMs ?? null,
-      messageCount: entry?.messageCount ?? 0,
       gitBranch: entry?.gitBranch ?? null,
       tag: entry?.tag ?? null,
       mode: entry?.mode ?? null,
@@ -233,7 +231,6 @@ export function selectMergedSessionRows(
       createdAtMs: entry.createdAtMs,
       lastMessageSentAt: null,
       transcriptActivityAtMs: entry.modifiedAtMs,
-      messageCount: entry.messageCount,
       gitBranch: entry.gitBranch,
       tag: entry.tag,
       mode: entry.mode,

@@ -177,7 +177,6 @@ describe('selectMergedSessionRows', () => {
       inRegistry: true,
       live: true,
       gitBranch: 'main',
-      messageCount: 9,
     })
   })
 
@@ -483,9 +482,9 @@ describe('selectMergedSessionRows', () => {
 
 describe('browse selectors', () => {
   const rows: MergedSessionRow[] = [
-    row({ sessionId: 'a', displayLabel: 'Alpha parser', cwd: '/w/proj', tag: 'bug', messageCount: 5, modifiedAtMs: 900 }),
-    row({ sessionId: 'b', displayLabel: 'Beta ui', cwd: '/w/proj', gitBranch: 'feat/ui', messageCount: 20, modifiedAtMs: 500 }),
-    row({ sessionId: 'c', displayLabel: 'Gamma', cwd: '/w/other', tag: 'chore', messageCount: 2, modifiedAtMs: 100 }),
+    row({ sessionId: 'a', displayLabel: 'Alpha parser', cwd: '/w/proj', tag: 'bug', modifiedAtMs: 900 }),
+    row({ sessionId: 'b', displayLabel: 'Beta ui', cwd: '/w/proj', gitBranch: 'feat/ui', modifiedAtMs: 500 }),
+    row({ sessionId: 'c', displayLabel: 'Gamma', cwd: '/w/other', tag: 'chore', modifiedAtMs: 100 }),
   ]
 
   test('filter by query over label/branch/tag/cwd', () => {
@@ -676,7 +675,6 @@ function row(partial: Partial<MergedSessionRow> & { sessionId: string }): Merged
     createdAtMs: 0,
     lastMessageSentAt: null,
     transcriptActivityAtMs: null,
-    messageCount: 0,
     gitBranch: null,
     tag: null,
     mode: null,
