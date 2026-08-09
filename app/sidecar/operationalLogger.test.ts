@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
-import { closeSync, mkdtempSync, openSync, readFileSync } from 'node:fs'
+import { closeSync, constants, mkdtempSync, openSync, readFileSync, readSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSidecarOperationalLogger } from './operationalLogger.js'
@@ -41,4 +42,38 @@ test('a saturated sidecar descriptor queue accounts for what it dropped', () => 
       resolve()
     }))
   })
+})
+
+test('a full pipe with a stalled reader does not block the sidecar, and records still arrive', async () => {
+  // Electron main blocks its own loop on synchronous reads while assembling a
+  // support bundle, which stops draining FD 3. A synchronous write would wait
+  // for that reader and stall the turn. The second assertion is the one that
+  // matters most: a queue that never blocks because it silently discards
+  // everything would satisfy the timing check on its own.
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-sidecar-operational-pipe-'))
+  const fifo = join(root, 'pipe')
+  execFileSync('mkfifo', [fifo])
+  const readFd = openSync(fifo, constants.O_RDONLY | constants.O_NONBLOCK)
+  const fd = openSync(fifo, constants.O_WRONLY)
+
+  const logger = createSidecarOperationalLogger({ launchId: 'launch', processInstanceId: 'sidecar', fd })
+  const started = performance.now()
+  for (let index = 0; index < 200; index++) {
+    logger.write({ level: 'info', event: 'diagnostic', fields: { source: 'sidecar', category: 'probe' } })
+  }
+  const elapsed = performance.now() - started
+  expect(elapsed).toBeLessThan(5_000)
+
+  await new Promise(resolve => setTimeout(resolve, 100))
+  const drained = Buffer.alloc(1024 * 1024)
+  let bytes = 0
+  try {
+    bytes = readSync(readFd, drained, 0, drained.byteLength, null)
+  } catch {
+    bytes = 0
+  }
+  closeSync(readFd)
+  const received = drained.subarray(0, bytes).toString('utf8').trim()
+  expect(received.length).toBeGreaterThan(0)
+  expect(JSON.parse(received.split('\n')[0]).event).toBe('diagnostic')
 })

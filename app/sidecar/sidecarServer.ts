@@ -3394,7 +3394,16 @@ export class SidecarServer {
       // cap keeps its place on the wire; only the trace is dropped.
       if (encoded.byteLength > MAX_OUTBOUND_FRAME_BYTES && payload !== frame) {
         const bare = encodeFrame(frame)
-        if (bare.byteLength <= MAX_OUTBOUND_FRAME_BYTES) encoded = bare
+        if (bare.byteLength <= MAX_OUTBOUND_FRAME_BYTES) {
+          encoded = bare
+          // Main mints a fresh trace for an envelope-less frame, so the stages
+          // already emitted here and the ones recorded there describe the same
+          // delivery under two ids. Say so at the source; the receiving side
+          // only sees a frame that never carried an envelope.
+          this.log(
+            `[sidecar] delivery envelope dropped for oversize frame kind=${frame.kind}: trace overflow, source and host stages will not share a trace id`,
+          )
+        }
       }
     } catch (error) {
       this.log(

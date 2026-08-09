@@ -55,6 +55,20 @@ test('operational text redacts a rooted path behind any delimiter, a non-http sc
   expect(sanitizeOperationalText('https://example.com')).toBe('https://example.com')
 })
 
+test('operational records reject a non-identifier in an identifier slot', () => {
+  const record = createOperationalRecord(
+    { level: 'info', event: 'diagnostic', process: 'sidecar', fields: { source: 'sidecar' } },
+    { launchId: 'launch', processInstanceId: 'process' },
+  )
+  expect(parseOperationalRecord(record)).not.toBeNull()
+  // These carried arbitrary strings, so a producer could route a path or an
+  // address out through an id instead of a metadata field.
+  expect(parseOperationalRecord({ ...record, launchId: '/Users/alice/private' })).toBeNull()
+  expect(parseOperationalRecord({ ...record, processInstanceId: 'alice@example.com' })).toBeNull()
+  expect(parseOperationalRecord({ ...record, appSessionId: '/var/db/private' })).toBeNull()
+  expect(parseOperationalRecord({ ...record, engineSessionId: 'has spaces' })).toBeNull()
+})
+
 test('operational text leaves a relative segment alone', () => {
   // Widening the path rule must not start eating ordinary prose and counters.
   expect(sanitizeOperationalText('and/or read 12/34 frames')).toBe('and/or read 12/34 frames')

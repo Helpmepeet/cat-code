@@ -1,7 +1,7 @@
 /** Sanitized sidecar → supervisor diagnostics descriptor (never stderr capture). */
 
 import { randomUUID } from 'node:crypto'
-import { writeSync } from 'node:fs'
+import { createWriteStream, fstatSync, writeSync, type WriteStream } from 'node:fs'
 import {
   createOperationalRecord,
   type OperationalRecordInput,
@@ -34,6 +34,30 @@ export function createSidecarOperationalLogger({
   let droppedRecords = 0
   let reportingDrops = false
   const MAX_PENDING_WRITES = 64
+  const MAX_PENDING_BYTES = 256 * 1024
+  /**
+   * Only a pipe or socket can make a write wait for the reader. FD 3 is a pipe
+   * in production, and its reader is Electron main, which blocks its own loop on
+   * synchronous reads while assembling a support bundle. A synchronous write
+   * would then stall a turn, so those descriptors get a userspace queue that
+   * never waits. A regular file cannot block that way and keeps the direct path,
+   * which is also what the tests exercise.
+   */
+  const streaming = ((): WriteStream | null => {
+    if (!writable) return null
+    try {
+      const stats = fstatSync(fd as number)
+      if (!stats.isFIFO() && !stats.isSocket()) return null
+      const stream = createWriteStream('', { fd: fd as number, autoClose: false })
+      stream.on('error', () => {
+        // The descriptor is diagnostics-only; a broken pipe cannot alter session IO.
+      })
+      stream.on('drain', () => reportDrops())
+      return stream
+    } catch {
+      return null
+    }
+  })()
   /**
    * A descriptor may accept fewer bytes than the record. Ignoring the return
    * value leaves a truncated line, which corrupts the NDJSON that follows it
@@ -47,6 +71,13 @@ export function createSidecarOperationalLogger({
       if (written <= 0) return
       offset += written
     }
+  }
+  /** Returns false when the record was dropped rather than queued. */
+  const enqueue = (text: string): boolean => {
+    if (!streaming) return false
+    if (streaming.writableLength > MAX_PENDING_BYTES) return false
+    streaming.write(text)
+    return true
   }
   /**
    * Silent loss reads as a quiet system. The count is the only thing the record
@@ -71,11 +102,14 @@ export function createSidecarOperationalLogger({
         { launchId: launchId as string, processInstanceId, processStartedAt },
       )
       const line = `${JSON.stringify(record)}\n`
-      // A blocked diagnostics descriptor must never hold up a turn. Normal
-      // records use a tiny bounded async queue; fatal evidence deliberately
-      // takes the synchronous best-effort path immediately before process exit.
+      // A blocked diagnostics descriptor must never hold up a turn. Fatal
+      // evidence deliberately takes the synchronous best-effort path immediately
+      // before process exit, accepting a brief stall in a process that is ending
+      // rather than losing the record that explains why.
       if (record.level === 'fatal') {
         writeAll(fd as number, line)
+      } else if (streaming) {
+        if (!enqueue(line)) droppedRecords++
       } else if (pendingWrites < MAX_PENDING_WRITES) {
         pendingWrites++
         setImmediate(() => {
@@ -98,9 +132,12 @@ export function createSidecarOperationalLogger({
   const deliveryStage = (input: Omit<SidecarDeliveryStageRecord, 'recordKind' | 'wallTimestamp' | 'monotonicTimestampMs' | 'processInstanceId' | 'processStartedAt'>): void => {
     if (!writable) return
     try {
-      // The caller supplies only closed delivery metadata.  This is deliberately
-      // synchronous: a process death after a socket failure must not erase the
-      // causal marker that identifies the failed hop.
+      // The caller supplies only closed delivery metadata. These markers sit
+      // directly in the frame path, which is exactly where a synchronous write
+      // to a full pipe would stall a turn, so on a pipe they queue like any
+      // other record. The original intent was that a process death must not
+      // erase the marker for the failed hop; that now yields to not stalling
+      // the hop in the first place, and a regular file still writes directly.
       const record: SidecarDeliveryStageRecord = {
         recordKind: 'delivery.trace',
         ...input,
@@ -109,7 +146,9 @@ export function createSidecarOperationalLogger({
         processInstanceId,
         processStartedAt,
       }
-      writeAll(fd as number, `${JSON.stringify(record)}\n`)
+      const line = `${JSON.stringify(record)}\n`
+      if (!streaming) writeAll(fd as number, line)
+      else if (!enqueue(line)) droppedRecords++
     } catch {
       // Descriptor evidence is best effort and cannot alter engine IO.
     }

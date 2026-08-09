@@ -145,6 +145,11 @@ const EMAIL = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g
 const TOKEN_SHAPE = /\b(?:bearer\s+)?(?:sk|rk|pk|ghp|eyJ)[A-Za-z0-9._-]{12,}\b/gi
 const CONTROL = /[\u0000-\u001f\u007f]/g
 
+/** The same opaque-identifier grammar the export parser enforces. */
+export function isOpaqueIdentifier(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value)
+}
+
 export function sanitizeOperationalText(value: string): string {
   const redacted = value
     .replace(URL_WITH_SENSITIVE_PARTS, raw => {
@@ -238,8 +243,14 @@ export function parseOperationalRecord(value: unknown): OperationalRecord | null
     !Object.values<string>(OPERATIONAL_EVENTS).includes(item.event as string) ||
     !['debug', 'info', 'warn', 'error', 'fatal'].includes(item.level as string) ||
     !['main', 'host', 'supervisor', 'sidecar', 'worker', 'renderer'].includes(item.process as string) ||
-    typeof item.launchId !== 'string' ||
-    typeof item.processInstanceId !== 'string' ||
+    // These four are minted identifiers, never prose. Accepting any string here
+    // left the widest hole at this boundary: a producer could carry a path, an
+    // address, or a credential out through an id rather than a metadata field,
+    // where only pattern redaction stood in the way.
+    !isOpaqueIdentifier(item.launchId) ||
+    !isOpaqueIdentifier(item.processInstanceId) ||
+    (item.appSessionId !== undefined && !isOpaqueIdentifier(item.appSessionId)) ||
+    (item.engineSessionId !== undefined && !isOpaqueIdentifier(item.engineSessionId)) ||
     !item.fields ||
     typeof item.fields !== 'object' ||
     Array.isArray(item.fields)
