@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 96/242** — counted against the review's original 61 High and
+**Progress: Fix 97/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -100,6 +100,7 @@ count tracks individually verified findings, not commit count.
 | S05 HIGH a first-event `response.failed` abandoned the primed WebSocket iterator and wedged the conversation turn queue | fixed | `b8d9c6e` | the failure path awaits `iterator.return()` before throwing, releasing the queued turn; Codex adapter regression suite (70 pass); app typecheck and renderer production build |
 | S05 HIGH in-process deferred continuation reloaded the Codex pool and lost live capped-account state, inverting its eligibility verdict | fixed | `b8d9c6e` | both in-process status callers request `loadPool: false`, retaining the live pool’s cap state; Codex status/deferred-continuation regressions (43 pass); app typecheck and renderer production build |
 | A10 HIGH orphan-reaper selected arbitrary parentless processes by command-line substring | fixed | `8ef5e0b` | reaper candidates now come only from valid, still-live registry rows with a recorded pid and socket; command marker and dead-parent checks remain mandatory identity filters; focused reaper regression (2 pass); app typecheck and renderer production build |
+| S01 HIGH a null foreground continuation claim returned without re-arming the session poll loop | fixed | `f697c60` | the null-attempt race now retries after one second, including the competing-owner path; deferred-continuation hook regressions (8 pass); app typecheck and renderer production build |
 
 ## Known verification limitation
 
