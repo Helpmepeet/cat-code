@@ -2122,7 +2122,7 @@ export type McpConfigEntry = {
   name: string
   transport: McpConfigTransport
   scope: McpConfigScope
-  /** Remote transports carry a url; stdio carries a command + arg count. */
+  /** Remote transports carry an origin/path-only URL; stdio carries a command + arg count. */
   url?: string
   command?: string
   argCount?: number
@@ -2200,7 +2200,7 @@ export type HookConfigType =
   | 'callback'
   | 'function'
 
-/** One configured hook (`IndividualHookConfig`), metadata + a display line only. */
+/** One configured hook (`IndividualHookConfig`), metadata + a non-sensitive display label. */
 export type HookEntry = {
   /** Canonical hook event name (`HOOK_EVENTS`, `coreTypes.ts:25`). */
   event: string
@@ -2209,7 +2209,7 @@ export type HookEntry = {
   source: HookConfigSource
   pluginName?: string
   async: boolean
-  /** `getHookDisplayText` output — the command / url / prompt line (no secrets). */
+  /** Static hook-kind label; never a command, webhook URL, or prompt body. */
   displayLine: string
 }
 

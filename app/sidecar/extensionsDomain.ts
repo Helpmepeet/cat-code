@@ -12,8 +12,8 @@
  * read failure (with a UI-visible note) so one bad domain never blanks the rest.
  *
  * Secret posture (proven in `extensionsDomain.test.ts`): the snapshot carries
- * config METADATA only — no MCP `env`/`headers`, no hook `command`/`prompt`
- * bodies beyond `getHookDisplayText`, no skill prompt bodies, no plugin option
+ * config METADATA only — no MCP `env`/`headers` or URL credentials, no hook
+ * command/prompt bodies, no skill prompt bodies, no plugin option
  * VALUES. `secretGuard` on the outbound frame is satisfied by construction.
  *
  * Deferred (see the `protocol.ts` P4-12 header for the full §0 flag list): MCP
@@ -31,7 +31,6 @@ import type { LoadedPlugin, PluginError } from '../../src/types/plugin.js'
 import type { Command } from '../../src/commands.js'
 import type { AgentDefinition } from '../../src/tools/AgentTool/loadAgentsDir.js'
 import { getAllHooks } from '../../src/utils/hooks/hooksSettings.js'
-import { getHookDisplayText } from '../../src/utils/hooks/hooksSettings.js'
 import { HOOK_EVENTS } from '../../src/entrypoints/sdk/coreTypes.js'
 import type { AppState } from '../../src/state/AppStateStore.js'
 import type {
@@ -119,7 +118,7 @@ export function buildMcpEntry(
   const scope = config.scope as McpConfigScope
   const entry: McpConfigEntry = { name, transport, scope }
   if ('url' in config && typeof config.url === 'string') {
-    entry.url = config.url
+    entry.url = redactRemoteUrl(config.url)
   }
   if ('command' in config && typeof config.command === 'string') {
     entry.command = config.command
@@ -129,6 +128,26 @@ export function buildMcpEntry(
     entry.pluginSource = config.pluginSource
   }
   return entry
+}
+
+/**
+ * A remote server's host and path are useful display metadata. Query strings,
+ * fragments, and user-info commonly carry credentials, so they never leave the
+ * sidecar even when their key names would evade the outbound secret guard.
+ */
+function redactRemoteUrl(rawUrl: string): string {
+  try {
+    const url = new URL(rawUrl)
+    url.username = ''
+    url.password = ''
+    url.search = ''
+    url.hash = ''
+    return url.toString()
+  } catch {
+    // Never fall back to the raw string: a malformed URL may still embed a
+    // token, and the renderer only needs to know that this server is remote.
+    return 'remote endpoint'
+  }
 }
 
 /* ---------------------------- Skills --------------------------- */
@@ -348,7 +367,10 @@ export function buildHookEntries(
       type: config.type as HookConfigType,
       source: hook.source,
       async: config.type === 'command' ? config.async === true : false,
-      displayLine: getHookDisplayText(config),
+      // Hook bodies are arbitrary command lines, prompts, or webhook URLs.
+      // They can contain credentials under values that a key-name-only guard
+      // cannot identify, so project only the hook kind to the renderer.
+      displayLine: `${config.type} hook`,
     }
     if (hook.matcher) {
       entry.matcher = hook.matcher

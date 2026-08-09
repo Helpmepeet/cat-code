@@ -103,10 +103,10 @@ test('buildMcpEntry maps stdio config and withholds env', () => {
   expect(JSON.stringify(entry)).not.toContain('API_KEY')
 })
 
-test('buildMcpEntry maps remote config with url + pluginSource, no headers', () => {
+test('buildMcpEntry maps remote config to a credential-free url + pluginSource', () => {
   const config = {
     type: 'http',
-    url: 'https://mcp.example.com/rpc',
+    url: 'https://mcp.example.com/rpc?api_key=sk-live-URL#token-fragment',
     headers: { Authorization: 'Bearer sk-live-SECRET' },
     scope: 'project',
     pluginSource: 'slack@anthropic',
@@ -122,6 +122,7 @@ test('buildMcpEntry maps remote config with url + pluginSource, no headers', () 
   expect(entry.command).toBeUndefined()
   expect(JSON.stringify(entry)).not.toContain('Authorization')
   expect(JSON.stringify(entry)).not.toContain('sk-live')
+  expect(JSON.stringify(entry)).not.toContain('token-fragment')
 })
 
 test('buildMcpEntry defaults a missing transport to stdio', () => {
@@ -179,16 +180,16 @@ function hook(fields: {
   return fields
 }
 
-test('buildHookEntries orders by canonical event and reads the display line', () => {
+test('buildHookEntries orders by canonical event without exposing hook bodies', () => {
   const hooks = [
     hook({
       event: 'PostToolUse',
-      config: { type: 'http', url: 'https://hooks.example.com/post' } as HookCommand,
+      config: { type: 'http', url: 'https://hooks.example.com/post?token=sk-live-HTTP' } as HookCommand,
       source: 'projectSettings',
     }),
     hook({
       event: 'PreToolUse',
-      config: { type: 'command', command: 'echo ran', async: true } as HookCommand,
+      config: { type: 'command', command: 'curl -H "x-api-key: sk-live-COMMAND"' , async: true } as HookCommand,
       matcher: 'Write|Edit',
       source: 'userSettings',
     }),
@@ -201,13 +202,14 @@ test('buildHookEntries orders by canonical event and reads the display line', ()
     matcher: 'Write|Edit',
     source: 'userSettings',
     async: true,
-    displayLine: 'echo ran',
+    displayLine: 'command hook',
   })
   expect(entries[1]).toMatchObject({
     type: 'http',
     async: false,
-    displayLine: 'https://hooks.example.com/post',
+    displayLine: 'http hook',
   })
+  expect(JSON.stringify(entries)).not.toContain('sk-live')
 })
 
 /* ------------------------------- Plugins ------------------------------ */
@@ -279,7 +281,7 @@ test('a full extensions frame carries no secret material', () => {
   const mcp = [
     buildMcpEntry('remote', {
       type: 'http',
-      url: 'https://x/y',
+      url: 'https://x/y?api_key=sk-live-URL',
       headers: { Authorization: 'sk-live-HEADER' },
       scope: 'user',
     } as unknown as ScopedMcpServerConfig),
@@ -288,7 +290,7 @@ test('a full extensions frame carries no secret material', () => {
   const hooks = buildHookEntries([
     hook({
       event: 'PreToolUse',
-      config: { type: 'command', command: 'run-check' } as HookCommand,
+      config: { type: 'command', command: 'run-check --token sk-live-HOOK' } as HookCommand,
       source: 'userSettings',
     }),
   ])
