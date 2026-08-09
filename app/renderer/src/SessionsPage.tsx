@@ -143,6 +143,7 @@ export function SessionsPage({
     undefined,
     createSessionsPageState,
   )
+  const previousRowsRef = useRef(rows)
 
   const now = Date.now()
   const allTags = useMemo(() => collectSessionTags(rows), [rows])
@@ -151,7 +152,8 @@ export function SessionsPage({
   // Reconcile against the rows on every catalog delivery: drop tag echoes the
   // catalog has caught up with, and forget selections whose row disappeared.
   useEffect(() => {
-    dispatchPage({ type: 'catalog-settled', rows })
+    dispatchPage({ type: 'catalog-settled', rows, previousRows: previousRowsRef.current })
+    previousRowsRef.current = rows
   }, [rows])
 
   // A confirmed tag write (never an optimistic guess — App only forwards an

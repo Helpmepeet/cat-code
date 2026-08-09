@@ -60,7 +60,12 @@ export type SessionsPageAction =
   | { type: 'open-tag-popover'; target: TagPopoverTarget; rect: TagPopoverState['rect'] }
   | { type: 'close-tag-popover' }
   | { type: 'tag-confirmed'; sessionIds: readonly string[]; tag: string | null }
-  | { type: 'catalog-settled'; rows: readonly MergedSessionRow[] }
+  | {
+      type: 'catalog-settled'
+      rows: readonly MergedSessionRow[]
+      /** The prior catalog snapshot, used only to migrate a fresh row's id after ready. */
+      previousRows: readonly MergedSessionRow[]
+    }
 
 export function createSessionsPageState(): SessionsPageState {
   return {
@@ -69,6 +74,21 @@ export function createSessionsPageState(): SessionsPageState {
     tagPopover: null,
     confirmedTags: {},
   }
+}
+
+function stringArraysEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index])
+}
+
+function tagRecordsEqual(
+  left: Readonly<Record<string, string | null>>,
+  right: Readonly<Record<string, string | null>>,
+): boolean {
+  const leftEntries = Object.entries(left)
+  return (
+    leftEntries.length === Object.keys(right).length &&
+    leftEntries.every(([key, value]) => right[key] === value)
+  )
 }
 
 export function reduceSessionsPageState(
@@ -117,28 +137,72 @@ export function reduceSessionsPageState(
       // Drop each echo the catalog has caught up with, so the rows become the only
       // source again. Also drop selections/rename/popover targets whose row is gone.
       const byId = new Map(action.rows.map(row => [row.sessionId, row]))
-      const settled = Object.entries(state.confirmedTags).filter(
+      // A newly-created app session initially has no engine id, so its catalog key
+      // is its app id. `ready` fills the engine id and flips the catalog key. The
+      // page state is keyed by that catalog id, so migrate every ephemeral key
+      // through the stable app id before pruning the old key as absent.
+      const currentByAppId = new Map(
+        action.rows.flatMap(row => (row.appSessionId ? [[row.appSessionId, row] as const] : [])),
+      )
+      const replacementById = new Map<string, string>()
+      for (const previous of action.previousRows) {
+        if (!previous.appSessionId) continue
+        const current = currentByAppId.get(previous.appSessionId)
+        if (current && current.sessionId !== previous.sessionId) {
+          replacementById.set(previous.sessionId, current.sessionId)
+        }
+      }
+      const migrateId = (sessionId: string) => replacementById.get(sessionId) ?? sessionId
+      const migratedTags = Object.fromEntries(
+        Object.entries(state.confirmedTags)
+          .map(([sessionId, tag]) => [migrateId(sessionId), tag] as const)
+          .filter(([sessionId]) => byId.has(sessionId)),
+      ) as Readonly<Record<string, string | null>>
+      const settled = Object.entries(migratedTags).filter(
         ([sessionId, tag]) => {
           const row = byId.get(sessionId)
           return row === undefined || (row.tag ?? null) === tag
         },
       )
-      const confirmedTags: Readonly<Record<string, string | null>> =
+      const nextConfirmedTags: Readonly<Record<string, string | null>> =
         settled.length === 0
-          ? state.confirmedTags
+          ? migratedTags
           : Object.fromEntries(
-              Object.entries(state.confirmedTags).filter(
+              Object.entries(migratedTags).filter(
                 ([sessionId]) => !settled.some(([id]) => id === sessionId),
               ),
             )
-      const selected = state.selected.filter(id => byId.has(id))
+      const confirmedTags = tagRecordsEqual(state.confirmedTags, nextConfirmedTags)
+        ? state.confirmedTags
+        : nextConfirmedTags
+      const nextSelected = [...new Set(state.selected.map(migrateId).filter(id => byId.has(id)))]
+      const selected = stringArraysEqual(state.selected, nextSelected) ? state.selected : nextSelected
+      const nextRenaming =
+        state.renaming && byId.has(migrateId(state.renaming.sessionId))
+          ? { ...state.renaming, sessionId: migrateId(state.renaming.sessionId) }
+          : null
       const renaming =
-        state.renaming && byId.has(state.renaming.sessionId) ? state.renaming : null
+        nextRenaming &&
+        state.renaming &&
+        nextRenaming.sessionId === state.renaming.sessionId &&
+        nextRenaming.value === state.renaming.value
+          ? state.renaming
+          : nextRenaming
       const tagPopover =
         state.tagPopover &&
         (state.tagPopover.target.kind === 'bulk' ||
-          byId.has(state.tagPopover.target.sessionId))
-          ? state.tagPopover
+          byId.has(migrateId(state.tagPopover.target.sessionId)))
+          ? state.tagPopover.target.kind === 'bulk'
+            ? state.tagPopover
+            : migrateId(state.tagPopover.target.sessionId) === state.tagPopover.target.sessionId
+              ? state.tagPopover
+            : {
+                ...state.tagPopover,
+                target: {
+                  ...state.tagPopover.target,
+                  sessionId: migrateId(state.tagPopover.target.sessionId),
+                },
+              }
           : null
       if (
         confirmedTags === state.confirmedTags &&

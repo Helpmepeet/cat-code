@@ -144,6 +144,7 @@ describe('tags', () => {
     const settled = reduceSessionsPageState(confirmed, {
       type: 'catalog-settled',
       rows: [row({ sessionId: 'a', tag: 'ui' })],
+      previousRows: [row({ sessionId: 'a', tag: 'infra' })],
     })
     expect(settled.confirmedTags).toEqual({})
   })
@@ -153,6 +154,7 @@ describe('tags', () => {
     const settled = reduceSessionsPageState(confirmed, {
       type: 'catalog-settled',
       rows: [row({ sessionId: 'a', tag: 'infra' })],
+      previousRows: [row({ sessionId: 'a', tag: 'infra' })],
     })
     expect(selectRowTag(settled, row({ sessionId: 'a', tag: 'infra' }))).toBe('ui')
   })
@@ -165,8 +167,47 @@ describe('tags', () => {
     const settled = reduceSessionsPageState(state, {
       type: 'catalog-settled',
       rows: [row({ sessionId: 'a' })],
+      previousRows: [row({ sessionId: 'a' })],
     })
     expect(settled.selected).toEqual(['a'])
+  })
+
+  test('catalog-settled migrates page state when ready replaces a fresh row app id with its engine id', () => {
+    const provisional = row({
+      sessionId: 'app-1',
+      appSessionId: 'app-1',
+      live: true,
+      inRegistry: true,
+      status: 'spawning',
+      tag: 'infra',
+    })
+    const ready = row({
+      ...provisional,
+      sessionId: 'engine-1',
+      status: 'ready',
+    })
+    const state = apply([
+      { type: 'toggle-selected', sessionId: 'app-1' },
+      { type: 'start-rename', sessionId: 'app-1', initial: 'Old title' },
+      { type: 'edit-rename', value: 'Draft title' },
+      { type: 'tag-confirmed', sessionIds: ['app-1'], tag: 'ui' },
+      {
+        type: 'open-tag-popover',
+        target: { kind: 'row', sessionId: 'app-1' },
+        rect: { top: 20, bottom: 10, left: 5 },
+      },
+    ])
+
+    const settled = reduceSessionsPageState(state, {
+      type: 'catalog-settled',
+      rows: [ready],
+      previousRows: [provisional],
+    })
+
+    expect(settled.selected).toEqual(['engine-1'])
+    expect(settled.renaming).toEqual({ sessionId: 'engine-1', value: 'Draft title' })
+    expect(selectRowTag(settled, ready)).toBe('ui')
+    expect(settled.tagPopover?.target).toEqual({ kind: 'row', sessionId: 'engine-1' })
   })
 
   // A bulk tag settles one result per row, so several confirmations arrive in a
