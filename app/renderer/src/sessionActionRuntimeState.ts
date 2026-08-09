@@ -31,7 +31,13 @@ export type SessionActionRuntimeState = {
 
 export type SessionActionError = { requestId: string; message: string }
 
-export type SessionActionRuntimeAction = { type: 'frame'; frame: ServerFrame }
+export type SessionActionRuntimeAction =
+  | { type: 'frame'; frame: ServerFrame }
+  /**
+   * A consumer has copied this exact outcome into its own short-lived state.
+   * Match the request id so an older dialog can never erase a newer action.
+   */
+  | { type: 'discard-result'; sessionId: SessionId; requestId: string }
 
 export function createSessionActionRuntimeState(): SessionActionRuntimeState {
   return { lastBySession: {}, errorBySession: {} }
@@ -41,6 +47,20 @@ export function reduceSessionActionRuntimeState(
   state: SessionActionRuntimeState,
   action: SessionActionRuntimeAction,
 ): SessionActionRuntimeState {
+  if (action.type === 'discard-result') {
+    const result = state.lastBySession[action.sessionId]
+    const error = state.errorBySession[action.sessionId]
+    const discardResult = result?.requestId === action.requestId
+    const discardError = error?.requestId === action.requestId
+    if (!discardResult && !discardError) return state
+
+    const lastBySession = { ...state.lastBySession }
+    const errorBySession = { ...state.errorBySession }
+    if (discardResult) delete lastBySession[action.sessionId]
+    if (discardError) delete errorBySession[action.sessionId]
+    return { ...state, lastBySession, errorBySession }
+  }
+
   const { frame } = action
 
   if (frame.kind === 'session-action.result') {

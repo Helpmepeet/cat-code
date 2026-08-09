@@ -1699,6 +1699,11 @@ export function App() {
               state: { status: 'failed', message: error.message },
             },
       )
+      dispatchSessionActionRuntime({
+        type: 'discard-result',
+        sessionId: exportDialog.sessionId,
+        requestId: exportDialog.requestId,
+      })
       return
     }
     if (projected.status === 'pending') return
@@ -1707,6 +1712,11 @@ export function App() {
         ? current
         : { requestId: exportDialog.requestId, state: projected },
     )
+    dispatchSessionActionRuntime({
+      type: 'discard-result',
+      sessionId: exportDialog.sessionId,
+      requestId: exportDialog.requestId,
+    })
   }, [exportDialog, sessionActionRuntime])
 
   // Decision #5 (audit §I.4) — surface a FAILED verb ack that would otherwise be
@@ -3254,11 +3264,25 @@ export function App() {
                             preview.text,
                             exportFileName(exportDialog.title),
                             'Transcript saved',
+                          ).finally(() =>
+                            dispatchSessionActionRuntime({
+                              type: 'discard-result',
+                              sessionId: exportDialog.sessionId,
+                              requestId: exportDialog.requestId,
+                            }),
                           )
                         },
                       }
                     : {})}
-                  onClose={() => setExportDialog(null)}
+                  onClose={() => {
+                    dispatchSessionActionRuntime({
+                      type: 'discard-result',
+                      sessionId: exportDialog.sessionId,
+                      requestId: exportDialog.requestId,
+                    })
+                    setLatchedExport(null)
+                    setExportDialog(null)
+                  }}
                 />
               )
             })()

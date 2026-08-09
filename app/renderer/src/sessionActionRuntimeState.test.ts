@@ -62,6 +62,32 @@ describe('sessionActionRuntimeState', () => {
     expect(result?.ok).toBe(false)
   })
 
+  test('discarding a latched export releases its payload without erasing a newer result', () => {
+    let state = reduceSessionActionRuntimeState(createSessionActionRuntimeState(), {
+      type: 'frame',
+      frame: resultFrame({ requestId: 'export', verb: 'export', exportText: 'HELLO' }),
+    })
+    state = reduceSessionActionRuntimeState(state, {
+      type: 'discard-result',
+      sessionId: SESSION,
+      requestId: 'export',
+    })
+    expect(selectLatestSessionActionResult(state, SESSION)).toBeNull()
+    expect(state.lastBySession).not.toHaveProperty(SESSION)
+
+    state = reduceSessionActionRuntimeState(state, {
+      type: 'frame',
+      frame: resultFrame({ requestId: 'newer', verb: 'rename' }),
+    })
+    const preserved = reduceSessionActionRuntimeState(state, {
+      type: 'discard-result',
+      sessionId: SESSION,
+      requestId: 'export',
+    })
+    expect(preserved).toBe(state)
+    expect(selectLatestSessionActionResult(preserved, SESSION)?.requestId).toBe('newer')
+  })
+
   test('a lifecycle frame clears a tracked session, leaves untracked alone', () => {
     let state = createSessionActionRuntimeState()
     state = reduceSessionActionRuntimeState(state, {
