@@ -16,6 +16,7 @@ import {
   selectBreakdownRows,
   selectDonutView,
   selectFreeTokens,
+  selectPanelUsage,
   type DonutView,
 } from './contextBreakdownState.js'
 import { PermissionModeChip } from './PermissionModeChip.js'
@@ -681,6 +682,13 @@ function fmtTokens(n: number): string {
  * Every number this paints — dash, offset, stroke width, opacity, the center
  * readout — comes from `selectDonutView`, so the hover behaviour is testable in
  * a suite with no DOM. All this component owns is the two pointer wires.
+ *
+ * The center reads two different questions depending on hover state: at rest
+ * it is `percentUsed`, the panel's own overall figure (share of the full
+ * window); hovering a category swaps it to that category's share of the
+ * ACCOUNTED total (`view.centerPercent`, share of what is actually used, not
+ * of window capacity) — the arcs underneath never change basis, only the
+ * number printed in the middle does.
  */
 function ContextBreakdownDonut({
   view,
@@ -736,7 +744,9 @@ function ContextBreakdownDonut({
         <span
           className={`text-[16px] font-semibold tabular-nums ${view.centerClass ?? tone}`}
         >
-          {view.centerTokens == null ? `${percentUsed}%` : fmtTokens(view.centerTokens)}
+          {view.centerPercent == null
+            ? `${percentUsed}%`
+            : `${Math.round(view.centerPercent)}%`}
         </span>
       </div>
     </div>
@@ -755,7 +765,15 @@ function ContextBreakdownDonut({
  * the `context-breakdown.snapshot` seam, carrying the engine's OWN
  * `analyzeContextUsage` output. It arrives on attach and whenever this popover is
  * opened, so a session with nothing to analyse yet renders the aggregate row alone —
- * absent, never fabricated. */
+ * absent, never fabricated.
+ *
+ * The header row reads {@link selectPanelUsage}, NOT `usage` directly, once a
+ * breakdown is present: `usage` is the composer's own live, per-message number,
+ * while the rows below are a coarse snapshot recomputed only on attach/open. The
+ * two are different pipelines on different cadences, so printing them together
+ * could show a header total the rows didn't sum to. `selectPanelUsage` sums the
+ * SAME rows the legend prints instead, so the header always reconciles with what
+ * is on screen below it. */
 export function ContextUsagePanel({
   usage,
   breakdown = null,
@@ -773,7 +791,10 @@ export function ContextUsagePanel({
    */
   onCompact?: () => void
 }) {
-  const { percentUsed, usedTokens, contextWindow } = usage
+  const { percentUsed, usedTokens, contextWindow } = selectPanelUsage(
+    usage,
+    breakdown,
+  )
   // Context fullness, NOT account quota — the same ladder the donut face reads.
   const tone = pressureTone(percentUsed)
   const t = toneClasses(tone)
@@ -1297,14 +1318,13 @@ export function ComposerActionsBar({
       onBlur={onToolbarBlur}
       className="mt-3 flex items-center gap-4 px-1"
     >
-      {/* Attach (§10 ❓, Chat.jsx:1435): quiet #3f3f46 glyph brightening to
-       * #a1a1aa on hover — a real file picker needs an engine attachment
-       * capability that is NOT on the wire; the working attach path today is a
-       * large paste, which the toast + title spell out. */}
+      {/* Attach (§10, Chat.jsx:1435): quiet #3f3f46 glyph brightening to
+       * #a1a1aa on hover. The owner opens the image picker; clipboard images
+       * use the same attachment path from the composer paste handler. */}
       <button
         {...faceProps('attach')}
         aria-label="Add attachment"
-        title="Add attachment. Paste a large block to attach it as a collapsed chip"
+        title="Add image"
         className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[5px] text-text-ghost transition-colors hover:text-text-muted disabled:opacity-50"
         disabled={attachDisabled}
         onClick={onAttach}

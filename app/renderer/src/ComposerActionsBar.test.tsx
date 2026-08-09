@@ -676,8 +676,11 @@ test('ContextUsagePanel draws a per-category donut, legend and Free row', () => 
   // half-gap in (nothing drawn before it, so the offset is the half-gap alone).
   expect(html).toContain('stroke-width="6"')
   expect(html).toContain('stroke-dashoffset="-1.5"')
-  // Center readout: the same percent the header line states.
-  expect(countOccurrences(html, '21%')).toBeGreaterThanOrEqual(2)
+  // Center readout: the same percent the header line states — the ACCOUNTED
+  // total (4.2k + 21k = 25.2k of the snapshot's own 200k), not `usage`'s 21%
+  // (42k/200k): once a breakdown exists the header reconciles with the rows
+  // printed below it instead of the composer's separately-clocked live figure.
+  expect(countOccurrences(html, '13%')).toBeGreaterThanOrEqual(2)
 })
 
 test('ContextUsagePanel without a breakdown keeps the aggregate row alone, no donut', () => {

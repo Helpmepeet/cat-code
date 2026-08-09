@@ -7,7 +7,9 @@ import {
   selectContextBreakdown,
   selectDonutView,
   selectFreeTokens,
+  selectPanelUsage,
 } from './contextBreakdownState.js'
+import type { ContextUsage } from './contextUsage.js'
 import type {
   ContextBreakdownSnapshot,
   ServerFrame,
@@ -198,8 +200,8 @@ test('at rest every arc is drawn at full opacity and the base stroke', () => {
     expect(segment.strokeWidth).toBe(6)
   }
   // Center shows the aggregate, so the caller keeps its own percent and tone.
-  expect(view.centerTokens).toBeNull()
   expect(view.centerClass).toBeNull()
+  expect(view.centerPercent).toBeNull()
 })
 
 // The gap is taken out of each arc's own length and paid back as a half-gap of
@@ -239,12 +241,15 @@ test('hovering a category emphasises its arc and dims the others', () => {
   expect(view.segments[2]!.opacity).toBe(0.3)
 })
 
-// The center readout is the whole point of the hover: it answers "how much is
-// that slice?" without a tooltip, tinted in the slice's own hue.
-test('hovering swaps the center readout to that category, in its own colour', () => {
+// Hovering both retints the center to the slice's own hue AND swaps its
+// number to that category's share of what is ACCOUNTED for (Σ rows[].tokens
+// = 4_200 + 8_600 + 1_200 + 500 = 14_500 here), never of the full window —
+// the row's own token count is already printed beside it, so the center
+// answers a different question: "how much of what's used is this."
+test('hovering swaps the center to that category\'s share of the accounted total, in its own colour', () => {
   const view = selectDonutView(selectBreakdownRows(BREAKDOWN), 1)
-  expect(view.centerTokens).toBe(8_600)
   expect(view.centerClass).toBe('text-[#60a5fa]')
+  expect(view.centerPercent).toBeCloseTo((8_600 / 14_500) * 100, 6)
 })
 
 test('an unknown colour key still tints the center readout with something static', () => {
@@ -279,6 +284,42 @@ test('leaving restores the resting legend, dimming nothing', () => {
 // the whole ring against a hover target that is gone.
 test('a hover index left over from a bigger snapshot reads as no hover', () => {
   const view = selectDonutView(selectBreakdownRows(BREAKDOWN), 9)
-  expect(view.centerTokens).toBeNull()
+  expect(view.centerClass).toBeNull()
+  expect(view.centerPercent).toBeNull()
   for (const segment of view.segments) expect(segment.opacity).toBe(1)
+})
+
+/* ---------------------------------------------------------------------------
+ * selectPanelUsage — the header total reconciled with the rows below it.
+ * ------------------------------------------------------------------------- */
+
+test('with a trustworthy breakdown, the panel total is the SUM OF THE ROWS over the snapshot\'s own window, not the live composer usage', () => {
+  // usage says 51% · 191k/372k (the composer's own live figure); the snapshot
+  // accounts for far less (4_200 + 8_600 + 1_200 + 500 = 14_500 of 200_000 =
+  // 7%) — the mismatch this selector exists to close.
+  const usage: ContextUsage = { usedTokens: 191_000, contextWindow: 372_000, percentUsed: 51 }
+  const result = selectPanelUsage(usage, BREAKDOWN)
+  expect(result).toEqual({ usedTokens: 14_500, contextWindow: 200_000, percentUsed: 7 })
+})
+
+test('the reconciled total always sums exactly with Free back to the window', () => {
+  const usage: ContextUsage = { usedTokens: 0, contextWindow: 0, percentUsed: 0 }
+  const result = selectPanelUsage(usage, BREAKDOWN)
+  const free = selectFreeTokens(BREAKDOWN)
+  expect(result.usedTokens + (free ?? 0)).toBe(result.contextWindow)
+})
+
+test('with no breakdown yet, the panel falls back to the live composer usage untouched', () => {
+  const usage: ContextUsage = { usedTokens: 191_000, contextWindow: 372_000, percentUsed: 51 }
+  expect(selectPanelUsage(usage, null)).toEqual(usage)
+})
+
+test('an untrustworthy breakdown (collapsed analysis) also falls back to the live usage', () => {
+  const usage: ContextUsage = { usedTokens: 191_000, contextWindow: 372_000, percentUsed: 51 }
+  const collapsed: ContextBreakdownSnapshot = {
+    ...BREAKDOWN,
+    categories: [{ label: 'Skills', tokens: 100, colorKey: 'warning', deferred: false }],
+    usedTokens: 14_500,
+  }
+  expect(selectPanelUsage(usage, collapsed)).toEqual(usage)
 })
