@@ -9,10 +9,10 @@
  * the current orphan fleet and, on confirmation, terminates it.
  *
  * SAFETY:
- *  - A process is an orphan candidate ONLY when its command line matches the
- *    sidecar entry AND its parent is dead (reparented to PID 1, or its PPID is
- *    no longer alive). Never matched on pid alone; a sidecar whose parent
- *    (Electron/supervisor) is still alive is left untouched.
+ *  - A process is an orphan candidate ONLY when its pid and socket path appear
+ *    in the desktop registry as a still-live row, its command line confirms the
+ *    sidecar entry, AND its parent is dead (reparented to PID 1, or its PPID is
+ *    no longer alive). A marker never discovers processes on its own.
  *  - DRY-RUN by default: it prints what it WOULD do and exits 0. Pass `--confirm`
  *    to actually SIGTERM the orphans and remove the stale socket dirs.
  *  - Stale `/tmp/catcode-<pid>` socket dirs are removed only when `<pid>` (the
@@ -21,21 +21,33 @@
  * Usage:
  *   bun run app/scripts/reap-orphan-sidecars.ts             # dry run (list only)
  *   bun run app/scripts/reap-orphan-sidecars.ts --confirm   # SIGTERM + remove dirs
- *   bun run app/scripts/reap-orphan-sidecars.ts --marker <substr>   # override cmdline marker (packaged binary)
+ *   bun run app/scripts/reap-orphan-sidecars.ts --marker <substr>   # identity marker for recorded pids only
  *
  * Electron-free; no new dependencies (node:child_process + node:fs only).
  */
 
 import { execFileSync } from 'node:child_process'
-import { readdirSync, rmSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { defaultRegistryDir, REGISTRY_VERSION } from '../host/registry.js'
 
 /** Default cmdline marker: the dev sidecar entry. Override for packaged builds. */
 const DEFAULT_MARKER = 'app/sidecar/index.ts'
 
-type OrphanProc = { pid: number; ppid: number; command: string }
+export type OrphanProc = {
+  pid: number
+  ppid: number
+  command: string
+  socketPath: string
+}
 type StaleDir = { path: string; pid: number }
+
+type RegistryCandidate = {
+  shutdown: unknown
+  enginePid: unknown
+  socketPath: unknown
+}
 
 function isProcessAlive(pid: number): boolean {
   if (pid <= 1) return false
@@ -49,30 +61,75 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-/** All processes whose command line contains `marker` (via `ps`, no shell). */
-function listMatchingProcesses(marker: string): OrphanProc[] {
-  let raw: string
+/**
+ * The reaper may only consider sidecars the desktop itself recorded as live.
+ * A marker is an identity CONFIRMATION, never a way to discover arbitrary
+ * processes. This is deliberately a narrow read-only parser: an unreadable or
+ * malformed registry produces no candidates, which is safer than a machine-wide
+ * process scan.
+ */
+export function ownedSidecarCandidatesFromRegistry(raw: string): Array<{
+  pid: number
+  socketPath: string
+}> {
+  let parsed: unknown
   try {
-    raw = execFileSync('ps', ['-axo', 'pid=,ppid=,command='], {
+    parsed = JSON.parse(raw)
+  } catch {
+    return []
+  }
+  if (
+    parsed === null ||
+    typeof parsed !== 'object' ||
+    !('registryVersion' in parsed) ||
+    parsed.registryVersion !== REGISTRY_VERSION ||
+    !('sessions' in parsed) ||
+    !Array.isArray(parsed.sessions)
+  ) {
+    return []
+  }
+  return parsed.sessions.flatMap(session => {
+    if (session === null || typeof session !== 'object') return []
+    const candidate = session as RegistryCandidate
+    // `shutdown: null` is the durable "host died before cleanup" marker. A
+    // clean/terminal row's advisory pid is history, not kill authority.
+    if (
+      candidate.shutdown !== null ||
+      typeof candidate.enginePid !== 'number' ||
+      !Number.isInteger(candidate.enginePid) ||
+      candidate.enginePid <= 1 ||
+      typeof candidate.socketPath !== 'string' ||
+      candidate.socketPath.length === 0
+    ) {
+      return []
+    }
+    return [{ pid: candidate.enginePid, socketPath: candidate.socketPath }]
+  })
+}
+
+function readOwnedSidecarCandidates(): Array<{ pid: number; socketPath: string }> {
+  try {
+    return ownedSidecarCandidatesFromRegistry(
+      readFileSync(join(defaultRegistryDir(), 'registry.json'), 'utf8'),
+    )
+  } catch {
+    return []
+  }
+}
+
+/** Read one owned pid's parent and command. Never enumerate machine processes. */
+function inspectOwnedProcess(pid: number): { ppid: number; command: string } | null {
+  try {
+    const raw = execFileSync('ps', ['-o', 'ppid=,command=', '-p', String(pid)], {
       encoding: 'utf8',
-      maxBuffer: 8 * 1024 * 1024,
-    })
-  } catch (error) {
-    throw new Error(`could not run ps: ${errText(error)}`)
+      maxBuffer: 16 * 1024,
+    }).trim()
+    const match = raw.match(/^(\d+)\s+(.*)$/)
+    if (!match) return null
+    return { ppid: Number(match[1]), command: match[2] ?? '' }
+  } catch {
+    return null
   }
-  const self = process.pid
-  const matches: OrphanProc[] = []
-  for (const line of raw.split('\n')) {
-    const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/)
-    if (!m) continue
-    const pid = Number(m[1])
-    const ppid = Number(m[2])
-    const command = m[3] ?? ''
-    if (pid === self) continue // never match this script
-    if (!command.includes(marker)) continue
-    matches.push({ pid, ppid, command })
-  }
-  return matches
 }
 
 /**
@@ -92,6 +149,16 @@ function partitionOrphans(procs: OrphanProc[]): {
     else adopted.push(proc)
   }
   return { orphans, adopted }
+}
+
+function listOwnedOrphanCandidates(marker: string): OrphanProc[] {
+  const self = process.pid
+  return readOwnedSidecarCandidates().flatMap(candidate => {
+    if (candidate.pid === self || !existsSync(candidate.socketPath)) return []
+    const process = inspectOwnedProcess(candidate.pid)
+    if (process === null || !process.command.includes(marker)) return []
+    return [{ ...candidate, ...process }]
+  })
 }
 
 /** `/tmp/catcode-<pid>` supervisor socket dirs whose owning pid is dead. */
@@ -140,14 +207,14 @@ function main(): void {
   const markerIdx = argv.indexOf('--marker')
   const marker = markerIdx >= 0 && argv[markerIdx + 1] ? argv[markerIdx + 1]! : DEFAULT_MARKER
 
-  const procs = listMatchingProcesses(marker)
+  const procs = listOwnedOrphanCandidates(marker)
   const { orphans, adopted } = partitionOrphans(procs)
   const staleDirs = listStaleSocketDirs()
 
   console.log(`\nOrphaned-sidecar cleanup (marker: "${marker}")`)
   console.log('─'.repeat(64))
   console.log(
-    `matched ${procs.length} sidecar process(es): ${orphans.length} orphaned, ` +
+    `matched ${procs.length} registry-owned sidecar process(es): ${orphans.length} orphaned, ` +
       `${adopted.length} with a live parent (kept).`,
   )
 
@@ -203,4 +270,4 @@ function main(): void {
   console.log(`\nDone: SIGTERM'd ${killed}/${orphans.length} orphan(s), removed ${removed}/${staleDirs.length} stale dir(s).`)
 }
 
-main()
+if (import.meta.main) main()
