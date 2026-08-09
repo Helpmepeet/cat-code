@@ -9,6 +9,7 @@
  * than a fixture, because a fixture cannot show that the shipped rules survived.
  */
 import { describe, expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -18,6 +19,7 @@ import {
   autoModeSectionDropsDefaults,
   spliceAutoModeDefaults,
   spliceAutoModeDefaultsList,
+  transformUpstreamRuntimePrompt,
 } from './autoModeDefaultsSplice.js'
 
 const UPSTREAM_DIR = join(
@@ -176,5 +178,21 @@ describe('assembleUpstreamSystemPrompt', () => {
       soft_deny: [AUTO_MODE_DEFAULTS_SENTINEL, 'mine'],
     })
     expect(out).not.toMatch(/<user_[a-z_]+_to_replace>/)
+  })
+
+  test('transforms the immutable upstream XML contract for the forced tool', () => {
+    const runtime = transformUpstreamRuntimePrompt(BASE, PERMISSIONS)
+    const out = assembleUpstreamSystemPrompt(BASE, PERMISSIONS, undefined)
+
+    expect(runtime.basePrompt).toContain('`classify_result` tool')
+    expect(runtime.basePrompt).not.toContain('<block>')
+    expect(runtime.permissionsTemplate).not.toContain('<settings_deny_rules>')
+    expect(out.match(/<settings_deny_rules>/g) ?? []).toHaveLength(0)
+    expect(out.match(/<\/settings_deny_rules>/g) ?? []).toHaveLength(0)
+    expect(
+      createHash('sha256')
+        .update(out)
+        .digest('hex'),
+    ).toBe('7a0f0472b3ced381e7b6683f00b14663c5a609ebaffd0aac9586373aabb97503')
   })
 })

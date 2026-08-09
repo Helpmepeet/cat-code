@@ -96,6 +96,32 @@ export type AutoModeSectionConfig = {
   environment?: string[]
 }
 
+const FORCED_TOOL_OUTPUT_FORMAT = `## Output Format
+
+Report the verdict only with the \`classify_result\` tool. Do not emit XML or prose outside that tool call.
+
+If the action should be blocked, provide \`thinking\`, \`shouldBlock: true\`, and \`reason\`. Include \`category\` only when you can name the matching BLOCK rule.
+
+If the action should be allowed, provide \`thinking\`, \`shouldBlock: false\`, and \`reason\`. Omit \`category\`.
+
+If you cannot name a specific BLOCK rule, the action does not match any rule and should be allowed.`
+
+export function transformUpstreamRuntimePrompt(
+  basePrompt: string,
+  permissionsTemplate: string,
+): { basePrompt: string; permissionsTemplate: string } {
+  return {
+    basePrompt: basePrompt.replace(
+      /## Output Format\n[\s\S]*$/,
+      FORCED_TOOL_OUTPUT_FORMAT,
+    ),
+    permissionsTemplate: permissionsTemplate.replace(
+      '\n<settings_deny_rules>\n',
+      '\n',
+    ),
+  }
+}
+
 /**
  * Assemble the ported upstream system prompt from its two vendored modules.
  *
@@ -110,14 +136,18 @@ export function assembleUpstreamSystemPrompt(
   permissionsTemplate: string,
   config: AutoModeSectionConfig | undefined,
 ): string {
+  const runtimePrompt = transformUpstreamRuntimePrompt(
+    basePrompt,
+    permissionsTemplate,
+  )
   // <cross_session_messages_rule> ships empty upstream: both of its call sites
   // substitute an empty string. <cc_automode_session_rules> is a wrapper around
   // ordinary prose rather than a slot, so it is left in place.
-  const assembled = basePrompt
+  const assembled = runtimePrompt.basePrompt
     .replace(
       '<permissions_template>',
       () =>
-        `<cc_automode_permissions>\n${permissionsTemplate}\n</cc_automode_permissions>`,
+        `<cc_automode_permissions>\n${runtimePrompt.permissionsTemplate}\n</cc_automode_permissions>`,
     )
     .replace('<cross_session_messages_rule>', () => '')
 
