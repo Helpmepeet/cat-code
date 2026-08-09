@@ -43,7 +43,10 @@ import {
   getProgressUpdate,
   updateProgressFromMessage,
 } from '../../tasks/LocalAgentTask/LocalAgentTask.js'
-import type { CustomAgentDefinition } from '../../tools/AgentTool/loadAgentsDir.js'
+import {
+  type AgentDefinition,
+  isBuiltInAgent,
+} from '../../tools/AgentTool/loadAgentsDir.js'
 import { resolveAgentTools } from '../../tools/AgentTool/agentToolUtils.js'
 import { runAgent } from '../../tools/AgentTool/runAgent.js'
 import { awaitClassifierAutoApproval } from '../../tools/BashTool/bashPermissions.js'
@@ -531,7 +534,7 @@ export type InProcessRunnerConfig = {
   /** Initial prompt for the teammate */
   prompt: string
   /** Optional agent definition (for specialized agents) */
-  agentDefinition?: CustomAgentDefinition
+  agentDefinition?: AgentDefinition
   /** Teammate context for AsyncLocalStorage */
   teammateContext: TeammateContext
   /** Parent's tool use context */
@@ -1104,7 +1107,7 @@ type InProcessRuntime = {
 async function resolveInProcessRuntime(
   args: {
     toolUseContext: ToolUseContext
-    agentDefinition?: CustomAgentDefinition
+    agentDefinition?: AgentDefinition
     model?: string
     systemPromptMode?: 'default' | 'replace' | 'append'
     systemPrompt?: string
@@ -1141,7 +1144,7 @@ async function resolveInProcessRuntime(
     {
       tools: agentToolNames,
       disallowedTools: agentDefinition?.disallowedTools,
-      source: 'projectSettings',
+      source: agentDefinition?.source ?? 'projectSettings',
       permissionMode: 'default',
     },
     toolUseContext.options.tools,
@@ -1165,11 +1168,15 @@ async function resolveInProcessRuntime(
     TEAMMATE_SYSTEM_PROMPT_ADDENDUM,
   ]
 
-  // If custom agent definition provided, append its prompt
+  // Append the requested agent's own prompt. Built-in definitions receive the
+  // context their dynamic prompt factory expects; plugin and settings agents
+  // own zero-argument prompt closures.
   if (agentDefinition) {
-    const customPrompt = agentDefinition.getSystemPrompt()
-    if (customPrompt) {
-      systemPromptParts.push(`\n# Custom Agent Instructions\n${customPrompt}`)
+    const agentPrompt = isBuiltInAgent(agentDefinition)
+      ? agentDefinition.getSystemPrompt({ toolUseContext })
+      : agentDefinition.getSystemPrompt()
+    if (agentPrompt) {
+      systemPromptParts.push(`\n# Custom Agent Instructions\n${agentPrompt}`)
     }
 
     // Log agent memory loaded event for in-process teammates
@@ -1280,17 +1287,21 @@ export async function runInProcessTeammate(
   // Resolve agent definition - use full system prompt with teammate addendum
   // IMPORTANT: Set permissionMode to 'default' so teammates always get full tool
   // access regardless of the leader's permission mode.
-  const resolvedAgentDefinition: CustomAgentDefinition = {
-    agentType: identity.agentName,
-    whenToUse: `In-process teammate: ${identity.agentName}`,
-    getSystemPrompt: () => teammateSystemPrompt,
-    tools: agentToolNames,
-    source: 'projectSettings',
-    permissionMode: 'default',
-    // Propagate model from custom agent definition so getAgentModel()
-    // can use it as a fallback when no tool-level model is specified
-    ...(agentDefinition?.model ? { model: agentDefinition.model } : {}),
-  }
+  const resolvedAgentDefinition: AgentDefinition = agentDefinition
+    ? {
+        ...agentDefinition,
+        getSystemPrompt: () => teammateSystemPrompt,
+        tools: agentToolNames,
+        permissionMode: 'default',
+      }
+    : {
+        agentType: identity.agentName,
+        whenToUse: `In-process teammate: ${identity.agentName}`,
+        getSystemPrompt: () => teammateSystemPrompt,
+        tools: agentToolNames,
+        source: 'projectSettings',
+        permissionMode: 'default',
+      }
 
   const teammateProvider =
     getProviderForModel(model) ?? toolUseContext.options.mainLoopProvider

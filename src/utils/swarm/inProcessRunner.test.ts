@@ -437,6 +437,37 @@ describe('resolveInProcessRuntime (via _forTest)', () => {
     expect(systemPrompt).toBe('You are a narrow reviewer teammate.')
     expect(called).toBe(false)
   })
+
+  test('keeps a built-in definition prompt and source-specific tool filtering', async () => {
+    const availableTools = [stubTool('Read'), stubTool('Edit')]
+    const toolUseContext = createRuntimeToolUseContext(availableTools)
+    const expectedOptions = toolUseContext.options
+    let builtInPromptReceivedOptions = false
+
+    const { tools, systemPrompt } = await _forTest.resolveInProcessRuntime(
+      {
+        toolUseContext,
+        agentDefinition: {
+          agentType: 'Explore',
+          whenToUse: 'Inspect without editing',
+          source: 'built-in',
+          baseDir: 'built-in',
+          tools: ['Read'],
+          getSystemPrompt: ({ toolUseContext: builtInContext }) => {
+            builtInPromptReceivedOptions =
+              builtInContext.options === expectedOptions
+            return 'Built-in explorer prompt'
+          },
+        },
+      },
+      { getSystemPrompt: (async () => ['BASE']) as never },
+    )
+
+    expect(builtInPromptReceivedOptions).toBe(true)
+    expect(tools.map(tool => tool.name)).toContain('Read')
+    expect(tools.map(tool => tool.name)).not.toContain('Edit')
+    expect(systemPrompt).toContain('Built-in explorer prompt')
+  })
 })
 
 describe('in-process mailbox permission fallback', () => {

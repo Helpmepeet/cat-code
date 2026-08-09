@@ -66,8 +66,7 @@ import {
 import { getHardcodedTeammateModelFallback } from '../../utils/swarm/teammateModel.js'
 import { registerTask } from '../../utils/task/framework.js'
 import { writeToMailbox } from '../../utils/teammateMailbox.js'
-import type { CustomAgentDefinition } from '../AgentTool/loadAgentsDir.js'
-import { isCustomAgent } from '../AgentTool/loadAgentsDir.js'
+import type { AgentDefinition } from '../AgentTool/loadAgentsDir.js'
 
 function getDefaultTeammateModel(leaderModel: string | null): string {
   const configured = getGlobalConfig().teammateDefaultModel
@@ -896,14 +895,13 @@ async function handleSpawnInProcess(
     // Assign a unique color to this teammate
     const teammateColor = assignTeammateColor(teammateId)
 
-    // Look up custom agent definition if agent_type is provided
-    let agentDefinition: CustomAgentDefinition | undefined
+    // Carry every active agent definition into the in-process path. Built-in
+    // and plugin definitions own their prompt and tool restrictions too.
+    let agentDefinition: AgentDefinition | undefined
     if (agent_type) {
       const allAgents = context.options.agentDefinitions.activeAgents
       const foundAgent = allAgents.find(a => a.agentType === agent_type)
-      if (foundAgent && isCustomAgent(foundAgent)) {
-        agentDefinition = foundAgent
-      }
+      agentDefinition = foundAgent
       logForDebugging(
         `[handleSpawnInProcess] agent_type=${agent_type}, found=${!!agentDefinition}`,
       )
