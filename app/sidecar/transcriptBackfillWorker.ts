@@ -168,6 +168,7 @@ async function main(): Promise<void> {
       const nested = await withRestoredSubagentHistory(
         item.engineSessionId,
         merged.history,
+        message => process.stderr.write(`${message}\n`),
       )
       const frames = buildBoundedFrames(
         item.appSessionId,

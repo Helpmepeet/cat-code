@@ -41,7 +41,7 @@ export type SubagentBranch = {
 }
 
 /** A subagent worth reading: metadata that actually carries the join key. */
-type BranchCandidate = {
+export type BranchCandidate = {
   agentId: Parameters<typeof getAgentTranscriptForSession>[1]
   parentToolUseId: string
   agentName: string | undefined
@@ -197,6 +197,46 @@ async function loadBranchCandidates(
 }
 
 /**
+ * Load only branches that can fit in the remaining replay budget. This is
+ * deliberately sequential: agent transcript reads deserialize entire
+ * sidechains, so reaching the frame cap must prevent reads of every later
+ * candidate rather than merely dropping their already-loaded result.
+ */
+export async function loadBranchesWithinBudget(
+  sessionId: string,
+  candidates: readonly BranchCandidate[],
+  budget: number,
+  seenUuids: Set<string>,
+  loadTranscript: typeof getAgentTranscriptForSession =
+    getAgentTranscriptForSession,
+): Promise<SubagentBranch[]> {
+  const branches: SubagentBranch[] = []
+  let remaining = budget
+  for (const candidate of candidates) {
+    if (remaining <= 0) break
+    const transcript = await loadTranscript(sessionId, candidate.agentId)
+    if (transcript === null) continue
+    const frames = projectBranchFrames(
+      transcript.messages,
+      candidate.parentToolUseId,
+      candidate.agentName,
+      seenUuids,
+    )
+    if (frames.length === 0 || frames.length > remaining) continue
+    const branch = { parentToolUseId: candidate.parentToolUseId, frames }
+    branches.push(branch)
+    remaining -= branch.frames.length
+    // Sibling fork-agent transcripts can inherit the same UUIDs. Fold
+    // accepted frames into the working set before loading the next branch so
+    // duplicates cannot consume the remaining replay budget.
+    for (const frame of branch.frames) {
+      if (typeof frame.uuid === 'string') seenUuids.add(frame.uuid)
+    }
+  }
+  return branches
+}
+
+/**
  * Restored history with every locatable subagent branch nested under its Agent
  * card.
  *
@@ -236,29 +276,13 @@ export async function withRestoredSubagentHistory(
         candidate => !reachable.has(candidate.parentToolUseId),
       )
       const seenUuids = collectUuids(assembled)
-      const loaded = await Promise.all(
-        matched.map(async candidate => {
-          const transcript = await getAgentTranscriptForSession(
-            sessionId,
-            candidate.agentId,
-          )
-          if (transcript === null) return null
-          const frames = projectBranchFrames(
-            transcript.messages,
-            candidate.parentToolUseId,
-            candidate.agentName,
-            seenUuids,
-          )
-          return frames.length === 0
-            ? null
-            : { parentToolUseId: candidate.parentToolUseId, frames }
-        }),
+      const branches = await loadBranchesWithinBudget(
+        sessionId,
+        matched,
+        budget,
+        seenUuids,
       )
-      const branches: SubagentBranch[] = []
-      for (const branch of loaded) {
-        if (branch === null) continue
-        if (branch.frames.length > budget) break
-        branches.push(branch)
+      for (const branch of branches) {
         budget -= branch.frames.length
       }
       if (branches.length === 0) break

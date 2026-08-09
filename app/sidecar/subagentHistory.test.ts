@@ -6,7 +6,11 @@ import {
   createCompactBoundaryMessage,
 } from '../../src/utils/messages.js'
 
-import { projectBranchFrames, spliceSubagentBranches } from './subagentHistory.js'
+import {
+  loadBranchesWithinBudget,
+  projectBranchFrames,
+  spliceSubagentBranches,
+} from './subagentHistory.js'
 
 function spawnFrame(toolUseId: string, uuid: string): SDKMessage {
   return {
@@ -173,6 +177,53 @@ describe('restored subagent branches', () => {
 
     expect(frames).toHaveLength(1)
     expect(frames[0]?.uuid).toBe(own.uuid)
+  })
+
+  test('stops reading reachable sidechains as soon as the replay budget is full', async () => {
+    const calls: string[] = []
+    const branches = await loadBranchesWithinBudget(
+      'session' as never,
+      [
+        { agentId: 'first' as never, parentToolUseId: 'tu-1', agentName: undefined },
+        { agentId: 'never-read' as never, parentToolUseId: 'tu-2', agentName: undefined },
+      ],
+      1,
+      new Set(),
+      async (_sessionId, agentId) => {
+        calls.push(agentId as string)
+        return { messages: [createAssistantMessage({ content: 'one frame' })] } as never
+      },
+    )
+
+    expect(calls).toEqual(['first'])
+    expect(branches).toHaveLength(1)
+  })
+
+  test('skips an oversized branch but still reads a later branch that fits', async () => {
+    const calls: string[] = []
+    const branches = await loadBranchesWithinBudget(
+      'session' as never,
+      [
+        { agentId: 'oversized' as never, parentToolUseId: 'tu-large', agentName: undefined },
+        { agentId: 'small' as never, parentToolUseId: 'tu-small', agentName: undefined },
+      ],
+      1,
+      new Set(),
+      async (_sessionId, agentId) => {
+        calls.push(agentId as string)
+        return {
+          messages: agentId === ('oversized' as never)
+            ? [
+                createAssistantMessage({ content: 'too much 1' }),
+                createAssistantMessage({ content: 'too much 2' }),
+              ]
+            : [createAssistantMessage({ content: 'fits' })],
+        } as never
+      },
+    )
+
+    expect(calls).toEqual(['oversized', 'small'])
+    expect(branches.map(branch => branch.parentToolUseId)).toEqual(['tu-small'])
   })
 
   test('ignores non-tool_use content when looking for a parent', () => {
