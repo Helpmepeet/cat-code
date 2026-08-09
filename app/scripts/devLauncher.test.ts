@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 
 import {
   describeChildExit,
@@ -206,4 +207,12 @@ describe('operator messages', () => {
     expect(timedOut).toContain('did not come up')
     expect(timedOut).not.toContain('lsof')
   })
+})
+
+test('dev wires signal cleanup before waiting for Vite readiness', () => {
+  const source = readFileSync(new URL('./dev.ts', import.meta.url), 'utf8')
+
+  expect(source.indexOf("process.on('SIGTERM'"))
+    .toBeLessThan(source.indexOf('const readiness = await waitForRendererReady'))
+  expect(source).toContain('...(electron ? [stop(electron)] : [])')
 })

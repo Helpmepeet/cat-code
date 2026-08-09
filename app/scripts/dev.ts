@@ -99,6 +99,31 @@ const vite = supervise(
   }),
 )
 
+let electron: Supervised | null = null
+let shuttingDown = false
+
+/**
+ * Tear down every child that exists and exit. This is armed before readiness so
+ * a signal while Vite is starting cannot leave it behind. Re-entrant by design:
+ * the operator's second Ctrl-C and a child exit during teardown both land here.
+ */
+async function shutdown(exitCode: number): Promise<void> {
+  if (shuttingDown) return
+  shuttingDown = true
+  await Promise.all([stop(vite), ...(electron ? [stop(electron)] : [])])
+  process.exit(exitCode)
+}
+
+// A signalled launcher reports the signal in its own status (128 + signum), so
+// a wrapping script can tell an interrupted run from a failed one. These must
+// be installed while Vite is still waiting to become reachable.
+process.on('SIGINT', () => {
+  void shutdown(resolveLauncherExitCode({ code: null, signal: 'SIGINT' }))
+})
+process.on('SIGTERM', () => {
+  void shutdown(resolveLauncherExitCode({ code: null, signal: 'SIGTERM' }))
+})
+
 // 3. Wait for OUR Vite to be reachable, then launch Electron.
 const readiness = await waitForRendererReady({
   probe: async () => {
@@ -122,7 +147,7 @@ if (!readiness.ok) {
   process.exit(1)
 }
 
-const electron = supervise(
+const launchedElectron = supervise(
   '(electron)',
   spawn(electronBin, ['.'], {
     stdio: 'inherit',
@@ -130,28 +155,16 @@ const electron = supervise(
     env: { ...process.env, CATCODE_RENDERER_URL: RENDERER_URL },
   }),
 )
-
-let shuttingDown = false
-
-/**
- * Tear down both children and exit. Re-entrant by design: the operator's second
- * Ctrl-C, and Electron's own exit event firing mid-teardown, both land here.
- */
-async function shutdown(exitCode: number): Promise<void> {
-  if (shuttingDown) return
-  shuttingDown = true
-  await Promise.all([stop(electron), stop(vite)])
-  process.exit(exitCode)
-}
+electron = launchedElectron
 
 // Electron quitting is the normal end of a dev run — its status is the run's
 // status, so a main-process crash at startup can no longer be read as success.
-electron.child.on('exit', (code, signal) => {
+launchedElectron.child.on('exit', (code, signal) => {
   const exit: ChildExit = { code, signal }
   // Only when it ended on its OWN: a teardown we started signalled it, so its
   // non-zero status there is the expected outcome, not something to report.
   if (!shuttingDown && !isCleanExit(exit)) {
-    console.error(`[dev] ${describeChildExit(electron.name, exit)}`)
+    console.error(`[dev] ${describeChildExit(launchedElectron.name, exit)}`)
   }
   void shutdown(resolveLauncherExitCode(exit))
 })
@@ -159,7 +172,7 @@ electron.child.on('exit', (code, signal) => {
 // A child that never started may emit `error` WITHOUT `exit`, so the exit
 // handler above is not guaranteed to run; without this the launcher would wait
 // forever with Vite still up.
-electron.child.on('error', () => {
+launchedElectron.child.on('error', () => {
   void shutdown(1)
 })
 
@@ -169,13 +182,4 @@ vite.child.on('exit', (code, signal) => {
   if (shuttingDown) return
   console.error(`[dev] ${describeChildExit(vite.name, { code, signal })}`)
   void shutdown(1)
-})
-
-// A signalled launcher reports the signal in its own status (128 + signum), so
-// a wrapping script can tell an interrupted run from a failed one.
-process.on('SIGINT', () => {
-  void shutdown(resolveLauncherExitCode({ code: null, signal: 'SIGINT' }))
-})
-process.on('SIGTERM', () => {
-  void shutdown(resolveLauncherExitCode({ code: null, signal: 'SIGTERM' }))
 })
