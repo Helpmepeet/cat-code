@@ -82,14 +82,6 @@ const AGENT_CONFIG_SLICE_CONSUMER: Record<
   availableMcpServers: 'unread',
 }
 
-test('every agent-config slice on the wire is classified by what reads it', () => {
-  expect(Object.keys(AGENT_CONFIG_SLICE_CONSUMER).sort()).toEqual([
-    'availableMcpServers',
-    'definitions',
-    'failedFiles',
-  ])
-})
-
 function lifecycleFrame(sessionId: SessionId): ServerFrame {
   return {
     kind: 'lifecycle',

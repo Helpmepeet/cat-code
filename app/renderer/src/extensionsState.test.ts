@@ -50,15 +50,6 @@ const RENDERED_EXTENSIONS_SLICES: Record<keyof ExtensionsSnapshot, true> = {
   hooks: true,
 }
 
-test('every extensions slice on the wire has a panel that renders it', () => {
-  expect(Object.keys(RENDERED_EXTENSIONS_SLICES).sort()).toEqual([
-    'hooks',
-    'mcp',
-    'plugins',
-    'skills',
-  ])
-})
-
 test('a lifecycle frame drops the stale snapshot only for a tracked session', () => {
   let state = createExtensionsState()
   state = reduceExtensionsState(state, { type: 'frame', frame: frame('s1', snapshot()) })

@@ -61,14 +61,6 @@ const READ_CATALOG_SLICES: Record<keyof SessionsCatalogSnapshot, true> = {
   capturedAtMs: true,
 }
 
-test('every sessions-catalog slice on the wire is read by the renderer', () => {
-  expect(Object.keys(READ_CATALOG_SLICES).sort()).toEqual([
-    'capturedAtMs',
-    'entries',
-    'truncated',
-  ])
-})
-
 function descriptor(partial: Partial<SessionDescriptor> & { appSessionId: string }): SessionDescriptor {
   return {
     engineSessionId: null,
