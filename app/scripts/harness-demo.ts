@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   describeReadinessFailure,
+  terminateChild as terminateSupervisedChild,
   waitForRendererReady,
   type ChildExit,
 } from './devLauncher.js'
@@ -18,6 +19,7 @@ const driverOut = join(here, 'harness-demo-driver.cjs')
 let scratch: string | null = null
 let configHome: string | null = null
 let viteProcess: ReturnType<typeof spawn> | null = null
+let electronProcess: ReturnType<typeof spawn> | null = null
 
 await main()
 process.exit(process.exitCode ?? 0)
@@ -93,6 +95,7 @@ async function main(): Promise<void> {
         CLAUDE_CONFIG_DIR: configHome,
       },
     })
+    electronProcess = electron
     electron.stdout?.on('data', chunk => {
       const text = String(chunk)
       if (text.includes('[main] renderer ready')) sawReady = true
@@ -122,28 +125,23 @@ async function main(): Promise<void> {
 
 async function cleanup(): Promise<void> {
   const vite = viteProcess
+  const electron = electronProcess
   viteProcess = null
-  if (vite) {
-    await terminateChild(vite)
-  }
+  electronProcess = null
+  await Promise.all([...(vite ? [terminateChild(vite)] : []), ...(electron ? [terminateChild(electron)] : [])])
   rmSync(driverOut, { force: true })
   if (scratch) rmSync(scratch, { recursive: true, force: true })
   if (configHome) rmSync(configHome, { recursive: true, force: true })
 }
 
-function terminateChild(child: ReturnType<typeof spawn>): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve()
-  return new Promise(resolve => {
-    const timer = setTimeout(() => {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill('SIGKILL')
-      }
-    }, 2_000)
-    child.once('exit', () => {
-      clearTimeout(timer)
-      resolve()
-    })
-    child.kill('SIGTERM')
+async function terminateChild(child: ReturnType<typeof spawn>): Promise<void> {
+  await terminateSupervisedChild({
+    kill: signal => child.kill(signal),
+    hasExited: () => child.exitCode !== null || child.signalCode !== null,
+    sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+    now: () => Date.now(),
+    graceMs: 2_000,
+    pollMs: 50,
   })
 }
 
@@ -161,13 +159,20 @@ function viteExit(): ChildExit | null {
 
 function waitForExit(child: ReturnType<typeof spawn>, timeoutMs: number): Promise<number | null> {
   return new Promise((resolve, reject) => {
+    let settled = false
+    const finish = (callback: () => void) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      callback()
+    }
     const timer = setTimeout(() => {
-      child.kill()
-      reject(new Error('Electron demo timed out'))
+      void terminateChild(child).then(() => {
+        finish(() => reject(new Error('Electron demo timed out')))
+      })
     }, timeoutMs)
     child.on('exit', code => {
-      clearTimeout(timer)
-      resolve(code)
+      finish(() => resolve(code))
     })
   })
 }

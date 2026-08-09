@@ -9,10 +9,12 @@ test('harness demo cleanup is reachable on every exit path', () => {
   expect(source).toContain('process.exitCode =')
   expect(source).toContain('await main()\nprocess.exit(process.exitCode ?? 0)')
   expect(source.match(/\bprocess\.exit\(/g) ?? []).toHaveLength(1)
-  expect(source).toContain('await terminateChild(vite)')
-  expect(source).not.toContain('vite.kill()')
-  expect(source).toContain("child.kill('SIGTERM')")
-  expect(source).toContain("child.kill('SIGKILL')")
+  expect(source).toContain('...(vite ? [terminateChild(vite)] : [])')
+  expect(source).toContain('await terminateSupervisedChild({')
+  expect(source).toContain('let electronProcess')
+  expect(source).toContain('electronProcess = electron')
+  expect(source).toContain('terminateChild(electron)')
+  expect(source).toContain('void terminateChild(child).then')
 })
 
 test('harness demo driver requests Electron shutdown before its forced-exit backstop', () => {
