@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 85/242** — counted against the review's original 61 High and
+**Progress: Fix 86/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -89,6 +89,7 @@ count tracks individually verified findings, not commit count.
 | A19 HIGH AskQuestion keyboard handling could consume composer keys or act after another handler claimed them | fixed | `eb3aece` | flow now shares the permission key-owner predicate and bails on `defaultPrevented`; AskQuestion/PermissionPrompt/App renderer suites (123 pass); app typecheck and renderer production build; GUI event dispatch remains operator-verifiable |
 | A06 HIGH a rejected, request-correlated inbound verb was ignored by every renderer outcome surface | fixed | `b421891` | correlated `bad_request` frames now join the existing verb-ack failure state and toast path, while uncorrelated framing errors remain ignored; verb-ack reducer regressions (17 pass); existing sidecar boundary tests verify request-id echoing; app typecheck and renderer production build |
 | A04 MED injected system turns printed raw engine discriminants as trailing debug tags | fixed | `4e99145` | the operator-facing heading and sender remain, while raw `channel`/`teammate`/`coordinator`/continuation tags are absent; TranscriptView suite (177 pass); app typecheck and renderer production build; GUI fidelity remains operator-verifiable |
+| A04 MED expanded Edit cards repeated their file path and ± totals in the shell and DiffView header | fixed | `104ea70` | DiffView is the single owner of the file/count header; regression asserts one addition and deletion total each; TranscriptView suite (177 pass); app typecheck and renderer production build; GUI fidelity remains operator-verifiable |
 
 ## Known verification limitation
 
