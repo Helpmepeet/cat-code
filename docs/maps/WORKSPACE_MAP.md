@@ -39,7 +39,7 @@ below are repo-root-relative — open a sub-map directly at that path (e.g.
 | [`docs/maps/native-client-integrations.md`](native-client-integrations.md) | Chrome/browser integration, computer-use, native shims, desktop/mobile, and voice. | 2026-05-12 |
 | [`docs/maps/proactive-assistant-services.md`](proactive-assistant-services.md) | Proactive/Kairos-style services, auto dream, MagicDocs, tips, assistant summaries, and triggers. | 2026-07-01 |
 | [`docs/maps/build-release-testing.md`](build-release-testing.md) | Build/dev/compile scripts, feature sets, migrations, release/upgrade/update, lint, and tests. | 2026-07-11 |
-| [`docs/maps/analytics-diagnostics.md`](analytics-diagnostics.md) | Analytics/telemetry, GrowthBook gates, diagnostics, doctor, logging, stats, and cost/status. | 2026-07-13 |
+| [`docs/maps/analytics-diagnostics.md`](analytics-diagnostics.md) | Analytics/telemetry, GrowthBook gates, diagnostics, doctor, logging, stats, and cost/status. | 2026-08-06 |
 
 ## Broad Routing Table
 

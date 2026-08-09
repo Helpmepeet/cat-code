@@ -147,6 +147,13 @@ tears down all three (`app/scripts/dev.ts`). Facts that follow from that:
   new owned diagnostic is a regression.
 - Root `bun run lint` does not cover `app/**` (Phase-5 CI item). Do not cite a
   clean root lint as evidence for an `app/` change.
+- **Private desktop diagnostics:** Electron main owns bounded, local operational
+  and delivery-trace JSONL under the desktop config directory. They are support
+  evidence, not model context: never feed raw logs, transcripts, settings, or
+  debug output into a prompt. Users export only the allowlisted, redacted bundle
+  through **Save diagnostics bundle**; preserve the closed schemas and retention
+  caps in `app/shared/operationalLog.ts`, `app/main/deliveryTraceSink.ts`, and
+  `app/main/diagnosticsBundle.ts` when changing this path.
 
 ### Web (`web/`)
 
@@ -484,45 +491,3 @@ set or setting stated in the report.
 
 Claiming completion requires: battery output pasted, quality-bar checklist
 satisfied, stale-reference sweep done, and zero unreported deviations.
-
-## 12. GPT one-shot delegation via `cat-code -p`
-
-Relocated 2026-07-10 from the global `~/.claude/CLAUDE.md` working-style file so
-this cat-code-specific guidance loads only in this repo rather than every project.
-
-### GPT model selection for `cat-code -p`
-- **Scope: only GPT model choice for cat-code's headless, one-shot delegation.** This does not govern cat-code's internal model picker or generic GPT questions; answer those from source/docs.
-- **Execution boundary:** `cat-code exec` is reserved exclusively for exercising the Claude harness. Do not use it to invoke, test, or stand in for Codex or Cat Code; use each system's native execution path instead.
-- `cat-code -p` is for a decorrelated, bounded GPT pass such as reviewing a diff or plan. Use Claude `Agent` for long-running, resumable, or multi-step delegated work; the named-GPT MCP helper is retired.
-- The repo's four-model GPT roster is below. A model rejection is a constraint to respect, not a reason to guess or bypass.
-- Evidence tags: **[verified]** means stated by current OpenAI documentation or checked directly in cat-code source; **[inferred]** means a local selection policy derived from those facts, not a provider guarantee.
-
-| Model | Rule | Why / evidence |
-|---|---|---|
-| `gpt-5.6-sol` | Use for the hardest bounded work that benefits from frontier capability: complex coding, research, or high-judgment review. | **[verified]** OpenAI describes Sol as the frontier GPT-5.6 model for complex professional work. **[inferred]** Reserve it for work where its quality advantage justifies the greater cost. |
-| `gpt-5.6-terra` | Default for bounded coding, debugging, testing, recon, and tool-heavy `cat-code -p` work. Use it for substantial everyday or complex work when Sol is not justified. | **[verified]** OpenAI positions Terra as the balanced GPT-5.6 model and the natural starting point for the former general-purpose tier. **[inferred]** Keep it as the default rather than treating every one-shot as a model-selection experiment. |
-| `gpt-5.6-luna` | Use for clear, repeatable, latency- or cost-sensitive work and high-volume one-shot checks. | **[verified]** OpenAI describes Luna as fast, affordable, and the lowest-cost GPT-5.6 option for efficient/high-volume workloads. **[inferred]** Prefer a different model when the task is ambiguous or high-judgment. |
-
-- Use Claude `Agent` instead for high-judgment work, long-horizon coherence, aesthetics/UI taste, visual inputs, or where false confidence is dangerous.
-- Brief a GPT reviewer like a peer: problem, constraints, evidence/report-back contract, and the complete material to inspect. Treat its output like coworker output — spot-check high-impact claims.
-
-### Second opinion via `cat-code -p` (GPT one-shot, no Codex CLI)
-- **What/when:** cat-code's own headless mode is the `codex exec` equivalent — no Codex CLI needed. `gpt-*` models route to the Codex/ChatGPT pool automatically (`src/utils/model/providers.ts:63`: `if (model.startsWith('gpt-')) return 'openai'`). Use it only for a one-shot decorrelated GPT pass (review a diff/plan); use Claude `Agent` for long-running or resumable work.
-- **Reviewer command** (read-only, machine-detectable failure):
-
-  ```bash
-  git diff main...HEAD > /tmp/cc-review.patch
-  cat-code -p --bare --model gpt-5.6-terra --effort high --tools "" \
-    --output-format json \
-    --append-system-prompt "You are a skeptical staff engineer doing a decorrelated second-opinion review. You did NOT write this code — judge ONLY the diff below. Report concrete bugs/security/unstated-requirement gaps as file:line. End with one line: 'VERDICT: APPROVED' or 'VERDICT: REVISE'." \
-    "Review this diff:
-
-  $(cat /tmp/cc-review.patch)"
-  ```
-
-- **Flags that matter:** the reviewer command below intentionally uses `gpt-5.6-terra`, the table's default for bounded coding/review; consult the table before changing it. `--bare` prevents recursion + context bloat (skips CLAUDE.md re-discovery, hooks, auto-memory); drop it only if a live run shows Codex auth doesn't load under bare. Read-only: `--tools ""` (pure judgment on the provided diff) or `--permission-mode plan --add-dir .` if it must open other files — never give a reviewer write tools. Large diffs: pipe via stdin (`cat x.patch | cat-code -p ...`).
-- **Exhausted-profile handling (REQUIRED — the pool fails terminal, not silent):** the Codex pool auto-fails-over across profiles on 429/cap (LRU, bounded by maxRetries; `codexAccountPool.ts:8`, `withRetry.ts:337`). When ALL profiles are capped it THROWS a terminal error classified `quota.exhausted` (`withRetry.ts:166-176`). **Output-format matters:** in `--output-format json` you get `is_error:true` on the final result + non-zero exit (coarse — "it failed," no reason code); the granular `cat_code_account_diagnostic` code (`quota.exhausted | account.pool.unavailable | auth.missing`) is emitted **only** in `--output-format stream-json --verbose` (`print.ts:597-603,800-802`), or read it cleanly from `cat-code codex status --json` once that ships. So: on `is_error` / non-zero exit, do NOT retry-hammer and do NOT fabricate a GPT verdict. To decide wait-for-reset (quota) vs needs-repair (auth) vs truncated (max-turns), consult the stream diagnostic or `codex status`, then report the pool state (reset ~time) and fall back to my own Anthropic-side review, clearly labeled as mine, not GPT's. Non-zero exit / empty stdout in text mode = same failure.
-- **`--fallback-model` does NOT rescue exhaustion** — it fires on overloaded/529, not account-cap (429), and any `gpt-*` fallback is the same pool. Leave it off for GPT delegation.
-- **Caps don't persist across `-p` invocations:** the capped state is in-memory pool state (`codexAccountPool.ts:95`), never written to the vault. Each one-shot is a fresh process that rebuilds health from vault + startup usage poll, so a profile a prior delegation just capped isn't remembered — under pool pressure a one-shot can burn one wasted 429 round before it re-caps and fails over (the "stale usageResetAt" edge). Prefer one well-scoped pass over retrying several one-shots when profiles are near their limits.
-- **Reusable persona:** bind a profile instead of retyping `--append-system-prompt` — `--agents '{"gpt-reviewer":{"description":"...","model":"gpt-5.6-terra","effort":"high","tools":["Read","Grep","Glob"],"prompt":"You are..."}}' --agent gpt-reviewer`. The agent def (also loadable from `.claude/agents/<name>.md`) binds persona + per-agent model + tools (`src/tools/AgentTool/loadAgentsDir.ts:75-116`) — cat-code's analog of a Codex `--profile`.
-- **Caveat:** the on-PATH `cat-code` may be a stale build; `--bare` + Codex auth and the exact print-mode `is_error`/exit shape are worth one live smoke test before trusting the rule end-to-end.

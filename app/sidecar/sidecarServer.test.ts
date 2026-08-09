@@ -290,6 +290,45 @@ test('on attach, the server sends the canonical controller-derived app.ready pay
   })
 })
 
+test('production delivery envelope adds metadata beside, never inside, the raw ServerFrame', () => {
+  const stages: string[] = []
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
+    controller: new AppSessionController(probeAdapter()),
+    wrapOutboundFrame: (frame, deliveryTrace) => ({
+      kind: 'sidecar.delivery-envelope',
+      frame,
+      deliveryTrace,
+    }),
+    onDeliveryStage: (_trace, stage) => stages.push(stage),
+    log: () => {},
+  })
+  servers.push(server)
+  const decoder = new FrameDecoder(MAX_FRAME_BYTES)
+  const received: unknown[] = []
+  server.addConnection({
+    write(data, onFlushed) {
+      for (const result of decoder.push(Buffer.from(data))) {
+        if (result.kind === 'frame') received.push(result.payload)
+      }
+      onFlushed?.()
+    },
+    end() {},
+  })
+  const envelope = received[0] as {
+    kind?: unknown
+    frame?: ServerFrame
+    deliveryTrace?: { sequence?: unknown; sourceProcessInstanceId?: unknown }
+  }
+  expect(envelope.kind).toBe('sidecar.delivery-envelope')
+  expect(stages).toEqual(['engine.produced', 'sidecar.received', 'sidecar.socket.queued', 'sidecar.socket.sent'])
+  expect(envelope.frame?.kind).toBe('ready')
+  expect(envelope.frame).not.toHaveProperty('deliveryTrace')
+  expect(envelope.deliveryTrace?.sequence).toBe(1)
+  expect(typeof envelope.deliveryTrace?.sourceProcessInstanceId).toBe('string')
+})
+
 test('image app.submit content blocks reach the real controller prompt unchanged', async () => {
   let seenPrompt: unknown
   const controller = new AppSessionController({

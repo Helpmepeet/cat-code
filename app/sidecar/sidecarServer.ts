@@ -66,6 +66,7 @@ import type {
 } from '../../src/web/appSessionProtocol.js'
 import { parseThreadGoal } from '../../src/utils/threadGoal.js'
 import { encodeFrame, FrameDecoder } from '../shared/framing.js'
+import { mintDeliveryTrace, type DeliveryStage, type DeliveryTrace } from '../shared/deliveryTrace.js'
 import {
   checkJsonSafe,
   omitUndefinedObjectProperties,
@@ -142,7 +143,7 @@ import type { SidecarRemoteSettingsDomain } from './remoteSettingsDomain.js'
 import type { PermissionDisplayFacts } from './permissionDomain.js'
 
 export type SidecarSocketLike = {
-  write(data: Uint8Array): void
+  write(data: Uint8Array, onFlushed?: () => void): void
   end(): void
 }
 
@@ -152,12 +153,21 @@ type Connection = {
   decoder: FrameDecoder
   rateWindowStart: number
   rateCount: number
+  deliveryConnectionEpoch: number
 }
 
 export type SidecarServerOptions = {
   sessionId: SessionId
   engineSessionId: string
   controller: AppSessionController
+  /**
+   * Optional socket-only wrapper. Production uses this to carry metadata-only
+   * delivery identity without changing the raw `ServerFrame` schema observed by
+   * server tests and other in-process consumers.
+   */
+  wrapOutboundFrame?: (frame: ServerFrame, trace: DeliveryTrace) => unknown
+  /** Causal descriptor emitted at the actual sidecar boundary, never frame data. */
+  onDeliveryStage?: (trace: DeliveryTrace, stage: Extract<DeliveryStage, 'engine.produced' | 'sidecar.received' | 'sidecar.socket.queued' | 'sidecar.socket.sent'>, frameKind: string) => void
   /**
    * Permissions domain capability (P2-4). Optional because the P1-0 probe
    * fixture has no engine app-state store; when absent, `permission.setMode`
@@ -385,6 +395,12 @@ export class SidecarServer {
   ) => Promise<Uint8Array | null>
   private readonly generatedImageToolUseIds = new Set<string>()
   private readonly log: (line: string) => void
+  private readonly wrapOutboundFrame: ((frame: ServerFrame, trace: DeliveryTrace) => unknown) | null
+  private readonly onDeliveryStage: ((trace: DeliveryTrace, stage: Extract<DeliveryStage, 'engine.produced' | 'sidecar.received' | 'sidecar.socket.queued' | 'sidecar.socket.sent'>, frameKind: string) => void) | null
+  private readonly deliveryStreamEpoch = randomUUID()
+  private readonly deliveryProcessInstanceId = randomUUID()
+  private deliverySequence = 0
+  private deliveryConnectionEpoch = 0
   private readonly connections = new Set<Connection>()
   private unsubscribe: (() => void) | null = null
   private unsubscribePermissionContext: (() => void) | null = null
@@ -475,6 +491,8 @@ export class SidecarServer {
     this.readGeneratedImage =
       options.readGeneratedImage ?? readGeneratedImageForPreview
     this.log = options.log ?? (line => process.stderr.write(`${line}\n`))
+    this.wrapOutboundFrame = options.wrapOutboundFrame ?? null
+    this.onDeliveryStage = options.onDeliveryStage ?? null
 
     // Subscribe once; broadcast every event to all connected clients as a raw
     // `event` frame. (P1-0 has one client, but the fan-out matches the WS
@@ -615,6 +633,7 @@ export class SidecarServer {
       decoder: new FrameDecoder(MAX_FRAME_BYTES),
       rateWindowStart: Date.now(),
       rateCount: 0,
+      deliveryConnectionEpoch: ++this.deliveryConnectionEpoch,
     }
     this.connections.add(connection)
     // Re-home the `app.ready` handshake onto IPC (AppSessionWebSocketServer.ts
@@ -3483,9 +3502,50 @@ export class SidecarServer {
       }
     }
 
+    const trace = this.wrapOutboundFrame
+      ? mintDeliveryTrace(
+        ++this.deliverySequence,
+        this.deliveryStreamEpoch,
+        this.deliveryProcessInstanceId,
+        undefined,
+        undefined,
+        connection.deliveryConnectionEpoch,
+      )
+      : null
+    // These are emitted before encoding and write, respectively.  They are not
+    // reconstructed by Electron after receipt, so a failed encode/write leaves
+    // an honest causal trail.
+    if (trace) {
+      this.onDeliveryStage?.(trace, 'engine.produced', frame.kind)
+      this.onDeliveryStage?.(trace, 'sidecar.received', frame.kind)
+    }
+
     let encoded: Buffer
     try {
-      encoded = encodeFrame(frame)
+      const payload = this.wrapOutboundFrame
+        ? this.wrapOutboundFrame(frame, trace!)
+        : frame
+      encoded = encodeFrame(payload)
+      // The delivery envelope is metadata-only and optional by contract, so it
+      // must never cost a frame its delivery. A raw frame that fits below the
+      // cap keeps its place on the wire; only the trace is dropped.
+      if (encoded.byteLength > MAX_OUTBOUND_FRAME_BYTES && payload !== frame) {
+        const bare = encodeFrame(frame)
+        if (bare.byteLength <= MAX_OUTBOUND_FRAME_BYTES) {
+          encoded = bare
+          // Main mints a fresh trace for an envelope-less frame, so the stages
+          // already emitted here and the ones recorded there describe the same
+          // delivery under two ids. Main records that distinctly when it mints
+          // one. This line is live-debugging detail only: it reaches the
+          // descriptor through the legacy path, which keeps a category and drops
+          // the text, so the durable record does not distinguish this from any
+          // other sidecar failure. Source-side attribution needs its own
+          // category or delivery stage, which neither vocabulary has yet.
+          this.log(
+            `[sidecar] delivery envelope dropped for oversize frame kind=${frame.kind}: trace overflow, source and host stages will not share a trace id`,
+          )
+        }
+      }
     } catch (error) {
       this.log(
         `[sidecar] failed to encode frame kind=${frame.kind}: ${
@@ -3505,7 +3565,10 @@ export class SidecarServer {
     }
 
     try {
-      connection.socket.write(encoded)
+      if (trace) this.onDeliveryStage?.(trace, 'sidecar.socket.queued', frame.kind)
+      connection.socket.write(encoded, () => {
+        if (trace) this.onDeliveryStage?.(trace, 'sidecar.socket.sent', frame.kind)
+      })
     } catch (error) {
       this.log(
         `[sidecar] write failed, dropping connection: ${

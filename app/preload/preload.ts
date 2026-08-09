@@ -15,6 +15,7 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron'
+import type { DeliveryAcknowledgement } from '../shared/deliveryTrace.js'
 import type {
   AccountVerbMessage,
   AskUserQuestionAnswer,
@@ -68,6 +69,103 @@ const CH_PING = 'catcode:ping'
 const CH_RESTART = 'catcode:restart'
 const CH_SERVER_FRAME = 'catcode:server-frame'
 const CH_RENDERER_READY = 'catcode:renderer-ready'
+const CH_DELIVERY_ACK = 'catcode:delivery-ack'
+const CH_RENDERER_FAULT = 'catcode:renderer-fault'
+const CH_OPEN_LOGS = 'catcode:open-logs'
+const CH_SAVE_DIAGNOSTICS = 'catcode:save-diagnostics'
+const CH_DELIVERY_HEALTH_PROBE = 'catcode:delivery-health-probe'
+const CH_DELIVERY_HEALTH_RESPONSE = 'catcode:delivery-health-response'
+
+// A document reload must never acknowledge work from its predecessor.
+const deliveryDocumentId = crypto.randomUUID()
+const deliveryProcessInstanceId = crypto.randomUUID()
+const deliveryProcessStartedAt = new Date().toISOString()
+let deliverySubscriptionEpoch = 0
+const deliveryWatermarks = new Map<string, { received: number; applied: number; committed: number }>()
+const pendingDeliveryAcknowledgements: DeliveryAcknowledgement[] = []
+let deliveryAcknowledgementFlushScheduled = false
+const MAX_DELIVERY_ACKS_PER_BATCH = 64
+let rendererFaultWindowStartedAt = Date.now()
+let rendererFaultCount = 0
+const MAX_RENDERER_FAULTS_PER_MINUTE = 12
+let lastMeasuredEventLoopLagMs = 0
+
+// Keep the watchdog payload metadata-only: this detects a delayed renderer
+// turn without ever exposing DOM, store, or transcript state.
+setInterval(() => {
+  const scheduledAt = performance.now()
+  setTimeout(() => {
+    lastMeasuredEventLoopLagMs = Math.max(0, performance.now() - scheduledAt)
+  }, 0)
+}, 5_000)
+
+function canReportRendererFault(): boolean {
+  const now = Date.now()
+  if (now - rendererFaultWindowStartedAt >= 60_000) {
+    rendererFaultWindowStartedAt = now
+    rendererFaultCount = 0
+  }
+  if (rendererFaultCount >= MAX_RENDERER_FAULTS_PER_MINUTE) return false
+  rendererFaultCount++
+  return true
+}
+
+function sendDeliveryAcknowledgement(
+  sessionId: string,
+  sequence: number,
+  deliveryAttempt: number,
+  streamEpoch: string,
+  traceId: string,
+  stage: DeliveryAcknowledgement['stage'],
+): void {
+  const payload: DeliveryAcknowledgement = {
+    sessionId,
+    streamEpoch,
+    sequence,
+    deliveryAttempt,
+    traceId,
+    stage,
+    documentId: deliveryDocumentId,
+    subscriptionEpoch: deliverySubscriptionEpoch,
+    rendererProcessInstanceId: deliveryProcessInstanceId,
+    rendererProcessStartedAt: deliveryProcessStartedAt,
+  }
+  pendingDeliveryAcknowledgements.push(payload)
+  if (pendingDeliveryAcknowledgements.length >= MAX_DELIVERY_ACKS_PER_BATCH) {
+    flushDeliveryAcknowledgements()
+  } else if (!deliveryAcknowledgementFlushScheduled) {
+    deliveryAcknowledgementFlushScheduled = true
+    queueMicrotask(flushDeliveryAcknowledgements)
+  }
+  const current = deliveryWatermarks.get(sessionId) ?? { received: 0, applied: 0, committed: 0 }
+  if (stage === 'preload.received' || stage === 'renderer.subscription.received') current.received = Math.max(current.received, sequence)
+  if (stage === 'renderer.state.applied') current.applied = Math.max(current.applied, sequence)
+  if (stage === 'renderer.ui.committed') current.committed = Math.max(current.committed, sequence)
+  deliveryWatermarks.set(sessionId, current)
+}
+
+function flushDeliveryAcknowledgements(): void {
+  deliveryAcknowledgementFlushScheduled = false
+  while (pendingDeliveryAcknowledgements.length > 0) {
+    const acknowledgements = pendingDeliveryAcknowledgements.splice(0, MAX_DELIVERY_ACKS_PER_BATCH)
+    const payload = { acknowledgements }
+    sendGuard.assertAllowed(payload)
+    ipcRenderer.send(CH_DELIVERY_ACK, payload)
+  }
+}
+
+ipcRenderer.on(CH_DELIVERY_HEALTH_PROBE, () => {
+  const payload = {
+    documentId: deliveryDocumentId,
+    subscriptionEpoch: deliverySubscriptionEpoch,
+    rendererProcessInstanceId: deliveryProcessInstanceId,
+    monotonicTimestampMs: performance.now(),
+    eventLoopLagMs: lastMeasuredEventLoopLagMs,
+    watermarks: [...deliveryWatermarks.entries()].slice(0, 32).map(([sessionId, value]) => ({ sessionId, ...value })),
+  }
+  sendGuard.assertAllowed(payload)
+  ipcRenderer.send(CH_DELIVERY_HEALTH_RESPONSE, payload)
+})
 
 // Control-plane channels (HC3 — fixed, per-method; must match main.ts).
 const CH_HOST_CREATE = 'catcode:host:create'
@@ -227,15 +325,49 @@ const bridge: CatCodeBridge = {
     // whole batch to the renderer so it folds each store in one dispatch. A live
     // single frame arrives as a one-element array. Outbound-only; no inbound
     // surface or validation change.
-    const handler = (_event: unknown, frames: ServerFrame[]) => listener(frames)
+    const handler = (_event: unknown, frames: ServerFrame[]) => {
+      for (const frame of frames) {
+        if (frame.deliveryTrace) {
+          sendDeliveryAcknowledgement(
+            frame.sessionId,
+            frame.deliveryTrace.sequence,
+            frame.deliveryTrace.deliveryAttempt,
+            frame.deliveryTrace.streamEpoch,
+            frame.deliveryTrace.traceId,
+            'preload.received',
+          )
+        }
+      }
+      // Preload receipt is durable before the renderer is invoked. The renderer
+      // itself emits `renderer.subscription.received` at its callback entry.
+      listener(frames)
+    }
     ipcRenderer.on(CH_SERVER_FRAME, handler)
     return () => {
       ipcRenderer.removeListener(CH_SERVER_FRAME, handler)
     }
   },
   rendererReady(): void {
-    sendGuard.assertAllowed({ rendererReady: true })
-    ipcRenderer.send(CH_RENDERER_READY)
+    deliverySubscriptionEpoch++
+    sendGuard.assertAllowed({ rendererReady: true, documentId: deliveryDocumentId })
+    ipcRenderer.send(CH_RENDERER_READY, { documentId: deliveryDocumentId })
+  },
+  deliveryAck(sessionId, sequence, deliveryAttempt, streamEpoch, traceId, stage): void {
+    sendDeliveryAcknowledgement(sessionId, sequence, deliveryAttempt, streamEpoch, traceId, stage)
+  },
+  reportRendererFault(kind, message): void {
+    if (!canReportRendererFault()) return
+    const payload = { kind, message: message.slice(0, 512) }
+    sendGuard.assertAllowed(payload)
+    ipcRenderer.send(CH_RENDERER_FAULT, payload)
+  },
+  openLogsFolder(): void {
+    sendGuard.assertAllowed({ openLogs: true })
+    ipcRenderer.send(CH_OPEN_LOGS)
+  },
+  saveDiagnosticsBundle(): Promise<boolean> {
+    sendGuard.assertAllowed({ saveDiagnostics: true })
+    return ipcRenderer.invoke(CH_SAVE_DIAGNOSTICS) as Promise<boolean>
   },
   reportVisibleSessions(sessionIds: SessionId[]): void {
     // IDLE-PARK §4(b) — a one-way hint naming the panes on screen so main's park

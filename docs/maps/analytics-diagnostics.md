@@ -1,6 +1,6 @@
 # Analytics And Diagnostics Map
 
-Last refreshed: 2026-07-13
+Last refreshed: 2026-08-06
 
 ## Purpose
 
@@ -30,6 +30,8 @@ active local features.
 | Status command/dialog | `src/commands/status/index.ts`, `src/commands/status/status.tsx` | `src/components/Settings/Settings.tsx`, `src/components/Settings/Status.tsx`, `src/utils/status.tsx` | `/status` opens Settings on the Status tab. Status aggregates account, provider, IDE, MCP, settings, install, memory, sandbox, and diagnostics. |
 | Codex pool status JSON | `src/cli/handlers/codexStatus.ts`, `src/services/api/codexStatus.ts` | `src/main.tsx`, `src/services/api/codexAccountPool.ts`, `src/services/api/codexUsage.ts`, [`codex-core.md`](codex-core.md) | `cat-code codex status --json` is a read-only advisory observation for external delegation/scheduling. It emits opaque profile refs, pool counts, usage freshness, and a decision action without raw account identity or token material. |
 | Debug logging | `src/utils/debug.ts` | `src/utils/debugFilter.ts`, `/debug` command surfaces, call sites using `logForDebugging` | Controls debug mode, file path, stderr/file output, filters, level threshold, runtime enablement, and latest symlink. |
+| Desktop operational logs | `app/main/operationalLogSink.ts` | `app/shared/operationalLog.ts`, `app/main/main.ts`, `app/supervisor/supervisor.ts`, `app/sidecar/operationalLogger.ts` | Main owns the private, bounded JSONL sink. Producers may emit only the closed metadata schema; sidecar diagnostics cross a dedicated FD 3 descriptor and raw stderr is never persisted. |
+| Desktop delivery trace and support export | `app/main/deliveryTraceSink.ts`, `app/main/diagnosticsBundle.ts` | `app/shared/deliveryTrace.ts`, `app/main/main.ts`, `app/preload/preload.ts`, `app/renderer/src/App.tsx`, `app/renderer/src/RendererErrorBoundary.tsx`, `app/renderer/src/SettingsShell.tsx` | Per-frame metadata tracks the desktop handoff and validated renderer acknowledgements. Settings exposes fixed actions to reveal private logs or save an allowlisted local support bundle; neither action gives the renderer a filesystem destination. |
 | Error logging | `src/utils/log.ts` | `src/utils/errorLogSink.ts`, `src/utils/sinks.ts`, MCP log call sites | Owns `logError`, in-memory recent errors, queued sink attachment, and persistent error/MCP logging boundary. |
 | API request logging | `src/services/api/logging.ts` | `src/services/api/claude.ts`, `src/utils/telemetry/sessionTracing.ts`, `src/utils/telemetry/perfettoTracing.ts`, `src/cost-tracker.ts` | Logs API query/success/error metadata, gateway detection, request IDs, OTEL event stubs, beta spans, duration state, and teleport first-message events. |
 | Cost tracking | `src/cost-tracker.ts` | `src/commands/cost/`, `src/costHook.ts`, `src/screens/REPL.tsx`, `src/bootstrap/state.ts` | Tracks session cost, token usage, API/tool duration, code-change counts, persistence on exit/session switch, and `/cost` display. |
@@ -86,6 +88,9 @@ active local features.
 | Debug destination | `src/utils/debug.ts:getDebugLogPath` | Uses `--debug-file`, `CLAUDE_CODE_DEBUG_LOGS_DIR`, or config debug directory with session ID. |
 | Debug filtering | `src/utils/debug.ts:getDebugFilter` | Delegates pattern parsing and matching to `src/utils/debugFilter.ts`. |
 | Runtime debug toggle | `src/utils/debug.ts:enableDebugLogging` | Used for mid-session debug capture without restart. |
+| Desktop operational lifecycle | `app/main/operationalLogSink.ts:createOperationalLogSink` | `app/shared/operationalLog.ts`, `app/main/main.ts`, `app/supervisor/supervisor.ts`, `app/sidecar/operationalLogger.ts` | Separate from engine debug logs and product telemetry. The sink uses private permissions, bounded rotation/retention, deduplication, and a synchronous fatal close; records carry no raw diagnostic line or engine stderr. |
+| Desktop delivery trace | `app/main/deliveryTraceSink.ts:createDeliveryTraceSink` | `app/shared/deliveryTrace.ts`, `app/main/main.ts`, `app/preload/preload.ts`, `app/renderer/src/App.tsx` | Metadata-only trace records and bounded watermarks identify a frame through main/preload/renderer delivery stages. Renderer acknowledgements are fixed, schema-validated IPC payloads. |
+| Desktop support bundle | `app/main/diagnosticsBundle.ts:buildDiagnosticsBundle` | `app/main/main.ts`, `app/renderer/src/SettingsShell.tsx`, `app/shared/operationalLog.ts` | Exports only parsed operational records and allowlisted delivery-trace objects. Transcripts, caches, settings, vaults, raw debug logs, and renderer debug state are excluded. |
 | Error recording | `src/utils/log.ts:logError` | Adds to in-memory errors and routes to attached sink unless disabled by provider/privacy/error-reporting gates. |
 | Error sink attachment | `src/utils/log.ts:attachErrorLogSink` | Queues pre-sink errors and drains when the sink attaches. |
 | API query event | `src/services/api/logging.ts:logAPIQuery` | Records model, message count, temperature, provider, permission/query metadata, thinking/effort/fast mode, and env model/base URL metadata. |

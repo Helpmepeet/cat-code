@@ -105,6 +105,28 @@ describe('runSessionsCatalogWorker — accept + deliver', () => {
     expect(delivered[0]!.entries.map(e => e.sessionId)).toEqual(['a', 'b'])
   })
 
+  test('reports only metadata-only worker start and exit lifecycle', async () => {
+    const lifecycle: unknown[] = []
+    await runSessionsCatalogWorker({
+      command: 'bun',
+      args: [],
+      cwd: process.cwd(),
+      spawnWorker: fakeSpawn({
+        stdout: ndjson({
+          type: 'catalog',
+          version: SESSIONS_CATALOG_WORKER_BOUNDARY_VERSION,
+          catalog: catalog([]),
+        }),
+      }),
+      onCatalog: () => {},
+      onWorkerLifecycle: event => lifecycle.push(event),
+    })
+    expect(lifecycle).toEqual([
+      { phase: 'started', pid: 0 },
+      { phase: 'exited', pid: 0, code: 0, signal: null },
+    ])
+  })
+
   test('a clean worker-reported failure resolves "failure" and never calls onCatalog (keeps last good)', async () => {
     let called = false
     const outcome = await runSessionsCatalogWorker({

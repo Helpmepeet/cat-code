@@ -195,6 +195,7 @@ import {
   connectionRecoveryMessage,
   connectionTone,
   createConnectionState,
+  isTerminalConnectionStatus,
   reduceConnectionState,
   selectConnection,
   type ConnectionSnapshot,
@@ -445,6 +446,8 @@ const reduceVerbAckResultStateBatched = withBatch(reduceVerbAckResultState)
 type SessionActionsOrigin = 'sidebar' | 'tab' | 'sessions-page'
 
 export function App() {
+  const pendingDeliveryStateAcksRef = useRef<Array<{ sessionId: SessionId; sequence: number; deliveryAttempt: number; streamEpoch: string; traceId: string }>>([])
+  const pendingDeliveryCommitAcksRef = useRef<Array<{ sessionId: SessionId; sequence: number; deliveryAttempt: number; streamEpoch: string; traceId: string }>>([])
   const [state, dispatch] = useReducer(
     reduceServerFrameBatched,
     undefined,
@@ -595,6 +598,24 @@ export function App() {
     undefined,
     createConnectionState,
   )
+  // Acknowledge UI commitment only after React has committed a render caused by
+  // the reducer batch. Dispatch return alone intentionally never satisfies it.
+  useEffect(() => {
+    const applied = pendingDeliveryStateAcksRef.current.splice(0)
+    for (const entry of applied) {
+      getBridge().deliveryAck(entry.sessionId, entry.sequence, entry.deliveryAttempt, entry.streamEpoch, entry.traceId, 'renderer.state.applied')
+    }
+    const pending = pendingDeliveryCommitAcksRef.current.splice(0)
+    for (const entry of pending) {
+      // A terminal UI acknowledgement is stronger than a generic React commit:
+      // the *active, rendered* session must expose the terminal connection
+      // projection produced by its reducer. Background tabs intentionally retain
+      // only `renderer.state.applied` evidence instead of claiming visible UI.
+      const projected = connection.sessions[entry.sessionId]
+      if (activeSessionId !== entry.sessionId || !projected || !isTerminalConnectionStatus(projected.status)) continue
+      getBridge().deliveryAck(entry.sessionId, entry.sequence, entry.deliveryAttempt, entry.streamEpoch, entry.traceId, 'renderer.ui.committed')
+    }
+  })
   // When each session's turn started, held above the panes because a pane only
   // exists while its session is on screen (`reduceTurnStarts`). The panes read
   // their own start from here to tick the activity clock.
@@ -845,6 +866,14 @@ export function App() {
     // dispatches, not 9 per frame. Focus semantics are unchanged: a background
     // frame never steals focus from another live tab. See serverFrameBatch.ts.
     const unsubscribe = bridge.subscribe(frames => {
+      // This is the subscription callback's first action. It is intentionally
+      // after preload receipt and before any reducer projection, so a delivery
+      // timeline can distinguish a stalled renderer callback from a stalled
+      // store update.
+      for (const frame of frames) {
+        if (!frame.deliveryTrace) continue
+        bridge.deliveryAck(frame.sessionId, frame.deliveryTrace.sequence, frame.deliveryTrace.deliveryAttempt, frame.deliveryTrace.streamEpoch, frame.deliveryTrace.traceId, 'renderer.subscription.received')
+      }
       const previewing = new Set<SessionId>()
       for (const sessionId in shellRef.current.previews) {
         previewing.add(sessionId)
@@ -891,6 +920,30 @@ export function App() {
       )
       for (const sessionId of swapSessions) {
         preloadReservedBytesRef.current.delete(sessionId)
+      }
+      for (const frame of frames) {
+        if (!frame.deliveryTrace) continue
+        bridge.deliveryAck(frame.sessionId, frame.deliveryTrace.sequence, frame.deliveryTrace.deliveryAttempt, frame.deliveryTrace.streamEpoch, frame.deliveryTrace.traceId, 'renderer.state.queued')
+        // The post-commit effect below provides applied proof only after React
+        // has incorporated the reducer batch; dispatch return proves queuing.
+        pendingDeliveryStateAcksRef.current.push({
+          sessionId: frame.sessionId,
+          sequence: frame.deliveryTrace.sequence,
+          deliveryAttempt: frame.deliveryTrace.deliveryAttempt,
+          streamEpoch: frame.deliveryTrace.streamEpoch,
+          traceId: frame.deliveryTrace.traceId,
+        })
+        // Streaming frames receive/apply proof but do not create one React-commit
+        // IPC per token. Terminal/lifecycle outcomes receive the stronger proof.
+        if (frame.kind === 'lifecycle' && ['disconnected', 'failed', 'exited'].includes(frame.status)) {
+          pendingDeliveryCommitAcksRef.current.push({
+            sessionId: frame.sessionId,
+            sequence: frame.deliveryTrace.sequence,
+            deliveryAttempt: frame.deliveryTrace.deliveryAttempt,
+            streamEpoch: frame.deliveryTrace.streamEpoch,
+            traceId: frame.deliveryTrace.traceId,
+          })
+        }
       }
     })
     bridge.rendererReady()
@@ -3381,6 +3434,8 @@ export function App() {
             initialCategory="agents"
             memorySnapshot={selectMemorySnapshot(goalMemory, activeSessionId)}
             onRemoteVerb={sendRemoteSettingsVerb}
+            onOpenLogs={() => getBridge().openLogsFolder()}
+            onSaveDiagnostics={() => void getBridge().saveDiagnosticsBundle()}
             onSettingWrite={sendSettingWrite}
             remoteLastResult={remoteSettings.lastResult}
             remoteSnapshot={selectRemoteSettingsSnapshot(remoteSettings, activeSessionId)}

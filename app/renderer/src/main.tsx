@@ -6,6 +6,8 @@ import { CodeThemeProvider } from './CodeThemeProvider.js'
 import { ReasoningLayoutProvider } from './ReasoningLayoutProvider.js'
 import { ToastHost } from './ToastHost.js'
 import { ToolsExpandedProvider } from './ToolsExpandedProvider.js'
+import { RendererErrorBoundary } from './RendererErrorBoundary.js'
+import { getBridge } from './bridge.js'
 import './theme.css'
 
 const root = document.getElementById('root')
@@ -22,16 +24,26 @@ if (!root) {
 // a toast is exactly the kind of chrome that would silently miss the accent.
 createRoot(root).render(
   <StrictMode>
-    <AccentThemeProvider>
-      <ToastHost>
-        <ReasoningLayoutProvider>
-          <CodeThemeProvider>
-            <ToolsExpandedProvider>
-              <App />
-            </ToolsExpandedProvider>
-          </CodeThemeProvider>
-        </ReasoningLayoutProvider>
-      </ToastHost>
-    </AccentThemeProvider>
+    <RendererErrorBoundary>
+      <AccentThemeProvider>
+        <ToastHost>
+          <ReasoningLayoutProvider>
+            <CodeThemeProvider>
+              <ToolsExpandedProvider>
+                <App />
+              </ToolsExpandedProvider>
+            </CodeThemeProvider>
+          </ReasoningLayoutProvider>
+        </ToastHost>
+      </AccentThemeProvider>
+    </RendererErrorBoundary>
   </StrictMode>,
 )
+
+window.addEventListener('error', event => {
+  getBridge().reportRendererFault('javascript', event.message)
+})
+window.addEventListener('unhandledrejection', event => {
+  const message = event.reason instanceof Error ? event.reason.message : String(event.reason)
+  getBridge().reportRendererFault('promise', message)
+})

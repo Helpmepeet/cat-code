@@ -24,6 +24,7 @@ import {
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { spawn } from 'node:child_process'
 import { existsSync, realpathSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 
@@ -112,6 +113,11 @@ import {
   type NavigationConfig,
 } from './navigationPolicy.js'
 import { MAX_SUGGESTION_SELECTIONS } from '../shared/limits.js'
+import { createOperationalLogSink } from './operationalLogSink.js'
+import { createOperationalRecord } from '../shared/operationalLog.js'
+import { createDeliveryTraceSink } from './deliveryTraceSink.js'
+import { buildDiagnosticsBundle } from './diagnosticsBundle.js'
+import { mintDeliveryTrace, replayDeliveryTrace, type DeliveryAcknowledgement, type DeliveryStage } from '../shared/deliveryTrace.js'
 import {
   ACCOUNT_VERB_TYPES,
   PERMISSION_SET_MODE_MODES,
@@ -168,6 +174,12 @@ const CH_PING = 'catcode:ping'
 const CH_RESTART = 'catcode:restart'
 const CH_SERVER_FRAME = 'catcode:server-frame'
 const CH_RENDERER_READY = 'catcode:renderer-ready'
+const CH_DELIVERY_ACK = 'catcode:delivery-ack'
+const CH_RENDERER_FAULT = 'catcode:renderer-fault'
+const CH_OPEN_LOGS = 'catcode:open-logs'
+const CH_SAVE_DIAGNOSTICS = 'catcode:save-diagnostics'
+const CH_DELIVERY_HEALTH_PROBE = 'catcode:delivery-health-probe'
+const CH_DELIVERY_HEALTH_RESPONSE = 'catcode:delivery-health-response'
 
 // Control-plane channels (HC3 — fixed, per-method structured senders). `invoke`
 // channels return a typed HostResult; `pick-directory` returns a realpath or
@@ -193,6 +205,207 @@ if (IS_DEV) app.setName('Cat Code Dev')
 const APP_ICON_PATH = join(__dirname, '..', 'resources', 'icon.png')
 const VITE_REACT_PREAMBLE_CSP_HASH =
   "'sha256-Z2/iFzh9VMlVkEOar1f/oSHWwQk3ve1qk/C2WdsC4Xk='"
+
+// Main is the persistence owner. Other desktop planes may retain their useful
+// development stderr, but only this bounded, redacted record stream is durable.
+const operationalLog = createOperationalLogSink({ configDir: defaultRegistryDir() })
+process.env.CATCODE_OPERATIONAL_LAUNCH_ID = operationalLog.launchId
+const deliveryTrace = createDeliveryTraceSink({
+  configDir: defaultRegistryDir(),
+  launchId: operationalLog.launchId,
+})
+const deliverySequences = new Map<SessionId, number>()
+let rendererDocumentId: string = randomUUID()
+let rendererSubscriptionEpoch = 0
+let rendererHealthMisses = 0
+let rendererHealthLastResponse = 0
+let rendererHealthTimer: ReturnType<typeof setInterval> | null = null
+let rendererHealthDegradedAt: number | null = null
+let rendererHealthLastSampleAt = 0
+let rendererFaultWindowStartedAt = Date.now()
+let rendererFaultCount = 0
+
+function logOperational(
+  event: Parameters<typeof operationalLog.write>[0]['event'],
+  level: Parameters<typeof operationalLog.write>[0]['level'],
+  fields: Record<string, string | number | boolean | null> = {},
+  appSessionId?: string,
+): void {
+  operationalLog.write({
+    event,
+    level,
+    process: 'main',
+    ...(appSessionId ? { appSessionId } : {}),
+    fields,
+  })
+}
+
+/** Each disposable engine-graph worker gets a distinct process timeline. */
+function createWorkerLifecycleLogger(role: string): (event: {
+  phase: 'started' | 'exited'
+  pid: number
+  code?: number | null
+  signal?: NodeJS.Signals | null
+}) => void {
+  const processInstanceId = randomUUID()
+  const processStartedAt = new Date().toISOString()
+  return event => {
+    try {
+      operationalLog.writeRecord(createOperationalRecord(
+        event.phase === 'started'
+          ? { level: 'info', event: 'process.started', process: 'worker', fields: { role, pid: event.pid } }
+          : {
+              level: event.code === 0 ? 'info' : 'error',
+              event: 'process.exited',
+              process: 'worker',
+              fields: {
+                role,
+                ...(event.code === null || event.code === undefined ? {} : { exitCode: event.code }),
+                ...(event.signal === null || event.signal === undefined ? {} : { signal: event.signal }),
+                expected: event.code === 0,
+              },
+            },
+        {
+          launchId: operationalLog.launchId,
+          processInstanceId,
+          pid: event.pid,
+          processStartedAt,
+        },
+      ))
+    } catch {
+      // Worker bookkeeping is best effort and cannot affect its run.
+    }
+  }
+}
+
+/**
+ * Transitional tee for injected legacy string callbacks. Legacy text remains
+ * on stderr for a developer at the console, but only an opaque classification
+ * enters the persistent support log: upstream strings can include engine
+ * output, paths, and other content that an operational stream must never own.
+ */
+function logLegacyDiagnostic(
+  line: string,
+  source: string,
+  processRole: 'main' | 'host' | 'supervisor' = 'main',
+): void {
+  process.stderr.write(`${line}\n`)
+  operationalLog.write({
+    event: 'diagnostic',
+    level: /fail|error|invalid|dropped/i.test(line) ? 'warn' : 'info',
+    process: processRole,
+    fields: {
+      source,
+      category: /fail|error|invalid|dropped/i.test(line) ? 'legacy_failure' : 'legacy_notice',
+    },
+  })
+}
+
+function traceFrame(frame: ServerFrame, stage: DeliveryStage): ServerFrame {
+  const created = !frame.deliveryTrace
+  const trace = stage === 'attachment.replayed' && frame.deliveryTrace
+    ? replayDeliveryTrace(frame.deliveryTrace)
+    : frame.deliveryTrace ?? mintDeliveryTrace((deliverySequences.get(frame.sessionId) ?? 0) + 1)
+  if (created) deliverySequences.set(frame.sessionId, trace.sequence)
+  // Sidecar stages arrive independently on FD 3 at their actual process-clock
+  // boundaries.  Do not infer or backfill them here after a socket receipt.
+  if (stage === 'supervisor.socket.received') {
+    if (created) {
+      logOperational('diagnostic', 'warn', { source: 'deliveryTrace', reason: 'missing_source_envelope' }, frame.sessionId)
+    }
+  }
+  deliveryTrace.mark({
+    sessionId: frame.sessionId,
+    trace,
+    stage,
+    frameKind: frame.kind,
+    documentId: rendererDocumentId,
+    subscriptionEpoch: rendererSubscriptionEpoch,
+  })
+  return frame.deliveryTrace === trace ? frame : { ...frame, deliveryTrace: trace }
+}
+
+function parseDeliveryAcknowledgements(value: unknown): DeliveryAcknowledgement[] | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const batch = value as Record<string, unknown>
+  if (Object.keys(batch).length !== 1 || !Array.isArray(batch.acknowledgements) || batch.acknowledgements.length < 1 || batch.acknowledgements.length > 64) return null
+  const acknowledgements: DeliveryAcknowledgement[] = []
+  for (const item of batch.acknowledgements) {
+    const parsed = parseDeliveryAcknowledgement(item)
+    if (!parsed) return null
+    acknowledgements.push(parsed)
+  }
+  return acknowledgements
+}
+
+function parseDeliveryAcknowledgement(value: unknown): DeliveryAcknowledgement | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const item = value as Record<string, unknown>
+  if (
+    Object.keys(item).length !== 10 ||
+    typeof item.sessionId !== 'string' ||
+    typeof item.streamEpoch !== 'string' || item.streamEpoch.length < 1 || item.streamEpoch.length > 128 ||
+    typeof item.sequence !== 'number' ||
+    !Number.isSafeInteger(item.sequence) ||
+    item.sequence < 1 ||
+    typeof item.deliveryAttempt !== 'number' ||
+    !Number.isSafeInteger(item.deliveryAttempt) ||
+    item.deliveryAttempt < 1 ||
+    typeof item.traceId !== 'string' || item.traceId.length < 1 || item.traceId.length > 128 ||
+    !['preload.received', 'renderer.subscription.received', 'renderer.state.queued', 'renderer.state.applied', 'renderer.ui.committed'].includes(item.stage as string) ||
+    typeof item.documentId !== 'string' ||
+    typeof item.subscriptionEpoch !== 'number' ||
+    !Number.isSafeInteger(item.subscriptionEpoch) ||
+    item.subscriptionEpoch < 1 ||
+    typeof item.rendererProcessInstanceId !== 'string' ||
+    item.rendererProcessInstanceId.length < 1 ||
+    item.rendererProcessInstanceId.length > 128 ||
+    typeof item.rendererProcessStartedAt !== 'string' ||
+    Number.isNaN(Date.parse(item.rendererProcessStartedAt))
+  ) return null
+  return item as DeliveryAcknowledgement
+}
+
+type RendererHealthResponse = Readonly<{
+  documentId: string
+  subscriptionEpoch: number
+  rendererProcessInstanceId: string
+  monotonicTimestampMs: number
+  eventLoopLagMs: number
+  watermarks: ReadonlyArray<Readonly<{ sessionId: string; received: number; applied: number; committed: number }>>
+}>
+
+function parseRendererHealthResponse(value: unknown): RendererHealthResponse | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const item = value as Record<string, unknown>
+  if (
+    Object.keys(item).length !== 6 ||
+    typeof item.documentId !== 'string' || item.documentId.length < 1 || item.documentId.length > 128 ||
+    !Number.isSafeInteger(item.subscriptionEpoch) || (item.subscriptionEpoch as number) < 1 ||
+    typeof item.rendererProcessInstanceId !== 'string' || item.rendererProcessInstanceId.length < 1 || item.rendererProcessInstanceId.length > 128 ||
+    typeof item.monotonicTimestampMs !== 'number' || !Number.isFinite(item.monotonicTimestampMs) ||
+    typeof item.eventLoopLagMs !== 'number' || !Number.isFinite(item.eventLoopLagMs) || item.eventLoopLagMs < 0 || item.eventLoopLagMs > 60_000 ||
+    !Array.isArray(item.watermarks) || item.watermarks.length > 32
+  ) return null
+  for (const watermark of item.watermarks) {
+    if (!watermark || typeof watermark !== 'object' || Array.isArray(watermark)) return null
+    const entry = watermark as Record<string, unknown>
+    if (
+      Object.keys(entry).length !== 4 || typeof entry.sessionId !== 'string' || entry.sessionId.length < 1 || entry.sessionId.length > 128 ||
+      !Number.isSafeInteger(entry.received) || (entry.received as number) < 0 ||
+      !Number.isSafeInteger(entry.applied) || (entry.applied as number) < 0 ||
+      !Number.isSafeInteger(entry.committed) || (entry.committed as number) < 0
+    ) return null
+  }
+  return item as RendererHealthResponse
+}
+
+logOperational('app.start', 'info', {
+  packaged: app.isPackaged,
+  platform: process.platform,
+  arch: process.arch,
+})
+logOperational('process.started', 'info', { role: 'electron-main', pid: process.pid })
 
 // The supervisor is N-ready (a map). The host composes it with the durable
 // registry into the typed control plane (P3-3); main is a CALLER of that host.
@@ -460,6 +673,7 @@ async function backfillTranscriptCaches(): Promise<void> {
 
   const abort = new AbortController()
   transcriptBackfillAbort = abort
+  const onWorkerLifecycle = createWorkerLifecycleLogger('transcript-backfill')
   try {
     const summary = await runTranscriptBackfill({
       items,
@@ -471,6 +685,7 @@ async function backfillTranscriptCaches(): Promise<void> {
       ],
       cwd: process.cwd(),
       signal: abort.signal,
+      onWorkerLifecycle,
       onSession: result => {
         const currentHost = host
         if (!currentHost || !currentHost.canPreview(result.appSessionId)) return
@@ -542,17 +757,20 @@ function startSessionsCatalogRefresh(): void {
   const abort = new AbortController()
   sessionsCatalogAbort = abort
   sessionsCatalogDriver = createSessionsCatalogDriver({
-    run: () =>
-      runSessionsCatalogWorker({
+    run: () => {
+      const onWorkerLifecycle = createWorkerLifecycleLogger('sessions-catalog')
+      return runSessionsCatalogWorker({
         command: process.env.CATCODE_BUN_BIN ?? 'bun',
         args: ['run', SESSIONS_CATALOG_WORKER_ENTRY, '--bare'],
         cwd: process.cwd(),
         signal: abort.signal,
+        onWorkerLifecycle,
         onCatalog: catalog => {
           sendHostEvent({ type: 'sessions-catalog', catalog })
         },
         log: line => process.stderr.write(`${line}\n`),
-      }),
+      })
+    },
     log: line => process.stderr.write(`${line}\n`),
   })
   sessionsCatalogDriver.start()
@@ -573,17 +791,20 @@ function startAccountsPoolRefresh(): void {
   const abort = new AbortController()
   accountsPoolAbort = abort
   accountsPoolDriver = createAccountsPoolDriver({
-    run: () =>
-      runAccountsPoolWorker({
+    run: () => {
+      const onWorkerLifecycle = createWorkerLifecycleLogger('accounts-pool')
+      return runAccountsPoolWorker({
         command: process.env.CATCODE_BUN_BIN ?? 'bun',
         args: ['run', ACCOUNTS_POOL_WORKER_ENTRY, '--bare'],
         cwd: process.cwd(),
         signal: abort.signal,
+        onWorkerLifecycle,
         onPool: pool => {
           sendHostEvent({ type: 'accounts-pool', pool })
         },
         log: line => process.stderr.write(`${line}\n`),
-      }),
+      })
+    },
     log: line => process.stderr.write(`${line}\n`),
   })
   accountsPoolDriver.start()
@@ -638,7 +859,9 @@ function deliver(frames: ServerFrame[]): void {
   // in-flight frame can land after the window went away.
   if (!contents || contents.isDestroyed()) return
   if (frames.length === 0) return
-  contents.send(CH_SERVER_FRAME, frames satisfies ServerFrame[])
+  const traced = frames.map(frame => traceFrame(frame, 'main.ipc.queued'))
+  contents.send(CH_SERVER_FRAME, traced satisfies ServerFrame[])
+  for (const frame of traced) traceFrame(frame, 'main.ipc.sent')
 }
 
 /** The sidecar entry path — also the registry's orphan-identity marker (§9-A3). */
@@ -670,6 +893,28 @@ const ACCOUNTS_POOL_WORKER_ENTRY = join(
   'sidecar',
   'accountsPoolWorker.ts',
 )
+const DEBUG_CLEANUP_WORKER_ENTRY = join(__dirname, '..', '..', 'app', 'sidecar', 'debugCleanupWorker.ts')
+
+function scheduleDebugCleanup(): void {
+  // A disposable, main-supervised worker gives all session sidecars one shared
+  // daily lock/marker.  Its result is intentionally non-fatal diagnostics.
+  try {
+    const child = spawn(process.env.CATCODE_BUN_BIN ?? 'bun', [...SIDECAR_RUNTIME_ARGS, DEBUG_CLEANUP_WORKER_ENTRY], {
+      stdio: 'ignore', detached: false,
+      env: { ...process.env, CATCODE_DEBUG_CLEANUP_MARKER_DIR: defaultRegistryDir() },
+    })
+    // F7 — a spawn failure (ENOENT: bun missing) arrives asynchronously as an
+    // 'error' event, which the try/catch cannot see. Without this listener Node
+    // treats it as unhandled, and the uncaughtException handler below exits the
+    // whole app over a deliberately non-fatal cleanup worker.
+    child.on('error', () => {
+      logOperational('diagnostic', 'warn', { source: 'debugCleanup', reason: 'worker_spawn_failed' })
+    })
+    child.unref()
+  } catch {
+    logOperational('diagnostic', 'warn', { source: 'debugCleanup', reason: 'worker_spawn_failed' })
+  }
+}
 
 function createSupervisor(): SidecarSupervisor {
   // The sidecar runs the same default classifier feature as the engine bundle
@@ -682,6 +927,22 @@ function createSupervisor(): SidecarSupervisor {
     // through the host API (createSession → native picker, HC1); this stays only
     // as the supervisor-wide default for probe/legacy callers.
     sidecarCwd: process.cwd(),
+    log: line => logLegacyDiagnostic(line, 'supervisor', 'supervisor'),
+    onOperationalRecord: record => operationalLog.writeRecord(record),
+    onDeliveryTraceRecord: record => deliveryTrace.mark({
+      sessionId: record.sessionId,
+      trace: record.trace,
+      stage: record.stage,
+      frameKind: record.frameKind,
+      processInstanceId: record.processInstanceId,
+      processStartedAt: record.processStartedAt,
+      wallTimestamp: record.wallTimestamp,
+      monotonicTimestampMs: record.monotonicTimestampMs,
+    }),
+    onOperationalEvent: input => operationalLog.write({
+      ...input,
+      process: 'supervisor',
+    }),
   })
 }
 
@@ -709,12 +970,12 @@ const devHarnessConfig = resolveDevHarnessConfig({
   isPackaged: app.isPackaged,
   env: process.env,
   validateCwd,
-  log: line => process.stderr.write(`${line}\n`),
+  log: line => logLegacyDiagnostic(line, 'devHarness'),
 })
 
 const devPickerBypass = createDevPickerBypass(devHarnessConfig, {
   validateCwd,
-  log: line => process.stderr.write(`${line}\n`),
+  log: line => logLegacyDiagnostic(line, 'devPicker'),
 })
 
 const scheduleDebugStateExport = createDebouncedAction(
@@ -724,6 +985,7 @@ const scheduleDebugStateExport = createDebouncedAction(
 
 const readinessLatch = createReadinessLatch(() => {
   process.stdout.write('[main] renderer ready\n')
+  logOperational('renderer.load.ready', 'info')
   scheduleDebugStateExport.schedule()
 })
 
@@ -808,6 +1070,26 @@ function createWindow(): void {
       ),
     },
   })
+  const healthProbe = () => {
+    const elapsed = Date.now() - rendererHealthLastResponse
+    if (elapsed > 5_500) {
+      rendererHealthMisses++
+      if (rendererHealthMisses >= 3 && rendererHealthDegradedAt === null) {
+        rendererHealthDegradedAt = Date.now()
+        logOperational('renderer.health.missed', 'warn', { missed: rendererHealthMisses, elapsedMs: elapsed })
+      }
+    }
+    if (!window.webContents.isDestroyed()) window.webContents.send(CH_DELIVERY_HEALTH_PROBE)
+  }
+  rendererHealthLastResponse = Date.now()
+  rendererHealthMisses = 0
+  rendererHealthDegradedAt = null
+  rendererHealthTimer = setInterval(healthProbe, 5_000)
+  window.once('closed', () => {
+    if (rendererHealthTimer) clearInterval(rendererHealthTimer)
+    rendererHealthTimer = null
+  })
+  logOperational('window.created', 'info')
   mainWindow = window
 
   // Drop the reference the moment the window is gone. Without this, `deliver`
@@ -831,6 +1113,9 @@ function createWindow(): void {
   // replay. `did-start-navigation` fires on the initial load and on reloads.
   window.webContents.on('did-start-navigation', (_e, _url, isInPlace, isMainFrame) => {
     if (isMainFrame && !isInPlace) {
+      rendererDocumentId = randomUUID()
+      rendererSubscriptionEpoch = 0
+      logOperational('renderer.navigation.started', 'info', { navigation: 'document' })
       cancelAllReplayFlushes()
       attachmentGate.onNavigationStart()
     }
@@ -859,6 +1144,7 @@ function createWindow(): void {
 
   window.once('ready-to-show', () => {
     window.show()
+    logOperational('renderer.load.ready', 'info')
     readinessLatch.windowReady()
     // Paint first. The worker import is the ~189 MB engine-graph cost; never pay
     // it on the launch/first-window critical path. Every one of these is armed
@@ -877,8 +1163,34 @@ function createWindow(): void {
     startupTimers.schedule(startIdleParkDriver)
   })
 
+  window.webContents.on('did-fail-load', (_event, code, _description, _url, isMainFrame) => {
+    if (isMainFrame) {
+      logOperational('renderer.load.failed', 'error', { code, reason: 'did_fail_load' })
+    }
+  })
+  window.webContents.on('render-process-gone', (_event, details) => {
+    logOperational('renderer.process.gone', 'error', {
+      reason: details.reason,
+      exitCode: details.exitCode,
+    })
+  })
+  let unresponsiveAt: number | null = null
+  window.webContents.on('unresponsive', () => {
+    unresponsiveAt = Date.now()
+    logOperational('renderer.unresponsive', 'warn')
+  })
+  window.webContents.on('responsive', () => {
+    logOperational('renderer.responsive', 'info', {
+      durationMs: unresponsiveAt === null ? 0 : Date.now() - unresponsiveAt,
+    })
+    unresponsiveAt = null
+  })
+
   if (IS_DEV) {
-    void window.loadURL(APP_ORIGIN_DEV)
+    logOperational('renderer.load.started', 'info', { source: 'dev' })
+    void window.loadURL(APP_ORIGIN_DEV).catch(error => {
+      logOperational('renderer.load.failed', 'error', { reason: classifyFailure(error) })
+    })
   } else {
     // `dev.ts` sets CATCODE_RENDERER_URL and waits for that server before
     // launching. Reaching the packaged branch anyway means the dev launcher
@@ -892,7 +1204,10 @@ function createWindow(): void {
         `[main] CATCODE_RENDERER_URL is set (${process.env.CATCODE_RENDERER_URL}) but app.isPackaged is true, so the packaged renderer is being loaded from disk. Renderer edits will NOT appear until "renderer:build" is re-run. Expected a dev launch? Check that the Electron executable is still named "electron".\n`,
       )
     }
-    void window.loadFile(PACKAGED_INDEX_PATH)
+    logOperational('renderer.load.started', 'info', { source: 'packaged' })
+    void window.loadFile(PACKAGED_INDEX_PATH).catch(error => {
+      logOperational('renderer.load.failed', 'error', { reason: classifyFailure(error) })
+    })
   }
 }
 
@@ -924,7 +1239,16 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
       void host?.setTitle(event.sessionId, frame.title)
       return
     }
-    deliver(attachmentGate.onFrame(event.sessionId, frame))
+    if (frame.kind === 'ready') {
+      logOperational('sidecar.ready', 'info', { frame: 'ready' }, event.sessionId)
+    }
+    const traced = traceFrame(frame, 'supervisor.socket.received')
+    // Receipt is true whether the attachment gate forwards immediately or
+    // buffers for replay; record that before deciding its outcome.
+    traceFrame(traced, 'host.received')
+    const gated = attachmentGate.onFrame(event.sessionId, traced)
+    if (gated.length === 0) traceFrame(traced, 'attachment.buffered')
+    deliver(gated)
     if (attachmentGate.hasPendingReplayCoalescing(event.sessionId)) {
       scheduleReplayFlush(event.sessionId)
     } else if (!attachmentGate.isReplayCoalescing(event.sessionId)) {
@@ -1257,9 +1581,151 @@ function registerIpcHandlers(): void {
   // F2 — the renderer signals it has mounted and subscribed. The gate replays the
   // buffered frames (including the one-shot `ready` handshake) once per document
   // load and returns nothing on a repeat signal (StrictMode double-invoke).
-  ipcMain.on(CH_RENDERER_READY, () => {
-    deliver(attachmentGate.onRendererReady())
+  ipcMain.on(CH_RENDERER_READY, (_e, payload: { documentId?: unknown }) => {
+    if (typeof payload?.documentId !== 'string' || payload.documentId.length > 128) return
+    rendererDocumentId = payload.documentId
+    rendererSubscriptionEpoch++
+    const replay = attachmentGate.onRendererReady().map(frame => traceFrame(frame, 'attachment.replayed'))
+    deliver(replay)
     readinessLatch.rendererReady()
+  })
+
+  ipcMain.on(CH_DELIVERY_ACK, (_e, payload: unknown) => {
+    const acknowledgements = parseDeliveryAcknowledgements(payload)
+    if (!acknowledgements) {
+      logOperational('diagnostic', 'warn', { source: 'deliveryAck', reason: 'rejected' })
+      return
+    }
+    for (const acknowledgement of acknowledgements) {
+      if (
+        acknowledgement.documentId !== rendererDocumentId ||
+        acknowledgement.subscriptionEpoch !== rendererSubscriptionEpoch ||
+        !deliveryTrace.accepts(
+          acknowledgement.sessionId,
+          acknowledgement.streamEpoch,
+          acknowledgement.sequence,
+          acknowledgement.documentId,
+          acknowledgement.subscriptionEpoch,
+        )
+      ) {
+        deliveryTrace.recordAcknowledgementRejected({
+          sessionId: acknowledgement.sessionId,
+          streamEpoch: acknowledgement.streamEpoch,
+          sequence: acknowledgement.sequence,
+          reason: acknowledgement.documentId !== rendererDocumentId || acknowledgement.subscriptionEpoch !== rendererSubscriptionEpoch
+            ? 'stale_document'
+            : 'unknown_sequence',
+        })
+        logOperational('diagnostic', 'warn', { source: 'deliveryAck', reason: 'rejected' })
+        continue
+      }
+      const trace = deliveryTrace.traceFor(
+        acknowledgement.sessionId,
+        acknowledgement.streamEpoch,
+        acknowledgement.sequence,
+      )
+      if (
+        !trace ||
+        trace.deliveryAttempt !== acknowledgement.deliveryAttempt ||
+        trace.streamEpoch !== acknowledgement.streamEpoch ||
+        trace.traceId !== acknowledgement.traceId
+      ) {
+        deliveryTrace.recordAcknowledgementRejected({
+          sessionId: acknowledgement.sessionId,
+          streamEpoch: acknowledgement.streamEpoch,
+          sequence: acknowledgement.sequence,
+          reason: 'stale_attempt',
+        })
+        logOperational('diagnostic', 'warn', { source: 'deliveryAck', reason: 'stale_attempt' })
+        continue
+      }
+      deliveryTrace.mark({
+        sessionId: acknowledgement.sessionId,
+        trace,
+        stage: acknowledgement.stage,
+        documentId: acknowledgement.documentId,
+        subscriptionEpoch: acknowledgement.subscriptionEpoch,
+        processInstanceId: acknowledgement.rendererProcessInstanceId,
+        processStartedAt: acknowledgement.rendererProcessStartedAt,
+      })
+    }
+  })
+
+  ipcMain.on(CH_DELIVERY_HEALTH_RESPONSE, (_e, payload: unknown) => {
+    const item = parseRendererHealthResponse(payload)
+    if (!item) return
+    if (
+      item.documentId !== rendererDocumentId ||
+      item.subscriptionEpoch !== rendererSubscriptionEpoch ||
+      item.rendererProcessInstanceId.length === 0
+    ) return
+    const recovered = rendererHealthDegradedAt !== null
+    const priorMisses = rendererHealthMisses
+    const outageDurationMs = rendererHealthDegradedAt === null ? 0 : Date.now() - rendererHealthDegradedAt
+    rendererHealthMisses = 0
+    rendererHealthDegradedAt = null
+    rendererHealthLastResponse = Date.now()
+    if (recovered || rendererHealthLastResponse - rendererHealthLastSampleAt >= 30_000) {
+      rendererHealthLastSampleAt = rendererHealthLastResponse
+      logOperational(recovered ? 'renderer.health.recovered' : 'renderer.health.sample', 'info', {
+        sessions: item.watermarks.length,
+        eventLoopLagMs: item.eventLoopLagMs,
+        ...(recovered ? { missed: priorMisses, durationMs: outageDurationMs } : {}),
+      })
+    }
+  })
+
+  ipcMain.on(CH_RENDERER_FAULT, (_e, payload: unknown) => {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return
+    const item = payload as { kind?: unknown; message?: unknown }
+    if (
+      Object.keys(item).length !== 2 ||
+      !['javascript', 'promise', 'component'].includes(item.kind as string) ||
+      typeof item.message !== 'string' ||
+      item.message.length > 512
+    ) return
+    const now = Date.now()
+    if (now - rendererFaultWindowStartedAt >= 60_000) {
+      rendererFaultWindowStartedAt = now
+      rendererFaultCount = 0
+    }
+    if (rendererFaultCount >= 12) {
+      logOperational('diagnostic', 'warn', { source: 'rendererFault', reason: 'rate_limited' })
+      return
+    }
+    rendererFaultCount++
+    logOperational(
+      item.kind === 'component' ? 'renderer.component.failed' : item.kind === 'promise' ? 'renderer.promise.unhandled' : 'renderer.javascript.error',
+      'error',
+      { source: 'renderer', reason: 'fault_reported' },
+    )
+  })
+
+  ipcMain.on(CH_OPEN_LOGS, () => {
+    void shell.openPath(operationalLog.getDirectory())
+  })
+  ipcMain.handle(CH_SAVE_DIAGNOSTICS, async (): Promise<boolean> => {
+    const result = mainWindow
+      ? await dialog.showSaveDialog(mainWindow, { defaultPath: 'cat-code-diagnostics.json' })
+      : await dialog.showSaveDialog({ defaultPath: 'cat-code-diagnostics.json' })
+    if (result.canceled || !result.filePath) return false
+    try {
+      await writeFile(
+        result.filePath,
+        buildDiagnosticsBundle({
+          logsDirectory: operationalLog.getDirectory(),
+          appVersion: app.getVersion(),
+          packaged: app.isPackaged,
+          buildId: process.env.CATCODE_BUILD_ID,
+          commitId: process.env.CATCODE_COMMIT_ID,
+        }),
+        'utf8',
+      )
+      return true
+    } catch (error) {
+      logOperational('diagnostic', 'error', { source: 'diagnosticsExport', reason: classifyFailure(error) })
+      return false
+    }
   })
 
   // IDLE-PARK §4(b) — the renderer reports which sessions are on screen so the
@@ -1751,6 +2217,7 @@ function ensureHost(): Host {
   // an innocent same-pid process.
   const registry = new SessionRegistry({
     sidecarCommandMarker: SIDECAR_ENTRY,
+    log: line => logLegacyDiagnostic(line, 'registry', 'host'),
   })
   registryForDebug = registry
 
@@ -1768,6 +2235,7 @@ function ensureHost(): Host {
     registry,
     validateCwd,
     launched,
+    log: line => logLegacyDiagnostic(line, 'host', 'host'),
     // The P3-0 carry: a closed/restarted session's replay buffer must be evicted
     // so a reload never replays a dead session's frames. IS-A: persist the
     // transcript cache FIRST (snapshot → persist → evict). This fires on
@@ -1839,6 +2307,11 @@ function errText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** A stable, non-content failure classification for persistent diagnostics. */
+function classifyFailure(error: unknown): string {
+  return error instanceof Error ? 'error' : 'unknown_failure'
+}
+
 // Single-instance lock (REGISTRY §5 / R5): the registry is a shared mutable file
 // and the host is its SINGLE writer by construction. Take the OS lock BEFORE any
 // host is constructed; a second app instance never builds a host — it focuses the
@@ -1846,6 +2319,7 @@ function errText(error: unknown): string {
 // discipline (the module-layer advisory lockfile is the belt to this braces).
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
 if (!gotSingleInstanceLock) {
+  logOperational('app.single_instance.refused', 'info')
   app.quit()
 } else {
   app.on('second-instance', () => {
@@ -1857,6 +2331,7 @@ if (!gotSingleInstanceLock) {
   })
 
   app.whenReady().then(() => {
+    logOperational('app.ready', 'info')
     // BrowserWindow's `icon` option doesn't reach the Dock tile (SECURITY-MINIMUM
     // is silent on this — it's cosmetic, not a trust boundary); the Dock image
     // comes from the running bundle's own Info.plist/icns unless overridden here.
@@ -1864,6 +2339,7 @@ if (!gotSingleInstanceLock) {
       app.dock?.setIcon(nativeImage.createFromPath(APP_ICON_PATH))
     }
     applySecurityBaseline()
+    scheduleDebugCleanup()
     registerIpcHandlers() // once — handlers read the module-level host/supervisor
     // Host construction (and thus the registry's launch sweep) runs only after we
     // hold the single-instance lock, so the sweep is never raced by a sibling.
@@ -1946,6 +2422,7 @@ process.on('SIGINT', () => teardownOnSignal('SIGINT'))
 process.on('SIGTERM', () => teardownOnSignal('SIGTERM'))
 
 app.on('window-all-closed', () => {
+  logOperational('app.shutdown.started', 'info', { reason: 'window-all-closed' })
   // D6: die-with-window for v1 — tear down every sidecar via the supervisor's
   // kill API (NOT by welding the sidecar to the window's lifecycle). `activate`
   // rebuilds a fresh host on reopen (F5).
@@ -1970,8 +2447,32 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  logOperational('app.shutdown.started', 'info', { reason: 'before-quit' })
   // B3 — same clean-marking on ⌘Q; idempotent if window-all-closed already ran
   // (no live rows left to mark).
   shutdownRuntime()
   stopBackgroundDrivers()
+  logOperational('app.shutdown.completed', 'info')
+  logOperational('process.exited', 'info', { role: 'electron-main', expected: true })
+  operationalLog.close()
+  deliveryTrace.close()
+})
+
+process.on('uncaughtException', error => {
+  operationalLog.flushFatal({
+    level: 'fatal',
+    event: 'app.fatal',
+    process: 'main',
+    fields: { reason: classifyFailure(error) },
+  })
+  app.exit(1)
+})
+process.on('unhandledRejection', reason => {
+  operationalLog.flushFatal({
+    level: 'fatal',
+    event: 'app.fatal',
+    process: 'main',
+    fields: { reason: classifyFailure(reason) },
+  })
+  app.exit(1)
 })

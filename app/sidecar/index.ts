@@ -41,6 +41,8 @@ import { withRestoredSubagentHistory } from './subagentHistory.js'
 import { resumeEngineSession, SidecarResumeError } from './sessionResume.js'
 import { SidecarServer } from './sidecarServer.js'
 import { createBackpressuredSocket } from './backpressuredSocket.js'
+import { createSidecarOperationalLogger } from './operationalLogger.js'
+import type { SidecarOperationalLogger } from './operationalLogger.js'
 
 /**
  * CC-3 — idle self-exit TTL (docs O1 / SESSION-LIFETIME §2). A sidecar whose
@@ -56,6 +58,36 @@ import { createBackpressuredSocket } from './backpressuredSocket.js'
  * `host.restoreSession` → `sessionResume.ts`, never attaching to an orphan).
  */
 const DEFAULT_SIDECAR_IDLE_TTL_MS = 15 * 60 * 1000
+
+let activeOperationalLogger: SidecarOperationalLogger | null = null
+let activeAppSessionId: string | undefined
+let activeEngineSessionId: string | undefined
+let fatalExitStarted = false
+
+/** Persist only a closed fatal category before the sidecar terminates. */
+function exitAfterFatal(error: unknown): void {
+  if (fatalExitStarted) return
+  fatalExitStarted = true
+  const isResumeFailure = error instanceof SidecarResumeError
+  activeOperationalLogger?.write({
+    level: 'fatal',
+    event: isResumeFailure ? 'session.restore.failed' : 'app.fatal',
+    ...(activeAppSessionId ? { appSessionId: activeAppSessionId } : {}),
+    ...(activeEngineSessionId ? { engineSessionId: activeEngineSessionId } : {}),
+    fields: { reason: isResumeFailure ? 'resume_failure' : 'uncaught_failure' },
+  })
+  // Retain raw stderr for an attached development terminal only. It is never
+  // copied into the desktop operational descriptor.
+  if (isResumeFailure) {
+    process.stderr.write(`[sidecar] resume-failed: ${error instanceof Error ? error.message : 'unknown'}\n`)
+    process.exit(RESUME_FAILED_EXIT_CODE)
+  }
+  process.stderr.write(`[sidecar] fatal: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`)
+  process.exit(1)
+}
+
+process.on('uncaughtException', exitAfterFatal)
+process.on('unhandledRejection', exitAfterFatal)
 
 /**
  * Parse `CATCODE_SIDECAR_IDLE_TTL_MS`. A non-negative finite integer overrides
@@ -127,7 +159,15 @@ function parseArgs(): SidecarArgs {
 
 async function main(): Promise<void> {
   const args = parseArgs()
-
+  const operational = createSidecarOperationalLogger()
+  activeOperationalLogger = operational
+  activeAppSessionId = args.sessionId
+  operational.write({
+    level: 'info',
+    event: 'process.started',
+    appSessionId: args.sessionId,
+    fields: { role: 'sidecar', pid: process.pid },
+  })
   if (!args.probeOnAttach) {
     await initializeSidecarRuntime()
   }
@@ -147,11 +187,19 @@ async function main(): Promise<void> {
     process.stderr.write(
       `[sidecar] resume-seeded messages=${resumed.messages.length} engineSessionId=${resumed.engineSessionId}\n`,
     )
+    operational.write({
+      level: 'info',
+      event: 'session.restore.completed',
+      appSessionId: args.sessionId,
+      engineSessionId: resumed.engineSessionId,
+      fields: { messageCount: resumed.messages.length },
+    })
   }
 
   const engineSessionId = args.probeOnAttach
     ? `probe:${args.sessionId}`
     : getSessionId()
+  activeEngineSessionId = engineSessionId
 
   const {
     controller,
@@ -244,6 +292,24 @@ async function main(): Promise<void> {
     // first turn this run is a continuation — never retitle it from that prompt.
     resumed: resumedMessages !== undefined,
     idleTtlMs,
+    // Keep the raw ServerFrame intact inside a socket-only envelope. The
+    // supervisor unwraps this before any host/renderer code sees the frame.
+    // This stamps identity at the engine/sidecar boundary without introducing a
+    // payload mapper or leaking frame content into diagnostics.
+    wrapOutboundFrame: (frame, deliveryTrace) => ({
+      kind: 'sidecar.delivery-envelope',
+      frame,
+      deliveryTrace,
+    }),
+    onDeliveryStage: (trace, stage, frameKind) => {
+      operational.deliveryStage({
+        sessionId: args.sessionId,
+        trace,
+        stage,
+        frameKind,
+      })
+    },
+    log: line => operational.legacy(line),
     // CC-3 — the idle janitor: clean up the socket like the signal handlers do,
     // then exit 0 (a clean, expected shutdown — not a crash). `cleanup` is the
     // same closure the SIGTERM/SIGINT handlers use; it is defined just below and
@@ -293,6 +359,13 @@ async function main(): Promise<void> {
             process.stderr.write(
               `[sidecar] outbound queue overflow (${queuedBytes} bytes), dropping connection\n`,
             )
+            operational.write({
+              level: 'warn',
+              event: 'diagnostic',
+              appSessionId: args.sessionId,
+              engineSessionId,
+              fields: { source: 'socket', queuedBytes, reason: 'outbound_overflow' },
+            })
           },
         })
         const connection = server.addConnection(wrapper)
@@ -360,6 +433,13 @@ async function main(): Promise<void> {
   process.stderr.write(
     `[sidecar] READY sessionId=${args.sessionId} socket=${args.socketPath}\n`,
   )
+  operational.write({
+    level: 'info',
+    event: 'sidecar.ready',
+    appSessionId: args.sessionId,
+    engineSessionId,
+    fields: { pid: process.pid },
+  })
 
   // Clean the socket file on exit so a restart can re-bind the path.
   const cleanup = () => {
@@ -396,17 +476,4 @@ function toBuffer(chunk: Buffer | Uint8Array): Buffer {
   return Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
 }
 
-void main().catch(error => {
-  // An unresumable engine session id is a distinguishable failure, not a generic
-  // crash: mark it explicitly on stderr and use a dedicated non-zero exit code so
-  // the supervisor/UI can surface "restore failed" rather than a silent fresh
-  // session (D6 anti-Potemkin).
-  if (error instanceof SidecarResumeError) {
-    process.stderr.write(`[sidecar] resume-failed: ${error.message}\n`)
-    process.exit(RESUME_FAILED_EXIT_CODE)
-  }
-  process.stderr.write(
-    `[sidecar] fatal: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`,
-  )
-  process.exit(1)
-})
+void main().catch(exitAfterFatal)
