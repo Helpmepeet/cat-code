@@ -57,6 +57,14 @@ test('the active-row marker moves with activeIndex, not fixed to the first row (
   expect(rowMarkup(atOne, 'help')).not.toContain('text-accent')
 })
 
+test('the picker is a listbox, not an unfocused dialog, with stable option ids', () => {
+  const html = render(CATALOG, 1)
+  expect(html).toContain('id="composer-slash-command-matches"')
+  expect(html).toContain('id="composer-slash-command-option-0"')
+  expect(html).toContain('id="composer-slash-command-option-1"')
+  expect(html).not.toContain('role="dialog"')
+})
+
 test('a names-only fallback entry renders just the name (no empty separator row)', () => {
   // A session without the rich snapshot: the composer maps names to entries with
   // an empty description; the row must render the name alone, no `·` separator.

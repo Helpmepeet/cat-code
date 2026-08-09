@@ -23,6 +23,10 @@
 
 import { useEffect, useRef } from 'react'
 import type { SlashCatalogEntry } from '../../shared/protocol.js'
+import {
+  SLASH_COMMAND_LISTBOX_ID,
+  slashCommandOptionId,
+} from './composerTypeaheadA11y.js'
 
 /**
  * Extract the in-progress slash query from the composer draft, or `null` when
@@ -57,11 +61,7 @@ export function SlashCommandPicker({
   if (!open || commands.length === 0) return null
 
   return (
-    <div
-      className="absolute bottom-full left-0 right-0 z-30 mb-2 overflow-hidden rounded-xl border border-white/10 bg-surface-raised shadow-[0_20px_48px_rgba(0,0,0,0.7),0_0_0_1px_rgb(var(--accent-rgb)/0.06)]"
-      role="dialog"
-      aria-label="Slash commands"
-    >
+    <div className="absolute bottom-full left-0 right-0 z-30 mb-2 overflow-hidden rounded-xl border border-white/10 bg-surface-raised shadow-[0_20px_48px_rgba(0,0,0,0.7),0_0_0_1px_rgb(var(--accent-rgb)/0.06)]">
       <div className="flex items-center justify-between border-b border-shell-seam px-3 py-1.5">
         <div className="flex items-center gap-2">
           <span className="rounded bg-accent/15 px-1.5 font-mono text-[11px] font-semibold text-accent">
@@ -81,6 +81,7 @@ export function SlashCommandPicker({
 
       <ul
         ref={listRef}
+        id={SLASH_COMMAND_LISTBOX_ID}
         className="max-h-56 overflow-y-auto py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         role="listbox"
         aria-label="Slash command matches"
@@ -88,7 +89,12 @@ export function SlashCommandPicker({
         {commands.map((entry, index) => {
           const isActive = index === activeIndex
           return (
-            <li key={entry.name} role="option" aria-selected={isActive}>
+            <li
+              key={entry.name}
+              id={slashCommandOptionId(index)}
+              role="option"
+              aria-selected={isActive}
+            >
               <button
                 type="button"
                 data-slash-active={isActive}

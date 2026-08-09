@@ -2209,6 +2209,16 @@ test('the composer authors newlines, drops, and pill removal itself', () => {
   expect(dropHandler.slice(0, 800)).toContain("event.dataTransfer.getData('text')")
 })
 
+test('the composer connects its focused textbox to the active slash or mention option', () => {
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  expect(source).toContain('const composerTypeahead = slashOpen')
+  expect(source).toContain('listboxId: SLASH_COMMAND_LISTBOX_ID')
+  expect(source).toContain('activeOptionId: slashCommandOptionId(slashIndex)')
+  expect(source).toContain('listboxId: MENTION_LISTBOX_ID')
+  expect(source).toContain('activeOptionId: mentionOptionId(mentionIndex)')
+  expect(source).toContain('typeahead={composerTypeahead}')
+})
+
 test('P4-50: the account-health bar sits above the workspace and cannot gate a send', () => {
   // The ruling's two hard constraints are structural, so they are pinned
   // structurally. (1) ONE bar, mounted as a sibling ABOVE the workspace, not
@@ -2309,4 +2319,3 @@ test('P4-55: initial roster reads and launcher retries share one truthful hydrat
     "const hostSnapshotReady = rosterBootstrap.status === 'ready'",
   )
 })
-

@@ -48,6 +48,9 @@ test('the picker renders filtered items and is data-source-agnostic', () => {
   expect(html).toContain('src/auth/auth.ts')
   expect(html).toContain('src/auth/middleware.ts')
   expect(html).not.toContain('package.json')
+  expect(html).toContain('id="composer-mention-matches"')
+  expect(html).toContain('id="composer-mention-option-0"')
+  expect(html).toContain('id="composer-mention-option-1"')
 })
 
 test('the picker shows an empty state when nothing matches', () => {

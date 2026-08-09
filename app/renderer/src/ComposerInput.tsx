@@ -33,6 +33,7 @@ import {
 } from './composerDom.js'
 import { pasteIdAtCaret } from './composerState.js'
 import type { PasteEntry } from './composerState.js'
+import type { ComposerTypeaheadA11y } from './composerTypeaheadA11y.js'
 
 /** The textarea-shaped surface the pane's handlers drive the field through. */
 export type ComposerInputHandle = {
@@ -60,6 +61,8 @@ type ComposerInputProps = {
   /** A live session that cannot accept input right now (history, crashed). */
   readOnly: boolean
   ref?: React.Ref<ComposerInputHandle>
+  /** The one typeahead whose listbox the focused editor currently controls. */
+  typeahead?: ComposerTypeaheadA11y | null
   value: string
 }
 
@@ -79,6 +82,7 @@ export function ComposerInput({
   pastes,
   readOnly,
   ref,
+  typeahead = null,
   value,
 }: ComposerInputProps) {
   const rootRef = useRef<HTMLDivElement>(null)
@@ -328,7 +332,10 @@ export function ComposerInput({
       <div
         ref={rootRef}
         aria-disabled={disabled ? true : undefined}
+        aria-activedescendant={typeahead?.activeOptionId}
         aria-label={ariaLabel}
+        aria-controls={typeahead?.listboxId}
+        aria-expanded={typeahead !== null}
         aria-multiline="true"
         aria-placeholder={placeholder}
         aria-readonly={readOnly ? true : undefined}

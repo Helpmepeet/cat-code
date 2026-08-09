@@ -106,6 +106,12 @@ import {
 import { TranscriptView, type RestorePhase } from './TranscriptView.js'
 import { SlashCommandPicker } from './SlashCommandPicker.js'
 import {
+  MENTION_LISTBOX_ID,
+  SLASH_COMMAND_LISTBOX_ID,
+  mentionOptionId,
+  slashCommandOptionId,
+} from './composerTypeaheadA11y.js'
+import {
   completeSlashDraft,
   filterSlashCommands,
   nextSlashIndex,
@@ -3853,6 +3859,17 @@ export function SessionPane({
     mentionMatches.length === 0
       ? 0
       : Math.min(mentionActiveIndex, mentionMatches.length - 1)
+  const composerTypeahead = slashOpen
+    ? {
+        listboxId: SLASH_COMMAND_LISTBOX_ID,
+        activeOptionId: slashCommandOptionId(slashIndex),
+      }
+    : mentionOpen
+      ? {
+          listboxId: MENTION_LISTBOX_ID,
+          activeOptionId: mentionOptionId(mentionIndex),
+        }
+      : null
 
   useEffect(() => {
     setMentionActiveIndex(0)
@@ -4599,6 +4616,7 @@ export function SessionPane({
               onRemovePaste={onRemovePaste}
               pastes={pastes}
               placeholder={composerPlaceholder}
+              typeahead={composerTypeahead}
               value={prompt}
             />
           </div>

@@ -15,6 +15,10 @@
  */
 
 import { useEffect, useRef, type ReactNode } from 'react'
+import {
+  MENTION_LISTBOX_ID,
+  mentionOptionId,
+} from './composerTypeaheadA11y.js'
 import { filterMentionItems } from './mentionPickerModel.js'
 
 export type MentionItem = {
@@ -75,6 +79,7 @@ export function MentionPicker({
   return (
     <div
       className={`z-[60] w-80 overflow-hidden rounded-xl border border-white/10 bg-surface-raised shadow-[0_14px_40px_rgba(0,0,0,0.6)] ${className}`}
+      id={MENTION_LISTBOX_ID}
       role="listbox"
       aria-label="Mentions"
     >
@@ -126,6 +131,7 @@ export function MentionPicker({
               // value) don't collide on the same React key.
               key={`${index}:${item.value ?? item.label}`}
               type="button"
+              id={mentionOptionId(index)}
               role="option"
               aria-selected={index === activeIndex}
               data-mention-active={index === activeIndex}
