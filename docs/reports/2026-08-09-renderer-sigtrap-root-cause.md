@@ -104,7 +104,34 @@ The 22:24:00 "Electron Helper" SIGABRT report is unrelated: a helper shim launch
 22:23:59 (parent launchd, 0.03s lifetime, abort in the 65KB shim binary before framework
 main) during/after the operator's ~22:23:34 teardown. Shutdown artifact.
 
-## Defects fixed in this session (both verified by reading before changing)
+## Fixes landed in this session
+
+Three commits on `migration`:
+
+- `6ee65a56` - the two crash-handling defects below.
+- `fb518346` - health telemetry: the probe response now carries `visible` and
+  `heapUsedBytes` (validated fail-closed in main, 8 pinned keys);
+  `renderer.health.sample`/`recovered` log both, and `missed`/`unavailable` are
+  annotated with last-known visibility. This closes the hidden-vs-hung ambiguity
+  that manufactured the freeze narrative, and gives the next memory incident a
+  growth curve.
+- `2fc7440c` - fixes for all valid findings from a two-agent review of
+  `6ee65a56`, plus removal of the never-emitted `renderer.navigation.completed`
+  vocabulary entry. The review caught one HIGH bug in the recovery mechanism as
+  first shipped: the renderer's ready signal (mount effect) can beat
+  `did-finish-load`, and the still-set `rendererGone` flag then silently
+  discarded the one-shot attachment-gate replay - a recovered window with an
+  empty transcript. Fixed by clearing the flag in the renderer-ready handler.
+  Also fixed: a failed recovery load previously left the app permanently mute
+  (did-fail-load now re-enters the capped policy as 'load-failed'); post-crash
+  frames now buffer for replay (gate re-armed at render-process-gone); recovery
+  goes through the real dev/packaged load path instead of webContents.reload()
+  (which can no-op before a first committed entry); recovery bookkeeping split
+  from the send gate so clean-exit cannot mint a bogus recovery.succeeded and
+  the give-up dialog re-arms after a genuine recovery; decide() takes a closed
+  RendererDeathReason union; boundary tests added.
+
+## Defects fixed in `6ee65a56` (both verified by reading before changing)
 
 1. **`render-process-gone` was log-only** (`app/main/main.ts:1177`): nothing recreated the
    document, so any renderer death is a permanently black window; packaged builds got no
@@ -124,16 +151,6 @@ main) during/after the operator's ~22:23:34 teardown. Shutdown artifact.
 
 ## Not fixed here, recommended
 
-- **Health telemetry cannot distinguish "hidden and throttled" from "hung"** - this
-  manufactured the entire freeze narrative. Cheapest fix: include
-  `document.visibilityState` (and ideally `performance.memory.usedJSHeapSize`) in the
-  health-response payload (schema change: the response validator pins exactly 6 keys,
-  `main.ts parseRendererHealthResponse`), or main-side, correlate with BrowserWindow
-  show/hide/occlusion state before logging `renderer.health.missed`. Until then, treat
-  59,999/1000ms lag readings as visibility artifacts.
-- **No renderer memory telemetry.** The OOM had no observable precursor in the logs. Adding
-  `usedJSHeapSize` + `process.memory` sampling to health samples would have shown the
-  growth curve and would settle the churn-source question on the next occurrence.
 - **Transcript render path**: no virtualization, full row rebuild per frame. That makes
   Blink partition churn proportional to transcript length times frame count. Worth its own
   scoped session (virtualization or at least render memoization); do not fix blind from
@@ -142,11 +159,26 @@ main) during/after the operator's ~22:23:34 teardown. Shutdown artifact.
   sink's queue is undersized for peak streaming; whatever those records were is
   unrecoverable. Minor, but it hides evidence exactly when things are busiest.
 
-## Battery (all from repo root)
+## Battery (all from repo root, final state after `2fc7440c`)
 
+- Focused suites (`mainDecisions`, `attachmentGate`, `historyReplayReload`,
+  `operationalLog`) - 79 pass / 0 fail.
 - `bun run --cwd app typecheck` - pass (fast-refresh lint + tsc clean).
-- `bun run --cwd app typecheck:sidecar` - pass, "5561 upstream diagnostics ignored", zero
+- `bun run --cwd app typecheck:sidecar` - pass, "5562 upstream diagnostics ignored", zero
   owned diagnostics.
 - `bun run --cwd app test:hardening` - 19/19 pass.
-- `bun test app/` - see final report in session log (run was in flight at writing time;
-  committed only after it passed).
+- `bun test app/` - 3019 pass / 11 fail. All 11 are real-engine probe tests
+  (roundtrip/resume/idle-park) that spawn live engine sessions; each dies on
+  "ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN env var is required" because the
+  diagnosing session's shell has no credentials. Environmental, not caused by
+  these changes (verified: identical failures in isolation, and the engine auth
+  path is unreachable from Electron main / the log vocabulary). Re-run from an
+  operator shell to confirm green.
+
+## Outstanding operator verification (GUI, cannot be closed headless)
+
+With the dev app running: `pgrep -f "Cat Code Dev"` to find the renderer helper
+pid, `kill -9` it, and confirm the window reloads with its transcript intact
+instead of staying black, with `renderer.process.gone` ->
+`renderer.recovery.started` -> `renderer.recovery.succeeded` in the operational
+log.
