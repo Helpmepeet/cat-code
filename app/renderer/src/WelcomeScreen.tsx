@@ -585,7 +585,7 @@ function CodexRow({ account }: { account: AccountStatus }) {
 }
 
 /**
- * The prototype `MiniUsageBar` (`Welcome.jsx:121`): ONE flat pink gradient fill
+ * The prototype `MiniUsageBar` (`Welcome.jsx:121`): ONE accent gradient fill
  * for every account regardless of percentage — NOT the threshold red/green/amber
  * of the AccountsPage meter. Min 2% fill so a live account is always visible.
  */
@@ -596,14 +596,14 @@ function UsageBar({ pct }: { pct: number | null }) {
       {/* §0 EXCEPTION: data-driven width Tailwind can't express — the single
           allowed width-only inline style (P4-5 precedent). */}
       <div
-        className="h-full rounded-[3px] bg-gradient-to-r from-[#f9a8d4] to-[#ec4899]"
+        className="h-full rounded-[3px] bg-gradient-to-r from-accent-soft to-accent"
         style={{ width: `${filled}%` }}
       />
     </div>
   )
 }
 
-/** Percent label — pink like the prototype (`pctColor`, `Welcome.jsx:149`),
+/** Percent label — accent-tinted like the prototype (`pctColor`, `Welcome.jsx:149`),
  * darker at ≥100%; never the tone-coded green/amber/red. */
 function UsagePct({ pct }: { pct: number | null }) {
   const p = pct ?? 0
@@ -611,7 +611,7 @@ function UsagePct({ pct }: { pct: number | null }) {
     <span
       className={
         'text-right text-[13px] font-semibold tabular-nums ' +
-        (p >= 100 ? 'text-[#ec4899]' : 'text-[#f9a8d4]')
+        (p >= 100 ? 'text-accent' : 'text-accent-soft')
       }
     >
       {p}%

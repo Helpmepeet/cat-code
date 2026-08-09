@@ -113,6 +113,15 @@ test('P4-59 keeps Open folder actionable without advertising an unbound shortcut
   expect(picker).not.toContain('⌘O')
 })
 
+test('Codex usage meters follow the selected accent rather than a hard-coded color', () => {
+  const source = readFileSync(new URL('./WelcomeScreen.tsx', import.meta.url), 'utf8')
+
+  expect(source).toContain('from-accent-soft to-accent')
+  expect(source).toContain("p >= 100 ? 'text-accent' : 'text-accent-soft'")
+  expect(source).not.toContain('from-[#f9a8d4]')
+  expect(source).not.toContain('text-[#ec4899]')
+})
+
 test('P4-55 renders a truthful retry in place of the false empty roster', () => {
   const html = renderToStaticMarkup(
     <WelcomeScreen
@@ -247,8 +256,8 @@ test('the Codex table renders real pool rows (alias, capped badge, usage %)', ()
   expect(html).toContain('capped')
   expect(html).toContain('20%')
   expect(html).toContain('100%')
-  // Prototype grammar: flat pink gradient bars, not tone-coded green/amber/red.
-  expect(html).toContain('from-[#f9a8d4] to-[#ec4899]')
+  // Flat accent-gradient bars, not tone-coded green/amber/red.
+  expect(html).toContain('from-accent-soft to-accent')
   // No "5h"/"wk" text labels in the prototype rows.
   expect(html).not.toContain('>5h<')
   expect(html).not.toContain('>wk<')
