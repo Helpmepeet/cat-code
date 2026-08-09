@@ -23,7 +23,10 @@ import { expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { readTranscriptRunFacts } from './transcriptRunFacts.js'
+import {
+  MAX_RUN_FACTS_READ_BYTES,
+  readTranscriptRunFacts,
+} from './transcriptRunFacts.js'
 
 function transcriptOf(records: unknown[]): string {
   const dir = mkdtempSync(join(tmpdir(), 'runfacts-'))
@@ -240,6 +243,36 @@ const runFacts = (
 const forbiddenResolver = () => {
   throw new Error('resolver consulted despite a recorded window')
 }
+
+test('reads a bounded newline-aligned tail instead of materializing a whole transcript', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'runfacts-tail-'))
+  const file = join(dir, 'large.jsonl')
+  // A single oversized historical line puts the read start mid-line. The
+  // newline alignment must discard that partial record yet retain the newest
+  // complete records below it.
+  writeFileSync(
+    file,
+    [
+      JSON.stringify(assistant('old-model', { input_tokens: 1 })),
+      'x'.repeat(MAX_RUN_FACTS_READ_BYTES + 1024),
+      JSON.stringify(runFacts('gpt-5.6-terra', 'auto', 'high', 372_000)),
+      JSON.stringify(assistant('gpt-5.6-terra', { input_tokens: 123 })),
+    ].join('\n'),
+    'utf8',
+  )
+  try {
+    const facts = readTranscriptRunFacts(file, forbiddenResolver)
+    expect(facts).toMatchObject({
+      model: 'gpt-5.6-terra',
+      permissionMode: 'auto',
+      effort: 'high',
+      usedTokens: 123,
+      contextWindow: 372_000,
+    })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
 
 test('a run_facts snapshot wins over the byproduct records, window included', () => {
   const facts = readTranscriptRunFacts(

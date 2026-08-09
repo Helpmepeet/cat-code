@@ -16,9 +16,15 @@
  * are the main/sidecar-side shared modules. The renderer imports neither.
  */
 
-import { readFileSync } from 'node:fs'
+import { closeSync, fstatSync, openSync, readSync } from 'node:fs'
 
 import type { TranscriptRunFacts } from './protocol.js'
+import { MAX_HISTORY_REPLAY_BYTES } from './limits.js'
+
+// Match the display-history reader's bounded tail window. Run facts are a
+// best-effort preview enhancement, never a reason to materialize an arbitrary
+// transcript on Electron's main thread during close/park.
+export const MAX_RUN_FACTS_READ_BYTES = MAX_HISTORY_REPLAY_BYTES * 2
 
 /**
  * Derive a session's run facts by scanning its transcript JSONL directly.
@@ -86,12 +92,8 @@ export function readTranscriptRunFacts(
     usedTokens: null,
     contextWindow: null,
   }
-  let lines: string[]
-  try {
-    lines = readFileSync(path, 'utf8').split('\n')
-  } catch {
-    return empty
-  }
+  const lines = readBoundedTranscriptLines(path)
+  if (lines === null) return empty
 
   const facts = { ...empty }
   let snapshot: RunFactsSnapshot | null = null
@@ -100,16 +102,10 @@ export function readTranscriptRunFacts(
     if (!line) continue
     // Parse only what can still contribute.
     //
-    // `run_facts` is written once per process and again only on change, so on a
-    // long session it sits near the TOP of the file: the walk cannot stop early
-    // and would otherwise `JSON.parse` every record on the way there. That cost
-    // lands on Electron's main thread during an idle-park (a park is a terminal
-    // lifecycle frame, which is a persist), not just at quit. Once the byproduct
-    // facts are all known, a substring test replaces the parse for every
-    // remaining line. Measured on the largest transcript here (13 MB, no
-    // `run_facts` record, so the walk runs to the top): 22.9 ms to 17.1 ms,
-    // identical output. The remainder is `readFileSync` + `split`, not parsing,
-    // so this is the whole win available without changing how the file is read.
+    // A `run_facts` snapshot is authoritative for model/mode/effort. Once it
+    // and the only independent measurement (used tokens) are known, no older
+    // record can improve the result. Legacy transcripts still scan the bounded
+    // tail for their independent newest facts.
     const needsByproducts =
       facts.model === null ||
       facts.permissionMode === null ||
@@ -148,13 +144,7 @@ export function readTranscriptRunFacts(
         facts.usedTokens = readUsedTokens(record.message.usage)
       }
     }
-    if (
-      facts.model !== null &&
-      facts.permissionMode !== null &&
-      facts.effort !== null &&
-      facts.usedTokens !== null &&
-      snapshot !== null
-    ) {
+    if (snapshot !== null && facts.usedTokens !== null) {
       break
     }
   }
@@ -185,6 +175,33 @@ export function readTranscriptRunFacts(
       ? readContextWindow(facts.model, resolveContextWindow)
       : null)
   return facts
+}
+
+/**
+ * Read only a newline-aligned tail of the JSONL file. Transcript records append
+ * over time and this reader walks newest-first, so a bounded tail retains the
+ * relevant records while preventing a large historical transcript from adding a
+ * full-file allocation to the main-process lifecycle path.
+ */
+function readBoundedTranscriptLines(path: string): string[] | null {
+  let fd: number | undefined
+  try {
+    fd = openSync(path, 'r')
+    const size = fstatSync(fd).size
+    const start = Math.max(0, size - MAX_RUN_FACTS_READ_BYTES)
+    const bytes = Buffer.allocUnsafe(size - start)
+    const bytesRead = readSync(fd, bytes, 0, bytes.length, start)
+    let text = bytes.toString('utf8', 0, bytesRead)
+    if (start > 0) {
+      const firstNewline = text.indexOf('\n')
+      text = firstNewline >= 0 ? text.slice(firstNewline + 1) : ''
+    }
+    return text.split('\n')
+  } catch {
+    return null
+  } finally {
+    if (fd !== undefined) closeSync(fd)
+  }
 }
 
 /**

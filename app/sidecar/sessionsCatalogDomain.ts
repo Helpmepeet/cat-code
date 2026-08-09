@@ -83,9 +83,16 @@ export async function enumerateSessionsCatalog(): Promise<SessionsCatalogSnapsho
     return await annotateCwdExistence(
       buildSessionsCatalogSnapshot(result, capturedAtMs),
     )
-  } catch {
+  } catch (error) {
     // A read failure degrades to "no catalog" — the page shows a load state,
-    // never a crash (display = degrade gracefully).
+    // never a crash (display = degrade gracefully). Keep the raw failure in
+    // the worker's stderr so a stale catalog is diagnosable without widening
+    // the renderer-facing failure vocabulary.
+    process.stderr.write(
+      `[catalog-worker] session catalog enumeration failed: ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
     return null
   }
 }
