@@ -33,9 +33,10 @@ export type TabVisualState = {
   /** A terminal tab offers restart (CH_RESTART) — the dead-tab affordance. */
   restartable: boolean
   /**
-   * A pending permission request is waiting in THIS session. On a background
-   * tab this drives the attention badge; on the active tab the permission
-   * surface in the pane already shows it, so the badge is suppressed there.
+   * A pending permission request is actionable in THIS ready session. On a
+   * background tab this drives the attention badge; on the active tab the
+   * permission surface in the pane already shows it, so the badge is suppressed
+   * there. A disconnected pane cannot render or answer its stale queue.
    */
   needsAttention: boolean
 }
@@ -55,6 +56,12 @@ export function deriveTabVisualState(args: {
   isActive: boolean
 }): TabVisualState {
   const { descriptor, connection, pendingPermissionCount, isActive } = args
+  // Keep attention in lockstep with App's permission rail, which renders and
+  // accepts requests only while this connection is ready. A queued request can
+  // outlive a transport failure until the next authoritative ready snapshot;
+  // advertising that unavailable card on a background tab is misleading.
+  const hasActionablePermission =
+    connection.status === 'ready' && pendingPermissionCount > 0
 
   // A background tab whose transport already reported a terminal failure looks
   // dead immediately (P3-4 typed states), even before the host emits its
@@ -105,7 +112,7 @@ export function deriveTabVisualState(args: {
       label: 'idle',
       tone: 'busy',
       restartable: false,
-      needsAttention: pendingPermissionCount > 0 && !isActive,
+      needsAttention: hasActionablePermission && !isActive,
     }
   }
 
@@ -128,6 +135,6 @@ export function deriveTabVisualState(args: {
     restartable,
     // The active tab's pane already surfaces the permission; the badge exists
     // for BACKGROUND tabs (the "never silently queued" requirement).
-    needsAttention: pendingPermissionCount > 0 && !isActive,
+    needsAttention: hasActionablePermission && !isActive,
   }
 }

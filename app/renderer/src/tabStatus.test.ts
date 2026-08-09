@@ -139,16 +139,14 @@ test('unparking shows starting, not idle, while the engine actually boots', () =
   expect(visual.tone).toBe('warn')
 })
 
-test('a parked background tab still raises a pending-permission badge', () => {
-  // Park is gated on no pending permission, so this is a belt-and-braces case:
-  // the early return must not drop the "never silently queued" signal.
+test('a parked background tab suppresses a stale permission badge its pane cannot render', () => {
   const visual = deriveTabVisualState({
     descriptor: descriptor({ status: 'disconnected', restorable: true }),
     connection: { status: 'parked', inputEnabled: false },
     pendingPermissionCount: 1,
     isActive: false,
   })
-  expect(visual.needsAttention).toBe(true)
+  expect(visual.needsAttention).toBe(false)
 })
 
 test('a background tab whose transport already died escalates to dead before the host status catches up', () => {
@@ -161,6 +159,16 @@ test('a background tab whose transport already died escalates to dead before the
   })
   expect(visual.tone).toBe('dead')
   expect(visual.restartable).toBe(true)
+})
+
+test('a disconnected background tab suppresses a stale permission badge', () => {
+  const visual = deriveTabVisualState({
+    descriptor: descriptor({ status: 'ready' }),
+    connection: { status: 'disconnected', inputEnabled: false },
+    pendingPermissionCount: 1,
+    isActive: false,
+  })
+  expect(visual.needsAttention).toBe(false)
 })
 
 test('a pending permission on a BACKGROUND tab raises the attention badge', () => {
