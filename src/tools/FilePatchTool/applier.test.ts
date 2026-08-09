@@ -84,7 +84,7 @@ describe('applyUpdateHunks', () => {
       '/tmp/example.txt',
     )
 
-    expect(result.content).toBe('alpha\nbeta updated\ngamma\ndelta updated\n')
+    expect(result.buffer.content).toBe('alpha\nbeta updated\ngamma\ndelta updated\n')
   })
 
   test('fails when the context no longer matches the mutated buffer', () => {
@@ -127,8 +127,8 @@ describe('applyUpdateHunks', () => {
       '/tmp/example.txt',
     )
 
-    expect(result.content).toBe('alpha\nbeta updated')
-    expect(serializeBuffer(result)).toBe('alpha\r\nbeta updated')
+    expect(result.buffer.content).toBe('alpha\nbeta updated')
+    expect(serializeBuffer(result.buffer)).toBe('alpha\r\nbeta updated')
   })
 })
 
@@ -152,7 +152,7 @@ describe('BOF and EOF (canonical Codex V4A)', () => {
       [hunk({ lines: [{ kind: 'add', text: '// top' }] })],
       '/tmp/example.ts',
     )
-    expect(result.content).toBe('// top\nline1\nline2\n')
+    expect(result.buffer.content).toBe('// top\nline1\nline2\n')
   })
 
   test('pure-insert first hunk on empty file produces only the added lines', () => {
@@ -161,7 +161,7 @@ describe('BOF and EOF (canonical Codex V4A)', () => {
       [hunk({ lines: [{ kind: 'add', text: 'first' }] })],
       '/tmp/empty.ts',
     )
-    expect(result.content).toBe('first\n')
+    expect(result.buffer.content).toBe('first\n')
   })
 
   test('isEndOfFile appends lines to a file', () => {
@@ -170,7 +170,7 @@ describe('BOF and EOF (canonical Codex V4A)', () => {
       [hunk({ isEndOfFile: true, lines: [{ kind: 'add', text: '// end' }] })],
       '/tmp/example.ts',
     )
-    expect(result.content).toBe('line1\nline2\n// end\n')
+    expect(result.buffer.content).toBe('line1\nline2\n// end\n')
   })
 
   test('isEndOfFile pure-insert on empty file produces only the added lines', () => {
@@ -179,7 +179,7 @@ describe('BOF and EOF (canonical Codex V4A)', () => {
       [hunk({ isEndOfFile: true, lines: [{ kind: 'add', text: 'first' }] })],
       '/tmp/empty.ts',
     )
-    expect(result.content).toBe('first\n')
+    expect(result.buffer.content).toBe('first\n')
   })
 
   test('full-fingerprint uniqueness rejects ambiguous hunks', () => {
@@ -214,7 +214,7 @@ describe('BOF and EOF (canonical Codex V4A)', () => {
       ],
       '/tmp/example.ts',
     )
-    expect(result.content).toBe('foo\nbar\nfoo\nbaz\ninserted\n')
+    expect(result.buffer.content).toBe('foo\nbar\nfoo\nbaz\ninserted\n')
   })
 })
 
@@ -233,7 +233,7 @@ describe('fuzzy matching tiers', () => {
       ],
       '/tmp/example.ts',
     )
-    expect(result.content).toBe('alpha   \nbeta updated\n')
+    expect(result.buffer.content).toBe('alpha   \nbeta updated\n')
   })
 
   test('tier 3: matches context lines with leading and trailing whitespace in file', () => {
@@ -250,7 +250,7 @@ describe('fuzzy matching tiers', () => {
       ],
       '/tmp/example.ts',
     )
-    expect(result.content).toBe('    alpha   \nbeta updated\n')
+    expect(result.buffer.content).toBe('    alpha   \nbeta updated\n')
   })
 
   test('tier 4: matches context with unicode dashes normalized to ASCII', () => {
@@ -268,7 +268,7 @@ describe('fuzzy matching tiers', () => {
       '/tmp/example.ts',
     )
     // Context line preserved as original file bytes
-    expect(result.content).toBe('foo \u2013 bar\n')
+    expect(result.buffer.content).toBe('foo \u2013 bar\n')
   })
 
   test('tier 4: matches context with curly quotes normalized to ASCII', () => {
@@ -285,7 +285,7 @@ describe('fuzzy matching tiers', () => {
       ],
       '/tmp/example.ts',
     )
-    expect(result.content).toBe('\u201chello\u201d\n')
+    expect(result.buffer.content).toBe('\u201chello\u201d\n')
   })
 })
 
@@ -320,9 +320,9 @@ describe('scope hint disambiguation', () => {
       '/tmp/example.ts',
     )
 
-    expect(result.content).toContain('    return 99')
-    expect(result.content).toContain('    return 1')
-    expect(result.content).not.toContain('    return 2')
+    expect(result.buffer.content).toContain('    return 99')
+    expect(result.buffer.content).toContain('    return 1')
+    expect(result.buffer.content).not.toContain('    return 2')
   })
 })
 
@@ -337,7 +337,6 @@ describe('sequential hunk cursor', () => {
   ].join('\n') + '\n'
 
   test('a later hunk with a repeated fingerprint lands after the anchored hunk', () => {
-    const notes: string[] = []
     const result = applyUpdateHunks(
       { content: SEQUENTIAL_FILE, lineEndings: 'LF' },
       [
@@ -356,11 +355,9 @@ describe('sequential hunk cursor', () => {
         }),
       ],
       '/tmp/example.test.ts',
-      undefined,
-      notes,
     )
 
-    expect(result.content).toBe(
+    expect(result.buffer.content).toBe(
       [
         "test('a', () => {",
         '  one()',
@@ -371,13 +368,12 @@ describe('sequential hunk cursor', () => {
         '// tail',
       ].join('\n') + '\n',
     )
-    expect(notes).toEqual([
+    expect(result.notes).toEqual([
       'hunk 2 matched 2 locations; applied at the first match after the previous hunk (line 6)',
     ])
   })
 
   test('a duplicate the first hunk itself created does not capture the second hunk', () => {
-    const notes: string[] = []
     const result = applyUpdateHunks(
       { content: 'alpha\nbeta\nmarker\ngamma\n', lineEndings: 'LF' },
       [
@@ -395,13 +391,14 @@ describe('sequential hunk cursor', () => {
         }),
       ],
       '/tmp/example.ts',
-      undefined,
-      notes,
     )
 
-    expect(result.content).toBe('alpha\nmarker\nbeta\nmarker\ninserted\ngamma\n')
-    expect(notes).toEqual([
-      'hunk 2 matched 2 locations; applied at the first match after the previous hunk (line 4)',
+    expect(result.buffer.content).toBe('alpha\nmarker\nbeta\nmarker\ninserted\ngamma\n')
+    // Line 3 is where 'marker' sits in the file the model read: the first hunk
+    // added a line above it, so the mutated buffer's index 4 is not what the
+    // disclosure should name.
+    expect(result.notes).toEqual([
+      'hunk 2 matched 2 locations; applied at the first match after the previous hunk (line 3)',
     ])
   })
 
@@ -443,9 +440,7 @@ describe('sequential hunk cursor', () => {
         ],
         '/tmp/example.ts',
       ),
-    ).toThrow(
-      'hunks apply in file order, and all 2 matches for hunk 2 (lines 1, 3) sit before the position established by the previous hunk — reorder the hunks',
-    )
+    ).toThrow('sit before the position established by the previous hunk')
   })
 
   test('a scope hint outranks the cursor and discloses nothing', () => {
@@ -463,7 +458,6 @@ describe('sequential hunk cursor', () => {
       '// end',
     ].join('\n') + '\n'
 
-    const notes: string[] = []
     const result = applyUpdateHunks(
       { content, lineEndings: 'LF' },
       [
@@ -484,11 +478,9 @@ describe('sequential hunk cursor', () => {
         }),
       ],
       '/tmp/example.ts',
-      undefined,
-      notes,
     )
 
-    expect(result.content).toBe(
+    expect(result.buffer.content).toBe(
       [
         'class A {',
         '  getValue() {',
@@ -505,7 +497,7 @@ describe('sequential hunk cursor', () => {
         '// appended',
       ].join('\n') + '\n',
     )
-    expect(notes).toEqual([])
+    expect(result.notes).toEqual([])
   })
 
   test('the applyPatchToBuffers result entry carries the disclosure', () => {
@@ -562,6 +554,163 @@ describe('sequential hunk cursor', () => {
     )
 
     expect(result.files[0]?.notes).toBeUndefined()
+  })
+
+  test('a move carries the disclosure on the destination entry, not the delete', () => {
+    const result = applyPatchToBuffers(
+      [
+        {
+          type: 'update',
+          path: '/tmp/old.test.ts',
+          moveTo: '/tmp/new.test.ts',
+          hunks: [
+            hunk({
+              lines: [
+                { kind: 'context', text: "test('b', () => {" },
+                { kind: 'delete', text: '  two()' },
+                { kind: 'add', text: '  two updated()' },
+              ],
+            }),
+            hunk({
+              lines: [
+                { kind: 'context', text: '})' },
+                { kind: 'add', text: '// tail' },
+              ],
+            }),
+          ],
+        },
+      ],
+      new Map([['/tmp/old.test.ts', fileState('/tmp/old.test.ts', SEQUENTIAL_FILE)]]),
+    )
+
+    expect(result.files[0]).toMatchObject({ path: '/tmp/old.test.ts', type: 'delete' })
+    expect(result.files[0]?.notes).toBeUndefined()
+    expect(result.files[1]).toMatchObject({ path: '/tmp/new.test.ts', type: 'add' })
+    expect(result.files[1]?.notes).toEqual([
+      'hunk 2 matched 2 locations; applied at the first match after the previous hunk (line 6)',
+    ])
+  })
+
+  test('a second file in the same patch does not inherit the first file disclosure', () => {
+    const result = applyPatchToBuffers(
+      [
+        {
+          type: 'update',
+          path: '/tmp/first.test.ts',
+          hunks: [
+            hunk({
+              lines: [
+                { kind: 'context', text: "test('b', () => {" },
+                { kind: 'delete', text: '  two()' },
+                { kind: 'add', text: '  two updated()' },
+              ],
+            }),
+            hunk({
+              lines: [
+                { kind: 'context', text: '})' },
+                { kind: 'add', text: '// tail' },
+              ],
+            }),
+          ],
+        },
+        {
+          type: 'update',
+          path: '/tmp/second.txt',
+          hunks: [
+            hunk({
+              lines: [
+                { kind: 'context', text: 'one' },
+                { kind: 'delete', text: 'two' },
+                { kind: 'add', text: 'two updated' },
+              ],
+            }),
+          ],
+        },
+      ],
+      new Map([
+        ['/tmp/first.test.ts', fileState('/tmp/first.test.ts', SEQUENTIAL_FILE)],
+        ['/tmp/second.txt', fileState('/tmp/second.txt', 'one\ntwo\n')],
+      ]),
+    )
+
+    expect(result.files[0]?.notes).toEqual([
+      'hunk 2 matched 2 locations; applied at the first match after the previous hunk (line 6)',
+    ])
+    expect(result.files[1]?.notes).toBeUndefined()
+    expect(Object.keys(result.files[1] ?? {})).not.toContain('notes')
+  })
+
+  test('a BOF pure-insert first hunk moves the cursor past the lines it added', () => {
+    const result = applyUpdateHunks(
+      { content: 'alpha\ndup\nbeta\n', lineEndings: 'LF' },
+      [
+        // The inserted line is itself a match for the next hunk, so a cursor
+        // left at 0 would capture it instead of the file's own 'dup'.
+        hunk({ lines: [{ kind: 'add', text: 'dup' }] }),
+        hunk({
+          lines: [
+            { kind: 'context', text: 'dup' },
+            { kind: 'add', text: 'inserted' },
+          ],
+        }),
+      ],
+      '/tmp/example.ts',
+    )
+
+    expect(result.buffer.content).toBe('dup\nalpha\ndup\ninserted\nbeta\n')
+    expect(result.notes).toEqual([
+      'hunk 2 matched 2 locations; applied at the first match after the previous hunk (line 2)',
+    ])
+  })
+
+  test('a scope hint that narrows to two still constrains the cursor rule', () => {
+    const content = [
+      '// anchor',
+      'target',
+      'class B {',
+      'target',
+      'target',
+      '}',
+    ].join('\n') + '\n'
+
+    const result = applyUpdateHunks(
+      { content, lineEndings: 'LF' },
+      [
+        hunk({
+          lines: [
+            { kind: 'context', text: '// anchor' },
+            { kind: 'add', text: '// touched' },
+          ],
+        }),
+        hunk({
+          // Three matches, two of them inside the hinted scope. The first match
+          // after the cursor is the unhinted one, so only a hint subset that
+          // survives into the cursor rule keeps this inside class B.
+          scopeHints: ['class B'],
+          lines: [
+            { kind: 'context', text: 'target' },
+            { kind: 'add', text: '  // inserted' },
+          ],
+        }),
+      ],
+      '/tmp/example.ts',
+    )
+
+    expect(result.buffer.content).toBe(
+      [
+        '// anchor',
+        '// touched',
+        'target',
+        'class B {',
+        'target',
+        '  // inserted',
+        'target',
+        '}',
+      ].join('\n') + '\n',
+    )
+    expect(result.notes).toEqual([
+      'hunk 2 matched 3 locations (2 within the hinted scope); applied at the first match after the previous hunk (line 4)',
+    ])
   })
 })
 

@@ -54,13 +54,11 @@ function applyOperations(
         }
 
         const cachedContent = cachedFiles?.get(operation.path)
-        const notes: string[] = []
-        const nextBuffer = applyUpdateHunks(
+        const { buffer: nextBuffer, notes } = applyUpdateHunks(
           current.buffer,
           operation.hunks,
           operation.path,
           cachedContent,
-          notes,
         )
 
         if (operation.moveTo) {
@@ -158,8 +156,7 @@ export function applyUpdateHunks(
   hunks: FilePatchHunk[],
   path: string,
   cachedContent?: string,
-  notes?: string[],
-): FilePatchBuffer {
+): { buffer: FilePatchBuffer; notes: string[] } {
   let lines = splitPreservingTerminalNewline(buffer.content)
   const cachedLines = cachedContent !== undefined
     ? splitPreservingTerminalNewline(cachedContent)
@@ -173,21 +170,33 @@ export function applyUpdateHunks(
   // which is what lets the canonical Codex idiom work: an early hunk anchors
   // uniquely and a later one uses a tiny fingerprint meaning "the next one".
   let cursor = 0
+  // Running (added − deleted) line count of the hunks already applied, so a
+  // disclosure can name the line the model itself read rather than the line of
+  // the intermediate buffer this loop is mutating.
+  let lineDelta = 0
+  const notes: string[] = []
 
   for (let i = 0; i < hunks.length; i++) {
-    const next = applySingleHunk(lines, hunks[i], path, i, cursor, cachedLines, notes)
+    const next = applySingleHunk(lines, hunks[i], path, i, cursor, lineDelta, cachedLines)
     lines = next.lines
     cursor = next.cursor
+    lineDelta = next.lineDelta
+    if (next.note !== undefined) {
+      notes.push(next.note)
+    }
     if (next.touchesEndOfFile) {
       noNewlineAtEndOfFile = hunks[i].noNewlineAtEndOfFile
     }
   }
 
   return {
-    content: joinLines(lines, noNewlineAtEndOfFile),
-    encoding: buffer.encoding,
-    lineEndings: buffer.lineEndings,
-    noNewlineAtEndOfFile,
+    buffer: {
+      content: joinLines(lines, noNewlineAtEndOfFile),
+      encoding: buffer.encoding,
+      lineEndings: buffer.lineEndings,
+      noNewlineAtEndOfFile,
+    },
+    notes,
   }
 }
 
@@ -197,14 +206,30 @@ function applySingleHunk(
   path: string,
   hunkIndex: number,
   cursor: number,
+  lineDelta: number,
   cachedLines?: string[],
-  notes?: string[],
-): { lines: string[]; touchesEndOfFile: boolean; cursor: number } {
-  const matchIndex = findHunkPosition(lines, hunk, path, hunkIndex, cursor, cachedLines, notes)
+): {
+  lines: string[]
+  touchesEndOfFile: boolean
+  cursor: number
+  lineDelta: number
+  note?: string
+} {
+  const position = findHunkPosition(
+    lines,
+    hunk,
+    path,
+    hunkIndex,
+    cursor,
+    lineDelta,
+    cachedLines,
+  )
+  const matchIndex = position.index
 
   let sourceIndex = matchIndex
   const nextLines = lines.slice(0, matchIndex)
   const addedLines: string[] = []
+  let deletedCount = 0
 
   for (const line of hunk.lines) {
     switch (line.kind) {
@@ -230,6 +255,7 @@ function applySingleHunk(
           )
         }
         sourceIndex += 1
+        deletedCount += 1
         break
       }
       case 'add': {
@@ -250,6 +276,8 @@ function applySingleHunk(
     lines: nextLines,
     touchesEndOfFile: isTouchingEndOfFile(lines, hunk.lines, matchIndex, addedLines),
     cursor: nextCursor,
+    lineDelta: lineDelta + addedLines.length - deletedCount,
+    ...(position.note !== undefined ? { note: position.note } : {}),
   }
 }
 
@@ -274,19 +302,19 @@ function findHunkPosition(
   path: string,
   hunkIndex: number,
   cursor: number,
+  lineDelta: number,
   cachedLines?: string[],
-  notes?: string[],
-): number {
+): { index: number; note?: string } {
   const fingerprint = hunk.lines.filter(l => l.kind !== 'add').map(l => l.text)
 
   // Pure-insert hunk (no context, no delete lines)
   if (fingerprint.length === 0) {
     if (hunk.isEndOfFile) {
-      return fileLines.length
+      return { index: fileLines.length }
     }
     if (hunkIndex === 0) {
       // Canonical Codex BOF: pure +lines as the first hunk prepend to the file
-      return 0
+      return { index: 0 }
     }
     throw new FilePatchError(
       `Patch hunk for ${path} has no context or delete lines — pure-insert hunks only work as the first hunk (BOF) or with "*** End of File". Add context lines to locate this hunk.`,
@@ -311,26 +339,41 @@ function findHunkPosition(
     for (const matchFn of matchFns) {
       const matches = findAllMatches(fileLines, fingerprint, searchStart, matchFn)
       if (matches.length === 1) {
-        return matches[0]
+        return { index: matches[0] }
       }
       if (matches.length > 1) {
-        const resolved = disambiguateWithScopeHints(fileLines, matches, hunk.scopeHints)
-        if (resolved !== null) {
-          return resolved
+        // Hints that narrow to 2+ still have to constrain the cursor rule
+        // below, so the subset — not the raw match list — is what carries
+        // forward. Hints satisfied by nothing are most likely mis-transcribed;
+        // fall back to the unhinted set rather than failing on the hint alone.
+        const hinted = disambiguateWithScopeHints(fileLines, matches, hunk.scopeHints)
+        const satisfied = hinted.length > 0 ? hinted : matches
+        if (satisfied.length === 1) {
+          return { index: satisfied[0] }
         }
         if (hunkIndex > 0) {
           // A later hunk's fingerprint is routinely tiny (`})` alone) because
           // the model means "the next one after the previous hunk". Only a
           // hunk with nothing before it has to be globally unique.
-          const forward = matches.filter(match => match >= cursor)
+          const forward = satisfied.filter(match => match >= cursor)
           if (forward.length > 0) {
-            notes?.push(
-              `hunk ${hunkIndex + 1} matched ${matches.length} locations; applied at the first match after the previous hunk (line ${forward[0] + 1})`,
-            )
-            return forward[0]
+            const scope =
+              satisfied.length < matches.length
+                ? ` (${satisfied.length} within the hinted scope)`
+                : ''
+            // Report the line in the coordinates of the file the model read:
+            // exact when the earlier hunks landed in file order (the normal
+            // case), approximate if a uniquely-matched earlier hunk landed
+            // later in the file. The structuredPatch in the tool result carries
+            // the authoritative final coordinates either way.
+            const line = forward[0] + 1 - lineDelta
+            return {
+              index: forward[0],
+              note: `hunk ${hunkIndex + 1} matched ${matches.length} locations${scope}; applied at the first match after the previous hunk (line ${line})`,
+            }
           }
           throw new FilePatchError(
-            `Patch hunk body is ambiguous in ${path}: hunks apply in file order, and all ${matches.length} matches for hunk ${hunkIndex + 1} (lines ${matches.map(i => i + 1).join(', ')}) sit before the position established by the previous hunk — reorder the hunks to match the file, or add more context lines.`,
+            `Patch hunk body is ambiguous in ${path}: all ${matches.length} matches for hunk ${hunkIndex + 1} (lines ${matches.map(i => i + 1).join(', ')}) sit before the position established by the previous hunk — reorder the hunks to match the file, or add more context lines.`,
             { code: 'PATCH_ANCHOR_AMBIGUOUS', path },
           )
         }
@@ -398,14 +441,16 @@ function findAllMatches(
   return matches
 }
 
+// Returns the subset of matches the scope hints allow, or the matches
+// unchanged when the hunk carries no effective hint.
 function disambiguateWithScopeHints(
   fileLines: string[],
   matches: number[],
   scopeHints: string[],
-): number | null {
+): number[] {
   const effectiveHints = scopeHints.filter(h => h.trim().length > 0)
   if (effectiveHints.length === 0) {
-    return null
+    return matches
   }
 
   // For each match position, walk backwards through scope hints (outermost last).
@@ -427,11 +472,7 @@ function disambiguateWithScopeHints(
     return true
   }
 
-  const satisfied = matches.filter(satisfies)
-  if (satisfied.length === 1) {
-    return satisfied[0]
-  }
-  return null
+  return matches.filter(satisfies)
 }
 
 function unicodeNormalize(s: string): string {
