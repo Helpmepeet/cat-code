@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
@@ -887,6 +888,17 @@ test('the four shortcuts are live only where no control owns the key', () => {
   expect(permissionKeysAreLive(undefined)).toBe(true)
   // A keydown whose target is `document` or `window` has no `closest` at all.
   expect(permissionKeysAreLive({})).toBe(true)
+})
+
+test('the key listener follows the same keysLive state that paints the cursor and hint', () => {
+  // SSR cannot move focus or dispatch the document listener. Pin the production
+  // guard so a permissive document target cannot confirm an option while the
+  // card still shows no keyboard affordance or highlighted row.
+  const source = readFileSync(new URL('./PermissionPrompt.tsx', import.meta.url), 'utf8')
+  const listenerStart = source.indexOf('function onKeyDown(event: KeyboardEvent)')
+  const listener = source.slice(listenerStart, source.indexOf("document.addEventListener('keydown'", listenerStart))
+  expect(listener).toContain('if (!permissionKeysAreLive(event.target)) return')
+  expect(listener).toContain('if (!keysLive) return')
 })
 
 test('only the card the shortcuts act on hosts them, takes focus, and says so', () => {

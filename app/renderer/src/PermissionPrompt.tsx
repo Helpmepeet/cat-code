@@ -248,6 +248,10 @@ export function PermissionPrompt({
       // this card, and the composer. The one exemption is the card itself, which
       // HOSTS the keys rather than owning them (`permissionKeysAreLive`).
       if (!permissionKeysAreLive(event.target)) return
+      // The cursor and shortcut hint are both painted from this state. A click on
+      // non-focusable page chrome can leave document focus permissive while the
+      // card still shows neither; never let that hidden cursor confirm a row.
+      if (!keysLive) return
       // In flight: the answer is already sent and the rows are disabled, so the
       // keyboard must not fire a second one before the resolve lands.
       if (submitted) return
