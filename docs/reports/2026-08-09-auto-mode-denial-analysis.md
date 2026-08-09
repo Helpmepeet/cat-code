@@ -12,6 +12,13 @@ had stated. This is not a broken classifier; it is a correctly-reasoning one
 applying a rule set whose "outside the working directory" clause does not
 distinguish a temp file from someone else's project.
 
+A second pass then found that the classifier's *decisions* are not the whole
+denial population. 30% of real denials come from the classifier being
+unavailable, carry no security reasoning, and — because of a return-ordering
+detail — are exempt from the three-strikes fallback that exists to stop exactly
+that loop. That, not the over-blocking, is the most consequential thing in this
+report.
+
 ## Method
 
 Source of truth is `logForDebugging('Auto mode classifier blocked action: …')`
@@ -184,6 +191,83 @@ the repo's own shared-tree rule about only killing processes you spawned) but
 discovery-paired kills deterministically. They also generated the heaviest retry
 loops in the dataset — one PID was attempted four different ways.
 
+## Deeper pass
+
+Three things the first pass missed, one of which retracts a method rather than a
+finding.
+
+### There is a second denial channel, and it carries no security judgment
+
+The 128 blocks above are classifier *decisions*. They are not all the denials.
+
+| Event | Count |
+| --- | --- |
+| `Auto mode classifier blocked action` (a decision) | 128 |
+| `Auto mode classifier unavailable, denying with retry guidance (fail closed)` | 55 |
+| `Auto mode classifier error` (cause of the above) | 56 |
+
+Real denial volume in the window is therefore **183, of which 30% never reached
+a security judgment at all.** The agent cannot tell the difference: both arrive
+as `Permission for this action has been denied. Reason: …`.
+
+The 56 errors split as 38 `Connection error.` and 18 `No healthy Codex account
+is available for this request.` The second is structural: the classifier runs on
+`getMainLoopModel()` when no override is set (`yoloClassifier.ts:1044`), so on a
+Codex-backed session **permission decisions inherit Codex account-pool health.**
+Pool exhaustion becomes blanket denial.
+
+### All 55 landed in one session, in three minutes, and the safety valve could not fire
+
+Session `24b1f79e`, 2026-08-07 18:22:53Z → 18:25:54Z. 56 fail-closed denials in
+3 minutes 1 second, against 126 classifier calls in that session — **44% of its
+tool calls denied for infrastructure reasons.**
+
+There is a designed escape hatch for exactly this: `DENIAL_LIMITS`
+(`denialTracking.ts:12`) sets `maxConsecutive: 3`, and
+`handleDenialLimitExceeded` (`permissions.ts:1002`) falls back to prompting the
+operator so a stuck agent becomes a human decision. It never fired. The reason is
+ordering, and it is verifiable in source: the `unavailable` branch returns its
+deny at `permissions.ts:875-885`, while `recordDenial` sits at
+`permissions.ts:897` — *after* that return.
+
+So infrastructure denials never increment the denial counter, and the
+three-strikes fallback is unreachable on precisely the path where the agent is
+most comprehensively stuck. A classifier-decision denial loop breaks out after 3;
+an outage denial loop does not break out at all.
+
+### Retracted: I cannot attribute a block to a specific command
+
+The first pass categorised denials from their reason text, which is sound —
+each reason names its own action ("`rm -rf`", "PID 63032", "`/tmp`"). I then
+tried to go further and pair every block to the exact command that caused it,
+using the `[auto-mode] new action being classified:` debug line. **That
+attribution does not hold, and I am discarding the consistency numbers it
+produced.**
+
+Three pairing strategies, each defeated:
+
+1. *Sequential* (action → next block). Broken by concurrency: 354 of 1,669 calls
+   (21%, across 15 logs) overlap another classifier call in the same log, because
+   subagents fan out and share one debug stream. One session ran 35 subagents.
+2. *Start-time* (`durationMs` back-dating). Better, but still crossed calls whose
+   requests began within the same window.
+3. *Non-overlapping only, log-truncated actions excluded.* Still wrong: it
+   attributed "force-deletes a file outside the project" to `bun run maps:lint`,
+   and "would edit a test file" to `shasum -a 256 …`.
+
+The residual error has two sources beyond concurrency: the action line is
+truncated at 500 characters and **multi-line actions are logged across multiple
+lines**, so every `Apply_patch` collapses to a shared first line
+(`Apply_patch *** Begin Patch`) and every heredoc to `Bash uv run python - <<'PY'`;
+and the 56 errored calls emit an action line but no usage line, shifting any
+positional pairing.
+
+This is itself the finding: **auto-mode decisions are not auditable after the
+fact.** Denials are never written to session JSONL, the debug log carries no
+correlation id joining an action to its verdict, and the action text is lossy.
+Anything requiring "which command was denied, and was that consistent" cannot be
+answered from what is retained. Reason-text analysis is the ceiling.
+
 ## Uncertainty
 
 - **Command recovery is partial.** Reasons are complete for all 128 blocks;
@@ -201,6 +285,17 @@ loops in the dataset — one PID was attempted four different ways.
   approved and a denial they would have refused look identical here. The
   over-blocking judgement is therefore mine on the merits of each action, not an
   observed disagreement rate.
+- **Consistency is unmeasured, not measured-and-clean.** See the retraction
+  above. Whether the classifier gives the same verdict to the same action twice
+  is the obvious next question and this data cannot answer it. My working
+  impression from the reason text is that verdicts are context-sensitive by
+  design (the system prompt instructs it to weigh user intent from the
+  transcript), which would make some variation correct rather than a defect —
+  but that is an impression, not a result.
+- **The 55 fail-closed denials are one session.** They may be a single bad
+  afternoon for the Codex pool rather than a recurring pattern. The ordering
+  defect that let them run unbounded is structural and permanent; the frequency
+  of the trigger is a one-observation sample.
 - **The `other` bucket is genuinely mixed** (20 items) and resisted clean
   categorisation: it contains real security saves, real over-blocks, and several
   one-off judgement calls about specific code changes.
