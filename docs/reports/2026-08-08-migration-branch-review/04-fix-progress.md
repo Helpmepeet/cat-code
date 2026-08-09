@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 101/242** — counted against the review's original 61 High and
+**Progress: Fix 102/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -105,6 +105,7 @@ count tracks individually verified findings, not commit count.
 | S07 HIGH a failed transcript append dropped its pending batch and left all later flushes poisoned | fixed | `d2d35bb` | failed batches are restored to the queue head for retry, while the scheduled drain logs the failure, clears its active promise, and re-arms if work remains; session-storage suite (25 pass); app typecheck and renderer production build |
 | S06 HIGH Config close paths discarded successful-redemption audit records | fixed | `2e626c2` | every Settings close, including Config's apply/Escape paths, now uses the audit-preserving wrapper without changing Config's normal result display; Settings regression (3 pass); app typecheck and renderer production build |
 | S06 MED failed settings migrations were permanently marked complete | fixed | `5fe618d` | the two settings-model migrations propagate write errors; startup logs and leaves the version pending rather than saving it, and version 15 retries previously-completed installs; both migration suites (14 pass); app typecheck and renderer production build |
+| S06 MED shared settings could fall back to truncate-then-write | fixed | `fa1a54d` | settings writes now fail closed after a temp-file fsync and atomic rename, with best-effort directory fsync; no direct-write fallback remains; atomic-write and real contention regressions (3 pass); app typecheck and renderer production build |
 
 ## Known verification limitation
 
