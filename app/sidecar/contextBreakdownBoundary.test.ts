@@ -156,6 +156,36 @@ test('a request inside the freshness floor is answered without recomputing', asy
   ).toHaveLength(5)
 })
 
+test('a failed analysis neither caches nor strands the next request', async () => {
+  let calls = 0
+  const domain: SidecarContextBreakdownDomain = {
+    snapshot: async () => {
+      calls++
+      if (calls === 1) throw new Error('transcript temporarily unavailable')
+      return BREAKDOWN
+    },
+  }
+  const server = makeServer(domain)
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  await flush()
+  await flush()
+
+  // The attach analysis failed silently: no cache, error frame, or stuck latch.
+  expect(calls).toBe(1)
+  expect(received.find(f => f.kind === 'context-breakdown.snapshot')).toBeUndefined()
+  expect(received.find(f => f.kind === 'error')).toBeUndefined()
+
+  server.handleData(
+    connection,
+    clientFrame({ type: 'context-breakdown.request', requestId: 'retry-1' }),
+  )
+  await flush()
+
+  expect(calls).toBe(2)
+  expect(received.find(f => f.kind === 'context-breakdown.snapshot')).toBeDefined()
+})
+
 // Fail closed: a malformed frame must not reach the (expensive) analysis.
 test('rejects malformed requests without running the analysis', async () => {
   const { domain, calls } = countingDomain()
