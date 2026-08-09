@@ -15,6 +15,8 @@ import { join } from 'node:path'
 import {
   extractAutoModeRuleEntries,
   extractAutoModeRuleIds,
+  hasAutoModeCategory,
+  isAutoModeVerdictCategoryValid,
   normalizeAutoModeCategory,
   readRawAutoModeCategory,
   resolveAutoModeCategory,
@@ -93,23 +95,16 @@ describe('extractAutoModeRuleEntries', () => {
 })
 
 describe('readRawAutoModeCategory (second parse layer)', () => {
-  test('reads a string category', () => {
-    expect(readRawAutoModeCategory({ category: 'Data Exfiltration' })).toBe(
-      'Data Exfiltration',
-    )
+  test('reads the category without validating it', () => {
+    expect(
+      readRawAutoModeCategory({
+        category: { kind: 'built_in', id: 'data_exfiltration' },
+      }),
+    ).toEqual({ kind: 'built_in', id: 'data_exfiltration' })
   })
 
-  test('treats a non-string category as absent rather than as an error', () => {
-    // This is the whole reason the parse is two-layered. If the category were
-    // validated with the core verdict, any of these would fail the parse — and
-    // a failed parse fails closed to shouldBlock: true, converting an ALLOW
-    // into a BLOCK on the strength of a junk label.
+  test('returns undefined when category is absent', () => {
     for (const input of [
-      { category: 42 },
-      { category: null },
-      { category: { id: 'x' } },
-      { category: ['a'] },
-      { category: true },
       {},
       null,
       undefined,
@@ -117,6 +112,29 @@ describe('readRawAutoModeCategory (second parse layer)', () => {
     ]) {
       expect(readRawAutoModeCategory(input)).toBeUndefined()
     }
+  })
+})
+
+describe('hasAutoModeCategory', () => {
+  test('distinguishes an omitted category from malformed category data', () => {
+    expect(hasAutoModeCategory({ shouldBlock: false })).toBe(false)
+    expect(hasAutoModeCategory({ category: null })).toBe(true)
+  })
+})
+
+describe('isAutoModeVerdictCategoryValid', () => {
+  test('rejects category data on allow verdicts', () => {
+    expect(
+      isAutoModeVerdictCategoryValid(false, {
+        category: { kind: 'built_in', id: 'data_exfiltration' },
+      }),
+    ).toBe(false)
+    expect(isAutoModeVerdictCategoryValid(false, {})).toBe(true)
+    expect(
+      isAutoModeVerdictCategoryValid(true, {
+        category: { kind: 'built_in', id: 'data_exfiltration' },
+      }),
+    ).toBe(true)
   })
 })
 
@@ -135,29 +153,28 @@ describe('normalizeAutoModeCategory', () => {
 })
 
 describe('resolveAutoModeCategory', () => {
-  test('resolves a known rule name to its id', () => {
-    const r = resolveAutoModeCategory('Data Exfiltration', IDS)
+  test('resolves a known built-in category', () => {
+    const r = resolveAutoModeCategory(
+      { kind: 'built_in', id: 'data_exfiltration' },
+      IDS,
+    )
     expect(r).toEqual({
-      category: 'data_exfiltration',
-      rawCategory: 'Data Exfiltration',
-      recognized: true,
+      category: { kind: 'built_in', id: 'data_exfiltration' },
     })
   })
 
-  test('drops an unrecognized name but keeps it for telemetry', () => {
-    // A user-authored rule, or a name the model invented. The verdict is
-    // unaffected either way — only the label is lost.
-    const r = resolveAutoModeCategory('My Own House Rule', IDS)
+  test('drops malformed and unrecognized categories', () => {
+    const r = resolveAutoModeCategory(
+      { kind: 'built_in', id: 'not_a_rule' },
+      IDS,
+    )
     expect(r.category).toBeUndefined()
-    expect(r.rawCategory).toBe('My Own House Rule')
-    expect(r.recognized).toBe(false)
   })
 
-  test('handles an absent or blank category', () => {
-    for (const raw of [undefined, '', '   ']) {
+  test('handles an absent or invalid category', () => {
+    for (const raw of [undefined, '', '   ', { kind: 'configured', index: 0 }]) {
       const r = resolveAutoModeCategory(raw, IDS)
       expect(r.category).toBeUndefined()
-      expect(r.recognized).toBe(false)
     }
   })
 
@@ -166,29 +183,20 @@ describe('resolveAutoModeCategory', () => {
       '',
       '   ',
       '!!!',
-      '$defaults',
-      'a'.repeat(5000),
-      '../../etc/passwd',
-      '<block>no</block>',
+      { kind: 'built_in', id: '$defaults' },
+      { kind: 'built_in', id: 'a'.repeat(5000) },
+      { kind: 'built_in', id: '../../etc/passwd' },
+      { kind: 'configured', source: 'permissions.deny', index: 0 },
     ]
     for (const raw of hostile) {
       const r = resolveAutoModeCategory(raw, IDS)
-      // The contract: every result is a plain label, recognized or not. There
-      // is no shape here that a caller could read as "allow this action".
-      expect(typeof r.recognized).toBe('boolean')
-      expect(r.category === undefined || IDS.has(r.category)).toBe(true)
-      expect(Object.keys(r).sort()).toEqual([
-        'category',
-        'rawCategory',
-        'recognized',
-      ])
+      expect(r.category === undefined || IDS.has(r.category.id)).toBe(true)
+      expect(Object.keys(r)).toEqual(['category'])
     }
   })
 
   test('an empty id set recognizes nothing and still resolves cleanly', () => {
     const r = resolveAutoModeCategory('Data Exfiltration', new Set())
     expect(r.category).toBeUndefined()
-    expect(r.rawCategory).toBe('Data Exfiltration')
-    expect(r.recognized).toBe(false)
   })
 })

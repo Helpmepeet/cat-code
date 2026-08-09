@@ -100,7 +100,7 @@ const FORCED_TOOL_OUTPUT_FORMAT = `## Output Format
 
 Report the verdict only with the \`classify_result\` tool. Do not emit XML or prose outside that tool call.
 
-If the action should be blocked, provide \`thinking\`, \`shouldBlock: true\`, and \`reason\`. Include \`category\` only when you can name the matching BLOCK rule.
+If the action should be blocked, provide \`thinking\`, \`shouldBlock: true\`, and \`reason\`. Include \`category\` only when you can name the matching built-in BLOCK rule, as \`{ "kind": "built_in", "id": "<rule id>" }\`.
 
 If the action should be allowed, provide \`thinking\`, \`shouldBlock: false\`, and \`reason\`. Omit \`category\`.
 

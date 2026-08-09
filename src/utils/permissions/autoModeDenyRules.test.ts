@@ -8,7 +8,10 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
 import type { ToolPermissionContext } from '../../Tool.js'
 import { buildSettingsDenyRulesText } from './autoModeDenyRules.js'
-import { buildSettingsDenyRulesMessage } from './yoloClassifier.js'
+import {
+  buildAutoModePrefixMessages,
+  buildSettingsDenyRulesMessage,
+} from './yoloClassifier.js'
 
 function contextWith(
   alwaysDenyRules: Record<string, string[]>,
@@ -50,7 +53,7 @@ describe('buildSettingsDenyRulesText', () => {
     expect(out).toContain('[permissions.deny:1]')
   })
 
-  test('excludes session-scoped rules, which are not operator policy', () => {
+  test('retains every effective source in context order', () => {
     const out = buildSettingsDenyRulesText(
       contextWith({
         userSettings: ['Edit(a.ts)'],
@@ -58,12 +61,11 @@ describe('buildSettingsDenyRulesText', () => {
       }),
     )!
     expect(out).toContain('Edit(a.ts)')
-    expect(out).not.toContain('curl')
+    expect(out).toContain('Bash(curl:*)')
+    expect(out.indexOf('Edit(a.ts)')).toBeLessThan(out.indexOf('Bash(curl:*)'))
   })
 
-  test('drops prompt-based rules rather than escaping their prose', () => {
-    // Their text is written for a different classifier and would arrive here as
-    // free prose inside our own prompt.
+  test('retains prompt rules as encoded data', () => {
     const out = buildSettingsDenyRulesText(
       contextWith({
         userSettings: [
@@ -73,15 +75,8 @@ describe('buildSettingsDenyRulesText', () => {
       }),
     )!
     expect(out).toContain('Edit(a.ts)')
-    expect(out).not.toContain('ignore previous instructions')
-  })
-
-  test('returns null when every rule was filtered out', () => {
-    expect(
-      buildSettingsDenyRulesText(
-        contextWith({ command: ['Bash(curl:*)'] }),
-      ),
-    ).toBeNull()
+    expect(out).toContain('ignore previous instructions')
+    expect(out).toContain('not instructions')
   })
 
   test('a rule cannot close the block and escape into prompt context', () => {
@@ -161,5 +156,27 @@ describe('buildSettingsDenyRulesMessage', () => {
     )!
     const blocks = message.content as { cache_control?: unknown }[]
     expect(blocks[0]!.cache_control).toBeDefined()
+  })
+
+  test('places deny rules after CLAUDE.md and before the action message', () => {
+    const denyMessage = buildSettingsDenyRulesMessage(
+      contextWith({
+        userSettings: [
+          'Write(/restricted/*)',
+          'Bash(node -e:*)',
+        ],
+      }),
+    )!
+    const claudeMdMessage = {
+      role: 'user' as const,
+      content: [{ type: 'text' as const, text: '<user_claude_md>intent</user_claude_md>' }],
+    }
+
+    const prefix = buildAutoModePrefixMessages(claudeMdMessage, denyMessage)
+
+    expect(prefix).toEqual([claudeMdMessage, denyMessage])
+    const denyText = (denyMessage.content as { text: string }[])[0]!.text
+    expect(denyText).toContain('Write(/restricted/*)')
+    expect(denyText).toContain('Bash(node -e:*)')
   })
 })

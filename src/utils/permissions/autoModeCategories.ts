@@ -27,12 +27,23 @@
  * A junk label would then convert an ALLOW into a BLOCK, manufacturing exactly
  * the over-blocking this port exists to remove.
  *
- * So anything that is not a string is simply absent.
+ * So malformed category data is simply absent.
  */
-export function readRawAutoModeCategory(input: unknown): string | undefined {
+export function readRawAutoModeCategory(input: unknown): unknown {
   if (input === null || typeof input !== 'object') return undefined
-  const value = (input as Record<string, unknown>).category
-  return typeof value === 'string' ? value : undefined
+  return (input as Record<string, unknown>).category
+}
+
+export function hasAutoModeCategory(input: unknown): boolean {
+  if (input === null || typeof input !== 'object') return false
+  return Object.hasOwn(input, 'category')
+}
+
+export function isAutoModeVerdictCategoryValid(
+  shouldBlock: boolean,
+  input: unknown,
+): boolean {
+  return shouldBlock || !hasAutoModeCategory(input)
 }
 
 /** Upstream's slug rule: lowercase, non-alphanumerics collapse to underscores. */
@@ -102,11 +113,12 @@ export function extractAutoModeRuleIds(
 }
 
 export type ResolvedAutoModeCategory = {
-  /** Normalized id when it matches a known rule, else undefined. */
-  category: string | undefined
-  /** The model's raw string, kept for telemetry even when unrecognized. */
-  rawCategory: string | undefined
-  recognized: boolean
+  category: AutoModeCategory | undefined
+}
+
+export type AutoModeCategory = {
+  kind: 'built_in'
+  id: string
 }
 
 /**
@@ -114,17 +126,17 @@ export type ResolvedAutoModeCategory = {
  * value, and none of them can express "reject this verdict".
  */
 export function resolveAutoModeCategory(
-  raw: string | undefined,
+  raw: unknown,
   knownIds: ReadonlySet<string>,
 ): ResolvedAutoModeCategory {
-  if (raw === undefined || raw.trim() === '') {
-    return { category: undefined, rawCategory: undefined, recognized: false }
+  if (
+    raw !== null &&
+    typeof raw === 'object' &&
+    raw.kind === 'built_in' &&
+    typeof raw.id === 'string' &&
+    knownIds.has(raw.id)
+  ) {
+    return { category: { kind: 'built_in', id: raw.id } }
   }
-  const normalized = normalizeAutoModeCategory(raw)
-  if (knownIds.has(normalized)) {
-    return { category: normalized, rawCategory: raw, recognized: true }
-  }
-  // Unrecognized: a user-authored rule, or a name the model invented. Either
-  // way the verdict stands; only the label is dropped.
-  return { category: undefined, rawCategory: raw, recognized: false }
+  return { category: undefined }
 }

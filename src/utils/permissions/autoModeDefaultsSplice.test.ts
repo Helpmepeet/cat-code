@@ -193,6 +193,6 @@ describe('assembleUpstreamSystemPrompt', () => {
       createHash('sha256')
         .update(out)
         .digest('hex'),
-    ).toBe('7a0f0472b3ced381e7b6683f00b14663c5a609ebaffd0aac9586373aabb97503')
+    ).toBe('910bae0fcd640e212d71572bb9ed2737ddc84c86e8daaf027fbdf1497d113598')
   })
 })

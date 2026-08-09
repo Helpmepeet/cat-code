@@ -41,6 +41,7 @@ import {
 import {
   extractAutoModeRuleEntries,
   extractAutoModeRuleIds,
+  isAutoModeVerdictCategoryValid,
   readRawAutoModeCategory,
   resolveAutoModeCategory,
 } from './autoModeCategories.js'
@@ -336,33 +337,62 @@ const yoloClassifierResponseSchema = lazySchema(() =>
 
 export const YOLO_CLASSIFIER_TOOL_NAME = 'classify_result'
 
-const YOLO_CLASSIFIER_TOOL_SCHEMA: BetaToolUnion = {
+export const YOLO_CLASSIFIER_TOOL_SCHEMA: BetaToolUnion = {
   type: 'custom',
   name: YOLO_CLASSIFIER_TOOL_NAME,
   description: 'Report the security classification result for the agent action',
   input_schema: {
-    type: 'object',
-    properties: {
-      thinking: {
-        type: 'string',
-        description: 'Brief step-by-step reasoning.',
+    oneOf: [
+      {
+        type: 'object',
+        properties: {
+          thinking: {
+            type: 'string',
+            description: 'Brief step-by-step reasoning.',
+          },
+          shouldBlock: {
+            type: 'boolean',
+            const: false,
+            description: 'Allow the action.',
+          },
+          reason: {
+            type: 'string',
+            description: 'Brief explanation of the classification decision.',
+          },
+        },
+        required: ['thinking', 'shouldBlock', 'reason'],
+        additionalProperties: false,
       },
-      shouldBlock: {
-        type: 'boolean',
-        description:
-          'Whether the action should be blocked (true) or allowed (false)',
+      {
+        type: 'object',
+        properties: {
+          thinking: {
+            type: 'string',
+            description: 'Brief step-by-step reasoning.',
+          },
+          shouldBlock: {
+            type: 'boolean',
+            const: true,
+            description: 'Block the action.',
+          },
+          reason: {
+            type: 'string',
+            description: 'Brief explanation of the classification decision.',
+          },
+          category: {
+            type: 'object',
+            properties: {
+              kind: { type: 'string', const: 'built_in' },
+              id: { type: 'string', enum: [...getAutoModeRuleIds()] },
+            },
+            required: ['kind', 'id'],
+            additionalProperties: false,
+          },
+        },
+        required: ['thinking', 'shouldBlock', 'reason'],
+        additionalProperties: false,
       },
-      reason: {
-        type: 'string',
-        description: 'Brief explanation of the classification decision',
-      },
-      category: {
-        type: 'string',
-        description:
-          'When blocking, the exact name of the BLOCK rule that matched. Omit when allowing.',
-      },
-    },
-    required: ['thinking', 'shouldBlock', 'reason'],
+    ],
   },
 }
 
@@ -573,6 +603,15 @@ export function buildSettingsDenyRulesMessage(
       },
     ],
   }
+}
+
+export function buildAutoModePrefixMessages(
+  claudeMdMessage: Anthropic.MessageParam | null,
+  settingsDenyRulesMessage: Anthropic.MessageParam | null,
+): Anthropic.MessageParam[] {
+  return [claudeMdMessage, settingsDenyRulesMessage].filter(
+    (message): message is Anthropic.MessageParam => message !== null,
+  )
 }
 
 /**
@@ -886,10 +925,10 @@ export async function classifyYoloAction(
   const settingsDenyRulesMessage = feature('AUTO_MODE_UPSTREAM_PORT')
     ? buildSettingsDenyRulesMessage(context)
     : null
-  const prefixMessages: Anthropic.MessageParam[] = [
+  const prefixMessages = buildAutoModePrefixMessages(
     claudeMdMessage,
     settingsDenyRulesMessage,
-  ].filter((message): message is Anthropic.MessageParam => message !== null)
+  )
 
   let toolCallsLength = actionCompact.length
   let userPromptsLength = 0
@@ -1085,20 +1124,50 @@ export async function classifyYoloAction(
         }
       }
 
+      if (
+        !isAutoModeVerdictCategoryValid(
+          parsed.shouldBlock,
+          toolUseBlock.input,
+        )
+      ) {
+        logForDebugging(
+          'Auto mode classifier: allow verdict included a category',
+          { level: 'warn' },
+        )
+        logAutoModeOutcome('parse_failure', model, {
+          failureKind: 'category_on_allow',
+        })
+        return {
+          shouldBlock: true,
+          reason: 'Invalid classifier response - blocking for safety',
+          model,
+          usage,
+          durationMs,
+          promptLengths,
+          stage1RequestId,
+          stage1MsgId,
+        }
+      }
+
       // Second parse layer. The verdict above is already final; reading the
-      // label cannot fail and cannot alter shouldBlock. A non-string category
+      // label cannot fail and cannot alter shouldBlock. A malformed category
       // is absent, and an unrecognized name drops the label and keeps the
       // verdict.
       const resolvedCategory = resolveAutoModeCategory(
         readRawAutoModeCategory(toolUseBlock.input),
         getAutoModeRuleIds(),
       )
+      if (parsed.shouldBlock && resolvedCategory.category === undefined) {
+        logForDebugging(
+          'Auto mode classifier: dropped missing or invalid block category',
+          { level: 'warn' },
+        )
+      }
       const classifierResult = {
         thinking: parsed.thinking,
         shouldBlock: parsed.shouldBlock,
         reason: parsed.reason ?? 'No reason provided',
         category: resolvedCategory.category,
-        rawCategory: resolvedCategory.rawCategory,
         model,
         usage,
         durationMs,
@@ -1111,7 +1180,7 @@ export async function classifyYoloAction(
       // classifier is bigger than main loop — auto-compact won't save us).
       logAutoModeOutcome('success', model, {
         durationMs,
-        category: resolvedCategory.category,
+        category: resolvedCategory.category?.id,
         mainLoopTokens,
         classifierInputTokens,
         classifierTokensEst,
@@ -1328,9 +1397,8 @@ function logAutoModeOutcome(
     classifierType?: string
     failureKind?: string
     /**
-     * Resolved rule id only, never the model's raw string: this is a bounded
-     * value from the vendored inventory, whereas rawCategory is free text the
-     * model authored and must not reach analytics.
+     * Resolved rule id only: this is a bounded value from the vendored
+     * inventory and must not include model-authored data.
      */
     category?: string
     durationMs?: number

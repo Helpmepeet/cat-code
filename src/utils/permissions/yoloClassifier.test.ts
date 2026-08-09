@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { ToolPermissionContext } from '../../Tool.js'
 import { buildSettingsDenyRulesText } from './autoModeDenyRules.js'
 import { getAutoModeClassifierAttempts } from './autoModeProviderLadder.js'
+import { YOLO_CLASSIFIER_TOOL_SCHEMA } from './yoloClassifier.js'
 
 describe('auto mode provider ladder', () => {
   test('starts Claude classifiers on the configured Anthropic provider and crosses to GPT', () => {
@@ -19,6 +20,18 @@ describe('auto mode provider ladder', () => {
       { provider: 'openai', model: 'gpt-5.6-sol' },
       { provider: 'openai', model: 'gpt-5.6-luna' },
     ])
+  })
+})
+
+describe('auto mode verdict tool schema', () => {
+  test('uses distinct allow and block shapes', () => {
+    const schema = JSON.stringify(YOLO_CLASSIFIER_TOOL_SCHEMA.input_schema)
+    expect(schema).toContain('"oneOf"')
+    expect(schema).toContain('"shouldBlock":{"type":"boolean","const":false,')
+    expect(schema).toContain('"shouldBlock":{"type":"boolean","const":true,')
+    expect(schema).toContain(
+      '"category":{"type":"object","properties":{"kind":{"type":"string","const":"built_in"},"id":{"type":"string","enum":',
+    )
   })
 })
 
