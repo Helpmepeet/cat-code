@@ -501,3 +501,8 @@ test('a repeated turn value returns the identical state object', () => {
   // Reference equality, so a re-broadcast cannot churn a React render.
   expect(reduceConnectionState(state, turnStatus('session-1', false))).toBe(state)
 })
+
+test('session removal drops the connection entry', () => {
+  const state = { sessions: { gone: { status: 'ready' as const, inputEnabled: true } } }
+  expect(reduceConnectionState(state, { type: 'session-removed', sessionId: 'gone' })).toEqual({ sessions: {} })
+})

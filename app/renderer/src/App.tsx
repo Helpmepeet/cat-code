@@ -970,6 +970,10 @@ export function App() {
         }
       }
       if (event.type === 'session-removed') {
+        dispatchConnection({ type: 'session-removed', sessionId: event.appSessionId })
+        dispatchTasks({ type: 'session-removed', sessionId: event.appSessionId })
+        dispatchLease({ type: 'session-removed', sessionId: event.appSessionId })
+        dispatchSessionActionRuntime({ type: 'session-removed', sessionId: event.appSessionId })
         removedIdsRef.current.add(event.appSessionId)
         lazyRestoreClaimsRef.current.delete(event.appSessionId)
         cancelledRestoresRef.current.delete(event.appSessionId)

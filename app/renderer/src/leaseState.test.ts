@@ -64,6 +64,11 @@ test('a lease snapshot lands under its own session and never leaks across sessio
   expect(selectLeaseSnapshot(state, null)).toBeNull()
 })
 
+test('session removal drops a retained lease key', () => {
+  expect(reduceLeaseState({ bySession: { gone: undefined } }, { type: 'session-removed', sessionId: 'gone' }))
+    .toEqual({ bySession: {} })
+})
+
 test('a later snapshot replaces the earlier one for that session', () => {
   let state = createLeaseState()
   state = reduceLeaseState(state, { type: 'frame', frame: frame('s1', snapshot()) })

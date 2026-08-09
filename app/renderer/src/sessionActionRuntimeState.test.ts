@@ -153,4 +153,13 @@ describe('sessionActionRuntimeState', () => {
     })
     expect(next).toBe(state)
   })
+
+  test('session removal drops retained result and error entries', () => {
+    const state = {
+      lastBySession: { [SESSION]: resultFrame() as Extract<ServerFrame, { kind: 'session-action.result' }> },
+      errorBySession: { [SESSION]: { requestId: 'request', message: 'failed' } },
+    }
+    expect(reduceSessionActionRuntimeState(state, { type: 'session-removed', sessionId: SESSION }))
+      .toEqual({ lastBySession: {}, errorBySession: {} })
+  })
 })

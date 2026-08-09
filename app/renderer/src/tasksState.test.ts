@@ -175,3 +175,8 @@ test('P4-8b stoppableTaskIdAt — an out-of-range / empty selection returns null
   expect(stoppableTaskIdAt([taskItem()], 5)).toBeNull()
   expect(stoppableTaskIdAt([taskItem()], -1)).toBeNull()
 })
+
+test('session removal drops a retained tasks key', () => {
+  expect(reduceTasksState({ bySession: { gone: undefined } }, { type: 'session-removed', sessionId: 'gone' }))
+    .toEqual({ bySession: {} })
+})

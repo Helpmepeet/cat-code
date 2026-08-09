@@ -34,6 +34,8 @@ export type ConnectionState = {
   sessions: Record<SessionId, ConnectionSnapshot>
 }
 
+export type ConnectionAction = ServerFrame | { type: 'session-removed'; sessionId: SessionId }
+
 const CONNECTING: ConnectionSnapshot = {
   status: 'connecting',
   inputEnabled: false,
@@ -210,8 +212,15 @@ function lifecycleConnectionStatus(
 
 export function reduceConnectionState(
   state: ConnectionState,
-  frame: ServerFrame,
+  action: ConnectionAction,
 ): ConnectionState {
+  if (!('kind' in action)) {
+    if (!(action.sessionId in state.sessions)) return state
+    const sessions = { ...state.sessions }
+    delete sessions[action.sessionId]
+    return { ...state, sessions }
+  }
+  const frame = action
   if (isAppReadyFrame(frame)) {
     return {
       ...state,

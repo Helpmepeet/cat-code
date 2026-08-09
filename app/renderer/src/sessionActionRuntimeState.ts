@@ -38,6 +38,7 @@ export type SessionActionRuntimeAction =
    * Match the request id so an older dialog can never erase a newer action.
    */
   | { type: 'discard-result'; sessionId: SessionId; requestId: string }
+  | { type: 'session-removed'; sessionId: SessionId }
 
 export function createSessionActionRuntimeState(): SessionActionRuntimeState {
   return { lastBySession: {}, errorBySession: {} }
@@ -47,6 +48,16 @@ export function reduceSessionActionRuntimeState(
   state: SessionActionRuntimeState,
   action: SessionActionRuntimeAction,
 ): SessionActionRuntimeState {
+  if (action.type === 'session-removed') {
+    if (!(action.sessionId in state.lastBySession) && !(action.sessionId in state.errorBySession)) {
+      return state
+    }
+    const lastBySession = { ...state.lastBySession }
+    const errorBySession = { ...state.errorBySession }
+    delete lastBySession[action.sessionId]
+    delete errorBySession[action.sessionId]
+    return { ...state, lastBySession, errorBySession }
+  }
   if (action.type === 'discard-result') {
     const result = state.lastBySession[action.sessionId]
     const error = state.errorBySession[action.sessionId]

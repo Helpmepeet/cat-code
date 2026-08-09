@@ -24,7 +24,9 @@ export type LeaseStateStore = {
   bySession: Record<SessionId, LeaseSnapshot | undefined>
 }
 
-export type LeaseAction = { type: 'frame'; frame: ServerFrame }
+export type LeaseAction =
+  | { type: 'frame'; frame: ServerFrame }
+  | { type: 'session-removed'; sessionId: SessionId }
 
 export function createLeaseState(): LeaseStateStore {
   return { bySession: {} }
@@ -34,6 +36,12 @@ export function reduceLeaseState(
   state: LeaseStateStore,
   action: LeaseAction,
 ): LeaseStateStore {
+  if (action.type === 'session-removed') {
+    if (!(action.sessionId in state.bySession)) return state
+    const bySession = { ...state.bySession }
+    delete bySession[action.sessionId]
+    return { ...state, bySession }
+  }
   const { frame } = action
 
   if (frame.kind === 'lease.snapshot') {

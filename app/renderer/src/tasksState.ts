@@ -20,13 +20,21 @@ export type TasksState = {
   bySession: Record<SessionId, TasksSnapshot | undefined>
 }
 
-export type TasksAction = { type: 'frame'; frame: ServerFrame }
+export type TasksAction =
+  | { type: 'frame'; frame: ServerFrame }
+  | { type: 'session-removed'; sessionId: SessionId }
 
 export function createTasksState(): TasksState {
   return { bySession: {} }
 }
 
 export function reduceTasksState(state: TasksState, action: TasksAction): TasksState {
+  if (action.type === 'session-removed') {
+    if (!(action.sessionId in state.bySession)) return state
+    const bySession = { ...state.bySession }
+    delete bySession[action.sessionId]
+    return { ...state, bySession }
+  }
   const { frame } = action
 
   if (frame.kind === 'tasks.snapshot') {
