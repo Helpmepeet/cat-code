@@ -388,5 +388,8 @@ async function runProductionHardeningSmoke(
   if (failed === 0) {
     process.stdout.write('[hardening-smoke] production path passed\n')
   }
-  app.exit(failed === 0 ? 0 : 1)
+  // Use Electron's normal lifecycle so production main receives before-quit
+  // and synchronously tears down the real sidecars this harness may have spawned.
+  process.exitCode = failed === 0 ? 0 : 1
+  app.quit()
 }

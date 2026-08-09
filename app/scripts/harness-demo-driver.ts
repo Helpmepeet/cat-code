@@ -96,6 +96,9 @@ function mustEnv(name: string): string {
 }
 
 function exitElectron(code: number): void {
-  app.exit(code)
+  // before-quit owns the production supervisor shutdown. app.exit() skips it
+  // and can orphan the sidecars this demo deliberately starts.
+  process.exitCode = code
+  app.quit()
   setTimeout(() => process.exit(code), 250).unref()
 }
