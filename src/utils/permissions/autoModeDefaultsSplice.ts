@@ -61,6 +61,34 @@ export function autoModeSectionDropsDefaults(
   return !userEntries.includes(AUTO_MODE_DEFAULTS_SENTINEL)
 }
 
+/**
+ * List form of the same rule, for callers that report the effective config
+ * rather than assemble prompt text — `claude auto-mode config`, chiefly.
+ *
+ * It exists so the reporting surface and the prompt cannot disagree about what
+ * the operator's settings actually do. A CLI that prints REPLACE semantics
+ * while the classifier splices is worse than no CLI.
+ */
+export function spliceAutoModeDefaultsList(
+  userEntries: readonly string[] | undefined,
+  defaults: readonly string[],
+): string[] {
+  if (!userEntries || userEntries.length === 0) return [...defaults]
+  const out: string[] = []
+  let splicedDefaults = false
+  for (const entry of userEntries) {
+    if (entry === AUTO_MODE_DEFAULTS_SENTINEL) {
+      if (!splicedDefaults) {
+        out.push(...defaults)
+        splicedDefaults = true
+      }
+      continue
+    }
+    out.push(entry)
+  }
+  return out
+}
+
 export type AutoModeSectionConfig = {
   allow?: string[]
   soft_deny?: string[]

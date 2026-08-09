@@ -39,7 +39,9 @@ import {
   getBashPromptDenyDescriptions,
 } from './bashClassifier.js'
 import {
+  extractAutoModeRuleEntries,
   extractAutoModeRuleIds,
+  readRawAutoModeCategory,
   resolveAutoModeCategory,
 } from './autoModeCategories.js'
 import {
@@ -133,16 +135,38 @@ export type AutoModeRules = {
  * never the Anthropic-internal template.
  */
 export function getDefaultExternalAutoModeRules(): AutoModeRules {
+  // With the port on, the vendored inventory IS the shipped default, and it has
+  // a hard tier. Reporting the legacy template here would tell the operator the
+  // classifier enforces something other than what it enforces.
+  if (feature('AUTO_MODE_UPSTREAM_PORT')) {
+    // Upstream rules are multi-line with nested sub-bullets, so the legacy
+    // one-line-per-bullet reader miscounts them.
+    const entries = (tag: string): string[] =>
+      extractAutoModeRuleEntries(UPSTREAM_PERMISSIONS_TEMPLATE, tag)
+    return {
+      allow: entries('user_allow_rules_to_replace'),
+      soft_deny: entries('user_soft_deny_rules_to_replace'),
+      hard_deny: entries('user_hard_deny_rules_to_replace'),
+      environment: extractTaggedBullets(
+        'user_environment_to_replace',
+        UPSTREAM_PERMISSIONS_TEMPLATE,
+      ),
+    }
+  }
   return {
     allow: extractTaggedBullets('user_allow_rules_to_replace'),
     soft_deny: extractTaggedBullets('user_deny_rules_to_replace'),
+    // The legacy template has no hard tier; an empty list is the truth here.
     hard_deny: [],
     environment: extractTaggedBullets('user_environment_to_replace'),
   }
 }
 
-function extractTaggedBullets(tagName: string): string[] {
-  const match = EXTERNAL_PERMISSIONS_TEMPLATE.match(
+function extractTaggedBullets(
+  tagName: string,
+  template: string = EXTERNAL_PERMISSIONS_TEMPLATE,
+): string[] {
+  const match = template.match(
     new RegExp(`<${tagName}>([\\s\\S]*?)</${tagName}>`),
   )
   if (!match) return []
@@ -297,17 +321,16 @@ async function dumpErrorPrompts(
   }
 }
 
-// `category` is optional and a free string, deliberately NOT an enum. Making it
-// a required enum turns a user-authored rule (autoMode.soft_deny is arbitrary
-// prose) or an ordinary allow into a schema validation failure, and a
-// validation failure fails closed into "invalid response" rather than carrying
-// the block. See autoModeCategories.ts.
+// Core verdict only. `category` is deliberately NOT here: this schema decides
+// whether the response is usable at all, and a failed parse fails closed to
+// shouldBlock: true. Validating a advisory label alongside the decision would
+// let a malformed category flip an ALLOW into a BLOCK. It is read separately,
+// leniently, after the core parse succeeds. See autoModeCategories.ts.
 const yoloClassifierResponseSchema = lazySchema(() =>
   z.object({
     thinking: z.string(),
     shouldBlock: z.boolean(),
     reason: z.string(),
-    category: z.string().optional(),
   }),
 )
 
@@ -1062,10 +1085,12 @@ export async function classifyYoloAction(
         }
       }
 
-      // Resolving the category cannot fail and cannot alter shouldBlock: an
-      // unrecognized name drops the label and keeps the verdict.
+      // Second parse layer. The verdict above is already final; reading the
+      // label cannot fail and cannot alter shouldBlock. A non-string category
+      // is absent, and an unrecognized name drops the label and keeps the
+      // verdict.
       const resolvedCategory = resolveAutoModeCategory(
-        parsed.category,
+        readRawAutoModeCategory(toolUseBlock.input),
         getAutoModeRuleIds(),
       )
       const classifierResult = {

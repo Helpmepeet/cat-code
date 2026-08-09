@@ -17,6 +17,7 @@ import {
   assembleUpstreamSystemPrompt,
   autoModeSectionDropsDefaults,
   spliceAutoModeDefaults,
+  spliceAutoModeDefaultsList,
 } from './autoModeDefaultsSplice.js'
 
 const UPSTREAM_DIR = join(
@@ -77,6 +78,37 @@ describe('spliceAutoModeDefaults', () => {
         '- ship',
       ),
     ).toBe('- ship\n- mine')
+  })
+})
+
+describe('spliceAutoModeDefaultsList', () => {
+  // `claude auto-mode config` reports the operator's effective posture. If it
+  // resolved differently from the prompt, it would misreport their own safety
+  // settings back to them.
+  test('agrees with the text splice on every case that matters', () => {
+    const defaults = ['ship one', 'ship two']
+    expect(spliceAutoModeDefaultsList(undefined, defaults)).toEqual(defaults)
+    expect(spliceAutoModeDefaultsList([], defaults)).toEqual(defaults)
+    expect(spliceAutoModeDefaultsList(['mine'], defaults)).toEqual(['mine'])
+    expect(
+      spliceAutoModeDefaultsList([AUTO_MODE_DEFAULTS_SENTINEL, 'mine'], defaults),
+    ).toEqual(['ship one', 'ship two', 'mine'])
+    expect(
+      spliceAutoModeDefaultsList(['mine', AUTO_MODE_DEFAULTS_SENTINEL], defaults),
+    ).toEqual(['mine', 'ship one', 'ship two'])
+    expect(
+      spliceAutoModeDefaultsList(
+        [AUTO_MODE_DEFAULTS_SENTINEL, 'mine', AUTO_MODE_DEFAULTS_SENTINEL],
+        defaults,
+      ),
+    ).toEqual(['ship one', 'ship two', 'mine'])
+  })
+
+  test('returns a copy, so a caller cannot mutate the shipped defaults', () => {
+    const defaults = ['ship']
+    const out = spliceAutoModeDefaultsList(undefined, defaults)
+    out.push('injected')
+    expect(defaults).toEqual(['ship'])
   })
 })
 

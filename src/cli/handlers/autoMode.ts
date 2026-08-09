@@ -8,6 +8,7 @@ import {
   getMainLoopModel,
   parseUserSpecifiedModel,
 } from '../../utils/model/model.js'
+import { spliceAutoModeDefaultsList } from '../../utils/permissions/autoModeDefaultsSplice.js'
 import {
   type AutoModeRules,
   buildDefaultExternalSystemPrompt,
@@ -26,23 +27,27 @@ export function autoModeDefaultsHandler(): void {
 }
 
 /**
- * Dump the effective auto mode config: user settings where provided, external
- * defaults otherwise. Per-section REPLACE semantics — matches how
- * buildYoloSystemPrompt resolves the external template (a non-empty user
- * section replaces that section's defaults entirely; an empty/absent section
- * falls through to defaults).
+ * Dump the effective auto mode config: user settings where provided, shipped
+ * defaults otherwise.
+ *
+ * Resolution must match what the classifier actually does, or this command
+ * misreports the operator's own safety posture. Both paths run through the same
+ * splice helper the prompt assembly uses: a user section replaces that
+ * section's defaults unless it contains the `$defaults` sentinel, which splices
+ * them back in at that position. With the port off there is no sentinel in play
+ * and the behaviour reduces to the legacy replace.
  */
 export function autoModeConfigHandler(): void {
   const config = getAutoModeConfig()
   const defaults = getDefaultExternalAutoModeRules()
   writeRules({
-    allow: config?.allow?.length ? config.allow : defaults.allow,
-    soft_deny: config?.soft_deny?.length
-      ? config.soft_deny
-      : defaults.soft_deny,
-    environment: config?.environment?.length
-      ? config.environment
-      : defaults.environment,
+    allow: spliceAutoModeDefaultsList(config?.allow, defaults.allow),
+    soft_deny: spliceAutoModeDefaultsList(config?.soft_deny, defaults.soft_deny),
+    hard_deny: spliceAutoModeDefaultsList(config?.hard_deny, defaults.hard_deny),
+    environment: spliceAutoModeDefaultsList(
+      config?.environment,
+      defaults.environment,
+    ),
   })
 }
 

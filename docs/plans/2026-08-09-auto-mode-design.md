@@ -31,11 +31,42 @@ compiles out of `build:dev:full` and is opt-in via
 | Advisory verdict category, fail-closed parser (closes G1) | landed `729a3c9e` |
 | Deny-seam hardening and circumvention coverage | landed `1bea2818` |
 | Classifier request/response dump, ungated | landed `537f88e5` |
+| Frozen replay corpus (`scripts/auto-mode-corpus.ts`) | landed `39c13c0b` |
 | **Machine-specific config content (delta 5)** | **not started; operator content decision** |
-| **Replay corpus and gate** | **not started; blocks enabling the flag** |
+| **The replay run itself** | **not started; blocks enabling the flag** |
 
-Nothing is enabled. The remaining gate is the replay corpus: per F4 no policy
-change lands unreplayed, and the corpus is specified but unbuilt.
+Nothing is enabled. The corpus now exists and is frozen; what remains is running
+the replay against it and setting the thresholds.
+
+### The frozen corpus
+
+`fixtures/auto-mode-corpus.json`, verified by
+`fixtures/auto-mode-corpus.sha256` (`shasum -a 256 -c`). Regenerating from
+unchanged transcripts reproduces the file byte for byte.
+
+- **428 block cases** — every retained classifier denial with the reason it
+  gave. These answer "did we fix the over-blocking". (The 162/163 figures
+  elsewhere came from the denial script's default 14-day window; the corpus
+  takes all retained history.)
+- **289 allow cases across 22 tools**, sampled per tool from 11,563 available so
+  no single chatty tool crowds out coverage. These answer "did we break
+  something that used to work" — the question a denial-only corpus cannot ask.
+  The drop is reported on every run, never silent.
+- Outage denials are excluded by design: they carry no verdict, so there is
+  nothing to replay against.
+
+**Caveat carried in the file itself:** `permissionMode` is recorded at session
+start, not per tool call, and can change mid-session. An allow case therefore
+means "this work completed and was not objected to", not "the classifier passed
+this exact call". That is still the right regression signal — if the ported
+prompt blocks it, we want to know regardless of who allowed it first time.
+
+### Still owed before the gate can pass or fail
+
+Point 3 of the specification: model, effort, repetition count, an exact
+parse-failure ceiling, and per-category thresholds. Model choice is open
+operator decision 3 (Sonnet only, or qualify Haiku as the floor), so the
+numbers cannot be fixed here.
 Supporting evidence:
 `docs/reports/2026-08-09-auto-mode-denial-analysis.md` (what our classifier did)
 and `docs/reports/2026-08-09-claude-code-auto-mode-architecture.md` (what
@@ -465,5 +496,5 @@ discovered-PID kills still block — the last by both upstream's
 2. **Headless denial-cap behaviour** (`AbortError` today,
    `permissions.ts:1041-1044`) — held by the operator, untouched here.
 3. **Replay on Sonnet only, or also qualify Haiku as the floor.**
-4. **New:** ungate `CLAUDE_CODE_DUMP_AUTO_MODE` from `USER_TYPE === 'ant'`
+4. ~~Ungate `CLAUDE_CODE_DUMP_AUTO_MODE`~~ — **done** (`537f88e5`), verified
    (amendment F). Cheap, and it is the likely input path for the replay harness.

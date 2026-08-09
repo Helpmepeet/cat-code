@@ -13,8 +13,10 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import {
+  extractAutoModeRuleEntries,
   extractAutoModeRuleIds,
   normalizeAutoModeCategory,
+  readRawAutoModeCategory,
   resolveAutoModeCategory,
 } from './autoModeCategories.js'
 
@@ -26,7 +28,7 @@ const UPSTREAM_DIR = join(
 const PERMISSIONS = readFileSync(join(UPSTREAM_DIR, 'permissions.txt'), 'utf-8')
 const RULES = JSON.parse(
   readFileSync(join(UPSTREAM_DIR, 'rules.json'), 'utf-8'),
-) as { soft_deny: string[]; hard_deny: string[] }
+) as { soft_deny: string[]; hard_deny: string[]; allow: string[] }
 
 const IDS = extractAutoModeRuleIds(PERMISSIONS)
 
@@ -50,6 +52,71 @@ describe('extractAutoModeRuleIds', () => {
 
   test('returns an empty set for an empty template rather than throwing', () => {
     expect(extractAutoModeRuleIds('').size).toBe(0)
+  })
+})
+
+describe('extractAutoModeRuleEntries', () => {
+  // `claude auto-mode defaults` reports these counts to the operator. Counting
+  // a rule's nested sub-bullets as separate rules made the single hard-deny
+  // rule report as four, which is the CLI misdescribing the safety posture.
+  test('reports one entry per rule, matching the CLI dump exactly', () => {
+    const hard = extractAutoModeRuleEntries(
+      PERMISSIONS,
+      'user_hard_deny_rules_to_replace',
+    )
+    const soft = extractAutoModeRuleEntries(
+      PERMISSIONS,
+      'user_soft_deny_rules_to_replace',
+    )
+    expect(hard).toHaveLength(RULES.hard_deny.length)
+    expect(hard).toHaveLength(1)
+    expect(soft).toHaveLength(RULES.soft_deny.length)
+  })
+
+  test('keeps a rule body whole, sub-bullets included', () => {
+    const [dataExfil] = extractAutoModeRuleEntries(
+      PERMISSIONS,
+      'user_hard_deny_rules_to_replace',
+    )
+    expect(dataExfil!.startsWith('Data Exfiltration:')).toBe(true)
+    // The three nested clauses belong to this rule, not beside it.
+    expect(dataExfil).toContain('What is being sent?')
+    expect(dataExfil).toContain('Trace the full destination path.')
+  })
+
+  test('returns nothing for an absent tag rather than throwing', () => {
+    expect(extractAutoModeRuleEntries(PERMISSIONS, 'no_such_tag')).toEqual([])
+    expect(extractAutoModeRuleEntries('', 'user_hard_deny_rules_to_replace')).toEqual(
+      [],
+    )
+  })
+})
+
+describe('readRawAutoModeCategory (second parse layer)', () => {
+  test('reads a string category', () => {
+    expect(readRawAutoModeCategory({ category: 'Data Exfiltration' })).toBe(
+      'Data Exfiltration',
+    )
+  })
+
+  test('treats a non-string category as absent rather than as an error', () => {
+    // This is the whole reason the parse is two-layered. If the category were
+    // validated with the core verdict, any of these would fail the parse — and
+    // a failed parse fails closed to shouldBlock: true, converting an ALLOW
+    // into a BLOCK on the strength of a junk label.
+    for (const input of [
+      { category: 42 },
+      { category: null },
+      { category: { id: 'x' } },
+      { category: ['a'] },
+      { category: true },
+      {},
+      null,
+      undefined,
+      'not an object',
+    ]) {
+      expect(readRawAutoModeCategory(input)).toBeUndefined()
+    }
   })
 })
 
