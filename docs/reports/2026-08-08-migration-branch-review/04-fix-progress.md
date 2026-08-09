@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 43/242** — counted against the review's original 61 High and
+**Progress: Fix 44/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -47,6 +47,7 @@ count tracks individually verified findings, not commit count.
 | V29 MED secret-guard projection fixture asserted its own keys rather than a real projection | fixed | `7de9d5d` | retained the real `scanForSecrets` check; secret-guard suite (27 pass) |
 | V29 HIGH `account.rename` lacked sidecar boundary acceptance coverage | fixed | `d60880e` | seeded vault-backed account regression proves schema acceptance, executor dispatch, and correlated result (1 pass) |
 | V29 MED context-breakdown failure path lacked a retry/no-cache regression | fixed | `e9b0a3d` | failed attach analysis stays silent and the next request re-runs it (7 pass) |
+| V15 MED session-action verbs remained enabled when host and frame planes disagreed about engine reachability | fixed | `a9e0569` | disconnected-sidecar resolver regression; menu/resolver suites (41 pass); renderer typecheck and production build; GUI fidelity pending |
 
 ## Known verification limitation
 
