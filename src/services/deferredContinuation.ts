@@ -1149,6 +1149,13 @@ export function findLatestMainTerminalFailure(
   return parseDeferredTerminalFailure(latestAssistant?.deferredTerminalFailure)
 }
 
+export function computeContinuationNotBefore(
+  observedAt: number,
+  resetAt: number,
+): number {
+  return Math.max(observedAt, resetAt + 60_000)
+}
+
 export async function evaluateDeferredContinuationEligibility(options: {
   messages: readonly Message[]
   model: string
@@ -1192,7 +1199,7 @@ export async function evaluateDeferredContinuationEligibility(options: {
         action: 'schedule',
         observedAt,
         resetAt,
-        notBefore: Math.max(now, resetAt + 60_000),
+        notBefore: computeContinuationNotBefore(now, resetAt),
       }
     }
     default: {

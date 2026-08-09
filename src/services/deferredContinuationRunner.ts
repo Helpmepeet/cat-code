@@ -13,6 +13,7 @@ import {
 import { buildCodexStatus } from './api/codexStatus.js'
 import {
   acquireDeferredContinuationLocks,
+  computeContinuationNotBefore,
   getDeferredContinuationLockTargets,
   listDeferredContinuations,
   listDueDeferredContinuations,
@@ -591,10 +592,7 @@ async function applyAttemptResult(
         Number.isFinite(resetAt) &&
         resetAt > (job.resetAt ?? 0)
       ) {
-        // Same clamp the scheduler applies: a stale reset hint that is still
-        // advancing can land in the past, and an unclamped notBefore burns a
-        // real model turn immediately instead of waiting for the reset.
-        const notBefore = Math.max(result.observedAt, resetAt + 60_000)
+        const notBefore = computeContinuationNotBefore(result.observedAt, resetAt)
         authority.assertHealthy()
         await recordDeferredContinuationNotice({
           version: 1,

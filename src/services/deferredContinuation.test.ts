@@ -10,6 +10,7 @@ import {
 } from './api/codexAccountPool.js'
 import { invalidateUsageCache } from './api/codexUsage.js'
 import {
+  computeContinuationNotBefore,
   evaluateDeferredContinuationEligibility,
   findLatestMainTerminalFailure,
   parseDeferredTerminalFailure,
@@ -113,6 +114,13 @@ function status(action: CodexStatusDecisionAction, notBefore: string | null = nu
 }
 
 describe('deferred continuation eligibility', () => {
+  test('never schedules before the quota-reset grace period or observation time', () => {
+    expect(computeContinuationNotBefore(NOW, NOW + 3_600_000)).toBe(
+      NOW + 3_660_000,
+    )
+    expect(computeContinuationNotBefore(NOW, NOW - 60_000)).toBe(NOW)
+  })
+
   test('runtime narrowing rejects malformed envelopes', () => {
     expect(parseDeferredTerminalFailure({ version: 1, provider: 'openai', code: 'quota_exhausted' })).toBeNull()
     expect(parseDeferredTerminalFailure({ version: 1, provider: 'openai', code: 'made_up', observedAt: NOW })).toBeNull()
