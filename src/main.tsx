@@ -335,6 +335,7 @@ async function logStartupTelemetry(): Promise<void> {
 // @[MODEL LAUNCH]: Consider any migrations you may need for model strings. See migrateSonnet1mToSonnet45.ts for an example.
 // Bump this when adding a new sync migration so existing users re-run the set.
 const CURRENT_MIGRATION_VERSION = 15;
+const DEFERRED_CONTINUATION_WORKER_MAX_TURNS = 20;
 function runMigrations(): void {
   if (getGlobalConfig().migrationVersion !== CURRENT_MIGRATION_VERSION) {
     migrateAutoUpdatesToSettings();
@@ -621,7 +622,7 @@ export async function main() {
     const runner = await import('./services/deferredContinuationRunner.js');
     const job = await runner.prepareBackgroundDeferredContinuation();
     if (!job) return;
-    process.argv = [process.argv[0]!, process.argv[1]!, runner.getContinuationPrompt(job), '--print', '--resume', job.sessionId, '--model', job.context.model, '--permission-mode', job.context.permissionMode, '--output-format', 'json'];
+    process.argv = [process.argv[0]!, process.argv[1]!, runner.getContinuationPrompt(job), '--print', '--resume', job.sessionId, '--model', job.context.model, '--permission-mode', job.context.permissionMode, '--max-turns', String(DEFERRED_CONTINUATION_WORKER_MAX_TURNS), '--output-format', 'json'];
   }
 
   // SECURITY: Prevent Windows from executing commands from current directory

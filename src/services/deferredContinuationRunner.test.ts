@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { mkdtemp, open, readFile, rm } from 'node:fs/promises'
 import {
   getSessionId,
@@ -101,6 +102,17 @@ afterEach(async () => {
 })
 
 describe('deferred continuation runner', () => {
+  test('the background worker argv has a finite agentic turn cap', () => {
+    const mainSource = readFileSync(
+      new URL('../main.tsx', import.meta.url),
+      'utf8',
+    )
+
+    expect(mainSource).toContain('DEFERRED_CONTINUATION_WORKER_MAX_TURNS = 20')
+    expect(mainSource).toContain("'--max-turns'")
+    expect(mainSource).toContain('String(DEFERRED_CONTINUATION_WORKER_MAX_TURNS)')
+  })
+
   test('fixed prompts are cause-correct and contain the reconciliation/no-repeat contract', () => {
     expect(getContinuationPrompt(submittedJob())).toBe(RESET_ELAPSED_CONTINUATION)
     expect(RESET_ELAPSED_CONTINUATION).toContain('should now have reset')
