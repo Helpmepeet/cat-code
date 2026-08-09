@@ -22,7 +22,6 @@ import {
   buildDenyResponse,
   createPermissionState,
   reducePermissionState,
-  selectAdditionalWorkingDirectories,
   selectLastPermissionMode,
   selectPendingPermissionCount,
   selectPermissionContext,
@@ -3386,14 +3385,8 @@ export function App() {
          * background sessions keep rendering without becoming the active tab. */}
         {activeView === 'settings' ? (
           <SettingsShell
-            additionalWorkingDirectories={selectAdditionalWorkingDirectories(
-              permissions,
-              activeSessionId,
-            )}
-            permissionContext={selectPermissionContext(permissions, activeSessionId)}
             agentsSnapshot={selectAgentConfigSnapshot(agentConfig, activeSessionId)}
             cwd={activeSessionId ? tabDescriptorsById.get(activeSessionId)?.cwd ?? null : null}
-            diagnosticsSnapshot={selectDiagnosticsSnapshot(diagnostics, activeSessionId)}
             extensionsSnapshot={selectExtensionsSnapshot(extensions, activeSessionId)}
             initialCategory="agents"
             memorySnapshot={selectMemorySnapshot(goalMemory, activeSessionId)}
@@ -3403,10 +3396,6 @@ export function App() {
             remoteSnapshot={selectRemoteSettingsSnapshot(remoteSettings, activeSessionId)}
             projectBinding={settingsProjectBinding}
             snapshot={selectSettingsSnapshot(settings, activeSessionId)}
-            workspaceTrustSnapshot={selectWorkspaceTrustSnapshot(
-              workspaceTrust,
-              activeSessionId,
-            )}
           />
         ) : activeView === 'goals' ? (
           <GoalsPage

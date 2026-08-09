@@ -450,9 +450,7 @@ describe('Permissions — durable half only', () => {
   test('the running session’s mode, rules and directories are not rendered', () => {
     const html = renderToStaticMarkup(
       <SettingsShell
-        additionalWorkingDirectories={PERMISSION_CONTEXT.additionalWorkingDirectories}
         initialCategory="permissions"
-        permissionContext={PERMISSION_CONTEXT}
         snapshot={SNAPSHOT}
       />,
     )

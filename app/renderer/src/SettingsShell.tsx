@@ -40,15 +40,12 @@ import { useContext, useState } from 'react'
 import type { ReactNode } from 'react'
 import type {
   AgentConfigSnapshot,
-  DiagnosticsSnapshot,
   ExtensionsSnapshot,
   MemorySnapshot,
-  PermissionContextSnapshot,
   RemoteSettingsResultFrame,
   RemoteSettingsSnapshot,
   RemoteVerbMessage,
   SettingsSnapshot,
-  WorkspaceTrustSnapshot,
 } from '../../shared/protocol.js'
 import {
   ACCENT_KEYS,
@@ -170,15 +167,6 @@ export function SettingsShell({
   initialScope?: SettingsScopeKind
   initialCategory?: string
 
-  /* Accepted but no longer rendered here — all four feed LIVE session state,
-   * which Law 1 moves to the session inspector (`MetadataInspector.tsx` already
-   * renders every one of them). Kept in the props type so App keeps type-checking
-   * unchanged while it is mid-edit in another session; drop them from App's call
-   * site and from here in the same later change. */
-  additionalWorkingDirectories?: PermissionContextSnapshot['additionalWorkingDirectories']
-  permissionContext?: PermissionContextSnapshot | null
-  diagnosticsSnapshot?: DiagnosticsSnapshot | null
-  workspaceTrustSnapshot?: WorkspaceTrustSnapshot | null
 }) {
   const [scope, setScope] = useState<SettingsScopeKind>(initialScope)
   const [item, setItem] = useState<string>(initialCategory)
@@ -979,4 +967,3 @@ function ManagedPanel({
     </>
   )
 }
-
