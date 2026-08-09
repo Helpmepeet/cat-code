@@ -184,13 +184,16 @@ Bash or scripting route because the classifier was never told the rule exists.
 
 **Specification (closed):**
 
-- Source: call `loadAllPermissionRulesFromDisk()` and retain effective
-  `ruleBehavior === "deny"` rules. This preserves its managed-only behaviour;
-  otherwise it includes all enabled sources. Denies are additive, so there is
-  no winner among sources and no lower-precedence deny can weaken another.
-- Canonicalize each entry with `permissionRuleValueToString`, deduplicate exact
-  canonical strings in first-seen order, then assign zero-based
-  `permissions.deny` indices. Category references use those emitted indices.
+- Source: consume `ToolPermissionContext.alwaysDenyRules`, the same effective
+  rules the live permission decision uses. Do not reload settings inside the
+  classifier: that creates a permission-module initialization cycle and can
+  diverge from CLI, command, session, managed-only, or runtime updates already
+  represented in the context. Denies are additive, so no lower-precedence deny
+  can weaken another.
+- The context values are already normalized permission-rule strings. Flatten
+  sources in context order, deduplicate exact strings in first-seen order, then
+  assign zero-based `permissions.deny` indices. Category references use those
+  emitted indices.
 - Slot: add one separate cached user message after the optional CLAUDE.md
   message and before transcript/action content. Its exact wrapper is
   `<settings_deny_rules>...</settings_deny_rules>`. It says the entries are
@@ -207,12 +210,12 @@ Bash or scripting route because the classifier was never told the rule exists.
 - A matched circumvention reports the configured category reference from G1.
   Failure to return or validate that reference cannot clear the block.
 
-Tests cover: omission when empty; enabled-source and managed-only loading;
-canonicalization/deduplication; hostile quotes/newlines/tag text remaining data;
-and at least `Write` denied directly but attempted via Bash redirection, plus
-`Bash` denied directly but attempted through a scripting tool. The live-path
-test asserts the deny message precedes the action and the classifier's block
-survives a missing or malformed category.
+Tests cover: omission when empty; effective context-source flattening and
+deduplication; hostile quotes/newlines/tag text remaining data; and at least
+`Write` denied directly but attempted via Bash redirection, plus `Bash` denied
+directly but attempted through a scripting tool. The live-path test asserts the
+deny message precedes the action and the classifier's block survives a missing
+or malformed category.
 
 ### G4 — Delete the settings for architecture we are not shipping (was F5, residual)
 
