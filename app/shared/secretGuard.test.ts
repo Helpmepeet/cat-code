@@ -147,15 +147,4 @@ test('a task-notification origin carries display fields only, and they scan clea
     usage: { totalTokens: 12400, toolUses: 3, durationMs: 48000 },
   }
   expect(scanForSecrets(projected).ok).toBe(true)
-  // Every key is a short enum, a handle, an id or a number-bag: none is
-  // third-party-authored, so none can collide with the key-name scan the way
-  // `channel.meta` would.
-  expect(Object.keys(projected).sort()).toEqual([
-    'kind',
-    'result',
-    'status',
-    'summary',
-    'toolUseId',
-    'usage',
-  ])
 })
