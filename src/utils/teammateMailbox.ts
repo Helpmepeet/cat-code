@@ -59,6 +59,20 @@ const LOCK_OPTIONS = {
   },
 }
 
+// Keep recent acknowledged history for diagnostics without letting an active
+// team's inbox turn every future read and acknowledgement into O(total history).
+// Unread messages are never discarded, regardless of this cap.
+const MAX_RETAINED_READ_MESSAGES = 1_000
+
+function pruneReadMessages(messages: readonly TeammateMessage[]): TeammateMessage[] {
+  let toDrop = Math.max(0, count(messages, message => message.read) - MAX_RETAINED_READ_MESSAGES)
+  return messages.filter(message => {
+    if (!message.read || toDrop === 0) return true
+    toDrop -= 1
+    return false
+  })
+}
+
 const TeammateStructuredPayloadSchema = z.union([
   StructuredTeammateHandoffRequestMessageSchema,
   StructuredTeammateHandoffResultMessageSchema,
@@ -1033,8 +1047,8 @@ export async function claimPendingControl(args: {
 }
 
 /**
- * Finalizes a claimed request record: `consumed` on successful handling, or
- * back to `written` on handler failure so the same response can be retried
+ * Finalizes a claimed request record: removes it on successful handling, or
+ * returns it to `written` on handler failure so the same response can be retried
  * (`claimPendingControl` will match it again on the next poll — the mailbox
  * message itself must also stay unread in that case; see call sites).
  */
@@ -1047,10 +1061,11 @@ export async function finishPendingControl(args: {
     const pendingControls = teamFile.pendingControls ?? []
     const index = pendingControls.findIndex(p => p.requestId === args.requestId)
     if (index === -1) return { teamFile, result: undefined }
-    const nextState = args.outcome === 'consumed' ? 'consumed' as const : 'written' as const
-    const updated = pendingControls.map((p, i) =>
-      i === index ? { ...p, state: nextState } : p,
-    )
+    const updated = args.outcome === 'consumed'
+      ? pendingControls.filter((_, i) => i !== index)
+      : pendingControls.map((p, i) =>
+        i === index ? { ...p, state: 'written' as const } : p,
+      )
     return { teamFile: { ...teamFile, pendingControls: updated }, result: undefined }
   })
 }
@@ -1125,7 +1140,7 @@ export async function acknowledgeMailboxMessages(args: {
       m.messageId && idSet.has(m.messageId) ? { ...m, read: true } : m,
     )
 
-    await writeMailboxAtomically(inboxPath, updated)
+    await writeMailboxAtomically(inboxPath, pruneReadMessages(updated))
   } catch (error) {
     const code = getErrnoCode(error)
     if (code === 'ENOENT') return
@@ -1194,7 +1209,7 @@ export async function markMessageAsReadByIndex(
 
     messages[messageIndex] = { ...message, read: true }
 
-    await writeMailboxAtomically(inboxPath, messages)
+    await writeMailboxAtomically(inboxPath, pruneReadMessages(messages))
     logForDebugging(
       `[TeammateMailbox] markMessageAsReadByIndex: marked message at index ${messageIndex} as read`,
     )
@@ -1267,7 +1282,7 @@ export async function markMessagesAsRead(
     // messages comes from jsonParse — fresh, unshared objects safe to mutate
     for (const m of messages) m.read = true
 
-    await writeMailboxAtomically(inboxPath, messages)
+    await writeMailboxAtomically(inboxPath, pruneReadMessages(messages))
     logForDebugging(
       `[TeammateMailbox] markMessagesAsRead: WROTE ${unreadCount} message(s) as read to ${inboxPath}`,
     )
@@ -2406,7 +2421,7 @@ export async function markMessagesAsReadByPredicate(
       !m.read && predicate(m) ? { ...m, read: true } : m,
     )
 
-    await writeMailboxAtomically(inboxPath, updatedMessages)
+    await writeMailboxAtomically(inboxPath, pruneReadMessages(updatedMessages))
   } catch (error) {
     const code = getErrnoCode(error)
     if (code === 'ENOENT') {

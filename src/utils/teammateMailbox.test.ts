@@ -216,6 +216,35 @@ describe('principal-based mailbox writes', () => {
     // the file by rewriting it as an empty array.
     expect(readFileSync(inboxPath, 'utf-8')).toBe('not valid json{{{')
   })
+
+  test('acknowledgement bounds retained read mailbox history without dropping unread mail', async () => {
+    await writeToMailbox({
+      recipient: alicePrincipal,
+      message: { text: 'create inbox' },
+      teamName: 'review-team',
+    })
+    const inboxPath = getInboxPath('alice', 'review-team')
+    const messages: TeammateMessage[] = Array.from({ length: 1_001 }, (_, index) => ({
+      from: 'team-lead',
+      text: `message-${index}`,
+      timestamp: '2026-08-09T00:00:00.000Z',
+      read: index < 1_000,
+      messageId: `message-${index}`,
+    }))
+    writeFileSync(inboxPath, JSON.stringify(messages))
+
+    await acknowledgeMailboxMessages({
+      recipient: alicePrincipal,
+      teamName: 'review-team',
+      messageIds: ['message-1000'],
+    })
+
+    const persisted = await readMailbox('alice', 'review-team')
+    expect(persisted).toHaveLength(1_000)
+    expect(persisted.every(message => message.read)).toBe(true)
+    expect(persisted[0]?.messageId).toBe('message-1')
+    expect(persisted.at(-1)?.messageId).toBe('message-1000')
+  })
 })
 
 describe('classifyMailboxMessage', () => {
@@ -955,6 +984,9 @@ describe('writeControlToMailbox / writeControlRequestToMailbox authority', () =>
       requestId: 'shutdown-3',
       outcome: 'consumed',
     })
+
+    const snapshot = await (await import('./swarm/teamHelpers.js')).readTeamSnapshot('review-team')
+    expect(snapshot.pendingControls).toEqual([])
 
     const thirdClaim = await claimPendingControl({
       teamName: 'review-team',
