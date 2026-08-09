@@ -169,8 +169,8 @@ export type InboxDispatch = {
   // same as before Task 3.
   regularMessages: TeammateMessage[]
   // Invalid/mismatched controls, and stale-recipient chat/notifications —
-  // acknowledged by exact ID below, never delivered or dispatched.
-  acknowledgeOnlyIds: string[]
+  // acknowledged by exact mailbox identity below, never delivered or dispatched.
+  acknowledgeOnlyKeys: string[]
 }
 
 function emptyInboxDispatch(): InboxDispatch {
@@ -185,7 +185,7 @@ function emptyInboxDispatch(): InboxDispatch {
     modeSetRequests: [],
     planApprovalRequests: [],
     regularMessages: [],
-    acknowledgeOnlyIds: [],
+    acknowledgeOnlyKeys: [],
   }
 }
 
@@ -218,7 +218,17 @@ export function classifyInboxMessages(args: {
         : null
 
     if (!classified) {
-      if (isStructuredProtocolMessage(m.text)) continue
+      if (isStructuredProtocolMessage(m.text)) {
+        // A valid-looking control from a terminated/stale sender cannot be
+        // authorized, so it must never reach the model. Still acknowledge it
+        // by the same legacy-safe key used by the final predicate, otherwise
+        // an idle leader rereads it and takes the team-file lock every second.
+        dispatch.acknowledgeOnlyKeys.push(mailboxMessageKey(m))
+        logForDebugging(
+          `[InboxPoller] Dropping unresolvable structured mailbox message from ${m.from}`,
+        )
+        continue
+      }
       dispatch.regularMessages.push(m)
       continue
     }
@@ -226,7 +236,7 @@ export function classifyInboxMessages(args: {
     switch (classified.kind) {
       case 'invalid_control':
       case 'protocol_mismatch':
-        if (m.messageId) dispatch.acknowledgeOnlyIds.push(m.messageId)
+        dispatch.acknowledgeOnlyKeys.push(mailboxMessageKey(m))
         break
       case 'notification':
         dispatch.regularMessages.push(m)
@@ -238,7 +248,7 @@ export function classifyInboxMessages(args: {
           receiver !== null &&
           m.recipientAllocationId !== receiver.allocationId
         if (isStaleRecipient) {
-          if (m.messageId) dispatch.acknowledgeOnlyIds.push(m.messageId)
+          dispatch.acknowledgeOnlyKeys.push(mailboxMessageKey(m))
         } else {
           dispatch.regularMessages.push(m)
         }
@@ -455,7 +465,7 @@ export function useInboxPoller({
     // Keyed by messageId when present, else the same from/timestamp/text key
     // `getTeammateMailboxAttachments` uses — legacy call sites (still ~15
     // across the repo) write chat with no messageId at all.
-    const consumedKeys = new Set<string>(dispatch.acknowledgeOnlyIds)
+    const consumedKeys = new Set<string>(dispatch.acknowledgeOnlyKeys)
     const trackForAck = (m: TeammateMessage) => {
       consumedKeys.add(mailboxMessageKey(m))
     }

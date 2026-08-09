@@ -160,7 +160,7 @@ describe('classifyInboxMessages', () => {
     expect(dispatch.shutdownRequests).toHaveLength(1)
     expect(dispatch.shutdownRequests[0]?.control).toEqual(control)
     expect(dispatch.regularMessages).toHaveLength(0)
-    expect(dispatch.acknowledgeOnlyIds).toHaveLength(0)
+    expect(dispatch.acknowledgeOnlyKeys).toHaveLength(0)
   })
 
   test('dispatches a correlated shutdown_approved into shutdownApprovals for the leader', () => {
@@ -225,7 +225,7 @@ describe('classifyInboxMessages', () => {
 
     expect(dispatch.shutdownRequests).toHaveLength(0)
     expect(dispatch.regularMessages).toHaveLength(0)
-    expect(dispatch.acknowledgeOnlyIds).toEqual(['m3'])
+    expect(dispatch.acknowledgeOnlyKeys).toEqual(['m3'])
   })
 
   test('a peer (teammate-to-teammate) shutdown_request never dispatches as shutdown, even with a version-2 envelope', () => {
@@ -256,7 +256,7 @@ describe('classifyInboxMessages', () => {
 
     expect(dispatch.shutdownRequests).toHaveLength(0)
     expect(dispatch.regularMessages).toHaveLength(0)
-    expect(dispatch.acknowledgeOnlyIds).toEqual(['m4'])
+    expect(dispatch.acknowledgeOnlyKeys).toEqual(['m4'])
   })
 
   test('an envelope/inner-payload mismatch (forged sender inside a validly-enveloped message) never dispatches as shutdown', () => {
@@ -291,7 +291,7 @@ describe('classifyInboxMessages', () => {
 
     expect(dispatch.shutdownRequests).toHaveLength(0)
     expect(dispatch.regularMessages).toHaveLength(0)
-    expect(dispatch.acknowledgeOnlyIds).toEqual(['m5'])
+    expect(dispatch.acknowledgeOnlyKeys).toEqual(['m5'])
   })
 
   function envelope(
@@ -366,7 +366,7 @@ describe('classifyInboxMessages', () => {
       receiver: leader,
     })
     expect(dispatch.regularMessages).toHaveLength(1)
-    expect(dispatch.acknowledgeOnlyIds).toHaveLength(0)
+    expect(dispatch.acknowledgeOnlyKeys).toHaveLength(0)
   })
 
   test('falls back to plain chat/text-sniff exclusion when no team snapshot is available (legacy team)', () => {
@@ -392,5 +392,8 @@ describe('classifyInboxMessages', () => {
 
     expect(dispatch.shutdownRequests).toHaveLength(0)
     expect(dispatch.regularMessages).toEqual([chat])
+    expect(dispatch.acknowledgeOnlyKeys).toEqual([
+      mailboxMessageKey(controlShaped),
+    ])
   })
 })
