@@ -198,7 +198,7 @@ const BEHAVIOR_LEAD: Record<
  * The other update types keep the engine's own vocabulary rather than a phrasing
  * invented for a case the prototype never had.
  */
-function describeSuggestionOption(update: PermissionUpdate): {
+export function describeSuggestionOption(update: PermissionUpdate): {
   pre: string
   code: string
   post: string

@@ -12,7 +12,7 @@ import { selectShellDescriptors } from './sidebarState.js'
 import { sessionStatusVisual } from './sessionStatusVisual.js'
 import { deriveTabVisualState } from './tabStatus.js'
 import { selectConnection, type ConnectionState } from './connectionState.js'
-import { describeSuggestion } from './permissionPromptModel.js'
+import { describeSuggestionOption } from './permissionPromptModel.js'
 import { basename } from './pathUtils.js'
 import { tabLabel } from './tabBarModel.js'
 
@@ -84,9 +84,10 @@ export function buildDebugShellStateSnapshot(args: {
                   request.request.display_name ?? request.request.tool_name,
                 displayTitle:
                   request.request.title ?? 'Permission required',
-                suggestionLabels: suggestions.map(
-                  suggestion => `Always allow: ${describeSuggestion(suggestion)}`,
-                ),
+                suggestionLabels: suggestions.map(suggestion => {
+                  const { pre, code, post } = describeSuggestionOption(suggestion)
+                  return `${pre}${code}${post}`
+                }),
               }
             }),
           },

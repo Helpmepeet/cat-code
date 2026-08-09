@@ -58,6 +58,12 @@ test('debug snapshot mirrors tab/sidebar selectors and visible permission string
               destination: 'userSettings',
               rules: [{ toolName: 'Bash', ruleContent: 'date' }],
             },
+            {
+              type: 'addRules',
+              behavior: 'deny',
+              destination: 'session',
+              rules: [{ toolName: 'Bash', ruleContent: 'rm:*' }],
+            },
           ],
         },
       }],
@@ -112,7 +118,10 @@ test('debug snapshot mirrors tab/sidebar selectors and visible permission string
         toolName: 'Bash',
         displayTitle: 'Run command?',
         toolDisplayName: 'Shell',
-        suggestionLabels: ['Always allow: allow Bash(date) · User settings'],
+        suggestionLabels: [
+          "Yes, and don't ask again for Bash(date) · User settings",
+          'Yes, and always block Bash(rm:*) · This session',
+        ],
       },
     ],
   })
