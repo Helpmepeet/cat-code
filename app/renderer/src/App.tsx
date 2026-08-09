@@ -1601,10 +1601,17 @@ export function App() {
   useEffect(() => {
     const requests = pendingBulkExportRef.current
     if (!requests) return
+    const engineBySession = Object.fromEntries(
+      requests.map(request => [
+        request.sessionId,
+        connectionHasEngine(selectConnection(connection, request.sessionId).status),
+      ]),
+    )
     const outcome = selectBulkExportOutcome(
       requests,
       sessionActionRuntime.lastBySession,
       sessionActionRuntime.errorBySession,
+      engineBySession,
     )
     if (outcome.status === 'waiting') return
     pendingBulkExportRef.current = null
@@ -1617,7 +1624,7 @@ export function App() {
       exportFileName(`${outcome.sections.length} sessions`),
       bulkExportSavedMessage(outcome.sections.length, outcome.failed),
     )
-  }, [sessionActionRuntime, saveTranscript, toast])
+  }, [connection, sessionActionRuntime, saveTranscript, toast])
 
   // P4-29 — DISARM both Sessions-page one-shots when the page goes away.
   //

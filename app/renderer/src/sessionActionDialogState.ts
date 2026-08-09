@@ -154,9 +154,11 @@ export type BulkExportOutcome =
  *
  * Two settle-failure shapes, kept distinct on purpose:
  *
- *  - the slot holds an explicit `null`, which is the reducer recording a lifecycle
- *    reset on that session (its engine died). The transcript is not coming, so the
- *    leg counts as FAILED rather than hanging the file forever;
+ *  - the slot is absent or holds an explicit `null`, and this session currently
+ *    has no engine. The transcript is not coming, so the leg counts as FAILED
+ *    rather than hanging the file forever. A stale `null` from an older lifecycle
+ *    reset is NOT enough on its own: a reconnected session may have a new export
+ *    in flight;
  *  - the slot holds someone ELSE's result, or nothing yet. That reads as pending
  *    and holds the whole outcome at `waiting`, because the alternative is silently
  *    saving a partial file and calling it complete. The caller owns giving up.
@@ -175,6 +177,7 @@ export function selectBulkExportOutcome(
     >
   >,
   errorsBySession: Readonly<Record<string, { requestId: string; message: string } | null>> = {},
+  engineBySession: Readonly<Record<string, boolean>> = {},
 ): BulkExportOutcome {
   const sections: { title: string | null; text: string }[] = []
   let failed = 0
@@ -185,9 +188,11 @@ export function selectBulkExportOutcome(
       continue
     }
     const slot = resultBySession[request.sessionId]
-    // An explicit null is the lifecycle reset, not an absent key: that session's
-    // engine is gone, so waiting on it would strand every other leg with it.
-    if (slot === null) {
+    // A lifecycle reset only settles this leg when the connection projection
+    // confirms there is still no engine. This keeps a stale null from a prior
+    // disconnect from prematurely saving a new export without its transcript.
+    const hasEngine = engineBySession[request.sessionId] ?? true
+    if (!hasEngine && (slot === null || slot === undefined)) {
       failed += 1
       continue
     }

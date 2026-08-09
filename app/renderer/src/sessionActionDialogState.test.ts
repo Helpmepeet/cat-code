@@ -272,18 +272,29 @@ describe('selectBulkExportOutcome (P4-35)', () => {
     }
   })
 
-  test('a leg whose engine died counts as failed instead of stranding the batch', () => {
-    // An explicit null is the reducer recording a lifecycle reset. Waiting on it
-    // would mean the other four transcripts never reach a file.
+  test('a leg with no result and no engine counts as failed instead of stranding the batch', () => {
     const outcome = selectBulkExportOutcome(
       [request('s1', 'r1', 'First'), request('s2', 'r2')],
-      { s1: done('r1', 'a'), s2: null },
+      { s1: done('r1', 'a') },
+      {},
+      { s1: true, s2: false },
     )
     expect(outcome).toEqual({
       status: 'settled',
       failed: 1,
       sections: [{ title: 'First', text: 'a' }],
     })
+  })
+
+  test('a stale lifecycle null does not settle a new export after the engine reconnects', () => {
+    expect(
+      selectBulkExportOutcome(
+        [request('s1', 'r1')],
+        { s1: null },
+        {},
+        { s1: true },
+      ),
+    ).toEqual({ status: 'waiting' })
   })
 
   test('a correlated transport error settles only its matching export leg', () => {
