@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 88/242** — counted against the review's original 61 High and
+**Progress: Fix 89/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -92,6 +92,7 @@ count tracks individually verified findings, not commit count.
 | A04 MED expanded Edit cards repeated their file path and ± totals in the shell and DiffView header | fixed | `104ea70` | DiffView is the single owner of the file/count header; regression asserts one addition and deletion total each; TranscriptView suite (177 pass); app typecheck and renderer production build; GUI fidelity remains operator-verifiable |
 | A04 MED prose rebuilt a new blockquote component type each render, remounting quote-copy feedback during streaming | fixed | `6a9a553` | prose component map is memoized by raw content and reasoning heading uses a module-stable paragraph override; source identity regression and TranscriptView suite (178 pass); app typecheck and renderer production build; live copy timing remains operator-verifiable |
 | A04 MED Tool Inspector re-split and re-searched all output on unrelated toolbar renders | fixed | `6f77c4e` | output search is memoized on body/query/match index, leaving Wrap and Copy changes out of the expensive path; Inspector/search suites (44 pass); app typecheck and renderer production build; large-output scrolling remains operator-verifiable |
+| A07 MED parked-and-removed sessions retained full agent-mode snapshots, while lifecycle cleanup left undefined tombstones | fixed | `f246ced` | host removal now deletes the orchestrator entry alongside the other session-scoped stores; lifecycle cleanup is idempotent and deletes rather than retaining undefined; Orchestrator/App suites (69 pass); app typecheck and renderer production build |
 
 ## Known verification limitation
 
