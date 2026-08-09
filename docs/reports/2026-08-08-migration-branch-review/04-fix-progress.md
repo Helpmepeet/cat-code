@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 74/242** — counted against the review's original 61 High and
+**Progress: Fix 75/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -78,6 +78,7 @@ count tracks individually verified findings, not commit count.
 | A18 MED Welcome-screen Codex usage grid left its usage-window cells unlabeled | fixed | `ec3a649` | named 5-hour/weekly progress values and reset labels, with visual percentages hidden from duplicate announcement; Welcome and Transcript suites (200 pass); renderer typecheck and production build; GUI fidelity remains operator-verifiable |
 | A18 MED Agents, Memory, and Remote Settings retained unreachable standalone layouts | fixed | `926a7af` | removed the `embedded` APIs and dead standalone wrappers; affected Settings/Agents/Memory suites (51 pass); renderer typecheck and production build; GUI fidelity remains operator-verifiable |
 | A18 MED session rows advertised a button role while containing nested controls | fixed | `124bde6` | keyboard opening now uses a named title button while the pointer row remains structural; Sessions state/action suites (67 pass); renderer typecheck and production build; GUI fidelity remains operator-verifiable |
+| A18 MED Agents and Memory duplicated the path-copy control | fixed | `ea7cc43` | both surfaces use one clipboard control with shared feedback behavior; Agents and Memory suites (15 pass); renderer typecheck and production build; GUI fidelity remains operator-verifiable |
 
 ## Known verification limitation
 
