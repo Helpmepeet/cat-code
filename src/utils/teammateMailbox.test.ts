@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -108,6 +108,24 @@ describe('teammate mailbox change detection', () => {
     expect(first.messages.filter(m => !m.read)).toHaveLength(1)
     expect(second.changed).toBe(true)
     expect(second.messages.filter(m => !m.read)).toHaveLength(1)
+  })
+
+  test('publishes writes and acknowledgement updates without leaving temp files', async () => {
+    await writeToMailbox(
+      'alice',
+      {
+        from: 'team-lead',
+        text: 'durable update',
+        timestamp: '2026-06-09T00:00:00.000Z',
+      },
+      'review-team',
+    )
+    await markMessagesAsRead('alice', 'review-team')
+
+    const inboxPath = getInboxPath('alice', 'review-team')
+    const persisted = JSON.parse(readFileSync(inboxPath, 'utf8')) as TeammateMessage[]
+    expect(persisted).toEqual([expect.objectContaining({ text: 'durable update', read: true })])
+    expect(readdirSync(join(inboxPath, '..')).filter(name => name.endsWith('.tmp'))).toEqual([])
   })
 })
 

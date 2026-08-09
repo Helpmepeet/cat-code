@@ -8,7 +8,7 @@
  */
 
 import { randomUUID } from 'crypto'
-import { mkdir, readFile, stat, writeFile } from 'fs/promises'
+import { mkdir, readFile, rename, stat, unlink, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { z } from 'zod/v4'
 import {
@@ -148,6 +148,30 @@ async function ensureInboxDir(teamName?: string): Promise<void> {
   const inboxDir = join(getTeamsDir(), safeTeam, 'inboxes')
   await mkdir(inboxDir, { recursive: true })
   logForDebugging(`[TeammateMailbox] Ensured inbox directory: ${inboxDir}`)
+}
+
+/**
+ * Publish a mailbox replacement without exposing a truncate window to the
+ * lock-free read paths. Callers already hold the mailbox lock, so a unique
+ * sibling temp file plus rename preserves both writer serialization and reader
+ * atomicity.
+ */
+async function writeMailboxAtomically(
+  inboxPath: string,
+  messages: readonly TeammateMessage[],
+): Promise<void> {
+  const tempPath = `${inboxPath}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    await writeFile(tempPath, jsonStringify(messages, null, 2), {
+      encoding: 'utf-8',
+      mode: 0o600,
+      flag: 'wx',
+    })
+    await rename(tempPath, inboxPath)
+  } finally {
+    // rename removes the source on success; remove only a failed-write temp.
+    await unlink(tempPath).catch(() => {})
+  }
 }
 
 /**
@@ -303,7 +327,7 @@ async function legacyWriteToMailbox(
 
     messages.push(newMessage)
 
-    await writeFile(inboxPath, jsonStringify(messages, null, 2), 'utf-8')
+    await writeMailboxAtomically(inboxPath, messages)
     logForDebugging(
       `[TeammateMailbox] Wrote message to ${recipientName}'s inbox from ${message.from}`,
     )
@@ -590,11 +614,7 @@ async function writeResolvedEnvelopeToMailbox(args: {
   }
 
   try {
-    await writeFile(
-      inboxPath,
-      jsonStringify([...existing, envelope], null, 2),
-      'utf-8',
-    )
+    await writeMailboxAtomically(inboxPath, [...existing, envelope])
   } catch (error) {
     await release().catch(() => {})
     throw new MailboxWriteError(recipient.name, 'write', error)
@@ -1096,7 +1116,7 @@ export async function acknowledgeMailboxMessages(args: {
       m.messageId && idSet.has(m.messageId) ? { ...m, read: true } : m,
     )
 
-    await writeFile(inboxPath, jsonStringify(updated, null, 2), 'utf-8')
+    await writeMailboxAtomically(inboxPath, updated)
   } catch (error) {
     const code = getErrnoCode(error)
     if (code === 'ENOENT') return
@@ -1165,7 +1185,7 @@ export async function markMessageAsReadByIndex(
 
     messages[messageIndex] = { ...message, read: true }
 
-    await writeFile(inboxPath, jsonStringify(messages, null, 2), 'utf-8')
+    await writeMailboxAtomically(inboxPath, messages)
     logForDebugging(
       `[TeammateMailbox] markMessageAsReadByIndex: marked message at index ${messageIndex} as read`,
     )
@@ -1238,7 +1258,7 @@ export async function markMessagesAsRead(
     // messages comes from jsonParse — fresh, unshared objects safe to mutate
     for (const m of messages) m.read = true
 
-    await writeFile(inboxPath, jsonStringify(messages, null, 2), 'utf-8')
+    await writeMailboxAtomically(inboxPath, messages)
     logForDebugging(
       `[TeammateMailbox] markMessagesAsRead: WROTE ${unreadCount} message(s) as read to ${inboxPath}`,
     )
@@ -1274,9 +1294,10 @@ export async function clearMailbox(
   const inboxPath = getInboxPath(agentName, teamName)
 
   try {
-    // flag 'r+' throws ENOENT if the file doesn't exist, so we don't
-    // accidentally create an inbox file that wasn't there.
-    await writeFile(inboxPath, '[]', { encoding: 'utf-8', flag: 'r+' })
+    // Preserve the existing no-create behavior, while publishing the clear as
+    // an atomic replacement for concurrent lock-free readers.
+    await stat(inboxPath)
+    await writeMailboxAtomically(inboxPath, [])
     logForDebugging(`[TeammateMailbox] Cleared inbox for ${agentName}`)
   } catch (error) {
     const code = getErrnoCode(error)
@@ -2376,7 +2397,7 @@ export async function markMessagesAsReadByPredicate(
       !m.read && predicate(m) ? { ...m, read: true } : m,
     )
 
-    await writeFile(inboxPath, jsonStringify(updatedMessages, null, 2), 'utf-8')
+    await writeMailboxAtomically(inboxPath, updatedMessages)
   } catch (error) {
     const code = getErrnoCode(error)
     if (code === 'ENOENT') {
