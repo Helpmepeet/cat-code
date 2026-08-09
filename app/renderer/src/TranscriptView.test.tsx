@@ -3009,6 +3009,19 @@ test('expansion is keyed by the engine tool_use id, not by row or display key', 
   ).toContain('KEYED_BY_TOOL_USE_ID')
 })
 
+test('inline output reveal depth uses the same tool_use-keyed store across regrouping', () => {
+  const store = createToolCardExpansionStore()
+  const row = runReadRow('r1', '/w/a.ts', { content: '1\tONE' })
+  const toolUseId = row.kind === 'tool-use' ? row.toolUseId : ''
+
+  store.setInlineOutputHead(toolUseId, 230)
+
+  expect(store.getInlineOutputHead(toolUseId)).toBe(230)
+  expect(
+    readFileSync(new URL('./TranscriptView.tsx', import.meta.url), 'utf8'),
+  ).toContain('useInlineOutputWindow(source.lines, toolUseId)')
+})
+
 test('a run head keeps its own expansion as the run grows', () => {
   const store = createToolCardExpansionStore()
   const a = runReadRow('r1', '/w/a.ts')

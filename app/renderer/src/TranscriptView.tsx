@@ -1978,15 +1978,30 @@ function ToolCardBody({
 
   switch (row.toolFamily) {
     case 'bash':
-      return <BashBody content={content} isError={errorTone} onOpenFull={openFull} />
+      return (
+        <BashBody
+          content={content}
+          isError={errorTone}
+          onOpenFull={openFull}
+          toolUseId={row.toolUseId}
+        />
+      )
     case 'grep':
-      return <GrepBody content={content} isError={errorTone} onOpenFull={openFull} />
+      return (
+        <GrepBody
+          content={content}
+          isError={errorTone}
+          onOpenFull={openFull}
+          toolUseId={row.toolUseId}
+        />
+      )
     case 'read':
       return (
         <NumberedBody
           content={content}
           filePath={row.input['file_path']}
           onOpenFull={openFull}
+          toolUseId={row.toolUseId}
         />
       )
     case 'write':
@@ -1997,12 +2012,20 @@ function ToolCardBody({
           result={content}
           isError={errorTone}
           onOpenFull={openFull}
+          toolUseId={row.toolUseId}
         />
       )
     case 'imagegen':
       return <ImageResultBody content={content} isError={errorTone} />
     default:
-      return <PlainLinesBody content={content} isError={errorTone} onOpenFull={openFull} />
+      return (
+        <PlainLinesBody
+          content={content}
+          isError={errorTone}
+          onOpenFull={openFull}
+          toolUseId={row.toolUseId}
+        />
+      )
   }
 }
 
@@ -2074,12 +2097,20 @@ const INLINE_OUTPUT_SCROLLER = 'max-h-[340px] overflow-auto'
  * prototype: `headShown` only grows, and the band removes itself once the gap
  * closes, so there is no collapse control to un-reveal.
  */
-function useInlineOutputWindow(lines: string[]) {
+function useInlineOutputWindow(lines: string[], toolUseId: string) {
+  const store = useToolCardExpansionStore()
   const [headShown, setHeadShown] = useState(INLINE_HEAD_LINES)
+  const rememberedHead = store?.getInlineOutputHead(toolUseId)
+  const visibleHead = rememberedHead ?? headShown
   return {
-    window: selectInlineOutputWindow(lines, headShown),
-    revealMore: () =>
-      setHeadShown(shown => revealMoreLines(shown, lines.length)),
+    window: selectInlineOutputWindow(lines, visibleHead),
+    revealMore: () => {
+      const next = revealMoreLines(visibleHead, lines.length)
+      store?.setInlineOutputHead(toolUseId, next)
+      // A shared Map does not notify React. Keep local state in sync so the
+      // clicked card repaints now; a remount reads the same value from the Map.
+      setHeadShown(next)
+    },
   }
 }
 
@@ -2087,13 +2118,15 @@ function BashBody({
   content,
   isError,
   onOpenFull,
+  toolUseId,
 }: {
   content: string
   isError: boolean
   onOpenFull: (() => void) | null
+  toolUseId: string
 }) {
   const lines = content.split('\n')
-  const { window, revealMore } = useInlineOutputWindow(lines)
+  const { window, revealMore } = useInlineOutputWindow(lines, toolUseId)
   return (
     <div className={INLINE_OUTPUT_SCROLLER}>
       <LogLines lines={window.head} isError={isError} startNo={1} />
@@ -2259,16 +2292,18 @@ function NumberedBody({
   content,
   filePath,
   onOpenFull,
+  toolUseId,
 }: {
   content: string
   filePath: unknown
   onOpenFull: (() => void) | null
+  toolUseId: string
 }) {
   const source = parseReadSource(content)
   // No numbers means we could not recognise the payload as a file read, so we
   // cannot claim to know what language it is in either.
   const lang = source.numbers === null ? null : readSourceLanguage(filePath)
-  const { window, revealMore } = useInlineOutputWindow(source.lines)
+  const { window, revealMore } = useInlineOutputWindow(source.lines, toolUseId)
   return (
     <div className={INLINE_OUTPUT_SCROLLER}>
       <ReadSourceLines
@@ -2303,14 +2338,16 @@ function AdditionsBody({
   content,
   filePath,
   onOpenFull,
+  toolUseId,
 }: {
   content: string
   filePath: unknown
   onOpenFull: (() => void) | null
+  toolUseId: string
 }) {
   const lines = content.split('\n')
   const lang = readSourceLanguage(filePath)
-  const { window, revealMore } = useInlineOutputWindow(lines)
+  const { window, revealMore } = useInlineOutputWindow(lines, toolUseId)
   return (
     <div className={INLINE_OUTPUT_SCROLLER}>
       <AdditionSourceLines lines={window.head} lang={lang} />
@@ -2354,6 +2391,7 @@ function WriteBody({
   result,
   isError,
   onOpenFull,
+  toolUseId,
 }: {
   /** Raw `input.content`, narrowed here rather than trusted. */
   written: unknown
@@ -2362,6 +2400,7 @@ function WriteBody({
   result: string
   isError: boolean
   onOpenFull: (() => void) | null
+  toolUseId: string
 }) {
   if (isError || typeof written !== 'string' || written.length === 0) {
     return (
@@ -2369,11 +2408,17 @@ function WriteBody({
         content={result}
         isError={isError}
         onOpenFull={onOpenFull}
+        toolUseId={toolUseId}
       />
     )
   }
   return (
-    <AdditionsBody content={written} filePath={filePath} onOpenFull={onOpenFull} />
+    <AdditionsBody
+      content={written}
+      filePath={filePath}
+      onOpenFull={onOpenFull}
+      toolUseId={toolUseId}
+    />
   )
 }
 
@@ -2393,13 +2438,15 @@ function GrepBody({
   content,
   isError,
   onOpenFull,
+  toolUseId,
 }: {
   content: string
   isError: boolean
   onOpenFull: (() => void) | null
+  toolUseId: string
 }) {
   const lines = content.split('\n')
-  const { window, revealMore } = useInlineOutputWindow(lines)
+  const { window, revealMore } = useInlineOutputWindow(lines, toolUseId)
   const renderSegments = (slice: string[], keyPrefix: string) =>
     groupGrepLines(slice).map((segment, index) =>
       segment.kind === 'plain' ? (
@@ -2458,13 +2505,15 @@ function PlainLinesBody({
   content,
   isError,
   onOpenFull,
+  toolUseId,
 }: {
   content: string
   isError: boolean
   onOpenFull: (() => void) | null
+  toolUseId: string
 }) {
   const lines = content.split('\n')
-  const { window, revealMore } = useInlineOutputWindow(lines)
+  const { window, revealMore } = useInlineOutputWindow(lines, toolUseId)
   // Flat `text-text-muted` is the prototype's own base here (`FE_T.t2` `#a1a1aa`),
   // and for Grep and Web it is the WHOLE colour rule (`Messages.jsx:695,715`).
   // Deliberately NOT the bash body's `logLineClass`: that heuristic belongs to

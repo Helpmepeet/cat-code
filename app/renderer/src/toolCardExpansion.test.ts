@@ -32,6 +32,17 @@ test('a later choice replaces the earlier one', () => {
   expect(store.get('toolu_a')).toBe(false)
 })
 
+test('inline output reveal depth follows the engine tool_use id', () => {
+  const store = createToolCardExpansionStore()
+
+  expect(store.getInlineOutputHead('toolu_a')).toBeUndefined()
+  store.setInlineOutputHead('toolu_a', 230)
+  store.setInlineOutputHead('toolu_b', 80)
+
+  expect(store.getInlineOutputHead('toolu_a')).toBe(230)
+  expect(store.getInlineOutputHead('toolu_b')).toBe(80)
+})
+
 test('two stores do not share memory', () => {
   const a = createToolCardExpansionStore()
   const b = createToolCardExpansionStore()

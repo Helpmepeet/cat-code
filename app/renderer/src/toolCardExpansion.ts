@@ -31,6 +31,9 @@ export type ToolCardExpansionStore = {
   /** The user's choice for this card, or undefined if they never touched it. */
   get(toolUseId: string): boolean | undefined
   set(toolUseId: string, expanded: boolean): void
+  /** Number of inline output lines the user has revealed for this card. */
+  getInlineOutputHead(toolUseId: string): number | undefined
+  setInlineOutputHead(toolUseId: string, headShown: number): void
 }
 
 /**
@@ -49,10 +52,15 @@ export const ToolCardExpansionContext =
  */
 export function createToolCardExpansionStore(): ToolCardExpansionStore {
   const opened = new Map<string, boolean>()
+  const inlineOutputHeads = new Map<string, number>()
   return {
     get: toolUseId => opened.get(toolUseId),
     set: (toolUseId, expanded) => {
       opened.set(toolUseId, expanded)
+    },
+    getInlineOutputHead: toolUseId => inlineOutputHeads.get(toolUseId),
+    setInlineOutputHead: (toolUseId, headShown) => {
+      inlineOutputHeads.set(toolUseId, headShown)
     },
   }
 }
