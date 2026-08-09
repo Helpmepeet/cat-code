@@ -223,7 +223,6 @@ let rendererDocumentId: string = randomUUID()
 let rendererSubscriptionEpoch = 0
 const rendererHealth = createRendererHealthMonitor()
 let rendererHealthTimer: ReturnType<typeof setInterval> | null = null
-let rendererHealthLastSampleAt = 0
 let rendererFaultWindowStartedAt = Date.now()
 let rendererFaultCount = 0
 
@@ -1673,9 +1672,7 @@ function registerIpcHandlers(): void {
       item.rendererProcessInstanceId.length === 0
     ) return
     const health = rendererHealth.response()
-    const responseAt = Date.now()
-    if (health.recovered || responseAt - rendererHealthLastSampleAt >= 30_000) {
-      rendererHealthLastSampleAt = responseAt
+    if (health.shouldSample) {
       logOperational(health.recovered ? 'renderer.health.recovered' : 'renderer.health.sample', 'info', {
         sessions: item.watermarks.length,
         eventLoopLagMs: item.eventLoopLagMs,

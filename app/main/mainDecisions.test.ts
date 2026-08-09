@@ -76,6 +76,7 @@ describe('renderer health evidence', () => {
       recovered: true,
       priorMisses: 3,
       outageDurationMs: 5_000,
+      shouldSample: true,
     })
     clock = 30_000
     expect(health.probe()).toBeNull()
@@ -676,4 +677,26 @@ describe('createStartupTimers', () => {
     timers.fire()
     expect(runs).toBe(1)
   })
+})
+
+test('renderer health sampling cadence resets with the monitor', () => {
+  // The cadence used to be a module global in main.ts that reset() never
+  // cleared, so the first sample of a reopened window could be suppressed for a
+  // full interval.
+  let clock = 0
+  const health = createRendererHealthMonitor({ now: () => clock })
+  health.reset()
+
+  clock = 1_000
+  expect(health.response().shouldSample).toBe(true)
+  clock = 2_000
+  expect(health.response().shouldSample).toBe(false)
+  clock = 40_000
+  expect(health.response().shouldSample).toBe(true)
+
+  // A window reopen must sample immediately rather than wait out the interval.
+  clock = 41_000
+  health.reset()
+  clock = 42_000
+  expect(health.response().shouldSample).toBe(true)
 })

@@ -47,6 +47,7 @@ export const SIDECAR_RUNTIME_ARGS = [
 export const RENDERER_HEALTH_DEGRADED_MISSES = 3
 export const RENDERER_HEALTH_UNAVAILABLE_MISSES = 6
 export const RENDERER_HEALTH_UNAVAILABLE_INTERVAL_MS = 60_000
+export const RENDERER_HEALTH_SAMPLE_INTERVAL_MS = 30_000
 
 export type RendererHealthEvent = Readonly<{
   event: 'renderer.health.missed' | 'renderer.health.unavailable'
@@ -58,10 +59,12 @@ export type RendererHealthResponse = Readonly<{
   recovered: boolean
   priorMisses: number
   outageDurationMs: number
+  /** False when this response falls inside the current sampling interval. */
+  shouldSample: boolean
 }>
 
 export function createRendererHealthMonitor({
-  now = Date.now,
+  now = () => performance.now(),
 }: {
   now?: () => number
 } = {}) {
@@ -69,6 +72,7 @@ export function createRendererHealthMonitor({
   let lastResponseAt = now()
   let degradedAt: number | null = null
   let lastUnavailableAt: number | null = null
+  let lastSampleAt: number | null = null
 
   return {
     reset(): void {
@@ -76,6 +80,7 @@ export function createRendererHealthMonitor({
       lastResponseAt = now()
       degradedAt = null
       lastUnavailableAt = null
+      lastSampleAt = null
     },
     probe(): RendererHealthEvent | null {
       const current = now()
@@ -108,10 +113,18 @@ export function createRendererHealthMonitor({
     response(): RendererHealthResponse {
       const current = now()
       const recovered = degradedAt !== null
+      // The sampling cadence used to be a module global in main, which reset()
+      // did not clear, so the first sample after a window reopened could be
+      // suppressed for a full interval. All health state lives here now.
+      const shouldSample = recovered ||
+        lastSampleAt === null ||
+        current - lastSampleAt >= RENDERER_HEALTH_SAMPLE_INTERVAL_MS
+      if (shouldSample) lastSampleAt = current
       const result = {
         recovered,
         priorMisses: misses,
         outageDurationMs: degradedAt === null ? 0 : current - degradedAt,
+        shouldSample,
       }
       misses = 0
       degradedAt = null
