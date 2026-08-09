@@ -363,7 +363,8 @@ function persistTranscriptCache(appSessionId: SessionId): void {
         // No resolver: main is engine-free, so a window here is only ever one
         // the engine itself recorded in `run_facts`.
         readRunFacts: path => readTranscriptRunFacts(path, () => null),
-        readCachedRunFacts: id => readCachedRunFacts(TRANSCRIPT_CACHE_DIR, id),
+        readCachedRunFacts: (id, engineSessionId) =>
+          readCachedRunFacts(TRANSCRIPT_CACHE_DIR, id, engineSessionId),
       },
       frames,
     )
@@ -972,8 +973,13 @@ function registerIpcHandlers(): void {
   // Renderer → supervisor: the four allowlisted channels. Main does light shape
   // coercion for UX, but the SIDECAR is the trust boundary (R2) — it re-validates
   // everything with the allowlist schema and applies T4/T6/T6b.
-  ipcMain.on(CH_SUBMIT, (_e, arg: { sessionId: SessionId; prompt: string; options?: unknown }) => {
-    if (typeof arg?.sessionId !== 'string' || typeof arg?.prompt !== 'string') return
+  ipcMain.on(CH_SUBMIT, (_e, arg: { sessionId: SessionId; prompt: unknown; options?: unknown }) => {
+    if (
+      typeof arg?.sessionId !== 'string' ||
+      (typeof arg?.prompt !== 'string' && !Array.isArray(arg?.prompt))
+    ) {
+      return
+    }
     forward(arg.sessionId, {
       type: 'app.submit',
       requestId: generateRequestId(),

@@ -942,7 +942,7 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
   // Park, and retire the draft exactly like a real send (so nothing is left
   // half-submitted), then return WITHOUT touching the bridge.
   expect(submitBody).toContain(
-    "if (action.type === 'hold') {\n      setPendingSubmits(prev =>\n        reducePendingSubmitHeld(prev, sessionId, {\n          text,\n          showQueuedRow: action.showQueuedRow,\n        }),\n      )\n      retireDraft()",
+    "if (action.type === 'hold') {\n      setPendingSubmits(prev =>\n        reducePendingSubmitHeld(prev, sessionId, {\n          text,\n          images,\n          showQueuedRow: action.showQueuedRow,\n        }),\n      )\n      retireDraft()",
   )
   // The drain rides the EXISTING app.submit — no new frame kind or channel.
   expect(submitBody).toContain(
@@ -950,7 +950,9 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
   )
   expect(submitBody).toContain("if (outcome === 'wait') continue")
   expect(submitBody).toContain("if (outcome === 'release') {\n        releasePendingSubmit(sessionId)")
-  expect(submitBody).toContain('getBridge().submit(sessionId, pending.text)')
+  expect(submitBody).toContain(
+    'buildSubmitPrompt(pending.text, pending.images ?? [])',
+  )
   // IDLE-PARK (CC-28) — the arm that makes a reclaimed engine invisible. Nothing
   // is spawning and no turn will end for a parked session, so without this the
   // held prompt would wait forever. It is pinned here for the same reason as its
@@ -976,9 +978,11 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
   // reads, not how deeply it happens to be indented. It broke once when the
   // button moved inside the send/stop ternary without its logic changing.
   expect(source.replace(/\s+/g, ' ')).toContain(
-    'disabled={ !composerGate.editable || prompt.trim().length === 0 || pendingSubmit !== null }',
+    'disabled={ !composerGate.editable || (prompt.trim().length === 0 && images.length === 0) || pendingSubmit !== null }',
   )
-  expect(source).toContain('attachDisabled={!composerGate.editable}')
+  expect(source).toContain(
+    'attachDisabled={!composerGate.editable || preparingImage}',
+  )
   // …and nothing instructs the user to act on a not-yet-connected session.
   expect(source).not.toContain('Focus to reconnect')
 })
@@ -1391,9 +1395,26 @@ test('collapsed pastes are rendered by the field, not parked in a strip above it
   // so a static render is empty: the pill's own shape is covered by
   // `composerDom.test.ts` and its behaviour needs the live app.
   expect(composerField(html)).toContain('contentEditable="true"')
-  // Honest attach affordance: a labelled control, not a silent dead button and
-  // not an invented file picker (no engine attachment capability on the wire).
+  // The attachment control stays labelled beside the inline paste affordance.
+  // Its file-picker and image-submit wiring are pinned in the App source test.
   expect(html).toContain('aria-label="Add attachment"')
+})
+
+test('image attachment wiring reaches both clipboard paste and the file picker', () => {
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+
+  expect(source).toContain(
+    'const image = Array.from(event.clipboardData.files).find',
+  )
+  expect(source).toContain("if (image) {\n      void attachImage(image)")
+  expect(source).toContain('ref={imageInputRef}')
+  expect(source).toContain('if (file) void attachImage(file)')
+  expect(source).toContain(
+    'onAttach={() => imageInputRef.current?.click()}',
+  )
+  expect(source).toContain(
+    'reduceImageAttachmentAdded(prev, sessionId, attachment)',
+  )
 })
 
 test('debug export explicitly marks lossy raw-message retention', () => {
@@ -2314,4 +2335,3 @@ test('P4-55: initial roster reads and launcher retries share one truthful hydrat
     "const hostSnapshotReady = rosterBootstrap.status === 'ready'",
   )
 })
-

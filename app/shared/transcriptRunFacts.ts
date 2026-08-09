@@ -16,7 +16,7 @@
  * are the main/sidecar-side shared modules. The renderer imports neither.
  */
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 
 import type { TranscriptRunFacts } from './protocol.js'
 
@@ -78,7 +78,7 @@ import type { TranscriptRunFacts } from './protocol.js'
 export function readTranscriptRunFacts(
   path: string,
   resolveContextWindow: (model: string) => number | null,
-): TranscriptRunFacts {
+): TranscriptRunFactsRead {
   const empty: TranscriptRunFacts = {
     model: null,
     permissionMode: null,
@@ -88,14 +88,37 @@ export function readTranscriptRunFacts(
   }
   let lines: string[]
   try {
+    // Bounded BEFORE the read. This runs synchronously on Electron's main
+    // thread at every close, park, crash and quit, and `readFileSync` +
+    // `split` materialises the whole file plus a line array at once. A
+    // transcript is append-only and its size is driven by model and tool
+    // output, which the threat model treats as attacker-influenceable
+    // (SECURITY-MINIMUM), so an unbounded read is an availability hole on the
+    // process that owns the window. Over the cap we decline: no facts, no
+    // header, and the renderer's frame fallback answers as it always did.
+    if (statSync(path).size > MAX_RUN_FACTS_TRANSCRIPT_BYTES) {
+      return { facts: empty, authoritative: false }
+    }
     lines = readFileSync(path, 'utf8').split('\n')
   } catch {
-    return empty
+    return { facts: empty, authoritative: false }
   }
 
   const facts = { ...empty }
   let snapshot: RunFactsSnapshot | null = null
-  for (let i = lines.length - 1; i >= 0; i--) {
+  // COMPACTION — usage is stale on BOTH sides of a boundary, and the newest
+  // assistant record is on the wrong side of it more often than not.
+  //
+  // `contextUsage.ts` documents the two halves and this must reproduce them, or
+  // a close writes a pre-compaction token count into a header the renderer
+  // trusts wholesale — a number its own frame fallback would have refused:
+  //   BELOW the boundary, records measure a context that no longer exists.
+  //   ABOVE it, the engine splices the PRESERVED originals back in carrying
+  //   their ORIGINAL usage, so a plain "newest wins" scan lands on one of them.
+  // Resolved in one pass here: `compaction` gives the floor and the preserved
+  // index range, and the usage scan below skips both.
+  const compaction = findCompactionRange(lines)
+  for (let i = lines.length - 1; i >= compaction.floor; i--) {
     const line = lines[i]
     if (!line) continue
     // Parse only what can still contribute.
@@ -143,8 +166,11 @@ export function readTranscriptRunFacts(
       facts.effort ??= readString(record.effort)
     }
     if (record.type === 'assistant' && isRecord(record.message)) {
+      // The MODEL is safe to read from a preserved record — it is the model
+      // that turn ran on either way. Only the token count is invalidated by
+      // compaction, so only that read is range-gated.
       facts.model ??= readString(record.message.model)
-      if (facts.usedTokens === null) {
+      if (facts.usedTokens === null && !inPreservedRange(compaction, i)) {
         facts.usedTokens = readUsedTokens(record.message.usage)
       }
     }
@@ -184,8 +210,120 @@ export function readTranscriptRunFacts(
     (facts.model !== null
       ? readContextWindow(facts.model, resolveContextWindow)
       : null)
-  return facts
+  return { facts, authoritative: snapshot !== null }
 }
+
+/**
+ * The run facts a transcript yields, plus WHERE they came from.
+ *
+ * `authoritative` means a `system`/`run_facts` snapshot was found: the engine
+ * recorded model, permission mode, effort and window as ONE resolved request.
+ * Callers must not patch such a result from another source — including an
+ * `effort: null`, which on this tier means the run used the provider default
+ * and NOT "nothing said". Merging a cached `high` over it reports an effort the
+ * run never used.
+ */
+export type TranscriptRunFactsRead = {
+  facts: TranscriptRunFacts
+  authoritative: boolean
+}
+
+/**
+ * Read cap for the synchronous scan. Generous against real transcripts (the
+ * largest on the author's machine is 13 MB) and small enough that the string
+ * plus line array cannot stall or exhaust the Electron main process.
+ */
+export const MAX_RUN_FACTS_TRANSCRIPT_BYTES = 64 * 1024 * 1024
+
+/** The newest compaction's stale-record ranges, or the whole-file default. */
+type CompactionRange = {
+  /** Lowest index whose usage still describes the live context. */
+  floor: number
+  /** The spliced-back originals above the boundary, or null when absent. */
+  preserved: { start: number; end: number } | null
+}
+
+const NO_COMPACTION: CompactionRange = { floor: 0, preserved: null }
+
+function inPreservedRange(range: CompactionRange, index: number): boolean {
+  return (
+    range.preserved !== null &&
+    index >= range.preserved.start &&
+    index <= range.preserved.end
+  )
+}
+
+/**
+ * Locate the newest `compact_boundary` and the preserved segment it records.
+ *
+ * Mirrors `contextUsage.ts` (`newestCompactBoundary` + `preservedTailRange`)
+ * against raw JSONL rather than projected messages. Substring-gated so an
+ * uncompacted transcript — the common case — pays one `includes` per line and
+ * no parse at all.
+ */
+function findCompactionRange(lines: readonly string[]): CompactionRange {
+  let boundary = -1
+  let head: string | null = null
+  let tail: string | null = null
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]
+    if (!line || !line.includes(COMPACT_BOUNDARY_MARKER)) continue
+    let record: unknown
+    try {
+      record = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (!isRecord(record)) continue
+    if (record.type !== 'system' || record.subtype !== 'compact_boundary') {
+      continue
+    }
+    boundary = i
+    const metadata = isRecord(record.compact_metadata)
+      ? record.compact_metadata
+      : null
+    const segment =
+      metadata && isRecord(metadata.preserved_segment)
+        ? metadata.preserved_segment
+        : null
+    head = segment ? readString(segment.head_uuid) : null
+    tail = segment ? readString(segment.tail_uuid) : null
+    break
+  }
+  if (boundary === -1) return NO_COMPACTION
+  const floor = boundary + 1
+  if (head === null || tail === null) return { floor, preserved: null }
+
+  let start = -1
+  let end = -1
+  for (let i = floor; i < lines.length; i++) {
+    const line = lines[i]
+    if (!line) continue
+    // A uuid is a bare string in the record, so a substring test finds the
+    // candidate lines without parsing every one of them.
+    if (start === -1 && !line.includes(head)) continue
+    if (start !== -1 && !line.includes(tail)) continue
+    let record: unknown
+    try {
+      record = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (!isRecord(record)) continue
+    const uuid = readString(record.uuid)
+    if (start === -1 && uuid === head) start = i
+    if (start !== -1 && uuid === tail) {
+      end = i
+      break
+    }
+  }
+  return start === -1 || end === -1
+    ? { floor, preserved: null }
+    : { floor, preserved: { start, end } }
+}
+
+/** Matches the boundary record `contextUsage.ts` reads on the projected side. */
+const COMPACT_BOUNDARY_MARKER = 'compact_boundary'
 
 /**
  * The cheap pre-test for the authoritative record. Deliberately the SUBTYPE

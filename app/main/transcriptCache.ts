@@ -53,6 +53,7 @@ import {
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
+import type { TranscriptRunFactsRead } from '../shared/transcriptRunFacts.js'
 import {
   HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
   PROTOCOL_VERSION,
@@ -240,6 +241,15 @@ export function createTranscriptCache(
 export function resolveCacheRunFacts(
   derived: TranscriptRunFacts,
   existing: TranscriptRunFacts | null,
+  /**
+   * The derivation found a `system`/`run_facts` snapshot, so its fields are one
+   * coherent request and NOTHING may be patched into them. Above all `effort`:
+   * on this tier `null` means the run used the provider default, and borrowing
+   * a cached `high` over it reports an effort that run never used. Only the
+   * legacy byproduct tier, where `null` really does mean "no record said",
+   * permits the fill-the-gaps merge below.
+   */
+  authoritative = false,
 ): TranscriptRunFacts | undefined {
   // A POSITIVE model match, never merely "the derivation said nothing".
   //
@@ -251,7 +261,10 @@ export function resolveCacheRunFacts(
   // transcript beside it. With no evidence, write no header and let the frame
   // fallback answer; it is derived from those very frames.
   const prior =
-    existing !== null && derived.model !== null && derived.model === existing.model
+    !authoritative &&
+    existing !== null &&
+    derived.model !== null &&
+    derived.model === existing.model
       ? existing
       : null
   const merged: TranscriptRunFacts = {
@@ -292,8 +305,11 @@ export function buildClosedSessionCache(
   deps: {
     /** The session's engine transcript, or null when its path is unknowable. */
     transcriptPath: (engineSessionId: string) => string | null
-    readRunFacts: (transcriptPath: string) => TranscriptRunFacts
-    readCachedRunFacts: (appSessionId: SessionId) => TranscriptRunFacts | null
+    readRunFacts: (transcriptPath: string) => TranscriptRunFactsRead
+    readCachedRunFacts: (
+      appSessionId: SessionId,
+      engineSessionId: string | null,
+    ) => TranscriptRunFacts | null
   },
   frames: ServerFrame[],
 ): TranscriptCache | null {
@@ -309,10 +325,14 @@ export function buildClosedSessionCache(
   if (base.frames.length === 0) return null
 
   const path = deps.transcriptPath(base.header.engineSessionId)
-  const derived = path === null ? EMPTY_RUN_FACTS : deps.readRunFacts(path)
+  const read =
+    path === null
+      ? { facts: EMPTY_RUN_FACTS, authoritative: false }
+      : deps.readRunFacts(path)
   const runFacts = resolveCacheRunFacts(
-    derived,
-    deps.readCachedRunFacts(base.header.appSessionId),
+    read.facts,
+    deps.readCachedRunFacts(base.header.appSessionId, base.header.engineSessionId),
+    read.authoritative,
   )
   if (!runFacts) return base
   return createTranscriptCache(
@@ -320,6 +340,24 @@ export function buildClosedSessionCache(
     base.header.engineSessionId,
     base.frames,
     runFacts,
+  )
+}
+
+/**
+ * Whether a facts object says ANYTHING. The floor both writers share.
+ *
+ * An all-null header is pure loss: it can beat no frame fallback anywhere, and
+ * the renderer stops consulting frames the moment a header exists. It is
+ * reachable — an unreadable transcript yields exactly this — so it is refused
+ * rather than stamped current.
+ */
+export function hasAnyRunFact(facts: TranscriptRunFacts): boolean {
+  return (
+    facts.model !== null ||
+    facts.permissionMode !== null ||
+    facts.effort !== null ||
+    facts.usedTokens !== null ||
+    facts.contextWindow !== null
   )
 }
 
@@ -364,9 +402,17 @@ export function cacheHasCurrentRunFacts(dir: string, id: SessionId): boolean {
 export function readCachedRunFacts(
   dir: string,
   id: SessionId,
+  /**
+   * The engine transcript the CURRENT facts describe. An app session is re-keyed
+   * when it resumes into a new transcript, and an older cache for the same app
+   * id then describes a different run — borrowing from it would relabel that
+   * run's effort and window as this one's.
+   */
+  engineSessionId: string | null,
 ): TranscriptRunFacts | null {
   const header = readCachedHeader(dir, id)
   if (header === null) return null
+  if (header.engineSessionId !== engineSessionId) return null
   // The same three gates `readCache` applies, because this value is about to be
   // COPIED into a freshly written header: facts from a cache the current guard
   // or protocol would reject must not outlive it by being carried forward, and

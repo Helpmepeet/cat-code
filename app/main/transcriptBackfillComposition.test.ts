@@ -239,7 +239,8 @@ function persistClose(cacheDir: string, transcriptPath: string | null): void {
     {
       transcriptPath: () => transcriptPath,
       readRunFacts: path => readTranscriptRunFacts(path, () => null),
-      readCachedRunFacts: id => readCachedRunFacts(cacheDir, id),
+      readCachedRunFacts: (id, engineSessionId) =>
+        readCachedRunFacts(cacheDir, id, engineSessionId),
     },
     closeFrames(),
   )

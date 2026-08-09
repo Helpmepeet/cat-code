@@ -185,7 +185,8 @@ async function main(): Promise<void> {
         //
         // The context window is the exception: nothing persists it, so it is
         // resolved from the model (see `resolveContextWindow` above).
-        runFacts: readTranscriptRunFacts(item.transcriptPath, resolveContextWindow),
+        runFacts: readTranscriptRunFacts(item.transcriptPath, resolveContextWindow)
+          .facts,
       }
       const secret = scanForSecrets(result)
       if (!secret.ok) {
