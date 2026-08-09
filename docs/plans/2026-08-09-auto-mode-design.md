@@ -14,7 +14,9 @@ maintenance problem, and buys upstream's continuing refinement for free. Evidenc
 that the design is settled rather than in flux: nine releases spanning Jul 18 to
 Aug 6 carry the identical architecture and rule count, with only prose growth.
 
-Supporting evidence:
+**Status: contract review returned RED (2026-08-09). Five findings hold and are
+folded in below; one was rejected on evidence. The gaps in "Contract gaps" must
+close before Step 1 starts.** Supporting evidence:
 `docs/reports/2026-08-09-auto-mode-denial-analysis.md` (what our classifier did)
 and `docs/reports/2026-08-09-claude-code-auto-mode-architecture.md` (what
 upstream's is, and how far each claim was verified).
@@ -29,138 +31,250 @@ upstream's is, and how far each claim was verified).
   no"), hard-check-first classification, the user-intent clearing machinery, the
   `$defaults` additive splice, a classifier model decoupled from the main loop,
   harness meta-injection with per-call outcome codes, CLAUDE.md injection
-  (already present in the fork, `yoloClassifier.ts:467-478`).
-- **Prompt assembly** — module 2 (75,469 chars: Environment, Definitions, and
-  the four substitution blocks) assembles from the vendored dump. Module 1
-  (38,180 chars: Context, Threat Model, Input, Default Rule, Scope, User Intent
-  Rule, Evaluation Rules, Classification Process, Output Format) comes from
-  binary extraction, tracked per release.
+  (already present, `yoloClassifier.ts:467-478`).
+- **Prompt assembly** — module 2 (75,469 chars: Environment, Definitions, the
+  four substitution blocks) assembles from the vendored dump. Module 1 (38,180
+  chars: Context, Threat Model, Input, Default Rule, Scope, User Intent Rule,
+  Evaluation Rules, Classification Process, Output Format) comes from binary
+  extraction, tracked per release.
+
+## Contract gaps to close before Step 1
+
+These came out of the RED review. Each is a specification owed before code.
+
+### G1 — The verdict schema needs a discriminated shape (was F1)
+
+`{thinking, shouldBlock, category, reason}` with `category` an enum of the 66
+built-in ids cannot represent two real cases:
+
+- **An ordinary allow.** With `category` required, `shouldBlock: false` has to
+  name a block rule that did not fire.
+- **A user-authored rule.** `autoMode.allow` and `autoMode.soft_deny` are
+  `z.array(z.string())` — arbitrary prose (`src/utils/settings/types.ts:1009-1033`).
+  A custom rule that matches cannot be named by a fixed enum, so it either fails
+  schema validation or is forced into a wrong id. Under "unnameable block = no
+  block", a validation failure degrades to an **unsafe allow**.
+
+Owed: a discriminated verdict where allows carry no category, and blocks carry
+either a built-in id or a validated runtime reference to a settings-authored or
+ordinary deny rule. The enum cannot be the only category channel.
+
+**Also missing, and not in the review:** cat-code's `autoMode` schema has
+`allow`, `soft_deny`, `environment`, and `deny` (ant-only back-compat). **There
+is no `hard_deny` key.** Porting upstream's hard tier requires adding it, and
+whatever G1 settles about category representation must cover it.
+
+### G2 — Model decoupling does not decouple the provider (was F2)
+
+Selecting a Sonnet-class classifier model does not move the request off Codex.
+`resolveRequestProvider` (`src/utils/model/providers.ts:183-195`) says so in its
+own doc comment: GPT-family models always route to OpenAI, while "Claude-family
+and custom model IDs remain ambiguous in this codebase, so they inherit the
+caller's provider when one is supplied; otherwise they fall back to the current
+session/env provider." The classifier's `sideQueryOpts`
+(`yoloClassifier.ts:837-862`) supplies **no provider**. So in a Codex session,
+`autoMode.model = sonnet` sends `sonnet` down the OpenAI path — the outage class
+delta 2 exists to end, unfixed.
+
+Owed, as an explicit table rather than prose: ordered `(provider, model)`
+attempts; provider selection across first-party, Bedrock, Vertex, Foundry;
+symmetric fallback conditions in both directions (Anthropic→GPT as well as
+GPT→Anthropic); settings and env precedence; how retries are accounted across
+hops; and which errors are terminal.
+
+### G3 — The ordinary deny-rule seam was dropped from the port (was F3)
+
+Upstream injects a `<settings_deny_rules>` block telling the classifier about the
+user's ordinary `permissions.deny` rules and asking it to catch **circumvention**
+— the same effect reached through another tool ("`python -c`, `sed -i`, `cat >`,
+heredocs"). This was documented in the architecture report and then not carried
+into this plan.
+
+The fork has live `permissions.deny` settings (`src/utils/settings/types.ts:42-58`)
+loaded across enabled sources (`src/utils/permissions/permissionsLoader.ts:83-95`),
+and `yoloClassifier.ts` references none of them: the `denyDescriptions` it builds
+at `:511` come from `settings.autoMode.soft_deny` only.
+
+Failure this permits: an operator denies an action for one tool; the direct call
+is still blocked by the permission system, but auto mode approves the equivalent
+Bash or scripting route because the classifier was never told the rule exists.
+
+Owed: source-to-slot mapping, precedence, escaping, a category representation
+consistent with G1, and tests that specifically exercise alternate-tool
+circumvention.
+
+### G4 — Delete the settings for architecture we are not shipping (was F5, residual)
+
+Delta 6 as originally written added stage-mode and severity-threshold settings
+while delta 8 defers the two-stage architecture. Settings for an unimplemented
+feature are dead config that later reads as capability. Ship retry counts only;
+add stage and severity settings with the architecture, not before.
 
 ## Delta list (exhaustive)
 
-1. **Output contract** — the one prompt section we own. Replace upstream's XML
-   verdict with the fork's schema-backed forced tool call:
-   `{thinking, shouldBlock, category, reason}`, `category` a schema-level enum of
-   the 66 rule ids. More reliable on the Codex/GPT path, reuses existing parse
-   machinery, and enforces "unnameable block = no block" at the API layer rather
-   than by instruction.
-2. **Classifier model** — new `autoMode.model` settings key;
+1. **Output contract.** Replace upstream's XML verdict with the fork's
+   schema-backed forced tool call. The fork already uses one — see amendment F —
+   so this is an extension, not new machinery. Shape is owed by **G1**: a
+   discriminated verdict, not a flat 66-value enum. It must still enforce
+   "unnameable block = no block" at the API layer rather than by instruction.
+2. **Classifier model and provider.** New `autoMode.model` settings key;
    `CLAUDE_CODE_AUTO_MODE_MODEL` honoured for all user types (closes B2).
-   Sonnet-class default. Keep the existing Sol → Terra → Luna chain
-   (`yoloClassifier.ts:629-639`) and add a cross-provider hop on Codex cap/auth
-   errors — the failure upstream never faces, and the whole 58-denial no-verdict
-   class. Fail closed only when every provider is exhausted.
-3. **Thinking/effort plumbing** — keep `getClassifierThinkingConfig`
+   Sonnet-class default. Keep the Sol → Terra → Luna chain
+   (`yoloClassifier.ts:629-639`). The cross-provider behaviour is owed by **G2**
+   and is the substance of this delta, not a rider on it.
+3. **Thinking/effort plumbing.** Keep `getClassifierThinkingConfig`
    (`yoloClassifier.ts:610`), extend for GPT-family effort. Upstream never runs
    this prompt on GPT models; our fallback path will.
-4. **Config splice** — `$defaults` with upstream's exact semantics (closes B1),
+4. **Config splice.** `$defaults` with upstream's exact semantics (closes B1),
    plus one fork-only guard: a loud startup warning when a config list omits
    `$defaults`. One operator, no review gate, one typo from silently deleting
    every rule.
-5. **Machine facts via config, not prompt edits** — environment/allow/soft_deny
+5. **Machine facts via config, not prompt edits.** Environment/allow/soft_deny
    entries for the shared tree with concurrent sessions, the scratchpad path,
-   worktree roots, `~/.agents/skills/` and its mirrors as ordinary territory, and
-   GUI driving under CLAUDE.md §8 per-run authorization. See amendment C: the
+   worktree roots, `~/.agents/skills/` and mirrors as ordinary territory, GUI
+   driving under CLAUDE.md §8 per-run authorization. See amendment C: the
    session-rules slot may be the designed home for part of this.
    **SKILL.md contents never self-authorize; operator-signed config stays the
    only channel.**
-6. **Server config pinned locally** — severity thresholds, stage mode, and retry
-   counts become settings carrying upstream's compiled-in defaults. No GrowthBook
-   dependency.
-7. **Meta-injection staged by census value** — outcome codes first (addresses the
-   46 repeat denials; carries "unavailable is NOT a policy decision"), then
+6. **Retry counts pinned locally** — a setting carrying upstream's compiled-in
+   default, no GrowthBook dependency. Stage mode and severity thresholds are
+   **not** included; see G4.
+7. **Ordinary deny-rule injection.** Port upstream's `<settings_deny_rules>`
+   seam. Specification owed by **G3**. New delta, added by the review.
+8. **Meta-injection staged by census value** — outcome codes first (addresses the
+   repeat denials; carries "unavailable is NOT a policy decision"), then
    `gitStatus`, then `repoVisibility`. Each behind its own flag, each with a
    boundary test proving tool output can never reach the meta channel.
-8. **Two-stage severity deferred** — lowest-confidence extraction, doubles cost,
+9. **Two-stage severity deferred** — lowest-confidence extraction, doubles cost,
    tunes a fleet we do not have. Revisit only if replay shows single-stage
-   under-performing.
+   under-performing. Nothing about it ships in the meantime (G4).
 
 ## Amendments from verification
 
-Four checks run against the design before adopting it. The ruling stands; these
-change scope, not direction.
+The operator's ruling stands throughout; these change scope, not direction.
 
-### A — Module 1 has no ground truth, but is now well-verified
+### A — Module 1 has no ground truth, but is well-verified
 
 The CLI exposes module 2 only. Module 1 exists solely as binary extraction, and
 the first pass at it missed its opening line. It was therefore verified
-separately before being trusted as the spine of the classifier:
+separately:
 
 - Extracted from **all nine** installed versions with the same boundary walk.
   All nine: zero code tokens, exactly 9 `##` sections, identical closing
   sentence.
-- Version-to-version diffs are coherent prose edits, each traceable to a feature
-  (2.1.220 adds the `<cc_automode_session_rules>` wrapper; 2.1.221 adds
-  "Synthetic Input Self Drive" to the adversarial-pattern list).
+- Version diffs are coherent prose edits, each traceable to a feature (2.1.220
+  adds the `<cc_automode_session_rules>` wrapper; 2.1.221 adds "Synthetic Input
+  Self Drive" to the adversarial-pattern list).
 - Exactly one template interpolation in module 1, `${""}`, evaluating to empty.
   Module 2's single `${VAR}` is escaped literal prose inside a rule about
   deleting an unresolved shell variable, and appears in the CLI output too.
-- **The decisive check:** the escape-decoding rules were validated against ground
+- **Decisive check:** the escape-decoding rules were validated against ground
   truth on module 2, where CLI and binary reconcile to within explained deltas.
   Module 1 uses the same encoding, so the only untested step was boundary
   detection — which the nine-version result covers.
 
-This is strong evidence, not ground truth. Treat module 1 as verified-by-
-construction and re-run the nine-version check on any re-extraction.
+Verified-by-construction, not ground truth. Re-run the nine-version check on any
+re-extraction, and hash-test the transformed prompt as the review asked.
 
-### B — There are three injection slots in module 1, not one
+### B — Three injection slots in module 1, not one
 
-The pre-step named `<cross_session_messages_rule>`. There are also
-`<cc_automode_session_rules>` and `<permissions_template>`.
-(`<subagent_hand_back>` is a false alarm: prose referring to a transcript tag,
-not a slot.) Both unknown slots are blank in the default assembly and must be
-mapped before module 1 is ported.
+`<cross_session_messages_rule>`, `<cc_automode_session_rules>`, and
+`<permissions_template>`. (`<subagent_hand_back>` is a false alarm: prose
+referring to a transcript tag, not a slot.) The two unmapped slots must be mapped
+before module 1 is ported.
 
 ### C — The session-rules slot is probably ours
 
 `<cc_automode_session_rules>` wraps `<cross_session_messages_rule>` immediately
 after a rule about **cross-session permission laundering** — one agent relaying
-an action another was denied. It was added in 2.1.220, so it is actively being
-built out. On a machine running several agents against one working tree, that is
-our exact situation, and it may be the designed home for part of delta 5 rather
-than the environment block. Map it before deciding where our shared-tree facts go.
+an action another was denied. Added in 2.1.220, so actively being built out. On a
+machine running several agents against one working tree that is our exact
+situation, and it may be the designed home for part of delta 5 rather than the
+environment block.
 
-### D — Delta 1 is cheaper than stated, and slightly mis-scoped
+### D — Delta 1 is cheaper than stated
 
 `shouldBlock` appears three times in the Classification Process, outside the
 Output Format section, so the verdict contract is not confined to one owned
 block. It cuts our way: `shouldBlock` is already the fork's field name, so that
-prose is already compatible. Real edit surface is small, but it is not zero and
-"the one section we own" should not be read as "one contiguous edit".
+prose is already compatible.
+
+### E — Module 1 carries no severity or two-stage instructions (review F5, rejected)
+
+The review held that module 1 contains severity and two-stage instructions, making
+it incompatible with a deferred two-stage architecture. Measured against the
+extraction, module 1 contains **zero** `<severity>` tags and zero occurrences of
+"Stage 1", "stage 2", or "two-stage". The four uses of the word "severity" are
+ordinary prose ("scope, severity, or destructiveness"; "high-severity targets").
+
+The "preliminary verdict" language in Classification Process steps 5-6 is
+**single-pass internal reasoning**, not a stage marker: it describes reaching a
+provisional verdict from the rules and then applying user intent, all in one
+call. Upstream's actual two-stage instructions live in separate appended strings
+injected only when stage mode is active, and are not part of module 1.
+
+So module 1 ports cleanly against a single-stage contract. The review's residual
+point is valid and is kept as **G4**.
+
+### F — The fork already has a schema tool contract and a full dump
+
+Two facts that were not in the plan and change two dispositions:
+
+- `yoloClassifier.ts:831-832` states the classifier "uses a single schema-backed
+  tool contract and does not emit or parse XML". Delta 1 extends existing
+  machinery rather than introducing it.
+- `maybeDumpAutoMode` (`yoloClassifier.ts:154`) already writes the **full
+  request and response as JSON** on every classifier call, behind
+  `CLAUDE_CODE_DUMP_AUTO_MODE` — gated on `USER_TYPE === 'ant'` at `:160`, the
+  same gate as the model env var.
+
+That second one is better observability than upstream's error-only dump, and
+ungating it is close to a one-line change. It also **changes the economics of the
+replay gate**: real classifier requests can be captured directly instead of
+reconstructed from JSONL. Size the harness against this path first.
 
 ## Sequencing and gates
 
-**Step 1 — mechanics, no policy change.** Deltas 2, 3, 4, 6. Model decoupling
-ends the no-verdict class; the splice closes B1. Pre-step: map the two unmapped
-injection slots (amendment B).
+**Step 0 — specifications.** Close G1, G2, G3, G4. Map the two unmapped injection
+slots (amendment B). No code.
 
-**Step 2 — the ported prompt and tool contract.** Deltas 1, 5. Gated on replaying
-the denial corpus: temp-path and skills denials must flip to allow, secrets
-denials must still block, parse failures at approximately zero. Prompt wording
-changes only on replay evidence.
+**Step 1 — mechanics.** Deltas 2, 3, 4, 6.
 
-**Step 3 — meta-injection.** Delta 7, with boundary tests.
+**Step 1 is not "no policy change"** — the original plan said so and the review
+was right to reject it. Changing the classifier model changes verdicts; changing
+effort changes verdicts; `$defaults` changes effective policy. Therefore: **land
+Steps 1 and 2 atomically behind a feature gate that is off by default, and open
+the gate only on replay evidence.** Structural unit tests are not sufficient to
+land Step 1 alone.
 
-Each step measured by `scripts/auto-mode-denials.ts`, which gains a rule-id
-column for free once verdicts carry categories.
+**Step 2 — ported prompt, tool contract, deny-rule seam.** Deltas 1, 5, 7.
+
+**Step 3 — meta-injection.** Delta 8, with boundary tests.
 
 Engine battery per CLAUDE.md §3: `bun run build:dev:full` plus focused
 `src/utils/permissions/` suites. Every splice change needs a test proving the
 defaults survive when user config is present — that is exactly the B1 failure
 mode, and it is silent without one.
 
-### Unsized: the replay harness
+### The replay gate is owed a specification
 
-The step-2 gate assumes a corpus replay that **does not exist yet**. What exists
-is single-denial replay (reconstruct one denial's exact inputs from JSONL, re-run
-it). Scaling to roughly 150 denials, likely twice for before-and-after, is real
-work and real quota. Size it before committing to it as a gate; if it proves too
-expensive, the gate needs redefining rather than quietly skipping.
+As written it was not falsifiable, and the review was right. Three things must be
+pinned before it can gate anything:
 
-Corpus counts for the gate, measured over 21 days (162 decision denials; the
-14-day window in the analysis is 151): secrets and credentials 23, temp and
-scratch paths 33, skill machinery 26, kill family 24. Pin the window before
-using these as pass criteria.
+1. **A versioned, frozen corpus.** A rolling `--days` window is not a corpus: a
+   21-day run on 2026-08-09 returned 162 decision denials early in the day and
+   163 later. Freeze it to a file with a hash.
+2. **Positive cases, not just denials.** A denial-only corpus cannot detect new
+   over-blocking of work that previously succeeded. The corpus needs known-safe
+   allows, hard blocks, soft blocks with and without `[named+specifics]` consent,
+   explicit user boundaries, custom settings rules, and provider failures.
+3. **Numbers.** Model, effort, repetition count, an exact parse-failure ceiling
+   (not "approximately zero"), and per-category acceptance thresholds.
+
+Corpus counts measured over 21 days (162 decision denials at time of writing):
+secrets and credentials 23, temp and scratch paths 33, skill machinery 26, kill
+family 24. These are sizing inputs, not acceptance criteria, until the corpus is
+frozen.
 
 ### Maintenance
 
@@ -171,8 +285,9 @@ Build that in from the start.
 
 ## Expected effect
 
-The 58 no-verdict denials disappear. Temp/scratch and skills clusters flip to
-allow. Repeats collapse via outcome codes. Secrets, publish, GUI, and
+The no-verdict denials disappear (conditional on G2 actually decoupling the
+provider, which the original delta did not). Temp/scratch and skills clusters
+flip to allow. Repeats collapse via outcome codes. Secrets, publish, GUI, and
 discovered-PID kills still block — the last by both upstream's
 `interfere_with_workloads` and CLAUDE.md §4, which agree.
 
@@ -184,3 +299,5 @@ discovered-PID kills still block — the last by both upstream's
 2. **Headless denial-cap behaviour** (`AbortError` today,
    `permissions.ts:1041-1044`) — held by the operator, untouched here.
 3. **Replay on Sonnet only, or also qualify Haiku as the floor.**
+4. **New:** ungate `CLAUDE_CODE_DUMP_AUTO_MODE` from `USER_TYPE === 'ant'`
+   (amendment F). Cheap, and it is the likely input path for the replay harness.
