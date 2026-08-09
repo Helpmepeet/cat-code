@@ -40,7 +40,7 @@ function snapshot(
   return { active: true, objective: 'Ship it', phase: 'executing', workers, ...over }
 }
 
-test('reduce folds an agent-mode.snapshot per session and clears it on lifecycle', () => {
+test('reduce folds an agent-mode.snapshot per session and prunes it on lifecycle/removal', () => {
   const frame: AgentModeSnapshotFrame = {
     kind: 'agent-mode.snapshot',
     protocolVersion: 1,
@@ -59,6 +59,16 @@ test('reduce folds an agent-mode.snapshot per session and clears it on lifecycle
   }
   state = reduceOrchestratorState(state, { type: 'frame', frame: lifecycle })
   expect(selectAgentModeSnapshot(state, 's1')).toBeNull()
+  expect('s1' in state.bySession).toBe(false)
+  // A lifecycle for an unseen session is a no-op, not a whole-store allocation.
+  expect(
+    reduceOrchestratorState(state, { type: 'frame', frame: lifecycle }),
+  ).toBe(state)
+
+  state = reduceOrchestratorState(createOrchestratorState(), { type: 'frame', frame })
+  state = reduceOrchestratorState(state, { type: 'session-removed', sessionId: 's1' })
+  expect(selectAgentModeSnapshot(state, 's1')).toBeNull()
+  expect('s1' in state.bySession).toBe(false)
 })
 
 test('a blocked worker waits on the assistant, never on the user', () => {

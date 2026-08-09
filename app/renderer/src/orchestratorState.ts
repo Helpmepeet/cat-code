@@ -34,10 +34,12 @@ import type {
 } from '../../shared/protocol.js'
 
 export type OrchestratorState = {
-  bySession: Record<SessionId, AgentModeSnapshot | undefined>
+  bySession: Record<SessionId, AgentModeSnapshot>
 }
 
-export type OrchestratorAction = { type: 'frame'; frame: ServerFrame }
+export type OrchestratorAction =
+  | { type: 'frame'; frame: ServerFrame }
+  | { type: 'session-removed'; sessionId: SessionId }
 
 export function createOrchestratorState(): OrchestratorState {
   return { bySession: {} }
@@ -47,6 +49,9 @@ export function reduceOrchestratorState(
   state: OrchestratorState,
   action: OrchestratorAction,
 ): OrchestratorState {
+  if (action.type === 'session-removed') {
+    return removeOrchestratorSession(state, action.sessionId)
+  }
   const { frame } = action
 
   if (frame.kind === 'agent-mode.snapshot') {
@@ -56,12 +61,20 @@ export function reduceOrchestratorState(
   }
 
   if (frame.kind === 'lifecycle') {
-    return {
-      bySession: { ...state.bySession, [frame.sessionId]: undefined },
-    }
+    return removeOrchestratorSession(state, frame.sessionId)
   }
 
   return state
+}
+
+function removeOrchestratorSession(
+  state: OrchestratorState,
+  sessionId: SessionId,
+): OrchestratorState {
+  if (!(sessionId in state.bySession)) return state
+  const bySession = { ...state.bySession }
+  delete bySession[sessionId]
+  return { bySession }
 }
 
 export function selectAgentModeSnapshot(
