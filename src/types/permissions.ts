@@ -347,6 +347,15 @@ export type YoloClassifierResult = {
   thinking?: string
   shouldBlock: boolean
   reason: string
+  /**
+   * Which BLOCK rule the classifier named, normalized, when it matches a rule
+   * in the vendored inventory. Advisory: it groups denials for analysis and
+   * never affects `shouldBlock`. Absent for allows, for user-authored rules,
+   * and for names the model invented — see autoModeCategories.ts.
+   */
+  category?: string
+  /** The classifier's raw category string, retained even when unrecognized. */
+  rawCategory?: string
   unavailable?: boolean
   /**
    * API returned "prompt is too long" — the classifier transcript exceeded

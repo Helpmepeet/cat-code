@@ -39,6 +39,10 @@ import {
   getBashPromptDenyDescriptions,
 } from './bashClassifier.js'
 import {
+  extractAutoModeRuleIds,
+  resolveAutoModeCategory,
+} from './autoModeCategories.js'
+import {
   AUTO_MODE_DEFAULTS_SENTINEL,
   assembleUpstreamSystemPrompt,
   autoModeSectionDropsDefaults,
@@ -87,6 +91,13 @@ const UPSTREAM_PERMISSIONS_TEMPLATE: string = feature('AUTO_MODE_UPSTREAM_PORT')
   ? txtRequire(require('./yolo-classifier-prompts/upstream/permissions.txt'))
   : ''
 /* eslint-enable custom-rules/no-process-env-top-level, @typescript-eslint/no-require-imports */
+
+/** Derived once from the vendored inventory so the ids cannot drift from it. */
+let cachedRuleIds: ReadonlySet<string> | null = null
+function getAutoModeRuleIds(): ReadonlySet<string> {
+  cachedRuleIds ??= extractAutoModeRuleIds(UPSTREAM_PERMISSIONS_TEMPLATE)
+  return cachedRuleIds
+}
 
 function isUsingExternalPermissions(): boolean {
   if (process.env.USER_TYPE !== 'ant') return true
@@ -276,11 +287,17 @@ async function dumpErrorPrompts(
   }
 }
 
+// `category` is optional and a free string, deliberately NOT an enum. Making it
+// a required enum turns a user-authored rule (autoMode.soft_deny is arbitrary
+// prose) or an ordinary allow into a schema validation failure, and a
+// validation failure fails closed into "invalid response" rather than carrying
+// the block. See autoModeCategories.ts.
 const yoloClassifierResponseSchema = lazySchema(() =>
   z.object({
     thinking: z.string(),
     shouldBlock: z.boolean(),
     reason: z.string(),
+    category: z.string().optional(),
   }),
 )
 
@@ -305,6 +322,11 @@ const YOLO_CLASSIFIER_TOOL_SCHEMA: BetaToolUnion = {
       reason: {
         type: 'string',
         description: 'Brief explanation of the classification decision',
+      },
+      category: {
+        type: 'string',
+        description:
+          'When blocking, the exact name of the BLOCK rule that matched. Omit when allowing.',
       },
     },
     required: ['thinking', 'shouldBlock', 'reason'],
@@ -1026,10 +1048,18 @@ export async function classifyYoloAction(
         }
       }
 
+      // Resolving the category cannot fail and cannot alter shouldBlock: an
+      // unrecognized name drops the label and keeps the verdict.
+      const resolvedCategory = resolveAutoModeCategory(
+        parsed.category,
+        getAutoModeRuleIds(),
+      )
       const classifierResult = {
         thinking: parsed.thinking,
         shouldBlock: parsed.shouldBlock,
         reason: parsed.reason ?? 'No reason provided',
+        category: resolvedCategory.category,
+        rawCategory: resolvedCategory.rawCategory,
         model,
         usage,
         durationMs,
