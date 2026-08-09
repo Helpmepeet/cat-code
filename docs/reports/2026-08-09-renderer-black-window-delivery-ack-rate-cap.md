@@ -278,7 +278,28 @@ Confirmed in this launch: the two `log.suppressed` records present are both
 The instrument that reports blindness is itself blinded, and it fails hardest on
 the busiest session — which is the one that goes dark.
 
-## Proposed fixes
+## Fixes
+
+> **ALL FIVE LANDED 2026-08-09**, same day as this report. Program record:
+> STATUS rows CC-38 and CC-40. Read the list below as history, not as a backlog.
+>
+> | # | Landed | Commit |
+> |---|---|---|
+> | 1 | Fault reporting non-fatal | `0cbc19ad` |
+> | 2 | Ack flush non-fatal, timer-batched | `0cbc19ad`, revised `8e4acb0a` |
+> | 3 | Diagnostics sub-cap inside the total | `8e4acb0a` (decision: `decisions/IPC-RATE-BUDGET.md`) |
+> | 4 | Sidecar `appSessionId` stamping | `0cbc19ad` |
+> | 5 | Dev-only stderr for renderer death | `e13678aa` |
+>
+> Two review rounds followed (`43c101dd`), then the acknowledgement queue was
+> extracted to an Electron-free module so its behaviour over time is testable
+> (`d6637e3e`, `adb2c387`). **Item 2 changed shape in review:** it now RETAINS and
+> retries a rejected batch instead of dropping it, because a dropped batch pins
+> the delivery-trace watermark and fabricates a renderer stall. The text below
+> still describes the original drop-on-reject proposal.
+>
+> **Still unverified:** operator GUI acceptance. Nothing here has been confirmed
+> against a running app.
 
 Ordered by value. Items 1 and 2 require no protocol change and no movement of
 `MAX_FRAMES_PER_WINDOW`. Item 3 is a boundary-design change and needs a recorded
