@@ -14,7 +14,7 @@
  * render as text nodes — never HTML.
  */
 
-import type { ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import { filterMentionItems } from './mentionPickerModel.js'
 
 export type MentionItem = {
@@ -60,8 +60,18 @@ export function MentionPicker({
   /** Positioning classes — the consumer anchors the popover. */
   className?: string
 }): ReactNode {
-  if (!open) return null
   const filtered = filterMentionItems(items, query)
+  const listRef = useRef<HTMLDivElement>(null)
+
+  // Keep the consumer-owned keyboard cursor visible; without this, Enter can
+  // insert a mention that has scrolled beyond the popover viewport.
+  useEffect(() => {
+    if (!open) return
+    const active = listRef.current?.querySelector('[data-mention-active="true"]')
+    if (active) active.scrollIntoView({ block: 'nearest' })
+  }, [activeIndex, open])
+
+  if (!open) return null
   return (
     <div
       className={`z-[60] w-80 overflow-hidden rounded-xl border border-white/10 bg-surface-raised shadow-[0_14px_40px_rgba(0,0,0,0.6)] ${className}`}
@@ -101,7 +111,10 @@ export function MentionPicker({
         </div>
       ) : null}
 
-      <div className="max-h-60 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <div
+        ref={listRef}
+        className="max-h-60 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      >
         {filtered.length === 0 ? (
           <div className="px-4 py-[18px] text-center text-[11.5px] text-text-subtle">
             No matches
@@ -115,6 +128,7 @@ export function MentionPicker({
               type="button"
               role="option"
               aria-selected={index === activeIndex}
+              data-mention-active={index === activeIndex}
               onClick={() => onPick(item)}
               className={
                 'flex w-full flex-col items-start border-b border-white/[0.03] px-3 py-2 text-left transition-colors ' +

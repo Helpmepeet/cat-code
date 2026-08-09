@@ -1,9 +1,17 @@
+import { readFileSync } from 'node:fs'
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
   MentionPicker,
   type MentionItem,
 } from './MentionPicker.js'
+
+test('the active mention stays marked and is scrolled into the popover viewport', () => {
+  const source = readFileSync(new URL('./MentionPicker.tsx', import.meta.url), 'utf8')
+  expect(source).toContain('data-mention-active={index === activeIndex}')
+  expect(source).toContain("querySelector('[data-mention-active=\"true\"]')")
+  expect(source).toContain("scrollIntoView({ block: 'nearest' })")
+})
 import { filterMentionItems } from './mentionPickerModel.js'
 
 const items: MentionItem[] = [

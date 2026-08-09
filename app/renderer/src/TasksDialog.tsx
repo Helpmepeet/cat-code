@@ -124,6 +124,7 @@ export function TasksDialog({
 }) {
   const [selected, setSelected] = useState(0)
   const dialogRef = useRef<HTMLDivElement>(null)
+  const taskListRef = useRef<HTMLDivElement>(null)
   const [tab, setTab] = useState<DialogTab>('tasks')
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null)
 
@@ -185,6 +186,14 @@ export function TasksDialog({
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [open, tab, flat, selected, onClose, onStopTask])
+
+  // A keyboard-selected task can be stopped with K, so it must never move out
+  // of view while the cursor advances through a long list.
+  useEffect(() => {
+    if (!open || tab !== 'tasks' || selectedWorker) return
+    const active = taskListRef.current?.querySelector('[data-task-active="true"]')
+    if (active) active.scrollIntoView({ block: 'nearest' })
+  }, [open, selected, selectedWorker, tab])
 
   useModalFocus({
     open,
@@ -256,7 +265,12 @@ export function TasksDialog({
           </div>
         )}
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <div
+          ref={taskListRef}
+          className="min-h-0 flex-1 overflow-y-auto px-2 py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          role={tab === 'tasks' && !selectedWorker ? 'listbox' : undefined}
+          aria-label={tab === 'tasks' && !selectedWorker ? 'Tasks' : undefined}
+        >
           {selectedWorker ? (
             <WorkerDetailPanel
               lease={selectLeaseForOwner(leases, selectedWorker.agentId)}
@@ -791,6 +805,9 @@ function TaskRow({ item, isSelected }: { item: TaskSnapshotItem; isSelected: boo
 
   return (
     <div
+      role="option"
+      aria-selected={isSelected}
+      data-task-active={isSelected}
       className={
         'flex items-center gap-2.5 rounded-lg px-2.5 py-2 ' +
         (isSelected ? 'bg-shell-active' : '') +
