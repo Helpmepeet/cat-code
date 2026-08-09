@@ -486,6 +486,26 @@ export function selectComposerGate(input: ComposerGateInput): ComposerGate {
 }
 
 /**
+ * Whether a submit the user did not type can be sent right now: the donut's
+ * Compact row, which puts `/compact` on the wire without going through the draft.
+ *
+ * The two arms the send arrow already treats as sendable. `connectPending` is
+ * deliberately NOT one of them: it would have to park the text, and there is one
+ * parked slot per session, so a button press would either swallow the prompt the
+ * user parked or bounce off the one-message-queued toast.
+ *
+ * Its own function, rather than the expression inline at the call site, because
+ * `editable` sits right next to it in the same JSX and reads like the obvious
+ * simplification — and `editable` INCLUDES `connectPending`, which includes
+ * `preview`. That substitution re-opens CC-28 (a verb sent to a session the
+ * supervisor does not have answers `session_not_found`, which the connection
+ * reducer maps to `dead`) on the one face that renders without an engine.
+ */
+export function canSendUntypedSubmit(gate: ComposerGate): boolean {
+  return gate.engineInputEnabled || gate.turnPending
+}
+
+/**
  * What Enter / the send arrow does.
  *  - `send`   — an engine is attached: it takes the prompt now (idle) or queues
  *               it into the running turn (`turnPending`). Both are one

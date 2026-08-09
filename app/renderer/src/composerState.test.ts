@@ -7,6 +7,7 @@ import {
   countNewlines,
   createHistoryState,
   createPasteState,
+  canSendUntypedSubmit,
   EMPTY_HISTORY_NAV,
   expandPasteRefs,
   formatPasteRef,
@@ -596,6 +597,75 @@ describe('composer gate — three reasons the engine cannot take a submit YET', 
       turnPending: false,
       editable: false,
     })
+  })
+
+  /**
+   * The donut's Compact row sends `/compact` on a click, with no draft behind it
+   * to park. It is therefore a STRICTER question than `editable`, and the whole
+   * table below exists so the obvious-looking simplification to `editable` fails
+   * here rather than in front of an operator: `editable` includes
+   * `connectPending`, `connectPending` includes `preview`, and a verb sent to a
+   * session the supervisor does not have comes back `session_not_found` — which
+   * the connection reducer maps to `dead` (CC-28, pinned again at the App call
+   * site in `App.test.tsx`).
+   */
+  describe('canSendUntypedSubmit — stricter than editable, by design', () => {
+    const cases: [string, ComposerGateInput, boolean][] = [
+      ['a live idle session takes it now', gateInput(), true],
+      [
+        'a mid-turn session queues it into the running turn',
+        gateInput({ connectionInputEnabled: false }),
+        true,
+      ],
+      [
+        'a preview pane has no engine to take it',
+        gateInput({ preview: true }),
+        false,
+      ],
+      [
+        'an in-flight spawn would have to park it, and the slot is the user’s',
+        gateInput({
+          connectionStatus: 'connecting',
+          connectionInputEnabled: false,
+          logInputEnabled: false,
+        }),
+        false,
+      ],
+      [
+        'an idle-PARKED session looks fine and has no process',
+        gateInput({
+          connectionStatus: 'parked',
+          connectionInputEnabled: false,
+          logInputEnabled: false,
+        }),
+        false,
+      ],
+      [
+        'a terminal session is gone',
+        gateInput({
+          connectionStatus: 'dead',
+          connectionInputEnabled: false,
+          logInputEnabled: false,
+        }),
+        false,
+      ],
+      [
+        'no session at all',
+        gateInput({ hasSession: false, connectionStatus: 'ready' }),
+        false,
+      ],
+    ]
+    for (const [name, input, expected] of cases) {
+      test(name, () => {
+        const gate = selectComposerGate(input)
+        expect(canSendUntypedSubmit(gate)).toBe(expected)
+        // Every false case here is a state the composer still accepts TYPING in,
+        // except the last two — that difference is the point of the helper.
+        if (!expected && input.hasSession && input.connectionStatus !== 'dead') {
+          expect(gate.editable).toBe(true)
+        }
+      })
+    }
   })
 })
 
