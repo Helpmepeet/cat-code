@@ -384,13 +384,15 @@ describe('resolveInProcessRuntime (via _forTest)', () => {
     const availableTools = buildSyntheticToolPool()
     const toolUseContext = createRuntimeToolUseContext(availableTools)
     const capturedToolNames: string[][] = []
+    let capturedModel: string | undefined
 
     const { tools, systemPrompt } = await _forTest.resolveInProcessRuntime(
-      { toolUseContext },
+      { toolUseContext, model: 'gpt-5.6-terra' },
       {
-        getSystemPrompt: (async promptTools => {
+        getSystemPrompt: (async (promptTools, model) => {
           const names = promptTools.map(tool => tool.name)
           capturedToolNames.push(names)
+          capturedModel = model
           return [`TOOLS:${names.join(',')}`]
         }) as never,
       },
@@ -410,6 +412,7 @@ describe('resolveInProcessRuntime (via _forTest)', () => {
     // prompt (Task 5: prompt/tool-pool consistency).
     expect(capturedToolNames).toEqual([toolNames])
     expect(systemPrompt).toContain(`TOOLS:${toolNames.join(',')}`)
+    expect(capturedModel).toBe('gpt-5.6-terra')
   })
 
   test('replace mode returns the override system prompt verbatim without calling getSystemPrompt', async () => {

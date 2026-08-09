@@ -1105,13 +1105,19 @@ async function resolveInProcessRuntime(
   args: {
     toolUseContext: ToolUseContext
     agentDefinition?: CustomAgentDefinition
+    model?: string
     systemPromptMode?: 'default' | 'replace' | 'append'
     systemPrompt?: string
   },
   deps: InProcessRuntimeDeps = defaultInProcessRuntimeDeps,
 ): Promise<InProcessRuntime> {
-  const { toolUseContext, agentDefinition, systemPromptMode, systemPrompt } =
-    args
+  const {
+    toolUseContext,
+    agentDefinition,
+    model,
+    systemPromptMode,
+    systemPrompt,
+  } = args
 
   // Inject team-essential tools so teammates can always respond to shutdown
   // requests, send messages, and coordinate via the task list, even with
@@ -1149,7 +1155,7 @@ async function resolveInProcessRuntime(
 
   const fullSystemPromptParts = await deps.getSystemPrompt(
     tools,
-    toolUseContext.options.mainLoopModel,
+    model ?? toolUseContext.options.mainLoopModel,
     undefined,
     toolUseContext.options.mcpClients,
   )
@@ -1266,6 +1272,7 @@ export async function runInProcessTeammate(
     await resolveInProcessRuntime({
       toolUseContext,
       agentDefinition,
+      model,
       systemPromptMode,
       systemPrompt,
     })
