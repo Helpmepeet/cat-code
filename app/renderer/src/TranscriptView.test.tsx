@@ -1049,7 +1049,7 @@ test('an injected turn renders system-side — never in the operator user column
     // A kind from a newer engine: still attributed away from the operator.
     ['future-kind-2027', null, 'Injected message', 'injected'],
   ]
-  for (const [injectedKind, label, expectedHeading, expectedTag] of cases) {
+  for (const [injectedKind, label, expectedHeading, rawTag] of cases) {
     const html = render({
       ...blockSource,
       id: `s:m:0:injected-${injectedKind}`,
@@ -1061,7 +1061,7 @@ test('an injected turn renders system-side — never in the operator user column
     })
     expect(html).toContain('a message the operator did not write')
     expect(html).toContain(expectedHeading)
-    expect(html).toContain(expectedTag)
+    expect(html).not.toContain(`>${rawTag}<`)
     // The user-bubble grammar (UserBubble/CommandEchoBubble/UserImageRowView)
     // is right-aligned + accent-tinted; an injected row must use neither.
     expect(html).not.toContain('justify-end')

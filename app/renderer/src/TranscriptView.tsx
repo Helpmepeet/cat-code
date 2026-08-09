@@ -3233,9 +3233,6 @@ function InjectedTurnBox({
           {content}
         </div>
       </div>
-      <span className="shrink-0 font-mono text-[9.5px] text-text-subtle/70">
-        {style.tag}
-      </span>
     </div>
   )
 }
@@ -3246,24 +3243,20 @@ type InjectedTurnStyle = {
   heading: string
   /** Prefix in front of a named sender (`@` for a teammate, '' for a channel). */
   prefix: string
-  /** Trailing debug tag, matching the SystemNoticeBox/TaskNotificationBox idiom. */
-  tag: string
 }
 
 const INJECTED_TURN_STYLE: Record<string, InjectedTurnStyle> = {
-  channel: { glyph: '←', heading: 'Channel message', prefix: '', tag: 'channel' },
-  teammate: { glyph: '@', heading: 'Teammate', prefix: '@', tag: 'teammate' },
+  channel: { glyph: '←', heading: 'Channel message', prefix: '' },
+  teammate: { glyph: '@', heading: 'Teammate', prefix: '@' },
   coordinator: {
     glyph: '⤷',
     heading: 'Coordinator',
     prefix: '',
-    tag: 'coordinator',
   },
   'deferred-continuation': {
     glyph: '⏱',
     heading: 'Continuation',
     prefix: '',
-    tag: 'continuation',
   },
 }
 
@@ -3271,7 +3264,6 @@ const INJECTED_TURN_FALLBACK: InjectedTurnStyle = {
   glyph: '⤷',
   heading: 'Injected message',
   prefix: '',
-  tag: 'injected',
 }
 
 /**
