@@ -492,7 +492,25 @@ export function useInboxPoller({
       const teamName = currentAppState.teamContext?.teamName
 
       for (const { message: m, control: parsed } of permissionRequests) {
-        trackForAck(m)
+        const rejectUnrenderableRequest = async (reason: string) => {
+          const sent = await sendPermissionResponseViaMailbox(
+            parsed.agent_id,
+            {
+              decision: 'rejected',
+              resolvedBy: 'leader',
+              feedback: reason,
+            },
+            parsed.request_id,
+            teamName,
+          )
+          if (sent) {
+            trackForAck(m)
+          } else {
+            logForDebugging(
+              `[InboxPoller] Could not reject unrenderable permission request ${parsed.request_id}; leaving it unread for retry`,
+            )
+          }
+        }
 
         if (setToolUseConfirmQueue) {
           // Route through the standard ToolUseConfirmQueue so tmux workers
@@ -501,10 +519,15 @@ export function useInboxPoller({
           const tool = findToolByName(getAllBaseTools(), parsed.tool_name)
           if (!tool) {
             logForDebugging(
-              `[InboxPoller] Unknown tool ${parsed.tool_name}, skipping permission request`,
+              `[InboxPoller] Unknown tool ${parsed.tool_name}, rejecting permission request`,
+            )
+            await rejectUnrenderableRequest(
+              `The team lead cannot render permission prompts for tool "${parsed.tool_name}".`,
             )
             continue
           }
+
+          trackForAck(m)
 
           const entry: ToolUseConfirm = {
             assistantMessage: createAssistantMessage({ content: '' }),
@@ -576,7 +599,10 @@ export function useInboxPoller({
           })
         } else {
           logForDebugging(
-            `[InboxPoller] ToolUseConfirmQueue unavailable, dropping permission request from ${parsed.agent_id}`,
+            `[InboxPoller] ToolUseConfirmQueue unavailable, rejecting permission request from ${parsed.agent_id}`,
+          )
+          await rejectUnrenderableRequest(
+            'The team lead is unavailable to render a permission prompt.',
           )
         }
       }

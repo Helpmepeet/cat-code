@@ -11,7 +11,10 @@ import {
   isSwarmWorker,
   sendPermissionRequestViaMailbox,
 } from '../../../utils/swarm/permissionSync.js'
-import { registerPermissionCallback } from '../../useSwarmPermissionPoller.js'
+import {
+  registerPermissionCallback,
+  unregisterPermissionCallback,
+} from '../../useSwarmPermissionPoller.js'
 import type { PermissionContext } from '../PermissionContext.js'
 import { createResolveOnce } from '../PermissionContext.js'
 
@@ -138,6 +141,7 @@ async function handleSwarmWorkerPermission(
         'abort',
         () => {
           if (!claim()) return
+          unregisterPermissionCallback(request.id)
           clearPendingRequest()
           ctx.logCancelled()
           resolveOnce(ctx.cancelAndAbort(undefined, true))
