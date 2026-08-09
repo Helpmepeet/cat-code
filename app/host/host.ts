@@ -626,8 +626,16 @@ export class Host implements HostApi {
         `transcript for ${appSessionId} is gone`,
       )
     }
+    // HC4 applies to every renderer-reachable process creation. A restart
+    // replaces an existing sidecar, so it does not consume another live slot,
+    // but it still forks a child and must share the same burst-rate budget as
+    // create/restore/workspace spawn.
+    const limit = this.checkSpawnLimits()
+    if (limit) return limit
+
     // Evict replay BEFORE the restart (mirrors the prior main behavior + P3-0).
     this.evictReplay(appSessionId)
+    this.recordSpawnTime()
     this.supervisor.restartSession(appSessionId, {
       cwd: row.cwd,
       ...(row.engineSessionId !== null

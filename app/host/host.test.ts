@@ -620,6 +620,27 @@ test('createSession enforces the spawn rate cap (HC4 → session_limit)', async 
   expect(next.ok).toBe(true)
 })
 
+test('restartSession shares the HC4 spawn-rate cap', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  expect(created.ok).toBe(true)
+  if (!created.ok) return
+
+  // The initial create consumes one slot; restarts consume the remaining slots.
+  for (let i = 1; i < MAX_SPAWNS_PER_WINDOW; i++) {
+    const restarted = await h.host.restartSession(created.value.appSessionId)
+    expect(restarted.ok).toBe(true)
+  }
+
+  const refused = await h.host.restartSession(created.value.appSessionId)
+  expect(refused.ok).toBe(false)
+  if (!refused.ok) expect(refused.error.code).toBe('session_limit')
+
+  h.setNow(h.now() + SPAWN_RATE_WINDOW_MS + 1)
+  const resumed = await h.host.restartSession(created.value.appSessionId)
+  expect(resumed.ok).toBe(true)
+})
+
 test('createSession enforces the live-process bound (HC4 → session_limit)', async () => {
   // A tiny fake registry that reports a saturated live set via the supervisor.
   const h = makeHost()
