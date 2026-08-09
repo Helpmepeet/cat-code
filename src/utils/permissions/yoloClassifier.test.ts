@@ -2,7 +2,10 @@ import { describe, expect, test } from 'bun:test'
 import type { ToolPermissionContext } from '../../Tool.js'
 import { buildSettingsDenyRulesText } from './autoModeDenyRules.js'
 import { getAutoModeClassifierAttempts } from './autoModeProviderLadder.js'
-import { getYoloClassifierToolSchema } from './yoloClassifier.js'
+import {
+  getYoloClassifierToolSchema,
+  isClassifierFallbackError,
+} from './yoloClassifier.js'
 
 describe('auto mode provider ladder', () => {
   test('starts Claude classifiers on the configured Anthropic provider and crosses to GPT', () => {
@@ -21,6 +24,19 @@ describe('auto mode provider ladder', () => {
       { provider: 'openai', model: 'gpt-5.6-luna' },
       { provider: 'bedrock', model: 'sonnet' },
     ])
+  })
+})
+
+describe('classifier fallback errors', () => {
+  test('retries connection and timeout failures', () => {
+    expect(isClassifierFallbackError(new Error('connection reset'))).toBe(true)
+    expect(isClassifierFallbackError(new Error('request timeout'))).toBe(true)
+  })
+
+  test('does not retry terminal client and policy statuses', () => {
+    for (const status of [400, 403, 404, 405, 409, 413, 422]) {
+      expect(isClassifierFallbackError({ status })).toBe(false)
+    }
   })
 })
 

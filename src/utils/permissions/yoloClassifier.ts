@@ -25,7 +25,7 @@ import type {
 } from '../../types/permissions.js'
 import { isDebugMode, logForDebugging } from '../debug.js'
 import {
-  getClaudeConfigHomeDir,
+  getAutoModeCaptureDir,
   isEnvDefinedFalsy,
   isEnvTruthy,
 } from '../envUtils.js'
@@ -207,7 +207,7 @@ export function buildDefaultExternalSystemPrompt(): string {
 }
 
 function getAutoModeDumpDir(): string {
-  return join(getClaudeConfigHomeDir(), 'auto-mode-captures')
+  return getAutoModeCaptureDir()
 }
 
 /**
@@ -874,7 +874,7 @@ const NON_FALLBACK_CODEX_ERROR_NAMES = new Set([
   'CodexAccountUnavailableError',
 ])
 
-function isClassifierFallbackError(error: unknown): boolean {
+export function isClassifierFallbackError(error: unknown): boolean {
   if (typeof error === 'object' && error !== null) {
     // Account cap / auth failures are not transient for the classifier: a
     // same-account model swap won't clear them, and falling back would mask the
@@ -925,6 +925,8 @@ function isClassifierFallbackErrorText(message: string): boolean {
     message.includes('service unavailable') ||
     message.includes('bad gateway') ||
     message.includes('gateway timeout') ||
+    message.includes('timeout') ||
+    message.includes('connection') ||
     message.includes('server_error')
   ) {
     return true
@@ -1238,6 +1240,7 @@ export async function classifyYoloAction(
       // classifier is bigger than main loop — auto-compact won't save us).
       logAutoModeOutcome('success', model, {
         durationMs,
+        provider,
         category: resolvedCategory.category?.id,
         mainLoopTokens,
         classifierInputTokens,
@@ -1283,6 +1286,7 @@ export async function classifyYoloAction(
           )
           logAutoModeOutcome('fallback', model, {
             failureKind: 'classifier_provider_unavailable',
+            provider,
           })
           provider = fallbackAttempt.provider
           model = fallbackAttempt.model
@@ -1454,6 +1458,7 @@ function logAutoModeOutcome(
   model: string,
   extra?: {
     classifierType?: string
+    provider?: string
     failureKind?: string
     /**
      * Resolved rule id only: this is a bounded value from the vendored
@@ -1468,7 +1473,7 @@ function logAutoModeOutcome(
     transcriptLimitTokens?: number
   },
 ): void {
-  const { classifierType, failureKind, category, ...rest } = extra ?? {}
+  const { classifierType, failureKind, category, provider, ...rest } = extra ?? {}
   logEvent('tengu_auto_mode_outcome', {
     outcome:
       outcome as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
@@ -1481,6 +1486,10 @@ function logAutoModeOutcome(
     ...(classifierType !== undefined && {
       classifierType:
         classifierType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+    }),
+    ...(provider !== undefined && {
+      classifierProvider:
+        provider as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
     }),
     ...(failureKind !== undefined && {
       failureKind:

@@ -9,8 +9,8 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { homedir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
+import { getAutoModeCaptureDir } from '../src/utils/envUtils.js'
 
 const args = process.argv.slice(2)
 const flag = (name: string): string | undefined => {
@@ -23,7 +23,7 @@ const flag = (name: string): string | undefined => {
   return value
 }
 
-const ROOT = flag('--root') ?? join(homedir(), '.cat-code', 'auto-mode-captures')
+const ROOT = flag('--root') ?? getAutoModeCaptureDir()
 const OUT = flag('--out') ?? 'fixtures/auto-mode-corpus.json'
 const VERIFY = args.includes('--verify')
 
