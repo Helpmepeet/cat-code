@@ -126,8 +126,11 @@ add stage and severity settings with the architecture, not before.
 1. **Output contract.** Replace upstream's XML verdict with the fork's
    schema-backed forced tool call. The fork already uses one — see amendment F —
    so this is an extension, not new machinery. Shape is owed by **G1**: a
-   discriminated verdict, not a flat 66-value enum. It must still enforce
-   "unnameable block = no block" at the API layer rather than by instruction.
+   discriminated verdict, not a flat 66-value enum. Note that G1 **withdraws**
+   this delta's original rationale of enforcing "unnameable block = no block" at
+   the API layer — upstream's own parser proves that is the wrong layer, and
+   enforcing it there is what creates the unsafe allow. The schema-backed
+   contract is kept for GPT-path reliability; the enforcement claim is not.
 2. **Classifier model and provider.** New `autoMode.model` settings key;
    `CLAUDE_CODE_AUTO_MODE_MODEL` honoured for all user types (closes B2).
    Sonnet-class default. Keep the Sol → Terra → Luna chain
