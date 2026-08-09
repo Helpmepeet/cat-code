@@ -175,7 +175,10 @@ function OutputPanel({ text }: { text: string }) {
     () => (source.numbers === null ? text : source.lines.join('\n')),
     [source, text],
   )
-  const search = describeOutputSearch(body, query, matchIndex)
+  const search = useMemo(
+    () => describeOutputSearch(body, query, matchIndex),
+    [body, query, matchIndex],
+  )
   const matchCount = search.matches.length
 
   // Park the active match in the vertical middle of the scroller, like the

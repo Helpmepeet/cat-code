@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { ToolInspector } from './ToolInspector.js'
@@ -196,6 +197,13 @@ function bashRowWithOutput(content: string) {
     result: { isError: false, content, diff: null },
   })
 }
+
+test('output search is memoized independently from toolbar state', () => {
+  // Static SSR cannot toggle Wrap, so pin the dependency boundary at source.
+  const source = readFileSync(new URL('./ToolInspector.tsx', import.meta.url), 'utf8')
+  expect(source).toContain('() => describeOutputSearch(body, query, matchIndex)')
+  expect(source).toContain('[body, query, matchIndex]')
+})
 
 test('P4-37: an output carries the copy / search / wrap toolbar', () => {
   const html = renderToStaticMarkup(
