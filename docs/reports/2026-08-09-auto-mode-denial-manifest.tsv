@@ -1,212 +1,213 @@
-# auto-mode denial manifest v1 | window 2026-07-26..2026-08-09 UTC (entry timestamps)
-# source: ~/.cat-code/projects/**/*.jsonl tool_result marker "Permission for this action has been denied. Reason:"
-# no commands or reason text: cmd_sha1/reason_sha1 are 12-char sha1 prefixes
-transcript	ts	tool	category	cmd_sha1	reason_sha1
-e382123c-edfa-4f5b-9122-df3603a924f2.jsonl	2026-07-26T07:09:35.247000+00:00	Write	temp-scratch	c20e724e95e6	c8e1b4dc95f6
-e382123c-edfa-4f5b-9122-df3603a924f2.jsonl	2026-07-26T07:09:35.247000+00:00	Write	temp-scratch	c20e724e95e6	c8e1b4dc95f6
-agent-a5e7e6b327a150cd4.jsonl	2026-07-27T13:05:35.582000+00:00	Bash	secrets	adad6d19671b	d89c4bae72c1
-agent-a5e7e6b327a150cd4.jsonl	2026-07-27T13:05:35.582000+00:00	Bash	secrets	adad6d19671b	d89c4bae72c1
-b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T13:08:01.383000+00:00	Bash	secrets	a23840185cab	b667bcd50ad8
-agent-acompact-a539b30a9bd6dcfb.jsonl	2026-07-27T13:08:01.383000+00:00	Bash	secrets	a23840185cab	b667bcd50ad8
-b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T13:08:01.383000+00:00	Bash	secrets	a23840185cab	b667bcd50ad8
-b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T13:10:52.076000+00:00	Bash	secrets	a23840185cab	1e6dba9d78ec
-agent-acompact-a539b30a9bd6dcfb.jsonl	2026-07-27T13:10:52.076000+00:00	Bash	secrets	a23840185cab	1e6dba9d78ec
-b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T13:10:52.076000+00:00	Bash	secrets	a23840185cab	1e6dba9d78ec
-b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T13:16:34.711000+00:00	Write	outside-workdir	007dc9590e32	fde90c0274da
-agent-acompact-a539b30a9bd6dcfb.jsonl	2026-07-27T13:16:34.711000+00:00	Write	outside-workdir	007dc9590e32	fde90c0274da
-b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T13:16:34.711000+00:00	Write	outside-workdir	007dc9590e32	fde90c0274da
-b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T13:30:27.194000+00:00	Bash	gui-external	a1bbb54c739b	45f987ce9bfc
-agent-acompact-a539b30a9bd6dcfb.jsonl	2026-07-27T13:30:27.194000+00:00	Bash	gui-external	a1bbb54c739b	45f987ce9bfc
-b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T13:30:27.194000+00:00	Bash	gui-external	a1bbb54c739b	45f987ce9bfc
-b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T13:31:35.281000+00:00	Bash	gui-external	a1bbb54c739b	bf9967d51c95
-agent-acompact-a539b30a9bd6dcfb.jsonl	2026-07-27T13:31:35.281000+00:00	Bash	gui-external	a1bbb54c739b	bf9967d51c95
-b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T13:31:35.281000+00:00	Bash	gui-external	a1bbb54c739b	bf9967d51c95
-b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T13:32:25.035000+00:00	Bash	gui-external	a0971f6c4bf9	f2a7003474fa
-agent-acompact-a539b30a9bd6dcfb.jsonl	2026-07-27T13:32:25.035000+00:00	Bash	gui-external	a0971f6c4bf9	f2a7003474fa
-b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T13:32:25.035000+00:00	Bash	gui-external	a0971f6c4bf9	f2a7003474fa
-b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T14:01:16.781000+00:00	Bash	remote-publish	acc2cf29825f	c174c22cbc11
-agent-acompact-a539b30a9bd6dcfb.jsonl	2026-07-27T14:01:16.781000+00:00	Bash	remote-publish	acc2cf29825f	c174c22cbc11
-b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T14:01:16.781000+00:00	Bash	remote-publish	acc2cf29825f	c174c22cbc11
-b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T16:34:52.252000+00:00	Bash	secrets	0c30012b2898	3155d9f11491
-agent-acompact-a539b30a9bd6dcfb.jsonl	2026-07-27T16:34:52.252000+00:00	Bash	secrets	0c30012b2898	3155d9f11491
-b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T16:34:52.252000+00:00	Bash	secrets	0c30012b2898	3155d9f11491
-b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T16:35:23.116000+00:00	Bash	secrets	b69868203341	5c6ddfb148b8
-agent-acompact-a539b30a9bd6dcfb.jsonl	2026-07-27T16:35:23.116000+00:00	Bash	secrets	b69868203341	5c6ddfb148b8
-b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T16:35:23.116000+00:00	Bash	secrets	b69868203341	5c6ddfb148b8
-b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T18:02:59.048000+00:00	Apply_patch	gui-external	3917968a56bb	daf01e3febaa
-agent-acompact-a539b30a9bd6dcfb.jsonl	2026-07-27T18:02:59.048000+00:00	Apply_patch	gui-external	3917968a56bb	daf01e3febaa
-b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T18:02:59.048000+00:00	Apply_patch	gui-external	3917968a56bb	daf01e3febaa
-b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-28T05:24:13.204000+00:00	Bash	gui-external	9fdc062219c5	547b48f6b5bb
-b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-28T05:24:13.204000+00:00	Bash	gui-external	9fdc062219c5	547b48f6b5bb
-b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-28T05:26:46.131000+00:00	Apply_patch	gui-external	a623f4dc68b1	fa1c37236290
-b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-28T05:26:46.131000+00:00	Apply_patch	gui-external	a623f4dc68b1	fa1c37236290
-b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-28T05:34:11.616000+00:00	Apply_patch	gui-external	a623f4dc68b1	6bdfb737d4ec
-b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-28T05:34:11.616000+00:00	Apply_patch	gui-external	a623f4dc68b1	6bdfb737d4ec
-b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-28T05:38:30.007000+00:00	Apply_patch	gui-external	a623f4dc68b1	cf8d80be9eb3
-b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-28T05:38:30.007000+00:00	Apply_patch	gui-external	a623f4dc68b1	cf8d80be9eb3
-agent-a296bb15d053df80e.jsonl	2026-07-28T16:02:24.685000+00:00	Bash	other	e42710615b0f	6c668ac47c62
-2ff826bf-2217-4caf-9d3d-05773b6070b3.jsonl	2026-07-29T09:22:24.483000+00:00	Bash	secrets	c2b4198a1b4e	3481bc4a34e5
-2ff826bf-2217-4caf-9d3d-05773b6070b3.jsonl	2026-07-29T09:22:24.483000+00:00	Bash	secrets	c2b4198a1b4e	3481bc4a34e5
-agent-a0a1297ab03eaa96e.jsonl	2026-07-31T09:46:06.203000+00:00	Bash	process-kill	828c65c15069	22a017371a7a
-agent-a0a1297ab03eaa96e.jsonl	2026-07-31T09:46:06.203000+00:00	Bash	process-kill	828c65c15069	22a017371a7a
-agent-a0a1297ab03eaa96e.jsonl	2026-07-31T09:46:06.203000+00:00	Bash	process-kill	828c65c15069	22a017371a7a
-agent-a0a1297ab03eaa96e.jsonl	2026-07-31T09:46:19.242000+00:00	Bash	process-kill	22444cc7bd2d	07d77ff4c5f4
-agent-a0a1297ab03eaa96e.jsonl	2026-07-31T09:46:19.242000+00:00	Bash	process-kill	22444cc7bd2d	07d77ff4c5f4
-agent-a0a1297ab03eaa96e.jsonl	2026-07-31T09:46:19.242000+00:00	Bash	process-kill	22444cc7bd2d	07d77ff4c5f4
-agent-a0a1297ab03eaa96e.jsonl	2026-07-31T09:46:28.644000+00:00	Bash	process-kill	1049ee28d784	3a8009818d2d
-agent-a0a1297ab03eaa96e.jsonl	2026-07-31T09:46:28.644000+00:00	Bash	process-kill	1049ee28d784	3a8009818d2d
-agent-a0a1297ab03eaa96e.jsonl	2026-07-31T09:46:28.644000+00:00	Bash	process-kill	1049ee28d784	3a8009818d2d
-agent-a9a472529882a8b35.jsonl	2026-07-31T09:53:39.078000+00:00	Bash	temp-scratch	c6f867c1976c	3a0ed8322e7d
-agent-a9a472529882a8b35.jsonl	2026-07-31T09:53:39.078000+00:00	Bash	temp-scratch	c6f867c1976c	3a0ed8322e7d
-agent-a9a472529882a8b35.jsonl	2026-07-31T09:53:39.078000+00:00	Bash	temp-scratch	c6f867c1976c	3a0ed8322e7d
-agent-a9a472529882a8b35.jsonl	2026-07-31T09:58:31.948000+00:00	Bash	temp-scratch	617b9bc896d0	c819e680854b
-agent-a9a472529882a8b35.jsonl	2026-07-31T09:58:31.948000+00:00	Bash	temp-scratch	617b9bc896d0	c819e680854b
-agent-a9a472529882a8b35.jsonl	2026-07-31T09:58:31.948000+00:00	Bash	temp-scratch	617b9bc896d0	c819e680854b
-agent-a0a1297ab03eaa96e.jsonl	2026-07-31T10:07:22.949000+00:00	Bash	process-kill	3f01872ca766	3b2edc9edc01
-agent-a0a1297ab03eaa96e.jsonl	2026-07-31T10:07:22.949000+00:00	Bash	process-kill	3f01872ca766	3b2edc9edc01
-agent-a0a1297ab03eaa96e.jsonl	2026-07-31T10:20:09.462000+00:00	Bash	process-kill	8ad3af1e82db	b277af0388ff
-agent-a49abf0a091187355.jsonl	2026-07-31T10:32:35.527000+00:00	Bash	process-kill	e244b8788f2d	f31eac18d946
-agent-ac1792f327ad90b6a.jsonl	2026-07-31T10:32:38.286000+00:00	Bash	process-kill	cbfab831a5e3	a94c68a0b74e
-agent-ac1792f327ad90b6a.jsonl	2026-07-31T10:32:38.286000+00:00	Bash	process-kill	cbfab831a5e3	a94c68a0b74e
-agent-ac1792f327ad90b6a.jsonl	2026-07-31T10:32:45.727000+00:00	Bash	process-kill	828c65c15069	4e79fac7f9eb
-agent-ac1792f327ad90b6a.jsonl	2026-07-31T10:32:45.727000+00:00	Bash	process-kill	828c65c15069	4e79fac7f9eb
-agent-a54dfdc2fa2e8fa30.jsonl	2026-07-31T10:32:47.789000+00:00	Bash	process-kill	828c65c15069	62303c0cb2ca
-agent-a54dfdc2fa2e8fa30.jsonl	2026-07-31T10:32:47.789000+00:00	Bash	process-kill	828c65c15069	62303c0cb2ca
-agent-a54dfdc2fa2e8fa30.jsonl	2026-07-31T10:33:05.923000+00:00	Bash	process-kill	fbdd31059209	b33504d92d19
-agent-a54dfdc2fa2e8fa30.jsonl	2026-07-31T10:33:05.923000+00:00	Bash	process-kill	fbdd31059209	b33504d92d19
-agent-a54dfdc2fa2e8fa30.jsonl	2026-07-31T10:33:25.572000+00:00	Bash	process-kill	4e2ea3524611	ab167c927a2d
-agent-a54dfdc2fa2e8fa30.jsonl	2026-07-31T10:33:25.572000+00:00	Bash	process-kill	4e2ea3524611	ab167c927a2d
-agent-a739d79884133ba3f.jsonl	2026-07-31T10:35:40.694000+00:00	Bash	secrets	0f7cd728683e	512284c6c0f7
-agent-a739d79884133ba3f.jsonl	2026-07-31T10:35:40.694000+00:00	Bash	secrets	0f7cd728683e	512284c6c0f7
-agent-a739d79884133ba3f.jsonl	2026-07-31T10:35:40.694000+00:00	Bash	secrets	0f7cd728683e	512284c6c0f7
-agent-a739d79884133ba3f.jsonl	2026-07-31T10:35:49.774000+00:00	Bash	process-kill	804a869f9438	a7caf1a8b3c8
-agent-a739d79884133ba3f.jsonl	2026-07-31T10:35:49.774000+00:00	Bash	process-kill	804a869f9438	a7caf1a8b3c8
-agent-a739d79884133ba3f.jsonl	2026-07-31T10:35:49.774000+00:00	Bash	process-kill	804a869f9438	a7caf1a8b3c8
-agent-ac4ec9d6fe973f1d4.jsonl	2026-07-31T10:41:47.325000+00:00	Bash	temp-scratch	70f7af6d0999	8c98bcfdf534
-agent-ac4ec9d6fe973f1d4.jsonl	2026-07-31T10:41:47.325000+00:00	Bash	temp-scratch	70f7af6d0999	8c98bcfdf534
-agent-afb3c65f635cdacac.jsonl	2026-07-31T10:43:28.718000+00:00	Bash	process-kill	ae3337128b37	b93ea9720688
-agent-afb3c65f635cdacac.jsonl	2026-07-31T10:43:28.718000+00:00	Bash	process-kill	ae3337128b37	b93ea9720688
-agent-afb3c65f635cdacac.jsonl	2026-07-31T10:44:18.271000+00:00	Bash	process-kill	640ae2daeca9	6a1e0c09e099
-agent-afb3c65f635cdacac.jsonl	2026-07-31T10:44:18.271000+00:00	Bash	process-kill	640ae2daeca9	6a1e0c09e099
-agent-ac4ec9d6fe973f1d4.jsonl	2026-07-31T10:45:23.754000+00:00	Bash	temp-scratch	ff38160448e5	0d7d96c4a08f
-agent-ac4ec9d6fe973f1d4.jsonl	2026-07-31T10:45:23.754000+00:00	Bash	temp-scratch	ff38160448e5	0d7d96c4a08f
-agent-ac4ec9d6fe973f1d4.jsonl	2026-07-31T10:45:36.474000+00:00	Bash	temp-scratch	1652e9a3a583	6815811f7e48
-agent-ac4ec9d6fe973f1d4.jsonl	2026-07-31T10:45:36.474000+00:00	Bash	temp-scratch	1652e9a3a583	6815811f7e48
-agent-ac4ec9d6fe973f1d4.jsonl	2026-07-31T10:48:40.786000+00:00	Bash	temp-scratch	72c416a36af2	4152102e4d75
-agent-ac4ec9d6fe973f1d4.jsonl	2026-07-31T10:48:40.786000+00:00	Bash	temp-scratch	72c416a36af2	4152102e4d75
-agent-afb3c65f635cdacac.jsonl	2026-07-31T10:48:52.066000+00:00	Bash	temp-scratch	060018a8f572	66e3bea34a43
-agent-afb3c65f635cdacac.jsonl	2026-07-31T10:48:52.066000+00:00	Bash	temp-scratch	060018a8f572	66e3bea34a43
-agent-afb3c65f635cdacac.jsonl	2026-07-31T10:49:01.371000+00:00	Bash	temp-scratch	319ce9507804	e26a04d7c9a4
-agent-afb3c65f635cdacac.jsonl	2026-07-31T10:49:01.371000+00:00	Bash	temp-scratch	319ce9507804	e26a04d7c9a4
-agent-a739d79884133ba3f.jsonl	2026-07-31T10:53:53.686000+00:00	Bash	process-kill	f8e8b97ee151	59f6281f429b
-agent-afef7e78f9d7bcbd4.jsonl	2026-07-31T11:14:40.188000+00:00	Bash	process-kill	feebe43c925c	6cf752777640
-agent-afef7e78f9d7bcbd4.jsonl	2026-07-31T11:14:58.435000+00:00	Bash	process-kill	590131713926	92fd22a71c83
-agent-afef7e78f9d7bcbd4.jsonl	2026-07-31T11:15:11.881000+00:00	Bash	process-kill	d107d5fb9c7f	83b2bcbe153b
-agent-a32eac27040856feb.jsonl	2026-07-31T11:16:55.543000+00:00	Bash	process-kill	828c65c15069	740a1e4ad621
-agent-a32eac27040856feb.jsonl	2026-07-31T11:17:09.460000+00:00	Bash	process-kill	d3912a1476e1	b6af07086b94
-agent-ab9307c23a6ee836b.jsonl	2026-07-31T11:20:31.810000+00:00	Bash	other	fa5e30c6d727	96c849aa4a90
-agent-ab9307c23a6ee836b.jsonl	2026-07-31T11:24:29.006000+00:00	Bash	gui-external	bd4845d6d296	cc0815c2032b
-agent-a1ec6a81a26230221.jsonl	2026-07-31T11:34:31.344000+00:00	Bash	process-kill	828c65c15069	1dbbdc0f30d1
-agent-a1ec6a81a26230221.jsonl	2026-07-31T11:34:31.344000+00:00	Bash	process-kill	828c65c15069	1dbbdc0f30d1
-agent-a1ec6a81a26230221.jsonl	2026-07-31T11:34:43.005000+00:00	Bash	process-kill	ad3e30a9ff61	82c3e537bdad
-agent-a1ec6a81a26230221.jsonl	2026-07-31T11:34:43.005000+00:00	Bash	process-kill	ad3e30a9ff61	82c3e537bdad
-agent-ae916c961d15ead2f.jsonl	2026-07-31T11:39:58.792000+00:00	Bash	temp-scratch	362c4ed24287	5d860a9b7138
-agent-ae916c961d15ead2f.jsonl	2026-07-31T11:39:58.792000+00:00	Bash	temp-scratch	362c4ed24287	5d860a9b7138
-agent-ae916c961d15ead2f.jsonl	2026-07-31T11:59:40.149000+00:00	Bash	outside-workdir	037375dfa285	96fd144ca70e
-agent-ae916c961d15ead2f.jsonl	2026-07-31T11:59:48.987000+00:00	Bash	outside-workdir	f2279514056a	3718a339d438
-966bc02d-1e57-4599-8346-21709375102c.jsonl	2026-08-03T05:24:42.595000+00:00	Bash	other	534c330b4b07	a0fa75e389b2
-966bc02d-1e57-4599-8346-21709375102c.jsonl	2026-08-03T05:24:42.595000+00:00	Bash	other	534c330b4b07	a0fa75e389b2
-ee559097-96ba-458b-86d7-6e15a85928a4.jsonl	2026-08-04T11:28:07.451000+00:00	Bash	temp-scratch	48bdd2114127	23affa83dbc5
-ee559097-96ba-458b-86d7-6e15a85928a4.jsonl	2026-08-04T11:28:07.451000+00:00	Bash	temp-scratch	48bdd2114127	23affa83dbc5
-94b1dde0-06e1-4fb0-8559-4f7dbff35d10.jsonl	2026-08-04T18:50:02.931000+00:00	Bash	outside-workdir	09cde1578274	ca68ece4b8b4
-94b1dde0-06e1-4fb0-8559-4f7dbff35d10.jsonl	2026-08-04T18:50:02.931000+00:00	Bash	outside-workdir	09cde1578274	ca68ece4b8b4
-b3955878-94db-4e60-ace7-d709ae4b9350.jsonl	2026-08-05T12:28:15.314000+00:00	Apply_patch	other	2878039fb141	f90ab7af58a9
-b3955878-94db-4e60-ace7-d709ae4b9350.jsonl	2026-08-05T12:28:15.314000+00:00	Apply_patch	other	2878039fb141	f90ab7af58a9
-b3955878-94db-4e60-ace7-d709ae4b9350.jsonl	2026-08-05T12:30:14.106000+00:00	Write	other	6314e8093617	84941969e018
-b3955878-94db-4e60-ace7-d709ae4b9350.jsonl	2026-08-05T12:30:14.106000+00:00	Write	other	6314e8093617	84941969e018
-fc1c914d-fcd5-4524-8d28-696d34392782.jsonl	2026-08-05T15:46:09.001000+00:00	Bash	outside-workdir	d058b69a47a9	4437b051243d
-fc1c914d-fcd5-4524-8d28-696d34392782.jsonl	2026-08-05T15:46:09.001000+00:00	Bash	outside-workdir	d058b69a47a9	4437b051243d
-2d2cd5e7-c8f0-442f-8dd4-f40a174c5d49.jsonl	2026-08-05T18:08:40.378000+00:00	Apply_patch	other	90098cf2c11d	805a00bd22e3
-2d2cd5e7-c8f0-442f-8dd4-f40a174c5d49.jsonl	2026-08-05T18:08:40.378000+00:00	Apply_patch	other	90098cf2c11d	805a00bd22e3
-2d2cd5e7-c8f0-442f-8dd4-f40a174c5d49.jsonl	2026-08-05T18:10:53.343000+00:00	Apply_patch	other	90098cf2c11d	dfa2dee23a8d
-2d2cd5e7-c8f0-442f-8dd4-f40a174c5d49.jsonl	2026-08-05T18:10:53.343000+00:00	Apply_patch	other	90098cf2c11d	dfa2dee23a8d
-agent-a53243bb34761ae86.jsonl	2026-08-07T18:18:13.595000+00:00	Bash	secrets	3831a7fcac99	f49eb75b2c26
-5080b1c0-7da6-4a5b-bc5f-882ad3890f67.jsonl	2026-08-08T03:28:01.385000+00:00	Bash	temp-scratch	02320e4097be	36e7df8e41e4
-5080b1c0-7da6-4a5b-bc5f-882ad3890f67.jsonl	2026-08-08T03:28:01.385000+00:00	Bash	temp-scratch	02320e4097be	36e7df8e41e4
-faf61691-25cb-4453-843b-798ab3d80020.jsonl	2026-08-08T04:13:10.964000+00:00	Bash	secrets	2e86361629a3	86d8c7ff06a1
-faf61691-25cb-4453-843b-798ab3d80020.jsonl	2026-08-08T04:13:10.964000+00:00	Bash	secrets	2e86361629a3	86d8c7ff06a1
-faf61691-25cb-4453-843b-798ab3d80020.jsonl	2026-08-08T04:20:09.213000+00:00	Bash	remote-publish	0bfdb1e08ed7	4ef64e6a73c5
-faf61691-25cb-4453-843b-798ab3d80020.jsonl	2026-08-08T04:20:09.213000+00:00	Bash	remote-publish	0bfdb1e08ed7	4ef64e6a73c5
-faf61691-25cb-4453-843b-798ab3d80020.jsonl	2026-08-08T04:21:55.746000+00:00	Bash	remote-publish	793e754e5353	8adf4334fa83
-faf61691-25cb-4453-843b-798ab3d80020.jsonl	2026-08-08T04:21:55.746000+00:00	Bash	remote-publish	793e754e5353	8adf4334fa83
-faf61691-25cb-4453-843b-798ab3d80020.jsonl	2026-08-08T04:36:08.350000+00:00	Apply_patch	gui-external	33f13e1d9f57	16be13df5dc8
-faf61691-25cb-4453-843b-798ab3d80020.jsonl	2026-08-08T04:36:08.350000+00:00	Apply_patch	gui-external	33f13e1d9f57	16be13df5dc8
-b79860e5-fb16-40f5-86b6-0bf2fcd59256.jsonl	2026-08-08T14:00:13.515000+00:00	Bash	temp-scratch	d7b27da98f8d	47a12365ca69
-agent-acompact-1e145096d3499c9f.jsonl	2026-08-08T14:00:13.515000+00:00	Bash	temp-scratch	d7b27da98f8d	47a12365ca69
-b79860e5-fb16-40f5-86b6-0bf2fcd59256.jsonl	2026-08-08T14:00:13.515000+00:00	Bash	temp-scratch	d7b27da98f8d	47a12365ca69
-agent-ad8b5fcebb358aba9.jsonl	2026-08-08T14:34:28.965000+00:00	Bash	temp-scratch	12e96730d8d2	1681d84f19d2
-agent-afb6c5c37d5124050.jsonl	2026-08-08T14:37:06.204000+00:00	Bash	secrets	66506af09f11	bbdc669fa6de
-b0a10a5a-64f3-42d7-a822-a45430a625e2.jsonl	2026-08-08T16:32:06.402000+00:00	Bash	outside-workdir	fd64b9bbdbf4	06340d778003
-b0a10a5a-64f3-42d7-a822-a45430a625e2.jsonl	2026-08-08T16:32:06.402000+00:00	Bash	outside-workdir	fd64b9bbdbf4	06340d778003
-b0a10a5a-64f3-42d7-a822-a45430a625e2.jsonl	2026-08-08T16:32:06.435000+00:00	Bash	outside-workdir	34cb1d66b25d	579ae2208eca
-b0a10a5a-64f3-42d7-a822-a45430a625e2.jsonl	2026-08-08T16:32:06.435000+00:00	Bash	outside-workdir	34cb1d66b25d	579ae2208eca
-69ffa25a-8e33-4e59-b6e3-2cddbbe75f03.jsonl	2026-08-08T17:46:19.509000+00:00	Bash	outside-workdir	1eb26a381e1e	a15789c46245
-69ffa25a-8e33-4e59-b6e3-2cddbbe75f03.jsonl	2026-08-08T17:46:19.509000+00:00	Bash	outside-workdir	1eb26a381e1e	a15789c46245
-69ffa25a-8e33-4e59-b6e3-2cddbbe75f03.jsonl	2026-08-08T17:47:14.222000+00:00	Bash	outside-workdir	350f4b3025f5	344318d55a1a
-69ffa25a-8e33-4e59-b6e3-2cddbbe75f03.jsonl	2026-08-08T17:47:14.222000+00:00	Bash	outside-workdir	350f4b3025f5	344318d55a1a
-agent-ad7a3497d1787a436.jsonl	2026-08-08T19:08:08.038000+00:00	Bash	other	694c44d82fe5	df11a99f8773
-fd09f2b1-3c22-4ae8-bc84-479709f6ddcb.jsonl	2026-08-09T05:23:08.563000+00:00	Bash	process-kill	342b23bc7c70	e389a2d1b8c2
-fd09f2b1-3c22-4ae8-bc84-479709f6ddcb.jsonl	2026-08-09T05:23:08.563000+00:00	Bash	process-kill	342b23bc7c70	e389a2d1b8c2
-fd09f2b1-3c22-4ae8-bc84-479709f6ddcb.jsonl	2026-08-09T05:23:41.135000+00:00	Bash	process-kill	4d52eba84841	ac1d374cec66
-fd09f2b1-3c22-4ae8-bc84-479709f6ddcb.jsonl	2026-08-09T05:23:41.135000+00:00	Bash	process-kill	4d52eba84841	ac1d374cec66
-13a18904-396d-4bc5-b380-c64ae4d9c2d9.jsonl	2026-08-09T06:54:25.522000+00:00	Bash	gui-external	fa6ba5f18c50	a23725f416f7
-13a18904-396d-4bc5-b380-c64ae4d9c2d9.jsonl	2026-08-09T06:54:25.522000+00:00	Bash	gui-external	fa6ba5f18c50	a23725f416f7
-13a18904-396d-4bc5-b380-c64ae4d9c2d9.jsonl	2026-08-09T06:55:39.300000+00:00	Bash	temp-scratch	0b897d3dafb4	c0a596456dc8
-13a18904-396d-4bc5-b380-c64ae4d9c2d9.jsonl	2026-08-09T06:55:39.300000+00:00	Bash	temp-scratch	0b897d3dafb4	c0a596456dc8
-13a18904-396d-4bc5-b380-c64ae4d9c2d9.jsonl	2026-08-09T07:03:48.835000+00:00	Bash	other	278487fcae1b	b728547eebd4
-13a18904-396d-4bc5-b380-c64ae4d9c2d9.jsonl	2026-08-09T07:03:48.835000+00:00	Bash	other	278487fcae1b	b728547eebd4
-13a18904-396d-4bc5-b380-c64ae4d9c2d9.jsonl	2026-08-09T07:09:55.445000+00:00	Bash	other	82a12c71f91e	7819ae299b50
-13a18904-396d-4bc5-b380-c64ae4d9c2d9.jsonl	2026-08-09T07:09:55.445000+00:00	Bash	other	82a12c71f91e	7819ae299b50
-f6a7c289-44e1-43ee-82f8-7fd8cd54073a.jsonl	2026-08-09T07:21:13.327000+00:00	Bash	other	44a6fb636cdc	0a3882fe3e50
-f6a7c289-44e1-43ee-82f8-7fd8cd54073a.jsonl	2026-08-09T07:21:13.327000+00:00	Bash	other	44a6fb636cdc	0a3882fe3e50
-f6a7c289-44e1-43ee-82f8-7fd8cd54073a.jsonl	2026-08-09T07:28:26.771000+00:00	Bash	temp-scratch	846d90c62112	8a0ab638ed5b
-f6a7c289-44e1-43ee-82f8-7fd8cd54073a.jsonl	2026-08-09T07:28:26.771000+00:00	Bash	temp-scratch	846d90c62112	8a0ab638ed5b
-b88d43cf-3d6f-47a1-a5bc-8446ea98c776.jsonl	2026-08-09T08:16:26.179000+00:00	Bash	gui-external	eb52816fdd63	9c1af77a2302
-agent-acompact-1710cdf894fe9aad.jsonl	2026-08-09T08:16:26.179000+00:00	Bash	gui-external	eb52816fdd63	9c1af77a2302
-b88d43cf-3d6f-47a1-a5bc-8446ea98c776.jsonl	2026-08-09T08:16:26.179000+00:00	Bash	gui-external	eb52816fdd63	9c1af77a2302
-b88d43cf-3d6f-47a1-a5bc-8446ea98c776.jsonl	2026-08-09T08:16:58.235000+00:00	Bash	gui-external	ef18c59ed8cf	d9ca3fcff3af
-agent-acompact-1710cdf894fe9aad.jsonl	2026-08-09T08:16:58.235000+00:00	Bash	gui-external	ef18c59ed8cf	d9ca3fcff3af
-b88d43cf-3d6f-47a1-a5bc-8446ea98c776.jsonl	2026-08-09T08:16:58.235000+00:00	Bash	gui-external	ef18c59ed8cf	d9ca3fcff3af
-b88d43cf-3d6f-47a1-a5bc-8446ea98c776.jsonl	2026-08-09T08:20:07.328000+00:00	Bash	gui-external	ef18c59ed8cf	dc2e9f31422f
-agent-acompact-1710cdf894fe9aad.jsonl	2026-08-09T08:20:07.328000+00:00	Bash	gui-external	ef18c59ed8cf	dc2e9f31422f
-b88d43cf-3d6f-47a1-a5bc-8446ea98c776.jsonl	2026-08-09T08:20:07.328000+00:00	Bash	gui-external	ef18c59ed8cf	dc2e9f31422f
-b88d43cf-3d6f-47a1-a5bc-8446ea98c776.jsonl	2026-08-09T08:21:28.365000+00:00	Bash	other	ef18c59ed8cf	6163554448f5
-agent-acompact-1710cdf894fe9aad.jsonl	2026-08-09T08:21:28.365000+00:00	Bash	other	ef18c59ed8cf	6163554448f5
-b88d43cf-3d6f-47a1-a5bc-8446ea98c776.jsonl	2026-08-09T08:21:28.365000+00:00	Bash	other	ef18c59ed8cf	6163554448f5
-27093454-599b-4f8c-9466-156e27904cb7.jsonl	2026-08-09T08:25:44.872000+00:00	Bash	other	57a82621feb1	8c2a133ac974
-27093454-599b-4f8c-9466-156e27904cb7.jsonl	2026-08-09T08:25:44.872000+00:00	Bash	other	57a82621feb1	8c2a133ac974
-b88d43cf-3d6f-47a1-a5bc-8446ea98c776.jsonl	2026-08-09T08:26:16.588000+00:00	Bash	gui-external	186c3b9378ba	1c482bab9146
-agent-acompact-1710cdf894fe9aad.jsonl	2026-08-09T08:26:16.588000+00:00	Bash	gui-external	186c3b9378ba	1c482bab9146
-b88d43cf-3d6f-47a1-a5bc-8446ea98c776.jsonl	2026-08-09T08:26:16.588000+00:00	Bash	gui-external	186c3b9378ba	1c482bab9146
-b88d43cf-3d6f-47a1-a5bc-8446ea98c776.jsonl	2026-08-09T08:26:37.325000+00:00	Bash	other	186c3b9378ba	00f28fb05002
-agent-acompact-1710cdf894fe9aad.jsonl	2026-08-09T08:26:37.325000+00:00	Bash	other	186c3b9378ba	00f28fb05002
-b88d43cf-3d6f-47a1-a5bc-8446ea98c776.jsonl	2026-08-09T08:26:37.325000+00:00	Bash	other	186c3b9378ba	00f28fb05002
-bfa8253c-e087-4d0b-a8a5-a435ba5ad001.jsonl	2026-08-09T09:19:32.582000+00:00	Read	process-kill	b5c436f65781	86e074e322d8
-bfa8253c-e087-4d0b-a8a5-a435ba5ad001.jsonl	2026-08-09T09:19:32.582000+00:00	Read	process-kill	b5c436f65781	86e074e322d8
-bfa8253c-e087-4d0b-a8a5-a435ba5ad001.jsonl	2026-08-09T09:20:18.865000+00:00	Bash	process-kill	09d31080eb8e	1391517ef167
-bfa8253c-e087-4d0b-a8a5-a435ba5ad001.jsonl	2026-08-09T09:20:18.865000+00:00	Bash	process-kill	09d31080eb8e	1391517ef167
-bfa8253c-e087-4d0b-a8a5-a435ba5ad001.jsonl	2026-08-09T09:21:57.025000+00:00	Read	secrets	19b088e56529	f49eb75b2c26
-bfa8253c-e087-4d0b-a8a5-a435ba5ad001.jsonl	2026-08-09T09:21:57.025000+00:00	Read	secrets	19b088e56529	f49eb75b2c26
-bfa8253c-e087-4d0b-a8a5-a435ba5ad001.jsonl	2026-08-09T09:22:05.338000+00:00	Read	outside-workdir	eb4d003e6bec	66e3bea34a43
-bfa8253c-e087-4d0b-a8a5-a435ba5ad001.jsonl	2026-08-09T09:22:05.338000+00:00	Read	outside-workdir	eb4d003e6bec	66e3bea34a43
-bfa8253c-e087-4d0b-a8a5-a435ba5ad001.jsonl	2026-08-09T09:22:05.343000+00:00	Read	outside-workdir	6479aadff3d8	66e3bea34a43
-bfa8253c-e087-4d0b-a8a5-a435ba5ad001.jsonl	2026-08-09T09:22:05.343000+00:00	Read	outside-workdir	6479aadff3d8	66e3bea34a43
-bfa8253c-e087-4d0b-a8a5-a435ba5ad001.jsonl	2026-08-09T09:23:58.536000+00:00	Bash	gui-external	282546e759aa	c4c50401dce7
-bfa8253c-e087-4d0b-a8a5-a435ba5ad001.jsonl	2026-08-09T09:23:58.536000+00:00	Bash	gui-external	282546e759aa	c4c50401dce7
-agent-a599a9bde808e8d65.jsonl	2026-08-09T09:24:04.186000+00:00	Read	gui-external	b7d71e1f8888	2c73e2965ba3
-bfa8253c-e087-4d0b-a8a5-a435ba5ad001.jsonl	2026-08-09T09:25:39.525000+00:00	Read	outside-workdir	b7591488415b	96c849aa4a90
-bfa8253c-e087-4d0b-a8a5-a435ba5ad001.jsonl	2026-08-09T09:25:39.525000+00:00	Read	outside-workdir	b7591488415b	96c849aa4a90
-3eda1c84-8702-4f76-a8bf-634f48a4323d.jsonl	2026-08-09T09:26:21.176000+00:00	Bash	outside-workdir	c3381c1b378d	8c84a5a2d206
-3eda1c84-8702-4f76-a8bf-634f48a4323d.jsonl	2026-08-09T09:26:21.176000+00:00	Bash	outside-workdir	c3381c1b378d	8c84a5a2d206
-agent-a599a9bde808e8d65.jsonl	2026-08-09T09:27:04.789000+00:00	Bash	secrets	96e82e91e34c	14719773c18a
-agent-a599a9bde808e8d65.jsonl	2026-08-09T09:29:16.093000+00:00	Bash	outside-workdir	1ed8830de0f6	1c2db3b656c3
+# auto-mode denial manifest v2 | window 2026-07-26..2026-08-09 UTC (entry timestamps)
+# regenerated by scripts/auto-mode-denials.ts --json (v1 double-counted parent-session transcripts)
+# no commands or reason text: *_sha1 are 12-char sha1 prefixes
+transcript	ts	kind	tool	category	cmd_sha1	reason_sha1
+e382123c-edfa-4f5b-9122-df3603a924f2.jsonl	2026-07-26T07:09:35.247Z	decision	Write	temp-scratch	9da6f7f42f32	c8e1b4dc95f6
+agent-a5e7e6b327a150cd4.jsonl	2026-07-27T13:05:35.582Z	decision	Bash	secrets	adad6d19671b	d89c4bae72c1
+agent-a5e7e6b327a150cd4.jsonl	2026-07-27T13:05:35.582Z	decision	Bash	secrets	adad6d19671b	d89c4bae72c1
+b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T13:08:01.383Z	decision	Bash	secrets	a23840185cab	b667bcd50ad8
+agent-acompact-a539b30a9bd6dcfb.jsonl	2026-07-27T13:08:01.383Z	decision	Bash	secrets	a23840185cab	b667bcd50ad8
+b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T13:10:52.076Z	decision	Bash	secrets	a23840185cab	1e6dba9d78ec
+agent-acompact-a539b30a9bd6dcfb.jsonl	2026-07-27T13:10:52.076Z	decision	Bash	secrets	a23840185cab	1e6dba9d78ec
+b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T13:16:34.711Z	decision	Write	outside-workdir	4656a1c96e2d	fde90c0274da
+agent-acompact-a539b30a9bd6dcfb.jsonl	2026-07-27T13:16:34.711Z	decision	Write	outside-workdir	4656a1c96e2d	fde90c0274da
+b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T13:30:27.194Z	decision	Bash	gui-external	a1bbb54c739b	45f987ce9bfc
+agent-acompact-a539b30a9bd6dcfb.jsonl	2026-07-27T13:30:27.194Z	decision	Bash	gui-external	a1bbb54c739b	45f987ce9bfc
+b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T13:31:35.281Z	decision	Bash	gui-external	a1bbb54c739b	bf9967d51c95
+agent-acompact-a539b30a9bd6dcfb.jsonl	2026-07-27T13:31:35.281Z	decision	Bash	gui-external	a1bbb54c739b	bf9967d51c95
+b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T13:32:25.035Z	decision	Bash	gui-external	a0971f6c4bf9	f2a7003474fa
+agent-acompact-a539b30a9bd6dcfb.jsonl	2026-07-27T13:32:25.035Z	decision	Bash	gui-external	a0971f6c4bf9	f2a7003474fa
+b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T14:01:16.781Z	decision	Bash	remote-publish	acc2cf29825f	c174c22cbc11
+agent-acompact-a539b30a9bd6dcfb.jsonl	2026-07-27T14:01:16.781Z	decision	Bash	remote-publish	acc2cf29825f	c174c22cbc11
+b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T16:34:52.252Z	decision	Bash	secrets	0c30012b2898	3155d9f11491
+agent-acompact-a539b30a9bd6dcfb.jsonl	2026-07-27T16:34:52.252Z	decision	Bash	secrets	0c30012b2898	3155d9f11491
+b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T16:35:23.116Z	decision	Bash	secrets	b69868203341	5c6ddfb148b8
+agent-acompact-a539b30a9bd6dcfb.jsonl	2026-07-27T16:35:23.116Z	decision	Bash	secrets	b69868203341	5c6ddfb148b8
+b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-27T18:02:59.048Z	decision	Apply_patch	gui-external	c768c0c88bb0	daf01e3febaa
+agent-acompact-a539b30a9bd6dcfb.jsonl	2026-07-27T18:02:59.048Z	decision	Apply_patch	gui-external	c768c0c88bb0	daf01e3febaa
+b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-28T05:24:13.204Z	decision	Bash	gui-external	9fdc062219c5	547b48f6b5bb
+b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-28T05:26:46.131Z	decision	Apply_patch	gui-external	09f1f7c6e2ee	fa1c37236290
+b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-28T05:34:11.616Z	decision	Apply_patch	gui-external	09f1f7c6e2ee	6bdfb737d4ec
+b956d7e2-99bb-42fc-934c-2d4e7dc2ce98.jsonl	2026-07-28T05:38:30.007Z	decision	Apply_patch	gui-external	09f1f7c6e2ee	cf8d80be9eb3
+agent-a296bb15d053df80e.jsonl	2026-07-28T16:02:24.685Z	decision	Bash	other	e42710615b0f	6c668ac47c62
+2ff826bf-2217-4caf-9d3d-05773b6070b3.jsonl	2026-07-29T09:22:24.483Z	decision	Bash	secrets	c2b4198a1b4e	3481bc4a34e5
+agent-a0a1297ab03eaa96e.jsonl	2026-07-31T09:46:06.203Z	decision	Bash	process-kill	828c65c15069	22a017371a7a
+agent-a0a1297ab03eaa96e.jsonl	2026-07-31T09:46:06.203Z	decision	Bash	process-kill	828c65c15069	22a017371a7a
+agent-a0a1297ab03eaa96e.jsonl	2026-07-31T09:46:06.203Z	decision	Bash	process-kill	828c65c15069	22a017371a7a
+agent-a0a1297ab03eaa96e.jsonl	2026-07-31T09:46:19.242Z	decision	Bash	process-kill	22444cc7bd2d	07d77ff4c5f4
+agent-a0a1297ab03eaa96e.jsonl	2026-07-31T09:46:19.242Z	decision	Bash	process-kill	22444cc7bd2d	07d77ff4c5f4
+agent-a0a1297ab03eaa96e.jsonl	2026-07-31T09:46:19.242Z	decision	Bash	process-kill	22444cc7bd2d	07d77ff4c5f4
+agent-a0a1297ab03eaa96e.jsonl	2026-07-31T09:46:28.644Z	decision	Bash	process-kill	1049ee28d784	3a8009818d2d
+agent-a0a1297ab03eaa96e.jsonl	2026-07-31T09:46:28.644Z	decision	Bash	process-kill	1049ee28d784	3a8009818d2d
+agent-a0a1297ab03eaa96e.jsonl	2026-07-31T09:46:28.644Z	decision	Bash	process-kill	1049ee28d784	3a8009818d2d
+agent-a9a472529882a8b35.jsonl	2026-07-31T09:53:39.078Z	decision	Bash	temp-scratch	c6f867c1976c	3a0ed8322e7d
+agent-a9a472529882a8b35.jsonl	2026-07-31T09:53:39.078Z	decision	Bash	temp-scratch	c6f867c1976c	3a0ed8322e7d
+agent-a9a472529882a8b35.jsonl	2026-07-31T09:53:39.078Z	decision	Bash	temp-scratch	c6f867c1976c	3a0ed8322e7d
+agent-a9a472529882a8b35.jsonl	2026-07-31T09:58:31.948Z	decision	Bash	temp-scratch	617b9bc896d0	c819e680854b
+agent-a9a472529882a8b35.jsonl	2026-07-31T09:58:31.948Z	decision	Bash	temp-scratch	617b9bc896d0	c819e680854b
+agent-a9a472529882a8b35.jsonl	2026-07-31T09:58:31.948Z	decision	Bash	temp-scratch	617b9bc896d0	c819e680854b
+agent-a0a1297ab03eaa96e.jsonl	2026-07-31T10:07:22.949Z	decision	Bash	process-kill	3f01872ca766	3b2edc9edc01
+agent-a0a1297ab03eaa96e.jsonl	2026-07-31T10:07:22.949Z	decision	Bash	process-kill	3f01872ca766	3b2edc9edc01
+agent-a0a1297ab03eaa96e.jsonl	2026-07-31T10:20:09.462Z	decision	Bash	process-kill	8ad3af1e82db	b277af0388ff
+agent-a49abf0a091187355.jsonl	2026-07-31T10:32:35.527Z	decision	Bash	process-kill	e244b8788f2d	f31eac18d946
+agent-ac1792f327ad90b6a.jsonl	2026-07-31T10:32:38.286Z	decision	Bash	process-kill	cbfab831a5e3	a94c68a0b74e
+agent-ac1792f327ad90b6a.jsonl	2026-07-31T10:32:38.286Z	decision	Bash	process-kill	cbfab831a5e3	a94c68a0b74e
+agent-ac1792f327ad90b6a.jsonl	2026-07-31T10:32:45.727Z	decision	Bash	process-kill	828c65c15069	4e79fac7f9eb
+agent-ac1792f327ad90b6a.jsonl	2026-07-31T10:32:45.727Z	decision	Bash	process-kill	828c65c15069	4e79fac7f9eb
+agent-a54dfdc2fa2e8fa30.jsonl	2026-07-31T10:32:47.789Z	decision	Bash	process-kill	828c65c15069	62303c0cb2ca
+agent-a54dfdc2fa2e8fa30.jsonl	2026-07-31T10:32:47.789Z	decision	Bash	process-kill	828c65c15069	62303c0cb2ca
+agent-a54dfdc2fa2e8fa30.jsonl	2026-07-31T10:33:05.923Z	decision	Bash	process-kill	fbdd31059209	b33504d92d19
+agent-a54dfdc2fa2e8fa30.jsonl	2026-07-31T10:33:05.923Z	decision	Bash	process-kill	fbdd31059209	b33504d92d19
+agent-a54dfdc2fa2e8fa30.jsonl	2026-07-31T10:33:25.572Z	decision	Bash	process-kill	4e2ea3524611	ab167c927a2d
+agent-a54dfdc2fa2e8fa30.jsonl	2026-07-31T10:33:25.572Z	decision	Bash	process-kill	4e2ea3524611	ab167c927a2d
+agent-a739d79884133ba3f.jsonl	2026-07-31T10:35:40.694Z	decision	Bash	secrets	0f7cd728683e	512284c6c0f7
+agent-a739d79884133ba3f.jsonl	2026-07-31T10:35:40.694Z	decision	Bash	secrets	0f7cd728683e	512284c6c0f7
+agent-a739d79884133ba3f.jsonl	2026-07-31T10:35:40.694Z	decision	Bash	secrets	0f7cd728683e	512284c6c0f7
+agent-a739d79884133ba3f.jsonl	2026-07-31T10:35:49.774Z	decision	Bash	process-kill	804a869f9438	a7caf1a8b3c8
+agent-a739d79884133ba3f.jsonl	2026-07-31T10:35:49.774Z	decision	Bash	process-kill	804a869f9438	a7caf1a8b3c8
+agent-a739d79884133ba3f.jsonl	2026-07-31T10:35:49.774Z	decision	Bash	process-kill	804a869f9438	a7caf1a8b3c8
+agent-ac4ec9d6fe973f1d4.jsonl	2026-07-31T10:41:47.325Z	decision	Bash	temp-scratch	70f7af6d0999	8c98bcfdf534
+agent-ac4ec9d6fe973f1d4.jsonl	2026-07-31T10:41:47.325Z	decision	Bash	temp-scratch	70f7af6d0999	8c98bcfdf534
+agent-afb3c65f635cdacac.jsonl	2026-07-31T10:43:28.718Z	decision	Bash	process-kill	ae3337128b37	b93ea9720688
+agent-afb3c65f635cdacac.jsonl	2026-07-31T10:43:28.718Z	decision	Bash	process-kill	ae3337128b37	b93ea9720688
+agent-afb3c65f635cdacac.jsonl	2026-07-31T10:44:18.271Z	decision	Bash	process-kill	640ae2daeca9	6a1e0c09e099
+agent-afb3c65f635cdacac.jsonl	2026-07-31T10:44:18.271Z	decision	Bash	process-kill	640ae2daeca9	6a1e0c09e099
+agent-ac4ec9d6fe973f1d4.jsonl	2026-07-31T10:45:23.754Z	decision	Bash	temp-scratch	ff38160448e5	0d7d96c4a08f
+agent-ac4ec9d6fe973f1d4.jsonl	2026-07-31T10:45:23.754Z	decision	Bash	temp-scratch	ff38160448e5	0d7d96c4a08f
+agent-ac4ec9d6fe973f1d4.jsonl	2026-07-31T10:45:36.474Z	decision	Bash	temp-scratch	1652e9a3a583	6815811f7e48
+agent-ac4ec9d6fe973f1d4.jsonl	2026-07-31T10:45:36.474Z	decision	Bash	temp-scratch	1652e9a3a583	6815811f7e48
+agent-ac4ec9d6fe973f1d4.jsonl	2026-07-31T10:48:40.786Z	decision	Bash	temp-scratch	72c416a36af2	4152102e4d75
+agent-ac4ec9d6fe973f1d4.jsonl	2026-07-31T10:48:40.786Z	decision	Bash	temp-scratch	72c416a36af2	4152102e4d75
+agent-afb3c65f635cdacac.jsonl	2026-07-31T10:48:52.066Z	decision	Bash	temp-scratch	060018a8f572	66e3bea34a43
+agent-afb3c65f635cdacac.jsonl	2026-07-31T10:48:52.066Z	decision	Bash	temp-scratch	060018a8f572	66e3bea34a43
+agent-afb3c65f635cdacac.jsonl	2026-07-31T10:49:01.371Z	decision	Bash	temp-scratch	319ce9507804	e26a04d7c9a4
+agent-afb3c65f635cdacac.jsonl	2026-07-31T10:49:01.371Z	decision	Bash	temp-scratch	319ce9507804	e26a04d7c9a4
+agent-a739d79884133ba3f.jsonl	2026-07-31T10:53:53.686Z	decision	Bash	process-kill	f8e8b97ee151	59f6281f429b
+agent-afef7e78f9d7bcbd4.jsonl	2026-07-31T11:14:40.188Z	decision	Bash	process-kill	feebe43c925c	6cf752777640
+agent-afef7e78f9d7bcbd4.jsonl	2026-07-31T11:14:58.435Z	decision	Bash	process-kill	590131713926	92fd22a71c83
+agent-afef7e78f9d7bcbd4.jsonl	2026-07-31T11:15:11.881Z	decision	Bash	process-kill	d107d5fb9c7f	83b2bcbe153b
+agent-a32eac27040856feb.jsonl	2026-07-31T11:16:55.543Z	decision	Bash	process-kill	828c65c15069	740a1e4ad621
+agent-a32eac27040856feb.jsonl	2026-07-31T11:17:09.460Z	decision	Bash	process-kill	d3912a1476e1	b6af07086b94
+agent-ab9307c23a6ee836b.jsonl	2026-07-31T11:20:31.810Z	decision	Bash	other	fa5e30c6d727	96c849aa4a90
+agent-ab9307c23a6ee836b.jsonl	2026-07-31T11:24:29.006Z	decision	Bash	gui-external	bd4845d6d296	cc0815c2032b
+agent-a1ec6a81a26230221.jsonl	2026-07-31T11:34:31.344Z	decision	Bash	process-kill	828c65c15069	1dbbdc0f30d1
+agent-a1ec6a81a26230221.jsonl	2026-07-31T11:34:31.344Z	decision	Bash	process-kill	828c65c15069	1dbbdc0f30d1
+agent-a1ec6a81a26230221.jsonl	2026-07-31T11:34:43.005Z	decision	Bash	process-kill	ad3e30a9ff61	82c3e537bdad
+agent-a1ec6a81a26230221.jsonl	2026-07-31T11:34:43.005Z	decision	Bash	process-kill	ad3e30a9ff61	82c3e537bdad
+agent-ae916c961d15ead2f.jsonl	2026-07-31T11:39:58.792Z	decision	Bash	temp-scratch	362c4ed24287	5d860a9b7138
+agent-ae916c961d15ead2f.jsonl	2026-07-31T11:39:58.792Z	decision	Bash	temp-scratch	362c4ed24287	5d860a9b7138
+agent-ae916c961d15ead2f.jsonl	2026-07-31T11:59:40.149Z	decision	Bash	outside-workdir	037375dfa285	96fd144ca70e
+agent-ae916c961d15ead2f.jsonl	2026-07-31T11:59:48.987Z	decision	Bash	outside-workdir	f2279514056a	3718a339d438
+966bc02d-1e57-4599-8346-21709375102c.jsonl	2026-08-03T05:24:42.595Z	decision	Bash	other	534c330b4b07	a0fa75e389b2
+ee559097-96ba-458b-86d7-6e15a85928a4.jsonl	2026-08-04T11:28:07.451Z	decision	Bash	temp-scratch	48bdd2114127	23affa83dbc5
+94b1dde0-06e1-4fb0-8559-4f7dbff35d10.jsonl	2026-08-04T18:50:02.931Z	decision	Bash	outside-workdir	09cde1578274	ca68ece4b8b4
+b3955878-94db-4e60-ace7-d709ae4b9350.jsonl	2026-08-05T12:28:15.314Z	decision	Apply_patch	other	ffe55535a6be	f90ab7af58a9
+b3955878-94db-4e60-ace7-d709ae4b9350.jsonl	2026-08-05T12:30:14.106Z	decision	Write	other	5ca6513c7d6c	84941969e018
+fc1c914d-fcd5-4524-8d28-696d34392782.jsonl	2026-08-05T15:46:09.001Z	decision	Bash	outside-workdir	d058b69a47a9	4437b051243d
+2d2cd5e7-c8f0-442f-8dd4-f40a174c5d49.jsonl	2026-08-05T18:08:40.378Z	decision	Apply_patch	other	4873f9242d27	805a00bd22e3
+2d2cd5e7-c8f0-442f-8dd4-f40a174c5d49.jsonl	2026-08-05T18:10:53.343Z	decision	Apply_patch	other	4873f9242d27	dfa2dee23a8d
+agent-a53243bb34761ae86.jsonl	2026-08-07T18:18:13.595Z	decision	Bash	secrets	3831a7fcac99	f49eb75b2c26
+agent-ad7dfd38899236dfc.jsonl	2026-08-07T18:22:53.711Z	outage	Bash	no-verdict	4b824f445e8d	9042b183c9a6
+agent-aa52413e95cc30d8b.jsonl	2026-08-07T18:22:56.725Z	outage	Bash	no-verdict	87e820032a75	9042b183c9a6
+agent-a05b11dd53a55d553.jsonl	2026-08-07T18:22:58.642Z	outage	Bash	no-verdict	a50c01e41df5	9042b183c9a6
+agent-a3430dc641cb0cda8.jsonl	2026-08-07T18:23:09.257Z	outage	Bash	no-verdict	72ff6e829dd0	9042b183c9a6
+agent-afbd58f0ffe80b74d.jsonl	2026-08-07T18:23:11.455Z	outage	Bash	no-verdict	7678108e91cd	9042b183c9a6
+agent-aa8def113c64a56f3.jsonl	2026-08-07T18:23:15.041Z	outage	Bash	no-verdict	b819df612356	9042b183c9a6
+agent-a05b11dd53a55d553.jsonl	2026-08-07T18:23:16.210Z	outage	Bash	no-verdict	e89edf216ce7	9042b183c9a6
+agent-a2cb555b38205cab4.jsonl	2026-08-07T18:23:16.586Z	outage	Bash	no-verdict	351d937c7681	9042b183c9a6
+agent-ac378983eda6ba46c.jsonl	2026-08-07T18:23:22.531Z	outage	Bash	no-verdict	2db75bd74f59	9042b183c9a6
+agent-a48882e84c29021c5.jsonl	2026-08-07T18:23:24.427Z	outage	Bash	no-verdict	09e557bea884	9042b183c9a6
+agent-a3bc1f7bd2d6e4138.jsonl	2026-08-07T18:23:30.744Z	outage	Bash	no-verdict	43f85847d49c	9042b183c9a6
+agent-a7e6a5d44c58a3d41.jsonl	2026-08-07T18:23:33.370Z	outage	Bash	no-verdict	16fea293a4b0	9042b183c9a6
+agent-a6ead296b74d79e6f.jsonl	2026-08-07T18:23:34.639Z	outage	Bash	no-verdict	e9c41bddee80	9042b183c9a6
+agent-a0c85d695be4790d6.jsonl	2026-08-07T18:23:37.615Z	outage	Bash	no-verdict	dbeda90ffc98	9042b183c9a6
+agent-ac378983eda6ba46c.jsonl	2026-08-07T18:23:40.835Z	outage	Bash	no-verdict	20baea4d42a7	9042b183c9a6
+agent-a05b11dd53a55d553.jsonl	2026-08-07T18:23:46.154Z	outage	Bash	no-verdict	5b5269acf5cc	9042b183c9a6
+agent-aa8def113c64a56f3.jsonl	2026-08-07T18:23:48.147Z	outage	Bash	no-verdict	d7ff775d5c34	9042b183c9a6
+agent-a6ead296b74d79e6f.jsonl	2026-08-07T18:23:52.974Z	outage	Bash	no-verdict	08e556236da9	9042b183c9a6
+agent-aa52413e95cc30d8b.jsonl	2026-08-07T18:23:53.609Z	outage	Bash	no-verdict	06a4a1c63ee3	9042b183c9a6
+agent-a9195210e39b41d11.jsonl	2026-08-07T18:23:54.145Z	outage	Bash	no-verdict	1dee6dc36a27	9042b183c9a6
+agent-a0c85d695be4790d6.jsonl	2026-08-07T18:23:55.138Z	outage	Bash	no-verdict	a6e32aebea09	9042b183c9a6
+agent-a05b11dd53a55d553.jsonl	2026-08-07T18:24:03.024Z	outage	Bash	no-verdict	f4af20455865	9042b183c9a6
+agent-a9ec46403e0b83c74.jsonl	2026-08-07T18:24:06.171Z	outage	Bash	no-verdict	4b73602415dc	9042b183c9a6
+agent-aa8def113c64a56f3.jsonl	2026-08-07T18:24:07.241Z	outage	Bash	no-verdict	b5c7fc9cf161	9042b183c9a6
+agent-a1db75089c2a4bc82.jsonl	2026-08-07T18:24:07.338Z	outage	Bash	no-verdict	e35018069ebe	9042b183c9a6
+agent-a4b43c1a76ea94798.jsonl	2026-08-07T18:24:10.025Z	outage	Bash	no-verdict	2c743eba902d	9042b183c9a6
+agent-a6ead296b74d79e6f.jsonl	2026-08-07T18:24:11.138Z	outage	Bash	no-verdict	599bf50be668	9042b183c9a6
+agent-a6acf20ea13f1b5c2.jsonl	2026-08-07T18:24:11.551Z	outage	Bash	no-verdict	bb9ed3491d94	9042b183c9a6
+agent-a0c85d695be4790d6.jsonl	2026-08-07T18:24:12.358Z	outage	Bash	no-verdict	ff6e184ba86f	9042b183c9a6
+agent-a9195210e39b41d11.jsonl	2026-08-07T18:24:12.371Z	outage	Bash	no-verdict	14afdea4047d	9042b183c9a6
+agent-aa52413e95cc30d8b.jsonl	2026-08-07T18:24:12.663Z	outage	Bash	no-verdict	87e820032a75	9042b183c9a6
+agent-a6bffcbb4096bc487.jsonl	2026-08-07T18:24:22.972Z	outage	Bash	no-verdict	36358184dade	9042b183c9a6
+agent-a9ec46403e0b83c74.jsonl	2026-08-07T18:24:23.104Z	outage	Bash	no-verdict	dc65751bde30	9042b183c9a6
+agent-a1db75089c2a4bc82.jsonl	2026-08-07T18:24:24.219Z	outage	Bash	no-verdict	a562f54d9cc3	9042b183c9a6
+agent-aa8def113c64a56f3.jsonl	2026-08-07T18:24:24.700Z	outage	Bash	no-verdict	3d217d10b77c	9042b183c9a6
+agent-a1db75089c2a4bc82.jsonl	2026-08-07T18:24:24.741Z	outage	Bash	no-verdict	10dae60d204d	9042b183c9a6
+agent-aa8def113c64a56f3.jsonl	2026-08-07T18:24:24.742Z	outage	Bash	no-verdict	62f1bb8cb459	9042b183c9a6
+agent-aa8def113c64a56f3.jsonl	2026-08-07T18:24:25.212Z	outage	Bash	no-verdict	35ea6bf778b8	9042b183c9a6
+agent-a4e3cc473fad612e2.jsonl	2026-08-07T18:24:25.536Z	outage	Bash	no-verdict	001b14b0799d	9042b183c9a6
+agent-a4e3cc473fad612e2.jsonl	2026-08-07T18:24:25.705Z	outage	Bash	no-verdict	a374b5c94f86	9042b183c9a6
+agent-a6ead296b74d79e6f.jsonl	2026-08-07T18:24:27.402Z	outage	Bash	no-verdict	cb1051b6f349	9042b183c9a6
+agent-a6ead296b74d79e6f.jsonl	2026-08-07T18:24:28.456Z	outage	Bash	no-verdict	cdddded026e5	9042b183c9a6
+agent-a2568daebb00565df.jsonl	2026-08-07T18:24:28.457Z	outage	Bash	no-verdict	feabe86d4172	9042b183c9a6
+agent-a9195210e39b41d11.jsonl	2026-08-07T18:24:28.762Z	outage	Bash	no-verdict	85ceb999f811	9042b183c9a6
+agent-a6acf20ea13f1b5c2.jsonl	2026-08-07T18:24:28.770Z	outage	Bash	no-verdict	5720c8530252	9042b183c9a6
+agent-a2568daebb00565df.jsonl	2026-08-07T18:24:28.932Z	outage	Bash	no-verdict	0a60547c3d6a	9042b183c9a6
+agent-a9195210e39b41d11.jsonl	2026-08-07T18:24:28.932Z	outage	Bash	no-verdict	463fbe18be7d	9042b183c9a6
+agent-a6ead296b74d79e6f.jsonl	2026-08-07T18:24:28.932Z	outage	Bash	no-verdict	6229374db52e	9042b183c9a6
+agent-a6acf20ea13f1b5c2.jsonl	2026-08-07T18:24:28.933Z	outage	Bash	no-verdict	af7c4be3f2ba	9042b183c9a6
+agent-a2568daebb00565df.jsonl	2026-08-07T18:24:29.420Z	outage	Bash	no-verdict	71edf410da81	9042b183c9a6
+agent-a9195210e39b41d11.jsonl	2026-08-07T18:24:29.421Z	outage	Bash	no-verdict	401cf5ad1832	9042b183c9a6
+agent-a6ead296b74d79e6f.jsonl	2026-08-07T18:24:29.421Z	outage	Bash	no-verdict	7f26a5de08bf	9042b183c9a6
+agent-a6acf20ea13f1b5c2.jsonl	2026-08-07T18:24:29.422Z	outage	Bash	no-verdict	48a59464366b	9042b183c9a6
+agent-a9195210e39b41d11.jsonl	2026-08-07T18:24:29.938Z	outage	Bash	no-verdict	074f3b8f178b	9042b183c9a6
+agent-ad7eedd5fc9439863.jsonl	2026-08-07T18:24:53.300Z	outage	Bash	no-verdict	8a6150593cc4	9042b183c9a6
+5080b1c0-7da6-4a5b-bc5f-882ad3890f67.jsonl	2026-08-08T03:28:01.385Z	decision	Bash	temp-scratch	02320e4097be	36e7df8e41e4
+faf61691-25cb-4453-843b-798ab3d80020.jsonl	2026-08-08T04:13:10.964Z	decision	Bash	secrets	2e86361629a3	86d8c7ff06a1
+faf61691-25cb-4453-843b-798ab3d80020.jsonl	2026-08-08T04:20:09.213Z	decision	Bash	remote-publish	0bfdb1e08ed7	4ef64e6a73c5
+faf61691-25cb-4453-843b-798ab3d80020.jsonl	2026-08-08T04:21:55.746Z	decision	Bash	remote-publish	793e754e5353	8adf4334fa83
+faf61691-25cb-4453-843b-798ab3d80020.jsonl	2026-08-08T04:36:08.350Z	decision	Apply_patch	gui-external	e8ba44ad3bdf	16be13df5dc8
+b79860e5-fb16-40f5-86b6-0bf2fcd59256.jsonl	2026-08-08T14:00:13.515Z	decision	Bash	temp-scratch	d7b27da98f8d	47a12365ca69
+agent-acompact-1e145096d3499c9f.jsonl	2026-08-08T14:00:13.515Z	decision	Bash	temp-scratch	d7b27da98f8d	47a12365ca69
+agent-ad8b5fcebb358aba9.jsonl	2026-08-08T14:34:28.965Z	decision	Bash	temp-scratch	12e96730d8d2	1681d84f19d2
+agent-afb6c5c37d5124050.jsonl	2026-08-08T14:37:06.204Z	decision	Bash	secrets	66506af09f11	bbdc669fa6de
+b0a10a5a-64f3-42d7-a822-a45430a625e2.jsonl	2026-08-08T16:32:06.402Z	decision	Bash	outside-workdir	fd64b9bbdbf4	06340d778003
+b0a10a5a-64f3-42d7-a822-a45430a625e2.jsonl	2026-08-08T16:32:06.435Z	decision	Bash	outside-workdir	34cb1d66b25d	579ae2208eca
+69ffa25a-8e33-4e59-b6e3-2cddbbe75f03.jsonl	2026-08-08T17:46:19.509Z	decision	Bash	outside-workdir	1eb26a381e1e	a15789c46245
+69ffa25a-8e33-4e59-b6e3-2cddbbe75f03.jsonl	2026-08-08T17:47:14.222Z	decision	Bash	outside-workdir	350f4b3025f5	344318d55a1a
+agent-ad7a3497d1787a436.jsonl	2026-08-08T19:08:08.038Z	decision	Bash	other	694c44d82fe5	df11a99f8773
+fd09f2b1-3c22-4ae8-bc84-479709f6ddcb.jsonl	2026-08-09T05:23:08.563Z	decision	Bash	process-kill	342b23bc7c70	e389a2d1b8c2
+fd09f2b1-3c22-4ae8-bc84-479709f6ddcb.jsonl	2026-08-09T05:23:41.135Z	decision	Bash	process-kill	4d52eba84841	ac1d374cec66
+13a18904-396d-4bc5-b380-c64ae4d9c2d9.jsonl	2026-08-09T06:54:25.522Z	decision	Bash	gui-external	fa6ba5f18c50	a23725f416f7
+13a18904-396d-4bc5-b380-c64ae4d9c2d9.jsonl	2026-08-09T06:55:39.300Z	decision	Bash	temp-scratch	0b897d3dafb4	c0a596456dc8
+13a18904-396d-4bc5-b380-c64ae4d9c2d9.jsonl	2026-08-09T07:03:48.835Z	decision	Bash	other	278487fcae1b	b728547eebd4
+13a18904-396d-4bc5-b380-c64ae4d9c2d9.jsonl	2026-08-09T07:09:55.445Z	decision	Bash	other	82a12c71f91e	7819ae299b50
+f6a7c289-44e1-43ee-82f8-7fd8cd54073a.jsonl	2026-08-09T07:21:13.327Z	decision	Bash	other	44a6fb636cdc	0a3882fe3e50
+f6a7c289-44e1-43ee-82f8-7fd8cd54073a.jsonl	2026-08-09T07:28:26.771Z	decision	Bash	temp-scratch	846d90c62112	8a0ab638ed5b
+agent-acompact-1710cdf894fe9aad.jsonl	2026-08-09T08:16:26.179Z	decision	Bash	gui-external	eb52816fdd63	9c1af77a2302
+b88d43cf-3d6f-47a1-a5bc-8446ea98c776.jsonl	2026-08-09T08:16:26.179Z	decision	Bash	gui-external	eb52816fdd63	9c1af77a2302
+agent-acompact-1710cdf894fe9aad.jsonl	2026-08-09T08:16:58.235Z	decision	Bash	gui-external	ef18c59ed8cf	d9ca3fcff3af
+b88d43cf-3d6f-47a1-a5bc-8446ea98c776.jsonl	2026-08-09T08:16:58.235Z	decision	Bash	gui-external	ef18c59ed8cf	d9ca3fcff3af
+agent-acompact-1710cdf894fe9aad.jsonl	2026-08-09T08:20:07.328Z	decision	Bash	gui-external	ef18c59ed8cf	dc2e9f31422f
+b88d43cf-3d6f-47a1-a5bc-8446ea98c776.jsonl	2026-08-09T08:20:07.328Z	decision	Bash	gui-external	ef18c59ed8cf	dc2e9f31422f
+agent-acompact-1710cdf894fe9aad.jsonl	2026-08-09T08:21:28.365Z	decision	Bash	other	ef18c59ed8cf	6163554448f5
+b88d43cf-3d6f-47a1-a5bc-8446ea98c776.jsonl	2026-08-09T08:21:28.365Z	decision	Bash	other	ef18c59ed8cf	6163554448f5
+27093454-599b-4f8c-9466-156e27904cb7.jsonl	2026-08-09T08:25:44.872Z	decision	Bash	other	57a82621feb1	8c2a133ac974
+agent-acompact-1710cdf894fe9aad.jsonl	2026-08-09T08:26:16.588Z	decision	Bash	gui-external	186c3b9378ba	1c482bab9146
+b88d43cf-3d6f-47a1-a5bc-8446ea98c776.jsonl	2026-08-09T08:26:16.588Z	decision	Bash	gui-external	186c3b9378ba	1c482bab9146
+agent-acompact-1710cdf894fe9aad.jsonl	2026-08-09T08:26:37.325Z	decision	Bash	other	186c3b9378ba	00f28fb05002
+b88d43cf-3d6f-47a1-a5bc-8446ea98c776.jsonl	2026-08-09T08:26:37.325Z	decision	Bash	other	186c3b9378ba	00f28fb05002
+bfa8253c-e087-4d0b-a8a5-a435ba5ad001.jsonl	2026-08-09T09:19:32.582Z	decision	Read	process-kill	66c776cc3f90	86e074e322d8
+bfa8253c-e087-4d0b-a8a5-a435ba5ad001.jsonl	2026-08-09T09:20:18.865Z	decision	Bash	process-kill	09d31080eb8e	1391517ef167
+bfa8253c-e087-4d0b-a8a5-a435ba5ad001.jsonl	2026-08-09T09:21:57.025Z	decision	Read	secrets	85fd5f16fe06	f49eb75b2c26
+bfa8253c-e087-4d0b-a8a5-a435ba5ad001.jsonl	2026-08-09T09:22:05.338Z	decision	Read	outside-workdir	40c70e2a45b5	66e3bea34a43
+bfa8253c-e087-4d0b-a8a5-a435ba5ad001.jsonl	2026-08-09T09:22:05.343Z	decision	Read	outside-workdir	c65bea477443	66e3bea34a43
+bfa8253c-e087-4d0b-a8a5-a435ba5ad001.jsonl	2026-08-09T09:22:20.419Z	outage	Grep	no-verdict	d4250fb5fe6e	9042b183c9a6
+bfa8253c-e087-4d0b-a8a5-a435ba5ad001.jsonl	2026-08-09T09:22:48.280Z	outage	Read	no-verdict	494e29e8d741	9042b183c9a6
+bfa8253c-e087-4d0b-a8a5-a435ba5ad001.jsonl	2026-08-09T09:23:58.536Z	decision	Bash	gui-external	282546e759aa	c4c50401dce7
+agent-a599a9bde808e8d65.jsonl	2026-08-09T09:24:04.186Z	decision	Read	gui-external	897ff15aaeef	2c73e2965ba3
+bfa8253c-e087-4d0b-a8a5-a435ba5ad001.jsonl	2026-08-09T09:25:39.525Z	decision	Read	outside-workdir	9816d0b5e748	96c849aa4a90
+3eda1c84-8702-4f76-a8bf-634f48a4323d.jsonl	2026-08-09T09:26:21.176Z	decision	Bash	outside-workdir	c3381c1b378d	8c84a5a2d206
+bfa8253c-e087-4d0b-a8a5-a435ba5ad001.jsonl	2026-08-09T09:26:58.968Z	outage	Read	no-verdict	2a08f2b1f76b	9042b183c9a6
+agent-a599a9bde808e8d65.jsonl	2026-08-09T09:27:04.789Z	decision	Bash	secrets	96e82e91e34c	14719773c18a
+agent-a599a9bde808e8d65.jsonl	2026-08-09T09:29:16.093Z	decision	Bash	outside-workdir	1ed8830de0f6	1c2db3b656c3

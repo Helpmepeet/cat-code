@@ -2,7 +2,14 @@
 
 Investigation. No code changed, no fixes proposed.
 
-**Revision 3.** Restructured so the observations stand without a verdict
+**Revision 4.** Corrects a double-counting error in revisions 2–3: the
+extraction scanned every top-level session transcript twice, inflating denial
+counts and manufacturing phantom repeats. Every figure sourced from JSONL has
+been recomputed by `scripts/auto-mode-denials.ts`, which walks the tree once. The
+direction of every finding is unchanged; several magnitudes are materially
+smaller. Full before/after in the revision history.
+
+Revision 3 restructured the report so the observations stand without a verdict
 attached. Revisions 1–2 interleaved measurement with judgement — findings were
 phrased as defects and absences ("no circuit breaker", "bypasses tracking"),
 which names a desired state and therefore its repair. A problem statement is a
@@ -13,7 +20,7 @@ Sections 1–6 are observations: facts recoverable from data or source, stated
 without asserting anything should change. Section 7 records which observations
 change meaning under which goal, without selecting a goal. Nothing here
 identifies a problem or proposes work; whether any of this warrants action is a
-separate decision, deliberately left open. Revision-2 numbers are unchanged.
+separate decision, deliberately left open.
 
 ## Method
 
@@ -26,9 +33,14 @@ or `…temporarily unavailable, so auto mode cannot determine…`
 to its originating command by `tool_use_id`, so every denial counted here has its
 exact command attached.
 
+Extraction is `scripts/auto-mode-denials.ts`, which walks the transcript tree
+once. **Revisions 2–3 used a globbing pass that matched every top-level session
+transcript twice**, double-counting denials recorded outside subagent files; all
+figures here are the deduplicated ones (see revision history).
+
 Debug logs supply classifier cost and latency only, which JSONL does not carry.
 Debug coverage is a strict subset: the debug scan finds 128 decision denials, the
-JSONL scan 208.
+JSONL scan 151.
 
 Companion manifest: `2026-08-09-auto-mode-denial-manifest.tsv`, one row per
 denial with transcript, timestamp, tool, category, and sha1 prefixes of command
@@ -38,10 +50,10 @@ and reason.
 
 | Measure | Value |
 | --- | --- |
-| Classifier-decision denials | 208 |
-| Denials issued when the classifier was unavailable | 61 |
-| Total | 269 |
-| Distinct transcripts affected | 44 |
+| Classifier-decision denials | 151 |
+| Denials issued when the classifier was unavailable | 58 |
+| Total | 209 |
+| Distinct transcripts affected (decision denials) | 44 |
 
 From the debug-logged subset (1,669 classifier invocations):
 
@@ -59,8 +71,8 @@ model.
 
 ## 2. Repeated commands
 
-**103 of the 208 decision denials repeat a byte-identical command already denied
-earlier in the same transcript.** 77 distinct commands were denied more than
+**46 of the 151 decision denials repeat a byte-identical command already denied
+earlier in the same transcript.** 36 distinct commands were denied more than
 once. Highest repeat counts:
 
 ```
@@ -77,7 +89,7 @@ was denied and the following attempt was `unlink "/tmp/sidebar-focus-probe.ts"`
 
 ## 3. Denials issued without a classifier decision
 
-61 of the 269 denials were issued because the classifier did not return a
+58 of the 209 denials were issued because the classifier did not return a
 verdict. In the debug-logged session `24b1f79e` (2026-08-07), 55 of these ran
 from **18:22:53.710Z to 18:24:53.299Z**, about 2 minutes, within a session making
 126 classifier calls. Causes: **38 connection errors, 17 "No healthy Codex
@@ -121,18 +133,24 @@ and those 9 subagents raising `AbortError` rather than reaching an operator.
 
 | Category | n | % |
 | --- | --- | --- |
-| Process kill / PID | 48 | 23.1% |
-| GUI / external (Electron, browser, ChatGPT launcher) | 40 | 19.2% |
-| Temp / scratch path | 34 | 16.3% |
-| Mixed / uncategorised | 27 | 13.0% |
-| Secrets / credentials | 26 | 12.5% |
-| Outside working dir, non-temp | 26 | 12.5% |
-| Remote / publish | 7 | 3.4% |
+| Process kill / PID | 44 | 29.1% |
+| Temp / scratch path | 28 | 18.5% |
+| GUI / external (Electron, browser, ChatGPT launcher) | 25 | 16.6% |
+| Secrets / credentials | 19 | 12.6% |
+| Mixed / uncategorised | 16 | 10.6% |
+| Outside working dir, non-temp | 15 | 9.9% |
+| Remote / publish | 4 | 2.6% |
 
-**Path provenance.** For the 45 denials naming an explicit temp path, I checked
-whether the same transcript referenced that path in an earlier `tool_use`: **40
-were referenced earlier in the same transcript**; 5 name no explicit path; none
-had a path with no prior reference.
+**Commands referencing skill machinery** (`~/.agents/skills/`, `SKILL.md`,
+mirrors, skill launcher scripts) account for **29 of the 151** decision denials,
+cutting across the temp-path, outside-workdir and GUI categories above. The
+category scheme is keyed to the rule that fired, so it does not surface this
+grouping.
+
+**Path provenance.** For the 35 temp-path denials, I checked whether the same
+transcript referenced that path in an earlier `tool_use`: **32 were referenced
+earlier in the same transcript**; 3 name no explicit path; none had a path with
+no prior reference.
 
 **Process kills.** These enforce the same constraint as
 `.claude/hooks/block-sweep-kill.sh`, which denies discovery-paired kills
@@ -215,6 +233,28 @@ rather than dropped:
 
 Revision 2 → 3 changed framing only. No number changed.
 
+**Revision 4 corrects a counting error of mine.** The extraction used
+`glob('*/**/*.jsonl') + glob('*/*.jsonl')`, and on Python's recursive glob the
+first pattern already matches top-level files, so all 239 session transcripts
+were scanned twice while subagent transcripts were scanned once. Denials
+recorded in a parent transcript were therefore counted twice, and a
+single-occurrence command in a parent transcript appeared as a repeat. The error
+was found by `scripts/auto-mode-denials.ts`, written to surface denials, when its
+single-walk figures disagreed with the report's.
+
+| Claim | Revisions 2–3 | Corrected |
+| --- | --- | --- |
+| Decision denials | 208 | 151 |
+| No-verdict denials | 61 | 58 |
+| Total | 269 | 209 |
+| Repeated commands | 103 (50%) | 46 (30%) |
+| Temp-path denials | 34 | 28 (35 incl. mixed-category) |
+| Provenance sample | 40 of 45 | 32 of 35 |
+
+Direction of every finding is unchanged; magnitudes are not. The manifest was
+regenerated (v2). Debug-log-derived figures in §1 and §6 come from a different
+source and were not affected.
+
 ## Uncertainty
 
 - **No approval outcomes.** Logs record that an action was denied, never whether
@@ -227,8 +267,8 @@ Revision 2 → 3 changed framing only. No number changed.
   may legitimately diverge.
 - **Category boundaries are mine**, keyword-assisted over command and reason
   text. The 27-item mixed bucket and the outside-workdir split are the softest.
-- **The 61 unavailable denials are dominated by one session.** The control-flow
+- **The 58 unavailable denials are dominated by one session.** The control-flow
   facts in §4 are permanent; the frequency of the trigger is a one-observation
   sample.
 - **Debug-derived cost figures cover only debug-enabled sessions** and are not
-  comparable to the 269 total.
+  comparable to the 209 total.
