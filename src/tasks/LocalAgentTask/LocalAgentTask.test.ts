@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
+import { getSessionId } from '../../bootstrap/state.js'
 import { getDefaultAppState } from '../../state/AppStateStore.js'
 import type { AppState } from '../../state/AppStateStore.js'
 import type { SetAppState } from '../../Task.js'
@@ -13,6 +14,11 @@ import {
   seedCodexAccountPoolForTest,
   type PoolAccount,
 } from '../../services/api/codexAccountPool.js'
+import {
+  _setWebSocketFactoryForTest,
+  clearWebSocketSession,
+  ensureWebSocketSession,
+} from '../../services/api/codex-websocket-transport.js'
 import {
   appendLocalAgentSystemMessage,
   completeAgentTask,
@@ -53,6 +59,27 @@ function buildPoolAccount(
   }
 }
 
+class FakeWebSocket {
+  static OPEN = 1
+
+  readyState = FakeWebSocket.OPEN
+  closeCalls = 0
+  private listeners = new Map<string, Array<(...args: unknown[]) => void>>()
+
+  on(type: string, listener: (...args: unknown[]) => void): void {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener])
+  }
+
+  open(): void {
+    for (const listener of this.listeners.get('open') ?? []) listener()
+  }
+
+  close(): void {
+    this.closeCalls += 1
+    this.readyState = 3
+  }
+}
+
 describe('LocalAgentTask foreground cleanup', () => {
   let appState: AppState
 
@@ -65,6 +92,10 @@ describe('LocalAgentTask foreground cleanup', () => {
     resetCodexAccountPoolForTest()
     resetCodexLeaseManagerForTest()
     resetCommandQueue()
+  })
+
+  afterEach(() => {
+    _setWebSocketFactoryForTest(null)
   })
 
   test('unregisterAgentForeground releases the foreground agent codex lease', () => {
@@ -212,6 +243,39 @@ describe('LocalAgentTask foreground cleanup', () => {
       handoffStatus: 'blocked',
       blockReason: 'Should I update the public API too?',
     })
+  })
+
+  test('completeAgentTask clears the finished agent WebSocket session', async () => {
+    const agentId = 'sync-agent-ws-cleanup'
+    const conversationId = `${getSessionId()}/${agentId}`
+    let socket: FakeWebSocket | undefined
+    _setWebSocketFactoryForTest(() => {
+      socket = new FakeWebSocket()
+      queueMicrotask(() => socket?.open())
+      return socket as never
+    })
+    await ensureWebSocketSession(conversationId, { Authorization: 'Bearer test' })
+    registerAgentForeground({
+      agentId,
+      description: 'Finish websocket agent',
+      prompt: 'test prompt',
+      selectedAgent: { name: 'general-purpose', prompt: 'test prompt' },
+      setAppState,
+    })
+
+    completeAgentTask(
+      {
+        agentId,
+        content: [{ type: 'text', text: 'done' }],
+        totalToolUseCount: 0,
+        totalDurationMs: 1,
+        totalTokens: 1,
+      },
+      setAppState,
+    )
+
+    expect(socket?.closeCalls).toBe(1)
+    clearWebSocketSession(conversationId)
   })
 
   test('local agent pill label shows name role blocked state and CTA', () => {

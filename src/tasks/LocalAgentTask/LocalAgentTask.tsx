@@ -1,6 +1,7 @@
-import { getSdkAgentProgressSummariesEnabled } from '../../bootstrap/state.js';
+import { getSdkAgentProgressSummariesEnabled, getSessionId } from '../../bootstrap/state.js';
 import { getCodexLeaseForOwner, releaseCodexLease } from '../../services/api/codexAccountLeaseManager.js';
 import { markPoolAccountLastError } from '../../services/api/codexAccountPool.js';
+import { clearWebSocketSession } from '../../services/api/codex-websocket-transport.js';
 import { OUTPUT_FILE_TAG, STATUS_TAG, SUMMARY_TAG, TASK_ID_TAG, TASK_NOTIFICATION_TAG, TOOL_USE_ID_TAG, WORKTREE_BRANCH_TAG, WORKTREE_PATH_TAG, WORKTREE_TAG } from '../../constants/xml.js';
 import { formatTaskNotificationText, toTaskNotificationOrigin } from '../../utils/taskNotification.js';
 import { abortSpeculation } from '../../services/PromptSuggestion/speculation.js';
@@ -362,6 +363,11 @@ export const LocalAgentTask: Task = {
   }
 };
 
+function releaseAgentCodexResources(taskId: string): void {
+  releaseCodexLease(taskId);
+  clearWebSocketSession(`${getSessionId()}/${taskId}`);
+}
+
 /**
  * Kill an agent task. No-op if already killed/completed.
  */
@@ -385,7 +391,7 @@ export function killAsyncAgent(taskId: string, setAppState: SetAppState): void {
     };
   });
   if (killed) {
-    releaseCodexLease(taskId);
+    releaseAgentCodexResources(taskId);
     void evictTaskOutput(taskId);
   }
 }
@@ -551,7 +557,7 @@ export function completeAgentTask(result: AgentToolResult, setAppState: SetAppSt
       selectedAgent: undefined
     };
   });
-  releaseCodexLease(taskId);
+  releaseAgentCodexResources(taskId);
   void evictTaskOutput(taskId);
   // Note: Notification is sent by AgentTool via enqueueAgentNotification
 }
@@ -578,7 +584,7 @@ export function failAgentTask(taskId: string, error: string, setAppState: SetApp
   });
   const failedLease = getCodexLeaseForOwner(taskId)
   if (failedLease) markPoolAccountLastError(failedLease.accountId)
-  releaseCodexLease(taskId);
+  releaseAgentCodexResources(taskId);
   void evictTaskOutput(taskId);
   // Note: Notification is sent by AgentTool via enqueueAgentNotification
 }
@@ -814,7 +820,7 @@ export function unregisterAgentForeground(taskId: string, setAppState: SetAppSta
   });
 
   if (shouldReleaseLease) {
-    releaseCodexLease(taskId);
+    releaseAgentCodexResources(taskId);
   }
 
   // Call cleanup outside of the state updater (avoid side effects in updater)
