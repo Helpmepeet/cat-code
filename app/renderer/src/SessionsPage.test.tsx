@@ -56,6 +56,14 @@ test('renders the header, count subtitle and real session titles', () => {
   expect(html).toContain('Fix the parser')
   expect(html).toContain('Old TUI session')
   expect(html).toContain('New session')
+  expect(html).toContain('aria-label="Open session Fix the parser"')
+})
+
+test('session rows use a named open button instead of a button role around nested controls', () => {
+  const source = readFileSync(new URL('./SessionsPage.tsx', import.meta.url), 'utf8')
+
+  expect(source).toContain('aria-label={`Open session ${row.displayLabel}`}')
+  expect(source).not.toContain("role={openable ? 'button' : undefined}")
 })
 
 test('renders the live status badge for a live registry row', () => {

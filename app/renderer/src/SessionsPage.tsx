@@ -679,9 +679,23 @@ function SessionRow({
               className="min-w-0 max-w-[340px] flex-[0_1_auto] rounded-md border border-accent/45 bg-white/[0.06] px-[7px] py-0.5 text-[13px] font-medium text-text-primary outline-none"
             />
           ) : (
-            <span className="truncate text-[13px] font-medium text-text-primary">
-              {row.displayLabel}
-            </span>
+            openable ? (
+              <button
+                aria-label={`Open session ${row.displayLabel}`}
+                className="min-w-0 truncate text-left text-[13px] font-medium text-text-primary"
+                onClick={event => {
+                  event.stopPropagation()
+                  actions.onOpen(row)
+                }}
+                type="button"
+              >
+                {row.displayLabel}
+              </button>
+            ) : (
+              <span className="truncate text-[13px] font-medium text-text-primary">
+                {row.displayLabel}
+              </span>
+            )
           )}
           <StatusBadge row={row} />
           {row.mode === 'agent' ? (
@@ -756,22 +770,13 @@ function SessionRow({
       }
     : undefined
 
-  // A div, not a button: the row now nests its own controls (checkbox, tag, ⋯),
-  // and a button may not contain buttons. Keyboard activation is restored
-  // explicitly so the row stays reachable without a pointer.
+  // The pointer-friendly row is a plain div because it nests controls. Keyboard
+  // opening belongs to the named title button above, so those controls retain
+  // their own roles in the accessibility tree.
   return (
     <div
-      role={openable ? 'button' : undefined}
-      tabIndex={openable ? 0 : undefined}
       className={rowClass}
       onClick={openRow}
-      onKeyDown={event => {
-        if (!openable || renaming) return
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault()
-          actions.onOpen(row)
-        }
-      }}
       onContextMenu={onContextMenu}
       title={
         openable
