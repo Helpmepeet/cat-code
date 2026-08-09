@@ -2509,6 +2509,25 @@ test('P4-24c — rejects model.set with a NON-string model (Zod boundary), no do
   expect(calls).toEqual([])
 })
 
+test('P4-24c — rejects effort.set with a NON-string effort (Zod boundary), no domain call', () => {
+  const { server, calls } = makeRunControlsServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'effort.set', requestId: 'rc-effort-type', effort: 42 } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(received.some(f => f.kind === 'run-control.result')).toBe(false)
+  expect(calls).toEqual([])
+})
+
 test('P4-24c — rejects fast.set with a NON-boolean active, no domain call', () => {
   const { server, calls } = makeRunControlsServer()
   const { socket, received } = makeSocket()
