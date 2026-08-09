@@ -111,7 +111,7 @@ and is explicitly **out of scope here**.
 ## 1a. Park is not a failure (operator ruling 2026-08-05)
 
 The premise above was that park could be free by reusing the crash presentation.
-It could not: the crash presentation *says something untrue*. The three surfaces
+It could not: the crash presentation *says something untrue*. The five surfaces
 a user meets in the chat view are fixed **without** touching the descriptor —
 §11's "the renderer is provably unaware park exists" is preserved at the
 DESCRIPTOR level, which is where it was load-bearing. The distinction is carried
@@ -146,14 +146,17 @@ red with `Expected: "parked" / Received: "exited"`.
 | Tab | danger dot + Restart button | `busy` tone, no restart affordance (`tabStatus.ts`; `busy` is the tone a preview pane already uses — same situation, opposite direction) |
 | Composer | read-only | editable; the submit is held (§3a) |
 | Composer rail (added 2026-08-09, CC-33) | model, effort, fast, account and mode faces ALL blank, and the context percentage moved as the donut lost its real window | the last values the engine reported, as read-only faces; the pickers disarm on the live seam alone (`composerRailModel.ts`) |
+| Pending-submit row (added 2026-08-09, CC-35) | `Queued — <text> — Sends when the session is ready.` narrated the restore until the resumed engine attached | absent for an idle-park restore; the pending-submit record retains that origin through `connecting`, while a genuine first cold spawn keeps the existing row unchanged |
 
-> **§1a was written as if the chat view had three surfaces. It has four.** The
+> **§1a was written as if the chat view had three surfaces. It has five.** The
 > composer rail was the fourth, and it failed in the loudest way available: a
 > parked session claimed to be running on nothing at all. The cause is the same
 > shape as the rest of this section — one signal doing two jobs. Each per-session
 > snapshot nulls on the `lifecycle` frame, which correctly disarms every picker
 > and incorrectly erases every answer. Display and capability are now separate
-> reads, so losing the process disarms without blanking.
+> reads, so losing the process disarms without blanking. The pending-submit row
+> was the fifth: its text remains held for delivery and failure recovery, but
+> only a first cold spawn advertises that hold as a queue. A park restore does not.
 
 **A second, earlier copy of the same defect** (found by review round 2, proved with
 a real sidecar): the sidecar closes its socket inside `cleanup()` *before*

@@ -153,6 +153,7 @@ import {
   type HistoryState,
   type PasteEntry,
   type PasteState,
+  type PendingSubmit,
   type PendingSubmitState,
   type TransportErrorState,
 } from './composerState.js'
@@ -1779,14 +1780,17 @@ export function App() {
   // restore here, a terminal connection status in the drain effect below), so a
   // failed reconnect surfaces the text plus an error instead of eating it.
   const releasePendingSubmit = useCallback((sessionId: SessionId) => {
-    const parked = selectPendingSubmit(pendingSubmitsRef.current, sessionId)
-    if (parked === null) return
+    const pending = selectPendingSubmit(pendingSubmitsRef.current, sessionId)
+    if (pending === null) return
     setPendingSubmits(prev => reducePendingSubmitCleared(prev, sessionId))
     setPromptDrafts(drafts =>
       reducePromptDrafts(
         drafts,
         sessionId,
-        restoreDraftWithPending(selectPromptDraft(drafts, sessionId), parked),
+        restoreDraftWithPending(
+          selectPromptDraft(drafts, sessionId),
+          pending.text,
+        ),
       ),
     )
     setTransportErrors(prev =>
@@ -2086,7 +2090,12 @@ export function App() {
       setHistoryState(prev => reduceHistoryPushed(prev, sessionId, text))
     }
     if (action.type === 'hold') {
-      setPendingSubmits(prev => reducePendingSubmitHeld(prev, sessionId, text))
+      setPendingSubmits(prev =>
+        reducePendingSubmitHeld(prev, sessionId, {
+          text,
+          showQueuedRow: action.showQueuedRow,
+        }),
+      )
       retireDraft()
       setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))
       return
@@ -2119,8 +2128,8 @@ export function App() {
   // and sends, and no Restart button is involved.
   useEffect(() => {
     for (const sessionId of Object.keys(pendingSubmits)) {
-      const parked = pendingSubmits[sessionId]
-      if (parked === undefined) continue
+      const pending = pendingSubmits[sessionId]
+      if (pending === undefined) continue
       const outcome = resolvePendingSubmit(selectConnection(connection, sessionId))
       if (outcome === 'wait') continue
       if (outcome === 'restore') {
@@ -2132,7 +2141,7 @@ export function App() {
         continue
       }
       try {
-        getBridge().submit(sessionId, parked)
+        getBridge().submit(sessionId, pending.text)
         setPendingSubmits(prev => reducePendingSubmitCleared(prev, sessionId))
         setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))
       } catch (error) {
@@ -4415,16 +4424,15 @@ export function SessionPane({
         <div className="text-sm text-tone-danger">{transportError}</div>
       ) : null}
 
-      {/* CC-16 — the parked prompt is the only sign the message still exists:
-       * the composer was cleared on submit, so without this row the text looks
-       * lost until it is sent. Only ONE wait can produce it now: no engine is
-       * attached yet. A mid-turn submit is not parked here at all, it is sent
-       * and the engine queues it into the running turn. */}
-      {pendingSubmit ? (
+      {/* CC-16 — a genuine cold-spawn prompt needs this row because the composer
+       * cleared before any engine was ready to receive it. IDLE-PARK restore is
+       * deliberately silent: it keeps the same held prompt and failure recovery,
+       * but must not narrate the reclaimed engine while it reconnects. */}
+      {pendingSubmit?.showQueuedRow ? (
         <div className="flex items-baseline gap-2 text-xs" role="status">
           <span className="shrink-0 font-medium text-text-muted">Queued</span>
           <span className="min-w-0 flex-1 truncate text-text-subtle">
-            {pendingSubmit}
+            {pendingSubmit.text}
           </span>
           <span className="shrink-0 text-text-subtle">
             Sends when the session is ready.
@@ -4987,9 +4995,9 @@ type SessionPaneProps = {
   mentionItems: MentionItem[]
   /** Collapsed pastes held aside for this session, oldest first. */
   pastes: PasteEntry[]
-  /** CC-16 — a prompt submitted before the engine could accept it, held until it
-   * can. Present = the composer is empty because the text is queued, not lost. */
-  pendingSubmit?: string | null
+  /** CC-16 — a prompt submitted before the engine could accept it. The cold-spawn
+   * row is presentation metadata; every pending prompt still blocks a second hold. */
+  pendingSubmit?: PendingSubmit | null
   /** Bug fix — hands `pendingSubmit` back to the composer without sending it.
    * `stopTurn` calls this so Stop cancels a queued prompt along with the turn,
    * instead of the CC-16 drain firing it as a fresh turn the instant the

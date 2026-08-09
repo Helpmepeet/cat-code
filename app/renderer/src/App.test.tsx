@@ -707,8 +707,12 @@ test('a mid-turn composer stays typeable: the turn gates the SEND, not the input
   expect(html).toContain('aria-label="Stop the turn"')
 })
 
-test('a parked prompt names the only wait there is: the spawn', () => {
+test('a cold-spawn prompt announces its wait, while a park restore stays silent', () => {
   const base = idleSessionPaneProps()
+  const coldSpawnPending = {
+    text: 'run the tests',
+    showQueuedRow: true,
+  }
 
   // The spawn wait is what the row exists for.
   const spawning = renderToStaticMarkup(
@@ -716,7 +720,7 @@ test('a parked prompt names the only wait there is: the spawn', () => {
       {...base}
       activeConnection={{ status: 'connecting', inputEnabled: false }}
       activeLog={{ ...base.activeLog, inputEnabled: false }}
-      pendingSubmit="run the tests"
+      pendingSubmit={coldSpawnPending}
     />,
   )
   expect(spawning).toContain('run the tests')
@@ -729,7 +733,7 @@ test('a parked prompt names the only wait there is: the spawn', () => {
       {...base}
       preview
       activeConnection={{ status: 'ready', inputEnabled: false }}
-      pendingSubmit="run the tests"
+      pendingSubmit={coldSpawnPending}
     />,
   )
   expect(preview).toContain('Sends when the session is ready.')
@@ -741,10 +745,30 @@ test('a parked prompt names the only wait there is: the spawn', () => {
     <SessionPane
       {...base}
       activeConnection={{ status: 'ready', inputEnabled: false }}
-      pendingSubmit="run the tests"
+      pendingSubmit={coldSpawnPending}
     />,
   )
   expect(midTurn).not.toContain('Sends when this response finishes.')
+
+  const parkRestorePending = {
+    text: 'resume without machinery',
+    showQueuedRow: false,
+  }
+  for (const status of ['parked', 'connecting'] as const) {
+    const restoring = renderToStaticMarkup(
+      <SessionPane
+        {...base}
+        activeConnection={{ status, inputEnabled: false }}
+        activeLog={{ ...base.activeLog, inputEnabled: false }}
+        pendingSubmit={parkRestorePending}
+      />,
+    )
+    expect(restoring).not.toContain('Queued')
+    expect(restoring).not.toContain('resume without machinery')
+    const sendButton =
+      restoring.match(/<button[^>]*aria-label="Send prompt"[^>]*>/)?.[0] ?? ''
+    expect(sendButton).toContain('disabled=""')
+  }
 })
 
 test('CC-16: a dead session stays read-only and does not pretend to be typeable', () => {
@@ -916,7 +940,7 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
   // Park, and retire the draft exactly like a real send (so nothing is left
   // half-submitted), then return WITHOUT touching the bridge.
   expect(submitBody).toContain(
-    "if (action.type === 'hold') {\n      setPendingSubmits(prev => reducePendingSubmitHeld(prev, sessionId, text))\n      retireDraft()",
+    "if (action.type === 'hold') {\n      setPendingSubmits(prev =>\n        reducePendingSubmitHeld(prev, sessionId, {\n          text,\n          showQueuedRow: action.showQueuedRow,\n        }),\n      )\n      retireDraft()",
   )
   // The drain rides the EXISTING app.submit — no new frame kind or channel.
   expect(submitBody).toContain(
@@ -924,7 +948,7 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
   )
   expect(submitBody).toContain("if (outcome === 'wait') continue")
   expect(submitBody).toContain("if (outcome === 'release') {\n        releasePendingSubmit(sessionId)")
-  expect(submitBody).toContain('getBridge().submit(sessionId, parked)')
+  expect(submitBody).toContain('getBridge().submit(sessionId, pending.text)')
   // IDLE-PARK (CC-28) — the arm that makes a reclaimed engine invisible. Nothing
   // is spawning and no turn will end for a parked session, so without this the
   // held prompt would wait forever. It is pinned here for the same reason as its
@@ -1832,7 +1856,7 @@ test('the autoscroll signature tracks the RENDERED transcript, not the capped ra
   expect(line).toContain('renderedRowCount')
 })
 
-test('a parked prompt is visible, and the send arrow says so', () => {
+test('a cold-spawn prompt is visible, and the send arrow says so', () => {
   // CC-16 parks a prompt submitted before the engine can take it, and clears the
   // composer as if it had been sent. Nothing rendered the parked text, so the
   // message simply vanished; and a second Enter was a silent no-op while the
@@ -1844,7 +1868,7 @@ test('a parked prompt is visible, and the send arrow says so', () => {
     <SessionPane
       {...idleSessionPaneProps()}
       prompt="ship it"
-      pendingSubmit="run the migration"
+      pendingSubmit={{ text: 'run the migration', showQueuedRow: true }}
     />,
   )
   expect(parked).toContain('run the migration')
