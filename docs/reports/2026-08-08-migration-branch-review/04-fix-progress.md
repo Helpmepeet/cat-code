@@ -20,6 +20,7 @@ and their verification. Entries are appended as checkpoints land.
 | A12 HIGH restored-agent catalog; A12 MED restored goals/state and worktree cwd | fixed | `30d97ee` | app typecheck; controller + real-process resume probes (18 pass) |
 | A12 MED subagent restore fan-out/budget; related replay dedupe/oversized-branch behavior | fixed | `71d0309` | app typecheck; `subagentHistory` suite (13 pass) |
 | A12/A14 MED catalog failure diagnostics and unbounded transcript run-facts reads | fixed | `7c885b0` | app typecheck; catalog + run-facts suites (48 pass) |
+| A03 HIGH removed sidecar connections can still submit late frames | fixed | `c4fa7c9` | app typecheck; focused regression passes (full boundary suite: 193 pass, 3 pre-existing account-snapshot failures) |
 
 ## Known verification limitation
 
@@ -30,5 +31,5 @@ Unix socket binding. GUI hardening verification is also still outstanding.
 
 ## Next active review item
 
-A03 HIGH: make a removed sidecar connection inert, so late data cannot start an
-undeliverable engine turn.
+Continue auditing the remaining confirmed High findings, prioritizing correctness
+and security boundaries over structural refactors.
