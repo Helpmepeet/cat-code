@@ -2,6 +2,8 @@
   "upstreamVersion": "2.1.223",
   "extractedOn": "2026-08-09",
   "binary": "~/.local/share/claude/versions/2.1.223",
+  "binarySha256": "a63e3ecbf6b58812fb314b8a8d99a12b45ec7c11209ad09598469542edbba8b3",
+  "extractionCommand": "bun -e 'import { createHash } from \"node:crypto\"; import { mkdirSync, readFileSync, writeFileSync } from \"node:fs\"; const [binaryPath, outputDirectory] = process.argv.slice(1); const binary = readFileSync(binaryPath, \"utf8\"); const extract = anchor => { const hit = binary.indexOf(anchor); if (hit < 0) throw new Error(`anchor not found: ${anchor}`); const start = binary.lastIndexOf(\"`\", hit) + 1; let end = start; for (; end < binary.length; end += 1) { if (binary[end] === \"\\\\\") { end += 1; continue } if (binary[end] === \"`\") break } if (end === binary.length) throw new Error(`unterminated template: ${anchor}`); return binary.slice(start, end).replace(\"${\\\"\\\"}\", \"\").replace(/\\\\\\$/g, \"$\").replace(/\\\\`/g, \"`\").replace(/\\\\u([0-9a-fA-F]{4})/g, (_, code) => String.fromCharCode(parseInt(code, 16))) }; mkdirSync(outputDirectory, { recursive: true }); for (const [name, anchor] of [[\"system_prompt.txt\", \"You are a security monitor for autonomous AI coding agents.\"], [\"permissions.txt\", \"## Environment\\n\\nThree kinds of slot.\"]]) { const text = extract(anchor); writeFileSync(`${outputDirectory}/${name}`, text); console.error(`${name} ${text.length} ${createHash(\"sha256\").update(text).digest(\"hex\")}`) }' -- ~/.local/share/claude/versions/2.1.223 /tmp/claude-auto-mode-2.1.223",
   "files": {
     "system_prompt.txt": {
       "chars": 37278,
