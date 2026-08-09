@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { randomUUID, type UUID } from 'crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'fs'
 import { writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
@@ -9,7 +9,7 @@ import { applyPostCodexAccountSwitchRefresh } from '../services/api/codexAccount
 import { asAgentId, asSessionId } from '../types/ids.js'
 import { registerActiveSubagent, unregisterActiveSubagent } from './cleanupRegistry.js'
 import { createUserMessage } from './messages.js'
-import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, flushSessionStorage, getAgentTranscriptPath, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, loadDisplayTranscriptFromJsonlPath, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordPromptCacheBreak, recordRunFacts, recordTranscript, resetProjectForTesting, resetRunFactsDedupeForTest } from './sessionStorage.js'
+import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, flushSessionStorage, getAgentTranscriptPath, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, loadDisplayTranscriptFromJsonlPath, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordPromptCacheBreak, recordRunFacts, recordTranscript, removeTranscriptMessage, resetProjectForTesting, resetRunFactsDedupeForTest, setSessionFileForTesting } from './sessionStorage.js'
 
 describe('session storage', () => {
   const originalSessionId = getSessionId()
@@ -129,6 +129,31 @@ describe('session storage', () => {
     // Tip is the user/assistant turn, not the lone system frame.
     expect(log!.firstPrompt).toBe('The magic word is NONCE-XYZ.')
     expect(JSON.stringify(log!.messages)).toContain('Acknowledged: NONCE-XYZ.')
+  })
+
+  test('concurrent tombstones serialize their transcript rewrites', async () => {
+    const first = randomUUID()
+    const second = randomUUID()
+    const surviving = randomUUID()
+    const filePath = join(tempDir, 'tombstone-race.jsonl')
+    writeFileSync(
+      filePath,
+      [first, second, surviving]
+        .map(uuid => JSON.stringify({ type: 'assistant', uuid, sessionId }))
+        .join('\n') + '\n',
+    )
+    setSessionFileForTesting(filePath)
+
+    await Promise.all([
+      removeTranscriptMessage(first as UUID),
+      removeTranscriptMessage(second as UUID),
+    ])
+
+    const remaining = (await Bun.file(filePath).text())
+      .trim()
+      .split('\n')
+      .map(line => (JSON.parse(line) as { uuid: string }).uuid)
+    expect(remaining).toEqual([surviving])
   })
 
   test('last session log restores metadata across legacy mixed session stamps', async () => {

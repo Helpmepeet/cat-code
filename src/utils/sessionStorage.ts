@@ -85,6 +85,7 @@ import { parseJSONL } from './json.js'
 import { logError } from './log.js'
 import { extractTag, isCompactBoundaryMessage } from './messages.js'
 import { sanitizePath } from './path.js'
+import { writeFileSyncAndFlush_DEPRECATED } from './file.js'
 import {
   extractJsonStringField,
   extractLastJsonStringField,
@@ -997,6 +998,10 @@ class Project {
   >()
   private flushTimer: ReturnType<typeof setTimeout> | null = null
   private activeDrain: Promise<void> | null = null
+  // Every mutation of one transcript must serialize with queued appends and
+  // with other tombstone removals. A counter (`trackWrite`) only tells flush()
+  // that work exists; it cannot protect the read-modify-write filesystem span.
+  private fileOperationChains = new Map<string, Promise<void>>()
   private FLUSH_INTERVAL_MS = 100
   private readonly MAX_CHUNK_BYTES = 100 * 1024 * 1024
 
@@ -1010,6 +1015,7 @@ class Project {
     this.flushTimer = null
     this.activeDrain = null
     this.writeQueues = new Map()
+    this.fileOperationChains = new Map()
   }
 
   private incrementPendingWrites(): void {
@@ -1036,6 +1042,25 @@ class Project {
     }
   }
 
+  private serializeFileOperation<T>(
+    filePath: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.fileOperationChains.get(filePath) ?? Promise.resolve()
+    const result = previous.catch(() => undefined).then(operation)
+    const completion = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    this.fileOperationChains.set(filePath, completion)
+    void completion.then(() => {
+      if (this.fileOperationChains.get(filePath) === completion) {
+        this.fileOperationChains.delete(filePath)
+      }
+    })
+    return result
+  }
+
   private enqueueWrite(filePath: string, entry: Entry): Promise<void> {
     return new Promise<void>(resolve => {
       let queue = this.writeQueues.get(filePath)
@@ -1054,9 +1079,17 @@ class Project {
     }
     this.flushTimer = setTimeout(async () => {
       this.flushTimer = null
-      this.activeDrain = this.drainWriteQueue()
-      await this.activeDrain
-      this.activeDrain = null
+      try {
+        this.activeDrain = this.drainWriteQueue()
+        await this.activeDrain
+      } catch (err) {
+        logForDebugging(
+          `Failed to flush transcript queue: ${err instanceof Error ? err.message : String(err)}`,
+          { level: 'warn' },
+        )
+      } finally {
+        this.activeDrain = null
+      }
       // If more items arrived during drain, schedule again
       if (this.writeQueues.size > 0) {
         this.scheduleDrain()
@@ -1082,31 +1115,36 @@ class Project {
       }
       const batch = queue.splice(0)
 
-      let content = ''
-      const resolvers: Array<() => void> = []
+      try {
+        await this.serializeFileOperation(filePath, async () => {
+          let content = ''
+          const resolvers: Array<() => void> = []
 
-      for (const { entry, resolve } of batch) {
-        const line = jsonStringify(entry) + '\n'
+          for (const { entry, resolve } of batch) {
+            const line = jsonStringify(entry) + '\n'
 
-        if (content.length + line.length >= this.MAX_CHUNK_BYTES) {
-          // Flush chunk and resolve its entries before starting a new one
-          await this.appendToFile(filePath, content)
-          for (const r of resolvers) {
-            r()
+            if (content.length + line.length >= this.MAX_CHUNK_BYTES) {
+              // Flush chunk and resolve its entries before starting a new one.
+              await this.appendToFile(filePath, content)
+              for (const r of resolvers) r()
+              resolvers.length = 0
+              content = ''
+            }
+
+            content += line
+            resolvers.push(resolve)
           }
-          resolvers.length = 0
-          content = ''
-        }
 
-        content += line
-        resolvers.push(resolve)
-      }
-
-      if (content.length > 0) {
-        await this.appendToFile(filePath, content)
-        for (const r of resolvers) {
-          r()
-        }
+          if (content.length > 0) {
+            await this.appendToFile(filePath, content)
+            for (const r of resolvers) r()
+          }
+        })
+      } catch (err) {
+        // The batch has not been durably acknowledged. Restore it at the front
+        // so a later flush retries every entry instead of silently losing it.
+        queue.unshift(...batch)
+        throw err
       }
     }
 
@@ -1318,11 +1356,19 @@ class Project {
    * positional write + truncate instead of rewriting the whole file.
    */
   async removeMessageByUuid(targetUuid: UUID): Promise<void> {
-    return this.trackWrite(async () => {
-      if (this.sessionFile === null) return
+    const sessionFile = this.sessionFile
+    if (sessionFile === null) return
+
+    // Move entries already queued for this transcript ahead of the removal.
+    // Any later drain joins the same per-file operation chain below, so it
+    // cannot append inside the removal's read-modify-write window.
+    await this.drainWriteQueue()
+
+    return this.trackWrite(() =>
+      this.serializeFileOperation(sessionFile, async () => {
       try {
         let fileSize = 0
-        const fh = await fsOpen(this.sessionFile, 'r+')
+        const fh = await fsOpen(sessionFile, 'r+')
         try {
           const { size } = await fh.stat()
           fileSize = size
@@ -1380,7 +1426,7 @@ class Project {
           )
           return
         }
-        const content = await readFile(this.sessionFile, { encoding: 'utf-8' })
+        const content = await readFile(sessionFile, { encoding: 'utf-8' })
         const lines = content.split('\n').filter((line: string) => {
           if (!line.trim()) return true
           try {
@@ -1390,13 +1436,20 @@ class Project {
             return true // Keep malformed lines
           }
         })
-        await writeFile(this.sessionFile, lines.join('\n'), {
+        writeFileSyncAndFlush_DEPRECATED(sessionFile, lines.join('\n'), {
           encoding: 'utf8',
+          mode: 0o600,
         })
-      } catch {
-        // Silently ignore errors - the file might not exist yet
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          logForDebugging(
+            `Failed to remove tombstoned transcript message: ${err instanceof Error ? err.message : String(err)}`,
+            { level: 'warn' },
+          )
+        }
       }
-    })
+      }),
+    )
   }
 
   /**
