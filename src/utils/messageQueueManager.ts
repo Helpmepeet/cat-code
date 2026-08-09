@@ -27,14 +27,16 @@ export type SetAppState = (f: (prev: AppState) => AppState) => void
 // Logging helper
 // ============================================================================
 
-function logOperation(operation: QueueOperation, content?: string): void {
+function logOperation(operation: QueueOperation, command?: QueuedCommand): void {
   const sessionId = getSessionId()
   const queueOp: QueueOperationMessage = {
     type: 'queue-operation',
     operation,
     timestamp: new Date().toISOString(),
     sessionId,
-    ...(content !== undefined && { content }),
+    ...(command?.uuid !== undefined && { uuid: command.uuid }),
+    ...(command?.mode !== undefined && { mode: command.mode }),
+    ...(typeof command?.value === 'string' && { content: command.value }),
   }
   void recordQueueOperation(queueOp)
 }
@@ -166,10 +168,7 @@ export function recheckCommandQueue(): void {
 export function enqueue(command: QueuedCommand): void {
   commandQueue.push({ ...command, priority: command.priority ?? 'next' })
   notifySubscribers()
-  logOperation(
-    'enqueue',
-    typeof command.value === 'string' ? command.value : undefined,
-  )
+  logOperation('enqueue', command)
 }
 
 /**
@@ -190,10 +189,7 @@ export function enqueuePendingNotification(command: QueuedCommand): void {
     priority: command.priority ?? 'later',
   })
   notifySubscribers()
-  logOperation(
-    'enqueue',
-    typeof command.value === 'string' ? command.value : undefined,
-  )
+  logOperation('enqueue', command)
 }
 
 const PRIORITY_ORDER: Record<QueuePriority, number> = {
@@ -236,7 +232,7 @@ export function dequeue(
 
   const [dequeued] = commandQueue.splice(bestIdx, 1)
   notifySubscribers()
-  logOperation('dequeue')
+  logOperation('dequeue', dequeued)
   return dequeued
 }
 

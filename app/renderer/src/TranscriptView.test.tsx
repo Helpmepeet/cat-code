@@ -1475,6 +1475,7 @@ test('P4-45: no notice type prints its discriminant', () => {
     'api_retry',
     'local_command_output',
     'account_diagnostic',
+    'turn_interrupted',
   ] as const) {
     const html = render({
       ...frameSource,

@@ -3183,8 +3183,7 @@ function RedactedThinkingBlock() {
 }
 
 /**
- * SystemNoticeRow: the notice box for the three projected notice types
- * (api_retry / local_command_output / account_diagnostic), each with its own
+ * SystemNoticeRow: the notice box for the projected notice types, each with its own
  * glyph + tone. The type is carried by that glyph and tone alone: it used to
  * also print the raw discriminant in the corner, which is a debug tag, not a
  * word anyone reads (CLAUDE.md §7).
@@ -3193,7 +3192,11 @@ function SystemNoticeBox({
   noticeType,
   content,
 }: {
-  noticeType: 'api_retry' | 'local_command_output' | 'account_diagnostic'
+  noticeType:
+    | 'api_retry'
+    | 'local_command_output'
+    | 'account_diagnostic'
+    | 'turn_interrupted'
   content: string
 }) {
   const { glyph, glyphTone } = NOTICE_STYLE[noticeType]
@@ -3210,12 +3213,16 @@ function SystemNoticeBox({
 }
 
 const NOTICE_STYLE: Record<
-  'api_retry' | 'local_command_output' | 'account_diagnostic',
+  | 'api_retry'
+  | 'local_command_output'
+  | 'account_diagnostic'
+  | 'turn_interrupted',
   { glyph: string; glyphTone: string }
 > = {
   api_retry: { glyph: '↻', glyphTone: 'text-tone-warn' },
   local_command_output: { glyph: '›', glyphTone: 'text-text-muted' },
   account_diagnostic: { glyph: '!', glyphTone: 'text-tone-warn' },
+  turn_interrupted: { glyph: '!', glyphTone: 'text-tone-warn' },
 }
 
 /** Status → dot tone, shared by the standalone row and the agent card's finish. */

@@ -65,7 +65,10 @@ function makeSupervisor(configHome: string): SidecarSupervisor {
   const supervisor = new SidecarSupervisor({
     sidecarCommand: 'bun',
     sidecarArgs: ['run', sidecarEntry],
-    sidecarEnv: { CLAUDE_CONFIG_DIR: configHome },
+    sidecarEnv: {
+      ANTHROPIC_API_KEY: 'sk-ant-restore-probe',
+      CLAUDE_CONFIG_DIR: configHome,
+    },
   })
   supervisors.push(supervisor)
   return supervisor
@@ -108,6 +111,45 @@ async function mintRealisticTranscript(opts: {
     transcriptPath: transcriptLine.slice('MINTED_TRANSCRIPT_PATH='.length),
     sidechainPath: sidechainLine.slice('MINTED_SIDECHAIN_PATH='.length),
   }
+}
+
+async function mintInterruptedQueuedTranscript(opts: {
+  configHome: string
+  cwd: string
+  engineSessionId: string
+  marker: string
+}): Promise<{ queuedUuid: string }> {
+  const child = Bun.spawn(
+    [
+      'bun',
+      'run',
+      minter,
+      opts.engineSessionId,
+      opts.marker,
+      '--interrupted-queued',
+    ],
+    {
+      cwd: opts.cwd,
+      env: {
+        ...process.env,
+        CLAUDE_CONFIG_DIR: opts.configHome,
+        TEST_ENABLE_SESSION_PERSISTENCE: '1',
+      },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+  )
+  const [code, stdout, stderr] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ])
+  if (code !== 0) throw new Error(`mint failed (exit ${code}): ${stderr}`)
+  const queuedLine = stdout
+    .split('\n')
+    .find(line => line.startsWith('MINTED_QUEUED_UUID='))
+  if (!queuedLine) throw new Error(`mint did not report queued UUID: ${stdout}`)
+  return { queuedUuid: queuedLine.slice('MINTED_QUEUED_UUID='.length) }
 }
 
 function waitForFrame(
@@ -215,4 +257,63 @@ test('F2: two realistic transcripts restore through new real sidecar processes w
   expect(JSON.stringify(replayA)).not.toContain(markerB)
   expect(JSON.stringify(replayB)).toContain(markerB)
   expect(JSON.stringify(replayB)).not.toContain(markerA)
+}, TEST_TIMEOUT_MS)
+
+test('restore replays undelivered queued input by UUID and reports an interrupted idle turn', async () => {
+  const configHome = tmp('catcode-queued-restore-cfg-')
+  const cwd = tmp('catcode-queued-restore-cwd-')
+  const engineSessionId = randomUUID()
+  const marker = `queued-${randomUUID()}`
+  const { queuedUuid } = await mintInterruptedQueuedTranscript({
+    configHome,
+    cwd,
+    engineSessionId,
+    marker,
+  })
+
+  const supervisor = makeSupervisor(configHome)
+  const appSessionId = 'queued-restore'
+  const frames: ServerFrame[] = []
+  supervisor.subscribe(event => {
+    if (event.type === 'frame') frames.push(event.frame)
+  })
+  const readyPromise = waitForFrame(
+    supervisor,
+    frame => frame.kind === 'ready' && frame.sessionId === appSessionId,
+  )
+  const queuedReplayPromise = waitForFrame(
+    supervisor,
+    frame =>
+      frame.kind === 'event' &&
+      frame.sessionId === appSessionId &&
+      frame.replay === true &&
+      JSON.stringify(frame).includes(queuedUuid),
+  )
+
+  supervisor.spawnSession(appSessionId, { cwd, resumeEngineSessionId: engineSessionId })
+  const [ready, queuedReplay] = await Promise.all([
+    readyPromise,
+    queuedReplayPromise,
+  ])
+
+  expect(ready).toMatchObject({
+    kind: 'ready',
+    turnInterrupted: true,
+    payload: { inputEnabled: true, activeTurn: false },
+  })
+  expect(queuedReplay).toMatchObject({
+    kind: 'event',
+    replay: true,
+    event: {
+      type: 'message',
+      message: {
+        type: 'user',
+        uuid: queuedUuid,
+        message: { role: 'user', content: `queued input ${marker}` },
+      },
+    },
+  })
+  expect(
+    frames.filter(frame => JSON.stringify(frame).includes(queuedUuid)),
+  ).toHaveLength(1)
 }, TEST_TIMEOUT_MS)

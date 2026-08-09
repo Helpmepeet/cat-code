@@ -520,6 +520,8 @@ export type ReadyFrame = {
   protocolVersion: typeof PROTOCOL_VERSION
   sessionId: SessionId
   engineSessionId: string
+  /** Desktop restore state. Additive under v1; absent means no interrupted turn. */
+  turnInterrupted?: boolean
   payload: AppReadyPayload
 }
 

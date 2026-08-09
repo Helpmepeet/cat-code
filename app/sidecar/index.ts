@@ -34,6 +34,7 @@ import {
 } from '../../src/utils/sessionStorage.js'
 import {
   mergeDisplayHistoryWithSeed,
+  projectUndeliveredPrompts,
   projectResumedHistory,
 } from './historyProjection.js'
 import { initializeSidecarRuntime } from './initializeRuntime.js'
@@ -192,6 +193,10 @@ async function main(): Promise<void> {
     : await loadAgentDefinitionsForRuntime(args.cwd)
   let resumed: Awaited<ReturnType<typeof resumeEngineSession>> | undefined
   let resumedMessages: Message[] | undefined
+  let turnInterrupted = false
+  let undeliveredPrompts: Awaited<
+    ReturnType<typeof resumeEngineSession>
+  >['undeliveredPrompts'] = []
   // `agentDefinitions` is loaded exactly when this is not a probe attach, so
   // testing it here is the same condition and lets the resume call see a
   // defined catalog.
@@ -202,6 +207,8 @@ async function main(): Promise<void> {
       agentDefinitions,
     )
     resumedMessages = resumed.messages
+    turnInterrupted = resumed.turnInterrupted
+    undeliveredPrompts = resumed.undeliveredPrompts
     process.stderr.write(
       `[sidecar] resume-seeded messages=${resumed.messages.length} engineSessionId=${resumed.engineSessionId}\n`,
     )
@@ -282,6 +289,9 @@ async function main(): Promise<void> {
       merged.history,
       message => process.stderr.write(`${message}\n`),
     )
+    historyEvents.push(
+      ...projectUndeliveredPrompts(undeliveredPrompts, getSessionId()),
+    )
     historySourceTruncated = display.truncated || merged.truncated
   }
 
@@ -312,6 +322,7 @@ async function main(): Promise<void> {
     ...(slashCatalog.length > 0 ? { slashCatalog } : {}),
     ...(historyEvents !== undefined ? { history: historyEvents } : {}),
     ...(historySourceTruncated ? { historySourceTruncated: true } : {}),
+    ...(turnInterrupted ? { turnInterrupted: true } : {}),
     // P4-6 title-rider: a resumed session already has its title + history, so its
     // first turn this run is a continuation — never retitle it from that prompt.
     resumed: resumedMessages !== undefined,

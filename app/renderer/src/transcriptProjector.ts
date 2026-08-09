@@ -367,7 +367,11 @@ export type InjectedTurnRow = RowSource & {
 
 export type SystemNoticeRow = FrameRowSource & {
   kind: 'system-notice'
-  noticeType: 'api_retry' | 'local_command_output' | 'account_diagnostic'
+  noticeType:
+    | 'api_retry'
+    | 'local_command_output'
+    | 'account_diagnostic'
+    | 'turn_interrupted'
   content: string
 }
 
@@ -465,6 +469,7 @@ type TranscriptSessionState = {
    * to show.
    */
   hiddenFrameIds: Record<string, true>
+  turnInterrupted: boolean
 }
 
 export type TranscriptState = {
@@ -484,6 +489,7 @@ function createTranscriptSessionState(): TranscriptSessionState {
     agentCompletionsByToolUseId: {},
     slashCommands: [],
     hiddenFrameIds: {},
+    turnInterrupted: false,
   }
 }
 
@@ -533,7 +539,8 @@ export function selectTranscriptRows(
   sessionId: SessionId | null,
   revealHidden = false,
 ): TranscriptRow[] {
-  const session = sessionId ? state.sessions[sessionId] : undefined
+  if (!sessionId) return []
+  const session = state.sessions[sessionId]
   if (!session) return []
   const completions = session.agentCompletionsByToolUseId
   // P4-36 runs FIRST: the hidden tier decides which rows exist in this view at
@@ -566,7 +573,7 @@ export function selectTranscriptRows(
       agentToolUseIds.add(row.toolUseId)
     }
   }
-  return visible.flatMap((row): TranscriptRow[] => {
+  const projected = visible.flatMap((row): TranscriptRow[] => {
     // A notification whose agent card is on screen is folded INTO that card
     // (below) and drops out here, so one finished agent is one row. Without a
     // join key, or before its card arrives, it stays as its own one-liner —
@@ -596,6 +603,19 @@ export function selectTranscriptRows(
     }
     return [{ ...row, status, result, agentCompletion }]
   })
+  if (!session.turnInterrupted) return projected
+  const frameId = `restore-interrupted:${sessionId}`
+  return [
+    ...projected,
+    {
+      id: frameRowId(sessionId, frameId, 'turn_interrupted'),
+      sessionId,
+      frameId,
+      kind: 'system-notice',
+      noticeType: 'turn_interrupted',
+      content: 'The previous turn was interrupted. Send a message to continue.',
+    },
+  ]
 }
 
 /** The read-time hidden-tier mark. Returns a COPY; the stored row is untouched. */
@@ -849,12 +869,16 @@ export function projectServerFrame(
   frame: ServerFrame,
 ): TranscriptState {
   if (isAppReadyFrame(frame)) {
+    const session =
+      state.sessions[frame.sessionId] ?? createTranscriptSessionState()
     return {
       ...state,
       sessions: {
         ...state.sessions,
-        [frame.sessionId]:
-          state.sessions[frame.sessionId] ?? createTranscriptSessionState(),
+        [frame.sessionId]: {
+          ...session,
+          turnInterrupted: frame.turnInterrupted === true,
+        },
       },
     }
   }

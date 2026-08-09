@@ -26,6 +26,7 @@
 import { getSessionId } from '../../src/bootstrap/state.js'
 import { loadConversationForResume } from '../../src/utils/conversationRecovery.js'
 import { processResumedConversation } from '../../src/utils/sessionRestore.js'
+import { getSessionQueueOperations } from '../../src/utils/sessionStorage.js'
 import { getDefaultAppState } from '../../src/state/AppStateStore.js'
 import type { Message } from '../../src/types/message.js'
 import type { AppState } from '../../src/state/AppStateStore.js'
@@ -60,6 +61,12 @@ export type SidecarResumeResult = {
    * disagree after a restart.
    */
   initialState: AppState
+  turnInterrupted: boolean
+  undeliveredPrompts: Array<{
+    uuid: string
+    content: string
+    timestamp: string
+  }>
 }
 
 /**
@@ -85,6 +92,28 @@ export async function resumeEngineSession(
       resumeEngineSessionId,
       'no conversation found (transcript missing or unreadable)',
     )
+  }
+
+  const queueState = await getSessionQueueOperations(resumeEngineSessionId)
+  const undeliveredByUuid = new Map<
+    string,
+    SidecarResumeResult['undeliveredPrompts'][number]
+  >()
+  for (const operation of queueState.operations) {
+    if (
+      operation.operation !== 'enqueue' ||
+      operation.mode !== 'prompt' ||
+      operation.uuid === undefined ||
+      operation.content === undefined ||
+      queueState.messageUuids.has(operation.uuid)
+    ) {
+      continue
+    }
+    undeliveredByUuid.set(operation.uuid, {
+      uuid: operation.uuid,
+      content: operation.content,
+      timestamp: operation.timestamp,
+    })
   }
 
   const processed = await processResumedConversation(
@@ -122,5 +151,7 @@ export async function resumeEngineSession(
     engineSessionId,
     messages: processed.messages,
     initialState: processed.initialState,
+    turnInterrupted: loaded.turnInterruptionState.kind === 'interrupted_prompt',
+    undeliveredPrompts: [...undeliveredByUuid.values()],
   }
 }

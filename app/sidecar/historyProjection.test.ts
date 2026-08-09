@@ -8,6 +8,7 @@ import {
 } from '../../src/utils/messages.js'
 import {
   mergeDisplayHistoryWithSeed,
+  projectUndeliveredPrompts,
   projectResumedHistory,
 } from './historyProjection.js'
 
@@ -42,6 +43,31 @@ describe('restored history projection', () => {
     expect(JSON.stringify(projectResumedHistory([genuine]))).toContain(
       NO_RESPONSE_REQUESTED,
     )
+  })
+
+  test('replays an undelivered prompt with its producer identity', () => {
+    expect(
+      projectUndeliveredPrompts(
+        [
+          {
+            uuid: '00000000-0000-4000-8000-000000000901',
+            content: 'keep this accepted input',
+            timestamp: '2026-08-09T10:00:00.000Z',
+          },
+        ],
+        'engine-session',
+      ),
+    ).toEqual([
+      {
+        type: 'user',
+        message: { role: 'user', content: 'keep this accepted input' },
+        session_id: 'engine-session',
+        parent_tool_use_id: null,
+        uuid: '00000000-0000-4000-8000-000000000901',
+        timestamp: '2026-08-09T10:00:00.000Z',
+        isReplay: true,
+      },
+    ])
   })
 
   test('hides current and legacy silent rate-limit fallback records', () => {
