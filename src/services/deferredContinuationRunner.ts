@@ -782,6 +782,7 @@ export async function reconcileDeferredContinuationJob(
 }
 
 export const _forTest = {
+  applyAttemptResult,
   clearForegroundRegistrations(): void {
     foregroundRegistrations.clear()
   },

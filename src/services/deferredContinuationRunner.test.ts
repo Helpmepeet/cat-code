@@ -417,6 +417,89 @@ describe('deferred continuation runner', () => {
     }
   })
 
+  test('stops a quota-exhausted attempt when the provider reset did not advance', async () => {
+    const root = await mkdtemp('/tmp/cat-code-deferred-unchanged-reset-')
+    cleanup.push(root)
+    const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+    const previousFetch = globalThis.fetch
+    const now = Date.now()
+    const resetAtSeconds = Math.floor((now + 3_600_000) / 1000)
+    const resetAt = resetAtSeconds * 1000
+    try {
+      process.env.CLAUDE_CONFIG_DIR = root
+      globalThis.fetch = (async () => {
+        throw new Error('test must not reach a provider endpoint')
+      }) as typeof globalThis.fetch
+      invalidateUsageCache()
+      seedCodexAccountPoolForTest({
+        accounts: [{
+          accountId: 'unchanged-reset-account',
+          accessToken: 'test-access-token',
+          refreshToken: 'test-refresh-token',
+          expiresAt: now + 60_000,
+          source: 'config',
+          status: 'capped',
+          statusReason: 'usage_cap',
+          lastUsedAt: 0,
+          cappedAt: now - 1,
+          usageResetAt: resetAtSeconds,
+        }],
+      })
+      const job = { ...pendingJob(), resetAt }
+      await createPendingDeferredContinuation(job)
+
+      await _forTest.applyAttemptResult(
+        job,
+        { outcome: 'quota_exhausted', observedAt: now },
+        { assertHealthy() {} },
+      )
+
+      expect(await readPendingDeferredContinuation(job.sessionId)).toBeNull()
+      expect(await getLatestDeferredContinuationHistory(job.sessionId)).toMatchObject({
+        terminalState: 'needs_attention',
+        terminalReason: 'quota_reset_unknown',
+      })
+      expect(await takeDeferredContinuationNotice(job.sessionId)).toMatchObject({
+        kind: 'needs_attention',
+        reason: 'quota_reset_unknown',
+      })
+    } finally {
+      globalThis.fetch = previousFetch
+      if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+    }
+  })
+
+  test('stops instead of scheduling a fourth transient-network retry', async () => {
+    const root = await mkdtemp('/tmp/cat-code-deferred-network-retry-limit-')
+    cleanup.push(root)
+    const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+    try {
+      process.env.CLAUDE_CONFIG_DIR = root
+      const job = { ...pendingJob(), transientRetries: 3 }
+      await createPendingDeferredContinuation(job)
+
+      await _forTest.applyAttemptResult(
+        job,
+        { outcome: 'transient_network', observedAt: NOW },
+        { assertHealthy() {} },
+      )
+
+      expect(await readPendingDeferredContinuation(job.sessionId)).toBeNull()
+      expect(await getLatestDeferredContinuationHistory(job.sessionId)).toMatchObject({
+        terminalState: 'needs_attention',
+        terminalReason: 'network',
+      })
+      expect(await takeDeferredContinuationNotice(job.sessionId)).toMatchObject({
+        kind: 'needs_attention',
+        reason: 'network',
+      })
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+    }
+  })
+
   test('typed result policy covers quota, permission, budget, abort, and forged settlement', () => {
     const job = submittedJob()
     const registration = registerForegroundDeferredAttempt(job)
