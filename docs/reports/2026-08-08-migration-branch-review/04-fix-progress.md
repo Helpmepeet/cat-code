@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 57/242** — counted against the review's original 61 High and
+**Progress: Fix 59/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -61,6 +61,8 @@ count tracks individually verified findings, not commit count.
 | A19 MED PermissionPrompt keyboard actions could target an unseen cursor row | fixed | `60a311c` | listener/cursor-state alignment regression (34 pass); renderer typecheck and production build; GUI behavior remains operator-verifiable |
 | A19 MED TasksDialog could stop a keyboard-selected task after it scrolled off-screen | fixed | `c2da0e8` | active-row scroll and accessibility regression (34 pass); renderer typecheck and production build; GUI behavior remains operator-verifiable |
 | A19 MED MentionPicker could insert an active mention after it scrolled off-screen | fixed | `c2da0e8` | active-row scroll regression (34 pass); renderer typecheck and production build; GUI behavior remains operator-verifiable |
+| A19 MED duplicated permission mode/source label tables had already drifted between surfaces | fixed | `48ffc5c` | central typed labels now serve the mode chip, rules editor, inspector, and suggestion formatter; focused renderer suites (86 pass); renderer typecheck and production build; GUI fidelity remains operator-verifiable |
+| A19 MED PermissionRulesEditor could expose raw mode/source tokens and lacked a match-type union tripwire | fixed | `48ffc5c` | neutral unknown-value regression; match labels are a total wire-union record; focused renderer suites (86 pass); renderer typecheck and production build; GUI fidelity remains operator-verifiable |
 
 ## Known verification limitation
 
