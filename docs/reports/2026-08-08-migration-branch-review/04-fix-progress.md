@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 107/242** — counted against the review's original 61 High and
+**Progress: Fix 108/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -111,6 +111,7 @@ count tracks individually verified findings, not commit count.
 | S05 MED deterministic initial `response.failed` errors consumed retries and triggered account failover | fixed | `6c343bd` | wrapped response-failure causes are unwrapped before retry classification and terminate immediately, rather than following connection retry/failover paths; account-recovery regression (17 pass); app typecheck and renderer production build |
 | S01 MED unattended background continuation had no agentic turn cap | fixed | `0525852` | the fixed internal worker argv now always includes `--max-turns 20`, activating its existing bounded terminal-result policy; deferred-continuation runner suite (12 pass); app typecheck and renderer production build |
 | S01 MED `enable-background` replaced actionable LaunchAgent installer errors with incorrect executable advice | fixed | `f697c60` | the command now surfaces the installer's own recovery message, consistent with disable-background; continue-after-limit suite (14 pass); app typecheck and renderer production build |
+| S05 MED finished subagents retained their WebSocket sessions and full request clones | fixed | `d65bac1` | every terminal LocalAgentTask path now clears its `${sessionId}/${agentId}` WebSocket session with its Codex lease; lifecycle regression (16 pass), WebSocket transport suite (35 pass), and engine development build |
 
 ## Known verification limitation
 
