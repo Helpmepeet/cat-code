@@ -258,6 +258,9 @@ test('the Codex table renders real pool rows (alias, capped badge, usage %)', ()
   expect(html).toContain('100%')
   // Flat accent-gradient bars, not tone-coded green/amber/red.
   expect(html).toContain('from-accent-soft to-accent')
+  expect(html).toContain('aria-label="5-hour usage: 20%"')
+  expect(html).toContain('aria-label="Weekly usage: 40%"')
+  expect(html).toContain('role="progressbar"')
   // No "5h"/"wk" text labels in the prototype rows.
   expect(html).not.toContain('>5h<')
   expect(html).not.toContain('>wk<')

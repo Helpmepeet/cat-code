@@ -571,15 +571,15 @@ function CodexRow({ account }: { account: AccountStatus }) {
           </span>
         ) : null}
       </div>
-      <UsageBar pct={account.usagePrimary} />
+      <UsageBar label="5-hour" pct={account.usagePrimary} />
       <UsagePct pct={account.usagePrimary} />
-      <ResetCell value={reset} />
-      <UsageBar pct={account.usageWeekly} />
+      <ResetCell label="5-hour reset" value={reset} />
+      <UsageBar label="Weekly" pct={account.usageWeekly} />
       <UsagePct pct={account.usageWeekly} />
       {/* §0: the seam carries ONE `usageResetAt` (the 5h/primary window), so the
           weekly reset column stays blank rather than duplicating or fabricating
           a second value — never a mock. */}
-      <ResetCell value="" />
+      <ResetCell label="Weekly reset" value="" />
     </div>
   )
 }
@@ -589,10 +589,18 @@ function CodexRow({ account }: { account: AccountStatus }) {
  * for every account regardless of percentage — NOT the threshold red/green/amber
  * of the AccountsPage meter. Min 2% fill so a live account is always visible.
  */
-function UsageBar({ pct }: { pct: number | null }) {
-  const filled = Math.max(2, Math.min(100, pct ?? 0))
+function UsageBar({ label, pct }: { label: string; pct: number | null }) {
+  const value = pct ?? 0
+  const filled = Math.max(2, Math.min(100, value))
   return (
-    <div className="h-[5px] min-w-0 max-w-[220px] overflow-hidden rounded-[3px] bg-white/[0.06]">
+    <div
+      aria-label={`${label} usage: ${value}%`}
+      aria-valuemax={100}
+      aria-valuemin={0}
+      aria-valuenow={value}
+      className="h-[5px] min-w-0 max-w-[220px] overflow-hidden rounded-[3px] bg-white/[0.06]"
+      role="progressbar"
+    >
       {/* §0 EXCEPTION: data-driven width Tailwind can't express — the single
           allowed width-only inline style (P4-5 precedent). */}
       <div
@@ -609,6 +617,7 @@ function UsagePct({ pct }: { pct: number | null }) {
   const p = pct ?? 0
   return (
     <span
+      aria-hidden="true"
       className={
         'text-right text-[13px] font-semibold tabular-nums ' +
         (p >= 100 ? 'text-accent' : 'text-accent-soft')
@@ -620,9 +629,13 @@ function UsagePct({ pct }: { pct: number | null }) {
 }
 
 /** Compact reset countdown, mono + dim (`Welcome.jsx:169`). Blank cell when absent. */
-function ResetCell({ value }: { value: string }) {
+function ResetCell({ label, value }: { label: string; value: string }) {
   return (
-    <span className="truncate font-mono text-[12px] tabular-nums text-text-subtle">
+    <span
+      aria-hidden={value ? undefined : 'true'}
+      aria-label={value ? `${label}: ${value}` : undefined}
+      className="truncate font-mono text-[12px] tabular-nums text-text-subtle"
+    >
       {value}
     </span>
   )
