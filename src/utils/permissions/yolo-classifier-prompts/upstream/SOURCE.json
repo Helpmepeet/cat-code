@@ -1,0 +1,33 @@
+{
+  "upstreamVersion": "2.1.223",
+  "extractedOn": "2026-08-09",
+  "binary": "~/.local/share/claude/versions/2.1.223",
+  "files": {
+    "system_prompt.txt": {
+      "chars": 37278,
+      "sha256": "deae8911b4994040fcecb85db1a5d52547ab106c704525366be550e5ab6bc36e",
+      "origin": "binary template literal opening \"You are a security monitor for autonomous AI coding agents.\""
+    },
+    "permissions.txt": {
+      "chars": 73173,
+      "sha256": "ec7761f3ceac37228d632fed998a0e524c90af229e4c2ac0e7294e1982970c73",
+      "origin": "binary template literal opening \"## Environment\""
+    },
+    "rules.json": {
+      "chars": 61123,
+      "sha256": "15063b07f9c773e630449e22bfe70ee5e00b74b6e1d564db0ba4544fa2dd47af",
+      "origin": "claude auto-mode defaults (supported CLI, ground truth)"
+    }
+  },
+  "decode": [
+    "remove the single ${\"\"} interpolation",
+    "unescape \\$",
+    "unescape backticks",
+    "decode \\uXXXX"
+  ],
+  "verification": {
+    "cliRulesFoundVerbatimInPermissions": "103/103",
+    "residualEscapes": 0,
+    "note": "rules.json is ground truth from the CLI; the two .txt files are binary extraction validated against it."
+  }
+}
