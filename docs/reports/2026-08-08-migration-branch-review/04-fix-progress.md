@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 81/242** — counted against the review's original 61 High and
+**Progress: Fix 82/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -85,6 +85,7 @@ count tracks individually verified findings, not commit count.
 | A20 MED `harness-demo.ts` duplicated child termination and left Electron alive on timeout | fixed | `6a4264a` | cleanup now owns both children and timeout awaits the shared bounded terminator; lifecycle source suites (17 pass); app typecheck and renderer production build |
 | A15 HIGH removed sessions left unprunable connection, lease, task, and action-result state (including export payloads) | fixed | `c3c7c1a` | host removal now deletes all four state slices; reducer regressions (65 pass); app typecheck and renderer production build |
 | A04 HIGH nested transcript projection replaced every unchanged row wrapper after a streamed update, defeating `React.memo` and re-parsing history | fixed | `a70957a` | source-keyed nested-row cache preserves wrappers when the direct-child source list is unchanged; projector/replay regressions (84 pass); app typecheck and renderer production build |
+| A04 HIGH collapsed tool cards repeatedly parsed acknowledgement JSON, split Bash output, and counted diff hunks on every streamed render | fixed | `1a6c63d` | result-keyed WeakMap caches retain the three derived values and the body reuses the header acknowledgement parse; TranscriptView suite (177 pass); app typecheck and renderer production build |
 
 ## Known verification limitation
 
