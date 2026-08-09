@@ -2062,7 +2062,6 @@ test('P4-8b — one agent-mode snapshot read fans out to every attached connecti
   )
 })
 
-
 test('P4-8b — an idempotent agent-mode.set (no change) acks ok but does NOT re-broadcast', async () => {
   const { server } = makeAgentModeServer(() => ({ ok: true, message: 'already off', changed: false }))
   const { socket, received } = makeSocket()
