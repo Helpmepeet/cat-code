@@ -1,6 +1,8 @@
 import { feature } from 'bun:bundle'
+import { closeSync, fsyncSync, openSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import mergeWith from 'lodash-es/mergeWith.js'
-import { dirname, join, resolve } from 'path'
+import { basename, dirname, join, resolve } from 'path'
 import { z } from 'zod/v4'
 import {
   getFlagSettingsInline,
@@ -14,7 +16,6 @@ import { logForDebugging } from '../debug.js'
 import { logForDiagnosticsNoPII } from '../diagLogs.js'
 import { getClaudeConfigHomeDir, isEnvTruthy } from '../envUtils.js'
 import { getErrnoCode, isENOENT } from '../errors.js'
-import { writeFileSyncAndFlush_DEPRECATED } from '../file.js'
 import { readFileSync } from '../fileRead.js'
 import { getFsImplementation, safeResolvePath } from '../fsOperations.js'
 import { addFileGlobRuleToGitignore } from '../git/gitignore.js'
@@ -464,6 +465,53 @@ export type SettingsUpdater = (
 ) => SettingsJson | null
 
 /**
+ * Replaces a settings file without exposing a truncate-then-write window.
+ *
+ * A failed temp write or rename leaves the previous settings file intact. The
+ * directory fsync is best-effort because Windows and some network filesystems
+ * do not permit opening a directory descriptor.
+ */
+export function writeSettingsFileAtomically(
+  filePath: string,
+  content: string,
+): void {
+  const directory = dirname(filePath)
+  const tempPath = join(
+    directory,
+    `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`,
+  )
+  let fileDescriptor: number | undefined
+  try {
+    fileDescriptor = openSync(tempPath, 'wx', 0o600)
+    writeFileSync(fileDescriptor, content, 'utf8')
+    fsyncSync(fileDescriptor)
+    closeSync(fileDescriptor)
+    fileDescriptor = undefined
+    renameSync(tempPath, filePath)
+  } catch (error) {
+    if (fileDescriptor !== undefined) {
+      try {
+        closeSync(fileDescriptor)
+      } catch {}
+    }
+    try {
+      unlinkSync(tempPath)
+    } catch {}
+    throw error
+  }
+
+  let directoryDescriptor: number | undefined
+  try {
+    directoryDescriptor = openSync(directory, 'r')
+    fsyncSync(directoryDescriptor)
+  } catch {
+    // Directory fsync is unavailable on some supported platforms.
+  } finally {
+    if (directoryDescriptor !== undefined) closeSync(directoryDescriptor)
+  }
+}
+
+/**
  * Merges `settings` into the existing settings for `source` using lodash mergeWith.
  *
  * To delete a key from a record field (e.g. enabledPlugins, extraKnownMarketplaces),
@@ -593,7 +641,7 @@ export function updateSettingsForSource(
     // Mark this as an internal write before writing the file
     markInternalWrite(filePath)
 
-    writeFileSyncAndFlush_DEPRECATED(
+    writeSettingsFileAtomically(
       filePath,
       jsonStringify(updatedSettings, null, 2) + '\n',
     )
