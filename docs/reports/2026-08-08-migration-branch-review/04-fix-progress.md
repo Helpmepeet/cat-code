@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 83/242** — counted against the review's original 61 High and
+**Progress: Fix 84/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -87,6 +87,7 @@ count tracks individually verified findings, not commit count.
 | A04 HIGH nested transcript projection replaced every unchanged row wrapper after a streamed update, defeating `React.memo` and re-parsing history | fixed | `a70957a` | source-keyed nested-row cache preserves wrappers when the direct-child source list is unchanged; projector/replay regressions (84 pass); app typecheck and renderer production build |
 | A04 HIGH collapsed tool cards repeatedly parsed acknowledgement JSON, split Bash output, and counted diff hunks on every streamed render | fixed | `1a6c63d` | result-keyed WeakMap caches retain the three derived values and the body reuses the header acknowledgement parse; TranscriptView suite (177 pass); app typecheck and renderer production build |
 | A19 HIGH AskQuestion keyboard handling could consume composer keys or act after another handler claimed them | fixed | `eb3aece` | flow now shares the permission key-owner predicate and bails on `defaultPrevented`; AskQuestion/PermissionPrompt/App renderer suites (123 pass); app typecheck and renderer production build; GUI event dispatch remains operator-verifiable |
+| A06 HIGH a rejected, request-correlated inbound verb was ignored by every renderer outcome surface | fixed | `b421891` | correlated `bad_request` frames now join the existing verb-ack failure state and toast path, while uncorrelated framing errors remain ignored; verb-ack reducer regressions (17 pass); existing sidecar boundary tests verify request-id echoing; app typecheck and renderer production build |
 
 ## Known verification limitation
 
