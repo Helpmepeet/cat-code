@@ -1,3 +1,4 @@
+import { feature } from 'bun:bundle'
 /**
  * Auto mode subcommand handlers — dump default/merged classifier rules and
  * critique user-written rules. Dynamically imported when `claude auto-mode ...` runs.
@@ -11,7 +12,7 @@ import {
 import { spliceAutoModeDefaultsList } from '../../utils/permissions/autoModeDefaultsSplice.js'
 import {
   type AutoModeRules,
-  buildDefaultExternalSystemPrompt,
+  buildAutoModeCritiqueSystemPrompt,
   getDefaultExternalAutoModeRules,
 } from '../../utils/permissions/yoloClassifier.js'
 import { getAutoModeConfig } from '../../utils/settings/settings.js'
@@ -40,6 +41,15 @@ export function autoModeDefaultsHandler(): void {
 export function autoModeConfigHandler(): void {
   const config = getAutoModeConfig()
   const defaults = getDefaultExternalAutoModeRules()
+  if (!feature('AUTO_MODE_UPSTREAM_PORT')) {
+    writeRules({
+      allow: config?.allow ?? defaults.allow,
+      soft_deny: config?.soft_deny ?? defaults.soft_deny,
+      hard_deny: defaults.hard_deny,
+      environment: config?.environment ?? defaults.environment,
+    })
+    return
+  }
   writeRules({
     allow: spliceAutoModeDefaultsList(config?.allow, defaults.allow),
     soft_deny: spliceAutoModeDefaultsList(config?.soft_deny, defaults.soft_deny),
@@ -56,10 +66,11 @@ const CRITIQUE_SYSTEM_PROMPT =
   '\n' +
   'Cat Code has an "auto mode" that uses an AI classifier to decide whether ' +
   'tool calls should be auto-approved or require user confirmation. Users can ' +
-  'write custom rules in three categories:\n' +
+  'write custom rules in four categories:\n' +
   '\n' +
   '- **allow**: Actions the classifier should auto-approve\n' +
   '- **soft_deny**: Actions the classifier should block (require user confirmation)\n' +
+  '- **hard_deny**: Actions the classifier must block\n' +
   "- **environment**: Context about the user's setup that helps the classifier make decisions\n" +
   '\n' +
   "Your job is to critique the user's custom rules for clarity, completeness, " +
@@ -82,12 +93,13 @@ export async function autoModeCritiqueHandler(options: {
   const hasCustomRules =
     (config?.allow?.length ?? 0) > 0 ||
     (config?.soft_deny?.length ?? 0) > 0 ||
+    (config?.hard_deny?.length ?? 0) > 0 ||
     (config?.environment?.length ?? 0) > 0
 
   if (!hasCustomRules) {
     process.stdout.write(
       'No custom auto mode rules found.\n\n' +
-        'Add rules to your settings file under autoMode.{allow, soft_deny, environment}.\n' +
+        'Add rules to your settings file under autoMode.{allow, soft_deny, hard_deny, environment}.\n' +
         'Run `cat-code auto-mode defaults` to see the default rules for reference.\n',
     )
     return
@@ -98,7 +110,7 @@ export async function autoModeCritiqueHandler(options: {
     : getMainLoopModel()
 
   const defaults = getDefaultExternalAutoModeRules()
-  const classifierPrompt = buildDefaultExternalSystemPrompt()
+  const classifierPrompt = buildAutoModeCritiqueSystemPrompt()
 
   const userRulesSummary =
     formatRulesForCritique('allow', config?.allow ?? [], defaults.allow) +
@@ -106,6 +118,11 @@ export async function autoModeCritiqueHandler(options: {
       'soft_deny',
       config?.soft_deny ?? [],
       defaults.soft_deny,
+    ) +
+    formatRulesForCritique(
+      'hard_deny',
+      config?.hard_deny ?? [],
+      defaults.hard_deny,
     ) +
     formatRulesForCritique(
       'environment',
@@ -131,7 +148,7 @@ export async function autoModeCritiqueHandler(options: {
             '<classifier_system_prompt>\n' +
             classifierPrompt +
             '\n</classifier_system_prompt>\n\n' +
-            "Here are the user's custom rules that REPLACE the corresponding default sections:\n\n" +
+            `Here are the user's custom rules that ${feature('AUTO_MODE_UPSTREAM_PORT') ? 'splice defaults when they include $defaults' : 'replace the corresponding default sections'}:\n\n` +
             userRulesSummary +
             '\nPlease critique these custom rules.',
         },
@@ -164,7 +181,9 @@ function formatRulesForCritique(
   return (
     '## ' +
     section +
-    ' (custom rules replacing defaults)\n' +
+    (feature('AUTO_MODE_UPSTREAM_PORT')
+      ? ' (custom rules; $defaults splices defaults once at its position)\n'
+      : ' (custom rules replacing defaults)\n') +
     'Custom:\n' +
     customLines +
     '\n\n' +

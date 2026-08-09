@@ -337,7 +337,8 @@ const yoloClassifierResponseSchema = lazySchema(() =>
 
 export const YOLO_CLASSIFIER_TOOL_NAME = 'classify_result'
 
-export const YOLO_CLASSIFIER_TOOL_SCHEMA: BetaToolUnion = {
+function buildPortedYoloClassifierToolSchema(): BetaToolUnion {
+  return {
   type: 'custom',
   name: YOLO_CLASSIFIER_TOOL_NAME,
   description: 'Report the security classification result for the agent action',
@@ -394,7 +395,42 @@ export const YOLO_CLASSIFIER_TOOL_SCHEMA: BetaToolUnion = {
       },
     ],
   },
+  }
 }
+
+const LEGACY_YOLO_CLASSIFIER_TOOL_SCHEMA: BetaToolUnion = {
+  type: 'custom',
+  name: YOLO_CLASSIFIER_TOOL_NAME,
+  description: 'Report the security classification result for the agent action',
+  input_schema: {
+    type: 'object',
+    properties: {
+      thinking: { type: 'string', description: 'Brief step-by-step reasoning.' },
+      shouldBlock: {
+        type: 'boolean',
+        description:
+          'Whether the action should be blocked (true) or allowed (false)',
+      },
+      reason: {
+        type: 'string',
+        description: 'Brief explanation of the classification decision',
+      },
+    },
+    required: ['thinking', 'shouldBlock', 'reason'],
+  },
+}
+
+export function getYoloClassifierToolSchema(
+  useUpstreamPort: boolean,
+): BetaToolUnion {
+  return useUpstreamPort
+    ? buildPortedYoloClassifierToolSchema()
+    : LEGACY_YOLO_CLASSIFIER_TOOL_SCHEMA
+}
+
+export const YOLO_CLASSIFIER_TOOL_SCHEMA = feature('AUTO_MODE_UPSTREAM_PORT')
+  ? buildPortedYoloClassifierToolSchema()
+  : LEGACY_YOLO_CLASSIFIER_TOOL_SCHEMA
 
 type TranscriptBlock =
   | { type: 'text'; text: string }
@@ -651,6 +687,12 @@ function buildUpstreamSystemPrompt(): string {
     UPSTREAM_PERMISSIONS_TEMPLATE,
     autoMode,
   )
+}
+
+export function buildAutoModeCritiqueSystemPrompt(): string {
+  return feature('AUTO_MODE_UPSTREAM_PORT')
+    ? buildUpstreamSystemPrompt()
+    : buildDefaultExternalSystemPrompt()
 }
 
 export async function buildYoloSystemPrompt(
@@ -1125,6 +1167,7 @@ export async function classifyYoloAction(
       }
 
       if (
+        feature('AUTO_MODE_UPSTREAM_PORT') &&
         !isAutoModeVerdictCategoryValid(
           parsed.shouldBlock,
           toolUseBlock.input,
@@ -1153,11 +1196,17 @@ export async function classifyYoloAction(
       // label cannot fail and cannot alter shouldBlock. A malformed category
       // is absent, and an unrecognized name drops the label and keeps the
       // verdict.
-      const resolvedCategory = resolveAutoModeCategory(
-        readRawAutoModeCategory(toolUseBlock.input),
-        getAutoModeRuleIds(),
-      )
-      if (parsed.shouldBlock && resolvedCategory.category === undefined) {
+      const resolvedCategory = feature('AUTO_MODE_UPSTREAM_PORT')
+        ? resolveAutoModeCategory(
+            readRawAutoModeCategory(toolUseBlock.input),
+            getAutoModeRuleIds(),
+          )
+        : { category: undefined }
+      if (
+        feature('AUTO_MODE_UPSTREAM_PORT') &&
+        parsed.shouldBlock &&
+        resolvedCategory.category === undefined
+      ) {
         logForDebugging(
           'Auto mode classifier: dropped missing or invalid block category',
           { level: 'warn' },
