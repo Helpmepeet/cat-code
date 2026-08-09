@@ -54,6 +54,18 @@ test('ids are never drawn from Math.random', () => {
   expect(source).not.toContain('cryptoRandomId')
 })
 
+test('renderer frame forwarding rejects non-supervisor session ids before buffering errors', () => {
+  // This is a source guard because importing Electron main would launch the
+  // application. The runtime behavior is covered by the focused sidecar and
+  // host tests; here we pin the sole forwarding choke point against a future
+  // handler-level validation regression.
+  const forward = region(
+    'function forward(sessionId: SessionId, message: SidecarClientMessage): void',
+    'function sanitizeSubmitOptions(',
+  )
+  expect(forward).toContain('if (!SESSION_ID_RE.test(sessionId)) return')
+})
+
 test('a normal startup never opts into the sidecar probe', () => {
   const createSupervisor = region(
     'function createSupervisor(): SidecarSupervisor',

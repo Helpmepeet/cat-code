@@ -169,6 +169,12 @@ const CH_RESTART = 'catcode:restart'
 const CH_SERVER_FRAME = 'catcode:server-frame'
 const CH_RENDERER_READY = 'catcode:renderer-ready'
 
+// App session ids are supervisor-minted UUIDs. Validate at the single frame
+// forwarding choke point so malformed renderer payloads cannot mint an
+// unbounded set of error/replay-buffer keys in main.
+const SESSION_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
 // Control-plane channels (HC3 — fixed, per-method structured senders). `invoke`
 // channels return a typed HostResult; `pick-directory` returns a realpath or
 // null (the native picker, HC1); the host-event channel is a one-way stream.
@@ -1615,6 +1621,8 @@ function readString(payload: unknown, key: string): string | undefined {
 }
 
 function forward(sessionId: SessionId, message: SidecarClientMessage): void {
+  if (!SESSION_ID_RE.test(sessionId)) return
+
   if (!supervisor) {
     const frame: ServerFrame = {
       kind: 'error',
