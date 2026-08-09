@@ -1157,9 +1157,17 @@ function createWindow(): void {
     startupTimers.schedule(startIdleParkDriver)
   })
 
+  // These two land in the operational log only, which a dev run has no reason to
+  // be watching. A window that dies therefore reads exactly like a healthy one
+  // from the terminal the operator launched it in, and on 2026-08-09 that cost
+  // real time before the log was consulted. Dev only: a packaged build must not
+  // gain a stderr surface.
   window.webContents.on('did-fail-load', (_event, code, _description, _url, isMainFrame) => {
     if (isMainFrame) {
       logOperational('renderer.load.failed', 'error', { code, reason: 'did_fail_load' })
+      if (IS_DEV) {
+        process.stderr.write(`[main] the window failed to load (code ${code}).\n`)
+      }
     }
   })
   window.webContents.on('render-process-gone', (_event, details) => {
@@ -1167,6 +1175,11 @@ function createWindow(): void {
       reason: details.reason,
       exitCode: details.exitCode,
     })
+    if (IS_DEV) {
+      process.stderr.write(
+        `[main] the window closed unexpectedly (${details.reason}). Reopen it to keep working.\n`,
+      )
+    }
   })
   let unresponsiveAt: number | null = null
   window.webContents.on('unresponsive', () => {
