@@ -1103,7 +1103,15 @@ function projectUserFrame(
     })
     return row === null ? [] : [row]
   })
-  if (rows.length === 0) return state
+  // Tool-result-only frames still changed correlation state above. Mark them
+  // seen even though they add no visible row, otherwise replay re-folds the
+  // same result and invalidates every transcript read cache.
+  if (rows.length === 0) {
+    return {
+      ...state,
+      seenFrameIds: { ...state.seenFrameIds, [frameId]: true },
+    }
+  }
   const withCompletion = recordAgentCompletion(state, origin)
   const appended = appendFrameRows(withCompletion, frameId, rows)
   // Identity is compared against what was HANDED to `appendFrameRows`, not the

@@ -1858,6 +1858,38 @@ test('a tool_result with no matching tool_use is tolerated (correlated but orpha
   expect(selectTranscriptRows(state, 'session-1')).toEqual([])
 })
 
+test('a tool_result-only user frame is marked seen after correlation', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'tool-parent',
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'tool-only', name: 'Read', input: {} }],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000000d1001',
+    }),
+  )
+  const resultOnly = messageFrame('session-1', {
+    type: 'user',
+    message: {
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: 'tool-only', content: 'ok' }],
+    },
+    parent_tool_use_id: null,
+    uuid: '00000000-0000-4000-8000-0000000d1002',
+  })
+  state = projectServerFrame(state, resultOnly)
+  const beforeReplay = state
+  const replayed = projectServerFrame(state, resultOnly)
+
+  expect(replayed).toBe(beforeReplay)
+})
+
 test('a tool_use with no matching tool_result stays pending forever (not a crash, not an error)', () => {
   let state = createTranscriptState()
   state = projectServerFrame(state, ready('session-1'))
