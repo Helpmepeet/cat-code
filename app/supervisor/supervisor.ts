@@ -232,6 +232,14 @@ export class SidecarSupervisor {
     if (record.operationalBuffer.length > 64 * 1024) {
       record.operationalBuffer = ''
       this.log(`[supervisor] dropped oversized operational diagnostics for ${record.sessionId}`)
+      // This is the one site where sidecar records provably vanish. A dev stderr
+      // line does not survive into the export, so the loss has to be stated in
+      // the record stream itself or the bundle will claim coverage it lost.
+      this.operational('log.coverage.incomplete', 'error', record.sessionId, {
+        source: 'sidecar',
+        reason: 'buffer_overflow',
+        expected: false,
+      })
       return
     }
     const lines = record.operationalBuffer.split('\n')
@@ -386,11 +394,19 @@ export class SidecarSupervisor {
         ...(signal === null ? {} : { signal }),
         expected: code === 0,
       })
-      this.operational('log.coverage.incomplete', code === 0 ? 'warn' : 'error', sessionId, {
-        source: 'sidecar',
-        reason: 'stream_closed_without_flush_ack',
-        expected: code === 0,
-      })
+      // Only claim lost coverage when there is evidence of it. A leftover buffer
+      // means a partial NDJSON record was cut off mid-write; a non-zero exit means
+      // the stream ended abnormally. A clean exit with an empty buffer lost
+      // nothing, and reporting it anyway pinned the export's coverage verdict to
+      // "incomplete" for every ordinary session close.
+      const truncatedRecord = record.operationalBuffer.length > 0
+      if (truncatedRecord || code !== 0) {
+        this.operational('log.coverage.incomplete', code === 0 ? 'warn' : 'error', sessionId, {
+          source: 'sidecar',
+          reason: truncatedRecord ? 'stream_closed_mid_record' : 'stream_closed_on_abnormal_exit',
+          expected: false,
+        })
+      }
       this.setStatus(record, 'exited')
       // Crash isolation: one sidecar dying does not touch the others. Restart
       // is left to the caller's policy (the app owns restart cadence).

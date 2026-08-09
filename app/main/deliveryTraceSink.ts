@@ -7,6 +7,7 @@ import {
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import {
+  deliveryAnomalyScope,
   deliveryObservationKind,
   type DeliveryStage,
   type DeliveryTrace,
@@ -270,7 +271,7 @@ export function createDeliveryTraceSink({
       sequence: trace.sequence,
       stage,
       observationKind: deliveryObservationKind(stage),
-      anomalyScope: anomaly === 'trace.sequence.gap' ? 'source_sequence' : 'stage_sequence',
+      anomalyScope: deliveryAnomalyScope(anomaly),
       ...(expected === undefined ? {} : { expectedSequence: expected }),
     }, trace.sequence, { state, sessionId, streamEpoch: trace.streamEpoch })
   }

@@ -34,6 +34,7 @@ test('diagnostics bundle exports only closed operational and trace schemas', () 
     logsDirectory: logs,
     appVersion: 'test',
     packaged: true,
+    currentLaunchId: 'launch',
     buildId: '2026.08.06',
     commitId: 'abc1234',
   }))
@@ -43,9 +44,12 @@ test('diagnostics bundle exports only closed operational and trace schemas', () 
   expect(bundle.stuckSessions[0].lastProducedFrameKind).toBe('lifecycle')
   expect(bundle.processInstances).toHaveLength(1)
   expect(bundle.processInstances[0]).toMatchObject({ pid: 123, status: 'observed' })
+  // This asserted status 'incomplete' and an 'interrupted' launch only because
+  // the call omitted currentLaunchId, so the live launch was misclassified. A
+  // healthy in-progress export is active.
   expect(bundle.recordingCoverage).toMatchObject({
-    status: 'incomplete',
-    launches: [{ launchId: 'launch', status: 'interrupted' }],
+    status: 'active',
+    launches: [{ launchId: 'launch', status: 'active' }],
   })
   expect(bundle.manifest).toMatchObject({
     build: { buildId: '2026.08.06', commitId: 'abc1234' },
@@ -153,4 +157,65 @@ test('recording coverage distinguishes known loss, active output, and interrupte
       { launchId: 'prior', status: 'interrupted' },
     ],
   })
+})
+
+test('a source file larger than the export window is reported as truncated', () => {
+  // The flag was only ever passed into deriveRecordingCoverage directly, so the
+  // detection in buildDiagnosticsBundle could be deleted with the suite staying
+  // green. This drives it from a real oversized file instead.
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-diagnostics-truncated-'))
+  const logs = join(root, 'logs')
+  mkdirSync(logs)
+  const record = (index: number) => JSON.stringify({
+    version: 1, timestamp: '2026-08-06T00:00:00.000Z', level: 'info', event: 'diagnostic',
+    launchId: 'launch', process: 'main', processInstanceId: 'process', pid: index,
+    processStartedAt: '2026-08-06T00:00:00.000Z', fields: { source: 'main', category: 'probe' },
+  })
+  const lines: string[] = []
+  let bytes = 0
+  while (bytes < 700 * 1024) {
+    const line = record(lines.length + 1)
+    lines.push(line)
+    bytes += line.length + 1
+  }
+  writeFileSync(join(logs, 'operational-launch-1.jsonl'), `${lines.join('\n')}\n`)
+
+  const bundle = JSON.parse(buildDiagnosticsBundle({
+    logsDirectory: logs,
+    appVersion: 'test',
+    currentLaunchId: 'launch',
+  }))
+  expect(bundle.recordingCoverage.sourceWindowTruncated).toBe(true)
+  expect(bundle.recordingCoverage.exportBounded).toBe(true)
+})
+
+test('an ordinary launch is not reported as incomplete, and real loss is not masked', () => {
+  // status had four always-on triggers, so it read 'incomplete' for every real
+  // export and 'loss_observed' was unreachable.
+  const ordinary = [
+    { launchId: 'L1', timestamp: '2026-08-09T12:00:00.000Z', event: 'app.start', fields: {} },
+    { launchId: 'L1', timestamp: '2026-08-09T12:00:02.000Z', event: 'app.shutdown.completed', fields: {} },
+  ]
+  expect(deriveRecordingCoverage(ordinary, [], 'L1').status).toBe('complete')
+
+  const withLoss = [...ordinary, {
+    launchId: 'L1', timestamp: '2026-08-09T12:00:03.000Z', event: 'log.suppressed', fields: { count: 42 },
+  }]
+  expect(deriveRecordingCoverage(withLoss, [], 'L1').status).toBe('loss_observed')
+
+  // A crash inside the retention window is history, not a verdict on today.
+  const withOldCrash = [
+    { launchId: 'OLD', timestamp: '2026-08-01T12:00:00.000Z', event: 'app.start', fields: {} },
+    ...ordinary,
+  ]
+  const stale = deriveRecordingCoverage(withOldCrash, [], 'L1')
+  expect(stale.status).toBe('complete')
+  expect(stale.interruptedLaunchCount).toBe(1)
+
+  // Missing evidence for the CURRENT launch still wins.
+  const broken = [...ordinary, {
+    launchId: 'L1', timestamp: '2026-08-09T12:00:04.000Z', event: 'log.coverage.incomplete',
+    fields: { source: 'sidecar', reason: 'buffer_overflow', expected: false },
+  }]
+  expect(deriveRecordingCoverage(broken, [], 'L1').status).toBe('incomplete')
 })

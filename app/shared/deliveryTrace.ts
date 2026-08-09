@@ -22,19 +22,48 @@ export const DELIVERY_STAGES = [
 
 export type DeliveryStage = (typeof DELIVERY_STAGES)[number]
 
+/**
+ * The stages a downstream process reports back rather than performs. This is the
+ * single source of truth: `DeliveryAcknowledgement['stage']` derives from it, and
+ * so does the classifier. Three hand-maintained copies of this set used to exist,
+ * and a `default` arm meant a new stage was silently labelled an action.
+ */
+export const DELIVERY_ACKNOWLEDGEMENT_STAGES = [
+  'preload.received',
+  'renderer.subscription.received',
+  'renderer.state.queued',
+  'renderer.state.applied',
+  'renderer.ui.committed',
+] as const
+
+export type DeliveryAcknowledgementStage = (typeof DELIVERY_ACKNOWLEDGEMENT_STAGES)[number]
+
+/** Compilation fails here if an acknowledgement stage is not a delivery stage. */
+const _acknowledgementStagesAreDeliveryStages: Record<DeliveryAcknowledgementStage, DeliveryStage> = {
+  'preload.received': 'preload.received',
+  'renderer.subscription.received': 'renderer.subscription.received',
+  'renderer.state.queued': 'renderer.state.queued',
+  'renderer.state.applied': 'renderer.state.applied',
+  'renderer.ui.committed': 'renderer.ui.committed',
+}
+void _acknowledgementStagesAreDeliveryStages
+
 export type DeliveryObservationKind = 'action' | 'acknowledgement'
 
 export function deliveryObservationKind(stage: DeliveryStage): DeliveryObservationKind {
-  switch (stage) {
-    case 'preload.received':
-    case 'renderer.subscription.received':
-    case 'renderer.state.queued':
-    case 'renderer.state.applied':
-    case 'renderer.ui.committed':
-      return 'acknowledgement'
-    default:
-      return 'action'
-  }
+  return (DELIVERY_ACKNOWLEDGEMENT_STAGES as readonly string[]).includes(stage)
+    ? 'acknowledgement'
+    : 'action'
+}
+
+export type DeliveryAnomalyScope = 'source_sequence' | 'stage_sequence'
+
+/**
+ * Shared so the producer and the export validator cannot drift. When they did,
+ * the cross-check silently rejected records the producer had just written.
+ */
+export function deliveryAnomalyScope(recordKind: string): DeliveryAnomalyScope {
+  return recordKind === 'trace.sequence.gap' ? 'source_sequence' : 'stage_sequence'
 }
 
 /** Additive envelope metadata; never inspect or rewrite AppSessionEvent content. */
@@ -57,7 +86,7 @@ export type DeliveryAcknowledgement = Readonly<{
   sequence: number
   deliveryAttempt: number
   traceId: string
-  stage: Extract<DeliveryStage, 'preload.received' | 'renderer.subscription.received' | 'renderer.state.queued' | 'renderer.state.applied' | 'renderer.ui.committed'>
+  stage: DeliveryAcknowledgementStage
   documentId: string
   subscriptionEpoch: number
   rendererProcessInstanceId: string

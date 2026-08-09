@@ -2425,6 +2425,15 @@ function teardownOnSignal(signal: 'SIGINT' | 'SIGTERM'): void {
   stopBackgroundDrivers()
   shutdownRuntime()
   cancelAllReplayFlushes()
+  // Without these the launch has no completion record, so every later export
+  // reads a Ctrl-C run as an interrupted launch and reports the whole window's
+  // evidence as incomplete. Same pair `before-quit` writes; both are synchronous
+  // enough to land before the exit below.
+  logOperational('app.shutdown.started', 'info', { reason: signal === 'SIGINT' ? 'sigint' : 'sigterm' })
+  logOperational('app.shutdown.completed', 'info')
+  logOperational('process.exited', 'info', { role: 'electron-main', signal, expected: true })
+  operationalLog.close()
+  deliveryTrace.close()
   app.exit(signal === 'SIGINT' ? 130 : 143)
 }
 

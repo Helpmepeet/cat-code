@@ -12,6 +12,7 @@ import {
   MAX_DELIVERY_TRACE_TOTAL_BYTES,
 } from './deliveryTraceSink.js'
 import {
+  deliveryAnomalyScope,
   deliveryObservationKind,
   isDeliveryStage,
   isSafeDeliveryIdentifier,
@@ -41,7 +42,8 @@ export function buildDiagnosticsBundle({
   logsDirectory: string
   appVersion: string
   packaged?: boolean
-  currentLaunchId?: string
+  /** Required: omitting it classified the live launch as interrupted. */
+  currentLaunchId: string
   buildId?: string
   commitId?: string
 }): string {
@@ -50,6 +52,7 @@ export function buildDiagnosticsBundle({
   let sourceWindowTruncated = false
   let bundleLimitReached = false
   let sourceReadFailures = 0
+  let recordsRejected = 0
   if (existsSync(logsDirectory)) {
     const now = Date.now()
     const candidates: Array<{ name: string; mtimeMs: number; size: number }> = []
@@ -63,6 +66,11 @@ export function buildDiagnosticsBundle({
     }
     candidates.sort((a, b) => b.mtimeMs - a.mtimeMs)
     for (const { name, size } of candidates) {
+      // The inner break only ends one file. Without this the remaining
+      // candidates, up to six 20 MiB trace files, were still read whole and
+      // parsed synchronously on the Electron main thread after the admission
+      // budget was already spent, freezing the UI inside the export handler.
+      if (bundleLimitReached) break
       const target = name.startsWith('operational-')
         ? streams.operational
         : name.startsWith('delivery-trace-')
@@ -76,11 +84,26 @@ export function buildDiagnosticsBundle({
         const text = readFileSync(join(logsDirectory, name), 'utf8').slice(-MAX_FILE_BYTES)
         for (const line of text.split('\n').reverse()) {
           if (!line) continue
-          const value = JSON.parse(line) as unknown
+          // Taking a tail almost always cuts the oldest line in half, so an
+          // unparseable line is an expected boundary artifact. It must not abort
+          // the rest of the file, and it is counted rather than hidden.
+          let value: unknown
+          try {
+            value = JSON.parse(line)
+          } catch {
+            recordsRejected++
+            continue
+          }
           const safe = target === streams.operational
             ? parseOperationalRecord(value)
             : parseDeliveryTraceRecord(value)
-          if (!safe) continue
+          // Reported so a reader knows the bundle is not the whole file, but it
+          // does not decide `status`: a rejected line means something wrote
+          // something odd, not that evidence we needed went missing.
+          if (!safe) {
+            recordsRejected++
+            continue
+          }
           const bytes = Buffer.byteLength(JSON.stringify(safe))
           if (includedBytes + bytes > MAX_BUNDLE_BYTES / 2) {
             bundleLimitReached = true
@@ -119,7 +142,7 @@ export function buildDiagnosticsBundle({
       streams.operational,
       streams.deliveryTrace,
       currentLaunchId,
-      { sourceWindowTruncated, bundleLimitReached, sourceReadFailures },
+      { sourceWindowTruncated, bundleLimitReached, sourceReadFailures, recordsRejected },
     ),
     stuckSessions: deriveStuckSessionSummaries(streams.deliveryTrace),
     streams,
@@ -223,7 +246,7 @@ export function parseDeliveryTraceRecord(value: unknown): TraceRecord | null {
     ) ||
     (
       item.anomalyScope !== undefined &&
-      item.anomalyScope !== (kind === 'trace.sequence.gap' ? 'source_sequence' : 'stage_sequence')
+      item.anomalyScope !== deliveryAnomalyScope(kind)
     ) ||
     // The gap and out_of_order kinds carry this too, and nothing else validated
     // it, so a rooted path in expectedSequence reached the export unchanged.
@@ -234,14 +257,29 @@ export function parseDeliveryTraceRecord(value: unknown): TraceRecord | null {
   return item as TraceRecord
 }
 
+export type RecordingCoverageStatus =
+  | 'incomplete'
+  | 'loss_observed'
+  | 'active'
+  | 'complete'
+  | 'unknown'
+
+export type LaunchCoverageStatus = 'complete' | 'active' | 'interrupted'
+
+/**
+ * `currentLaunchId` is required: omitting it silently classified the live launch
+ * as interrupted, which is the difference between "this export is trustworthy"
+ * and "something crashed".
+ */
 export function deriveRecordingCoverage(
   operationalRecords: readonly unknown[],
   traceRecords: readonly TraceRecord[],
-  currentLaunchId?: string,
+  currentLaunchId: string,
   exportLimits: {
     sourceWindowTruncated?: boolean
     bundleLimitReached?: boolean
     sourceReadFailures?: number
+    recordsRejected?: number
   } = {},
 ): Record<string, unknown> {
   const launches = new Map<string, {
@@ -253,6 +291,7 @@ export function deriveRecordingCoverage(
   let operationalRecordsSuppressed = 0
   let deliveryTraceRecordsLost = 0
   let incompleteStreamCount = 0
+  let currentLaunchIncomplete = 0
 
   for (const record of operationalRecords) {
     if (!record || typeof record !== 'object' || Array.isArray(record)) continue
@@ -267,7 +306,10 @@ export function deriveRecordingCoverage(
     if (item.timestamp > launch.lastRecordAt) launch.lastRecordAt = item.timestamp
     if (item.event === 'app.start') launch.startedAt = item.timestamp
     if (item.event === 'app.shutdown.completed') launch.completed = true
-    if (item.event === 'log.coverage.incomplete') incompleteStreamCount++
+    if (item.event === 'log.coverage.incomplete') {
+      incompleteStreamCount++
+      if (item.launchId === currentLaunchId) currentLaunchIncomplete++
+    }
     if (item.event === 'log.suppressed') {
       const fields = item.fields as Record<string, unknown>
       if (typeof fields.count === 'number') operationalRecordsSuppressed += fields.count
@@ -293,30 +335,43 @@ export function deriveRecordingCoverage(
     }))
     .sort((a, b) => b.lastRecordAt.localeCompare(a.lastRecordAt))
   const knownLoss = operationalRecordsSuppressed + deliveryTraceRecordsLost > 0
-  const incomplete = incompleteStreamCount > 0 ||
-    exportLimits.sourceWindowTruncated === true ||
-    exportLimits.bundleLimitReached === true ||
-    (exportLimits.sourceReadFailures ?? 0) > 0 ||
-    launchCoverage.some(launch => launch.status === 'interrupted')
-  const active = launchCoverage.some(launch => launch.status === 'active')
+  // Scoped to the CURRENT launch. A crash inside the retention window is real
+  // history and stays in `launches[]`, but letting it decide this field made a
+  // fortnight of exports report the live evidence as untrustworthy.
+  const currentLaunch = launchCoverage.find(launch => launch.launchId === currentLaunchId)
+  const evidenceMissing = currentLaunchIncomplete > 0 ||
+    (exportLimits.sourceReadFailures ?? 0) > 0
+  // A tail-based export is bounded by construction, so truncation and admission
+  // limits describe the export's shape, not the evidence's integrity. Folding
+  // them in left `status` unable to tell a good bundle from a bad one.
+  const exportBounded = exportLimits.sourceWindowTruncated === true ||
+    exportLimits.bundleLimitReached === true
+
+  const status: RecordingCoverageStatus = evidenceMissing
+    ? 'incomplete'
+    : knownLoss
+      ? 'loss_observed'
+      : currentLaunch?.status === 'active'
+        ? 'active'
+        : currentLaunch?.status === 'complete'
+          ? 'complete'
+          : launchCoverage.length > 0
+            ? 'active'
+            : 'unknown'
 
   return {
-    status: incomplete
-      ? 'incomplete'
-      : knownLoss
-        ? 'loss_observed'
-        : active
-          ? 'active'
-          : launchCoverage.length > 0
-            ? 'complete'
-            : 'unknown',
+    status,
     lossObserved: knownLoss,
     operationalRecordsSuppressed,
     deliveryTraceRecordsLost,
     incompleteStreamCount,
+    currentLaunchIncompleteCount: currentLaunchIncomplete,
+    interruptedLaunchCount: launchCoverage.filter(launch => launch.status === 'interrupted').length,
+    exportBounded,
     sourceWindowTruncated: exportLimits.sourceWindowTruncated ?? false,
     bundleLimitReached: exportLimits.bundleLimitReached ?? false,
     sourceReadFailures: exportLimits.sourceReadFailures ?? 0,
+    recordsRejected: exportLimits.recordsRejected ?? 0,
     launches: launchCoverage,
   }
 }
