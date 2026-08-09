@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   createSessionActionRuntimeState,
   reduceSessionActionRuntimeState,
+  selectLatestSessionActionError,
   selectLatestSessionActionResult,
 } from './sessionActionRuntimeState.js'
 import {
@@ -92,6 +93,30 @@ describe('sessionActionRuntimeState', () => {
       } as unknown as ServerFrame,
     })
     expect(selectLatestSessionActionResult(state, SESSION)).toBeNull()
+  })
+
+  test('records a correlated error separately from a verb result', () => {
+    const state = reduceSessionActionRuntimeState(
+      createSessionActionRuntimeState(),
+      {
+        type: 'frame',
+        frame: {
+          kind: 'error',
+          protocolVersion: PROTOCOL_VERSION,
+          sessionId: SESSION,
+          requestId: 'export-request',
+          code: 'session_disconnected',
+          message: 'This session is disconnected.',
+          retryable: true,
+        },
+      },
+    )
+
+    expect(selectLatestSessionActionResult(state, SESSION)).toBeNull()
+    expect(selectLatestSessionActionError(state, SESSION)).toEqual({
+      requestId: 'export-request',
+      message: 'This session is disconnected.',
+    })
   })
 
   test('an unrelated frame kind is ignored', () => {

@@ -174,10 +174,16 @@ export function selectBulkExportOutcome(
       | undefined
     >
   >,
+  errorsBySession: Readonly<Record<string, { requestId: string; message: string } | null>> = {},
 ): BulkExportOutcome {
   const sections: { title: string | null; text: string }[] = []
   let failed = 0
   for (const request of requests) {
+    const error = errorsBySession[request.sessionId]
+    if (error?.requestId === request.requestId) {
+      failed += 1
+      continue
+    }
     const slot = resultBySession[request.sessionId]
     // An explicit null is the lifecycle reset, not an absent key: that session's
     // engine is gone, so waiting on it would strand every other leg with it.

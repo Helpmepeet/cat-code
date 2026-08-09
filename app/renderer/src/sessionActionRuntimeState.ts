@@ -25,12 +25,16 @@ import type {
 export type SessionActionRuntimeState = {
   /** Most recent `session-action.result` per session (null after a lifecycle reset). */
   lastBySession: Record<SessionId, SessionActionResultFrame | null>
+  /** Correlated failures stay separate: ErrorFrame does not name an action verb. */
+  errorBySession: Record<SessionId, SessionActionError | null>
 }
+
+export type SessionActionError = { requestId: string; message: string }
 
 export type SessionActionRuntimeAction = { type: 'frame'; frame: ServerFrame }
 
 export function createSessionActionRuntimeState(): SessionActionRuntimeState {
-  return { lastBySession: {} }
+  return { lastBySession: {}, errorBySession: {} }
 }
 
 export function reduceSessionActionRuntimeState(
@@ -46,6 +50,16 @@ export function reduceSessionActionRuntimeState(
     }
   }
 
+  if (frame.kind === 'error' && frame.requestId) {
+    return {
+      ...state,
+      errorBySession: {
+        ...state.errorBySession,
+        [frame.sessionId]: { requestId: frame.requestId, message: frame.message },
+      },
+    }
+  }
+
   // A process/transport reset drops the stale result; a fresh one arrives on the
   // next verb. Untracked sessions are left alone (mirrors the other domains).
   if (frame.kind === 'lifecycle') {
@@ -53,10 +67,19 @@ export function reduceSessionActionRuntimeState(
     return {
       ...state,
       lastBySession: { ...state.lastBySession, [frame.sessionId]: null },
+      errorBySession: { ...state.errorBySession, [frame.sessionId]: null },
     }
   }
 
   return state
+}
+
+export function selectLatestSessionActionError(
+  state: SessionActionRuntimeState,
+  sessionId: SessionId | null,
+): SessionActionError | null {
+  const error = sessionId ? state.errorBySession[sessionId] : undefined
+  return error ?? null
 }
 
 /** The latest session-action result for a session (null before any verb / after reset). */

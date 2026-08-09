@@ -286,6 +286,19 @@ describe('selectBulkExportOutcome (P4-35)', () => {
     })
   })
 
+  test('a correlated transport error settles only its matching export leg', () => {
+    const outcome = selectBulkExportOutcome(
+      [request('s1', 'r1', 'First'), request('s2', 'r2')],
+      { s1: done('r1', 'a') },
+      { s2: { requestId: 'r2', message: 'This session is disconnected.' } },
+    )
+    expect(outcome).toEqual({
+      status: 'settled',
+      failed: 1,
+      sections: [{ title: 'First', text: 'a' }],
+    })
+  })
+
   test('another action finishing mid-flight is never mistaken for this export', () => {
     // The runtime state keeps only the latest result per session. A rename result
     // landing in a leg's slot must read as pending, not as that leg completing.

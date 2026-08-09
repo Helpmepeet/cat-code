@@ -333,6 +333,7 @@ import {
 import {
   createSessionActionRuntimeState,
   reduceSessionActionRuntimeState,
+  selectLatestSessionActionError,
   selectLatestSessionActionResult,
 } from './sessionActionRuntimeState.js'
 import {
@@ -1579,6 +1580,13 @@ export function App() {
       if (result.ok) entries.push(pending)
       toast(result.message, { tone: result.ok ? 'success' : 'danger' })
     }
+    for (const error of Object.values(sessionActionRuntime.errorBySession)) {
+      if (!error || toastedActionRequestsRef.current.has(error.requestId)) continue
+      if (!pendingTagWritesRef.current.has(error.requestId)) continue
+      toastedActionRequestsRef.current.add(error.requestId)
+      pendingTagWritesRef.current.delete(error.requestId)
+      toast(error.message, { tone: 'danger' })
+    }
     if (entries.length > 0) setSessionsTagEcho({ entries })
   }, [sessionActionRuntime, toast])
 
@@ -1596,6 +1604,7 @@ export function App() {
     const outcome = selectBulkExportOutcome(
       requests,
       sessionActionRuntime.lastBySession,
+      sessionActionRuntime.errorBySession,
     )
     if (outcome.status === 'waiting') return
     pendingBulkExportRef.current = null
@@ -1643,6 +1652,18 @@ export function App() {
     toast(result.message, { tone: result.ok ? 'success' : 'danger' })
   }, [latestSessionActionResult, toast])
 
+  const latestSessionActionError = selectLatestSessionActionError(
+    sessionActionRuntime,
+    activeSessionId,
+  )
+  useEffect(() => {
+    const error = latestSessionActionError
+    if (!error || toastedActionRequestsRef.current.has(error.requestId)) return
+    if (error.requestId === openExportRequestIdRef.current) return
+    toastedActionRequestsRef.current.add(error.requestId)
+    toast(error.message, { tone: 'danger' })
+  }, [latestSessionActionError, toast])
+
   // P4-30 — latch the open Export dialog's OWN result the first time it lands.
   // It reads the target session's latest result rather than the active session's,
   // because the dialog can target any row the menu was opened for. A pending
@@ -1657,6 +1678,21 @@ export function App() {
       ),
       exportDialog.requestId,
     )
+    const error = selectLatestSessionActionError(
+      sessionActionRuntime,
+      exportDialog.sessionId,
+    )
+    if (error?.requestId === exportDialog.requestId) {
+      setLatchedExport(current =>
+        current?.requestId === exportDialog.requestId
+          ? current
+          : {
+              requestId: exportDialog.requestId,
+              state: { status: 'failed', message: error.message },
+            },
+      )
+      return
+    }
     if (projected.status === 'pending') return
     setLatchedExport(current =>
       current?.requestId === exportDialog.requestId
