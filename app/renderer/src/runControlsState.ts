@@ -31,7 +31,16 @@ export type RunControlsState = {
   last: Record<SessionId, RunControlsSnapshot>
 }
 
-export type RunControlsAction = { type: 'frame'; frame: ServerFrame }
+export type RunControlsAction =
+  | { type: 'frame'; frame: ServerFrame }
+  /**
+   * The row left the live ∪ restorable set for good (reaped, or its
+   * engineSessionId cleared). Retention is scoped to a session that still
+   * EXISTS: a lifecycle frame means "no engine right now" and must keep the
+   * facts, but a removed row has nothing left to display them for, and its
+   * snapshot carries the full model option list.
+   */
+  | { type: 'session-removed'; sessionId: SessionId }
 
 export function createRunControlsState(): RunControlsState {
   return { sessions: {}, last: {} }
@@ -41,6 +50,17 @@ export function reduceRunControlsState(
   state: RunControlsState,
   action: RunControlsAction,
 ): RunControlsState {
+  if (action.type === 'session-removed') {
+    if (!(action.sessionId in state.sessions) && !(action.sessionId in state.last)) {
+      return state
+    }
+    const sessions = { ...state.sessions }
+    const last = { ...state.last }
+    delete sessions[action.sessionId]
+    delete last[action.sessionId]
+    return { sessions, last }
+  }
+
   const { frame } = action
 
   if (frame.kind === 'run-controls.snapshot') {

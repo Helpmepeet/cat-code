@@ -115,8 +115,10 @@ import { MentionPicker, type MentionItem } from './MentionPicker.js'
 import { filterMentionItems } from './mentionPickerModel.js'
 import {
   applyMention,
+  buildSubmitPrompt,
   caretAtHistoryEdge,
   createHistoryState,
+  createImageAttachmentState,
   createPasteState,
   canSendUntypedSubmit,
   createPendingSubmitState,
@@ -129,10 +131,13 @@ import {
   PENDING_SUBMIT_RELEASED_MESSAGE,
   planSessionSubmit,
   reduceHistoryPushed,
+  reduceImageAttachmentAdded,
+  reduceImageAttachmentRemoved,
   reducePasteAdded,
   reducePasteStateForDraftWrite,
   reducePendingSubmitCleared,
   reducePendingSubmitHeld,
+  reduceSessionImagesReplaced,
   reduceSessionPastesCleared,
   removePasteOccurrence,
   reduceTransportErrorCleared,
@@ -142,6 +147,7 @@ import {
   selectAgentMentionItems,
   selectComposerGate,
   selectHistory,
+  selectImageAttachments,
   selectPendingSubmit,
   selectSessionPasteList,
   selectSessionPasteState,
@@ -151,12 +157,18 @@ import {
   type DraftWriteReason,
   type HistoryNav,
   type HistoryState,
+  type ImageAttachment,
+  type ImageAttachmentState,
   type PasteEntry,
   type PasteState,
   type PendingSubmit,
   type PendingSubmitState,
   type TransportErrorState,
 } from './composerState.js'
+import {
+  ACCEPTED_IMAGE_TYPES,
+  prepareImageAttachment,
+} from './imageAttachment.js'
 import {
   WorkspaceLayout,
   type WorkspacePanelView,
@@ -462,6 +474,8 @@ export function App() {
   // switch (SessionPane unmounts for off-screen sessions). Renderer-local; never
   // crosses the wire.
   const [pasteState, setPasteState] = useState<PasteState>(createPasteState)
+  const [imageAttachmentState, setImageAttachmentState] =
+    useState<ImageAttachmentState>(createImageAttachmentState)
   const [historyState, setHistoryState] = useState<HistoryState>(createHistoryState)
   // CC-16 — a prompt submitted while the session was still spawning. Parked
   // per-session (same keying as `promptDrafts`) and drained through the SAME
@@ -972,6 +986,21 @@ export function App() {
         releasePendingSubmit(event.appSessionId)
         dispatchPreviewTranscript({
           type: 'preview-reset',
+          sessionId: event.appSessionId,
+        })
+        // The per-session domain stores keep their last-known values across a
+        // LIFECYCLE frame on purpose — the rail must keep reading for a session
+        // whose engine is merely gone. A REMOVED row is the other case: there is
+        // nothing left to display it for, and the retained run-controls snapshot
+        // carries a full model option list, so it is dropped here rather than
+        // held until the renderer restarts.
+        dispatchRunControls({
+          type: 'session-removed',
+          sessionId: event.appSessionId,
+        })
+        dispatchAccounts({ type: 'session-removed', sessionId: event.appSessionId })
+        dispatchPermission({
+          type: 'session-removed',
           sessionId: event.appSessionId,
         })
         preloadReservedBytesRef.current.delete(event.appSessionId)
@@ -1810,6 +1839,9 @@ export function App() {
         ),
       ),
     )
+    setImageAttachmentState(state =>
+      reduceSessionImagesReplaced(state, sessionId, pending.images ?? []),
+    )
     setTransportErrors(prev =>
       reduceTransportErrorSet(prev, sessionId, PENDING_SUBMIT_RELEASED_MESSAGE),
     )
@@ -2067,6 +2099,7 @@ export function App() {
     event.preventDefault()
     const sessionLog = selectRawMessageLog(state, sessionId)
     const sessionConnection = selectConnection(connection, sessionId)
+    const images = selectImageAttachments(imageAttachmentState, sessionId)
     // Collapsed-paste tokens are expanded back to their full text before submit
     // — the engine receives plain prompt text, never a `[Pasted text #N]` ref
     // (parity `expandPastedTextRefs`, src/history.ts:81 / handlePromptSubmit.ts:216).
@@ -2077,6 +2110,7 @@ export function App() {
     const action = planSessionSubmit({
       draft: selectPromptDraft(promptDrafts, sessionId),
       pasteEntries: selectSessionPasteState(pasteState, sessionId).entries,
+      hasImages: images.length > 0,
       preview: hasPreviewTranscript(previewTranscript, sessionId),
       connectionStatus: sessionConnection.status,
       connectionInputEnabled: sessionConnection.inputEnabled,
@@ -2097,6 +2131,7 @@ export function App() {
       return
     }
     const text = action.text
+    const submitPrompt = buildSubmitPrompt(text, images)
     // Both paths retire the draft the same way: the prompt has left the
     // composer, so the pastes it expanded are spent and it joins ↑/↓ history.
     // A parked prompt that is later released comes back as its expanded text
@@ -2104,12 +2139,16 @@ export function App() {
     const retireDraft = (): void => {
       setPromptDrafts(drafts => reducePromptDrafts(drafts, sessionId, ''))
       setPasteState(prev => reduceSessionPastesCleared(prev, sessionId))
+      setImageAttachmentState(prev =>
+        reduceSessionImagesReplaced(prev, sessionId, []),
+      )
       setHistoryState(prev => reduceHistoryPushed(prev, sessionId, text))
     }
     if (action.type === 'hold') {
       setPendingSubmits(prev =>
         reducePendingSubmitHeld(prev, sessionId, {
           text,
+          images,
           showQueuedRow: action.showQueuedRow,
         }),
       )
@@ -2122,7 +2161,7 @@ export function App() {
     // goalSnapshot unless the renderer actually owns one; if added later, the
     // sidecar's T4 parseThreadGoal validation remains the trust boundary.
     try {
-      getBridge().submit(sessionId, text)
+      getBridge().submit(sessionId, submitPrompt)
       retireDraft()
       setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))
     } catch (error) {
@@ -2158,7 +2197,10 @@ export function App() {
         continue
       }
       try {
-        getBridge().submit(sessionId, pending.text)
+        getBridge().submit(
+          sessionId,
+          buildSubmitPrompt(pending.text, pending.images ?? []),
+        )
         setPendingSubmits(prev => reducePendingSubmitCleared(prev, sessionId))
         setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))
       } catch (error) {
@@ -2815,6 +2857,7 @@ export function App() {
 	              selectAgentConfigSnapshot(agentConfig, sessionId),
 	            )}
 	            pastes={selectSessionPasteList(pasteState, sessionId)}
+	            images={selectImageAttachments(imageAttachmentState, sessionId)}
 	            pendingSubmit={selectPendingSubmit(pendingSubmits, sessionId)}
 	            history={selectHistory(historyState, sessionId)}
 	            onPaste={(content, selectionStart, selectionEnd) =>
@@ -2832,6 +2875,16 @@ export function App() {
 	                selectPromptDraft(promptDrafts, sessionId),
 	                entry,
 	                at,
+	              )
+	            }
+	            onAttachImage={attachment =>
+	              setImageAttachmentState(prev =>
+	                reduceImageAttachmentAdded(prev, sessionId, attachment),
+	              )
+	            }
+	            onRemoveImage={id =>
+	              setImageAttachmentState(prev =>
+	                reduceImageAttachmentRemoved(prev, sessionId, id),
 	              )
 	            }
 		            transcript={panelPreviewTranscript ?? transcript}
@@ -3665,9 +3718,12 @@ export function SessionPane({
   copyForLlm,
   denyPermission,
   history,
+  images = [],
   mentionItems,
   onApprovePlan,
+  onAttachImage,
   onPaste,
+  onRemoveImage,
   onRemovePaste,
   onRevisePlan,
   askQuestion,
@@ -3827,6 +3883,23 @@ export function SessionPane({
   // contentEditable (`ComposerInput`) so a collapsed paste renders as an inline
   // pill; the handle keeps the textarea-shaped selection API these handlers use.
   const composerRef = useRef<ComposerInputHandle>(null)
+  const imageInputRef = useRef<HTMLInputElement>(null)
+  const [preparingImage, setPreparingImage] = useState(false)
+  const attachImage = async (file: File): Promise<void> => {
+    if (!onAttachImage) return
+    setPreparingImage(true)
+    try {
+      onAttachImage(await prepareImageAttachment(file))
+      setTransportErrorFromImage(null)
+    } catch (error) {
+      setTransportErrorFromImage(errorMessage(error))
+    } finally {
+      setPreparingImage(false)
+    }
+  }
+  const [transportErrorFromImage, setTransportErrorFromImage] = useState<
+    string | null
+  >(null)
   // P4-24 — where the caret belongs after a PROGRAMMATIC draft rewrite (at-caret
   // paste, whole-token Backspace). A rewritten draft rebuilds the field's nodes,
   // so without this the next keystroke lands at the end of the draft instead of
@@ -4112,6 +4185,13 @@ export function SessionPane({
     const composer = composerRef.current
     if (!composer || event.target !== composer.element) return
     event.preventDefault()
+    const image = Array.from(event.clipboardData.files).find(file =>
+      ACCEPTED_IMAGE_TYPES.some(type => type === file.type),
+    )
+    if (image) {
+      void attachImage(image)
+      return
+    }
     const text = event.clipboardData.getData('text')
     if (!text) return
     const start = composer.selectionStart
@@ -4441,6 +4521,9 @@ export function SessionPane({
       {transportError ? (
         <div className="text-sm text-tone-danger">{transportError}</div>
       ) : null}
+      {transportErrorFromImage ? (
+        <div className="text-sm text-tone-danger">{transportErrorFromImage}</div>
+      ) : null}
 
       {/* CC-16 — a genuine cold-spawn prompt needs this row because the composer
        * cleared before any engine was ready to receive it. IDLE-PARK restore is
@@ -4450,7 +4533,7 @@ export function SessionPane({
         <div className="flex items-baseline gap-2 text-xs" role="status">
           <span className="shrink-0 font-medium text-text-muted">Queued</span>
           <span className="min-w-0 flex-1 truncate text-text-subtle">
-            {pendingSubmit.text}
+            {pendingSubmit.text || 'Image attachment'}
           </span>
           <span className="shrink-0 text-text-subtle">
             Sends when the session is ready.
@@ -4492,6 +4575,44 @@ export function SessionPane({
           submit(event)
         }}
       >
+        <input
+          ref={imageInputRef}
+          accept={ACCEPTED_IMAGE_TYPES.join(',')}
+          className="hidden"
+          onChange={event => {
+            const file = event.currentTarget.files?.[0]
+            event.currentTarget.value = ''
+            if (file) void attachImage(file)
+          }}
+          type="file"
+        />
+        {images.length > 0 ? (
+          <div
+            aria-label="Image attachments"
+            className="mb-2 flex items-center gap-2 px-1"
+          >
+            {images.map(image => (
+              <div
+                className="group relative overflow-hidden rounded-lg border border-accent/20 bg-accent/[0.06] p-1.5"
+                key={image.id}
+              >
+                <img
+                  alt={image.name}
+                  className="max-h-24 max-w-36 rounded-md object-contain"
+                  src={`data:${image.mediaType};base64,${image.data}`}
+                />
+                <button
+                  aria-label={`Remove ${image.name}`}
+                  className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-black/70 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                  onClick={() => onRemoveImage?.(image.id)}
+                  type="button"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
         {/* No bottom padding, deliberately. The prototype has 11px here
          * (Chat.jsx:1395 `padding: '0 4px 11px'`); the operator chose 0 on
          * 2026-08-02 to close the idle composer's dead band. A parity sweep
@@ -4576,7 +4697,7 @@ export function SessionPane({
               className="flex h-[30px] w-[30px] shrink-0 items-center justify-center self-end rounded-lg text-accent transition-colors disabled:text-text-ghost"
               disabled={
                 !composerGate.editable ||
-                prompt.trim().length === 0 ||
+                (prompt.trim().length === 0 && images.length === 0) ||
                 pendingSubmit !== null
               }
               type="submit"
@@ -4609,12 +4730,8 @@ export function SessionPane({
          * model override · permission MODE · —— · active account · context donut.
          * Real data only — see `ComposerActionsBar` for the per-chip backing. */}
         <ComposerActionsBar
-          attachDisabled={!composerGate.editable}
-          onAttach={() =>
-            toast('Paste a large block to attach it as a collapsed chip.', {
-              tone: 'info',
-            })
-          }
+          attachDisabled={!composerGate.editable || preparingImage}
+          onAttach={() => imageInputRef.current?.click()}
           model={railModel}
           modelLabel={railModelLabel}
           reasoningEffort={railEffort}
@@ -5013,6 +5130,10 @@ type SessionPaneProps = {
   mentionItems: MentionItem[]
   /** Collapsed pastes held aside for this session, oldest first. */
   pastes: PasteEntry[]
+  /** Images attached from the clipboard or picker for this session. */
+  images?: ImageAttachment[]
+  onAttachImage?: (attachment: Omit<ImageAttachment, 'id'>) => void
+  onRemoveImage?: (id: number) => void
   /** CC-16 — a prompt submitted before the engine could accept it. The cold-spawn
    * row is presentation metadata; every pending prompt still blocks a second hold. */
   pendingSubmit?: PendingSubmit | null
