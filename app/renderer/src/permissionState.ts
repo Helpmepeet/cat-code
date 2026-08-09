@@ -175,6 +175,16 @@ export function reducePermissionState(
 
   if (frame.kind === 'error' && frame.requestId) {
     if (!session.submittedRequestIds.includes(frame.requestId)) return state
+    // The sidecar's pending-request lookup is definitive. A stale card can
+    // survive only when its `permission.resolved` event was missed; retrying an
+    // id the engine says no longer exists would just create another error loop.
+    if (frame.code === 'permission_not_found') {
+      return updateSession(
+        state,
+        frame.sessionId,
+        removeRequest(session, frame.requestId),
+      )
+    }
     return updateSession(state, frame.sessionId, {
       ...session,
       submittedRequestIds: session.submittedRequestIds.filter(

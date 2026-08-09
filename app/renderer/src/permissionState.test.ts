@@ -129,6 +129,33 @@ test('an addressed transport error restores a submitted permission for retry', (
   expect(selectVisiblePermission(state, 'session-1')).toEqual(REQUEST)
 })
 
+test('permission_not_found removes a stale submitted card instead of re-arming it', () => {
+  let state = reducePermissionState(createPermissionState(), {
+    type: 'frame',
+    frame: readyFrame(),
+  })
+  state = reducePermissionState(state, {
+    type: 'submitted',
+    sessionId: 'session-1',
+    requestId: REQUEST.requestId,
+  })
+  state = reducePermissionState(state, {
+    type: 'frame',
+    frame: {
+      kind: 'error',
+      protocolVersion: 1,
+      sessionId: 'session-1',
+      requestId: REQUEST.requestId,
+      code: 'permission_not_found',
+      message: 'request no longer pending',
+      retryable: false,
+    },
+  })
+
+  expect(selectPermissionQueue(state, 'session-1')).toEqual([])
+  expect(selectVisiblePermission(state, 'session-1')).toBeNull()
+})
+
 test('a synchronous bridge failure restores a submitted permission for retry', () => {
   let state = reducePermissionState(createPermissionState(), {
     type: 'frame',
