@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { SDKMessage } from '@cat-code/engine/session-events'
@@ -190,6 +191,14 @@ test('a blockquote gets its own per-quote copy control', () => {
   expect(html).toContain('<blockquote')
   expect(html).toContain('Ship the fix today.')
   expect(html).toContain('aria-label="Copy quote"') // per-quote copy control
+})
+
+test('quote and reasoning markdown component types stay stable between content changes', () => {
+  // SSR cannot preserve click state, so pin the component-identity guard at its
+  // source: changing unrelated streamed rows must not remount QuoteCopyChip.
+  const source = readFileSync(new URL('./TranscriptView.tsx', import.meta.url), 'utf8')
+  expect(source).toContain('const components = useMemo(')
+  expect(source).toContain('REASONING_HEADING_COMPONENTS')
 })
 
 test('prose with no blockquote gets no per-quote copy control', () => {

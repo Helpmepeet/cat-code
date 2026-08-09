@@ -29,6 +29,7 @@ import {
   useContext,
   useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
   type ComponentPropsWithoutRef,
@@ -652,15 +653,14 @@ function AssistantProse({
   // is still arriving (there is no settled answer to take yet, and the caret owns
   // that corner), and none on an empty turn.
   const copyable = !streaming && content.trim().length > 0
-  // Built fresh per render — cheap next to the remark/rehype parse
-  // react-markdown already redoes on every content change. The blockquote
-  // renderer closes over this message's raw source so its own copy control
-  // can dequote by source position rather than re-deriving text from the
-  // parsed tree (see `createBlockquoteComponent`).
-  const components = {
-    ...MARKDOWN_COMPONENTS,
-    blockquote: createBlockquoteComponent(content),
-  }
+  // The blockquote renderer closes over this message's raw source so its own
+  // copy control can dequote by source position rather than re-deriving text
+  // from the parsed tree. Keep its component type stable until that source
+  // changes: otherwise React remounts each quote and loses its copy feedback.
+  const components = useMemo(
+    () => ({ ...MARKDOWN_COMPONENTS, blockquote: createBlockquoteComponent(content) }),
+    [content],
+  )
   return (
     // P4-38 host contract for `BubbleCopyChip`: `group relative` makes this body
     // the hover/focus group the absolute chip anchors to. No reserved right
@@ -853,7 +853,7 @@ function QuoteCopyChip({ text }: { text: string }) {
 }
 
 /**
- * Blockquote renderer, built fresh per `AssistantProse` render closing over
+ * Blockquote renderer, built per distinct `AssistantProse` source closing over
  * that message's raw markdown `rawSource` — `node.position` offsets are into
  * that string. `.md-prose blockquote` (theme.css) still supplies the
  * border/color styling by tag-name selector regardless of this component's own
@@ -2957,13 +2957,17 @@ function ReasoningProse({ content }: { content: string }) {
  * one-line layout while still interpreting inline Markdown such as emphasis,
  * strong text, code, and links. Raw HTML remains disabled by react-markdown.
  */
+const REASONING_HEADING_COMPONENTS = {
+  p: ({ children }: ComponentPropsWithoutRef<'p'>) => <>{children}</>,
+}
+
 function ReasoningHeading({ content }: { content: string }) {
   return (
     <span className="break-words">
       <MarkdownErrorBoundary fallback={content}>
         <Markdown
           remarkPlugins={REMARK_PLUGINS}
-          components={{ p: ({ children }) => <>{children}</> }}
+          components={REASONING_HEADING_COMPONENTS}
         >
           {content}
         </Markdown>
