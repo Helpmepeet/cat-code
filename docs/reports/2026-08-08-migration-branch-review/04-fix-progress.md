@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 31/242** — counted against the review's original 61 High and
+**Progress: Fix 32/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -35,6 +35,7 @@ count tracks individually verified findings, not commit count.
 | S03 HIGH post-launch spawn failure leaves a teammate running but unaddressable | fixed | `330089d` | spawn lifecycle regression (3 pass); focused lint; app typecheck |
 | S03 HIGH pane teammate reports success when initial task-prompt delivery fails | fixed | `1768c62` | spawn + mailbox suites (38 pass); focused lint; app typecheck |
 | S03 HIGH team-file reads can observe torn JSON during a write | fixed | `cb7e9c6` | swarm + mailbox suites (51 pass); focused lint; app typecheck |
+| A20 HIGH hardening/demo harness `app.exit()` bypasses sidecar shutdown | fixed | `298cac6` | harness lifecycle source test (2 pass); app typecheck; full GUI smoke remains gated |
 
 ## Known verification limitation
 
