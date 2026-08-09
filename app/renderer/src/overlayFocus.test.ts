@@ -7,6 +7,7 @@ import {
   nextTabStopIndex,
   overlayEscapeAction,
   popoverKeyAction,
+  restoreTargetForRemoval,
   selectFocusableElements,
 } from './overlayFocus.js'
 
@@ -237,6 +238,20 @@ test('concurrent cleanup resolves restoration past removed overlay content', () 
     shouldRestore: true,
   })
   expect(topRemoval.restoreTarget).not.toBe(underlyingButton)
+})
+
+test('popover cleanup retains and honors the stack-computed restore target', () => {
+  const stack = createModalFocusStack()
+  const owner = Symbol('session-actions')
+  const trigger = focusNode()
+  const popover = focusNode()
+
+  stack.register(owner, popover, trigger, 'popover')
+  const removal = stack.unregister(owner)
+
+  expect(removal).toEqual({ restoreTarget: trigger, shouldRestore: true })
+  expect(restoreTargetForRemoval(removal)).toBe(trigger)
+  expect(restoreTargetForRemoval({ restoreTarget: trigger, shouldRestore: false })).toBeNull()
 })
 
 test('a popover defers Escape to a modal opened on top of it, regardless of which keydown listener runs first', () => {

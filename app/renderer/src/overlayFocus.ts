@@ -124,6 +124,18 @@ export type ModalFocusStack = {
   isBlockedByModal(owner: ModalFocusOwner): boolean
 }
 
+export type OverlayFocusRemoval = {
+  restoreTarget: HTMLElement | null
+  shouldRestore: boolean
+}
+
+/** The one restoration decision both modal and popover cleanups honor. */
+export function restoreTargetForRemoval(
+  removal: OverlayFocusRemoval,
+): HTMLElement | null {
+  return removal.shouldRestore ? removal.restoreTarget : null
+}
+
 function resolveConnectedRestoreTarget(
   entries: readonly ModalFocusEntry[],
   initial: HTMLElement | null,
@@ -304,8 +316,8 @@ export function useModalFocus({
     return () => {
       cancelAnimationFrame(frame)
       const removal = modalFocusStack.unregister(owner)
-      if (restoreOnCloseRef.current && removal.shouldRestore) {
-        restoreFocus(removal.restoreTarget)
+      if (restoreOnCloseRef.current) {
+        restoreFocus(restoreTargetForRemoval(removal))
       }
     }
   }, [containerRef, open])
@@ -366,10 +378,7 @@ export function usePopoverFocus({
   }, [])
 
   useEffect(() => {
-    if (!open) {
-      triggerFocusRef.current = null
-      return
-    }
+    if (!open) return
     const owner = ownerRef.current
     triggerFocusRef.current = activeHtmlElement()
     // Join the SAME stack `useModalFocus` registers with (kind: 'popover'),
@@ -386,7 +395,7 @@ export function usePopoverFocus({
     })
     return () => {
       cancelAnimationFrame(frame)
-      modalFocusStack.unregister(owner)
+      restoreFocus(restoreTargetForRemoval(modalFocusStack.unregister(owner)))
     }
   }, [containerRef, initialFocusSelector, open])
 
