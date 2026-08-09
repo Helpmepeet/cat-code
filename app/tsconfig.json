@@ -26,7 +26,8 @@
     "shared/**/*.ts",
     "renderer/src/**/*.ts",
     "renderer/src/**/*.tsx",
-    "scripts/**/*.ts"
+    "scripts/**/*.ts",
+    "scripts/**/*.tsx"
   ],
   "//": "sidecar/** is checked by sidecar/tsconfig.json — it imports engine RUNTIME directly and must resolve the real Bun engine graph, which this isolated (snapshot-alias, DOM-lib) config deliberately cannot."
 }
