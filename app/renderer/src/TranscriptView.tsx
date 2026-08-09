@@ -1183,11 +1183,11 @@ function ToolCardShell({
  * P4-18b tool card: dispatches the shared shell (family mark/word/target/
  * state-dot/collapse) with a per-family body rendered from the REAL projected
  * row (`input` + correlated `result.content`/`result.diff`, zero casts). Sub-
- * features that need data the projector never surfaces (stdout/stderr split,
- * line/byte counts, real diagnostic severity, the GenerateImage inline tile,
- * WebFetch content-type/size, word-level intra-line diff) render truth or a
- * flagged note — they are §5 ledger deferrals needing a projector data-contract
- * change, NOT the P2-locked render layer, and are never mocked.
+ * features that still need data the projector never surfaces (stdout/stderr
+ * split, line/byte counts, real diagnostic severity, WebFetch content-type/size,
+ * word-level intra-line diff) render truth or a flagged note — they are §5
+ * ledger deferrals needing a projector data-contract change, NOT the P2-locked
+ * render layer, and are never mocked.
  */
 function ToolCard({ row }: { row: ToolUseNestedRow }) {
   // Read before the early return so the Agent branch doesn't skip the hook; the
@@ -1200,6 +1200,13 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
   // D2/C2: the Agent tool_use is rendered as the Agent member of this same
   // tool-card family (specialized body + C4 child nesting), not a sibling row.
   if (row.toolFamily === 'agent') return <AgentToolCard row={row} />
+  if (
+    row.toolFamily === 'imagegen' &&
+    row.status === 'success' &&
+    row.result?.generatedImage?.preview
+  ) {
+    return <CompletedGeneratedImageCard row={row} />
+  }
 
   const content = row.result?.content ?? ''
   const isImageDone = row.toolFamily === 'imagegen' && row.status === 'success'
@@ -2479,15 +2486,90 @@ function PlainLinesBody({
   )
 }
 
-/**
- * GenerateImage result. The projector carries only the flattened result text,
- * NOT the inline image bytes/path structure — the prototype's inline image
- * tile + Open/Copy actions need a projector data-contract change (§5 flag), so
- * this renders the real result text and nothing else. It used to print that
- * flag at the user as a roadmap note; the deferral belongs in the ledger and
- * STATUS, not on the transcript (CLAUDE.md §7). The result text above it
- * already says what happened.
- */
+function CompletedGeneratedImageCard({ row }: { row: ToolUseNestedRow }) {
+  const toast = useToast()
+  const [copied, setCopied] = useState(false)
+  const image = row.result?.generatedImage
+  const preview = image?.preview
+  if (!image || !preview) return null
+  const prompt =
+    image.revisedPrompt ??
+    (typeof row.input['prompt'] === 'string' ? row.input['prompt'] : null)
+  const formattedBytes =
+    image.bytes >= 1_048_576
+      ? `${(image.bytes / 1_048_576).toFixed(1)} MB`
+      : image.bytes >= 1_024
+        ? `${Math.round(image.bytes / 1_024)} KB`
+        : `${image.bytes} B`
+  const directory = dirname(image.filePath).replace(/[/\\]+$/, '')
+  const directoryLabel = basename(directory)
+  const savedTo = directoryLabel ? `${directoryLabel}/` : directory || image.filePath
+  const copyPath = (): void => {
+    const clipboard =
+      typeof navigator !== 'undefined' ? navigator.clipboard : undefined
+    if (!clipboard) return
+    void clipboard
+      .writeText(image.filePath)
+      .then(() => {
+        setCopied(true)
+        setTimeout(() => setCopied(false), 1300)
+        toast('Path copied', { tone: 'success' })
+      })
+      .catch(() => {})
+  }
+  return (
+    <div className="w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.025]">
+      <div className="flex items-center gap-2 px-3 py-2">
+        <span className="text-[#e879f9]" aria-hidden="true">◰</span>
+        <span className="text-[10.5px] font-bold uppercase tracking-[0.08em] text-[#e879f9]">
+          Generate Image
+        </span>
+        <span className="min-w-0 flex-1 truncate font-mono text-xs text-text-primary">
+          {image.model}
+        </span>
+        <span className="h-1.5 w-1.5 rounded-full bg-tone-success" aria-hidden="true" />
+        <span className="text-[10.5px] text-tone-success">Done</span>
+      </div>
+      <div className="px-3 pb-3">
+        <img
+          alt="Generated image"
+          className="mx-auto max-h-[520px] w-auto max-w-full rounded-[10px] border border-shell-seam object-contain"
+          src={`data:${preview.mediaType};base64,${preview.data}`}
+        />
+        {prompt ? (
+          <p className="mt-[11px] text-xs leading-relaxed text-text-muted">{prompt}</p>
+        ) : null}
+        <div className="mt-[11px] font-mono text-[11px] text-text-ghost">
+          {[image.model, image.size, image.outputFormat.toUpperCase(), formattedBytes].join(
+            ' · ',
+          )}
+        </div>
+        <div className="mt-[11px] flex flex-wrap items-center gap-2.5">
+          <span
+            className="min-w-0 flex-1 truncate text-[11px] text-text-ghost"
+            title={image.filePath}
+          >
+            Saved to <span className="font-mono text-text-subtle">{savedTo}</span>
+          </span>
+          <button
+            aria-label={copied ? 'Path copied' : 'Copy path'}
+            className="rounded-md border border-shell-seam bg-white/[0.04] px-2 py-0.5 text-[11px] font-medium text-text-muted transition-colors hover:text-text-primary"
+            onClick={copyPath}
+            type="button"
+          >
+            {copied ? 'Copied' : 'Copy path'}
+          </button>
+        </div>
+      </div>
+      {row.children.length > 0 ? (
+        <div className="border-l border-accent/20 px-3 pb-3">
+          <NestedRowList rows={row.children} />
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function ImageResultBody({ content, isError }: { content: string; isError: boolean }) {
   return (
     <pre

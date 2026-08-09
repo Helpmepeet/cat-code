@@ -9,7 +9,7 @@
  * this snapshot for types only.
  *
  * Canonical sources at commit 234da9e (AppSessionEvent re-synced 2026-08-02 for
- * the `turn.status` member):
+ * `turn.status`; AppClientMessage re-synced 2026-08-09 for image prompts):
  *   SDKMessage:        src/entrypoints/agentSdkTypes.ts
  *   AppSessionEvent:   src/app-runtime/sessionEvents.ts
  *   AppClientMessage + AppReadyPayload: src/web/appSessionProtocol.ts
@@ -97,10 +97,27 @@ export type AppSessionEvent =
 
 /* --- src/web/appSessionProtocol.ts (the 4 allowlisted client message types) --- */
 
+export type AppSubmitPrompt =
+  | string
+  | Array<
+      | {
+          type: 'image'
+          source: {
+            type: 'base64'
+            media_type: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
+            data: string
+          }
+        }
+      | {
+          type: 'text'
+          text: string
+        }
+    >
+
 export type AppSubmitMessage = {
   type: 'app.submit'
   requestId: string
-  prompt: string
+  prompt: AppSubmitPrompt
   options?: {
     uuid?: string
     isMeta?: boolean

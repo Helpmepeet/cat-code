@@ -135,6 +135,28 @@ test('a later ready frame replaces the head rather than duplicating it', () => {
   expect(snapshot.filter(f => f.kind === 'ready')).toHaveLength(1)
 })
 
+test('a generated-image preview stays in the replay ring for a late renderer', () => {
+  const buffer = new FrameReplayBuffer()
+  buffer.record(SID, readyFrame())
+  buffer.record(SID, {
+    kind: 'generated-image-preview',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID,
+    toolUseId: 'toolu_generate_image_1',
+    mediaType: 'image/png',
+    data: 'AAAA',
+  })
+
+  expect(buffer.snapshot()).toContainEqual({
+    kind: 'generated-image-preview',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID,
+    toolUseId: 'toolu_generate_image_1',
+    mediaType: 'image/png',
+    data: 'AAAA',
+  })
+})
+
 // SLASH-6 — the rich slash-catalog snapshot is sent once per connect and is
 // the composer picker's only source; it must survive a renderer reload even
 // after the ring buffer below has evicted it (main/App.tsx never re-runs

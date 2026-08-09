@@ -119,6 +119,7 @@ const FRAME_RETENTION: Record<ServerFrame['kind'], FrameRetention> = {
   'slash-catalog.snapshot': 'sticky',
 
   event: 'ring',
+  'generated-image-preview': 'ring',
   pong: 'ring',
   error: 'ring',
   lifecycle: 'ring',
