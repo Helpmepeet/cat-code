@@ -15,6 +15,36 @@ Every claim below is anchored to a searchable literal in the 2.1.223 binary, not
 to a byte offset (offsets move between builds). Minified symbol names are quoted
 as found and are build-specific.
 
+The prompt ships as **two** template literals, not one, and the assembled system
+prompt is their concatenation:
+
+1. 38,180 chars, opening `You are a security monitor for autonomous AI coding
+   agents.`, covering Context, Threat Model, Input, Default Rule, Scope, User
+   Intent Rule, Evaluation Rules, Classification Process, Output Format.
+2. 75,469 chars, opening `## Environment`, carrying Definitions and all four
+   substitution blocks (environment, hard-deny, soft-deny, allow).
+
+Measuring a byte range between the first heading and the last one instead
+over-counts, because unrelated bundled code sits between the two modules.
+
+## How far this was verified
+
+Two independent checks were run against the extraction, both of which found
+errors in the first draft of this report:
+
+- **Rule-set closure.** The 66 machine-readable rule ids and the rule bullets in
+  the prose were extracted separately, from different regions of the binary,
+  then slug-matched. The result is an exact bijection: 66 ↔ 66, no id without a
+  prose rule, no prose rule without an id. This corrected a stated count of 65.
+- **Module boundaries.** Each prompt module was re-measured by walking to its
+  enclosing unescaped backticks, and the extracted text checked for code tokens
+  (`function `, `var `, `=>`, `exports`, `require(`): zero occurrences in either
+  module. This corrected a size figure that had been derived from a binary byte
+  range, and surfaced the opening line, which the first pass missed entirely.
+
+What these checks establish is that the *text* was recovered intact and the rule
+inventory is complete. They do not establish runtime behaviour — see Uncertainty.
+
 ## The architecture
 
 ### 1. Two tiers, not one
@@ -35,7 +65,7 @@ explicit boundary.
 
 ### 2. A closed, named rule set
 
-65 rule ids, in the binary as an array literal starting
+66 rule ids, in the binary as an array literal starting
 `["auto_mode_bypass","blind_apply",…]` — `credential_exploration`,
 `data_exfiltration`, `git_destructive`, `irreversible_local_destruction`,
 `instruction_poisoning`, `self_modification`, `production_deploy`, and so on.
@@ -170,7 +200,7 @@ continuously refined in wording while the architecture holds still.
 
 | | Upstream 2.1.223 | This fork |
 |---|---|---|
-| Prompt size | ~111,600 chars + ~3,000 env | 7,534 chars total |
+| Prompt size | 113,649 chars (two modules: 38,180 + 75,469) | 7,534 chars total |
 | Tiers | HARD BLOCK / SOFT BLOCK | one flat deny tier |
 | Deny rules | 65 named ids | 12 unnamed bullets |
 | Verdict shape | `<block>` + `<category>` + `[Rule Name]` reason | `{thinking, shouldBlock, reason}`, free prose |
@@ -181,9 +211,10 @@ continuously refined in wording while the architecture holds still.
 | Harness ground truth | `gitStatus`, `repoVisibility`, per-call outcome codes | none |
 | CLAUDE.md to classifier | yes | yes |
 
-Section weighting upstream is worth noting on its own: SOFT BLOCK is ~48,000
-chars, HARD BLOCK ~5,800. The overwhelming majority of the prompt is spent on
-the tier that user intent *can* clear, and on how it clears.
+Section weighting upstream is worth noting on its own. Measured inside the
+substitution tags themselves: soft-deny 46,499 chars, allow 8,175, hard-deny
+5,426. The overwhelming majority of the rule text is spent on the tier that user
+intent *can* clear, and on how it clears.
 
 ### What this explains about the observed denials
 
