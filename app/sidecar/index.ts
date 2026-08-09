@@ -15,7 +15,7 @@
  * ZERO `electron` imports. This is a plain Bun program.
  */
 
-import { statSync } from 'node:fs'
+import { chmodSync, statSync } from 'node:fs'
 
 import { FrameDecoder } from '../shared/framing.js'
 import {
@@ -356,6 +356,11 @@ async function main(): Promise<void> {
       },
     },
   })
+
+  // The supervisor's random parent directory authenticates path ownership;
+  // this closes the second leg by preventing other local users from connecting
+  // when a permissive umask would otherwise create a world-readable socket.
+  chmodSync(args.socketPath, 0o600)
 
   process.stderr.write(
     `[sidecar] READY sessionId=${args.sessionId} socket=${args.socketPath}\n`,

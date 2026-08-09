@@ -5,12 +5,14 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { MAX_PROMPT_BYTES } from '../shared/limits.js'
 import {
+  createPrivateSocketDir,
   SidecarSendError,
   SidecarSupervisor,
   type SupervisorEvent,
@@ -189,6 +191,23 @@ test('rejects an oversized prompt before writing it and keeps the session usable
     sessionId,
     status: 'ready',
   })
+})
+
+test('default socket allocation uses a private random directory', () => {
+  const socketDir = createPrivateSocketDir()
+  tempDirs.push(socketDir)
+  expect(socketDir).toMatch(/^\/tmp\/cc-[^/]+$/)
+  expect(statSync(socketDir).mode & 0o777).toBe(0o700)
+
+  // The sandbox running this suite forbids Unix-domain socket binds, so the
+  // filesystem mode on the real listener is verified by the dedicated desktop
+  // hardening probe. Pin the sidecar wiring here to keep this essential chmod
+  // from being removed without a deliberate test update.
+  const sidecarSource = readFileSync(
+    new URL('../sidecar/index.ts', import.meta.url),
+    'utf8',
+  )
+  expect(sidecarSource).toContain('chmodSync(args.socketPath, 0o600)')
 })
 
 test('remote FIN transitions ready to disconnected and the session can restart', async () => {

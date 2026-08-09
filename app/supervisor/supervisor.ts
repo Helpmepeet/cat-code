@@ -23,7 +23,7 @@
 import { type ChildProcess, spawn } from 'node:child_process'
 import { connect, type Socket } from 'node:net'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, rmSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { encodeFrame, FrameDecoder } from '../shared/framing.js'
@@ -62,7 +62,10 @@ export type SupervisorOptions = {
    * engine project identity is initialized from process.cwd().
    */
   sidecarCwd?: string
-  /** Directory for the per-session socket files. Defaults to an OS temp dir. */
+  /**
+   * Directory for per-session socket files. Defaults to a private random temp
+   * dir; callers supplying one own its access-control policy.
+   */
   socketDir?: string
   /** Structured logger. */
   log?: (line: string) => void
@@ -181,19 +184,22 @@ export class SidecarSupervisor {
     this.disconnectSettleMs = options.disconnectSettleMs ?? 250
     // A Unix-domain socket path is bounded by the platform's `sun_path` (104
     // bytes on Darwin, 108 on Linux). The macOS `$TMPDIR` (/var/folders/…) plus
-    // a UUID filename overflows it, so default to a SHORT base and use short
-    // per-session filenames (a counter, not the UUID sessionId). The registry
-    // still keys sessions by the real sessionId; the socket name is an internal
-    // handle only.
-    this.socketDir =
-      options.socketDir ??
-      (process.platform === 'win32'
-        ? join(process.env.TEMP ?? 'C:\\Temp', `catcode-${process.pid}`)
-        : `/tmp/catcode-${process.pid}`)
-    this.log = options.log ?? (line => process.stderr.write(`${line}\n`))
-    if (!existsSync(this.socketDir)) {
-      mkdirSync(this.socketDir, { recursive: true })
+    // a UUID filename overflows it, so use a short random `/tmp/cc-*` directory
+    // and short per-session filenames. The old predictable PID directory was
+    // pre-creatable by another local user, turning its socket into an unauthenticated
+    // control channel. The registry still keys sessions by the real sessionId;
+    // the socket name is an internal handle only.
+    if (options.socketDir) {
+      // This is an explicit host/test override. Never chmod an existing caller
+      // path here: it could be a shared directory such as `/tmp`.
+      this.socketDir = options.socketDir
+      if (!existsSync(this.socketDir)) {
+        mkdirSync(this.socketDir, { recursive: true, mode: 0o700 })
+      }
+    } else {
+      this.socketDir = createPrivateSocketDir()
     }
+    this.log = options.log ?? (line => process.stderr.write(`${line}\n`))
   }
 
   /** Max Unix-domain socket path length (`sun_path`) for this platform. */
@@ -580,6 +586,15 @@ export class SidecarSupervisor {
       listener(event)
     }
   }
+}
+
+export function createPrivateSocketDir(): string {
+  if (process.platform === 'win32') {
+    return join(process.env.TEMP ?? 'C:\\Temp', `catcode-${process.pid}`)
+  }
+  const dir = mkdtempSync('/tmp/cc-')
+  chmodSync(dir, 0o700)
+  return dir
 }
 
 function sendFailureCodeForStatus(status: SidecarStatus): SendFailureCode {
