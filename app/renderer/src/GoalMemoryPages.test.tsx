@@ -89,7 +89,7 @@ test('renders the empty goal state without fixtures', () => {
 })
 
 test('renders memory metadata without file contents', () => {
-  const html = renderToStaticMarkup(<MemoryPage embedded snapshot={MEMORY} />)
+  const html = renderToStaticMarkup(<MemoryPage snapshot={MEMORY} />)
 
   expect(html).toContain('instruction files')
   expect(html).toContain('/repo/CLAUDE.md')
@@ -104,7 +104,7 @@ test('renders memory metadata without file contents', () => {
 })
 
 test('P4-57 renders a keyboard-reachable copy button for every displayed memory path row', () => {
-  const html = renderToStaticMarkup(<MemoryPage embedded snapshot={MEMORY} />)
+  const html = renderToStaticMarkup(<MemoryPage snapshot={MEMORY} />)
 
   for (const label of [
     'Copy auto-memory directory path',
@@ -168,7 +168,7 @@ test('renders every memory instruction and auto-memory type', () => {
     })),
   }
 
-  const html = renderToStaticMarkup(<MemoryPage embedded snapshot={memory} />)
+  const html = renderToStaticMarkup(<MemoryPage snapshot={memory} />)
   // The engine's own type tokens are expanded before they reach the page.
   const LABEL: Record<string, string> = {
     AutoMem: 'Auto memory',
@@ -206,7 +206,7 @@ test('agent-memory rows name both a known role and a user-defined one, each as a
       },
     ],
   }
-  const html = renderToStaticMarkup(<MemoryPage embedded snapshot={memory} />)
+  const html = renderToStaticMarkup(<MemoryPage snapshot={memory} />)
 
   expect(html).toContain('Agent memory')
   expect(html).toContain('2 agents')
@@ -234,7 +234,6 @@ test('agent-memory rows name both a known role and a user-defined one, each as a
 test('an unreadable agent directory costs that row its count, not the page', () => {
   const html = renderToStaticMarkup(
     <MemoryPage
-      embedded
       snapshot={{
         ...MEMORY,
         agentMemories: [
@@ -261,7 +260,6 @@ test('an unreadable agent directory costs that row its count, not the page', () 
 test('one agent reads as one agent, and none renders no section at all', () => {
   const one = renderToStaticMarkup(
     <MemoryPage
-      embedded
       snapshot={{
         ...MEMORY,
         agentMemories: [
@@ -281,13 +279,13 @@ test('one agent reads as one agent, and none renders no section at all', () => {
   expect(one).toContain('0 files')
 
   const none = renderToStaticMarkup(
-    <MemoryPage embedded snapshot={{ ...MEMORY, agentMemories: [] }} />,
+    <MemoryPage snapshot={{ ...MEMORY, agentMemories: [] }} />,
   )
   expect(none).not.toContain('Agent memory')
 })
 
 test('renders memory waiting state without fixtures', () => {
-  const html = renderToStaticMarkup(<MemoryPage embedded snapshot={null} />)
+  const html = renderToStaticMarkup(<MemoryPage snapshot={null} />)
 
   expect(html).toContain('No memory loaded')
   expect(html).toContain('Open a session')

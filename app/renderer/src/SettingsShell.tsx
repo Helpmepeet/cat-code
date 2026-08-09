@@ -568,11 +568,11 @@ function ScopeBody({
             sessionOpen={sessionOpen}
             snapshot={snapshot}
           />
-          <MemoryPage embedded snapshot={memorySnapshot} />
+          <MemoryPage snapshot={memorySnapshot} />
         </>
       )
     case 'agents':
-      return <AgentsPage embedded snapshot={agentsSnapshot} />
+      return <AgentsPage snapshot={agentsSnapshot} />
     case 'skills':
       return <SkillsPanel snapshot={extensionsSnapshot} />
     case 'plugins':
@@ -584,7 +584,6 @@ function ScopeBody({
     case 'remote':
       return (
         <RemoteSettingsPage
-          embedded
           lastResult={remoteLastResult}
           onVerb={onRemoteVerb}
           snapshot={remoteSnapshot}

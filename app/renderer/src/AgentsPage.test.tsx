@@ -58,7 +58,7 @@ const SNAPSHOT: AgentConfigSnapshot = {
 }
 
 test('renders real agent definition groups, with no note about our own build', () => {
-  const html = renderToStaticMarkup(<AgentsPage embedded snapshot={SNAPSHOT} />)
+  const html = renderToStaticMarkup(<AgentsPage snapshot={SNAPSHOT} />)
 
   expect(html).toContain('2 agent definitions')
   expect(html).toContain('Project')
@@ -77,7 +77,7 @@ test('renders real agent definition groups, with no note about our own build', (
 })
 
 test('with no session, says what to do rather than naming the missing frame', () => {
-  const html = renderToStaticMarkup(<AgentsPage embedded snapshot={null} />)
+  const html = renderToStaticMarkup(<AgentsPage snapshot={null} />)
   // The read is session-keyed but Settings renders with no session, so this is a
   // no-session state, not a load. The copy it replaced promised a fill that
   // never came and named internals (CLAUDE.md §7).

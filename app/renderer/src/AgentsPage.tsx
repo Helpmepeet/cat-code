@@ -70,34 +70,20 @@ const AGENT_DOT_CLASS: Record<string, string> = {
 
 export function AgentsPage({
   snapshot,
-  embedded = false,
 }: {
   snapshot: AgentConfigSnapshot | null
-  embedded?: boolean
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const groups = useMemo(() => selectAgentConfigGroups(snapshot), [snapshot])
   const counts = selectAgentConfigCounts(snapshot)
   const selected = snapshot?.definitions.find(definition => definition.id === selectedId) ?? null
 
-  const body = (
+  return (
     <>
       <div className="mb-2 flex items-start justify-between gap-3">
-        {embedded ? (
-          <span className="text-[13px] text-text-subtle">
-            {counts.total} agent definition{counts.total === 1 ? '' : 's'}
-          </span>
-        ) : (
-          <div>
-            <h1 className="text-lg font-semibold tracking-tight text-text-primary">
-              Agents
-            </h1>
-            <p className="text-[13px] text-text-subtle">
-              {counts.total} agent definition{counts.total === 1 ? '' : 's'} · {counts.active}{' '}
-              active
-            </p>
-          </div>
-        )}
+        <span className="text-[13px] text-text-subtle">
+          {counts.total} agent definition{counts.total === 1 ? '' : 's'}
+        </span>
         <span className="rounded-lg border border-dashed border-shell-seam px-3 py-1.5 text-[12px] text-text-subtle">
           Read-only
         </span>
@@ -143,13 +129,6 @@ export function AgentsPage({
         <AgentInspectDrawer definition={selected} onClose={() => setSelectedId(null)} />
       ) : null}
     </>
-  )
-
-  if (embedded) return body
-  return (
-    <div className="relative flex-1 overflow-y-auto px-7 py-7 pb-24">
-      <div className="mx-auto max-w-[820px]">{body}</div>
-    </div>
   )
 }
 

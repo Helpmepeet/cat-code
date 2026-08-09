@@ -30,17 +30,15 @@ const newRequestId = (): string => crypto.randomUUID()
 type DirectConnectDetails = NonNullable<RemoteSettingsResultFrame['directConnect']>
 
 export function RemoteSettingsPage({
-  embedded = false,
   snapshot,
   lastResult,
   onVerb,
 }: {
-  embedded?: boolean
   snapshot: RemoteSettingsSnapshot | null
   lastResult: RemoteSettingsResultFrame | null
   onVerb: (verb: RemoteVerbMessage) => void
 }) {
-  const body = !snapshot ? (
+  return !snapshot ? (
     <WaitingState />
   ) : (
     <>
@@ -48,30 +46,6 @@ export function RemoteSettingsPage({
       <CommandFilterSection filter={snapshot.commandFilter} />
       <DirectConnectSection lastResult={lastResult} onVerb={onVerb} />
     </>
-  )
-
-  if (embedded) return body
-
-  return (
-    <main className="flex min-h-0 flex-1 overflow-auto px-8 py-7">
-      <div className="mx-auto w-full max-w-[660px]">
-        <RemoteSettingsHeader />
-        {body}
-      </div>
-    </main>
-  )
-}
-
-function RemoteSettingsHeader() {
-  return (
-    <header className="mb-5">
-      <h1 className="text-lg font-semibold tracking-tight text-text-primary">
-        Remote
-      </h1>
-      <p className="mt-1 text-[13px] text-text-subtle">
-        Remote Control bridge and connect transports.
-      </p>
-    </header>
   )
 }
 

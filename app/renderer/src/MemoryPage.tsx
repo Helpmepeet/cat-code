@@ -27,13 +27,11 @@ function instructionTypeLabel(type: string): string {
 }
 
 export function MemoryPage({
-  embedded = false,
   snapshot,
 }: {
-  embedded?: boolean
   snapshot: MemorySnapshot | null
 }) {
-  const body = (
+  return (
     <>
       {!snapshot ? (
         <WaitingState />
@@ -46,35 +44,6 @@ export function MemoryPage({
         </>
       )}
     </>
-  )
-
-  if (embedded) return body
-
-  return (
-    <main className="flex min-h-0 flex-1 overflow-auto px-8 py-7">
-      <div className="mx-auto w-full max-w-[760px]">
-        <MemoryHeader />
-        {body}
-      </div>
-    </main>
-  )
-}
-
-function MemoryHeader() {
-  return (
-    <header className="mb-5 flex items-start justify-between gap-4">
-      <div>
-        <h1 className="text-lg font-semibold tracking-tight text-text-primary">
-          Memory
-        </h1>
-        <p className="mt-1 text-[13px] text-text-subtle">
-          Real CLAUDE.md instruction files and auto-memory metadata.
-        </p>
-      </div>
-      <span className="rounded-full border border-shell-seam bg-shell-hover px-2.5 py-1 text-[11px] font-medium text-text-subtle">
-        Read-only
-      </span>
-    </header>
   )
 }
 
