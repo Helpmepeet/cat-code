@@ -9,8 +9,8 @@
  * Switching is manual only via /switch-account.
  */
 
-import { chmodSync, readFileSync, readdirSync, existsSync, mkdirSync, writeFileSync, renameSync, unlinkSync } from 'fs'
-import { join } from 'path'
+import { chmodSync, readFileSync, readdirSync, existsSync, mkdirSync, writeFileSync, renameSync, unlinkSync, openSync, closeSync, fsyncSync } from 'fs'
+import { join, dirname, basename } from 'path'
 import { homedir } from 'os'
 
 import { logForDebugging } from '../../utils/debug.js'
@@ -161,8 +161,8 @@ export function initClaudeAccountPool(): void {
     // has a persisted vault file, same end state as before this extraction.
     const migratable = pool.accounts.find((a) => !a.vaultFilePath)
     if (migratable) {
-      saveClaudeTokenToVault(migratable)
-      migratable.vaultFilePath = join(getVaultAccountsDir(), `${migratable.accountUuid}.json`)
+      const vaultFilePath = saveClaudeTokenToVault(migratable)
+      if (vaultFilePath) migratable.vaultFilePath = vaultFilePath
     }
 
     pool.initialized = true
@@ -629,7 +629,8 @@ function getVaultAccountsDir(): string {
   return join(vaultPathOverrideForTest ?? DEFAULT_VAULT_PATH, 'accounts')
 }
 
-function saveClaudeTokenToVault(account: ClaudePoolAccount): void {
+function saveClaudeTokenToVault(account: ClaudePoolAccount): string | null {
+  let tmpPath: string | undefined
   try {
     const accountsDir = getVaultAccountsDir()
     mkdirSync(accountsDir, { recursive: true, mode: 0o700 })
@@ -661,19 +662,45 @@ function saveClaudeTokenToVault(account: ClaudePoolAccount): void {
       last_refresh: new Date().toISOString(),
     }
     if (account.alias) data.alias = account.alias
-    writeFileSync(filePath, JSON.stringify(data, null, 2) + '\n', {
-      encoding: 'utf-8',
-      mode: 0o600,
-    })
-    // `mode` applies only to newly created files, so also repair a permissive
-    // pre-existing credential file after each write.
-    chmodSync(filePath, 0o600)
+    // Credentials must never be visible as a truncated JSON file. Write and
+    // flush a sibling temp file, then publish it with one atomic rename.
+    tmpPath = join(
+      accountsDir,
+      `.${basename(filePath)}.${process.pid}.${Date.now()}.tmp`,
+    )
+    const fd = openSync(tmpPath, 'w', 0o600)
+    try {
+      writeFileSync(fd, JSON.stringify(data, null, 2) + '\n', 'utf-8')
+      fsyncSync(fd)
+    } finally {
+      closeSync(fd)
+    }
+    renameSync(tmpPath, filePath)
+    tmpPath = undefined
+
+    // Persist the directory entry as well; without this, a power failure can
+    // lose a just-renamed credential even though its file data was flushed.
+    let dirFd: number | undefined
+    try {
+      dirFd = openSync(dirname(filePath), 'r')
+      fsyncSync(dirFd)
+    } catch {
+      // Some filesystems cannot fsync directory handles. The atomic rename is
+      // still the essential no-truncation guarantee on those filesystems.
+    } finally {
+      if (dirFd !== undefined) closeSync(dirFd)
+    }
     logForDebugging(`[claude-pool] Saved account ${account.emailAddress} to vault`)
+    return filePath
   } catch (err) {
+    if (tmpPath) {
+      try { unlinkSync(tmpPath) } catch {}
+    }
     logForDebugging(
       `[claude-pool] Failed to save account to vault: ${err instanceof Error ? err.message : String(err)}`,
       { level: 'warn' },
     )
+    return null
   }
 }
 

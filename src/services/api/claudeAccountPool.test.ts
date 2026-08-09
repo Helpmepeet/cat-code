@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -335,6 +335,7 @@ describe('loadClaudePoolForObservation vs initClaudeAccountPool (disk-write boun
     expect(written.profile.account_uuid).toBe('resurrection-uuid')
     expect(statSync(accountsDir()).mode & 0o777).toBe(0o700)
     expect(statSync(filePath).mode & 0o777).toBe(0o600)
+    expect(readdirSync(accountsDir()).filter(name => name.endsWith('.tmp'))).toEqual([])
   })
 
   test('loadClaudePoolForObservation repairs permissive vault file and directory modes', () => {
