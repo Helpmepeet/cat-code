@@ -173,6 +173,33 @@ test('de-dupes by handle: a live worker wins over a same-handle persisted worker
   expect(handles).toContain('Lovelace')
 })
 
+/* CC-32 follow-up — handle de-dupe means the live plane MASKS its persisted twin,
+ * so retiring the live task un-masks the twin unless the dismissal is recorded.
+ * These two pin the before/after of that hole. */
+test('CC-32 — without the dismissal record, evicting the live worker un-dedupes its persisted twin and the row comes back', () => {
+  const state = persisted([
+    worker({ agentId: 'w-live', handle: '@gauss', status: 'completed' }),
+  ])
+  const live: Record<string, TaskState> = {
+    a1: agentTask({ agentId: 'w-live', agentName: 'Gauss', status: 'completed' }),
+  }
+  // Masked while the live task exists...
+  expect(agentModeSnapshot(live, state, true).workers).toHaveLength(1)
+  // ...and back the moment the live task is evicted. This is the self-cancel.
+  const afterEviction = agentModeSnapshot(undefined, state, true)
+  expect(afterEviction.workers.map(w => w.handle)).toEqual(['@gauss'])
+})
+
+test('CC-32 — a dismissed worker stays gone: the session plane no longer re-supplies its row after the live task is evicted', () => {
+  const state = persisted([
+    worker({ agentId: 'w-live', handle: '@gauss', status: 'completed' }),
+    worker({ agentId: 'w-other', handle: 'Lovelace', status: 'completed' }),
+  ])
+  const snap = agentModeSnapshot(undefined, state, true, new Set(['w-live']))
+  // Only the dismissed one is suppressed — the rest of the plane is untouched.
+  expect(snap.workers.map(w => w.handle)).toEqual(['Lovelace'])
+})
+
 test('an absent agent-mode session degrades to an empty, well-formed snapshot', () => {
   expect(agentModeSnapshot(undefined, null, false)).toEqual({
     active: false,

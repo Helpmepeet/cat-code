@@ -1474,6 +1474,23 @@ export function App() {
     [activeSessionId],
   )
 
+  // Retire a FINISHED worker row the engine's grace deadline will never retire on
+  // its own (a blocked handoff carries no `evictAfter`). Same trust shape as the
+  // stop above: the renderer names only the taskId, and the sidecar runs the
+  // engine's own dismiss + eviction. The row's disappearance rides the resulting
+  // `agent-mode.snapshot` re-broadcast, not this call.
+  const sendDismissTask = useCallback(
+    (taskId: string) => {
+      if (!activeSessionId) return
+      getBridge().taskControlVerb(activeSessionId, {
+        type: 'task.dismiss',
+        requestId: crypto.randomUUID(),
+        taskId,
+      })
+    },
+    [activeSessionId],
+  )
+
   // P4-13 — dispatch a RemoteSettings verb (bridge toggle / direct-connect) to
   // the active session's sidecar. The outcome returns as a
   // `remoteSettings.result` frame (→ remoteSettings.lastResult).
@@ -3532,6 +3549,7 @@ export function App() {
         snapshot={selectTasksSnapshot(tasks, activeSessionId)}
         hasActiveSession={activeSessionId !== null}
         onStopTask={activeSessionId ? sendStopTask : undefined}
+        onDismissTask={activeSessionId ? sendDismissTask : undefined}
         /* P4-32b — the Workers + Leases tabs of the same dialog: the read-only
          * worker drilldown (inspection ruling D1) and the session-scoped Codex
          * lease roster (L1). Both are read seams; no verb rides them. */

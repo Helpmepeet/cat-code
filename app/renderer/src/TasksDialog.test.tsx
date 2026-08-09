@@ -326,6 +326,61 @@ test('worker detail hides Stop for a terminal worker and for a prior-session one
   expect(prior).toContain('resumable')
 })
 
+/* CC-32 follow-up — Dismiss is the finished-worker escape hatch the desktop
+ * lacked. A blocked handoff gets no eviction deadline, so its row would otherwise
+ * sit above the composer until the session process exits. */
+test('CC-32 — worker detail offers Dismiss for a finished blocked worker, and Stop is absent there', () => {
+  const html = renderToStaticMarkup(
+    <WorkerDetailPanel
+      lease={null}
+      onBack={noop}
+      onDismissTask={noop}
+      onStopTask={noop}
+      worker={workerFixture({
+        status: 'completed',
+        handoffStatus: 'blocked',
+        blockReason: 'pick a schema',
+      })}
+    />,
+  )
+  expect(html).toContain('Dismiss')
+  expect(html).not.toContain('Stop')
+})
+
+test('CC-32 — Dismiss is absent while the worker runs, for a prior-session worker, and with no active session', () => {
+  const running = renderToStaticMarkup(
+    <WorkerDetailPanel
+      lease={null}
+      onBack={noop}
+      onDismissTask={noop}
+      onStopTask={noop}
+      worker={workerFixture({ status: 'running' })}
+    />,
+  )
+  expect(running).not.toContain('Dismiss')
+  expect(running).toContain('Stop')
+
+  const prior = renderToStaticMarkup(
+    <WorkerDetailPanel
+      lease={null}
+      onBack={noop}
+      onDismissTask={noop}
+      worker={workerFixture({ status: 'completed', origin: 'prior' })}
+    />,
+  )
+  expect(prior).not.toContain('Dismiss')
+
+  // No active session → no verb to send, so no dead affordance.
+  const noSession = renderToStaticMarkup(
+    <WorkerDetailPanel
+      lease={null}
+      onBack={noop}
+      worker={workerFixture({ status: 'completed' })}
+    />,
+  )
+  expect(noSession).not.toContain('Dismiss')
+})
+
 test('Workers rows and detail headers omit null and legacy-id names without inventing Subagent', () => {
   const worker = workerFixture({
     agentId: 'internal-agent-id',

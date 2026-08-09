@@ -1468,8 +1468,36 @@ export type AgentModeSetResultFrame = {
  *  - No new snapshot frame: `stopTask`'s store mutation drives the existing
  *    `tasks.snapshot` / `agent-mode.snapshot` re-broadcasts (the store-subscription
  *    path, the SAME live path any engine-side kill takes — not a synthetic frame).
+ *
+ * `task.dismiss` (2026-08-09) is the TERMINAL half of the same family, and it
+ * exists because a finished worker does not always leave on its own. The engine
+ * stamps NO `evictAfter` when a worker's report carries a `status: blocked`
+ * handoff line (`src/tasks/LocalAgentTask/LocalAgentTask.tsx:540,548`), so the
+ * shared eviction guard `(evictAfter ?? Infinity) > Date.now()`
+ * (`src/utils/task/framework.ts:134,240`) refuses forever and the desktop's
+ * deadline owner skips it by design (`app/sidecar/panelTaskReaper.ts`
+ * `earliestDeadline`). Keeping the row is INTENDED engine semantics — blocked
+ * means unresolved — but the terminal REPL pairs it with an escape hatch the
+ * desktop lacked: the `x` key runs `stopOrDismissAgent`
+ * (`src/state/teammateViewHelpers.ts:116`, wired at
+ * `src/components/PromptInput/PromptInput.tsx:1872`), which sets `evictAfter: 0`.
+ * This verb is that same escape hatch, reached from the worker detail's controls
+ * (`decisions/AGENT-CHROME.md` §2 `WorkerDetail` adapt; PARITY-LEDGER §20 sits the
+ * Stop control there already). The full diagnosis is the CC-32 row in
+ * `docs/migration/STATUS.md`.
+ *
+ *  - Same trust shape as `task.stop`: the renderer authors ONLY the target
+ *    `taskId`, the sidecar re-resolves it against the LIVE store, and a target
+ *    that is unknown / still running / not a panel worker fails closed with
+ *    `ok:false` and no side effect (T6-analog). T5a-analog `requestId`; T7 caps
+ *    unchanged.
+ *  - It calls the engine's OWN `stopOrDismissAgent` + `evictTerminalTask`
+ *    (`framework.ts:120`), never a store delete in `app/` code, so the engine
+ *    keeps every eviction guard (terminal status, `notified`, no pending
+ *    notification). A worker whose completion notification is still in flight is
+ *    marked and then evicted by the panel reaper on its next beat.
  */
-export const TASK_CONTROL_VERB_TYPES = ['task.stop'] as const
+export const TASK_CONTROL_VERB_TYPES = ['task.stop', 'task.dismiss'] as const
 
 export type TaskControlVerbType = (typeof TASK_CONTROL_VERB_TYPES)[number]
 
@@ -1481,7 +1509,19 @@ export type TaskStopMessage = {
   taskId: string
 }
 
-export type TaskControlVerbMessage = TaskStopMessage
+/**
+ * Dismiss a FINISHED worker row that the engine's own grace deadline will never
+ * retire (the blocked-handoff shape above). Terminal-only by design: a running
+ * worker is `task.stop`'s target, not this one.
+ */
+export type TaskDismissMessage = {
+  type: 'task.dismiss'
+  requestId: string
+  /** The target `AppState.tasks` key (a live `local_agent` worker's id). */
+  taskId: string
+}
+
+export type TaskControlVerbMessage = TaskStopMessage | TaskDismissMessage
 
 /**
  * P4-8b outbound result echoing the verb's `requestId` (T5a-analog). The updated
@@ -2886,6 +2926,11 @@ export type CatCodeBridge = {
    * engine object, no token crosses. The outcome arrives as a `task-control.result`
    * frame echoing `requestId` (`ok:false` when the task was gone/terminal), and the
    * kill's store mutation drives the existing `tasks.snapshot` re-broadcast.
+   *
+   * The same channel carries `task.dismiss`, the terminal counterpart: it retires a
+   * FINISHED worker row the engine's grace deadline will never retire on its own
+   * (see TASK_CONTROL_VERB_TYPES above), through the engine's own
+   * `stopOrDismissAgent` + `evictTerminalTask`.
    */
   taskControlVerb(sessionId: SessionId, verb: TaskControlVerbMessage): void
   /**

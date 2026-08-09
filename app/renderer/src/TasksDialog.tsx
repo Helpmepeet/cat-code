@@ -12,6 +12,15 @@
  * live store and runs the engine's own `stopTask`. The per-type detail dialogs
  * (`ShellDetailDialog` + 4 siblings) stay deferred — no fake toasts.
  *
+ * The worker detail gained the terminal counterpart, Dismiss, on 2026-08-09
+ * (operator ruling in the CC-32 follow-up; the record is that row in
+ * `docs/migration/STATUS.md`). It is not a prototype element — the prototype has
+ * no dismiss — but the terminal REPL does (`x` on a finished worker), and without
+ * it a worker whose report carried a blocked handoff has NO eviction deadline and
+ * so keeps its roster row above the composer for the life of the session process.
+ * D1's "read-only" bar is about not messaging a worker and not swapping the main
+ * column; the lifecycle controls it already admits (Stop) are where this sits.
+ *
  * Visual grammar adapted from `~/catcode_prototype/cat-app/TasksPage.jsx`
  * (`BgTasksDialog`), rebuilt on the P0-2 tokens, zero ported code.
  *
@@ -78,6 +87,7 @@ import {
 import {
   groupWorkersByRole,
   selectWorkerResult,
+  selectWorkerDismissTargetId,
   selectWorkerStopTargetId,
 } from './workerInspection.js'
 import {
@@ -98,6 +108,7 @@ export function TasksDialog({
   snapshot,
   hasActiveSession,
   onStopTask,
+  onDismissTask,
   agentMode = null,
   leases = null,
   now,
@@ -115,6 +126,12 @@ export function TasksDialog({
    * gates `K` on a non-terminal row (`TasksPage.jsx:109`); we match that.
    */
   onStopTask?: (taskId: string) => void
+  /**
+   * Retire a finished worker row (the `task.dismiss` verb). Undefined when there is
+   * no active session. Detail-panel only: there is no keyboard chord for it, and
+   * the task list does not offer it, because the row that needs it is a worker.
+   */
+  onDismissTask?: (taskId: string) => void
   /** P4-32b — the active session's orchestrator roster, source of the Workers tab. */
   agentMode?: AgentModeSnapshot | null
   /** P4-32b — the active session's Codex lease snapshot, source of the Leases tab. */
@@ -262,6 +279,7 @@ export function TasksDialog({
               lease={selectLeaseForOwner(leases, selectedWorker.agentId)}
               nowMs={now}
               onBack={() => setSelectedWorkerId(null)}
+              {...(onDismissTask ? { onDismissTask } : {})}
               {...(onStopTask ? { onStopTask } : {})}
               worker={selectedWorker}
             />
@@ -476,25 +494,32 @@ function WorkerRow({
  * count, traffic, cost) are WAIVED rather than mocked (§9 waiver 7, approved), and
  * the account/failover half of that line renders here from the real lease.
  *
- * The only control is Stop, which rides the existing `task.stop` verb.
+ * The controls are the two halves of the task-control verb family and they are
+ * mutually exclusive by lifecycle: Stop while the worker runs, Dismiss once it has
+ * finished. Dismiss is not cosmetic housekeeping — a worker whose report carried a
+ * blocked handoff gets no eviction deadline at all, so without it that row stays
+ * above the composer until the session's process exits.
  */
 export function WorkerDetailPanel({
   worker,
   lease,
   onBack,
   onStopTask,
+  onDismissTask,
   nowMs,
 }: {
   worker: AgentModeWorkerItem
   lease: LeaseOwnerRow | null
   onBack: () => void
   onStopTask?: (taskId: string) => void
+  onDismissTask?: (taskId: string) => void
   nowMs?: number
 }) {
   const state = orchestratorWorkerState(worker)
   const name = selectWorkerDisplayName(worker)
   const result = selectWorkerResult(worker)
   const stopTargetId = selectWorkerStopTargetId(worker)
+  const dismissTargetId = selectWorkerDismissTargetId(worker)
 
   return (
     <div className="px-2 pb-3 pt-1">
@@ -551,13 +576,22 @@ export function WorkerDetailPanel({
           </div>
         ) : null}
 
-        {onStopTask && stopTargetId ? (
+        {(onStopTask && stopTargetId) || (onDismissTask && dismissTargetId) ? (
           <div className="flex flex-wrap items-center gap-2.5 pt-0.5">
-            <AgentActionButton
-              label="Stop"
-              onClick={() => onStopTask(stopTargetId)}
-              tone="danger"
-            />
+            {onStopTask && stopTargetId ? (
+              <AgentActionButton
+                label="Stop"
+                onClick={() => onStopTask(stopTargetId)}
+                tone="danger"
+              />
+            ) : null}
+            {onDismissTask && dismissTargetId ? (
+              <AgentActionButton
+                label="Dismiss"
+                onClick={() => onDismissTask(dismissTargetId)}
+                title="Remove this finished worker from the roster"
+              />
+            ) : null}
           </div>
         ) : null}
       </div>

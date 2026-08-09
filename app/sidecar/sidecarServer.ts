@@ -1911,6 +1911,10 @@ export class SidecarServer {
    * `stopTask` is async; the result frame follows the awaited kill. The renderer
    * authors ONLY the target `taskId`; the engine re-resolves it against the live
    * store, so an unknown/terminal target fails closed with `ok:false` (no crash).
+   *
+   * `task.dismiss` (CC-32 follow-up) rides the identical path with the identical
+   * shape; only the domain call differs, and its refusals (unknown / still running
+   * / not a panel worker) are decided against the same live store.
    */
   private async handleTaskControlVerb(
     connection: Connection,
@@ -1943,7 +1947,19 @@ export class SidecarServer {
     }
 
     const verb = parsed.data as TaskControlVerbMessage
-    const result = await this.taskControl.stop(verb.taskId)
+    const result =
+      verb.type === 'task.dismiss'
+        ? await this.taskControl.dismiss(verb.taskId)
+        : await this.taskControl.stop(verb.taskId)
+    if (verb.type === 'task.dismiss' && result.ok && this.agentMode) {
+      // The eviction removed the LIVE row, which un-masks this worker's persisted
+      // twin in the session plane (`agentModeDomain.ts` union policy) and would put
+      // the dismissed row straight back. Record the dismissal, then re-broadcast:
+      // the store-subscription re-broadcast already fired inside the eviction
+      // ABOVE this line, so it went out before the domain knew.
+      this.agentMode.noteWorkerDismissed(verb.taskId)
+      void this.broadcastAgentModeSnapshot()
+    }
     this.send(connection, {
       kind: 'task-control.result',
       protocolVersion: PROTOCOL_VERSION,
@@ -1956,6 +1972,8 @@ export class SidecarServer {
     // No explicit snapshot re-broadcast here — on a successful stop, `stopTask`
     // mutated the store, and the tasks/agent-mode store-subscriptions (constructor)
     // re-emit `tasks.snapshot` / `agent-mode.snapshot` with the task now `killed`.
+    // A dismiss takes the same route: the eviction removes the task from the store,
+    // and the same subscriptions re-emit snapshots that no longer carry the row.
   }
 
   /**
@@ -3541,6 +3559,9 @@ function checkStrictKeys(message: unknown): string | null {
     // P4-8b task-control STOP verb (app-owned; see TASK_CONTROL_VERB_TYPES). The
     // renderer authors ONLY the target taskId — any other key is rejected.
     ['task.stop', new Set(['type', 'requestId', 'taskId'])],
+    // The terminal counterpart (CC-32 follow-up): same single renderer-authored
+    // key, so a forged `evictAfter`/`retain` never reaches the engine's guards.
+    ['task.dismiss', new Set(['type', 'requestId', 'taskId'])],
     // P4-24c composer run-control verbs (app-owned; see RUN_CONTROL_VERB_TYPES). The
     // renderer authors ONLY the value/selection — any other key is rejected.
     ['model.set', new Set(['type', 'requestId', 'model'])],
@@ -3797,11 +3818,21 @@ const agentModeSetMessageSchema = z.object({
  * only, never trusting the frame. A non-string/absent `taskId` is rejected here
  * fail-closed before the domain runs any kill.
  */
-const taskControlVerbMessageSchema = z.object({
-  type: z.literal('task.stop'),
-  requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
-  taskId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
-})
+const taskControlVerbMessageSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('task.stop'),
+    requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+    taskId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  }),
+  // The dismiss half carries the SAME renderer-authored surface (a target id and
+  // nothing else); which of the two verbs is legal for a given task is the
+  // domain's live-store business check, never the boundary's.
+  z.object({
+    type: z.literal('task.dismiss'),
+    requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+    taskId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  }),
+])
 
 /**
  * P4-24c — sidecar-LOCAL schema for the composer run-control set verbs (protocol.ts:
