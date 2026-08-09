@@ -6,6 +6,7 @@ import * as React from 'react'
 import { Box, render, Text, ThemeProvider } from '../../ink.js'
 import { AppStateProvider, getDefaultAppState } from '../../state/AppState.js'
 import type { LocalJSXCommandContext } from '../../commands.js'
+import { settingsCloseResult } from './Settings.js'
 
 // bun never unregisters a `mock.module`, and `mock.restore()` does not undo one
 // either, so every registration below stays installed for the rest of the test
@@ -196,5 +197,17 @@ describe('Settings tabs', () => {
     expect(output).toContain('Usage')
     expect(output).toContain('Reset')
     expect(output.indexOf('Usage')).toBeLessThan(output.indexOf('Reset'))
+  })
+
+  test('retains redemption audit lines when Config closes Settings', () => {
+    expect(
+      settingsCloseResult('Set model to gpt-5.6', undefined, [
+        'Redeemed reset for account@example.com',
+      ]),
+    ).toEqual({
+      result:
+        'Redeemed reset for account@example.com\nSet model to gpt-5.6',
+      options: undefined,
+    })
   })
 })

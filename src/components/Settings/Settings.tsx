@@ -29,6 +29,21 @@ type Props = {
   defaultTab: 'Status' | 'Config' | 'Usage'
 }
 
+export function settingsCloseResult(
+  result: string | undefined,
+  options: { display?: CommandResultDisplay } | undefined,
+  redeemedLines: readonly string[],
+): { result: string; options: { display?: CommandResultDisplay } | undefined } {
+  const message = result ?? 'Status dialog dismissed'
+  return {
+    result:
+      redeemedLines.length > 0 ? [...redeemedLines, message].join('\n') : message,
+    // A child that supplied a result already selected its normal display
+    // behavior. Only Settings' own bare close needs the system-message default.
+    options: options ?? (result === undefined ? { display: 'system' } : undefined),
+  }
+}
+
 export function Settings({
   onClose,
   context,
@@ -65,13 +80,12 @@ export function Settings({
 
   useExitOnCtrlCDWithKeybindings()
 
-  const closeSettings = () => {
-    onClose(
-      redeemedLines.length > 0
-        ? redeemedLines.join('\n')
-        : 'Status dialog dismissed',
-      { display: 'system' },
-    )
+  const closeSettings = (
+    result?: string,
+    options?: { display?: CommandResultDisplay },
+  ) => {
+    const close = settingsCloseResult(result, options, redeemedLines)
+    onClose(close.result, close.options)
   }
 
   // Handle escape via keybinding - only when not in submenu
@@ -102,7 +116,7 @@ export function Settings({
       <Suspense fallback={null}>
         <Config
           context={context}
-          onClose={onClose}
+          onClose={closeSettings}
           setTabsHidden={setTabsHidden}
           onIsSearchModeChange={setConfigOwnsEsc}
           contentHeight={contentHeight}
