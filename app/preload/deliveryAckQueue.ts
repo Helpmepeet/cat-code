@@ -99,9 +99,14 @@ export class DeliveryAckQueue {
   /**
    * Queue a delivery acknowledgement.
    *
-   * Does NOT send inline — pushes onto the pending array and schedules a
-   * flush. This ensures a rate rejection never propagates to the frame-
-   * dispatch caller.
+   * Usually defers: pushes onto the pending array and schedules a flush. But at
+   * the batch threshold it DOES flush inline, on the caller's own stack, and the
+   * caller can be a React passive effect. That is not a leftover — it bounds the
+   * pending array. What makes it safe is that `flush` swallows the guard's
+   * rejection rather than that a send cannot happen here, so a rate rejection
+   * still never reaches the frame-dispatch caller. Removing the containment in
+   * `flush` and relying on this being deferred is what unmounted the renderer to
+   * a black window on 2026-08-09.
    */
   push(
     sessionId: string,
