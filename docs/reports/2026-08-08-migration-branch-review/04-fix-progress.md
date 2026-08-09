@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 26/242** — counted against the review's original 61 High and
+**Progress: Fix 28/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -31,6 +31,7 @@ count tracks individually verified findings, not commit count.
 | S02 MED mailbox lock stale/compromise handling | mitigated (not counted) | `6408091` | 60-second stale window and compromise logging; an explicit post-compromise recovery path remains |
 | S02 MED unrenderable permission requests are acknowledged while the worker waits forever | fixed | `44347f7` | callback-registry regression (1 pass); poller + mailbox suites (46 pass); focused lint; app typecheck |
 | S02 MED unacknowledgeable structured mailbox entries pin idle pollers | fixed | `7f8d65b` | poller + mailbox suites (46 pass); focused lint; app typecheck |
+| A15 HIGH bulk export hangs when a session dies before its first result; related stale lifecycle reset can prematurely save a partial export | fixed | `3e38524` | session-action dialog/runtime suites (41 pass); app typecheck; renderer build |
 
 ## Known verification limitation
 
