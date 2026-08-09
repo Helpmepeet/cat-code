@@ -5497,6 +5497,27 @@ test('CC-3 — an open connection cancels the idle timer; closing it re-arms the
   expect(idleCount).toBe(1)
 })
 
+test('a removed connection cannot submit a late frame into the engine', async () => {
+  let turns = 0
+  const controller = new AppSessionController({
+    async *runTurn() {
+      turns++
+    },
+  })
+  const server = makeServer(controller)
+  const { socket } = makeSocket()
+  const connection = server.addConnection(socket)
+
+  server.removeConnection(connection)
+  server.handleData(
+    connection,
+    clientFrame({ type: 'app.submit', requestId: 'late-submit', prompt: 'ignored' }),
+  )
+  await Bun.sleep(0)
+
+  expect(turns).toBe(0)
+})
+
 /* ------------------------------------------------------------------------- *
  * P4-14 — workspace-trust + diagnostics read-seams
  * ------------------------------------------------------------------------- */

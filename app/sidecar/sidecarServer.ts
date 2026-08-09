@@ -144,6 +144,8 @@ type Connection = {
   decoder: FrameDecoder
   rateWindowStart: number
   rateCount: number
+  /** Removed connections must not route late transport chunks into the engine. */
+  closed: boolean
 }
 
 export type SidecarServerOptions = {
@@ -598,6 +600,7 @@ export class SidecarServer {
       decoder: new FrameDecoder(MAX_FRAME_BYTES),
       rateWindowStart: Date.now(),
       rateCount: 0,
+      closed: false,
     }
     this.connections.add(connection)
     // Re-home the `app.ready` handshake onto IPC (AppSessionWebSocketServer.ts
@@ -783,6 +786,8 @@ export class SidecarServer {
   }
 
   removeConnection(connection: Connection): void {
+    if (connection.closed) return
+    connection.closed = true
     this.connections.delete(connection)
     // CC-3: the last supervisor connection just dropped (e.g. a host crash left
     // this sidecar orphaned). Start the idle countdown; a reconnect within the
@@ -794,6 +799,10 @@ export class SidecarServer {
 
   /** Feed a raw socket chunk for a given connection. */
   handleData(connection: Connection, chunk: Buffer): void {
+    // Bun may deliver data after an outbound write failure or during the
+    // wrapper's deferred close. A removed socket is no longer an authenticated
+    // transport endpoint, so it must be inert before framing or dispatch.
+    if (connection.closed || !this.connections.has(connection)) return
     const results = connection.decoder.push(chunk)
     for (const result of results) {
       if (result.kind === 'error') {
@@ -3420,6 +3429,11 @@ export class SidecarServer {
         }`,
       )
       this.removeConnection(connection)
+      try {
+        connection.socket.end()
+      } catch {
+        // The connection is already inert. Transport teardown is best-effort.
+      }
     }
   }
 
