@@ -138,6 +138,22 @@ export function createRendererHealthMonitor({
 export const RENDERER_RECOVERY_MAX_ATTEMPTS = 3
 export const RENDERER_RECOVERY_WINDOW_MS = 10 * 60_000
 
+/**
+ * Every reason this policy can be asked about: Electron's own
+ * `render-process-gone` reasons, plus `load-failed` for a recovery load that
+ * never committed a document. Declared here rather than imported so this file
+ * stays Electron-free.
+ */
+export type RendererDeathReason =
+  | 'clean-exit'
+  | 'abnormal-exit'
+  | 'killed'
+  | 'crashed'
+  | 'oom'
+  | 'launch-failed'
+  | 'integrity-failure'
+  | 'load-failed'
+
 export type RendererRecoveryDecision =
   | Readonly<{ action: 'reload'; attempt: number }>
   | Readonly<{ action: 'give-up' }>
@@ -158,7 +174,7 @@ export function createRendererRecoveryPolicy({
 } = {}) {
   const attemptsAt: number[] = []
   return {
-    decide(reason: string): RendererRecoveryDecision {
+    decide(reason: RendererDeathReason): RendererRecoveryDecision {
       if (reason === 'clean-exit') return { action: 'ignore' }
       const current = now()
       while (attemptsAt.length > 0 && current - attemptsAt[0] >= RENDERER_RECOVERY_WINDOW_MS) {

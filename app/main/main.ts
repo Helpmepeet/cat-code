@@ -61,6 +61,8 @@ import {
   createStartupTimers,
   isTerminalLifecycleFrame,
   parseVisibleSessions,
+  RENDERER_RECOVERY_MAX_ATTEMPTS,
+  type RendererDeathReason,
   SIDECAR_RUNTIME_ARGS,
   selectTranscriptBackfillCandidates,
   supervisorEventToServerFrame,
@@ -234,6 +236,7 @@ let lastKnownRendererVisible: boolean | null = null
 // the health probe threw every 5 seconds against a dead renderer). Every
 // renderer send checks this flag alongside `isDestroyed`.
 let rendererGone = false
+let rendererRecovering = false
 const rendererRecovery = createRendererRecoveryPolicy()
 let rendererRecoveryDialogShown = false
 let rendererFaultWindowStartedAt = Date.now()
@@ -1111,6 +1114,8 @@ function createWindow(): void {
     rendererHealth.reset()
     rendererHealthTimer = setInterval(healthProbe, 5_000)
   }
+  rendererGone = false
+  rendererRecovering = false
   startRendererHealthTimer()
   window.once('closed', stopRendererHealthTimer)
   logOperational('window.created', 'info')
@@ -1187,6 +1192,45 @@ function createWindow(): void {
     startupTimers.schedule(startIdleParkDriver)
   })
 
+  const loadRenderer = () => {
+    if (IS_DEV) {
+      logOperational('renderer.load.started', 'info', { source: 'dev' })
+      void window.loadURL(APP_ORIGIN_DEV).catch(error => {
+        logOperational('renderer.load.failed', 'error', { reason: classifyFailure(error) })
+      })
+    } else {
+      // `dev.ts` sets CATCODE_RENDERER_URL and waits for that server before
+      // launching. Reaching the packaged branch anyway means the dev launcher
+      // believes this is a dev run and main disagrees, so the window is about to
+      // load a STALE `dist` while a live Vite server sits unused. Say so: the
+      // 2026-07-28 instance cost hours precisely because it was silent. This only
+      // reports the contradiction; the packaged branch still wins, so a real
+      // packaged build can never be talked onto a remote origin by an env var.
+      if (process.env.CATCODE_RENDERER_URL) {
+        process.stderr.write(
+          `[main] CATCODE_RENDERER_URL is set (${process.env.CATCODE_RENDERER_URL}) but app.isPackaged is true, so the packaged renderer is being loaded from disk. Renderer edits will NOT appear until "renderer:build" is re-run. Expected a dev launch? Check that the Electron executable is still named "electron".\n`,
+        )
+      }
+      logOperational('renderer.load.started', 'info', { source: 'packaged' })
+      void window.loadFile(PACKAGED_INDEX_PATH).catch(error => {
+        logOperational('renderer.load.failed', 'error', { reason: classifyFailure(error) })
+      })
+    }
+  }
+  const giveUpOnRenderer = (reason: RendererDeathReason) => {
+    logOperational('renderer.recovery.exhausted', 'error', {
+      count: RENDERER_RECOVERY_MAX_ATTEMPTS,
+      reason,
+    })
+    if (!rendererRecoveryDialogShown) {
+      rendererRecoveryDialogShown = true
+      dialog.showErrorBox(
+        'Cat Code window crashed',
+        'The window crashed several times in a row, so automatic reload stopped. Quit and reopen the app to continue.',
+      )
+    }
+  }
+
   // Stderr lines are dev only: a packaged build must not gain a stderr surface.
   // Both are filtered where the operational record is not, because a diagnostic
   // that fires on routine events trains the reader to ignore it, while the
@@ -1201,6 +1245,18 @@ function createWindow(): void {
       if (IS_DEV && code !== -3) {
         process.stderr.write(`[main] the window failed to load (code ${code}).\n`)
       }
+      if (rendererRecovering && code !== -3) {
+        const decision = rendererRecovery.decide('load-failed')
+        if (decision.action === 'reload') {
+          logOperational('renderer.recovery.started', 'warn', {
+            count: decision.attempt,
+            reason: 'load-failed',
+          })
+          loadRenderer()
+        } else if (decision.action === 'give-up') {
+          giveUpOnRenderer('load-failed')
+        }
+      }
     }
   })
   window.webContents.on('render-process-gone', (_event, details) => {
@@ -1210,6 +1266,12 @@ function createWindow(): void {
     // process main positively knows is gone.
     rendererGone = true
     stopRendererHealthTimer()
+    // The gate is still attached to the document that just died, so re-arm it
+    // here: frames arriving before the replacement document announces itself
+    // would otherwise be dropped by the `rendererGone` check instead of buffered
+    // for its replay. Document identity stays navigation-owned.
+    cancelAllReplayFlushes()
+    attachmentGate.onNavigationStart()
     logOperational('renderer.process.gone', 'error', {
       reason: details.reason,
       exitCode: details.exitCode,
@@ -1227,26 +1289,23 @@ function createWindow(): void {
         count: decision.attempt,
         reason: details.reason,
       })
-      window.webContents.reload()
+      rendererRecovering = true
+      loadRenderer()
     } else if (decision.action === 'give-up') {
-      logOperational('renderer.recovery.exhausted', 'error', { reason: details.reason })
-      if (!rendererRecoveryDialogShown) {
-        rendererRecoveryDialogShown = true
-        dialog.showErrorBox(
-          'Cat Code window crashed',
-          'The window crashed several times in a row, so automatic reload stopped. Quit and reopen the app to continue.',
-        )
-      }
+      giveUpOnRenderer(details.reason)
     }
   })
   // A reload after a crash lands here once the fresh document is loaded; the
   // renderer-ready handshake then replays state through the attachment gate the
   // same way any reload does (F2).
   window.webContents.on('did-finish-load', () => {
-    if (!rendererGone) return
     rendererGone = false
-    logOperational('renderer.recovery.succeeded', 'info')
-    startRendererHealthTimer()
+    if (rendererRecovering) {
+      rendererRecovering = false
+      rendererRecoveryDialogShown = false
+      logOperational('renderer.recovery.succeeded', 'info')
+      startRendererHealthTimer()
+    }
   })
   let unresponsiveAt: number | null = null
   window.webContents.on('unresponsive', () => {
@@ -1260,29 +1319,7 @@ function createWindow(): void {
     unresponsiveAt = null
   })
 
-  if (IS_DEV) {
-    logOperational('renderer.load.started', 'info', { source: 'dev' })
-    void window.loadURL(APP_ORIGIN_DEV).catch(error => {
-      logOperational('renderer.load.failed', 'error', { reason: classifyFailure(error) })
-    })
-  } else {
-    // `dev.ts` sets CATCODE_RENDERER_URL and waits for that server before
-    // launching. Reaching the packaged branch anyway means the dev launcher
-    // believes this is a dev run and main disagrees, so the window is about to
-    // load a STALE `dist` while a live Vite server sits unused. Say so: the
-    // 2026-07-28 instance cost hours precisely because it was silent. This only
-    // reports the contradiction; the packaged branch still wins, so a real
-    // packaged build can never be talked onto a remote origin by an env var.
-    if (process.env.CATCODE_RENDERER_URL) {
-      process.stderr.write(
-        `[main] CATCODE_RENDERER_URL is set (${process.env.CATCODE_RENDERER_URL}) but app.isPackaged is true, so the packaged renderer is being loaded from disk. Renderer edits will NOT appear until "renderer:build" is re-run. Expected a dev launch? Check that the Electron executable is still named "electron".\n`,
-      )
-    }
-    logOperational('renderer.load.started', 'info', { source: 'packaged' })
-    void window.loadFile(PACKAGED_INDEX_PATH).catch(error => {
-      logOperational('renderer.load.failed', 'error', { reason: classifyFailure(error) })
-    })
-  }
+  loadRenderer()
 }
 
 /** The exact packaged renderer entry file (production nav target). */
@@ -1657,6 +1694,10 @@ function registerIpcHandlers(): void {
   // load and returns nothing on a repeat signal (StrictMode double-invoke).
   ipcMain.on(CH_RENDERER_READY, (_e, payload: { documentId?: unknown }) => {
     if (typeof payload?.documentId !== 'string' || payload.documentId.length > 128) return
+    // An IPC message from the renderer is positive proof of a live committed
+    // frame, and the mount effect that sends it can beat `did-finish-load`, so
+    // clearing the flag only there left the one-shot replay below discarded.
+    rendererGone = false
     rendererDocumentId = payload.documentId
     rendererSubscriptionEpoch++
     const replay = attachmentGate.onRendererReady().map(frame => traceFrame(frame, 'attachment.replayed'))

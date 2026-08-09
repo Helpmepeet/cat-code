@@ -122,6 +122,30 @@ describe('renderer recovery policy', () => {
     clock = RENDERER_RECOVERY_WINDOW_MS
     expect(recovery.decide('crashed')).toEqual({ action: 'reload', attempt: 1 })
   })
+
+  test('ages out only the attempts older than the window', () => {
+    let clock = 0
+    const recovery = createRendererRecoveryPolicy({ now: () => clock })
+    recovery.decide('crashed')
+    clock = 1_000
+    recovery.decide('crashed')
+    clock = 2_000
+    recovery.decide('crashed')
+    clock = RENDERER_RECOVERY_WINDOW_MS
+    expect(recovery.decide('crashed')).toEqual({ action: 'reload', attempt: 3 })
+    clock = RENDERER_RECOVERY_WINDOW_MS + 500
+    expect(recovery.decide('crashed')).toEqual({ action: 'give-up' })
+  })
+
+  test('holds an attempt for the whole window, to its last millisecond', () => {
+    let clock = 0
+    const recovery = createRendererRecoveryPolicy({ now: () => clock })
+    for (let attempt = 1; attempt <= RENDERER_RECOVERY_MAX_ATTEMPTS; attempt++) {
+      recovery.decide('crashed')
+    }
+    clock = RENDERER_RECOVERY_WINDOW_MS - 1
+    expect(recovery.decide('crashed')).toEqual({ action: 'give-up' })
+  })
 })
 
 function pongFrame(sessionId = SID): ServerFrame {

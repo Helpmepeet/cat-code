@@ -27,7 +27,6 @@ export const OPERATIONAL_EVENTS = [
   'renderer.load.ready',
   'renderer.load.failed',
   'renderer.navigation.started',
-  'renderer.navigation.completed',
   'renderer.process.gone',
   'renderer.recovery.started',
   'renderer.recovery.succeeded',
