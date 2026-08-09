@@ -135,6 +135,42 @@ export function createRendererHealthMonitor({
   }
 }
 
+export const RENDERER_RECOVERY_MAX_ATTEMPTS = 3
+export const RENDERER_RECOVERY_WINDOW_MS = 10 * 60_000
+
+export type RendererRecoveryDecision =
+  | Readonly<{ action: 'reload'; attempt: number }>
+  | Readonly<{ action: 'give-up' }>
+  | Readonly<{ action: 'ignore' }>
+
+/**
+ * Reload policy for a dead renderer process. Before 2026-08-09 a renderer
+ * crash (an OOM trap in that incident) left the window permanently black:
+ * `render-process-gone` only wrote a log record, and nothing ever recreated
+ * the document. Reload every abnormal death, but cap attempts inside a
+ * sliding window so a renderer that dies during load cannot reload forever.
+ * `clean-exit` is what quitting looks like and is never reloaded.
+ */
+export function createRendererRecoveryPolicy({
+  now = () => Date.now(),
+}: {
+  now?: () => number
+} = {}) {
+  const attemptsAt: number[] = []
+  return {
+    decide(reason: string): RendererRecoveryDecision {
+      if (reason === 'clean-exit') return { action: 'ignore' }
+      const current = now()
+      while (attemptsAt.length > 0 && current - attemptsAt[0] >= RENDERER_RECOVERY_WINDOW_MS) {
+        attemptsAt.shift()
+      }
+      if (attemptsAt.length >= RENDERER_RECOVERY_MAX_ATTEMPTS) return { action: 'give-up' }
+      attemptsAt.push(current)
+      return { action: 'reload', attempt: attemptsAt.length }
+    },
+  }
+}
+
 /**
  * The renderer-visible frame a supervisor event becomes, or null when the event
  * says nothing the renderer needs. A process `exit` and a terminal transport

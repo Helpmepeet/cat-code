@@ -57,6 +57,7 @@ import {
 import {
   createCwdTokenStore,
   createRendererHealthMonitor,
+  createRendererRecoveryPolicy,
   createStartupTimers,
   isTerminalLifecycleFrame,
   parseVisibleSessions,
@@ -223,6 +224,14 @@ let rendererDocumentId: string = randomUUID()
 let rendererSubscriptionEpoch = 0
 const rendererHealth = createRendererHealthMonitor()
 let rendererHealthTimer: ReturnType<typeof setInterval> | null = null
+// True from `render-process-gone` until the next document finishes loading.
+// `webContents.isDestroyed()` stays false for a crashed-but-open window, so any
+// send in that state throws "Render frame was disposed" (observed 2026-08-09:
+// the health probe threw every 5 seconds against a dead renderer). Every
+// renderer send checks this flag alongside `isDestroyed`.
+let rendererGone = false
+const rendererRecovery = createRendererRecoveryPolicy()
+let rendererRecoveryDialogShown = false
 let rendererFaultWindowStartedAt = Date.now()
 let rendererFaultCount = 0
 
@@ -857,8 +866,9 @@ function startIdleParkDriver(): void {
 function deliver(frames: ServerFrame[]): void {
   const contents = mainWindow?.webContents
   // `isDestroyed` because a send is only ever scheduled, never immediate: an
-  // in-flight frame can land after the window went away.
-  if (!contents || contents.isDestroyed()) return
+  // in-flight frame can land after the window went away. `rendererGone`
+  // because a crashed renderer leaves the window open and `isDestroyed` false.
+  if (!contents || contents.isDestroyed() || rendererGone) return
   if (frames.length === 0) return
   const traced = frames.map(frame => traceFrame(frame, 'main.ipc.queued'))
   contents.send(CH_SERVER_FRAME, traced satisfies ServerFrame[])
@@ -1074,14 +1084,21 @@ function createWindow(): void {
   const healthProbe = () => {
     const event = rendererHealth.probe()
     if (event) logOperational(event.event, event.level, event.fields)
-    if (!window.webContents.isDestroyed()) window.webContents.send(CH_DELIVERY_HEALTH_PROBE)
+    if (!window.webContents.isDestroyed() && !rendererGone) {
+      window.webContents.send(CH_DELIVERY_HEALTH_PROBE)
+    }
   }
-  rendererHealth.reset()
-  rendererHealthTimer = setInterval(healthProbe, 5_000)
-  window.once('closed', () => {
+  const stopRendererHealthTimer = () => {
     if (rendererHealthTimer) clearInterval(rendererHealthTimer)
     rendererHealthTimer = null
-  })
+  }
+  const startRendererHealthTimer = () => {
+    stopRendererHealthTimer()
+    rendererHealth.reset()
+    rendererHealthTimer = setInterval(healthProbe, 5_000)
+  }
+  startRendererHealthTimer()
+  window.once('closed', stopRendererHealthTimer)
   logOperational('window.created', 'info')
   mainWindow = window
 
@@ -1156,14 +1173,12 @@ function createWindow(): void {
     startupTimers.schedule(startIdleParkDriver)
   })
 
-  // These two land in the operational log only, which a dev run has no reason to
-  // be watching, so process death is invisible from the terminal the operator
-  // launched the app in. (The 2026-08-09 black window did NOT involve process
-  // death: the renderer stayed alive and React unmounted. Neither event below
-  // would have fired for it.) Dev only: a packaged build must not gain a stderr
-  // surface. Both stderr lines are filtered where the operational record is not,
-  // because a diagnostic that fires on routine events trains the reader to
-  // ignore it, while the record should still capture every case.
+  // Stderr lines are dev only: a packaged build must not gain a stderr surface.
+  // Both are filtered where the operational record is not, because a diagnostic
+  // that fires on routine events trains the reader to ignore it, while the
+  // record should still capture every case. An abnormal renderer death also
+  // auto-reloads the window (bounded by the recovery policy), because a logged
+  // but unrecovered crash is a permanently black window (2026-08-09 incident).
   window.webContents.on('did-fail-load', (_event, code, _description, _url, isMainFrame) => {
     if (isMainFrame) {
       logOperational('renderer.load.failed', 'error', { code, reason: 'did_fail_load' })
@@ -1175,6 +1190,12 @@ function createWindow(): void {
     }
   })
   window.webContents.on('render-process-gone', (_event, details) => {
+    // A crashed renderer leaves the window open and `isDestroyed()` false, so
+    // without this flag every scheduled send (probe, host event, frame) throws
+    // "Render frame was disposed" forever. Flag first, then stop probing a
+    // process main positively knows is gone.
+    rendererGone = true
+    stopRendererHealthTimer()
     logOperational('renderer.process.gone', 'error', {
       reason: details.reason,
       exitCode: details.exitCode,
@@ -1182,9 +1203,36 @@ function createWindow(): void {
     // `clean-exit` is a renderer that exited 0, which is what quitting looks like.
     if (IS_DEV && details.reason !== 'clean-exit') {
       process.stderr.write(
-        `[main] the window closed unexpectedly (${details.reason}, exit code ${details.exitCode}). Reopen it to keep working.\n`,
+        `[main] the window crashed (${details.reason}, exit code ${details.exitCode}); reloading it.\n`,
       )
     }
+    if (window.isDestroyed()) return
+    const decision = rendererRecovery.decide(details.reason)
+    if (decision.action === 'reload') {
+      logOperational('renderer.recovery.started', 'warn', {
+        count: decision.attempt,
+        reason: details.reason,
+      })
+      window.webContents.reload()
+    } else if (decision.action === 'give-up') {
+      logOperational('renderer.recovery.exhausted', 'error', { reason: details.reason })
+      if (!rendererRecoveryDialogShown) {
+        rendererRecoveryDialogShown = true
+        dialog.showErrorBox(
+          'Cat Code window crashed',
+          'The window crashed several times in a row, so automatic reload stopped. Quit and reopen the app to continue.',
+        )
+      }
+    }
+  })
+  // A reload after a crash lands here once the fresh document is loaded; the
+  // renderer-ready handshake then replays state through the attachment gate the
+  // same way any reload does (F2).
+  window.webContents.on('did-finish-load', () => {
+    if (!rendererGone) return
+    rendererGone = false
+    logOperational('renderer.recovery.succeeded', 'info')
+    startRendererHealthTimer()
   })
   let unresponsiveAt: number | null = null
   window.webContents.on('unresponsive', () => {
@@ -1298,7 +1346,7 @@ function wireHostEvents(h: Host): void {
 
 function sendHostEvent(event: HostEvent): void {
   const contents = mainWindow?.webContents
-  if (contents && !contents.isDestroyed()) contents.send(CH_HOST_EVENT, event)
+  if (contents && !contents.isDestroyed() && !rendererGone) contents.send(CH_HOST_EVENT, event)
 }
 
 /**

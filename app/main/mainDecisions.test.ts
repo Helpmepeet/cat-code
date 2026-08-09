@@ -13,9 +13,12 @@ import {
 import { MAX_LIVE_SESSIONS } from '../shared/hostApi.js'
 import {
   CWD_TOKEN_TTL_MS,
+  RENDERER_RECOVERY_MAX_ATTEMPTS,
+  RENDERER_RECOVERY_WINDOW_MS,
   SIDECAR_RUNTIME_ARGS,
   createCwdTokenStore,
   createRendererHealthMonitor,
+  createRendererRecoveryPolicy,
   createStartupTimers,
   isTerminalLifecycleFrame,
   parseVisibleSessions,
@@ -80,6 +83,44 @@ describe('renderer health evidence', () => {
     })
     clock = 30_000
     expect(health.probe()).toBeNull()
+  })
+})
+
+describe('renderer recovery policy', () => {
+  test('reloads an abnormal death and numbers the attempts', () => {
+    let clock = 0
+    const recovery = createRendererRecoveryPolicy({ now: () => clock })
+    expect(recovery.decide('crashed')).toEqual({ action: 'reload', attempt: 1 })
+    clock = 60_000
+    expect(recovery.decide('oom')).toEqual({ action: 'reload', attempt: 2 })
+  })
+
+  test('never reloads a clean exit, and a clean exit costs no attempt', () => {
+    const recovery = createRendererRecoveryPolicy({ now: () => 0 })
+    expect(recovery.decide('clean-exit')).toEqual({ action: 'ignore' })
+    expect(recovery.decide('crashed')).toEqual({ action: 'reload', attempt: 1 })
+  })
+
+  test('gives up after the attempt cap inside the sliding window', () => {
+    let clock = 0
+    const recovery = createRendererRecoveryPolicy({ now: () => clock })
+    for (let attempt = 1; attempt <= RENDERER_RECOVERY_MAX_ATTEMPTS; attempt++) {
+      clock += 1_000
+      expect(recovery.decide('crashed')).toEqual({ action: 'reload', attempt })
+    }
+    clock += 1_000
+    expect(recovery.decide('crashed')).toEqual({ action: 'give-up' })
+  })
+
+  test('attempts expire once they age out of the window', () => {
+    let clock = 0
+    const recovery = createRendererRecoveryPolicy({ now: () => clock })
+    for (let attempt = 1; attempt <= RENDERER_RECOVERY_MAX_ATTEMPTS; attempt++) {
+      recovery.decide('crashed')
+    }
+    expect(recovery.decide('crashed')).toEqual({ action: 'give-up' })
+    clock = RENDERER_RECOVERY_WINDOW_MS
+    expect(recovery.decide('crashed')).toEqual({ action: 'reload', attempt: 1 })
   })
 })
 
