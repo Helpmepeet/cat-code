@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 47/242** — counted against the review's original 61 High and
+**Progress: Fix 48/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -51,6 +51,7 @@ count tracks individually verified findings, not commit count.
 | V15 MED fresh-session catalog key flips discarded Sessions-page selection, rename draft, tag echo, and tag popover state | fixed | `d7ed71e` | catalog id-migration regression (21 pass); renderer typecheck and production build; GUI fidelity pending |
 | V15 MED dead inspector seam selector claimed centralization that no production code used | fixed | `bf7f757` | removed unused selector and self-contained tests; inspector-state suite (19 pass); renderer typecheck and production build |
 | V15 MED dev debug snapshot fabricated/inverted permission-suggestion labels | fixed | `ae90352` | reused the visible option formatter and covered allow/deny labels (1 pass); renderer typecheck and production build |
+| V15 MED writable-row eligibility drifted across Sessions-page and App bulk-action paths | fixed | `5193cf5` | shared typed row selector regression; Sessions-page suites (40 pass); renderer typecheck and production build |
 
 ## Known verification limitation
 
