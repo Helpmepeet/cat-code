@@ -6,6 +6,10 @@ is, because the fork's behaviour only makes sense next to it.
 
 ## Method, and how to re-verify
 
+**Start with `claude auto-mode defaults`.** The rule set is a supported,
+read-only CLI output and needs no extraction. That was found late here; the
+binary work below came first and is what the CLI does *not* cover.
+
 The shipped Claude Code binary embeds its bundled JS, so the prompt and the
 control flow around it are recoverable with `strings` and byte-window slicing.
 Nine versions are on disk (`~/.local/share/claude/versions/`, 2.1.214 of Jul 18
@@ -29,8 +33,41 @@ over-counts, because unrelated bundled code sits between the two modules.
 
 ## How far this was verified
 
-Two independent checks were run against the extraction, both of which found
-errors in the first draft of this report:
+### There is a supported CLI, and it confirms the extraction
+
+Claude Code ships `claude auto-mode` with four subcommands: `defaults` and
+`config` print the rule set as JSON, `critique` asks a model to review custom
+rules, `reset` removes the user's `autoMode` settings block. The rule half of
+this report therefore did not need extracting at all — it is a documented,
+read-only command.
+
+Checked against `claude auto-mode defaults` on 2.1.223:
+
+| | CLI ground truth | Extracted from binary |
+|---|---|---|
+| Block rules | 66 (1 hard-deny + 65 soft-deny) | 66 ids, exact bijection |
+| Allow rules | 17 | 17 |
+| Environment slots | 20 | 20 |
+| Rule names | — | zero drift, both directions |
+
+Character counts came within 1.5% (soft-deny 44,555 CLI vs 46,466 raw in the
+binary), and the difference is fully accounted for by bullet prefixes, joining
+newlines, and `\uXXXX` escapes counted as six bytes rather than one. No rule
+text is missing from the extraction.
+
+`claude auto-mode config` on this machine is byte-identical to `defaults`, so
+the numbers above describe what actually governs this machine, not just what
+ships.
+
+**The CLI does not expose the surrounding architecture** — the two-stage split,
+the severity scale, model selection and fallback, harness meta-injection, and
+the `$defaults` splice are all binary-only findings, and remain at the
+confidence stated under Uncertainty.
+
+### Self-checks that caught errors
+
+Two independent checks were run against the extraction before the CLI was found,
+both of which found errors in the first draft of this report:
 
 - **Rule-set closure.** The 66 machine-readable rule ids and the rule bullets in
   the prose were extracted separately, from different regions of the binary,
@@ -58,6 +95,12 @@ The classification process runs the hard check first and stops there:
 
 > **HARD BLOCK check**: Does the action match any HARD BLOCK condition? →
 > `shouldBlock: true`. Stop. User intent and ALLOW do not apply.
+
+**The hard tier holds exactly one rule** — Data Exfiltration. All 65 others are
+soft. This is worth stating plainly because "two tiers" invites the wrong
+picture: upstream is not split down the middle. It is one unconditional
+prohibition on sensitive data crossing the trust boundary, and everything else
+placed where the user can clear it.
 
 Soft blocks then produce a *preliminary* verdict, which user intent can overturn
 in either direction — clearing a block, or creating one where the user set an
@@ -202,7 +245,7 @@ continuously refined in wording while the architecture holds still.
 |---|---|---|
 | Prompt size | 113,649 chars (two modules: 38,180 + 75,469) | 7,534 chars total |
 | Tiers | HARD BLOCK / SOFT BLOCK | one flat deny tier |
-| Deny rules | 65 named ids | 12 unnamed bullets |
+| Deny rules | 66 named (1 unconditional, 65 clearable) | 12 unnamed bullets |
 | Verdict shape | `<block>` + `<category>` + `[Rule Name]` reason | `{thinking, shouldBlock, reason}`, free prose |
 | Severity | 0-100 with configurable thresholds | none |
 | Stages | two, default `"both"` | one |
@@ -253,13 +296,23 @@ working upstream implementations to read rather than design from scratch.
 
 ## Uncertainty
 
-- **Not executed, only read.** Everything here is static extraction from the
-  bundled JS. Runtime behaviour under GrowthBook values this machine actually
-  receives is unverified; server config can change defaults without a release.
-- **Compiled-side strings.** The prompt-dump strings and the Sonnet probe log
-  lines were found in the native string table as well as the JS. How the dump is
-  triggered (flag, env var, or error path only) was not established — the string
-  `Dumped auto mode classifier error prompts to` suggests an error path.
+- **The rules are confirmed; the machinery around them is not.** Rule text,
+  counts, and names are ground truth from `claude auto-mode defaults`. The
+  two-stage split, severity scale, model probe/fallback, retry count, and meta
+  injection are read from code that was never executed. Several are read from
+  GrowthBook at runtime (`tengu_auto_mode_config`), so server config can change
+  them without a release and the compiled-in defaults may not be what this
+  machine receives.
+- **The prompt dump is error-path only.** `Qxy` writes
+  `=== SYSTEM PROMPT ===` / `=== USER PROMPT (transcript) ===` to
+  `<config>/auto-mode-classifier-errors/<id>.txt`, and is reached only from a
+  classifier failure. A sibling function (`E2d`) with the same signature is a
+  compiled-out stub. So the assembled prompt cannot be dumped on demand — but
+  `W2d()` assembles the full default prompt internally and is what
+  `auto-mode critique` feeds to its reviewer, which is why the CLI is the
+  practical route.
+- **One substitution tag was not investigated:** `<cross_session_messages_rule>`,
+  which `W2d` blanks out. Whatever it carries in the live path is unexamined.
 - **Fork-point unknown.** Nine versions were available, all with the two-tier
   design. When this fork diverged, and whether the flat design was ever
   upstream's, is not answerable from these binaries.
