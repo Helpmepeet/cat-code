@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 68/242** — counted against the review's original 61 High and
+**Progress: Fix 69/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -72,6 +72,7 @@ count tracks individually verified findings, not commit count.
 | A18 MED SettingsShell accepted four unused live-session props and App recomputed them every render | fixed | `aca8b28` | removed discarded API surface and Settings/App suites (90 pass); renderer typecheck and production build; GUI fidelity remains operator-verifiable |
 | A18 MED `DiagnosticsSection` and `WorkspaceTrustSection` were orphaned renderer modules | fixed | `42afa51` | removed both zero-import, zero-test modules; the active Settings/App/MetadataInspector suites pass (109 pass); renderer typecheck and production build; GUI fidelity remains operator-verifiable |
 | A18 MED `StartupOAuth` handled a closed phase union without an exhaustiveness tripwire | fixed | `056c7d7` | phase switch now rejects future unhandled variants at typecheck; focused StartupSurfaces suite (17 pass); renderer typecheck and production build; GUI fidelity remains operator-verifiable |
+| A18 MED Welcome-screen usage meters ignored the selected accent with hard-coded pink classes | fixed | `dfee305` | meters and labels now use the shared accent tokens; Welcome and Transcript suites (200 pass); renderer typecheck and production build; GUI fidelity remains operator-verifiable |
 
 ## Known verification limitation
 
