@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 92/242** — counted against the review's original 61 High and
+**Progress: Fix 93/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -96,6 +96,7 @@ count tracks individually verified findings, not commit count.
 | A04 MED inline-output “Show more” depth reset when a lone tool card regrouped into a tool run | fixed | `2817288` | inline reveal depth is now remembered by engine `tool_use` id beside expansion state, so every inline body remounts with the revealed depth; store/regroup regressions (184 pass); app typecheck and renderer production build |
 | A17 HIGH model-supplied prototype property names (`toString`, `__proto__`, etc.) crashed agent transcript rendering | fixed | `b5637c0` | agent metadata now accepts only own palette keys and gives every unknown type neutral metadata; agent-identity/transcript regressions (190 pass); app typecheck and renderer production build |
 | A18 HIGH pressing Enter on an empty tag query could apply the first matching tag, including across a bulk selection | fixed | `b8d9c6e` | tag Enter actions apply only `resolveTagCommit`'s explicit non-empty result; empty queries resolve to `null`; Sessions page/state regressions (41 pass); app typecheck and renderer production build |
+| A09 HIGH terminal supervisor tombstones consumed the live-session cap and could prevent new or restored sessions | fixed | `b8d9c6e` | host concurrency counting now excludes terminal supervisor statuses; the cap test covers both creation and restore with a retained tombstone (56 pass); app typecheck and renderer production build |
 
 ## Known verification limitation
 
