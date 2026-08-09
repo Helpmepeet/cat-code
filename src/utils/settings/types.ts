@@ -1008,6 +1008,22 @@ export const SettingsSchema = lazySchema(() =>
               ),
             autoMode: z
               .object({
+	                ...(feature('AUTO_MODE_UPSTREAM_PORT')
+	                  ? {
+	                      model: z
+	                        .string()
+	                        .optional()
+	                        .describe('Model used by the auto mode classifier'),
+	                      maxRetries: z
+	                        .number()
+	                        .int()
+	                        .min(0)
+	                        .optional()
+	                        .describe(
+	                          'Maximum additional auto mode classifier attempts',
+	                        ),
+	                    }
+	                  : {}),
                 allow: z
                   .array(z.string())
                   .optional()
@@ -1016,6 +1032,16 @@ export const SettingsSchema = lazySchema(() =>
                   .array(z.string())
                   .optional()
                   .describe('Rules for the auto mode classifier deny section'),
+	                ...(feature('AUTO_MODE_UPSTREAM_PORT')
+	                  ? {
+	                      hard_deny: z
+	                        .array(z.string())
+	                        .optional()
+	                        .describe(
+	                          'Rules for the auto mode classifier unconditional deny section',
+	                        ),
+	                    }
+	                  : {}),
                 ...(process.env.USER_TYPE === 'ant'
                   ? {
                       // Back-compat alias for ant users; external users use soft_deny

@@ -38,6 +38,8 @@ import {
   getBashPromptAllowDescriptions,
   getBashPromptDenyDescriptions,
 } from './bashClassifier.js'
+import { buildSettingsDenyRulesText } from './autoModeDenyRules.js'
+import { getAutoModeClassifierAttempts } from './autoModeProviderLadder.js'
 import {
   extractToolUseBlock,
   parseClassifierResponse,
@@ -86,6 +88,7 @@ function isUsingExternalPermissions(): boolean {
 export type AutoModeRules = {
   allow: string[]
   soft_deny: string[]
+  hard_deny: string[]
   environment: string[]
 }
 
@@ -102,6 +105,7 @@ export function getDefaultExternalAutoModeRules(): AutoModeRules {
   return {
     allow: extractTaggedBullets('user_allow_rules_to_replace'),
     soft_deny: extractTaggedBullets('user_deny_rules_to_replace'),
+    hard_deny: [],
     environment: extractTaggedBullets('user_environment_to_replace'),
   }
 }
@@ -482,6 +486,23 @@ function buildClaudeMdMessage(): Anthropic.MessageParam | null {
   }
 }
 
+export function buildSettingsDenyRulesMessage(
+  context: ToolPermissionContext,
+): Anthropic.MessageParam | null {
+  const text = buildSettingsDenyRulesText(context)
+  if (text === null) return null
+  return {
+    role: 'user',
+    content: [
+      {
+        type: 'text',
+        text,
+        cache_control: getCacheControl({ querySource: 'auto_mode' }),
+      },
+    ],
+  }
+}
+
 /**
  * Build the system prompt for the auto mode classifier.
  * Assembles the base prompt with the permissions template and substitutes
@@ -750,9 +771,13 @@ export async function classifyYoloAction(
   const systemPrompt = await buildYoloSystemPrompt(context)
   const transcriptEntries = buildTranscriptEntries(messages)
   const claudeMdMessage = buildClaudeMdMessage()
-  const prefixMessages: Anthropic.MessageParam[] = claudeMdMessage
-    ? [claudeMdMessage]
-    : []
+  const settingsDenyRulesMessage = feature('AUTO_MODE_UPSTREAM_PORT')
+    ? buildSettingsDenyRulesMessage(context)
+    : null
+  const prefixMessages: Anthropic.MessageParam[] = [
+    claudeMdMessage,
+    settingsDenyRulesMessage,
+  ].filter((message): message is Anthropic.MessageParam => message !== null)
 
   let toolCallsLength = actionCompact.length
   let userPromptsLength = 0
@@ -824,6 +849,17 @@ export async function classifyYoloAction(
   })
 
   let model = getClassifierModel()
+  const configuredMaxRetries = getClassifierMaxRetries()
+  const gatedAttempts = feature('AUTO_MODE_UPSTREAM_PORT')
+    ? getAutoModeClassifierAttempts(
+        model,
+        configuredMaxRetries,
+        (await import('../model/providers.js')).getConfiguredAnthropicProvider(),
+      )
+    : null
+  let attemptIndex = 0
+  let provider = gatedAttempts?.[0]?.provider
+  if (gatedAttempts?.[0]) model = gatedAttempts[0].model
   const attemptedModels: string[] = []
 
   for (;;) {
@@ -836,6 +872,7 @@ export async function classifyYoloAction(
       const start = Date.now()
       const sideQueryOpts = {
         model,
+        ...(provider && { provider }),
         max_tokens: 4096 + thinkingPadding,
         system: [
           {
@@ -856,7 +893,7 @@ export async function classifyYoloAction(
           type: 'tool' as const,
           name: YOLO_CLASSIFIER_TOOL_NAME,
         },
-        maxRetries: getDefaultMaxRetries(),
+        maxRetries: gatedAttempts ? 0 : getDefaultMaxRetries(),
         signal,
         querySource: 'auto_mode' as const,
       }
@@ -971,7 +1008,36 @@ export async function classifyYoloAction(
       const tooLong = detectPromptTooLong(error)
       const fallbackModel = tooLong
         ? undefined
-        : getClassifierFallbackModel(model, error)
+        : gatedAttempts
+          ? undefined
+          : getClassifierFallbackModel(model, error)
+      if (
+        gatedAttempts &&
+        !tooLong &&
+        isClassifierAttemptFallbackError(error)
+      ) {
+        const failedProvider = provider
+        const skipProviderFamily = isProviderAuthenticationError(error)
+        do {
+          attemptIndex++
+        } while (
+          skipProviderFamily &&
+          gatedAttempts[attemptIndex]?.provider === failedProvider
+        )
+        const fallbackAttempt = gatedAttempts[attemptIndex]
+        if (fallbackAttempt) {
+          logForDebugging(
+            `Auto mode classifier ${provider}/${model} unavailable, retrying with ${fallbackAttempt.provider}/${fallbackAttempt.model}: ${errorMessage(error)}`,
+            { level: 'warn' },
+          )
+          logAutoModeOutcome('fallback', model, {
+            failureKind: 'classifier_provider_unavailable',
+          })
+          provider = fallbackAttempt.provider
+          model = fallbackAttempt.model
+          continue
+        }
+      }
       if (fallbackModel) {
         logForDebugging(
           `Auto mode classifier model ${model} unavailable, retrying with ${fallbackModel}: ${errorMessage(error)}`,
@@ -1042,6 +1108,11 @@ type AutoModeConfig = {
  * then the main loop model.
  */
 function getClassifierModel(): string {
+  if (feature('AUTO_MODE_UPSTREAM_PORT')) {
+    const envModel = process.env.CLAUDE_CODE_AUTO_MODE_MODEL
+    if (envModel) return envModel
+    return getAutoModeConfig()?.model ?? 'sonnet'
+  }
   if (process.env.USER_TYPE === 'ant') {
     const envModel = process.env.CLAUDE_CODE_AUTO_MODE_MODEL
     if (envModel) return envModel
@@ -1054,6 +1125,29 @@ function getClassifierModel(): string {
     return config.model
   }
   return getMainLoopModel()
+}
+
+function getClassifierMaxRetries(): number {
+  return feature('AUTO_MODE_UPSTREAM_PORT')
+    ? (getAutoModeConfig()?.maxRetries ?? 4)
+    : getDefaultMaxRetries()
+}
+
+function isProviderAuthenticationError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  const name = 'name' in error ? error.name : undefined
+  if (
+    typeof name === 'string' &&
+    NON_FALLBACK_CODEX_ERROR_NAMES.has(name)
+  ) {
+    return true
+  }
+  const status = 'status' in error ? error.status : undefined
+  return status === 401
+}
+
+function isClassifierAttemptFallbackError(error: unknown): boolean {
+  return isProviderAuthenticationError(error) || isClassifierFallbackError(error)
 }
 
 
