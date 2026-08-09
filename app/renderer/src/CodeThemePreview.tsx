@@ -16,8 +16,8 @@
  * `CodeBlock` does not tokenize: its `highlighted` prop is the already-colored
  * span tree, which in the transcript comes from `rehype-highlight` running
  * inside react-markdown. Rather than reach for a second tokenizer, this renders
- * the sample as a one-fence markdown document through the same plugin and hands
- * the resulting tree straight to `CodeBlock` (see PLUGIN CONFIG below).
+ * the sample as a one-fence markdown document through the transcript's plugin
+ * config and hands the resulting tree straight to `CodeBlock`.
  *
  * The theme is applied by neither: `CodeThemeProvider` puts `data-code-theme` on
  * a wrapper above the whole app (`main.tsx`) and `theme.css` selects palettes off
@@ -33,23 +33,10 @@
  */
 
 import Markdown from 'react-markdown'
-import rehypeHighlight from 'rehype-highlight'
 import type { ComponentPropsWithoutRef } from 'react'
 import { CodeBlock } from './TranscriptView.js'
 import { PREVIEW_CODE, PREVIEW_CODE_LANG } from './codeTheme.js'
-
-/**
- * PLUGIN CONFIG. This restates `TranscriptView.tsx`'s `REHYPE_PLUGINS` because
- * that constant is module-private and its file was under concurrent edit; the
- * drift-free form is to import it, which costs one word (`export const
- * REHYPE_PLUGINS`) at its declaration. `remark-gfm` is deliberately absent: it
- * adds tables, autolinks, and strikethrough, none of which a fenced block can
- * contain, so including it would be cargo rather than parity.
- */
-const PREVIEW_REHYPE_PLUGINS: [
-  typeof rehypeHighlight,
-  { detect: boolean; ignoreMissing: boolean },
-][] = [[rehypeHighlight, { detect: false, ignoreMissing: true }]]
+import { REHYPE_PLUGINS } from './markdownPlugins.js'
 
 /** The sample as a one-fence markdown document, so the fence carries the
  * language and `rehype-highlight` tokenizes for that language exactly as it does
@@ -80,7 +67,7 @@ export function CodeThemePreview() {
   return (
     <Markdown
       components={PREVIEW_COMPONENTS}
-      rehypePlugins={PREVIEW_REHYPE_PLUGINS}
+      rehypePlugins={REHYPE_PLUGINS}
     >
       {PREVIEW_MARKDOWN}
     </Markdown>

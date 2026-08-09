@@ -36,10 +36,10 @@ import {
 } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import rehypeHighlight from 'rehype-highlight'
 import { diffWordsWithSpace } from 'diff'
 import type { AccountsSnapshot, SessionId } from '../../shared/protocol.js'
 import { WelcomeScreen } from './WelcomeScreen.js'
+import { REHYPE_PLUGINS } from './markdownPlugins.js'
 import { useModalFocus } from './overlayFocus.js'
 import { useToast } from './toastContext.js'
 import {
@@ -637,16 +637,9 @@ const TranscriptRowView = memo(function TranscriptRowView({
  */
 
 // Stable module-scope plugin config. `remark-gfm` adds pipe tables (+ autolinks/
-// strikethrough). `rehype-highlight` tokenizes fenced ```lang blocks into
-// highlight.js `hljs-*` spans: `detect:false` colors ONLY explicitly-languaged
-// blocks (no noisy auto-detect of plain text); `ignoreMissing:true` degrades an
-// unknown language to plain text instead of throwing (display = degrade
-// gracefully, and safe under SSR where the error boundary can't catch).
+// strikethrough). Rehype highlighting is shared with the code-theme preview;
+// it tokenizes fenced ```lang blocks into highlight.js `hljs-*` spans.
 const REMARK_PLUGINS = [remarkGfm]
-const REHYPE_PLUGINS: [
-  typeof rehypeHighlight,
-  { detect: boolean; ignoreMissing: boolean },
-][] = [[rehypeHighlight, { detect: false, ignoreMissing: true }]]
 
 function AssistantProse({
   content,
