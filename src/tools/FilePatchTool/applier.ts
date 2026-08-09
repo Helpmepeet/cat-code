@@ -54,7 +54,14 @@ function applyOperations(
         }
 
         const cachedContent = cachedFiles?.get(operation.path)
-        const nextBuffer = applyUpdateHunks(current.buffer, operation.hunks, operation.path, cachedContent)
+        const notes: string[] = []
+        const nextBuffer = applyUpdateHunks(
+          current.buffer,
+          operation.hunks,
+          operation.path,
+          cachedContent,
+          notes,
+        )
 
         if (operation.moveTo) {
           const moveTarget = getExistingOrDefaultState(currentFiles, workingFiles, operation.moveTo)
@@ -68,7 +75,15 @@ function applyOperations(
           workingFiles.set(operation.path, { path: operation.path, exists: false, buffer: current.buffer })
           workingFiles.set(operation.moveTo, { path: operation.moveTo, exists: true, buffer: nextBuffer })
           results.push({ path: operation.path, type: 'delete', before: current.buffer.content, after: null })
-          results.push({ path: operation.moveTo, type: 'add', before: null, after: nextBuffer.content })
+          // The hunks landed in the moved-to file, so any placement disclosure
+          // belongs on the entry that carries the patched content.
+          results.push({
+            path: operation.moveTo,
+            type: 'add',
+            before: null,
+            after: nextBuffer.content,
+            ...(notes.length > 0 ? { notes } : {}),
+          })
         } else {
           workingFiles.set(operation.path, { path: operation.path, exists: true, buffer: nextBuffer })
           results.push({
@@ -76,6 +91,7 @@ function applyOperations(
             type: 'update',
             before: current.buffer.content,
             after: nextBuffer.content,
+            ...(notes.length > 0 ? { notes } : {}),
           })
         }
         break
@@ -142,6 +158,7 @@ export function applyUpdateHunks(
   hunks: FilePatchHunk[],
   path: string,
   cachedContent?: string,
+  notes?: string[],
 ): FilePatchBuffer {
   let lines = splitPreservingTerminalNewline(buffer.content)
   const cachedLines = cachedContent !== undefined
@@ -150,9 +167,17 @@ export function applyUpdateHunks(
   let noNewlineAtEndOfFile =
     buffer.noNewlineAtEndOfFile ?? !buffer.content.endsWith('\n')
 
+  // Hunks of one update apply in file order, so a later hunk may only match
+  // at-or-after where the previous one finished. The cursor carries that
+  // position in the coordinates of the mutated buffer the next hunk searches,
+  // which is what lets the canonical Codex idiom work: an early hunk anchors
+  // uniquely and a later one uses a tiny fingerprint meaning "the next one".
+  let cursor = 0
+
   for (let i = 0; i < hunks.length; i++) {
-    const next = applySingleHunk(lines, hunks[i], path, i, cachedLines)
+    const next = applySingleHunk(lines, hunks[i], path, i, cursor, cachedLines, notes)
     lines = next.lines
+    cursor = next.cursor
     if (next.touchesEndOfFile) {
       noNewlineAtEndOfFile = hunks[i].noNewlineAtEndOfFile
     }
@@ -171,9 +196,11 @@ function applySingleHunk(
   hunk: FilePatchHunk,
   path: string,
   hunkIndex: number,
+  cursor: number,
   cachedLines?: string[],
-): { lines: string[]; touchesEndOfFile: boolean } {
-  const matchIndex = findHunkPosition(lines, hunk, path, hunkIndex, cachedLines)
+  notes?: string[],
+): { lines: string[]; touchesEndOfFile: boolean; cursor: number } {
+  const matchIndex = findHunkPosition(lines, hunk, path, hunkIndex, cursor, cachedLines, notes)
 
   let sourceIndex = matchIndex
   const nextLines = lines.slice(0, matchIndex)
@@ -213,11 +240,16 @@ function applySingleHunk(
     }
   }
 
+  // Everything this hunk pushed sits between matchIndex and here, so this is
+  // where the next hunk may start looking in the buffer it will search.
+  const nextCursor = nextLines.length
+
   nextLines.push(...lines.slice(sourceIndex))
 
   return {
     lines: nextLines,
     touchesEndOfFile: isTouchingEndOfFile(lines, hunk.lines, matchIndex, addedLines),
+    cursor: nextCursor,
   }
 }
 
@@ -241,7 +273,9 @@ function findHunkPosition(
   hunk: FilePatchHunk,
   path: string,
   hunkIndex: number,
+  cursor: number,
   cachedLines?: string[],
+  notes?: string[],
 ): number {
   const fingerprint = hunk.lines.filter(l => l.kind !== 'add').map(l => l.text)
 
@@ -284,8 +318,24 @@ function findHunkPosition(
         if (resolved !== null) {
           return resolved
         }
+        if (hunkIndex > 0) {
+          // A later hunk's fingerprint is routinely tiny (`})` alone) because
+          // the model means "the next one after the previous hunk". Only a
+          // hunk with nothing before it has to be globally unique.
+          const forward = matches.filter(match => match >= cursor)
+          if (forward.length > 0) {
+            notes?.push(
+              `hunk ${hunkIndex + 1} matched ${matches.length} locations; applied at the first match after the previous hunk (line ${forward[0] + 1})`,
+            )
+            return forward[0]
+          }
+          throw new FilePatchError(
+            `Patch hunk body is ambiguous in ${path}: hunks apply in file order, and all ${matches.length} matches for hunk ${hunkIndex + 1} (lines ${matches.map(i => i + 1).join(', ')}) sit before the position established by the previous hunk — reorder the hunks to match the file, or add more context lines.`,
+            { code: 'PATCH_ANCHOR_AMBIGUOUS', path },
+          )
+        }
         throw new FilePatchError(
-          `Patch hunk body is ambiguous in ${path}: the context+delete lines match at ${matches.length} locations (lines ${matches.map(i => i + 1).join(', ')}) — add more surrounding context lines or @@ scope hints until only one location matches.`,
+          `Patch hunk body is ambiguous in ${path}: the context+delete lines match at ${matches.length} locations (lines ${matches.map(i => i + 1).join(', ')}) — the first hunk of an update must locate itself uniquely; add more surrounding context lines or @@ scope hints until only one location matches.`,
           { code: 'PATCH_ANCHOR_AMBIGUOUS', path },
         )
       }

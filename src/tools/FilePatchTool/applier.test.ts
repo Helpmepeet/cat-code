@@ -326,6 +326,245 @@ describe('scope hint disambiguation', () => {
   })
 })
 
+describe('sequential hunk cursor', () => {
+  const SEQUENTIAL_FILE = [
+    "test('a', () => {",
+    '  one()',
+    '})',
+    "test('b', () => {",
+    '  two()',
+    '})',
+  ].join('\n') + '\n'
+
+  test('a later hunk with a repeated fingerprint lands after the anchored hunk', () => {
+    const notes: string[] = []
+    const result = applyUpdateHunks(
+      { content: SEQUENTIAL_FILE, lineEndings: 'LF' },
+      [
+        hunk({
+          lines: [
+            { kind: 'context', text: "test('b', () => {" },
+            { kind: 'delete', text: '  two()' },
+            { kind: 'add', text: '  two updated()' },
+          ],
+        }),
+        hunk({
+          lines: [
+            { kind: 'context', text: '})' },
+            { kind: 'add', text: '// tail' },
+          ],
+        }),
+      ],
+      '/tmp/example.test.ts',
+      undefined,
+      notes,
+    )
+
+    expect(result.content).toBe(
+      [
+        "test('a', () => {",
+        '  one()',
+        '})',
+        "test('b', () => {",
+        '  two updated()',
+        '})',
+        '// tail',
+      ].join('\n') + '\n',
+    )
+    expect(notes).toEqual([
+      'hunk 2 matched 2 locations; applied at the first match after the previous hunk (line 6)',
+    ])
+  })
+
+  test('a duplicate the first hunk itself created does not capture the second hunk', () => {
+    const notes: string[] = []
+    const result = applyUpdateHunks(
+      { content: 'alpha\nbeta\nmarker\ngamma\n', lineEndings: 'LF' },
+      [
+        hunk({
+          lines: [
+            { kind: 'context', text: 'alpha' },
+            { kind: 'add', text: 'marker' },
+          ],
+        }),
+        hunk({
+          lines: [
+            { kind: 'context', text: 'marker' },
+            { kind: 'add', text: 'inserted' },
+          ],
+        }),
+      ],
+      '/tmp/example.ts',
+      undefined,
+      notes,
+    )
+
+    expect(result.content).toBe('alpha\nmarker\nbeta\nmarker\ninserted\ngamma\n')
+    expect(notes).toEqual([
+      'hunk 2 matched 2 locations; applied at the first match after the previous hunk (line 4)',
+    ])
+  })
+
+  test('a first hunk that matches everywhere still fails, and says why', () => {
+    expect(() =>
+      applyUpdateHunks(
+        { content: 'foo\nbar\nfoo\nbar\n', lineEndings: 'LF' },
+        [
+          hunk({
+            lines: [
+              { kind: 'context', text: 'foo' },
+              { kind: 'context', text: 'bar' },
+              { kind: 'add', text: 'inserted' },
+            ],
+          }),
+        ],
+        '/tmp/example.ts',
+      ),
+    ).toThrow('the first hunk of an update must locate itself uniquely')
+  })
+
+  test('a later hunk whose every match sits behind the cursor asks for a reorder', () => {
+    expect(() =>
+      applyUpdateHunks(
+        { content: 'dup\nmid\ndup\nanchor\n', lineEndings: 'LF' },
+        [
+          hunk({
+            lines: [
+              { kind: 'context', text: 'anchor' },
+              { kind: 'add', text: 'appended' },
+            ],
+          }),
+          hunk({
+            lines: [
+              { kind: 'context', text: 'dup' },
+              { kind: 'add', text: 'inserted' },
+            ],
+          }),
+        ],
+        '/tmp/example.ts',
+      ),
+    ).toThrow(
+      'hunks apply in file order, and all 2 matches for hunk 2 (lines 1, 3) sit before the position established by the previous hunk — reorder the hunks',
+    )
+  })
+
+  test('a scope hint outranks the cursor and discloses nothing', () => {
+    const content = [
+      'class A {',
+      '  getValue() {',
+      '    return 1',
+      '  }',
+      '}',
+      'class B {',
+      '  getValue() {',
+      '    return 2',
+      '  }',
+      '}',
+      '// end',
+    ].join('\n') + '\n'
+
+    const notes: string[] = []
+    const result = applyUpdateHunks(
+      { content, lineEndings: 'LF' },
+      [
+        hunk({
+          lines: [
+            { kind: 'context', text: '// end' },
+            { kind: 'add', text: '// appended' },
+          ],
+        }),
+        hunk({
+          // Both matches sit behind the cursor the first hunk established, so
+          // only the hint can place this one.
+          scopeHints: ['class B'],
+          lines: [
+            { kind: 'context', text: '  getValue() {' },
+            { kind: 'add', text: '    // hinted' },
+          ],
+        }),
+      ],
+      '/tmp/example.ts',
+      undefined,
+      notes,
+    )
+
+    expect(result.content).toBe(
+      [
+        'class A {',
+        '  getValue() {',
+        '    return 1',
+        '  }',
+        '}',
+        'class B {',
+        '  getValue() {',
+        '    // hinted',
+        '    return 2',
+        '  }',
+        '}',
+        '// end',
+        '// appended',
+      ].join('\n') + '\n',
+    )
+    expect(notes).toEqual([])
+  })
+
+  test('the applyPatchToBuffers result entry carries the disclosure', () => {
+    const result = applyPatchToBuffers(
+      [
+        {
+          type: 'update',
+          path: '/tmp/example.test.ts',
+          hunks: [
+            hunk({
+              lines: [
+                { kind: 'context', text: "test('b', () => {" },
+                { kind: 'delete', text: '  two()' },
+                { kind: 'add', text: '  two updated()' },
+              ],
+            }),
+            hunk({
+              lines: [
+                { kind: 'context', text: '})' },
+                { kind: 'add', text: '// tail' },
+              ],
+            }),
+          ],
+        },
+      ],
+      new Map([
+        ['/tmp/example.test.ts', fileState('/tmp/example.test.ts', SEQUENTIAL_FILE)],
+      ]),
+    )
+
+    expect(result.files[0]?.notes).toEqual([
+      'hunk 2 matched 2 locations; applied at the first match after the previous hunk (line 6)',
+    ])
+  })
+
+  test('an unambiguous patch records no disclosure', () => {
+    const result = applyPatchToBuffers(
+      [
+        {
+          type: 'update',
+          path: '/tmp/example.txt',
+          hunks: [
+            hunk({
+              lines: [
+                { kind: 'context', text: 'one' },
+                { kind: 'delete', text: 'two' },
+                { kind: 'add', text: 'two updated' },
+              ],
+            }),
+          ],
+        },
+      ],
+      new Map([['/tmp/example.txt', fileState('/tmp/example.txt', 'one\ntwo\n')]]),
+    )
+
+    expect(result.files[0]?.notes).toBeUndefined()
+  })
+})
+
 describe('applyPatchToBuffers', () => {
   test('applies add, update, and delete atomically in memory', () => {
     const currentFiles = new Map<string, ApplyPatchFileState>([
@@ -795,6 +1034,31 @@ describe('FilePatchTool.mapToolResultToToolResultBlockParam', () => {
     expect(content).toContain('Added /x/new.ts')
     expect(content).toContain('Deleted /x/gone.ts')
   })
+
+  test('puts a placement disclosure on its own file line', () => {
+    const result = FilePatchTool.mapToolResultToToolResultBlockParam(
+      {
+        files: [
+          { path: '/x/a.ts', type: 'update', structuredPatch: [] },
+          {
+            path: '/x/b.ts',
+            type: 'update',
+            structuredPatch: [],
+            notes: [
+              'hunk 3 matched 21 locations; applied at the first match after the previous hunk (line 118)',
+            ],
+          },
+        ],
+      },
+      'tool-1',
+    )
+
+    const lines = (result.content as string).split('\n')
+    expect(lines).toContain('Updated /x/a.ts')
+    expect(lines).toContain(
+      'Updated /x/b.ts: hunk 3 matched 21 locations; applied at the first match after the previous hunk (line 118)',
+    )
+  })
 })
 
 describe('FilePatchTool.call transcript payload', () => {
@@ -1103,6 +1367,22 @@ describe('FilePatchTool.outputSchema back-compat', () => {
     expect(
       outputSchema().safeParse({
         files: [{ ...base, firstLine: 'const a = 1' }],
+      }).success,
+    ).toBe(true)
+  })
+
+  test('accepts a result that carries placement notes', () => {
+    expect(
+      outputSchema().safeParse({
+        files: [
+          {
+            ...base,
+            firstLine: 'const a = 1',
+            notes: [
+              'hunk 2 matched 2 locations; applied at the first match after the previous hunk (line 6)',
+            ],
+          },
+        ],
       }).success,
     ).toBe(true)
   })
