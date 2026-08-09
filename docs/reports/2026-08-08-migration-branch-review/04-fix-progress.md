@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 110/242** — counted against the review's original 61 High and
+**Progress: Fix 111/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -114,6 +114,7 @@ count tracks individually verified findings, not commit count.
 | S05 MED finished subagents retained their WebSocket sessions and full request clones | fixed | `d65bac1` | every terminal LocalAgentTask path now clears its `${sessionId}/${agentId}` WebSocket session with its Codex lease; lifecycle regression (16 pass), WebSocket transport suite (35 pass), and engine development build |
 | S01 MED empty deferred-continuation worker loaded the full CLI graph on every LaunchAgent tick | fixed | `f870199` | the entrypoint scans the queue before profiler or main-CLI import and enters normal headless resume only for a prepared job; runner suite (13 pass), real child-process probes (6 pass), and engine development build |
 | S01 MED deferred-continuation reset scheduling was duplicated across eligibility and runner paths | fixed | `90891dd` | one shared not-before helper preserves the 60-second reset grace and never-past rule for both initial scheduling and quota rescheduling; deferred-continuation suites (45 pass) and engine development build |
+| S01 MED deferred-continuation retry and reschedule terminal branches lacked behavioural coverage | fixed | `1237f9d2` | direct runner regression coverage proves unchanged quota resets stop for attention and the fourth transient-network failure stops instead of rearming; runner and hook suites (23 pass) and engine development build |
 
 ## Known verification limitation
 
