@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 71/242** — counted against the review's original 61 High and
+**Progress: Fix 72/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -75,6 +75,7 @@ count tracks individually verified findings, not commit count.
 | A18 MED Welcome-screen usage meters ignored the selected accent with hard-coded pink classes | fixed | `dfee305` | meters and labels now use the shared accent tokens; Welcome and Transcript suites (200 pass); renderer typecheck and production build; GUI fidelity remains operator-verifiable |
 | A18 MED `CodeThemePreview` duplicated transcript highlighting plugin configuration | fixed | `0650b84` | preview and transcript now import one non-component markdown-plugin module; preview/transcript suites (182 pass); renderer typecheck and production build; GUI fidelity remains operator-verifiable |
 | A18 MED Startup, Skills, Agents, and Settings exposed internal/unbuilt-feature vocabulary to users | fixed | `2a8947f` | copy now gives an operator action or a neutral configured state; affected renderer suites (63 pass); renderer typecheck and production build; GUI fidelity remains operator-verifiable |
+| A18 MED Welcome-screen Codex usage grid left its usage-window cells unlabeled | fixed | `ec3a649` | named 5-hour/weekly progress values and reset labels, with visual percentages hidden from duplicate announcement; Welcome and Transcript suites (200 pass); renderer typecheck and production build; GUI fidelity remains operator-verifiable |
 
 ## Known verification limitation
 
