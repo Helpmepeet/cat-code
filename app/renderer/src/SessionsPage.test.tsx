@@ -63,6 +63,7 @@ test('session rows use a named open button instead of a button role around neste
   const source = readFileSync(new URL('./SessionsPage.tsx', import.meta.url), 'utf8')
 
   expect(source).toContain('aria-label={`Open session ${row.displayLabel}`}')
+  expect(source).toContain("import { EmptyState } from './EmptyState.js'")
   expect(source).not.toContain("role={openable ? 'button' : undefined}")
 })
 

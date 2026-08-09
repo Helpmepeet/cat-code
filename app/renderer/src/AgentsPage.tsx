@@ -12,6 +12,7 @@ import {
 } from './agentConfigState.js'
 import { useModalFocus } from './overlayFocus.js'
 import { PathCopyButton } from './PathCopyButton.js'
+import { EmptyState } from './EmptyState.js'
 
 type SourceMeta = {
   label: string
@@ -111,8 +112,8 @@ export function AgentsPage({
         <EmptyState title="Open a session to see its agent definitions" />
       ) : snapshot.definitions.length === 0 ? (
         <EmptyState
+          description="Add agent files to this workspace or your user config to see them here."
           title="No agent definitions"
-          hint="Add agent files to this workspace or your user config to see them here."
         />
       ) : (
         groups.map(group => (
@@ -139,15 +140,6 @@ function SummaryCard({ label, value }: { label: string; value: number }) {
       <div className="text-[10.5px] uppercase tracking-[0.1em] text-text-subtle">
         {label}
       </div>
-    </div>
-  )
-}
-
-function EmptyState({ title, hint }: { title: string; hint?: string }) {
-  return (
-    <div className="py-14 text-center">
-      <div className="mb-1 text-sm font-medium text-text-subtle">{title}</div>
-      {hint ? <div className="text-xs text-text-subtle/75">{hint}</div> : null}
     </div>
   )
 }

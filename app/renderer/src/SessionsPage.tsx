@@ -38,6 +38,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from 'react'
+import { EmptyState } from './EmptyState.js'
 import { Chip } from './Chip.js'
 import {
   FOCUSABLE_ELEMENT_SELECTOR,
@@ -398,7 +399,7 @@ export function SessionsPage({
 
         {/* List */}
         {visible.length === 0 ? (
-          <EmptyState
+          <SessionsEmptyState
             catalogLoaded={catalogLoaded}
             searching={search.trim().length > 0}
             tagged={tagFilter !== 'all'}
@@ -885,7 +886,7 @@ function GroupHeader({
   )
 }
 
-function EmptyState({
+function SessionsEmptyState({
   catalogLoaded,
   searching,
   tagged,
@@ -908,12 +909,7 @@ function EmptyState({
     : searching || tagged
       ? 'Try a different filter.'
       : 'Start a new session to see it here.'
-  return (
-    <div className="py-14 text-center">
-      <div className="mb-1 text-sm font-medium text-text-subtle">{headline}</div>
-      {subtext ? <div className="text-xs text-text-subtle/75">{subtext}</div> : null}
-    </div>
-  )
+  return <EmptyState description={subtext ?? undefined} title={headline} />
 }
 
 /**
