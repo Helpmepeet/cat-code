@@ -69,3 +69,41 @@ test('a previewed pane resolves through the ONE shared vocabulary', () => {
     label: 'preview',
   })
 })
+
+/* ------------------------------------------------------------------------- *
+ * IDLE-PARK §1b — an intentional reclaim is not a crash
+ * ------------------------------------------------------------------------- */
+
+test('a parked row reads as resting, not crashed', () => {
+  // The descriptor is byte-identical to a crash by design (disconnected +
+  // restorable keeps the tab), so before `parked` existed every surface keyed on
+  // it called an intentional reclaim `crashed`. `busy` is the tone a preview
+  // already uses: a readable transcript with no engine, which re-engages on use.
+  expect(sessionStatusVisual('disconnected', true, true, true)).toEqual({
+    tone: 'busy',
+    label: 'idle',
+  })
+  // Same descriptor, NOT parked — still an honest crash.
+  expect(sessionStatusVisual('disconnected', true, true, false)).toEqual({
+    tone: 'dead',
+    label: 'crashed',
+  })
+})
+
+test('an unrestorable park stays dead, because it can never come back', () => {
+  // IDLE-PARK §1c: a session parked before it ever ran a turn has no transcript
+  // on disk, so `canResume` refuses it and both restore and restart fail.
+  // Painting that as resting would turn a visible failure into a silent one.
+  expect(sessionStatusVisual('disconnected', false, true, true)).toEqual({
+    tone: 'dead',
+    label: 'disconnected',
+  })
+})
+
+test('park never overrides a live status or a history row', () => {
+  // The host clears `parked` the moment a process exists, but the vocabulary
+  // must not depend on that: a live row reads live even if asked wrongly.
+  expect(sessionStatusVisual('ready', false, true, true).label).toBe('live')
+  expect(sessionStatusVisual('spawning', false, true, true).label).toBe('starting')
+  expect(sessionStatusVisual('history', false, false, true).label).toBe('history')
+})

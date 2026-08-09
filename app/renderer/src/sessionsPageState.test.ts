@@ -29,6 +29,7 @@ function row(
     displayLabel: partial.sessionId,
     live: false,
     restorable: false,
+    parked: false,
     status: 'history',
     inRegistry: false,
     modifiedAtMs: 0,

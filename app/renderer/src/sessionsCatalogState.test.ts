@@ -77,6 +77,7 @@ function descriptor(partial: Partial<SessionDescriptor> & { appSessionId: string
     titleUpdatedAt: null,
     status: 'ready',
     restorable: false,
+    parked: false,
     createdAt: 100,
     lastAttachedAt: 2000,
     lastMessageSentAt: null,
@@ -439,6 +440,7 @@ describe('selectMergedSessionRows', () => {
       status: 'history',
       live: false,
       restorable: false,
+      parked: false,
     })
   })
 
@@ -678,6 +680,7 @@ function row(partial: Partial<MergedSessionRow> & { sessionId: string }): Merged
     displayLabel: partial.sessionId,
     live: false,
     restorable: false,
+    parked: false,
     status: 'history',
     inRegistry: false,
     modifiedAtMs: 0,
@@ -716,6 +719,7 @@ describe('resolveSessionOpenRoute (P4-29 — one open decision, no per-caller co
         inRegistry: true,
         live: false,
         restorable: true,
+        parked: false,
         status: 'exited',
       }),
     )
@@ -747,6 +751,7 @@ describe('selectRecentWorkspaces (P4-17 Welcome recents)', () => {
         cwd: '/w/one',
         status: 'ready',
         restorable: false,
+        parked: false,
         lastAttachedAt: 3000,
       }),
     ],
@@ -940,6 +945,7 @@ describe('selectRecentWorkspaces label disambiguation (CC-15)', () => {
           cwd: '/Users/pt/cat-code/app',
           status: 'ready',
           restorable: false,
+          parked: false,
           lastAttachedAt: 5000,
         }),
       ],

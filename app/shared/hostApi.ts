@@ -98,6 +98,24 @@ export type SessionDescriptor = {
   status: 'spawning' | 'ready' | 'disconnected' | 'exited'
   /** Registry row + transcript both present (the row can be re-spawned). */
   restorable: boolean
+  /**
+   * This dead row's engine was RECLAIMED on purpose (IDLE-PARK), not lost.
+   *
+   * `status` cannot carry it: a park must project `disconnected` + `restorable`
+   * so `foldTabMembership` keeps the tab, which is byte-identical to a crash.
+   * IDLE-PARK §11 rejected this field to keep the renderer provably unaware park
+   * exists — but the 2026-08-05 ruling WITHDREW that goal ("a park must not
+   * present as a failure"), and without a descriptor signal the four
+   * descriptor-derived surfaces (Sessions page, ⌘K palette, sidebar row,
+   * debug export) went on calling an intentional reclaim `crashed` (§1b).
+   *
+   * False for every live row, so a restore in flight is never "parked". Pairs
+   * with `restorable`: a session parked before it ever ran a turn has no
+   * transcript and can never come back, and reads as dead rather than resting
+   * (§1c). Additive control-plane field, not a wire frame — no `protocol.ts`
+   * version bump (the `lastMessageSentAt` / `titleUpdatedAt` precedent).
+   */
+  parked: boolean
   createdAt: number
   lastAttachedAt: number
   /**

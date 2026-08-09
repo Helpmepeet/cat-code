@@ -54,6 +54,7 @@ test('PL-B cache is admitted by PL-A and the later click stays store-first', asy
     titleUpdatedAt: null,
     status: 'exited',
     restorable: true,
+    parked: false,
     createdAt: 1,
     lastAttachedAt: 2,
     lastMessageSentAt: null,

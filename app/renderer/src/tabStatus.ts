@@ -62,48 +62,40 @@ export function deriveTabVisualState(args: {
   const connectionDead =
     connection.status === 'dead' || connection.status === 'disconnected'
 
+  // IDLE-PARK — the two truth sources for "parked" are FUSED here, then handed
+  // to the shared vocabulary so this surface cannot drift from the four
+  // descriptor-derived ones. The host descriptor carries `parked` (§1b) and is
+  // authoritative on liveness; the renderer's own connection snapshot read the
+  // park exit code off the lifecycle frame and is authoritative on WHY the
+  // engine went away, and it is the FASTER of the two. Either alone is enough
+  // to know an engine was reclaimed rather than lost.
+  //
+  // Both spawning/ready gates stay: the connection snapshot holds `parked` until
+  // the resumed sidecar's `ready` frame, while the host reports `spawning` the
+  // moment a restore starts, so without them an unpark would paint the tab
+  // resting for the several seconds of a real engine boot and swallow the
+  // `starting` signal. `sessionStatusVisual` applies the third gate itself
+  // (`restorable`, the §1c honesty one).
+  const parked =
+    (descriptor.parked || connection.status === 'parked') &&
+    descriptor.status !== 'spawning' &&
+    descriptor.status !== 'ready'
+
   let { label, tone } = sessionStatusVisual(
     descriptor.status,
     descriptor.restorable,
     true,
+    parked,
   )
   let restartable = false
 
-  // IDLE-PARK — the host descriptor for a parked session is byte-identical to a
-  // crash by design (decisions/IDLE-PARK.md §11: the distinction lives in the
-  // registry row, so the descriptor cannot carry it), which alone would paint an
-  // intentional reclaim with the danger dot and offer a Restart button for a
-  // session that needs no restarting. The renderer's OWN connection snapshot is
-  // where the distinction survives — it read the park exit code off the lifecycle
-  // frame — so the two truth sources are fused here, exactly as the `ready` +
-  // connectionDead escalation below fuses them in the other direction.
-  //
-  // `busy` is the tone a PREVIEW pane already uses, and for good reason: the two
-  // states are the same situation reached from opposite ends — a readable
-  // transcript with no engine behind it, which re-engages when the user uses it.
-  // No new tone, no new colour, and nothing for the user to do.
-  // Gated on the DESCRIPTOR still agreeing there is no process. The connection
-  // snapshot stays `parked` until the resumed sidecar's `ready` frame, but the
-  // host reports `spawning` as soon as the restore starts, so without this gate
-  // an unpark would paint `idle` for the several seconds of a real engine boot
-  // and swallow the `starting` signal. The host descriptor is the authority on
-  // liveness; the connection snapshot is only the authority on WHY it died.
-  // `restorable` is the third gate, and it is the honesty one. A session parked
-  // before it ever ran a turn has no transcript on disk (the engine writes one on
-  // the first message), so it can never be brought back — `canResume` refuses it
-  // and both restore and restart fail. Presenting that as a resting `idle` tab
-  // with no affordance would turn a visible failure into a silent one, which is
-  // the opposite of the point. Such a session falls through to the honest dead
-  // presentation below.
-  if (
-    connection.status === 'parked' &&
-    descriptor.status !== 'spawning' &&
-    descriptor.status !== 'ready' &&
-    descriptor.restorable
-  ) {
+  // A parked tab offers nothing to restart: the user's next message brings the
+  // engine back (§3a). `sessionStatusVisual` already refused the resting label
+  // for an unrestorable park, so this only fires where that label was granted.
+  if (parked && descriptor.restorable) {
     return {
-      label: 'idle',
-      tone: 'busy',
+      label,
+      tone,
       restartable: false,
       needsAttention: pendingPermissionCount > 0 && !isActive,
     }

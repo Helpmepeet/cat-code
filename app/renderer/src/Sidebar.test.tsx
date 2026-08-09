@@ -38,6 +38,7 @@ function registryRow(
     displayLabel: 'Alpha',
     live: true,
     restorable: false,
+    parked: false,
     status: 'ready',
     inRegistry: true,
     modifiedAtMs: 0,
@@ -65,6 +66,7 @@ function historyRow(
     inRegistry: false,
     live: false,
     restorable: false,
+    parked: false,
     status: 'history',
     ...over,
   })
@@ -318,6 +320,7 @@ test('a restorable registry row carries no dot at all', () => {
       displayLabel: 'R',
       live: false,
       restorable: true,
+      parked: false,
       status: 'exited',
     }),
   )
@@ -335,6 +338,7 @@ test('a non-restorable exited registry row carries no dot (row.live, not visual.
       displayLabel: 'X',
       live: false,
       restorable: false,
+      parked: false,
       status: 'exited',
     }),
   )
@@ -362,12 +366,14 @@ test('a mixed group paints exactly one dot in exactly one tone', () => {
       displayLabel: 'Beta',
       live: false,
       restorable: true,
+      parked: false,
       status: 'exited',
     }),
     registryRow('c', {
       displayLabel: 'Gamma',
       live: false,
       restorable: true,
+      parked: false,
       status: 'disconnected',
     }),
     historyRow('h', { displayLabel: 'Delta', cwd: '/tmp/proj' }),

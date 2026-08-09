@@ -55,6 +55,7 @@ export function buildDebugShellStateSnapshot(args: {
           descriptor.status,
           descriptor.restorable,
           true,
+          descriptor.parked,
         )
         return {
           appSessionId: descriptor.appSessionId,

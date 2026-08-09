@@ -805,6 +805,12 @@ export class Host implements HostApi {
       titleUpdatedAt: row?.titleUpdatedAt ?? null,
       status,
       restorable: this.isRestorable(row, liveStatus),
+      // IDLE-PARK §1b — the one bit `status` cannot carry, read off the same
+      // row marking the status branch above already tests. Gated on there being
+      // no live process: `upsertOnSpawn` clears `shutdown` on restore, but a
+      // descriptor built mid-spawn would otherwise still read the stale mark and
+      // paint a booting engine as resting.
+      parked: liveStatus === null && row?.shutdown === 'parked',
       createdAt: row?.createdAt ?? 0,
       lastAttachedAt: row?.lastAttachedAt ?? 0,
       // CC-2: the sidebar reads this for its recency text; null → the row falls

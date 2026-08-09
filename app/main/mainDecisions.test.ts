@@ -257,6 +257,7 @@ function row(overrides: Partial<SessionDescriptor> = {}): SessionDescriptor {
     titleUpdatedAt: null,
     status: 'exited',
     restorable: true,
+    parked: false,
     createdAt: 0,
     lastAttachedAt: 0,
     lastMessageSentAt: null,

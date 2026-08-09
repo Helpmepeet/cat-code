@@ -16,6 +16,7 @@ function row(
     displayLabel: partial.appSessionId,
     live: true,
     restorable: false,
+    parked: false,
     status: 'ready',
     inRegistry: true,
     modifiedAtMs: 0,

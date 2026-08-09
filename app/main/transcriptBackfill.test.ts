@@ -54,6 +54,7 @@ function descriptor(restorable: boolean): SessionDescriptor {
     titleUpdatedAt: null,
     status: restorable ? 'exited' : 'ready',
     restorable,
+    parked: false,
     createdAt: 1,
     lastAttachedAt: 2,
     lastMessageSentAt: null,

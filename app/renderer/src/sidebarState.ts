@@ -238,6 +238,7 @@ export function deriveMergedRowVisual(row: MergedSessionRow): MergedRowVisual {
     row.status,
     row.restorable,
     row.inRegistry,
+    row.parked,
   )
   if (!row.inRegistry) {
     // A resolvable, still-EXISTING cwd makes a history row openable (Part-A host

@@ -16,6 +16,7 @@ function descriptor(over: Partial<SessionDescriptor>): SessionDescriptor {
     titleUpdatedAt: null,
     status: 'ready',
     restorable: false,
+    parked: false,
     createdAt: 1,
     lastAttachedAt: 1,
     lastMessageSentAt: null,
