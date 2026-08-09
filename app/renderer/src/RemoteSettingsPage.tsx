@@ -21,10 +21,13 @@ import type {
   RemoteVerbMessage,
 } from '../../shared/protocol.js'
 import { Chip } from './Chip.js'
+import { directConnectResultForRequest } from './remoteSettingsPageModel.js'
 import { PaneSection } from './SettingsField.js'
 import { useToast } from './toastContext.js'
 
 const newRequestId = (): string => crypto.randomUUID()
+
+type DirectConnectDetails = NonNullable<RemoteSettingsResultFrame['directConnect']>
 
 export function RemoteSettingsPage({
   embedded = false,
@@ -273,27 +276,27 @@ function DirectConnectSection({
   const toast = useToast()
   const [serverUrl, setServerUrl] = useState('')
   const [connecting, setConnecting] = useState(false)
+  const [connected, setConnected] = useState<DirectConnectDetails | null>(null)
   const pendingRequestId = useRef<string | null>(null)
 
-  const matched =
-    !!lastResult &&
-    lastResult.verb === 'remoteSettings.directConnect' &&
-    lastResult.requestId === pendingRequestId.current
-
   useEffect(() => {
-    if (!matched || !lastResult) return
+    const matched = directConnectResultForRequest(
+      pendingRequestId.current,
+      lastResult,
+    )
+    if (!matched) return
     pendingRequestId.current = null
     setConnecting(false)
-    toast(lastResult.message, { tone: lastResult.ok ? 'success' : 'danger' })
-  }, [matched, lastResult, toast])
-
-  const connected = matched && lastResult?.ok ? lastResult.directConnect : undefined
+    setConnected(matched.ok ? (matched.directConnect ?? null) : null)
+    toast(matched.message, { tone: matched.ok ? 'success' : 'danger' })
+  }, [lastResult, toast])
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault()
     if (!serverUrl.trim() || connecting) return
     const requestId = newRequestId()
     pendingRequestId.current = requestId
+    setConnected(null)
     setConnecting(true)
     onVerb({ type: 'remoteSettings.directConnect', requestId, serverUrl: serverUrl.trim() })
   }
