@@ -291,7 +291,7 @@ async function dumpErrorPrompts(
     messages: number
     action: string
     model: string
-    attemptedModels?: string[]
+    attemptedAttempts?: string[]
   },
 ): Promise<string | null> {
   try {
@@ -302,8 +302,8 @@ async function dumpErrorPrompts(
       `=== CONTEXT COMPARISON ===\n` +
       `timestamp: ${new Date().toISOString()}\n` +
       `model: ${contextInfo.model}\n` +
-      (contextInfo.attemptedModels
-        ? `attemptedModels: ${contextInfo.attemptedModels.join(',')}\n`
+      (contextInfo.attemptedAttempts
+        ? `attemptedAttempts: ${contextInfo.attemptedAttempts.join(',')}\n`
         : '') +
       `mainLoopTokens: ${contextInfo.mainLoopTokens}\n` +
       `classifierChars: ${contextInfo.classifierChars}\n` +
@@ -866,6 +866,7 @@ const CLASSIFIER_FALLBACK_STATUSES = new Set([408, 429, 500, 502, 503, 504, 529]
 const NON_FALLBACK_CODEX_ERROR_NAMES = new Set([
   'CodexAccountCapError',
   'CodexAccountAuthError',
+  'CodexAccountUnavailableError',
 ])
 
 function isClassifierFallbackError(error: unknown): boolean {
@@ -1051,12 +1052,14 @@ export async function classifyYoloAction(
       )
     : null
   let attemptIndex = 0
+  let attemptsMade = 0
   let provider = gatedAttempts?.[0]?.provider
   if (gatedAttempts?.[0]) model = gatedAttempts[0].model
-  const attemptedModels: string[] = []
+  const attemptedAttempts: string[] = []
 
   for (;;) {
-    attemptedModels.push(model)
+    attemptsMade++
+    attemptedAttempts.push(`${provider ?? 'default'}/${model}`)
     // The classifier uses a single schema-backed tool contract and does not
     // emit or parse XML.
     const [disableThinking, thinkingPadding] =
@@ -1255,6 +1258,7 @@ export async function classifyYoloAction(
       if (
         gatedAttempts &&
         !tooLong &&
+        attemptsMade < configuredMaxRetries + 1 &&
         isClassifierAttemptFallbackError(error)
       ) {
         const failedProvider = provider
@@ -1302,7 +1306,7 @@ export async function classifyYoloAction(
           messages: messages.length,
           action: actionCompact,
           model,
-          attemptedModels,
+          attemptedAttempts,
         })) ?? undefined
       // No API usage on error — use classifierTokensEst / mainLoopTokens
       // for the ratio. Overflow errors are the critical divergence signal.

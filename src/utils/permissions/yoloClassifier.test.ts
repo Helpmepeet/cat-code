@@ -14,11 +14,12 @@ describe('auto mode provider ladder', () => {
     ])
   })
 
-  test('deduplicates a configured GPT model and applies one global retry budget', () => {
+  test('deduplicates a configured GPT model without truncating the ladder', () => {
     expect(getAutoModeClassifierAttempts('gpt-5.6-terra', 2, 'bedrock')).toEqual([
       { provider: 'openai', model: 'gpt-5.6-terra' },
       { provider: 'openai', model: 'gpt-5.6-sol' },
       { provider: 'openai', model: 'gpt-5.6-luna' },
+      { provider: 'bedrock', model: 'sonnet' },
     ])
   })
 })

@@ -13,7 +13,7 @@ const GPT_CLASSIFIER_FALLBACKS = [
 
 export function getAutoModeClassifierAttempts(
   configuredModel: string,
-  maxRetries: number,
+  _maxRetries: number,
   anthropicProvider: Exclude<APIProvider, 'openai'>,
 ): AutoModeClassifierAttempt[] {
   const attempts: AutoModeClassifierAttempt[] = configuredModel.startsWith(
@@ -43,5 +43,4 @@ export function getAutoModeClassifierAttempts(
       seen.add(key)
       return true
     })
-    .slice(0, maxRetries + 1)
 }
