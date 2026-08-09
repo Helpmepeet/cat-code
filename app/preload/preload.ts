@@ -46,7 +46,8 @@ import type {
 } from '../shared/hostApi.js'
 import type { DebugRendererSnapshot } from '../shared/debugState.js'
 import { MAX_SAVE_TEXT_BYTES } from '../shared/limits.js'
-import { createRendererIpcGuard, RendererIpcRejection } from './rendererIpcGuard.js'
+import { createRendererIpcGuard } from './rendererIpcGuard.js'
+import { DeliveryAckQueue } from './deliveryAckQueue.js'
 
 declare const __CATCODE_DEV_HARNESS__: boolean
 
@@ -81,27 +82,6 @@ const deliveryDocumentId = crypto.randomUUID()
 const deliveryProcessInstanceId = crypto.randomUUID()
 const deliveryProcessStartedAt = new Date().toISOString()
 let deliverySubscriptionEpoch = 0
-const deliveryWatermarks = new Map<string, { received: number; applied: number; committed: number }>()
-const pendingDeliveryAcknowledgements: DeliveryAcknowledgement[] = []
-let deliveryAckFlushTimer: ReturnType<typeof setTimeout> | null = null
-/** The last attempt was rejected by the rate guard and the batch is still queued. */
-let deliveryAckRetrying = false
-const MAX_DELIVERY_ACKS_PER_BATCH = 64
-/**
- * Retained acknowledgements are trimmed to this on each failed attempt, so the
- * true peak is this plus whatever arrives before the next one. 16 batches is
- * roughly 256 traced frames, which a fast stream can reach inside a second, so
- * treat it as a bound on unbounded growth rather than as headroom.
- */
-const MAX_PENDING_DELIVERY_ACKS = 1024
-/**
- * A microtask drains at the end of the CURRENT task, and each delivered frame
- * arrives in its own task, so a microtask flush coalesced nothing in steady
- * state: one frame cost one guarded send. A short timer batches across tasks,
- * which is what keeps diagnostics from spending the shared inbound budget
- * (`MAX_FRAMES_PER_WINDOW`) that real user actions draw on.
- */
-const DELIVERY_ACK_FLUSH_MS = 50
 let rendererFaultWindowStartedAt = Date.now()
 let rendererFaultCount = 0
 const MAX_RENDERER_FAULTS_PER_MINUTE = 12
@@ -127,6 +107,30 @@ function canReportRendererFault(): boolean {
   return true
 }
 
+const sendGuard = createRendererIpcGuard()
+
+// Delivery-acknowledgement queue — diagnostics traffic (CC-40).
+// Extracted to deliveryAckQueue.ts for testability; wired here with the real
+// Electron IPC send and the shared rate guard.
+const deliveryAckQueue = new DeliveryAckQueue(
+  {
+    assertAllowed: (payload, kind) => sendGuard.assertAllowed(payload, kind),
+    send: (ipcChannel, payload) => ipcRenderer.send(ipcChannel, payload),
+    documentId: deliveryDocumentId,
+    processInstanceId: deliveryProcessInstanceId,
+    processStartedAt: deliveryProcessStartedAt,
+    getSubscriptionEpoch: () => deliverySubscriptionEpoch,
+    setTimeout: (fn, ms) => setTimeout(fn, ms),
+    clearTimeout: (handle) => clearTimeout(handle),
+  },
+  {
+    channel: CH_DELIVERY_ACK,
+    maxBatchSize: 64,
+    maxPending: 1024,
+    flushIntervalMs: 50,
+  },
+)
+
 function sendDeliveryAcknowledgement(
   sessionId: string,
   sequence: number,
@@ -135,85 +139,9 @@ function sendDeliveryAcknowledgement(
   traceId: string,
   stage: DeliveryAcknowledgement['stage'],
 ): void {
-  const payload: DeliveryAcknowledgement = {
-    sessionId,
-    streamEpoch,
-    sequence,
-    deliveryAttempt,
-    traceId,
-    stage,
-    documentId: deliveryDocumentId,
-    subscriptionEpoch: deliverySubscriptionEpoch,
-    rendererProcessInstanceId: deliveryProcessInstanceId,
-    rendererProcessStartedAt: deliveryProcessStartedAt,
-  }
-  pendingDeliveryAcknowledgements.push(payload)
-  // While retrying, every push would otherwise re-enter the batch branch and
-  // serialize 64 acknowledgements again just to be rejected again. Wait for the
-  // timer instead: the window is 1000ms, so the budget is never far from rolling.
-  if (!deliveryAckRetrying && pendingDeliveryAcknowledgements.length >= MAX_DELIVERY_ACKS_PER_BATCH) {
-    flushDeliveryAcknowledgements()
-  } else {
-    scheduleDeliveryAcknowledgementFlush()
-  }
-  const current = deliveryWatermarks.get(sessionId) ?? { received: 0, applied: 0, committed: 0 }
-  if (stage === 'preload.received' || stage === 'renderer.subscription.received') current.received = Math.max(current.received, sequence)
-  if (stage === 'renderer.state.applied') current.applied = Math.max(current.applied, sequence)
-  if (stage === 'renderer.ui.committed') current.committed = Math.max(current.committed, sequence)
-  deliveryWatermarks.set(sessionId, current)
+  deliveryAckQueue.push(sessionId, sequence, deliveryAttempt, streamEpoch, traceId, stage)
 }
 
-function scheduleDeliveryAcknowledgementFlush(): void {
-  if (deliveryAckFlushTimer !== null) return
-  deliveryAckFlushTimer = setTimeout(flushDeliveryAcknowledgements, DELIVERY_ACK_FLUSH_MS)
-}
-
-function flushDeliveryAcknowledgements(): void {
-  if (deliveryAckFlushTimer !== null) {
-    clearTimeout(deliveryAckFlushTimer)
-    deliveryAckFlushTimer = null
-  }
-  while (pendingDeliveryAcknowledgements.length > 0) {
-    const acknowledgements = pendingDeliveryAcknowledgements.splice(0, MAX_DELIVERY_ACKS_PER_BATCH)
-    const payload = { acknowledgements }
-    // These are diagnostics, and the rejection must not escape: this runs on a
-    // React effect stack whenever the batch branch above fires synchronously,
-    // and an exception there reaches the error boundary, whose own reporter is
-    // blocked by the same spent budget. That pair unmounted the renderer to a
-    // black window on 2026-08-09.
-    try {
-      // The only diagnostics-class sender: high volume, rate set by engine
-      // output rather than by the user, and losing one costs evidence only.
-      sendGuard.assertAllowed(payload, 'diagnostics')
-      ipcRenderer.send(CH_DELIVERY_ACK, payload)
-    } catch (error) {
-      // Only a rate rejection clears on its own. A size or serialization
-      // rejection is a property of the payload, so retrying it would re-reject
-      // the identical bytes every tick forever and the queue would never drain.
-      if (!(error instanceof RendererIpcRejection) || error.reason !== 'rate') {
-        return
-      }
-      // Keep the batch and retry rather than dropping it. `updateWatermarks`
-      // advances each stage by a CONTIGUOUS scan (`app/main/deliveryTraceSink.ts`),
-      // so a discarded batch pins `applied` below `produced` for the rest of the
-      // stream and `firstMissing` then reports a renderer stall that never
-      // happened — the same symptom the 2026-08-09 investigation was chasing.
-      // This narrows that to starvation deeper than the bound below rather than
-      // eliminating it: any ack actually dropped still pins the watermark.
-      pendingDeliveryAcknowledgements.unshift(...acknowledgements)
-      // Drop the NEWEST beyond the bound. `contiguous()` resumes from the
-      // current watermark, so keeping the head lets it advance through the
-      // retained sequences; keeping the tail would pin it immediately.
-      if (pendingDeliveryAcknowledgements.length > MAX_PENDING_DELIVERY_ACKS) {
-        pendingDeliveryAcknowledgements.splice(MAX_PENDING_DELIVERY_ACKS)
-      }
-      deliveryAckRetrying = true
-      scheduleDeliveryAcknowledgementFlush()
-      return
-    }
-  }
-  deliveryAckRetrying = false
-}
 
 ipcRenderer.on(CH_DELIVERY_HEALTH_PROBE, () => {
   const payload = {
@@ -222,7 +150,7 @@ ipcRenderer.on(CH_DELIVERY_HEALTH_PROBE, () => {
     rendererProcessInstanceId: deliveryProcessInstanceId,
     monotonicTimestampMs: performance.now(),
     eventLoopLagMs: lastMeasuredEventLoopLagMs,
-    watermarks: [...deliveryWatermarks.entries()].slice(0, 32).map(([sessionId, value]) => ({ sessionId, ...value })),
+    watermarks: [...deliveryAckQueue.getWatermarks().entries()].slice(0, 32).map(([sessionId, value]) => ({ sessionId, ...value })),
   }
   // Telemetry, and wrapped like the other telemetry senders, but deliberately
   // CONTROL class for the budget (IPC-RATE-BUDGET §4): it is roughly one frame
@@ -251,8 +179,6 @@ const CH_HOST_OPEN_HISTORY = 'catcode:host:open-history'
 const CH_HOST_SAVE_TEXT = 'catcode:host:save-text'
 const CH_HOST_EVENT = 'catcode:host:event'
 const CH_HOST_VISIBLE_SESSIONS = 'catcode:host:visible-sessions'
-
-const sendGuard = createRendererIpcGuard()
 
 const bridge: CatCodeBridge = {
   submit(sessionId: SessionId, prompt: SubmitPrompt, options?: SubmitOptions): void {

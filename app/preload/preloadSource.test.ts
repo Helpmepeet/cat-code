@@ -194,8 +194,9 @@ test('P4-35: the file sink carries no destination the renderer could author (HC1
 
 test('failure-path senders keep the rate guard but never let its rejection escape', () => {
   const source = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
+  const queueSource = readFileSync(new URL('./deliveryAckQueue.ts', import.meta.url), 'utf8')
 
-  // 2026-08-09 black window: both of these run when something has ALREADY gone
+  // 2026-08-09 black window: all of these run when something has ALREADY gone
   // wrong — the ack flush on a React effect stack, the fault reporter from
   // `componentDidCatch` — and a throw from either unmounted the renderer. The
   // guard must still run, so an over-budget payload is DROPPED rather than sent
@@ -203,7 +204,6 @@ test('failure-path senders keep the rate guard but never let its rejection escap
   // All THREE telemetry senders, including the health probe: the commit that
   // wrapped it claimed parity with the other two, and only a pin makes that true.
   for (const [open, close] of [
-    ['function flushDeliveryAcknowledgements(): void {', '\n}'],
     ['reportRendererFault(kind, message): void {', '\n  },'],
     ['ipcRenderer.on(CH_DELIVERY_HEALTH_PROBE, () => {', '\n})'],
   ] as const) {
@@ -213,33 +213,36 @@ test('failure-path senders keep the rate guard but never let its rejection escap
     expect(body).toContain('sendGuard.assertAllowed')
     expect(body.indexOf('try {')).toBeGreaterThan(-1)
     expect(body.indexOf('try {')).toBeLessThan(body.indexOf('sendGuard.assertAllowed'))
-    // `} catch` rather than `} catch {`: the ack flush binds the error so it can
-    // tell a rate rejection from a poison batch.
     expect(body).toContain('} catch')
-    // The send must sit INSIDE the same try, after the guard. Asserting only
-    // that a try and a catch exist would pass this, which is the exact T7
-    // regression the assertions above claim to prevent:
-    //   try { sendGuard.assertAllowed(payload) } catch {}
-    //   ipcRenderer.send(CH, payload)   // sends what the guard rejected
     expect(body.indexOf('ipcRenderer.send')).toBeGreaterThan(body.indexOf('sendGuard.assertAllowed'))
     expect(body.indexOf('ipcRenderer.send')).toBeLessThan(body.indexOf('} catch'))
   }
+
+  // The extracted delivery ack queue flush method keeps the guard inside try/catch
+  const flushStart = queueSource.indexOf('private flush(): void {')
+  expect(flushStart).toBeGreaterThan(-1)
+  const flushBody = queueSource.slice(flushStart, queueSource.indexOf('\n  }', flushStart))
+  expect(flushBody).toContain('this.deps.assertAllowed')
+  expect(flushBody.indexOf('try {')).toBeGreaterThan(-1)
+  expect(flushBody.indexOf('try {')).toBeLessThan(flushBody.indexOf('this.deps.assertAllowed'))
+  expect(flushBody).toContain('} catch')
+  expect(flushBody.indexOf('this.deps.send')).toBeGreaterThan(flushBody.indexOf('this.deps.assertAllowed'))
+  expect(flushBody.indexOf('this.deps.send')).toBeLessThan(flushBody.indexOf('} catch'))
 })
 
 test('only the acknowledgement flush is diagnostics class', () => {
   const source = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
+  const queueSource = readFileSync(new URL('./deliveryAckQueue.ts', import.meta.url), 'utf8')
 
   // The entire rate-budget reservation (IPC-RATE-BUDGET §4) is this one
-  // argument. Delete it and every suite stays green while the starvation that
-  // caused the 2026-08-09 black window comes straight back, so it is pinned
-  // here in both directions.
-  const flush = source.slice(
-    source.indexOf('function flushDeliveryAcknowledgements(): void {'),
-  )
-  expect(flush).toContain("sendGuard.assertAllowed(payload, 'diagnostics')")
+  // argument in the acknowledgement queue.
+  const flushStart = queueSource.indexOf('private flush(): void {')
+  expect(flushStart).toBeGreaterThan(-1)
+  const flush = queueSource.slice(flushStart)
+  expect(flush).toContain("this.deps.assertAllowed(payload, 'diagnostics')")
 
-  const diagnosticsCallSites = [...source.matchAll(/assertAllowed\([^)]*'diagnostics'/g)]
-  expect(diagnosticsCallSites.length).toBe(1)
+  const queueDiagnosticsCallSites = [...queueSource.matchAll(/assertAllowed\([^)]*'diagnostics'/g)]
+  expect(queueDiagnosticsCallSites.length).toBe(1)
 
   // The fault reporter and the health probe are telemetry too, but stay CONTROL
   // class deliberately: the reporter matters most exactly when the window is
@@ -255,11 +258,11 @@ test('only the acknowledgement flush is diagnostics class', () => {
 })
 
 test('acknowledgement flushing batches across tasks rather than per delivered frame', () => {
-  const source = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
+  const queueSource = readFileSync(new URL('./deliveryAckQueue.ts', import.meta.url), 'utf8')
 
   // A microtask drains at the end of the current task and each frame arrives in
   // its own task, so `queueMicrotask` coalesced nothing in steady state: one
   // frame cost one guarded send against the budget real user actions draw on.
-  expect(source).not.toContain('queueMicrotask(flushDeliveryAcknowledgements)')
-  expect(source).toContain('setTimeout(flushDeliveryAcknowledgements, DELIVERY_ACK_FLUSH_MS)')
+  expect(queueSource).not.toContain('queueMicrotask')
+  expect(queueSource).toContain('this.deps.setTimeout')
 })
