@@ -189,7 +189,14 @@ async function maybeDumpAutoMode(
   timestamp: number,
   suffix?: string,
 ): Promise<void> {
-  if (process.env.USER_TYPE !== 'ant') return
+  // Opt-in for everyone, not just ant builds. This is the only way to see the
+  // exact prompt and verdict for a real tool call, and it is what a replay
+  // corpus is captured from — reconstructing those inputs from session JSONL is
+  // lossy, because tool_result blocks never reach the classifier.
+  //
+  // The dump contains the full classifier request, so it carries whatever the
+  // transcript carried. It stays behind an explicit env var and writes only to
+  // the local temp dir; it is never enabled by default and never uploaded.
   if (!isEnvTruthy(process.env.CLAUDE_CODE_DUMP_AUTO_MODE)) return
   const base = suffix ? `${timestamp}.${suffix}` : `${timestamp}`
   try {
