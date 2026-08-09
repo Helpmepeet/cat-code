@@ -6,6 +6,7 @@ import {
 } from './codex-websocket-transport.js'
 
 import {
+  _getConversationIdForRequestForTest,
   _hasStickyHttpFallbackForTest,
   _markStickyHttpFallbackForTest,
   _primeCodexEventsForTest,
@@ -42,6 +43,24 @@ type WsListener = (...args: unknown[]) => void
 type FakeWsBatchItem =
   | Record<string, unknown>
   | { __close: { code?: number; reason?: string; wasClean?: boolean } }
+
+test('failover conversation IDs are stable per account/model pair across cache resets', () => {
+  const primary = _getConversationIdForRequestForTest('acct-primary', 'gpt-5.6')
+  const failover = _getConversationIdForRequestForTest('acct-failover', 'gpt-5.6')
+
+  resetCodexCacheContext()
+
+  expect(
+    _getConversationIdForRequestForTest('acct-primary', 'gpt-5.6'),
+  ).toBe(primary)
+  expect(
+    _getConversationIdForRequestForTest('acct-failover', 'gpt-5.6'),
+  ).toBe(failover)
+  expect(failover).not.toBe(primary)
+  expect(failover).toMatch(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  )
+})
 
 class FakeWebSocket {
   static OPEN = 1

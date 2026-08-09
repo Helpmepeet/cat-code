@@ -16,8 +16,7 @@
  */
 
 import { APIConnectionError } from '@anthropic-ai/sdk'
-import { createHash } from 'crypto'
-import { randomUUID } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import { logForDebugging } from '../../utils/debug.js'
 import { logEvent } from '../analytics/index.js'
 import { getCurrentCodexLease } from './codexAccountLeaseManager.js'
@@ -180,6 +179,19 @@ function clearStickyHttpFallback(
   }
 }
 
+function stableConversationIdForCacheKey(cacheKey: string): string {
+  const hash = createHash('sha256')
+    .update(codexPromptCacheKey ?? CODEX_SESSION_ID)
+    .update('\0')
+    .update(cacheKey)
+    .digest('hex')
+  // Preserve UUID shape: the backend accepts a conventional UUID conversation
+  // identity, while this UUIDv5-shaped value remains stable across restarts.
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-${
+    ['8', '9', 'a', 'b'][parseInt(hash[16]!, 16) & 0x3]!
+  }${hash.slice(17, 20)}-${hash.slice(20, 32)}`
+}
+
 function getConversationIdForRequest(
   accountId: string,
   model: string,
@@ -195,12 +207,17 @@ function getConversationIdForRequest(
     return existingConversationId
   }
 
-  const conversationId =
-    conversationIdsByCacheKey.size === 0
-      ? (codexPromptCacheKey ?? CODEX_SESSION_ID)
-      : randomUUID()
+  const conversationId = stableConversationIdForCacheKey(cacheKey)
   conversationIdsByCacheKey.set(cacheKey, conversationId)
   return conversationId
+}
+
+export function _getConversationIdForRequestForTest(
+  accountId: string,
+  model: string,
+  conversationIdOverride?: string,
+): string {
+  return getConversationIdForRequest(accountId, model, conversationIdOverride)
 }
 
 export function _markStickyHttpFallbackForTest(
