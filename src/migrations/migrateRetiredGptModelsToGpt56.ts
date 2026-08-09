@@ -19,7 +19,7 @@ function remapModelList(models: string[]): string[] {
  * intentionally left alone; runtime model resolution remaps their explicit
  * legacy values without mutating configuration the user does not own here.
  */
-export function migrateRetiredGptModelsToGpt56(): void {
+export function migrateRetiredGptModelsToGpt56(): Error | null {
   const settings = getSettingsForSource('userSettings')
   if (settings) {
     const model = settings.model
@@ -48,11 +48,12 @@ export function migrateRetiredGptModelsToGpt56(): void {
       ? availableModels.join('\u0000') !== settings.availableModels?.join('\u0000')
       : false
     if (remappedModel !== model || changedAvailableModels || changedOverrides) {
-      updateSettingsForSource('userSettings', {
+      const { error } = updateSettingsForSource('userSettings', {
         ...(remappedModel !== model ? { model: remappedModel } : {}),
         ...(changedAvailableModels ? { availableModels } : {}),
         ...(changedOverrides ? { modelOverrides } : {}),
       })
+      if (error) return error
     }
   }
 
@@ -63,4 +64,5 @@ export function migrateRetiredGptModelsToGpt56(): void {
       setMainLoopModelOverride(remappedOverride)
     }
   }
+  return null
 }

@@ -17,7 +17,7 @@ function remapModelList(models: string[]): string[] {
  * their Claude 5 replacements. Runtime parsing also remaps project, local,
  * managed, CLI, and environment pins without mutating those sources.
  */
-export function migrateRetiredClaude46ModelsToClaude5(): void {
+export function migrateRetiredClaude46ModelsToClaude5(): Error | null {
   const settings = getSettingsForSource('userSettings')
   if (settings) {
     const model = settings.model
@@ -46,11 +46,12 @@ export function migrateRetiredClaude46ModelsToClaude5(): void {
       ? availableModels.join('\u0000') !== settings.availableModels?.join('\u0000')
       : false
     if (remappedModel !== model || changedAvailableModels || changedOverrides) {
-      updateSettingsForSource('userSettings', {
+      const { error } = updateSettingsForSource('userSettings', {
         ...(remappedModel !== model ? { model: remappedModel } : {}),
         ...(changedAvailableModels ? { availableModels } : {}),
         ...(changedOverrides ? { modelOverrides } : {}),
       })
+      if (error) return error
     }
   }
 
@@ -61,4 +62,5 @@ export function migrateRetiredClaude46ModelsToClaude5(): void {
       setMainLoopModelOverride(remappedOverride)
     }
   }
+  return null
 }

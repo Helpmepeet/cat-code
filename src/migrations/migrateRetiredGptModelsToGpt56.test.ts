@@ -25,6 +25,7 @@ let userSettings: SettingsJson | null = null
 let updateCalls: Array<Partial<SettingsJson>> = []
 let mainLoopOverride: string | undefined
 let mainLoopOverrideWrites: Array<string | undefined> = []
+let updateError: Error | null = null
 
 const actualSettings = await import('../utils/settings/settings.js')
 mock.module('../utils/settings/settings.js', () => ({
@@ -50,7 +51,7 @@ mock.module('../utils/settings/settings.js', () => ({
         ...(patch.modelOverrides ? { modelOverrides: mergedOverrides } : {}),
       }
     }
-    return { error: null }
+    return { error: updateError }
   },
 }))
 
@@ -73,6 +74,7 @@ beforeEach(() => {
   updateCalls = []
   mainLoopOverride = undefined
   mainLoopOverrideWrites = []
+  updateError = null
 })
 
 afterEach(() => {
@@ -80,6 +82,14 @@ afterEach(() => {
 })
 
 describe('migrateRetiredGptModelsToGpt56', () => {
+  test('reports a settings-write error so startup keeps the migration pending', () => {
+    userSettings = { model: 'gpt-5.4' }
+    updateError = new Error('settings lock unavailable')
+
+    expect(migrateRetiredGptModelsToGpt56()).toBe(updateError)
+    expect(mainLoopOverrideWrites).toEqual([])
+  })
+
   test('remaps every user-owned model surface and de-duplicates the resulting allowlist', () => {
     userSettings = {
       model: 'gpt-5.4',
@@ -194,5 +204,6 @@ test('startup wiring tripwire keeps the migration imported and invoked by runMig
     "import { migrateRetiredGptModelsToGpt56 } from './migrations/migrateRetiredGptModelsToGpt56.js';",
   )
   const runMigrations = mainSource.slice(mainSource.indexOf('function runMigrations'))
-  expect(runMigrations).toContain('migrateRetiredGptModelsToGpt56();')
+  expect(runMigrations).toContain('migrateRetiredGptModelsToGpt56()')
+  expect(runMigrations).toContain('if (settingsMigrationError)')
 })

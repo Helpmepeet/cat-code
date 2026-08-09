@@ -8,6 +8,7 @@ let updateCalls: Array<Partial<SettingsJson>> = []
 let mainLoopOverride: string | undefined
 let mainLoopOverrideWrites: Array<string | undefined> = []
 let provider = 'firstParty'
+let updateError: Error | null = null
 
 const actualSettings = await import('../utils/settings/settings.js')
 mock.module('../utils/settings/settings.js', () => ({
@@ -34,7 +35,7 @@ mock.module('../utils/settings/settings.js', () => ({
         ...(patch.modelOverrides ? { modelOverrides: mergedOverrides } : {}),
       }
     }
-    return { error: null }
+    return { error: updateError }
   },
 }))
 
@@ -77,6 +78,7 @@ beforeEach(() => {
   mainLoopOverride = undefined
   mainLoopOverrideWrites = []
   provider = 'firstParty'
+  updateError = null
   for (const key of ENV_KEYS) {
     envSnapshot.set(key, process.env[key])
     delete process.env[key]
@@ -97,6 +99,14 @@ afterEach(() => {
 })
 
 describe('migrateRetiredClaude46ModelsToClaude5', () => {
+  test('reports a settings-write error so startup keeps the migration pending', () => {
+    userSettings = { model: 'claude-sonnet-4-6' }
+    updateError = new Error('settings lock unavailable')
+
+    expect(migrateRetiredClaude46ModelsToClaude5()).toBe(updateError)
+    expect(mainLoopOverrideWrites).toEqual([])
+  })
+
   test('remaps every first-party user-owned model surface without overwriting a current override', () => {
     userSettings = {
       model: 'claude-sonnet-4-6[1m]',
@@ -239,7 +249,8 @@ test('startup wiring tripwire keeps the Claude 4.6 retirement migration active',
     "import { migrateRetiredClaude46ModelsToClaude5 } from './migrations/migrateRetiredClaude46ModelsToClaude5.js';",
   )
   const runMigrations = mainSource.slice(mainSource.indexOf('function runMigrations'))
-  expect(runMigrations).toContain('migrateRetiredClaude46ModelsToClaude5();')
+  expect(runMigrations).toContain('migrateRetiredClaude46ModelsToClaude5()')
+  expect(runMigrations).toContain('if (settingsMigrationError)')
 
   // A migration only actually runs for existing users if it is wired into the
   // migrationVersion gate/bump: users who already have migrationVersion ===
@@ -251,7 +262,7 @@ test('startup wiring tripwire keeps the Claude 4.6 retirement migration active',
   const gateIndex = runMigrations.indexOf(
     'if (getGlobalConfig().migrationVersion !== CURRENT_MIGRATION_VERSION)',
   )
-  const callIndex = runMigrations.indexOf('migrateRetiredClaude46ModelsToClaude5();')
+  const callIndex = runMigrations.indexOf('migrateRetiredClaude46ModelsToClaude5()')
   const saveIndex = runMigrations.indexOf('saveGlobalConfig(')
   expect(gateIndex).toBeGreaterThanOrEqual(0)
   expect(callIndex).toBeGreaterThan(gateIndex)

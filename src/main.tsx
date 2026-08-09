@@ -334,7 +334,7 @@ async function logStartupTelemetry(): Promise<void> {
 
 // @[MODEL LAUNCH]: Consider any migrations you may need for model strings. See migrateSonnet1mToSonnet45.ts for an example.
 // Bump this when adding a new sync migration so existing users re-run the set.
-const CURRENT_MIGRATION_VERSION = 14;
+const CURRENT_MIGRATION_VERSION = 15;
 function runMigrations(): void {
   if (getGlobalConfig().migrationVersion !== CURRENT_MIGRATION_VERSION) {
     migrateAutoUpdatesToSettings();
@@ -343,8 +343,11 @@ function runMigrations(): void {
     resetProToOpusDefault();
     migrateSonnet1mToSonnet45();
     migrateLegacyOpusToCurrent();
-    migrateRetiredGptModelsToGpt56();
-    migrateRetiredClaude46ModelsToClaude5();
+    const settingsMigrationError = migrateRetiredGptModelsToGpt56() ?? migrateRetiredClaude46ModelsToClaude5();
+    if (settingsMigrationError) {
+      logError(settingsMigrationError);
+      return;
+    }
     migrateSonnet45ToSonnet46();
     migrateOpusToOpus1m();
     migrateReplBridgeEnabledToRemoteControlAtStartup();
