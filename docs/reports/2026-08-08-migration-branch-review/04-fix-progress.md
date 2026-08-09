@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 37/242** — counted against the review's original 61 High and
+**Progress: Fix 38/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -41,6 +41,7 @@ count tracks individually verified findings, not commit count.
 | S03 MED in-process teammates drop built-in/plugin agent definitions | fixed | `d65f448` | built-in prompt/tool-filtering regression (13 pass); development build |
 | V15 MED session-open route allows history opens after its cwd disappears | fixed | `446a52c` | session-catalog route regression (62 pass); renderer typecheck and production build |
 | V26 HIGH default permission-mode update can clobber concurrent rules and leak merged rules into user settings | fixed | `b58fa2a` | user-scoped updater regression (1 pass); development build |
+| V31 HIGH discarded deferred-continuation commands retain the session lock | fixed | `1caba13` | queue-clear deferred-registration regression (11 pass); development build |
 
 ## Known verification limitation
 
