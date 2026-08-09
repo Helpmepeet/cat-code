@@ -335,7 +335,6 @@ async function logStartupTelemetry(): Promise<void> {
 // @[MODEL LAUNCH]: Consider any migrations you may need for model strings. See migrateSonnet1mToSonnet45.ts for an example.
 // Bump this when adding a new sync migration so existing users re-run the set.
 const CURRENT_MIGRATION_VERSION = 15;
-const DEFERRED_CONTINUATION_WORKER_MAX_TURNS = 20;
 function runMigrations(): void {
   if (getGlobalConfig().migrationVersion !== CURRENT_MIGRATION_VERSION) {
     migrateAutoUpdatesToSettings();
@@ -612,18 +611,6 @@ const _pendingSSH: PendingSSH | undefined = feature('SSH_REMOTE') ? {
 } : undefined;
 export async function main() {
   profileCheckpoint('main_function_start');
-
-  // Fixed internal one-shot worker entry. It accepts no arguments and selects
-  // its job only from the validated private queue. The trusted runner restores
-  // cwd/worktree before this function reaches settings, instructions, skills,
-  // tools, or project bootstrap, then threads the job through normal headless
-  // resume using process-local state rather than a public option.
-  if (process.argv.slice(2).length === 1 && process.argv[2] === 'deferred-continuation-worker') {
-    const runner = await import('./services/deferredContinuationRunner.js');
-    const job = await runner.prepareBackgroundDeferredContinuation();
-    if (!job) return;
-    process.argv = [process.argv[0]!, process.argv[1]!, runner.getContinuationPrompt(job), '--print', '--resume', job.sessionId, '--model', job.context.model, '--permission-mode', job.context.permissionMode, '--max-turns', String(DEFERRED_CONTINUATION_WORKER_MAX_TURNS), '--output-format', 'json'];
-  }
 
   // SECURITY: Prevent Windows from executing commands from current directory
   // This must be set before ANY command execution to prevent PATH hijacking attacks

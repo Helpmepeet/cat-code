@@ -1,5 +1,7 @@
 import { feature } from 'bun:bundle';
 
+const DEFERRED_CONTINUATION_WORKER_MAX_TURNS = 20;
+
 // Define MACRO global for development (normally injected by bun build --define)
 if (typeof MACRO === 'undefined') {
   (globalThis as any).MACRO = {
@@ -56,6 +58,31 @@ async function main(): Promise<void> {
     // biome-ignore lint/suspicious/noConsole:: intentional console output
     console.log(`${MACRO.VERSION} (Cat Code)`);
     return;
+  }
+
+  // Launchd invokes this once per minute while background continuation is
+  // enabled. Check the private queue before loading the CLI graph; the empty
+  // case should only pay for the runner's filesystem scan.
+  if (args.length === 1 && args[0] === 'deferred-continuation-worker') {
+    const runner = await import('../services/deferredContinuationRunner.js');
+    const job = await runner.prepareBackgroundDeferredContinuation();
+    if (!job) return;
+    process.argv = [
+      process.argv[0]!,
+      process.argv[1]!,
+      runner.getContinuationPrompt(job),
+      '--print',
+      '--resume',
+      job.sessionId,
+      '--model',
+      job.context.model,
+      '--permission-mode',
+      job.context.permissionMode,
+      '--max-turns',
+      String(DEFERRED_CONTINUATION_WORKER_MAX_TURNS),
+      '--output-format',
+      'json',
+    ];
   }
 
   // For all other paths, load the startup profiler

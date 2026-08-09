@@ -103,14 +103,30 @@ afterEach(async () => {
 
 describe('deferred continuation runner', () => {
   test('the background worker argv has a finite agentic turn cap', () => {
-    const mainSource = readFileSync(
-      new URL('../main.tsx', import.meta.url),
+    const cliSource = readFileSync(
+      new URL('../entrypoints/cli.tsx', import.meta.url),
       'utf8',
     )
 
-    expect(mainSource).toContain('DEFERRED_CONTINUATION_WORKER_MAX_TURNS = 20')
-    expect(mainSource).toContain("'--max-turns'")
-    expect(mainSource).toContain('String(DEFERRED_CONTINUATION_WORKER_MAX_TURNS)')
+    expect(cliSource).toContain('DEFERRED_CONTINUATION_WORKER_MAX_TURNS = 20')
+    expect(cliSource).toContain("'--max-turns'")
+    expect(cliSource).toContain('String(DEFERRED_CONTINUATION_WORKER_MAX_TURNS)')
+  })
+
+  test('the empty background worker checks its queue before importing the full CLI', () => {
+    const cliSource = readFileSync(
+      new URL('../entrypoints/cli.tsx', import.meta.url),
+      'utf8',
+    )
+
+    const workerFastPath = cliSource.indexOf("args[0] === 'deferred-continuation-worker'")
+    const profilerImport = cliSource.indexOf("await import('../utils/startupProfiler.js')")
+    const mainImport = cliSource.indexOf("await import('../main.js')")
+
+    expect(workerFastPath).toBeGreaterThan(-1)
+    expect(workerFastPath).toBeLessThan(profilerImport)
+    expect(workerFastPath).toBeLessThan(mainImport)
+    expect(cliSource).toContain("await import('../services/deferredContinuationRunner.js')")
   })
 
   test('fixed prompts are cause-correct and contain the reconciliation/no-repeat contract', () => {
