@@ -18,6 +18,7 @@ import {
 import {
   CodexAccountAuthError,
   CodexAccountCapError,
+  CodexResponseFailedError,
   createCodexFetch,
   resetCodexCacheContext,
 } from './codex-fetch-adapter.js'
@@ -132,6 +133,41 @@ describe('account recovery diagnostics', () => {
       getSessionId: () => 'account-recovery-test-session',
       createUuid: () => `diag-${diagnostics.length + 1}`,
     })
+  })
+
+  test('does not retry or fail over a wrapped deterministic response.failed', async () => {
+    let attempts = 0
+    let thrown: unknown
+    try {
+      for await (const _message of withRetry(
+        async () => ({}) as never,
+        async () => {
+          attempts += 1
+          throw new APIConnectionError({
+            cause: new CodexResponseFailedError({
+              code: 'invalid_request_error',
+              message: 'tool schema is invalid',
+            }),
+          })
+        },
+        {
+          maxRetries: 3,
+          model: 'gpt-5.6-luna',
+          thinkingConfig: { type: 'disabled' },
+          isCodexRequest: true,
+        } as Parameters<typeof withRetry>[2],
+      )) {
+        // The failure is terminal before a retry message can be yielded.
+      }
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(attempts).toBe(1)
+    expect(thrown).toBeInstanceOf(CannotRetryError)
+    expect((thrown as CannotRetryError).originalError).toBeInstanceOf(
+      CodexResponseFailedError,
+    )
   })
 
   afterEach(() => {

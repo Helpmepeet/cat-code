@@ -10,6 +10,7 @@ import type { SystemAPIErrorMessage } from 'src/types/message.js'
 import {
   CodexAccountAuthError,
   CodexAccountCapError,
+  CodexResponseFailedError,
 } from './codex-fetch-adapter.js'
 import {
   failoverCodexLease,
@@ -276,7 +277,8 @@ function unwrapCodexAccountError(error: unknown): unknown {
     return error
   }
   return error.cause instanceof CodexAccountAuthError ||
-    error.cause instanceof CodexAccountCapError
+    error.cause instanceof CodexAccountCapError ||
+    error.cause instanceof CodexResponseFailedError
     ? error.cause
     : error
 }
@@ -588,6 +590,14 @@ export async function* withRetry<T>(
         `API error (attempt ${attempt}/${maxRetries + 1}): ${error instanceof APIError ? `${error.status} ${error.message}` : errorMessage(error)}`,
         { level: 'error' },
       )
+
+      // `response.failed` is a completed upstream verdict (for example, an
+      // invalid request or policy rejection), not a transport outage. The SDK
+      // can wrap it in APIConnectionError, so stop before generic retry or
+      // account failover resends the same deterministic failure.
+      if (error instanceof CodexResponseFailedError) {
+        throw new CannotRetryError(error, retryContext)
+      }
 
       // Codex account failover: on 429 from a pool-managed account, cap
       // the failed account. Rotate only when another selectable account exists.
