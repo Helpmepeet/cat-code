@@ -1,12 +1,11 @@
-import { chmodSync } from 'fs'
 import { join } from 'path'
 import { getClaudeConfigHomeDir } from '../envUtils.js'
 import { getErrnoCode } from '../errors.js'
+import { writeFileSyncAndFlush_DEPRECATED } from '../file.js'
 import { getFsImplementation } from '../fsOperations.js'
 import {
   jsonParse,
   jsonStringify,
-  writeFileSync_DEPRECATED,
 } from '../slowOperations.js'
 import type { SecureStorage, SecureStorageData } from './types.js'
 
@@ -46,7 +45,10 @@ export const plainTextStorage = {
     try {
       const { storageDir, storagePath } = getStoragePath()
       try {
-        getFsImplementation().mkdirSync(storageDir)
+        getFsImplementation().mkdirSync(storageDir, {
+          recursive: true,
+          mode: 0o700,
+        })
       } catch (e: unknown) {
         const code = getErrnoCode(e)
         if (code !== 'EEXIST') {
@@ -54,11 +56,10 @@ export const plainTextStorage = {
         }
       }
 
-      writeFileSync_DEPRECATED(storagePath, jsonStringify(data), {
+      writeFileSyncAndFlush_DEPRECATED(storagePath, jsonStringify(data), {
         encoding: 'utf8',
-        flush: false,
+        mode: 0o600,
       })
-      chmodSync(storagePath, 0o600)
       return {
         success: true,
         warning: 'Warning: Storing credentials in plaintext.',
