@@ -406,118 +406,122 @@ export function StartupOAuth({
   onSubmitAlias: (alias: string) => void
   onRetry: () => void
 }): ReactNode {
-  if (view.phase === 'waiting') {
-    return (
-      <StartupShell step="auth" onEscape={onCancel}>
-        <h1 className="mb-2 text-[22px] font-semibold tracking-tight text-text-primary">
-          Continue in your browser
-        </h1>
-        <p className="mb-5 max-w-[420px] text-[13px] leading-relaxed text-text-muted">
-          Opening browser to sign in… authorize the request, then return here.
-          Your {provider === 'anthropic' ? 'Anthropic' : 'Codex'} account appears
-          once the engine captures the callback.
-        </p>
-        <OAuthWaitingBody url={view.url} onPasteCode={onPasteCode} />
-        <SecondaryButton onClick={onCancel}>Cancel</SecondaryButton>
-      </StartupShell>
-    )
-  }
+  switch (view.phase) {
+    case 'waiting':
+      return (
+        <StartupShell step="auth" onEscape={onCancel}>
+          <h1 className="mb-2 text-[22px] font-semibold tracking-tight text-text-primary">
+            Continue in your browser
+          </h1>
+          <p className="mb-5 max-w-[420px] text-[13px] leading-relaxed text-text-muted">
+            Opening browser to sign in… authorize the request, then return here.
+            Your {provider === 'anthropic' ? 'Anthropic' : 'Codex'} account appears
+            once the engine captures the callback.
+          </p>
+          <OAuthWaitingBody url={view.url} onPasteCode={onPasteCode} />
+          <SecondaryButton onClick={onCancel}>Cancel</SecondaryButton>
+        </StartupShell>
+      )
 
-  if (view.phase === 'success') {
-    return (
-      <StartupShell step="auth" onEscape={onCancel}>
-        <h1 className="mb-2 text-[22px] font-semibold tracking-tight text-text-primary">
-          Signed in
-        </h1>
-        <p className="mb-5 max-w-[420px] text-[13px] leading-relaxed text-text-muted">
-          Account linked. Setting up your workspace…
-        </p>
-        <div className="flex items-center gap-2.5 rounded-[9px] border border-shell-seam bg-app-bg px-3.5 py-3">
-          <OAuthCheck />
-          <span className="text-[12.5px] text-text-muted">Authorized</span>
-        </div>
-      </StartupShell>
-    )
-  }
+    case 'success':
+      return (
+        <StartupShell step="auth" onEscape={onCancel}>
+          <h1 className="mb-2 text-[22px] font-semibold tracking-tight text-text-primary">
+            Signed in
+          </h1>
+          <p className="mb-5 max-w-[420px] text-[13px] leading-relaxed text-text-muted">
+            Account linked. Setting up your workspace…
+          </p>
+          <div className="flex items-center gap-2.5 rounded-[9px] border border-shell-seam bg-app-bg px-3.5 py-3">
+            <OAuthCheck />
+            <span className="text-[12.5px] text-text-muted">Authorized</span>
+          </div>
+        </StartupShell>
+      )
 
-  if (view.phase === 'alias') {
-    return <AliasForm onSubmitAlias={onSubmitAlias} onCancel={onCancel} />
-  }
+    case 'alias':
+      return <AliasForm onSubmitAlias={onSubmitAlias} onCancel={onCancel} />
 
-  if (view.phase === 'error') {
-    return (
-      <StartupShell step="auth" onEscape={onCancel}>
-        <div className="mb-5">
-          <Pill tone="danger" label="OAuth error" />
-        </div>
-        <h1 className="mb-2.5 text-[22px] font-semibold tracking-tight text-text-primary">
-          Sign-in didn&apos;t complete
-        </h1>
-        <p className="mb-4 max-w-[420px] text-[13px] leading-relaxed text-text-muted">
-          The browser flow was cancelled or timed out before authorization came
-          back.
-        </p>
-        <div className="mb-[22px] rounded-lg border border-tone-danger/20 bg-tone-danger/[0.06] px-3 py-2.5">
-          <code className="break-all font-mono text-[12px] text-tone-danger">
-            OAuth error: {view.message}
-          </code>
-        </div>
-        <div className="flex gap-2">
-          <PrimaryButton autoFocus onClick={onRetry}>
-            Retry <span className="ml-1.5 text-[11px] opacity-60">↵</span>
-          </PrimaryButton>
-          <SecondaryButton onClick={onCancel}>Back</SecondaryButton>
-        </div>
-      </StartupShell>
-    )
-  }
+    case 'error':
+      return (
+        <StartupShell step="auth" onEscape={onCancel}>
+          <div className="mb-5">
+            <Pill tone="danger" label="OAuth error" />
+          </div>
+          <h1 className="mb-2.5 text-[22px] font-semibold tracking-tight text-text-primary">
+            Sign-in didn&apos;t complete
+          </h1>
+          <p className="mb-4 max-w-[420px] text-[13px] leading-relaxed text-text-muted">
+            The browser flow was cancelled or timed out before authorization came
+            back.
+          </p>
+          <div className="mb-[22px] rounded-lg border border-tone-danger/20 bg-tone-danger/[0.06] px-3 py-2.5">
+            <code className="break-all font-mono text-[12px] text-tone-danger">
+              OAuth error: {view.message}
+            </code>
+          </div>
+          <div className="flex gap-2">
+            <PrimaryButton autoFocus onClick={onRetry}>
+              Retry <span className="ml-1.5 text-[11px] opacity-60">↵</span>
+            </PrimaryButton>
+            <SecondaryButton onClick={onCancel}>Back</SecondaryButton>
+          </div>
+        </StartupShell>
+      )
 
-  return (
-    <StartupShell step="auth" onEscape={onCancel}>
-      <div className="mb-5">
-        <Pill tone="info" label="Sign in" />
-      </div>
-      <h1 className="mb-2.5 text-[22px] font-semibold tracking-tight text-text-primary">
-        Choose your provider
-      </h1>
-      <p className="mb-5 max-w-[460px] text-[13px] leading-relaxed text-text-muted">
-        Link an Anthropic Claude or ChatGPT / Codex subscription. You can switch
-        models later without signing out.
-      </p>
-      <div className="flex flex-col gap-2.5">
-        <div className="flex items-center gap-3 rounded-[10px] border border-shell-seam bg-shell-hover/20 px-3.5 py-3">
-          <span className="inline-flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[7px] border border-accent/25 bg-accent/10 text-[13px] font-bold text-accent">
-            A
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block text-[13.5px] font-semibold text-text-primary">
-              Anthropic · Claude subscription
-            </span>
-            <span className="text-[11.5px] text-text-subtle">
-              Claude Opus, Sonnet, and Haiku via Anthropic OAuth
-            </span>
-          </span>
-          <PrimaryButton autoFocus onClick={() => onBegin('anthropic')}>
-            Open browser to sign in
-          </PrimaryButton>
-        </div>
-        <div className="flex items-center gap-3 rounded-[10px] border border-shell-seam bg-shell-hover/20 px-3.5 py-3">
-          <span className="inline-flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[7px] border border-tone-info/25 bg-tone-info/10 text-[13px] font-bold text-tone-info">
-            C
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block text-[13.5px] font-semibold text-text-primary">
-              Codex · ChatGPT subscription
-            </span>
-            <span className="text-[11.5px] text-text-subtle">
-              OpenAI models via ChatGPT / Codex OAuth
-            </span>
-          </span>
-          <PrimaryButton onClick={() => onBegin('openai')}>
-            Open browser to sign in
-          </PrimaryButton>
-        </div>
-      </div>
-    </StartupShell>
-  )
+    case 'ready':
+      return (
+        <StartupShell step="auth" onEscape={onCancel}>
+          <div className="mb-5">
+            <Pill tone="info" label="Sign in" />
+          </div>
+          <h1 className="mb-2.5 text-[22px] font-semibold tracking-tight text-text-primary">
+            Choose your provider
+          </h1>
+          <p className="mb-5 max-w-[460px] text-[13px] leading-relaxed text-text-muted">
+            Link an Anthropic Claude or ChatGPT / Codex subscription. You can switch
+            models later without signing out.
+          </p>
+          <div className="flex flex-col gap-2.5">
+            <div className="flex items-center gap-3 rounded-[10px] border border-shell-seam bg-shell-hover/20 px-3.5 py-3">
+              <span className="inline-flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[7px] border border-accent/25 bg-accent/10 text-[13px] font-bold text-accent">
+                A
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[13.5px] font-semibold text-text-primary">
+                  Anthropic · Claude subscription
+                </span>
+                <span className="text-[11.5px] text-text-subtle">
+                  Claude Opus, Sonnet, and Haiku via Anthropic OAuth
+                </span>
+              </span>
+              <PrimaryButton autoFocus onClick={() => onBegin('anthropic')}>
+                Open browser to sign in
+              </PrimaryButton>
+            </div>
+            <div className="flex items-center gap-3 rounded-[10px] border border-shell-seam bg-shell-hover/20 px-3.5 py-3">
+              <span className="inline-flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[7px] border border-tone-info/25 bg-tone-info/10 text-[13px] font-bold text-tone-info">
+                C
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[13.5px] font-semibold text-text-primary">
+                  Codex · ChatGPT subscription
+                </span>
+                <span className="text-[11.5px] text-text-subtle">
+                  OpenAI models via ChatGPT / Codex OAuth
+                </span>
+              </span>
+              <PrimaryButton onClick={() => onBegin('openai')}>
+                Open browser to sign in
+              </PrimaryButton>
+            </div>
+          </div>
+        </StartupShell>
+      )
+
+    default: {
+      const exhaustive: never = view
+      return exhaustive
+    }
+  }
 }
