@@ -178,6 +178,7 @@ test('CC-32 — dismiss() on a RUNNING worker fails closed (that is task.stop te
   const result = await domain.dismiss('t1')
 
   expect(result.ok).toBe(false)
+  expect(result.refusal).toBe('still_running')
   expect(result.message).toContain('still running')
   expect(store.getState().tasks.t1?.status).toBe('running')
   expect(notifications).toBe(0)
@@ -195,6 +196,10 @@ test('CC-32 — dismiss() on an UNKNOWN taskId fails closed, no store mutation',
   const result = await domain.dismiss('does-not-exist')
 
   expect(result.ok).toBe(false)
+  // The refusal CODE survives the domain boundary, because `not_found` means
+  // something different to the server than `still_running` does: no live task
+  // holds the row, so the persisted plane is the only thing left rendering it.
+  expect(result.refusal).toBe('not_found')
   expect(store.getState().tasks.g1).toBeDefined()
   expect(notifications).toBe(0)
 })

@@ -53,6 +53,7 @@ import { createSidecarTasksDomain, type SidecarTasksDomain } from './tasksDomain
 import {
   createSidecarTaskControlDomain,
   type SidecarTaskControlDomain,
+  type TaskDismissResult,
 } from './taskControlDomain.js'
 import {
   createSidecarAgentModeDomain,
@@ -1889,7 +1890,7 @@ test('P4-8b — rejects agent-mode.set carrying an unexpected key (checkStrictKe
  * drives a fresh `tasks.snapshot`.
  */
 function fakeTaskControlDomain(
-  override?: (taskId: string) => { ok: boolean; message: string },
+  override?: (taskId: string) => TaskDismissResult,
 ): {
   domain: SidecarTaskControlDomain
   calls: string[]
@@ -1911,7 +1912,7 @@ function fakeTaskControlDomain(
 }
 
 function makeTaskControlServer(
-  override?: (taskId: string) => { ok: boolean; message: string },
+  override?: (taskId: string) => TaskDismissResult,
 ): { server: SidecarServer; calls: string[]; dismissCalls: string[] } {
   const { domain, calls, dismissCalls } = fakeTaskControlDomain(override)
   const server = makeServer(
@@ -2364,9 +2365,61 @@ test('CC-32 — a SUCCESSFUL dismiss records the worker with the agent-mode doma
   expect(received.filter(f => f.kind === 'agent-mode.snapshot').length).toBeGreaterThan(before)
 })
 
+test('CC-32 — a PERSISTED-ONLY worker (no live task) is dismissible: not_found suppresses the row and acks ok, instead of a dead control', async () => {
+  // The commonest stale row there is: the reaper already evicted the live task, so
+  // the row now comes from the persisted plane alone and `readSessionState` stamps
+  // it `origin: 'current'`. Refusing here left Dismiss visible but inert.
+  const { domain: taskControl } = fakeTaskControlDomain(() => ({
+    ok: false,
+    refusal: 'not_found' as const,
+    message: 'That worker is already gone.',
+  }))
+  const { domain: agentMode, dismissed } = fakeAgentModeDomain()
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined, // permissions
+    undefined, // goals
+    undefined, // accounts
+    undefined, // workspaceTrust
+    undefined, // diagnostics
+    undefined, // remoteSettings
+    undefined, // tasks
+    undefined, // extensions
+    agentMode,
+    undefined, // settings
+    undefined, // runControls
+    undefined, // sessionActions
+    taskControl,
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  const before = received.filter(f => f.kind === 'agent-mode.snapshot').length
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'task.dismiss', requestId: 'td8', taskId: 'w-persisted' } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  for (let i = 0; i < 50 && !received.some(f => f.kind === 'task-control.result'); i += 1) {
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+  const result = received.find(f => f.kind === 'task-control.result')
+  // The operator sees the row go, so the ack must not read as a failure.
+  expect(result && result.kind === 'task-control.result' && result.ok).toBe(true)
+  expect(dismissed).toEqual(['w-persisted'])
+  // No store mutated on this path, so no subscription fired: the explicit
+  // re-broadcast is the ONLY thing carrying the suppression to the renderer.
+  expect(received.filter(f => f.kind === 'agent-mode.snapshot').length).toBeGreaterThan(before)
+})
+
 test('CC-32 — a REFUSED dismiss records nothing: a row the engine kept must not be suppressed in the other plane', async () => {
   const { domain: taskControl } = fakeTaskControlDomain(() => ({
     ok: false,
+    refusal: 'still_running' as const,
     message: 'That worker is still running. Stop it first.',
   }))
   const { domain: agentMode, dismissed } = fakeAgentModeDomain()

@@ -116,7 +116,10 @@ import type { SidecarTasksDomain } from './tasksDomain.js'
 import type { SidecarAgentModeDomain } from './agentModeDomain.js'
 import type { SidecarLeaseDomain } from './leaseDomain.js'
 import type { SidecarPanelTaskReaper } from './panelTaskReaper.js'
-import type { SidecarTaskControlDomain } from './taskControlDomain.js'
+import type {
+  SidecarTaskControlDomain,
+  TaskDismissResult,
+} from './taskControlDomain.js'
 import type { SidecarRunControlsDomain } from './runControlsDomain.js'
 import type { SidecarSessionActionsDomain } from './sessionActionsDomain.js'
 import type { SidecarContextBreakdownDomain } from './contextBreakdownDomain.js'
@@ -1949,17 +1952,8 @@ export class SidecarServer {
     const verb = parsed.data as TaskControlVerbMessage
     const result =
       verb.type === 'task.dismiss'
-        ? await this.taskControl.dismiss(verb.taskId)
+        ? await this.dismissWorker(verb.taskId)
         : await this.taskControl.stop(verb.taskId)
-    if (verb.type === 'task.dismiss' && result.ok && this.agentMode) {
-      // The eviction removed the LIVE row, which un-masks this worker's persisted
-      // twin in the session plane (`agentModeDomain.ts` union policy) and would put
-      // the dismissed row straight back. Record the dismissal, then re-broadcast:
-      // the store-subscription re-broadcast already fired inside the eviction
-      // ABOVE this line, so it went out before the domain knew.
-      this.agentMode.noteWorkerDismissed(verb.taskId)
-      void this.broadcastAgentModeSnapshot()
-    }
     this.send(connection, {
       kind: 'task-control.result',
       protocolVersion: PROTOCOL_VERSION,
@@ -1972,8 +1966,42 @@ export class SidecarServer {
     // No explicit snapshot re-broadcast here — on a successful stop, `stopTask`
     // mutated the store, and the tasks/agent-mode store-subscriptions (constructor)
     // re-emit `tasks.snapshot` / `agent-mode.snapshot` with the task now `killed`.
-    // A dismiss takes the same route: the eviction removes the task from the store,
-    // and the same subscriptions re-emit snapshots that no longer carry the row.
+    // A dismiss needs one more step, which `dismissWorker` owns.
+  }
+
+  /**
+   * The two-plane half of a dismiss (CC-32 follow-up). `taskControl` can only see
+   * the LIVE `AppState.tasks`, but a worker's roster row has a second source: the
+   * persisted agent-mode plane, which `agentModeSnapshot` unions in whenever no
+   * live worker MASKS it by handle (`agentModeDomain.ts` union policy). Retiring
+   * the row therefore takes both planes, and only this layer sees both.
+   *
+   * `not_found` is consequently NOT a failed dismiss. It means nothing live holds
+   * the row, which leaves the persisted twin as the only thing still rendering it
+   * — exactly what the suppression below retires. Treating it as a refusal made
+   * the control dead on the commonest shape there is: `readSessionState` stamps
+   * `origin: worker.origin ?? 'current'` (`src/agent-mode/sessionState.ts:672`), so
+   * every worker the reaper has already evicted comes back as a persisted row that
+   * looks current, offers Dismiss, and refused it. `still_running` and
+   * `unsupported_type` stay refusals: there the engine holds real state, and
+   * hiding a row it still owns would be a display lie.
+   *
+   * The explicit re-broadcast is required rather than redundant: on this path no
+   * store mutation happens at all, so no subscription fires and nothing else would
+   * carry the suppression to the renderer.
+   */
+  private async dismissWorker(taskId: string): Promise<TaskDismissResult> {
+    if (!this.taskControl) {
+      return { ok: false, message: 'Could not dismiss the worker.' }
+    }
+    const result = await this.taskControl.dismiss(taskId)
+    const retiresRow = result.ok || result.refusal === 'not_found'
+    if (!retiresRow || !this.agentMode) {
+      return result
+    }
+    this.agentMode.noteWorkerDismissed(taskId)
+    void this.broadcastAgentModeSnapshot()
+    return result.ok ? result : { ok: true, message: 'Dismissed worker.' }
   }
 
   /**

@@ -122,7 +122,18 @@ export type SidecarTaskControlDomain = {
    * and fail-closed the same way `stop` is: an unknown / still-running / non-worker
    * target degrades to `ok:false` with no side effect.
    */
-  dismiss(taskId: string): Promise<TaskStopResult>
+  dismiss(taskId: string): Promise<TaskDismissResult>
+}
+
+/**
+ * A dismiss outcome, carrying WHY it was refused. The code survives the domain
+ * boundary because the live store is not the only plane a worker's row can come
+ * from: a `not_found` means nothing LIVE holds this row, which is a different
+ * situation from `still_running`, and only the server can see the other plane.
+ * Flattening both into prose here would force the server to match on strings.
+ */
+export type TaskDismissResult = TaskStopResult & {
+  refusal?: TaskDismissRefusal
 }
 
 export function createSidecarTaskControlDomain(
@@ -161,7 +172,11 @@ export function createSidecarTaskControlDomain(
       try {
         const outcome = await executor.dismiss(taskId)
         if (!outcome.ok) {
-          return { ok: false, message: dismissRefusalMessage(outcome.code) }
+          return {
+            ok: false,
+            refusal: outcome.code,
+            message: dismissRefusalMessage(outcome.code),
+          }
         }
         const label = outcome.display ? ` ${outcome.display}` : ''
         return { ok: true, message: `Dismissed worker${label}.` }

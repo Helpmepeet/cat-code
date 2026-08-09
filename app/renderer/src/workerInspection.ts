@@ -107,8 +107,13 @@ export function selectWorkerStopTargetId(
  * engine stamp no `evictAfter` at all (`LocalAgentTask.tsx:540,548`), so nothing
  * ever retires the row. The terminal REPL answers that with its `x` key
  * (`teammateViewHelpers.ts:116`); this is the desktop's same escape hatch.
- * The sidecar re-resolves the id against the live store regardless and fails
- * closed on a target it cannot dismiss.
+ *
+ * Deliberately NOT narrowed to rows backed by a live task, because the renderer
+ * cannot tell: a same-session PERSISTED worker also arrives as `origin: 'current'`
+ * (`src/agent-mode/sessionState.ts:672`), and those rows are the ones most in need
+ * of dismissing — they are what the roster shows after the reaper has already
+ * evicted the live task. The sidecar resolves both planes and fails closed only on
+ * a target it genuinely cannot retire.
  */
 export function selectWorkerDismissTargetId(
   worker: AgentModeWorkerItem,

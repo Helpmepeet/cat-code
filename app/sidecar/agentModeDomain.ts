@@ -93,10 +93,11 @@ export type SidecarAgentModeDomain = {
   setActive(active: boolean): AgentModeSetResult
   /**
    * Record that this worker was dismissed, so the session plane stops re-supplying
-   * the row the live plane just gave up (see `agentModeSnapshot`). Called only
-   * after a `task.dismiss` the live store actually accepted; process-local and
+   * the row the live plane gave up (see `agentModeSnapshot`). Process-local and
    * session-scoped, exactly like the live plane it shadows — nothing is written to
-   * the engine's persisted state, which stays the engine's own record.
+   * the engine's persisted state, which stays the engine's own record. A worker
+   * that becomes live again un-marks itself on the next snapshot, so this is a
+   * record of "the operator retired this row", not a permanent blocklist.
    */
   noteWorkerDismissed(agentId: string): void
   subscribe(listener: () => void): () => void
@@ -107,11 +108,12 @@ export function createSidecarAgentModeDomain(
   options: { executor?: AgentModeExecutor } = {},
 ): SidecarAgentModeDomain {
   const executor = options.executor ?? createRealAgentModeExecutor()
-  const dismissed = new Set<string>()
+  let dismissed: ReadonlySet<string> = new Set()
   return {
     async getSnapshot() {
       const persisted = await readPersistedAgentModeState()
       const state = appStateStore.getState()
+      dismissed = dismissedStillPending(dismissed, state.tasks)
       // Read `active` through the executor so the spawn snapshot, the set path,
       // and any injected test fake all share ONE truth source (real: isAgentMode()).
       return agentModeSnapshot(
@@ -122,7 +124,7 @@ export function createSidecarAgentModeDomain(
       )
     },
     noteWorkerDismissed(agentId) {
-      dismissed.add(agentId)
+      dismissed = new Set(dismissed).add(agentId)
     },
     setActive(active) {
       const wasActive = executor.isActive()
@@ -177,6 +179,31 @@ async function readPersistedAgentModeState(): Promise<AgentModeSessionState | nu
     // empty, never throw (display = degrade gracefully; the live plane still fills).
     return null
   }
+}
+
+/**
+ * The dismissal marks that still describe something.
+ *
+ * A dismissed worker that is LIVE again is no longer dismissed: resume reuses the
+ * same agentId (`recordWorkerSessionSpawn` keys `knownWorkers[agentId]`,
+ * `src/agent-mode/sessionState.ts:489`), so a mark left standing would suppress the
+ * persisted twin forever once the resumed run finished — a genuine current worker
+ * missing from the roster with no way to get it back. Dropping the mark while the
+ * worker is live is free, because a live worker already masks its own twin by
+ * handle. It also stops the set outliving what it describes.
+ */
+export function dismissedStillPending(
+  dismissed: ReadonlySet<string>,
+  tasks: Record<string, TaskState> | undefined,
+): ReadonlySet<string> {
+  if (dismissed.size === 0) return dismissed
+  const live = new Set<string>()
+  for (const task of Object.values(tasks ?? {})) {
+    if (task.type !== 'local_agent') continue
+    live.add(task.agentId ?? task.id)
+  }
+  const pending = new Set([...dismissed].filter(id => !live.has(id)))
+  return pending.size === dismissed.size ? dismissed : pending
 }
 
 /**
