@@ -73,6 +73,21 @@ function settingsResult(
   }
 }
 
+function correlatedBadRequest(
+  sessionId: string,
+  message: string,
+): VerbAckResultFrame {
+  return {
+    kind: 'error',
+    protocolVersion: 1,
+    sessionId,
+    requestId: `bad-request-${sessionId}`,
+    code: 'bad_request',
+    message,
+    retryable: false,
+  }
+}
+
 const BUILDERS = [
   ['agent-mode.set.result', agentModeResult],
   ['task-control.result', taskControlResult],
@@ -102,6 +117,32 @@ test('a later ack replaces the earlier one for the same session', () => {
   const latest = settingsResult('s1', true, 'second')
   state = reduceVerbAckResultState(state, { type: 'frame', frame: latest })
   expect(selectLatestVerbAckResult(state, 's1')).toEqual(latest)
+})
+
+test('a correlated boundary rejection is stored and surfaces its redacted message', () => {
+  const frame = correlatedBadRequest('s1', 'unexpected field')
+  const state = reduceVerbAckResultState(createVerbAckResultState(), {
+    type: 'frame',
+    frame,
+  })
+  expect(selectLatestVerbAckResult(state, 's1')).toEqual(frame)
+  expect(verbAckErrorToast(frame)).toEqual({
+    message: 'unexpected field',
+    tone: 'danger',
+  })
+})
+
+test('an uncorrelated boundary rejection remains ignored', () => {
+  const state = createVerbAckResultState()
+  const frame: ServerFrame = {
+    kind: 'error',
+    protocolVersion: 1,
+    sessionId: 's1',
+    code: 'bad_request',
+    message: 'framing error',
+    retryable: false,
+  }
+  expect(reduceVerbAckResultState(state, { type: 'frame', frame })).toBe(state)
 })
 
 test('a lifecycle frame clears a tracked session but leaves untracked ones alone', () => {

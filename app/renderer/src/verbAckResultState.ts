@@ -16,6 +16,7 @@
 
 import type {
   AgentModeSetResultFrame,
+  ErrorFrame,
   RunControlResultFrame,
   ServerFrame,
   SessionId,
@@ -33,10 +34,23 @@ export type VerbAckResultFrame =
   | TaskControlResultFrame
   | RunControlResultFrame
   | SettingsResultFrame
+  /** A boundary rejection can be correlated only when the renderer-minted id survived. */
+  | (ErrorFrame & { code: 'bad_request'; requestId: string })
 
 export type VerbAckResultState = {
   /** Most recent verb-ack per session (null after a lifecycle reset). */
   lastBySession: Record<SessionId, VerbAckResultFrame | null>
+}
+
+function isCorrelatedBadRequest(
+  frame: ServerFrame,
+): frame is ErrorFrame & { code: 'bad_request'; requestId: string } {
+  return (
+    frame.kind === 'error' &&
+    frame.code === 'bad_request' &&
+    typeof frame.requestId === 'string' &&
+    frame.requestId.length > 0
+  )
 }
 
 export type VerbAckResultAction = { type: 'frame'; frame: ServerFrame }
@@ -57,7 +71,8 @@ export function reduceVerbAckResultState(
     frame.kind === 'agent-mode.set.result' ||
     frame.kind === 'task-control.result' ||
     frame.kind === 'run-control.result' ||
-    frame.kind === 'settings.result'
+    frame.kind === 'settings.result' ||
+    isCorrelatedBadRequest(frame)
   ) {
     return {
       ...state,
@@ -98,6 +113,6 @@ export function selectLatestVerbAckResult(
 export function verbAckErrorToast(
   frame: VerbAckResultFrame,
 ): { message: string; tone: ToastTone } | null {
-  if (frame.ok) return null
+  if (frame.kind !== 'error' && frame.ok) return null
   return { message: frame.message, tone: 'danger' }
 }
