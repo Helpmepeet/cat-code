@@ -187,7 +187,13 @@ export function parseDeliveryTraceRecord(value: unknown): TraceRecord | null {
       !positiveInteger(item.sequence) ||
       !['invalid_shape', 'unknown_sequence', 'stale_document', 'stale_attempt'].includes(item.reason as string)
     ) return null
-  } else if (!opaqueId(item.sessionId) || !isSafeDeliveryIdentifier(item.streamEpoch) || !positiveInteger(item.sequence) || !isDeliveryStage(item.stage)) {
+  } else if (
+    !opaqueId(item.sessionId) || !isSafeDeliveryIdentifier(item.streamEpoch) ||
+    !positiveInteger(item.sequence) || !isDeliveryStage(item.stage) ||
+    // The gap and out_of_order kinds carry this too, and nothing else validated
+    // it, so a rooted path in expectedSequence reached the export unchanged.
+    (item.expectedSequence !== undefined && !positiveInteger(item.expectedSequence))
+  ) {
     return null
   }
   return item as TraceRecord

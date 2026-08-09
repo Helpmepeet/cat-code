@@ -86,3 +86,16 @@ test('second-pass trace parser closes anomaly records, not only delivery stages'
   expect(parseDeliveryTraceRecord({ ...loss, reason: 'https://example.com/private' })).toBeNull()
   expect(parseDeliveryTraceRecord({ ...loss, processName: 'whatever-i-like' })).toBeNull()
 })
+
+test('second-pass trace parser validates the sequence-anomaly expectation field', () => {
+  const gap = {
+    schemaVersion: 1, recordKind: 'trace.sequence.gap', wallTimestamp: '2026-08-06T00:00:00.000Z', monotonicTimestampMs: 1,
+    launchId: 'launch', processName: 'electron-main', processInstanceId: 'process', sessionId: 'session',
+    streamEpoch: '018f0000-0000-4000-8000-000000000001', sequence: 1, stage: 'engine.produced',
+  }
+  expect(parseDeliveryTraceRecord(gap)).not.toBeNull()
+  expect(parseDeliveryTraceRecord({ ...gap, expectedSequence: 5 })).not.toBeNull()
+  // The gap and out_of_order kinds allow this field, and no branch checked it,
+  // so a rooted path in it was exported verbatim.
+  expect(parseDeliveryTraceRecord({ ...gap, expectedSequence: '/Users/alice/private' })).toBeNull()
+})

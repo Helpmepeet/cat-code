@@ -49,6 +49,10 @@ test('operational text redacts a rooted path behind any delimiter, a non-http sc
   // The URL rule matched http(s) only, so a file URL kept the whole home path.
   expect(sanitizeOperationalText('file:///Users/alice/private')).not.toContain('/Users/alice')
   expect(sanitizeOperationalText('reached alice@example.com')).not.toContain('alice@example.com')
+  // A guard added so a rewritten URL's "//" is not read as a path also let a
+  // double-slash share path through, which is still a rooted location.
+  expect(sanitizeOperationalText('//server/share/private')).not.toContain('server/share')
+  expect(sanitizeOperationalText('https://example.com')).toBe('https://example.com')
 })
 
 test('operational text leaves a relative segment alone', () => {

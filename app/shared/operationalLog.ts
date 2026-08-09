@@ -138,7 +138,7 @@ const SECRET_KEY = /(token|secret|password|credential|authorization|cookie|vault
 // characters a path segment is built from catches every rooted path while
 // leaving a relative segment ("and/or") alone; the inner guard stops the "//"
 // of an already-rewritten URL from reading as a rooted path.
-const ABSOLUTE_PATH = /(?<![A-Za-z0-9._\\/-])(?:[A-Za-z]:[\\/][^\s"')]*|\\\\[^\s"']+|\/(?!\/)[^\s"')]+)/g
+const ABSOLUTE_PATH = /(?:(?<![A-Za-z0-9._-])[A-Za-z]:[\\/][^\s"')]*|\\\\[^\s"']+|(?<![A-Za-z0-9._\\/:-])\/\/[^\s"')]+|(?<![A-Za-z0-9._\\/-])\/(?!\/)[^\s"')]+)/g
 // Every scheme, not only http(s): a file:// URL names the same home directory.
 const URL_WITH_SENSITIVE_PARTS = /\b[a-z][a-z0-9+.-]*:\/\/[^\s]+/gi
 const EMAIL = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g
