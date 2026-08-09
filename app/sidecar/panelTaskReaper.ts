@@ -31,10 +31,19 @@
  *
  * What this does NOT fix: both evictors share one guard set (terminal status,
  * `notified`, no pending notification, `evictAfter` passed), so a worker held by
- * a guard is held here as well. The 2026-08-08 report that prompted this module
- * had ~41 post-grace turns and the row still did not leave, which means a GUARD
- * refused rather than a trigger being missing. Do not read this file as having
- * closed that; `docs/migration/STATUS.md` CC-32 carries the open question.
+ * a guard is held here as well. RESOLVED 2026-08-09 (CC-32): the 2026-08-08
+ * report WAS this module's gap after all — its "~41 post-grace turns with the
+ * row still docked" premise was a timeline misread. The transcript shows ZERO
+ * turn boundaries during both docked windows (18:31–18:52 and 19:12 → next
+ * morning), and the queue-operation log proves every completion notification
+ * was delivered and persisted within ~10ms, so no guard could hold a
+ * deadline-stamped row at the boundaries that did run. The one shape that
+ * outlives this module BY DESIGN is a blocked handoff: `completeAgentTask`
+ * stamps NO `evictAfter` when the result carries a `status: blocked` line
+ * (`LocalAgentTask.tsx:540,548`), `earliestDeadline()` below skips undefined
+ * deadlines, and the desktop has no dismiss verb (`taskControlDomain.ts` stops
+ * RUNNING tasks only) — such a row persists until the sidecar exits.
+ * `docs/migration/STATUS.md` CC-32 carries the full record.
  *
  * Evicting the task is what makes the row disappear: the store mutation drives
  * the existing `tasks.snapshot` / `agent-mode.snapshot` re-broadcasts, and the
