@@ -73,3 +73,8 @@ test('the DeferredNote twin that survived the 2026-07-27 sweep is gone', () => {
   // not survive to be reused by the next panel added here.
   expect(MODULE).not.toContain('DeferredNote')
 })
+
+test('skill flags direct configuration changes without exposing an implementation note', () => {
+  expect(MODULE).toContain('Change them in the agent&apos;s configuration file.')
+  expect(MODULE).not.toContain('toggling is deferred to a settings writer')
+})

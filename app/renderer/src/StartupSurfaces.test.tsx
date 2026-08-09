@@ -173,7 +173,9 @@ test('OAuth waiting phase names the selected Anthropic provider', () => {
     'anthropic',
   )
   expect(html).toContain('Your Anthropic account appears')
+  expect(html).toContain('after you finish in the browser')
   expect(html).not.toContain('Your Codex account appears')
+  expect(html).not.toContain('engine captures the callback')
 })
 
 test('OAuth alias phase shows the Authorized pill + naming step (Codex waiting_for_alias)', () => {

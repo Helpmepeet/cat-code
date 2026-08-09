@@ -206,7 +206,6 @@ export function SettingsShell({
   const writeLayer = selectSettingsWriteLayer(scope, projectLayer)
   const activeItem = selectSettingsRailItem(scope, item)
   const rail = selectSettingsRail(scope, query)
-  const scopeFile = writeLayer ? selectLayerOrigin(snapshot, writeLayer) : null
 
   return (
     <div
@@ -265,21 +264,6 @@ export function SettingsShell({
             {activeItem === 'memory'
               ? 'Auto memory edits are saved immediately. Features use the new value when they next check the setting.'
               : SETTINGS_APPLY_NOTE}
-            {engine === 'live' && settingsWereRead(snapshot) ? (
-              <>
-                {' '}
-                Anything this page does not show lives in the same file
-                {scopeFile ? (
-                  <>
-                    :{' '}
-                    <span className="font-mono text-[11px]">{scopeFile}</span>
-                  </>
-                ) : (
-                  ', which holds no settings yet'
-                )}
-                .
-              </>
-            ) : null}
           </p>
         ) : null}
       </header>

@@ -95,6 +95,9 @@ test('P4-57 agent definition file paths have a keyboard-reachable copy button', 
   expect(html).toContain('aria-label="Copy agent definition file path"')
   expect(html).toContain('title="Copy agent definition file path"')
   expect(html).toContain('type="button"')
+  expect(html).toContain('Configured')
+  expect(html).not.toContain('payload withheld')
+  expect(html).not.toContain('config withheld')
 })
 
 test('P4-57 wires the agent copy payload directly from the trusted definition path', () => {

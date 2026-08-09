@@ -372,8 +372,8 @@ function DetailGrid({ definition }: { definition: AgentConfigDefinition }) {
       ? [['Missing MCP', definition.missingMcpServers.join(', ')] as [string, string]]
       : []),
     ...(definition.skills?.length ? [['Skills', definition.skills.join(', ')] as [string, string]] : []),
-    ...(definition.hasInitialPrompt ? [['Initial prompt', 'present, withheld'] as [string, string]] : []),
-    ...(definition.hasHooks ? [['Hooks', 'present, payload withheld'] as [string, string]] : []),
+    ...(definition.hasInitialPrompt ? [['Initial prompt', 'Configured'] as [string, string]] : []),
+    ...(definition.hasHooks ? [['Hooks', 'Configured'] as [string, string]] : []),
     ...(definition.hasMcpServers
       ? [
           [
@@ -387,7 +387,7 @@ function DetailGrid({ definition }: { definition: AgentConfigDefinition }) {
                 : null,
             ]
               .filter(Boolean)
-              .join(' · ') || 'present, config withheld',
+              .join(' · ') || 'Configured',
           ] as [string, string],
         ]
       : []),

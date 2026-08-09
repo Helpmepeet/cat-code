@@ -416,7 +416,7 @@ export function StartupOAuth({
           <p className="mb-5 max-w-[420px] text-[13px] leading-relaxed text-text-muted">
             Opening browser to sign in… authorize the request, then return here.
             Your {provider === 'anthropic' ? 'Anthropic' : 'Codex'} account appears
-            once the engine captures the callback.
+            here after you finish in the browser.
           </p>
           <OAuthWaitingBody url={view.url} onPasteCode={onPasteCode} />
           <SecondaryButton onClick={onCancel}>Cancel</SecondaryButton>
