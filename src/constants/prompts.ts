@@ -121,6 +121,7 @@ import {
   getCorePolicySection,
   getCyberPolicyInstruction,
   HOOK_AUTHORITY_RULE,
+  INSTRUCTION_AUTHORITY_LIMIT,
   OUTCOME_REPORTING_RULE,
   PROJECT_INSTRUCTION_AUTHORITY_RULE,
   PROMPT_INJECTION_RULE,
@@ -704,10 +705,19 @@ export async function getSystemPrompt(
   })
   if (isEnvTruthy(process.env.CLAUDE_CODE_SIMPLE)) {
     return [
-      `${getCLISyspromptPrefix({
-        isNonInteractive: false,
-        hasAppendSystemPrompt: false,
-      })}\n\nCWD: ${getCwd()}\nDate: ${getSessionStartDate()}`,
+      [
+        getCLISyspromptPrefix({
+          isNonInteractive: false,
+          hasAppendSystemPrompt: false,
+        }),
+        `CWD: ${getCwd()}\nDate: ${getSessionStartDate()}`,
+        '# Core policy',
+        getCyberPolicyInstruction(),
+        TOOL_OUTPUT_IS_DATA_RULE,
+        PROMPT_INJECTION_RULE,
+        INSTRUCTION_AUTHORITY_LIMIT,
+        OUTCOME_REPORTING_RULE,
+      ].join('\n\n'),
     ]
   }
 

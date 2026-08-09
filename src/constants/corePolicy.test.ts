@@ -39,13 +39,16 @@ const promptsSource = await Bun.file(
 ).text()
 
 /**
- * `agentMode` is an explicit parameter because this helper clears the env var
- * by default: a test that set it itself and then called this would have been
+ * Each prompt mode is explicit because this helper clears the environment by
+ * default: a test that set a mode itself and then called this would have been
  * silently downgraded to a normal-mode build and asserted nothing.
  */
 async function withPromptEnv<T>(
   run: () => Promise<T>,
-  { agentMode = false }: { agentMode?: boolean } = {},
+  {
+    agentMode = false,
+    simple = false,
+  }: { agentMode?: boolean; simple?: boolean } = {},
 ): Promise<T> {
   const saved = {
     simple: process.env.CLAUDE_CODE_SIMPLE,
@@ -53,7 +56,8 @@ async function withPromptEnv<T>(
     anthropicKey: process.env.ANTHROPIC_API_KEY,
     openaiKey: process.env.OPENAI_API_KEY,
   }
-  delete process.env.CLAUDE_CODE_SIMPLE
+  if (simple) process.env.CLAUDE_CODE_SIMPLE = '1'
+  else delete process.env.CLAUDE_CODE_SIMPLE
   if (agentMode) process.env.CLAUDE_CODE_AGENT_MODE = '1'
   else delete process.env.CLAUDE_CODE_AGENT_MODE
   process.env.ANTHROPIC_API_KEY = saved.anthropicKey ?? 'test-key'
@@ -96,6 +100,30 @@ describe('policy core coverage across provider and mode variants', () => {
   afterEach(() => {
     clearSystemPromptSections()
   })
+
+  test.each([
+    ['bare Claude', CLAUDE_MODEL],
+    ['bare GPT', GPT_MODEL],
+  ] as const)(
+    '%s preserves the minimal runtime while carrying tool-output safety and reporting policy',
+    async (_label, model) => {
+      const prompt = await withPromptEnv(
+        async () => (await getSystemPrompt(TOOLS, model)).join('\n'),
+        { simple: true },
+      )
+
+      // Bare mode deliberately skips hooks and project-instruction discovery,
+      // but it still exposes file and shell tools. These rules are the
+      // load-bearing guardrails for content those tools can return.
+      expect(prompt).toContain(getCyberPolicyInstruction())
+      expect(prompt).toContain(TOOL_OUTPUT_IS_DATA_RULE)
+      expect(prompt).toContain(PROMPT_INJECTION_RULE)
+      expect(prompt).toContain(INSTRUCTION_AUTHORITY_LIMIT)
+      expect(prompt).toContain(OUTCOME_REPORTING_RULE)
+      expect(prompt).not.toContain(HOOK_AUTHORITY_RULE)
+      expect(prompt).not.toContain(RETRY_RULE)
+    },
+  )
 
   test.each(VARIANTS.map(v => [v.label, v.build] as const))(
     '%s carries the shared safety, provenance, authority, and reporting core',
