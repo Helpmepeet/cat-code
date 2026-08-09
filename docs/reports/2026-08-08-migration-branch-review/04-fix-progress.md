@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 62/242** — counted against the review's original 61 High and
+**Progress: Fix 63/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -66,6 +66,7 @@ count tracks individually verified findings, not commit count.
 | A19 MED composer slash/mention typeaheads were not connected to the focused text editor as comboboxes | fixed | `19727f2` | active listbox/option accessibility linkage, stable option ids, and slash dialog-role regression (67 pass); renderer typecheck and production build; GUI fidelity remains operator-verifiable |
 | A17 MED outside-click popover dismissal discarded the focus stack's restore target | fixed | `b25e6e4` | stack-removal focus-target regression plus affected menu suites (73 pass); renderer typecheck and production build; GUI behavior remains operator-verifiable |
 | A17 MED SettingsShell left its existing active-project binding selector unwired | fixed | `39d2a32` | live route now supplies the merged-roster binding; binding, Settings, and App suites (102 pass); renderer typecheck and production build; GUI fidelity remains operator-verifiable |
+| A16 MED `permission_not_found` re-armed a renderer card that the engine had already removed | fixed | `f5ef9df` | engine-authoritative stale-card removal regression plus permission UI suites (67 pass); renderer typecheck and production build; GUI behavior remains operator-verifiable |
 
 ## Known verification limitation
 
