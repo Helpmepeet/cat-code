@@ -23,6 +23,7 @@ import {
   buildAskAnswerPayload,
   type DraftAnswer,
 } from './askQuestionFlowModel.js'
+import { permissionKeysAreLive } from './permissionPromptModel.js'
 
 /** One question's in-progress answer: engine-option indices + freeform text. */
 
@@ -123,7 +124,15 @@ export function AskQuestionFlow({
     // keydown, which acts solely on the activeSessionId's request.
     if (!isActivePane) return
     function onKeyDown(event: KeyboardEvent) {
-      if (event.repeat || event.metaKey || event.altKey) return
+      if (
+        event.defaultPrevented ||
+        event.repeat ||
+        event.metaKey ||
+        event.altKey ||
+        !permissionKeysAreLive(event.target)
+      ) {
+        return
+      }
       // In flight: the answer is already sent (buttons are disabled too) — the
       // keyboard must not fire a second advance/submit before the resolve lands.
       if (submitted) return
@@ -147,14 +156,6 @@ export function AskQuestionFlow({
       }
 
       // Never hijack keys typed into an unrelated field (e.g. the composer).
-      if (
-        target?.isContentEditable ||
-        target?.tagName === 'INPUT' ||
-        target?.tagName === 'TEXTAREA'
-      ) {
-        return
-      }
-
       if (key === 'Escape') {
         event.preventDefault()
         onCancel()

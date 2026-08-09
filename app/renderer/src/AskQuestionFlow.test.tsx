@@ -42,8 +42,9 @@ const MULTI: AskQuestion[] = [
 ]
 
 // `renderToStaticMarkup` never runs effects, so these tests cover MARKUP only.
-// The source pin below covers the contentEditable guard, but event dispatch
-// remains a GUI-verified surface until the renderer has a DOM harness.
+// The source pin below covers the shared key-owner and event-claim guards, but
+// event dispatch remains a GUI-verified surface until the renderer has a DOM
+// harness.
 function render(questions: AskQuestion[], isActivePane = true) {
   return renderToStaticMarkup(
     <AskQuestionFlow
@@ -56,9 +57,10 @@ function render(questions: AskQuestion[], isActivePane = true) {
   )
 }
 
-test('the window key handler leaves contentEditable targets to their editor', () => {
+test('the window key handler leaves key-owning targets and claimed events alone', () => {
   const source = readFileSync(new URL('./AskQuestionFlow.tsx', import.meta.url), 'utf8')
-  expect(source).toContain('target?.isContentEditable')
+  expect(source).toContain('!permissionKeysAreLive(event.target)')
+  expect(source).toContain('event.defaultPrevented')
 })
 
 test('renders the question, header chip, option rows with numbers + descriptions', () => {
