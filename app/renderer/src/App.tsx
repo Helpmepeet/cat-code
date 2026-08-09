@@ -3884,9 +3884,16 @@ export function SessionPane({
   // pill; the handle keeps the textarea-shaped selection API these handlers use.
   const composerRef = useRef<ComposerInputHandle>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
+  const imagePreparationInFlightRef = useRef(false)
   const [preparingImage, setPreparingImage] = useState(false)
   const attachImage = async (file: File): Promise<void> => {
-    if (!onAttachImage) return
+    if (!onAttachImage || imagePreparationInFlightRef.current) {
+      if (imagePreparationInFlightRef.current) {
+        toast('Wait for the image to finish attaching.', { tone: 'info' })
+      }
+      return
+    }
+    imagePreparationInFlightRef.current = true
     setPreparingImage(true)
     try {
       onAttachImage(await prepareImageAttachment(file))
@@ -3894,6 +3901,7 @@ export function SessionPane({
     } catch (error) {
       setTransportErrorFromImage(errorMessage(error))
     } finally {
+      imagePreparationInFlightRef.current = false
       setPreparingImage(false)
     }
   }
@@ -4185,11 +4193,17 @@ export function SessionPane({
     const composer = composerRef.current
     if (!composer || event.target !== composer.element) return
     event.preventDefault()
-    const image = Array.from(event.clipboardData.files).find(file =>
+    const files = Array.from(event.clipboardData.files)
+    const image = files.find(file =>
       ACCEPTED_IMAGE_TYPES.some(type => type === file.type),
     )
     if (image) {
       void attachImage(image)
+      return
+    }
+    const unsupportedImage = files.find(file => file.type.startsWith('image/'))
+    if (unsupportedImage) {
+      void attachImage(unsupportedImage)
       return
     }
     const text = event.clipboardData.getData('text')
@@ -4566,6 +4580,11 @@ export function SessionPane({
         onKeyDown={onComposerKeyDown}
         onPaste={handlePaste}
         onSubmit={event => {
+          if (preparingImage) {
+            event.preventDefault()
+            toast('Wait for the image to finish attaching.', { tone: 'info' })
+            return
+          }
           // CC-16 — a submit is intent too. Focus/pointer-down normally fired
           // the spawn already (`claimLazyRestore` makes a repeat a no-op), but
           // a send-arrow click on a pre-filled draft never touched the
@@ -4697,6 +4716,7 @@ export function SessionPane({
               className="flex h-[30px] w-[30px] shrink-0 items-center justify-center self-end rounded-lg text-accent transition-colors disabled:text-text-ghost"
               disabled={
                 !composerGate.editable ||
+                preparingImage ||
                 (prompt.trim().length === 0 && images.length === 0) ||
                 pendingSubmit !== null
               }

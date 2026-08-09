@@ -340,7 +340,12 @@ export class SidecarSupervisor {
     }
     if (
       message.type === 'app.submit' &&
-      Buffer.byteLength(message.prompt, 'utf8') > MAX_PROMPT_BYTES
+      Buffer.byteLength(
+        typeof message.prompt === 'string'
+          ? message.prompt
+          : JSON.stringify(message.prompt),
+        'utf8',
+      ) > MAX_PROMPT_BYTES
     ) {
       throw new Error(`prompt exceeds ${MAX_PROMPT_BYTES} bytes`)
     }

@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { SDKMessage } from '@cat-code/engine/session-events'
 import {
@@ -591,24 +592,47 @@ test('P4-18b: each tool family renders its own glyph + word header', () => {
   }
 })
 
-test('P4-18b: a GenerateImage card renders its real result text and never mocks a tile', () => {
+test('a completed GenerateImage card shows the generated image by default', () => {
   const html = render(
     toolRow({
       toolName: 'GenerateImage',
       toolFamily: 'imagegen',
-      input: { prompt: 'a cat' },
+      input: { prompt: 'a cat', quality: 'high' },
       status: 'success',
-      result: { isError: false, content: 'saved to /tmp/cat.png', diff: null },
+      result: {
+        isError: false,
+        content: 'saved to /tmp/cat.png',
+        diff: null,
+        generatedImage: {
+          filePath: '/tmp/cat.png',
+          model: 'gpt-image-2',
+          size: '1024x1024',
+          outputFormat: 'png',
+          bytes: 4,
+          preview: { mediaType: 'image/png', data: 'AAAA' },
+        },
+      },
     }),
   )
 
-  expect(html).toContain('saved to /tmp/cat.png') // real result text
-  // P4-45: the missing inline-image tile is still deferred, but the deferral is
-  // recorded in the ledger, not printed under every image the user generates.
-  expect(html).not.toContain('inline image tile pending')
-  // ("seam" alone is not assertable here: `border-shell-seam` is a Tailwind
-  // token. `userVisibleText.test.ts` strips class names and enforces the word.)
-  expect(html).not.toContain('image-payload')
+  expect(html).toContain('alt="Generated image"')
+  expect(html).toContain('data:image/png;base64,AAAA')
+  expect(html).toContain('gpt-image-2')
+  expect(html).toContain('1024x1024')
+  expect(html).toContain('4 B')
+  expect(html).toContain('Saved to')
+  expect(html).toContain('tmp/')
+  expect(html).toContain('title="/tmp/cat.png"')
+  expect(html).toContain('Copy path')
+  expect(html).not.toContain('high')
+  expect(html).not.toContain('aria-expanded')
+
+  const source = readFileSync(new URL('./TranscriptView.tsx', import.meta.url), 'utf8')
+  expect(source).toContain(
+    "toast('Could not write to the clipboard', { tone: 'warn' })",
+  )
+  expect(source).toContain('clearTimeout(copiedResetRef.current)')
+  expect(source).toContain('copiedResetRef.current = setTimeout')
 })
 
 // P4-8c: a top-level Agent tool-use row (the DelegateGroup member / lone card).

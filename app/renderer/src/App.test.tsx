@@ -978,10 +978,19 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
   // reads, not how deeply it happens to be indented. It broke once when the
   // button moved inside the send/stop ternary without its logic changing.
   expect(source.replace(/\s+/g, ' ')).toContain(
-    'disabled={ !composerGate.editable || (prompt.trim().length === 0 && images.length === 0) || pendingSubmit !== null }',
+    'disabled={ !composerGate.editable || preparingImage || (prompt.trim().length === 0 && images.length === 0) || pendingSubmit !== null }',
   )
   expect(source).toContain(
     'attachDisabled={!composerGate.editable || preparingImage}',
+  )
+  expect(source.replace(/\s+/g, ' ')).toContain(
+    "if (preparingImage) { event.preventDefault() toast('Wait for the image to finish attaching.', { tone: 'info' }) return }",
+  )
+  expect(source.replace(/\s+/g, ' ')).toContain(
+    "if (!onAttachImage || imagePreparationInFlightRef.current) { if (imagePreparationInFlightRef.current) { toast('Wait for the image to finish attaching.', { tone: 'info' }) } return } imagePreparationInFlightRef.current = true",
+  )
+  expect(source.replace(/\s+/g, ' ')).toContain(
+    "const unsupportedImage = files.find(file => file.type.startsWith('image/')) if (unsupportedImage) { void attachImage(unsupportedImage) return }",
   )
   // …and nothing instructs the user to act on a not-yet-connected session.
   expect(source).not.toContain('Focus to reconnect')
@@ -1403,9 +1412,8 @@ test('collapsed pastes are rendered by the field, not parked in a strip above it
 test('image attachment wiring reaches both clipboard paste and the file picker', () => {
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
 
-  expect(source).toContain(
-    'const image = Array.from(event.clipboardData.files).find',
-  )
+  expect(source).toContain('const files = Array.from(event.clipboardData.files)')
+  expect(source).toContain('const image = files.find')
   expect(source).toContain("if (image) {\n      void attachImage(image)")
   expect(source).toContain('ref={imageInputRef}')
   expect(source).toContain('if (file) void attachImage(file)')

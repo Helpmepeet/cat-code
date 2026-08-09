@@ -1916,6 +1916,260 @@ test('a server-executed tool (server_tool_use) resolves via a result block ridin
   expect(resolvedRow.result?.content).toBe('')
 })
 
+test('a GenerateImage result and preview merge into one completed image row', () => {
+  const toolUseId = 'toolu_generate_image_1'
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_generate_image_1',
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: toolUseId,
+            name: 'GenerateImage',
+            input: {
+              prompt: 'A cat typing at a terminal',
+              size: '1024x1024',
+              quality: 'high',
+              output_format: 'png',
+            },
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000000c0007',
+    }),
+  )
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: toolUseId,
+            content: [{ type: 'text', text: 'Generated image saved' }],
+            is_error: false,
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+      isSynthetic: true,
+      tool_use_result: {
+        filePath: '/tmp/generated-cat.png',
+        model: 'gpt-image-2',
+        size: '1024x1024',
+        outputFormat: 'png',
+        bytes: 4,
+      },
+      uuid: '00000000-0000-4000-8000-0000000c0008',
+    }),
+  )
+  state = projectServerFrame(state, {
+    kind: 'generated-image-preview',
+    protocolVersion: 1,
+    sessionId: 'session-1',
+    toolUseId,
+    mediaType: 'image/png',
+    data: 'AAAA',
+  })
+
+  const row = selectTranscriptRows(state, 'session-1')[0]
+  if (row?.kind !== 'tool-use') throw new Error('expected tool-use row')
+  expect(row.status).toBe('success')
+  expect(row.result?.generatedImage).toEqual({
+    filePath: '/tmp/generated-cat.png',
+    model: 'gpt-image-2',
+    size: '1024x1024',
+    outputFormat: 'png',
+    bytes: 4,
+    preview: { mediaType: 'image/png', data: 'AAAA' },
+  })
+})
+
+test('GenerateImage previews merge before results and stay isolated by session', () => {
+  const toolUseId = 'toolu_shared_generate_image'
+  let state = createTranscriptState()
+  for (const sessionId of ['session-1', 'session-2']) {
+    state = projectServerFrame(state, ready(sessionId))
+    state = projectServerFrame(
+      state,
+      messageFrame(sessionId, {
+        type: 'assistant',
+        message: {
+          id: `msg_${sessionId}_image`,
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: toolUseId,
+              name: 'GenerateImage',
+              input: { prompt: `image for ${sessionId}` },
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+        uuid:
+          sessionId === 'session-1'
+            ? '00000000-0000-4000-8000-0000000c0011'
+            : '00000000-0000-4000-8000-0000000c0012',
+      }),
+    )
+    state = projectServerFrame(state, {
+      kind: 'generated-image-preview',
+      protocolVersion: 1,
+      sessionId,
+      toolUseId,
+      mediaType: 'image/png',
+      data: sessionId === 'session-1' ? 'AAAA' : 'BBBB',
+    })
+  }
+
+  for (const sessionId of ['session-1', 'session-2']) {
+    state = projectServerFrame(
+      state,
+      messageFrame(sessionId, {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: toolUseId,
+              content: [{ type: 'text', text: 'Generated image saved' }],
+              is_error: false,
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+        isSynthetic: true,
+        tool_use_result: {
+          filePath: `/tmp/${sessionId}.png`,
+          model: 'gpt-image-2',
+          size: '1024x1024',
+          outputFormat: 'png',
+          bytes: 4,
+        },
+        uuid:
+          sessionId === 'session-1'
+            ? '00000000-0000-4000-8000-0000000c0013'
+            : '00000000-0000-4000-8000-0000000c0014',
+      }),
+    )
+  }
+
+  const first = selectTranscriptRows(state, 'session-1')[0]
+  const second = selectTranscriptRows(state, 'session-2')[0]
+  if (first?.kind !== 'tool-use' || second?.kind !== 'tool-use') {
+    throw new Error('expected tool-use rows')
+  }
+  expect(first.result?.generatedImage?.preview).toEqual({
+    mediaType: 'image/png',
+    data: 'AAAA',
+  })
+  expect(second.result?.generatedImage?.preview).toEqual({
+    mediaType: 'image/png',
+    data: 'BBBB',
+  })
+})
+
+test('GenerateImage previews stay isolated by tool-use id within one session', () => {
+  const images = [
+    {
+      toolUseId: 'toolu_generate_first',
+      data: 'AAAA',
+      suffix: '21',
+      path: '/tmp/first.png',
+    },
+    {
+      toolUseId: 'toolu_generate_second',
+      data: 'BBBB',
+      suffix: '22',
+      path: '/tmp/second.png',
+    },
+  ] as const
+  let state = projectServerFrame(createTranscriptState(), ready('session-1'))
+
+  for (const image of images) {
+    state = projectServerFrame(
+      state,
+      messageFrame('session-1', {
+        type: 'assistant',
+        message: {
+          id: `msg_generate_${image.suffix}`,
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: image.toolUseId,
+              name: 'GenerateImage',
+              input: { prompt: image.toolUseId },
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+        uuid: `00000000-0000-4000-8000-0000000c00${image.suffix}`,
+      }),
+    )
+    state = projectServerFrame(state, {
+      kind: 'generated-image-preview',
+      protocolVersion: 1,
+      sessionId: 'session-1',
+      toolUseId: image.toolUseId,
+      mediaType: 'image/png',
+      data: image.data,
+    })
+    state = projectServerFrame(
+      state,
+      messageFrame('session-1', {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: image.toolUseId,
+              content: [{ type: 'text', text: 'Generated image saved' }],
+              is_error: false,
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+        isSynthetic: true,
+        tool_use_result: {
+          filePath: image.path,
+          model: 'gpt-image-2',
+          size: '1024x1024',
+          outputFormat: 'png',
+          bytes: 4,
+        },
+        uuid: `00000000-0000-4000-8000-0000000d00${image.suffix}`,
+      }),
+    )
+  }
+
+  const rows = selectTranscriptRows(state, 'session-1')
+  for (const image of images) {
+    const row = rows.find(
+      candidate =>
+        candidate.kind === 'tool-use' &&
+        candidate.toolUseId === image.toolUseId,
+    )
+    if (row?.kind !== 'tool-use') throw new Error('expected tool-use row')
+    expect(row.result?.generatedImage?.preview).toEqual({
+      mediaType: 'image/png',
+      data: image.data,
+    })
+  }
+})
+
 test('FileEditTool tool_use_result narrows to a DiffView/MultiDiffCard hunk shape', () => {
   const useSample = SDK_MESSAGE_FIXTURE.assistant.find(sample =>
     sample.name.startsWith('assistant: FileEditTool diff result'),
