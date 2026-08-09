@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 40/242** — counted against the review's original 61 High and
+**Progress: Fix 41/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -44,6 +44,7 @@ count tracks individually verified findings, not commit count.
 | V31 HIGH discarded deferred-continuation commands retain the session lock | fixed | `1caba13` | queue-clear deferred-registration regression (11 pass); development build |
 | V29 HIGH fixture-key test assertions provide no independent wire-coverage evidence | fixed | `631e317` | removed three self-referential assertions while retaining the typed compile-time records; focused renderer suites (69 pass); renderer typecheck |
 | V29 MED `effort.set` lacks a schema-level malformed-input rejection test | fixed | `63c4951` | real sidecar boundary regression (1 pass); full sidecar file has 194 pass and 3 pre-existing account-snapshot failures; renderer typecheck |
+| V29 MED secret-guard projection fixture asserted its own keys rather than a real projection | fixed | `7de9d5d` | retained the real `scanForSecrets` check; secret-guard suite (27 pass) |
 
 ## Known verification limitation
 
