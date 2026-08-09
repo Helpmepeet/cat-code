@@ -4,7 +4,7 @@ This is a live implementation ledger for the review. The original scope reports
 remain historical evidence; this file records only fixes made after the review
 and their verification. Entries are appended as checkpoints land.
 
-**Progress: Fix 33/242** — counted against the review's original 61 High and
+**Progress: Fix 34/242** — counted against the review's original 61 High and
 181 Medium findings. A checkpoint can resolve related findings together; the
 count tracks individually verified findings, not commit count.
 
@@ -37,6 +37,7 @@ count tracks individually verified findings, not commit count.
 | S03 HIGH team-file reads can observe torn JSON during a write | fixed | `cb7e9c6` | swarm + mailbox suites (51 pass); focused lint; app typecheck |
 | A20 HIGH hardening/demo harness `app.exit()` bypasses sidecar shutdown | fixed | `298cac6` | harness lifecycle source test (2 pass); app typecheck; full GUI smoke remains gated |
 | S03 MED permission-request delivery failure leaves a swarm worker waiting forever | fixed | `5b2e019` | renderer-worker and in-process fallback regressions; focused swarm suites (11 pass); development build |
+| S03 HIGH in-process teammate core prompt uses the leader model/provider | fixed | `6b665ef` | runtime model-forwarding regression (9 pass); development build |
 
 ## Known verification limitation
 
