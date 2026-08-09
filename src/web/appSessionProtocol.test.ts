@@ -66,6 +66,67 @@ describe('app session web protocol', () => {
     ).toThrow()
   })
 
+  test('accepts bounded image prompts and rejects malformed image blocks', () => {
+    const prompt = [
+      {
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: 'image/png',
+          data: 'AAAA',
+        },
+      },
+      { type: 'text', text: 'What is in this image?' },
+    ]
+    expect(
+      appClientMessageSchema.parse({
+        type: 'app.submit',
+        requestId: 'submit-image',
+        prompt,
+      }),
+    ).toMatchObject({ type: 'app.submit', prompt })
+
+    expect(() =>
+      appClientMessageSchema.parse({
+        type: 'app.submit',
+        requestId: 'submit-image',
+        prompt: [
+          {
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: 'image/png',
+              data: 'not base64!',
+            },
+          },
+        ],
+      }),
+    ).toThrow()
+    expect(() =>
+      appClientMessageSchema.parse({
+        type: 'app.submit',
+        requestId: 'submit-image',
+        prompt: [
+          {
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: 'image/png',
+              data: 'A',
+            },
+          },
+        ],
+      }),
+    ).toThrow()
+    expect(() =>
+      appClientMessageSchema.parse({
+        type: 'app.submit',
+        requestId: 'submit-image',
+        prompt: [{ type: 'text', text: 'array text only' }],
+      }),
+    ).toThrow()
+  })
+
   test('accepts ready, ack, error, and event envelopes', () => {
     expect(
       appServerMessageSchema.parse({

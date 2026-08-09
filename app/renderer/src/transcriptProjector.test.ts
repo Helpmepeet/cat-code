@@ -1916,6 +1916,84 @@ test('a server-executed tool (server_tool_use) resolves via a result block ridin
   expect(resolvedRow.result?.content).toBe('')
 })
 
+test('a GenerateImage result and preview merge into one completed image row', () => {
+  const toolUseId = 'toolu_generate_image_1'
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_generate_image_1',
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: toolUseId,
+            name: 'GenerateImage',
+            input: {
+              prompt: 'A cat typing at a terminal',
+              size: '1024x1024',
+              quality: 'high',
+              output_format: 'png',
+            },
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000000c0007',
+    }),
+  )
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: toolUseId,
+            content: [{ type: 'text', text: 'Generated image saved' }],
+            is_error: false,
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+      isSynthetic: true,
+      tool_use_result: {
+        filePath: '/tmp/generated-cat.png',
+        model: 'gpt-image-2',
+        size: '1024x1024',
+        outputFormat: 'png',
+        bytes: 4,
+      },
+      uuid: '00000000-0000-4000-8000-0000000c0008',
+    }),
+  )
+  state = projectServerFrame(state, {
+    kind: 'generated-image-preview',
+    protocolVersion: 1,
+    sessionId: 'session-1',
+    toolUseId,
+    mediaType: 'image/png',
+    data: 'AAAA',
+  })
+
+  const row = selectTranscriptRows(state, 'session-1')[0]
+  if (row?.kind !== 'tool-use') throw new Error('expected tool-use row')
+  expect(row.status).toBe('success')
+  expect(row.result?.generatedImage).toEqual({
+    filePath: '/tmp/generated-cat.png',
+    model: 'gpt-image-2',
+    size: '1024x1024',
+    outputFormat: 'png',
+    bytes: 4,
+    preview: { mediaType: 'image/png', data: 'AAAA' },
+  })
+})
+
 test('FileEditTool tool_use_result narrows to a DiffView/MultiDiffCard hunk shape', () => {
   const useSample = SDK_MESSAGE_FIXTURE.assistant.find(sample =>
     sample.name.startsWith('assistant: FileEditTool diff result'),

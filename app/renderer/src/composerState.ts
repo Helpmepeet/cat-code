@@ -26,7 +26,12 @@
 
 import type { ConnectionSnapshot } from './connectionState.js'
 import type { MentionItem } from './MentionPicker.js'
-import type { AgentConfigSnapshot, SessionId } from '../../shared/protocol.js'
+import type {
+  AgentConfigSnapshot,
+  SessionId,
+  SubmitPrompt,
+} from '../../shared/protocol.js'
+import type { AcceptedImageType } from './imageAttachment.js'
 
 // ── @-mention ──────────────────────────────────────────────────────────────
 
@@ -97,6 +102,81 @@ export type SessionPasteState = {
   nextId: number
 }
 export type PasteState = Record<SessionId, SessionPasteState>
+
+export type ImageAttachment = {
+  id: number
+  mediaType: AcceptedImageType
+  data: string
+  name: string
+}
+export type ImageAttachmentState = Record<SessionId, ImageAttachment[]>
+
+export function createImageAttachmentState(): ImageAttachmentState {
+  return {}
+}
+
+export function selectImageAttachments(
+  state: ImageAttachmentState,
+  sessionId: SessionId | null,
+): ImageAttachment[] {
+  return sessionId ? (state[sessionId] ?? []) : []
+}
+
+export function reduceImageAttachmentAdded(
+  state: ImageAttachmentState,
+  sessionId: SessionId,
+  attachment: Omit<ImageAttachment, 'id'>,
+): ImageAttachmentState {
+  const current = selectImageAttachments(state, sessionId)
+  const id = (current.at(-1)?.id ?? 0) + 1
+  return { ...state, [sessionId]: [{ ...attachment, id }] }
+}
+
+export function reduceImageAttachmentRemoved(
+  state: ImageAttachmentState,
+  sessionId: SessionId,
+  id: number,
+): ImageAttachmentState {
+  const current = state[sessionId]
+  if (!current?.some(attachment => attachment.id === id)) return state
+  const remaining = current.filter(attachment => attachment.id !== id)
+  if (remaining.length > 0) return { ...state, [sessionId]: remaining }
+  const next = { ...state }
+  delete next[sessionId]
+  return next
+}
+
+export function reduceSessionImagesReplaced(
+  state: ImageAttachmentState,
+  sessionId: SessionId,
+  attachments: readonly ImageAttachment[],
+): ImageAttachmentState {
+  if (attachments.length === 0) {
+    if (!(sessionId in state)) return state
+    const next = { ...state }
+    delete next[sessionId]
+    return next
+  }
+  return { ...state, [sessionId]: [...attachments] }
+}
+
+export function buildSubmitPrompt(
+  text: string,
+  attachments: readonly ImageAttachment[],
+): SubmitPrompt {
+  if (attachments.length === 0) return text
+  return [
+    ...attachments.map(attachment => ({
+      type: 'image' as const,
+      source: {
+        type: 'base64' as const,
+        media_type: attachment.mediaType,
+        data: attachment.data,
+      },
+    })),
+    ...(text.length > 0 ? [{ type: 'text' as const, text }] : []),
+  ]
+}
 
 export function createPasteState(): PasteState {
   return {}
@@ -532,6 +612,7 @@ export type ComposerSubmitAction =
 export function planSessionSubmit(input: {
   draft: string
   pasteEntries: Record<number, PasteEntry>
+  hasImages?: boolean
   preview: boolean
   connectionStatus: ConnectionSnapshot['status']
   connectionInputEnabled: boolean
@@ -539,7 +620,7 @@ export function planSessionSubmit(input: {
   alreadyParked: boolean
 }): ComposerSubmitAction {
   const text = expandPasteRefs(input.draft, input.pasteEntries).trim()
-  if (text.length === 0) return { type: 'ignore' }
+  if (text.length === 0 && input.hasImages !== true) return { type: 'ignore' }
   const gate = selectComposerGate({
     hasSession: true,
     preview: input.preview,
@@ -570,6 +651,7 @@ export function planSessionSubmit(input: {
  */
 export type PendingSubmit = {
   text: string
+  images?: ImageAttachment[]
   showQueuedRow: boolean
 }
 export type PendingSubmitState = Record<SessionId, PendingSubmit>
@@ -591,7 +673,7 @@ export function reducePendingSubmitHeld(
   sessionId: SessionId,
   pending: PendingSubmit,
 ): PendingSubmitState {
-  if (pending.text.length === 0) return state
+  if (pending.text.length === 0 && (pending.images?.length ?? 0) === 0) return state
   return { ...state, [sessionId]: pending }
 }
 
