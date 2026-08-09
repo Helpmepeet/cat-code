@@ -386,6 +386,11 @@ export class SidecarSupervisor {
         ...(signal === null ? {} : { signal }),
         expected: code === 0,
       })
+      this.operational('log.coverage.incomplete', code === 0 ? 'warn' : 'error', sessionId, {
+        source: 'sidecar',
+        reason: 'stream_closed_without_flush_ack',
+        expected: code === 0,
+      })
       this.setStatus(record, 'exited')
       // Crash isolation: one sidecar dying does not touch the others. Restart
       // is left to the caller's policy (the app owns restart cadence).

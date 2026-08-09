@@ -56,6 +56,7 @@ import {
 } from './attachmentGate.js'
 import {
   createCwdTokenStore,
+  createRendererHealthMonitor,
   createStartupTimers,
   isTerminalLifecycleFrame,
   parseVisibleSessions,
@@ -210,6 +211,9 @@ const VITE_REACT_PREAMBLE_CSP_HASH =
 // development stderr, but only this bounded, redacted record stream is durable.
 const operationalLog = createOperationalLogSink({ configDir: defaultRegistryDir() })
 process.env.CATCODE_OPERATIONAL_LAUNCH_ID = operationalLog.launchId
+if (IS_DEV) {
+  process.stderr.write(`[main] desktop diagnostics: ${operationalLog.getDirectory()}\n`)
+}
 const deliveryTrace = createDeliveryTraceSink({
   configDir: defaultRegistryDir(),
   launchId: operationalLog.launchId,
@@ -217,10 +221,8 @@ const deliveryTrace = createDeliveryTraceSink({
 const deliverySequences = new Map<SessionId, number>()
 let rendererDocumentId: string = randomUUID()
 let rendererSubscriptionEpoch = 0
-let rendererHealthMisses = 0
-let rendererHealthLastResponse = 0
+const rendererHealth = createRendererHealthMonitor()
 let rendererHealthTimer: ReturnType<typeof setInterval> | null = null
-let rendererHealthDegradedAt: number | null = null
 let rendererHealthLastSampleAt = 0
 let rendererFaultWindowStartedAt = Date.now()
 let rendererFaultCount = 0
@@ -1071,19 +1073,11 @@ function createWindow(): void {
     },
   })
   const healthProbe = () => {
-    const elapsed = Date.now() - rendererHealthLastResponse
-    if (elapsed > 5_500) {
-      rendererHealthMisses++
-      if (rendererHealthMisses >= 3 && rendererHealthDegradedAt === null) {
-        rendererHealthDegradedAt = Date.now()
-        logOperational('renderer.health.missed', 'warn', { missed: rendererHealthMisses, elapsedMs: elapsed })
-      }
-    }
+    const event = rendererHealth.probe()
+    if (event) logOperational(event.event, event.level, event.fields)
     if (!window.webContents.isDestroyed()) window.webContents.send(CH_DELIVERY_HEALTH_PROBE)
   }
-  rendererHealthLastResponse = Date.now()
-  rendererHealthMisses = 0
-  rendererHealthDegradedAt = null
+  rendererHealth.reset()
   rendererHealthTimer = setInterval(healthProbe, 5_000)
   window.once('closed', () => {
     if (rendererHealthTimer) clearInterval(rendererHealthTimer)
@@ -1659,18 +1653,14 @@ function registerIpcHandlers(): void {
       item.subscriptionEpoch !== rendererSubscriptionEpoch ||
       item.rendererProcessInstanceId.length === 0
     ) return
-    const recovered = rendererHealthDegradedAt !== null
-    const priorMisses = rendererHealthMisses
-    const outageDurationMs = rendererHealthDegradedAt === null ? 0 : Date.now() - rendererHealthDegradedAt
-    rendererHealthMisses = 0
-    rendererHealthDegradedAt = null
-    rendererHealthLastResponse = Date.now()
-    if (recovered || rendererHealthLastResponse - rendererHealthLastSampleAt >= 30_000) {
-      rendererHealthLastSampleAt = rendererHealthLastResponse
-      logOperational(recovered ? 'renderer.health.recovered' : 'renderer.health.sample', 'info', {
+    const health = rendererHealth.response()
+    const responseAt = Date.now()
+    if (health.recovered || responseAt - rendererHealthLastSampleAt >= 30_000) {
+      rendererHealthLastSampleAt = responseAt
+      logOperational(health.recovered ? 'renderer.health.recovered' : 'renderer.health.sample', 'info', {
         sessions: item.watermarks.length,
         eventLoopLagMs: item.eventLoopLagMs,
-        ...(recovered ? { missed: priorMisses, durationMs: outageDurationMs } : {}),
+        ...(health.recovered ? { missed: health.priorMisses, durationMs: health.outageDurationMs } : {}),
       })
     }
   })
@@ -1716,6 +1706,7 @@ function registerIpcHandlers(): void {
           logsDirectory: operationalLog.getDirectory(),
           appVersion: app.getVersion(),
           packaged: app.isPackaged,
+          currentLaunchId: operationalLog.launchId,
           buildId: process.env.CATCODE_BUILD_ID,
           commitId: process.env.CATCODE_COMMIT_ID,
         }),

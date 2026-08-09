@@ -36,6 +36,7 @@ export const OPERATIONAL_EVENTS = [
   'renderer.component.failed',
   'renderer.health.sample',
   'renderer.health.missed',
+  'renderer.health.unavailable',
   'renderer.health.recovered',
   'registry.load.completed',
   'registry.write.failed',
@@ -55,6 +56,7 @@ export const OPERATIONAL_EVENTS = [
   'worker.completed',
   'worker.failed',
   'diagnostic',
+  'log.coverage.incomplete',
   'log.suppressed',
 ] as const
 
@@ -94,6 +96,7 @@ const OPERATIONAL_EVENT_FIELD_KEYS: Partial<Record<OperationalEvent, readonly st
   'renderer.responsive': ['durationMs'],
   'renderer.health.sample': ['sessions', 'eventLoopLagMs'],
   'renderer.health.missed': ['missed', 'elapsedMs'],
+  'renderer.health.unavailable': ['missed', 'elapsedMs'],
   'renderer.health.recovered': ['sessions', 'missed', 'eventLoopLagMs', 'durationMs'],
   'sidecar.spawn.started': ['pid'],
   'sidecar.spawn.failed': ['reason'],
@@ -102,6 +105,7 @@ const OPERATIONAL_EVENT_FIELD_KEYS: Partial<Record<OperationalEvent, readonly st
   'sidecar.exit': ['exitCode', 'signal', 'expected'],
   'session.restore.completed': ['messageCount'],
   diagnostic: ['source', 'category', 'queuedBytes', 'reason'],
+  'log.coverage.incomplete': ['source', 'reason', 'expected'],
   'log.suppressed': ['count'],
 }
 

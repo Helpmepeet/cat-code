@@ -36,6 +36,38 @@ test('operational events accept only their declared metadata fields', () => {
   expect(parseOperationalRecord({ ...appStart, fields: { reason: 'not valid for startup' } })).toBeNull()
 })
 
+test('renderer failure and incomplete coverage records keep closed metadata', () => {
+  const unavailable = createOperationalRecord(
+    {
+      level: 'error',
+      event: 'renderer.health.unavailable',
+      process: 'main',
+      fields: { missed: 6, elapsedMs: 35_000 },
+    },
+    { launchId: 'launch', processInstanceId: 'process' },
+  )
+  const incomplete = createOperationalRecord(
+    {
+      level: 'error',
+      event: 'log.coverage.incomplete',
+      process: 'main',
+      fields: {
+        source: 'sidecar',
+        reason: 'stream_closed_without_flush_ack',
+        expected: false,
+      },
+    },
+    { launchId: 'launch', processInstanceId: 'process' },
+  )
+
+  expect(parseOperationalRecord(unavailable)).not.toBeNull()
+  expect(parseOperationalRecord(incomplete)).not.toBeNull()
+  expect(parseOperationalRecord({
+    ...incomplete,
+    fields: { ...incomplete.fields, category: 'not allowed' },
+  })).toBeNull()
+})
+
 test('operational text removes every rooted path and URL path/query', () => {
   expect(sanitizeOperationalText('/var/db/private.txt C:\\Users\\alice\\secret https://user:pw@example.com/private/customer?a=1#x'))
     .not.toMatch(/var\/db|Users\\alice|private\/customer|user:pw|\?a=/)

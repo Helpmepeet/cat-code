@@ -14,6 +14,7 @@
  *   - the Bun runtime flags required by the real engine sidecar;
  *   - the HC1 validation of a `saveTextToFile` request (P4-35);
  *   - the cancellable post-paint window that arms the background drivers.
+ *   - deciding when renderer health loss becomes durable error evidence.
  *
  * `main.ts` keeps the Electron wiring and calls in here.
  */
@@ -42,6 +43,84 @@ export const SIDECAR_RUNTIME_ARGS = [
   '--feature=TRANSCRIPT_CLASSIFIER',
   'run',
 ] as const
+
+export const RENDERER_HEALTH_DEGRADED_MISSES = 3
+export const RENDERER_HEALTH_UNAVAILABLE_MISSES = 6
+export const RENDERER_HEALTH_UNAVAILABLE_INTERVAL_MS = 60_000
+
+export type RendererHealthEvent = Readonly<{
+  event: 'renderer.health.missed' | 'renderer.health.unavailable'
+  level: 'warn' | 'error'
+  fields: Readonly<{ missed: number; elapsedMs: number }>
+}>
+
+export type RendererHealthResponse = Readonly<{
+  recovered: boolean
+  priorMisses: number
+  outageDurationMs: number
+}>
+
+export function createRendererHealthMonitor({
+  now = Date.now,
+}: {
+  now?: () => number
+} = {}) {
+  let misses = 0
+  let lastResponseAt = now()
+  let degradedAt: number | null = null
+  let lastUnavailableAt: number | null = null
+
+  return {
+    reset(): void {
+      misses = 0
+      lastResponseAt = now()
+      degradedAt = null
+      lastUnavailableAt = null
+    },
+    probe(): RendererHealthEvent | null {
+      const current = now()
+      const elapsedMs = current - lastResponseAt
+      if (elapsedMs <= 5_500) return null
+
+      misses++
+      if (misses === RENDERER_HEALTH_DEGRADED_MISSES) {
+        degradedAt = current
+        return {
+          event: 'renderer.health.missed',
+          level: 'warn',
+          fields: { missed: misses, elapsedMs },
+        }
+      }
+      if (
+        misses >= RENDERER_HEALTH_UNAVAILABLE_MISSES &&
+        (lastUnavailableAt === null ||
+          current - lastUnavailableAt >= RENDERER_HEALTH_UNAVAILABLE_INTERVAL_MS)
+      ) {
+        lastUnavailableAt = current
+        return {
+          event: 'renderer.health.unavailable',
+          level: 'error',
+          fields: { missed: misses, elapsedMs },
+        }
+      }
+      return null
+    },
+    response(): RendererHealthResponse {
+      const current = now()
+      const recovered = degradedAt !== null
+      const result = {
+        recovered,
+        priorMisses: misses,
+        outageDurationMs: degradedAt === null ? 0 : current - degradedAt,
+      }
+      misses = 0
+      degradedAt = null
+      lastUnavailableAt = null
+      lastResponseAt = current
+      return result
+    },
+  }
+}
 
 /**
  * The renderer-visible frame a supervisor event becomes, or null when the event

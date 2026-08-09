@@ -41,9 +41,40 @@ test('delivery trace records sequence gaps and preserves every stage record', ()
   const text = readFileSync(join(root, 'logs', file), 'utf8')
   expect(text).toContain('trace.sequence.gap')
   expect(text).toContain('trace.sequence.duplicate')
+  const records = text.trim().split('\n').map(line => JSON.parse(line))
+  expect(records.find(record => record.recordKind === 'trace.sequence.gap')).toMatchObject({
+    stage: 'engine.produced',
+    observationKind: 'action',
+    anomalyScope: 'source_sequence',
+  })
+  expect(records.find(record => record.recordKind === 'trace.sequence.duplicate')).toMatchObject({
+    stage: 'engine.produced',
+    observationKind: 'action',
+    anomalyScope: 'stage_sequence',
+  })
   // Later observations cannot advance a contiguous source watermark over the
   // missing second sequence.
   expect(sink.summary('session')).toMatchObject({ produced: 1, nextExpected: 2 })
+})
+
+test('delivery stages say whether main observed an action or received an acknowledgement', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-observation-'))
+  const sink = createDeliveryTraceSink({ configDir: root, launchId: 'launch' })
+  const trace = mintDeliveryTrace(1, 'stream')
+  sink.mark({ sessionId: 'session', trace, stage: 'main.ipc.sent' })
+  sink.mark({ sessionId: 'session', trace, stage: 'renderer.state.applied' })
+  sink.close()
+
+  const file = readdirSync(join(root, 'logs')).find(name => name.startsWith('delivery-trace-'))!
+  const records = readFileSync(join(root, 'logs', file), 'utf8')
+    .trim()
+    .split('\n')
+    .map(line => JSON.parse(line))
+    .filter(record => record.recordKind === 'delivery.trace')
+  expect(records.map(record => [record.stage, record.observationKind])).toEqual([
+    ['main.ipc.sent', 'action'],
+    ['renderer.state.applied', 'acknowledgement'],
+  ])
 })
 
 test('contiguous acknowledgements expose an earlier missing frame despite a later complete frame', () => {

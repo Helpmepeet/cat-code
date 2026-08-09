@@ -2,8 +2,11 @@ import { expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { buildDiagnosticsBundle } from './diagnosticsBundle.js'
-import { parseDeliveryTraceRecord } from './diagnosticsBundle.js'
+import {
+  buildDiagnosticsBundle,
+  deriveRecordingCoverage,
+  parseDeliveryTraceRecord,
+} from './diagnosticsBundle.js'
 
 test('diagnostics bundle exports only closed operational and trace schemas', () => {
   const root = mkdtempSync(join(tmpdir(), 'cat-code-diagnostics-bundle-'))
@@ -40,6 +43,10 @@ test('diagnostics bundle exports only closed operational and trace schemas', () 
   expect(bundle.stuckSessions[0].lastProducedFrameKind).toBe('lifecycle')
   expect(bundle.processInstances).toHaveLength(1)
   expect(bundle.processInstances[0]).toMatchObject({ pid: 123, status: 'observed' })
+  expect(bundle.recordingCoverage).toMatchObject({
+    status: 'incomplete',
+    launches: [{ launchId: 'launch', status: 'interrupted' }],
+  })
   expect(bundle.manifest).toMatchObject({
     build: { buildId: '2026.08.06', commitId: 'abc1234' },
     configuration: { packaged: true },
@@ -98,4 +105,50 @@ test('second-pass trace parser validates the sequence-anomaly expectation field'
   // The gap and out_of_order kinds allow this field, and no branch checked it,
   // so a rooted path in it was exported verbatim.
   expect(parseDeliveryTraceRecord({ ...gap, expectedSequence: '/Users/alice/private' })).toBeNull()
+})
+
+test('second-pass trace parser validates observation kind and anomaly scope', () => {
+  const trace = {
+    schemaVersion: 1, recordKind: 'delivery.trace', wallTimestamp: '2026-08-06T00:00:00.000Z', monotonicTimestampMs: 1,
+    launchId: 'launch', component: 'renderer', processName: 'electron-renderer', processInstanceId: 'process', sessionId: 'session',
+    streamEpoch: '018f0000-0000-4000-8000-000000000001', sequence: 1, traceId: '018f0000-0000-4000-8000-000000000002',
+    deliveryAttempt: 1, replay: false, connectionEpoch: 1, stage: 'renderer.state.applied',
+    observationKind: 'acknowledgement',
+  }
+  expect(parseDeliveryTraceRecord(trace)).not.toBeNull()
+  expect(parseDeliveryTraceRecord({ ...trace, observationKind: 'action' })).toBeNull()
+
+  const gap = {
+    schemaVersion: 1, recordKind: 'trace.sequence.gap', wallTimestamp: '2026-08-06T00:00:00.000Z', monotonicTimestampMs: 1,
+    launchId: 'launch', processName: 'electron-main', processInstanceId: 'process', sessionId: 'session',
+    streamEpoch: '018f0000-0000-4000-8000-000000000001', sequence: 2, stage: 'engine.produced',
+    expectedSequence: 1, observationKind: 'action', anomalyScope: 'source_sequence',
+  }
+  expect(parseDeliveryTraceRecord(gap)).not.toBeNull()
+  expect(parseDeliveryTraceRecord({ ...gap, anomalyScope: 'stage_sequence' })).toBeNull()
+})
+
+test('recording coverage distinguishes known loss, active output, and interrupted launches', () => {
+  const coverage = deriveRecordingCoverage(
+    [
+      { launchId: 'current', timestamp: '2026-08-06T01:00:00.000Z', event: 'app.start', fields: {} },
+      { launchId: 'current', timestamp: '2026-08-06T01:01:00.000Z', event: 'log.suppressed', fields: { count: 3 } },
+      { launchId: 'current', timestamp: '2026-08-06T01:02:00.000Z', event: 'log.coverage.incomplete', fields: {} },
+      { launchId: 'prior', timestamp: '2026-08-06T00:00:00.000Z', event: 'app.start', fields: {} },
+    ],
+    [{ recordKind: 'trace.loss', droppedCount: 2 }],
+    'current',
+  )
+
+  expect(coverage).toMatchObject({
+    status: 'incomplete',
+    lossObserved: true,
+    operationalRecordsSuppressed: 3,
+    deliveryTraceRecordsLost: 2,
+    incompleteStreamCount: 1,
+    launches: [
+      { launchId: 'current', status: 'active' },
+      { launchId: 'prior', status: 'interrupted' },
+    ],
+  })
 })

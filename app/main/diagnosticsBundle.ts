@@ -11,7 +11,11 @@ import {
   MAX_DELIVERY_TRACE_RECORD_BYTES,
   MAX_DELIVERY_TRACE_TOTAL_BYTES,
 } from './deliveryTraceSink.js'
-import { isDeliveryStage, isSafeDeliveryIdentifier } from '../shared/deliveryTrace.js'
+import {
+  deliveryObservationKind,
+  isDeliveryStage,
+  isSafeDeliveryIdentifier,
+} from '../shared/deliveryTrace.js'
 import { isServerFrameKind } from '../shared/protocol.js'
 import {
   MAX_OPERATIONAL_LOG_AGE_MS,
@@ -30,12 +34,14 @@ export function buildDiagnosticsBundle({
   logsDirectory,
   appVersion,
   packaged = false,
+  currentLaunchId,
   buildId,
   commitId,
 }: {
   logsDirectory: string
   appVersion: string
   packaged?: boolean
+  currentLaunchId?: string
   buildId?: string
   commitId?: string
 }): string {
@@ -101,6 +107,11 @@ export function buildDiagnosticsBundle({
       recordCounts: { operational: streams.operational.length, deliveryTrace: streams.deliveryTrace.length },
     },
     processInstances: deriveProcessInstances(streams.operational, streams.deliveryTrace),
+    recordingCoverage: deriveRecordingCoverage(
+      streams.operational,
+      streams.deliveryTrace,
+      currentLaunchId,
+    ),
     stuckSessions: deriveStuckSessionSummaries(streams.deliveryTrace),
     streams,
     excluded: [
@@ -123,7 +134,7 @@ export function parseDeliveryTraceRecord(value: unknown): TraceRecord | null {
       'schemaVersion', 'recordKind', 'wallTimestamp', 'monotonicTimestampMs', 'launchId',
       'component', 'processName', 'processInstanceId', 'sessionId', 'streamEpoch',
       'sequence', 'traceId', 'deliveryAttempt', 'replay', 'stage', 'documentId', 'subscriptionEpoch',
-      'connectionEpoch', 'frameKind', 'processStartedAt',
+      'connectionEpoch', 'frameKind', 'processStartedAt', 'observationKind',
     ],
     'trace.loss': [
       'schemaVersion', 'recordKind', 'wallTimestamp', 'monotonicTimestampMs', 'launchId',
@@ -132,15 +143,18 @@ export function parseDeliveryTraceRecord(value: unknown): TraceRecord | null {
     ],
     'trace.sequence.gap': [
       'schemaVersion', 'recordKind', 'wallTimestamp', 'monotonicTimestampMs', 'launchId',
-      'processName', 'processInstanceId', 'sessionId', 'streamEpoch', 'sequence', 'stage', 'expectedSequence',
+      'processName', 'processInstanceId', 'sessionId', 'streamEpoch', 'sequence', 'stage',
+      'expectedSequence', 'observationKind', 'anomalyScope',
     ],
     'trace.sequence.duplicate': [
       'schemaVersion', 'recordKind', 'wallTimestamp', 'monotonicTimestampMs', 'launchId',
       'processName', 'processInstanceId', 'sessionId', 'streamEpoch', 'sequence', 'stage',
+      'observationKind', 'anomalyScope',
     ],
     'trace.sequence.out_of_order': [
       'schemaVersion', 'recordKind', 'wallTimestamp', 'monotonicTimestampMs', 'launchId',
-      'processName', 'processInstanceId', 'sessionId', 'streamEpoch', 'sequence', 'stage', 'expectedSequence',
+      'processName', 'processInstanceId', 'sessionId', 'streamEpoch', 'sequence', 'stage',
+      'expectedSequence', 'observationKind', 'anomalyScope',
     ],
     'trace.ack.rejected': [
       'schemaVersion', 'recordKind', 'wallTimestamp', 'monotonicTimestampMs', 'launchId',
@@ -171,7 +185,11 @@ export function parseDeliveryTraceRecord(value: unknown): TraceRecord | null {
       (item.frameKind !== undefined && !isServerFrameKind(item.frameKind)) ||
       (item.processStartedAt !== undefined && (typeof item.processStartedAt !== 'string' || Number.isNaN(Date.parse(item.processStartedAt)))) ||
       (item.documentId !== undefined && !opaqueId(item.documentId)) ||
-      (item.subscriptionEpoch !== undefined && !positiveInteger(item.subscriptionEpoch))
+      (item.subscriptionEpoch !== undefined && !positiveInteger(item.subscriptionEpoch)) ||
+      (
+        item.observationKind !== undefined &&
+        item.observationKind !== deliveryObservationKind(item.stage)
+      )
     ) return null
   } else if (kind === 'trace.loss') {
     if (
@@ -190,6 +208,14 @@ export function parseDeliveryTraceRecord(value: unknown): TraceRecord | null {
   } else if (
     !opaqueId(item.sessionId) || !isSafeDeliveryIdentifier(item.streamEpoch) ||
     !positiveInteger(item.sequence) || !isDeliveryStage(item.stage) ||
+    (
+      item.observationKind !== undefined &&
+      item.observationKind !== deliveryObservationKind(item.stage)
+    ) ||
+    (
+      item.anomalyScope !== undefined &&
+      item.anomalyScope !== (kind === 'trace.sequence.gap' ? 'source_sequence' : 'stage_sequence')
+    ) ||
     // The gap and out_of_order kinds carry this too, and nothing else validated
     // it, so a rooted path in expectedSequence reached the export unchanged.
     (item.expectedSequence !== undefined && !positiveInteger(item.expectedSequence))
@@ -197,6 +223,82 @@ export function parseDeliveryTraceRecord(value: unknown): TraceRecord | null {
     return null
   }
   return item as TraceRecord
+}
+
+export function deriveRecordingCoverage(
+  operationalRecords: readonly unknown[],
+  traceRecords: readonly TraceRecord[],
+  currentLaunchId?: string,
+): Record<string, unknown> {
+  const launches = new Map<string, {
+    launchId: string
+    startedAt: string | null
+    lastRecordAt: string
+    completed: boolean
+  }>()
+  let operationalRecordsSuppressed = 0
+  let deliveryTraceRecordsLost = 0
+  let incompleteStreamCount = 0
+
+  for (const record of operationalRecords) {
+    if (!record || typeof record !== 'object' || Array.isArray(record)) continue
+    const item = record as Record<string, unknown>
+    if (typeof item.launchId !== 'string' || typeof item.timestamp !== 'string') continue
+    const launch = launches.get(item.launchId) ?? {
+      launchId: item.launchId,
+      startedAt: null,
+      lastRecordAt: item.timestamp,
+      completed: false,
+    }
+    if (item.timestamp > launch.lastRecordAt) launch.lastRecordAt = item.timestamp
+    if (item.event === 'app.start') launch.startedAt = item.timestamp
+    if (item.event === 'app.shutdown.completed') launch.completed = true
+    if (item.event === 'log.coverage.incomplete') incompleteStreamCount++
+    if (item.event === 'log.suppressed') {
+      const fields = item.fields as Record<string, unknown>
+      if (typeof fields.count === 'number') operationalRecordsSuppressed += fields.count
+    }
+    launches.set(item.launchId, launch)
+  }
+  for (const record of traceRecords) {
+    if (record.recordKind === 'trace.loss' && typeof record.droppedCount === 'number') {
+      deliveryTraceRecordsLost += record.droppedCount
+    }
+  }
+
+  const launchCoverage = [...launches.values()]
+    .map(launch => ({
+      launchId: launch.launchId,
+      status: launch.completed
+        ? 'complete'
+        : launch.launchId === currentLaunchId
+          ? 'active'
+          : 'interrupted',
+      startedAt: launch.startedAt,
+      lastRecordAt: launch.lastRecordAt,
+    }))
+    .sort((a, b) => b.lastRecordAt.localeCompare(a.lastRecordAt))
+  const knownLoss = operationalRecordsSuppressed + deliveryTraceRecordsLost > 0
+  const incomplete = incompleteStreamCount > 0 ||
+    launchCoverage.some(launch => launch.status === 'interrupted')
+  const active = launchCoverage.some(launch => launch.status === 'active')
+
+  return {
+    status: incomplete
+      ? 'incomplete'
+      : knownLoss
+        ? 'loss_observed'
+        : active
+          ? 'active'
+          : launchCoverage.length > 0
+            ? 'complete'
+            : 'unknown',
+    lossObserved: knownLoss,
+    operationalRecordsSuppressed,
+    deliveryTraceRecordsLost,
+    incompleteStreamCount,
+    launches: launchCoverage,
+  }
 }
 
 export function deriveStuckSessionSummaries(records: readonly TraceRecord[]): Array<Record<string, unknown>> {

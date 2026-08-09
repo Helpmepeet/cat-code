@@ -6,7 +6,11 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import type { DeliveryStage, DeliveryTrace } from '../shared/deliveryTrace.js'
+import {
+  deliveryObservationKind,
+  type DeliveryStage,
+  type DeliveryTrace,
+} from '../shared/deliveryTrace.js'
 import { isServerFrameKind } from '../shared/protocol.js'
 
 export const MAX_DELIVERY_TRACE_RECORD_BYTES = 2 * 1024
@@ -265,6 +269,8 @@ export function createDeliveryTraceSink({
       streamEpoch: trace.streamEpoch,
       sequence: trace.sequence,
       stage,
+      observationKind: deliveryObservationKind(stage),
+      anomalyScope: anomaly === 'trace.sequence.gap' ? 'source_sequence' : 'stage_sequence',
       ...(expected === undefined ? {} : { expectedSequence: expected }),
     }, trace.sequence, { state, sessionId, streamEpoch: trace.streamEpoch })
   }
@@ -316,6 +322,7 @@ export function createDeliveryTraceSink({
         replay: trace.replay,
         connectionEpoch: trace.connectionEpoch,
         stage,
+        observationKind: deliveryObservationKind(stage),
         ...(state.frameKinds.get(trace.sequence) ? { frameKind: state.frameKinds.get(trace.sequence) } : {}),
         ...(documentId ? { documentId } : {}),
         ...(subscriptionEpoch === undefined ? {} : { subscriptionEpoch }),

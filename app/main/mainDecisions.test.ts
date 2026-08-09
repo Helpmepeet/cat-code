@@ -15,6 +15,7 @@ import {
   CWD_TOKEN_TTL_MS,
   SIDECAR_RUNTIME_ARGS,
   createCwdTokenStore,
+  createRendererHealthMonitor,
   createStartupTimers,
   isTerminalLifecycleFrame,
   parseVisibleSessions,
@@ -31,6 +32,54 @@ test('the production sidecar runtime enables the classifier feature', () => {
     '--feature=TRANSCRIPT_CLASSIFIER',
     'run',
   ])
+})
+
+describe('renderer health evidence', () => {
+  test('escalates sustained loss to repeated error records with current duration', () => {
+    let clock = 0
+    const health = createRendererHealthMonitor({ now: () => clock })
+    health.reset()
+
+    const events = []
+    for (clock = 5_000; clock <= 95_000; clock += 5_000) {
+      const event = health.probe()
+      if (event) events.push(event)
+    }
+
+    expect(events).toEqual([
+      {
+        event: 'renderer.health.missed',
+        level: 'warn',
+        fields: { missed: 3, elapsedMs: 20_000 },
+      },
+      {
+        event: 'renderer.health.unavailable',
+        level: 'error',
+        fields: { missed: 6, elapsedMs: 35_000 },
+      },
+      {
+        event: 'renderer.health.unavailable',
+        level: 'error',
+        fields: { missed: 18, elapsedMs: 95_000 },
+      },
+    ])
+  })
+
+  test('recovery closes a transient episode and resets escalation state', () => {
+    let clock = 0
+    const health = createRendererHealthMonitor({ now: () => clock })
+    health.reset()
+    for (clock = 5_000; clock <= 20_000; clock += 5_000) health.probe()
+
+    clock = 25_000
+    expect(health.response()).toEqual({
+      recovered: true,
+      priorMisses: 3,
+      outageDurationMs: 5_000,
+    })
+    clock = 30_000
+    expect(health.probe()).toBeNull()
+  })
 })
 
 function pongFrame(sessionId = SID): ServerFrame {

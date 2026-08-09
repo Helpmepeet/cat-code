@@ -22,6 +22,21 @@ export const DELIVERY_STAGES = [
 
 export type DeliveryStage = (typeof DELIVERY_STAGES)[number]
 
+export type DeliveryObservationKind = 'action' | 'acknowledgement'
+
+export function deliveryObservationKind(stage: DeliveryStage): DeliveryObservationKind {
+  switch (stage) {
+    case 'preload.received':
+    case 'renderer.subscription.received':
+    case 'renderer.state.queued':
+    case 'renderer.state.applied':
+    case 'renderer.ui.committed':
+      return 'acknowledgement'
+    default:
+      return 'action'
+  }
+}
+
 /** Additive envelope metadata; never inspect or rewrite AppSessionEvent content. */
 export type DeliveryTrace = Readonly<{
   streamEpoch: string
