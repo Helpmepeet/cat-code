@@ -6,6 +6,10 @@ code quality, weighted equally, per `00-review-contract.md`.
 
 **Totals: 61 HIGH · 181 MED · 167 LOW across 31 scopes.**
 
+Implementation progress after the review is tracked in
+[04-fix-progress.md](./04-fix-progress.md). The original findings below remain
+unchanged as the review record.
+
 Branch size at review time: 710 commits vs `main`; `app/` is 146,289 insertions
 / 0 deletions (entirely new), `src/` is 39,774 / 4,651.
 
