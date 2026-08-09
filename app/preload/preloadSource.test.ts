@@ -211,6 +211,13 @@ test('failure-path senders keep the rate guard but never let its rejection escap
     expect(body.indexOf('try {')).toBeGreaterThan(-1)
     expect(body.indexOf('try {')).toBeLessThan(body.indexOf('sendGuard.assertAllowed'))
     expect(body).toContain('} catch {')
+    // The send must sit INSIDE the same try, after the guard. Asserting only
+    // that a try and a catch exist would pass this, which is the exact T7
+    // regression the assertions above claim to prevent:
+    //   try { sendGuard.assertAllowed(payload) } catch {}
+    //   ipcRenderer.send(CH, payload)   // sends what the guard rejected
+    expect(body.indexOf('ipcRenderer.send')).toBeGreaterThan(body.indexOf('sendGuard.assertAllowed'))
+    expect(body.indexOf('ipcRenderer.send')).toBeLessThan(body.indexOf('} catch {'))
   }
 })
 

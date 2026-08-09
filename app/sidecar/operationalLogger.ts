@@ -107,13 +107,9 @@ export function createSidecarOperationalLogger({
     if (!writable) return
     try {
       const record = createOperationalRecord(
-        {
-          ...input,
-          process: 'sidecar',
-          ...(input.appSessionId ?? appSessionId
-            ? { appSessionId: input.appSessionId ?? appSessionId }
-            : {}),
-        },
+        // `createOperationalRecord` already drops a falsy `appSessionId`, so this
+        // needs no conditional spread of its own.
+        { ...input, process: 'sidecar', appSessionId: input.appSessionId ?? appSessionId },
         { launchId: launchId as string, processInstanceId, processStartedAt },
       )
       const line = `${JSON.stringify(record)}\n`

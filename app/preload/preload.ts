@@ -83,8 +83,16 @@ const deliveryProcessStartedAt = new Date().toISOString()
 let deliverySubscriptionEpoch = 0
 const deliveryWatermarks = new Map<string, { received: number; applied: number; committed: number }>()
 const pendingDeliveryAcknowledgements: DeliveryAcknowledgement[] = []
-let deliveryAcknowledgementFlushScheduled = false
+let deliveryAckFlushTimer: ReturnType<typeof setTimeout> | null = null
+/** The last attempt was rejected by the rate guard and the batch is still queued. */
+let deliveryAckRetrying = false
 const MAX_DELIVERY_ACKS_PER_BATCH = 64
+/**
+ * Ceiling on retained acknowledgements while the budget is spent. 16 batches is
+ * far more than a rolling 1000ms window can withhold in practice, and bounds the
+ * queue if it ever cannot drain at all.
+ */
+const MAX_PENDING_DELIVERY_ACKS = 1024
 /**
  * A microtask drains at the end of the CURRENT task, and each delivered frame
  * arrives in its own task, so a microtask flush coalesced nothing in steady
@@ -139,11 +147,13 @@ function sendDeliveryAcknowledgement(
     rendererProcessStartedAt: deliveryProcessStartedAt,
   }
   pendingDeliveryAcknowledgements.push(payload)
-  if (pendingDeliveryAcknowledgements.length >= MAX_DELIVERY_ACKS_PER_BATCH) {
+  // While retrying, every push would otherwise re-enter the batch branch and
+  // serialize 64 acknowledgements again just to be rejected again. Wait for the
+  // timer instead: the window is 1000ms, so the budget is never far from rolling.
+  if (!deliveryAckRetrying && pendingDeliveryAcknowledgements.length >= MAX_DELIVERY_ACKS_PER_BATCH) {
     flushDeliveryAcknowledgements()
-  } else if (!deliveryAcknowledgementFlushScheduled) {
-    deliveryAcknowledgementFlushScheduled = true
-    setTimeout(flushDeliveryAcknowledgements, DELIVERY_ACK_FLUSH_MS)
+  } else {
+    scheduleDeliveryAcknowledgementFlush()
   }
   const current = deliveryWatermarks.get(sessionId) ?? { received: 0, applied: 0, committed: 0 }
   if (stage === 'preload.received' || stage === 'renderer.subscription.received') current.received = Math.max(current.received, sequence)
@@ -152,27 +162,50 @@ function sendDeliveryAcknowledgement(
   deliveryWatermarks.set(sessionId, current)
 }
 
+function scheduleDeliveryAcknowledgementFlush(): void {
+  if (deliveryAckFlushTimer !== null) return
+  deliveryAckFlushTimer = setTimeout(flushDeliveryAcknowledgements, DELIVERY_ACK_FLUSH_MS)
+}
+
 function flushDeliveryAcknowledgements(): void {
-  deliveryAcknowledgementFlushScheduled = false
+  if (deliveryAckFlushTimer !== null) {
+    clearTimeout(deliveryAckFlushTimer)
+    deliveryAckFlushTimer = null
+  }
   while (pendingDeliveryAcknowledgements.length > 0) {
     const acknowledgements = pendingDeliveryAcknowledgements.splice(0, MAX_DELIVERY_ACKS_PER_BATCH)
     const payload = { acknowledgements }
-    // These are diagnostics. The guard still rejects the batch when the shared
-    // inbound budget is spent — dropping it is strictly more restrictive than
-    // sending, so T7's cap is unchanged — but the rejection must not escape:
-    // this runs on a React effect stack whenever the 64-item branch above fires
-    // synchronously, and an exception there reaches the error boundary, whose
-    // own reporter is blocked by the same spent budget. That pair unmounted the
-    // renderer to a black window on 2026-08-09. The trace sink already accounts
-    // for missing stage records, so a dropped batch degrades evidence, not the
-    // session.
+    // These are diagnostics, and the rejection must not escape: this runs on a
+    // React effect stack whenever the batch branch above fires synchronously,
+    // and an exception there reaches the error boundary, whose own reporter is
+    // blocked by the same spent budget. That pair unmounted the renderer to a
+    // black window on 2026-08-09.
     try {
-      sendGuard.assertAllowed(payload)
+      // The only diagnostics-class sender: high volume, rate set by engine
+      // output rather than by the user, and losing one costs evidence only.
+      sendGuard.assertAllowed(payload, 'diagnostics')
       ipcRenderer.send(CH_DELIVERY_ACK, payload)
     } catch {
+      // Keep the batch and retry rather than dropping it. `updateWatermarks`
+      // advances each stage by a CONTIGUOUS scan (`app/main/deliveryTraceSink.ts`),
+      // so one discarded batch pins `applied` below `produced` for the rest of
+      // the stream and `firstMissing` then reports a renderer stall that never
+      // happened — the same symptom the 2026-08-09 investigation was chasing.
+      // Late evidence is recoverable; invented evidence is not. The guard still
+      // runs on every retry, so nothing reaches main that the cap rejected.
+      pendingDeliveryAcknowledgements.unshift(...acknowledgements)
+      // Sustained starvation must not grow this without bound. Drop the NEWEST
+      // beyond the bound: the contiguous scan resumes from the oldest retained
+      // sequence, so keeping the tail would strand everything behind the gap.
+      if (pendingDeliveryAcknowledgements.length > MAX_PENDING_DELIVERY_ACKS) {
+        pendingDeliveryAcknowledgements.splice(MAX_PENDING_DELIVERY_ACKS)
+      }
+      deliveryAckRetrying = true
+      scheduleDeliveryAcknowledgementFlush()
       return
     }
   }
+  deliveryAckRetrying = false
 }
 
 ipcRenderer.on(CH_DELIVERY_HEALTH_PROBE, () => {
@@ -184,8 +217,16 @@ ipcRenderer.on(CH_DELIVERY_HEALTH_PROBE, () => {
     eventLoopLagMs: lastMeasuredEventLoopLagMs,
     watermarks: [...deliveryWatermarks.entries()].slice(0, 32).map(([sessionId, value]) => ({ sessionId, ...value })),
   }
-  sendGuard.assertAllowed(payload)
-  ipcRenderer.send(CH_DELIVERY_HEALTH_RESPONSE, payload)
+  // Same class as the two senders above: telemetry, running inside an IPC
+  // listener. Under the flood this file now contains, an escaping rejection
+  // would lose the probe response and make main record `renderer.health.missed`
+  // for a renderer that is merely rate-limited, i.e. report a fake outage.
+  try {
+    sendGuard.assertAllowed(payload)
+    ipcRenderer.send(CH_DELIVERY_HEALTH_RESPONSE, payload)
+  } catch {
+    // Diagnostics only. The next probe carries the same watermarks.
+  }
 })
 
 // Control-plane channels (HC3 — fixed, per-method; must match main.ts).

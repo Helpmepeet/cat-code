@@ -212,8 +212,18 @@ reload or HMR document swap.
 | `preload.received` | 17 | 145 |
 | `renderer.state.applied` | 17 | 102 |
 
-**What that divergence does and does not prove.** Renderer-side stages reach main
-as acknowledgements over `CH_DELIVERY_ACK` (`app/main/main.ts:1593`), so once
+**A second symptom, found during the 2026-08-09 review of the fix.** The renderer
+acknowledges `renderer.subscription.received` inside the `bridge.subscribe`
+callback at `app/renderer/src/App.tsx:875`, deliberately before any reducer
+projection. Before the fix, a rate rejection there threw *out of the subscribe
+callback*, so `applyServerFrameBatch` never ran and the entire frame batch was
+never applied to any store. So this incident lost real frames from renderer
+state, not only trace evidence, and the containment in `deliveryAck` closes that
+path as well as the black window. This does not change the root cause; it adds a
+consequence the first two versions of this report missed.
+
+**What the funnel divergence does and does not prove.** Renderer-side stages reach
+main as acknowledgements over `CH_DELIVERY_ACK` (`app/main/main.ts:1593`), so once
 acknowledgement sends began throwing, those stages stopped being reported while
 frames kept flowing. That makes acknowledgement loss the leading explanation,
 and it is consistent with the console evidence above. It is not proof on its own:
