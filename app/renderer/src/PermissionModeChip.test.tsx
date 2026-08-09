@@ -88,11 +88,12 @@ test('bypassPermissions renders as "Bypass" (amber) — the prototype 5th mode',
   expect(html).toContain('text-amber-400')
 })
 
-test('an unrecognized mode falls back to its raw name (no crash)', () => {
+test('an unrecognized mode uses a neutral label rather than leaking its raw name', () => {
   const html = renderToStaticMarkup(
     <PermissionModeChip context={ctx('someFutureMode')} onSetMode={() => {}} />,
   )
-  expect(html).toContain('someFutureMode')
+  expect(html).toContain('Unknown mode')
+  expect(html).not.toContain('someFutureMode')
 })
 
 // ── Feature #13: adopting the shared usePopover lifecycle + in-panel roving ────

@@ -1,10 +1,15 @@
 import type { ComposerFaceProps } from './ComposerActionsBar.js'
 import { handleMenuRovingKeyDown, usePopover } from './composerPopover.js'
 import {
-  PERMISSION_SET_MODE_MODES,
   type PermissionContextSnapshot,
   type PermissionSetModeMode,
 } from '../../shared/protocol.js'
+import {
+  permissionModeMeta,
+  permissionModeShortLabel,
+  permissionModeTitle,
+  PERMISSION_MODE_META,
+} from './permissionLabels.js'
 
 /**
  * Compact permission-MODE chip for the composer actions row (P4-24 fidelity —
@@ -24,76 +29,10 @@ import {
  * page, not this popover). The renderer never authors rules (T6b) — it only
  * selects a mode via `onSetMode` → `permission.setMode`.
  */
-// `label` is the SHORT name on the composer face; `title` is the fuller name in
-// the picker row (the prototype's `short`/`title` split, Surfaces.jsx PERM_MODES).
-type ModeMeta = {
-  label: string
-  title: string
-  desc: string
-  toneText: string
-  toneDot: string
-}
-
-// Static class maps (no interpolated `text-[…]` — the v4 dynamic-class trap).
-// `satisfies Record<PermissionSetModeMode, …>` is the exhaustiveness tripwire:
-// a new allowlisted mode fails to compile until it gets an entry here. Labels +
-// descriptions mirror the prototype's mode picker (Surfaces.jsx PERM_MODES): the
-// engine's `default` mode is presented as "Ask" ("confirm before each tool"),
-// its friendlier name in the prototype (the engine's own title is "Default",
-// `PermissionMode.ts:46` — the prototype is the design target here).
 /** The rail's quiet read-only face geometry (ComposerActionsBar `RAIL_FACE`),
  * duplicated as a constant rather than imported to keep this chip standalone. */
 const READ_ONLY_FACE =
   'inline-flex max-w-[170px] shrink-0 items-center overflow-hidden text-ellipsis whitespace-nowrap rounded-md px-[5px] py-[3px] text-[12.5px] font-medium'
-
-const MODE_META = {
-  default: {
-    label: 'Ask',
-    title: 'Ask permissions',
-    desc: 'Confirm before each tool use',
-    toneText: 'text-text-muted',
-    toneDot: 'bg-text-subtle',
-  },
-  acceptEdits: {
-    label: 'Accept edits',
-    title: 'Accept edits',
-    desc: 'Auto-accept edits, ask for commands',
-    toneText: 'text-emerald-400',
-    toneDot: 'bg-emerald-400',
-  },
-  plan: {
-    label: 'Plan',
-    title: 'Plan mode',
-    desc: 'Research & plan only, no changes',
-    toneText: 'text-sky-400',
-    toneDot: 'bg-sky-400',
-  },
-  auto: {
-    label: 'Auto',
-    title: 'Auto mode',
-    desc: 'Use the safety classifier for unapproved actions',
-    toneText: 'text-accent',
-    toneDot: 'bg-accent',
-  },
-  dontAsk: {
-    label: "Don't ask",
-    title: "Don't ask",
-    desc: 'Deny anything that needs approval',
-    toneText: 'text-red-400',
-    toneDot: 'bg-red-400',
-  },
-  // The prototype's 5th mode. Selectable ONLY when the session was launched with
-  // the trusted opt-in (`CATCODE_ALLOW_BYPASS=1` → context
-  // `isBypassPermissionsModeAvailable`); otherwise the row is shown disabled for
-  // visual parity, and the sidecar rejects a request anyway (defence in depth).
-  bypassPermissions: {
-    label: 'Bypass',
-    title: 'Bypass permissions',
-    desc: 'Run everything without asking',
-    toneText: 'text-amber-400',
-    toneDot: 'bg-amber-400',
-  },
-} satisfies Record<PermissionSetModeMode, ModeMeta>
 
 // The prototype's popover order (Surfaces.jsx PERM_MODES): Plan · Ask · Accept
 // edits · then the skip-prompts mode. The prototype's Bypass is the mode NOT on
@@ -107,10 +46,6 @@ const MODE_DISPLAY_ORDER = [
   'dontAsk',
   'bypassPermissions',
 ] as const satisfies readonly PermissionSetModeMode[]
-
-function isKnownMode(mode: string): mode is PermissionSetModeMode {
-  return (PERMISSION_SET_MODE_MODES as readonly string[]).includes(mode)
-}
 
 export function PermissionModeChip({
   context,
@@ -134,8 +69,7 @@ export function PermissionModeChip({
   // had bespoke state with NO first-item focus and NO in-panel roving.
   const { open, setOpen, close, ref, triggerRef } = usePopover()
 
-  const current =
-    context && isKnownMode(context.mode) ? MODE_META[context.mode] : null
+  const current = context ? permissionModeMeta(context.mode) : null
 
   // No live context. A PREVIEWED session still knows the mode it ran under,
   // from its own cached transcript, so show it as a quiet read-only face: there
@@ -145,12 +79,12 @@ export function PermissionModeChip({
   // claim about state this pane never read, so render nothing at all.
   if (!context) {
     if (!readOnlyMode) return null
-    const meta = isKnownMode(readOnlyMode) ? MODE_META[readOnlyMode] : null
-    const label = meta?.label ?? readOnlyMode
+    const meta = permissionModeMeta(readOnlyMode)
+    const label = permissionModeShortLabel(readOnlyMode)
     return (
       <span
         className={`${READ_ONLY_FACE} ${meta?.toneText ?? 'text-text-muted'}`}
-        title={`Permission mode: ${meta?.title ?? readOnlyMode}`}
+        title={`Permission mode: ${permissionModeTitle(readOnlyMode)}`}
       >
         {label}
       </span>
@@ -168,12 +102,12 @@ export function PermissionModeChip({
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={`Permission mode: ${current?.label ?? context?.mode ?? 'unknown'}`}
+        aria-label={`Permission mode: ${permissionModeShortLabel(context.mode)}`}
         disabled={!context}
         onClick={() => setOpen(value => !value)}
         className={`inline-flex max-w-[170px] shrink-0 items-center overflow-hidden text-ellipsis whitespace-nowrap rounded-md px-[5px] py-[3px] text-[12.5px] font-medium transition-colors hover:text-text-primary disabled:opacity-50 ${current?.toneText ?? 'text-text-subtle'}`}
       >
-        {current?.label ?? context?.mode ?? 'none'}
+        {permissionModeShortLabel(context.mode)}
       </button>
 
       {open && context ? (
@@ -187,7 +121,7 @@ export function PermissionModeChip({
             Mode
           </div>
           {MODE_DISPLAY_ORDER.map(mode => {
-            const meta = MODE_META[mode]
+            const meta = PERMISSION_MODE_META[mode]
             const active = context.mode === mode
             const unavailable =
               (mode === 'auto' && !context.permissionClassifierEnabled) ||

@@ -42,6 +42,7 @@ import {
   type MetadataMessageRef,
 } from './messageMetadata.js'
 import { PermissionRulesEditor } from './PermissionRulesEditor.js'
+import { permissionRuleSourceLabel } from './permissionLabels.js'
 import type { RawMessageSessionLog } from './rawMessageLog.js'
 import {
   DIRECTORY_SOURCE_AMBIGUITY_NOTE,
@@ -302,32 +303,6 @@ export function MetadataInspector({
  * ------------------------------------------------------------------------- */
 
 /**
- * Where a directory came from, in words. The wire carries the engine's own
- * `PermissionRuleSource` token (`src/types/permissions.ts:54-62`), which is
- * source vocabulary, not something an operator reads.
- *
- * Duplicated from `PermissionRulesEditor`'s identical map rather than imported,
- * because a renderer `.tsx` may export React components only
- * (`lint:fast-refresh`) — the same reason `permissionPromptModel.ts` keeps its
- * own copy of the mode names. The wire type is an open `string`, so an
- * unrecognized tag falls back to a phrase instead of leaking the token.
- */
-const DIRECTORY_SOURCE_LABEL: Record<string, string> = {
-  userSettings: 'your defaults',
-  projectSettings: "this project's settings",
-  localSettings: 'your private settings',
-  flagSettings: 'a launch flag',
-  policySettings: 'organization policy',
-  cliArg: 'a launch flag',
-  command: 'a command',
-  session: 'this session',
-}
-
-function directorySourceLabel(source: string): string {
-  return DIRECTORY_SOURCE_LABEL[source] ?? 'another source'
-}
-
-/**
  * Trust of the session's cwd, plus HOW MANY extra directories it runs with.
  * Counts, never a second path list: `PermissionRulesEditor` below already
  * renders the authoritative paths from the same `permission.context` snapshot,
@@ -361,7 +336,7 @@ function WorkspaceFacts({ state }: { state: SessionInspectorState }) {
           {directories.total === 0
             ? 'none'
             : `${directories.total} · ${directories.groups
-                .map(group => `${group.count} from ${directorySourceLabel(group.source)}`)
+                .map(group => `${group.count} from ${permissionRuleSourceLabel(group.source)}`)
                 .join(', ')}`}
         </Row>
       ) : null}

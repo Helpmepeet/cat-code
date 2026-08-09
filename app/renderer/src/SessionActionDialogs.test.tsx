@@ -187,8 +187,8 @@ test('ExportDialog: the export gap marker is gone from the rendered footer', () 
 })
 
 test('ExportDialog: the subtitle carries the title only — no invented message count', () => {
-  // `MergedSessionRow.messageCount` is never populated by the bounded catalog
-  // loader (`sessionsCatalogState.ts:374`), so the prototype's "N messages · title"
+  // The bounded catalog intentionally omits a message count
+  // (`sessionsCatalogState.ts:374`), so the prototype's "N messages · title"
   // would read "0 messages" for every session.
   const html = renderToStaticMarkup(
     <ExportDialog

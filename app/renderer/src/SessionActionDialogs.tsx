@@ -22,8 +22,8 @@
  * LEDGER Part C counts the same three):
  *
  *  1. **No message count in the Export subtitle.** The prototype shows
- *     "N messages · title". `MergedSessionRow.messageCount` cannot supply it: the
- *     bounded catalog loader never populates it (`sessionsCatalogState.ts:374`),
+ *     "N messages · title". The bounded catalog does not expose that count: its
+ *     loader intentionally omits it (`sessionsCatalogState.ts:374`),
  *     so every session would read "0 messages".
  *  2. **No format segmented control.** md/json remain the owner-flagged §0 defer
  *     (`sessionActions.ts:20-21`); the engine renders text only, so there is one

@@ -199,3 +199,33 @@ test('renders engine-derived match type and read-only managed/classifier facts',
   )
   expect(html).toContain('Permission classifier: off, managed read-only')
 })
+
+test('unknown context values use neutral labels rather than raw engine tokens', () => {
+  const html = renderToStaticMarkup(
+    <PermissionRulesEditor
+      context={{
+        ...CONTEXT,
+        mode: 'futureMode',
+        alwaysAllowRules: { mcpConfig: ['Bash(ls)'] },
+        ruleMetadata: [
+          {
+            behavior: 'allow',
+            source: 'mcpConfig',
+            rule: 'Bash(ls)',
+            matchType: 'exact',
+          },
+        ],
+        additionalWorkingDirectories: [
+          { path: '/tmp/x', source: 'mcpConfig' },
+        ],
+      }}
+      onSetMode={() => {}}
+      showModes={false}
+    />,
+  )
+
+  expect(html).toContain('Current permission mode: Unknown mode')
+  expect(html).toContain('(from another source)')
+  expect(html).not.toContain('futureMode')
+  expect(html).not.toContain('mcpConfig')
+})

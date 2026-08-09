@@ -1,6 +1,7 @@
 import { diffLines } from 'diff'
 import type { PermissionUpdate } from '@cat-code/engine/sdk'
 import type { PermissionRequest } from './permissionState.js'
+import { permissionModeTitle } from './permissionLabels.js'
 
 /**
  * What a key press does to the card's option list. The card is a keyboard-driven
@@ -127,22 +128,6 @@ function destinationLabel(destination: PermissionUpdate['destination']): string 
   return DESTINATION_LABEL[destination] ?? 'This session'
 }
 
-/**
- * Mode names as this app presents them (`MODE_META`, `PermissionModeChip.tsx`).
- * Duplicated rather than imported because a renderer `.tsx` may export React
- * components only (`lint:fast-refresh`). The total `Record` is the tripwire: a
- * new engine mode fails to compile until it gets a name here.
- */
-type SuggestionMode = Extract<PermissionUpdate, { type: 'setMode' }>['mode']
-
-const MODE_LABEL: Record<SuggestionMode, string> = {
-  default: 'Ask permissions',
-  acceptEdits: 'Accept edits',
-  plan: 'Plan mode',
-  dontAsk: "Don't ask",
-  bypassPermissions: 'Bypass permissions',
-}
-
 function formatRules(update: Extract<PermissionUpdate, { rules: unknown }>): string {
   return update.rules
     .map(rule =>
@@ -160,7 +145,7 @@ export function describeSuggestion(update: PermissionUpdate): string {
       return `${update.behavior} ${rules} · ${destinationLabel(update.destination)}`
     }
     case 'setMode':
-      return `mode → ${MODE_LABEL[update.mode] ?? update.mode} · ${destinationLabel(update.destination)}`
+      return `mode → ${permissionModeTitle(update.mode)} · ${destinationLabel(update.destination)}`
     case 'addDirectories':
     case 'removeDirectories':
       return `${update.type === 'addDirectories' ? 'allow' : 'remove'} directory ${update.directories.join(', ')} · ${destinationLabel(update.destination)}`
@@ -215,7 +200,7 @@ export function describeSuggestionOption(update: PermissionUpdate): {
     case 'setMode':
       return {
         pre: 'Yes, and switch to ',
-        code: MODE_LABEL[update.mode] ?? update.mode,
+        code: permissionModeTitle(update.mode),
         post,
       }
     case 'addDirectories':
