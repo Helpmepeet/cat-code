@@ -444,6 +444,96 @@ that implements the two-stage architecture.
    Nothing about it ships in the meantime, and G4's settings surface stays
    closed until it does.
 
+### P — Upstream's defaults are server-tunable, which bounds every finding here
+
+Extracted 2026-08-10 by enumerating auto-mode identifiers in the binary rather
+than reading known prompt text. Twelve switches exist:
+
+`CLASSIFY_EDITS` · `EDIT_REMOVAL` · `EDIT_REMOVAL_CAP` · `EXTERNAL_PERMISSIONS` ·
+`GIT_STATUS` · `GIT_STATUS_LIMIT` · `GIT_STATUS_UPLOADS` · `MODEL` ·
+`OUTCOME_CODES` · `PRIOR_ASSISTANT_CONTEXT` · `REPO_VISIBILITY` · `TEMPERATURE`
+(all prefixed `CLAUDE_CODE_AUTO_MODE_`), plus the master `CLAUDE_CODE_ENABLE_AUTO_MODE`.
+
+**Each resolves `env > Xe("tengu_auto_mode_config") > hardcoded default`.** The
+middle term is a remote gate. So every behaviour this document calls "upstream's
+default" is the default *arm* — Anthropic can change any of it server-side
+without shipping a binary, and no extraction of ours would see the change. State
+that limit whenever these findings are cited as upstream truth.
+
+Two defaults are load-bearing for findings already recorded:
+
+- `priorAssistantContext` resolves to `!1`. **Finding G now has its named
+  mechanism**: assistant prose is withheld from the classifier by default
+  upstream too, so Path B is inert there for the same reason it is here. Ours is
+  not a deviation, and upstream keeps a switch we do not have.
+- `classifyEditsModels` resolves to `!1`, and the flag's only job is to
+  **disable** a fast path (see O). Its enabled form is per-model, not global.
+
+Minor: `CLAUDE_CODE_AUTO_MODE_OUTCOME_CODES` is read into an empty `if` whose
+body is missing — the check is dead and outcome codes are unconditional. It does
+not change finding I, but it does mean there is no switch to blame for it.
+
+### O — Both pre-classifier fast paths match upstream; one flag explains J
+
+Extracted 2026-08-10. **Positive result on the architecture.**
+
+Upstream short-circuits before ever calling the classifier, in two places, both
+identifiable from their log strings:
+
+1. `Skipping auto mode classifier for ${name}: would be allowed in acceptEdits mode`
+   (telemetry `fastPath: "acceptEdits"`) — it re-runs `checkPermissions` with the
+   mode forced to `acceptEdits` and allow-rules filtered; if that allows, it
+   allows without classifying.
+2. `Skipping auto mode classifier for ${name}: tool is on the safe allowlist`.
+
+This fork has both: `SAFE_YOLO_ALLOWLISTED_TOOLS` and the acceptEdits path, at
+`src/utils/permissions/classifierDecision.ts:54,56-94`.
+
+The `classifyEditsModels` flag exists to turn fast path 1 **off** for the three
+edit-family tools. Since it defaults false, **upstream's default sends edits
+through the fast path and never classifies them.** That compounds finding J: the
+Edit action projection and the Security Test Removal rule are dormant upstream by
+default for two independent reasons, not one.
+
+One deviation found, not previously recorded and not on the delta list: **our
+classifier requests `temperature: 0`** (`src/utils/permissions/yoloClassifier.ts:1174`);
+upstream's default resolves to `1`. Determinism is defensible for a security
+classifier and this is not a correctness bug, but it has a direct consequence for
+the replay gate: **variance measured on our stack will be far lower than
+upstream's, so any repetition count or threshold tuned from our replay does not
+transfer to upstream's numbers, and vice versa.** Decide it deliberately rather
+than inheriting it.
+
+### N — The Workflow tool carries a pre-wired classifier exemption (latent)
+
+Extracted 2026-08-10. **Not live today** — state that first, because the entry
+looks alarming out of context.
+
+`SAFE_YOLO_ALLOWLISTED_TOOLS` includes a conditional entry for the Workflow tool
+(`src/utils/permissions/classifierDecision.ts:85-86`), gated on
+`feature('WORKFLOW_SCRIPTS')`. That name appears in neither `defaultFeatures` nor
+`fullExperimentalFeatures` in `scripts/build.ts:13-49`, so the gate compiles to
+false, the constant is null, the spread contributes nothing, and the tool does
+not exist in any standard build.
+
+The reason to record it anyway is that the exemption is already written, and its
+justification is the argument the ported prompt explicitly rejects. The comment
+reads "subagents go through canUseTool individually"; upstream's SUB-AGENT
+DELEGATION rule answers exactly that: "The sub-agent's actions inherit these
+security rules, but blocking at spawn time prevents delegation attacks." 2.1.221
+extended the same rule to Workflow specifically — "apply the same treatment to
+the `script` field: it is orchestration code that may spawn sub-agents (via
+`agent(...)`) or run actions directly."
+
+So the fork is internally asymmetric by design: the Agent tool is **not**
+allowlisted and is classified; Workflow **is** allowlisted and would not be. If
+`WORKFLOW_SCRIPTS` is ever added to a build list, that exemption activates
+silently, with no second review and no test that would fail. Worth resolving
+while it is still theoretical.
+
+Incidental re-verification from the same read: `AUTO_MODE_UPSTREAM_PORT` is
+correctly absent from `fullExperimentalFeatures`, so the port remains uncompiled.
+
 ### M — Task notifications reach the classifier as ordinary user turns
 
 Extracted 2026-08-10, from the same version diff as K.
