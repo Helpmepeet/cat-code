@@ -108,7 +108,7 @@ export const getDebugFilter = memoize((): DebugFilter | null => {
 
 // Messages with these prefixes bypass the non-ant gate so diagnostic signal
 // survives even when debug mode isn't enabled. Keep this list narrow.
-const ALWAYS_LOG_PREFIXES = ['[codex-cache]']
+const ALWAYS_LOG_PREFIXES = ['[codex-cache]', '[codex-ws] turn_lock_stall']
 
 function shouldLogDebugMessage(message: string): boolean {
   if (process.env.NODE_ENV === 'test' && !isDebugToStdErr()) {

@@ -146,6 +146,49 @@ interface ConversationTurnQueue {
 // same Codex session are queued.
 const conversationTurnQueues = new Map<string, ConversationTurnQueue>()
 
+// How long a turn may wait for the per-conversation lock before the wait is
+// reported. The wait itself stays UNBOUNDED: this is a diagnostic only, and
+// bounding it is a separate decision
+// (docs/reports/2026-08-10-overnight-turn-hang-investigation.md, candidate 2).
+const LOCK_WAIT_WARN_MS = 30_000
+
+// Injection seam so the report can be driven in tests without a 30s wall-clock
+// wait. Production values only here.
+type LockWaitHooks = {
+  now: () => number
+  setTimer: (fn: () => void, ms: number) => unknown
+  clearTimer: (handle: unknown) => void
+  report: (conversationIdPrefix: string, waitedMs: number) => void
+}
+
+const defaultLockWaitHooks: LockWaitHooks = {
+  now: () => Date.now(),
+  setTimer: (fn, ms) => {
+    const timer = setTimeout(fn, ms)
+    // A pending report must never be the reason the process stays alive.
+    timer.unref?.()
+    return timer
+  },
+  clearTimer: handle => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  // `turn_lock_stall` is in debug.ts's ALWAYS_LOG_PREFIXES: a stalled lock
+  // writes nothing anywhere else, and by definition it only fires when a turn
+  // has already been stuck for 30s.
+  report: (conversationIdPrefix, waitedMs) =>
+    logForDebugging(
+      `[codex-ws] turn_lock_stall conv=${conversationIdPrefix} waited_ms=${waitedMs} ` +
+      `threshold_ms=${LOCK_WAIT_WARN_MS}`,
+      { level: 'warn' },
+    ),
+}
+
+let lockWaitHooks: LockWaitHooks = defaultLockWaitHooks
+
+export function _setLockWaitHooksForTest(
+  hooks: Partial<LockWaitHooks> | null,
+): void {
+  lockWaitHooks = hooks ? { ...defaultLockWaitHooks, ...hooks } : defaultLockWaitHooks
+}
+
 async function acquireConversationTurn(
   conversationId: string,
   signal?: AbortSignal,
@@ -181,6 +224,18 @@ async function acquireConversationTurn(
       })
     : null
 
+  // This wait is the one stretch of a turn no watchdog covers: the stream idle
+  // timeout arms only after ws.send, so a turn parked here is silent and
+  // indistinguishable from one that was never started. Report it; the wait can
+  // still block forever by design.
+  const waitStartedAt = lockWaitHooks.now()
+  const waitTimer = lockWaitHooks.setTimer(() => {
+    lockWaitHooks.report(
+      conversationId.slice(0, 8),
+      lockWaitHooks.now() - waitStartedAt,
+    )
+  }, LOCK_WAIT_WARN_MS)
+
   try {
     await (aborted ? Promise.race([priorTail, aborted]) : priorTail)
   } catch (error) {
@@ -197,6 +252,8 @@ async function acquireConversationTurn(
     }
     throw error
   } finally {
+    // Every exit from the wait lands here: acquired, aborted, or thrown.
+    lockWaitHooks.clearTimer(waitTimer)
     if (onAbort) signal?.removeEventListener('abort', onAbort)
   }
 
