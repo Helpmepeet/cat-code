@@ -4460,6 +4460,25 @@ test('A5 — a secret-blocked outbound frame is recorded without naming the secr
   expect(written).not.toContain('accessToken')
 })
 
+test('A5 — an oversized outbound frame is recorded as a dropped frame', () => {
+  const controller = new AppSessionController(probeAdapter())
+  // Clones fine and is JSON-safe, so it survives both payload gates and is
+  // refused by the F3 size bound instead — the last of the outbound drop paths
+  // that used to account for itself on stderr alone.
+  controller.getGoalSnapshot = () => ({
+    threadId: 'thread-123',
+    note: 'x'.repeat(MAX_OUTBOUND_FRAME_BYTES),
+  } as never)
+  const { server, records } = makeDropRecordingServer(controller)
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+
+  expect(received.some(f => f.kind === 'ready')).toBe(false)
+  expect(records.map(record => record.fields)).toEqual([
+    { reason: 'oversize', frame: 'ready' },
+  ])
+})
+
 /** Read `updatedInput` off a possibly-null allow response without union quirks. */
 function allowInput(response: AppPermissionResponse | null): unknown {
   return (response as unknown as { updatedInput?: unknown } | null)?.updatedInput

@@ -151,6 +151,8 @@ export type OutboundDropReason =
   | 'clone_failed'
   | 'not_json_safe'
   | 'secret_key'
+  | 'encode_failed'
+  | 'oversize'
 
 export type SidecarSocketLike = {
   write(data: Uint8Array, onFlushed?: () => void): void
@@ -3588,6 +3590,7 @@ export class SidecarServer {
           error instanceof Error ? error.message : String(error)
         }`,
       )
+      this.onFrameDropped?.('encode_failed', frame.kind)
       return
     }
 
@@ -3597,6 +3600,7 @@ export class SidecarServer {
       this.log(
         `[sidecar] dropped oversized outbound frame kind=${frame.kind} (${encoded.byteLength} > ${MAX_OUTBOUND_FRAME_BYTES})`,
       )
+      this.onFrameDropped?.('oversize', frame.kind)
       return
     }
 
