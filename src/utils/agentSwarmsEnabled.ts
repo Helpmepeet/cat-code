@@ -12,6 +12,18 @@ function isAgentTeamsFlagSet(): boolean {
 }
 
 /**
+ * Static opt-in only: env + argv + ant. Safe to memoize — none of these
+ * change after process start. Deliberately excludes the killswitch.
+ */
+export function isAgentTeamsOptedIn(): boolean {
+  if (process.env.USER_TYPE === 'ant') return true
+  return (
+    isEnvTruthy(process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS) ||
+    isAgentTeamsFlagSet()
+  )
+}
+
+/**
  * Centralized runtime check for agent teams/teammate features.
  * This is the single gate that should be checked everywhere teammates
  * are referenced (prompts, code, tools isEnabled, UI, etc.).
@@ -22,17 +34,13 @@ function isAgentTeamsFlagSet(): boolean {
  * 2. GrowthBook gate 'tengu_amber_flint' enabled (killswitch)
  */
 export function isAgentSwarmsEnabled(): boolean {
+  if (!isAgentTeamsOptedIn()) {
+    return false
+  }
+
   // Ant: always on
   if (process.env.USER_TYPE === 'ant') {
     return true
-  }
-
-  // External: require opt-in via env var or --agent-teams flag
-  if (
-    !isEnvTruthy(process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS) &&
-    !isAgentTeamsFlagSet()
-  ) {
-    return false
   }
 
   // Killswitch — always respected for external users

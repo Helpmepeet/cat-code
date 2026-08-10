@@ -257,6 +257,24 @@ describe('SendMessageTool durable worker handle fallback', () => {
     })
   })
 
+  test('without Agent Teams, a structured message to an @-recipient reports the message-shape error, not the recipient-format error', async () => {
+    process.env.CLAUDE_CODE_AGENT_MODE = '1'
+    delete process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+
+    await expect(
+      SendMessageTool.validateInput?.(
+        {
+          to: '@nonexistent-agent',
+          message: { type: 'shutdown_request' },
+        },
+        undefined as never,
+      ),
+    ).resolves.toMatchObject({
+      result: false,
+      message: 'structured messages require Agent Teams',
+    })
+  })
+
   test('without Agent Teams does not fall through to teammate mailbox', async () => {
     process.env.CLAUDE_CODE_AGENT_MODE = '1'
     delete process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
