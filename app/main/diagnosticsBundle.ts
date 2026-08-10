@@ -216,6 +216,14 @@ export function parseDeliveryTraceRecord(value: unknown): TraceRecord | null {
       'schemaVersion', 'recordKind', 'wallTimestamp', 'monotonicTimestampMs', 'launchId',
       'processName', 'processInstanceId', 'sessionId', 'streamEpoch', 'sequence', 'reason',
     ],
+    // The only record in this stream that is not arrival-driven: a stream that
+    // stopped producing writes nothing, so this one is written by a sweep. Its
+    // absence from this allowlist would reject it from every export.
+    'trace.stream.quiescent': [
+      'schemaVersion', 'recordKind', 'wallTimestamp', 'monotonicTimestampMs', 'launchId',
+      'processName', 'processInstanceId', 'sessionId', 'streamEpoch', 'sequence',
+      'quietMs', 'lastMessageKind', 'deliveryStatus', 'stage',
+    ],
   }
   if (typeof kind !== 'string' || !allowedByKind[kind] || Object.keys(item).some(key => !allowedByKind[kind]!.includes(key))) return null
   // The bundle's promise is that a second pass re-validates every retained
@@ -255,6 +263,19 @@ export function parseDeliveryTraceRecord(value: unknown): TraceRecord | null {
       !['writer_unavailable_or_record_oversize', 'stream_evicted', 'in_memory_eviction'].includes(item.reason as string) ||
       (item.sessionId !== undefined && !opaqueId(item.sessionId)) ||
       (item.streamEpoch !== undefined && !isSafeDeliveryIdentifier(item.streamEpoch))
+    ) return null
+  } else if (kind === 'trace.stream.quiescent') {
+    if (
+      !opaqueId(item.sessionId) || !isSafeDeliveryIdentifier(item.streamEpoch) ||
+      !positiveInteger(item.sequence) ||
+      typeof item.quietMs !== 'number' || !Number.isFinite(item.quietMs) || item.quietMs < 0 ||
+      !isDeliveryMessageKind(item.lastMessageKind) ||
+      !['complete', 'incomplete', 'unknown'].includes(item.deliveryStatus as string) ||
+      // A named stage is exactly what `incomplete` means. Either without the
+      // other is a producer bug, and exporting it would put a stage label on a
+      // verdict that did not attribute one.
+      (item.deliveryStatus === 'incomplete') !== (item.stage !== undefined) ||
+      (item.stage !== undefined && !isDeliveryStage(item.stage))
     ) return null
   } else if (kind === 'trace.ack.rejected') {
     if (
@@ -498,8 +519,13 @@ function firstMissingFromCoverage(coverage: ReadonlyMap<number, ReadonlySet<stri
   const produced = contiguousBundleWatermarks(coverage).produced
   for (let sequence = 1; sequence <= produced; sequence++) {
     const stages = coverage.get(sequence) ?? new Set<string>()
-    if (!stages.has('sidecar.socket.sent')) return 'sidecar.socket.sent'
-    if (!stages.has('host.received')) return 'host.received'
+    // `sidecar.socket.sent` rides the lossy FD 3 descriptor, so its absence is
+    // missing evidence, never a missing frame: a fully delivered frame whose
+    // send marker was shed used to be reported as stuck at the sidecar. Arrival
+    // in main is the first trustworthy checkpoint, and when THAT is missing the
+    // two upstream hops cannot be told apart, so the verdict is unattributed
+    // rather than a guess (OBSERVABILITY-MINIMUM.md §4).
+    if (!stages.has('host.received') && !stages.has('supervisor.socket.received')) return 'unknown'
     if (!stages.has('main.ipc.sent')) return 'main.ipc.sent'
     if (!stages.has('preload.received') && !stages.has('renderer.subscription.received')) return 'preload.received'
     if (!stages.has('renderer.state.applied')) return 'renderer.state.applied'

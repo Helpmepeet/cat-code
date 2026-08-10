@@ -24,6 +24,16 @@ export const MAX_DELIVERY_TRACE_AGE_MS = 72 * 60 * 60 * 1000
 /** In-memory evidence is a bounded diagnostic ring, never a session history. */
 export const MAX_DELIVERY_TRACE_SEQUENCES_PER_STREAM = 2_048
 export const MAX_DELIVERY_TRACE_STREAMS = 128
+/**
+ * How long a stream may go without a single delivery mark before it counts as
+ * quiet. Every anomaly above is arrival-driven — it needs a LATER frame to
+ * fire — so the one shape this trace was built for, frames simply STOPPING,
+ * wrote no record at all (2026-08-10 overnight hang). This is the threshold
+ * that turns that silence into one record.
+ */
+export const DELIVERY_TRACE_QUIET_MS = 5 * 60 * 1000
+/** How often quiescence is evaluated: a walk of at most 128 in-memory streams. */
+export const DELIVERY_TRACE_SWEEP_MS = 60 * 1000
 
 export type DeliveryComponent =
   | 'engine' | 'sidecar' | 'supervisor' | 'host' | 'attachment-gate'
@@ -87,10 +97,19 @@ export type DeliveryTraceSink = {
   }): void
   summary(sessionId: string): DeliveryWatermarks | null
   stuckSessionSummaries(): StuckSessionSummary[]
+  /**
+   * Emit one `trace.stream.quiescent` record per stream that has gone quiet.
+   * Driven by this sink's own interval; exposed so a caller (and a test) can
+   * evaluate on demand. Diagnosis only: it writes and returns, and never
+   * touches a socket, a session, or a frame (OBSERVABILITY-MINIMUM.md §3).
+   */
+  sweepQuiescentStreams(): void
   close(): void
 }
 
 type StreamState = {
+  sessionId: string
+  streamEpoch: string
   traces: Map<number, DeliveryTrace>
   frameKinds: Map<number, string>
   messageKinds: Map<number, DeliveryMessageKind>
@@ -108,6 +127,19 @@ type StreamState = {
   reportedGapAt: number | null
   reportedSourceHoleAt: number | null
   lastTouched: number
+  /** Monotonic clock at the last mark, so quiet time is a duration not a date. */
+  lastMarkedAtMs: number
+  highestSequence: number
+  /**
+   * The SDK message type of the last message-bearing frame (CC-48's tag). It is
+   * what separates a session sitting idle after a `result` from one that went
+   * quiet mid-turn, which is the whole difference between noise and the record
+   * this sweep exists to write.
+   */
+  lastMessageKind: DeliveryMessageKind | null
+  lastMessageKindSequence: number
+  /** One record per quiet episode; cleared by the next mark (§5). */
+  quiescenceReported: boolean
 }
 
 export function createDeliveryTraceSink({
@@ -118,6 +150,8 @@ export function createDeliveryTraceSink({
   maxTotalBytes = MAX_DELIVERY_TRACE_TOTAL_BYTES,
   maxFiles = MAX_DELIVERY_TRACE_FILES,
   maxAgeMs = MAX_DELIVERY_TRACE_AGE_MS,
+  quietMs = DELIVERY_TRACE_QUIET_MS,
+  sweepIntervalMs = DELIVERY_TRACE_SWEEP_MS,
   now = () => new Date(),
   monotonicNow = () => performance.now(),
 }: {
@@ -128,6 +162,9 @@ export function createDeliveryTraceSink({
   maxTotalBytes?: number
   maxFiles?: number
   maxAgeMs?: number
+  quietMs?: number
+  /** Zero or less leaves the sweep unarmed, for a caller that drives it itself. */
+  sweepIntervalMs?: number
   now?: () => Date
   monotonicNow?: () => number
 }): DeliveryTraceSink {
@@ -255,6 +292,8 @@ export function createDeliveryTraceSink({
     let state = streams.get(key)
     if (!state) {
       state = {
+        sessionId,
+        streamEpoch,
         traces: new Map(),
         frameKinds: new Map(),
         messageKinds: new Map(),
@@ -269,6 +308,11 @@ export function createDeliveryTraceSink({
         reportedGapAt: null,
         reportedSourceHoleAt: null,
         lastTouched: Date.now(),
+        lastMarkedAtMs: monotonicNow(),
+        highestSequence: 0,
+        lastMessageKind: null,
+        lastMessageKindSequence: 0,
+        quiescenceReported: false,
       }
       streams.set(key, state)
     }
@@ -303,11 +347,58 @@ export function createDeliveryTraceSink({
     }, trace.sequence, { state, sessionId, streamEpoch: trace.streamEpoch })
   }
 
+  const sweepQuiescentStreams = (): void => {
+    const nowMs = monotonicNow()
+    for (const [key, state] of streams) {
+      if (state.quiescenceReported) continue
+      const quiet = nowMs - state.lastMarkedAtMs
+      if (quiet < quietMs) continue
+      // Latch either way: a stream that is quiet by design costs one evaluation
+      // per episode rather than one per sweep, and the next mark clears it.
+      state.quiescenceReported = true
+      // A stream whose last SDK message was the turn's `result` has finished and
+      // is idle. Reporting that as a stall is the mistake OBSERVABILITY-MINIMUM
+      // §4 names: a designed terminal state must stay distinguishable from a
+      // failure to reach one. A stream that carried no message at all has no
+      // turn to be mid-way through.
+      if (state.lastMessageKind === null || state.lastMessageKind === 'result') continue
+      const { sessionId, streamEpoch } = state
+      const missing = firstMissing(state.watermarks)
+      state.anomalies.set('trace.stream.quiescent', (state.anomalies.get('trace.stream.quiescent') ?? 0) + 1)
+      write({
+        schemaVersion: 1,
+        recordKind: 'trace.stream.quiescent',
+        wallTimestamp: now().toISOString(),
+        monotonicTimestampMs: nowMs,
+        launchId,
+        processName: 'electron-main',
+        processInstanceId,
+        sessionId: sessionId!,
+        streamEpoch: streamEpoch!,
+        sequence: state.highestSequence,
+        quietMs: Math.round(quiet),
+        lastMessageKind: state.lastMessageKind,
+        // `complete` is the load-bearing verdict: every frame the engine
+        // produced reached the renderer and the stream still went quiet, so the
+        // engine stopped producing and the pipeline is exonerated. That is the
+        // 2026-08-10 shape, and reading it off a perfect trace took hours.
+        deliveryStatus: missing === null ? 'complete' : missing === 'unknown' ? 'unknown' : 'incomplete',
+        ...(missing === null || missing === 'unknown' ? {} : { stage: missing }),
+      }, state.highestSequence, { state, sessionId: sessionId!, streamEpoch: streamEpoch! })
+    }
+  }
+
+  const sweepTimer = sweepIntervalMs > 0 ? setInterval(sweepQuiescentStreams, sweepIntervalMs) : null
+  sweepTimer?.unref?.()
+
   return {
     processInstanceId,
     mark({ sessionId, trace, stage, frameKind, messageKind, documentId, subscriptionEpoch, processInstanceId: stageInstanceId, processStartedAt: stageStartedAt, wallTimestamp: stageWallTimestamp, monotonicTimestampMs: stageMonotonicTimestampMs }) {
       const state = stateFor(sessionId, trace.streamEpoch)
       state.lastTouched = Date.now()
+      state.lastMarkedAtMs = monotonicNow()
+      state.quiescenceReported = false
+      state.highestSequence = Math.max(state.highestSequence, trace.sequence)
       const seenStages = state.stages.get(trace.sequence) ?? new Set<string>()
       const stageKey = `${trace.deliveryAttempt}:${stage}`
       if (seenStages.has(stageKey)) {
@@ -343,7 +434,16 @@ export function createDeliveryTraceSink({
       if (frameKind && isSafeFrameKind(frameKind)) state.frameKinds.set(trace.sequence, frameKind)
       // Gated against the closed vocabulary exactly as `frameKind` is: this
       // field is persisted and exported, so it is never an arbitrary string.
-      if (messageKind && isDeliveryMessageKind(messageKind)) state.messageKinds.set(trace.sequence, messageKind)
+      if (messageKind && isDeliveryMessageKind(messageKind)) {
+        state.messageKinds.set(trace.sequence, messageKind)
+        // Keyed on the sequence, not on arrival order: a renderer acknowledgement
+        // for an older frame is marked after newer ones, and it must not make an
+        // earlier `assistant` look like the stream's last word.
+        if (trace.sequence >= state.lastMessageKindSequence) {
+          state.lastMessageKindSequence = trace.sequence
+          state.lastMessageKind = messageKind
+        }
+      }
       state.watermarks = updateWatermarks(state, state.watermarks)
 
       const component = componentFor(stage)
@@ -428,8 +528,14 @@ export function createDeliveryTraceSink({
         }
       })
     },
+    sweepQuiescentStreams,
     close() {
+      // A quit between two sweeps would otherwise lose the only account of a
+      // stream that had already gone quiet. The per-episode latch keeps this
+      // from double-reporting one that the interval already named.
+      sweepQuiescentStreams()
       flushPendingLoss()
+      if (sweepTimer) clearInterval(sweepTimer)
       if (fd !== null) {
         try { closeSync(fd) } catch {}
         fd = null
@@ -515,7 +621,14 @@ function firstMissing(watermarks: DeliveryWatermarks): string | null {
   // the sidecar of a stall whenever the diagnostics queue shed a run.
   const reached = arrived(watermarks.socketReceived, watermarks.hostReceived)
   if (watermarks.socketSent > reached) return 'supervisor.socket.received'
-  if (watermarks.produced > reached) return 'sidecar.socket.sent'
+  // `produced` outruns arrival with no send marker to place the frame. That is
+  // trustworthy about ONE thing — the frame never reached main — and silent
+  // about which of the two hops swallowed it: the sidecar may never have sent
+  // it, or FD 3 may have shed the send marker for a frame lost in transit. The
+  // comparison cannot separate them, so naming the sidecar here was a label
+  // read off absent evidence (OBSERVABILITY-MINIMUM.md §4). The watermarks that
+  // travel beside this verdict still say what did and did not arrive.
+  if (watermarks.produced > reached) return 'unknown'
   if (reached > watermarks.hostReceived) return 'host.received'
   if (watermarks.hostReceived > watermarks.ipcSent) return 'main.ipc.sent'
   if (watermarks.ipcSent > watermarks.preloadReceived) return 'preload.received'

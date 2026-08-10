@@ -134,11 +134,16 @@ test('source markers that outrun the socket still accuse the transport', () => {
   sink.close()
 })
 
-test('a sidecar that produced but never sent is still named', () => {
+test('a produced frame that never arrived is not attributed to a hop it cannot be traced to', () => {
   const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-unsent-'))
   const sink = createDeliveryTraceSink({ configDir: root, launchId: 'launch' })
   sink.mark({ sessionId: 'session', trace: mintDeliveryTrace(1, 'stream'), stage: 'engine.produced' })
-  expect(sink.stuckSessionSummaries()[0]?.firstMissingStage).toBe('sidecar.socket.sent')
+  // This used to answer `sidecar.socket.sent`. The frame really did not reach
+  // main, but the send marker rides FD 3, so its absence is equally explained by
+  // a shed marker on a frame lost in transit. The watermarks beside this still
+  // say precisely what arrived and what did not.
+  expect(sink.stuckSessionSummaries()[0]?.firstMissingStage).toBe('unknown')
+  expect(sink.stuckSessionSummaries()[0]?.watermarks).toMatchObject({ produced: 1, socketReceived: 0 })
   sink.close()
 })
 
@@ -280,6 +285,97 @@ test('a message kind outside the closed vocabulary is never persisted', () => {
   })
   sink.close()
   expect(kinds(root, 'delivery.trace').every(record => !('messageKind' in record))).toBe(true)
+})
+
+/** A sink whose clock and sweep the test drives; no real interval is armed. */
+function quiescenceSink(root: string, clock: { ms: number }) {
+  return createDeliveryTraceSink({
+    configDir: root,
+    launchId: 'launch',
+    quietMs: 300_000,
+    sweepIntervalMs: 0,
+    monotonicNow: () => clock.ms,
+  })
+}
+
+test('a stream that stops mid-turn is reported once, and says the pipeline delivered everything', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-quiescent-'))
+  const clock = { ms: 0 }
+  const sink = quiescenceSink(root, clock)
+  // The 2026-08-10 shape exactly: assistant frames deliver end to end, the
+  // `result` never comes, and every arrival-driven detector above stays silent
+  // because there is no later frame to fire on.
+  for (const sequence of [1, 2, 3]) {
+    const trace = mintDeliveryTrace(sequence, 'stream')
+    for (const stage of ['engine.produced', 'sidecar.socket.sent', 'supervisor.socket.received', 'host.received', 'main.ipc.sent', 'preload.received', 'renderer.state.applied', 'renderer.ui.committed'] as const) {
+      sink.mark({ sessionId: 'session', trace, stage, frameKind: 'event', messageKind: deliveryMessageKindOfFrame(ASSISTANT_FRAME) })
+    }
+  }
+  clock.ms = 299_000
+  sink.sweepQuiescentStreams()
+  expect(kinds(root, 'trace.stream.quiescent')).toEqual([])
+
+  clock.ms = 420_000
+  sink.sweepQuiescentStreams()
+  // Repeating the sweep is what a duration-scaled record would do. One quiet
+  // episode costs one record (OBSERVABILITY-MINIMUM.md §5).
+  sink.sweepQuiescentStreams()
+  sink.sweepQuiescentStreams()
+  sink.close()
+
+  expect(kinds(root, 'trace.stream.quiescent')).toMatchObject([{
+    sessionId: 'session',
+    streamEpoch: 'stream',
+    sequence: 3,
+    quietMs: 420_000,
+    lastMessageKind: 'assistant',
+    deliveryStatus: 'complete',
+  }])
+  expect(kinds(root, 'trace.stream.quiescent')[0]).not.toHaveProperty('stage')
+})
+
+test('a session sitting idle after its result is never reported as quiet', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-idle-'))
+  const clock = { ms: 0 }
+  const sink = quiescenceSink(root, clock)
+  traceThroughMain(sink, 1, ASSISTANT_FRAME)
+  traceThroughMain(sink, 2, RESULT_FRAME)
+  clock.ms = 86_400_000
+  sink.sweepQuiescentStreams()
+  sink.close()
+  expect(kinds(root, 'trace.stream.quiescent')).toEqual([])
+})
+
+test('a quiet stream whose frames stopped downstream names the stage they stopped at', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-quiescent-stage-'))
+  const clock = { ms: 0 }
+  const sink = quiescenceSink(root, clock)
+  traceThroughMain(sink, 1, ASSISTANT_FRAME)
+  clock.ms = 600_000
+  sink.close()
+
+  expect(kinds(root, 'trace.stream.quiescent')).toMatchObject([{
+    deliveryStatus: 'incomplete',
+    stage: 'preload.received',
+    lastMessageKind: 'assistant',
+  }])
+})
+
+test('a stream that resumes and stops again is reported a second time', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-requiet-'))
+  const clock = { ms: 0 }
+  const sink = quiescenceSink(root, clock)
+  traceThroughMain(sink, 1, ASSISTANT_FRAME)
+  clock.ms = 400_000
+  sink.sweepQuiescentStreams()
+  // A new mark clears the latch: the count is bounded by the number of quiet
+  // episodes, which is work, not by how long any one of them lasts.
+  traceThroughMain(sink, 2, ASSISTANT_FRAME)
+  clock.ms = 900_000
+  sink.sweepQuiescentStreams()
+  sink.close()
+
+  expect(kinds(root, 'trace.stream.quiescent').map(record => record.sequence)).toEqual([1, 2])
 })
 
 test('delivery acknowledgement lookup cannot cross a recreated stream epoch', () => {
