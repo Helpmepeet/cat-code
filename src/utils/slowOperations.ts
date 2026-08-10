@@ -162,6 +162,24 @@ export const slowLogging: {
  * Wrapped JSON.stringify with slow operation logging.
  * Use this instead of JSON.stringify directly to detect performance issues.
  *
+ * Returns undefined for exactly the inputs JSON.stringify does — undefined, a
+ * function, a symbol — despite the `string` in the signature. The signature
+ * cannot say so: the root tsconfig sets `strict: false`, and with
+ * strictNullChecks off TypeScript erases undefined from every union, so a
+ * `string | undefined` return type is checked identically to `string` at all
+ * call sites. Declaring one would read as a guarantee while catching nothing.
+ *
+ * So guard the argument, never the result, when the argument can be undefined.
+ * Two shapes bite in practice:
+ *   - Consuming the result as a string. Guard at the call:
+ *     `x ? jsonStringify(x) : null` (see services/policyLimits/index.ts and
+ *     services/remoteManagedSettings/index.ts).
+ *   - Comparing results for equality. Two undefined inputs compare equal, which
+ *     reads as a cache hit against an empty cache: that crashed
+ *     buildUpstreamSystemPrompt (utils/permissions/yoloClassifier.ts) on its
+ *     first call, where `cache?.config === config` matched undefined against
+ *     undefined and then dereferenced the cache that did not exist yet.
+ *
  * @example
  * import { jsonStringify } from './slowOperations.js'
  * const json = jsonStringify(data)
