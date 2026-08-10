@@ -63,10 +63,11 @@ prompt blocks it, we want to know regardless of who allowed it first time.
 
 ### Still owed before the gate can pass or fail
 
-Point 3 of the specification: model, effort, repetition count, an exact
-parse-failure ceiling, and per-category thresholds. Model choice is open
-operator decision 3 (Sonnet only, or qualify Haiku as the floor), so the
-numbers cannot be fixed here.
+Point 3 of the specification. **Model and effort are now decided** (open
+decision 3): `gpt-5.6-luna` at maximum reasoning effort, set by the replay
+harness rather than by any setting. Still owed: repetition count, an exact
+parse-failure ceiling, and per-category acceptance thresholds — all of which
+need the corpus to exist before they can be set to anything meaningful.
 Supporting evidence:
 `docs/reports/2026-08-09-auto-mode-denial-analysis.md` (what our classifier did)
 and `docs/reports/2026-08-09-claude-code-auto-mode-architecture.md` (what
@@ -499,6 +500,27 @@ discovered-PID kills still block — the last by both upstream's
    with §4.
 2. **Headless denial-cap behaviour** (`AbortError` today,
    `permissions.ts:1041-1044`) — held by the operator, untouched here.
-3. **Replay on Sonnet only, or also qualify Haiku as the floor.**
+3. ~~Replay on Sonnet only, or also qualify Haiku as the floor.~~ **Decided
+   2026-08-10: replay on `gpt-5.6-luna` at maximum reasoning effort.**
+
+   Rationale: at maximum effort the model stops being a confound, so a block the
+   replay shows is attributable to the ported rules rather than to a weak
+   classifier. Upstream defaults to a Sonnet-class classifier; Luna at max is
+   the local stand-in that does not consume Anthropic quota.
+
+   Two consequences that follow, and neither is a settings change:
+
+   - **The replay harness must set effort explicitly for its own run.** Shipped
+     code hardcodes medium for GPT-family classifier calls
+     (`getClassifierThinkingConfig`), deliberately and with no configuration
+     surface, per the F6 decision and G4. The replay overriding effort inside
+     its harness leaves both intact; adding an effort setting to satisfy the
+     replay would reopen a closed decision.
+   - **This measures the prompt, not the production primary path.** In
+     production the primary classifier is Sonnet-class and GPT is the fallback
+     at medium. So a green replay says the ported rules behave; it does not say
+     the medium-effort fallback is adequate. That remains a separate question,
+     and the honest place to answer it is a second replay pass at the shipped
+     fallback settings once the first one passes.
 4. ~~Ungate `CLAUDE_CODE_DUMP_AUTO_MODE`~~ — **done** (`537f88e5`), verified
    (amendment F). Cheap, and it is the likely input path for the replay harness.
