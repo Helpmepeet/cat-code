@@ -23,14 +23,15 @@ import type { ContextUsage } from './contextUsage.js'
  * APPROXIMATION — the QUANTITY compared is not the engine's. This feeds
  * `contextUsage.usedTokens`, the API-reported usage off the newest `result`
  * frame, whereas `shouldAutoCompact` compares
- * `tokenCountWithEstimation(messages, model) - snipTokensFreed`
- * (`autoCompact.ts:371-372`). Two consequences, both accepted:
+ * `tokenCountWithEstimation(messages, model) - preRequestTokensFreed`
+ * (`autoCompact.ts:373-374`). Two consequences, both accepted:
  *
  *  - MID-TURN the newest result frame predates the current turn, so its usage
  *    omits this turn's tool results and the glyph can lag: the engine may
  *    compact before the readout ever appears.
- *  - `snipTokensFreed` has no renderer analog, so after a snip the readout can
- *    be pessimistic (showing less headroom than the engine will act on).
+ *  - `preRequestTokensFreed` (history-snip plus time-based-microcompact savings)
+ *    has no renderer analog, so after either pass the readout can be pessimistic
+ *    (showing less headroom than the engine will act on).
  *
  * It is a live READOUT, not the trigger — the engine compacts on its own
  * numbers regardless of what this shows, so drift costs accuracy, never
