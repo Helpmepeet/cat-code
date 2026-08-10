@@ -821,7 +821,12 @@ export type PostTurnStallPhase =
  */
 export function recordPostTurnStall(entry: {
   phase: PostTurnStallPhase
-  elapsed_ms: number
+  /**
+   * The bar the watch was armed at. There is deliberately no elapsed figure:
+   * the callback fires AT the threshold, so any "elapsed" it could report is
+   * the threshold back again, and a field that reads like a stall duration
+   * without being one sends the next reader down a false path.
+   */
   threshold_ms: number
   turn_count: number
   query_source: string

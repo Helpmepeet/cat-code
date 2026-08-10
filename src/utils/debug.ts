@@ -108,7 +108,14 @@ export const getDebugFilter = memoize((): DebugFilter | null => {
 
 // Messages with these prefixes bypass the non-ant gate so diagnostic signal
 // survives even when debug mode isn't enabled. Keep this list narrow.
-const ALWAYS_LOG_PREFIXES = ['[codex-cache]', '[codex-ws] turn_lock_stall']
+/**
+ * Exported so the producer composes its message from the same literal that
+ * un-gates it. Held apart, a reformat of the message silently re-gates the
+ * record to ants/debug-mode and every test stays green.
+ */
+export const TURN_LOCK_STALL_PREFIX = '[codex-ws] turn_lock_stall'
+
+const ALWAYS_LOG_PREFIXES = ['[codex-cache]', TURN_LOCK_STALL_PREFIX]
 
 function shouldLogDebugMessage(message: string): boolean {
   if (process.env.NODE_ENV === 'test' && !isDebugToStdErr()) {

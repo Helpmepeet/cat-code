@@ -14,7 +14,7 @@ import { createHash } from 'crypto'
 import type { IncomingMessage } from 'http'
 import WSNode from 'ws'
 import { isEnvTruthy } from '../../utils/envUtils.js'
-import { logForDebugging } from '../../utils/debug.js'
+import { logForDebugging, TURN_LOCK_STALL_PREFIX } from '../../utils/debug.js'
 
 // Optional callback invoked when a stale previous_response_id is detected and
 // the turn is retried as a full send. Registered by the fetch adapter so that
@@ -173,12 +173,20 @@ const defaultLockWaitHooks: LockWaitHooks = {
   // `turn_lock_stall` is in debug.ts's ALWAYS_LOG_PREFIXES: a stalled lock
   // writes nothing anywhere else, and by definition it only fires when a turn
   // has already been stuck for 30s.
-  report: (conversationIdPrefix, waitedMs) =>
-    logForDebugging(
-      `[codex-ws] turn_lock_stall conv=${conversationIdPrefix} waited_ms=${waitedMs} ` +
-      `threshold_ms=${LOCK_WAIT_WARN_MS}`,
-      { level: 'warn' },
-    ),
+  report: (conversationIdPrefix, waitedMs) => {
+    // Called from a bare timer callback, where nothing upstack can catch: the
+    // debug writer's `appendFileSync` is unguarded, so an unwritable
+    // `--debug-file` would raise `uncaughtException` and kill the very process
+    // this record exists to keep sampleable. A diagnostic never alters control
+    // flow, least of all by ending the run it is describing.
+    try {
+      logForDebugging(
+        `${TURN_LOCK_STALL_PREFIX} conv=${conversationIdPrefix} waited_ms=${waitedMs} ` +
+        `threshold_ms=${LOCK_WAIT_WARN_MS}`,
+        { level: 'warn' },
+      )
+    } catch {}
+  },
 }
 
 let lockWaitHooks: LockWaitHooks = defaultLockWaitHooks
@@ -228,15 +236,19 @@ async function acquireConversationTurn(
   // timeout arms only after ws.send, so a turn parked here is silent and
   // indistinguishable from one that was never started. Report it; the wait can
   // still block forever by design.
-  const waitStartedAt = lockWaitHooks.now()
-  const waitTimer = lockWaitHooks.setTimer(() => {
-    lockWaitHooks.report(
-      conversationId.slice(0, 8),
-      lockWaitHooks.now() - waitStartedAt,
-    )
-  }, LOCK_WAIT_WARN_MS)
-
+  let waitTimer: unknown
   try {
+    // Armed INSIDE the try. By this point `queue.pending` is incremented and
+    // `queue.tail` is chained on `gate`, so a throw before the catch would skip
+    // `releaseGate()` and park every later turn on this conversation forever:
+    // the diagnostic manufacturing the exact hang it was added to detect.
+    const waitStartedAt = lockWaitHooks.now()
+    waitTimer = lockWaitHooks.setTimer(() => {
+      lockWaitHooks.report(
+        conversationId.slice(0, 8),
+        lockWaitHooks.now() - waitStartedAt,
+      )
+    }, LOCK_WAIT_WARN_MS)
     await (aborted ? Promise.race([priorTail, aborted]) : priorTail)
   } catch (error) {
     // Resolve this queued turn's gate without bypassing priorTail: queue.tail
@@ -252,8 +264,9 @@ async function acquireConversationTurn(
     }
     throw error
   } finally {
-    // Every exit from the wait lands here: acquired, aborted, or thrown.
-    lockWaitHooks.clearTimer(waitTimer)
+    // Every exit from the wait lands here: acquired, aborted, or thrown. The
+    // guard covers the one path where the timer was never armed.
+    if (waitTimer !== undefined) lockWaitHooks.clearTimer(waitTimer)
     if (onAbort) signal?.removeEventListener('abort', onAbort)
   }
 

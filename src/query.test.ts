@@ -343,7 +343,13 @@ describe('post-turn stall diagnostics', () => {
 
   const originalEmitFlag = process.env.CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES
 
+  // Restored here, not at the end of each test body: a failing assertion returns
+  // before an in-body restore, leaving `generateToolUseSummary` and
+  // `recordPostTurnStall` mocked for every later test in the file.
+  const spies: { mockRestore: () => void }[] = []
+
   afterEach(() => {
+    while (spies.length > 0) spies.pop()!.mockRestore()
     postTurnStallForTest.setScheduler(null)
     if (originalEmitFlag === undefined) {
       delete process.env.CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES
@@ -370,6 +376,7 @@ describe('post-turn stall diagnostics', () => {
     const recordSpy = spyOn(sessionStorage, 'recordPostTurnStall').mockImplementation(
       () => {},
     )
+    spies.push(summarySpy, recordSpy)
 
     const armed: { delayMs: number; fire: () => void; cancelled: boolean }[] = []
     postTurnStallForTest.setScheduler((callback, delayMs) => {
@@ -426,9 +433,6 @@ describe('post-turn stall diagnostics', () => {
     await drained
     expect(armed[0]!.cancelled).toBe(true)
     expect(recordSpy).toHaveBeenCalledTimes(1)
-
-    summarySpy.mockRestore()
-    recordSpy.mockRestore()
   })
 
   test('a summary that resolves in time reports nothing', async () => {
@@ -441,6 +445,7 @@ describe('post-turn stall diagnostics', () => {
     const recordSpy = spyOn(sessionStorage, 'recordPostTurnStall').mockImplementation(
       () => {},
     )
+    spies.push(summarySpy, recordSpy)
 
     const armed: { fire: () => void; cancelled: boolean }[] = []
     postTurnStallForTest.setScheduler(callback => {
@@ -471,9 +476,10 @@ describe('post-turn stall diagnostics', () => {
     }
 
     expect(recordSpy).not.toHaveBeenCalled()
+    // Assert the watch was armed BEFORE asserting it was cancelled: `every` on
+    // an empty array is true, so without this the test would still pass if the
+    // watch were deleted from the tool_use_summary site entirely.
+    expect(armed.length).toBeGreaterThanOrEqual(1)
     expect(armed.every(entry => entry.cancelled)).toBe(true)
-
-    summarySpy.mockRestore()
-    recordSpy.mockRestore()
   })
 })

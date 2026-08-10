@@ -837,7 +837,6 @@ describe('session storage', () => {
   describe('post-turn stall diagnostics', () => {
     const stallEntry = {
       phase: 'tool_use_summary' as const,
-      elapsed_ms: 60_001,
       threshold_ms: 60_000,
       turn_count: 2,
       query_source: 'repl_main_thread',

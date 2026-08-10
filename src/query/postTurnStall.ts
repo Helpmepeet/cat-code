@@ -21,6 +21,17 @@ import {
  */
 export const POST_TURN_STALL_THRESHOLD_MS = 60_000
 
+/**
+ * Phases whose own code already bounds the wait, so the shared threshold would
+ * fire on a path that is about to recover by itself. `handleStopHooks` races
+ * its classifier against a 60s timer (`src/query/stopHooks.ts`), and a record
+ * written at exactly that bound cannot be told apart from one that never ended.
+ * Arm above it, so the record means "outlived the guard this path already has".
+ */
+const PHASE_THRESHOLD_MS: Partial<Record<PostTurnStallPhase, number>> = {
+  stop_hooks: 90_000,
+}
+
 /** Schedules `callback` after `delayMs` and returns its cancel function. */
 type Scheduler = (callback: () => void, delayMs: number) => () => void
 
@@ -50,17 +61,18 @@ export function watchPostTurnStall(
   phase: PostTurnStallPhase,
   context: PostTurnStallContext,
 ): () => void {
-  const armedAt = Date.now()
+  // Read once, at arm time: the record must name the bar the timer was actually
+  // set to, not whatever the module holds when it fires.
+  const delayMs = PHASE_THRESHOLD_MS[phase] ?? thresholdMs
   const cancel = scheduler(() => {
     recordPostTurnStall({
       phase,
-      elapsed_ms: Date.now() - armedAt,
-      threshold_ms: thresholdMs,
+      threshold_ms: delayMs,
       turn_count: context.turnCount,
       query_source: context.querySource,
       ...(context.agentId ? { agentId: context.agentId } : {}),
     })
-  }, thresholdMs)
+  }, delayMs)
   let disarmed = false
   return () => {
     if (disarmed) return
@@ -76,8 +88,5 @@ export const _forTest = {
    */
   setScheduler(next: Scheduler | null): void {
     scheduler = next ?? realScheduler
-  },
-  setThresholdMs(ms: number | null): void {
-    thresholdMs = ms ?? POST_TURN_STALL_THRESHOLD_MS
   },
 }
