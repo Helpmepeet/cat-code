@@ -16,12 +16,15 @@ export function getAutoModeClassifierAttempts(
   _maxRetries: number,
   anthropicProvider: Exclude<APIProvider, 'openai'>,
 ): AutoModeClassifierAttempt[] {
-  const attempts: AutoModeClassifierAttempt[] = configuredModel.startsWith(
-    'gpt-',
+  const configuredGptIndex = GPT_CLASSIFIER_FALLBACKS.indexOf(
+    configuredModel as (typeof GPT_CLASSIFIER_FALLBACKS)[number],
   )
+  const attempts: AutoModeClassifierAttempt[] = configuredModel.startsWith('gpt-')
     ? [
         { provider: 'openai', model: configuredModel },
-        ...GPT_CLASSIFIER_FALLBACKS.map(model => ({
+        ...GPT_CLASSIFIER_FALLBACKS.slice(
+          configuredGptIndex === -1 ? 0 : configuredGptIndex + 1,
+        ).map(model => ({
           provider: 'openai' as const,
           model,
         })),

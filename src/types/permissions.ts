@@ -354,6 +354,12 @@ export type YoloClassifierResult = {
    */
   category?: { kind: 'built_in'; id: string }
   unavailable?: boolean
+  /** Bounded classifier result state for the next classifier request's meta. */
+  autoModeOutcome?:
+    | 'automode-blocked'
+    | 'automode-unavailable'
+    | 'automode-parsing-error'
+    | 'interrupted'
   /**
    * API returned "prompt is too long" — the classifier transcript exceeded
    * the context window. Deterministic (same transcript → same error), so

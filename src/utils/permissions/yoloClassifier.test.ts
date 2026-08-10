@@ -3,9 +3,12 @@ import type { ToolPermissionContext } from '../../Tool.js'
 import { buildSettingsDenyRulesText } from './autoModeDenyRules.js'
 import { getAutoModeClassifierAttempts } from './autoModeProviderLadder.js'
 import {
+  getClassifierThinkingConfigForTest,
   getYoloClassifierToolSchema,
+  isProviderAuthenticationErrorForTest,
   isClassifierFallbackError,
 } from './yoloClassifier.js'
+import { translateToCodexBody } from '../../services/api/codex-fetch-adapter.js'
 
 describe('auto mode provider ladder', () => {
   test('starts Claude classifiers on the configured Anthropic provider and crosses to GPT', () => {
@@ -17,12 +20,18 @@ describe('auto mode provider ladder', () => {
     ])
   })
 
-  test('deduplicates a configured GPT model without truncating the ladder', () => {
+  test('continues a configured GPT model at the next untried standard member', () => {
     expect(getAutoModeClassifierAttempts('gpt-5.6-terra', 2, 'bedrock')).toEqual([
       { provider: 'openai', model: 'gpt-5.6-terra' },
-      { provider: 'openai', model: 'gpt-5.6-sol' },
       { provider: 'openai', model: 'gpt-5.6-luna' },
       { provider: 'bedrock', model: 'sonnet' },
+    ])
+  })
+
+  test('crosses directly to the configured Anthropic provider after GPT Luna', () => {
+    expect(getAutoModeClassifierAttempts('gpt-5.6-luna', 4, 'firstParty')).toEqual([
+      { provider: 'openai', model: 'gpt-5.6-luna' },
+      { provider: 'firstParty', model: 'sonnet' },
     ])
   })
 })
@@ -35,8 +44,51 @@ describe('classifier fallback errors', () => {
 
   test('does not retry terminal client and policy statuses', () => {
     for (const status of [400, 403, 404, 405, 409, 413, 422]) {
-      expect(isClassifierFallbackError({ status })).toBe(false)
+      expect(isClassifierFallbackError({ status, message: 'connection timeout' })).toBe(false)
     }
+  })
+
+  test('identifies provider-local auth failures without treating generic 403s as retryable', () => {
+    expect(
+      isProviderAuthenticationErrorForTest(
+        Object.assign(new Error('No healthy Codex account is available for this request.'), {
+          name: 'APIConnectionError',
+        }),
+        'openai',
+      ),
+    ).toBe(true)
+    expect(
+      isProviderAuthenticationErrorForTest(
+        { name: 'CredentialsProviderError' },
+        'bedrock',
+      ),
+    ).toBe(true)
+    expect(
+      isProviderAuthenticationErrorForTest(
+        new Error('Could not refresh access token'),
+        'vertex',
+      ),
+    ).toBe(true)
+    expect(isProviderAuthenticationErrorForTest({ status: 403 }, 'openai')).toBe(
+      false,
+    )
+  })
+
+  test('translates the GPT classifier fallback to medium reasoning', () => {
+    const [thinking, _padding, reasoningEffort] =
+      getClassifierThinkingConfigForTest('gpt-5.6-terra')
+    const { codexBody } = translateToCodexBody({
+      model: 'gpt-5.6-terra',
+      ...(thinking !== undefined && { thinking }),
+      output_config: { effort: reasoningEffort },
+      _openaiInstructionAssembly: {
+        instructions: 'classifier prompt',
+        inputMessages: [],
+      },
+    })
+
+    expect(thinking).toBeUndefined()
+    expect(codexBody.reasoning).toMatchObject({ effort: 'medium' })
   })
 })
 

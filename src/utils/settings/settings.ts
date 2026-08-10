@@ -29,6 +29,10 @@ import {
   getEnabledSettingSources,
   type SettingSource,
 } from './constants.js'
+import {
+  AUTO_MODE_DEFAULTS_SENTINEL,
+  autoModeSectionDropsDefaults,
+} from '../permissions/autoModeDefaultsSplice.js'
 import { markInternalWrite } from './internalWrites.js'
 import {
   getManagedFilePath,
@@ -1117,6 +1121,25 @@ export function getAutoModeConfig():
     }
   }
   return undefined
+}
+
+export function warnAutoModeDefaultsAtStartup(): void {
+  if (!feature('AUTO_MODE_UPSTREAM_PORT')) return
+
+  const config = getAutoModeConfig()
+  for (const [section, entries] of [
+    ['allow', config?.allow],
+    ['soft_deny', config?.soft_deny],
+    ['hard_deny', config?.hard_deny],
+    ['environment', config?.environment],
+  ] as const) {
+    if (!autoModeSectionDropsDefaults(entries)) continue
+    process.stderr.write(
+      `Warning: settings.autoMode.${section} does not include "${AUTO_MODE_DEFAULTS_SENTINEL}", ` +
+        `so its ${entries?.length ?? 0} configured entries replace the shipped rules. ` +
+        `Add "${AUTO_MODE_DEFAULTS_SENTINEL}" to keep them.\n`,
+    )
+  }
 }
 
 export function rawSettingsContainsKey(key: string): boolean {

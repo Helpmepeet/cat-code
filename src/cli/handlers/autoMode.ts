@@ -187,7 +187,9 @@ function formatRulesForCritique(
     'Custom:\n' +
     customLines +
     '\n\n' +
-    'Defaults being replaced:\n' +
+    (feature('AUTO_MODE_UPSTREAM_PORT')
+      ? 'Shipped defaults included at $defaults:\n'
+      : 'Defaults being replaced:\n') +
     defaultLines +
     '\n\n'
   )

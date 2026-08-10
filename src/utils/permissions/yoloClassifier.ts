@@ -24,6 +24,8 @@ import type {
   YoloClassifierResult,
 } from '../../types/permissions.js'
 import { isDebugMode, logForDebugging } from '../debug.js'
+import { execFileNoThrow } from '../execFileNoThrow.js'
+import { gitExe } from '../git.js'
 import {
   getAutoModeCaptureDir,
   isEnvDefinedFalsy,
@@ -50,12 +52,16 @@ import {
   resolveAutoModeCategory,
 } from './autoModeCategories.js'
 import {
-  AUTO_MODE_DEFAULTS_SENTINEL,
   assembleUpstreamSystemPrompt,
-  autoModeSectionDropsDefaults,
 } from './autoModeDefaultsSplice.js'
 import { buildSettingsDenyRulesText } from './autoModeDenyRules.js'
 import { getAutoModeClassifierAttempts } from './autoModeProviderLadder.js'
+import {
+  buildAutoModeMetaLines,
+  isAutoModeGitStatusMetaEnabled,
+  isAutoModeRepoVisibilityMetaEnabled,
+  type AutoModeMetaInput,
+} from './autoModeMeta.js'
 import {
   extractToolUseBlock,
   parseClassifierResponse,
@@ -443,6 +449,12 @@ type TranscriptBlock =
 export type TranscriptEntry = {
   role: 'user' | 'assistant'
   content: TranscriptBlock[]
+  /**
+   * Bounded harness facts associated with the pending action. This deliberately
+   * accepts only outcome records and repo visibility; fresh git status is read
+   * locally below and raw tool results never enter this channel.
+   */
+  autoModeMeta?: AutoModeMetaInput
 }
 
 /**
@@ -579,6 +591,48 @@ function toCompact(entry: TranscriptEntry, lookup: ToolLookup): string {
   return entry.content.map(b => toCompactBlock(b, entry.role, lookup)).join('')
 }
 
+async function buildActionMetaLines(
+  input: AutoModeMetaInput | undefined,
+): Promise<string[]> {
+  if (!feature('AUTO_MODE_UPSTREAM_PORT')) return []
+  const upstreamPortEnabled = true
+  let metaInput = input
+  let freshGitStatus: { code: number; stdout: string } | undefined
+  if (isAutoModeGitStatusMetaEnabled(upstreamPortEnabled)) {
+    try {
+      const result = await execFileNoThrow(
+        gitExe(),
+        ['--no-optional-locks', 'status', '--porcelain', '-uno'],
+        { preserveOutputOnError: false },
+      )
+      freshGitStatus = { code: result.code, stdout: result.stdout }
+    } catch {
+      // A failed status command establishes no fact and emits no error text.
+    }
+  }
+  if (isAutoModeRepoVisibilityMetaEnabled(upstreamPortEnabled)) {
+    try {
+      const result = await execFileNoThrow(
+        'gh',
+        ['repo', 'view', '--json', 'visibility', '--jq', '.visibility'],
+        { preserveOutputOnError: false, timeout: 5000 },
+      )
+      if (result.code === 0) {
+        metaInput = {
+          ...input,
+          repoVisibility: result.stdout.trim().toLowerCase(),
+        }
+      }
+    } catch {
+      // A failed lookup establishes no visibility fact.
+    }
+  }
+  return buildAutoModeMetaLines(metaInput, {
+    upstreamPortEnabled,
+    freshGitStatus,
+  })
+}
+
 /**
  * Build a compact transcript string including user messages and assistant tool_use blocks.
  * Used by AgentTool for handoff classification.
@@ -667,30 +721,24 @@ export function buildAutoModePrefixMessages(
  * deny list. The tiers are upstream's own — one unconditional hard-deny rule and
  * 65 soft ones the user's intent can clear.
  */
+let cachedUpstreamSystemPrompt:
+  | { config: string; prompt: string }
+  | undefined
+
 function buildUpstreamSystemPrompt(): string {
   const autoMode = getAutoModeConfig()
-
-  for (const [section, entries] of [
-    ['allow', autoMode?.allow],
-    ['soft_deny', autoMode?.soft_deny],
-    ['hard_deny', autoMode?.hard_deny],
-    ['environment', autoMode?.environment],
-  ] as const) {
-    if (autoModeSectionDropsDefaults(entries)) {
-      logForDebugging(
-        `[auto-mode] settings.autoMode.${section} does not include "${AUTO_MODE_DEFAULTS_SENTINEL}", ` +
-          `so the ${entries?.length ?? 0} configured entries REPLACE the shipped rules for that section. ` +
-          `Add "${AUTO_MODE_DEFAULTS_SENTINEL}" to keep them.`,
-        { level: 'warn' },
-      )
-    }
+  const config = jsonStringify(autoMode)
+  if (cachedUpstreamSystemPrompt?.config === config) {
+    return cachedUpstreamSystemPrompt.prompt
   }
 
-  return assembleUpstreamSystemPrompt(
+  const prompt = assembleUpstreamSystemPrompt(
     UPSTREAM_BASE_PROMPT,
     UPSTREAM_PERMISSIONS_TEMPLATE,
     autoMode,
   )
+  cachedUpstreamSystemPrompt = { config, prompt }
+  return prompt
 }
 
 export function buildAutoModeCritiqueSystemPrompt(): string {
@@ -828,7 +876,7 @@ function combineUsage(a: ClassifierUsage, b: ClassifierUsage): ClassifierUsage {
 function getClassifierThinkingConfig(
   model: string,
 ): [false | undefined, number, 'medium' | undefined] {
-  if (model.startsWith('gpt-')) return [false, 0, 'medium']
+  if (model.startsWith('gpt-')) return [undefined, 0, 'medium']
   if (
     process.env.USER_TYPE === 'ant' &&
     resolveAntModel(model)?.alwaysOnThinking
@@ -836,6 +884,12 @@ function getClassifierThinkingConfig(
     return [undefined, 2048, undefined]
   }
   return [false, 0, undefined]
+}
+
+export function getClassifierThinkingConfigForTest(
+  model: string,
+): [false | undefined, number, 'medium' | undefined] {
+  return getClassifierThinkingConfig(model)
 }
 
 export function getClassifierFallbackModel(
@@ -885,8 +939,8 @@ export function isClassifierFallbackError(error: unknown): boolean {
     }
 
     const status = 'status' in error ? error.status : undefined
-    if (typeof status === 'number' && CLASSIFIER_FALLBACK_STATUSES.has(status)) {
-      return true
+    if (typeof status === 'number') {
+      return CLASSIFIER_FALLBACK_STATUSES.has(status)
     }
 
     const code = 'code' in error ? error.code : undefined
@@ -906,7 +960,7 @@ export function isClassifierFallbackError(error: unknown): boolean {
   const embedded = message.match(/codex api error \((\d{3})\)/)
   if (embedded) {
     const embeddedStatus = Number(embedded[1])
-    if (CLASSIFIER_FALLBACK_STATUSES.has(embeddedStatus)) return true
+    return CLASSIFIER_FALLBACK_STATUSES.has(embeddedStatus)
   }
 
   return isClassifierFallbackErrorText(message)
@@ -971,6 +1025,7 @@ export async function classifyYoloAction(
 
   const systemPrompt = await buildYoloSystemPrompt(context)
   const transcriptEntries = buildTranscriptEntries(messages)
+  const metaLines = await buildActionMetaLines(action.autoModeMeta)
   const claudeMdMessage = buildClaudeMdMessage()
   const settingsDenyRulesMessage = feature('AUTO_MODE_UPSTREAM_PORT')
     ? buildSettingsDenyRulesMessage(context)
@@ -1003,7 +1058,9 @@ export async function classifyYoloAction(
     }
   }
 
-  const userPrompt = userContentBlocks.map(b => b.text).join('') + actionCompact
+  const metaText = metaLines.join('')
+  const userPrompt =
+    userContentBlocks.map(b => b.text).join('') + metaText + actionCompact
   const promptLengths = {
     systemPrompt: systemPrompt.length,
     toolCalls: toolCallsLength,
@@ -1040,9 +1097,12 @@ export async function classifyYoloAction(
   // respects GrowthBook TTL allowlist and query-source gating.
   const cacheControl = getCacheControl({ querySource: 'auto_mode' })
   // Place cache_control on the action block so the stable classifier prefix
-  // (system + optional CLAUDE.md + transcript + action) stays cacheable across
+  // (system + optional CLAUDE.md + transcript + meta + action) stays cacheable across
   // repeated classifier calls. Budget: system (1) + CLAUDE.md (0–1) + action
   // (1) = 2–3, under the API limit of 4 cache_control blocks.
+  for (const line of metaLines) {
+    userContentBlocks.push({ type: 'text' as const, text: line })
+  }
   userContentBlocks.push({
     type: 'text' as const,
     text: actionCompact,
@@ -1140,11 +1200,13 @@ export async function classifyYoloAction(
         })
         logAutoModeOutcome('parse_failure', model, {
           failureKind: 'no_tool_use',
+          provider,
         })
         return {
           shouldBlock: true,
           reason: 'Classifier returned no tool use block - blocking for safety',
           model,
+          autoModeOutcome: 'automode-parsing-error',
           usage,
           durationMs,
           promptLengths,
@@ -1164,11 +1226,13 @@ export async function classifyYoloAction(
         })
         logAutoModeOutcome('parse_failure', model, {
           failureKind: 'invalid_schema',
+          provider,
         })
         return {
           shouldBlock: true,
           reason: 'Invalid classifier response - blocking for safety',
           model,
+          autoModeOutcome: 'automode-parsing-error',
           usage,
           durationMs,
           promptLengths,
@@ -1190,11 +1254,13 @@ export async function classifyYoloAction(
         )
         logAutoModeOutcome('parse_failure', model, {
           failureKind: 'category_on_allow',
+          provider,
         })
         return {
           shouldBlock: true,
           reason: 'Invalid classifier response - blocking for safety',
           model,
+          autoModeOutcome: 'automode-parsing-error',
           usage,
           durationMs,
           promptLengths,
@@ -1250,12 +1316,13 @@ export async function classifyYoloAction(
     } catch (error) {
       if (signal.aborted) {
         logForDebugging('Auto mode classifier: aborted by user')
-        logAutoModeOutcome('interrupted', model)
+        logAutoModeOutcome('interrupted', model, { provider })
         return {
           shouldBlock: true,
           reason: 'Classifier request aborted',
           model,
           unavailable: true,
+          autoModeOutcome: 'interrupted',
         }
       }
       const tooLong = detectPromptTooLong(error)
@@ -1268,10 +1335,13 @@ export async function classifyYoloAction(
         gatedAttempts &&
         !tooLong &&
         attemptsMade < configuredMaxRetries + 1 &&
-        isClassifierAttemptFallbackError(error)
+        isClassifierAttemptFallbackError(error, provider)
       ) {
         const failedProvider = provider
-        const skipProviderFamily = isProviderAuthenticationError(error)
+        const skipProviderFamily = isProviderAuthenticationErrorForTest(
+          error,
+          provider,
+        )
         do {
           attemptIndex++
         } while (
@@ -1321,6 +1391,7 @@ export async function classifyYoloAction(
       // No API usage on error — use classifierTokensEst / mainLoopTokens
       // for the ratio. Overflow errors are the critical divergence signal.
       logAutoModeOutcome(tooLong ? 'transcript_too_long' : 'error', model, {
+        provider,
         mainLoopTokens,
         classifierTokensEst,
         ...(tooLong && {
@@ -1335,6 +1406,7 @@ export async function classifyYoloAction(
           : 'Classifier unavailable - blocking for safety',
         model,
         unavailable: true,
+        autoModeOutcome: 'automode-unavailable',
         transcriptTooLong: Boolean(tooLong),
         errorDumpPath,
       }
@@ -1388,7 +1460,10 @@ function getClassifierMaxRetries(): number {
     : getDefaultMaxRetries()
 }
 
-function isProviderAuthenticationError(error: unknown): boolean {
+export function isProviderAuthenticationErrorForTest(
+  error: unknown,
+  provider?: string,
+): boolean {
   if (typeof error !== 'object' || error === null) return false
   const name = 'name' in error ? error.name : undefined
   if (
@@ -1398,11 +1473,36 @@ function isProviderAuthenticationError(error: unknown): boolean {
     return true
   }
   const status = 'status' in error ? error.status : undefined
-  return status === 401
+  if (status === 401) return true
+  if (provider === 'bedrock' && status === 403) return true
+  if (
+    provider === 'bedrock' &&
+    name === 'CredentialsProviderError'
+  ) {
+    return true
+  }
+  if (provider === 'vertex') {
+    const message = errorMessage(error)
+    return (
+      message.includes('Could not load the default credentials') ||
+      message.includes('Could not refresh access token') ||
+      message.includes('invalid_grant')
+    )
+  }
+  return (
+    name === 'APIConnectionError' &&
+    errorMessage(error) === 'No healthy Codex account is available for this request.'
+  )
 }
 
-function isClassifierAttemptFallbackError(error: unknown): boolean {
-  return isProviderAuthenticationError(error) || isClassifierFallbackError(error)
+function isClassifierAttemptFallbackError(
+  error: unknown,
+  provider: string | undefined,
+): boolean {
+  return (
+    isProviderAuthenticationErrorForTest(error, provider) ||
+    isClassifierFallbackError(error)
+  )
 }
 
 
@@ -1524,9 +1624,11 @@ function detectPromptTooLong(
 export function formatActionForClassifier(
   toolName: string,
   toolInput: unknown,
+  autoModeMeta?: AutoModeMetaInput,
 ): TranscriptEntry {
   return {
     role: 'assistant',
     content: [{ type: 'tool_use', name: toolName, input: toolInput }],
+    autoModeMeta,
   }
 }
