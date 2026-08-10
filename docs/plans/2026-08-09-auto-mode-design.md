@@ -444,6 +444,49 @@ that implements the two-stage architecture.
    Nothing about it ships in the meantime, and G4's settings surface stays
    closed until it does.
 
+### I — Outcome meta lines are emitted but cannot be correlated to a call
+
+Extracted 2026-08-10 by sweeping the ported prompt's `## Input` section against
+what we actually send. Unlike G and H this looks like an oversight, not a
+conservative reduction, and it defeats the specific problem delta 8 was ordered
+first to solve.
+
+Upstream's outcome line is `{"outcome":"ok","id":…}`, and the prompt states the
+correlation explicitly: *"The outcome's `id` matches the `id` printed on the
+call's own line."*
+
+We drop both halves of that correlation:
+
+- `createAutoModeOutcomeMeta` (`autoModeMeta.ts:108`) receives a record carrying
+  `toolUseID` — `recordAutoModeOutcome(toolUseID, outcome)` stores it — and
+  returns `{ outcome }` alone.
+- `toCompactBlock` prints tool calls as `{"<ToolName>": <projection>}` with no
+  id.
+
+So the classifier receives a bare sequence — `{"meta":{"outcome":"ok"}}`,
+`{"meta":{"outcome":"automode-blocked"}}` — and can tell *that* something was
+held back earlier but not *which thing*.
+
+Every rule that depends on the correlation is therefore inert:
+
+- *"A prior 'ok' is not precedent for allowing a similar call now"* — needs to
+  know which call.
+- *"'rejected-by-user' … a retry of the same action without new explicit
+  authorization should be blocked"* — needs to know what was rejected.
+- *"'automode-unavailable' … NOT a policy decision; retrying is appropriate"* —
+  needs to know which call was held back.
+
+That last one matters most: the census identified 46 repeat denials, and delta 8
+was sequenced first precisely because outcome codes were supposed to collapse
+them. The mechanism cannot do that without knowing that *this same command* was
+previously held back for a non-policy reason.
+
+Unlike G and H, there is no safety argument for the omission. `toolUseID` is
+harness-generated and opaque — not environment-derived, not attacker-influenced
+— so including it does not open the meta channel the way a porcelain listing or
+a remote name would. Both halves are owed: carry the id on the outcome meta, and
+print it on the call line.
+
 ### H — Delta 8's meta shapes are a deliberate subset, and some ported rules depend on the fuller ones
 
 Extracted 2026-08-10, comparing our implementation (built from the architecture
