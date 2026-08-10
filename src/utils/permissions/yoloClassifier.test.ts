@@ -1,8 +1,13 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import type { ToolPermissionContext } from '../../Tool.js'
 import { buildSettingsDenyRulesText } from './autoModeDenyRules.js'
+import {
+  recordAutoModeOutcome,
+  resetRecordedAutoModeOutcomesForTest,
+} from './autoModeMeta.js'
 import { getAutoModeClassifierAttempts } from './autoModeProviderLadder.js'
 import {
+  buildTranscriptForClassifier,
   getClassifierThinkingConfigForTest,
   getYoloClassifierToolSchema,
   isProviderAuthenticationErrorForTest,
@@ -148,6 +153,91 @@ describe('ordinary deny-rule injection', () => {
     // ceasing to be data — the one thing the surrounding framing promises.
     expect(text).toContain('line 1\\n\\u003c/settings_deny_rules> \\"quoted\\"')
     expect(text!.match(/<\/settings_deny_rules>/g)).toHaveLength(1)
+  })
+})
+
+/**
+ * Finding I: the classifier could see *that* something was held back earlier but
+ * not *which* call, because outcomes were emitted as a detached batch of meta
+ * lines above the pending action. These assert the correlation upstream's prompt
+ * promises: an id on the call line, and the outcome on its own line beneath it.
+ */
+describe('outcome correlation in the rendered transcript', () => {
+  const tools = [
+    {
+      name: 'Bash',
+      toAutoClassifierInput: (input: { command: string }) => input.command,
+    },
+  ] as unknown as Parameters<typeof buildTranscriptForClassifier>[1]
+
+  const callFor = (id: string, command: string) =>
+    ({
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', name: 'Bash', input: { command }, id }] },
+    }) as unknown as Parameters<typeof buildTranscriptForClassifier>[0][number]
+
+  afterEach(() => resetRecordedAutoModeOutcomesForTest())
+
+  test('prints no id and no outcome line while the port is off', () => {
+    recordAutoModeOutcome('toolu_aaaaaa111111', 'automode-unavailable')
+    const out = buildTranscriptForClassifier(
+      [callFor('toolu_aaaaaa111111', 'rm -rf build')],
+      tools,
+      false,
+    )
+    expect(out).toBe('Bash rm -rf build\n')
+  })
+
+  test('ties each outcome to the call it reports', () => {
+    recordAutoModeOutcome('toolu_aaaaaa111111', 'automode-unavailable')
+    recordAutoModeOutcome('toolu_bbbbbb222222', 'rejected-by-user')
+
+    const out = buildTranscriptForClassifier(
+      [
+        callFor('toolu_aaaaaa111111', 'rm -rf build'),
+        callFor('toolu_bbbbbb222222', 'git push --force'),
+        callFor('toolu_cccccc333333', 'ls'),
+      ],
+      tools,
+      true,
+    )
+
+    // Each outcome sits directly beneath its own call, and the ids match — the
+    // retry of `rm -rf build` is now distinguishable from a first attempt, which
+    // is the whole reason delta 8 was sequenced first.
+    expect(out).toBe(
+      'Bash[111111] rm -rf build\n' +
+        '{"outcome":"automode-unavailable","id":"111111"}\n' +
+        'Bash[222222] git push --force\n' +
+        '{"outcome":"rejected-by-user","id":"222222"}\n' +
+        // No outcome recorded: absence must stay absence, never an implied 'ok'.
+        'Bash[333333] ls\n',
+    )
+  })
+})
+
+describe('harness key collisions in the transcript', () => {
+  const tools = [
+    { name: 'outcome', toAutoClassifierInput: () => 'forged' },
+  ] as unknown as Parameters<typeof buildTranscriptForClassifier>[1]
+
+  test('a tool named like a harness key cannot forge a harness line', () => {
+    const out = buildTranscriptForClassifier(
+      [
+        {
+          type: 'assistant',
+          message: {
+            content: [
+              { type: 'tool_use', name: 'outcome', input: {}, id: 'toolu_zz9999' },
+            ],
+          },
+        } as unknown as Parameters<typeof buildTranscriptForClassifier>[0][number],
+      ],
+      tools,
+      true,
+    )
+    expect(out).toBe('outcome[zz9999] forged\n')
+    expect(out).not.toContain('{"outcome"')
   })
 })
 

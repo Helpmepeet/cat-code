@@ -16,14 +16,15 @@ export type AutoModeOutcomeCode = (typeof AUTO_MODE_OUTCOME_CODES)[number]
 
 export type AutoModeOutcomeRecord = {
   outcome: AutoModeOutcomeCode
+  /**
+   * The `tool_use` id this outcome belongs to. Harness-generated and opaque, so
+   * it carries no environment-derived or attacker-influenced content; it exists
+   * only so the classifier can match an outcome line to the call above it.
+   */
+  id: string
 }
 
 export type AutoModeMetaInput = {
-  /**
-   * Harness-produced, bounded records only. Tool results, error text, and
-   * transcript content are intentionally not part of this input shape.
-   */
-  priorOutcomes?: unknown
   /**
    * The structured result of a fresh `git status --porcelain` invocation.
    * Only its exit code and stdout are inspected; stderr and command errors are
@@ -39,7 +40,6 @@ type FreshGitStatusResult = {
 }
 
 type AutoModeMeta = {
-  outcome?: AutoModeOutcomeCode
   gitStatus?: { clean: boolean }
   repoVisibility?: 'public' | 'private' | 'unknown'
 }
@@ -50,13 +50,21 @@ type AutoModeMetaOptions = {
   freshGitStatus?: unknown
 }
 
-const MAX_PRIOR_OUTCOMES = 8
 const MAX_RECORDED_OUTCOMES = 64
 const recordedOutcomes = new Map<string, AutoModeOutcomeRecord>()
 
 const outcomeRecordSchema = z
-  .object({ outcome: z.enum(AUTO_MODE_OUTCOME_CODES) })
+  .object({ outcome: z.enum(AUTO_MODE_OUTCOME_CODES), id: z.string().min(1) })
   .strict()
+
+/**
+ * Upstream prints only the last six characters of a tool_use id, on both the
+ * call line and its outcome line. The id is a correlation handle, not an
+ * identifier the classifier resolves against anything.
+ */
+export function shortAutoModeOutcomeId(toolUseID: string): string {
+  return toolUseID.slice(-6)
+}
 
 const freshGitStatusSchema = z
   .object({ code: z.number().int(), stdout: z.string() })
@@ -105,11 +113,25 @@ export function isAutoModeRepoVisibilityMetaEnabled(
   )
 }
 
-export function createAutoModeOutcomeMeta(
-  record: unknown,
-): AutoModeMeta | null {
+/**
+ * Renders an outcome as its own standalone line, in upstream's bare shape:
+ * `{"outcome":"ok","id":"abc123"}`. This is deliberately NOT a `{"meta":{…}}`
+ * line — the ported prompt describes the two separately, and places outcome
+ * lines *below* the call they report while meta lines sit above it.
+ */
+export function buildAutoModeOutcomeLine(record: unknown): string | null {
   const parsed = outcomeRecordSchema.safeParse(record)
-  return parsed.success ? { outcome: parsed.data.outcome } : null
+  if (!parsed.success) return null
+  return `${JSON.stringify({
+    outcome: parsed.data.outcome,
+    id: shortAutoModeOutcomeId(parsed.data.id),
+  })}\n`
+}
+
+export function getRecordedAutoModeOutcome(
+  toolUseID: string,
+): AutoModeOutcomeRecord | undefined {
+  return recordedOutcomes.get(toolUseID)
 }
 
 export function recordAutoModeOutcome(
@@ -117,7 +139,7 @@ export function recordAutoModeOutcome(
   outcome: AutoModeOutcomeCode,
 ): void {
   recordedOutcomes.delete(toolUseID)
-  recordedOutcomes.set(toolUseID, { outcome })
+  recordedOutcomes.set(toolUseID, { outcome, id: toolUseID })
   if (recordedOutcomes.size > MAX_RECORDED_OUTCOMES) {
     const oldest = recordedOutcomes.keys().next().value
     if (oldest !== undefined) recordedOutcomes.delete(oldest)
@@ -163,15 +185,6 @@ export function buildAutoModeMetaLines(
 ): string[] {
   const lines: string[] = []
   const { upstreamPortEnabled, environment } = options
-
-  if (isAutoModeOutcomeCodesMetaEnabled(upstreamPortEnabled, environment)) {
-    if (Array.isArray(input?.priorOutcomes)) {
-      for (const record of input.priorOutcomes.slice(-MAX_PRIOR_OUTCOMES)) {
-        const meta = createAutoModeOutcomeMeta(record)
-        if (meta !== null) lines.push(metaLine(meta))
-      }
-    }
-  }
 
   if (isAutoModeGitStatusMetaEnabled(upstreamPortEnabled, environment)) {
     const meta = createFreshGitStatusMeta(

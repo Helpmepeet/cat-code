@@ -104,10 +104,7 @@ import {
   classifyYoloAction,
   formatActionForClassifier,
 } from './yoloClassifier.js'
-import {
-  getRecordedAutoModeOutcomes,
-  recordAutoModeOutcome,
-} from './autoModeMeta.js'
+import { recordAutoModeOutcome } from './autoModeMeta.js'
 
 const CLASSIFIER_FAIL_CLOSED_REFRESH_MS = 30 * 60 * 1000 // 30 minutes
 
@@ -708,9 +705,9 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
       }
 
       // Run the auto mode classifier
-      const action = formatActionForClassifier(tool.name, input, {
-        priorOutcomes: getRecordedAutoModeOutcomes(),
-      })
+      // Outcomes are no longer passed in here: they render inline, beneath the
+      // call each one reports, so the classifier can correlate them by id.
+      const action = formatActionForClassifier(tool.name, input, {})
       setClassifierChecking(toolUseID)
       let classifierResult
       try {

@@ -58,9 +58,14 @@ import { buildSettingsDenyRulesText } from './autoModeDenyRules.js'
 import { getAutoModeClassifierAttempts } from './autoModeProviderLadder.js'
 import {
   buildAutoModeMetaLines,
+  buildAutoModeOutcomeLine,
+  getRecordedAutoModeOutcome,
   isAutoModeGitStatusMetaEnabled,
+  isAutoModeOutcomeCodesMetaEnabled,
   isAutoModeRepoVisibilityMetaEnabled,
+  shortAutoModeOutcomeId,
   type AutoModeMetaInput,
+  type AutoModeOutcomeRecord,
 } from './autoModeMeta.js'
 import {
   extractToolUseBlock,
@@ -444,7 +449,13 @@ export const YOLO_CLASSIFIER_TOOL_SCHEMA = feature('AUTO_MODE_UPSTREAM_PORT')
 
 type TranscriptBlock =
   | { type: 'text'; text: string }
-  | { type: 'tool_use'; name: string; input: unknown }
+  | { type: 'tool_use'; name: string; input: unknown; id?: string }
+  /**
+   * A completed call's recorded outcome, rendered on its own line beneath the
+   * call it reports. Correlation is by id, so this block only ever follows the
+   * `tool_use` it belongs to.
+   */
+  | { type: 'outcome'; record: AutoModeOutcomeRecord }
 
 export type TranscriptEntry = {
   role: 'user' | 'assistant'
@@ -463,7 +474,16 @@ export type TranscriptEntry = {
  * Queued user messages (attachment messages with queued_command type) are extracted
  * and emitted as user turns.
  */
-export function buildTranscriptEntries(messages: Message[]): TranscriptEntry[] {
+export function buildTranscriptEntries(
+  messages: Message[],
+  /**
+   * Injectable because `feature()` compiles to `false` under `bun test`, which
+   * would otherwise make the outcome branch unreachable from any test.
+   */
+  outcomeCodesEnabled: boolean = feature('AUTO_MODE_UPSTREAM_PORT')
+    ? isAutoModeOutcomeCodesMetaEnabled(true)
+    : false,
+): TranscriptEntry[] {
   const transcript: TranscriptEntry[] = []
   for (const msg of messages) {
     if (msg.type === 'attachment' && msg.attachment.type === 'queued_command') {
@@ -512,7 +532,15 @@ export function buildTranscriptEntries(messages: Message[]): TranscriptEntry[] {
             type: 'tool_use',
             name: block.name,
             input: block.input,
+            // Upstream gates the call-line id on the same flag as the outcome
+            // lines: the id exists only to correlate the two.
+            ...(outcomeCodesEnabled &&
+              block.id !== undefined && { id: block.id }),
           })
+          if (outcomeCodesEnabled && block.id !== undefined) {
+            const record = getRecordedAutoModeOutcome(block.id)
+            if (record !== undefined) blocks.push({ type: 'outcome', record })
+          }
         }
       }
       if (blocks.length > 0) {
@@ -573,11 +601,21 @@ function toCompactBlock(
       encoded = input
     }
     if (encoded === '') return ''
+    const shortId =
+      block.id === undefined ? undefined : shortAutoModeOutcomeId(block.id)
     if (isJsonlTranscriptEnabled()) {
-      return jsonStringify({ [block.name]: encoded }) + '\n'
+      return (
+        jsonStringify({
+          [harnessSafeToolName(block.name, shortId !== undefined)]: encoded,
+          ...(shortId !== undefined && { id: shortId }),
+        }) + '\n'
+      )
     }
     const s = typeof encoded === 'string' ? encoded : jsonStringify(encoded)
-    return `${block.name} ${s}\n`
+    return `${shortId === undefined ? block.name : `${block.name}[${shortId}]`} ${s}\n`
+  }
+  if (block.type === 'outcome') {
+    return buildAutoModeOutcomeLine(block.record) ?? ''
   }
   if (block.type === 'text' && role === 'user') {
     return isJsonlTranscriptEnabled()
@@ -585,6 +623,18 @@ function toCompactBlock(
       : `User: ${block.text}\n`
   }
   return ''
+}
+
+/**
+ * A tool whose name collides with a harness-authored key would let a model-named
+ * tool forge an outcome or meta line. Upstream brackets the colliding names
+ * rather than dropping the call, so the line stays readable and stays data.
+ */
+function harnessSafeToolName(name: string, idPrinted: boolean): string {
+  if (name === 'outcome') return '[outcome]'
+  if (name === 'meta') return '[meta]'
+  if (name === 'id' && idPrinted) return '[id]'
+  return name
 }
 
 function toCompact(entry: TranscriptEntry, lookup: ToolLookup): string {
@@ -640,9 +690,10 @@ async function buildActionMetaLines(
 export function buildTranscriptForClassifier(
   messages: Message[],
   tools: Tools,
+  outcomeCodesEnabled?: boolean,
 ): string {
   const lookup = buildToolLookup(tools)
-  return buildTranscriptEntries(messages)
+  return buildTranscriptEntries(messages, outcomeCodesEnabled)
     .map(e => toCompact(e, lookup))
     .join('')
 }
