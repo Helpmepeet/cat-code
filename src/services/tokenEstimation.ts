@@ -213,6 +213,95 @@ export function roughTokenCountEstimation(
 }
 
 /**
+ * Chars-per-token ratios for the message/block estimators below.
+ *
+ * Calibrated 2026-08-10 by measuring real payloads with o200k_base as a
+ * labeled proxy.  Claude's tokenizer is generally no more byte-efficient on
+ * code and JSON, so these are lower bounds on the correction, not upper ones.
+ *
+ *   English prose            6.11 chars/token
+ *   TypeScript source        4.24-4.32
+ *   grep output (path:line:) 3.47
+ *   dense JSON               3.07
+ *   JSONL logs               2.86
+ *   UUID/hash-rich JSONL     1.84
+ *
+ * The historical flat 4 measured accurate for code and conservative for prose,
+ * so it stays the default.  It under-counts structured tool output by 1.15x
+ * to 1.4x, which is why tool results carry their own ratio: an underestimate
+ * here lets the context fill past the point where auto-compact should have
+ * fired.  Lowering the default instead would over-compact prose and code.
+ */
+const PROSE_CHARS_PER_TOKEN = 4
+
+/**
+ * Tool results carry the dense structured output (grep hits, JSON, JSONL).
+ * 3 covers the measured 2.86-3.47 band conservatively without punishing the
+ * prose and code that also arrive as tool results.
+ */
+const STRUCTURED_CHARS_PER_TOKEN = 3
+
+/** Identifier-saturated output (UUIDs, git SHAs) measured 1.84 chars/token. */
+const IDENTIFIER_DENSE_CHARS_PER_TOKEN = 2
+
+/**
+ * Fraction of hex-digit-or-dash characters above which a tool result is
+ * treated as identifier-saturated.
+ *
+ * Measured over 18,740 real tool_result payloads from local session
+ * transcripts: median 0.271, p90 0.342, p99 0.570.  Prose, TypeScript source
+ * and grep output all cluster at 0.20-0.25 (English 'a'-'f' plus digits put a
+ * floor around 0.25), so the threshold sits well clear of them.  Every
+ * observed payload above it was genuinely identifier-saturated: git SHA
+ * listings, UUID filename tables, timestamped debug logs.  It fires on ~0.35%
+ * of results, and a false positive only costs a slight overestimate.
+ */
+const IDENTIFIER_DENSITY_THRESHOLD = 0.65
+
+/** Bounded sample so the density check stays O(1) on huge tool results. */
+const IDENTIFIER_DENSITY_SAMPLE_CHARS = 4096
+
+/**
+ * True when the leading sample of `content` is mostly hex digits and dashes,
+ * the signature of UUID/hash-dense output.  Deterministic and bounded: it
+ * reads at most {@link IDENTIFIER_DENSITY_SAMPLE_CHARS} characters.
+ */
+function isIdentifierDense(content: string): boolean {
+  const sampleLength = Math.min(
+    content.length,
+    IDENTIFIER_DENSITY_SAMPLE_CHARS,
+  )
+  if (sampleLength === 0) {
+    return false
+  }
+  let identifierChars = 0
+  for (let i = 0; i < sampleLength; i++) {
+    const code = content.charCodeAt(i)
+    if (
+      (code >= 48 && code <= 57) || // 0-9
+      (code >= 97 && code <= 102) || // a-f
+      (code >= 65 && code <= 70) || // A-F
+      code === 45 // -
+    ) {
+      identifierChars++
+    }
+  }
+  return identifierChars / sampleLength >= IDENTIFIER_DENSITY_THRESHOLD
+}
+
+/**
+ * Ratio to use for a tool_result block's content.  The identifier escalator
+ * applies to string content only; array content recurses at the flat
+ * structured ratio.
+ */
+function charsPerTokenForToolResult(content: unknown): number {
+  if (typeof content === 'string' && isIdentifierDense(content)) {
+    return IDENTIFIER_DENSE_CHARS_PER_TOKEN
+  }
+  return STRUCTURED_CHARS_PER_TOKEN
+}
+
+/**
  * Returns an estimated bytes-per-token ratio for a given file extension.
  * Dense JSON has many single-character tokens (`{`, `}`, `:`, `,`, `"`)
  * which makes the real ratio closer to 2 rather than the default 4.
@@ -379,34 +468,42 @@ export function roughTokenCountEstimationForMessage(message: {
   return 0
 }
 
+/**
+ * @param charsPerToken ratio for the prose-like payloads in this content.
+ *   Defaults to {@link PROSE_CHARS_PER_TOKEN}; tool_result recursion passes
+ *   {@link STRUCTURED_CHARS_PER_TOKEN} so that text blocks nested inside a
+ *   tool_result are counted as the structured output they are, not as prose.
+ */
 export function roughTokenCountEstimationForContent(
   content:
     | string
     | Array<Anthropic.ContentBlock>
     | Array<Anthropic.ContentBlockParam>
     | undefined,
+  charsPerToken: number = PROSE_CHARS_PER_TOKEN,
 ): number {
   if (!content) {
     return 0
   }
   if (typeof content === 'string') {
-    return roughTokenCountEstimation(content)
+    return roughTokenCountEstimation(content, charsPerToken)
   }
   let totalTokens = 0
   for (const block of content) {
-    totalTokens += roughTokenCountEstimationForBlock(block)
+    totalTokens += roughTokenCountEstimationForBlock(block, charsPerToken)
   }
   return totalTokens
 }
 
 function roughTokenCountEstimationForBlock(
   block: string | Anthropic.ContentBlock | Anthropic.ContentBlockParam,
+  charsPerToken: number = PROSE_CHARS_PER_TOKEN,
 ): number {
   if (typeof block === 'string') {
-    return roughTokenCountEstimation(block)
+    return roughTokenCountEstimation(block, charsPerToken)
   }
   if (block.type === 'text') {
-    return roughTokenCountEstimation(block.text)
+    return roughTokenCountEstimation(block.text, charsPerToken)
   }
   if (block.type === 'image' || block.type === 'document') {
     // https://platform.claude.com/docs/en/build-with-claude/vision#calculate-image-costs
@@ -422,27 +519,43 @@ function roughTokenCountEstimationForBlock(
     return 2000
   }
   if (block.type === 'tool_result') {
-    return roughTokenCountEstimationForContent(block.content)
+    // Structured output: measured 2.9-3.5 chars/token, vs the 4.2+ of the
+    // prose and code elsewhere in a message.  String content additionally
+    // escalates when it is identifier-saturated.  The ratio is threaded into
+    // the recursion so text blocks nested in an array-shaped tool_result get
+    // it too.
+    return roughTokenCountEstimationForContent(
+      block.content,
+      charsPerTokenForToolResult(block.content),
+    )
   }
   if (block.type === 'tool_use') {
     // input is the JSON the model generated — arbitrarily large (bash
     // commands, Edit diffs, file contents).  Stringify once for the
     // char count; the API re-serializes anyway so this is what it sees.
+    // Measured 4.2-4.4 chars/token: these are code and prose arguments, so
+    // they keep the default ratio rather than the tool_result one.
     return roughTokenCountEstimation(
       block.name + jsonStringify(block.input ?? {}),
+      PROSE_CHARS_PER_TOKEN,
     )
   }
   if (block.type === 'thinking') {
-    return roughTokenCountEstimation(block.thinking)
+    return roughTokenCountEstimation(block.thinking, PROSE_CHARS_PER_TOKEN)
   }
   if (block.type === 'redacted_thinking') {
-    return roughTokenCountEstimation(block.data)
+    return roughTokenCountEstimation(block.data, PROSE_CHARS_PER_TOKEN)
   }
   // server_tool_use, web_search_tool_result, mcp_tool_use, etc. —
   // text-like payloads (tool inputs, search results, no base64).
   // Stringify-length tracks the serialized form the API sees; the
   // key/bracket overhead is single-digit percent on real blocks.
-  return roughTokenCountEstimation(jsonStringify(block))
+  // Serialized JSON measured ~3.07 chars/token, so these take the structured
+  // ratio rather than the prose default.
+  return roughTokenCountEstimation(
+    jsonStringify(block),
+    STRUCTURED_CHARS_PER_TOKEN,
+  )
 }
 
 async function countTokensWithBedrock({

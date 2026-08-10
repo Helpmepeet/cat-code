@@ -172,6 +172,15 @@ function calculateToolResultTokens(block: ToolResultBlockParam): number {
  * Estimate token count for messages by extracting text content
  * Used for rough token estimation when we don't have accurate API counts
  * Pads estimate by 4/3 to be conservative since we're approximating
+ *
+ * Consistent with roughTokenCountEstimationForBlock by construction, not by
+ * shared code: this walk calls roughTokenCountEstimation directly at the flat
+ * 4 chars/token default and then pads the total by 4/3, which lands on the
+ * same effective ~3 chars/token that the 2026-08-10 calibration audit
+ * measured for structured tool output (2.86-3.47, o200k proxy).  Nothing here
+ * routes through the shape-aware estimator, so the pad is not a double
+ * correction.  If this walk is ever switched over to those helpers, drop the
+ * pad — applying both would over-count.
  */
 export function estimateMessageTokens(messages: Message[]): number {
   let totalTokens = 0

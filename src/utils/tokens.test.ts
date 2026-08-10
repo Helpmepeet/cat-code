@@ -671,7 +671,9 @@ describe('gpt→claude usage-anchor invalidation (Item 2)', () => {
           {
             type: 'tool_result',
             tool_use_id: 'call_x',
-            content: 'W'.repeat(200_000), // ~50k tokens of real transcript
+            // ~67k tokens of real transcript: tool_result content is rough
+            // counted at 3 chars/token as of the 2026-08-10 calibration.
+            content: 'W'.repeat(200_000),
           },
         ],
       },
@@ -683,7 +685,7 @@ describe('gpt→claude usage-anchor invalidation (Item 2)', () => {
   // transcript sent to a Claude model contains it at full size.
   const conversation = (): Message[] => [
     createUserMessage('question'),
-    bigUserToolResult(), // ~50k tokens of real transcript, PRE-anchor
+    bigUserToolResult(), // ~67k tokens of real transcript, PRE-anchor
     createAssistantUsageMessage(), // model gpt-5.6-luna, usage total 130 (truncated)
   ]
 
@@ -701,7 +703,7 @@ describe('gpt→claude usage-anchor invalidation (Item 2)', () => {
       conversation(),
       'claude-sonnet-4-6',
     )
-    // The gpt anchor hid the pre-anchor 50k tool_result; the full re-estimate
+    // The gpt anchor hid the pre-anchor 67k tool_result; the full re-estimate
     // sees it. reestimated must dwarf the truncated-anchor count.
     expect(reestimated).toBeGreaterThan(40_000)
     expect(reestimated).toBeGreaterThan(anchored * 10)
