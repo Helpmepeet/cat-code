@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { createWriteStream, fstatSync, writeSync, type WriteStream } from 'node:fs'
 import {
   createOperationalRecord,
+  MAX_OPERATIONAL_STRING_BYTES,
   type OperationalRecordInput,
 } from '../shared/operationalLog.js'
 import type { DeliveryTrace, SidecarDeliveryStageRecord } from '../shared/deliveryTrace.js'
@@ -42,8 +43,16 @@ export function createSidecarOperationalLogger({
   let pendingWrites = 0
   let droppedRecords = 0
   let reportingDrops = false
+  /**
+   * Keyed by the operational event, or by `delivery.trace` for a delivery-stage
+   * marker, which carries a stage rather than an event. Bucketing strictly by
+   * event name would leave exactly those markers unaccounted for while still
+   * counting them in `droppedRecords`.
+   */
+  const droppedByType = new Map<string, number>()
   const MAX_PENDING_WRITES = 64
   const MAX_PENDING_BYTES = 256 * 1024
+  const MAX_DROP_BUCKETS = 6
   /**
    * Only a pipe or socket can make a write wait for the reader. FD 3 is a pipe
    * in production, and its reader is Electron main, which blocks its own loop on
@@ -88,17 +97,46 @@ export function createSidecarOperationalLogger({
     streaming.write(text)
     return true
   }
+  const noteDrop = (type: string): void => {
+    droppedRecords++
+    droppedByType.set(type, (droppedByType.get(type) ?? 0) + 1)
+  }
   /**
-   * Silent loss reads as a quiet system. The count is the only thing the record
-   * carries, so a saturated queue stays visible without widening the vocabulary.
+   * Fields are flat scalars, so the breakdown travels as one compact string in
+   * the existing `category` slot. Whole buckets are left out rather than leaning
+   * on `sanitizeOperationalText`, which truncates silently and would leave a
+   * corrupt trailing entry in place of a missing one.
+   */
+  const formatDroppedByType = (): string => {
+    const ordered = [...droppedByType.entries()]
+      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+      .slice(0, MAX_DROP_BUCKETS)
+    let text = ''
+    for (const [type, count] of ordered) {
+      const entry = `${text.length > 0 ? ',' : ''}${type}:${count}`
+      if (Buffer.byteLength(text, 'utf8') + Buffer.byteLength(entry, 'utf8') > MAX_OPERATIONAL_STRING_BYTES) break
+      text += entry
+    }
+    return text
+  }
+  /**
+   * Silent loss reads as a quiet system, and a bare count leaves what was lost
+   * unknowable after the fact. The count plus the per-type breakdown keeps a
+   * saturated queue attributable without widening the vocabulary.
    */
   const reportDrops = (): void => {
     if (droppedRecords === 0 || reportingDrops) return
     const count = droppedRecords
+    const category = formatDroppedByType()
     droppedRecords = 0
+    droppedByType.clear()
     reportingDrops = true
     try {
-      write({ level: 'warn', event: 'log.suppressed', fields: { count, reason: 'queue_saturated' } })
+      write({
+        level: 'warn',
+        event: 'log.suppressed',
+        fields: { count, reason: 'queue_saturated', category },
+      })
     } finally {
       reportingDrops = false
     }
@@ -120,7 +158,7 @@ export function createSidecarOperationalLogger({
       if (record.level === 'fatal') {
         writeAll(fd as number, line)
       } else if (streaming) {
-        if (!enqueue(line)) droppedRecords++
+        if (!enqueue(line)) noteDrop(record.event)
       } else if (pendingWrites < MAX_PENDING_WRITES) {
         pendingWrites++
         setImmediate(() => {
@@ -134,7 +172,7 @@ export function createSidecarOperationalLogger({
           }
         })
       } else {
-        droppedRecords++
+        noteDrop(record.event)
       }
     } catch {
       // The pipe is diagnostics-only. Backpressure/error must not alter session IO.
@@ -159,7 +197,7 @@ export function createSidecarOperationalLogger({
       }
       const line = `${JSON.stringify(record)}\n`
       if (!streaming) writeAll(fd as number, line)
-      else if (!enqueue(line)) droppedRecords++
+      else if (!enqueue(line)) noteDrop(record.recordKind)
     } catch {
       // Descriptor evidence is best effort and cannot alter engine IO.
     }

@@ -110,7 +110,7 @@ const OPERATIONAL_EVENT_FIELD_KEYS: Partial<Record<OperationalEvent, readonly st
   'session.restore.completed': ['messageCount'],
   diagnostic: ['source', 'category', 'queuedBytes', 'reason'],
   'log.coverage.incomplete': ['source', 'reason', 'expected'],
-  'log.suppressed': ['count', 'reason'],
+  'log.suppressed': ['count', 'reason', 'category'],
 }
 
 export type OperationalRecord = Readonly<{
