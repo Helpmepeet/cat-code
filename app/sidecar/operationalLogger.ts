@@ -14,7 +14,9 @@ import type { DeliveryTrace, SidecarDeliveryStageRecord } from '../shared/delive
  * what a session did is worth far more after the fact than one that merely
  * samples its health, and shedding both at one threshold loses them with equal
  * probability: a single `queue_saturated` event shed 3,317 records on
- * 2026-08-10 and took the turn's shape with it.
+ * 2026-08-10 and took the turn's shape with it. That figure is the requesting
+ * investigation's measurement, filed as item B4 in
+ * `docs/reports/2026-08-10-overnight-hang-log-request.md`.
  */
 type RecordPriority = 'lifecycle' | 'anomaly' | 'sample'
 
