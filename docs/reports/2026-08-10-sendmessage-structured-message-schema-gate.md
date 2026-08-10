@@ -2,7 +2,7 @@
 
 Date: 2026-08-10
 Area: engine (`src/tools/SendMessageTool/`)
-Status: diagnosed, not fixed
+Status: fixed — options 1 and 2 shipped in `ebc751a8`; the cycle they exposed in `7cfb04df`
 Reproduce: `bun docs/reports/2026-08-10-sendmessage-scan.ts`
 
 ## Summary
@@ -195,7 +195,9 @@ completed normally. Recorded here only so it is not conflated with the defects a
 
 ## Fix options
 
-None of these are implemented.
+Options 1 and 2 shipped together in `ebc751a8`; see Resolution below for what changed
+and what implementing them uncovered. Option 3 was not taken. The three are kept as
+written so the reasoning that led to the choice stays legible.
 
 ### Option 1: gate the union (addresses defect A)
 
@@ -272,14 +274,72 @@ regression test**, and any fix touching the ordering needs a new one asserting t
 structured message to an `@`-prefixed recipient reports the message-shape error rather
 than the recipient-format error.
 
+## Resolution
+
+`ebc751a8` shipped options 1 and 2. The `lazySchema` freeze objection to option 1 was
+resolved by gating on a narrower predicate than the one the option proposed: a new
+`isAgentTeamsOptedIn()` in `src/utils/agentSwarmsEnabled.ts` reads only env, argv, and
+`USER_TYPE`, all fixed at process start, so memoizing them is correct rather than
+hazardous. The GrowthBook killswitch stays out of the schema path and is still enforced
+by `isAgentSwarmsEnabled()` at validation time, which option 2's reordering now reports
+legibly. `isAgentSwarmsEnabled()` semantics are unchanged for its 32 consumers.
+
+### What implementing it uncovered
+
+Building the two-process probe required a process with Agent Teams opted in from launch.
+That crashed at import (verbatim pre-fix trace; `Tool.ts:799` is the spread as it stood
+then, not a current line):
+
+```
+ReferenceError: Cannot access 'envOverridesParsed' before initialization
+  at getEnvOverrides (src/services/analytics/growthbook.ts:171)
+  at isAgentSwarmsEnabled (src/utils/agentSwarmsEnabled.ts:47)
+  at AgentTool.tsx:468 -> lazySchema.ts:7 -> buildTool (Tool.ts:799)
+```
+
+`buildTool()` spread its definition by value, and a spread reads accessors, so every
+`get inputSchema()` ran during `buildTool` — at import time, since tools call `buildTool`
+at module scope. That defeated the `lazySchema` deferral in 112 tool modules, and on this
+import cycle it re-entered `growthbook.ts` mid-initialization and hit the temporal dead
+zone on its module-level `let`s. Value-import cycle:
+
+```
+growthbook -> utils/http -> utils/auth -> utils/model/providers -> utils/messages
+  -> utils/api -> tools.ts -> AgentTool.tsx -> agentSwarmsEnabled -> growthbook
+```
+
+Two of growthbook's ten direct imports reach `AgentTool.tsx` (`utils/http.ts` and
+`utils/user.ts`), both through `utils/auth.ts`, so cutting a single growthbook edge would
+not have been sufficient. `7cfb04df` fixes `buildTool` to copy property descriptors
+instead, preserving precedence and restoring the laziness the pattern already assumed —
+including at `AgentTool.tsx:472`, whose comment reasons explicitly about
+"GrowthBook-in-lazySchema" being safe, an invariant the builder had been silently
+breaking.
+
+Effect: any launch opting into Agent Teams from process start, by env var or
+`--agent-teams`, died at import. That is almost certainly why the corpus contains no
+Agent Teams session at all, and it means the affordance this report is about was gated
+behind a feature that could not start.
+
+### Verification
+
+`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 bun run src/entrypoints/cli.tsx --agent-teams --help`
+prints usage instead of the `ReferenceError`. A real opted-in process, with no preloaded
+growthbook stub, now advertises `shutdown_request` in the generated schema, and an
+opted-out process does not — which retires the caveat that the shipped probe's opted-in
+case only passed because it stubbed around the crash above. `bun test src/tools/` 363/0,
+`bun test ./src/Tool.test.ts` 2/0, `bun run build:dev:full` green.
+
 ## Uncertainty
 
-- The corpus contains no session with Agent Teams enabled, so this report says nothing
-  about whether structured messages work correctly when the gate is on.
+- Agent Teams is now startable but has still never run a real session. This report says
+  nothing about whether structured messages behave correctly end to end once the gate is
+  on; it establishes only that the schema and the validator now agree in both states.
 - The 23 failures are all `shutdown_request`. `shutdown_response` and
-  `plan_approval_response` are in the same ungated union and would fail identically by
+  `plan_approval_response` are in the same union and would have failed identically by
   inspection, but neither appears in the transcripts, so that is reasoning from source,
   not observation.
-- The `lazySchema` freeze risk under option 1 is reasoned from source, not reproduced. If
-  option 1 is taken, it needs a live check of when the schema is first constructed
-  relative to GrowthBook feature load.
+- `bun test app/` was not a clean signal when this landed: 11 live-sidecar probes failed
+  on a missing `ANTHROPIC_API_KEY`/`CLAUDE_CODE_OAUTH_TOKEN` in the shell, and
+  `app/sidecar/` carried another session's uncommitted work. Neither was attributable to
+  these changes, and neither was re-checked with credentials present.
