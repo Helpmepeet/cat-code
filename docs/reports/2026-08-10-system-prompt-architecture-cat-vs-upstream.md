@@ -323,8 +323,15 @@ forces invariants across assemblies, and lost two of them on the new path.
 | 2.1.87 | ant_model_override, brief, env_info_simple, frc, language, memory, output_style, scratchpad, summarize_tool_results, mcp_instructions |
 | 2.1.223 | act_dont_rederive, autonomy_append, brief, context_management, delivering_work_max, endconv_deferred_hint, env_info_simple, **env_info_static**, fable_identity, focus_mode, heron_brook, language, output_style, overcorrection, pronouns, scratchpad, subagent_steer_delegation, task_continuity, tool_param_json, action_caution, session_guidance, memory |
 
-Dropped: `frc`, `summarize_tool_results`, `ant_model_override`,
-`mcp_instructions` (as a registry entry). Added thirteen behavioral sections.
+Added thirteen behavioral sections. Four entries left the registry, and they
+are not equivalent — each was checked rather than assumed:
+
+| Entry | What actually happened | Cat Code today |
+|---|---|---|
+| `mcp_instructions` | **Relocated**, not deleted. `# MCP Server Instructions` is still in 2.1.223, now emitted from the attachment renderer's `mcp_instructions_delta` case as an `isMeta` message, which also handles disconnection ("The following MCP servers have disconnected. Their instructions above no longer apply") — something a cached system-prompt section structurally cannot do | already has the same relocation, gated by `isMcpInstructionsDeltaEnabled()` |
+| `summarize_tool_results` | **Genuinely deleted.** "write down any important information you might need later" is present at 2.1.87, absent at 2.1.223 | still emits it |
+| `frc` | **Announcement deleted, mechanism kept.** `keepRecent` / `toolsCleared` / `toolsKept` / `clearedIds` are alive at 2.1.223; the system-prompt section is gone. Upstream now clears tool results without telling the model. Note the text was feature-gated out of *both* external builds anyway, so this changed nothing for external users | still announces it under `CACHED_MICROCOMPACT` |
+| `ant_model_override` | internal-only in both; no external effect | retained, `USER_TYPE === 'ant'` gated |
 
 ### 3.2 `--exclude-dynamic-system-prompt-sections`
 
@@ -502,9 +509,15 @@ the qualifying contexts.
    target failure modes visible in this repo's own history (sessions wrapping up
    early; re-deriving settled facts). Low risk, additive.
 
+7. **`tool_search_usage_reminder`.** Cat Code has deferred tool schemas and a
+   `ToolSearchTool` but no per-turn nudge, so a session can conclude a capability
+   is missing while the tool sits one `select:` query away. This is an attachment,
+   not a system-prompt section, so it costs nothing in the cached prefix. Cheapest
+   real win on this list after item 1.
+
 ### Adapt
 
-7. **`--exclude-dynamic-system-prompt-sections`.** The cross-user cache-reuse
+8. **`--exclude-dynamic-system-prompt-sections`.** The cross-user cache-reuse
    argument is weak for a single-user fork, but the underlying `env_info` split
    is valuable on its own: Cat Code's `computeSimpleEnvInfo` currently mixes
    machine-independent facts (model name, cutoff, latest-model list, provider,
@@ -513,33 +526,33 @@ the qualifying contexts.
    `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` into the `cacheScope: 'global'` prefix. Do the
    split; skip the flag and the first-user-message redirect.
 
-8. **`# Delivering work` and `# Corrections`.** Both are strong, but both overlap
+9. **`# Delivering work` and `# Corrections`.** Both are strong, but both overlap
    Cat Code's existing `getOutputEfficiencySection` and `OUTCOME_REPORTING_RULE`.
    Per the policy core's "exactly one container per assembled prompt" rule, these
    must be merged into the existing containers rather than appended, or Cat Code
    ends up stating outcome-reporting twice in two wordings.
 
-9. **The fork-subagent wording.** Cat Code's "without a subagent_type" text
+10. **The fork-subagent wording.** Cat Code's "without a subagent_type" text
    should be re-verified against Cat Code's own `AgentTool` contract rather than
    copied from upstream — upstream's `subagent_type: "fork"` reflects an upstream
    API change, and the two forks' tool schemas have diverged.
 
 ### Avoid
 
-10. **Upstream's CLAUDE.md authority wording.** Do not re-sync
+11. **Upstream's CLAUDE.md authority wording.** Do not re-sync
     `src/utils/claudemd.ts:96` or the actions section toward upstream. Cat Code's
     scoped-override plus `INSTRUCTION_AUTHORITY_LIMIT` is a deliberate,
     documented improvement over upstream's unbounded claim.
 
-11. **Upstream's name-only section keying.** Cat Code's structured key encoder is
+12. **Upstream's name-only section keying.** Cat Code's structured key encoder is
     strictly stronger and is load-bearing for per-request provider switching.
     Adopt upstream's generation guard *into* Cat Code's keying, not instead of it.
 
-12. **`heron_brook`, `fable_identity`, `autonomy_append`, `endconv_deferred_hint`,
+13. **`heron_brook`, `fable_identity`, `autonomy_append`, `endconv_deferred_hint`,
     `focus_mode`.** Model-specific, experiment-gated, or tied to upstream
     surfaces (End-conversation tool, focus mode) that Cat Code does not have.
 
-13. **The UI/frontend "start the dev server" rule.** It contradicts Cat Code's
+14. **The UI/frontend "start the dev server" rule.** It contradicts Cat Code's
     §8.8 GUI protocol, where launching the desktop app is an operator action the
     agent must not take unprompted.
 
@@ -609,6 +622,40 @@ ExitPlanMode protocol footer — plus a "plan workshop" flow
 has `plan_mode`, `plan_mode_exit`, `plan_mode_reentry`, `verify_plan_reminder`,
 `plan_file_reference` attachments and `src/utils/ultraplan/prompt.txt`, but no
 customization seam. Not compared line by line.
+
+### 7.4 The attachment channel, and the relocation question
+
+The open question after §3.0 was whether "upstream shortened the prompt" is
+really a *relocation* story: content moved from the cached system prompt into
+per-turn `isMeta` attachments, which would make the lean prompt look smaller
+without the model seeing less.
+
+Tested against the four registry entries that left (table in §3.1). **It is not
+a relocation story.** Exactly one entry moved (`mcp_instructions`), and Cat Code
+already has that same move. One was deleted outright, one had its announcement
+deleted while the mechanism stayed, one was internal-only. The lean/verbose split
+is compression and deletion, so the §3.0 reading stands.
+
+Comparing the two channels directly: Cat Code renders 66 attachment kinds
+(`src/utils/attachments.ts`). Upstream's renderer carries five that Cat Code has
+no equivalent for:
+
+- **`tool_search_usage_reminder`** — names the tools whose schemas are not loaded
+  and says: "Before concluding a capability is missing or building a workaround,
+  use ToolSearch to find and load relevant tools… Calling a tool before its
+  schema is loaded will fail."
+- **`mcp_dropped_tools_delta`** — an `# Unavailable MCP Tools` notice when tools
+  are evicted.
+- `plan_ready`, `memory_update`, `auto_mode_scan`.
+
+Cat Code ships `ToolSearchTool` and `deferred_tools_delta` but has **no per-turn
+ToolSearch nudge at all**, which is the exact configuration the upstream reminder
+exists to rescue: a session with deferred schemas, where the model concludes a
+capability is missing rather than loading it.
+
+Direction caveat: the upstream list came from a 260 KB window around the
+renderer, so "upstream has X" is reliable positive evidence, while
+"upstream lacks Y" is not established for Cat Code's 66 kinds.
 
 ## 8. What this report still does not cover
 
