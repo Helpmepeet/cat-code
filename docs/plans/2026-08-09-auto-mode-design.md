@@ -346,11 +346,11 @@ that implements the two-stage architecture.
    transcripts carrying file contents, tool output, and other agents' messages,
    so that is the operative threat, not a hypothetical one.
 
-   **Why after the replay, not before.** The mechanism is a severity scale
-   (0-100, 50 the boundary) with configurable cut points. Building it now means
-   inventing threshold numbers with no data. The replay produces exactly the
-   evidence that makes them non-arbitrary. Cost is secondary but real: every
-   decision becomes two model calls.
+   **Why after the replay, not before.** The thresholds are the tunable part and
+   we would be inventing them with no data; the replay produces the evidence
+   that makes them non-arbitrary. **Cost is NOT a reason** — see the mechanism
+   below, which corrects an earlier claim here that two-stage doubles classifier
+   cost. It does not.
 
    **What is established, checked 2026-08-10.** Two stages are two real API
    requests, not two readings of one response. Upstream's telemetry schema
@@ -368,11 +368,44 @@ that implements the two-stage architecture.
    (one demanding a bare `<block>`, one a bare `<severity>`) which read equally
    as two variants of one stage.
 
-   **Still unresolved, and narrower than before.** What
-   `"fast" | "thinking" | "both"` selects — a stage-1 variant, or whether stage
-   2 runs at all — and how `t1`/`t2` combine two severity scores into one
-   verdict. Re-extract those two before implementing; do not infer them from
-   this paragraph.
+   **Mechanism, re-extracted 2026-08-10.** Both remaining unknowns are now
+   answered. The mode selects which stages run:
+
+   | mode | behaviour | stage-1 budget |
+   |---|---|---|
+   | `fast` | stage 1 only; its verdict is final | 256 tokens |
+   | `thinking` | stage 1 skipped entirely; stage 2 alone | — |
+   | `both` (default) | stage 1, then stage 2 **only on escalation** | 64 tokens |
+
+   The two thresholds do different jobs:
+
+   - **`t1` is an escalation gate, not a verdict.** After stage 1,
+     `severity > t1` escalates to stage 2. Otherwise the action is **allowed
+     immediately and stage 2 never runs** — returned as "Allowed by fast
+     classifier".
+   - **`t2` is the block threshold.** Stage 2 blocks when its own severity
+     exceeds it.
+
+   Defaults are **`t1 = 15`, `t2 = 20`**, configurable per model via
+   `tengu_auto_mode_config.severityByModel[<model>]`.
+
+   **Two consequences worth carrying forward.**
+
+   First, **this is a cheap filter plus a conditional expensive pass, not two
+   full calls.** Stage 1 in `both` mode is capped at 64 output tokens — it emits
+   a number — against a prompt that is already cached. Stage 2 is capped at
+   8192 and runs only on actions stage 1 flagged. Routine actions, which are
+   nearly all of them, cost one small completion. The earlier "doubles cost"
+   claim in this delta was wrong and is withdrawn; it was reasoning from "two
+   stages" without reading the budgets.
+
+   Second, **the operational thresholds are far below the scale the prompt
+   describes.** The prompt tells the model "50 is exactly the allow/block
+   boundary", while the harness escalates above 15 and blocks above 20. So the
+   stated midpoint is not the operating point, and any implementation that took
+   50 as the threshold would be dramatically more permissive than upstream. If
+   we tune our own thresholds from replay data, this is the shape to expect:
+   models under-score harm relative to the scale they are given.
 
    Nothing about it ships in the meantime, and G4's settings surface stays
    closed until it does.
