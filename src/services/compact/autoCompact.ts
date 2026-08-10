@@ -302,10 +302,12 @@ export async function shouldAutoCompact(
   messages: Message[],
   model: string,
   querySource?: QuerySource,
-  // Snip removes messages but the surviving assistant's usage still reflects
-  // pre-snip context, so tokenCountWithEstimation can't see the savings.
-  // Subtract the rough-delta that snip already computed.
-  snipTokensFreed = 0,
+  // Snip drops messages and time-based microcompact content-clears old
+  // tool_results, but both act on the request array only — the surviving
+  // assistant's usage still reflects the pre-shrink context, so
+  // tokenCountWithEstimation can't see the savings. Subtract the rough delta
+  // those passes already computed.
+  preRequestTokensFreed = 0,
 ): Promise<boolean> {
   // Recursion guards. session_memory and compact are forked agents that
   // would deadlock.
@@ -369,12 +371,12 @@ export async function shouldAutoCompact(
   // sends the full transcript, so trusting it would fire autocompact late (or
   // let the first Claude call 413). See tokenCountWithEstimation's currentModel.
   const tokenCount =
-    tokenCountWithEstimation(messages, model) - snipTokensFreed
+    tokenCountWithEstimation(messages, model) - preRequestTokensFreed
   const threshold = getAutoCompactThreshold(model)
   const effectiveWindow = getEffectiveContextWindowSize(model)
 
   logForDebugging(
-    `autocompact: tokens=${tokenCount} threshold=${threshold} effectiveWindow=${effectiveWindow}${snipTokensFreed > 0 ? ` snipFreed=${snipTokensFreed}` : ''}`,
+    `autocompact: tokens=${tokenCount} threshold=${threshold} effectiveWindow=${effectiveWindow}${preRequestTokensFreed > 0 ? ` preRequestFreed=${preRequestTokensFreed}` : ''}`,
   )
 
   const { isAboveAutoCompactThreshold } = calculateTokenWarningState(
@@ -391,7 +393,7 @@ export async function autoCompactIfNeeded(
   cacheSafeParams: CacheSafeParams,
   querySource?: QuerySource,
   tracking?: AutoCompactTrackingState,
-  snipTokensFreed?: number,
+  preRequestTokensFreed?: number,
 ): Promise<{
   wasCompacted: boolean
   compactionResult?: CompactionResult
@@ -416,7 +418,7 @@ export async function autoCompactIfNeeded(
     messages,
     model,
     querySource,
-    snipTokensFreed,
+    preRequestTokensFreed,
   )
 
   if (!shouldCompact) {

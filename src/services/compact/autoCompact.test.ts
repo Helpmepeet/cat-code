@@ -6,8 +6,10 @@ import {
   getBlockingLimit,
   getEffectiveContextWindowSize,
   MANUAL_COMPACT_BUFFER_TOKENS,
+  shouldAutoCompact,
 } from './autoCompact.js'
 import { getContextWindowForModel } from '../../utils/context.js'
+import type { Message } from '../../types/message.js'
 
 const ENV_KEYS = [
   'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE',
@@ -97,5 +99,52 @@ describe('autoCompact thresholds', () => {
   test('respects the compliance 1M disablement for Claude 5 models', () => {
     process.env.CLAUDE_CODE_DISABLE_1M_CONTEXT = 'true'
     expect(getContextWindowForModel('claude-sonnet-5')).toBe(200_000)
+  })
+})
+
+describe('shouldAutoCompact pre-request savings', () => {
+  const MODEL = 'claude-sonnet-4-6'
+
+  // Snip and time-based microcompact shrink the request array only; the
+  // anchor shouldAutoCompact reads still carries the pre-shrink usage.
+  function anchoredAt(inputTokens: number): Message[] {
+    return [
+      {
+        type: 'assistant',
+        uuid: 'anchor',
+        timestamp: '2026-01-01T00:00:00.000Z',
+        message: {
+          id: 'anchor',
+          model: MODEL,
+          role: 'assistant',
+          content: [{ type: 'text', text: 'anchor' }],
+          usage: {
+            input_tokens: inputTokens,
+            output_tokens: 0,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+          },
+        },
+      } as unknown as Message,
+    ]
+  }
+
+  test('subtracts the pre-request freed tokens from the stale anchor', async () => {
+    const threshold = getAutoCompactThreshold(MODEL)
+    const messages = anchoredAt(threshold + 10_000)
+
+    expect(await shouldAutoCompact(messages, MODEL)).toBe(true)
+    expect(
+      await shouldAutoCompact(messages, MODEL, undefined, 20_000),
+    ).toBe(false)
+  })
+
+  test('freed tokens below the overshoot still compact', async () => {
+    const threshold = getAutoCompactThreshold(MODEL)
+    const messages = anchoredAt(threshold + 10_000)
+
+    expect(await shouldAutoCompact(messages, MODEL, undefined, 5_000)).toBe(
+      true,
+    )
   })
 })

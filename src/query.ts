@@ -423,9 +423,10 @@ async function* queryLoop(
     )
 
     // Apply snip before microcompact (both may run — they are not mutually exclusive).
-    // snipTokensFreed is plumbed to autocompact so its threshold check reflects
-    // what snip removed; tokenCountWithEstimation alone can't see it (reads usage
-    // from the protected-tail assistant, which survives snip unchanged).
+    // snipTokensFreed feeds preRequestTokensFreed below (combined with what
+    // microcompact freed) so autocompact's threshold check reflects what snip
+    // removed; tokenCountWithEstimation alone can't see it (reads usage from
+    // the protected-tail assistant, which survives snip unchanged).
     let snipTokensFreed = 0
     if (feature('HISTORY_SNIP')) {
       queryCheckpoint('query_snip_start')
@@ -453,6 +454,14 @@ async function* queryLoop(
       ? microcompactResult.compactionInfo?.pendingCacheEdits
       : undefined
     queryCheckpoint('query_microcompact_end')
+
+    // Both snip and time-based microcompact shrink the REQUEST array only —
+    // the usage anchor tokenCountWithEstimation reads comes from an assistant
+    // message that predates either. Combine their savings and subtract once,
+    // wherever the stale anchor is consulted below. Computed after
+    // microcompact because microcompact runs after snip.
+    const preRequestTokensFreed =
+      snipTokensFreed + (microcompactResult.tokensFreed ?? 0)
 
     // Project the collapsed context view and maybe commit more collapses.
     // Runs BEFORE autocompact so that if collapse gets us under the
@@ -502,7 +511,7 @@ async function* queryLoop(
       },
       querySource,
       tracking,
-      snipTokensFreed,
+      preRequestTokensFreed,
     )
     queryCheckpoint('query_autocompact_end')
 
@@ -628,7 +637,8 @@ async function* queryLoop(
     // Skip this check if compaction just happened - the compaction result is already
     // validated to be under the threshold, and tokenCountWithEstimation would use
     // stale input_tokens from kept messages that reflect pre-compaction context size.
-    // Same staleness applies to snip: subtract snipTokensFreed (otherwise we'd
+    // Same staleness applies to snip and time-based microcompact: subtract
+    // preRequestTokensFreed (otherwise we'd
     // falsely block in the window where snip brought us under autocompact threshold
     // but the stale usage is still above blocking limit — before this PR that
     // window never existed because autocompact always fired on the stale count).
@@ -669,11 +679,9 @@ async function* queryLoop(
       !collapseOwnsIt
     ) {
       const { isAtBlockingLimit } = calculateTokenWarningState(
-        tokenCountWithEstimation(
-          messagesForQuery,
-          toolUseContext.options.mainLoopModel,
-        ) - snipTokensFreed,
-        toolUseContext.options.mainLoopModel,
+        tokenCountWithEstimation(messagesForQuery, currentModel) -
+          preRequestTokensFreed,
+        currentModel,
       )
       if (isAtBlockingLimit) {
         yield createAssistantAPIErrorMessage({
