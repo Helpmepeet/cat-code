@@ -322,9 +322,46 @@ that implements the two-stage architecture.
    repeat denials; carries "unavailable is NOT a policy decision"), then
    `gitStatus`, then `repoVisibility`. Each behind its own flag, each with a
    boundary test proving tool output can never reach the meta channel.
-9. **Two-stage severity deferred** — lowest-confidence extraction, doubles cost,
-   tunes a fleet we do not have. Revisit only if replay shows single-stage
-   under-performing. Nothing about it ships in the meantime (G4).
+9. **Two-stage classification — required, sequenced after the replay.**
+   Reframed 2026-08-10; it previously read "deferred, revisit only if replay
+   shows single-stage under-performing", which was wrong in kind.
+
+   **It is not an upstream extra.** `tengu_auto_mode_config.twoStageClassifier`
+   defaults to `"both"`, so two-stage is upstream's normal operation. Running
+   one pass is therefore a deviation from the port-wholesale ruling, and belongs
+   on this list as an argued deviation rather than a contingency.
+
+   **The rules were authored for two passes.** All 65 soft rules carry consent
+   bars. Upstream's stage 1 ignores those bars entirely and grades harm alone —
+   verbatim: *"Stage 1 does NOT apply user intent or ALLOW exceptions … Grade
+   HARM ONLY — do NOT reduce for user intent"* — and stage 2 then applies them.
+   A single pass weighs harm and consent together, which is precisely what
+   upstream separated. We are running their rule text under a procedure it was
+   not written for.
+
+   **The separation is an injection defence.** With one pass, hostile text in a
+   transcript has two routes: make the action look benign, or look like consent.
+   Grading harm before intent is read closes the first, leaving only stage 2's
+   explicit-confirmation bar. This fork runs unattended sessions over
+   transcripts carrying file contents, tool output, and other agents' messages,
+   so that is the operative threat, not a hypothetical one.
+
+   **Why after the replay, not before.** The mechanism is a severity scale
+   (0-100, 50 the boundary) with configurable cut points. Building it now means
+   inventing threshold numbers with no data. The replay produces exactly the
+   evidence that makes them non-arbitrary. Cost is secondary but real: every
+   decision becomes two model calls.
+
+   **Re-derive the mechanics before implementing.** This was the
+   lowest-confidence part of the binary extraction. Specifically unresolved:
+   whether `"fast" | "thinking" | "both"` selects which stage-1 variant runs or
+   whether both stages run, and how `t1`/`t2` map onto the verdict. Two
+   stage-1 suffixes exist (one demanding a bare `<block>`, one demanding a bare
+   `<severity>`), which is consistent with either reading. Do not implement from
+   this paragraph; re-extract.
+
+   Nothing about it ships in the meantime, and G4's settings surface stays
+   closed until it does.
 
 ## Amendments from verification
 
