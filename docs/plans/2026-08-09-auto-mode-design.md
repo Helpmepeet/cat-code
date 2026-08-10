@@ -516,11 +516,27 @@ discovered-PID kills still block — the last by both upstream's
      surface, per the F6 decision and G4. The replay overriding effort inside
      its harness leaves both intact; adding an effort setting to satisfy the
      replay would reopen a closed decision.
-   - **This measures the prompt, not the production primary path.** In
-     production the primary classifier is Sonnet-class and GPT is the fallback
-     at medium. So a green replay says the ported rules behave; it does not say
-     the medium-effort fallback is adequate. That remains a separate question,
-     and the honest place to answer it is a second replay pass at the shipped
-     fallback settings once the first one passes.
+   - **GPT is the production classifier here, not a fallback.** This machine has
+     no Anthropic model access, so every real classifier call runs on the GPT
+     family. Replaying on Luna therefore exercises the production path, not a
+     substitute. What differs is effort: the replay runs at maximum, shipped
+     code runs at medium (F6). So a green replay qualifies the ported rules but
+     not the shipped effort level; the honest place to close that is a second
+     pass at medium once the first passes.
+
+**Defect this exposed, 2026-08-10 — not yet fixed.** With the port on and no
+`autoMode.model` configured, `getClassifierModel()` returns `'sonnet'`, so the
+ladder's first attempt on every permission decision targets an Anthropic
+provider this machine cannot authenticate against. The resulting error
+(`ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN env var is required`) is **not**
+recognised by `isProviderAuthenticationError`, which does recognise the Bedrock,
+Vertex, and Codex-pool equivalents. G2 requires symmetric crossing on provider
+failures, so this both violates the spec and, on a GPT-only machine, reproduces
+the fail-closed outage class the port exists to remove — on every call.
+
+Two things are owed: recognise absent first-party Anthropic credentials as a
+provider-family failure (unambiguous, implements G2 as written), and decide what
+`autoMode.model` should default to on a machine with no Anthropic access, which
+is a design question the plan has not answered.
 4. ~~Ungate `CLAUDE_CODE_DUMP_AUTO_MODE`~~ — **done** (`537f88e5`), verified
    (amendment F). Cheap, and it is the likely input path for the replay harness.
