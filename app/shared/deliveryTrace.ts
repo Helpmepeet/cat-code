@@ -93,12 +93,11 @@ export function deliveryAnomalyScope(recordKind: string): DeliveryAnomalyScope {
  * question is asked about. Two further app-seam variants (`tool_progress`,
  * `tool_use_summary`) therefore stay untagged, so an absent tag means "no tag
  * for this frame", never "not an SDK message".
- */
-/**
+ *
  * `satisfies` is the tripwire: compilation fails if a name here is not an
  * `SDKMessage` discriminant, so a renamed engine variant cannot leave behind a
- * tag no frame can ever carry. The reverse direction is intentionally not
- * total, per the subset note above.
+ * tag no frame can ever carry. The reverse direction is deliberately not total,
+ * which is what makes the subset above legal.
  */
 export const DELIVERY_MESSAGE_KINDS = [
   'assistant', 'user', 'system', 'result', 'stream_event',
