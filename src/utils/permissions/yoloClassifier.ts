@@ -871,7 +871,14 @@ let cachedUpstreamSystemPrompt:
 function buildUpstreamSystemPrompt(): string {
   const autoMode = getAutoModeConfig()
   const config = jsonStringify(autoMode)
-  if (cachedUpstreamSystemPrompt?.config === config) {
+  // Explicit presence check, not `cache?.config === config`. With no auto-mode
+  // config `jsonStringify` returns undefined, and an empty cache's `?.config`
+  // is undefined too, so the optional-chained form reports a hit on the very
+  // first call and then dereferences the cache that does not exist yet.
+  if (
+    cachedUpstreamSystemPrompt !== undefined &&
+    cachedUpstreamSystemPrompt.config === config
+  ) {
     return cachedUpstreamSystemPrompt.prompt
   }
 
