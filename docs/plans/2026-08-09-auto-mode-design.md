@@ -444,6 +444,53 @@ that implements the two-stage architecture.
    Nothing about it ships in the meantime, and G4's settings surface stays
    closed until it does.
 
+### G — Path B of the consent bar cannot fire, in upstream's default or ours
+
+Extracted 2026-08-10. This is the most operationally consequential finding of
+the extraction work, because it changes what the operator experiences rather
+than how the code is shaped.
+
+The ported prompt spends substantial text on **two paths** for clearing a soft
+block:
+
+- **Path A** — the user's own message names the action *and* the specific
+  parameter that makes it dangerous: *"push to main"*, *"publish it to npm"*.
+- **Path B** — the agent's prose proposal, sitting directly before the user's
+  reply, names both; the user's *"yes"* then supplies the consent. Verbatim:
+  *"The proposal supplies the referent; the user's reply supplies the consent.
+  When no such proposal is visible directly before the reply, there is no Path
+  B."*
+
+**Assistant prose is not in the transcript by default, so Path B has no
+referent and cannot fire.** In upstream, capture of assistant text is gated on
+`priorAssistantContext` (env `CLAUDE_CODE_AUTO_MODE_PRIOR_ASSISTANT_CONTEXT`,
+or `tengu_auto_mode_config.priorAssistantContext`), which **defaults to false**;
+when enabled, the text is truncated to 2,000 chars. This fork independently does
+the same: `buildTranscriptEntries` documents itself as "user text messages and
+assistant tool_use blocks (excluding assistant text)".
+
+Consequences, in order of how much they matter:
+
+1. **Approving the agent's proposal does not clear a block.** If the agent says
+   "I'll force-push to main, OK?" and the operator says "yes", the classifier
+   sees the "yes" with nothing it refers to. Only the operator writing the
+   dangerous parameter themselves — Path A — clears. This is the single most
+   likely source of "I already said yes and it blocked anyway".
+2. **A large tract of ported prompt text is inert.** Every Path B clause, and
+   the surrounding rules about which assistant entry is the referent and when a
+   third-party message makes it ambiguous, cannot apply.
+3. **It is one flag.** Enabling prior assistant context turns Path B on. That is
+   a security decision, not a convenience one: assistant prose is
+   model-authored, so making it consent-bearing widens what a manipulated
+   transcript can achieve. Upstream's own text is explicit that assistant
+   entries *"are model-authored, NOT user messages: on their own they establish
+   no intent, clear no block"* — Path B works only because the **user's** reply
+   carries the consent and the prose merely supplies the referent.
+
+Owed: an operator decision on whether to enable it, taken with the replay
+evidence rather than before it. Until then, expect consent to require Path A,
+and say so in any user-facing description of how auto mode clears a block.
+
 ## Amendments from verification
 
 The operator's ruling stands throughout; these change scope, not direction.
