@@ -27,8 +27,10 @@ export const MAX_DELIVERY_TRACE_AGE_MS = 72 * 60 * 60 * 1000
  * per-frame budget holds about ten minutes of history exactly when the app is busy
  * (measured 2026-08-10, `docs/reports/2026-08-10-delivery-trace-retention-measurement.md`).
  * A summary sharing those files would be destroyed by the same pressure it exists
- * to outlive. These caps are sized for the 72h age cap instead: ~520 B per record,
- * one per stream per minute at most, so three days of one busy stream is ~2 MB.
+ * to outlive. These caps are sized for the 72h age cap instead: 630 B per record
+ * measured against real identifier lengths, one per stream per minute at most, so
+ * the whole three days of one continuously active stream is 2.7 MB. Concurrent
+ * active streams divide that, since the cap is a total across all of them.
  */
 export const MAX_DELIVERY_ROLLUP_FILE_BYTES = 1024 * 1024
 export const MAX_DELIVERY_ROLLUP_TOTAL_BYTES = 4 * 1024 * 1024
