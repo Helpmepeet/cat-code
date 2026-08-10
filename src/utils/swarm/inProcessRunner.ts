@@ -28,7 +28,6 @@ import {
   compactConversation,
   ERROR_MESSAGE_USER_ABORT,
 } from '../../services/compact/compact.js'
-import { resetMicrocompactState } from '../../services/compact/microCompact.js'
 import type { AppState } from '../../state/AppState.js'
 import type { Tool, Tools, ToolUseContext } from '../../Tool.js'
 import { appendTeammateMessage } from '../../tasks/InProcessTeammateTask/InProcessTeammateTask.js'
@@ -1381,9 +1380,13 @@ export async function runInProcessTeammate(
           true, // isAutoCompact
         )
         contextMessages = buildPostCompactMessages(compactedSummary)
-        // Reset microcompact state since full compact replaces all
-        // messages — old tool IDs are no longer relevant
-        resetMicrocompactState()
+        // Deliberately NOT calling resetMicrocompactState() here. Microcompact
+        // module state is main-thread-owned and this teammate never writes it:
+        // teammate turns run with querySource 'agent:custom' (below), which
+        // fails both the cached-MC gate and the time-based trigger gate in
+        // microCompact.ts. Resetting it from here would only wipe the MAIN
+        // thread's cached-MC registrations and sticky cleared-id set — same
+        // process, same module globals — re-inflating its next request.
         // Reset content replacement state — compact replaces all messages
         // so old tool_use_ids are gone. Stale Map entries are harmless
         // (UUID keys never match) but accumulate memory over long runs.

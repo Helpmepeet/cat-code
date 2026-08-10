@@ -23,8 +23,8 @@ import { resetMicrocompactState } from './microCompact.js'
  * resets that would clobber main-thread module-level state. Subagents
  * (agent:*) run in the same process and share module-level state
  * (context-collapse store, getMemoryFiles one-shot hook flag,
- * getUserContext cache); resetting those when a SUBAGENT compacts
- * would corrupt the MAIN thread's state. All compaction callers should
+ * getUserContext cache, microcompact state); resetting those when a
+ * SUBAGENT compacts would corrupt the MAIN thread's state. All compaction callers should
  * pass querySource — undefined is only safe for callers that are
  * genuinely main-thread-only (/compact, /clear).
  */
@@ -38,7 +38,16 @@ export function runPostCompactCleanup(querySource?: QuerySource): void {
     querySource.startsWith('repl_main_thread') ||
     querySource === 'sdk'
 
-  resetMicrocompactState()
+  if (isMainThreadCompact) {
+    // Microcompact module state (cachedMCState, pendingCacheEdits, and the
+    // time-based sticky cleared-id set) is main-thread-only by construction:
+    // every write path is gated on a main-thread querySource
+    // (microCompact.ts:328 cached-MC, microCompact.ts:488 time-based
+    // trigger). A subagent compacting its own history invalidates none of
+    // it, so resetting here would only drop the main thread's sticky
+    // clearing and re-inflate its next request.
+    resetMicrocompactState()
+  }
   if (feature('CONTEXT_COLLAPSE')) {
     if (isMainThreadCompact) {
       /* eslint-disable @typescript-eslint/no-require-imports */

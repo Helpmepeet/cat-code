@@ -145,11 +145,13 @@ file-isolation caveat in action.
 
 ## 7. Open items
 
-- **Sticky-set reset scope:** `runPostCompactCleanup` calls
-  `resetMicrocompactState()` unconditionally, so a *subagent* compaction drops
-  the main thread's sticky clear set — behavior degrades to pre-fix (no
-  regression). Fixing it moves the reset inside the main-thread guard and
-  changes cached-MC reset semantics; deliberately left for a decision.
+- **Sticky-set reset scope:** RESOLVED in a same-day follow-up — the reset
+  now sits inside `runPostCompactCleanup`'s main-thread guard and the
+  in-process-teammate reset call was removed after tracing that teammates
+  (querySource `agent:custom`) can never write microcompact state. Residual:
+  the sticky set is process-memory only, so **resume drops stickiness** while
+  the resumed anchor still reflects cleared content — a bounded under-count
+  window until the next response, deliberately not persisted.
 - **Calibration is proxy-based.** Re-run against Claude `count_tokens` (free)
   when an Anthropic login exists; only the escalator threshold and the 3
   chars/token band would plausibly move.

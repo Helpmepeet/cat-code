@@ -134,8 +134,13 @@ export function markToolsSentToAPIState(): void {
 // re-applied on every subsequent main-thread request the full tool_results
 // are re-sent while the usage anchor comes from the post-clear response —
 // the request silently exceeds the estimate and autocompact fires late.
-// Cleared by resetMicrocompactState (compaction, /clear, rewind), which is
-// exactly when the ids stop referring to the live conversation.
+// Cleared by resetMicrocompactState (MAIN-THREAD compaction, /clear, rewind),
+// which is exactly when the ids stop referring to the live conversation.
+// This set — like cachedMCState and pendingCacheEdits above — is owned by the
+// main thread: only a main-thread querySource can write it (see the gates at
+// evaluateTimeBasedTrigger and the sticky re-application in
+// microcompactMessages). Subagents and in-process teammates share this module
+// but never own any of it, so they must never reset it.
 const timeBasedClearedToolIds = new Set<string>()
 
 export function resetMicrocompactState(): void {

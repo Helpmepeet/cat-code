@@ -68,9 +68,10 @@ export function clearSessionCaches(
   // Clear last emitted date so it's re-detected on next turn
   setLastEmittedDate(null)
 
-  // Run post-compaction cleanup (clears system prompt sections, microcompact tracking,
-  // classifier approvals, speculative checks, and — for main-thread compacts — memory
-  // files cache with load_reason 'compact').
+  // Run post-compaction cleanup (clears system prompt sections, classifier
+  // approvals, speculative checks, and — for main-thread compacts, which the
+  // undefined querySource here counts as — microcompact tracking and the
+  // memory files cache with load_reason 'compact').
   runPostCompactCleanup()
   // Reset sent skill names so the skill listing is re-sent after /clear.
   // runPostCompactCleanup intentionally does NOT reset this (post-compact
