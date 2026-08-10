@@ -5,6 +5,12 @@ import { join } from 'node:path'
 import { release as osRelease } from 'node:os'
 import { parseOperationalRecord } from '../shared/operationalLog.js'
 import {
+  DELIVERY_ANOMALY_KINDS,
+  DELIVERY_ROLLUP_FILE_PREFIX,
+  DELIVERY_TRACE_FILE_PREFIX,
+  MAX_DELIVERY_ROLLUP_FILES,
+  MAX_DELIVERY_ROLLUP_FILE_BYTES,
+  MAX_DELIVERY_ROLLUP_TOTAL_BYTES,
   MAX_DELIVERY_TRACE_AGE_MS,
   MAX_DELIVERY_TRACE_FILES,
   MAX_DELIVERY_TRACE_FILE_BYTES,
@@ -42,6 +48,13 @@ function readTail(path: string, size: number): string {
 
 const MAX_BUNDLE_BYTES = 2 * 1024 * 1024
 const MAX_FILE_BYTES = 512 * 1024
+/**
+ * The rollup lane's admission reserve, spent only by rollup records. Sharing the
+ * general budget would undo on the export side what the separate files buy on the
+ * retention side: one busy minute of per-frame records fills 1 MiB, and the
+ * summaries that exist to outlive them would be squeezed out of every bundle.
+ */
+const MAX_BUNDLE_ROLLUP_BYTES = 256 * 1024
 
 type TraceRecord = Record<string, string | number | boolean>
 
@@ -61,8 +74,11 @@ export function buildDiagnosticsBundle({
   buildId?: string
   commitId?: string
 }): string {
-  const streams: { operational: unknown[]; deliveryTrace: TraceRecord[] } = { operational: [], deliveryTrace: [] }
+  const streams: { operational: unknown[]; deliveryTrace: TraceRecord[]; deliveryRollup: TraceRecord[] } =
+    { operational: [], deliveryTrace: [], deliveryRollup: [] }
   let includedBytes = 0
+  let rollupBytes = 0
+  let rollupLimitReached = false
   let sourceWindowTruncated = false
   let bundleLimitReached = false
   let sourceReadFailures = 0
@@ -84,13 +100,19 @@ export function buildDiagnosticsBundle({
       // candidates, up to six 20 MiB trace files, were still read whole and
       // parsed synchronously on the Electron main thread after the admission
       // budget was already spent, freezing the UI inside the export handler.
-      if (bundleLimitReached) break
+      if (bundleLimitReached && rollupLimitReached) break
+      const isRollup = name.startsWith(DELIVERY_ROLLUP_FILE_PREFIX)
       const target = name.startsWith('operational-')
         ? streams.operational
-        : name.startsWith('delivery-trace-')
-          ? streams.deliveryTrace
-          : null
+        : isRollup
+          ? streams.deliveryRollup
+          : name.startsWith(DELIVERY_TRACE_FILE_PREFIX)
+            ? streams.deliveryTrace
+            : null
       if (!target) continue
+      // Skipped before the tail read, for the same reason the break above exists:
+      // a lane whose budget is spent must not cost the main thread a file parse.
+      if (isRollup ? rollupLimitReached : bundleLimitReached) continue
       try {
         if (size > MAX_FILE_BYTES) sourceWindowTruncated = true
         // Take the tail and parse newest complete records first, so an incident
@@ -122,12 +144,20 @@ export function buildDiagnosticsBundle({
             continue
           }
           const bytes = Buffer.byteLength(JSON.stringify(safe))
-          if (includedBytes + bytes > MAX_BUNDLE_BYTES / 2) {
-            bundleLimitReached = true
-            break
+          if (isRollup) {
+            if (rollupBytes + bytes > MAX_BUNDLE_ROLLUP_BYTES) {
+              rollupLimitReached = true
+              break
+            }
+            rollupBytes += bytes
+          } else {
+            if (includedBytes + bytes > MAX_BUNDLE_BYTES / 2) {
+              bundleLimitReached = true
+              break
+            }
+            includedBytes += bytes
           }
           target.push(safe)
-          includedBytes += bytes
         }
       } catch {
         // A concurrently rotated/broken log is omitted rather than failing export.
@@ -147,19 +177,26 @@ export function buildDiagnosticsBundle({
       os: { platform: process.platform, arch: process.arch, release: bounded(osRelease()) },
       runtime: { node: bounded(process.versions.node), electron: bounded(process.versions.electron ?? 'unavailable') },
       configuration: { packaged },
-      schemas: { operational: 1, deliveryTrace: 1 },
+      schemas: { operational: 1, deliveryTrace: 1, deliveryRollup: 1 },
       limits: {
         operational: { recordBytes: MAX_OPERATIONAL_RECORD_BYTES, fileBytes: MAX_OPERATIONAL_LOG_BYTES, totalBytes: MAX_OPERATIONAL_LOG_TOTAL_BYTES, files: MAX_OPERATIONAL_LOG_FILES, ageMs: MAX_OPERATIONAL_LOG_AGE_MS },
         deliveryTrace: { recordBytes: MAX_DELIVERY_TRACE_RECORD_BYTES, fileBytes: MAX_DELIVERY_TRACE_FILE_BYTES, totalBytes: MAX_DELIVERY_TRACE_TOTAL_BYTES, files: MAX_DELIVERY_TRACE_FILES, ageMs: MAX_DELIVERY_TRACE_AGE_MS },
+        deliveryRollup: { recordBytes: MAX_DELIVERY_TRACE_RECORD_BYTES, fileBytes: MAX_DELIVERY_ROLLUP_FILE_BYTES, totalBytes: MAX_DELIVERY_ROLLUP_TOTAL_BYTES, files: MAX_DELIVERY_ROLLUP_FILES, ageMs: MAX_DELIVERY_TRACE_AGE_MS },
       },
-      recordCounts: { operational: streams.operational.length, deliveryTrace: streams.deliveryTrace.length },
+      recordCounts: {
+        operational: streams.operational.length,
+        deliveryTrace: streams.deliveryTrace.length,
+        deliveryRollup: streams.deliveryRollup.length,
+      },
     },
-    processInstances: deriveProcessInstances(streams.operational, streams.deliveryTrace),
+    // Rollups included: when the per-frame files have rotated away, they may be
+    // the only remaining evidence that a process observed anything at all.
+    processInstances: deriveProcessInstances(streams.operational, [...streams.deliveryTrace, ...streams.deliveryRollup]),
     recordingCoverage: deriveRecordingCoverage(
       streams.operational,
       streams.deliveryTrace,
       currentLaunchId,
-      { sourceWindowTruncated, bundleLimitReached, sourceReadFailures, recordsRejected },
+      { sourceWindowTruncated, bundleLimitReached: bundleLimitReached || rollupLimitReached, sourceReadFailures, recordsRejected },
     ),
     stuckSessions: deriveStuckSessionSummaries(streams.deliveryTrace),
     streams,
@@ -224,6 +261,18 @@ export function parseDeliveryTraceRecord(value: unknown): TraceRecord | null {
       'processName', 'processInstanceId', 'sessionId', 'streamEpoch', 'sequence',
       'quietMs', 'lastMessageKind', 'deliveryStatus', 'stage',
     ],
+    // The periodic per-stream summary, written to its own files on its own
+    // retention budget so it outlives the per-frame detail it summarizes. It
+    // reaches a bundle only through this entry: an unlisted kind is rejected
+    // whole and silently, which is the fail-before this row was written against.
+    'trace.stream.rollup': [
+      'schemaVersion', 'recordKind', 'wallTimestamp', 'monotonicTimestampMs', 'launchId',
+      'processName', 'processInstanceId', 'sessionId', 'streamEpoch', 'sequence',
+      'quietMs', 'lastMessageKind', 'deliveryStatus', 'stage',
+      'produced', 'socketSent', 'socketReceived', 'hostReceived', 'ipcSent',
+      'preloadReceived', 'applied', 'committed', 'traceLossCount',
+      ...DELIVERY_ANOMALY_KINDS,
+    ],
   }
   if (typeof kind !== 'string' || !allowedByKind[kind] || Object.keys(item).some(key => !allowedByKind[kind]!.includes(key))) return null
   // The bundle's promise is that a second pass re-validates every retained
@@ -276,6 +325,22 @@ export function parseDeliveryTraceRecord(value: unknown): TraceRecord | null {
       // verdict that did not attribute one.
       (item.deliveryStatus === 'incomplete') !== (item.stage !== undefined) ||
       (item.stage !== undefined && !isDeliveryStage(item.stage))
+    ) return null
+  } else if (kind === 'trace.stream.rollup') {
+    if (
+      !opaqueId(item.sessionId) || !isSafeDeliveryIdentifier(item.streamEpoch) ||
+      !positiveInteger(item.sequence) ||
+      typeof item.quietMs !== 'number' || !Number.isFinite(item.quietMs) || item.quietMs < 0 ||
+      // Absent where no frame in the stream carried an SDK message. Unlike the
+      // quiescence record, which is only ever written for a stream that had one.
+      (item.lastMessageKind !== undefined && !isDeliveryMessageKind(item.lastMessageKind)) ||
+      !['complete', 'incomplete', 'unknown'].includes(item.deliveryStatus as string) ||
+      (item.deliveryStatus === 'incomplete') !== (item.stage !== undefined) ||
+      (item.stage !== undefined && !isDeliveryStage(item.stage)) ||
+      // A watermark of zero is the meaningful case, so these are counts, not ids.
+      !WATERMARK_FIELDS.every(field => nonNegativeInteger(item[field])) ||
+      (item.traceLossCount !== undefined && !positiveInteger(item.traceLossCount)) ||
+      DELIVERY_ANOMALY_KINDS.some(anomaly => item[anomaly] !== undefined && !positiveInteger(item[anomaly]))
     ) return null
   } else if (kind === 'trace.ack.rejected') {
     if (
@@ -579,8 +644,18 @@ export function deriveProcessInstances(
   return [...processes.values()]
 }
 
+/** Every watermark a rollup carries; all required, and zero is a real answer. */
+const WATERMARK_FIELDS = [
+  'produced', 'socketSent', 'socketReceived', 'hostReceived',
+  'ipcSent', 'preloadReceived', 'applied', 'committed',
+] as const
+
 function positiveInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+}
+
+function nonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 }
 
 function opaqueId(value: unknown): value is string {

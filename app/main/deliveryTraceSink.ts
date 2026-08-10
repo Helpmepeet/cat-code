@@ -21,6 +21,32 @@ export const MAX_DELIVERY_TRACE_FILE_BYTES = 20 * 1024 * 1024
 export const MAX_DELIVERY_TRACE_TOTAL_BYTES = 100 * 1024 * 1024
 export const MAX_DELIVERY_TRACE_FILES = 6
 export const MAX_DELIVERY_TRACE_AGE_MS = 72 * 60 * 60 * 1000
+/**
+ * The rollup lane's own files, and the whole reason it is a lane at all. Per-frame
+ * detail costs ~8.1 KB per frame and burns 9.85 MB/min under load, so the 100 MB
+ * per-frame budget holds about ten minutes of history exactly when the app is busy
+ * (measured 2026-08-10, `docs/reports/2026-08-10-delivery-trace-retention-measurement.md`).
+ * A summary sharing those files would be destroyed by the same pressure it exists
+ * to outlive. These caps are sized for the 72h age cap instead: ~520 B per record,
+ * one per stream per minute at most, so three days of one busy stream is ~2 MB.
+ */
+export const MAX_DELIVERY_ROLLUP_FILE_BYTES = 1024 * 1024
+export const MAX_DELIVERY_ROLLUP_TOTAL_BYTES = 4 * 1024 * 1024
+export const MAX_DELIVERY_ROLLUP_FILES = 4
+export const DELIVERY_TRACE_FILE_PREFIX = 'delivery-trace-'
+export const DELIVERY_ROLLUP_FILE_PREFIX = 'delivery-rollup-'
+/**
+ * The anomaly kinds a rollup counts, named for the records they summarize so the
+ * counter fields invent no second vocabulary. Shared with the export allowlist.
+ */
+export const DELIVERY_ANOMALY_KINDS = [
+  'trace.sequence.gap',
+  'trace.sequence.duplicate',
+  'trace.sequence.out_of_order',
+  'trace.source.incomplete',
+  'trace.ack.rejected',
+  'trace.stream.quiescent',
+] as const
 /** In-memory evidence is a bounded diagnostic ring, never a session history. */
 export const MAX_DELIVERY_TRACE_SEQUENCES_PER_STREAM = 2_048
 export const MAX_DELIVERY_TRACE_STREAMS = 128
@@ -104,6 +130,14 @@ export type DeliveryTraceSink = {
    * touches a socket, a session, or a frame (OBSERVABILITY-MINIMUM.md §3).
    */
   sweepQuiescentStreams(): void
+  /**
+   * Emit one `trace.stream.rollup` per stream whose observable state has changed
+   * since its last rollup, onto the rollup lane's own files. Rides the same
+   * interval as `sweepQuiescentStreams`; exposed for the same reason. Diagnosis
+   * only: it writes and returns, and never touches a socket, a session, or a
+   * frame (OBSERVABILITY-MINIMUM.md §3).
+   */
+  emitStreamRollups(): void
   close(): void
 }
 
@@ -140,6 +174,84 @@ type StreamState = {
   lastMessageKindSequence: number
   /** One record per quiet episode; cleared by the next mark (§5). */
   quiescenceReported: boolean
+  /**
+   * The observable state the last rollup reported. An interval that changed
+   * nothing writes nothing, so the record count is bounded by the stream's work
+   * rather than by how long it sits there (OBSERVABILITY-MINIMUM.md §5).
+   */
+  lastRollupFingerprint: string | null
+}
+
+/** An append-only JSONL file with its own rotation and its own retention. */
+type LogLane = {
+  append(record: Record<string, unknown>): boolean
+  close(): void
+}
+
+function createLane({
+  directory, prefix, latestName, launchId, maxRecordBytes, maxFileBytes, maxTotalBytes, maxFiles, maxAgeMs, now,
+}: {
+  directory: string
+  prefix: string
+  latestName: string
+  launchId: string
+  maxRecordBytes: number
+  maxFileBytes: number
+  maxTotalBytes: number
+  maxFiles: number
+  maxAgeMs: number
+  now: () => Date
+}): LogLane {
+  let fd: number | null = null
+  let file = ''
+
+  const ensureOpen = (): boolean => {
+    try {
+      mkdirSync(directory, { recursive: true, mode: 0o700 })
+      chmodSync(directory, 0o700)
+      if (fd === null) {
+        file = join(directory, `${prefix}${launchId}-${now().getTime()}.jsonl`)
+        fd = openSync(file, 'a', 0o600)
+        chmodSync(file, 0o600)
+        updateLatest(directory, latestName, file)
+        retain(directory, prefix, now().getTime(), maxTotalBytes, maxFiles, maxAgeMs, file)
+      }
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  return {
+    append(record) {
+      let line: string
+      try {
+        line = `${JSON.stringify(record)}\n`
+      } catch {
+        return false
+      }
+      if (Buffer.byteLength(line) > maxRecordBytes || !ensureOpen() || fd === null) return false
+      try {
+        const currentSize = fstatSync(fd).size
+        if (currentSize > 0 && currentSize + Buffer.byteLength(line) > maxFileBytes) {
+          closeSync(fd)
+          fd = null
+          file = ''
+          if (!ensureOpen() || fd === null) return false
+        }
+        writeSync(fd, line)
+        return true
+      } catch {
+        return false
+      }
+    },
+    close() {
+      if (fd !== null) {
+        try { closeSync(fd) } catch {}
+        fd = null
+      }
+    },
+  }
 }
 
 export function createDeliveryTraceSink({
@@ -150,6 +262,9 @@ export function createDeliveryTraceSink({
   maxTotalBytes = MAX_DELIVERY_TRACE_TOTAL_BYTES,
   maxFiles = MAX_DELIVERY_TRACE_FILES,
   maxAgeMs = MAX_DELIVERY_TRACE_AGE_MS,
+  rollupFileBytes = MAX_DELIVERY_ROLLUP_FILE_BYTES,
+  rollupTotalBytes = MAX_DELIVERY_ROLLUP_TOTAL_BYTES,
+  rollupFiles = MAX_DELIVERY_ROLLUP_FILES,
   quietMs = DELIVERY_TRACE_QUIET_MS,
   sweepIntervalMs = DELIVERY_TRACE_SWEEP_MS,
   now = () => new Date(),
@@ -162,6 +277,10 @@ export function createDeliveryTraceSink({
   maxTotalBytes?: number
   maxFiles?: number
   maxAgeMs?: number
+  /** Deliberately separate from the per-frame caps: see the constants above. */
+  rollupFileBytes?: number
+  rollupTotalBytes?: number
+  rollupFiles?: number
   quietMs?: number
   /** Zero or less leaves the sweep unarmed, for a caller that drives it itself. */
   sweepIntervalMs?: number
@@ -171,52 +290,21 @@ export function createDeliveryTraceSink({
   const directory = join(configDir, 'logs')
   const processInstanceId = randomUUID()
   const streams = new Map<string, StreamState>()
-  let fd: number | null = null
-  let file = ''
   let pendingLoss: {
     first: number; last: number; count: number; reason: string
     sessionId?: string; streamEpoch?: string
   } | null = null
 
-  const ensureOpen = (): boolean => {
-    try {
-      mkdirSync(directory, { recursive: true, mode: 0o700 })
-      chmodSync(directory, 0o700)
-      if (fd === null) {
-        file = join(directory, `delivery-trace-${launchId}-${Date.now()}.jsonl`)
-        fd = openSync(file, 'a', 0o600)
-        chmodSync(file, 0o600)
-        updateLatest(directory, file)
-        retain(directory, now().getTime(), maxTotalBytes, maxFiles, maxAgeMs, file)
-      }
-      return true
-    } catch {
-      return false
-    }
-  }
-
-  const appendLine = (record: Record<string, unknown>): boolean => {
-    let line: string
-    try {
-      line = `${JSON.stringify(record)}\n`
-    } catch {
-      return false
-    }
-    if (Buffer.byteLength(line) > maxRecordBytes || !ensureOpen() || fd === null) return false
-    try {
-      const currentSize = fstatSync(fd).size
-      if (currentSize > 0 && currentSize + Buffer.byteLength(line) > maxFileBytes) {
-        closeSync(fd)
-        fd = null
-        file = ''
-        if (!ensureOpen() || fd === null) return false
-      }
-      writeSync(fd, line)
-      return true
-    } catch {
-      return false
-    }
-  }
+  const traceLane = createLane({
+    directory, prefix: DELIVERY_TRACE_FILE_PREFIX, latestName: 'latest-delivery', launchId,
+    maxRecordBytes, maxFileBytes, maxTotalBytes, maxFiles, maxAgeMs, now,
+  })
+  const rollupLane = createLane({
+    directory, prefix: DELIVERY_ROLLUP_FILE_PREFIX, latestName: 'latest-delivery-rollup', launchId,
+    maxRecordBytes, maxFileBytes: rollupFileBytes, maxTotalBytes: rollupTotalBytes, maxFiles: rollupFiles,
+    maxAgeMs, now,
+  })
+  const appendLine = (record: Record<string, unknown>): boolean => traceLane.append(record)
 
   const noteLoss = (
     sequence: number,
@@ -313,6 +401,7 @@ export function createDeliveryTraceSink({
         lastMessageKind: null,
         lastMessageKindSequence: 0,
         quiescenceReported: false,
+        lastRollupFingerprint: null,
       }
       streams.set(key, state)
     }
@@ -363,7 +452,7 @@ export function createDeliveryTraceSink({
       // turn to be mid-way through.
       if (state.lastMessageKind === null || state.lastMessageKind === 'result') continue
       const { sessionId, streamEpoch } = state
-      const missing = firstMissing(state.watermarks, true)
+      const verdict = deliveryVerdict(state.watermarks)
       state.anomalies.set('trace.stream.quiescent', (state.anomalies.get('trace.stream.quiescent') ?? 0) + 1)
       write({
         schemaVersion: 1,
@@ -382,13 +471,69 @@ export function createDeliveryTraceSink({
         // produced reached the renderer and the stream still went quiet, so the
         // engine stopped producing and the pipeline is exonerated. That is the
         // 2026-08-10 shape, and reading it off a perfect trace took hours.
-        deliveryStatus: missing === null ? 'complete' : missing === 'unknown' ? 'unknown' : 'incomplete',
-        ...(missing === null || missing === 'unknown' ? {} : { stage: missing }),
+        ...verdict,
       }, state.highestSequence, { state, sessionId: sessionId!, streamEpoch: streamEpoch! })
     }
   }
 
-  const sweepTimer = sweepIntervalMs > 0 ? setInterval(sweepQuiescentStreams, sweepIntervalMs) : null
+  const emitStreamRollups = (): void => {
+    const nowMs = monotonicNow()
+    for (const state of streams.values()) {
+      // A stream with no marked frame has no watermark to summarize; its rollup
+      // would be an all-zero record standing for nothing observed.
+      if (state.highestSequence < 1) continue
+      const verdict = deliveryVerdict(state.watermarks)
+      const anomalies = Object.fromEntries(
+        DELIVERY_ANOMALY_KINDS
+          .map(kind => [kind, state.anomalies.get(kind) ?? 0] as const)
+          .filter(([, count]) => count > 0),
+      )
+      // Everything the record asserts, and nothing time-derived: `quietMs` grows
+      // every interval by definition, so including it would defeat suppression
+      // and put the record count back on the clock.
+      const fingerprint = JSON.stringify([
+        state.highestSequence, state.watermarks, state.lastMessageKind, verdict, anomalies, state.losses,
+      ])
+      if (fingerprint === state.lastRollupFingerprint) continue
+      const written = rollupLane.append({
+        schemaVersion: 1,
+        recordKind: 'trace.stream.rollup',
+        wallTimestamp: now().toISOString(),
+        monotonicTimestampMs: nowMs,
+        launchId,
+        processName: 'electron-main',
+        processInstanceId,
+        sessionId: state.sessionId,
+        streamEpoch: state.streamEpoch,
+        sequence: state.highestSequence,
+        quietMs: Math.max(0, Math.round(nowMs - state.lastMarkedAtMs)),
+        ...(state.lastMessageKind ? { lastMessageKind: state.lastMessageKind } : {}),
+        ...verdict,
+        produced: state.watermarks.produced,
+        socketSent: state.watermarks.socketSent,
+        socketReceived: state.watermarks.socketReceived,
+        hostReceived: state.watermarks.hostReceived,
+        ipcSent: state.watermarks.ipcSent,
+        preloadReceived: state.watermarks.preloadReceived,
+        applied: state.watermarks.applied,
+        committed: state.watermarks.committed,
+        ...(state.losses > 0 ? { traceLossCount: state.losses } : {}),
+        ...anomalies,
+      })
+      // Left unset on a failed write, so the next interval retries this state
+      // instead of suppressing it as already reported. The rollup lane carries
+      // no `trace.loss` of its own: a lost summary is re-derivable from state
+      // that is still in memory, which is exactly what makes the retry correct.
+      if (written) state.lastRollupFingerprint = fingerprint
+    }
+  }
+
+  const sweepTimer = sweepIntervalMs > 0
+    ? setInterval(() => {
+      sweepQuiescentStreams()
+      emitStreamRollups()
+    }, sweepIntervalMs)
+    : null
   sweepTimer?.unref?.()
 
   return {
@@ -529,17 +674,19 @@ export function createDeliveryTraceSink({
       })
     },
     sweepQuiescentStreams,
+    emitStreamRollups,
     close() {
       // A quit between two sweeps would otherwise lose the only account of a
       // stream that had already gone quiet. The per-episode latch keeps this
       // from double-reporting one that the interval already named.
       sweepQuiescentStreams()
+      // After the sweep, so the last rollup carries the quiescence it just
+      // counted; suppressed when the interval already reported this state.
+      emitStreamRollups()
       flushPendingLoss()
       if (sweepTimer) clearInterval(sweepTimer)
-      if (fd !== null) {
-        try { closeSync(fd) } catch {}
-        fd = null
-      }
+      traceLane.close()
+      rollupLane.close()
     },
   }
 }
@@ -648,6 +795,20 @@ function firstMissing(watermarks: DeliveryWatermarks, deliveredOnly = false): st
   return null
 }
 
+/**
+ * The delivered-through verdict both non-arrival records carry. `complete` means
+ * every frame the engine produced reached the renderer, which exonerates the
+ * pipeline; `unknown` is the deliberate non-answer where the evidence cannot
+ * separate two hops (OBSERVABILITY-MINIMUM.md §4). A named stage rides only
+ * `incomplete`, so the pairing is what the export validates.
+ */
+function deliveryVerdict(watermarks: DeliveryWatermarks): { deliveryStatus: string; stage?: string } {
+  const missing = firstMissing(watermarks, true)
+  if (missing === null) return { deliveryStatus: 'complete' }
+  if (missing === 'unknown') return { deliveryStatus: 'unknown' }
+  return { deliveryStatus: 'incomplete', stage: missing }
+}
+
 /** Server-frame kinds are fixed protocol discriminants, not user-authored text. */
 function isSafeFrameKind(value: string): boolean {
   return isServerFrameKind(value)
@@ -666,15 +827,20 @@ export function deliveryMessageKindOfFrame(frame: ServerFrame): DeliveryMessageK
   return isDeliveryMessageKind(messageKind) ? messageKind : undefined
 }
 
-function updateLatest(directory: string, activeFile: string): void {
-  const latest = join(directory, 'latest-delivery')
+function updateLatest(directory: string, latestName: string, activeFile: string): void {
+  const latest = join(directory, latestName)
   try { unlinkSync(latest) } catch {}
   try { symlinkSync(activeFile, latest) } catch {}
 }
 
-function retain(directory: string, current: number, maxTotalBytes: number, maxFiles: number, maxAgeMs: number, activeFile: string): void {
+/**
+ * Retention is per lane: the pattern is anchored on the caller's own prefix, so
+ * pressure on the per-frame files can never reach a rollup file and the reverse.
+ */
+function retain(directory: string, prefix: string, current: number, maxTotalBytes: number, maxFiles: number, maxAgeMs: number, activeFile: string): void {
+  const pattern = new RegExp(`^${prefix}[A-Za-z0-9-]+-\\d+\\.jsonl$`)
   const files = readdirSync(directory)
-    .filter(name => /^delivery-trace-[A-Za-z0-9-]+-\d+\.jsonl$/.test(name))
+    .filter(name => pattern.test(name))
     .map(name => ({ path: join(directory, name), stat: statSync(join(directory, name)) }))
     .sort((a, b) => a.stat.mtimeMs - b.stat.mtimeMs)
   let total = files.reduce((sum, item) => sum + item.stat.size, 0)

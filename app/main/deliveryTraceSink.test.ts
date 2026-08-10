@@ -398,6 +398,136 @@ test('a stream that resumes and stops again is reported a second time', () => {
   expect(kinds(root, 'trace.stream.quiescent').map(record => record.sequence)).toEqual([1, 2])
 })
 
+/** Every record on one lane's files, oldest file first. Rotation spans files. */
+function laneRecords(root: string, prefix: string): Array<Record<string, unknown>> {
+  const dir = join(root, 'logs')
+  return readdirSync(dir)
+    .filter(name => name.startsWith(prefix))
+    .sort()
+    .flatMap(name => readFileSync(join(dir, name), 'utf8').trim().split('\n'))
+    .filter(Boolean)
+    .map(line => JSON.parse(line))
+}
+
+/**
+ * A sink whose per-frame lane is squeezed to what one busy minute costs in the
+ * real one. The measured 100 MB budget holds ~12,300 frames and burns
+ * 9.85 MB/min under load, so the per-frame files are what rotation reaches.
+ */
+function rotatingSink(root: string, clock: { ms: number }, wall: { value: number }) {
+  return createDeliveryTraceSink({
+    configDir: root,
+    launchId: 'launch',
+    maxFileBytes: 4096,
+    maxTotalBytes: 8192,
+    maxFiles: 1,
+    sweepIntervalMs: 0,
+    monotonicNow: () => clock.ms,
+    now: () => new Date(wall.value++),
+  })
+}
+
+test('a stream summary outlives the per-frame records it summarizes', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-rollup-retention-'))
+  const clock = { ms: 0 }
+  const wall = { value: 1_760_000_000_000 }
+  const sink = rotatingSink(root, clock, wall)
+  for (let sequence = 1; sequence <= 4; sequence++) traceThroughMain(sink, sequence, ASSISTANT_FRAME)
+  clock.ms = 60_000
+  sink.emitStreamRollups()
+
+  // The pressure that ends the per-frame history. Nothing here is unusual: it is
+  // ordinary traffic on the same stream, which is exactly why ten minutes of it
+  // erased the onset of the 2026-08-10 hang before anyone read it.
+  for (let sequence = 5; sequence <= 64; sequence++) traceThroughMain(sink, sequence, ASSISTANT_FRAME)
+  sink.close()
+
+  const perFrame = laneRecords(root, 'delivery-trace-')
+  expect(perFrame.some(record => record.sequence === 1)).toBe(false)
+  expect(perFrame.some(record => record.sequence === 4)).toBe(false)
+  // Same directory, same launch, different lane: the summary written while those
+  // records still existed is still on disk after they are gone.
+  const rollups = laneRecords(root, 'delivery-rollup-')
+  expect(rollups[0]).toMatchObject({
+    recordKind: 'trace.stream.rollup',
+    sessionId: 'session',
+    streamEpoch: 'stream',
+    sequence: 4,
+    socketReceived: 4,
+    ipcSent: 4,
+    preloadReceived: 0,
+    deliveryStatus: 'incomplete',
+    stage: 'preload.received',
+    lastMessageKind: 'assistant',
+  })
+})
+
+test('a rollup carries the stream facts an investigation opens first', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-rollup-facts-'))
+  const clock = { ms: 0 }
+  const sink = createDeliveryTraceSink({
+    configDir: root, launchId: 'launch', sweepIntervalMs: 0, monotonicNow: () => clock.ms,
+  })
+  // Sequence 2 never crossed the socket, so a gap fires on 3. How far the stream
+  // got, what fired, and where it stopped are the three facts, and they are
+  // stream-level: none of them needs the per-frame records to be readable.
+  for (const sequence of [1, 3]) traceThroughMain(sink, sequence, ASSISTANT_FRAME)
+  clock.ms = 60_000
+  sink.emitStreamRollups()
+  sink.close()
+
+  expect(laneRecords(root, 'delivery-rollup-')[0]).toMatchObject({
+    sequence: 3,
+    produced: 0,
+    socketReceived: 1,
+    hostReceived: 1,
+    ipcSent: 1,
+    applied: 0,
+    committed: 0,
+    quietMs: 60_000,
+    deliveryStatus: 'incomplete',
+    stage: 'preload.received',
+    'trace.sequence.gap': 1,
+  })
+  // Counters for anomalies that never fired are absent, not zero: this record is
+  // written once a minute per stream, and the whole point is that it is cheap.
+  expect(laneRecords(root, 'delivery-rollup-')[0]).not.toHaveProperty('trace.sequence.duplicate')
+})
+
+test('the rollup rides the sweep the sink already owns', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-rollup-timer-'))
+  const sink = createDeliveryTraceSink({ configDir: root, launchId: 'launch', sweepIntervalMs: 5 })
+  traceThroughMain(sink, 1, ASSISTANT_FRAME)
+  // Nothing drives the sweep here. A lane armed to no timer writes nothing in
+  // production and still passes every test that calls the method by hand.
+  await new Promise(resolve => setTimeout(resolve, 60))
+  const written = laneRecords(root, 'delivery-rollup-')
+  sink.close()
+  expect(written).toHaveLength(1)
+})
+
+test('an interval in which a stream did nothing writes no rollup', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-rollup-idle-'))
+  const clock = { ms: 0 }
+  const sink = createDeliveryTraceSink({
+    configDir: root, launchId: 'launch', sweepIntervalMs: 0, monotonicNow: () => clock.ms,
+  })
+  traceThroughMain(sink, 1, ASSISTANT_FRAME)
+  for (const minute of [1, 2, 3, 4, 5]) {
+    clock.ms = minute * 60_000
+    sink.emitStreamRollups()
+  }
+  // A record per minute for a stream doing nothing is bounded by elapsed time
+  // rather than by work, which OBSERVABILITY-MINIMUM.md §5 calls the defect.
+  expect(laneRecords(root, 'delivery-rollup-')).toHaveLength(1)
+
+  traceThroughMain(sink, 2, ASSISTANT_FRAME)
+  clock.ms = 360_000
+  sink.emitStreamRollups()
+  sink.close()
+  expect(laneRecords(root, 'delivery-rollup-').map(record => record.sequence)).toEqual([1, 2])
+})
+
 test('delivery acknowledgement lookup cannot cross a recreated stream epoch', () => {
   const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-epoch-'))
   const sink = createDeliveryTraceSink({ configDir: root, launchId: 'launch' })

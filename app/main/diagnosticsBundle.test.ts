@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -260,6 +260,72 @@ test('deliberate dedupe is not reported as lost evidence', () => {
   }], [], 'L1')
   expect(dropped.status).toBe('loss_observed')
   expect(dropped.operationalRecordsSuppressed).toBe(12)
+})
+
+const ROLLUP = {
+  schemaVersion: 1, recordKind: 'trace.stream.rollup', wallTimestamp: '2026-08-06T00:00:00.000Z',
+  monotonicTimestampMs: 1, launchId: 'launch', processName: 'electron-main', processInstanceId: 'process',
+  sessionId: 'session', streamEpoch: '018f0000-0000-4000-8000-000000000001', sequence: 6,
+  quietMs: 60000, lastMessageKind: 'assistant', deliveryStatus: 'complete',
+  produced: 6, socketSent: 6, socketReceived: 6, hostReceived: 6, ipcSent: 6,
+  preloadReceived: 6, applied: 0, committed: 0,
+}
+
+test('second-pass trace parser closes the stream rollup and its watermarks', () => {
+  // Without the allowlist entry the whole record is rejected from every export,
+  // so the lane that exists to outlive rotation would reach no bundle at all.
+  expect(parseDeliveryTraceRecord(ROLLUP)).not.toBeNull()
+  expect(parseDeliveryTraceRecord({ ...ROLLUP, 'trace.sequence.gap': 2, traceLossCount: 9 })).not.toBeNull()
+  // A stream whose frames carried no SDK message has no tag to report, unlike
+  // the quiescence record, which is only written for a stream that had one.
+  expect(parseDeliveryTraceRecord(withoutKey(ROLLUP, 'lastMessageKind'))).not.toBeNull()
+  expect(parseDeliveryTraceRecord({ ...ROLLUP, deliveryStatus: 'incomplete', stage: 'preload.received' })).not.toBeNull()
+
+  expect(parseDeliveryTraceRecord({ ...ROLLUP, deliveryStatus: 'incomplete' })).toBeNull()
+  expect(parseDeliveryTraceRecord({ ...ROLLUP, stage: 'preload.received' })).toBeNull()
+  expect(parseDeliveryTraceRecord({ ...ROLLUP, lastMessageKind: 'acme-holdings-migration' })).toBeNull()
+  expect(parseDeliveryTraceRecord({ ...ROLLUP, deliveryStatus: 'stalled-probably' })).toBeNull()
+  // A watermark is a count, so zero is a real answer and a path is not one.
+  expect(parseDeliveryTraceRecord({ ...ROLLUP, applied: '/Users/alice/secret' })).toBeNull()
+  expect(parseDeliveryTraceRecord({ ...ROLLUP, committed: -1 })).toBeNull()
+  expect(parseDeliveryTraceRecord(withoutKey(ROLLUP, 'produced'))).toBeNull()
+  expect(parseDeliveryTraceRecord({ ...ROLLUP, 'trace.sequence.gap': 'many' })).toBeNull()
+  expect(parseDeliveryTraceRecord({ ...ROLLUP, sessionCwd: '/Users/alice' })).toBeNull()
+})
+
+function withoutKey(record: Record<string, unknown>, key: string): Record<string, unknown> {
+  const { [key]: _dropped, ...rest } = record
+  return rest
+}
+
+test('a rollup reaches the bundle even when per-frame records fill the export budget', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-diagnostics-rollup-budget-'))
+  const logs = join(root, 'logs')
+  mkdirSync(logs)
+  writeFileSync(join(logs, 'delivery-rollup-launch-1.jsonl'), `${JSON.stringify(ROLLUP)}\n`)
+  // Three full trace files, more than the general admission budget holds, and
+  // all newer than the rollup so they are read first. This is the ordinary
+  // state of the log directory under load, not a contrived one.
+  const frame = (sequence: number) => JSON.stringify({
+    schemaVersion: 1, recordKind: 'delivery.trace', wallTimestamp: '2026-08-06T00:00:01.000Z',
+    monotonicTimestampMs: 1, launchId: 'launch', component: 'host', processName: 'electron-main',
+    processInstanceId: 'process', sessionId: 'session', streamEpoch: '018f0000-0000-4000-8000-000000000001',
+    sequence, traceId: '018f0000-0000-4000-8000-000000000002', deliveryAttempt: 1, replay: false,
+    connectionEpoch: 1, frameKind: 'event', messageKind: 'assistant', stage: 'host.received',
+  })
+  for (const index of [1, 2, 3]) {
+    const lines: string[] = []
+    for (let sequence = 1; sequence <= 2000; sequence++) lines.push(frame(sequence))
+    writeFileSync(join(logs, `delivery-trace-launch-${index}.jsonl`), `${lines.join('\n')}\n`)
+  }
+  const older = new Date('2026-08-06T00:00:00.000Z')
+  utimesSync(join(logs, 'delivery-rollup-launch-1.jsonl'), older, older)
+
+  const bundle = JSON.parse(buildDiagnosticsBundle({ logsDirectory: logs, appVersion: 'test', currentLaunchId: 'launch' }))
+  expect(bundle.recordingCoverage.bundleLimitReached).toBe(true)
+  expect(bundle.manifest.recordCounts.deliveryRollup).toBe(1)
+  expect(bundle.streams.deliveryRollup[0]).toMatchObject({ recordKind: 'trace.stream.rollup', sequence: 6 })
+  expect(bundle.manifest.limits.deliveryRollup.totalBytes).toBeLessThan(bundle.manifest.limits.deliveryTrace.totalBytes)
 })
 
 test('second-pass trace parser closes the quiescence record and its verdict', () => {
