@@ -97,8 +97,12 @@ So the rule is deliberately narrow:
   closed vocabulary in `app/shared/operationalLog.ts`. Never a payload, never
   free-form text.
 - One record per operation start, or one per watchdog firing. A record that
-  repeats per frame, per chunk, or per retry is a defect; report a hole once
-  and remember that you reported it.
+  repeats per frame, per chunk, or per poll of the same pending operation is a
+  defect; report a condition once and remember that you reported it. A
+  **bounded retry is not a repeat**: each attempt is itself a new operation
+  that can hang independently, so it gets its own start marker and pairs with
+  its own completion record. The test is whether the count is bounded by the
+  work or by the duration of the failure — the latter is the defect.
 - Priority classes on the shedding path (lifecycle never shed, anomalies shed
   last, samples shed first) are what keep this rule affordable. A start marker
   is worthless if it is the first thing dropped under load.
