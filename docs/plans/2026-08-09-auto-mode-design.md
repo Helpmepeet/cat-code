@@ -444,6 +444,43 @@ that implements the two-stage architecture.
    Nothing about it ships in the meantime, and G4's settings surface stays
    closed until it does.
 
+## Findings closed by implementation (2026-08-10)
+
+Four of the extraction findings were code defects rather than observations, and
+are now fixed. They were sequenced ahead of capture collection deliberately:
+captures are request/response pairs, so a corpus gathered before these landed
+would have recorded the pre-fix prompt.
+
+| finding | commit | what changed |
+|---|---|---|
+| I | `081cbe8a` | outcomes render as bare `{"outcome":…,"id":…}` lines beneath their own call, with the matching id on the call line |
+| L | `0b2f872c` | AskUserQuestion answers reach the classifier as a user turn with upstream's prefix |
+| M | `0b2f872c` | task notifications carry `[SYSTEM NOTIFICATION - NOT USER INPUT]` |
+| N | `0b2f872c` | Workflow removed from the classifier safe allowlist |
+
+Finding I turned out to be structural, not a missing field: outcomes were
+emitted as a **detached batch** of `{"meta":{"outcome":…}}` lines above the
+pending action. Wrong shape, wrong channel, wrong position. The ported prompt
+describes meta lines and outcome lines as different things and places them on
+opposite sides of the call they concern, so no amount of adding an id to the old
+shape would have worked. The batched `priorOutcomes` plumbing is gone.
+
+Two details came from the binary rather than from the prompt, which documents
+neither: the printed id is the **last six characters** of the tool_use id, and
+tool names colliding with harness keys (`outcome`, `id`, `meta`) are **bracketed**
+so a tool named `outcome` cannot forge a harness line. Both are ported.
+
+Evidence: `bun test src/utils/permissions/` 120 pass / 4 fail, where all four
+failures are pre-existing and reproduce identically at HEAD with these changes
+reverted (they concern auto-mode availability and mode cycling, which none of
+this touches). `bun run build:dev:full` green, `./cli-dev` built. The outcome
+correlation was mutation-checked: deleting the line that emits the outcome block
+fails the test that asserts it.
+
+**Finding O (temperature 0 here, 1 upstream) is deliberately NOT included** — it
+is a judgement call about our own stack rather than a fidelity defect, and it
+belongs on the delta list as a recorded decision. It remains open.
+
 ### P — Upstream's defaults are server-tunable, which bounds every finding here
 
 Extracted 2026-08-10 by enumerating auto-mode identifiers in the binary rather
