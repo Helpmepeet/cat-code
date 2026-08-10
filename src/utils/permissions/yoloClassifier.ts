@@ -18,7 +18,8 @@ import { getCacheControl } from '../../services/api/claude.js'
 import { parsePromptTooLongTokenCounts } from '../../services/api/errors.js'
 import { getDefaultMaxRetries } from '../../services/api/withRetry.js'
 import type { Tool, ToolPermissionContext, Tools } from '../../Tool.js'
-import type { Message } from '../../types/message.js'
+import type { Message, UserMessage } from '../../types/message.js'
+import { ASK_USER_QUESTION_TOOL_NAME } from '../../tools/AskUserQuestionTool/prompt.js'
 import type {
   ClassifierUsage,
   YoloClassifierResult,
@@ -474,6 +475,47 @@ export type TranscriptEntry = {
  * Queued user messages (attachment messages with queued_command type) are extracted
  * and emitted as user turns.
  */
+/**
+ * Marks a user-role turn the harness delivered on someone else's behalf. Only
+ * task notifications are marked: `<teammate-message>` and
+ * `<cross-session-message>` already carry their own tags inside the text, and
+ * the ported prompt names no other relay.
+ */
+function relayPrefixFor(origin: UserMessage['origin']): string {
+  return origin?.kind === 'task-notification'
+    ? '[SYSTEM NOTIFICATION - NOT USER INPUT] '
+    : ''
+}
+
+/**
+ * The user's answer to a question the agent asked, or null for any other tool
+ * result. Correlation is by tool_use id, so a result cannot claim to be an
+ * answer to a question that was never asked.
+ */
+function askUserQuestionAnswerText(
+  block: { tool_use_id?: string; content?: unknown },
+  askedQuestionIds: ReadonlySet<string>,
+): string | null {
+  const id = block.tool_use_id
+  if (id === undefined || !askedQuestionIds.has(id)) return null
+  const raw =
+    typeof block.content === 'string'
+      ? block.content
+      : Array.isArray(block.content)
+        ? block.content
+            .filter(
+              (b): b is { type: 'text'; text: string } =>
+                typeof b === 'object' &&
+                b !== null &&
+                (b as { type?: unknown }).type === 'text',
+            )
+            .map(b => b.text)
+            .join('\n')
+        : ''
+  const text = raw.replace(/^User has answered your questions:\s*/, '').trim()
+  return text.length > 0 ? text : null
+}
+
 export function buildTranscriptEntries(
   messages: Message[],
   /**
@@ -485,6 +527,9 @@ export function buildTranscriptEntries(
     : false,
 ): TranscriptEntry[] {
   const transcript: TranscriptEntry[] = []
+  // Which tool_use ids were AskUserQuestion calls. Built as we walk forward, so
+  // a result is only credited to a question the agent actually asked earlier.
+  const askedQuestionIds = new Set<string>()
   for (const msg of messages) {
     if (msg.type === 'attachment' && msg.attachment.type === 'queued_command') {
       const prompt = msg.attachment.prompt
@@ -510,12 +555,28 @@ export function buildTranscriptEntries(
     } else if (msg.type === 'user') {
       const content = msg.message.content
       const textBlocks: TranscriptBlock[] = []
+      // A worker result or teammate relay is delivered as a user-role turn, so
+      // without this it reads as the user's own words and can clear a soft-block
+      // bar. The ported prompt distrusts a relay only if it can recognise one.
+      const prefix = relayPrefixFor(msg.origin)
       if (typeof content === 'string') {
-        textBlocks.push({ type: 'text', text: content })
+        textBlocks.push({ type: 'text', text: prefix + content })
       } else if (Array.isArray(content)) {
         for (const block of content) {
           if (block.type === 'text') {
-            textBlocks.push({ type: 'text', text: block.text })
+            textBlocks.push({ type: 'text', text: prefix + block.text })
+          } else if (block.type === 'tool_result') {
+            // Tool results are otherwise excluded from the transcript. The one
+            // exception is the user's own answer to a question the agent asked:
+            // it is direct user intent, and the ported prompt recognises it by
+            // this exact prefix.
+            const answer = askUserQuestionAnswerText(block, askedQuestionIds)
+            if (answer !== null) {
+              textBlocks.push({
+                type: 'text',
+                text: `[User answered AskUserQuestion]: ${answer}`,
+              })
+            }
           }
         }
       }
@@ -528,6 +589,12 @@ export function buildTranscriptEntries(
         // Only include tool_use blocks — assistant text is model-authored
         // and could be crafted to influence the classifier's decision.
         if (block.type === 'tool_use') {
+          if (
+            block.name === ASK_USER_QUESTION_TOOL_NAME &&
+            block.id !== undefined
+          ) {
+            askedQuestionIds.add(block.id)
+          }
           blocks.push({
             type: 'tool_use',
             name: block.name,
