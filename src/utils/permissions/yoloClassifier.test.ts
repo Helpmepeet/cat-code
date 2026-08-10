@@ -88,7 +88,7 @@ describe('classifier fallback errors', () => {
     })
 
     expect(thinking).toBeUndefined()
-    expect(codexBody.reasoning).toMatchObject({ effort: 'medium' })
+    expect(codexBody.reasoning).toMatchObject({ effort: 'xhigh' })
   })
 })
 
@@ -157,9 +157,9 @@ describe('auto mode default classifier ladder', () => {
     // access is intermittent, Bedrock and Vertex are not targets. A ladder that
     // opened on Anthropic would spend the first attempt of every permission
     // decision on a provider it may not be able to reach.
-    const attempts = getAutoModeClassifierAttempts('gpt-5.6-sol', 4, 'firstParty')
-    expect(attempts[0]).toEqual({ provider: 'openai', model: 'gpt-5.6-sol' })
+    const attempts = getAutoModeClassifierAttempts('gpt-5.6-luna', 4, 'firstParty')
+    expect(attempts[0]).toEqual({ provider: 'openai', model: 'gpt-5.6-luna' })
     expect(attempts.at(-1)).toEqual({ provider: 'firstParty', model: 'sonnet' })
-    expect(attempts.filter(a => a.provider === 'openai')).toHaveLength(3)
+    expect(attempts.filter(a => a.provider === 'openai')).toHaveLength(1)
   })
 })

@@ -539,10 +539,30 @@ deployment shape and got it backwards:
 **Defect this exposed, fixed 2026-08-10.** `getClassifierModel()` defaulted to
 `'sonnet'`, which put an Anthropic provider first on the ladder — so with the
 port on, every permission decision would open by spending an attempt on a
-provider that may be unreachable. The default is now `'gpt-5.6-sol'`, which
-yields Sol → Terra → Luna → Anthropic: the Codex chain first, Anthropic as the
-final fallback. Pinned by a test asserting the ladder opens on Codex and ends on
-Anthropic.
+provider that may be unreachable.
+
+The default is now **`gpt-5.6-luna` at `xhigh` effort**, per the operator: Luna
+at maximum effort is the Sonnet-class equivalent upstream uses for this job.
+Verified against the translated request, not the config:
+`{"effort":"xhigh"}`.
+
+**This amends F6, which fixed GPT effort at medium.** F6 was decided on the
+stated premise that GPT was a rarely-hit fallback behind Anthropic. That premise
+was wrong — Anthropic access here is intermittent, so the GPT classifier judges
+every permission decision. Medium would put every decision below the class the
+port is copying. G4 is untouched: this is a compiled-in constant, not a settings
+key.
+
+Sol/Terra/Luna is an **availability chain** for routing past transient rate
+limits, not a capability ladder — the head of it implies nothing about strength.
+
+**Consequence the operator should weigh.** A Luna default yields a two-entry
+ladder, `luna → sonnet`, where a Sol default would give
+`sol → terra → luna → sonnet`. Quality is right; GPT-side rate-limit routing is
+mostly gone. If Luna hits a 429 and Anthropic is unavailable, the ladder is
+exhausted and the classifier fails closed. Undecided: whether G2 should allow a
+configured chain member to fall back to *earlier* untried members rather than
+only later ones.
 
 **Residual, low.** An absent first-party Anthropic credential
 (`ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN env var is required`) is still not

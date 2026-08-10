@@ -900,8 +900,14 @@ function combineUsage(a: ClassifierUsage, b: ClassifierUsage): ClassifierUsage {
  */
 function getClassifierThinkingConfig(
   model: string,
-): [false | undefined, number, 'medium' | undefined] {
-  if (model.startsWith('gpt-')) return [undefined, 0, 'medium']
+): [false | undefined, number, 'xhigh' | undefined] {
+  // Maximum effort, per the operator. F6 originally fixed this at medium on the
+  // stated premise that GPT was a rarely-hit fallback behind Anthropic. That
+  // premise was wrong: this fork's Anthropic access is intermittent, so the GPT
+  // classifier judges EVERY permission decision. Upstream runs a Sonnet-class
+  // classifier for this job, and Luna reaches that class only at maximum effort.
+  // Shipping medium would put every decision below the bar the port is copying.
+  if (model.startsWith('gpt-')) return [undefined, 0, 'xhigh']
   if (
     process.env.USER_TYPE === 'ant' &&
     resolveAntModel(model)?.alwaysOnThinking
@@ -913,7 +919,7 @@ function getClassifierThinkingConfig(
 
 export function getClassifierThinkingConfigForTest(
   model: string,
-): [false | undefined, number, 'medium' | undefined] {
+): [false | undefined, number, 'xhigh' | undefined] {
   return getClassifierThinkingConfig(model)
 }
 
@@ -1462,7 +1468,13 @@ function getClassifierModel(): string {
     // to sonnet puts an unreachable provider first on the ladder, so every
     // permission decision would open by failing an attempt it cannot complete.
     // Bedrock and Vertex are not deployment targets for this fork.
-    return getAutoModeConfig()?.model ?? 'gpt-5.6-sol'
+    //
+    // Luna specifically, per the operator: at maximum reasoning effort it is the
+    // Sonnet-class equivalent upstream uses for this job. Sol/Terra/Luna is an
+    // availability chain for routing past transient rate limits (see the
+    // fallback-status comment below), NOT a capability ladder — the head of it
+    // carries no implication of being the strongest.
+    return getAutoModeConfig()?.model ?? 'gpt-5.6-luna'
   }
   if (process.env.USER_TYPE === 'ant') {
     const envModel = process.env.CLAUDE_CODE_AUTO_MODE_MODEL
