@@ -1,27 +1,62 @@
 # System Prompt Architecture: Cat Code vs Upstream Claude Code
 
-Date: 2026-08-10
-Scope: construction, modification, and delivery of the system prompt, end to end.
-Comparison points: Cat Code working tree (branch `migration`), upstream
-**2.1.87** (fork point) and upstream **2.1.223** (current).
+**Date:** 2026-08-10
+**Scope:** construction, modification, and delivery of the system prompt, end to end
+**Status:** reverse-engineering report; no implementation changes
+**Source basis:** Cat Code working-tree source (branch `migration`) plus static analysis of shipped upstream 2.1.87 and 2.1.223; source and executable control flow win over release notes
+
+Companion: [`2026-08-10-cat-code-upstream-divergence-ledger.md`](2026-08-10-cat-code-upstream-divergence-ledger.md)
+carries the cross-cutting fork ledger and the method. This report is the
+prompt-system audit it summarizes.
 
 ## 0. Evidence base
 
-| Artifact | What it is | Why it is trustworthy |
-|---|---|---|
-| `src/**` in this repo | Cat Code, read directly | source of truth |
-| `node_modules/@anthropic-ai/claude-agent-sdk@0.2.87/cli.js` | 12.9 MB readable JS bundle, `VERSION:"2.1.87"` | matches `package.json` `"version": "2.1.87"`, the frozen fork point |
-| `~/.local/share/claude/versions/2.1.223` | 272 MB Bun-compiled Mach-O, `VERSION:"2.1.223"`, `BUILD_TIME:"2026-08-05T18:12:31Z"`, `GIT_SHA:4535f697…` | current upstream on this machine |
-| `claude --help` (2.1.223) | supported interface | enumerated before byte-slicing |
+### 0.1 Evidence labels
 
-Upstream string corpora were extracted with a UTF-8 + UTF-16LE scanner into
-`up187.txt` / `up223.txt` in the session scratchpad. Upstream identifiers are
-minified; string literals are intact, so every upstream claim below is anchored
-to literal prompt text or to a minified expression quoted verbatim.
+- **CAT-SOURCE:** confirmed by current Cat Code working-tree source.
+- **UP187-STATIC:** confirmed by string or control flow in the shipped 2.1.87 bundle.
+- **UP223-STATIC:** confirmed by string or control flow in the shipped 2.1.223 executable.
+- **RUNTIME:** verified by a local, non-network command.
+- **INFERENCE:** best explanation supported by surrounding evidence, not directly observed.
+
+Upstream identifiers are minified but string literals and control flow are
+intact, so upstream claims below quote either literal prompt text or the
+minified expression itself. Where only a string was recovered without its
+producer or consumer, the claim says so.
+
+### 0.2 Artifacts
+
+| Artifact | Identity |
+|---|---|
+| `src/**` in this repo | `./cli-dev --version` → `2.1.87-dev.20260810.t153835.shae1e8a806 (Cat Code)` |
+| `node_modules/@anthropic-ai/claude-agent-sdk/cli.js` | fork point. SHA-256 `4dd5c9f5c9939975e1d866ca790359c8932e6a8b2dbb41a9b8ae3bcc7f13f8d0`, `VERSION:"2.1.87"`, `BUILD_TIME:"2026-03-29T02:12:10Z"`, 12.9 MB readable JS |
+| `~/.local/share/claude/versions/2.1.223` | current upstream. SHA-256 `a63e3ecbf6b58812fb314b8a8d99a12b45ec7c11209ad09598469542edbba8b3`, `BUILD_TIME:"2026-08-05T18:12:31Z"`, `GIT_SHA:4535f69721056abf01650c73ee8a91c69ba00838` |
+
+The 2.1.223 hash matches the artifact recorded in
+[`2026-08-09-claude-code-compaction-evolution.md`](2026-08-09-claude-code-compaction-evolution.md)
+§2.2, which establishes that the installed copy differs from upstream-original
+by 271 bytes confined to streamed thinking-delta handling. That region is
+unrelated to prompt assembly, so nothing here is affected.
+
+String corpora were extracted with a UTF-8 **and** UTF-16LE scanner into
+`up187.txt` / `up223.txt` in the session scratchpad. Scanning only UTF-8 misses
+roughly half the literals in the binary and makes present content look deleted.
 
 Caveat: the 2.1.87 baseline is the Agent SDK's bundle rather than the npm CLI
 build of that version. It carries the same commander CLI, the same prompt
 strings, and the same version constant, so it is treated as equivalent.
+
+### 0.3 Runtime boundary
+
+`claude --help` was enumerated before any byte-slicing. No live model call was
+made, so GrowthBook values as served, prompt-cache hit rates, and anything
+depending on a model response are outside what this method establishes. One
+negative result is RUNTIME rather than inferred:
+
+```text
+./cli-dev --dump-system-prompt --model claude-opus-5
+error: unknown option '--dump-system-prompt'
+```
 
 ## 1. The Cat Code lifecycle, end to end
 
