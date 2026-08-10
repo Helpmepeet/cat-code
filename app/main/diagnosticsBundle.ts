@@ -14,6 +14,7 @@ import {
 import {
   deliveryAnomalyScope,
   deliveryObservationKind,
+  isDeliveryMessageKind,
   isDeliveryStage,
   isSafeDeliveryIdentifier,
 } from '../shared/deliveryTrace.js'
@@ -182,7 +183,7 @@ export function parseDeliveryTraceRecord(value: unknown): TraceRecord | null {
       'schemaVersion', 'recordKind', 'wallTimestamp', 'monotonicTimestampMs', 'launchId',
       'component', 'processName', 'processInstanceId', 'sessionId', 'streamEpoch',
       'sequence', 'traceId', 'deliveryAttempt', 'replay', 'stage', 'documentId', 'subscriptionEpoch',
-      'connectionEpoch', 'frameKind', 'processStartedAt', 'observationKind',
+      'connectionEpoch', 'frameKind', 'messageKind', 'processStartedAt', 'observationKind',
     ],
     'trace.loss': [
       'schemaVersion', 'recordKind', 'wallTimestamp', 'monotonicTimestampMs', 'launchId',
@@ -238,6 +239,7 @@ export function parseDeliveryTraceRecord(value: unknown): TraceRecord | null {
       !isDeliveryStage(item.stage) ||
       !positiveInteger(item.connectionEpoch) ||
       (item.frameKind !== undefined && !isServerFrameKind(item.frameKind)) ||
+      (item.messageKind !== undefined && !isDeliveryMessageKind(item.messageKind)) ||
       (item.processStartedAt !== undefined && (typeof item.processStartedAt !== 'string' || Number.isNaN(Date.parse(item.processStartedAt)))) ||
       (item.documentId !== undefined && !opaqueId(item.documentId)) ||
       (item.subscriptionEpoch !== undefined && !positiveInteger(item.subscriptionEpoch)) ||

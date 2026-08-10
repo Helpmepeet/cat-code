@@ -82,6 +82,22 @@ test('second-pass trace parser admits only a real frame kind', () => {
   expect(parseDeliveryTraceRecord({ ...base, frameKind: 'acme-holdings-migration' })).toBeNull()
 })
 
+test('second-pass trace parser keeps a real message kind and admits no other', () => {
+  const base = {
+    schemaVersion: 1, recordKind: 'delivery.trace', wallTimestamp: '2026-08-06T00:00:00.000Z', monotonicTimestampMs: 1,
+    launchId: 'launch', component: 'host', processName: 'electron-main', processInstanceId: 'process', sessionId: 'session',
+    streamEpoch: '018f0000-0000-4000-8000-000000000001', sequence: 1, traceId: '018f0000-0000-4000-8000-000000000002',
+    deliveryAttempt: 1, replay: false, connectionEpoch: 1, frameKind: 'event', stage: 'host.received',
+  }
+  // An unlisted key is dropped by the whole record, so a field the producer
+  // writes but the export schema never learned costs the record its export.
+  expect(parseDeliveryTraceRecord({ ...base, messageKind: 'result' })).toMatchObject({ messageKind: 'result' })
+  expect(parseDeliveryTraceRecord({ ...base, messageKind: 'assistant' })).not.toBeNull()
+  expect(parseDeliveryTraceRecord(base)).not.toBeNull()
+  expect(parseDeliveryTraceRecord({ ...base, messageKind: 'acme-holdings-migration' })).toBeNull()
+  expect(parseDeliveryTraceRecord({ ...base, messageKind: '/Users/alice/secret' })).toBeNull()
+})
+
 test('second-pass trace parser closes anomaly records, not only delivery stages', () => {
   const loss = {
     schemaVersion: 1, recordKind: 'trace.loss', wallTimestamp: '2026-08-06T00:00:00.000Z', monotonicTimestampMs: 1,

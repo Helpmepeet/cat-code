@@ -3,7 +3,9 @@ import { mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { mintDeliveryTrace } from '../shared/deliveryTrace.js'
-import { createDeliveryTraceSink } from './deliveryTraceSink.js'
+import { PROTOCOL_VERSION, type ServerFrame } from '../shared/protocol.js'
+import { SDK_MESSAGE_FIXTURE } from '../renderer/src/sdkMessageFixtures.js'
+import { createDeliveryTraceSink, deliveryMessageKindOfFrame } from './deliveryTraceSink.js'
 
 test('delivery trace persists metadata-only stages under private permissions', () => {
   const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-'))
@@ -185,6 +187,99 @@ test('contiguous acknowledgements expose an earlier missing frame despite a late
   expect(sink.summary('session')).toMatchObject({ produced: 2, ipcSent: 2, preloadReceived: 0, applied: 0, committed: 0 })
   expect(sink.stuckSessionSummaries()[0]?.firstMissingStage).toBe('preload.received')
   sink.close()
+})
+
+/**
+ * A frame the way main holds it at a trace site, carrying a real engine message
+ * out of the exhaustive SDK fixture rather than an invented shape.
+ */
+function messageFrame(message: (typeof SDK_MESSAGE_FIXTURE)['assistant'][number]['message'] | (typeof SDK_MESSAGE_FIXTURE)['result'][number]['message']): ServerFrame {
+  return { kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'session', event: { type: 'message', message } }
+}
+
+const ASSISTANT_FRAME = messageFrame(SDK_MESSAGE_FIXTURE.assistant[0]!.message)
+const RESULT_FRAME = messageFrame(SDK_MESSAGE_FIXTURE.result[0]!.message)
+
+/** Trace one frame through the stages main marks for it, as `traceFrame` does. */
+function traceThroughMain(sink: ReturnType<typeof createDeliveryTraceSink>, sequence: number, frame: ServerFrame): void {
+  const trace = mintDeliveryTrace(sequence, 'stream')
+  for (const stage of ['supervisor.socket.received', 'host.received', 'main.ipc.sent'] as const) {
+    sink.mark({
+      sessionId: 'session',
+      trace,
+      stage,
+      frameKind: frame.kind,
+      messageKind: deliveryMessageKindOfFrame(frame),
+    })
+  }
+}
+
+test('a traced run says which of its frames carried a result', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-message-kind-'))
+  const sink = createDeliveryTraceSink({ configDir: root, launchId: 'launch' })
+  traceThroughMain(sink, 1, ASSISTANT_FRAME)
+  traceThroughMain(sink, 2, ASSISTANT_FRAME)
+  traceThroughMain(sink, 3, RESULT_FRAME)
+  sink.close()
+
+  // Every conversation frame is `frameKind: 'event'`, which is why the envelope
+  // discriminant alone could not answer this.
+  const records = kinds(root, 'delivery.trace')
+  expect(new Set(records.map(record => record.frameKind))).toEqual(new Set(['event']))
+  // The tag rides every stage record for its sequence, not only the first mark.
+  expect(records.filter(record => record.messageKind === 'result').map(record => record.stage)).toEqual([
+    'supervisor.socket.received', 'host.received', 'main.ipc.sent',
+  ])
+  expect([...new Set(records.map(record => `${record.sequence}:${record.messageKind}`))]).toEqual([
+    '1:assistant', '2:assistant', '3:result',
+  ])
+})
+
+test('a run that never produced a result is distinguishable from an untagged one', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-no-result-'))
+  const sink = createDeliveryTraceSink({ configDir: root, launchId: 'launch' })
+  // The 2026-08-10 hang in miniature: six frames deliver perfectly and the turn
+  // never ends. A reader must be able to say the result is ABSENT, which needs
+  // the surviving frames to be positively tagged as something else.
+  for (let sequence = 1; sequence <= 6; sequence++) traceThroughMain(sink, sequence, ASSISTANT_FRAME)
+  sink.close()
+
+  const records = kinds(root, 'delivery.trace')
+  expect(records.every(record => record.messageKind === 'assistant')).toBe(true)
+  expect(records.some(record => record.messageKind === 'result')).toBe(false)
+})
+
+test('frames carrying no SDK message get no message kind at all', () => {
+  const lifecycle: ServerFrame = {
+    kind: 'lifecycle', protocolVersion: PROTOCOL_VERSION, sessionId: 'session', status: 'exited',
+  }
+  const turnStatus: ServerFrame = {
+    kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'session',
+    event: { type: 'turn.status', activeTurn: true },
+  }
+  expect(deliveryMessageKindOfFrame(lifecycle)).toBeUndefined()
+  expect(deliveryMessageKindOfFrame(turnStatus)).toBeUndefined()
+  expect(deliveryMessageKindOfFrame(RESULT_FRAME)).toBe('result')
+
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-untagged-'))
+  const sink = createDeliveryTraceSink({ configDir: root, launchId: 'launch' })
+  traceThroughMain(sink, 1, turnStatus)
+  sink.close()
+  expect(kinds(root, 'delivery.trace').every(record => !('messageKind' in record))).toBe(true)
+})
+
+test('a message kind outside the closed vocabulary is never persisted', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-message-kind-gate-'))
+  const sink = createDeliveryTraceSink({ configDir: root, launchId: 'launch' })
+  sink.mark({
+    sessionId: 'session',
+    trace: mintDeliveryTrace(1, 'stream'),
+    stage: 'host.received',
+    frameKind: 'event',
+    messageKind: 'acme-holdings-migration',
+  })
+  sink.close()
+  expect(kinds(root, 'delivery.trace').every(record => !('messageKind' in record))).toBe(true)
 })
 
 test('delivery acknowledgement lookup cannot cross a recreated stream epoch', () => {

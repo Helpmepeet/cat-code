@@ -1,6 +1,7 @@
 /** Metadata-only delivery tracing. This never serializes a frame payload. */
 
 import { randomUUID } from 'node:crypto'
+import type { SDKMessage } from '@cat-code/engine/session-events'
 
 export const DELIVERY_STAGES = [
   'engine.produced',
@@ -70,6 +71,43 @@ export type DeliveryAnomalyScope = 'source_sequence' | 'stage_sequence'
  */
 export function deliveryAnomalyScope(recordKind: string): DeliveryAnomalyScope {
   return recordKind === 'trace.sequence.gap' ? 'source_sequence' : 'stage_sequence'
+}
+
+/**
+ * The SDK message type an `event` frame carried, as a payload-free tag.
+ *
+ * This is a SECOND discriminator, beside `frameKind`, and the two answer
+ * different questions. `frameKind` is the ServerFrame envelope discriminant
+ * (`SERVER_FRAME_KINDS`, `protocol.ts`), and EVERY conversation frame is
+ * `event`, so a trace of them cannot say whether a run ended in a `result`.
+ * That is exactly the question the 2026-08-10 hang investigation could not
+ * answer from a trace with perfect 11-stage continuity, filed as item B3 in
+ * `docs/reports/2026-08-10-overnight-hang-log-request.md`.
+ *
+ * A type tag is not content: no text, no tool names, no ids. Frames carrying no
+ * SDK message (`ready`, `pong`, the snapshot kinds) simply have no tag; there is
+ * no value standing for "not a message".
+ *
+ * These five are a deliberate SUBSET of the engine's 15 `SDKMessage`
+ * discriminants, not the whole union: they are the turn-shaped ones a delivery
+ * question is asked about. Two further app-seam variants (`tool_progress`,
+ * `tool_use_summary`) therefore stay untagged, so an absent tag means "no tag
+ * for this frame", never "not an SDK message".
+ */
+/**
+ * `satisfies` is the tripwire: compilation fails if a name here is not an
+ * `SDKMessage` discriminant, so a renamed engine variant cannot leave behind a
+ * tag no frame can ever carry. The reverse direction is intentionally not
+ * total, per the subset note above.
+ */
+export const DELIVERY_MESSAGE_KINDS = [
+  'assistant', 'user', 'system', 'result', 'stream_event',
+] as const satisfies readonly SDKMessage['type'][]
+
+export type DeliveryMessageKind = (typeof DELIVERY_MESSAGE_KINDS)[number]
+
+export function isDeliveryMessageKind(value: unknown): value is DeliveryMessageKind {
+  return typeof value === 'string' && (DELIVERY_MESSAGE_KINDS as readonly string[]).includes(value)
 }
 
 /** Additive envelope metadata; never inspect or rewrite AppSessionEvent content. */

@@ -122,7 +122,7 @@ import {
 import { MAX_SUGGESTION_SELECTIONS } from '../shared/limits.js'
 import { createOperationalLogSink } from './operationalLogSink.js'
 import { createOperationalRecord } from '../shared/operationalLog.js'
-import { createDeliveryTraceSink } from './deliveryTraceSink.js'
+import { createDeliveryTraceSink, deliveryMessageKindOfFrame } from './deliveryTraceSink.js'
 import { buildDiagnosticsBundle } from './diagnosticsBundle.js'
 import { mintDeliveryTrace, replayDeliveryTrace, type DeliveryAcknowledgement, type DeliveryStage } from '../shared/deliveryTrace.js'
 import {
@@ -355,6 +355,7 @@ function traceFrame(frame: ServerFrame, stage: DeliveryStage): ServerFrame {
     trace,
     stage,
     frameKind: frame.kind,
+    messageKind: deliveryMessageKindOfFrame(frame),
     documentId: rendererDocumentId,
     subscriptionEpoch: rendererSubscriptionEpoch,
   })

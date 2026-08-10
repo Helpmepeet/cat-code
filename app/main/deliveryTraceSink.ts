@@ -9,10 +9,12 @@ import { randomUUID } from 'node:crypto'
 import {
   deliveryAnomalyScope,
   deliveryObservationKind,
+  isDeliveryMessageKind,
+  type DeliveryMessageKind,
   type DeliveryStage,
   type DeliveryTrace,
 } from '../shared/deliveryTrace.js'
-import { isServerFrameKind } from '../shared/protocol.js'
+import { isServerFrameKind, type ServerFrame } from '../shared/protocol.js'
 
 export const MAX_DELIVERY_TRACE_RECORD_BYTES = 2 * 1024
 export const MAX_DELIVERY_TRACE_FILE_BYTES = 20 * 1024 * 1024
@@ -63,6 +65,11 @@ export type DeliveryTraceSink = {
     stage: DeliveryStage
     /** Closed ServerFrame discriminant only; never the frame payload. */
     frameKind?: string
+    /**
+     * Closed SDK message-type tag for an `event` frame, from
+     * `deliveryMessageKindOfFrame`; never the message itself.
+     */
+    messageKind?: string
     documentId?: string
   subscriptionEpoch?: number
   processInstanceId?: string
@@ -86,6 +93,7 @@ export type DeliveryTraceSink = {
 type StreamState = {
   traces: Map<number, DeliveryTrace>
   frameKinds: Map<number, string>
+  messageKinds: Map<number, DeliveryMessageKind>
   stages: Map<number, Set<string>>
   highestByStage: Map<string, number>
   watermarks: DeliveryWatermarks
@@ -249,6 +257,7 @@ export function createDeliveryTraceSink({
       state = {
         traces: new Map(),
         frameKinds: new Map(),
+        messageKinds: new Map(),
         stages: new Map(),
         highestByStage: new Map(),
         watermarks: {
@@ -296,7 +305,7 @@ export function createDeliveryTraceSink({
 
   return {
     processInstanceId,
-    mark({ sessionId, trace, stage, frameKind, documentId, subscriptionEpoch, processInstanceId: stageInstanceId, processStartedAt: stageStartedAt, wallTimestamp: stageWallTimestamp, monotonicTimestampMs: stageMonotonicTimestampMs }) {
+    mark({ sessionId, trace, stage, frameKind, messageKind, documentId, subscriptionEpoch, processInstanceId: stageInstanceId, processStartedAt: stageStartedAt, wallTimestamp: stageWallTimestamp, monotonicTimestampMs: stageMonotonicTimestampMs }) {
       const state = stateFor(sessionId, trace.streamEpoch)
       state.lastTouched = Date.now()
       const seenStages = state.stages.get(trace.sequence) ?? new Set<string>()
@@ -332,6 +341,9 @@ export function createDeliveryTraceSink({
       }
       state.traces.set(trace.sequence, trace)
       if (frameKind && isSafeFrameKind(frameKind)) state.frameKinds.set(trace.sequence, frameKind)
+      // Gated against the closed vocabulary exactly as `frameKind` is: this
+      // field is persisted and exported, so it is never an arbitrary string.
+      if (messageKind && isDeliveryMessageKind(messageKind)) state.messageKinds.set(trace.sequence, messageKind)
       state.watermarks = updateWatermarks(state, state.watermarks)
 
       const component = componentFor(stage)
@@ -356,6 +368,7 @@ export function createDeliveryTraceSink({
         stage,
         observationKind: deliveryObservationKind(stage),
         ...(state.frameKinds.get(trace.sequence) ? { frameKind: state.frameKinds.get(trace.sequence) } : {}),
+        ...(state.messageKinds.get(trace.sequence) ? { messageKind: state.messageKinds.get(trace.sequence) } : {}),
         ...(documentId ? { documentId } : {}),
         ...(subscriptionEpoch === undefined ? {} : { subscriptionEpoch }),
       }, trace.sequence, { state, sessionId, streamEpoch: trace.streamEpoch })
@@ -477,6 +490,7 @@ function trimState(
     const oldest = Math.min(...state.traces.keys())
     state.traces.delete(oldest)
     state.frameKinds.delete(oldest)
+    state.messageKinds.delete(oldest)
     state.stages.delete(oldest)
     noteLoss(oldest, 'in_memory_eviction', { state, sessionId, streamEpoch })
   }
@@ -513,6 +527,19 @@ function firstMissing(watermarks: DeliveryWatermarks): string | null {
 /** Server-frame kinds are fixed protocol discriminants, not user-authored text. */
 function isSafeFrameKind(value: string): boolean {
   return isServerFrameKind(value)
+}
+
+/**
+ * The SDK message type an `event` frame carries, read off the frame main already
+ * holds. Nothing new crosses the wire: the sidecar already ships the whole
+ * `AppSessionEvent` (raw-fidelity, TRANSPORT-DECISION.md §2), so the tag is
+ * derivable at every main-side mark site and `protocol.ts` stays untouched.
+ * Undefined for every frame that carries no SDK message.
+ */
+export function deliveryMessageKindOfFrame(frame: ServerFrame): DeliveryMessageKind | undefined {
+  if (frame.kind !== 'event' || frame.event.type !== 'message') return undefined
+  const messageKind = frame.event.message.type
+  return isDeliveryMessageKind(messageKind) ? messageKind : undefined
 }
 
 function updateLatest(directory: string, activeFile: string): void {
