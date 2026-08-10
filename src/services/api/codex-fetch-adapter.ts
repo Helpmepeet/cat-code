@@ -36,6 +36,7 @@ import {
 } from './codex-websocket-transport.js'
 import { notifyStaleResponseIdRetry } from './promptCacheBreakDetection.js'
 import {
+  recordCodexRequestStart,
   recordCodexSendPath,
   recordCodexStreamSurface,
 } from '../../utils/sessionStorage.js'
@@ -3322,6 +3323,25 @@ export function createCodexFetch(
       conversationId,
     }
 
+    // Which transport this request dispatches on. Resolved once, here, so the
+    // start marker below names the same transport the dispatch further down
+    // actually takes; nothing between the two advances the sticky clock.
+    const attemptsWebSocket =
+      isStreamingAnthropicRequest &&
+      !hasStickyHttpFallback(conversationId, currentAccountId)
+
+    // Request-start marker. Everything else on this path
+    // (`codex_send_path`/`codex_stream_surface`) is written when the stream
+    // ends, so a request that never finishes is indistinguishable from one
+    // that was never made — see `recordCodexRequestStart`. Log only: no
+    // timeout, no abort, no watchdog is armed from here.
+    recordCodexRequestStart({
+      mode: attemptsWebSocket ? 'websocket' : 'http',
+      conversation_id_prefix: conversationId.slice(0, 8),
+      account_id_prefix: currentAccountId.slice(0, 8),
+      model: codexModel,
+    })
+
     // Auth headers used by both WebSocket and HTTP paths.
     const authHeaders: Record<string, string> = {
       Authorization: `Bearer ${currentToken}`,
@@ -3451,7 +3471,7 @@ export function createCodexFetch(
       : []
 
     if (isStreamingAnthropicRequest) {
-      if (!hasStickyHttpFallback(conversationId, currentAccountId)) {
+      if (attemptsWebSocket) {
         try {
           // Item 3 rule 1: no per-request prewarm. It re-fired on every
           // session-clearing event and never warmed ahead of time (the real

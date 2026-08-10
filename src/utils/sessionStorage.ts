@@ -483,6 +483,53 @@ function getOwnedTranscriptPath(): string | null {
 }
 
 /**
+ * Append a codex_request_start diagnostic entry to the current session JSONL.
+ *
+ * The start-side counterpart of `recordCodexSendPath` /
+ * `recordCodexStreamSurface`: both of those write when a stream ENDS, so a
+ * provider request that hangs forever writes nothing at all and the absence of
+ * a record cannot distinguish "no request was made" from "a request never
+ * finished" — the ambiguity that cost the 2026-08-10 overnight hang hours
+ * (`docs/reports/2026-08-10-overnight-turn-hang-investigation.md`,
+ * `docs/migration/decisions/OBSERVABILITY-MINIMUM.md` §2).
+ *
+ * Metadata only: the transport this request dispatches on, prefixes, and the
+ * model. Never the request body, message content, or a full conversation id
+ * (OBSERVABILITY-MINIMUM §5). Log-only — nothing here bounds, aborts, or
+ * retries the request, because killing a hung request destroys the state that
+ * explains it (§3).
+ *
+ * One record per request dispatch, never per chunk, frame, or WS→HTTP
+ * fallback: a request that starts on the websocket and finishes over HTTP is
+ * one request and pairs with the one `codex_stream_surface` it ends with.
+ *
+ * No-op unless a real session owns the transcript — see
+ * `getOwnedTranscriptPath()`.
+ *
+ * Sync and best-effort — never throws. Safe to call from the API path.
+ */
+export function recordCodexRequestStart(entry: {
+  mode: 'websocket' | 'http'
+  conversation_id_prefix: string | null
+  account_id_prefix: string | null
+  model: string
+}): void {
+  try {
+    const transcriptPath = getOwnedTranscriptPath()
+    if (transcriptPath === null) return
+    appendEntryToFile(transcriptPath, {
+      type: 'system',
+      subtype: 'codex_request_start',
+      uuid: randomUUID(),
+      timestamp: new Date().toISOString(),
+      ...entry,
+    })
+  } catch {
+    // Best-effort — don't let diagnostic writes crash the API path.
+  }
+}
+
+/**
  * Append a codex_send_path diagnostic entry to the current session JSONL.
  * Records the WS send-path decision (incremental/full/prewarm/stale_retry)
  * and associated metadata so post-hoc analysis of cache misses doesn't

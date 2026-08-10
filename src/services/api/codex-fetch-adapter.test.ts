@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
+import * as sessionStorage from '../../utils/sessionStorage.js'
 import {
   _setWebSocketFactoryForTest,
   CodexWebSocketClosedBeforeCompletedError,
@@ -3078,5 +3079,168 @@ describe('codex tool-result truncation (Item 2)', () => {
     const small = 'ok result'
     const wire = outputStringFor(buildBodyWithToolResult('Read', small))
     expect(wire).toBe(small)
+  })
+})
+
+// `codex_send_path` / `codex_stream_surface` are written when a stream ENDS, so
+// a provider request that hangs forever writes nothing at all and absence of a
+// record cannot distinguish "no request was made" from "a request never
+// finished" (docs/reports/2026-08-10-overnight-turn-hang-investigation.md, A3;
+// docs/migration/decisions/OBSERVABILITY-MINIMUM.md §2). These tests drive the
+// real dispatch through createCodexFetch; nothing hand-feeds the marker.
+describe('codex request-start diagnostic', () => {
+  const streamingBody = JSON.stringify({
+    stream: true,
+    model: 'claude-sonnet-4-6', // maps to gpt-5.6-luna
+    _openaiInstructionAssembly: { instructions: 'Be precise.', inputMessages: [] },
+  })
+
+  function completedSseResponse(): Response {
+    return new Response(
+      [
+        'event: response.output_text.delta',
+        `data: ${JSON.stringify({ type: 'response.output_text.delta', delta: 'http ok' })}`,
+        '',
+        'event: response.completed',
+        `data: ${JSON.stringify({
+          type: 'response.completed',
+          response: { usage: { input_tokens: 4, output_tokens: 2 } },
+        })}`,
+        '',
+      ].join('\n'),
+      { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+    )
+  }
+
+  test('a websocket request that has produced nothing has already named itself', async () => {
+    const accountId = 'acct_request_start_ws'
+    const accessToken = createAccessToken(accountId)
+    const conv = 'conv_request_start_ws'
+    const startSpy = spyOn(sessionStorage, 'recordCodexRequestStart').mockImplementation(
+      () => {},
+    )
+    const surfaceSpy = spyOn(sessionStorage, 'recordCodexStreamSurface').mockImplementation(
+      () => {},
+    )
+    const fakeWs = installFakeWs()
+    // Opens, accepts the turn, then delivers nothing — the shape of the hang.
+    fakeWs.responseBatches = [[]]
+
+    try {
+      const pending = createCodexFetch(accessToken, conv)(
+        'https://api.anthropic.com/v1/messages',
+        { method: 'POST', body: streamingBody },
+      )
+      let settled = false
+      void pending.then(
+        () => {
+          settled = true
+        },
+        () => {
+          settled = true
+        },
+      )
+
+      for (let i = 0; i < 100 && fakeWs.getSentCount() === 0; i++) {
+        await new Promise(resolve => setTimeout(resolve, 5))
+      }
+      expect(fakeWs.getSentCount()).toBe(1)
+      expect(settled).toBe(false)
+
+      expect(startSpy).toHaveBeenCalledTimes(1)
+      expect(startSpy.mock.calls[0]![0]).toEqual({
+        mode: 'websocket',
+        conversation_id_prefix: conv.slice(0, 8),
+        account_id_prefix: accountId.slice(0, 8),
+        model: 'gpt-5.6-luna',
+      })
+      // The end-of-stream record is exactly what a hung request never writes.
+      expect(surfaceSpy).not.toHaveBeenCalled()
+
+      // Reporting the start does not unstick anything: the request only
+      // finishes because the test feeds it, and it stays one record.
+      fakeWs.deliver({ type: 'response.output_text.delta', delta: 'late' })
+      fakeWs.deliver(completedWsResponse('resp_request_start'))
+      const response = await pending
+      await response.text()
+      expect(startSpy).toHaveBeenCalledTimes(1)
+      expect(surfaceSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      startSpy.mockRestore()
+      surfaceSpy.mockRestore()
+      _setWebSocketFactoryForTest(null)
+      clearWebSocketSession(conv)
+      resetCodexCacheContext()
+    }
+  })
+
+  test('a request forced onto HTTP names the http transport', async () => {
+    const accountId = 'acct_request_start_http'
+    const accessToken = createAccessToken(accountId)
+    const conv = 'conv_request_start_http'
+    const originalFetch = globalThis.fetch
+    const startSpy = spyOn(sessionStorage, 'recordCodexRequestStart').mockImplementation(
+      () => {},
+    )
+    globalThis.fetch = (async () => completedSseResponse()) as unknown as typeof globalThis.fetch
+
+    try {
+      _markStickyHttpFallbackForTest(conv, 'test', accountId)
+      const response = await createCodexFetch(accessToken, conv)(
+        'https://api.anthropic.com/v1/messages',
+        { method: 'POST', body: streamingBody },
+      )
+      await response.text()
+
+      expect(startSpy).toHaveBeenCalledTimes(1)
+      expect(startSpy.mock.calls[0]![0]).toEqual({
+        mode: 'http',
+        conversation_id_prefix: conv.slice(0, 8),
+        account_id_prefix: accountId.slice(0, 8),
+        model: 'gpt-5.6-luna',
+      })
+    } finally {
+      startSpy.mockRestore()
+      globalThis.fetch = originalFetch
+      resetCodexCacheContext()
+    }
+  })
+
+  test('a websocket attempt that falls back to HTTP still records one start', async () => {
+    const accountId = 'acct_request_start_fallback'
+    const accessToken = createAccessToken(accountId)
+    const conv = 'conv_request_start_fallback'
+    const originalFetch = globalThis.fetch
+    const startSpy = spyOn(sessionStorage, 'recordCodexRequestStart').mockImplementation(
+      () => {},
+    )
+    let httpCalls = 0
+    globalThis.fetch = (async () => {
+      httpCalls++
+      return completedSseResponse()
+    }) as unknown as typeof globalThis.fetch
+    const fakeWs = installFakeWs()
+    fakeWs.responseBatches = [[{ __close: { code: 1006, reason: 'ws gone' } }]]
+
+    try {
+      const response = await createCodexFetch(accessToken, conv)(
+        'https://api.anthropic.com/v1/messages',
+        { method: 'POST', body: streamingBody },
+      )
+      const body = await response.text()
+      expect(httpCalls).toBe(1)
+      expect(body).toContain('event: message_stop')
+
+      // One request, one marker — the transport switch is reported by the
+      // end-of-stream record's transport_path, not by a second start.
+      expect(startSpy).toHaveBeenCalledTimes(1)
+      expect(startSpy.mock.calls[0]![0]).toMatchObject({ mode: 'websocket' })
+    } finally {
+      startSpy.mockRestore()
+      globalThis.fetch = originalFetch
+      _setWebSocketFactoryForTest(null)
+      clearWebSocketSession(conv)
+      resetCodexCacheContext()
+    }
   })
 })
