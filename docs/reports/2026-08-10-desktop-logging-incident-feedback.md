@@ -68,6 +68,12 @@ change is additive.
 
 ## Task 2 - attribute what queue_saturated drops
 
+**LANDED 2026-08-10** (`909404c8`, STATUS CC-41). Per-type histogram in the
+existing `category` field, top 6 buckets by count, whole buckets dropped
+rather than truncated. Delivery-trace drops bucket as `delivery.trace`, taken
+from the record's own `recordKind` so it cannot drift. `count` remains the
+authoritative total, which the bucket cap deliberately does not try to match.
+
 **What happened.** At 21:38:02, mid-streaming, 135 operational records were
 shed with only `log.suppressed { count: 135, reason: "queue_saturated" }` to
 show for it. What those records were is unknowable after the fact.
@@ -108,6 +114,15 @@ records by type, including dropped delivery-trace markers; the record stays
 within `MAX_OPERATIONAL_STRING_BYTES` / `MAX_OPERATIONAL_FIELDS`.
 
 ## Task 3 - do not mistake a dropped source marker for a dropped frame
+
+**LANDED 2026-08-10** (`efa80f9d`, STATUS CC-42). Continuity moved to a new
+`socketReceived` watermark fed by `supervisor.socket.received`; missing sidecar
+markers now emit the additive `trace.source.incomplete` kind. The unbounded
+emission was solved by remembering the hole each detector already reported
+rather than by a rate cap, so one hole costs one record and a second, distinct
+hole is still reported. `firstMissing` trusts a source watermark only in the
+one direction FD 3 loss cannot fake: a source stage that still OUTRUNS arrival
+really does mean the frame never landed.
 
 **What happened.** On 2026-08-09, the sidecar restored 376 transcript messages
 and then reported `log.suppressed { count: 1923, reason: "queue_saturated" }`.
