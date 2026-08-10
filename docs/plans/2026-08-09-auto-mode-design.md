@@ -444,6 +444,50 @@ that implements the two-stage architecture.
    Nothing about it ships in the meantime, and G4's settings surface stays
    closed until it does.
 
+### H — Delta 8's meta shapes are a deliberate subset, and some ported rules depend on the fuller ones
+
+Extracted 2026-08-10, comparing our implementation (built from the architecture
+report) against upstream's source.
+
+**The wire format matches.** Upstream emits `JSON.stringify({meta: …})`; so do
+we (`autoModeMeta.ts` `metaLine`).
+
+**Upstream sanitizes; we make sanitizing unnecessary.** Upstream runs three
+layers over meta and transcript text, because its shapes carry free strings:
+
+- strip `/[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu` — invisible formatting,
+  bidi overrides, tag characters; the hidden-instruction vector;
+- rewrite any `<transcript>` tag's leading `<` to `[`, so content cannot close
+  the block early;
+- escape `U+2028`, `U+2029`, `U+0085` to `\uXXXX`, so invisible line breaks
+  cannot forge a new meta line.
+
+Our `AutoModeMeta` is closed — `outcome` is an enum, `gitStatus` is
+`{clean: boolean}`, `repoVisibility` is a three-value enum. No free string can
+reach the channel, so none of those attacks are expressible. That is the
+stronger arrangement for this risk and should not be "fixed" by adding
+sanitization to shapes that need none. **It does mean any future widening of
+these shapes must add upstream's three layers first.**
+
+**The gap: ported rules reference data our shapes cannot carry.**
+
+- `gitStatus` upstream is `{clean:true}` **or** `{staged, modified, untracked}`
+  counts **or** `{porcelain: <listing>}`. The prompt uses the second form for a
+  second job: *"carrying the `git status` listing taken as the whole command
+  starts; judge what is being staged or pushed from it."* Ours emits only
+  `{clean: boolean}`, so the clears-the-presume-dirty job works and the
+  judge-what-is-being-pushed job cannot.
+- `repoVisibility` upstream carries a `remote` naming the repo each line
+  describes, and emits one line per destination when a command names another
+  repo. Ours carries visibility alone, so a command with two destinations cannot
+  be told apart.
+
+Flagged rather than fixed, per the parity rule: this was a deliberate
+safety-conservative reduction, not an oversight. Widening either shape means
+accepting environment-derived strings — branch names, file paths, remote names —
+into the meta channel, and therefore adopting the three sanitization layers
+above. Worth doing only if the replay shows the missing data changing verdicts.
+
 ### G — Path B of the consent bar cannot fire, in upstream's default or ours
 
 Extracted 2026-08-10. This is the most operationally consequential finding of
