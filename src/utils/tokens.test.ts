@@ -7,7 +7,11 @@ import {
   getCurrentUsage,
   getDisplayedTokenCountFromUsage,
   getFreshInputTokens,
+  getTokenUsage,
   getTotalInputTokens,
+  messageTokenCountFromLastAPIResponse,
+  NON_MESSAGE_REQUEST_OVERHEAD_TOKENS,
+  tokenCountFromLastAPIResponse,
   tokenCountWithEstimation,
 } from './tokens.js'
 
@@ -314,8 +318,12 @@ describe('post-compaction preserved-segment skip', () => {
   })
 
   test('tokenCountWithEstimation does not anchor on stale 180k usage', () => {
-    // Falls through to rough estimation of the small post-compact array.
-    expect(tokenCountWithEstimation(postCompactMessages())).toBeLessThan(10_000)
+    // Falls through to rough estimation of the small post-compact array, plus
+    // the non-message request overhead a pure rough estimate cannot see.
+    const count = tokenCountWithEstimation(postCompactMessages())
+    expect(count).toBeLessThan(NON_MESSAGE_REQUEST_OVERHEAD_TOKENS + 10_000)
+    // Nowhere near the stale 180k anchor it must not have used.
+    expect(count).toBeLessThan(100_000)
   })
 
   test('a fresh post-compact response after the kept tail still counts', () => {
@@ -323,6 +331,326 @@ describe('post-compaction preserved-segment skip', () => {
     const msgs = [...postCompactMessages(), createAssistantUsageMessage()]
     const usage = getCurrentUsage(msgs)
     expect(usage?.input_tokens).toBe(100)
+  })
+})
+
+describe('compact-boundary walk floor', () => {
+  // Display/telemetry callers (StatusLine, REPL, Notifications, sessionMemory)
+  // pass the UNSLICED message array, and fullscreen mode keeps pre-compact
+  // scrollback in it. A usage walk that ignores the boundary anchors on a
+  // pre-compact record and reports a freshly-compacted session as still-full.
+  // Note there is NO preservedSegment here: the stale usage sits BEFORE the
+  // boundary, so the preserved-segment skip cannot help.
+  function preCompactAssistant(uuid: string): Message {
+    return {
+      type: 'assistant',
+      uuid,
+      message: {
+        id: `msg-${uuid}`,
+        model: 'claude-sonnet-4-6',
+        role: 'assistant',
+        stop_reason: 'end_turn',
+        content: [{ type: 'text', text: 'pre-compact reply' }],
+        usage: {
+          input_tokens: 180_000,
+          output_tokens: 500,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+        },
+      },
+    } as Message
+  }
+
+  function bareBoundary(): Message {
+    return {
+      type: 'system',
+      subtype: 'compact_boundary',
+      uuid: 'compact-boundary',
+      timestamp: '2026-04-21T00:00:00.000Z',
+      compactMetadata: {},
+    } as Message
+  }
+
+  // What a fullscreen array looks like after /compact: scrollback, boundary,
+  // then the summary and a short new exchange.
+  function fullscreenShaped(): Message[] {
+    return [
+      createUserMessage('old question'),
+      preCompactAssistant('old-asst'),
+      bareBoundary(),
+      createUserMessage('compact summary'),
+      createUserMessage('new question'),
+    ]
+  }
+
+  test('tokenCountWithEstimation ignores pre-boundary scrollback usage', () => {
+    const count = tokenCountWithEstimation(fullscreenShaped())
+    // Before the fix this anchored on the pre-boundary 180,500 usage.
+    expect(count).toBeLessThan(NON_MESSAGE_REQUEST_OVERHEAD_TOKENS + 10_000)
+    expect(count).toBeLessThan(100_000)
+  })
+
+  test('getCurrentUsage ignores pre-boundary scrollback usage', () => {
+    expect(getCurrentUsage(fullscreenShaped())).toBeNull()
+  })
+
+  test('a post-boundary response is still anchored on normally', () => {
+    const msgs = [...fullscreenShaped(), createAssistantUsageMessage()]
+    expect(getCurrentUsage(msgs)?.input_tokens).toBe(100)
+    // Anchor path: no overhead added, and nothing from before the boundary.
+    expect(tokenCountWithEstimation(msgs)).toBeLessThan(1_000)
+  })
+
+  test('the rough fallback estimates only from the boundary onward', () => {
+    // A huge pre-boundary user message (no usage anywhere) must not be counted:
+    // query.ts slices it away before the request is built.
+    const huge = createUserMessage('W'.repeat(400_000)) // ~100k tokens
+    const withScrollback: Message[] = [
+      huge,
+      bareBoundary(),
+      createUserMessage('compact summary'),
+    ]
+    const count = tokenCountWithEstimation(withScrollback)
+    expect(count).toBeLessThan(NON_MESSAGE_REQUEST_OVERHEAD_TOKENS + 10_000)
+    // Sanity: the same array WITHOUT a boundary does count the huge message,
+    // proving the assertion above is the boundary's doing and not a dead input.
+    expect(
+      tokenCountWithEstimation([huge, createUserMessage('compact summary')]),
+    ).toBeGreaterThan(90_000)
+  })
+})
+
+describe('split-response sibling double-counting (bug #1)', () => {
+  // Streaming splits one API response into several assistant records sharing
+  // one message.id (claude.ts:2414-2456); only the LAST split gets the final
+  // usage and stop_reason written back (claude.ts:2496-2503). The anchor's
+  // output_tokens already covers every sibling's generated content, so
+  // rough-counting the sibling records again is phantom context.
+  const BIG_INPUT = { path: '/tmp/x.txt', content: 'W'.repeat(40_000) }
+
+  function split(seq: number, opts: { terminal: boolean }): Message {
+    return {
+      type: 'assistant',
+      uuid: `split-${seq}`,
+      message: {
+        id: 'msg-shared-response',
+        model: 'claude-sonnet-4-6',
+        role: 'assistant',
+        // Only the terminal split carries stop_reason + final usage.
+        stop_reason: opts.terminal ? 'tool_use' : null,
+        content: [
+          {
+            type: 'tool_use',
+            id: `call_${seq}`,
+            name: 'Write',
+            input: BIG_INPUT,
+          },
+        ],
+        usage: opts.terminal
+          ? {
+              input_tokens: 50_000,
+              output_tokens: 31_000,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+            }
+          : // message_start seed: real input_tokens, output_tokens ~1.
+            {
+              input_tokens: 50_000,
+              output_tokens: 1,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+            },
+      },
+    } as Message
+  }
+
+  function toolResult(seq: number): Message {
+    return {
+      type: 'user',
+      uuid: `result-${seq}`,
+      timestamp: '2026-04-21T00:00:00.000Z',
+      message: {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: `call_${seq}`, content: 'ok' },
+        ],
+      },
+    } as Message
+  }
+
+  // Three parallel 40KB Writes, tool_results interleaved between the splits.
+  function parallelWrites(terminalLast: boolean): Message[] {
+    return [
+      createUserMessage('write three files'),
+      split(1, { terminal: false }),
+      toolResult(1),
+      split(2, { terminal: false }),
+      toolResult(2),
+      split(3, { terminal: terminalLast }),
+      toolResult(3),
+    ]
+  }
+
+  test('terminal anchor: sibling tool_use content is not counted again', () => {
+    const count = tokenCountWithEstimation(parallelWrites(true))
+    // Anchor total is 81,000. The only thing left to estimate is the trailing
+    // tool_results (a few tokens). Before the fix the two earlier splits'
+    // 40KB inputs were rough-counted on top, adding ~20k of phantom context.
+    expect(count).toBeGreaterThanOrEqual(81_000)
+    expect(count).toBeLessThan(82_000)
+  })
+
+  test('interrupted anchor (no stop_reason): sibling content IS still counted', () => {
+    // The stream died before the final usage was written back, so the anchor is
+    // a seed whose output_tokens is 1 and covers none of the generated content.
+    // Excluding siblings here would flip an overcount into an undercount.
+    const count = tokenCountWithEstimation(parallelWrites(false))
+    expect(count).toBeGreaterThan(60_000)
+  })
+
+  test('interleaved tool_results are counted on both paths', () => {
+    // The walk-back to the first sibling exists so these are not missed.
+    const withResults = tokenCountWithEstimation(parallelWrites(true))
+    const withoutResults = tokenCountWithEstimation([
+      createUserMessage('write three files'),
+      split(1, { terminal: false }),
+      split(2, { terminal: false }),
+      split(3, { terminal: true }),
+    ])
+    expect(withResults).toBeGreaterThan(withoutResults)
+  })
+})
+
+describe('non-message request overhead on the rough fallback (bug #3a)', () => {
+  test('pure rough estimate includes the overhead', () => {
+    // No usage anywhere → nothing anchors → rough path.
+    const count = tokenCountWithEstimation([createUserMessage('hello')])
+    expect(count).toBeGreaterThanOrEqual(NON_MESSAGE_REQUEST_OVERHEAD_TOKENS)
+  })
+
+  test('an empty session still reports 0, not the overhead', () => {
+    expect(tokenCountWithEstimation([])).toBe(0)
+  })
+
+  test('the anchor path never adds the overhead', () => {
+    // Server usage already includes system prompt + tools + userContext.
+    expect(
+      tokenCountWithEstimation([
+        createUserMessage('question'),
+        createAssistantUsageMessage(),
+      ]),
+    ).toBeLessThan(1_000)
+  })
+
+  test('immediately post-compaction the overhead is still added', () => {
+    const boundaryOnly: Message[] = [
+      {
+        type: 'system',
+        subtype: 'compact_boundary',
+        uuid: 'compact-boundary',
+        timestamp: '2026-04-21T00:00:00.000Z',
+        compactMetadata: {},
+      } as Message,
+      createUserMessage('compact summary'),
+    ]
+    expect(tokenCountWithEstimation(boundaryOnly)).toBeGreaterThanOrEqual(
+      NON_MESSAGE_REQUEST_OVERHEAD_TOKENS,
+    )
+  })
+})
+
+describe('getTokenUsage synthetic detection', () => {
+  function assistantSaying(text: string, model: string): Message {
+    return {
+      type: 'assistant',
+      uuid: `asst-${text.length}-${model}`,
+      message: {
+        id: 'msg-x',
+        model,
+        role: 'assistant',
+        stop_reason: 'end_turn',
+        content: [{ type: 'text', text }],
+        usage: {
+          input_tokens: 5_000,
+          output_tokens: 10,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+        },
+      },
+    } as Message
+  }
+
+  test('a genuine reply of exactly "No response requested." keeps its usage', () => {
+    // The text used to be matched against SYNTHETIC_MESSAGES, which discarded
+    // this turn's real usage and fell back to an older anchor.
+    const usage = getTokenUsage(
+      assistantSaying('No response requested.', 'claude-sonnet-4-6'),
+    )
+    expect(usage?.input_tokens).toBe(5_000)
+  })
+
+  test('the same text from the synthetic model is still excluded', () => {
+    expect(
+      getTokenUsage(assistantSaying('No response requested.', '<synthetic>')),
+    ).toBeUndefined()
+  })
+
+  test('tokenCountWithEstimation anchors on the genuine reply', () => {
+    const count = tokenCountWithEstimation([
+      createUserMessage('q'),
+      assistantSaying('No response requested.', 'claude-sonnet-4-6'),
+    ])
+    expect(count).toBeGreaterThanOrEqual(5_010)
+    // Anchored, so no rough-path overhead.
+    expect(count).toBeLessThan(6_000)
+  })
+})
+
+describe('zero-usage seed guards on every walker', () => {
+  // After an interrupted Codex turn the trailing records carry the {0,0,0,0}
+  // message_start seed. Anchoring on one reports the context as 0.
+  const zeroSeed: Message = {
+    type: 'assistant',
+    uuid: 'assistant-zero-seed',
+    message: {
+      id: 'msg-codex-seed',
+      model: 'gpt-5.6-luna',
+      role: 'assistant',
+      stop_reason: null,
+      content: [{ type: 'text', text: 'seed' }],
+      usage: {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+      },
+    },
+  } as Message
+
+  const withSeed = (): Message[] => [createAssistantUsageMessage(), zeroSeed]
+
+  test('tokenCountFromLastAPIResponse skips the seed', () => {
+    expect(tokenCountFromLastAPIResponse(withSeed())).toBe(130)
+  })
+
+  test('getCurrentUsage skips the seed', () => {
+    expect(getCurrentUsage(withSeed())?.input_tokens).toBe(100)
+  })
+
+  test('finalContextTokensFromLastResponse skips the seed', () => {
+    expect(finalContextTokensFromLastResponse(withSeed())).toBe(120)
+  })
+
+  test('messageTokenCountFromLastAPIResponse skips the seed', () => {
+    expect(messageTokenCountFromLastAPIResponse(withSeed())).toBe(20)
+  })
+
+  test('all four still return 0 when there is no real usage at all', () => {
+    const onlySeeds = [zeroSeed]
+    expect(tokenCountFromLastAPIResponse(onlySeeds)).toBe(0)
+    expect(getCurrentUsage(onlySeeds)).toBeNull()
+    expect(finalContextTokensFromLastResponse(onlySeeds)).toBe(0)
+    expect(messageTokenCountFromLastAPIResponse(onlySeeds)).toBe(0)
   })
 })
 
