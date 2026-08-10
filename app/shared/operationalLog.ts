@@ -19,6 +19,10 @@ export const OPERATIONAL_EVENTS = [
   'app.ready',
   'app.shutdown.started',
   'app.shutdown.completed',
+  // macOS keeps the process alive when the last window closes. That route tears
+  // the runtime down but never reaches `app.shutdown.completed`, so logging it
+  // as a shutdown made the designed park indistinguishable from a hung one.
+  'app.parked.windowless',
   'app.fatal',
   'process.started',
   'process.exited',

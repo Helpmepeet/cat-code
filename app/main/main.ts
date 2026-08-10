@@ -2617,7 +2617,16 @@ process.on('SIGINT', () => teardownOnSignal('SIGINT'))
 process.on('SIGTERM', () => teardownOnSignal('SIGTERM'))
 
 app.on('window-all-closed', () => {
-  logOperational('app.shutdown.started', 'info', { reason: 'window-all-closed' })
+  // On darwin this route parks in the dock (see the platform branch at the end):
+  // the runtime goes away, the process does not, and `app.shutdown.completed`
+  // correctly never arrives. Logging it as a shutdown start therefore read as a
+  // shutdown that hung, which cost the 2026-08-10 investigation a full pass.
+  // Elsewhere `app.quit()` below really does start a shutdown.
+  if (process.platform === 'darwin') {
+    logOperational('app.parked.windowless', 'info')
+  } else {
+    logOperational('app.shutdown.started', 'info', { reason: 'window-all-closed' })
+  }
   // D6: die-with-window for v1 — tear down every sidecar via the supervisor's
   // kill API (NOT by welding the sidecar to the window's lifecycle). `activate`
   // rebuilds a fresh host on reopen (F5).

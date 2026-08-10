@@ -36,6 +36,22 @@ test('operational events accept only their declared metadata fields', () => {
   expect(parseOperationalRecord({ ...appStart, fields: { reason: 'not valid for startup' } })).toBeNull()
 })
 
+test('the macOS park has its own event so it cannot read as a hung shutdown', () => {
+  const parked = createOperationalRecord(
+    { level: 'info', event: 'app.parked.windowless', process: 'main' },
+    { launchId: 'launch', processInstanceId: 'process' },
+  )
+  expect(parked.event).toBe('app.parked.windowless')
+  expect(parked.fields).toEqual({})
+  expect(parseOperationalRecord(parked)).not.toBeNull()
+  // It describes a state, not a reason, and must not become a free-form slot:
+  // `app.shutdown.started` owns `reason`, this owns nothing.
+  expect(() => createOperationalRecord(
+    { level: 'info', event: 'app.parked.windowless', process: 'main', fields: { reason: 'window-all-closed' } },
+    { launchId: 'launch', processInstanceId: 'process' },
+  )).toThrow('unsafe field reason')
+})
+
 test('renderer failure and incomplete coverage records keep closed metadata', () => {
   const unavailable = createOperationalRecord(
     {
