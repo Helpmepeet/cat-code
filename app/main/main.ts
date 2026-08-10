@@ -1416,6 +1416,13 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
     // reaches the sidebar/tab as a host descriptor update (HostEvent). event.sessionId
     // is the appSessionId (the supervisor's routing key = the host's row id).
     if (frame.kind === 'session-title') {
+      // It is not forwarded, but it DID cross the socket, and the sidecar spent
+      // a delivery sequence on it like any other frame. Continuity is judged at
+      // arrival, so returning before these marks pinned the arrival watermark
+      // and made every titled session — i.e. every fresh one — report a frame
+      // that never arrived. Mark what actually happened, then relay.
+      const titled = traceFrame(frame, 'supervisor.socket.received')
+      traceFrame(titled, 'host.received')
       void host?.setTitle(event.sessionId, frame.title)
       return
     }

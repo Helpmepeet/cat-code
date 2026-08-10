@@ -70,11 +70,14 @@ separate goals; a change that serves one should say which.
 Two corollaries, both paid for by real investigations:
 
 **A designed terminal state must be distinguishable from a failure to reach
-it.** On macOS, `window-all-closed` emits `app.shutdown.started` and correctly
-never emits `app.shutdown.completed`, because parking in the dock is the
-designed path. In the log that is indistinguishable from a shutdown that hung,
-and it misled the overnight investigation for a full pass. Either pair
-started/completed on every route or give the parked route its own event.
+it.** On macOS, `window-all-closed` used to emit `app.shutdown.started` and
+correctly never emit `app.shutdown.completed`, because parking in the dock is
+the designed path — in the log, indistinguishable from a shutdown that hung,
+and it misled the overnight investigation for a full pass. Fixed in
+`2c63a972`: that route now emits `app.parked.windowless` and other platforms
+keep `app.shutdown.started`, since `app.quit()` there really does begin a
+shutdown. The rule this stands for outlives the instance: pair
+started/completed on every route, or give the terminal state its own name.
 
 **Prefer `unknown` to inference.** Where a record carries a phase, cause, or
 class, populate it only from state the emitter directly holds. A confidently
