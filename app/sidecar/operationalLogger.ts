@@ -9,6 +9,49 @@ import {
 } from '../shared/operationalLog.js'
 import type { DeliveryTrace, SidecarDeliveryStageRecord } from '../shared/deliveryTrace.js'
 
+/**
+ * Records do not all pay for a stalled reader equally. A record that explains
+ * what a session did is worth far more after the fact than one that merely
+ * samples its health, and shedding both at one threshold loses them with equal
+ * probability: a single `queue_saturated` event shed 3,317 records on
+ * 2026-08-10 and took the turn's shape with it.
+ */
+type RecordPriority = 'lifecycle' | 'anomaly' | 'sample'
+
+/**
+ * A closed "never shed under normal saturation" set rather than a default:
+ * an event added to the shared vocabulary later falls to `sample`, which
+ * costs resolution instead of raising the memory a stuck reader can pin.
+ * `log.suppressed` sits here because it is the record that reports the
+ * shedding; losing it makes every other loss unattributable.
+ */
+const LIFECYCLE_EVENTS: ReadonlySet<string> = new Set([
+  'app.start', 'app.single_instance.refused', 'app.ready', 'app.shutdown.started',
+  'app.shutdown.completed', 'app.fatal',
+  'process.started', 'process.exited',
+  'window.created',
+  'renderer.load.started', 'renderer.load.ready', 'renderer.load.failed',
+  'renderer.process.gone',
+  'renderer.recovery.started', 'renderer.recovery.succeeded', 'renderer.recovery.exhausted',
+  'registry.load.completed',
+  'session.create.requested',
+  'sidecar.spawn.started', 'sidecar.spawn.failed', 'sidecar.socket.connected',
+  'sidecar.ready', 'sidecar.disconnected', 'sidecar.exit',
+  'session.restore.started', 'session.restore.completed', 'session.restore.failed',
+  'worker.started', 'worker.completed', 'worker.failed',
+  'log.suppressed', 'log.coverage.incomplete',
+])
+
+/**
+ * Level carries the anomaly signal: the same `diagnostic` event is a legacy
+ * failure line at `warn` and routine narration at `info`, so the producer's
+ * own severity is the only thing that separates them here.
+ */
+const priorityOf = (level: string, event: string): RecordPriority => {
+  if (LIFECYCLE_EVENTS.has(event)) return 'lifecycle'
+  return level === 'warn' || level === 'error' || level === 'fatal' ? 'anomaly' : 'sample'
+}
+
 export type SidecarOperationalLogger = {
   write(input: Omit<OperationalRecordInput, 'process'>): void
   deliveryStage(input: Omit<SidecarDeliveryStageRecord, 'recordKind' | 'wallTimestamp' | 'monotonicTimestampMs' | 'processInstanceId' | 'processStartedAt'>): void
@@ -51,7 +94,22 @@ export function createSidecarOperationalLogger({
    */
   const droppedByType = new Map<string, number>()
   const MAX_PENDING_WRITES = 64
-  const MAX_PENDING_BYTES = 256 * 1024
+  /**
+   * The threshold governs the drop decision, not the write order: samples stop
+   * being accepted well before anomalies, and anomalies well before lifecycle,
+   * so a stalled reader costs resolution before it costs the timeline.
+   *
+   * Lifecycle gets a high ceiling rather than none. An unconditional enqueue
+   * turns a stuck reader into an unbounded leak, which is the exact failure
+   * this non-blocking queue exists to prevent. One megabyte holds on the order
+   * of three thousand lifecycle records, far past what any real session emits,
+   * while bounding what one wedged sidecar can pin.
+   */
+  const MAX_PENDING_BYTES: Readonly<Record<RecordPriority, number>> = {
+    lifecycle: 1024 * 1024,
+    anomaly: 256 * 1024,
+    sample: 64 * 1024,
+  }
   const MAX_DROP_BUCKETS = 6
   /**
    * Only a pipe or socket can make a write wait for the reader. FD 3 is a pipe
@@ -91,9 +149,9 @@ export function createSidecarOperationalLogger({
     }
   }
   /** Returns false when the record was dropped rather than queued. */
-  const enqueue = (text: string): boolean => {
+  const enqueue = (text: string, priority: RecordPriority): boolean => {
     if (!streaming) return false
-    if (streaming.writableLength > MAX_PENDING_BYTES) return false
+    if (streaming.writableLength > MAX_PENDING_BYTES[priority]) return false
     streaming.write(text)
     return true
   }
@@ -158,7 +216,7 @@ export function createSidecarOperationalLogger({
       if (record.level === 'fatal') {
         writeAll(fd as number, line)
       } else if (streaming) {
-        if (!enqueue(line)) noteDrop(record.event)
+        if (!enqueue(line, priorityOf(record.level, record.event))) noteDrop(record.event)
       } else if (pendingWrites < MAX_PENDING_WRITES) {
         pendingWrites++
         setImmediate(() => {
@@ -197,7 +255,12 @@ export function createSidecarOperationalLogger({
       }
       const line = `${JSON.stringify(record)}\n`
       if (!streaming) writeAll(fd as number, line)
-      else if (!enqueue(line)) noteDrop(record.recordKind)
+      // A stage marker carries a stage, not an event, so it cannot be classified
+      // by the table above. It is `sample`: one marker per frame per hop makes it
+      // the highest-volume producer on this descriptor, and its value is
+      // statistical — the population shows where frames stop arriving, no single
+      // marker explains a session.
+      else if (!enqueue(line, 'sample')) noteDrop(record.recordKind)
     } catch {
       // Descriptor evidence is best effort and cannot alter engine IO.
     }
