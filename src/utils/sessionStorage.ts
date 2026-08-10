@@ -740,6 +740,64 @@ export function recordPromptCacheBreak(entry: {
   }
 }
 
+/**
+ * Named awaits on the path between the final assistant message and result
+ * emission. `storage_flush`, `provider_stream` and `unknown` are reserved
+ * vocabulary — no call site arms them yet; see `query/postTurnStall.ts` for
+ * which phases are wired.
+ */
+export type PostTurnStallPhase =
+  | 'tool_use_summary'
+  | 'reactive_compact'
+  | 'stop_hooks'
+  | 'computer_use_cleanup'
+  | 'storage_flush'
+  | 'provider_stream'
+  | 'unknown'
+
+/**
+ * Append a post_turn_stall diagnostic entry to the current session JSONL.
+ * Records that one named await between the final assistant message and result
+ * emission has been outstanding past its threshold, so a run that never closes
+ * names the phase it is stuck in instead of going silent for nine hours
+ * (docs/reports/2026-08-10-overnight-turn-hang-investigation.md).
+ *
+ * Log only, by design: nothing here cancels the await. A timeout would unstick
+ * the turn and destroy the evidence this record exists to capture — the run
+ * must still be hung when someone samples the process.
+ *
+ * No-op unless the target transcript has an owner — the main session from
+ * `getOwnedTranscriptPath()`, a subagent from `getOwnedAgentTranscriptPath()`.
+ * Metadata only: no message, tool input, or hook output content.
+ *
+ * Sync and best-effort — never throws. Safe to call from a timer callback.
+ */
+export function recordPostTurnStall(entry: {
+  phase: PostTurnStallPhase
+  elapsed_ms: number
+  threshold_ms: number
+  turn_count: number
+  query_source: string
+  agentId?: AgentId
+}): void {
+  try {
+    const transcriptPath = entry.agentId
+      ? getOwnedAgentTranscriptPath(entry.agentId)
+      : getOwnedTranscriptPath()
+    if (transcriptPath === null) return
+    appendEntryToFile(transcriptPath, {
+      type: 'system',
+      subtype: 'post_turn_stall',
+      sessionId: getSessionId(),
+      uuid: randomUUID(),
+      timestamp: new Date().toISOString(),
+      ...entry,
+    })
+  } catch {
+    // Best-effort — don't let diagnostic writes crash the API path.
+  }
+}
+
 export type RemoteAgentMetadata = {
   taskId: string
   remoteTaskType: string

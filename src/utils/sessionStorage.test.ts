@@ -9,7 +9,7 @@ import { applyPostCodexAccountSwitchRefresh } from '../services/api/codexAccount
 import { asAgentId, asSessionId } from '../types/ids.js'
 import { registerActiveSubagent, unregisterActiveSubagent } from './cleanupRegistry.js'
 import { createUserMessage } from './messages.js'
-import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, flushSessionStorage, getAgentTranscriptPath, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, loadDisplayTranscriptFromJsonlPath, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordPromptCacheBreak, recordRunFacts, recordTranscript, resetProjectForTesting, resetRunFactsDedupeForTest } from './sessionStorage.js'
+import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, flushSessionStorage, getAgentTranscriptPath, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, loadDisplayTranscriptFromJsonlPath, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordPostTurnStall, recordPromptCacheBreak, recordRunFacts, recordTranscript, resetProjectForTesting, resetRunFactsDedupeForTest } from './sessionStorage.js'
 
 describe('session storage', () => {
   const originalSessionId = getSessionId()
@@ -831,6 +831,39 @@ describe('session storage', () => {
       expect(text).toContain('"subtype":"codex_stream_surface"')
       expect(text).toContain('abc123')
       expect(text).toContain('gpt-5.6-luna')
+    })
+  })
+
+  describe('post-turn stall diagnostics', () => {
+    const stallEntry = {
+      phase: 'tool_use_summary' as const,
+      elapsed_ms: 60_001,
+      threshold_ms: 60_000,
+      turn_count: 2,
+      query_source: 'repl_main_thread',
+    }
+
+    test('no owning session writes nothing', () => {
+      expect(readdirSync(tempDir)).toHaveLength(0)
+
+      recordPostTurnStall(stallEntry)
+
+      expect(existsSync(getTranscriptPathForSession(sessionId))).toBe(false)
+      expect(readdirSync(tempDir)).toHaveLength(0)
+    })
+
+    test('an owning session records the phase', async () => {
+      await recordTranscript([
+        createUserMessage({ content: 'real turn', uuid: randomUUID() }),
+      ])
+      await flushSessionStorage()
+
+      recordPostTurnStall(stallEntry)
+
+      const text = await Bun.file(getTranscriptPathForSession(sessionId)).text()
+      expect(text).toContain('"subtype":"post_turn_stall"')
+      expect(text).toContain('"phase":"tool_use_summary"')
+      expect(text).toContain('"threshold_ms":60000')
     })
   })
 

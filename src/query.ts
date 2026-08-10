@@ -108,9 +108,10 @@ import { queryCheckpoint } from './utils/queryProfiler.js'
 import { runTools } from './services/tools/toolOrchestration.js'
 import { applyToolResultBudget } from './utils/toolResultStorage.js'
 import { recordContentReplacement } from './utils/sessionStorage.js'
-import { handleStopHooks } from './query/stopHooks.js'
+import { handleStopHooks, type StopHookResult } from './query/stopHooks.js'
 import { buildQueryConfig } from './query/config.js'
 import { productionDeps, type QueryDeps } from './query/deps.js'
+import { watchPostTurnStall } from './query/postTurnStall.js'
 import type { Terminal, Continue } from './query/transitions.js'
 import { feature } from 'bun:bundle'
 import {
@@ -1088,6 +1089,10 @@ async function* queryLoop(
       // as the natural turn-end path in stopHooks.ts. Main thread only —
       // see stopHooks.ts for the subagent-releasing-main's-lock rationale.
       if (feature('CHICAGO_MCP') && !toolUseContext.agentId) {
+        const disarmStallWatch = watchPostTurnStall('computer_use_cleanup', {
+          turnCount,
+          querySource,
+        })
         try {
           const { cleanupComputerUseAfterTurn } = await import(
             './utils/computerUse/cleanup.js'
@@ -1095,6 +1100,8 @@ async function* queryLoop(
           await cleanupComputerUseAfterTurn(toolUseContext)
         } catch {
           // Failures are silent — this is dogfooding cleanup, not critical path
+        } finally {
+          disarmStallWatch()
         }
       }
 
@@ -1109,8 +1116,23 @@ async function* queryLoop(
     }
 
     // Yield tool use summary from previous turn — haiku (~1s) resolved during model streaming (5-30s)
+    //
+    // When it does NOT resolve, this await is the last thing between the final
+    // assistant message and result emission, and it has no timeout on purpose:
+    // the watch reports the stall and lets the turn keep hanging so the live
+    // stack is still sampleable. See query/postTurnStall.ts.
     if (pendingToolUseSummary) {
-      const summary = await pendingToolUseSummary
+      const disarmStallWatch = watchPostTurnStall('tool_use_summary', {
+        turnCount,
+        querySource,
+        agentId: toolUseContext.agentId,
+      })
+      let summary: ToolUseSummaryMessage | null
+      try {
+        summary = await pendingToolUseSummary
+      } finally {
+        disarmStallWatch()
+      }
       if (summary) {
         yield summary
       }
@@ -1174,19 +1196,31 @@ async function* queryLoop(
         }
       }
       if ((isWithheld413 || isWithheldMedia) && reactiveCompact) {
-        const compacted = await reactiveCompact.tryReactiveCompact({
-          hasAttempted: hasAttemptedReactiveCompact,
+        const disarmStallWatch = watchPostTurnStall('reactive_compact', {
+          turnCount,
           querySource,
-          aborted: toolUseContext.abortController.signal.aborted,
-          messages: messagesForQuery,
-          cacheSafeParams: {
-            systemPrompt,
-            userContext,
-            systemContext,
-            toolUseContext,
-            forkContextMessages: messagesForQuery,
-          },
+          agentId: toolUseContext.agentId,
         })
+        let compacted: Awaited<
+          ReturnType<typeof reactiveCompact.tryReactiveCompact>
+        >
+        try {
+          compacted = await reactiveCompact.tryReactiveCompact({
+            hasAttempted: hasAttemptedReactiveCompact,
+            querySource,
+            aborted: toolUseContext.abortController.signal.aborted,
+            messages: messagesForQuery,
+            cacheSafeParams: {
+              systemPrompt,
+              userContext,
+              systemContext,
+              toolUseContext,
+              forkContextMessages: messagesForQuery,
+            },
+          })
+        } finally {
+          disarmStallWatch()
+        }
 
         if (compacted) {
           // task_budget: same carryover as the proactive path above.
@@ -1322,16 +1356,26 @@ async function* queryLoop(
         return { reason: 'completed' }
       }
 
-      const stopHookResult = yield* handleStopHooks(
-        messagesForQuery,
-        assistantMessages,
-        systemPrompt,
-        userContext,
-        systemContext,
-        toolUseContext,
+      const disarmStopHookStallWatch = watchPostTurnStall('stop_hooks', {
+        turnCount,
         querySource,
-        stopHookActive,
-      )
+        agentId: toolUseContext.agentId,
+      })
+      let stopHookResult: StopHookResult
+      try {
+        stopHookResult = yield* handleStopHooks(
+          messagesForQuery,
+          assistantMessages,
+          systemPrompt,
+          userContext,
+          systemContext,
+          toolUseContext,
+          querySource,
+          stopHookActive,
+        )
+      } finally {
+        disarmStopHookStallWatch()
+      }
 
       if (stopHookResult.preventContinuation) {
         return { reason: 'stop_hook_prevented' }
@@ -1545,6 +1589,10 @@ async function* queryLoop(
       // This is the most likely Ctrl+C path for CU (e.g. slow screenshot).
       // Main thread only — see stopHooks.ts for the subagent rationale.
       if (feature('CHICAGO_MCP') && !toolUseContext.agentId) {
+        const disarmStallWatch = watchPostTurnStall('computer_use_cleanup', {
+          turnCount,
+          querySource,
+        })
         try {
           const { cleanupComputerUseAfterTurn } = await import(
             './utils/computerUse/cleanup.js'
@@ -1552,6 +1600,8 @@ async function* queryLoop(
           await cleanupComputerUseAfterTurn(toolUseContext)
         } catch {
           // Failures are silent — this is dogfooding cleanup, not critical path
+        } finally {
+          disarmStallWatch()
         }
       }
       // Skip the interruption message for submit-interrupts — the queued
