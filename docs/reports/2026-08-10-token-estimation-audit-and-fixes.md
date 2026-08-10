@@ -155,6 +155,19 @@ file-isolation caveat in action.
 - **Calibration is proxy-based.** Re-run against Claude `count_tokens` (free)
   when an Anthropic login exists; only the escalator threshold and the 3
   chars/token band would plausibly move.
+- **Post-audit hardening (same-day follow-ups, second verification pass):**
+  a review of the shipped design confirmed and fixed three further issues —
+  CJK text was under-counted 3.1x at the flat 4 (now 1.5 chars/token via a
+  script-range detector; Cyrillic measured safe and excluded), base64 tool
+  results were under-counted 2.05x (now 1.5 via an alphabet/run-length
+  detector), and density sampling now takes head/middle/tail windows so a
+  long prose header cannot defeat the escalators; the flat 20k overhead was
+  demoted to a FLOOR, with the autocompact check and blocking preempt
+  supplying a measured value from the real system prompt, context blocks,
+  and serialized tool schemas (memoized per tool set). Verified safe as-is:
+  the `stop_reason` terminal-sibling signal (single assignment site per
+  adapter, atomic with final usage). Confirmed but not code-fixable: the
+  compensation-discipline hazard (§7's design rule remains the only guard).
 - **`/stats` cache:** days aggregated before `e1e8a806` keep their inflated
   input/cache numbers until the stats cache rebuilds.
 - **Behavior change to watch:** tool-result-heavy transcripts now autocompact

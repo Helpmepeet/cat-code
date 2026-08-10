@@ -69,10 +69,10 @@ export function getTokenCountFromUsage(usage: Usage): number {
 }
 
 /**
- * Non-message content of every request that a pure rough estimate cannot see:
- * the system prompt, the tool schemas, and userContext. Server usage already
- * includes all of it, so this is added ONLY on the rough-estimate fallback
- * paths, never on top of a usage anchor.
+ * FLOOR for the non-message content of every request that a pure rough estimate
+ * cannot see: the system prompt, the tool schemas, and userContext. Server usage
+ * already includes all of it, so this is added ONLY on the rough-estimate
+ * fallback paths, never on top of a usage anchor.
  *
  * compact.ts:667-670 measures the gap at "~20-40K". The low end is chosen
  * deliberately: minimal-prompt contexts really do sit near the bottom of that
@@ -80,6 +80,13 @@ export function getTokenCountFromUsage(usage: Usage): number {
  * src/utils/swarm/inProcessRunner.ts:1370), and overstating their context would
  * push them into premature compaction. Undershooting a fat prompt only delays
  * autocompact slightly; overshooting a thin one compacts work away for nothing.
+ *
+ * A flat 20K is a floor, not the truth: tool schemas are unbounded, so a session
+ * with heavy MCP tooling exceeds it by construction. The two DECISION call sites
+ * (shouldAutoCompact and the query.ts blocking preempt) can see the real system
+ * prompt, userContext and tool schemas, so they measure them and pass the result
+ * as `nonMessageOverheadTokens`; the larger of the two wins. Display and
+ * telemetry callers have no request context and keep this floor.
  */
 export const NON_MESSAGE_REQUEST_OVERHEAD_TOKENS = 20_000
 
@@ -138,12 +145,20 @@ function getUsageWalkBounds(messages: readonly Message[]): {
  * Rough estimate for a request whose context could not be anchored on server
  * usage. Adds the non-message overhead the estimator cannot see, except for a
  * genuinely empty array — an empty session must still report 0.
+ *
+ * `measured` is a caller-supplied measurement of that overhead (see
+ * NON_MESSAGE_REQUEST_OVERHEAD_TOKENS). It only ever raises the number: a
+ * measurement below the floor means the measurement missed something the floor
+ * was chosen to cover, not that the request is cheaper than the floor.
  */
-function roughEstimateWithOverhead(slice: readonly Message[]): number {
+function roughEstimateWithOverhead(
+  slice: readonly Message[],
+  measured: number | undefined,
+): number {
   if (slice.length === 0) return 0
   return (
     roughTokenCountEstimationForMessages(slice) +
-    NON_MESSAGE_REQUEST_OVERHEAD_TOKENS
+    Math.max(NON_MESSAGE_REQUEST_OVERHEAD_TOKENS, measured ?? 0)
   )
 }
 
@@ -398,6 +413,14 @@ export function tokenCountWithEstimation(
   // sizes; gpt only shrinks the wire, so the estimate stays conservative), so
   // that direction is left untouched.
   currentModel?: string,
+  // Measured non-message request overhead (system prompt + userContext/
+  // systemContext + serialized tool schemas) for the request this count is
+  // gating. Only the two decision call sites can see it — autoCompactIfNeeded
+  // and the query.ts blocking preempt — and it is consumed ONLY on the
+  // pure-rough fallback paths, where NON_MESSAGE_REQUEST_OVERHEAD_TOKENS acts
+  // as its floor. Never applied on an anchored path: server usage already
+  // counts every one of those bytes.
+  nonMessageOverheadTokens?: number,
 ): number {
   const invalidateOpenaiAnchor =
     currentModel !== undefined &&
@@ -429,7 +452,10 @@ export function tokenCountWithEstimation(
         message.type === 'assistant' &&
         getProviderForModel(message.message.model) === 'openai'
       ) {
-        return roughEstimateWithOverhead(messages.slice(boundaryIdx))
+        return roughEstimateWithOverhead(
+          messages.slice(boundaryIdx),
+          nonMessageOverheadTokens,
+        )
       }
       // Walk back past any earlier sibling records split from the same API
       // response (same message.id) so interleaved tool_results between them
@@ -483,5 +509,8 @@ export function tokenCountWithEstimation(
   // No usable anchor at or after the boundary. Estimate only what the next
   // request will actually carry; rough-counting a fullscreen array's whole
   // scrollback here massively overcounts (measured 180,514 vs 14).
-  return roughEstimateWithOverhead(messages.slice(boundaryIdx))
+  return roughEstimateWithOverhead(
+    messages.slice(boundaryIdx),
+    nonMessageOverheadTokens,
+  )
 }

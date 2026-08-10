@@ -559,6 +559,60 @@ describe('non-message request overhead on the rough fallback (bug #3a)', () => {
   })
 })
 
+describe('measured non-message overhead beats the floor', () => {
+  const MEASURED = NON_MESSAGE_REQUEST_OVERHEAD_TOKENS + 45_000
+
+  test('a measurement above the floor replaces it on the rough path', () => {
+    const messages = [createUserMessage('hello')]
+    const withFloor = tokenCountWithEstimation(messages)
+    const withMeasured = tokenCountWithEstimation(
+      messages,
+      undefined,
+      MEASURED,
+    )
+    expect(withMeasured - withFloor).toBe(
+      MEASURED - NON_MESSAGE_REQUEST_OVERHEAD_TOKENS,
+    )
+  })
+
+  test('a measurement below the floor loses to the floor', () => {
+    const messages = [createUserMessage('hello')]
+    expect(tokenCountWithEstimation(messages, undefined, 1_000)).toBe(
+      tokenCountWithEstimation(messages),
+    )
+  })
+
+  test('the anchor path ignores it — server usage already counts it', () => {
+    const anchored = [createUserMessage('question'), createAssistantUsageMessage()]
+    expect(tokenCountWithEstimation(anchored, undefined, MEASURED)).toBe(
+      tokenCountWithEstimation(anchored),
+    )
+  })
+
+  test('an empty session still reports 0, whatever was measured', () => {
+    expect(tokenCountWithEstimation([], undefined, MEASURED)).toBe(0)
+  })
+
+  test('the invalidated-gpt-anchor fallback consumes it', () => {
+    // The decision-relevant fallback: a gpt anchor thrown away on a switch to
+    // Claude re-estimates from scratch, so it is exactly where a 20K floor
+    // under-reports a session whose real tool block is far bigger.
+    const messages = [
+      createUserMessage('question'),
+      createAssistantUsageMessage(),
+    ]
+    const withFloor = tokenCountWithEstimation(messages, 'claude-sonnet-4-6')
+    const withMeasured = tokenCountWithEstimation(
+      messages,
+      'claude-sonnet-4-6',
+      MEASURED,
+    )
+    expect(withMeasured - withFloor).toBe(
+      MEASURED - NON_MESSAGE_REQUEST_OVERHEAD_TOKENS,
+    )
+  })
+})
+
 describe('getTokenUsage synthetic detection', () => {
   function assistantSaying(text: string, model: string): Message {
     return {

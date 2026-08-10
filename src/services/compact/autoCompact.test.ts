@@ -1,15 +1,20 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
 import {
+  _resetToolSchemaTokensMemoForTest,
   getAutoCompactRecoveryWindowTokens,
   getAutoCompactThreshold,
   getBlockingLimit,
   getEffectiveContextWindowSize,
   MANUAL_COMPACT_BUFFER_TOKENS,
+  measureNonMessageOverheadTokens,
   shouldAutoCompact,
 } from './autoCompact.js'
 import { getContextWindowForModel } from '../../utils/context.js'
+import { getEmptyToolPermissionContext, type Tool } from '../../Tool.js'
+import type { ToolUseContext } from '../../Tool.js'
 import type { Message } from '../../types/message.js'
+import { NON_MESSAGE_REQUEST_OVERHEAD_TOKENS } from '../../utils/tokens.js'
 
 const ENV_KEYS = [
   'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE',
@@ -146,5 +151,183 @@ describe('shouldAutoCompact pre-request savings', () => {
     expect(await shouldAutoCompact(messages, MODEL, undefined, 5_000)).toBe(
       true,
     )
+  })
+})
+
+describe('shouldAutoCompact measured non-message overhead', () => {
+  const MODEL = 'claude-sonnet-4-6'
+  let windowSnapshot: string | undefined
+
+  beforeEach(() => {
+    windowSnapshot = process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
+    // Shrink the window so the fixture is a 15KB string instead of 450KB.
+    process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = '60000'
+  })
+
+  afterEach(() => {
+    if (windowSnapshot === undefined) {
+      delete process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
+    } else {
+      process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = windowSnapshot
+    }
+  })
+
+  // The decision-relevant fallback: a gpt-produced anchor is thrown away on a
+  // switch to Claude, so the whole request is rough-estimated and the
+  // non-message overhead is a guess rather than a server measurement.
+  function gptAnchoredConversation(toolResultChars: number): Message[] {
+    return [
+      {
+        type: 'user',
+        uuid: 'user-tool-result',
+        timestamp: '2026-01-01T00:00:00.000Z',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'call_1',
+              content: 'W'.repeat(toolResultChars),
+            },
+          ],
+        },
+      } as unknown as Message,
+      {
+        type: 'assistant',
+        uuid: 'gpt-anchor',
+        timestamp: '2026-01-01T00:00:01.000Z',
+        message: {
+          id: 'gpt-anchor',
+          model: 'gpt-5.6-luna',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'done' }],
+          usage: {
+            input_tokens: 130,
+            output_tokens: 0,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+          },
+        },
+      } as unknown as Message,
+    ]
+  }
+
+  test('a big measured overhead compacts where the 20K floor would not', async () => {
+    const threshold = getAutoCompactThreshold(MODEL)
+    // Sit 2K under the threshold once the floor is added. tool_result content
+    // is rough-counted at 3 chars/token.
+    const contentTokens = threshold - NON_MESSAGE_REQUEST_OVERHEAD_TOKENS - 2_000
+    const messages = gptAnchoredConversation(contentTokens * 3)
+
+    expect(await shouldAutoCompact(messages, MODEL)).toBe(false)
+    expect(
+      await shouldAutoCompact(
+        messages,
+        MODEL,
+        undefined,
+        0,
+        NON_MESSAGE_REQUEST_OVERHEAD_TOKENS + 10_000,
+      ),
+    ).toBe(true)
+  })
+
+  test('a measured overhead under the floor changes nothing', async () => {
+    const threshold = getAutoCompactThreshold(MODEL)
+    const contentTokens = threshold - NON_MESSAGE_REQUEST_OVERHEAD_TOKENS - 2_000
+    const messages = gptAnchoredConversation(contentTokens * 3)
+
+    expect(
+      await shouldAutoCompact(messages, MODEL, undefined, 0, 1_000),
+    ).toBe(false)
+  })
+})
+
+describe('measureNonMessageOverheadTokens', () => {
+  const MODEL = 'claude-sonnet-4-6'
+
+  beforeEach(() => {
+    _resetToolSchemaTokensMemoForTest()
+  })
+
+  afterEach(() => {
+    _resetToolSchemaTokensMemoForTest()
+  })
+
+  function fakeTool(name: string, descriptionChars: number): Tool {
+    return {
+      name,
+      inputJSONSchema: { type: 'object', properties: {} },
+      prompt: async () => 'd'.repeat(descriptionChars),
+    } as unknown as Tool
+  }
+
+  function contextWith(tools: Tool[]): ToolUseContext {
+    return {
+      options: {
+        tools,
+        agentDefinitions: { activeAgents: [], allowedAgentTypes: [] },
+      },
+      getAppState: () => ({
+        toolPermissionContext: getEmptyToolPermissionContext(),
+      }),
+    } as unknown as ToolUseContext
+  }
+
+  function measure(tools: Tool[], systemPrompt: string[] = []) {
+    return measureNonMessageOverheadTokens({
+      model: MODEL,
+      toolUseContext: contextWith(tools),
+      systemPrompt,
+      userContext: {},
+      systemContext: {},
+    })
+  }
+
+  test('counts the serialized tool schemas', async () => {
+    const tokens = await measure([fakeTool('AlphaTool', 30_000)])
+    // 30K chars of description at the structured ratio of 3.
+    expect(tokens).toBeGreaterThan(9_000)
+    expect(tokens).toBeLessThan(11_000)
+  })
+
+  test('counts the system prompt, not only the tools', async () => {
+    const withoutPrompt = await measure([fakeTool('BetaTool', 1_000)])
+    _resetToolSchemaTokensMemoForTest()
+    const withPrompt = await measure(
+      [fakeTool('BetaTool', 1_000)],
+      ['p'.repeat(8_000)],
+    )
+    // Prose ratio of 4 → ~2,000 tokens for the added system prompt.
+    expect(withPrompt - withoutPrompt).toBeGreaterThan(1_800)
+    expect(withPrompt - withoutPrompt).toBeLessThan(2_200)
+  })
+
+  test('a grown tool set is re-measured, not served from the memo', async () => {
+    // Deferred-tool discovery adds tools mid-session. A memo that survived that
+    // would keep reporting the old, smaller tool block forever.
+    const first = await measure([fakeTool('GammaTool', 12_000)])
+    const second = await measure([
+      fakeTool('GammaTool', 12_000),
+      fakeTool('DeltaTool', 12_000),
+    ])
+    expect(second).toBeGreaterThan(first * 1.8)
+  })
+
+  test('an unchanged tool set is stable across calls', async () => {
+    const tools = [fakeTool('EpsilonTool', 5_000)]
+    expect(await measure(tools)).toBe(await measure(tools))
+  })
+
+  test('two live tool sets keep their own measurements', async () => {
+    // Subagents and the compact fork run alongside the main thread with
+    // different tool sets; neither may be served the other's number.
+    const main = [fakeTool('ZetaTool', 20_000)]
+    const fork = [fakeTool('EtaTool', 2_000)]
+    const mainFirst = await measure(main)
+    const forkTokens = await measure(fork)
+    const mainAgain = await measure(main)
+
+    expect(mainAgain).toBe(mainFirst)
+    expect(forkTokens).toBeLessThan(mainFirst)
   })
 })

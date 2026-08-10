@@ -16,6 +16,7 @@ import {
   calculateTokenWarningState,
   getPersistedAutoCompactTracking,
   isAutoCompactEnabled,
+  measureNonMessageOverheadTokens,
   setPersistedAutoCompactConsecutiveFailures,
   type AutoCompactTrackingState,
 } from './services/compact/autoCompact.js'
@@ -678,9 +679,22 @@ async function* queryLoop(
       ) &&
       !collapseOwnsIt
     ) {
+      // Same measurement autocompact uses: when no usage anchor survives (a
+      // gpt→claude switch invalidates one), the count falls back to a rough
+      // estimate whose 20K non-message floor undershoots a heavy tool block.
+      const nonMessageOverheadTokens = await measureNonMessageOverheadTokens({
+        model: currentModel,
+        toolUseContext,
+        systemPrompt,
+        userContext,
+        systemContext,
+      })
       const { isAtBlockingLimit } = calculateTokenWarningState(
-        tokenCountWithEstimation(messagesForQuery, currentModel) -
-          preRequestTokensFreed,
+        tokenCountWithEstimation(
+          messagesForQuery,
+          currentModel,
+          nonMessageOverheadTokens,
+        ) - preRequestTokensFreed,
         currentModel,
       )
       if (isAtBlockingLimit) {
