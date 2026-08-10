@@ -57,6 +57,12 @@ export const OPERATIONAL_EVENTS = [
   'sidecar.ready',
   'sidecar.disconnected',
   'sidecar.exit',
+  // An outbound frame the sidecar refuses to ship. The refusal is deliberate,
+  // but its only account used to be inherited stderr, which dies with the dev
+  // terminal: a dropped result frame then looked exactly like a turn that never
+  // finished. Item A5,
+  // `docs/reports/2026-08-10-overnight-hang-log-request.md`.
+  'frame.dropped',
   'session.restore.started',
   'session.restore.completed',
   'session.restore.failed',
@@ -125,6 +131,10 @@ const OPERATIONAL_EVENT_FIELD_KEYS: Partial<Record<OperationalEvent, readonly st
   'sidecar.ready': ['frame', 'pid'],
   'sidecar.disconnected': ['reason'],
   'sidecar.exit': ['exitCode', 'signal', 'expected'],
+  // `reason` is the drop mechanism from a closed set, `frame` the ServerFrame
+  // kind that was lost. Neither carries payload: what the frame contained is
+  // exactly what must not reach this descriptor.
+  'frame.dropped': ['reason', 'frame'],
   'session.restore.completed': ['messageCount'],
   diagnostic: ['source', 'category', 'queuedBytes', 'reason'],
   'log.coverage.incomplete': ['source', 'reason', 'expected'],

@@ -309,6 +309,17 @@ async function main(): Promise<void> {
         frameKind,
       })
     },
+    // A refused frame is the one loss the transcript cannot show: the session
+    // just goes quiet. `warn` is load-bearing — it is what puts the record in
+    // the anomaly shedding class rather than the sample one.
+    onFrameDropped: (reason, frameKind) => {
+      operational.write({
+        level: 'warn',
+        event: 'frame.dropped',
+        appSessionId: args.sessionId,
+        fields: { reason, frame: frameKind },
+      })
+    },
     log: line => operational.legacy(line),
     // CC-3 — the idle janitor: clean up the socket like the signal handlers do,
     // then exit 0 (a clean, expected shutdown — not a crash). `cleanup` is the

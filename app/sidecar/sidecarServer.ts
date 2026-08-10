@@ -142,6 +142,16 @@ import type { SidecarExtensionsDomain } from './extensionsDomain.js'
 import type { SidecarRemoteSettingsDomain } from './remoteSettingsDomain.js'
 import type { PermissionDisplayFacts } from './permissionDomain.js'
 
+/**
+ * Why an outbound frame was refused, one value per refusing site. Closed and
+ * named for the mechanism so a drop record stays a metadata record: the frame's
+ * own content is the thing that must not reach the diagnostics descriptor.
+ */
+export type OutboundDropReason =
+  | 'clone_failed'
+  | 'not_json_safe'
+  | 'secret_key'
+
 export type SidecarSocketLike = {
   write(data: Uint8Array, onFlushed?: () => void): void
   end(): void
@@ -168,6 +178,13 @@ export type SidecarServerOptions = {
   wrapOutboundFrame?: (frame: ServerFrame, trace: DeliveryTrace) => unknown
   /** Causal descriptor emitted at the actual sidecar boundary, never frame data. */
   onDeliveryStage?: (trace: DeliveryTrace, stage: Extract<DeliveryStage, 'engine.produced' | 'sidecar.received' | 'sidecar.socket.queued' | 'sidecar.socket.sent'>, frameKind: string) => void
+  /**
+   * A frame this server refuses to ship. The `log` lines below stay the live
+   * debugging copy; this is the durable one, because stderr is inherited and
+   * unpersisted (`app/supervisor/supervisor.ts`). Metadata only, per
+   * decisions/OBSERVABILITY-MINIMUM.md §5.
+   */
+  onFrameDropped?: (reason: OutboundDropReason, frameKind: ServerFrame['kind']) => void
   /**
    * Permissions domain capability (P2-4). Optional because the P1-0 probe
    * fixture has no engine app-state store; when absent, `permission.setMode`
@@ -397,6 +414,7 @@ export class SidecarServer {
   private readonly log: (line: string) => void
   private readonly wrapOutboundFrame: ((frame: ServerFrame, trace: DeliveryTrace) => unknown) | null
   private readonly onDeliveryStage: ((trace: DeliveryTrace, stage: Extract<DeliveryStage, 'engine.produced' | 'sidecar.received' | 'sidecar.socket.queued' | 'sidecar.socket.sent'>, frameKind: string) => void) | null
+  private readonly onFrameDropped: ((reason: OutboundDropReason, frameKind: ServerFrame['kind']) => void) | null
   private readonly deliveryStreamEpoch = randomUUID()
   private readonly deliveryProcessInstanceId = randomUUID()
   private deliverySequence = 0
@@ -493,6 +511,7 @@ export class SidecarServer {
     this.log = options.log ?? (line => process.stderr.write(`${line}\n`))
     this.wrapOutboundFrame = options.wrapOutboundFrame ?? null
     this.onDeliveryStage = options.onDeliveryStage ?? null
+    this.onFrameDropped = options.onFrameDropped ?? null
 
     // Subscribe once; broadcast every event to all connected clients as a raw
     // `event` frame. (P1-0 has one client, but the fan-out matches the WS
@@ -647,7 +666,7 @@ export class SidecarServer {
       goalSnapshot: this.controller.getGoalSnapshot(),
       pendingPermissionRequests: this.controller.getPendingPermissionRequests(),
     }
-    const preparedPayload = this.prepareOutboundPayload(readyPayload, 'ready payload')
+    const preparedPayload = this.prepareOutboundPayload(readyPayload, 'ready', 'payload')
     if (preparedPayload) {
       this.send(connection, {
         kind: 'ready',
@@ -773,7 +792,8 @@ export class SidecarServer {
       const message = this.history[i]!
       const prepared = this.prepareOutboundPayload(
         createMessageEvent(message),
-        'history replay event',
+        'event',
+        'history replay',
       )
       if (!prepared) {
         // Un-serializable restored message (should not happen for
@@ -2624,7 +2644,17 @@ export class SidecarServer {
    * Outbound (engine → client): raw-forward, JSON-safe, clone-on-serialize.
    * --------------------------------------------------------------------- */
 
-  private prepareOutboundPayload<T>(payload: T, contextName: string): T | null {
+  /**
+   * `frameKind` is the frame this payload was being built for, so a drop record
+   * names a real `ServerFrame` kind rather than the free-form context string.
+   * `detail` only sharpens the stderr line.
+   */
+  private prepareOutboundPayload<T>(
+    payload: T,
+    frameKind: ServerFrame['kind'],
+    detail?: string,
+  ): T | null {
+    const contextName = detail ? `${frameKind} ${detail}` : frameKind
     // Landmine 2 (immutability): structuredClone
     let cloned: T
     try {
@@ -2635,6 +2665,7 @@ export class SidecarServer {
           error instanceof Error ? error.message : String(error)
         }`,
       )
+      this.onFrameDropped?.('clone_failed', frameKind)
       return null
     }
 
@@ -2648,6 +2679,7 @@ export class SidecarServer {
       this.log(
         `[sidecar] dropped non-JSON-safe payload for ${contextName} at ${safety.path}: ${safety.reason}`,
       )
+      this.onFrameDropped?.('not_json_safe', frameKind)
       return null
     }
 
@@ -2659,7 +2691,7 @@ export class SidecarServer {
       return
     }
 
-    const prepared = this.prepareOutboundPayload(event, `event type=${event.type}`)
+    const prepared = this.prepareOutboundPayload(event, 'event', `type=${event.type}`)
     if (!prepared) {
       return
     }
@@ -2746,7 +2778,8 @@ export class SidecarServer {
           permissionClassifierEnabled: false,
         },
       ),
-      'permission.context snapshot',
+      'permission.context',
+      'snapshot',
     )
     if (!snapshot) {
       return null
@@ -3491,6 +3524,9 @@ export class SidecarServer {
         this.log(
           `[sidecar] BLOCKED outbound frame carrying secret key "${secret.key}" at ${secret.path} (F6)`,
         )
+        // The offending key/path stays on stderr: the durable record gets the
+        // kind and the mechanism only.
+        this.onFrameDropped?.('secret_key', frame.kind)
         this.sendError(
           connection,
           undefined,

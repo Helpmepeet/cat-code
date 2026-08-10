@@ -36,6 +36,31 @@ test('operational events accept only their declared metadata fields', () => {
   expect(parseOperationalRecord({ ...appStart, fields: { reason: 'not valid for startup' } })).toBeNull()
 })
 
+test('a dropped outbound frame carries its mechanism and kind, and nothing else', () => {
+  const dropped = createOperationalRecord(
+    {
+      level: 'warn',
+      event: 'frame.dropped',
+      process: 'sidecar',
+      fields: { reason: 'secret_key', frame: 'event' },
+    },
+    { launchId: 'launch', processInstanceId: 'process' },
+  )
+  expect(dropped.fields).toEqual({ reason: 'secret_key', frame: 'event' })
+  expect(parseOperationalRecord(dropped)).not.toBeNull()
+  // The refused frame's content is the one thing this record must never carry,
+  // so the event owns no slot a payload could ride in.
+  expect(() => createOperationalRecord(
+    {
+      level: 'warn',
+      event: 'frame.dropped',
+      process: 'sidecar',
+      fields: { reason: 'secret_key', category: 'accessToken at message.content' },
+    },
+    { launchId: 'launch', processInstanceId: 'process' },
+  )).toThrow('unsafe field category')
+})
+
 test('the macOS park has its own event so it cannot read as a hung shutdown', () => {
   const parked = createOperationalRecord(
     { level: 'info', event: 'app.parked.windowless', process: 'main' },

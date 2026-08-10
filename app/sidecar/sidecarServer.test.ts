@@ -103,6 +103,10 @@ import {
 import type { SidecarSettingsDomain } from './settingsDomain.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 import {
+  createOperationalRecord,
+  type OperationalRecord,
+} from '../shared/operationalLog.js'
+import {
   enqueue,
   enqueuePendingNotification,
   getCommandQueueSnapshot,
@@ -4354,6 +4358,106 @@ test('F5 — ready frame with non-JSON-safe payload is rejected', () => {
   expect(received.some(f => f.kind === 'ready')).toBe(false)
   // An error should be logged
   expect(loggedMessage).toContain('non-plain object')
+})
+
+/* ------------------------------------------------------------------------- *
+ * A5 (docs/reports/2026-08-10-overnight-hang-log-request.md) — every outbound
+ * drop leaves a durable record. Each test below makes the server genuinely
+ * refuse a frame; the callback runs the result through the real shared record
+ * builder, so a vocabulary that did not admit the event or its fields fails
+ * here rather than silently at runtime on the FD 3 descriptor.
+ * ------------------------------------------------------------------------- */
+
+function makeDropRecordingServer(controller: AppSessionController): {
+  server: SidecarServer
+  records: OperationalRecord[]
+} {
+  const records: OperationalRecord[] = []
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
+    controller,
+    log: () => {},
+    onFrameDropped: (reason, frameKind) => {
+      records.push(
+        createOperationalRecord(
+          {
+            level: 'warn',
+            event: 'frame.dropped',
+            process: 'sidecar',
+            fields: { reason, frame: frameKind },
+          },
+          { launchId: 'launch', processInstanceId: 'process' },
+        ),
+      )
+    },
+  })
+  servers.push(server)
+  return { server, records }
+}
+
+test('A5 — an un-cloneable event is recorded as a dropped frame, not only on stderr', async () => {
+  const controller = new AppSessionController({
+    async *runTurn() {
+      // A function cannot cross `structuredClone`; the payload is refused
+      // before it is ever framed.
+      yield {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'ok' }], reviver: () => 'nope' },
+      } as never
+    },
+  })
+  const { server, records } = makeDropRecordingServer(controller)
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+
+  void controller.submit('go')
+  await waitFor(() => records.length > 0)
+
+  expect(received.some(f => f.kind === 'event' && f.event.type === 'message')).toBe(false)
+  expect(records[0]?.event).toBe('frame.dropped')
+  expect(records[0]?.fields).toEqual({ reason: 'clone_failed', frame: 'event' })
+})
+
+test('A5 — a non-JSON-safe ready payload is recorded as a dropped frame', () => {
+  const controller = new AppSessionController(probeAdapter())
+  // A Date clones fine and is not JSON-safe, so this reaches the SECOND gate.
+  controller.getGoalSnapshot = () => ({
+    threadId: 'thread-123',
+    invalidField: new Date(),
+  } as never)
+  const { server, records } = makeDropRecordingServer(controller)
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+
+  expect(received.some(f => f.kind === 'ready')).toBe(false)
+  expect(records.map(record => record.fields)).toEqual([
+    { reason: 'not_json_safe', frame: 'ready' },
+  ])
+})
+
+test('A5 — a secret-blocked outbound frame is recorded without naming the secret', async () => {
+  const controller = new AppSessionController({
+    async *runTurn() {
+      yield {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'ok', accessToken: 'sk-leak' }] },
+      } as never
+    },
+  })
+  const { server, records } = makeDropRecordingServer(controller)
+  const { socket } = makeSocket()
+  server.addConnection(socket)
+
+  void controller.submit('go')
+  await waitFor(() => records.length > 0)
+
+  expect(records[0]?.fields).toEqual({ reason: 'secret_key', frame: 'event' })
+  // The mechanism travels, the contents do not: the offending key and value
+  // stay on stderr, where no support bundle can pick them up.
+  const written = JSON.stringify(records)
+  expect(written).not.toContain('sk-leak')
+  expect(written).not.toContain('accessToken')
 })
 
 /** Read `updatedInput` off a possibly-null allow response without union quirks. */
