@@ -23,7 +23,7 @@ below are repo-root-relative — open a sub-map directly at that path (e.g.
 
 | Sub-map | Scope | Last refreshed |
 |---|---|---|
-| [`docs/maps/prompt-system.md`](prompt-system.md) | System prompts, instruction injection, output styles, prompt context, and prompt-policy owners. | 2026-08-06 |
+| [`docs/maps/prompt-system.md`](prompt-system.md) | System prompts, instruction injection, output styles, prompt context, and prompt-policy owners. | 2026-08-10 |
 | [`docs/maps/agent-mode.md`](agent-mode.md) | Agent Mode orchestration, deployment-aware behavior, roles, worker identity, and mode-specific prompts. | 2026-07-31 |
 | [`docs/maps/tools-permissions.md`](tools-permissions.md) | Built-in tools, MCP tools, permissions, sandboxing, approvals, and policy gates. | 2026-08-06 |
 | [`docs/maps/tasks-workers.md`](tasks-workers.md) | Background tasks, retained agents, shell tasks, worker lifecycle, and task UI. | 2026-07-14 |
@@ -38,6 +38,7 @@ below are repo-root-relative — open a sub-map directly at that path (e.g.
 | [`docs/maps/ide-lsp.md`](ide-lsp.md) | IDE integration, LSP lifecycle, diagnostics, LSP tool exposure, and plugin LSP config. | 2026-05-12 |
 | [`docs/maps/native-client-integrations.md`](native-client-integrations.md) | Chrome/browser integration, computer-use, native shims, desktop/mobile, and voice. | 2026-05-12 |
 | [`docs/maps/proactive-assistant-services.md`](proactive-assistant-services.md) | Proactive/Kairos-style services, auto dream, MagicDocs, tips, assistant summaries, and triggers. | 2026-07-01 |
+| [`docs/maps/upstream-divergence.md`](upstream-divergence.md) | Fork-vs-upstream divergence ledger: what is deliberate, what is drift, and how to check a behavior against upstream builds. | 2026-08-10 |
 | [`docs/maps/build-release-testing.md`](build-release-testing.md) | Build/dev/compile scripts, feature sets, migrations, release/upgrade/update, lint, and tests. | 2026-07-11 |
 | [`docs/maps/analytics-diagnostics.md`](analytics-diagnostics.md) | Analytics/telemetry, GrowthBook gates, diagnostics, doctor, logging, stats, and cost/status. | 2026-08-06 |
 
@@ -50,6 +51,7 @@ below are repo-root-relative — open a sub-map directly at that path (e.g.
 | Slash commands and command exposure | `src/commands.ts` | `src/commands/`, `src/skills/`, `src/plugins/`, `src/utils/plugins/` | [`docs/maps/plugins-skills-commands.md`](plugins-skills-commands.md) |
 | Build scripts and feature gates | `package.json`, `scripts/build.ts` | Runtime `feature(...)` call sites in entrypoints, commands, tools, and tasks | [`docs/maps/build-release-testing.md`](build-release-testing.md) |
 | Prompt system and instruction behavior | `docs/prompts/` prompt-surface notes | `src/constants/prompts.ts`, `src/context.ts`, `src/utils/queryContext.ts`, `src/tools/AgentTool/` | [`docs/maps/prompt-system.md`](prompt-system.md) |
+| "Does upstream do this differently?" | `package.json` (fork point is the pinned `version`) | `src/constants/corePolicy.ts`, `src/utils/claudemd.ts`, `src/constants/systemPromptSections.ts` | [`docs/maps/upstream-divergence.md`](upstream-divergence.md) |
 | Agent Mode and delegated workers | `src/agent-mode/` | `src/tools/AgentTool/`, `src/tasks/`, `src/screens/REPL.tsx`, `src/QueryEngine.ts` | [`docs/maps/agent-mode.md`](agent-mode.md), [`docs/maps/tasks-workers.md`](tasks-workers.md) |
 | Built-in tools, MCP, permissions, sandboxing | `src/tools.ts`, `src/hooks/useCanUseTool.tsx` | `src/tools/`, `src/services/mcp/`, `src/utils/permissions/`, `src/utils/sandbox/` | [`docs/maps/tools-permissions.md`](tools-permissions.md) |
 | Background tasks and task UI | `src/tasks.ts` | `src/tasks/`, `src/components/tasks/`, `src/hooks/useBackgroundTaskNavigation.ts` | [`docs/maps/tasks-workers.md`](tasks-workers.md) |
