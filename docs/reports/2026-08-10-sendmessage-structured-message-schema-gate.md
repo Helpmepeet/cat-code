@@ -316,10 +316,19 @@ including at `AgentTool.tsx:472`, whose comment reasons explicitly about
 "GrowthBook-in-lazySchema" being safe, an invariant the builder had been silently
 breaking.
 
-Effect: any launch opting into Agent Teams from process start, by env var or
-`--agent-teams`, died at import. That is almost certainly why the corpus contains no
-Agent Teams session at all, and it means the affordance this report is about was gated
-behind a feature that could not start.
+Effect: an **external** opt-in from process start, by `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`
+or `--agent-teams`, died at import. `USER_TYPE=ant` was never affected: the old gate
+returned true on its first line, before the GrowthBook read, so it never reached the
+cycle. The crash was specific to the external path, which is the one this install uses
+(`USER_TYPE` unset).
+
+That explains why the corpus contains no Agent Teams session, and it means the affordance
+this report is about was gated behind a feature that could not start here. Supporting
+evidence, all consistent: zero transcripts carry teammate records, and the only Agent
+Teams artifact on disk is `~/.cat-code/teams/default/inboxes/explore-prior.json` dated
+2026-05-02, whose contents (`"continue prior work"`, `"follow up"`) are verbatim fixtures
+from `SendMessageTool.test.ts:653` — a test writing into the real user home, not a real
+session. Worth fixing separately; not investigated here.
 
 ### Verification
 
