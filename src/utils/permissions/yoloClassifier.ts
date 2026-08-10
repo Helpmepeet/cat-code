@@ -709,6 +709,31 @@ export function buildAutoModePrefixMessages(
 }
 
 /**
+ * The prefix the classifier request actually carries: CLAUDE.md, then the
+ * operator's effective deny rules, then (from the caller) transcript and action.
+ *
+ * `includeSettingsDenyRules` exists so this is reachable from a test. Feature
+ * gates compile to `false` under `bun test`, so the deny-rule branch is
+ * otherwise unexecutable, and G3's mandated live-path assertion — that the deny
+ * message precedes the action — could only be written against source text. That
+ * is the class of test that missed a malformed prompt and an inverted effort
+ * setting twice; an injectable seam is cheaper than a third miss. Production
+ * callers pass nothing and get the gate.
+ */
+export function buildAutoModeRequestPrefix(
+  context: ToolPermissionContext,
+  includeSettingsDenyRules?: boolean,
+): Anthropic.MessageParam[] {
+  const include =
+    includeSettingsDenyRules ??
+    (feature('AUTO_MODE_UPSTREAM_PORT') ? true : false)
+  return buildAutoModePrefixMessages(
+    buildClaudeMdMessage(),
+    include ? buildSettingsDenyRulesMessage(context) : null,
+  )
+}
+
+/**
  * Build the system prompt for the auto mode classifier.
  * Assembles the base prompt with the permissions template and substitutes
  * user allow/deny/environment values from settings.autoMode.
@@ -1026,14 +1051,7 @@ export async function classifyYoloAction(
   const systemPrompt = await buildYoloSystemPrompt(context)
   const transcriptEntries = buildTranscriptEntries(messages)
   const metaLines = await buildActionMetaLines(action.autoModeMeta)
-  const claudeMdMessage = buildClaudeMdMessage()
-  const settingsDenyRulesMessage = feature('AUTO_MODE_UPSTREAM_PORT')
-    ? buildSettingsDenyRulesMessage(context)
-    : null
-  const prefixMessages = buildAutoModePrefixMessages(
-    claudeMdMessage,
-    settingsDenyRulesMessage,
-  )
+  const prefixMessages = buildAutoModeRequestPrefix(context)
 
   let toolCallsLength = actionCompact.length
   let userPromptsLength = 0

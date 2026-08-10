@@ -10,6 +10,7 @@ import type { ToolPermissionContext } from '../../Tool.js'
 import { buildSettingsDenyRulesText } from './autoModeDenyRules.js'
 import {
   buildAutoModePrefixMessages,
+  buildAutoModeRequestPrefix,
   buildSettingsDenyRulesMessage,
 } from './yoloClassifier.js'
 
@@ -178,5 +179,76 @@ describe('buildSettingsDenyRulesMessage', () => {
     const denyText = (denyMessage.content as { text: string }[])[0]!.text
     expect(denyText).toContain('Write(/restricted/*)')
     expect(denyText).toContain('Bash(node -e:*)')
+  })
+})
+
+/**
+ * G3's mandated live-path coverage: the prefix the classifier request actually
+ * carries, with the deny-rule branch forced on.
+ *
+ * Feature gates compile to `false` under `bun test`, so without the injectable
+ * flag this branch is unexecutable and the only available assertion would be
+ * against source text — the class of test that twice failed to notice a
+ * malformed prompt and an inverted effort setting.
+ */
+describe('buildAutoModeRequestPrefix (live path)', () => {
+  const originalApiKey = process.env.ANTHROPIC_API_KEY
+  beforeEach(() => {
+    process.env.ANTHROPIC_API_KEY = 'test-anthropic-key'
+  })
+  afterEach(() => {
+    if (originalApiKey === undefined) delete process.env.ANTHROPIC_API_KEY
+    else process.env.ANTHROPIC_API_KEY = originalApiKey
+  })
+
+  const textOf = (m: { content: unknown }): string =>
+    (m.content as { text: string }[])[0]!.text
+
+  test('omits the deny block entirely when the port is off', () => {
+    const prefix = buildAutoModeRequestPrefix(
+      contextWith({ userSettings: ['Edit(a.ts)'] }),
+      false,
+    )
+    expect(prefix.every(m => !textOf(m).includes('<settings_deny_rules>'))).toBe(
+      true,
+    )
+  })
+
+  test('a Write denial reaches the classifier so a Bash redirection route can be caught', () => {
+    // The permission system already blocks the direct Write. This seam is the
+    // only thing that can catch `echo … > src/secrets.ts` achieving the same
+    // effect, and it can only do that if the rule is in the request.
+    const prefix = buildAutoModeRequestPrefix(
+      contextWith({ userSettings: ['Write(src/secrets.ts)'] }),
+      true,
+    )
+    const deny = prefix.find(m => textOf(m).includes('<settings_deny_rules>'))!
+    expect(deny).toBeDefined()
+    expect(textOf(deny)).toContain('Write(src/secrets.ts)')
+    expect(textOf(deny)).toContain('another tool or indirection')
+  })
+
+  test('a Bash denial reaches the classifier so a scripting-tool route can be caught', () => {
+    const prefix = buildAutoModeRequestPrefix(
+      contextWith({ userSettings: ['Bash(curl:*)'] }),
+      true,
+    )
+    const deny = prefix.find(m => textOf(m).includes('<settings_deny_rules>'))!
+    expect(textOf(deny)).toContain('Bash(curl:*)')
+  })
+
+  test('the deny block precedes the action, after CLAUDE.md', () => {
+    // The caller appends transcript and action after this prefix, so ordering
+    // within the prefix is what decides whether the rules precede the action.
+    const prefix = buildAutoModeRequestPrefix(
+      contextWith({ userSettings: ['Write(src/secrets.ts)'] }),
+      true,
+    )
+    const denyIndex = prefix.findIndex(m =>
+      textOf(m).includes('<settings_deny_rules>'),
+    )
+    expect(denyIndex).toBeGreaterThanOrEqual(0)
+    expect(denyIndex).toBe(prefix.length - 1)
+    for (const m of prefix) expect(m.role).toBe('user')
   })
 })
