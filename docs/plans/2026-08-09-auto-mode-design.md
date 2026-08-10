@@ -524,19 +524,32 @@ discovered-PID kills still block — the last by both upstream's
      not the shipped effort level; the honest place to close that is a second
      pass at medium once the first passes.
 
-**Defect this exposed, 2026-08-10 — not yet fixed.** With the port on and no
-`autoMode.model` configured, `getClassifierModel()` returns `'sonnet'`, so the
-ladder's first attempt on every permission decision targets an Anthropic
-provider this machine cannot authenticate against. The resulting error
-(`ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN env var is required`) is **not**
-recognised by `isProviderAuthenticationError`, which does recognise the Bedrock,
-Vertex, and Codex-pool equivalents. G2 requires symmetric crossing on provider
-failures, so this both violates the spec and, on a GPT-only machine, reproduces
-the fail-closed outage class the port exists to remove — on every call.
+### Provider reality for this fork (operator, 2026-08-10)
 
-Two things are owed: recognise absent first-party Anthropic credentials as a
-provider-family failure (unambiguous, implements G2 as written), and decide what
-`autoMode.model` should default to on a machine with no Anthropic access, which
-is a design question the plan has not answered.
+Recorded because both reviews and the original plan assumed upstream's
+deployment shape and got it backwards:
+
+- **Codex is always available.** It is the reliable path and the production
+  classifier.
+- **Anthropic may be available, intermittently.** It is a fallback, not a
+  primary, and cannot be assumed present.
+- **Bedrock and Vertex are not deployment targets.** No support is owed; the
+  existing handling is harmless but should not be extended.
+
+**Defect this exposed, fixed 2026-08-10.** `getClassifierModel()` defaulted to
+`'sonnet'`, which put an Anthropic provider first on the ladder — so with the
+port on, every permission decision would open by spending an attempt on a
+provider that may be unreachable. The default is now `'gpt-5.6-sol'`, which
+yields Sol → Terra → Luna → Anthropic: the Codex chain first, Anthropic as the
+final fallback. Pinned by a test asserting the ladder opens on Codex and ends on
+Anthropic.
+
+**Residual, low.** An absent first-party Anthropic credential
+(`ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN env var is required`) is still not
+recognised by `isProviderAuthenticationError`, though the Bedrock, Vertex, and
+Codex-pool equivalents are. With the ladder now Codex-first this sits on the
+final leg, where an exhausted ladder failing closed is the correct outcome
+anyway, so it costs diagnostic precision rather than behaviour. Worth closing
+when the ladder is next touched.
 4. ~~Ungate `CLAUDE_CODE_DUMP_AUTO_MODE`~~ — **done** (`537f88e5`), verified
    (amendment F). Cheap, and it is the likely input path for the replay harness.

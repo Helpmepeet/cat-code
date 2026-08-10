@@ -1456,7 +1456,13 @@ function getClassifierModel(): string {
   if (feature('AUTO_MODE_UPSTREAM_PORT')) {
     const envModel = process.env.CLAUDE_CODE_AUTO_MODE_MODEL
     if (envModel) return envModel
-    return getAutoModeConfig()?.model ?? 'sonnet'
+    // Codex-first, deliberately. Upstream defaults to a Sonnet-class classifier
+    // because Anthropic access is its reliable path; here it is the opposite —
+    // Codex is always available and Anthropic access is intermittent. Defaulting
+    // to sonnet puts an unreachable provider first on the ladder, so every
+    // permission decision would open by failing an attempt it cannot complete.
+    // Bedrock and Vertex are not deployment targets for this fork.
+    return getAutoModeConfig()?.model ?? 'gpt-5.6-sol'
   }
   if (process.env.USER_TYPE === 'ant') {
     const envModel = process.env.CLAUDE_CODE_AUTO_MODE_MODEL

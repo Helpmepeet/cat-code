@@ -150,3 +150,16 @@ describe('ordinary deny-rule injection', () => {
     expect(text!.match(/<\/settings_deny_rules>/g)).toHaveLength(1)
   })
 })
+
+describe('auto mode default classifier ladder', () => {
+  test('opens on Codex and keeps Anthropic as the final fallback', () => {
+    // The environment this fork runs in: Codex is always available, Anthropic
+    // access is intermittent, Bedrock and Vertex are not targets. A ladder that
+    // opened on Anthropic would spend the first attempt of every permission
+    // decision on a provider it may not be able to reach.
+    const attempts = getAutoModeClassifierAttempts('gpt-5.6-sol', 4, 'firstParty')
+    expect(attempts[0]).toEqual({ provider: 'openai', model: 'gpt-5.6-sol' })
+    expect(attempts.at(-1)).toEqual({ provider: 'firstParty', model: 'sonnet' })
+    expect(attempts.filter(a => a.provider === 'openai')).toHaveLength(3)
+  })
+})
