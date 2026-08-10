@@ -541,10 +541,13 @@ deployment shape and got it backwards:
 port on, every permission decision would open by spending an attempt on a
 provider that may be unreachable.
 
-The default is now **`gpt-5.6-luna` at `xhigh` effort**, per the operator: Luna
-at maximum effort is the Sonnet-class equivalent upstream uses for this job.
-Verified against the translated request, not the config:
-`{"effort":"xhigh"}`.
+The default is now **`gpt-5.6-luna` at `max` effort**, per the operator: Luna at
+its ceiling is the Sonnet-class equivalent upstream uses for this job.
+
+`max` and `xhigh` are different rungs, not synonyms. The ladder runs low →
+medium → high → xhigh → max → ultra; for Luna, `max` is the top (`ultra` exists
+only for Sol and Terra). `mapEffortToCodex` handles `max` explicitly. Verified
+against the translated request rather than the config: `{"effort":"max"}`.
 
 **This amends F6, which fixed GPT effort at medium.** F6 was decided on the
 stated premise that GPT was a rarely-hit fallback behind Anthropic. That premise

@@ -88,7 +88,7 @@ describe('classifier fallback errors', () => {
     })
 
     expect(thinking).toBeUndefined()
-    expect(codexBody.reasoning).toMatchObject({ effort: 'xhigh' })
+    expect(codexBody.reasoning).toMatchObject({ effort: 'max' })
   })
 })
 
