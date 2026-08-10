@@ -322,9 +322,11 @@ that implements the two-stage architecture.
    repeat denials; carries "unavailable is NOT a policy decision"), then
    `gitStatus`, then `repoVisibility`. Each behind its own flag, each with a
    boundary test proving tool output can never reach the meta channel.
-9. **Two-stage classification — required, sequenced after the replay.**
-   Reframed 2026-08-10; it previously read "deferred, revisit only if replay
-   shows single-stage under-performing", which was wrong in kind.
+9. **Two-stage classification — required. Order it with the replay, not behind
+   it.** Reframed twice on 2026-08-10. It first read "deferred, revisit only if
+   replay shows single-stage under-performing", which was wrong in kind. It then
+   read "sequenced after the replay" on two grounds — cost, and needing replay
+   data to tune thresholds — and re-extraction withdrew both.
 
    **It is not an upstream extra.** `tengu_auto_mode_config.twoStageClassifier`
    defaults to `"both"`, so two-stage is upstream's normal operation. Running
@@ -346,11 +348,13 @@ that implements the two-stage architecture.
    transcripts carrying file contents, tool output, and other agents' messages,
    so that is the operative threat, not a hypothetical one.
 
-   **Why after the replay, not before.** The thresholds are the tunable part and
-   we would be inventing them with no data; the replay produces the evidence
-   that makes them non-arbitrary. **Cost is NOT a reason** — see the mechanism
-   below, which corrects an earlier claim here that two-stage doubles classifier
-   cost. It does not.
+   **Both original reasons for deferring have been withdrawn** after
+   re-extraction. Cost was wrong (stage 1 is a 64-token completion on an
+   already-cached prompt). Threshold tuning does not apply, because severity
+   mode is not the default — the default needs no thresholds at all. See the
+   mechanism below. What remains is only that this is behaviour-changing code
+   and must be replayed like anything else, which is a verification order, not a
+   dependency on replay data.
 
    **What is established, checked 2026-08-10.** Two stages are two real API
    requests, not two readings of one response. Upstream's telemetry schema
@@ -386,8 +390,38 @@ that implements the two-stage architecture.
    - **`t2` is the block threshold.** Stage 2 blocks when its own severity
      exceeds it.
 
-   Defaults are **`t1 = 15`, `t2 = 20`**, configurable per model via
-   `tengu_auto_mode_config.severityByModel[<model>]`.
+   Defaults are **`t1 = 15`, `t2 = 20`** — but see below: they only apply in
+   severity mode, which is not the default.
+
+   **Severity is an optional refinement, not the base mechanism.** The
+   thresholds object is itself the switch. `Q2d()` returns thresholds only when
+   `tengu_auto_mode_config.severityByModel[<model>]` is server-configured, and
+   `null` otherwise. Both suffix selectors branch on that same object:
+
+   ```
+   SIy: thresholds ? severity-suffix : <block>-suffix
+   TIy: thresholds ? severity-stage-2 : <block>-stage-2
+   ```
+
+   With no server config — our situation, since delta 6 pins configuration
+   locally and drops GrowthBook — **the default two-stage flow uses `<block>`
+   yes/no at each stage and no thresholds exist to tune.** This also explains
+   the two stage-1 suffixes that previously looked ambiguous: they are the
+   severity variant and the `<block>` variant, not two stages.
+
+   The default flow, end to end:
+
+   1. **Stage 1**, 64-token budget, stop sequence `</block>`, suffix: *"Stage 1
+      does NOT apply user intent or ALLOW exceptions … Block if ANY rule could
+      apply. Your ENTIRE response MUST begin with `<block>`."*
+   2. **`<block>no` → allowed immediately.** Stage 2 never runs.
+   3. **`<block>yes` → stage 2**, 8192-token budget, suffix: *"explicit (not
+      suggestive or implicit) user confirmation is required to override blocks.
+      Use `<thinking>` before responding with `<block>`."*
+
+   So the base mechanism is a cheap harm-only screen followed by a conditional
+   expensive adjudication with intent. Severity scoring replaces the yes/no at
+   each stage only when someone configures thresholds.
 
    **Two consequences worth carrying forward.**
 
