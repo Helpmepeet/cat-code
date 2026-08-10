@@ -352,13 +352,27 @@ that implements the two-stage architecture.
    evidence that makes them non-arbitrary. Cost is secondary but real: every
    decision becomes two model calls.
 
-   **Re-derive the mechanics before implementing.** This was the
-   lowest-confidence part of the binary extraction. Specifically unresolved:
-   whether `"fast" | "thinking" | "both"` selects which stage-1 variant runs or
-   whether both stages run, and how `t1`/`t2` map onto the verdict. Two
-   stage-1 suffixes exist (one demanding a bare `<block>`, one demanding a bare
-   `<severity>`), which is consistent with either reading. Do not implement from
-   this paragraph; re-extract.
+   **What is established, checked 2026-08-10.** Two stages are two real API
+   requests, not two readings of one response. Upstream's telemetry schema
+   carries them separately: `classifierStage1Severity` /
+   `classifierStage2Severity`, `classifierStage1RequestId` /
+   `classifierStage2RequestId`, `classifierStage1MsgId` /
+   `classifierStage2MsgId`, and per-stage input/output token counts. Distinct
+   request ids and separate token accounting do not arise from a single call.
+
+   This supersedes an earlier note calling the whole mechanism the
+   lowest-confidence extraction. That was written when the only evidence was
+   prompt text: the classifier path showed one `sideQuery` and no second
+   request, `nFd()` returns `"both"` as a catch-all for any unrecognised value
+   rather than as an obviously deliberate mode, and two stage-1 suffixes exist
+   (one demanding a bare `<block>`, one a bare `<severity>`) which read equally
+   as two variants of one stage.
+
+   **Still unresolved, and narrower than before.** What
+   `"fast" | "thinking" | "both"` selects — a stage-1 variant, or whether stage
+   2 runs at all — and how `t1`/`t2` combine two severity scores into one
+   verdict. Re-extract those two before implementing; do not infer them from
+   this paragraph.
 
    Nothing about it ships in the meantime, and G4's settings surface stays
    closed until it does.
