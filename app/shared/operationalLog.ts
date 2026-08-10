@@ -63,6 +63,14 @@ export const OPERATIONAL_EVENTS = [
   // finished. Item A5,
   // `docs/reports/2026-08-10-overnight-hang-log-request.md`.
   'frame.dropped',
+  // Turn lifecycle from the sidecar. A turn that hangs between its last
+  // assistant message and its result used to leave the same log as an idle
+  // session: nothing. `stalled` fires ONCE per turn, after a quiet interval,
+  // and never aborts the turn it reports (OBSERVABILITY-MINIMUM.md §2/§3).
+  // Item A1, `docs/reports/2026-08-10-overnight-hang-log-request.md`.
+  'session.turn.started',
+  'session.turn.completed',
+  'session.turn.stalled',
   'session.restore.started',
   'session.restore.completed',
   'session.restore.failed',
@@ -87,7 +95,7 @@ const OPERATIONAL_FIELD_KEYS = new Set([
   'arch', 'category', 'code', 'count', 'durationMs', 'elapsedMs', 'eventLoopLagMs', 'exitCode',
   'frame', 'messageCount', 'missed', 'navigation', 'packaged', 'pid',
   'platform', 'queuedBytes', 'reason', 'role', 'samples', 'sessions', 'source', 'version',
-  'signal', 'expected', 'visible', 'heapUsedBytes',
+  'signal', 'expected', 'visible', 'heapUsedBytes', 'phase',
 ])
 
 /**
@@ -135,6 +143,15 @@ const OPERATIONAL_EVENT_FIELD_KEYS: Partial<Record<OperationalEvent, readonly st
   // kind that was lost. Neither carries payload: what the frame contained is
   // exactly what must not reach this descriptor.
   'frame.dropped': ['reason', 'frame'],
+  'session.turn.completed': ['durationMs', 'reason'],
+  // `phase` is read off state the sidecar directly holds — whether the turn's
+  // `result` message has already been broadcast — and is `unknown` otherwise.
+  // A confidently wrong phase label sends the next investigation down a false
+  // path, which is worse than the silence this record removes (§4).
+  // `elapsedMs` is the turn's age, not the quiet span: the record fires on a
+  // fixed quiet threshold, so the interesting unknown is how long the turn had
+  // already been running when it went silent.
+  'session.turn.stalled': ['phase', 'elapsedMs'],
   'session.restore.completed': ['messageCount'],
   diagnostic: ['source', 'category', 'queuedBytes', 'reason'],
   'log.coverage.incomplete': ['source', 'reason', 'expected'],

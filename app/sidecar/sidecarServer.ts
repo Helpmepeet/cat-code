@@ -168,6 +168,34 @@ type Connection = {
   deliveryConnectionEpoch: number
 }
 
+/**
+ * Quiet time inside a running turn before it is reported stalled. Long enough
+ * that a slow tool or a long model response is not mistaken for a hang; the
+ * 2026-08-10 turn was quiet for hours.
+ */
+export const DEFAULT_TURN_STALL_MS = 10 * 60 * 1000
+
+/**
+ * What this server can say about a turn without inferring anything: it holds
+ * the active-turn flag, the clock, and whether the turn's `result` message has
+ * come out of the engine yet. `phase` is populated from those and nothing else.
+ */
+export type SidecarTurnLifecycleEvent =
+  | { kind: 'started' }
+  | { kind: 'completed'; durationMs: number; outcome: 'ok' | 'failed' }
+  | {
+      kind: 'stalled'
+      elapsedMs: number
+      /**
+       * `post_result` is the 2026-08-10 shape: the engine emitted its result and
+       * the submit promise never settled, so the stall is on the post-turn path.
+       * `awaiting_result` means the turn itself went quiet. `unknown` means no
+       * engine event has been seen at all since the turn started, which is the
+       * honest answer rather than a guess at which side is hung.
+       */
+      phase: 'awaiting_result' | 'post_result' | 'unknown'
+    }
+
 export type SidecarServerOptions = {
   sessionId: SessionId
   engineSessionId: string
@@ -187,6 +215,16 @@ export type SidecarServerOptions = {
    * decisions/OBSERVABILITY-MINIMUM.md §5.
    */
   onFrameDropped?: (reason: OutboundDropReason, frameKind: ServerFrame['kind']) => void
+  /**
+   * Turn lifecycle, the highest-value record the 2026-08-10 hang investigation
+   * asked for (item A1). `started`/`completed` pair on every route; `stalled`
+   * fires at most once per turn, after `turnStallMs` with no engine event, and
+   * deliberately leaves the turn hung — killing it would destroy the state that
+   * explains it (OBSERVABILITY-MINIMUM.md §3).
+   */
+  onTurnLifecycle?: (event: SidecarTurnLifecycleEvent) => void
+  /** Quiet interval before a running turn is reported stalled. */
+  turnStallMs?: number
   /**
    * Permissions domain capability (P2-4). Optional because the P1-0 probe
    * fixture has no engine app-state store; when absent, `permission.setMode`
@@ -417,6 +455,15 @@ export class SidecarServer {
   private readonly wrapOutboundFrame: ((frame: ServerFrame, trace: DeliveryTrace) => unknown) | null
   private readonly onDeliveryStage: ((trace: DeliveryTrace, stage: Extract<DeliveryStage, 'engine.produced' | 'sidecar.received' | 'sidecar.socket.queued' | 'sidecar.socket.sent'>, frameKind: string) => void) | null
   private readonly onFrameDropped: ((reason: OutboundDropReason, frameKind: ServerFrame['kind']) => void) | null
+  private readonly onTurnLifecycle: ((event: SidecarTurnLifecycleEvent) => void) | null
+  private readonly turnStallMs: number
+  /** Turn-scoped stall state; all of it is reset by the next `startTurn`. */
+  private turnStartedAtMs = 0
+  private turnLastEventAtMs = 0
+  private turnEventCount = 0
+  private turnResultSeen = false
+  private turnStallReported = false
+  private turnStallTimer: ReturnType<typeof setTimeout> | null = null
   private readonly deliveryStreamEpoch = randomUUID()
   private readonly deliveryProcessInstanceId = randomUUID()
   private deliverySequence = 0
@@ -514,11 +561,17 @@ export class SidecarServer {
     this.wrapOutboundFrame = options.wrapOutboundFrame ?? null
     this.onDeliveryStage = options.onDeliveryStage ?? null
     this.onFrameDropped = options.onFrameDropped ?? null
+    this.onTurnLifecycle = options.onTurnLifecycle ?? null
+    this.turnStallMs = options.turnStallMs ?? DEFAULT_TURN_STALL_MS
 
     // Subscribe once; broadcast every event to all connected clients as a raw
     // `event` frame. (P1-0 has one client, but the fan-out matches the WS
     // server's broadcast model.)
     this.unsubscribe = this.controller.subscribe(event => {
+      // Before the broadcast: `broadcastEvent` returns early with no clients
+      // attached, and a turn that hangs with the window closed is exactly the
+      // case this needs to see.
+      this.observeTurnEvent(event)
       this.broadcastEvent(event)
       this.observeGeneratedImageEvent(event)
       // NO per-turn context-breakdown refresh. The analysis is not cheap enough
@@ -881,6 +934,7 @@ export class SidecarServer {
   close(): void {
     this.closed = true
     this.clearIdleTimer()
+    this.clearTurnStallTimer()
     this.unsubscribe?.()
     this.unsubscribe = null
     this.unsubscribePermissionContext?.()
@@ -1361,6 +1415,7 @@ export class SidecarServer {
     if (this.parking || this.activeTurn) return false
     this.runControls?.lockProviderSwitches()
     this.activeTurn = true
+    this.beginTurnObservation()
     if (announcePrompt) {
       this.broadcastPromptMessage(prompt, uuid, isMeta, origin)
     }
@@ -1376,6 +1431,7 @@ export class SidecarServer {
       })
     } catch (error) {
       this.activeTurn = false
+      this.endTurnObservation('failed')
       this.scheduleBoundaryDrain()
       return false
     }
@@ -1389,6 +1445,7 @@ export class SidecarServer {
       })
       .finally(() => {
         this.activeTurn = false
+        this.endTurnObservation(rejection ? 'failed' : 'ok')
         onSettled?.(rejection)
         if (generateTitle) {
           void this.titleGenerator.maybeGenerate(promptText(prompt), title =>
@@ -1398,6 +1455,83 @@ export class SidecarServer {
         this.scheduleBoundaryDrain()
       })
     return true
+  }
+
+  /**
+   * A1 (`docs/reports/2026-08-10-overnight-hang-log-request.md`) — a turn that
+   * hangs and a session sitting idle wrote the same log: nothing. Start and
+   * completion pair on every route out of `startTurn`, including the synchronous
+   * throw, so an unpaired `started` means the turn really never finished.
+   */
+  private beginTurnObservation(): void {
+    const startedAt = Date.now()
+    this.turnStartedAtMs = startedAt
+    this.turnLastEventAtMs = startedAt
+    this.turnEventCount = 0
+    this.turnResultSeen = false
+    this.turnStallReported = false
+    this.onTurnLifecycle?.({ kind: 'started' })
+    this.armTurnStallTimer(this.turnStallMs)
+  }
+
+  private endTurnObservation(outcome: 'ok' | 'failed'): void {
+    if (this.turnStartedAtMs === 0) return
+    const durationMs = Date.now() - this.turnStartedAtMs
+    this.turnStartedAtMs = 0
+    this.clearTurnStallTimer()
+    this.onTurnLifecycle?.({ kind: 'completed', durationMs, outcome })
+  }
+
+  /** Engine liveness for the running turn, and the one phase fact we hold. */
+  private observeTurnEvent(event: AppSessionEvent): void {
+    if (this.turnStartedAtMs === 0) return
+    // Messages ONLY. `turn.status` is this controller's own bookkeeping and it
+    // fires at both ends of every turn, so counting it as liveness would have
+    // reset the quiet clock without the engine having produced anything.
+    if (event.type !== 'message') return
+    this.turnEventCount++
+    this.turnLastEventAtMs = Date.now()
+    if (event.message.type === 'result') this.turnResultSeen = true
+  }
+
+  private armTurnStallTimer(delayMs: number): void {
+    this.clearTurnStallTimer()
+    if (this.turnStallMs <= 0) return
+    const timer = setTimeout(() => {
+      this.turnStallTimer = null
+      if (this.turnStartedAtMs === 0 || this.turnStallReported) return
+      const quietMs = Date.now() - this.turnLastEventAtMs
+      // A long turn is not a stalled one, and neither is one waiting on a
+      // permission the user has not answered: that wait is designed, and its
+      // pending request is state this server directly holds. Re-arming for the
+      // remaining quiet window is not a repeated record: nothing is written on
+      // this path, and the report below still happens at most once per turn (§5).
+      if (quietMs < this.turnStallMs || this.controller.getPendingPermissionRequests().length > 0) {
+        this.armTurnStallTimer(quietMs < this.turnStallMs ? this.turnStallMs - quietMs : this.turnStallMs)
+        return
+      }
+      this.turnStallReported = true
+      this.onTurnLifecycle?.({
+        kind: 'stalled',
+        elapsedMs: Date.now() - this.turnStartedAtMs,
+        // Read off held state only: whether the engine emitted this turn's
+        // result, and whether it emitted anything at all. Never inferred from
+        // the shape of the silence (OBSERVABILITY-MINIMUM.md §4).
+        phase: this.turnEventCount === 0
+          ? 'unknown'
+          : this.turnResultSeen ? 'post_result' : 'awaiting_result',
+      })
+      // Deliberately NOT re-armed and deliberately not aborting the turn: the
+      // hung state is the evidence, and killing it destroys what explains it.
+    }, delayMs)
+    timer.unref?.()
+    this.turnStallTimer = timer
+  }
+
+  private clearTurnStallTimer(): void {
+    if (!this.turnStallTimer) return
+    clearTimeout(this.turnStallTimer)
+    this.turnStallTimer = null
   }
 
   /**

@@ -320,6 +320,40 @@ async function main(): Promise<void> {
         fields: { reason, frame: frameKind },
       })
     },
+    // A1 — the turn lifecycle. `started`/`completed` are the pair that makes a
+    // missing `completed` mean something; `stalled` is the once-per-turn record
+    // for the case the pair alone cannot report while the process is still up.
+    onTurnLifecycle: event => {
+      if (event.kind === 'started') {
+        operational.write({
+          level: 'info',
+          event: 'session.turn.started',
+          appSessionId: args.sessionId,
+          engineSessionId,
+        })
+        return
+      }
+      if (event.kind === 'completed') {
+        operational.write({
+          level: 'info',
+          event: 'session.turn.completed',
+          appSessionId: args.sessionId,
+          engineSessionId,
+          fields: { durationMs: event.durationMs, reason: event.outcome },
+        })
+        return
+      }
+      // `warn` is load-bearing exactly as it is on `frame.dropped`: it puts the
+      // record in the anomaly shedding class rather than the sample one, and a
+      // start marker shed under load is worth nothing (CC-45).
+      operational.write({
+        level: 'warn',
+        event: 'session.turn.stalled',
+        appSessionId: args.sessionId,
+        engineSessionId,
+        fields: { phase: event.phase, elapsedMs: event.elapsedMs },
+      })
+    },
     log: line => operational.legacy(line),
     // CC-3 — the idle janitor: clean up the socket like the signal handlers do,
     // then exit 0 (a clean, expected shutdown — not a crash). `cleanup` is the
