@@ -15,6 +15,7 @@ import {
   MAX_OPERATIONAL_FIELDS,
   MAX_OPERATIONAL_STRING_BYTES,
   createOperationalRecord,
+  parseOperationalRecord,
 } from '../shared/operationalLog.js'
 import {
   CWD_TOKEN_TTL_MS,
@@ -27,6 +28,7 @@ import {
   createRendererHealthMonitor,
   createRendererRecoveryPolicy,
   createStartupTimers,
+  createWindowVisibilityTracker,
   isTerminalLifecycleFrame,
   parseVisibleSessions,
   sanitizeSaveFileName,
@@ -200,6 +202,83 @@ describe('renderer health flight recorder', () => {
     clock += 5_000
     recorder.record({ eventLoopLagMs: 7, visible: false, heapUsedBytes: null })
     expect(recorder.flush()).toEqual({ count: 1, samples: '0:7:-:h' })
+  })
+})
+
+describe('window visibility transitions', () => {
+  test('brackets a hidden episode with exactly two records', () => {
+    const tracker = createWindowVisibilityTracker()
+
+    // The launch show is a transition, so an incident reader has a baseline
+    // rather than a log that first mentions the window when it disappears.
+    expect(tracker.observe('show')).toEqual({ visible: true, reason: 'show' })
+    // macOS fires both for one Cmd-H; the overlap must not double the record.
+    expect(tracker.observe('hide')).toEqual({ visible: false, reason: 'hide' })
+    expect(tracker.observe('minimize')).toBeNull()
+    expect(tracker.observe('restore')).toEqual({ visible: true, reason: 'restore' })
+    expect(tracker.observe('show')).toBeNull()
+  })
+
+  test('a repeated signal in the same direction is not a transition', () => {
+    const tracker = createWindowVisibilityTracker()
+    tracker.observe('show')
+    expect(tracker.observe('minimize')).toEqual({ visible: false, reason: 'minimize' })
+    expect(tracker.observe('minimize')).toBeNull()
+    expect(tracker.observe('hide')).toBeNull()
+    expect(tracker.observe('show')).toEqual({ visible: true, reason: 'show' })
+  })
+
+  test('a transition is a writable, exportable record', () => {
+    const tracker = createWindowVisibilityTracker()
+    const transition = tracker.observe('hide')
+    if (!transition) throw new Error('expected a transition')
+
+    const record = createOperationalRecord(
+      {
+        level: 'info',
+        event: 'window.visibility.changed',
+        process: 'main',
+        fields: { visible: transition.visible, reason: transition.reason },
+      },
+      { launchId: 'launch-1', processInstanceId: 'instance-1' },
+    )
+
+    expect(record.fields).toEqual({ visible: false, reason: 'hide' })
+    // The bundle admits records through the same closed schema, so this is also
+    // the export check.
+    expect(parseOperationalRecord(record)).not.toBeNull()
+  })
+})
+
+describe('renderer process identity', () => {
+  test('the pid a crash report names travels on the window and death records', () => {
+    const created = createOperationalRecord(
+      { level: 'info', event: 'window.created', process: 'main', fields: { pid: 4242 } },
+      { launchId: 'launch-1', processInstanceId: 'instance-1', pid: 11 },
+    )
+    const gone = createOperationalRecord(
+      {
+        level: 'error',
+        event: 'renderer.process.gone',
+        process: 'main',
+        fields: { reason: 'oom', exitCode: 5, pid: 4242 },
+      },
+      { launchId: 'launch-1', processInstanceId: 'instance-1', pid: 11 },
+    )
+    const recovered = createOperationalRecord(
+      { level: 'info', event: 'renderer.recovery.succeeded', process: 'main', fields: { pid: 4343 } },
+      { launchId: 'launch-1', processInstanceId: 'instance-1', pid: 11 },
+    )
+
+    // The record's own `pid` is main's; the renderer's is the field. Conflating
+    // them is what made the 2026-08-09 crash report unmatchable.
+    expect(created.pid).toBe(11)
+    expect(created.fields.pid).toBe(4242)
+    expect(gone.fields).toEqual({ reason: 'oom', exitCode: 5, pid: 4242 })
+    expect(recovered.fields.pid).toBe(4343)
+    for (const record of [created, gone, recovered]) {
+      expect(parseOperationalRecord(record)).not.toBeNull()
+    }
   })
 })
 

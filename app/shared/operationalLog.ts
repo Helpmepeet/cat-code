@@ -23,6 +23,7 @@ export const OPERATIONAL_EVENTS = [
   'process.started',
   'process.exited',
   'window.created',
+  'window.visibility.changed',
   'renderer.load.started',
   'renderer.load.ready',
   'renderer.load.failed',
@@ -92,11 +93,20 @@ const OPERATIONAL_EVENT_FIELD_KEYS: Partial<Record<OperationalEvent, readonly st
   'app.fatal': ['reason'],
   'process.started': ['role', 'pid'],
   'process.exited': ['role', 'exitCode', 'signal', 'expected'],
+  // The renderer's OWN os pid, not main's: a macOS crash report names the
+  // process that died, and matching one to a session previously took
+  // launch-timestamp forensics. `pid` at the record's top level is always the
+  // writing process, so the renderer's has to travel as a field.
+  'window.created': ['pid'],
+  'window.visibility.changed': ['visible', 'reason'],
   'renderer.load.started': ['source'],
   'renderer.load.failed': ['code', 'reason'],
   'renderer.navigation.started': ['navigation'],
-  'renderer.process.gone': ['reason', 'exitCode'],
+  'renderer.process.gone': ['reason', 'exitCode', 'pid'],
   'renderer.recovery.started': ['count', 'reason'],
+  // A reload spawns a NEW renderer process, so the pid recorded at window
+  // creation is stale from here on.
+  'renderer.recovery.succeeded': ['pid'],
   'renderer.recovery.exhausted': ['count', 'reason'],
   'renderer.responsive': ['durationMs'],
   'renderer.health.sample': ['sessions', 'eventLoopLagMs', 'visible', 'heapUsedBytes'],

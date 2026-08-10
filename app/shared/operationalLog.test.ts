@@ -122,6 +122,40 @@ test('renderer health samples carry visibility and heap usage', () => {
   })).toBeNull()
 })
 
+test('window records name the renderer process without opening a free-form slot', () => {
+  const visibility = createOperationalRecord(
+    {
+      level: 'info',
+      event: 'window.visibility.changed',
+      process: 'main',
+      fields: { visible: false, reason: 'minimize' },
+    },
+    { launchId: 'launch', processInstanceId: 'process' },
+  )
+  expect(visibility.fields).toEqual({ visible: false, reason: 'minimize' })
+  expect(parseOperationalRecord(visibility)).not.toBeNull()
+
+  // A visibility transition has no process identity to report, and a window
+  // record has no prose slot: each event admits only what it can mean.
+  expect(() => createOperationalRecord(
+    {
+      level: 'info',
+      event: 'window.visibility.changed',
+      process: 'main',
+      fields: { visible: false, pid: 4242 },
+    },
+    { launchId: 'launch', processInstanceId: 'process' },
+  )).toThrow('unsafe field pid')
+  expect(() => createOperationalRecord(
+    { level: 'info', event: 'window.created', process: 'main', fields: { pid: 4242, reason: 'why' } },
+    { launchId: 'launch', processInstanceId: 'process' },
+  )).toThrow('unsafe field reason')
+  expect(parseOperationalRecord({
+    ...visibility,
+    fields: { ...visibility.fields, pid: 4242 },
+  })).toBeNull()
+})
+
 test('operational text removes every rooted path and URL path/query', () => {
   expect(sanitizeOperationalText('/var/db/private.txt C:\\Users\\alice\\secret https://user:pw@example.com/private/customer?a=1#x'))
     .not.toMatch(/var\/db|Users\\alice|private\/customer|user:pw|\?a=/)

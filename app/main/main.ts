@@ -60,10 +60,12 @@ import {
   createRendererHealthMonitor,
   createRendererRecoveryPolicy,
   createStartupTimers,
+  createWindowVisibilityTracker,
   isTerminalLifecycleFrame,
   parseVisibleSessions,
   RENDERER_RECOVERY_MAX_ATTEMPTS,
   type RendererDeathReason,
+  type WindowVisibilityReason,
   SIDECAR_RUNTIME_ARGS,
   selectTranscriptBackfillCandidates,
   supervisorEventToServerFrame,
@@ -1140,8 +1142,35 @@ function createWindow(): void {
   rendererRecovering = false
   startRendererHealthTimer()
   window.once('closed', stopRendererHealthTimer)
-  logOperational('window.created', 'info')
   mainWindow = window
+
+  // The pid a macOS crash report names. The renderer process does not exist
+  // until a document loads, and it is already gone by `render-process-gone`, so
+  // this is read post-load and remembered for the death record.
+  let rendererOsProcessId: number | null = null
+  let windowCreatedLogged = false
+  const readRendererOsProcessId = (): number | null => {
+    try {
+      const pid = window.webContents.getOSProcessId()
+      return Number.isSafeInteger(pid) && pid > 0 ? pid : null
+    } catch {
+      return null
+    }
+  }
+
+  const windowVisibility = createWindowVisibilityTracker()
+  const logWindowVisibility = (reason: WindowVisibilityReason) => {
+    const transition = windowVisibility.observe(reason)
+    if (!transition) return
+    logOperational('window.visibility.changed', 'info', {
+      visible: transition.visible,
+      reason: transition.reason,
+    })
+  }
+  window.on('show', () => logWindowVisibility('show'))
+  window.on('hide', () => logWindowVisibility('hide'))
+  window.on('minimize', () => logWindowVisibility('minimize'))
+  window.on('restore', () => logWindowVisibility('restore'))
 
   // Drop the reference the moment the window is gone. Without this, `deliver`
   // and `sendHostEvent` keep addressing a destroyed `webContents` for anything
@@ -1297,6 +1326,8 @@ function createWindow(): void {
     logOperational('renderer.process.gone', 'error', {
       reason: details.reason,
       exitCode: details.exitCode,
+      // Remembered from the load: the process is gone, so asking now returns 0.
+      ...(rendererOsProcessId === null ? {} : { pid: rendererOsProcessId }),
     })
     flushRendererHealthFlightRecorder('process_gone')
     // `clean-exit` is a renderer that exited 0, which is what quitting looks like.
@@ -1323,10 +1354,24 @@ function createWindow(): void {
   // same way any reload does (F2).
   window.webContents.on('did-finish-load', () => {
     rendererGone = false
+    rendererOsProcessId = readRendererOsProcessId()
+    const pid: Record<string, number> =
+      rendererOsProcessId === null ? {} : { pid: rendererOsProcessId }
+    // Deliberately here and not beside `new BrowserWindow`: before a document
+    // loads there is no renderer process to name, and the pid is the point of
+    // this record. `renderer.load.started` still marks the construction moment.
+    // Flagged rather than inferred from the pid, so a load that could not report
+    // one does not make the next reload look like a second window.
+    if (!windowCreatedLogged) {
+      windowCreatedLogged = true
+      logOperational('window.created', 'info', pid)
+    }
     if (rendererRecovering) {
       rendererRecovering = false
       rendererRecoveryDialogShown = false
-      logOperational('renderer.recovery.succeeded', 'info')
+      // A reload is a different OS process, so the crash report for a SECOND
+      // death would otherwise have nothing live to match against.
+      logOperational('renderer.recovery.succeeded', 'info', pid)
       startRendererHealthTimer()
     }
   })

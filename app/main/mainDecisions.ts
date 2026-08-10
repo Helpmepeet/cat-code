@@ -15,6 +15,7 @@
  *   - the HC1 validation of a `saveTextToFile` request (P4-35);
  *   - the cancellable post-paint window that arms the background drivers.
  *   - deciding when renderer health loss becomes durable error evidence.
+ *   - collapsing window show/hide signals into visibility transitions.
  *
  * `main.ts` keeps the Electron wiring and calls in here.
  */
@@ -233,6 +234,52 @@ export function createRendererHealthFlightRecorder({
       }
       if (kept.length === 0) return null
       return { count: kept.length, samples: kept.reverse().join(';') }
+    },
+  }
+}
+
+/* ------------------------------------------------------------------------- *
+ * Window visibility transitions (2026-08-10, from the 2026-08-09 incident).
+ *
+ * A 21:50-22:08 "outage" of missed health probes was a HIDDEN WINDOW: Chromium
+ * throttles a hidden renderer's timers, so the probe saw silence. Nothing in the
+ * log said so, because main's only visibility signal is the `visible` flag a
+ * renderer RESPONSE carries (`lastKnownRendererVisible`) — and a missed response
+ * carries nothing, so the flag freezes at whatever it last was precisely when it
+ * matters. These transitions come from the window itself, so they keep arriving
+ * while the renderer is quiet, and they bracket such an episode exactly.
+ * ------------------------------------------------------------------------- */
+
+/** The BrowserWindow signals that change whether a user can see the window. */
+export type WindowVisibilityReason = 'show' | 'hide' | 'minimize' | 'restore'
+
+export type WindowVisibilityTransition = Readonly<{
+  visible: boolean
+  reason: WindowVisibilityReason
+}>
+
+/**
+ * Collapse window signals into transitions: a record per CHANGE, never per
+ * signal.
+ *
+ * The signals overlap — macOS fires hide alongside minimize, and restoring a
+ * hidden-and-minimized window fires both restore and show — so logging each one
+ * would double every user action. Same-direction repeats would not even survive
+ * the sink, whose 1s dedup keys on `event:appSessionId:reason`: two different
+ * reasons for one direction are two keys, so both would be written.
+ *
+ * Starting at `null` rather than `true` means the first show after launch is a
+ * transition, which is what gives an incident reader a visibility baseline
+ * instead of a log that only mentions the window once it is hidden.
+ */
+export function createWindowVisibilityTracker() {
+  let visible: boolean | null = null
+  return {
+    observe(reason: WindowVisibilityReason): WindowVisibilityTransition | null {
+      const next = reason === 'show' || reason === 'restore'
+      if (visible === next) return null
+      visible = next
+      return { visible: next, reason }
     },
   }
 }
