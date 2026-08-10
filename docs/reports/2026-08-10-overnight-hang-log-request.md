@@ -20,7 +20,7 @@ against source on the day it was written.
 
 | # | Request | Disposition |
 |---|---|---|
-| A1 | Turn lifecycle from the sidecar: `session.turn.started` / `completed` / `stalled`, the stall firing once after N minutes of an empty tool queue and no engine events, naming the pending post-turn phase. Called "the single highest-value addition". | **Not yet started.** Needs `app/sidecar/sessionController.ts`, which was held by another session's uncommitted work for the whole dispatch window. Deliberately not raced. |
+| A1 | Turn lifecycle from the sidecar: `session.turn.started` / `completed` / `stalled`, the stall firing once after N minutes of an empty tool queue and no engine events, naming the pending post-turn phase. Called "the single highest-value addition". | ✅ `319d541b` (CC-50). **This row previously claimed A1 needed `app/sidecar/sessionController.ts` and was blocked behind another session holding it. That was wrong on the second half and it cost a dispatch window.** That file builds the engine config; the turn boundary is `activeTurn` in `app/sidecar/sidecarServer.ts`, which was clean throughout. The lesson is the ordinary one: ownership was asserted from a plausible file name instead of being traced in source. |
 | A2 | Slow-await diagnostics on the post-turn path, log-only, no timeout. | ✅ `3a0b066c` (CC-46) |
 | A3 | Provider request START visibility, since `codex_send_path` / `codex_stream_surface` are end-of-stream summaries and a hung request writes nothing. | ✅ `de506a11` (CC-46), as the start marker. The alternative offered — arming `CLAUDE_ENABLE_STREAM_WATCHDOG` — was **declined**: see §D. |
 | A4 | Websocket conversation-lock wait telemetry before any send. | ✅ `caddcd90` (CC-46) |
@@ -78,7 +78,12 @@ vocabulary instead, which the request itself offers as the alternative.
 
 ## E. Open
 
-- **A1 remains unbuilt** and is the request's own highest-value item.
+- **Every item in §A and §B is now built or deliberately declined.** A1 landed
+  as CC-50; the trace's own blind spot (an arrival-driven gap detector cannot
+  see a stall, because no later frame arrives to trip it) landed as CC-49.
+- **Delivery-trace retention is measured and awaiting an owner decision**, the
+  one thing here nobody may decide by proxy:
+  `docs/reports/2026-08-10-delivery-trace-retention-measurement.md`.
 - No record added for this request has yet been produced by a **real** stall;
   all verification used injected timers. First live evidence is the next
   occurrence.
