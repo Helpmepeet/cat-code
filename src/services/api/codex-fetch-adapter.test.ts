@@ -1837,6 +1837,41 @@ describe('codex-fetch-adapter', () => {
     expect((thrown as Error).message).toContain('usage limit reached')
   })
 
+  test('translateCodexWsStreamToAnthropic clamps input_tokens to zero when cached_tokens exceeds input_tokens', async () => {
+    const response = translateCodexWsStreamToAnthropic(
+      (async function* () {
+        yield { type: 'response.output_text.delta', delta: 'hello' }
+        yield {
+          type: 'response.completed',
+          response: {
+            usage: {
+              input_tokens: 400,
+              output_tokens: 12,
+              // Malformed: cached exceeds the inclusive input total.
+              input_tokens_details: { cached_tokens: 900 },
+            },
+          },
+        }
+      })(),
+      'gpt-5.6-luna',
+    )
+
+    const body = await response.text()
+    // message_delta and message_stop both carry the converted usage.
+    const finalUsages = [...body.matchAll(/^data: (\{.*\})$/gm)]
+      .map(match => JSON.parse(match[1]!) as Record<string, unknown>)
+      .filter(
+        payload =>
+          payload.type === 'message_delta' || payload.type === 'message_stop',
+      )
+      .map(payload => payload.usage as { input_tokens: number })
+
+    expect(finalUsages.length).toBe(2)
+    for (const usage of finalUsages) {
+      expect(usage.input_tokens).toBe(0)
+    }
+  })
+
   test('primeCodexEvents returns a failed iterator before a queued turn can proceed', async () => {
     let firstIteratorReturnCalls = 0
     let releaseQueuedTurn: () => void = () => {}

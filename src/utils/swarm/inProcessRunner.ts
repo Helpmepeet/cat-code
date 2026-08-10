@@ -1346,7 +1346,10 @@ export async function runInProcessTeammate(
 
       // Check if compaction is needed before building context
       let contextMessages = allMessages
-      const tokenCount = tokenCountWithEstimation(allMessages)
+      const tokenCount = tokenCountWithEstimation(
+        allMessages,
+        toolUseContext.options.mainLoopModel,
+      )
       if (
         tokenCount >
         getAutoCompactThreshold(toolUseContext.options.mainLoopModel)

@@ -2896,7 +2896,9 @@ function finishStream(
   // so cacheRead/input naively computes an invalid rate >100%.
   // OpenAI input_tokens is inclusive of cached_tokens; Anthropic's is exclusive.
   // Subtract to avoid double-counting in downstream context usage.
-  const uncachedInputTokens = inputTokens - cachedInputTokens
+  // Clamped: a malformed payload reporting cached_tokens > input_tokens would
+  // otherwise emit negative input_tokens into downstream context accounting.
+  const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens)
   controller.enqueue(
     encoder.encode(
       formatSSE(
