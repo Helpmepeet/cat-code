@@ -30,6 +30,13 @@ export type DeliveryComponent =
 export type DeliveryWatermarks = Readonly<{
   produced: number
   socketSent: number
+  /**
+   * Frame arrival observed on the Unix socket itself. `produced` and
+   * `socketSent` ride the sidecar's deliberately lossy FD 3 descriptor, so they
+   * are evidence about diagnostic coverage; only this one is evidence about
+   * frames. Continuity is judged here.
+   */
+  socketReceived: number
   hostReceived: number
   ipcSent: number
   preloadReceived: number
@@ -84,6 +91,14 @@ type StreamState = {
   watermarks: DeliveryWatermarks
   losses: number
   anomalies: Map<string, number>
+  /**
+   * The hole each detector has already reported, so one hole costs one record.
+   * A pinned watermark otherwise re-reports the same hole for every frame that
+   * follows it: the 2026-08-09 incident emitted thousands of `trace.sequence.gap`
+   * records for a single lost run of markers.
+   */
+  reportedGapAt: number | null
+  reportedSourceHoleAt: number | null
   lastTouched: number
 }
 
@@ -237,11 +252,13 @@ export function createDeliveryTraceSink({
         stages: new Map(),
         highestByStage: new Map(),
         watermarks: {
-          produced: 0, socketSent: 0, hostReceived: 0, ipcSent: 0,
+          produced: 0, socketSent: 0, socketReceived: 0, hostReceived: 0, ipcSent: 0,
           preloadReceived: 0, applied: 0, committed: 0, nextExpected: 1,
         },
         losses: 0,
         anomalies: new Map(),
+        reportedGapAt: null,
+        reportedSourceHoleAt: null,
         lastTouched: Date.now(),
       }
       streams.set(key, state)
@@ -254,7 +271,8 @@ export function createDeliveryTraceSink({
     sessionId: string,
     trace: DeliveryTrace,
     stage: DeliveryStage,
-    anomaly: 'trace.sequence.gap' | 'trace.sequence.duplicate' | 'trace.sequence.out_of_order',
+    anomaly: 'trace.sequence.gap' | 'trace.sequence.duplicate' | 'trace.sequence.out_of_order'
+      | 'trace.source.incomplete',
     expected?: number,
   ): void => {
     state.anomalies.set(anomaly, (state.anomalies.get(anomaly) ?? 0) + 1)
@@ -294,9 +312,22 @@ export function createDeliveryTraceSink({
         appendAnomaly(state, sessionId, trace, stage, 'trace.sequence.out_of_order', previousAtStage + 1)
       }
       state.highestByStage.set(stage, Math.max(previousAtStage, trace.sequence))
-      if (stage === 'engine.produced') {
-        if (trace.sequence > state.watermarks.nextExpected) {
+      // Frame continuity is judged where frames actually arrive. A hole here
+      // means a conversation frame did not cross the socket.
+      if (stage === 'supervisor.socket.received' && trace.sequence > state.watermarks.nextExpected) {
+        if (state.reportedGapAt !== state.watermarks.nextExpected) {
+          state.reportedGapAt = state.watermarks.nextExpected
           appendAnomaly(state, sessionId, trace, stage, 'trace.sequence.gap', state.watermarks.nextExpected)
+        }
+      }
+      // A hole in the sidecar's own markers means the FD 3 diagnostics queue
+      // shed them (`app/sidecar/operationalLogger.ts` drops on saturation by
+      // design). That is missing evidence, not a missing frame, and saying so
+      // is the whole point of keeping the two apart.
+      if (stage === 'engine.produced' && trace.sequence > state.watermarks.produced + 1) {
+        if (state.reportedSourceHoleAt !== state.watermarks.produced + 1) {
+          state.reportedSourceHoleAt = state.watermarks.produced + 1
+          appendAnomaly(state, sessionId, trace, stage, 'trace.source.incomplete', state.watermarks.produced + 1)
         }
       }
       state.traces.set(trace.sequence, trace)
@@ -400,17 +431,29 @@ function updateWatermarks(state: StreamState, watermarks: DeliveryWatermarks): D
     while (hasStage(state, next, stage)) next++
     return next - 1
   }
-  const produced = contiguous('engine.produced', watermarks.produced)
+  const socketReceived = contiguous('supervisor.socket.received', watermarks.socketReceived)
+  const hostReceived = contiguous('host.received', watermarks.hostReceived)
   return {
-    produced,
+    produced: contiguous('engine.produced', watermarks.produced),
     socketSent: contiguous('sidecar.socket.sent', watermarks.socketSent),
-    hostReceived: contiguous('host.received', watermarks.hostReceived),
+    socketReceived,
+    hostReceived,
     ipcSent: contiguous('main.ipc.sent', watermarks.ipcSent),
     preloadReceived: contiguousEither(state, ['preload.received', 'renderer.subscription.received'], watermarks.preloadReceived),
     applied: contiguous('renderer.state.applied', watermarks.applied),
     committed: contiguous('renderer.ui.committed', watermarks.committed),
-    nextExpected: produced + 1,
+    nextExpected: arrived(socketReceived, hostReceived) + 1,
   }
+}
+
+/**
+ * Main marks `supervisor.socket.received` and then `host.received` back to back
+ * for every frame off the socket (`app/main/main.ts`), and neither rides FD 3.
+ * Take the furthest of the two so attribution stays truthful for a caller that
+ * marks only one of them.
+ */
+function arrived(socketReceived: number, hostReceived: number): number {
+  return Math.max(socketReceived, hostReceived)
 }
 
 function contiguousEither(state: StreamState, stages: readonly DeliveryStage[], current: number): number {
@@ -451,8 +494,15 @@ function componentFor(stage: DeliveryStage): DeliveryComponent {
 }
 
 function firstMissing(watermarks: DeliveryWatermarks): string | null {
-  if (watermarks.produced > watermarks.socketSent) return 'sidecar.socket.sent'
-  if (watermarks.socketSent > watermarks.hostReceived) return 'host.received'
+  // FD 3 loss only ever depresses the source watermarks, never inflates them,
+  // so a source watermark that still EXCEEDS what arrived is trustworthy in
+  // that one direction: those frames really did not reach main. The reverse
+  // comparison is not evidence of anything, which is why the old chain accused
+  // the sidecar of a stall whenever the diagnostics queue shed a run.
+  const reached = arrived(watermarks.socketReceived, watermarks.hostReceived)
+  if (watermarks.socketSent > reached) return 'supervisor.socket.received'
+  if (watermarks.produced > reached) return 'sidecar.socket.sent'
+  if (reached > watermarks.hostReceived) return 'host.received'
   if (watermarks.hostReceived > watermarks.ipcSent) return 'main.ipc.sent'
   if (watermarks.ipcSent > watermarks.preloadReceived) return 'preload.received'
   if (watermarks.preloadReceived > watermarks.applied) return 'renderer.state.applied'

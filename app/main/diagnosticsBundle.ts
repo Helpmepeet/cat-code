@@ -194,6 +194,13 @@ export function parseDeliveryTraceRecord(value: unknown): TraceRecord | null {
       'processName', 'processInstanceId', 'sessionId', 'streamEpoch', 'sequence', 'stage',
       'expectedSequence', 'observationKind', 'anomalyScope',
     ],
+    // Missing sidecar markers, i.e. incomplete diagnostic coverage. Deliberately
+    // a separate kind from `trace.sequence.gap`, which means a missing frame.
+    'trace.source.incomplete': [
+      'schemaVersion', 'recordKind', 'wallTimestamp', 'monotonicTimestampMs', 'launchId',
+      'processName', 'processInstanceId', 'sessionId', 'streamEpoch', 'sequence', 'stage',
+      'expectedSequence', 'observationKind', 'anomalyScope',
+    ],
     'trace.sequence.duplicate': [
       'schemaVersion', 'recordKind', 'wallTimestamp', 'monotonicTimestampMs', 'launchId',
       'processName', 'processInstanceId', 'sessionId', 'streamEpoch', 'sequence', 'stage',

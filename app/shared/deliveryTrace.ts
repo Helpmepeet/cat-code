@@ -61,6 +61,12 @@ export type DeliveryAnomalyScope = 'source_sequence' | 'stage_sequence'
 /**
  * Shared so the producer and the export validator cannot drift. When they did,
  * the cross-check silently rejected records the producer had just written.
+ *
+ * `source_sequence` belongs to `trace.sequence.gap` alone, which since
+ * 2026-08-10 means a frame that never crossed the socket. Everything else,
+ * `trace.source.incomplete` included, is scoped to one stage's own marker
+ * coverage: the sidecar stages ride a lossy descriptor, so a hole there is
+ * missing evidence rather than a missing frame.
  */
 export function deliveryAnomalyScope(recordKind: string): DeliveryAnomalyScope {
   return recordKind === 'trace.sequence.gap' ? 'source_sequence' : 'stage_sequence'

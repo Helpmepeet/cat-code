@@ -18,7 +18,10 @@ test('delivery trace persists metadata-only stages under private permissions', (
     preloadReceived: 0,
     applied: 0,
     committed: 0,
-    nextExpected: 2,
+    // Nothing was marked at the socket, so sequence 1 is still outstanding as
+    // far as frame arrival is concerned. A source marker alone cannot say a
+    // frame arrived.
+    nextExpected: 1,
   })
   sink.close()
   const dir = join(root, 'logs')
@@ -29,32 +32,127 @@ test('delivery trace persists metadata-only stages under private permissions', (
   expect(readdirSync(dir)).toContain('latest-delivery')
 })
 
-test('delivery trace records sequence gaps and preserves every stage record', () => {
-  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-anomaly-'))
+/** Every record the sink wrote, in order. */
+function recordsWritten(root: string): Array<Record<string, unknown>> {
+  const file = readdirSync(join(root, 'logs')).find(name => name.startsWith('delivery-trace-'))!
+  return readFileSync(join(root, 'logs', file), 'utf8').trim().split('\n').map(line => JSON.parse(line))
+}
+
+function kinds(root: string, recordKind: string): Array<Record<string, unknown>> {
+  return recordsWritten(root).filter(record => record.recordKind === recordKind)
+}
+
+test('a hole in the sidecar markers is reported as missing evidence, not a missing frame', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-fd3-loss-'))
   const sink = createDeliveryTraceSink({ configDir: root, launchId: 'launch' })
-  sink.mark({ sessionId: 'session', trace: mintDeliveryTrace(1, 'stream'), stage: 'engine.produced' })
-  sink.mark({ sessionId: 'session', trace: mintDeliveryTrace(3, 'stream'), stage: 'engine.produced' })
-  sink.mark({ sessionId: 'session', trace: mintDeliveryTrace(3, 'stream'), stage: 'engine.produced' })
+  // The FD 3 queue shed the markers for sequences 2 and 3 while every frame
+  // still crossed the socket. This is the 2026-08-09 incident in miniature.
+  for (const sequence of [1, 2, 3, 4]) {
+    const trace = mintDeliveryTrace(sequence, 'stream')
+    if (sequence === 1 || sequence === 4) sink.mark({ sessionId: 'session', trace, stage: 'engine.produced' })
+    sink.mark({ sessionId: 'session', trace, stage: 'supervisor.socket.received' })
+    sink.mark({ sessionId: 'session', trace, stage: 'host.received' })
+  }
   sink.close()
 
-  const file = readdirSync(join(root, 'logs')).find(name => name.startsWith('delivery-trace-'))!
-  const text = readFileSync(join(root, 'logs', file), 'utf8')
-  expect(text).toContain('trace.sequence.gap')
-  expect(text).toContain('trace.sequence.duplicate')
-  const records = text.trim().split('\n').map(line => JSON.parse(line))
-  expect(records.find(record => record.recordKind === 'trace.sequence.gap')).toMatchObject({
+  expect(kinds(root, 'trace.sequence.gap')).toEqual([])
+  expect(kinds(root, 'trace.source.incomplete')).toMatchObject([{
     stage: 'engine.produced',
+    sequence: 4,
+    expectedSequence: 2,
     observationKind: 'action',
+    anomalyScope: 'stage_sequence',
+  }])
+  // The source watermark stays honestly pinned; frame continuity is intact.
+  expect(sink.summary('session')).toMatchObject({ produced: 1, socketReceived: 4, nextExpected: 5 })
+})
+
+test('a frame that never crossed the socket is still reported as a sequence gap', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-frame-loss-'))
+  const sink = createDeliveryTraceSink({ configDir: root, launchId: 'launch' })
+  for (const sequence of [1, 3]) {
+    const trace = mintDeliveryTrace(sequence, 'stream')
+    sink.mark({ sessionId: 'session', trace, stage: 'engine.produced' })
+    sink.mark({ sessionId: 'session', trace, stage: 'supervisor.socket.received' })
+  }
+  sink.close()
+
+  expect(kinds(root, 'trace.sequence.gap')).toMatchObject([{
+    stage: 'supervisor.socket.received',
+    sequence: 3,
+    expectedSequence: 2,
     anomalyScope: 'source_sequence',
-  })
-  expect(records.find(record => record.recordKind === 'trace.sequence.duplicate')).toMatchObject({
+  }])
+})
+
+test('one hole costs one anomaly record however many frames follow it', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-pinned-'))
+  const sink = createDeliveryTraceSink({ configDir: root, launchId: 'launch' })
+  sink.mark({ sessionId: 'session', trace: mintDeliveryTrace(1, 'stream'), stage: 'supervisor.socket.received' })
+  // Sequence 2 never arrives, so the watermark pins and every later frame is
+  // beyond it. Before the split this emitted one record per frame forever.
+  for (let sequence = 3; sequence <= 40; sequence++) {
+    sink.mark({ sessionId: 'session', trace: mintDeliveryTrace(sequence, 'stream'), stage: 'supervisor.socket.received' })
+  }
+  sink.close()
+
+  expect(kinds(root, 'trace.sequence.gap')).toHaveLength(1)
+})
+
+test('a pinned source watermark no longer accuses the sidecar of a stall', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-attribution-'))
+  const sink = createDeliveryTraceSink({ configDir: root, launchId: 'launch' })
+  // Frames 1..3 all arrive and reach the IPC bridge; the renderer never
+  // acknowledges them. The FD 3 queue shed the `sidecar.socket.sent` markers
+  // for 2 and 3 but kept their `engine.produced` ones, which is precisely the
+  // shape that used to make `produced > socketSent` accuse the sidecar.
+  for (const sequence of [1, 2, 3]) {
+    const trace = mintDeliveryTrace(sequence, 'stream')
+    sink.mark({ sessionId: 'session', trace, stage: 'engine.produced' })
+    if (sequence === 1) sink.mark({ sessionId: 'session', trace, stage: 'sidecar.socket.sent' })
+    for (const stage of ['supervisor.socket.received', 'host.received', 'main.ipc.sent'] as const) {
+      sink.mark({ sessionId: 'session', trace, stage })
+    }
+  }
+  expect(sink.stuckSessionSummaries()[0]?.firstMissingStage).toBe('preload.received')
+  sink.close()
+})
+
+test('source markers that outrun the socket still accuse the transport', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-transport-'))
+  const sink = createDeliveryTraceSink({ configDir: root, launchId: 'launch' })
+  // FD 3 loss only ever depresses these watermarks, so a source stage that
+  // still outruns arrival is trustworthy evidence the frame never landed.
+  for (const sequence of [1, 2]) {
+    const trace = mintDeliveryTrace(sequence, 'stream')
+    sink.mark({ sessionId: 'session', trace, stage: 'engine.produced' })
+    sink.mark({ sessionId: 'session', trace, stage: 'sidecar.socket.sent' })
+  }
+  expect(sink.stuckSessionSummaries()[0]?.firstMissingStage).toBe('supervisor.socket.received')
+  sink.close()
+})
+
+test('a sidecar that produced but never sent is still named', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-unsent-'))
+  const sink = createDeliveryTraceSink({ configDir: root, launchId: 'launch' })
+  sink.mark({ sessionId: 'session', trace: mintDeliveryTrace(1, 'stream'), stage: 'engine.produced' })
+  expect(sink.stuckSessionSummaries()[0]?.firstMissingStage).toBe('sidecar.socket.sent')
+  sink.close()
+})
+
+test('a repeated stage observation is still recorded as a duplicate', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-anomaly-'))
+  const sink = createDeliveryTraceSink({ configDir: root, launchId: 'launch' })
+  const trace = mintDeliveryTrace(1, 'stream')
+  sink.mark({ sessionId: 'session', trace, stage: 'engine.produced' })
+  sink.mark({ sessionId: 'session', trace, stage: 'engine.produced' })
+  sink.close()
+
+  expect(kinds(root, 'trace.sequence.duplicate')).toMatchObject([{
     stage: 'engine.produced',
     observationKind: 'action',
     anomalyScope: 'stage_sequence',
-  })
-  // Later observations cannot advance a contiguous source watermark over the
-  // missing second sequence.
-  expect(sink.summary('session')).toMatchObject({ produced: 1, nextExpected: 2 })
+  }])
 })
 
 test('delivery stages say whether main observed an action or received an acknowledgement', () => {
