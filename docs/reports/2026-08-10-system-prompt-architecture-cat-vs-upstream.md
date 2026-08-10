@@ -170,6 +170,104 @@ Cat Code keeps all ten and adds `session_guidance`, `token_budget`,
 
 ## 3. What upstream changed since the fork
 
+### 3.0 The default prompt split in two, and the model picks
+
+This is the largest architectural change since the fork, and Cat Code has no
+counterpart to any of it.
+
+`getSystemPrompt` (minified `X9`) now ends:
+
+```js
+return[...o?[Kyb(c,t)]:[Fyb(c),Uyb(t),c===null||c.keepCodingInstructions===!0?qyb():null,
+              jyb(),Wyb(d),Vyb()],
+       ...n?.excludeDynamicSections?[rdu(t)]:[], ...kyt()?[vTe]:[], ...h, I0p(t)]
+      .filter((y)=>y!==null)
+```
+
+`o = PE(model)` selects between two whole assemblies:
+
+- **Verbose** (`Fyb`…`Vyb`): the six-section prompt Cat Code inherited — intro,
+  `# System`, `# Doing tasks`, `# Executing actions with care`,
+  `# Using your tools`, `# Tone and style`.
+- **Lean** (`Kyb`): one identity line, the cyber policy, and a five-bullet
+  `# Harness` block. That is the entire static prompt. Everything behavioral
+  moves into the registry sections of §3.1.
+
+The lean block, verbatim:
+
+```
+You are an interactive agent that helps users with software engineering tasks.
+
+{cyber policy}
+
+# Harness
+ - Text you output outside of tool use is displayed to the user as Github-flavored markdown in a terminal.
+ - Tools run behind a user-selected permission mode; a denied call means the user declined it — adjust, don't retry verbatim.
+ - {x0p(model,"lean")} Hooks may intercept tool calls; treat hook output as user feedback.
+ - Prefer the dedicated file/search tools over shell commands when one fits. Independent tool calls can run in parallel in one response.
+ - Reference code as `file_path:line_number` — it's clickable.
+```
+
+The selector:
+
+```js
+PE=Gr((e)=>{if(!e)return!1;
+  if(tr(process.env.CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT))return!0;
+  if(ud(process.env.CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT))return!1;
+  if(!TQg(e))return!0; if(Xe("tengu_velvet_tide",!1))return!0; return pQg(e)})
+
+function TQg(e){ if(QVe(e))return!1; let t=to(e);
+  if(K2(t,"lean_prompt")||t==="claude-mythos-5")return!1;
+  if(t.includes("claude-3-")||t.includes("haiku")||t.includes("sonnet")
+     ||t==="claude-opus-4-0"||t==="claude-opus-4-1"||t==="claude-opus-4-5"
+     ||t==="claude-opus-4-6"||t==="claude-opus-4-7")return!0;
+  return!Ym()}
+```
+
+Verbose is **pinned** for Claude 3, every Haiku, every Sonnet, and Opus 4.0
+through 4.7. Lean is selected for `claude-mythos-5`, for any model carrying a
+`lean_prompt` capability, and for anything else falling through. So the split is
+generational: the enumerated-rules prompt is retained for older models, and the
+newest tier gets a minimal harness description instead.
+
+**Empirical confirmation.** The session that produced this report runs
+`claude-opus-5` under upstream 2.1.x, and its own system prompt contains the
+`# Harness` block above verbatim, including the third bullet resolving to
+`Byb` ("The system may send updates, reminders, or modifications to rules via
+mid-conversation system turns. These are system-controlled, unlike function
+results."). The lean path is live for Opus 5, not an experiment arm.
+
+Two registry sections exist only to backfill the lean path, and both compress a
+whole verbose section into a paragraph:
+
+- `action_caution:L` (`xyb`, returns null when not lean) replaces the ~500-word
+  `# Executing actions with care`: "For actions that are hard to reverse or
+  outward-facing, confirm first unless durably authorized or explicitly told to
+  proceed without asking; approval in one context doesn't extend to the next…
+  Report outcomes faithfully: if tests fail, say so with the output…"
+- `anti_verbosity:L` (`kyb`) replaces `# Tone and style` plus
+  `# Communicating with the user`, and carries its own variants for harnesses
+  where mid-turn text is not shown.
+
+The `:L` suffix on `anti_verbosity${s}`, `action_caution${s}`,
+`session_guidance${s}`, `memory${s}` and `focus_mode${s}` is `s = o ? ":L" : ""`.
+Upstream's name-suffix keying (§2.3) exists *because of* this split: the same
+section name yields different text under lean and verbose.
+
+Also appended at the very end, after the dynamic sections:
+`I0p(model)` emits `<total_tokens>N tokens left</total_tokens>` when
+`CLAUDE_CODE_TOTAL_TOKENS_REMINDER` / the `totalTokensReminder` setting /
+`tengu_lapis_anchor` is one of `infinite|fixed|countdown|padded-countdown`
+(default `off`). Cat Code has no system-prompt token counter; its nearest
+equivalents are the `token_usage` / `output_token_usage` per-turn attachments.
+
+Cat Code by contrast has exactly one assembly (plus the GPT restatement of that
+same assembly) and no selector: `CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT`,
+`lean_prompt` and any equivalent are absent from `src/`. Its only short path is
+the degenerate `CLAUDE_CODE_SIMPLE` branch that emits `CWD:` and `Date:` alone.
+So Cat Code sends `claude-opus-5` and `claude-fable-5` the Claude-4-era verbose
+prompt that upstream now reserves for Opus 4.x and below.
+
 ### 3.1 The registry was rebuilt
 
 | | Sections |
@@ -285,6 +383,28 @@ the qualifying contexts.
 
 ## 5. Recommendations
 
+### Decide first
+
+0. **Whether Cat Code follows upstream into the lean assembly.** Everything else
+   on this list is small next to this. Upstream concluded that its newest tier
+   does better with a five-bullet harness description plus targeted behavioral
+   sections than with six enumerated rule sections, and pinned the old prompt to
+   Opus 4.x and below. Cat Code's default model is `claude-opus-5` and it sends
+   that model the verbose prompt. The fork has also been moving the *other* way:
+   the policy core, `session_transcripts`, `token_budget`, the Agent Mode
+   assembly and the 31 KB GPT restatement all add enumerated text to the verbose
+   path.
+
+   This is a judgment call about prompt philosophy, not a defect, and it should
+   be made deliberately rather than by inertia. The cheap experiment is to add
+   the selector and a `Kyb`-equivalent behind an env var
+   (Cat Code already has the machinery: the assembly is a single array, and the
+   section cache is already keyed by captured inputs, so a `lean` boolean in the
+   key input is all the plumbing a variant needs — no name suffixing required).
+   Then compare on real work. Note that a lean Cat Code prompt would have to keep
+   the policy core, since Cat Code's invariants (§2.2 in particular) are not in
+   upstream's lean block.
+
 ### Adopt
 
 1. **Stale-write guard on the section cache.** Smallest change with a real
@@ -383,3 +503,34 @@ the qualifying contexts.
 - **`--append-subagent-system-prompt` and `--plan-mode-instructions`** exist
   upstream (both hidden flags). Cat Code has neither; whether its
   `getAgentModePromptInjections` covers the first was not traced.
+- **`Ym()` in the lean selector.** For `claude-opus-5` and `claude-fable-5`,
+  `TQg` falls through to `return !Ym()`, and I did not decode `Ym`. The lean
+  path is confirmed live for Opus 5 empirically (this session's own prompt), but
+  the exact predicate for Fable 5 is unverified.
+- **`task_continuity` is currently dead upstream**: it is gated on `wau(model)`,
+  and `function wau(e){return!1}`. Its text is still worth reading as intent, but
+  it ships disabled.
+
+## 7. What this report does not cover
+
+Stated so the next reader knows the edges:
+
+- **The per-turn attachment channel.** Cat Code injects 66 distinct reminder
+  kinds through `src/utils/attachments.ts` (including `plan_mode`,
+  `critical_system_reminder`, `mcp_instructions_delta`, `skill_discovery`,
+  `context_efficiency`, `token_usage`). `mcp_instructions_delta` in particular
+  moves content *out of* the system prompt into attachments, so the two channels
+  are coupled. Only that coupling was traced; the channel itself was not
+  compared against upstream.
+- **Output styles.** The mechanism was traced (`keepCodingInstructions: false`
+  drops `# Doing tasks`, which is why `getCorePolicySection()` exists), but the
+  built-in style text (`Explanatory`, `Learning`) was not compared to upstream.
+- **Tool descriptions.** These are part of the cached model-facing surface and
+  upstream is A/B-ing them (`SG()==="counter_steer"` swaps Glob's description,
+  and the lean path swaps it again via `PE`). Cat Code's `src/tools/*/prompt.ts`
+  drift from upstream was not measured.
+- **Compaction's effect on the prompt**, which has its own study in
+  `docs/reports/2026-08-09-claude-code-compaction-evolution.md`.
+- **Agent Mode and coordinator assemblies** were identified as Cat-only and
+  their selection logic traced, but their prompt text was not reviewed for
+  quality or upstream overlap.
