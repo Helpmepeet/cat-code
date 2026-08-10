@@ -361,6 +361,26 @@ test('a quiet stream whose frames stopped downstream names the stage they stoppe
   }])
 })
 
+test('a renderer acknowledgement the renderer never sends is not read as a lost frame', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-quiescent-acks-'))
+  const clock = { ms: 0 }
+  const sink = quiescenceSink(root, clock)
+  // Delivered all the way to the preload and no further. `renderer.ui.committed`
+  // is sent only for the ACTIVE session once its projection is terminal, so
+  // across 144k real records on 2026-08-10 it appeared ZERO times. Counting its
+  // absence would have made every stall verdict accuse the renderer.
+  for (const stage of ['engine.produced', 'sidecar.socket.sent', 'supervisor.socket.received', 'host.received', 'main.ipc.sent', 'preload.received'] as const) {
+    sink.mark({ sessionId: 'session', trace: mintDeliveryTrace(1, 'stream'), stage, frameKind: 'event', messageKind: 'assistant' })
+  }
+  clock.ms = 600_000
+  sink.close()
+
+  expect(kinds(root, 'trace.stream.quiescent')).toMatchObject([{ deliveryStatus: 'complete' }])
+  // The forensic summary keeps the full chain: there the missing acknowledgement
+  // is a fact about the renderer worth reading, just not a stall verdict.
+  expect(sink.stuckSessionSummaries()[0]?.firstMissingStage).toBe('renderer.state.applied')
+})
+
 test('a stream that resumes and stops again is reported a second time', () => {
   const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-requiet-'))
   const clock = { ms: 0 }

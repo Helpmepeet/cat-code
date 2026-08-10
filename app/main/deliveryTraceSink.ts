@@ -363,7 +363,7 @@ export function createDeliveryTraceSink({
       // turn to be mid-way through.
       if (state.lastMessageKind === null || state.lastMessageKind === 'result') continue
       const { sessionId, streamEpoch } = state
-      const missing = firstMissing(state.watermarks)
+      const missing = firstMissing(state.watermarks, true)
       state.anomalies.set('trace.stream.quiescent', (state.anomalies.get('trace.stream.quiescent') ?? 0) + 1)
       write({
         schemaVersion: 1,
@@ -613,7 +613,17 @@ function componentFor(stage: DeliveryStage): DeliveryComponent {
   return 'renderer'
 }
 
-function firstMissing(watermarks: DeliveryWatermarks): string | null {
+/**
+ * `deliveredOnly` stops the chain at the preload, which is the last hop every
+ * frame is unconditionally marked at (measured 2026-08-10 across 144k real
+ * records: `preload.received` tracks `main.ipc.sent` one for one). The two
+ * renderer stages after it are acknowledgements sent by POLICY — `App.tsx`
+ * emits `renderer.ui.committed` only for the ACTIVE session and only once its
+ * projection is terminal, so it is absent for essentially every conversation
+ * frame. A stall verdict that read that absence as a lost frame would accuse
+ * the renderer on every stall it ever reported.
+ */
+function firstMissing(watermarks: DeliveryWatermarks, deliveredOnly = false): string | null {
   // FD 3 loss only ever depresses the source watermarks, never inflates them,
   // so a source watermark that still EXCEEDS what arrived is trustworthy in
   // that one direction: those frames really did not reach main. The reverse
@@ -632,6 +642,7 @@ function firstMissing(watermarks: DeliveryWatermarks): string | null {
   if (reached > watermarks.hostReceived) return 'host.received'
   if (watermarks.hostReceived > watermarks.ipcSent) return 'main.ipc.sent'
   if (watermarks.ipcSent > watermarks.preloadReceived) return 'preload.received'
+  if (deliveredOnly) return null
   if (watermarks.preloadReceived > watermarks.applied) return 'renderer.state.applied'
   if (watermarks.applied > watermarks.committed) return 'renderer.ui.committed'
   return null
