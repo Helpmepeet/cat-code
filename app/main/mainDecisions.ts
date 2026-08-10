@@ -27,6 +27,7 @@ import {
   type SessionDescriptor,
 } from '../shared/hostApi.js'
 import { MAX_SAVE_NAME_CHARS, MAX_SAVE_TEXT_BYTES } from '../shared/limits.js'
+import { MAX_OPERATIONAL_STRING_BYTES } from '../shared/operationalLog.js'
 import {
   PROTOCOL_VERSION,
   type ServerFrame,
@@ -131,6 +132,107 @@ export function createRendererHealthMonitor({
       lastUnavailableAt = null
       lastResponseAt = current
       return result
+    },
+  }
+}
+
+/* ------------------------------------------------------------------------- *
+ * Health flight recorder (2026-08-10, from the 2026-08-09 renderer OOM).
+ *
+ * Health is measured every 5s but `shouldSample` above logs at most one reading
+ * per 30s, so the renderer that died at 22:13:46 left a last sample 29.8s old:
+ * the six readings that could have shown the terminal lag spike or heap climb
+ * were parsed and then dropped. The steady-state thrift is correct, so the
+ * dedup stays; this ring keeps the raw readings in memory and pays bytes only
+ * where an anomaly already happened.
+ * ------------------------------------------------------------------------- */
+
+/** Twelve 5s readings is a minute of history, ~250 bytes once encoded. */
+export const RENDERER_HEALTH_RING_CAPACITY = 12
+
+export type RendererHealthReading = Readonly<{
+  eventLoopLagMs: number
+  visible: boolean
+  heapUsedBytes: number | null
+}>
+
+export type RendererHealthFlightRecorderFlush = Readonly<{
+  count: number
+  samples: string
+}>
+
+export type RendererHealthFlightRecorder = {
+  /** Keep one raw reading, evicting the oldest past the ring's capacity. */
+  record(reading: RendererHealthReading): void
+  /**
+   * Encode and CLEAR the ring, or null when it holds nothing. Clearing is what
+   * stops a crash that fires both triggers from writing the same readings
+   * twice, and what stops stale pre-recovery readings reaching a later record.
+   */
+  flush(): RendererHealthFlightRecorderFlush | null
+}
+
+/**
+ * One reading as `<ageMs>:<lagMs>:<heapMiB>:<v|h>`, age measured back from the
+ * flush. Unknown heap is `-`.
+ *
+ * ASCII by construction, so the byte budget below can count characters, and
+ * free of the shapes `sanitizeOperationalText` rewrites (no path separator, no
+ * scheme, no `@`) so the stored string is the string that was measured.
+ */
+function encodeHealthReading(ageMs: number, reading: RendererHealthReading): string {
+  const heapMiB = reading.heapUsedBytes === null
+    ? '-'
+    : String(Math.round(reading.heapUsedBytes / 1_048_576))
+  const age = Math.max(0, Math.round(ageMs))
+  return `${age}:${Math.round(reading.eventLoopLagMs)}:${heapMiB}:${reading.visible ? 'v' : 'h'}`
+}
+
+/**
+ * The ring, as one capped string rather than one record per reading.
+ *
+ * Both alternatives are foreclosed by the record contract, not merely awkward:
+ * `sanitizeOperationalFields` takes only scalars and caps at
+ * `MAX_OPERATIONAL_FIELDS`, so twelve readings of four values can be neither an
+ * array nor flat fields; and a burst of same-event records would be collapsed
+ * by the main sink's 1000ms `${event}:${appSessionId}:${reason}` dedup
+ * (`operationalLogSink.ts`), destroying the evidence this exists to keep.
+ *
+ * Whole readings are dropped when the budget runs out, newest kept first:
+ * `sanitizeOperationalText` truncates mid-string, which would corrupt an entry
+ * rather than lose one, and the readings nearest the failure are the point.
+ */
+export function createRendererHealthFlightRecorder({
+  now = () => performance.now(),
+  capacity = RENDERER_HEALTH_RING_CAPACITY,
+  maxBytes = MAX_OPERATIONAL_STRING_BYTES,
+}: {
+  now?: () => number
+  capacity?: number
+  maxBytes?: number
+} = {}): RendererHealthFlightRecorder {
+  let ring: Array<{ at: number } & RendererHealthReading> = []
+  return {
+    record(reading: RendererHealthReading): void {
+      ring.push({ at: now(), ...reading })
+      if (ring.length > capacity) ring.shift()
+    },
+    flush(): RendererHealthFlightRecorderFlush | null {
+      if (ring.length === 0) return null
+      const current = now()
+      const readings = ring
+      ring = []
+      const kept: string[] = []
+      let bytes = 0
+      for (let index = readings.length - 1; index >= 0; index--) {
+        const entry = encodeHealthReading(current - readings[index].at, readings[index])
+        const cost = entry.length + (kept.length === 0 ? 0 : 1)
+        if (bytes + cost > maxBytes) break
+        bytes += cost
+        kept.push(entry)
+      }
+      if (kept.length === 0) return null
+      return { count: kept.length, samples: kept.reverse().join(';') }
     },
   }
 }

@@ -12,11 +12,18 @@ import {
 } from '../shared/limits.js'
 import { MAX_LIVE_SESSIONS } from '../shared/hostApi.js'
 import {
+  MAX_OPERATIONAL_FIELDS,
+  MAX_OPERATIONAL_STRING_BYTES,
+  createOperationalRecord,
+} from '../shared/operationalLog.js'
+import {
   CWD_TOKEN_TTL_MS,
+  RENDERER_HEALTH_RING_CAPACITY,
   RENDERER_RECOVERY_MAX_ATTEMPTS,
   RENDERER_RECOVERY_WINDOW_MS,
   SIDECAR_RUNTIME_ARGS,
   createCwdTokenStore,
+  createRendererHealthFlightRecorder,
   createRendererHealthMonitor,
   createRendererRecoveryPolicy,
   createStartupTimers,
@@ -83,6 +90,116 @@ describe('renderer health evidence', () => {
     })
     clock = 30_000
     expect(health.probe()).toBeNull()
+  })
+})
+
+describe('renderer health flight recorder', () => {
+  /** The live pairing in main: every response is recorded, few are sampled. */
+  function runProbeBurst(
+    recorder: ReturnType<typeof createRendererHealthFlightRecorder>,
+    monitor: ReturnType<typeof createRendererHealthMonitor>,
+    setClock: (value: number) => void,
+  ): Array<{ at: number; eventLoopLagMs: number }> {
+    const sampled: Array<{ at: number; eventLoopLagMs: number }> = []
+    for (let index = 1; index <= 12; index++) {
+      setClock(index * 5_000)
+      const eventLoopLagMs = index === 12 ? 900 : 4
+      recorder.record({
+        eventLoopLagMs,
+        visible: index !== 6,
+        heapUsedBytes: index === 6 ? null : (200 + index) * 1_048_576,
+      })
+      if (monitor.response().shouldSample) sampled.push({ at: index * 5_000, eventLoopLagMs })
+    }
+    return sampled
+  }
+
+  test('a crash surfaces the readings the 30s sample dedup dropped', () => {
+    let clock = 0
+    const monitor = createRendererHealthMonitor({ now: () => clock })
+    const recorder = createRendererHealthFlightRecorder({ now: () => clock })
+
+    const sampled = runProbeBurst(recorder, monitor, value => { clock = value })
+    clock = 62_000
+    const ring = recorder.flush()
+
+    // Two of twelve readings reached the log, and the terminal spike was not
+    // one of them: that gap is the whole defect.
+    expect(sampled).toEqual([
+      { at: 5_000, eventLoopLagMs: 4 },
+      { at: 35_000, eventLoopLagMs: 4 },
+    ])
+    expect(ring?.count).toBe(12)
+    const entries = ring?.samples.split(';') ?? []
+    expect(entries).toHaveLength(12)
+    expect(entries[0]).toBe('57000:4:201:v')
+    // Hidden window, heap unavailable.
+    expect(entries[5]).toBe('32000:4:-:h')
+    // The reading 2s before the crash, carrying the lag spike no record held.
+    expect(entries[11]).toBe('2000:900:212:v')
+  })
+
+  test('the ring fits one record without the sanitizer rewriting it', () => {
+    let clock = 0
+    const monitor = createRendererHealthMonitor({ now: () => clock })
+    const recorder = createRendererHealthFlightRecorder({ now: () => clock })
+    runProbeBurst(recorder, monitor, value => { clock = value })
+    clock = 62_000
+    const ring = recorder.flush()
+    if (!ring) throw new Error('expected a flushed ring')
+
+    const record = createOperationalRecord(
+      {
+        level: 'error',
+        event: 'renderer.health.flight_recorder',
+        process: 'main',
+        fields: { reason: 'process_gone', count: ring.count, samples: ring.samples },
+      },
+      { launchId: 'launch-1', processInstanceId: 'instance-1' },
+    )
+
+    expect(Object.keys(record.fields).length).toBeLessThanOrEqual(MAX_OPERATIONAL_FIELDS)
+    expect(new TextEncoder().encode(ring.samples).byteLength)
+      .toBeLessThanOrEqual(MAX_OPERATIONAL_STRING_BYTES)
+    // No path, URL, or control shape survives redaction, so what was measured
+    // is what is stored.
+    expect(record.fields.samples).toBe(ring.samples)
+  })
+
+  test('drops whole readings rather than letting truncation corrupt one', () => {
+    let clock = 0
+    const recorder = createRendererHealthFlightRecorder({ now: () => clock, maxBytes: 40 })
+    for (let index = 1; index <= 5; index++) {
+      clock = index * 1_000
+      recorder.record({ eventLoopLagMs: 1, visible: true, heapUsedBytes: 100 * 1_048_576 })
+    }
+    clock = 6_000
+    const ring = recorder.flush()
+
+    expect(ring?.count).toBe(3)
+    expect(new TextEncoder().encode(ring?.samples ?? '').byteLength).toBeLessThanOrEqual(40)
+    for (const entry of ring?.samples.split(';') ?? []) {
+      expect(entry).toMatch(/^\d+:\d+:(\d+|-):[vh]$/)
+    }
+    // The readings nearest the failure are the ones kept.
+    expect(ring?.samples.endsWith('1000:1:100:v')).toBe(true)
+    expect(ring?.samples).not.toContain('5000:')
+  })
+
+  test('bounds the ring and empties it once flushed', () => {
+    let clock = 0
+    const recorder = createRendererHealthFlightRecorder({ now: () => clock })
+    for (let index = 1; index <= RENDERER_HEALTH_RING_CAPACITY + 3; index++) {
+      clock = index * 5_000
+      recorder.record({ eventLoopLagMs: index, visible: true, heapUsedBytes: null })
+    }
+    expect(recorder.flush()?.count).toBe(RENDERER_HEALTH_RING_CAPACITY)
+    // A second trigger for the same failure must not re-emit spent evidence.
+    expect(recorder.flush()).toBeNull()
+
+    clock += 5_000
+    recorder.record({ eventLoopLagMs: 7, visible: false, heapUsedBytes: null })
+    expect(recorder.flush()).toEqual({ count: 1, samples: '0:7:-:h' })
   })
 })
 

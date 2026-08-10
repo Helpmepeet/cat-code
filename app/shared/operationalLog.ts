@@ -40,6 +40,7 @@ export const OPERATIONAL_EVENTS = [
   'renderer.health.missed',
   'renderer.health.unavailable',
   'renderer.health.recovered',
+  'renderer.health.flight_recorder',
   'registry.load.completed',
   'registry.write.failed',
   'registry.orphan.swept',
@@ -74,7 +75,7 @@ export type OperationalFields = Readonly<Record<string, SafeOperationalValue>>
 const OPERATIONAL_FIELD_KEYS = new Set([
   'arch', 'category', 'code', 'count', 'durationMs', 'elapsedMs', 'eventLoopLagMs', 'exitCode',
   'frame', 'messageCount', 'missed', 'navigation', 'packaged', 'pid',
-  'platform', 'queuedBytes', 'reason', 'role', 'sessions', 'source', 'version',
+  'platform', 'queuedBytes', 'reason', 'role', 'samples', 'sessions', 'source', 'version',
   'signal', 'expected', 'visible', 'heapUsedBytes',
 ])
 
@@ -102,6 +103,9 @@ const OPERATIONAL_EVENT_FIELD_KEYS: Partial<Record<OperationalEvent, readonly st
   'renderer.health.missed': ['missed', 'elapsedMs', 'visible'],
   'renderer.health.unavailable': ['missed', 'elapsedMs', 'visible'],
   'renderer.health.recovered': ['sessions', 'missed', 'eventLoopLagMs', 'durationMs', 'visible', 'heapUsedBytes'],
+  // `samples` is the health ring, encoded as one capped string because this
+  // vocabulary admits no arrays: see `createRendererHealthFlightRecorder`.
+  'renderer.health.flight_recorder': ['reason', 'count', 'samples'],
   'sidecar.spawn.started': ['pid'],
   'sidecar.spawn.failed': ['reason'],
   'sidecar.ready': ['frame', 'pid'],

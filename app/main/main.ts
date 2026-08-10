@@ -56,6 +56,7 @@ import {
 } from './attachmentGate.js'
 import {
   createCwdTokenStore,
+  createRendererHealthFlightRecorder,
   createRendererHealthMonitor,
   createRendererRecoveryPolicy,
   createStartupTimers,
@@ -225,6 +226,7 @@ const deliverySequences = new Map<SessionId, number>()
 let rendererDocumentId: string = randomUUID()
 let rendererSubscriptionEpoch = 0
 const rendererHealth = createRendererHealthMonitor()
+const rendererHealthFlightRecorder = createRendererHealthFlightRecorder()
 let rendererHealthTimer: ReturnType<typeof setInterval> | null = null
 // Last visibility a renderer response reported. A missed probe carries no
 // payload of its own, so this is the only way an outage record can say whether
@@ -254,6 +256,21 @@ function logOperational(
     process: 'main',
     ...(appSessionId ? { appSessionId } : {}),
     fields,
+  })
+}
+
+/**
+ * Write the buffered health readings the 30s sampling dedup would have dropped.
+ * Called only where the renderer has already failed, so the ring costs bytes in
+ * anomaly neighbourhoods and nowhere else.
+ */
+function flushRendererHealthFlightRecorder(reason: string): void {
+  const ring = rendererHealthFlightRecorder.flush()
+  if (!ring) return
+  logOperational('renderer.health.flight_recorder', 'error', {
+    reason,
+    count: ring.count,
+    samples: ring.samples,
   })
 }
 
@@ -1100,7 +1117,12 @@ function createWindow(): void {
   const healthProbe = () => {
     const event = rendererHealth.probe()
     // Annotation only: the monitor's escalation logic never sees this.
-    if (event) logOperational(event.event, event.level, { ...event.fields, visible: lastKnownRendererVisible })
+    if (event) {
+      logOperational(event.event, event.level, { ...event.fields, visible: lastKnownRendererVisible })
+      if (event.event === 'renderer.health.unavailable') {
+        flushRendererHealthFlightRecorder('health_unavailable')
+      }
+    }
     if (!window.webContents.isDestroyed() && !rendererGone) {
       window.webContents.send(CH_DELIVERY_HEALTH_PROBE)
     }
@@ -1276,6 +1298,7 @@ function createWindow(): void {
       reason: details.reason,
       exitCode: details.exitCode,
     })
+    flushRendererHealthFlightRecorder('process_gone')
     // `clean-exit` is a renderer that exited 0, which is what quitting looks like.
     if (IS_DEV && details.reason !== 'clean-exit') {
       process.stderr.write(
@@ -1775,6 +1798,11 @@ function registerIpcHandlers(): void {
       item.rendererProcessInstanceId.length === 0
     ) return
     lastKnownRendererVisible = item.visible
+    rendererHealthFlightRecorder.record({
+      eventLoopLagMs: item.eventLoopLagMs,
+      visible: item.visible,
+      heapUsedBytes: item.heapUsedBytes,
+    })
     const health = rendererHealth.response()
     if (health.shouldSample) {
       logOperational(health.recovered ? 'renderer.health.recovered' : 'renderer.health.sample', 'info', {
