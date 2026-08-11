@@ -27,6 +27,7 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url))
 const appRoot = join(here, '..')
+const repoRoot = join(appRoot, '..')
 
 const RENDERER_URL = 'http://localhost:5173'
 const READY_TIMEOUT_MS = 15_000
@@ -127,7 +128,15 @@ const electron = supervise(
   spawn(electronBin, ['.'], {
     stdio: 'inherit',
     cwd: appRoot,
-    env: { ...process.env, CATCODE_RENDERER_URL: RENDERER_URL },
+    // Electron's cwd is appRoot (needed for `.` to resolve the app), so without
+    // this the primary startup session (main.ts's process.cwd() fallback)
+    // opens in app/ instead of the repo. Dev-only: devHarness.ts ignores this
+    // var entirely when app.isPackaged.
+    env: {
+      ...process.env,
+      CATCODE_RENDERER_URL: RENDERER_URL,
+      CATCODE_INITIAL_CWD: repoRoot,
+    },
   }),
 )
 
