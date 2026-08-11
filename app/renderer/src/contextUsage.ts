@@ -86,15 +86,19 @@ export type ContextUsage = {
  * Pressure → tone on the prototype's ladder: `>= 90` danger, `>= 70` warn,
  * otherwise the pink brand hue.
  *
- * ONE ladder serves the whole context chip. `ContextChip` (`Surfaces.jsx:474`,
- * the donut + its Context row) and `PlanUsageRow` (`:386`, the 5-hour and weekly
- * rows) are the identical expression in the prototype, so the popover never
- * shows two percentages coloured by different rules.
+ * ONE ladder serves the whole context chip: the donut face, its popover's
+ * Context row, and the per-category donut's center readout
+ * (`ComposerActionsBar.tsx` `ContextGauge`/`ContextUsagePanel`/
+ * `ContextBreakdownDonut`) all read this same expression, so the popover never
+ * shows two percentages coloured by different rules. Plan/quota usage (the
+ * prototype's `PlanUsageRow`, `Surfaces.jsx:386`) is deliberately NOT rendered
+ * in this popover at all (operator call, 2026-08-05: it is visible elsewhere,
+ * and this popover is about the context WINDOW, not the account's rate
+ * limits) — so it never competed for this ladder in the first place.
  *
  * Deliberately NOT `usageTone` (`accountsPageModel.ts:94`), the ACCOUNT-quota
  * ladder, whose healthy band is green and whose break is 65. Reading it here
- * printed a green `34%` inside a popover opened by a pink donut, and green plan
- * rows under a pink context row.
+ * printed a green `34%` inside a popover opened by a pink donut.
  */
 export function pressureTone(percent: number): Tone {
   if (percent >= 90) return 'danger'
