@@ -24,7 +24,9 @@ if (!root) {
 // a toast is exactly the kind of chrome that would silently miss the accent.
 createRoot(root).render(
   <StrictMode>
-    <RendererErrorBoundary>
+    <RendererErrorBoundary
+      onFault={fault => reportFault(fault.kind, fault.message)}
+    >
       <AccentThemeProvider>
         <ToastHost>
           <ReasoningLayoutProvider>
@@ -43,7 +45,10 @@ createRoot(root).render(
 // Both handlers run only after something has already failed, so neither may
 // raise a second fault of its own: a throw here re-enters `error` and turns one
 // failure into a loop.
-function reportFault(kind: 'javascript' | 'promise', message: string): void {
+function reportFault(
+  kind: 'javascript' | 'promise' | 'component',
+  message: string,
+): void {
   try {
     getBridge().reportRendererFault(kind, message)
   } catch {
