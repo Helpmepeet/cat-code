@@ -54,7 +54,7 @@ const MATCH_TYPE_LABEL = {
  * Write paths, deliberately narrow:
  *   - mode switching via `permission.setMode` (C2). Classifier-backed `auto`
  *     is offered only while the engine gate is available; `bypassPermissions`
- *     still requires its trusted launch opt-in. It sets THIS SESSION's mode only; it has no
+ *     is always available in the app. It sets THIS SESSION's mode only; it has no
  *     destination for `permissions.defaultMode` (PERMISSION-BOUNDARY.md §3),
  *     which is why the default is read-only here;
  *   - "always allow" lives on the QUEUE cards as C1 suggestion selection.
@@ -170,10 +170,7 @@ export function PermissionRulesEditor({
               {showModes
                 ? PERMISSION_SET_MODE_MODES.map(mode => {
                     const unavailable =
-                      (mode === 'auto' &&
-                        !context.permissionClassifierEnabled) ||
-                      (mode === 'bypassPermissions' &&
-                        !context.isBypassPermissionsModeAvailable)
+                      mode === 'auto' && !context.permissionClassifierEnabled
                     return (
                       <button
                         aria-pressed={context.mode === mode}
@@ -188,9 +185,7 @@ export function PermissionRulesEditor({
                         title={
                           mode === 'auto' && unavailable
                             ? 'Auto mode is unavailable for this model or has been disabled in settings.'
-                            : mode === 'bypassPermissions' && unavailable
-                              ? 'Bypass mode has to be turned on when Cat Code starts.'
-                              : undefined
+                            : undefined
                         }
                         type="button"
                       >

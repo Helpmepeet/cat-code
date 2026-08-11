@@ -132,7 +132,7 @@ test('parsePlanSteps returns an empty list for null/empty/unstructured plans', (
   expect(parsePlanSteps('Just a paragraph of prose with no list markers.')).toEqual([])
 })
 
-test('the plan approval menu never offers bypassPermissions — rejected at the boundary (C2)', () => {
+test('the plan approval menu keeps its two-choice approval flow', () => {
   const modes = PLAN_APPROVE_OPTIONS.map(option => option.mode)
   expect(modes).toEqual(['acceptEdits', 'default'])
   expect(modes).not.toContain('bypassPermissions')

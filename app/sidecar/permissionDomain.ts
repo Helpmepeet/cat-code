@@ -97,8 +97,8 @@ export function createSidecarPermissionDomain(
       // `applyPermissionUpdate({type:'setMode'})`, which skips that cleanup.
       // Policy guards already ran at the boundary: `auto` reaches here only
       // while the classifier feature and live gate are enabled, and
-      // `bypassPermissions` reaches here only when the trusted launch flag
-      // enabled it. `transitionPermissionMode` applies the resulting mode.
+      // `bypassPermissions` reaches here only after the user selects it in the
+      // app. `transitionPermissionMode` applies the resulting mode.
       appStateStore.setState(prev => {
         const current = prev.toolPermissionContext.mode
         if (current === mode) return prev

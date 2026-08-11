@@ -51,6 +51,7 @@ test('showModes=true: the pill AND the interactive selector both render', () => 
   expect(html).toContain('>Accept edits<')
   expect(html).toContain('>Auto<')
   expect(html).toContain('>Don&#x27;t ask<')
+  expect(html).toContain('>Bypass<')
   expect(html).not.toContain('>acceptEdits<')
   // This fixture reports the classifier unavailable, so Auto is visible but
   // cannot issue a mode transition.

@@ -160,20 +160,20 @@ export async function loadSidecarToolPermissionContext(): Promise<ToolPermission
       toolPermissionContext,
     )
   }
-  return {
-    ...toolPermissionContext,
-    // PERMISSION-BOUNDARY.md §3: bypass is only grantable from a TRUSTED
-    // surface. The desktop's trusted surface is the launch env var
-    // `CATCODE_ALLOW_BYPASS=1` (the operator sets it before the renderer loads,
-    // mirroring the CLI's --dangerously-skip-permissions launch flag). Both this
-    // trusted capability AND the engine's settings/Statsig policy must allow
-    // bypass; a launch env var must never override managed policy. Read here at
-    // session construction — NEVER from a renderer frame — so a browser-like
-    // renderer cannot self-escalate.
-    isBypassPermissionsModeAvailable:
-      toolPermissionContext.isBypassPermissionsModeAvailable &&
-      process.env.CATCODE_ALLOW_BYPASS === '1',
-  }
+  // Bypass is an ordinary session mode in the desktop app (operator ruling
+  // 2026-08-11, PERMISSION-BOUNDARY.md §3, replacing the CATCODE_ALLOW_BYPASS
+  // launch grant), so there is no desktop-local gate to apply here and no
+  // override of the field either. What flows through from
+  // `initializeToolPermissionContext` is the ENGINE's own policy answer
+  // (`permissionSetup.ts:963`): false when the `tengu_disable_bypass_permissions_mode`
+  // Statsig gate is on or settings carry `permissions.disableBypassPermissionsMode`,
+  // and false again when auto-mode dangerous-rule stripping ran above. Managed
+  // policy therefore still disables bypass on the desktop; what was removed is
+  // the launch-flag ceremony, not the policy. Distinct from the engine's OTHER
+  // bypass killswitch (`isBypassPermissionsModeDisabled()` /
+  // `bypassPermissionsKillswitch`), which has zero call sites in `app/` and is
+  // NOT a control here.
+  return toolPermissionContext
 }
 
 /**

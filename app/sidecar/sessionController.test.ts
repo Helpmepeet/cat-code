@@ -507,10 +507,7 @@ test('PERMISSION-BOUNDARY §8 fix — settings rules and defaultMode actually lo
     )
     expect(context.alwaysDenyRules.userSettings).toContain('WebSearch')
     expect(context.mode).toBe('acceptEdits')
-    // §3 pin: no trusted desktop grant surface exists for bypass, so the
-    // loader must keep the engine-side availability backstop OFF regardless
-    // of what settings policy alone would report.
-    expect(context.isBypassPermissionsModeAvailable).toBe(false)
+    expect(context.isBypassPermissionsModeAvailable).toBe(true)
   } finally {
     if (previousConfigDir === undefined) {
       delete process.env.CLAUDE_CONFIG_DIR
@@ -522,7 +519,9 @@ test('PERMISSION-BOUNDARY §8 fix — settings rules and defaultMode actually lo
   }
 })
 
-test('PERMISSION-BOUNDARY §3 — managed bypass policy still wins over the trusted launch flag', async () => {
+// The launch flag is gone (§3, amended 2026-08-11), so setting it here proves
+// the removed lever cannot re-enable bypass against managed policy.
+test('PERMISSION-BOUNDARY §3 — managed bypass policy disables the mode, legacy launch flag or not', async () => {
   const configDir = mkdtempSync(join(tmpdir(), 'catcode-bypass-policy-'))
   const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
   const previousAllowBypass = process.env.CATCODE_ALLOW_BYPASS
