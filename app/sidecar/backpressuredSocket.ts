@@ -42,14 +42,14 @@ export function createBackpressuredSocket(
 ): { wrapper: SidecarSocketLike; drain: () => void } {
   const maxQueuedBytes = options.maxQueuedBytes ?? DEFAULT_MAX_QUEUED_BYTES
   // Unwritten byte chunks, head-first.
-  const queue: Uint8Array[] = []
+  const queue: Array<{ data: Uint8Array; onFlushed?: () => void }> = []
   let queuedBytes = 0
   let ended = false
   let overflowed = false
 
-  const enqueue = (chunk: Uint8Array): void => {
-    queue.push(chunk)
-    queuedBytes += chunk.byteLength
+  const enqueue = (data: Uint8Array, onFlushed?: () => void): void => {
+    queue.push({ data, onFlushed })
+    queuedBytes += data.byteLength
     if (queuedBytes > maxQueuedBytes && !overflowed) {
       overflowed = true
       const overflowedBytes = queuedBytes
@@ -61,18 +61,20 @@ export function createBackpressuredSocket(
   }
 
   const wrapper: SidecarSocketLike = {
-    write: data => {
+    write: (data, onFlushed) => {
       if (overflowed) return
       // Once anything is queued, everything queues behind it — ordering is
       // load-bearing for the length-prefixed stream.
       if (queue.length > 0) {
-        enqueue(data)
+        enqueue(data, onFlushed)
         return
       }
       const n = socket.write(data)
       const written = n > 0 ? n : 0
       if (written < data.byteLength) {
-        enqueue(written > 0 ? data.subarray(written) : data)
+        enqueue(written > 0 ? data.subarray(written) : data, onFlushed)
+      } else {
+        onFlushed?.()
       }
     },
     end: () => {
@@ -89,17 +91,19 @@ export function createBackpressuredSocket(
   const drain = (): void => {
     if (overflowed) return
     while (queue.length > 0) {
-      const chunk = queue[0]!
+      const queued = queue[0]!
+      const chunk = queued.data
       const n = socket.write(chunk)
       const written = n > 0 ? n : 0
       if (written >= chunk.byteLength) {
         queue.shift()
         queuedBytes -= chunk.byteLength
+        queued.onFlushed?.()
       } else {
         // Still backpressured — keep the remainder at the head, wait for the
         // next drain.
         if (written > 0) {
-          queue[0] = chunk.subarray(written)
+          queue[0] = { ...queued, data: chunk.subarray(written) }
           queuedBytes -= written
         }
         return

@@ -3,6 +3,7 @@ import type { AgentModeWorkerItem } from '../../shared/protocol.js'
 import { agentTranscriptStateWord, type AgentStateKey } from './agentIdentity.js'
 import {
   groupWorkersByRole,
+  selectWorkerDismissTargetId,
   selectWorkerResult,
   selectWorkerStopTargetId,
   workerRoleGroupLabel,
@@ -70,6 +71,31 @@ test('stop targets a RUNNING current-session worker only, by its agentId', () =>
   expect(selectWorkerStopTargetId(worker({ status: 'killed' }))).toBeNull()
   // A worker marked prior has no live task in this process.
   expect(selectWorkerStopTargetId(worker({ origin: 'prior' }))).toBeNull()
+})
+
+test('CC-32 — dismiss is the exact complement of stop: FINISHED current-session workers only, same id', () => {
+  // The shape the verb exists for: a finished worker with a blocked handoff, which
+  // the engine stamps with no eviction deadline and therefore never retires.
+  expect(
+    selectWorkerDismissTargetId(
+      worker({ status: 'completed', handoffStatus: 'blocked' }),
+    ),
+  ).toBe('agent_a')
+  expect(selectWorkerDismissTargetId(worker({ status: 'failed' }))).toBe('agent_a')
+  expect(selectWorkerDismissTargetId(worker({ status: 'killed' }))).toBe('agent_a')
+  // Still running is task.stop's job, not this one.
+  expect(selectWorkerDismissTargetId(worker())).toBeNull()
+  // A prior-session worker has no live task to dismiss in this process.
+  expect(selectWorkerDismissTargetId(worker({ origin: 'prior' }))).toBeNull()
+})
+
+test('CC-32 — stop and dismiss are never both offered for the same worker', () => {
+  for (const status of ['running', 'completed', 'failed', 'killed'] as const) {
+    const w = worker({ status })
+    const both =
+      selectWorkerStopTargetId(w) !== null && selectWorkerDismissTargetId(w) !== null
+    expect(both).toBe(false)
+  }
 })
 
 test('a blocked worker is still stoppable (it is running, waiting on a handoff)', () => {

@@ -40,11 +40,6 @@ const VERIFY_PLAN_EXECUTION_TOOL_NAME =
         require('../../tools/VerifyPlanExecutionTool/constants.js') as typeof import('../../tools/VerifyPlanExecutionTool/constants.js')
       ).VERIFY_PLAN_EXECUTION_TOOL_NAME
     : null
-const WORKFLOW_TOOL_NAME = feature('WORKFLOW_SCRIPTS')
-  ? (
-      require('../../tools/WorkflowTool/constants.js') as typeof import('../../tools/WorkflowTool/constants.js')
-    ).WORKFLOW_TOOL_NAME
-  : null
 /* eslint-enable @typescript-eslint/no-require-imports */
 
 /**
@@ -81,8 +76,10 @@ const SAFE_YOLO_ALLOWLISTED_TOOLS = new Set([
   // Agent cleanup
   TEAM_DELETE_TOOL_NAME,
   SEND_MESSAGE_TOOL_NAME,
-  // Workflow orchestration — subagents go through canUseTool individually
-  ...(WORKFLOW_TOOL_NAME ? [WORKFLOW_TOOL_NAME] : []),
+  // Workflow is deliberately NOT here. Its script is orchestration code that
+  // embeds sub-agent prompts, and the classifier is told to read that script as
+  // a delegation payload. Per-subagent checks are not a substitute: blocking at
+  // spawn time is what stops a delegated action from being attempted at all.
   // Misc safe
   SLEEP_TOOL_NAME,
   // Ant-only safe tools (gates mirror tools.ts)

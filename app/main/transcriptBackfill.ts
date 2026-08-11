@@ -23,6 +23,7 @@ import {
   TRANSCRIPT_CACHE_RUN_FACTS_VERSION,
   createTranscriptCache,
   readCache,
+  hasAnyRunFact,
   writeCache,
 } from './transcriptCache.js'
 
@@ -39,8 +40,17 @@ export type TranscriptBackfillRunOptions = {
   timeoutMs?: number
   spawnWorker?: typeof spawn
   onSession: (result: TranscriptBackfillSessionResult) => void
+  /** Metadata-only process lifecycle hook; it never receives worker output. */
+  onWorkerLifecycle?: (event: WorkerProcessLifecycle) => void
   log?: (line: string) => void
 }
+
+export type WorkerProcessLifecycle = Readonly<{
+  phase: 'started' | 'exited'
+  pid: number
+  code?: number | null
+  signal?: NodeJS.Signals | null
+}>
 
 export type TranscriptBackfillRunSummary = {
   attempted: number
@@ -106,13 +116,33 @@ export function persistTranscriptBackfillResult(
   ) {
     return 'already_cached'
   }
+  // A WEAKER gate than the close path's, and deliberately so.
+  //
+  // Both writers must obey the same principle — never write a header thinner
+  // than what that cache's own frames could supply, because the renderer trusts
+  // a header wholesale and stops reading frames. But the two caches have very
+  // different frames, so the same principle yields different rules:
+  //
+  //   CLOSE: the frames are the live replay buffer, carrying `result` messages
+  //     (usage + the exact context window) and `permissionMode` on user turns.
+  //     A rich fallback, so only a COMPLETE header may displace it.
+  //   BACKFILL (here): the frames come from the engine's `toSDKMessages`
+  //     conversion, which keeps conversation and drops telemetry. Measured on
+  //     this machine's real caches: ZERO `result` frames and zero frame-level
+  //     `permissionMode`. The fallback can name the model and nothing else, so
+  //     any fact at all is an improvement and requiring completeness would throw
+  //     away the window and effort this worker uniquely resolved.
+  //
+  // What both refuse is an ALL-NULL object, which cannot beat any fallback and
+  // is reachable whenever the transcript could not be read.
+  const runFacts = hasAnyRunFact(result.runFacts) ? result.runFacts : undefined
   writeCache(
     options.cacheDir,
     createTranscriptCache(
       result.appSessionId,
       result.engineSessionId,
       result.frames,
-      result.runFacts,
+      runFacts,
     ),
   )
   return readCache(options.cacheDir, result.appSessionId) === null
@@ -148,6 +178,7 @@ export async function runTranscriptBackfill(
     },
     stdio: ['pipe', 'pipe', 'pipe'],
   }) as ChildProcessWithoutNullStreams
+  options.onWorkerLifecycle?.({ phase: 'started', pid: child.pid ?? 0 })
 
   const expected = new Map(
     request.items.map(item => [
@@ -273,6 +304,7 @@ export async function runTranscriptBackfill(
   try {
     child.stdin.end(input)
     ;({ code, signal } = await closed)
+    options.onWorkerLifecycle?.({ phase: 'exited', pid: child.pid ?? 0, code, signal })
   } finally {
     clearTimeout(timeout)
     options.signal?.removeEventListener('abort', onAbort)

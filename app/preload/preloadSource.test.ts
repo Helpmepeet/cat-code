@@ -73,7 +73,8 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
     "const CH_HOST_OPEN_HISTORY = 'catcode:host:open-history'",
   )
   expect(source).toContain('openHistorySession(')
-  // 17 frame-plane senders (incl. P4-5 accountVerb + P4-15 workspaceTrustVerb +
+  // 18 frame-plane senders (including the fixed metadata-only delivery ack; no
+  // generic logging IPC) (incl. P4-5 accountVerb + P4-15 workspaceTrustVerb +
   // P4-8b setAgentMode + P4-8b taskControlVerb + P4-13 remoteSettingsVerb + P4-19
   // settingsVerb + P4-24c runControlVerb + P4-6b sessionActionVerb + C5/P4-20
   // answerQuestions + contextBreakdownVerb) + 10 payload-bearing control-plane
@@ -89,7 +90,11 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
     "const CH_HOST_VISIBLE_SESSIONS = 'catcode:host:visible-sessions'",
   )
   expect(source).toContain('reportVisibleSessions(sessionIds: SessionId[]): void')
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(29)
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(34)
+  expect(source).toContain("const CH_DELIVERY_ACK = 'catcode:delivery-ack'")
+  expect(source).toContain('deliveryAck(sessionId, sequence, deliveryAttempt, streamEpoch, traceId, stage): void')
+  expect(source).toContain("const CH_OPEN_LOGS = 'catcode:open-logs'")
+  expect(source).toContain("const CH_SAVE_DIAGNOSTICS = 'catcode:save-diagnostics'")
   expect(source).toContain("const CH_DEBUG_SHELL_STATE = 'catcode:debug:shell-state'")
   expect(source).toContain('reportDebugShellState')
   expect(source).toContain('pickDirectory(activeSessionId?: SessionId | null)')
@@ -126,7 +131,7 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
   const invokeChannels = [...source.matchAll(/ipcRenderer\.invoke\((\w+)/g)].map(
     m => m[1],
   )
-  expect(invokeChannels.length).toBe(10)
+  expect(invokeChannels.length).toBe(11)
   const allowed = new Set([
     'CH_HOST_CREATE',
     'CH_HOST_CREATE_IN_WORKSPACE',
@@ -138,6 +143,7 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
     'CH_HOST_SESSIONS_CATALOG',
     'CH_HOST_OPEN_HISTORY',
     'CH_HOST_SAVE_TEXT',
+    'CH_SAVE_DIAGNOSTICS',
   ])
   for (const channel of invokeChannels) {
     expect(allowed.has(channel)).toBe(true)
@@ -184,4 +190,79 @@ test('P4-35: the file sink carries no destination the renderer could author (HC1
   // rather than silently riding the inbound frame cap.
   expect(save).toContain('sendGuard.assertAllowed')
   expect(save).toContain('MAX_SAVE_TEXT_BYTES')
+})
+
+test('failure-path senders keep the rate guard but never let its rejection escape', () => {
+  const source = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
+  const queueSource = readFileSync(new URL('./deliveryAckQueue.ts', import.meta.url), 'utf8')
+
+  // 2026-08-09 black window: all of these run when something has ALREADY gone
+  // wrong — the ack flush on a React effect stack, the fault reporter from
+  // `componentDidCatch` — and a throw from either unmounted the renderer. The
+  // guard must still run, so an over-budget payload is DROPPED rather than sent
+  // and T7's cap is unchanged; only the exception is contained.
+  // All THREE telemetry senders, including the health probe: the commit that
+  // wrapped it claimed parity with the other two, and only a pin makes that true.
+  for (const [open, close] of [
+    ['reportRendererFault(kind, message): void {', '\n  },'],
+    ['ipcRenderer.on(CH_DELIVERY_HEALTH_PROBE, () => {', '\n})'],
+  ] as const) {
+    const start = source.indexOf(open)
+    expect(start).toBeGreaterThan(-1)
+    const body = source.slice(start, source.indexOf(close, start))
+    expect(body).toContain('sendGuard.assertAllowed')
+    expect(body.indexOf('try {')).toBeGreaterThan(-1)
+    expect(body.indexOf('try {')).toBeLessThan(body.indexOf('sendGuard.assertAllowed'))
+    expect(body).toContain('} catch')
+    expect(body.indexOf('ipcRenderer.send')).toBeGreaterThan(body.indexOf('sendGuard.assertAllowed'))
+    expect(body.indexOf('ipcRenderer.send')).toBeLessThan(body.indexOf('} catch'))
+  }
+
+  // The extracted delivery ack queue flush method keeps the guard inside try/catch
+  const flushStart = queueSource.indexOf('private flush(): void {')
+  expect(flushStart).toBeGreaterThan(-1)
+  const flushBody = queueSource.slice(flushStart, queueSource.indexOf('\n  }', flushStart))
+  expect(flushBody).toContain('this.deps.assertAllowed')
+  expect(flushBody.indexOf('try {')).toBeGreaterThan(-1)
+  expect(flushBody.indexOf('try {')).toBeLessThan(flushBody.indexOf('this.deps.assertAllowed'))
+  expect(flushBody).toContain('} catch')
+  expect(flushBody.indexOf('this.deps.send')).toBeGreaterThan(flushBody.indexOf('this.deps.assertAllowed'))
+  expect(flushBody.indexOf('this.deps.send')).toBeLessThan(flushBody.indexOf('} catch'))
+})
+
+test('only the acknowledgement flush is diagnostics class', () => {
+  const source = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
+  const queueSource = readFileSync(new URL('./deliveryAckQueue.ts', import.meta.url), 'utf8')
+
+  // The entire rate-budget reservation (IPC-RATE-BUDGET §4) is this one
+  // argument in the acknowledgement queue.
+  const flushStart = queueSource.indexOf('private flush(): void {')
+  expect(flushStart).toBeGreaterThan(-1)
+  const flush = queueSource.slice(flushStart)
+  expect(flush).toContain("this.deps.assertAllowed(payload, 'diagnostics')")
+
+  const queueDiagnosticsCallSites = [...queueSource.matchAll(/assertAllowed\([^)]*'diagnostics'/g)]
+  expect(queueDiagnosticsCallSites.length).toBe(1)
+
+  // The fault reporter and the health probe are telemetry too, but stay CONTROL
+  // class deliberately: the reporter matters most exactly when the window is
+  // saturating, and a starved health response manufactures a fake outage.
+  for (const open of [
+    'reportRendererFault(kind, message): void {',
+    'ipcRenderer.on(CH_DELIVERY_HEALTH_PROBE, () => {',
+  ]) {
+    const start = source.indexOf(open)
+    const body = source.slice(start, source.indexOf('\n}', start))
+    expect(body).not.toContain("'diagnostics'")
+  }
+})
+
+test('acknowledgement flushing batches across tasks rather than per delivered frame', () => {
+  const queueSource = readFileSync(new URL('./deliveryAckQueue.ts', import.meta.url), 'utf8')
+
+  // A microtask drains at the end of the current task and each frame arrives in
+  // its own task, so `queueMicrotask` coalesced nothing in steady state: one
+  // frame cost one guarded send against the budget real user actions draw on.
+  expect(queueSource).not.toContain('queueMicrotask')
+  expect(queueSource).toContain('this.deps.setTimeout')
 })

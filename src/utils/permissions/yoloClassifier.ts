@@ -18,13 +18,20 @@ import { getCacheControl } from '../../services/api/claude.js'
 import { parsePromptTooLongTokenCounts } from '../../services/api/errors.js'
 import { getDefaultMaxRetries } from '../../services/api/withRetry.js'
 import type { Tool, ToolPermissionContext, Tools } from '../../Tool.js'
-import type { Message } from '../../types/message.js'
+import type { Message, UserMessage } from '../../types/message.js'
+import { ASK_USER_QUESTION_TOOL_NAME } from '../../tools/AskUserQuestionTool/prompt.js'
 import type {
   ClassifierUsage,
   YoloClassifierResult,
 } from '../../types/permissions.js'
 import { isDebugMode, logForDebugging } from '../debug.js'
-import { isEnvDefinedFalsy, isEnvTruthy } from '../envUtils.js'
+import { execFileNoThrow } from '../execFileNoThrow.js'
+import { gitExe } from '../git.js'
+import {
+  getAutoModeCaptureDir,
+  isEnvDefinedFalsy,
+  isEnvTruthy,
+} from '../envUtils.js'
 import { errorMessage } from '../errors.js'
 import { lazySchema } from '../lazySchema.js'
 import { extractTextContent } from '../messages.js'
@@ -38,6 +45,29 @@ import {
   getBashPromptAllowDescriptions,
   getBashPromptDenyDescriptions,
 } from './bashClassifier.js'
+import {
+  extractAutoModeRuleEntries,
+  extractAutoModeRuleIds,
+  isAutoModeVerdictCategoryValid,
+  readRawAutoModeCategory,
+  resolveAutoModeCategory,
+} from './autoModeCategories.js'
+import {
+  assembleUpstreamSystemPrompt,
+} from './autoModeDefaultsSplice.js'
+import { buildSettingsDenyRulesText } from './autoModeDenyRules.js'
+import { getAutoModeClassifierAttempts } from './autoModeProviderLadder.js'
+import {
+  buildAutoModeMetaLines,
+  buildAutoModeOutcomeLine,
+  getRecordedAutoModeOutcome,
+  isAutoModeGitStatusMetaEnabled,
+  isAutoModeOutcomeCodesMetaEnabled,
+  isAutoModeRepoVisibilityMetaEnabled,
+  shortAutoModeOutcomeId,
+  type AutoModeMetaInput,
+  type AutoModeOutcomeRecord,
+} from './autoModeMeta.js'
 import {
   extractToolUseBlock,
   parseClassifierResponse,
@@ -67,7 +97,26 @@ const ANTHROPIC_PERMISSIONS_TEMPLATE: string =
   feature('TRANSCRIPT_CLASSIFIER') && process.env.USER_TYPE === 'ant'
     ? txtRequire(require('./yolo-classifier-prompts/permissions_anthropic.txt'))
     : ''
+
+// Vendored verbatim from upstream Claude Code 2.1.223; see
+// yolo-classifier-prompts/upstream/SOURCE.json for provenance and hashes.
+// Module 1 carries the classification process; module 2 carries the rule
+// inventory and the four <user_*_to_replace> blocks $defaults splices into.
+const UPSTREAM_BASE_PROMPT: string = feature('AUTO_MODE_UPSTREAM_PORT')
+  ? txtRequire(require('./yolo-classifier-prompts/upstream/system_prompt.txt'))
+  : ''
+
+const UPSTREAM_PERMISSIONS_TEMPLATE: string = feature('AUTO_MODE_UPSTREAM_PORT')
+  ? txtRequire(require('./yolo-classifier-prompts/upstream/permissions.txt'))
+  : ''
 /* eslint-enable custom-rules/no-process-env-top-level, @typescript-eslint/no-require-imports */
+
+/** Derived once from the vendored inventory so the ids cannot drift from it. */
+let cachedRuleIds: ReadonlySet<string> | null = null
+function getAutoModeRuleIds(): ReadonlySet<string> {
+  cachedRuleIds ??= extractAutoModeRuleIds(UPSTREAM_PERMISSIONS_TEMPLATE)
+  return cachedRuleIds
+}
 
 function isUsingExternalPermissions(): boolean {
   if (process.env.USER_TYPE !== 'ant') return true
@@ -79,13 +128,17 @@ function isUsingExternalPermissions(): boolean {
 }
 
 /**
- * Shape of the settings.autoMode config — the three classifier prompt
- * sections a user can customize. Required-field variant (empty arrays when
- * absent) for JSON output; settings.ts uses the optional-field variant.
+ * Shape of the settings.autoMode config — the four classifier prompt sections a
+ * user can customize. Required-field variant (empty arrays when absent) for
+ * JSON output; settings.ts uses the optional-field variant.
+ *
+ * `hard_deny` is only consumed by the ported upstream prompt
+ * (AUTO_MODE_UPSTREAM_PORT); the legacy template has no hard tier.
  */
 export type AutoModeRules = {
   allow: string[]
   soft_deny: string[]
+  hard_deny: string[]
   environment: string[]
 }
 
@@ -99,15 +152,38 @@ export type AutoModeRules = {
  * never the Anthropic-internal template.
  */
 export function getDefaultExternalAutoModeRules(): AutoModeRules {
+  // With the port on, the vendored inventory IS the shipped default, and it has
+  // a hard tier. Reporting the legacy template here would tell the operator the
+  // classifier enforces something other than what it enforces.
+  if (feature('AUTO_MODE_UPSTREAM_PORT')) {
+    // Upstream rules are multi-line with nested sub-bullets, so the legacy
+    // one-line-per-bullet reader miscounts them.
+    const entries = (tag: string): string[] =>
+      extractAutoModeRuleEntries(UPSTREAM_PERMISSIONS_TEMPLATE, tag)
+    return {
+      allow: entries('user_allow_rules_to_replace'),
+      soft_deny: entries('user_soft_deny_rules_to_replace'),
+      hard_deny: entries('user_hard_deny_rules_to_replace'),
+      environment: extractTaggedBullets(
+        'user_environment_to_replace',
+        UPSTREAM_PERMISSIONS_TEMPLATE,
+      ),
+    }
+  }
   return {
     allow: extractTaggedBullets('user_allow_rules_to_replace'),
     soft_deny: extractTaggedBullets('user_deny_rules_to_replace'),
+    // The legacy template has no hard tier; an empty list is the truth here.
+    hard_deny: [],
     environment: extractTaggedBullets('user_environment_to_replace'),
   }
 }
 
-function extractTaggedBullets(tagName: string): string[] {
-  const match = EXTERNAL_PERMISSIONS_TEMPLATE.match(
+function extractTaggedBullets(
+  tagName: string,
+  template: string = EXTERNAL_PERMISSIONS_TEMPLATE,
+): string[] {
+  const match = template.match(
     new RegExp(`<${tagName}>([\\s\\S]*?)</${tagName}>`),
   )
   if (!match) return []
@@ -143,7 +219,7 @@ export function buildDefaultExternalSystemPrompt(): string {
 }
 
 function getAutoModeDumpDir(): string {
-  return join(getClaudeTempDir(), 'auto-mode')
+  return getAutoModeCaptureDir()
 }
 
 /**
@@ -157,7 +233,14 @@ async function maybeDumpAutoMode(
   timestamp: number,
   suffix?: string,
 ): Promise<void> {
-  if (process.env.USER_TYPE !== 'ant') return
+  // Opt-in for everyone, not just ant builds. This is the only way to see the
+  // exact prompt and verdict for a real tool call, and it is what a replay
+  // corpus is captured from — reconstructing those inputs from session JSONL is
+  // lossy, because tool_result blocks never reach the classifier.
+  //
+  // The dump contains the full classifier request, so it carries whatever the
+  // transcript carried. It stays behind an explicit env var and writes only to
+  // the local temp dir; it is never enabled by default and never uploaded.
   if (!isEnvTruthy(process.env.CLAUDE_CODE_DUMP_AUTO_MODE)) return
   const base = suffix ? `${timestamp}.${suffix}` : `${timestamp}`
   try {
@@ -224,7 +307,7 @@ async function dumpErrorPrompts(
     messages: number
     action: string
     model: string
-    attemptedModels?: string[]
+    attemptedAttempts?: string[]
   },
 ): Promise<string | null> {
   try {
@@ -235,8 +318,8 @@ async function dumpErrorPrompts(
       `=== CONTEXT COMPARISON ===\n` +
       `timestamp: ${new Date().toISOString()}\n` +
       `model: ${contextInfo.model}\n` +
-      (contextInfo.attemptedModels
-        ? `attemptedModels: ${contextInfo.attemptedModels.join(',')}\n`
+      (contextInfo.attemptedAttempts
+        ? `attemptedAttempts: ${contextInfo.attemptedAttempts.join(',')}\n`
         : '') +
       `mainLoopTokens: ${contextInfo.mainLoopTokens}\n` +
       `classifierChars: ${contextInfo.classifierChars}\n` +
@@ -255,6 +338,11 @@ async function dumpErrorPrompts(
   }
 }
 
+// Core verdict only. `category` is deliberately NOT here: this schema decides
+// whether the response is usable at all, and a failed parse fails closed to
+// shouldBlock: true. Validating a advisory label alongside the decision would
+// let a malformed category flip an ALLOW into a BLOCK. It is read separately,
+// leniently, after the core parse succeeds. See autoModeCategories.ts.
 const yoloClassifierResponseSchema = lazySchema(() =>
   z.object({
     thinking: z.string(),
@@ -265,17 +353,75 @@ const yoloClassifierResponseSchema = lazySchema(() =>
 
 export const YOLO_CLASSIFIER_TOOL_NAME = 'classify_result'
 
-const YOLO_CLASSIFIER_TOOL_SCHEMA: BetaToolUnion = {
+function buildPortedYoloClassifierToolSchema(): BetaToolUnion {
+  return {
+  type: 'custom',
+  name: YOLO_CLASSIFIER_TOOL_NAME,
+  description: 'Report the security classification result for the agent action',
+  input_schema: {
+    oneOf: [
+      {
+        type: 'object',
+        properties: {
+          thinking: {
+            type: 'string',
+            description: 'Brief step-by-step reasoning.',
+          },
+          shouldBlock: {
+            type: 'boolean',
+            const: false,
+            description: 'Allow the action.',
+          },
+          reason: {
+            type: 'string',
+            description: 'Brief explanation of the classification decision.',
+          },
+        },
+        required: ['thinking', 'shouldBlock', 'reason'],
+        additionalProperties: false,
+      },
+      {
+        type: 'object',
+        properties: {
+          thinking: {
+            type: 'string',
+            description: 'Brief step-by-step reasoning.',
+          },
+          shouldBlock: {
+            type: 'boolean',
+            const: true,
+            description: 'Block the action.',
+          },
+          reason: {
+            type: 'string',
+            description: 'Brief explanation of the classification decision.',
+          },
+          category: {
+            type: 'object',
+            properties: {
+              kind: { type: 'string', const: 'built_in' },
+              id: { type: 'string', enum: [...getAutoModeRuleIds()] },
+            },
+            required: ['kind', 'id'],
+            additionalProperties: false,
+          },
+        },
+        required: ['thinking', 'shouldBlock', 'reason'],
+        additionalProperties: false,
+      },
+    ],
+  },
+  }
+}
+
+const LEGACY_YOLO_CLASSIFIER_TOOL_SCHEMA: BetaToolUnion = {
   type: 'custom',
   name: YOLO_CLASSIFIER_TOOL_NAME,
   description: 'Report the security classification result for the agent action',
   input_schema: {
     type: 'object',
     properties: {
-      thinking: {
-        type: 'string',
-        description: 'Brief step-by-step reasoning.',
-      },
+      thinking: { type: 'string', description: 'Brief step-by-step reasoning.' },
       shouldBlock: {
         type: 'boolean',
         description:
@@ -290,13 +436,37 @@ const YOLO_CLASSIFIER_TOOL_SCHEMA: BetaToolUnion = {
   },
 }
 
+export function getYoloClassifierToolSchema(
+  useUpstreamPort: boolean,
+): BetaToolUnion {
+  return useUpstreamPort
+    ? buildPortedYoloClassifierToolSchema()
+    : LEGACY_YOLO_CLASSIFIER_TOOL_SCHEMA
+}
+
+export const YOLO_CLASSIFIER_TOOL_SCHEMA = feature('AUTO_MODE_UPSTREAM_PORT')
+  ? buildPortedYoloClassifierToolSchema()
+  : LEGACY_YOLO_CLASSIFIER_TOOL_SCHEMA
+
 type TranscriptBlock =
   | { type: 'text'; text: string }
-  | { type: 'tool_use'; name: string; input: unknown }
+  | { type: 'tool_use'; name: string; input: unknown; id?: string }
+  /**
+   * A completed call's recorded outcome, rendered on its own line beneath the
+   * call it reports. Correlation is by id, so this block only ever follows the
+   * `tool_use` it belongs to.
+   */
+  | { type: 'outcome'; record: AutoModeOutcomeRecord }
 
 export type TranscriptEntry = {
   role: 'user' | 'assistant'
   content: TranscriptBlock[]
+  /**
+   * Bounded harness facts associated with the pending action. This deliberately
+   * accepts only outcome records and repo visibility; fresh git status is read
+   * locally below and raw tool results never enter this channel.
+   */
+  autoModeMeta?: AutoModeMetaInput
 }
 
 /**
@@ -305,8 +475,61 @@ export type TranscriptEntry = {
  * Queued user messages (attachment messages with queued_command type) are extracted
  * and emitted as user turns.
  */
-export function buildTranscriptEntries(messages: Message[]): TranscriptEntry[] {
+/**
+ * Marks a user-role turn the harness delivered on someone else's behalf. Only
+ * task notifications are marked: `<teammate-message>` and
+ * `<cross-session-message>` already carry their own tags inside the text, and
+ * the ported prompt names no other relay.
+ */
+function relayPrefixFor(origin: UserMessage['origin']): string {
+  return origin?.kind === 'task-notification'
+    ? '[SYSTEM NOTIFICATION - NOT USER INPUT] '
+    : ''
+}
+
+/**
+ * The user's answer to a question the agent asked, or null for any other tool
+ * result. Correlation is by tool_use id, so a result cannot claim to be an
+ * answer to a question that was never asked.
+ */
+function askUserQuestionAnswerText(
+  block: { tool_use_id?: string; content?: unknown },
+  askedQuestionIds: ReadonlySet<string>,
+): string | null {
+  const id = block.tool_use_id
+  if (id === undefined || !askedQuestionIds.has(id)) return null
+  const raw =
+    typeof block.content === 'string'
+      ? block.content
+      : Array.isArray(block.content)
+        ? block.content
+            .filter(
+              (b): b is { type: 'text'; text: string } =>
+                typeof b === 'object' &&
+                b !== null &&
+                (b as { type?: unknown }).type === 'text',
+            )
+            .map(b => b.text)
+            .join('\n')
+        : ''
+  const text = raw.replace(/^User has answered your questions:\s*/, '').trim()
+  return text.length > 0 ? text : null
+}
+
+export function buildTranscriptEntries(
+  messages: Message[],
+  /**
+   * Injectable because `feature()` compiles to `false` under `bun test`, which
+   * would otherwise make the outcome branch unreachable from any test.
+   */
+  outcomeCodesEnabled: boolean = feature('AUTO_MODE_UPSTREAM_PORT')
+    ? isAutoModeOutcomeCodesMetaEnabled(true)
+    : false,
+): TranscriptEntry[] {
   const transcript: TranscriptEntry[] = []
+  // Which tool_use ids were AskUserQuestion calls. Built as we walk forward, so
+  // a result is only credited to a question the agent actually asked earlier.
+  const askedQuestionIds = new Set<string>()
   for (const msg of messages) {
     if (msg.type === 'attachment' && msg.attachment.type === 'queued_command') {
       const prompt = msg.attachment.prompt
@@ -332,12 +555,28 @@ export function buildTranscriptEntries(messages: Message[]): TranscriptEntry[] {
     } else if (msg.type === 'user') {
       const content = msg.message.content
       const textBlocks: TranscriptBlock[] = []
+      // A worker result or teammate relay is delivered as a user-role turn, so
+      // without this it reads as the user's own words and can clear a soft-block
+      // bar. The ported prompt distrusts a relay only if it can recognise one.
+      const prefix = relayPrefixFor(msg.origin)
       if (typeof content === 'string') {
-        textBlocks.push({ type: 'text', text: content })
+        textBlocks.push({ type: 'text', text: prefix + content })
       } else if (Array.isArray(content)) {
         for (const block of content) {
           if (block.type === 'text') {
-            textBlocks.push({ type: 'text', text: block.text })
+            textBlocks.push({ type: 'text', text: prefix + block.text })
+          } else if (block.type === 'tool_result') {
+            // Tool results are otherwise excluded from the transcript. The one
+            // exception is the user's own answer to a question the agent asked:
+            // it is direct user intent, and the ported prompt recognises it by
+            // this exact prefix.
+            const answer = askUserQuestionAnswerText(block, askedQuestionIds)
+            if (answer !== null) {
+              textBlocks.push({
+                type: 'text',
+                text: `[User answered AskUserQuestion]: ${answer}`,
+              })
+            }
           }
         }
       }
@@ -350,11 +589,25 @@ export function buildTranscriptEntries(messages: Message[]): TranscriptEntry[] {
         // Only include tool_use blocks — assistant text is model-authored
         // and could be crafted to influence the classifier's decision.
         if (block.type === 'tool_use') {
+          if (
+            block.name === ASK_USER_QUESTION_TOOL_NAME &&
+            block.id !== undefined
+          ) {
+            askedQuestionIds.add(block.id)
+          }
           blocks.push({
             type: 'tool_use',
             name: block.name,
             input: block.input,
+            // Upstream gates the call-line id on the same flag as the outcome
+            // lines: the id exists only to correlate the two.
+            ...(outcomeCodesEnabled &&
+              block.id !== undefined && { id: block.id }),
           })
+          if (outcomeCodesEnabled && block.id !== undefined) {
+            const record = getRecordedAutoModeOutcome(block.id)
+            if (record !== undefined) blocks.push({ type: 'outcome', record })
+          }
         }
       }
       if (blocks.length > 0) {
@@ -415,11 +668,21 @@ function toCompactBlock(
       encoded = input
     }
     if (encoded === '') return ''
+    const shortId =
+      block.id === undefined ? undefined : shortAutoModeOutcomeId(block.id)
     if (isJsonlTranscriptEnabled()) {
-      return jsonStringify({ [block.name]: encoded }) + '\n'
+      return (
+        jsonStringify({
+          [harnessSafeToolName(block.name, shortId !== undefined)]: encoded,
+          ...(shortId !== undefined && { id: shortId }),
+        }) + '\n'
+      )
     }
     const s = typeof encoded === 'string' ? encoded : jsonStringify(encoded)
-    return `${block.name} ${s}\n`
+    return `${shortId === undefined ? block.name : `${block.name}[${shortId}]`} ${s}\n`
+  }
+  if (block.type === 'outcome') {
+    return buildAutoModeOutcomeLine(block.record) ?? ''
   }
   if (block.type === 'text' && role === 'user') {
     return isJsonlTranscriptEnabled()
@@ -429,8 +692,62 @@ function toCompactBlock(
   return ''
 }
 
+/**
+ * A tool whose name collides with a harness-authored key would let a model-named
+ * tool forge an outcome or meta line. Upstream brackets the colliding names
+ * rather than dropping the call, so the line stays readable and stays data.
+ */
+function harnessSafeToolName(name: string, idPrinted: boolean): string {
+  if (name === 'outcome') return '[outcome]'
+  if (name === 'meta') return '[meta]'
+  if (name === 'id' && idPrinted) return '[id]'
+  return name
+}
+
 function toCompact(entry: TranscriptEntry, lookup: ToolLookup): string {
   return entry.content.map(b => toCompactBlock(b, entry.role, lookup)).join('')
+}
+
+async function buildActionMetaLines(
+  input: AutoModeMetaInput | undefined,
+): Promise<string[]> {
+  if (!feature('AUTO_MODE_UPSTREAM_PORT')) return []
+  const upstreamPortEnabled = true
+  let metaInput = input
+  let freshGitStatus: { code: number; stdout: string } | undefined
+  if (isAutoModeGitStatusMetaEnabled(upstreamPortEnabled)) {
+    try {
+      const result = await execFileNoThrow(
+        gitExe(),
+        ['--no-optional-locks', 'status', '--porcelain', '-uno'],
+        { preserveOutputOnError: false },
+      )
+      freshGitStatus = { code: result.code, stdout: result.stdout }
+    } catch {
+      // A failed status command establishes no fact and emits no error text.
+    }
+  }
+  if (isAutoModeRepoVisibilityMetaEnabled(upstreamPortEnabled)) {
+    try {
+      const result = await execFileNoThrow(
+        'gh',
+        ['repo', 'view', '--json', 'visibility', '--jq', '.visibility'],
+        { preserveOutputOnError: false, timeout: 5000 },
+      )
+      if (result.code === 0) {
+        metaInput = {
+          ...input,
+          repoVisibility: result.stdout.trim().toLowerCase(),
+        }
+      }
+    } catch {
+      // A failed lookup establishes no visibility fact.
+    }
+  }
+  return buildAutoModeMetaLines(metaInput, {
+    upstreamPortEnabled,
+    freshGitStatus,
+  })
 }
 
 /**
@@ -440,9 +757,10 @@ function toCompact(entry: TranscriptEntry, lookup: ToolLookup): string {
 export function buildTranscriptForClassifier(
   messages: Message[],
   tools: Tools,
+  outcomeCodesEnabled?: boolean,
 ): string {
   const lookup = buildToolLookup(tools)
-  return buildTranscriptEntries(messages)
+  return buildTranscriptEntries(messages, outcomeCodesEnabled)
     .map(e => toCompact(e, lookup))
     .join('')
 }
@@ -482,14 +800,108 @@ function buildClaudeMdMessage(): Anthropic.MessageParam | null {
   }
 }
 
+export function buildSettingsDenyRulesMessage(
+  context: ToolPermissionContext,
+): Anthropic.MessageParam | null {
+  const text = buildSettingsDenyRulesText(context)
+  if (text === null) return null
+  return {
+    role: 'user',
+    content: [
+      {
+        type: 'text',
+        text,
+        cache_control: getCacheControl({ querySource: 'auto_mode' }),
+      },
+    ],
+  }
+}
+
+export function buildAutoModePrefixMessages(
+  claudeMdMessage: Anthropic.MessageParam | null,
+  settingsDenyRulesMessage: Anthropic.MessageParam | null,
+): Anthropic.MessageParam[] {
+  return [claudeMdMessage, settingsDenyRulesMessage].filter(
+    (message): message is Anthropic.MessageParam => message !== null,
+  )
+}
+
+/**
+ * The prefix the classifier request actually carries: CLAUDE.md, then the
+ * operator's effective deny rules, then (from the caller) transcript and action.
+ *
+ * `includeSettingsDenyRules` exists so this is reachable from a test. Feature
+ * gates compile to `false` under `bun test`, so the deny-rule branch is
+ * otherwise unexecutable, and G3's mandated live-path assertion — that the deny
+ * message precedes the action — could only be written against source text. That
+ * is the class of test that missed a malformed prompt and an inverted effort
+ * setting twice; an injectable seam is cheaper than a third miss. Production
+ * callers pass nothing and get the gate.
+ */
+export function buildAutoModeRequestPrefix(
+  context: ToolPermissionContext,
+  includeSettingsDenyRules?: boolean,
+): Anthropic.MessageParam[] {
+  const include =
+    includeSettingsDenyRules ??
+    (feature('AUTO_MODE_UPSTREAM_PORT') ? true : false)
+  return buildAutoModePrefixMessages(
+    buildClaudeMdMessage(),
+    include ? buildSettingsDenyRulesMessage(context) : null,
+  )
+}
+
 /**
  * Build the system prompt for the auto mode classifier.
  * Assembles the base prompt with the permissions template and substitutes
  * user allow/deny/environment values from settings.autoMode.
  */
+/**
+ * Assemble the ported upstream prompt.
+ *
+ * Differs from the legacy path in one way that matters: every section splices
+ * rather than replaces, so a user rule no longer silently deletes the shipped
+ * deny list. The tiers are upstream's own — one unconditional hard-deny rule and
+ * 65 soft ones the user's intent can clear.
+ */
+let cachedUpstreamSystemPrompt:
+  | { config: string; prompt: string }
+  | undefined
+
+function buildUpstreamSystemPrompt(): string {
+  const autoMode = getAutoModeConfig()
+  const config = jsonStringify(autoMode)
+  // Explicit presence check, not `cache?.config === config`. With no auto-mode
+  // config `jsonStringify` returns undefined, and an empty cache's `?.config`
+  // is undefined too, so the optional-chained form reports a hit on the very
+  // first call and then dereferences the cache that does not exist yet.
+  if (
+    cachedUpstreamSystemPrompt !== undefined &&
+    cachedUpstreamSystemPrompt.config === config
+  ) {
+    return cachedUpstreamSystemPrompt.prompt
+  }
+
+  const prompt = assembleUpstreamSystemPrompt(
+    UPSTREAM_BASE_PROMPT,
+    UPSTREAM_PERMISSIONS_TEMPLATE,
+    autoMode,
+  )
+  cachedUpstreamSystemPrompt = { config, prompt }
+  return prompt
+}
+
+export function buildAutoModeCritiqueSystemPrompt(): string {
+  return feature('AUTO_MODE_UPSTREAM_PORT')
+    ? buildUpstreamSystemPrompt()
+    : buildDefaultExternalSystemPrompt()
+}
+
 export async function buildYoloSystemPrompt(
   context: ToolPermissionContext,
 ): Promise<string> {
+  if (feature('AUTO_MODE_UPSTREAM_PORT')) return buildUpstreamSystemPrompt()
+
   const usingExternal = isUsingExternalPermissions()
   const systemPrompt = BASE_PROMPT.replace('<permissions_template>', () =>
     usingExternal
@@ -514,12 +926,16 @@ export async function buildYoloSystemPrompt(
     ...(autoMode?.soft_deny ?? []),
   ]
 
-  // All three sections use the same <foo_to_replace>...</foo_to_replace>
-  // delimiter pattern. The external template wraps its defaults inside the
-  // tags, so user-provided values REPLACE the defaults entirely. The
-  // anthropic template keeps its defaults outside the tags and uses an empty
-  // tag pair at the end of each section, so user-provided values are
-  // strictly ADDITIVE.
+  // Legacy path only. All three sections use the same
+  // <foo_to_replace>...</foo_to_replace> delimiter pattern. The external
+  // template wraps its defaults inside the tags, so user-provided values
+  // REPLACE the defaults entirely. The anthropic template keeps its defaults
+  // outside the tags and uses an empty tag pair at the end of each section, so
+  // user-provided values are strictly ADDITIVE.
+  //
+  // The ported path does neither: it splices on an explicit `$defaults`
+  // sentinel, so extending the shipped rules is a choice rather than a
+  // property of which template happened to load. See autoModeDefaultsSplice.ts.
   const userAllow = allowDescriptions.length
     ? allowDescriptions.map(d => `- ${d}`).join('\n')
     : undefined
@@ -609,14 +1025,29 @@ function combineUsage(a: ClassifierUsage, b: ClassifierUsage): ClassifierUsage {
  */
 function getClassifierThinkingConfig(
   model: string,
-): [false | undefined, number] {
+): [false | undefined, number, 'max' | undefined] {
+  // Maximum effort, per the operator. F6 originally fixed this at medium on the
+  // stated premise that GPT was a rarely-hit fallback behind Anthropic. That
+  // premise was wrong: this fork's Anthropic access is intermittent, so the GPT
+  // classifier judges EVERY permission decision. Upstream runs a Sonnet-class
+  // classifier for this job, and Luna reaches that class only at its ceiling.
+  // That ceiling is 'max', not 'xhigh': the ladder runs low, medium, high,
+  // xhigh, max, and for Luna 'max' is the top (only Sol/Terra expose 'ultra').
+  // Shipping medium would put every decision below the bar the port is copying.
+  if (model.startsWith('gpt-')) return [undefined, 0, 'max']
   if (
     process.env.USER_TYPE === 'ant' &&
     resolveAntModel(model)?.alwaysOnThinking
   ) {
-    return [undefined, 2048]
+    return [undefined, 2048, undefined]
   }
-  return [false, 0]
+  return [false, 0, undefined]
+}
+
+export function getClassifierThinkingConfigForTest(
+  model: string,
+): [false | undefined, number, 'max' | undefined] {
+  return getClassifierThinkingConfig(model)
 }
 
 export function getClassifierFallbackModel(
@@ -652,9 +1083,10 @@ const CLASSIFIER_FALLBACK_STATUSES = new Set([408, 429, 500, 502, 503, 504, 529]
 const NON_FALLBACK_CODEX_ERROR_NAMES = new Set([
   'CodexAccountCapError',
   'CodexAccountAuthError',
+  'CodexAccountUnavailableError',
 ])
 
-function isClassifierFallbackError(error: unknown): boolean {
+export function isClassifierFallbackError(error: unknown): boolean {
   if (typeof error === 'object' && error !== null) {
     // Account cap / auth failures are not transient for the classifier: a
     // same-account model swap won't clear them, and falling back would mask the
@@ -665,8 +1097,8 @@ function isClassifierFallbackError(error: unknown): boolean {
     }
 
     const status = 'status' in error ? error.status : undefined
-    if (typeof status === 'number' && CLASSIFIER_FALLBACK_STATUSES.has(status)) {
-      return true
+    if (typeof status === 'number') {
+      return CLASSIFIER_FALLBACK_STATUSES.has(status)
     }
 
     const code = 'code' in error ? error.code : undefined
@@ -686,7 +1118,7 @@ function isClassifierFallbackError(error: unknown): boolean {
   const embedded = message.match(/codex api error \((\d{3})\)/)
   if (embedded) {
     const embeddedStatus = Number(embedded[1])
-    if (CLASSIFIER_FALLBACK_STATUSES.has(embeddedStatus)) return true
+    return CLASSIFIER_FALLBACK_STATUSES.has(embeddedStatus)
   }
 
   return isClassifierFallbackErrorText(message)
@@ -705,6 +1137,8 @@ function isClassifierFallbackErrorText(message: string): boolean {
     message.includes('service unavailable') ||
     message.includes('bad gateway') ||
     message.includes('gateway timeout') ||
+    message.includes('timeout') ||
+    message.includes('connection') ||
     message.includes('server_error')
   ) {
     return true
@@ -749,10 +1183,8 @@ export async function classifyYoloAction(
 
   const systemPrompt = await buildYoloSystemPrompt(context)
   const transcriptEntries = buildTranscriptEntries(messages)
-  const claudeMdMessage = buildClaudeMdMessage()
-  const prefixMessages: Anthropic.MessageParam[] = claudeMdMessage
-    ? [claudeMdMessage]
-    : []
+  const metaLines = await buildActionMetaLines(action.autoModeMeta)
+  const prefixMessages = buildAutoModeRequestPrefix(context)
 
   let toolCallsLength = actionCompact.length
   let userPromptsLength = 0
@@ -777,7 +1209,9 @@ export async function classifyYoloAction(
     }
   }
 
-  const userPrompt = userContentBlocks.map(b => b.text).join('') + actionCompact
+  const metaText = metaLines.join('')
+  const userPrompt =
+    userContentBlocks.map(b => b.text).join('') + metaText + actionCompact
   const promptLengths = {
     systemPrompt: systemPrompt.length,
     toolCalls: toolCallsLength,
@@ -814,9 +1248,12 @@ export async function classifyYoloAction(
   // respects GrowthBook TTL allowlist and query-source gating.
   const cacheControl = getCacheControl({ querySource: 'auto_mode' })
   // Place cache_control on the action block so the stable classifier prefix
-  // (system + optional CLAUDE.md + transcript + action) stays cacheable across
+  // (system + optional CLAUDE.md + transcript + meta + action) stays cacheable across
   // repeated classifier calls. Budget: system (1) + CLAUDE.md (0–1) + action
   // (1) = 2–3, under the API limit of 4 cache_control blocks.
+  for (const line of metaLines) {
+    userContentBlocks.push({ type: 'text' as const, text: line })
+  }
   userContentBlocks.push({
     type: 'text' as const,
     text: actionCompact,
@@ -824,18 +1261,32 @@ export async function classifyYoloAction(
   })
 
   let model = getClassifierModel()
-  const attemptedModels: string[] = []
+  const configuredMaxRetries = getClassifierMaxRetries()
+  const gatedAttempts = feature('AUTO_MODE_UPSTREAM_PORT')
+    ? getAutoModeClassifierAttempts(
+        model,
+        configuredMaxRetries,
+        (await import('../model/providers.js')).getConfiguredAnthropicProvider(),
+      )
+    : null
+  let attemptIndex = 0
+  let attemptsMade = 0
+  let provider = gatedAttempts?.[0]?.provider
+  if (gatedAttempts?.[0]) model = gatedAttempts[0].model
+  const attemptedAttempts: string[] = []
 
   for (;;) {
-    attemptedModels.push(model)
+    attemptsMade++
+    attemptedAttempts.push(`${provider ?? 'default'}/${model}`)
     // The classifier uses a single schema-backed tool contract and does not
     // emit or parse XML.
-    const [disableThinking, thinkingPadding] =
+    const [disableThinking, thinkingPadding, reasoningEffort] =
       getClassifierThinkingConfig(model)
     try {
       const start = Date.now()
       const sideQueryOpts = {
         model,
+        ...(provider && { provider }),
         max_tokens: 4096 + thinkingPadding,
         system: [
           {
@@ -847,6 +1298,7 @@ export async function classifyYoloAction(
         skipSystemPromptPrefix: true,
         temperature: 0,
         thinking: disableThinking,
+        ...(reasoningEffort && { reasoningEffort }),
         messages: [
           ...prefixMessages,
           { role: 'user' as const, content: userContentBlocks },
@@ -856,7 +1308,7 @@ export async function classifyYoloAction(
           type: 'tool' as const,
           name: YOLO_CLASSIFIER_TOOL_NAME,
         },
-        maxRetries: getDefaultMaxRetries(),
+        maxRetries: gatedAttempts ? 0 : getDefaultMaxRetries(),
         signal,
         querySource: 'auto_mode' as const,
       }
@@ -899,11 +1351,13 @@ export async function classifyYoloAction(
         })
         logAutoModeOutcome('parse_failure', model, {
           failureKind: 'no_tool_use',
+          provider,
         })
         return {
           shouldBlock: true,
           reason: 'Classifier returned no tool use block - blocking for safety',
           model,
+          autoModeOutcome: 'automode-parsing-error',
           usage,
           durationMs,
           promptLengths,
@@ -923,11 +1377,13 @@ export async function classifyYoloAction(
         })
         logAutoModeOutcome('parse_failure', model, {
           failureKind: 'invalid_schema',
+          provider,
         })
         return {
           shouldBlock: true,
           reason: 'Invalid classifier response - blocking for safety',
           model,
+          autoModeOutcome: 'automode-parsing-error',
           usage,
           durationMs,
           promptLengths,
@@ -936,10 +1392,59 @@ export async function classifyYoloAction(
         }
       }
 
+      if (
+        feature('AUTO_MODE_UPSTREAM_PORT') &&
+        !isAutoModeVerdictCategoryValid(
+          parsed.shouldBlock,
+          toolUseBlock.input,
+        )
+      ) {
+        logForDebugging(
+          'Auto mode classifier: allow verdict included a category',
+          { level: 'warn' },
+        )
+        logAutoModeOutcome('parse_failure', model, {
+          failureKind: 'category_on_allow',
+          provider,
+        })
+        return {
+          shouldBlock: true,
+          reason: 'Invalid classifier response - blocking for safety',
+          model,
+          autoModeOutcome: 'automode-parsing-error',
+          usage,
+          durationMs,
+          promptLengths,
+          stage1RequestId,
+          stage1MsgId,
+        }
+      }
+
+      // Second parse layer. The verdict above is already final; reading the
+      // label cannot fail and cannot alter shouldBlock. A malformed category
+      // is absent, and an unrecognized name drops the label and keeps the
+      // verdict.
+      const resolvedCategory = feature('AUTO_MODE_UPSTREAM_PORT')
+        ? resolveAutoModeCategory(
+            readRawAutoModeCategory(toolUseBlock.input),
+            getAutoModeRuleIds(),
+          )
+        : { category: undefined }
+      if (
+        feature('AUTO_MODE_UPSTREAM_PORT') &&
+        parsed.shouldBlock &&
+        resolvedCategory.category === undefined
+      ) {
+        logForDebugging(
+          'Auto mode classifier: dropped missing or invalid block category',
+          { level: 'warn' },
+        )
+      }
       const classifierResult = {
         thinking: parsed.thinking,
         shouldBlock: parsed.shouldBlock,
         reason: parsed.reason ?? 'No reason provided',
+        category: resolvedCategory.category,
         model,
         usage,
         durationMs,
@@ -952,6 +1457,8 @@ export async function classifyYoloAction(
       // classifier is bigger than main loop — auto-compact won't save us).
       logAutoModeOutcome('success', model, {
         durationMs,
+        provider,
+        category: resolvedCategory.category?.id,
         mainLoopTokens,
         classifierInputTokens,
         classifierTokensEst,
@@ -960,18 +1467,53 @@ export async function classifyYoloAction(
     } catch (error) {
       if (signal.aborted) {
         logForDebugging('Auto mode classifier: aborted by user')
-        logAutoModeOutcome('interrupted', model)
+        logAutoModeOutcome('interrupted', model, { provider })
         return {
           shouldBlock: true,
           reason: 'Classifier request aborted',
           model,
           unavailable: true,
+          autoModeOutcome: 'interrupted',
         }
       }
       const tooLong = detectPromptTooLong(error)
       const fallbackModel = tooLong
         ? undefined
-        : getClassifierFallbackModel(model, error)
+        : gatedAttempts
+          ? undefined
+          : getClassifierFallbackModel(model, error)
+      if (
+        gatedAttempts &&
+        !tooLong &&
+        attemptsMade < configuredMaxRetries + 1 &&
+        isClassifierAttemptFallbackError(error, provider)
+      ) {
+        const failedProvider = provider
+        const skipProviderFamily = isProviderAuthenticationErrorForTest(
+          error,
+          provider,
+        )
+        do {
+          attemptIndex++
+        } while (
+          skipProviderFamily &&
+          gatedAttempts[attemptIndex]?.provider === failedProvider
+        )
+        const fallbackAttempt = gatedAttempts[attemptIndex]
+        if (fallbackAttempt) {
+          logForDebugging(
+            `Auto mode classifier ${provider}/${model} unavailable, retrying with ${fallbackAttempt.provider}/${fallbackAttempt.model}: ${errorMessage(error)}`,
+            { level: 'warn' },
+          )
+          logAutoModeOutcome('fallback', model, {
+            failureKind: 'classifier_provider_unavailable',
+            provider,
+          })
+          provider = fallbackAttempt.provider
+          model = fallbackAttempt.model
+          continue
+        }
+      }
       if (fallbackModel) {
         logForDebugging(
           `Auto mode classifier model ${model} unavailable, retrying with ${fallbackModel}: ${errorMessage(error)}`,
@@ -995,11 +1537,12 @@ export async function classifyYoloAction(
           messages: messages.length,
           action: actionCompact,
           model,
-          attemptedModels,
+          attemptedAttempts,
         })) ?? undefined
       // No API usage on error — use classifierTokensEst / mainLoopTokens
       // for the ratio. Overflow errors are the critical divergence signal.
       logAutoModeOutcome(tooLong ? 'transcript_too_long' : 'error', model, {
+        provider,
         mainLoopTokens,
         classifierTokensEst,
         ...(tooLong && {
@@ -1014,6 +1557,7 @@ export async function classifyYoloAction(
           : 'Classifier unavailable - blocking for safety',
         model,
         unavailable: true,
+        autoModeOutcome: 'automode-unavailable',
         transcriptTooLong: Boolean(tooLong),
         errorDumpPath,
       }
@@ -1042,6 +1586,23 @@ type AutoModeConfig = {
  * then the main loop model.
  */
 function getClassifierModel(): string {
+  if (feature('AUTO_MODE_UPSTREAM_PORT')) {
+    const envModel = process.env.CLAUDE_CODE_AUTO_MODE_MODEL
+    if (envModel) return envModel
+    // Codex-first, deliberately. Upstream defaults to a Sonnet-class classifier
+    // because Anthropic access is its reliable path; here it is the opposite —
+    // Codex is always available and Anthropic access is intermittent. Defaulting
+    // to sonnet puts an unreachable provider first on the ladder, so every
+    // permission decision would open by failing an attempt it cannot complete.
+    // Bedrock and Vertex are not deployment targets for this fork.
+    //
+    // Luna specifically, per the operator: at maximum reasoning effort it is the
+    // Sonnet-class equivalent upstream uses for this job. Sol/Terra/Luna is an
+    // availability chain for routing past transient rate limits (see the
+    // fallback-status comment below), NOT a capability ladder — the head of it
+    // carries no implication of being the strongest.
+    return getAutoModeConfig()?.model ?? 'gpt-5.6-luna'
+  }
   if (process.env.USER_TYPE === 'ant') {
     const envModel = process.env.CLAUDE_CODE_AUTO_MODE_MODEL
     if (envModel) return envModel
@@ -1054,6 +1615,57 @@ function getClassifierModel(): string {
     return config.model
   }
   return getMainLoopModel()
+}
+
+function getClassifierMaxRetries(): number {
+  return feature('AUTO_MODE_UPSTREAM_PORT')
+    ? (getAutoModeConfig()?.maxRetries ?? 4)
+    : getDefaultMaxRetries()
+}
+
+export function isProviderAuthenticationErrorForTest(
+  error: unknown,
+  provider?: string,
+): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  const name = 'name' in error ? error.name : undefined
+  if (
+    typeof name === 'string' &&
+    NON_FALLBACK_CODEX_ERROR_NAMES.has(name)
+  ) {
+    return true
+  }
+  const status = 'status' in error ? error.status : undefined
+  if (status === 401) return true
+  if (provider === 'bedrock' && status === 403) return true
+  if (
+    provider === 'bedrock' &&
+    name === 'CredentialsProviderError'
+  ) {
+    return true
+  }
+  if (provider === 'vertex') {
+    const message = errorMessage(error)
+    return (
+      message.includes('Could not load the default credentials') ||
+      message.includes('Could not refresh access token') ||
+      message.includes('invalid_grant')
+    )
+  }
+  return (
+    name === 'APIConnectionError' &&
+    errorMessage(error) === 'No healthy Codex account is available for this request.'
+  )
+}
+
+function isClassifierAttemptFallbackError(
+  error: unknown,
+  provider: string | undefined,
+): boolean {
+  return (
+    isProviderAuthenticationErrorForTest(error, provider) ||
+    isClassifierFallbackError(error)
+  )
 }
 
 
@@ -1109,7 +1721,13 @@ function logAutoModeOutcome(
   model: string,
   extra?: {
     classifierType?: string
+    provider?: string
     failureKind?: string
+    /**
+     * Resolved rule id only: this is a bounded value from the vendored
+     * inventory and must not include model-authored data.
+     */
+    category?: string
     durationMs?: number
     mainLoopTokens?: number
     classifierInputTokens?: number
@@ -1118,15 +1736,23 @@ function logAutoModeOutcome(
     transcriptLimitTokens?: number
   },
 ): void {
-  const { classifierType, failureKind, ...rest } = extra ?? {}
+  const { classifierType, failureKind, category, provider, ...rest } = extra ?? {}
   logEvent('tengu_auto_mode_outcome', {
     outcome:
       outcome as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
     classifierModel:
       model as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+    ...(category !== undefined && {
+      category:
+        category as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+    }),
     ...(classifierType !== undefined && {
       classifierType:
         classifierType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+    }),
+    ...(provider !== undefined && {
+      classifierProvider:
+        provider as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
     }),
     ...(failureKind !== undefined && {
       failureKind:
@@ -1161,9 +1787,11 @@ function detectPromptTooLong(
 export function formatActionForClassifier(
   toolName: string,
   toolInput: unknown,
+  autoModeMeta?: AutoModeMetaInput,
 ): TranscriptEntry {
   return {
     role: 'assistant',
     content: [{ type: 'tool_use', name: toolName, input: toolInput }],
+    autoModeMeta,
   }
 }

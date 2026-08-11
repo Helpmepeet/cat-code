@@ -9,6 +9,7 @@
  * points the popover reads the last snapshot rather than an estimate.
  */
 
+import type { ContextUsage } from './contextUsage.js'
 import type {
   ContextBreakdownSnapshot,
   ServerFrame,
@@ -228,6 +229,38 @@ export function selectBreakdownRows(
     }))
 }
 
+/**
+ * The popover's own aggregate — the sum of the SAME rows the legend prints,
+ * over the snapshot's OWN `contextWindow`. Never the composer's live `usage`
+ * (refreshed on every message): the breakdown is a coarse, throttled snapshot
+ * (attach + on popover-open, 15s floor — `sidecarServer.ts`
+ * `CONTEXT_BREAKDOWN_MIN_INTERVAL_MS`), and its category tokens are local
+ * estimates on top of that, so pairing it with the live number let the header
+ * and the rows drift apart — a header reading "30k" over rows that summed to
+ * well over that. `accounted + Free` equals the snapshot's own `contextWindow`
+ * exactly, by construction (`analyzeContext.ts`: `freeTokens = contextWindow -
+ * actualUsage - reservedTokens`, and the reserved-buffer row, when present, is
+ * part of `actualUsage`'s complement, not `accounted`'s), so this is the one
+ * total that always reconciles with what is printed below it.
+ *
+ * Falls back to the live `usage` when there is no trustworthy breakdown yet
+ * (`rows` empty) — the aggregate-row-only state, where there is nothing to sum.
+ */
+export function selectPanelUsage(
+  usage: ContextUsage,
+  breakdown: ContextBreakdownSnapshot | null,
+): ContextUsage {
+  const rows = selectBreakdownRows(breakdown)
+  if (rows.length === 0 || !breakdown) return usage
+  const accounted = rows.reduce((sum, row) => sum + row.tokens, 0)
+  const contextWindow = breakdown.contextWindow
+  const percentUsed = Math.min(
+    100,
+    Math.max(0, Math.round((accounted / contextWindow) * 100)),
+  )
+  return { usedTokens: accounted, contextWindow, percentUsed }
+}
+
 /* ---------------------------------------------------------------------------
  * The donut's hover view
  *
@@ -279,14 +312,18 @@ export type DonutView = {
   circumference: number
   segments: DonutSegment[]
   legend: DonutLegendRow[]
-  /**
-   * Tokens for the hovered category, or null for the resting view — which is the
-   * panel's own aggregate percent, in the panel's own pressure tone. Formatting
-   * stays with the caller, which owns the token formatter.
-   */
-  centerTokens: number | null
   /** The hovered category's hue as a static `text-*` class, null at rest. */
   centerClass: string | null
+  /**
+   * The hovered category's share of the ACCOUNTED total (`Σ rows[].tokens`,
+   * the same denominator {@link selectPanelUsage} sums the header from), 0-100.
+   * Null at rest, where the caller prints the panel's own overall percent
+   * instead — the arcs still size by share of the full window
+   * ({@link ContextBreakdownRow.percentOfWindow}), so a category can read
+   * "23% of what's used" in the center while its arc still occupies a sliver
+   * of the ring; those are different questions and both are correct.
+   */
+  centerPercent: number | null
 }
 
 /**
@@ -305,6 +342,7 @@ export function selectDonutView(
     hoveredIndex != null && hoveredIndex >= 0 && hoveredIndex < rows.length
       ? hoveredIndex
       : null
+  const accountedTotal = rows.reduce((sum, row) => sum + row.tokens, 0)
 
   let drawn = 0
   const segments = rows.map((row, index) => {
@@ -344,8 +382,11 @@ export function selectDonutView(
     circumference: DONUT_CIRCUMFERENCE,
     segments,
     legend,
-    centerTokens: hoveredRow ? hoveredRow.tokens : null,
     centerClass: hoveredRow ? hoveredRow.textClass : null,
+    centerPercent:
+      hoveredRow && accountedTotal > 0
+        ? (hoveredRow.tokens / accountedTotal) * 100
+        : null,
   }
 }
 

@@ -1,6 +1,6 @@
 # Prompt System Map
 
-Last refreshed: 2026-08-06
+Last refreshed: 2026-08-10
 
 ## Purpose
 
@@ -165,3 +165,6 @@ For emitted-prompt inspection, use prompt dumps when available:
 - Do not forget API-time additions in `src/services/api/claude.ts`, such as CLI prompt prefixes and tool-search related instructions.
 - Do not assume safety or orchestration guidance is shared across providers. GPT-specific tool-output handling, risky-action policy, verification bounds, and Explore delegation rules are assembled in `src/constants/promptStyles/gpt.ts`.
 - Do not treat a single subagent as a neutral pass-through. The default and GPT prompt styles both require a concrete reason delegation beats doing that work in the current thread.
+- Do not reach for `src/services/api/dumpPrompts.ts` without setting `USER_TYPE=ant`. Every entry point returns early otherwise, so the rows above that point at prompt dumps describe an ant-only path. `/context` is the only inspection surface live by default.
+- Do not reach for `--dump-system-prompt`. Its call site in `src/entrypoints/cli.tsx` is guarded on a feature name that does not appear in `scripts/build.ts`, so it is eliminated from every build and the CLI reports it as an unknown option.
+- Do not assume a prompt difference from upstream is Cat Code's doing. Roughly half of the prompt-system differences audited on 2026-08-10 were upstream changes made after the fork. Check [`../reports/2026-08-10-cat-code-upstream-divergence-ledger.md`](../reports/2026-08-10-cat-code-upstream-divergence-ledger.md) before re-syncing anything toward upstream, especially the instruction-authority wrapper in `src/utils/claudemd.ts` and the input-keyed section cache, which are deliberate.

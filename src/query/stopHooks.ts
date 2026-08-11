@@ -59,7 +59,7 @@ import {
 } from '../utils/forkedAgent.js'
 import { resolveRequestProvider } from '../utils/model/providers.js'
 
-type StopHookResult = {
+export type StopHookResult = {
   blockingErrors: Message[]
   preventContinuation: boolean
 }

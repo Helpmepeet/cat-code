@@ -484,6 +484,53 @@ function getOwnedTranscriptPath(): string | null {
 }
 
 /**
+ * Append a codex_request_start diagnostic entry to the current session JSONL.
+ *
+ * The start-side counterpart of `recordCodexSendPath` /
+ * `recordCodexStreamSurface`: both of those write when a stream ENDS, so a
+ * provider request that hangs forever writes nothing at all and the absence of
+ * a record cannot distinguish "no request was made" from "a request never
+ * finished" — the ambiguity that cost the 2026-08-10 overnight hang hours
+ * (`docs/reports/2026-08-10-overnight-turn-hang-investigation.md`,
+ * `docs/migration/decisions/OBSERVABILITY-MINIMUM.md` §2).
+ *
+ * Metadata only: the transport this request dispatches on, prefixes, and the
+ * model. Never the request body, message content, or a full conversation id
+ * (OBSERVABILITY-MINIMUM §5). Log-only — nothing here bounds, aborts, or
+ * retries the request, because killing a hung request destroys the state that
+ * explains it (§3).
+ *
+ * One record per request dispatch, never per chunk, frame, or WS→HTTP
+ * fallback: a request that starts on the websocket and finishes over HTTP is
+ * one request and pairs with the one `codex_stream_surface` it ends with.
+ *
+ * No-op unless a real session owns the transcript — see
+ * `getOwnedTranscriptPath()`.
+ *
+ * Sync and best-effort — never throws. Safe to call from the API path.
+ */
+export function recordCodexRequestStart(entry: {
+  mode: 'websocket' | 'http'
+  conversation_id_prefix: string | null
+  account_id_prefix: string | null
+  model: string
+}): void {
+  try {
+    const transcriptPath = getOwnedTranscriptPath()
+    if (transcriptPath === null) return
+    appendEntryToFile(transcriptPath, {
+      type: 'system',
+      subtype: 'codex_request_start',
+      uuid: randomUUID(),
+      timestamp: new Date().toISOString(),
+      ...entry,
+    })
+  } catch {
+    // Best-effort — don't let diagnostic writes crash the API path.
+  }
+}
+
+/**
  * Append a codex_send_path diagnostic entry to the current session JSONL.
  * Records the WS send-path decision (incremental/full/prewarm/stale_retry)
  * and associated metadata so post-hoc analysis of cache misses doesn't
@@ -731,6 +778,69 @@ export function recordPromptCacheBreak(entry: {
     appendEntryToFile(transcriptPath, {
       type: 'system',
       subtype: 'prompt_cache_break',
+      sessionId: getSessionId(),
+      uuid: randomUUID(),
+      timestamp: new Date().toISOString(),
+      ...entry,
+    })
+  } catch {
+    // Best-effort — don't let diagnostic writes crash the API path.
+  }
+}
+
+/**
+ * Named awaits on the path between the final assistant message and result
+ * emission. `storage_flush`, `provider_stream` and `unknown` are reserved
+ * vocabulary — no call site arms them yet; see `query/postTurnStall.ts` for
+ * which phases are wired.
+ */
+export type PostTurnStallPhase =
+  | 'tool_use_summary'
+  | 'reactive_compact'
+  | 'stop_hooks'
+  | 'computer_use_cleanup'
+  | 'storage_flush'
+  | 'provider_stream'
+  | 'unknown'
+
+/**
+ * Append a post_turn_stall diagnostic entry to the current session JSONL.
+ * Records that one named await between the final assistant message and result
+ * emission has been outstanding past its threshold, so a run that never closes
+ * names the phase it is stuck in instead of going silent for nine hours
+ * (docs/reports/2026-08-10-overnight-turn-hang-investigation.md).
+ *
+ * Log only, by design: nothing here cancels the await. A timeout would unstick
+ * the turn and destroy the evidence this record exists to capture — the run
+ * must still be hung when someone samples the process.
+ *
+ * No-op unless the target transcript has an owner — the main session from
+ * `getOwnedTranscriptPath()`, a subagent from `getOwnedAgentTranscriptPath()`.
+ * Metadata only: no message, tool input, or hook output content.
+ *
+ * Sync and best-effort — never throws. Safe to call from a timer callback.
+ */
+export function recordPostTurnStall(entry: {
+  phase: PostTurnStallPhase
+  /**
+   * The bar the watch was armed at. There is deliberately no elapsed figure:
+   * the callback fires AT the threshold, so any "elapsed" it could report is
+   * the threshold back again, and a field that reads like a stall duration
+   * without being one sends the next reader down a false path.
+   */
+  threshold_ms: number
+  turn_count: number
+  query_source: string
+  agentId?: AgentId
+}): void {
+  try {
+    const transcriptPath = entry.agentId
+      ? getOwnedAgentTranscriptPath(entry.agentId)
+      : getOwnedTranscriptPath()
+    if (transcriptPath === null) return
+    appendEntryToFile(transcriptPath, {
+      type: 'system',
+      subtype: 'post_turn_stall',
       sessionId: getSessionId(),
       uuid: randomUUID(),
       timestamp: new Date().toISOString(),

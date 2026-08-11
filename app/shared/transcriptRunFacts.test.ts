@@ -20,13 +20,22 @@
  * Fixtures here are raw JSONL lines, the same thing the worker reads.
  */
 import { expect, test } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   MAX_RUN_FACTS_READ_BYTES,
+  MAX_RUN_FACTS_TRANSCRIPT_BYTES,
   readTranscriptRunFacts,
 } from './transcriptRunFacts.js'
+
+/**
+ * The facts half of a read. The `authoritative` half is a separate contract
+ * (whether a `system`/`run_facts` snapshot was found) and has its own tests.
+ */
+function factsOf(...args: Parameters<typeof readTranscriptRunFacts>) {
+  return readTranscriptRunFacts(...args).facts
+}
 
 function transcriptOf(records: unknown[]): string {
   const dir = mkdtempSync(join(tmpdir(), 'runfacts-'))
@@ -53,7 +62,7 @@ const sendPath = (effort: string) => ({
 const noWindow = () => null
 
 test('every fact is read from the record shape the engine really writes', () => {
-  const facts = readTranscriptRunFacts(
+  const facts = factsOf(
     transcriptOf([
       user('plan'),
       sendPath('high'),
@@ -83,7 +92,7 @@ test('every fact is read from the record shape the engine really writes', () => 
  * the same session would read two different sizes previewed vs attached.
  */
 test('output_tokens counts toward context, matching the engine numerator', () => {
-  const facts = readTranscriptRunFacts(
+  const facts = factsOf(
     transcriptOf([
       assistant('gpt-5.6-sol', {
         input_tokens: 654,
@@ -100,7 +109,7 @@ test('output_tokens counts toward context, matching the engine numerator', () =>
 })
 
 test('a turn whose ONLY nonzero field is output still reports context', () => {
-  const facts = readTranscriptRunFacts(
+  const facts = factsOf(
     transcriptOf([
       assistant('m', {
         input_tokens: 0,
@@ -115,14 +124,14 @@ test('a turn whose ONLY nonzero field is output still reports context', () => {
 })
 
 test('an engine-internal mode survives, since it is what the session ran under', () => {
-  const facts = readTranscriptRunFacts(transcriptOf([user('auto')]), noWindow)
+  const facts = factsOf(transcriptOf([user('auto')]), noWindow)
   expect(facts.permissionMode).toBe('auto')
 })
 
 /** Real transcripts open with all-zero usage rows; they say nothing about
  * context, and a zero would render an empty donut on a session that used it. */
 test('all-zero usage is skipped in favour of a turn that really reported', () => {
-  const facts = readTranscriptRunFacts(
+  const facts = factsOf(
     transcriptOf([
       assistant('m', { input_tokens: 900, cache_read_input_tokens: 100 }),
       assistant('m', {
@@ -137,7 +146,7 @@ test('all-zero usage is skipped in favour of a turn that really reported', () =>
 })
 
 test('effort is ignored on a system record of another subtype', () => {
-  const facts = readTranscriptRunFacts(
+  const facts = factsOf(
     transcriptOf([
       sendPath('xhigh'),
       { type: 'system', subtype: 'turn_duration', effort: 'low' },
@@ -154,7 +163,7 @@ test('effort is ignored on a system record of another subtype', () => {
  */
 test('the window is resolved from the newest model, so a non-200k one is real', () => {
   const asked: string[] = []
-  const facts = readTranscriptRunFacts(
+  const facts = factsOf(
     transcriptOf([
       assistant('claude-sonnet-5', { input_tokens: 10 }),
       assistant('gpt-5.6-terra', { input_tokens: 171_000 }),
@@ -171,7 +180,7 @@ test('the window is resolved from the newest model, so a non-200k one is real', 
 })
 
 test('a resolver that claims no window leaves the renderer its fallback', () => {
-  const facts = readTranscriptRunFacts(
+  const facts = factsOf(
     transcriptOf([assistant('gpt-5.6-terra')]),
     noWindow,
   )
@@ -181,7 +190,7 @@ test('a resolver that claims no window leaves the renderer its fallback', () => 
 
 test('a transcript with no model never asks for a window', () => {
   let asked = false
-  const facts = readTranscriptRunFacts(transcriptOf([user('plan')]), () => {
+  const facts = factsOf(transcriptOf([user('plan')]), () => {
     asked = true
     return 372_000
   })
@@ -196,7 +205,7 @@ test.each([
   ['answers a non-number', () => Number.NaN],
   ['answers zero', () => 0],
 ])('a resolver that %s yields null rather than failing the read', (_label, resolve) => {
-  const facts = readTranscriptRunFacts(
+  const facts = factsOf(
     transcriptOf([assistant('gpt-5.6-terra', { input_tokens: 10 })]),
     resolve as (model: string) => number | null,
   )
@@ -207,21 +216,21 @@ test.each([
 })
 
 test('a silent or unreadable transcript claims nothing, and never throws', () => {
-  expect(readTranscriptRunFacts(transcriptOf([]), noWindow)).toEqual({
+  expect(factsOf(transcriptOf([]), noWindow)).toEqual({
     model: null,
     permissionMode: null,
     effort: null,
     usedTokens: null,
     contextWindow: null,
   })
-  expect(readTranscriptRunFacts('/no/such/transcript.jsonl', noWindow).model).toBeNull()
+  expect(factsOf('/no/such/transcript.jsonl', noWindow).model).toBeNull()
 })
 
 test('a corrupt line is skipped rather than failing the whole read', () => {
   const dir = mkdtempSync(join(tmpdir(), 'runfacts-bad-'))
   const file = join(dir, 't.jsonl')
   writeFileSync(file, `{not json\n${JSON.stringify(user('plan'))}\n`, 'utf8')
-  expect(readTranscriptRunFacts(file, noWindow).permissionMode).toBe('plan')
+  expect(factsOf(file, noWindow).permissionMode).toBe('plan')
   rmSync(dir, { recursive: true, force: true })
 })
 
@@ -261,7 +270,7 @@ test('reads a bounded newline-aligned tail instead of materializing a whole tran
     'utf8',
   )
   try {
-    const facts = readTranscriptRunFacts(file, forbiddenResolver)
+    const facts = readTranscriptRunFacts(file, forbiddenResolver).facts
     expect(facts).toMatchObject({
       model: 'gpt-5.6-terra',
       permissionMode: 'auto',
@@ -275,7 +284,7 @@ test('reads a bounded newline-aligned tail instead of materializing a whole tran
 })
 
 test('a run_facts snapshot wins over the byproduct records, window included', () => {
-  const facts = readTranscriptRunFacts(
+  const facts = factsOf(
     transcriptOf([
       user('plan'),
       sendPath('low'),
@@ -297,7 +306,7 @@ test('the snapshot is taken as a unit, not merged with newer byproducts', () => 
   // The send-path record is NEWER than the snapshot. Letting it win would pair
   // an effort from one turn with a model from another — the incoherence the
   // snapshot exists to remove.
-  const facts = readTranscriptRunFacts(
+  const facts = factsOf(
     transcriptOf([
       runFacts('gpt-5.6-luna', 'auto', 'high', 372_000),
       sendPath('xhigh'),
@@ -308,7 +317,7 @@ test('the snapshot is taken as a unit, not merged with newer byproducts', () => 
 })
 
 test('the newest snapshot wins when a session changed mid-run', () => {
-  const facts = readTranscriptRunFacts(
+  const facts = factsOf(
     transcriptOf([
       runFacts('claude-sonnet-5', 'default', null, 200_000),
       runFacts('gpt-5.6-sol', 'auto', 'xhigh', 372_000),
@@ -321,7 +330,7 @@ test('the newest snapshot wins when a session changed mid-run', () => {
 })
 
 test('a legacy transcript still resolves its window from the model', () => {
-  const facts = readTranscriptRunFacts(
+  const facts = factsOf(
     transcriptOf([user('plan'), assistant('gpt-5.5', { input_tokens: 10 })]),
     model => (model === 'gpt-5.5' ? 272_000 : null),
   )
@@ -330,9 +339,115 @@ test('a legacy transcript still resolves its window from the model', () => {
 })
 
 test('a snapshot with an unusable window falls back to the resolver', () => {
-  const facts = readTranscriptRunFacts(
+  const facts = factsOf(
     transcriptOf([runFacts('gpt-5.5', 'auto', 'high', 0)]),
     model => (model === 'gpt-5.5' ? 272_000 : null),
   )
   expect(facts.contextWindow).toBe(272_000)
+})
+
+/* ------------------------------------------------------------------------- *
+ * Compaction — usage is stale on BOTH sides of the boundary
+ * ------------------------------------------------------------------------- */
+
+const boundary = (head: string, tail: string) => ({
+  type: 'system',
+  subtype: 'compact_boundary',
+  compact_metadata: { preserved_segment: { head_uuid: head, tail_uuid: tail } },
+})
+
+const assistantWithUuid = (
+  uuid: string,
+  model: string,
+  usage: Record<string, number>,
+) => ({ ...assistant(model, usage), uuid })
+
+test('usage below a compaction boundary is never read', () => {
+  // Those records measure a context that no longer exists. `contextUsage.ts`
+  // floors its walk at the boundary and this must match, or a close writes a
+  // pre-compaction number into a header the renderer trusts wholesale.
+  const facts = factsOf(
+    transcriptOf([
+      assistant('gpt-5.6-sol', { input_tokens: 300_000 }),
+      boundary('head-1', 'tail-1'),
+    ]),
+    noWindow,
+  )
+  expect(facts.usedTokens).toBeNull()
+})
+
+test('the PRESERVED segment spliced above the boundary is skipped too', () => {
+  // The subtle half. The engine splices the kept originals back in AFTER the
+  // boundary, carrying their ORIGINAL usage, so a plain newest-wins scan lands
+  // on a pre-compaction number that sits in the newest part of the file.
+  const facts = factsOf(
+    transcriptOf([
+      boundary('head-1', 'tail-1'),
+      assistantWithUuid('head-1', 'gpt-5.6-sol', { input_tokens: 300_000 }),
+      assistantWithUuid('tail-1', 'gpt-5.6-sol', { input_tokens: 290_000 }),
+      // The only post-compaction turn that actually reported.
+      assistant('gpt-5.6-sol', { input_tokens: 12_000 }),
+    ]),
+    noWindow,
+  )
+  expect(facts.usedTokens).toBe(12_000)
+})
+
+test('a preserved segment with no post-compaction turn reports nothing', () => {
+  // Rather than the preserved tail's stale high number. Null leaves the
+  // renderer its own fallback, which would have rejected that value too.
+  const facts = factsOf(
+    transcriptOf([
+      boundary('head-1', 'tail-1'),
+      assistantWithUuid('head-1', 'gpt-5.6-sol', { input_tokens: 300_000 }),
+      assistantWithUuid('tail-1', 'gpt-5.6-sol', { input_tokens: 290_000 }),
+    ]),
+    noWindow,
+  )
+  expect(facts.usedTokens).toBeNull()
+  // The MODEL is still safe to read from a preserved record: compaction does
+  // not change what model that turn ran on.
+  expect(facts.model).toBe('gpt-5.6-sol')
+})
+
+/* ------------------------------------------------------------------------- *
+ * Provenance + the read cap
+ * ------------------------------------------------------------------------- */
+
+test('an authoritative snapshot is reported as such, a legacy scan is not', () => {
+  const withSnapshot = readTranscriptRunFacts(
+    transcriptOf([
+      {
+        type: 'system',
+        subtype: 'run_facts',
+        model: 'gpt-5.6-sol',
+        permissionMode: 'auto',
+        effort: null,
+        contextWindow: 372_000,
+      },
+    ]),
+    noWindow,
+  )
+  expect(withSnapshot.authoritative).toBe(true)
+  // `effort: null` on THIS tier means the run used the provider default. The
+  // flag is what stops a caller patching a cached `high` over it.
+  expect(withSnapshot.facts.effort).toBeNull()
+
+  const legacy = readTranscriptRunFacts(
+    transcriptOf([user('plan'), assistant('claude-sonnet-5')]),
+    noWindow,
+  )
+  expect(legacy.authoritative).toBe(false)
+})
+
+test('an oversized transcript is declined before it is read', () => {
+  // The scan is synchronous on Electron's main thread at every close, park,
+  // crash and quit, and transcript size is driven by model and tool output.
+  const dir = mkdtempSync(join(tmpdir(), 'runfacts-big-'))
+  const file = join(dir, 'transcript.jsonl')
+  writeFileSync(file, JSON.stringify(assistant('m', { input_tokens: 5 })), 'utf8')
+  // Rather than writing 64 MB, prove the gate by its own constant.
+  expect(MAX_RUN_FACTS_TRANSCRIPT_BYTES).toBe(64 * 1024 * 1024)
+  expect(statSync(file).size).toBeLessThan(MAX_RUN_FACTS_TRANSCRIPT_BYTES)
+  expect(readTranscriptRunFacts(file, noWindow).facts.usedTokens).toBe(5)
 })

@@ -81,6 +81,7 @@ import type {
   PermissionDecisionReason,
   PermissionResult,
 } from '../../utils/permissions/PermissionResult.js'
+import { recordAutoModeOutcome } from '../../utils/permissions/autoModeMeta.js'
 import {
   startSessionActivity,
   stopSessionActivity,
@@ -1007,6 +1008,14 @@ async function checkPermissionsAndCallTool(
   }
 
   if (permissionDecision.behavior !== 'allow') {
+    if (permissionDecision.decisionReason?.type !== 'classifier') {
+      recordAutoModeOutcome(
+        toolUseID,
+        permissionDecision.behavior === 'ask'
+          ? 'rejected-by-user'
+          : 'blocked-by-permissions',
+      )
+    }
     logForDebugging(`${tool.name} tool permission denied`)
     const decisionInfo = toolUseContext.toolDecisions?.get(toolUseID)
     endToolBlockedOnUserSpan('reject', decisionInfo?.source || 'unknown')
@@ -1418,6 +1427,7 @@ async function checkPermissionsAndCallTool(
       toolUseResult: unknown,
       preMappedBlock?: ToolResultBlockParam,
     ) {
+      recordAutoModeOutcome(toolUseID, 'ok')
       // Use the pre-mapped block when available (non-MCP tools where hooks
       // don't modify the output), otherwise map from scratch.
       const toolResultBlock = preMappedBlock
@@ -1601,6 +1611,10 @@ async function checkPermissionsAndCallTool(
     }
     return resultingMessages
   } catch (error) {
+    recordAutoModeOutcome(
+      toolUseID,
+      error instanceof AbortError ? 'interrupted' : 'error',
+    )
     const durationMs = Date.now() - startTime
     addToToolDuration(durationMs)
 

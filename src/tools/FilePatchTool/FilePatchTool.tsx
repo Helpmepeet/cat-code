@@ -459,18 +459,24 @@ export const FilePatchTool = buildTool({
     // onto the transcript. structuredPatch plus a bounded firstLine is
     // everything any reader uses.
     const output: FilePatchToolOutput = {
-      files: applied.files.map(file => ({
-        path: file.path,
-        type: file.type,
-        firstLine: firstLineForLanguageDetection(file.before ?? file.after),
-        structuredPatch: boundPatchLinesForPersistence(
-          getPatchFromContents({
-            filePath: file.path,
-            oldContent: file.before ?? '',
-            newContent: file.after ?? '',
-          }),
-        ),
-      })),
+      files: applied.files.map(file => {
+        const entry: FilePatchToolOutput['files'][number] = {
+          path: file.path,
+          type: file.type,
+          firstLine: firstLineForLanguageDetection(file.before ?? file.after),
+          structuredPatch: boundPatchLinesForPersistence(
+            getPatchFromContents({
+              filePath: file.path,
+              oldContent: file.before ?? '',
+              newContent: file.after ?? '',
+            }),
+          ),
+        }
+        if (file.notes && file.notes.length > 0) {
+          entry.notes = file.notes
+        }
+        return entry
+      }),
     }
 
     return { data: output }
@@ -489,7 +495,10 @@ export const FilePatchTool = buildTool({
           : file.type === 'delete'
             ? 'Deleted'
             : 'Updated'
-      return `${verb} ${file.path}`
+      // Placement disclosures ride on their own file's line: a multi-file
+      // patch otherwise leaves the model guessing which target moved.
+      const notes = file.notes?.length ? `: ${file.notes.join('; ')}` : ''
+      return `${verb} ${file.path}${notes}`
     })
     const detail = lines.length > 0 ? `:\n${lines.join('\n')}` : '.'
     return {

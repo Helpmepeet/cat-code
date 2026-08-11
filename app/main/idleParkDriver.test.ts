@@ -6,7 +6,20 @@
 
 import { expect, test } from 'bun:test'
 import type { SessionDescriptor } from '../shared/hostApi.js'
-import { createIdleParkDriver, MAX_LIVE_ENGINES } from './idleParkDriver.js'
+import {
+  createIdleParkDriver as createIdleParkDriverWithDeps,
+  MAX_LIVE_ENGINES,
+  type IdleParkDriverDeps,
+} from './idleParkDriver.js'
+
+function createIdleParkDriver(
+  deps: Omit<IdleParkDriverDeps, 'canResume'>,
+) {
+  return createIdleParkDriverWithDeps({
+    ...deps,
+    canResume: () => true,
+  })
+}
 
 function desc(
   over: Partial<SessionDescriptor> & { appSessionId: string },
@@ -18,6 +31,7 @@ function desc(
     titleUpdatedAt: null,
     status: 'ready',
     restorable: false,
+    parked: false,
     createdAt: 0,
     lastAttachedAt: 0,
     lastMessageSentAt: null,
@@ -274,6 +288,31 @@ test('never parks a non-live (disconnected / exited) session, however old', () =
   driver.evaluate()
 
   expect(parked).toEqual([])
+})
+
+test('never parks a live session the host cannot resume', () => {
+  // An engine session id exists at ready, but the engine creates its transcript
+  // only once a turn runs. The target is oldest and over the cap; without the
+  // host predicate it would be parked and stranded.
+  const sessions = [
+    desc({ appSessionId: 'never-typed', lastMessageSentAt: 0 }),
+    desc({ appSessionId: 'resumable-old', lastMessageSentAt: 100 }),
+    desc({ appSessionId: 'resumable-2', lastMessageSentAt: 200 }),
+    desc({ appSessionId: 'resumable-3', lastMessageSentAt: 300 }),
+    desc({ appSessionId: 'resumable-4', lastMessageSentAt: 400 }),
+  ]
+  const parked: string[] = []
+  const driver = createIdleParkDriverWithDeps({
+    listSessions: () => sessions,
+    canResume: id => id !== 'never-typed',
+    park: id => parked.push(id),
+    idleTtlMs: 1e12,
+    now: () => 1_000,
+  })
+
+  driver.evaluate()
+
+  expect(parked).toEqual(['resumable-old'])
 })
 
 test('a park that throws (victim raced to exit) does not abort the sweep', () => {

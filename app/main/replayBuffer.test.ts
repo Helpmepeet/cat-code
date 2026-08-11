@@ -15,6 +15,7 @@ import {
   DEFAULT_MAX_BUFFERED_BYTES,
   DEFAULT_MAX_BUFFERED_FRAMES,
   FrameReplayBuffer,
+  isPreviewReplayTruncationFrame,
   isReplayTruncationFrame,
   STICKY_FRAME_KINDS,
 } from './replayBuffer.js'
@@ -91,6 +92,21 @@ function pongFrame(nonce: string, sessionId: SessionId = SID): ServerFrame {
   return { kind: 'pong', protocolVersion: PROTOCOL_VERSION, sessionId, nonce }
 }
 
+function generatedImagePreviewFrame(
+  toolUseId: string,
+  data: string,
+  sessionId: SessionId = SID,
+): ServerFrame {
+  return {
+    kind: 'generated-image-preview',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId,
+    toolUseId,
+    mediaType: 'image/png',
+    data,
+  }
+}
+
 function slashCatalogFrame(sessionId: SessionId = SID): ServerFrame {
   return {
     kind: 'slash-catalog.snapshot',
@@ -133,6 +149,68 @@ test('a later ready frame replaces the head rather than duplicating it', () => {
   buffer.record(SID, readyFrame()) // e.g. a fresh sidecar re-announced
   const snapshot = buffer.snapshot()
   expect(snapshot.filter(f => f.kind === 'ready')).toHaveLength(1)
+})
+
+test('a generated-image preview larger than the transcript ring stays replayable without evicting transcript frames', () => {
+  const buffer = new FrameReplayBuffer(10, 256, 2_048)
+  buffer.record(SID, readyFrame())
+  buffer.record(SID, pongFrame('before-preview'))
+  const preview = generatedImagePreviewFrame(
+    'toolu_generate_image_1',
+    'A'.repeat(600),
+  )
+  buffer.record(SID, preview)
+  buffer.record(SID, pongFrame('after-preview'))
+
+  const snapshot = buffer.snapshot()
+  expect(snapshot).toContainEqual(preview)
+  expect(snapshot).toContainEqual(pongFrame('before-preview'))
+  expect(snapshot).toContainEqual(pongFrame('after-preview'))
+  expect(snapshot.some(isReplayTruncationFrame)).toBe(false)
+})
+
+test('generated-image preview retention evicts only its oldest preview when its own budget fills', () => {
+  const buffer = new FrameReplayBuffer(10, 512, 1_000)
+  buffer.record(SID, readyFrame())
+  buffer.record(SID, pongFrame('transcript'))
+  buffer.record(
+    SID,
+    generatedImagePreviewFrame('toolu_old', 'A'.repeat(600)),
+  )
+  const newest = generatedImagePreviewFrame('toolu_new', 'B'.repeat(600))
+  buffer.record(SID, newest)
+
+  const snapshot = buffer.snapshot()
+  expect(snapshot).toContainEqual(pongFrame('transcript'))
+  expect(snapshot).toContainEqual(newest)
+  expect(
+    snapshot.some(
+      frame =>
+        frame.kind === 'generated-image-preview' &&
+        frame.toolUseId === 'toolu_old',
+    ),
+  ).toBe(false)
+  expect(snapshot.some(isReplayTruncationFrame)).toBe(false)
+  expect(snapshot.some(isPreviewReplayTruncationFrame)).toBe(true)
+})
+
+test('generated-image preview retention also bounds entry count', () => {
+  const buffer = new FrameReplayBuffer(10, 512, 4_096, 1)
+  buffer.record(SID, readyFrame())
+  buffer.record(SID, generatedImagePreviewFrame('toolu_old', 'A'))
+  const newest = generatedImagePreviewFrame('toolu_new', 'B')
+  buffer.record(SID, newest)
+
+  const snapshot = buffer.snapshot()
+  expect(snapshot).toContainEqual(newest)
+  expect(
+    snapshot.some(
+      frame =>
+        frame.kind === 'generated-image-preview' &&
+        frame.toolUseId === 'toolu_old',
+    ),
+  ).toBe(false)
+  expect(snapshot.some(isPreviewReplayTruncationFrame)).toBe(true)
 })
 
 // SLASH-6 — the rich slash-catalog snapshot is sent once per connect and is

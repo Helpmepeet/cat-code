@@ -21,6 +21,8 @@ import { TOOL_RESULTS_SUBDIR } from './toolResultStorage.js'
 import { cleanupStaleAgentWorktrees } from './worktree.js'
 
 const DEFAULT_CLEANUP_PERIOD_DAYS = 30
+/** Hard cap in addition to age retention: debug failure loops must not fill disk. */
+export const MAX_DEBUG_LOG_TOTAL_BYTES = 100 * 1024 * 1024
 
 function getCutoffDate(): Date {
   const settings = getSettings_DEPRECATED() || {}
@@ -419,6 +421,32 @@ export async function cleanupOldDebugLogs(): Promise<CleanupResult> {
       if (await unlinkIfOld(join(debugDir, dirent.name), cutoffDate, fsImpl)) {
         result.messages++
       }
+    } catch {
+      result.errors++
+    }
+  }
+
+  // Age retention alone cannot contain a high-volume failure loop. Keep the
+  // newest debug files under a fixed total-byte budget; `latest` remains a
+  // symlink and is never a deletion candidate.
+  const remaining: Array<{ path: string; size: number; mtimeMs: number }> = []
+  for (const dirent of dirents) {
+    if (!dirent.isFile() || !dirent.name.endsWith('.txt')) continue
+    const path = join(debugDir, dirent.name)
+    try {
+      const stat = await fsImpl.stat(path)
+      remaining.push({ path, size: stat.size, mtimeMs: stat.mtimeMs })
+    } catch {
+      // It may have been removed by the age pass or another process.
+    }
+  }
+  let totalBytes = remaining.reduce((total, file) => total + file.size, 0)
+  for (const file of remaining.sort((a, b) => a.mtimeMs - b.mtimeMs)) {
+    if (totalBytes <= MAX_DEBUG_LOG_TOTAL_BYTES) break
+    try {
+      await fsImpl.unlink(file.path)
+      totalBytes -= file.size
+      result.messages++
     } catch {
       result.errors++
     }

@@ -24,6 +24,10 @@ export function getTeamsDir(): string {
   return join(getClaudeConfigHomeDir(), 'teams')
 }
 
+export function getAutoModeCaptureDir(): string {
+  return join(getClaudeConfigHomeDir(), 'auto-mode-captures')
+}
+
 /**
  * Check if NODE_OPTIONS contains a specific flag.
  * Splits on whitespace and checks for exact match to avoid false positives.

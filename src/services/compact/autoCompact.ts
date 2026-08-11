@@ -16,7 +16,9 @@ import { isEnvTruthy } from '../../utils/envUtils.js'
 import { hasExactErrorMessage, isAbortError } from '../../utils/errors.js'
 import type { CacheSafeParams } from '../../utils/forkedAgent.js'
 import { logError } from '../../utils/log.js'
+import { jsonStringify } from '../../utils/slowOperations.js'
 import { tokenCountWithEstimation } from '../../utils/tokens.js'
+import { roughTokenCountEstimationForContent } from '../tokenEstimation.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../analytics/growthbook.js'
 import { getMaxOutputTokensForModel } from '../api/claude.js'
 import { getCodexLeaseExhaustedMessage } from '../api/codexAccountLeaseManager.js'
@@ -298,14 +300,166 @@ export function isAutoCompactEnabled(): boolean {
   return userConfig.autoCompactEnabled
 }
 
+/**
+ * Tool schemas reach the wire as dense JSON — {"name":…,"description":…,
+ * "input_schema":{…}} — so they take the estimator's structured band rather than
+ * its prose default. tokenEstimation.ts's 2026-08-10 calibration measured dense
+ * JSON at 3.07-3.64 chars/token and prices structured payloads at 3. The
+ * descriptions inside a schema are English prose (5-6 chars/token), so 3 stays
+ * on the conservative side of a real schema blob without doubling it the way the
+ * JSON file-type ratio (2, bytesPerTokenForFileType) would — and this number
+ * only ever pulls autocompact EARLIER, so a 2x overshoot would compact live work
+ * away for nothing.
+ */
+const TOOL_SCHEMA_CHARS_PER_TOKEN = 3
+
+/**
+ * Rendered tool schemas are session-stable by design — utils/toolSchemaCache.ts
+ * locks their bytes at first render so a mid-session GrowthBook flip cannot bust
+ * the prompt cache — so re-serializing every tool on every turn buys nothing.
+ * The memo key is the tool set itself, because that is the one thing that does
+ * change mid-session: deferred-tool discovery grows `tools`, and MCP reconnects
+ * add or drop names. Model is in the key too (openai renames schema properties).
+ *
+ * A map rather than a single slot because several tool sets are live at once in
+ * one process: subagents carry their own, and the compact and session-memory
+ * forks run with the parent's. A single slot would be invalidated by every
+ * alternation and re-serialize the whole tool block each turn — the opposite of
+ * what memoizing is for. The cap keeps a long session with churning MCP servers
+ * from growing it without bound; a wipe just costs one re-measurement.
+ */
+const MAX_TOOL_SCHEMA_TOKEN_MEMO_ENTRIES = 8
+const toolSchemaTokensMemo = new Map<string, number>()
+
+export function _resetToolSchemaTokensMemoForTest(): void {
+  toolSchemaTokensMemo.clear()
+}
+
+/**
+ * Rough token count for the tool block this request will carry, built from the
+ * same `toolToAPISchema` the request path itself uses (claude.ts:1364-1374) so
+ * the bytes counted are the bytes sent.
+ *
+ * Deferred tools are excluded whenever tool search MIGHT be on: under tool
+ * search, claude.ts:1281-1289 sends a deferred tool only once the model has
+ * discovered it, so counting the whole MCP pool would invent tens of thousands
+ * of tokens in exactly the sessions this measurement exists for. The optimistic
+ * gate can say "maybe" where the real gate later says no; over-skipping only
+ * drags the measurement back toward NON_MESSAGE_REQUEST_OVERHEAD_TOKENS, which
+ * is where this code path started, whereas over-counting compacts for nothing.
+ *
+ * Imported dynamically: this module is pulled in by StatusLine/REPL-level code,
+ * and utils/api.js reaches getTools() and the MCP client at module init.
+ */
+async function measureToolSchemaTokens(
+  toolUseContext: ToolUseContext,
+  model: string,
+): Promise<number> {
+  const { isToolSearchEnabledOptimistic } = await import(
+    '../../utils/toolSearch.js'
+  )
+  const { isDeferredTool } = await import(
+    '../../tools/ToolSearchTool/prompt.js'
+  )
+  const allTools = toolUseContext.options.tools
+  const mayDefer = isToolSearchEnabledOptimistic()
+  const sentTools = mayDefer
+    ? allTools.filter(tool => !isDeferredTool(tool))
+    : allTools
+  const key = `${model}|${mayDefer}|${sentTools.length}|${sentTools
+    .map(tool => tool.name)
+    .join(',')}`
+  const memoized = toolSchemaTokensMemo.get(key)
+  if (memoized !== undefined) {
+    return memoized
+  }
+
+  const { toolToAPISchema } = await import('../../utils/api.js')
+  const agentDefinitions = toolUseContext.options.agentDefinitions
+  const schemas = await Promise.all(
+    sentTools.map(tool =>
+      toolToAPISchema(tool, {
+        // Same shape the query loop passes at query.ts:723-744.
+        getToolPermissionContext: async () =>
+          toolUseContext.getAppState().toolPermissionContext,
+        // The full list, not the filtered one: ToolSearchTool's own prompt
+        // enumerates every available MCP tool (claude.ts:1361-1363).
+        tools: allTools,
+        agents: agentDefinitions?.activeAgents ?? [],
+        allowedAgentTypes: agentDefinitions?.allowedAgentTypes,
+        model,
+      }),
+    ),
+  )
+  const tokens = roughTokenCountEstimationForContent(
+    jsonStringify(schemas),
+    TOOL_SCHEMA_CHARS_PER_TOKEN,
+  )
+  if (toolSchemaTokensMemo.size >= MAX_TOOL_SCHEMA_TOKEN_MEMO_ENTRIES) {
+    toolSchemaTokensMemo.clear()
+  }
+  toolSchemaTokensMemo.set(key, tokens)
+  return tokens
+}
+
+/**
+ * Measure the non-message content of the next request: system prompt, the
+ * userContext/systemContext blocks, and the serialized tool schemas.
+ *
+ * This is the value tokenCountWithEstimation's NON_MESSAGE_REQUEST_OVERHEAD_TOKENS
+ * floor stands in for when nobody can measure it. Deterministic, no API calls,
+ * and bounded: everything but the tool schemas is a character count, and those
+ * are memoized per tool set. Returns 0 — i.e. "use the floor" — if anything
+ * throws, because a failed measurement must never take autocompact down with it.
+ */
+export async function measureNonMessageOverheadTokens(params: {
+  model: string
+  toolUseContext: ToolUseContext
+  systemPrompt: readonly string[]
+  userContext: { [k: string]: string }
+  systemContext: { [k: string]: string }
+}): Promise<number> {
+  try {
+    const toolSchemaTokens = await measureToolSchemaTokens(
+      params.toolUseContext,
+      params.model,
+    )
+    // Both blocks are prose (CLAUDE.md files, env descriptions, git status), so
+    // they take the estimator's default ratio, with its CJK escalation intact —
+    // a Japanese CLAUDE.md is 1.3 chars/token, not 4.
+    const systemPromptTokens = roughTokenCountEstimationForContent(
+      params.systemPrompt.join('\n'),
+    )
+    const contextTokens = roughTokenCountEstimationForContent(
+      [
+        ...Object.entries(params.userContext),
+        ...Object.entries(params.systemContext),
+      ]
+        .map(([key, value]) => `${key}: ${value}`)
+        .join('\n'),
+    )
+    return toolSchemaTokens + systemPromptTokens + contextTokens
+  } catch (error) {
+    logError(error)
+    return 0
+  }
+}
+
 export async function shouldAutoCompact(
   messages: Message[],
   model: string,
   querySource?: QuerySource,
-  // Snip removes messages but the surviving assistant's usage still reflects
-  // pre-snip context, so tokenCountWithEstimation can't see the savings.
-  // Subtract the rough-delta that snip already computed.
-  snipTokensFreed = 0,
+  // Snip drops messages and time-based microcompact content-clears old
+  // tool_results, but both act on the request array only — the surviving
+  // assistant's usage still reflects the pre-shrink context, so
+  // tokenCountWithEstimation can't see the savings. Subtract the rough delta
+  // those passes already computed.
+  preRequestTokensFreed = 0,
+  // Measured system prompt + userContext/systemContext + tool schemas for this
+  // request, from measureNonMessageOverheadTokens. Only consumed when the count
+  // falls back to a pure rough estimate, where it replaces the 20K floor if it
+  // is larger. Absent (display callers, tests) keeps the floor.
+  nonMessageOverheadTokens?: number,
 ): Promise<boolean> {
   // Recursion guards. session_memory and compact are forked agents that
   // would deadlock.
@@ -369,12 +523,13 @@ export async function shouldAutoCompact(
   // sends the full transcript, so trusting it would fire autocompact late (or
   // let the first Claude call 413). See tokenCountWithEstimation's currentModel.
   const tokenCount =
-    tokenCountWithEstimation(messages, model) - snipTokensFreed
+    tokenCountWithEstimation(messages, model, nonMessageOverheadTokens) -
+    preRequestTokensFreed
   const threshold = getAutoCompactThreshold(model)
   const effectiveWindow = getEffectiveContextWindowSize(model)
 
   logForDebugging(
-    `autocompact: tokens=${tokenCount} threshold=${threshold} effectiveWindow=${effectiveWindow}${snipTokensFreed > 0 ? ` snipFreed=${snipTokensFreed}` : ''}`,
+    `autocompact: tokens=${tokenCount} threshold=${threshold} effectiveWindow=${effectiveWindow}${preRequestTokensFreed > 0 ? ` preRequestFreed=${preRequestTokensFreed}` : ''}${nonMessageOverheadTokens !== undefined ? ` nonMessageOverhead=${nonMessageOverheadTokens}` : ''}`,
   )
 
   const { isAboveAutoCompactThreshold } = calculateTokenWarningState(
@@ -391,7 +546,7 @@ export async function autoCompactIfNeeded(
   cacheSafeParams: CacheSafeParams,
   querySource?: QuerySource,
   tracking?: AutoCompactTrackingState,
-  snipTokensFreed?: number,
+  preRequestTokensFreed?: number,
 ): Promise<{
   wasCompacted: boolean
   compactionResult?: CompactionResult
@@ -412,11 +567,22 @@ export async function autoCompactIfNeeded(
   }
 
   const model = toolUseContext.options.mainLoopModel
+  // The rough-estimate fallback cannot see the system prompt, the context blocks
+  // or the tool schemas, and its 20K floor undershoots any session with heavy
+  // MCP tooling. Everything needed to measure them is right here.
+  const nonMessageOverheadTokens = await measureNonMessageOverheadTokens({
+    model,
+    toolUseContext,
+    systemPrompt: cacheSafeParams.systemPrompt,
+    userContext: cacheSafeParams.userContext,
+    systemContext: cacheSafeParams.systemContext,
+  })
   const shouldCompact = await shouldAutoCompact(
     messages,
     model,
     querySource,
-    snipTokensFreed,
+    preRequestTokensFreed,
+    nonMessageOverheadTokens,
   )
 
   if (!shouldCompact) {

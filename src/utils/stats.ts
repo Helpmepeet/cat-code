@@ -290,6 +290,13 @@ async function processSessionFiles(
         dailyActivityMap.set(dateKey, existing)
       }
 
+      // Streaming splits one API response into several persisted records that
+      // share one API message.id. Every split carries the message_start
+      // input/cache seed, so summing them multiplies the input side by the
+      // split count. Tracks the output already credited per id so input-side
+      // tokens are counted once and output is counted as the max across splits.
+      const creditedOutputByMessageId = new Map<string, number>()
+
       // Process messages for tool usage and model stats
       for (const message of mainMessages) {
         if (message.type === 'assistant') {
@@ -315,6 +322,35 @@ async function processSessionFiles(
               continue
             }
 
+            // Dedup splits of one API response (see creditedOutputByMessageId).
+            // Records without an id keep the plain summing behavior.
+            const messageId = message.message.id
+            const creditedOutput = messageId
+              ? creditedOutputByMessageId.get(messageId)
+              : undefined
+            const isRepeatedMessageId = creditedOutput !== undefined
+
+            const inputTokens = isRepeatedMessageId ? 0 : usage.input_tokens || 0
+            const cacheReadTokens = isRepeatedMessageId
+              ? 0
+              : usage.cache_read_input_tokens || 0
+            const cacheCreationTokens = isRepeatedMessageId
+              ? 0
+              : usage.cache_creation_input_tokens || 0
+            // Credit only the increase, so the aggregate equals the max output
+            // seen for this id rather than the sum of every split's output.
+            const outputTokens = Math.max(
+              0,
+              (usage.output_tokens || 0) - (creditedOutput || 0),
+            )
+
+            if (messageId) {
+              creditedOutputByMessageId.set(
+                messageId,
+                Math.max(creditedOutput || 0, usage.output_tokens || 0),
+              )
+            }
+
             if (!modelUsageAgg[model]) {
               modelUsageAgg[model] = {
                 inputTokens: 0,
@@ -328,16 +364,13 @@ async function processSessionFiles(
               }
             }
 
-            modelUsageAgg[model]!.inputTokens += usage.input_tokens || 0
-            modelUsageAgg[model]!.outputTokens += usage.output_tokens || 0
-            modelUsageAgg[model]!.cacheReadInputTokens +=
-              usage.cache_read_input_tokens || 0
-            modelUsageAgg[model]!.cacheCreationInputTokens +=
-              usage.cache_creation_input_tokens || 0
+            modelUsageAgg[model]!.inputTokens += inputTokens
+            modelUsageAgg[model]!.outputTokens += outputTokens
+            modelUsageAgg[model]!.cacheReadInputTokens += cacheReadTokens
+            modelUsageAgg[model]!.cacheCreationInputTokens += cacheCreationTokens
 
             // Track daily tokens per model
-            const totalTokens =
-              (usage.input_tokens || 0) + (usage.output_tokens || 0)
+            const totalTokens = inputTokens + outputTokens
             if (totalTokens > 0) {
               const dayTokens = dailyModelTokensMap.get(dateKey) || {}
               dayTokens[model] = (dayTokens[model] || 0) + totalTokens
@@ -365,6 +398,10 @@ async function processSessionFiles(
       ? { shotDistribution: Object.fromEntries(shotDistributionMap) }
       : {}),
   }
+}
+
+export const _forTest = {
+  processSessionFiles,
 }
 
 /**

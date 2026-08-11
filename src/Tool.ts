@@ -790,12 +790,23 @@ type ToolDefaults = typeof TOOL_DEFAULTS
 type AnyToolDef = ToolDef<any, any, any>
 
 export function buildTool<D extends AnyToolDef>(def: D): BuiltTool<D> {
-  // The runtime spread is straightforward; the `as` bridges the gap between
-  // the structural-any constraint and the precise BuiltTool<D> return. The
-  // type semantics are proven by the 0-error typecheck across all 60+ tools.
-  return {
-    ...TOOL_DEFAULTS,
-    userFacingName: () => def.name,
-    ...def,
-  } as BuiltTool<D>
+  // Copy `def`'s property DESCRIPTORS rather than spreading its values. A
+  // spread reads every accessor, so `get inputSchema()` would run here — and
+  // because tools call buildTool at module scope, "here" means import time.
+  // That defeats the lazySchema deferral 112 tool modules rely on, and it
+  // deadlocks on import cycles: AgentTool's schema factory reads
+  // isAgentSwarmsEnabled(), which re-enters growthbook.ts while that module
+  // is still initializing (ReferenceError on its TDZ `let`s). Descriptors
+  // keep accessors lazy; value properties copy identically either way.
+  //
+  // Precedence is unchanged: defaults first, then `def` overrides them.
+  // The `as` bridges the structural-any constraint to the precise
+  // BuiltTool<D> return, exactly as the spread version did.
+  return Object.defineProperties(
+    {
+      ...TOOL_DEFAULTS,
+      userFacingName: () => def.name,
+    },
+    Object.getOwnPropertyDescriptors(def),
+  ) as BuiltTool<D>
 }

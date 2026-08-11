@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
 import {
+  _setLockWaitHooksForTest,
   _setWebSocketFactoryForTest,
   CodexWebSocketClosedBeforeCompletedError,
   CodexWebSocketIdleTimeoutError,
@@ -1443,5 +1444,169 @@ describe('streamTurnViaWebSocket', () => {
       ),
     )
     expect(sessionsList[1]!.getSent()[0]!.previous_response_id).toBe('resp_001')
+  })
+})
+
+// The per-conversation turn lock is awaited BEFORE anything is sent, so the
+// stream idle watchdog (armed after ws.send) does not cover it: a turn parked
+// here is silent and indistinguishable from one that never started
+// (docs/reports/2026-08-10-overnight-turn-hang-investigation.md, candidate 2).
+// The wait stays unbounded on purpose; these tests only pin the report.
+describe('conversation turn lock stall diagnostic', () => {
+  type FakeTimer = { fn: () => void; ms: number; cleared: boolean }
+
+  let timers: FakeTimer[]
+  let reports: Array<{ prefix: string; waitedMs: number }>
+  let clockMs: number
+
+  const tick = () => new Promise(resolve => setTimeout(resolve, 0))
+
+  function installLockFakeWs(): FakeWebSocket[] {
+    const fakeSessions: FakeWebSocket[] = []
+    _setWebSocketFactoryForTest(() => {
+      const ws = new FakeWebSocket()
+      fakeSessions.push(ws)
+      Promise.resolve().then(() => ws.triggerOpen())
+      return ws as never
+    })
+    return fakeSessions
+  }
+
+  // Holds the socket open on `response.created` so the turn keeps the lock
+  // until the test delivers a completion.
+  function holdOpenOnSend(ws: FakeWebSocket): void {
+    ws.send = (data: string) => {
+      ;(ws as unknown as { sent: string[] }).sent.push(data)
+      Promise.resolve().then(() => ws.deliver({ type: 'response.created' }))
+    }
+  }
+
+  beforeEach(() => {
+    timers = []
+    reports = []
+    clockMs = 0
+    _setLockWaitHooksForTest({
+      now: () => clockMs,
+      setTimer: (fn, ms) => {
+        const timer: FakeTimer = { fn, ms, cleared: false }
+        timers.push(timer)
+        return timer
+      },
+      clearTimer: handle => {
+        ;(handle as FakeTimer).cleared = true
+      },
+      report: (prefix, waitedMs) => {
+        reports.push({ prefix, waitedMs })
+      },
+    })
+  })
+
+  afterEach(() => {
+    _setLockWaitHooksForTest(null)
+  })
+
+  test('an uncontended turn clears its wait timer and reports nothing', async () => {
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+
+    fakeWs.responses = [completedEvent('resp_solo')]
+    await collectEvents(
+      streamTurnViaWebSocketLocked(
+        CONV_ID,
+        { instructions: 'sys', input: [{ role: 'user', content: 'solo' }] },
+        AUTH,
+        1,
+      ),
+    )
+
+    expect(timers).toHaveLength(1)
+    expect(timers[0]!.ms).toBe(30_000)
+    expect(timers[0]!.cleared).toBe(true)
+    expect(reports).toEqual([])
+  })
+
+  test('a turn stalled on the lock reports the conversation prefix and elapsed wait', async () => {
+    const sessionsList = installLockFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+    const ws = sessionsList[0]!
+    holdOpenOnSend(ws)
+
+    const activeDone = collectEvents(
+      streamTurnViaWebSocketLocked(
+        CONV_ID,
+        { instructions: 'sys', input: [{ role: 'user', content: 'active' }] },
+        AUTH,
+        1,
+      ),
+    )
+    await tick()
+    expect(timers[0]!.cleared).toBe(true)
+
+    const queuedDone = collectEvents(
+      streamTurnViaWebSocketLocked(
+        CONV_ID,
+        { instructions: 'sys', input: [{ role: 'user', content: 'queued' }] },
+        AUTH,
+        1,
+      ),
+    )
+    await tick()
+
+    const waitTimer = timers[1]!
+    expect(waitTimer.ms).toBe(30_000)
+    expect(waitTimer.cleared).toBe(false)
+
+    clockMs = 31_500
+    waitTimer.fn()
+    expect(reports).toEqual([
+      { prefix: CONV_ID.slice(0, 8), waitedMs: 31_500 },
+    ])
+
+    // Releasing the lock settles the wait, which must clear the timer.
+    ws.deliver(completedEvent('resp_active'))
+    await activeDone
+    await tick()
+    expect(waitTimer.cleared).toBe(true)
+
+    ws.deliver(completedEvent('resp_queued'))
+    await queuedDone
+    expect(reports).toHaveLength(1)
+  })
+
+  test('aborting while stalled on the lock clears the wait timer', async () => {
+    const sessionsList = installLockFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+    const ws = sessionsList[0]!
+    holdOpenOnSend(ws)
+
+    const active = streamTurnViaWebSocketLocked(
+      CONV_ID,
+      { instructions: 'sys', input: [{ role: 'user', content: 'active' }] },
+      AUTH,
+      1,
+    )
+    await active.next()
+
+    const abortController = new AbortController()
+    const queued = streamTurnViaWebSocketLocked(
+      CONV_ID,
+      { instructions: 'sys', input: [{ role: 'user', content: 'queued' }] },
+      AUTH,
+      1,
+      abortController.signal,
+    )
+    const pending = queued.next()
+    await tick()
+
+    const waitTimer = timers[1]!
+    expect(waitTimer.cleared).toBe(false)
+
+    abortController.abort()
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+
+    expect(waitTimer.cleared).toBe(true)
+    expect(reports).toEqual([])
+
+    await active.return(undefined)
   })
 })

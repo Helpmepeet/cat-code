@@ -1,7 +1,10 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import type { ToolUseContext } from './Tool.js'
 import { query } from './query.js'
 import type { QueryDeps } from './query/deps.js'
+import { _forTest as postTurnStallForTest } from './query/postTurnStall.js'
+import * as toolUseSummaryGenerator from './services/toolUseSummary/toolUseSummaryGenerator.js'
+import * as sessionStorage from './utils/sessionStorage.js'
 import type { CompactionResult } from './services/compact/compact.js'
 import type { AssistantMessage, Message, SystemMessage } from './types/message.js'
 import { createUserMessage } from './utils/messages.js'
@@ -284,5 +287,199 @@ describe('query mid-turn drain gate', () => {
     await drainQuery([createUserMessage({ content: 'start' })])
 
     expect(getCommandQueueSnapshot()).toHaveLength(0)
+  })
+})
+
+describe('post-turn stall diagnostics', () => {
+  // An overnight run sat on `await pendingToolUseSummary` for nine hours and
+  // wrote nothing anywhere, so the phase had to be reconstructed by hand
+  // (docs/reports/2026-08-10-overnight-turn-hang-investigation.md). The await
+  // must still be able to hang forever — it just has to name itself first.
+  const probeTool = buildTool({
+    name: 'StallProbe',
+    inputSchema: z.strictObject({}),
+    isReadOnly: () => true,
+    isConcurrencySafe: () => true,
+    async description() {
+      return 'test probe'
+    },
+    async prompt() {
+      return 'test probe'
+    },
+    async validateInput() {
+      return { result: true as const }
+    },
+    renderToolUseMessage: () => null,
+    renderToolResultMessage: () => null,
+    renderToolUseErrorMessage: () => null,
+    mapToolResultToToolResultBlockParam(_output: unknown, toolUseID: string) {
+      return { tool_use_id: toolUseID, type: 'tool_result' as const, content: 'probed' }
+    },
+    async *call() {
+      yield { type: 'result' as const, data: 'probed' }
+    },
+  })
+
+  function probeThenAnswerDeps(): QueryDeps {
+    let call = 0
+    return {
+      uuid: () => 'test-query-chain-id',
+      microcompact: async messages => ({ messages }),
+      autocompact: async () => ({ wasCompacted: false, consecutiveFailures: 0 }),
+      callModel: async function* () {
+        call++
+        if (call === 1) {
+          const withProbe = createAssistantMessage('probing', 'assistant-probe')
+          withProbe.message.content = [
+            { type: 'tool_use', id: 'toolu_probe_1', name: 'StallProbe', input: {} },
+          ] as AssistantMessage['message']['content']
+          yield withProbe
+          return
+        }
+        yield createAssistantMessage('done', 'assistant-done')
+      },
+    }
+  }
+
+  const originalEmitFlag = process.env.CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES
+
+  // Restored here, not at the end of each test body: a failing assertion returns
+  // before an in-body restore, leaving `generateToolUseSummary` and
+  // `recordPostTurnStall` mocked for every later test in the file.
+  const spies: { mockRestore: () => void }[] = []
+
+  afterEach(() => {
+    while (spies.length > 0) spies.pop()!.mockRestore()
+    postTurnStallForTest.setScheduler(null)
+    if (originalEmitFlag === undefined) {
+      delete process.env.CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES
+    } else {
+      process.env.CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES = originalEmitFlag
+    }
+  })
+
+  test('names the tool_use_summary phase when that await outlives its threshold', async () => {
+    process.env.CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES = '1'
+
+    // The real generator, blocked. query() still builds the summary call, wraps
+    // it, carries it across the loop iteration, and awaits it at the real site.
+    let releaseSummary: (value: string | null) => void = () => {}
+    const summarySpy = spyOn(
+      toolUseSummaryGenerator,
+      'generateToolUseSummary',
+    ).mockImplementation(
+      () =>
+        new Promise<string | null>(resolve => {
+          releaseSummary = resolve
+        }),
+    )
+    const recordSpy = spyOn(sessionStorage, 'recordPostTurnStall').mockImplementation(
+      () => {},
+    )
+    spies.push(summarySpy, recordSpy)
+
+    const armed: { delayMs: number; fire: () => void; cancelled: boolean }[] = []
+    postTurnStallForTest.setScheduler((callback, delayMs) => {
+      const entry = { delayMs, fire: callback, cancelled: false }
+      armed.push(entry)
+      return () => {
+        entry.cancelled = true
+      }
+    })
+
+    const messages = [createUserMessage({ content: 'start' })]
+    const toolUseContext = createToolUseContext(messages)
+    ;(toolUseContext.options as { tools: unknown[] }).tools = [probeTool]
+    const drained = (async () => {
+      for await (const _message of query({
+        messages,
+        systemPrompt: ['system prompt'],
+        userContext: {},
+        systemContext: {},
+        canUseTool: async () => ({
+          behavior: 'allow',
+          decisionReason: { type: 'other', reason: 'test allows all tools' },
+        }),
+        toolUseContext,
+        querySource: 'repl_main_thread',
+        deps: probeThenAnswerDeps(),
+      })) {
+        // Drain so the loop reaches the post-turn await.
+      }
+    })()
+
+    // The run is now parked on the real await, with nothing else armed. Bounded
+    // so an unwired await fails the assertion instead of hanging the suite.
+    for (let i = 0; i < 200 && armed.length === 0; i++) {
+      await new Promise(resolve => setTimeout(resolve, 5))
+    }
+    expect(armed).toHaveLength(1)
+    expect(armed[0]!.delayMs).toBe(60_000)
+    expect(armed[0]!.cancelled).toBe(false)
+    expect(recordSpy).not.toHaveBeenCalled()
+
+    armed[0]!.fire()
+
+    expect(recordSpy).toHaveBeenCalledTimes(1)
+    const entry = recordSpy.mock.calls[0]![0]
+    expect(entry.phase).toBe('tool_use_summary')
+    expect(entry.threshold_ms).toBe(60_000)
+    expect(entry.query_source).toBe('repl_main_thread')
+    expect(entry.turn_count).toBe(2)
+
+    // Reporting does not unstick anything: the await is still pending, and the
+    // turn only closes because the test resolves it.
+    releaseSummary(null)
+    await drained
+    expect(armed[0]!.cancelled).toBe(true)
+    expect(recordSpy).toHaveBeenCalledTimes(1)
+  })
+
+  test('a summary that resolves in time reports nothing', async () => {
+    process.env.CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES = '1'
+
+    const summarySpy = spyOn(
+      toolUseSummaryGenerator,
+      'generateToolUseSummary',
+    ).mockImplementation(async () => 'Probed things')
+    const recordSpy = spyOn(sessionStorage, 'recordPostTurnStall').mockImplementation(
+      () => {},
+    )
+    spies.push(summarySpy, recordSpy)
+
+    const armed: { fire: () => void; cancelled: boolean }[] = []
+    postTurnStallForTest.setScheduler(callback => {
+      const entry = { fire: callback, cancelled: false }
+      armed.push(entry)
+      return () => {
+        entry.cancelled = true
+      }
+    })
+
+    const messages = [createUserMessage({ content: 'start' })]
+    const toolUseContext = createToolUseContext(messages)
+    ;(toolUseContext.options as { tools: unknown[] }).tools = [probeTool]
+    for await (const _message of query({
+      messages,
+      systemPrompt: ['system prompt'],
+      userContext: {},
+      systemContext: {},
+      canUseTool: async () => ({
+        behavior: 'allow',
+        decisionReason: { type: 'other', reason: 'test allows all tools' },
+      }),
+      toolUseContext,
+      querySource: 'repl_main_thread',
+      deps: probeThenAnswerDeps(),
+    })) {
+      // Drain the whole turn.
+    }
+
+    expect(recordSpy).not.toHaveBeenCalled()
+    // Assert the watch was armed BEFORE asserting it was cancelled: `every` on
+    // an empty array is true, so without this the test would still pass if the
+    // watch were deleted from the tool_use_summary site entirely.
+    expect(armed.length).toBeGreaterThanOrEqual(1)
+    expect(armed.every(entry => entry.cancelled)).toBe(true)
   })
 })

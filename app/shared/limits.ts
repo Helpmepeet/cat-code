@@ -25,8 +25,23 @@ export const MAX_FRAME_BYTES = 128 * 1024
  */
 export const MAX_OUTBOUND_FRAME_BYTES = 32 * 1024 * 1024
 
+/**
+ * Largest generated-image file the sidecar will read back for an inline preview.
+ * Base64 expansion keeps this below the outbound frame sanity bound.
+ */
+export const MAX_GENERATED_IMAGE_PREVIEW_BYTES = 20 * 1024 * 1024
+
 /** Sliding-window rate cap: max inbound frames per window (T7). */
 export const MAX_FRAMES_PER_WINDOW = 120
+
+/**
+ * How much of `MAX_FRAMES_PER_WINDOW` the DIAGNOSTICS class may occupy, leaving
+ * the remainder always available to control traffic (a submit, a permission
+ * response). A sub-cap INSIDE the total, never a second budget beside it: the
+ * total inbound ceiling stays 120, so T7's flood surface does not move.
+ * See `docs/migration/decisions/IPC-RATE-BUDGET.md`.
+ */
+export const MAX_DIAGNOSTIC_FRAMES_PER_WINDOW = 80
 
 /** Rate-limit window length in milliseconds. */
 export const RATE_WINDOW_MS = 1_000

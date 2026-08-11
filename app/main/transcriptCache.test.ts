@@ -477,7 +477,7 @@ test('readCachedRunFacts ignores facts from an older derivation', () => {
   const dir = tempDir()
   const stamped = createTranscriptCache(SID, 'engine-abc', [eventFrame(0)], COMPLETE_FACTS)
   writeCache(dir, stamped)
-  expect(readCachedRunFacts(dir, SID)).toEqual(COMPLETE_FACTS)
+  expect(readCachedRunFacts(dir, SID, 'engine-abc')).toEqual(COMPLETE_FACTS)
 
   writeFileSync(
     cachePath(dir),
@@ -486,8 +486,8 @@ test('readCachedRunFacts ignores facts from an older derivation', () => {
       frames: stamped.frames,
     }),
   )
-  expect(readCachedRunFacts(dir, SID)).toBeNull()
-  expect(readCachedRunFacts(dir, OTHER_SID)).toBeNull()
+  expect(readCachedRunFacts(dir, SID, 'engine-abc')).toBeNull()
+  expect(readCachedRunFacts(dir, OTHER_SID, 'engine-abc')).toBeNull()
 })
 
 test('the header prefix read survives a brace inside a header string', () => {
@@ -506,8 +506,10 @@ test('buildClosedSessionCache enriches a distilled close cache from the transcri
   const cache = buildClosedSessionCache(
     {
       transcriptPath: engineSessionId => `/transcripts/${engineSessionId}.jsonl`,
-      readRunFacts: path =>
-        path === '/transcripts/engine-abc.jsonl' ? COMPLETE_FACTS : EMPTY,
+      readRunFacts: path => ({
+        facts: path === '/transcripts/engine-abc.jsonl' ? COMPLETE_FACTS : EMPTY,
+        authoritative: true,
+      }),
       readCachedRunFacts: () => null,
     },
     [readyFrame(), permissionFrame(), eventFrame(0)],
@@ -521,7 +523,7 @@ test('buildClosedSessionCache enriches a distilled close cache from the transcri
 test('buildClosedSessionCache skips a session with no transcript frames or no engine id', () => {
   const deps = {
     transcriptPath: (engineSessionId: string) => `/t/${engineSessionId}`,
-    readRunFacts: () => COMPLETE_FACTS,
+    readRunFacts: () => ({ facts: COMPLETE_FACTS, authoritative: true }),
     readCachedRunFacts: () => null,
   }
   // Ready + snapshots only: a session closed before its first turn. A readable
@@ -536,7 +538,7 @@ test('an unknown transcript path degrades to the headerless cache, never a guess
     {
       // The row is gone: nothing to enrich from.
       transcriptPath: () => null,
-      readRunFacts: () => COMPLETE_FACTS,
+      readRunFacts: () => ({ facts: COMPLETE_FACTS, authoritative: true }),
       readCachedRunFacts: () => null,
     },
     [readyFrame(), eventFrame(0)],
@@ -670,3 +672,31 @@ function fileExists(path: string): boolean {
     return false
   }
 }
+
+test('an authoritative provider-default effort is never patched from a cache', () => {
+  // The run_facts snapshot is one resolved request: `effort: null` there means
+  // this run used the PROVIDER DEFAULT, not "no record said". Borrowing a
+  // cached `high` over it reports an effort the run never used.
+  const authoritative = { ...COMPLETE_FACTS, effort: null }
+  expect(resolveCacheRunFacts(authoritative, COMPLETE_FACTS, true)).toEqual(
+    authoritative,
+  )
+  // The legacy tier means the opposite by the same null, so it still borrows.
+  expect(
+    resolveCacheRunFacts(authoritative, COMPLETE_FACTS, false)?.effort,
+  ).toBe('high')
+})
+
+test('carry-forward is refused across a re-keyed engine session', () => {
+  // An app session resumed into a NEW transcript keeps its appSessionId, so an
+  // older cache under that id describes a different run. Borrowing its effort
+  // and window would relabel that run as this one.
+  const dir = tempDir()
+  writeCache(
+    dir,
+    createTranscriptCache(SID, 'engine-old', [eventFrame(0)], COMPLETE_FACTS),
+  )
+  expect(readCachedRunFacts(dir, SID, 'engine-old')).toEqual(COMPLETE_FACTS)
+  expect(readCachedRunFacts(dir, SID, 'engine-new')).toBeNull()
+  expect(readCachedRunFacts(dir, SID, null)).toBeNull()
+})

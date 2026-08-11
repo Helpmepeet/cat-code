@@ -276,6 +276,15 @@ async function runProductionHardeningSmoke(
       // (`parseVisibleSessions`) because the preload is not the boundary.
       'reportVisibleSessions',
       'subscribeHost',
+      // Private desktop diagnostics (2026-08-06). All four terminate in Electron
+      // main and appear in neither the supervisor nor the sidecar, so they add no
+      // engine vocabulary. Main re-validates the payload-bearing ones because the
+      // preload is not the boundary, and the renderer names no path or
+      // destination: it asks for the folder and the save dialog (HC1/HC3).
+      'deliveryAck',
+      'openLogsFolder',
+      'reportRendererFault',
+      'saveDiagnosticsBundle',
     ].sort()
     const links = probe.links as Array<{
       text: string | null

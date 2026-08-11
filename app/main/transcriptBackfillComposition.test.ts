@@ -54,6 +54,7 @@ test('PL-B cache is admitted by PL-A and the later click stays store-first', asy
     titleUpdatedAt: null,
     status: 'exited',
     restorable: true,
+    parked: false,
     createdAt: 1,
     lastAttachedAt: 2,
     lastMessageSentAt: null,
@@ -238,7 +239,8 @@ function persistClose(cacheDir: string, transcriptPath: string | null): void {
     {
       transcriptPath: () => transcriptPath,
       readRunFacts: path => readTranscriptRunFacts(path, () => null),
-      readCachedRunFacts: id => readCachedRunFacts(cacheDir, id),
+      readCachedRunFacts: (id, engineSessionId) =>
+        readCachedRunFacts(cacheDir, id, engineSessionId),
     },
     closeFrames(),
   )

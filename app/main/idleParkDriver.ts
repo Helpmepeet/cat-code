@@ -70,6 +70,13 @@ export type IdleParkDriverDeps = {
   /** The host's live∪restorable view; the driver filters it to live engines. */
   listSessions: () => SessionDescriptor[]
   /**
+   * IDLE-PARK §1c — a live session is eligible only if the host can resume it
+   * after park. Main cannot derive this from a descriptor because live rows are
+   * never restore candidates; the host checks the actual transcript and its
+   * in-memory resume-failure verdict.
+   */
+  canResume: (appSessionId: SessionId) => boolean
+  /**
    * IDLE-PARK §4 open decision 4, resolved 2026-08-05 as option (b): the sessions
    * the user is LOOKING AT are never park victims. Main cannot derive this — the
    * workspace layout is renderer-only state and merely switching panes bumps no
@@ -141,6 +148,7 @@ export function createIdleParkDriver(deps: IdleParkDriverDeps): IdleParkDriver {
   const idleTtlMs = deps.idleTtlMs ?? PARK_IDLE_TTL_MS
   const sweepIntervalMs = deps.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS
   const now = deps.now ?? (() => Date.now())
+  const canResume = deps.canResume
   const setTimer = deps.setTimer ?? ((cb, ms) => setTimeout(cb, ms))
   const clearTimer = deps.clearTimer ?? (handle => clearTimeout(handle))
 
@@ -156,7 +164,9 @@ export function createIdleParkDriver(deps: IdleParkDriverDeps): IdleParkDriver {
     // least-recent background session instead of the one being read.
     const protectedIds = deps.protectedSessions?.() ?? EMPTY_PROTECTED
     const candidates = live.filter(
-      session => !protectedIds.has(session.appSessionId),
+      session =>
+        !protectedIds.has(session.appSessionId) &&
+        canResume(session.appSessionId),
     )
     // Idle-TTL: any live session idle beyond the TTL, regardless of the cap.
     const cutoff = now() - idleTtlMs

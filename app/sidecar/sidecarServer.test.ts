@@ -54,6 +54,7 @@ import { createSidecarTasksDomain, type SidecarTasksDomain } from './tasksDomain
 import {
   createSidecarTaskControlDomain,
   type SidecarTaskControlDomain,
+  type TaskDismissResult,
 } from './taskControlDomain.js'
 import {
   createSidecarAgentModeDomain,
@@ -102,6 +103,10 @@ import {
 } from './extensionsDomain.js'
 import type { SidecarSettingsDomain } from './settingsDomain.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
+import {
+  createOperationalRecord,
+  type OperationalRecord,
+} from '../shared/operationalLog.js'
 import {
   enqueue,
   enqueuePendingNotification,
@@ -288,6 +293,237 @@ test('on attach, the server sends the canonical controller-derived app.ready pay
       pendingPermissionRequests: [],
     },
   })
+})
+
+test('production delivery envelope adds metadata beside, never inside, the raw ServerFrame', () => {
+  const stages: string[] = []
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
+    controller: new AppSessionController(probeAdapter()),
+    wrapOutboundFrame: (frame, deliveryTrace) => ({
+      kind: 'sidecar.delivery-envelope',
+      frame,
+      deliveryTrace,
+    }),
+    onDeliveryStage: (_trace, stage) => stages.push(stage),
+    log: () => {},
+  })
+  servers.push(server)
+  const decoder = new FrameDecoder(MAX_FRAME_BYTES)
+  const received: unknown[] = []
+  server.addConnection({
+    write(data, onFlushed) {
+      for (const result of decoder.push(Buffer.from(data))) {
+        if (result.kind === 'frame') received.push(result.payload)
+      }
+      onFlushed?.()
+    },
+    end() {},
+  })
+  const envelope = received[0] as {
+    kind?: unknown
+    frame?: ServerFrame
+    deliveryTrace?: { sequence?: unknown; sourceProcessInstanceId?: unknown }
+  }
+  expect(envelope.kind).toBe('sidecar.delivery-envelope')
+  expect(stages).toEqual(['engine.produced', 'sidecar.received', 'sidecar.socket.queued', 'sidecar.socket.sent'])
+  expect(envelope.frame?.kind).toBe('ready')
+  expect(envelope.frame).not.toHaveProperty('deliveryTrace')
+  expect(envelope.deliveryTrace?.sequence).toBe(1)
+  expect(typeof envelope.deliveryTrace?.sourceProcessInstanceId).toBe('string')
+})
+
+test('image app.submit content blocks reach the real controller prompt unchanged', async () => {
+  let seenPrompt: unknown
+  const controller = new AppSessionController({
+    async *runTurn({ prompt }) {
+      seenPrompt = prompt
+    },
+  })
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  const prompt = [
+    {
+      type: 'image' as const,
+      source: {
+        type: 'base64' as const,
+        media_type: 'image/png' as const,
+        data: 'AAAA',
+      },
+    },
+    { type: 'text' as const, text: 'Inspect this image' },
+  ]
+
+  server.handleData(
+    connection,
+    clientFrame({
+      type: 'app.submit',
+      requestId: 'image-submit',
+      prompt,
+    }),
+  )
+  await waitFor(() => seenPrompt !== undefined)
+
+  expect(seenPrompt).toEqual(prompt)
+  expect(
+    received.find(
+      frame =>
+        frame.kind === 'event' &&
+        frame.event.type === 'message' &&
+        frame.event.message.type === 'user',
+    ),
+  ).toMatchObject({
+    kind: 'event',
+    event: {
+      type: 'message',
+      message: {
+        type: 'user',
+        message: { role: 'user', content: prompt },
+      },
+    },
+  })
+})
+
+test('a live GenerateImage result emits a read-only inline preview frame', async () => {
+  const controller = new AppSessionController({
+    async *runTurn() {
+      yield {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_image',
+              name: 'GenerateImage',
+              input: { prompt: 'a cat' },
+            },
+          ],
+        },
+      } as never
+      yield {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_image',
+              content: 'Generated image',
+            },
+          ],
+        },
+        tool_use_result: {
+          filePath: '/generated/cat.png',
+          model: 'gpt-image-2',
+          size: '1024x1024',
+          outputFormat: 'png',
+          bytes: 4,
+        },
+      } as never
+    },
+  })
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
+    controller,
+    readGeneratedImage: async filePath => {
+      expect(filePath).toBe('/generated/cat.png')
+      return new Uint8Array([0, 1, 2, 3])
+    },
+    log: () => {},
+  })
+  servers.push(server)
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+
+  server.handleData(
+    connection,
+    clientFrame({
+      type: 'app.submit',
+      requestId: 'generate',
+      prompt: 'make a cat',
+    }),
+  )
+  await waitFor(() =>
+    received.some(frame => frame.kind === 'generated-image-preview'),
+  )
+
+  expect(
+    received.find(frame => frame.kind === 'generated-image-preview'),
+  ).toEqual({
+    kind: 'generated-image-preview',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SESSION,
+    toolUseId: 'toolu_image',
+    mediaType: 'image/png',
+    data: 'AAECAw==',
+  })
+})
+
+test('a structured image result without a live GenerateImage tool id cannot trigger a file read', async () => {
+  const controller = new AppSessionController({
+    async *runTurn() {
+      yield {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_unobserved_image',
+              content: 'Generated image',
+            },
+          ],
+        },
+        tool_use_result: {
+          filePath: '/generated/unobserved.png',
+          model: 'gpt-image-2',
+          size: '1024x1024',
+          outputFormat: 'png',
+          bytes: 4,
+        },
+      } as never
+    },
+  })
+  let readCalls = 0
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
+    controller,
+    readGeneratedImage: async () => {
+      readCalls += 1
+      return new Uint8Array([0, 1, 2, 3])
+    },
+    log: () => {},
+  })
+  servers.push(server)
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+
+  server.handleData(
+    connection,
+    clientFrame({
+      type: 'app.submit',
+      requestId: 'unobserved-generate-result',
+      prompt: 'continue',
+    }),
+  )
+  await waitFor(() =>
+    received.some(
+      frame =>
+        frame.kind === 'event' &&
+        frame.event.type === 'message' &&
+        frame.event.message.type === 'user',
+    ),
+  )
+
+  expect(readCalls).toBe(0)
+  expect(
+    received.some(frame => frame.kind === 'generated-image-preview'),
+  ).toBe(false)
 })
 
 test('rejects a frame with the wrong protocolVersion and echoes its bounded request id', () => {
@@ -1730,11 +1966,19 @@ test('P4-8 — emits a joined agent-mode.snapshot on attach that is secretGuard-
  */
 function fakeAgentModeDomain(
   override?: (active: boolean) => { ok: boolean; message: string; changed: boolean },
-): { domain: SidecarAgentModeDomain; calls: boolean[] } {
+): {
+  domain: SidecarAgentModeDomain
+  calls: boolean[]
+  dismissed: string[]
+  snapshotReads: boolean[]
+} {
   const calls: boolean[] = []
+  const dismissed: string[] = []
+  const snapshotReads: boolean[] = []
   let active = false
   const domain: SidecarAgentModeDomain = {
     async getSnapshot() {
+      snapshotReads.push(active)
       return { active, objective: '', phase: 'planning', workers: [] }
     },
     setActive(next: boolean) {
@@ -1744,11 +1988,14 @@ function fakeAgentModeDomain(
       active = next
       return { ok: true, message: next ? 'on' : 'off', changed }
     },
+    noteWorkerDismissed(agentId: string) {
+      dismissed.push(agentId)
+    },
     subscribe() {
       return () => {}
     },
   }
-  return { domain, calls }
+  return { domain, calls, dismissed, snapshotReads }
 }
 
 function makeAgentModeServer(
@@ -1814,6 +2061,71 @@ test('P4-8b — a valid agent-mode.set{active:true} switches the domain + re-bro
   expect(after.length).toBeGreaterThan(before)
   // The freshly re-broadcast snapshot reflects the flipped mode.
   expect(after[after.length - 1]?.agentMode.active).toBe(true)
+})
+
+test('P4-8b — one agent-mode snapshot read fans out to every attached connection', async () => {
+  const { domain, snapshotReads } = fakeAgentModeDomain()
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    domain,
+  )
+  const first = makeSocket()
+  const second = makeSocket()
+  const firstConnection = server.addConnection(first.socket)
+  server.addConnection(second.socket)
+
+  for (
+    let i = 0;
+    i < 50 &&
+    (first.received.some(f => f.kind === 'agent-mode.snapshot') === false ||
+      second.received.some(f => f.kind === 'agent-mode.snapshot') === false);
+    i += 1
+  ) {
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  const readsBefore = snapshotReads.length
+  const firstBefore = first.received.filter(f => f.kind === 'agent-mode.snapshot').length
+  const secondBefore = second.received.filter(f => f.kind === 'agent-mode.snapshot').length
+
+  server.handleData(
+    firstConnection,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'agent-mode.set',
+        requestId: 'am-fanout',
+        active: true,
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  for (
+    let i = 0;
+    i < 50 &&
+    (snapshotReads.length <= readsBefore ||
+      first.received.filter(f => f.kind === 'agent-mode.snapshot').length <= firstBefore ||
+      second.received.filter(f => f.kind === 'agent-mode.snapshot').length <= secondBefore);
+    i += 1
+  ) {
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+
+  expect(snapshotReads).toHaveLength(readsBefore + 1)
+  expect(first.received.filter(f => f.kind === 'agent-mode.snapshot').length).toBeGreaterThan(
+    firstBefore,
+  )
+  expect(second.received.filter(f => f.kind === 'agent-mode.snapshot').length).toBeGreaterThan(
+    secondBefore,
+  )
 })
 
 test('P4-8b — an idempotent agent-mode.set (no change) acks ok but does NOT re-broadcast', async () => {
@@ -1908,22 +2220,31 @@ test('P4-8b — rejects agent-mode.set carrying an unexpected key (checkStrictKe
  * drives a fresh `tasks.snapshot`.
  */
 function fakeTaskControlDomain(
-  override?: (taskId: string) => { ok: boolean; message: string },
-): { domain: SidecarTaskControlDomain; calls: string[] } {
+  override?: (taskId: string) => TaskDismissResult,
+): {
+  domain: SidecarTaskControlDomain
+  calls: string[]
+  dismissCalls: string[]
+} {
   const calls: string[] = []
+  const dismissCalls: string[] = []
   const domain: SidecarTaskControlDomain = {
     async stop(taskId: string) {
       calls.push(taskId)
       return override ? override(taskId) : { ok: true, message: 'Stopped worker.' }
     },
+    async dismiss(taskId: string) {
+      dismissCalls.push(taskId)
+      return override ? override(taskId) : { ok: true, message: 'Dismissed worker.' }
+    },
   }
-  return { domain, calls }
+  return { domain, calls, dismissCalls }
 }
 
 function makeTaskControlServer(
-  override?: (taskId: string) => { ok: boolean; message: string },
-): { server: SidecarServer; calls: string[] } {
-  const { domain, calls } = fakeTaskControlDomain(override)
+  override?: (taskId: string) => TaskDismissResult,
+): { server: SidecarServer; calls: string[]; dismissCalls: string[] } {
+  const { domain, calls, dismissCalls } = fakeTaskControlDomain(override)
   const server = makeServer(
     new AppSessionController(probeAdapter()),
     undefined, // permissions
@@ -1940,7 +2261,7 @@ function makeTaskControlServer(
     undefined, // sessionActions
     domain, // taskControl
   )
-  return { server, calls }
+  return { server, calls, dismissCalls }
 }
 
 test('P4-8b — a valid task.stop dispatches the domain + acks task-control.result (echoes requestId)', async () => {
@@ -2139,6 +2460,333 @@ test('P4-8b — LIVE PATH: a real task.stop kills the worker AND drives a fresh 
   expect(snaps.length).toBeGreaterThan(before)
   const item = snaps[snaps.length - 1]?.tasks.items.find(i => i.id === 'a1')
   expect(item?.status).toBe('killed')
+})
+
+/* ------------------------------------------------------------------------- *
+ * CC-32 follow-up — task.dismiss, the terminal half of the same verb family
+ * ------------------------------------------------------------------------- *
+ * Same boundary, same fail-closed order; the verb exists because a worker whose
+ * report carried a blocked handoff gets NO eviction deadline and so never leaves
+ * the roster on its own (`LocalAgentTask.tsx:540,548`).
+ */
+test('CC-32 — a valid task.dismiss dispatches the DISMISS domain call + acks task-control.result with the dismiss verb', async () => {
+  const { server, calls, dismissCalls } = makeTaskControlServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'task.dismiss',
+        requestId: 'td1',
+        taskId: 'agent-1',
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  for (let i = 0; i < 50 && !received.some(f => f.kind === 'task-control.result'); i += 1) {
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+  const result = received.find(f => f.kind === 'task-control.result')
+  expect(result && result.kind === 'task-control.result' && result.ok).toBe(true)
+  expect(result && result.kind === 'task-control.result' && result.verb).toBe('task.dismiss')
+  expect(result && result.kind === 'task-control.result' && result.requestId).toBe('td1')
+  // Routed to dismiss, NOT to stop — the two halves must never be interchangeable.
+  expect(dismissCalls).toEqual(['agent-1'])
+  expect(calls).toEqual([])
+})
+
+test('CC-32 — rejects task.dismiss with a NON-string taskId (Zod boundary), no domain call', () => {
+  const { server, dismissCalls } = makeTaskControlServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'task.dismiss', requestId: 'td2', taskId: 42 } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(received.some(f => f.kind === 'task-control.result')).toBe(false)
+  expect(dismissCalls).toEqual([])
+})
+
+test('CC-32 — rejects task.dismiss missing requestId at the schema boundary, no domain call', () => {
+  const { server, dismissCalls } = makeTaskControlServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'task.dismiss', taskId: 'agent-1' } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(received.some(f => f.kind === 'task-control.result')).toBe(false)
+  expect(dismissCalls).toEqual([])
+})
+
+test('CC-32 — rejects task.dismiss carrying a forged eviction key (checkStrictKeys), no domain call', () => {
+  const { server, dismissCalls } = makeTaskControlServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      // The renderer must never author eviction state — only the target id.
+      message: {
+        type: 'task.dismiss',
+        requestId: 'td3',
+        taskId: 'agent-1',
+        evictAfter: 0,
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(received.some(f => f.kind === 'task-control.result')).toBe(false)
+  expect(dismissCalls).toEqual([])
+})
+
+test('CC-32 — task.dismiss with NO task-control domain fails closed (internal_error), no result frame', () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'task.dismiss', requestId: 'td4', taskId: 'agent-1' } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'internal_error')).toBe(true)
+  expect(received.some(f => f.kind === 'task-control.result')).toBe(false)
+})
+
+test('CC-32 — LIVE PATH: a real task.dismiss retires a blocked worker the reaper cannot, AND drives a fresh tasks.snapshot without it', async () => {
+  const store = createStore(getDefaultAppState())
+  // The exact shape from the report: completed, notified, blocked handoff, and
+  // therefore NO evictAfter — the engine's own evictors refuse it forever.
+  const blockedWorker = {
+    ...createTaskStateBase('g1', 'local_agent', 'Audit docs and archive refs'),
+    type: 'local_agent' as const,
+    status: 'completed' as const,
+    agentId: 'g1',
+    agentType: 'general-purpose',
+    agentName: 'Gauss',
+    isBackgrounded: true,
+    notified: true,
+    handoffStatus: 'blocked' as const,
+    retain: false,
+  }
+  store.setState(prev => ({ ...prev, tasks: { g1: blockedWorker } as never }))
+
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined, // permissions
+    undefined, // goals
+    undefined, // accounts
+    undefined, // workspaceTrust
+    undefined, // diagnostics
+    undefined, // remoteSettings
+    createSidecarTasksDomain(store), // tasks — its store-subscription re-broadcasts
+    undefined, // extensions
+    undefined, // agentMode
+    undefined, // settings
+    undefined, // runControls
+    undefined, // sessionActions
+    createSidecarTaskControlDomain(store), // taskControl — REAL dismiss composition
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  const before = received.filter(f => f.kind === 'tasks.snapshot').length
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'task.dismiss', requestId: 'td5', taskId: 'g1' } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  for (
+    let i = 0;
+    i < 50 &&
+    (!received.some(f => f.kind === 'task-control.result') ||
+      received.filter(f => f.kind === 'tasks.snapshot').length <= before);
+    i += 1
+  ) {
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+
+  const result = received.find(f => f.kind === 'task-control.result')
+  expect(result && result.kind === 'task-control.result' && result.ok).toBe(true)
+  // Proven by the store, not a stub: the row is gone.
+  expect(store.getState().tasks.g1).toBeUndefined()
+  const snaps = received.filter(
+    (f): f is Extract<ServerFrame, { kind: 'tasks.snapshot' }> => f.kind === 'tasks.snapshot',
+  )
+  expect(snaps.length).toBeGreaterThan(before)
+  expect(snaps[snaps.length - 1]?.tasks.items.find(i => i.id === 'g1')).toBeUndefined()
+})
+
+test('CC-32 — a SUCCESSFUL dismiss records the worker with the agent-mode domain (so the persisted twin cannot re-supply the row) and re-broadcasts', async () => {
+  const { domain: taskControl } = fakeTaskControlDomain()
+  const { domain: agentMode, dismissed } = fakeAgentModeDomain()
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined, // permissions
+    undefined, // goals
+    undefined, // accounts
+    undefined, // workspaceTrust
+    undefined, // diagnostics
+    undefined, // remoteSettings
+    undefined, // tasks
+    undefined, // extensions
+    agentMode,
+    undefined, // settings
+    undefined, // runControls
+    undefined, // sessionActions
+    taskControl,
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  const before = received.filter(f => f.kind === 'agent-mode.snapshot').length
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'task.dismiss', requestId: 'td6', taskId: 'w-live' } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  for (
+    let i = 0;
+    i < 50 &&
+    (dismissed.length === 0 ||
+      received.filter(f => f.kind === 'agent-mode.snapshot').length <= before);
+    i += 1
+  ) {
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+  expect(dismissed).toEqual(['w-live'])
+  // The eviction's own store re-broadcast went out BEFORE the domain knew, so the
+  // explicit re-broadcast is what actually carries the suppressed row to the UI.
+  expect(received.filter(f => f.kind === 'agent-mode.snapshot').length).toBeGreaterThan(before)
+})
+
+test('CC-32 — a PERSISTED-ONLY worker (no live task) is dismissible: not_found suppresses the row and acks ok, instead of a dead control', async () => {
+  // The commonest stale row there is: the reaper already evicted the live task, so
+  // the row now comes from the persisted plane alone and `readSessionState` stamps
+  // it `origin: 'current'`. Refusing here left Dismiss visible but inert.
+  const { domain: taskControl } = fakeTaskControlDomain(() => ({
+    ok: false,
+    refusal: 'not_found' as const,
+    message: 'That worker is already gone.',
+  }))
+  const { domain: agentMode, dismissed } = fakeAgentModeDomain()
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined, // permissions
+    undefined, // goals
+    undefined, // accounts
+    undefined, // workspaceTrust
+    undefined, // diagnostics
+    undefined, // remoteSettings
+    undefined, // tasks
+    undefined, // extensions
+    agentMode,
+    undefined, // settings
+    undefined, // runControls
+    undefined, // sessionActions
+    taskControl,
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  const before = received.filter(f => f.kind === 'agent-mode.snapshot').length
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'task.dismiss', requestId: 'td8', taskId: 'w-persisted' } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  for (let i = 0; i < 50 && !received.some(f => f.kind === 'task-control.result'); i += 1) {
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+  const result = received.find(f => f.kind === 'task-control.result')
+  // The operator sees the row go, so the ack must not read as a failure.
+  expect(result && result.kind === 'task-control.result' && result.ok).toBe(true)
+  expect(dismissed).toEqual(['w-persisted'])
+  // No store mutated on this path, so no subscription fired: the explicit
+  // re-broadcast is the ONLY thing carrying the suppression to the renderer.
+  expect(received.filter(f => f.kind === 'agent-mode.snapshot').length).toBeGreaterThan(before)
+})
+
+test('CC-32 — a REFUSED dismiss records nothing: a row the engine kept must not be suppressed in the other plane', async () => {
+  const { domain: taskControl } = fakeTaskControlDomain(() => ({
+    ok: false,
+    refusal: 'still_running' as const,
+    message: 'That worker is still running. Stop it first.',
+  }))
+  const { domain: agentMode, dismissed } = fakeAgentModeDomain()
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined, // permissions
+    undefined, // goals
+    undefined, // accounts
+    undefined, // workspaceTrust
+    undefined, // diagnostics
+    undefined, // remoteSettings
+    undefined, // tasks
+    undefined, // extensions
+    agentMode,
+    undefined, // settings
+    undefined, // runControls
+    undefined, // sessionActions
+    taskControl,
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: { type: 'task.dismiss', requestId: 'td7', taskId: 'w-live' } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  for (let i = 0; i < 50 && !received.some(f => f.kind === 'task-control.result'); i += 1) {
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+  const result = received.find(f => f.kind === 'task-control.result')
+  expect(result && result.kind === 'task-control.result' && result.ok).toBe(false)
+  expect(dismissed).toEqual([])
 })
 
 /* ------------------------------------------------------------------------- *
@@ -3754,6 +4402,125 @@ test('F5 — ready frame with non-JSON-safe payload is rejected', () => {
   expect(loggedMessage).toContain('non-plain object')
 })
 
+/* ------------------------------------------------------------------------- *
+ * A5 (docs/reports/2026-08-10-overnight-hang-log-request.md) — every outbound
+ * drop leaves a durable record. Each test below makes the server genuinely
+ * refuse a frame; the callback runs the result through the real shared record
+ * builder, so a vocabulary that did not admit the event or its fields fails
+ * here rather than silently at runtime on the FD 3 descriptor.
+ * ------------------------------------------------------------------------- */
+
+function makeDropRecordingServer(controller: AppSessionController): {
+  server: SidecarServer
+  records: OperationalRecord[]
+} {
+  const records: OperationalRecord[] = []
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
+    controller,
+    log: () => {},
+    onFrameDropped: (reason, frameKind) => {
+      records.push(
+        createOperationalRecord(
+          {
+            level: 'warn',
+            event: 'frame.dropped',
+            process: 'sidecar',
+            fields: { reason, frame: frameKind },
+          },
+          { launchId: 'launch', processInstanceId: 'process' },
+        ),
+      )
+    },
+  })
+  servers.push(server)
+  return { server, records }
+}
+
+test('A5 — an un-cloneable event is recorded as a dropped frame, not only on stderr', async () => {
+  const controller = new AppSessionController({
+    async *runTurn() {
+      // A function cannot cross `structuredClone`; the payload is refused
+      // before it is ever framed.
+      yield {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'ok' }], reviver: () => 'nope' },
+      } as never
+    },
+  })
+  const { server, records } = makeDropRecordingServer(controller)
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+
+  void controller.submit('go')
+  await waitFor(() => records.length > 0)
+
+  expect(received.some(f => f.kind === 'event' && f.event.type === 'message')).toBe(false)
+  expect(records[0]?.event).toBe('frame.dropped')
+  expect(records[0]?.fields).toEqual({ reason: 'clone_failed', frame: 'event' })
+})
+
+test('A5 — a non-JSON-safe ready payload is recorded as a dropped frame', () => {
+  const controller = new AppSessionController(probeAdapter())
+  // A Date clones fine and is not JSON-safe, so this reaches the SECOND gate.
+  controller.getGoalSnapshot = () => ({
+    threadId: 'thread-123',
+    invalidField: new Date(),
+  } as never)
+  const { server, records } = makeDropRecordingServer(controller)
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+
+  expect(received.some(f => f.kind === 'ready')).toBe(false)
+  expect(records.map(record => record.fields)).toEqual([
+    { reason: 'not_json_safe', frame: 'ready' },
+  ])
+})
+
+test('A5 — a secret-blocked outbound frame is recorded without naming the secret', async () => {
+  const controller = new AppSessionController({
+    async *runTurn() {
+      yield {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'ok', accessToken: 'sk-leak' }] },
+      } as never
+    },
+  })
+  const { server, records } = makeDropRecordingServer(controller)
+  const { socket } = makeSocket()
+  server.addConnection(socket)
+
+  void controller.submit('go')
+  await waitFor(() => records.length > 0)
+
+  expect(records[0]?.fields).toEqual({ reason: 'secret_key', frame: 'event' })
+  // The mechanism travels, the contents do not: the offending key and value
+  // stay on stderr, where no support bundle can pick them up.
+  const written = JSON.stringify(records)
+  expect(written).not.toContain('sk-leak')
+  expect(written).not.toContain('accessToken')
+})
+
+test('A5 — an oversized outbound frame is recorded as a dropped frame', () => {
+  const controller = new AppSessionController(probeAdapter())
+  // Clones fine and is JSON-safe, so it survives both payload gates and is
+  // refused by the F3 size bound instead — the last of the outbound drop paths
+  // that used to account for itself on stderr alone.
+  controller.getGoalSnapshot = () => ({
+    threadId: 'thread-123',
+    note: 'x'.repeat(MAX_OUTBOUND_FRAME_BYTES),
+  } as never)
+  const { server, records } = makeDropRecordingServer(controller)
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+
+  expect(received.some(f => f.kind === 'ready')).toBe(false)
+  expect(records.map(record => record.fields)).toEqual([
+    { reason: 'oversize', frame: 'ready' },
+  ])
+})
+
 /** Read `updatedInput` off a possibly-null allow response without union quirks. */
 function allowInput(response: AppPermissionResponse | null): unknown {
   return (response as unknown as { updatedInput?: unknown } | null)?.updatedInput
@@ -4383,11 +5150,11 @@ test('P4-5 — rejects account.switch with a missing accountId (schema)', () => 
 
 test('P4-5 — a valid account.rename passes the boundary and dispatches with its correlated result', async () => {
   seedCodexAccountPoolForTest({ accounts: [acctFixture()], activeAccountId: 'acct-aaaa' })
-  let renamed: { accountId: string; alias: string } | null = null
+  const renames: { accountId: string; alias: string }[] = []
   const accounts = makeAccountsDomain({
     executor: fakeExecutor({
       rename: (accountId, alias) => {
-        renamed = { accountId, alias }
+        renames.push({ accountId, alias })
         return { ok: true, message: 'renamed' }
       },
     }),
@@ -4402,7 +5169,7 @@ test('P4-5 — a valid account.rename passes the boundary and dispatches with it
   )
   await flush()
 
-  expect(renamed).toEqual({ accountId: 'acct-aaaa', alias: 'renamed' })
+  expect(renames).toEqual([{ accountId: 'acct-aaaa', alias: 'renamed' }])
   expect(
     received.some(
       f => f.kind === 'account.result' && f.requestId === 'rename-1' && f.ok,

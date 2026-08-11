@@ -119,6 +119,9 @@ export type MergedSessionRow = {
   restorable: boolean
   /** Registry status, or `history` for a transcript with no registry row. */
   status: SessionDescriptor['status'] | 'history'
+  /** IDLE-PARK: the engine was reclaimed on purpose, not lost. Always false for
+   * a history row, which never had a registry row to park. */
+  parked: boolean
   inRegistry: boolean
   modifiedAtMs: number
   createdAtMs: number
@@ -199,6 +202,7 @@ export function selectMergedSessionRows(
       live: !descriptor.restorable && descriptor.status !== 'exited',
       restorable: descriptor.restorable,
       status: descriptor.status,
+      parked: descriptor.parked,
       inRegistry: true,
       modifiedAtMs: entry?.modifiedAtMs ?? descriptor.lastAttachedAt,
       createdAtMs: entry?.createdAtMs ?? descriptor.createdAt,
@@ -226,6 +230,7 @@ export function selectMergedSessionRows(
       live: false,
       restorable: false,
       status: 'history',
+      parked: false,
       inRegistry: false,
       modifiedAtMs: entry.modifiedAtMs,
       createdAtMs: entry.createdAtMs,

@@ -33,6 +33,7 @@ function descriptor(id: string, lastAttachedAt: number): SessionDescriptor {
     titleUpdatedAt: null,
     status: 'exited',
     restorable: true,
+    parked: false,
     createdAt: lastAttachedAt,
     lastAttachedAt,
     lastMessageSentAt: null,

@@ -14,6 +14,8 @@
  *   - the Bun runtime flags required by the real engine sidecar;
  *   - the HC1 validation of a `saveTextToFile` request (P4-35);
  *   - the cancellable post-paint window that arms the background drivers.
+ *   - deciding when renderer health loss becomes durable error evidence.
+ *   - collapsing window show/hide signals into visibility transitions.
  *
  * `main.ts` keeps the Electron wiring and calls in here.
  */
@@ -26,6 +28,7 @@ import {
   type SessionDescriptor,
 } from '../shared/hostApi.js'
 import { MAX_SAVE_NAME_CHARS, MAX_SAVE_TEXT_BYTES } from '../shared/limits.js'
+import { MAX_OPERATIONAL_STRING_BYTES } from '../shared/operationalLog.js'
 import {
   PROTOCOL_VERSION,
   type ServerFrame,
@@ -42,6 +45,296 @@ export const SIDECAR_RUNTIME_ARGS = [
   '--feature=TRANSCRIPT_CLASSIFIER',
   'run',
 ] as const
+
+export const RENDERER_HEALTH_DEGRADED_MISSES = 3
+export const RENDERER_HEALTH_UNAVAILABLE_MISSES = 6
+export const RENDERER_HEALTH_UNAVAILABLE_INTERVAL_MS = 60_000
+export const RENDERER_HEALTH_SAMPLE_INTERVAL_MS = 30_000
+
+export type RendererHealthEvent = Readonly<{
+  event: 'renderer.health.missed' | 'renderer.health.unavailable'
+  level: 'warn' | 'error'
+  fields: Readonly<{ missed: number; elapsedMs: number }>
+}>
+
+export type RendererHealthResponse = Readonly<{
+  recovered: boolean
+  priorMisses: number
+  outageDurationMs: number
+  /** False when this response falls inside the current sampling interval. */
+  shouldSample: boolean
+}>
+
+export function createRendererHealthMonitor({
+  now = () => performance.now(),
+}: {
+  now?: () => number
+} = {}) {
+  let misses = 0
+  let lastResponseAt = now()
+  let degradedAt: number | null = null
+  let lastUnavailableAt: number | null = null
+  let lastSampleAt: number | null = null
+
+  return {
+    reset(): void {
+      misses = 0
+      lastResponseAt = now()
+      degradedAt = null
+      lastUnavailableAt = null
+      lastSampleAt = null
+    },
+    probe(): RendererHealthEvent | null {
+      const current = now()
+      const elapsedMs = current - lastResponseAt
+      if (elapsedMs <= 5_500) return null
+
+      misses++
+      if (misses === RENDERER_HEALTH_DEGRADED_MISSES) {
+        degradedAt = current
+        return {
+          event: 'renderer.health.missed',
+          level: 'warn',
+          fields: { missed: misses, elapsedMs },
+        }
+      }
+      if (
+        misses >= RENDERER_HEALTH_UNAVAILABLE_MISSES &&
+        (lastUnavailableAt === null ||
+          current - lastUnavailableAt >= RENDERER_HEALTH_UNAVAILABLE_INTERVAL_MS)
+      ) {
+        lastUnavailableAt = current
+        return {
+          event: 'renderer.health.unavailable',
+          level: 'error',
+          fields: { missed: misses, elapsedMs },
+        }
+      }
+      return null
+    },
+    response(): RendererHealthResponse {
+      const current = now()
+      const recovered = degradedAt !== null
+      // The sampling cadence used to be a module global in main, which reset()
+      // did not clear, so the first sample after a window reopened could be
+      // suppressed for a full interval. All health state lives here now.
+      const shouldSample = recovered ||
+        lastSampleAt === null ||
+        current - lastSampleAt >= RENDERER_HEALTH_SAMPLE_INTERVAL_MS
+      if (shouldSample) lastSampleAt = current
+      const result = {
+        recovered,
+        priorMisses: misses,
+        outageDurationMs: degradedAt === null ? 0 : current - degradedAt,
+        shouldSample,
+      }
+      misses = 0
+      degradedAt = null
+      lastUnavailableAt = null
+      lastResponseAt = current
+      return result
+    },
+  }
+}
+
+/* ------------------------------------------------------------------------- *
+ * Health flight recorder (2026-08-10, from the 2026-08-09 renderer OOM).
+ *
+ * Health is measured every 5s but `shouldSample` above logs at most one reading
+ * per 30s, so the renderer that died at 22:13:46 left a last sample 29.8s old:
+ * the six readings that could have shown the terminal lag spike or heap climb
+ * were parsed and then dropped. The steady-state thrift is correct, so the
+ * dedup stays; this ring keeps the raw readings in memory and pays bytes only
+ * where an anomaly already happened.
+ * ------------------------------------------------------------------------- */
+
+/** Twelve 5s readings is a minute of history, ~250 bytes once encoded. */
+export const RENDERER_HEALTH_RING_CAPACITY = 12
+
+export type RendererHealthReading = Readonly<{
+  eventLoopLagMs: number
+  visible: boolean
+  heapUsedBytes: number | null
+}>
+
+export type RendererHealthFlightRecorderFlush = Readonly<{
+  count: number
+  samples: string
+}>
+
+export type RendererHealthFlightRecorder = {
+  /** Keep one raw reading, evicting the oldest past the ring's capacity. */
+  record(reading: RendererHealthReading): void
+  /**
+   * Encode and CLEAR the ring, or null when it holds nothing. Clearing is what
+   * stops a crash that fires both triggers from writing the same readings
+   * twice, and what stops stale pre-recovery readings reaching a later record.
+   */
+  flush(): RendererHealthFlightRecorderFlush | null
+}
+
+/**
+ * One reading as `<ageMs>:<lagMs>:<heapMiB>:<v|h>`, age measured back from the
+ * flush. Unknown heap is `-`.
+ *
+ * ASCII by construction, so the byte budget below can count characters, and
+ * free of the shapes `sanitizeOperationalText` rewrites (no path separator, no
+ * scheme, no `@`) so the stored string is the string that was measured.
+ */
+function encodeHealthReading(ageMs: number, reading: RendererHealthReading): string {
+  const heapMiB = reading.heapUsedBytes === null
+    ? '-'
+    : String(Math.round(reading.heapUsedBytes / 1_048_576))
+  const age = Math.max(0, Math.round(ageMs))
+  return `${age}:${Math.round(reading.eventLoopLagMs)}:${heapMiB}:${reading.visible ? 'v' : 'h'}`
+}
+
+/**
+ * The ring, as one capped string rather than one record per reading.
+ *
+ * Both alternatives are foreclosed by the record contract, not merely awkward:
+ * `sanitizeOperationalFields` takes only scalars and caps at
+ * `MAX_OPERATIONAL_FIELDS`, so twelve readings of four values can be neither an
+ * array nor flat fields; and a burst of same-event records would be collapsed
+ * by the main sink's 1000ms `${event}:${appSessionId}:${reason}` dedup
+ * (`operationalLogSink.ts`), destroying the evidence this exists to keep.
+ *
+ * Whole readings are dropped when the budget runs out, newest kept first:
+ * `sanitizeOperationalText` truncates mid-string, which would corrupt an entry
+ * rather than lose one, and the readings nearest the failure are the point.
+ */
+export function createRendererHealthFlightRecorder({
+  now = () => performance.now(),
+  capacity = RENDERER_HEALTH_RING_CAPACITY,
+  maxBytes = MAX_OPERATIONAL_STRING_BYTES,
+}: {
+  now?: () => number
+  capacity?: number
+  maxBytes?: number
+} = {}): RendererHealthFlightRecorder {
+  let ring: Array<{ at: number } & RendererHealthReading> = []
+  return {
+    record(reading: RendererHealthReading): void {
+      ring.push({ at: now(), ...reading })
+      if (ring.length > capacity) ring.shift()
+    },
+    flush(): RendererHealthFlightRecorderFlush | null {
+      if (ring.length === 0) return null
+      const current = now()
+      const readings = ring
+      ring = []
+      const kept: string[] = []
+      let bytes = 0
+      for (let index = readings.length - 1; index >= 0; index--) {
+        const entry = encodeHealthReading(current - readings[index].at, readings[index])
+        const cost = entry.length + (kept.length === 0 ? 0 : 1)
+        if (bytes + cost > maxBytes) break
+        bytes += cost
+        kept.push(entry)
+      }
+      if (kept.length === 0) return null
+      return { count: kept.length, samples: kept.reverse().join(';') }
+    },
+  }
+}
+
+/* ------------------------------------------------------------------------- *
+ * Window visibility transitions (2026-08-10, from the 2026-08-09 incident).
+ *
+ * A 21:50-22:08 "outage" of missed health probes was a HIDDEN WINDOW: Chromium
+ * throttles a hidden renderer's timers, so the probe saw silence. Nothing in the
+ * log said so, because main's only visibility signal is the `visible` flag a
+ * renderer RESPONSE carries (`lastKnownRendererVisible`) — and a missed response
+ * carries nothing, so the flag freezes at whatever it last was precisely when it
+ * matters. These transitions come from the window itself, so they keep arriving
+ * while the renderer is quiet, and they bracket such an episode exactly.
+ * ------------------------------------------------------------------------- */
+
+/** The BrowserWindow signals that change whether a user can see the window. */
+export type WindowVisibilityReason = 'show' | 'hide' | 'minimize' | 'restore'
+
+export type WindowVisibilityTransition = Readonly<{
+  visible: boolean
+  reason: WindowVisibilityReason
+}>
+
+/**
+ * Collapse window signals into transitions: a record per CHANGE, never per
+ * signal.
+ *
+ * The signals overlap — macOS fires hide alongside minimize, and restoring a
+ * hidden-and-minimized window fires both restore and show — so logging each one
+ * would double every user action. Same-direction repeats would not even survive
+ * the sink, whose 1s dedup keys on `event:appSessionId:reason`: two different
+ * reasons for one direction are two keys, so both would be written.
+ *
+ * Starting at `null` rather than `true` means the first show after launch is a
+ * transition, which is what gives an incident reader a visibility baseline
+ * instead of a log that only mentions the window once it is hidden.
+ */
+export function createWindowVisibilityTracker() {
+  let visible: boolean | null = null
+  return {
+    observe(reason: WindowVisibilityReason): WindowVisibilityTransition | null {
+      const next = reason === 'show' || reason === 'restore'
+      if (visible === next) return null
+      visible = next
+      return { visible: next, reason }
+    },
+  }
+}
+
+export const RENDERER_RECOVERY_MAX_ATTEMPTS = 3
+export const RENDERER_RECOVERY_WINDOW_MS = 10 * 60_000
+
+/**
+ * Every reason this policy can be asked about: Electron's own
+ * `render-process-gone` reasons, plus `load-failed` for a recovery load that
+ * never committed a document. Declared here rather than imported so this file
+ * stays Electron-free.
+ */
+export type RendererDeathReason =
+  | 'clean-exit'
+  | 'abnormal-exit'
+  | 'killed'
+  | 'crashed'
+  | 'oom'
+  | 'launch-failed'
+  | 'integrity-failure'
+  | 'load-failed'
+
+export type RendererRecoveryDecision =
+  | Readonly<{ action: 'reload'; attempt: number }>
+  | Readonly<{ action: 'give-up' }>
+  | Readonly<{ action: 'ignore' }>
+
+/**
+ * Reload policy for a dead renderer process. Before 2026-08-09 a renderer
+ * crash (an OOM trap in that incident) left the window permanently black:
+ * `render-process-gone` only wrote a log record, and nothing ever recreated
+ * the document. Reload every abnormal death, but cap attempts inside a
+ * sliding window so a renderer that dies during load cannot reload forever.
+ * `clean-exit` is what quitting looks like and is never reloaded.
+ */
+export function createRendererRecoveryPolicy({
+  now = () => Date.now(),
+}: {
+  now?: () => number
+} = {}) {
+  const attemptsAt: number[] = []
+  return {
+    decide(reason: RendererDeathReason): RendererRecoveryDecision {
+      if (reason === 'clean-exit') return { action: 'ignore' }
+      const current = now()
+      while (attemptsAt.length > 0 && current - attemptsAt[0] >= RENDERER_RECOVERY_WINDOW_MS) {
+        attemptsAt.shift()
+      }
+      if (attemptsAt.length >= RENDERER_RECOVERY_MAX_ATTEMPTS) return { action: 'give-up' }
+      attemptsAt.push(current)
+      return { action: 'reload', attempt: attemptsAt.length }
+    },
+  }
+}
 
 /**
  * The renderer-visible frame a supervisor event becomes, or null when the event

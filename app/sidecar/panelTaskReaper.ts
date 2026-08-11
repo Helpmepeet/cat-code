@@ -40,10 +40,12 @@
  * deadline-stamped row at the boundaries that did run. The one shape that
  * outlives this module BY DESIGN is a blocked handoff: `completeAgentTask`
  * stamps NO `evictAfter` when the result carries a `status: blocked` line
- * (`LocalAgentTask.tsx:540,548`), `earliestDeadline()` below skips undefined
- * deadlines, and the desktop has no dismiss verb (`taskControlDomain.ts` stops
- * RUNNING tasks only) — such a row persists until the sidecar exits.
- * `docs/migration/STATUS.md` CC-32 carries the full record.
+ * (`LocalAgentTask.tsx:540,548`), and `earliestDeadline()` below skips undefined
+ * deadlines, so no sweep here will ever pick it up. That row is retired by the
+ * operator instead, through the `task.dismiss` verb
+ * (`taskControlDomain.ts`) — which sets `evictAfter: 0` and so hands the row
+ * BACK to this module whenever the engine's `notified` guard defers the
+ * immediate eviction. `docs/migration/STATUS.md` CC-32 carries the full record.
  *
  * Evicting the task is what makes the row disappear: the store mutation drives
  * the existing `tasks.snapshot` / `agent-mode.snapshot` re-broadcasts, and the

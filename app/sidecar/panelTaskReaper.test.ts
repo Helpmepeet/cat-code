@@ -54,7 +54,7 @@ function runningWorker(id: string): TaskState {
  * guard (`framework.ts:128`). The reaper must keep retrying rather than give up
  * or spin.
  */
-function refusedWorker(id: string, evictAfter: number): TaskState {
+function refusedWorker(id: string, evictAfter: number | undefined): TaskState {
   return {
     ...(finishedWorker(id, evictAfter) as unknown as Record<string, unknown>),
     notified: false,
@@ -166,6 +166,50 @@ test('a refused eviction still gets swept under sustained store churn (no retry 
 
   const evicted = await until(() => store.getState().tasks.w1 === undefined, 4_000)
   clearInterval(churn)
+  stop()
+  expect(evicted).toBe(true)
+})
+
+/* CC-32 follow-up — the dismiss hand-off. A blocked handoff carries NO deadline,
+ * so `earliestDeadline` skips it and no sweep here will ever pick it up. The
+ * `task.dismiss` verb resolves that by stamping `evictAfter: 0` through the
+ * engine's own `stopOrDismissAgent`; whenever the engine then defers the eviction
+ * on its `notified` guard, THIS module is what finishes the job. Three doc
+ * comments assert that hand-off, so it is pinned here rather than assumed. */
+test('CC-32 — an idle reaper picks up a task newly marked evictAfter:0 by a dismiss, and sweeps it once the notified guard clears', async () => {
+  const store = createStore(getDefaultAppState())
+  // A blocked worker: terminal, no deadline, and not yet notified. The reaper
+  // holds NO timer for it — there is nothing to arm on.
+  store.setState(prev => ({
+    ...prev,
+    tasks: { b1: refusedWorker('b1', undefined) },
+  }))
+  const stop = createSidecarPanelTaskReaper(store).start()
+
+  // Nothing happens on its own, however long we wait: this is the shape the
+  // reaper cannot fix and the dismiss verb exists for.
+  const leftAlone = await until(() => store.getState().tasks.b1 === undefined, 300)
+  expect(leftAlone).toBe(false)
+
+  // The dismiss mark, exactly as `stopOrDismissAgent` writes it.
+  store.setState(prev => {
+    const task = prev.tasks.b1
+    if (!task) return prev
+    return { ...prev, tasks: { ...prev.tasks, b1: { ...task, evictAfter: 0 } } }
+  })
+  // Still guard-held (not notified), so the mark alone must not evict it.
+  expect(store.getState().tasks.b1).toBeDefined()
+
+  // The completion notification lands the way a delivered one would.
+  setTimeout(() => {
+    store.setState(prev => {
+      const task = prev.tasks.b1
+      if (!task) return prev
+      return { ...prev, tasks: { ...prev.tasks, b1: { ...task, notified: true } } }
+    })
+  }, 100)
+
+  const evicted = await until(() => store.getState().tasks.b1 === undefined, 4_000)
   stop()
   expect(evicted).toBe(true)
 })

@@ -67,6 +67,9 @@ export type ApplyPatchSuccess = {
   type: FilePatchOperationType
   before: string | null
   after: string | null
+  // Placement disclosures: set when a hunk was ambiguous on its own and was
+  // resolved by the position the previous hunk established.
+  notes?: string[]
 }
 
 export type ApplyPatchResult = {
@@ -156,6 +159,9 @@ const outputFileSchema = lazySchema(() =>
         }),
       )
       .describe('Display diff for the operation'),
+    // Additive-optional so transcripts written before placement disclosures
+    // existed still validate on resume.
+    notes: z.array(z.string()).optional(),
   }),
 )
 
@@ -180,6 +186,7 @@ export type FilePatchToolOutput = {
     structuredPatch: StructuredPatchHunk[]
     before?: string | null
     after?: string | null
+    notes?: string[]
   }>
 }
 

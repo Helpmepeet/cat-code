@@ -20,6 +20,7 @@ import { scanForSecrets } from '../shared/secretGuard.js'
 import {
   agentModeSnapshot,
   createSidecarAgentModeDomain,
+  dismissedStillPending,
   type AgentModeExecutor,
 } from './agentModeDomain.js'
 
@@ -171,6 +172,64 @@ test('de-dupes by handle: a live worker wins over a same-handle persisted worker
   expect(snap.workers.filter(w => (w.handle ?? '').toLowerCase().replace(/^@/, '') === 'turing')).toHaveLength(1)
   expect(snap.workers.find(w => w.handle === 'Turing')).toMatchObject({ agentId: 'w-live', status: 'running' })
   expect(handles).toContain('Lovelace')
+})
+
+/* CC-32 follow-up — handle de-dupe means the live plane MASKS its persisted twin,
+ * so retiring the live task un-masks the twin unless the dismissal is recorded.
+ * These two pin the before/after of that hole. */
+test('CC-32 — without the dismissal record, evicting the live worker un-dedupes its persisted twin and the row comes back', () => {
+  const state = persisted([
+    worker({ agentId: 'w-live', handle: '@gauss', status: 'completed' }),
+  ])
+  const live: Record<string, TaskState> = {
+    a1: agentTask({ agentId: 'w-live', agentName: 'Gauss', status: 'completed' }),
+  }
+  // Masked while the live task exists...
+  expect(agentModeSnapshot(live, state, true).workers).toHaveLength(1)
+  // ...and back the moment the live task is evicted. This is the self-cancel.
+  const afterEviction = agentModeSnapshot(undefined, state, true)
+  expect(afterEviction.workers.map(w => w.handle)).toEqual(['@gauss'])
+})
+
+test('CC-32 — a dismissed worker stays gone: the session plane no longer re-supplies its row after the live task is evicted', () => {
+  const state = persisted([
+    worker({ agentId: 'w-live', handle: '@gauss', status: 'completed' }),
+    worker({ agentId: 'w-other', handle: 'Lovelace', status: 'completed' }),
+  ])
+  const snap = agentModeSnapshot(undefined, state, true, new Set(['w-live']))
+  // Only the dismissed one is suppressed — the rest of the plane is untouched.
+  expect(snap.workers.map(w => w.handle)).toEqual(['Lovelace'])
+})
+
+test('CC-32 — a dismissal mark is dropped once its worker is LIVE again, so a resume does not lose the row forever', () => {
+  const live: Record<string, TaskState> = {
+    a1: agentTask({ agentId: 'w-live', agentName: 'Gauss', status: 'running' }),
+  }
+  // Resume reuses the agentId, so the mark taken before the resume would otherwise
+  // suppress the persisted twin for good once the resumed run finished.
+  const pruned = dismissedStillPending(new Set(['w-live', 'w-gone']), live)
+  expect([...pruned]).toEqual(['w-gone'])
+
+  // And the mark survives while the worker really is absent.
+  expect([...dismissedStillPending(new Set(['w-live']), {})]).toEqual(['w-live'])
+  // Identity of the input is preserved when nothing changes (no needless churn).
+  const unchanged = new Set(['w-gone'])
+  expect(dismissedStillPending(unchanged, live)).toBe(unchanged)
+})
+
+test('CC-32 — the pruned mark actually restores the row: same persisted plane, before and after the un-mark', () => {
+  const state = persisted([
+    worker({ agentId: 'w-live', handle: '@gauss', status: 'completed' }),
+  ])
+  // Marked and absent → suppressed.
+  expect(
+    agentModeSnapshot(undefined, state, true, new Set(['w-live'])).workers,
+  ).toHaveLength(0)
+  // Mark pruned by a live run → the row is back once that run ends.
+  const pruned = dismissedStillPending(new Set(['w-live']), {
+    a1: agentTask({ agentId: 'w-live', agentName: 'Gauss', status: 'running' }),
+  })
+  expect(agentModeSnapshot(undefined, state, true, pruned).workers).toHaveLength(1)
 })
 
 test('an absent agent-mode session degrades to an empty, well-formed snapshot', () => {

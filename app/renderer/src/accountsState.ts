@@ -58,6 +58,8 @@ export type AccountsAction =
   | { type: 'oauthReset'; sessionId: SessionId }
   /** The global `accounts-pool` host event (accounts owner). Session-independent. */
   | { type: 'pool'; pool: AccountsSnapshot }
+  /** The row is gone for good — drop its retained snapshot (see `lastSessions`). */
+  | { type: 'session-removed'; sessionId: SessionId }
 
 export function createAccountsState(): AccountsState {
   return {
@@ -75,6 +77,24 @@ export function reduceAccountsState(
 ): AccountsState {
   if (action.type === 'pool') {
     return { ...state, pool: action.pool }
+  }
+
+  if (action.type === 'session-removed') {
+    const { sessionId } = action
+    if (
+      !(sessionId in state.sessions) &&
+      !(sessionId in state.lastSessions) &&
+      !(sessionId in state.oauthProgress)
+    ) {
+      return state
+    }
+    const sessions = { ...state.sessions }
+    const lastSessions = { ...state.lastSessions }
+    const oauthProgress = { ...state.oauthProgress }
+    delete sessions[sessionId]
+    delete lastSessions[sessionId]
+    delete oauthProgress[sessionId]
+    return { ...state, sessions, lastSessions, oauthProgress }
   }
 
   if (action.type === 'oauthReset') {

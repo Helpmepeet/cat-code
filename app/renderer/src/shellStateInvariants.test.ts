@@ -83,6 +83,9 @@ function descriptorFor(m: SessionModel): SessionDescriptor {
     createdAt: m.createdAt,
     lastAttachedAt: m.lastAttachedAt,
     lastMessageSentAt: null,
+    // The model's phases are crash/close shapes; a park is a separate axis this
+    // invariant suite does not model, so every descriptor it builds is unparked.
+    parked: false,
   }
   switch (m.phase) {
     case 'spawning':
@@ -249,6 +252,7 @@ test('explicit P3-5b shape: ready→crash keeps tab, restore relives it, close r
     createdAt: 1,
     lastAttachedAt: 1,
     lastMessageSentAt: null,
+    parked: false,
   }
 
   // spawn → ready

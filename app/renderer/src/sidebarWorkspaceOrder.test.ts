@@ -328,6 +328,7 @@ function row(cwd: string, id: string): MergedSessionRow {
     displayLabel: id,
     live: false,
     restorable: false,
+    parked: false,
     status: 'history',
     inRegistry: false,
     modifiedAtMs: 0,

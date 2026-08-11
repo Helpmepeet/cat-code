@@ -2,7 +2,7 @@ import { AppSessionController } from '../../src/app-runtime/AppSessionController
 import { createQueryEngineAppSessionConfigFromSetup } from '../../src/app-runtime/createQueryEngineAppSessionConfigFromSetup.js'
 import { createQueryEngineSessionController } from '../../src/app-runtime/createQueryEngineSessionController.js'
 import { createRuntimeBackedWebAppSession } from '../../src/app-runtime/createRuntimeBackedWebAppSession.js'
-import { getDefaultAppState } from '../../src/state/AppStateStore.js'
+import { getDefaultAppState, type AppState } from '../../src/state/AppStateStore.js'
 import { getInitialEffortSetting } from '../../src/utils/effort.js'
 import {
   getModelEnvOverride,

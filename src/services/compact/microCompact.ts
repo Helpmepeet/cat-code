@@ -127,11 +127,28 @@ export function markToolsSentToAPIState(): void {
   }
 }
 
+// --- Time-based microcompact sticky state ---
+
+// tool_use_ids that time-based MC has content-cleared in the REQUEST array.
+// The stored conversation keeps full content, so unless the clearing is
+// re-applied on every subsequent main-thread request the full tool_results
+// are re-sent while the usage anchor comes from the post-clear response —
+// the request silently exceeds the estimate and autocompact fires late.
+// Cleared by resetMicrocompactState (MAIN-THREAD compaction, /clear, rewind),
+// which is exactly when the ids stop referring to the live conversation.
+// This set — like cachedMCState and pendingCacheEdits above — is owned by the
+// main thread: only a main-thread querySource can write it (see the gates at
+// evaluateTimeBasedTrigger and the sticky re-application in
+// microcompactMessages). Subagents and in-process teammates share this module
+// but never own any of it, so they must never reset it.
+const timeBasedClearedToolIds = new Set<string>()
+
 export function resetMicrocompactState(): void {
   if (cachedMCState && cachedMCModule) {
     cachedMCModule.resetCachedMCState(cachedMCState)
   }
   pendingCacheEdits = null
+  timeBasedClearedToolIds.clear()
 }
 
 // Helper to calculate tool result tokens
@@ -160,6 +177,15 @@ function calculateToolResultTokens(block: ToolResultBlockParam): number {
  * Estimate token count for messages by extracting text content
  * Used for rough token estimation when we don't have accurate API counts
  * Pads estimate by 4/3 to be conservative since we're approximating
+ *
+ * Consistent with roughTokenCountEstimationForBlock by construction, not by
+ * shared code: this walk calls roughTokenCountEstimation directly at the flat
+ * 4 chars/token default and then pads the total by 4/3, which lands on the
+ * same effective ~3 chars/token that the 2026-08-10 calibration audit
+ * measured for structured tool output (2.86-3.47, o200k proxy).  Nothing here
+ * routes through the shape-aware estimator, so the pad is not a double
+ * correction.  If this walk is ever switched over to those helpers, drop the
+ * pad — applying both would over-count.
  */
 export function estimateMessageTokens(messages: Message[]): number {
   let totalTokens = 0
@@ -214,6 +240,14 @@ export type PendingCacheEdits = {
 
 export type MicrocompactResult = {
   messages: Message[]
+  /**
+   * Rough tokens removed from the returned REQUEST array relative to the
+   * stored conversation (time-based MC content-clearing only). The usage
+   * anchor tokenCountWithEstimation reads comes from the pre-clear response,
+   * so callers must subtract this to keep the autocompact threshold honest —
+   * same compensation snipCompactIfNeeded's tokensFreed provides.
+   */
+  tokensFreed?: number
   compactionInfo?: {
     pendingCacheEdits?: PendingCacheEdits
   }
@@ -269,6 +303,26 @@ export async function microcompactMessages(
     return timeBasedResult
   }
 
+  // Sticky re-application. The gap trigger only fires on the turn after the
+  // idle window; every later turn rebuilds the request from the stored
+  // conversation, which still holds full tool_result content. Re-apply the
+  // clearing so the request keeps matching the anchor it will be measured
+  // against. Idempotent — already-cleared blocks are skipped and contribute
+  // no tokensFreed. Gated on an explicit main-thread source for the same
+  // reason evaluateTimeBasedTrigger is: /context, /compact and
+  // analyzeContext call in without one for analysis only.
+  let workingMessages = messages
+  let stickyTokensFreed = 0
+  if (
+    timeBasedClearedToolIds.size > 0 &&
+    querySource &&
+    isMainThreadSource(querySource)
+  ) {
+    const reapplied = applyToolResultClearing(messages, timeBasedClearedToolIds)
+    workingMessages = reapplied.messages
+    stickyTokensFreed = reapplied.tokensSaved
+  }
+
   // Only run cached MC for the main thread to prevent forked agents
   // (session_memory, prompt_suggestion, etc.) from registering their
   // tool_results in the global cachedMCState, which would cause the main
@@ -281,7 +335,13 @@ export async function microcompactMessages(
       mod.isModelSupportedForCacheEditing(model) &&
       isMainThreadSource(querySource)
     ) {
-      return await cachedMicrocompactPath(messages, querySource)
+      const cachedResult = await cachedMicrocompactPath(
+        workingMessages,
+        querySource,
+      )
+      return stickyTokensFreed > 0
+        ? { ...cachedResult, tokensFreed: stickyTokensFreed }
+        : cachedResult
     }
   }
 
@@ -289,7 +349,9 @@ export async function microcompactMessages(
   // For contexts where cached microcompact is not available (external builds,
   // non-ant users, unsupported models, sub-agents), no compaction happens here;
   // autocompact handles context pressure instead.
-  return { messages }
+  return stickyTokensFreed > 0
+    ? { messages: workingMessages, tokensFreed: stickyTokensFreed }
+    : { messages: workingMessages }
 }
 
 /**
@@ -443,29 +505,16 @@ export function evaluateTimeBasedTrigger(
   return { gapMinutes, config }
 }
 
-function maybeTimeBasedMicrocompact(
+/**
+ * Content-clear every tool_result whose tool_use_id is in clearSet, returning
+ * a new message array plus the rough token count of what was actually
+ * replaced this call. Blocks already carrying the cleared placeholder are
+ * skipped, so re-applying a set is idempotent and reports 0.
+ */
+function applyToolResultClearing(
   messages: Message[],
-  querySource: QuerySource | undefined,
-): MicrocompactResult | null {
-  const trigger = evaluateTimeBasedTrigger(messages, querySource)
-  if (!trigger) {
-    return null
-  }
-  const { gapMinutes, config } = trigger
-
-  const compactableIds = collectCompactableToolIds(messages)
-
-  // Floor at 1: slice(-0) returns the full array (paradoxically keeps
-  // everything), and clearing ALL results leaves the model with zero working
-  // context. Neither degenerate is sensible — always keep at least the last.
-  const keepRecent = Math.max(1, config.keepRecent)
-  const keepSet = new Set(compactableIds.slice(-keepRecent))
-  const clearSet = new Set(compactableIds.filter(id => !keepSet.has(id)))
-
-  if (clearSet.size === 0) {
-    return null
-  }
-
+  clearSet: ReadonlySet<string>,
+): { messages: Message[]; tokensSaved: number } {
   let tokensSaved = 0
   const result: Message[] = messages.map(message => {
     if (message.type !== 'user' || !Array.isArray(message.message.content)) {
@@ -490,6 +539,44 @@ function maybeTimeBasedMicrocompact(
       message: { ...message.message, content: newContent },
     }
   })
+  return { messages: result, tokensSaved }
+}
+
+function maybeTimeBasedMicrocompact(
+  messages: Message[],
+  querySource: QuerySource | undefined,
+): MicrocompactResult | null {
+  const trigger = evaluateTimeBasedTrigger(messages, querySource)
+  if (!trigger) {
+    return null
+  }
+  const { gapMinutes, config } = trigger
+
+  const compactableIds = collectCompactableToolIds(messages)
+
+  // Floor at 1: slice(-0) returns the full array (paradoxically keeps
+  // everything), and clearing ALL results leaves the model with zero working
+  // context. Neither degenerate is sensible — always keep at least the last.
+  const keepRecent = Math.max(1, config.keepRecent)
+  const keepSet = new Set(compactableIds.slice(-keepRecent))
+  const clearSet = new Set(compactableIds.filter(id => !keepSet.has(id)))
+  // Carry forward anything a previous trigger cleared, minus whatever is now
+  // protected as recent — otherwise a re-fire would resurrect full content
+  // for ids the earlier pass had already dropped from the request.
+  for (const id of timeBasedClearedToolIds) {
+    if (!keepSet.has(id)) {
+      clearSet.add(id)
+    }
+  }
+
+  if (clearSet.size === 0) {
+    return null
+  }
+
+  const { messages: result, tokensSaved } = applyToolResultClearing(
+    messages,
+    clearSet,
+  )
 
   if (tokensSaved === 0) {
     return null
@@ -515,6 +602,11 @@ function maybeTimeBasedMicrocompact(
   // stale state, it would try to cache_edit tools whose server-side entries
   // no longer exist. Reset it.
   resetMicrocompactState()
+  // Record what we cleared AFTER the reset above (which clears this set too),
+  // so later turns keep re-applying it to the request array.
+  for (const id of clearSet) {
+    timeBasedClearedToolIds.add(id)
+  }
   // We just changed the prompt content — the next response's cache read will
   // be low, but that's us, not a break. Tell the detector to expect a drop.
   // notifyCacheDeletion (not notifyCompaction) because it's already imported
@@ -526,5 +618,5 @@ function maybeTimeBasedMicrocompact(
     notifyCacheDeletion(querySource)
   }
 
-  return { messages: result }
+  return { messages: result, tokensFreed: tokensSaved }
 }

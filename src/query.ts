@@ -16,6 +16,7 @@ import {
   calculateTokenWarningState,
   getPersistedAutoCompactTracking,
   isAutoCompactEnabled,
+  measureNonMessageOverheadTokens,
   setPersistedAutoCompactConsecutiveFailures,
   type AutoCompactTrackingState,
 } from './services/compact/autoCompact.js'
@@ -108,9 +109,10 @@ import { queryCheckpoint } from './utils/queryProfiler.js'
 import { runTools } from './services/tools/toolOrchestration.js'
 import { applyToolResultBudget } from './utils/toolResultStorage.js'
 import { recordContentReplacement } from './utils/sessionStorage.js'
-import { handleStopHooks } from './query/stopHooks.js'
+import { handleStopHooks, type StopHookResult } from './query/stopHooks.js'
 import { buildQueryConfig } from './query/config.js'
 import { productionDeps, type QueryDeps } from './query/deps.js'
+import { watchPostTurnStall } from './query/postTurnStall.js'
 import type { Terminal, Continue } from './query/transitions.js'
 import { feature } from 'bun:bundle'
 import {
@@ -422,9 +424,10 @@ async function* queryLoop(
     )
 
     // Apply snip before microcompact (both may run — they are not mutually exclusive).
-    // snipTokensFreed is plumbed to autocompact so its threshold check reflects
-    // what snip removed; tokenCountWithEstimation alone can't see it (reads usage
-    // from the protected-tail assistant, which survives snip unchanged).
+    // snipTokensFreed feeds preRequestTokensFreed below (combined with what
+    // microcompact freed) so autocompact's threshold check reflects what snip
+    // removed; tokenCountWithEstimation alone can't see it (reads usage from
+    // the protected-tail assistant, which survives snip unchanged).
     let snipTokensFreed = 0
     if (feature('HISTORY_SNIP')) {
       queryCheckpoint('query_snip_start')
@@ -452,6 +455,14 @@ async function* queryLoop(
       ? microcompactResult.compactionInfo?.pendingCacheEdits
       : undefined
     queryCheckpoint('query_microcompact_end')
+
+    // Both snip and time-based microcompact shrink the REQUEST array only —
+    // the usage anchor tokenCountWithEstimation reads comes from an assistant
+    // message that predates either. Combine their savings and subtract once,
+    // wherever the stale anchor is consulted below. Computed after
+    // microcompact because microcompact runs after snip.
+    const preRequestTokensFreed =
+      snipTokensFreed + (microcompactResult.tokensFreed ?? 0)
 
     // Project the collapsed context view and maybe commit more collapses.
     // Runs BEFORE autocompact so that if collapse gets us under the
@@ -501,7 +512,7 @@ async function* queryLoop(
       },
       querySource,
       tracking,
-      snipTokensFreed,
+      preRequestTokensFreed,
     )
     queryCheckpoint('query_autocompact_end')
 
@@ -627,7 +638,8 @@ async function* queryLoop(
     // Skip this check if compaction just happened - the compaction result is already
     // validated to be under the threshold, and tokenCountWithEstimation would use
     // stale input_tokens from kept messages that reflect pre-compaction context size.
-    // Same staleness applies to snip: subtract snipTokensFreed (otherwise we'd
+    // Same staleness applies to snip and time-based microcompact: subtract
+    // preRequestTokensFreed (otherwise we'd
     // falsely block in the window where snip brought us under autocompact threshold
     // but the stale usage is still above blocking limit — before this PR that
     // window never existed because autocompact always fired on the stale count).
@@ -667,12 +679,23 @@ async function* queryLoop(
       ) &&
       !collapseOwnsIt
     ) {
+      // Same measurement autocompact uses: when no usage anchor survives (a
+      // gpt→claude switch invalidates one), the count falls back to a rough
+      // estimate whose 20K non-message floor undershoots a heavy tool block.
+      const nonMessageOverheadTokens = await measureNonMessageOverheadTokens({
+        model: currentModel,
+        toolUseContext,
+        systemPrompt,
+        userContext,
+        systemContext,
+      })
       const { isAtBlockingLimit } = calculateTokenWarningState(
         tokenCountWithEstimation(
           messagesForQuery,
-          toolUseContext.options.mainLoopModel,
-        ) - snipTokensFreed,
-        toolUseContext.options.mainLoopModel,
+          currentModel,
+          nonMessageOverheadTokens,
+        ) - preRequestTokensFreed,
+        currentModel,
       )
       if (isAtBlockingLimit) {
         yield createAssistantAPIErrorMessage({
@@ -1088,6 +1111,10 @@ async function* queryLoop(
       // as the natural turn-end path in stopHooks.ts. Main thread only —
       // see stopHooks.ts for the subagent-releasing-main's-lock rationale.
       if (feature('CHICAGO_MCP') && !toolUseContext.agentId) {
+        const disarmStallWatch = watchPostTurnStall('computer_use_cleanup', {
+          turnCount,
+          querySource,
+        })
         try {
           const { cleanupComputerUseAfterTurn } = await import(
             './utils/computerUse/cleanup.js'
@@ -1095,6 +1122,8 @@ async function* queryLoop(
           await cleanupComputerUseAfterTurn(toolUseContext)
         } catch {
           // Failures are silent — this is dogfooding cleanup, not critical path
+        } finally {
+          disarmStallWatch()
         }
       }
 
@@ -1109,8 +1138,23 @@ async function* queryLoop(
     }
 
     // Yield tool use summary from previous turn — haiku (~1s) resolved during model streaming (5-30s)
+    //
+    // When it does NOT resolve, this await is the last thing between the final
+    // assistant message and result emission, and it has no timeout on purpose:
+    // the watch reports the stall and lets the turn keep hanging so the live
+    // stack is still sampleable. See query/postTurnStall.ts.
     if (pendingToolUseSummary) {
-      const summary = await pendingToolUseSummary
+      const disarmStallWatch = watchPostTurnStall('tool_use_summary', {
+        turnCount,
+        querySource,
+        agentId: toolUseContext.agentId,
+      })
+      let summary: ToolUseSummaryMessage | null
+      try {
+        summary = await pendingToolUseSummary
+      } finally {
+        disarmStallWatch()
+      }
       if (summary) {
         yield summary
       }
@@ -1174,19 +1218,31 @@ async function* queryLoop(
         }
       }
       if ((isWithheld413 || isWithheldMedia) && reactiveCompact) {
-        const compacted = await reactiveCompact.tryReactiveCompact({
-          hasAttempted: hasAttemptedReactiveCompact,
+        const disarmStallWatch = watchPostTurnStall('reactive_compact', {
+          turnCount,
           querySource,
-          aborted: toolUseContext.abortController.signal.aborted,
-          messages: messagesForQuery,
-          cacheSafeParams: {
-            systemPrompt,
-            userContext,
-            systemContext,
-            toolUseContext,
-            forkContextMessages: messagesForQuery,
-          },
+          agentId: toolUseContext.agentId,
         })
+        let compacted: Awaited<
+          ReturnType<typeof reactiveCompact.tryReactiveCompact>
+        >
+        try {
+          compacted = await reactiveCompact.tryReactiveCompact({
+            hasAttempted: hasAttemptedReactiveCompact,
+            querySource,
+            aborted: toolUseContext.abortController.signal.aborted,
+            messages: messagesForQuery,
+            cacheSafeParams: {
+              systemPrompt,
+              userContext,
+              systemContext,
+              toolUseContext,
+              forkContextMessages: messagesForQuery,
+            },
+          })
+        } finally {
+          disarmStallWatch()
+        }
 
         if (compacted) {
           // task_budget: same carryover as the proactive path above.
@@ -1322,16 +1378,26 @@ async function* queryLoop(
         return { reason: 'completed' }
       }
 
-      const stopHookResult = yield* handleStopHooks(
-        messagesForQuery,
-        assistantMessages,
-        systemPrompt,
-        userContext,
-        systemContext,
-        toolUseContext,
+      const disarmStopHookStallWatch = watchPostTurnStall('stop_hooks', {
+        turnCount,
         querySource,
-        stopHookActive,
-      )
+        agentId: toolUseContext.agentId,
+      })
+      let stopHookResult: StopHookResult
+      try {
+        stopHookResult = yield* handleStopHooks(
+          messagesForQuery,
+          assistantMessages,
+          systemPrompt,
+          userContext,
+          systemContext,
+          toolUseContext,
+          querySource,
+          stopHookActive,
+        )
+      } finally {
+        disarmStopHookStallWatch()
+      }
 
       if (stopHookResult.preventContinuation) {
         return { reason: 'stop_hook_prevented' }
@@ -1545,6 +1611,10 @@ async function* queryLoop(
       // This is the most likely Ctrl+C path for CU (e.g. slow screenshot).
       // Main thread only — see stopHooks.ts for the subagent rationale.
       if (feature('CHICAGO_MCP') && !toolUseContext.agentId) {
+        const disarmStallWatch = watchPostTurnStall('computer_use_cleanup', {
+          turnCount,
+          querySource,
+        })
         try {
           const { cleanupComputerUseAfterTurn } = await import(
             './utils/computerUse/cleanup.js'
@@ -1552,6 +1622,8 @@ async function* queryLoop(
           await cleanupComputerUseAfterTurn(toolUseContext)
         } catch {
           // Failures are silent — this is dogfooding cleanup, not critical path
+        } finally {
+          disarmStallWatch()
         }
       }
       // Skip the interruption message for submit-interrupts — the queued

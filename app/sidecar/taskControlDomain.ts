@@ -21,8 +21,24 @@
  * string, never a token. A test injects a fake executor so the SERVER boundary is
  * exercised without the engine round-trip (the accountsDomain / agentModeDomain
  * executor-seam idiom).
+ *
+ * DISMISS (2026-08-09, the CC-32 follow-up) is the terminal counterpart, and it
+ * has no `stopTask`-shaped engine entry point of its own — the terminal REPL's
+ * `x` key composes two engine calls, so this does the same two:
+ * `stopOrDismissAgent` (`src/state/teammateViewHelpers.ts:116`) to set
+ * `evictAfter: 0` and drop `retain`, then `evictTerminalTask`
+ * (`src/utils/task/framework.ts:120`) to retire the row. Both are the engine's
+ * own; nothing here deletes from the store. `evictTerminalTask` keeps its own
+ * guards, so a worker whose completion notification is still queued is MARKED
+ * here and retired by the panel reaper on its next beat (`panelTaskReaper.ts`) —
+ * the mark is what makes that eventual sweep succeed, since a blocked handoff
+ * never had a deadline to sweep on.
  */
 import { StopTaskError, stopTask } from '../../src/tasks/stopTask.js'
+import { isPanelAgentTask } from '../../src/tasks/LocalAgentTask/LocalAgentTask.js'
+import { isTerminalTaskStatus } from '../../src/Task.js'
+import { stopOrDismissAgent } from '../../src/state/teammateViewHelpers.js'
+import { evictTerminalTask } from '../../src/utils/task/framework.js'
 import type { AppStateStore } from '../../src/state/AppStateStore.js'
 
 /** The redacted outcome of a stop write (no transport, no secret). */
@@ -44,7 +60,23 @@ export type TaskControlExecutor = {
    * not_running / unsupported_type) when the live store refuses the target.
    */
   stop(taskId: string): Promise<{ taskType: string; display: string | undefined }>
+  /**
+   * Retire a FINISHED panel worker via the engine's own dismiss composition. The
+   * refusal codes mirror `StopTaskError`'s vocabulary, but they are decided here
+   * rather than thrown by the engine: `evictTerminalTask` is silent about why it
+   * declined, so the target is checked against the live store BEFORE the write.
+   * A result union rather than an exception, because nothing engine-side throws.
+   */
+  dismiss(
+    taskId: string,
+  ): Promise<
+    | { ok: true; display: string | undefined }
+    | { ok: false; code: TaskDismissRefusal }
+  >
 }
+
+/** Why a dismiss was refused at the live store (fail-closed, no side effect). */
+export type TaskDismissRefusal = 'not_found' | 'still_running' | 'unsupported_type'
 
 export function createRealTaskControlExecutor(
   appStateStore: AppStateStore,
@@ -57,6 +89,24 @@ export function createRealTaskControlExecutor(
       })
       return { taskType: result.taskType, display: result.command }
     },
+    async dismiss(taskId) {
+      // Re-resolve against the LIVE store — the renderer's id is a claim, not a
+      // handle (T6-analog). `isPanelAgentTask` is the same predicate the panel
+      // reaper uses, so the two agree on what a dismissible row even is.
+      const task = appStateStore.getState().tasks?.[taskId]
+      if (!task) return { ok: false, code: 'not_found' }
+      if (!isPanelAgentTask(task)) return { ok: false, code: 'unsupported_type' }
+      if (!isTerminalTaskStatus(task.status)) {
+        return { ok: false, code: 'still_running' }
+      }
+      const display = task.description
+      stopOrDismissAgent(taskId, appStateStore.setState)
+      // Best-effort now, guaranteed later: this succeeds outright once the
+      // completion notification has been consumed, and otherwise the `evictAfter:
+      // 0` just written is what lets the reaper's next sweep finish the job.
+      evictTerminalTask(taskId, appStateStore.setState)
+      return { ok: true, display }
+    },
   }
 }
 
@@ -67,6 +117,23 @@ export type SidecarTaskControlDomain = {
    * side effect (fail-closed), never an exception.
    */
   stop(taskId: string): Promise<TaskStopResult>
+  /**
+   * Retire the finished worker with `taskId` from this session's store. Throw-free
+   * and fail-closed the same way `stop` is: an unknown / still-running / non-worker
+   * target degrades to `ok:false` with no side effect.
+   */
+  dismiss(taskId: string): Promise<TaskDismissResult>
+}
+
+/**
+ * A dismiss outcome, carrying WHY it was refused. The code survives the domain
+ * boundary because the live store is not the only plane a worker's row can come
+ * from: a `not_found` means nothing LIVE holds this row, which is a different
+ * situation from `still_running`, and only the server can see the other plane.
+ * Flattening both into prose here would force the server to match on strings.
+ */
+export type TaskDismissResult = TaskStopResult & {
+  refusal?: TaskDismissRefusal
 }
 
 export function createSidecarTaskControlDomain(
@@ -101,6 +168,43 @@ export function createSidecarTaskControlDomain(
         }
       }
     },
+    async dismiss(taskId) {
+      try {
+        const outcome = await executor.dismiss(taskId)
+        if (!outcome.ok) {
+          return {
+            ok: false,
+            refusal: outcome.code,
+            message: dismissRefusalMessage(outcome.code),
+          }
+        }
+        const label = outcome.display ? ` ${outcome.display}` : ''
+        return { ok: true, message: `Dismissed worker${label}.` }
+      } catch (error) {
+        return {
+          ok: false,
+          message: `Could not dismiss the worker: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        }
+      }
+    },
+  }
+}
+
+function dismissRefusalMessage(refusal: TaskDismissRefusal): string {
+  switch (refusal) {
+    case 'not_found':
+      return 'That worker is already gone.'
+    case 'still_running':
+      return 'That worker is still running. Stop it first.'
+    case 'unsupported_type':
+      return "That task type can't be dismissed."
+    default: {
+      // Closed union tripwire — a new refusal code must get its own message.
+      const exhaustive: never = refusal
+      return exhaustive
+    }
   }
 }
 

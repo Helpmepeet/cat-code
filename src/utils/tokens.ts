@@ -1,7 +1,7 @@
 import type { BetaUsage as Usage } from '@anthropic-ai/sdk/resources/beta/messages/messages.mjs'
 import { roughTokenCountEstimationForMessages } from '../services/tokenEstimation.js'
 import type { AssistantMessage, Message } from '../types/message.js'
-import { findLastCompactBoundaryIndex, isCompactBoundaryMessage, SYNTHETIC_MESSAGES, SYNTHETIC_MODEL } from './messages.js'
+import { findLastCompactBoundaryIndex, isCompactBoundaryMessage, SYNTHETIC_MODEL } from './messages.js'
 import { getProviderForModel } from './model/providers.js'
 import { jsonStringify } from './slowOperations.js'
 
@@ -10,14 +10,24 @@ type ContextUsage = Pick<
   'input_tokens' | 'output_tokens' | 'cache_creation_input_tokens' | 'cache_read_input_tokens'
 >
 
+/**
+ * Usage of a real API response, or undefined for synthetic/placeholder records.
+ *
+ * The SYNTHETIC_MODEL stamp is the only test applied, and it is both sufficient
+ * and precise: every locally-constructed synthetic assistant record is built by
+ * baseCreateAssistantMessage (messages.ts:379-436), which hardcodes
+ * model: SYNTHETIC_MODEL, and the only two exported constructors
+ * (createAssistantMessage, createAssistantAPIErrorMessage) both route through
+ * it. A second test — first content block's text present in SYNTHETIC_MESSAGES —
+ * used to sit alongside it, but it false-positives on a genuine model response
+ * whose first text block happens to be exactly one of those strings (e.g. a
+ * model that replies "No response requested."), silently discarding that turn's
+ * real usage and dropping the context measurement back to an older anchor.
+ */
 export function getTokenUsage(message: Message): Usage | undefined {
   if (
     message?.type === 'assistant' &&
     'usage' in message.message &&
-    !(
-      message.message.content[0]?.type === 'text' &&
-      SYNTHETIC_MESSAGES.has(message.message.content[0].text)
-    ) &&
     message.message.model !== SYNTHETIC_MODEL
   ) {
     return message.message.usage
@@ -59,33 +69,67 @@ export function getTokenCountFromUsage(usage: Usage): number {
 }
 
 /**
- * After a partial/session-memory compaction the kept tail (messagesToKeep) is
- * spliced in AFTER the compact boundary, but those assistant messages keep
- * their ORIGINAL usage — whose input_tokens describes the pre-compaction
- * window. A backward usage walk would anchor on that stale number and report
- * the context as still-full until the next API response writes fresh usage
- * (statusline/footer freezing at the pre-compact % after /compact).
+ * FLOOR for the non-message content of every request that a pure rough estimate
+ * cannot see: the system prompt, the tool schemas, and userContext. Server usage
+ * already includes all of it, so this is added ONLY on the rough-estimate
+ * fallback paths, never on top of a usage anchor.
  *
- * The boundary records the preserved range as head/tail UUIDs
- * (compact.ts annotateBoundaryWithPreservedSegment). Resolve that to an index
- * range [headIdx, tailIdx] so usage walks can skip it. Returns null when there
- * is no boundary or no preserved segment (nothing to skip).
+ * compact.ts:667-670 measures the gap at "~20-40K". The low end is chosen
+ * deliberately: minimal-prompt contexts really do sit near the bottom of that
+ * range (swarm teammates run with empty system prompts,
+ * src/utils/swarm/inProcessRunner.ts:1370), and overstating their context would
+ * push them into premature compaction. Undershooting a fat prompt only delays
+ * autocompact slightly; overshooting a thin one compacts work away for nothing.
+ *
+ * A flat 20K is a floor, not the truth: tool schemas are unbounded, so a session
+ * with heavy MCP tooling exceeds it by construction. The two DECISION call sites
+ * (shouldAutoCompact and the query.ts blocking preempt) can see the real system
+ * prompt, userContext and tool schemas, so they measure them and pass the result
+ * as `nonMessageOverheadTokens`; the larger of the two wins. Display and
+ * telemetry callers have no request context and keep this floor.
  */
-function getPreservedSegmentRange(
-  messages: readonly Message[],
-): { start: number; end: number } | null {
-  const boundaryIdx = findLastCompactBoundaryIndex(messages as Message[])
-  if (boundaryIdx === -1) return null
-  const boundary = messages[boundaryIdx]
+export const NON_MESSAGE_REQUEST_OVERHEAD_TOKENS = 20_000
+
+/**
+ * Bounds for a backward usage walk over a display-shaped message array.
+ *
+ * `boundaryIdx` is the index of the LAST compact boundary, or 0 when there is
+ * none — the same slice point getMessagesAfterCompactBoundary uses (it keeps
+ * the boundary itself, which normalizeMessagesForAPI then drops). It is a hard
+ * floor: query.ts:394 slices the array there before building a request, so
+ * nothing before it is part of the next request. Display and
+ * telemetry callers (StatusLine, REPL, Notifications, sessionMemory) pass the
+ * UNSLICED array, and fullscreen mode (default-on) keeps pre-compact scrollback
+ * in it, so a walk that ignores the boundary anchors on stale pre-compact usage
+ * and reports a freshly-compacted session as still-full.
+ *
+ * `preserved` is a second, narrower skip. After a partial/session-memory
+ * compaction the kept tail (messagesToKeep) is spliced in AFTER the boundary,
+ * but those assistant messages keep their ORIGINAL usage — whose input_tokens
+ * describes the pre-compaction window. The boundary records the kept range as
+ * head/tail UUIDs (compact.ts annotateBoundaryWithPreservedSegment); this
+ * resolves it to an index range [start, end] so usage walks can skip it. It is
+ * null when there is no boundary or no preserved segment (nothing to skip).
+ *
+ * Both come from one scan for the boundary, so callers never search twice.
+ */
+function getUsageWalkBounds(messages: readonly Message[]): {
+  boundaryIdx: number
+  preserved: { start: number; end: number } | null
+} {
+  const found = findLastCompactBoundaryIndex(messages as Message[])
+  const boundaryIdx = found === -1 ? 0 : found
+  if (found === -1) return { boundaryIdx, preserved: null }
+  const boundary = messages[found]
   const seg =
     boundary && isCompactBoundaryMessage(boundary)
       ? boundary.compactMetadata?.preservedSegment
       : undefined
-  if (!seg) return null
+  if (!seg) return { boundaryIdx, preserved: null }
   // head/tail sit after the boundary; scan forward from it to resolve indices.
   let start = -1
   let end = -1
-  for (let i = boundaryIdx + 1; i < messages.length; i++) {
+  for (let i = found + 1; i < messages.length; i++) {
     const uuid = messages[i]?.uuid
     if (uuid === seg.headUuid) start = i
     if (uuid === seg.tailUuid) {
@@ -93,8 +137,29 @@ function getPreservedSegmentRange(
       break
     }
   }
-  if (start === -1 || end === -1) return null
-  return { start, end }
+  if (start === -1 || end === -1) return { boundaryIdx, preserved: null }
+  return { boundaryIdx, preserved: { start, end } }
+}
+
+/**
+ * Rough estimate for a request whose context could not be anchored on server
+ * usage. Adds the non-message overhead the estimator cannot see, except for a
+ * genuinely empty array — an empty session must still report 0.
+ *
+ * `measured` is a caller-supplied measurement of that overhead (see
+ * NON_MESSAGE_REQUEST_OVERHEAD_TOKENS). It only ever raises the number: a
+ * measurement below the floor means the measurement missed something the floor
+ * was chosen to cover, not that the request is cheaper than the floor.
+ */
+function roughEstimateWithOverhead(
+  slice: readonly Message[],
+  measured: number | undefined,
+): number {
+  if (slice.length === 0) return 0
+  return (
+    roughTokenCountEstimationForMessages(slice) +
+    Math.max(NON_MESSAGE_REQUEST_OVERHEAD_TOKENS, measured ?? 0)
+  )
 }
 
 /**
@@ -146,12 +211,24 @@ export function getCacheHitRate(usage: Usage): number {
   return total > 0 ? (usage.cache_read_input_tokens ?? 0) / total : 0
 }
 
+/**
+ * A usage object that carries no context at all ({0,0,0,0}) is a seed, not a
+ * measurement: the Codex adapter writes it on message_start and only fills real
+ * numbers on the final message_delta/stop, and tool-use sub-records split from
+ * one API response keep the seed. Anchoring on one reports the context as 0.
+ * Every backward usage walk in this module treats it as "no usage yet" and
+ * keeps walking to the last record with real numbers.
+ */
+function hasRealUsage(usage: Usage | undefined): usage is Usage {
+  return usage !== undefined && getTokenCountFromUsage(usage) > 0
+}
+
 export function tokenCountFromLastAPIResponse(messages: Message[]): number {
   let i = messages.length - 1
   while (i >= 0) {
     const message = messages[i]
     const usage = message ? getTokenUsage(message) : undefined
-    if (usage) {
+    if (hasRealUsage(usage)) {
       return getTokenCountFromUsage(usage)
     }
     i--
@@ -177,7 +254,7 @@ export function finalContextTokensFromLastResponse(
   while (i >= 0) {
     const message = messages[i]
     const usage = message ? getTokenUsage(message) : undefined
-    if (usage) {
+    if (hasRealUsage(usage)) {
       // Stainless types don't include iterations yet — cast like advisor.ts:43
       const iterations = (
         usage as {
@@ -221,7 +298,7 @@ export function messageTokenCountFromLastAPIResponse(
   while (i >= 0) {
     const message = messages[i]
     const usage = message ? getTokenUsage(message) : undefined
-    if (usage) {
+    if (hasRealUsage(usage)) {
       return usage.output_tokens
     }
     i--
@@ -230,8 +307,10 @@ export function messageTokenCountFromLastAPIResponse(
 }
 
 export function getCurrentUsage(messages: Message[]): ContextUsage | null {
-  const preserved = getPreservedSegmentRange(messages)
-  for (let i = messages.length - 1; i >= 0; i--) {
+  const { boundaryIdx, preserved } = getUsageWalkBounds(messages)
+  // Stop at the last compact boundary: messages before it are scrollback, not
+  // part of the next request, and their usage describes the pre-compact window.
+  for (let i = messages.length - 1; i >= boundaryIdx; i--) {
     // Skip kept-tail messages whose usage describes the pre-compaction window.
     if (preserved && i >= preserved.start && i <= preserved.end) {
       i = preserved.start
@@ -239,7 +318,7 @@ export function getCurrentUsage(messages: Message[]): ContextUsage | null {
     }
     const message = messages[i]
     const usage = message ? getTokenUsage(message) : undefined
-    if (usage) {
+    if (hasRealUsage(usage)) {
       return {
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
@@ -316,7 +395,10 @@ export function getAssistantMessageContentLength(
  * after it and miss all the earlier interleaved tool_results — which will ALL
  * be in the next API request. To avoid undercounting, after finding a usage-
  * bearing record we walk back to the FIRST sibling with the same message.id
- * so every interleaved tool_result is included in the rough estimate.
+ * so every interleaved tool_result is included in the rough estimate. The
+ * sibling records' own content is then excluded from that estimate when the
+ * anchor is the terminal sibling, because the anchor's output_tokens already
+ * covers it — see the stop_reason note at the return.
  */
 export function tokenCountWithEstimation(
   messages: readonly Message[],
@@ -331,15 +413,24 @@ export function tokenCountWithEstimation(
   // sizes; gpt only shrinks the wire, so the estimate stays conservative), so
   // that direction is left untouched.
   currentModel?: string,
+  // Measured non-message request overhead (system prompt + userContext/
+  // systemContext + serialized tool schemas) for the request this count is
+  // gating. Only the two decision call sites can see it — autoCompactIfNeeded
+  // and the query.ts blocking preempt — and it is consumed ONLY on the
+  // pure-rough fallback paths, where NON_MESSAGE_REQUEST_OVERHEAD_TOKENS acts
+  // as its floor. Never applied on an anchored path: server usage already
+  // counts every one of those bytes.
+  nonMessageOverheadTokens?: number,
 ): number {
   const invalidateOpenaiAnchor =
     currentModel !== undefined &&
     getProviderForModel(currentModel) !== 'openai'
-  const preserved = getPreservedSegmentRange(messages)
+  const { boundaryIdx, preserved } = getUsageWalkBounds(messages)
   let i = messages.length - 1
-  while (i >= 0) {
+  // The walk floor is the last compact boundary — see getUsageWalkBounds.
+  while (i >= boundaryIdx) {
     // Don't anchor on kept-tail usage (pre-compaction window). Skipping it lets
-    // the walk fall through to the whole-array rough estimate, which still
+    // the walk fall through to the post-boundary rough estimate, which still
     // counts the kept tail as context — just not via its stale usage number.
     if (preserved && i >= preserved.start && i <= preserved.end) {
       i = preserved.start - 1
@@ -347,23 +438,24 @@ export function tokenCountWithEstimation(
     }
     const message = messages[i]
     const usage = message ? getTokenUsage(message) : undefined
-    // The Codex adapter seeds usage at {0,0,0,0} on message_start and only
-    // fills real numbers on the final message_delta/stop. Tool-use sub-records
-    // split from one API response keep the zero seed. Treat a zero-context
-    // usage as "no usage yet" and keep walking, so the base anchors on the
+    // hasRealUsage skips the {0,0,0,0} Codex seed so the base anchors on the
     // last record with real numbers instead of reading the context as ~0 and
     // silently skipping autocompact until the API 413s. (GPT/Codex agents.)
-    if (message && usage && getTokenCountFromUsage(usage) > 0) {
+    if (message && hasRealUsage(usage)) {
       // gpt→claude switch: this anchor's usage reflects the wire-truncated tool
       // outputs the openai server billed, but the current (non-openai) request
       // sends the full transcript. Trusting it understates context, so force a
-      // full rough re-estimation of the whole array instead.
+      // rough re-estimation of everything the next request will carry — which
+      // starts at the compact boundary, not at index 0.
       if (
         invalidateOpenaiAnchor &&
         message.type === 'assistant' &&
         getProviderForModel(message.message.model) === 'openai'
       ) {
-        return roughTokenCountEstimationForMessages(messages)
+        return roughEstimateWithOverhead(
+          messages.slice(boundaryIdx),
+          nonMessageOverheadTokens,
+        )
       }
       // Walk back past any earlier sibling records split from the same API
       // response (same message.id) so interleaved tool_results between them
@@ -371,7 +463,7 @@ export function tokenCountWithEstimation(
       const responseId = getAssistantMessageId(message)
       if (responseId) {
         let j = i - 1
-        while (j >= 0) {
+        while (j >= boundaryIdx) {
           const prior = messages[j]
           const priorId = prior ? getAssistantMessageId(prior) : undefined
           if (priorId === responseId) {
@@ -386,12 +478,39 @@ export function tokenCountWithEstimation(
           j--
         }
       }
+      // Only the LAST split of a streamed response gets the final usage and
+      // stop_reason written back (claude.ts:2496-2503). When stop_reason is
+      // set, this anchor IS that terminal sibling, so its output_tokens already
+      // covers every sibling's generated content (tool_use inputs included) —
+      // rough-counting the sibling records again on top of it is pure phantom
+      // context (measured +20k on three parallel 40KB Writes). Exclude them.
+      //
+      // When stop_reason is null/undefined the stream was interrupted before
+      // the write-back, so this anchor is a message_start seed whose
+      // output_tokens is ~1 and covers nothing. There the sibling content is
+      // genuinely unaccounted for, and excluding it would turn a bounded
+      // overcount into an undercount that hides a real 413.
+      const excludeSiblings =
+        responseId !== undefined &&
+        message.type === 'assistant' &&
+        message.message.stop_reason != null
+      const tail = messages.slice(i + 1)
       return (
         getTokenCountFromUsage(usage) +
-        roughTokenCountEstimationForMessages(messages.slice(i + 1))
+        roughTokenCountEstimationForMessages(
+          excludeSiblings
+            ? tail.filter(m => getAssistantMessageId(m) !== responseId)
+            : tail,
+        )
       )
     }
     i--
   }
-  return roughTokenCountEstimationForMessages(messages)
+  // No usable anchor at or after the boundary. Estimate only what the next
+  // request will actually carry; rough-counting a fullscreen array's whole
+  // scrollback here massively overcounts (measured 180,514 vs 14).
+  return roughEstimateWithOverhead(
+    messages.slice(boundaryIdx),
+    nonMessageOverheadTokens,
+  )
 }

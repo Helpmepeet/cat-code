@@ -526,7 +526,8 @@ export function buildRunControlsSnapshot(state: AppState): RunControlsSnapshot {
  *
  * These are the engine's THRESHOLDS, not its verdict. The renderer compares them
  * against API-reported usage off the newest `result` frame, while the engine
- * compares `tokenCountWithEstimation(...) - snipTokensFreed` (`autoCompact.ts:371`),
+ * compares `tokenCountWithEstimation(...) - preRequestTokensFreed`
+ * (`autoCompact.ts:373-374`),
  * so the glyph approximates `isAboveWarningThreshold` and can lag it mid-turn.
  * The drift and why it is accepted are documented at the point of comparison,
  * `app/renderer/src/tokenWarning.ts`.

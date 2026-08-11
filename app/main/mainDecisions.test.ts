@@ -12,10 +12,23 @@ import {
 } from '../shared/limits.js'
 import { MAX_LIVE_SESSIONS } from '../shared/hostApi.js'
 import {
+  MAX_OPERATIONAL_FIELDS,
+  MAX_OPERATIONAL_STRING_BYTES,
+  createOperationalRecord,
+  parseOperationalRecord,
+} from '../shared/operationalLog.js'
+import {
   CWD_TOKEN_TTL_MS,
+  RENDERER_HEALTH_RING_CAPACITY,
+  RENDERER_RECOVERY_MAX_ATTEMPTS,
+  RENDERER_RECOVERY_WINDOW_MS,
   SIDECAR_RUNTIME_ARGS,
   createCwdTokenStore,
+  createRendererHealthFlightRecorder,
+  createRendererHealthMonitor,
+  createRendererRecoveryPolicy,
   createStartupTimers,
+  createWindowVisibilityTracker,
   isTerminalLifecycleFrame,
   parseVisibleSessions,
   sanitizeSaveFileName,
@@ -31,6 +44,304 @@ test('the production sidecar runtime enables the classifier feature', () => {
     '--feature=TRANSCRIPT_CLASSIFIER',
     'run',
   ])
+})
+
+describe('renderer health evidence', () => {
+  test('escalates sustained loss to repeated error records with current duration', () => {
+    let clock = 0
+    const health = createRendererHealthMonitor({ now: () => clock })
+    health.reset()
+
+    const events = []
+    for (clock = 5_000; clock <= 95_000; clock += 5_000) {
+      const event = health.probe()
+      if (event) events.push(event)
+    }
+
+    expect(events).toEqual([
+      {
+        event: 'renderer.health.missed',
+        level: 'warn',
+        fields: { missed: 3, elapsedMs: 20_000 },
+      },
+      {
+        event: 'renderer.health.unavailable',
+        level: 'error',
+        fields: { missed: 6, elapsedMs: 35_000 },
+      },
+      {
+        event: 'renderer.health.unavailable',
+        level: 'error',
+        fields: { missed: 18, elapsedMs: 95_000 },
+      },
+    ])
+  })
+
+  test('recovery closes a transient episode and resets escalation state', () => {
+    let clock = 0
+    const health = createRendererHealthMonitor({ now: () => clock })
+    health.reset()
+    for (clock = 5_000; clock <= 20_000; clock += 5_000) health.probe()
+
+    clock = 25_000
+    expect(health.response()).toEqual({
+      recovered: true,
+      priorMisses: 3,
+      outageDurationMs: 5_000,
+      shouldSample: true,
+    })
+    clock = 30_000
+    expect(health.probe()).toBeNull()
+  })
+})
+
+describe('renderer health flight recorder', () => {
+  /** The live pairing in main: every response is recorded, few are sampled. */
+  function runProbeBurst(
+    recorder: ReturnType<typeof createRendererHealthFlightRecorder>,
+    monitor: ReturnType<typeof createRendererHealthMonitor>,
+    setClock: (value: number) => void,
+  ): Array<{ at: number; eventLoopLagMs: number }> {
+    const sampled: Array<{ at: number; eventLoopLagMs: number }> = []
+    for (let index = 1; index <= 12; index++) {
+      setClock(index * 5_000)
+      const eventLoopLagMs = index === 12 ? 900 : 4
+      recorder.record({
+        eventLoopLagMs,
+        visible: index !== 6,
+        heapUsedBytes: index === 6 ? null : (200 + index) * 1_048_576,
+      })
+      if (monitor.response().shouldSample) sampled.push({ at: index * 5_000, eventLoopLagMs })
+    }
+    return sampled
+  }
+
+  test('a crash surfaces the readings the 30s sample dedup dropped', () => {
+    let clock = 0
+    const monitor = createRendererHealthMonitor({ now: () => clock })
+    const recorder = createRendererHealthFlightRecorder({ now: () => clock })
+
+    const sampled = runProbeBurst(recorder, monitor, value => { clock = value })
+    clock = 62_000
+    const ring = recorder.flush()
+
+    // Two of twelve readings reached the log, and the terminal spike was not
+    // one of them: that gap is the whole defect.
+    expect(sampled).toEqual([
+      { at: 5_000, eventLoopLagMs: 4 },
+      { at: 35_000, eventLoopLagMs: 4 },
+    ])
+    expect(ring?.count).toBe(12)
+    const entries = ring?.samples.split(';') ?? []
+    expect(entries).toHaveLength(12)
+    expect(entries[0]).toBe('57000:4:201:v')
+    // Hidden window, heap unavailable.
+    expect(entries[5]).toBe('32000:4:-:h')
+    // The reading 2s before the crash, carrying the lag spike no record held.
+    expect(entries[11]).toBe('2000:900:212:v')
+  })
+
+  test('the ring fits one record without the sanitizer rewriting it', () => {
+    let clock = 0
+    const monitor = createRendererHealthMonitor({ now: () => clock })
+    const recorder = createRendererHealthFlightRecorder({ now: () => clock })
+    runProbeBurst(recorder, monitor, value => { clock = value })
+    clock = 62_000
+    const ring = recorder.flush()
+    if (!ring) throw new Error('expected a flushed ring')
+
+    const record = createOperationalRecord(
+      {
+        level: 'error',
+        event: 'renderer.health.flight_recorder',
+        process: 'main',
+        fields: { reason: 'process_gone', count: ring.count, samples: ring.samples },
+      },
+      { launchId: 'launch-1', processInstanceId: 'instance-1' },
+    )
+
+    expect(Object.keys(record.fields).length).toBeLessThanOrEqual(MAX_OPERATIONAL_FIELDS)
+    expect(new TextEncoder().encode(ring.samples).byteLength)
+      .toBeLessThanOrEqual(MAX_OPERATIONAL_STRING_BYTES)
+    // No path, URL, or control shape survives redaction, so what was measured
+    // is what is stored.
+    expect(record.fields.samples).toBe(ring.samples)
+  })
+
+  test('drops whole readings rather than letting truncation corrupt one', () => {
+    let clock = 0
+    const recorder = createRendererHealthFlightRecorder({ now: () => clock, maxBytes: 40 })
+    for (let index = 1; index <= 5; index++) {
+      clock = index * 1_000
+      recorder.record({ eventLoopLagMs: 1, visible: true, heapUsedBytes: 100 * 1_048_576 })
+    }
+    clock = 6_000
+    const ring = recorder.flush()
+
+    expect(ring?.count).toBe(3)
+    expect(new TextEncoder().encode(ring?.samples ?? '').byteLength).toBeLessThanOrEqual(40)
+    for (const entry of ring?.samples.split(';') ?? []) {
+      expect(entry).toMatch(/^\d+:\d+:(\d+|-):[vh]$/)
+    }
+    // The readings nearest the failure are the ones kept.
+    expect(ring?.samples.endsWith('1000:1:100:v')).toBe(true)
+    expect(ring?.samples).not.toContain('5000:')
+  })
+
+  test('bounds the ring and empties it once flushed', () => {
+    let clock = 0
+    const recorder = createRendererHealthFlightRecorder({ now: () => clock })
+    for (let index = 1; index <= RENDERER_HEALTH_RING_CAPACITY + 3; index++) {
+      clock = index * 5_000
+      recorder.record({ eventLoopLagMs: index, visible: true, heapUsedBytes: null })
+    }
+    expect(recorder.flush()?.count).toBe(RENDERER_HEALTH_RING_CAPACITY)
+    // A second trigger for the same failure must not re-emit spent evidence.
+    expect(recorder.flush()).toBeNull()
+
+    clock += 5_000
+    recorder.record({ eventLoopLagMs: 7, visible: false, heapUsedBytes: null })
+    expect(recorder.flush()).toEqual({ count: 1, samples: '0:7:-:h' })
+  })
+})
+
+describe('window visibility transitions', () => {
+  test('brackets a hidden episode with exactly two records', () => {
+    const tracker = createWindowVisibilityTracker()
+
+    // The launch show is a transition, so an incident reader has a baseline
+    // rather than a log that first mentions the window when it disappears.
+    expect(tracker.observe('show')).toEqual({ visible: true, reason: 'show' })
+    // macOS fires both for one Cmd-H; the overlap must not double the record.
+    expect(tracker.observe('hide')).toEqual({ visible: false, reason: 'hide' })
+    expect(tracker.observe('minimize')).toBeNull()
+    expect(tracker.observe('restore')).toEqual({ visible: true, reason: 'restore' })
+    expect(tracker.observe('show')).toBeNull()
+  })
+
+  test('a repeated signal in the same direction is not a transition', () => {
+    const tracker = createWindowVisibilityTracker()
+    tracker.observe('show')
+    expect(tracker.observe('minimize')).toEqual({ visible: false, reason: 'minimize' })
+    expect(tracker.observe('minimize')).toBeNull()
+    expect(tracker.observe('hide')).toBeNull()
+    expect(tracker.observe('show')).toEqual({ visible: true, reason: 'show' })
+  })
+
+  test('a transition is a writable, exportable record', () => {
+    const tracker = createWindowVisibilityTracker()
+    const transition = tracker.observe('hide')
+    if (!transition) throw new Error('expected a transition')
+
+    const record = createOperationalRecord(
+      {
+        level: 'info',
+        event: 'window.visibility.changed',
+        process: 'main',
+        fields: { visible: transition.visible, reason: transition.reason },
+      },
+      { launchId: 'launch-1', processInstanceId: 'instance-1' },
+    )
+
+    expect(record.fields).toEqual({ visible: false, reason: 'hide' })
+    // The bundle admits records through the same closed schema, so this is also
+    // the export check.
+    expect(parseOperationalRecord(record)).not.toBeNull()
+  })
+})
+
+describe('renderer process identity', () => {
+  test('the pid a crash report names travels on the window and death records', () => {
+    const created = createOperationalRecord(
+      { level: 'info', event: 'window.created', process: 'main', fields: { pid: 4242 } },
+      { launchId: 'launch-1', processInstanceId: 'instance-1', pid: 11 },
+    )
+    const gone = createOperationalRecord(
+      {
+        level: 'error',
+        event: 'renderer.process.gone',
+        process: 'main',
+        fields: { reason: 'oom', exitCode: 5, pid: 4242 },
+      },
+      { launchId: 'launch-1', processInstanceId: 'instance-1', pid: 11 },
+    )
+    const recovered = createOperationalRecord(
+      { level: 'info', event: 'renderer.recovery.succeeded', process: 'main', fields: { pid: 4343 } },
+      { launchId: 'launch-1', processInstanceId: 'instance-1', pid: 11 },
+    )
+
+    // The record's own `pid` is main's; the renderer's is the field. Conflating
+    // them is what made the 2026-08-09 crash report unmatchable.
+    expect(created.pid).toBe(11)
+    expect(created.fields.pid).toBe(4242)
+    expect(gone.fields).toEqual({ reason: 'oom', exitCode: 5, pid: 4242 })
+    expect(recovered.fields.pid).toBe(4343)
+    for (const record of [created, gone, recovered]) {
+      expect(parseOperationalRecord(record)).not.toBeNull()
+    }
+  })
+})
+
+describe('renderer recovery policy', () => {
+  test('reloads an abnormal death and numbers the attempts', () => {
+    let clock = 0
+    const recovery = createRendererRecoveryPolicy({ now: () => clock })
+    expect(recovery.decide('crashed')).toEqual({ action: 'reload', attempt: 1 })
+    clock = 60_000
+    expect(recovery.decide('oom')).toEqual({ action: 'reload', attempt: 2 })
+  })
+
+  test('never reloads a clean exit, and a clean exit costs no attempt', () => {
+    const recovery = createRendererRecoveryPolicy({ now: () => 0 })
+    expect(recovery.decide('clean-exit')).toEqual({ action: 'ignore' })
+    expect(recovery.decide('crashed')).toEqual({ action: 'reload', attempt: 1 })
+  })
+
+  test('gives up after the attempt cap inside the sliding window', () => {
+    let clock = 0
+    const recovery = createRendererRecoveryPolicy({ now: () => clock })
+    for (let attempt = 1; attempt <= RENDERER_RECOVERY_MAX_ATTEMPTS; attempt++) {
+      clock += 1_000
+      expect(recovery.decide('crashed')).toEqual({ action: 'reload', attempt })
+    }
+    clock += 1_000
+    expect(recovery.decide('crashed')).toEqual({ action: 'give-up' })
+  })
+
+  test('attempts expire once they age out of the window', () => {
+    let clock = 0
+    const recovery = createRendererRecoveryPolicy({ now: () => clock })
+    for (let attempt = 1; attempt <= RENDERER_RECOVERY_MAX_ATTEMPTS; attempt++) {
+      recovery.decide('crashed')
+    }
+    expect(recovery.decide('crashed')).toEqual({ action: 'give-up' })
+    clock = RENDERER_RECOVERY_WINDOW_MS
+    expect(recovery.decide('crashed')).toEqual({ action: 'reload', attempt: 1 })
+  })
+
+  test('ages out only the attempts older than the window', () => {
+    let clock = 0
+    const recovery = createRendererRecoveryPolicy({ now: () => clock })
+    recovery.decide('crashed')
+    clock = 1_000
+    recovery.decide('crashed')
+    clock = 2_000
+    recovery.decide('crashed')
+    clock = RENDERER_RECOVERY_WINDOW_MS
+    expect(recovery.decide('crashed')).toEqual({ action: 'reload', attempt: 3 })
+    clock = RENDERER_RECOVERY_WINDOW_MS + 500
+    expect(recovery.decide('crashed')).toEqual({ action: 'give-up' })
+  })
+
+  test('holds an attempt for the whole window, to its last millisecond', () => {
+    let clock = 0
+    const recovery = createRendererRecoveryPolicy({ now: () => clock })
+    for (let attempt = 1; attempt <= RENDERER_RECOVERY_MAX_ATTEMPTS; attempt++) {
+      recovery.decide('crashed')
+    }
+    clock = RENDERER_RECOVERY_WINDOW_MS - 1
+    expect(recovery.decide('crashed')).toEqual({ action: 'give-up' })
+  })
 })
 
 function pongFrame(sessionId = SID): ServerFrame {
@@ -257,6 +568,7 @@ function row(overrides: Partial<SessionDescriptor> = {}): SessionDescriptor {
     titleUpdatedAt: null,
     status: 'exited',
     restorable: true,
+    parked: false,
     createdAt: 0,
     lastAttachedAt: 0,
     lastMessageSentAt: null,
@@ -626,4 +938,26 @@ describe('createStartupTimers', () => {
     timers.fire()
     expect(runs).toBe(1)
   })
+})
+
+test('renderer health sampling cadence resets with the monitor', () => {
+  // The cadence used to be a module global in main.ts that reset() never
+  // cleared, so the first sample of a reopened window could be suppressed for a
+  // full interval.
+  let clock = 0
+  const health = createRendererHealthMonitor({ now: () => clock })
+  health.reset()
+
+  clock = 1_000
+  expect(health.response().shouldSample).toBe(true)
+  clock = 2_000
+  expect(health.response().shouldSample).toBe(false)
+  clock = 40_000
+  expect(health.response().shouldSample).toBe(true)
+
+  // A window reopen must sample immediately rather than wait out the interval.
+  clock = 41_000
+  health.reset()
+  clock = 42_000
+  expect(health.response().shouldSample).toBe(true)
 })

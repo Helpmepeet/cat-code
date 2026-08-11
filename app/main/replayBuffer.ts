@@ -14,7 +14,7 @@
  * (the hop the P1-0 tests otherwise cannot exercise) is unit-testable without an
  * Electron process.
  *
- * Retention has three tiers, one per frame kind (`FRAME_RETENTION` below):
+ * Retention has four tiers, one per frame kind (`FRAME_RETENTION` below):
  *
  *  - `head` — the single `ready` frame per session, a permanent head outside
  *    the replay budget (a late renderer must recover its session id).
@@ -31,6 +31,10 @@
  *    replies, lifecycle). Bounded by BOTH count and serialized UTF-8 JSON
  *    bytes; oldest evicted until both limits hold, and a frame larger than the
  *    whole byte budget is not retained.
+ *  - `preview` — generated-image bytes, keyed by tool-use id and bounded by
+ *    their own byte budget. A preview can be larger than the transcript ring;
+ *    keeping it outside that ring prevents one image from erasing the result
+ *    event it must correlate with after a renderer reload.
  *
  * Sticky storage is bounded by construction: one slot per `sticky` kind in the
  * table, so it can never grow into a second unbounded store. Any
@@ -44,6 +48,7 @@ import {
   type ServerFrame,
   type SessionId,
 } from '../shared/protocol.js'
+import { MAX_OUTBOUND_FRAME_BYTES } from '../shared/limits.js'
 
 /**
  * Default cap on retained `ring` frames per session (`head`/`sticky` are
@@ -63,19 +68,31 @@ import {
  *
  * The bound this costs is the ELECTRON MAIN process, not an engine process: the
  * engines are N separate processes, while `FrameReplayBuffer.sessions` is one
- * Map in main. The true ceiling is therefore
- * `MAX_LIVE_SESSIONS` (32, `app/shared/hostApi.ts`) × `DEFAULT_MAX_BUFFERED_BYTES`
- * (8 MiB) = 256 MiB of serialized JSON held as parsed objects, all in main.
- * Steady state is far below it — idle-park frees a parked session's buffer — but
- * 256 MiB is the number to reason about before raising either constant.
+ * Map in main. The transcript-ring ceiling is therefore `MAX_LIVE_SESSIONS`
+ * (32, `app/shared/hostApi.ts`) × `DEFAULT_MAX_BUFFERED_BYTES` (8 MiB) = 256 MiB
+ * of serialized JSON held as parsed objects, all in main. Generated images use
+ * the separately bounded 32 MiB preview tier below, for a combined worst-case
+ * ceiling of 1.25 GiB across 32 simultaneously image-heavy live sessions.
+ * Steady state is far below either ceiling because idle-park frees a parked
+ * session's buffer.
  */
 export const DEFAULT_MAX_BUFFERED_FRAMES = 8_000
 /** Default UTF-8 JSON byte budget for retained `ring` frames, per session. */
 export const DEFAULT_MAX_BUFFERED_BYTES = 8 * 1024 * 1024
+/**
+ * Generated-image previews use a separate per-session budget. Matching the
+ * outbound frame cap guarantees that any preview delivered live can occupy the
+ * bounded replay slot without consuming the transcript ring.
+ */
+export const DEFAULT_MAX_BUFFERED_PREVIEW_BYTES = MAX_OUTBOUND_FRAME_BYTES
+/** Max retained generated-image preview frames per live session. */
+export const DEFAULT_MAX_BUFFERED_PREVIEWS = 32
 
 const REPLAY_TRUNCATION_REQUEST_ID = 'catcode.replay-truncated'
+const PREVIEW_REPLAY_TRUNCATION_REQUEST_ID =
+  'catcode.preview-replay-truncated'
 
-type FrameRetention = 'head' | 'sticky' | 'ring'
+type FrameRetention = 'head' | 'sticky' | 'ring' | 'preview'
 
 /**
  * Retention tier per frame kind. Exhaustive by construction — a
@@ -119,6 +136,7 @@ const FRAME_RETENTION: Record<ServerFrame['kind'], FrameRetention> = {
   'slash-catalog.snapshot': 'sticky',
 
   event: 'ring',
+  'generated-image-preview': 'preview',
   pong: 'ring',
   error: 'ring',
   lifecycle: 'ring',
@@ -151,7 +169,13 @@ type SessionEntry = {
   sticky: Map<ServerFrame['kind'], ServerFrame>
   recent: ServerFrame[]
   recentBytes: number
+  previews: Map<
+    string,
+    { frame: Extract<ServerFrame, { kind: 'generated-image-preview' }>; bytes: number }
+  >
+  previewBytes: number
   truncated: boolean
+  previewTruncated: boolean
 }
 
 export class FrameReplayBuffer {
@@ -160,6 +184,8 @@ export class FrameReplayBuffer {
   constructor(
     private readonly maxRecent: number = DEFAULT_MAX_BUFFERED_FRAMES,
     private readonly maxRecentBytes: number = DEFAULT_MAX_BUFFERED_BYTES,
+    private readonly maxPreviewBytes: number = DEFAULT_MAX_BUFFERED_PREVIEW_BYTES,
+    private readonly maxPreviews: number = DEFAULT_MAX_BUFFERED_PREVIEWS,
   ) {}
 
   /**
@@ -174,7 +200,10 @@ export class FrameReplayBuffer {
         sticky: new Map(),
         recent: [],
         recentBytes: 0,
+        previews: new Map(),
+        previewBytes: 0,
         truncated: false,
+        previewTruncated: false,
       }
       this.sessions.set(sessionId, entry)
     }
@@ -185,6 +214,33 @@ export class FrameReplayBuffer {
     }
     if (retention === 'sticky') {
       entry.sticky.set(frame.kind, frame)
+      return
+    }
+    if (retention === 'preview') {
+      if (frame.kind !== 'generated-image-preview') return
+      const frameBytes = serializedUtf8Bytes(frame)
+      const existing = entry.previews.get(frame.toolUseId)
+      if (existing) {
+        entry.previewBytes -= existing.bytes
+        entry.previews.delete(frame.toolUseId)
+      }
+      if (frameBytes > this.maxPreviewBytes) {
+        entry.previewTruncated = true
+        return
+      }
+      entry.previews.set(frame.toolUseId, { frame, bytes: frameBytes })
+      entry.previewBytes += frameBytes
+      while (
+        entry.previews.size > this.maxPreviews ||
+        entry.previewBytes > this.maxPreviewBytes
+      ) {
+        const oldest = entry.previews.entries().next().value
+        if (!oldest) break
+        const [toolUseId, retained] = oldest
+        entry.previews.delete(toolUseId)
+        entry.previewBytes -= retained.bytes
+        entry.previewTruncated = true
+      }
       return
     }
     const frameBytes = serializedUtf8Bytes(frame)
@@ -229,8 +285,10 @@ export class FrameReplayBuffer {
   /**
    * One session's frames in delivery order: its `ready` head, then its sticky
    * once-per-attach snapshots in first-arrival order, then the truncation marker
-   * if lossy, then its buffered recent frames — the single-session slice of
-   * `snapshot()`. Empty when the session was never buffered.
+   * if lossy, then its buffered recent frames and generated-image previews —
+   * the single-session slice of `snapshot()`. Preview-after-result ordering is
+   * intentional; the renderer projector supports either arrival order. Empty
+   * when the session was never buffered.
    * Used by the transcript-cache persist path (IS-A); the permanent `ready` head
    * is INCLUDED here (like `snapshot()`) and dropped by the cache's `distill`
    * allowlist, so the ready-drop decision lives in exactly one place — the same
@@ -247,6 +305,10 @@ export class FrameReplayBuffer {
       frames.push(replayTruncationFrame(sessionId, entry.recent.length))
     }
     frames.push(...entry.recent)
+    if (entry.previewTruncated) {
+      frames.push(previewReplayTruncationFrame(sessionId))
+    }
+    frames.push(...Array.from(entry.previews.values(), retained => retained.frame))
     return frames
   }
 
@@ -270,6 +332,15 @@ export function isReplayTruncationFrame(
   )
 }
 
+export function isPreviewReplayTruncationFrame(
+  frame: ServerFrame | undefined,
+): boolean {
+  return (
+    frame?.kind === 'error' &&
+    frame.requestId === PREVIEW_REPLAY_TRUNCATION_REQUEST_ID
+  )
+}
+
 function replayTruncationFrame(
   sessionId: SessionId,
   retained: number,
@@ -281,6 +352,18 @@ function replayTruncationFrame(
     requestId: REPLAY_TRUNCATION_REQUEST_ID,
     code: 'internal_error',
     message: `Only the ${retained} most recent messages are shown.`,
+    retryable: false,
+  }
+}
+
+function previewReplayTruncationFrame(sessionId: SessionId): ServerFrame {
+  return {
+    kind: 'error',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId,
+    requestId: PREVIEW_REPLAY_TRUNCATION_REQUEST_ID,
+    code: 'internal_error',
+    message: 'Some earlier generated image previews are no longer available.',
     retryable: false,
   }
 }

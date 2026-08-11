@@ -51,6 +51,7 @@ import type { AppSessionEvent } from '@cat-code/engine/session-events'
 import type {
   AppClientMessage,
   AppReadyPayload,
+  AppSubmitPrompt,
 } from '@cat-code/engine/session-events'
 // The host control-plane contract (P3-3). Kept in its own module (`hostApi.ts`)
 // because it is a SEPARATE plane from the wire frames — its `HostErrorCode` union
@@ -1468,8 +1469,36 @@ export type AgentModeSetResultFrame = {
  *  - No new snapshot frame: `stopTask`'s store mutation drives the existing
  *    `tasks.snapshot` / `agent-mode.snapshot` re-broadcasts (the store-subscription
  *    path, the SAME live path any engine-side kill takes — not a synthetic frame).
+ *
+ * `task.dismiss` (2026-08-09) is the TERMINAL half of the same family, and it
+ * exists because a finished worker does not always leave on its own. The engine
+ * stamps NO `evictAfter` when a worker's report carries a `status: blocked`
+ * handoff line (`src/tasks/LocalAgentTask/LocalAgentTask.tsx:540,548`), so the
+ * shared eviction guard `(evictAfter ?? Infinity) > Date.now()`
+ * (`src/utils/task/framework.ts:134,240`) refuses forever and the desktop's
+ * deadline owner skips it by design (`app/sidecar/panelTaskReaper.ts`
+ * `earliestDeadline`). Keeping the row is INTENDED engine semantics — blocked
+ * means unresolved — but the terminal REPL pairs it with an escape hatch the
+ * desktop lacked: the `x` key runs `stopOrDismissAgent`
+ * (`src/state/teammateViewHelpers.ts:116`, wired at
+ * `src/components/PromptInput/PromptInput.tsx:1872`), which sets `evictAfter: 0`.
+ * This verb is that same escape hatch, reached from the worker detail's controls
+ * (`decisions/AGENT-CHROME.md` §2 `WorkerDetail` adapt; PARITY-LEDGER §20 sits the
+ * Stop control there already). The full diagnosis is the CC-32 row in
+ * `docs/migration/STATUS.md`.
+ *
+ *  - Same trust shape as `task.stop`: the renderer authors ONLY the target
+ *    `taskId`, the sidecar re-resolves it against the LIVE store, and a target
+ *    that is unknown / still running / not a panel worker fails closed with
+ *    `ok:false` and no side effect (T6-analog). T5a-analog `requestId`; T7 caps
+ *    unchanged.
+ *  - It calls the engine's OWN `stopOrDismissAgent` + `evictTerminalTask`
+ *    (`framework.ts:120`), never a store delete in `app/` code, so the engine
+ *    keeps every eviction guard (terminal status, `notified`, no pending
+ *    notification). A worker whose completion notification is still in flight is
+ *    marked and then evicted by the panel reaper on its next beat.
  */
-export const TASK_CONTROL_VERB_TYPES = ['task.stop'] as const
+export const TASK_CONTROL_VERB_TYPES = ['task.stop', 'task.dismiss'] as const
 
 export type TaskControlVerbType = (typeof TASK_CONTROL_VERB_TYPES)[number]
 
@@ -1481,7 +1510,19 @@ export type TaskStopMessage = {
   taskId: string
 }
 
-export type TaskControlVerbMessage = TaskStopMessage
+/**
+ * Dismiss a FINISHED worker row that the engine's own grace deadline will never
+ * retire (the blocked-handoff shape above). Terminal-only by design: a running
+ * worker is `task.stop`'s target, not this one.
+ */
+export type TaskDismissMessage = {
+  type: 'task.dismiss'
+  requestId: string
+  /** The target `AppState.tasks` key (a live `local_agent` worker's id). */
+  taskId: string
+}
+
+export type TaskControlVerbMessage = TaskStopMessage | TaskDismissMessage
 
 /**
  * P4-8b outbound result echoing the verb's `requestId` (T5a-analog). The updated
@@ -2678,7 +2719,23 @@ export type SlashCatalogSnapshotFrame = {
   commands: SlashCatalogEntry[]
 }
 
-export type ServerFrame =
+/**
+ * Read-only generated-image preview derived by the sidecar from the structured
+ * output of a live `GenerateImage` tool call. The renderer receives an engine-
+ * minted tool id plus image bytes, never a filesystem path to read. This is an
+ * additive display frame under SECURITY-MINIMUM R5; raw `AppSessionEvent` frames
+ * remain unchanged.
+ */
+export type GeneratedImagePreviewFrame = {
+  kind: 'generated-image-preview'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  toolUseId: string
+  mediaType: 'image/jpeg' | 'image/png' | 'image/webp'
+  data: string
+}
+
+export type ServerFramePayload =
   | ReadyFrame
   | SessionTitleFrame
   | EventFrame
@@ -2710,7 +2767,66 @@ export type ServerFrame =
   | RemoteSettingsResultFrame
   | SessionsCatalogSnapshotFrame
   | SlashCatalogSnapshotFrame
+  | GeneratedImagePreviewFrame
   | SettingsResultFrame
+
+/**
+ * Metadata-only delivery envelope. Optional so an older sidecar remains
+ * compatible; it sits beside the raw event and never changes its fidelity.
+ */
+export type ServerFrame = ServerFramePayload & {
+  deliveryTrace?: import('./deliveryTrace.js').DeliveryTrace
+}
+
+export type ServerFrameKind = ServerFramePayload['kind']
+
+/**
+ * The discriminant as a runtime vocabulary. A delivery-trace record carries its
+ * frame kind across a process boundary and is persisted and exported, so the
+ * parsers on that path must check membership here rather than string shape:
+ * an identifier-shaped regex admits arbitrary operator text. Typed as a total
+ * Record so tsc fails on a kind added to the union but not to this list, and on
+ * a list entry that no payload declares.
+ */
+const SERVER_FRAME_KINDS: Record<ServerFrameKind, true> = {
+  ready: true,
+  'session-title': true,
+  event: true,
+  pong: true,
+  error: true,
+  lifecycle: true,
+  'permission.context': true,
+  'settings.snapshot': true,
+  'settings.result': true,
+  'agent-config.snapshot': true,
+  'thread-goal.snapshot': true,
+  'memory.snapshot': true,
+  'context-breakdown.snapshot': true,
+  'tasks.snapshot': true,
+  'agent-mode.snapshot': true,
+  'agent-mode.set.result': true,
+  'lease.snapshot': true,
+  'task-control.result': true,
+  'run-controls.snapshot': true,
+  'run-control.result': true,
+  'session-action.result': true,
+  'accounts.snapshot': true,
+  'account.result': true,
+  'oauth.login.progress': true,
+  'workspace-trust.snapshot': true,
+  'workspace.trust.result': true,
+  'diagnostics.snapshot': true,
+  'extensions.snapshot': true,
+  'remoteSettings.snapshot': true,
+  'remoteSettings.result': true,
+  'sessions.snapshot': true,
+  'slash-catalog.snapshot': true,
+  'generated-image-preview': true,
+}
+
+export function isServerFrameKind(value: unknown): value is ServerFrameKind {
+  return typeof value === 'string' && Object.hasOwn(SERVER_FRAME_KINDS, value)
+}
 
 /* ------------------------------------------------------------------------- *
  * Transcript cache — the at-rest "instant session open" artifact
@@ -2816,7 +2932,7 @@ export type TranscriptCache = {
  */
 export type CatCodeBridge = {
   /** Send one prompt to the addressed session. */
-  submit(sessionId: SessionId, prompt: string, options?: SubmitOptions): void
+  submit(sessionId: SessionId, prompt: SubmitPrompt, options?: SubmitOptions): void
   /** Abort the named turn on the addressed session. */
   abort(sessionId: SessionId, requestId: string, reason?: string): void
   /** Answer a currently-pending permission request on the addressed session. */
@@ -2884,6 +3000,11 @@ export type CatCodeBridge = {
    * engine object, no token crosses. The outcome arrives as a `task-control.result`
    * frame echoing `requestId` (`ok:false` when the task was gone/terminal), and the
    * kill's store mutation drives the existing `tasks.snapshot` re-broadcast.
+   *
+   * The same channel carries `task.dismiss`, the terminal counterpart: it retires a
+   * FINISHED worker row the engine's grace deadline will never retire on its own
+   * (see TASK_CONTROL_VERB_TYPES above), through the engine's own
+   * `stopOrDismissAgent` + `evictTerminalTask`.
    */
   taskControlVerb(sessionId: SessionId, verb: TaskControlVerbMessage): void
   /**
@@ -2946,6 +3067,20 @@ export type CatCodeBridge = {
    * send.
    */
   rendererReady(): void
+  /** Metadata-only receipt/apply/commit acknowledgement for a delivered frame. */
+  deliveryAck(
+    sessionId: SessionId,
+    sequence: number,
+    deliveryAttempt: number,
+    streamEpoch: string,
+    traceId: string,
+    stage: import('./deliveryTrace.js').DeliveryAcknowledgement['stage'],
+  ): void
+  /** Fixed, bounded renderer fault signal; never a console/log forwarding API. */
+  reportRendererFault(kind: 'javascript' | 'promise' | 'component', message: string): void
+  /** Main-owned local diagnostics retrieval; the renderer never supplies a path. */
+  openLogsFolder(): void
+  saveDiagnosticsBundle(): Promise<boolean>
   /**
    * IDLE-PARK (decisions/IDLE-PARK.md §4, option (b)) — report which sessions the
    * user can currently SEE, so main's park policy never reclaims an engine out
@@ -3073,6 +3208,8 @@ export type SubmitOptions = {
   isMeta?: boolean
   goalSnapshot?: unknown
 }
+
+export type SubmitPrompt = AppSubmitPrompt
 
 /**
  * Renderer-supplied permission response. The renderer may confirm or deny a

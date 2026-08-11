@@ -12,7 +12,10 @@ import {
 } from '../../tasks/LocalAgentTask/LocalAgentTask.js'
 import { isMainSessionTask } from '../../tasks/LocalMainSessionTask.js'
 import { generateRequestId } from '../../utils/agentId.js'
-import { isAgentSwarmsEnabled } from '../../utils/agentSwarmsEnabled.js'
+import {
+  isAgentSwarmsEnabled,
+  isAgentTeamsOptedIn,
+} from '../../utils/agentSwarmsEnabled.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { errorMessage } from '../../utils/errors.js'
 import { truncate } from '../../utils/format.js'
@@ -101,10 +104,12 @@ const inputSchema = lazySchema(() =>
       .describe(
         'A 5-10 word summary shown as a preview in the UI (required when message is a string)',
       ),
-    message: z.union([
-      z.string().describe('Plain text message content'),
-      StructuredMessage(),
-    ]),
+    message: isAgentTeamsOptedIn()
+      ? z.union([
+          z.string().describe('Plain text message content'),
+          StructuredMessage(),
+        ])
+      : z.string().describe('Plain text message content'),
   }),
 )
 type InputSchema = ReturnType<typeof inputSchema>
@@ -1077,6 +1082,13 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
           errorCode: 9,
         }
       }
+      if (!isAgentSwarmsEnabled() && typeof input.message !== 'string') {
+        return {
+          result: false,
+          message: 'structured messages require Agent Teams',
+          errorCode: 9,
+        }
+      }
       if (input.to.includes('@')) {
         const isSingleLeadingAt =
           input.to.startsWith('@') && !input.to.slice(1).includes('@')
@@ -1110,13 +1122,6 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
           return {
             result: false,
             message: 'cross-session messaging requires Agent Teams',
-            errorCode: 9,
-          }
-        }
-        if (typeof input.message !== 'string') {
-          return {
-            result: false,
-            message: 'structured messages require Agent Teams',
             errorCode: 9,
           }
         }

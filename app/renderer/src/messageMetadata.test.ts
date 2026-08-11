@@ -156,6 +156,7 @@ describe('buildSessionMetadataView', () => {
     displayLabel: 't',
     live: true,
     restorable: false,
+    parked: false,
     status: 'ready',
     inRegistry: true,
     modifiedAtMs: 1,

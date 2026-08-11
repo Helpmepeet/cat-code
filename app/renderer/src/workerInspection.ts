@@ -97,6 +97,33 @@ export function selectWorkerStopTargetId(
 }
 
 /**
+ * The task id to name on a `task.dismiss` verb for this worker, or null when the
+ * worker has nothing to dismiss.
+ *
+ * The exact complement of the Stop target: same id (a live `local_agent` task's
+ * id IS the roster's `agentId`), same `prior`-origin exclusion, but FINISHED
+ * rather than running. It exists because a finished worker is not guaranteed to
+ * leave on its own — a `status: blocked` handoff line in the report makes the
+ * engine stamp no `evictAfter` at all (`LocalAgentTask.tsx:540,548`), so nothing
+ * ever retires the row. The terminal REPL answers that with its `x` key
+ * (`teammateViewHelpers.ts:116`); this is the desktop's same escape hatch.
+ *
+ * Deliberately NOT narrowed to rows backed by a live task, because the renderer
+ * cannot tell: a same-session PERSISTED worker also arrives as `origin: 'current'`
+ * (`src/agent-mode/sessionState.ts:672`), and those rows are the ones most in need
+ * of dismissing — they are what the roster shows after the reaper has already
+ * evicted the live task. The sidecar resolves both planes and fails closed only on
+ * a target it genuinely cannot retire.
+ */
+export function selectWorkerDismissTargetId(
+  worker: AgentModeWorkerItem,
+): string | null {
+  if (worker.origin === 'prior') return null
+  if (worker.status === 'running') return null
+  return worker.agentId
+}
+
+/**
  * The real result text to show in read-only `/tasks` detail, or null.
  *
  * **Result policy Q2** (operator ruling 2026-07-30): a worker's own conclusion may

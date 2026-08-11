@@ -431,7 +431,7 @@ Review the restored session.
     // The supplied catalog is the one QueryEngine and the Agent read seam use;
     // a resume must not reload an independently drifting set after restoration.
     expect(
-      session.agentConfig?.getSnapshot().definitions.some(
+      session.agentConfig?.getSnapshot()?.definitions.some(
         definition => definition.agentType === 'resume-reviewer' && definition.active,
       ),
     ).toBe(true)

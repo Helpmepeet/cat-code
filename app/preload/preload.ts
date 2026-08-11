@@ -15,6 +15,7 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron'
+import type { DeliveryAcknowledgement } from '../shared/deliveryTrace.js'
 import type {
   AccountVerbMessage,
   AskUserQuestionAnswer,
@@ -29,6 +30,7 @@ import type {
   SessionId,
   SessionsCatalogSnapshot,
   SettingsVerbMessage,
+  SubmitPrompt,
   SubmitOptions,
   TaskControlVerbMessage,
   TranscriptCache,
@@ -45,6 +47,7 @@ import type {
 import type { DebugRendererSnapshot } from '../shared/debugState.js'
 import { MAX_SAVE_TEXT_BYTES } from '../shared/limits.js'
 import { createRendererIpcGuard } from './rendererIpcGuard.js'
+import { DeliveryAckQueue } from './deliveryAckQueue.js'
 
 declare const __CATCODE_DEV_HARNESS__: boolean
 
@@ -67,6 +70,112 @@ const CH_PING = 'catcode:ping'
 const CH_RESTART = 'catcode:restart'
 const CH_SERVER_FRAME = 'catcode:server-frame'
 const CH_RENDERER_READY = 'catcode:renderer-ready'
+const CH_DELIVERY_ACK = 'catcode:delivery-ack'
+const CH_RENDERER_FAULT = 'catcode:renderer-fault'
+const CH_OPEN_LOGS = 'catcode:open-logs'
+const CH_SAVE_DIAGNOSTICS = 'catcode:save-diagnostics'
+const CH_DELIVERY_HEALTH_PROBE = 'catcode:delivery-health-probe'
+const CH_DELIVERY_HEALTH_RESPONSE = 'catcode:delivery-health-response'
+
+// A document reload must never acknowledge work from its predecessor.
+const deliveryDocumentId = crypto.randomUUID()
+const deliveryProcessInstanceId = crypto.randomUUID()
+const deliveryProcessStartedAt = new Date().toISOString()
+let deliverySubscriptionEpoch = 0
+let rendererFaultWindowStartedAt = Date.now()
+let rendererFaultCount = 0
+const MAX_RENDERER_FAULTS_PER_MINUTE = 12
+let lastMeasuredEventLoopLagMs = 0
+
+// Keep the watchdog payload metadata-only: this detects a delayed renderer
+// turn without ever exposing DOM, store, or transcript state.
+setInterval(() => {
+  const scheduledAt = performance.now()
+  setTimeout(() => {
+    lastMeasuredEventLoopLagMs = Math.max(0, performance.now() - scheduledAt)
+  }, 0)
+}, 5_000)
+
+function canReportRendererFault(): boolean {
+  const now = Date.now()
+  if (now - rendererFaultWindowStartedAt >= 60_000) {
+    rendererFaultWindowStartedAt = now
+    rendererFaultCount = 0
+  }
+  if (rendererFaultCount >= MAX_RENDERER_FAULTS_PER_MINUTE) return false
+  rendererFaultCount++
+  return true
+}
+
+const sendGuard = createRendererIpcGuard()
+
+// Delivery-acknowledgement queue — diagnostics traffic (CC-40).
+// Extracted to deliveryAckQueue.ts for testability; wired here with the real
+// Electron IPC send and the shared rate guard.
+const deliveryAckQueue = new DeliveryAckQueue(
+  {
+    assertAllowed: (payload, kind) => sendGuard.assertAllowed(payload, kind),
+    send: (ipcChannel, payload) => ipcRenderer.send(ipcChannel, payload),
+    documentId: deliveryDocumentId,
+    processInstanceId: deliveryProcessInstanceId,
+    processStartedAt: deliveryProcessStartedAt,
+    getSubscriptionEpoch: () => deliverySubscriptionEpoch,
+    setTimeout: (fn, ms) => setTimeout(fn, ms),
+    clearTimeout: (handle) => clearTimeout(handle),
+  },
+  {
+    channel: CH_DELIVERY_ACK,
+    maxBatchSize: 64,
+    maxPending: 1024,
+    flushIntervalMs: 50,
+  },
+)
+
+function sendDeliveryAcknowledgement(
+  sessionId: string,
+  sequence: number,
+  deliveryAttempt: number,
+  streamEpoch: string,
+  traceId: string,
+  stage: DeliveryAcknowledgement['stage'],
+): void {
+  deliveryAckQueue.push(sessionId, sequence, deliveryAttempt, streamEpoch, traceId, stage)
+}
+
+
+// `performance.memory` is Chromium-only and absent from the DOM typings.
+function readHeapUsedBytes(): number | null {
+  const memory = (performance as Performance & { memory?: { usedJSHeapSize?: unknown } }).memory
+  const used = memory?.usedJSHeapSize
+  return typeof used === 'number' && Number.isFinite(used) && used >= 0 ? Math.round(used) : null
+}
+
+ipcRenderer.on(CH_DELIVERY_HEALTH_PROBE, () => {
+  const payload = {
+    documentId: deliveryDocumentId,
+    subscriptionEpoch: deliverySubscriptionEpoch,
+    rendererProcessInstanceId: deliveryProcessInstanceId,
+    monotonicTimestampMs: performance.now(),
+    eventLoopLagMs: lastMeasuredEventLoopLagMs,
+    // A hidden window's timers are throttled, so lag and missed probes alone
+    // cannot tell an occluded renderer from a hung one (observed 2026-08-09).
+    visible: document.visibilityState === 'visible',
+    heapUsedBytes: readHeapUsedBytes(),
+    watermarks: [...deliveryAckQueue.getWatermarks().entries()].slice(0, 32).map(([sessionId, value]) => ({ sessionId, ...value })),
+  }
+  // Telemetry, and wrapped like the other telemetry senders, but deliberately
+  // CONTROL class for the budget (IPC-RATE-BUDGET §4): it is roughly one frame
+  // per five seconds, and starving it would make main record
+  // `renderer.health.missed` for a renderer that is merely rate-limited, i.e.
+  // manufacture a fake outage. Budget class and failure class are separate axes.
+  try {
+    sendGuard.assertAllowed(payload)
+    ipcRenderer.send(CH_DELIVERY_HEALTH_RESPONSE, payload)
+  } catch {
+    // The next probe carries the same watermarks, so a lost response costs
+    // nothing beyond one sample.
+  }
+})
 
 // Control-plane channels (HC3 — fixed, per-method; must match main.ts).
 const CH_HOST_CREATE = 'catcode:host:create'
@@ -82,10 +191,8 @@ const CH_HOST_SAVE_TEXT = 'catcode:host:save-text'
 const CH_HOST_EVENT = 'catcode:host:event'
 const CH_HOST_VISIBLE_SESSIONS = 'catcode:host:visible-sessions'
 
-const sendGuard = createRendererIpcGuard()
-
 const bridge: CatCodeBridge = {
-  submit(sessionId: SessionId, prompt: string, options?: SubmitOptions): void {
+  submit(sessionId: SessionId, prompt: SubmitPrompt, options?: SubmitOptions): void {
     const payload = { sessionId, prompt, options }
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_SUBMIT, payload)
@@ -226,15 +333,60 @@ const bridge: CatCodeBridge = {
     // whole batch to the renderer so it folds each store in one dispatch. A live
     // single frame arrives as a one-element array. Outbound-only; no inbound
     // surface or validation change.
-    const handler = (_event: unknown, frames: ServerFrame[]) => listener(frames)
+    const handler = (_event: unknown, frames: ServerFrame[]) => {
+      for (const frame of frames) {
+        if (frame.deliveryTrace) {
+          sendDeliveryAcknowledgement(
+            frame.sessionId,
+            frame.deliveryTrace.sequence,
+            frame.deliveryTrace.deliveryAttempt,
+            frame.deliveryTrace.streamEpoch,
+            frame.deliveryTrace.traceId,
+            'preload.received',
+          )
+        }
+      }
+      // Preload receipt is durable before the renderer is invoked. The renderer
+      // itself emits `renderer.subscription.received` at its callback entry.
+      listener(frames)
+    }
     ipcRenderer.on(CH_SERVER_FRAME, handler)
     return () => {
       ipcRenderer.removeListener(CH_SERVER_FRAME, handler)
     }
   },
   rendererReady(): void {
-    sendGuard.assertAllowed({ rendererReady: true })
-    ipcRenderer.send(CH_RENDERER_READY)
+    deliverySubscriptionEpoch++
+    sendGuard.assertAllowed({ rendererReady: true, documentId: deliveryDocumentId })
+    ipcRenderer.send(CH_RENDERER_READY, { documentId: deliveryDocumentId })
+  },
+  deliveryAck(sessionId, sequence, deliveryAttempt, streamEpoch, traceId, stage): void {
+    sendDeliveryAcknowledgement(sessionId, sequence, deliveryAttempt, streamEpoch, traceId, stage)
+  },
+  reportRendererFault(kind, message): void {
+    if (!canReportRendererFault()) return
+    const payload = { kind, message: message.slice(0, 512) }
+    // The fault reporter runs from `componentDidCatch` and from the global
+    // error handlers, i.e. only ever while something has already failed. It
+    // shares the one inbound budget with every other channel, so the very
+    // condition worth reporting (a flood that spent the budget) is the
+    // condition under which the guard rejects this report. Throwing here
+    // escalated a caught error into a full React unmount. Losing the report is
+    // the acceptable failure; losing the window is not.
+    try {
+      sendGuard.assertAllowed(payload)
+      ipcRenderer.send(CH_RENDERER_FAULT, payload)
+    } catch {
+      // Diagnostics only. Never surfaces to the caller.
+    }
+  },
+  openLogsFolder(): void {
+    sendGuard.assertAllowed({ openLogs: true })
+    ipcRenderer.send(CH_OPEN_LOGS)
+  },
+  saveDiagnosticsBundle(): Promise<boolean> {
+    sendGuard.assertAllowed({ saveDiagnostics: true })
+    return ipcRenderer.invoke(CH_SAVE_DIAGNOSTICS) as Promise<boolean>
   },
   reportVisibleSessions(sessionIds: SessionId[]): void {
     // IDLE-PARK §4(b) — a one-way hint naming the panes on screen so main's park

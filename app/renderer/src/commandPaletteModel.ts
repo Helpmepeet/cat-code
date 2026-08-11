@@ -182,7 +182,12 @@ export function buildPaletteItems(input: PaletteInput): PaletteItem[] {
     const restorable = descriptor.restorable
     // Same status vocabulary the Sidebar/TabBar paint (audit §I.2). A palette
     // row is always a registry row, so `inRegistry` is true.
-    const { label, tone } = sessionStatusVisual(descriptor.status, restorable, true)
+    const { label, tone } = sessionStatusVisual(
+      descriptor.status,
+      restorable,
+      true,
+      descriptor.parked,
+    )
     items.push({
       id: `session:${id}`,
       kind: 'session',

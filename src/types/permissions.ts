@@ -347,7 +347,19 @@ export type YoloClassifierResult = {
   thinking?: string
   shouldBlock: boolean
   reason: string
+  /**
+   * Which BLOCK rule the classifier named when it matches the vendored
+   * inventory. Advisory: it groups denials for analysis and never affects
+   * `shouldBlock`. See autoModeCategories.ts.
+   */
+  category?: { kind: 'built_in'; id: string }
   unavailable?: boolean
+  /** Bounded classifier result state for the next classifier request's meta. */
+  autoModeOutcome?:
+    | 'automode-blocked'
+    | 'automode-unavailable'
+    | 'automode-parsing-error'
+    | 'interrupted'
   /**
    * API returned "prompt is too long" — the classifier transcript exceeded
    * the context window. Deterministic (same transcript → same error), so

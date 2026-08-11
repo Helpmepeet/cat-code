@@ -53,8 +53,17 @@ export type SessionsCatalogRunOptions = {
   spawnWorker?: typeof spawn
   /** Called at most ONCE, only for an accepted + secret-clean catalog record. */
   onCatalog: (catalog: SessionsCatalogSnapshot) => void
+  /** Metadata-only process lifecycle hook; it never receives worker output. */
+  onWorkerLifecycle?: (event: WorkerProcessLifecycle) => void
   log?: (line: string) => void
 }
+
+export type WorkerProcessLifecycle = Readonly<{
+  phase: 'started' | 'exited'
+  pid: number
+  code?: number | null
+  signal?: NodeJS.Signals | null
+}>
 
 export type SessionsCatalogRunOutcome = 'delivered' | 'failure' | 'empty'
 
@@ -80,6 +89,7 @@ export async function runSessionsCatalogWorker(
     },
     stdio: ['pipe', 'pipe', 'pipe'],
   }) as ChildProcessWithoutNullStreams
+  options.onWorkerLifecycle?.({ phase: 'started', pid: child.pid ?? 0 })
 
   let outcome: SessionsCatalogRunOutcome = 'empty'
   let recordSeen = false
@@ -182,6 +192,7 @@ export async function runSessionsCatalogWorker(
     // worker that reads it (defense in depth) sees EOF immediately.
     child.stdin.end()
     ;({ code, signal } = await closed)
+    options.onWorkerLifecycle?.({ phase: 'exited', pid: child.pid ?? 0, code, signal })
   } finally {
     clearTimeout(timeout)
     options.signal?.removeEventListener('abort', onAbort)

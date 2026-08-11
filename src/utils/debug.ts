@@ -1,4 +1,5 @@
-import { appendFile, mkdir, symlink, unlink } from 'fs/promises'
+import { chmodSync } from 'fs'
+import { appendFile, chmod, mkdir, symlink, unlink } from 'fs/promises'
 import memoize from 'lodash-es/memoize.js'
 import { dirname, join } from 'path'
 import { getSessionId } from 'src/bootstrap/state.js'
@@ -107,7 +108,14 @@ export const getDebugFilter = memoize((): DebugFilter | null => {
 
 // Messages with these prefixes bypass the non-ant gate so diagnostic signal
 // survives even when debug mode isn't enabled. Keep this list narrow.
-const ALWAYS_LOG_PREFIXES = ['[codex-cache]']
+/**
+ * Exported so the producer composes its message from the same literal that
+ * un-gates it. Held apart, a reformat of the message silently re-gates the
+ * record to ants/debug-mode and every test stays green.
+ */
+export const TURN_LOCK_STALL_PREFIX = '[codex-ws] turn_lock_stall'
+
+const ALWAYS_LOG_PREFIXES = ['[codex-cache]', TURN_LOCK_STALL_PREFIX]
 
 function shouldLogDebugMessage(message: string): boolean {
   if (process.env.NODE_ENV === 'test' && !isDebugToStdErr()) {
@@ -172,8 +180,10 @@ async function appendAsync(
 ): Promise<void> {
   if (needMkdir) {
     await mkdir(dir, { recursive: true }).catch(() => {})
+    await chmod(dir, 0o700).catch(() => {})
   }
   await appendFile(path, content)
+  await chmod(path, 0o600).catch(() => {})
   void updateLatestDebugLogSymlink()
 }
 
@@ -198,8 +208,18 @@ function getDebugWriter(): BufferedWriter {
             } catch {
               // Directory already exists
             }
+            try {
+              chmodSync(dir, 0o700)
+            } catch {
+              // Best effort: a non-writable external debug directory remains usable.
+            }
           }
           getFsImplementation().appendFileSync(path, content)
+          try {
+            chmodSync(path, 0o600)
+          } catch {
+            // Same best-effort posture as the existing debug writer.
+          }
           void updateLatestDebugLogSymlink()
           return
         }

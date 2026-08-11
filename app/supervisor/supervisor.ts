@@ -33,6 +33,7 @@ import {
   MAX_PROMPT_BYTES,
 } from '../shared/limits.js'
 import {
+  isServerFrameKind,
   PROTOCOL_VERSION,
   type ClientFrame,
   type ReadyFrame,
@@ -40,6 +41,14 @@ import {
   type SessionId,
   type SidecarClientMessage,
 } from '../shared/protocol.js'
+import {
+  parseOperationalRecord,
+  type OperationalEvent,
+  type OperationalFields,
+  type OperationalLogLevel,
+  type OperationalRecord,
+} from '../shared/operationalLog.js'
+import { isDeliveryStage, isSafeDeliveryIdentifier, type DeliveryTrace, type SidecarDeliveryStageRecord } from '../shared/deliveryTrace.js'
 
 export type SupervisorOptions = {
   /**
@@ -69,6 +78,17 @@ export type SupervisorOptions = {
   socketDir?: string
   /** Structured logger. */
   log?: (line: string) => void
+  /** Dedicated sanitized descriptor records. Raw stderr never enters this path. */
+  onOperationalRecord?: (record: OperationalRecord) => void
+  /** Sidecar-originated causal evidence from FD 3; raw frame data never enters. */
+  onDeliveryTraceRecord?: (record: SidecarDeliveryStageRecord) => void
+  /** Closed lifecycle events emitted without string-prefix parsing. */
+  onOperationalEvent?: (input: {
+    event: OperationalEvent
+    level: OperationalLogLevel
+    appSessionId?: string
+    fields?: OperationalFields
+  }) => void
 }
 
 /** Lifecycle state of a managed sidecar. */
@@ -90,6 +110,7 @@ type SidecarRecord = {
   status: SidecarStatus
   /** Spawn config to re-apply on restart (per-session cwd + resume id). */
   config?: SpawnConfig
+  operationalBuffer: string
 }
 
 export type SupervisorEvent =
@@ -149,6 +170,15 @@ export class SidecarSupervisor {
   private readonly socketDir: string
   private readonly log: (line: string) => void
 
+  private operational(
+    event: OperationalEvent,
+    level: OperationalLogLevel,
+    appSessionId?: string,
+    fields: OperationalFields = {},
+  ): void {
+    this.options.onOperationalEvent?.({ event, level, ...(appSessionId ? { appSessionId } : {}), fields })
+  }
+
   /** Monotonic counter → short, collision-free socket filenames. */
   private socketSeq = 0
 
@@ -200,6 +230,49 @@ export class SidecarSupervisor {
       this.socketDir = createPrivateSocketDir()
     }
     this.log = options.log ?? (line => process.stderr.write(`${line}\n`))
+  }
+
+  /** Bounded NDJSON decode for the dedicated sidecar diagnostics descriptor. */
+  private consumeOperationalRecords(record: SidecarRecord, text: string): void {
+    record.operationalBuffer += text
+    if (record.operationalBuffer.length > 64 * 1024) {
+      record.operationalBuffer = ''
+      this.log(`[supervisor] dropped oversized operational diagnostics for ${record.sessionId}`)
+      // This is the one site where sidecar records provably vanish. A dev stderr
+      // line does not survive into the export, so the loss has to be stated in
+      // the record stream itself or the bundle will claim coverage it lost.
+      this.operational('log.coverage.incomplete', 'error', record.sessionId, {
+        source: 'sidecar',
+        reason: 'buffer_overflow',
+        expected: false,
+      })
+      return
+    }
+    const lines = record.operationalBuffer.split('\n')
+    record.operationalBuffer = lines.pop() ?? ''
+    for (const line of lines) {
+      if (line.length === 0) continue
+      try {
+        const value = JSON.parse(line)
+        const traceRecord = parseSidecarDeliveryStageRecord(value)
+        if (traceRecord) {
+          if (traceRecord.sessionId !== record.sessionId) {
+            this.log(`[supervisor] dropped invalid delivery trace for ${record.sessionId}`)
+            continue
+          }
+          this.options.onDeliveryTraceRecord?.(traceRecord)
+          continue
+        }
+        const parsed = parseOperationalRecord(value)
+        if (!parsed || parsed.process !== 'sidecar' || parsed.appSessionId !== record.sessionId) {
+          this.log(`[supervisor] dropped invalid operational record for ${record.sessionId}`)
+          continue
+        }
+        this.options.onOperationalRecord?.(parsed)
+      } catch {
+        this.log(`[supervisor] dropped malformed operational record for ${record.sessionId}`)
+      }
+    }
   }
 
   /** Max Unix-domain socket path length (`sun_path`) for this platform. */
@@ -255,7 +328,9 @@ export class SidecarSupervisor {
     }
 
     const child = spawn(this.options.sidecarCommand, this.options.sidecarArgs ?? [], {
-      stdio: ['ignore', 'inherit', 'inherit'],
+      // FD 3 is a separate NDJSON diagnostics stream. stdout/stderr deliberately
+      // stay inherited for development and are never persisted wholesale.
+      stdio: ['ignore', 'inherit', 'inherit', 'pipe'],
       // Actual spawn cwd: the engine reads process.cwd() at boot for project
       // identity (src/bootstrap/state.ts getInitialState → originalCwd), so the
       // child must actually start here — the env alone is not enough.
@@ -272,8 +347,11 @@ export class SidecarSupervisor {
         ...(config?.resumeEngineSessionId !== undefined
           ? { CATCODE_SIDECAR_RESUME_SESSION_ID: config.resumeEngineSessionId }
           : { CATCODE_SIDECAR_RESUME_SESSION_ID: '' }),
+        CATCODE_OPERATIONAL_FD: '3',
+        CATCODE_OPERATIONAL_LAUNCH_ID: process.env.CATCODE_OPERATIONAL_LAUNCH_ID ?? '',
       },
     })
+    this.operational('sidecar.spawn.started', 'info', sessionId, { pid: child.pid ?? 0 })
 
     const record: SidecarRecord = {
       sessionId,
@@ -288,14 +366,24 @@ export class SidecarSupervisor {
       // cwd and re-resumes the same engine session (REGISTRY.md §2: a restarted
       // engine re-announces its engineSessionId in its new ready frame).
       ...(config ? { config } : {}),
+      operationalBuffer: '',
     }
     this.registry.set(sessionId, record)
+
+    const operational = child.stdio[3]
+    if (operational) {
+      operational.on('data', chunk => this.consumeOperationalRecords(record, String(chunk)))
+      operational.on('error', () => {
+        this.log(`[supervisor] operational descriptor closed for ${sessionId}`)
+      })
+    }
 
     // F7 — a spawn error (e.g. ENOENT: bun not on PATH, missing packaged binary)
     // emits an 'error' event; without a listener Node treats it as unhandled and
     // can terminate Electron main. Handle it as a session failure instead.
     child.on('error', error => {
       this.log(`[supervisor] sidecar ${sessionId} spawn error: ${error.message}`)
+      this.operational('sidecar.spawn.failed', 'error', sessionId, { reason: 'spawn_error' })
       this.setStatus(record, 'failed')
     })
 
@@ -307,6 +395,24 @@ export class SidecarSupervisor {
         return
       }
       this.emit({ type: 'exit', sessionId, code, signal })
+      this.operational('sidecar.exit', code === 0 ? 'info' : 'error', sessionId, {
+        ...(code === null ? {} : { exitCode: code }),
+        ...(signal === null ? {} : { signal }),
+        expected: code === 0,
+      })
+      // Only claim lost coverage when there is evidence of it. A leftover buffer
+      // means a partial NDJSON record was cut off mid-write; a non-zero exit means
+      // the stream ended abnormally. A clean exit with an empty buffer lost
+      // nothing, and reporting it anyway pinned the export's coverage verdict to
+      // "incomplete" for every ordinary session close.
+      const truncatedRecord = record.operationalBuffer.length > 0
+      if (truncatedRecord || code !== 0) {
+        this.operational('log.coverage.incomplete', code === 0 ? 'warn' : 'error', sessionId, {
+          source: 'sidecar',
+          reason: truncatedRecord ? 'stream_closed_mid_record' : 'stream_closed_on_abnormal_exit',
+          expected: false,
+        })
+      }
       this.setStatus(record, 'exited')
       // Crash isolation: one sidecar dying does not touch the others. Restart
       // is left to the caller's policy (the app owns restart cadence).
@@ -346,7 +452,12 @@ export class SidecarSupervisor {
     }
     if (
       message.type === 'app.submit' &&
-      Buffer.byteLength(message.prompt, 'utf8') > MAX_PROMPT_BYTES
+      Buffer.byteLength(
+        typeof message.prompt === 'string'
+          ? message.prompt
+          : JSON.stringify(message.prompt),
+        'utf8',
+      ) > MAX_PROMPT_BYTES
     ) {
       throw new Error(`prompt exceeds ${MAX_PROMPT_BYTES} bytes`)
     }
@@ -454,6 +565,7 @@ export class SidecarSupervisor {
 
     socket.on('connect', () => {
       this.setStatus(record, 'connecting')
+      this.operational('sidecar.socket.connected', 'info', record.sessionId)
     })
 
     socket.on('data', chunk => {
@@ -464,14 +576,20 @@ export class SidecarSupervisor {
           socket.destroy()
           return
         }
-        const frame = result.payload
-        if (!isObjectRecord(frame)) {
+        // Two distinct drops: a payload that is not a frame at all, and a frame
+        // whose delivery envelope is malformed. unwrapServerFrame would collapse
+        // both, but they are not the same failure and are reported separately.
+        if (!isObjectRecord(result.payload)) {
           this.log(
             `[supervisor] dropped frame from ${record.sessionId}: frame was not an object`,
           )
           continue
         }
-        const serverFrame = frame as ServerFrame
+        const serverFrame = unwrapServerFrame(result.payload)
+        if (!serverFrame) {
+          this.log(`[supervisor] dropped malformed outbound envelope from ${record.sessionId}`)
+          continue
+        }
         if (serverFrame.kind === 'ready') {
           const readyError = validateReadyFrame(record.sessionId, serverFrame)
           if (readyError) {
@@ -565,6 +683,7 @@ export class SidecarSupervisor {
       // already moved to a terminal state by the exit this close belonged to.
       if (this.registry.get(record.sessionId) !== record) return
       if (record.status !== 'ready' && record.status !== 'connecting') return
+      this.operational('sidecar.disconnected', 'warn', record.sessionId, { reason: 'socket_closed' })
       this.setStatus(record, 'disconnected')
     }, this.disconnectSettleMs)
     timer.unref?.()
@@ -595,6 +714,54 @@ export function createPrivateSocketDir(): string {
   const dir = mkdtempSync('/tmp/cc-')
   chmodSync(dir, 0o700)
   return dir
+}
+
+/**
+ * Sidecar production wraps raw frames only on the Unix socket so the trace can
+ * be minted at its earliest desktop boundary. The wrapper is strict and is
+ * removed here; all existing host/renderer code still receives `ServerFrame`.
+ */
+function unwrapServerFrame(payload: unknown): ServerFrame | null {
+  if (!isObjectRecord(payload)) return null
+  if (payload.kind !== 'sidecar.delivery-envelope') return payload as ServerFrame
+  if (Object.keys(payload).length !== 3 || !isObjectRecord(payload.frame) || !isDeliveryTrace(payload.deliveryTrace)) {
+    return null
+  }
+  return { ...(payload.frame as ServerFrame), deliveryTrace: payload.deliveryTrace }
+}
+
+function isDeliveryTrace(value: unknown): value is DeliveryTrace {
+  if (!isObjectRecord(value) || Object.keys(value).length !== 9) return false
+  return (
+    isTraceUuid(value.streamEpoch) &&
+    typeof value.sequence === 'number' && Number.isSafeInteger(value.sequence) && value.sequence > 0 &&
+    isTraceUuid(value.traceId) &&
+    typeof value.deliveryAttempt === 'number' && Number.isSafeInteger(value.deliveryAttempt) && value.deliveryAttempt > 0 &&
+    typeof value.replay === 'boolean' &&
+    isTraceUuid(value.sourceProcessInstanceId) &&
+    typeof value.sourceWallTimestamp === 'string' && !Number.isNaN(Date.parse(value.sourceWallTimestamp)) &&
+    typeof value.sourceMonotonicTimestampMs === 'number' && Number.isFinite(value.sourceMonotonicTimestampMs) && value.sourceMonotonicTimestampMs >= 0 &&
+    typeof value.connectionEpoch === 'number' && Number.isSafeInteger(value.connectionEpoch) && value.connectionEpoch > 0
+  )
+}
+
+function isTraceUuid(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+}
+
+function parseSidecarDeliveryStageRecord(value: unknown): SidecarDeliveryStageRecord | null {
+  if (!isObjectRecord(value) || Object.keys(value).length !== 9 || value.recordKind !== 'delivery.trace') return null
+  if (
+    typeof value.sessionId !== 'string' || value.sessionId.length < 1 || value.sessionId.length > 128 ||
+    !isDeliveryTrace(value.trace) ||
+    !['engine.produced', 'sidecar.received', 'sidecar.socket.queued', 'sidecar.socket.sent'].includes(value.stage as string) ||
+    !isServerFrameKind(value.frameKind) ||
+    typeof value.wallTimestamp !== 'string' || Number.isNaN(Date.parse(value.wallTimestamp)) ||
+    typeof value.monotonicTimestampMs !== 'number' || !Number.isFinite(value.monotonicTimestampMs) || value.monotonicTimestampMs < 0 ||
+    !isSafeDeliveryIdentifier(value.processInstanceId) ||
+    typeof value.processStartedAt !== 'string' || Number.isNaN(Date.parse(value.processStartedAt))
+  ) return null
+  return value as SidecarDeliveryStageRecord
 }
 
 function sendFailureCodeForStatus(status: SidecarStatus): SendFailureCode {

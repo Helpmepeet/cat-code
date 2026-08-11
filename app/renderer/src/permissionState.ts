@@ -64,6 +64,8 @@ export type PermissionAction =
   | { type: 'submissionFailed'; sessionId: SessionId; requestId: string }
   | { type: 'dismissed'; sessionId: SessionId; requestId: string }
   | { type: 'restored'; sessionId: SessionId; requestId: string }
+  /** The row is gone for good — drop its entry, retained mode included. */
+  | { type: 'session-removed'; sessionId: SessionId }
 
 export function createPermissionState(): PermissionState {
   return { sessions: {} }
@@ -83,6 +85,13 @@ export function reducePermissionState(
   state: PermissionState,
   action: PermissionAction,
 ): PermissionState {
+  if (action.type === 'session-removed') {
+    if (!(action.sessionId in state.sessions)) return state
+    const sessions = { ...state.sessions }
+    delete sessions[action.sessionId]
+    return { sessions }
+  }
+
   if (action.type === 'submitted' || action.type === 'dismissed') {
     const session = state.sessions[action.sessionId]
     if (!session) return state

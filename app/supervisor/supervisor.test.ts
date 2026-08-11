@@ -252,11 +252,13 @@ test('a self-exiting sidecar reports its exit, never a transport failure first',
   const script = readyScript({
     afterOpen: 'setTimeout(() => { socket.end(); process.exit(5) }, 50)',
   })
+  const operationalEvents: string[] = []
   const supervisor = new SidecarSupervisor({
     sidecarCommand: process.execPath,
     sidecarArgs: ['-e', script],
     socketDir,
     disconnectSettleMs: 250,
+    onOperationalEvent: event => operationalEvents.push(event.event),
   })
   supervisors.push(supervisor)
 
@@ -273,6 +275,7 @@ test('a self-exiting sidecar reports its exit, never a transport failure first',
   // Wait out the settle window: a dropped report must stay dropped.
   await new Promise(resolve => setTimeout(resolve, 400))
   expect(statuses).not.toContain('disconnected')
+  expect(operationalEvents).toContain('log.coverage.incomplete')
 })
 
 test('a socket that drops under a LIVING child still reports disconnected', async () => {

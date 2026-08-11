@@ -67,6 +67,7 @@ let servers: SidecarServer[] = []
 function makeServer(
   history: readonly SDKMessage[],
   historySourceTruncated = false,
+  readGeneratedImage?: (filePath: string) => Promise<Uint8Array | null>,
 ): SidecarServer {
   const server = new SidecarServer({
     sessionId: SESSION,
@@ -78,6 +79,7 @@ function makeServer(
     }),
     history,
     historySourceTruncated,
+    ...(readGeneratedImage ? { readGeneratedImage } : {}),
     log: () => {},
   })
   servers.push(server)
@@ -124,6 +126,69 @@ test('a fresh session (no history) sends only ready on attach', () => {
   const { socket, received } = makeSocket()
   server.addConnection(socket)
   expect(received.map(f => f.kind)).toEqual(['ready'])
+})
+
+test('restored GenerateImage history cannot authorize a generated-image file read', () => {
+  const toolUseId = 'toolu_restored_image'
+  const history = [
+    {
+      type: 'assistant',
+      message: {
+        id: 'msg_restored_image',
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: toolUseId,
+            name: 'GenerateImage',
+            input: { prompt: 'restored image' },
+          },
+        ],
+      },
+      session_id: ENGINE_SESSION,
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-000000000201',
+      timestamp: '2026-08-09T00:00:00.000Z',
+    },
+    {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: toolUseId,
+            content: 'Generated image',
+          },
+        ],
+      },
+      tool_use_result: {
+        filePath: '/tmp/restored-image.png',
+        model: 'gpt-image-2',
+        size: '1024x1024',
+        outputFormat: 'png',
+        bytes: 4,
+      },
+      session_id: ENGINE_SESSION,
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-000000000202',
+      timestamp: '2026-08-09T00:00:01.000Z',
+      isSynthetic: true,
+    },
+  ] as unknown as SDKMessage[]
+  let reads = 0
+  const server = makeServer(history, false, async () => {
+    reads++
+    return Uint8Array.from([0, 1, 2, 3])
+  })
+  const { socket, received } = makeSocket()
+
+  server.addConnection(socket)
+
+  expect(reads).toBe(0)
+  expect(
+    received.some(frame => frame.kind === 'generated-image-preview'),
+  ).toBe(false)
 })
 
 test('frames cap keeps the NEWEST contiguous tail and announces the loss BEFORE it', () => {

@@ -700,6 +700,18 @@ export class Host implements HostApi {
     return this.descriptorFor(appSessionId)?.restorable === true
   }
 
+  /**
+   * IDLE-PARK §1c — a live engine is a valid park candidate only when its
+   * transcript can be resumed after reclamation. This deliberately does not
+   * apply the not-live requirement of `canPreview`: the driver asks before the
+   * sidecar exits.
+   */
+  canResume(appSessionId: SessionId): boolean {
+    if (!isUuid(appSessionId)) return false
+    if (this.resumeFailed.has(appSessionId)) return false
+    return this.registry.hasTranscript(appSessionId)
+  }
+
   /* --------------------------------------------------------------------- *
    * subscribe — HostEvent stream (the renderer's list is a projection, never a
    * poll loop)
@@ -813,6 +825,12 @@ export class Host implements HostApi {
       titleUpdatedAt: row?.titleUpdatedAt ?? null,
       status,
       restorable: this.isRestorable(row, liveStatus),
+      // IDLE-PARK §1b — the one bit `status` cannot carry, read off the same
+      // row marking the status branch above already tests. Gated on there being
+      // no live process: `upsertOnSpawn` clears `shutdown` on restore, but a
+      // descriptor built mid-spawn would otherwise still read the stale mark and
+      // paint a booting engine as resting.
+      parked: liveStatus === null && row?.shutdown === 'parked',
       createdAt: row?.createdAt ?? 0,
       lastAttachedAt: row?.lastAttachedAt ?? 0,
       // CC-2: the sidebar reads this for its recency text; null → the row falls
@@ -868,11 +886,6 @@ export class Host implements HostApi {
    *    (`app/sidecar/sessionResume.ts` "no conversation found"); `existsSync`
    *    cannot see that, only the sidecar's exit code reports it.
    */
-  private canResume(appSessionId: SessionId): boolean {
-    if (this.resumeFailed.has(appSessionId)) return false
-    return this.registry.hasTranscript(appSessionId)
-  }
-
   /* --------------------------------------------------------------------- *
    * HostEvent emit helpers
    * --------------------------------------------------------------------- */

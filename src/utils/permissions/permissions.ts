@@ -104,6 +104,7 @@ import {
   classifyYoloAction,
   formatActionForClassifier,
 } from './yoloClassifier.js'
+import { recordAutoModeOutcome } from './autoModeMeta.js'
 
 const CLASSIFIER_FAIL_CLOSED_REFRESH_MS = 30 * 60 * 1000 // 30 minutes
 
@@ -704,7 +705,9 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
       }
 
       // Run the auto mode classifier
-      const action = formatActionForClassifier(tool.name, input)
+      // Outcomes are no longer passed in here: they render inline, beneath the
+      // call each one reports, so the classifier can correlate them by id.
+      const action = formatActionForClassifier(tool.name, input, {})
       setClassifierChecking(toolUseID)
       let classifierResult
       try {
@@ -717,6 +720,11 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
         )
       } finally {
         clearClassifierChecking(toolUseID)
+      }
+      if (classifierResult.autoModeOutcome) {
+        recordAutoModeOutcome(toolUseID, classifierResult.autoModeOutcome)
+      } else if (classifierResult.shouldBlock) {
+        recordAutoModeOutcome(toolUseID, 'automode-blocked')
       }
 
       // Notify ants when classifier error dumped prompts (will be in /share)

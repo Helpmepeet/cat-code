@@ -295,3 +295,43 @@ test('a session that never reported anything claims nothing', () => {
   expect(rail.accountsSnapshot).toBeNull()
   expect(rail.canSwitchAccount).toBe(false)
 })
+
+/* --------------------------------------------------------------------- *
+ * removal — retention is scoped to a session that still exists
+ * --------------------------------------------------------------------- */
+
+test('a removed row drops every retained snapshot, a lifecycle frame keeps them', () => {
+  // The distinction the retention rests on. "No engine right now" must keep the
+  // facts, or the rail blanks again; "this row is gone" must drop them, or a
+  // long-running window accumulates full model option lists and account
+  // snapshots keyed by ids nothing can display.
+  const detachedSources = { ...detached(), connectionStatus: 'dead' as const }
+  expect(
+    selectComposerRail(sources(detachedSources)).model,
+  ).toBe('gpt-5.6-sol')
+
+  const removed = {
+    runControls: reduceRunControlsState(detachedSources.runControls, {
+      type: 'session-removed',
+      sessionId: SID,
+    }),
+    permissions: reducePermissionState(detachedSources.permissions, {
+      type: 'session-removed',
+      sessionId: SID,
+    }),
+    accounts: reduceAccountsState(detachedSources.accounts, {
+      type: 'session-removed',
+      sessionId: SID,
+    }),
+  }
+  const rail = selectComposerRail(sources({ ...removed, connectionStatus: 'dead' }))
+  expect(rail.model).toBeNull()
+  expect(rail.lastPermissionMode).toBeNull()
+  expect(rail.accountsSnapshot).toBeNull()
+
+  // And the maps are genuinely empty, not merely null-valued.
+  expect(Object.keys(removed.runControls.last)).toEqual([])
+  expect(Object.keys(removed.runControls.sessions)).toEqual([])
+  expect(Object.keys(removed.accounts.lastSessions)).toEqual([])
+  expect(Object.keys(removed.permissions.sessions)).toEqual([])
+})

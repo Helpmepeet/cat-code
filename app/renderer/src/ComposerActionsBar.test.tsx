@@ -676,8 +676,11 @@ test('ContextUsagePanel draws a per-category donut, legend and Free row', () => 
   // half-gap in (nothing drawn before it, so the offset is the half-gap alone).
   expect(html).toContain('stroke-width="6"')
   expect(html).toContain('stroke-dashoffset="-1.5"')
-  // Center readout: the same percent the header line states.
-  expect(countOccurrences(html, '21%')).toBeGreaterThanOrEqual(2)
+  // Center readout: the same percent the header line states — the ACCOUNTED
+  // total (4.2k + 21k = 25.2k of the snapshot's own 200k), not `usage`'s 21%
+  // (42k/200k): once a breakdown exists the header reconciles with the rows
+  // printed below it instead of the composer's separately-clocked live figure.
+  expect(countOccurrences(html, '13%')).toBeGreaterThanOrEqual(2)
 })
 
 test('ContextUsagePanel without a breakdown keeps the aggregate row alone, no donut', () => {
@@ -831,7 +834,7 @@ test('the Context readout compacts millions ("1M") without changing sub-million 
   }
 })
 
-test('the attach button reflects the disabled gate (echo-only stub)', () => {
+test('the attach button reflects the image-picker disabled gate', () => {
   const enabled = render({ attachDisabled: false })
   expect(enabled).toContain('aria-label="Add attachment"')
   expect(enabled).not.toContain('disabled=""')
@@ -1083,8 +1086,13 @@ test('the detached account face keeps its status dot', () => {
   // `accent` is the active account's tone (`statusDotTone`), the pink dot the
   // interactive chip shows in the same position.
   expect(active).toContain(toneClasses('accent').dot)
-  const capped = renderDetached({
-    account: account({ alias: 'hiby', isDefault: false, status: 'capped' }),
+  // A REACHABLE unhealthy state. Production selects the active account only by
+  // `isDefault` (`selectActiveAccount`), and `statusDotTone` checks
+  // usage-limited BEFORE `isDefault`, so this is the shape a detached pane can
+  // actually show. An `isDefault:false` account was the wrong fixture: it can
+  // never be the active one, so the assertion proved nothing about production.
+  const limited = renderDetached({
+    account: account({ alias: 'hiby', isDefault: true, usageLimitReached: true }),
   })
-  expect(capped).toContain(toneClasses('danger').dot)
+  expect(limited).toContain(toneClasses('warn').dot)
 })

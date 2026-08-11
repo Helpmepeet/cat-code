@@ -21,8 +21,12 @@
  */
 
 import { randomUUID } from 'crypto'
+import { open } from 'node:fs/promises'
 import z from 'zod/v4'
-import type { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
+import type {
+  AppSessionController,
+  AppSessionPrompt,
+} from '../../src/app-runtime/AppSessionController.js'
 import { createMessageEvent } from '../../src/app-runtime/sessionEvents.js'
 import type {
   AppPermissionRequest,
@@ -62,6 +66,7 @@ import type {
 } from '../../src/web/appSessionProtocol.js'
 import { parseThreadGoal } from '../../src/utils/threadGoal.js'
 import { encodeFrame, FrameDecoder } from '../shared/framing.js'
+import { mintDeliveryTrace, type DeliveryStage, type DeliveryTrace } from '../shared/deliveryTrace.js'
 import {
   checkJsonSafe,
   omitUndefinedObjectProperties,
@@ -71,6 +76,7 @@ import {
   MAX_ANSWER_QUESTIONS,
   MAX_FRAME_BYTES,
   MAX_FRAMES_PER_WINDOW,
+  MAX_GENERATED_IMAGE_PREVIEW_BYTES,
   MAX_HISTORY_REPLAY_BYTES,
   MAX_HISTORY_REPLAY_FRAMES,
   MAX_OUTBOUND_FRAME_BYTES,
@@ -116,7 +122,10 @@ import type { SidecarTasksDomain } from './tasksDomain.js'
 import type { SidecarAgentModeDomain } from './agentModeDomain.js'
 import type { SidecarLeaseDomain } from './leaseDomain.js'
 import type { SidecarPanelTaskReaper } from './panelTaskReaper.js'
-import type { SidecarTaskControlDomain } from './taskControlDomain.js'
+import type {
+  SidecarTaskControlDomain,
+  TaskDismissResult,
+} from './taskControlDomain.js'
 import type { SidecarRunControlsDomain } from './runControlsDomain.js'
 import type { SidecarSessionActionsDomain } from './sessionActionsDomain.js'
 import type { SidecarContextBreakdownDomain } from './contextBreakdownDomain.js'
@@ -133,8 +142,20 @@ import type { SidecarExtensionsDomain } from './extensionsDomain.js'
 import type { SidecarRemoteSettingsDomain } from './remoteSettingsDomain.js'
 import type { PermissionDisplayFacts } from './permissionDomain.js'
 
+/**
+ * Why an outbound frame was refused, one value per refusing site. Closed and
+ * named for the mechanism so a drop record stays a metadata record: the frame's
+ * own content is the thing that must not reach the diagnostics descriptor.
+ */
+export type OutboundDropReason =
+  | 'clone_failed'
+  | 'not_json_safe'
+  | 'secret_key'
+  | 'encode_failed'
+  | 'oversize'
+
 export type SidecarSocketLike = {
-  write(data: Uint8Array): void
+  write(data: Uint8Array, onFlushed?: () => void): void
   end(): void
 }
 
@@ -146,12 +167,66 @@ type Connection = {
   rateCount: number
   /** Removed connections must not route late transport chunks into the engine. */
   closed: boolean
+  deliveryConnectionEpoch: number
 }
+
+/**
+ * Quiet time inside a running turn before it is reported stalled. Long enough
+ * that a slow tool or a long model response is not mistaken for a hang; the
+ * 2026-08-10 turn was quiet for hours.
+ */
+export const DEFAULT_TURN_STALL_MS = 10 * 60 * 1000
+
+/**
+ * What this server can say about a turn without inferring anything: it holds
+ * the active-turn flag, the clock, and whether the turn's `result` message has
+ * come out of the engine yet. `phase` is populated from those and nothing else.
+ */
+export type SidecarTurnLifecycleEvent =
+  | { kind: 'started' }
+  | { kind: 'completed'; durationMs: number; outcome: 'ok' | 'failed' }
+  | {
+      kind: 'stalled'
+      elapsedMs: number
+      /**
+       * `post_result` is the 2026-08-10 shape: the engine emitted its result and
+       * the submit promise never settled, so the stall is on the post-turn path.
+       * `awaiting_result` means the turn itself went quiet. `unknown` means no
+       * engine event has been seen at all since the turn started, which is the
+       * honest answer rather than a guess at which side is hung.
+       */
+      phase: 'awaiting_result' | 'post_result' | 'unknown'
+    }
 
 export type SidecarServerOptions = {
   sessionId: SessionId
   engineSessionId: string
   controller: AppSessionController
+  /**
+   * Optional socket-only wrapper. Production uses this to carry metadata-only
+   * delivery identity without changing the raw `ServerFrame` schema observed by
+   * server tests and other in-process consumers.
+   */
+  wrapOutboundFrame?: (frame: ServerFrame, trace: DeliveryTrace) => unknown
+  /** Causal descriptor emitted at the actual sidecar boundary, never frame data. */
+  onDeliveryStage?: (trace: DeliveryTrace, stage: Extract<DeliveryStage, 'engine.produced' | 'sidecar.received' | 'sidecar.socket.queued' | 'sidecar.socket.sent'>, frameKind: string) => void
+  /**
+   * A frame this server refuses to ship. The `log` lines below stay the live
+   * debugging copy; this is the durable one, because stderr is inherited and
+   * unpersisted (`app/supervisor/supervisor.ts`). Metadata only, per
+   * decisions/OBSERVABILITY-MINIMUM.md §5.
+   */
+  onFrameDropped?: (reason: OutboundDropReason, frameKind: ServerFrame['kind']) => void
+  /**
+   * Turn lifecycle, the highest-value record the 2026-08-10 hang investigation
+   * asked for (item A1). `started`/`completed` pair on every route; `stalled`
+   * fires at most once per turn, after `turnStallMs` with no engine event, and
+   * deliberately leaves the turn hung — killing it would destroy the state that
+   * explains it (OBSERVABILITY-MINIMUM.md §3).
+   */
+  onTurnLifecycle?: (event: SidecarTurnLifecycleEvent) => void
+  /** Quiet interval before a running turn is reported stalled. */
+  turnStallMs?: number
   /**
    * Permissions domain capability (P2-4). Optional because the P1-0 probe
    * fixture has no engine app-state store; when absent, `permission.setMode`
@@ -322,6 +397,8 @@ export type SidecarServerOptions = {
    * so production never injects and a test never needs the Haiku round-trip.
    */
   titleDeps?: SessionTitleDeps
+  /** Test seam for the live generated-image preview read. */
+  readGeneratedImage?: (filePath: string) => Promise<Uint8Array | null>
   /** Structured logger; defaults to stderr. Never logs secrets. */
   log?: (line: string) => void
 }
@@ -372,7 +449,27 @@ export class SidecarServer {
   private readonly onPark: (() => void) | null
   /** P4-6 title-rider — the one-shot AI-title generator for this session. */
   private readonly titleGenerator: SessionTitleGenerator
+  private readonly readGeneratedImage: (
+    filePath: string,
+  ) => Promise<Uint8Array | null>
+  private readonly generatedImageToolUseIds = new Set<string>()
   private readonly log: (line: string) => void
+  private readonly wrapOutboundFrame: ((frame: ServerFrame, trace: DeliveryTrace) => unknown) | null
+  private readonly onDeliveryStage: ((trace: DeliveryTrace, stage: Extract<DeliveryStage, 'engine.produced' | 'sidecar.received' | 'sidecar.socket.queued' | 'sidecar.socket.sent'>, frameKind: string) => void) | null
+  private readonly onFrameDropped: ((reason: OutboundDropReason, frameKind: ServerFrame['kind']) => void) | null
+  private readonly onTurnLifecycle: ((event: SidecarTurnLifecycleEvent) => void) | null
+  private readonly turnStallMs: number
+  /** Turn-scoped stall state; all of it is reset by the next `startTurn`. */
+  private turnStartedAtMs = 0
+  private turnLastEventAtMs = 0
+  private turnEventCount = 0
+  private turnResultSeen = false
+  private turnStallReported = false
+  private turnStallTimer: ReturnType<typeof setTimeout> | null = null
+  private readonly deliveryStreamEpoch = randomUUID()
+  private readonly deliveryProcessInstanceId = randomUUID()
+  private deliverySequence = 0
+  private deliveryConnectionEpoch = 0
   private readonly connections = new Set<Connection>()
   private unsubscribe: (() => void) | null = null
   private unsubscribePermissionContext: (() => void) | null = null
@@ -460,13 +557,25 @@ export class SidecarServer {
       resumed: options.resumed ?? false,
       ...(options.titleDeps ? { deps: options.titleDeps } : {}),
     })
+    this.readGeneratedImage =
+      options.readGeneratedImage ?? readGeneratedImageForPreview
     this.log = options.log ?? (line => process.stderr.write(`${line}\n`))
+    this.wrapOutboundFrame = options.wrapOutboundFrame ?? null
+    this.onDeliveryStage = options.onDeliveryStage ?? null
+    this.onFrameDropped = options.onFrameDropped ?? null
+    this.onTurnLifecycle = options.onTurnLifecycle ?? null
+    this.turnStallMs = options.turnStallMs ?? DEFAULT_TURN_STALL_MS
 
     // Subscribe once; broadcast every event to all connected clients as a raw
     // `event` frame. (P1-0 has one client, but the fan-out matches the WS
     // server's broadcast model.)
     this.unsubscribe = this.controller.subscribe(event => {
+      // Before the broadcast: `broadcastEvent` returns early with no clients
+      // attached, and a turn that hangs with the window closed is exactly the
+      // case this needs to see.
+      this.observeTurnEvent(event)
       this.broadcastEvent(event)
+      this.observeGeneratedImageEvent(event)
       // NO per-turn context-breakdown refresh. The analysis is not cheap enough
       // to be automatic: `analyzeContextUsage` fans out to ~10
       // `countTokensWithFallback` calls (system prompt, tool schemas, each memory
@@ -601,6 +710,7 @@ export class SidecarServer {
       rateWindowStart: Date.now(),
       rateCount: 0,
       closed: false,
+      deliveryConnectionEpoch: ++this.deliveryConnectionEpoch,
     }
     this.connections.add(connection)
     // Re-home the `app.ready` handshake onto IPC (AppSessionWebSocketServer.ts
@@ -614,7 +724,7 @@ export class SidecarServer {
       goalSnapshot: this.controller.getGoalSnapshot(),
       pendingPermissionRequests: this.controller.getPendingPermissionRequests(),
     }
-    const preparedPayload = this.prepareOutboundPayload(readyPayload, 'ready payload')
+    const preparedPayload = this.prepareOutboundPayload(readyPayload, 'ready', 'payload')
     if (preparedPayload) {
       this.send(connection, {
         kind: 'ready',
@@ -740,7 +850,8 @@ export class SidecarServer {
       const message = this.history[i]!
       const prepared = this.prepareOutboundPayload(
         createMessageEvent(message),
-        'history replay event',
+        'event',
+        'history replay',
       )
       if (!prepared) {
         // Un-serializable restored message (should not happen for
@@ -832,6 +943,7 @@ export class SidecarServer {
   close(): void {
     this.closed = true
     this.clearIdleTimer()
+    this.clearTurnStallTimer()
     this.unsubscribe?.()
     this.unsubscribe = null
     this.unsubscribePermissionContext?.()
@@ -1174,7 +1286,7 @@ export class SidecarServer {
     // Re-read at drain time: the turn we were scheduled behind may have drained
     // this prompt itself on its way out.
     const command = dequeue(isDeliverableParentPrompt)
-    if (!command || typeof command.value !== 'string') return false
+    if (!command) return false
 
     // The user already watched this leave the composer and saw it in the
     // transcript, so a turn that never accepts it must not end in silence.
@@ -1184,7 +1296,7 @@ export class SidecarServer {
     // the next boundary. Retry ONCE per prompt: `startTurn`'s finalizer
     // schedules the next drain, so an unconditional requeue on a turn that
     // always rejects would spin at microtask speed.
-    const retryKey = command.uuid ?? command.value
+    const retryKey = command.uuid ?? promptText(command.value)
     let persisted = false
     const started = this.startTurn({
       prompt: command.value,
@@ -1298,7 +1410,7 @@ export class SidecarServer {
     onRejected,
     onSettled,
   }: {
-    prompt: string
+    prompt: AppSessionPrompt
     uuid?: string
     isMeta?: boolean
     goalSnapshot?: ReturnType<typeof parseThreadGoal>
@@ -1317,6 +1429,7 @@ export class SidecarServer {
     if (this.parking || this.activeTurn) return false
     this.runControls?.lockProviderSwitches()
     this.activeTurn = true
+    this.beginTurnObservation()
     if (announcePrompt) {
       this.broadcastPromptMessage(prompt, uuid, isMeta, origin)
     }
@@ -1332,6 +1445,7 @@ export class SidecarServer {
       })
     } catch (error) {
       this.activeTurn = false
+      this.endTurnObservation('failed')
       this.scheduleBoundaryDrain()
       return false
     }
@@ -1345,9 +1459,10 @@ export class SidecarServer {
       })
       .finally(() => {
         this.activeTurn = false
+        this.endTurnObservation(rejection ? 'failed' : 'ok')
         onSettled?.(rejection)
         if (generateTitle) {
-          void this.titleGenerator.maybeGenerate(prompt, title =>
+          void this.titleGenerator.maybeGenerate(promptText(prompt), title =>
             this.broadcastSessionTitle(title),
           )
         }
@@ -1357,12 +1472,89 @@ export class SidecarServer {
   }
 
   /**
+   * A1 (`docs/reports/2026-08-10-overnight-hang-log-request.md`) — a turn that
+   * hangs and a session sitting idle wrote the same log: nothing. Start and
+   * completion pair on every route out of `startTurn`, including the synchronous
+   * throw, so an unpaired `started` means the turn really never finished.
+   */
+  private beginTurnObservation(): void {
+    const startedAt = Date.now()
+    this.turnStartedAtMs = startedAt
+    this.turnLastEventAtMs = startedAt
+    this.turnEventCount = 0
+    this.turnResultSeen = false
+    this.turnStallReported = false
+    this.onTurnLifecycle?.({ kind: 'started' })
+    this.armTurnStallTimer(this.turnStallMs)
+  }
+
+  private endTurnObservation(outcome: 'ok' | 'failed'): void {
+    if (this.turnStartedAtMs === 0) return
+    const durationMs = Date.now() - this.turnStartedAtMs
+    this.turnStartedAtMs = 0
+    this.clearTurnStallTimer()
+    this.onTurnLifecycle?.({ kind: 'completed', durationMs, outcome })
+  }
+
+  /** Engine liveness for the running turn, and the one phase fact we hold. */
+  private observeTurnEvent(event: AppSessionEvent): void {
+    if (this.turnStartedAtMs === 0) return
+    // Messages ONLY. `turn.status` is this controller's own bookkeeping and it
+    // fires at both ends of every turn, so counting it as liveness would have
+    // reset the quiet clock without the engine having produced anything.
+    if (event.type !== 'message') return
+    this.turnEventCount++
+    this.turnLastEventAtMs = Date.now()
+    if (event.message.type === 'result') this.turnResultSeen = true
+  }
+
+  private armTurnStallTimer(delayMs: number): void {
+    this.clearTurnStallTimer()
+    if (this.turnStallMs <= 0) return
+    const timer = setTimeout(() => {
+      this.turnStallTimer = null
+      if (this.turnStartedAtMs === 0 || this.turnStallReported) return
+      const quietMs = Date.now() - this.turnLastEventAtMs
+      // A long turn is not a stalled one, and neither is one waiting on a
+      // permission the user has not answered: that wait is designed, and its
+      // pending request is state this server directly holds. Re-arming for the
+      // remaining quiet window is not a repeated record: nothing is written on
+      // this path, and the report below still happens at most once per turn (§5).
+      if (quietMs < this.turnStallMs || this.controller.getPendingPermissionRequests().length > 0) {
+        this.armTurnStallTimer(quietMs < this.turnStallMs ? this.turnStallMs - quietMs : this.turnStallMs)
+        return
+      }
+      this.turnStallReported = true
+      this.onTurnLifecycle?.({
+        kind: 'stalled',
+        elapsedMs: Date.now() - this.turnStartedAtMs,
+        // Read off held state only: whether the engine emitted this turn's
+        // result, and whether it emitted anything at all. Never inferred from
+        // the shape of the silence (OBSERVABILITY-MINIMUM.md §4).
+        phase: this.turnEventCount === 0
+          ? 'unknown'
+          : this.turnResultSeen ? 'post_result' : 'awaiting_result',
+      })
+      // Deliberately NOT re-armed and deliberately not aborting the turn: the
+      // hung state is the evidence, and killing it destroys what explains it.
+    }, delayMs)
+    timer.unref?.()
+    this.turnStallTimer = timer
+  }
+
+  private clearTurnStallTimer(): void {
+    if (!this.turnStallTimer) return
+    clearTimeout(this.turnStallTimer)
+    this.turnStallTimer = null
+  }
+
+  /**
    * The transcript row for a prompt the user sent. Raw-fidelity `user` event,
    * identical whether the prompt starts a turn or is queued into a running one,
    * so the renderer needs no new frame kind and no new variant to display it.
    */
   private broadcastPromptMessage(
-    prompt: string,
+    prompt: AppSessionPrompt,
     uuid: string,
     isMeta?: boolean,
     origin?: MessageOrigin,
@@ -1395,7 +1587,7 @@ export class SidecarServer {
    * tool round drains it, `drainOneQueuedPrompt` starts a turn for it with
    * `announcePrompt: false` so it is never printed twice.
    */
-  private enqueueMidTurnPrompt(prompt: string, isMeta?: boolean): void {
+  private enqueueMidTurnPrompt(prompt: AppSessionPrompt, isMeta?: boolean): void {
     const uuid = randomUUID()
     this.broadcastPromptMessage(prompt, uuid, isMeta)
     enqueue({
@@ -1453,7 +1645,12 @@ export class SidecarServer {
     // T7 (F4) — prompt cap in UTF-8 BYTES (not JS chars), consistent with the
     // frame byte cap so a multibyte prompt cannot advertise a size the frame
     // cannot carry.
-    const promptBytes = Buffer.byteLength(message.prompt, 'utf8')
+    const promptBytes = Buffer.byteLength(
+      typeof message.prompt === 'string'
+        ? message.prompt
+        : JSON.stringify(message.prompt),
+      'utf8',
+    )
     if (promptBytes > MAX_PROMPT_BYTES) {
       this.sendError(
         connection,
@@ -1943,6 +2140,10 @@ export class SidecarServer {
    * `stopTask` is async; the result frame follows the awaited kill. The renderer
    * authors ONLY the target `taskId`; the engine re-resolves it against the live
    * store, so an unknown/terminal target fails closed with `ok:false` (no crash).
+   *
+   * `task.dismiss` (CC-32 follow-up) rides the identical path with the identical
+   * shape; only the domain call differs, and its refusals (unknown / still running
+   * / not a panel worker) are decided against the same live store.
    */
   private async handleTaskControlVerb(
     connection: Connection,
@@ -1975,7 +2176,10 @@ export class SidecarServer {
     }
 
     const verb = parsed.data as TaskControlVerbMessage
-    const result = await this.taskControl.stop(verb.taskId)
+    const result =
+      verb.type === 'task.dismiss'
+        ? await this.dismissWorker(verb.taskId)
+        : await this.taskControl.stop(verb.taskId)
     this.send(connection, {
       kind: 'task-control.result',
       protocolVersion: PROTOCOL_VERSION,
@@ -1988,6 +2192,42 @@ export class SidecarServer {
     // No explicit snapshot re-broadcast here — on a successful stop, `stopTask`
     // mutated the store, and the tasks/agent-mode store-subscriptions (constructor)
     // re-emit `tasks.snapshot` / `agent-mode.snapshot` with the task now `killed`.
+    // A dismiss needs one more step, which `dismissWorker` owns.
+  }
+
+  /**
+   * The two-plane half of a dismiss (CC-32 follow-up). `taskControl` can only see
+   * the LIVE `AppState.tasks`, but a worker's roster row has a second source: the
+   * persisted agent-mode plane, which `agentModeSnapshot` unions in whenever no
+   * live worker MASKS it by handle (`agentModeDomain.ts` union policy). Retiring
+   * the row therefore takes both planes, and only this layer sees both.
+   *
+   * `not_found` is consequently NOT a failed dismiss. It means nothing live holds
+   * the row, which leaves the persisted twin as the only thing still rendering it
+   * — exactly what the suppression below retires. Treating it as a refusal made
+   * the control dead on the commonest shape there is: `readSessionState` stamps
+   * `origin: worker.origin ?? 'current'` (`src/agent-mode/sessionState.ts:672`), so
+   * every worker the reaper has already evicted comes back as a persisted row that
+   * looks current, offers Dismiss, and refused it. `still_running` and
+   * `unsupported_type` stay refusals: there the engine holds real state, and
+   * hiding a row it still owns would be a display lie.
+   *
+   * The explicit re-broadcast is required rather than redundant: on this path no
+   * store mutation happens at all, so no subscription fires and nothing else would
+   * carry the suppression to the renderer.
+   */
+  private async dismissWorker(taskId: string): Promise<TaskDismissResult> {
+    if (!this.taskControl) {
+      return { ok: false, message: 'Could not dismiss the worker.' }
+    }
+    const result = await this.taskControl.dismiss(taskId)
+    const retiresRow = result.ok || result.refusal === 'not_found'
+    if (!retiresRow || !this.agentMode) {
+      return result
+    }
+    this.agentMode.noteWorkerDismissed(taskId)
+    void this.broadcastAgentModeSnapshot()
+    return result.ok ? result : { ok: true, message: 'Dismissed worker.' }
   }
 
   /**
@@ -2572,7 +2812,17 @@ export class SidecarServer {
    * Outbound (engine → client): raw-forward, JSON-safe, clone-on-serialize.
    * --------------------------------------------------------------------- */
 
-  private prepareOutboundPayload<T>(payload: T, contextName: string): T | null {
+  /**
+   * `frameKind` is the frame this payload was being built for, so a drop record
+   * names a real `ServerFrame` kind rather than the free-form context string.
+   * `detail` only sharpens the stderr line.
+   */
+  private prepareOutboundPayload<T>(
+    payload: T,
+    frameKind: ServerFrame['kind'],
+    detail?: string,
+  ): T | null {
+    const contextName = detail ? `${frameKind} ${detail}` : frameKind
     // Landmine 2 (immutability): structuredClone
     let cloned: T
     try {
@@ -2583,6 +2833,7 @@ export class SidecarServer {
           error instanceof Error ? error.message : String(error)
         }`,
       )
+      this.onFrameDropped?.('clone_failed', frameKind)
       return null
     }
 
@@ -2596,6 +2847,7 @@ export class SidecarServer {
       this.log(
         `[sidecar] dropped non-JSON-safe payload for ${contextName} at ${safety.path}: ${safety.reason}`,
       )
+      this.onFrameDropped?.('not_json_safe', frameKind)
       return null
     }
 
@@ -2607,7 +2859,7 @@ export class SidecarServer {
       return
     }
 
-    const prepared = this.prepareOutboundPayload(event, `event type=${event.type}`)
+    const prepared = this.prepareOutboundPayload(event, 'event', `type=${event.type}`)
     if (!prepared) {
       return
     }
@@ -2620,6 +2872,41 @@ export class SidecarServer {
     }
     for (const connection of this.connections) {
       this.send(connection, frame)
+    }
+  }
+
+  private observeGeneratedImageEvent(event: AppSessionEvent): void {
+    for (const toolUseId of generatedImageToolUseIds(event)) {
+      this.generatedImageToolUseIds.add(toolUseId)
+    }
+    const result = generatedImageResult(event)
+    if (!result || !this.generatedImageToolUseIds.delete(result.toolUseId)) return
+    void this.broadcastGeneratedImagePreview(result)
+  }
+
+  private async broadcastGeneratedImagePreview(result: {
+    toolUseId: string
+    filePath: string
+    mediaType: 'image/jpeg' | 'image/png' | 'image/webp'
+  }): Promise<void> {
+    try {
+      const bytes = await this.readGeneratedImage(result.filePath)
+      if (!bytes || bytes.byteLength === 0) return
+      const frame: ServerFrame = {
+        kind: 'generated-image-preview',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        toolUseId: result.toolUseId,
+        mediaType: result.mediaType,
+        data: Buffer.from(bytes).toString('base64'),
+      }
+      for (const connection of this.connections) this.send(connection, frame)
+    } catch (error) {
+      this.log(
+        `[sidecar] could not load generated image preview: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
     }
   }
 
@@ -2659,7 +2946,8 @@ export class SidecarServer {
           permissionClassifierEnabled: false,
         },
       ),
-      'permission.context snapshot',
+      'permission.context',
+      'snapshot',
     )
     if (!snapshot) {
       return null
@@ -2911,16 +3199,7 @@ export class SidecarServer {
     }
     try {
       const raw = await this.agentMode.getSnapshot()
-      const snapshot = this.prepareOutboundPayload(raw, 'agent-mode.snapshot')
-      if (!snapshot) {
-        return
-      }
-      this.send(connection, {
-        kind: 'agent-mode.snapshot',
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: this.sessionId,
-        agentMode: snapshot,
-      })
+      this.sendAgentModeSnapshotPayload(connection, raw)
     } catch (error) {
       this.log(
         `[sidecar] agent-mode.snapshot send skipped (${
@@ -2930,12 +3209,37 @@ export class SidecarServer {
     }
   }
 
-  private async broadcastAgentModeSnapshot(): Promise<void> {
-    if (this.connections.size === 0) {
+  private sendAgentModeSnapshotPayload(
+    connection: Connection,
+    raw: Awaited<ReturnType<SidecarAgentModeDomain['getSnapshot']>>,
+  ): void {
+    const snapshot = this.prepareOutboundPayload(raw, 'agent-mode.snapshot')
+    if (!snapshot) {
       return
     }
-    for (const connection of this.connections) {
-      await this.sendAgentModeSnapshot(connection)
+    this.send(connection, {
+      kind: 'agent-mode.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      agentMode: snapshot,
+    })
+  }
+
+  private async broadcastAgentModeSnapshot(): Promise<void> {
+    if (!this.agentMode || this.connections.size === 0) {
+      return
+    }
+    try {
+      const raw = await this.agentMode.getSnapshot()
+      for (const connection of this.connections) {
+        this.sendAgentModeSnapshotPayload(connection, raw)
+      }
+    } catch (error) {
+      this.log(
+        `[sidecar] agent-mode.snapshot send skipped (${
+          error instanceof Error ? error.message : String(error)
+        })`,
+      )
     }
   }
 
@@ -3388,6 +3692,9 @@ export class SidecarServer {
         this.log(
           `[sidecar] BLOCKED outbound frame carrying secret key "${secret.key}" at ${secret.path} (F6)`,
         )
+        // The offending key/path stays on stderr: the durable record gets the
+        // kind and the mechanism only.
+        this.onFrameDropped?.('secret_key', frame.kind)
         this.sendError(
           connection,
           undefined,
@@ -3399,15 +3706,57 @@ export class SidecarServer {
       }
     }
 
+    const trace = this.wrapOutboundFrame
+      ? mintDeliveryTrace(
+        ++this.deliverySequence,
+        this.deliveryStreamEpoch,
+        this.deliveryProcessInstanceId,
+        undefined,
+        undefined,
+        connection.deliveryConnectionEpoch,
+      )
+      : null
+    // These are emitted before encoding and write, respectively.  They are not
+    // reconstructed by Electron after receipt, so a failed encode/write leaves
+    // an honest causal trail.
+    if (trace) {
+      this.onDeliveryStage?.(trace, 'engine.produced', frame.kind)
+      this.onDeliveryStage?.(trace, 'sidecar.received', frame.kind)
+    }
+
     let encoded: Buffer
     try {
-      encoded = encodeFrame(frame)
+      const payload = this.wrapOutboundFrame
+        ? this.wrapOutboundFrame(frame, trace!)
+        : frame
+      encoded = encodeFrame(payload)
+      // The delivery envelope is metadata-only and optional by contract, so it
+      // must never cost a frame its delivery. A raw frame that fits below the
+      // cap keeps its place on the wire; only the trace is dropped.
+      if (encoded.byteLength > MAX_OUTBOUND_FRAME_BYTES && payload !== frame) {
+        const bare = encodeFrame(frame)
+        if (bare.byteLength <= MAX_OUTBOUND_FRAME_BYTES) {
+          encoded = bare
+          // Main mints a fresh trace for an envelope-less frame, so the stages
+          // already emitted here and the ones recorded there describe the same
+          // delivery under two ids. Main records that distinctly when it mints
+          // one. This line is live-debugging detail only: it reaches the
+          // descriptor through the legacy path, which keeps a category and drops
+          // the text, so the durable record does not distinguish this from any
+          // other sidecar failure. Source-side attribution needs its own
+          // category or delivery stage, which neither vocabulary has yet.
+          this.log(
+            `[sidecar] delivery envelope dropped for oversize frame kind=${frame.kind}: trace overflow, source and host stages will not share a trace id`,
+          )
+        }
+      }
     } catch (error) {
       this.log(
         `[sidecar] failed to encode frame kind=${frame.kind}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       )
+      this.onFrameDropped?.('encode_failed', frame.kind)
       return
     }
 
@@ -3417,11 +3766,15 @@ export class SidecarServer {
       this.log(
         `[sidecar] dropped oversized outbound frame kind=${frame.kind} (${encoded.byteLength} > ${MAX_OUTBOUND_FRAME_BYTES})`,
       )
+      this.onFrameDropped?.('oversize', frame.kind)
       return
     }
 
     try {
-      connection.socket.write(encoded)
+      if (trace) this.onDeliveryStage?.(trace, 'sidecar.socket.queued', frame.kind)
+      connection.socket.write(encoded, () => {
+        if (trace) this.onDeliveryStage?.(trace, 'sidecar.socket.sent', frame.kind)
+      })
     } catch (error) {
       this.log(
         `[sidecar] write failed, dropping connection: ${
@@ -3543,6 +3896,98 @@ function redactErrorMessage(message: string): string {
     : stripped
 }
 
+function promptText(prompt: AppSessionPrompt): string {
+  if (typeof prompt === 'string') return prompt
+  return prompt
+    .flatMap(block => (block.type === 'text' ? [block.text] : []))
+    .join('\n')
+}
+
+async function readGeneratedImageForPreview(
+  filePath: string,
+): Promise<Uint8Array | null> {
+  const file = await open(filePath, 'r')
+  try {
+    const info = await file.stat()
+    if (!info.isFile() || info.size > MAX_GENERATED_IMAGE_PREVIEW_BYTES) return null
+    const bytes = Buffer.allocUnsafe(info.size)
+    let offset = 0
+    while (offset < bytes.length) {
+      const read = await file.read(bytes, offset, bytes.length - offset, offset)
+      if (read.bytesRead === 0) break
+      offset += read.bytesRead
+    }
+    const overflow = Buffer.allocUnsafe(1)
+    const extra = await file.read(overflow, 0, 1, offset)
+    if (extra.bytesRead > 0) return null
+    return bytes.subarray(0, offset)
+  } finally {
+    await file.close()
+  }
+}
+
+function generatedImageToolUseIds(event: AppSessionEvent): string[] {
+  if (event.type !== 'message' || event.message.type !== 'assistant') return []
+  const content = event.message.message?.content
+  if (!Array.isArray(content)) return []
+  return content.flatMap(block =>
+    typeof block === 'object' &&
+    block !== null &&
+    'type' in block &&
+    block.type === 'tool_use' &&
+    'name' in block &&
+    block.name === 'GenerateImage' &&
+    'id' in block &&
+    typeof block.id === 'string'
+      ? [block.id]
+      : [],
+  )
+}
+
+function generatedImageResult(event: AppSessionEvent): {
+  toolUseId: string
+  filePath: string
+  mediaType: 'image/jpeg' | 'image/png' | 'image/webp'
+} | null {
+  if (event.type !== 'message' || event.message.type !== 'user') return null
+  const content = event.message.message?.content
+  if (!Array.isArray(content)) return null
+  const toolUseResult = event.message.tool_use_result
+  if (
+    typeof toolUseResult !== 'object' ||
+    toolUseResult === null ||
+    Array.isArray(toolUseResult)
+  ) {
+    return null
+  }
+  const output = toolUseResult as Record<string, unknown>
+  const filePath = output['filePath']
+  const outputFormat = output['outputFormat']
+  if (typeof filePath !== 'string') return null
+  const mediaType =
+    outputFormat === 'png'
+      ? 'image/png'
+      : outputFormat === 'jpeg'
+        ? 'image/jpeg'
+        : outputFormat === 'webp'
+          ? 'image/webp'
+          : null
+  if (!mediaType) return null
+  for (const block of content) {
+    if (
+      typeof block === 'object' &&
+      block !== null &&
+      'type' in block &&
+      block.type === 'tool_result' &&
+      'tool_use_id' in block &&
+      typeof block.tool_use_id === 'string'
+    ) {
+      return { toolUseId: block.tool_use_id, filePath, mediaType }
+    }
+  }
+  return null
+}
+
 /**
  * F10 — strict per-type key allowlist. The reused Zod schemas strip unknown
  * keys; this rejects a frame that carries any key not in the renderer-facing
@@ -3596,6 +4041,9 @@ function checkStrictKeys(message: unknown): string | null {
     // P4-8b task-control STOP verb (app-owned; see TASK_CONTROL_VERB_TYPES). The
     // renderer authors ONLY the target taskId — any other key is rejected.
     ['task.stop', new Set(['type', 'requestId', 'taskId'])],
+    // The terminal counterpart (CC-32 follow-up): same single renderer-authored
+    // key, so a forged `evictAfter`/`retain` never reaches the engine's guards.
+    ['task.dismiss', new Set(['type', 'requestId', 'taskId'])],
     // P4-24c composer run-control verbs (app-owned; see RUN_CONTROL_VERB_TYPES). The
     // renderer authors ONLY the value/selection — any other key is rejected.
     ['model.set', new Set(['type', 'requestId', 'model'])],
@@ -3852,11 +4300,21 @@ const agentModeSetMessageSchema = z.object({
  * only, never trusting the frame. A non-string/absent `taskId` is rejected here
  * fail-closed before the domain runs any kill.
  */
-const taskControlVerbMessageSchema = z.object({
-  type: z.literal('task.stop'),
-  requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
-  taskId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
-})
+const taskControlVerbMessageSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('task.stop'),
+    requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+    taskId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  }),
+  // The dismiss half carries the SAME renderer-authored surface (a target id and
+  // nothing else); which of the two verbs is legal for a given task is the
+  // domain's live-store business check, never the boundary's.
+  z.object({
+    type: z.literal('task.dismiss'),
+    requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+    taskId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  }),
+])
 
 /**
  * P4-24c — sidecar-LOCAL schema for the composer run-control set verbs (protocol.ts:

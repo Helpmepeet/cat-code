@@ -30,6 +30,10 @@ import {
   getEnabledSettingSources,
   type SettingSource,
 } from './constants.js'
+import {
+  AUTO_MODE_DEFAULTS_SENTINEL,
+  autoModeSectionDropsDefaults,
+} from '../permissions/autoModeDefaultsSplice.js'
 import { markInternalWrite } from './internalWrites.js'
 import {
   getManagedFilePath,
@@ -1082,18 +1086,31 @@ export function getUseAutoModeDuringPlan(): boolean {
  * otherwise inject classifier allow/deny rules (RCE risk).
  */
 export function getAutoModeConfig():
-  | { allow?: string[]; soft_deny?: string[]; environment?: string[] }
+  | {
+      model?: string
+      maxRetries?: number
+      allow?: string[]
+      soft_deny?: string[]
+      hard_deny?: string[]
+      environment?: string[]
+    }
   | undefined {
   if (feature('TRANSCRIPT_CLASSIFIER')) {
     const schema = z.object({
+      model: z.string().optional(),
+      maxRetries: z.number().int().min(0).optional(),
       allow: z.array(z.string()).optional(),
       soft_deny: z.array(z.string()).optional(),
+      hard_deny: z.array(z.string()).optional(),
       deny: z.array(z.string()).optional(),
       environment: z.array(z.string()).optional(),
     })
 
+    let model: string | undefined
+    let maxRetries: number | undefined
     const allow: string[] = []
     const soft_deny: string[] = []
+    const hard_deny: string[] = []
     const environment: string[] = []
 
     for (const source of [
@@ -1108,8 +1125,23 @@ export function getAutoModeConfig():
         (settings as Record<string, unknown>).autoMode,
       )
       if (result.success) {
+        if (
+          feature('AUTO_MODE_UPSTREAM_PORT') &&
+          result.data.model !== undefined
+        ) {
+          model = result.data.model
+        }
+        if (
+          feature('AUTO_MODE_UPSTREAM_PORT') &&
+          result.data.maxRetries !== undefined
+        ) {
+          maxRetries = result.data.maxRetries
+        }
         if (result.data.allow) allow.push(...result.data.allow)
         if (result.data.soft_deny) soft_deny.push(...result.data.soft_deny)
+        if (feature('AUTO_MODE_UPSTREAM_PORT') && result.data.hard_deny) {
+          hard_deny.push(...result.data.hard_deny)
+        }
         if (process.env.USER_TYPE === 'ant') {
           if (result.data.deny) soft_deny.push(...result.data.deny)
         }
@@ -1118,15 +1150,44 @@ export function getAutoModeConfig():
       }
     }
 
-    if (allow.length > 0 || soft_deny.length > 0 || environment.length > 0) {
+    if (
+      model !== undefined ||
+      maxRetries !== undefined ||
+      allow.length > 0 ||
+      soft_deny.length > 0 ||
+      hard_deny.length > 0 ||
+      environment.length > 0
+    ) {
       return {
+        ...(model !== undefined && { model }),
+        ...(maxRetries !== undefined && { maxRetries }),
         ...(allow.length > 0 && { allow }),
         ...(soft_deny.length > 0 && { soft_deny }),
+        ...(hard_deny.length > 0 && { hard_deny }),
         ...(environment.length > 0 && { environment }),
       }
     }
   }
   return undefined
+}
+
+export function warnAutoModeDefaultsAtStartup(): void {
+  if (!feature('AUTO_MODE_UPSTREAM_PORT')) return
+
+  const config = getAutoModeConfig()
+  for (const [section, entries] of [
+    ['allow', config?.allow],
+    ['soft_deny', config?.soft_deny],
+    ['hard_deny', config?.hard_deny],
+    ['environment', config?.environment],
+  ] as const) {
+    if (!autoModeSectionDropsDefaults(entries)) continue
+    process.stderr.write(
+      `Warning: settings.autoMode.${section} does not include "${AUTO_MODE_DEFAULTS_SENTINEL}", ` +
+        `so its ${entries?.length ?? 0} configured entries replace the shipped rules. ` +
+        `Add "${AUTO_MODE_DEFAULTS_SENTINEL}" to keep them.\n`,
+    )
+  }
 }
 
 export function rawSettingsContainsKey(key: string): boolean {

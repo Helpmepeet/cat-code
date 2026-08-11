@@ -24,6 +24,7 @@ import {
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { spawn } from 'node:child_process'
 import { existsSync, realpathSync, statSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 
@@ -55,9 +56,16 @@ import {
 } from './attachmentGate.js'
 import {
   createCwdTokenStore,
+  createRendererHealthFlightRecorder,
+  createRendererHealthMonitor,
+  createRendererRecoveryPolicy,
   createStartupTimers,
+  createWindowVisibilityTracker,
   isTerminalLifecycleFrame,
   parseVisibleSessions,
+  RENDERER_RECOVERY_MAX_ATTEMPTS,
+  type RendererDeathReason,
+  type WindowVisibilityReason,
   SIDECAR_RUNTIME_ARGS,
   selectTranscriptBackfillCandidates,
   supervisorEventToServerFrame,
@@ -112,6 +120,11 @@ import {
   type NavigationConfig,
 } from './navigationPolicy.js'
 import { MAX_SUGGESTION_SELECTIONS } from '../shared/limits.js'
+import { createOperationalLogSink } from './operationalLogSink.js'
+import { createOperationalRecord } from '../shared/operationalLog.js'
+import { createDeliveryTraceSink, deliveryMessageKindOfFrame } from './deliveryTraceSink.js'
+import { buildDiagnosticsBundle } from './diagnosticsBundle.js'
+import { mintDeliveryTrace, replayDeliveryTrace, type DeliveryAcknowledgement, type DeliveryStage } from '../shared/deliveryTrace.js'
 import {
   ACCOUNT_VERB_TYPES,
   PERMISSION_SET_MODE_MODES,
@@ -168,6 +181,12 @@ const CH_PING = 'catcode:ping'
 const CH_RESTART = 'catcode:restart'
 const CH_SERVER_FRAME = 'catcode:server-frame'
 const CH_RENDERER_READY = 'catcode:renderer-ready'
+const CH_DELIVERY_ACK = 'catcode:delivery-ack'
+const CH_RENDERER_FAULT = 'catcode:renderer-fault'
+const CH_OPEN_LOGS = 'catcode:open-logs'
+const CH_SAVE_DIAGNOSTICS = 'catcode:save-diagnostics'
+const CH_DELIVERY_HEALTH_PROBE = 'catcode:delivery-health-probe'
+const CH_DELIVERY_HEALTH_RESPONSE = 'catcode:delivery-health-response'
 
 // App session ids are supervisor-minted UUIDs. Validate at the single frame
 // forwarding choke point so malformed renderer payloads cannot mint an
@@ -199,6 +218,246 @@ if (IS_DEV) app.setName('Cat Code Dev')
 const APP_ICON_PATH = join(__dirname, '..', 'resources', 'icon.png')
 const VITE_REACT_PREAMBLE_CSP_HASH =
   "'sha256-Z2/iFzh9VMlVkEOar1f/oSHWwQk3ve1qk/C2WdsC4Xk='"
+
+// Main is the persistence owner. Other desktop planes may retain their useful
+// development stderr, but only this bounded, redacted record stream is durable.
+const operationalLog = createOperationalLogSink({ configDir: defaultRegistryDir() })
+process.env.CATCODE_OPERATIONAL_LAUNCH_ID = operationalLog.launchId
+if (IS_DEV) {
+  process.stderr.write(`[main] desktop diagnostics: ${operationalLog.getDirectory()}\n`)
+}
+const deliveryTrace = createDeliveryTraceSink({
+  configDir: defaultRegistryDir(),
+  launchId: operationalLog.launchId,
+})
+const deliverySequences = new Map<SessionId, number>()
+let rendererDocumentId: string = randomUUID()
+let rendererSubscriptionEpoch = 0
+const rendererHealth = createRendererHealthMonitor()
+const rendererHealthFlightRecorder = createRendererHealthFlightRecorder()
+let rendererHealthTimer: ReturnType<typeof setInterval> | null = null
+// Last visibility a renderer response reported. A missed probe carries no
+// payload of its own, so this is the only way an outage record can say whether
+// the window was hidden (throttled timers) when it went quiet.
+let lastKnownRendererVisible: boolean | null = null
+// True from `render-process-gone` until the next document finishes loading.
+// `webContents.isDestroyed()` stays false for a crashed-but-open window, so any
+// send in that state throws "Render frame was disposed" (observed 2026-08-09:
+// the health probe threw every 5 seconds against a dead renderer). Every
+// renderer send checks this flag alongside `isDestroyed`.
+let rendererGone = false
+let rendererRecovering = false
+const rendererRecovery = createRendererRecoveryPolicy()
+let rendererRecoveryDialogShown = false
+let rendererFaultWindowStartedAt = Date.now()
+let rendererFaultCount = 0
+
+function logOperational(
+  event: Parameters<typeof operationalLog.write>[0]['event'],
+  level: Parameters<typeof operationalLog.write>[0]['level'],
+  fields: Record<string, string | number | boolean | null> = {},
+  appSessionId?: string,
+): void {
+  operationalLog.write({
+    event,
+    level,
+    process: 'main',
+    ...(appSessionId ? { appSessionId } : {}),
+    fields,
+  })
+}
+
+/**
+ * Write the buffered health readings the 30s sampling dedup would have dropped.
+ * Called only where the renderer has already failed, so the ring costs bytes in
+ * anomaly neighbourhoods and nowhere else.
+ */
+function flushRendererHealthFlightRecorder(reason: string): void {
+  const ring = rendererHealthFlightRecorder.flush()
+  if (!ring) return
+  logOperational('renderer.health.flight_recorder', 'error', {
+    reason,
+    count: ring.count,
+    samples: ring.samples,
+  })
+}
+
+/** Each disposable engine-graph worker gets a distinct process timeline. */
+function createWorkerLifecycleLogger(role: string): (event: {
+  phase: 'started' | 'exited'
+  pid: number
+  code?: number | null
+  signal?: NodeJS.Signals | null
+}) => void {
+  const processInstanceId = randomUUID()
+  const processStartedAt = new Date().toISOString()
+  return event => {
+    try {
+      operationalLog.writeRecord(createOperationalRecord(
+        event.phase === 'started'
+          ? { level: 'info', event: 'process.started', process: 'worker', fields: { role, pid: event.pid } }
+          : {
+              level: event.code === 0 ? 'info' : 'error',
+              event: 'process.exited',
+              process: 'worker',
+              fields: {
+                role,
+                ...(event.code === null || event.code === undefined ? {} : { exitCode: event.code }),
+                ...(event.signal === null || event.signal === undefined ? {} : { signal: event.signal }),
+                expected: event.code === 0,
+              },
+            },
+        {
+          launchId: operationalLog.launchId,
+          processInstanceId,
+          pid: event.pid,
+          processStartedAt,
+        },
+      ))
+    } catch {
+      // Worker bookkeeping is best effort and cannot affect its run.
+    }
+  }
+}
+
+/**
+ * Transitional tee for injected legacy string callbacks. Legacy text remains
+ * on stderr for a developer at the console, but only an opaque classification
+ * enters the persistent support log: upstream strings can include engine
+ * output, paths, and other content that an operational stream must never own.
+ */
+function logLegacyDiagnostic(
+  line: string,
+  source: string,
+  processRole: 'main' | 'host' | 'supervisor' = 'main',
+): void {
+  process.stderr.write(`${line}\n`)
+  operationalLog.write({
+    event: 'diagnostic',
+    level: /fail|error|invalid|dropped/i.test(line) ? 'warn' : 'info',
+    process: processRole,
+    fields: {
+      source,
+      category: /fail|error|invalid|dropped/i.test(line) ? 'legacy_failure' : 'legacy_notice',
+    },
+  })
+}
+
+function traceFrame(frame: ServerFrame, stage: DeliveryStage): ServerFrame {
+  const created = !frame.deliveryTrace
+  const trace = stage === 'attachment.replayed' && frame.deliveryTrace
+    ? replayDeliveryTrace(frame.deliveryTrace)
+    : frame.deliveryTrace ?? mintDeliveryTrace((deliverySequences.get(frame.sessionId) ?? 0) + 1)
+  if (created) deliverySequences.set(frame.sessionId, trace.sequence)
+  // Sidecar stages arrive independently on FD 3 at their actual process-clock
+  // boundaries.  Do not infer or backfill them here after a socket receipt.
+  if (stage === 'supervisor.socket.received') {
+    if (created) {
+      logOperational('diagnostic', 'warn', { source: 'deliveryTrace', reason: 'missing_source_envelope' }, frame.sessionId)
+    }
+  }
+  deliveryTrace.mark({
+    sessionId: frame.sessionId,
+    trace,
+    stage,
+    frameKind: frame.kind,
+    messageKind: deliveryMessageKindOfFrame(frame),
+    documentId: rendererDocumentId,
+    subscriptionEpoch: rendererSubscriptionEpoch,
+  })
+  return frame.deliveryTrace === trace ? frame : { ...frame, deliveryTrace: trace }
+}
+
+function parseDeliveryAcknowledgements(value: unknown): DeliveryAcknowledgement[] | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const batch = value as Record<string, unknown>
+  if (Object.keys(batch).length !== 1 || !Array.isArray(batch.acknowledgements) || batch.acknowledgements.length < 1 || batch.acknowledgements.length > 64) return null
+  const acknowledgements: DeliveryAcknowledgement[] = []
+  for (const item of batch.acknowledgements) {
+    const parsed = parseDeliveryAcknowledgement(item)
+    if (!parsed) return null
+    acknowledgements.push(parsed)
+  }
+  return acknowledgements
+}
+
+function parseDeliveryAcknowledgement(value: unknown): DeliveryAcknowledgement | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const item = value as Record<string, unknown>
+  if (
+    Object.keys(item).length !== 10 ||
+    typeof item.sessionId !== 'string' ||
+    typeof item.streamEpoch !== 'string' || item.streamEpoch.length < 1 || item.streamEpoch.length > 128 ||
+    typeof item.sequence !== 'number' ||
+    !Number.isSafeInteger(item.sequence) ||
+    item.sequence < 1 ||
+    typeof item.deliveryAttempt !== 'number' ||
+    !Number.isSafeInteger(item.deliveryAttempt) ||
+    item.deliveryAttempt < 1 ||
+    typeof item.traceId !== 'string' || item.traceId.length < 1 || item.traceId.length > 128 ||
+    !['preload.received', 'renderer.subscription.received', 'renderer.state.queued', 'renderer.state.applied', 'renderer.ui.committed'].includes(item.stage as string) ||
+    typeof item.documentId !== 'string' ||
+    typeof item.subscriptionEpoch !== 'number' ||
+    !Number.isSafeInteger(item.subscriptionEpoch) ||
+    item.subscriptionEpoch < 1 ||
+    typeof item.rendererProcessInstanceId !== 'string' ||
+    item.rendererProcessInstanceId.length < 1 ||
+    item.rendererProcessInstanceId.length > 128 ||
+    typeof item.rendererProcessStartedAt !== 'string' ||
+    Number.isNaN(Date.parse(item.rendererProcessStartedAt))
+  ) return null
+  return item as DeliveryAcknowledgement
+}
+
+type RendererHealthResponse = Readonly<{
+  documentId: string
+  subscriptionEpoch: number
+  rendererProcessInstanceId: string
+  monotonicTimestampMs: number
+  eventLoopLagMs: number
+  visible: boolean
+  heapUsedBytes: number | null
+  watermarks: ReadonlyArray<Readonly<{ sessionId: string; received: number; applied: number; committed: number }>>
+}>
+
+function parseRendererHealthResponse(value: unknown): RendererHealthResponse | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const item = value as Record<string, unknown>
+  if (
+    Object.keys(item).length !== 8 ||
+    typeof item.documentId !== 'string' || item.documentId.length < 1 || item.documentId.length > 128 ||
+    !Number.isSafeInteger(item.subscriptionEpoch) || (item.subscriptionEpoch as number) < 1 ||
+    typeof item.rendererProcessInstanceId !== 'string' || item.rendererProcessInstanceId.length < 1 || item.rendererProcessInstanceId.length > 128 ||
+    typeof item.monotonicTimestampMs !== 'number' || !Number.isFinite(item.monotonicTimestampMs) ||
+    typeof item.eventLoopLagMs !== 'number' || !Number.isFinite(item.eventLoopLagMs) || item.eventLoopLagMs < 0 || item.eventLoopLagMs > 60_000 ||
+    typeof item.visible !== 'boolean' ||
+    (item.heapUsedBytes !== null && (
+      typeof item.heapUsedBytes !== 'number' ||
+      !Number.isFinite(item.heapUsedBytes) ||
+      item.heapUsedBytes < 0 ||
+      item.heapUsedBytes > Number.MAX_SAFE_INTEGER
+    )) ||
+    !Array.isArray(item.watermarks) || item.watermarks.length > 32
+  ) return null
+  for (const watermark of item.watermarks) {
+    if (!watermark || typeof watermark !== 'object' || Array.isArray(watermark)) return null
+    const entry = watermark as Record<string, unknown>
+    if (
+      Object.keys(entry).length !== 4 || typeof entry.sessionId !== 'string' || entry.sessionId.length < 1 || entry.sessionId.length > 128 ||
+      !Number.isSafeInteger(entry.received) || (entry.received as number) < 0 ||
+      !Number.isSafeInteger(entry.applied) || (entry.applied as number) < 0 ||
+      !Number.isSafeInteger(entry.committed) || (entry.committed as number) < 0
+    ) return null
+  }
+  return item as RendererHealthResponse
+}
+
+logOperational('app.start', 'info', {
+  packaged: app.isPackaged,
+  platform: process.platform,
+  arch: process.arch,
+})
+logOperational('process.started', 'info', { role: 'electron-main', pid: process.pid })
 
 // The supervisor is N-ready (a map). The host composes it with the durable
 // registry into the typed control plane (P3-3); main is a CALLER of that host.
@@ -369,7 +628,8 @@ function persistTranscriptCache(appSessionId: SessionId): void {
         // No resolver: main is engine-free, so a window here is only ever one
         // the engine itself recorded in `run_facts`.
         readRunFacts: path => readTranscriptRunFacts(path, () => null),
-        readCachedRunFacts: id => readCachedRunFacts(TRANSCRIPT_CACHE_DIR, id),
+        readCachedRunFacts: (id, engineSessionId) =>
+          readCachedRunFacts(TRANSCRIPT_CACHE_DIR, id, engineSessionId),
       },
       frames,
     )
@@ -465,6 +725,7 @@ async function backfillTranscriptCaches(): Promise<void> {
 
   const abort = new AbortController()
   transcriptBackfillAbort = abort
+  const onWorkerLifecycle = createWorkerLifecycleLogger('transcript-backfill')
   try {
     const summary = await runTranscriptBackfill({
       items,
@@ -476,6 +737,7 @@ async function backfillTranscriptCaches(): Promise<void> {
       ],
       cwd: process.cwd(),
       signal: abort.signal,
+      onWorkerLifecycle,
       onSession: result => {
         const currentHost = host
         if (!currentHost || !currentHost.canPreview(result.appSessionId)) return
@@ -547,17 +809,20 @@ function startSessionsCatalogRefresh(): void {
   const abort = new AbortController()
   sessionsCatalogAbort = abort
   sessionsCatalogDriver = createSessionsCatalogDriver({
-    run: () =>
-      runSessionsCatalogWorker({
+    run: () => {
+      const onWorkerLifecycle = createWorkerLifecycleLogger('sessions-catalog')
+      return runSessionsCatalogWorker({
         command: process.env.CATCODE_BUN_BIN ?? 'bun',
         args: ['run', SESSIONS_CATALOG_WORKER_ENTRY, '--bare'],
         cwd: process.cwd(),
         signal: abort.signal,
+        onWorkerLifecycle,
         onCatalog: catalog => {
           sendHostEvent({ type: 'sessions-catalog', catalog })
         },
         log: line => process.stderr.write(`${line}\n`),
-      }),
+      })
+    },
     log: line => process.stderr.write(`${line}\n`),
   })
   sessionsCatalogDriver.start()
@@ -578,17 +843,20 @@ function startAccountsPoolRefresh(): void {
   const abort = new AbortController()
   accountsPoolAbort = abort
   accountsPoolDriver = createAccountsPoolDriver({
-    run: () =>
-      runAccountsPoolWorker({
+    run: () => {
+      const onWorkerLifecycle = createWorkerLifecycleLogger('accounts-pool')
+      return runAccountsPoolWorker({
         command: process.env.CATCODE_BUN_BIN ?? 'bun',
         args: ['run', ACCOUNTS_POOL_WORKER_ENTRY, '--bare'],
         cwd: process.cwd(),
         signal: abort.signal,
+        onWorkerLifecycle,
         onPool: pool => {
           sendHostEvent({ type: 'accounts-pool', pool })
         },
         log: line => process.stderr.write(`${line}\n`),
-      }),
+      })
+    },
     log: line => process.stderr.write(`${line}\n`),
   })
   accountsPoolDriver.start()
@@ -611,6 +879,7 @@ function startIdleParkDriver(): void {
   if (!activeHost || !activeSupervisor) return
   idleParkDriver = createIdleParkDriver({
     listSessions: () => activeHost.listSessions(),
+    canResume: appSessionId => activeHost.canResume(appSessionId),
     park: appSessionId => {
       // Host-originated, gated at the sidecar. No renderer authored this — the
       // requestId is minted here purely to satisfy the frame contract (there is
@@ -639,10 +908,13 @@ function startIdleParkDriver(): void {
 function deliver(frames: ServerFrame[]): void {
   const contents = mainWindow?.webContents
   // `isDestroyed` because a send is only ever scheduled, never immediate: an
-  // in-flight frame can land after the window went away.
-  if (!contents || contents.isDestroyed()) return
+  // in-flight frame can land after the window went away. `rendererGone`
+  // because a crashed renderer leaves the window open and `isDestroyed` false.
+  if (!contents || contents.isDestroyed() || rendererGone) return
   if (frames.length === 0) return
-  contents.send(CH_SERVER_FRAME, frames satisfies ServerFrame[])
+  const traced = frames.map(frame => traceFrame(frame, 'main.ipc.queued'))
+  contents.send(CH_SERVER_FRAME, traced satisfies ServerFrame[])
+  for (const frame of traced) traceFrame(frame, 'main.ipc.sent')
 }
 
 /** The sidecar entry path — also the registry's orphan-identity marker (§9-A3). */
@@ -674,6 +946,28 @@ const ACCOUNTS_POOL_WORKER_ENTRY = join(
   'sidecar',
   'accountsPoolWorker.ts',
 )
+const DEBUG_CLEANUP_WORKER_ENTRY = join(__dirname, '..', '..', 'app', 'sidecar', 'debugCleanupWorker.ts')
+
+function scheduleDebugCleanup(): void {
+  // A disposable, main-supervised worker gives all session sidecars one shared
+  // daily lock/marker.  Its result is intentionally non-fatal diagnostics.
+  try {
+    const child = spawn(process.env.CATCODE_BUN_BIN ?? 'bun', [...SIDECAR_RUNTIME_ARGS, DEBUG_CLEANUP_WORKER_ENTRY], {
+      stdio: 'ignore', detached: false,
+      env: { ...process.env, CATCODE_DEBUG_CLEANUP_MARKER_DIR: defaultRegistryDir() },
+    })
+    // F7 — a spawn failure (ENOENT: bun missing) arrives asynchronously as an
+    // 'error' event, which the try/catch cannot see. Without this listener Node
+    // treats it as unhandled, and the uncaughtException handler below exits the
+    // whole app over a deliberately non-fatal cleanup worker.
+    child.on('error', () => {
+      logOperational('diagnostic', 'warn', { source: 'debugCleanup', reason: 'worker_spawn_failed' })
+    })
+    child.unref()
+  } catch {
+    logOperational('diagnostic', 'warn', { source: 'debugCleanup', reason: 'worker_spawn_failed' })
+  }
+}
 
 function createSupervisor(): SidecarSupervisor {
   // The sidecar runs the same default classifier feature as the engine bundle
@@ -686,6 +980,22 @@ function createSupervisor(): SidecarSupervisor {
     // through the host API (createSession → native picker, HC1); this stays only
     // as the supervisor-wide default for probe/legacy callers.
     sidecarCwd: process.cwd(),
+    log: line => logLegacyDiagnostic(line, 'supervisor', 'supervisor'),
+    onOperationalRecord: record => operationalLog.writeRecord(record),
+    onDeliveryTraceRecord: record => deliveryTrace.mark({
+      sessionId: record.sessionId,
+      trace: record.trace,
+      stage: record.stage,
+      frameKind: record.frameKind,
+      processInstanceId: record.processInstanceId,
+      processStartedAt: record.processStartedAt,
+      wallTimestamp: record.wallTimestamp,
+      monotonicTimestampMs: record.monotonicTimestampMs,
+    }),
+    onOperationalEvent: input => operationalLog.write({
+      ...input,
+      process: 'supervisor',
+    }),
   })
 }
 
@@ -713,12 +1023,12 @@ const devHarnessConfig = resolveDevHarnessConfig({
   isPackaged: app.isPackaged,
   env: process.env,
   validateCwd,
-  log: line => process.stderr.write(`${line}\n`),
+  log: line => logLegacyDiagnostic(line, 'devHarness'),
 })
 
 const devPickerBypass = createDevPickerBypass(devHarnessConfig, {
   validateCwd,
-  log: line => process.stderr.write(`${line}\n`),
+  log: line => logLegacyDiagnostic(line, 'devPicker'),
 })
 
 const scheduleDebugStateExport = createDebouncedAction(
@@ -728,6 +1038,7 @@ const scheduleDebugStateExport = createDebouncedAction(
 
 const readinessLatch = createReadinessLatch(() => {
   process.stdout.write('[main] renderer ready\n')
+  logOperational('renderer.load.ready', 'info')
   scheduleDebugStateExport.schedule()
 })
 
@@ -812,7 +1123,61 @@ function createWindow(): void {
       ),
     },
   })
+  const healthProbe = () => {
+    const event = rendererHealth.probe()
+    // Annotation only: the monitor's escalation logic never sees this.
+    if (event) {
+      logOperational(event.event, event.level, { ...event.fields, visible: lastKnownRendererVisible })
+      if (event.event === 'renderer.health.unavailable') {
+        flushRendererHealthFlightRecorder('health_unavailable')
+      }
+    }
+    if (!window.webContents.isDestroyed() && !rendererGone) {
+      window.webContents.send(CH_DELIVERY_HEALTH_PROBE)
+    }
+  }
+  const stopRendererHealthTimer = () => {
+    if (rendererHealthTimer) clearInterval(rendererHealthTimer)
+    rendererHealthTimer = null
+  }
+  const startRendererHealthTimer = () => {
+    stopRendererHealthTimer()
+    rendererHealth.reset()
+    rendererHealthTimer = setInterval(healthProbe, 5_000)
+  }
+  rendererGone = false
+  rendererRecovering = false
+  startRendererHealthTimer()
+  window.once('closed', stopRendererHealthTimer)
   mainWindow = window
+
+  // The pid a macOS crash report names. The renderer process does not exist
+  // until a document loads, and it is already gone by `render-process-gone`, so
+  // this is read post-load and remembered for the death record.
+  let rendererOsProcessId: number | null = null
+  let windowCreatedLogged = false
+  const readRendererOsProcessId = (): number | null => {
+    try {
+      const pid = window.webContents.getOSProcessId()
+      return Number.isSafeInteger(pid) && pid > 0 ? pid : null
+    } catch {
+      return null
+    }
+  }
+
+  const windowVisibility = createWindowVisibilityTracker()
+  const logWindowVisibility = (reason: WindowVisibilityReason) => {
+    const transition = windowVisibility.observe(reason)
+    if (!transition) return
+    logOperational('window.visibility.changed', 'info', {
+      visible: transition.visible,
+      reason: transition.reason,
+    })
+  }
+  window.on('show', () => logWindowVisibility('show'))
+  window.on('hide', () => logWindowVisibility('hide'))
+  window.on('minimize', () => logWindowVisibility('minimize'))
+  window.on('restore', () => logWindowVisibility('restore'))
 
   // Drop the reference the moment the window is gone. Without this, `deliver`
   // and `sendHostEvent` keep addressing a destroyed `webContents` for anything
@@ -835,6 +1200,9 @@ function createWindow(): void {
   // replay. `did-start-navigation` fires on the initial load and on reloads.
   window.webContents.on('did-start-navigation', (_e, _url, isInPlace, isMainFrame) => {
     if (isMainFrame && !isInPlace) {
+      rendererDocumentId = randomUUID()
+      rendererSubscriptionEpoch = 0
+      logOperational('renderer.navigation.started', 'info', { navigation: 'document' })
       cancelAllReplayFlushes()
       attachmentGate.onNavigationStart()
     }
@@ -863,6 +1231,7 @@ function createWindow(): void {
 
   window.once('ready-to-show', () => {
     window.show()
+    logOperational('renderer.load.ready', 'info')
     readinessLatch.windowReady()
     // Paint first. The worker import is the ~189 MB engine-graph cost; never pay
     // it on the launch/first-window critical path. Every one of these is armed
@@ -881,23 +1250,151 @@ function createWindow(): void {
     startupTimers.schedule(startIdleParkDriver)
   })
 
-  if (IS_DEV) {
-    void window.loadURL(APP_ORIGIN_DEV)
-  } else {
-    // `dev.ts` sets CATCODE_RENDERER_URL and waits for that server before
-    // launching. Reaching the packaged branch anyway means the dev launcher
-    // believes this is a dev run and main disagrees, so the window is about to
-    // load a STALE `dist` while a live Vite server sits unused. Say so: the
-    // 2026-07-28 instance cost hours precisely because it was silent. This only
-    // reports the contradiction; the packaged branch still wins, so a real
-    // packaged build can never be talked onto a remote origin by an env var.
-    if (process.env.CATCODE_RENDERER_URL) {
-      process.stderr.write(
-        `[main] CATCODE_RENDERER_URL is set (${process.env.CATCODE_RENDERER_URL}) but app.isPackaged is true, so the packaged renderer is being loaded from disk. Renderer edits will NOT appear until "renderer:build" is re-run. Expected a dev launch? Check that the Electron executable is still named "electron".\n`,
+  const loadRenderer = () => {
+    if (IS_DEV) {
+      logOperational('renderer.load.started', 'info', { source: 'dev' })
+      void window.loadURL(APP_ORIGIN_DEV).catch(error => {
+        logOperational('renderer.load.failed', 'error', { reason: classifyFailure(error) })
+      })
+    } else {
+      // `dev.ts` sets CATCODE_RENDERER_URL and waits for that server before
+      // launching. Reaching the packaged branch anyway means the dev launcher
+      // believes this is a dev run and main disagrees, so the window is about to
+      // load a STALE `dist` while a live Vite server sits unused. Say so: the
+      // 2026-07-28 instance cost hours precisely because it was silent. This only
+      // reports the contradiction; the packaged branch still wins, so a real
+      // packaged build can never be talked onto a remote origin by an env var.
+      if (process.env.CATCODE_RENDERER_URL) {
+        process.stderr.write(
+          `[main] CATCODE_RENDERER_URL is set (${process.env.CATCODE_RENDERER_URL}) but app.isPackaged is true, so the packaged renderer is being loaded from disk. Renderer edits will NOT appear until "renderer:build" is re-run. Expected a dev launch? Check that the Electron executable is still named "electron".\n`,
+        )
+      }
+      logOperational('renderer.load.started', 'info', { source: 'packaged' })
+      void window.loadFile(PACKAGED_INDEX_PATH).catch(error => {
+        logOperational('renderer.load.failed', 'error', { reason: classifyFailure(error) })
+      })
+    }
+  }
+  const giveUpOnRenderer = (reason: RendererDeathReason) => {
+    logOperational('renderer.recovery.exhausted', 'error', {
+      count: RENDERER_RECOVERY_MAX_ATTEMPTS,
+      reason,
+    })
+    if (!rendererRecoveryDialogShown) {
+      rendererRecoveryDialogShown = true
+      dialog.showErrorBox(
+        'Cat Code window crashed',
+        'The window crashed several times in a row, so automatic reload stopped. Quit and reopen the app to continue.',
       )
     }
-    void window.loadFile(PACKAGED_INDEX_PATH)
   }
+
+  // Stderr lines are dev only: a packaged build must not gain a stderr surface.
+  // Both are filtered where the operational record is not, because a diagnostic
+  // that fires on routine events trains the reader to ignore it, while the
+  // record should still capture every case. An abnormal renderer death also
+  // auto-reloads the window (bounded by the recovery policy), because a logged
+  // but unrecovered crash is a permanently black window (2026-08-09 incident).
+  window.webContents.on('did-fail-load', (_event, code, _description, _url, isMainFrame) => {
+    if (isMainFrame) {
+      logOperational('renderer.load.failed', 'error', { code, reason: 'did_fail_load' })
+      // -3 is ERR_ABORTED: a load superseded or cancelled, which is what an
+      // ordinary dev reload looks like.
+      if (IS_DEV && code !== -3) {
+        process.stderr.write(`[main] the window failed to load (code ${code}).\n`)
+      }
+      if (rendererRecovering && code !== -3) {
+        const decision = rendererRecovery.decide('load-failed')
+        if (decision.action === 'reload') {
+          logOperational('renderer.recovery.started', 'warn', {
+            count: decision.attempt,
+            reason: 'load-failed',
+          })
+          loadRenderer()
+        } else if (decision.action === 'give-up') {
+          giveUpOnRenderer('load-failed')
+        }
+      }
+    }
+  })
+  window.webContents.on('render-process-gone', (_event, details) => {
+    // A crashed renderer leaves the window open and `isDestroyed()` false, so
+    // without this flag every scheduled send (probe, host event, frame) throws
+    // "Render frame was disposed" forever. Flag first, then stop probing a
+    // process main positively knows is gone.
+    rendererGone = true
+    stopRendererHealthTimer()
+    // The gate is still attached to the document that just died, so re-arm it
+    // here: frames arriving before the replacement document announces itself
+    // would otherwise be dropped by the `rendererGone` check instead of buffered
+    // for its replay. Document identity stays navigation-owned.
+    cancelAllReplayFlushes()
+    attachmentGate.onNavigationStart()
+    logOperational('renderer.process.gone', 'error', {
+      reason: details.reason,
+      exitCode: details.exitCode,
+      // Remembered from the load: the process is gone, so asking now returns 0.
+      ...(rendererOsProcessId === null ? {} : { pid: rendererOsProcessId }),
+    })
+    flushRendererHealthFlightRecorder('process_gone')
+    // `clean-exit` is a renderer that exited 0, which is what quitting looks like.
+    if (IS_DEV && details.reason !== 'clean-exit') {
+      process.stderr.write(
+        `[main] the window crashed (${details.reason}, exit code ${details.exitCode}); reloading it.\n`,
+      )
+    }
+    if (window.isDestroyed()) return
+    const decision = rendererRecovery.decide(details.reason)
+    if (decision.action === 'reload') {
+      logOperational('renderer.recovery.started', 'warn', {
+        count: decision.attempt,
+        reason: details.reason,
+      })
+      rendererRecovering = true
+      loadRenderer()
+    } else if (decision.action === 'give-up') {
+      giveUpOnRenderer(details.reason)
+    }
+  })
+  // A reload after a crash lands here once the fresh document is loaded; the
+  // renderer-ready handshake then replays state through the attachment gate the
+  // same way any reload does (F2).
+  window.webContents.on('did-finish-load', () => {
+    rendererGone = false
+    rendererOsProcessId = readRendererOsProcessId()
+    const pid: Record<string, number> =
+      rendererOsProcessId === null ? {} : { pid: rendererOsProcessId }
+    // Deliberately here and not beside `new BrowserWindow`: before a document
+    // loads there is no renderer process to name, and the pid is the point of
+    // this record. `renderer.load.started` still marks the construction moment.
+    // Flagged rather than inferred from the pid, so a load that could not report
+    // one does not make the next reload look like a second window.
+    if (!windowCreatedLogged) {
+      windowCreatedLogged = true
+      logOperational('window.created', 'info', pid)
+    }
+    if (rendererRecovering) {
+      rendererRecovering = false
+      rendererRecoveryDialogShown = false
+      // A reload is a different OS process, so the crash report for a SECOND
+      // death would otherwise have nothing live to match against.
+      logOperational('renderer.recovery.succeeded', 'info', pid)
+      startRendererHealthTimer()
+    }
+  })
+  let unresponsiveAt: number | null = null
+  window.webContents.on('unresponsive', () => {
+    unresponsiveAt = Date.now()
+    logOperational('renderer.unresponsive', 'warn')
+  })
+  window.webContents.on('responsive', () => {
+    logOperational('renderer.responsive', 'info', {
+      durationMs: unresponsiveAt === null ? 0 : Date.now() - unresponsiveAt,
+    })
+    unresponsiveAt = null
+  })
+
+  loadRenderer()
 }
 
 /** The exact packaged renderer entry file (production nav target). */
@@ -925,10 +1422,26 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
     // reaches the sidebar/tab as a host descriptor update (HostEvent). event.sessionId
     // is the appSessionId (the supervisor's routing key = the host's row id).
     if (frame.kind === 'session-title') {
+      // It is not forwarded, but it DID cross the socket, and the sidecar spent
+      // a delivery sequence on it like any other frame. Continuity is judged at
+      // arrival, so returning before these marks pinned the arrival watermark
+      // and made every titled session — i.e. every fresh one — report a frame
+      // that never arrived. Mark what actually happened, then relay.
+      const titled = traceFrame(frame, 'supervisor.socket.received')
+      traceFrame(titled, 'host.received')
       void host?.setTitle(event.sessionId, frame.title)
       return
     }
-    deliver(attachmentGate.onFrame(event.sessionId, frame))
+    if (frame.kind === 'ready') {
+      logOperational('sidecar.ready', 'info', { frame: 'ready' }, event.sessionId)
+    }
+    const traced = traceFrame(frame, 'supervisor.socket.received')
+    // Receipt is true whether the attachment gate forwards immediately or
+    // buffers for replay; record that before deciding its outcome.
+    traceFrame(traced, 'host.received')
+    const gated = attachmentGate.onFrame(event.sessionId, traced)
+    if (gated.length === 0) traceFrame(traced, 'attachment.buffered')
+    deliver(gated)
     if (attachmentGate.hasPendingReplayCoalescing(event.sessionId)) {
       scheduleReplayFlush(event.sessionId)
     } else if (!attachmentGate.isReplayCoalescing(event.sessionId)) {
@@ -966,7 +1479,7 @@ function wireHostEvents(h: Host): void {
 
 function sendHostEvent(event: HostEvent): void {
   const contents = mainWindow?.webContents
-  if (contents && !contents.isDestroyed()) contents.send(CH_HOST_EVENT, event)
+  if (contents && !contents.isDestroyed() && !rendererGone) contents.send(CH_HOST_EVENT, event)
 }
 
 /**
@@ -978,8 +1491,13 @@ function registerIpcHandlers(): void {
   // Renderer → supervisor: the four allowlisted channels. Main does light shape
   // coercion for UX, but the SIDECAR is the trust boundary (R2) — it re-validates
   // everything with the allowlist schema and applies T4/T6/T6b.
-  ipcMain.on(CH_SUBMIT, (_e, arg: { sessionId: SessionId; prompt: string; options?: unknown }) => {
-    if (typeof arg?.sessionId !== 'string' || typeof arg?.prompt !== 'string') return
+  ipcMain.on(CH_SUBMIT, (_e, arg: { sessionId: SessionId; prompt: unknown; options?: unknown }) => {
+    if (
+      typeof arg?.sessionId !== 'string' ||
+      (typeof arg?.prompt !== 'string' && !Array.isArray(arg?.prompt))
+    ) {
+      return
+    }
     forward(arg.sessionId, {
       type: 'app.submit',
       requestId: generateRequestId(),
@@ -1256,9 +1774,158 @@ function registerIpcHandlers(): void {
   // F2 — the renderer signals it has mounted and subscribed. The gate replays the
   // buffered frames (including the one-shot `ready` handshake) once per document
   // load and returns nothing on a repeat signal (StrictMode double-invoke).
-  ipcMain.on(CH_RENDERER_READY, () => {
-    deliver(attachmentGate.onRendererReady())
+  ipcMain.on(CH_RENDERER_READY, (_e, payload: { documentId?: unknown }) => {
+    if (typeof payload?.documentId !== 'string' || payload.documentId.length > 128) return
+    // An IPC message from the renderer is positive proof of a live committed
+    // frame, and the mount effect that sends it can beat `did-finish-load`, so
+    // clearing the flag only there left the one-shot replay below discarded.
+    rendererGone = false
+    rendererDocumentId = payload.documentId
+    rendererSubscriptionEpoch++
+    const replay = attachmentGate.onRendererReady().map(frame => traceFrame(frame, 'attachment.replayed'))
+    deliver(replay)
     readinessLatch.rendererReady()
+  })
+
+  ipcMain.on(CH_DELIVERY_ACK, (_e, payload: unknown) => {
+    const acknowledgements = parseDeliveryAcknowledgements(payload)
+    if (!acknowledgements) {
+      logOperational('diagnostic', 'warn', { source: 'deliveryAck', reason: 'rejected' })
+      return
+    }
+    for (const acknowledgement of acknowledgements) {
+      if (
+        acknowledgement.documentId !== rendererDocumentId ||
+        acknowledgement.subscriptionEpoch !== rendererSubscriptionEpoch ||
+        !deliveryTrace.accepts(
+          acknowledgement.sessionId,
+          acknowledgement.streamEpoch,
+          acknowledgement.sequence,
+          acknowledgement.documentId,
+          acknowledgement.subscriptionEpoch,
+        )
+      ) {
+        deliveryTrace.recordAcknowledgementRejected({
+          sessionId: acknowledgement.sessionId,
+          streamEpoch: acknowledgement.streamEpoch,
+          sequence: acknowledgement.sequence,
+          reason: acknowledgement.documentId !== rendererDocumentId || acknowledgement.subscriptionEpoch !== rendererSubscriptionEpoch
+            ? 'stale_document'
+            : 'unknown_sequence',
+        })
+        logOperational('diagnostic', 'warn', { source: 'deliveryAck', reason: 'rejected' })
+        continue
+      }
+      const trace = deliveryTrace.traceFor(
+        acknowledgement.sessionId,
+        acknowledgement.streamEpoch,
+        acknowledgement.sequence,
+      )
+      if (
+        !trace ||
+        trace.deliveryAttempt !== acknowledgement.deliveryAttempt ||
+        trace.streamEpoch !== acknowledgement.streamEpoch ||
+        trace.traceId !== acknowledgement.traceId
+      ) {
+        deliveryTrace.recordAcknowledgementRejected({
+          sessionId: acknowledgement.sessionId,
+          streamEpoch: acknowledgement.streamEpoch,
+          sequence: acknowledgement.sequence,
+          reason: 'stale_attempt',
+        })
+        logOperational('diagnostic', 'warn', { source: 'deliveryAck', reason: 'stale_attempt' })
+        continue
+      }
+      deliveryTrace.mark({
+        sessionId: acknowledgement.sessionId,
+        trace,
+        stage: acknowledgement.stage,
+        documentId: acknowledgement.documentId,
+        subscriptionEpoch: acknowledgement.subscriptionEpoch,
+        processInstanceId: acknowledgement.rendererProcessInstanceId,
+        processStartedAt: acknowledgement.rendererProcessStartedAt,
+      })
+    }
+  })
+
+  ipcMain.on(CH_DELIVERY_HEALTH_RESPONSE, (_e, payload: unknown) => {
+    const item = parseRendererHealthResponse(payload)
+    if (!item) return
+    if (
+      item.documentId !== rendererDocumentId ||
+      item.subscriptionEpoch !== rendererSubscriptionEpoch ||
+      item.rendererProcessInstanceId.length === 0
+    ) return
+    lastKnownRendererVisible = item.visible
+    rendererHealthFlightRecorder.record({
+      eventLoopLagMs: item.eventLoopLagMs,
+      visible: item.visible,
+      heapUsedBytes: item.heapUsedBytes,
+    })
+    const health = rendererHealth.response()
+    if (health.shouldSample) {
+      logOperational(health.recovered ? 'renderer.health.recovered' : 'renderer.health.sample', 'info', {
+        sessions: item.watermarks.length,
+        eventLoopLagMs: item.eventLoopLagMs,
+        visible: item.visible,
+        heapUsedBytes: item.heapUsedBytes,
+        ...(health.recovered ? { missed: health.priorMisses, durationMs: health.outageDurationMs } : {}),
+      })
+    }
+  })
+
+  ipcMain.on(CH_RENDERER_FAULT, (_e, payload: unknown) => {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return
+    const item = payload as { kind?: unknown; message?: unknown }
+    if (
+      Object.keys(item).length !== 2 ||
+      !['javascript', 'promise', 'component'].includes(item.kind as string) ||
+      typeof item.message !== 'string' ||
+      item.message.length > 512
+    ) return
+    const now = Date.now()
+    if (now - rendererFaultWindowStartedAt >= 60_000) {
+      rendererFaultWindowStartedAt = now
+      rendererFaultCount = 0
+    }
+    if (rendererFaultCount >= 12) {
+      logOperational('diagnostic', 'warn', { source: 'rendererFault', reason: 'rate_limited' })
+      return
+    }
+    rendererFaultCount++
+    logOperational(
+      item.kind === 'component' ? 'renderer.component.failed' : item.kind === 'promise' ? 'renderer.promise.unhandled' : 'renderer.javascript.error',
+      'error',
+      { source: 'renderer', reason: 'fault_reported' },
+    )
+  })
+
+  ipcMain.on(CH_OPEN_LOGS, () => {
+    void shell.openPath(operationalLog.getDirectory())
+  })
+  ipcMain.handle(CH_SAVE_DIAGNOSTICS, async (): Promise<boolean> => {
+    const result = mainWindow
+      ? await dialog.showSaveDialog(mainWindow, { defaultPath: 'cat-code-diagnostics.json' })
+      : await dialog.showSaveDialog({ defaultPath: 'cat-code-diagnostics.json' })
+    if (result.canceled || !result.filePath) return false
+    try {
+      await writeFile(
+        result.filePath,
+        buildDiagnosticsBundle({
+          logsDirectory: operationalLog.getDirectory(),
+          appVersion: app.getVersion(),
+          packaged: app.isPackaged,
+          currentLaunchId: operationalLog.launchId,
+          buildId: process.env.CATCODE_BUILD_ID,
+          commitId: process.env.CATCODE_COMMIT_ID,
+        }),
+        'utf8',
+      )
+      return true
+    } catch (error) {
+      logOperational('diagnostic', 'error', { source: 'diagnosticsExport', reason: classifyFailure(error) })
+      return false
+    }
   })
 
   // IDLE-PARK §4(b) — the renderer reports which sessions are on screen so the
@@ -1752,6 +2419,7 @@ function ensureHost(): Host {
   // an innocent same-pid process.
   const registry = new SessionRegistry({
     sidecarCommandMarker: SIDECAR_ENTRY,
+    log: line => logLegacyDiagnostic(line, 'registry', 'host'),
   })
   registryForDebug = registry
 
@@ -1769,6 +2437,7 @@ function ensureHost(): Host {
     registry,
     validateCwd,
     launched,
+    log: line => logLegacyDiagnostic(line, 'host', 'host'),
     // The P3-0 carry: a closed/restarted session's replay buffer must be evicted
     // so a reload never replays a dead session's frames. IS-A: persist the
     // transcript cache FIRST (snapshot → persist → evict). This fires on
@@ -1840,6 +2509,11 @@ function errText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** A stable, non-content failure classification for persistent diagnostics. */
+function classifyFailure(error: unknown): string {
+  return error instanceof Error ? 'error' : 'unknown_failure'
+}
+
 // Single-instance lock (REGISTRY §5 / R5): the registry is a shared mutable file
 // and the host is its SINGLE writer by construction. Take the OS lock BEFORE any
 // host is constructed; a second app instance never builds a host — it focuses the
@@ -1847,6 +2521,7 @@ function errText(error: unknown): string {
 // discipline (the module-layer advisory lockfile is the belt to this braces).
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
 if (!gotSingleInstanceLock) {
+  logOperational('app.single_instance.refused', 'info')
   app.quit()
 } else {
   app.on('second-instance', () => {
@@ -1858,6 +2533,7 @@ if (!gotSingleInstanceLock) {
   })
 
   app.whenReady().then(() => {
+    logOperational('app.ready', 'info')
     // BrowserWindow's `icon` option doesn't reach the Dock tile (SECURITY-MINIMUM
     // is silent on this — it's cosmetic, not a trust boundary); the Dock image
     // comes from the running bundle's own Info.plist/icns unless overridden here.
@@ -1865,6 +2541,7 @@ if (!gotSingleInstanceLock) {
       app.dock?.setIcon(nativeImage.createFromPath(APP_ICON_PATH))
     }
     applySecurityBaseline()
+    scheduleDebugCleanup()
     registerIpcHandlers() // once — handlers read the module-level host/supervisor
     // Host construction (and thus the registry's launch sweep) runs only after we
     // hold the single-instance lock, so the sweep is never raced by a sibling.
@@ -1940,6 +2617,15 @@ function teardownOnSignal(signal: 'SIGINT' | 'SIGTERM'): void {
   stopBackgroundDrivers()
   shutdownRuntime()
   cancelAllReplayFlushes()
+  // Without these the launch has no completion record, so every later export
+  // reads a Ctrl-C run as an interrupted launch and reports the whole window's
+  // evidence as incomplete. Same pair `before-quit` writes; both are synchronous
+  // enough to land before the exit below.
+  logOperational('app.shutdown.started', 'info', { reason: signal === 'SIGINT' ? 'sigint' : 'sigterm' })
+  logOperational('app.shutdown.completed', 'info')
+  logOperational('process.exited', 'info', { role: 'electron-main', signal, expected: true })
+  operationalLog.close()
+  deliveryTrace.close()
   app.exit(signal === 'SIGINT' ? 130 : 143)
 }
 
@@ -1947,6 +2633,16 @@ process.on('SIGINT', () => teardownOnSignal('SIGINT'))
 process.on('SIGTERM', () => teardownOnSignal('SIGTERM'))
 
 app.on('window-all-closed', () => {
+  // On darwin this route parks in the dock (see the platform branch at the end):
+  // the runtime goes away, the process does not, and `app.shutdown.completed`
+  // correctly never arrives. Logging it as a shutdown start therefore read as a
+  // shutdown that hung, which cost the 2026-08-10 investigation a full pass.
+  // Elsewhere `app.quit()` below really does start a shutdown.
+  if (process.platform === 'darwin') {
+    logOperational('app.parked.windowless', 'info')
+  } else {
+    logOperational('app.shutdown.started', 'info', { reason: 'window-all-closed' })
+  }
   // D6: die-with-window for v1 — tear down every sidecar via the supervisor's
   // kill API (NOT by welding the sidecar to the window's lifecycle). `activate`
   // rebuilds a fresh host on reopen (F5).
@@ -1971,8 +2667,32 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  logOperational('app.shutdown.started', 'info', { reason: 'before-quit' })
   // B3 — same clean-marking on ⌘Q; idempotent if window-all-closed already ran
   // (no live rows left to mark).
   shutdownRuntime()
   stopBackgroundDrivers()
+  logOperational('app.shutdown.completed', 'info')
+  logOperational('process.exited', 'info', { role: 'electron-main', expected: true })
+  operationalLog.close()
+  deliveryTrace.close()
+})
+
+process.on('uncaughtException', error => {
+  operationalLog.flushFatal({
+    level: 'fatal',
+    event: 'app.fatal',
+    process: 'main',
+    fields: { reason: classifyFailure(error) },
+  })
+  app.exit(1)
+})
+process.on('unhandledRejection', reason => {
+  operationalLog.flushFatal({
+    level: 'fatal',
+    event: 'app.fatal',
+    process: 'main',
+    fields: { reason: classifyFailure(reason) },
+  })
+  app.exit(1)
 })

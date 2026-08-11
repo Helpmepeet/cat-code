@@ -19,6 +19,7 @@ function row(overrides: Partial<MergedSessionRow> = {}): MergedSessionRow {
     displayLabel: 'Refactor auth',
     live: true,
     restorable: false,
+    parked: false,
     status: 'ready',
     inRegistry: true,
     modifiedAtMs: 1,
