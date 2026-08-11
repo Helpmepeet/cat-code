@@ -19,7 +19,8 @@
     "maps:lint": "bun run ./scripts/workspaceMapLint.ts",
     "typecheck": "tsc --noEmit",
     "compile": "bun run ./scripts/build.ts --compile",
-    "dev": "bun run ./src/entrypoints/cli.tsx"
+    "dev": "bun run ./src/entrypoints/cli.tsx",
+    "auto-mode:replay": "bun --feature=AUTO_MODE_UPSTREAM_PORT --define 'MACRO.VERSION=\"replay\"' --define 'MACRO.BUILD_TIME=\"replay\"' --define 'MACRO.PACKAGE_URL=\"cat-code\"' --define 'MACRO.NATIVE_PACKAGE_URL=undefined' --define 'MACRO.FEEDBACK_CHANNEL=\"github\"' --define 'MACRO.ISSUES_EXPLAINER=\"replay harness\"' --define 'MACRO.VERSION_CHANGELOG=\"replay\"' ./scripts/auto-mode-replay.ts"
   },
   "dependencies": {
     "@alcalzone/ansi-tokenize": "^0.3.0",
