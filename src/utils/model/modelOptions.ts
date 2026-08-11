@@ -361,9 +361,9 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
       hasAnthropicCredentials()
     ) {
       codexOptions.push(
-        getSonnet5Option(),
-        getOpus5Option(),
         getFable5Option(),
+        getOpus5Option(),
+        getSonnet5Option(),
         getHaiku45Option(),
       )
     }
@@ -374,6 +374,8 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
     if (isMaxSubscriber() || isTeamPremiumSubscriber()) {
       // Keep the default model selectable alongside the Default row.
       const premiumOptions = [getDefaultOptionForUser(fastMode)]
+      premiumOptions.push(getFable5Option())
+      premiumOptions.push(getOpus5Option())
       if (
         !isOpus1mMergeEnabled() &&
         checkOpus1mAccess() &&
@@ -381,16 +383,14 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
       ) {
         premiumOptions.push(getMaxOpus46_1MOption(fastMode))
       }
-
-      premiumOptions.push(getOpus5Option())
       premiumOptions.push(MaxSonnet5Option)
-      premiumOptions.push(getFable5Option())
       premiumOptions.push(MaxHaiku45Option)
       return premiumOptions
     }
 
     // Pro/Team Standard/Enterprise users: Sonnet is default, show Opus as alternative
     const standardOptions = [getDefaultOptionForUser(fastMode)]
+    standardOptions.push(getFable5Option())
     if (isOpus1mMergeEnabled()) {
       standardOptions.push(getMergedOpus1MOption(fastMode))
     } else {
@@ -399,15 +399,14 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
         standardOptions.push(getMaxOpus46_1MOption(fastMode))
       }
     }
-
-    standardOptions.push(getFable5Option())
     standardOptions.push(MaxHaiku45Option)
     return standardOptions
   }
 
-  // PAYG 1P API: Default (Sonnet) + Sonnet 1M + Opus 5 + Opus 1M + Fable + Haiku
+  // PAYG 1P API: Default (Sonnet) + Fable 5 + Opus 5 + Opus 1M + Haiku
   if (getAPIProvider() === 'firstParty') {
     const payg1POptions = [getDefaultOptionForUser(fastMode)]
+    payg1POptions.push(getFable5Option())
     if (isOpus1mMergeEnabled()) {
       payg1POptions.push(getMergedOpus1MOption(fastMode))
     } else {
@@ -416,7 +415,6 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
         payg1POptions.push(getOpus46_1MOption(fastMode))
       }
     }
-    payg1POptions.push(getFable5Option())
     payg1POptions.push(getHaiku45Option())
     return payg1POptions
   }
