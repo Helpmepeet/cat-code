@@ -431,11 +431,97 @@ Each of the three sits at a seam between two source strings, which is weak
 corroboration that these sections are assembled by concatenation rather than
 authored as units.
 
-## 6. What this capture does not establish
+## 6. The measurement: Cat Code vs upstream, like for like
+
+Added 2026-08-12, once `--dump-system-prompt --provider` existed (commit
+`d568ee9d`) to produce the Cat Code side.
+
+### 6.1 Method, and why the two sides are comparable
+
+Both corpora are **product-authored system-prompt text only**. Neither contains
+the user's `CLAUDE.md`, the memory index, or `gitStatus`:
+
+- Cat Code side: `./cli-dev --dump-system-prompt --model claude-opus-5 --provider
+  anthropic`. Verified by search that the output contains no `CLAUDE.md` body, no
+  `Current branch:` / `Recent commits:` block, and no memory-index rows — the six
+  hits for `MEMORY.md` are all inside the instruction text referring to the index
+  file, not the index itself.
+- Upstream side: §2 of this document, with the elided **product** passages
+  restored from the same session context (memory template, scratchpad bullets,
+  simulator guidance, safety-block bullets). The elided **local** payloads
+  (`gitStatus` file list) stay out, matching the Cat Code side.
+
+Upstream is split in two because its total is configuration-dependent: an
+unconditional core, and the tool-conditional blocks (§4) that appear only with
+computer-use surfaces attached.
+
+### 6.2 Totals
+
+| | chars | ~tokens |
+|---|---|---|
+| Upstream lean, unconditional core | 11,966 | ~2,990 |
+| Upstream tool-conditional add-ons (browser + simulator + safety block) | 7,697 | ~1,920 |
+| **Upstream total, this session's configuration** | **19,663** | **~4,920** |
+| **Cat Code, Claude style** | **32,738** | **~8,180** |
+| Cat Code, GPT style | 31,946 | ~7,990 |
+
+Cat Code is **2.74x** upstream's unconditional core, and **1.66x** upstream even
+when upstream is carrying its full computer-use safety apparatus.
+
+### 6.3 Where the difference actually is
+
+| category | upstream | Cat Code | ratio |
+|---|---|---|---|
+| **memory instructions** | 2,079 | **13,639** | **6.56x** |
+| behavioral rules | 6,832 | 15,480 | 2.27x |
+| product-specific guidance | 664 | 1,305 | 1.97x |
+| environment | 1,008 | 1,473 | 1.46x |
+| intro / identity | 636 | 841 | 1.32x |
+| scratchpad | 747 | 0 | not emitted |
+
+Buckets: upstream "behavioral" is `# Harness` (which also carries the pronouns
+and `action_caution` paragraphs), `# Context management` (which carries
+`act_dont_rederive`), `# Delivering work`, and `# Corrections` (which carries the
+six trailing directives). Cat Code "behavioral" is `# System`, `# Doing tasks`,
+`# Executing actions with care`, `# Communicating with the user`,
+`# Tone and style`, `# Using your tools`.
+
+**The headline: Cat Code's memory instruction block, at 13,639 chars, is larger
+than upstream's entire unconditional system prompt (11,966).** `## Types of
+memory` alone is 7,854 chars — bigger than any section on either side, including
+Cat Code's `# Doing tasks`.
+
+Strip memory from both and the remaining gap is 19,099 vs 9,887, or 1.93x —
+still a real divergence, but an ordinary one attributable to the verbose-vs-lean
+split the audit is about. Memory is a separate phenomenon of a different size,
+and no part of the audit examined it.
+
+`scratchpad` registers in Cat Code but did not render in this dump; whether it is
+conditional on configuration was not chased.
+
+### 6.4 Caveats on these numbers
+
+- The upstream side is transcribed from session context. Wording is verbatim;
+  exact whitespace is not guaranteed, so treat char counts as ±1-2%. Ratios are
+  more reliable than absolutes.
+- Token figures are chars/4. Both corpora are English prose, so the ratio
+  survives; the absolute numbers are estimates, not tokenizer output.
+- The Cat Code dump passes `tools: []`, so any tool-gated section is missing.
+  **32,738 is a floor, not a ceiling.**
+- Upstream's tool-conditional total is specific to this session's six MCP
+  servers. A different tool set produces a different number, and a plain
+  terminal session should produce 11,966 — which is what the outstanding
+  baseline capture would confirm.
+- Both `# Environment` blocks carry machine-specific values. They are compared as
+  a category, not as identical content.
+
+## 7. What this capture does not establish
 
 - **Anything about a plain terminal session.** Every conclusion here is scoped to
   the desktop entrypoint with six MCP servers loaded. The baseline capture has
-  not been taken and is the obvious next artifact.
+  not been taken and is the obvious next artifact. It would also convert §6.2's
+  upstream core figure from "the unconditional blocks I could identify" into a
+  measured total.
 - **The `env_info_static` split.** §2.7 shows machine-dependent and
   machine-independent facts contiguous in one block, which does not match a
   reading of audit §3.2 where they are separate sections. Three explanations fit:
