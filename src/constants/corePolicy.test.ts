@@ -289,16 +289,15 @@ describe('retry budgets by mode', () => {
     },
   )
 
-  test('both styles bound the verification loop at three fix/verify cycles', () => {
-    // The verification contract is gated on feature('VERIFICATION_AGENT'),
-    // which is off under `bun test`, so this checks the literals that ship.
+  test('normal prompt styles do not require an automatic verification worker', () => {
     const gptSource = Bun.file(
       new URL('./promptStyles/gpt.ts', import.meta.url),
     )
     return gptSource.text().then(gpt => {
-      expect(gpt).toContain('up to 3 cycles; if it still fails, stop')
-      expect(promptsSource).toContain('for up to 3 fix/verify cycles')
-      expect(promptsSource).not.toContain('repeat until PASS')
+      expect(gpt).not.toContain('VERIFICATION CONTRACT:')
+      expect(promptsSource).not.toContain(
+        'The contract: when non-trivial implementation happens on your turn',
+      )
     })
   })
 })

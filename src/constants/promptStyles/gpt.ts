@@ -17,10 +17,7 @@
  * Reference: https://developers.openai.com/api/docs/guides/prompt-guidance
  */
 
-import {
-  AGENT_TOOL_NAME,
-  VERIFICATION_AGENT_TYPE,
-} from '../../tools/AgentTool/constants.js'
+import { AGENT_TOOL_NAME } from '../../tools/AgentTool/constants.js'
 import { FILE_WRITE_TOOL_NAME } from '../../tools/FileWriteTool/prompt.js'
 import { FILE_READ_TOOL_NAME } from '../../tools/FileReadTool/prompt.js'
 import { FILE_EDIT_TOOL_NAME } from '../../tools/FileEditTool/constants.js'
@@ -243,6 +240,14 @@ export function getGPTUsingToolsSection(enabledTools: Set<string>): string {
   const preferredToolRules = [
     `File reading → ${FILE_READ_TOOL_NAME} (not cat, head, tail, sed)`,
     `File editing → ${editToolName} (not sed, awk)`,
+    // The patch format requires relative paths but never says relative to what,
+    // so a session rooted in a subdirectory invites project-root-style paths
+    // that resolve one level too deep.
+    ...(editToolName === FILE_PATCH_TOOL_NAME
+      ? [
+          `${FILE_PATCH_TOOL_NAME} file paths → resolved against the session working directory, which is not always the project root`,
+        ]
+      : []),
     `File creation → ${FILE_WRITE_TOOL_NAME} (not heredoc or echo redirection)`,
     ...(embedded
       ? []
@@ -276,6 +281,7 @@ export function getGPTToneAndStyleSection(): string {
     `CODE REFERENCES: When referencing a specific function or code location, use the format file_path:line_number so the user can navigate directly.`,
     `GITHUB REFERENCES: When referencing GitHub issues or pull requests, use the owner/repo#123 format (e.g., anthropics/claude-code#100) so they render as clickable links.`,
     `TOOL CALL FRAMING: Do not use a colon before tool calls. Text like "Let me read the file:" followed by a tool call should be "Let me read the file." with a period.`,
+    `COPYABLE TEXT: When writing a prompt, or any other text meant to be copied verbatim (not run as a command), put it in a \`\`\`text fenced code block.`,
   ]
 
   return [`# Tone and Style`, ...prependBullets(items)].join('\n')
@@ -421,13 +427,6 @@ export function getGPTSessionGuidanceSection(
       ? `SKILL DISCOVERY: Relevant skills are automatically surfaced each turn as "Skills relevant to your task:" reminders. If your next action is not covered — mid-task pivot, unusual workflow, multi-step plan — call ${DISCOVER_SKILLS_TOOL_NAME} with a specific description. Already-visible or loaded skills are filtered automatically. Skip this if surfaced skills already cover your next action.`
       : null
 
-  const verificationRule =
-    hasAgentTool &&
-    feature('VERIFICATION_AGENT') &&
-    getFeatureValue_CACHED_MAY_BE_STALE('tengu_hive_evidence', false)
-      ? `VERIFICATION CONTRACT: After any non-trivial implementation (3+ file edits, backend/API changes, or infrastructure changes), you MUST spawn ${AGENT_TOOL_NAME} with subagent_type="${VERIFICATION_AGENT_TYPE}" before reporting completion to the user. You own the verification gate regardless of who did the implementing (you, a fork, or a subagent). Your own checks do NOT substitute — only the verifier assigns a verdict. Pass: original user request, all changed files, approach, plan file path if applicable. Flag concerns if you have them, but do NOT share your own test results or claim things work — the verifier must reach its verdict independently. On FAIL: fix and re-run the verifier, up to 3 cycles; if it still fails, stop and report what it flags and why your fixes are not resolving it — do not loop further. On PASS: spot-check — re-run 2-3 commands from its report and confirm output matches. On PARTIAL: report what passed and what could not be verified.`
-      : null
-
   const items = [
     hasAskUserQuestionTool
       ? `DENIED TOOL: If you do not understand why the user denied a tool call, use ${ASK_USER_QUESTION_TOOL_NAME} to ask.`
@@ -457,7 +456,6 @@ export function getGPTSessionGuidanceSection(
       ? `HANDOFF PROMPTS: When the user asks you to write a prompt for another model, agent, or session, load and follow the writing-handoff-prompts skill (via ${SKILL_TOOL_NAME}, if listed) before writing the prompt.`
       : null,
     discoverSkillsRule,
-    verificationRule,
   ].filter(item => item !== null)
 
   if (items.length === 0) return null
