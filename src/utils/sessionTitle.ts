@@ -31,7 +31,7 @@ import {
   createUserMessage,
   normalizeMessagesForAPI,
 } from './messages.js'
-import { getSmallFastModel } from './model/model.js'
+import { getSmallFastModelForProvider } from './model/model.js'
 import { resolveRequestProvider } from './model/providers.js'
 import { asSystemPrompt } from './systemPromptType.js'
 
@@ -109,7 +109,7 @@ export async function generateSessionTitle(
     }
 
     const userMessage = createUserMessage({ content: trimmed })
-    const model = getSmallFastModel()
+    const model = getSmallFastModelForProvider()
     const provider = resolveRequestProvider(model)
     codexConversationIdOverride =
       provider === 'openai' ? `side/title/${randomUUID()}` : undefined

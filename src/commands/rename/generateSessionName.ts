@@ -12,7 +12,7 @@ import {
   createUserMessage,
   normalizeMessagesForAPI,
 } from '../../utils/messages.js'
-import { getSmallFastModel } from '../../utils/model/model.js'
+import { getSmallFastModelForProvider } from '../../utils/model/model.js'
 import { resolveRequestProvider } from '../../utils/model/providers.js'
 import { extractConversationText } from '../../utils/sessionTitle.js'
 import { asSystemPrompt } from '../../utils/systemPromptType.js'
@@ -41,7 +41,7 @@ export async function generateSessionName(
     }
 
     const userMessage = createUserMessage({ content: conversationText })
-    const model = getSmallFastModel()
+    const model = getSmallFastModelForProvider()
     const provider = resolveRequestProvider(model)
     const instructionAssembly = buildProviderInstructionAssembly({
       provider,

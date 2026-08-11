@@ -37,7 +37,7 @@ import { truncateToWidth } from './format.js';
 import { findGitRoot, getDefaultBranch, getIsClean, gitExe } from './git.js';
 import { logError } from './log.js';
 import { createSystemMessage, createUserMessage, normalizeMessagesForAPI } from './messages.js';
-import { getMainLoopModel, getSmallFastModel } from './model/model.js';
+import { getMainLoopModel, getSmallFastModelForProvider } from './model/model.js';
 import { isTranscriptMessage } from './sessionStorage.js';
 import { getSettings_DEPRECATED } from './settings/settings.js';
 import { jsonStringify } from './slowOperations.js';
@@ -103,7 +103,7 @@ type TitleAndBranch = {
  * @param description The description/prompt for the session
  * @returns Promise<TitleAndBranch> The generated title and branch name
  */
-async function generateTitleAndBranch(description: string, signal: AbortSignal): Promise<TitleAndBranch> {
+export async function generateTitleAndBranch(description: string, signal: AbortSignal): Promise<TitleAndBranch> {
   const fallbackTitle = truncateToWidth(description, 75);
   const fallbackBranch = 'claude/task';
   try {
@@ -124,7 +124,7 @@ async function generateTitleAndBranch(description: string, signal: AbortSignal):
     const userMessage = createUserMessage({
       content: SESSION_TITLE_AND_BRANCH_PROMPT.replace('{description}', description)
     });
-    const model = getSmallFastModel();
+    const model = getSmallFastModelForProvider();
     const provider = resolveRequestProvider(model);
     const instructionAssembly = buildProviderInstructionAssembly({
       provider,

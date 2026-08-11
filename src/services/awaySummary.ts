@@ -7,7 +7,7 @@ import {
   getAssistantMessageText,
   normalizeMessagesForAPI,
 } from '../utils/messages.js'
-import { getSmallFastModel } from '../utils/model/model.js'
+import { getSmallFastModelForProvider } from '../utils/model/model.js'
 import { resolveRequestProvider } from '../utils/model/providers.js'
 import { asSystemPrompt } from '../utils/systemPromptType.js'
 import { buildProviderInstructionAssembly } from './api/instructionAssembly.js'
@@ -41,7 +41,7 @@ export async function generateAwaySummary(
     const memory = await getSessionMemoryContent()
     const recent = messages.slice(-RECENT_MESSAGE_WINDOW)
     recent.push(createUserMessage({ content: buildAwaySummaryPrompt(memory) }))
-    const model = getSmallFastModel()
+    const model = getSmallFastModelForProvider()
     const provider = resolveRequestProvider(model)
     // Build a provider-native instruction assembly so the OpenAI/Codex path
     // (the default on the Codex fork) receives the payload translateToCodexBody
