@@ -127,7 +127,6 @@ import {
   shouldInjectAgentListInMessages,
 } from '../tools/AgentTool/prompt.js'
 import { filterDeniedAgents } from './permissions/permissions.js'
-import { getSubscriptionType } from './auth.js'
 import { mcpInfoFromString } from '../services/mcp/mcpStringUtils.js'
 import {
   matchingRuleForInput,
@@ -1562,7 +1561,11 @@ export function getAgentListingDeltaAttachment(
       addedLines: added.map(formatAgentLine),
       removedTypes: removed,
       isInitial: announced.size === 0,
-      showConcurrencyNote: getSubscriptionType() !== 'pro',
+      // Removed: this note pushed aggressive concurrent/background spawning
+      // based on the Anthropic subscription tier, which has no relation to
+      // the account actually executing requests when routed through a
+      // non-Anthropic provider. See AgentTool/prompt.ts's concurrencyNote.
+      showConcurrencyNote: false,
     },
   ]
 }

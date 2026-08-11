@@ -1,5 +1,4 @@
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js'
-import { getSubscriptionType } from '../../utils/auth.js'
 import { hasEmbeddedSearchTools } from '../../utils/embeddedTools.js'
 import { isEnvDefinedFalsy, isEnvTruthy } from '../../utils/envUtils.js'
 import { isTeammate } from '../../utils/teammate.js'
@@ -376,14 +375,12 @@ When NOT to use the ${AGENT_TOOL_NAME} tool:
 - Other tasks that are not related to the agent descriptions above
 `
 
-  // When listing via attachment, the "launch multiple agents" note is in the
-  // attachment message (conditioned on subscription there). When inline, keep
-  // the existing per-call getSubscriptionType() check.
-  const concurrencyNote =
-    !listViaAttachment && getSubscriptionType() !== 'pro'
-      ? `
-- Launch multiple agents concurrently whenever possible, to maximize performance; to do that, use a single message with multiple tool uses${isGPTPromptStyle ? ' with run_in_background: true on each — without it, agents run serially even in the same turn' : ''}`
-      : ''
+  // Removed: this note pushed aggressive concurrent/background spawning
+  // based on the Anthropic subscription tier (getSubscriptionType()), which
+  // has no relation to the account actually executing requests when routed
+  // through a non-Anthropic provider (e.g. a Codex/ChatGPT account) — the
+  // gate was blind to the tier that actually matters for that session.
+  const concurrencyNote = ''
 
   const usageHeader = isGPTPromptStyle ? 'USAGE RULES:' : 'Usage notes:'
 
