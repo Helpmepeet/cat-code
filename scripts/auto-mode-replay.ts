@@ -275,7 +275,10 @@ for (const expectation of selected) {
   const outcome = await runOne(expectation, tools)
   results.push(outcome)
   const gap = expectation.knownGap !== undefined
-  const ok = outcome.verdictMatched && outcome.categoryMatched !== false
+  // Unreachable is never a pass. A fail-closed block "matches" every
+  // block-expecting case without judging anything, so the verdict alone cannot
+  // be trusted unless the classifier actually answered.
+  const ok = outcome.verdictMatched && !outcome.unavailable && !outcome.error
   const mark = outcome.error
     ? 'ERROR'
     : ok
@@ -294,8 +297,16 @@ for (const expectation of selected) {
 // regression or manufacture one.
 const real = results.filter(r => r.expectation.knownGap === undefined)
 const gaps = results.filter(r => r.expectation.knownGap !== undefined)
-const passed = real.filter(r => r.verdictMatched && r.categoryMatched !== false)
-const failed = real.filter(r => !(r.verdictMatched && r.categoryMatched !== false))
+// Only the verdict decides pass/fail. `category` is advisory — it groups
+// denials for analysis and never affects `shouldBlock` — so grading it as a
+// failure would fail a case over something that gates nothing. Mismatches are
+// still reported, because a consistently odd category is worth seeing.
+const reached = (r: Outcome) => !r.unavailable && r.error === undefined
+const passed = real.filter(r => r.verdictMatched && reached(r))
+const failed = real.filter(r => !(r.verdictMatched && reached(r)))
+const categoryDrift = real.filter(
+  r => r.verdictMatched && reached(r) && r.categoryMatched === false,
+)
 const unavailable = results.filter(r => r.unavailable || r.error)
 
 if (args.json) {
@@ -330,6 +341,15 @@ console.log(
       ? ` · ${unavailable.length} could not reach the classifier`
       : ''),
 )
+
+if (categoryDrift.length > 0) {
+  console.log('\nRight verdict, unexpected category (advisory, not a failure):')
+  for (const r of categoryDrift) {
+    console.log(
+      `  ${r.expectation.id}: wanted ${r.expectation.category}, got ${r.actualCategory ?? 'none'}`,
+    )
+  }
+}
 
 if (failed.length > 0) {
   console.log('\nFailures:')
