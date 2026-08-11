@@ -195,23 +195,33 @@ and a standalone mode switcher has no pending request to select from.
   restrictive `dontAsk` as “Auto.”
 - **`bypassPermissions` is an ordinary session mode. AMENDED 2026-08-11 by operator ruling,
   replacing the 2026-07-13 trusted-launch grant recorded below.** It is selectable directly from
-  the mode picker, like every other mode. `loadSidecarToolPermissionContext`
-  (`app/sidecar/sessionController.ts`) reports `isBypassPermissionsModeAvailable: true`
-  unconditionally; `CATCODE_ALLOW_BYPASS` is gone from source.
+  the mode picker, like every other mode. `CATCODE_ALLOW_BYPASS` is gone from source, and
+  `loadSidecarToolPermissionContext` (`app/sidecar/sessionController.ts`) applies no
+  desktop-local gate: it returns the engine's context untouched, so
+  `isBypassPermissionsModeAvailable` carries the ENGINE's own policy answer
+  (`permissionSetup.ts:963` — false under the `tengu_disable_bypass_permissions_mode` Statsig
+  gate or settings `permissions.disableBypassPermissionsMode`, and false again after auto-mode
+  dangerous-rule stripping). **Managed policy still disables bypass on the desktop.** What was
+  removed is the launch-flag ceremony, not the policy.
 
   **What this concedes, stated plainly so nobody re-derives it as a discovery.** Bypass escalates
   beyond T5b: no per-action prompt is ever raised, which kills both the round-trip and its audit
-  trail. There is now **no boundary gate and no killswitch on this path**:
-  `app/sidecar/sidecarServer.ts` `handleSetMode` re-checks `auto` only, and the engine's
+  trail. The engine policy above governs the PICKER, not the boundary: there is **no boundary
+  gate on this path**, because `app/sidecar/sidecarServer.ts` `handleSetMode` re-checks `auto`
+  only and never consults `isBypassPermissionsModeAvailable`. A renderer that requests bypass
+  gets it even where managed policy says the mode is unavailable. Nor is there a second
+  safety net: the engine's
   `isBypassPermissionsModeDisabled()` / `bypassPermissionsKillswitch` have **zero call sites in
   `app/`** (they run from `src/main.tsx`, `src/screens/REPL.tsx`, `src/commands/login/login.tsx`,
   and the React `AppStateProvider` the sidecar never mounts). So a T1-compromised renderer can send
   one `permission.setMode('bypassPermissions')` frame and every later tool call in that session
   runs unprompted. **That is accepted, not overlooked.**
 
-  Two consequences worth keeping visible. The `isBypassPermissionsModeAvailable` field stays on the
-  wire even though it is always `true`, so a future trusted grant surface can make it meaningful
-  again without a protocol change. And if the concession above is ever revisited, the fix is a real
+  Two consequences worth keeping visible. `isBypassPermissionsModeAvailable` is now an
+  ADVISORY field: real (it carries engine policy) but enforced nowhere, so any future code
+  reading it as a guarantee is wrong until `handleSetMode` starts honouring it. And if the
+  concession above is ever revisited, the cheapest honest fix is to make it binding at that
+  boundary; anything stronger wants a real
   grant surface outside the renderer's reach (an Electron-main confirmation, or wiring the engine
   killswitch into `app/`) — **not** restoring the launch flag alone, which only ever gated the
   picker's appearance once `handleSetMode` stopped checking it.

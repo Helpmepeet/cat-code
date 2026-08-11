@@ -93,11 +93,14 @@ export type SessionId = string
  * only while the sidecar's live engine gate reports it available; the sidecar
  * re-checks that gate before applying the transition.
  * `bypassPermissions` is an ordinary mode in this picker (operator ruling
- * 2026-08-11, amending the 2026-07-13 launch-flag grant). It is NOT gated at
- * the sidecar, and no killswitch runs on this path: the engine's
- * `bypassPermissionsKillswitch` has zero call sites in `app/`, so a renderer
- * that requests bypass gets it. That is the recorded, accepted cost of making
- * the mode selectable; the decision names the threat it concedes.
+ * 2026-08-11, amending the 2026-07-13 launch-flag grant). Two separate things,
+ * easy to conflate: `isBypassPermissionsModeAvailable` on the context snapshot
+ * carries the ENGINE's policy answer (Statsig gate + settings
+ * `permissions.disableBypassPermissionsMode`) and drives whether the picker
+ * offers the row; `handleSetMode` does NOT re-check it, so a renderer that
+ * requests bypass gets it whatever that flag says. Managed policy therefore
+ * governs the UI, not the boundary. That is the recorded, accepted cost of
+ * making the mode selectable; the decision names the threat it concedes.
  * There is NO `destination` on the wire — the sidecar pins `session` scope; a
  * renderer must never persist `permissions.defaultMode`.
  */
