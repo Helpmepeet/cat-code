@@ -83,7 +83,6 @@ async function main(): Promise<void> {
 
   // Fast-path for --dump-system-prompt: output the rendered system prompt and exit.
   // Used by prompt sensitivity evals to extract the system prompt at a specific commit.
-  // Ant-only: eliminated from external builds via feature flag.
   if (feature('DUMP_SYSTEM_PROMPT') && args[0] === '--dump-system-prompt') {
     profileCheckpoint('cli_dump_system_prompt_path');
     const {
@@ -95,6 +94,35 @@ async function main(): Promise<void> {
     } = await import('../utils/model/model.js');
     const modelIdx = args.indexOf('--model');
     const model = modelIdx !== -1 && args[modelIdx + 1] || getMainLoopModel();
+    // --model alone does NOT decide the prompt style: resolveRequestProvider()
+    // maps only `gpt-*` to a provider and otherwise falls back to the session
+    // provider, which here is the persisted startup preference. Without this
+    // override, `--dump-system-prompt --model claude-opus-5` on a machine last
+    // used with OpenAI silently emits the GPT style.
+    const providerIdx = args.indexOf('--provider');
+    const providerArg = providerIdx !== -1 ? args[providerIdx + 1] : undefined;
+    if (providerArg) {
+      const providerAliases = {
+        anthropic: 'firstParty',
+        firstParty: 'firstParty',
+        bedrock: 'bedrock',
+        vertex: 'vertex',
+        foundry: 'foundry',
+        openai: 'openai',
+        gpt: 'openai'
+      } as const;
+      const resolved = providerAliases[providerArg as keyof typeof providerAliases];
+      if (!resolved) {
+        const {
+          exitWithError
+        } = await import('../utils/process.js');
+        exitWithError(`Unknown --provider '${providerArg}'. Expected one of: ${Object.keys(providerAliases).join(', ')}`);
+      }
+      const {
+        setSessionProvider
+      } = await import('../bootstrap/state.js');
+      setSessionProvider(resolved);
+    }
     const {
       getSystemPrompt
     } = await import('../constants/prompts.js');
