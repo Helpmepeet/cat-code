@@ -1863,6 +1863,7 @@ export const AGENT_WITH_NESTED_SUBAGENT_TURN: {
         usage: { input_tokens: 300, output_tokens: 8, service_tier: null },
       },
       parent_tool_use_id: 'toolu_agent8c_parent',
+      agent_name: ' @Ada ',
       session_id: SESSION,
       uuid: '00000000-0000-4000-8000-0000008c0002',
     },
