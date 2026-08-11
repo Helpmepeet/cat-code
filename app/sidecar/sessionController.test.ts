@@ -445,10 +445,7 @@ test('PERMISSION-BOUNDARY §8 fix — settings rules and defaultMode actually lo
     )
     expect(context.alwaysDenyRules.userSettings).toContain('WebSearch')
     expect(context.mode).toBe('acceptEdits')
-    // §3 pin: no trusted desktop grant surface exists for bypass, so the
-    // loader must keep the engine-side availability backstop OFF regardless
-    // of what settings policy alone would report.
-    expect(context.isBypassPermissionsModeAvailable).toBe(false)
+    expect(context.isBypassPermissionsModeAvailable).toBe(true)
   } finally {
     if (previousConfigDir === undefined) {
       delete process.env.CLAUDE_CONFIG_DIR

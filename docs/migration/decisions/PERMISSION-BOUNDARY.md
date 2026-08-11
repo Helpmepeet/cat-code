@@ -13,7 +13,7 @@ tree on 2026-07-03; where this doc and source disagree, **source wins**.
 | # | Question | Verdict |
 |---|---|---|
 | **C1** | "always allow" through the boundary | **DECIDED + IMPLEMENTED NOW** — suggestion **selection by index**, validated at the sidecar; renderer never authors update objects. Zero engine (`src/`) changes. |
-| **C2** | mode switch | **DECIDED, spec'd for P2-4** — new inbound `permission.setMode` frame, session-destination only; `bypassPermissions` boundary-rejected unless the trusted launch flag `CATCODE_ALLOW_BYPASS=1` enabled it (§3, 2026-07-13). Not implemented here. |
+| **C2** | mode switch | **DECIDED, spec'd for P2-4** — new inbound `permission.setMode` frame, session-destination only. `bypassPermissions` was boundary-rejected unless the trusted launch flag `CATCODE_ALLOW_BYPASS=1` enabled it (§3, 2026-07-13); **amended 2026-08-11 — it is now an ordinary selectable mode with no boundary gate, and §3 records what that concedes.** Not implemented here. |
 | **C3** | rules-editor read path | **DECIDED, spec'd for P2-4** — new read-only outbound `permission.context` snapshot frame, emitted on attach and on change, built from the engine's live context. Not implemented here. |
 | **C4** | `deny.interrupt` | **CONFIRMED CUT** — `app.abort` already mass-denies all pendings and aborts the turn; no second kill path. |
 
@@ -193,20 +193,34 @@ and a standalone mode switcher has no pending request to select from.
   settings, and circuit-breaker availability before applying the session-scoped transition, and
   otherwise rejects it fail-closed. This replaces the incorrect desktop mapping that presented
   restrictive `dontAsk` as “Auto.”
-- **`bypassPermissions` is grantable ONLY from a trusted launch surface** (the "separate future
-  decision" below, taken 2026-07-13, operator-authorized). It escalates beyond T5b: no per-action
-  prompt is ever raised, killing both the round-trip and its audit trail. The desktop's trusted
-  surface is the launch env var **`CATCODE_ALLOW_BYPASS=1`** — read at SESSION CONSTRUCTION
-  (`app/sidecar/sessionController.ts` `loadSidecarToolPermissionContext`), **never from a renderer
-  frame**, mirroring the CLI's `--dangerously-skip-permissions` launch flag. It sets the context's
-  `isBypassPermissionsModeAvailable`; the sidecar's `permission.setMode` boundary
-  (`app/sidecar/sidecarServer.ts` `handleSetMode`) rejects a bypass request **UNLESS** that context
-  flag is `true`, failing closed on a missing domain or unset flag (`!== true`). So a renderer alone
-  (a browser-like surface) can **never self-escalate** — the operator must opt in at launch, exactly
-  as at the terminal. The engine's own bypass killswitch (`isBypassPermissionsModeDisabled()` /
-  `bypassPermissionsKillswitch`) still applies on top. **Default (no env var): unavailable +
-  boundary-rejected, identical to the prior always-reject.** The renderer shows the "Bypass
-  permissions" mode disabled with a launch-flag hint when unavailable (visual parity, no grant).
+- **`bypassPermissions` is an ordinary session mode. AMENDED 2026-08-11 by operator ruling,
+  replacing the 2026-07-13 trusted-launch grant recorded below.** It is selectable directly from
+  the mode picker, like every other mode. `loadSidecarToolPermissionContext`
+  (`app/sidecar/sessionController.ts`) reports `isBypassPermissionsModeAvailable: true`
+  unconditionally; `CATCODE_ALLOW_BYPASS` is gone from source.
+
+  **What this concedes, stated plainly so nobody re-derives it as a discovery.** Bypass escalates
+  beyond T5b: no per-action prompt is ever raised, which kills both the round-trip and its audit
+  trail. There is now **no boundary gate and no killswitch on this path**:
+  `app/sidecar/sidecarServer.ts` `handleSetMode` re-checks `auto` only, and the engine's
+  `isBypassPermissionsModeDisabled()` / `bypassPermissionsKillswitch` have **zero call sites in
+  `app/`** (they run from `src/main.tsx`, `src/screens/REPL.tsx`, `src/commands/login/login.tsx`,
+  and the React `AppStateProvider` the sidecar never mounts). So a T1-compromised renderer can send
+  one `permission.setMode('bypassPermissions')` frame and every later tool call in that session
+  runs unprompted. **That is accepted, not overlooked.**
+
+  Two consequences worth keeping visible. The `isBypassPermissionsModeAvailable` field stays on the
+  wire even though it is always `true`, so a future trusted grant surface can make it meaningful
+  again without a protocol change. And if the concession above is ever revisited, the fix is a real
+  grant surface outside the renderer's reach (an Electron-main confirmation, or wiring the engine
+  killswitch into `app/`) — **not** restoring the launch flag alone, which only ever gated the
+  picker's appearance once `handleSetMode` stopped checking it.
+
+  *Superseded (2026-07-13 - 2026-08-11): grantable only via the launch env var
+  `CATCODE_ALLOW_BYPASS=1`, read at session construction and never from a renderer frame, with
+  `handleSetMode` rejecting the mode unless that context flag was `true`. The boundary half of that
+  gate was already absent from `handleSetMode` before this amendment, so the documented
+  fail-closed default had stopped being true in source ahead of this ruling.*
 - **No `destination` on the wire — pinned `session` at the sidecar.** A renderer must never
   persist `permissions.defaultMode` (a compromised renderer writing
   `defaultMode: bypassPermissions` into `userSettings` would disarm every future session — a

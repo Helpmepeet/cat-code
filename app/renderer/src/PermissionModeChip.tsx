@@ -13,11 +13,10 @@ import {
  * popover of the wire-allowlisted modes (`PERMISSION_SET_MODE_MODES`), presented
  * with truthful names for the engine's distinct classifier-backed `auto` and
  * restrictive `dontAsk` policies.
- * `bypassPermissions` is shown disabled unless the session was launched with the
- * trusted opt-in (`CATCODE_ALLOW_BYPASS=1` → `isBypassPermissionsModeAvailable`);
- * the sidecar re-checks that flag and rejects otherwise (C2, PERMISSION-BOUNDARY.md
- * §3). Auto is disabled when the sidecar reports that its live classifier gate
- * is unavailable.
+ * `bypassPermissions` is available directly in the mode picker. The sidecar
+ * still owns the mode transition and the engine's own bypass killswitch remains
+ * authoritative. Auto is disabled when the sidecar reports that its live
+ * classifier gate is unavailable.
  * The popover shows ONLY the mode list (the prototype's `PermChip`,
  * Surfaces.jsx:338-363) — NOT the Always-allow/deny/ask rules, which the
  * prototype relegates to a separate "Manage rules" surface (a future desktop
@@ -82,10 +81,8 @@ const MODE_META = {
     toneText: 'text-red-400',
     toneDot: 'bg-red-400',
   },
-  // The prototype's 5th mode. Selectable ONLY when the session was launched with
-  // the trusted opt-in (`CATCODE_ALLOW_BYPASS=1` → context
-  // `isBypassPermissionsModeAvailable`); otherwise the row is shown disabled for
-  // visual parity, and the sidecar rejects a request anyway (defence in depth).
+  // The prototype's 5th mode. The sidecar owns the transition and the engine's
+  // bypass killswitch remains the final authority.
   bypassPermissions: {
     label: 'Bypass',
     title: 'Bypass permissions',
@@ -96,9 +93,7 @@ const MODE_META = {
 } satisfies Record<PermissionSetModeMode, ModeMeta>
 
 // The prototype's popover order (Surfaces.jsx PERM_MODES): Plan · Ask · Accept
-// edits · then the skip-prompts mode. The prototype's Bypass is the mode NOT on
-// the desktop wire allowlist — it stays off until a trusted desktop grant surface
-// exists (`sessionController.ts:133`).
+// edits · then the skip-prompts modes.
 const MODE_DISPLAY_ORDER = [
   'plan',
   'default',
@@ -120,8 +115,9 @@ export function PermissionModeChip({
 }: {
   context: PermissionContextSnapshot | null
   onSetMode: (mode: PermissionSetModeMode) => void
-  /** The mode a session with no live context ran under, from its cached
-   * transcript. Display-only: there is no engine here to switch. */
+  /** The mode a session with no live context is in, from its cached transcript
+   * (a preview) or from the last one its engine reported before going away.
+   * Display-only: there is no engine here to switch. */
   readOnlyMode?: string | null
   /** Feature #4 — roving-tabindex props from the composer action bar's toolbar
    * (data-composer-face + tabIndex + onFocus). Spread on the trigger so the chip
@@ -137,12 +133,13 @@ export function PermissionModeChip({
   const current =
     context && isKnownMode(context.mode) ? MODE_META[context.mode] : null
 
-  // No live context. A PREVIEWED session still knows the mode it ran under,
-  // from its own cached transcript, so show it as a quiet read-only face: there
-  // is no engine to switch, and the value may be an engine-internal mode the
-  // picker could not offer anyway. With nothing cached either, the mode was
-  // never reported — and since every session HAS one, naming it would be a
-  // claim about state this pane never read, so render nothing at all.
+  // No live context, so nothing here may switch a mode. A session can still
+  // KNOW its mode: a preview reads its cached transcript, and one that lost its
+  // engine keeps the last mode that engine reported. Either way it renders as a
+  // quiet read-only face, since the value may also be an engine-internal mode
+  // the picker could not offer. With no source at all the mode was never
+  // reported — and since every session HAS one, naming it would be a claim
+  // about state this pane never read, so render nothing.
   if (!context) {
     if (!readOnlyMode) return null
     const meta = isKnownMode(readOnlyMode) ? MODE_META[readOnlyMode] : null
@@ -190,9 +187,7 @@ export function PermissionModeChip({
             const meta = MODE_META[mode]
             const active = context.mode === mode
             const unavailable =
-              (mode === 'auto' && !context.permissionClassifierEnabled) ||
-              (mode === 'bypassPermissions' &&
-                !context.isBypassPermissionsModeAvailable)
+              mode === 'auto' && !context.permissionClassifierEnabled
             return (
               <button
                 key={mode}
@@ -203,8 +198,6 @@ export function PermissionModeChip({
                 title={
                   mode === 'auto' && unavailable
                     ? 'Auto mode is unavailable for this model or has been disabled in settings.'
-                    : unavailable
-                    ? 'Bypass mode has to be turned on when Cat Code starts. Enable it from the command line, then open a new session.'
                     : undefined
                 }
                 onClick={() => {

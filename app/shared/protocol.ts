@@ -89,11 +89,15 @@ export type SessionId = string
 /**
  * C2 — the modes a renderer may request via `permission.setMode`
  * (decisions/PERMISSION-BOUNDARY.md §3). The first four sit inside T5b's
- * already-conceded surface. `bypassPermissions` is available directly in the
- * app mode picker; the engine's own bypass killswitch remains authoritative.
- * `auto` is classifier-backed and may be selected only while the sidecar's live
- * engine gate reports it available; the sidecar re-checks that gate before
- * applying the transition.
+ * already-conceded surface. `auto` is classifier-backed and may be selected
+ * only while the sidecar's live engine gate reports it available; the sidecar
+ * re-checks that gate before applying the transition.
+ * `bypassPermissions` is an ordinary mode in this picker (operator ruling
+ * 2026-08-11, amending the 2026-07-13 launch-flag grant). It is NOT gated at
+ * the sidecar, and no killswitch runs on this path: the engine's
+ * `bypassPermissionsKillswitch` has zero call sites in `app/`, so a renderer
+ * that requests bypass gets it. That is the recorded, accepted cost of making
+ * the mode selectable; the decision names the threat it concedes.
  * There is NO `destination` on the wire — the sidecar pins `session` scope; a
  * renderer must never persist `permissions.defaultMode`.
  */

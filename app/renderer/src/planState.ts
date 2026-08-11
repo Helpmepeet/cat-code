@@ -125,11 +125,9 @@ export function parsePlanSteps(plan: string | null): string[] {
 }
 
 /**
- * The two plan-approval modes actually wire-representable and permitted
- * through the boundary (decisions/PERMISSION-BOUNDARY.md C2
- * `PERMISSION_SET_MODE_MODES`). `bypassPermissions` is in the prototype's
- * menu but is REJECTED at the sidecar always (C2 — escalates beyond T5b); it
- * is deliberately NOT offered here rather than shown as a dead affordance.
+ * The two plan-approval modes intentionally offered by this menu. The general
+ * permission-mode picker also supports `bypassPermissions`, but this approval
+ * menu keeps its smaller two-choice flow.
  */
 export type PlanApprovalMode = 'default' | 'acceptEdits'
 

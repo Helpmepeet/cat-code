@@ -98,8 +98,8 @@ test('an unrecognized mode falls back to its raw name (no crash)', () => {
 // ── Feature #13: adopting the shared usePopover lifecycle + in-panel roving ────
 // The chip now shares the run-control chips' popover machinery (composerPopover):
 // first-item focus on open, Escape/selection focus-restore to the trigger, and
-// ArrowUp/Down/Home/End roving over the mode rows (bypass is natively `disabled`
-// and skipped). The pure roving math is in composerPopover.test.ts; the live key
+// ArrowUp/Down/Home/End roving over the mode rows. The pure roving math is in
+// composerPopover.test.ts; the live key
 // behaviour is operator-GUI owed — SSR renders only the CLOSED face (the popover
 // is client open-state, and the component uses hooks so it can't be called as a
 // plain function). These guard that the refactor kept the closed-face contract.
