@@ -1344,7 +1344,8 @@ export const AgentTool = buildTool({
                 message: normalizedFirstMessage,
                 type: 'agent_progress',
                 prompt,
-                agentId: syncAgentId
+                agentId: syncAgentId,
+                agentName,
               }
             });
           }
@@ -1803,7 +1804,8 @@ export const AgentTool = buildTool({
                       // prompt only needed on first progress message (UI.tsx:624
                       // reads progressMessages[0]). Omit here to avoid duplication.
                       prompt: '',
-                      agentId: syncAgentId
+                      agentId: syncAgentId,
+                      agentName,
                     }
                   });
                 }

@@ -103,6 +103,19 @@ const MAX_TOOL_PROGRESS_TRACKING_ENTRIES = 100
 const TOOL_PROGRESS_THROTTLE_MS = 30000
 const toolProgressLastSentTime = new Map<string, number>()
 
+/**
+ * A subagent's friendly name is engine-minted at spawn. Preserve it on every
+ * nested full frame so transcript consumers can display it without consulting
+ * live task state. Restore intentionally does not recreate nested frames.
+ */
+function progressAgentName(data: unknown): string | undefined {
+  if (!data || typeof data !== 'object' || !('agentName' in data)) return undefined
+  const name = data.agentName
+  if (typeof name !== 'string') return undefined
+  const normalized = name.trim().replace(/^@/, '').trim()
+  return normalized || undefined
+}
+
 export function* normalizeMessage(message: Message): Generator<SDKMessage> {
   switch (message.type) {
     case 'assistant':
@@ -127,6 +140,7 @@ export function* normalizeMessage(message: Message): Generator<SDKMessage> {
         message.data.type === 'agent_progress' ||
         message.data.type === 'skill_progress'
       ) {
+        const agentName = progressAgentName(message.data)
         for (const _ of normalizeMessages([message.data.message])) {
           switch (_.type) {
             case 'assistant':
@@ -138,6 +152,7 @@ export function* normalizeMessage(message: Message): Generator<SDKMessage> {
                 type: 'assistant',
                 message: _.message,
                 parent_tool_use_id: message.parentToolUseID,
+                ...(agentName ? { agent_name: agentName } : {}),
                 session_id: getSessionId(),
                 uuid: _.uuid,
                 error: _.error,
@@ -148,6 +163,7 @@ export function* normalizeMessage(message: Message): Generator<SDKMessage> {
                 type: 'user',
                 message: _.message,
                 parent_tool_use_id: message.parentToolUseID,
+                ...(agentName ? { agent_name: agentName } : {}),
                 session_id: getSessionId(),
                 uuid: _.uuid,
                 timestamp: _.timestamp,
