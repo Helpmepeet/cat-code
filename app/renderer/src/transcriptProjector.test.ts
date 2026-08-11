@@ -2413,6 +2413,127 @@ test('legacy Apply_patch result with whole-file before/after still narrows to a 
   })
 })
 
+/*
+ * The RUNNING-name path. The C4 nesting test also asserts this, but a break here
+ * should fail a test named for identity rather than one named for nesting, and
+ * the absent case below is not covered anywhere else.
+ */
+test('a nested frame\'s engine-minted agent_name reaches the child row while the agent runs', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  for (const message of AGENT_WITH_NESTED_SUBAGENT_TURN.messages) {
+    state = projectServerFrame(state, messageFrame('session-1', message))
+  }
+
+  const agent = selectNestedTranscriptRows(state, 'session-1')[0]
+  if (agent?.kind !== 'tool-use') throw new Error('expected agent tool-use row')
+  const child = agent.children[0]
+  if (child?.kind !== 'tool-use') throw new Error('expected nested child tool-use row')
+  expect(child.agentName).toBe('Ada')
+})
+
+test('a nested frame with no agent_name leaves the child row unnamed, never guessing one', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  for (const message of AGENT_WITH_NESTED_SUBAGENT_TURN.messages) {
+    // Same turn with identity stripped: the projector must degrade to no name
+    // rather than fall back to the parent's type or the session plane.
+    const { agent_name: _dropped, ...withoutName } = message as Record<string, unknown>
+    state = projectServerFrame(state, messageFrame('session-1', withoutName as SDKMessage))
+  }
+
+  const agent = selectNestedTranscriptRows(state, 'session-1')[0]
+  if (agent?.kind !== 'tool-use') throw new Error('expected agent tool-use row')
+  const child = agent.children[0]
+  if (child?.kind !== 'tool-use') throw new Error('expected nested child tool-use row')
+  expect(child.agentName).toBeUndefined()
+})
+
+test('an Agent tool_use_result carries the worker name onto the row, @-stripped', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_agent_name',
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_agent_name',
+            name: 'Task',
+            input: { subagent_type: 'Explore', description: 'trace the seam' },
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000000d0001',
+    }),
+  )
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 'toolu_agent_name', content: 'done', is_error: false },
+        ],
+      },
+      parent_tool_use_id: null,
+      // The real `AgentToolResult` shape (agentToolUtils.ts:727). The engine
+      // also spells the name into the model-facing result TEXT; the projector
+      // must read this structured field, not that prose.
+      tool_use_result: { agentId: 'agent-1', agentType: 'Explore', agentName: ' @Ada ' },
+      uuid: '00000000-0000-4000-8000-0000000d0002',
+    }),
+  )
+
+  const row = selectTranscriptRows(state, 'session-1')[0]
+  if (row?.kind !== 'tool-use') throw new Error('expected tool-use row')
+  expect(row.result?.agentName).toBe('Ada')
+})
+
+test('a non-Agent tool_use_result leaves agentName absent, never an empty string', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_no_name',
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'toolu_no_name', name: 'Bash', input: {} }],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000000d0003',
+    }),
+  )
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 'toolu_no_name', content: 'ok', is_error: false },
+        ],
+      },
+      parent_tool_use_id: null,
+      // A blank name must degrade to absent, so no card renders an empty handle.
+      tool_use_result: { agentName: '   ' },
+      uuid: '00000000-0000-4000-8000-0000000d0004',
+    }),
+  )
+
+  const row = selectTranscriptRows(state, 'session-1')[0]
+  if (row?.kind !== 'tool-use') throw new Error('expected tool-use row')
+  expect(row.result?.agentName).toBeUndefined()
+})
+
 test('a foreign/malformed tool_use_result never crashes and yields diff: null', () => {
   let state = createTranscriptState()
   state = projectServerFrame(state, ready('session-1'))
@@ -2639,6 +2760,7 @@ test('C4: an Agent tool_use with a nested subagent stays ONE single display item
   if (child?.kind !== 'tool-use') throw new Error('expected nested child tool-use row')
   expect(child.toolUseId).toBe(AGENT_WITH_NESTED_SUBAGENT_TURN.childToolUseId)
   expect(child.parentToolUseId).toBe(AGENT_WITH_NESTED_SUBAGENT_TURN.parentToolUseId)
+  expect(child.agentName).toBe('Ada')
   // The nested subagent's own tool_result correlated too (read-time join).
   expect(child.status).toBe('success')
 
@@ -2996,4 +3118,81 @@ test('hidden tier: the two views cache separately and each stays identity-stable
   expect(selectTranscriptDisplayItems(state, 'session-1', true)).toBe(
     selectTranscriptDisplayItems(state, 'session-1', true),
   )
+})
+
+/* ── slash-command replay identity (bug, 2026-08-08) ───────────────────────
+ * A sidecar broadcasts a live echo of the raw prompt, then persists the
+ * EXPANDED `<command-name>` breadcrumb. Both must carry the submitted uuid
+ * (src/utils/processUserInput/processSlashCommand.tsx `case 'local'`), because
+ * replay dedupe here is uuid-keyed and nothing else links the two shapes. When
+ * the breadcrumb minted its own uuid, an in-run sidecar restart replayed it as
+ * a second `/compact` row. The fix is at the producer: no assertion below
+ * correlates on CONTENT, and none should be added — see
+ * docs/migration/reviews/2026-08-08-slash-command-replay-duplicate.md. */
+
+const SLASH_UUID = '00000000-0000-4000-8000-0000000009f1'
+const SLASH_BREADCRUMB =
+  '<command-name>/compact</command-name>\n' +
+  '<command-message>compact</command-message>\n' +
+  '<command-args></command-args>'
+
+function slashFrame(content: string, uuid: string, replay?: true) {
+  const raw = JSON.stringify({
+    type: 'user',
+    message: { role: 'user', content },
+    parent_tool_use_id: null,
+    uuid,
+  })
+  return {
+    ...messageFrame('session-1', JSON.parse(raw) as SDKMessage),
+    ...(replay ? { replay: true as const } : {}),
+  }
+}
+
+test('a replayed slash breadcrumb sharing the submit uuid does not add a row', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  // Live: the sidecar's echo of what the operator typed.
+  state = projectServerFrame(state, slashFrame('/compact', SLASH_UUID))
+  // Restore: the same command, now as the persisted expanded breadcrumb.
+  state = projectServerFrame(
+    state,
+    slashFrame(SLASH_BREADCRUMB, SLASH_UUID, true),
+  )
+  // Its output row is separately identified and must survive the dedupe.
+  state = projectServerFrame(
+    state,
+    slashFrame(
+      '<local-command-stdout>Compacted</local-command-stdout>',
+      '00000000-0000-4000-8000-0000000009f2',
+      true,
+    ),
+  )
+
+  const rows = selectTranscriptRows(state, 'session-1')
+  expect(rows.filter(row => row.kind === 'user-text')).toHaveLength(1)
+  expect(rows[0]).toMatchObject({ kind: 'user-text', content: '/compact' })
+  expect(rows[1]).toMatchObject({ noticeType: 'local_command_output' })
+  expect(rows).toHaveLength(2)
+})
+
+test('a breadcrumb under a FRESH uuid duplicates — the defect the producer owns', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(state, slashFrame('/compact', SLASH_UUID))
+  state = projectServerFrame(
+    state,
+    slashFrame(SLASH_BREADCRUMB, '00000000-0000-4000-8000-0000000009f3', true),
+  )
+
+  // Two rows that both READ `/compact` — the reported symptom. They are not the
+  // same kind (the live echo is user text, the breadcrumb is a command echo),
+  // which is precisely why no consumer-side rule can collapse them. This is
+  // CORRECT behaviour for a uuid-keyed dedupe handed two distinct identities.
+  const rows = selectTranscriptRows(state, 'session-1')
+  expect(rows).toHaveLength(2)
+  expect(rows.map(row => row.kind)).toEqual(['user-text', 'command-echo'])
+  expect(
+    rows.every(row => 'content' in row && row.content === '/compact'),
+  ).toBe(true)
 })
