@@ -12,7 +12,11 @@ import {
   getDefaultAgentPrompt,
   SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
 } from '../constants/prompts.js'
-import { getGPTDoingTasksSection } from '../constants/promptStyles/gpt.js'
+import {
+  getGPTDoingTasksSection,
+  getGPTUsingToolsSection,
+} from '../constants/promptStyles/gpt.js'
+import { FILE_PATCH_TOOL_NAME } from '../tools/FilePatchTool/constants.js'
 import { buildProviderInstructionAssembly } from '../services/api/instructionAssembly.js'
 import { getEditToolDescription } from '../tools/FileEditTool/prompt.js'
 import { FilePatchTool } from '../tools/FilePatchTool/FilePatchTool.js'
@@ -383,5 +387,14 @@ describe('provider and prompt regressions', () => {
         process.env.CLAUDE_CODE_SIMPLE = originalSimple
       }
     }
+  })
+  // The patch format mandates relative paths without naming the base, so a
+  // session rooted below the project root resolves them one level too deep.
+  test('GPT tool rules state where patch paths resolve, only when that tool is live', () => {
+    const withPatchTool = getGPTUsingToolsSection(new Set([FILE_PATCH_TOOL_NAME]))
+    expect(withPatchTool).toContain('resolved against the session working directory')
+
+    const withoutPatchTool = getGPTUsingToolsSection(new Set())
+    expect(withoutPatchTool).not.toContain('resolved against the session working directory')
   })
 })
