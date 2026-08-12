@@ -361,7 +361,8 @@ test('a write drawer opens on the file that was written, not the ack', () => {
   )
 
   expect(model.output).toBe('const x = 1\nconst y = 2')
-  // Nothing is hidden: the raw input panel still carries it verbatim.
+  // The model still carries the input verbatim, but since 2026-08-13 the drawer
+  // no longer renders it, so this selection is the whole of what a write shows.
   expect(model.input.content).toBe('const x = 1\nconst y = 2')
 })
 

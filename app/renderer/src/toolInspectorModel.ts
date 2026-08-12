@@ -71,7 +71,12 @@ export function describeToolForInspector(row: ToolUseRow): ToolInspectorModel {
  *
  * A FAILED write keeps its result: that one carries the error, and there is no
  * written file to show. So does a write whose input has no usable `content`.
- * The raw input panel is untouched either way, so nothing is hidden by this.
+ *
+ * This used to end "the raw input panel is untouched either way, so nothing is
+ * hidden by this". That stopped being true on 2026-08-13, when the drawer lost
+ * its Input section: `output` is now the ONLY thing the drawer shows for a
+ * write, so this selection decides what is visible rather than which of two
+ * panels leads.
  */
 function selectOutput(
   row: ToolUseRow,

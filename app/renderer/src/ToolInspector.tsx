@@ -86,6 +86,15 @@ export function ToolInspector({
       </div>
 
       <div className="flex-1 overflow-y-auto px-[18px] py-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {/* CURRENTLY UNREACHABLE, and kept deliberately rather than deleted.
+            `ToolCardBody` returns `DiffView` before any windowed body
+            (`TranscriptView.tsx`, the `row.result?.diff` early return), so a row
+            with a diff never renders a reveal band, and the band is now the only
+            route in. Before 2026-08-13 the card footer was the other route and
+            this section really did paint. Deleting it would be a second parity
+            cut nobody has approved, and it comes back the moment a diff body
+            gains a route; do not treat a passing test on it as proof of a live
+            surface. Raised for an owner decision alongside that removal. */}
         {model.diff ? (
           <>
             <SectionLabel>Diff · {model.diff.filePath}</SectionLabel>
