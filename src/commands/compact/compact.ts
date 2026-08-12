@@ -86,15 +86,28 @@ export const call: LocalCommandCall = async (args, context) => {
       }
     }
 
-    // Reactive-only mode: route /compact through the reactive path.
-    // Checked after session-memory (that path is cheap and orthogonal).
-    if (reactiveCompact?.isReactiveOnlyMode()) {
-      return await compactViaReactive(
+    // Prefix compaction is the normal path for /compact: summarize the older
+    // prefix, keep the newest complete rounds verbatim. Checked after
+    // session-memory (that path is cheap and orthogonal).
+    //
+    // canPrefixCompact decides the fallback BEFORE compactViaReactive runs
+    // PreCompact hooks, because compactConversation runs its own — a user's
+    // PreCompact hook must fire once per compaction, not once per attempted
+    // path. A conversation of one round cannot be split; full compaction has no
+    // such requirement.
+    if (
+      reactiveCompact?.isReactiveManualCompactEnabled() &&
+      reactiveCompact.canPrefixCompact(messages)
+    ) {
+      const reactiveResult = await compactViaReactive(
         messages,
         context,
         customInstructions,
         reactiveCompact,
       )
+      if (reactiveResult) {
+        return reactiveResult
+      }
     }
 
     // Fall back to traditional compaction
@@ -142,6 +155,13 @@ export const call: LocalCommandCall = async (args, context) => {
   }
 }
 
+/**
+ * Returns null when prefix compaction cannot run on this conversation, which
+ * is the caller's signal to fall through to full compaction. Defensive only:
+ * the caller's canPrefixCompact already answered that for the same messages.
+ * Every other failure means the summary request could not be served, and full
+ * compaction sends strictly more, so those still surface as errors.
+ */
 async function compactViaReactive(
   messages: Message[],
   context: ToolUseContext,
@@ -151,7 +171,7 @@ async function compactViaReactive(
   type: 'compact'
   compactionResult: CompactionResult
   displayText: string
-}> {
+} | null> {
   context.onCompactProgress?.({
     type: 'hooks_start',
     hookType: 'pre_compact',
@@ -189,11 +209,11 @@ async function compactViaReactive(
 
     if (!outcome.ok) {
       // The outer catch in `call` translates these: aborted → "Compaction
-      // canceled." (via abortController.signal.aborted check), NOT_ENOUGH →
-      // re-thrown as-is, everything else → "Error during compaction: …".
+      // canceled." (via abortController.signal.aborted check), everything
+      // else → "Error during compaction: …".
       switch (outcome.reason) {
         case 'too_few_groups':
-          throw new Error(ERROR_MESSAGE_NOT_ENOUGH_MESSAGES)
+          return null
         case 'aborted':
           throw new Error(ERROR_MESSAGE_USER_ABORT)
         case 'exhausted':

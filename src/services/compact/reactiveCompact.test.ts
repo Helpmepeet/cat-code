@@ -1,3 +1,4 @@
+import { feature } from 'bun:bundle'
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
@@ -480,5 +481,285 @@ describe('planReactiveSplit', () => {
     ]
     const groups = groupMessagesByApiRound(messages)
     expect(planReactiveSplit(messages, groups, groups.length)).toBeNull()
+  })
+})
+
+/**
+ * The production trigger, not the reactive function.
+ *
+ * The defect these tests exist for was a feature that was compiled in and
+ * never reached: `autoCompactIfNeeded` is what actually fires at the token
+ * threshold, so a test that calls `reactiveCompactOnPromptTooLong` directly
+ * proves nothing about whether ordinary compaction routes into it. These drive
+ * `autoCompactIfNeeded` and let the real gate decide.
+ *
+ * `feature()` is false under a plain `bun test`, so the reactive branch is
+ * dead there. `bun test --feature=REACTIVE_COMPACT` compiles it in — the same
+ * switch `scripts/build.ts` passes to `bun build` for dev-full. Both runs are
+ * required: the pair asserts the reactive result WITH the feature and the
+ * full-compaction fallback WITHOUT it.
+ */
+const REACTIVE_COMPILED_IN = ((): boolean => {
+  if (feature('REACTIVE_COMPACT')) {
+    return true
+  }
+  return false
+})()
+
+describe('autoCompactIfNeeded routing', () => {
+  const originalSessionId = getSessionId()
+  const originalProjectDir = getSessionProjectDir()
+  const ENV_KEYS = [
+    'DISABLE_COMPACT',
+    'DISABLE_AUTO_COMPACT',
+    'ENABLE_CLAUDE_CODE_SM_COMPACT',
+    'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE',
+  ] as const
+  const envSnapshot = new Map<string, string | undefined>()
+  let tempDir: string
+  let summarizerRequests: string[]
+
+  const MODEL = 'gpt-5.6-terra'
+
+  beforeEach(async () => {
+    for (const key of ENV_KEYS) {
+      envSnapshot.set(key, process.env[key])
+      delete process.env[key]
+    }
+    tempDir = mkdtempSync(join(tmpdir(), 'autocompact-routing-'))
+    switchSession('autocompact-routing-session', tempDir)
+    summarizerRequests = []
+
+    await mock.module('../analytics/growthbook.js', () => ({
+      getFeatureValue_CACHED_MAY_BE_STALE: mock(
+        (key: string, defaultValue: boolean) =>
+          key === 'tengu_compact_cache_prefix' ? false : defaultValue,
+      ),
+    }))
+    await mock.module('../api/claude.js', () => ({
+      ...realClaudeApi,
+      queryModelWithStreaming: mock(async function* (params: unknown) {
+        summarizerRequests.push(JSON.stringify(params))
+        yield assistant('summary', '<summary>Older rounds, summarized.</summary>')
+      }),
+    }))
+  })
+
+  afterEach(() => {
+    mock.restore()
+    switchSession(originalSessionId, originalProjectDir)
+    rmSync(tempDir, { recursive: true, force: true })
+    for (const key of ENV_KEYS) {
+      const value = envSnapshot.get(key)
+      if (value === undefined) {
+        delete process.env[key]
+      } else {
+        process.env[key] = value
+      }
+    }
+    envSnapshot.clear()
+  })
+
+  /**
+   * Three rounds carrying a usage anchor above the model's autocompact
+   * threshold, so `shouldAutoCompact` decides to compact from the same
+   * measurement production uses instead of the test forcing the decision.
+   */
+  async function overThresholdConversation() {
+    const { getAutoCompactThreshold } = await import('./autoCompact.js')
+    const first = createUserMessage({ content: 'OLDEST_USER_PROMPT' })
+    const firstAnswer = assistant('round-1', 'OLDEST_ASSISTANT_ANSWER')
+    const second = createUserMessage({ content: 'MIDDLE_USER_PROMPT' })
+    const secondAnswer = assistant('round-2', 'MIDDLE_ASSISTANT_ANSWER')
+    const third = createUserMessage({ content: 'THIRD_USER_PROMPT' })
+    const newestAnswer = assistant('round-3', 'NEWEST_ASSISTANT_ANSWER')
+    newestAnswer.message.usage.input_tokens =
+      getAutoCompactThreshold(MODEL) + 50_000
+    const newest = createUserMessage({ content: 'NEWEST_USER_PROMPT' })
+    return {
+      newestAnswer,
+      newest,
+      messages: [
+        first,
+        firstAnswer,
+        second,
+        secondAnswer,
+        third,
+        newestAnswer,
+        newest,
+      ],
+    }
+  }
+
+  function contextForModel(
+    messages: Message[],
+    progress?: { type: string }[],
+  ): ToolUseContext {
+    const context = createToolUseContext(messages)
+    context.options.mainLoopModel = MODEL
+    if (progress) {
+      context.onCompactProgress = event => progress.push(event)
+    }
+    return context
+  }
+
+  test.if(REACTIVE_COMPILED_IN)(
+    'threshold compaction preserves the newest round and hands it to the next request',
+    async () => {
+      const { autoCompactIfNeeded, isAutoCompactEnabled } = await import(
+        './autoCompact.js'
+      )
+      const { buildPostCompactMessages } = await import('./compact.js')
+      // Asserted rather than mocked: the user's own setting is allowed to turn
+      // this off, so a machine where it is off must fail loudly here instead of
+      // passing without ever reaching the subject.
+      expect(isAutoCompactEnabled()).toBe(true)
+
+      const { messages, newestAnswer, newest } =
+        await overThresholdConversation()
+      const context = contextForModel(messages)
+      const outcome = await autoCompactIfNeeded(
+        messages,
+        context,
+        cacheSafeParamsFor(context, messages),
+        'repl_main_thread',
+      )
+
+      expect(outcome.wasCompacted).toBe(true)
+      // Full compaction returns no messagesToKeep at all, so this key is the
+      // discriminator between the two paths.
+      expect(outcome.compactionResult!.messagesToKeep).toEqual([
+        newestAnswer,
+        newest,
+      ])
+
+      // The array query.ts replaces messagesForQuery with (query.ts:614-620):
+      // boundary, summary, then the preserved round byte for byte.
+      const nextRequest = buildPostCompactMessages(outcome.compactionResult!)
+      expect(nextRequest[0]!.type).toBe('system')
+      expect(nextRequest[1]).toBe(outcome.compactionResult!.summaryMessages[0]!)
+      expect(nextRequest[2]).toBe(newestAnswer)
+      expect(nextRequest[3]).toBe(newest)
+
+      // One summary request, over the prefix only. Sending the preserved tail
+      // to the summarizer as well is the size problem being avoided.
+      expect(summarizerRequests).toHaveLength(1)
+      expect(summarizerRequests[0]).toContain('OLDEST_USER_PROMPT')
+      expect(summarizerRequests[0]).not.toContain('NEWEST_USER_PROMPT')
+    },
+  )
+
+  test.if(REACTIVE_COMPILED_IN)(
+    'falls back to full compaction when the conversation is one round',
+    async () => {
+      const { autoCompactIfNeeded } = await import('./autoCompact.js')
+      const { getAutoCompactThreshold } = await import('./autoCompact.js')
+
+      const onlyAnswer = assistant('round-1', 'ONLY_ASSISTANT_ANSWER')
+      onlyAnswer.message.usage.input_tokens =
+        getAutoCompactThreshold(MODEL) + 50_000
+      const messages = [
+        createUserMessage({ content: 'ONLY_USER_PROMPT' }),
+        onlyAnswer,
+      ]
+      const progress: { type: string }[] = []
+      const context = contextForModel(messages, progress)
+      const outcome = await autoCompactIfNeeded(
+        messages,
+        context,
+        cacheSafeParamsFor(context, messages),
+        'repl_main_thread',
+      )
+
+      expect(outcome.wasCompacted).toBe(true)
+      expect(outcome.compactionResult!.messagesToKeep).toBeUndefined()
+      // Exactly one compaction was started. Two would mean the reactive path
+      // ran far enough to emit its own progress and its own PreCompact hooks
+      // before falling back, firing the user's hook twice for one compaction.
+      expect(progress.filter(event => event.type === 'compact_start')).toEqual([
+        { type: 'compact_start' },
+      ])
+    },
+  )
+
+  test.if(!REACTIVE_COMPILED_IN)(
+    'compiles out to full compaction when REACTIVE_COMPACT is absent',
+    async () => {
+      const { autoCompactIfNeeded, isAutoCompactEnabled } = await import(
+        './autoCompact.js'
+      )
+      expect(isAutoCompactEnabled()).toBe(true)
+
+      const { messages } = await overThresholdConversation()
+      const context = contextForModel(messages)
+      const outcome = await autoCompactIfNeeded(
+        messages,
+        context,
+        cacheSafeParamsFor(context, messages),
+        'repl_main_thread',
+      )
+
+      expect(outcome.wasCompacted).toBe(true)
+      expect(outcome.compactionResult!.messagesToKeep).toBeUndefined()
+    },
+  )
+
+  test('DISABLE_AUTO_COMPACT suppresses the threshold trigger entirely', async () => {
+    process.env.DISABLE_AUTO_COMPACT = '1'
+    const { autoCompactIfNeeded } = await import('./autoCompact.js')
+
+    const { messages } = await overThresholdConversation()
+    const context = contextForModel(messages)
+    const outcome = await autoCompactIfNeeded(
+      messages,
+      context,
+      cacheSafeParamsFor(context, messages),
+      'repl_main_thread',
+    )
+
+    expect(outcome.wasCompacted).toBe(false)
+    expect(summarizerRequests).toHaveLength(0)
+  })
+})
+
+describe('prefix-compaction gates', () => {
+  const ENV_KEYS = ['DISABLE_COMPACT', 'DISABLE_AUTO_COMPACT'] as const
+  const envSnapshot = new Map<string, string | undefined>()
+
+  beforeEach(async () => {
+    for (const key of ENV_KEYS) {
+      envSnapshot.set(key, process.env[key])
+      delete process.env[key]
+    }
+    await mock.module('../analytics/growthbook.js', () => ({
+      getFeatureValue_CACHED_MAY_BE_STALE: mock(
+        (_key: string, defaultValue: boolean) => defaultValue,
+      ),
+    }))
+  })
+
+  afterEach(() => {
+    mock.restore()
+    for (const key of ENV_KEYS) {
+      const value = envSnapshot.get(key)
+      if (value === undefined) {
+        delete process.env[key]
+      } else {
+        process.env[key] = value
+      }
+    }
+    envSnapshot.clear()
+  })
+
+  test('turning automatic compaction off leaves manual /compact on the prefix path', async () => {
+    const { isReactiveCompactEnabled, isReactiveManualCompactEnabled } =
+      await import('./reactiveCompact.js')
+
+    process.env.DISABLE_AUTO_COMPACT = '1'
+    // The automatic triggers stand down, because the user asked for no
+    // automatic compaction. An explicitly typed /compact still summarizes the
+    // prefix rather than silently reverting to full replacement.
+    expect(isReactiveCompactEnabled()).toBe(false)
+    expect(isReactiveManualCompactEnabled()).toBe(true)
   })
 })

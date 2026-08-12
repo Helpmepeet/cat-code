@@ -83,9 +83,12 @@ import { adjustIndexToPreserveAPIInvariants } from './sessionMemoryCompact.js'
  * complete API rounds verbatim, and hand the caller a CompactionResult it can
  * feed straight back into the interrupted turn.
  *
- * Traditional full compaction (compactConversation) stays the fallback; this
- * path only runs when the API has already rejected a request (prompt-too-long
- * or media-size) or when reactive-only mode routes /compact here.
+ * This is the NORMAL path for all three triggers: the autocompact threshold
+ * (autoCompact.ts), manual /compact, and recovery after the API has already
+ * rejected a request (prompt-too-long or media-size). Traditional full
+ * compaction (compactConversation) is the fallback, taken only when this
+ * module reports that a prefix split is impossible ('too_few_groups' — a
+ * single round cannot be halved, and full compaction has no such requirement).
  *
  * Two properties are load-bearing and easy to break:
  *   - The summary fork keeps the parent's ENTIRE tool set. The prompt-cache key
@@ -127,38 +130,44 @@ export type ReactiveCompactOutcome = {
 }
 
 /**
- * Is reactive recovery allowed to act at all?
+ * Remote kill-switch for prefix compaction as a whole (default ON), not an
+ * opt-in: the module only exists in builds that compiled REACTIVE_COMPACT in.
+ * Flipping it off returns every path to full replacement.
+ */
+function isPrefixCompactionKillSwitchOn(): boolean {
+  return getFeatureValue_CACHED_MAY_BE_STALE('tengu_reactive_compact', true)
+}
+
+/**
+ * Is reactive compaction allowed to act on an AUTOMATIC trigger — the
+ * threshold in autoCompactIfNeeded, and 413/media recovery in the query loop?
  *
  * Consults isAutoCompactEnabled directly rather than shouldAutoCompact: the
- * suppression gates layered into shouldAutoCompact (reactive-only mode,
- * context collapse) exist to hand the headroom problem to a recovery path, so
- * reading them here would switch this path off exactly when it is the last one
- * left. DISABLE_COMPACT / DISABLE_AUTO_COMPACT / the user's autoCompactEnabled
- * setting all still win, because a user who asked for no automatic compaction
- * gets none.
- *
- * The GrowthBook read is a remote kill-switch (default on), not an opt-in: the
- * module only exists in builds that compiled REACTIVE_COMPACT in.
+ * suppression gates layered into shouldAutoCompact (context collapse) exist to
+ * hand the headroom problem to a recovery path, so reading them here would
+ * switch this path off exactly when it is the last one left. DISABLE_COMPACT /
+ * DISABLE_AUTO_COMPACT / the user's autoCompactEnabled setting all still win,
+ * because a user who asked for no automatic compaction gets none.
  */
 export function isReactiveCompactEnabled(): boolean {
   if (!isAutoCompactEnabled()) {
     return false
   }
-  return getFeatureValue_CACHED_MAY_BE_STALE('tengu_reactive_compact', true)
+  return isPrefixCompactionKillSwitchOn()
 }
 
 /**
- * Reactive-only mode: proactive autocompact is suppressed and /compact routes
- * through this module. Single source of truth for that decision —
- * autoCompact.ts's shouldAutoCompact calls this rather than re-reading the
- * flag, so the two can never disagree and leave a session with no compaction
- * path at all.
+ * Is prefix compaction the algorithm for a MANUAL /compact?
+ *
+ * Deliberately does NOT consult isAutoCompactEnabled. That setting decides
+ * whether compaction happens on its own, not how an explicitly requested
+ * compaction summarizes, and the users most likely to turn automatic
+ * compaction off are the ones who run /compact by hand — tying the two would
+ * hand exactly them the full-replacement path. DISABLE_COMPACT still wins: it
+ * removes the command (commands/compact/index.ts isEnabled).
  */
-export function isReactiveOnlyMode(): boolean {
-  return (
-    isReactiveCompactEnabled() &&
-    getFeatureValue_CACHED_MAY_BE_STALE('tengu_cobalt_raccoon', false)
-  )
+export function isReactiveManualCompactEnabled(): boolean {
+  return isPrefixCompactionKillSwitchOn()
 }
 
 /**
@@ -236,6 +245,31 @@ function selectMessagesToKeep(active: Message[], pivot: number): Message[] {
 }
 
 /**
+ * Group 0 is whatever precedes the first assistant response, so it is a
+ * preamble rather than a round. One round cannot be split into "summarize" and
+ * "preserve" halves — preserving the only answer while summarizing away the
+ * prompt that produced it is worse than a full compaction.
+ */
+function hasCompleteRoundsToSplit(groups: Message[][]): boolean {
+  return groups.filter(group => group[0]?.type === 'assistant').length >= 2
+}
+
+/**
+ * Can this conversation be prefix-compacted at all?
+ *
+ * Both callers consult this BEFORE running PreCompact hooks or emitting
+ * compaction progress, because the fallback they take when it answers false
+ * (compactConversation) runs PreCompact hooks itself — and a user's PreCompact
+ * hook must not fire twice for one compaction. Cheap and side-effect free: no
+ * flag read, no API call, just the grouping.
+ */
+export function canPrefixCompact(messages: Message[]): boolean {
+  return hasCompleteRoundsToSplit(
+    groupMessagesByApiRound(getMessagesAfterCompactBoundary(messages)),
+  )
+}
+
+/**
  * Split point for a given number of preserved trailing groups, expressed as an
  * index into `active`. Returns null when nothing would be left to summarize.
  *
@@ -276,15 +310,9 @@ export async function reactiveCompactOnPromptTooLong(
   // across it would leave the resume walk a chain with a hole in it.
   const active = getMessagesAfterCompactBoundary(messages)
   const groups = groupMessagesByApiRound(active)
-  // Group 0 is whatever precedes the first assistant response, so it is a
-  // preamble rather than a round. One round cannot be split into "summarize"
-  // and "preserve" halves — preserving the only answer while summarizing away
-  // the prompt that produced it is worse than a full compaction. Report it
-  // instead of manufacturing that split.
-  const completeRounds = groups.filter(
-    group => group[0]?.type === 'assistant',
-  ).length
-  if (completeRounds < 2) {
+  // Callers pre-check this with canPrefixCompact so they can fall back before
+  // running PreCompact hooks; repeated here so the function is safe on its own.
+  if (!hasCompleteRoundsToSplit(groups)) {
     return { ok: false, reason: 'too_few_groups' }
   }
 

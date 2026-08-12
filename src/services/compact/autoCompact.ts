@@ -15,6 +15,7 @@ import { logForDebugging } from '../../utils/debug.js'
 import { isEnvTruthy } from '../../utils/envUtils.js'
 import { hasExactErrorMessage, isAbortError } from '../../utils/errors.js'
 import type { CacheSafeParams } from '../../utils/forkedAgent.js'
+import { executePreCompactHooks } from '../../utils/hooks.js'
 import { logError } from '../../utils/log.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { tokenCountWithEstimation } from '../../utils/tokens.js'
@@ -28,6 +29,7 @@ import {
   compactConversation,
   ERROR_MESSAGE_INCOMPLETE_RESPONSE,
   ERROR_MESSAGE_USER_ABORT,
+  mergeHookInstructions,
   type RecompactionInfo,
 } from './compact.js'
 import { runPostCompactCleanup } from './postCompactCleanup.js'
@@ -480,28 +482,6 @@ export async function shouldAutoCompact(
     return false
   }
 
-  // Reactive-only mode: suppress proactive autocompact, let reactive compact
-  // catch the API's prompt-too-long. feature() wrapper keeps the flag string
-  // out of external builds (REACTIVE_COMPACT is ant-only).
-  // Note: returning false here also means autoCompactIfNeeded never reaches
-  // trySessionMemoryCompaction in the query loop — the /compact call site
-  // still tries session memory first. Revisit if reactive-only graduates.
-  //
-  // The decision lives in reactiveCompact.isReactiveOnlyMode so suppression and
-  // the path that is supposed to replace it can never disagree — reading the
-  // raw flag here would let a session end up with proactive compaction off and
-  // reactive compaction off too. require() rather than import: reactiveCompact
-  // imports isAutoCompactEnabled from this module.
-  if (feature('REACTIVE_COMPACT')) {
-    /* eslint-disable @typescript-eslint/no-require-imports */
-    const { isReactiveOnlyMode } =
-      require('./reactiveCompact.js') as typeof import('./reactiveCompact.js')
-    /* eslint-enable @typescript-eslint/no-require-imports */
-    if (isReactiveOnlyMode()) {
-      return false
-    }
-  }
-
   // Context-collapse mode: same suppression. Collapse IS the context
   // management system when it's on — the 90% commit / 95% blocking-spawn
   // flow owns the headroom problem. Autocompact's threshold is model-scaled,
@@ -547,6 +527,117 @@ export async function shouldAutoCompact(
   )
 
   return isAboveAutoCompactThreshold
+}
+
+/**
+ * Threshold-triggered prefix compaction: summarize the older prefix and keep
+ * the newest complete API rounds verbatim.
+ *
+ * This is the NORMAL automatic path. compactConversation's full replacement is
+ * the fallback, and the only failure that falls back to it is 'too_few_groups':
+ * reactive needs two complete rounds to split, compactConversation needs none.
+ * Every other failure means the summary request itself could not be served, and
+ * a full compaction sends MORE than the prefix did — so those are thrown for
+ * autoCompactIfNeeded's existing classifier to decide whether they burn
+ * circuit-breaker budget, rather than paying for a second doomed API call.
+ *
+ * A preserved tail large enough to leave the session still over the threshold
+ * re-triggers on the next turn; that second pass sees only the preserved tail
+ * after the boundary, reports 'too_few_groups', and full compaction closes it.
+ * The loop is self-limiting at one extra compaction, which is why no separate
+ * size guard exists here.
+ *
+ * PreCompact hooks run HERE, not inside reactiveCompactOnPromptTooLong: every
+ * caller of that function runs them outside so it can merge the PreCompact
+ * userDisplayMessage with the PostCompact one the call returns.
+ * compactConversation runs its own (compact.ts:433-452), which is why the
+ * fallback decision is taken by canPrefixCompact BEFORE any hook runs: a user's
+ * PreCompact hook must fire once per compaction, not once per attempted path.
+ *
+ * require() rather than import: reactiveCompact imports isAutoCompactEnabled
+ * from this module.
+ */
+async function tryReactivePrefixCompaction(
+  messages: Message[],
+  toolUseContext: ToolUseContext,
+  cacheSafeParams: CacheSafeParams,
+  querySource: QuerySource | undefined,
+): Promise<CompactionResult | null> {
+  if (!feature('REACTIVE_COMPACT')) {
+    return null
+  }
+  /* eslint-disable @typescript-eslint/no-require-imports */
+  const {
+    canPrefixCompact,
+    isReactiveCompactEnabled,
+    reactiveCompactOnPromptTooLong,
+  } = require('./reactiveCompact.js') as typeof import('./reactiveCompact.js')
+  /* eslint-enable @typescript-eslint/no-require-imports */
+  if (!isReactiveCompactEnabled()) {
+    return null
+  }
+  if (!canPrefixCompact(messages)) {
+    logForDebugging(
+      'autocompact: conversation too short to split — falling back to full compaction',
+    )
+    return null
+  }
+
+  toolUseContext.setSDKStatus?.('compacting')
+  toolUseContext.onCompactProgress?.({
+    type: 'hooks_start',
+    hookType: 'pre_compact',
+  })
+  try {
+    const hookResult = await executePreCompactHooks(
+      { trigger: 'auto', customInstructions: null },
+      toolUseContext.abortController.signal,
+    )
+
+    toolUseContext.setStreamMode?.('requesting')
+    toolUseContext.setResponseLength?.(() => 0)
+    toolUseContext.onCompactProgress?.({ type: 'compact_start' })
+
+    const outcome = await reactiveCompactOnPromptTooLong(
+      messages,
+      cacheSafeParams,
+      {
+        customInstructions: mergeHookInstructions(
+          undefined,
+          hookResult.newCustomInstructions,
+        ),
+        trigger: 'auto',
+        querySource,
+      },
+    )
+
+    if (!outcome.ok) {
+      // Defensive only: canPrefixCompact above already answered this for the
+      // same messages, so reaching here would mean the two disagree.
+      if (outcome.reason === 'too_few_groups') {
+        return null
+      }
+      // An abort is the user's doing, so it reuses the message
+      // isTransientAutoCompactFailure already classifies and spends no
+      // circuit-breaker budget. 'exhausted' is the opposite: a conversation
+      // the summary request itself cannot fit is precisely what the breaker
+      // exists to stop retrying, so it must NOT be classified transient.
+      if (outcome.reason === 'aborted') {
+        throw new Error(ERROR_MESSAGE_USER_ABORT)
+      }
+      throw new Error(`Reactive compaction failed: ${outcome.reason}`)
+    }
+
+    const userDisplayMessage =
+      [hookResult.userDisplayMessage, outcome.result.userDisplayMessage]
+        .filter(Boolean)
+        .join('\n') || undefined
+
+    return { ...outcome.result, userDisplayMessage }
+  } finally {
+    toolUseContext.onCompactProgress?.({ type: 'compact_end' })
+    toolUseContext.setSDKStatus?.(null)
+  }
 }
 
 export async function autoCompactIfNeeded(
@@ -633,15 +724,26 @@ export async function autoCompactIfNeeded(
   }
 
   try {
-    const compactionResult = await compactConversation(
+    // Prefix compaction is the normal path; full replacement is the fallback.
+    // null means "reactive is off, or could not split this conversation".
+    const reactiveResult = await tryReactivePrefixCompaction(
       messages,
       toolUseContext,
       cacheSafeParams,
-      true, // Suppress user questions for autocompact
-      undefined, // No custom instructions for autocompact
-      true, // isAutoCompact
-      recompactionInfo,
+      querySource,
     )
+
+    const compactionResult =
+      reactiveResult ??
+      (await compactConversation(
+        messages,
+        toolUseContext,
+        cacheSafeParams,
+        true, // Suppress user questions for autocompact
+        undefined, // No custom instructions for autocompact
+        true, // isAutoCompact
+        recompactionInfo,
+      ))
 
     // Reset lastSummarizedMessageId since legacy compaction replaces all messages
     // and the old message UUID will no longer exist in the new messages array

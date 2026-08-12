@@ -28,6 +28,7 @@ const fullExperimentalFeatures = [
   'EXTRACT_MEMORIES',
   'HISTORY_PICKER',
   'HOOK_PROMPTS',
+  'INTERRUPTED_TURN',
   'KAIROS_BRIEF',
   'KAIROS_CHANNELS',
   'LODESTONE',

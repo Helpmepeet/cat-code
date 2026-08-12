@@ -177,6 +177,12 @@ function* yieldMissingToolResultBlocks(
  * The complementary hole is deliberate and documented in `interruptedTurn.ts`:
  * a shutdown or crash that never reaches this branch leaves no record, and
  * resume falls back to the generic continuation.
+ *
+ * INTERRUPTED_TURN gates capture ONLY, and that is the whole feature gate:
+ * writing a record is the only thing this feature originates. The resume-side
+ * reader (`conversationRecovery.ts` takeInterruptedTurnRecord) finds nothing
+ * without one and reproduces the pre-feature `Continue from where you left
+ * off.` behaviour exactly, so no second gate is needed there.
  */
 function captureInterruptedTurnForAbort(
   messages: Message[],
@@ -184,6 +190,7 @@ function captureInterruptedTurnForAbort(
   interruption: UserMessage,
   toolUseContext: ToolUseContext,
 ): void {
+  if (!feature('INTERRUPTED_TURN')) return
   if (toolUseContext.agentId) return
   captureInterruptedTurn({
     sessionId: getSessionId(),

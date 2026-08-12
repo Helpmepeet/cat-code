@@ -9,7 +9,6 @@ import { microcompactMessages } from 'src/services/compact/microCompact.js'
 import { getSdkBetas } from '../bootstrap/state.js'
 import { getCommandName } from '../commands.js'
 import { getSystemContext } from '../context.js'
-import { getFeatureValue_CACHED_MAY_BE_STALE } from '../services/analytics/growthbook.js'
 import {
   getAutoCompactThreshold,
   isAutoCompactEnabled,
@@ -1220,19 +1219,13 @@ export async function analyzeContextUsage(
   )
 
   // Reserved space after messages (not counted in actualUsage shown to user).
-  // Under reactive-only mode (cobalt_raccoon), proactive autocompact never
-  // fires and the reserved buffer is a lie — skip it entirely and let Free
-  // space fill the grid. feature() guard keeps the flag string out of
-  // external builds. Same for context-collapse (marble_origami) — collapse
-  // owns the threshold ladder and autocompact is suppressed in
-  // shouldAutoCompact, so the 33k buffer shown here would be a lie too.
+  // Reactive prefix compaction does NOT skip this: it changes which compaction
+  // runs at the autocompact threshold, not whether the threshold fires, so the
+  // reserved buffer stays real. Context-collapse (marble_origami) does skip it
+  // — collapse owns the threshold ladder and autocompact is suppressed in
+  // shouldAutoCompact, so the 33k buffer shown here would be a lie.
   let reservedTokens = 0
   let skipReservedBuffer = false
-  if (feature('REACTIVE_COMPACT')) {
-    if (getFeatureValue_CACHED_MAY_BE_STALE('tengu_cobalt_raccoon', false)) {
-      skipReservedBuffer = true
-    }
-  }
   if (feature('CONTEXT_COLLAPSE')) {
     /* eslint-disable @typescript-eslint/no-require-imports */
     const { isContextCollapseEnabled } =
@@ -1243,8 +1236,8 @@ export async function analyzeContextUsage(
     }
   }
   if (skipReservedBuffer) {
-    // No buffer category pushed — reactive compaction is transparent and
-    // doesn't need a visible reservation in the grid.
+    // No buffer category pushed — collapse manages headroom itself and doesn't
+    // need a visible reservation in the grid.
   } else if (isAutoCompact && autoCompactThreshold !== undefined) {
     // Autocompact buffer (from effective context)
     reservedTokens = contextWindow - autoCompactThreshold
