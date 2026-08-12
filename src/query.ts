@@ -117,9 +117,11 @@ import type { Terminal, Continue } from './query/transitions.js'
 import { feature } from 'bun:bundle'
 import {
   getCurrentTurnTokenBudget,
+  getSessionId,
   getTurnOutputTokens,
   incrementBudgetContinuationCount,
 } from './bootstrap/state.js'
+import { captureInterruptedTurn } from './utils/interruptedTurn.js'
 import { createBudgetTracker, checkTokenBudget } from './query/tokenBudget.js'
 import { count } from './utils/array.js'
 
@@ -158,6 +160,40 @@ function* yieldMissingToolResultBlocks(
       })
     }
   }
+}
+
+/**
+ * Persist what the interrupted turn had already produced, bound to the leaf it
+ * was produced at.
+ *
+ * Called immediately after the interruption marker is yielded, which is the
+ * last user message the abort path appends, so `[...messages,
+ * ...assistantMessages, interruption]` is the conversation as the transcript
+ * will hold it and the leaf derived from it is the leaf resume will compute.
+ *
+ * Main thread only: subagents run on sidechains but share the session id, so
+ * capturing there would overwrite the main record with a sidechain's output.
+ *
+ * The complementary hole is deliberate and documented in `interruptedTurn.ts`:
+ * a shutdown or crash that never reaches this branch leaves no record, and
+ * resume falls back to the generic continuation.
+ */
+function captureInterruptedTurnForAbort(
+  messages: Message[],
+  assistantMessages: AssistantMessage[],
+  interruption: UserMessage,
+  toolUseContext: ToolUseContext,
+): void {
+  if (toolUseContext.agentId) return
+  captureInterruptedTurn({
+    sessionId: getSessionId(),
+    messages: [...messages, ...assistantMessages, interruption],
+    assistantMessages,
+    reason:
+      toolUseContext.abortController.signal.reason === 'user-cancel'
+        ? 'user_abort'
+        : 'aborted',
+  })
 }
 
 /**
@@ -1130,9 +1166,18 @@ async function* queryLoop(
       // Skip the interruption message for submit-interrupts — the queued
       // user message that follows provides sufficient context.
       if (toolUseContext.abortController.signal.reason !== 'interrupt') {
-        yield createUserInterruptionMessage({
+        const interruption = createUserInterruptionMessage({
           toolUse: false,
         })
+        yield interruption
+        // Runs after the consumer has taken the marker, so `messages` below is
+        // the conversation as it will be persisted.
+        captureInterruptedTurnForAbort(
+          messages,
+          assistantMessages,
+          interruption,
+          toolUseContext,
+        )
       }
       return { reason: 'aborted_streaming' }
     }
@@ -1629,9 +1674,16 @@ async function* queryLoop(
       // Skip the interruption message for submit-interrupts — the queued
       // user message that follows provides sufficient context.
       if (toolUseContext.abortController.signal.reason !== 'interrupt') {
-        yield createUserInterruptionMessage({
+        const interruption = createUserInterruptionMessage({
           toolUse: true,
         })
+        yield interruption
+        captureInterruptedTurnForAbort(
+          messages,
+          assistantMessages,
+          interruption,
+          toolUseContext,
+        )
       }
       // Check maxTurns before returning when aborted
       const nextTurnCountOnAbort = turnCount + 1

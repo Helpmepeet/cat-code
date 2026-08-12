@@ -42,6 +42,13 @@ import {
   NO_RESPONSE_REQUESTED,
   normalizeMessages,
 } from './messages.js'
+import {
+  formatInterruptedTurnContinuation,
+  matchInterruptedTurnRecord,
+  takeInterruptedTurnRecord,
+  type InterruptedTurnMatch,
+  type InterruptedTurnRecordV1,
+} from './interruptedTurn.js'
 import { copyPlanForResume } from './plans.js'
 import { processSessionStartHooks } from './sessionStart.js'
 import {
@@ -152,6 +159,12 @@ export type TurnInterruptionState =
 export type DeserializeResult = {
   messages: Message[]
   turnInterruptionState: TurnInterruptionState
+  /**
+   * Outcome of the durable interrupted-turn record, when one existed. `null`
+   * when no record was supplied; a `discard` result means a record existed and
+   * was deliberately not applied.
+   */
+  interruptedTurn: InterruptedTurnMatch | null
 }
 
 /**
@@ -172,8 +185,18 @@ export function deserializeMessages(serializedMessages: Message[]): Message[] {
  */
 export function deserializeMessagesWithInterruptDetection(
   serializedMessages: Message[],
+  interruptedTurnRecord?: InterruptedTurnRecordV1 | null,
 ): DeserializeResult {
   try {
+    // Leaf matching runs against the messages exactly as loaded, before any
+    // filter removes the unresolved tool_use trajectory the record describes.
+    const interruptedTurn = matchInterruptedTurnRecord(
+      interruptedTurnRecord,
+      serializedMessages,
+    )
+    const appliedRecord =
+      interruptedTurn?.status === 'apply' ? interruptedTurn.record : null
+
     // Transform legacy attachment types before processing
     const migratedMessages = serializedMessages.map(
       migrateLegacyAttachmentTypes,
@@ -215,11 +238,25 @@ export function deserializeMessagesWithInterruptDetection(
     // Transform mid-turn interruptions into interrupted_prompt by appending
     // a synthetic continuation message. This unifies both interruption kinds
     // so the consumer only needs to handle interrupted_prompt.
+    //
+    // A record that matched the leaf supersedes the generic text for EITHER
+    // interruption kind. It carries the output the filters above just removed
+    // (an unresolved tool_use trajectory takes its assistant text with it), and
+    // the leaf binding already proved it belongs to this branch. Without a
+    // record the behaviour is unchanged.
+    const continuationContent = appliedRecord
+      ? internalState.kind === 'none'
+        ? undefined
+        : formatInterruptedTurnContinuation(appliedRecord)
+      : internalState.kind === 'interrupted_turn'
+        ? 'Continue from where you left off.'
+        : undefined
+
     let turnInterruptionState: TurnInterruptionState
-    if (internalState.kind === 'interrupted_turn') {
+    if (continuationContent !== undefined) {
       const [continuationMessage] = normalizeMessages([
         createUserMessage({
-          content: 'Continue from where you left off.',
+          content: continuationContent,
           isMeta: true,
         }),
       ])
@@ -229,7 +266,12 @@ export function deserializeMessagesWithInterruptDetection(
         message: continuationMessage!,
       }
     } else {
-      turnInterruptionState = internalState
+      // interrupted_turn always produced a continuation above, so the remaining
+      // kinds are exactly TurnInterruptionState.
+      turnInterruptionState =
+        internalState.kind === 'interrupted_turn'
+          ? { kind: 'none' }
+          : internalState
     }
 
     // Append a synthetic assistant sentinel after the last user message so
@@ -257,7 +299,11 @@ export function deserializeMessagesWithInterruptDetection(
       )
     }
 
-    return { messages: filteredMessages, turnInterruptionState }
+    return {
+      messages: filteredMessages,
+      turnInterruptionState,
+      interruptedTurn: interruptedTurn ?? null,
+    }
   } catch (error) {
     logError(error as Error)
     throw error
@@ -513,6 +559,7 @@ export async function loadConversationForResume(
 ): Promise<{
   messages: Message[]
   turnInterruptionState: TurnInterruptionState
+  interruptedTurn: InterruptedTurnMatch | null
   fileHistorySnapshots?: FileHistorySnapshot[]
   attributionSnapshots?: AttributionSnapshotMessage[]
   contentReplacements?: ContentReplacementRecord[]
@@ -615,8 +662,17 @@ export async function loadConversationForResume(
     // This ensures skills survive multiple compaction cycles after resume.
     restoreSkillStateFromMessages(messages!)
 
+    // Consume the durable interrupted-turn record for this session. Read here,
+    // matched inside the deserializer against the messages exactly as loaded.
+    // Consumption is unconditional: the record describes one interruption, so a
+    // leaf mismatch must retire it rather than leave it for the next resume.
+    const interruptedTurnRecord = await takeInterruptedTurnRecord(sessionId)
+
     // Deserialize messages to handle unresolved tool uses and ensure proper format
-    const deserialized = deserializeMessagesWithInterruptDetection(messages!)
+    const deserialized = deserializeMessagesWithInterruptDetection(
+      messages!,
+      interruptedTurnRecord,
+    )
     messages = deserialized.messages
 
     // Process session start hooks for resume
@@ -628,6 +684,7 @@ export async function loadConversationForResume(
     return {
       messages,
       turnInterruptionState: deserialized.turnInterruptionState,
+      interruptedTurn: deserialized.interruptedTurn,
       fileHistorySnapshots: log?.fileHistorySnapshots,
       attributionSnapshots: log?.attributionSnapshots,
       contentReplacements: log?.contentReplacements,
