@@ -10,7 +10,10 @@ import type { QuerySource } from '../../constants/querySource.js'
 import type { ToolUseContext } from '../../Tool.js'
 import type { Message } from '../../types/message.js'
 import { getGlobalConfig } from '../../utils/config.js'
-import { getContextWindowForModel } from '../../utils/context.js'
+import {
+  formatContextWindowProvenance,
+  resolveContextWindowPolicy,
+} from '../../utils/contextWindowPolicy.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { isEnvTruthy } from '../../utils/envUtils.js'
 import { hasExactErrorMessage, isAbortError } from '../../utils/errors.js'
@@ -20,7 +23,6 @@ import { logError } from '../../utils/log.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { tokenCountWithEstimation } from '../../utils/tokens.js'
 import { roughTokenCountEstimationForContent } from '../tokenEstimation.js'
-import { getMaxOutputTokensForModel } from '../api/claude.js'
 import { getCodexLeaseExhaustedMessage } from '../api/codexAccountLeaseManager.js'
 import { notifyCompaction } from '../api/promptCacheBreakDetection.js'
 import { setLastSummarizedMessageId } from '../SessionMemory/sessionMemoryUtils.js'
@@ -35,27 +37,18 @@ import {
 import { runPostCompactCleanup } from './postCompactCleanup.js'
 import { trySessionMemoryCompaction } from './sessionMemoryCompact.js'
 
-// Reserve this many tokens for output during compaction
-// Based on p99.99 of compact summary output being 17,387 tokens.
-const MAX_OUTPUT_TOKENS_FOR_SUMMARY = 20_000
-
-// Returns the context window size minus the max output tokens for the model
+/**
+ * The window every threshold below is derived from: the model's advertised
+ * window, narrowed by the account's long-context entitlement, then by operator
+ * configuration, then by the output capacity a summary response needs.
+ *
+ * `resolveContextWindowPolicy` owns the four notions and the reason for each
+ * step between them (`utils/contextWindowPolicy.ts`). Read the policy directly
+ * when you need to say WHY a session's budget is what it is; this returns only
+ * the number.
+ */
 export function getEffectiveContextWindowSize(model: string): number {
-  const reservedTokensForSummary = Math.min(
-    getMaxOutputTokensForModel(model),
-    MAX_OUTPUT_TOKENS_FOR_SUMMARY,
-  )
-  let contextWindow = getContextWindowForModel(model, getSdkBetas())
-
-  const autoCompactWindow = process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
-  if (autoCompactWindow) {
-    const parsed = parseInt(autoCompactWindow, 10)
-    if (!isNaN(parsed) && parsed > 0) {
-      contextWindow = Math.min(contextWindow, parsed)
-    }
-  }
-
-  return contextWindow - reservedTokensForSummary
+  return resolveContextWindowPolicy(model, getSdkBetas()).effective
 }
 
 export type AutoCompactTrackingState = {
@@ -515,10 +508,10 @@ export async function shouldAutoCompact(
     tokenCountWithEstimation(messages, model, nonMessageOverheadTokens) -
     preRequestTokensFreed
   const threshold = getAutoCompactThreshold(model)
-  const effectiveWindow = getEffectiveContextWindowSize(model)
+  const policy = resolveContextWindowPolicy(model, getSdkBetas())
 
   logForDebugging(
-    `autocompact: tokens=${tokenCount} threshold=${threshold} effectiveWindow=${effectiveWindow}${preRequestTokensFreed > 0 ? ` preRequestFreed=${preRequestTokensFreed}` : ''}${nonMessageOverheadTokens !== undefined ? ` nonMessageOverhead=${nonMessageOverheadTokens}` : ''}`,
+    `autocompact: tokens=${tokenCount} threshold=${threshold} effectiveWindow=${policy.effective} ${formatContextWindowProvenance(policy)}${preRequestTokensFreed > 0 ? ` preRequestFreed=${preRequestTokensFreed}` : ''}${nonMessageOverheadTokens !== undefined ? ` nonMessageOverhead=${nonMessageOverheadTokens}` : ''}`,
   )
 
   const { isAboveAutoCompactThreshold } = calculateTokenWarningState(

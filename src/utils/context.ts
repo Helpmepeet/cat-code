@@ -33,7 +33,11 @@ export function is1mContextDisabled(): boolean {
 }
 
 export function has1mContext(model: string): boolean {
-  if (is1mContextDisabled()) {
+  return has1mSuffix(model, is1mContextDisabled())
+}
+
+function has1mSuffix(model: string, disabled: boolean): boolean {
+  if (disabled) {
     return false
   }
   return /\[1m\]/i.test(model)
@@ -41,7 +45,11 @@ export function has1mContext(model: string): boolean {
 
 // @[MODEL LAUNCH]: Update this pattern if the new model supports 1M context
 export function modelSupports1M(model: string): boolean {
-  if (is1mContextDisabled()) {
+  return supports1M(model, is1mContextDisabled())
+}
+
+function supports1M(model: string, disabled: boolean): boolean {
+  if (disabled) {
     return false
   }
   const canonical = getCanonicalName(model)
@@ -54,7 +62,11 @@ export function modelSupports1M(model: string): boolean {
  * older models and explicit user configuration.
  */
 export function modelUses1MContextByDefault(model: string): boolean {
-  if (is1mContextDisabled()) {
+  return uses1MByDefault(model, is1mContextDisabled())
+}
+
+function uses1MByDefault(model: string, disabled: boolean): boolean {
+  if (disabled) {
     return false
   }
   const canonical = getCanonicalName(model)
@@ -65,52 +77,101 @@ export function modelUses1MContextByDefault(model: string): boolean {
   )
 }
 
-export function getContextWindowForModel(
+/**
+ * Which branch of the resolution below produced a model's advertised window.
+ *
+ * This tag is DECISIONAL, not cosmetic. The long-context entitlement cap is an
+ * Anthropic extra-usage fact, so it must never narrow a window a Codex model
+ * advertises: `isLongContextEntitlementScoped` reads this tag to decide.
+ */
+export type ContextWindowSource =
+  | 'max_context_tokens_override'
+  | 'model_1m_suffix'
+  | 'frontier_1m_default'
+  | 'model_capability_cache'
+  | 'context_1m_beta'
+  | 'sonnet_1m_experiment'
+  | 'gpt_5_6_codex'
+  | 'gpt_default'
+  | 'ant_model_catalog'
+  | 'default'
+
+export type NativeContextWindow = {
+  window: number
+  source: ContextWindowSource
+}
+
+export type NativeContextWindowOptions = {
+  /**
+   * Resolve as if `CLAUDE_CODE_DISABLE_1M_CONTEXT` were unset, i.e. what the
+   * model advertises before the compliance kill switch narrows it. Only the
+   * policy resolver uses this, to report the kill switch as its own clamp
+   * instead of silently folding it into the model's advertised window.
+   */
+  ignore1mDisable?: boolean
+  /**
+   * Resolve as if the ant-only `CLAUDE_CODE_MAX_CONTEXT_TOKENS` were unset.
+   * Same reason: an operator ceiling is configuration, not advertisement.
+   */
+  ignoreMaxContextTokensOverride?: boolean
+}
+
+/**
+ * The window the MODEL advertises, plus which branch said so.
+ *
+ * Ten branches, in precedence order: the ant operator override, the `[1m]`
+ * suffix, the Claude 5 frontier default, the first-party capability cache, the
+ * 1M beta header, the Sonnet 1M experiment, GPT-5.6 Codex, other `gpt-*`, the
+ * ant model catalog, and the 200,000 fallback. Every 1M branch is nullified by
+ * `CLAUDE_CODE_DISABLE_1M_CONTEXT`, and the capability-cache branch clamps back
+ * to 200,000 under it rather than falling through.
+ */
+export function resolveNativeContextWindow(
   model: string,
   betas?: string[],
-): number {
+  options: NativeContextWindowOptions = {},
+): NativeContextWindow {
+  const disabled = options.ignore1mDisable ? false : is1mContextDisabled()
+
   // Allow override via environment variable (ant-only)
   // This takes precedence over all other context window resolution, including 1M detection,
   // so users can cap the effective context window for local decisions (auto-compact, etc.)
   // while still using a 1M-capable endpoint.
-  if (
-    process.env.USER_TYPE === 'ant' &&
-    process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS
-  ) {
-    const override = parseInt(process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, 10)
-    if (!isNaN(override) && override > 0) {
-      return override
+  if (!options.ignoreMaxContextTokensOverride) {
+    const override = readMaxContextTokensOverride()
+    if (override !== undefined) {
+      return { window: override, source: 'max_context_tokens_override' }
     }
   }
 
   // [1m] suffix — explicit client-side opt-in, respected over all detection
-  if (has1mContext(model)) {
-    return 1_000_000
+  if (has1mSuffix(model, disabled)) {
+    return { window: 1_000_000, source: 'model_1m_suffix' }
   }
 
   // Claude 5 frontier models have a 1M context window by default. This must
   // precede capability-cache lookup so a cold or stale cache cannot make the
   // statusline and compaction logic fall back to the legacy 200k default.
-  if (modelUses1MContextByDefault(model)) {
-    return 1_000_000
+  if (uses1MByDefault(model, disabled)) {
+    return { window: 1_000_000, source: 'frontier_1m_default' }
   }
 
   const cap = getModelCapability(model)
   if (cap?.max_input_tokens && cap.max_input_tokens >= 100_000) {
-    if (
-      cap.max_input_tokens > MODEL_CONTEXT_WINDOW_DEFAULT &&
-      is1mContextDisabled()
-    ) {
-      return MODEL_CONTEXT_WINDOW_DEFAULT
+    if (cap.max_input_tokens > MODEL_CONTEXT_WINDOW_DEFAULT && disabled) {
+      return {
+        window: MODEL_CONTEXT_WINDOW_DEFAULT,
+        source: 'model_capability_cache',
+      }
     }
-    return cap.max_input_tokens
+    return { window: cap.max_input_tokens, source: 'model_capability_cache' }
   }
 
-  if (betas?.includes(CONTEXT_1M_BETA_HEADER) && modelSupports1M(model)) {
-    return 1_000_000
+  if (betas?.includes(CONTEXT_1M_BETA_HEADER) && supports1M(model, disabled)) {
+    return { window: 1_000_000, source: 'context_1m_beta' }
   }
-  if (getSonnet1mExpTreatmentEnabled(model)) {
-    return 1_000_000
+  if (sonnet1mExpTreatmentEnabled(model, disabled)) {
+    return { window: 1_000_000, source: 'sonnet_1m_experiment' }
   }
   const canonicalModel = getCanonicalName(model)
   // GPT-5.6 Sol, Terra, and Luna have a 372k Codex context window.
@@ -119,34 +180,143 @@ export function getContextWindowForModel(
     canonicalModel === 'gpt-5.6-terra' ||
     canonicalModel === 'gpt-5.6-luna'
   ) {
-    return 372_000
+    return { window: 372_000, source: 'gpt_5_6_codex' }
   }
   // GPT/Codex models: 272k max input tokens (400k total budget minus 128k output reserve)
   if (canonicalModel.startsWith('gpt-')) {
-    return 272_000
+    return { window: 272_000, source: 'gpt_default' }
   }
 
   if (process.env.USER_TYPE === 'ant') {
     const antModel = resolveAntModel(model)
     if (antModel?.contextWindow) {
-      return antModel.contextWindow
+      return { window: antModel.contextWindow, source: 'ant_model_catalog' }
     }
   }
-  return MODEL_CONTEXT_WINDOW_DEFAULT
+  return { window: MODEL_CONTEXT_WINDOW_DEFAULT, source: 'default' }
+}
+
+/**
+ * The ant-only operator ceiling, or undefined when unset or unparseable.
+ * Exported so the policy resolver applies the exact same gate rather than a
+ * lookalike that could drift.
+ */
+export function readMaxContextTokensOverride(): number | undefined {
+  if (
+    process.env.USER_TYPE !== 'ant' ||
+    !process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS
+  ) {
+    return undefined
+  }
+  const override = parseInt(process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, 10)
+  return !isNaN(override) && override > 0 ? override : undefined
+}
+
+/**
+ * The window this model is currently usable at: what it advertises, capped by
+ * what the account turned out to be entitled to. This is the NOMINAL window
+ * (statusline denominator, `/context`, cost tracker, tool-search sizing);
+ * compaction budgets against `resolveContextWindowPolicy(...).effective`, which
+ * additionally reserves output capacity.
+ */
+export function getContextWindowForModel(
+  model: string,
+  betas?: string[],
+): number {
+  const resolved = resolveNativeContextWindow(model, betas)
+  return applyLongContextEntitlementCap(resolved)
 }
 
 export function getSonnet1mExpTreatmentEnabled(model: string): boolean {
-  if (is1mContextDisabled()) {
+  return sonnet1mExpTreatmentEnabled(model, is1mContextDisabled())
+}
+
+function sonnet1mExpTreatmentEnabled(model: string, disabled: boolean): boolean {
+  if (disabled) {
     return false
   }
   // Only applies to sonnet 4.6 without an explicit [1m] suffix
-  if (has1mContext(model)) {
+  if (has1mSuffix(model, disabled)) {
     return false
   }
   if (!getCanonicalName(model).includes('sonnet-4-6')) {
     return false
   }
   return getGlobalConfig().clientDataCache?.['coral_reef_sonnet'] === 'true'
+}
+
+/**
+ * The window a session falls back to once the provider has refused long
+ * context. Same number as the legacy default, but a distinct constant: this one
+ * is an entitlement ceiling, not a "we don't know this model" guess.
+ */
+export const LONG_CONTEXT_ENTITLEMENT_WINDOW = MODEL_CONTEXT_WINDOW_DEFAULT
+
+let longContextEntitlementRefused = false
+
+/**
+ * Record that the provider refused this request because the account is not
+ * entitled to long context.
+ *
+ * This is durable information about the session, not a transient error: the
+ * same account retried against the same endpoint refuses the same way, so
+ * retrying is a guaranteed second failure. Latching it narrows the session's
+ * windows (see `getContextWindowForModel` and `resolveContextWindowPolicy`) so
+ * the next turn's autocompact budget is one the account can actually spend.
+ *
+ * Deliberately process-scoped and in memory. Entitlement is enabled in a minute
+ * at claude.ai/settings/usage, so persisting the cap would keep a 1M model
+ * pinned at 200,000 long after the user fixed it, with nothing on screen to say
+ * why. A restart is the cheapest possible reset, and `/extra-usage` already
+ * exists for the fix itself.
+ *
+ * Known limitation: switching accounts inside one process does not clear the
+ * latch. Sharpening this needs an account identity this module can read without
+ * an import cycle through auth.
+ */
+export function noteLongContextEntitlementRefused(): void {
+  longContextEntitlementRefused = true
+}
+
+export function isLongContextEntitlementRefused(): boolean {
+  return longContextEntitlementRefused
+}
+
+export function _resetLongContextEntitlementForTest(): void {
+  longContextEntitlementRefused = false
+}
+
+/**
+ * Does the long-context entitlement cap govern a window from this branch?
+ *
+ * Extra usage is an Anthropic first-party entitlement, so a Codex model's 272K
+ * or 372K window is not the provider's to refuse. Without this, one Anthropic
+ * refusal would silently cut a later `gpt-5.6-luna` turn's budget by 172,000
+ * tokens for the rest of the session.
+ */
+export function isLongContextEntitlementScoped(
+  source: ContextWindowSource,
+): boolean {
+  return source !== 'gpt_5_6_codex' && source !== 'gpt_default'
+}
+
+/**
+ * The ant operator override is exempt on purpose: it is someone explicitly
+ * typing a ceiling for local decisions, and entitlement narrows what the MODEL
+ * advertises, not what the operator asked for.
+ */
+export function applyLongContextEntitlementCap(
+  resolved: NativeContextWindow,
+): number {
+  if (
+    !longContextEntitlementRefused ||
+    resolved.source === 'max_context_tokens_override' ||
+    !isLongContextEntitlementScoped(resolved.source) ||
+    resolved.window <= LONG_CONTEXT_ENTITLEMENT_WINDOW
+  ) {
+    return resolved.window
+  }
+  return LONG_CONTEXT_ENTITLEMENT_WINDOW
 }
 
 /**

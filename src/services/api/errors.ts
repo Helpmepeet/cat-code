@@ -39,6 +39,7 @@ import {
   API_PDF_MAX_PAGES,
   PDF_TARGET_RAW_SIZE,
 } from '../../constants/apiLimits.js'
+import { noteLongContextEntitlementRefused } from '../../utils/context.js'
 import { isEnvTruthy } from '../../utils/envUtils.js'
 import { formatFileSize } from '../../utils/format.js'
 import { ImageResizeError } from '../../utils/imageResizer.js'
@@ -64,6 +65,14 @@ export function startsWithApiErrorPrefix(text: string): boolean {
   )
 }
 export const PROMPT_TOO_LONG_ERROR_MESSAGE = 'Prompt is too long'
+
+/**
+ * Raw API wording for a long-context entitlement refusal: the model supports
+ * the window, the account is not paying for it. Matched in two places below and
+ * kept as one constant so they cannot drift apart.
+ */
+export const LONG_CONTEXT_ENTITLEMENT_ERROR_MESSAGE =
+  'Extra usage is required for long context'
 
 export function isPromptTooLongMessage(msg: AssistantMessage): boolean {
   if (!msg.isApiErrorMessage) {
@@ -484,6 +493,21 @@ function getAssistantMessageFromErrorInternal(
       deferredTerminalFailure: options.deferredTerminalFailure,
     }),
   })
+  // A long-context entitlement refusal is a durable fact about the session, not
+  // a transient failure: the same account retried against the same endpoint
+  // refuses identically. Latch it so the session's windows narrow and the next
+  // turn compacts to a budget the account can actually spend, instead of
+  // retrying into the same wall (utils/context.ts
+  // noteLongContextEntitlementRefused). Recorded here rather than inside the
+  // 429 branch below because that branch is gated on subscriber rate-limit
+  // processing, while the refusal is the same fact on every auth path.
+  if (
+    error instanceof Error &&
+    error.message.includes(LONG_CONTEXT_ENTITLEMENT_ERROR_MESSAGE)
+  ) {
+    noteLongContextEntitlementRefused()
+  }
+
   // Check for SDK timeout errors
   if (
     error instanceof APIConnectionTimeoutError ||
@@ -591,12 +615,14 @@ function getAssistantMessageFromErrorInternal(
     // No quota headers — this is NOT a quota limit. Surface what the API actually
     // said instead of a generic "Rate limit reached". Entitlement rejections
     // (e.g. 1M context without Extra Usage) and infra capacity 429s land here.
-    if (error.message.includes('Extra usage is required for long context')) {
+    if (error.message.includes(LONG_CONTEXT_ENTITLEMENT_ERROR_MESSAGE)) {
       const hint = getIsNonInteractiveSession()
         ? 'enable extra usage at claude.ai/settings/usage, or use --model to switch to standard context'
         : 'run /extra-usage to enable, or /model to switch to standard context'
+      // The cap is the surprising part, and it is the only place the user can
+      // learn why their 1M model suddenly budgets 200K.
       return createAssistantAPIErrorMessage({
-        content: `${API_ERROR_MESSAGE_PREFIX}: Extra usage is required for 1M context · ${hint}`,
+        content: `${API_ERROR_MESSAGE_PREFIX}: Extra usage is required for 1M context · this session is now capped at 200K context · ${hint}`,
         error: 'rate_limit',
       })
     }
