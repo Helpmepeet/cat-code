@@ -95,7 +95,7 @@ test('falls back to the first string value when no priority key is present', () 
   expect(model.summary).toBe('inspect me')
 })
 
-test('renders the drawer over a real row (structured input as text, diff lines)', () => {
+test('renders the drawer over a real row (diff lines, row named in the header)', () => {
   const html = renderToStaticMarkup(
     <ToolInspector
       row={mkToolRow({
@@ -122,13 +122,38 @@ test('renders the drawer over a real row (structured input as text, diff lines)'
       })}
     />,
   )
-  expect(html).toContain('Tool inspector')
+  // The header names the row (`deriveSummary` over the real input), and the
+  // generic title above it is gone with the rest of the metadata stack.
   expect(html).toContain('/app/x.ts')
-  // Structured input rendered as escaped JSON text, never HTML.
-  expect(html).toContain('file_path')
+  expect(html).not.toContain('Tool inspector')
   // Diff line tones.
   expect(html).toContain('text-tone-good')
   expect(html).toContain('text-tone-danger')
+})
+
+test('the drawer opens on the output, not on a restatement of the card', () => {
+  // 2026-08-13 (`docs/reports/2026-08-12-tool-inspector-ux-review.md`): the
+  // Tool / Summary / Status / raw-Input stack that used to sit above the output
+  // repeated the expanded card the user reached this from. All four are gone.
+  const html = renderToStaticMarkup(
+    <ToolInspector
+      row={mkToolRow({
+        toolName: 'Bash',
+        toolFamily: 'bash',
+        input: { command: 'ls', description: 'list the files' },
+        status: 'success',
+        result: { isError: false, content: 'a\nb\n', diff: null },
+      })}
+    />,
+  )
+
+  expect(html).toContain('Output') // the one section label left, plus Diff
+  expect(html).not.toContain('>Tool<')
+  expect(html).not.toContain('>Summary<')
+  expect(html).not.toContain('>Status<')
+  expect(html).not.toContain('>Input<')
+  // The raw structured input went with them: no JSON keys reach the drawer.
+  expect(html).not.toContain('description')
 })
 
 test('renders a Diff section for a real Apply_patch row (E1 — edit-family, files[] envelope)', () => {

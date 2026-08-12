@@ -2228,14 +2228,15 @@ function projectedBashRow(): NestedToolUseRow {
   return row
 }
 
-test('P4-1: a real projected tool card renders the open-from-card inspector affordance', () => {
-  // Default-expanded (error status), so the body — and the launch affordance
-  // wired to the inspector via context — appears in the real render path.
+test('an expanded card whose output fits offers no route to the drawer at all', () => {
+  // Default-expanded (error status), so the body renders in the real path. The
+  // always-present `Inspector` footer was removed 2026-08-13
+  // (`docs/reports/2026-08-12-tool-inspector-ux-review.md`): it was a second
+  // route to a destination that repeated this card. Short output means no band
+  // either, so an expanded card that shows everything offers nothing.
   const html = renderToStaticMarkup(<TranscriptRowsView rows={[projectedBashRow()]} />)
-  expect(html).toContain('Inspector')
-  // P4-45: this footer is ALWAYS offered, so it must not wear the label of the
-  // reveal band, which appears only when output was cut. This output is short:
-  // there is no band here, and therefore no "Open full output" anywhere.
+  expect(html).toContain('hi from the shell') // the body really did render
+  expect(html).not.toContain('Inspector')
   expect(html).not.toContain('Open full output')
 })
 
@@ -2243,8 +2244,10 @@ test('P4-1: the inspector overlay renders the REAL projected row (drawer + backd
   const html = renderToStaticMarkup(
     <ToolInspectorOverlay row={projectedBashRow()} onClose={() => {}} />,
   )
-  expect(html).toContain('Tool inspector')
+  // The header names the ROW, not the drawer: the generic "Tool inspector"
+  // title and the Tool/Summary/Status/Input stack under it went with the footer.
   expect(html).toContain('echo hi') // real input summary, from the projected row
+  expect(html).not.toContain('Tool inspector')
   expect(html).toContain('hi from the shell') // real correlated result output
   expect(html).toContain('bg-black/60') // the dimmed dismiss backdrop
 })
@@ -2451,15 +2454,14 @@ test('P4-36 — the tail of a truncated read stays visible, with its real line n
   expect(html).toContain('>900<')
 })
 
-test('P4-36 — the band offers the route to the complete text', () => {
+test('P4-36 — the band offers the route to the complete text, and it is the only one', () => {
   const html = render(longToolRow('read', 900))
   expect(html).toContain('Open full output')
-  // P4-45: this card renders BOTH routes to the drawer (the always-present
-  // footer and this band), so a bare `toContain` passed even when the footer
-  // was the only thing carrying the label. Exactly one button says it now, and
-  // the other says "Inspector".
+  // The band is now the ONLY route in: the card footer that also opened the
+  // drawer was removed 2026-08-13. This count was the P4-45 guard against two
+  // same-label buttons; it now also pins that nothing else offers the drawer.
   expect(html.split('Open full output').length - 1).toBe(1)
-  expect(html).toContain('Inspector')
+  expect(html).not.toContain('Inspector')
 })
 
 test('P4-36 — output under the window renders whole, with no band', () => {
@@ -2715,6 +2717,24 @@ test('adjacent reads collapse into ONE card that counts the files', () => {
   expect(html).toContain('3 files')
   // One shell, not three: the family word is drawn once, by the group head.
   expect(occurrences(html, '>Read</span>')).toBe(1)
+})
+
+test('an expanded run member carries no inspector footer either', () => {
+  // The removed footer rendered once per OPEN MEMBER, not once per card, so a
+  // three-file run with every member open used to draw three of them
+  // (`docs/reports/2026-08-12-tool-inspector-ux-review.md` finding 1). Opened
+  // via `toolsExpanded`, which reaches the members, so the bodies are on screen.
+  const html = renderMany(
+    [
+      runReadRow('r1', '/repo/app/shared/protocol.ts'),
+      runReadRow('r2', '/repo/app/sidecar/sidecarServer.ts'),
+      runReadRow('r3', '/repo/app/renderer/src/TranscriptView.tsx'),
+    ],
+    true,
+  )
+
+  expect(occurrences(visibleText(html), 'const a = 1')).toBe(3) // all three open
+  expect(html).not.toContain('Inspector')
 })
 
 test('the run hoists the shared directory onto the head and shortens its rows', () => {

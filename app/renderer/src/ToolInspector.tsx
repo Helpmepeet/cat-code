@@ -1,12 +1,10 @@
 /**
  * P4-1 shared primitive — `ToolInspector` (Surfaces.jsx:1090-1147).
  *
- * A read-only side drawer over a transcript tool row's REAL input/result. It
- * reuses the projector's `ToolUseRow` shape (transcriptProjector.ts) with ZERO
- * casts and narrows tolerantly — a malformed/partial input never crashes the
- * drawer, it degrades to the `none` placeholder. The prototype's single fixture
- * `toolSummary` string is replaced by a derived summary PLUS the real structured
- * input.
+ * A read-only side drawer over a transcript tool row's REAL result. It reuses
+ * the projector's `ToolUseRow` shape (transcriptProjector.ts) with ZERO casts
+ * and narrows tolerantly — a malformed/partial input never crashes the drawer,
+ * it degrades to the `none` placeholder.
  *
  * P4-37 adds the output tools the prototype's `OutputInspector` carries
  * (Messages.jsx:255-352): copy, literal search with wrap-around match stepping
@@ -17,10 +15,21 @@
  * to static markup and cannot exercise a keystroke; this file is the thin DOM
  * half.
  *
+ * WHY IT IS OUTPUT AND DIFF ONLY (2026-08-13,
+ * `docs/reports/2026-08-12-tool-inspector-ux-review.md`). It used to open on a
+ * Tool / Summary / Status / raw-Input stack and put the output last, so landing
+ * here from `Open full output` meant scrolling past four fields the expanded
+ * card had already shown in its own purpose-built body. Those four are gone and
+ * the row's identity moved into the header, which is the one thing the card
+ * cannot say once it is dimmed behind the backdrop. The drawer is now what its
+ * one entry point promises: the complete output, searchable and copyable. The
+ * raw structured input is no longer surfaced anywhere for a resolved call —
+ * flagged in that report, not lost by accident.
+ *
  * Security (hard gate): this renders untrusted tool input and model/tool output.
- * Everything is a text node — `JSON.stringify` for the structured input, plain
- * strings for output/diff, and the search paints matched runs by SPLITTING the
- * line into text segments, never by building markup. NEVER
+ * Everything is a text node — the derived summary, plain strings for
+ * output/diff, and the search paints matched runs by SPLITTING the line into
+ * text segments, never by building markup. NEVER
  * `dangerouslySetInnerHTML`, never `eval`, never a live control (the prototype's
  * "Open diff in IDE" affordance has no real verb and is dropped — flagged in the
  * report).
@@ -38,7 +47,6 @@ import {
 } from './outputSearchModel.js'
 import { parseReadSource } from './readSource.js'
 import { useToast } from './toastContext.js'
-import { toneClasses } from './tone.js'
 
 export function ToolInspector({
   row,
@@ -51,21 +59,26 @@ export function ToolInspector({
   const model = describeToolForInspector(row)
   return (
     <div className="flex w-[420px] shrink-0 flex-col border-l border-shell-seam bg-surface-panel">
-      <div className="flex items-center justify-between border-b border-shell-seam px-[18px] py-3.5">
-        <div className="flex items-center gap-2">
-          <span className="rounded bg-accent/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-accent">
+      <div className="flex items-center justify-between gap-2 border-b border-shell-seam px-[18px] py-3.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="shrink-0 rounded bg-accent/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-accent">
             {model.family}
           </span>
-          <span className="text-[13px] font-semibold text-text-primary">
-            Tool inspector
+          {/* WHICH output, not WHAT this drawer is. The generic title used to sit
+              here above a Tool/Summary/Status/Input stack that restated the card
+              the user had already expanded; the header now carries the only fact
+              the card cannot supply once it is dimmed behind the backdrop, which
+              is the row this output belongs to. */}
+          <span className="min-w-0 truncate font-mono text-[12.5px] text-text-primary">
+            {model.summary}
           </span>
         </div>
         {onClose ? (
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close tool inspector"
-            className="flex h-[22px] w-[22px] items-center justify-center text-base leading-none text-text-subtle hover:text-text-primary"
+            aria-label="Close full output"
+            className="flex h-[22px] w-[22px] shrink-0 items-center justify-center text-base leading-none text-text-subtle hover:text-text-primary"
           >
             ×
           </button>
@@ -73,28 +86,6 @@ export function ToolInspector({
       </div>
 
       <div className="flex-1 overflow-y-auto px-[18px] py-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        <SectionLabel>Tool</SectionLabel>
-        <div className="mb-4 font-mono text-[12.5px] text-text-primary">
-          {model.name}
-        </div>
-
-        <SectionLabel>Summary</SectionLabel>
-        <div className="mb-4 break-all font-mono text-[12.5px] text-text-primary">
-          {model.summary}
-        </div>
-
-        <SectionLabel>Status</SectionLabel>
-        <div
-          className={`mb-4 text-[12.5px] capitalize ${toneClasses(model.statusTone).text}`}
-        >
-          {model.statusLabel}
-        </div>
-
-        <SectionLabel>Input</SectionLabel>
-        <pre className="mb-4 max-h-72 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-shell-seam bg-black/40 px-3 py-2.5 font-mono text-[11.5px] leading-relaxed text-text-muted">
-          {safeStringify(model.input)}
-        </pre>
-
         {model.diff ? (
           <>
             <SectionLabel>Diff · {model.diff.filePath}</SectionLabel>
@@ -370,14 +361,4 @@ function diffLineClass(line: string): string {
   if (line.startsWith('+')) return 'text-tone-good bg-tone-good/10'
   if (line.startsWith('-')) return 'text-tone-danger bg-tone-danger/10'
   return 'text-text-subtle'
-}
-
-/** Stringify tolerantly — a cyclic/exotic input degrades to a note, never throws. */
-function safeStringify(value: unknown): string {
-  try {
-    const json = JSON.stringify(value, null, 2)
-    return json ?? String(value)
-  } catch {
-    return '[uninspectable input]'
-  }
 }

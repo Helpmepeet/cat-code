@@ -132,12 +132,19 @@ import {
 } from './inlineOutputWindow.js'
 
 /**
- * P4-1 open-from-card handle: a tool card calls this with its own REAL projected
- * row to open the `ToolInspector` drawer. Provided by `TranscriptRowsView`, which
- * owns the selected-row state and renders the overlay. Default `null` so a tool
- * card rendered outside a transcript (a direct unit test) simply shows no
- * inspector affordance. The published value is a stable `useCallback` handle, so
- * exposing it via context never defeats the memoized row subtree.
+ * P4-1 open-from-card handle: the truncation reveal band calls this with its
+ * card's own REAL projected row to open the `ToolInspector` drawer. Provided by
+ * `TranscriptRowsView`, which owns the selected-row state and renders the
+ * overlay. Default `null` so a tool card rendered outside a transcript (a direct
+ * unit test) simply omits the band's button. The published value is a stable
+ * `useCallback` handle, so exposing it via context never defeats the memoized
+ * row subtree.
+ *
+ * The band is now the ONLY route in. The always-present `Inspector` card footer
+ * that also held this handle was removed 2026-08-13
+ * (`docs/reports/2026-08-12-tool-inspector-ux-review.md`): it was a second
+ * always-visible entry to a destination that repeated the card, so the drawer is
+ * reached only for output a card had to cut.
  */
 const ToolInspectorContext = createContext<((row: ToolUseNestedRow) => void) | null>(
   null,
@@ -359,8 +366,9 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
 /**
  * P4-1 mount: the `ToolInspector` drawer as a right-side overlay (prototype
  * OutputInspector, Messages.jsx:254 — `position: fixed`, dimmed backdrop, Esc to
- * close). Rendered by `TranscriptRowsView` from the REAL projected row a card
- * handed to `openInspector`; a null row renders nothing. Fixed positioning keeps
+ * close). Rendered by `TranscriptRowsView` from the REAL projected row a card's
+ * reveal band handed to `openInspector`; a null row renders nothing. Fixed
+ * positioning keeps
  * it off the transcript's own scroller (App owns `transcriptScrollRef`), so
  * opening the drawer never perturbs stick-to-bottom. Display degrades gracefully:
  * `ToolInspector` renders text nodes only and never throws on a malformed input.
@@ -391,7 +399,7 @@ export function ToolInspectorOverlay({
         className="relative flex h-full shadow-2xl"
         role="dialog"
         aria-modal="true"
-        aria-label="Tool inspector"
+        aria-label="Full output"
         tabIndex={-1}
       >
         <ToolInspector row={row} onClose={onClose} />
@@ -1179,9 +1187,6 @@ function ToolCardShell({
  * render layer, and are never mocked.
  */
 function ToolCard({ row }: { row: ToolUseNestedRow }) {
-  // Read before the early return so the Agent branch doesn't skip the hook; the
-  // Agent card has its own body and does not carry the inspector affordance.
-  const openInspector = useContext(ToolInspectorContext)
   // The weakest of the three expansion inputs: a user's own click still wins
   // (`resolveToolCardExpanded`), and a failed or finished-image card still opens
   // itself, for reasons this preference knows nothing about.
@@ -1222,12 +1227,6 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
         }
       >
         <ToolCardBody row={row} content={content} ack={ack} />
-        {/* P4-1 open-from-card affordance: hands THIS real projected row to the
-            inspector drawer. Only present when a transcript provided the context
-            (`openInspector`); a card mounted bare in a test shows none. */}
-        {openInspector ? (
-          <ToolInspectorLaunch onOpen={() => openInspector(row)} />
-        ) : null}
       </ToolCardShell>
       {row.children.length > 0 ? (
         <div className="mt-2 flex flex-col gap-2 border-l border-accent/20 pl-3">
@@ -1471,7 +1470,6 @@ const ToolRunRow = memo(function ToolRunRow({
     setOpen(next)
     store?.set(runKey, true)
   }
-  const openInspector = useContext(ToolInspectorContext)
   const content = row.result?.content ?? ''
   const st = STATE_STYLE[row.status]
   const fam = FAMILY_STYLE[family]
@@ -1520,9 +1518,6 @@ const ToolRunRow = memo(function ToolRunRow({
             content={content}
             ack={toolAckForResult(row.result)}
           />
-          {openInspector ? (
-            <ToolInspectorLaunch onOpen={() => openInspector(row)} />
-          ) : null}
         </div>
       ) : null}
     </div>
@@ -1632,34 +1627,6 @@ function toolRunDigest(family: ToolRunFamily, row: ToolRunMember): string | null
       : `Read ${source.lines.length} ${source.lines.length === 1 ? 'line' : 'lines'}`
   readDigestByResult.set(result, label)
   return label
-}
-
-/**
- * "Inspector ↗" — the footer affordance inside a tool card's expanded body.
- * Opens the `ToolInspector` drawer over this card's real projected row. Sits
- * below the body so a collapsed card stays quiet; a running/errored card
- * (default-expanded) shows it immediately.
- *
- * The label is the prototype's, and the distinction is deliberate: its footer
- * button reads "Inspector" (`Messages.jsx:564`) while the reveal band's reads
- * "Open full output" (`:452`). Both routes end at the same drawer, but they are
- * scoped differently — the footer always offers it, the band offers it only for
- * output the card had to cut — so they must not share one label. This one
- * carried the band's wording until P4-45.
- */
-function ToolInspectorLaunch({ onOpen }: { onOpen: () => void }) {
-  return (
-    <div className="mt-2 flex justify-end border-t border-shell-seam pt-2">
-      <button
-        type="button"
-        onClick={onOpen}
-        className="inline-flex items-center gap-1 rounded-md border border-accent/25 bg-accent/[0.06] px-2.5 py-1 font-mono text-[10.5px] text-accent-soft hover:bg-accent/10"
-      >
-        Inspector
-        <span aria-hidden>↗</span>
-      </button>
-    </div>
-  )
 }
 
 /**
@@ -1954,9 +1921,8 @@ function ToolCardBody({
   ack: ToolAck | null
 }) {
   // Read before any early return so the hook order is stable across families.
-  // The reveal band's escape hatch is the SAME `ToolInspectorContext` route the
-  // card footer uses, over this same real projected row; null outside a
-  // transcript, where the band simply omits the button.
+  // The reveal band's escape hatch, over this same real projected row; null
+  // outside a transcript, where the band simply omits the button.
   const openInspector = useContext(ToolInspectorContext)
   const openFull = openInspector ? () => openInspector(row) : null
 

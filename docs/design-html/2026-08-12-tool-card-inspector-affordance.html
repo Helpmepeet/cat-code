@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tool card inspector affordance · before / after</title>
+<style>
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;font-display:swap;
+  src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:swap;
+  src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:500;font-display:swap;
+  src:url('../../app/renderer/src/assets/fonts/DMMono-Medium.woff2') format('woff2')}
+
+:root{
+  /* app tokens — app/renderer/src/theme.css */
+  --app-bg:#09090b; --shell-seam:rgba(255,255,255,.06); --surface-panel:#0a0a0c;
+  --text-primary:#f4f4f5; --text-muted:#a1a1aa; --text-subtle:#98989f;
+  --text-faint:#838389; --text-ghost:#75757b;
+  --accent:#f472b6; --accent-soft:#f9a8d4; --accent-rgb:244 114 182;
+  --tone-good:#4ade80; --tone-warn:#fbbf24; --tone-danger:#f87171;
+  /* family hues — FAMILY_STYLE, TranscriptView.tsx:948-972 */
+  --fam-bash:#a3e635; --fam-read:#60a5fa;
+  /* log line hues — logLineClass, transcriptViewModel.ts:199-227 */
+  --log-pass:#86efac; --log-warn:#fcd34d;
+  /* dracula code theme — theme.css:589-651 */
+  --hl-fg:#f8f8f2; --hl-com:#6272a4; --hl-key:#ff79c6; --hl-str:#f1fa8c;
+  --hl-num:#bd93f9; --hl-fn:#50fa7b; --hl-type:#8be9fd; --hl-prop:#66d9ef;
+  --font-sans:"DM Sans",-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+  --font-mono:"DM Mono",ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
+  /* chrome only */
+  --x-ink:#6b6b72; --x-rule:rgba(255,255,255,.07);
+}
+
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--app-bg)}
+body{font-family:var(--font-sans);color:var(--text-primary);-webkit-font-smoothing:antialiased}
+
+/* ─── chrome ─────────────────────────────────────────────────────────── */
+.x-wrap{max-width:1280px;margin:0 auto;padding:40px 28px 120px}
+.x-title{font-family:var(--font-mono);font-size:10px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--x-ink);margin:0 0 22px}
+.x-mode{display:flex;gap:16px;align-items:center;margin:0 0 34px;
+  font-family:var(--font-mono);font-size:9.5px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--x-ink)}
+.x-mode button{font:inherit;letter-spacing:inherit;text-transform:inherit;
+  color:var(--x-ink);background:none;border:0;border-bottom:1px solid transparent;
+  padding:0 0 3px;cursor:pointer}
+.x-mode button[aria-pressed=true]{color:#c9c9d1;border-bottom-color:#c9c9d1}
+.x-sec{margin:0 0 4px;padding-top:30px;border-top:1px solid var(--x-rule);
+  font-family:var(--font-mono);font-size:9.5px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--x-ink)}
+.x-sec:first-of-type{border-top:0;padding-top:0}
+.x-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 26px;margin:0 0 34px}
+.x-col{font-family:var(--font-mono);font-size:9px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--x-ink);padding:12px 0 9px}
+.x-cell{min-width:0;padding:0}
+body[data-view=current] .x-grid{grid-template-columns:1fr}
+body[data-view=current] .x-cell.is-after,body[data-view=current] .x-col.is-after{display:none}
+body[data-view=proposed] .x-grid{grid-template-columns:1fr}
+body[data-view=proposed] .x-cell.is-before,body[data-view=proposed] .x-col.is-before{display:none}
+@media (max-width:1000px){.x-grid{grid-template-columns:1fr}}
+
+/* ─── specimen: tool card shell (ToolCardShell, TranscriptView.tsx:1077-1169) ─ */
+.card{width:100%;overflow:hidden;border-radius:6px;border:1px solid var(--shell-seam);
+  background:rgba(255,255,255,.025);font-family:var(--font-sans)}
+.chead{display:flex;width:100%;align-items:center;gap:10px;padding:8px 12px;text-align:left}
+.fmark{width:16px;flex:none;text-align:center;font-size:13px}
+.fword{flex:none;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}
+.ctarget{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:var(--font-mono);font-size:12px;color:var(--text-primary)}
+.cbadge{flex:none;font-family:var(--font-mono);font-size:11px;color:var(--text-faint)}
+.dot{width:6px;height:6px;flex:none;border-radius:9999px}
+.dot.good{background:var(--tone-good)}
+.cbody{border-top:1px solid var(--shell-seam);background:rgba(0,0,0,.28)}
+.csub{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:6px 12px 0;
+  font-family:var(--font-mono);font-size:9.5px;font-weight:600;text-transform:uppercase;
+  letter-spacing:.07em;color:var(--text-subtle)}
+.cpad{padding:4px 12px 10px}
+
+/* inline output (LogLines / INLINE_OUTPUT_SCROLLER, TranscriptView.tsx:2058-2100) */
+.scroll{max-height:340px;overflow:auto}
+.log{margin:0;white-space:pre;font-family:var(--font-mono);font-size:11.5px;line-height:1.625}
+.lrow{display:flex}
+.lno{position:sticky;left:0;width:48px;flex:none;user-select:none;background:inherit;
+  padding-right:11px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text-ghost)}
+.ltx{color:var(--text-muted)}
+.ltx.pass{color:var(--log-pass)}
+
+/* read body (ReadSourceLines.tsx:76-103) */
+.src{display:flex}
+.sgut{margin:0;margin-right:12px;min-width:32px;flex:none;user-select:none;text-align:right;
+  font-variant-numeric:tabular-nums;color:rgba(152,152,159,.6);
+  white-space:pre;font-family:var(--font-mono);font-size:11.5px;line-height:1.625}
+.scode{margin:0;white-space:pre;font-family:var(--font-mono);font-size:11.5px;
+  line-height:1.625;color:var(--hl-fg)}
+.k{color:var(--hl-key)}.s{color:var(--hl-str)}.c{color:var(--hl-com);font-style:italic}
+.n{color:var(--hl-num)}.f{color:var(--hl-fn)}.t{color:var(--hl-type)}.p{color:var(--hl-prop)}
+
+/* reveal band (InlineRevealBand, TranscriptView.tsx:2694-2730) */
+.band{display:flex;align-items:center;gap:8px;padding:4px 12px;
+  font-family:var(--font-mono);font-size:10.5px;line-height:1}
+.band .bhid{flex:none;color:var(--text-subtle)}
+.band .brule{height:1px;flex:1;background:var(--shell-seam)}
+.band button{font:inherit;background:none;border:0;border-radius:4px;padding:2px 4px;
+  flex:none;cursor:pointer}
+.band .bmore{color:var(--text-subtle)}
+.band .bfull{display:inline-flex;align-items:center;gap:2px;color:rgba(249,168,212,.7)}
+
+/* inspector footer (ToolInspectorLaunch, TranscriptView.tsx:1650-1663) */
+.ifoot{margin-top:8px;display:flex;justify-content:flex-end;
+  border-top:1px solid var(--shell-seam);padding-top:8px}
+.ibtn{display:inline-flex;align-items:center;gap:4px;border-radius:6px;
+  border:1px solid rgb(var(--accent-rgb)/.25);background:rgb(var(--accent-rgb)/.06);
+  padding:4px 10px;font-family:var(--font-mono);font-size:10.5px;
+  color:var(--accent-soft);cursor:pointer}
+
+/* grouped run member (ToolRunRow, TranscriptView.tsx:1470-1528) */
+.mrow{display:flex;width:100%;align-items:center;gap:10px;border-radius:4px;padding:2px 0;
+  text-align:left}
+.mcaret{width:10px;flex:none;font-size:9px;line-height:1;color:var(--text-ghost)}
+.mcaret.open{transform:rotate(90deg)}
+.mmark{width:14px;flex:none;text-align:center;font-size:13px}
+.mlabel{display:flex;min-width:0;flex:1;font-family:var(--font-mono);font-size:12px;
+  color:var(--text-primary)}
+.mdir{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-ghost)}
+.mrange{flex:none;color:var(--text-ghost)}
+.mdigest{flex:none;font-family:var(--font-mono);font-size:11px;color:var(--text-subtle)}
+.mbody{margin:2px 0 6px 24px;border-left:1px solid var(--shell-seam);padding-left:12px}
+
+/* drawer (ToolInspector.tsx:53-124) */
+.drawer{display:flex;width:420px;flex:none;flex-direction:column;
+  border-left:1px solid var(--shell-seam);background:var(--surface-panel);
+  height:600px;font-family:var(--font-sans)}
+.dhead{display:flex;align-items:center;justify-content:space-between;
+  border-bottom:1px solid var(--shell-seam);padding:14px 18px}
+.dhl{display:flex;min-width:0;align-items:center;gap:8px}
+.dbadge{flex:none;border-radius:4px;background:rgb(var(--accent-rgb)/.1);padding:2px 6px;
+  font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.025em;color:var(--accent)}
+.dtitle{font-size:13px;font-weight:600;color:var(--text-primary)}
+.dsummary{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:var(--font-mono);font-size:12.5px;color:var(--text-primary)}
+.dclose{display:flex;height:22px;width:22px;flex:none;align-items:center;justify-content:center;
+  border:0;background:none;font-size:16px;line-height:1;color:var(--text-subtle);cursor:pointer}
+.dbody{flex:1;overflow-y:auto;padding:16px 18px;scrollbar-width:none}
+.dbody::-webkit-scrollbar{display:none}
+.dlabel{margin-bottom:6px;font-size:10px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.1em;color:var(--text-subtle)}
+.dval{margin-bottom:16px;font-family:var(--font-mono);font-size:12.5px;color:var(--text-primary);
+  word-break:break-all}
+.dstatus{margin-bottom:16px;font-size:12.5px;color:var(--tone-good)}
+.dpre{margin:0 0 16px;max-height:288px;overflow:auto;white-space:pre-wrap;word-break:break-all;
+  border-radius:8px;border:1px solid var(--shell-seam);background:rgba(0,0,0,.4);
+  padding:10px 12px;font-family:var(--font-mono);font-size:11.5px;line-height:1.625;
+  color:var(--text-muted)}
+.dtools{margin-bottom:6px;display:flex;align-items:center;gap:6px}
+.dsearch{display:flex;height:28px;min-width:0;flex:1;align-items:center;gap:6px;
+  border-radius:8px;border:1px solid var(--shell-seam);background:rgba(255,255,255,.02);
+  padding:0 8px}
+.dsearch svg{flex:none;color:var(--text-faint)}
+.dsearch input{min-width:0;flex:1;border:0;background:transparent;outline:none;
+  font-family:var(--font-mono);font-size:12px;color:var(--text-primary)}
+.dsearch input::placeholder{color:var(--text-subtle)}
+.dbtn{height:28px;flex:none;border-radius:8px;border:1px solid var(--shell-seam);
+  background:none;padding:0 8px;font-family:var(--font-sans);font-size:11.5px;
+  color:var(--text-muted);cursor:pointer}
+.dout{position:relative;max-height:384px;overflow:auto;border-radius:8px;
+  border:1px solid var(--shell-seam);background:rgba(0,0,0,.4);padding:8px 0;
+  font-family:var(--font-mono);font-size:11.5px;line-height:1.625;color:var(--text-muted)}
+.dline{display:flex}
+.dno{position:sticky;left:0;width:42px;flex:none;user-select:none;background:var(--app-bg);
+  padding-right:10px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text-ghost)}
+.dtx{flex:1;padding:0 16px 0 12px;white-space:pre}
+</style>
+</head>
+<body data-view="both">
+<div class="x-wrap">
+
+<p class="x-title">Tool card inspector affordance</p>
+
+<div class="x-mode">
+  <button type="button" data-set="both" aria-pressed="true">Both</button>
+  <button type="button" data-set="current" aria-pressed="false">Current</button>
+  <button type="button" data-set="proposed" aria-pressed="false">Proposed</button>
+</div>
+
+<!-- ══ 1 ══════════════════════════════════════════════════════════════ -->
+<p class="x-sec">Standalone tool card, complete output</p>
+<div class="x-grid">
+  <p class="x-col is-before">Current</p>
+  <p class="x-col is-after">Proposed</p>
+
+  <div class="x-cell is-before">
+    <div class="card">
+      <div class="chead">
+        <span class="fmark" style="color:var(--fam-bash)">$</span>
+        <span class="fword" style="color:var(--fam-bash)">Bash</span>
+        <span class="ctarget">bun test app/renderer/src/toolCardExpansion.test.ts</span>
+        <span class="dot good"></span>
+      </div>
+      <div class="cbody"><div class="cpad">
+        <div class="scroll"><pre class="log"><div class="lrow"><span class="lno">1</span><span class="ltx">bun test v1.2.5 (a1b2c3d4)</span></div><div class="lrow"><span class="lno">2</span><span class="ltx"> </span></div><div class="lrow"><span class="lno">3</span><span class="ltx">app/renderer/src/toolCardExpansion.test.ts:</span></div><div class="lrow"><span class="lno">4</span><span class="ltx pass">✓ it remembers a card the user opened [2.11ms]</span></div><div class="lrow"><span class="lno">5</span><span class="ltx pass">✓ it keeps a run open through a regroup [0.87ms]</span></div><div class="lrow"><span class="lno">6</span><span class="ltx"> </span></div><div class="lrow"><span class="lno">7</span><span class="ltx pass"> 2 pass</span></div><div class="lrow"><span class="lno">8</span><span class="ltx"> 0 fail</span></div><div class="lrow"><span class="lno">9</span><span class="ltx"> 4 expect() calls</span></div><div class="lrow"><span class="lno">10</span><span class="ltx">Ran 2 tests across 1 file. [128.00ms]</span></div></pre></div>
+        <div class="ifoot"><button type="button" class="ibtn">Inspector<span aria-hidden="true">↗</span></button></div>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="x-cell is-after">
+    <div class="card">
+      <div class="chead">
+        <span class="fmark" style="color:var(--fam-bash)">$</span>
+        <span class="fword" style="color:var(--fam-bash)">Bash</span>
+        <span class="ctarget">bun test app/renderer/src/toolCardExpansion.test.ts</span>
+        <span class="dot good"></span>
+      </div>
+      <div class="cbody"><div class="cpad">
+        <div class="scroll"><pre class="log"><div class="lrow"><span class="lno">1</span><span class="ltx">bun test v1.2.5 (a1b2c3d4)</span></div><div class="lrow"><span class="lno">2</span><span class="ltx"> </span></div><div class="lrow"><span class="lno">3</span><span class="ltx">app/renderer/src/toolCardExpansion.test.ts:</span></div><div class="lrow"><span class="lno">4</span><span class="ltx pass">✓ it remembers a card the user opened [2.11ms]</span></div><div class="lrow"><span class="lno">5</span><span class="ltx pass">✓ it keeps a run open through a regroup [0.87ms]</span></div><div class="lrow"><span class="lno">6</span><span class="ltx"> </span></div><div class="lrow"><span class="lno">7</span><span class="ltx pass"> 2 pass</span></div><div class="lrow"><span class="lno">8</span><span class="ltx"> 0 fail</span></div><div class="lrow"><span class="lno">9</span><span class="ltx"> 4 expect() calls</span></div><div class="lrow"><span class="lno">10</span><span class="ltx">Ran 2 tests across 1 file. [128.00ms]</span></div></pre></div>
+      </div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ 2 ══════════════════════════════════════════════════════════════ -->
+<p class="x-sec">Grouped read run, member expanded</p>
+<div class="x-grid">
+  <p class="x-col is-before">Current</p>
+  <p class="x-col is-after">Proposed</p>
+
+  <div class="x-cell is-before">
+    <div class="card">
+      <div class="chead">
+        <span class="fmark" style="color:var(--fam-read)">≡</span>
+        <span class="fword" style="color:var(--fam-read)">Read</span>
+        <span class="ctarget">3 files</span>
+        <span class="cbadge">app/renderer/src/</span>
+        <span class="dot good"></span>
+      </div>
+      <div class="cbody">
+        <div class="csub">3 files read</div>
+        <div class="cpad">
+          <div class="mrow"><span class="mcaret">▸</span><span class="mmark" style="color:var(--fam-read)">≡</span><span class="mlabel"><span>ToolInspector.tsx</span></span><span class="mdigest">Read 384 lines</span></div>
+          <div class="mrow"><span class="mcaret open">▸</span><span class="mmark" style="color:var(--fam-read)">≡</span><span class="mlabel"><span>readSource.ts</span><span class="mrange">, lines 84 to 96</span></span><span class="mdigest">Read 13 lines</span></div>
+          <div class="mbody">
+            <div class="scroll"><div class="src"><pre class="sgut">84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96</pre><pre class="scode"><span class="c">/**</span>
+<span class="c"> * File extension → highlight.js language.</span>
+<span class="c"> *</span>
+<span class="c"> * Only names highlight.js registers in its `common` bundle, which is what</span>
+<span class="c"> * `rehype-highlight` loads: an unregistered name would silently render</span>
+<span class="c"> * uncolored (`ignoreMissing`), which is the same as not mapping it, so mapping</span>
+<span class="c"> * one would only be a claim we cannot keep. `.toml` → `ini` is the one</span>
+<span class="c"> * approximation, and it is the shape TOML actually shares (`[section]` headers</span>
+<span class="c"> * over `key = value`).</span>
+<span class="c"> */</span>
+<span class="k">const</span> SOURCE_LANGUAGES: <span class="t">Readonly</span>&lt;<span class="t">Record</span>&lt;<span class="t">string</span>, <span class="t">string</span>&gt;&gt; = {
+  <span class="p">bash</span>: <span class="s">'bash'</span>,
+  <span class="p">c</span>: <span class="s">'c'</span>,</pre></div></div>
+            <div class="ifoot"><button type="button" class="ibtn">Inspector<span aria-hidden="true">↗</span></button></div>
+          </div>
+          <div class="mrow"><span class="mcaret">▸</span><span class="mmark" style="color:var(--fam-read)">≡</span><span class="mlabel"><span>theme.css</span></span><span class="mdigest">Read 812 lines</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="x-cell is-after">
+    <div class="card">
+      <div class="chead">
+        <span class="fmark" style="color:var(--fam-read)">≡</span>
+        <span class="fword" style="color:var(--fam-read)">Read</span>
+        <span class="ctarget">3 files</span>
+        <span class="cbadge">app/renderer/src/</span>
+        <span class="dot good"></span>
+      </div>
+      <div class="cbody">
+        <div class="csub">3 files read</div>
+        <div class="cpad">
+          <div class="mrow"><span class="mcaret">▸</span><span class="mmark" style="color:var(--fam-read)">≡</span><span class="mlabel"><span>ToolInspector.tsx</span></span><span class="mdigest">Read 384 lines</span></div>
+          <div class="mrow"><span class="mcaret open">▸</span><span class="mmark" style="color:var(--fam-read)">≡</span><span class="mlabel"><span>readSource.ts</span><span class="mrange">, lines 84 to 96</span></span><span class="mdigest">Read 13 lines</span></div>
+          <div class="mbody">
+            <div class="scroll"><div class="src"><pre class="sgut">84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96</pre><pre class="scode"><span class="c">/**</span>
+<span class="c"> * File extension → highlight.js language.</span>
+<span class="c"> *</span>
+<span class="c"> * Only names highlight.js registers in its `common` bundle, which is what</span>
+<span class="c"> * `rehype-highlight` loads: an unregistered name would silently render</span>
+<span class="c"> * uncolored (`ignoreMissing`), which is the same as not mapping it, so mapping</span>
+<span class="c"> * one would only be a claim we cannot keep. `.toml` → `ini` is the one</span>
+<span class="c"> * approximation, and it is the shape TOML actually shares (`[section]` headers</span>
+<span class="c"> * over `key = value`).</span>
+<span class="c"> */</span>
+<span class="k">const</span> SOURCE_LANGUAGES: <span class="t">Readonly</span>&lt;<span class="t">Record</span>&lt;<span class="t">string</span>, <span class="t">string</span>&gt;&gt; = {
+  <span class="p">bash</span>: <span class="s">'bash'</span>,
+  <span class="p">c</span>: <span class="s">'c'</span>,</pre></div></div>
+          </div>
+          <div class="mrow"><span class="mcaret">▸</span><span class="mmark" style="color:var(--fam-read)">≡</span><span class="mlabel"><span>theme.css</span></span><span class="mdigest">Read 812 lines</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ 3 ══════════════════════════════════════════════════════════════ -->
+<p class="x-sec">Standalone tool card, truncated output</p>
+<div class="x-grid">
+  <p class="x-col is-before">Current</p>
+  <p class="x-col is-after">Proposed</p>
+
+  <div class="x-cell is-before">
+    <div class="card">
+      <div class="chead">
+        <span class="fmark" style="color:var(--fam-bash)">$</span>
+        <span class="fword" style="color:var(--fam-bash)">Bash</span>
+        <span class="ctarget">bun test app/</span>
+        <span class="dot good"></span>
+      </div>
+      <div class="cbody"><div class="cpad">
+        <div class="scroll" data-scroll-band><pre class="log" data-head></pre>
+          <div class="band">
+            <span class="bhid">178 lines hidden</span>
+            <span class="brule"></span>
+            <button type="button" class="bmore">Show 100 more</button>
+            <button type="button" class="bfull">Open full output<span aria-hidden="true">↗</span></button>
+          </div>
+          <pre class="log" data-tail></pre>
+        </div>
+        <div class="ifoot"><button type="button" class="ibtn">Inspector<span aria-hidden="true">↗</span></button></div>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="x-cell is-after">
+    <div class="card">
+      <div class="chead">
+        <span class="fmark" style="color:var(--fam-bash)">$</span>
+        <span class="fword" style="color:var(--fam-bash)">Bash</span>
+        <span class="ctarget">bun test app/</span>
+        <span class="dot good"></span>
+      </div>
+      <div class="cbody"><div class="cpad">
+        <div class="scroll" data-scroll-band><pre class="log" data-head></pre>
+          <div class="band">
+            <span class="bhid">178 lines hidden</span>
+            <span class="brule"></span>
+            <button type="button" class="bmore">Show 100 more</button>
+            <button type="button" class="bfull">Open full output<span aria-hidden="true">↗</span></button>
+          </div>
+          <pre class="log" data-tail></pre>
+        </div>
+      </div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ 4 ══════════════════════════════════════════════════════════════ -->
+<p class="x-sec">Full-output destination</p>
+<div class="x-grid">
+  <p class="x-col is-before">Current</p>
+  <p class="x-col is-after">Proposed</p>
+
+  <div class="x-cell is-before">
+    <div class="drawer">
+      <div class="dhead">
+        <div class="dhl">
+          <span class="dbadge">bash</span>
+          <span class="dtitle">Tool inspector</span>
+        </div>
+        <button type="button" class="dclose" aria-label="Close tool inspector">×</button>
+      </div>
+      <div class="dbody">
+        <div class="dlabel">Tool</div>
+        <div class="dval">Bash</div>
+        <div class="dlabel">Summary</div>
+        <div class="dval">bun test app/</div>
+        <div class="dlabel">Status</div>
+        <div class="dstatus">Success</div>
+        <div class="dlabel">Input</div>
+        <pre class="dpre">{
+  "command": "bun test app/",
+  "description": "Run the desktop package suite"
+}</pre>
+        <div class="dlabel">Output</div>
+        <div class="dtools">
+          <div class="dsearch">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <input type="text" aria-label="Search output" placeholder="Search output…">
+          </div>
+          <button type="button" class="dbtn">Wrap</button>
+          <button type="button" class="dbtn">Copy</button>
+        </div>
+        <div class="dout" data-drawer-output></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="x-cell is-after">
+    <div class="drawer">
+      <div class="dhead">
+        <div class="dhl">
+          <span class="dbadge">bash</span>
+          <span class="dsummary">bun test app/</span>
+        </div>
+        <button type="button" class="dclose" aria-label="Close output">×</button>
+      </div>
+      <div class="dbody">
+        <div class="dtools">
+          <div class="dsearch">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <input type="text" aria-label="Search output" placeholder="Search output…">
+          </div>
+          <button type="button" class="dbtn">Wrap</button>
+          <button type="button" class="dbtn">Copy</button>
+        </div>
+        <div class="dout" data-drawer-output></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div>
+
+<script>
+(function () {
+  var buttons = document.querySelectorAll('.x-mode button')
+  buttons.forEach(function (button) {
+    button.addEventListener('click', function () {
+      document.body.dataset.view = button.dataset.set
+      buttons.forEach(function (other) {
+        other.setAttribute('aria-pressed', String(other === button))
+      })
+    })
+  })
+
+  // The 214-line `bun test app/` output the section-3 window is cut from.
+  var files = [
+    'agentConfigState', 'composerDom', 'contextBreakdownState', 'hostApi',
+    'inlineOutputWindow', 'outputSearchModel', 'permissionPromptModel',
+    'readSource', 'sessionsCatalogState', 'settingsScope', 'sidebarState',
+    'toolCardExpansion', 'toolInspectorModel', 'transcriptProjector',
+    'transcriptViewModel'
+  ]
+  var lines = ['bun test v1.2.5 (a1b2c3d4)', '']
+  files.forEach(function (name) {
+    lines.push('app/renderer/src/' + name + '.test.ts:')
+    for (var i = 1; i <= 12; i++) {
+      lines.push('✓ ' + name + ' case ' + i + ' [' + (0.4 + i * 0.13).toFixed(2) + 'ms]')
+    }
+    lines.push('')
+  })
+  lines.push(' 180 pass', ' 0 fail', ' 612 expect() calls',
+    'Ran 180 tests across 15 files. [1842.00ms]')
+
+  var PASS = /(^\s*PASS\b|✓|compiled|succeeded|\bpassed\b)/
+  var COUNT = /^\s*(\d+)\s+(pass(?:ed|ing)?|fail(?:ed|ures?|ing)?|errors?)\b/i
+  function rows(slice, startNo) {
+    return slice.map(function (line, index) {
+      var count = COUNT.exec(line)
+      var pass = count ? Number(count[1]) > 0 && /^pass/i.test(count[2]) : PASS.test(line)
+      return '<div class="lrow"><span class="lno">' + (startNo + index) +
+        '</span><span class="ltx' + (pass ? ' pass' : '') + '">' +
+        (line === '' ? ' ' : line.replace(/&/g, '&amp;').replace(/</g, '&lt;')) +
+        '</span></div>'
+    }).join('')
+  }
+
+  var HEAD = 30, TAIL = 6
+  document.querySelectorAll('[data-head]').forEach(function (node) {
+    node.innerHTML = rows(lines.slice(0, HEAD), 1)
+  })
+  document.querySelectorAll('[data-tail]').forEach(function (node) {
+    node.innerHTML = rows(lines.slice(lines.length - TAIL), lines.length - TAIL + 1)
+  })
+  document.querySelectorAll('[data-scroll-band]').forEach(function (box) {
+    var band = box.querySelector('.band')
+    if (!band) return
+    var offset = band.getBoundingClientRect().top - box.getBoundingClientRect().top
+    box.scrollTop = box.scrollTop + offset - box.clientHeight + band.offsetHeight + 40
+  })
+
+  document.querySelectorAll('[data-drawer-output]').forEach(function (box) {
+    box.innerHTML = lines.slice(0, 26).map(function (line, index) {
+      return '<div class="dline"><span class="dno">' + (index + 1) +
+        '</span><span class="dtx">' +
+        (line === '' ? ' ' : line.replace(/&/g, '&amp;').replace(/</g, '&lt;')) +
+        '</span></div>'
+    }).join('')
+  })
+})()
+</script>
+</body>
+</html>
