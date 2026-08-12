@@ -78,7 +78,10 @@ import {
   checkMockRateLimitError,
   isMockRateLimitError,
 } from '../rateLimitMocking.js'
-import { REPEATED_529_ERROR_MESSAGE } from './errors.js'
+import {
+  LONG_CONTEXT_ENTITLEMENT_ERROR_MESSAGE,
+  REPEATED_529_ERROR_MESSAGE,
+} from './errors.js'
 import { extractConnectionErrorDetails } from './errorUtils.js'
 import { emitAccountDiagnostic } from './accountDiagnostics.js'
 import type { DeferredTerminalFailureV1 } from '../../types/message.js'
@@ -326,6 +329,15 @@ export class CannotRetryError extends Error {
       this.stack = originalError.stack
     }
   }
+}
+
+function getLongContextEntitlementError(error: unknown): Error | undefined {
+  const originalError =
+    error instanceof CannotRetryError ? error.originalError : error
+  return originalError instanceof Error &&
+    originalError.message.includes(LONG_CONTEXT_ENTITLEMENT_ERROR_MESSAGE)
+    ? originalError
+    : undefined
 }
 
 /**
@@ -590,6 +602,11 @@ export async function* withRetry<T>(
         `API error (attempt ${attempt}/${maxRetries + 1}): ${error instanceof APIError ? `${error.status} ${error.message}` : errorMessage(error)}`,
         { level: 'error' },
       )
+
+      const longContextEntitlementError = getLongContextEntitlementError(error)
+      if (longContextEntitlementError) {
+        throwRetryExhausted(longContextEntitlementError, attempt)
+      }
 
       // `response.failed` is a completed upstream verdict (for example, an
       // invalid request or policy rejection), not a transport outage. The SDK
