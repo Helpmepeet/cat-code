@@ -1171,12 +1171,24 @@ Substance verified at the current lines; the cites below are stale. All `§4.13`
 
 ### 15.6 One §4.1 distinction worth keeping
 
-All three of `REACTIVE_COMPACT`, `CONTEXT_COLLAPSE` and `HISTORY_SNIP` are
-absent from the build lists (`scripts/build.ts:13-51,83`), as stated. They are
-not in the same state on disk: `CONTEXT_COLLAPSE`
-(`src/services/contextCollapse/`) and `HISTORY_SNIP`
-(`src/services/compact/snipCompact.ts`) are fully implemented and merely
-uncompiled, while `src/services/compact/reactiveCompact.ts` does not exist.
-Reactive compaction is the only genuine implementation hole; the other two are
-build-list edits. `autoCompact.ts:486` records why the module is missing:
-`REACTIVE_COMPACT is ant-only`.
+All three of `REACTIVE_COMPACT`, `CONTEXT_COLLAPSE` and `HISTORY_SNIP` were
+absent from the build lists (`scripts/build.ts`), as stated. They were not in
+the same state on disk, and the difference is not the one an earlier revision of
+this section claimed. Verified by reading the modules, not just checking that
+files exist:
+
+- `REACTIVE_COMPACT`: no module. `autoCompact.ts` records why
+  (`REACTIVE_COMPACT is ant-only`). **Implemented in `4980de08`** and added to
+  the dev-full build list; `defaultFeatures` is still untouched, so this is not
+  default-on.
+- `CONTEXT_COLLAPSE`: `src/services/contextCollapse/` is a **stub**, not a
+  complete implementation. `index.ts` is 67 lines whose
+  `isContextCollapseEnabled()` returns a literal `false`, and `operations.ts`
+  and `persist.ts` are 3 and 4 lines. Compiling it in would do nothing.
+  `docs/maps/query-provider-runtime.md` already stated this correctly.
+- `HISTORY_SNIP`: `snipCompact.ts` / `snipProjection.ts` are real
+  implementations, uncompiled.
+
+The correction matters beyond bookkeeping: "the file exists" is not evidence
+that a feature is implemented, and treating it as such is how a build-list edit
+gets mistaken for shippable work.
