@@ -498,6 +498,110 @@ describe('session storage', () => {
     ])
   })
 
+  test('explicit preserved-message membership relinks without a legacy segment', async () => {
+    const archivalUuid = randomUUID()
+    const preservedHeadUuid = randomUUID()
+    const preservedTailUuid = randomUUID()
+    const boundaryUuid = randomUUID()
+    const summaryUuid = randomUUID()
+    const postCompactUuid = randomUUID()
+    const base = {
+      isSidechain: false,
+      sessionId,
+      cwd: tempDir,
+      version: 'test',
+    }
+    const transcript = [
+      {
+        ...base,
+        type: 'user',
+        uuid: archivalUuid,
+        parentUuid: null,
+        userType: 'external',
+        timestamp: '2026-08-12T09:00:00.000Z',
+        message: { role: 'user', content: 'archival prefix' },
+      },
+      {
+        ...base,
+        type: 'user',
+        uuid: preservedHeadUuid,
+        parentUuid: archivalUuid,
+        userType: 'external',
+        timestamp: '2026-08-12T09:00:01.000Z',
+        message: { role: 'user', content: 'preserved head' },
+      },
+      {
+        ...base,
+        type: 'assistant',
+        uuid: preservedTailUuid,
+        parentUuid: preservedHeadUuid,
+        timestamp: '2026-08-12T09:00:02.000Z',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'preserved tail' }],
+        },
+      },
+      {
+        ...base,
+        type: 'system',
+        subtype: 'compact_boundary',
+        content: 'Conversation compacted',
+        level: 'info',
+        isMeta: false,
+        uuid: boundaryUuid,
+        parentUuid: null,
+        logicalParentUuid: preservedTailUuid,
+        timestamp: '2026-08-12T09:00:03.000Z',
+        // No preservedSegment: only the explicit membership written by
+        // annotateBoundaryWithPreservedSegment for new compactions.
+        compactMetadata: {
+          trigger: 'auto',
+          preTokens: 180_000,
+          preservedMessages: {
+            anchorUuid: summaryUuid,
+            durableUuids: [preservedHeadUuid, preservedTailUuid],
+          },
+        },
+      },
+      {
+        ...base,
+        type: 'user',
+        uuid: summaryUuid,
+        parentUuid: boundaryUuid,
+        userType: 'external',
+        timestamp: '2026-08-12T09:00:04.000Z',
+        isCompactSummary: true,
+        message: { role: 'user', content: 'compact model summary' },
+      },
+      {
+        ...base,
+        type: 'user',
+        uuid: postCompactUuid,
+        parentUuid: preservedTailUuid,
+        userType: 'external',
+        timestamp: '2026-08-12T09:00:05.000Z',
+        message: { role: 'user', content: 'post compact turn' },
+      },
+    ]
+      .map(entry => JSON.stringify(entry))
+      .join('\n')
+    const path = getTranscriptPathForSession(sessionId)
+    await writeFile(path, `${transcript}\n`)
+
+    const resume = await getLastSessionLog(sessionId as UUID)
+    expect(resume?.messages.map(message => message.uuid)).toEqual([
+      boundaryUuid,
+      summaryUuid,
+      preservedHeadUuid,
+      preservedTailUuid,
+      postCompactUuid,
+    ])
+    // The summarized prefix is still pruned from the resume chain.
+    expect(resume?.messages.map(message => message.uuid)).not.toContain(
+      archivalUuid,
+    )
+  })
+
   test('display history retains summarized rows around a prefix-preserved compact seam', async () => {
     const preservedUuid = randomUUID()
     const summarizedUuid = randomUUID()

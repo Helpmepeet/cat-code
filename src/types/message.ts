@@ -292,6 +292,21 @@ export type CompactMetadata = {
     anchorUuid: string
     tailUuid: string
   }
+  /**
+   * Explicit membership for the preserved suffix. Additive: `preservedSegment`
+   * is still written for transcripts read by the head/tail walk, and boundaries
+   * written before this field existed carry only that.
+   *
+   * `durableUuids` names preserved messages that reach the transcript, in chain
+   * order, and is what resume relinks against. `liveUuids` is the in-process
+   * superset including messages `isLoggableMessage` drops (attachments, meta);
+   * it is NOT crash durable and must never be treated as recoverable state.
+   */
+  preservedMessages?: {
+    anchorUuid: string
+    durableUuids: string[]
+    liveUuids?: string[]
+  }
 }
 
 export type RequestStartEvent = {

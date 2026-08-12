@@ -222,3 +222,65 @@ describe('compactConversation', () => {
     expect(normalizedText).not.toContain(outputFilePath!)
   })
 })
+
+describe('preserved-message boundary metadata', () => {
+  // A progress message is never loggable, so it stands in for any message the
+  // compactor keeps in memory that never reaches the transcript.
+  const nonLoggable = {
+    type: 'progress',
+    uuid: 'progress-not-on-disk',
+  } as unknown as Message
+
+  async function annotate(keep: readonly Message[]) {
+    const { annotateBoundaryWithPreservedSegment } = await import('./compact.js')
+    const { createCompactBoundaryMessage } = await import(
+      '../../utils/messages.js'
+    )
+    const boundary = createCompactBoundaryMessage('auto', 1_000, undefined)
+    return {
+      boundary,
+      annotated: annotateBoundaryWithPreservedSegment(
+        boundary,
+        'anchor-uuid' as never,
+        keep,
+      ),
+    }
+  }
+
+  test('endpoints skip a non-loggable head that would break the resume walk', async () => {
+    const keptUser = createUserMessage({ content: 'kept user turn' })
+    const keptAssistant = createAssistantMessage('kept assistant turn')
+    const { annotated } = await annotate([nonLoggable, keptUser, keptAssistant])
+
+    expect(annotated.compactMetadata.preservedMessages).toEqual({
+      anchorUuid: 'anchor-uuid',
+      durableUuids: [keptUser.uuid, keptAssistant.uuid],
+      liveUuids: [nonLoggable.uuid, keptUser.uuid, keptAssistant.uuid],
+    })
+    // The legacy field must not name the progress message either: resume walks
+    // tail→head and a head that is not in the transcript loses the whole suffix.
+    expect(annotated.compactMetadata.preservedSegment).toEqual({
+      headUuid: keptUser.uuid,
+      anchorUuid: 'anchor-uuid',
+      tailUuid: keptAssistant.uuid,
+    })
+  })
+
+  test('omits liveUuids when every preserved message is durable', async () => {
+    const keptUser = createUserMessage({ content: 'kept user turn' })
+    const { annotated } = await annotate([keptUser])
+
+    expect(annotated.compactMetadata.preservedMessages).toEqual({
+      anchorUuid: 'anchor-uuid',
+      durableUuids: [keptUser.uuid],
+    })
+  })
+
+  test('leaves the boundary untouched when nothing preserved is durable', async () => {
+    const { boundary, annotated } = await annotate([nonLoggable])
+
+    expect(annotated).toBe(boundary)
+    expect(annotated.compactMetadata.preservedMessages).toBeUndefined()
+    expect(annotated.compactMetadata.preservedSegment).toBeUndefined()
+  })
+})

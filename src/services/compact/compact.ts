@@ -76,6 +76,7 @@ import {
 import { processSessionStartHooks } from '../../utils/sessionStart.js'
 import {
   getTranscriptPath,
+  isLoggableMessage,
   reAppendSessionMetadata,
 } from '../../utils/sessionStorage.js'
 import { sleep } from '../../utils/sleep.js'
@@ -346,9 +347,14 @@ export function buildPostCompactMessages(result: CompactionResult): Message[] {
  * Preserved messages keep their original parentUuids on disk (dedup-skipped);
  * the loader uses this to patch head→anchor and anchor's-other-children→tail.
  *
- * `anchorUuid` = what sits immediately before keep[0] in the desired chain:
+ * `anchorUuid` = what sits immediately before the preserved head in the desired
+ * chain:
  *   - suffix-preserving (reactive/session-memory): last summary message
  *   - prefix-preserving (partial compact): the boundary itself
+ *
+ * Endpoints are the first and last DURABLE messages, not keep[0]/keep.at(-1).
+ * A non-loggable head (a mid-turn attachment) never reaches the transcript, so
+ * naming it breaks the resume walk and costs the whole preserved suffix.
  */
 export function annotateBoundaryWithPreservedSegment(
   boundary: SystemCompactBoundaryMessage,
@@ -357,14 +363,27 @@ export function annotateBoundaryWithPreservedSegment(
 ): SystemCompactBoundaryMessage {
   const keep = messagesToKeep ?? []
   if (keep.length === 0) return boundary
+
+  const durable = keep.filter(isLoggableMessage)
+  // Nothing survives to disk, so there is no chain for resume to rebuild.
+  if (durable.length === 0) return boundary
+
+  const durableUuids = durable.map(message => message.uuid)
+  const liveUuids = keep.map(message => message.uuid)
+
   return {
     ...boundary,
     compactMetadata: {
       ...boundary.compactMetadata,
       preservedSegment: {
-        headUuid: keep[0]!.uuid,
+        headUuid: durableUuids[0]!,
         anchorUuid,
-        tailUuid: keep.at(-1)!.uuid,
+        tailUuid: durableUuids.at(-1)!,
+      },
+      preservedMessages: {
+        anchorUuid,
+        durableUuids,
+        ...(liveUuids.length !== durableUuids.length && { liveUuids }),
       },
     },
   }

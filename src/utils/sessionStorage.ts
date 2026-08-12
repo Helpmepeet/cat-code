@@ -2524,16 +2524,44 @@ export function removeExtraFields(
  *
  * Mutates the Map in place.
  */
+type ResolvedPreservedSegment = {
+  headUuid: UUID
+  anchorUuid: UUID
+  tailUuid: UUID
+  /** Present only on boundaries written with explicit preserved membership. */
+  durableUuids?: readonly UUID[]
+}
+
+/**
+ * Explicit `preservedMessages` wins over the legacy `preservedSegment`, which
+ * boundaries written before that field carry alone. Endpoints come from the
+ * durable list so a non-loggable head cannot name a UUID that never reached
+ * the transcript.
+ */
+function resolvePreservedSegment(
+  entry: SystemCompactBoundaryMessage,
+): ResolvedPreservedSegment | undefined {
+  const explicit = entry.compactMetadata?.preservedMessages
+  if (explicit && explicit.durableUuids.length > 0) {
+    const durableUuids = explicit.durableUuids as readonly UUID[]
+    return {
+      headUuid: durableUuids[0]!,
+      anchorUuid: explicit.anchorUuid as UUID,
+      tailUuid: durableUuids.at(-1)!,
+      durableUuids,
+    }
+  }
+  return entry.compactMetadata?.preservedSegment as
+    | ResolvedPreservedSegment
+    | undefined
+}
+
 function applyPreservedSegmentRelinks(
   messages: Map<UUID, TranscriptMessage>,
 ): void {
-  type Seg = NonNullable<
-    SystemCompactBoundaryMessage['compactMetadata']['preservedSegment']
-  >
-
   // Find the absolute-last boundary and the last seg-boundary (can differ:
   // manual /compact after reactive compact → seg is stale).
-  let lastSeg: Seg | undefined
+  let lastSeg: ResolvedPreservedSegment | undefined
   let lastSegBoundaryIdx = -1
   let absoluteLastBoundaryIdx = -1
   const entryIndex = new Map<UUID, number>()
@@ -2542,7 +2570,7 @@ function applyPreservedSegmentRelinks(
     entryIndex.set(entry.uuid, i)
     if (isCompactBoundaryMessage(entry)) {
       absoluteLastBoundaryIdx = i
-      const seg = entry.compactMetadata?.preservedSegment
+      const seg = resolvePreservedSegment(entry)
       if (seg) {
         lastSeg = seg
         lastSegBoundaryIdx = i
@@ -2585,8 +2613,19 @@ function applyPreservedSegmentRelinks(
         anchorInTranscript: messages.has(lastSeg.anchorUuid),
         walkSteps: walkSeen.size,
         transcriptSize: messages.size,
+        // Explicit membership names exactly what went missing; the walk alone
+        // can only report where it stopped.
+        durableCount: lastSeg.durableUuids?.length ?? -1,
+        durableMissing:
+          lastSeg.durableUuids?.filter(uuid => !messages.has(uuid)).length ?? -1,
       })
       return
+    }
+
+    // Preserved sets need not be one parent chain. Anything the compactor
+    // named and that survived to disk is preserved, even off the walk.
+    for (const uuid of lastSeg.durableUuids ?? []) {
+      if (messages.has(uuid)) preservedUuids.add(uuid)
     }
   }
 
