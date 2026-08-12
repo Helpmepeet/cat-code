@@ -88,6 +88,78 @@ eleven operations in a single forward pass, and does not.
 The tool being a no-op sink is the load-bearing detail. It adds no capability. All the gain
 comes from the model having somewhere to put tokens.
 
+## Does tool-reasoning degrade quality? (follow-up experiment)
+
+The arithmetic task above is a **binary** instrument: it detects whether a scratchpad exists, not
+whether the reasoning done in it is any good. It would score 6/6 even if tool-scratchpad
+reasoning were substantially worse than native thinking. The real question — *is reasoning in a
+tool argument the same as reasoning in a thinking block, or does the different channel hurt?* —
+needs a graded instrument.
+
+**Instrument.** Logic puzzles, 5 houses × 3 categories (owner / pet / door), generated with
+**verified-unique solutions** and **trimmed to minimal clue sets** (every clue load-bearing, 9
+clues each) so difficulty comes from deduction depth rather than clue count. Scored on 150
+individual cells, not pass/fail, so partial degradation is visible as a gradient. Prompt is
+**identical across all conditions** — only thinking and tool availability vary. All runs at
+`--effort high` (the highest effort legal with thinking disabled).
+
+| Run | Thinking | Tool | Exact | Cells | Reasoning volume |
+|---|---|---|---|---|---|
+| A1 | **on** | none | **10/10** | 150/150 (100%) | 5,236 thinking tokens |
+| A2 | **on** | none | **10/10** | 150/150 (100%) | 5,565 thinking tokens |
+| B1 | off | `deep_think` | **10/10** | 150/150 (100%) | 9,968 chars (~2.5k tok) |
+| B2 | off | `deep_think` | **10/10** | 150/150 (100%) | 9,570 chars (~2.4k tok) |
+| C1 | off | none | 0/10 | 42/150 (28%) | — |
+| C2 | off | none | 1/10 | 89/150 (59%) | — |
+
+Both arms replicated cleanly: native thinking 10/10 twice, tool-scratchpad 10/10 twice, floor
+0–1/10 twice.
+
+Earlier tier (4 houses × 3 categories, 12 minimal puzzles): thinking on **12/12** (3,536
+thinking tokens); thinking off + `deep_think` **12/12** (5,033 chars); thinking off, no tool
+**4/12** (54% cells).
+
+**Answer: no degradation detected, at any difficulty I could construct.** Tool-scratchpad
+reasoning matched native thinking *exactly* — 100% vs 100%, on two difficulty tiers, replicated —
+against a floor of 28–59% where the same model has nowhere to write. Inspecting the scratchpad
+content shows why: it is genuine deliberate reasoning, including case analysis, constraint
+re-checking, and explicit uniqueness proofs ("Check alternative Ana4,Cy5,Eli3: ... impossible.
+So unique."), not a shallow dump.
+
+**The honest caveat: both arms are at ceiling.** I never found a task where native thinking
+succeeds and the tool fails, which means this rules out *gross* degradation but cannot rule out
+degradation at the frontier of difficulty — the instrument has no headroom left. Anyone relying
+on this should re-run it at a difficulty where native thinking itself starts to fail.
+
+**One measured difference that is the place to look.** The tool version consistently used
+**roughly half the reasoning tokens** for the same perfect score (5,236 thinking tokens vs
+~2.4–2.5k in the scratchpad; 3,536 vs ~1.3k on the easier tier). Reasoning through a tool is
+more *compressed*. At this difficulty compression costs nothing. Compression is exactly what
+would fail first as difficulty rises, and `effort` scales native thinking depth while nothing
+scales a tool argument's — so the gap should be expected to widen, not stay flat.
+
+### The failure mode that showed up instead
+
+Running the floor condition on an over-determined puzzle set produced something more interesting
+than a score. With thinking disabled and a format rule forbidding visible working, the model
+**emitted `<thinking>` tags into the user-visible answer and reasoned there anyway** — the
+documented thinking-disabled leak, reproduced. On the minimal-clue set it instead self-corrected
+mid-answer in the visible channel ("Wait — I need to correct:") and then repeated the same wrong
+line, having detected the error with nowhere to fix it.
+
+**You cannot actually take the scratchpad away.** Disabling thinking does not remove reasoning;
+it relocates it — into a tool if you provide one, and into the user-visible output if you do
+not. For a harness with a format contract, that second outcome is a correctness bug, not a
+stylistic one.
+
+### A note on observability
+
+Native `thinking` blocks came back with **`thinking` string length 0** — `display` defaults to
+`"omitted"` and the raw chain of thought is never returned on `claude-opus-5`. The tool argument,
+by contrast, is fully readable, which is how the reasoning-quality inspection above was possible
+at all. This is the empirical version of the plaintext-vs-opaque argument in the cat-code
+evaluation below: the two channels differ far more in *auditability* than in *quality*.
+
 ## Limits — what this does not show
 
 **Threat to validity, caught mid-experiment.** The first run of condition B scored 6/6, but
