@@ -120,6 +120,7 @@ import {
   getCompactPrompt,
   getCompactUserSummaryMessage,
   getPartialCompactPrompt,
+  toAgentModeCompactState,
 } from './prompt.js'
 
 export const POST_COMPACT_MAX_FILES_TO_RESTORE = 5
@@ -651,7 +652,7 @@ export async function compactConversation(
             context.options.mainLoopModel,
             context.options.mainLoopProvider,
           ),
-          sessionState ?? undefined,
+          toAgentModeCompactState(sessionState),
         ),
         isCompactSummary: true,
         isVisibleInTranscriptOnly: true,
@@ -1085,7 +1086,7 @@ export async function partialCompactConversation(
             context.options.mainLoopModel,
             context.options.mainLoopProvider,
           ),
-          sessionState ?? undefined,
+          toAgentModeCompactState(sessionState),
         ),
         isCompactSummary: true,
         ...(messagesToKeep.length > 0

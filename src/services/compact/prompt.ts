@@ -740,7 +740,7 @@ export function formatCompactSummary(summary: string): string {
   return formattedSummary.trim()
 }
 
-export type AgentModeCompactState = {
+type AgentModeRunState = {
   objective: string
   planSummary: string | null
   currentPhase: RunStatus
@@ -751,52 +751,74 @@ export type AgentModeCompactState = {
   latestVerifierVerdict: VerificationSummary | null
   handoff: HandoffBlock | null
   nextAction: string
-  sessionState?: AgentModeSessionState | null
+}
+
+// A union, not one all-optional object, so that AgentModeSessionState is
+// assignable to NEITHER member. AgentModeRunPhase and RunStatus are identical
+// unions, so an all-optional shape would silently accept the narrow state and
+// drop the worker roster — the defect this type is guarding against.
+// `readSessionState()` is the only compaction-time source of Agent Mode state;
+// route it through toAgentModeCompactState() rather than widening it by hand.
+export type AgentModeCompactState =
+  | (AgentModeRunState & { sessionState?: AgentModeSessionState | null })
+  | { sessionState: AgentModeSessionState }
+
+export function toAgentModeCompactState(
+  sessionState: AgentModeSessionState | null | undefined,
+): AgentModeCompactState | undefined {
+  return sessionState ? { sessionState } : undefined
 }
 
 function formatAgentModeState(state: AgentModeCompactState): string {
-  const verifierVerdict = state.latestVerifierVerdict
-    ? [
-        `- Verdict: ${state.latestVerifierVerdict.verdict}`,
-        `- Evidence: ${state.latestVerifierVerdict.evidence}`,
-        `- Issues: ${
-          state.latestVerifierVerdict.issues.length > 0
-            ? state.latestVerifierVerdict.issues.join('; ')
-            : 'none'
-        }`,
-        `- Recommended direction: ${
-          state.latestVerifierVerdict.recommended_direction ?? 'none'
-        }`,
-      ].join('\n')
-    : '- None recorded.'
+  const lines: string[] = []
 
-  const handoff = state.handoff
-    ? [
-        `- Summary: ${state.handoff.summary}`,
-        `- Open questions: ${
-          state.handoff.open_questions.length > 0
-            ? state.handoff.open_questions.join('; ')
-            : 'none'
-        }`,
-        `- Resume hint: ${state.handoff.resume_hint}`,
-      ].join('\n')
-    : '- None recorded.'
+  // Only emit the run-state block when a caller supplied run fields. With just
+  // a nested sessionState the block would restate objective/phase/next action
+  // and print placeholders for the rest.
+  if ('objective' in state) {
+    const verifierVerdict = state.latestVerifierVerdict
+      ? [
+          `- Verdict: ${state.latestVerifierVerdict.verdict}`,
+          `- Evidence: ${state.latestVerifierVerdict.evidence}`,
+          `- Issues: ${
+            state.latestVerifierVerdict.issues.length > 0
+              ? state.latestVerifierVerdict.issues.join('; ')
+              : 'none'
+          }`,
+          `- Recommended direction: ${
+            state.latestVerifierVerdict.recommended_direction ?? 'none'
+          }`,
+        ].join('\n')
+      : '- None recorded.'
 
-  const lines = [
-    'Agent Mode Run State (authoritative):',
-    `- Objective: ${state.objective}`,
-    `- Approved plan summary: ${state.planSummary ?? 'None recorded.'}`,
-    `- Current phase: ${state.currentPhase}`,
-    `- Approval status: ${state.approvalStatus}`,
-    `- Approval reason: ${state.approvalReason ?? 'none'}`,
-    `- Blocked reason: ${state.blockedReason ?? 'none'}`,
-    `- Execution target: ${state.executionTarget ?? 'none recorded.'}`,
-    'Latest verifier verdict:',
-    verifierVerdict,
-    'Handoff block:',
-    handoff,
-    `- Next action: ${state.nextAction}`,
-  ]
+    const handoff = state.handoff
+      ? [
+          `- Summary: ${state.handoff.summary}`,
+          `- Open questions: ${
+            state.handoff.open_questions.length > 0
+              ? state.handoff.open_questions.join('; ')
+              : 'none'
+          }`,
+          `- Resume hint: ${state.handoff.resume_hint}`,
+        ].join('\n')
+      : '- None recorded.'
+
+    lines.push(
+      'Agent Mode Run State (authoritative):',
+      `- Objective: ${state.objective}`,
+      `- Approved plan summary: ${state.planSummary ?? 'None recorded.'}`,
+      `- Current phase: ${state.currentPhase}`,
+      `- Approval status: ${state.approvalStatus}`,
+      `- Approval reason: ${state.approvalReason ?? 'none'}`,
+      `- Blocked reason: ${state.blockedReason ?? 'none'}`,
+      `- Execution target: ${state.executionTarget ?? 'none recorded.'}`,
+      'Latest verifier verdict:',
+      verifierVerdict,
+      'Handoff block:',
+      handoff,
+      `- Next action: ${state.nextAction}`,
+    )
+  }
 
   if (state.sessionState) {
     lines.push(formatAgentModeSessionState(state.sessionState))

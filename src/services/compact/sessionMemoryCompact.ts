@@ -42,7 +42,10 @@ import {
   createPlanAttachmentIfNeeded,
 } from './compact.js'
 import { estimateMessageTokens } from './microCompact.js'
-import { getCompactUserSummaryMessage } from './prompt.js'
+import {
+  getCompactUserSummaryMessage,
+  toAgentModeCompactState,
+} from './prompt.js'
 import type { AgentModeCompactState } from './prompt.js'
 
 /**
@@ -609,7 +612,7 @@ export async function trySessionMemoryCompaction(
       hookResults,
       transcriptPath,
       agentId,
-      agentModeState,
+      agentModeState ?? toAgentModeCompactState(sessionState),
     )
 
     const postCompactMessages = buildPostCompactMessages(compactionResult)

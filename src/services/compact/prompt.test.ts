@@ -1,6 +1,13 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
-import { getCompactUserSummaryMessage } from './prompt.js'
+import { readSessionState } from '../../agent-mode/sessionState.js'
+import {
+  getCompactUserSummaryMessage,
+  toAgentModeCompactState,
+} from './prompt.js'
 
 describe('compact prompt Agent Mode summary', () => {
   test('marks Agent Mode run state as authoritative and keeps resume wording', () => {
@@ -105,5 +112,101 @@ describe('compact prompt Agent Mode summary', () => {
 
     expect(summary).toContain('Agent Mode Run State (authoritative):')
     expect(summary).not.toContain('Agent Mode session state:')
+  })
+})
+
+// The cases above hand-build AgentModeCompactState and cast it `as any`, which
+// is what let compact.ts pass the narrow readSessionState() result straight
+// through: the worker roster silently vanished from the post-compact summary.
+// These drive the real reader into the real formatter, with no cast.
+describe('compact prompt Agent Mode state wiring (live path)', () => {
+  let stateDir: string | null = null
+
+  afterEach(async () => {
+    if (stateDir) {
+      await rm(stateDir, { recursive: true, force: true })
+      stateDir = null
+    }
+  })
+
+  async function writeSessionStateFixture(): Promise<string> {
+    stateDir = await mkdtemp(join(tmpdir(), 'cat-compact-state-'))
+    const statePath = join(stateDir, 'session.agent-mode-state.json')
+    await writeFile(
+      statePath,
+      JSON.stringify({
+        sessionId: 'session-under-test',
+        mode: 'agent',
+        objective: 'Ship reactive compaction.',
+        activeWorkers: {
+          'worker-1': { agentId: 'worker-1' },
+        },
+        knownWorkers: {
+          'worker-1': {
+            agentId: 'worker-1',
+            role: 'implementor',
+            description: 'Implement approved plan',
+            status: 'running',
+            worktreePath: null,
+          },
+          'worker-2': {
+            agentId: 'worker-2',
+            role: 'verifier',
+            description: 'Verify the implementation',
+            status: 'completed',
+            worktreePath: null,
+          },
+        },
+      }),
+      'utf-8',
+    )
+    return statePath
+  }
+
+  test('carries the worker roster from readSessionState into the summary', async () => {
+    const statePath = await writeSessionStateFixture()
+    const sessionState = await readSessionState('session-under-test', statePath)
+    expect(sessionState).not.toBeNull()
+
+    const summary = getCompactUserSummaryMessage(
+      '<summary>continuity prose</summary>',
+      true,
+      '/tmp/transcript.jsonl',
+      false,
+      'anthropic',
+      toAgentModeCompactState(sessionState),
+    )
+
+    expect(summary).toContain('Agent Mode session state:')
+    expect(summary).toContain('Ship reactive compaction.')
+    // Both workers survive, not just the active one.
+    expect(summary).toContain('Known workers:')
+    expect(summary).toContain('Implement approved plan')
+    expect(summary).toContain('Verify the implementation')
+    expect(summary).toContain('- Active worker: implementor')
+    // The run-state block has no producer on this path; emitting it would print
+    // placeholders and one literal `undefined` for fields nobody supplied.
+    expect(summary).not.toContain('Agent Mode Run State (authoritative):')
+    expect(summary).not.toContain('undefined')
+  })
+
+  test('omits the Agent Mode block when no session state is persisted', async () => {
+    stateDir = await mkdtemp(join(tmpdir(), 'cat-compact-state-'))
+    const missingPath = join(stateDir, 'absent.agent-mode-state.json')
+    const sessionState = await readSessionState('session-under-test', missingPath)
+    expect(sessionState).toBeNull()
+    expect(toAgentModeCompactState(sessionState)).toBeUndefined()
+
+    const summary = getCompactUserSummaryMessage(
+      '<summary>continuity prose</summary>',
+      true,
+      '/tmp/transcript.jsonl',
+      false,
+      'anthropic',
+      toAgentModeCompactState(sessionState),
+    )
+
+    expect(summary).not.toContain('Agent Mode session state:')
+    expect(summary).not.toContain('Agent Mode Run State (authoritative):')
   })
 })
