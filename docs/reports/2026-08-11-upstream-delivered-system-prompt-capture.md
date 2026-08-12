@@ -493,8 +493,63 @@ Cat Code's `# Doing tasks`.
 
 Strip memory from both and the remaining gap is 19,099 vs 9,887, or 1.93x —
 still a real divergence, but an ordinary one attributable to the verbose-vs-lean
-split the audit is about. Memory is a separate phenomenon of a different size,
-and no part of the audit examined it.
+split the audit is about.
+
+### 6.3.1 The memory gap is a missed upstream rewrite, not fork bloat
+
+Traced 2026-08-12. The first reading of the 6.56x — that Cat Code had grown its
+own memory prompt and should trim it — is **wrong**, and the correct reading is
+more actionable.
+
+Cat Code's memory text is **inherited, not authored**. `src/memdir/memoryTypes.ts`
+(24 KB, the source of `## Types of memory`) arrives in the very first commit,
+`86051a8e` "Initial private publish snapshot", and has one subsequent commit
+against it (`f32bf5c8`, a feedback-scope fix). No session ever grew it.
+
+Every heading in that 13,639-char block is present in upstream's own binaries:
+
+| heading | 2.1.87 | 2.1.223 |
+|---|---|---|
+| `Types of memory` | 2 | 5 |
+| `What NOT to save in memory` | 1 | 3 |
+| `Before recommending from memory` | 1 | 3 |
+| `Memory and other forms of persistence` | 2 | 6 |
+| `When to access memories` | 3 | 8 |
+
+What upstream did post-fork was add a **compact replacement variant** and select
+it by default. Distinctive phrases from the delivered compact prompt in §2.6:
+
+| phrase | 2.1.87 | 2.1.223 | Cat Code `src/` |
+|---|---|---|---|
+| "one file holding one fact" | 0 | 2 | 0 |
+| "used to decide relevance during recall" | 0 | 1 | 0 |
+| "Link related memories with" | 0 | 2 | 0 |
+
+Absent at the fork point, present upstream now, absent from Cat Code entirely.
+The long taxonomy still exists in 2.1.223, so upstream keeps both and selects
+between them; a default Opus 5 session receives the compact one.
+
+So the 6.56x is **variant selection, not divergence**. Cat Code still ships the
+2.1.87-era memory prompt because that is the only one it has. Consequences:
+
+- The remedy is a **port, not a redesign**. The compact text exists, upstream
+  ships it as default, and it is ~11,500 chars (~2,900 tokens) smaller. This is
+  the largest single reduction available anywhere in the prompt and it requires
+  no design judgment about what memory guidance should say.
+- **Sequence it before the lean decision.** It is bigger than going lean
+  (~9k chars) and carries far less risk, since it is adopting text upstream
+  already validated rather than authoring a new assembly.
+- Before porting, check that Cat Code's memory *mechanism* matches what the
+  compact prompt describes — it specifies a frontmatter schema and a `MEMORY.md`
+  index, and Cat Code's `src/memdir/` must actually implement that shape or the
+  prompt will describe a system that does not exist. Not verified here.
+
+**Methodological note for the audit.** Its §3.1 registry table lists `memory` as
+present at both 2.1.87 and 2.1.223, which is true by name and misleading in
+substance: the section was rewritten underneath a stable name. Name-level
+registry comparison cannot see content rewrites, so the other five retained
+sections (`brief`, `env_info_simple`, `language`, `output_style`, `scratchpad`)
+carry the same risk and none were diffed by content.
 
 `scratchpad` registers in Cat Code but did not render in this dump; whether it is
 conditional on configuration was not chased.
