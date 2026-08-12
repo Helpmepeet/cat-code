@@ -605,10 +605,16 @@ the qualifying contexts.
    Cat Code's are the verbose branch plus a third, longer GPT variant (measured
    on Grep: 1,030 chars for the GPT branch against 949 for the default).
 
-   **Two things this report cannot supply, and the decision needs both.** First,
-   a size: nowhere here is Cat Code's assembled prompt measured, because §4.2 and
-   §4.3 establish there is no working way to emit one. Item 2 below is therefore
-   a *prerequisite* for this decision, not an item ranked under it — do it first.
+   **Both prerequisites are now supplied (2026-08-12).** Item 2 was implemented,
+   and the measurement it unblocked is in the capture companion's §6. Cat Code
+   was 32,804 chars against an 11,188-char upstream terminal baseline; disabling
+   auto-memory then removed 13,687 of that, leaving **19,117 chars, or 1.71x
+   upstream**. So the lean switch is now worth roughly 9k chars on a prompt that
+   has already taken its largest available cut, and it is a smaller lever than it
+   looked when this item was written.
+
+   **What this report could not supply on its own.** No size was measured here,
+   because §4.2 and §4.3 establish there was no working way to emit one.
    Second, the adopt list that follows (items 4, 5, 6, 9) all add text to the
    verbose path. If the answer here is "go lean", those four should be
    re-evaluated as lean-path sections rather than appended to a path being
@@ -624,11 +630,15 @@ the qualifying contexts.
    only write when unchanged. Keep Cat Code's existing `!s.cacheBreak` write
    guard, which upstream still lacks — the two are complementary.
 
-2. **Wire up prompt inspection.** Either add `DUMP_SYSTEM_PROMPT` to the
-   `dev-full` feature set in `scripts/build.ts`, or delete the dead fast path.
-   The flag's stated purpose (extracting the prompt at a given commit) is exactly
-   what a fork maintaining prompt divergence needs. Prefer wiring it, and extend
-   it to take `--provider` so the GPT assembly can be dumped too.
+2. ~~**Wire up prompt inspection.**~~ **DONE 2026-08-12 (`d568ee9d`).**
+   `DUMP_SYSTEM_PROMPT` added to the `dev-full` feature set, and `--provider`
+   added as recommended. Wiring it exposed a second defect the audit had not
+   found: `--model` does **not** select the prompt style. `resolveRequestProvider`
+   maps only `gpt-*`, so every Claude model falls through to the session
+   provider, and `--dump-system-prompt --model claude-opus-5` emitted the GPT
+   assembly on a machine whose persisted `lastUsedProvider` was `openai`.
+   `--provider` overrides it for the dump only. Note the resulting capability is
+   a divergence, not a catch-up: upstream 2.1.223 has no dump flag of any kind.
 
 3. **Upstream's cyber policy text.** Cat Code's baseline is a lossy paraphrase of
    a Safeguards-owned string that is available verbatim. Replacing

@@ -488,6 +488,14 @@ computer-use surfaces attached.
 Cat Code is **2.74x** upstream's unconditional core, and **1.66x** upstream even
 when upstream is carrying its full computer-use safety apparatus.
 
+> **Superseded 2026-08-12.** The Cat Code figures above are the pre-change
+> measurement, kept because §6.3 reasons from them. Auto-memory has since been
+> disabled (§6.3.2b), taking Cat Code to **19,117 chars / ~4,780 tokens** — a 42%
+> cut, and **1.71x** the 11,188-char terminal baseline rather than 2.93x. Every
+> Cat Code figure and ratio in §6.3 and §6.4 describes the state before that
+> change and is retained as the reasoning that led to it. The upstream figures
+> are unaffected.
+
 ### 6.3 Where the difference actually is
 
 | category | upstream | Cat Code | ratio |
@@ -643,6 +651,45 @@ This is an owner decision about owner-authored text, so it is not taken here.
 Option 2 is the best value if the owner confirms which parts of `f32bf5c8` are
 must-keep; option 1 is correct if the answer is "all of it and I would rather not
 risk the rest."
+
+### 6.3.2b Resolved: the feature was switched off instead
+
+**Decision taken 2026-08-12.** Asked which parts of `f32bf5c8` were must-keep,
+the owner's answer was that the memory feature is not wanted at all. None of the
+three options above applies: the block is not being ported, merged, or trimmed.
+
+`autoMemoryEnabled: false` is now set in `~/.cat-code/settings.json`. That is the
+feature's documented gate (`src/memdir/paths.ts:30`), whose priority chain is
+`CLAUDE_CODE_DISABLE_AUTO_MEMORY` → `CLAUDE_CODE_SIMPLE` → CCR-without-storage →
+this setting → default-on. It was previously unset, so the feature was running on
+its default.
+
+Measured with the setting alone, no env var:
+
+| | chars | ~tokens |
+|---|---|---|
+| before | 32,804 | ~8,200 |
+| after | 19,117 | ~4,780 |
+| **removed** | **13,687** | **~3,420** |
+
+A 42% reduction, and it puts Cat Code at **1.71x** the upstream terminal baseline
+instead of 2.93x.
+
+What the gate covers, beyond the prompt text: the turn-end extraction fork,
+autoDream, `/remember`, `/dream`, and team sync all stop, and `claudemd.ts` gates
+MEMORY.md index injection on the same function, so the index is no longer loaded
+into context either. This is the whole feature, not a prompt trim.
+
+Nothing was deleted. The memory files remain on disk, `memoryTypes.ts` and
+`f32bf5c8` are untouched in source, and removing one line from the settings file
+restores the previous behaviour exactly. §6.3.1's port recommendation and
+§6.3.2a's three options are therefore **moot rather than answered** — they become
+live again only if auto-memory is ever re-enabled, which is why both are kept
+above rather than deleted.
+
+Scope note: user-level settings apply to every cat-code session on this machine,
+including concurrent agent sessions on this shared tree. Moving the key to
+`.claude/settings.local.json` would scope it to this project instead.
 
 ### 6.3.3 Registry sweep: memory is the exception, not the pattern
 
