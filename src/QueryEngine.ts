@@ -775,6 +775,7 @@ export class QueryEngine {
     let currentMessageUsage: NonNullableUsage = EMPTY_USAGE
     let turnCount = 1
     let hasAcknowledgedInitialMessages = false
+    const preservedReplayUuids = new Set<string>()
     // Track structured output from StructuredOutput tool calls
     let structuredOutputFromTool: unknown
     // Track the last stop_reason from assistant messages
@@ -801,6 +802,19 @@ export class QueryEngine {
       maxTurns,
       taskBudget,
     })) {
+      if (
+        message.type === 'system' &&
+        message.subtype === 'compact_boundary'
+      ) {
+        const preservedMessages = message.compactMetadata?.preservedMessages
+        for (const uuid of
+          preservedMessages?.liveUuids ?? preservedMessages?.durableUuids ?? []) {
+          preservedReplayUuids.add(uuid)
+        }
+      } else if (preservedReplayUuids.delete(message.uuid)) {
+        continue
+      }
+
       // Record assistant, user, and compact boundary messages
       if (
         message.type === 'assistant' ||

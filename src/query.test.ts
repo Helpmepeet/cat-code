@@ -89,11 +89,25 @@ function createToolUseContext(messages: Message[]): ToolUseContext {
 describe('query auto-compaction request assembly', () => {
   test('sends post-compact messages to both generic and OpenAI request assembly', async () => {
     const originalUserMessage = createUserMessage({ content: 'pre compact user text' })
+    const preservedUserMessage = createUserMessage({
+      content: 'preserved user text',
+    })
+    const preservedAssistantMessage = createAssistantMessage(
+      'preserved assistant text',
+      'assistant-preserved',
+    )
     const originalMessages: Message[] = [
       originalUserMessage,
+      preservedUserMessage,
+      preservedAssistantMessage,
       createAssistantMessage('pre compact assistant text', 'assistant-before-compact'),
     ]
 
+    const compactSummary = createUserMessage({
+      content: 'post compact summary text',
+      isCompactSummary: true,
+      isVisibleInTranscriptOnly: true,
+    })
     const compactBoundary: SystemMessage = {
       type: 'system',
       subtype: 'compact_boundary',
@@ -102,22 +116,30 @@ describe('query auto-compaction request assembly', () => {
       compactMetadata: {
         trigger: 'auto',
         preTokens: 240_000,
+        preservedMessages: {
+          anchorUuid: compactSummary.uuid,
+          durableUuids: [
+            preservedUserMessage.uuid,
+            preservedAssistantMessage.uuid,
+          ],
+        },
       },
     }
-    const compactSummary = createUserMessage({
-      content: 'post compact summary text',
-      isCompactSummary: true,
-      isVisibleInTranscriptOnly: true,
-    })
     const compactionResult: CompactionResult = {
       boundaryMarker: compactBoundary,
       summaryMessages: [compactSummary],
       attachments: [],
       hookResults: [],
+      messagesToKeep: [preservedUserMessage, preservedAssistantMessage],
       preCompactTokenCount: 240_000,
       truePostCompactTokenCount: 1_000,
     }
-    const expectedPostCompactMessages = [compactBoundary, compactSummary]
+    const expectedPostCompactMessages = [
+      compactBoundary,
+      compactSummary,
+      preservedUserMessage,
+      preservedAssistantMessage,
+    ]
 
     let capturedMessages: Message[] | undefined
     let capturedOpenAIInputMessages: Message[] | undefined
