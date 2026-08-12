@@ -115,6 +115,17 @@ individual cells, not pass/fail, so partial degradation is visible as a gradient
 Both arms replicated cleanly: native thinking 10/10 twice, tool-scratchpad 10/10 twice, floor
 0–1/10 twice.
 
+**Does the tool interfere when thinking is left on?** No — and it is inert. With thinking
+enabled *and* `deep_think` available (run E1), the model **never called the tool** (`tools:
+none`), thought natively at its usual depth (5,634 tokens, in line with A1/A2's 5,236 / 5,565),
+and scored 10/10. The model does not reach for a scratchpad it does not need.
+
+This closes off the apparent middle path. There is no "add the tool without disabling thinking"
+compromise for cat-code: with thinking on, the tool is never invoked, so it buys nothing and
+costs its schema tokens in every request. `deep_think` only ever activates as a *substitute* for
+native thinking — which means adopting it necessarily means accepting the disabled-thinking
+failure modes documented above.
+
 Earlier tier (4 houses × 3 categories, 12 minimal puzzles): thinking on **12/12** (3,536
 thinking tokens); thinking off + `deep_think` **12/12** (5,033 chars); thinking off, no tool
 **4/12** (54% cells).
