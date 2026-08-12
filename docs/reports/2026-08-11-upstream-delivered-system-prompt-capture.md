@@ -665,18 +665,45 @@ a whole extra variant looks like.
 
 **Conclusion: no second missed rewrite found.** Memory is a one-off.
 
-Two limits on that negative:
+### 6.3.3a Residual closed: no second rewrite
 
-- One probe per section. A rewrite that preserved the probed sentence and changed
-  everything around it would not show up here.
-- The method that actually caught memory was the reverse direction — probing
-  phrases from the *delivered* upstream text and finding them absent from `src/`.
-  That direction is only available for sections that rendered in the capture, so
-  it confirms `scratchpad` and `env_info_simple` outright. For `language`,
-  `output_style`, and `brief`, this table proves Cat Code's text still exists
-  upstream but cannot rule out a newer preferred variant sitting alongside it —
-  exactly memory's failure mode. Closing that needs captures from sessions where
-  those sections render.
+The three sections §6.3.3 could not clear — `language`, `output_style`, `brief` —
+were resolved 2026-08-12 without needing further captures.
+
+`output_style` needs no probe: `getOutputStyleSection` (`prompts.ts:185-192`)
+emits `# Output Style: ${name}` followed by `outputStyleConfig.prompt`, which is
+config-supplied. There is no upstream wording for it to diverge from.
+
+For the other two, probing raw bytes in **both UTF-8 and UTF-16LE** (macOS
+`strings` has no `-e`, and scanning one encoding is the false-negative trap the
+audit §0.2 warns about), across three builds:
+
+| probe | 2.1.87 | 2.1.223 | 2.1.228 |
+|---|---|---|---|
+| `language`: "Technical terms and code identifiers should remain in their original form" | 1 | 2 | 2 |
+| `brief`: "is where your replies go" | 1 | 2 | 2 |
+| `brief`: "Anything you want them to actually see goes through" | 1 | 2 | 2 |
+| *control* — memory compact: "one file holding one fact" | 0 | 2 | 2 |
+| *control* — memory taxonomy: "Types of memory" | 2 | 5 | 5 |
+
+The two controls prove the method discriminates: a post-fork addition reads
+0→2, an extra variant reads 2→5, and a stable section reads 1→2 (bundle
+duplication). `language` and `brief` are both stable, and `brief`'s presence at
+the fork point also settles that its text is inherited rather than Cat Code's.
+
+**Conclusion: memory is the only rewritten section. The registry sweep is
+complete and the answer is negative everywhere else.**
+
+Incidental: 2.1.228 matches 2.1.223 on every probe, so this surface has not moved
+across the five most recent upstream builds.
+
+### 6.3.3b The blocking finding survives an encoding re-check
+
+§6.3.2a rests on three phrases being absent from 2.1.87, and those probes
+originally used single-encoding `strings`. Re-checked: the fork-point artifact is
+`cli.js`, plain readable JavaScript rather than a compiled binary, so it is
+grepped directly and no encoding question arises. All three phrases return zero.
+`f32bf5c8` is owner-authored, and §6.3.2a stands.
 
 `scratchpad` registers in Cat Code but did not render in this dump; whether it is
 conditional on configuration was not chased.
