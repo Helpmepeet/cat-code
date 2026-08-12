@@ -596,6 +596,54 @@ either flatten `type:` in the ported wording, or teach `parseMemoryType` to read
 `metadata.type` with a flat fallback. Flattening the text is the smaller change;
 teaching the parser both shapes is the one that survives a future re-sync.
 
+### 6.3.2a Blocking finding: the block is not purely inherited
+
+Found 2026-08-12 while starting the port. **Do not swap this text wholesale.**
+
+§6.3.1 established that `memoryTypes.ts` arrives at the initial snapshot with one
+later commit. That later commit is the problem: `f32bf5c8` (2026-07-12,
+"fix(memory): preserve feedback scope when saving") is the repo owner's own
+behavioral fix, and its text is absent from upstream 2.1.87 — probes for
+"preserve the complete decision rule" and "do not rely on the index title" return
+zero there. It adds, to both the main and extraction prompt variants:
+
+- a durability test before saving feedback: save only when the user says it
+  applies to future conversations or it clearly generalizes beyond this turn;
+- two named anti-patterns — "up to you, don't ask anymore" while settling one
+  task detail is not "never ask follow-up questions", and stopping one delegated
+  worker is not "never spawn subagents";
+- an index-hook fidelity rule: the `MEMORY.md` hook must carry the complete
+  decision rule including every trigger qualifier, not lean on the title;
+- same-save reconciliation of superseded guidance, and the private-vs-team
+  authority boundary.
+
+Upstream's compact variant carries none of it. Its entire feedback guidance is
+one clause: "guidance the user has given on how you should work, both corrections
+and confirmed approaches; include the why." Porting it verbatim would regress
+past the fix, and past the pre-fix state too, since the compact text is terser
+than what `f32bf5c8` replaced.
+
+The failure mode `f32bf5c8` prevents — turn-scoped corrections hardening into
+standing rules — is silent, cumulative, and only visible sessions later in a
+polluted memory index. It is exactly the kind of regression a prompt-size metric
+would not catch.
+
+**Revised options, in place of the swap:**
+
+1. **Do nothing.** Keep the ~3,400 tokens. Zero risk, zero gain.
+2. **Merge rather than swap.** Adopt upstream's compact structure and re-apply
+   `f32bf5c8`'s semantics on top. Everything in the block that is *not* from that
+   commit is upstream 2.1.87 text and is safe to compress, so this is tractable —
+   but it recovers less than 11,500 chars and needs judgment about which of the
+   remaining sections are load-bearing.
+3. **Trim selectively.** Leave the tuned feedback guidance alone and compress
+   only the demonstrably redundant upstream-inherited sections.
+
+This is an owner decision about owner-authored text, so it is not taken here.
+Option 2 is the best value if the owner confirms which parts of `f32bf5c8` are
+must-keep; option 1 is correct if the answer is "all of it and I would rather not
+risk the rest."
+
 ### 6.3.3 Registry sweep: memory is the exception, not the pattern
 
 The obvious follow-on was that other sections might also have been rewritten

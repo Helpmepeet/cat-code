@@ -59,6 +59,15 @@ String corpora were extracted with a UTF-8 **and** UTF-16LE scanner into
 `up187.txt` / `up223.txt` in the session scratchpad. Scanning only UTF-8 misses
 roughly half the literals in the binary and makes present content look deleted.
 
+**Artifact drift, noted 2026-08-12.** The installed `2.1.223` cited in §0.2
+(SHA-256 `a63e3ecb…`) is **no longer on disk** — upstream auto-updated and
+2.1.226/227/228 now occupy that directory. The upstream-original copy survives as
+`2.1.223.orig-2.1.223` (SHA-256 `fcbe0b8d…`); the two differ by the 271 bytes in
+streamed thinking-delta handling recorded in the compaction-evolution report,
+which is unrelated to prompt assembly. Every prompt claim here therefore stays
+reproducible against the `.orig-` file, and that is the artifact to re-probe
+against. Three newer builds are now available for a follow-up diff.
+
 **Reproducibility limit.** Those corpora live in the authoring session's
 scratchpad and are not durable; no extraction command was recorded with the
 report. Every upstream identifier quoted below (`Kyb`, `Uyb`, `xyb`, `PE`,
