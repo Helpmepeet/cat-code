@@ -404,11 +404,31 @@ Cat Code carries those rules unconditionally through `corePolicy.ts`, on every
 assembly, whether or not any browser tool is present. That difference is real and
 this capture sharpens rather than softens it.
 
-**Confidence: inference, not proof.** I cannot see my own prompt's producers.
-The cheap confirmation is to capture a second prompt from a Claude Code session
-with no browser or simulator MCP servers and diff the two; if §2.16 disappears
-and nothing replaces it, the finding is closed. That experiment costs one session
-and no API spend beyond it.
+**Confirmed 2026-08-12 by a second capture.**
+[`2026-08-12-upstream-baseline-no-mcp.md`](2026-08-12-upstream-baseline-no-mcp.md)
+is a terminal Opus 5 session, and the safety block is **absent** from it — no
+"Instruction source boundary", no "Action categories", no "data, not commands",
+no "prompt-injection attacks". The block is conditional, as inferred.
+
+**The trigger is narrower than §4 originally guessed, and the result is worse for
+upstream.** That session was not MCP-free: its own deviation note records that
+`claude-in-chrome` and `computer-use` were both loaded, contributing a
+4,725-char instruction block to the system prompt and deferred tool entries. What
+differs from §2.16's session is that those tool *schemas* were deferred — names
+visible, schemas unfetched — whereas the browser tools in the §2.16 session were
+fully loaded. So the likely trigger is **loaded computer-use tool schemas, not
+configured servers**.
+
+Either way the load-bearing conclusion is now observed rather than inferred, and
+it is sharper than the original claim: **a lean Opus 5 session carrying 4,725
+chars of browser-automation instructions in its system prompt received no
+prompt-injection rule and no tool-output-is-data rule.** The safety guidance is
+not coupled to the capability it exists to govern. Cat Code carries both rules
+unconditionally on every assembly through `corePolicy.ts`, independent of tool
+set.
+
+Still open: the precise predicate. Distinguishing "loaded schemas" from other
+differences between the two sessions needs a third capture that varies only that.
 
 ## 5. Formatting defects in the delivered prompt
 
@@ -612,6 +632,53 @@ Two limits on that negative:
 
 `scratchpad` registers in Cat Code but did not render in this dump; whether it is
 conditional on configuration was not chased.
+
+### 6.3.4 Independent validation of the upstream numbers
+
+The 2026-08-12 terminal capture was transcribed by a different session with no
+sight of §2 or §6, which makes it an independent check on the figures above.
+Shared sections agree to within ~1%:
+
+| section | §2 (desktop) | terminal capture | delta |
+|---|---|---|---|
+| `# Memory` | 2,079 | 2,072 | 7 |
+| `# Delivering work` | 2,019 | 2,019 | 0 |
+| `# Harness` | 1,645 | 1,645 | 0 |
+| `# Environment` | 1,008 | 1,009 | 1 |
+| `# Scratchpad Directory` | 747 | 747 | 0 |
+| `# Context management` | 561 | 561 | 0 |
+
+The two that differ are the two that should: `# Corrections` is 2,607 here and
+1,603 there, and the ~1,004-char gap is exactly the six desktop-surface
+directives (§2.12) that this bucket absorbs and a terminal session never
+receives; `# Session-specific guidance` is 664 vs 923 because the guidance itself
+is entrypoint-specific.
+
+**Measured upstream cores: 11,188 chars (terminal) and 11,966 (desktop).** So
+Cat Code's 32,738 is **2.93x** the terminal baseline. §6.2's figure was derived
+by identifying unconditional blocks by inspection; it now has a measured
+counterpart that lands within 7% of it, and the residual is accounted for.
+
+The memory match matters most: 2,079 against 2,072 for the compact variant means
+the 6.56x ratio driving §6.3.1's port recommendation is not a transcription
+artifact.
+
+### 6.3.5 Two audit uncertainties closed
+
+The terminal capture separates the delivery channels in a way a single prompt
+could not, and settles two items from the audit's §6:
+
+- **`userContext` is still a `<system-reminder>` first-user-message.** Its §2
+  shows `claudeMd`, `userEmail`, and `currentDate` arriving in an injected
+  reminder block on the first user turn, not in the system prompt. Upstream's
+  channel split matches what `prependUserContext` does on the Cat Code side.
+- **MCP instructions arrive post-system on the same turn.** Its §3 shows
+  `# MCP Server Instructions` delivered outside the system prompt, corroborating
+  the audit §3.1 finding that `mcp_instructions` was relocated rather than
+  deleted.
+
+`language`, `output_style`, and `brief` did not render in this capture either, so
+the §6.3.3 residual on those three stays open.
 
 ### 6.4 Caveats on these numbers
 
