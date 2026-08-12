@@ -75,8 +75,8 @@ import {
 } from '../../utils/sessionActivity.js'
 import { processSessionStartHooks } from '../../utils/sessionStart.js'
 import {
+  cleanMessagesForLogging,
   getTranscriptPath,
-  isLoggableMessage,
   reAppendSessionMetadata,
 } from '../../utils/sessionStorage.js'
 import { sleep } from '../../utils/sleep.js'
@@ -353,18 +353,19 @@ export function buildPostCompactMessages(result: CompactionResult): Message[] {
  *   - prefix-preserving (partial compact): the boundary itself
  *
  * Endpoints are the first and last DURABLE messages, not keep[0]/keep.at(-1).
- * A non-loggable head (a mid-turn attachment) never reaches the transcript, so
- * naming it breaks the resume walk and costs the whole preserved suffix.
+ * A non-persisted head never reaches the transcript, so naming it breaks the
+ * resume walk and costs the whole preserved suffix.
  */
 export function annotateBoundaryWithPreservedSegment(
   boundary: SystemCompactBoundaryMessage,
   anchorUuid: UUID,
   messagesToKeep: readonly Message[] | undefined,
+  allMessages: readonly Message[] = messagesToKeep ?? [],
 ): SystemCompactBoundaryMessage {
   const keep = messagesToKeep ?? []
   if (keep.length === 0) return boundary
 
-  const durable = keep.filter(isLoggableMessage)
+  const durable = cleanMessagesForLogging([...keep], allMessages)
   // Nothing survives to disk, so there is no chain for resume to rebuild.
   if (durable.length === 0) return boundary
 
@@ -1160,6 +1161,7 @@ export async function partialCompactConversation(
         boundaryMarker,
         anchorUuid,
         messagesToKeep,
+        allMessages,
       ),
       summaryMessages,
       messagesToKeep,

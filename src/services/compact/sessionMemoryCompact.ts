@@ -504,6 +504,7 @@ function createCompactionResultFromSessionMemory(
       boundaryMarker,
       summaryMessages[summaryMessages.length - 1]!.uuid,
       messagesToKeep,
+      messages,
     ),
     summaryMessages,
     attachments,

@@ -33,6 +33,7 @@ import {
 import { resolveRequestProvider } from '../../utils/model/providers.js'
 import { processSessionStartHooks } from '../../utils/sessionStart.js'
 import {
+  cleanMessagesForLogging,
   getTranscriptPath,
   reAppendSessionMetadata,
 } from '../../utils/sessionStorage.js'
@@ -499,12 +500,12 @@ export async function reactiveCompactOnPromptTooLong(
     model: context.options.mainLoopModel,
   })
 
-  // logicalParentUuid names the last message of the summarized prefix: that is
-  // what preceded the boundary in the original chain. Progress messages never
-  // reach the transcript, so naming one would null the link out.
-  const lastPreCompactUuid = summarized.findLast(
-    message => message.type !== 'progress',
-  )?.uuid as UUID | undefined
+  // logicalParentUuid names the last persisted message of the summarized
+  // prefix: that is what preceded the boundary in the on-disk chain.
+  const lastPreCompactUuid = cleanMessagesForLogging(
+    [...summarized],
+    active,
+  ).at(-1)?.uuid as UUID | undefined
   const boundaryMarker = createCompactBoundaryMessage(
     options.trigger,
     preCompactTokenCount,
@@ -570,6 +571,7 @@ export async function reactiveCompactOnPromptTooLong(
         boundaryMarker,
         summaryMessages.at(-1)!.uuid as UUID,
         messagesToKeep,
+        active,
       ),
       summaryMessages,
       messagesToKeep,

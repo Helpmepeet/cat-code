@@ -2535,7 +2535,7 @@ type ResolvedPreservedSegment = {
 /**
  * Explicit `preservedMessages` wins over the legacy `preservedSegment`, which
  * boundaries written before that field carry alone. Endpoints come from the
- * durable list so a non-loggable head cannot name a UUID that never reached
+ * durable list so a non-persisted head cannot name a UUID that never reached
  * the transcript.
  */
 function resolvePreservedSegment(

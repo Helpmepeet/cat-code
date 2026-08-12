@@ -7,6 +7,7 @@ import { dirname, join } from 'path'
 import { getAPISessionId, getSessionId, getSessionProjectDir, switchSession } from '../bootstrap/state.js'
 import { applyPostCodexAccountSwitchRefresh } from '../services/api/codexAccountPool.js'
 import { asAgentId, asSessionId } from '../types/ids.js'
+import type { AssistantMessage } from '../types/message.js'
 import { registerActiveSubagent, unregisterActiveSubagent } from './cleanupRegistry.js'
 import { createUserMessage } from './messages.js'
 import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, flushSessionStorage, getAgentTranscriptPath, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, loadDisplayTranscriptFromJsonlPath, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordPostTurnStall, recordPromptCacheBreak, recordRunFacts, recordTranscript, removeTranscriptMessage, resetProjectForTesting, resetRunFactsDedupeForTest, setSessionFileForTesting } from './sessionStorage.js'
@@ -599,6 +600,100 @@ describe('session storage', () => {
     // The summarized prefix is still pruned from the resume chain.
     expect(resume?.messages.map(message => message.uuid)).not.toContain(
       archivalUuid,
+    )
+  })
+
+  test('writer and boundary metadata agree when a preserved REPL-only message is dropped', async () => {
+    const { annotateBoundaryWithPreservedSegment } = await import(
+      '../services/compact/compact.js'
+    )
+    const { createCompactBoundaryMessage } = await import('./messages.js')
+    const archival = createUserMessage({
+      content: 'archival prefix',
+      uuid: '10000000-0000-4000-8000-000000000001',
+    })
+    const replOnly = {
+      type: 'assistant',
+      uuid: '20000000-0000-4000-8000-000000000002',
+      timestamp: '2026-08-13T09:00:01.000Z',
+      message: {
+        id: 'repl-only-message',
+        model: 'gpt-5.6-terra',
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'repl-only-tool-use',
+            name: 'REPL',
+            input: { code: '1 + 1' },
+          },
+        ],
+        usage: {
+          input_tokens: 10,
+          output_tokens: 1,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+        },
+        stop_reason: 'tool_use',
+        stop_sequence: null,
+      },
+    } as AssistantMessage
+    const durable = createUserMessage({
+      content: 'preserved durable turn',
+      uuid: '30000000-0000-4000-8000-000000000003',
+    })
+    const originalMessages = [archival, replOnly, durable]
+    await recordTranscript(
+      originalMessages,
+      undefined,
+      undefined,
+      originalMessages,
+    )
+
+    const summary = createUserMessage({
+      content: 'compact model summary',
+      uuid: '40000000-0000-4000-8000-000000000004',
+      isCompactSummary: true,
+      isVisibleInTranscriptOnly: true,
+    })
+    const rawBoundary = createCompactBoundaryMessage(
+      'auto',
+      180_000,
+      durable.uuid,
+    )
+    const boundary = annotateBoundaryWithPreservedSegment(
+      rawBoundary,
+      summary.uuid,
+      [replOnly, durable],
+      originalMessages,
+    )
+    expect(boundary.compactMetadata.preservedMessages).toEqual({
+      anchorUuid: summary.uuid,
+      durableUuids: [durable.uuid],
+      liveUuids: [replOnly.uuid, durable.uuid],
+    })
+
+    const compactedMessages = [boundary, summary, replOnly, durable]
+    await recordTranscript(
+      compactedMessages,
+      undefined,
+      undefined,
+      compactedMessages,
+    )
+    await flushCurrentTranscriptDurably()
+    clearSessionMessagesCache()
+
+    const resume = await getLastSessionLog(sessionId as UUID)
+    expect(resume?.messages.map(message => message.uuid)).toEqual([
+      boundary.uuid,
+      summary.uuid,
+      durable.uuid,
+    ])
+    expect(resume?.messages.map(message => message.uuid)).not.toContain(
+      archival.uuid,
+    )
+    expect(resume?.messages.map(message => message.uuid)).not.toContain(
+      replOnly.uuid,
     )
   })
 

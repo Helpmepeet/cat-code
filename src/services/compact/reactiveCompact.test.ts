@@ -261,6 +261,38 @@ describe('reactiveCompactOnPromptTooLong', () => {
     })
   })
 
+  test('logical parent skips a summarized REPL-only round tail', async () => {
+    await mockSummarizer([
+      assistant('summary', '<summary>Older rounds, summarized.</summary>'),
+    ])
+    const { reactiveCompactOnPromptTooLong } = await import(
+      './reactiveCompact.js'
+    )
+    const { messages } = fourRoundConversation()
+    const summarizedPrompt = messages[4]!
+    const replCall = messages[5] as AssistantMessage
+    replCall.message.content = [
+      {
+        type: 'tool_use',
+        id: 'tool-3',
+        name: 'REPL',
+        input: { code: '1 + 1' },
+      },
+    ]
+    const context = createToolUseContext(messages)
+
+    const outcome = await reactiveCompactOnPromptTooLong(
+      messages,
+      cacheSafeParamsFor(context, messages),
+      { trigger: 'auto' },
+    )
+
+    expect(outcome.ok).toBe(true)
+    expect(outcome.result!.boundaryMarker.logicalParentUuid).toBe(
+      summarizedPrompt.uuid,
+    )
+  })
+
   test('preserves more trailing rounds when the summary request is itself too long', async () => {
     await mockSummarizer([
       promptTooLongResponse('prompt is too long: 100010 tokens > 100000'),
