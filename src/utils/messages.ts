@@ -4844,6 +4844,55 @@ export function getMessagesAfterCompactBoundary<
   return sliced
 }
 
+/**
+ * Drops the pre-boundary copies of the messages a compaction preserved.
+ *
+ * A preserving compaction re-lists `messagesToKeep` after the boundary while
+ * the originals stay where they were, so a display that does not slice at the
+ * boundary (fullscreen, verbose, the transcript screen) shows those rounds
+ * twice. The copy after the boundary is the one that survives: it is what the
+ * model carried across, and it is what every non-display consumer reads.
+ *
+ * Display-only. The REPL's own array keeps both copies on purpose — the
+ * transcript writer treats it as append-only between compactions
+ * (useLogMessages), so removing entries mid-array desynchronizes its
+ * incremental slice and can lose the boundary itself (REPL.tsx notes the same
+ * hazard on the partial-compact path).
+ *
+ * Membership comes from the boundary's own `preservedMessages` metadata
+ * (`annotateBoundaryWithPreservedSegment`, services/compact/compact.ts), so a
+ * uuid repeating for any other reason is left alone. Run this BEFORE
+ * normalizeMessages: normalization derives per-content-block uuids that no
+ * longer match what the boundary recorded.
+ *
+ * Returns the input array unchanged when nothing was preserved, which is every
+ * session up to its first preserving compaction.
+ */
+export function dropPreservedMessageDuplicates<
+  T extends Message | NormalizedMessage,
+>(messages: T[]): T[] {
+  const preserved = new Set<string>()
+  for (const message of messages) {
+    if (!isCompactBoundaryMessage(message)) continue
+    const membership = message.compactMetadata?.preservedMessages
+    if (!membership) continue
+    for (const uuid of membership.liveUuids ?? membership.durableUuids) {
+      preserved.add(uuid)
+    }
+  }
+  if (preserved.size === 0) return messages
+
+  const lastIndexByUuid = new Map<string, number>()
+  messages.forEach((message, index) => {
+    if (preserved.has(message.uuid)) lastIndexByUuid.set(message.uuid, index)
+  })
+  return messages.filter(
+    (message, index) =>
+      !preserved.has(message.uuid) ||
+      lastIndexByUuid.get(message.uuid) === index,
+  )
+}
+
 export function shouldShowUserMessage(
   message: NormalizedMessage,
   isTranscriptMode: boolean,

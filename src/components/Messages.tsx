@@ -28,7 +28,7 @@ import { getGlobalConfig } from '../utils/config.js';
 import { isEnvTruthy } from '../utils/envUtils.js';
 import { isFullscreenEnvEnabled } from '../utils/fullscreen.js';
 import { applyGrouping } from '../utils/groupToolUses.js';
-import { buildMessageLookups, createAssistantMessage, deriveUUID, getMessagesAfterCompactBoundary, getToolUseID, getToolUseIDs, hasUnresolvedHooksFromLookup, isNotEmptyMessage, normalizeMessages, reorderMessagesInUI, type StreamingThinking, type StreamingToolUse, shouldShowUserMessage } from '../utils/messages.js';
+import { buildMessageLookups, createAssistantMessage, deriveUUID, dropPreservedMessageDuplicates, getMessagesAfterCompactBoundary, getToolUseID, getToolUseIDs, hasUnresolvedHooksFromLookup, isNotEmptyMessage, normalizeMessages, reorderMessagesInUI, type StreamingThinking, type StreamingToolUse, shouldShowUserMessage } from '../utils/messages.js';
 import { useAppState } from '../state/AppState.js';
 import { plural } from '../utils/stringUtils.js';
 import { renderableSearchText } from '../utils/transcriptSearch.js';
@@ -379,7 +379,13 @@ const MessagesImpl = ({
   } = useTerminalSize();
   const authVersion = useAppState(s => s.authVersion);
   const toggleShowAllShortcut = useShortcutDisplay('transcript:toggleShowAll', 'Transcript', 'Ctrl+E');
-  const normalizedMessages = useMemo(() => normalizeMessages(messages).filter(isNotEmptyMessage), [messages]);
+  // dropPreservedMessageDuplicates first: a preserving compaction re-lists the
+  // rounds it kept after the boundary, and the originals are still sitting in
+  // the array above it. Every branch below that skips the compact-boundary
+  // filter (fullscreen, verbose, transcript) would otherwise render those
+  // rounds twice. It has to run on the raw messages — normalizeMessages
+  // derives new per-block uuids that the boundary's preserved list can't match.
+  const normalizedMessages = useMemo(() => normalizeMessages(dropPreservedMessageDuplicates(messages)).filter(isNotEmptyMessage), [messages]);
 
   // Check if streaming thinking should be visible (streaming or within 30s timeout)
   const isStreamingThinkingVisible = useMemo(() => {
