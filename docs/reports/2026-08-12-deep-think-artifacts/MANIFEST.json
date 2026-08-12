@@ -1,7 +1,77 @@
 {
  "note": "Saved named arms only; unsaved pilots/probes not included.",
- "total_cost_usd_saved_arms": 1.842,
+ "total_cost_usd_saved_arms": 10.861,
  "runs": [
+  {
+   "run": "bA_b1",
+   "cost_usd": 0.424,
+   "tools_available": 0,
+   "thinking_tokens": 16002,
+   "output_tokens": 16028,
+   "turns": 1,
+   "stop_reason": "end_turn",
+   "is_error": false
+  },
+  {
+   "run": "bA_b2",
+   "cost_usd": 0.576,
+   "tools_available": 0,
+   "thinking_tokens": 22079,
+   "output_tokens": 22105,
+   "turns": 1,
+   "stop_reason": "end_turn",
+   "is_error": false
+  },
+  {
+   "run": "bA_b3",
+   "cost_usd": 1.622,
+   "tools_available": 0,
+   "thinking_tokens": 64000,
+   "output_tokens": 64000,
+   "turns": 2,
+   "stop_reason": "max_tokens",
+   "is_error": true
+  },
+  {
+   "run": "bB_b1",
+   "cost_usd": 0.32,
+   "tools_available": 1,
+   "thinking_tokens": 0,
+   "output_tokens": 8311,
+   "turns": 2,
+   "stop_reason": "end_turn",
+   "is_error": false
+  },
+  {
+   "run": "bB_b2",
+   "cost_usd": 0.835,
+   "tools_available": 1,
+   "thinking_tokens": 0,
+   "output_tokens": 23030,
+   "turns": 2,
+   "stop_reason": "end_turn",
+   "is_error": false
+  },
+  {
+   "run": "bB_b3",
+   "cost_usd": 1.626,
+   "tools_available": 1,
+   "thinking_tokens": 0,
+   "output_tokens": 64000,
+   "turns": 5,
+   "stop_reason": "max_tokens",
+   "is_error": true
+  },
+  {
+   "run": "bench_B",
+   "cost_usd": 3.616,
+   "tools_available": 1,
+   "thinking_tokens": 0,
+   "output_tokens": 100137,
+   "turns": 12,
+   "stop_reason": "end_turn",
+   "is_error": false
+  },
   {
    "run": "bench_C",
    "cost_usd": 0.043,
@@ -9,6 +79,7 @@
    "thinking_tokens": 0,
    "output_tokens": 80,
    "turns": 1,
+   "stop_reason": "end_turn",
    "is_error": false
   },
   {
@@ -18,6 +89,7 @@
    "thinking_tokens": 426,
    "output_tokens": 467,
    "turns": 1,
+   "stop_reason": "end_turn",
    "is_error": false
   },
   {
@@ -27,6 +99,7 @@
    "thinking_tokens": 0,
    "output_tokens": 44,
    "turns": 1,
+   "stop_reason": "end_turn",
    "is_error": false
   },
   {
@@ -36,6 +109,7 @@
    "thinking_tokens": 0,
    "output_tokens": 417,
    "turns": 2,
+   "stop_reason": "end_turn",
    "is_error": false
   },
   {
@@ -45,6 +119,7 @@
    "thinking_tokens": 0,
    "output_tokens": 532,
    "turns": 2,
+   "stop_reason": "end_turn",
    "is_error": false
   },
   {
@@ -54,6 +129,7 @@
    "thinking_tokens": 0,
    "output_tokens": 524,
    "turns": 2,
+   "stop_reason": "end_turn",
    "is_error": false
   },
   {
@@ -63,6 +139,7 @@
    "thinking_tokens": 0,
    "output_tokens": 516,
    "turns": 2,
+   "stop_reason": "end_turn",
    "is_error": false
   },
   {
@@ -72,6 +149,7 @@
    "thinking_tokens": 3536,
    "output_tokens": 4161,
    "turns": 1,
+   "stop_reason": "end_turn",
    "is_error": false
   },
   {
@@ -81,6 +159,7 @@
    "thinking_tokens": 0,
    "output_tokens": 3684,
    "turns": 2,
+   "stop_reason": "end_turn",
    "is_error": false
   },
   {
@@ -90,6 +169,7 @@
    "thinking_tokens": 0,
    "output_tokens": 625,
    "turns": 1,
+   "stop_reason": "end_turn",
    "is_error": false
   },
   {
@@ -99,6 +179,7 @@
    "thinking_tokens": 5236,
    "output_tokens": 5877,
    "turns": 1,
+   "stop_reason": "end_turn",
    "is_error": false
   },
   {
@@ -108,6 +189,7 @@
    "thinking_tokens": 5565,
    "output_tokens": 6206,
    "turns": 1,
+   "stop_reason": "end_turn",
    "is_error": false
   },
   {
@@ -117,6 +199,7 @@
    "thinking_tokens": 0,
    "output_tokens": 6478,
    "turns": 2,
+   "stop_reason": "end_turn",
    "is_error": false
   },
   {
@@ -126,6 +209,7 @@
    "thinking_tokens": 0,
    "output_tokens": 6189,
    "turns": 2,
+   "stop_reason": "end_turn",
    "is_error": false
   },
   {
@@ -135,6 +219,7 @@
    "thinking_tokens": 0,
    "output_tokens": 415,
    "turns": 1,
+   "stop_reason": "end_turn",
    "is_error": false
   },
   {
@@ -144,6 +229,7 @@
    "thinking_tokens": 0,
    "output_tokens": 1476,
    "turns": 1,
+   "stop_reason": "end_turn",
    "is_error": false
   },
   {
@@ -153,6 +239,7 @@
    "thinking_tokens": 5634,
    "output_tokens": 6275,
    "turns": 1,
+   "stop_reason": "end_turn",
    "is_error": false
   }
  ]

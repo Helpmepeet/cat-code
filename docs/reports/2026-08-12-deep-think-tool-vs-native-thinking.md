@@ -180,12 +180,52 @@ memorisation cannot substitute for reasoning. Ground truth is the published answ
 the fifteen answers were additionally re-derived by brute force in Python and matched. The set is
 committed at `docs/reports/2026-08-12-deep-think-artifacts/bench.json`.
 
-The floor is established: **thinking off, no tool = 0/15**. That is the first instrument in this
-investigation with real headroom, and therefore the first one capable of detecting degradation
-rather than merely failing to find it. The native-thinking and `deep_think` arms had not finished
-when this revision was written; **this section must be completed before the accuracy conclusion
-above is treated as settled.** Until then the honest summary is: *no accuracy degradation
-observed on tasks where both arms score 100%, which is not a strong claim.*
+The floor is established: **thinking off, no tool = 0/15** — wrong by magnitude (155 vs 669, 800
+vs 896), not by corrupted recall.
+
+**That floor is also the contamination control.** These problems postdate the stated training
+cutoff, but `claude-opus-5`'s actual cutoff is not something this investigation can verify. The
+0/15 floor makes memorisation unlikely regardless: the same model, on the same problems, with no
+scratchpad, recalls none of them. Whatever the other arms are doing, they are computing.
+
+### Result: parity where both arms complete
+
+**The first design was invalid and was discarded.** It gave the tool arm an unbounded agent loop
+(12 turns, 11 `deep_think` calls, 100,137 output tokens) and gave native thinking **one** turn for
+all 15 problems. That compares turn budgets, not reasoning channels. The native arm then stalled
+— 40 minutes wall-clock, 5.3 s CPU, blocked on I/O, no output — and was killed. Re-run as **three
+batches of five, identical for both arms**, 20-minute timeout each:
+
+| Batch | Native thinking | `deep_think` |
+|---|---|---|
+| 1 | **5/5** — 16,002 thinking tokens | **5/5** — 15,512 chars, 1 call |
+| 2 | **5/5** — 22,079 thinking tokens | **5/5** — 42,632 chars, 1 call |
+| 3 (hardest) | **0/5** — `stop_reason: max_tokens`, 64,000 thinking tokens, **empty output** | **0/5** — `stop_reason: max_tokens`, 3 calls, timed out |
+
+**Accuracy: no degradation.** On batches 1 and 2 the two channels are exactly equal — 10/10
+apiece on real AIME 2026 / HMMT February 2026 problems, against a 0/15 floor. This is the first
+non-saturated evidence in the investigation, and it is the answer to the question the puzzle
+tiers could not resolve: reasoning written into a tool argument is not worse than reasoning
+written into a thinking block.
+
+**Batch 3 is uninformative and should not be cited either way.** Both arms hit the model's
+`max_tokens` ceiling *and* the harness's 20-minute timeout, so "could not solve it" and "was not
+allowed to finish" are entangled. Native thinking's failure is the starker one — it spent the
+entire 64,000-token output budget on thinking and returned an empty string — but the tool arm
+failed on the same five problems under the same conditions.
+
+> A claim that reasoning-as-tool-calls "escapes the single-turn ceiling" was drafted from the
+> native arm's batch-3 failure before the tool arm's result was in. The tool arm then failed the
+> same way. The mechanism is real — each turn does get a fresh output budget, and the unbatched
+> run did solve all 15 by chaining 11 calls — but it is **not** demonstrated by these data, and
+> the unbatched run is not a controlled comparison. Recorded here because the inference was
+> plausible, tempting, and wrong.
+
+**Format compliance: 3/3 violations for the tool arm, 0/3 for native thinking.** Every
+`deep_think` run emitted a visible preamble ("I'll work through these problems.") before calling
+the tool. Across every tier in this report the tally is now **5/5 tool runs violating, 0/5 native
+runs violating.** This is the only difference between the channels that has reproduced
+consistently at every difficulty.
 
 ### The failure mode that showed up instead
 
@@ -243,10 +283,22 @@ comparison drawn from it is **confounded** and is withdrawn. Those two runs diff
 size, prompt bytes, and cache state, none of which were controlled. The puzzle tiers used
 `--tools ""` and are genuinely isolated (init records list 0 and 1 tool respectively).
 
+**Non-Claude models were not tested, and the blocker is diagnosed, not assumed.** Codex CLI
+0.147.0 spawns the MCP server and completes the `initialize` handshake (confirmed by
+server-side logging), then exposes only the MCP *resource* plumbing to the model
+(`list_mcp_resources`, `read_mcp_resource`) — never the tool itself. `thread_start` reports
+`dynamic_tool_count=0`. This holds with `tool_search_always_defer_mcp_tools` disabled and with
+`mcp_2026_07_28` + `non_prefixed_mcp_tool_names` enabled; its own feature table has `tool_search`
+as `removed` while MCP tools are still deferred *to* tool search. Testing GPT needs a direct API
+key or a local OpenAI-compatible endpoint (LM Studio is installed but holds only an embedding
+model). **The claim that this technique generalises across providers is therefore an untested
+hypothesis in this report.**
+
 **Not tested**: multi-turn agent loops; long-horizon tasks; whether tool-scratchpad reasoning
 degrades over many turns as it accumulates in context; models other than `claude-opus-5`; any
-provider other than first-party Anthropic. n=2 problem sets on the puzzle tiers, 1 run per cell
-elsewhere. No latency claim in this report is controlled.
+provider other than first-party Anthropic; the capacity boundary (batch 3, confounded by the
+harness timeout). n=2 problem sets on the puzzle tiers, 1 run per cell elsewhere. No latency
+claim in this report is controlled.
 
 **Cross-provider**: not established. The Codex CLI (`gpt-5.6-sol`, reasoning effort low) was
 tested but its build would not surface a third-party stdio MCP server's tools to the model
@@ -445,7 +497,7 @@ ephemeral scratchpad:
 | `raw/*.json` | Raw `--output-format json` output for all 17 saved runs. |
 | `MANIFEST.json` | Per-run cost, tools-available count, thinking tokens, output tokens, turns. |
 
-**Cost: $1.842 across the 17 saved named arms** (per `MANIFEST.json`). An earlier revision said
+**Cost: $10.861 across the 24 saved named arms** (per `MANIFEST.json`). An earlier revision said
 "six invocations, roughly $0.55" — that counted only the first tier and was stale by the time the
 puzzle and benchmark tiers were added. Unsaved pilots and discarded probes are not included, so
 true session spend is somewhat higher.

@@ -1,0 +1,28 @@
+You will answer 5 competition mathematics problems.
+
+HARD RULE: your visible reply must contain NOTHING but the 5 answer lines. No working, no explanation, no preamble, no XML tags. Exactly this format:
+
+1: <answer>
+2: <answer>
+3: <answer>
+4: <answer>
+5: <answer>
+
+All answers are integers.
+
+1. For each nonnegative integer $r$ less than $502$, define \[S_r=\sum_{m\geq 0}\binom{10{,}000}{502m+r},\] where $\binom{10{,}000}{n}$ is defined to be $0$ when $n>10{,}000$. That is, $S_r$ is the sum of all the binomial coefficients of the form $\binom{10{,}000}{k}$ for which $0\leq k\leq 10{,}000$ and $k-r$ is a multiple of $502$. Find the number of integers in the list $S_0,S_1,S_2,\dots,S_{501}$ that are multiples of the prime number $503$.
+
+2. Call finite sets of integers $S$ and $T$ cousins if
+- $S$ and $T$ have the same number of elements,
+- $S$ and $T$ are disjoint, and
+- the elements of $S$ can be paired with the elements of $T$ so that the elements in each pair differ by exactly $1$.
+For example, $\{1,2,5\}$ and $\{0,3,4\}$ are cousins. Suppose that the set $S$ has exactly $4040$ cousins. Find the least number of elements the set $S$ can have.
+
+3. In an equiangular pentagon, the sum of the squares of the side lengths equals $308$, and the sum of the squares of the diagonal lengths equals $800$. The square of the perimeter of the pentagon can be expressed as $m\sqrt{n}$, where $m$ and $n$ are positive integers and $n$ is not divisible by the square of any prime. Find $m+n$.
+
+4. For integers $a$ and $b,$ let $a \circ b = a - b$ if $a$ is odd and $b$ is even, and $a+b$ otherwise. Find the number of sequences $a_1, a_2, a_3, \ldots, a_n$ of positive integers such that \[a_1 + a_2 + a_3 + \cdots + a_n = 12 \quad \text{and} \quad a_1 \circ a_2 \circ a_3 \circ \cdots \circ a_n = 0\] where the operations are performed from left to right; that is, $a_1 \circ a_2 \circ a_3$ means $(a_1 \circ a_2) \circ a_3.$
+
+5. Find the number of ordered 7-tuples $(a_1, a_2, a_3, \ldots, a_7)$ having the following properties:
+- $a_k \in \{1,2,3\}$ for all $k.$
+- $a_1+a_2+a_3+a_4+a_5+a_6+a_7$ is a multiple of $3.$
+- $a_1a_2 a_4 + a_2a_3a_5 + a_3a_4 a_6 + a_4 a_5 a_7 + a_5 a_6 a_1 + a_6 a_7 a_2 + a_7 a_1 a_3$ is a multiple of $3.$

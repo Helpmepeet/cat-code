@@ -1,0 +1,21 @@
+You will answer 5 competition mathematics problems.
+
+HARD RULE: your visible reply must contain NOTHING but the 5 answer lines. No working, no explanation, no preamble, no XML tags. Exactly this format:
+
+1: <answer>
+2: <answer>
+3: <answer>
+4: <answer>
+5: <answer>
+
+All answers are integers.
+
+1. Let $S$ denote the value of the infinite sum \[\frac 19 + \frac 1{99} + \frac 1{999} + \frac 1{9999} + \cdots\] Find the remainder when the greatest integer less than or equal to $10^{100} S$ is divided by $1000.$
+
+2. The integers from $1$ to $64$ are placed in some order into an $8\times 8$ grid of cells with one number in each cell. Let $a_{i,j}$ be the number placed in the cell in row $i$ and column $j$, and let $M$ be the sum of the absolute differences between adjacent cells. That is, \[M=\sum^{8}_{i=1}\sum^{7}_{j=1}\left(|a_{i,j+1}-a_{i,j}|+|a_{j+1,i}-a_{j,i}|\right).\] Find the remainder when the maximum possible value of $M$ is divided by $1000$.
+
+3. Find the greatest integer $n$ such that the cubic polynomial \[x^{3} -\frac{n}{6}x^{2} + (n - 11)x - 400\] has roots $\alpha^{2}$, $\beta^{2}$, and $\gamma^{2}$, where $\alpha$, $\beta$, and $\gamma$ are complex numbers, and there are exactly seven different possible values for $\alpha + \beta + \gamma$.
+
+4. Triangle $\triangle ABC$ lies in plane $\mathcal{P}$ with $AB=6$, $AC=4$, and $\angle BAC=90^{\circ}$. Let $D$ be the reflection across $\overline{BC}$ of the centroid of $\triangle ABC$. Four spheres, all on the same side of $\mathcal{P}$, have radii $1$, $2$, $3$, and $r$ and are tangent to $\mathcal{P}$ at points $A$, $B$, $C$, and $D$, respectively. The four spheres are also each tangent to a second plane $\mathcal{T}$ and are all on the same side of $\mathcal{T}$. The value of $r$ can be written as $\frac{m}{n}$, where $m$ and $n$ are relatively prime positive integers. Find $m+n$.
+
+5. Consider a tetrahedron with two isosceles triangle faces with side lengths $5\sqrt{10}, \,5\sqrt{10},$ and $10$ and two isosceles triangle faces with side lengths $5\sqrt{10},\, 5\sqrt{10},$ and $18.$ The four vertices of the tetrahedron lie on a sphere with center $S,$ and the four faces of the tetrahedron are tangent to a sphere with center $R.$ The distance $RS$ can be written as $\tfrac mn,$ where $m$ and $n$ are relatively prime positive integers. Find $m + n.$

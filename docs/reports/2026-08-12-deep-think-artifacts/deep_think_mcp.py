@@ -31,11 +31,17 @@ def main():
         req_id = req.get("id")
 
         if method == "initialize":
+            # Echo the client's requested protocol version rather than pinning
+            # one: Codex negotiates a newer version than Claude Code and a
+            # hardcoded mismatch makes it drop the server silently.
+            client_ver = (req.get("params") or {}).get("protocolVersion") or "2025-06-18"
+            with open("/tmp/deep_think_mcp.stderr.log", "a") as lf:
+                lf.write(f"initialize from client, protocolVersion={client_ver}\n")
             send({
                 "jsonrpc": "2.0",
                 "id": req_id,
                 "result": {
-                    "protocolVersion": "2025-06-18",
+                    "protocolVersion": client_ver,
                     "capabilities": {"tools": {}},
                     "serverInfo": {"name": "deep-think-probe", "version": "0.1.0"},
                 },

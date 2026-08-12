@@ -1,0 +1,25 @@
+You will answer 5 competition mathematics problems.
+
+HARD RULE: your visible reply must contain NOTHING but the 5 answer lines. No working, no explanation, no preamble, no XML tags. Exactly this format:
+
+1: <answer>
+2: <answer>
+3: <answer>
+4: <answer>
+5: <answer>
+
+All answers are integers.
+
+1. Let $a, b,$ and $n$ be positive integers with both $a$ and $b$ greater than or equal to $2$ and less than or equal to $2n.$ Define an $a \times b$ cell loop in a $2n \times 2n$ grid of cells to be the $2a + 2b - 4$ cells that surround an $(a - 2) \times (b - 2)$ (possibly empty) rectangle of cells in the grid. Find the number of ways to partition a $10 \times 10$ grid of cells into $5$ cell loops so that every cell of the grid belongs to exactly one cell loop.
+
+2. Let $a_0$, $a_1$, $a_2$, $\ldots$ be the unique sequence of nonnegative integers less than 397 with $a_0 = 1$ and $$a_{n+1}(a_n + 1)^2 \equiv a_n \pmod{397}$$ for all nonnegative integers $n$. Given that $a_{2026} = 9$, compute the remainder when $a_0 + a_1 + \cdots + a_{2026}$ is divided by 397.
+
+3. A regular hexagon with side length 4 is subdivided into a lattice of 96 equilateral triangles of side length 1. Let $S$ be the set of all vertices of this lattice. Compute the number of nondegenerate triangles with vertices in $S$ that contain the center of the hexagon strictly in their interior.
+
+4. Let $$S = \sum_{k=0}^{2026} k\binom{2k}{k}2^k.$$ Compute the remainder when $S$ is divided by 2027. (Note that 2027 is prime.)
+
+5. Let $S$ be the set of all ordered pairs $(x, y)$ of nonnegative integers $0 \le x \le 19$ and $0 \le y \le 2$. Compute the number of permutations $(x_1, y_1)$, $(x_2, y_2)$, $\ldots$, $(x_{60}, y_{60})$ of the elements of $S$ such that
+- $y_1 = 2$ and $y_{60} = 0$;
+- for all nonnegative integers $1 \le i \le 59$, exactly one of the following holds:
+  - $x_i = x_{i+1}$ and $|y_i - y_{i+1}| = 1$,
+  - $y_i = y_{i+1}$ and $x_i - x_{i+1}$ is $-1$ or $19$.
