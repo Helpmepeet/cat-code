@@ -1,0 +1,122 @@
+You will solve 12 logic puzzles. Each has exactly one valid solution.
+
+Setup for every puzzle: 4 houses in a row, numbered 1 to 4 left to right. Each house has a different owner (Ana, Ben, Cy, Dee), a different pet (cat, dog, fish, bird), and a different door colour (red, blue, green, white).
+
+HARD RULE: your visible reply must contain NOTHING but the 12 answer lines. No working, no explanation. Exactly this format:
+
+P1: 1=<owner>/<pet>/<door>; 2=<owner>/<pet>/<door>; 3=<owner>/<pet>/<door>; 4=<owner>/<pet>/<door>
+(and so on through P12)
+
+P1:
+  - Ana has the red door
+  - The white door is house 1
+  - The white door is immediately left of the blue door
+  - Ben lives in house 3
+  - The dog owner has the blue door
+  - Dee owns the bird
+  - Ana owns the cat
+
+P2:
+  - The bird owner has the red door
+  - The bird owner lives immediately left of the dog owner
+  - Ben lives immediately left of Dee
+  - The fish owner lives in house 2
+  - The green door is house 1
+  - Cy has the blue door
+  - Dee owns the bird
+
+P3:
+  - Ben does not own the fish
+  - Cy lives in house 2
+  - Ben has the white door
+  - The red door is house 4
+  - Cy has the green door
+  - The bird owner has the blue door
+  - Dee owns the cat
+  - Cy lives immediately left of Ben
+
+P4:
+  - Cy lives in house 4
+  - Ben has the white door
+  - Dee owns the dog
+  - Ana owns the bird
+  - The red door is house 1
+  - The fish owner has the blue door
+  - Ana lives in house 2
+
+P5:
+  - The white door is immediately left of the green door
+  - Ben lives immediately left of Dee
+  - Dee lives in house 4
+  - Cy has the white door
+  - The cat owner has the red door
+  - The fish owner has the blue door
+  - The blue door is house 4
+  - Ben owns the bird
+
+P6:
+  - Ana lives in house 3
+  - Ana owns the bird
+  - Ben owns the fish
+  - Dee lives immediately left of Ben
+  - Cy does not own the cat
+  - Cy has the green door
+  - The bird owner has the white door
+  - The blue door is house 2
+
+P7:
+  - Dee does not own the dog
+  - Cy has the white door
+  - The red door is house 1
+  - Ana has the blue door
+  - Ana owns the bird
+  - The cat owner lives in house 2
+  - The white door is immediately left of the green door
+  - The dog owner lives immediately left of the cat owner
+
+P8:
+  - Ben lives in house 2
+  - Cy does not own the dog
+  - The green door is house 2
+  - The dog owner lives in house 1
+  - The cat owner has the blue door
+  - The white door is house 4
+  - Ben lives immediately left of Dee
+  - The bird owner has the green door
+
+P9:
+  - The fish owner has the green door
+  - The bird owner lives immediately left of the dog owner
+  - Dee owns the bird
+  - Ana lives immediately left of Dee
+  - The bird owner has the white door
+  - Ben lives in house 3
+  - Cy has the red door
+
+P10:
+  - The fish owner has the blue door
+  - Dee owns the bird
+  - The fish owner lives immediately left of the bird owner
+  - Cy does not own the dog
+  - The white door is house 1
+  - Cy has the red door
+  - Ben lives immediately left of Cy
+
+P11:
+  - The fish owner has the red door
+  - Dee has the green door
+  - Ana owns the bird
+  - Ben lives immediately left of Ana
+  - The dog owner lives in house 4
+  - Ben lives in house 2
+  - The blue door is house 4
+
+P12:
+  - The green door is immediately left of the blue door
+  - The fish owner has the red door
+  - The bird owner has the white door
+  - The cat owner has the green door
+  - Ana has the red door
+  - Dee lives immediately left of Ana
+  - The cat owner lives in house 2
+  - Cy lives in house 1

@@ -1,0 +1,118 @@
+You will solve 10 logic puzzles. Each has exactly one valid solution, and every clue is needed.
+
+Setup for every puzzle: 5 houses in a row, numbered 1 to 5 left to right. Each house has a different owner (Ana, Ben, Cy, Dee, Eli), a different pet (cat, dog, fish, bird, rat), and a different door colour (red, blue, green, white, black).
+
+HARD RULE: your visible reply must contain NOTHING but the 10 answer lines. No working, no explanation, no XML tags. Exactly this format:
+
+P1: 1=<owner>/<pet>/<door>; 2=<owner>/<pet>/<door>; 3=<owner>/<pet>/<door>; 4=<owner>/<pet>/<door>; 5=<owner>/<pet>/<door>
+(and so on through P10)
+
+P1:
+  - Ben owns the dog
+  - The bird owner lives immediately left of the fish owner
+  - The white door is house 1
+  - The dog owner has the red door
+  - The bird owner lives in house 3
+  - Ana lives immediately left of Eli
+  - Cy owns the cat
+  - Cy has the blue door
+  - The green door is immediately left of the red door
+
+P2:
+  - Cy has the white door
+  - Ana owns the cat
+  - Dee lives immediately left of Ben
+  - The rat owner lives in house 2
+  - The fish owner has the red door
+  - Eli lives in house 4
+  - The dog owner has the black door
+  - The bird owner lives in house 1
+  - The green door is immediately left of the red door
+
+P3:
+  - The red door is house 4
+  - Ana owns the cat
+  - Ana lives immediately left of Ben
+  - The fish owner has the red door
+  - Eli does not own the bird
+  - The blue door is immediately left of the white door
+  - The rat owner lives immediately left of the dog owner
+  - Dee has the red door
+  - Ana has the green door
+
+P4:
+  - Dee has the red door
+  - The cat owner has the white door
+  - Ben lives immediately left of Eli
+  - The green door is house 4
+  - The dog owner lives in house 1
+  - Cy has the white door
+  - Eli has the black door
+  - The blue door is immediately left of the red door
+  - The bird owner lives immediately left of the fish owner
+
+P5:
+  - Dee owns the rat
+  - The dog owner has the white door
+  - Ana lives immediately left of Cy
+  - Dee has the blue door
+  - The green door is immediately left of the red door
+  - The bird owner lives in house 5
+  - Ben lives in house 1
+  - The fish owner lives in house 4
+  - Ana has the black door
+
+P6:
+  - Dee has the black door
+  - The dog owner has the blue door
+  - Dee owns the cat
+  - The cat owner lives immediately left of the rat owner
+  - Ana lives immediately left of Dee
+  - Cy lives in house 3
+  - Eli has the white door
+  - The green door is house 4
+  - The bird owner lives in house 5
+
+P7:
+  - The white door is immediately left of the red door
+  - Ben owns the bird
+  - Cy has the white door
+  - The green door is immediately left of the white door
+  - The red door is immediately left of the black door
+  - Dee lives in house 3
+  - The fish owner has the white door
+  - Eli has the green door
+  - The dog owner lives immediately left of the cat owner
+
+P8:
+  - The red door is immediately left of the white door
+  - Cy lives in house 3
+  - Ana has the black door
+  - Cy owns the dog
+  - The rat owner lives immediately left of the fish owner
+  - Eli has the blue door
+  - The cat owner has the green door
+  - Eli lives immediately left of Ana
+  - Dee lives in house 5
+
+P9:
+  - Cy lives immediately left of Dee
+  - Ana lives in house 3
+  - The green door is immediately left of the white door
+  - The fish owner lives immediately left of the bird owner
+  - The green door is house 4
+  - Ana has the red door
+  - Cy owns the cat
+  - Ben lives in house 1
+  - The dog owner has the blue door
+
+P10:
+  - Cy owns the fish
+  - The cat owner has the green door
+  - The bird owner has the white door
+  - The rat owner lives in house 1
+  - The green door is immediately left of the black door
+  - Cy lives immediately left of Ben
+  - Ana has the red door
+  - Eli does not have the green door
+  - The white door is immediately left of the red door

@@ -1,0 +1,50 @@
+You will answer 15 competition mathematics problems.
+
+HARD RULE: your visible reply must contain NOTHING but the 15 answer lines. No working, no explanation, no preamble, no XML tags. Exactly this format:
+
+1: <answer>
+2: <answer>
+(and so on through 15)
+
+All answers are integers.
+
+1. Let $S$ denote the value of the infinite sum \[\frac 19 + \frac 1{99} + \frac 1{999} + \frac 1{9999} + \cdots\] Find the remainder when the greatest integer less than or equal to $10^{100} S$ is divided by $1000.$
+
+2. The integers from $1$ to $64$ are placed in some order into an $8\times 8$ grid of cells with one number in each cell. Let $a_{i,j}$ be the number placed in the cell in row $i$ and column $j$, and let $M$ be the sum of the absolute differences between adjacent cells. That is, \[M=\sum^{8}_{i=1}\sum^{7}_{j=1}\left(|a_{i,j+1}-a_{i,j}|+|a_{j+1,i}-a_{j,i}|\right).\] Find the remainder when the maximum possible value of $M$ is divided by $1000$.
+
+3. Find the greatest integer $n$ such that the cubic polynomial \[x^{3} -\frac{n}{6}x^{2} + (n - 11)x - 400\] has roots $\alpha^{2}$, $\beta^{2}$, and $\gamma^{2}$, where $\alpha$, $\beta$, and $\gamma$ are complex numbers, and there are exactly seven different possible values for $\alpha + \beta + \gamma$.
+
+4. Triangle $\triangle ABC$ lies in plane $\mathcal{P}$ with $AB=6$, $AC=4$, and $\angle BAC=90^{\circ}$. Let $D$ be the reflection across $\overline{BC}$ of the centroid of $\triangle ABC$. Four spheres, all on the same side of $\mathcal{P}$, have radii $1$, $2$, $3$, and $r$ and are tangent to $\mathcal{P}$ at points $A$, $B$, $C$, and $D$, respectively. The four spheres are also each tangent to a second plane $\mathcal{T}$ and are all on the same side of $\mathcal{T}$. The value of $r$ can be written as $\frac{m}{n}$, where $m$ and $n$ are relatively prime positive integers. Find $m+n$.
+
+5. Consider a tetrahedron with two isosceles triangle faces with side lengths $5\sqrt{10}, \,5\sqrt{10},$ and $10$ and two isosceles triangle faces with side lengths $5\sqrt{10},\, 5\sqrt{10},$ and $18.$ The four vertices of the tetrahedron lie on a sphere with center $S,$ and the four faces of the tetrahedron are tangent to a sphere with center $R.$ The distance $RS$ can be written as $\tfrac mn,$ where $m$ and $n$ are relatively prime positive integers. Find $m + n.$
+
+6. For each nonnegative integer $r$ less than $502$, define \[S_r=\sum_{m\geq 0}\binom{10{,}000}{502m+r},\] where $\binom{10{,}000}{n}$ is defined to be $0$ when $n>10{,}000$. That is, $S_r$ is the sum of all the binomial coefficients of the form $\binom{10{,}000}{k}$ for which $0\leq k\leq 10{,}000$ and $k-r$ is a multiple of $502$. Find the number of integers in the list $S_0,S_1,S_2,\dots,S_{501}$ that are multiples of the prime number $503$.
+
+7. Call finite sets of integers $S$ and $T$ cousins if
+- $S$ and $T$ have the same number of elements,
+- $S$ and $T$ are disjoint, and
+- the elements of $S$ can be paired with the elements of $T$ so that the elements in each pair differ by exactly $1$.
+For example, $\{1,2,5\}$ and $\{0,3,4\}$ are cousins. Suppose that the set $S$ has exactly $4040$ cousins. Find the least number of elements the set $S$ can have.
+
+8. In an equiangular pentagon, the sum of the squares of the side lengths equals $308$, and the sum of the squares of the diagonal lengths equals $800$. The square of the perimeter of the pentagon can be expressed as $m\sqrt{n}$, where $m$ and $n$ are positive integers and $n$ is not divisible by the square of any prime. Find $m+n$.
+
+9. For integers $a$ and $b,$ let $a \circ b = a - b$ if $a$ is odd and $b$ is even, and $a+b$ otherwise. Find the number of sequences $a_1, a_2, a_3, \ldots, a_n$ of positive integers such that \[a_1 + a_2 + a_3 + \cdots + a_n = 12 \quad \text{and} \quad a_1 \circ a_2 \circ a_3 \circ \cdots \circ a_n = 0\] where the operations are performed from left to right; that is, $a_1 \circ a_2 \circ a_3$ means $(a_1 \circ a_2) \circ a_3.$
+
+10. Find the number of ordered 7-tuples $(a_1, a_2, a_3, \ldots, a_7)$ having the following properties:
+- $a_k \in \{1,2,3\}$ for all $k.$
+- $a_1+a_2+a_3+a_4+a_5+a_6+a_7$ is a multiple of $3.$
+- $a_1a_2 a_4 + a_2a_3a_5 + a_3a_4 a_6 + a_4 a_5 a_7 + a_5 a_6 a_1 + a_6 a_7 a_2 + a_7 a_1 a_3$ is a multiple of $3.$
+
+11. Let $a, b,$ and $n$ be positive integers with both $a$ and $b$ greater than or equal to $2$ and less than or equal to $2n.$ Define an $a \times b$ cell loop in a $2n \times 2n$ grid of cells to be the $2a + 2b - 4$ cells that surround an $(a - 2) \times (b - 2)$ (possibly empty) rectangle of cells in the grid. Find the number of ways to partition a $10 \times 10$ grid of cells into $5$ cell loops so that every cell of the grid belongs to exactly one cell loop.
+
+12. Let $a_0$, $a_1$, $a_2$, $\ldots$ be the unique sequence of nonnegative integers less than 397 with $a_0 = 1$ and $$a_{n+1}(a_n + 1)^2 \equiv a_n \pmod{397}$$ for all nonnegative integers $n$. Given that $a_{2026} = 9$, compute the remainder when $a_0 + a_1 + \cdots + a_{2026}$ is divided by 397.
+
+13. A regular hexagon with side length 4 is subdivided into a lattice of 96 equilateral triangles of side length 1. Let $S$ be the set of all vertices of this lattice. Compute the number of nondegenerate triangles with vertices in $S$ that contain the center of the hexagon strictly in their interior.
+
+14. Let $$S = \sum_{k=0}^{2026} k\binom{2k}{k}2^k.$$ Compute the remainder when $S$ is divided by 2027. (Note that 2027 is prime.)
+
+15. Let $S$ be the set of all ordered pairs $(x, y)$ of nonnegative integers $0 \le x \le 19$ and $0 \le y \le 2$. Compute the number of permutations $(x_1, y_1)$, $(x_2, y_2)$, $\ldots$, $(x_{60}, y_{60})$ of the elements of $S$ such that
+- $y_1 = 2$ and $y_{60} = 0$;
+- for all nonnegative integers $1 \le i \le 59$, exactly one of the following holds:
+  - $x_i = x_{i+1}$ and $|y_i - y_{i+1}| = 1$,
+  - $y_i = y_{i+1}$ and $x_i - x_{i+1}$ is $-1$ or $19$.

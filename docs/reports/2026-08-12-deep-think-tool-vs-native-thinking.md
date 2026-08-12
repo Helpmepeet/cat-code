@@ -103,51 +103,89 @@ individual cells, not pass/fail, so partial degradation is visible as a gradient
 **identical across all conditions** — only thinking and tool availability vary. All runs at
 `--effort high` (the highest effort legal with thinking disabled).
 
-| Run | Thinking | Tool | Exact | Cells | Reasoning volume |
-|---|---|---|---|---|---|
-| A1 | **on** | none | **10/10** | 150/150 (100%) | 5,236 thinking tokens |
-| A2 | **on** | none | **10/10** | 150/150 (100%) | 5,565 thinking tokens |
-| B1 | off | `deep_think` | **10/10** | 150/150 (100%) | 9,968 chars (~2.5k tok) |
-| B2 | off | `deep_think` | **10/10** | 150/150 (100%) | 9,570 chars (~2.4k tok) |
-| C1 | off | none | 0/10 | 42/150 (28%) | — |
-| C2 | off | none | 1/10 | 89/150 (59%) | — |
+| Run | Thinking | Tool | Exact | Cells | Reasoning tokens | Format |
+|---|---|---|---|---|---|---|
+| A1 | **on** | none | **10/10** | 150/150 (100%) | 5,236 (thinking) | clean |
+| A2 | **on** | none | **10/10** | 150/150 (100%) | 5,565 (thinking) | clean |
+| B1 | off | `deep_think` | **10/10** | 150/150 (100%) | 5,837 (scratchpad) | **VIOLATION** |
+| B2 | off | `deep_think` | **10/10** | 150/150 (100%) | 5,548 (scratchpad) | **VIOLATION** |
+| C1 | off | none | 0/10 | 42/150 (28%) | — | clean |
+| C2 | off | none | 1/10 | 89/150 (59%) | — | clean |
 
-Both arms replicated cleanly: native thinking 10/10 twice, tool-scratchpad 10/10 twice, floor
-0–1/10 twice.
+Both arms replicated cleanly on accuracy: native thinking 10/10 twice, tool-scratchpad 10/10
+twice, floor 0–1/10 twice.
 
-**Does the tool interfere when thinking is left on?** No — and it is inert. With thinking
-enabled *and* `deep_think` available (run E1), the model **never called the tool** (`tools:
-none`), thought natively at its usual depth (5,634 tokens, in line with A1/A2's 5,236 / 5,565),
-and scored 10/10. The model does not reach for a scratchpad it does not need.
+**Reasoning-token accounting.** Provider accounting, not a character estimate. Native thinking
+is `usage.output_tokens_details.thinking_tokens`. The scratchpad figure is total
+`usage.output_tokens` minus the final answer iteration (641 tokens in every run, since the
+answer format is identical across conditions): B1 = 6,478 − 641 = 5,837; B2 = 6,189 − 641 =
+5,548. **The two channels spend the same reasoning budget** — the tool arm was slightly higher
+in one run and slightly lower in the other.
 
-This closes off the apparent middle path. There is no "add the tool without disabling thinking"
-compromise for cat-code: with thinking on, the tool is never invoked, so it buys nothing and
-costs its schema tokens in every request. `deep_think` only ever activates as a *substitute* for
-native thinking — which means adopting it necessarily means accepting the disabled-thinking
-failure modes documented above.
+> An earlier revision of this report claimed the tool used "roughly half the reasoning tokens."
+> That was wrong. It came from dividing scratchpad characters by four while exact provider token
+> counts sat in the same JSON. The scratchpad tokenises at ~1.7 chars/token, not 4, because it is
+> dense with digits, names and punctuation. Any inference built on tool-reasoning being more
+> *compressed* is retracted — there is no compression to explain.
+
+**Format compliance is where the two arms actually differ.** Both `deep_think` runs emitted a
+visible preamble — `"I'll work through these carefully."` — before calling the tool, breaking the
+answer-only contract the prompt imposed. Native thinking broke it zero times out of two. This was
+invisible to the first version of the grader, which scored only the final result message and
+never inspected earlier assistant text; it is now checked explicitly. **Accuracy 10/10, format
+compliance 0/2.**
+
+**Does the tool interfere when thinking is left on? — single observation, n=1.** In one run
+(E1) with thinking enabled *and* `deep_think` available, the model did not call the tool
+(`tools: none`), thought natively at its usual depth (5,634 tokens, in line with A1/A2's 5,236 /
+5,565), and scored 10/10.
+
+This is one run, on one task family, with no instruction to use the tool. It is **not** evidence
+that the tool is inert in general, and the earlier phrasing ("inert whenever thinking is on",
+"only ever activates as a substitute") overclaimed from it. Establishing that would need
+replication, a second task family, and a thinking-on arm that explicitly instructs tool use.
+What it does justify is a weaker, useful prior: **the apparent "add the tool but keep thinking"
+middle path should not be assumed to work — on this evidence the tool may simply go unused, and
+the question is open.**
 
 Earlier tier (4 houses × 3 categories, 12 minimal puzzles): thinking on **12/12** (3,536
-thinking tokens); thinking off + `deep_think` **12/12** (5,033 chars); thinking off, no tool
-**4/12** (54% cells).
+thinking tokens); thinking off + `deep_think` **12/12**; thinking off, no tool **4/12** (54%
+cells).
 
-**Answer: no degradation detected, at any difficulty I could construct.** Tool-scratchpad
-reasoning matched native thinking *exactly* — 100% vs 100%, on two difficulty tiers, replicated —
-against a floor of 28–59% where the same model has nowhere to write. Inspecting the scratchpad
-content shows why: it is genuine deliberate reasoning, including case analysis, constraint
-re-checking, and explicit uniqueness proofs ("Check alternative Ana4,Cy5,Eli3: ... impossible.
-So unique."), not a shallow dump.
+**Answer on accuracy: no degradation detected, at any difficulty in this section.**
+Tool-scratchpad reasoning matched native thinking exactly — 100% vs 100%, two difficulty tiers,
+replicated — against a floor of 28–59% where the same model has nowhere to write, and it did so
+on the *same* reasoning-token budget. Inspecting the scratchpad shows genuine deliberate
+reasoning: case analysis, constraint re-checking, explicit uniqueness proofs ("Check alternative
+Ana4,Cy5,Eli3: ... impossible. So unique."), not a shallow dump.
 
-**The honest caveat: both arms are at ceiling.** I never found a task where native thinking
-succeeds and the tool fails, which means this rules out *gross* degradation but cannot rule out
-degradation at the frontier of difficulty — the instrument has no headroom left. Anyone relying
-on this should re-run it at a difficulty where native thinking itself starts to fail.
+**The caveat that limits all of it: both arms are at ceiling.** No task here separates them, so
+this rules out *gross* accuracy degradation and nothing finer. A test where both conditions
+score 100% has no resolving power — it can fail to detect degradation, which is not the same as
+showing there is none. These puzzles were also **self-authored from a single task family**,
+which bounds difficulty by the author's imagination and generalises to nothing else. Resolving
+the question needs an externally-sourced instrument at a difficulty where native thinking itself
+starts to fail; see the pending work note below.
 
-**One measured difference that is the place to look.** The tool version consistently used
-**roughly half the reasoning tokens** for the same perfect score (5,236 thinking tokens vs
-~2.4–2.5k in the scratchpad; 3,536 vs ~1.3k on the easier tier). Reasoning through a tool is
-more *compressed*. At this difficulty compression costs nothing. Compression is exactly what
-would fail first as difficulty rises, and `effort` scales native thinking depth while nothing
-scales a tool argument's — so the gap should be expected to widen, not stay flat.
+**Where the arms do separate is format, not accuracy** — 0/2 vs 2/2 (above). For an agent
+harness that is the more consequential axis: a wrong answer is visible, an unbidden preamble
+silently breaks a downstream contract.
+
+### Pending: an instrument with headroom (in progress at time of writing)
+
+Because the puzzle tiers saturate, a third tier was built from **externally sourced problems**
+rather than self-authored ones: 15 items from **AIME 2026 I/II and HMMT February 2026** — all
+competitions held in February 2026, deliberately **after the model's training cutoff**, so
+memorisation cannot substitute for reasoning. Ground truth is the published answer keys; six of
+the fifteen answers were additionally re-derived by brute force in Python and matched. The set is
+committed at `docs/reports/2026-08-12-deep-think-artifacts/bench.json`.
+
+The floor is established: **thinking off, no tool = 0/15**. That is the first instrument in this
+investigation with real headroom, and therefore the first one capable of detecting degradation
+rather than merely failing to find it. The native-thinking and `deep_think` arms had not finished
+when this revision was written; **this section must be completed before the accuracy conclusion
+above is treated as settled.** Until then the honest summary is: *no accuracy degradation
+observed on tasks where both arms score 100%, which is not a strong claim.*
 
 ### The failure mode that showed up instead
 
@@ -197,9 +235,18 @@ it means the tool does not crowd out real tools — but it also means it fires u
 from the harness author's point of view, because the model is making a judgement call every
 time.
 
+**The arithmetic tier was not tool-isolated, contrary to how it was first written.** Its
+baseline run (`condA.json`) used `--allowedTools ""`, which does **not** restrict the built-in
+set — its init record lists **31 available tools**. No tool fired, so the score stands, but two
+things follow: the "no tools" label was wrong for that tier, and the 6,960 ms → 7,872 ms latency
+comparison drawn from it is **confounded** and is withdrawn. Those two runs differ in tool-schema
+size, prompt bytes, and cache state, none of which were controlled. The puzzle tiers used
+`--tools ""` and are genuinely isolated (init records list 0 and 1 tool respectively).
+
 **Not tested**: multi-turn agent loops; long-horizon tasks; whether tool-scratchpad reasoning
-degrades over many turns as it accumulates in context; models other than `claude-opus-5`;
-whether quality holds on reasoning that is not arithmetic. n=2 problem sets, 1 run per cell.
+degrades over many turns as it accumulates in context; models other than `claude-opus-5`; any
+provider other than first-party Anthropic. n=2 problem sets on the puzzle tiers, 1 run per cell
+elsewhere. No latency claim in this report is controlled.
 
 **Cross-provider**: not established. The Codex CLI (`gpt-5.6-sol`, reasoning effort low) was
 tested but its build would not surface a third-party stdio MCP server's tools to the model
@@ -296,13 +343,20 @@ for real work.
 `{thinking_turns: 1}` after a >1 h idle latch (`src/services/compact/apiMicrocompact.ts:89-90`),
 and client microcompact clears `tool_result` blocks only, never `tool_use` inputs
 (`src/services/compact/microCompact.ts:216-221`). Move reasoning into a tool argument and it
-becomes a `tool_use` input — the one thing no current eviction mechanism clears — while the
-evictable half is the empty acknowledgement. Reasoning would accumulate in context precisely
-because it is no longer thinking.
+becomes a `tool_use` input, while the evictable half is the empty acknowledgement — so reasoning
+would accumulate in context precisely because it is no longer thinking.
+
+Qualification: this asymmetry is stated for the **external-user client path**. API-side
+tool-input clearing does exist (`clear_tool_uses_20250919` with `clear_tool_inputs`), but it is
+ant-only and env-gated in cat-code (`USE_API_CLEAR_TOOL_RESULTS` / `USE_API_CLEAR_TOOL_USES`,
+`src/services/compact/apiMicrocompact.ts:95-140`), so it is not a mechanism an external user's
+session can rely on. Full compaction destroys both classes regardless.
 
 **4. Latency, on an interactive product.** One extra round trip per reasoning step, with the
-prompt re-sent (caching absorbs tokens, not latency). Measured here: 6,960 ms → 7,872 ms on a
-single-step task. A multi-step agent turn multiplies that.
+prompt re-sent (caching absorbs tokens, not latency). **No controlled measurement of this is
+offered here** — the only latency numbers collected came from the confounded arithmetic tier and
+are withdrawn (see Limits). The extra round trip is a structural fact of the design; its cost on
+a multi-step agent turn is unquantified.
 
 ### Where the idea is genuinely right — and it is not about thinking
 
@@ -326,14 +380,23 @@ representation, and the repo already has the receipts:
   redactable, secret-scannable. It does not make the exposure vanish — it moves it into a
   surface that transcript export and remote persistence treat as ordinary readable content —
   but it moves it somewhere the existing guards can actually see.
-- **The desktop renders reasoning far worse than it renders tools, and this is the cheap win.**
-  In `app/`, thinking deltas project **no rows at all** — asserted by fixtures with
-  `expectRows: 0` (`app/renderer/src/sdkMessageFixtures.ts:552-600`) and stated in
+- **The desktop renders reasoning far worse than it renders tools.** In `app/`, thinking deltas
+  project **no rows at all** — asserted by fixtures with `expectRows: 0`
+  (`app/renderer/src/sdkMessageFixtures.ts:552-600`) and stated in
   `app/renderer/src/appModel.ts:99-103` ("thinking deltas project no row... close to
   unreachable today"). A thinking row is stateless and uncorrelated; a `ToolUseRow` is a
-  stateful, correlated, collapsible card with live status (`app/renderer/src/TranscriptView.tsx`
-  `ToolCard`). The terminal has a live streaming thinking view; the desktop does not. Reasoning
-  delivered as a tool call would inherit the good renderer for free.
+  stateful, correlated, collapsible card with live status. The terminal has a live streaming
+  thinking view; the desktop does not.
+
+  **But reasoning-as-a-tool would not inherit that renderer "for free" — an earlier revision of
+  this report said so and was wrong.** A tool card shows `stringifyInput(row.input)` only while
+  `!row.result` (`app/renderer/src/TranscriptView.tsx:1969`). Once the result arrives — for a
+  `deep_think` sink, an instant acknowledgement — the body switches to rendering the *result*
+  content (`TranscriptView.tsx:2027`), so the reasoning disappears from the card and survives
+  only in the inspector. The `AckBody` path does not rescue it either: it surfaces only
+  `input.prompt` / `input.message`, not an arbitrary `reasoning` field, and requires an exact
+  two-key ack shape (`app/renderer/src/toolAck.ts:61`). Displaying completed reasoning in the
+  desktop would take renderer work either way.
 
 That third point stands on its own and does not require this technique. **The actionable item
 is that the desktop has no live reasoning view, not that we should reshape the API to get one.**
@@ -368,13 +431,31 @@ of reasoning cost across providers is blocked on that. Worth fixing regardless o
 
 ## Reproduction
 
-Artifacts are in this session's scratchpad (`deep_think_mcp.py`, `task_notool.txt`,
-`task_tool.txt`, `cond*.json`). The server is ~80 lines of stdlib Python implementing
-`initialize` / `tools/list` / `tools/call`; the whole experiment is six `claude -p` invocations.
-Total API spend: roughly $0.55.
+All artifacts are committed under **`docs/reports/2026-08-12-deep-think-artifacts/`** — not in an
+ephemeral scratchpad:
 
-Key flags, since two of them were the difference between a valid and an invalid run:
+| Path | What |
+|---|---|
+| `deep_think_mcp.py` | The MCP server: ~80 lines of stdlib Python, `initialize` / `tools/list` / `tools/call`. A pure sink — returns a fixed acknowledgement, computes nothing. |
+| `gen_hard.py` | Puzzle generator (numpy masks over the 1,728,000-state space; verified-unique + minimal-clue trimming). |
+| `grade.py`, `grade_bench.py` | Graders. Both inspect **every** assistant text block for format violations, not just the final result. |
+| `task_*.txt` | The exact prompts, verbatim. |
+| `puzzles.json`, `puzzles5h.json`, `bench.json` | Problem sets with ground truth. |
+| `runall.sh`, `runbench.sh`, `claude_mcp.json` | Exact commands and MCP wiring. |
+| `raw/*.json` | Raw `--output-format json` output for all 17 saved runs. |
+| `MANIFEST.json` | Per-run cost, tools-available count, thinking tokens, output tokens, turns. |
 
-- `--tools ""` — disables the built-in toolset. `--allowedTools` does **not** restrict it.
+**Cost: $1.842 across the 17 saved named arms** (per `MANIFEST.json`). An earlier revision said
+"six invocations, roughly $0.55" — that counted only the first tier and was stale by the time the
+puzzle and benchmark tiers were added. Unsaved pilots and discarded probes are not included, so
+true session spend is somewhat higher.
+
+Three flags carry the whole experiment, and two of them were the difference between a valid and
+an invalid run:
+
+- `--tools ""` — disables the built-in toolset. **`--allowedTools` does not restrict it** (see
+  the 31-tool arithmetic baseline above).
 - `MAX_THINKING_TOKENS=0` — sends `thinking: {type:'disabled'}` (confirmed by the 400 above).
-- `--output-format json` — needed to read `thinking_tokens` and inspect which tool actually fired.
+- `--output-format json` — required to read `thinking_tokens`, per-iteration `output_tokens`, the
+  init record's tool list, and which tool actually fired. Every quantitative claim here should be
+  taken from these fields, never estimated from character counts.

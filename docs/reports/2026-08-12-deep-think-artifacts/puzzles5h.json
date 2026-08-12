@@ -1,0 +1,362 @@
+[
+ {
+  "clues": [
+   "Ben owns the dog",
+   "The bird owner lives immediately left of the fish owner",
+   "The white door is house 1",
+   "The dog owner has the red door",
+   "The bird owner lives in house 3",
+   "Ana lives immediately left of Eli",
+   "Cy owns the cat",
+   "Cy has the blue door",
+   "The green door is immediately left of the red door"
+  ],
+  "sol": {
+   "owners": [
+    "Dee",
+    "Cy",
+    "Ana",
+    "Eli",
+    "Ben"
+   ],
+   "pets": [
+    "rat",
+    "cat",
+    "bird",
+    "fish",
+    "dog"
+   ],
+   "doors": [
+    "white",
+    "blue",
+    "black",
+    "green",
+    "red"
+   ]
+  }
+ },
+ {
+  "clues": [
+   "Cy has the white door",
+   "Ana owns the cat",
+   "Dee lives immediately left of Ben",
+   "The rat owner lives in house 2",
+   "The fish owner has the red door",
+   "Eli lives in house 4",
+   "The dog owner has the black door",
+   "The bird owner lives in house 1",
+   "The green door is immediately left of the red door"
+  ],
+  "sol": {
+   "owners": [
+    "Cy",
+    "Dee",
+    "Ben",
+    "Eli",
+    "Ana"
+   ],
+   "pets": [
+    "bird",
+    "rat",
+    "fish",
+    "dog",
+    "cat"
+   ],
+   "doors": [
+    "white",
+    "green",
+    "red",
+    "black",
+    "blue"
+   ]
+  }
+ },
+ {
+  "clues": [
+   "The red door is house 4",
+   "Ana owns the cat",
+   "Ana lives immediately left of Ben",
+   "The fish owner has the red door",
+   "Eli does not own the bird",
+   "The blue door is immediately left of the white door",
+   "The rat owner lives immediately left of the dog owner",
+   "Dee has the red door",
+   "Ana has the green door"
+  ],
+  "sol": {
+   "owners": [
+    "Ana",
+    "Ben",
+    "Eli",
+    "Dee",
+    "Cy"
+   ],
+   "pets": [
+    "cat",
+    "rat",
+    "dog",
+    "fish",
+    "bird"
+   ],
+   "doors": [
+    "green",
+    "blue",
+    "white",
+    "red",
+    "black"
+   ]
+  }
+ },
+ {
+  "clues": [
+   "Dee has the red door",
+   "The cat owner has the white door",
+   "Ben lives immediately left of Eli",
+   "The green door is house 4",
+   "The dog owner lives in house 1",
+   "Cy has the white door",
+   "Eli has the black door",
+   "The blue door is immediately left of the red door",
+   "The bird owner lives immediately left of the fish owner"
+  ],
+  "sol": {
+   "owners": [
+    "Ana",
+    "Dee",
+    "Cy",
+    "Ben",
+    "Eli"
+   ],
+   "pets": [
+    "dog",
+    "rat",
+    "cat",
+    "bird",
+    "fish"
+   ],
+   "doors": [
+    "blue",
+    "red",
+    "white",
+    "green",
+    "black"
+   ]
+  }
+ },
+ {
+  "clues": [
+   "Dee owns the rat",
+   "The dog owner has the white door",
+   "Ana lives immediately left of Cy",
+   "Dee has the blue door",
+   "The green door is immediately left of the red door",
+   "The bird owner lives in house 5",
+   "Ben lives in house 1",
+   "The fish owner lives in house 4",
+   "Ana has the black door"
+  ],
+  "sol": {
+   "owners": [
+    "Ben",
+    "Dee",
+    "Ana",
+    "Cy",
+    "Eli"
+   ],
+   "pets": [
+    "dog",
+    "rat",
+    "cat",
+    "fish",
+    "bird"
+   ],
+   "doors": [
+    "white",
+    "blue",
+    "black",
+    "green",
+    "red"
+   ]
+  }
+ },
+ {
+  "clues": [
+   "Dee has the black door",
+   "The dog owner has the blue door",
+   "Dee owns the cat",
+   "The cat owner lives immediately left of the rat owner",
+   "Ana lives immediately left of Dee",
+   "Cy lives in house 3",
+   "Eli has the white door",
+   "The green door is house 4",
+   "The bird owner lives in house 5"
+  ],
+  "sol": {
+   "owners": [
+    "Ana",
+    "Dee",
+    "Cy",
+    "Ben",
+    "Eli"
+   ],
+   "pets": [
+    "dog",
+    "cat",
+    "rat",
+    "fish",
+    "bird"
+   ],
+   "doors": [
+    "blue",
+    "black",
+    "red",
+    "green",
+    "white"
+   ]
+  }
+ },
+ {
+  "clues": [
+   "The white door is immediately left of the red door",
+   "Ben owns the bird",
+   "Cy has the white door",
+   "The green door is immediately left of the white door",
+   "The red door is immediately left of the black door",
+   "Dee lives in house 3",
+   "The fish owner has the white door",
+   "Eli has the green door",
+   "The dog owner lives immediately left of the cat owner"
+  ],
+  "sol": {
+   "owners": [
+    "Eli",
+    "Cy",
+    "Dee",
+    "Ana",
+    "Ben"
+   ],
+   "pets": [
+    "rat",
+    "fish",
+    "dog",
+    "cat",
+    "bird"
+   ],
+   "doors": [
+    "green",
+    "white",
+    "red",
+    "black",
+    "blue"
+   ]
+  }
+ },
+ {
+  "clues": [
+   "The red door is immediately left of the white door",
+   "Cy lives in house 3",
+   "Ana has the black door",
+   "Cy owns the dog",
+   "The rat owner lives immediately left of the fish owner",
+   "Eli has the blue door",
+   "The cat owner has the green door",
+   "Eli lives immediately left of Ana",
+   "Dee lives in house 5"
+  ],
+  "sol": {
+   "owners": [
+    "Eli",
+    "Ana",
+    "Cy",
+    "Ben",
+    "Dee"
+   ],
+   "pets": [
+    "rat",
+    "fish",
+    "dog",
+    "bird",
+    "cat"
+   ],
+   "doors": [
+    "blue",
+    "black",
+    "red",
+    "white",
+    "green"
+   ]
+  }
+ },
+ {
+  "clues": [
+   "Cy lives immediately left of Dee",
+   "Ana lives in house 3",
+   "The green door is immediately left of the white door",
+   "The fish owner lives immediately left of the bird owner",
+   "The green door is house 4",
+   "Ana has the red door",
+   "Cy owns the cat",
+   "Ben lives in house 1",
+   "The dog owner has the blue door"
+  ],
+  "sol": {
+   "owners": [
+    "Ben",
+    "Eli",
+    "Ana",
+    "Cy",
+    "Dee"
+   ],
+   "pets": [
+    "dog",
+    "fish",
+    "bird",
+    "cat",
+    "rat"
+   ],
+   "doors": [
+    "blue",
+    "black",
+    "red",
+    "green",
+    "white"
+   ]
+  }
+ },
+ {
+  "clues": [
+   "Cy owns the fish",
+   "The cat owner has the green door",
+   "The bird owner has the white door",
+   "The rat owner lives in house 1",
+   "The green door is immediately left of the black door",
+   "Cy lives immediately left of Ben",
+   "Ana has the red door",
+   "Eli does not have the green door",
+   "The white door is immediately left of the red door"
+  ],
+  "sol": {
+   "owners": [
+    "Eli",
+    "Dee",
+    "Cy",
+    "Ben",
+    "Ana"
+   ],
+   "pets": [
+    "rat",
+    "cat",
+    "fish",
+    "bird",
+    "dog"
+   ],
+   "doors": [
+    "blue",
+    "green",
+    "black",
+    "white",
+    "red"
+   ]
+  }
+ }
+]

@@ -1,0 +1,19 @@
+You will solve 6 arithmetic chain problems.
+
+HARD RULE: Your visible reply must contain NOTHING but the six answers. No working, no steps, no intermediate values, no explanation. Exactly this format and nothing else:
+
+P1: <number>
+P2: <number>
+P3: <number>
+P4: <number>
+P5: <number>
+P6: <number>
+
+Apply each operation in order, left to right, to the starting number.
+
+P1: start 12; add 52, multiply by 8, multiply by 6, add 18, subtract 36, multiply by 9, multiply by 7, add 35, multiply by 5, add 50, subtract 32
+P2: start 25; multiply by 4, subtract 89, multiply by 3, subtract 92, add 56, multiply by 9, subtract 89, add 94, subtract 55, add 49, add 82
+P3: start 11; multiply by 2, multiply by 4, subtract 72, multiply by 3, subtract 70, multiply by 7, subtract 37, subtract 57, subtract 68, add 47, multiply by 3
+P4: start 24; subtract 57, add 84, subtract 47, subtract 45, multiply by 7, subtract 35, subtract 69, multiply by 7, multiply by 9, add 90, subtract 36
+P5: start 16; subtract 65, multiply by 6, add 57, subtract 69, subtract 19, multiply by 6, subtract 78, add 91, add 28, subtract 32, subtract 87
+P6: start 26; add 14, subtract 67, add 86, subtract 19, add 30, add 80, multiply by 8, multiply by 2, subtract 74, subtract 82, subtract 28

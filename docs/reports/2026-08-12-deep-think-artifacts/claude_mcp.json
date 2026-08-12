@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "deepthink": {
+      "command": "python3",
+      "args": ["/private/tmp/claude-501/-Users-pt-cat-code/cde27359-d467-42af-a056-546d27e12279/scratchpad/deep_think_mcp.py"]
+    }
+  }
+}

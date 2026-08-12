@@ -1,0 +1,159 @@
+{
+ "note": "Saved named arms only; unsaved pilots/probes not included.",
+ "total_cost_usd_saved_arms": 1.842,
+ "runs": [
+  {
+   "run": "bench_C",
+   "cost_usd": 0.043,
+   "tools_available": 0,
+   "thinking_tokens": 0,
+   "output_tokens": 80,
+   "turns": 1,
+   "is_error": false
+  },
+  {
+   "run": "condA",
+   "cost_usd": 0.107,
+   "tools_available": 31,
+   "thinking_tokens": 426,
+   "output_tokens": 467,
+   "turns": 1,
+   "is_error": false
+  },
+  {
+   "run": "condA2r",
+   "cost_usd": 0.019,
+   "tools_available": 0,
+   "thinking_tokens": 0,
+   "output_tokens": 44,
+   "turns": 1,
+   "is_error": false
+  },
+  {
+   "run": "condB",
+   "cost_usd": 0.125,
+   "tools_available": 32,
+   "thinking_tokens": 0,
+   "output_tokens": 417,
+   "turns": 2,
+   "is_error": false
+  },
+  {
+   "run": "condBr",
+   "cost_usd": 0.043,
+   "tools_available": 1,
+   "thinking_tokens": 0,
+   "output_tokens": 532,
+   "turns": 2,
+   "is_error": false
+  },
+  {
+   "run": "condC",
+   "cost_usd": 0.042,
+   "tools_available": 1,
+   "thinking_tokens": 0,
+   "output_tokens": 524,
+   "turns": 2,
+   "is_error": false
+  },
+  {
+   "run": "condD",
+   "cost_usd": 0.072,
+   "tools_available": 5,
+   "thinking_tokens": 0,
+   "output_tokens": 516,
+   "turns": 2,
+   "is_error": false
+  },
+  {
+   "run": "condP_A",
+   "cost_usd": 0.131,
+   "tools_available": 0,
+   "thinking_tokens": 3536,
+   "output_tokens": 4161,
+   "turns": 1,
+   "is_error": false
+  },
+  {
+   "run": "condP_B",
+   "cost_usd": 0.156,
+   "tools_available": 1,
+   "thinking_tokens": 0,
+   "output_tokens": 3684,
+   "turns": 2,
+   "is_error": false
+  },
+  {
+   "run": "condP_C",
+   "cost_usd": 0.042,
+   "tools_available": 0,
+   "thinking_tokens": 0,
+   "output_tokens": 625,
+   "turns": 1,
+   "is_error": false
+  },
+  {
+   "run": "hard_A1",
+   "cost_usd": 0.174,
+   "tools_available": 0,
+   "thinking_tokens": 5236,
+   "output_tokens": 5877,
+   "turns": 1,
+   "is_error": false
+  },
+  {
+   "run": "hard_A2",
+   "cost_usd": 0.157,
+   "tools_available": 0,
+   "thinking_tokens": 5565,
+   "output_tokens": 6206,
+   "turns": 1,
+   "is_error": false
+  },
+  {
+   "run": "hard_B1",
+   "cost_usd": 0.254,
+   "tools_available": 1,
+   "thinking_tokens": 0,
+   "output_tokens": 6478,
+   "turns": 2,
+   "is_error": false
+  },
+  {
+   "run": "hard_B2",
+   "cost_usd": 0.214,
+   "tools_available": 1,
+   "thinking_tokens": 0,
+   "output_tokens": 6189,
+   "turns": 2,
+   "is_error": false
+  },
+  {
+   "run": "hard_C1",
+   "cost_usd": 0.038,
+   "tools_available": 0,
+   "thinking_tokens": 0,
+   "output_tokens": 415,
+   "turns": 1,
+   "is_error": false
+  },
+  {
+   "run": "hard_C2",
+   "cost_usd": 0.038,
+   "tools_available": 0,
+   "thinking_tokens": 0,
+   "output_tokens": 1476,
+   "turns": 1,
+   "is_error": false
+  },
+  {
+   "run": "hard_E1",
+   "cost_usd": 0.189,
+   "tools_available": 1,
+   "thinking_tokens": 5634,
+   "output_tokens": 6275,
+   "turns": 1,
+   "is_error": false
+  }
+ ]
+}
