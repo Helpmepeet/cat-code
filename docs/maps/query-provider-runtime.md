@@ -148,7 +148,7 @@ Recovery decisions:
 |---|---|---|
 | Model fallback | `src/query.ts` with `FallbackTriggeredError` from API path | Switches to `fallbackModel`, recomputes provider, clears partial messages/tool results, strips signatures for ant fallback, and retries the whole request. |
 | Context-collapse drain | `src/query.ts` plus `src/services/contextCollapse/index.ts` | On withheld prompt-too-long, drains staged collapses once before reactive compact. In this source snapshot the default module is a no-op unless replaced by a feature build. |
-| Reactive compact | Feature-gated loader and retry flow in `src/query.ts`; the implementation module is absent from this checkout | On withheld prompt-too-long/media errors, attempts compact-and-retry once before surfacing the error. |
+| Reactive compact | Feature-gated loader and retry flow in `src/query.ts`; implementation in `src/services/compact/reactiveCompact.ts` (compiled in only under the `dev-full` feature set) | On withheld prompt-too-long/media errors, summarizes an older prefix, keeps the newest complete API rounds verbatim, and retries the interrupted request once before surfacing the error. |
 | Max-output escalation | `src/query.ts` | Can retry once with `ESCALATED_MAX_TOKENS`, then up to `MAX_OUTPUT_TOKENS_RECOVERY_LIMIT` continuation nudges. |
 | Autocompact circuit breaker | `src/services/compact/autoCompact.ts` | Stops automatic retries after repeated non-transient compaction failures and persists failure count by scope. |
 | Unknown-tool loop breaker | `src/query.ts` | Aborts when repeated follow-up turns only produce unknown-tool errors for the same tool. |

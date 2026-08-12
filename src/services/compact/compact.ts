@@ -1209,7 +1209,15 @@ export function createCompactCanUseTool(): CanUseToolFn {
   })
 }
 
-async function streamCompactSummary({
+/**
+ * Runs the summarizer fork for one candidate message set.
+ *
+ * Exported for reactiveCompact.ts, which drives its own retry ladder (widen the
+ * preserved suffix) instead of this file's head-truncation one. Callers must
+ * narrow BOTH `messages` and `cacheSafeParams.forkContextMessages` on a retry —
+ * the cache-sharing path reads only the latter.
+ */
+export async function streamCompactSummary({
   messages,
   summaryRequest,
   appState,

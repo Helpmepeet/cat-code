@@ -19,7 +19,6 @@ import { logError } from '../../utils/log.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { tokenCountWithEstimation } from '../../utils/tokens.js'
 import { roughTokenCountEstimationForContent } from '../tokenEstimation.js'
-import { getFeatureValue_CACHED_MAY_BE_STALE } from '../analytics/growthbook.js'
 import { getMaxOutputTokensForModel } from '../api/claude.js'
 import { getCodexLeaseExhaustedMessage } from '../api/codexAccountLeaseManager.js'
 import { notifyCompaction } from '../api/promptCacheBreakDetection.js'
@@ -487,8 +486,18 @@ export async function shouldAutoCompact(
   // Note: returning false here also means autoCompactIfNeeded never reaches
   // trySessionMemoryCompaction in the query loop — the /compact call site
   // still tries session memory first. Revisit if reactive-only graduates.
+  //
+  // The decision lives in reactiveCompact.isReactiveOnlyMode so suppression and
+  // the path that is supposed to replace it can never disagree — reading the
+  // raw flag here would let a session end up with proactive compaction off and
+  // reactive compaction off too. require() rather than import: reactiveCompact
+  // imports isAutoCompactEnabled from this module.
   if (feature('REACTIVE_COMPACT')) {
-    if (getFeatureValue_CACHED_MAY_BE_STALE('tengu_cobalt_raccoon', false)) {
+    /* eslint-disable @typescript-eslint/no-require-imports */
+    const { isReactiveOnlyMode } =
+      require('./reactiveCompact.js') as typeof import('./reactiveCompact.js')
+    /* eslint-enable @typescript-eslint/no-require-imports */
+    if (isReactiveOnlyMode()) {
       return false
     }
   }
