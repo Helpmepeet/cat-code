@@ -4,8 +4,8 @@
 **Scope:** Cat Code’s current source, installed upstream Claude Code 2.1.223, and the officially shipped 2.1.224 native artifact
 **Status:** reverse-engineering report; no implementation changes
 **Corrections:** §15 records a 2026-08-12 claim-by-claim verification of every
-CAT-SOURCE claim in §4. Eleven are wrong or imprecise, and most §4.8/§4.12
-line citations have drifted. Read §15 before acting on any §4 claim.
+CAT-SOURCE claim in §4. Ten are wrong or imprecise, and most §4.8/§4.12 line
+citations have drifted. Read §15 before acting on any §4 claim.
 **Source basis:** Cat Code working-tree source plus static analysis of shipped upstream executables; source and executable control flow win over release notes
 
 ## 1. Executive conclusion
@@ -1087,14 +1087,20 @@ key; `query.ts:578-585` replaces rather than appends; and
 called by the full path. §4.3's derived threshold table was recomputed from
 source constants and every cell matches. The §10-11 recommendations stand.
 
-Eleven claims are wrong or imprecise. Three would misdirect an implementer.
+Ten claims are wrong or imprecise. Two would misdirect an implementer.
+
+The audits were split by owner file, which created one blind spot: a claim
+spanning two files can be judged against only one of them. §4.2's usage claim
+was initially graded WRONG on `tokens.ts` alone, when the mechanism it names
+lives in `sessionStorage.ts`. Both halves are recorded below. Treat any
+single-lane verdict on a cross-file claim as provisional.
 
 ### 15.1 Corrections that change an implementation decision
 
 | § | Claim as written | Source |
 |---|---|---|
 | 4.4 | The summary fork has "no tools" | **WRONG.** The fork sends the parent's ENTIRE tool set, which is mandatory for the cache-key match (`prompt.ts:42-44`, `compact.ts:1238-1241`). Only tool *execution* is blocked (`createCompactCanUseTool`, `compact.ts:1181-1190`). The streaming fallback sends `FileReadTool`, plus tool-search and MCP tools when enabled (`compact.ts:1337-1346`). Dropping tools to shrink the request would destroy the prompt-cache reuse of §4.16. |
-| 4.2 | Preserved messages "can have stale usage zeroed during relinking" | **WRONG mechanism.** Nothing zeroes usage. Preserved messages keep their original usage and are *skipped* by the usage walk via the boundary's head/tail UUIDs (`tokens.ts:106-109,435-438`). Load-bearing for §10.2: an explicit preserved-UUID list must preserve that skip. |
+| 4.2 | Preserved messages "can have stale usage zeroed during relinking" | **CONFIRMED**, and there are two distinct mechanisms, both load-bearing for §10.2. On **resume**, `applyPreservedSegmentRelinks` zeroes `input_tokens`/`output_tokens`/`cache_*` on preserved assistant messages in the loaded map (`sessionStorage.ts:2611-2627`) — without it, resume triggers an immediate autocompact spiral. During a **live session** nothing is mutated; the usage walk instead *skips* preserved messages, which keep their original usage (`tokens.ts:106-109,435-438`). An explicit preserved-UUID list must drive both. |
 | 4.16 | "`/clear` creates a new UUID", implying a new Codex cache key | **WRONG, and a live defect.** `regenerateSessionId()` (`bootstrap/state.ts:460-477`) never emits `sessionSwitched`, so the rebind at `setup.ts:95-97` never fires, and `resetCodexCacheContext()` is not called from the clear path. After `/clear` the pre-clear `prompt_cache_key` is reused for the life of the process. See §15.4. |
 
 ### 15.2 Precision corrections
