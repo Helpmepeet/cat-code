@@ -547,9 +547,68 @@ So the 6.56x is **variant selection, not divergence**. Cat Code still ships the
 **Methodological note for the audit.** Its §3.1 registry table lists `memory` as
 present at both 2.1.87 and 2.1.223, which is true by name and misleading in
 substance: the section was rewritten underneath a stable name. Name-level
-registry comparison cannot see content rewrites, so the other five retained
-sections (`brief`, `env_info_simple`, `language`, `output_style`, `scratchpad`)
-carry the same risk and none were diffed by content.
+registry comparison cannot see content rewrites.
+
+### 6.3.2 Port gate: the frontmatter shapes do not match
+
+Checked 2026-08-12, before recommending the port.
+
+Most of the contract lines up. Both sides use the same four types
+(`user`, `feedback`, `project`, `reference` — `memoryTypes.ts:15-18`), the same
+`MEMORY.md` index concept (`memdir.ts:34` `ENTRYPOINT_NAME`), and the same
+one-line pointer format (`- [Title](file.md) — hook`).
+
+One thing does not, and it would break silently:
+
+| | frontmatter `type` |
+|---|---|
+| upstream compact prompt (§2.6) | nested — `metadata:` then `type:` beneath it |
+| Cat Code prompt (`memoryTypes.ts:261-268`) | flat — `type: {{…}}` |
+| Cat Code parser (`memoryScan.ts:61`) | flat — `parseMemoryType(frontmatter.type)` |
+
+Nothing in `src/` reads `metadata.type`. Port the compact text verbatim and the
+model writes nested frontmatter that the scanner cannot see, so every new memory
+parses with an unknown type and degrades quietly — no error, no failed test, just
+a taxonomy that stops working.
+
+So the port is **a text swap plus one small decision**, not a pure text swap:
+either flatten `type:` in the ported wording, or teach `parseMemoryType` to read
+`metadata.type` with a flat fallback. Flattening the text is the smaller change;
+teaching the parser both shapes is the one that survives a future re-sync.
+
+### 6.3.3 Registry sweep: memory is the exception, not the pattern
+
+The obvious follow-on was that other sections might also have been rewritten
+under stable names. Probed a distinctive phrase from each of the five retained
+sections against both binaries and `src/constants/prompts.ts`:
+
+| section | probe | 2.1.87 | 2.1.223 | Cat |
+|---|---|---|---|---|
+| `env_info_simple` | "Here is useful information about the environment you are running in" | 1 | 2 | 1 |
+| `scratchpad` | "Always use this scratchpad directory for temporary files instead of" | 1 | 2 | 1 |
+| `scratchpad` | "Use this directory for ALL temporary file needs" | 1 | 2 | 1 |
+| `language` | "for all explanations, comments, and communications with the user" | 1 | 2 | 1 |
+| `output_style` | "# Output Style: " | 1 | 2 | 1 |
+
+All present on all three sides. The uniform 1→2 rise between builds is a
+structural duplication in the newer bundle, not per-section churn — contrast
+memory, whose headings rose unevenly (2→5, 1→3, 2→6, 3→8), which is what gaining
+a whole extra variant looks like.
+
+**Conclusion: no second missed rewrite found.** Memory is a one-off.
+
+Two limits on that negative:
+
+- One probe per section. A rewrite that preserved the probed sentence and changed
+  everything around it would not show up here.
+- The method that actually caught memory was the reverse direction — probing
+  phrases from the *delivered* upstream text and finding them absent from `src/`.
+  That direction is only available for sections that rendered in the capture, so
+  it confirms `scratchpad` and `env_info_simple` outright. For `language`,
+  `output_style`, and `brief`, this table proves Cat Code's text still exists
+  upstream but cannot rule out a newer preferred variant sitting alongside it —
+  exactly memory's failure mode. Closing that needs captures from sessions where
+  those sections render.
 
 `scratchpad` registers in Cat Code but did not render in this dump; whether it is
 conditional on configuration was not chased.
