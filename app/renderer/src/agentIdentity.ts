@@ -343,7 +343,8 @@ export function deriveAgentModeWorkerState(
   if (worker.origin === 'prior' && worker.resumable === false) return 'stale'
   if (worker.synthesisStatus === 'pending') return 'result-ready'
   if (worker.synthesisStatus === 'synthesized') return 'reviewed'
-  if (worker.status === 'failed' || worker.status === 'killed') return 'attention'
+  if (worker.status === 'failed') return 'failed'
+  if (worker.status === 'killed') return 'stopped'
   if (worker.status === 'completed') return 'completed'
   return 'running'
 }

@@ -2226,8 +2226,8 @@ STATUS claim is wrong, correct that row too (say so in your report).
 `AgentTypeChip` (`AgentChrome.tsx:98`) currently has **no production importer** — this is one of the
 two places that would give it one (P4-32 owns the other); coordinate rather than duplicating.
 
-**§7 Permissions.jsx (1)** — `:578` worker-relay chrome ("worker" badge + "Relayed from worker X"
-subtitle). Orchestrator-adjacent — check P4-32's ruling before inventing the vocabulary.
+**§7 Permissions.jsx (1)** — `:578` worker-relay chrome ("worker" badge + engine-sourced worker and
+role subtitle). Orchestrator-adjacent — check P4-32's ruling before inventing the vocabulary.
 
 **§29 Welcome.jsx (1)** — `:1996` `openSignal`: the `/workspace` slash command opens the picker from
 the composer.

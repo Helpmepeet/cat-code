@@ -96,7 +96,7 @@ export type WorkerOwner = 'none' | 'orchestrator'
  *   - blocked (handoffStatus) → 'waiting', always: the delegating assistant is
  *     the one that receives the handoff.
  *   - otherwise the persisted lifecycle via `deriveAgentModeWorkerState`
- *     (resumable/stale/result-ready/reviewed/attention/completed/running).
+ *     (resumable/stale/result-ready/reviewed/failed/stopped/completed/running).
  */
 export function orchestratorWorkerState(
   worker: AgentModeWorkerItem,
@@ -124,8 +124,8 @@ export function orchestratorWorkerState(
  * Attention owner (the baton). Blocked workers are always assistant-owned: they
  * fed a question back through AskOrchestratorTool (`AskOrchestratorTool.ts:83`)
  * and it lands in the delegating conversation's own queue. A pending-synthesis
- * result and a failed/killed worker likewise await the assistant. Everything else
- * needs nobody.
+ * result and a failed worker likewise await the assistant. A stopped worker is
+ * settled and needs nobody.
  */
 export function deriveWorkerOwner(worker: AgentModeWorkerItem): WorkerOwner {
   return ownerForState(orchestratorWorkerState(worker))
@@ -138,7 +138,7 @@ export function deriveWorkerOwner(worker: AgentModeWorkerItem): WorkerOwner {
  * not synthesised and a worker that died on it.
  */
 function ownerForState(state: AgentStateKey): WorkerOwner {
-  return state === 'waiting' || state === 'result-ready' || state === 'attention'
+  return state === 'waiting' || state === 'result-ready' || state === 'failed'
     ? 'orchestrator'
     : 'none'
 }
@@ -213,7 +213,7 @@ export function workerEventPriority(worker: AgentModeWorkerItem): number {
 
 /** Its state-only half, so a caller holding the state need not re-derive it. */
 function priorityForState(state: AgentStateKey): number {
-  if (state === 'attention') return 2
+  if (state === 'failed') return 2
   if (state === 'result-ready') return 1
   return 0
 }
@@ -259,7 +259,7 @@ export type OrchestratorRosterLine = {
  *
  * The prototype also treats a promoted `working` lead as "any working". That
  * branch is unreachable in this derivation and in the prototype's own: a priority
- * above 0 requires state `attention` or `result-ready`, and neither is `running`.
+ * above 0 requires state `failed` or `result-ready`, and neither is `running`.
  * So `anyWorking` reads only the counted workers.
  */
 export function selectOrchestratorRosterLine(

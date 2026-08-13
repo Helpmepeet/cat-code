@@ -270,10 +270,11 @@ function toolRow(fields: {
   input?: Record<string, unknown>
   status?: ToolCardStatus
   result?: ToolResultProjection | null
+  agentCompletion?: AgentCompletionProjection | null
   children?: NestedTranscriptRow[]
   /** Only needed when a test renders more than one row of the same tool. */
   id?: string
-}): NestedTranscriptRow {
+}): NestedToolUseRow {
   return {
     ...blockSource,
     id: fields.id ?? `s:m:0:${fields.toolName}`,
@@ -281,7 +282,7 @@ function toolRow(fields: {
     toolUseId: `toolu_${fields.id ?? fields.toolName}`,
     toolName: fields.toolName,
     toolFamily: fields.toolFamily,
-    agentCompletion: null,
+    agentCompletion: fields.agentCompletion ?? null,
     input: fields.input ?? {},
     status: fields.status ?? 'pending',
     result: fields.result ?? null,
@@ -476,11 +477,11 @@ test('P4-18b: a bash card tints an error line and expands failed results', () =>
 // the engine's wording puts around the name, so assert on the rest of it.
 const RESUME_ACK = 'in the background. Previous context: ~105k / 372k tokens (28%).'
 
-test('ack card: a resumed agent shows its outcome COLLAPSED, never as raw JSON', () => {
+test('a resumed agent is an independent agent card named by the follow-up prompt', () => {
   const html = render(
     toolRow({
       toolName: 'ResumeAgent',
-      toolFamily: 'agent-control',
+      toolFamily: 'agent',
       input: { agentId: '@Ramanujan', prompt: 'measure the card height' },
       status: 'success',
       result: {
@@ -490,14 +491,25 @@ test('ack card: a resumed agent shows its outcome COLLAPSED, never as raw JSON',
           message: `Resumed "@Ramanujan" ${RESUME_ACK}`,
         }),
         diff: null,
+        agentName: 'Ramanujan',
+      },
+      agentCompletion: {
+        status: 'completed',
+        summary: 'Agent @Ramanujan completed',
+        result: 'The card is 84 pixels high.',
+        usage: { totalTokens: 9500, toolUses: 5, durationMs: 52000 },
       },
     }),
   )
 
-  // The whole point: no expansion needed, and none of the JSON scaffolding.
-  expect(html).toContain(RESUME_ACK)
+  expect(html).toContain('measure the card height')
+  expect(html).toContain('Ramanujan')
+  expect(html).toContain('Completed')
+  expect(html).toContain('The card is 84 pixels high.')
+  expect(html).toContain('~9.5k tokens')
+  expect(html).not.toContain('resume @Ramanujan')
+  expect(html).not.toContain(RESUME_ACK)
   expect(html).not.toContain('"success"')
-  expect(html).toContain('resume @Ramanujan') // target from the real agentId
   expect(html).toContain('◇') // hollow mark against the spawn card's ◆
   expect(html).toContain('text-[#a78bfa]')
 })
@@ -561,6 +573,33 @@ test('ack card: a non-ack result keeps its existing rendering untouched', () => 
 
   expect(html).toContain('plain stdout, not JSON')
   expect(html).toContain('Tool') // still the neutral family
+})
+
+test('TaskOutput renders the structured agent answer in a Task Output card', () => {
+  const html = render(
+    toolRow({
+      toolName: 'TaskOutput',
+      toolFamily: 'other',
+      status: 'success',
+      result: {
+        isError: false,
+        content:
+          '<retrieval_status>success</retrieval_status><output>raw payload</output>',
+        diff: null,
+        taskOutput: {
+          taskId: 'task-1',
+          description: 'Find every caller of the retry helper',
+          output: 'Four callers, all in the request layer.',
+        },
+      },
+    }),
+  )
+
+  expect(html).toContain('Task Output')
+  expect(html).toContain('Find every caller of the retry helper')
+  expect(html).toContain('Four callers, all in the request layer.')
+  expect(html).not.toContain('&lt;retrieval_status&gt;')
+  expect(html).toContain('task-1')
 })
 
 test('P4-18b: an expanded edit card keeps its counts in the shell and one current-file gutter', () => {
@@ -724,7 +763,7 @@ function agentRow(
   children: NestedTranscriptRow[] = [],
   agentCompletion: AgentCompletionProjection | null = null,
   result: ToolResultProjection | null = null,
-): NestedTranscriptRow {
+): NestedToolUseRow {
   return {
     ...blockSource,
     id: `s:m:0:agent-${suffix}`,
@@ -768,26 +807,28 @@ const ADA_COMPLETION: AgentCompletionProjection = {
   usage: { totalTokens: 12400, toolUses: 3, durationMs: 48000 },
 }
 
-test('a finished background agent shows its result and stats on its own card, opened', () => {
+test('a background agent card remains a launch record without completion output', () => {
   const html = render(
     agentRow(
       'bg',
-      { subagent_type: 'Explore', description: 'find the sidebar owner' },
+      {
+        subagent_type: 'Explore',
+        description: 'find the sidebar owner',
+        run_in_background: true,
+      },
       'success',
       [],
       ADA_COMPLETION,
     ),
   )
 
-  expect(html).toContain('Result')
-  expect(html).toContain('Sidebar lives in app/renderer/src/Sidebar.tsx')
-  // Stats read compactly, the way the prototype's card footer does.
-  expect(html).toContain('~12.4k tokens')
-  expect(html).toContain('3 tools')
-  expect(html).toContain('48s')
-  // The card is the ONLY place this appears: no second banner row, and the
-  // summary is not repeated inside a card that already names the agent.
+  expect(html).toContain('backgrounded')
+  expect(html).not.toContain('Result')
+  expect(html).not.toContain('Sidebar lives in app/renderer/src/Sidebar.tsx')
+  expect(html).not.toContain('~12.4k tokens')
   expect(html).not.toContain('Agent @Ada completed')
+  expect(html).not.toContain('In background')
+  expect(html).not.toContain('Completed')
 })
 
 test('a foreground agent card keeps the C4 collapsed default and grows no result section', () => {
@@ -800,10 +841,7 @@ test('a foreground agent card keeps the C4 collapsed default and grows no result
 
 /* ── a backgrounded agent's launch ack is not its finish (bug, 2026-08-05) ── */
 
-test('a backgrounded agent with no completion yet reads as In background, not Completed', () => {
-  // Its `tool_result` (status: 'success') only ever says the launch started —
-  // the real outcome is a separate task-notification that hasn't landed
-  // (agentCompletion: null). Showing "Completed"/"done" here is a fake label.
+test('a backgrounded agent is a neutral past-tense launch record without a lifecycle chip', () => {
   const html = render(
     agentRow(
       'launched',
@@ -811,11 +849,12 @@ test('a backgrounded agent with no completion yet reads as In background, not Co
       'success',
     ),
   )
-  expect(html).toContain('In background')
+  expect(html).toContain('backgrounded')
+  expect(html).not.toContain('In background')
   expect(html).not.toContain('Completed')
 })
 
-test('a backgrounded agent shows Completed once its real completion lands', () => {
+test('a backgrounded agent remains byte-stable in meaning if completion data is present', () => {
   const html = render(
     agentRow(
       'settled',
@@ -825,10 +864,12 @@ test('a backgrounded agent shows Completed once its real completion lands', () =
       ADA_COMPLETION,
     ),
   )
-  expect(html).toContain('Completed')
+  expect(html).toContain('backgrounded')
+  expect(html).not.toContain('Completed')
+  expect(html).not.toContain('Sidebar lives in app/renderer/src/Sidebar.tsx')
 })
 
-test('a DelegateGroup of backgrounded members reads Running, not finished, before completion lands', () => {
+test('background launch records do not form a stale lifecycle group', () => {
   const html = renderToStaticMarkup(
     <TranscriptRowsView
       rows={[
@@ -845,11 +886,12 @@ test('a DelegateGroup of backgrounded members reads Running, not finished, befor
       ]}
     />,
   )
-  expect(html).toContain('Running 2 Explore agents')
-  expect(html).not.toContain('agents finished')
+  expect(html.match(/backgrounded/g)).toHaveLength(2)
+  expect(html).not.toContain('Running 2 Explore agents')
+  expect(html).not.toContain('Delegate')
 })
 
-test('a DelegateGroup of backgrounded members reads finished once both complete', () => {
+test('background launch records stay independent even if completion facts are present', () => {
   const html = renderToStaticMarkup(
     <TranscriptRowsView
       rows={[
@@ -870,7 +912,9 @@ test('a DelegateGroup of backgrounded members reads finished once both complete'
       ]}
     />,
   )
-  expect(html).toContain('2 Explore agents finished')
+  expect(html.match(/backgrounded/g)).toHaveLength(2)
+  expect(html).not.toContain('Running 2 Explore agents')
+  expect(html).not.toContain('Delegate')
 })
 
 test('an unmergeable completion renders one line, never the model-facing banner', () => {
@@ -1013,34 +1057,45 @@ test('a backgrounded agent never claims to be "starting" for its whole run', () 
   expect(html).not.toContain('starting')
 })
 
-test('a finished agent reports real token usage even with zero tool calls', () => {
+test('a resumed agent keeps settled usage in its result body, not its header', () => {
   const html = render(
-    agentRow('owner', { subagent_type: 'Explore', description: 'investigate' }, 'success', [], {
-      status: 'completed',
-      summary: null,
-      result: null,
-      usage: { totalTokens: 12000, toolUses: 0, durationMs: 1000 },
-    }),
+    {
+      ...agentRow('owner', { agentId: 'agent-1', prompt: 'investigate' }, 'success', [], {
+        status: 'completed',
+        summary: null,
+        result: 'done',
+        usage: { totalTokens: 12000, toolUses: 0, durationMs: 1000 },
+      }, {
+        isError: false,
+        content: 'resumed',
+        diff: null,
+        agentName: 'Ada',
+      }),
+      toolName: 'ResumeAgent',
+    },
   )
-  expect(html).toContain('12.0k tokens')
-  // The badge's own phrasing. `AgentCompletionBody` separately prints "0 tools",
-  // which is its business, not this badge's.
-  expect(html).not.toContain('0 tool call')
+  expect(html.match(/~12\.0k tokens/g)).toHaveLength(1)
+  expect(html).toContain('0 tools')
 })
 
-test('a missing token count is omitted, never printed as "0 tokens"', () => {
+test('a resumed agent omits a missing token count from its result body', () => {
   const html = render(
-    agentRow('owner', { subagent_type: 'Explore', description: 'investigate' }, 'success', [], {
-      status: 'completed',
-      summary: null,
-      result: null,
-      // The engine persists an ABSENT count as a literal zero
-      // (`totalTokensOverride ?? 0`, agentToolUtils.ts:694), so a real worker
-      // that made 55 tool calls arrives here claiming zero tokens.
-      usage: { totalTokens: 0, toolUses: 55, durationMs: 1000 },
-    }),
+    {
+      ...agentRow('owner', { agentId: 'agent-1', prompt: 'investigate' }, 'success', [], {
+        status: 'completed',
+        summary: null,
+        result: 'done',
+        usage: { totalTokens: 0, toolUses: 55, durationMs: 1000 },
+      }, {
+        isError: false,
+        content: 'resumed',
+        diff: null,
+        agentName: 'Ada',
+      }),
+      toolName: 'ResumeAgent',
+    },
   )
-  expect(html).toContain('55 tool calls')
+  expect(html).toContain('55 tools')
   expect(html).not.toContain('0 tokens')
 })
 

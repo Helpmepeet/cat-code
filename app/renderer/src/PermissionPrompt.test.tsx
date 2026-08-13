@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
+import type { AgentModeWorkerItem } from '../../shared/protocol.js'
 import {
   PermissionPrompt,
 } from './PermissionPrompt.js'
@@ -28,6 +29,19 @@ const REQUEST: PermissionRequest = {
     input: { command: 'date' },
     tool_use_id: 'toolu-1',
   },
+}
+
+function worker(
+  over: Partial<AgentModeWorkerItem> = {},
+): AgentModeWorkerItem {
+  return {
+    agentId: 'worker-42',
+    handle: 'Vale',
+    role: 'coding-worker',
+    status: 'running',
+    description: 'Check the failing test',
+    ...over,
+  }
 }
 
 test('the command is the headline, and the answer is a numbered select list', () => {
@@ -225,6 +239,7 @@ test('a relayed request reads as running another agent command', () => {
         ...REQUEST,
         request: { ...REQUEST.request, agent_id: 'worker-42' },
       }}
+      workers={[worker()]}
     />,
   )
   // The prototype's own verb and kicker for a relayed ask
@@ -232,6 +247,45 @@ test('a relayed request reads as running another agent command', () => {
   expect(html).toContain('Run')
   expect(html).not.toContain('>Allow<')
   expect(html).toContain('Worker request')
+  expect(html).toContain(
+    'Relayed from <span class="font-mono text-violet-300">@Vale</span>, a coding worker. You decide.',
+  )
+})
+
+test('a relayed request with an unnamed worker names the engine role only', () => {
+  const html = renderToStaticMarkup(
+    <PermissionPrompt
+      onAllow={() => {}}
+      onDeny={() => {}}
+      request={{
+        ...REQUEST,
+        request: { ...REQUEST.request, agent_id: 'worker-42' },
+      }}
+      workers={[worker({ handle: null })]}
+    />,
+  )
+
+  expect(html).toContain('Relayed from a coding worker. You decide.')
+  expect(html).not.toContain('worker-42')
+  expect(html).not.toContain('@Vale')
+})
+
+test('an unmatched relay id degrades to the role-only fallback', () => {
+  const html = renderToStaticMarkup(
+    <PermissionPrompt
+      onAllow={() => {}}
+      onDeny={() => {}}
+      request={{
+        ...REQUEST,
+        request: { ...REQUEST.request, agent_id: 'worker-missing' },
+      }}
+      workers={[worker()]}
+    />,
+  )
+
+  expect(html).toContain('Relayed from a coding worker. You decide.')
+  expect(html).not.toContain('worker-missing')
+  expect(html).not.toContain('@Vale')
 })
 
 test('a rule row never prints a raw engine behavior word', () => {
@@ -310,7 +364,8 @@ test('a relayed card agrees with itself across all four surfaces', () => {
   expect(html).toContain('Worker request')
   expect(html).toContain('>worker<')
   expect(html).toContain('Run WebFetch?')
-  expect(html).toContain('worker-7')
+  expect(html).toContain('Relayed from a coding worker. You decide.')
+  expect(html).not.toContain('worker-7')
   // …and so does the GLYPH. Fed only the tool name it drew the globe under a
   // "Worker request" caption.
   expect(html).toContain('<circle cx="18" cy="6" r="3">')
@@ -540,11 +595,14 @@ test('renders worker-relay chrome from the engine request agent_id', () => {
         ...REQUEST,
         request: { ...REQUEST.request, agent_id: 'worker-42' },
       }}
+      workers={[worker()]}
     />,
   )
   expect(html).toContain('>worker<')
-  expect(html).toContain('Relayed from worker')
-  expect(html).toContain('worker-42')
+  expect(html).toContain('Relayed from ')
+  expect(html).toContain('@Vale')
+  expect(html).toContain('a coding worker. You decide.')
+  expect(html).not.toContain('worker-42')
 })
 
 test('renders a rule row per ENGINE-minted suggestion, verbatim', () => {

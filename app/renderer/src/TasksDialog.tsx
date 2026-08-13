@@ -304,11 +304,13 @@ export function TasksDialog({
           ) : flat.length === 0 ? (
             <div className="px-4 py-10 text-center">
               <div className="mb-1 text-[13px] font-medium text-text-subtle">
-                {hasActiveSession ? 'No tasks in this session' : 'No background tasks'}
+                No background tasks
               </div>
-              <div className="text-[11.5px] text-text-subtle/70">
-                Run a background bash, agent, or dream to see it here
-              </div>
+              {workers.length > 0 ? (
+                <div className="text-[11.5px] text-text-subtle/70">
+                  {workers.length} {workers.length === 1 ? 'worker is' : 'workers are'} running, in Workers
+                </div>
+              ) : null}
             </div>
           ) : (
             <>
@@ -498,6 +500,9 @@ function WorkerRow({
         {worker.description ?? ''}
       </span>
       <AgentTypeLabel role={worker.role} />
+      {state === 'stopped' || state === 'failed' ? (
+        <AgentStateLabel state={state} />
+      ) : null}
     </button>
   )
 }

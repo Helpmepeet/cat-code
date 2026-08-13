@@ -133,6 +133,7 @@ export function groupTaskItems(snapshot: TasksSnapshot | null): TaskGroups {
   const active: TaskSnapshotItem[] = []
   const completed: TaskSnapshotItem[] = []
   for (const item of sortTaskItems(snapshot.items)) {
+    if (item.type === 'local_agent') continue
     ;(isTerminalTaskStatus(item.status) ? completed : active).push(item)
   }
   return { active, completed }

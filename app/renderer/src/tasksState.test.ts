@@ -95,7 +95,7 @@ test('sorts running-first, then newest', () => {
   expect(sortTaskItems(items).map(i => i.id)).toEqual(['running', 'new-done', 'old-done'])
 })
 
-test('groups active vs completed, sorted within each group', () => {
+test('groups non-agent tasks active vs completed, sorted within each group', () => {
   const snapshot: TasksSnapshot = {
     items: [
       item({ id: 'r1', status: 'running', startTime: 1 }),
@@ -103,6 +103,8 @@ test('groups active vs completed, sorted within each group', () => {
       item({ id: 'c1', status: 'completed', startTime: 3 }),
       item({ id: 'f1', status: 'failed', startTime: 4 }),
       item({ id: 'k1', status: 'killed', startTime: 5 }),
+      item({ id: 'a1', type: 'local_agent', status: 'running', startTime: 6 }),
+      item({ id: 'a2', type: 'local_agent', status: 'completed', startTime: 7 }),
     ],
   }
   const { active, completed } = groupTaskItems(snapshot)

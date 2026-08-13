@@ -1,4 +1,5 @@
 import { PermissionPrompt } from './PermissionPrompt.js'
+import type { AgentModeWorkerItem } from '../../shared/protocol.js'
 import {
   isAskUserQuestionRequest,
   type PermissionQueueItem,
@@ -16,6 +17,7 @@ import {
  */
 export function PermissionQueue({
   items,
+  workers = [],
   keyboardTargetRequestId = null,
   onAllow,
   onDeny,
@@ -23,6 +25,8 @@ export function PermissionQueue({
   onSnooze,
 }: {
   items: PermissionQueueItem[]
+  /** This session's engine-sourced workers, for relayed-card identity only. */
+  workers?: readonly AgentModeWorkerItem[]
   /**
    * The request the shortcuts act on, or null when no card owns the keyboard
    * here (a background pane, or a dedicated flow holding the keys). That card
@@ -81,6 +85,7 @@ export function PermissionQueue({
             pendingCount={index === 0 ? awaitingAnswer : undefined}
             request={item.request}
             submitted={item.submitted}
+            workers={workers}
           />
         )
       })}

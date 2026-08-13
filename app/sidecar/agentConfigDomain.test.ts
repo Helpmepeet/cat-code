@@ -240,7 +240,7 @@ test('agent display state covers every engine task and durable worker status', (
       status,
       worktreePath: null,
     }),
-  )).toEqual(['running', 'completed', 'attention', 'attention'])
+  )).toEqual(['running', 'completed', 'failed', 'stopped'])
 
   expect(ENGINE_WORKER_SYNTHESIS_STATUSES.map(synthesisStatus =>
     deriveAgentModeWorkerState({

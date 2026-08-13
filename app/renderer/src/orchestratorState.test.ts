@@ -91,7 +91,8 @@ test('non-blocked lifecycle reuses the shared agent-mode vocabulary', () => {
   expect(
     orchestratorWorkerState(worker({ origin: 'prior', resumable: true, status: 'completed' })),
   ).toBe('resumable')
-  expect(orchestratorWorkerState(worker({ status: 'failed' }))).toBe('attention')
+  expect(orchestratorWorkerState(worker({ status: 'failed' }))).toBe('failed')
+  expect(orchestratorWorkerState(worker({ status: 'killed' }))).toBe('stopped')
 })
 
 test('a backgrounded worker reads BACKGROUND, and only while it is genuinely running', () => {
@@ -151,6 +152,24 @@ test('summary + pill: a blocked worker is counted on the assistant and never ale
     worker({ status: 'completed', synthesisStatus: 'synthesized' }),
   ])
   expect(settled).toBeNull()
+})
+
+test('failed workers stay on the assistant while stopped workers are settled', () => {
+  const failed = worker({ agentId: 'w-failed', status: 'failed' })
+  const stopped = worker({ agentId: 'w-stopped', status: 'killed' })
+
+  expect(deriveWorkerOwner(failed)).toBe('orchestrator')
+  expect(deriveWorkerOwner(stopped)).toBe('none')
+  expect(summarizeOrchestratorWorkers([failed, stopped])).toEqual({
+    working: 0,
+    background: 0,
+    orchestrator: 1,
+    done: 1,
+  })
+
+  const line = selectOrchestratorRosterLine([failed, stopped])
+  expect(line.lead?.worker.agentId).toBe('w-failed')
+  expect(line.tail).toEqual([{ text: '1 done', tone: 'done' }])
 })
 
 test('roster promotes the news-bearing worker (failure over a ready result over quiet workers)', () => {

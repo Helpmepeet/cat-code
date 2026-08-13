@@ -1259,6 +1259,7 @@ function ToolCardShell({
   headerBadge,
   alwaysExtra,
   collapsedExtra,
+  suppressStatus,
   defaultExpanded,
   expansionKey,
   children,
@@ -1272,6 +1273,7 @@ function ToolCardShell({
   /** Always-visible sub-header row under the header (Agent identity strip). */
   alwaysExtra?: ReactNode
   collapsedExtra?: ReactNode
+  suppressStatus?: boolean
   defaultExpanded?: boolean
   /**
    * The engine's `toolUseId`, so the user's expansion outlives this component.
@@ -1314,7 +1316,7 @@ function ToolCardShell({
             3-state pill would just repeat it with a different, coarser word
             (e.g. "done" beside "Completed") and, for a backgrounded agent
             whose tool_result only says it started, an outright wrong one. */}
-        {family === 'agent' ? null : (
+        {family === 'agent' || suppressStatus ? null : (
           // The word ("done"/"failed"/"running") next to a dot that already
           // carries the same state in color is redundant chrome; the dot
           // alone, colour-coded, is enough (operator call).
@@ -1363,6 +1365,9 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
   // D2/C2: the Agent tool_use is rendered as the Agent member of this same
   // tool-card family (specialized body + C4 child nesting), not a sibling row.
   if (row.toolFamily === 'agent') return <AgentToolCard row={row} />
+  if (row.toolName === 'TaskOutput' && row.result?.taskOutput) {
+    return <TaskOutputCard row={row} />
+  }
   if (
     row.toolFamily === 'imagegen' &&
     row.status === 'success' &&
@@ -1408,6 +1413,34 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
         </div>
       ) : null}
     </div>
+  )
+}
+
+function TaskOutputCard({ row }: { row: ToolUseNestedRow }) {
+  const output = row.result?.taskOutput
+  if (!output) return null
+  return (
+    <ToolCardShell
+      family="other"
+      target="Task Output"
+      status={row.status}
+      expansionKey={row.toolUseId}
+      defaultExpanded
+      headerBadge={
+        <span className="font-mono text-[10px] text-text-subtle">
+          {output.taskId.slice(0, 8)}
+        </span>
+      }
+    >
+      <div className="flex flex-col gap-1.5">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-subtle">
+          {output.description}
+        </span>
+        <div className="whitespace-pre-wrap break-words text-xs leading-relaxed text-text-muted">
+          {output.output}
+        </div>
+      </div>
+    </ToolCardShell>
   )
 }
 
@@ -1820,6 +1853,9 @@ function agentToolSourceOf(row: ToolUseNestedRow): AgentToolSource {
   const subagentType = str('subagent_type')
   const description = str('description')
   const prompt = str('prompt')
+  const isLaunchRecord =
+    (row.toolName === 'Agent' || row.toolName === 'Task') &&
+    input.run_in_background === true
   // Identity is transcript-owned in either state: the completed result carries
   // it on the parent correlation, while a running worker carries it on its
   // nested progress frames. No live task snapshot joins this card.
@@ -1836,11 +1872,13 @@ function agentToolSourceOf(row: ToolUseNestedRow): AgentToolSource {
     toolName: row.toolName === 'Task' ? 'Task' : 'Agent',
     status: row.status,
     ...(agentName !== undefined ? { agentName } : {}),
-    ...(input.run_in_background === true ? { run_in_background: true } : {}),
+    ...(input.run_in_background === true || row.toolName === 'ResumeAgent'
+      ? { run_in_background: true }
+      : {}),
     ...(subagentType !== undefined ? { subagent_type: subagentType } : {}),
     ...(description !== undefined ? { description } : {}),
     ...(prompt !== undefined ? { prompt } : {}),
-    ...(row.agentCompletion !== null
+    ...(!isLaunchRecord && row.agentCompletion !== null
       ? { hasCompletion: true, completionStatus: row.agentCompletion.status }
       : {}),
   }
@@ -1880,20 +1918,13 @@ function agentToolCallCount(row: ToolUseNestedRow): number {
 }
 
 /**
- * What the header says about progress: live activity while the worker runs, a
- * settled digest once it stops.
- *
- * Three sources, in falling order of authority. `agentCompletion.usage` is a
- * backgrounded worker's real totals. `result.agentUsage` is a FOREGROUND
- * worker's own totals off its structured result, which is the only place they
- * exist for it and, unlike nested rows, replays from history. Counting the
- * nested rows is the last resort: it works live, but a restored card whose
- * branch fell outside the replayed window has none.
+ * What a foreground card's header says about progress: live activity while the
+ * worker runs, then a settled digest from its structured result. Counting
+ * nested rows is the last resort when restored result usage is absent.
  */
 function agentProgressBadge(
   row: ToolUseNestedRow,
   state: AgentStateKey,
-  usage: AgentCompletionProjection['usage'],
 ): string | null {
   const activity = agentActivityOf(row)
   if (state === 'running') return activity ?? 'starting'
@@ -1903,7 +1934,7 @@ function agentProgressBadge(
   // `starting` would sit there for the worker's entire life. Its state word
   // already reads "In background", which is the honest thing to say.
   if (state === 'background') return activity
-  const settledUsage = usage ?? row.result?.agentUsage ?? null
+  const settledUsage = row.result?.agentUsage ?? null
   const toolCalls = settledUsage?.toolUses ?? agentToolCallCount(row)
   const parts: string[] = []
   if (toolCalls > 0) {
@@ -1953,15 +1984,44 @@ function agentWorkerType(vocab: ReturnType<typeof deriveAgentDisplayVocabulary>)
  * card (task rule).
  */
 function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
+  const resumeAck =
+    row.toolName === 'ResumeAgent' ? toolAckForResult(row.result) : null
+  if (resumeAck && !resumeAck.ok) {
+    return (
+      <ToolCardShell
+        family="agent-control"
+        target={deriveTarget(row)}
+        status={row.status}
+        expansionKey={row.toolUseId}
+        defaultExpanded={row.status === 'error'}
+        collapsedExtra={<AckPeek ack={resumeAck} />}
+      >
+        <ToolCardBody
+          row={row}
+          content={row.result?.content ?? ''}
+          ack={resumeAck}
+        />
+      </ToolCardShell>
+    )
+  }
   const vocab = deriveAgentDisplayVocabulary(agentToolSourceOf(row))
   const workerType = agentWorkerType(vocab)
   const typeTone = vocab.type
     ? AGENT_TYPE_TONE_CLASS[vocab.type.tone]
     : AGENT_TYPE_TONE_CLASS.neutral
   const childCount = row.children.length
-  const completion = row.agentCompletion
-  const isLive = vocab.state.key === 'running' || vocab.state.key === 'background'
-  const progress = agentProgressBadge(row, vocab.state.key, completion?.usage ?? null)
+  const isLaunchRecord =
+    (row.toolName === 'Agent' || row.toolName === 'Task') &&
+    row.input.run_in_background === true
+  const completion = isLaunchRecord ? null : row.agentCompletion
+  const isLive =
+    !isLaunchRecord &&
+    (vocab.state.key === 'running' || vocab.state.key === 'background')
+  const progress = isLaunchRecord
+    ? 'backgrounded'
+    : completion !== null
+      ? null
+      : agentProgressBadge(row, vocab.state.key)
   // ONE expression, so `ToolCardShell`'s `hasBody` stays null when there is
   // genuinely no body — two sibling expressions would make it an array and give
   // every childless agent card a body that expands to nothing.
@@ -1983,12 +2043,13 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
     )
   return (
     <ToolCardShell
-      family="agent"
+      family={row.toolName === 'ResumeAgent' ? 'agent-control' : 'agent'}
       target={deriveTarget(row)}
       status={row.status}
+      suppressStatus
       expansionKey={row.toolUseId}
-      // A finished background agent's result is the ONLY place its output
-      // exists, so it opens; a foreground card keeps the C4 collapsed default.
+      // A resumed run opens when its completion supplies the answer; ordinary
+      // foreground and launch-record cards keep the C4 collapsed default.
       defaultExpanded={completion !== null}
       headerBadge={
         progress === null ? undefined : (
@@ -2016,7 +2077,7 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
           <span className={`shrink-0 text-[12.5px] font-semibold ${typeTone.text}`}>
             {workerType}
           </span>
-          <AgentStateLabel state={vocab.state.key} />
+          {isLaunchRecord ? null : <AgentStateLabel state={vocab.state.key} />}
           {/* Owner/handoff is a session-plane (`LocalAgentTask`) fact, absent
               from this frame — never fabricated here (D2/§4). Renders nothing. */}
           <Baton owner="none" />
@@ -3375,9 +3436,8 @@ function agentCompletionTone(status: string | null): string {
 }
 
 /**
- * TaskNotificationRow: a background agent's finish that could NOT be folded
- * into its agent card (no join key on the wire, or the card never arrived).
- * One line, the way both references render it: the prototype's `AgentEventRow`
+ * TaskNotificationRow: a background agent's finish in transcript arrival
+ * order. One line, the way both references render it: the prototype's `AgentEventRow`
  * (`Messages.jsx:843-870`) is a pip plus a name plus a state word, and the
  * terminal's `UserAgentNotificationMessage.tsx:46` is `● {summary}` and nothing
  * else.
@@ -3428,17 +3488,10 @@ function formatDuration(ms: number): string {
 }
 
 /**
- * A background agent's finish, shown INSIDE its own agent card rather than as a
- * second transcript row. This is the prototype's disposition: `data.js:153-165`
- * joins the completion to the named spawn card on the task id and drops the
- * duplicate row, because the notification is a `role:'user'` message upstream
- * and "rendering it as a human turn would misread the conversation".
- *
- * Mirrors `AgentTranscriptCard`'s own result grammar (`Messages.jsx:826-832`):
- * a labelled result body plus a stats line. The summary is NOT repeated here —
- * the card header already names the agent and shows its state, so the line
- * would say what the operator can already read (§7 "say only what is
- * surprising").
+ * A resumed run's result. ResumeAgent creates a second independent agent card,
+ * so the later completion supplies that card's labelled answer and stats. The
+ * summary is not repeated because the identity strip and state already carry
+ * it.
  */
 function AgentCompletionBody({
   completion,

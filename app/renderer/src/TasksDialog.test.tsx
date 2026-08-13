@@ -49,11 +49,11 @@ test('renders nothing when closed', () => {
   expect(html).toBe('')
 })
 
-test('renders the empty state, branched on active-session scope', () => {
+test('renders the plain empty state regardless of active-session scope', () => {
   const withSession = renderToStaticMarkup(
     <TasksDialog hasActiveSession={true} onClose={noop} open={true} snapshot={null} />,
   )
-  expect(withSession).toContain('No tasks in this session')
+  expect(withSession).toContain('No background tasks')
 
   const withoutSession = renderToStaticMarkup(
     <TasksDialog hasActiveSession={false} onClose={noop} open={true} snapshot={null} />,
@@ -88,7 +88,68 @@ test('renders active and completed task rows with their labels and kind badge', 
   expect(html).toContain('1 completed')
 })
 
-test('a blocked local_agent row names the assistant as the one who owes the answer', () => {
+test('excludes delegated agents from task rows and both task counts', () => {
+  const snapshot: TasksSnapshot = {
+    items: [
+      item({ id: 'b1', status: 'running', label: 'bun test app/' }),
+      item({ id: 'a1', type: 'local_agent', status: 'running', label: 'Inspect the retry helper' }),
+      item({ id: 'a2', type: 'local_agent', status: 'completed', label: 'Review the settings panel' }),
+    ],
+  }
+  const html = renderToStaticMarkup(
+    <TasksDialog
+      agentMode={agentModeSnapshotFixture({
+        workers: [
+          workerFixture(),
+          workerFixture({ agentId: 'agent_b', handle: '@probe' }),
+        ],
+      })}
+      hasActiveSession={true}
+      onClose={noop}
+      open={true}
+      snapshot={snapshot}
+    />,
+  )
+  const chip = (label: string) =>
+    html.match(new RegExp(`${label}<span[^>]*>(\\d+)</span>`))?.[1]
+  expect(html).toContain('1 active')
+  expect(html).toContain('0 completed')
+  expect(chip('Tasks')).toBe('1')
+  expect(chip('Workers')).toBe('2')
+  expect(html).not.toContain('Inspect the retry helper')
+  expect(html).not.toContain('Review the settings panel')
+})
+
+test('an agents-only session points the empty Tasks tab at Workers', () => {
+  const html = renderToStaticMarkup(
+    <TasksDialog
+      agentMode={agentModeSnapshotFixture({
+        workers: [
+          workerFixture(),
+          workerFixture({ agentId: 'agent_b', handle: '@probe' }),
+          workerFixture({ agentId: 'agent_c', handle: '@reviewer' }),
+        ],
+      })}
+      hasActiveSession={true}
+      onClose={noop}
+      open={true}
+      snapshot={{
+        items: [
+          item({ id: 'a1', type: 'local_agent', label: 'Inspect the retry helper' }),
+          item({ id: 'a2', type: 'local_agent', label: 'Review the settings panel' }),
+          item({ id: 'a3', type: 'local_agent', label: 'Check the failing test' }),
+        ],
+      }}
+    />,
+  )
+  expect(html).toContain('0 active')
+  expect(html).toContain('0 completed')
+  expect(html).toContain('No background tasks')
+  expect(html).toContain('3 workers are running, in Workers')
+  expect(html).not.toContain('Run a background')
+})
+
+test('a blocked local_agent is omitted from Tasks because Workers owns delegated agents', () => {
   const snapshot: TasksSnapshot = {
     items: [
       item({
@@ -103,10 +164,8 @@ test('a blocked local_agent row names the assistant as the one who owes the answ
   const html = renderToStaticMarkup(
     <TasksDialog hasActiveSession={true} onClose={noop} open={true} snapshot={snapshot} />,
   )
-  expect(html).toContain('Fix the flaky test')
-  // Was 'Needs you' on every ordinary session: this row has no orchestrator axis
-  // at all, so it escalated unconditionally.
-  expect(html).toContain('Waiting on the assistant')
+  expect(html).not.toContain('Fix the flaky test')
+  expect(html).not.toContain('Waiting on the assistant')
   expect(html).not.toContain('Needs you')
 })
 
@@ -273,6 +332,26 @@ test('the Workers panel counts a blocked worker as the assistant’s, never as y
   )
   expect(html).toContain('1 on the assistant')
   expect(html).not.toContain('needs you')
+})
+
+test('the Workers panel distinguishes stopped and failed ownership', () => {
+  const html = renderToStaticMarkup(
+    <WorkerRosterPanel
+      onSelect={noop}
+      workers={[
+        workerFixture({ agentId: 'stopped', status: 'killed', description: 'Stopped work' }),
+        workerFixture({ agentId: 'failed', status: 'failed', description: 'Failed work' }),
+      ]}
+    />,
+  )
+  expect(html).toContain('1 on the assistant')
+  expect(html).toContain('1 done')
+  expect(html).toContain('status Stopped')
+  expect(html).toContain('status Failed')
+  expect(html).toContain('>Stopped<')
+  expect(html).toContain('>Failed<')
+  expect(html).not.toContain('status Attention')
+  expect(html).not.toContain('>Attention<')
 })
 
 test('the Workers panel empty state names the real cause', () => {

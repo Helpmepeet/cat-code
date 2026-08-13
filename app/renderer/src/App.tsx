@@ -4660,6 +4660,7 @@ export function SessionPane({
         onDeny={denyPermission}
         onRestore={restorePermission}
         onSnooze={snoozePermission}
+        workers={orchestratorWorkers}
       />
 
       {showLogError ? (

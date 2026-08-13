@@ -931,12 +931,7 @@ test('legacy <task-notification> transcripts (no origin field) do not regress', 
   expect(JSON.stringify(rows[0])).not.toContain('<task-notification>')
 })
 
-/* ── background-agent finish folds into its card (leak fix, 2026-08-01) ──────
- * The prototype's disposition (`~/catcode_prototype/cat-app/data.js:153-165`):
- * the notification is joined to the named spawn card on the task id and the
- * duplicate row is dropped, because upstream it is a `role:'user'` message and
- * "rendering it as a human turn would misread the conversation".
- */
+/* ── background-agent finish stays in transcript order ───────────────────── */
 function stateWithBackgroundAgent(origin: unknown) {
   let state = createTranscriptState()
   state = projectServerFrame(state, ready('session-1'))
@@ -999,21 +994,19 @@ const ADA_ORIGIN = {
   usage: { totalTokens: 12400, toolUses: 3, durationMs: 48000 },
 }
 
-test('a background agent’s finish rides its own card, and the banner row disappears', () => {
+test('a background agent finish stays a later notification row and leaves its launch card unchanged', () => {
   const rows = selectTranscriptRows(stateWithBackgroundAgent(ADA_ORIGIN), 'session-1')
 
-  // One finished agent reads as ONE row, not a card plus a banner.
-  expect(rows.filter(row => row.kind === 'task-notification')).toHaveLength(0)
-  expect(rows).toHaveLength(1)
+  expect(rows).toHaveLength(2)
   expect(rows[0]).toMatchObject({
     kind: 'tool-use',
     toolUseId: 'toolu_agent_1',
-    agentCompletion: {
-      status: 'completed',
-      summary: 'Agent @Ada completed',
-      result: 'Sidebar lives in app/renderer/src/Sidebar.tsx',
-      usage: { totalTokens: 12400, toolUses: 3, durationMs: 48000 },
-    },
+    agentCompletion: null,
+  })
+  expect(rows[1]).toMatchObject({
+    kind: 'task-notification',
+    status: 'completed',
+    summary: 'Agent @Ada completed',
   })
 
   // The leak, pinned shut: not one of the banner's internals survives into
@@ -1030,17 +1023,18 @@ test('a background agent’s finish rides its own card, and the banner row disap
   }
 })
 
-test('the completion reaches the agent card through the nested selector too', () => {
+test('the nested selector preserves the launch card followed by its completion row', () => {
   const nested = selectNestedTranscriptRows(
     stateWithBackgroundAgent(ADA_ORIGIN),
     'session-1',
   )
-  expect(nested).toHaveLength(1)
+  expect(nested).toHaveLength(2)
   expect(nested[0]).toMatchObject({
     kind: 'tool-use',
     toolFamily: 'agent',
-    agentCompletion: { summary: 'Agent @Ada completed' },
+    agentCompletion: null,
   })
+  expect(nested[1]).toMatchObject({ kind: 'task-notification' })
 })
 
 test('a completion whose card never arrived stays a visible row, never vanishes', () => {
@@ -1063,7 +1057,7 @@ test('a completion whose card never arrived stays a visible row, never vanishes'
   })
 })
 
-test('a background SHELL finish keeps its own row — only agent cards absorb one', () => {
+test('a background SHELL finish keeps its own row', () => {
   // `LocalShellTask.tsx:165` notifies with the Bash `toolUseId`. A Bash card has
   // no completion renderer, so folding one in would delete the notice outright.
   let state = createTranscriptState()
@@ -1107,7 +1101,7 @@ test('a background SHELL finish keeps its own row — only agent cards absorb on
   })
 })
 
-test('a partial or malformed usage object reads as no usage, never a holed stat line', () => {
+test('a partial or malformed completion usage never leaks into the notification row', () => {
   for (const usage of [
     { totalTokens: 10, toolUses: 2 },
     { totalTokens: 'lots', toolUses: 2, durationMs: 5 },
@@ -1119,7 +1113,11 @@ test('a partial or malformed usage object reads as no usage, never a holed stat 
       stateWithBackgroundAgent({ ...ADA_ORIGIN, usage }),
       'session-1',
     )
-    expect(rows[0]).toMatchObject({ agentCompletion: { usage: null } })
+    expect(rows[0]).toMatchObject({ agentCompletion: null })
+    expect(rows[1]).toMatchObject({
+      kind: 'task-notification',
+      summary: 'Agent @Ada completed',
+    })
   }
 })
 
@@ -2575,6 +2573,185 @@ test('an Agent tool_use_result carries the worker name onto the row, @-stripped'
   const row = selectTranscriptRows(state, 'session-1')[0]
   if (row?.kind !== 'tool-use') throw new Error('expected tool-use row')
   expect(row.result?.agentName).toBe('Ada')
+  expect(row.result?.agentId).toBe('agent-1')
+})
+
+test('ResumeAgent projects as an independent agent card joined to the original identity and its own completion', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_original_agent',
+        role: 'assistant',
+        content: [{
+          type: 'tool_use',
+          id: 'toolu_original_agent',
+          name: 'Agent',
+          input: { subagent_type: 'Explore', description: 'Summarize the release notes' },
+        }],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000000d1001',
+    }),
+  )
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'toolu_original_agent',
+          content: 'done',
+          is_error: false,
+        }],
+      },
+      parent_tool_use_id: null,
+      tool_use_result: {
+        agentId: 'agent-1',
+        agentName: 'Rue',
+        totalTokens: 22400,
+        totalToolUseCount: 9,
+      },
+      uuid: '00000000-0000-4000-8000-0000000d1002',
+    }),
+  )
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_resume_agent',
+        role: 'assistant',
+        content: [{
+          type: 'tool_use',
+          id: 'toolu_resume_agent',
+          name: 'ResumeAgent',
+          input: {
+            agentId: 'agent-1',
+            prompt: 'Add the migration guide for the config rename',
+          },
+        }],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000000d1003',
+    }),
+  )
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'toolu_resume_agent',
+          content: '{"success":true,"message":"resumed"}',
+          is_error: false,
+        }],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000000d1004',
+    }),
+  )
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'text', text: 'Task notification' }] },
+      parent_tool_use_id: null,
+      origin: {
+        kind: 'task-notification',
+        status: 'completed',
+        summary: 'Agent @Rue completed',
+        toolUseId: 'toolu_resume_agent',
+        result: 'The migration guide now covers the rename.',
+        usage: { totalTokens: 9500, toolUses: 5, durationMs: 52000 },
+      },
+      uuid: '00000000-0000-4000-8000-0000000d1005',
+    }),
+  )
+
+  const rows = selectTranscriptRows(state, 'session-1')
+  expect(rows).toHaveLength(2)
+  expect(rows[0]).toMatchObject({
+    toolUseId: 'toolu_original_agent',
+    result: { agentId: 'agent-1', agentName: 'Rue' },
+    agentCompletion: null,
+  })
+  expect(rows[1]).toMatchObject({
+    toolUseId: 'toolu_resume_agent',
+    toolFamily: 'agent',
+    input: { prompt: 'Add the migration guide for the config rename' },
+    result: { agentId: 'agent-1', agentName: 'Rue' },
+    agentCompletion: {
+      result: 'The migration guide now covers the rename.',
+      usage: { totalTokens: 9500, toolUses: 5, durationMs: 52000 },
+    },
+  })
+})
+
+test('TaskOutput narrows a local agent clean answer from its structured retrieval result', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_task_output',
+        role: 'assistant',
+        content: [{
+          type: 'tool_use',
+          id: 'toolu_task_output',
+          name: 'TaskOutput',
+          input: { task_id: 'task-1', block: true },
+        }],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000000d2001',
+    }),
+  )
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'toolu_task_output',
+          content: '<retrieval_status>success</retrieval_status>',
+          is_error: false,
+        }],
+      },
+      parent_tool_use_id: null,
+      tool_use_result: {
+        retrieval_status: 'success',
+        task: {
+          task_id: 'task-1',
+          task_type: 'local_agent',
+          status: 'completed',
+          description: 'Find every caller of the retry helper',
+          output: 'raw fallback',
+          result: 'Four callers in the request layer.',
+        },
+      },
+      uuid: '00000000-0000-4000-8000-0000000d2002',
+    }),
+  )
+
+  const row = selectTranscriptRows(state, 'session-1')[0]
+  if (row?.kind !== 'tool-use') throw new Error('expected tool-use row')
+  expect(row.result?.taskOutput).toEqual({
+    taskId: 'task-1',
+    description: 'Find every caller of the retry helper',
+    output: 'Four callers in the request layer.',
+  })
 })
 
 test('a non-Agent tool_use_result leaves agentName absent, never an empty string', () => {

@@ -166,8 +166,9 @@ together.
 
 - [ ] **C15 · P4-34 Lane 2 worker-relay permission chrome.** Compare an ordinary
   permission request with one carrying a real engine `agent_id`. Only the latter
-  shows the `worker` badge and “Relayed from worker <id>”; allow/deny still
-  answers the same engine-minted request.
+  shows the `worker` badge and names the engine-sourced worker and role. An
+  unnamed or unmatched worker shows the role only, never the raw id. Allow/deny
+  still answers the same engine-minted request.
   Source: `PermissionPrompt.tsx:81-104`.
 
 ### Command palette

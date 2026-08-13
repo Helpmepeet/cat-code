@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import type { AgentModeWorkerItem } from '../../shared/protocol.js'
+import { agentTypeMeta, resolveAgentIdentity } from './agentIdentity.js'
 import type { PermissionRequest } from './permissionState.js'
 import {
   buildPermissionOptions,
@@ -85,6 +87,7 @@ function isEditableElement(element: Element | null): boolean {
  */
 export function PermissionPrompt({
   request,
+  workers = [],
   submitted,
   denyOnly,
   keyboardTarget,
@@ -94,6 +97,8 @@ export function PermissionPrompt({
   onSnooze,
 }: {
   request: PermissionRequest
+  /** Engine-sourced worker snapshot used only to label a relayed request. */
+  workers?: readonly AgentModeWorkerItem[]
   /** True while an answer for this card is in flight. */
   submitted?: boolean
   /** Hide every allow path: this request can only be answered by denying it. */
@@ -126,6 +131,15 @@ export function PermissionPrompt({
   const engineTitle = request.request.title || undefined
   const workerId = request.request.agent_id || undefined
   const relayed = workerId !== undefined
+  const relayingWorker = relayed
+    ? workers.find(worker => worker.agentId === workerId)
+    : undefined
+  const workerHandle = relayingWorker
+    ? resolveAgentIdentity({ handle: relayingWorker.handle }).handle
+    : null
+  const workerRole =
+    agentTypeMeta(relayingWorker?.role)?.label.toLowerCase() ??
+    'coding worker'
   // Memoised because this card re-renders on every App render (once per
   // streamed frame during a turn) as well as on hover and every disclosure
   // toggle, and an `Edit` preview runs `diffLines` over the whole change.
@@ -367,9 +381,13 @@ export function PermissionPrompt({
 
       {relayed ? (
         <p className="mt-1 text-[11px] text-text-subtle">
-          Relayed from worker{' '}
-          <span className="font-mono text-violet-300">{workerId}</span>. You
-          decide.
+          Relayed from{' '}
+          {workerHandle ? (
+            <>
+              <span className="font-mono text-violet-300">{workerHandle}</span>,{' '}
+            </>
+          ) : null}
+          a {workerRole}. You decide.
         </p>
       ) : null}
       {request.request.decision_reason ? (

@@ -197,8 +197,8 @@ test('compresses durable Agent Mode worker sessions using workerUxSummary semant
       synthesisStatus: 'pending',
     }),
   ).toBe('result-ready')
-  expect(deriveAgentModeWorkerState({ ...base, status: 'failed' })).toBe('attention')
-  expect(deriveAgentModeWorkerState({ ...base, status: 'killed' })).toBe('attention')
+  expect(deriveAgentModeWorkerState({ ...base, status: 'failed' })).toBe('failed')
+  expect(deriveAgentModeWorkerState({ ...base, status: 'killed' })).toBe('stopped')
 })
 
 test('maps a blocked local_agent task to waiting-on-the-assistant, never to needs-you', () => {

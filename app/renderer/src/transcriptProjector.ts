@@ -109,12 +109,11 @@ export type ToolUseRow = RowSource & {
   status: ToolCardStatus
   result: ToolResultProjection | null
   /**
-   * A BACKGROUND agent's finish, joined in at read time from
-   * `agentCompletionsByToolUseId`. Null for every foreground tool: their answer
-   * is the correlated `tool_result` in `result`. A background agent's
-   * `tool_result` only says it started, so its real outcome arrives later on a
-   * separate task-notification turn — this is where that outcome lands, which
-   * is what lets the notification stop being a transcript row of its own.
+   * A RESUMED agent's finish, joined in at read time from
+   * `agentCompletionsByToolUseId`. The ResumeAgent invocation is the resumed
+   * worker's independent second card, so its later task-notification supplies
+   * that card's result. Null for an original background launch: its card is a
+   * past-tense launch record and its completion remains a later transcript row.
    */
   agentCompletion: AgentCompletionProjection | null
 }
@@ -148,12 +147,10 @@ export type ToolFamily =
   | 'skill'
   | 'agent'
   /**
-   * Tools that act on an agent that ALREADY exists (resume, message) as opposed
-   * to spawning one. Deliberately NOT `'agent'`: `ToolCard` routes that family
-   * to `AgentToolCard`, whose body reads spawn-shaped input
-   * (`subagent_type`/`description`), which these tools do not carry. Keep the
-   * dispatch there an exact equality test so this family keeps falling through
-   * to the generic card.
+   * Tools that act on an agent that ALREADY exists as opposed to spawning one.
+   * ResumeAgent is the exception: it is projected as `agent`
+   * because the resumed run owns a second independent agent card. SendMessage
+   * remains an agent-control acknowledgement.
    */
   | 'agent-control'
   | 'imagegen'
@@ -208,19 +205,35 @@ export type ToolResultProjection = {
    */
   agentName?: string
   /**
+   * Stable identity from the Agent tool's structured result
+   * (`AgentToolResult.agentId`). ResumeAgent input carries the same value, so
+   * the renderer can give the resumed run the original worker identity without
+   * changing the wire contract or mutating the original card.
+   */
+  agentId?: string
+  /**
    * The finished Agent tool's own totals, from that same structured result
    * (`totalTokens` / `totalToolUseCount`, `agentToolUtils.ts:734-735`).
    *
-   * This is the only usage a FOREGROUND worker ever reports: `agentCompletion`
-   * is minted from a task-notification turn, which only a backgrounded worker
-   * produces. Counting its nested rows instead works live but not after a
-   * restore that landed outside the replayed window, and never yields tokens
-   * at all.
+   * This is the only usage a foreground worker reports. A resumed run gets its
+   * own totals from its later task-notification completion instead. Counting
+   * nested rows works live but not after a restore that landed outside the
+   * replayed window, and never yields tokens at all.
    *
    * All-or-nothing, matching `AgentCompletionProjection['usage']`: a partial
    * object would render a stat line with holes in it.
    */
   agentUsage?: { totalTokens: number; toolUses: number }
+  /**
+   * Structured TaskOutput retrieval for a local agent. The display consumes the
+   * clean `task.result` when present, falling back to `task.output`; it never
+   * parses the model-facing XML/text payload.
+   */
+  taskOutput?: {
+    taskId: string
+    description: string
+    output: string
+  }
 }
 
 /**
@@ -323,13 +336,9 @@ export type TaskNotificationRow = RowSource & {
    */
   summary: string | null
   /**
-   * The spawning `tool_use` id, when the engine sent one. A row that HAS one
-   * and finds its agent card is suppressed at read time in favour of that card
-   * (`selectTranscriptRows`), which is the prototype's disposition:
-   * `data.js:153-165` merges the notification into the named agent card and
-   * drops the duplicate row. Null (or unmatched) keeps the row visible, so a
-   * completion whose card never arrived degrades to a one-liner, never to
-   * nothing.
+   * The related `tool_use` id, when the engine sent one. Ordinary background
+   * launches keep this row visible in arrival order. A ResumeAgent completion
+   * uses the id to populate that resumed run's independent card.
    */
   toolUseId: string | null
   timestamp?: string
@@ -434,16 +443,7 @@ type TranscriptSessionState = {
     string,
     { mediaType: 'image/jpeg' | 'image/png' | 'image/webp'; data: string }
   >
-  /**
-   * Correlation map for background-agent finishes: the spawning `tool_use_id`
-   * → the completion carried by that agent's task-notification turn. Same
-   * shape and same discipline as `toolResultsByUseId` above — the outcome is
-   * joined onto the agent's card at read time, never written into a stored row.
-   *
-   * Its presence is also what suppresses the standalone notification row, so
-   * one finished agent reads as one card rather than a card plus a banner
-   * (prototype disposition, `~/catcode_prototype/cat-app/data.js:153-165`).
-   */
+  /** Completion facts keyed by the engine-minted tool-use id. */
   agentCompletionsByToolUseId: Record<string, AgentCompletionProjection>
   /**
    * P3-7 slash catalog: the user-invocable command names carried by the
@@ -543,10 +543,7 @@ export function selectTranscriptRows(
   const session = state.sessions[sessionId]
   if (!session) return []
   const completions = session.agentCompletionsByToolUseId
-  // P4-36 runs FIRST: the hidden tier decides which rows exist in this view at
-  // all, and every transform below (the agent-card set, the completion fold) is
-  // defined over the rows actually on screen. Filtering after the fold would let
-  // a card that is not in this view absorb a notification into nothing.
+  // P4-36 runs FIRST: the hidden tier decides which rows exist in this view.
   const hidden = session.hiddenFrameIds
   const visible =
     Object.keys(hidden).length === 0
@@ -554,44 +551,54 @@ export function selectTranscriptRows(
       : revealHidden
         ? session.rows.map(row => (hidden[row.frameId] ? markHidden(row) : row))
         : session.rows.filter(row => !hidden[row.frameId])
-  /**
-   * The AGENT cards actually on screen — the only rows that can absorb a
-   * completion, because `AgentToolCard` is the only card that renders one.
-   *
-   * Two traps this set closes. It must be built from the rows, not from
-   * `agentCompletionsByToolUseId`: a notification always files itself into that
-   * map, so keying off it would make every notification suppress itself and a
-   * completion whose card never arrived would vanish. And it must be filtered
-   * to `agent`: background SHELL tasks notify with a `toolUseId` too
-   * (`src/tasks/LocalShellTask/LocalShellTask.tsx:165`), which names a Bash
-   * card that has no completion renderer, so an unfiltered set would suppress a
-   * finished background command into nothing.
-   */
-  const agentToolUseIds = new Set<string>()
+  const resumedToolUseIds = new Set<string>()
+  const agentIdentityById = new Map<
+    string,
+    { agentName?: string; agentUsage?: { totalTokens: number; toolUses: number } }
+  >()
   for (const row of visible) {
-    if (row.kind === 'tool-use' && row.toolFamily === 'agent') {
-      agentToolUseIds.add(row.toolUseId)
+    if (row.kind !== 'tool-use') continue
+    if (row.toolName === 'ResumeAgent') resumedToolUseIds.add(row.toolUseId)
+    const result = session.toolResultsByUseId[row.toolUseId]
+    if (result?.agentId) {
+      agentIdentityById.set(result.agentId, {
+        ...(result.agentName === undefined ? {} : { agentName: result.agentName }),
+        ...(result.agentUsage === undefined ? {} : { agentUsage: result.agentUsage }),
+      })
     }
   }
   const projected = visible.flatMap((row): TranscriptRow[] => {
-    // A notification whose agent card is on screen is folded INTO that card
-    // (below) and drops out here, so one finished agent is one row. Without a
-    // join key, or before its card arrives, it stays as its own one-liner —
-    // degraded placement, never data loss.
     if (row.kind === 'task-notification') {
-      const merged = row.toolUseId !== null && agentToolUseIds.has(row.toolUseId)
+      // A resumed run owns an independent card, including its result. Ordinary
+      // background launches remain immutable launch records and their finish
+      // stays here in arrival order.
+      const merged = row.toolUseId !== null && resumedToolUseIds.has(row.toolUseId)
       return merged ? [] : [row]
     }
     if (row.kind !== 'tool-use') return [row]
-    const result = session.toolResultsByUseId[row.toolUseId] ?? null
+    const storedResult = session.toolResultsByUseId[row.toolUseId] ?? null
+    const resumedAgentId =
+      row.toolName === 'ResumeAgent' && typeof row.input.agentId === 'string'
+        ? row.input.agentId
+        : null
+    const resumedIdentity =
+      resumedAgentId === null ? undefined : agentIdentityById.get(resumedAgentId)
+    const result: ToolResultProjection | null =
+      storedResult === null ||
+      resumedIdentity === undefined ||
+      resumedAgentId === null
+        ? storedResult
+        : {
+            ...storedResult,
+            ...resumedIdentity,
+            agentId: resumedAgentId,
+          }
     const status: ToolCardStatus = result
       ? result.isError
         ? 'error'
         : 'success'
       : 'pending'
-    // Only an agent card carries one, matching the suppression above: the two
-    // must agree, or a completion is both hidden and unrendered.
-    const agentCompletion = agentToolUseIds.has(row.toolUseId)
+    const agentCompletion = resumedToolUseIds.has(row.toolUseId)
       ? (completions[row.toolUseId] ?? null)
       : null
     if (
@@ -787,7 +794,12 @@ function agentDelegateGroupKey(row: NestedToolUseRow): string {
 }
 
 function isAgentToolUseRow(row: NestedTranscriptRow): row is NestedToolUseRow {
-  return row.kind === 'tool-use' && row.toolFamily === 'agent'
+  return (
+    row.kind === 'tool-use' &&
+    row.toolFamily === 'agent' &&
+    row.toolName !== 'ResumeAgent' &&
+    row.input.run_in_background !== true
+  )
 }
 
 const displayItemsCache = new WeakMap<
@@ -1221,12 +1233,11 @@ function projectUserFrame(
 }
 
 /**
- * File a background agent's finish under the `tool_use_id` that spawned it, so
- * `selectTranscriptRows` can fold it into that agent's card. Only a
- * task-notification carrying a join key writes here; everything else passes
- * through untouched, and a duplicate id is overwritten by the later turn (the
- * engine notifies once per task, guarded by the `notified` flag at
- * `src/tasks/LocalAgentTask/LocalAgentTask.tsx:307`).
+ * Retain structured completion facts by `tool_use_id`. Original background
+ * launch cards do not consume them; ResumeAgent uses them to populate the
+ * resumed run's independent result card. A duplicate id is overwritten by the
+ * later turn (the engine notifies once per task, guarded by the `notified` flag
+ * at `src/tasks/LocalAgentTask/LocalAgentTask.tsx:307`).
  */
 function recordAgentCompletion(
   state: TranscriptSessionState,
@@ -1508,14 +1519,18 @@ function projectToolResultBlock(
   toolUseResult: unknown,
 ): ToolResultProjection {
   const agentName = extractAgentName(toolUseResult)
+  const agentId = extractAgentId(toolUseResult)
   const agentUsage = extractAgentUsage(toolUseResult)
+  const taskOutput = extractTaskOutput(toolUseResult)
   return {
     isError: block.is_error === true,
     content: flattenToolResultContent(block.content),
     diff: extractDiffProjection(toolUseResult),
     ...extractGeneratedImageProjection(toolUseResult),
     ...(agentName !== null ? { agentName } : {}),
+    ...(agentId !== null ? { agentId } : {}),
     ...(agentUsage !== null ? { agentUsage } : {}),
+    ...(taskOutput !== null ? { taskOutput } : {}),
   }
 }
 
@@ -1584,6 +1599,26 @@ function extractAgentUsage(
 function extractAgentName(toolUseResult: unknown): string | null {
   if (!isRecord(toolUseResult)) return null
   return normalizeAgentName(toolUseResult.agentName)
+}
+
+function extractAgentId(toolUseResult: unknown): string | null {
+  if (!isRecord(toolUseResult)) return null
+  return nonEmptyString(toolUseResult.agentId)
+}
+
+function extractTaskOutput(
+  toolUseResult: unknown,
+): ToolResultProjection['taskOutput'] | null {
+  if (!isRecord(toolUseResult) || toolUseResult.retrieval_status !== 'success') {
+    return null
+  }
+  const task = toolUseResult.task
+  if (!isRecord(task) || task.task_type !== 'local_agent') return null
+  const taskId = nonEmptyString(task.task_id)
+  const description = nonEmptyString(task.description)
+  const output = nonEmptyString(task.result) ?? nonEmptyString(task.output)
+  if (taskId === null || description === null || output === null) return null
+  return { taskId, description, output }
 }
 
 /** Canonical display form for names from both live frames and result objects. */
@@ -1723,10 +1758,9 @@ function deriveToolFamily(toolName: string): ToolFamily {
       return 'skill'
     case 'Agent':
     case 'Task':
-      return 'agent'
-    // `RESUME_AGENT_TOOL_NAME` (`src/tools/ResumeAgentTool/constants.ts:1`) and
-    // `SEND_MESSAGE_TOOL_NAME` (`src/tools/SendMessageTool/constants.ts:1`).
     case 'ResumeAgent':
+      return 'agent'
+    // `SEND_MESSAGE_TOOL_NAME` (`src/tools/SendMessageTool/constants.ts:1`).
     case 'SendMessage':
       return 'agent-control'
     case 'GenerateImage':

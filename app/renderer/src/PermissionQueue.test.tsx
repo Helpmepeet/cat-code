@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
+import type { AgentModeWorkerItem } from '../../shared/protocol.js'
 import { PermissionQueue } from './PermissionQueue.js'
 import type { PermissionQueueItem, PermissionRequest } from './permissionState.js'
 
@@ -41,6 +42,14 @@ const MALFORMED_ASK: PermissionRequest = {
 const ALLOW_ROW = '>Yes<'
 const REFUSE_ROW = 'No, and tell Cat Code what to do differently'
 
+const WORKER: AgentModeWorkerItem = {
+  agentId: 'worker-42',
+  handle: 'Vale',
+  role: 'coding-worker',
+  status: 'running',
+  description: 'Check the failing test',
+}
+
 test('an ordinary request keeps both rows', () => {
   const html = renderToStaticMarkup(
     <PermissionQueue
@@ -52,6 +61,27 @@ test('an ordinary request keeps both rows', () => {
   )
   expect(html).toContain(ALLOW_ROW)
   expect(html).toContain(REFUSE_ROW)
+})
+
+test('threads the engine worker snapshot to a relayed card', () => {
+  const html = renderToStaticMarkup(
+    <PermissionQueue
+      items={[
+        queueItem({
+          ...BASH,
+          request: { ...BASH.request, agent_id: 'worker-42' },
+        }),
+      ]}
+      onAllow={() => {}}
+      onDeny={() => {}}
+      onRestore={() => {}}
+      workers={[WORKER]}
+    />,
+  )
+
+  expect(html).toContain('@Vale')
+  expect(html).toContain('a coding worker. You decide.')
+  expect(html).not.toContain('worker-42')
 })
 
 test('an unreadable AskUserQuestion card cannot be allowed by mouse either', () => {
