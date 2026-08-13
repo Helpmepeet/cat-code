@@ -3,7 +3,10 @@ import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import type { LogOption } from '../types/logs.js'
 import type { AssistantMessage, Message, UserMessage } from '../types/message.js'
-import { loadConversationForResume } from './conversationRecovery.js'
+import {
+  adoptInterruptedTurnForResume,
+  loadConversationForResume,
+} from './conversationRecovery.js'
 import {
   captureInterruptedTurn,
   getInterruptedTurnDir,
@@ -169,6 +172,67 @@ describe('structured interrupted-turn continuation', () => {
     })
   })
 
+  test('keeps the record when a loaded resume is rejected before adoption', async () => {
+    await withStore(async () => {
+      const sessionId = randomUUID()
+      const { log, assistantMessages, messages } =
+        interruptedTurnTranscript(sessionId)
+      captureInterruptedTurn({
+        sessionId,
+        messages,
+        assistantMessages,
+        reason: 'user_abort',
+      })
+
+      const rejected = await loadConversationForResume(log, undefined, {
+        interruptedTurn: 'defer',
+      })
+      expect(rejected?.interruptedTurn?.status).toBe('apply')
+
+      const accepted = await loadConversationForResume(
+        logOptionFor(sessionId, messages),
+        undefined,
+        { interruptedTurn: 'defer' },
+      )
+      expect(accepted?.interruptedTurn?.status).toBe('apply')
+      await adoptInterruptedTurnForResume(accepted!)
+
+      const spent = await loadConversationForResume(
+        logOptionFor(sessionId, messages),
+        undefined,
+      )
+      expect(spent?.interruptedTurn).toBeNull()
+    })
+  })
+
+  test('does not apply or consume the source record when forking', async () => {
+    await withStore(async () => {
+      const sessionId = randomUUID()
+      const { log, assistantMessages, messages } =
+        interruptedTurnTranscript(sessionId)
+      captureInterruptedTurn({
+        sessionId,
+        messages,
+        assistantMessages,
+        reason: 'user_abort',
+      })
+
+      const forked = await loadConversationForResume(log, undefined, {
+        interruptedTurn: 'ignore',
+      })
+      expect(forked?.interruptedTurn).toBeNull()
+      expect(continuationText(forked!.turnInterruptionState)).not.toContain(
+        PARTIAL_TEXT,
+      )
+
+      const source = await loadConversationForResume(
+        logOptionFor(sessionId, messages),
+        undefined,
+      )
+      expect(source?.interruptedTurn?.status).toBe('apply')
+    })
+  })
+
   // The ordinary abort path does emit the tool_result, so the assistant survives
   // the filters. Today that transcript resumes by re-sending the literal
   // interruption marker as the next prompt; the record replaces it.
@@ -303,6 +367,25 @@ describe('structured interrupted-turn continuation', () => {
       expect(Buffer.byteLength(record!.partialOutput, 'utf8')).toBeLessThanOrEqual(
         MAX_PARTIAL_OUTPUT_BYTES,
       )
+    })
+  })
+
+  test('preserves leading indentation and trailing whitespace exactly', async () => {
+    await withStore(async () => {
+      const sessionId = randomUUID()
+      const exact = '  if (ready) {\n    run()\n  }\n\n'
+      const assistant = createAssistantMessage({
+        content: exact,
+      }) as AssistantMessage
+      const interruption = createUserInterruptionMessage({ toolUse: false })
+      const record = captureInterruptedTurn({
+        sessionId,
+        messages: [assistant, interruption],
+        assistantMessages: [assistant],
+        reason: 'aborted',
+      })
+
+      expect(record?.partialOutput).toBe(exact)
     })
   })
 

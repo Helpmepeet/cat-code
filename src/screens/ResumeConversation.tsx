@@ -24,7 +24,7 @@ import type { Message } from '../types/message.js';
 import { agenticSessionSearch } from '../utils/agenticSessionSearch.js';
 import { renameRecordingForSession } from '../utils/asciicast.js';
 import { updateSessionName } from '../utils/concurrentSessions.js';
-import { loadConversationForResume } from '../utils/conversationRecovery.js';
+import { adoptInterruptedTurnForResume, loadConversationForResume } from '../utils/conversationRecovery.js';
 import { checkCrossProjectResume } from '../utils/crossProjectResume.js';
 import type { FileHistorySnapshot } from '../utils/fileHistory.js';
 import { logError } from '../utils/log.js';
@@ -196,7 +196,9 @@ export function ResumeConversation({
       }
     }
     try {
-      const result_3 = await loadConversationForResume(log_0, undefined);
+      const result_3 = await loadConversationForResume(log_0, undefined, {
+        interruptedTurn: forkSession ? 'ignore' : 'defer'
+      });
       if (!result_3) {
         throw new Error('Failed to load conversation');
       }
@@ -286,6 +288,7 @@ export function ResumeConversation({
         } else {
           adopt();
         }
+        await adoptInterruptedTurnForResume(result_3);
       }
       if (feature('CONTEXT_COLLAPSE')) {
         /* eslint-disable @typescript-eslint/no-require-imports */

@@ -253,6 +253,11 @@ function sonnet1mExpTreatmentEnabled(model: string, disabled: boolean): boolean 
 export const LONG_CONTEXT_ENTITLEMENT_WINDOW = MODEL_CONTEXT_WINDOW_DEFAULT
 
 let longContextEntitlementRefused = false
+let longContextEntitlementAccountUuid: string | undefined
+
+function getActiveClaudeAccountUuid(): string | undefined {
+  return getGlobalConfig().activeClaudeAccountUuid
+}
 
 /**
  * Record that the provider refused this request because the account is not
@@ -270,20 +275,29 @@ let longContextEntitlementRefused = false
  * why. A restart is the cheapest possible reset, and `/extra-usage` already
  * exists for the fix itself.
  *
- * Known limitation: switching accounts inside one process does not clear the
- * latch. Sharpening this needs an account identity this module can read without
- * an import cycle through auth.
+ * The active Claude account pointer is also the existing account-switch signal.
+ * Binding the refusal to that pointer avoids an import cycle through auth while
+ * ensuring a different account starts with its own entitlement budget.
  */
 export function noteLongContextEntitlementRefused(): void {
   longContextEntitlementRefused = true
+  longContextEntitlementAccountUuid = getActiveClaudeAccountUuid()
 }
 
 export function isLongContextEntitlementRefused(): boolean {
+  if (
+    longContextEntitlementRefused &&
+    longContextEntitlementAccountUuid !== getActiveClaudeAccountUuid()
+  ) {
+    longContextEntitlementRefused = false
+    longContextEntitlementAccountUuid = undefined
+  }
   return longContextEntitlementRefused
 }
 
 export function _resetLongContextEntitlementForTest(): void {
   longContextEntitlementRefused = false
+  longContextEntitlementAccountUuid = undefined
 }
 
 /**
@@ -309,7 +323,7 @@ export function applyLongContextEntitlementCap(
   resolved: NativeContextWindow,
 ): number {
   if (
-    !longContextEntitlementRefused ||
+    !isLongContextEntitlementRefused() ||
     resolved.source === 'max_context_tokens_override' ||
     !isLongContextEntitlementScoped(resolved.source) ||
     resolved.window <= LONG_CONTEXT_ENTITLEMENT_WINDOW

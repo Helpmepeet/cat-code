@@ -230,7 +230,7 @@ export function extractAssistantOutputText(
       if (block.type === 'text') parts.push(block.text)
     }
   }
-  return parts.join('').trim()
+  return parts.join('')
 }
 
 export type CaptureInterruptedTurnInput = {
@@ -259,7 +259,7 @@ export function captureInterruptedTurn(
   input: CaptureInterruptedTurnInput,
 ): InterruptedTurnRecordV1 | null {
   const partial = extractAssistantOutputText(input.assistantMessages)
-  if (!input.sessionId || partial.length === 0) return null
+  if (!input.sessionId || partial.trim().length === 0) return null
   const leafUuid = computeTranscriptLeafUuid(input.messages)
   if (!leafUuid) return null
 
@@ -301,13 +301,12 @@ export function captureInterruptedTurn(
 }
 
 /**
- * Read and consume the record for a session.
+ * Read the record for a session without consuming a valid record.
  *
- * Consuming is unconditional: whether the record applies or is discarded on a
- * leaf mismatch, it describes one interruption and must not be reconsidered by
- * the next resume of the same session.
+ * Invalid records are retired immediately because no adoption can ever apply
+ * them. Valid records remain available until the caller adopts the resume.
  */
-export async function takeInterruptedTurnRecord(
+export async function readInterruptedTurnRecord(
   sessionId: string | undefined,
 ): Promise<InterruptedTurnRecordV1 | null> {
   if (!sessionId) return null
@@ -328,7 +327,6 @@ export async function takeInterruptedTurnRecord(
   } catch {
     return null
   }
-  await unlink(path).catch(() => {})
   const parsed = interruptedTurnRecordSchema.safeParse(
     ((): unknown => {
       try {
@@ -338,7 +336,45 @@ export async function takeInterruptedTurnRecord(
       }
     })(),
   )
-  return parsed.success ? parsed.data : null
+  if (!parsed.success) {
+    await unlink(path).catch(() => {})
+    return null
+  }
+  return parsed.data
+}
+
+/**
+ * Retire the record read for an adopted resume.
+ *
+ * The identity check avoids deleting a newer interruption that replaced the
+ * record while the conversation was being loaded.
+ */
+export async function consumeInterruptedTurnRecord(
+  sessionId: string | undefined,
+  expected: InterruptedTurnRecordV1,
+): Promise<void> {
+  const current = await readInterruptedTurnRecord(sessionId)
+  if (!current || JSON.stringify(current) !== JSON.stringify(expected)) return
+  try {
+    await unlink(recordPath(current.sessionId))
+  } catch {
+    // Another process consumed or replaced it.
+  }
+}
+
+/**
+ * Read and consume the record for callers that adopt immediately.
+ *
+ * Consuming is unconditional: whether the record applies or is discarded on a
+ * leaf mismatch, it describes one interruption and must not be reconsidered by
+ * the next resume of the same session.
+ */
+export async function takeInterruptedTurnRecord(
+  sessionId: string | undefined,
+): Promise<InterruptedTurnRecordV1 | null> {
+  const record = await readInterruptedTurnRecord(sessionId)
+  if (record) await consumeInterruptedTurnRecord(sessionId, record)
+  return record
 }
 
 export type InterruptedTurnMatch =
@@ -410,10 +446,10 @@ export function formatInterruptedTurnContinuation(
 /**
  * Age-based sweep of the store.
  *
- * Records are consumed on read, so the only ones that accumulate belong to
- * sessions that were interrupted and never resumed. Cheap, bounded, and run
- * from the capture path rather than a timer, so a machine that never
- * interrupts a turn never pays for it.
+ * Records are consumed when a loaded conversation is adopted, so the only ones
+ * that accumulate belong to sessions that were interrupted and never resumed.
+ * Cheap, bounded, and run from the capture path rather than a timer, so a
+ * machine that never interrupts a turn never pays for it.
  */
 export async function pruneInterruptedTurnRecords(
   now: number = Date.now(),

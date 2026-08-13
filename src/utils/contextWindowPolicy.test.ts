@@ -24,6 +24,7 @@ import {
   isLongContextEntitlementRefused,
   noteLongContextEntitlementRefused,
 } from './context.js'
+import { saveGlobalConfig } from './config.js'
 import {
   formatContextWindowProvenance,
   MAX_OUTPUT_TOKENS_FOR_SUMMARY,
@@ -253,6 +254,22 @@ describe('long-context entitlement clamp', () => {
     expect(
       resolveContextWindowPolicy('gpt-5.6-luna').clamps.map(c => c.reason),
     ).toEqual(['output_reservation'])
+  })
+
+  test('a different active Claude account regains its full window', () => {
+    saveGlobalConfig(current => ({
+      ...current,
+      activeClaudeAccountUuid: 'account-a',
+    }))
+    noteLongContextEntitlementRefused()
+    expect(getContextWindowForModel('claude-sonnet-5')).toBe(200_000)
+
+    saveGlobalConfig(current => ({
+      ...current,
+      activeClaudeAccountUuid: 'account-b',
+    }))
+    expect(isLongContextEntitlementRefused()).toBe(false)
+    expect(getContextWindowForModel('claude-sonnet-5')).toBe(1_000_000)
   })
 
   test('models already at or below the cap are untouched', () => {

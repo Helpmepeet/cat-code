@@ -43,8 +43,10 @@ import {
   normalizeMessages,
 } from './messages.js'
 import {
+  consumeInterruptedTurnRecord,
   formatInterruptedTurnContinuation,
   matchInterruptedTurnRecord,
+  readInterruptedTurnRecord,
   takeInterruptedTurnRecord,
   type InterruptedTurnMatch,
   type InterruptedTurnRecordV1,
@@ -556,10 +558,12 @@ export async function loadMessagesFromJsonlPath(path: string): Promise<{
 export async function loadConversationForResume(
   source: string | LogOption | undefined,
   sourceJsonlFile: string | undefined,
+  options?: { interruptedTurn?: 'consume' | 'defer' | 'ignore' },
 ): Promise<{
   messages: Message[]
   turnInterruptionState: TurnInterruptionState
   interruptedTurn: InterruptedTurnMatch | null
+  interruptedTurnRecord?: InterruptedTurnRecordV1
   fileHistorySnapshots?: FileHistorySnapshot[]
   attributionSnapshots?: AttributionSnapshotMessage[]
   contentReplacements?: ContentReplacementRecord[]
@@ -662,11 +666,13 @@ export async function loadConversationForResume(
     // This ensures skills survive multiple compaction cycles after resume.
     restoreSkillStateFromMessages(messages!)
 
-    // Consume the durable interrupted-turn record for this session. Read here,
-    // matched inside the deserializer against the messages exactly as loaded.
-    // Consumption is unconditional: the record describes one interruption, so a
-    // leaf mismatch must retire it rather than leave it for the next resume.
-    const interruptedTurnRecord = await takeInterruptedTurnRecord(sessionId)
+    const interruptedTurnPolicy = options?.interruptedTurn ?? 'consume'
+    const interruptedTurnRecord =
+      interruptedTurnPolicy === 'ignore'
+        ? null
+        : interruptedTurnPolicy === 'defer'
+          ? await readInterruptedTurnRecord(sessionId)
+          : await takeInterruptedTurnRecord(sessionId)
 
     // Deserialize messages to handle unresolved tool uses and ensure proper format
     const deserialized = deserializeMessagesWithInterruptDetection(
@@ -685,6 +691,7 @@ export async function loadConversationForResume(
       messages,
       turnInterruptionState: deserialized.turnInterruptionState,
       interruptedTurn: deserialized.interruptedTurn,
+      interruptedTurnRecord: interruptedTurnRecord ?? undefined,
       fileHistorySnapshots: log?.fileHistorySnapshots,
       attributionSnapshots: log?.attributionSnapshots,
       contentReplacements: log?.contentReplacements,
@@ -710,4 +717,15 @@ export async function loadConversationForResume(
     logError(error as Error)
     throw error
   }
+}
+
+export async function adoptInterruptedTurnForResume(result: {
+  sessionId: UUID | undefined
+  interruptedTurnRecord?: InterruptedTurnRecordV1
+}): Promise<void> {
+  if (!result.interruptedTurnRecord) return
+  await consumeInterruptedTurnRecord(
+    result.sessionId,
+    result.interruptedTurnRecord,
+  )
 }
