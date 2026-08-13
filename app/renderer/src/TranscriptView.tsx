@@ -94,7 +94,13 @@ import {
   parseReadSource,
   readLineNumbers,
   readSourceLanguage,
+  sourceFence,
 } from './readSource.js'
+import {
+  highlightedLines,
+  highlightedWordSegments,
+  type HighlightedLine,
+} from './diffHighlight.js'
 import { basename, commonDirPrefix, dirname } from './pathUtils.js'
 import {
   createToolCardExpansionStore,
@@ -1207,6 +1213,10 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
   const ack = toolAckForResult(row.result)
   const bashTail =
     row.toolFamily === 'bash' && ack === null ? bashTailForResult(row.result) : []
+  const headerBadge =
+    row.toolFamily === 'edit' || row.toolFamily === 'write'
+      ? diffCountBadge(row)
+      : undefined
   return (
     <div className="w-full">
       <ToolCardShell
@@ -1214,6 +1224,7 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
         target={deriveTarget(row)}
         status={row.status}
         sub={deriveSub(row)}
+        headerBadge={headerBadge}
         expansionKey={row.toolUseId}
         defaultExpanded={
           toolsExpanded || row.status === 'error' || isImageDone
@@ -3533,20 +3544,35 @@ function countDiff(diff: ToolDiffProjection): { adds: number; dels: number } {
   return { adds, dels }
 }
 
+function diffCountBadge(row: ToolUseNestedRow): ReactNode {
+  const counts = row.result?.diff
+    ? countDiff(row.result.diff)
+    : row.toolFamily === 'write' &&
+        row.result?.isError !== true &&
+        typeof row.input.content === 'string' &&
+        row.input.content.length > 0
+      ? { adds: row.input.content.split('\n').length, dels: 0 }
+      : null
+  if (counts === null || (counts.adds === 0 && counts.dels === 0)) return undefined
+  return (
+    <span className="flex shrink-0 items-center gap-1.5 font-mono text-[10.5px] tabular-nums">
+      {counts.adds > 0 ? <span className="text-[#86efac]">+{counts.adds}</span> : null}
+      {counts.dels > 0 ? <span className="text-[#fca5a5]">−{counts.dels}</span> : null}
+    </span>
+  )
+}
+
 type DiffLineKind = 'add' | 'del' | 'ctx'
 
-// Exact prototype DiffView line grammar (Messages.jsx:182-186): a del/add row
-// tints red-500/green-500 at 0.1 with #fca5a5/#86efac (red-300/green-300) body
-// text; the sign glyph is the brighter tone-danger/tone-success (#f87171/#4ade80)
-// and context stays in the ghost/faint greys the prototype uses (#52525b body,
-// #3f3f46 sign). Static classes only.
+// Diff semantics live on the add/delete wash and glyph, while source text takes
+// its base and token colors from the selected code theme.
 const DIFF_ROW_CLASS: Record<DiffLineKind, string> = {
   // Exact prototype row washes rgba(34,197,94,0.1) / rgba(239,68,68,0.1). NOT the
   // green-500/red-500 utilities — Tailwind v4's oklch palette drifted those to
   // #00c758 / #fb2c36, so a literal hex keeps the prototype value exact.
-  add: 'bg-[#22c55e]/10 text-[#86efac]',
-  del: 'bg-[#ef4444]/10 text-[#fca5a5]',
-  ctx: 'text-text-faint',
+  add: 'bg-[#22c55e]/10',
+  del: 'bg-[#ef4444]/10',
+  ctx: '',
 }
 
 const DIFF_SIGN_CLASS: Record<DiffLineKind, string> = {
@@ -3558,18 +3584,19 @@ const DIFF_SIGN_CLASS: Record<DiffLineKind, string> = {
 // Word-level intra-line highlight (prototype DiffView, Messages.jsx:160-168): a
 // CHANGED word carries the exact rgba(248,113,113,0.28) / rgba(74,222,128,0.26)
 // wash (= tone-danger/28, tone-success/26) with a 2px radius + 1px x-pad; an
-// UNCHANGED word dims to the prototype's #fca5a5 / #86efac at 0.55 alpha.
+// UNCHANGED word dims by opacity so syntax-token colors still lead.
 const WORD_EMPH_CLASS: Record<'del' | 'add', string> = {
   del: 'rounded-[2px] bg-tone-danger/28 px-px',
   add: 'rounded-[2px] bg-tone-success/26 px-px',
 }
 const WORD_DIM_CLASS: Record<'del' | 'add', string> = {
-  del: 'text-[#fca5a5]/55',
-  add: 'text-[#86efac]/55',
+  del: 'opacity-60',
+  add: 'opacity-60',
 }
 
 type WordDiffSide = { value: string; changed: boolean }[]
 type DiffHunkModel = ToolDiffProjection['hunks'][number]
+type DiffHunkWithPath = DiffHunkModel & { filePath: string }
 
 /**
  * Word-level intra-line highlight for a replaced line pair (prototype DiffView,
@@ -3607,27 +3634,12 @@ function wordDiffPair(
 
 /** One word-diffed line body: changed words get the emphasis wash, unchanged
  * words dim (prototype `renderLine`). */
-function WordDiffBody({ side, segments }: { side: 'del' | 'add'; segments: WordDiffSide }) {
-  return (
-    <>
-      {segments.map((seg, index) => (
-        <span
-          key={index}
-          className={seg.changed ? WORD_EMPH_CLASS[side] : WORD_DIM_CLASS[side]}
-        >
-          {seg.value}
-        </span>
-      ))}
-    </>
-  )
-}
-
 /**
- * One hunk: classify each line, walk the dual old/new gutters from the hunk's
+ * One hunk: classify each line, walk the current-file gutter from the hunk's
  * `oldStart`/`newStart`, and pair consecutive del-runs with add-runs for the
  * word-level intra-line highlight (prototype pairing, Messages.jsx:134-150).
  */
-function DiffHunk({ hunk, hunkIndex }: { hunk: DiffHunkModel; hunkIndex: number }) {
+function DiffHunk({ hunk, hunkIndex }: { hunk: DiffHunkWithPath; hunkIndex: number }) {
   let oldNo = hunk.oldStart
   let newNo = hunk.newStart
   const rows = hunk.lines.map(line => {
@@ -3637,11 +3649,10 @@ function DiffHunk({ hunk, hunkIndex }: { hunk: DiffHunkModel; hunkIndex: number 
         ? 'del'
         : 'ctx'
     const body = kind === 'ctx' ? line : line.slice(1)
-    const oldLabel = kind === 'add' ? '' : String(oldNo)
-    const newLabel = kind === 'del' ? '' : String(newNo)
+    const currentLabel = kind === 'del' ? '' : String(newNo)
     if (kind !== 'add') oldNo++
     if (kind !== 'del') newNo++
-    return { kind, body, oldLabel, newLabel }
+    return { kind, body, currentLabel }
   })
   // Pair each consecutive run of removes with the following run of adds; a
   // successful pair carries the per-side word segments for that row index.
@@ -3665,58 +3676,59 @@ function DiffHunk({ hunk, hunkIndex }: { hunk: DiffHunkModel; hunkIndex: number 
       }
     }
   }
-  return (
-    <>
-      {rows.map((row, lineIndex) => {
-        const sign = row.kind === 'add' ? '+' : row.kind === 'del' ? '−' : ' '
-        const segments = wordInfo[lineIndex]
-        return (
-          <div
-            key={`${hunkIndex}:${lineIndex}`}
-            className={`flex whitespace-pre ${DIFF_ROW_CLASS[row.kind]}`}
-          >
-            <span className="w-[26px] shrink-0 select-none pr-[7px] text-right tabular-nums text-text-ghost">
-              {row.oldLabel}
-            </span>
-            <span className="w-[26px] shrink-0 select-none pr-[7px] text-right tabular-nums text-text-ghost">
-              {row.newLabel}
-            </span>
-            <span className="min-w-0 flex-1 border-l border-white/[0.05] pl-2.5 pr-3.5">
-              <span className={DIFF_SIGN_CLASS[row.kind]}>{sign}</span>{' '}
-              {segments ? (
-                <WordDiffBody side={row.kind === 'del' ? 'del' : 'add'} segments={segments} />
-              ) : (
-                row.body
-              )}
-            </span>
-          </div>
+  const lang = readSourceLanguage(hunk.filePath)
+  const renderRow = (row: (typeof rows)[number], lineIndex: number, line: HighlightedLine) => {
+    const sign = row.kind === 'add' ? '+' : row.kind === 'del' ? '−' : ' '
+    const segments = wordInfo[lineIndex]
+    const body = segments
+      ? highlightedWordSegments(
+          line,
+          segments,
+          WORD_EMPH_CLASS[row.kind === 'del' ? 'del' : 'add'],
+          WORD_DIM_CLASS[row.kind === 'del' ? 'del' : 'add'],
         )
-      })}
-    </>
+      : line
+    return (
+      <div key={`${hunkIndex}:${lineIndex}`} className={`flex whitespace-pre ${DIFF_ROW_CLASS[row.kind]}`}>
+        <span className="w-[26px] shrink-0 select-none pr-[7px] text-right tabular-nums text-text-ghost">
+          {row.currentLabel}
+        </span>
+        <span className="min-w-0 flex-1 border-l border-white/[0.05] pl-2.5 pr-3.5 hljs">
+          <span className={DIFF_SIGN_CLASS[row.kind]}>{sign}</span>{' '}
+          {body}
+        </span>
+      </div>
+    )
+  }
+  if (lang === null) {
+    return <>{rows.map((row, index) => renderRow(row, index, [row.body]))}</>
+  }
+  return (
+    <Markdown
+      components={{
+        pre: ({ children }) => <>{children}</>,
+        code: ({ children }) => {
+          const lines = highlightedLines(children)
+          return <>{rows.map((row, index) => renderRow(row, index, lines[index] ?? []))}</>
+        },
+      }}
+      rehypePlugins={REHYPE_PLUGINS}
+    >
+      {sourceFence(rows.map(row => row.body).join('\n'), lang)}
+    </Markdown>
   )
 }
 
 /**
- * `DiffView`/`MultiDiffCard` (INVENTORY W3 ⚓2): one file's hunks, dual old/new
- * line-number gutters + a +adds/−dels file-header count (P4-18b). Multiple hunks
- * in the SAME file (`FileEditTool`'s own multi-edit input) render as successive
- * blocks under one header — there is no seam shape for one result spanning many
- * separate files (`ToolDiffProjection` doc). Gutter numbers walk each hunk from
- * its `oldStart`/`newStart`. P4-18c adds the word-level intra-line highlight
- * (`DiffHunk`/`wordDiffPair`, prototype `Diff.diffWordsWithSpace`).
+ * One file's hunks, with the current-file line number in one gutter. The header
+ * already carries the path and counts, so the body renders source only.
  */
 function DiffView({ diff }: { diff: ToolDiffProjection }) {
-  const { adds, dels } = countDiff(diff)
   return (
     <div className="font-mono text-xs leading-[1.65]">
-      <div className="flex items-center gap-2.5 border-b border-white/[0.05] pb-1.5 text-[11.5px] text-text-muted">
-        <span className="min-w-0 flex-1 truncate">{diff.filePath}</span>
-        {adds > 0 ? <span className="shrink-0 text-[#86efac]">+{adds}</span> : null}
-        {dels > 0 ? <span className="shrink-0 text-[#fca5a5]">−{dels}</span> : null}
-      </div>
       <div className="overflow-x-auto">
         {diff.hunks.map((hunk, hunkIndex) => (
-          <DiffHunk key={hunkIndex} hunk={hunk} hunkIndex={hunkIndex} />
+          <DiffHunk key={hunkIndex} hunk={{ ...hunk, filePath: diff.filePath }} hunkIndex={hunkIndex} />
         ))}
       </div>
     </div>

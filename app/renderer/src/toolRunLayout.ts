@@ -31,7 +31,7 @@
  * group (`collapseReadSearch.ts:345-368`; only memory-file writes are exempt),
  * and the ledger already cut the prototype's many-files edit switcher because
  * `FileEditTool` returns ONE file's patch (§05 `MultiDiffCard`). Both sources say
- * no, and a collapsed edit card already carries its filename and ±counts, which
+ * no, and an individual edit card carries its filename and ±counts, which
  * is real information a run would hide.
  */
 

@@ -532,7 +532,7 @@ test('ack card: a non-ack result keeps its existing rendering untouched', () => 
   expect(html).toContain('Tool') // still the neutral family
 })
 
-test('P4-18b: an edit card renders a dual-gutter diff with +adds/−dels counts', () => {
+test('P4-18b: an expanded edit card keeps its counts in the shell and one current-file gutter', () => {
   const diff: ToolDiffProjection = {
     filePath: '/repo/app.ts',
     hunks: [
@@ -555,17 +555,54 @@ test('P4-18b: an edit card renders a dual-gutter diff with +adds/−dels counts'
     }),
   )
 
-  expect(html).toContain('/repo/app.ts')
   expect(html).toContain('+1') // one addition
   expect(html).toContain('−1') // one deletion
-  // DiffView owns the rich file/count header; ToolCardShell must not repeat it.
+  // ToolCardShell owns the count badge; DiffView does not repeat a file/count header.
   expect(html.match(/>\+1</g)).toHaveLength(1)
   expect(html.match(/>−1</g)).toHaveLength(1)
+  expect(html.match(/w-\[26px\]/g)).toHaveLength(3) // one gutter for each source row
   // P4-18c word-level intra-line highlight: the replaced token (2 → 3) is washed
   // per side; the shared prefix dims. The line is no longer one contiguous string.
   expect(html).toContain('bg-tone-danger/28') // removed word wash
   expect(html).toContain('bg-tone-success/26') // added word wash
-  expect(html).toContain('const b = ') // shared, dimmed prefix
+  expect(visibleText(html)).toContain('const b = ') // shared, dimmed prefix
+})
+
+test('P4-18b: a collapsed edit card keeps its diff counts visible in the header', () => {
+  const html = render(
+    toolRow({
+      toolName: 'Edit',
+      toolFamily: 'edit',
+      input: { file_path: '/repo/app.ts' },
+      status: 'success',
+      result: {
+        isError: false,
+        content: '',
+        diff: {
+          filePath: '/repo/app.ts',
+          hunks: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ['-old', '+new'] }],
+        },
+      },
+    }),
+  )
+
+  expect(html).toContain('>+1</span>')
+  expect(html).toContain('>−1</span>')
+  expect(html).not.toContain('w-[26px]') // body remains collapsed
+})
+
+test('P4-18b: a collapsed Write-create card counts input content before a result exists', () => {
+  const html = render(
+    toolRow({
+      toolName: 'Write',
+      toolFamily: 'write',
+      input: { file_path: '/repo/new.ts', content: 'const a = 1\nconst b = 2\n' },
+      status: 'pending',
+    }),
+  )
+
+  expect(html).toContain('>+3</span>')
+  expect(html).not.toContain('>−')
 })
 
 test('P4-18b: an MCP card frames the target as server › tool', () => {
@@ -1955,14 +1992,7 @@ test('a NON-bash body keeps the prototype flat base, NOT the bash line heuristic
   expect(html).not.toContain('text-[#86efac]')
 })
 
-test('a written file is syntax-colored AND still reads as additions', () => {
-  // The prototype's `hl()` colors only the tokens it recognizes and lets every
-  // untouched character inherit the surrounding `FE_T.add` (`Messages.jsx:626`).
-  // Reproduced by NOT putting `hljs` on the source element: `.hljs` sets an
-  // explicit base color that would repaint the file in the code theme's
-  // foreground, while the per-token `.hljs-*` rules are independent selectors
-  // and still apply. Both halves are asserted, because either alone would pass
-  // while the body looked wrong.
+test('a written file is syntax-colored while its gutter remains additions-green', () => {
   const html = render(
     writeRow(
       { file_path: '/w/hello.ts', content: 'const greeting = "hi"' },
@@ -1972,16 +2002,11 @@ test('a written file is syntax-colored AND still reads as additions', () => {
 
   expect(html).toContain('hljs-keyword') // `const` tokenized
   expect(html).toContain('hljs-string') // the quoted literal tokenized
-  expect(html).toContain('text-[#86efac]') // …over the add-green base
-  // `hljs` must appear ONLY as the `hljs-<token>` prefix, never as a class of
-  // its own — that bare class is what carries the base color. Matched as a
-  // whole class token: a plain `toContain('hljs')` cannot tell the two apart,
-  // and `toContain('"hljs"')` silently never matches, since the class would sit
-  // mid-list rather than alone in the attribute.
-  expect(html).not.toMatch(/class="[^"]*\bhljs\b(?!-)/)
+  expect(html).toContain('text-[#86efac]') // the + gutter
+  expect(html).toMatch(/class="[^"]*\bhljs\b(?!-)/) // theme base foreground
 })
 
-test('a written file whose extension names no language stays plain green', () => {
+test('a written file whose extension names no language uses the theme base', () => {
   // `detect: false` is the house rule: color only what we can name. An unknown
   // extension must not be guessed at, and must not lose the additions green.
   const html = render(
@@ -1992,14 +2017,12 @@ test('a written file whose extension names no language stays plain green', () =>
   )
 
   expect(visibleText(html)).toContain('const greeting = &quot;hi&quot;')
-  expect(html).toContain('text-[#86efac]')
-  expect(html).not.toContain('hljs')
+  expect(html).toContain('text-[#86efac]') // the + gutter
+  expect(html).toMatch(/class="[^"]*\bhljs\b(?!-)/)
+  expect(html).not.toContain('hljs-keyword')
 })
 
-test('a written file uses the prototype add-green on both the + and the line', () => {
-  // `FE_T.add` `#86efac` on the row AND the marker (`Messages.jsx:625-627`).
-  // NOT `tone-success` `#4ade80`, which is the prototype's DIFF sign green
-  // (`:186`); painting the body with it made a write read as a green slab.
+test('a written file uses add-green only for its + gutter', () => {
   const html = render(
     writeRow(
       { file_path: '/w/hello.ts', content: 'const greeting = "hi"' },
@@ -2136,8 +2159,8 @@ test('P4-18c: a replaced diff line shows word-level intra-line highlighting', ()
   // The differing token (30 → 60) is washed per side; the shared prefix dims.
   expect(html).toContain('bg-tone-danger/28') // removed word wash (exact prototype 0.28)
   expect(html).toContain('bg-tone-success/26') // added word wash (exact prototype 0.26)
-  expect(html).toContain('text-[#fca5a5]/55') // unchanged del word dims (exact)
-  expect(html).toContain('const timeout = ') // shared prefix present
+  expect(html).toContain('opacity-60') // unchanged source dims without overriding syntax colors
+  expect(visibleText(html)).toContain('const timeout = ') // shared prefix present
 })
 
 test('P4-18c: a near-total line rewrite skips word-highlight (line-level), no throw', () => {

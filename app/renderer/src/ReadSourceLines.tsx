@@ -154,24 +154,14 @@ export function GrepSourceLines({
 const ADDITION_GUTTER_CLASS = `${SOURCE_TYPE} w-3.5 shrink-0 select-none text-[#86efac]`
 
 /**
- * The write body's source column. Identical to `SOURCE_COMPONENTS` except that
- * it deliberately does NOT carry the `hljs` class.
- *
- * That one omission is what lets a written file read as ADDITIONS and as source
- * at the same time, which is what the prototype does: its `hl()` colors only the
- * tokens it recognizes and every untouched character inherits the surrounding
- * `FE_T.add` (`Messages.jsx:626-627`). `.hljs` sets an explicit base color
- * (`theme.css:325`), so carrying it here would repaint the whole file in the
- * code theme's foreground and the green would survive only on the `+` markers.
- * The per-token rules (`.hljs-keyword`, `.hljs-string`, …) are independent
- * selectors on the inner spans, so they still apply, and still follow whichever
- * of the five code themes is selected. No new CSS, and no specificity fight with
- * the `[data-code-theme]` blocks.
+ * The operator's 2026-08-13 decision makes the source column code-themed while
+ * retaining the green `+` gutter as the additions signal. `hljs` supplies the
+ * selected theme's base color and its token rules color the highlighted spans.
  */
 const ADDITION_COMPONENTS = {
   pre: ({ children }: ComponentPropsWithoutRef<'pre'>) => <>{children}</>,
   code: ({ children }: ComponentPropsWithoutRef<'code'>) => (
-    <pre className={`${SOURCE_TYPE} text-[#86efac]`}>
+    <pre className={`${SOURCE_TYPE} hljs`}>
       {trimTrailingNewline(children)}
     </pre>
   ),
@@ -191,7 +181,7 @@ export function AdditionSourceLines({
   lang,
 }: {
   lines: string[]
-  /** null when the file's language is unknown: the slice stays plain green. */
+  /** null when the file's language is unknown: the slice uses the theme base. */
   lang: string | null
 }) {
   const code = lines.join('\n')
@@ -203,7 +193,7 @@ export function AdditionSourceLines({
         ))}
       </pre>
       {lang === null ? (
-        <pre className={`${SOURCE_TYPE} text-[#86efac]`}>{code}</pre>
+        <pre className={`${SOURCE_TYPE} hljs`}>{code}</pre>
       ) : (
         <Markdown components={ADDITION_COMPONENTS} rehypePlugins={REHYPE_PLUGINS}>
           {sourceFence(code, lang)}
