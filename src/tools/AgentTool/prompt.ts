@@ -9,6 +9,7 @@ import { GLOB_TOOL_NAME } from '../GlobTool/prompt.js'
 import { SEND_MESSAGE_TOOL_NAME } from '../SendMessageTool/constants.js'
 import { RESUME_AGENT_TOOL_NAME } from '../ResumeAgentTool/constants.js'
 import { TASK_OUTPUT_TOOL_NAME } from '../TaskOutputTool/constants.js'
+import { TASK_STOP_TOOL_NAME } from '../TaskStopTool/prompt.js'
 import { AGENT_TOOL_NAME } from './constants.js'
 import { isForkSubagentEnabled } from './forkSubagent.js'
 import type { AgentContinuationCapabilities } from './agentToolUtils.js'
@@ -85,6 +86,7 @@ export async function getPrompt(
   // unknown/other caller shouldn't have guidance silently stripped.
   const canResumeAgent = capabilities?.canResumeAgent ?? true
   const canSendMessage = capabilities?.canSendMessage ?? true
+  const canStopTask = capabilities?.canStopTask ?? true
   // Filter agents by allowed types when Agent(x,y) restricts which agents can be spawned
   const effectiveAgents = allowedAgentTypes
     ? agentDefinitions.filter(a => allowedAgentTypes.includes(a.agentType))
@@ -400,7 +402,7 @@ ${usageHeader}
 - **Foreground vs background**: Use foreground (default) when you need the agent's results before you can proceed — e.g., research agents whose findings inform your next steps. Use background when you have genuinely independent work to do in parallel.${isGPTPromptStyle ? ' **IMPORTANT: run_in_background: true is REQUIRED for true parallel execution — without it, the parent agent is fully blocked waiting for each subagent to finish, even if you emit multiple spawns in the same turn.**' : ''}`
       : ''
   }
-- ${
+${canStopTask ? `- To stop a running background agent, use ${TASK_STOP_TOOL_NAME} with \`task_id\` set to the \`agentId\` returned by ${AGENT_TOOL_NAME}.${canSendMessage ? ` ${SEND_MESSAGE_TOOL_NAME} does not cancel it.` : ''}\n` : ''}- ${
     canResumeAgent
       ? `To continue a previously spawned stopped agent, use ${RESUME_AGENT_TOOL_NAME} with the agent's ID or name as the \`agentId\` field. The agent resumes from its prior transcript. `
       : `A completed or stopped agent cannot be resumed from this context — ${RESUME_AGENT_TOOL_NAME} is not available here; spawn a fresh ${AGENT_TOOL_NAME} instead. `

@@ -74,6 +74,7 @@ import { safeParseJSON } from '../../utils/json.js'
 import { EXIT_PLAN_MODE_V2_TOOL_NAME } from '../ExitPlanModeTool/constants.js'
 import { RESUME_AGENT_TOOL_NAME } from '../ResumeAgentTool/constants.js'
 import { SEND_MESSAGE_TOOL_NAME } from '../SendMessageTool/constants.js'
+import { TASK_STOP_TOOL_NAME } from '../TaskStopTool/prompt.js'
 import { AGENT_TOOL_NAME, LEGACY_AGENT_TOOL_NAME } from './constants.js'
 import type { AgentDefinition } from './loadAgentsDir.js'
 export type ResolvedAgentTools = {
@@ -338,6 +339,7 @@ export type AgentContinuationCapabilities = {
   canSendMessage: boolean
   canResumeAgent: boolean
   canSpawnAgent: boolean
+  canStopTask: boolean
 }
 
 export function getAgentContinuationCapabilities(
@@ -351,6 +353,9 @@ export function getAgentContinuationCapabilities(
       toolMatchesName(tool, RESUME_AGENT_TOOL_NAME),
     ),
     canSpawnAgent: tools.some(tool => toolMatchesName(tool, AGENT_TOOL_NAME)),
+    canStopTask: tools.some(tool =>
+      toolMatchesName(tool, TASK_STOP_TOOL_NAME),
+    ),
   }
 }
 

@@ -84,9 +84,11 @@ describe('Agent tool prompt in Agent Mode', () => {
         canSendMessage: true,
         canResumeAgent: false,
         canSpawnAgent: false,
+        canStopTask: false,
       },
     )
     expect(withoutResume).not.toContain('use ResumeAgent')
+    expect(withoutResume).not.toContain('use TaskStop')
 
     const topLevel = await getPrompt(
       getBuiltInAgents(),
@@ -98,8 +100,13 @@ describe('Agent tool prompt in Agent Mode', () => {
         canSendMessage: true,
         canResumeAgent: true,
         canSpawnAgent: true,
+        canStopTask: true,
       },
     )
     expect(topLevel).toContain('use ResumeAgent')
+    expect(topLevel).toContain(
+      'use TaskStop with `task_id` set to the `agentId` returned by Agent',
+    )
+    expect(topLevel).toContain('SendMessage does not cancel it')
   })
 })

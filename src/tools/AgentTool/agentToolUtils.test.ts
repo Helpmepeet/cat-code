@@ -353,6 +353,7 @@ describe('resolveAgentTools explicit in-process-teammate environment', () => {
       canSendMessage: true,
       canResumeAgent: false,
       canSpawnAgent: false,
+      canStopTask: false,
     })
   })
 
