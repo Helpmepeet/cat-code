@@ -277,10 +277,9 @@ export function getAutoModeClassifierErrorDumpPath(): string {
 
 /**
  * Snapshot of the most recent classifier API request(s), stringified lazily
- * only when /share reads it. The stored shape remains an array because
- * bootstrap/state.ts persists requests generically, not because the classifier
- * has multiple runtime stages. Stored there to avoid module-scope mutable
- * state.
+ * only when /share reads it. The array holds stage 1 alone for fast decisions
+ * and both stages when full adjudication runs. Stored in bootstrap state to
+ * avoid module-scope mutable state.
  */
 export function getAutoModeClassifierTranscript(): string | null {
   const requests = getLastClassifierRequests()
@@ -352,6 +351,35 @@ const yoloClassifierResponseSchema = lazySchema(() =>
 )
 
 export const YOLO_CLASSIFIER_TOOL_NAME = 'classify_result'
+
+const STAGE1_PROMPT_SUFFIX = `
+
+This is Stage 1 of a two-stage classifier. Ignore user intent and all ALLOW
+exceptions. Judge harm only. Set shouldBlock to true if ANY BLOCK rule could
+apply to the pending action. Output only through the forced tool.`
+
+const stage1ClassifierResponseSchema = lazySchema(() =>
+  z.object({
+    shouldBlock: z.boolean(),
+  }),
+)
+
+const STAGE1_YOLO_CLASSIFIER_TOOL_SCHEMA: BetaToolUnion = {
+  type: 'custom',
+  name: YOLO_CLASSIFIER_TOOL_NAME,
+  description: 'Report whether any block rule could apply to the agent action',
+  input_schema: {
+    type: 'object',
+    properties: {
+      shouldBlock: {
+        type: 'boolean',
+        description: 'Whether any BLOCK rule could apply.',
+      },
+    },
+    required: ['shouldBlock'],
+    additionalProperties: false,
+  },
+}
 
 function buildPortedYoloClassifierToolSchema(): BetaToolUnion {
   return {
@@ -1162,6 +1190,11 @@ function isClassifierFallbackErrorText(message: string): boolean {
  * @param context - Tool permission context for extracting Bash(prompt:) rules
  * @param signal - Abort signal
  */
+type ClassifierOverrides = {
+  upstreamPortEnabled?: boolean
+  sideQuery?: typeof sideQuery
+}
+
 export async function classifyYoloAction(
   messages: Message[],
   action: TranscriptEntry,
@@ -1169,6 +1202,27 @@ export async function classifyYoloAction(
   context: ToolPermissionContext,
   signal: AbortSignal,
 ): Promise<YoloClassifierResult> {
+  return classifyYoloActionWithOverrides(
+    messages,
+    action,
+    tools,
+    context,
+    signal,
+  )
+}
+
+async function classifyYoloActionWithOverrides(
+  messages: Message[],
+  action: TranscriptEntry,
+  tools: Tools,
+  context: ToolPermissionContext,
+  signal: AbortSignal,
+  overrides?: ClassifierOverrides,
+): Promise<YoloClassifierResult> {
+  const upstreamPortEnabled =
+    overrides?.upstreamPortEnabled ??
+    (feature('AUTO_MODE_UPSTREAM_PORT') ? true : false)
+  const runSideQuery = overrides?.sideQuery ?? sideQuery
   const lookup = buildToolLookup(tools)
   const actionCompact = toCompact(action, lookup)
   // '' = "no security relevance" (Tool.toAutoClassifierInput contract). Without
@@ -1184,7 +1238,10 @@ export async function classifyYoloAction(
   const systemPrompt = await buildYoloSystemPrompt(context)
   const transcriptEntries = buildTranscriptEntries(messages)
   const metaLines = await buildActionMetaLines(action.autoModeMeta)
-  const prefixMessages = buildAutoModeRequestPrefix(context)
+  const prefixMessages = buildAutoModeRequestPrefix(
+    context,
+    upstreamPortEnabled,
+  )
 
   let toolCallsLength = actionCompact.length
   let userPromptsLength = 0
@@ -1260,50 +1317,77 @@ export async function classifyYoloAction(
     cache_control: cacheControl,
   })
 
-  let model = getClassifierModel()
-  const configuredMaxRetries = getClassifierMaxRetries()
-  const gatedAttempts = feature('AUTO_MODE_UPSTREAM_PORT')
-    ? getAutoModeClassifierAttempts(
-        model,
-        configuredMaxRetries,
-        (await import('../model/providers.js')).getConfiguredAnthropicProvider(),
-      )
-    : null
-  let attemptIndex = 0
-  let attemptsMade = 0
-  let provider = gatedAttempts?.[0]?.provider
-  if (gatedAttempts?.[0]) model = gatedAttempts[0].model
-  const attemptedAttempts: string[] = []
+  const configuredMaxRetries = getClassifierMaxRetries(upstreamPortEnabled)
+  const classifierRequests: unknown[] = []
 
-  for (;;) {
-    attemptsMade++
-    attemptedAttempts.push(`${provider ?? 'default'}/${model}`)
-    // The classifier uses a single schema-backed tool contract and does not
-    // emit or parse XML.
-    const [disableThinking, thinkingPadding, reasoningEffort] =
-      getClassifierThinkingConfig(model)
-    try {
-      const start = Date.now()
+  type StageName = 'fast' | 'thinking'
+  type StageRequestResult =
+    | {
+        ok: true
+        result: Anthropic.Beta.Messages.BetaMessage
+        model: string
+        provider?: string
+        durationMs: number
+        usage: ClassifierUsage
+      }
+    | {
+        ok: false
+        error: unknown
+        model: string
+        provider?: string
+        attemptedAttempts: string[]
+        tooLong: ReturnType<typeof detectPromptTooLong>
+        aborted: boolean
+      }
+
+  const requestStage = async (stage: StageName): Promise<StageRequestResult> => {
+    let model = getClassifierModel(upstreamPortEnabled)
+    const gatedAttempts = upstreamPortEnabled
+      ? getAutoModeClassifierAttempts(
+          model,
+          configuredMaxRetries,
+          (await import('../model/providers.js')).getConfiguredAnthropicProvider(),
+        )
+      : null
+    let attemptIndex = 0
+    let attemptsMade = 0
+    let provider = gatedAttempts?.[0]?.provider
+    if (gatedAttempts?.[0]) model = gatedAttempts[0].model
+    const attemptedAttempts: string[] = []
+
+    for (;;) {
+      attemptsMade++
+      attemptedAttempts.push(`${provider ?? 'default'}/${model}`)
+      const [disableThinking, thinkingPadding, reasoningEffort] =
+        getClassifierThinkingConfig(model)
+      const isFast = stage === 'fast'
       const sideQueryOpts = {
         model,
         ...(provider && { provider }),
-        max_tokens: 4096 + thinkingPadding,
+        max_tokens: isFast ? 64 : 4096 + thinkingPadding,
         system: [
           {
             type: 'text' as const,
             text: systemPrompt,
             cache_control: getCacheControl({ querySource: 'auto_mode' }),
           },
+          ...(isFast
+            ? [{ type: 'text' as const, text: STAGE1_PROMPT_SUFFIX }]
+            : []),
         ],
         skipSystemPromptPrefix: true,
         temperature: 0,
-        thinking: disableThinking,
-        ...(reasoningEffort && { reasoningEffort }),
+        thinking: isFast ? false : disableThinking,
+        ...(!isFast && reasoningEffort && { reasoningEffort }),
         messages: [
           ...prefixMessages,
           { role: 'user' as const, content: userContentBlocks },
         ],
-        tools: [YOLO_CLASSIFIER_TOOL_SCHEMA],
+        tools: [
+          isFast
+            ? STAGE1_YOLO_CLASSIFIER_TOOL_SCHEMA
+            : getYoloClassifierToolSchema(upstreamPortEnabled),
+        ],
         tool_choice: {
           type: 'tool' as const,
           name: YOLO_CLASSIFIER_TOOL_NAME,
@@ -1312,257 +1396,441 @@ export async function classifyYoloAction(
         signal,
         querySource: 'auto_mode' as const,
       }
-      const result = await sideQuery(sideQueryOpts)
-      void maybeDumpAutoMode(sideQueryOpts, result, start)
-      setLastClassifierRequests([sideQueryOpts])
-      const durationMs = Date.now() - start
-      const stage1RequestId = extractRequestId(result)
-      const stage1MsgId = result.id
-
-      // Extract usage for overhead telemetry
-      const usage = extractUsage(result)
-      // Actual total input tokens the classifier API consumed (uncached + cache)
-      const classifierInputTokens =
-        usage.inputTokens +
-        usage.cacheReadInputTokens +
-        usage.cacheCreationInputTokens
-      if (isDebugMode()) {
-        logForDebugging(
-          `[auto-mode] API usage: ` +
-            `actualInputTokens=${classifierInputTokens} ` +
-            `(uncached=${usage.inputTokens} ` +
-            `cacheRead=${usage.cacheReadInputTokens} ` +
-            `cacheCreate=${usage.cacheCreationInputTokens}) ` +
-            `estimateWas=${classifierTokensEst} ` +
-            `deltaVsMainLoop=${classifierInputTokens - mainLoopTokens} ` +
-            `durationMs=${durationMs}`,
-        )
+      const requestIndex = upstreamPortEnabled && stage === 'thinking' ? 1 : 0
+      classifierRequests[requestIndex] = sideQueryOpts
+      if (upstreamPortEnabled) {
+        setLastClassifierRequests([...classifierRequests])
       }
-
-      // Extract the tool use result using shared utility
-      const toolUseBlock = extractToolUseBlock(
-        result.content,
-        YOLO_CLASSIFIER_TOOL_NAME,
-      )
-
-      if (!toolUseBlock) {
-        logForDebugging('Auto mode classifier: No tool use block found', {
-          level: 'warn',
-        })
-        logAutoModeOutcome('parse_failure', model, {
-          failureKind: 'no_tool_use',
+      const start = Date.now()
+      try {
+        const result = await runSideQuery(sideQueryOpts)
+        if (!upstreamPortEnabled) {
+          setLastClassifierRequests([sideQueryOpts])
+        }
+        void maybeDumpAutoMode(
+          sideQueryOpts,
+          result,
+          start,
+          upstreamPortEnabled ? `stage-${stage}` : undefined,
+        )
+        return {
+          ok: true,
+          result,
+          model,
           provider,
-        })
-        return {
-          shouldBlock: true,
-          reason: 'Classifier returned no tool use block - blocking for safety',
-          model,
-          autoModeOutcome: 'automode-parsing-error',
-          usage,
-          durationMs,
-          promptLengths,
-          stage1RequestId,
-          stage1MsgId,
+          durationMs: Date.now() - start,
+          usage: extractUsage(result),
         }
-      }
-
-      // Parse response using shared utility
-      const parsed = parseClassifierResponse(
-        toolUseBlock,
-        yoloClassifierResponseSchema(),
-      )
-      if (!parsed) {
-        logForDebugging('Auto mode classifier: Invalid response schema', {
-          level: 'warn',
-        })
-        logAutoModeOutcome('parse_failure', model, {
-          failureKind: 'invalid_schema',
-          provider,
-        })
-        return {
-          shouldBlock: true,
-          reason: 'Invalid classifier response - blocking for safety',
-          model,
-          autoModeOutcome: 'automode-parsing-error',
-          usage,
-          durationMs,
-          promptLengths,
-          stage1RequestId,
-          stage1MsgId,
+      } catch (error) {
+        if (signal.aborted) {
+          return {
+            ok: false,
+            error,
+            model,
+            provider,
+            attemptedAttempts,
+            tooLong: null,
+            aborted: true,
+          }
         }
-      }
-
-      if (
-        feature('AUTO_MODE_UPSTREAM_PORT') &&
-        !isAutoModeVerdictCategoryValid(
-          parsed.shouldBlock,
-          toolUseBlock.input,
-        )
-      ) {
-        logForDebugging(
-          'Auto mode classifier: allow verdict included a category',
-          { level: 'warn' },
-        )
-        logAutoModeOutcome('parse_failure', model, {
-          failureKind: 'category_on_allow',
-          provider,
-        })
-        return {
-          shouldBlock: true,
-          reason: 'Invalid classifier response - blocking for safety',
-          model,
-          autoModeOutcome: 'automode-parsing-error',
-          usage,
-          durationMs,
-          promptLengths,
-          stage1RequestId,
-          stage1MsgId,
-        }
-      }
-
-      // Second parse layer. The verdict above is already final; reading the
-      // label cannot fail and cannot alter shouldBlock. A malformed category
-      // is absent, and an unrecognized name drops the label and keeps the
-      // verdict.
-      const resolvedCategory = feature('AUTO_MODE_UPSTREAM_PORT')
-        ? resolveAutoModeCategory(
-            readRawAutoModeCategory(toolUseBlock.input),
-            getAutoModeRuleIds(),
-          )
-        : { category: undefined }
-      if (
-        feature('AUTO_MODE_UPSTREAM_PORT') &&
-        parsed.shouldBlock &&
-        resolvedCategory.category === undefined
-      ) {
-        logForDebugging(
-          'Auto mode classifier: dropped missing or invalid block category',
-          { level: 'warn' },
-        )
-      }
-      const classifierResult = {
-        thinking: parsed.thinking,
-        shouldBlock: parsed.shouldBlock,
-        reason: parsed.reason ?? 'No reason provided',
-        category: resolvedCategory.category,
-        model,
-        usage,
-        durationMs,
-        promptLengths,
-        stage1RequestId,
-        stage1MsgId,
-      }
-      // Context-delta telemetry: chart classifierInputTokens / mainLoopTokens
-      // in Datadog. Expect ~0.6-0.8 steady state; alert on p95 > 1.0 (means
-      // classifier is bigger than main loop — auto-compact won't save us).
-      logAutoModeOutcome('success', model, {
-        durationMs,
-        provider,
-        category: resolvedCategory.category?.id,
-        mainLoopTokens,
-        classifierInputTokens,
-        classifierTokensEst,
-      })
-      return classifierResult
-    } catch (error) {
-      if (signal.aborted) {
-        logForDebugging('Auto mode classifier: aborted by user')
-        logAutoModeOutcome('interrupted', model, { provider })
-        return {
-          shouldBlock: true,
-          reason: 'Classifier request aborted',
-          model,
-          unavailable: true,
-          autoModeOutcome: 'interrupted',
-        }
-      }
-      const tooLong = detectPromptTooLong(error)
-      const fallbackModel = tooLong
-        ? undefined
-        : gatedAttempts
+        const tooLong = detectPromptTooLong(error)
+        const fallbackModel = tooLong
           ? undefined
-          : getClassifierFallbackModel(model, error)
-      if (
-        gatedAttempts &&
-        !tooLong &&
-        attemptsMade < configuredMaxRetries + 1 &&
-        isClassifierAttemptFallbackError(error, provider)
-      ) {
-        const failedProvider = provider
-        const skipProviderFamily = isProviderAuthenticationErrorForTest(
-          error,
-          provider,
-        )
-        do {
-          attemptIndex++
-        } while (
-          skipProviderFamily &&
-          gatedAttempts[attemptIndex]?.provider === failedProvider
-        )
-        const fallbackAttempt = gatedAttempts[attemptIndex]
-        if (fallbackAttempt) {
+          : gatedAttempts
+            ? undefined
+            : getClassifierFallbackModel(model, error)
+        if (
+          gatedAttempts &&
+          !tooLong &&
+          attemptsMade < configuredMaxRetries + 1 &&
+          isClassifierAttemptFallbackError(error, provider)
+        ) {
+          const failedProvider = provider
+          const skipProviderFamily = isProviderAuthenticationErrorForTest(
+            error,
+            provider,
+          )
+          do {
+            attemptIndex++
+          } while (
+            skipProviderFamily &&
+            gatedAttempts[attemptIndex]?.provider === failedProvider
+          )
+          const fallbackAttempt = gatedAttempts[attemptIndex]
+          if (fallbackAttempt) {
+            logForDebugging(
+              `Auto mode classifier ${provider}/${model} unavailable, retrying with ${fallbackAttempt.provider}/${fallbackAttempt.model}: ${errorMessage(error)}`,
+              { level: 'warn' },
+            )
+            logAutoModeOutcome('fallback', model, {
+              classifierType: stage,
+              failureKind: 'classifier_provider_unavailable',
+              provider,
+            })
+            provider = fallbackAttempt.provider
+            model = fallbackAttempt.model
+            continue
+          }
+        }
+        if (fallbackModel) {
           logForDebugging(
-            `Auto mode classifier ${provider}/${model} unavailable, retrying with ${fallbackAttempt.provider}/${fallbackAttempt.model}: ${errorMessage(error)}`,
+            `Auto mode classifier model ${model} unavailable, retrying with ${fallbackModel}: ${errorMessage(error)}`,
             { level: 'warn' },
           )
           logAutoModeOutcome('fallback', model, {
-            failureKind: 'classifier_provider_unavailable',
-            provider,
+            classifierType: stage,
+            failureKind: 'classifier_model_unavailable',
           })
-          provider = fallbackAttempt.provider
-          model = fallbackAttempt.model
+          model = fallbackModel
           continue
         }
-      }
-      if (fallbackModel) {
-        logForDebugging(
-          `Auto mode classifier model ${model} unavailable, retrying with ${fallbackModel}: ${errorMessage(error)}`,
-          { level: 'warn' },
-        )
-        logAutoModeOutcome('fallback', model, {
-          failureKind: 'classifier_model_unavailable',
-        })
-        model = fallbackModel
-        continue
-      }
-      logForDebugging(`Auto mode classifier error: ${errorMessage(error)}`, {
-        level: 'warn',
-      })
-      const errorDumpPath =
-        (await dumpErrorPrompts(systemPrompt, userPrompt, error, {
-          mainLoopTokens,
-          classifierChars,
-          classifierTokensEst,
-          transcriptEntries: transcriptEntries.length,
-          messages: messages.length,
-          action: actionCompact,
+        return {
+          ok: false,
+          error,
           model,
+          provider,
           attemptedAttempts,
-        })) ?? undefined
-      // No API usage on error — use classifierTokensEst / mainLoopTokens
-      // for the ratio. Overflow errors are the critical divergence signal.
-      logAutoModeOutcome(tooLong ? 'transcript_too_long' : 'error', model, {
-        provider,
-        mainLoopTokens,
-        classifierTokensEst,
-        ...(tooLong && {
-          transcriptActualTokens: tooLong.actualTokens,
-          transcriptLimitTokens: tooLong.limitTokens,
-        }),
-      })
-      return {
-        shouldBlock: true,
-        reason: tooLong
-          ? 'Classifier transcript exceeded context window'
-          : 'Classifier unavailable - blocking for safety',
-        model,
-        unavailable: true,
-        autoModeOutcome: 'automode-unavailable',
-        transcriptTooLong: Boolean(tooLong),
-        errorDumpPath,
+          tooLong,
+          aborted: false,
+        }
       }
     }
   }
+
+  const failedStageResult = async (
+    failed: Extract<StageRequestResult, { ok: false }>,
+    stage: StageName,
+  ): Promise<YoloClassifierResult> => {
+    if (failed.aborted) {
+      logForDebugging('Auto mode classifier: aborted by user')
+      logAutoModeOutcome('interrupted', failed.model, {
+        classifierType: stage,
+        provider: failed.provider,
+      })
+      return {
+        shouldBlock: true,
+        reason: 'Classifier request aborted',
+        model: failed.model,
+        unavailable: true,
+        autoModeOutcome: 'interrupted',
+        ...(upstreamPortEnabled && { stage }),
+      }
+    }
+    logForDebugging(`Auto mode classifier error: ${errorMessage(failed.error)}`, {
+      level: 'warn',
+    })
+    const stageSystemPrompt =
+      stage === 'fast' ? systemPrompt + STAGE1_PROMPT_SUFFIX : systemPrompt
+    const errorDumpPath =
+      (await dumpErrorPrompts(stageSystemPrompt, userPrompt, failed.error, {
+        mainLoopTokens,
+        classifierChars:
+          stageSystemPrompt.length + userPrompt.length,
+        classifierTokensEst: Math.round(
+          (stageSystemPrompt.length + userPrompt.length) / 4,
+        ),
+        transcriptEntries: transcriptEntries.length,
+        messages: messages.length,
+        action: actionCompact,
+        model: failed.model,
+        attemptedAttempts: failed.attemptedAttempts,
+      })) ?? undefined
+    logAutoModeOutcome(
+      failed.tooLong ? 'transcript_too_long' : 'error',
+      failed.model,
+      {
+        classifierType: stage,
+        provider: failed.provider,
+        mainLoopTokens,
+        classifierTokensEst,
+        ...(failed.tooLong && {
+          transcriptActualTokens: failed.tooLong.actualTokens,
+          transcriptLimitTokens: failed.tooLong.limitTokens,
+        }),
+      },
+    )
+    return {
+      shouldBlock: true,
+      reason: failed.tooLong
+        ? 'Classifier transcript exceeded context window'
+        : 'Classifier unavailable - blocking for safety',
+      model: failed.model,
+      unavailable: true,
+      autoModeOutcome: 'automode-unavailable',
+      transcriptTooLong: Boolean(failed.tooLong),
+      errorDumpPath,
+      ...(upstreamPortEnabled && { stage }),
+    }
+  }
+
+  let stage1:
+    | Extract<StageRequestResult, { ok: true }>
+    | undefined
+  if (upstreamPortEnabled) {
+    const fast = await requestStage('fast')
+    if (!fast.ok) return failedStageResult(fast, 'fast')
+    stage1 = fast
+    const toolUseBlock = extractToolUseBlock(
+      fast.result.content,
+      YOLO_CLASSIFIER_TOOL_NAME,
+    )
+    const parsed = toolUseBlock
+      ? parseClassifierResponse(toolUseBlock, stage1ClassifierResponseSchema())
+      : null
+    const stage1Telemetry = {
+      stage: 'fast' as const,
+      usage: fast.usage,
+      durationMs: fast.durationMs,
+      promptLengths,
+      stage1Usage: fast.usage,
+      stage1DurationMs: fast.durationMs,
+      stage1RequestId: extractRequestId(fast.result),
+      stage1MsgId: fast.result.id,
+    }
+    if (!parsed) {
+      logForDebugging('Auto mode classifier: Invalid stage 1 response', {
+        level: 'warn',
+      })
+      logAutoModeOutcome('parse_failure', fast.model, {
+        classifierType: 'fast',
+        failureKind: toolUseBlock ? 'invalid_schema' : 'no_tool_use',
+        provider: fast.provider,
+      })
+      return {
+        shouldBlock: true,
+        reason: 'Invalid classifier response - blocking for safety',
+        model: fast.model,
+        autoModeOutcome: 'automode-parsing-error',
+        ...stage1Telemetry,
+      }
+    }
+    logAutoModeOutcome('success', fast.model, {
+      classifierType: 'fast',
+      durationMs: fast.durationMs,
+      provider: fast.provider,
+      mainLoopTokens,
+      classifierInputTokens:
+        fast.usage.inputTokens +
+        fast.usage.cacheReadInputTokens +
+        fast.usage.cacheCreationInputTokens,
+      classifierTokensEst: Math.round(
+        (systemPrompt.length + STAGE1_PROMPT_SUFFIX.length + userPrompt.length) /
+          4,
+      ),
+    })
+    if (!parsed.shouldBlock) {
+      return {
+        shouldBlock: false,
+        reason: 'No block rule could apply',
+        model: fast.model,
+        ...stage1Telemetry,
+      }
+    }
+  }
+
+  const adjudication = await requestStage('thinking')
+  if (!adjudication.ok) {
+    const failure = await failedStageResult(adjudication, 'thinking')
+    if (!stage1) return failure
+    return {
+      ...failure,
+      stage: 'thinking',
+      usage: stage1.usage,
+      durationMs: stage1.durationMs,
+      promptLengths,
+      stage1Usage: stage1.usage,
+      stage1DurationMs: stage1.durationMs,
+      stage1RequestId: extractRequestId(stage1.result),
+      stage1MsgId: stage1.result.id,
+    }
+  }
+
+  const { result, model, provider, durationMs, usage } = adjudication
+  const stage1RequestId = extractRequestId(result)
+  const stage1MsgId = result.id
+
+  // Actual total input tokens the classifier API consumed (uncached + cache)
+  const classifierInputTokens =
+    usage.inputTokens +
+    usage.cacheReadInputTokens +
+    usage.cacheCreationInputTokens
+  if (isDebugMode()) {
+    logForDebugging(
+      `[auto-mode] API usage: ` +
+        `actualInputTokens=${classifierInputTokens} ` +
+        `(uncached=${usage.inputTokens} ` +
+        `cacheRead=${usage.cacheReadInputTokens} ` +
+        `cacheCreate=${usage.cacheCreationInputTokens}) ` +
+        `estimateWas=${classifierTokensEst} ` +
+        `deltaVsMainLoop=${classifierInputTokens - mainLoopTokens} ` +
+        `durationMs=${durationMs}`,
+    )
+  }
+
+  // Extract the tool use result using shared utility
+  const toolUseBlock = extractToolUseBlock(
+    result.content,
+    YOLO_CLASSIFIER_TOOL_NAME,
+  )
+  const parseFailureTelemetry = stage1
+    ? {
+        stage: 'thinking' as const,
+        usage: combineUsage(stage1.usage, usage),
+        durationMs: stage1.durationMs + durationMs,
+        stage1Usage: stage1.usage,
+        stage1DurationMs: stage1.durationMs,
+        stage1RequestId: extractRequestId(stage1.result),
+        stage1MsgId: stage1.result.id,
+        stage2Usage: usage,
+        stage2DurationMs: durationMs,
+        stage2RequestId: extractRequestId(result),
+        stage2MsgId: result.id,
+      }
+    : { usage, durationMs, stage1RequestId, stage1MsgId }
+
+  if (!toolUseBlock) {
+    logForDebugging('Auto mode classifier: No tool use block found', {
+      level: 'warn',
+    })
+    logAutoModeOutcome('parse_failure', model, {
+      classifierType: upstreamPortEnabled ? 'thinking' : undefined,
+      failureKind: 'no_tool_use',
+      provider,
+    })
+    return {
+      shouldBlock: true,
+      reason: 'Classifier returned no tool use block - blocking for safety',
+      model,
+      autoModeOutcome: 'automode-parsing-error',
+      promptLengths,
+      ...parseFailureTelemetry,
+    }
+  }
+
+  // Parse response using shared utility
+  const parsed = parseClassifierResponse(
+    toolUseBlock,
+    yoloClassifierResponseSchema(),
+  )
+  if (!parsed) {
+    logForDebugging('Auto mode classifier: Invalid response schema', {
+      level: 'warn',
+    })
+    logAutoModeOutcome('parse_failure', model, {
+      classifierType: upstreamPortEnabled ? 'thinking' : undefined,
+      failureKind: 'invalid_schema',
+      provider,
+    })
+    return {
+      shouldBlock: true,
+      reason: 'Invalid classifier response - blocking for safety',
+      model,
+      autoModeOutcome: 'automode-parsing-error',
+      promptLengths,
+      ...parseFailureTelemetry,
+    }
+  }
+
+  if (
+    upstreamPortEnabled &&
+    !isAutoModeVerdictCategoryValid(parsed.shouldBlock, toolUseBlock.input)
+  ) {
+    logForDebugging(
+      'Auto mode classifier: allow verdict included a category',
+      { level: 'warn' },
+    )
+    logAutoModeOutcome('parse_failure', model, {
+      classifierType: 'thinking',
+      failureKind: 'category_on_allow',
+      provider,
+    })
+    return {
+      shouldBlock: true,
+      reason: 'Invalid classifier response - blocking for safety',
+      model,
+      autoModeOutcome: 'automode-parsing-error',
+      promptLengths,
+      ...parseFailureTelemetry,
+    }
+  }
+
+  // Second parse layer. The verdict above is already final; reading the
+  // label cannot fail and cannot alter shouldBlock. A malformed category
+  // is absent, and an unrecognized name drops the label and keeps the
+  // verdict.
+  const resolvedCategory = upstreamPortEnabled
+    ? resolveAutoModeCategory(
+        readRawAutoModeCategory(toolUseBlock.input),
+        getAutoModeRuleIds(),
+      )
+    : { category: undefined }
+  if (
+    upstreamPortEnabled &&
+    parsed.shouldBlock &&
+    resolvedCategory.category === undefined
+  ) {
+    logForDebugging(
+      'Auto mode classifier: dropped missing or invalid block category',
+      { level: 'warn' },
+    )
+  }
+  const classifierResult = {
+    thinking: parsed.thinking,
+    shouldBlock: parsed.shouldBlock,
+    reason: parsed.reason ?? 'No reason provided',
+    category: resolvedCategory.category,
+    model,
+    promptLengths,
+    ...(stage1
+      ? {
+          stage: 'thinking' as const,
+          usage: combineUsage(stage1.usage, usage),
+          durationMs: stage1.durationMs + durationMs,
+          stage1Usage: stage1.usage,
+          stage1DurationMs: stage1.durationMs,
+          stage1RequestId: extractRequestId(stage1.result),
+          stage1MsgId: stage1.result.id,
+          stage2Usage: usage,
+          stage2DurationMs: durationMs,
+          stage2RequestId: extractRequestId(result),
+          stage2MsgId: result.id,
+        }
+      : { usage, durationMs, stage1RequestId, stage1MsgId }),
+  }
+  // Context-delta telemetry: chart classifierInputTokens / mainLoopTokens
+  // in Datadog. Expect ~0.6-0.8 steady state; alert on p95 > 1.0 (means
+  // classifier is bigger than main loop — auto-compact won't save us).
+  logAutoModeOutcome('success', model, {
+    classifierType: upstreamPortEnabled ? 'thinking' : undefined,
+    durationMs,
+    provider,
+    category: resolvedCategory.category?.id,
+    mainLoopTokens,
+    classifierInputTokens,
+    classifierTokensEst,
+  })
+  return classifierResult
+}
+
+export const _forTest = {
+  classifyYoloAction: classifyYoloActionWithOverrides,
+  classifyYoloActionWithSideQuery(
+    messages: Message[],
+    action: TranscriptEntry,
+    tools: Tools,
+    context: ToolPermissionContext,
+    signal: AbortSignal,
+    fakeSideQuery: typeof sideQuery,
+  ): Promise<YoloClassifierResult> {
+    return classifyYoloActionWithOverrides(
+      messages,
+      action,
+      tools,
+      context,
+      signal,
+      { sideQuery: fakeSideQuery },
+    )
+  },
 }
 
 
@@ -1585,8 +1853,10 @@ type AutoModeConfig = {
  * Ant-only env var takes precedence, then GrowthBook JSON config override,
  * then the main loop model.
  */
-function getClassifierModel(): string {
-  if (feature('AUTO_MODE_UPSTREAM_PORT')) {
+function getClassifierModel(upstreamPortOverride?: boolean): string {
+  const upstreamPortEnabled =
+    upstreamPortOverride ?? (feature('AUTO_MODE_UPSTREAM_PORT') ? true : false)
+  if (upstreamPortEnabled) {
     const envModel = process.env.CLAUDE_CODE_AUTO_MODE_MODEL
     if (envModel) return envModel
     // Codex-first, deliberately. Upstream defaults to a Sonnet-class classifier
@@ -1617,8 +1887,10 @@ function getClassifierModel(): string {
   return getMainLoopModel()
 }
 
-function getClassifierMaxRetries(): number {
-  return feature('AUTO_MODE_UPSTREAM_PORT')
+function getClassifierMaxRetries(upstreamPortOverride?: boolean): number {
+  const upstreamPortEnabled =
+    upstreamPortOverride ?? (feature('AUTO_MODE_UPSTREAM_PORT') ? true : false)
+  return upstreamPortEnabled
     ? (getAutoModeConfig()?.maxRetries ?? 4)
     : getDefaultMaxRetries()
 }

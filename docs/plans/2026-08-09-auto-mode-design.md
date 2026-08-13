@@ -14,11 +14,12 @@ maintenance problem, and buys upstream's continuing refinement for free. Evidenc
 that the design is settled rather than in flux: nine releases spanning Jul 18 to
 Aug 6 carry the identical architecture and rule count, with only prose growth.
 
-**Status: contract review returned RED (2026-08-09). Five findings held and one
-was rejected on evidence. G1-G4 are now closed specifications below; the replay
-gate remains closed, so the atomic Steps 1+2 feature stays off by default.**
+**Status (2026-08-13): the ported classifier, including the default two-stage
+flow, is implemented behind `AUTO_MODE_UPSTREAM_PORT`. The feature remains off
+in standard builds. Focused tests pass with the feature both compiled out and
+compiled in; no live two-stage replay has qualified it for deployment.**
 
-**Implementation status (2026-08-09, all behind `AUTO_MODE_UPSTREAM_PORT`, which
+**Implementation status (2026-08-13, all behind `AUTO_MODE_UPSTREAM_PORT`, which
 is deliberately NOT in `scripts/build.ts` `fullExperimentalFeatures`, so it
 compiles out of `build:dev:full` and is opt-in via
 `--feature=AUTO_MODE_UPSTREAM_PORT`):**
@@ -31,18 +32,21 @@ compiles out of `build:dev:full` and is opt-in via
 | Advisory verdict category, fail-closed parser (closes G1) | landed `729a3c9e` |
 | Deny-seam hardening and circumvention coverage | landed `1bea2818` |
 | Classifier request/response dump, ungated | landed `537f88e5` |
-| Frozen replay corpus (`scripts/auto-mode-corpus.ts`) | landed `239ccc7e` |
+| Labeled replay expectations (`fixtures/auto-mode-expectations.ts`) | 20/20 measured single-stage verdicts correct |
+| Default two-stage flow | implemented 2026-08-13; feature-on unit coverage green |
 | **Machine-specific config content (delta 5)** | **not started; operator content decision** |
-| **The replay run itself** | **not started; blocks enabling the flag** |
+| **Feature-on two-stage live replay** | **not run; blocks enabling the flag** |
 
-Nothing is enabled. The corpus now exists and is frozen; what remains is running
-the replay against it and setting the thresholds.
+Nothing is enabled. What remains is the operator-owned machine configuration, a
+clean live replay of the two-stage path, and then explicit build-feature wiring.
 
-### The frozen corpus
+### Historical frozen corpus
 
-`fixtures/auto-mode-corpus.json`, verified by
-`fixtures/auto-mode-corpus.sha256` (`shasum -a 256 -c`). Regenerating from
-unchanged transcripts reproduces the file byte for byte.
+The 2026-08-09 implementation briefly tracked `fixtures/auto-mode-corpus.json`
+and `fixtures/auto-mode-corpus.sha256`. Those artifacts are not present in the
+current tree. The retained executable gate is
+`fixtures/auto-mode-expectations.ts`, run through
+`scripts/auto-mode-replay.ts`.
 
 - **428 block cases** — every retained classifier denial with the reason it
   gave. These answer "did we fix the over-blocking". (The 162/163 figures
@@ -61,17 +65,19 @@ means "this work completed and was not objected to", not "the classifier passed
 this exact call". That is still the right regression signal — if the ported
 prompt blocks it, we want to know regardless of who allowed it first time.
 
-### Still owed before the gate can pass or fail
+### Still owed before enabling
 
-Point 3 of the specification. **Model and effort are now decided** (open
-decision 3): `gpt-5.6-luna` at maximum reasoning effort, set by the replay
-harness rather than by any setting. Still owed: repetition count, an exact
-parse-failure ceiling, and per-category acceptance thresholds — all of which
-need the corpus to exist before they can be set to anything meaningful.
-Supporting evidence:
-`docs/reports/2026-08-09-auto-mode-denial-analysis.md` (what our classifier did)
-and `docs/reports/2026-08-09-claude-code-auto-mode-architecture.md` (what
-upstream's is, and how far each claim was verified).
+- Run the labeled cases against the live two-stage path in one clean
+  feature-enabled pass. Classifier-unavailable results remain non-passing.
+- Decide and install the machine-specific environment, allow, and deny content
+  from delta 5.
+- Confirm provider availability is sufficient for failover during unattended
+  operation.
+- Add `AUTO_MODE_UPSTREAM_PORT` to the intended build feature set only after
+  those checks pass.
+
+The default two-stage path uses boolean harm screening and conditional
+adjudication, not severity mode, so it has no per-category thresholds to tune.
 
 ## Ported as-is
 

@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { feature } from 'bun:bundle'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import type { ToolPermissionContext } from '../../Tool.js'
 import { buildSettingsDenyRulesText } from './autoModeDenyRules.js'
 import {
@@ -7,13 +8,17 @@ import {
 } from './autoModeMeta.js'
 import { getAutoModeClassifierAttempts } from './autoModeProviderLadder.js'
 import {
+  _forTest,
   buildTranscriptForClassifier,
+  getAutoModeClassifierTranscript,
   getClassifierThinkingConfigForTest,
   getYoloClassifierToolSchema,
   isProviderAuthenticationErrorForTest,
   isClassifierFallbackError,
+  YOLO_CLASSIFIER_TOOL_NAME,
 } from './yoloClassifier.js'
 import { translateToCodexBody } from '../../services/api/codex-fetch-adapter.js'
+import type { sideQuery } from '../sideQuery.js'
 
 describe('auto mode provider ladder', () => {
   test('starts Claude classifiers on the configured Anthropic provider and crosses to GPT', () => {
@@ -357,5 +362,283 @@ describe('auto mode default classifier ladder', () => {
     expect(attempts[0]).toEqual({ provider: 'openai', model: 'gpt-5.6-luna' })
     expect(attempts.at(-1)).toEqual({ provider: 'firstParty', model: 'sonnet' })
     expect(attempts.filter(a => a.provider === 'openai')).toHaveLength(1)
+  })
+})
+
+describe('two-stage upstream classifier', () => {
+  const originalOAuthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN
+
+  beforeEach(() => {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-token'
+  })
+
+  afterEach(() => {
+    if (originalOAuthToken === undefined) {
+      delete process.env.CLAUDE_CODE_OAUTH_TOKEN
+    } else {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = originalOAuthToken
+    }
+  })
+
+  const tools = [
+    {
+      name: 'Bash',
+      toAutoClassifierInput: (input: { command: string }) => input.command,
+    },
+  ] as unknown as Parameters<typeof _forTest.classifyYoloAction>[2]
+  const action = {
+    role: 'assistant',
+    content: [
+      {
+        type: 'tool_use',
+        name: 'Bash',
+        input: { command: 'rm -rf build' },
+        id: 'toolu_pending',
+      },
+    ],
+  } as Parameters<typeof _forTest.classifyYoloAction>[1]
+  const context = {
+    mode: 'auto',
+    additionalWorkingDirectories: new Map(),
+    alwaysAllowRules: {},
+    alwaysDenyRules: {},
+    alwaysAskRules: {},
+    isBypassPermissionsModeAvailable: false,
+  } as ToolPermissionContext
+  const usage = (
+    inputTokens: number,
+    outputTokens: number,
+    cacheReadInputTokens: number,
+    cacheCreationInputTokens: number,
+  ) => ({
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    cache_read_input_tokens: cacheReadInputTokens,
+    cache_creation_input_tokens: cacheCreationInputTokens,
+  })
+  const response = (
+    id: string,
+    requestId: string,
+    input: unknown,
+    responseUsage = usage(1, 2, 3, 4),
+  ) =>
+    Object.assign(
+      {
+        id,
+        type: 'message',
+        role: 'assistant',
+        model: 'gpt-5.6-luna',
+        content: [
+          {
+            type: 'tool_use',
+            id: `toolu_${id}`,
+            name: YOLO_CLASSIFIER_TOOL_NAME,
+            input,
+          },
+        ],
+        stop_reason: 'tool_use',
+        stop_sequence: null,
+        usage: responseUsage,
+      },
+      { _request_id: requestId },
+    )
+
+  const classify = (
+    fakeSideQuery: (...args: Parameters<typeof sideQuery>) => unknown,
+  ) => {
+    const signal = new AbortController().signal
+    return feature('AUTO_MODE_UPSTREAM_PORT')
+      ? _forTest.classifyYoloActionWithSideQuery(
+          [],
+          action,
+          tools,
+          context,
+          signal,
+          fakeSideQuery as typeof sideQuery,
+        )
+      : _forTest.classifyYoloAction(
+          [],
+          action,
+          tools,
+          context,
+          signal,
+          {
+            upstreamPortEnabled: true,
+            sideQuery: fakeSideQuery as typeof sideQuery,
+          },
+        )
+  }
+
+  test('allows at stage 1 with the minimal no-thinking request', async () => {
+    const requests: Parameters<typeof sideQuery>[0][] = []
+    const result = await classify(async request => {
+      requests.push(request)
+      return response('msg_fast', 'req_fast', { shouldBlock: false })
+    })
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.max_tokens).toBe(64)
+    expect(requests[0]?.thinking).toBe(false)
+    expect(requests[0]?.reasoningEffort).toBeUndefined()
+    const system = requests[0]?.system
+    expect(Array.isArray(system)).toBe(true)
+    if (!Array.isArray(system)) throw new Error('expected system prompt blocks')
+    expect(system).toHaveLength(2)
+    expect(system[0]).toMatchObject({
+      type: 'text',
+      cache_control: { type: 'ephemeral' },
+    })
+    expect(system[1]?.text).toContain('Ignore user intent and all ALLOW')
+    expect(system[1]?.text).toContain(
+      'Set shouldBlock to true if ANY BLOCK rule could',
+    )
+    if (feature('AUTO_MODE_UPSTREAM_PORT')) {
+      expect(JSON.stringify(requests[0]?.system)).toContain('Data Exfiltration')
+    }
+    expect(requests[0]?.tools?.[0]?.input_schema).toEqual({
+      type: 'object',
+      properties: {
+        shouldBlock: {
+          type: 'boolean',
+          description: 'Whether any BLOCK rule could apply.',
+        },
+      },
+      required: ['shouldBlock'],
+      additionalProperties: false,
+    })
+    expect(result).toMatchObject({
+      shouldBlock: false,
+      stage: 'fast',
+      usage: {
+        inputTokens: 1,
+        outputTokens: 2,
+        cacheReadInputTokens: 3,
+        cacheCreationInputTokens: 4,
+      },
+      stage1RequestId: 'req_fast',
+      stage1MsgId: 'msg_fast',
+    })
+    expect(result.stage2Usage).toBeUndefined()
+    expect(JSON.parse(getAutoModeClassifierTranscript() ?? 'null')).toHaveLength(
+      1,
+    )
+  })
+
+  test('escalates to stage 2 and combines usage and identifiers', async () => {
+    const requests: Parameters<typeof sideQuery>[0][] = []
+    const responses = [
+      response(
+        'msg_fast',
+        'req_fast',
+        { shouldBlock: true },
+        usage(1, 2, 3, 4),
+      ),
+      response(
+        'msg_thinking',
+        'req_thinking',
+        {
+          thinking: 'The action matches a block rule.',
+          shouldBlock: true,
+          reason: 'Destructive action',
+        },
+        usage(10, 20, 30, 40),
+      ),
+    ]
+    const result = await classify(async request => {
+      requests.push(request)
+      return responses.shift()
+    })
+
+    expect(requests).toHaveLength(2)
+    expect(requests[1]?.max_tokens).toBeGreaterThan(64)
+    expect(result).toMatchObject({
+      shouldBlock: true,
+      reason: 'Destructive action',
+      stage: 'thinking',
+      usage: {
+        inputTokens: 11,
+        outputTokens: 22,
+        cacheReadInputTokens: 33,
+        cacheCreationInputTokens: 44,
+      },
+      stage1RequestId: 'req_fast',
+      stage1MsgId: 'msg_fast',
+      stage2RequestId: 'req_thinking',
+      stage2MsgId: 'msg_thinking',
+    })
+    expect(JSON.parse(getAutoModeClassifierTranscript() ?? 'null')).toHaveLength(
+      2,
+    )
+  })
+
+  test('fails closed on a malformed stage 1 response without stage 2', async () => {
+    let calls = 0
+    const result = await classify(async () => {
+      calls++
+      return response('msg_fast', 'req_fast', {
+        shouldBlock: 'not-a-boolean',
+      })
+    })
+
+    expect(calls).toBe(1)
+    expect(result).toMatchObject({
+      shouldBlock: true,
+      stage: 'fast',
+      autoModeOutcome: 'automode-parsing-error',
+      stage1RequestId: 'req_fast',
+      stage1MsgId: 'msg_fast',
+    })
+    expect(result.stage2Usage).toBeUndefined()
+  })
+
+  test('fails closed when stage 1 is unavailable without stage 2', async () => {
+    let calls = 0
+    const result = await classify(async () => {
+      calls++
+      throw Object.assign(new Error('policy rejected'), { status: 403 })
+    })
+
+    expect(calls).toBe(1)
+    expect(result).toMatchObject({
+      shouldBlock: true,
+      unavailable: true,
+      autoModeOutcome: 'automode-unavailable',
+      stage: 'fast',
+    })
+  })
+
+  test('fails closed on a malformed stage 2 response', async () => {
+    const responses = [
+      response('msg_fast', 'req_fast', { shouldBlock: true }),
+      response('msg_thinking', 'req_thinking', { shouldBlock: false }),
+    ]
+    const result = await classify(async () => responses.shift()!)
+
+    expect(result).toMatchObject({
+      shouldBlock: true,
+      autoModeOutcome: 'automode-parsing-error',
+      stage: 'thinking',
+      stage1RequestId: 'req_fast',
+      stage2RequestId: 'req_thinking',
+    })
+  })
+
+  test('uses the provider fallback ladder independently for stage 1', async () => {
+    const requests: Parameters<typeof sideQuery>[0][] = []
+    const result = await classify(async request => {
+      requests.push(request)
+      if (requests.length === 1) {
+        throw Object.assign(new Error('temporarily unavailable'), { status: 503 })
+      }
+      return response('msg_fast', 'req_fast', { shouldBlock: false })
+    })
+
+    expect(requests.map(request => `${request.provider}/${request.model}`)).toEqual(
+      ['openai/gpt-5.6-luna', 'firstParty/sonnet'],
+    )
+    expect(result).toMatchObject({ shouldBlock: false, stage: 'fast' })
+    expect(JSON.parse(getAutoModeClassifierTranscript() ?? 'null')).toHaveLength(
+      1,
+    )
   })
 })
