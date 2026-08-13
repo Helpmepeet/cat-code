@@ -3632,8 +3632,6 @@ function wordDiffPair(
   }
 }
 
-/** One word-diffed line body: changed words get the emphasis wash, unchanged
- * words dim (prototype `renderLine`). */
 /**
  * One hunk: classify each line, walk the current-file gutter from the hunk's
  * `oldStart`/`newStart`, and pair consecutive del-runs with add-runs for the
