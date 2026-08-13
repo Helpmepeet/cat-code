@@ -286,6 +286,21 @@ ${
     : `When using the ${AGENT_TOOL_NAME} tool, specify a subagent_type parameter to select which agent type to use. If omitted, the general-purpose agent is used.`
 }`
 
+  const agentModeWorkerControlGuidance = [
+    canStopTask
+      ? `- To stop a running background agent, use ${TASK_STOP_TOOL_NAME} with \`task_id\` set to the \`agentId\` returned by ${AGENT_TOOL_NAME}.`
+      : null,
+    canResumeAgent
+      ? `- Use ${RESUME_AGENT_TOOL_NAME} to continue a stopped worker when its existing context is still the right context.`
+      : null,
+    canSendMessage
+      ? `- Use ${SEND_MESSAGE_TOOL_NAME} only to queue messages into a worker that is still running. ${SEND_MESSAGE_TOOL_NAME} does not cancel or interrupt the worker.`
+      : null,
+    '- Otherwise spawn a fresh worker with a cleaner brief.',
+  ]
+    .filter((line): line is string => line !== null)
+    .join('\n')
+
   const agentModeShared = isGPTPromptStyle
     ? [
         `Launch a delegated worker for a bounded part of the run.
@@ -313,7 +328,7 @@ USAGE RULES:
 - Use independent verification workers whenever a coding worker produced a non-trivial patch, or prompt, session-state, worker-control, or orchestration behavior changed, instead of treating implementor self-checks as completion proof.
 - If a coding worker changed more than one file, or changed prompt, session-state, worker-control, or orchestration behavior, use an independent verification worker by default.
 - Parallel work only when ownership is clear and the results will join cleanly.
-- Use ${RESUME_AGENT_TOOL_NAME} to continue a stopped worker when its existing context is still the right context. Use ${SEND_MESSAGE_TOOL_NAME} only to queue messages into a worker that is still running. Otherwise spawn a fresh worker with a cleaner brief.`,
+${agentModeWorkerControlGuidance}`,
       ].join('\n')
     : `Launch a delegated worker for a bounded part of the run.
 
@@ -336,7 +351,7 @@ Usage notes:
 - Use independent verification workers whenever a coding worker produced a non-trivial patch, or prompt, session-state, worker-control, or orchestration behavior changed, instead of treating implementor self-checks as completion proof.
 - If a coding worker changed more than one file, or changed prompt, session-state, worker-control, or orchestration behavior, use an independent verification worker by default.
 - Parallel work only when ownership is clear and the results will join cleanly.
-- Use ${RESUME_AGENT_TOOL_NAME} to continue a stopped worker when its existing context is still the right context. Use ${SEND_MESSAGE_TOOL_NAME} only to queue messages into a worker that is still running. Otherwise spawn a fresh worker with a cleaner brief.`
+${agentModeWorkerControlGuidance}`
 
   // Coordinator mode and Agent mode both get slim prompts because their
   // system prompts already carry the main behavior contract.

@@ -73,7 +73,7 @@ describe('Agent tool prompt in Agent Mode', () => {
     expect(prompt).toContain('prompt, session-state, worker-control, or orchestration behavior changed')
   })
 
-  test('omits ResumeAgent guidance when the invoker cannot resume agents', async () => {
+  test('gates normal-mode worker control guidance by caller capabilities', async () => {
     const withoutResume = await getPrompt(
       getBuiltInAgents(),
       false,
@@ -108,5 +108,44 @@ describe('Agent tool prompt in Agent Mode', () => {
       'use TaskStop with `task_id` set to the `agentId` returned by Agent',
     )
     expect(topLevel).toContain('SendMessage does not cancel it')
+  })
+
+  test('gates Agent Mode worker control guidance by caller capabilities', async () => {
+    const restricted = await getPrompt(
+      getBuiltInAgents(),
+      false,
+      undefined,
+      'openai',
+      true,
+      {
+        canSendMessage: false,
+        canResumeAgent: false,
+        canSpawnAgent: true,
+        canStopTask: false,
+      },
+    )
+    expect(restricted).not.toContain('Use ResumeAgent')
+    expect(restricted).not.toContain('Use SendMessage')
+    expect(restricted).not.toContain('use TaskStop')
+
+    const full = await getPrompt(
+      getBuiltInAgents(),
+      false,
+      undefined,
+      'openai',
+      true,
+      {
+        canSendMessage: true,
+        canResumeAgent: true,
+        canSpawnAgent: true,
+        canStopTask: true,
+      },
+    )
+    expect(full).toContain(
+      'use TaskStop with `task_id` set to the `agentId` returned by Agent',
+    )
+    expect(full).toContain('Use ResumeAgent')
+    expect(full).toContain('Use SendMessage')
+    expect(full).toContain('does not cancel or interrupt the worker')
   })
 })
