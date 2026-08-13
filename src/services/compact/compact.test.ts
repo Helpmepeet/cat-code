@@ -125,10 +125,12 @@ describe('compactConversation', () => {
   const originalSessionId = getSessionId()
   const originalProjectDir = getSessionProjectDir()
   let tempDir: string
+  let streamingRequests: Array<Record<string, unknown>>
 
   beforeEach(async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'compact-conversation-'))
     switchSession('compact-session', tempDir)
+    streamingRequests = []
 
     await mock.module('../analytics/growthbook.js', () => ({
       getFeatureValue_CACHED_MAY_BE_STALE: mock(
@@ -139,7 +141,8 @@ describe('compactConversation', () => {
 
     await mock.module('../api/claude.js', () => ({
       getMaxOutputTokensForModel: mock(() => 4096),
-      queryModelWithStreaming: mock(async function* () {
+      queryModelWithStreaming: mock(async function* (request: unknown) {
+        streamingRequests.push(request as Record<string, unknown>)
         yield createAssistantMessage(
           '<summary>Keep the compacted conversation moving.</summary>',
         )
@@ -187,6 +190,34 @@ describe('compactConversation', () => {
     expect(postCompactMessages[0]?.type).toBe('system')
     expect(summaryMessage).toContain('Keep the compacted conversation moving.')
     expect(summaryMessage).not.toContain('Agent Mode Run State')
+  })
+
+  test('streaming fallback passes the compacting agent as the request owner', async () => {
+    const { compactConversation } = await import('./compact.js')
+    const messages = [
+      createUserMessage({ content: 'Please compact this agent context.' }),
+      createAssistantMessage('I will compact this agent context.'),
+    ]
+    const context = createToolUseContext(messages)
+    context.agentId = 'compact-agent' as never
+
+    await compactConversation(
+      messages,
+      context,
+      {
+        systemPrompt: ['system prompt'],
+        userContext: {},
+        systemContext: {},
+        toolUseContext: context,
+        forkContextMessages: messages,
+      },
+      true,
+    )
+
+    expect(streamingRequests).toHaveLength(1)
+    expect(streamingRequests[0]?.options).toMatchObject({
+      agentId: 'compact-agent',
+    })
   })
 
   test('post-compact completed local-agent attachment points to TaskOutput instead of raw output file reads', async () => {

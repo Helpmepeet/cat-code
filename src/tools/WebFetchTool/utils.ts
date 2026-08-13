@@ -5,6 +5,7 @@ import {
   logEvent,
 } from '../../services/analytics/index.js'
 import { queryHaiku } from '../../services/api/claude.js'
+import type { AgentId } from '../../types/ids.js'
 import { AbortError } from '../../utils/errors.js'
 import { getWebFetchUserAgent } from '../../utils/http.js'
 import { logError } from '../../utils/log.js'
@@ -487,6 +488,7 @@ export async function applyPromptToMarkdown(
   signal: AbortSignal,
   isNonInteractiveSession: boolean,
   isPreapprovedDomain: boolean,
+  agentId?: AgentId,
 ): Promise<string> {
   // Truncate content to avoid "Prompt is too long" errors from the secondary model
   const truncatedContent =
@@ -510,6 +512,7 @@ export async function applyPromptToMarkdown(
       isNonInteractiveSession,
       hasAppendSystemPrompt: false,
       mcpTools: [],
+      agentId,
     },
   })
 

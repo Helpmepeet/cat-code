@@ -18,7 +18,8 @@ import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEve
 import { clearDumpState } from '../../services/api/dumpPrompts.js';
 import { EMPTY_USAGE } from '../../services/api/emptyUsage.js';
 import { completeAgentTask as completeAsyncAgent, createActivityDescriptionResolver, createProgressTracker, enqueueAgentNotification, failAgentTask as failAsyncAgent, getProgressUpdate, getTokenCountFromTracker, isLocalAgentTask, killAsyncAgent, registerAgentForeground, registerAsyncAgent, unregisterAgentForeground, updateAgentProgress as updateAsyncAgentProgress, updateProgressFromMessage } from '../../tasks/LocalAgentTask/LocalAgentTask.js';
-import { registerCodexLease } from '../../services/api/codexAccountLeaseManager.js';
+import { registerCodexLease, releaseCodexLease } from '../../services/api/codexAccountLeaseManager.js';
+import { clearWebSocketSession } from '../../services/api/codex-websocket-transport.js';
 import { checkRemoteAgentEligibility, formatPreconditionError, getRemoteTaskSessionUrl, registerRemoteAgentTask } from '../../tasks/RemoteAgentTask/RemoteAgentTask.js';
 import { assembleToolPool } from '../../tools.js';
 import { asAgentId } from '../../types/ids.js';
@@ -234,6 +235,11 @@ const PROGRESS_THRESHOLD_MS = 2000; // Show background hint after 2 seconds
 const isBackgroundTasksDisabled =
   // eslint-disable-next-line custom-rules/no-process-env-top-level -- Intentional: schema must be defined at module load
   isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS);
+
+export function releaseSynchronousAgentCodexResources(agentId: string): void {
+  releaseCodexLease(agentId);
+  clearWebSocketSession(`${getSessionId()}/${agentId}`);
+}
 
 // Auto-background agent tasks after this many ms (0 = disabled)
 // Enabled by env var OR GrowthBook gate (checked lazily since GB may not be ready at module load)
@@ -1905,6 +1911,9 @@ export const AgentTool = buildTool({
           // Skip if backgrounded — the background continuation is still running in it
           if (!wasBackgrounded) {
             worktreeResult = await cleanupWorktreeIfNeeded();
+          }
+          if (isBackgroundTasksDisabled) {
+            releaseSynchronousAgentCodexResources(syncAgentId);
           }
         }
 

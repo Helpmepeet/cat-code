@@ -11,6 +11,7 @@
 import type { UUID } from 'crypto'
 import { randomUUID } from 'crypto'
 import type { PromptCommand } from '../commands.js'
+import { getSessionId } from '../bootstrap/state.js'
 import type { QuerySource } from '../constants/querySource.js'
 import type { CanUseToolFn } from '../hooks/useCanUseTool.js'
 import { query } from '../query.js'
@@ -19,6 +20,8 @@ import {
   logEvent,
 } from '../services/analytics/index.js'
 import { accumulateUsage, updateUsage } from '../services/api/claude.js'
+import { releaseCodexLease } from '../services/api/codexAccountLeaseManager.js'
+import { clearWebSocketSession } from '../services/api/codex-websocket-transport.js'
 import { EMPTY_USAGE, type NonNullableUsage } from '../services/api/logging.js'
 import type { ToolUseContext } from '../Tool.js'
 import type { AgentDefinition } from '../tools/AgentTool/loadAgentsDir.js'
@@ -605,6 +608,11 @@ export async function runForkedAgent({
     isolatedToolUseContext.readFileState.clear()
     // Release the cloned fork context messages
     initialMessages.length = 0
+    const agentId = isolatedToolUseContext.agentId
+    if (agentId) {
+      releaseCodexLease(agentId)
+      clearWebSocketSession(`${getSessionId()}/${agentId}`)
+    }
   }
 
   logForDebugging(
