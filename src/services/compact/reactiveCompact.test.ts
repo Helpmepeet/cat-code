@@ -92,6 +92,7 @@ function createToolUseContext(messages: Message[]): ToolUseContext {
     },
     mcp: { tools: [], clients: [] },
     tasks: {},
+    sessionHooks: new Map(),
     fastMode: false,
     effortValue: undefined,
     advisorModel: undefined,
@@ -253,6 +254,21 @@ describe('reactiveCompactOnPromptTooLong', () => {
     expect(result.boundaryMarker.compactMetadata?.preservedMessages).toEqual({
       anchorUuid: result.summaryMessages.at(-1)!.uuid,
       durableUuids: [newestAnswer.uuid, newest.uuid],
+    })
+
+    const { buildPostCompactMessages } = await import('./compact.js')
+    const { roughTokenCountEstimationForMessages } = await import(
+      '../tokenEstimation.js'
+    )
+    expect(result.postCompactTokenCount).toBe(11)
+    expect(result.truePostCompactTokenCount).toBe(
+      roughTokenCountEstimationForMessages(buildPostCompactMessages(result)),
+    )
+    expect(result.compactionUsage).toEqual({
+      input_tokens: 10,
+      output_tokens: 1,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
     })
     expect(result.boundaryMarker.compactMetadata?.preservedSegment).toEqual({
       headUuid: newestAnswer.uuid,
@@ -537,6 +553,96 @@ const REACTIVE_COMPILED_IN = ((): boolean => {
   }
   return false
 })()
+
+describe('query prompt-too-long recovery', () => {
+  test.if(REACTIVE_COMPILED_IN)(
+    'falls back to full compaction in the same turn without double-firing PreCompact',
+    async () => {
+      let summaryAttempts = 0
+      await mock.module('../analytics/growthbook.js', () => ({
+        getFeatureValue_CACHED_MAY_BE_STALE: mock(
+          (key: string, defaultValue: boolean) =>
+            key === 'tengu_compact_cache_prefix' ? false : defaultValue,
+        ),
+      }))
+      await mock.module('../api/claude.js', () => ({
+        ...realClaudeApi,
+        queryModelWithStreaming: mock(async function* () {
+          summaryAttempts++
+          yield assistant('summary', '<summary>Fully compacted.</summary>')
+        }),
+      }))
+      const { query } = await import('../../query.js')
+
+      const messages = [
+        createUserMessage({ content: 'ONLY_USER_PROMPT' }),
+        assistantWithToolUse('round-1', 'oversized-tool'),
+        toolResult('oversized-tool', 'OVERSIZED_TOOL_RESULT'),
+      ]
+      const progress: { type: string; hookType?: string }[] = []
+      const context = createToolUseContext(messages)
+      context.onCompactProgress = event => progress.push(event)
+
+      let modelCalls = 0
+      const submittedRequests: Message[][] = []
+      const yielded: Message[] = []
+      for await (const message of query({
+        messages,
+        systemPrompt: ['system prompt'],
+        userContext: {},
+        systemContext: {},
+        canUseTool: async () => ({
+          behavior: 'allow',
+          decisionReason: { type: 'other', reason: 'test allows all tools' },
+        }),
+        toolUseContext: context,
+        querySource: 'repl_main_thread',
+        deps: {
+          uuid: () => 'query-chain-id',
+          microcompact: async input => ({ messages: input }),
+          autocompact: async () => ({
+            wasCompacted: false,
+            consecutiveFailures: 0,
+          }),
+          callModel: async function* ({ messages: request }) {
+            submittedRequests.push(request)
+            modelCalls++
+            if (modelCalls === 1) {
+              yield promptTooLongResponse()
+              return
+            }
+            yield assistant('recovered', 'RECOVERED_IN_SAME_TURN')
+          },
+        },
+      })) {
+        yielded.push(message)
+      }
+
+      expect(modelCalls).toBe(2)
+      expect(summaryAttempts).toBe(1)
+      expect(submittedRequests[1]?.some(message => message.type === 'system')).toBe(
+        true,
+      )
+      expect(
+        yielded.some(
+          message =>
+            message.type === 'assistant' &&
+            message.message.content.some(
+              block =>
+                block.type === 'text' && block.text === 'RECOVERED_IN_SAME_TURN',
+            ),
+        ),
+      ).toBe(true)
+      expect(yielded).not.toContainEqual(promptTooLongResponse())
+      expect(
+        progress.filter(
+          event =>
+            event.type === 'hooks_start' && event.hookType === 'pre_compact',
+        ),
+      ).toHaveLength(1)
+    },
+  )
+})
 
 describe('autoCompactIfNeeded routing', () => {
   const originalSessionId = getSessionId()

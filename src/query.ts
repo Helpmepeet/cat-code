@@ -571,6 +571,7 @@ async function* queryLoop(
         originalMessageCount: messages.length,
         compactedMessageCount:
           compactionResult.summaryMessages.length +
+          (compactionResult.messagesToKeep?.length ?? 0) +
           compactionResult.attachments.length +
           compactionResult.hookResults.length,
         preCompactTokenCount,

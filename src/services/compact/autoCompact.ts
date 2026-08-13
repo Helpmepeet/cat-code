@@ -534,11 +534,9 @@ export async function shouldAutoCompact(
  * autoCompactIfNeeded's existing classifier to decide whether they burn
  * circuit-breaker budget, rather than paying for a second doomed API call.
  *
- * A preserved tail large enough to leave the session still over the threshold
- * re-triggers on the next turn; that second pass sees only the preserved tail
- * after the boundary, reports 'too_few_groups', and full compaction closes it.
- * The loop is self-limiting at one extra compaction, which is why no separate
- * size guard exists here.
+ * A preserved tail large enough to exceed the provider limit is rejected on
+ * the immediate retry. The query recovery path then sees that the tail cannot
+ * be prefix-split and runs full compaction within the same turn.
  *
  * PreCompact hooks run HERE, not inside reactiveCompactOnPromptTooLong: every
  * caller of that function runs them outside so it can merge the PreCompact

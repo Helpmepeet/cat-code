@@ -37,7 +37,11 @@ import {
   getTranscriptPath,
   reAppendSessionMetadata,
 } from '../../utils/sessionStorage.js'
-import { tokenCountWithEstimation } from '../../utils/tokens.js'
+import {
+  getTokenUsage,
+  tokenCountFromLastAPIResponse,
+  tokenCountWithEstimation,
+} from '../../utils/tokens.js'
 import { extractDiscoveredToolNames } from '../../utils/toolSearch.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../analytics/growthbook.js'
 import {
@@ -58,6 +62,7 @@ import { isAutoCompactEnabled } from './autoCompact.js'
 import {
   annotateBoundaryWithPreservedSegment,
   type CompactionResult,
+  compactConversation,
   createAsyncAgentAttachmentsIfNeeded,
   createPlanAttachmentIfNeeded,
   createPlanModeAttachmentIfNeeded,
@@ -536,6 +541,15 @@ export async function reactiveCompactOnPromptTooLong(
       isVisibleInTranscriptOnly: true,
     }),
   ]
+  const postCompactTokenCount = tokenCountFromLastAPIResponse([summaryResponse])
+  const truePostCompactTokenCount = roughTokenCountEstimationForMessages([
+    boundaryMarker,
+    ...summaryMessages,
+    ...messagesToKeep,
+    ...attachments,
+    ...hookResults,
+  ])
+  const compactionUsage = getTokenUsage(summaryResponse)
 
   if (feature('PROMPT_CACHE_BREAK_DETECTION')) {
     notifyCompaction(
@@ -579,14 +593,17 @@ export async function reactiveCompactOnPromptTooLong(
       hookResults,
       userDisplayMessage: postCompactHookResult.userDisplayMessage,
       preCompactTokenCount,
+      postCompactTokenCount,
+      truePostCompactTokenCount,
+      compactionUsage,
     },
   }
 }
 
 /**
  * Query-loop entry point: the API rejected the request and the error is being
- * withheld. Returns a CompactionResult the caller replays into the SAME turn,
- * or null to let the withheld error surface.
+ * withheld. Returns a prefix result when the conversation can be split, a full
+ * compaction result when it cannot, or null when recovery should stop.
  */
 export async function tryReactiveCompact(params: {
   hasAttempted: boolean
@@ -607,6 +624,25 @@ export async function tryReactiveCompact(params: {
   }
 
   const context = cacheSafeParams.toolUseContext
+  if (!canPrefixCompact(messages)) {
+    logForDebugging(
+      'reactive compact: conversation too short to split — falling back to full compaction',
+    )
+    try {
+      return await compactConversation(
+        messages,
+        context,
+        cacheSafeParams,
+        true,
+        undefined,
+        true,
+      )
+    } catch (error) {
+      logError(error)
+      return null
+    }
+  }
+
   context.setSDKStatus?.('compacting')
   context.onCompactProgress?.({ type: 'hooks_start', hookType: 'pre_compact' })
   try {
