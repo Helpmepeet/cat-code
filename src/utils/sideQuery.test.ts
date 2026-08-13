@@ -189,6 +189,7 @@ describe('sideQuery', () => {
       skipSystemPromptPrefix: true,
       querySource: 'memdir_relevance',
       agentId: 'memory-agent',
+      maxRetries: 0,
     })
 
     expect(attempts).toBe(2)

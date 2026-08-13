@@ -258,7 +258,7 @@ export async function sideQuery(opts: SideQueryOptions): Promise<BetaMessage> {
       createClient,
       createMessage,
       {
-        maxRetries,
+        maxRetries: Math.max(1, maxRetries),
         model,
         thinkingConfig:
           thinking === false

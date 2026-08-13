@@ -1,38 +1,29 @@
-import { afterEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 
-import { getSessionId } from '../../bootstrap/state.js'
-import * as realCodexLeaseManager from '../../services/api/codexAccountLeaseManager.js'
-import * as realWebSocketTransport from '../../services/api/codex-websocket-transport.js'
-
-const releaseCodexLease = mock(() => {})
-const clearWebSocketSession = mock(() => {})
-
-mock.module('../../services/api/codexAccountLeaseManager.js', () => ({
-  ...realCodexLeaseManager,
-  releaseCodexLease,
-}))
-
-mock.module('../../services/api/codex-websocket-transport.js', () => ({
-  ...realWebSocketTransport,
-  clearWebSocketSession,
-}))
+import {
+  getCodexLeaseForOwner,
+  resetCodexLeaseManagerForTest,
+  seedCodexLeaseForTest,
+} from '../../services/api/codexAccountLeaseManager.js'
 
 describe('releaseSynchronousAgentCodexResources', () => {
   afterEach(() => {
-    releaseCodexLease.mockClear()
-    clearWebSocketSession.mockClear()
+    resetCodexLeaseManagerForTest()
   })
 
-  test('releases the synchronous agent owner and its session-scoped WebSocket', async () => {
+  test('releases the synchronous agent owner', async () => {
     const { releaseSynchronousAgentCodexResources } = await import(
       './AgentTool.js'
     )
+    seedCodexLeaseForTest({
+      ownerId: 'sync-agent',
+      ownerType: 'subagent',
+      ownerLabel: 'Synchronous agent',
+      accountId: 'account-a',
+    })
 
     releaseSynchronousAgentCodexResources('sync-agent')
 
-    expect(releaseCodexLease).toHaveBeenCalledWith('sync-agent')
-    expect(clearWebSocketSession).toHaveBeenCalledWith(
-      `${getSessionId()}/sync-agent`,
-    )
+    expect(getCodexLeaseForOwner('sync-agent')).toBeUndefined()
   })
 })

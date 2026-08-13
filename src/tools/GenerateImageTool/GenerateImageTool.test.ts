@@ -4,6 +4,7 @@ import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import type { ToolPermissionContext, ToolUseContext } from '../../Tool.js'
 import {
+  getCodexLeaseForOwner,
   resetCodexLeaseManagerForTest,
   seedCodexLeaseForTest,
 } from '../../services/api/codexAccountLeaseManager.js'
@@ -583,6 +584,74 @@ describe('GenerateImageTool', () => {
     expect(await readFile(outputPath)).toEqual(generatedBytes)
   })
 
+  test('fails over only the subagent lease after a Codex image endpoint 429', async () => {
+    delete process.env.CAT_CODE_IMAGE_BACKEND
+    delete process.env.OPENAI_API_KEY
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount('main-account'),
+        buildPoolAccount('subagent-account'),
+        buildPoolAccount('backup-account'),
+      ],
+    })
+    seedCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'Main thread',
+      accountId: 'main-account',
+    })
+    seedCodexLeaseForTest({
+      ownerId: 'image-agent',
+      ownerType: 'subagent',
+      ownerLabel: 'Image agent',
+      accountId: 'subagent-account',
+    })
+
+    const outputPath = join(tempDir!, 'generated.png')
+    const generatedBytes = Buffer.from('generated image')
+    const requestAccounts: string[] = []
+    globalThis.fetch = (async (_input, init) => {
+      requestAccounts.push(
+        new Headers(init?.headers).get('chatgpt-account-id') ?? '',
+      )
+      if (requestAccounts.length === 1) {
+        return new Response('rate limited', { status: 429 })
+      }
+      return new Response(
+        [
+          'event: response.output_item.done',
+          `data: ${JSON.stringify({
+            type: 'response.output_item.done',
+            item: {
+              type: 'image_generation_call',
+              result: generatedBytes.toString('base64'),
+            },
+          })}`,
+          '',
+        ].join('\n'),
+        { status: 200 },
+      )
+    }) as typeof fetch
+
+    await GenerateImageTool.call(
+      {
+        prompt: 'retry without moving the main lease',
+        output_path: outputPath,
+      },
+      {
+        abortController: new AbortController(),
+        agentId: 'image-agent',
+        options: { mainLoopModel: 'gpt-5.6-terra' },
+      } as ToolUseContext,
+    )
+
+    expect(requestAccounts).toEqual(['subagent-account', 'backup-account'])
+    expect(getCodexLeaseForOwner('main-thread')?.accountId).toBe('main-account')
+    expect(getCodexLeaseForOwner('image-agent')?.accountId).toBe('backup-account')
+    expect(await readFile(outputPath)).toEqual(generatedBytes)
+  })
+
   test('fails over the main lease after a Codex image endpoint 401 without a refresh token', async () => {
     delete process.env.CAT_CODE_IMAGE_BACKEND
     delete process.env.OPENAI_API_KEY
@@ -643,6 +712,114 @@ describe('GenerateImageTool', () => {
         account => account.accountId === 'primary-account',
       )?.status,
     ).toBe('dead')
+    expect(await readFile(outputPath)).toEqual(generatedBytes)
+  })
+
+  test('retries a Codex image request with the refreshed account token after a 401', async () => {
+    delete process.env.CAT_CODE_IMAGE_BACKEND
+    delete process.env.OPENAI_API_KEY
+
+    const accountId = 'ca11ab1e-0000-4000-8000-00000000f102'
+    const oldAccessToken = mintAccessJwt(accountId, 0)
+    const newAccessToken = mintAccessJwt(accountId, 1)
+    const oldRefreshToken = 'image-refresh-old'
+    const newRefreshToken = 'image-refresh-new'
+    const vaultFilePath = join(tempDir!, 'vault', 'accounts', `${accountId}.json`)
+    await mkdir(dirname(vaultFilePath), { recursive: true })
+    await writeFile(
+      vaultFilePath,
+      `${JSON.stringify({
+        version: 1,
+        tokens: {
+          access_token: oldAccessToken,
+          refresh_token: oldRefreshToken,
+          account_id: accountId,
+          expires_at: Date.now() + 3_600_000,
+        },
+        refresh: { state: 'idle' },
+      })}\n`,
+    )
+    seedCodexAccountPoolForTest({
+      activeAccountId: accountId,
+      accounts: [
+        {
+          accountId,
+          accessToken: oldAccessToken,
+          refreshToken: oldRefreshToken,
+          expiresAt: Date.now() + 3_600_000,
+          source: 'vault',
+          status: 'healthy',
+          lastUsedAt: 0,
+          vaultFilePath,
+        },
+      ],
+    })
+    seedCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'Main thread',
+      accountId,
+    })
+
+    const outputPath = join(tempDir!, 'generated.png')
+    const generatedBytes = Buffer.from('generated image')
+    const requestTokens: string[] = []
+    let refreshCalls = 0
+    globalThis.fetch = (async (input, init) => {
+      const requestUrl =
+        typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url
+      if (requestUrl === 'https://auth.openai.com/oauth/token') {
+        refreshCalls += 1
+        return Response.json({
+          access_token: newAccessToken,
+          refresh_token: newRefreshToken,
+          id_token: newAccessToken,
+          expires_in: 3600,
+        })
+      }
+
+      requestTokens.push(
+        new Headers(init?.headers).get('authorization') ?? '',
+      )
+      if (requestTokens.length === 1) {
+        return new Response('unauthorized', { status: 401 })
+      }
+      return new Response(
+        [
+          'event: response.output_item.done',
+          `data: ${JSON.stringify({
+            type: 'response.output_item.done',
+            item: {
+              type: 'image_generation_call',
+              result: generatedBytes.toString('base64'),
+            },
+          })}`,
+          '',
+        ].join('\n'),
+        { status: 200 },
+      )
+    }) as typeof fetch
+
+    await GenerateImageTool.call(
+      {
+        prompt: 'retry after refreshing image credentials',
+        output_path: outputPath,
+      },
+      {
+        abortController: new AbortController(),
+        options: { mainLoopModel: 'gpt-5.6-terra' },
+      } as ToolUseContext,
+    )
+
+    expect(refreshCalls).toBe(1)
+    expect(requestTokens).toEqual([
+      `Bearer ${oldAccessToken}`,
+      `Bearer ${newAccessToken}`,
+    ])
     expect(await readFile(outputPath)).toEqual(generatedBytes)
   })
 

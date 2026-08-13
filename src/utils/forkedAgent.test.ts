@@ -1,14 +1,14 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test'
 
-import { getSessionId } from '../bootstrap/state.js'
-import * as realCodexLeaseManager from '../services/api/codexAccountLeaseManager.js'
-import * as realWebSocketTransport from '../services/api/codex-websocket-transport.js'
+import {
+  getCodexLeaseForOwner,
+  resetCodexLeaseManagerForTest,
+  seedCodexLeaseForTest,
+} from '../services/api/codexAccountLeaseManager.js'
 import type { ToolUseContext } from '../Tool.js'
 import { createFileStateCacheWithSizeLimit } from './fileStateCache.js'
 import type { CacheSafeParams } from './forkedAgent.js'
 
-const releaseCodexLease = mock(() => {})
-const clearWebSocketSession = mock(() => {})
 let queryError: Error | undefined
 
 mock.module('../query.js', () => ({
@@ -17,16 +17,6 @@ mock.module('../query.js', () => ({
       throw queryError
     }
   }),
-}))
-
-mock.module('../services/api/codexAccountLeaseManager.js', () => ({
-  ...realCodexLeaseManager,
-  releaseCodexLease,
-}))
-
-mock.module('../services/api/codex-websocket-transport.js', () => ({
-  ...realWebSocketTransport,
-  clearWebSocketSession,
 }))
 
 function createCacheSafeParams(): CacheSafeParams {
@@ -72,27 +62,32 @@ async function runForkedAgentWithOwner(): Promise<void> {
 describe('runForkedAgent Codex resource cleanup', () => {
   afterEach(() => {
     queryError = undefined
-    releaseCodexLease.mockClear()
-    clearWebSocketSession.mockClear()
+    resetCodexLeaseManagerForTest()
   })
 
   test('releases the isolated tool-context owner after completion without a transcript ID', async () => {
+    seedCodexLeaseForTest({
+      ownerId: 'tool-context-owner',
+      ownerType: 'subagent',
+      ownerLabel: 'Forked agent',
+      accountId: 'account-a',
+    })
     await runForkedAgentWithOwner()
 
-    expect(releaseCodexLease).toHaveBeenCalledWith('tool-context-owner')
-    expect(clearWebSocketSession).toHaveBeenCalledWith(
-      `${getSessionId()}/tool-context-owner`,
-    )
+    expect(getCodexLeaseForOwner('tool-context-owner')).toBeUndefined()
   })
 
   test('releases the isolated tool-context owner when the query fails', async () => {
     queryError = new Error('query failed')
+    seedCodexLeaseForTest({
+      ownerId: 'tool-context-owner',
+      ownerType: 'subagent',
+      ownerLabel: 'Forked agent',
+      accountId: 'account-a',
+    })
 
     await expect(runForkedAgentWithOwner()).rejects.toThrow('query failed')
 
-    expect(releaseCodexLease).toHaveBeenCalledWith('tool-context-owner')
-    expect(clearWebSocketSession).toHaveBeenCalledWith(
-      `${getSessionId()}/tool-context-owner`,
-    )
+    expect(getCodexLeaseForOwner('tool-context-owner')).toBeUndefined()
   })
 })
