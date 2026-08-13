@@ -1,0 +1,53 @@
+A_low_notool Q1  OK  got=669 want=669 rtok=616 calls=0 17.3s
+A_low_notool Q2  OK  got=896 want=896 rtok=1097 calls=0 30.2s
+A_low_notool Q3  OK  got=132 want=132 rtok=780 calls=0 18.5s
+A_low_notool Q4  OK  got=161 want=161 rtok=679 calls=0 15.5s
+A_low_notool Q5  OK  got=223 want=223 rtok=636 calls=0 21.5s
+A_low_notool Q6  OK  got=39 want=39 rtok=476 calls=0 11.1s
+A_low_notool Q7  OK  got=107 want=107 rtok=1362 calls=0 40.7s
+A_low_notool Q8  OK  got=681 want=681 rtok=398 calls=0 9.6s
+A_low_notool Q9  OK  got=157 want=157 rtok=987 calls=0 24.1s
+A_low_notool Q10 OK  got=393 want=393 rtok=2588 calls=0 71.9s
+A_low_notool Q11 MISS got=177 want=83 rtok=2700 calls=0 83.6s
+A_low_notool Q12 OK  got=279 want=279 rtok=919 calls=0 22.6s
+A_low_notool Q13 OK  got=6992 want=6992 rtok=1664 calls=0 40.8s
+A_low_notool Q14 OK  got=289 want=289 rtok=644 calls=0 15.0s
+A_low_notool Q15 MISS got=10485760 want=20460 rtok=2336 calls=0 65.0s
+== A_low_notool: 13/15 ==
+B_low_tool Q1  OK  got=669 want=669 rtok=662 calls=1 24.6s
+B_low_tool Q2  OK  got=896 want=896 rtok=16 calls=1 23.7s
+B_low_tool Q3  OK  got=132 want=132 rtok=16 calls=1 26.6s
+B_low_tool Q4  OK  got=161 want=161 rtok=0 calls=1 18.6s
+B_low_tool Q5  OK  got=223 want=223 rtok=15 calls=1 13.7s
+B_low_tool Q6  OK  got=39 want=39 rtok=0 calls=1 12.6s
+B_low_tool Q7  OK  got=107 want=107 rtok=0 calls=1 33.8s
+B_low_tool Q8  OK  got=681 want=681 rtok=482 calls=1 16.6s
+B_low_tool Q9  OK  got=157 want=157 rtok=0 calls=1 34.9s
+B_low_tool Q10 OK  got=393 want=393 rtok=0 calls=1 54.0s
+B_low_tool Q11 MISS got=945 want=83 rtok=0 calls=1 67.4s
+B_low_tool Q12 OK  got=279 want=279 rtok=0 calls=1 35.4s
+B_low_tool Q13 MISS got=8120 want=6992 rtok=516 calls=1 31.5s
+B_low_tool Q14 OK  got=289 want=289 rtok=0 calls=1 19.2s
+B_low_tool Q15 MISS got=20971500 want=20460 rtok=0 calls=1 111.5s
+== B_low_tool: 12/15 ==
+H_high_notool Q1  OK  got=669 want=669 rtok=699 calls=0 15.0s
+H_high_notool Q2  OK  got=896 want=896 rtok=7847 calls=0 177.4s
+H_high_notool Q3  OK  got=132 want=132 rtok=1528 calls=0 36.9s
+H_high_notool Q4  OK  got=161 want=161 rtok=900 calls=0 18.1s
+H_high_notool Q5  OK  got=223 want=223 rtok=978 calls=0 19.8s
+H_high_notool Q6  OK  got=39 want=39 rtok=479 calls=0 10.7s
+H_high_notool Q7  OK  got=107 want=107 rtok=2070 calls=0 51.7s
+H_high_notool Q8  OK  got=681 want=681 rtok=484 calls=0 14.1s
+H_high_notool Q9  OK  got=157 want=157 rtok=2519 calls=0 49.7s
+H_high_notool Q10 OK  got=393 want=393 rtok=3379 calls=0 67.2s
+H_high_notool Q11 OK  got=83 want=83 rtok=9039 calls=0 212.6s
+H_high_notool Q12 OK  got=279 want=279 rtok=1372 calls=0 27.3s
+H_high_notool Q13 OK  got=6992 want=6992 rtok=1754 calls=0 34.2s
+H_high_notool Q14 OK  got=289 want=289 rtok=871 calls=0 17.4s
+H_high_notool Q15 OK  got=20460 want=20460 rtok=9512 calls=0 205.1s
+== H_high_notool: 15/15 ==
+{
+ "A_low_notool": "13/15",
+ "B_low_tool": "12/15",
+ "H_high_notool": "15/15"
+}

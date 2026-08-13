@@ -1,0 +1,680 @@
+{
+ "A_low_notool": {
+  "score": 13,
+  "n": 15,
+  "rows": [
+   {
+    "q": 1,
+    "id": "aime-2026-II-p9",
+    "got": "669",
+    "want": "669",
+    "hit": true,
+    "calls": [],
+    "reasoning_tokens": 616,
+    "output_tokens": 626,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 17.3,
+    "errors": []
+   },
+   {
+    "q": 2,
+    "id": "aime-2026-I-p11",
+    "got": "896",
+    "want": "896",
+    "hit": true,
+    "calls": [],
+    "reasoning_tokens": 1097,
+    "output_tokens": 1107,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 30.2,
+    "errors": []
+   },
+   {
+    "q": 3,
+    "id": "aime-2026-II-p11",
+    "got": "132",
+    "want": "132",
+    "hit": true,
+    "calls": [],
+    "reasoning_tokens": 780,
+    "output_tokens": 790,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 18.5,
+    "errors": []
+   },
+   {
+    "q": 4,
+    "id": "aime-2026-I-p12",
+    "got": "161",
+    "want": "161",
+    "hit": true,
+    "calls": [],
+    "reasoning_tokens": 679,
+    "output_tokens": 689,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 15.5,
+    "errors": []
+   },
+   {
+    "q": 5,
+    "id": "aime-2026-II-p12",
+    "got": "223",
+    "want": "223",
+    "hit": true,
+    "calls": [],
+    "reasoning_tokens": 636,
+    "output_tokens": 646,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 21.5,
+    "errors": []
+   },
+   {
+    "q": 6,
+    "id": "aime-2026-I-p13",
+    "got": "39",
+    "want": "39",
+    "hit": true,
+    "calls": [],
+    "reasoning_tokens": 476,
+    "output_tokens": 486,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 11.1,
+    "errors": []
+   },
+   {
+    "q": 7,
+    "id": "aime-2026-II-p13",
+    "got": "107",
+    "want": "107",
+    "hit": true,
+    "calls": [],
+    "reasoning_tokens": 1362,
+    "output_tokens": 1372,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 40.7,
+    "errors": []
+   },
+   {
+    "q": 8,
+    "id": "aime-2026-I-p14",
+    "got": "681",
+    "want": "681",
+    "hit": true,
+    "calls": [],
+    "reasoning_tokens": 398,
+    "output_tokens": 408,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 9.6,
+    "errors": []
+   },
+   {
+    "q": 9,
+    "id": "aime-2026-II-p14",
+    "got": "157",
+    "want": "157",
+    "hit": true,
+    "calls": [],
+    "reasoning_tokens": 987,
+    "output_tokens": 997,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 24.1,
+    "errors": []
+   },
+   {
+    "q": 10,
+    "id": "aime-2026-II-p15",
+    "got": "393",
+    "want": "393",
+    "hit": true,
+    "calls": [],
+    "reasoning_tokens": 2588,
+    "output_tokens": 2598,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 71.9,
+    "errors": []
+   },
+   {
+    "q": 11,
+    "id": "aime-2026-I-p15",
+    "got": "177",
+    "want": "83",
+    "hit": false,
+    "calls": [],
+    "reasoning_tokens": 2700,
+    "output_tokens": 2710,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 83.6,
+    "errors": []
+   },
+   {
+    "q": 12,
+    "id": "hmmt-2026-algnt-8",
+    "got": "279",
+    "want": "279",
+    "hit": true,
+    "calls": [],
+    "reasoning_tokens": 919,
+    "output_tokens": 929,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 22.6,
+    "errors": []
+   },
+   {
+    "q": 13,
+    "id": "hmmt-2026-comb-8",
+    "got": "6992",
+    "want": "6992",
+    "hit": true,
+    "calls": [],
+    "reasoning_tokens": 1664,
+    "output_tokens": 1675,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 40.8,
+    "errors": []
+   },
+   {
+    "q": 14,
+    "id": "hmmt-2026-algnt-10",
+    "got": "289",
+    "want": "289",
+    "hit": true,
+    "calls": [],
+    "reasoning_tokens": 644,
+    "output_tokens": 654,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 15.0,
+    "errors": []
+   },
+   {
+    "q": 15,
+    "id": "hmmt-2026-comb-10",
+    "got": "10485760",
+    "want": "20460",
+    "hit": false,
+    "calls": [],
+    "reasoning_tokens": 2336,
+    "output_tokens": 2348,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 65.0,
+    "errors": []
+   }
+  ]
+ },
+ "B_low_tool": {
+  "score": 12,
+  "n": 15,
+  "rows": [
+   {
+    "q": 1,
+    "id": "aime-2026-II-p9",
+    "got": "669",
+    "want": "669",
+    "hit": true,
+    "calls": [
+     "deep_think"
+    ],
+    "reasoning_tokens": 662,
+    "output_tokens": 1109,
+    "scratch_chars": 1044,
+    "turns": 2,
+    "secs": 24.6,
+    "errors": []
+   },
+   {
+    "q": 2,
+    "id": "aime-2026-I-p11",
+    "got": "896",
+    "want": "896",
+    "hit": true,
+    "calls": [
+     "deep_think"
+    ],
+    "reasoning_tokens": 16,
+    "output_tokens": 1110,
+    "scratch_chars": 4304,
+    "turns": 2,
+    "secs": 23.7,
+    "errors": []
+   },
+   {
+    "q": 3,
+    "id": "aime-2026-II-p11",
+    "got": "132",
+    "want": "132",
+    "hit": true,
+    "calls": [
+     "deep_think"
+    ],
+    "reasoning_tokens": 16,
+    "output_tokens": 1197,
+    "scratch_chars": 3246,
+    "turns": 2,
+    "secs": 26.6,
+    "errors": []
+   },
+   {
+    "q": 4,
+    "id": "aime-2026-I-p12",
+    "got": "161",
+    "want": "161",
+    "hit": true,
+    "calls": [
+     "deep_think"
+    ],
+    "reasoning_tokens": 0,
+    "output_tokens": 690,
+    "scratch_chars": 1634,
+    "turns": 2,
+    "secs": 18.6,
+    "errors": []
+   },
+   {
+    "q": 5,
+    "id": "aime-2026-II-p12",
+    "got": "223",
+    "want": "223",
+    "hit": true,
+    "calls": [
+     "deep_think"
+    ],
+    "reasoning_tokens": 15,
+    "output_tokens": 573,
+    "scratch_chars": 1555,
+    "turns": 2,
+    "secs": 13.7,
+    "errors": []
+   },
+   {
+    "q": 6,
+    "id": "aime-2026-I-p13",
+    "got": "39",
+    "want": "39",
+    "hit": true,
+    "calls": [
+     "deep_think"
+    ],
+    "reasoning_tokens": 0,
+    "output_tokens": 351,
+    "scratch_chars": 898,
+    "turns": 2,
+    "secs": 12.6,
+    "errors": []
+   },
+   {
+    "q": 7,
+    "id": "aime-2026-II-p13",
+    "got": "107",
+    "want": "107",
+    "hit": true,
+    "calls": [
+     "deep_think"
+    ],
+    "reasoning_tokens": 0,
+    "output_tokens": 1204,
+    "scratch_chars": 5090,
+    "turns": 2,
+    "secs": 33.8,
+    "errors": []
+   },
+   {
+    "q": 8,
+    "id": "aime-2026-I-p14",
+    "got": "681",
+    "want": "681",
+    "hit": true,
+    "calls": [
+     "deep_think"
+    ],
+    "reasoning_tokens": 482,
+    "output_tokens": 773,
+    "scratch_chars": 712,
+    "turns": 2,
+    "secs": 16.6,
+    "errors": []
+   },
+   {
+    "q": 9,
+    "id": "aime-2026-II-p14",
+    "got": "157",
+    "want": "157",
+    "hit": true,
+    "calls": [
+     "deep_think"
+    ],
+    "reasoning_tokens": 0,
+    "output_tokens": 1505,
+    "scratch_chars": 3969,
+    "turns": 2,
+    "secs": 34.9,
+    "errors": []
+   },
+   {
+    "q": 10,
+    "id": "aime-2026-II-p15",
+    "got": "393",
+    "want": "393",
+    "hit": true,
+    "calls": [
+     "deep_think"
+    ],
+    "reasoning_tokens": 0,
+    "output_tokens": 2124,
+    "scratch_chars": 7044,
+    "turns": 2,
+    "secs": 54.0,
+    "errors": []
+   },
+   {
+    "q": 11,
+    "id": "aime-2026-I-p15",
+    "got": "945",
+    "want": "83",
+    "hit": false,
+    "calls": [
+     "deep_think"
+    ],
+    "reasoning_tokens": 0,
+    "output_tokens": 2518,
+    "scratch_chars": 9970,
+    "turns": 2,
+    "secs": 67.4,
+    "errors": []
+   },
+   {
+    "q": 12,
+    "id": "hmmt-2026-algnt-8",
+    "got": "279",
+    "want": "279",
+    "hit": true,
+    "calls": [
+     "deep_think"
+    ],
+    "reasoning_tokens": 0,
+    "output_tokens": 1527,
+    "scratch_chars": 4251,
+    "turns": 2,
+    "secs": 35.4,
+    "errors": []
+   },
+   {
+    "q": 13,
+    "id": "hmmt-2026-comb-8",
+    "got": "8120",
+    "want": "6992",
+    "hit": false,
+    "calls": [
+     "deep_think"
+    ],
+    "reasoning_tokens": 516,
+    "output_tokens": 1404,
+    "scratch_chars": 2718,
+    "turns": 2,
+    "secs": 31.5,
+    "errors": []
+   },
+   {
+    "q": 14,
+    "id": "hmmt-2026-algnt-10",
+    "got": "289",
+    "want": "289",
+    "hit": true,
+    "calls": [
+     "deep_think"
+    ],
+    "reasoning_tokens": 0,
+    "output_tokens": 676,
+    "scratch_chars": 1500,
+    "turns": 2,
+    "secs": 19.2,
+    "errors": []
+   },
+   {
+    "q": 15,
+    "id": "hmmt-2026-comb-10",
+    "got": "20971500",
+    "want": "20460",
+    "hit": false,
+    "calls": [
+     "deep_think"
+    ],
+    "reasoning_tokens": 0,
+    "output_tokens": 4114,
+    "scratch_chars": 17801,
+    "turns": 2,
+    "secs": 111.5,
+    "errors": []
+   }
+  ]
+ },
+ "H_high_notool": {
+  "score": 15,
+  "n": 15,
+  "rows": [
+   {
+    "q": 1,
+    "id": "aime-2026-II-p9",
+    "got": "669",
+    "want": "669",
+    "hit": true,
+    "calls": [],
+    "reasoning_tokens": 699,
+    "output_tokens": 709,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 15.0,
+    "errors": []
+   },
+   {
+    "q": 2,
+    "id": "aime-2026-I-p11",
+    "got": "896",
+    "want": "896",
+    "hit": true,
+    "calls": [],
+    "reasoning_tokens": 7847,
+    "output_tokens": 7857,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 177.4,
+    "errors": []
+   },
+   {
+    "q": 3,
+    "id": "aime-2026-II-p11",
+    "got": "132",
+    "want": "132",
+    "hit": true,
+    "calls": [],
+    "reasoning_tokens": 1528,
+    "output_tokens": 1538,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 36.9,
+    "errors": []
+   },
+   {
+    "q": 4,
+    "id": "aime-2026-I-p12",
+    "got": "161",
+    "want": "161",
+    "hit": true,
+    "calls": [],
+    "reasoning_tokens": 900,
+    "output_tokens": 910,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 18.1,
+    "errors": []
+   },
+   {
+    "q": 5,
+    "id": "aime-2026-II-p12",
+    "got": "223",
+    "want": "223",
+    "hit": true,
+    "calls": [],
+    "reasoning_tokens": 978,
+    "output_tokens": 988,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 19.8,
+    "errors": []
+   },
+   {
+    "q": 6,
+    "id": "aime-2026-I-p13",
+    "got": "39",
+    "want": "39",
+    "hit": true,
+    "calls": [],
+    "reasoning_tokens": 479,
+    "output_tokens": 489,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 10.7,
+    "errors": []
+   },
+   {
+    "q": 7,
+    "id": "aime-2026-II-p13",
+    "got": "107",
+    "want": "107",
+    "hit": true,
+    "calls": [],
+    "reasoning_tokens": 2070,
+    "output_tokens": 2080,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 51.7,
+    "errors": []
+   },
+   {
+    "q": 8,
+    "id": "aime-2026-I-p14",
+    "got": "681",
+    "want": "681",
+    "hit": true,
+    "calls": [],
+    "reasoning_tokens": 484,
+    "output_tokens": 494,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 14.1,
+    "errors": []
+   },
+   {
+    "q": 9,
+    "id": "aime-2026-II-p14",
+    "got": "157",
+    "want": "157",
+    "hit": true,
+    "calls": [],
+    "reasoning_tokens": 2519,
+    "output_tokens": 2529,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 49.7,
+    "errors": []
+   },
+   {
+    "q": 10,
+    "id": "aime-2026-II-p15",
+    "got": "393",
+    "want": "393",
+    "hit": true,
+    "calls": [],
+    "reasoning_tokens": 3379,
+    "output_tokens": 3389,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 67.2,
+    "errors": []
+   },
+   {
+    "q": 11,
+    "id": "aime-2026-I-p15",
+    "got": "83",
+    "want": "83",
+    "hit": true,
+    "calls": [],
+    "reasoning_tokens": 9039,
+    "output_tokens": 9049,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 212.6,
+    "errors": []
+   },
+   {
+    "q": 12,
+    "id": "hmmt-2026-algnt-8",
+    "got": "279",
+    "want": "279",
+    "hit": true,
+    "calls": [],
+    "reasoning_tokens": 1372,
+    "output_tokens": 1382,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 27.3,
+    "errors": []
+   },
+   {
+    "q": 13,
+    "id": "hmmt-2026-comb-8",
+    "got": "6992",
+    "want": "6992",
+    "hit": true,
+    "calls": [],
+    "reasoning_tokens": 1754,
+    "output_tokens": 1765,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 34.2,
+    "errors": []
+   },
+   {
+    "q": 14,
+    "id": "hmmt-2026-algnt-10",
+    "got": "289",
+    "want": "289",
+    "hit": true,
+    "calls": [],
+    "reasoning_tokens": 871,
+    "output_tokens": 881,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 17.4,
+    "errors": []
+   },
+   {
+    "q": 15,
+    "id": "hmmt-2026-comb-10",
+    "got": "20460",
+    "want": "20460",
+    "hit": true,
+    "calls": [],
+    "reasoning_tokens": 9512,
+    "output_tokens": 9523,
+    "scratch_chars": 0,
+    "turns": 1,
+    "secs": 205.1,
+    "errors": []
+   }
+  ]
+ }
+}

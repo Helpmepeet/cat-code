@@ -283,22 +283,70 @@ comparison drawn from it is **confounded** and is withdrawn. Those two runs diff
 size, prompt bytes, and cache state, none of which were controlled. The puzzle tiers used
 `--tools ""` and are genuinely isolated (init records list 0 and 1 tool respectively).
 
-**Non-Claude models were not tested, and the blocker is diagnosed, not assumed.** Codex CLI
-0.147.0 spawns the MCP server and completes the `initialize` handshake (confirmed by
-server-side logging), then exposes only the MCP *resource* plumbing to the model
-(`list_mcp_resources`, `read_mcp_resource`) — never the tool itself. `thread_start` reports
-`dynamic_tool_count=0`. This holds with `tool_search_always_defer_mcp_tools` disabled and with
-`mcp_2026_07_28` + `non_prefixed_mcp_tool_names` enabled; its own feature table has `tool_search`
-as `removed` while MCP tools are still deferred *to* tool search. Testing GPT needs a direct API
-key or a local OpenAI-compatible endpoint (LM Studio is installed but holds only an embedding
-model). **The claim that this technique generalises across providers is therefore an untested
-hypothesis in this report.**
-
 **Not tested**: multi-turn agent loops; long-horizon tasks; whether tool-scratchpad reasoning
-degrades over many turns as it accumulates in context; models other than `claude-opus-5`; any
-provider other than first-party Anthropic; the capacity boundary (batch 3, confounded by the
-harness timeout). n=2 problem sets on the puzzle tiers, 1 run per cell elsewhere. No latency
-claim in this report is controlled.
+degrades over many turns as it accumulates in context; Claude models other than `claude-opus-5`;
+the capacity boundary (batch 3, confounded by the harness timeout). n=2 problem sets on the
+puzzle tiers, 1 run per cell elsewhere. No latency claim in this report is controlled.
+
+## The GPT arm — the premise does not hold outside Claude
+
+The claim opens with "you can just disable thinking." **On GPT-5.x you cannot.** Every model
+served by the Codex backend reports a `supported_reasoning_levels` floor of `low`; none offers
+`none` or `disabled`:
+
+| Model | Levels |
+|---|---|
+| `gpt-5.6-sol`, `gpt-5.6-sol-wm` | low, medium, high, xhigh, max, ultra |
+| `gpt-5.6-luna` | low, medium, high, xhigh, max |
+| `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini` | low, medium, high, xhigh |
+
+So the manoeuvre the claim describes — deprive the model of thinking, hand it a tool as a
+substitute — **has no GPT equivalent**. The nearest analogue is adding a scratchpad on top of
+reasoning that is already running, which is a different intervention.
+
+**Method.** Codex backend (`chatgpt.com/backend-api/codex/responses`) over the ChatGPT OAuth
+credential, one call per problem, same 15 post-cutoff competition problems, same answer-only
+format. `deep_think` is the same pure-sink function; the client drives a real agent loop so the
+tool result re-enters context exactly as in the Claude arm. Reasoning volume is read from
+`usage.output_tokens_details.reasoning_tokens`. (Codex CLI could not be used: it spawns the MCP
+server and completes `initialize` — confirmed by server-side logging — but surfaces only
+`list_mcp_resources` / `read_mcp_resource` to the model and never the tool. `thread_start`
+reports `dynamic_tool_count=0`, with `tool_search` flagged `removed` while MCP tools are still
+deferred *to* tool search.)
+
+| Condition (`gpt-5.6-sol`) | Score | Native reasoning tokens | Scratchpad chars | Tool calls |
+|---|---|---|---|---|
+| A — native, effort `low` | **13/15** | 17,882 | 0 | 0 |
+| B — `low` + forced `deep_think` | **12/15** | **1,707** | 65,736 | 15/15 |
+| H — native, effort `high` | **15/15** | 43,431 | 0 | 0 |
+
+**1. Unprompted, GPT does not reach for the tool.** Given `deep_think` and no instruction, it
+answered directly using native reasoning. On Claude with thinking disabled the same setup
+produced a spontaneous call. The difference is precisely the premise: Claude had been deprived
+of a scratchpad and GPT cannot be.
+
+**2. Instructed, it uses the tool and writes real chain-of-thought.** Called on 15/15 problems,
+in the same telegraphic register as Claude — *"Write each summand as 1/(10^n-1)=sum_{k>=1}
+10^{-nk}. Grouping by m=nk gives sum_{m>=1} d(m)10^{100-m}, where d(m) is the divisor-counting
+function."* Sub-claim 2 (CoT format) is the one part of the original claim that generalises.
+
+**3. The tool displaces native reasoning rather than adding to it.** Native reasoning collapsed
+~10× under forced tool use, 17,882 → 1,707 tokens, while 65,736 characters went into tool
+arguments. An earlier single-problem observation suggested the two stacked; across 15 problems
+they do not. Reasoning moves out of the trained channel into the function argument.
+
+**4. No accuracy difference, and the effort knob dominates.** 13/15 vs 12/15 is one problem at
+n=1 per cell — noise, not degradation. The tool never rescued a problem native `low` missed; it
+lost one native `low` got (Q13, 6992 → 8120). Meanwhile raising native effort to `high` scored
+**15/15**, rescuing both problems that `low` missed under *both* conditions. On GPT the simple
+lever strictly beats the elaborate one.
+
+**Conclusion for the general claim.** It is not a fact about models; it is a fact about one API
+surface that accepts `thinking: {type: "disabled"}`. Where that surface exists (Claude), the
+technique works and reasoning quality is unaffected. Where it does not (GPT-5.x), the technique
+is inapplicable by premise, and forcing it anyway relocates reasoning for no gain while a
+one-word effort change delivers the actual improvement. Even on Claude the surface is narrowing:
+disabled thinking is rejected above effort `high`, and outright on Fable 5.
 
 **Cross-provider**: not established. The Codex CLI (`gpt-5.6-sol`, reasoning effort low) was
 tested but its build would not surface a third-party stdio MCP server's tools to the model

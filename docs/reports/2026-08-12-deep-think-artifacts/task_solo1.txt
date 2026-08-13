@@ -1,0 +1,9 @@
+Answer this competition mathematics problem.
+
+HARD RULE: your visible reply must contain NOTHING but the single answer line. No working, no explanation, no preamble, no XML tags. Exactly:
+
+1: <answer>
+
+The answer is an integer.
+
+1. Let $S$ denote the value of the infinite sum \[\frac 19 + \frac 1{99} + \frac 1{999} + \frac 1{9999} + \cdots\] Find the remainder when the greatest integer less than or equal to $10^{100} S$ is divided by $1000.$

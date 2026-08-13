@@ -1,9 +1,10 @@
 {
- "note": "Saved named arms only; unsaved pilots/probes not included.",
- "total_cost_usd_saved_arms": 10.861,
+ "note": "Saved named arms only. Anthropic runs are USD-billed; GPT runs are ChatGPT-subscription billed.",
+ "total_cost_usd_anthropic_arms": 10.861,
  "runs": [
   {
    "run": "bA_b1",
+   "provider": "anthropic",
    "cost_usd": 0.424,
    "tools_available": 0,
    "thinking_tokens": 16002,
@@ -14,6 +15,7 @@
   },
   {
    "run": "bA_b2",
+   "provider": "anthropic",
    "cost_usd": 0.576,
    "tools_available": 0,
    "thinking_tokens": 22079,
@@ -24,6 +26,7 @@
   },
   {
    "run": "bA_b3",
+   "provider": "anthropic",
    "cost_usd": 1.622,
    "tools_available": 0,
    "thinking_tokens": 64000,
@@ -34,6 +37,7 @@
   },
   {
    "run": "bB_b1",
+   "provider": "anthropic",
    "cost_usd": 0.32,
    "tools_available": 1,
    "thinking_tokens": 0,
@@ -44,6 +48,7 @@
   },
   {
    "run": "bB_b2",
+   "provider": "anthropic",
    "cost_usd": 0.835,
    "tools_available": 1,
    "thinking_tokens": 0,
@@ -54,6 +59,7 @@
   },
   {
    "run": "bB_b3",
+   "provider": "anthropic",
    "cost_usd": 1.626,
    "tools_available": 1,
    "thinking_tokens": 0,
@@ -64,6 +70,7 @@
   },
   {
    "run": "bench_B",
+   "provider": "anthropic",
    "cost_usd": 3.616,
    "tools_available": 1,
    "thinking_tokens": 0,
@@ -74,6 +81,7 @@
   },
   {
    "run": "bench_C",
+   "provider": "anthropic",
    "cost_usd": 0.043,
    "tools_available": 0,
    "thinking_tokens": 0,
@@ -84,6 +92,7 @@
   },
   {
    "run": "condA",
+   "provider": "anthropic",
    "cost_usd": 0.107,
    "tools_available": 31,
    "thinking_tokens": 426,
@@ -94,6 +103,7 @@
   },
   {
    "run": "condA2r",
+   "provider": "anthropic",
    "cost_usd": 0.019,
    "tools_available": 0,
    "thinking_tokens": 0,
@@ -104,6 +114,7 @@
   },
   {
    "run": "condB",
+   "provider": "anthropic",
    "cost_usd": 0.125,
    "tools_available": 32,
    "thinking_tokens": 0,
@@ -114,6 +125,7 @@
   },
   {
    "run": "condBr",
+   "provider": "anthropic",
    "cost_usd": 0.043,
    "tools_available": 1,
    "thinking_tokens": 0,
@@ -124,6 +136,7 @@
   },
   {
    "run": "condC",
+   "provider": "anthropic",
    "cost_usd": 0.042,
    "tools_available": 1,
    "thinking_tokens": 0,
@@ -134,6 +147,7 @@
   },
   {
    "run": "condD",
+   "provider": "anthropic",
    "cost_usd": 0.072,
    "tools_available": 5,
    "thinking_tokens": 0,
@@ -144,6 +158,7 @@
   },
   {
    "run": "condP_A",
+   "provider": "anthropic",
    "cost_usd": 0.131,
    "tools_available": 0,
    "thinking_tokens": 3536,
@@ -154,6 +169,7 @@
   },
   {
    "run": "condP_B",
+   "provider": "anthropic",
    "cost_usd": 0.156,
    "tools_available": 1,
    "thinking_tokens": 0,
@@ -164,6 +180,7 @@
   },
   {
    "run": "condP_C",
+   "provider": "anthropic",
    "cost_usd": 0.042,
    "tools_available": 0,
    "thinking_tokens": 0,
@@ -174,6 +191,7 @@
   },
   {
    "run": "hard_A1",
+   "provider": "anthropic",
    "cost_usd": 0.174,
    "tools_available": 0,
    "thinking_tokens": 5236,
@@ -184,6 +202,7 @@
   },
   {
    "run": "hard_A2",
+   "provider": "anthropic",
    "cost_usd": 0.157,
    "tools_available": 0,
    "thinking_tokens": 5565,
@@ -194,6 +213,7 @@
   },
   {
    "run": "hard_B1",
+   "provider": "anthropic",
    "cost_usd": 0.254,
    "tools_available": 1,
    "thinking_tokens": 0,
@@ -204,6 +224,7 @@
   },
   {
    "run": "hard_B2",
+   "provider": "anthropic",
    "cost_usd": 0.214,
    "tools_available": 1,
    "thinking_tokens": 0,
@@ -214,6 +235,7 @@
   },
   {
    "run": "hard_C1",
+   "provider": "anthropic",
    "cost_usd": 0.038,
    "tools_available": 0,
    "thinking_tokens": 0,
@@ -224,6 +246,7 @@
   },
   {
    "run": "hard_C2",
+   "provider": "anthropic",
    "cost_usd": 0.038,
    "tools_available": 0,
    "thinking_tokens": 0,
@@ -234,6 +257,7 @@
   },
   {
    "run": "hard_E1",
+   "provider": "anthropic",
    "cost_usd": 0.189,
    "tools_available": 1,
    "thinking_tokens": 5634,
@@ -241,6 +265,36 @@
    "turns": 1,
    "stop_reason": "end_turn",
    "is_error": false
+  },
+  {
+   "run": "gpt/A_low_notool",
+   "provider": "openai-codex-subscription",
+   "score": "13/15",
+   "reasoning_tokens": 17882,
+   "scratch_chars": 0,
+   "tool_calls": 0,
+   "cost_usd": null,
+   "note": "subscription-billed, no per-run USD"
+  },
+  {
+   "run": "gpt/B_low_tool",
+   "provider": "openai-codex-subscription",
+   "score": "12/15",
+   "reasoning_tokens": 1707,
+   "scratch_chars": 65736,
+   "tool_calls": 15,
+   "cost_usd": null,
+   "note": "subscription-billed, no per-run USD"
+  },
+  {
+   "run": "gpt/H_high_notool",
+   "provider": "openai-codex-subscription",
+   "score": "15/15",
+   "reasoning_tokens": 43431,
+   "scratch_chars": 0,
+   "tool_calls": 0,
+   "cost_usd": null,
+   "note": "subscription-billed, no per-run USD"
   }
  ]
 }

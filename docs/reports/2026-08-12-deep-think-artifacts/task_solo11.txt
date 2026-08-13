@@ -1,0 +1,9 @@
+Answer this competition mathematics problem.
+
+HARD RULE: your visible reply must contain NOTHING but the single answer line. No working, no explanation, no preamble, no XML tags. Exactly:
+
+1: <answer>
+
+The answer is an integer.
+
+1. Let $a, b,$ and $n$ be positive integers with both $a$ and $b$ greater than or equal to $2$ and less than or equal to $2n.$ Define an $a \times b$ cell loop in a $2n \times 2n$ grid of cells to be the $2a + 2b - 4$ cells that surround an $(a - 2) \times (b - 2)$ (possibly empty) rectangle of cells in the grid. Find the number of ways to partition a $10 \times 10$ grid of cells into $5$ cell loops so that every cell of the grid belongs to exactly one cell loop.
