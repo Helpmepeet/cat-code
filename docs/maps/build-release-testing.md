@@ -65,7 +65,8 @@ arguments, bundled externals, and executable chmod.
 
 ## Feature Sets
 
-Default build features are currently only `VOICE_MODE`.
+Default build features are `AUTO_MODE_UPSTREAM_PORT`, `TRANSCRIPT_CLASSIFIER`,
+and `VOICE_MODE`.
 
 `--feature <name>` and `--feature=<name>` add a single feature. `--feature-set
 dev-full` or `--feature-set=dev-full` adds the current experimental set from

@@ -367,9 +367,11 @@ describe('auto mode default classifier ladder', () => {
 
 describe('two-stage upstream classifier', () => {
   const originalOAuthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN
+  const originalAutoModeModel = process.env.CLAUDE_CODE_AUTO_MODE_MODEL
 
   beforeEach(() => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-token'
+    process.env.CLAUDE_CODE_AUTO_MODE_MODEL = 'gpt-5.6-luna'
   })
 
   afterEach(() => {
@@ -377,6 +379,11 @@ describe('two-stage upstream classifier', () => {
       delete process.env.CLAUDE_CODE_OAUTH_TOKEN
     } else {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = originalOAuthToken
+    }
+    if (originalAutoModeModel === undefined) {
+      delete process.env.CLAUDE_CODE_AUTO_MODE_MODEL
+    } else {
+      process.env.CLAUDE_CODE_AUTO_MODE_MODEL = originalAutoModeModel
     }
   })
 

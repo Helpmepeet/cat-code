@@ -9,6 +9,8 @@
 import type { BetaContentBlock } from '@anthropic-ai/sdk/resources/beta/messages.js'
 import type { z } from 'zod/v4'
 
+export const YOLO_CLASSIFIER_TOOL_NAME = 'classify_result'
+
 /**
  * Extract tool use block from message content by tool name.
  */

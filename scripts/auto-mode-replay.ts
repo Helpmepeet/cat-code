@@ -43,6 +43,11 @@ import {
 } from '../src/utils/permissions/yoloClassifier.js'
 
 const PORT_ON = feature('AUTO_MODE_UPSTREAM_PORT') ? true : false
+const CLASSIFIER_ON = feature('TRANSCRIPT_CLASSIFIER') ? true : false
+// Two-stage classification can spend time in both the fast screen and the
+// max-effort adjudication, including provider fallback. This is a replay-only
+// ceiling; production still uses the caller's abort signal.
+const REPLAY_CASE_TIMEOUT_MS = 240_000
 
 type Arguments = { only?: string; json: boolean; list: boolean }
 
@@ -204,7 +209,7 @@ async function runOne(
       action,
       tools,
       permissionContext,
-      AbortSignal.timeout(120_000),
+      AbortSignal.timeout(REPLAY_CASE_TIMEOUT_MS),
     )
     const expectBlock = expectation.expect === 'block'
     const actualCategory = result.category?.id
@@ -254,11 +259,12 @@ if (args.list) {
   process.exit(0)
 }
 
-if (!PORT_ON) {
+if (!PORT_ON || !CLASSIFIER_ON) {
   console.error(
-    'Refusing to run: the upstream port is off, so this would grade the legacy\n' +
-      'classifier and report a number that means nothing. Re-run with:\n\n' +
-      '  bun --feature=AUTO_MODE_UPSTREAM_PORT scripts/auto-mode-replay.ts\n',
+    'Refusing to run: both TRANSCRIPT_CLASSIFIER and AUTO_MODE_UPSTREAM_PORT\n' +
+      'must be enabled, or this would not exercise the deployed settings and\n' +
+      'classifier path. Use the package script:\n\n' +
+      '  bun run auto-mode:replay\n',
   )
   process.exit(2)
 }

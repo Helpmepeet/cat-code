@@ -71,7 +71,9 @@ import {
 import {
   extractToolUseBlock,
   parseClassifierResponse,
+  YOLO_CLASSIFIER_TOOL_NAME,
 } from './classifierShared.js'
+export { YOLO_CLASSIFIER_TOOL_NAME } from './classifierShared.js'
 import { getClaudeTempDir } from './filesystem.js'
 
 // Dead code elimination: conditional imports for auto mode classifier prompts.
@@ -349,8 +351,6 @@ const yoloClassifierResponseSchema = lazySchema(() =>
     reason: z.string(),
   }),
 )
-
-export const YOLO_CLASSIFIER_TOOL_NAME = 'classify_result'
 
 const STAGE1_PROMPT_SUFFIX = `
 

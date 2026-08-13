@@ -14,15 +14,13 @@ maintenance problem, and buys upstream's continuing refinement for free. Evidenc
 that the design is settled rather than in flux: nine releases spanning Jul 18 to
 Aug 6 carry the identical architecture and rule count, with only prose growth.
 
-**Status (2026-08-13): the ported classifier, including the default two-stage
-flow, is implemented behind `AUTO_MODE_UPSTREAM_PORT`. The feature remains off
-in standard builds. Focused tests pass with the feature both compiled out and
-compiled in; no live two-stage replay has qualified it for deployment.**
+**Status (2026-08-13): deployed. Standard builds include the ported default
+two-stage classifier. The replay-equivalent live gate passed 20/20 labeled
+cases with two declared upstream-default gaps; focused tests pass with the port
+both compiled out and compiled in.**
 
-**Implementation status (2026-08-13, all behind `AUTO_MODE_UPSTREAM_PORT`, which
-is deliberately NOT in `scripts/build.ts` `fullExperimentalFeatures`, so it
-compiles out of `build:dev:full` and is opt-in via
-`--feature=AUTO_MODE_UPSTREAM_PORT`):**
+**Implementation status (2026-08-13, enabled through
+`scripts/build.ts` `defaultFeatures`):**
 
 | Step | State |
 |---|---|
@@ -34,11 +32,12 @@ compiles out of `build:dev:full` and is opt-in via
 | Classifier request/response dump, ungated | landed `537f88e5` |
 | Labeled replay expectations (`fixtures/auto-mode-expectations.ts`) | 20/20 measured single-stage verdicts correct |
 | Default two-stage flow | implemented 2026-08-13; feature-on unit coverage green |
-| **Machine-specific config content (delta 5)** | **not started; operator content decision** |
-| **Feature-on two-stage live replay** | **not run; blocks enabling the flag** |
+| Machine-specific config content (delta 5) | installed in user settings with `$defaults` retained |
+| Feature-on two-stage live replay | 20/20 passed; 2 declared known gaps |
 
-Nothing is enabled. What remains is the operator-owned machine configuration, a
-clean live replay of the two-stage path, and then explicit build-feature wiring.
+The port is enabled in standard builds. This machine selects `gpt-5.6-sol` so
+provider fallback can continue through Terra and Luna before the optional
+Anthropic fallback.
 
 ### Historical frozen corpus
 
@@ -65,16 +64,13 @@ means "this work completed and was not objected to", not "the classifier passed
 this exact call". That is still the right regression signal — if the ported
 prompt blocks it, we want to know regardless of who allowed it first time.
 
-### Still owed before enabling
+### Deployment gate result
 
-- Run the labeled cases against the live two-stage path in one clean
-  feature-enabled pass. Classifier-unavailable results remain non-passing.
-- Decide and install the machine-specific environment, allow, and deny content
-  from delta 5.
-- Confirm provider availability is sufficient for failover during unattended
-  operation.
-- Add `AUTO_MODE_UPSTREAM_PORT` to the intended build feature set only after
-  those checks pass.
+The final replay compiled both `TRANSCRIPT_CLASSIFIER` and
+`AUTO_MODE_UPSTREAM_PORT`, loaded the installed machine policy, started with
+`gpt-5.6-sol`, and passed all 20 scored cases without an unavailable result.
+`workflow-script-blocked` and `security-test-removal` remain the two declared
+known gaps described by their fixtures.
 
 The default two-stage path uses boolean harm screening and conditional
 adjudication, not severity mode, so it has no per-category thresholds to tune.
