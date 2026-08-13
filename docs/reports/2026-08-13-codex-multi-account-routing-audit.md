@@ -4,15 +4,15 @@
 
 **Scope:** All production Cat Code features that can spend Codex/ChatGPT subscription usage, with session labeling treated as one example rather than the primary focus.
 
-**Reviewed state:** Current working tree, including pre-existing uncommitted changes. This review did not modify implementation code.
+**Reviewed state:** Current working tree, including pre-existing uncommitted changes. This review did not modify implementation code. All findings are observations of that audited working tree; the report-only review PR does not independently reproduce them.
 
 **Repository snapshot:** branch `migration`, `HEAD` `34b2aee8be5b5ce174a440464cb91230787c9795`.
 
-**Working-tree caveat:** the repository was already broadly dirty. The account-relevant pre-existing changes visible during this audit were `src/utils/sessionTitle.ts`, `src/utils/sessionTitle.test.ts`, and `src/services/api/codex-fetch-adapter.test.ts`. Findings describe the working tree that was actually executed, not a clean reconstruction of `HEAD`.
+**Working-tree caveat:** the repository was already broadly dirty. The account-relevant pre-existing source/test changes visible during this audit were `src/utils/sessionTitle.ts`, `src/utils/sessionTitle.test.ts`, and `src/services/api/codex-fetch-adapter.test.ts`; `docs/maps/query-provider-runtime.md` was also modified. Findings describe the working tree that was actually executed, not a clean reconstruction of `HEAD`. `HEAD` identifies the base commit only; it does not identify uncommitted bytes. The provenance section below records which material evidence is reconstructible from `HEAD` and hashes the dirty files used by the audit.
 
 ## How to use this report
 
-This report is intended to be sufficient input for a repair session. A new session should not need to repeat the repository-wide discovery pass before beginning implementation.
+This report is intended to be sufficient input for a repair session **while the relevant call graph and files still match the audited state**. A new session can begin from the inventory and discovery recipe below, but must rerun the recipe if entry points, request wrappers, account lifecycle, or direct-network code have changed since this snapshot.
 
 Start with:
 
@@ -29,13 +29,59 @@ The report distinguishes three different concepts that must not be collapsed:
 
 An implementation is only uniform when it handles all three, plus owner cleanup.
 
+## Evidence vocabulary and independence boundary
+
+Every finding uses one or more of these labels:
+
+| Label | Meaning in this report |
+|---|---|
+| **SOURCE-OBSERVED** | Directly read from the audited working-tree source. For files clean relative to `HEAD`, the cited bytes are reconstructible from commit `34b2aee8be5b5ce174a440464cb91230787c9795`; dirty files require the recorded content hash. |
+| **TEST-OBSERVED** | Observed by running the recorded command against the audited working tree. A passing test proves only the behavior named in the test-confidence table. |
+| **INFERRED** | A consequence of composing source paths, or a runtime risk not directly exercised by a focused test. |
+| **UNVERIFIED-LIVE** | Not exercised against real Codex accounts, real quota state, or real OAuth refresh endpoints. |
+
+The report-only PR contains this Markdown artifact, not the audited dirty source tree. The external ChatGPT review could compare architectural shapes available from the repository connector, but could not independently reproduce working-tree-only source or test observations. Its result was a document-quality review: **REVISE before handoff**. The required revisions are incorporated here; it should not be cited as independent confirmation of F1–F5.
+
+## Repository-wide discovery recipe
+
+The audit enumerated inference-spending entry points first, then traced each call to provider resolution, owner propagation, account resolution, retry transitions, and cleanup. These are the literal discovery searches used or rerun for this revision:
+
+```sh
+rg -l "queryModelWithoutStreaming\\(|queryModelWithStreaming\\(|queryHaiku\\(" src | sort
+rg -l "sideQuery\\(" src | sort
+rg -l "runForkedAgent\\(" src | sort
+rg -l "getAnthropicClient\\(|createCodexFetch\\(|resolveCodexOAuthTokensForLeaseOwner\\(|runCodexLLM\\(" src scripts | sort
+rg -l "api\\.openai\\.com|chatgpt\\.com/backend-api|chatgpt-account-id|CODEX_BASE_URL" src scripts | sort
+rg -l "registerCodexLease\\(|releaseCodexLease\\(|clearWebSocketSession\\(" src | sort
+```
+
+For every result, the audit classified whether it was production or test/script-only, whether its model/provider can resolve to OpenAI, whether it is main-scoped or subagent-capable, and whether it uses the shared `withRetry()` state machine. Direct HTTP/WebSocket surfaces were separately inspected for account headers, error translation, and retry ownership. The production surface inventory below is the resulting classification, not merely a text-search hit list.
+
+Rerun this recipe before implementation if `git diff --name-only 34b2aee8be5b5ce174a440464cb91230787c9795...HEAD` or working-tree changes touch `src/services/api`, `src/query.ts`, `src/utils/sideQuery.ts`, `src/utils/forkedAgent.ts`, `src/tools`, or a newly added model/network helper. Also search any new provider endpoint or wrapper name that the literal patterns cannot know about.
+
+## Evidence provenance
+
+The table records the material source evidence for each finding. “Clean” means byte-identical to the audited `HEAD`, so the commit is sufficient provenance. Hashes are included for dirty account-relevant files because the commit alone cannot reproduce them.
+
+| Finding | Material evidence files | State relative to audited `HEAD` | Reproduction note |
+|---|---|---|---|
+| F1 | `src/utils/forkedAgent.ts`; `src/services/api/claude.ts`; `src/services/api/codexAccountLeaseManager.ts`; `src/tools/AgentTool/AgentTool.tsx`; `src/tasks/LocalAgentTask/LocalAgentTask.tsx`; `src/services/api/codex-fetch-adapter.ts`; `src/services/api/codex-websocket-transport.ts` | Clean | Reconstructible from `34b2aee8`; lease leak is source-established; transport allocation remains conditional as described in F1. |
+| F2 | `src/services/compact/compact.ts`; `src/tools/WebFetchTool/WebFetchTool.ts`; `src/tools/WebFetchTool/utils.ts`; `src/services/api/claude.ts` | Clean | Reconstructible from `34b2aee8`. |
+| F3 | `src/utils/sideQuery.ts`; the caller files listed in the `sideQuery` inventory; `src/query.ts`; `src/utils/attachments.ts` | Clean | Reconstructible from `34b2aee8`. Relevant-memory prefetch is the demonstrated subagent-capable caller; the others are not presumed subagent-owned without separate evidence. |
+| F4 | `src/tools/GenerateImageTool/GenerateImageTool.ts`; `src/tools/GenerateImageTool/GenerateImageTool.test.ts`; `docs/maps/auth-accounts-oauth.md`; `docs/maps/codex-core.md` | Clean | Reconstructible from `34b2aee8`; this is a documented capability gap against the requested uniformity target. |
+| F5 | `src/services/api/withRetry.ts`; `src/services/api/codexAccountLeaseManager.test.ts` | Clean | Reconstructible from `34b2aee8`; the focused failure is test-observed policy/contract drift. |
+| Session-label conclusion | `src/utils/sessionTitle.ts`; `src/utils/sessionTitle.test.ts` | **Dirty** | SHA-256: source `82f30395210e45c44d7b80785f61b03ba5a77d3cde70c71192f61734c966a45a`; test `bc0e88f5b295ca5f6a1283b3de3bc4fe86877a1d788155f40ba47858c9eddf89`. |
+| Ancillary dirty account test | `src/services/api/codex-fetch-adapter.test.ts` | **Dirty** | SHA-256 `688b8c71c94b0aa56d2d0ad553b2563f856eeaf5ed7445b7485f451206eb14c0`; not used to establish F1–F5. |
+
+The broader dirty tree contains unrelated app/docs work. `docs/maps/query-provider-runtime.md` was also dirty (SHA-256 `99806e45dab53b5e527fc7d5fe82422f253e3c250cc5234d573f2d23a3df7256`) but was used only as a future-update target, not as evidence for a finding.
+
 ## Verdict
 
 **RED — rework before claiming uniform multi-account support.**
 
 Cat Code's central request path correctly supports pool-authoritative credential selection, per-owner leases, refresh-on-use, and account-local failover. Main chat requests and ordinary managed subagents use that path successfully. Session labeling also uses it correctly in the reviewed working tree.
 
-The behavior is not uniform across every Codex-consuming feature. Ephemeral forked agents leak leases, several subagent secondary calls lose their owner identity, `sideQuery` bypasses pool-aware retry/failover, and image generation only performs initial account selection. The terminal exhaustion contract also conflicts with its focused regression test.
+The behavior is not uniform across every Codex-consuming feature. Ephemeral forked agents leak leases, several subagent secondary calls lose their owner identity, `sideQuery` bypasses pool-aware retry/failover, and image generation implements the repository's documented initial-selection-only capability rather than the requested uniform endpoint failover. The terminal exhaustion policy also conflicts with its focused regression test.
 
 ## Contract
 
@@ -47,7 +93,7 @@ The source and repository maps establish these routing expectations:
 4. Finished owners must release leases so `spread` reflects live concurrency rather than historical work (`src/services/api/codexAccountLeaseManager.ts:329-331`, `src/services/api/codexAccountLeaseManager.ts:532-591`).
 5. Usage/status observations are advisory and intentionally do not reserve accounts or spend inference usage.
 
-The repository maps explicitly document one current exception: image generation shares the resolver and refresh route, while image-endpoint 401/429 pool-state reporting is deferred (`docs/maps/auth-accounts-oauth.md:113`, `docs/maps/codex-core.md:109`). F4 is therefore a documented limitation relative to the current map, but it still violates the broader goal that all Codex-consuming features switch accounts consistently.
+The repository maps explicitly document one current exception: image generation shares the resolver and refresh route, while image-endpoint 401/429 pool-state reporting is deferred (`docs/maps/auth-accounts-oauth.md:113`, `docs/maps/codex-core.md:109`). F4 is therefore a **known capability gap**, not a regression against the documented current contract. It remains material because the requested target is uniform switching across all Codex-consuming features.
 
 ## Reference architecture: the correct path
 
@@ -106,11 +152,11 @@ flowchart LR
 | Session title / label | Main-thread lease | Shared `queryModelWithoutStreaming()` / `withRetry()` | Isolated conversation cleared | Implemented |
 | Rename, away summary, teleport naming, agent generation | Main-thread lease | Shared query path | Main-scoped | Implemented |
 | Prompt/API hooks | Preserves `toolUseContext.agentId` | Shared query path | Uses owning agent | Implemented |
-| Ephemeral `runForkedAgent()` services | New subagent lease | Shared retry while running | Lease/WebSocket not released | Partial |
+| Ephemeral `runForkedAgent()` services | New subagent lease | Shared retry while running | Lease is not released; transport state is retained only if WebSocket was allocated | Partial (F1) |
 | `sideQuery` callers | Current pooled account | No pool-aware retry or failover | No explicit owner | Partial |
 | WebFetch secondary summarization in a subagent | Falls back to main account | Main lease can rotate | Subagent identity dropped | Partial |
 | Compact streaming fallback in a subagent | Falls back to main account | Main lease can rotate | Subagent identity dropped | Partial |
-| Codex image generation | Correct main/subagent lease initially | No 401/429 pool transition or failover | One-shot request | Partial |
+| Codex image generation | Correct main/subagent lease initially | No 401/429 pool transition or failover | One-shot request | Documented capability gap (F4) |
 | Usage/status polling | Explicit observation target | Not applicable | Non-inference | Implemented by design |
 | Standalone `codex-core` client | Explicit account only | Intentionally non-rotating | Script/test use only | Implemented by contract |
 
@@ -170,36 +216,36 @@ Important identity detail for the fix: the account lease belongs to `isolatedToo
 
 | Feature | Call site | Codex applicability | Result |
 |---|---|---|---|
-| Relevant-memory selection | `src/memdir/findRelevantMemories.ts:105-125` | Uses `getDefaultSonnetModel()` without provider override. Claude-family IDs inherit the OpenAI session provider, so this is Codex-applicable. Started once near main query entry (`src/query.ts:357-364`). | No pool-aware failover; failure is swallowed/degraded by caller |
-| Auto-mode rule critique | `src/cli/handlers/autoMode.ts:108-143` | Defaults to main-loop model; therefore GPT/OpenAI in a Codex session | No pool-aware failover |
-| Agentic session search | `src/utils/agenticSessionSearch.ts:258-272` | Uses `getSmallFastModel()` without provider override; under OpenAI session the ambiguous Claude ID inherits OpenAI | No pool-aware failover |
-| Permission explanation | `src/utils/permissions/permissionExplainer.ts:175-186` | Uses main-loop model | No pool-aware failover |
-| Chrome MCP secondary request | `src/utils/claudeInChrome/mcpServer.ts:181-197` | Uses caller's model and session provider | No pool-aware failover |
-| Model validation probe | `src/utils/model/validateModel.ts:44-82` | Known Codex models short-circuit; unknown/custom allowed models can still reach `sideQuery()` | Limited Codex reachability; no failover if reached |
+| Relevant-memory selection | `src/memdir/findRelevantMemories.ts:105-125` | Uses `getDefaultSonnetModel()` without provider override. Claude-family IDs inherit the OpenAI session provider, so this is Codex-applicable. It is started by every eligible `query()` entry with `state.toolUseContext`, including subagent query loops, but `startRelevantMemoryPrefetch()` passes only an abort controller and drops `agentId` (`src/query.ts:357-364`; `src/utils/attachments.ts:2376-2432`). | No pool-aware failover; failure is swallowed/degraded by caller. **Demonstrated subagent-capable caller with owner loss.** |
+| Auto-mode rule critique | `src/cli/handlers/autoMode.ts:108-143` | Defaults to main-loop model; therefore GPT/OpenAI in a Codex session | No pool-aware failover. No subagent ownership claim established. |
+| Agentic session search | `src/utils/agenticSessionSearch.ts:258-272` | Uses `getSmallFastModel()` without provider override; under OpenAI session the ambiguous Claude ID inherits OpenAI | No pool-aware failover. No subagent ownership claim established. |
+| Permission explanation | `src/utils/permissions/permissionExplainer.ts:175-186` | Uses main-loop model | No pool-aware failover. Potential subagent reachability was not independently established. |
+| Chrome MCP secondary request | `src/utils/claudeInChrome/mcpServer.ts:181-197` | Uses caller's model and session provider | No pool-aware failover. Potential subagent reachability was not independently established. |
+| Model validation probe | `src/utils/model/validateModel.ts:44-82` | Known Codex models short-circuit; unknown/custom allowed models can still reach `sideQuery()` | Limited Codex reachability; no failover if reached; main/configuration scoped. |
 | Insights facet/section generation | `src/commands/insights.ts:1026-1029`, `:1686-1689` | Explicit `provider: 'firstParty'` | **Not** Codex usage; excluded from findings |
 
 ### Direct non-text and standalone calls
 
 | Surface | Entry point | Account contract | Result |
 |---|---|---|---|
-| Codex image generation | `src/tools/GenerateImageTool/GenerateImageTool.ts:476-500`, `:803-850` | Main/subagent lease and refresh-on-use for initial auth | Initial selection correct; response failure bypasses transitions (F4) |
+| Codex image generation | `src/tools/GenerateImageTool/GenerateImageTool.ts:476-500`, `:803-850` | Main/subagent lease and refresh-on-use for initial auth | Initial selection correct; endpoint failover is a documented capability gap (F4) |
 | OpenAI API-key image generation | Same tool with `CAT_CODE_IMAGE_BACKEND=openai-api` | Explicit `OPENAI_API_KEY`, not subscription pool | Out of scope for account switching |
 | Standalone `runCodexLLM()` | `src/codex-core/client.ts:11` | Explicit alias/account ID; intentionally no silent rotation | Only production callers found are scripts: `scripts/test-codex-core.ts` and `scripts/test-codex-core-conversation.ts`; no app feature depends on it |
 | `cat-code codex status --json` and usage polling | `src/services/api/codexStatus.ts`, `src/services/api/codexUsage.ts` | Advisory observation only | Correctly does not reserve, rotate, or promise that state is shared with the next process |
 
 ## Findings
 
-| ID | Severity | Defect | Evidence | Concrete failure scenario | Proposed owner / disposition |
+| ID | Severity | Classification | Evidence status and basis | Concrete failure scenario | Proposed owner / disposition |
 |---|---|---|---|---|---|
-| F1 | **High** | Automatically registered subagent leases are not always paired with cleanup: ephemeral `runForkedAgent()` owners leak, and synchronous AgentTool owners leak when background-task registration is disabled. | `createSubagentContext()` assigns a new `agentId` at `src/utils/forkedAgent.ts:448-453`; the shared query path auto-registers at `src/services/api/claude.ts:1167-1179`; fork cleanup at `src/utils/forkedAgent.ts:603-608` omits account cleanup. AgentTool skips LocalAgentTask registration at `src/tools/AgentTool/AgentTool.tsx:1354-1385` when background tasks are disabled, and its `finally` only unregisters when `foregroundTaskId` exists (`src/tools/AgentTool/AgentTool.tsx:1856-1890`). Active leases are counted at `src/services/api/codexAccountLeaseManager.ts:616-630`. | Internal forks and background-disabled synchronous agents leave historical owners marked active. After enough work, `spread` ranks accounts using stale concurrency and `/accounts` reports dead holders. | **Account-routing/AgentTool owners:** pair every auto-created owner with lease and WebSocket cleanup on success, error, and cancellation. Test both fork and background-disabled sync-agent public paths. |
-| F2 | **Medium** | Some secondary calls made for a subagent omit `agentId`, so they spend and fail over the main-thread account instead of the subagent's lease. | Compact fallback options omit `context.agentId` at `src/services/compact/compact.ts:1407-1432`. WebFetch destructures away the rest of `ToolUseContext` at `src/tools/WebFetchTool/WebFetchTool.ts:208-211`, then `applyPromptToMarkdown()` calls `queryHaiku()` without an owner at `src/tools/WebFetchTool/utils.ts:503-514`. | A subagent whose assigned account is healthy invokes WebFetch or compact fallback. The secondary call consumes the main account; a 429 can move the main lease while leaving the subagent lease unchanged, defeating per-owner distribution. | **Tool/compact owners:** thread `agentId` through both public call paths and add main-vs-subagent routing tests. |
-| F3 | **Medium** | The `sideQuery` family resolves an initial pooled credential but bypasses the pool-aware retry/failover layer. | `sideQuery()` creates a client at `src/utils/sideQuery.ts:140-146` and calls `client.beta.messages.create()` directly at `src/utils/sideQuery.ts:207-231`. It does not call `withRetry()` or carry a lease owner. Production callers include relevant-memory lookup, auto mode, session search, permission explanation, and Chrome integration. | The currently selected account first reaches a hard cap during relevant-memory prefetch or another side query. That feature fails without marking the account capped or selecting a healthy backup. A later main request must rediscover the cap before the pool heals. | **Shared API owner:** route `sideQuery` through the common retry contract or add an equivalent explicitly tested account-transition wrapper. |
-| F4 | **Medium** | Codex image generation chooses the correct initial lease account but treats 401/429 as generic terminal errors. | Auth resolution is owner-aware at `src/tools/GenerateImageTool/GenerateImageTool.ts:476-495`. The backend performs one direct `fetch()` at `src/tools/GenerateImageTool/GenerateImageTool.ts:803-838`, and every non-OK response becomes a generic `Error` at `src/tools/GenerateImageTool/GenerateImageTool.ts:841-845`. | A subagent's leased account is exhausted while another account is healthy. Image generation fails immediately and the pool never records or fails over that account. | **Image/API owner:** normalize Codex image 401/429 into the shared account errors, then retry after refresh/failover under the same owner lease. |
-| F5 | **Medium** | Terminal exhaustion classification has contradictory source and test contracts for a capped usable account plus another dead account. | `getCodexExhaustionDiagnosticCode()` returns quota exhaustion only when `capped === total` at `src/services/api/withRetry.ts:171-193`. The regression test at `src/services/api/codexAccountLeaseManager.test.ts:2396-2457` requires the typed hard-cap decision to remain `quota_exhausted` even when another account is dead. The test currently receives `account_recovery`. | The only usable account is capped and an unrelated account is dead. Cat Code emits account-repair guidance instead of the wait-for-reset terminal state, preventing the normal continue-after-limit behavior even though the capped account's reset can recover the session. | **Account-routing/product owner:** decide and document the intended terminal contract, then align implementation, diagnostics, and test. Do not leave the current contradiction as an implicit policy decision. |
+| F1 | **High** | **Defect:** auto-registered subagent leases lack paired cleanup in ephemeral `runForkedAgent()` and background-disabled synchronous AgentTool paths. A related transport-state risk is conditional. | **SOURCE-OBSERVED:** owner creation, lease auto-registration, missing release, and stale-holder counting are direct source facts (`src/utils/forkedAgent.ts:448-453`, `:603-608`; `src/services/api/claude.ts:1167-1179`; `src/services/api/codexAccountLeaseManager.ts:616-630`; `src/tools/AgentTool/AgentTool.tsx:1354-1385`, `:1856-1890`). **INFERRED:** persistent WebSocket state is possible only if that owner actually takes the streaming WebSocket path. No focused lifecycle test exercised either leak. | Internal forks and background-disabled synchronous agents leave historical lease owners active. After enough work, `spread` ranks accounts using stale concurrency and `/accounts` reports dead holders. A transport entry may also survive when WebSocket was allocated. | **Account-routing/AgentTool owners:** pair every auto-created owner with idempotent lease cleanup. Add transport cleanup only through a lifecycle abstraction justified by the actual transport allocation/key path; test both public paths. |
+| F2 | **Medium** | **Defect:** compact fallback and WebFetch secondary calls omit a subagent's `agentId`, so they route as main-thread work. | **SOURCE-OBSERVED:** compact fallback options omit `context.agentId` (`src/services/compact/compact.ts:1407-1432`); WebFetch discards the owner and calls `queryHaiku()` without it (`src/tools/WebFetchTool/WebFetchTool.ts:208-211`; `src/tools/WebFetchTool/utils.ts:503-514`). **INFERRED:** the exact account mutation sequence is not covered by a public feature test. | A subagent whose assigned account is healthy invokes WebFetch or compact fallback. The secondary call consumes the main account; a 429 can move the main lease while leaving the subagent lease unchanged. | **Tool/compact owners:** thread `agentId` through both public call paths and add main-vs-subagent routing tests. |
+| F3 | **Medium** | **Defect:** the `sideQuery` family resolves pooled credentials but bypasses Cat Code's pool-aware state transitions. | **SOURCE-OBSERVED:** direct client creation/call without `withRetry()` or an owner (`src/utils/sideQuery.ts:140-146`, `:207-231`). Relevant-memory prefetch is demonstrably invoked from both main and subagent `query()` contexts, but drops `toolUseContext.agentId` before `sideQuery()` (`src/query.ts:361-364`; `src/utils/attachments.ts:2376-2432`; `src/memdir/findRelevantMemories.ts:105-125`). **TEST-OBSERVED:** existing side-query tests cover request/provider shape only. | The selected account first reaches a hard cap during relevant-memory prefetch or another side query. That feature fails without marking the account capped or selecting a healthy backup; a later shared-path request must rediscover the cap. In a subagent prefetch, it can also select/mutate main/global state rather than that owner. | **Shared API owner:** give `sideQuery` shared account-state classification and owner-local semantics. Retry count/backoff may remain purpose-specific. Propagate owner first from the demonstrated memory-prefetch path; audit other callers before labeling them subagent-owned. |
+| F4 | **Medium** | **Known capability gap against the requested uniformity target:** Codex image generation chooses the correct initial lease account but treats endpoint 401/429 as generic terminal errors. | **SOURCE-OBSERVED:** owner-aware initial auth and one direct fetch/generic error (`src/tools/GenerateImageTool/GenerateImageTool.ts:476-495`, `:803-845`). **TEST-OBSERVED:** tests prove initial main/subagent selection and proactive refresh, not endpoint failover. The deferral is explicitly documented in the auth/Codex maps. | A subagent's leased account is exhausted while another account is healthy. Image generation fails immediately and the pool never records or fails over that account. | **Product/API decision:** if uniformity is the target, normalize image endpoint 401/429 into shared account-state transitions and retry under the same owner. If the gap remains deferred, retain it as an explicit product limitation. |
+| F5 | **Medium** | **Policy/contract drift requiring a product decision:** capped-plus-dead terminal classification differs between implementation and focused regression test. | **SOURCE-OBSERVED:** aggregate-count policy in `src/services/api/withRetry.ts:171-193` conflicts with the typed-hard-cap policy encoded at `src/services/api/codexAccountLeaseManager.test.ts:2396-2457`. **TEST-OBSERVED:** the test receives `account_recovery` while expecting `quota_exhausted`. | The only usable account is capped and an unrelated account is dead. Cat Code emits repair guidance instead of wait-for-reset behavior, even though the capped account's reset can recover the session. Whether this is wrong is the unresolved product policy. | **Account-routing/product owner:** choose and document the terminal policy, then align implementation, diagnostics, continuation consumers, maps, and tests. Do not treat either side as a routine bug fix until the policy is selected. |
 
 ## Finding details and repair specifications
 
-### F1 — Auto-registered subagent lease and transport-state leaks
+### F1 — Auto-registered lease leaks and conditional transport-state retention
 
 #### Exact failure sequence
 
@@ -208,14 +254,15 @@ Important identity detail for the fix: the account lease belongs to `isolatedToo
 3. The fork invokes the normal `query()` loop with the isolated context (`src/utils/forkedAgent.ts:547-560`).
 4. The shared API layer sees an OpenAI request with `options.agentId`, no current async-local lease, and managed pool credentials, then registers a subagent lease (`src/services/api/claude.ts:1166-1179`). `registerCodexLease()` keeps the lease in the process-global `codexLeasesByOwnerId` map (`src/services/api/codexAccountLeaseManager.ts:152-191`).
 5. `withRetry()` correctly uses that owner while the request is active.
-6. When the fork returns, throws, or is aborted, its `finally` only clears `readFileState` and the local message array (`src/utils/forkedAgent.ts:603-608`). There is no `releaseCodexLease(isolatedToolUseContext.agentId)` and no `clearWebSocketSession(`${getSessionId()}/${isolatedToolUseContext.agentId}`)`.
-7. `getCodexLeaseSnapshot()` continues exposing the stale holder in `/accounts` (`src/services/api/codexAccountLeaseManager.ts:194-214`), and `getLiveLeaseCountsByAccountId()` continues including it in `spread` ranking (`src/services/api/codexAccountLeaseManager.ts:616-630`).
+6. When the fork returns, throws, or is aborted, its `finally` only clears `readFileState` and the local message array (`src/utils/forkedAgent.ts:603-608`). There is no `releaseCodexLease(isolatedToolUseContext.agentId)`.
+7. `getCodexLeaseSnapshot()` therefore continues exposing the stale holder in `/accounts` (`src/services/api/codexAccountLeaseManager.ts:194-214`), and `getLiveLeaseCountsByAccountId()` continues including it in `spread` ranking (`src/services/api/codexAccountLeaseManager.ts:616-630`). This lease leak is **SOURCE-OBSERVED**, not conditional on transport choice.
+8. Transport state is a separate, conditional consequence. Agent requests derive conversation ID `${getSessionId()}/${options.agentId}` (`src/services/api/claude.ts:782-789`). A streaming request with no sticky HTTP fallback calls `streamTurnViaWebSocketLocked(conversationId, ...)` (`src/services/api/codex-fetch-adapter.ts:3348-3352`, `:3512-3519`), which allocates/reuses entries keyed by that exact conversation ID (`src/services/api/codex-websocket-transport.ts:129-130`, `:408-422`, `:594-620`). `clearWebSocketSession()` removes that key (`src/services/api/codex-websocket-transport.ts:285-297`). Thus an uncleaned transport entry is **INFERRED and conditional**: it exists only when the fork actually used the WebSocket path. No test in this audit proved that allocation for either affected public path.
 
 #### Second affected path: background-disabled synchronous AgentTool
 
 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` is captured at AgentTool module load (`src/tools/AgentTool/AgentTool.tsx:230-236`). When true, synchronous subagent execution skips `registerAgentForeground()` and the explicit `registerCodexLease()` block (`src/tools/AgentTool/AgentTool.tsx:1354-1385`). The subagent still carries `syncAgentId`, so the shared query layer auto-registers a Codex lease on its first OpenAI request.
 
-At completion, AgentTool's `finally` calls `unregisterAgentForeground()` only when `foregroundTaskId` exists (`src/tools/AgentTool/AgentTool.tsx:1856-1890`). In this branch it is undefined, so no LocalAgentTask cleanup runs. The lease and `${sessionId}/${syncAgentId}` WebSocket session survive exactly like a forked-agent owner.
+At completion, AgentTool's `finally` calls `unregisterAgentForeground()` only when `foregroundTaskId` exists (`src/tools/AgentTool/AgentTool.tsx:1856-1890`). In this branch it is undefined, so no LocalAgentTask cleanup runs. The lease survives exactly like a forked-agent owner. A WebSocket entry also survives if this execution selected streaming WebSocket transport and allocated one under its derived conversation ID.
 
 #### Why this is High
 
@@ -226,13 +273,15 @@ At completion, AgentTool's `finally` calls `unregisterAgentForeground()` only wh
 - Routing gradually represents historical task count rather than current concurrency.
 - A stale lease attached to an account that later recovers from cap/auth state can keep that account artificially “crowded.”
 - `/accounts` lease-holder display can report jobs that no longer exist.
-- Explicit subagent conversation overrides can leave transport-session entries after the logical owner is gone.
+- A fork that actually allocates WebSocket transport can leave a transport-session entry after the logical owner is gone; this risk is conditional, unlike the lease leak.
 
 #### Safe patch boundary
 
 Prefer lifecycle cleanup in the logical owner wrappers rather than unconditional cleanup inside `queryModel()`. `queryModel()` can be called more than once during one fork or AgentTool multi-turn loop; releasing after each API turn would allow one logical subagent to reacquire a different account mid-conversation.
 
-The wrapper already owns the isolated context and has a single outer `finally`. Add cleanup there using **`isolatedToolUseContext.agentId`**, not the transcript-only `agentId`. Cleanup should be idempotent and run on success, thrown API error, tool error, and abort. Reuse the same two operations as `releaseAgentCodexResources()` in `LocalAgentTask.tsx`.
+The wrapper already owns the isolated context and has a single outer `finally`. Add lease cleanup there using **`isolatedToolUseContext.agentId`**, not the transcript-only `agentId`. Cleanup should be idempotent and run on success, thrown API error, tool error, and abort.
+
+For transport cleanup, prefer a shared owner-lifecycle helper over duplicating a string convention. The current source does establish the key chain—agent ID to `${sessionId}/${agentId}` conversation ID to the transport maps—so an idempotent clear of that derived conversation is a defensible current implementation. The regression test must nevertheless prove that the public path actually allocated the transport entry before asserting it was cleared; otherwise it tests only a cleanup call by analogy.
 
 For AgentTool's background-disabled branch, ensure its outer sync-agent `finally` releases `syncAgentId` and clears `${getSessionId()}/${syncAgentId}` when no LocalAgentTask owns cleanup. A cleaner long-term design would factor one idempotent account-resource cleanup helper shared by AgentTool, LocalAgentTask, and forked-agent wrappers. Do not make UI task registration a prerequisite for account-resource lifecycle.
 
@@ -243,18 +292,19 @@ Add a public-entry test for `runForkedAgent()` that:
 1. Seeds two healthy pool accounts and OpenAI session provider.
 2. Runs a minimal fork through the real lease registration seam.
 3. Captures the isolated owner ID or inspects the lease snapshot while the mocked query is active.
-4. After normal completion, asserts that owner is absent from `getCodexLeaseSnapshotForTest()` and its conversation session is cleared.
+4. After normal completion, asserts that owner is absent from `getCodexLeaseSnapshotForTest()`.
 5. Repeats for thrown error and aborted execution.
 6. Acquires a subsequent `spread` lease and proves the completed fork no longer affects account choice.
 7. Covers `skipTranscript: true`, proving cleanup does not accidentally depend on the transcript ID.
-8. Imports/runs AgentTool with `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` enabled, executes a synchronous Codex subagent, and proves its auto-registered lease and WebSocket session are removed on success, error, and abort.
+8. In a separate transport case, forces the streaming WebSocket branch, proves the owner conversation was inserted into transport state, then proves it is removed on completion/abort.
+9. Imports/runs AgentTool with `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` enabled, executes a synchronous Codex subagent, and proves its auto-registered lease is removed on success, error, and abort; apply the same allocate-then-clear proof if transport cleanup is part of the patch.
 
 Pre-fix failure: the lease remains in the snapshot after the fork resolves/rejects, and the next `spread` selection sees an extra live holder.
 
 #### Acceptance criteria
 
 - No fork-created lease survives logical fork completion.
-- No fork-created WebSocket session survives completion or abort.
+- No **actually allocated** fork-created WebSocket session survives completion or abort.
 - Managed AgentTool subagent leases remain alive for the entire task and are not prematurely released.
 - Background-disabled synchronous AgentTool subagents release account resources even though no LocalAgentTask exists.
 - Multi-turn forks remain pinned to one owner lease until the wrapper finishes.
@@ -302,22 +352,22 @@ Pre-fix failure: the first request uses A and any failover mutates the main owne
 
 #### Exact failure sequence
 
-1. `sideQuery()` resolves provider and calls `getAnthropicClient()` without `codexLeaseOwnerId` or `codexLeaseOwnerType` (`src/utils/sideQuery.ts:140-146`).
+1. `sideQuery()` resolves provider and calls `getAnthropicClient()` without `codexLeaseOwnerId` or `codexLeaseOwnerType` (`src/utils/sideQuery.ts:140-146`). Its option type has no owner field.
 2. The credential resolver therefore uses the active/first selectable account rather than a named owner lease.
 3. `sideQuery()` invokes `client.beta.messages.create()` directly (`src/utils/sideQuery.ts:207-231`).
 4. The Codex adapter correctly converts an endpoint 429/401 into `CodexAccountCapError`/`CodexAccountAuthError`, but no Cat Code `withRetry()` surrounds the call.
 5. The SDK's `maxRetries` setting cannot perform the pool state mutation that makes a different account selectable. It can resend, but normally re-resolves the unchanged active account.
 6. The feature's caller catches or surfaces the error; the pool remains unaware until some later shared-path request observes the same failure.
 
-This path is especially visible for relevant-memory lookup because it begins once per normal query entry before main lease work completes. A side failure can therefore be the first real evidence that the active account is capped, yet that evidence is discarded for routing purposes.
+This path is especially visible for relevant-memory lookup because it begins once per eligible `query()` entry before the main model loop. `query()` passes the full `ToolUseContext` to the prefetch, but the prefetch threads only abort state into `findRelevantMemories()` and `sideQuery()`. This is a demonstrated owner-loss path for subagent queries as well as a main-query classification gap. A side failure can be the first real evidence that the selected account is capped, yet that evidence is discarded for routing purposes.
 
 #### Design options
 
-Preferred: make `sideQuery` a thin request-shaping frontend to the shared non-streaming request/retry machinery. Preserve its attribution, beta, tool-choice, output-format, temperature, thinking, and stop-sequence behavior.
+Preferred: make `sideQuery` a thin request-shaping frontend to shared account-state classification and owner-local transition machinery. Preserve its attribution, beta, tool-choice, output-format, temperature, thinking, stop-sequence behavior, and its intentionally lightweight retry/backoff budget.
 
-Alternative: factor a reusable non-streaming `withRetry()` wrapper used by both `queryModelWithoutStreaming()` and `sideQuery()`. Avoid copying the 401/429 state machine into `sideQuery`; duplicated classification will drift.
+Alternative: factor a reusable account-transition wrapper used by both `queryModelWithoutStreaming()` and `sideQuery()`. Avoid copying the 401/429 classification/state mutation into `sideQuery`; duplicated policy will drift. This does **not** require identical retry counts, delay schedules, telemetry, or response-shaping behavior.
 
-Whichever design is chosen, add an optional owner field (ideally the same `agentId` convention used by `Options`) and propagate it from callers that can run inside a subagent. Main/session-only callers can omit it and use `main-thread`.
+Whichever design is chosen, add an optional owner field (ideally the same `agentId` convention used by `Options`) and first propagate it through the demonstrated relevant-memory prefetch path. Main/session-only callers can omit it and use `main-thread`. Treat propagation from permission explanation, Chrome integration, or other callers as an audit item rather than an established requirement until their invocation context proves subagent reachability.
 
 #### Required regression matrix
 
@@ -335,12 +385,12 @@ Pre-fix failure: the first four Codex cases return/throw from the same initial c
 
 #### Acceptance criteria
 
-- `sideQuery` 401/429/connection behavior is observably identical to shared model calls.
-- Owner-local semantics are preserved for subagent callers.
+- `sideQuery` uses the same account-state classification and exact-failed-account mutations as shared model calls; its retry count/backoff may remain purpose-specific.
+- Owner-local semantics are preserved for the demonstrated subagent relevant-memory caller and any other caller proven subagent-capable during implementation.
 - Explicit first-party side queries remain isolated from Codex.
 - Existing attribution/request-shape tests continue passing.
 
-### F4 — Image generation lacks endpoint failover
+### F4 — Documented image-endpoint failover capability gap
 
 #### What already works
 
@@ -355,9 +405,9 @@ Pre-fix failure: the first four Codex cases return/throw from the same initial c
 
 Authentication is resolved once before `generateWithCodexBackend()`. The image backend sends one request with that token/account header and turns every non-OK status into a generic `Error`. It never creates `CodexAccountCapError`/`CodexAccountAuthError`, calls `withRetry()`, or re-resolves auth for another attempt.
 
-#### Safe patch boundary
+#### Product decision and safe patch boundary
 
-Keep `getImageAuth()` as the one credential/refresh entry point; do not build a second token refresh implementation. Wrap Codex image attempts in reusable account-aware retry semantics so every attempt obtains fresh auth for the same owner. The OpenAI API-key backend must stay outside pool mutation.
+The current one-shot behavior matches the repository maps, so changing it is an expansion of supported behavior rather than a regression fix. If the product chooses the requested uniformity target, keep `getImageAuth()` as the one credential/refresh entry point; do not build a second token refresh implementation. Wrap Codex image attempts in reusable account-aware transition semantics so every attempt obtains fresh auth for the same owner. The OpenAI API-key backend must stay outside pool mutation.
 
 The retry integration must preserve:
 
@@ -368,7 +418,7 @@ The retry integration must preserve:
 - No duplicate output-file write before a request has succeeded.
 - A bounded retry/failover budget.
 
-#### Required regression matrix
+#### Required regression matrix if the gap is closed
 
 1. Subagent on A, backup B, image endpoint returns 429 for A then succeeds for B: A is capped, subagent lease moves, main lease does not.
 2. Main on A, endpoint returns 401, forced refresh succeeds: second attempt uses rotated A token.
@@ -379,14 +429,14 @@ The retry integration must preserve:
 
 Pre-fix failure: all Codex non-OK cases throw the generic message from `GenerateImageTool.ts:841-845` after one request.
 
-#### Acceptance criteria
+#### Acceptance criteria if the gap is closed
 
 - Initial and retry account selection match text requests for both main and subagent owners.
 - 401/429 update the exact failed account, not whichever account is active when the response arrives.
 - Tests prove account headers on both attempts, not only final success.
 - `docs/maps/auth-accounts-oauth.md` and `docs/maps/codex-core.md` remove or update the documented “deferred” limitation once behavior changes.
 
-### F5 — Conflicting terminal policy for capped + dead pools
+### F5 — Terminal policy/contract drift for capped + dead pools
 
 #### Reproduced state
 
@@ -430,7 +480,7 @@ For each case, assert both emitted diagnostic and `CannotRetryError.deferredTerm
 
 ### Verification gap V1 — single-account auth test timeout
 
-The isolated lease-manager test `withRetry records single-account cap/auth states without rotating` passes its cap assertions and then times out during the auth half (`src/services/api/codexAccountLeaseManager.test.ts:946-1014`). `buildPoolAccount()` supplies a synthetic refresh token by default (`src/services/api/codexAccountLeaseManager.test.ts:53-75`), while this test does not install the request-scoped fetch mock used by nearby refresh tests. The production 401 branch therefore attempts the real forced-refresh machinery.
+**Evidence status: TEST-OBSERVED timeout; INFERRED cause.** The isolated lease-manager test `withRetry records single-account cap/auth states without rotating` passes its cap assertions and then times out during the auth half (`src/services/api/codexAccountLeaseManager.test.ts:946-1014`). `buildPoolAccount()` supplies a synthetic refresh token by default (`src/services/api/codexAccountLeaseManager.test.ts:53-75`), while this test does not install the request-scoped fetch mock used by nearby refresh tests. The production 401 branch therefore appears to enter real forced-refresh machinery.
 
 The likely test defect is an unmocked refresh transport, but that precise cause was not proven by instrumenting or changing the test. Treat it as a test-confidence gap, not as evidence that production auth recovery hangs.
 
@@ -452,7 +502,7 @@ The full request route is:
 8. A title-request 429/401 enters the same `withRetry()` account rotation/recovery path as a main chat request.
 9. `finally` clears the title-specific WebSocket session on success, parse failure, API error, or abort (`src/utils/sessionTitle.ts:179-194`).
 
-Therefore session title usage is charged to the current main account and can move the main lease when that account is exhausted. That is the expected ownership model for a session-level label.
+Therefore session title usage is charged to the current main account and can move the main lease when that account is exhausted. That is the expected ownership model for a session-level label. This routing conclusion is **SOURCE-OBSERVED/INFERRED through the shared path**, not title-specific failover test evidence.
 
 One confidence limitation remains: `src/utils/sessionTitle.test.ts` mocks `queryModelWithoutStreaming()`. It proves provider/model/output-format wiring, but it does not itself cause a title request to fail over across two real seeded pool accounts. The conclusion relies on the shared-path source trace plus the generic lease/retry integration tests. A title-specific two-account integration test would strengthen confidence but is not required to fix F1-F5.
 
@@ -465,8 +515,8 @@ This order reduces overlap and makes failures easier to attribute:
 1. **F1: fix `runForkedAgent()` lifecycle.** It is the only High finding and affects the broadest set of internal services. Add focused lifecycle tests before touching other routing.
 2. **F2: propagate existing owners through compact fallback and WebFetch.** These should be small wiring changes using the already-correct shared path.
 3. **F3: bring `sideQuery` under shared retry semantics.** This is the broadest API refactor; keep request-shaping behavior stable and add the full owner/failure matrix.
-4. **F4: add image endpoint retry/failover.** Reuse the account transition abstraction produced or clarified by F3 where possible, without forcing image payloads through Anthropic message translation.
-5. **F5: resolve terminal policy deliberately.** This may be done earlier if it blocks the shared abstraction, but it should be its own commit because it changes durable recovery semantics.
+4. **F4: make the capability decision.** If uniform endpoint failover is accepted as the target, add image retry/failover using the account transition abstraction produced or clarified by F3, without forcing image payloads through Anthropic message translation. Otherwise preserve and clearly surface the documented limitation.
+5. **F5: resolve terminal policy deliberately.** Select the product contract before changing code or tests. This may be done earlier if it blocks the shared abstraction, but it should be its own commit because it changes durable recovery semantics.
 6. **Repair V1 test isolation.** Ensure the full lease suite is deterministic and network-free.
 7. **Update maps after implementation.** At minimum revisit `docs/maps/auth-accounts-oauth.md`, `docs/maps/codex-core.md`, `docs/maps/query-provider-runtime.md`, and the build/test routing map if new suites are added.
 
@@ -475,8 +525,8 @@ Suggested commit boundaries:
 - Commit A: fork lifecycle + tests.
 - Commit B: nested owner propagation + tests.
 - Commit C: shared side-query retry integration + caller owner propagation + tests.
-- Commit D: image retry/failover + tests + map updates.
-- Commit E: terminal-policy decision + diagnostics/continuation tests + map updates.
+- Commit D, if F4 is accepted: image retry/failover + tests + map updates.
+- Commit E: selected F5 terminal policy + diagnostics/continuation tests + map updates.
 
 Avoid combining all findings into one large patch. F3/F4/F5 each change different contracts and need independently reviewable evidence.
 
@@ -487,8 +537,8 @@ A future implementation session should not claim completion until all applicable
 - [ ] Every inference-spending production entry point appears in the inventory above or is documented as newly added.
 - [ ] Every subagent-owned nested request either carries the parent `agentId` or intentionally creates a bounded child owner with paired cleanup.
 - [ ] Every automatically created lease has an explicit owner responsible for releasing it on success, error, cancellation, and kill.
-- [ ] Every Codex 429 path marks the exact request account capped and retries a healthy account for the same logical owner when possible.
-- [ ] Every Codex 401 path attempts forced refresh of the exact request account before dead-mark/failover.
+- [ ] Every Codex 429 path covered by the chosen uniformity contract marks the exact request account capped and retries a healthy account for the same logical owner when possible; any deliberate exception is documented.
+- [ ] Every Codex 401 path covered by the chosen uniformity contract attempts forced refresh of the exact request account before dead-mark/failover; any deliberate exception is documented.
 - [ ] Connection failures never become usage caps.
 - [ ] Deterministic `response.failed` results are not replayed on other accounts.
 - [ ] Main-thread failure never silently moves an unrelated subagent lease, and subagent failure never silently moves the main lease.
@@ -503,7 +553,7 @@ A future implementation session should not claim completion until all applicable
 
 ## Test-confidence assessment
 
-The focused feature suites prove request shape and initial routing for session titles and images. The account pool and lease suites exercise pool selection, refresh, lease-local failover, connection failover, and conversation isolation. They do not cover the forked-agent release lifecycle, subagent WebFetch/compact ownership, `sideQuery` failover, or image 401/429 failover.
+The focused session-title suite proves provider/model/request/output wiring; title account routing is traced through shared source and generic lease/retry tests. The image suite proves initial main/subagent account selection and proactive refresh. The account pool and lease suites exercise pool selection, refresh, lease-local failover, connection failover, and conversation isolation. They do not cover the forked-agent release lifecycle, subagent WebFetch/compact ownership, `sideQuery` failover, title-specific two-account failover, or image-endpoint 401/429 failover.
 
 The isolated lease-manager suite has two failures:
 
@@ -527,17 +577,17 @@ The isolated lease-manager suite has two failures:
 
 | Finding | Preferred test location | Public behavior that must fail before the fix |
 |---|---|---|
-| F1 | Add a new focused test beside `src/utils/forkedAgent.ts` (no dedicated test currently exists) and extend `src/tools/AgentTool/AgentTool.test.ts` | Lease snapshot/WebSocket state retain a completed fork or a background-disabled synchronous AgentTool owner |
+| F1 | Add a new focused test beside `src/utils/forkedAgent.ts` (no dedicated test currently exists) and extend `src/tools/AgentTool/AgentTool.test.ts` | Lease snapshot retains a completed owner; in a separate forced-WebSocket case, allocated transport state is retained |
 | F2 compact | `src/services/compact/compact.test.ts` | Subagent fallback sends main account header |
 | F2 WebFetch | Add a new focused test beside `src/tools/WebFetchTool/WebFetchTool.ts`; no WebFetch test file currently exists | Subagent summarization sends main account header |
 | F3 | Extend `src/utils/sideQuery.test.ts` plus shared account integration fixture | 429/401 throws without pool transition or second-account request |
-| F4 | Extend `src/tools/GenerateImageTool/GenerateImageTool.test.ts` | Codex image 429/401 makes exactly one request and leaves pool unchanged |
+| F4, if capability is accepted | Extend `src/tools/GenerateImageTool/GenerateImageTool.test.ts` | Codex image 429/401 makes exactly one request and leaves pool unchanged |
 | F5 | Existing `src/services/api/codexAccountLeaseManager.test.ts`; add continuation consumer test if policy changes | Diagnostic and deferred terminal classification disagree with selected policy |
 | V1 | Existing lease-manager test | Test contacts/awaits unmocked refresh machinery and times out |
 
 ## Unverified live behavior
 
-No real Codex accounts were spent and no live 401, 429, refresh-token rotation, concurrent failover, or quota reset was induced. Those layers remain **UNVERIFIED**. Operator verification would require a controlled test pool with disposable quota state and explicit authorization to make live subscription requests.
+No real Codex accounts were spent and no live 401, 429, refresh-token rotation, concurrent failover, or quota reset was induced. Those layers remain **UNVERIFIED-LIVE**. Operator verification would require a controlled test pool with disposable quota state and explicit authorization to make live subscription requests.
 
 ### Controlled live verification playbook
 
@@ -547,7 +597,7 @@ Only run this after the implementation is green under mocked tests and the opera
 2. Start one main session and one subagent, then inspect `/accounts` to record main and subagent lease ownership.
 3. Trigger one low-cost request from each owner and verify diagnostics/account headers identify the expected distinct accounts without exposing raw IDs in user-facing output.
 4. Simulate or safely arrange a hard cap on only the subagent account. Verify the next subagent request moves only that lease and the main lease remains fixed.
-5. Repeat for a main-owned secondary feature: session title, relevant-memory side query, and image generation. Verify each transitions according to the same policy.
+5. Repeat for a main-owned secondary feature: session title and relevant-memory side query, plus image generation if F4 uniformity was accepted. Verify each transitions according to the selected policy.
 6. Exercise one controlled expired/revoked access-token case with a valid refresh token; verify same-account refresh succeeds before failover.
 7. End all forks/subagents and confirm `/accounts` shows no stale holders.
 8. Verify a newly launched `spread` subagent is ranked from current live holders, not the completed jobs.
@@ -564,7 +614,7 @@ Live acceptance remains separate from mocked engineering acceptance. A green uni
 - It does not classify plan metadata warnings as hard unavailability; the pool availability reducer intentionally distinguishes them.
 - It does not treat a connection error as evidence of cap exhaustion.
 - It does not claim that the lease-manager timeout proves a production hang.
-- It does not claim live provider correctness; all live subscription behavior is explicitly UNVERIFIED.
+- It does not claim live provider correctness; all live subscription behavior is explicitly **UNVERIFIED-LIVE**.
 
 ## Verification evidence
 
