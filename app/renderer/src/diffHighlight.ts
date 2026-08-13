@@ -24,7 +24,14 @@ function appendLines(target: HighlightedLine[], source: HighlightedLine[]): High
 function nodeLines(node: ReactNode): HighlightedLine[] {
   if (typeof node === 'string') return node.split('\n').map(part => (part === '' ? [] : [part]))
   if (isValidElement<{ children?: ReactNode }>(node)) {
-    return highlightedLines(node.props.children).map(children => [cloneElement(node, undefined, ...children)])
+    // An empty slice yields NO node, never a childless clone: `cloneElement`
+    // with zero children arguments preserves the original element's children,
+    // so a token spanning a blank line (a template literal, docstring, or block
+    // comment with an empty line in it) would reprint itself in full on that
+    // line — inside a `whitespace-pre` diff row, breaking the row grid.
+    return highlightedLines(node.props.children).map(children =>
+      children.length === 0 ? [] : [cloneElement(node, undefined, ...children)],
+    )
   }
   return [[node]]
 }
