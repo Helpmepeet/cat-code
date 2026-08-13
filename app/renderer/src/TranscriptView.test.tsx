@@ -158,8 +158,39 @@ test('renders an assistant text row as markdown, not raw source', () => {
     />,
   )
 
-  expect(html).toContain('<strong>package.json</strong>')
+  expect(html).toContain(
+    '<strong><button class="font-mono text-accent underline decoration-accent/45 underline-offset-2 hover:text-accent-soft" type="button" aria-label="Open package.json">package.json</button></strong>',
+  )
   expect(html).not.toContain('**package.json**')
+})
+
+test('renders workspace file paths as open-file controls without linkifying web URLs', () => {
+  const html = render({
+    ...blockSource,
+    id: 's:m:0:paths',
+    kind: 'assistant-text',
+    role: 'assistant',
+    content:
+      'Created at:docs/reports/2026-08-13-session-label-flow.md. Read README.md, **package.json**, `src/main.ts`, and `docs/My Report.md`. See https://example.com/readme.md, example.com/readme.md, and www.example.com/readme.md.',
+  })
+
+  expect(html).toContain(
+    '<button class="font-mono text-accent underline decoration-accent/45 underline-offset-2 hover:text-accent-soft" type="button" aria-label="Open docs/reports/2026-08-13-session-label-flow.md">docs/reports/2026-08-13-session-label-flow.md</button>',
+  )
+  expect(html).toContain('https://example.com/readme.md')
+  expect(html).not.toContain('aria-label="Open /example.com/readme.md"')
+  expect(html).toContain(
+    'aria-label="Open src/main.ts"><code>src/main.ts</code>',
+  )
+  expect(html).toContain('aria-label="Open README.md">README.md</button>')
+  expect(html).toContain(
+    '<strong><button class="font-mono text-accent underline decoration-accent/45 underline-offset-2 hover:text-accent-soft" type="button" aria-label="Open package.json">package.json</button></strong>',
+  )
+  expect(html).toContain(
+    'aria-label="Open docs/My Report.md"><code>docs/My Report.md</code>',
+  )
+  expect(html).not.toContain('aria-label="Open example.com/readme.md"')
+  expect(html).not.toContain('aria-label="Open www.example.com/readme.md"')
 })
 
 test('P4-18c: a fenced code block renders framed + copyable with syntax highlight tokens', () => {

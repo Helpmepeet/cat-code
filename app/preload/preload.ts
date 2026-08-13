@@ -188,6 +188,7 @@ const CH_HOST_PREVIEW = 'catcode:host:preview'
 const CH_HOST_SESSIONS_CATALOG = 'catcode:host:sessions-catalog'
 const CH_HOST_OPEN_HISTORY = 'catcode:host:open-history'
 const CH_HOST_SAVE_TEXT = 'catcode:host:save-text'
+const CH_HOST_OPEN_WORKSPACE_FILE = 'catcode:host:open-workspace-file'
 const CH_HOST_EVENT = 'catcode:host:event'
 const CH_HOST_VISIBLE_SESSIONS = 'catcode:host:visible-sessions'
 
@@ -387,6 +388,11 @@ const bridge: CatCodeBridge = {
   saveDiagnosticsBundle(): Promise<boolean> {
     sendGuard.assertAllowed({ saveDiagnostics: true })
     return ipcRenderer.invoke(CH_SAVE_DIAGNOSTICS) as Promise<boolean>
+  },
+  openWorkspaceFile(appSessionId: SessionId, path: string): Promise<boolean> {
+    const payload = { appSessionId, path }
+    sendGuard.assertAllowed(payload)
+    return ipcRenderer.invoke(CH_HOST_OPEN_WORKSPACE_FILE, payload) as Promise<boolean>
   },
   reportVisibleSessions(sessionIds: SessionId[]): void {
     // IDLE-PARK §4(b) — a one-way hint naming the panes on screen so main's park

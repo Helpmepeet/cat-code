@@ -86,6 +86,7 @@ import {
 import { readTranscriptRunFacts } from '../shared/transcriptRunFacts.js'
 import { readSessionsCatalogCache } from './sessionsCatalogBaseline.js'
 import { resolveOpenHistorySession } from './openHistorySession.js'
+import { openWorkspaceFile } from './openWorkspaceFile.js'
 import {
   persistTranscriptBackfillResult,
   runTranscriptBackfill,
@@ -209,6 +210,7 @@ const CH_HOST_OPEN_HISTORY = 'catcode:host:open-history'
 // P4-35 — the file sink. Mirrors `pick-directory`: the renderer REQUESTS a native
 // dialog it cannot answer, and main owns the destination (HC1).
 const CH_HOST_SAVE_TEXT = 'catcode:host:save-text'
+const CH_HOST_OPEN_WORKSPACE_FILE = 'catcode:host:open-workspace-file'
 const CH_HOST_EVENT = 'catcode:host:event'
 const CH_HOST_VISIBLE_SESSIONS = 'catcode:host:visible-sessions'
 
@@ -2238,6 +2240,11 @@ function registerHostControlPlane(): void {
       return { ok: true, saved: true }
     },
   )
+
+  ipcMain.handle(CH_HOST_OPEN_WORKSPACE_FILE, (_e, input: unknown): Promise<boolean> => {
+    if (!host) return Promise.resolve(false)
+    return openWorkspaceFile(input, host.listSessions(), path => shell.openPath(path))
+  })
 }
 
 function registerDebugStateHandler(): void {

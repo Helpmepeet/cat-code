@@ -3091,6 +3091,12 @@ export type CatCodeBridge = {
   openLogsFolder(): void
   saveDiagnosticsBundle(): Promise<boolean>
   /**
+   * Open a model-mentioned file from this session's workspace in the operating
+   * system's associated application. Main resolves the path against the
+   * host-owned session cwd and rejects missing, non-file, or escaping targets.
+   */
+  openWorkspaceFile(appSessionId: SessionId, path: string): Promise<boolean>
+  /**
    * IDLE-PARK (decisions/IDLE-PARK.md §4, option (b)) — report which sessions the
    * user can currently SEE, so main's park policy never reclaims an engine out
    * from under a pane on screen. Sent on every change to the visible set; main

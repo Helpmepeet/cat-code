@@ -22,7 +22,9 @@
 
 import {
   Component,
+  cloneElement,
   createContext,
+  Fragment,
   isValidElement,
   memo,
   useCallback,
@@ -528,7 +530,13 @@ const TranscriptRowView = memo(function TranscriptRowView({
   const rowKind: string = row.kind
   switch (row.kind) {
     case 'assistant-text':
-      return <AssistantProse content={row.content} streaming={row.isStreaming} />
+      return (
+        <AssistantProse
+          content={row.content}
+          sessionId={row.sessionId}
+          streaming={row.isStreaming}
+        />
+      )
 
     case 'user-text':
       return <UserBubble content={row.content} />
@@ -658,11 +666,25 @@ const REMARK_PLUGINS = [remarkGfm]
 
 function AssistantProse({
   content,
+  sessionId,
   streaming,
 }: {
   content: string
+  sessionId: SessionId
   streaming?: true
 }) {
+  const toast = useToast()
+  const openFile = useCallback(
+    (path: string): void => {
+      void window.catcode
+        .openWorkspaceFile(sessionId, path)
+        .then(opened => {
+          if (!opened) toast('Could not open this file', { tone: 'warn' })
+        })
+        .catch(() => toast('Could not open this file', { tone: 'warn' }))
+    },
+    [sessionId, toast],
+  )
   // The prototype's `showCopy` gate (Messages.jsx:2068): no chip while the reply
   // is still arriving (there is no settled answer to take yet, and the caret owns
   // that corner), and none on an empty turn.
@@ -672,8 +694,14 @@ function AssistantProse({
   // from the parsed tree. Keep its component type stable until that source
   // changes: otherwise React remounts each quote and loses its copy feedback.
   const components = useMemo(
-    () => ({ ...MARKDOWN_COMPONENTS, blockquote: createBlockquoteComponent(content) }),
-    [content],
+    () => ({
+      ...MARKDOWN_COMPONENTS,
+      blockquote: createBlockquoteComponent(content),
+      p: createPathAwareParagraph(openFile),
+      li: createPathAwareListItem(openFile),
+      code: createPathAwareCode(openFile),
+    }),
+    [content, openFile],
   )
   return (
     // P4-38 host contract for `BubbleCopyChip`: `group relative` makes this body
@@ -704,6 +732,136 @@ function AssistantProse({
       ) : null}
     </div>
   )
+}
+
+const FILE_PATH_RE =
+  /(?:(?:\/|(?:\.{1,2}\/)|(?:[A-Za-z0-9_@.+-]+\/))(?:[A-Za-z0-9_@.+-]+\/)*[A-Za-z0-9_@.+-]+|[A-Za-z_@.][A-Za-z0-9_@.+-]*)\.[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?/g
+const WEB_PATH_RE =
+  /^(?:www\.|(?:[A-Za-z0-9-]+\.)+(?:(?:com|org|net|io|dev|app|ai|co|edu|gov|me|xyz)(?:[/:]|$)|[A-Za-z]{2,}\/))/i
+
+function isWebPath(path: string): boolean {
+  return WEB_PATH_RE.test(path)
+}
+
+function isInlineFilePath(path: string): boolean {
+  return (
+    path.length > 0 &&
+    path.length <= 4_096 &&
+    path === path.trim() &&
+    !path.includes('\n') &&
+    !path.includes('\0') &&
+    !isWebPath(path) &&
+    /(?:^|\/)[^/]+\.[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/.test(path)
+  )
+}
+
+function linkifyFilePathText(
+  text: string,
+  openFile: (path: string) => void,
+): ReactNode {
+  const parts: ReactNode[] = []
+  let cursor = 0
+  for (const match of text.matchAll(FILE_PATH_RE)) {
+    const path = match[0]
+    const index = match.index
+    if (
+      text.slice(0, index).endsWith(':/') ||
+      path.startsWith('//') ||
+      isWebPath(path)
+    ) {
+      continue
+    }
+    if (index > cursor) parts.push(text.slice(cursor, index))
+    parts.push(
+      <button
+        className="font-mono text-accent underline decoration-accent/45 underline-offset-2 hover:text-accent-soft"
+        key={`${index}:${path}`}
+        type="button"
+        aria-label={`Open ${path}`}
+        onClick={() => openFile(path)}
+      >
+        {path}
+      </button>,
+    )
+    cursor = index + path.length
+  }
+  if (cursor === 0) return text
+  if (cursor < text.length) parts.push(text.slice(cursor))
+  return parts.map((part, index) => <Fragment key={index}>{part}</Fragment>)
+}
+
+function linkifyFilePathChildren(
+  children: ReactNode,
+  openFile: (path: string) => void,
+): ReactNode {
+  if (typeof children === 'string') {
+    return linkifyFilePathText(children, openFile)
+  }
+  if (isValidElement<{ children?: ReactNode }>(children)) {
+    if (
+      typeof children.type !== 'string' ||
+      children.type === 'a' ||
+      children.type === 'button' ||
+      children.type === 'code'
+    ) {
+      return children
+    }
+    return cloneElement(
+      children,
+      undefined,
+      linkifyFilePathChildren(children.props.children, openFile),
+    )
+  }
+  if (!Array.isArray(children)) return children
+  return children.map((child, index) => (
+    <Fragment key={index}>
+      {linkifyFilePathChildren(child, openFile)}
+    </Fragment>
+  ))
+}
+
+function createPathAwareParagraph(openFile: (path: string) => void) {
+  return function PathAwareParagraph({
+    children,
+    node: _node,
+    ...props
+  }: ComponentPropsWithoutRef<'p'> & { node?: unknown }) {
+    void _node
+    return <p {...props}>{linkifyFilePathChildren(children, openFile)}</p>
+  }
+}
+
+function createPathAwareListItem(openFile: (path: string) => void) {
+  return function PathAwareListItem({
+    children,
+    node: _node,
+    ...props
+  }: ComponentPropsWithoutRef<'li'> & { node?: unknown }) {
+    void _node
+    return <li {...props}>{linkifyFilePathChildren(children, openFile)}</li>
+  }
+}
+
+function createPathAwareCode(openFile: (path: string) => void) {
+  return function PathAwareCode({
+    className,
+    children,
+  }: ComponentPropsWithoutRef<'code'>) {
+    const text = childrenToText(children)
+    if (!className && isInlineFilePath(text)) {
+      return (
+        <button
+          className="text-accent underline decoration-accent/45 underline-offset-2 hover:text-accent-soft"
+          type="button"
+          aria-label={`Open ${text}`}
+          onClick={() => openFile(text)}
+        >
+          <code>{children}</code>
+        </button>
+      )
+    }
+    return <MarkdownCode className={className}>{children}</MarkdownCode>
+  }
 }
 
 /**
@@ -750,23 +908,7 @@ const MARKDOWN_COMPONENTS = {
   // react-markdown wraps a fenced block in <pre><code>; unwrap the <pre> and let
   // the <code> renderer own the framed CodeBlock (avoids a nested <pre>).
   pre: ({ children }: ComponentPropsWithoutRef<'pre'>) => <>{children}</>,
-  code: ({ className, children }: ComponentPropsWithoutRef<'code'>) => {
-    const match = /language-(\w+)/.exec(className ?? '')
-    const text = childrenToText(children)
-    // Inline code (single backtick, no language, no newline) stays inline.
-    if (!match && !text.includes('\n')) {
-      return <code className={className}>{children}</code>
-    }
-    // Fenced block: `children` carries rehype-highlight's colored <span> tree for
-    // DISPLAY; `text` is the raw source used by the copy button.
-    return (
-      <CodeBlock
-        lang={match?.[1] ?? ''}
-        code={text.replace(/\n$/, '')}
-        highlighted={children}
-      />
-    )
-  },
+  code: MarkdownCode,
   // GFM pipe tables (remark-gfm). Exact prototype ProseTable values
   // (Messages.jsx:1890-1906): rounded 8px scroll wrapper w/ a 0.08 white border,
   // horizontal-only rules (header 0.12, body 0.05), a 0.03 header wash, 13px, and
@@ -789,6 +931,27 @@ const MARKDOWN_COMPONENTS = {
       {children}
     </td>
   ),
+}
+
+function MarkdownCode({
+  className,
+  children,
+}: ComponentPropsWithoutRef<'code'>) {
+  const match = /language-(\w+)/.exec(className ?? '')
+  const text = childrenToText(children)
+  // Inline code (single backtick, no language, no newline) stays inline.
+  if (!match && !text.includes('\n')) {
+    return <code className={className}>{children}</code>
+  }
+  // Fenced block: `children` carries rehype-highlight's colored <span> tree for
+  // DISPLAY; `text` is the raw source used by the copy button.
+  return (
+    <CodeBlock
+      lang={match?.[1] ?? ''}
+      code={text.replace(/\n$/, '')}
+      highlighted={children}
+    />
+  )
 }
 
 /**

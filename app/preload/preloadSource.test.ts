@@ -78,7 +78,7 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   // P4-8b setAgentMode + P4-8b taskControlVerb + P4-13 remoteSettingsVerb + P4-19
   // settingsVerb + P4-24c runControlVerb + P4-6b sessionActionVerb + C5/P4-20
   // answerQuestions + contextBreakdownVerb) + 10 payload-bearing control-plane
-  // senders + the DEV-only
+  // senders plus openWorkspaceFile + the DEV-only
   // debug-state sender (compiled out of the packaged preload.cjs). (pickDirectory/
   // createSession/createSessionInWorkspace/restoreSession/closeSession/listSessions/
   // previewSession/readSessionsCatalog/openHistorySession/P4-35 saveTextToFile).
@@ -90,7 +90,7 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
     "const CH_HOST_VISIBLE_SESSIONS = 'catcode:host:visible-sessions'",
   )
   expect(source).toContain('reportVisibleSessions(sessionIds: SessionId[]): void')
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(34)
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(35)
   expect(source).toContain("const CH_DELIVERY_ACK = 'catcode:delivery-ack'")
   expect(source).toContain('deliveryAck(sessionId, sequence, deliveryAttempt, streamEpoch, traceId, stage): void')
   expect(source).toContain("const CH_OPEN_LOGS = 'catcode:open-logs'")
@@ -98,6 +98,10 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   expect(source).toContain("const CH_DEBUG_SHELL_STATE = 'catcode:debug:shell-state'")
   expect(source).toContain('reportDebugShellState')
   expect(source).toContain('pickDirectory(activeSessionId?: SessionId | null)')
+  expect(source).toContain(
+    "const CH_HOST_OPEN_WORKSPACE_FILE = 'catcode:host:open-workspace-file'",
+  )
+  expect(source).toContain('openWorkspaceFile(appSessionId: SessionId, path: string)')
 })
 
 test('control-plane senders are fixed per-method channels (HC3), no generic invoke', () => {
@@ -116,6 +120,9 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
   // P4-35 — the file sink rides its own fixed channel (HC3). The renderer carries
   // text plus a name suggestion; main owns the destination (HC1).
   expect(source).toContain("const CH_HOST_SAVE_TEXT = 'catcode:host:save-text'")
+  expect(source).toContain(
+    "const CH_HOST_OPEN_WORKSPACE_FILE = 'catcode:host:open-workspace-file'",
+  )
   // F2 — read-only cold-launch sessions-catalog baseline rides its own fixed channel.
   expect(source).toContain(
     "const CH_HOST_SESSIONS_CATALOG = 'catcode:host:sessions-catalog'",
@@ -131,7 +138,7 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
   const invokeChannels = [...source.matchAll(/ipcRenderer\.invoke\((\w+)/g)].map(
     m => m[1],
   )
-  expect(invokeChannels.length).toBe(11)
+  expect(invokeChannels.length).toBe(12)
   const allowed = new Set([
     'CH_HOST_CREATE',
     'CH_HOST_CREATE_IN_WORKSPACE',
@@ -143,6 +150,7 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
     'CH_HOST_SESSIONS_CATALOG',
     'CH_HOST_OPEN_HISTORY',
     'CH_HOST_SAVE_TEXT',
+    'CH_HOST_OPEN_WORKSPACE_FILE',
     'CH_SAVE_DIAGNOSTICS',
   ])
   for (const channel of invokeChannels) {
