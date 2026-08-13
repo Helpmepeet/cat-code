@@ -185,6 +185,25 @@ test('PL-A wiring tripwire: the startup preload and restore call the parts they 
   )
 })
 
+test('parked tabs keep their live transcript when a cache is admitted', () => {
+  // The renderer suite is SSR-only, so App's host-event effects cannot run.
+  // Pin the production selection boundary: loading a bounded cache in the
+  // background is not enough to replace a tab's complete live projection.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const start = source.indexOf('const workspacePanels:')
+  const end = source.indexOf('\n  const paletteItems = paletteOpen', start)
+  expect(start).toBeGreaterThan(-1)
+  expect(end).toBeGreaterThan(start)
+  const body = source.slice(start, end)
+
+  expect(body).toContain(
+    'shell.previews[sessionId] === true ? panelPreviewTranscript : null',
+  )
+  expect(body).toContain('const panelIsPreview = panelTranscript !== null')
+  expect(body).toContain('transcript={panelTranscript ?? transcript}')
+  expect(body).not.toContain('transcript={panelPreviewTranscript ?? transcript}')
+})
+
 test('wiring tripwire: the usage popover asks no engine that is not there', () => {
   // The defect this pins (2026-08-05, operator-reported): the context donut is
   // the ONE composer face that renders with no engine behind it — it reads the

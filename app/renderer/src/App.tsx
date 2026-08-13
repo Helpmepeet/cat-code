@@ -2597,7 +2597,12 @@ export function App() {
             previewTranscript,
             sessionId,
           )
-          const panelIsPreview = panelPreviewTranscript !== null
+          // Background cache admission must not replace a tab's fuller live
+          // projection when its engine parks. Only an explicitly opened preview
+          // pane reads the bounded cache.
+          const panelTranscript =
+            shell.previews[sessionId] === true ? panelPreviewTranscript : null
+          const panelIsPreview = panelTranscript !== null
 	      const panelPartialCount = sessionLog.messages.filter(
 	        message => message.type === 'stream_event',
 	      ).length
@@ -3014,7 +3019,7 @@ export function App() {
 	                reduceImageAttachmentRemoved(prev, sessionId, id),
 	              )
 	            }
-		            transcript={panelPreviewTranscript ?? transcript}
+		            transcript={panelTranscript ?? transcript}
 	            transportError={selectTransportError(transportErrors, sessionId)}
 	            releasePendingSubmit={() => releasePendingSubmit(sessionId)}
 	          />
