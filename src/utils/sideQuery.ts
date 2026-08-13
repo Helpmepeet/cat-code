@@ -15,6 +15,7 @@ import type { AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS } from 
 import { getAPIMetadata } from '../services/api/claude.js'
 import { getAnthropicClient } from '../services/api/client.js'
 import { EMPTY_USAGE } from '../services/api/emptyUsage.js'
+import { withRetry } from '../services/api/withRetry.js'
 import { getModelBetas, modelSupportsStructuredOutputs } from './betas.js'
 import { computeFingerprint } from './fingerprint.js'
 import { normalizeModelStringForAPI } from './model/model.js'
@@ -76,6 +77,11 @@ export type SideQueryOptions = {
    * (existing `getProviderForModel` behavior).
    */
   provider?: APIProvider
+  /**
+   * Subagent lease owner for a Codex-routed call. Callers must pass this only
+   * when the side query belongs to an already-registered subagent lease.
+   */
+  agentId?: string
 }
 
 /**
@@ -138,12 +144,14 @@ export async function sideQuery(opts: SideQueryOptions): Promise<BetaMessage> {
   } = opts
 
   const provider = resolveRequestProvider(model, opts.provider)
-  const client = await getAnthropicClient({
-    maxRetries,
-    model,
-    provider,
-    source: 'side_query',
-  })
+  const codexLeaseOwnerId =
+    provider === 'openai' ? (opts.agentId ?? 'main-thread') : undefined
+  const codexLeaseOwnerType =
+    provider === 'openai'
+      ? opts.agentId
+        ? ('subagent' as const)
+        : ('main' as const)
+      : undefined
   const betas = [...getModelBetas(model)]
   // Add structured-outputs beta if using output_format and provider supports it
   if (
@@ -204,31 +212,74 @@ export async function sideQuery(opts: SideQueryOptions): Promise<BetaMessage> {
           },
         }
       : {}
+  const request = {
+    model: normalizedModel,
+    max_tokens,
+    system: systemBlocks,
+    messages,
+    ...openAIInstructionAssembly,
+    ...(tools && { tools }),
+    ...(tool_choice && { tool_choice }),
+    ...((output_format || reasoningEffort) && {
+      output_config: {
+        ...(output_format && { format: output_format }),
+        ...(reasoningEffort && { effort: reasoningEffort }),
+      },
+    }),
+    ...(temperature !== undefined && { temperature }),
+    ...(stop_sequences && { stop_sequences }),
+    ...(thinkingConfig && { thinking: thinkingConfig }),
+    ...(betas.length > 0 && { betas }),
+    metadata: getAPIMetadata(),
+  }
+  const createClient = () =>
+    getAnthropicClient({
+      // Codex retries are owned by withRetry so pool transitions happen once
+      // per attempt. Preserve the SDK retry budget for first-party side calls.
+      maxRetries: provider === 'openai' ? 0 : maxRetries,
+      model,
+      provider,
+      source: 'side_query',
+      ...(codexLeaseOwnerId && codexLeaseOwnerType
+        ? {
+            codexLeaseOwnerId,
+            codexLeaseOwnerType,
+          }
+        : {}),
+    })
+  const createMessage = async (client: Anthropic): Promise<BetaMessage> =>
+    // biome-ignore lint/plugin: this IS the wrapper that handles OAuth attribution
+    client.beta.messages.create(request, { signal })
+
   const start = Date.now()
-  // biome-ignore lint/plugin: this IS the wrapper that handles OAuth attribution
-  const response = await client.beta.messages.create(
-    {
-      model: normalizedModel,
-      max_tokens,
-      system: systemBlocks,
-      messages,
-      ...openAIInstructionAssembly,
-      ...(tools && { tools }),
-      ...(tool_choice && { tool_choice }),
-      ...((output_format || reasoningEffort) && {
-        output_config: {
-          ...(output_format && { format: output_format }),
-          ...(reasoningEffort && { effort: reasoningEffort }),
-        },
-      }),
-      ...(temperature !== undefined && { temperature }),
-      ...(stop_sequences && { stop_sequences }),
-      ...(thinkingConfig && { thinking: thinkingConfig }),
-      ...(betas.length > 0 && { betas }),
-      metadata: getAPIMetadata(),
-    },
-    { signal },
-  )
+  let response: BetaMessage
+  if (provider === 'openai') {
+    const generator = withRetry(
+      createClient,
+      createMessage,
+      {
+        maxRetries,
+        model,
+        thinkingConfig:
+          thinking === false
+            ? { type: 'disabled' }
+            : thinking === undefined
+              ? { type: 'disabled' }
+              : { type: 'enabled', budgetTokens: Math.min(thinking, max_tokens - 1) },
+        signal,
+        querySource: opts.querySource,
+        ownerId: codexLeaseOwnerId,
+        isCodexRequest: true,
+      },
+    )
+    let next
+    do {
+      next = await generator.next()
+    } while (!next.done)
+    response = next.value
+  } else {
+    response = await createMessage(await createClient())
+  }
 
   const requestId =
     (response as { _request_id?: string | null })._request_id ?? undefined

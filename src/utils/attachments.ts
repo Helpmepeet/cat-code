@@ -2215,6 +2215,7 @@ async function getRelevantMemoryAttachments(
   recentTools: readonly string[],
   signal: AbortSignal,
   alreadySurfaced: ReadonlySet<string>,
+  agentId?: string,
 ): Promise<Attachment[]> {
   // If an agent is @-mentioned, search only its memory dir (isolation).
   // Otherwise search the auto-memory dir.
@@ -2235,6 +2236,7 @@ async function getRelevantMemoryAttachments(
         signal,
         recentTools,
         alreadySurfaced,
+        agentId,
       ).catch(() => []),
     ),
   )
@@ -2376,6 +2378,7 @@ export type MemoryPrefetch = {
 export function startRelevantMemoryPrefetch(
   messages: ReadonlyArray<Message>,
   toolUseContext: ToolUseContext,
+  agentId?: string,
 ): MemoryPrefetch | undefined {
   if (
     !isAutoMemoryEnabled() ||
@@ -2411,6 +2414,7 @@ export function startRelevantMemoryPrefetch(
     collectRecentSuccessfulTools(messages, lastUserMessage),
     controller.signal,
     surfaced.paths,
+    agentId,
   ).catch(e => {
     if (!isAbortError(e)) {
       logError(e)

@@ -8,6 +8,11 @@ import { MessageResponse } from '../../components/MessageResponse.js'
 import { Box, Text } from '../../ink.js'
 import { getSessionId } from '../../bootstrap/state.js'
 import { resolveCodexOAuthTokensForLeaseOwner } from '../../services/api/client.js'
+import {
+  CodexAccountAuthError,
+  CodexAccountCapError,
+} from '../../services/api/codex-fetch-adapter.js'
+import { withRetry } from '../../services/api/withRetry.js'
 import { buildTool, type ToolDef, type ToolUseContext } from '../../Tool.js'
 import { PNG } from 'pngjs'
 import promptingGuideText from './PROMPTING_GUIDE.md' with { type: 'text' }
@@ -26,6 +31,9 @@ const OPENAI_IMAGES_GENERATIONS_URL = 'https://api.openai.com/v1/images/generati
 const CODEX_IMAGE_GENERATIONS_URL = 'https://chatgpt.com/backend-api/codex/responses'
 const DEFAULT_IMAGE_MODEL = 'gpt-image-2'
 const DEFAULT_CODEX_RESPONSE_MODEL = 'gpt-5.6-terra'
+// Image generation is an auxiliary tool call, so keep retries bounded locally
+// instead of inheriting the main conversation's retry budget.
+const MAX_CODEX_IMAGE_RETRIES = 2
 const CODEX_IMAGE_GENERATION_INSTRUCTIONS =
   'Generate the requested image using the image_generation tool.'
 const TERMINAL_PREVIEW_WIDTH_COLUMNS = 48
@@ -839,6 +847,12 @@ async function generateWithCodexBackend(
   const responseText = await response.text()
 
   if (!response.ok) {
+    if (response.status === 429) {
+      throw new CodexAccountCapError(auth.accountId)
+    }
+    if (response.status === 401) {
+      throw new CodexAccountAuthError(auth.accountId, 401)
+    }
     throw new Error(
       `Codex image generation failed (${response.status}): ${getOpenAIErrorMessage(response.status, responseText)}`,
     )
@@ -848,6 +862,43 @@ async function generateWithCodexBackend(
     b64: parseCodexImageGenerationResponse(responseText),
     model: responseModel,
   }
+}
+
+async function generateWithCodexRetries(
+  input: Input,
+  outputFormat: OutputFormat,
+  context: ToolUseContext,
+  responseModel: string,
+): Promise<{ b64: string; model: string }> {
+  const generator = withRetry(
+    () => getImageAuth(context),
+    async auth => {
+      if (auth.backend !== 'codex') {
+        throw new Error('Codex image generation requires a ChatGPT account.')
+      }
+      return generateWithCodexBackend(
+        input,
+        outputFormat,
+        auth,
+        responseModel,
+        context.abortController.signal,
+      )
+    },
+    {
+      maxRetries: MAX_CODEX_IMAGE_RETRIES,
+      model: responseModel,
+      thinkingConfig: { type: 'disabled' },
+      signal: context.abortController.signal,
+      ownerId: context.agentId ?? 'main-thread',
+      isCodexRequest: true,
+    },
+  )
+
+  let next
+  do {
+    next = await generator.next()
+  } while (!next.done)
+  return next.value
 }
 
 export const GenerateImageTool = buildTool({
@@ -1095,12 +1146,11 @@ Prompt rewriting:
             context.abortController.signal,
             auth,
           )
-        : await generateWithCodexBackend(
+        : await generateWithCodexRetries(
             input,
             outputFormat,
-            auth,
+            context,
             context.options?.mainLoopModel ?? DEFAULT_CODEX_RESPONSE_MODEL,
-            context.abortController.signal,
           )
 
     const bytes = Buffer.from(generation.b64, 'base64')

@@ -361,6 +361,7 @@ async function* queryLoop(
   using pendingMemoryPrefetch = startRelevantMemoryPrefetch(
     state.messages,
     state.toolUseContext,
+    state.toolUseContext.agentId,
   )
 
   // Codex account routing: the main thread now uses a lease too, preserving

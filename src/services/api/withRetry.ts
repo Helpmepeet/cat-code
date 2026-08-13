@@ -371,10 +371,10 @@ export class FallbackTriggeredError extends Error {
   }
 }
 
-export async function* withRetry<T>(
-  getClient: () => Promise<Anthropic>,
+export async function* withRetry<T, Client = Anthropic>(
+  getClient: () => Promise<Client>,
   operation: (
-    client: Anthropic,
+    client: Client,
     attempt: number,
     context: RetryContext,
   ) => Promise<T>,
@@ -386,7 +386,7 @@ export async function* withRetry<T>(
     thinkingConfig: options.thinkingConfig,
     ...(isFastModeEnabled() && { fastMode: options.fastMode }),
   }
-  let client: Anthropic | null = null
+  let client: Client | null = null
   let consecutive529Errors = options.initialConsecutive529Errors ?? 0
   let lastError: unknown
   let persistentAttempt = 0

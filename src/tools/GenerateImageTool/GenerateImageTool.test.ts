@@ -8,6 +8,7 @@ import {
   seedCodexLeaseForTest,
 } from '../../services/api/codexAccountLeaseManager.js'
 import {
+  getPoolStatus,
   resetCodexAccountPoolForTest,
   seedCodexAccountPoolForTest,
   type PoolAccount,
@@ -517,6 +518,165 @@ describe('GenerateImageTool', () => {
     expect(accountId).toBe('main-account')
     expect(await readFile(outputPath)).toEqual(generatedBytes)
     expect(result.data.filePath).toBe(outputPath)
+  })
+
+  test('fails over the main lease after a Codex image endpoint 429', async () => {
+    delete process.env.CAT_CODE_IMAGE_BACKEND
+    delete process.env.OPENAI_API_KEY
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'primary-account',
+      accounts: [
+        buildPoolAccount('primary-account'),
+        buildPoolAccount('backup-account'),
+      ],
+    })
+    seedCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'Main thread',
+      accountId: 'primary-account',
+    })
+
+    const outputPath = join(tempDir!, 'generated.png')
+    const generatedBytes = Buffer.from('generated image')
+    const requestAccounts: string[] = []
+    globalThis.fetch = (async (_input, init) => {
+      requestAccounts.push(
+        new Headers(init?.headers).get('chatgpt-account-id') ?? '',
+      )
+      if (requestAccounts.length === 1) {
+        return new Response('rate limited', { status: 429 })
+      }
+      return new Response(
+        [
+          'event: response.output_item.done',
+          `data: ${JSON.stringify({
+            type: 'response.output_item.done',
+            item: {
+              type: 'image_generation_call',
+              result: generatedBytes.toString('base64'),
+            },
+          })}`,
+          '',
+        ].join('\n'),
+        { status: 200 },
+      )
+    }) as typeof fetch
+
+    await GenerateImageTool.call(
+      {
+        prompt: 'retry after a subscription cap',
+        output_path: outputPath,
+      },
+      {
+        abortController: new AbortController(),
+        options: { mainLoopModel: 'gpt-5.6-terra' },
+      } as ToolUseContext,
+    )
+
+    expect(requestAccounts).toEqual(['primary-account', 'backup-account'])
+    expect(
+      getPoolStatus().accounts.find(
+        account => account.accountId === 'primary-account',
+      )?.status,
+    ).toBe('capped')
+    expect(await readFile(outputPath)).toEqual(generatedBytes)
+  })
+
+  test('fails over the main lease after a Codex image endpoint 401 without a refresh token', async () => {
+    delete process.env.CAT_CODE_IMAGE_BACKEND
+    delete process.env.OPENAI_API_KEY
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'primary-account',
+      accounts: [
+        { ...buildPoolAccount('primary-account'), refreshToken: '' },
+        buildPoolAccount('backup-account'),
+      ],
+    })
+    seedCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'Main thread',
+      accountId: 'primary-account',
+    })
+
+    const outputPath = join(tempDir!, 'generated.png')
+    const generatedBytes = Buffer.from('generated image')
+    const requestAccounts: string[] = []
+    globalThis.fetch = (async (_input, init) => {
+      requestAccounts.push(
+        new Headers(init?.headers).get('chatgpt-account-id') ?? '',
+      )
+      if (requestAccounts.length === 1) {
+        return new Response('unauthorized', { status: 401 })
+      }
+      return new Response(
+        [
+          'event: response.output_item.done',
+          `data: ${JSON.stringify({
+            type: 'response.output_item.done',
+            item: {
+              type: 'image_generation_call',
+              result: generatedBytes.toString('base64'),
+            },
+          })}`,
+          '',
+        ].join('\n'),
+        { status: 200 },
+      )
+    }) as typeof fetch
+
+    await GenerateImageTool.call(
+      {
+        prompt: 'retry after subscription auth failure',
+        output_path: outputPath,
+      },
+      {
+        abortController: new AbortController(),
+        options: { mainLoopModel: 'gpt-5.6-terra' },
+      } as ToolUseContext,
+    )
+
+    expect(requestAccounts).toEqual(['primary-account', 'backup-account'])
+    expect(
+      getPoolStatus().accounts.find(
+        account => account.accountId === 'primary-account',
+      )?.status,
+    ).toBe('dead')
+    expect(await readFile(outputPath)).toEqual(generatedBytes)
+  })
+
+  test('keeps API-key image endpoint 429 isolated from the Codex pool', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'primary-account',
+      accounts: [
+        buildPoolAccount('primary-account'),
+        buildPoolAccount('backup-account'),
+      ],
+    })
+    let requests = 0
+    globalThis.fetch = (async () => {
+      requests += 1
+      return new Response('rate limited', { status: 429 })
+    }) as typeof fetch
+
+    await expect(
+      GenerateImageTool.call(
+        {
+          prompt: 'do not retry API-key requests',
+          output_path: join(tempDir!, 'generated.png'),
+        },
+        {
+          abortController: new AbortController(),
+        } as ToolUseContext,
+      ),
+    ).rejects.toThrow('OpenAI image generation failed (429)')
+
+    expect(requests).toBe(1)
+    expect(getPoolStatus().accounts.map(account => account.status)).toEqual([
+      'healthy',
+      'healthy',
+    ])
   })
 
   test('refreshes a near-expiry sole vault-backed Codex account through the vault for image auth', async () => {

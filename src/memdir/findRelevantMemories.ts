@@ -50,6 +50,7 @@ export async function findRelevantMemories(
   signal: AbortSignal,
   recentTools: readonly string[] = [],
   alreadySurfaced: ReadonlySet<string> = new Set(),
+  agentId?: string,
 ): Promise<RelevantMemory[]> {
   const memories = (await scanMemoryFiles(memoryDir, signal)).filter(
     m => !alreadySurfaced.has(m.filePath),
@@ -63,6 +64,7 @@ export async function findRelevantMemories(
     memories,
     signal,
     recentTools,
+    agentId,
   )
   const byFilename = new Map(memories.map(m => [m.filename, m]))
   const selected = selectedFilenames
@@ -87,6 +89,7 @@ async function selectRelevantMemories(
   memories: MemoryHeader[],
   signal: AbortSignal,
   recentTools: readonly string[],
+  agentId?: string,
 ): Promise<string[]> {
   const validFilenames = new Set(memories.map(m => m.filename))
 
@@ -131,6 +134,7 @@ async function selectRelevantMemories(
       tool_choice: { type: 'tool', name: 'select_memories' },
       signal,
       querySource: 'memdir_relevance',
+      agentId,
     })
 
     const toolUseBlock = result.content.find(
