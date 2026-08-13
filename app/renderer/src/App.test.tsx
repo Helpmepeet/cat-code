@@ -186,9 +186,8 @@ test('PL-A wiring tripwire: the startup preload and restore call the parts they 
 })
 
 test('parked tabs keep their live transcript when a cache is admitted', () => {
-  // The renderer suite is SSR-only, so App's host-event effects cannot run.
-  // Pin the production selection boundary: loading a bounded cache in the
-  // background is not enough to replace a tab's complete live projection.
+  // The renderer suite is SSR-only, so the state matrix is exercised in
+  // previewTranscriptState.test.ts. This pins App to that behavioral selector.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
   const start = source.indexOf('const workspacePanels:')
   const end = source.indexOf('\n  const paletteItems = paletteOpen', start)
@@ -196,12 +195,12 @@ test('parked tabs keep their live transcript when a cache is admitted', () => {
   expect(end).toBeGreaterThan(start)
   const body = source.slice(start, end)
 
+  expect(body).toContain('const panelTranscript = selectPaneTranscript({')
+  expect(body).toContain('previewOpen: shell.previews[sessionId] === true')
+  expect(body).toContain('transcript={panelTranscript.transcript}')
   expect(body).toContain(
-    'shell.previews[sessionId] === true ? panelPreviewTranscript : null',
+    'previewTruncationMessage={panelTranscript.truncationMessage}',
   )
-  expect(body).toContain('const panelIsPreview = panelTranscript !== null')
-  expect(body).toContain('transcript={panelTranscript ?? transcript}')
-  expect(body).not.toContain('transcript={panelPreviewTranscript ?? transcript}')
 })
 
 test('wiring tripwire: the usage popover asks no engine that is not there', () => {
@@ -237,7 +236,7 @@ test('wiring tripwire: the usage popover asks no engine that is not there', () =
   // its prompt is held — while having no process at all. A terminal test would
   // therefore have re-opened this exact defect on the one state that most looks
   // fine, so the gate is pinned to the question it actually means.
-  expect(gateBody).toContain('panelIsPreview')
+  expect(gateBody).toContain('panelTranscript.preview')
   expect(gateBody).toContain('!connectionHasEngine(sessionConnection.status)')
   expect(gateBody).not.toContain('isTerminalConnectionStatus')
   expect(gateBody).toContain('? undefined')

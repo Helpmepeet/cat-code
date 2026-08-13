@@ -90,9 +90,7 @@ import {
   previewClosePlan,
   reduceLiveTranscriptState,
   reducePreviewTranscriptState,
-  selectPreviewRunFactsFor,
-  selectPreviewTranscript,
-  selectPreviewTruncationMessage,
+  selectPaneTranscript,
   type PreviewRunFacts,
 } from './previewTranscriptState.js'
 import {
@@ -2593,16 +2591,15 @@ export function App() {
 	            )
 	          : []
 	      const descriptor = tabDescriptorsById.get(sessionId)
-          const panelPreviewTranscript = selectPreviewTranscript(
-            previewTranscript,
-            sessionId,
-          )
           // Background cache admission must not replace a tab's fuller live
           // projection when its engine parks. Only an explicitly opened preview
-          // pane reads the bounded cache.
-          const panelTranscript =
-            shell.previews[sessionId] === true ? panelPreviewTranscript : null
-          const panelIsPreview = panelTranscript !== null
+          // pane reads the bounded cache and its related metadata.
+          const panelTranscript = selectPaneTranscript({
+            previewState: previewTranscript,
+            sessionId,
+            previewOpen: shell.previews[sessionId] === true,
+            liveTranscript: transcript,
+          })
 	      const panelPartialCount = sessionLog.messages.filter(
 	        message => message.type === 'stream_event',
 	      ).length
@@ -2703,16 +2700,10 @@ export function App() {
 	            activeLog={sessionLog}
 	            activeSessionId={sessionId}
                 isActivePane={sessionId === activeSessionId}
-                preview={panelIsPreview}
-                previewTruncationMessage={selectPreviewTruncationMessage(
-                  previewTranscript,
-                  sessionId,
-                )}
+                preview={panelTranscript.preview}
+                previewTruncationMessage={panelTranscript.truncationMessage}
                 onPreviewEngage={() => engagePreview(sessionId)}
-                previewRunFacts={selectPreviewRunFactsFor(
-                  previewTranscript,
-                  sessionId,
-                )}
+                previewRunFacts={panelTranscript.runFacts}
 	            branch={panelBranch}
 	            sandboxed={panelSandboxed}
 	            model={rail.model}
@@ -2739,7 +2730,8 @@ export function App() {
 	            // process, so the terminal test alone would have re-opened this exact
 	            // bug on the one state that most looks fine.
 	            onRequestContextBreakdown={
-	              panelIsPreview || !connectionHasEngine(sessionConnection.status)
+		              panelTranscript.preview ||
+		              !connectionHasEngine(sessionConnection.status)
 	                ? undefined
 	                : () => {
 	                    // Best-effort: the analysis is expensive and its absence
@@ -3019,7 +3011,7 @@ export function App() {
 	                reduceImageAttachmentRemoved(prev, sessionId, id),
 	              )
 	            }
-		            transcript={panelTranscript ?? transcript}
+		            transcript={panelTranscript.transcript}
 	            transportError={selectTransportError(transportErrors, sessionId)}
 	            releasePendingSubmit={() => releasePendingSubmit(sessionId)}
 	          />

@@ -24,6 +24,7 @@ import {
   previewClosePlan,
   reduceLiveTranscriptState,
   reducePreviewTranscriptState,
+  selectPaneTranscript,
   selectPreviewSwapSessions,
   selectPreviewTranscript,
   selectPreviewTruncationMessage,
@@ -184,6 +185,85 @@ test('a truncation-only cache preserves its visible boundary message', () => {
   let liveLog = reduceServerFrame(createRawMessageLogState(), ready())
   liveLog = reduceServerFrame(liveLog, boundary)
   expect(selectRawMessageLog(liveLog, SID).error).toBeNull()
+})
+
+test('pane selection uses an admitted cache only for an explicit preview', () => {
+  const boundary: ServerFrame = {
+    kind: 'error',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID,
+    requestId: 'catcode.history-truncated',
+    code: 'internal_error',
+    message: 'Earlier restored history was omitted.',
+    retryable: false,
+  }
+  const preview = reducePreviewTranscriptState(createPreviewTranscriptState(), {
+    type: 'preview-load',
+    cache: cache([boundary, messageFrame(0)]),
+  })
+  const live = projectServerFrame(createTranscriptState(), ready())
+
+  expect(
+    selectPaneTranscript({
+      previewState: preview,
+      sessionId: SID,
+      previewOpen: false,
+      liveTranscript: live,
+    }),
+  ).toEqual({
+    transcript: live,
+    preview: false,
+    truncationMessage: null,
+    runFacts: null,
+  })
+
+  const selectedPreview = selectPaneTranscript({
+    previewState: preview,
+    sessionId: SID,
+    previewOpen: true,
+    liveTranscript: live,
+  })
+  expect(selectedPreview.transcript).toBe(preview.bySession[SID]!.transcript)
+  expect(selectedPreview.preview).toBe(true)
+  expect(selectedPreview.truncationMessage).toBe(
+    'Earlier restored history was omitted.',
+  )
+  expect(selectedPreview.runFacts).toBe(preview.bySession[SID]?.runFacts)
+})
+
+test('pane selection falls back to live after preview handover resets the cache', () => {
+  let preview = reducePreviewTranscriptState(createPreviewTranscriptState(), {
+    type: 'preview-load',
+    cache: cache([messageFrame(0)]),
+  })
+  const live = projectServerFrame(createTranscriptState(), ready())
+
+  expect(
+    selectPaneTranscript({
+      previewState: preview,
+      sessionId: SID,
+      previewOpen: true,
+      liveTranscript: live,
+    }).preview,
+  ).toBe(true)
+
+  preview = reducePreviewTranscriptState(preview, {
+    type: 'preview-reset',
+    sessionId: SID,
+  })
+  expect(
+    selectPaneTranscript({
+      previewState: preview,
+      sessionId: SID,
+      previewOpen: true,
+      liveTranscript: live,
+    }),
+  ).toEqual({
+    transcript: live,
+    preview: false,
+    truncationMessage: null,
+    runFacts: null,
+  })
 })
 
 test('swap observations cover replay batches and ready zero-history batches', () => {

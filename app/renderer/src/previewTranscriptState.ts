@@ -293,6 +293,41 @@ export function selectPreviewTruncationMessage(
   return state.bySession[sessionId]?.truncationMessage ?? null
 }
 
+export type PaneTranscriptSelection = {
+  transcript: TranscriptState
+  preview: boolean
+  truncationMessage: string | null
+  runFacts: PreviewRunFacts | null
+}
+
+export function selectPaneTranscript({
+  previewState,
+  sessionId,
+  previewOpen,
+  liveTranscript,
+}: {
+  previewState: PreviewTranscriptState
+  sessionId: SessionId
+  previewOpen: boolean
+  liveTranscript: TranscriptState
+}): PaneTranscriptSelection {
+  const entry = previewOpen ? previewState.bySession[sessionId] : undefined
+  if (!entry) {
+    return {
+      transcript: liveTranscript,
+      preview: false,
+      truncationMessage: null,
+      runFacts: null,
+    }
+  }
+  return {
+    transcript: entry.transcript,
+    preview: true,
+    truncationMessage: entry.truncationMessage,
+    runFacts: entry.runFacts,
+  }
+}
+
 export function hasPreviewTranscript(
   state: PreviewTranscriptState,
   sessionId: SessionId,
