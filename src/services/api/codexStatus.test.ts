@@ -143,6 +143,36 @@ describe('buildCodexStatus', () => {
     expect(status.profiles.every((p) => p.block_code === 'usage_cap')).toBe(true)
   })
 
+  test('capped plus dead accounts require recovery despite a known quota reset', async () => {
+    seedCodexAccountPoolForTest({
+      accounts: [
+        buildPoolAccount({
+          accountId: 'acct-capped',
+          status: 'capped',
+          statusReason: 'usage_cap',
+          cappedAt: NOW - 1000,
+          usageResetAt: FUTURE_RESET_SEC,
+        }),
+        buildPoolAccount({
+          accountId: 'acct-dead',
+          status: 'dead',
+          statusReason: 'auth_dead',
+        }),
+      ],
+    })
+
+    const status = await buildCodexStatus({ now: NOW, refresh: 'never', loadPool: false })
+
+    expect(status.decision.action).toBe('human_recovery')
+    expect(status.decision.reason_code).toBe('all_auth_blocked')
+    expect(status.decision.not_before).toBeNull()
+    expect(status.pool.quota_blocked).toBe(1)
+    expect(status.pool.auth_blocked).toBe(1)
+    expect(status.pool.earliest_known_reset_at).toBe(
+      new Date(FUTURE_RESET_SEC * 1000).toISOString(),
+    )
+  })
+
   test('(3) all capped with NO credible reset → recheck', async () => {
     seedCodexAccountPoolForTest({
       accounts: [

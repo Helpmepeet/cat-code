@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { APIConnectionError } from '@anthropic-ai/sdk'
+import { mkdtempSync, rmSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 
 import { setSessionProvider } from '../../bootstrap/state.js'
 import { getGlobalConfig } from '../../utils/config.js'
@@ -943,7 +946,7 @@ describe('codexAccountLeaseManager', () => {
     expect((thrown as CannotRetryError).deferredTerminalFailure).toBeUndefined()
   })
 
-  test('withRetry records single-account cap/auth states without rotating', async () => {
+  test('withRetry records a single-account cap without rotating', async () => {
     seedCodexAccountPoolForTest({
       activeAccountId: 'solo-cap',
       accounts: [buildPoolAccount({ accountId: 'solo-cap' })],
@@ -978,15 +981,32 @@ describe('codexAccountLeaseManager', () => {
     expect(((capThrown as CannotRetryError).originalError as Error).message).toContain(
       'All Codex accounts are capped or unavailable',
     )
+  })
 
-    resetCodexAccountPoolForTest()
-    seedCodexAccountPoolForTest({
-      activeAccountId: 'solo-auth',
-      accounts: [buildPoolAccount({ accountId: 'solo-auth' })],
-    })
+  test('withRetry records invalid-grant auth failure without live OAuth', async () => {
+    const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+    const scratchConfigDir = mkdtempSync(join(tmpdir(), 'codex-lease-auth-'))
+    const originalFetch = globalThis.fetch
+    let oauthRefreshCalls = 0
 
-    let authThrown: unknown
     try {
+      process.env.CLAUDE_CONFIG_DIR = scratchConfigDir
+      seedCodexAccountPoolForTest({
+        activeAccountId: 'solo-auth',
+        accounts: [buildPoolAccount({ accountId: 'solo-auth' })],
+      })
+      globalThis.fetch = (async input => {
+        const url = String(input)
+        if (url !== 'https://auth.openai.com/oauth/token') {
+          throw new Error(`unexpected fetch: ${url}`)
+        }
+        oauthRefreshCalls += 1
+        return new Response(JSON.stringify({ error: 'invalid_grant' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }) as typeof globalThis.fetch
+
       for await (const _message of withRetry(
         async () => ({}) as never,
         async () => {
@@ -1001,16 +1021,25 @@ describe('codexAccountLeaseManager', () => {
       )) {
         // unreachable
       }
-    } catch (error) {
-      authThrown = error
-    }
 
-    expect(authThrown).toBeInstanceOf(CannotRetryError)
-    expect(getPoolStatus().accounts[0]).toMatchObject({
-      accountId: 'solo-auth',
-      status: 'dead',
-      statusReason: 'auth_dead',
-    })
+      throw new Error('Expected invalid-grant auth recovery to fail')
+    } catch (error) {
+      expect(error).toBeInstanceOf(CannotRetryError)
+      expect(oauthRefreshCalls).toBe(1)
+      expect(getPoolStatus().accounts[0]).toMatchObject({
+        accountId: 'solo-auth',
+        status: 'dead',
+        statusReason: 'auth_dead',
+      })
+      expect((error as CannotRetryError).deferredTerminalFailure?.code).toBe(
+        'account_recovery',
+      )
+    } finally {
+      globalThis.fetch = originalFetch
+      if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+      rmSync(scratchConfigDir, { recursive: true, force: true })
+    }
   })
 
   test('failover keeps the failed lease inspectable when no healthy replacement exists', () => {
@@ -2393,14 +2422,9 @@ describe('codexAccountLeaseManager', () => {
     })
   })
 
-  test('terminal cap failure reports quota exhaustion from the typed decision, not from pool counts', async () => {
-    // The diagnostic code and the deferred envelope are projections of one
-    // terminal decision: a hard cap that could not be failed over. Neither may
-    // re-derive quota belief from a pool snapshot. Here the pool is only
-    // partially capped when the decision fires (the second account is dead, so
-    // it counts toward `total` but can never serve traffic). The previous
-    // count-based helper reported `account.pool.unavailable` for this shape and
-    // only said `quota.exhausted` when capped === total.
+  test('terminal capped-plus-dead pool reports recovery, not quota exhaustion', async () => {
+    // A reset for the capped account cannot repair a dead account. The terminal
+    // decision therefore requires account recovery rather than continuation.
     const emitted: unknown[] = []
     installStreamJsonAccountDiagnosticHook({
       emit: message => {
@@ -2448,19 +2472,19 @@ describe('codexAccountLeaseManager', () => {
     expect((thrown as CannotRetryError).deferredTerminalFailure).toMatchObject({
       version: 1,
       provider: 'openai',
-      code: 'quota_exhausted',
+      code: 'account_recovery',
     })
     expect(
       emitted.some(
         message => (message as { code?: string }).code === 'quota.exhausted',
       ),
-    ).toBe(true)
+    ).toBe(false)
     expect(
       emitted.some(
         message =>
           (message as { code?: string }).code === 'account.pool.unavailable',
       ),
-    ).toBe(false)
+    ).toBe(true)
   })
 
   test('withRetry global Codex cap failover uses the replacement account instead of falsely exhausting', async () => {

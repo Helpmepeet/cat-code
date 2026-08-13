@@ -391,6 +391,11 @@ function decide(
     // A live request is more authoritative than a transient/unknown observation.
     return { action: 'attempt', reason_code: 'observation_uncertain' }
   }
+  if (pool.auth_blocked > 0) {
+    // A reset cannot repair credentials, so a mixed capped/dead pool must not
+    // authorize an automatic continuation based on the capped account's reset.
+    return { action: 'human_recovery', reason_code: 'all_auth_blocked' }
+  }
   if (pool.quota_blocked > 0) {
     return pool.earliest_known_reset_at
       ? { action: 'wait', reason_code: 'quota_blocked_reset_known' }
