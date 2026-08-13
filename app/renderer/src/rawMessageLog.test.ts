@@ -113,12 +113,10 @@ test('records transport errors without adding non-message events to the raw log'
   expect(active.error).toBe('turn failed')
 })
 
-test('the replay-buffer retention notice never reaches the error line', () => {
-  // It rides `kind:'error'` to reuse the channel, but retention is working as
-  // designed and there is nothing to act on. Shown, it pinned an undismissable
-  // red line above the composer for the rest of the session, because nothing
-  // ever clears `error`. Its history-replay sibling is deliberately still shown:
-  // the preview/restore surface owns that message.
+test('retention notices never reach the live error line', () => {
+  // They ride `kind:'error'` to reuse the channel, but retention is working as
+  // designed and there is nothing to act on. The history-replay boundary remains
+  // available to the preview/restore surface through the transcript cache.
   const ready: ServerFrame = {
     kind: 'ready',
     protocolVersion: 1,
@@ -147,7 +145,7 @@ test('the replay-buffer retention notice never reaches the error line', () => {
   })
   expect(selectRawMessageLog(suppressed, 'session-1').error).toBeNull()
 
-  // The history-replay sibling still surfaces — a different surface owns it.
+  // The history-replay sibling is also omitted from this live error store.
   let restored = reduceServerFrame(createRawMessageLogState(), ready)
   restored = reduceServerFrame(restored, {
     kind: 'error',
@@ -158,9 +156,7 @@ test('the replay-buffer retention notice never reaches the error line', () => {
     message: 'Earlier restored history was omitted.',
     retryable: false,
   })
-  expect(selectRawMessageLog(restored, 'session-1').error).toBe(
-    'Earlier restored history was omitted.',
-  )
+  expect(selectRawMessageLog(restored, 'session-1').error).toBeNull()
 
   // A real internal_error with no request id is untouched.
   let state = reduceServerFrame(createRawMessageLogState(), ready)

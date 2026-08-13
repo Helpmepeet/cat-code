@@ -1206,13 +1206,17 @@ function projectUserFrame(
   }
   const withCompletion = recordAgentCompletion(state, origin)
   const appended = appendFrameRows(withCompletion, frameId, rows)
+  const continued =
+    message.isReplay === true || isHidden || !appended.turnInterrupted
+      ? appended
+      : { ...appended, turnInterrupted: false }
   // Identity is compared against what was HANDED to `appendFrameRows`, not the
   // original `state`: `recordAgentCompletion` may already have returned a new
   // object, so comparing to `state` would read a no-op append as a real one.
-  if (!isHidden || appended === withCompletion) return appended
+  if (!isHidden || appended === withCompletion) return continued
   return {
-    ...appended,
-    hiddenFrameIds: { ...appended.hiddenFrameIds, [frameId]: true },
+    ...continued,
+    hiddenFrameIds: { ...continued.hiddenFrameIds, [frameId]: true },
   }
 }
 

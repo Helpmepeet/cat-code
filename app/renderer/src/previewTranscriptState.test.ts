@@ -183,9 +183,7 @@ test('a truncation-only cache preserves its visible boundary message', () => {
 
   let liveLog = reduceServerFrame(createRawMessageLogState(), ready())
   liveLog = reduceServerFrame(liveLog, boundary)
-  expect(selectRawMessageLog(liveLog, SID).error).toBe(
-    'Earlier restored history was omitted.',
-  )
+  expect(selectRawMessageLog(liveLog, SID).error).toBeNull()
 })
 
 test('swap observations cover replay batches and ready zero-history batches', () => {

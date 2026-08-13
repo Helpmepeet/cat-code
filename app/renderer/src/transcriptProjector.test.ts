@@ -50,7 +50,7 @@ function messageFrame(
   }
 }
 
-test('restored interrupted turns stay idle and show a notice after replayed rows', () => {
+test('restored interruption notice clears after the next live user message', () => {
   let state = createTranscriptState()
   state = projectServerFrame(state, ready('session-1', true))
   state = projectServerFrame(
@@ -77,8 +77,25 @@ test('restored interrupted turns stay idle and show a notice after replayed rows
     },
   ])
 
-  state = projectServerFrame(state, ready('session-1'))
-  expect(selectTranscriptRows(state, 'session-1')).toHaveLength(1)
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'user',
+      message: { role: 'user', content: 'continue now' },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-000000000903',
+    }),
+  )
+  expect(selectTranscriptRows(state, 'session-1')).toMatchObject([
+    {
+      kind: 'user-text',
+      content: 'accepted before close',
+    },
+    {
+      kind: 'user-text',
+      content: 'continue now',
+    },
+  ])
 })
 
 test('preserves real per-block producer identity, grouping, and order', () => {

@@ -1,5 +1,9 @@
 import type { SDKMessage } from '@cat-code/engine/sdk'
-import type { ServerFrame, SessionId } from '../../shared/protocol.js'
+import {
+  HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
+  type ServerFrame,
+  type SessionId,
+} from '../../shared/protocol.js'
 import { isAppReadyFrame } from './connectionState.js'
 
 /**
@@ -10,11 +14,11 @@ import { isAppReadyFrame } from './connectionState.js'
  * Nothing ever clears `error`, so displaying it pinned an undismissable red line
  * above the composer for the rest of the session.
  *
- * Dropped at DISPLAY only, and only for this one id. The frame is still minted
+ * Dropped at DISPLAY only. The frames are still minted
  * (`replayBuffer.ts:279`, carrying the retained count) and still kept in the
- * transcript cache by `app/main/transcriptCache.ts:129`, which keys off it. The
- * sibling `HISTORY_REPLAY_TRUNCATION_REQUEST_ID` is deliberately NOT filtered:
- * the preview/restore surface shows its own boundary message and owns that call.
+ * transcript cache by `app/main/transcriptCache.ts:129`, which keys off them.
+ * The preview/restore surface reads the history-replay boundary directly from
+ * that cache; neither retention notice belongs in the live error line.
  *
  * The id is minted at exactly one site but declared privately in
  * `app/main/replayBuffer.ts:76`, across a process boundary the renderer cannot
@@ -114,7 +118,12 @@ export function reduceServerFrameWithLimits(
   }
 
   if (frame.kind === 'error') {
-    if (frame.requestId === REPLAY_BUFFER_TRUNCATION_REQUEST_ID) return state
+    if (
+      frame.requestId === REPLAY_BUFFER_TRUNCATION_REQUEST_ID ||
+      frame.requestId === HISTORY_REPLAY_TRUNCATION_REQUEST_ID
+    ) {
+      return state
+    }
     const session = state.sessions[frame.sessionId] ?? EMPTY_SESSION_LOG
     return updateSession(state, frame.sessionId, {
       ...session,
