@@ -8,7 +8,7 @@ import {
   getCorePolicySection,
   getCyberPolicyInstruction,
   HOOK_AUTHORITY_RULE,
-  INSTRUCTION_AUTHORITY_LIMIT,
+  INSTRUCTION_AUTHORITY_RULE,
   OUTCOME_REPORTING_RULE,
   PROMPT_INJECTION_RULE,
   RETRY_RULE,
@@ -118,7 +118,7 @@ describe('policy core coverage across provider and mode variants', () => {
       expect(prompt).toContain(getCyberPolicyInstruction())
       expect(prompt).toContain(TOOL_OUTPUT_IS_DATA_RULE)
       expect(prompt).toContain(PROMPT_INJECTION_RULE)
-      expect(prompt).toContain(INSTRUCTION_AUTHORITY_LIMIT)
+      expect(prompt).toContain(INSTRUCTION_AUTHORITY_RULE)
       expect(prompt).toContain(OUTCOME_REPORTING_RULE)
       expect(prompt).not.toContain(HOOK_AUTHORITY_RULE)
       expect(prompt).not.toContain(RETRY_RULE)
@@ -134,7 +134,7 @@ describe('policy core coverage across provider and mode variants', () => {
       expect(prompt).toContain(TOOL_OUTPUT_IS_DATA_RULE)
       expect(prompt).toContain(RUNTIME_METADATA_RULE)
       expect(prompt).toContain(PROMPT_INJECTION_RULE)
-      expect(prompt).toContain(INSTRUCTION_AUTHORITY_LIMIT)
+      expect(prompt).toContain(INSTRUCTION_AUTHORITY_RULE)
       expect(prompt).toContain(OUTCOME_REPORTING_RULE)
     },
   )
@@ -154,7 +154,7 @@ describe('policy core coverage across provider and mode variants', () => {
         RUNTIME_METADATA_RULE,
         PROMPT_INJECTION_RULE,
         HOOK_AUTHORITY_RULE,
-        INSTRUCTION_AUTHORITY_LIMIT,
+        INSTRUCTION_AUTHORITY_RULE,
         OUTCOME_REPORTING_RULE,
         RETRY_RULE,
       ]) {
@@ -225,7 +225,7 @@ describe('policy core coverage across provider and mode variants', () => {
     // Proves the branch was actually taken: doing-tasks is Agent Mode's tell.
     expect(prompt).not.toContain('# Doing tasks')
     expect(prompt).toContain(getCyberPolicyInstruction())
-    expect(prompt).toContain(INSTRUCTION_AUTHORITY_LIMIT)
+    expect(prompt).toContain(INSTRUCTION_AUTHORITY_RULE)
     expect(prompt).toContain(OUTCOME_REPORTING_RULE)
     expect(prompt).toContain('# Executing actions with care')
     // The intro already carries the cyber policy on this branch, so the

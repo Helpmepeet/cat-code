@@ -81,7 +81,7 @@ Use the gh command via the Bash tool for other GitHub-related tasks including wo
 
   return `# Committing changes with git
 
-Only create commits when requested by the user. If unclear, ask first. When the user asks you to create a new git commit, follow these steps carefully:
+Create commits when the user requests one or when loaded repository instructions explicitly require one as part of the workflow. If neither applies, ask first. When either source authorizes a new git commit, follow these steps carefully:
 
 You can call multiple tools in a single response. When multiple independent pieces of information are requested and all commands are likely to succeed, run multiple tool calls in parallel for optimal performance. The numbered steps below indicate which commands should be batched in parallel.
 
@@ -92,7 +92,7 @@ Git Safety Protocol:
 - NEVER run force push to main/master, warn the user if they request it
 - CRITICAL: Always create NEW commits rather than amending, unless the user explicitly requests a git amend. When a pre-commit hook fails, the commit did NOT happen — so --amend would modify the PREVIOUS commit, which may result in destroying work or losing previous changes. Instead, after hook failure, fix the issue, re-stage, and create a NEW commit
 - When staging files, prefer adding specific files by name rather than using "git add -A" or "git add .", which can accidentally include sensitive files (.env, credentials) or large binaries
-- NEVER commit changes unless the user explicitly asks you to. It is VERY IMPORTANT to only commit when explicitly asked, otherwise the user will feel that you are being too proactive
+- NEVER commit changes unless the user explicitly asks or loaded repository instructions explicitly require a commit. In either case, stage only the intended paths and do not push unless separately authorized.
 
 1. Run the following bash commands in parallel, each using the ${BASH_TOOL_NAME} tool:
   - Run a git status command to see all untracked files. IMPORTANT: Never use the -uall flag as it can cause memory issues on large repos.

@@ -18,3 +18,18 @@ describe('Bash prompt working-directory guidance', () => {
     }
   })
 })
+
+describe('Bash prompt commit authority', () => {
+  test('honors an explicit repository commit workflow without authorizing push', () => {
+    for (const provider of ['firstParty', 'openai'] as const) {
+      const prompt = getBashPrompt(provider)
+
+      expect(prompt).toContain(
+        'loaded repository instructions explicitly require one as part of the workflow',
+      )
+      expect(prompt).toContain(
+        'stage only the intended paths and do not push unless separately authorized',
+      )
+    }
+  })
+})

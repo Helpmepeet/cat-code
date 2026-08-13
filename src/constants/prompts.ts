@@ -118,7 +118,7 @@ import {
   getCorePolicySection,
   getCyberPolicyInstruction,
   HOOK_AUTHORITY_RULE,
-  INSTRUCTION_AUTHORITY_LIMIT,
+  INSTRUCTION_AUTHORITY_RULE,
   OUTCOME_REPORTING_RULE,
   PROJECT_INSTRUCTION_AUTHORITY_RULE,
   PROMPT_INJECTION_RULE,
@@ -708,7 +708,7 @@ export async function getSystemPrompt(
         getCyberPolicyInstruction(),
         TOOL_OUTPUT_IS_DATA_RULE,
         PROMPT_INJECTION_RULE,
-        INSTRUCTION_AUTHORITY_LIMIT,
+        INSTRUCTION_AUTHORITY_RULE,
         OUTCOME_REPORTING_RULE,
       ].join('\n\n'),
     ]
