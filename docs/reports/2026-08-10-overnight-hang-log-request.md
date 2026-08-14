@@ -33,7 +33,7 @@ against source on the day it was written.
 |---|---|---|
 | B1 | "Absence is evidence" is currently false — make it true. Any operation that can block must log its start or be covered by a watchdog that logs its failure to finish. | ✅ Recorded as `docs/migration/decisions/OBSERVABILITY-MINIMUM.md`, PROPOSED. |
 | B2 | Give the darwin park route its own event; `app.shutdown.started` with no `completed` is the designed path but reads as a hung shutdown. Misled the investigation for a full pass. | ✅ `2c63a972`, new `app.parked.windowless`. |
-| B3 | An event-type bucket on delivery-trace records, so "was any of the last 6 frames a `result`?" is answerable. | Dispatched. |
+| B3 | An event-type bucket on delivery-trace records, so "was any of the last 6 frames a `result`?" is answerable. | ✅ `5eb76537`, as the `messageKind` field (`app/main/deliveryTraceSink.ts:110`). **This row read "Dispatched" until 2026-08-14, when an investigation trusted it, concluded frame composition was unknowable, and left its central claim resting on a weaker argument. Source wins over dated docs (CLAUDE.md §8.2).** |
 | B4 | Priority classes for the lossy FD 3 queue: lifecycle never shed, anomalies shed last, samples shed first. **"The 3,317-record `queue_saturated` shed during the morning restore shows lifecycle records and bulk samples share one fate."** | ✅ `ac7bd1de` (CC-45). This sentence is the provenance for the figure cited in `app/sidecar/operationalLogger.ts`. |
 | B5 | Persist sidecar stderr minimally. | **Declined pending an owner decision.** See §D. |
 
