@@ -268,6 +268,11 @@ async function runProductionHardeningSmoke(
       // and a request id, schema-validated AT THE SIDECAR (`statsQueryMessageSchema`)
       // which fails closed with `bad_request`, and the snapshot is secretGuard-clean.
       'queryStats',
+      // Freeze telemetry — the renderer reports that React committed a render.
+      // Argument-free and IPC-free: it only increments a preload-local counter
+      // (with an overflow guard) that the health probe reads at sample time, so
+      // it reaches neither main nor the sidecar and carries no payload at all.
+      'recordRenderCommit',
     ].sort()
     const links = probe.links as Array<{
       text: string | null
