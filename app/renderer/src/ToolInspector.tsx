@@ -35,7 +35,7 @@
  * report).
  */
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import type {
   ToolUseRow,
 } from './transcriptProjector.js'
@@ -47,6 +47,7 @@ import {
 } from './outputSearchModel.js'
 import { parseReadSource } from './readSource.js'
 import { useToast } from './toastContext.js'
+import { VirtualLineList } from './VirtualLineList.js'
 
 export function ToolInspector({
   row,
@@ -166,8 +167,6 @@ function OutputPanel({ text }: { text: string }) {
   const [wrap, setWrap] = useState(false)
   const [copied, setCopied] = useState(false)
   const toast = useToast()
-  const scrollRef = useRef<HTMLDivElement | null>(null)
-  const activeRef = useRef<HTMLDivElement | null>(null)
   // Memoized against the search below, which re-runs on every keystroke while
   // this depends only on the output itself.
   const source = useMemo(() => parseReadSource(text), [text])
@@ -180,16 +179,6 @@ function OutputPanel({ text }: { text: string }) {
     [body, query, matchIndex],
   )
   const matchCount = search.matches.length
-
-  // Park the active match in the vertical middle of the scroller, like the
-  // prototype (Messages.jsx:279-284). Scrolling the drawer's own box never
-  // perturbs the transcript scroller behind it (App owns that one).
-  useEffect(() => {
-    const line = activeRef.current
-    const box = scrollRef.current
-    if (!line || !box) return
-    box.scrollTop = line.offsetTop - box.clientHeight / 2 + line.clientHeight / 2
-  }, [search.activeLine])
 
   const step = (delta: number): void => {
     setMatchIndex(index => stepMatchIndex(index, delta, matchCount))
@@ -287,55 +276,44 @@ function OutputPanel({ text }: { text: string }) {
           {copied ? 'Copied' : 'Copy'}
         </button>
       </div>
-      <div
-        ref={scrollRef}
+      <VirtualLineList
+        lines={search.lines}
+        activeIndex={search.activeLine === null ? null : search.activeLine - 1}
         className="relative max-h-96 overflow-auto rounded-lg border border-shell-seam bg-black/40 py-2 font-mono text-[11.5px] leading-relaxed text-text-muted"
-      >
-        <div className={wrap ? 'min-w-full' : 'min-w-max'}>
-          {search.lines.map((line, index) => {
-            // Two different numbers. The search model tracks POSITION in the
-            // painted body; the gutter shows the file's own line when the
-            // payload carried one.
-            const position = index + 1
-            const lineNumber = source.numbers?.[index] ?? position
-            const active = search.activeLine === position
-            return (
-              <div
-                key={index}
-                ref={active ? activeRef : undefined}
-                className={`flex ${active ? 'bg-accent/15' : ''}`}
+        renderLine={(line, index) => {
+          // Two different numbers. The search model tracks POSITION in the
+          // painted body; the gutter shows the file's own line when the
+          // payload carried one.
+          const position = index + 1
+          const lineNumber = source.numbers?.[index] ?? position
+          const active = search.activeLine === position
+          return (
+            <div key={index} className={`flex ${active ? 'bg-accent/15' : ''}`}>
+              <span className="sticky left-0 w-[42px] shrink-0 select-none bg-app-bg pr-2.5 text-right text-text-ghost [font-variant-numeric:tabular-nums]">
+                {lineNumber}
+              </span>
+              <span
+                className={`flex-1 pl-3 pr-4 ${
+                  wrap ? LINE_TEXT_CLASS.wrap : LINE_TEXT_CLASS.nowrap
+                }`}
               >
-                <span className="sticky left-0 w-[42px] shrink-0 select-none bg-app-bg pr-2.5 text-right text-text-ghost [font-variant-numeric:tabular-nums]">
-                  {lineNumber}
-                </span>
-                <span
-                  className={`flex-1 pl-3 pr-4 ${
-                    wrap ? LINE_TEXT_CLASS.wrap : LINE_TEXT_CLASS.nowrap
-                  }`}
-                >
-                  {splitLineByQuery(line, query).map((segment, segmentIndex) =>
-                    segment.match ? (
-                      <mark
-                        key={segmentIndex}
-                        className="rounded-sm bg-tone-warn/25 px-px text-[#fde68a]"
-                      >
-                        {segment.text}
-                      </mark>
-                    ) : (
-                      <span key={segmentIndex}>{segment.text}</span>
-                    ),
-                  )}
-                </span>
-              </div>
-            )
-          })}
-        </div>
-      </div>
-      {search.hiddenLines > 0 ? (
-        <div className="mt-1 font-mono text-[10px] text-text-subtle/70">
-          {search.hiddenLines} more lines. Copy writes the full output.
-        </div>
-      ) : null}
+                {splitLineByQuery(line, query).map((segment, segmentIndex) =>
+                  segment.match ? (
+                    <mark
+                      key={segmentIndex}
+                      className="rounded-sm bg-tone-warn/25 px-px text-[#fde68a]"
+                    >
+                      {segment.text}
+                    </mark>
+                  ) : (
+                    <span key={segmentIndex}>{segment.text}</span>
+                  ),
+                )}
+              </span>
+            </div>
+          )
+        }}
+      />
     </>
   )
 }

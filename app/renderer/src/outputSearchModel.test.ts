@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import {
   describeOutputSearch,
-  MAX_INSPECTOR_LINES,
   splitLineByQuery,
   stepMatchIndex,
 } from './outputSearchModel.js'
@@ -87,26 +86,14 @@ describe('describeOutputSearch', () => {
     expect(model.activeLine).toBe(900)
   })
 
-  test('past the render cut: the counter never promises an unpaintable match', () => {
-    const text = ['hit', 'x', 'hit', 'x', 'hit'].join('\n')
-    const model = describeOutputSearch(text, 'hit', 0, 3)
-    expect(model.lines).toHaveLength(3)
-    expect(model.totalLines).toBe(5)
-    expect(model.hiddenLines).toBe(2)
-    // Line 5 also says "hit", but it is not painted, so it is not counted.
-    expect(model.matches).toEqual([1, 3])
-    expect(model.label).toBe('1/2')
-  })
-
-  test('the default cut is generous and only bites a runaway output', () => {
-    expect(MAX_INSPECTOR_LINES).toBeGreaterThan(4000)
-    const huge = Array.from(
-      { length: MAX_INSPECTOR_LINES + 25 },
-      () => 'x',
+  test('a large output remains searchable past the old render cut', () => {
+    const huge = Array.from({ length: 5_025 }, (_, index) =>
+      index === 5_024 ? 'needle' : 'x',
     ).join('\n')
     const model = describeOutputSearch(huge, '', 0)
-    expect(model.lines).toHaveLength(MAX_INSPECTOR_LINES)
-    expect(model.hiddenLines).toBe(25)
+    expect(model.lines).toHaveLength(5_025)
+    expect(model.hiddenLines).toBe(0)
+    expect(describeOutputSearch(huge, 'needle', 0).activeLine).toBe(5_025)
   })
 })
 

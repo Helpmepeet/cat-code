@@ -21,21 +21,16 @@ export type OutputSegment = {
 }
 
 /**
- * How many lines the drawer paints. Each line becomes its own row so the active
- * match can be highlighted and scrolled to, and the whole body re-renders on
- * every keystroke in the search field — so an unbounded output would freeze the
- * renderer on a keypress. Far above any real tool result (the inline card cuts
- * over at 400 lines), and the copy button always writes the COMPLETE output, so
- * nothing becomes unreachable.
+ * The model retains all output lines. The render boundary windows them before
+ * creating DOM nodes, so search can navigate to any line without an arbitrary
+ * source-data cut.
  */
-export const MAX_INSPECTOR_LINES = 5000
-
 export type OutputSearchModel = {
-  /** The output split on newlines, cut to `MAX_INSPECTOR_LINES`. Line N is `lines[N - 1]`. */
+  /** The complete output split on newlines. Line N is `lines[N - 1]`. */
   lines: string[]
-  /** Lines in the whole output, including any past the render cut. */
+  /** Lines in the whole output. */
   totalLines: number
-  /** How many lines the cut left out. 0 for every realistic output. */
+  /** Kept for the display contract. Windowing paints every source line logically. */
   hiddenLines: number
   /** 1-based numbers of the lines containing the query, ascending. */
   matches: number[]
@@ -53,14 +48,12 @@ export function describeOutputSearch(
   text: string,
   query: string,
   matchIndex: number,
-  maxLines: number = MAX_INSPECTOR_LINES,
 ): OutputSearchModel {
   const allLines = text.split('\n')
-  const lines =
-    allLines.length > maxLines ? allLines.slice(0, maxLines) : allLines
+  const lines = allLines
   const counts = {
     totalLines: allLines.length,
-    hiddenLines: allLines.length - lines.length,
+    hiddenLines: 0,
   }
   const needle = query.toLowerCase()
   if (needle.length === 0) {
@@ -74,8 +67,6 @@ export function describeOutputSearch(
       searching: false,
     }
   }
-  // Only the painted lines can be matched: a counter promising a match the body
-  // cannot scroll to would be a lie.
   const matches: number[] = []
   for (let i = 0; i < lines.length; i++) {
     if (lines[i].toLowerCase().includes(needle)) matches.push(i + 1)

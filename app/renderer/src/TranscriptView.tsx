@@ -42,6 +42,8 @@ import remarkGfm from 'remark-gfm'
 import { diffWordsWithSpace } from 'diff'
 import type { AccountsSnapshot, SessionId } from '../../shared/protocol.js'
 import { WelcomeScreen } from './WelcomeScreen.js'
+import { BoundedMarkdown } from './BoundedMarkdown.js'
+import { VirtualLineList } from './VirtualLineList.js'
 import { REHYPE_PLUGINS } from './markdownPlugins.js'
 import { useModalFocus } from './overlayFocus.js'
 import { useToast } from './toastContext.js'
@@ -534,6 +536,7 @@ const TranscriptRowView = memo(function TranscriptRowView({
       return (
         <AssistantProse
           content={row.content}
+          sourceId={row.id}
           sessionId={row.sessionId}
           streaming={row.isStreaming}
         />
@@ -564,7 +567,7 @@ const TranscriptRowView = memo(function TranscriptRowView({
       return row.content.trim().length === 0 ? (
         <RedactedThinkingBlock />
       ) : reasoningMode === 'blocks' ? (
-        <ThinkingBlock content={row.content} />
+        <ThinkingBlock content={row.content} sourceId={row.id} />
       ) : (
         <ReasoningRun steps={reasoningStepsForRow(row)} />
       )
@@ -667,10 +670,12 @@ const REMARK_PLUGINS = [remarkGfm]
 
 function AssistantProse({
   content,
+  sourceId,
   sessionId,
   streaming,
 }: {
   content: string
+  sourceId: string
   sessionId: SessionId
   streaming?: true
 }) {
@@ -711,17 +716,26 @@ function AssistantProse({
     // last line rather than narrowing the column (Messages.jsx:2064-2091), and
     // the app's own reserved-gutter version read as an unexplained gap.
     <div className="group relative">
-      <MarkdownErrorBoundary fallback={content}>
-        <div className="md-prose font-sans font-medium text-sm leading-relaxed">
-          <Markdown
-            remarkPlugins={REMARK_PLUGINS}
-            rehypePlugins={REHYPE_PLUGINS}
-            components={components}
+      <BoundedMarkdown
+        sourceId={sourceId}
+        source={content}
+        renderLeaf={leaf => (
+          <div
+            className="md-prose font-sans font-medium text-sm leading-relaxed"
+            key={leaf.id}
           >
-            {content}
-          </Markdown>
-        </div>
-      </MarkdownErrorBoundary>
+            <MarkdownErrorBoundary fallback={leaf.content}>
+              <Markdown
+                remarkPlugins={REMARK_PLUGINS}
+                rehypePlugins={REHYPE_PLUGINS}
+                components={components}
+              >
+                {leaf.content}
+              </Markdown>
+            </MarkdownErrorBoundary>
+          </div>
+        )}
+      />
       {streaming ? (
         <span
           className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-accent align-text-bottom"
@@ -2259,26 +2273,65 @@ function stringifyInput(input: Record<string, unknown>): string {
  * per line: the outcome is already known, and running the heuristic over a stack
  * trace would paint most of it as ordinary output.
  */
-function LogLines({
-  lines,
-  isError,
-  startNo,
-}: {
-  lines: string[]
-  isError: boolean
-  startNo: number
-}) {
+function renderLogLine(
+  line: string,
+  isError: boolean,
+  lineNumber: number,
+) {
   return (
-    <pre className="whitespace-pre font-mono text-[11.5px] leading-relaxed">
-      {lines.map((line, index) => (
-        <div key={index} className="flex">
-          <span className={LOG_GUTTER_CLASS}>{startNo + index}</span>
-          <span className={isError ? 'text-tone-danger' : logLineClass(line)}>
-            {line || ' '}
-          </span>
-        </div>
-      ))}
-    </pre>
+    <div key={lineNumber} className="flex">
+      <span className={LOG_GUTTER_CLASS}>{lineNumber}</span>
+      <span className={isError ? 'text-tone-danger' : logLineClass(line)}>
+        {line || ' '}
+      </span>
+    </div>
+  )
+}
+
+function BashBody({
+  content,
+  isError,
+  onOpenFull,
+  toolUseId,
+}: {
+  content: string
+  isError: boolean
+  onOpenFull: (() => void) | null
+  toolUseId: string
+}) {
+  const lines = content.split('\n')
+  const { window, revealMore } = useInlineOutputWindow(lines, toolUseId)
+  const visibleLines = window.truncated
+    ? [...window.head, ...window.tail]
+    : window.head
+  return (
+    <VirtualLineList
+      lines={visibleLines}
+      activeIndex={null}
+      className={`${INLINE_OUTPUT_SCROLLER} whitespace-pre font-mono text-[11.5px] leading-relaxed`}
+      renderBeforeIndex={
+        window.truncated
+          ? index =>
+              index === window.head.length ? (
+                <InlineRevealBand
+                  hidden={window.hidden}
+                  revealStep={window.revealStep}
+                  onReveal={revealMore}
+                  onOpenFull={onOpenFull}
+                />
+              ) : null
+          : undefined
+      }
+      renderLine={(line, index) =>
+        renderLogLine(
+          line,
+          isError,
+          index < window.head.length
+            ? index + 1
+            : window.tailStartLine + index - window.head.length,
+        )
+      }
+    />
   )
 }
 
@@ -2323,44 +2376,6 @@ function useInlineOutputWindow(lines: string[], toolUseId: string) {
       setHeadShown(next)
     },
   }
-}
-
-function BashBody({
-  content,
-  isError,
-  onOpenFull,
-  toolUseId,
-}: {
-  content: string
-  isError: boolean
-  onOpenFull: (() => void) | null
-  toolUseId: string
-}) {
-  const lines = content.split('\n')
-  const { window, revealMore } = useInlineOutputWindow(lines, toolUseId)
-  return (
-    <div className={INLINE_OUTPUT_SCROLLER}>
-      <LogLines lines={window.head} isError={isError} startNo={1} />
-      {window.truncated ? (
-        <>
-          <InlineRevealBand
-            hidden={window.hidden}
-            revealStep={window.revealStep}
-            onReveal={revealMore}
-            onOpenFull={onOpenFull}
-          />
-          {/* The tail resumes at its TRUE output line, never restarting at 1
-           * (prototype `startNo={lines.length-TAIL+1}`, `Messages.jsx:552`) —
-           * the same rule P4-36 established for a truncated read. */}
-          <LogLines
-            lines={window.tail}
-            isError={isError}
-            startNo={window.tailStartLine}
-          />
-        </>
-      ) : null}
-    </div>
-  )
 }
 
 /** Collapsed tail-peek: the last few output lines, faded (prototype bash peek). */
@@ -2735,28 +2750,36 @@ function PlainLinesBody({
   // per-prefix tints Mcp and Skill add on top of the flat base — `→` lines in
   // `FE_T.add` and `›`/`skill` lines in `FE_T.t3` (`:734,788`).
   const toneClass = isError ? 'text-tone-danger' : 'text-text-muted'
-  const renderLines = (slice: string[]) => (
-    <pre
-      className={`whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed ${toneClass}`}
-    >
-      {slice.join('\n')}
-    </pre>
-  )
+  const visibleLines = window.truncated
+    ? [...window.head, ...window.tail]
+    : window.head
   return (
-    <div className={INLINE_OUTPUT_SCROLLER}>
-      {renderLines(window.head)}
-      {window.truncated ? (
-        <>
-          <InlineRevealBand
-            hidden={window.hidden}
-            revealStep={window.revealStep}
-            onReveal={revealMore}
-            onOpenFull={onOpenFull}
-          />
-          {renderLines(window.tail)}
-        </>
-      ) : null}
-    </div>
+    <VirtualLineList
+      lines={visibleLines}
+      activeIndex={null}
+      className={INLINE_OUTPUT_SCROLLER}
+      renderBeforeIndex={
+        window.truncated
+          ? index =>
+              index === window.head.length ? (
+                <InlineRevealBand
+                  hidden={window.hidden}
+                  revealStep={window.revealStep}
+                  onReveal={revealMore}
+                  onOpenFull={onOpenFull}
+                />
+              ) : null
+          : undefined
+      }
+      renderLine={(line, index) => (
+        <pre
+          key={index}
+          className={`whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed ${toneClass}`}
+        >
+          {line}
+        </pre>
+      )}
+    />
   )
 }
 
@@ -3110,7 +3133,7 @@ function UserImageRowView({ source }: { source: UserImageSource }) {
  * prose. The prototype's expand/collapse is an interactive polish affordance
  * (18c); 18a renders the block expanded (flagged) so the reasoning is visible.
  */
-function ThinkingBlock({ content }: { content: string }) {
+function ThinkingBlock({ content, sourceId }: { content: string; sourceId: string }) {
   return (
     <div className="rounded-lg border border-accent/15 bg-accent/[0.04]">
       <div className="flex items-center gap-2 px-3.5 py-2">
@@ -3118,10 +3141,18 @@ function ThinkingBlock({ content }: { content: string }) {
           Thinking
         </span>
       </div>
-      <div className="md-prose border-t border-accent/10 px-3.5 py-2.5 text-[13px] italic leading-relaxed text-text-subtle">
-        <MarkdownErrorBoundary fallback={content}>
-          <Markdown remarkPlugins={REMARK_PLUGINS}>{content}</Markdown>
-        </MarkdownErrorBoundary>
+      <div className="border-t border-accent/10 px-3.5 py-2.5 text-[13px] italic leading-relaxed text-text-subtle">
+        <BoundedMarkdown
+          sourceId={sourceId}
+          source={content}
+          renderLeaf={leaf => (
+            <div className="md-prose" key={leaf.id}>
+              <MarkdownErrorBoundary fallback={leaf.content}>
+                <Markdown remarkPlugins={REMARK_PLUGINS}>{leaf.content}</Markdown>
+              </MarkdownErrorBoundary>
+            </div>
+          )}
+        />
       </div>
     </div>
   )
@@ -3258,7 +3289,7 @@ const ReasoningStep = memo(function ReasoningStep({
       {step.kind === 'heading' ? (
         <ReasoningHeading content={step.text} />
       ) : (
-        <ReasoningProse content={step.text} />
+        <ReasoningProse content={step.text} sourceId={step.key} />
       )}
     </li>
   )
@@ -3293,15 +3324,23 @@ function ReasoningNode({
  * the app's ordinary prose grammar under its own step, and can be folded away on
  * its own so one long body does not push the rest of the run off-screen (the
  * run's head collapses everything; this collapses just this step). */
-function ReasoningProse({ content }: { content: string }) {
+function ReasoningProse({ content, sourceId }: { content: string; sourceId: string }) {
   const [hidden, setHidden] = useState(false)
   return (
     <>
       {hidden ? null : (
         <div className="md-prose mb-1.5 mt-1 border-l border-shell-seam pl-2.5 text-[13px] leading-relaxed text-text-subtle">
-          <MarkdownErrorBoundary fallback={content}>
-            <Markdown remarkPlugins={REMARK_PLUGINS}>{content}</Markdown>
-          </MarkdownErrorBoundary>
+          <BoundedMarkdown
+            sourceId={sourceId}
+            source={content}
+            renderLeaf={leaf => (
+              <MarkdownErrorBoundary fallback={leaf.content} key={leaf.id}>
+                <Markdown key={leaf.id} remarkPlugins={REMARK_PLUGINS}>
+                  {leaf.content}
+                </Markdown>
+              </MarkdownErrorBoundary>
+            )}
+          />
         </div>
       )}
       <button
