@@ -12,8 +12,10 @@ import { app, BrowserWindow } from 'electron'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ServerFrame } from '../shared/protocol.js'
+import type { HostEvent } from '../shared/hostApi.js'
 
 const CH_SERVER_FRAME = 'catcode:server-frame'
+const CH_HOST_EVENT = 'catcode:host:event'
 const HARDENING_SESSION_ID = 'hardening-smoke-session'
 const HARDENING_MARKER = 'catcode-production-hardening-marker'
 
@@ -113,53 +115,24 @@ const gateFrames: ServerFrame[] = [
   },
 ]
 
-// Capture the session id of the FIRST frame main delivers to the renderer (the
-// real startup session that owns the active pane), so the crafted Markdown can
-// be delivered into it. Wraps webContents.send before any frame flows.
-let liveSessionId: string | null = null
-// P4-15 — the real attach ends its snapshot burst with `workspace-trust.snapshot`
-// (P4-14: sent AFTER the other snapshots, before history replay). Observing it
-// means the real trust/accounts snapshots have all landed, so the gate-clearing
-// override injected afterward is DETERMINISTICALLY last (no re-send race).
-let sawAttachSettled = false
-
-function watchForLiveSession(window: BrowserWindow): void {
-  const contents = window.webContents
-  const originalSend = contents.send.bind(contents)
-  contents.send = ((channel: string, ...args: unknown[]) => {
-    if (channel === CH_SERVER_FRAME) {
-      // Production main batches a delivery as one ServerFrame[] (perf F3); sniff
-      // the session id from the first frame of the batch.
-      const batch = args[0] as Array<{ sessionId?: unknown; kind?: unknown }> | undefined
-      const frame = Array.isArray(batch) ? batch[0] : undefined
-      if (liveSessionId === null && frame && typeof frame.sessionId === 'string') {
-        liveSessionId = frame.sessionId
-      }
-      if (Array.isArray(batch) && batch.some(f => f?.kind === 'workspace-trust.snapshot')) {
-        sawAttachSettled = true
-      }
-    }
-    return originalSend(channel, ...args)
-  }) as typeof contents.send
-}
-
-async function resolveActiveSessionId(window: BrowserWindow): Promise<string> {
-  const deadline = Date.now() + 5_000
-  while (liveSessionId === null && Date.now() < deadline) {
-    await new Promise(resolve => setTimeout(resolve, 25))
-  }
-  // Wait for the real attach snapshots to settle (workspace-trust is last) so the
-  // injected trusted/non-first-run override post-dates them deterministically. If
-  // no real session ever attaches, fall back to the synthetic id (the crafted
-  // frame then acts as the first-ever streaming session, with no real gate).
-  while (!sawAttachSettled && liveSessionId !== null && Date.now() < deadline) {
-    await new Promise(resolve => setTimeout(resolve, 25))
-  }
-  return liveSessionId ?? HARDENING_SESSION_ID
+const hostSessionAdded: HostEvent = {
+  type: 'session-added',
+  session: {
+    appSessionId: HARDENING_SESSION_ID,
+    engineSessionId: 'hardening-engine-session',
+    cwd: '/tmp/catcode-hardening',
+    title: null,
+    titleUpdatedAt: null,
+    status: 'ready',
+    restorable: false,
+    parked: false,
+    createdAt: 0,
+    lastAttachedAt: 0,
+    lastMessageSentAt: null,
+  },
 }
 
 app.once('browser-window-created', (_event, window) => {
-  watchForLiveSession(window)
   window.webContents.once('did-finish-load', () => {
     void runProductionHardeningSmoke(window)
   })
@@ -178,25 +151,23 @@ async function runProductionHardeningSmoke(
     // did-finish-load precedes React effects. Wait for the real app mount, then
     // use the same fixed server-frame channel that production main delivers.
     //
-    // Multi-session shell (P3-5a): main auto-creates a real startup session, and
-    // that session owns the active pane (a background session's frames never
-    // steal focus). The crafted Markdown must therefore be delivered INTO the
-    // active session, not a synthetic id — otherwise it renders only in a
-    // background slice the probe cannot see. Sniff the live session id from the
-    // frames main delivers on CH_SERVER_FRAME, then stamp the crafted frames
-    // with it so the Markdown lands in the pane under test.
+    // The product starts with no engine session. Add a synthetic host row through
+    // the same host-event channel before injecting the crafted frames, so this
+    // security probe exercises a real active transcript pane without spawning a
+    // sidecar or opening the native directory picker.
     await new Promise(resolve => setTimeout(resolve, 100))
-    const activeSessionId = await resolveActiveSessionId(window)
+    window.webContents.send(CH_HOST_EVENT, hostSessionAdded)
+    await new Promise(resolve => setTimeout(resolve, 100))
     const sendGateFrames = () => {
       for (const frame of gateFrames) {
-        window.webContents.send(CH_SERVER_FRAME, [{ ...frame, sessionId: activeSessionId }])
+        window.webContents.send(CH_SERVER_FRAME, [frame])
       }
     }
     sendGateFrames()
     for (const frame of frames) {
       // Deliver on the same batched contract production main uses (one
       // ServerFrame[] per send); the preload fans it out to `subscribe`.
-      window.webContents.send(CH_SERVER_FRAME, [{ ...frame, sessionId: activeSessionId }])
+      window.webContents.send(CH_SERVER_FRAME, [frame])
     }
 
     const deadline = Date.now() + 5_000
@@ -267,6 +238,13 @@ async function runProductionHardeningSmoke(
       // F2 — read-only cold-launch sessions-catalog baseline (HC3 fixed sender).
       'readSessionsCatalog',
       'restoreSession',
+      // 2026-08-13 — open a transcript-cited file in the OS handler. The renderer
+      // DOES name a path here, so main is the boundary and re-validates it whole
+      // (`app/main/openWorkspaceFile.ts`): closed key set, 4,096-char cap, NUL
+      // rejected, the appSessionId must match a live session, and the resolved
+      // realpath must stay inside that session's realpath'd cwd and be a regular
+      // file. Traversal and symlink escape both fail closed.
+      'openWorkspaceFile',
       // P4-35 — the file sink (operator ruling 2026-07-30). The renderer requests
       // main's native save dialog and cannot name a destination (HC1/HC3).
       'saveTextToFile',
@@ -285,6 +263,11 @@ async function runProductionHardeningSmoke(
       'openLogsFolder',
       'reportRendererFault',
       'saveDiagnosticsBundle',
+      // Usage analytics — the renderer requests an engine-backed stats snapshot.
+      // It authors no query: the `stats.query` frame carries a bounded range enum
+      // and a request id, schema-validated AT THE SIDECAR (`statsQueryMessageSchema`)
+      // which fails closed with `bad_request`, and the snapshot is secretGuard-clean.
+      'queryStats',
     ].sort()
     const links = probe.links as Array<{
       text: string | null
