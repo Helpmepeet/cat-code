@@ -44,7 +44,7 @@ export function BoundedMarkdown({
       frame = 0
       const rootRect = root.getBoundingClientRect()
       const scrollerRect = scroller.getBoundingClientRect()
-      const scrollOffset = scroller.scrollTop + scrollerRect.top - rootRect.top
+      const scrollOffset = scrollerRect.top - rootRect.top
       setLeafWindow(current => {
         const next = selectMarkdownLeafWindow(
           measuredLeaves,
@@ -60,12 +60,14 @@ export function BoundedMarkdown({
     const observer = new ResizeObserver(schedule)
     observer.observe(root)
     observer.observe(scroller)
-    scroller.addEventListener('scroll', schedule, { passive: true })
+    const scrollTarget: EventTarget =
+      scroller === document.documentElement ? window : scroller
+    scrollTarget.addEventListener('scroll', schedule, { passive: true })
     schedule()
     return () => {
       if (frame !== 0) window.cancelAnimationFrame(frame)
       observer.disconnect()
-      scroller.removeEventListener('scroll', schedule)
+      scrollTarget.removeEventListener('scroll', schedule)
     }
   }, [measuredLeaves])
 
