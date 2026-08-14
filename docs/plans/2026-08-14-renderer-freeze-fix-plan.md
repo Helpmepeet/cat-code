@@ -184,8 +184,15 @@ debugging tool from a state that should not exist is the wrong shape of fix. The
 crash disappears when the memory problem does. Until then, the rule is simply
 not to open DevTools on a window that has been streaming for a long time.
 
-**Not rewriting the transcript to render incrementally.** This was recommended
-early and withdrawn. The 2026-08-09 report attributed a crash to the transcript's
+**Not rewriting the transcript to render incrementally.** SUPERSEDED the same
+evening by `docs/reports/2026-08-14-renderer-memory-attribution.md`: measurement
+shows 95% of the renderer is Blink PartitionAlloc against 182 MB of JavaScript
+heap, which is the growth-curve condition this section set for reopening it.
+Virtualization is back on the table but still not established, because
+parked-session retention is an untested alternative that explains the same
+numbers. The original reasoning is kept below for the record.
+
+This was recommended early and withdrawn. The 2026-08-09 report attributed a crash to the transcript's
 inefficient drawing, but that attribution was explicitly inferred rather than
 proven, and this crash's failing allocation turned out to be somewhere else
 entirely. Its last route back into relevance was the theory that redrawing was

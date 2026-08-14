@@ -215,6 +215,11 @@ Symptom: a session shows working, no new rows, and the app otherwise responds.
 
 ## Open questions
 
+**Partly answered the same evening.** The 6.7 GB is attributed in
+`docs/reports/2026-08-14-renderer-memory-attribution.md`: 95% of the renderer is
+Blink PartitionAlloc, the JavaScript heap is 182 MB, and the growth reproduces on
+demand in about fifteen minutes. The freeze below remains unexplained.
+
 - **Why React stopped committing.** Established: frames arrived, were dispatched
   unconditionally into all twenty stores, the event loop was idle with timers
   firing, the window was `visible: true` throughout, no acknowledgements were
