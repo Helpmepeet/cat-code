@@ -83,7 +83,7 @@ test('a swarm with news promotes one worker and keeps the rest as neutral counts
     />,
   )
   expect(html).toContain('Hopper')
-  expect(html).toContain('status Attention')
+  expect(html).toContain('status Failed')
   expect(html).not.toContain('>Attention<')
   expect(html).toContain('1 working')
   // A failure awaits the ASSISTANT, so the baton is the neutral one while the
@@ -108,7 +108,7 @@ test('an unnamed promoted worker leads with its task description and keeps count
   )
   expect(html).toContain('Investigate the failing handoff')
   expect(html).toContain('General-purpose')
-  expect(html).toContain('aria-label="Investigate the failing handoff, type General-purpose, status Attention, 1 working"')
+  expect(html).toContain('aria-label="Investigate the failing handoff, type General-purpose, status Failed, 1 working"')
   expect(html).not.toContain('>Attention<')
 })
 
