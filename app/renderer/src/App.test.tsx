@@ -1834,6 +1834,32 @@ test('P4-32a — a session with no delegated workers leaves the dock untouched',
   expect(html).not.toContain('subagents')
 })
 
+test('P4-32a — the dock retires settled workers but keeps unresolved ones', () => {
+  const settled = renderToStaticMarkup(
+    <SessionPane
+      {...idleSessionPaneProps()}
+      orchestratorWorkers={[
+        agentWorkerForTest({
+          description: 'Completed worker',
+          status: 'completed',
+          synthesisStatus: 'synthesized',
+        }),
+      ]}
+    />,
+  )
+  expect(settled).not.toContain('Completed worker')
+
+  const failed = renderToStaticMarkup(
+    <SessionPane
+      {...idleSessionPaneProps()}
+      orchestratorWorkers={[
+        agentWorkerForTest({ description: 'Failed worker', status: 'failed' }),
+      ]}
+    />,
+  )
+  expect(failed).toContain('Failed worker')
+})
+
 test('P4-32a — WIRING TRIPWIRE (source text, NOT reachability) for the mode joins', () => {
   // Read this for what it is: a source-TEXT assertion. It fires if someone deletes
   // or renames these joins, and it proves NOTHING about whether the handler can be

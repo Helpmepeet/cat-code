@@ -121,6 +121,40 @@ export function orchestratorWorkerState(
 }
 
 /**
+ * The docked roster is a live-work and open-business indicator. The Workers tab
+ * keeps every worker available for inspection until the engine evicts it.
+ */
+export function selectDockedOrchestratorWorkers(
+  workers: readonly AgentModeWorkerItem[],
+): AgentModeWorkerItem[] {
+  return workers.filter(worker => {
+    const state = orchestratorWorkerState(worker)
+    switch (state) {
+      case 'running':
+      case 'background':
+      case 'resumed':
+      case 'waiting':
+      case 'needs-you':
+      case 'paused':
+      case 'result-ready':
+      case 'failed':
+      case 'attention':
+        return true
+      case 'completed':
+      case 'reviewed':
+      case 'stopped':
+      case 'resumable':
+      case 'stale':
+        return false
+      default: {
+        const exhaustive: never = state
+        return exhaustive
+      }
+    }
+  })
+}
+
+/**
  * Attention owner (the baton). Blocked workers are always assistant-owned: they
  * fed a question back through AskOrchestratorTool (`AskOrchestratorTool.ts:83`)
  * and it lands in the delegating conversation's own queue. A pending-synthesis

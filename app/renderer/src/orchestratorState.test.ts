@@ -13,6 +13,7 @@ import {
   orchestratorWorkerState,
   reduceOrchestratorState,
   selectAgentModeSnapshot,
+  selectDockedOrchestratorWorkers,
   selectOrchestratorRosterLine,
   selectPromotedWorker,
   selectWorkerById,
@@ -109,6 +110,29 @@ test('a backgrounded worker reads BACKGROUND, and only while it is genuinely run
       worker({ status: 'completed', synthesisStatus: 'pending', isBackgrounded: true }),
     ),
   ).toBe('result-ready')
+})
+
+test('the docked roster keeps only live work and unresolved worker states', () => {
+  const visible = selectDockedOrchestratorWorkers([
+    worker({ agentId: 'running', status: 'running' }),
+    worker({ agentId: 'background', status: 'running', isBackgrounded: true }),
+    worker({ agentId: 'waiting', status: 'completed', handoffStatus: 'blocked' }),
+    worker({ agentId: 'result-ready', status: 'completed', synthesisStatus: 'pending' }),
+    worker({ agentId: 'failed', status: 'failed' }),
+    worker({ agentId: 'completed', status: 'completed' }),
+    worker({ agentId: 'reviewed', status: 'completed', synthesisStatus: 'synthesized' }),
+    worker({ agentId: 'stopped', status: 'killed' }),
+    worker({ agentId: 'resumable', status: 'completed', origin: 'prior', resumable: true }),
+    worker({ agentId: 'stale', status: 'completed', origin: 'prior', resumable: false }),
+  ])
+
+  expect(visible.map(item => item.agentId)).toEqual([
+    'running',
+    'background',
+    'waiting',
+    'result-ready',
+    'failed',
+  ])
 })
 
 test('the roster counts background separately, and still calls it in flight', () => {

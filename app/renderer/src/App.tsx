@@ -296,6 +296,7 @@ import {
   orchestratorPill,
   reduceOrchestratorState,
   selectAgentModeSnapshot,
+  selectDockedOrchestratorWorkers,
 } from './orchestratorState.js'
 import {
   createLeaseState,
@@ -4635,7 +4636,7 @@ export function SessionPane({
       <OrchestratorRoster
         compact={generating}
         onOpen={onOpenTasks}
-        workers={orchestratorWorkers}
+        workers={selectDockedOrchestratorWorkers(orchestratorWorkers)}
       />
 
       {/* Docked above the composer, in Chat.jsx order — live permission-request
