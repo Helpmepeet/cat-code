@@ -277,3 +277,44 @@ test('acknowledgement flushing batches across tasks rather than per delivered fr
   expect(queueSource).not.toContain('queueMicrotask')
   expect(queueSource).toContain('this.deps.setTimeout')
 })
+
+// The hardening smoke asserts the exposed bridge equals a hand-kept allowlist,
+// but it runs INSIDE Electron, so the environments most likely to add a bridge
+// method cannot run it. That gap let `openWorkspaceFile` sit unlisted from
+// 2026-08-13 through seven app/ commits, and `recordRenderCommit` repeat it the
+// same day. This compares the two lists as SOURCE TEXT so the drift is caught by
+// plain `bun test app/`, wherever it runs.
+test('the hardening allowlist matches the bridge preload actually exposes', () => {
+  const source = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
+  const start = source.indexOf('const bridge: CatCodeBridge = {')
+  const end = source.indexOf("contextBridge.exposeInMainWorld('catcode', bridge)")
+  if (start < 0 || end < 0) {
+    throw new Error('preload.ts no longer declares the bridge the way this test locates it')
+  }
+  const exposed = [
+    ...source.slice(start, end).matchAll(/^ {2}([A-Za-z][A-Za-z0-9]*)\(/gm),
+  ]
+    .map(match => match[1])
+    .sort()
+
+  const smoke = readFileSync(
+    new URL('../scripts/hardening-smoke.ts', import.meta.url),
+    'utf8',
+  )
+  const listStart = smoke.indexOf('const expectedBridgeKeys = [')
+  if (listStart < 0) {
+    throw new Error('hardening-smoke.ts no longer declares expectedBridgeKeys')
+  }
+  const listEnd = smoke.indexOf('].sort()', listStart)
+  const allowlisted = [
+    ...smoke.slice(listStart, listEnd).matchAll(/'([A-Za-z][A-Za-z0-9]*)'/g),
+  ]
+    .map(match => match[1])
+    .sort()
+
+  // Report both directions: an unlisted method is a widened surface, and a
+  // listed-but-absent one means the allowlist is describing a bridge that is
+  // gone. Either way the security gate is no longer checking what it claims to.
+  expect(exposed.filter(name => !allowlisted.includes(name))).toEqual([])
+  expect(allowlisted.filter(name => !exposed.includes(name))).toEqual([])
+})
