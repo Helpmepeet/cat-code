@@ -31,6 +31,7 @@ import {
   createWindowVisibilityTracker,
   isTerminalLifecycleFrame,
   parseVisibleSessions,
+  selectRendererWorkingSetKiB,
   sanitizeSaveFileName,
   selectTranscriptBackfillCandidates,
   supervisorEventToServerFrame,
@@ -111,6 +112,7 @@ describe('renderer health flight recorder', () => {
         eventLoopLagMs,
         visible: index !== 6,
         jsHeapUsedBytes: index === 6 ? null : (200 + index) * 1_048_576,
+        rendererWorkingSetKiB: index === 6 ? null : (100 + index) * 1_024,
       })
       if (monitor.response().shouldSample) sampled.push({ at: index * 5_000, eventLoopLagMs })
     }
@@ -135,11 +137,11 @@ describe('renderer health flight recorder', () => {
     expect(ring?.count).toBe(12)
     const entries = ring?.samples.split(';') ?? []
     expect(entries).toHaveLength(12)
-    expect(entries[0]).toBe('57000:4:201:v')
-    // Hidden window, V8 heap unavailable.
-    expect(entries[5]).toBe('32000:4:-:h')
+    expect(entries[0]).toBe('57000:4:201:103424:v')
+    // Hidden window, V8 heap and process memory unavailable.
+    expect(entries[5]).toBe('32000:4:-:-:h')
     // The reading 2s before the crash, carrying the lag spike no record held.
-    expect(entries[11]).toBe('2000:900:212:v')
+    expect(entries[11]).toBe('2000:900:212:114688:v')
   })
 
   test('the ring fits one record without the sanitizer rewriting it', () => {
@@ -171,21 +173,26 @@ describe('renderer health flight recorder', () => {
 
   test('drops whole readings rather than letting truncation corrupt one', () => {
     let clock = 0
-    const recorder = createRendererHealthFlightRecorder({ now: () => clock, maxBytes: 40 })
+    const recorder = createRendererHealthFlightRecorder({ now: () => clock, maxBytes: 50 })
     for (let index = 1; index <= 5; index++) {
       clock = index * 1_000
-      recorder.record({ eventLoopLagMs: 1, visible: true, jsHeapUsedBytes: 100 * 1_048_576 })
+      recorder.record({
+        eventLoopLagMs: 1,
+        visible: true,
+        jsHeapUsedBytes: 100 * 1_048_576,
+        rendererWorkingSetKiB: 100 * 1_024,
+      })
     }
     clock = 6_000
     const ring = recorder.flush()
 
-    expect(ring?.count).toBe(3)
-    expect(new TextEncoder().encode(ring?.samples ?? '').byteLength).toBeLessThanOrEqual(40)
+    expect(ring?.count).toBe(2)
+    expect(new TextEncoder().encode(ring?.samples ?? '').byteLength).toBeLessThanOrEqual(50)
     for (const entry of ring?.samples.split(';') ?? []) {
-      expect(entry).toMatch(/^\d+:\d+:(\d+|-):[vh]$/)
+      expect(entry).toMatch(/^\d+:\d+:(\d+|-):(\d+|-):[vh]$/)
     }
     // The readings nearest the failure are the ones kept.
-    expect(ring?.samples.endsWith('1000:1:100:v')).toBe(true)
+    expect(ring?.samples.endsWith('1000:1:100:102400:v')).toBe(true)
     expect(ring?.samples).not.toContain('5000:')
   })
 
@@ -194,16 +201,45 @@ describe('renderer health flight recorder', () => {
     const recorder = createRendererHealthFlightRecorder({ now: () => clock })
     for (let index = 1; index <= RENDERER_HEALTH_RING_CAPACITY + 3; index++) {
       clock = index * 5_000
-      recorder.record({ eventLoopLagMs: index, visible: true, jsHeapUsedBytes: null })
+      recorder.record({
+        eventLoopLagMs: index,
+        visible: true,
+        jsHeapUsedBytes: null,
+        rendererWorkingSetKiB: null,
+      })
     }
     expect(recorder.flush()?.count).toBe(RENDERER_HEALTH_RING_CAPACITY)
     // A second trigger for the same failure must not re-emit spent evidence.
     expect(recorder.flush()).toBeNull()
 
     clock += 5_000
-    recorder.record({ eventLoopLagMs: 7, visible: false, jsHeapUsedBytes: null })
-    expect(recorder.flush()).toEqual({ count: 1, samples: '0:7:-:h' })
+    recorder.record({
+      eventLoopLagMs: 7,
+      visible: false,
+      jsHeapUsedBytes: null,
+      rendererWorkingSetKiB: null,
+    })
+    expect(recorder.flush()).toEqual({ count: 1, samples: '0:7:-:-:h' })
   })
+})
+
+test('selectRendererWorkingSetKiB returns only the responding renderer process measurement', () => {
+  expect(
+    selectRendererWorkingSetKiB(
+      [
+        { pid: 101, memory: { workingSetSize: 200 } },
+        { pid: 202, memory: { workingSetSize: 400 } },
+      ],
+      202,
+    ),
+  ).toBe(400)
+  expect(selectRendererWorkingSetKiB([], 202)).toBeNull()
+  expect(
+    selectRendererWorkingSetKiB(
+      [{ pid: 202, memory: { workingSetSize: -1 } }],
+      202,
+    ),
+  ).toBeNull()
 })
 
 describe('window visibility transitions', () => {

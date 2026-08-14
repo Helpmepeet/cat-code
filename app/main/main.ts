@@ -64,6 +64,7 @@ import {
   isTerminalLifecycleFrame,
   parseVisibleSessions,
   RENDERER_RECOVERY_MAX_ATTEMPTS,
+  selectRendererWorkingSetKiB,
   type RendererDeathReason,
   type WindowVisibilityReason,
   SIDECAR_RUNTIME_ARGS,
@@ -1867,7 +1868,7 @@ function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.on(CH_DELIVERY_HEALTH_RESPONSE, (_e, payload: unknown) => {
+  ipcMain.on(CH_DELIVERY_HEALTH_RESPONSE, (event, payload: unknown) => {
     const item = parseRendererHealthResponse(payload)
     if (!item) return
     if (
@@ -1876,21 +1877,37 @@ function registerIpcHandlers(): void {
       item.rendererProcessInstanceId.length === 0
     ) return
     lastKnownRendererVisible = item.visible
+    const health = rendererHealth.response()
+    const rendererWorkingSetKiB = selectRendererWorkingSetKiB(
+      app.getAppMetrics(),
+      event.sender.getOSProcessId(),
+    )
     rendererHealthFlightRecorder.record({
       eventLoopLagMs: item.eventLoopLagMs,
       visible: item.visible,
       jsHeapUsedBytes: item.jsHeapUsedBytes,
+      rendererWorkingSetKiB,
     })
-    const health = rendererHealth.response()
-    if (health.shouldSample) {
-      logOperational(health.recovered ? 'renderer.health.recovered' : 'renderer.health.sample', 'info', {
+    if (!health.shouldSample) return
+    logOperational(
+      health.recovered
+        ? 'renderer.health.recovered'
+        : 'renderer.health.sample',
+      'info',
+      {
         sessions: item.watermarks.length,
         eventLoopLagMs: item.eventLoopLagMs,
         visible: item.visible,
         jsHeapUsedBytes: item.jsHeapUsedBytes,
-        ...(health.recovered ? { missed: health.priorMisses, durationMs: health.outageDurationMs } : {}),
-      })
-    }
+        rendererWorkingSetKiB,
+        ...(health.recovered
+          ? {
+              missed: health.priorMisses,
+              durationMs: health.outageDurationMs,
+            }
+          : {}),
+      },
+    )
   })
 
   ipcMain.on(CH_RENDERER_FAULT, (_e, payload: unknown) => {

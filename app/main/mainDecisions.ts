@@ -157,6 +157,7 @@ export type RendererHealthReading = Readonly<{
   eventLoopLagMs: number
   visible: boolean
   jsHeapUsedBytes: number | null
+  rendererWorkingSetKiB: number | null
 }>
 
 export type RendererHealthFlightRecorderFlush = Readonly<{
@@ -176,8 +177,8 @@ export type RendererHealthFlightRecorder = {
 }
 
 /**
- * One reading as `<ageMs>:<lagMs>:<jsHeapMiB>:<v|h>`, age measured back from
- * the flush. Unknown V8 heap is `-`.
+ * One reading as `<ageMs>:<lagMs>:<jsHeapMiB>:<workingSetKiB>:<v|h>`, age measured
+ * back from the flush. Unknown values are `-`.
  *
  * ASCII by construction, so the byte budget below can count characters, and
  * free of the shapes `sanitizeOperationalText` rewrites (no path separator, no
@@ -187,8 +188,27 @@ function encodeHealthReading(ageMs: number, reading: RendererHealthReading): str
   const heapMiB = reading.jsHeapUsedBytes === null
     ? '-'
     : String(Math.round(reading.jsHeapUsedBytes / 1_048_576))
+  const workingSetKiB = reading.rendererWorkingSetKiB === null
+    ? '-'
+    : String(reading.rendererWorkingSetKiB)
   const age = Math.max(0, Math.round(ageMs))
-  return `${age}:${Math.round(reading.eventLoopLagMs)}:${heapMiB}:${reading.visible ? 'v' : 'h'}`
+  return `${age}:${Math.round(reading.eventLoopLagMs)}:${heapMiB}:${workingSetKiB}:${reading.visible ? 'v' : 'h'}`
+}
+
+export function selectRendererWorkingSetKiB(
+  metrics: readonly Readonly<{
+    pid: number
+    memory: Readonly<{ workingSetSize: number }>
+  }>[],
+  rendererPid: number | null,
+): number | null {
+  if (rendererPid === null) return null
+  const workingSetKiB = metrics.find(metric => metric.pid === rendererPid)
+    ?.memory.workingSetSize
+  if (typeof workingSetKiB !== 'number') return null
+  return Number.isSafeInteger(workingSetKiB) && workingSetKiB >= 0
+    ? workingSetKiB
+    : null
 }
 
 /**

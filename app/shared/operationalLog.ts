@@ -95,7 +95,7 @@ const OPERATIONAL_FIELD_KEYS = new Set([
   'arch', 'category', 'code', 'count', 'durationMs', 'elapsedMs', 'eventLoopLagMs', 'exitCode',
   'frame', 'messageCount', 'missed', 'navigation', 'packaged', 'pid',
   'platform', 'queuedBytes', 'reason', 'role', 'samples', 'sessions', 'source', 'version',
-  'signal', 'expected', 'visible', 'jsHeapUsedBytes', 'phase',
+  'signal', 'expected', 'visible', 'jsHeapUsedBytes', 'rendererWorkingSetKiB', 'phase',
 ])
 
 /**
@@ -127,10 +127,10 @@ const OPERATIONAL_EVENT_FIELD_KEYS: Partial<Record<OperationalEvent, readonly st
   'renderer.recovery.succeeded': ['pid'],
   'renderer.recovery.exhausted': ['count', 'reason'],
   'renderer.responsive': ['durationMs'],
-  'renderer.health.sample': ['sessions', 'eventLoopLagMs', 'visible', 'jsHeapUsedBytes'],
+  'renderer.health.sample': ['sessions', 'eventLoopLagMs', 'visible', 'jsHeapUsedBytes', 'rendererWorkingSetKiB'],
   'renderer.health.missed': ['missed', 'elapsedMs', 'visible'],
   'renderer.health.unavailable': ['missed', 'elapsedMs', 'visible'],
-  'renderer.health.recovered': ['sessions', 'missed', 'eventLoopLagMs', 'durationMs', 'visible', 'jsHeapUsedBytes'],
+  'renderer.health.recovered': ['sessions', 'missed', 'eventLoopLagMs', 'durationMs', 'visible', 'jsHeapUsedBytes', 'rendererWorkingSetKiB'],
   // `samples` is the health ring, encoded as one capped string because this
   // vocabulary admits no arrays: see `createRendererHealthFlightRecorder`.
   'renderer.health.flight_recorder': ['reason', 'count', 'samples'],
