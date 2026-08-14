@@ -138,3 +138,73 @@ footprint does. Fresh launch is around 850; the 2026-08-14 morning crash was at
 
 Do not open DevTools to investigate this. It is a mutating probe and it killed a
 renderer earlier the same day.
+
+## What to do next, in order
+
+### 1. Finish the check this session started: does the pane's DOM unmount when a session parks?
+
+This is the fork the whole memory question now turns on, it is answerable by
+source inspection plus one measurement, and everything below depends on it. A
+parked session leaves tab membership (`foldTabMembership` in
+`app/renderer/src/shellState.ts`), so the pane should stop rendering — but that
+was not confirmed, and the measured numbers do not obviously agree with it.
+
+Three outcomes, three different projects:
+
+- **DOM stays mounted.** Cheapest fix in the whole investigation: stop rendering
+  parked sessions. No rendering rework at all.
+- **DOM unmounts and PartitionAlloc falls.** Then the retained 3.9 GB was live
+  sessions after all, the growth is a live-rendering cost, and **virtualization
+  is the fix** on evidence.
+- **DOM unmounts and PartitionAlloc does NOT fall.** Then memory is retained
+  below the application layer — fragmentation, detached trees pinned by small
+  JavaScript retainers, or an allocator that will not return pages. Neither
+  store eviction nor virtualization helps, and this escalates to §3.
+
+Do not skip to a fix before this resolves. Two fixes have already been proposed
+and withdrawn today for want of exactly this answer.
+
+### 2. Release the renderer-side projection when a session parks
+
+Independently of §1, a closed-but-restorable session holds its full projected
+transcript and raw message log in the renderer to serve a restore offer, while
+the durable source is the engine transcript on disk. Re-deriving on restore is
+the obvious trade and needs no rendering change.
+
+Test it the way §1 is tested: park a session, watch dirty bytes and region count.
+
+### 3. If §1 lands on the third outcome: Chromium memory-infra tracing
+
+`contentTracing.startRecording()` with a `memory_dump_config`, scoped to the
+renderer, during one controlled reproduction. This separates V8, Blink
+partitions and discardable memory by component, and it works without DevTools.
+It is the only instrument that can subdivide PartitionAlloc; external tools
+explicitly cannot.
+
+### 4. Re-test the leak fix on a path that actually fires
+
+`287cb9bb` was never exercised (see above). It needs a session that is genuinely
+not restorable — no engine session id, or a transcript that no longer exists.
+Until then its effect is unmeasured, not disproven.
+
+### 5. The freeze, which none of the above touches
+
+Unchanged and unexplained. The one lead remains a renders-committed counter in
+the health payload, incremented in the post-commit effect at
+`app/renderer/src/App.tsx:610`. One integer, and it distinguishes the three
+candidate failures that are currently indistinguishable in every log.
+
+### 6. The logging debts
+
+From `docs/reports/2026-08-14-desktop-logging-feedback.md`, in its own priority
+order: delete or rename `heapUsedBytes` (it misled two investigations and cost
+this one hours), log real process memory from Electron main so a growth curve
+exists when nobody is at the keyboard, and stop the delivery trace evicting the
+evidence for the incident it is recording.
+
+### Deliberately not first
+
+**Virtualization**, until §1 rules out the third outcome. **The quadratic array
+copying** in the raw log and transcript projector: real, and it churns the
+compartment that grows, but it is JavaScript-side work against a 182 MB ceiling,
+so it cannot be the main event.
