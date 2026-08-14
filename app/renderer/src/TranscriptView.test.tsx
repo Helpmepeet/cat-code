@@ -214,6 +214,24 @@ test('P4-18c: a fenced code block renders framed + copyable with syntax highligh
   expect(html).toContain('ts') // floating language label
 })
 
+test('bounds a giant assistant response before react-markdown creates its full tree', () => {
+  const content = Array.from(
+    { length: 1_000 },
+    (_, index) => `Paragraph ${index + 1}`,
+  ).join('\n\n')
+  const html = render({
+    ...blockSource,
+    id: 's:m:0:giant',
+    kind: 'assistant-text',
+    role: 'assistant',
+    content,
+  })
+
+  expect(html).toContain('Paragraph 1')
+  expect(html).not.toContain('Paragraph 1000')
+  expect(html).toContain('aria-hidden="true"')
+})
+
 test('a blockquote gets its own per-quote copy control', () => {
   const html = render({
     ...blockSource,
