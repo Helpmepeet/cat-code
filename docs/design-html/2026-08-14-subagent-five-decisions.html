@@ -1,0 +1,2860 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Subagent surface · five decisions</title>
+<style>
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 100 1000;
+  src: url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'DM Mono';
+  font-style: normal;
+  font-weight: 400;
+  src: url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'DM Mono';
+  font-style: normal;
+  font-weight: 500;
+  src: url('../../app/renderer/src/assets/fonts/DMMono-Medium.woff2') format('woff2');
+}
+
+* { box-sizing: border-box; }
+html { background: #09090b; }
+body {
+  margin: 0;
+  padding: 56px 32px 120px;
+  background: #09090b;
+}
+
+/* ── chrome ─────────────────────────────────────────────────────────────── */
+
+.x-page { width: 1328px; margin: 0 auto; }
+
+.x-title {
+  font: 400 9.5px/1 "DM Mono", ui-monospace, Menlo, monospace;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #6b6b73;
+  margin: 0 0 48px;
+}
+
+.x-group {
+  margin: 0 0 10px;
+  padding: 0 0 5px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+  font: 400 10px/1.1 "DM Mono", ui-monospace, Menlo, monospace;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #8a8a92;
+}
+
+.x-pairhead,
+.x-pair {
+  display: grid;
+  grid-template-columns: 640px 640px;
+  gap: 48px;
+  align-items: start;
+}
+
+.x-pairhead { margin: 32px 0 9px; }
+
+.x-side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font: 400 9.5px/1 "DM Mono", ui-monospace, Menlo, monospace;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #55555c;
+}
+
+.x-sub {
+  margin: 0 0 7px;
+  font: 400 9px/1 "DM Mono", ui-monospace, Menlo, monospace;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #46464c;
+}
+
+.x-cost {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  padding: 2px 5px;
+  font-size: 8.5px;
+  letter-spacing: 0.14em;
+  color: #8a8a92;
+}
+
+.x-gap-lg { height: 96px; }
+.x-cell { width: 640px; }
+.x-cell > * + * { margin-top: 10px; }
+.x-cell > * + .x-sub { margin-top: 22px; }
+
+/* ── specimen: app values only ──────────────────────────────────────────── */
+
+.card {
+  width: 100%;
+  overflow: hidden;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.025);
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+}
+
+.mark {
+  width: 16px;
+  flex: none;
+  text-align: center;
+  font-size: 13px;
+}
+
+.word {
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.fam-agent { color: #f472b6; }
+.fam-control { color: #a78bfa; }
+.fam-other { color: #a1a1aa; }
+
+.target {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "DM Mono", ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  color: #f4f4f5;
+}
+
+.badge {
+  flex: none;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "DM Mono", ui-monospace, Menlo, monospace;
+  font-size: 10px;
+  color: #98989f;
+}
+
+.badge-live { color: #60a5fa; }
+
+.dot {
+  height: 6px;
+  width: 6px;
+  flex: none;
+  border-radius: 9999px;
+}
+
+.dot-good { background: #4ade80; }
+
+.strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 6px 12px;
+}
+
+.roledot {
+  height: 6px;
+  width: 6px;
+  flex: none;
+  border-radius: 9999px;
+}
+
+.role-sky { background: #7dd3fc; }
+.role-blue { background: #93c5fd; }
+.role-violet { background: #c4b5fd; }
+
+.handle {
+  flex: none;
+  white-space: nowrap;
+  font-family: "DM Mono", ui-monospace, Menlo, monospace;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #e9d5ff;
+}
+
+.wtype {
+  flex: none;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.type-sky { color: #7dd3fc; }
+.type-blue { color: #93c5fd; }
+.type-violet { color: #c4b5fd; }
+
+.statelabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.state-info { color: #60a5fa; }
+.state-good { color: #4ade80; }
+
+.pip {
+  height: 8px;
+  width: 8px;
+  flex: none;
+  border-radius: 9999px;
+}
+
+.pip-sm { height: 6px; width: 6px; }
+
+.pip-fill-good { background: #4ade80; }
+.pip-fill-warn { background: #fbbf24; }
+.pip-fill-danger { background: #f87171; }
+.pip-ring-info { border: 1.6px solid #60a5fa; background: transparent; }
+.pip-ring-warn { border: 1.6px solid #fbbf24; background: transparent; }
+.pip-ring-purple { border: 1.6px solid #c084fc; background: transparent; }
+.pip-pulse-info { background: #60a5fa; animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+
+@keyframes pulse { 50% { opacity: 0.5; } }
+
+.body {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(0, 0, 0, 0.28);
+  padding: 4px 12px 10px;
+}
+
+.col6 { display: flex; flex-direction: column; gap: 6px; }
+.col14 { display: flex; flex-direction: column; gap: 14px; }
+
+.nest {
+  border-left: 1px solid rgba(244, 114, 182, 0.2);
+  padding-left: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.reslabel {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #98989f;
+}
+
+.restext {
+  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #a1a1aa;
+}
+
+.stats {
+  font-family: "DM Mono", ui-monospace, Menlo, monospace;
+  font-size: 10px;
+  color: #98989f;
+}
+
+.trace {
+  font-family: "DM Mono", ui-monospace, Menlo, monospace;
+  font-size: 10px;
+  color: #75757b;
+}
+
+.raw {
+  margin: 0;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  font-family: "DM Mono", ui-monospace, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: #98989f;
+}
+
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.018);
+  padding: 6px 12px;
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.notice-text {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: #a1a1aa;
+}
+
+
+
+
+/* dialog */
+
+.dlg {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: #0a0a0c;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.dlg-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 14px 18px;
+}
+
+.dlg-title { font-size: 14px; font-weight: 600; color: #f4f4f5; }
+.dlg-sub { margin-top: 2px; font-size: 12px; color: #98989f; }
+
+.dlg-x {
+  display: flex;
+  height: 28px;
+  width: 28px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  font-size: 18px;
+  color: #98989f;
+}
+
+.dlg-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 8px 14px 0;
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1.5px solid transparent;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #98989f;
+}
+
+.tab-on { font-weight: 600; color: #f4f4f5; }
+.tab-on-neutral { border-bottom-color: #a1a1aa; }
+.tab-on-worker { border-bottom-color: #c084fc; }
+
+.tab-n {
+  font-family: "DM Mono", ui-monospace, Menlo, monospace;
+  font-size: 10px;
+  color: rgba(152, 152, 159, 0.7);
+}
+
+.tab-n-neutral { color: #a1a1aa; }
+.tab-n-worker { color: #c084fc; }
+
+.dlg-list { padding: 6px 8px; }
+
+.grouphead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 10px 6px;
+}
+
+.grouphead-word {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #98989f;
+}
+
+.grouphead-rule { height: 1px; flex: 1; background: rgba(255, 255, 255, 0.06); }
+.grouphead-n { font-size: 10.5px; color: rgba(152, 152, 159, 0.6); }
+
+.trow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.trow-term { opacity: 0.7; }
+
+.tmark { display: flex; width: 14px; flex: none; justify-content: center; }
+
+.spinner {
+  display: inline-block;
+  height: 10px;
+  width: 10px;
+  flex: none;
+  border-radius: 9999px;
+  border: 1.5px solid rgba(255, 255, 255, 0.06);
+  border-top-color: #a1a1aa;
+}
+
+.tdot { display: inline-block; height: 8px; width: 8px; flex: none; border-radius: 9999px; }
+.tdot-warn { background: #fbbf24; }
+.tdot-good { background: #4ade80; }
+.tdot-danger { background: #f87171; }
+.tdot-purple { background: #c084fc; }
+
+.kind {
+  flex: none;
+  border-radius: 4px;
+  border: 1px solid;
+  padding: 2px 6px;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.kind-agent { color: #c084fc; border-color: rgba(192, 132, 252, 0.35); }
+.kind-bash { color: #5eead4; border-color: rgba(94, 234, 212, 0.35); }
+.kind-dream { color: #fbbf24; border-color: rgba(251, 191, 36, 0.35); }
+.kind-workflow { color: #4ade80; border-color: rgba(74, 222, 128, 0.35); }
+
+.tlabel {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: #f4f4f5;
+}
+
+.tlabel-mono {
+  font-family: "DM Mono", ui-monospace, Menlo, monospace;
+  color: #c4c4c8;
+}
+
+.tstate {
+  flex: none;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "DM Mono", ui-monospace, Menlo, monospace;
+  font-size: 11px;
+  color: #98989f;
+}
+
+.tstate-warn { color: #fbbf24; }
+.tstate-danger { color: #fca5a5; }
+
+.wsummary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 10px 10px 8px;
+  font-size: 11px;
+  color: #a1a1aa;
+}
+
+.wsummary-item { display: inline-flex; align-items: center; gap: 6px; }
+.wsummary-orch { color: #c084fc; }
+
+.seclabel {
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #52525b;
+  padding: 8px 10px 4px;
+}
+
+.wrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.wdesc {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: #98989f;
+}
+
+.wtypelabel {
+  flex: none;
+  white-space: nowrap;
+  font-family: "DM Mono", ui-monospace, Menlo, monospace;
+  font-size: 10.5px;
+  font-weight: 500;
+}
+
+.wchild { padding-left: 26px; }
+
+.wparent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px 2px;
+  font-family: "DM Mono", ui-monospace, Menlo, monospace;
+  font-size: 10px;
+  color: #75757b;
+}
+
+.empty { padding: 40px 16px; text-align: center; }
+.empty-lead { margin-bottom: 4px; font-size: 13px; font-weight: 500; color: #98989f; }
+.empty-note { font-size: 11.5px; color: rgba(152, 152, 159, 0.7); }
+
+.dlg-foot {
+  display: flex;
+  gap: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 8px 16px;
+  font-family: "DM Mono", ui-monospace, Menlo, monospace;
+  font-size: 10.5px;
+  color: #98989f;
+}
+
+.foot-key { color: #a1a1aa; }
+.foot-right { margin-left: auto; }
+
+/* permission card */
+
+.perm {
+  border-left: 2px solid #f472b6;
+  background: rgba(244, 244, 245, 0.04);
+  padding: 12px 16px;
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.perm-kicker { display: flex; align-items: center; gap: 8px; }
+
+.perm-glyph { display: flex; color: #f472b6; font-size: 13px; line-height: 1; }
+
+.perm-word {
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #f472b6;
+}
+
+.perm-worker {
+  border-radius: 4px;
+  background: rgba(167, 139, 250, 0.1);
+  padding: 2px 6px;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #c4b5fd;
+}
+
+.perm-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  margin: 8px 0 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #f4f4f5;
+}
+
+.perm-code {
+  border-radius: 4px;
+  background: rgba(244, 114, 182, 0.1);
+  padding: 2px 6px;
+  font-family: "DM Mono", ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  color: #f472b6;
+}
+
+.perm-sub { margin: 4px 0 0; font-size: 11px; color: #98989f; }
+
+.perm-id {
+  font-family: "DM Mono", ui-monospace, Menlo, monospace;
+  color: #c4b5fd;
+}
+
+.perm-idrow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.perm-task { margin: 4px 0 0; font-size: 11.5px; color: #a1a1aa; }
+
+.perm-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 5px;
+  border: 1px solid rgba(125, 211, 252, 0.3);
+  background: rgba(125, 211, 252, 0.1);
+  padding: 1px 6px;
+  font-family: "DM Mono", ui-monospace, Menlo, monospace;
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #7dd3fc;
+}
+</style>
+</head>
+<body>
+<div class="x-page">
+
+<p class="x-title">Subagent surface · five decisions</p>
+
+<!-- ═══ 1 ═══════════════════════════════════════════════════════════════ -->
+
+<p class="x-group">1 · Folded subagent output</p>
+
+<div class="x-pairhead"><span class="x-side">Today</span><span class="x-side">1-A · Silent</span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-agent">◆</span>
+        <span class="word fam-agent">Agent</span>
+        <span class="target">Find every caller of the retry helper</span>
+        <span class="badge">12 tool calls · 41.2k tokens</span>
+      </div>
+      <div class="strip">
+        <span class="roledot role-sky"></span>
+        <span class="handle">Ada</span>
+        <span class="wtype type-sky">Explore</span>
+        <span class="statelabel state-good"><span class="pip pip-fill-good"></span>Completed</span>
+      </div>
+    </div>
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-other">•</span>
+        <span class="word fam-other">Tool</span>
+        <span class="target">TaskOutput</span>
+        <span class="dot dot-good"></span>
+      </div>
+      <div class="body">
+        <pre class="raw">&lt;retrieval_status&gt;success&lt;/retrieval_status&gt;&lt;task_id&gt;bc4a1e02-77d3-4f18-9a55-2c0be1d44f30&lt;/task_id&gt;&lt;output&gt;Four callers, all in the request layer. Two pass the default backoff, two override it.&lt;/output&gt;</pre>
+      </div>
+    </div>
+  </div>
+  <div class="x-cell">
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-agent">◆</span>
+        <span class="word fam-agent">Agent</span>
+        <span class="target">Find every caller of the retry helper</span>
+      </div>
+      <div class="strip">
+        <span class="roledot role-sky"></span>
+        <span class="handle">Ada</span>
+        <span class="wtype type-sky">Explore</span>
+        <span class="statelabel state-good"><span class="pip pip-fill-good"></span>Completed</span>
+      </div>
+      <div class="body">
+        <div class="col6">
+          <span class="reslabel">Result</span>
+          <div class="restext">Four callers, all in the request layer. Two pass the default backoff, two override it.</div>
+          <span class="stats">~41.2k tokens · 12 tools · 3m 08s</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="x-pairhead"><span class="x-side">Today</span><span class="x-side">1-B · Body line</span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-agent">◆</span>
+        <span class="word fam-agent">Agent</span>
+        <span class="target">Find every caller of the retry helper</span>
+        <span class="badge">12 tool calls · 41.2k tokens</span>
+      </div>
+      <div class="strip">
+        <span class="roledot role-sky"></span>
+        <span class="handle">Ada</span>
+        <span class="wtype type-sky">Explore</span>
+        <span class="statelabel state-good"><span class="pip pip-fill-good"></span>Completed</span>
+      </div>
+    </div>
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-other">•</span>
+        <span class="word fam-other">Tool</span>
+        <span class="target">TaskOutput</span>
+        <span class="dot dot-good"></span>
+      </div>
+      <div class="body">
+        <pre class="raw">&lt;retrieval_status&gt;success&lt;/retrieval_status&gt;&lt;task_id&gt;bc4a1e02-77d3-4f18-9a55-2c0be1d44f30&lt;/task_id&gt;&lt;output&gt;Four callers, all in the request layer. Two pass the default backoff, two override it.&lt;/output&gt;</pre>
+      </div>
+    </div>
+  </div>
+  <div class="x-cell">
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-agent">◆</span>
+        <span class="word fam-agent">Agent</span>
+        <span class="target">Find every caller of the retry helper</span>
+      </div>
+      <div class="strip">
+        <span class="roledot role-sky"></span>
+        <span class="handle">Ada</span>
+        <span class="wtype type-sky">Explore</span>
+        <span class="statelabel state-good"><span class="pip pip-fill-good"></span>Completed</span>
+      </div>
+      <div class="body">
+        <div class="col6">
+          <span class="reslabel">Result</span>
+          <div class="restext">Four callers, all in the request layer. Two pass the default backoff, two override it.</div>
+          <span class="stats">~41.2k tokens · 12 tools · 3m 08s</span>
+          <span class="trace">read by the assistant</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="x-pairhead"><span class="x-side">Today</span><span class="x-side">1-C · Header mark</span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-agent">◆</span>
+        <span class="word fam-agent">Agent</span>
+        <span class="target">Find every caller of the retry helper</span>
+        <span class="badge">12 tool calls · 41.2k tokens</span>
+      </div>
+      <div class="strip">
+        <span class="roledot role-sky"></span>
+        <span class="handle">Ada</span>
+        <span class="wtype type-sky">Explore</span>
+        <span class="statelabel state-good"><span class="pip pip-fill-good"></span>Completed</span>
+      </div>
+    </div>
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-other">•</span>
+        <span class="word fam-other">Tool</span>
+        <span class="target">TaskOutput</span>
+        <span class="dot dot-good"></span>
+      </div>
+      <div class="body">
+        <pre class="raw">&lt;retrieval_status&gt;success&lt;/retrieval_status&gt;&lt;task_id&gt;bc4a1e02-77d3-4f18-9a55-2c0be1d44f30&lt;/task_id&gt;&lt;output&gt;Four callers, all in the request layer. Two pass the default backoff, two override it.&lt;/output&gt;</pre>
+      </div>
+    </div>
+  </div>
+  <div class="x-cell">
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-agent">◆</span>
+        <span class="word fam-agent">Agent</span>
+        <span class="target">Find every caller of the retry helper</span>
+        <span class="badge">read</span>
+      </div>
+      <div class="strip">
+        <span class="roledot role-sky"></span>
+        <span class="handle">Ada</span>
+        <span class="wtype type-sky">Explore</span>
+        <span class="statelabel state-good"><span class="pip pip-fill-good"></span>Completed</span>
+      </div>
+      <div class="body">
+        <div class="col6">
+          <span class="reslabel">Result</span>
+          <div class="restext">Four callers, all in the request layer. Two pass the default backoff, two override it.</div>
+          <span class="stats">~41.2k tokens · 12 tools · 3m 08s</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="x-pairhead"><span class="x-side">Today</span><span class="x-side">1-D · Terminal log</span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-agent">◆</span>
+        <span class="word fam-agent">Agent</span>
+        <span class="target">Find every caller of the retry helper</span>
+        <span class="badge">12 tool calls · 41.2k tokens</span>
+      </div>
+      <div class="strip">
+        <span class="roledot role-sky"></span>
+        <span class="handle">Ada</span>
+        <span class="wtype type-sky">Explore</span>
+        <span class="statelabel state-good"><span class="pip pip-fill-good"></span>Completed</span>
+      </div>
+    </div>
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-other">•</span>
+        <span class="word fam-other">Tool</span>
+        <span class="target">TaskOutput</span>
+        <span class="dot dot-good"></span>
+      </div>
+      <div class="body">
+        <pre class="raw">&lt;retrieval_status&gt;success&lt;/retrieval_status&gt;&lt;task_id&gt;bc4a1e02-77d3-4f18-9a55-2c0be1d44f30&lt;/task_id&gt;&lt;output&gt;Four callers, all in the request layer. Two pass the default backoff, two override it.&lt;/output&gt;</pre>
+      </div>
+    </div>
+  </div>
+  <div class="x-cell">
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-agent">◆</span>
+        <span class="word fam-agent">Agent</span>
+        <span class="target">Find every caller of the retry helper</span>
+        <span class="badge">backgrounded</span>
+      </div>
+      <div class="strip">
+        <span class="roledot role-sky"></span>
+        <span class="handle">Ada</span>
+        <span class="wtype type-sky">Explore</span>
+      </div>
+    </div>
+    <div class="notice">
+      <span class="dot dot-good"></span>
+      <span class="notice-text">Agent @Ada completed</span>
+    </div>
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-other">•</span>
+        <span class="word fam-other">Tool</span>
+        <span class="target">Task Output</span>
+        <span class="badge">bc4a1e02</span>
+        <span class="dot dot-good"></span>
+      </div>
+      <div class="body">
+        <div class="col6">
+          <span class="reslabel">Find every caller of the retry helper</span>
+          <div class="restext">Four callers, all in the request layer. Two pass the default backoff, two override it.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="x-pairhead"><span class="x-side">Today · No card on screen</span><span class="x-side">1-Fallback · No card on screen</span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-other">•</span>
+        <span class="word fam-other">Tool</span>
+        <span class="target">TaskOutput</span>
+        <span class="dot dot-good"></span>
+      </div>
+      <div class="body">
+        <pre class="raw">&lt;retrieval_status&gt;success&lt;/retrieval_status&gt;&lt;task_id&gt;bc4a1e02-77d3-4f18-9a55-2c0be1d44f30&lt;/task_id&gt;&lt;output&gt;Four callers, all in the request layer. Two pass the default backoff, two override it.&lt;/output&gt;</pre>
+      </div>
+    </div>
+  </div>
+  <div class="x-cell">
+    <div class="notice">
+      <span class="dot dot-good"></span>
+      <span class="notice-text">Agent @Ada completed</span>
+    </div>
+  </div>
+</div>
+
+<div class="x-gap-lg"></div>
+
+<!-- ═══ 2 ═══════════════════════════════════════════════════════════════ -->
+
+<p class="x-group">2 · A resumed agent's second life</p>
+
+<div class="x-pairhead"><span class="x-side">Today</span><span class="x-side">2-A · New card, named by worker</span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-agent">◆</span>
+        <span class="word fam-agent">Agent</span>
+        <span class="target">Summarize the release notes</span>
+        <span class="badge">9 tool calls · 22.4k tokens</span>
+      </div>
+      <div class="strip">
+        <span class="roledot role-blue"></span>
+        <span class="handle">Rue</span>
+        <span class="wtype type-blue">Agent</span>
+        <span class="statelabel state-good"><span class="pip pip-fill-good"></span>Completed</span>
+      </div>
+      <div class="body">
+        <div class="col6">
+          <span class="reslabel">Result</span>
+          <div class="restext">Three user-facing changes and one config rename. Nothing breaking.</div>
+          <span class="stats">~22.4k tokens · 9 tools · 1m 47s</span>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-control">◇</span>
+        <span class="word fam-control">Agent</span>
+        <span class="target">resume agent_01j9x4m2q8</span>
+        <span class="dot dot-good"></span>
+      </div>
+    </div>
+    <div class="notice">
+      <span class="dot dot-good"></span>
+      <span class="notice-text">Agent @Rue completed</span>
+    </div>
+  </div>
+  <div class="x-cell">
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-agent">◆</span>
+        <span class="word fam-agent">Agent</span>
+        <span class="target">Summarize the release notes</span>
+      </div>
+      <div class="strip">
+        <span class="roledot role-blue"></span>
+        <span class="handle">Rue</span>
+        <span class="wtype type-blue">Agent</span>
+        <span class="statelabel state-good"><span class="pip pip-fill-good"></span>Completed</span>
+      </div>
+      <div class="body">
+        <div class="col6">
+          <span class="reslabel">Result</span>
+          <div class="restext">Three user-facing changes and one config rename. Nothing breaking.</div>
+          <span class="stats">~22.4k tokens · 9 tools · 1m 47s</span>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-control">◇</span>
+        <span class="word fam-control">Agent</span>
+        <span class="target">resume @Rue</span>
+      </div>
+      <div class="strip">
+        <span class="roledot role-blue"></span>
+        <span class="handle">Rue</span>
+        <span class="wtype type-blue">Agent</span>
+        <span class="statelabel state-good"><span class="pip pip-fill-good"></span>Completed</span>
+      </div>
+      <div class="body">
+        <div class="col6">
+          <span class="reslabel">Result</span>
+          <div class="restext">Adding the migration guide: the config rename needs a manual edit in older projects.</div>
+          <span class="stats">~9.5k tokens · 5 tools · 52s</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="x-pairhead"><span class="x-side">Today</span><span class="x-side">2-B · New card, named by follow-up</span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-agent">◆</span>
+        <span class="word fam-agent">Agent</span>
+        <span class="target">Summarize the release notes</span>
+        <span class="badge">9 tool calls · 22.4k tokens</span>
+      </div>
+      <div class="strip">
+        <span class="roledot role-blue"></span>
+        <span class="handle">Rue</span>
+        <span class="wtype type-blue">Agent</span>
+        <span class="statelabel state-good"><span class="pip pip-fill-good"></span>Completed</span>
+      </div>
+      <div class="body">
+        <div class="col6">
+          <span class="reslabel">Result</span>
+          <div class="restext">Three user-facing changes and one config rename. Nothing breaking.</div>
+          <span class="stats">~22.4k tokens · 9 tools · 1m 47s</span>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-control">◇</span>
+        <span class="word fam-control">Agent</span>
+        <span class="target">resume agent_01j9x4m2q8</span>
+        <span class="dot dot-good"></span>
+      </div>
+    </div>
+    <div class="notice">
+      <span class="dot dot-good"></span>
+      <span class="notice-text">Agent @Rue completed</span>
+    </div>
+  </div>
+  <div class="x-cell">
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-agent">◆</span>
+        <span class="word fam-agent">Agent</span>
+        <span class="target">Summarize the release notes</span>
+      </div>
+      <div class="strip">
+        <span class="roledot role-blue"></span>
+        <span class="handle">Rue</span>
+        <span class="wtype type-blue">Agent</span>
+        <span class="statelabel state-good"><span class="pip pip-fill-good"></span>Completed</span>
+      </div>
+      <div class="body">
+        <div class="col6">
+          <span class="reslabel">Result</span>
+          <div class="restext">Three user-facing changes and one config rename. Nothing breaking.</div>
+          <span class="stats">~22.4k tokens · 9 tools · 1m 47s</span>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-control">◇</span>
+        <span class="word fam-control">Agent</span>
+        <span class="target">Add the migration guide for the config rename</span>
+      </div>
+      <div class="strip">
+        <span class="roledot role-blue"></span>
+        <span class="handle">Rue</span>
+        <span class="wtype type-blue">Agent</span>
+        <span class="statelabel state-good"><span class="pip pip-fill-good"></span>Completed</span>
+      </div>
+      <div class="body">
+        <div class="col6">
+          <span class="reslabel">Result</span>
+          <div class="restext">Adding the migration guide: the config rename needs a manual edit in older projects.</div>
+          <span class="stats">~9.5k tokens · 5 tools · 52s</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="x-pairhead"><span class="x-side">Today</span><span class="x-side">2-C · Terminal log</span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-agent">◆</span>
+        <span class="word fam-agent">Agent</span>
+        <span class="target">Summarize the release notes</span>
+        <span class="badge">9 tool calls · 22.4k tokens</span>
+      </div>
+      <div class="strip">
+        <span class="roledot role-blue"></span>
+        <span class="handle">Rue</span>
+        <span class="wtype type-blue">Agent</span>
+        <span class="statelabel state-good"><span class="pip pip-fill-good"></span>Completed</span>
+      </div>
+      <div class="body">
+        <div class="col6">
+          <span class="reslabel">Result</span>
+          <div class="restext">Three user-facing changes and one config rename. Nothing breaking.</div>
+          <span class="stats">~22.4k tokens · 9 tools · 1m 47s</span>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-control">◇</span>
+        <span class="word fam-control">Agent</span>
+        <span class="target">resume agent_01j9x4m2q8</span>
+        <span class="dot dot-good"></span>
+      </div>
+    </div>
+    <div class="notice">
+      <span class="dot dot-good"></span>
+      <span class="notice-text">Agent @Rue completed</span>
+    </div>
+  </div>
+  <div class="x-cell">
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-agent">◆</span>
+        <span class="word fam-agent">Agent</span>
+        <span class="target">Summarize the release notes</span>
+        <span class="badge">backgrounded</span>
+      </div>
+      <div class="strip">
+        <span class="roledot role-blue"></span>
+        <span class="handle">Rue</span>
+        <span class="wtype type-blue">Agent</span>
+      </div>
+    </div>
+    <div class="notice">
+      <span class="dot dot-good"></span>
+      <span class="notice-text">Agent @Rue completed</span>
+    </div>
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-other">•</span>
+        <span class="word fam-other">Tool</span>
+        <span class="target">Task Output</span>
+        <span class="badge">9f21c7d4</span>
+        <span class="dot dot-good"></span>
+      </div>
+      <div class="body">
+        <div class="col6">
+          <span class="reslabel">Summarize the release notes</span>
+          <div class="restext">Three user-facing changes and one config rename. Nothing breaking.</div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-control">◇</span>
+        <span class="word fam-control">Agent</span>
+        <span class="target">resume @Rue</span>
+        <span class="dot dot-good"></span>
+      </div>
+      <div class="body">
+        <div class="restext">Resumed agent @Rue</div>
+      </div>
+    </div>
+    <div class="notice">
+      <span class="dot dot-good"></span>
+      <span class="notice-text">Agent @Rue completed</span>
+    </div>
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-other">•</span>
+        <span class="word fam-other">Tool</span>
+        <span class="target">Task Output</span>
+        <span class="badge">9f21c7d4</span>
+        <span class="dot dot-good"></span>
+      </div>
+      <div class="body">
+        <div class="col6">
+          <span class="reslabel">Summarize the release notes</span>
+          <div class="restext">Adding the migration guide: the config rename needs a manual edit in older projects.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="x-pairhead"><span class="x-side">Today · Second run live</span><span class="x-side">2-A · Second run live</span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-agent">◆</span>
+        <span class="word fam-agent">Agent</span>
+        <span class="target">Summarize the release notes</span>
+        <span class="badge">9 tool calls · 22.4k tokens</span>
+      </div>
+      <div class="strip">
+        <span class="roledot role-blue"></span>
+        <span class="handle">Rue</span>
+        <span class="wtype type-blue">Agent</span>
+        <span class="statelabel state-good"><span class="pip pip-fill-good"></span>Completed</span>
+      </div>
+      <div class="body">
+        <div class="col6">
+          <span class="reslabel">Result</span>
+          <div class="restext">Three user-facing changes and one config rename. Nothing breaking.</div>
+          <span class="stats">~22.4k tokens · 9 tools · 1m 47s</span>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-control">◇</span>
+        <span class="word fam-control">Agent</span>
+        <span class="target">resume agent_01j9x4m2q8</span>
+        <span class="dot dot-good"></span>
+      </div>
+    </div>
+  </div>
+  <div class="x-cell">
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-agent">◆</span>
+        <span class="word fam-agent">Agent</span>
+        <span class="target">Summarize the release notes</span>
+      </div>
+      <div class="strip">
+        <span class="roledot role-blue"></span>
+        <span class="handle">Rue</span>
+        <span class="wtype type-blue">Agent</span>
+        <span class="statelabel state-good"><span class="pip pip-fill-good"></span>Completed</span>
+      </div>
+      <div class="body">
+        <div class="col6">
+          <span class="reslabel">Result</span>
+          <div class="restext">Three user-facing changes and one config rename. Nothing breaking.</div>
+          <span class="stats">~22.4k tokens · 9 tools · 1m 47s</span>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-control">◇</span>
+        <span class="word fam-control">Agent</span>
+        <span class="target">resume @Rue</span>
+        <span class="badge badge-live">Read CHANGELOG.md</span>
+      </div>
+      <div class="strip">
+        <span class="roledot role-blue"></span>
+        <span class="handle">Rue</span>
+        <span class="wtype type-blue">Agent</span>
+        <span class="statelabel state-info"><span class="pip pip-pulse-info"></span>Running</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="x-gap-lg"></div>
+
+<!-- ═══ 3 ═══════════════════════════════════════════════════════════════ -->
+
+<p class="x-group">3 · Stopped-worker vocabulary</p>
+
+<div class="x-pairhead"><span class="x-side">Today</span><span class="x-side">3-A · Stopped, uncounted</span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <p class="x-sub">Tasks</p>
+    <div class="dlg">
+      <div class="dlg-list">
+        <div class="trow trow-term">
+          <span class="tmark"><span class="tdot tdot-warn"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Check the failing test</span>
+          <span class="tstate">Stopped</span>
+        </div>
+        <div class="trow trow-term">
+          <span class="tmark"><span class="tdot tdot-danger"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Draft the upgrade notes</span>
+          <span class="tstate tstate-danger">Failed</span>
+        </div>
+      </div>
+    </div>
+    <p class="x-sub">Workers</p>
+    <div class="dlg">
+      <div class="wsummary">
+        <span class="wsummary-item"><span class="pip pip-sm pip-pulse-info"></span>1 working</span>
+        <span class="wsummary-item wsummary-orch"><span class="pip pip-sm pip-ring-purple"></span>2 on the assistant</span>
+      </div>
+      <div class="wrow">
+        <span class="pip pip-fill-warn"></span>
+        <span class="handle">Vale</span>
+        <span class="wdesc">Check the failing test</span>
+        <span class="wtypelabel type-violet">Coding worker</span>
+        <span class="tstate tstate-warn">Attention</span>
+      </div>
+      <div class="wrow">
+        <span class="pip pip-fill-warn"></span>
+        <span class="handle">Bly</span>
+        <span class="wdesc">Draft the upgrade notes</span>
+        <span class="wtypelabel type-violet">Coding worker</span>
+        <span class="tstate tstate-warn">Attention</span>
+      </div>
+    </div>
+  </div>
+  <div class="x-cell">
+    <p class="x-sub">Tasks</p>
+    <div class="dlg">
+      <div class="dlg-list">
+        <div class="trow trow-term">
+          <span class="tmark"><span class="tdot tdot-warn"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Check the failing test</span>
+          <span class="tstate">Stopped</span>
+        </div>
+        <div class="trow trow-term">
+          <span class="tmark"><span class="tdot tdot-danger"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Draft the upgrade notes</span>
+          <span class="tstate tstate-danger">Failed</span>
+        </div>
+      </div>
+    </div>
+    <p class="x-sub">Workers</p>
+    <div class="dlg">
+      <div class="wsummary">
+        <span class="wsummary-item"><span class="pip pip-sm pip-pulse-info"></span>1 working</span>
+        <span class="wsummary-item wsummary-orch"><span class="pip pip-sm pip-ring-purple"></span>1 on the assistant</span>
+        <span class="wsummary-item"><span class="pip pip-sm pip-fill-good"></span>1 done</span>
+      </div>
+      <div class="wrow">
+        <span class="pip pip-ring-warn"></span>
+        <span class="handle">Vale</span>
+        <span class="wdesc">Check the failing test</span>
+        <span class="wtypelabel type-violet">Coding worker</span>
+        <span class="tstate tstate-warn">Stopped</span>
+      </div>
+      <div class="wrow">
+        <span class="pip pip-fill-warn"></span>
+        <span class="handle">Bly</span>
+        <span class="wdesc">Draft the upgrade notes</span>
+        <span class="wtypelabel type-violet">Coding worker</span>
+        <span class="tstate tstate-warn">Attention</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="x-pairhead"><span class="x-side">Today</span><span class="x-side">3-B · Stopped and failed</span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <p class="x-sub">Tasks</p>
+    <div class="dlg">
+      <div class="dlg-list">
+        <div class="trow trow-term">
+          <span class="tmark"><span class="tdot tdot-warn"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Check the failing test</span>
+          <span class="tstate">Stopped</span>
+        </div>
+        <div class="trow trow-term">
+          <span class="tmark"><span class="tdot tdot-danger"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Draft the upgrade notes</span>
+          <span class="tstate tstate-danger">Failed</span>
+        </div>
+      </div>
+    </div>
+    <p class="x-sub">Workers</p>
+    <div class="dlg">
+      <div class="wsummary">
+        <span class="wsummary-item"><span class="pip pip-sm pip-pulse-info"></span>1 working</span>
+        <span class="wsummary-item wsummary-orch"><span class="pip pip-sm pip-ring-purple"></span>2 on the assistant</span>
+      </div>
+      <div class="wrow">
+        <span class="pip pip-fill-warn"></span>
+        <span class="handle">Vale</span>
+        <span class="wdesc">Check the failing test</span>
+        <span class="wtypelabel type-violet">Coding worker</span>
+        <span class="tstate tstate-warn">Attention</span>
+      </div>
+      <div class="wrow">
+        <span class="pip pip-fill-warn"></span>
+        <span class="handle">Bly</span>
+        <span class="wdesc">Draft the upgrade notes</span>
+        <span class="wtypelabel type-violet">Coding worker</span>
+        <span class="tstate tstate-warn">Attention</span>
+      </div>
+    </div>
+  </div>
+  <div class="x-cell">
+    <p class="x-sub">Tasks</p>
+    <div class="dlg">
+      <div class="dlg-list">
+        <div class="trow trow-term">
+          <span class="tmark"><span class="tdot tdot-warn"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Check the failing test</span>
+          <span class="tstate">Stopped</span>
+        </div>
+        <div class="trow trow-term">
+          <span class="tmark"><span class="tdot tdot-danger"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Draft the upgrade notes</span>
+          <span class="tstate tstate-danger">Failed</span>
+        </div>
+      </div>
+    </div>
+    <p class="x-sub">Workers</p>
+    <div class="dlg">
+      <div class="wsummary">
+        <span class="wsummary-item"><span class="pip pip-sm pip-pulse-info"></span>1 working</span>
+        <span class="wsummary-item wsummary-orch"><span class="pip pip-sm pip-ring-purple"></span>1 on the assistant</span>
+        <span class="wsummary-item"><span class="pip pip-sm pip-fill-good"></span>1 done</span>
+      </div>
+      <div class="wrow">
+        <span class="pip pip-ring-warn"></span>
+        <span class="handle">Vale</span>
+        <span class="wdesc">Check the failing test</span>
+        <span class="wtypelabel type-violet">Coding worker</span>
+        <span class="tstate tstate-warn">Stopped</span>
+      </div>
+      <div class="wrow">
+        <span class="pip pip-fill-danger"></span>
+        <span class="handle">Bly</span>
+        <span class="wdesc">Draft the upgrade notes</span>
+        <span class="wtypelabel type-violet">Coding worker</span>
+        <span class="tstate tstate-danger">Failed</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="x-pairhead"><span class="x-side">Today</span><span class="x-side">3-C · One vocabulary</span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <p class="x-sub">Tasks</p>
+    <div class="dlg">
+      <div class="dlg-list">
+        <div class="trow trow-term">
+          <span class="tmark"><span class="tdot tdot-warn"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Check the failing test</span>
+          <span class="tstate">Stopped</span>
+        </div>
+        <div class="trow trow-term">
+          <span class="tmark"><span class="tdot tdot-danger"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Draft the upgrade notes</span>
+          <span class="tstate tstate-danger">Failed</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="tdot tdot-purple"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Port the settings panel</span>
+          <span class="tstate">Waiting on the assistant</span>
+        </div>
+      </div>
+    </div>
+    <p class="x-sub">Workers</p>
+    <div class="dlg">
+      <div class="wsummary">
+        <span class="wsummary-item"><span class="pip pip-sm pip-pulse-info"></span>1 working</span>
+        <span class="wsummary-item wsummary-orch"><span class="pip pip-sm pip-ring-purple"></span>3 on the assistant</span>
+      </div>
+      <div class="wrow">
+        <span class="pip pip-fill-warn"></span>
+        <span class="handle">Vale</span>
+        <span class="wdesc">Check the failing test</span>
+        <span class="wtypelabel type-violet">Coding worker</span>
+        <span class="tstate tstate-warn">Attention</span>
+      </div>
+      <div class="wrow">
+        <span class="pip pip-fill-warn"></span>
+        <span class="handle">Bly</span>
+        <span class="wdesc">Draft the upgrade notes</span>
+        <span class="wtypelabel type-violet">Coding worker</span>
+        <span class="tstate tstate-warn">Attention</span>
+      </div>
+      <div class="wrow">
+        <span class="pip pip-ring-purple"></span>
+        <span class="handle">Rue</span>
+        <span class="wdesc">Port the settings panel</span>
+        <span class="wtypelabel type-violet">Coding worker</span>
+        <span class="tstate">Waiting on the assistant</span>
+      </div>
+    </div>
+  </div>
+  <div class="x-cell">
+    <p class="x-sub">Tasks</p>
+    <div class="dlg">
+      <div class="dlg-list">
+        <div class="trow trow-term">
+          <span class="tmark"><span class="tdot tdot-warn"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Check the failing test</span>
+          <span class="tstate tstate-warn">Stopped</span>
+        </div>
+        <div class="trow trow-term">
+          <span class="tmark"><span class="tdot tdot-danger"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Draft the upgrade notes</span>
+          <span class="tstate tstate-danger">Failed</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="tdot tdot-purple"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Port the settings panel</span>
+          <span class="tstate">Waiting on the assistant</span>
+        </div>
+      </div>
+    </div>
+    <p class="x-sub">Workers</p>
+    <div class="dlg">
+      <div class="wsummary">
+        <span class="wsummary-item"><span class="pip pip-sm pip-pulse-info"></span>1 working</span>
+        <span class="wsummary-item wsummary-orch"><span class="pip pip-sm pip-ring-purple"></span>1 needs the assistant</span>
+        <span class="wsummary-item"><span class="pip pip-sm pip-fill-good"></span>2 done</span>
+      </div>
+      <div class="wrow">
+        <span class="pip pip-ring-warn"></span>
+        <span class="handle">Vale</span>
+        <span class="wdesc">Check the failing test</span>
+        <span class="wtypelabel type-violet">Coding worker</span>
+        <span class="tstate tstate-warn">Stopped</span>
+      </div>
+      <div class="wrow">
+        <span class="pip pip-fill-danger"></span>
+        <span class="handle">Bly</span>
+        <span class="wdesc">Draft the upgrade notes</span>
+        <span class="wtypelabel type-violet">Coding worker</span>
+        <span class="tstate tstate-danger">Failed</span>
+      </div>
+      <div class="wrow">
+        <span class="pip pip-ring-purple"></span>
+        <span class="handle">Rue</span>
+        <span class="wdesc">Port the settings panel</span>
+        <span class="wtypelabel type-violet">Coding worker</span>
+        <span class="tstate">Waiting on the assistant</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="x-gap-lg"></div>
+
+<!-- ═══ 4 ═══════════════════════════════════════════════════════════════ -->
+
+<p class="x-group">4 · Agents in the Tasks list</p>
+
+<div class="x-pairhead"><span class="x-side">Today</span><span class="x-side">4-A · Tasks without agents</span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <div class="dlg">
+      <div class="dlg-head">
+        <div>
+          <div class="dlg-title">Tasks</div>
+          <div class="dlg-sub">5 active · 1 completed</div>
+        </div>
+        <div class="dlg-x">×</div>
+      </div>
+      <div class="dlg-tabs">
+        <div class="tab tab-on tab-on-neutral">Tasks <span class="tab-n tab-n-neutral">6</span></div>
+        <div class="tab">Workers <span class="tab-n">3</span></div>
+        <div class="tab">Accounts <span class="tab-n">2</span></div>
+      </div>
+      <div class="dlg-list">
+        <div class="grouphead">
+          <span class="grouphead-word">Active</span>
+          <span class="grouphead-rule"></span>
+          <span class="grouphead-n">5</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-bash">Bash</span>
+          <span class="tlabel tlabel-mono">bun test app/</span>
+          <span class="tstate">Running</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Find every caller of the retry helper</span>
+          <span class="tstate">In background</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Port the settings panel</span>
+          <span class="tstate">In background</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-dream">Dream</span>
+          <span class="tlabel">Nightly digest</span>
+          <span class="tstate">Running</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Check the failing test</span>
+          <span class="tstate">In background</span>
+        </div>
+        <div class="grouphead">
+          <span class="grouphead-word">Completed</span>
+          <span class="grouphead-rule"></span>
+          <span class="grouphead-n">1</span>
+        </div>
+        <div class="trow trow-term">
+          <span class="tmark"><span class="tdot tdot-good"></span></span>
+          <span class="kind kind-workflow">Workflow</span>
+          <span class="tlabel">Release checks</span>
+          <span class="tstate">Completed</span>
+        </div>
+      </div>
+      <div class="dlg-foot">
+        <span><span class="foot-key">↑↓</span> select</span>
+        <span><span class="foot-key">K</span> stop</span>
+        <span class="foot-right"><span class="foot-key">esc</span> close</span>
+      </div>
+    </div>
+  </div>
+  <div class="x-cell">
+    <div class="dlg">
+      <div class="dlg-head">
+        <div>
+          <div class="dlg-title">Tasks</div>
+          <div class="dlg-sub">2 active · 1 completed</div>
+        </div>
+        <div class="dlg-x">×</div>
+      </div>
+      <div class="dlg-tabs">
+        <div class="tab tab-on tab-on-neutral">Tasks <span class="tab-n tab-n-neutral">3</span></div>
+        <div class="tab">Workers <span class="tab-n">3</span></div>
+        <div class="tab">Accounts <span class="tab-n">2</span></div>
+      </div>
+      <div class="dlg-list">
+        <div class="grouphead">
+          <span class="grouphead-word">Active</span>
+          <span class="grouphead-rule"></span>
+          <span class="grouphead-n">2</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-bash">Bash</span>
+          <span class="tlabel tlabel-mono">bun test app/</span>
+          <span class="tstate">Running</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-dream">Dream</span>
+          <span class="tlabel">Nightly digest</span>
+          <span class="tstate">Running</span>
+        </div>
+        <div class="grouphead">
+          <span class="grouphead-word">Completed</span>
+          <span class="grouphead-rule"></span>
+          <span class="grouphead-n">1</span>
+        </div>
+        <div class="trow trow-term">
+          <span class="tmark"><span class="tdot tdot-good"></span></span>
+          <span class="kind kind-workflow">Workflow</span>
+          <span class="tlabel">Release checks</span>
+          <span class="tstate">Completed</span>
+        </div>
+      </div>
+      <div class="dlg-foot">
+        <span><span class="foot-key">↑↓</span> select</span>
+        <span><span class="foot-key">K</span> stop</span>
+        <span class="foot-right"><span class="foot-key">esc</span> close</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="x-pairhead"><span class="x-side">Today · One task left</span><span class="x-side">4-A · One task left</span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <div class="dlg">
+      <div class="dlg-head">
+        <div>
+          <div class="dlg-title">Tasks</div>
+          <div class="dlg-sub">4 active · 0 completed</div>
+        </div>
+        <div class="dlg-x">×</div>
+      </div>
+      <div class="dlg-tabs">
+        <div class="tab tab-on tab-on-neutral">Tasks <span class="tab-n tab-n-neutral">4</span></div>
+        <div class="tab">Workers <span class="tab-n">3</span></div>
+        <div class="tab">Accounts <span class="tab-n">2</span></div>
+      </div>
+      <div class="dlg-list">
+        <div class="grouphead">
+          <span class="grouphead-word">Active</span>
+          <span class="grouphead-rule"></span>
+          <span class="grouphead-n">4</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-bash">Bash</span>
+          <span class="tlabel tlabel-mono">bun test app/</span>
+          <span class="tstate">Running</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Find every caller of the retry helper</span>
+          <span class="tstate">In background</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Port the settings panel</span>
+          <span class="tstate">In background</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Check the failing test</span>
+          <span class="tstate">In background</span>
+        </div>
+      </div>
+      <div class="dlg-foot">
+        <span><span class="foot-key">↑↓</span> select</span>
+        <span><span class="foot-key">K</span> stop</span>
+        <span class="foot-right"><span class="foot-key">esc</span> close</span>
+      </div>
+    </div>
+  </div>
+  <div class="x-cell">
+    <div class="dlg">
+      <div class="dlg-head">
+        <div>
+          <div class="dlg-title">Tasks</div>
+          <div class="dlg-sub">1 active · 0 completed</div>
+        </div>
+        <div class="dlg-x">×</div>
+      </div>
+      <div class="dlg-tabs">
+        <div class="tab tab-on tab-on-neutral">Tasks <span class="tab-n tab-n-neutral">1</span></div>
+        <div class="tab">Workers <span class="tab-n">3</span></div>
+        <div class="tab">Accounts <span class="tab-n">2</span></div>
+      </div>
+      <div class="dlg-list">
+        <div class="grouphead">
+          <span class="grouphead-word">Active</span>
+          <span class="grouphead-rule"></span>
+          <span class="grouphead-n">1</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-bash">Bash</span>
+          <span class="tlabel tlabel-mono">bun test app/</span>
+          <span class="tstate">Running</span>
+        </div>
+      </div>
+      <div class="dlg-foot">
+        <span><span class="foot-key">↑↓</span> select</span>
+        <span><span class="foot-key">K</span> stop</span>
+        <span class="foot-right"><span class="foot-key">esc</span> close</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="x-pairhead"><span class="x-side">Today · Nothing but agents</span><span class="x-side">4-A · Nothing but agents</span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <div class="dlg">
+      <div class="dlg-head">
+        <div>
+          <div class="dlg-title">Tasks</div>
+          <div class="dlg-sub">3 active · 0 completed</div>
+        </div>
+        <div class="dlg-x">×</div>
+      </div>
+      <div class="dlg-tabs">
+        <div class="tab tab-on tab-on-neutral">Tasks <span class="tab-n tab-n-neutral">3</span></div>
+        <div class="tab">Workers <span class="tab-n">3</span></div>
+        <div class="tab">Accounts <span class="tab-n">2</span></div>
+      </div>
+      <div class="dlg-list">
+        <div class="grouphead">
+          <span class="grouphead-word">Active</span>
+          <span class="grouphead-rule"></span>
+          <span class="grouphead-n">3</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Find every caller of the retry helper</span>
+          <span class="tstate">In background</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Port the settings panel</span>
+          <span class="tstate">In background</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Check the failing test</span>
+          <span class="tstate">In background</span>
+        </div>
+      </div>
+      <div class="dlg-foot">
+        <span><span class="foot-key">↑↓</span> select</span>
+        <span><span class="foot-key">K</span> stop</span>
+        <span class="foot-right"><span class="foot-key">esc</span> close</span>
+      </div>
+    </div>
+  </div>
+  <div class="x-cell">
+    <div class="dlg">
+      <div class="dlg-head">
+        <div>
+          <div class="dlg-title">Tasks</div>
+          <div class="dlg-sub">0 active · 0 completed</div>
+        </div>
+        <div class="dlg-x">×</div>
+      </div>
+      <div class="dlg-tabs">
+        <div class="tab tab-on tab-on-neutral">Tasks</div>
+        <div class="tab">Workers <span class="tab-n">3</span></div>
+        <div class="tab">Accounts <span class="tab-n">2</span></div>
+      </div>
+      <div class="dlg-list">
+        <div class="empty">
+          <div class="empty-lead">No background tasks</div>
+          <div class="empty-note">3 workers are running, in Workers</div>
+        </div>
+      </div>
+      <div class="dlg-foot">
+        <span><span class="foot-key">↑↓</span> select</span>
+        <span><span class="foot-key">K</span> stop</span>
+        <span class="foot-right"><span class="foot-key">esc</span> close</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="x-pairhead"><span class="x-side">Today</span><span class="x-side">4-B · One list</span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <div class="dlg">
+      <div class="dlg-head">
+        <div>
+          <div class="dlg-title">Tasks</div>
+          <div class="dlg-sub">5 active · 1 completed</div>
+        </div>
+        <div class="dlg-x">×</div>
+      </div>
+      <div class="dlg-tabs">
+        <div class="tab tab-on tab-on-neutral">Tasks <span class="tab-n tab-n-neutral">6</span></div>
+        <div class="tab">Workers <span class="tab-n">3</span></div>
+        <div class="tab">Accounts <span class="tab-n">2</span></div>
+      </div>
+      <div class="dlg-list">
+        <div class="grouphead">
+          <span class="grouphead-word">Active</span>
+          <span class="grouphead-rule"></span>
+          <span class="grouphead-n">5</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-bash">Bash</span>
+          <span class="tlabel tlabel-mono">bun test app/</span>
+          <span class="tstate">Running</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Find every caller of the retry helper</span>
+          <span class="tstate">In background</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Port the settings panel</span>
+          <span class="tstate">In background</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-dream">Dream</span>
+          <span class="tlabel">Nightly digest</span>
+          <span class="tstate">Running</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Check the failing test</span>
+          <span class="tstate">In background</span>
+        </div>
+        <div class="grouphead">
+          <span class="grouphead-word">Completed</span>
+          <span class="grouphead-rule"></span>
+          <span class="grouphead-n">1</span>
+        </div>
+        <div class="trow trow-term">
+          <span class="tmark"><span class="tdot tdot-good"></span></span>
+          <span class="kind kind-workflow">Workflow</span>
+          <span class="tlabel">Release checks</span>
+          <span class="tstate">Completed</span>
+        </div>
+      </div>
+      <div class="dlg-foot">
+        <span><span class="foot-key">↑↓</span> select</span>
+        <span><span class="foot-key">K</span> stop</span>
+        <span class="foot-right"><span class="foot-key">esc</span> close</span>
+      </div>
+    </div>
+  </div>
+  <div class="x-cell">
+    <div class="dlg">
+      <div class="dlg-head">
+        <div>
+          <div class="dlg-title">Tasks</div>
+          <div class="dlg-sub">5 active · 1 completed</div>
+        </div>
+        <div class="dlg-x">×</div>
+      </div>
+      <div class="dlg-tabs">
+        <div class="tab tab-on tab-on-neutral">Tasks <span class="tab-n tab-n-neutral">6</span></div>
+        <div class="tab">Accounts <span class="tab-n">2</span></div>
+      </div>
+      <div class="dlg-list">
+        <div class="grouphead">
+          <span class="grouphead-word">Workers</span>
+          <span class="grouphead-rule"></span>
+          <span class="grouphead-n">3</span>
+        </div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Ada</span>
+          <span class="wdesc">Find every caller of the retry helper</span>
+          <span class="wtypelabel type-sky">Explore</span>
+        </div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Rue</span>
+          <span class="wdesc">Port the settings panel</span>
+          <span class="wtypelabel type-violet">Coding worker</span>
+        </div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Vale</span>
+          <span class="wdesc">Check the failing test</span>
+          <span class="wtypelabel type-violet">Coding worker</span>
+        </div>
+        <div class="grouphead">
+          <span class="grouphead-word">Active</span>
+          <span class="grouphead-rule"></span>
+          <span class="grouphead-n">2</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-bash">Bash</span>
+          <span class="tlabel tlabel-mono">bun test app/</span>
+          <span class="tstate">Running</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-dream">Dream</span>
+          <span class="tlabel">Nightly digest</span>
+          <span class="tstate">Running</span>
+        </div>
+        <div class="grouphead">
+          <span class="grouphead-word">Completed</span>
+          <span class="grouphead-rule"></span>
+          <span class="grouphead-n">1</span>
+        </div>
+        <div class="trow trow-term">
+          <span class="tmark"><span class="tdot tdot-good"></span></span>
+          <span class="kind kind-workflow">Workflow</span>
+          <span class="tlabel">Release checks</span>
+          <span class="tstate">Completed</span>
+        </div>
+      </div>
+      <div class="dlg-foot">
+        <span><span class="foot-key">↑↓</span> select</span>
+        <span><span class="foot-key">K</span> stop</span>
+        <span class="foot-right"><span class="foot-key">esc</span> close</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="x-pairhead"><span class="x-side">Today · One task left</span><span class="x-side">4-B · One task left</span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <div class="dlg">
+      <div class="dlg-head">
+        <div>
+          <div class="dlg-title">Tasks</div>
+          <div class="dlg-sub">4 active · 0 completed</div>
+        </div>
+        <div class="dlg-x">×</div>
+      </div>
+      <div class="dlg-tabs">
+        <div class="tab tab-on tab-on-neutral">Tasks <span class="tab-n tab-n-neutral">4</span></div>
+        <div class="tab">Workers <span class="tab-n">3</span></div>
+        <div class="tab">Accounts <span class="tab-n">2</span></div>
+      </div>
+      <div class="dlg-list">
+        <div class="grouphead">
+          <span class="grouphead-word">Active</span>
+          <span class="grouphead-rule"></span>
+          <span class="grouphead-n">4</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-bash">Bash</span>
+          <span class="tlabel tlabel-mono">bun test app/</span>
+          <span class="tstate">Running</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Find every caller of the retry helper</span>
+          <span class="tstate">In background</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Port the settings panel</span>
+          <span class="tstate">In background</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Check the failing test</span>
+          <span class="tstate">In background</span>
+        </div>
+      </div>
+      <div class="dlg-foot">
+        <span><span class="foot-key">↑↓</span> select</span>
+        <span><span class="foot-key">K</span> stop</span>
+        <span class="foot-right"><span class="foot-key">esc</span> close</span>
+      </div>
+    </div>
+  </div>
+  <div class="x-cell">
+    <div class="dlg">
+      <div class="dlg-head">
+        <div>
+          <div class="dlg-title">Tasks</div>
+          <div class="dlg-sub">4 active · 0 completed</div>
+        </div>
+        <div class="dlg-x">×</div>
+      </div>
+      <div class="dlg-tabs">
+        <div class="tab tab-on tab-on-neutral">Tasks <span class="tab-n tab-n-neutral">4</span></div>
+        <div class="tab">Accounts <span class="tab-n">2</span></div>
+      </div>
+      <div class="dlg-list">
+        <div class="grouphead">
+          <span class="grouphead-word">Workers</span>
+          <span class="grouphead-rule"></span>
+          <span class="grouphead-n">3</span>
+        </div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Ada</span>
+          <span class="wdesc">Find every caller of the retry helper</span>
+          <span class="wtypelabel type-sky">Explore</span>
+        </div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Rue</span>
+          <span class="wdesc">Port the settings panel</span>
+          <span class="wtypelabel type-violet">Coding worker</span>
+        </div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Vale</span>
+          <span class="wdesc">Check the failing test</span>
+          <span class="wtypelabel type-violet">Coding worker</span>
+        </div>
+        <div class="grouphead">
+          <span class="grouphead-word">Active</span>
+          <span class="grouphead-rule"></span>
+          <span class="grouphead-n">1</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-bash">Bash</span>
+          <span class="tlabel tlabel-mono">bun test app/</span>
+          <span class="tstate">Running</span>
+        </div>
+      </div>
+      <div class="dlg-foot">
+        <span><span class="foot-key">↑↓</span> select</span>
+        <span><span class="foot-key">K</span> stop</span>
+        <span class="foot-right"><span class="foot-key">esc</span> close</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="x-pairhead"><span class="x-side">Today · Nothing but agents</span><span class="x-side">4-B · Nothing but agents</span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <div class="dlg">
+      <div class="dlg-head">
+        <div>
+          <div class="dlg-title">Tasks</div>
+          <div class="dlg-sub">3 active · 0 completed</div>
+        </div>
+        <div class="dlg-x">×</div>
+      </div>
+      <div class="dlg-tabs">
+        <div class="tab tab-on tab-on-neutral">Tasks <span class="tab-n tab-n-neutral">3</span></div>
+        <div class="tab">Workers <span class="tab-n">3</span></div>
+        <div class="tab">Accounts <span class="tab-n">2</span></div>
+      </div>
+      <div class="dlg-list">
+        <div class="grouphead">
+          <span class="grouphead-word">Active</span>
+          <span class="grouphead-rule"></span>
+          <span class="grouphead-n">3</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Find every caller of the retry helper</span>
+          <span class="tstate">In background</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Port the settings panel</span>
+          <span class="tstate">In background</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Check the failing test</span>
+          <span class="tstate">In background</span>
+        </div>
+      </div>
+      <div class="dlg-foot">
+        <span><span class="foot-key">↑↓</span> select</span>
+        <span><span class="foot-key">K</span> stop</span>
+        <span class="foot-right"><span class="foot-key">esc</span> close</span>
+      </div>
+    </div>
+  </div>
+  <div class="x-cell">
+    <div class="dlg">
+      <div class="dlg-head">
+        <div>
+          <div class="dlg-title">Tasks</div>
+          <div class="dlg-sub">3 active · 0 completed</div>
+        </div>
+        <div class="dlg-x">×</div>
+      </div>
+      <div class="dlg-tabs">
+        <div class="tab tab-on tab-on-neutral">Tasks <span class="tab-n tab-n-neutral">3</span></div>
+        <div class="tab">Accounts <span class="tab-n">2</span></div>
+      </div>
+      <div class="dlg-list">
+        <div class="grouphead">
+          <span class="grouphead-word">Workers</span>
+          <span class="grouphead-rule"></span>
+          <span class="grouphead-n">3</span>
+        </div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Ada</span>
+          <span class="wdesc">Find every caller of the retry helper</span>
+          <span class="wtypelabel type-sky">Explore</span>
+        </div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Rue</span>
+          <span class="wdesc">Port the settings panel</span>
+          <span class="wtypelabel type-violet">Coding worker</span>
+        </div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Vale</span>
+          <span class="wdesc">Check the failing test</span>
+          <span class="wtypelabel type-violet">Coding worker</span>
+        </div>
+      </div>
+      <div class="dlg-foot">
+        <span><span class="foot-key">↑↓</span> select</span>
+        <span><span class="foot-key">K</span> stop</span>
+        <span class="foot-right"><span class="foot-key">esc</span> close</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="x-pairhead"><span class="x-side">Today</span><span class="x-side">4-C · Tab hidden when empty</span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <div class="dlg">
+      <div class="dlg-head">
+        <div>
+          <div class="dlg-title">Tasks</div>
+          <div class="dlg-sub">5 active · 1 completed</div>
+        </div>
+        <div class="dlg-x">×</div>
+      </div>
+      <div class="dlg-tabs">
+        <div class="tab tab-on tab-on-neutral">Tasks <span class="tab-n tab-n-neutral">6</span></div>
+        <div class="tab">Workers <span class="tab-n">3</span></div>
+        <div class="tab">Accounts <span class="tab-n">2</span></div>
+      </div>
+      <div class="dlg-list">
+        <div class="grouphead">
+          <span class="grouphead-word">Active</span>
+          <span class="grouphead-rule"></span>
+          <span class="grouphead-n">5</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-bash">Bash</span>
+          <span class="tlabel tlabel-mono">bun test app/</span>
+          <span class="tstate">Running</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Find every caller of the retry helper</span>
+          <span class="tstate">In background</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Port the settings panel</span>
+          <span class="tstate">In background</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-dream">Dream</span>
+          <span class="tlabel">Nightly digest</span>
+          <span class="tstate">Running</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Check the failing test</span>
+          <span class="tstate">In background</span>
+        </div>
+        <div class="grouphead">
+          <span class="grouphead-word">Completed</span>
+          <span class="grouphead-rule"></span>
+          <span class="grouphead-n">1</span>
+        </div>
+        <div class="trow trow-term">
+          <span class="tmark"><span class="tdot tdot-good"></span></span>
+          <span class="kind kind-workflow">Workflow</span>
+          <span class="tlabel">Release checks</span>
+          <span class="tstate">Completed</span>
+        </div>
+      </div>
+      <div class="dlg-foot">
+        <span><span class="foot-key">↑↓</span> select</span>
+        <span><span class="foot-key">K</span> stop</span>
+        <span class="foot-right"><span class="foot-key">esc</span> close</span>
+      </div>
+    </div>
+  </div>
+  <div class="x-cell">
+    <div class="dlg">
+      <div class="dlg-head">
+        <div>
+          <div class="dlg-title">Tasks</div>
+          <div class="dlg-sub">2 active · 1 completed</div>
+        </div>
+        <div class="dlg-x">×</div>
+      </div>
+      <div class="dlg-tabs">
+        <div class="tab tab-on tab-on-neutral">Tasks <span class="tab-n tab-n-neutral">3</span></div>
+        <div class="tab">Workers <span class="tab-n">3</span></div>
+        <div class="tab">Accounts <span class="tab-n">2</span></div>
+      </div>
+      <div class="dlg-list">
+        <div class="grouphead">
+          <span class="grouphead-word">Active</span>
+          <span class="grouphead-rule"></span>
+          <span class="grouphead-n">2</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-bash">Bash</span>
+          <span class="tlabel tlabel-mono">bun test app/</span>
+          <span class="tstate">Running</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-dream">Dream</span>
+          <span class="tlabel">Nightly digest</span>
+          <span class="tstate">Running</span>
+        </div>
+        <div class="grouphead">
+          <span class="grouphead-word">Completed</span>
+          <span class="grouphead-rule"></span>
+          <span class="grouphead-n">1</span>
+        </div>
+        <div class="trow trow-term">
+          <span class="tmark"><span class="tdot tdot-good"></span></span>
+          <span class="kind kind-workflow">Workflow</span>
+          <span class="tlabel">Release checks</span>
+          <span class="tstate">Completed</span>
+        </div>
+      </div>
+      <div class="dlg-foot">
+        <span><span class="foot-key">↑↓</span> select</span>
+        <span><span class="foot-key">K</span> stop</span>
+        <span class="foot-right"><span class="foot-key">esc</span> close</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="x-pairhead"><span class="x-side">Today · Nothing but agents</span><span class="x-side">4-C · Nothing but agents</span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <div class="dlg">
+      <div class="dlg-head">
+        <div>
+          <div class="dlg-title">Tasks</div>
+          <div class="dlg-sub">3 active · 0 completed</div>
+        </div>
+        <div class="dlg-x">×</div>
+      </div>
+      <div class="dlg-tabs">
+        <div class="tab tab-on tab-on-neutral">Tasks <span class="tab-n tab-n-neutral">3</span></div>
+        <div class="tab">Workers <span class="tab-n">3</span></div>
+        <div class="tab">Accounts <span class="tab-n">2</span></div>
+      </div>
+      <div class="dlg-list">
+        <div class="grouphead">
+          <span class="grouphead-word">Active</span>
+          <span class="grouphead-rule"></span>
+          <span class="grouphead-n">3</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Find every caller of the retry helper</span>
+          <span class="tstate">In background</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Port the settings panel</span>
+          <span class="tstate">In background</span>
+        </div>
+        <div class="trow">
+          <span class="tmark"><span class="spinner"></span></span>
+          <span class="kind kind-agent">Agent</span>
+          <span class="tlabel">Check the failing test</span>
+          <span class="tstate">In background</span>
+        </div>
+      </div>
+      <div class="dlg-foot">
+        <span><span class="foot-key">↑↓</span> select</span>
+        <span><span class="foot-key">K</span> stop</span>
+        <span class="foot-right"><span class="foot-key">esc</span> close</span>
+      </div>
+    </div>
+  </div>
+  <div class="x-cell">
+    <div class="dlg">
+      <div class="dlg-head">
+        <div>
+          <div class="dlg-title">Workers</div>
+          <div class="dlg-sub">3 working</div>
+        </div>
+        <div class="dlg-x">×</div>
+      </div>
+      <div class="dlg-tabs">
+        <div class="tab tab-on tab-on-worker">Workers <span class="tab-n tab-n-worker">3</span></div>
+        <div class="tab">Accounts <span class="tab-n">2</span></div>
+      </div>
+      <div class="dlg-list">
+        <div class="wsummary">
+          <span class="wsummary-item"><span class="pip pip-sm pip-ring-info"></span>3 in background</span>
+        </div>
+        <div class="seclabel">Explore · 1</div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Ada</span>
+          <span class="wdesc">Find every caller of the retry helper</span>
+          <span class="wtypelabel type-sky">Explore</span>
+        </div>
+        <div class="seclabel">Coding worker · 2</div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Rue</span>
+          <span class="wdesc">Port the settings panel</span>
+          <span class="wtypelabel type-violet">Coding worker</span>
+        </div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Vale</span>
+          <span class="wdesc">Check the failing test</span>
+          <span class="wtypelabel type-violet">Coding worker</span>
+        </div>
+      </div>
+      <div class="dlg-foot">
+        <span>click a worker to inspect it</span>
+        <span class="foot-right"><span class="foot-key">esc</span> close</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="x-gap-lg"></div>
+
+<!-- ═══ 5P ══════════════════════════════════════════════════════════════ -->
+
+<p class="x-group">5P · Permission card identity</p>
+
+<div class="x-pairhead"><span class="x-side">Today</span><span class="x-side">5P-A · Name and role</span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <div class="perm">
+      <div class="perm-kicker">
+        <span class="perm-glyph">◈</span>
+        <span class="perm-word">Permission</span>
+        <span class="perm-worker">worker</span>
+      </div>
+      <h2 class="perm-title"><span>Run</span><span><span class="perm-code">git push origin migration</span>?</span></h2>
+      <p class="perm-sub">Relayed from worker <span class="perm-id">agent_01j9x4m2q8</span>. You decide.</p>
+    </div>
+  </div>
+  <div class="x-cell">
+    <div class="perm">
+      <div class="perm-kicker">
+        <span class="perm-glyph">◈</span>
+        <span class="perm-word">Permission</span>
+        <span class="perm-worker">worker</span>
+      </div>
+      <h2 class="perm-title"><span>Run</span><span><span class="perm-code">git push origin migration</span>?</span></h2>
+      <p class="perm-sub">Relayed from <span class="perm-id">@Vale</span>, a coding worker. You decide.</p>
+    </div>
+  </div>
+</div>
+
+<div class="x-pairhead"><span class="x-side">Today · Worker not named yet</span><span class="x-side">5P-A · Worker not named yet</span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <div class="perm">
+      <div class="perm-kicker">
+        <span class="perm-glyph">◈</span>
+        <span class="perm-word">Permission</span>
+        <span class="perm-worker">worker</span>
+      </div>
+      <h2 class="perm-title"><span>Run</span><span><span class="perm-code">git push origin migration</span>?</span></h2>
+      <p class="perm-sub">Relayed from worker <span class="perm-id">agent_01j9x4m2q8</span>. You decide.</p>
+    </div>
+  </div>
+  <div class="x-cell">
+    <div class="perm">
+      <div class="perm-kicker">
+        <span class="perm-glyph">◈</span>
+        <span class="perm-word">Permission</span>
+        <span class="perm-worker">worker</span>
+      </div>
+      <h2 class="perm-title"><span>Run</span><span><span class="perm-code">git push origin migration</span>?</span></h2>
+      <p class="perm-sub">Relayed from a coding worker. You decide.</p>
+    </div>
+  </div>
+</div>
+
+<div class="x-pairhead"><span class="x-side">Today</span><span class="x-side">5P-B · Identity chips</span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <div class="perm">
+      <div class="perm-kicker">
+        <span class="perm-glyph">◈</span>
+        <span class="perm-word">Permission</span>
+        <span class="perm-worker">worker</span>
+      </div>
+      <h2 class="perm-title"><span>Run</span><span><span class="perm-code">git push origin migration</span>?</span></h2>
+      <p class="perm-sub">Relayed from worker <span class="perm-id">agent_01j9x4m2q8</span>. You decide.</p>
+    </div>
+  </div>
+  <div class="x-cell">
+    <div class="perm">
+      <div class="perm-kicker">
+        <span class="perm-glyph">◈</span>
+        <span class="perm-word">Permission</span>
+        <span class="perm-worker">worker</span>
+      </div>
+      <h2 class="perm-title"><span>Run</span><span><span class="perm-code">git push origin migration</span>?</span></h2>
+      <div class="perm-idrow">
+        <span class="roledot role-violet"></span>
+        <span class="handle">Vale</span>
+        <span class="perm-chip">Coding worker</span>
+      </div>
+      <p class="perm-sub">You decide.</p>
+    </div>
+  </div>
+</div>
+
+<div class="x-pairhead"><span class="x-side">Today · Worker not named yet</span><span class="x-side">5P-B · Worker not named yet</span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <div class="perm">
+      <div class="perm-kicker">
+        <span class="perm-glyph">◈</span>
+        <span class="perm-word">Permission</span>
+        <span class="perm-worker">worker</span>
+      </div>
+      <h2 class="perm-title"><span>Run</span><span><span class="perm-code">git push origin migration</span>?</span></h2>
+      <p class="perm-sub">Relayed from worker <span class="perm-id">agent_01j9x4m2q8</span>. You decide.</p>
+    </div>
+  </div>
+  <div class="x-cell">
+    <div class="perm">
+      <div class="perm-kicker">
+        <span class="perm-glyph">◈</span>
+        <span class="perm-word">Permission</span>
+        <span class="perm-worker">worker</span>
+      </div>
+      <h2 class="perm-title"><span>Run</span><span><span class="perm-code">git push origin migration</span>?</span></h2>
+      <div class="perm-idrow">
+        <span class="roledot role-violet"></span>
+        <span class="perm-chip">Coding worker</span>
+      </div>
+      <p class="perm-sub">You decide.</p>
+    </div>
+  </div>
+</div>
+
+<div class="x-pairhead"><span class="x-side">Today</span><span class="x-side">5P-C · Name, role, task</span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <div class="perm">
+      <div class="perm-kicker">
+        <span class="perm-glyph">◈</span>
+        <span class="perm-word">Permission</span>
+        <span class="perm-worker">worker</span>
+      </div>
+      <h2 class="perm-title"><span>Run</span><span><span class="perm-code">git push origin migration</span>?</span></h2>
+      <p class="perm-sub">Relayed from worker <span class="perm-id">agent_01j9x4m2q8</span>. You decide.</p>
+    </div>
+  </div>
+  <div class="x-cell">
+    <div class="perm">
+      <div class="perm-kicker">
+        <span class="perm-glyph">◈</span>
+        <span class="perm-word">Permission</span>
+        <span class="perm-worker">worker</span>
+      </div>
+      <h2 class="perm-title"><span>Run</span><span><span class="perm-code">git push origin migration</span>?</span></h2>
+      <div class="perm-idrow">
+        <span class="roledot role-violet"></span>
+        <span class="handle">Vale</span>
+        <span class="perm-chip">Coding worker</span>
+      </div>
+      <p class="perm-task">Check the failing test</p>
+      <p class="perm-sub">You decide.</p>
+    </div>
+  </div>
+</div>
+
+<div class="x-pairhead"><span class="x-side">Today · Worker not named yet</span><span class="x-side">5P-C · Worker not named yet</span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <div class="perm">
+      <div class="perm-kicker">
+        <span class="perm-glyph">◈</span>
+        <span class="perm-word">Permission</span>
+        <span class="perm-worker">worker</span>
+      </div>
+      <h2 class="perm-title"><span>Run</span><span><span class="perm-code">git push origin migration</span>?</span></h2>
+      <p class="perm-sub">Relayed from worker <span class="perm-id">agent_01j9x4m2q8</span>. You decide.</p>
+    </div>
+  </div>
+  <div class="x-cell">
+    <div class="perm">
+      <div class="perm-kicker">
+        <span class="perm-glyph">◈</span>
+        <span class="perm-word">Permission</span>
+        <span class="perm-worker">worker</span>
+      </div>
+      <h2 class="perm-title"><span>Run</span><span><span class="perm-code">git push origin migration</span>?</span></h2>
+      <div class="perm-idrow">
+        <span class="roledot role-violet"></span>
+        <span class="perm-chip">Coding worker</span>
+      </div>
+      <p class="perm-task">Check the failing test</p>
+      <p class="perm-sub">You decide.</p>
+    </div>
+  </div>
+</div>
+
+<div class="x-gap-lg"></div>
+
+<!-- ═══ 5N ══════════════════════════════════════════════════════════════ -->
+
+<p class="x-group">5N · Parentage and depth</p>
+
+<div class="x-pairhead"><span class="x-side">Today · Roster</span><span class="x-side">5N-A · Flat, role groups</span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <div class="dlg">
+      <div class="dlg-list">
+        <div class="seclabel">Explore · 1</div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Ada</span>
+          <span class="wdesc">Find every caller of the retry helper</span>
+          <span class="wtypelabel type-sky">Explore</span>
+        </div>
+        <div class="seclabel">Coding worker · 3</div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Rue</span>
+          <span class="wdesc">Port the settings panel</span>
+          <span class="wtypelabel type-violet">Coding worker</span>
+        </div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Vale</span>
+          <span class="wdesc">Check the failing test</span>
+          <span class="wtypelabel type-violet">Coding worker</span>
+        </div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Wren</span>
+          <span class="wdesc">Rewrite the panel tests</span>
+          <span class="wtypelabel type-violet">Coding worker</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="x-cell">
+    <div class="dlg">
+      <div class="dlg-list">
+        <div class="seclabel">Explore · 1</div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Ada</span>
+          <span class="wdesc">Find every caller of the retry helper</span>
+          <span class="wtypelabel type-sky">Explore</span>
+        </div>
+        <div class="seclabel">Coding worker · 3</div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Rue</span>
+          <span class="wdesc">Port the settings panel</span>
+          <span class="wtypelabel type-violet">Coding worker</span>
+        </div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Vale</span>
+          <span class="wdesc">Check the failing test</span>
+          <span class="wtypelabel type-violet">Coding worker</span>
+        </div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Wren</span>
+          <span class="wdesc">Rewrite the panel tests</span>
+          <span class="wtypelabel type-violet">Coding worker</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="x-pairhead"><span class="x-side">Today · Roster</span><span class="x-side">5N-B · Depth indent <span class="x-cost">New field</span></span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <div class="dlg">
+      <div class="dlg-list">
+        <div class="seclabel">Explore · 1</div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Ada</span>
+          <span class="wdesc">Find every caller of the retry helper</span>
+          <span class="wtypelabel type-sky">Explore</span>
+        </div>
+        <div class="seclabel">Coding worker · 3</div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Rue</span>
+          <span class="wdesc">Port the settings panel</span>
+          <span class="wtypelabel type-violet">Coding worker</span>
+        </div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Vale</span>
+          <span class="wdesc">Check the failing test</span>
+          <span class="wtypelabel type-violet">Coding worker</span>
+        </div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Wren</span>
+          <span class="wdesc">Rewrite the panel tests</span>
+          <span class="wtypelabel type-violet">Coding worker</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="x-cell">
+    <div class="dlg">
+      <div class="dlg-list">
+        <div class="seclabel">Explore · 1</div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Ada</span>
+          <span class="wdesc">Find every caller of the retry helper</span>
+          <span class="wtypelabel type-sky">Explore</span>
+        </div>
+        <div class="seclabel">Coding worker · 3</div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Rue</span>
+          <span class="wdesc">Port the settings panel</span>
+          <span class="wtypelabel type-violet">Coding worker</span>
+        </div>
+        <div class="wrow wchild">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Wren</span>
+          <span class="wdesc">Rewrite the panel tests</span>
+          <span class="wtypelabel type-violet">Coding worker</span>
+        </div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Vale</span>
+          <span class="wdesc">Check the failing test</span>
+          <span class="wtypelabel type-violet">Coding worker</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="x-pairhead"><span class="x-side">Today · Roster</span><span class="x-side">5N-C · Parent groups <span class="x-cost">New field</span></span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <div class="dlg">
+      <div class="dlg-list">
+        <div class="seclabel">Explore · 1</div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Ada</span>
+          <span class="wdesc">Find every caller of the retry helper</span>
+          <span class="wtypelabel type-sky">Explore</span>
+        </div>
+        <div class="seclabel">Coding worker · 3</div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Rue</span>
+          <span class="wdesc">Port the settings panel</span>
+          <span class="wtypelabel type-violet">Coding worker</span>
+        </div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Vale</span>
+          <span class="wdesc">Check the failing test</span>
+          <span class="wtypelabel type-violet">Coding worker</span>
+        </div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Wren</span>
+          <span class="wdesc">Rewrite the panel tests</span>
+          <span class="wtypelabel type-violet">Coding worker</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="x-cell">
+    <div class="dlg">
+      <div class="dlg-list">
+        <div class="seclabel">Delegated by you · 3</div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Ada</span>
+          <span class="wdesc">Find every caller of the retry helper</span>
+          <span class="wtypelabel type-sky">Explore</span>
+        </div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Rue</span>
+          <span class="wdesc">Port the settings panel</span>
+          <span class="wtypelabel type-violet">Coding worker</span>
+        </div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Vale</span>
+          <span class="wdesc">Check the failing test</span>
+          <span class="wtypelabel type-violet">Coding worker</span>
+        </div>
+        <div class="wparent">under @Rue</div>
+        <div class="wrow">
+          <span class="pip pip-ring-info"></span>
+          <span class="handle">Wren</span>
+          <span class="wdesc">Rewrite the panel tests</span>
+          <span class="wtypelabel type-violet">Coding worker</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="x-pairhead"><span class="x-side">Today · Transcript depth</span><span class="x-side">Unchanged by 5N</span></div>
+<div class="x-pair">
+  <div class="x-cell">
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-agent">◆</span>
+        <span class="word fam-agent">Agent</span>
+        <span class="target">Port the settings panel</span>
+        <span class="badge badge-live">Agent Rewrite the panel tests</span>
+      </div>
+      <div class="strip">
+        <span class="roledot role-violet"></span>
+        <span class="handle">Rue</span>
+        <span class="wtype type-violet">Coding worker</span>
+        <span class="statelabel state-info"><span class="pip pip-pulse-info"></span>Running</span>
+      </div>
+      <div class="body">
+        <div class="nest">
+          <div class="card">
+            <div class="head">
+              <span class="mark fam-agent">◆</span>
+              <span class="word fam-agent">Agent</span>
+              <span class="target">Rewrite the panel tests</span>
+              <span class="badge badge-live">Edit settingsPanel.test.tsx</span>
+            </div>
+            <div class="strip">
+              <span class="roledot role-violet"></span>
+              <span class="handle">Wren</span>
+              <span class="wtype type-violet">Coding worker</span>
+              <span class="statelabel state-info"><span class="pip pip-pulse-info"></span>Running</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="x-cell">
+    <div class="card">
+      <div class="head">
+        <span class="mark fam-agent">◆</span>
+        <span class="word fam-agent">Agent</span>
+        <span class="target">Port the settings panel</span>
+        <span class="badge badge-live">Agent Rewrite the panel tests</span>
+      </div>
+      <div class="strip">
+        <span class="roledot role-violet"></span>
+        <span class="handle">Rue</span>
+        <span class="wtype type-violet">Coding worker</span>
+        <span class="statelabel state-info"><span class="pip pip-pulse-info"></span>Running</span>
+      </div>
+      <div class="body">
+        <div class="nest">
+          <div class="card">
+            <div class="head">
+              <span class="mark fam-agent">◆</span>
+              <span class="word fam-agent">Agent</span>
+              <span class="target">Rewrite the panel tests</span>
+              <span class="badge badge-live">Edit settingsPanel.test.tsx</span>
+            </div>
+            <div class="strip">
+              <span class="roledot role-violet"></span>
+              <span class="handle">Wren</span>
+              <span class="wtype type-violet">Coding worker</span>
+              <span class="statelabel state-info"><span class="pip pip-pulse-info"></span>Running</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div>
+
+</body>
+</html>
