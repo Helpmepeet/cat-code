@@ -422,6 +422,7 @@ type RendererHealthResponse = Readonly<{
   eventLoopLagMs: number
   visible: boolean
   jsHeapUsedBytes: number | null
+  rendersCommitted: number
   watermarks: ReadonlyArray<Readonly<{ sessionId: string; received: number; applied: number; committed: number }>>
 }>
 
@@ -429,7 +430,7 @@ function parseRendererHealthResponse(value: unknown): RendererHealthResponse | n
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const item = value as Record<string, unknown>
   if (
-    Object.keys(item).length !== 8 ||
+    Object.keys(item).length !== 9 ||
     typeof item.documentId !== 'string' || item.documentId.length < 1 || item.documentId.length > 128 ||
     !Number.isSafeInteger(item.subscriptionEpoch) || (item.subscriptionEpoch as number) < 1 ||
     typeof item.rendererProcessInstanceId !== 'string' || item.rendererProcessInstanceId.length < 1 || item.rendererProcessInstanceId.length > 128 ||
@@ -442,6 +443,10 @@ function parseRendererHealthResponse(value: unknown): RendererHealthResponse | n
       item.jsHeapUsedBytes < 0 ||
       item.jsHeapUsedBytes > Number.MAX_SAFE_INTEGER
     )) ||
+    (typeof item.rendersCommitted !== 'number' ||
+      !Number.isSafeInteger(item.rendersCommitted) ||
+      item.rendersCommitted < 0 ||
+      item.rendersCommitted > Number.MAX_SAFE_INTEGER) ||
     !Array.isArray(item.watermarks) || item.watermarks.length > 32
   ) return null
   for (const watermark of item.watermarks) {
@@ -1887,6 +1892,7 @@ function registerIpcHandlers(): void {
       visible: item.visible,
       jsHeapUsedBytes: item.jsHeapUsedBytes,
       rendererWorkingSetKiB,
+      rendersCommitted: item.rendersCommitted,
     })
     if (!health.shouldSample) return
     logOperational(
@@ -1900,6 +1906,7 @@ function registerIpcHandlers(): void {
         visible: item.visible,
         jsHeapUsedBytes: item.jsHeapUsedBytes,
         rendererWorkingSetKiB,
+        rendersCommitted: item.rendersCommitted,
         ...(health.recovered
           ? {
               missed: health.priorMisses,

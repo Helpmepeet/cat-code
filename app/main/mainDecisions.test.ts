@@ -113,6 +113,7 @@ describe('renderer health flight recorder', () => {
         visible: index !== 6,
         jsHeapUsedBytes: index === 6 ? null : (200 + index) * 1_048_576,
         rendererWorkingSetKiB: index === 6 ? null : (100 + index) * 1_024,
+        rendersCommitted: 100 + index,
       })
       if (monitor.response().shouldSample) sampled.push({ at: index * 5_000, eventLoopLagMs })
     }
@@ -137,11 +138,11 @@ describe('renderer health flight recorder', () => {
     expect(ring?.count).toBe(12)
     const entries = ring?.samples.split(';') ?? []
     expect(entries).toHaveLength(12)
-    expect(entries[0]).toBe('57000:4:201:103424:v')
+    expect(entries[0]).toBe('57000:4:201:103424:101:v')
     // Hidden window, V8 heap and process memory unavailable.
-    expect(entries[5]).toBe('32000:4:-:-:h')
+    expect(entries[5]).toBe('32000:4:-:-:106:h')
     // The reading 2s before the crash, carrying the lag spike no record held.
-    expect(entries[11]).toBe('2000:900:212:114688:v')
+    expect(entries[11]).toBe('2000:900:212:114688:112:v')
   })
 
   test('the ring fits one record without the sanitizer rewriting it', () => {
@@ -181,6 +182,7 @@ describe('renderer health flight recorder', () => {
         visible: true,
         jsHeapUsedBytes: 100 * 1_048_576,
         rendererWorkingSetKiB: 100 * 1_024,
+        rendersCommitted: 10,
       })
     }
     clock = 6_000
@@ -189,10 +191,10 @@ describe('renderer health flight recorder', () => {
     expect(ring?.count).toBe(2)
     expect(new TextEncoder().encode(ring?.samples ?? '').byteLength).toBeLessThanOrEqual(50)
     for (const entry of ring?.samples.split(';') ?? []) {
-      expect(entry).toMatch(/^\d+:\d+:(\d+|-):(\d+|-):[vh]$/)
+      expect(entry).toMatch(/^\d+:\d+:(\d+|-):(\d+|-):\d+:[vh]$/)
     }
     // The readings nearest the failure are the ones kept.
-    expect(ring?.samples.endsWith('1000:1:100:102400:v')).toBe(true)
+    expect(ring?.samples.endsWith('1000:1:100:102400:10:v')).toBe(true)
     expect(ring?.samples).not.toContain('5000:')
   })
 
@@ -206,6 +208,7 @@ describe('renderer health flight recorder', () => {
         visible: true,
         jsHeapUsedBytes: null,
         rendererWorkingSetKiB: null,
+        rendersCommitted: index,
       })
     }
     expect(recorder.flush()?.count).toBe(RENDERER_HEALTH_RING_CAPACITY)
@@ -218,8 +221,9 @@ describe('renderer health flight recorder', () => {
       visible: false,
       jsHeapUsedBytes: null,
       rendererWorkingSetKiB: null,
+      rendersCommitted: 7,
     })
-    expect(recorder.flush()).toEqual({ count: 1, samples: '0:7:-:-:h' })
+    expect(recorder.flush()).toEqual({ count: 1, samples: '0:7:-:-:7:h' })
   })
 })
 

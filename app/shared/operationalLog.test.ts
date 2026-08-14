@@ -121,6 +121,7 @@ test('renderer health samples identify V8 heap usage explicitly', () => {
         visible: false,
         jsHeapUsedBytes: 512_000_000,
         rendererWorkingSetKiB: 1_024_000,
+        rendersCommitted: 42,
       },
     },
     { launchId: 'launch', processInstanceId: 'process' },
@@ -128,6 +129,7 @@ test('renderer health samples identify V8 heap usage explicitly', () => {
   expect(sample.fields.visible).toBe(false)
   expect(sample.fields.jsHeapUsedBytes).toBe(512_000_000)
   expect(sample.fields.rendererWorkingSetKiB).toBe(1_024_000)
+  expect(sample.fields.rendersCommitted).toBe(42)
   expect(parseOperationalRecord(sample)).not.toBeNull()
 
   // A renderer without the Chromium heap API reports no figure at all.

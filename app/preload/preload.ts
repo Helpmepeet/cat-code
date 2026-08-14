@@ -88,6 +88,7 @@ let rendererFaultWindowStartedAt = Date.now()
 let rendererFaultCount = 0
 const MAX_RENDERER_FAULTS_PER_MINUTE = 12
 let lastMeasuredEventLoopLagMs = 0
+let rendersCommitted = 0
 
 // Keep the watchdog payload metadata-only: this detects a delayed renderer
 // turn without ever exposing DOM, store, or transcript state.
@@ -163,6 +164,7 @@ ipcRenderer.on(CH_DELIVERY_HEALTH_PROBE, () => {
     // cannot tell an occluded renderer from a hung one (observed 2026-08-09).
     visible: document.visibilityState === 'visible',
     jsHeapUsedBytes: readJsHeapUsedBytes(),
+    rendersCommitted,
     watermarks: [...deliveryAckQueue.getWatermarks().entries()].slice(0, 32).map(([sessionId, value]) => ({ sessionId, ...value })),
   }
   // Telemetry, and wrapped like the other telemetry senders, but deliberately
@@ -373,6 +375,9 @@ const bridge: CatCodeBridge = {
   },
   deliveryAck(sessionId, sequence, deliveryAttempt, streamEpoch, traceId, stage): void {
     sendDeliveryAcknowledgement(sessionId, sequence, deliveryAttempt, streamEpoch, traceId, stage)
+  },
+  recordRenderCommit(): void {
+    if (rendersCommitted < Number.MAX_SAFE_INTEGER) rendersCommitted++
   },
   reportRendererFault(kind, message): void {
     if (!canReportRendererFault()) return

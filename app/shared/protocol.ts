@@ -3143,6 +3143,8 @@ export type CatCodeBridge = {
     traceId: string,
     stage: import('./deliveryTrace.js').DeliveryAcknowledgement['stage'],
   ): void
+  /** Records one completed React commit for the renderer health sampler. */
+  recordRenderCommit(): void
   /** Fixed, bounded renderer fault signal; never a console/log forwarding API. */
   reportRendererFault(kind: 'javascript' | 'promise' | 'component', message: string): void
   /** Main-owned local diagnostics retrieval; the renderer never supplies a path. */

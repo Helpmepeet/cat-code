@@ -2422,3 +2422,17 @@ test('clean parking releases live transcript projection and raw log from rendere
   expect(hostSubBody).toContain("dispatchSessionEvent({ type: 'session-removed', sessionId })")
 })
 
+test('each App commit increments the health payload counter before delivery acknowledgements', () => {
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const effectStart = source.indexOf('  // Acknowledge UI commitment only after React has committed')
+  const effectEnd = source.indexOf('\n  // When each session', effectStart)
+  expect(effectStart).toBeGreaterThan(-1)
+  expect(effectEnd).toBeGreaterThan(effectStart)
+  const effect = source.slice(effectStart, effectEnd)
+
+  expect(effect).toContain('getBridge().recordRenderCommit()')
+  expect(effect.indexOf('getBridge().recordRenderCommit()')).toBeLessThan(
+    effect.indexOf('pendingDeliveryStateAcksRef.current.splice(0)'),
+  )
+})
+

@@ -158,6 +158,7 @@ export type RendererHealthReading = Readonly<{
   visible: boolean
   jsHeapUsedBytes: number | null
   rendererWorkingSetKiB: number | null
+  rendersCommitted: number
 }>
 
 export type RendererHealthFlightRecorderFlush = Readonly<{
@@ -177,7 +178,7 @@ export type RendererHealthFlightRecorder = {
 }
 
 /**
- * One reading as `<ageMs>:<lagMs>:<jsHeapMiB>:<workingSetKiB>:<v|h>`, age measured
+ * One reading as `<ageMs>:<lagMs>:<jsHeapMiB>:<workingSetKiB>:<commits>:<v|h>`, age measured
  * back from the flush. Unknown values are `-`.
  *
  * ASCII by construction, so the byte budget below can count characters, and
@@ -192,7 +193,7 @@ function encodeHealthReading(ageMs: number, reading: RendererHealthReading): str
     ? '-'
     : String(reading.rendererWorkingSetKiB)
   const age = Math.max(0, Math.round(ageMs))
-  return `${age}:${Math.round(reading.eventLoopLagMs)}:${heapMiB}:${workingSetKiB}:${reading.visible ? 'v' : 'h'}`
+  return `${age}:${Math.round(reading.eventLoopLagMs)}:${heapMiB}:${workingSetKiB}:${reading.rendersCommitted}:${reading.visible ? 'v' : 'h'}`
 }
 
 export function selectRendererWorkingSetKiB(

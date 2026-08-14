@@ -611,6 +611,7 @@ export function App() {
   // Acknowledge UI commitment only after React has committed a render caused by
   // the reducer batch. Dispatch return alone intentionally never satisfies it.
   useEffect(() => {
+    getBridge().recordRenderCommit()
     const applied = pendingDeliveryStateAcksRef.current.splice(0)
     for (const entry of applied) {
       getBridge().deliveryAck(entry.sessionId, entry.sequence, entry.deliveryAttempt, entry.streamEpoch, entry.traceId, 'renderer.state.applied')
