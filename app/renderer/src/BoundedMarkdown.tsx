@@ -18,6 +18,17 @@ export function BoundedMarkdown({
   renderLeaf: (leaf: MarkdownRenderLeaf) => ReactNode
 }): ReactNode {
   const leaves = useMemo(() => planMarkdownLeaves(sourceId, source), [sourceId, source])
+  const [measuredHeights, setMeasuredHeights] = useState<ReadonlyMap<string, number>>(
+    new Map(),
+  )
+  const measuredLeaves = useMemo(
+    () =>
+      leaves.map(leaf => ({
+        ...leaf,
+        estimatedHeight: measuredHeights.get(leaf.id) ?? leaf.estimatedHeight,
+      })),
+    [leaves, measuredHeights],
+  )
   const [leafWindow, setLeafWindow] = useState<MarkdownLeafWindow>(() =>
     selectMarkdownLeafWindow(leaves, 0, INITIAL_VIEWPORT_HEIGHT),
   )
@@ -36,7 +47,7 @@ export function BoundedMarkdown({
       const scrollOffset = scroller.scrollTop + scrollerRect.top - rootRect.top
       setLeafWindow(current => {
         const next = selectMarkdownLeafWindow(
-          leaves,
+          measuredLeaves,
           scrollOffset,
           scroller.clientHeight || INITIAL_VIEWPORT_HEIGHT,
         )
@@ -56,16 +67,40 @@ export function BoundedMarkdown({
       observer.disconnect()
       scroller.removeEventListener('scroll', schedule)
     }
-  }, [leaves])
+  }, [measuredLeaves])
+
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(entries => {
+      setMeasuredHeights(current => {
+        let next: Map<string, number> | null = null
+        for (const entry of entries) {
+          const id = entry.target.getAttribute('data-markdown-leaf')
+          if (id === null) continue
+          const height = Math.ceil(entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height)
+          if (height <= 0 || Math.abs((current.get(id) ?? 0) - height) < 1) continue
+          if (next === null) next = new Map(current)
+          next.set(id, height)
+        }
+        return next ?? current
+      })
+    })
+    for (const element of root.querySelectorAll<HTMLElement>('[data-markdown-leaf]')) {
+      observer.observe(element)
+    }
+    return () => observer.disconnect()
+  }, [leafWindow])
 
   return (
     <div ref={rootRef}>
       {leafWindow.topSpacerHeight > 0 ? (
         <div aria-hidden style={{ height: `${leafWindow.topSpacerHeight}px` }} />
       ) : null}
-      {leaves.slice(leafWindow.start, leafWindow.end).map(leaf =>
+      {measuredLeaves.slice(leafWindow.start, leafWindow.end).map(leaf =>
         leaf.kind === 'atomic-text' ? (
           <div
+            data-markdown-leaf={leaf.id}
             className="my-2 rounded border border-shell-seam bg-shell-hover/40 p-3 font-mono text-xs text-text-muted"
             key={leaf.id}
           >
@@ -87,7 +122,9 @@ export function BoundedMarkdown({
             <pre className="whitespace-pre-wrap break-words">{leaf.content}</pre>
           </div>
         ) : (
-          renderLeaf(leaf)
+          <div data-markdown-leaf={leaf.id} key={leaf.id}>
+            {renderLeaf(leaf)}
+          </div>
         ),
       )}
       {leafWindow.bottomSpacerHeight > 0 ? (
