@@ -173,11 +173,29 @@ heights, `af9e082a` covers bounded assistant markdown rendering. The dispatched
 session committed each piece as it landed, so its death cost a report rather
 than the work. Design: `docs/plans/2026-08-14-desktop-transcript-virtualization-design.md`.
 
-**Not yet done, and the only thing that decides whether any of this worked:**
-the full battery against those three commits, and the before/after measurement.
-Targets from the design are under 1 GB footprint, under 700 MB PartitionAlloc
-dirty and under 3,000 regions, against the 3,974 MB / 3.6 G / 13,018 recorded
-above.
+**Stage one passes the test suite.** `bun test app/` gives 3,176 pass / 12 fail
+against a 3,166 / 12 baseline: ten new passing tests and the same twelve
+failures. The composition was checked by NAME, not by count, because two of the
+twelve are fast failures rather than the usual 45-second credential timeouts.
+Both are pre-existing: `app/main/replayBuffer.test.ts` is the known one, and
+`app/sidecar/turnLifecycle.test.ts` passes 7/0 in isolation — it asserts a turn
+is NOT reported stalled using real timers, so it is inherently load-sensitive and
+flakes during a 519-second full run. The stats boundary test flakes the same way
+for the same reason. **When this suite is run under load, re-run a fast failure
+in isolation before calling it a regression.**
+
+Not run in that pass: `typecheck`, `renderer:build`, `test:hardening`.
+
+**Two things still decide whether any of this worked**, and neither is a test
+run. First, the before/after measurement: targets are under 1 GB footprint,
+under 700 MB PartitionAlloc dirty and under 3,000 regions, against the
+3,974 MB / 3.6 G / 13,018 recorded above. Second, interaction behavior — the
+renderer suite is SSR-only, so a green battery proves nothing about whether
+scrolling, expansion, inline-output reveal or text selection still work with
+bounded markdown. That risk is real and this verification cannot reach it.
+Stage one bounds leaves only; the design left outer virtualization conditional
+on the measurement, so partial improvement is the expected result rather than a
+disappointment.
 
 **Occurrence count.** The pathology fired five times on 2026-08-14: the 6.7 GB
 morning crash, a 4.7 GB peak that unmounted the React tree into an unclickable
