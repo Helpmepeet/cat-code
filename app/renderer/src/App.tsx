@@ -235,6 +235,7 @@ import {
   selectLastAccountsSnapshot,
   selectGlobalAccountsSnapshot,
   selectOAuthProgress,
+  selectUsageStatsForRange,
 } from './accountsState.js'
 import { selectAccountHealthBanner } from './accountHealthBanner.js'
 import { BannerStack, type BannerNotice } from './BannerStack.js'
@@ -382,6 +383,8 @@ import type {
   SessionActionVerbMessage,
   SessionId,
   SlashCatalogEntry,
+  UsageStatsRange,
+  UsageStatsSnapshot,
 } from '../../shared/protocol.js'
 import type {
   HostError,
@@ -1027,6 +1030,15 @@ export function App() {
         lazyRestoreClaimsRef.current.delete(sessionId)
         cancelledRestoresRef.current.delete(sessionId)
 
+        // Clean close / parked session (leaves tab membership): release the live
+        // projected transcript and raw message log from renderer memory. The durable
+        // source of truth is the engine transcript on disk. Releasing it on park
+        // prevents closed sessions from retaining memory indefinitely.
+        if (descriptor.status !== 'disconnected') {
+          dispatch({ type: 'session-removed', sessionId })
+          dispatchSessionEvent({ type: 'session-removed', sessionId })
+        }
+
         // PL-A + PL-B composition: main re-emits a stable session-status after
         // writing a backfilled cache. Admit that cache through the existing
         // previewSession read path, serialized and under the same count/RAM
@@ -1460,6 +1472,16 @@ export function App() {
         setOauthStarting(true)
       }
       getBridge().accountVerb(activeSessionId, verb)
+    },
+    [activeSessionId],
+  )
+
+  const handleStatsRangeChange = useCallback(
+    (range: UsageStatsRange) => {
+      dispatchAccounts({ type: 'set-stats-range', range })
+      if (activeSessionId) {
+        getBridge().queryStats(activeSessionId, range)
+      }
     },
     [activeSessionId],
   )
@@ -3543,6 +3565,9 @@ export function App() {
           <AccountsPage
             snapshot={selectGlobalAccountsSnapshot(accounts)}
             lastResult={accounts.lastResult}
+            usageStats={selectUsageStatsForRange(accounts)}
+            activeStatsRange={accounts.activeStatsRange}
+            onRangeChange={handleStatsRangeChange}
             onVerb={sendAccountVerb}
           />
         ) : activeView === 'sessions' ? (
