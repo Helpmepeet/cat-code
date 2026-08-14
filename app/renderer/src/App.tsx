@@ -1036,6 +1036,11 @@ export function App() {
         }
       }
       if (event.type === 'session-removed') {
+        dispatch({ type: 'session-removed', sessionId: event.appSessionId })
+        dispatchSessionEvent({
+          type: 'session-removed',
+          sessionId: event.appSessionId,
+        })
         dispatchConnection({ type: 'session-removed', sessionId: event.appSessionId })
         dispatchTasks({ type: 'session-removed', sessionId: event.appSessionId })
         dispatchLease({ type: 'session-removed', sessionId: event.appSessionId })

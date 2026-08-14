@@ -202,6 +202,37 @@ test('keys logs by ready session and rejects frames for an unattached session', 
   expect(selectRawMessageLog(state, 'session-1').messages).toEqual([])
 })
 
+test('session removal releases the raw message log', () => {
+  let state = reduceServerFrame(createRawMessageLogState(), {
+    kind: 'ready',
+    protocolVersion: 1,
+    sessionId: 'removed',
+    engineSessionId: 'engine-removed',
+    payload: {
+      type: 'app.ready',
+      protocolVersion: 1,
+      inputEnabled: true,
+      activeTurn: false,
+      abort: { status: 'idle' },
+      goalSnapshot: null,
+      pendingPermissionRequests: [],
+    },
+  })
+  state = reduceServerFrame(state, {
+    kind: 'event',
+    protocolVersion: 1,
+    sessionId: 'removed',
+    event: { type: 'message', message: { type: 'result', subtype: 'success' } },
+  })
+
+  state = reduceServerFrame(state, {
+    type: 'session-removed',
+    sessionId: 'removed',
+  })
+
+  expect(state.sessions).toEqual({})
+})
+
 test('bounds raw retention by serialized UTF-8 bytes and exposes truncation', () => {
   let state = createRawMessageLogState()
   state = reduceServerFrame(state, {

@@ -65,6 +65,10 @@ export type RawMessageLogLimits = {
   maxBytes: number
 }
 
+export type RawMessageLogAction =
+  | ServerFrame
+  | { type: 'session-removed'; sessionId: SessionId }
+
 const EMPTY_SESSION_LOG: RawMessageSessionLog = {
   inputEnabled: false,
   messages: [],
@@ -89,9 +93,18 @@ export function selectRawMessageLog(
 
 export function reduceServerFrame(
   state: RawMessageLogState,
-  frame: ServerFrame,
+  action: RawMessageLogAction,
 ): RawMessageLogState {
-  return reduceServerFrameWithLimits(state, frame, {
+  if ('type' in action) {
+    if (action.type === 'session-removed') {
+      if (!state.sessions[action.sessionId]) return state
+      const sessions = { ...state.sessions }
+      delete sessions[action.sessionId]
+      return { ...state, sessions }
+    }
+    return state
+  }
+  return reduceServerFrameWithLimits(state, action, {
     maxMessages: DEFAULT_MAX_RAW_MESSAGES,
     maxBytes: DEFAULT_MAX_RAW_MESSAGE_BYTES,
   })

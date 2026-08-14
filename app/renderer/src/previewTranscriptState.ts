@@ -16,6 +16,7 @@ import {
 import {
   createTranscriptState,
   projectServerFrame,
+  removeTranscriptSession,
   resetTranscriptSession,
   type TranscriptState,
 } from './transcriptProjector.js'
@@ -75,6 +76,7 @@ export type LiveTranscriptAction =
   | ServerFrame
   | BatchAction<ServerFrame>
   | { type: 'preview-live-reset'; sessionId: SessionId }
+  | { type: 'session-removed'; sessionId: SessionId }
 
 const projectServerFrameBatched = withBatch(projectServerFrame)
 
@@ -91,6 +93,9 @@ export function reduceLiveTranscriptState(
     // `ready` frame that would rebuild the session, and the projector discards
     // events for an unknown session. See `resetTranscriptSession`.
     return resetTranscriptSession(state, action.sessionId)
+  }
+  if ('type' in action && action.type === 'session-removed') {
+    return removeTranscriptSession(state, action.sessionId)
   }
   return projectServerFrameBatched(state, action)
 }

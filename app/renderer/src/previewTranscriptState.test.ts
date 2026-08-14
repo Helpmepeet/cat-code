@@ -141,6 +141,18 @@ test('preview-reset drops exactly one session', () => {
   expect(selectPreviewTranscript(state, 'other')).not.toBeNull()
 })
 
+test('session removal releases the full live transcript state', () => {
+  let state = reduceLiveTranscriptState(createTranscriptState(), ready())
+  state = reduceLiveTranscriptState(state, messageFrame(0))
+
+  state = reduceLiveTranscriptState(state, {
+    type: 'session-removed',
+    sessionId: SID,
+  })
+
+  expect(state.sessions).toEqual({})
+})
+
 test('cache ready and permission frames are structurally isolated from operational stores', () => {
   const connection = createConnectionState()
   const permissions = createPermissionState()

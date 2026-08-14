@@ -522,6 +522,16 @@ export function resetTranscriptSession(
   }
 }
 
+export function removeTranscriptSession(
+  state: TranscriptState,
+  sessionId: SessionId,
+): TranscriptState {
+  if (!state.sessions[sessionId]) return state
+  const sessions = { ...state.sessions }
+  delete sessions[sessionId]
+  return { ...state, sessions }
+}
+
 /**
  * Rows are stored as pure producer facts; tool status/result are joined in
  * HERE from the correlation map on every read, never mutated onto a stored
