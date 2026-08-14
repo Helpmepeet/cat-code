@@ -149,3 +149,45 @@ React stopped committing renders during freeze incidents.
 From `docs/reports/2026-08-14-desktop-logging-feedback.md`:
 - Delete or rename `heapUsedBytes` (which tracks only V8 JS heap and misled investigations).
 - Log real process memory (`process.getProcessMemoryInfo()`) from Electron main.
+
+## Status at end of 2026-08-14
+
+**Observability shipped and validated on first live use.**
+`dd866ad0` renamed the misleading probe to `jsHeapUsedBytes`, `e7aab83e` added
+`rendererWorkingSetKiB` sampled from Electron main, `b110d99e` added
+`rendersCommitted`. `f135d6ad` added a source-level bridge-allowlist drift guard
+that runs in plain `bun test app/`, after the Electron-only hardening gate missed
+two new preload methods in one day (`40149284`, `8bd8552b`) because the sessions
+adding them could not run it.
+
+Within hours, a session reported as stalled was discriminated in **three
+commands**: `rendersCommitted` climbing 260 to 302 ruled out the renderer,
+`renderer.state.applied` tracking `queued` 445/445 ruled out delivery, and
+`engine.produced` seventy seconds earlier ruled out an engine hang. The same
+question took a full day, a wrong verdict and a dead renderer that morning.
+
+**Stage one of virtualization landed**, uncommitted work intact after the
+engine process running it died mid-turn: `7115ff71` bounds transcript markdown
+and inspector leaves, `45f3b3f0` converges virtual markdown spacers to measured
+heights, `af9e082a` covers bounded assistant markdown rendering. The dispatched
+session committed each piece as it landed, so its death cost a report rather
+than the work. Design: `docs/plans/2026-08-14-desktop-transcript-virtualization-design.md`.
+
+**Not yet done, and the only thing that decides whether any of this worked:**
+the full battery against those three commits, and the before/after measurement.
+Targets from the design are under 1 GB footprint, under 700 MB PartitionAlloc
+dirty and under 3,000 regions, against the 3,974 MB / 3.6 G / 13,018 recorded
+above.
+
+**Occurrence count.** The pathology fired five times on 2026-08-14: the 6.7 GB
+morning crash, a 4.7 GB peak that unmounted the React tree into an unclickable
+"Something went wrong" fallback, a 5.7 GB peak that froze the UI during the
+dispatched run, and two lesser runs measured deliberately. Each is now captured
+automatically rather than reconstructed, which means the fix has five real
+baselines to be tested against instead of one forensic account.
+
+A note for whoever measures: the recovery UI is unreachable in this failure mode.
+The fallback renders in the renderer that is stuck, so its button cannot be
+clicked. Killing the renderer pid alone is the clean recovery: Electron respawns
+it in under 200 ms and the session survives, because the engine runs in a
+separate sidecar process.
