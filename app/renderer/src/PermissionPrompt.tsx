@@ -135,7 +135,7 @@ export function PermissionPrompt({
     ? workers.find(worker => worker.agentId === workerId)
     : undefined
   const workerHandle = relayingWorker
-    ? resolveAgentIdentity({ handle: relayingWorker.handle }).handle
+    ? resolveAgentIdentity({ handle: relayingWorker.handle ?? undefined }).handle
     : null
   const workerRole =
     agentTypeMeta(relayingWorker?.role)?.label.toLowerCase() ??
