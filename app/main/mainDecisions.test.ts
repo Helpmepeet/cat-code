@@ -110,7 +110,7 @@ describe('renderer health flight recorder', () => {
       recorder.record({
         eventLoopLagMs,
         visible: index !== 6,
-        heapUsedBytes: index === 6 ? null : (200 + index) * 1_048_576,
+        jsHeapUsedBytes: index === 6 ? null : (200 + index) * 1_048_576,
       })
       if (monitor.response().shouldSample) sampled.push({ at: index * 5_000, eventLoopLagMs })
     }
@@ -136,7 +136,7 @@ describe('renderer health flight recorder', () => {
     const entries = ring?.samples.split(';') ?? []
     expect(entries).toHaveLength(12)
     expect(entries[0]).toBe('57000:4:201:v')
-    // Hidden window, heap unavailable.
+    // Hidden window, V8 heap unavailable.
     expect(entries[5]).toBe('32000:4:-:h')
     // The reading 2s before the crash, carrying the lag spike no record held.
     expect(entries[11]).toBe('2000:900:212:v')
@@ -174,7 +174,7 @@ describe('renderer health flight recorder', () => {
     const recorder = createRendererHealthFlightRecorder({ now: () => clock, maxBytes: 40 })
     for (let index = 1; index <= 5; index++) {
       clock = index * 1_000
-      recorder.record({ eventLoopLagMs: 1, visible: true, heapUsedBytes: 100 * 1_048_576 })
+      recorder.record({ eventLoopLagMs: 1, visible: true, jsHeapUsedBytes: 100 * 1_048_576 })
     }
     clock = 6_000
     const ring = recorder.flush()
@@ -194,14 +194,14 @@ describe('renderer health flight recorder', () => {
     const recorder = createRendererHealthFlightRecorder({ now: () => clock })
     for (let index = 1; index <= RENDERER_HEALTH_RING_CAPACITY + 3; index++) {
       clock = index * 5_000
-      recorder.record({ eventLoopLagMs: index, visible: true, heapUsedBytes: null })
+      recorder.record({ eventLoopLagMs: index, visible: true, jsHeapUsedBytes: null })
     }
     expect(recorder.flush()?.count).toBe(RENDERER_HEALTH_RING_CAPACITY)
     // A second trigger for the same failure must not re-emit spent evidence.
     expect(recorder.flush()).toBeNull()
 
     clock += 5_000
-    recorder.record({ eventLoopLagMs: 7, visible: false, heapUsedBytes: null })
+    recorder.record({ eventLoopLagMs: 7, visible: false, jsHeapUsedBytes: null })
     expect(recorder.flush()).toEqual({ count: 1, samples: '0:7:-:h' })
   })
 })

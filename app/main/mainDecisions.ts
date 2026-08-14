@@ -156,7 +156,7 @@ export const RENDERER_HEALTH_RING_CAPACITY = 12
 export type RendererHealthReading = Readonly<{
   eventLoopLagMs: number
   visible: boolean
-  heapUsedBytes: number | null
+  jsHeapUsedBytes: number | null
 }>
 
 export type RendererHealthFlightRecorderFlush = Readonly<{
@@ -176,17 +176,17 @@ export type RendererHealthFlightRecorder = {
 }
 
 /**
- * One reading as `<ageMs>:<lagMs>:<heapMiB>:<v|h>`, age measured back from the
- * flush. Unknown heap is `-`.
+ * One reading as `<ageMs>:<lagMs>:<jsHeapMiB>:<v|h>`, age measured back from
+ * the flush. Unknown V8 heap is `-`.
  *
  * ASCII by construction, so the byte budget below can count characters, and
  * free of the shapes `sanitizeOperationalText` rewrites (no path separator, no
  * scheme, no `@`) so the stored string is the string that was measured.
  */
 function encodeHealthReading(ageMs: number, reading: RendererHealthReading): string {
-  const heapMiB = reading.heapUsedBytes === null
+  const heapMiB = reading.jsHeapUsedBytes === null
     ? '-'
-    : String(Math.round(reading.heapUsedBytes / 1_048_576))
+    : String(Math.round(reading.jsHeapUsedBytes / 1_048_576))
   const age = Math.max(0, Math.round(ageMs))
   return `${age}:${Math.round(reading.eventLoopLagMs)}:${heapMiB}:${reading.visible ? 'v' : 'h'}`
 }

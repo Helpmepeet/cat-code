@@ -420,7 +420,7 @@ type RendererHealthResponse = Readonly<{
   monotonicTimestampMs: number
   eventLoopLagMs: number
   visible: boolean
-  heapUsedBytes: number | null
+  jsHeapUsedBytes: number | null
   watermarks: ReadonlyArray<Readonly<{ sessionId: string; received: number; applied: number; committed: number }>>
 }>
 
@@ -435,11 +435,11 @@ function parseRendererHealthResponse(value: unknown): RendererHealthResponse | n
     typeof item.monotonicTimestampMs !== 'number' || !Number.isFinite(item.monotonicTimestampMs) ||
     typeof item.eventLoopLagMs !== 'number' || !Number.isFinite(item.eventLoopLagMs) || item.eventLoopLagMs < 0 || item.eventLoopLagMs > 60_000 ||
     typeof item.visible !== 'boolean' ||
-    (item.heapUsedBytes !== null && (
-      typeof item.heapUsedBytes !== 'number' ||
-      !Number.isFinite(item.heapUsedBytes) ||
-      item.heapUsedBytes < 0 ||
-      item.heapUsedBytes > Number.MAX_SAFE_INTEGER
+    (item.jsHeapUsedBytes !== null && (
+      typeof item.jsHeapUsedBytes !== 'number' ||
+      !Number.isFinite(item.jsHeapUsedBytes) ||
+      item.jsHeapUsedBytes < 0 ||
+      item.jsHeapUsedBytes > Number.MAX_SAFE_INTEGER
     )) ||
     !Array.isArray(item.watermarks) || item.watermarks.length > 32
   ) return null
@@ -1879,7 +1879,7 @@ function registerIpcHandlers(): void {
     rendererHealthFlightRecorder.record({
       eventLoopLagMs: item.eventLoopLagMs,
       visible: item.visible,
-      heapUsedBytes: item.heapUsedBytes,
+      jsHeapUsedBytes: item.jsHeapUsedBytes,
     })
     const health = rendererHealth.response()
     if (health.shouldSample) {
@@ -1887,7 +1887,7 @@ function registerIpcHandlers(): void {
         sessions: item.watermarks.length,
         eventLoopLagMs: item.eventLoopLagMs,
         visible: item.visible,
-        heapUsedBytes: item.heapUsedBytes,
+        jsHeapUsedBytes: item.jsHeapUsedBytes,
         ...(health.recovered ? { missed: health.priorMisses, durationMs: health.outageDurationMs } : {}),
       })
     }
