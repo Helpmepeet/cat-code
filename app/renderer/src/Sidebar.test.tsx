@@ -498,7 +498,7 @@ function renderSidebar(
 // flow and is present in BOTH states. Assert on the <aside>'s own width, which
 // trails the shared transition classes.
 const ASIDE_COLLAPSED = 'ease-out w-12'
-const ASIDE_EXPANDED = 'ease-out w-60'
+const ASIDE_EXPANDED = 'ease-out sidebar-expanded'
 
 test('P4-33 — the rail stays collapsed when no row menu is open', () => {
   const html = renderSidebar()
@@ -549,6 +549,14 @@ test('P4-33 — holding it open reveals the row content the menu is anchored to'
   // The point of the guard is that the ANCHOR stays visible, not merely that a
   // width changed: the expanded rail renders the row title.
   expect(renderSidebar({ menuActive: true })).toContain('Alpha')
+})
+
+test('the expanded sidebar exposes separate collapse and resize controls', () => {
+  const html = renderSidebar({ menuActive: true })
+  expect(html).toContain('aria-label="Collapse sidebar"')
+  expect(html).toContain('aria-label="Resize sidebar"')
+  expect(html).toContain('title="Drag to resize sidebar"')
+  expect(html).toContain('sidebar-expanded')
 })
 
 /* --------------------------------------------------------------------------- *

@@ -104,7 +104,6 @@ test('packaged builds disable all dev harness flags regardless of env', () => {
     isPackaged: true,
     env: {
       CATCODE_TEST_CWD_ALLOWLIST: dir,
-      CATCODE_INITIAL_CWD: dir,
       CATCODE_DEBUG_STATE: '1',
     },
     validateCwd: cwd => ({ ok: true, realpath: cwd }),
@@ -112,7 +111,6 @@ test('packaged builds disable all dev harness flags regardless of env', () => {
   })
 
   expect(config.picker.kind).toBe('disabled')
-  expect(config.initialCwd).toBeNull()
   expect(config.debugState).toBe(false)
 })
 

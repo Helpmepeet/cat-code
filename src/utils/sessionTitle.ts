@@ -1,5 +1,5 @@
 /**
- * Session title generation via Haiku.
+ * Session title generation via the active provider's small, fast model.
  *
  * Standalone module with minimal dependencies so it can be imported from
  * print.ts (SDK control request handler) without pulling in the React/chalk/
@@ -81,7 +81,7 @@ const titleSchema = lazySchema(() => z.object({ title: z.string() }))
 
 /**
  * Generate a sentence-case session title from a description or first message.
- * Returns null on error or if Haiku returns an unparseable response.
+ * Returns null on error or if the provider returns an unparseable response.
  *
  * @param description - The user's first message or a description of the session
  * @param signal - Abort signal for cancellation
@@ -103,14 +103,16 @@ export async function generateSessionTitle(
       required: ['title'],
       additionalProperties: false,
     } as const
-    const syntheticOutputResult = createSyntheticOutputTool(structuredOutputSchema)
-    if ('error' in syntheticOutputResult) {
-      throw new Error(syntheticOutputResult.error)
-    }
-
     const userMessage = createUserMessage({ content: trimmed })
     const model = getSmallFastModelForProvider()
     const provider = resolveRequestProvider(model)
+    const syntheticOutputResult =
+      provider === 'openai'
+        ? null
+        : createSyntheticOutputTool(structuredOutputSchema)
+    if (syntheticOutputResult && 'error' in syntheticOutputResult) {
+      throw new Error(syntheticOutputResult.error)
+    }
     codexConversationIdOverride =
       provider === 'openai' ? `side/title/${randomUUID()}` : undefined
     const instructionAssembly = buildProviderInstructionAssembly({
@@ -126,13 +128,29 @@ export async function generateSessionTitle(
       systemPrompt: instructionAssembly.systemPrompt,
       openAIInstructionAssembly: instructionAssembly.openAIInstructionAssembly,
       thinkingConfig: { type: 'disabled' },
-      tools: [syntheticOutputResult.tool],
+      tools:
+        syntheticOutputResult && 'tool' in syntheticOutputResult
+          ? [syntheticOutputResult.tool]
+          : [],
       signal,
       options: {
         getToolPermissionContext: async () => getEmptyToolPermissionContext(),
         model,
         provider,
-        toolChoice: { type: 'tool', name: SYNTHETIC_OUTPUT_TOOL_NAME },
+        ...(provider === 'openai'
+          ? {
+              outputFormat: {
+                type: 'json_schema' as const,
+                schema: structuredOutputSchema,
+              },
+              effortValue: 'low' as const,
+            }
+          : {
+              toolChoice: {
+                type: 'tool' as const,
+                name: SYNTHETIC_OUTPUT_TOOL_NAME,
+              },
+            }),
         agents: [],
         // Reflect the actual session mode — this module is called from
         // both the SDK print path (non-interactive) and the CCR remote
@@ -148,7 +166,17 @@ export async function generateSessionTitle(
     const toolUseBlock = result.message.content.find(
       block => block.type === 'tool_use' && block.name === SYNTHETIC_OUTPUT_TOOL_NAME,
     )
-    const parsed = titleSchema().safeParse(toolUseBlock?.type === 'tool_use' ? toolUseBlock.input : null)
+    const textBlock = result.message.content.find(block => block.type === 'text')
+    let candidate: unknown =
+      toolUseBlock?.type === 'tool_use' ? toolUseBlock.input : null
+    if (provider === 'openai' && textBlock?.type === 'text') {
+      try {
+        candidate = JSON.parse(textBlock.text)
+      } catch {
+        candidate = null
+      }
+    }
+    const parsed = titleSchema().safeParse(candidate)
     const title = parsed.success ? parsed.data.title.trim() || null : null
 
     logEvent('tengu_session_title_generated', { success: title !== null })

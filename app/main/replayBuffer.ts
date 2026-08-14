@@ -134,6 +134,7 @@ const FRAME_RETENTION: Record<ServerFrame['kind'], FrameRetention> = {
   'extensions.snapshot': 'sticky',
   'remoteSettings.snapshot': 'sticky',
   'slash-catalog.snapshot': 'sticky',
+  'stats.usage.snapshot': 'sticky',
 
   event: 'ring',
   'generated-image-preview': 'preview',

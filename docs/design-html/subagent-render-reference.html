@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cat Code — Current subagent UI reference</title>
+  <style>
+    @font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2')}@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2')}@font-face{font-family:'DM Mono';font-style:normal;font-weight:500;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMMono-Medium.woff2') format('woff2')}
+    :root { --app:#09090b; --panel:#0a0a0c; --line:rgba(255,255,255,.06); --text:#f4f4f5; --sub:#a1a1aa; --faint:#52525b; --accent:#f472b6; --blue:#60a5fa; --green:#4ade80; --red:#f87171; --amber:#fbbf24; --purple:#c084fc; --violet:#c4b5fd; --sky:#7dd3fc; --teal:#5eead4; --stone:#a8a29e; --zinc:#71717a; --sans:'DM Sans',-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif; --mono:'DM Mono',ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace; }
+    *{box-sizing:border-box} body{margin:0;background:var(--app);color:var(--text);font:13px/1.4 var(--sans);-webkit-font-smoothing:antialiased}.app{min-height:100vh;padding:28px;background:var(--app)}.top{max-width:1200px;margin:0 auto 18px;display:flex;align-items:baseline;gap:12px}h1{margin:0;font-size:17px;font-weight:650;letter-spacing:-.02em}.eyebrow,.caption,.section-label{font:800 9.5px var(--mono);letter-spacing:.1em;text-transform:uppercase}.eyebrow{color:var(--faint)}.layout{max-width:1200px;margin:auto;display:grid;grid-template-columns:1.15fr .85fr;gap:16px;align-items:start}.column{display:grid;gap:16px}.panel{overflow:hidden;border:1px solid var(--line);border-radius:10px;background:var(--panel);box-shadow:0 16px 34px rgba(0,0,0,.2)}.caption{padding:10px 13px;border-bottom:1px solid var(--line);color:var(--faint)}.pad{padding:12px}.thread{display:grid;gap:10px}.assistant{padding:9px 11px;border:1px solid rgba(255,255,255,.04);border-radius:8px;background:#0f0f11;color:var(--sub)}.assistant b{color:var(--text);font-weight:600}.tool{overflow:hidden;border:1px solid var(--line);border-radius:7px;background:#0f0f11}.tool-top{display:flex;min-height:35px;align-items:center;gap:9px;padding:7px 11px}.mark{width:16px;color:var(--accent);font-size:13px;text-align:center}.tool-name{color:var(--accent);font-size:10.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}.target{min-width:0;flex:1;overflow:hidden;color:var(--text);font:12px var(--mono);text-overflow:ellipsis;white-space:nowrap}.nested-badge{border:1px solid var(--line);border-radius:5px;padding:1px 6px;color:var(--sub);font:10px var(--mono)}.identity{display:flex;flex-wrap:wrap;align-items:center;gap:8px;border-top:1px solid var(--line);padding:6px 11px}.role-dot{width:6px;height:6px;border-radius:50%;background:var(--sky);flex:none}.worker-type{font-size:12.5px;font-weight:650;color:var(--sky)}.state{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:550;white-space:nowrap}.pip{display:inline-block;width:8px;height:8px;border-radius:50%;flex:none}.ring{background:transparent!important;border:1.6px solid currentColor}.pulse{animation:pulse 1.55s infinite}@keyframes pulse{50%{opacity:.35;transform:scale(.82)}}.state.blue{color:var(--blue)}.state.green{color:var(--green)}.state.red{color:var(--red)}.state.amber{color:var(--amber)}.state.purple{color:var(--purple)}.state.stone{color:var(--stone)}.state.zinc{color:var(--zinc)}.pip.blue{background:var(--blue);color:var(--blue)}.pip.green{background:var(--green);color:var(--green)}.pip.red{background:var(--red);color:var(--red)}.pip.amber{background:var(--amber);color:var(--amber)}.pip.purple{background:var(--purple);color:var(--purple)}.pip.stone{background:var(--stone);color:var(--stone)}.pip.zinc{background:var(--zinc);color:var(--zinc)}.body{border-top:1px solid var(--line);background:rgba(0,0,0,.28);padding:9px 11px}.nested{display:grid;gap:7px;border-left:1px solid rgba(244,114,182,.2);padding-left:11px}.nested-row{border:1px solid rgba(255,255,255,.06);border-radius:5px;padding:7px 8px;color:var(--sub);font:11px var(--mono)}.result-label{color:var(--sub);font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}.result{margin-top:4px;color:var(--sub);font-size:12px}.stats{margin-top:6px;color:var(--sub);font:10px var(--mono)}.annotation{padding:7px 11px;color:var(--faint);font-size:10.5px}.delegate{overflow:hidden;border:1px solid var(--line);border-radius:7px;background:#0f0f11}.delegate-head{display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line);padding:7px 11px}.delegate-name{color:var(--accent);font-size:10.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}.delegate-cards{display:grid;gap:8px;padding:8px}.notice{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:8px;background:#0f0f11;padding:7px 11px;color:var(--sub);font-size:12px}.notice .pip{width:6px;height:6px}.composer-zone{position:relative;border-top:1px solid var(--line);padding:11px 12px 56px;background:var(--app)}.roster{border-radius:10px;background:var(--app);padding:3px 5px}.roster-row{display:flex;min-height:32px;align-items:center;gap:8px;border:1px solid rgba(255,255,255,.06);border-radius:7px;background:rgba(255,255,255,.025);padding:5px 7px}.handle{color:#e9d5ff;font:600 12.5px var(--mono);white-space:nowrap}.task{min-width:0;flex:1;overflow:hidden;color:var(--sub);font-size:11.5px;text-overflow:ellipsis;white-space:nowrap}.type-label{color:var(--sky);font:500 10.5px var(--mono);white-space:nowrap}.chevron{color:var(--faint);font:16px var(--mono)}.sep{color:var(--faint)}.roster-note{margin:7px 2px 0;color:var(--faint);font-size:10.5px}.composer{height:50px;border:1px solid var(--line);border-radius:10px;background:#0f0f11;padding:13px;color:#71717a}.strip{position:absolute;right:12px;bottom:11px;display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:999px;background:#070709;padding:6px 11px;color:var(--sub);font-size:12px;box-shadow:0 10px 30px rgba(0,0,0,.5)}.strip .pip{width:6px;height:6px;background:var(--accent)}.dialog{background:var(--panel)}.dialog-head{display:flex;justify-content:space-between;align-items:start;border-bottom:1px solid var(--line);padding:13px 15px}.dialog-title{font-size:14px;font-weight:650}.dialog-sub{margin-top:2px;color:var(--sub);font-size:12px}.close{color:var(--sub);font-size:17px}.tabs{display:flex;gap:2px;padding:0 12px;border-bottom:1px solid var(--line)}.tab{padding:9px 9px 7px;border-bottom:1.5px solid transparent;color:var(--sub);font-size:12px}.tab.active{border-color:var(--purple);color:var(--text);font-weight:650}.tab small{margin-left:3px;color:var(--purple);font:10px var(--mono)}.group{padding:8px 8px 0}.group-title{display:flex;align-items:center;gap:8px;padding:4px 4px 6px;color:var(--sub);font-size:10px;font-weight:800;letter-spacing:.1em;text-transform:uppercase}.group-title:after{height:1px;flex:1;background:var(--line);content:""}.task-row{display:flex;align-items:center;gap:9px;border-radius:7px;padding:8px 5px}.spinner{width:10px;height:10px;border:1.5px solid #454954;border-top-color:var(--sub);border-radius:50%}.kind{border:1px solid;border-radius:4px;padding:2px 5px;font-size:9px;font-weight:800;letter-spacing:.04em;text-transform:uppercase}.kind.agent{color:var(--purple);border-color:rgba(192,132,252,.35)}.kind.remote{color:var(--blue);border-color:rgba(96,165,250,.35)}.kind.teammate{color:#c4b5fd;border-color:rgba(196,181,253,.35)}.kind.bash{color:var(--teal);border-color:rgba(94,234,212,.35)}.task-title{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.task-state{max-width:200px;overflow:hidden;color:var(--sub);font:11px var(--mono);text-overflow:ellipsis;white-space:nowrap}.worker-summary{display:flex;flex-wrap:wrap;gap:13px;padding:11px 12px 4px;color:var(--sub);font-size:11px}.worker-summary span{display:inline-flex;align-items:center;gap:6px}.worker-row{display:flex;align-items:center;gap:9px;border-radius:8px;padding:8px 5px}.detail{border-top:1px solid var(--line);margin-top:8px;padding:12px}.back{color:var(--sub);font-size:11.5px}.detail-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px;border-bottom:1px solid var(--line);padding:9px 0}.chip{display:inline-flex;align-items:center;border:1px solid;border-radius:5px;padding:1px 6px;font:800 9.5px var(--mono);letter-spacing:.05em;text-transform:uppercase}.chip.violet{color:#c4b5fd;background:rgba(196,181,253,.1);border-color:rgba(196,181,253,.3)}.baton{border:1px solid rgba(192,132,252,.3);border-radius:5px;padding:1px 6px;color:var(--purple);font:600 10px var(--mono)}.detail-meta{margin-top:12px;color:var(--sub);font:10.5px var(--mono)}.detail-copy{margin-top:12px;color:var(--sub);font-size:12.5px;line-height:1.5}.block{margin-top:12px;border:1px solid rgba(192,132,252,.3);border-radius:7px;background:rgba(192,132,252,.08);padding:9px;color:#eadcff}.stop{display:inline-block;margin-top:12px;border:1px solid rgba(248,113,113,.3);border-radius:7px;padding:5px 11px;color:var(--red);font-size:11.5px}.full{grid-column:1/-1}.matrix{display:grid;grid-template-columns:150px repeat(4,minmax(0,1fr));overflow:auto}.matrix > div{min-width:120px;padding:9px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);font-size:11px}.matrix .head{color:var(--faint);font:800 9px var(--mono);letter-spacing:.08em;text-transform:uppercase}.yes{color:var(--sub)}.no{color:#4d5058}.foot{padding:10px 13px;color:var(--faint);font-size:10.5px}@media(max-width:880px){.app{padding:14px}.layout{grid-template-columns:1fr}.matrix{grid-template-columns:125px repeat(4,150px)}}
+  </style>
+</head>
+<body>
+  <main class="app">
+    <div class="top"><h1>Current subagent UI</h1><span class="eyebrow">source-accurate reference</span></div>
+    <div class="layout">
+      <section class="panel">
+        <div class="caption">Transcript</div>
+        <div class="pad thread">
+          <div class="assistant"><b>Assistant</b><br>I’ll inspect the renderer and hand the findings back.</div>
+
+          <article class="tool">
+            <div class="tool-top"><span class="mark">◆</span><span class="tool-name">Agent</span><span class="target">inspect the renderer</span><span class="nested-badge">2 nested</span></div>
+            <div class="identity"><span class="role-dot"></span><span class="worker-type">Explore</span><span class="state blue"><i class="pip blue pulse"></i>Running</span></div>
+            <div class="annotation">Nested activity is collapsed by default; the type/state strip remains visible.</div>
+          </article>
+
+          <article class="tool">
+            <div class="tool-top"><span class="mark">◆</span><span class="tool-name">Agent</span><span class="target">run focused verification</span></div>
+            <div class="identity"><span class="role-dot" style="background:var(--teal)"></span><span class="worker-type" style="color:var(--teal)">Verification</span><span class="state green"><i class="pip green"></i>Completed</span></div>
+          </article>
+
+          <article class="tool">
+            <div class="tool-top"><span class="mark">◆</span><span class="tool-name">Agent</span><span class="target">implement the view</span></div>
+            <div class="identity"><span class="role-dot" style="background:var(--violet)"></span><span class="worker-type" style="color:var(--violet)">Implementor</span><span class="state blue"><i class="pip blue ring"></i>In background</span></div>
+          </article>
+
+          <article class="tool">
+            <div class="tool-top"><span class="mark">◆</span><span class="tool-name">Agent</span><span class="target">run focused verification</span></div>
+            <div class="identity"><span class="role-dot" style="background:var(--teal)"></span><span class="worker-type" style="color:var(--teal)">Verification</span><span class="state green"><i class="pip green"></i>Completed</span></div>
+            <div class="body"><div class="result-label">Result</div><div class="result">Focused tests passed; no new renderer errors.</div><div class="stats">~12.4k tokens · 8 tools · 1m 14s</div></div>
+          </article>
+
+          <div class="delegate">
+            <div class="delegate-head"><i class="pip blue pulse"></i><span class="delegate-name">Delegate</span><span class="state blue">Running 3 agents…</span></div>
+            <div class="delegate-cards">
+              <article class="tool"><div class="tool-top"><span class="mark">◆</span><span class="tool-name">Agent</span><span class="target">map task state</span></div><div class="identity"><i class="role-dot"></i><span class="worker-type">Explore</span><span class="state blue"><i class="pip blue pulse"></i>Running</span></div></article>
+              <article class="tool"><div class="tool-top"><span class="mark">◆</span><span class="tool-name">Agent</span><span class="target">review ownership</span></div><div class="identity"><i class="role-dot" style="background:var(--teal)"></i><span class="worker-type" style="color:var(--teal)">Verification</span><span class="state green"><i class="pip green"></i>Completed</span></div></article>
+            </div>
+          </div>
+
+          <div class="notice"><i class="pip red"></i><span>Agent Ada failed: the worker process exited unexpectedly.</span></div>
+          <div class="annotation">This one-line notice appears only when a background completion cannot be joined to its originating Agent card.</div>
+        </div>
+      </section>
+
+      <div class="column">
+        <section class="panel">
+          <div class="caption">Above composer — worker roster</div>
+          <div class="composer-zone">
+            <div class="roster">
+              <div class="roster-row"><i class="pip blue pulse"></i><span class="handle">Turing</span><span class="task">Wire the docked worker roster</span><span class="type-label" style="color:var(--violet)">Coding worker</span><span class="chevron">›</span></div>
+            </div>
+            <div class="roster-note">One worker: full row. Names render without a leading @.</div>
+            <div class="roster" style="margin-top:9px"><div class="roster-row"><i class="pip amber"></i><span class="handle">Ada</span><span class="type-label" style="color:var(--violet)">Coding worker</span><span class="sep">·</span><span class="type-label" style="color:var(--blue)">2 working</span><span class="baton" style="color:var(--amber);border-color:rgba(251,191,36,.3)">→ you</span><span class="chevron">›</span></div></div>
+            <div class="roster-note">Two or more workers: a named row is promoted only for attention/news; otherwise the row is counts only.</div>
+            <div class="composer">Message Cat Code…</div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="caption">Floating session task strip</div>
+          <div style="position:relative;height:90px;background:var(--app)"><span class="strip"><i class="pip"></i><span style="color:var(--accent)">2 subagents active</span><span class="sep">·</span><span>1 background task</span></span></div>
+        </section>
+      </div>
+
+      <section class="panel full">
+        <div class="caption">Tasks dialog — default Tasks tab and Workers detail</div>
+        <div class="dialog-head"><div><div class="dialog-title">Tasks</div><div class="dialog-sub">3 active · 2 completed</div></div><div class="close">×</div></div>
+        <div class="tabs"><div class="tab active">Tasks <small>5</small></div><div class="tab">Workers <small>3</small></div><div class="tab">Leases</div></div>
+        <div class="group"><div class="group-title">Active</div>
+          <div class="task-row"><i class="spinner"></i><span class="kind agent">Agent</span><span class="task-title">Implement the focused renderer change</span><span class="task-state" style="color:var(--amber)">Needs you</span></div>
+          <div class="task-row"><i class="spinner"></i><span class="kind remote">Remote</span><span class="task-title">Continue the remote review</span><span class="task-state">Running</span></div>
+          <div class="task-row"><i class="spinner"></i><span class="kind teammate">Teammate</span><span class="task-title">Draft an implementation plan</span><span class="task-state">Paused</span></div>
+          <div class="task-row"><i class="spinner"></i><span class="kind bash">Bash</span><span class="task-title" style="font-family:var(--mono)">run focused tests</span><span class="task-state">Running</span></div>
+        </div>
+        <div class="tabs" style="margin-top:10px"><div class="tab">Tasks <small style="color:var(--sub)">5</small></div><div class="tab active">Workers <small>3</small></div><div class="tab">Leases</div></div>
+        <div class="worker-summary"><span><i class="pip blue pulse"></i>1 working</span><span style="color:var(--purple)"><i class="pip purple ring"></i>1 on the assistant</span><span style="color:var(--amber)"><i class="pip amber"></i>1 needs you</span></div>
+        <div class="group"><div class="group-title">Coding worker · 2</div><div class="worker-row"><i class="pip blue pulse"></i><span class="handle">Turing</span><span class="task">Wire the docked worker roster</span><span class="type-label" style="color:var(--violet)">Coding worker</span></div><div class="worker-row"><i class="pip purple ring"></i><span class="handle">Ada</span><span class="task">Resolve the migration boundary</span><span class="type-label" style="color:var(--violet)">Coding worker</span></div></div>
+        <div class="detail"><div class="back">‹ All workers</div><div class="detail-head"><span class="handle">Ada</span><span class="chip violet">Coding worker</span><span class="state purple"><i class="pip purple ring"></i>Waiting on orchestrator</span><span class="baton">→ orchestrator</span></div><div class="detail-meta">acct primary · held 2m 18s · backgrounded</div><div class="detail-copy"><div class="section-label" style="color:var(--faint);margin-bottom:4px">Prompt</div>Resolve the migration boundary and report the decision.</div><div class="block"><div class="section-label" style="color:var(--purple);margin-bottom:4px">Waiting on the assistant</div>Needs the parent agent to choose the protocol seam.<br><span style="color:var(--sub);font-size:10.5px">The assistant resolves this or relays it to you in its own turn.</span></div><span class="stop">Stop</span></div>
+      </section>
+
+      <section class="panel full">
+        <div class="caption">State availability by renderer surface</div>
+        <div class="matrix">
+          <div class="head">State</div><div class="head">Transcript Agent card</div><div class="head">Worker roster / Workers tab</div><div class="head">Tasks tab</div><div class="head">Task notification</div>
+          <div>Running</div><div class="yes">foreground pending</div><div class="yes">active worker</div><div class="yes">all task kinds</div><div class="no">—</div>
+          <div>In background</div><div class="yes">background launch, no completion</div><div class="no">—</div><div class="yes">local Agent</div><div class="no">—</div>
+          <div>Completed / Failed / Stopped</div><div class="yes">completion / tool result</div><div class="yes">completed; failed/killed → Attention</div><div class="yes">status-derived</div><div class="yes">dot only; summary already contains outcome</div>
+          <div>Waiting on orchestrator</div><div class="no">—</div><div class="yes">blocked + orchestrator active</div><div class="no">—</div><div class="no">—</div>
+          <div>Needs you</div><div class="no">—</div><div class="yes">blocked + no orchestrator</div><div class="yes">Agent / Remote / Teammate conditions</div><div class="no">—</div>
+          <div>Paused / Resumed</div><div class="no">—</div><div class="no">—</div><div class="yes">Teammate paused; local Agent resumed</div><div class="no">—</div>
+          <div>Result ready / Reviewed / Resumable / Stale / Attention</div><div class="no">—</div><div class="yes">agent-mode worker lifecycle</div><div class="no">—</div><div class="no">—</div>
+        </div>
+        <div class="foot">Transcript generic subagent types <b>general-purpose</b> and <b>worker</b> render as “Agent”. The Tasks tab kinds are Agent, Remote, Teammate, Bash, Dream, Workflow, and Monitor.</div>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

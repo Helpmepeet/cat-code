@@ -1,6 +1,6 @@
 # Tasks And Workers Routing Map
 
-Last refreshed: 2026-07-14.
+Last refreshed: 2026-08-14.
 
 Purpose: route local agents, shell tasks, teammate tasks, remote agent tasks, task panel UI, lifecycle, kill/stop behavior, and tests. This is a navigation map, not a replacement for source inspection. Start here, then verify behavior in the owner files below.
 
@@ -157,7 +157,7 @@ Start with `src/state/selectors.ts`.
 | Escape while viewing teammate | `src/hooks/useBackgroundTaskNavigation.ts` | Running teammate: aborts current work only. Terminal/nonexistent teammate: exits view. |
 | Ctrl+C while viewing teammate | `src/hooks/useCancelRequest.ts` | Kills running local-agent tasks through the aggregate agent kill path, then exits teammate view. |
 | `chat:killAgents` | `src/hooks/useCancelRequest.ts` | Two-press confirmation, kills all running `local_agent` tasks, marks them notified, emits SDK terminations, and enqueues one aggregate notification. |
-| Agent process cleanup | `src/tools/AgentTool/runAgent.ts` | Kills shell and monitor tasks spawned by the agent so children do not outlive the agent. |
+| Agent process cleanup | `src/tools/AgentTool/runAgent.ts`, `src/utils/forkedAgent.ts` | Kills shell and monitor tasks spawned by the agent so children do not outlive the agent. Synchronous and forked agents also release their Codex lease and scoped WebSocket session on exit. |
 | Remote kill | `src/tasks/RemoteAgentTask/RemoteAgentTask.tsx` | Marks local task killed/notified and archives the remote session to stop cloud resource use. |
 
 ## Tests And Validation
@@ -186,6 +186,9 @@ When changing task UI, search for component tests first; this snapshot does not 
 - Do not kill a teammate's whole task when the intended action is "stop current work"; use `currentWorkAbortController` where the UI already does.
 - Do not emit duplicate task notifications. Many task types set `notified` atomically before enqueueing.
 - Do not let terminal local-agent tasks disappear while retained in a viewed transcript; `retain`, `diskLoaded`, and `evictAfter` are coupled.
+- Do not drop a local agent's `agentName` when serializing a task result or a
+  nested transcript frame; it remains the friendly routing and display handle
+  after the live task has stopped.
 - Do not let agent-scoped shell/monitor tasks survive agent exit; keep `runAgent.ts` cleanup aligned with task types.
 - Do not assume remote sessions are local-only tasks. Killing a remote task should archive the remote session and remove sidecar metadata.
 - Do not route a steering message off a captured `task.status` read before an earlier `await` (target resolution, mailbox I/O). Re-read AppState and use `queuePendingMessageIfRunning()` immediately before deciding to queue vs. resume/fail — the target can transition mid-call.

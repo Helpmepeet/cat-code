@@ -205,14 +205,16 @@ One section per prototype surface, in prototype-load order. Each row is one elem
 | Element / UX-state | Cat | Disposition | Evidence | Notes |
 |---|---|---|---|---|
 | PawLogo (pink paw SVG glyph) | chrome | ✅ built | `app/renderer/src/Sidebar.tsx:603` def, rendered `:140` | SVG ported attribute-for-attribute; `text-accent` (pink). |
-| Rail geometry: 48px collapsed → 240px expanded | chrome | ✅ built | `app/renderer/src/Sidebar.tsx:121` `w-12` spacer, `:129` `open?'w-60':'w-12'` | RAIL_W/FULL_W → Tailwind `w-12`/`w-60`. |
+| Rail geometry: 48px collapsed → 192–420px expanded | chrome | 🔁 adapted | `app/renderer/src/Sidebar.tsx:172-174,456-460,776` + `app/renderer/src/theme.css:96-98` | The original 240px expanded width remains the default, but the operator can now drag the right edge between 192px and 420px. |
 | Hover-expand timing (120ms show / 200ms hide) | ux-state | ✅ built | `app/renderer/src/Sidebar.tsx:36` `HOVER_DELAY`/`HIDE_DELAY`; timers `:86-93` | |
 | Spacer div reserving rail footprint in flex flow | chrome | ✅ built | `app/renderer/src/Sidebar.tsx:121` `<div className="w-12 shrink-0" aria-hidden>` | |
 | Floating fixed rail: bg, border-right, shadow-when-open, width easing | chrome | ✅ built | `app/renderer/src/Sidebar.tsx:123-130` `fixed inset-y-0 z-40 bg-shell-chrome border-r border-shell-seam shadow[…] transition-[width,box-shadow]` | Raw `#0a0a0c`/rgba tokens → `shell-chrome`/`shell-seam` design tokens (P3-5a grammar). |
 | Logo + pin header row (height 50) | chrome | ✅ built | `app/renderer/src/Sidebar.tsx:133-137` `h-[50px]`, justify-between when open else center | |
 | "Cat Code" wordmark (shown only when open) | chrome | ✅ built | `app/renderer/src/Sidebar.tsx:143-147` `truncate text-[13px] font-semibold`, gated on `open` | |
-| Pin button (toggle pinned-open) + pin icon + active pink bg | control | ✅ built | `app/renderer/src/Sidebar.tsx:149-165`; `PinIcon` `:709` | Pinned → `bg-accent/15 text-accent`; real adds `aria-pressed`+`aria-label`. |
-| Pinned-open state (pin overrides hover collapse) | ux-state | ✅ built | `app/renderer/src/Sidebar.tsx:76` `pinned`; `:84` `open = pinned \|\| hovering` | |
+| Pin button (toggle pinned-open) + pin icon + active pink bg | control | ✅ built | `app/renderer/src/Sidebar.tsx:816-829`; `PinIcon` `:2214` | Pinned → `bg-accent/15 text-accent`; real adds `aria-pressed`+`aria-label`. |
+| Pinned-open state (pin overrides hover collapse) | ux-state | ✅ built | `app/renderer/src/Sidebar.tsx:416-423` | The pin keeps the rail open until the explicit collapse control is used. |
+| Explicit collapse control | control | ➕ real-added | `app/renderer/src/Sidebar.tsx:437-443,806-814` | Closes the expanded rail immediately, including a pinned rail; it reopens on the next pointer entry. |
+| Right-edge resize handle | control | ➕ real-added | `app/renderer/src/Sidebar.tsx:1139-1167` | Pointer-only resize control with a 192–420px bound; no prototype equivalent. |
 | Collapsed rail nav (icons only, anchored bottom) | chrome | ✅ built | `app/renderer/src/Sidebar.tsx:233-245` rail nav `mt-auto`; `NavItemRail` `:485` | |
 | Rail nav item hover color change | ux-state | ✅ built | `app/renderer/src/Sidebar.tsx:524` `hover:text-text-muted`; disabled items no hover | |
 | Rail nav active state (pink bg + accent-soft) | ux-state | 🔁 adapted | `app/renderer/src/Sidebar.tsx:494` `active = enabled && id===activeView`; `:522-523` | Active follows `activeView` over chat/goals/settings (wired); Sessions/Accounts disabled. Prototype's `activePage` spanned all 5. |

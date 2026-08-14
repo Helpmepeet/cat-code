@@ -1,6 +1,6 @@
 # Prompt System Map
 
-Last refreshed: 2026-08-10
+Last refreshed: 2026-08-14
 
 ## Purpose
 
@@ -40,6 +40,7 @@ Read in this order for most prompt or instruction work:
 | Change output styles | `src/constants/outputStyles.ts` | `src/outputStyles/loadOutputStylesDir.ts`, `src/utils/plugins/loadPluginOutputStyles.ts`, `.claude/output-styles/*.md`, `~/.cat-code/output-styles/*.md` | Output style text is injected by `src/constants/prompts.ts`. |
 | Change tool descriptions | `src/tools/*/prompt.ts` | `src/tools.ts`, `src/utils/api.ts`, `src/utils/providerPromptRegressions.test.ts` | Tool prompt files are model-visible instruction surfaces even when the main system prompt is unchanged. `src/tools/BashTool/prompt.ts` also owns model-facing git/commit guidance, shell failure handling, sandbox retry wording, background execution, and sleep/polling guidance. |
 | Inspect emitted prompts | `src/services/api/dumpPrompts.ts` | `src/query.ts`, `src/services/api/claude.ts`, `/context` command paths | Ant-user dumps write under `~/.cat-code/dump-prompts/<session-or-agent-id>.jsonl` as init, system_update, message, and response entries. |
+| Render a prompt for a dev-full evaluation | `src/entrypoints/cli.tsx` | `scripts/build.ts`, `src/constants/prompts.ts`, `src/utils/model/model.ts`, `src/bootstrap/state.ts` | A `dev-full` build includes the gated `--dump-system-prompt` fast path. It renders and exits; use `--model` plus explicit `--provider` when the desired prompt family differs from persisted startup provider state. |
 
 ## Runtime Flow
 
@@ -160,11 +161,11 @@ For emitted-prompt inspection, use prompt dumps when available:
 - Do not assume a subagent sees the same context as the main loop. `runAgent.ts` may omit `claudeMd` or `gitStatus` by agent type and feature gate.
 - Do not assume Agent Mode is only a plan. It is wired through `src/constants/prompts.ts`, `src/utils/systemPrompt.ts`, `src/utils/queryContext.ts`, `src/QueryEngine.ts`, and `src/agent-mode/`.
 - Do not move or remove `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` without checking prompt-cache code in `src/utils/api.ts` and `src/services/api/claude.ts`.
-- Do not trust older docs that mention a missing `src/agent/prompt.ts` split. Verify current prompt entrypoints in this map.
+- Do not trust older historical docs that mention the removed `src/agent/prompt.ts` split. Verify current prompt entrypoints in this map.
 - Do not debug MCP prompt churn only in `prompts.ts`; MCP instruction delta behavior can move instructions out of the normal prompt section.
 - Do not forget API-time additions in `src/services/api/claude.ts`, such as CLI prompt prefixes and tool-search related instructions.
 - Do not assume safety or orchestration guidance is shared across providers. GPT-specific tool-output handling, risky-action policy, verification bounds, and Explore delegation rules are assembled in `src/constants/promptStyles/gpt.ts`.
 - Do not treat a single subagent as a neutral pass-through. The default and GPT prompt styles both require a concrete reason delegation beats doing that work in the current thread.
 - Do not reach for `src/services/api/dumpPrompts.ts` without setting `USER_TYPE=ant`. Every entry point returns early otherwise, so the rows above that point at prompt dumps describe an ant-only path. `/context` is the only inspection surface live by default.
-- Do not reach for `--dump-system-prompt`. Its call site in `src/entrypoints/cli.tsx` is guarded on a feature name that does not appear in `scripts/build.ts`, so it is eliminated from every build and the CLI reports it as an unknown option.
+- Do not assume `--dump-system-prompt` exists in every build. `scripts/build.ts` enables `DUMP_SYSTEM_PROMPT` only for the `dev-full` feature set; when inspecting a non-GPT model, pass `--provider` explicitly or the persisted startup provider can select the wrong prompt style.
 - Do not assume a prompt difference from upstream is Cat Code's doing. Roughly half of the prompt-system differences audited on 2026-08-10 were upstream changes made after the fork. Check [`../reports/2026-08-10-cat-code-upstream-divergence-ledger.md`](../reports/2026-08-10-cat-code-upstream-divergence-ledger.md) before re-syncing anything toward upstream, especially the instruction-authority wrapper in `src/utils/claudemd.ts` and the input-keyed section cache, which are deliberate.

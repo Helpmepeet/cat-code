@@ -141,6 +141,8 @@ import type { SidecarDiagnosticsDomain } from './diagnosticsDomain.js'
 import type { SidecarExtensionsDomain } from './extensionsDomain.js'
 import type { SidecarRemoteSettingsDomain } from './remoteSettingsDomain.js'
 import type { PermissionDisplayFacts } from './permissionDomain.js'
+import { getUsageStatsSnapshot } from './statsDomain.js'
+import type { UsageStatsRange } from '../shared/protocol.js'
 
 /**
  * Why an outbound frame was refused, one value per refusing site. Closed and
@@ -590,8 +592,8 @@ export class SidecarServer {
       // MODEL STRING, so count_tokens takes the Codex path, fails, and bills the
       // Anthropic fallback instead. Per turn, per session, that is a real cost for
       // a panel nobody may open. `/context` pays it only on explicit user demand.
-      // The breakdown is therefore attach-scoped until an on-demand request verb
-      // exists; a turn-boundary refresh belongs on that verb, not here.
+      // The breakdown is recomputed only by the on-demand request verb; a
+      // turn-boundary refresh belongs there, not here.
     })
     // The terminal REPL owns an equivalent between-turn drain. Desktop submits
     // straight to this sidecar, so this process owns the idle wake-up for its
@@ -773,15 +775,12 @@ export class SidecarServer {
     // selectable options + availability). Read-at-call + re-broadcast on change; no
     // renderer-authored state (the value/selection rides the app-owned write verbs).
     this.sendRunControlsSnapshot(connection)
-    // The donut popover's per-category breakdown. Async + fire-and-forget (it
-    // tokenizes the transcript), so a resumed session's popover fills in shortly
-    // after attach rather than holding up replay. Broadcast, not per-connection:
-    // one analysis serves every attached pane.
-    void this.broadcastContextBreakdown()
     // P4-5 — redacted Codex account pool snapshot (the canonical domain read-seam),
     // after the other snapshots and before replay. Read-only + secretGuard-clean by
     // construction; re-broadcast after any pool-mutating account verb.
     this.sendAccountsSnapshot(connection)
+    // Usage analytics snapshot — real engine-backed stats aggregation for the Accounts page.
+    void this.sendUsageStatsSnapshot(connection)
     // The pool loads observation-only in the sidecar (no engine startup path
     // runs `initAccountPool`), so the first snapshot's usage hints are 0/null.
     // Fire the same read-only wham/usage GET the engine runs at startup, ONCE,
@@ -1071,6 +1070,11 @@ export class SidecarServer {
     // account machinery. The engine's shared schema is deliberately not extended.
     const messageType = (frame.message as { type?: unknown } | null | undefined)
       ?.type
+    if (typeof messageType === 'string' && messageType === 'stats.query') {
+      this.handleStatsQuery(connection, frame.message)
+      return
+    }
+
     if (typeof messageType === 'string' && messageType.startsWith('account.')) {
       this.handleAccountVerb(connection, frame.message)
       return
@@ -1946,6 +1950,26 @@ export class SidecarServer {
         false,
       )
     }
+  }
+
+  private handleStatsQuery(connection: Connection, rawMessage: unknown): void {
+    const raw = rawMessage as { requestId?: unknown }
+    const requestId =
+      typeof raw.requestId === 'string' ? raw.requestId : undefined
+
+    const parsed = statsQueryMessageSchema.safeParse(rawMessage)
+    if (!parsed.success) {
+      this.sendError(
+        connection,
+        requestId,
+        'bad_request',
+        parsed.error.issues[0]?.message ?? 'invalid stats query',
+        false,
+      )
+      return
+    }
+
+    void this.sendUsageStatsSnapshot(connection, parsed.data.range)
   }
 
   /**
@@ -3343,8 +3367,8 @@ export class SidecarServer {
    */
   /**
    * Renderer asked for a fresh breakdown (the popover was opened). Validate,
-   * then run the same broadcast the attach path uses — the snapshot IS the
-   * answer, so there is no separate result frame to correlate.
+   * then compute and broadcast the snapshot, which is the answer; there is no
+   * separate result frame to correlate.
    *
    * Fails SILENTLY on an invalid frame rather than erroring back: this is a
    * read-only refresh with no user-visible commitment, and the popover already
@@ -3491,6 +3515,31 @@ export class SidecarServer {
     }
     for (const connection of this.connections) {
       this.sendAccountsSnapshot(connection)
+    }
+  }
+
+  private async sendUsageStatsSnapshot(
+    connection: Connection,
+    range: UsageStatsRange = '7d',
+  ): Promise<void> {
+    try {
+      const raw = await getUsageStatsSnapshot(range)
+      const snapshot = this.prepareOutboundPayload(raw, 'stats.usage.snapshot')
+      if (!snapshot) {
+        return
+      }
+      this.send(connection, {
+        kind: 'stats.usage.snapshot',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        stats: snapshot,
+      })
+    } catch (error) {
+      this.log(
+        `[sidecar] stats.usage.snapshot send skipped (${
+          error instanceof Error ? error.message : String(error)
+        })`,
+      )
     }
   }
 
@@ -4062,6 +4111,8 @@ function checkStrictKeys(message: unknown): string | null {
     ['session.branch', new Set(['type', 'requestId'])],
     // P4-29 — the renderer authors ONLY the tag name (empty string = remove).
     ['session.tag', new Set(['type', 'requestId', 'tag'])],
+    // Usage stats query verb — real engine-backed aggregation
+    ['stats.query', new Set(['type', 'requestId', 'range'])],
     // IDLE-PARK (decisions/IDLE-PARK.md §2/§6). Host-originated (no preload
     // channel forwards it), but on the closed allowlist as defence-in-depth. The
     // frame carries NO renderer-authored state — only `type` + `requestId`; any
@@ -4380,6 +4431,12 @@ const sessionActionVerbMessageSchema = z.discriminatedUnion('type', [
     tag: z.string().max(MAX_TEXT_FIELD_CHARS),
   }),
 ])
+
+const statsQueryMessageSchema = z.object({
+  type: z.literal('stats.query'),
+  range: z.enum(['7d', '30d']),
+  requestId: z.string().max(MAX_TEXT_FIELD_CHARS).optional(),
+})
 
 /**
  * P4-13 — sidecar-LOCAL schemas for the RemoteSettings verbs (protocol.ts:

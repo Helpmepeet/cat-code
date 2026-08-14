@@ -6,6 +6,8 @@ import type {
   OAuthLoginProgress,
   ServerFrame,
   SessionId,
+  UsageStatsRange,
+  UsageStatsSnapshot,
 } from '../../shared/protocol.js'
 
 /**
@@ -50,6 +52,12 @@ export type AccountsState = {
    * the session tears down.
    */
   oauthProgress: Record<SessionId, OAuthLoginProgress | null>
+  /**
+   * Real usage statistics aggregated from session transcript logs.
+   */
+  usageStats: Record<UsageStatsRange, UsageStatsSnapshot | null>
+  latestUsageStats: UsageStatsSnapshot | null
+  activeStatsRange: UsageStatsRange
 }
 
 export type AccountsAction =
@@ -60,6 +68,7 @@ export type AccountsAction =
   | { type: 'pool'; pool: AccountsSnapshot }
   /** The row is gone for good — drop its retained snapshot (see `lastSessions`). */
   | { type: 'session-removed'; sessionId: SessionId }
+  | { type: 'set-stats-range'; range: UsageStatsRange }
 
 export function createAccountsState(): AccountsState {
   return {
@@ -68,6 +77,12 @@ export function createAccountsState(): AccountsState {
     lastSessions: {},
     lastResult: null,
     oauthProgress: {},
+    usageStats: {
+      '7d': null,
+      '30d': null,
+    },
+    latestUsageStats: null,
+    activeStatsRange: '7d',
   }
 }
 
@@ -97,6 +112,10 @@ export function reduceAccountsState(
     return { ...state, sessions, lastSessions, oauthProgress }
   }
 
+  if (action.type === 'set-stats-range') {
+    return { ...state, activeStatsRange: action.range }
+  }
+
   if (action.type === 'oauthReset') {
     if (state.oauthProgress[action.sessionId] == null) return state
     return {
@@ -124,6 +143,17 @@ export function reduceAccountsState(
 
   if (frame.kind === 'account.result') {
     return { ...state, lastResult: frame }
+  }
+
+  if (frame.kind === 'stats.usage.snapshot') {
+    return {
+      ...state,
+      usageStats: {
+        ...state.usageStats,
+        [frame.stats.range]: frame.stats,
+      },
+      latestUsageStats: frame.stats,
+    }
   }
 
   if (frame.kind === 'lifecycle') {
@@ -259,5 +289,19 @@ export function selectHasOtherSwitchable(
       a.id !== accountId &&
       a.status === 'healthy' &&
       !a.usageLimitReached,
+  )
+}
+
+/** Resolves usage statistics for the given range ('7d' | '30d') or the active range. */
+export function selectUsageStatsForRange(
+  state: AccountsState,
+  range?: UsageStatsRange,
+): UsageStatsSnapshot | null {
+  const targetRange = range ?? state.activeStatsRange
+  return (
+    state.usageStats[targetRange] ??
+    (state.latestUsageStats?.range === targetRange
+      ? state.latestUsageStats
+      : null)
   )
 }

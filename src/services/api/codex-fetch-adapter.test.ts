@@ -714,26 +714,38 @@ describe('codex-fetch-adapter', () => {
     expect(defaultChoice.tool_choice).toBe('auto')
   })
 
-  test('translateToCodexBody does not force filtered StructuredOutput tool choice', () => {
+  test('translateToCodexBody replaces filtered StructuredOutput with native JSON schema', () => {
+    const schema = {
+      type: 'object',
+      properties: { title: { type: 'string' } },
+      required: ['title'],
+      additionalProperties: false,
+    }
     const body = translateToCodexBody({
       model: 'claude-sonnet-4-6',
       tools: [
         {
           name: SYNTHETIC_OUTPUT_TOOL_NAME,
           description: 'Return structured output',
-          input_schema: {
-            type: 'object',
-            properties: { title: { type: 'string' } },
-            required: ['title'],
-            additionalProperties: false,
-          },
+          input_schema: schema,
         },
       ],
       tool_choice: { type: 'tool', name: SYNTHETIC_OUTPUT_TOOL_NAME },
+      output_config: {
+        format: { type: 'json_schema', schema },
+      },
       _openaiInstructionAssembly: { instructions: 's', inputMessages: [] },
     }).codexBody
 
     expect(body.tool_choice).toBe('auto')
+    expect(body.text).toEqual({
+      format: {
+        type: 'json_schema',
+        name: 'cat_code_output',
+        schema,
+        strict: true,
+      },
+    })
     expect(
       Array.isArray(body.tools)
         ? body.tools.some(tool => tool.name === SYNTHETIC_OUTPUT_TOOL_NAME)

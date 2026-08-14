@@ -4,9 +4,9 @@
  * recipe this copies): a reducer over the read-only frame plus a read-time
  * selector, kept OUT of `transcriptProjector.ts`.
  *
- * The seam is coarse on purpose: the sidecar computes on attach and when the
- * popover asks, not per turn, because the analysis is expensive. Between those
- * points the popover reads the last snapshot rather than an estimate.
+ * The seam is coarse on purpose: the sidecar computes only when the popover
+ * asks, not per turn or attach, because the analysis is expensive. Between those
+ * requests the popover reads the last snapshot rather than an estimate.
  */
 
 import type { ContextUsage } from './contextUsage.js'

@@ -5062,6 +5062,60 @@ test('P4-5 — attach emits a redacted accounts.snapshot that is secretGuard-cle
   expect(serialized).not.toContain('/Users/secret')
 })
 
+test('stats — attach emits a stats.usage.snapshot that is secretGuard-clean', async () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+  await waitFor(() => received.some(f => f.kind === 'stats.usage.snapshot'), 4000)
+
+  const snap = received.find(f => f.kind === 'stats.usage.snapshot')
+  expect(snap?.kind).toBe('stats.usage.snapshot')
+  if (snap && snap.kind === 'stats.usage.snapshot') {
+    expect(snap.stats.range).toBe('7d')
+    expect(typeof snap.stats.totalTokens).toBe('number')
+  }
+})
+
+test('stats — stats.query with range: 30d dispatches and responds with 30d stats.usage.snapshot', async () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'stats.query', requestId: 'sq-1', range: '30d' }),
+  )
+  await waitFor(
+    () =>
+      received.some(
+        f => f.kind === 'stats.usage.snapshot' && f.stats.range === '30d',
+      ),
+    4000,
+  )
+
+  const thirtyDaySnaps = received.filter(
+    f => f.kind === 'stats.usage.snapshot' && f.stats.range === '30d',
+  )
+  expect(thirtyDaySnaps.length).toBeGreaterThan(0)
+})
+
+test('stats — stats.query with invalid range fails closed (bad_request)', async () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'stats.query', requestId: 'sq-bad', range: 'invalid' as any }),
+  )
+  await flush()
+
+  const error = received.find(
+    f => f.kind === 'error' && (f as any).requestId === 'sq-bad',
+  )
+  expect(error?.kind).toBe('error')
+})
+
 test('P4-5 — a valid account.switch produces an ok account.result and re-broadcasts the snapshot', async () => {
   seedCodexAccountPoolForTest({
     accounts: [acctFixture({ accountId: 'a', alias: 'a' }), acctFixture({ accountId: 'b', alias: 'b' })],

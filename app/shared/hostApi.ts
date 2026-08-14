@@ -37,12 +37,12 @@ import type {
 /**
  * Create (or restore) a session — the INTERNAL (main→host) request. `cwd` and
  * `resumeEngineSessionId` are MAIN-supplied, never renderer-authored (HC1/T8):
- * `cwd` is either main's own `process.cwd()` (the startup session) or a realpath
- * main resolved from a native-picker token; `resumeEngineSessionId` is only ever
- * set by `restoreSession` from a registry row. The host re-validates `cwd`
- * regardless of origin (defense in depth). The renderer's create surface is the
- * separate `CreateSessionInput` (a picker token + a title), which cannot express
- * either field — see `CatCodeBridge.createSession`.
+ * `cwd` is a realpath main resolved from a native-picker token, a registry row,
+ * or the engine-written sessions catalog; `resumeEngineSessionId` is only ever
+ * set by `restoreSession` from a registry row or main's catalog-backed history
+ * open. The host re-validates `cwd` regardless of origin (defense in depth). The
+ * renderer's create surface is the separate `CreateSessionInput` (a picker token
+ * + a title), which cannot express either field — see `CatCodeBridge.createSession`.
  */
 export type CreateSessionRequest = {
   /** Session root. Host re-validates (realpath / exists / isDirectory) — HC1. */

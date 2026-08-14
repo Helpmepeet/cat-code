@@ -38,11 +38,13 @@ import type { TranscriptBackfillItem } from '../shared/transcriptBackfill.js'
 import type { SupervisorEvent } from '../supervisor/supervisor.js'
 
 /**
- * Keep the unbundled desktop sidecar on the engine build's default classifier
- * feature. Without this runtime flag Bun folds every classifier branch away.
+ * Keep the unbundled desktop sidecar on the engine's default runtime features.
+ * Without these runtime flags Bun folds the corresponding feature branches
+ * away, so the desktop would silently run a different engine than `cli-dev`.
  */
 export const SIDECAR_RUNTIME_ARGS = [
   '--feature=TRANSCRIPT_CLASSIFIER',
+  '--feature=REACTIVE_COMPACT',
   'run',
 ] as const
 

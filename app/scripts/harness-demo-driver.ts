@@ -15,24 +15,37 @@ app.once('browser-window-created', (_event, window) => {
 
 async function run(window: BrowserWindow): Promise<void> {
   try {
-    const initial = await waitForExport(state => {
-      const matches = state.sessions.filter(
-        session => session.cwd === cwd && session.status === 'ready',
-      )
-      return matches.length >= 1
-    })
+    const initial = await waitForExport(state => state.sessions.length === 0)
     assertMode(exportPath, 0o600, 'debug export file')
     if (window.getTitle() !== 'Cat Code Dev') {
       throw new Error(`expected Cat Code Dev title, got ${JSON.stringify(window.getTitle())}`)
     }
 
-    const createResult = await window.webContents.executeJavaScript(`(async () => {
+    const firstCreateResult = await window.webContents.executeJavaScript(`(async () => {
       const token = await window.catcode.pickDirectory()
       if (!token) return { ok: false, error: 'no token' }
       return await window.catcode.createSession({ cwdToken: token })
     })()`)
-    if (!createResult?.ok) {
-      throw new Error(`createSession failed: ${JSON.stringify(createResult)}`)
+    if (!firstCreateResult?.ok) {
+      throw new Error(`first createSession failed: ${JSON.stringify(firstCreateResult)}`)
+    }
+
+    await waitForExport(state =>
+      state.sessions.some(
+        session =>
+          session.cwd === cwd &&
+          session.status === 'ready' &&
+          typeof session.enginePid === 'number',
+      ),
+    )
+
+    const secondCreateResult = await window.webContents.executeJavaScript(`(async () => {
+      const token = await window.catcode.pickDirectory()
+      if (!token) return { ok: false, error: 'no token' }
+      return await window.catcode.createSession({ cwdToken: token })
+    })()`)
+    if (!secondCreateResult?.ok) {
+      throw new Error(`second createSession failed: ${JSON.stringify(secondCreateResult)}`)
     }
 
     const final = await waitForExport(state => {

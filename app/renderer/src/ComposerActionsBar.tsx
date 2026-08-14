@@ -763,13 +763,13 @@ function ContextBreakdownDonut({
  * The per-category BREAKDOWN below the aggregate row (the prototype's stacked bar +
  * legend + Free, Surfaces.jsx:517-537, now drawn as {@link ContextBreakdownDonut}) is
  * the `context-breakdown.snapshot` seam, carrying the engine's OWN
- * `analyzeContextUsage` output. It arrives on attach and whenever this popover is
- * opened, so a session with nothing to analyse yet renders the aggregate row alone —
- * absent, never fabricated.
+ * `analyzeContextUsage` output. It arrives only after this popover is opened, so a
+ * session with nothing to analyse yet renders the aggregate row alone — absent,
+ * never fabricated.
  *
  * The header row reads {@link selectPanelUsage}, NOT `usage` directly, once a
  * breakdown is present: `usage` is the composer's own live, per-message number,
- * while the rows below are a coarse snapshot recomputed only on attach/open. The
+ * while the rows below are a coarse snapshot recomputed only on open. The
  * two are different pipelines on different cadences, so printing them together
  * could show a header total the rows didn't sum to. `selectPanelUsage` sums the
  * SAME rows the legend prints instead, so the header always reconciles with what

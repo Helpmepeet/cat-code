@@ -106,11 +106,12 @@ function countingDomain(
 const flush = () => new Promise(resolve => setTimeout(resolve, 0))
 
 test('accepts a valid request and answers with a context-breakdown.snapshot', async () => {
-  const { domain } = countingDomain()
+  const { domain, calls } = countingDomain()
   const server = makeServer(domain)
   const { socket, received } = makeSocket()
   const connection = server.addConnection(socket)
   await flush()
+  expect(calls()).toBe(0)
   received.length = 0
 
   server.handleData(
@@ -119,6 +120,7 @@ test('accepts a valid request and answers with a context-breakdown.snapshot', as
   )
   await flush()
 
+  expect(calls()).toBe(1)
   const snapshot = received.find(f => f.kind === 'context-breakdown.snapshot')
   expect(snapshot).toBeDefined()
   expect(
@@ -137,8 +139,15 @@ test('a request inside the freshness floor is answered without recomputing', asy
   const { socket, received } = makeSocket()
   const connection = server.addConnection(socket)
   await flush()
-  const afterAttach = calls()
-  expect(afterAttach).toBe(1)
+  expect(calls()).toBe(0)
+
+  server.handleData(
+    connection,
+    clientFrame({ type: 'context-breakdown.request', requestId: 'initial' }),
+  )
+  await flush()
+  const afterInitialRequest = calls()
+  expect(afterInitialRequest).toBe(1)
   received.length = 0
 
   for (let i = 0; i < 5; i++) {
@@ -149,8 +158,8 @@ test('a request inside the freshness floor is answered without recomputing', asy
   }
   await flush()
 
-  // Still exactly the attach analysis, but every request was answered.
-  expect(calls()).toBe(afterAttach)
+  // Every request uses the first click's snapshot.
+  expect(calls()).toBe(afterInitialRequest)
   expect(
     received.filter(f => f.kind === 'context-breakdown.snapshot'),
   ).toHaveLength(5)
@@ -169,9 +178,15 @@ test('a failed analysis neither caches nor strands the next request', async () =
   const { socket, received } = makeSocket()
   const connection = server.addConnection(socket)
   await flush()
+  expect(calls).toBe(0)
+
+  server.handleData(
+    connection,
+    clientFrame({ type: 'context-breakdown.request', requestId: 'initial' }),
+  )
   await flush()
 
-  // The attach analysis failed silently: no cache, error frame, or stuck latch.
+  // A failed click analysis leaves no cache or error frame and does not strand retry.
   expect(calls).toBe(1)
   expect(received.find(f => f.kind === 'context-breakdown.snapshot')).toBeUndefined()
   expect(received.find(f => f.kind === 'error')).toBeUndefined()
@@ -264,7 +279,7 @@ test('overlapping requests coalesce instead of stacking analyses', async () => {
   server.handleData(connection, frame)
   await flush()
 
-  // The attach analysis is in flight; the three requests collapse into ONE rerun.
+  // The first request is in flight; the three requests collapse into one rerun.
   expect(calls).toBe(1)
   release()
   await flush()

@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cat Code — Subagent UI Verified Production Replica</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"DM Sans"', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
+            mono: ['"DM Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'monospace'],
+          },
+          colors: {
+            'app-bg': '#09090b',
+            'shell-chrome': '#070709',
+            'shell-seam': 'rgba(255, 255, 255, 0.06)',
+            'shell-hover': 'rgba(255, 255, 255, 0.045)',
+            'surface-panel': '#0a0a0c',
+            'surface-raised': '#111113',
+            'text-primary': '#f4f4f5',
+            'text-muted': '#a1a1aa',
+            'text-subtle': '#71717a',
+            'text-faint': '#52525b',
+            'text-ghost': '#3f3f46',
+            'tone-good': '#4ade80',
+            'tone-warn': '#fbbf24',
+            'tone-danger': '#f87171',
+            'tone-info': '#60a5fa',
+            'accent': '#f472b6',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { background-color: #09090b; color: #f4f4f5; font-family: 'DM Sans', sans-serif; -webkit-font-smoothing: antialiased; }
+    @keyframes pulse { 50% { opacity: .4; } }
+    .animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+  </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden bg-app-bg text-text-primary">
+
+  <!-- AUDITED TOP TOOLBAR -->
+  <header class="h-10 bg-shell-chrome border-b border-shell-seam px-4 flex items-center justify-between shrink-0 font-sans text-xs select-none">
+    <div class="flex items-center gap-3 font-mono">
+      <span class="text-accent font-bold">Cat Code UI</span>
+      <span class="text-text-ghost">/</span>
+      <span class="text-text-subtle">Audited Production Component Replica</span>
+    </div>
+
+    <!-- SURFACE NAVIGATION CONTROLS -->
+    <div class="flex items-center gap-1 bg-surface-panel p-1 rounded-lg border border-shell-seam font-mono text-[11px]">
+      <button onclick="showSurface('transcript')" id="btn-transcript" class="px-3 py-0.5 rounded bg-white/10 text-white font-medium">1. Transcript Cards & Docked Roster</button>
+      <button onclick="showSurface('tasks-dialog')" id="btn-tasks-dialog" class="px-3 py-0.5 rounded text-text-subtle hover:text-white">2. Tasks Dialog & Worker Inspector</button>
+      <button onclick="showSurface('all-states')" id="btn-all-states" class="px-3 py-0.5 rounded text-text-subtle hover:text-white">3. Multi-Worker Gallery (8 Cards)</button>
+    </div>
+
+    <div class="font-mono text-[11px] text-text-subtle">
+      100% Code-Verified
+    </div>
+  </header>
+
+  <!-- SURFACE 1: TRANSCRIPT VIEW & DOCKED ORCHESTRATOR ROSTER (EXACT REACT REPLICA) -->
+  <main id="surface-transcript" class="flex-1 flex flex-col min-h-0 bg-app-bg overflow-hidden relative">
+    
+    <!-- CHAT MESSAGES CONTAINER (max-w-[740px] centered) -->
+    <div class="flex-1 overflow-y-auto px-4 py-6">
+      <div class="mx-auto max-w-[740px] space-y-6">
+        
+        <!-- USER MESSAGE -->
+        <div class="flex flex-col gap-1">
+          <div class="font-mono text-[11px] text-text-subtle">You</div>
+          <div class="text-[13.5px] leading-relaxed text-text-primary">
+            Perform a full architecture overhaul: survey module dependencies, refactor subagent UI components, audit npm security, run unit tests, and check bundle sizes concurrently.
+          </div>
+        </div>
+
+        <!-- ASSISTANT MESSAGE WITH SUBAGENTS -->
+        <div class="flex flex-col gap-3">
+          <div class="flex items-center gap-2 font-mono text-[11px] text-text-subtle">
+            <span class="font-semibold text-text-muted">Assistant</span>
+            <!-- OrchestratorBadge Component -->
+            <span class="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[5px] border border-purple-400/25 bg-purple-400/10 px-1.5 py-px font-mono text-[10px] font-semibold tracking-[0.04em] text-purple-300">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>
+              Orchestrator
+            </span>
+          </div>
+
+          <div class="text-[13.5px] leading-relaxed text-text-primary">
+            I have co-spawned subagents to handle the architecture overhaul in parallel across exploration, implementation, verification, and security auditing.
+          </div>
+
+          <!-- AGENT TOOL CARD 1: RUNNING EXPLORE AGENT (@explorer) -->
+          <!-- Source: AgentToolCard in TranscriptView.tsx:1610-1644 & ToolCardShell:988-1033 -->
+          <div class="w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.025] font-sans">
+            <!-- ToolCardShell Header -->
+            <button type="button" class="flex w-full items-center gap-2.5 px-3 py-2 text-left">
+              <span class="w-4 shrink-0 text-center text-[13px] text-accent font-mono" aria-hidden="true">◆</span>
+              <span class="shrink-0 text-[10.5px] font-bold uppercase tracking-[0.08em] text-accent">AGENT</span>
+              <span class="min-w-0 flex-1 truncate font-mono text-xs text-text-primary">Survey subagent component dependencies</span>
+              <span class="shrink-0 rounded-[5px] border border-shell-seam bg-white/[0.03] px-1.5 py-px font-mono text-[10px] text-text-subtle">3 nested</span>
+            </button>
+
+            <!-- AgentToolCard alwaysExtra Identity Strip -->
+            <div class="flex flex-wrap items-center gap-2 border-t border-shell-seam px-3 py-1.5">
+              <!-- AgentRoleDot -->
+              <span class="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-sky-300"></span>
+              <!-- AgentTypeLabel -->
+              <span class="shrink-0 text-[12.5px] font-semibold text-sky-300">Explore</span>
+              <!-- AgentStateLabel (state: 'running') -->
+              <span class="inline-flex items-center gap-1.5 whitespace-nowrap text-[11px] font-medium text-blue-400">
+                <span class="inline-block shrink-0 rounded-full h-2 w-2 bg-blue-400 animate-pulse"></span>
+                Running
+              </span>
+              <!-- Baton (owner: 'orchestrator') -->
+              <span class="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[5px] border border-purple-400/30 bg-transparent px-1.5 py-px font-mono text-[10px] font-semibold text-purple-400">
+                <span class="opacity-80">→</span>orchestrator
+              </span>
+            </div>
+
+            <!-- Nested Child Activity Rows -->
+            <div class="border-t border-shell-seam bg-black/[0.28]">
+              <div class="px-3 pb-2.5 pt-1">
+              <div class="flex flex-col gap-2">
+                <div class="flex flex-col gap-2 border-l border-accent/20 pl-3 font-mono text-xs">
+                  <div class="flex items-center gap-2 text-text-muted">
+                    <span class="text-[#fbbf24]">⌕</span>
+                    <span>grep_search</span>
+                    <span class="text-text-faint truncate font-mono text-[11.5px]">Query: "AgentRoleDot"</span>
+                    <span class="ml-auto text-[10.5px] text-tone-good">done</span>
+                  </div>
+                  <div class="flex items-center gap-2 text-text-muted">
+                    <span class="text-[#60a5fa]">≡</span>
+                    <span>view_file</span>
+                    <span class="text-text-faint truncate font-mono text-[11.5px]">app/renderer/src/AgentChrome.tsx</span>
+                    <span class="ml-auto text-[10.5px] text-tone-good">done</span>
+                  </div>
+                  <div class="flex items-center gap-2 text-text-muted">
+                    <span class="text-[#60a5fa]">≡</span>
+                    <span>view_file</span>
+                    <span class="text-text-faint truncate font-mono text-[11.5px]">app/renderer/src/TranscriptView.tsx</span>
+                    <span class="ml-auto text-[10.5px] text-blue-400 animate-pulse">running</span>
+                  </div>
+                </div>
+              </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- AGENT TOOL CARD 2: RUNNING IMPLEMENTOR (@builder) -->
+          <div class="w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.025] font-sans">
+            <button type="button" class="flex w-full items-center gap-2.5 px-3 py-2 text-left">
+              <span class="w-4 shrink-0 text-center text-[13px] text-accent font-mono" aria-hidden="true">◆</span>
+              <span class="shrink-0 text-[10.5px] font-bold uppercase tracking-[0.08em] text-accent">AGENT</span>
+              <span class="min-w-0 flex-1 truncate font-mono text-xs text-text-primary">Refactor agentChromeModel tone mappings</span>
+            </button>
+
+            <div class="flex flex-wrap items-center gap-2 border-t border-shell-seam px-3 py-1.5">
+              <span class="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-violet-300"></span>
+              <span class="shrink-0 text-[12.5px] font-semibold text-violet-300">Implementor</span>
+              <span class="inline-flex items-center gap-1.5 whitespace-nowrap text-[11px] font-medium text-blue-400">
+                <span class="inline-block shrink-0 rounded-full h-2 w-2 bg-blue-400 animate-pulse"></span>
+                Running
+              </span>
+              <span class="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[5px] border border-purple-400/30 bg-transparent px-1.5 py-px font-mono text-[10px] font-semibold text-purple-400">
+                <span class="opacity-80">→</span>orchestrator
+              </span>
+            </div>
+          </div>
+
+          <!-- AGENT TOOL CARD 3: COMPLETED VERIFICATION (@verifier) -->
+          <div class="w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.025] font-sans">
+            <button type="button" class="flex w-full items-center gap-2.5 px-3 py-2 text-left">
+              <span class="w-4 shrink-0 text-center text-[13px] text-accent font-mono" aria-hidden="true">◆</span>
+              <span class="shrink-0 text-[10.5px] font-bold uppercase tracking-[0.08em] text-accent">AGENT</span>
+              <span class="min-w-0 flex-1 truncate font-mono text-xs text-text-primary">Run unit test suite</span>
+            </button>
+
+            <div class="flex flex-wrap items-center gap-2 border-t border-shell-seam px-3 py-1.5">
+              <span class="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-teal-300"></span>
+              <span class="shrink-0 text-[12.5px] font-semibold text-teal-300">Verification</span>
+              <span class="inline-flex items-center gap-1.5 whitespace-nowrap text-[11px] font-medium text-tone-good">
+                <span class="inline-block shrink-0 rounded-full h-2 w-2 bg-tone-good"></span>
+                Completed
+              </span>
+              <span class="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[5px] border border-tone-warn/30 bg-tone-warn/10 px-1.5 py-px font-mono text-[10px] font-semibold text-tone-warn">
+                <span class="opacity-80">→</span>you
+              </span>
+            </div>
+
+            <!-- AgentCompletionBody (TranscriptView.tsx:2880-2898) -->
+            <div class="border-t border-shell-seam bg-black/[0.28]">
+              <div class="px-3 pb-2.5 pt-1">
+                <div class="flex flex-col gap-1.5">
+                  <span class="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-subtle">Result</span>
+                  <div class="whitespace-pre-wrap break-words text-xs leading-relaxed text-text-muted">All 42 unit tests passed in 1.84s (0 failures)</div>
+                  <span class="font-mono text-[10px] text-text-subtle">~12.4k tokens · 3 tools · 8.2s</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- AGENT TOOL CARD 4: NEEDS YOU HANDOFF (@planner) -->
+          <div class="w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.025] font-sans">
+            <button type="button" class="flex w-full items-center gap-2.5 px-3 py-2 text-left">
+              <span class="w-4 shrink-0 text-center text-[13px] text-accent font-mono" aria-hidden="true">◆</span>
+              <span class="shrink-0 text-[10.5px] font-bold uppercase tracking-[0.08em] text-accent">AGENT</span>
+              <span class="min-w-0 flex-1 truncate font-mono text-xs text-text-primary">Migration plan review required</span>
+            </button>
+
+            <div class="flex flex-wrap items-center gap-2 border-t border-shell-seam px-3 py-1.5">
+              <span class="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-blue-300"></span>
+              <span class="shrink-0 text-[12.5px] font-semibold text-blue-300">General-purpose</span>
+              <span class="inline-flex items-center gap-1.5 whitespace-nowrap text-[11px] font-medium text-tone-warn">
+                <span class="inline-block shrink-0 rounded-full h-2 w-2 bg-tone-warn"></span>
+                Needs you
+              </span>
+              <span class="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[5px] border border-tone-warn/30 bg-tone-warn/10 px-1.5 py-px font-mono text-[10px] font-semibold text-tone-warn">
+                <span class="opacity-80">→</span>you
+              </span>
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+    </div>
+
+    <!-- DOCKED ORCHESTRATOR ROSTER (OrchestratorRoster.tsx:57-151) -->
+    <!-- Max-740px centered column immediately above composer -->
+    <div class="mx-auto flex w-full max-w-[740px] shrink-0 flex-col gap-2 p-3">
+      
+      <!-- OrchestratorRoster Component -->
+      <div class="group relative mx-1 mb-0.5 rounded-[10px] bg-app-bg px-1 py-[3px]">
+        
+        <!-- HOVER / FOCUS POPOVER WORKER ROSTER -->
+        <div class="absolute inset-x-1 bottom-full z-40 hidden pb-1.5 group-hover:block group-focus-within:block">
+          <div class="rounded-[10px] border border-white/[0.08] bg-surface-panel px-1 pb-[5px] pt-1 shadow-[0_14px_34px_rgba(0,0,0,0.5)]">
+            <div class="px-2 pb-[3px] pt-[5px] font-mono text-[9px] tracking-[0.1em] text-text-faint">
+              6 SUBAGENTS
+            </div>
+            
+            <!-- WorkerRow 1: @explorer -->
+            <button type="button" class="flex w-full items-center gap-2 rounded-[7px] border border-transparent px-[7px] py-[5px] text-left transition-colors hover:border-white/[0.06] hover:bg-white/[0.035]">
+              <!-- AgentRoleDot -->
+              <span class="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-sky-300"></span>
+              <!-- AgentHandle -->
+              <span class="shrink-0 whitespace-nowrap font-mono text-[12.5px] font-semibold text-purple-200">@explorer</span>
+              <!-- Task description -->
+              <span class="min-w-0 flex-1 truncate text-[11.5px] text-text-subtle">Survey component dependencies</span>
+              <!-- AgentPip -->
+              <span class="inline-block h-2 w-2 shrink-0 rounded-full bg-blue-400 animate-pulse"></span>
+              <!-- AgentTypeLabel -->
+              <span class="shrink-0 whitespace-nowrap font-mono text-[10.5px] font-medium text-sky-300">Explore</span>
+              <!-- Baton -->
+              <span class="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[5px] border border-purple-400/30 bg-transparent px-1.5 py-px font-mono text-[10px] font-semibold text-purple-400">
+                <span class="opacity-80">→</span>orchestrator
+              </span>
+            </button>
+
+            <!-- WorkerRow 2: @builder -->
+            <button type="button" class="flex w-full items-center gap-2 rounded-[7px] border border-transparent px-[7px] py-[5px] text-left transition-colors hover:border-white/[0.06] hover:bg-white/[0.035]">
+              <span class="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-violet-300"></span>
+              <span class="shrink-0 whitespace-nowrap font-mono text-[12.5px] font-semibold text-purple-200">@builder</span>
+              <span class="min-w-0 flex-1 truncate text-[11.5px] text-text-subtle">Refactor agentChromeModel tone mappings</span>
+              <span class="inline-block h-2 w-2 shrink-0 rounded-full bg-blue-400 animate-pulse"></span>
+              <span class="shrink-0 whitespace-nowrap font-mono text-[10.5px] font-medium text-violet-300">Implementor</span>
+              <span class="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[5px] border border-purple-400/30 bg-transparent px-1.5 py-px font-mono text-[10px] font-semibold text-purple-400">
+                <span class="opacity-80">→</span>orchestrator
+              </span>
+            </button>
+
+            <!-- WorkerRow 3: @security-auditor -->
+            <button type="button" class="flex w-full items-center gap-2 rounded-[7px] border border-transparent px-[7px] py-[5px] text-left transition-colors hover:border-white/[0.06] hover:bg-white/[0.035]">
+              <span class="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-teal-300"></span>
+              <span class="shrink-0 whitespace-nowrap font-mono text-[12.5px] font-semibold text-purple-200">@security-auditor</span>
+              <span class="min-w-0 flex-1 truncate text-[11.5px] text-text-subtle">Scan npm dependency vulnerabilities</span>
+              <span class="inline-block h-2 w-2 shrink-0 rounded-full border-[1.6px] border-blue-400 bg-transparent"></span>
+              <span class="shrink-0 whitespace-nowrap font-mono text-[10.5px] font-medium text-teal-300">Verification</span>
+              <span class="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[5px] border border-purple-400/30 bg-transparent px-1.5 py-px font-mono text-[10px] font-semibold text-purple-400">
+                <span class="opacity-80">→</span>orchestrator
+              </span>
+            </button>
+
+            <!-- WorkerRow 4: @architect -->
+            <button type="button" class="flex w-full items-center gap-2 rounded-[7px] border border-transparent px-[7px] py-[5px] text-left transition-colors hover:border-white/[0.06] hover:bg-white/[0.035]">
+              <span class="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-violet-300"></span>
+              <span class="shrink-0 whitespace-nowrap font-mono text-[12.5px] font-semibold text-purple-200">@architect</span>
+              <span class="min-w-0 flex-1 truncate text-[11.5px] text-text-subtle">Design database schema migration</span>
+              <span class="inline-block h-2 w-2 shrink-0 rounded-full border-[1.6px] border-purple-400 bg-transparent"></span>
+              <span class="shrink-0 whitespace-nowrap font-mono text-[10.5px] font-medium text-violet-300">Coding worker</span>
+              <span class="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[5px] border border-purple-400/30 bg-transparent px-1.5 py-px font-mono text-[10px] font-semibold text-purple-400">
+                <span class="opacity-80">→</span>orchestrator
+              </span>
+            </button>
+
+            <!-- WorkerRow 5: @planner -->
+            <button type="button" class="flex w-full items-center gap-2 rounded-[7px] border border-transparent px-[7px] py-[5px] text-left transition-colors hover:border-white/[0.06] hover:bg-white/[0.035]">
+              <span class="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-blue-300"></span>
+              <span class="shrink-0 whitespace-nowrap font-mono text-[12.5px] font-semibold text-purple-200">@planner</span>
+              <span class="min-w-0 flex-1 truncate text-[11.5px] text-text-subtle">Awaiting user plan approval</span>
+              <span class="inline-block h-2 w-2 shrink-0 rounded-full bg-tone-warn"></span>
+              <span class="shrink-0 whitespace-nowrap font-mono text-[10.5px] font-medium text-blue-300">General-purpose</span>
+              <span class="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[5px] border border-tone-warn/30 bg-tone-warn/10 px-1.5 py-px font-mono text-[10px] font-semibold text-tone-warn">
+                <span class="opacity-80">→</span>you
+              </span>
+            </button>
+
+            <!-- WorkerRow 6: @verifier -->
+            <button type="button" class="flex w-full items-center gap-2 rounded-[7px] border border-transparent px-[7px] py-[5px] text-left transition-colors hover:border-white/[0.06] hover:bg-white/[0.035]">
+              <span class="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-teal-300"></span>
+              <span class="shrink-0 whitespace-nowrap font-mono text-[12.5px] font-semibold text-purple-200">@verifier</span>
+              <span class="min-w-0 flex-1 truncate text-[11.5px] text-text-subtle">Run test battery</span>
+              <span class="inline-block h-2 w-2 shrink-0 rounded-full bg-tone-good"></span>
+              <span class="shrink-0 whitespace-nowrap font-mono text-[10.5px] font-medium text-teal-300">Verification</span>
+              <span class="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[5px] border border-tone-warn/30 bg-tone-warn/10 px-1.5 py-px font-mono text-[10px] font-semibold text-tone-warn">
+                <span class="opacity-80">→</span>you
+              </span>
+            </button>
+          </div>
+        </div>
+
+        <!-- RESTING LINE BUTTON (ROW_CLASS) -->
+        <button type="button" class="flex w-full items-center gap-2 rounded-[7px] border border-transparent px-[7px] py-[5px] text-left transition-colors hover:border-white/[0.06] hover:bg-white/[0.035]">
+          <span class="inline-block h-2 w-2 shrink-0 rounded-full bg-blue-400 animate-pulse"></span>
+          <span class="shrink-0 font-mono text-[12.5px] font-semibold text-purple-200">@explorer</span>
+          <span class="min-w-0 flex-1 truncate text-[11.5px] text-text-subtle">Survey component dependencies</span>
+          <span class="inline-flex min-w-0 flex-wrap items-center gap-[7px]">
+            <span class="whitespace-nowrap font-mono text-[11.5px] font-medium text-blue-400">3 working</span>
+            <span aria-hidden="true" class="shrink-0 text-text-ghost">·</span>
+            <span class="whitespace-nowrap font-mono text-[11.5px] font-medium text-stone-400">1 waiting</span>
+            <span aria-hidden="true" class="shrink-0 text-text-ghost">·</span>
+            <span class="whitespace-nowrap font-mono text-[11.5px] font-medium text-tone-warn">1 needs you</span>
+            <span aria-hidden="true" class="shrink-0 text-text-ghost">·</span>
+            <span class="whitespace-nowrap font-mono text-[11.5px] font-medium text-text-faint">1 done</span>
+          </span>
+          <span aria-hidden="true" class="shrink-0 font-mono text-[13px] leading-none text-text-ghost">›</span>
+        </button>
+      </div>
+
+      <!-- COMPOSER FIELD CONTAINER -->
+      <div class="relative rounded-lg border border-shell-seam bg-surface-panel p-3">
+        <input type="text" placeholder="Type a message or instruction..." class="w-full bg-transparent text-xs text-text-primary outline-none font-sans" readonly>
+      </div>
+
+    </div>
+  </main>
+
+  <!-- SURFACE 2: TASKS DIALOG INSPECTOR MODAL (TasksDialog.tsx:202-581) -->
+  <main id="surface-tasks-dialog" class="flex-1 hidden bg-app-bg relative">
+    <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/55 backdrop-blur-sm">
+      
+      <!-- TasksDialog Overlay Container -->
+      <div class="animate-toast-in flex max-h-[74vh] w-[640px] max-w-[calc(100%-48px)] flex-col overflow-hidden rounded-[14px] border border-shell-seam bg-surface-panel shadow-[0_30px_80px_rgba(0,0,0,0.6)]">
+        
+        <!-- Dialog Header -->
+        <div class="flex items-center justify-between gap-3 border-b border-shell-seam px-[18px] py-3.5">
+          <div>
+            <div class="text-sm font-semibold text-text-primary">Tasks</div>
+            <div class="mt-0.5 text-xs text-text-subtle">
+              5 active · 1 completed
+            </div>
+          </div>
+          <button class="flex h-7 w-7 items-center justify-center rounded-md text-lg text-text-subtle hover:bg-shell-hover hover:text-text-muted" type="button" onclick="showSurface('transcript')">
+            ×
+          </button>
+        </div>
+
+        <!-- WorkerDetailPanel (TasksDialog.tsx:513-581) -->
+        <div class="min-h-0 flex-1 overflow-y-auto px-2 py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div class="px-2 pb-3 pt-1">
+            
+            <button class="mb-2.5 inline-flex items-center gap-1.5 px-0.5 text-[11.5px] text-text-muted hover:text-text-primary" type="button">
+              <span aria-hidden="true">‹</span>All workers
+            </button>
+
+            <!-- Worker Header Line -->
+            <div class="flex flex-wrap items-center gap-2 border-b border-shell-seam pb-3">
+              <!-- AgentHandle -->
+              <span class="shrink-0 whitespace-nowrap font-mono text-[12.5px] font-semibold text-purple-200">@builder</span>
+              <!-- AgentTypeChip -->
+              <span class="inline-flex shrink-0 items-center whitespace-nowrap rounded-[5px] border border-violet-300/30 bg-violet-300/10 px-1.5 py-px text-[9.5px] font-bold uppercase tracking-[0.05em] font-mono text-violet-300">
+                IMPLEMENTOR
+              </span>
+              <!-- AgentStateLabel -->
+              <span class="inline-flex items-center gap-1.5 whitespace-nowrap text-[11px] font-medium text-blue-400">
+                <span class="inline-block shrink-0 rounded-full h-2 w-2 bg-blue-400 animate-pulse"></span>
+                Running
+              </span>
+              <!-- Baton -->
+              <span class="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[5px] border border-purple-400/30 bg-transparent px-1.5 py-px font-mono text-[10px] font-semibold text-purple-400">
+                <span class="opacity-80">→</span>orchestrator
+              </span>
+            </div>
+
+            <div class="flex flex-col gap-3.5 px-0.5 pt-3.5">
+            <!-- WorkerMetaLine (TasksDialog.tsx:590-630) -->
+            <div class="flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[10.5px] text-text-subtle">
+              <span class="whitespace-nowrap">acct Default</span>
+              <span class="whitespace-nowrap"><span class="pr-2 text-zinc-700">·</span>held 2m 14s</span>
+            </div>
+
+            <!-- Prompt Section -->
+            <div>
+              <!-- AgentSectionLabel -->
+              <div class="text-[9.5px] font-bold uppercase tracking-[0.1em] text-zinc-600">Prompt</div>
+              <div class="mt-1 text-[12.5px] leading-relaxed text-text-muted">
+                Refactor agentStateMeta and AGENT_TYPE_META definitions into a clean domain module.
+              </div>
+            </div>
+
+            <!-- Blocked Handoff Status -->
+            <div class="rounded-lg border border-purple-400/30 bg-purple-400/[0.08] px-3 py-2.5">
+              <div class="text-[9.5px] font-bold uppercase tracking-[0.1em] text-purple-400">
+                Waiting on the assistant
+              </div>
+              <div class="mt-1.5 text-[12.5px] leading-relaxed text-purple-200">
+                Subagent finished preliminary tasks. Waiting on orchestrator turn.
+              </div>
+              <div class="mt-1.5 text-[10.5px] text-text-subtle">
+                The assistant resolves this or relays it to you in its own turn.
+              </div>
+            </div>
+
+            <!-- Result Section (workerInspection.ts selectWorkerResult) -->
+            <div>
+              <div class="text-[9.5px] font-bold uppercase tracking-[0.1em] text-zinc-600">Result</div>
+              <div class="mt-1 rounded-md border border-shell-seam bg-white/[0.02] px-3 py-2.5 text-[12.5px] leading-relaxed text-text-muted">
+                Created app/renderer/src/agentChromeModel.ts
+              </div>
+            </div>
+
+            <!-- Action Button (TasksDialog.tsx:569-577) -->
+            <div class="flex flex-wrap items-center gap-2.5 pt-0.5">
+              <button class="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[7px] border bg-transparent px-[11px] py-1 text-[11.5px] font-medium hover:bg-white/5 border-tone-danger/30 text-tone-danger" type="button">
+                Stop
+              </button>
+            </div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- Footer hint (TasksDialog.tsx:300-322) -->
+        <div class="flex gap-3.5 border-t border-shell-seam px-4 py-2 font-mono text-[10.5px] text-text-subtle">
+          <span>read only, the orchestrator relays this worker&apos;s outcome</span>
+          <span class="ml-auto">
+            <span class="text-text-muted">esc</span> close
+          </span>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- SURFACE 3: MULTI-WORKER GALLERY -->
+  <main id="surface-all-states" class="flex-1 hidden overflow-y-auto p-6 bg-app-bg">
+    <div class="max-w-5xl mx-auto space-y-6">
+      <div class="border-b border-shell-seam pb-3">
+        <h2 class="text-sm font-mono font-bold text-text-primary">Multi-Subagent Card Gallery (All Types & States)</h2>
+        <p class="text-xs text-text-subtle font-mono">Verified component rendering across 8 subagent roles and states.</p>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        
+        <!-- Card 1: @explorer (Explore - Running) -->
+        <div class="w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.025] font-sans p-3 space-y-2">
+          <div class="flex items-center gap-2 font-mono text-xs">
+            <span class="text-accent font-bold">◆</span>
+            <span class="font-bold text-accent">AGENT</span>
+            <span class="text-purple-200 font-semibold">@explorer</span>
+            <span class="text-text-primary truncate">Survey module dependencies</span>
+          </div>
+          <div class="flex items-center gap-2 border-t border-shell-seam pt-2 text-xs">
+            <span class="h-1.5 w-1.5 rounded-full bg-sky-300"></span>
+            <span class="text-sky-300 font-semibold">Explore</span>
+            <span class="text-blue-400 flex items-center gap-1 font-medium"><span class="h-2 w-2 rounded-full bg-blue-400 animate-pulse"></span> Running</span>
+            <span class="ml-auto rounded border border-purple-400/30 px-1.5 py-px font-mono text-[10px] text-purple-400">→orchestrator</span>
+          </div>
+        </div>
+
+        <!-- Card 2: @builder (Implementor - Running) -->
+        <div class="w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.025] font-sans p-3 space-y-2">
+          <div class="flex items-center gap-2 font-mono text-xs">
+            <span class="text-accent font-bold">◆</span>
+            <span class="font-bold text-accent">AGENT</span>
+            <span class="text-purple-200 font-semibold">@builder</span>
+            <span class="text-text-primary truncate">Refactor agentChromeModel logic</span>
+          </div>
+          <div class="flex items-center gap-2 border-t border-shell-seam pt-2 text-xs">
+            <span class="h-1.5 w-1.5 rounded-full bg-violet-300"></span>
+            <span class="text-violet-300 font-semibold">Implementor</span>
+            <span class="text-blue-400 flex items-center gap-1 font-medium"><span class="h-2 w-2 rounded-full bg-blue-400 animate-pulse"></span> Running</span>
+            <span class="ml-auto rounded border border-purple-400/30 px-1.5 py-px font-mono text-[10px] text-purple-400">→orchestrator</span>
+          </div>
+        </div>
+
+        <!-- Card 3: @verifier (Verification - Completed) -->
+        <div class="w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.025] font-sans p-3 space-y-2">
+          <div class="flex items-center gap-2 font-mono text-xs">
+            <span class="text-accent font-bold">◆</span>
+            <span class="font-bold text-accent">AGENT</span>
+            <span class="text-purple-200 font-semibold">@verifier</span>
+            <span class="text-text-primary truncate">Run test battery</span>
+          </div>
+          <div class="flex items-center gap-2 border-t border-shell-seam pt-2 text-xs">
+            <span class="h-1.5 w-1.5 rounded-full bg-teal-300"></span>
+            <span class="text-teal-300 font-semibold">Verification</span>
+            <span class="text-tone-good flex items-center gap-1 font-medium"><span class="h-2 w-2 rounded-full bg-tone-good"></span> Completed</span>
+            <span class="ml-auto rounded border border-tone-warn/30 bg-tone-warn/10 px-1.5 py-px font-mono text-[10px] text-tone-warn">→you</span>
+          </div>
+        </div>
+
+        <!-- Card 4: @architect (Coding worker - Waiting) -->
+        <div class="w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.025] font-sans p-3 space-y-2">
+          <div class="flex items-center gap-2 font-mono text-xs">
+            <span class="text-accent font-bold">◆</span>
+            <span class="font-bold text-accent">AGENT</span>
+            <span class="text-purple-200 font-semibold">@architect</span>
+            <span class="text-text-primary truncate">Design schema migration</span>
+          </div>
+          <div class="flex items-center gap-2 border-t border-shell-seam pt-2 text-xs">
+            <span class="h-1.5 w-1.5 rounded-full bg-violet-300"></span>
+            <span class="text-violet-300 font-semibold">Coding worker</span>
+            <span class="text-purple-400 flex items-center gap-1 font-medium"><span class="h-2 w-2 rounded-full border-[1.6px] border-purple-400 bg-transparent"></span> Waiting on orchestrator</span>
+          </div>
+        </div>
+
+        <!-- Card 5: @planner (General-purpose - Needs You) -->
+        <div class="w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.025] font-sans p-3 space-y-2">
+          <div class="flex items-center gap-2 font-mono text-xs">
+            <span class="text-accent font-bold">◆</span>
+            <span class="font-bold text-accent">AGENT</span>
+            <span class="text-purple-200 font-semibold">@planner</span>
+            <span class="text-text-primary truncate">Awaiting plan approval</span>
+          </div>
+          <div class="flex items-center gap-2 border-t border-shell-seam pt-2 text-xs">
+            <span class="h-1.5 w-1.5 rounded-full bg-blue-300"></span>
+            <span class="text-blue-300 font-semibold">General-purpose</span>
+            <span class="text-tone-warn flex items-center gap-1 font-medium"><span class="h-2 w-2 rounded-full bg-tone-warn"></span> Needs you</span>
+            <span class="ml-auto rounded border border-tone-warn/30 bg-tone-warn/10 px-1.5 py-px font-mono text-[10px] text-tone-warn">→you</span>
+          </div>
+        </div>
+
+        <!-- Card 6: @security-auditor (Verification - In Background) -->
+        <div class="w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.025] font-sans p-3 space-y-2">
+          <div class="flex items-center gap-2 font-mono text-xs">
+            <span class="text-accent font-bold">◆</span>
+            <span class="font-bold text-accent">AGENT</span>
+            <span class="text-purple-200 font-semibold">@security-auditor</span>
+            <span class="text-text-primary truncate">Scan npm vulnerability database</span>
+          </div>
+          <div class="flex items-center gap-2 border-t border-shell-seam pt-2 text-xs">
+            <span class="h-1.5 w-1.5 rounded-full bg-teal-300"></span>
+            <span class="text-teal-300 font-semibold">Verification</span>
+            <span class="text-blue-400 flex items-center gap-1 font-medium"><span class="h-2 w-2 rounded-full border-[1.6px] border-blue-400 bg-transparent"></span> In background</span>
+          </div>
+        </div>
+
+        <!-- Card 7: @optimizer (Implementor - Failed) -->
+        <div class="w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.025] font-sans p-3 space-y-2">
+          <div class="flex items-center gap-2 font-mono text-xs">
+            <span class="text-accent font-bold">◆</span>
+            <span class="font-bold text-accent">AGENT</span>
+            <span class="text-purple-200 font-semibold">@optimizer</span>
+            <span class="text-text-primary truncate">Check bundle size budget</span>
+          </div>
+          <div class="flex items-center gap-2 border-t border-shell-seam pt-2 text-xs">
+            <span class="h-1.5 w-1.5 rounded-full bg-violet-300"></span>
+            <span class="text-violet-300 font-semibold">Implementor</span>
+            <span class="text-tone-danger flex items-center gap-1 font-medium"><span class="h-2 w-2 rounded-full bg-tone-danger"></span> Failed</span>
+          </div>
+        </div>
+
+        <!-- Card 8: @linter-worker (General-purpose - Stopped) -->
+        <div class="w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.025] font-sans p-3 space-y-2">
+          <div class="flex items-center gap-2 font-mono text-xs">
+            <span class="text-accent font-bold">◆</span>
+            <span class="font-bold text-accent">AGENT</span>
+            <span class="text-purple-200 font-semibold">@linter-worker</span>
+            <span class="text-text-primary truncate">Lint workspace codebase</span>
+          </div>
+          <div class="flex items-center gap-2 border-t border-shell-seam pt-2 text-xs">
+            <span class="h-1.5 w-1.5 rounded-full bg-blue-300"></span>
+            <span class="text-blue-300 font-semibold">General-purpose</span>
+            <span class="text-tone-warn flex items-center gap-1 font-medium"><span class="h-2 w-2 rounded-full border-[1.6px] border-tone-warn bg-transparent"></span> Stopped</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </main>
+
+  <script>
+    function showSurface(surface) {
+      document.getElementById('surface-transcript').classList.add('hidden');
+      document.getElementById('surface-tasks-dialog').classList.add('hidden');
+      document.getElementById('surface-all-states').classList.add('hidden');
+
+      document.getElementById('btn-transcript').classList.remove('bg-white/10', 'text-white');
+      document.getElementById('btn-tasks-dialog').classList.remove('bg-white/10', 'text-white');
+      document.getElementById('btn-all-states').classList.remove('bg-white/10', 'text-white');
+
+      document.getElementById('surface-' + surface).classList.remove('hidden');
+      document.getElementById('btn-' + surface).classList.add('bg-white/10', 'text-white');
+    }
+  </script>
+</body>
+</html>

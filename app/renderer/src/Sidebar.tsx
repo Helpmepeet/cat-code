@@ -169,6 +169,9 @@ import {
 // Rail geometry + hover timing, matching the design source (RAIL_W/FULL_W/delays).
 const HOVER_DELAY = 120
 const HIDE_DELAY = 200
+const SIDEBAR_MIN_WIDTH = 192
+const SIDEBAR_MAX_WIDTH = 420
+const SIDEBAR_DEFAULT_WIDTH = 240
 
 /**
  * Max session rows a workspace group shows before a "Show N more" toggle
@@ -358,6 +361,9 @@ export function Sidebar({
   const [hovering, setHovering] = useState(false)
   const [focusWithin, setFocusWithin] = useState(false)
   const [navOpen, setNavOpen] = useState(false)
+  const [dismissed, setDismissed] = useState(false)
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH)
+  const [resizing, setResizing] = useState(false)
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(
     {},
   )
@@ -407,15 +413,18 @@ export function Sidebar({
   const navRefs = useRef(new Map<NavItem['id'], HTMLButtonElement>())
   const refocusNavId = useRef<NavItem['id'] | null>(null)
 
-  const open = selectSidebarOpen({
-    pinned,
-    hovering,
-    menuActive,
-    focusWithin,
-  })
+  const open =
+    !dismissed &&
+    selectSidebarOpen({
+      pinned,
+      hovering,
+      menuActive,
+      focusWithin,
+    })
 
   const onEnter = () => {
     if (hideTimer.current) clearTimeout(hideTimer.current)
+    setDismissed(false)
     showTimer.current = setTimeout(() => setHovering(true), HOVER_DELAY)
   }
   const onLeave = () => {
@@ -425,6 +434,18 @@ export function Sidebar({
     if (menuActive) return
     hideTimer.current = setTimeout(() => setHovering(false), HIDE_DELAY)
   }
+  const collapseSidebar = () => {
+    if (showTimer.current) clearTimeout(showTimer.current)
+    if (hideTimer.current) clearTimeout(hideTimer.current)
+    setPinned(false)
+    setHovering(false)
+    setDismissed(true)
+  }
+  const resizeSidebar = (clientX: number) => {
+    setSidebarWidth(
+      Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, clientX)),
+    )
+  }
   useEffect(
     () => () => {
       if (showTimer.current) clearTimeout(showTimer.current)
@@ -432,6 +453,12 @@ export function Sidebar({
     },
     [],
   )
+  useEffect(() => {
+    asideRef.current?.style.setProperty(
+      '--sidebar-expanded-width',
+      `${sidebarWidth}px`,
+    )
+  }, [sidebarWidth])
 
   // When that overlay CLOSES, its full-screen backdrop swallowed the click, so
   // the pointer is wherever the menu was with no `onMouseLeave` to follow and
@@ -745,7 +772,10 @@ export function Sidebar({
         aria-label="Primary"
         className={
           'fixed inset-y-0 left-0 z-50 flex flex-col overflow-hidden border-r border-white/[0.05] bg-surface-panel transition-[width,box-shadow] duration-200 ease-out ' +
-          (open ? 'w-60 shadow-[4px_0_24px_rgba(0,0,0,0.45)]' : 'w-12')
+          (open
+            ? 'sidebar-expanded shadow-[4px_0_24px_rgba(0,0,0,0.45)]'
+            : 'w-12') +
+          (resizing ? ' transition-none' : '')
         }
       >
         {/* Logo + pin. The pin stays mounted while collapsed so Tab has a stable
@@ -766,23 +796,38 @@ export function Sidebar({
               </span>
             ) : null}
           </div>
-          <button
-            type="button"
-            onClick={() => setPinned(value => !value)}
-            title={pinned ? 'Unpin sidebar' : 'Pin sidebar open'}
-            aria-label={pinned ? 'Unpin sidebar' : 'Pin sidebar open'}
-            aria-pressed={pinned}
+          <div
             className={
               open
-                ? 'flex h-[22px] w-[22px] items-center justify-center rounded ' +
-                  (pinned
-                    ? 'bg-accent/[0.12] text-accent'
-                    : 'text-text-faint hover:text-text-muted')
+                ? 'flex items-center gap-1'
                 : 'pointer-events-none absolute inset-0 h-[50px] w-12 opacity-0'
             }
           >
-            <PinIcon />
-          </button>
+            <button
+              type="button"
+              onClick={collapseSidebar}
+              title="Collapse sidebar"
+              aria-label="Collapse sidebar"
+              className="flex h-[22px] w-[22px] items-center justify-center rounded text-text-faint hover:text-text-muted"
+            >
+              <CollapseSidebarIcon />
+            </button>
+            <button
+              type="button"
+              onClick={() => setPinned(value => !value)}
+              title={pinned ? 'Unpin sidebar' : 'Pin sidebar open'}
+              aria-label={pinned ? 'Unpin sidebar' : 'Pin sidebar open'}
+              aria-pressed={pinned}
+              className={
+                'flex h-[22px] w-[22px] items-center justify-center rounded ' +
+                (pinned
+                  ? 'bg-accent/[0.12] text-accent'
+                  : 'text-text-faint hover:text-text-muted')
+              }
+            >
+              <PinIcon />
+            </button>
+          </div>
         </div>
 
         {open ? (
@@ -1089,6 +1134,32 @@ export function Sidebar({
               )
             }
             onClose={() => setWorkspaceMenu(null)}
+          />
+        ) : null}
+        {open ? (
+          <div
+            role="separator"
+            aria-label="Resize sidebar"
+            aria-orientation="vertical"
+            title="Drag to resize sidebar"
+            onPointerDown={event => {
+              if (event.button !== 0) return
+              event.preventDefault()
+              event.currentTarget.setPointerCapture(event.pointerId)
+              setResizing(true)
+              resizeSidebar(event.clientX)
+            }}
+            onPointerMove={event => {
+              if (resizing) resizeSidebar(event.clientX)
+            }}
+            onPointerUp={event => {
+              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                event.currentTarget.releasePointerCapture(event.pointerId)
+              }
+              setResizing(false)
+            }}
+            onPointerCancel={() => setResizing(false)}
+            className="absolute inset-y-0 right-0 z-10 w-2 cursor-col-resize touch-none"
           />
         ) : null}
       </aside>
@@ -2120,6 +2191,25 @@ function ComposeIcon() {
     >
       <path d="M12 20h9" />
       <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
+    </svg>
+  )
+}
+
+function CollapseSidebarIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="m14 7-5 5 5 5" />
+      <path d="M20 5v14" />
     </svg>
   )
 }

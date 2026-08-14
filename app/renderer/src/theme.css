@@ -93,6 +93,10 @@
   --transcript-width: 900px;
 }
 
+.sidebar-expanded {
+  width: var(--sidebar-expanded-width, 15rem);
+}
+
 /*
  * Accent choices (P4-34, prototype `Settings.jsx:310-313`). `AccentThemeProvider`
  * stamps `data-accent` on a wrapper above the app and these redeclare the two

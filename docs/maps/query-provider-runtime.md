@@ -1,6 +1,6 @@
 # Query Provider Runtime Map
 
-Last refreshed: 2026-08-03
+Last refreshed: 2026-08-13
 
 ## Purpose
 
@@ -76,8 +76,8 @@ src/services/api/client.ts
 | Change cheap secondary model calls | `src/utils/model/model.ts:getSmallFastModelForProvider()` | `src/services/api/claude.ts:queryHaiku()`, `src/services/compact/compact.ts`, `src/services/awaySummary.ts`, `src/utils/hooks/apiQueryHookHelper.ts`, `src/utils/hooks/skillImprovement.ts` | Codex subscribers route provider-aware side-calls to GPT mini. OpenAI-bound callers must build provider instruction assembly; cheap calls explicitly request low reasoning effort. Anthropic-only callers such as `/insights` pin `provider: 'firstParty'`. |
 | Change first-party model defaults or retirement migration | `src/utils/model/model.ts` | `src/utils/model/{configs,modelOptions,aliases}.ts`, `src/migrations/migrateRetiredClaude46ModelsToClaude5.ts`, `src/main.tsx`, `src/constants/prompts.ts` | Model parsing and defaults distinguish first-party availability from third-party lag. Retired first-party Claude 4.6 pins migrate to Claude 5 and drop the obsolete `[1m]` suffix; the on-disk migration uses literal third-party/base-URL configuration rather than session provider state, which has not settled when startup migrations run. |
 | Change client/auth routing | `src/services/api/client.ts` | `src/utils/auth.ts`, `src/utils/model/providers.ts`, [`codex-core.md`](codex-core.md) | Provider-specific clients are selected here. OpenAI/Codex fetch-adapter and account lease details are intentionally routed to `codex-core.md`. |
-| Change retry/fallback behavior | `src/services/api/withRetry.ts` | `src/query.ts`, `src/services/api/claude.ts`, [`codex-core.md`](codex-core.md) | `claude.ts` wraps requests with `withRetry()`. `query.ts` handles model fallback by switching model/provider and replaying the whole attempt. |
-| Change compaction/collapse hooks | `src/query.ts` | `src/services/compact/autoCompact.ts`, `src/services/compact/compact.ts`, `src/services/compact/microCompact.ts`, `src/services/contextCollapse/index.ts` | Query loop order matters: tool-result budget, snip, microcompact, context collapse, autocompact, blocking-limit check, API call, reactive recovery. `compact.ts` also owns the provider-aware streaming fallback request and its instruction assembly. |
+| Change retry/fallback behavior | `src/services/api/withRetry.ts` | `src/query.ts`, `src/services/api/claude.ts`, [`codex-core.md`](codex-core.md) | `claude.ts` wraps requests with `withRetry()`. `query.ts` handles model fallback by switching model/provider and replaying the whole attempt; a long-context entitlement refusal latches the lower budget instead of consuming retry attempts. |
+| Change compaction/collapse hooks | `src/query.ts` | `src/services/compact/{autoCompact,reactiveCompact,compact}.ts`, `src/utils/contextWindowPolicy.ts`, `src/services/contextCollapse/index.ts` | Query loop order matters: tool-result budget, snip, microcompact, context collapse, autocompact, blocking-limit check, API call, reactive recovery. Prefix compaction is the normal automatic path when `REACTIVE_COMPACT` is compiled and enabled; full replacement is the short-conversation fallback. |
 | Change model validation | `src/utils/model/validateModel.ts` | `src/utils/model/modelAllowlist.ts`, `src/utils/model/modelCapabilities.ts`, `src/utils/sideQuery.ts` | Validation checks allowlist and aliases before probing the API via `sideQuery()`. Codex subscriber model handling short-circuits known Codex/OpenAI models. |
 
 ## Turn Execution Owners
@@ -148,7 +148,7 @@ Recovery decisions:
 |---|---|---|
 | Model fallback | `src/query.ts` with `FallbackTriggeredError` from API path | Switches to `fallbackModel`, recomputes provider, clears partial messages/tool results, strips signatures for ant fallback, and retries the whole request. |
 | Context-collapse drain | `src/query.ts` plus `src/services/contextCollapse/index.ts` | On withheld prompt-too-long, drains staged collapses once before reactive compact. In this source snapshot the default module is a no-op unless replaced by a feature build. |
-| Reactive compact | Feature-gated loader and retry flow in `src/query.ts`; implementation in `src/services/compact/reactiveCompact.ts` (compiled in only under the `dev-full` feature set) | On withheld prompt-too-long/media errors, summarizes an older prefix, keeps the newest complete API rounds verbatim, and retries the interrupted request once before surfacing the error. |
+| Reactive compact | Feature-gated loader and retry flow in `src/query.ts`; implementation in `src/services/compact/reactiveCompact.ts` (compiled in by the root `dev-full` set and the desktop sidecar's `REACTIVE_COMPACT` runtime flag) | On withheld prompt-too-long/media errors, summarizes an older prefix, keeps the newest complete API rounds verbatim, records the preserved segment, and retries the interrupted request once before surfacing the error. |
 | Max-output escalation | `src/query.ts` | Can retry once with `ESCALATED_MAX_TOKENS`, then up to `MAX_OUTPUT_TOKENS_RECOVERY_LIMIT` continuation nudges. |
 | Autocompact circuit breaker | `src/services/compact/autoCompact.ts` | Stops automatic retries after repeated non-transient compaction failures and persists failure count by scope. |
 | Unknown-tool loop breaker | `src/query.ts` | Aborts when repeated follow-up turns only produce unknown-tool errors for the same tool. |
@@ -173,7 +173,7 @@ Use focused checks first, then the documented build for broader confidence:
 | Model catalog labels/options/agent downgrades | `bun test src/utils/model/gpt56LunaLabel.test.ts src/utils/model/agent.test.ts` |
 | Provider instruction placement | `bun test src/utils/providerPromptRegressions.test.ts` |
 | Prompt/context behavior | `bun test src/constants/prompts.test.ts src/services/compact/prompt.test.ts` |
-| Compaction behavior | `bun test src/services/compact/compact.test.ts src/services/compact/autoCompact.test.ts` |
+| Compaction behavior | `bun test src/services/compact/compact.test.ts src/services/compact/autoCompact.test.ts src/services/compact/reactiveCompact.test.ts` |
 | Codex/OpenAI adapter/account routing | See [`codex-core.md`](codex-core.md) § Tests And Validation. |
 | Docs-only map change | `git diff --check -- docs/maps/query-provider-runtime.md` |
 | Full documented build | `bun run build:dev:full` |
@@ -197,6 +197,9 @@ For model validation logic specifically:
   old prompt. `QueryEngine.ts` refetches prompt/context when either changed.
 - Do not assume custom system prompts still include system context. The custom
   prompt path skips `getSystemContext()` in `fetchSystemPromptParts()`.
+- Do not collapse native, entitlement, configured, and effective context
+  windows into one number. `src/utils/contextWindowPolicy.ts` records each
+  clamp, including a provider long-context refusal and output reservation.
 - Do not assume user context and system context are placed the same way for all
   providers. Check `instructionAssembly.ts` before changing prompt placement.
 - Do not assume autocompact is the only overflow recovery path. The query loop

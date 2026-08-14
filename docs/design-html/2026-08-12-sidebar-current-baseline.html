@@ -1,0 +1,825 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Sidebar as it renders today</title>
+
+<!--
+==============================================================================
+  BASELINE. This is the Cat Code desktop left rail EXACTLY as it renders today,
+  in its three real states. Nothing here is proposed, and nothing is invented.
+  Every value is read from `app/renderer/src/Sidebar.tsx` and the theme tokens
+  in `app/renderer/src/theme.css`.
+
+  Everything below is context for designing a replacement. None of it is
+  rendered on the page.
+==============================================================================
+
+  THE PRODUCT
+  Cat Code is a private fork of Claude Code being turned into an always-on
+  personal agent system. Claude Code is a coding agent that runs in a terminal;
+  the fork keeps that engine intact and is growing a desktop app around it. So
+  there are two front ends over one engine: the original terminal REPL, and
+  this Electron DESKTOP app (package `@cat-code/desktop`, source
+  `app/renderer/src/`). Moving the terminal UI to the desktop app is an active,
+  multi-phase migration program, and this rail is one of its surfaces.
+
+  ONE OPERATOR. This is a single-person tool, not a multi-tenant product. There
+  are no other users to design for, no onboarding, no empty-product state worth
+  optimizing, and no sharing or collaboration anywhere in the shell. The person
+  using it wrote most of it and runs several sessions at once, all day.
+
+  The desktop shell is a three-part frame: this left rail, a TabBar across the
+  top (open sessions, split-pane drops, per-tab status), and a session column
+  (transcript + composer) filling the rest. The rail and the TabBar overlap in
+  purpose on purpose: the TabBar is what is OPEN right now and carries the rich
+  per-session status; the rail is everything that EXISTS and carries almost no
+  status at all.
+
+  The unit of work is a SESSION: one running engine process, bound to one
+  workspace folder (its `cwd`). A session is created by picking a folder, lives
+  for days, and holds a whole transcript. Sessions are numerous (one real
+  project here holds 168 of them), and the operator switches between them all
+  day. The rail is the only place that shows every session at once, so its
+  whole job is: find the session I mean, and tell me which ones are alive.
+
+  Sessions come from two places and the rail shows both merged: sessions the
+  desktop app created (it has a registry row, so it can be switched to,
+  restored, renamed, acted on) and sessions created in the terminal (history
+  only, opened read-first). A terminal session with no recorded workspace can
+  be listed but not opened from here, so it renders inert: no hover state, no
+  actions, dimmer title. That is the "Unknown workspace" row in the specimen.
+
+  IMPLEMENTATION CONSTRAINTS ON WHATEVER REPLACES THIS
+  - React + Tailwind v4, dark only, no inline `style={{}}` anywhere.
+  - Static class strings only. An interpolated arbitrary-value class
+    (`delay-[${n}ms]`) silently produces nothing in this setup, and a headless
+    test cannot see the difference.
+  - The rail is one component in a shipped app, not a mockup: every affordance
+    it draws has to map to something the engine can actually do.
+
+  THE RAIL'S MECHANICS
+  - Hover-expanding: 48px collapsed, 240px expanded, 120ms show delay / 200ms
+    hide delay, plus a pin to keep it open. Expanded it FLOATS OVER the session
+    column (a 48px spacer holds its place in the flex flow), with a
+    `4px 0 24px rgba(0,0,0,0.45)` shadow, transitioning width over 200ms ease-out.
+  - Expanded order: paw logo + pin · search · New chat · Pinned · Projects ·
+    footer (active account + a toggle that unfolds five destinations UPWARD:
+    Chat, Sessions, Goals, Accounts, Settings, staggered 150/120/90/60/30ms).
+  - Collapsed, the footer's five destinations show as icons, bottom-anchored,
+    so no destination is ever more than one click away.
+
+  THE DATA IT SHOWS
+  A merged roster: desktop-registry sessions plus sessions created in the
+  terminal. A registry row switches or restores; a terminal-history row opens
+  by its engine id; a history row with no recorded workspace is browse-only
+  (non-interactive, no hover affordances).
+
+  RULES THAT ARE ALREADY SETTLED (a redesign has to respect these)
+  - NO per-row status chips or status words. Ruled out 2026-07-20. The single
+    exception is one small unlabeled dot on LIVE rows (ruling O1, 2026-07-31):
+    one tone, no text, nothing at all on a row that is not live. The dot sits
+    in a fixed leading lane EVERY row reserves, centred on the title's line
+    box, so its presence never reflows the title or the subtitle. Richer
+    per-state status belongs on the TabBar, not here.
+  - Row order inside a project is ACTIVITY order and is not manually sortable.
+    A row rises only when its session sends a message, never on a mere open.
+    Manual sequencing exists in exactly one place, the Pinned section, because
+    that list is short and operator-authored. (A manual order over a project's
+    rows shipped once with a 64-id cap and inverted the rail on the first
+    project to exceed it. Reverted 2026-08-02.)
+  - Project GROUPS are drag-reorderable (and ⌥↑/⌥↓), and that order persists.
+  - A project can be hidden behind its group kebab, and comes back via a
+    "Show N hidden projects" button.
+  - A group shows at most 6 rows before a "Show N more" toggle. The active
+    session stays visible even when it falls past the cap.
+  - A pinned session is LIFTED into Pinned, never duplicated in its project.
+  - A row's subtitle is `time · model`, where model is the engine's own display
+    name, rendered verbatim ("Opus 5", "GPT-5.6 Sol"), never shortened.
+  - Hover (or focus) reveals a row's kebab and pin, overlaying the row's right
+    edge so a title gets the full rail width at rest. A pinned row keeps its
+    pin visible at rest so an unpin is not a hover-hunt.
+
+  THEME (`app/renderer/src/theme.css`, Tailwind v4 `@theme inline`)
+  Dark only. Every value below is the real token; this page uses them raw.
+
+    app body            #09090b   --color-app-bg
+    shell chrome        #070709   --color-shell-chrome   (TabBar / rail base)
+    rail panel          #0a0a0c   --color-surface-panel
+    raised (popovers)   #111113   --color-surface-raised
+    seam                rgba(255,255,255,0.06)  --color-shell-seam
+    hover wash          rgba(255,255,255,0.045) --color-shell-hover
+
+    text primary        #f4f4f5     muted   #a1a1aa
+    text subtle         #98989f     faint   #838389     ghost  #75757b
+      (the subtle/faint/ghost ramp was LIGHTENED 2026-08-07 off the prototype
+       values for contrast against near-black. Do not "restore" the old ones.)
+
+    accent              #f472b6   --accent      (pink 400)
+    accent soft         #f9a8d4   --accent-soft (pink 300, active emphasis)
+    accent as channels  244 114 182  --accent-rgb, for alpha tints
+
+    tones: good #4ade80 · warn #fbbf24 · danger #f87171 · info #60a5fa
+      Tones mean success/warning/info. They are NEVER the accent, and the
+      accent is never a tone. The live dot uses `good`.
+
+    THE ACCENT IS USER-CHOSEN. `data-accent` on a wrapper swaps three tokens:
+    pink (default) / blue #60a5fa / green #4ade80 / purple #c084fc /
+    amber #fbbf24, each with its own one-step-brighter soft. So emphasis must
+    be expressed as accent tints (`accent/0.09` fills, `accent/0.18` borders),
+    never a hardcoded pink.
+
+    fonts: DM Sans (UI), DM Mono (code), Press Start 2P (display only).
+    Self-hosted; the app's CSP blocks remote font CDNs.
+
+  HOUSE RULES FOR ANY UI TEXT
+  - No em dash (—) anywhere a user can read it. Split the sentence or use a
+    comma. This includes placeholder dashes: write "none".
+  - No engineering vocabulary on screen (no file:line, no session ids, no
+    internal terms). No sentence that restates the state the user just chose.
+  - Tell the user what to do, not why something is unbuilt.
+
+  SAMPLE DATA
+  Deliberately generic, not a real roster: 9 sessions across 3 projects, one
+  active, two live, two pinned.
+==============================================================================
+-->
+
+<style>
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 100 1000;
+  font-display: swap;
+  src: url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2');
+}
+
+/* ── chrome (page furniture; never inside a specimen) ─────────────────── */
+html { color-scheme: dark; }
+body {
+  margin: 0;
+  background: #09090b;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+.x-strip {
+  display: flex;
+  align-items: flex-start;
+  gap: 40px;
+  padding: 34px 34px 48px;
+  overflow-x: auto;
+}
+.x-col { flex: 0 0 auto; }
+.x-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #6a6a70;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #1c1c20;
+  margin-bottom: 16px;
+}
+
+/* ── specimen (everything below is app-real) ──────────────────────────── */
+.sb-rail {
+  height: 620px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #0a0a0c;
+  border-right: 1px solid rgba(255, 255, 255, 0.05);
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+  color: #f4f4f5;
+  user-select: none;
+  /* Tailwind v4 preflight puts `line-height: 1.5` on the document root, and the
+   * rail's type is all `text-[13px]`-style arbitrary sizes, which set font-size
+   * ONLY and inherit that 1.5. So a 13px title occupies a 19.5px line box and a
+   * 10px subtitle a 15px one, which is what sets every row's real height. */
+  line-height: 1.5;
+  /* `body { -webkit-font-smoothing: antialiased }`, theme.css base layer.
+   * Without it DM Sans renders visibly heavier than the app. */
+  -webkit-font-smoothing: antialiased;
+}
+.sb-rail.is-open {
+  width: 240px;
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.45);
+}
+.sb-rail.is-collapsed { width: 48px; }
+
+.sb-head {
+  height: 50px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px 0 16px;
+}
+.sb-head.is-collapsed { justify-content: center; padding: 0; }
+.sb-brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.sb-brand svg { color: #f472b6; display: block; }
+/* `tracking-tight` is -0.025em. */
+.sb-wordmark { font-size: 13px; font-weight: 600; letter-spacing: -0.025em; color: #f4f4f5; }
+.sb-pin-btn {
+  height: 22px; width: 22px; border: 0; background: none; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 4px; color: #838389; cursor: pointer;
+}
+.sb-pin-btn:hover { color: #a1a1aa; }
+
+.sb-searchwrap { flex-shrink: 0; padding: 0 10px 8px; }
+.sb-search { position: relative; }
+.sb-search > svg {
+  position: absolute; left: 8px; top: 50%; transform: translateY(-50%);
+  color: #838389; pointer-events: none;
+}
+.sb-search input {
+  width: 100%; box-sizing: border-box;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.04);
+  padding: 6px 8px 6px 26px;
+  font-family: inherit;
+  /* `text-xs`, the one non-arbitrary size in the rail: unlike the bracket sizes
+   * it carries its own line-height (0.75rem / calc(1 / 0.75) = 12px / 16px). */
+  font-size: 12px;
+  line-height: 1.33333;
+  color: #d4d4d8;
+  outline: none;
+}
+.sb-search input::placeholder { color: #98989f; }
+.sb-search input:focus { border-color: rgba(244, 114, 182, 0.35); }
+
+.sb-newchat {
+  margin: 0 8px 8px; flex-shrink: 0;
+  display: flex; align-items: center; gap: 9px;
+  border: 0; background: none;
+  border-radius: 6px; padding: 6px 8px;
+  font-family: inherit; font-size: 12.5px; font-weight: 500;
+  color: #d4d4d8; cursor: pointer; text-align: left;
+}
+.sb-newchat:hover { background: rgba(244, 114, 182, 0.10); color: #f9a8d4; }
+.sb-newchat svg { display: block; }
+
+.sb-scroll {
+  min-height: 0; flex: 1;
+  overflow-y: auto; overflow-x: hidden;
+  padding: 0 8px;
+  scrollbar-width: none;
+}
+.sb-scroll::-webkit-scrollbar { display: none; }
+
+.sb-section { margin-bottom: 10px; }
+.sb-sectionhead { display: flex; align-items: center; gap: 4px; padding: 2px 4px 6px; }
+.sb-sectiontitle {
+  flex: 1; min-width: 0;
+  font-size: 10px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.08em;
+  color: #838389;
+}
+.sb-iconbtn {
+  height: 18px; width: 18px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: none; padding: 0; color: #838389; cursor: pointer;
+}
+.sb-iconbtn:hover { border-color: rgba(244, 114, 182, 0.4); background: rgba(244, 114, 182, 0.08); color: #f472b6; }
+
+.sb-group { position: relative; margin-bottom: 4px; }
+.sb-grouphead { display: flex; align-items: center; gap: 5px; padding: 2px 4px 4px; cursor: grab; }
+.sb-groupbtn {
+  display: flex; align-items: center; gap: 4px;
+  flex: 1; min-width: 0;
+  border: 0; background: none; padding: 0; cursor: pointer;
+  font-family: inherit; text-align: left;
+}
+.sb-groupicon {
+  height: 13px; width: 13px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  color: #98989f;
+}
+.sb-grouphead:hover .sb-groupicon { color: #f9a8d4; }
+.sb-groupname {
+  font-size: 12.5px; font-weight: 500; color: #a1a1aa;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sb-grouphead:hover .sb-groupname { color: #d4d4d8; }
+.sb-ghost {
+  height: 18px; width: 18px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: 0; background: none; padding: 0; border-radius: 4px;
+  color: #838389; cursor: pointer; opacity: 0;
+}
+.sb-grouphead:hover .sb-ghost { opacity: 1; }
+.sb-ghost:hover { background: rgba(244, 114, 182, 0.12); color: #f472b6; }
+
+.sb-row {
+  position: relative;
+  display: flex; align-items: center; gap: 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  padding: 6px 8px 6px 4px;
+  cursor: pointer;
+}
+.sb-row:hover { border-color: rgba(244, 114, 182, 0.22); background: rgba(244, 114, 182, 0.07); }
+.sb-row.is-active { border-color: rgba(244, 114, 182, 0.18); background: rgba(244, 114, 182, 0.09); }
+.sb-row.is-browseonly { cursor: default; }
+.sb-row.is-browseonly:hover { border-color: transparent; background: none; }
+.sb-dotlane {
+  height: 16px; width: 6px; flex-shrink: 0;
+  display: flex; align-items: center; align-self: flex-start;
+  pointer-events: none;
+}
+.sb-dot { height: 6px; width: 6px; border-radius: 999px; background: #4ade80; }
+.sb-rowbody { min-width: 0; flex: 1; }
+.sb-title {
+  display: block;
+  font-size: 13px; font-weight: 500; color: #c4c4c8;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sb-row:hover .sb-title { color: #f4f4f5; }
+.sb-row.is-active .sb-title { color: #fce7f3; }
+.sb-row.is-browseonly .sb-title { color: #98989f; }
+.sb-row.is-browseonly:hover .sb-title { color: #98989f; }
+.sb-sub {
+  display: flex; align-items: center; gap: 5px; min-width: 0;
+  font-size: 10px; color: #838389;
+}
+.sb-sub .sb-sep { color: #75757b; flex-shrink: 0; }
+.sb-sub .sb-now { flex-shrink: 0; }
+.sb-sub .sb-model { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.sb-actions {
+  position: absolute; top: 0; bottom: 0; right: 4px;
+  display: flex; align-items: center; gap: 2px;
+  padding-left: 14px;
+  opacity: 0;
+}
+.sb-row:hover .sb-actions {
+  opacity: 1;
+  background-image:
+    linear-gradient(90deg, rgb(244 114 182 / 0), rgb(244 114 182 / 0.07) 14px),
+    linear-gradient(90deg, rgb(10 10 12 / 0), #0a0a0c 14px);
+}
+.sb-row.is-active:hover .sb-actions {
+  background-image:
+    linear-gradient(90deg, rgb(244 114 182 / 0), rgb(244 114 182 / 0.09) 14px),
+    linear-gradient(90deg, rgb(10 10 12 / 0), #0a0a0c 14px);
+}
+/* A pinned row's actions lane is painted at rest, with only its kebab hidden. */
+.sb-actions.is-restvisible { opacity: 1; }
+.sb-actbtn {
+  height: 22px; width: 22px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: 0; background: none; padding: 0; border-radius: 4px;
+  color: #98989f; cursor: pointer;
+}
+.sb-actbtn:hover { background: rgba(244, 114, 182, 0.16); color: #f9a8d4; }
+.sb-actbtn.is-hiddenatrest { opacity: 0; }
+.sb-row:hover .sb-actbtn.is-hiddenatrest { opacity: 1; }
+.sb-actbtn.is-pinned { color: #f472b6; }
+.sb-actbtn.is-unpinned { color: #838389; }
+
+.sb-more {
+  display: flex; align-items: center; gap: 4px;
+  width: 100%; box-sizing: border-box;
+  border: 0; background: none;
+  border-radius: 6px; padding: 4px 8px 4px 26px;
+  font-family: inherit; font-size: 11px; font-weight: 500;
+  color: #838389; cursor: pointer; text-align: left;
+}
+.sb-more:hover { background: rgba(255, 255, 255, 0.045); color: #a1a1aa; }
+.sb-hidden {
+  display: flex; align-items: center; gap: 4px;
+  width: 100%; box-sizing: border-box;
+  border: 0; background: none;
+  border-radius: 6px; padding: 4px 8px;
+  font-family: inherit; font-size: 11px; font-weight: 500;
+  color: #838389; cursor: pointer; text-align: left;
+}
+.sb-hidden:hover { background: rgba(255, 255, 255, 0.045); color: #a1a1aa; }
+
+.sb-foot {
+  flex-shrink: 0;
+  display: flex; flex-direction: column-reverse; align-items: stretch;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 6px 8px 8px;
+}
+.sb-footrow { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.sb-account {
+  display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1;
+  border: 0; background: none; border-radius: 6px; padding: 2px 4px;
+  font-family: inherit; color: #98989f; cursor: pointer; text-align: left;
+}
+.sb-account:hover { background: rgba(255, 255, 255, 0.045); color: #a1a1aa; }
+.sb-avatar {
+  height: 20px; width: 20px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 999px;
+  background: rgba(244, 114, 182, 0.16);
+  font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
+  color: #f9a8d4;
+}
+.sb-alias { font-size: 11px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-navtoggle {
+  margin-left: auto;
+  height: 26px; width: 26px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: 0; background: none; padding: 0; border-radius: 6px;
+  color: #838389; cursor: pointer;
+}
+.sb-navtoggle:hover { background: rgba(255, 255, 255, 0.045); color: #a1a1aa; }
+.sb-navtoggle.is-on { color: #f9a8d4; transform: rotate(90deg); }
+
+.sb-navlist { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 6px; }
+.sb-navitem {
+  display: flex; align-items: center; gap: 4px;
+  width: 100%; box-sizing: border-box;
+  border: 0; background: none; border-radius: 6px;
+  padding: 6px 0;
+  font-family: inherit;
+  color: #98989f; cursor: pointer; text-align: left;
+}
+.sb-navitem:hover { color: #d4d4d8; }
+.sb-navitem.is-current { background: rgba(244, 114, 182, 0.09); color: #f9a8d4; }
+.sb-navlane {
+  height: 20px; width: 32px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.sb-navlabel { font-size: 13px; }
+.sb-navitem.is-current .sb-navlabel { font-weight: 500; }
+
+.sb-railnav {
+  margin-top: auto;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 8px 0 12px;
+}
+.sb-railnav .sb-avatar { margin-bottom: 4px; }
+.sb-railbtn {
+  height: 32px; width: 32px;
+  display: flex; align-items: center; justify-content: center;
+  border: 0; background: none; padding: 0; border-radius: 6px;
+  color: #98989f; cursor: pointer;
+}
+.sb-railbtn:hover { color: #d4d4d8; }
+.sb-railbtn.is-current { background: rgba(244, 114, 182, 0.12); color: #f9a8d4; }
+</style>
+</head>
+<body>
+
+<div class="x-strip">
+
+  <!-- ===== collapsed rail: 48px, logo + bottom-anchored destinations ===== -->
+  <div class="x-col">
+    <div class="x-label">Collapsed</div>
+    <div class="sb-rail is-collapsed">
+      <div class="sb-head is-collapsed">
+        <span class="sb-brand">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><ellipse cx="6.5" cy="5.5" rx="1.8" ry="2.5" opacity=".65"/><ellipse cx="11.5" cy="4" rx="1.8" ry="2.5" opacity=".65"/><ellipse cx="16.5" cy="5.5" rx="1.8" ry="2.5" opacity=".65"/><ellipse cx="4" cy="9.5" rx="1.4" ry="2" opacity=".45"/><path d="M12 21.5c-4.2 0-7.5-2.3-7.5-6 0-1.9 1.1-3.6 2.8-4.6.75-.45 1.6-.65 2.3-.65h.8c.7 0 1.55.2 2.3.65 1.7.95 2.8 2.7 2.8 4.6 0 3.7-3.3 6-7.5 6z"/></svg>
+        </span>
+      </div>
+      <div class="sb-railnav">
+        <span class="sb-avatar">M</span>
+        <button class="sb-railbtn is-current" title="Chat">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        </button>
+        <button class="sb-railbtn" title="Sessions">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+        </button>
+        <button class="sb-railbtn" title="Goals">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+        </button>
+        <button class="sb-railbtn" title="Accounts">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+        </button>
+        <button class="sb-railbtn" title="Settings">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== expanded rail: 240px, the full roster ===== -->
+  <div class="x-col">
+    <div class="x-label">Expanded</div>
+    <div class="sb-rail is-open">
+      <div class="sb-head">
+        <div class="sb-brand">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><ellipse cx="6.5" cy="5.5" rx="1.8" ry="2.5" opacity=".65"/><ellipse cx="11.5" cy="4" rx="1.8" ry="2.5" opacity=".65"/><ellipse cx="16.5" cy="5.5" rx="1.8" ry="2.5" opacity=".65"/><ellipse cx="4" cy="9.5" rx="1.4" ry="2" opacity=".45"/><path d="M12 21.5c-4.2 0-7.5-2.3-7.5-6 0-1.9 1.1-3.6 2.8-4.6.75-.45 1.6-.65 2.3-.65h.8c.7 0 1.55.2 2.3.65 1.7.95 2.8 2.7 2.8 4.6 0 3.7-3.3 6-7.5 6z"/></svg>
+          <span class="sb-wordmark">Cat Code</span>
+        </div>
+        <button class="sb-pin-btn" title="Pin sidebar open">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1V4H8v2h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24z"/></svg>
+        </button>
+      </div>
+
+      <div class="sb-searchwrap">
+        <div class="sb-search">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" placeholder="Search sessions…" />
+        </div>
+      </div>
+
+      <button class="sb-newchat">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+        <span>New chat</span>
+      </button>
+
+      <div class="sb-scroll">
+        <div class="sb-section">
+          <div class="sb-sectionhead"><span class="sb-sectiontitle">Pinned</span></div>
+
+          <div class="sb-row">
+            <span class="sb-dotlane"></span>
+            <div class="sb-rowbody">
+              <span class="sb-title">Release checklist</span>
+              <div class="sb-sub"><span class="sb-now">2d</span></div>
+            </div>
+            <div class="sb-actions is-restvisible">
+              <button class="sb-actbtn is-hiddenatrest" title="Session actions"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></button>
+              <button class="sb-actbtn is-pinned" title="Unpin"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M9 4V3h6v1h-1v6.76a2 2 0 0 0 1.11 1.79l1.78.9A2 2 0 0 1 19 15.24V17h-6v5h-2v-5H5v-1.76a2 2 0 0 1 1.11-1.79l1.78-.9A2 2 0 0 0 9 10.76z"/></svg></button>
+            </div>
+          </div>
+
+          <div class="sb-row">
+            <span class="sb-dotlane"></span>
+            <div class="sb-rowbody">
+              <span class="sb-title">Design tokens sweep</span>
+              <div class="sb-sub"><span class="sb-now">6h</span><span class="sb-sep">·</span><span class="sb-model">Opus 5</span></div>
+            </div>
+            <div class="sb-actions is-restvisible">
+              <button class="sb-actbtn is-hiddenatrest" title="Session actions"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></button>
+              <button class="sb-actbtn is-pinned" title="Unpin"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M9 4V3h6v1h-1v6.76a2 2 0 0 0 1.11 1.79l1.78.9A2 2 0 0 1 19 15.24V17h-6v5h-2v-5H5v-1.76a2 2 0 0 1 1.11-1.79l1.78-.9A2 2 0 0 0 9 10.76z"/></svg></button>
+            </div>
+          </div>
+        </div>
+
+        <div class="sb-section">
+          <div class="sb-sectionhead">
+            <span class="sb-sectiontitle">Projects</span>
+            <button class="sb-iconbtn" title="Add project: choose a folder"><svg width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="1" x2="5" y2="9"/><line x1="1" y1="5" x2="9" y2="5"/></svg></button>
+          </div>
+
+          <div class="sb-group">
+            <div class="sb-grouphead">
+              <button class="sb-groupbtn">
+                <span class="sb-groupicon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l2 2.5h6a2 2 0 0 1 2 2V9"/><path d="M2 12h18.5a1.5 1.5 0 0 1 1.45 1.9l-1.3 4.8A2 2 0 0 1 18.7 20H4"/></svg></span>
+                <span class="sb-groupname">atlas</span>
+              </button>
+              <button class="sb-ghost" title="New session in this workspace"><svg width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="1" x2="5" y2="9"/><line x1="1" y1="5" x2="9" y2="5"/></svg></button>
+              <button class="sb-ghost" title="Project actions"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></button>
+            </div>
+
+            <div class="sb-row is-active">
+              <span class="sb-dotlane"><span class="sb-dot"></span></span>
+              <div class="sb-rowbody">
+                <span class="sb-title">Session restore fix</span>
+                <div class="sb-sub"><span class="sb-now">now</span><span class="sb-sep">·</span><span class="sb-model">Opus 5</span></div>
+              </div>
+              <div class="sb-actions">
+                <button class="sb-actbtn" title="Session actions"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></button>
+                <button class="sb-actbtn is-unpinned" title="Pin to top"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1V4H8v2h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24z"/></svg></button>
+              </div>
+            </div>
+
+            <div class="sb-row">
+              <span class="sb-dotlane"></span>
+              <div class="sb-rowbody">
+                <span class="sb-title">Cache layer refactor</span>
+                <div class="sb-sub"><span class="sb-now">41m</span><span class="sb-sep">·</span><span class="sb-model">Opus 5</span></div>
+              </div>
+              <div class="sb-actions">
+                <button class="sb-actbtn" title="Session actions"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></button>
+                <button class="sb-actbtn is-unpinned" title="Pin to top"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1V4H8v2h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24z"/></svg></button>
+              </div>
+            </div>
+
+            <div class="sb-row">
+              <span class="sb-dotlane"></span>
+              <div class="sb-rowbody">
+                <span class="sb-title">Flaky test triage</span>
+                <div class="sb-sub"><span class="sb-now">3h</span><span class="sb-sep">·</span><span class="sb-model">Sonnet 5</span></div>
+              </div>
+              <div class="sb-actions">
+                <button class="sb-actbtn" title="Session actions"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></button>
+                <button class="sb-actbtn is-unpinned" title="Pin to top"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1V4H8v2h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24z"/></svg></button>
+              </div>
+            </div>
+
+            <div class="sb-row">
+              <span class="sb-dotlane"></span>
+              <div class="sb-rowbody">
+                <span class="sb-title">Token count audit</span>
+                <div class="sb-sub"><span class="sb-now">1d</span></div>
+              </div>
+              <div class="sb-actions">
+                <button class="sb-actbtn" title="Session actions"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></button>
+                <button class="sb-actbtn is-unpinned" title="Pin to top"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1V4H8v2h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24z"/></svg></button>
+              </div>
+            </div>
+
+            <button class="sb-more">Show 4 more</button>
+          </div>
+
+          <div class="sb-group">
+            <div class="sb-grouphead">
+              <button class="sb-groupbtn">
+                <span class="sb-groupicon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l2 2.5h6a2 2 0 0 1 2 2V9"/><path d="M2 12h18.5a1.5 1.5 0 0 1 1.45 1.9l-1.3 4.8A2 2 0 0 1 18.7 20H4"/></svg></span>
+                <span class="sb-groupname">pipeline-api</span>
+              </button>
+              <button class="sb-ghost" title="New session in this workspace"><svg width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="1" x2="5" y2="9"/><line x1="1" y1="5" x2="9" y2="5"/></svg></button>
+              <button class="sb-ghost" title="Project actions"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></button>
+            </div>
+
+            <div class="sb-row">
+              <span class="sb-dotlane"><span class="sb-dot"></span></span>
+              <div class="sb-rowbody">
+                <span class="sb-title">Rate limit backoff</span>
+                <div class="sb-sub"><span class="sb-now">12m</span><span class="sb-sep">·</span><span class="sb-model">Sonnet 5</span></div>
+              </div>
+              <div class="sb-actions">
+                <button class="sb-actbtn" title="Session actions"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></button>
+                <button class="sb-actbtn is-unpinned" title="Pin to top"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1V4H8v2h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24z"/></svg></button>
+              </div>
+            </div>
+
+            <div class="sb-row">
+              <span class="sb-dotlane"></span>
+              <div class="sb-rowbody">
+                <span class="sb-title">Schema migration</span>
+                <div class="sb-sub"><span class="sb-now">1d</span></div>
+              </div>
+              <div class="sb-actions">
+                <button class="sb-actbtn" title="Session actions"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></button>
+                <button class="sb-actbtn is-unpinned" title="Pin to top"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1V4H8v2h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24z"/></svg></button>
+              </div>
+            </div>
+          </div>
+
+          <div class="sb-group">
+            <div class="sb-grouphead">
+              <button class="sb-groupbtn">
+                <span class="sb-groupicon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 19V6a2 2 0 0 1 2-2h3.6l2 2.5H19a2 2 0 0 1 2 2V19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/></svg></span>
+                <span class="sb-groupname">notes</span>
+              </button>
+              <button class="sb-ghost" title="New session in this workspace"><svg width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="1" x2="5" y2="9"/><line x1="1" y1="5" x2="9" y2="5"/></svg></button>
+              <button class="sb-ghost" title="Project actions"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></button>
+            </div>
+          </div>
+
+          <div class="sb-group">
+            <div class="sb-grouphead">
+              <button class="sb-groupbtn">
+                <span class="sb-groupname">Unknown workspace</span>
+              </button>
+            </div>
+
+            <div class="sb-row is-browseonly">
+              <span class="sb-dotlane"></span>
+              <div class="sb-rowbody">
+                <span class="sb-title">Import cleanup</span>
+                <div class="sb-sub"><span class="sb-now">4d</span></div>
+              </div>
+            </div>
+          </div>
+
+          <button class="sb-hidden">Show 1 hidden project</button>
+        </div>
+      </div>
+
+      <div class="sb-foot">
+        <div class="sb-footrow">
+          <button class="sb-account">
+            <span class="sb-avatar">M</span>
+            <span class="sb-alias">main</span>
+          </button>
+          <button class="sb-navtoggle" title="Show destinations">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== expanded, footer destinations unfolded ===== -->
+  <div class="x-col">
+    <div class="x-label">Expanded, destinations open</div>
+    <div class="sb-rail is-open">
+      <div class="sb-head">
+        <div class="sb-brand">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><ellipse cx="6.5" cy="5.5" rx="1.8" ry="2.5" opacity=".65"/><ellipse cx="11.5" cy="4" rx="1.8" ry="2.5" opacity=".65"/><ellipse cx="16.5" cy="5.5" rx="1.8" ry="2.5" opacity=".65"/><ellipse cx="4" cy="9.5" rx="1.4" ry="2" opacity=".45"/><path d="M12 21.5c-4.2 0-7.5-2.3-7.5-6 0-1.9 1.1-3.6 2.8-4.6.75-.45 1.6-.65 2.3-.65h.8c.7 0 1.55.2 2.3.65 1.7.95 2.8 2.7 2.8 4.6 0 3.7-3.3 6-7.5 6z"/></svg>
+          <span class="sb-wordmark">Cat Code</span>
+        </div>
+        <button class="sb-pin-btn" title="Pin sidebar open">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1V4H8v2h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24z"/></svg>
+        </button>
+      </div>
+
+      <div class="sb-searchwrap">
+        <div class="sb-search">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" placeholder="Search sessions…" />
+        </div>
+      </div>
+
+      <button class="sb-newchat">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+        <span>New chat</span>
+      </button>
+
+      <div class="sb-scroll">
+        <div class="sb-section">
+          <div class="sb-sectionhead"><span class="sb-sectiontitle">Pinned</span></div>
+          <div class="sb-row">
+            <span class="sb-dotlane"></span>
+            <div class="sb-rowbody">
+              <span class="sb-title">Release checklist</span>
+              <div class="sb-sub"><span class="sb-now">2d</span></div>
+            </div>
+            <div class="sb-actions is-restvisible">
+              <button class="sb-actbtn is-hiddenatrest" title="Session actions"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></button>
+              <button class="sb-actbtn is-pinned" title="Unpin"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M9 4V3h6v1h-1v6.76a2 2 0 0 0 1.11 1.79l1.78.9A2 2 0 0 1 19 15.24V17h-6v5h-2v-5H5v-1.76a2 2 0 0 1 1.11-1.79l1.78-.9A2 2 0 0 0 9 10.76z"/></svg></button>
+            </div>
+          </div>
+        </div>
+
+        <div class="sb-section">
+          <div class="sb-sectionhead">
+            <span class="sb-sectiontitle">Projects</span>
+            <button class="sb-iconbtn" title="Add project: choose a folder"><svg width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="1" x2="5" y2="9"/><line x1="1" y1="5" x2="9" y2="5"/></svg></button>
+          </div>
+
+          <div class="sb-group">
+            <div class="sb-grouphead">
+              <button class="sb-groupbtn">
+                <span class="sb-groupicon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l2 2.5h6a2 2 0 0 1 2 2V9"/><path d="M2 12h18.5a1.5 1.5 0 0 1 1.45 1.9l-1.3 4.8A2 2 0 0 1 18.7 20H4"/></svg></span>
+                <span class="sb-groupname">atlas</span>
+              </button>
+              <button class="sb-ghost" title="New session in this workspace"><svg width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="1" x2="5" y2="9"/><line x1="1" y1="5" x2="9" y2="5"/></svg></button>
+              <button class="sb-ghost" title="Project actions"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></button>
+            </div>
+            <div class="sb-row is-active">
+              <span class="sb-dotlane"><span class="sb-dot"></span></span>
+              <div class="sb-rowbody">
+                <span class="sb-title">Session restore fix</span>
+                <div class="sb-sub"><span class="sb-now">now</span><span class="sb-sep">·</span><span class="sb-model">Opus 5</span></div>
+              </div>
+            </div>
+            <div class="sb-row">
+              <span class="sb-dotlane"></span>
+              <div class="sb-rowbody">
+                <span class="sb-title">Cache layer refactor</span>
+                <div class="sb-sub"><span class="sb-now">41m</span><span class="sb-sep">·</span><span class="sb-model">Opus 5</span></div>
+              </div>
+            </div>
+            <div class="sb-row">
+              <span class="sb-dotlane"></span>
+              <div class="sb-rowbody">
+                <span class="sb-title">Flaky test triage</span>
+                <div class="sb-sub"><span class="sb-now">3h</span><span class="sb-sep">·</span><span class="sb-model">Sonnet 5</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sb-foot">
+        <div class="sb-footrow">
+          <button class="sb-account">
+            <span class="sb-avatar">M</span>
+            <span class="sb-alias">main</span>
+          </button>
+          <button class="sb-navtoggle is-on" title="Hide destinations">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/></svg>
+          </button>
+        </div>
+
+        <div class="sb-navlist">
+          <button class="sb-navitem is-current">
+            <span class="sb-navlane"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
+            <span class="sb-navlabel">Chat</span>
+          </button>
+          <button class="sb-navitem">
+            <span class="sb-navlane"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></span>
+            <span class="sb-navlabel">Sessions</span>
+          </button>
+          <button class="sb-navitem">
+            <span class="sb-navlane"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg></span>
+            <span class="sb-navlabel">Goals</span>
+          </button>
+          <button class="sb-navitem">
+            <span class="sb-navlane"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg></span>
+            <span class="sb-navlabel">Accounts</span>
+          </button>
+          <button class="sb-navitem">
+            <span class="sb-navlane"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
+            <span class="sb-navlabel">Settings</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

@@ -19,10 +19,16 @@ const actualClaude = await import('../services/api/claude.js')
 
 let capturedModel: string | undefined
 let capturedProvider: string | undefined
+let capturedOptions: any
+let capturedTools: any[] = []
+let codexResponseText = '{"title":"Fix login bug"}'
 
 beforeEach(async () => {
   capturedModel = undefined
   capturedProvider = undefined
+  capturedOptions = undefined
+  capturedTools = []
+  codexResponseText = '{"title":"Fix login bug"}'
   await mock.module('src/utils/auth.js', () => ({
     ...actualAuth,
     isCodexSubscriber: () =>
@@ -30,21 +36,26 @@ beforeEach(async () => {
   }))
   await mock.module('src/services/api/claude.js', () => ({
     ...actualClaude,
-    queryModelWithoutStreaming: async ({ options }: any) => {
+    queryModelWithoutStreaming: async ({ options, tools }: any) => {
       capturedModel = options.model
       capturedProvider = options.provider
+      capturedOptions = options
+      capturedTools = tools
       return {
         type: 'assistant',
         uuid: randomUUID(),
         message: {
-          content: [
-            {
-              type: 'tool_use',
-              id: 'toolu_test',
-              name: 'StructuredOutput',
-              input: { title: 'Fix login bug' },
-            },
-          ],
+          content:
+            options.provider === 'openai'
+              ? [{ type: 'text', text: codexResponseText }]
+              : [
+                  {
+                    type: 'tool_use',
+                    id: 'toolu_test',
+                    name: 'StructuredOutput',
+                    input: { title: 'Fix login bug' },
+                  },
+                ],
         },
       }
     },
@@ -67,6 +78,30 @@ describe('generateSessionTitle provider routing', () => {
     expect(title).toBe('Fix login bug')
     expect(capturedProvider).toBe('openai')
     expect(capturedModel).toBe('gpt-5.6-luna')
+    expect(capturedTools).toEqual([])
+    expect(capturedOptions.toolChoice).toBeUndefined()
+    expect(capturedOptions.outputFormat).toEqual({
+      type: 'json_schema',
+      schema: {
+        type: 'object',
+        properties: { title: { type: 'string' } },
+        required: ['title'],
+        additionalProperties: false,
+      },
+    })
+    expect(capturedOptions.effortValue).toBe('low')
+  })
+
+  test('rejects malformed native structured output on Codex', async () => {
+    codexSubscriber = true
+    codexResponseText = 'not json'
+    const { generateSessionTitle } = await import('./sessionTitle.js')
+    expect(
+      await generateSessionTitle(
+        'fix the login bug',
+        new AbortController().signal,
+      ),
+    ).toBeNull()
   })
 
   test('keeps the Anthropic default off the Codex fork', async () => {
@@ -76,5 +111,11 @@ describe('generateSessionTitle provider routing', () => {
     await generateSessionTitle('fix the login bug', new AbortController().signal)
     expect(capturedProvider).not.toBe('openai')
     expect(capturedModel).toBe(getDefaultHaikuModel())
+    expect(capturedTools).toHaveLength(1)
+    expect(capturedOptions.toolChoice).toEqual({
+      type: 'tool',
+      name: 'StructuredOutput',
+    })
+    expect(capturedOptions.outputFormat).toBeUndefined()
   })
 })

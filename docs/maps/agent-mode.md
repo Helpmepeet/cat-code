@@ -2,7 +2,7 @@
 
 Daily-refreshable routing map for Agent Mode ownership, integration points, and stale-doc checks.
 
-Last refreshed: 2026-07-31 against the current source tree.
+Last refreshed: 2026-08-13 against the current source tree.
 
 ## First Files To Inspect
 
@@ -65,7 +65,7 @@ Agent Mode is currently an environment-selected orchestration mode, not the olde
 | REPL Agent Mode UX | `src/screens/REPL.tsx` | `src/agent-mode/AgentModeWorkerRoster.tsx`, `src/agent-mode/workerUxSummary.ts` | REPL enters Agent Mode, rebuilds prompt context, renders the worker roster, handles Escape/a abort confirmation, and refreshes worker state from durable session state. |
 | Background sessions | `src/screens/REPL.tsx` background query path | `src/constants/prompts.ts`, `src/utils/systemPrompt.ts` | Backgrounded queries rebuild Agent Mode prompt sections when `CLAUDE_CODE_AGENT_MODE` is truthy and no custom system prompt is active. |
 | Resume mode matching | `src/agent-mode/agentMode.ts` `matchSessionMode()` | `src/utils/sessionStorage.ts`, `src/utils/sessionRestore.ts`, `src/screens/ResumeConversation.tsx`, `src/screens/REPL.tsx` | Session metadata stores mode via `saveMode()`. Resume paths call `matchSessionMode()` and then re-derive active built-in agent definitions for the target mode. |
-| Compaction continuity | `src/services/compact/prompt.ts` | `src/services/compact/prompt.test.ts`, `src/skills/bundled/agent-mode-compaction-recovery/SKILL.md` | Compaction summaries can include authoritative Agent Mode run state. The orchestrator prompt says to recover from durable session state before trusting summary text. |
+| Compaction continuity | `src/services/compact/{prompt,compact,reactiveCompact}.ts` | `src/services/compact/prompt.test.ts`, `src/skills/bundled/agent-mode-compaction-recovery/SKILL.md` | Compaction summaries can include authoritative Agent Mode run state, while prefix compaction keeps the newest complete rounds verbatim and records the preserved segment. The orchestrator prompt says to recover from durable session state before trusting summary text. |
 | Goal continuity | `src/utils/threadGoalActions.ts` | `src/utils/threadGoal.ts`, `src/tools/UpdateGoalTool/UpdateGoalTool.ts`, `src/commands/goal/goal.test.ts` | `/goal` syncs durable Agent Mode objective state and can reset workers. Goal completion is blocked while Agent Mode has unresolved workers. |
 | Worktree doctrine | `src/agent-mode/orchestratorPrompt.ts` | `src/tools/EnterWorktreeTool/prompt.ts`, `src/tools/ExitWorktreeTool/prompt.ts`, `src/tools/AgentTool/` | Worktrees are execution backends owned by the orchestrator, not user-facing task state. Verify current apply/cleanup behavior in tool code before changing docs. |
 
@@ -96,6 +96,9 @@ Treat these docs as historical planning or operator notes unless current source 
 - `docs/agent/2026-04-30-agent-mode-v2-v2.3-resumable-subagents.md` is a design proposal. Many concepts now exist through durable session state, worker-control tools, `ResumeAgent`, and `SendMessage`, but the doc is not the source of truth.
 - `docs/agent/2026-05-02-agent-mode-v2.3-live-feedback.md` and `docs/agent/2026-05-02-agent-mode-v2.4-live-feedback.md` are live feedback logs. Use their verified-evidence sections as clues, not authority.
 - `docs/agent/2026-05-03-cat-swarm-skill.md` contains useful runtime facts about worker-control tools and `SendMessage`, but it is scoped to a local workflow, not the general Agent Mode architecture.
+- Do not infer a durable worker roster from transcript prose after compaction.
+  Read structured Agent Mode state first; preserved recent rounds are
+  continuity context, not a replacement for that state.
 - `docs/agent/2026-04-30-agent-mode-readme.md` is the closest operator-facing overview. Still verify prompt, role, compaction, and UI claims against source before editing behavior.
 
 ## Refresh Notes

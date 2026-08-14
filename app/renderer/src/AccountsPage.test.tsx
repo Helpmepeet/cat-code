@@ -416,3 +416,93 @@ test('renameError enforces the alias regex + uniqueness (excluding self)', () =>
   expect(renameError('old', 'old', ['old'])).toBeNull()
   expect(renameError('fresh-name_1', 'old', ['taken'])).toBeNull()
 })
+
+test('AccountsPage renders Usage Analytics section and 7d/30d global toggle buttons', () => {
+  const snap = snapshot([account({ id: 'acc-1', isDefault: true })])
+  const html = renderToStaticMarkup(
+    <AccountsPage snapshot={snap} lastResult={null} onVerb={noop} />,
+  )
+  expect(html).toContain('Usage Analytics')
+  expect(html).toContain('7 Days')
+  expect(html).toContain('30 Days')
+  expect(html).toContain('Prompt Caching')
+})
+
+test('AccountsPage renders real token counts from usageStats', () => {
+  const snap = snapshot([account({ id: 'acc-1', isDefault: true })])
+  const realStats = {
+    range: '7d' as const,
+    totalTokens: 2260000,
+    dailyModelTokens: [
+      { date: '2026-08-13', tokensByModel: { 'claude-3-5-sonnet': 1000000 } },
+      { date: '2026-08-14', tokensByModel: { 'claude-3-5-sonnet': 1260000 } },
+    ],
+    modelUsage: {
+      'claude-3-5-sonnet': {
+        inputTokens: 1500000,
+        outputTokens: 760000,
+        cacheCreationInputTokens: 200000,
+        cacheReadInputTokens: 8000000,
+      },
+    },
+    dailyActivity: [
+      { date: '2026-08-13', messageCount: 200, sessionCount: 5, toolCallCount: 10 },
+      { date: '2026-08-14', messageCount: 300, sessionCount: 8, toolCallCount: 15 },
+    ],
+    cacheHitRate: 82,
+    cacheReadTokens: 8000000,
+    cacheWriteTokens: 200000,
+    freshInputTokens: 1500000,
+    totalSessions: 13,
+    totalMessages: 500,
+    activeDays: 2,
+  }
+
+  const html = renderToStaticMarkup(
+    <AccountsPage
+      snapshot={snap}
+      lastResult={null}
+      usageStats={realStats}
+      activeStatsRange="7d"
+      onVerb={noop}
+    />,
+  )
+
+  expect(html).toContain('2.26M') // totalTokens in 7d
+  expect(html).toContain('82%') // cacheHitRate
+  expect(html).toContain('Claude 3.5 Sonnet')
+  expect(html).toContain('13') // total sessions
+  expect(html).toContain('500 msgs')
+})
+
+test('AccountsPage honestly renders empty usage state when 0 sessions exist in window', () => {
+  const snap = snapshot([account({ id: 'acc-1', isDefault: true })])
+  const emptyStats = {
+    range: '7d' as const,
+    totalTokens: 0,
+    dailyModelTokens: [],
+    modelUsage: {},
+    dailyActivity: [],
+    cacheHitRate: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    freshInputTokens: 0,
+    totalSessions: 0,
+    totalMessages: 0,
+    activeDays: 0,
+  }
+
+  const html = renderToStaticMarkup(
+    <AccountsPage
+      snapshot={snap}
+      lastResult={null}
+      usageStats={emptyStats}
+      activeStatsRange="7d"
+      onVerb={noop}
+    />,
+  )
+
+  expect(html).toContain('No session activity recorded')
+  expect(html).toContain('No model activity in this period.')
+})
+

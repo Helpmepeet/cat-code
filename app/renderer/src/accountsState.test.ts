@@ -18,6 +18,7 @@ import {
   selectOAuthProgress,
   selectReadyLabel,
   selectTakenAliases,
+  selectUsageStatsForRange,
 } from './accountsState.js'
 import type { OAuthLoginProgressFrame } from '../../shared/protocol.js'
 
@@ -313,5 +314,46 @@ describe('accountsState selectors', () => {
   })
   test('selectAccountRows returns [] for a null snapshot', () => {
     expect(selectAccountRows(null)).toEqual([])
+  })
+
+  test('reduces stats.usage.snapshot and selectUsageStatsForRange resolves by range', () => {
+    let state = createAccountsState()
+    expect(selectUsageStatsForRange(state, '7d')).toBeNull()
+
+    const snap7d = {
+      range: '7d' as const,
+      totalTokens: 100000,
+      dailyModelTokens: [],
+      modelUsage: {},
+      dailyActivity: [],
+      cacheHitRate: 85,
+      cacheReadTokens: 50000,
+      cacheWriteTokens: 10000,
+      freshInputTokens: 20000,
+      totalSessions: 5,
+      totalMessages: 50,
+      activeDays: 3,
+    }
+
+    state = reduceAccountsState(state, {
+      type: 'frame',
+      frame: {
+        kind: 'stats.usage.snapshot',
+        protocolVersion: 1,
+        sessionId: 's1',
+        stats: snap7d,
+      },
+    })
+
+    expect(state.usageStats['7d']).toEqual(snap7d)
+    expect(state.latestUsageStats).toEqual(snap7d)
+    expect(selectUsageStatsForRange(state, '7d')).toEqual(snap7d)
+    expect(selectUsageStatsForRange(state, '30d')).toBeNull()
+
+    state = reduceAccountsState(state, {
+      type: 'set-stats-range',
+      range: '30d',
+    })
+    expect(state.activeStatsRange).toBe('30d')
   })
 })

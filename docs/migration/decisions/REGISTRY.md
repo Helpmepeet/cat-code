@@ -321,12 +321,6 @@ HC1–HC4) and summarized here for locality:
   the row; restore is never offered on a missing transcript. The inverse (transcript exists,
   registry forgot) degrades to the Sessions page's normal resume path — the registry is an index,
   not a gatekeeper.
-- **A5 — macOS `activate` mints a fresh session per dock reopen** (D6 §8-A5): without hygiene the
-  registry accretes one-turn-old rows. Handled by `shutdown:"clean"` rows with
-  `engineSessionId: null` (never got a ready frame / never ran a turn) being reaped **immediately**
-  — an address that never acquired content is not restorable and not worth a row. That reap is
-  bound-independent and does the real work here; the §3 row bound is a file-growth backstop behind
-  it, which is why raising the bound to 256 on 2026-07-26 costs A5 nothing.
 - **A6 — Secrets creep.** The schema has no secret-shaped field and the doc forbids adding one
   (§3). Registry writes go nowhere near the outbound frame path, so the F6 secret scan is not the
   (only) line of defense — exclusion by construction is.

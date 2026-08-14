@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Cat Code subagent surfaces, current vs proposed</title>
+<style>
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:500;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMMono-Medium.woff2') format('woff2')}
+
+:root{
+  --app:#09090b; --panel:#0a0a0c; --line:rgba(255,255,255,.06); --line2:rgba(255,255,255,.10);
+  --text:#f4f4f5; --sub:#a1a1aa; --faint:#52525b; --dim:#3f3f46;
+  --accent:#f472b6; --blue:#60a5fa; --green:#4ade80; --red:#f87171; --amber:#fbbf24;
+  --purple:#c084fc; --violet:#c4b5fd; --sky:#7dd3fc; --teal:#5eead4; --zinc:#71717a; --stone:#a8a29e;
+  --sans:'DM Sans',-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;
+  --mono:'DM Mono',ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Courier New',monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--app);color:var(--text);font:13px/1.45 var(--sans);-webkit-font-smoothing:antialiased}
+.page{max-width:1220px;margin:0 auto;padding:28px 24px 90px}
+h1{margin:0;font-size:18px;font-weight:650;letter-spacing:-.02em}
+.top{display:flex;align-items:baseline;gap:12px;margin-bottom:18px}
+.eyebrow{font:800 9.5px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+
+h2{margin:34px 0 0;font-size:14.5px;font-weight:650;letter-spacing:-.01em}
+h2 .n{font:800 10px var(--mono);color:var(--accent);margin-right:9px;letter-spacing:.08em}
+
+/* ── comparison scaffold ───────────────────────────────────────── */
+.cols{position:sticky;top:0;z-index:5;display:grid;grid-template-columns:1fr 1fr;gap:20px;margin:14px 0 0;padding:9px 0 8px;background:linear-gradient(var(--app) 82%,rgba(9,9,11,0))}
+.colhead{font:800 10px var(--mono);letter-spacing:.12em;text-transform:uppercase;display:flex;align-items:center;gap:9px}
+.colhead.a{color:var(--dim)}
+.colhead.b{color:var(--accent)}
+.colhead:after{content:"";flex:1;height:1px;background:var(--line)}
+.colhead.b:after{background:rgba(244,114,182,.22)}
+
+.rowlabel{margin:22px 0 8px;font:800 9.5px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);display:flex;align-items:center;gap:9px}
+.rowlabel:after{content:"";flex:1;height:1px;background:rgba(255,255,255,.04)}
+.cmp{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start}
+.cell{border-radius:10px;padding:13px}
+.cell.now{border:1px solid var(--line);background:rgba(255,255,255,.012);opacity:.9}
+.cell.new{border:1px solid rgba(244,114,182,.18);background:rgba(244,114,182,.022)}
+.cellcap{font:800 9px var(--mono);letter-spacing:.1em;text-transform:uppercase;margin-bottom:9px}
+.cell.now .cellcap{color:var(--dim)}
+.cell.new .cellcap{color:rgba(244,114,182,.75)}
+.foot{margin-top:9px;color:var(--dim);font:10.5px var(--mono)}
+@media(max-width:900px){.cols{display:none}.cmp{grid-template-columns:1fr}}
+
+/* ── proposed agent card ───────────────────────────────────────── */
+.card{border:1px solid var(--line);border-radius:9px;background:#0e0e11;overflow:hidden}
+.line{display:flex;gap:12px;align-items:baseline;padding:10px 12px}
+.tag{flex:none;width:88px;text-align:right;font:500 10px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--sky);padding-top:1px}
+.tag.verify{color:var(--teal)} .tag.impl{color:var(--violet)} .tag.plain{color:var(--zinc)} .tag.generic{color:var(--stone)}
+.tag.detached{border-bottom:1px dashed currentColor;padding-bottom:1px}
+.what{flex:1;min-width:0;color:var(--text);font-size:13px;line-height:1.45}
+.what .prompt{display:block;color:var(--sub);font-size:12px;margin-top:3px}
+.state{flex:none;font-size:12px;font-weight:600;white-space:nowrap}
+.state.work{color:var(--blue)} .state.done{color:var(--green)} .state.fail{color:var(--red)}
+.state.stop{color:var(--sub)} .state.wait{color:var(--purple)} .state.you{color:var(--amber)}
+.state .qual{color:var(--faint);font-weight:400;font-size:11.5px}
+.dots i{font-style:normal;animation:blink 1.4s infinite}
+.dots i:nth-child(2){animation-delay:.2s}.dots i:nth-child(3){animation-delay:.4s}
+@keyframes blink{0%,100%{opacity:.25}40%{opacity:1}}
+@media(prefers-reduced-motion:reduce){.dots i{animation:none;opacity:.7}}
+
+.meta{display:flex;gap:10px;align-items:center;border-top:1px solid var(--line);padding:7px 12px 7px 100px;color:var(--faint);font:11px var(--mono)}
+.meta .grow{flex:1}
+.disc{border:1px solid var(--line2);border-radius:6px;background:transparent;color:var(--sub);font:11px var(--mono);padding:3px 9px;cursor:pointer}
+.disc:hover{border-color:rgba(244,114,182,.4);color:var(--text)}
+.disc:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.steps{border-top:1px solid var(--line);background:rgba(0,0,0,.3);padding:9px 12px 10px 100px;display:grid;gap:5px}
+.steps[hidden]{display:none}
+.step{display:flex;gap:9px;align-items:baseline;color:var(--sub);font:11.5px var(--mono)}
+.step .k{color:var(--accent);font-weight:500;min-width:52px}
+.step .v{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.step .r{color:var(--faint);flex:none}
+.result{border-top:1px solid var(--line);padding:9px 12px 11px 100px;background:rgba(255,255,255,.012)}
+.result .rl{font:800 9px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin-bottom:4px}
+.result p{margin:0;color:var(--sub);font-size:12.5px;line-height:1.5}
+.usage{margin-top:7px;color:var(--faint);font:10.5px var(--mono)}
+.fail-hint{color:#fca5a5}
+
+.group{border:1px solid var(--line);border-radius:9px;background:#0e0e11;overflow:hidden}
+.group-head{display:flex;gap:12px;align-items:baseline;padding:8px 12px;border-bottom:1px solid var(--line);background:rgba(255,255,255,.02)}
+.group-head .gt{font:500 10px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--accent);width:88px;text-align:right;flex:none}
+.group-head .gs{flex:1;color:var(--sub);font-size:12px}
+.group .line + .line{border-top:1px solid var(--line)}
+
+.notice{padding:8px 12px 8px 100px;color:var(--sub);font-size:12.5px;border:1px solid var(--line);border-radius:9px;background:#0e0e11}
+.notice .who{color:var(--violet);font:500 12.5px var(--mono)}
+.notice .bad{color:var(--red);font-weight:600}
+
+/* ── proposed roster ───────────────────────────────────────────── */
+.composer-frame{border:1px solid var(--line);border-radius:11px;background:#0e0e11;overflow:hidden}
+.rail{border-bottom:1px solid var(--line);background:rgba(255,255,255,.022)}
+.rrow{display:flex;gap:10px;align-items:baseline;padding:8px 12px;width:100%;background:transparent;border:0;text-align:left;font:inherit;color:inherit;cursor:pointer}
+.rrow:hover{background:rgba(255,255,255,.03)}
+.rrow:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.rrow + .rrow{border-top:1px solid var(--line)}
+.who{flex:none;color:var(--violet);font:500 12.5px var(--mono)}
+.who.settled{color:var(--sub)}
+.doing{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--sub);font-size:12px}
+.role{flex:none;font:400 10.5px var(--mono);color:var(--faint);letter-spacing:.03em}
+.rest{flex:1;min-width:0;color:var(--sub);font-size:12px}
+.rest .nm{color:var(--violet);font:500 12px var(--mono)}
+.more{border:0;background:transparent;color:var(--faint);font:11px var(--mono);cursor:pointer;padding:0;text-decoration:underline;text-underline-offset:3px}
+.more:hover{color:var(--sub)}
+.attn{background:rgba(251,191,36,.07)}
+.attn .who{color:var(--amber)}
+.rail .rrow[hidden]{display:none}
+.composer{padding:12px 13px 30px;color:#71717a;font-size:12.5px}
+
+/* ── current renderings (source accurate) ──────────────────────── */
+.o-tool{border:1px solid var(--line);border-radius:7px;background:#0f0f11;overflow:hidden}
+.o-top{display:flex;min-height:35px;align-items:center;gap:9px;padding:7px 11px}
+.o-mark{width:16px;color:var(--accent);font-size:13px;text-align:center}
+.o-name{color:var(--accent);font:800 10.5px var(--sans);letter-spacing:.08em;text-transform:uppercase}
+.o-target{min-width:0;flex:1;overflow:hidden;color:var(--text);font:12px var(--mono);text-overflow:ellipsis;white-space:nowrap}
+.o-badge{border:1px solid var(--line);border-radius:5px;padding:1px 6px;color:var(--sub);font:10px var(--mono)}
+.o-id{display:flex;flex-wrap:wrap;gap:8px;align-items:center;border-top:1px solid var(--line);padding:6px 11px}
+.o-dot{width:6px;height:6px;border-radius:50%;background:var(--sky);flex:none}
+.o-type{font-size:12.5px;font-weight:650;color:var(--sky)}
+.o-state{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:550;color:var(--blue)}
+.o-pip{width:8px;height:8px;border-radius:50%;background:var(--blue);display:inline-block;flex:none}
+.o-pip.ring{background:transparent;border:1.6px solid currentColor}
+.o-pulse{animation:pulse 1.55s infinite}
+@keyframes pulse{50%{opacity:.35;transform:scale(.82)}}
+@media(prefers-reduced-motion:reduce){.o-pulse{animation:none}}
+.o-body{border-top:1px solid var(--line);background:rgba(0,0,0,.28);padding:9px 11px}
+.o-rl{color:var(--sub);font:700 10px var(--sans);letter-spacing:.08em;text-transform:uppercase}
+.o-res{margin-top:4px;color:var(--sub);font-size:12px}
+.o-stats{margin-top:6px;color:var(--sub);font:10px var(--mono)}
+.o-delegate{border:1px solid var(--line);border-radius:7px;background:#0f0f11;overflow:hidden}
+.o-dhead{display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line);padding:7px 11px}
+.o-dname{color:var(--accent);font:800 10.5px var(--sans);letter-spacing:.08em;text-transform:uppercase}
+.o-dcards{display:grid;gap:8px;padding:8px}
+.o-notice{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:8px;background:#0f0f11;padding:7px 11px;color:var(--sub);font-size:12px}
+.o-notice .o-pip{width:6px;height:6px}
+.o-rosterwrap{padding:3px 5px}
+.o-roster{border:1px solid rgba(255,255,255,.06);border-radius:7px;background:rgba(255,255,255,.025);display:flex;align-items:center;gap:8px;padding:5px 7px;min-height:32px}
+.o-roster + .o-roster{margin-top:6px}
+.o-handle{color:#e9d5ff;font:600 12.5px var(--mono);white-space:nowrap}
+.o-task{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--sub);font-size:11.5px}
+.o-lab{font:500 10.5px var(--mono);color:var(--violet);white-space:nowrap}
+.o-sep{color:var(--faint)}
+.o-baton{border:1px solid rgba(251,191,36,.3);border-radius:5px;padding:1px 6px;color:var(--amber);font:600 10px var(--mono);white-space:nowrap}
+.o-baton.orch{color:var(--purple);border-color:rgba(192,132,252,.3)}
+.o-chev{color:var(--faint);font:16px var(--mono)}
+.o-composer{height:44px;border:1px solid var(--line);border-radius:10px;background:#0f0f11;padding:12px;color:#71717a;margin-top:8px}
+code{font:11.5px var(--mono);color:var(--sub)}
+</style>
+</head>
+<body>
+<main class="page">
+
+  <div class="top"><h1>Subagent surfaces</h1><span class="eyebrow">left: what ships today · right: what we build</span></div>
+
+  <!-- ══════════════ 1. TRANSCRIPT ══════════════ -->
+  <h2><span class="n">01</span>Transcript, the Agent card</h2>
+  <div class="cols"><div class="colhead a">Current</div><div class="colhead b">Proposed</div></div>
+
+  <div class="rowlabel">Running, with nested activity</div>
+  <div class="cmp">
+    <div class="cell now"><div class="cellcap">Current</div>
+      <article class="o-tool">
+        <div class="o-top"><span class="o-mark">◆</span><span class="o-name">Agent</span><span class="o-target">inspect the renderer</span><span class="o-badge">2 nested</span></div>
+        <div class="o-id"><span class="o-dot"></span><span class="o-type">Explore</span><span class="o-state"><i class="o-pip o-pulse"></i>Running</span></div>
+      </article>
+      <div class="foot">nested rows collapsed, no preview</div>
+    </div>
+    <div class="cell new"><div class="cellcap">Proposed</div>
+      <article class="card">
+        <div class="line"><span class="tag">Explore</span><span class="what">Inspect the renderer and hand the findings back.</span><span class="state work">working<span class="dots"><i>.</i><i>.</i><i>.</i></span></span></div>
+        <div class="meta"><span class="grow">2 steps so far</span><button class="disc" data-toggle="s-run">Show steps</button></div>
+        <div class="steps" id="s-run" hidden>
+          <div class="step"><span class="k">Read</span><span class="v">app/renderer/src/TranscriptView.tsx</span><span class="r">1.9k lines</span></div>
+          <div class="step"><span class="k">Grep</span><span class="v">parentToolUseId</span><span class="r">7 files</span></div>
+        </div>
+      </article>
+      <div class="foot">one line, steps on demand</div>
+    </div>
+  </div>
+
+  <div class="rowlabel">Completed, with a returned result</div>
+  <div class="cmp">
+    <div class="cell now"><div class="cellcap">Current</div>
+      <article class="o-tool">
+        <div class="o-top"><span class="o-mark">◆</span><span class="o-name">Agent</span><span class="o-target">run focused verification</span></div>
+        <div class="o-id"><span class="o-dot" style="background:var(--teal)"></span><span class="o-type" style="color:var(--teal)">Verification</span><span class="o-state" style="color:var(--green)"><i class="o-pip" style="background:var(--green)"></i>Completed</span></div>
+        <div class="o-body"><div class="o-rl">Result</div><div class="o-res">Focused tests passed; no new renderer errors.</div><div class="o-stats">~12.4k tokens · 8 tools · 1m 14s</div></div>
+      </article>
+      <div class="foot">body behind a collapse by default</div>
+    </div>
+    <div class="cell new"><div class="cellcap">Proposed</div>
+      <article class="card">
+        <div class="line"><span class="tag verify">Verification</span><span class="what">Run focused verification on the touched suites.</span><span class="state done">done</span></div>
+        <div class="result"><div class="rl">Returned</div><p>Focused tests passed. No new renderer errors.</p><div class="usage">12.4k tokens · 8 tools · 1m 14s</div></div>
+        <div class="meta"><span class="grow">8 steps</span><button class="disc" data-toggle="s-done">Show steps</button></div>
+        <div class="steps" id="s-done" hidden>
+          <div class="step"><span class="k">Bash</span><span class="v">bun test app/renderer/src/TranscriptView.test.tsx</span><span class="r">exit 0</span></div>
+          <div class="step"><span class="k">Read</span><span class="v">app/renderer/src/transcriptProjector.ts</span><span class="r">764 lines</span></div>
+          <div class="step"><span class="k">Grep</span><span class="v">selectNestedTranscriptRows</span><span class="r">3 files</span></div>
+        </div>
+      </article>
+      <div class="foot">result open, steps behind disclosure</div>
+    </div>
+  </div>
+
+  <div class="rowlabel">Background launch</div>
+  <div class="cmp">
+    <div class="cell now"><div class="cellcap">Current</div>
+      <article class="o-tool">
+        <div class="o-top"><span class="o-mark">◆</span><span class="o-name">Agent</span><span class="o-target">implement the view</span></div>
+        <div class="o-id"><span class="o-dot" style="background:var(--violet)"></span><span class="o-type" style="color:var(--violet)">Implementor</span><span class="o-state"><i class="o-pip ring"></i>In background</span></div>
+      </article>
+      <div class="foot">background replaces the lifecycle word</div>
+    </div>
+    <div class="cell new"><div class="cellcap">Proposed</div>
+      <article class="card">
+        <div class="line"><span class="tag impl detached">Implementor</span><span class="what">Implement the docked roster view.</span><span class="state work">working <span class="qual">in background</span></span></div>
+        <div class="meta"><span class="grow">Reports back as a notification</span></div>
+      </article>
+      <div class="foot">lifecycle and location on separate axes</div>
+    </div>
+  </div>
+
+  <div class="rowlabel">Failed, invocation carried a longer prompt</div>
+  <div class="cmp">
+    <div class="cell now"><div class="cellcap">Current</div>
+      <article class="o-tool">
+        <div class="o-top"><span class="o-mark">◆</span><span class="o-name">Agent</span><span class="o-target">sweep the migration docs for stale references</span></div>
+        <div class="o-id"><span class="o-dot" style="background:var(--stone)"></span><span class="o-type" style="color:var(--stone)">Agent</span><span class="o-state" style="color:var(--red)"><i class="o-pip" style="background:var(--red)"></i>Failed</span></div>
+      </article>
+      <div class="foot">prompt text truncated out of the row</div>
+    </div>
+    <div class="cell new"><div class="cellcap">Proposed</div>
+      <article class="card">
+        <div class="line"><span class="tag generic">Agent</span><span class="what">Sweep the migration docs for stale references.<span class="prompt">Read every file under docs/migration and report rows whose cited paths no longer exist.</span></span><span class="state fail">failed</span></div>
+        <div class="result"><div class="rl">Returned</div><p class="fail-hint">The worker process exited before it produced a result.</p></div>
+      </article>
+      <div class="foot">prompt kept on a second line</div>
+    </div>
+  </div>
+
+  <div class="rowlabel">Stopped, legacy Task invocation</div>
+  <div class="cmp">
+    <div class="cell now"><div class="cellcap">Current</div>
+      <article class="o-tool">
+        <div class="o-top"><span class="o-mark">◆</span><span class="o-name">Task</span><span class="o-target">continue the remote review</span></div>
+        <div class="o-id"><span class="o-dot" style="background:var(--zinc)"></span><span class="o-type" style="color:var(--zinc)">Agent</span><span class="o-state" style="color:var(--zinc)"><i class="o-pip" style="background:var(--zinc)"></i>Stopped</span></div>
+      </article>
+      <div class="foot">Task preserved as the header name</div>
+    </div>
+    <div class="cell new"><div class="cellcap">Proposed</div>
+      <article class="card">
+        <div class="line"><span class="tag plain">Agent</span><span class="what">Continue the remote review.</span><span class="state stop">stopped</span></div>
+        <div class="meta"><span class="grow"><code>Task</code></span></div>
+      </article>
+      <div class="foot">Task preserved on the meta line</div>
+    </div>
+  </div>
+
+  <div class="rowlabel">Parallel delegation in one turn</div>
+  <div class="cmp">
+    <div class="cell now"><div class="cellcap">Current</div>
+      <div class="o-delegate">
+        <div class="o-dhead"><i class="o-pip o-pulse"></i><span class="o-dname">Delegate</span><span class="o-state">Running 3 agents…</span></div>
+        <div class="o-dcards">
+          <article class="o-tool"><div class="o-top"><span class="o-mark">◆</span><span class="o-name">Agent</span><span class="o-target">map task state</span></div><div class="o-id"><i class="o-dot"></i><span class="o-type">Explore</span><span class="o-state"><i class="o-pip o-pulse"></i>Running</span></div></article>
+          <article class="o-tool"><div class="o-top"><span class="o-mark">◆</span><span class="o-name">Agent</span><span class="o-target">review ownership</span></div><div class="o-id"><i class="o-dot" style="background:var(--teal)"></i><span class="o-type" style="color:var(--teal)">Verification</span><span class="o-state" style="color:var(--green)"><i class="o-pip" style="background:var(--green)"></i>Completed</span></div></article>
+          <article class="o-tool"><div class="o-top"><span class="o-mark">◆</span><span class="o-name">Agent</span><span class="o-target">draft the protocol note</span></div><div class="o-id"><i class="o-dot" style="background:var(--violet)"></i><span class="o-type" style="color:var(--violet)">Implementor</span><span class="o-state"><i class="o-pip ring"></i>In background</span></div></article>
+        </div>
+      </div>
+      <div class="foot">cards nested inside a group box</div>
+    </div>
+    <div class="cell new"><div class="cellcap">Proposed</div>
+      <div class="group">
+        <div class="group-head"><span class="gt">Parallel</span><span class="gs">3 workers delegated in one turn</span><span class="state work">2 working<span class="dots"><i>.</i><i>.</i><i>.</i></span></span></div>
+        <div class="line"><span class="tag">Explore</span><span class="what">Map how task state reaches the roster.</span><span class="state work">working<span class="dots"><i>.</i><i>.</i><i>.</i></span></span></div>
+        <div class="line"><span class="tag verify">Verification</span><span class="what">Review ownership of the changed files.</span><span class="state done">done</span></div>
+        <div class="line"><span class="tag impl detached">Implementor</span><span class="what">Draft the protocol note.</span><span class="state work">working <span class="qual">in background</span></span></div>
+      </div>
+      <div class="foot">one box, sibling rows</div>
+    </div>
+  </div>
+
+  <div class="rowlabel">Background completion with no originating card</div>
+  <div class="cmp">
+    <div class="cell now"><div class="cellcap">Current</div>
+      <div class="o-notice"><i class="o-pip" style="background:var(--red)"></i><span>Agent Ada failed: the worker process exited unexpectedly.</span></div>
+      <div class="foot">status object phrasing</div>
+    </div>
+    <div class="cell new"><div class="cellcap">Proposed</div>
+      <div class="notice"><span class="who">Ada</span> <span class="bad">failed</span>. The worker process exited unexpectedly.</div>
+      <div class="foot">named worker, sentence phrasing</div>
+    </div>
+  </div>
+
+  <!-- ══════════════ 2. ROSTER ══════════════ -->
+  <h2><span class="n">02</span>Above the composer, the worker roster</h2>
+  <div class="cols"><div class="colhead a">Current</div><div class="colhead b">Proposed</div></div>
+
+  <div class="rowlabel">One worker</div>
+  <div class="cmp">
+    <div class="cell now"><div class="cellcap">Current</div>
+      <div class="o-rosterwrap"><div class="o-roster"><i class="o-pip o-pulse"></i><span class="o-handle">Turing</span><span class="o-task">Wire the docked worker roster</span><span class="o-lab">Coding worker</span><span class="o-chev">›</span></div></div>
+      <div class="o-composer">Message Cat Code…</div>
+      <div class="foot">card floats above the composer</div>
+    </div>
+    <div class="cell new"><div class="cellcap">Proposed</div>
+      <div class="composer-frame">
+        <div class="rail"><button class="rrow"><span class="who">Turing</span><span class="doing">Wire the docked worker roster</span><span class="role">coding worker</span><span class="state work">working<span class="dots"><i>.</i><i>.</i><i>.</i></span></span></button></div>
+        <div class="composer">Message Cat Code…</div>
+      </div>
+      <div class="foot">rail welded to the composer</div>
+    </div>
+  </div>
+
+  <div class="rowlabel">Several workers, one blocked on you</div>
+  <div class="cmp">
+    <div class="cell now"><div class="cellcap">Current</div>
+      <div class="o-rosterwrap"><div class="o-roster"><i class="o-pip" style="background:var(--amber)"></i><span class="o-handle">Ada</span><span class="o-lab">Coding worker</span><span class="o-sep">·</span><span class="o-lab" style="color:var(--blue)">2 working</span><span class="o-baton">→ you</span><span class="o-chev">›</span></div></div>
+      <div class="o-composer">Message Cat Code…</div>
+      <div class="foot">counts row, other names on hover only</div>
+    </div>
+    <div class="cell new"><div class="cellcap">Proposed</div>
+      <div class="composer-frame">
+        <div class="rail">
+          <button class="rrow attn"><span class="who">Ada</span><span class="doing">Resolve the migration boundary</span><span class="role">coding worker</span><span class="state you">needs you</span></button>
+          <button class="rrow" data-toggle="r-rest" aria-expanded="false"><span class="rest">Also <span class="nm">Turing</span> and <span class="nm">Hopper</span>, working</span><span class="more">Show</span></button>
+          <button class="rrow" id="r-rest" hidden><span class="who">Turing</span><span class="doing">Wire the docked worker roster</span><span class="role">coding worker</span><span class="state work">working<span class="dots"><i>.</i><i>.</i><i>.</i></span></span></button>
+          <button class="rrow" hidden data-follows="r-rest"><span class="who">Hopper</span><span class="doing">Trace the frame batch route</span><span class="role">explore</span><span class="state work">working<span class="dots"><i>.</i><i>.</i><i>.</i></span></span></button>
+        </div>
+        <div class="composer">Message Cat Code…</div>
+      </div>
+      <div class="foot">names inline, expands in place</div>
+    </div>
+  </div>
+
+  <div class="rowlabel">Ownership and synthesis</div>
+  <div class="cmp">
+    <div class="cell now"><div class="cellcap">Current</div>
+      <div class="o-rosterwrap">
+        <div class="o-roster"><i class="o-pip ring" style="color:var(--purple)"></i><span class="o-handle">Ada</span><span class="o-task">Resolve the migration boundary</span><span class="o-lab">Coding worker</span><span class="o-baton orch">→ orchestrator</span><span class="o-chev">›</span></div>
+        <div class="o-roster"><i class="o-pip" style="background:var(--purple)"></i><span class="o-handle">Hopper</span><span class="o-task">Trace the frame batch route</span><span class="o-lab" style="color:var(--sky)">Explore</span><span class="o-chev">›</span></div>
+        <div class="o-roster"><i class="o-pip" style="background:var(--green)"></i><span class="o-handle">Curie</span><span class="o-task">Check the permission boundary tests</span><span class="o-lab" style="color:var(--teal)">Verification</span><span class="o-chev">›</span></div>
+      </div>
+      <div class="o-composer">Message Cat Code…</div>
+      <div class="foot">ownership rides an arrow chip, result ready is pip colour only</div>
+    </div>
+    <div class="cell new"><div class="cellcap">Proposed</div>
+      <div class="composer-frame">
+        <div class="rail">
+          <button class="rrow"><span class="who">Ada</span><span class="doing">Resolve the migration boundary</span><span class="role">coding worker</span><span class="state wait">with the assistant</span></button>
+          <button class="rrow"><span class="who">Hopper</span><span class="doing">Trace the frame batch route</span><span class="role">explore</span><span class="state done">result ready</span></button>
+          <button class="rrow"><span class="who settled">Curie</span><span class="doing">Check the permission boundary tests</span><span class="role">verification</span><span class="state stop">reviewed</span></button>
+        </div>
+        <div class="composer">Message Cat Code…</div>
+      </div>
+      <div class="foot">ownership and synthesis stated in words</div>
+    </div>
+  </div>
+
+  <div class="rowlabel">Attention, failure, resumable, stale</div>
+  <div class="cmp">
+    <div class="cell now"><div class="cellcap">Current</div>
+      <div class="o-rosterwrap">
+        <div class="o-roster"><i class="o-pip" style="background:var(--amber)"></i><span class="o-handle">Ada</span><span class="o-task">Resolve the migration boundary</span><span class="o-lab">Coding worker</span><span class="o-baton">→ you</span><span class="o-chev">›</span></div>
+        <div class="o-roster"><i class="o-pip" style="background:var(--red)"></i><span class="o-handle">Curie</span><span class="o-task">Check the permission boundary tests</span><span class="o-lab" style="color:var(--teal)">Verification</span><span class="o-chev">›</span></div>
+        <div class="o-roster"><i class="o-pip" style="background:var(--stone)"></i><span class="o-handle">Noether</span><span class="o-task">Draft the resume path</span><span class="o-lab">Coding worker</span><span class="o-chev">›</span></div>
+        <div class="o-roster"><i class="o-pip" style="background:var(--zinc)"></i><span class="o-handle">Lovelace</span><span class="o-task">Earlier session</span><span class="o-lab" style="color:var(--sky)">Explore</span><span class="o-chev">›</span></div>
+      </div>
+      <div class="o-composer">Message Cat Code…</div>
+      <div class="foot">block reason not shown, four greys of settled</div>
+    </div>
+    <div class="cell new"><div class="cellcap">Proposed</div>
+      <div class="composer-frame">
+        <div class="rail">
+          <button class="rrow attn"><span class="who">Ada</span><span class="doing">Needs the parent agent to choose the protocol seam</span><span class="role">coding worker</span><span class="state you">needs you</span></button>
+          <button class="rrow"><span class="who">Curie</span><span class="doing">Check the permission boundary tests</span><span class="role">verification</span><span class="state fail">failed</span></button>
+          <button class="rrow"><span class="who settled">Noether</span><span class="doing">Draft the resume path</span><span class="role">coding worker</span><span class="state stop">can resume</span></button>
+          <button class="rrow"><span class="who settled">Lovelace</span><span class="doing">Earlier session</span><span class="role">explore</span><span class="state stop">past session</span></button>
+        </div>
+        <div class="composer">Message Cat Code…</div>
+      </div>
+      <div class="foot">block reason in the row, attention sorted first</div>
+    </div>
+  </div>
+
+  <div class="rowlabel">Verifier verdicts</div>
+  <div class="cmp">
+    <div class="cell now"><div class="cellcap">Current</div>
+      <div class="o-rosterwrap">
+        <div class="o-roster"><i class="o-pip" style="background:var(--green)"></i><span class="o-handle">Turing</span><span class="o-task">Wire the docked worker roster</span><span class="o-lab">Coding worker</span><span class="o-chev">›</span></div>
+        <div class="o-roster"><i class="o-pip" style="background:var(--green)"></i><span class="o-handle">Curie</span><span class="o-task">Check the permission boundary tests</span><span class="o-lab" style="color:var(--teal)">Verification</span><span class="o-chev">›</span></div>
+      </div>
+      <div class="o-composer">Message Cat Code…</div>
+      <div class="foot">both read completed, verdict only in the Tasks detail</div>
+    </div>
+    <div class="cell new"><div class="cellcap">Proposed</div>
+      <div class="composer-frame">
+        <div class="rail">
+          <button class="rrow"><span class="who settled">Turing</span><span class="doing">Wire the docked worker roster</span><span class="role">coding worker</span><span class="state done">passed</span></button>
+          <button class="rrow"><span class="who settled">Curie</span><span class="doing">Check the permission boundary tests</span><span class="role">verification</span><span class="state you">partial</span></button>
+        </div>
+        <div class="composer">Message Cat Code…</div>
+      </div>
+      <div class="foot">verdict is the outcome word</div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+(function () {
+  document.addEventListener('click', function (event) {
+    var trigger = event.target.closest('[data-toggle]');
+    if (!trigger) return;
+    var id = trigger.getAttribute('data-toggle');
+    var panel = document.getElementById(id);
+    if (!panel) return;
+    var open = panel.hidden;
+    panel.hidden = !open;
+    var followers = document.querySelectorAll('[data-follows="' + id + '"]');
+    for (var i = 0; i < followers.length; i++) followers[i].hidden = !open;
+    if (trigger.hasAttribute('aria-expanded')) trigger.setAttribute('aria-expanded', String(open));
+    var more = trigger.querySelector('.more');
+    if (more) more.textContent = open ? 'Hide' : 'Show';
+    if (trigger.classList.contains('disc')) trigger.textContent = open ? 'Hide steps' : 'Show steps';
+  });
+})();
+</script>
+</body>
+</html>

@@ -74,6 +74,12 @@ test('a normal startup never opts into the sidecar probe', () => {
   expect(createSupervisor).not.toContain('CATCODE_SIDECAR_PROBE')
 })
 
+test('host startup leaves session creation to an explicit renderer action', () => {
+  const ensureHost = region('function ensureHost(): Host', 'function errText(')
+
+  expect(ensureHost).not.toContain('.createSession(')
+})
+
 test('the dev app name never depends on the userData path', () => {
   expect(source).not.toContain("app.getPath('userData')")
   expect(source).not.toContain('app.getPath("userData")')

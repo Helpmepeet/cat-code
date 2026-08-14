@@ -23,8 +23,6 @@ export type DevHarnessConfig = Readonly<{
     | { kind: 'disabled' }
     | { kind: 'ready'; entries: readonly string[] }
     | { kind: 'broken'; reason: string }
-  initialCwd: string | null
-  initialCwdInvalid: boolean
   debugState: boolean
 }>
 
@@ -37,8 +35,6 @@ export function resolveDevHarnessConfig(args: {
   if (args.isPackaged) {
     return freezeConfig({
       picker: { kind: 'disabled' },
-      initialCwd: null,
-      initialCwdInvalid: false,
       debugState: false,
     })
   }
@@ -67,30 +63,14 @@ export function resolveDevHarnessConfig(args: {
     }
   }
 
-  let initialCwd: string | null = null
-  let initialCwdInvalid = false
-  const rawInitial = args.env.CATCODE_INITIAL_CWD
-  if (rawInitial && rawInitial.trim().length > 0) {
-    const validated = args.validateCwd(rawInitial)
-    if (validated.ok) {
-      initialCwd = validated.realpath
-      args.log(`[main] DEV CATCODE_INITIAL_CWD enabled: ${validated.realpath}`)
-    } else {
-      initialCwdInvalid = true
-      args.log(`[main] DEV CATCODE_INITIAL_CWD invalid: ${rawInitial}`)
-    }
-  }
-
   const debugState = args.env.CATCODE_DEBUG_STATE === '1'
   if (debugState) args.log('[main] DEV CATCODE_DEBUG_STATE enabled')
 
-  return freezeConfig({ picker, initialCwd, initialCwdInvalid, debugState })
+  return freezeConfig({ picker, debugState })
 }
 
 function freezeConfig(config: {
   picker: DevHarnessConfig['picker']
-  initialCwd: string | null
-  initialCwdInvalid: boolean
   debugState: boolean
 }): DevHarnessConfig {
   if ('entries' in config.picker) Object.freeze(config.picker.entries)

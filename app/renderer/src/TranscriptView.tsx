@@ -86,6 +86,7 @@ import {
   AGENT_TYPE_TONE_CLASS,
 } from './agentChromeModel.js'
 import { ToolInspector } from './ToolInspector.js'
+import { ActionFileIcon } from './SessionActionIcons.js'
 import { parseToolAck, type ToolAck } from './toolAck.js'
 import {
   AdditionSourceLines,
@@ -774,12 +775,13 @@ function linkifyFilePathText(
     if (index > cursor) parts.push(text.slice(cursor, index))
     parts.push(
       <button
-        className="font-mono text-accent underline decoration-accent/45 underline-offset-2 hover:text-accent-soft"
+        className="inline-flex items-center gap-0.5 rounded-sm align-baseline font-mono text-accent hover:text-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
         key={`${index}:${path}`}
         type="button"
         aria-label={`Open ${path}`}
         onClick={() => openFile(path)}
       >
+        <ActionFileIcon />
         {path}
       </button>,
     )
@@ -851,11 +853,12 @@ function createPathAwareCode(openFile: (path: string) => void) {
     if (!className && isInlineFilePath(text)) {
       return (
         <button
-          className="text-accent underline decoration-accent/45 underline-offset-2 hover:text-accent-soft"
+          className="inline-flex items-center gap-0.5 rounded-sm align-baseline text-accent hover:text-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
           type="button"
           aria-label={`Open ${text}`}
           onClick={() => openFile(text)}
         >
+          <ActionFileIcon />
           <code>{children}</code>
         </button>
       )

@@ -1,6 +1,6 @@
 # Tools And Permissions Map
 
-Last refreshed: 2026-08-13 against the current source tree.
+Last refreshed: 2026-08-14 against the current source tree.
 
 ## Purpose
 

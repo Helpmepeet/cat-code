@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Current subagent rendering reference</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --app-bg: #111214;
+      --panel: #18191d;
+      --panel-raised: #202127;
+      --seam: rgba(255, 255, 255, .10);
+      --muted: #9a9ba6;
+      --faint: #62636d;
+      --text: #f4f2f5;
+      --purple: #c4b5fd;
+      --purple-dim: rgba(192, 132, 252, .10);
+      --blue: #93c5fd;
+      --green: #4ade80;
+      --amber: #fbbf24;
+      --red: #f87171;
+      --teal: #5eead4;
+      --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      background: #0c0d0f;
+      color: var(--text);
+      font-family: var(--sans);
+    }
+    button { font: inherit; }
+    button:focus-visible { outline: 2px solid var(--purple); outline-offset: 2px; }
+
+    .app-shell {
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 72% 12%, rgba(139, 92, 246, .06), transparent 24rem),
+        var(--app-bg);
+    }
+    .titlebar {
+      height: 46px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 18px;
+      border-bottom: 1px solid var(--seam);
+      background: rgba(24, 25, 29, .82);
+    }
+    .wordmark { font: 650 12px/1 var(--mono); letter-spacing: .06em; color: #d9d8df; }
+    .reference-label { font: 600 10px/1 var(--mono); color: var(--faint); letter-spacing: .08em; text-transform: uppercase; }
+
+    .chat {
+      width: min(100%, 804px);
+      min-height: calc(100vh - 46px);
+      margin: 0 auto;
+      padding: 56px 32px 28px;
+      display: flex;
+      flex-direction: column;
+    }
+    .transcript { flex: 1; }
+    .thread-rule { height: 1px; width: 100%; background: linear-gradient(90deg, transparent, var(--seam), transparent); margin: 0 0 24px; }
+
+    .tool-card, .delegate-group {
+      overflow: hidden;
+      border: 1px solid var(--seam);
+      border-radius: 9px;
+      background: rgba(255, 255, 255, .018);
+      box-shadow: 0 14px 35px rgba(0, 0, 0, .18);
+    }
+    .tool-card + .tool-card { margin-top: 10px; }
+    .tool-head {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-height: 42px;
+      padding: 8px 12px;
+      border: 0;
+      color: inherit;
+      text-align: left;
+      cursor: pointer;
+      background: transparent;
+    }
+    .tool-head:hover { background: rgba(255, 255, 255, .025); }
+    .tool-mark {
+      width: 18px;
+      height: 18px;
+      display: grid;
+      place-items: center;
+      border-radius: 5px;
+      background: var(--purple-dim);
+      color: var(--purple);
+      font: 700 11px/1 var(--mono);
+    }
+    .tool-title { min-width: 0; flex: 1; font-size: 12px; font-weight: 620; color: #e5e1ee; }
+    .tool-target { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font: 11px/1 var(--mono); }
+    .chevron { color: var(--faint); font: 19px/1 var(--sans); transition: transform 160ms ease; }
+    .tool-card.open .chevron { transform: rotate(90deg); }
+    .identity {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 12px;
+      border-top: 1px solid var(--seam);
+    }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--purple); flex: 0 0 auto; }
+    .dot.running { width: 8px; height: 8px; background: var(--blue); box-shadow: 0 0 0 4px rgba(147, 197, 253, .11); animation: pulse 1.75s ease-in-out infinite; }
+    .dot.done { background: var(--green); }
+    .dot.waiting { width: 8px; height: 8px; background: transparent; border: 1.5px solid var(--purple); }
+    .handle { font: 650 12px/1 var(--mono); color: #ddd6fe; }
+    .agent-type { font: 650 10px/1 var(--mono); color: var(--purple); }
+    .state { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; color: var(--blue); font-size: 11px; font-weight: 600; }
+    .state.done { color: var(--green); }
+    .nested-body { display: none; border-top: 1px solid var(--seam); padding: 10px 12px 12px 27px; background: rgba(0,0,0,.21); }
+    .tool-card.open .nested-body { display: block; }
+    .nested-list { padding-left: 11px; border-left: 1px solid rgba(192,132,252,.30); }
+    .nested-row { display: flex; align-items: center; gap: 9px; padding: 7px 0; color: var(--muted); font: 11px/1.35 var(--mono); }
+    .nested-row + .nested-row { border-top: 1px solid rgba(255,255,255,.05); }
+
+    .delegate-group { margin-top: 18px; }
+    .delegate-head { display: flex; align-items: center; gap: 9px; padding: 10px 12px; border-bottom: 1px solid var(--seam); }
+    .delegate-label { color: var(--purple); font: 700 10px/1 var(--sans); text-transform: uppercase; letter-spacing: .08em; }
+    .delegate-summary { color: var(--muted); font-size: 11px; }
+    .delegate-body { display: grid; gap: 9px; padding: 9px; }
+
+    .composer-dock { width: min(100%, 740px); margin: 44px auto 0; }
+    .roster {
+      position: relative;
+      margin: 0 4px 3px;
+      padding: 3px 4px;
+      border-radius: 10px;
+      background: var(--app-bg);
+    }
+    .roster-button {
+      width: 100%;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      padding: 6px 7px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      color: var(--text);
+      cursor: pointer;
+      background: transparent;
+      text-align: left;
+    }
+    .roster-button:hover { border-color: rgba(255,255,255,.08); background: rgba(255,255,255,.035); }
+    .roster-title { font: 650 11px/1 var(--mono); color: var(--muted); }
+    .separator { color: var(--faint); }
+    .roster-count { font: 600 11px/1 var(--mono); color: var(--blue); }
+    .roster-count.subtle { color: var(--faint); }
+    .roster-spacer { flex: 1; }
+    .roster-popover {
+      position: absolute;
+      inset: auto 4px calc(100% + 4px);
+      z-index: 2;
+      display: none;
+      padding: 5px;
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 10px;
+      background: var(--panel-raised);
+      box-shadow: 0 14px 34px rgba(0,0,0,.5);
+    }
+    .roster.open .roster-popover { display: block; }
+    .popover-caption { padding: 5px 8px 4px; color: var(--faint); font: 600 9px/1 var(--mono); letter-spacing: .1em; }
+    .worker-row { width: 100%; display: flex; align-items: center; gap: 8px; padding: 6px 7px; border: 1px solid transparent; border-radius: 7px; color: var(--text); background: transparent; text-align: left; cursor: pointer; }
+    .worker-row:hover { border-color: rgba(255,255,255,.08); background: rgba(255,255,255,.035); }
+    .worker-description { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11.5px; }
+    .baton { padding: 2px 5px; border: 1px solid rgba(192,132,252,.3); border-radius: 5px; color: var(--purple); font: 650 9px/1 var(--mono); }
+
+    .composer { height: 62px; display: flex; align-items: center; gap: 12px; padding: 0 14px; border: 1px solid var(--seam); border-radius: 13px; background: var(--panel); color: var(--faint); font-size: 13px; }
+    .composer-key { margin-left: auto; padding: 3px 5px; border: 1px solid var(--seam); border-radius: 4px; font: 10px/1 var(--mono); }
+
+    .tasks-strip { position: fixed; right: 18px; bottom: 18px; border: 1px solid var(--seam); border-radius: 999px; padding: 9px 13px; display: flex; align-items: center; gap: 8px; background: var(--panel); color: var(--blue); box-shadow: 0 10px 30px rgba(0,0,0,.48); cursor: pointer; }
+    .tasks-strip:hover { color: var(--text); }
+    .tasks-strip span:last-child { color: var(--muted); font-size: 12px; }
+
+    .backdrop { position: fixed; inset: 0; z-index: 9; display: none; align-items: center; justify-content: center; padding: 24px; background: rgba(0,0,0,.6); backdrop-filter: blur(5px); }
+    .backdrop.show { display: flex; }
+    .dialog { width: min(640px, 100%); max-height: min(74vh, 720px); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--seam); border-radius: 14px; background: var(--panel); box-shadow: 0 30px 80px rgba(0,0,0,.6); }
+    .dialog-header { display: flex; align-items: flex-start; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--seam); }
+    .dialog-title { font-size: 14px; font-weight: 650; }
+    .dialog-subtitle { margin-top: 3px; color: var(--muted); font-size: 12px; }
+    .close { border: 0; color: var(--muted); background: transparent; cursor: pointer; font-size: 21px; line-height: 1; }
+    .tabs { display: flex; gap: 4px; padding: 8px 14px 0; border-bottom: 1px solid var(--seam); }
+    .tab { padding: 0 10px 8px; border: 0; border-bottom: 2px solid transparent; color: var(--muted); background: transparent; cursor: pointer; font-size: 12px; }
+    .tab.active { border-color: var(--purple); color: var(--text); font-weight: 650; }
+    .tab-count { margin-left: 5px; color: var(--purple); font: 10px/1 var(--mono); }
+    .dialog-body { overflow: auto; padding: 10px; }
+    .workers-summary { display: flex; gap: 18px; padding: 4px 4px 12px; color: var(--muted); font-size: 11px; }
+    .workers-summary span { display: inline-flex; align-items: center; gap: 6px; }
+    .group-label { margin: 8px 3px 5px; color: var(--faint); font: 700 10px/1 var(--sans); text-transform: uppercase; letter-spacing: .1em; }
+    .detail { display: none; padding: 2px 3px 12px; }
+    .detail.show { display: block; }
+    .detail-back { border: 0; padding: 2px 0 12px; color: var(--muted); background: transparent; cursor: pointer; font-size: 12px; }
+    .detail-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-bottom: 12px; border-bottom: 1px solid var(--seam); }
+    .chip { padding: 3px 6px; border: 1px solid rgba(192,132,252,.26); border-radius: 5px; background: var(--purple-dim); color: var(--purple); font: 700 9px/1 var(--mono); text-transform: uppercase; letter-spacing: .05em; }
+    .detail-section { margin-top: 18px; }
+    .detail-label { color: var(--faint); font: 700 9px/1 var(--sans); text-transform: uppercase; letter-spacing: .1em; }
+    .detail-copy { margin-top: 7px; color: #d0ced5; font-size: 12.5px; line-height: 1.55; }
+    .waiting-card { margin-top: 7px; padding: 11px; border: 1px solid rgba(192,132,252,.30); border-radius: 8px; background: var(--purple-dim); color: #e9ddff; font-size: 12.5px; line-height: 1.45; }
+    .stop { margin-top: 18px; border: 1px solid rgba(248,113,113,.36); border-radius: 7px; padding: 6px 12px; color: #fca5a5; background: rgba(248,113,113,.05); cursor: pointer; font-size: 11px; }
+
+    @keyframes pulse { 50% { opacity: .48; transform: scale(.82); } }
+    @media (max-width: 680px) {
+      .chat { padding: 34px 16px 22px; }
+      .tasks-strip { right: 12px; bottom: 12px; }
+      .tool-target { display: none; }
+      .dialog { max-height: 82vh; }
+    }
+    @media (prefers-reduced-motion: reduce) { .dot.running { animation: none; } .chevron { transition: none; } }
+  </style>
+</head>
+<body>
+  <main class="app-shell">
+    <header class="titlebar">
+      <span class="wordmark">CAT CODE</span>
+      <span class="reference-label">Current subagent surfaces</span>
+    </header>
+
+    <section class="chat" aria-label="Subagent rendering reference">
+      <div class="transcript">
+        <div class="thread-rule"></div>
+
+        <article class="tool-card open" id="agent-card">
+          <button class="tool-head" type="button" aria-expanded="true" aria-controls="agent-body" data-toggle="agent-card">
+            <span class="tool-mark">A</span>
+            <span class="tool-title">Agent</span>
+            <span class="tool-target">Port the roster</span>
+            <span class="chevron" aria-hidden="true">›</span>
+          </button>
+          <div class="identity">
+            <span class="dot"></span>
+            <span class="agent-type">Coding worker</span>
+            <span class="state"><span class="dot running"></span>Running</span>
+          </div>
+          <div class="nested-body" id="agent-body">
+            <div class="nested-list">
+              <div class="nested-row"><span class="dot done"></span><span>Read</span></div>
+              <div class="nested-row"><span class="dot running"></span><span>Grep</span></div>
+            </div>
+          </div>
+        </article>
+
+        <section class="delegate-group" aria-label="Grouped parallel agents">
+          <div class="delegate-head">
+            <span class="dot running"></span>
+            <span class="delegate-label">Delegate</span>
+            <span class="delegate-summary">Running 2 agents</span>
+          </div>
+          <div class="delegate-body">
+            <article class="tool-card" id="delegate-one">
+              <button class="tool-head" type="button" aria-expanded="false" data-toggle="delegate-one">
+                <span class="tool-mark">A</span>
+                <span class="tool-title">Agent</span>
+                <span class="tool-target">Port the roster</span>
+                <span class="chevron" aria-hidden="true">›</span>
+              </button>
+              <div class="identity"><span class="dot"></span><span class="agent-type">Coding worker</span><span class="state"><span class="dot running"></span>Running</span></div>
+              <div class="nested-body"><div class="nested-list"><div class="nested-row">Read</div></div></div>
+            </article>
+            <article class="tool-card" id="delegate-two">
+              <button class="tool-head" type="button" aria-expanded="false" data-toggle="delegate-two">
+                <span class="tool-mark">A</span>
+                <span class="tool-title">Agent</span>
+                <span class="tool-target">audit the auth path</span>
+                <span class="chevron" aria-hidden="true">›</span>
+              </button>
+              <div class="identity"><span class="dot"></span><span class="agent-type">Verification</span><span class="state"><span class="dot running"></span>Running</span></div>
+              <div class="nested-body"><div class="nested-list"><div class="nested-row">Read</div></div></div>
+            </article>
+          </div>
+        </section>
+      </div>
+
+      <div class="composer-dock">
+        <section class="roster" id="roster">
+          <div class="roster-popover" aria-label="Full subagent roster">
+            <div class="popover-caption">3 SUBAGENTS</div>
+            <button type="button" class="worker-row" data-worker="turing"><span class="dot"></span><span class="handle">Turing</span><span class="worker-description">Port the roster</span><span class="dot running"></span><span class="agent-type">Coding worker</span></button>
+            <button type="button" class="worker-row" data-worker="hopper"><span class="dot"></span><span class="handle">Hopper</span><span class="worker-description">audit the auth path</span><span class="dot waiting"></span><span class="agent-type">Verification</span><span class="baton">→ orchestrator</span></button>
+            <button type="button" class="worker-row" data-worker="bell"><span class="dot done"></span><span class="handle">Bell</span><span class="worker-description">Port the roster</span><span class="dot done"></span><span class="agent-type">Coding worker</span></button>
+          </div>
+          <button class="roster-button" type="button" aria-expanded="false" aria-controls="roster" id="roster-button">
+            <span class="dot running"></span>
+            <span class="roster-title">3 subagents</span>
+            <span class="separator">·</span>
+            <span class="roster-count">2 working</span>
+            <span class="separator">·</span>
+            <span class="roster-count subtle">1 done</span>
+            <span class="roster-spacer"></span>
+            <span class="chevron" aria-hidden="true">›</span>
+          </button>
+        </section>
+        <div class="composer"><span>Message Cat Code</span><span class="composer-key">⌘↵</span></div>
+      </div>
+    </section>
+
+    <button class="tasks-strip" type="button" id="open-tasks"><span class="dot running"></span><span>2 subagents active</span></button>
+  </main>
+
+  <div class="backdrop" id="tasks-dialog" role="presentation">
+    <section class="dialog" role="dialog" aria-modal="true" aria-label="Background tasks">
+      <header class="dialog-header">
+        <div><div class="dialog-title">Tasks</div><div class="dialog-subtitle">2 active · 1 completed</div></div>
+        <button class="close" type="button" aria-label="Close" id="close-tasks">×</button>
+      </header>
+      <nav class="tabs" aria-label="Task panels">
+        <button class="tab" type="button" data-tab="tasks">Tasks <span class="tab-count">3</span></button>
+        <button class="tab active" type="button" data-tab="workers">Workers <span class="tab-count">3</span></button>
+        <button class="tab" type="button" data-tab="leases">Leases <span class="tab-count">1</span></button>
+      </nav>
+      <div class="dialog-body" id="workers-panel">
+        <div class="workers-summary"><span><i class="dot running"></i>1 working</span><span style="color: var(--purple)"><i class="dot waiting"></i>1 on the assistant</span><span><i class="dot done"></i>1 done</span></div>
+        <div class="group-label">Coding workers · 2</div>
+        <button type="button" class="worker-row" data-worker="turing"><span class="dot running"></span><span class="handle">Turing</span><span class="worker-description">Port the roster</span><span class="agent-type">Coding worker</span></button>
+        <button type="button" class="worker-row" data-worker="bell"><span class="dot done"></span><span class="handle">Bell</span><span class="worker-description">Port the roster</span><span class="agent-type">Coding worker</span></button>
+        <div class="group-label">Verification · 1</div>
+        <button type="button" class="worker-row" data-worker="hopper"><span class="dot waiting"></span><span class="handle">Hopper</span><span class="worker-description">audit the auth path</span><span class="agent-type">Verification</span></button>
+      </div>
+      <div class="detail" id="worker-detail">
+        <button type="button" class="detail-back" id="detail-back">‹ All workers</button>
+        <div class="detail-head"><span class="handle" id="detail-name">Hopper</span><span class="chip" id="detail-role">Verification</span><span class="state" id="detail-state"><span class="dot waiting"></span>Waiting on orchestrator</span><span class="baton">→ orchestrator</span></div>
+        <div class="detail-section"><div class="detail-label">Prompt</div><div class="detail-copy" id="detail-prompt">audit the auth path</div></div>
+        <div class="detail-section"><div class="detail-label">Waiting on the assistant</div><div class="waiting-card">pick a schema</div></div>
+        <button type="button" class="stop">Stop</button>
+      </div>
+      <footer class="dialog-header" style="padding: 10px 16px; border-top: 1px solid var(--seam); border-bottom: 0;"><span class="reference-label" style="text-transform: none; letter-spacing: 0;">Click a worker to inspect it</span><span class="reference-label">esc close</span></footer>
+    </section>
+  </div>
+
+  <script>
+    const dialog = document.getElementById('tasks-dialog');
+    const roster = document.getElementById('roster');
+    const rosterButton = document.getElementById('roster-button');
+    const workersPanel = document.getElementById('workers-panel');
+    const detail = document.getElementById('worker-detail');
+    const names = { turing: 'Turing', hopper: 'Hopper', bell: 'Bell' };
+    const prompts = { turing: 'Port the roster', hopper: 'audit the auth path', bell: 'Port the roster' };
+
+    function openDialog() { dialog.classList.add('show'); workersPanel.style.display = 'block'; detail.classList.remove('show'); }
+    function closeDialog() { dialog.classList.remove('show'); }
+    function inspectWorker(id) {
+      document.getElementById('detail-name').textContent = names[id];
+      document.getElementById('detail-prompt').textContent = prompts[id];
+      workersPanel.style.display = 'none';
+      detail.classList.add('show');
+      roster.classList.remove('open');
+      rosterButton.setAttribute('aria-expanded', 'false');
+    }
+
+    document.querySelectorAll('[data-toggle]').forEach(button => button.addEventListener('click', () => {
+      const card = document.getElementById(button.dataset.toggle);
+      const open = card.classList.toggle('open');
+      button.setAttribute('aria-expanded', String(open));
+    }));
+    rosterButton.addEventListener('click', () => {
+      const open = roster.classList.toggle('open');
+      rosterButton.setAttribute('aria-expanded', String(open));
+    });
+    document.getElementById('open-tasks').addEventListener('click', openDialog);
+    document.getElementById('close-tasks').addEventListener('click', closeDialog);
+    document.getElementById('detail-back').addEventListener('click', () => { detail.classList.remove('show'); workersPanel.style.display = 'block'; });
+    dialog.addEventListener('mousedown', event => { if (event.target === dialog) closeDialog(); });
+    document.querySelectorAll('[data-worker]').forEach(button => button.addEventListener('click', () => { openDialog(); inspectWorker(button.dataset.worker); }));
+    document.addEventListener('keydown', event => { if (event.key === 'Escape') closeDialog(); });
+  </script>
+</body>
+</html>

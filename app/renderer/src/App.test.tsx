@@ -2408,3 +2408,17 @@ test('P4-55: initial roster reads and launcher retries share one truthful hydrat
     "const hostSnapshotReady = rosterBootstrap.status === 'ready'",
   )
 })
+
+test('clean parking releases live transcript projection and raw log from renderer memory', () => {
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const hostSubStart = source.indexOf('const unsubscribe = bridge.subscribeHost(event => {')
+  expect(hostSubStart).toBeGreaterThan(-1)
+  const hostSubEnd = source.indexOf('void hydrateHostRoster()', hostSubStart)
+  expect(hostSubEnd).toBeGreaterThan(hostSubStart)
+  const hostSubBody = source.slice(hostSubStart, hostSubEnd)
+
+  expect(hostSubBody).toContain("descriptor.status !== 'disconnected'")
+  expect(hostSubBody).toContain("dispatch({ type: 'session-removed', sessionId })")
+  expect(hostSubBody).toContain("dispatchSessionEvent({ type: 'session-removed', sessionId })")
+})
+

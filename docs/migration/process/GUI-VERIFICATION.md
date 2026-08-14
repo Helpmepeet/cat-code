@@ -12,7 +12,6 @@ Run the desktop app in dev with the harness flags:
 
 ```bash
 CATCODE_TEST_CWD_ALLOWLIST=/path/one:/path/two \
-CATCODE_INITIAL_CWD=/path/one \
 CATCODE_DEBUG_STATE=1 \
 bun run --cwd app dev
 ```
@@ -20,10 +19,10 @@ bun run --cwd app dev
 - `CATCODE_TEST_CWD_ALLOWLIST` is main-read only. While set, `pickDirectory()`
   never opens the native picker; it returns one-time cwd tokens for the
   allowlisted realpaths in cyclic order.
-- `CATCODE_INITIAL_CWD` creates the primary startup session at that validated
-  cwd. If invalid, the app starts with an empty shell rather than a wrong-cwd
-  fallback.
 - `CATCODE_DEBUG_STATE=1` writes the debug export only in dev builds.
+
+The app launches with no engine session. Use **Open a project** or **New session**
+to create one through the allowlisted picker.
 
 Readiness is the stdout line:
 
@@ -140,7 +139,7 @@ usage/quota for no benefit.
   turn, or that turn already burns frontier quota.** Two ways:
   - **Preferred — set at launch (Luna is live before anything can fire):** prepend
     `ANTHROPIC_MODEL=gpt-5.6-luna` to the dev command, e.g.
-    `ANTHROPIC_MODEL=gpt-5.6-luna CATCODE_INITIAL_CWD=… CATCODE_DEBUG_STATE=1 bun run --cwd app dev`.
+    `ANTHROPIC_MODEL=gpt-5.6-luna CATCODE_TEST_CWD_ALLOWLIST=… CATCODE_DEBUG_STATE=1 bun run --cwd app dev`.
     Verified path: the supervisor spawns the sidecar with `{...process.env}`
     (`app/supervisor/supervisor.ts:218`), and with `mainLoopModel` at its null
     default the engine resolves the model from `ANTHROPIC_MODEL`

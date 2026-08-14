@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Diff line numbers</title>
+<style>
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 100 1000;
+  src: url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'DM Mono';
+  font-style: normal;
+  font-weight: 400;
+  src: url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'DM Mono';
+  font-style: normal;
+  font-weight: 500;
+  src: url('../../app/renderer/src/assets/fonts/DMMono-Medium.woff2') format('woff2');
+}
+
+* { box-sizing: border-box; }
+
+html { background: #09090b; }
+
+body {
+  margin: 0;
+  padding: 56px 32px 96px;
+  background: #09090b;
+}
+
+/* ── chrome ─────────────────────────────────────────────────────────────── */
+
+.x-page {
+  width: 836px;
+  margin: 0 auto;
+}
+
+.x-title {
+  font: 400 9.5px/1 "DM Mono", ui-monospace, Menlo, monospace;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #6b6b73;
+  margin: 0 0 40px;
+}
+
+.x-variant {
+  margin: 0 0 8px;
+  padding: 0 0 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  font: 400 9.5px/1 "DM Mono", ui-monospace, Menlo, monospace;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #6b6b73;
+}
+
+.x-cell { width: 836px; }
+
+.x-gap { height: 44px; }
+
+/* ── specimen ───────────────────────────────────────────────────────────── */
+
+.card {
+  width: 100%;
+  overflow: hidden;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.025);
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.mark {
+  width: 16px;
+  flex: none;
+  text-align: center;
+  font-size: 13px;
+  color: #f472b6;
+}
+
+.word {
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #f472b6;
+}
+
+.target {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "DM Mono", ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  color: #f4f4f5;
+}
+
+.stat {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  font-family: "DM Mono", ui-monospace, Menlo, monospace;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-add { color: #86efac; }
+.stat-del { color: #fca5a5; }
+
+.dot {
+  height: 6px;
+  width: 6px;
+  flex: none;
+  border-radius: 9999px;
+  background: #4ade80;
+}
+
+.body {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(0, 0, 0, 0.28);
+  padding: 4px 12px 10px;
+}
+
+.diff {
+  font-family: "DM Mono", ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.65;
+  color: #f8f8f2;
+}
+
+.row {
+  display: flex;
+  white-space: pre;
+}
+
+.row-add { background: rgba(34, 197, 94, 0.1); }
+.row-del { background: rgba(239, 68, 68, 0.1); }
+
+.gut {
+  width: 26px;
+  flex: none;
+  padding-right: 7px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  color: #75757b;
+}
+
+.src {
+  min-width: 0;
+  flex: 1;
+  border-left: 1px solid rgba(255, 255, 255, 0.05);
+  padding-left: 10px;
+  padding-right: 14px;
+}
+
+.src-bare {
+  min-width: 0;
+  flex: 1;
+  padding-right: 14px;
+}
+
+.hunk {
+  padding: 6px 0 2px;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: #75757b;
+  user-select: none;
+}
+
+.sign-add { color: #4ade80; }
+.sign-del { color: #f87171; }
+.sign-ctx { color: #75757b; }
+
+.emph-del {
+  border-radius: 2px;
+  background: rgba(248, 113, 113, 0.28);
+  padding: 0 1px;
+}
+
+.emph-add {
+  border-radius: 2px;
+  background: rgba(74, 222, 128, 0.26);
+  padding: 0 1px;
+}
+
+.dim { opacity: 0.6; }
+
+.k { color: #ff79c6; }
+.n { color: #bd93f9; }
+.t { color: #50fa7b; }
+.b { color: #8be9fd; }
+</style>
+</head>
+<body>
+<div class="x-page">
+
+  <p class="x-title">Diff line numbers</p>
+
+  <p class="x-variant">A</p>
+  <div class="x-cell">
+    <div class="card">
+      <div class="head">
+        <span class="mark">±</span>
+        <span class="word">Edit</span>
+        <span class="target">src/utils/cache.ts</span>
+        <span class="stat"><span class="stat-add">+2</span><span class="stat-del">−2</span></span>
+        <span class="dot"></span>
+      </div>
+      <div class="body">
+        <div class="diff">
+          <div class="row"><span class="gut">18</span><span class="src"><span class="sign-ctx"> </span> <span class="k">const</span> ttl = <span class="n">60</span></span></div>
+          <div class="row row-del"><span class="gut"></span><span class="src"><span class="sign-del">−</span> <span class="dim"><span class="k">export</span> <span class="k">function</span> <span class="t">get</span>(key: <span class="b">string</span></span><span class="emph-del">)</span><span class="dim"> {</span></span></div>
+          <div class="row row-add"><span class="gut">19</span><span class="src"><span class="sign-add">+</span> <span class="dim"><span class="k">export</span> <span class="k">function</span> <span class="t">get</span>(key: <span class="b">string</span></span><span class="emph-add">, fallback = <span class="n">null</span>)</span><span class="dim"> {</span></span></div>
+          <div class="row"><span class="gut">20</span><span class="src"><span class="sign-ctx"> </span>   <span class="k">const</span> hit = store.<span class="t">get</span>(key)</span></div>
+          <div class="row row-del"><span class="gut"></span><span class="src"><span class="sign-del">−</span> <span class="dim">   <span class="k">if</span> (!hit) <span class="k">return</span> </span><span class="emph-del"><span class="n">null</span></span></span></div>
+          <div class="row row-add"><span class="gut">21</span><span class="src"><span class="sign-add">+</span> <span class="dim">   <span class="k">if</span> (!hit) <span class="k">return</span> </span><span class="emph-add">fallback</span></span></div>
+          <div class="row"><span class="gut">22</span><span class="src"><span class="sign-ctx"> </span>   <span class="k">return</span> hit.value</span></div>
+          <div class="row"><span class="gut">23</span><span class="src"><span class="sign-ctx"> </span> }</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="x-gap"></div>
+  <p class="x-variant">B</p>
+  <div class="x-cell">
+    <div class="card">
+      <div class="head">
+        <span class="mark">±</span>
+        <span class="word">Edit</span>
+        <span class="target">src/utils/cache.ts</span>
+        <span class="stat"><span class="stat-add">+2</span><span class="stat-del">−2</span></span>
+        <span class="dot"></span>
+      </div>
+      <div class="body">
+        <div class="diff">
+          <div class="row"><span class="gut">18</span><span class="src"><span class="sign-ctx"> </span> <span class="k">const</span> ttl = <span class="n">60</span></span></div>
+          <div class="row row-del"><span class="gut">19</span><span class="src"><span class="sign-del">−</span> <span class="dim"><span class="k">export</span> <span class="k">function</span> <span class="t">get</span>(key: <span class="b">string</span></span><span class="emph-del">)</span><span class="dim"> {</span></span></div>
+          <div class="row row-add"><span class="gut">19</span><span class="src"><span class="sign-add">+</span> <span class="dim"><span class="k">export</span> <span class="k">function</span> <span class="t">get</span>(key: <span class="b">string</span></span><span class="emph-add">, fallback = <span class="n">null</span>)</span><span class="dim"> {</span></span></div>
+          <div class="row"><span class="gut">20</span><span class="src"><span class="sign-ctx"> </span>   <span class="k">const</span> hit = store.<span class="t">get</span>(key)</span></div>
+          <div class="row row-del"><span class="gut">21</span><span class="src"><span class="sign-del">−</span> <span class="dim">   <span class="k">if</span> (!hit) <span class="k">return</span> </span><span class="emph-del"><span class="n">null</span></span></span></div>
+          <div class="row row-add"><span class="gut">21</span><span class="src"><span class="sign-add">+</span> <span class="dim">   <span class="k">if</span> (!hit) <span class="k">return</span> </span><span class="emph-add">fallback</span></span></div>
+          <div class="row"><span class="gut">22</span><span class="src"><span class="sign-ctx"> </span>   <span class="k">return</span> hit.value</span></div>
+          <div class="row"><span class="gut">23</span><span class="src"><span class="sign-ctx"> </span> }</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="x-gap"></div>
+  <p class="x-variant">C</p>
+  <div class="x-cell">
+    <div class="card">
+      <div class="head">
+        <span class="mark">±</span>
+        <span class="word">Edit</span>
+        <span class="target">src/utils/cache.ts</span>
+        <span class="stat"><span class="stat-add">+2</span><span class="stat-del">−2</span></span>
+        <span class="dot"></span>
+      </div>
+      <div class="body">
+        <div class="diff">
+          <div class="hunk">18</div>
+          <div class="row"><span class="src-bare"><span class="sign-ctx"> </span> <span class="k">const</span> ttl = <span class="n">60</span></span></div>
+          <div class="row row-del"><span class="src-bare"><span class="sign-del">−</span> <span class="dim"><span class="k">export</span> <span class="k">function</span> <span class="t">get</span>(key: <span class="b">string</span></span><span class="emph-del">)</span><span class="dim"> {</span></span></div>
+          <div class="row row-add"><span class="src-bare"><span class="sign-add">+</span> <span class="dim"><span class="k">export</span> <span class="k">function</span> <span class="t">get</span>(key: <span class="b">string</span></span><span class="emph-add">, fallback = <span class="n">null</span>)</span><span class="dim"> {</span></span></div>
+          <div class="row"><span class="src-bare"><span class="sign-ctx"> </span>   <span class="k">const</span> hit = store.<span class="t">get</span>(key)</span></div>
+          <div class="row row-del"><span class="src-bare"><span class="sign-del">−</span> <span class="dim">   <span class="k">if</span> (!hit) <span class="k">return</span> </span><span class="emph-del"><span class="n">null</span></span></span></div>
+          <div class="row row-add"><span class="src-bare"><span class="sign-add">+</span> <span class="dim">   <span class="k">if</span> (!hit) <span class="k">return</span> </span><span class="emph-add">fallback</span></span></div>
+          <div class="row"><span class="src-bare"><span class="sign-ctx"> </span>   <span class="k">return</span> hit.value</span></div>
+          <div class="row"><span class="src-bare"><span class="sign-ctx"> </span> }</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="x-gap"></div>
+  <p class="x-variant">D</p>
+  <div class="x-cell">
+    <div class="card">
+      <div class="head">
+        <span class="mark">±</span>
+        <span class="word">Edit</span>
+        <span class="target">src/utils/cache.ts</span>
+        <span class="stat"><span class="stat-add">+2</span><span class="stat-del">−2</span></span>
+        <span class="dot"></span>
+      </div>
+      <div class="body">
+        <div class="diff">
+          <div class="row"><span class="src-bare"><span class="sign-ctx"> </span> <span class="k">const</span> ttl = <span class="n">60</span></span></div>
+          <div class="row row-del"><span class="src-bare"><span class="sign-del">−</span> <span class="dim"><span class="k">export</span> <span class="k">function</span> <span class="t">get</span>(key: <span class="b">string</span></span><span class="emph-del">)</span><span class="dim"> {</span></span></div>
+          <div class="row row-add"><span class="src-bare"><span class="sign-add">+</span> <span class="dim"><span class="k">export</span> <span class="k">function</span> <span class="t">get</span>(key: <span class="b">string</span></span><span class="emph-add">, fallback = <span class="n">null</span>)</span><span class="dim"> {</span></span></div>
+          <div class="row"><span class="src-bare"><span class="sign-ctx"> </span>   <span class="k">const</span> hit = store.<span class="t">get</span>(key)</span></div>
+          <div class="row row-del"><span class="src-bare"><span class="sign-del">−</span> <span class="dim">   <span class="k">if</span> (!hit) <span class="k">return</span> </span><span class="emph-del"><span class="n">null</span></span></span></div>
+          <div class="row row-add"><span class="src-bare"><span class="sign-add">+</span> <span class="dim">   <span class="k">if</span> (!hit) <span class="k">return</span> </span><span class="emph-add">fallback</span></span></div>
+          <div class="row"><span class="src-bare"><span class="sign-ctx"> </span>   <span class="k">return</span> hit.value</span></div>
+          <div class="row"><span class="src-bare"><span class="sign-ctx"> </span> }</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="x-gap"></div>
+  <p class="x-variant">E</p>
+  <div class="x-cell">
+    <div class="card">
+      <div class="head">
+        <span class="mark">±</span>
+        <span class="word">Edit</span>
+        <span class="target">src/utils/cache.ts</span>
+        <span class="stat"><span class="stat-add">+2</span><span class="stat-del">−2</span></span>
+        <span class="dot"></span>
+      </div>
+      <div class="body">
+        <div class="diff">
+          <div class="row"><span class="gut">18</span><span class="src-bare"><span class="sign-ctx"> </span> <span class="k">const</span> ttl = <span class="n">60</span></span></div>
+          <div class="row row-del"><span class="gut"></span><span class="src-bare"><span class="sign-del">−</span> <span class="dim"><span class="k">export</span> <span class="k">function</span> <span class="t">get</span>(key: <span class="b">string</span></span><span class="emph-del">)</span><span class="dim"> {</span></span></div>
+          <div class="row row-add"><span class="gut">19</span><span class="src-bare"><span class="sign-add">+</span> <span class="dim"><span class="k">export</span> <span class="k">function</span> <span class="t">get</span>(key: <span class="b">string</span></span><span class="emph-add">, fallback = <span class="n">null</span>)</span><span class="dim"> {</span></span></div>
+          <div class="row"><span class="gut">20</span><span class="src-bare"><span class="sign-ctx"> </span>   <span class="k">const</span> hit = store.<span class="t">get</span>(key)</span></div>
+          <div class="row row-del"><span class="gut"></span><span class="src-bare"><span class="sign-del">−</span> <span class="dim">   <span class="k">if</span> (!hit) <span class="k">return</span> </span><span class="emph-del"><span class="n">null</span></span></span></div>
+          <div class="row row-add"><span class="gut">21</span><span class="src-bare"><span class="sign-add">+</span> <span class="dim">   <span class="k">if</span> (!hit) <span class="k">return</span> </span><span class="emph-add">fallback</span></span></div>
+          <div class="row"><span class="gut">22</span><span class="src-bare"><span class="sign-ctx"> </span>   <span class="k">return</span> hit.value</span></div>
+          <div class="row"><span class="gut">23</span><span class="src-bare"><span class="sign-ctx"> </span> }</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

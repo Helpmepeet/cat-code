@@ -84,13 +84,16 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   // previewSession/readSessionsCatalog/openHistorySession/P4-35 saveTextToFile).
   // subscribe / subscribeHost register a listener and send no payload, so they do
   // NOT (and must not) call the guard.
+  // Usage stats query sender rides its own fixed channel (HC3).
+  expect(source).toContain("const CH_STATS_QUERY = 'catcode:stats-query'")
+  expect(source).toContain('queryStats(')
   // IDLE-PARK §4(b) — the visible-pane hint is a fixed one-way sender like the
   // rest, guarded here and re-validated at main (`parseVisibleSessions`).
   expect(source).toContain(
     "const CH_HOST_VISIBLE_SESSIONS = 'catcode:host:visible-sessions'",
   )
   expect(source).toContain('reportVisibleSessions(sessionIds: SessionId[]): void')
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(35)
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(36)
   expect(source).toContain("const CH_DELIVERY_ACK = 'catcode:delivery-ack'")
   expect(source).toContain('deliveryAck(sessionId, sequence, deliveryAttempt, streamEpoch, traceId, stage): void')
   expect(source).toContain("const CH_OPEN_LOGS = 'catcode:open-logs'")

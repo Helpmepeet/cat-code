@@ -492,6 +492,7 @@ export type SidecarClientMessage =
   | RunControlVerbMessage
   | SessionActionVerbMessage
   | ContextBreakdownVerbMessage
+  | StatsQueryMessage
   | AppParkMessage
 
 /**
@@ -1016,13 +1017,11 @@ export type MemorySnapshotFrame = {
  * (`src/utils/analyzeContext.ts:923`) over this session's real messages, tools,
  * agent definitions and permission context — never re-derived in the sidecar.
  *
- * Pushed on attach, and on request thereafter (`CONTEXT_BREAKDOWN_VERB_TYPES`).
- * It was outbound-only at first, on the argument that a push carries the same
- * information with no new frame to validate. That was wrong on cost, which is what
- * decides here: the analysis is expensive enough that pushing it per turn spends
- * real money on a panel that may never be opened, so the trigger has to be the
- * user opening it. The request frame carries no renderer state, so the inbound
- * surface it adds is a bounded id and nothing else.
+ * Requested only when the user opens the popover (`CONTEXT_BREAKDOWN_VERB_TYPES`).
+ * The analysis is expensive enough that computing it during attach or per turn
+ * spends real money on a panel that may never be opened. The request frame carries
+ * no renderer state, so the inbound surface it adds is a bounded id and nothing
+ * else.
  *
  * Category `label` and `tokens` are the engine's own (`analyzeContext.ts:1039`
  * onward) and are passed through verbatim — the sidecar never renames a category
@@ -2064,6 +2063,59 @@ export type AccountResultFrame = {
   }>
 }
 
+/* ------------------------------------------------------------------------- *
+ * Usage Analytics Snapshot & Query Protocol (Real engine-backed stats)
+ * ------------------------------------------------------------------------- */
+
+export type UsageStatsRange = '7d' | '30d'
+
+export type UsageStatsDailyModelTokens = {
+  date: string
+  tokensByModel: Record<string, number>
+}
+
+export type UsageStatsModelUsageItem = {
+  inputTokens: number
+  outputTokens: number
+  cacheCreationInputTokens: number
+  cacheReadInputTokens: number
+}
+
+export type UsageStatsDailyActivityItem = {
+  date: string
+  messageCount: number
+  sessionCount: number
+  toolCallCount: number
+}
+
+export type UsageStatsSnapshot = {
+  range: UsageStatsRange
+  totalTokens: number
+  dailyModelTokens: UsageStatsDailyModelTokens[]
+  modelUsage: Record<string, UsageStatsModelUsageItem>
+  dailyActivity: UsageStatsDailyActivityItem[]
+  cacheHitRate: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  freshInputTokens: number
+  totalSessions: number
+  totalMessages: number
+  activeDays: number
+}
+
+export type UsageStatsSnapshotFrame = {
+  kind: 'stats.usage.snapshot'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  stats: UsageStatsSnapshot
+}
+
+export type StatsQueryMessage = {
+  type: 'stats.query'
+  range: UsageStatsRange
+  requestId: string
+}
+
 /**
  * P4-15 — the live OAuth login progress states, surfaced to the renderer so the
  * first-run sign-in surface and the reauth banner can drive their sub-states off
@@ -2778,6 +2830,7 @@ export type ServerFramePayload =
   | SlashCatalogSnapshotFrame
   | GeneratedImagePreviewFrame
   | SettingsResultFrame
+  | UsageStatsSnapshotFrame
 
 /**
  * Metadata-only delivery envelope. Optional so an older sidecar remains
@@ -2831,6 +2884,7 @@ const SERVER_FRAME_KINDS: Record<ServerFrameKind, true> = {
   'sessions.snapshot': true,
   'slash-catalog.snapshot': true,
   'generated-image-preview': true,
+  'stats.usage.snapshot': true,
 }
 
 export function isServerFrameKind(value: unknown): value is ServerFrameKind {
@@ -3057,6 +3111,10 @@ export type CatCodeBridge = {
    * `settings.snapshot` when the write landed.
    */
   settingsVerb(sessionId: SessionId, verb: SettingsVerbMessage): void
+  /**
+   * Usage stats query — requests a refreshed UsageStatsSnapshot for '7d' or '30d'.
+   */
+  queryStats(sessionId: SessionId, range: UsageStatsRange): void
   /** Liveness ping; resolves as a `pong` server frame. */
   ping(sessionId: SessionId, nonce: string): void
   /** Restart the addressed sidecar process while retaining renderer attachment. */

@@ -34,6 +34,7 @@ import type {
   SubmitOptions,
   TaskControlVerbMessage,
   TranscriptCache,
+  UsageStatsRange,
   WorkspaceTrustMessage,
 } from '../shared/protocol.js'
 import type {
@@ -66,6 +67,7 @@ const CH_CONTEXT_BREAKDOWN_VERB = 'catcode:context-breakdown-verb'
 const CH_SESSION_ACTION_VERB = 'catcode:session-action-verb'
 const CH_REMOTE_SETTINGS_VERB = 'catcode:remote-settings-verb'
 const CH_SETTINGS_VERB = 'catcode:settings-verb'
+const CH_STATS_QUERY = 'catcode:stats-query'
 const CH_PING = 'catcode:ping'
 const CH_RESTART = 'catcode:restart'
 const CH_SERVER_FRAME = 'catcode:server-frame'
@@ -318,6 +320,14 @@ const bridge: CatCodeBridge = {
     const payload = { sessionId, verb }
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_SETTINGS_VERB, payload)
+  },
+  queryStats(sessionId: SessionId, range: UsageStatsRange): void {
+    const payload = {
+      sessionId,
+      verb: { type: 'stats.query', range, requestId: crypto.randomUUID() },
+    }
+    sendGuard.assertAllowed(payload)
+    ipcRenderer.send(CH_STATS_QUERY, payload)
   },
   ping(sessionId: SessionId, nonce: string): void {
     const payload = { sessionId, nonce }

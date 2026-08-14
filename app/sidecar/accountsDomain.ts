@@ -436,6 +436,16 @@ export function resolveAnthropicSubscriptionActive(
   }
 }
 
+export function resolveAnthropicRouteAvailable(
+  credentialsCheck: () => boolean = hasAnthropicCredentials,
+): boolean {
+  try {
+    return credentialsCheck()
+  } catch {
+    return false
+  }
+}
+
 /** Project the whole pool status to the redacted snapshot. Pure. */
 export function buildAccountsSnapshot(
   poolStatus: {
@@ -445,7 +455,7 @@ export function buildAccountsSnapshot(
   },
   now = Date.now(),
   anthropicPoolStatus = getClaudePoolStatus(),
-  anthropicRouteAvailable = hasAnthropicCredentials(),
+  anthropicRouteAvailable = resolveAnthropicRouteAvailable(),
   anthropicSubscriptionActive = resolveAnthropicSubscriptionActive(),
 ): AccountsSnapshot {
   const activeAccount = poolStatus.accounts[poolStatus.activeIndex]

@@ -89,7 +89,6 @@ async function main(): Promise<void> {
         ...process.env,
         CATCODE_RENDERER_URL: rendererUrl,
         CATCODE_TEST_CWD_ALLOWLIST: scratch,
-        CATCODE_INITIAL_CWD: scratch,
         CATCODE_DEBUG_STATE: '1',
         CATCODE_HARNESS_DEMO_CWD: scratch,
         CLAUDE_CONFIG_DIR: configHome,

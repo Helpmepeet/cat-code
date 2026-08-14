@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test'
+import * as analytics from './services/analytics/index.js'
 import type { ToolUseContext } from './Tool.js'
 import { query } from './query.js'
 import type { QueryDeps } from './query/deps.js'
@@ -50,6 +51,7 @@ function createToolUseContext(messages: Message[]): ToolUseContext {
       clients: [],
     },
     tasks: {},
+    sessionHooks: new Map(),
     fastMode: false,
     effortValue: undefined,
     advisorModel: undefined,
@@ -132,7 +134,14 @@ describe('query auto-compaction request assembly', () => {
       hookResults: [],
       messagesToKeep: [preservedUserMessage, preservedAssistantMessage],
       preCompactTokenCount: 240_000,
+      postCompactTokenCount: 1_200,
       truePostCompactTokenCount: 1_000,
+      compactionUsage: {
+        input_tokens: 1_100,
+        output_tokens: 100,
+        cache_creation_input_tokens: 20,
+        cache_read_input_tokens: 30,
+      },
     }
     const expectedPostCompactMessages = [
       compactBoundary,
@@ -143,6 +152,7 @@ describe('query auto-compaction request assembly', () => {
 
     let capturedMessages: Message[] | undefined
     let capturedOpenAIInputMessages: Message[] | undefined
+    const logEvent = spyOn(analytics, 'logEvent')
 
     const deps: QueryDeps = {
       uuid: () => 'test-query-chain-id',
@@ -182,6 +192,19 @@ describe('query auto-compaction request assembly', () => {
 
     expect(capturedMessages).toEqual(expectedPostCompactMessages)
     expect(capturedOpenAIInputMessages).toEqual(expectedPostCompactMessages)
+    expect(logEvent).toHaveBeenCalledWith(
+      'tengu_auto_compact_succeeded',
+      expect.objectContaining({
+        compactedMessageCount: 3,
+        postCompactTokenCount: 1_200,
+        truePostCompactTokenCount: 1_000,
+        compactionInputTokens: 1_100,
+        compactionOutputTokens: 100,
+        compactionCacheCreationTokens: 20,
+        compactionCacheReadTokens: 30,
+        compactionTotalTokens: 1_250,
+      }),
+    )
   })
 })
 

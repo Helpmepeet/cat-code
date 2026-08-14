@@ -56,13 +56,14 @@ Concretely, as built today:
   clear the registry map (`app/main/main.ts:396-410`, `app/supervisor/supervisor.ts:246-255`).
 - `before-quit` → same shutdown (`app/main/main.ts:412-414`).
 - On macOS the Electron process itself stays alive in the dock after `window-all-closed`
-  (`main.ts:407-409`), and `activate` builds a **fresh host with a fresh session**
-  (`ensureHost`, `main.ts:389-393`). So v1 is literally die-with-*window*, not
-  die-with-*app-process*: an app icon sitting in the dock holds no live sessions. This is the
-  TUI-parity reading (closing the terminal kills the TUI) and it is what ships; if daily use
-  shows "window closed, dock icon alive, agent dead" to be the wrong feel, that is a
-  **dogfood-gate finding (DR-3), not a Phase-3 re-architecture** — flipping it means *not
-  calling shutdown* on window-all-closed, which the structure already permits.
+  (`main.ts:2635-2667`), and `activate` builds a fresh host with an empty launcher
+  (`ensureHost`, `main.ts:2411-2482`). Prior sessions remain restore offers, but no engine process
+  starts until the user explicitly creates or restores one. So v1 is literally
+  die-with-*window*, not die-with-*app-process*: an app icon sitting in the dock holds no live
+  sessions. This is the TUI-parity reading (closing the terminal kills the TUI) and it is what
+  ships; if daily use shows "window closed, dock icon alive, agent dead" to be the wrong feel,
+  that is a **dogfood-gate finding (DR-3), not a Phase-3 re-architecture** — flipping it means
+  *not calling shutdown* on window-all-closed, which the structure already permits.
 - A sidecar dying does **not** kill anything else (crash isolation held in P0-1 §2 and the
   supervisor's per-record `exit` handling, `supervisor.ts:179-190`); D6 is about the window's
   effect on sessions, not sessions' effect on each other.
@@ -79,11 +80,11 @@ choice is *this* decision.
 | Event | Engine processes | In-flight turn | Session identity/history |
 |---|---|---|---|
 | Quit (⌘Q) / last window closed | killed via `supervisor.shutdown()` | lost (aborted with the process) | engine transcript on disk; registry row persists → restorable |
-| Relaunch after clean quit | fresh spawns | — | **restore offered from registry** (re-spawn + transcript resume; gate line §4) |
+| Relaunch after clean quit | none until explicit create or restore | — | **restore offered from registry** (re-spawn + transcript resume; gate line §4) |
 | Host (Electron) crash | **orphaned** (socket outlives parent) | runs to completion, unobserved | next launch: liveness sweep **kills orphans**, rows marked `crashed`, restore offered |
 | One sidecar crashes | that session only | lost for that session | restart is caller policy (`supervisor.ts:231-243`); other sessions untouched |
 | Phase-5 auto-update relaunch | = clean quit + relaunch | lost | same as relaunch; **update UX must warn if a turn is in flight** (carry-forward §7) |
-| macOS dock-alive, zero windows | none running | — | next window = fresh session (+ restore offer) |
+| macOS dock-alive, zero windows | none running | — | next window = empty launcher (+ restore offers) |
 
 ## 4. The Phase-3 gate line (deliverable of this decision)
 
@@ -169,17 +170,12 @@ is the seed. None of this is v1 work; all of it must remain *possible* — that 
   it."** That is precisely TUI parity — the desktop app dies exactly when he closes *it*. The
   residual risk (that always-on is the real daily need) is measured by the DR-3 dogfood gate, and
   the v2 flip is priced at "move the host module," not "rebuild Phase 3."
-- **A5 — "Fresh-session-per-activate (macOS) leaks sessions into the registry."** `ensureHost()`
-  mints a new session per dock reopen (`main.ts:389-393`). Without registry hygiene this creates
-  row litter. Registry R4 (reap + bounded rows) owns this; flagged there.
-
 ## 9. Carry-forwards
 
 - **Phase-5 update UX:** updates are quits — block or warn when a turn is in flight (§8 A2).
 - **Dogfood-gate probe (DR-3):** explicitly collect "did you lose work / want sessions to
   survive quit?" in the keep/cut/change list — it is the empirical test of this ruling.
-- **Registry owns:** orphan reap policy mechanics, restore UX, row hygiene for macOS reopen
-  (→ `REGISTRY.md` §4, §7).
+- **Registry owns:** orphan reap policy mechanics and restore UX (→ `REGISTRY.md` §4, §7).
 - The engine's `daemon`/`daemon-worker` session kinds (`src/utils/concurrentSessions.ts:18`)
   show the *engine* already anticipates daemon-hosted sessions; the desktop host does not use
   them in v1 — do not conflate the two when v2 arrives.

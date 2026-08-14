@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Write / Edit cards</title>
+<style>
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 100 1000;
+  src: url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'DM Mono';
+  font-style: normal;
+  font-weight: 400;
+  src: url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'DM Mono';
+  font-style: normal;
+  font-weight: 500;
+  src: url('../../app/renderer/src/assets/fonts/DMMono-Medium.woff2') format('woff2');
+}
+
+* { box-sizing: border-box; }
+
+html { background: #09090b; }
+
+body {
+  margin: 0;
+  padding: 56px 32px 96px;
+  background: #09090b;
+}
+
+/* ── chrome ─────────────────────────────────────────────────────────────── */
+
+.x-page {
+  width: 836px;
+  margin: 0 auto;
+}
+
+.x-title {
+  font: 400 9.5px/1 "DM Mono", ui-monospace, Menlo, monospace;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #6b6b73;
+  margin: 0 0 40px;
+}
+
+.x-group {
+  margin: 0 0 8px;
+  padding: 0 0 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  font: 400 9.5px/1 "DM Mono", ui-monospace, Menlo, monospace;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #6b6b73;
+}
+
+.x-side {
+  margin: 24px 0 8px;
+  font: 400 9.5px/1 "DM Mono", ui-monospace, Menlo, monospace;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #55555c;
+}
+
+.x-cell { width: 836px; }
+
+.x-gap { height: 44px; }
+
+/* ── specimen: app values only ──────────────────────────────────────────── */
+
+.card {
+  width: 100%;
+  overflow: hidden;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.025);
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.mark {
+  width: 16px;
+  flex: none;
+  text-align: center;
+  font-size: 13px;
+}
+
+.word {
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.fam-edit { color: #f472b6; }
+.fam-write { color: #fb923c; }
+
+.target {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "DM Mono", ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  color: #f4f4f5;
+}
+
+.stat {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  font-family: "DM Mono", ui-monospace, Menlo, monospace;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-add { color: #86efac; }
+.stat-del { color: #fca5a5; }
+
+.dot {
+  height: 6px;
+  width: 6px;
+  flex: none;
+  border-radius: 9999px;
+  background: #4ade80;
+}
+
+.body {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(0, 0, 0, 0.28);
+  padding: 4px 12px 10px;
+}
+
+.diff {
+  font-family: "DM Mono", ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.diff-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  padding-bottom: 6px;
+  font-size: 11.5px;
+  color: #a1a1aa;
+}
+
+.diff-head-path {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row {
+  display: flex;
+  white-space: pre;
+}
+
+.row-add { background: rgba(34, 197, 94, 0.1); }
+.row-del { background: rgba(239, 68, 68, 0.1); }
+
+.now .row-add { color: #86efac; }
+.now .row-del { color: #fca5a5; }
+.now .row-ctx { color: #838389; }
+
+.gut {
+  width: 26px;
+  flex: none;
+  padding-right: 7px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  color: #75757b;
+}
+
+.src {
+  min-width: 0;
+  flex: 1;
+  border-left: 1px solid rgba(255, 255, 255, 0.05);
+  padding-left: 10px;
+  padding-right: 14px;
+}
+
+.sign-add { color: #4ade80; }
+.sign-del { color: #f87171; }
+.sign-ctx { color: #75757b; }
+
+.emph-del {
+  border-radius: 2px;
+  background: rgba(248, 113, 113, 0.28);
+  padding: 0 1px;
+}
+
+.emph-add {
+  border-radius: 2px;
+  background: rgba(74, 222, 128, 0.26);
+  padding: 0 1px;
+}
+
+.now .dim-del { color: rgba(252, 165, 165, 0.55); }
+.now .dim-add { color: rgba(134, 239, 172, 0.55); }
+.next .dim { opacity: 0.6; }
+
+/* dracula, the app's default code theme (theme.css .hljs block) */
+.next .src { color: #f8f8f2; }
+.k { color: #ff79c6; }
+.s { color: #f1fa8c; }
+.n { color: #bd93f9; }
+.t { color: #50fa7b; }
+.b { color: #8be9fd; }
+.a { color: #66d9ef; }
+.c { color: #6272a4; font-style: italic; }
+
+.adds {
+  font-family: "DM Mono", ui-monospace, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.625;
+}
+
+.add-gut {
+  width: 14px;
+  flex: none;
+  user-select: none;
+  color: #86efac;
+}
+
+.add-src {
+  min-width: 0;
+  flex: 1;
+}
+
+.now .add-src { color: #86efac; }
+.next .add-src { color: #f8f8f2; }
+</style>
+</head>
+<body>
+<div class="x-page">
+
+  <p class="x-title">Write / Edit tool cards</p>
+
+  <p class="x-group">Edit · collapsed</p>
+
+  <p class="x-side">Current</p>
+  <div class="x-cell">
+    <div class="card now">
+      <div class="head">
+        <span class="mark fam-edit">±</span>
+        <span class="word fam-edit">Edit</span>
+        <span class="target">src/utils/cache.ts</span>
+        <span class="dot"></span>
+      </div>
+    </div>
+  </div>
+
+  <p class="x-side">Proposed</p>
+  <div class="x-cell">
+    <div class="card next">
+      <div class="head">
+        <span class="mark fam-edit">±</span>
+        <span class="word fam-edit">Edit</span>
+        <span class="target">src/utils/cache.ts</span>
+        <span class="stat"><span class="stat-add">+2</span><span class="stat-del">−2</span></span>
+        <span class="dot"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="x-gap"></div>
+  <p class="x-group">Edit · expanded</p>
+
+  <p class="x-side">Current</p>
+  <div class="x-cell">
+    <div class="card now">
+      <div class="head">
+        <span class="mark fam-edit">±</span>
+        <span class="word fam-edit">Edit</span>
+        <span class="target">src/utils/cache.ts</span>
+        <span class="dot"></span>
+      </div>
+      <div class="body">
+        <div class="diff">
+          <div class="diff-head">
+            <span class="diff-head-path">src/utils/cache.ts</span>
+            <span class="stat-add">+2</span>
+            <span class="stat-del">−2</span>
+          </div>
+          <div class="row row-ctx"><span class="gut">18</span><span class="gut">18</span><span class="src"><span class="sign-ctx"> </span> const ttl = 60</span></div>
+          <div class="row row-del"><span class="gut">19</span><span class="gut"></span><span class="src"><span class="sign-del">−</span> <span class="dim-del">export function get(key: string</span><span class="emph-del">)</span><span class="dim-del"> {</span></span></div>
+          <div class="row row-add"><span class="gut"></span><span class="gut">19</span><span class="src"><span class="sign-add">+</span> <span class="dim-add">export function get(key: string</span><span class="emph-add">, fallback = null)</span><span class="dim-add"> {</span></span></div>
+          <div class="row row-ctx"><span class="gut">20</span><span class="gut">20</span><span class="src"><span class="sign-ctx"> </span>   const hit = store.get(key)</span></div>
+          <div class="row row-del"><span class="gut">21</span><span class="gut"></span><span class="src"><span class="sign-del">−</span> <span class="dim-del">   if (!hit) return </span><span class="emph-del">null</span></span></div>
+          <div class="row row-add"><span class="gut"></span><span class="gut">21</span><span class="src"><span class="sign-add">+</span> <span class="dim-add">   if (!hit) return </span><span class="emph-add">fallback</span></span></div>
+          <div class="row row-ctx"><span class="gut">22</span><span class="gut">22</span><span class="src"><span class="sign-ctx"> </span>   return hit.value</span></div>
+          <div class="row row-ctx"><span class="gut">23</span><span class="gut">23</span><span class="src"><span class="sign-ctx"> </span> }</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p class="x-side">Proposed</p>
+  <div class="x-cell">
+    <div class="card next">
+      <div class="head">
+        <span class="mark fam-edit">±</span>
+        <span class="word fam-edit">Edit</span>
+        <span class="target">src/utils/cache.ts</span>
+        <span class="stat"><span class="stat-add">+2</span><span class="stat-del">−2</span></span>
+        <span class="dot"></span>
+      </div>
+      <div class="body">
+        <div class="diff">
+          <div class="row row-ctx"><span class="gut">18</span><span class="gut">18</span><span class="src"><span class="sign-ctx"> </span> <span class="k">const</span> ttl = <span class="n">60</span></span></div>
+          <div class="row row-del"><span class="gut">19</span><span class="gut"></span><span class="src"><span class="sign-del">−</span> <span class="dim"><span class="k">export</span> <span class="k">function</span> <span class="t">get</span>(key: <span class="b">string</span></span><span class="emph-del">)</span><span class="dim"> {</span></span></div>
+          <div class="row row-add"><span class="gut"></span><span class="gut">19</span><span class="src"><span class="sign-add">+</span> <span class="dim"><span class="k">export</span> <span class="k">function</span> <span class="t">get</span>(key: <span class="b">string</span></span><span class="emph-add">, fallback = <span class="n">null</span>)</span><span class="dim"> {</span></span></div>
+          <div class="row row-ctx"><span class="gut">20</span><span class="gut">20</span><span class="src"><span class="sign-ctx"> </span>   <span class="k">const</span> hit = store.<span class="t">get</span>(key)</span></div>
+          <div class="row row-del"><span class="gut">21</span><span class="gut"></span><span class="src"><span class="sign-del">−</span> <span class="dim">   <span class="k">if</span> (!hit) <span class="k">return</span> </span><span class="emph-del"><span class="n">null</span></span></span></div>
+          <div class="row row-add"><span class="gut"></span><span class="gut">21</span><span class="src"><span class="sign-add">+</span> <span class="dim">   <span class="k">if</span> (!hit) <span class="k">return</span> </span><span class="emph-add">fallback</span></span></div>
+          <div class="row row-ctx"><span class="gut">22</span><span class="gut">22</span><span class="src"><span class="sign-ctx"> </span>   <span class="k">return</span> hit.value</span></div>
+          <div class="row row-ctx"><span class="gut">23</span><span class="gut">23</span><span class="src"><span class="sign-ctx"> </span> }</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="x-gap"></div>
+  <p class="x-group">Write · collapsed</p>
+
+  <p class="x-side">Current</p>
+  <div class="x-cell">
+    <div class="card now">
+      <div class="head">
+        <span class="mark fam-write">+</span>
+        <span class="word fam-write">Write</span>
+        <span class="target">src/utils/cache.ts</span>
+        <span class="dot"></span>
+      </div>
+    </div>
+  </div>
+
+  <p class="x-side">Proposed</p>
+  <div class="x-cell">
+    <div class="card next">
+      <div class="head">
+        <span class="mark fam-write">+</span>
+        <span class="word fam-write">Write</span>
+        <span class="target">src/utils/cache.ts</span>
+        <span class="stat"><span class="stat-add">+7</span></span>
+        <span class="dot"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="x-gap"></div>
+  <p class="x-group">Write · expanded</p>
+
+  <p class="x-side">Current</p>
+  <div class="x-cell">
+    <div class="card now">
+      <div class="head">
+        <span class="mark fam-write">+</span>
+        <span class="word fam-write">Write</span>
+        <span class="target">src/utils/cache.ts</span>
+        <span class="dot"></span>
+      </div>
+      <div class="body">
+        <div class="adds">
+          <div class="row"><span class="add-gut">+</span><span class="add-src">const store = new Map()</span></div>
+          <div class="row"><span class="add-gut">+</span><span class="add-src"> </span></div>
+          <div class="row"><span class="add-gut">+</span><span class="add-src">export function get(key: string, fallback = null) {</span></div>
+          <div class="row"><span class="add-gut">+</span><span class="add-src">  const hit = store.get(key)</span></div>
+          <div class="row"><span class="add-gut">+</span><span class="add-src">  if (!hit) return fallback</span></div>
+          <div class="row"><span class="add-gut">+</span><span class="add-src">  return hit.value</span></div>
+          <div class="row"><span class="add-gut">+</span><span class="add-src">}</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p class="x-side">Proposed</p>
+  <div class="x-cell">
+    <div class="card next">
+      <div class="head">
+        <span class="mark fam-write">+</span>
+        <span class="word fam-write">Write</span>
+        <span class="target">src/utils/cache.ts</span>
+        <span class="stat"><span class="stat-add">+7</span></span>
+        <span class="dot"></span>
+      </div>
+      <div class="body">
+        <div class="adds">
+          <div class="row"><span class="add-gut">+</span><span class="add-src"><span class="k">const</span> store = <span class="k">new</span> <span class="b">Map</span>()</span></div>
+          <div class="row"><span class="add-gut">+</span><span class="add-src"> </span></div>
+          <div class="row"><span class="add-gut">+</span><span class="add-src"><span class="k">export</span> <span class="k">function</span> <span class="t">get</span>(key: <span class="b">string</span>, fallback = <span class="n">null</span>) {</span></div>
+          <div class="row"><span class="add-gut">+</span><span class="add-src">  <span class="k">const</span> hit = store.<span class="t">get</span>(key)</span></div>
+          <div class="row"><span class="add-gut">+</span><span class="add-src">  <span class="k">if</span> (!hit) <span class="k">return</span> fallback</span></div>
+          <div class="row"><span class="add-gut">+</span><span class="add-src">  <span class="k">return</span> hit.value</span></div>
+          <div class="row"><span class="add-gut">+</span><span class="add-src">}</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

@@ -157,6 +157,7 @@ import {
   type TaskControlVerbMessage,
   type TaskControlVerbType,
   type SidecarClientMessage,
+  type StatsQueryMessage,
   type TranscriptCache,
   type WorkspaceTrustMessage,
   type WorkspaceTrustVerbType,
@@ -178,6 +179,7 @@ const CH_CONTEXT_BREAKDOWN_VERB = 'catcode:context-breakdown-verb'
 const CH_SESSION_ACTION_VERB = 'catcode:session-action-verb'
 const CH_REMOTE_SETTINGS_VERB = 'catcode:remote-settings-verb'
 const CH_SETTINGS_VERB = 'catcode:settings-verb'
+const CH_STATS_QUERY = 'catcode:stats-query'
 const CH_PING = 'catcode:ping'
 const CH_RESTART = 'catcode:restart'
 const CH_SERVER_FRAME = 'catcode:server-frame'
@@ -972,9 +974,9 @@ function scheduleDebugCleanup(): void {
 }
 
 function createSupervisor(): SidecarSupervisor {
-  // The sidecar runs the same default classifier feature as the engine bundle
-  // (`scripts/build.ts`). Without the Bun runtime flag every `feature(...)`
-  // branch is compiled false and genuine auto mode cannot run.
+  // The sidecar runs the desktop engine feature set declared in
+  // `SIDECAR_RUNTIME_ARGS`. Without the Bun runtime flags every `feature(...)`
+  // branch is compiled false and the desktop can silently lose engine behavior.
   return new SidecarSupervisor({
     sidecarCommand: process.env.CATCODE_BUN_BIN ?? 'bun',
     sidecarArgs: [...SIDECAR_RUNTIME_ARGS, SIDECAR_ENTRY],
@@ -1759,6 +1761,21 @@ function registerIpcHandlers(): void {
     },
   )
 
+  ipcMain.on(
+    CH_STATS_QUERY,
+    (_e, arg: { sessionId: SessionId; verb: unknown }) => {
+      if (typeof arg?.sessionId !== 'string') return
+      const verb = arg.verb as { type?: unknown; range?: unknown } | null | undefined
+      if (
+        verb?.type !== 'stats.query' ||
+        (verb.range !== '7d' && verb.range !== '30d')
+      ) {
+        return
+      }
+      forward(arg.sessionId, arg.verb as StatsQueryMessage)
+    },
+  )
+
   ipcMain.on(CH_PING, (_e, arg: { sessionId: SessionId; nonce: string }) => {
     if (typeof arg?.sessionId !== 'string' || typeof arg?.nonce !== 'string') return
     forward(arg.sessionId, { type: 'app.ping', nonce: arg.nonce })
@@ -2405,15 +2422,12 @@ function generateRequestId(): string {
 
 /**
  * (Re)create the host: supervisor + durable registry + the typed control-plane
- * composition, then the primary session. Called on startup AND on macOS
- * `activate` (F5) so reopening the window after `window-all-closed` produces a
- * NEW functioning session rather than a shell wired to a shut-down supervisor.
+ * composition. Called on startup AND on macOS `activate` (F5), so reopening the
+ * window after `window-all-closed` creates a functioning host without reviving
+ * the shut-down supervisor.
  *
- * The fresh-session-per-activate now flows through `host.createSession` so
- * registry hygiene (the launch sweep, row bound, clean/crashed marking) applies
- * to dock-reopen sessions (D1 §9-A5). The single-instance lock (taken in
- * `whenReady`, REGISTRY §5) guarantees this is the ONLY writer of the registry
- * file, so its launch sweep runs unraced.
+ * The single-instance lock (taken in `whenReady`, REGISTRY §5) guarantees this
+ * is the ONLY writer of the registry file, so its launch sweep runs unraced.
  */
 function ensureHost(): Host {
   if (host) return host
@@ -2463,28 +2477,6 @@ function ensureHost(): Host {
   // HostEvent subscription, so they emit no session-removed), drop any orphaned
   // cache file whose row is no longer restorable.
   void launched.then(() => gcTranscriptCache())
-
-  // The primary startup session: main's OWN process.cwd() (trusted main input,
-  // not a renderer string). host.createSession awaits `launched` internally, so
-  // this runs strictly after the sweep.
-  const primaryCwd = devHarnessConfig.initialCwd ?? process.cwd()
-  if (devHarnessConfig.initialCwdInvalid) {
-    process.stderr.write('[main] primary session skipped: invalid CATCODE_INITIAL_CWD\n')
-  } else {
-    void host
-      .createSession({ cwd: primaryCwd })
-      .then(result => {
-        if (!result.ok) {
-          process.stderr.write(
-            `[main] primary session create failed: ${result.error.code} ${result.error.message}\n`,
-          )
-        }
-        scheduleDebugStateExport.schedule()
-      })
-      .catch(error => {
-        process.stderr.write(`[main] primary session create threw: ${errText(error)}\n`)
-      })
-  }
 
   // Smoke-run hook (verification only): if CATCODE_SMOKE_EXIT_MS is set, log the
   // frames the supervisor receives and exit after the timeout. Lets a headless
@@ -2652,20 +2644,19 @@ app.on('window-all-closed', () => {
   }
   // D6: die-with-window for v1 — tear down every sidecar via the supervisor's
   // kill API (NOT by welding the sidecar to the window's lifecycle). `activate`
-  // rebuilds a fresh host on reopen (F5).
+  // rebuilds the host on reopen (F5).
   shutdownRuntime()
   // Drivers are window-scoped: a fresh `activate` re-arms them after the next paint.
   stopBackgroundDrivers()
   supervisor = null
   // Drop the host too so `ensureHost` rebuilds supervisor + registry + host as a
   // unit on the next `activate` (a fresh registry re-reads the file and re-runs
-  // its launch sweep — the dock-reopen session goes through createSession again).
+  // its launch sweep).
   host = null
   registryForDebug = null
   scheduleDebugStateExport.cancel()
-  // F2 — drop the old session's buffered frames so a macOS reopen (which spawns a
-  // NEW session id via `ensureHost`) never replays dead-session frames into the
-  // fresh window.
+  // F2 — drop buffered frames from the closed window so a macOS reopen never
+  // replays dead-session frames into the new renderer.
   attachmentGate.reset()
   cancelAllReplayFlushes()
   if (process.platform !== 'darwin') {

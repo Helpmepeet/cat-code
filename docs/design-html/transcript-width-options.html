@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Transcript width options</title>
+<style>
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:500;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMMono-Medium.woff2') format('woff2')}
+
+:root{
+  --app-bg:#09090b;
+  --text-primary:#f4f4f5;
+  --text-muted:#a1a1aa;
+  --text-subtle:#98989f;
+  --text-faint:#838389;
+  --text-ghost:#75757b;
+  --seam:rgba(255,255,255,0.06);
+  --accent:#f472b6;
+  --accent-soft:#f9a8d4;
+  --tone-good:#4ade80;
+  --font-sans:"DM Sans",-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+  --font-mono:"DM Mono",ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
+  --prose-measure:42em;
+  /* 42em resolved at the 14px prose size. Pinned in px for the variants that
+     apply the measure above the prose element, where em would resolve at 16px
+     and silently vary the axis under comparison. */
+  --measure-px:588px;
+}
+*{box-sizing:border-box}
+html{background:var(--app-bg)}
+body{margin:0;background:var(--app-bg);color:var(--text-primary);font-family:var(--font-sans);-webkit-font-smoothing:antialiased}
+
+/* ── x- chrome. Never matches inside a specimen. ─────────────────────────── */
+.x-bar{position:sticky;top:0;z-index:5;display:flex;gap:18px;align-items:center;
+  padding:10px 20px;background:#0d0d10;border-bottom:1px solid #1c1c20}
+.x-tag{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:9.5px;
+  letter-spacing:.14em;text-transform:uppercase;color:#6e6e76}
+.x-btn{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:9.5px;
+  letter-spacing:.14em;text-transform:uppercase;color:#6e6e76;background:none;
+  border:0;border-bottom:1px solid transparent;padding:3px 0;cursor:pointer}
+.x-btn[aria-pressed="true"]{color:#c8c8d0;border-bottom-color:#5a5a62}
+.x-head{display:flex;align-items:baseline;gap:10px;padding:34px 20px 12px;
+  border-top:1px solid #1c1c20}
+.x-head:first-of-type{border-top:0}
+.x-letter{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;
+  letter-spacing:.14em;color:#c8c8d0}
+.x-name{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:9.5px;
+  letter-spacing:.14em;text-transform:uppercase;color:#6e6e76}
+.x-rule{height:1px;background:#1c1c20;margin:0 20px}
+
+/* ── specimen: real app values ───────────────────────────────────────────── */
+.tx{max-width:1000px;margin:0 auto;padding:24px 32px 34px;display:flex;
+  flex-direction:column;gap:10px}
+
+.rsn-head{display:flex;align-items:center;gap:10px;padding:1px 0}
+.rsn-caret{display:inline-block;width:16px;text-align:center;font-size:9px;
+  line-height:1;color:var(--text-ghost)}
+.rsn-word{font-size:10px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.08em;color:var(--text-subtle)}
+.rsn-count{font-size:10.5px;color:var(--text-faint)}
+.rsn-list{margin:2px 0 0 8px;padding:0 0 0 17px;border-left:1px solid rgba(255,255,255,.1);
+  list-style:none}
+.rsn-step{position:relative;padding:2px 0;font-size:12.5px;line-height:1.5;
+  color:var(--text-subtle);font-weight:600}
+.rsn-node{position:absolute;left:-21px;top:9px;width:5px;height:5px;border-radius:9999px;
+  background:var(--text-ghost)}
+
+.card{width:100%;overflow:hidden;border-radius:6px;border:1px solid var(--seam);
+  background:rgba(255,255,255,.025);font-family:var(--font-sans)}
+.card-btn{display:flex;width:100%;align-items:center;gap:10px;padding:8px 12px;
+  text-align:left;background:none;border:0}
+.card-mark{width:16px;flex-shrink:0;text-align:center;font-size:13px}
+.card-word{flex-shrink:0;font-size:10.5px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.08em}
+.card-target{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:var(--font-mono);font-size:12px;color:var(--text-primary)}
+.card-path{flex-shrink:0;font-family:var(--font-mono);font-size:11px;color:var(--text-faint)}
+.card-dot{width:6px;height:6px;flex-shrink:0;border-radius:9999px;background:var(--tone-good)}
+.fam-read{color:#60a5fa}
+.fam-grep{color:#fbbf24}
+
+.prose{font-family:var(--font-sans);font-weight:500;font-size:14px;line-height:1.625}
+.md-prose{display:grid;grid-template-columns:1fr min(var(--prose-measure),100%) 1fr;
+  overflow-wrap:break-word}
+.md-prose>*{grid-column:2/3;margin:0}
+.md-prose>:is(div,pre,table){grid-column:1/-1}
+.md-prose>*+*{margin-top:.85em}
+.md-prose>:first-child{margin-top:0}
+.md-prose p{text-wrap:pretty}
+.md-prose :is(h1,h2,h3,h4,h5,h6){font-weight:600;line-height:1.3;text-wrap:balance}
+.md-prose h2{font-size:1.18em}
+.md-prose h3{font-size:1.05em}
+.md-prose>*+:is(h1,h2){margin-top:1.5em}
+.md-prose>*+:is(h3,h4,h5,h6){margin-top:1.35em}
+.md-prose>:is(h1,h2,h3,h4,h5,h6)+*{margin-top:.5em}
+.md-prose :is(ul,ol){padding-left:1.5em;margin:0;list-style-type:disc}
+.md-prose li::marker{color:var(--text-muted)}
+.md-prose li+li{margin-top:.3em}
+.md-prose :not(pre)>code{font-family:var(--font-mono);font-size:.9em;
+  color:var(--accent-soft);overflow-wrap:anywhere}
+
+.codeblock{position:relative;margin-top:12px;overflow:hidden;border-radius:8px;
+  border:1px solid var(--seam);background:var(--app-bg)}
+.codeblock-lang{position:absolute;left:14px;top:8px;z-index:1;font-family:var(--font-mono);
+  font-size:10px;font-weight:600;letter-spacing:.06em;color:var(--accent)}
+.codeblock pre{margin:0;overflow-x:auto;padding:38px 14px 14px;font-family:var(--font-mono);
+  font-size:12.5px;line-height:1.65;color:#f8f8f2}
+.k{color:#ff79c6}.s{color:#f1fa8c}.f{color:#50fa7b}.a{color:#66d9ef}
+
+.tablewrap{margin-top:12px;overflow-x:auto;border-radius:8px;border:1px solid rgba(255,255,255,.08)}
+.tablewrap table{width:100%;border-collapse:collapse;font-size:13px}
+.tablewrap th{white-space:nowrap;border-bottom:1px solid rgba(255,255,255,.12);
+  background:rgba(255,255,255,.03);padding:7px 12px;text-align:left;font-weight:600;color:#e4e4e7}
+.tablewrap td{border-bottom:1px solid rgba(255,255,255,.05);padding:7px 12px;
+  vertical-align:top;color:#c4c4c8}
+
+/* ── the varied axis: width treatment ────────────────────────────────────── */
+.v-a .md-prose{display:block}
+
+.v-c{display:grid;grid-template-columns:1fr min(var(--measure-px),100%) 1fr;row-gap:10px}
+.v-c>.row{grid-column:2/3}
+.v-c>.row-card{grid-column:1/-1}
+.v-c .md-prose{display:block}
+
+.v-d{max-width:calc(var(--measure-px) + 64px)}
+.v-d .md-prose{display:block}
+</style>
+</head>
+<body>
+
+<div class="x-bar">
+  <span class="x-tag">Transcript width</span>
+  <button class="x-btn" data-w="1520" aria-pressed="true">1520</button>
+  <button class="x-btn" data-w="1280" aria-pressed="false">1280</button>
+  <button class="x-btn" data-w="1040" aria-pressed="false">1040</button>
+</div>
+
+<div class="x-head"><span class="x-letter">A</span><span class="x-name">single width</span></div>
+<div class="tx v-a" data-variant></div>
+<div class="x-rule"></div>
+
+<div class="x-head"><span class="x-letter">B</span><span class="x-name">prose measure, full-width rows</span></div>
+<div class="tx v-b" data-variant></div>
+<div class="x-rule"></div>
+
+<div class="x-head"><span class="x-letter">C</span><span class="x-name">text measure, wide panels</span></div>
+<div class="tx v-c" data-variant></div>
+<div class="x-rule"></div>
+
+<div class="x-head"><span class="x-letter">D</span><span class="x-name">measure throughout</span></div>
+<div class="tx v-d" data-variant></div>
+
+<template id="frag">
+  <div class="row row-reasoning">
+    <div class="rsn-head">
+      <span class="rsn-caret">&#9662;</span>
+      <span class="rsn-word">Reasoning</span>
+      <span class="rsn-count">2 steps</span>
+    </div>
+    <ol class="rsn-list">
+      <li class="rsn-step"><span class="rsn-node"></span>Checking how the store registers a session</li>
+      <li class="rsn-step"><span class="rsn-node"></span>Comparing the two projections at one instant</li>
+    </ol>
+  </div>
+
+  <div class="row row-card">
+    <div class="card"><div class="card-btn">
+      <span class="card-mark fam-read">&#8801;</span>
+      <span class="card-word fam-read">Read</span>
+      <span class="card-target">transcriptProjector.ts</span>
+      <span class="card-path">/Users/pt/cat-code/app/renderer/src/</span>
+      <span class="card-dot"></span>
+    </div></div>
+  </div>
+
+  <div class="row row-prose">
+    <div class="prose"><div class="md-prose">
+      <h2>Where the frame pipeline loses events</h2>
+      <p>The renderer projects raw <code>AppSessionEvent</code> frames through <code>transcriptProjector.ts</code>, and a frame whose session id is unknown to the store is dropped rather than surfaced. That is why an empty transcript pane can sit beside a live context percentage: one store took the frames and the other did not.</p>
+      <p>The two stores disagree only while both are live, so a reload erases the evidence before it can be read.</p>
+      <h3>Reproduction</h3>
+      <ul>
+        <li>Open two panes on the same working directory.</li>
+        <li>Send one turn in each, then compare the row counts.</li>
+        <li>Read the unknown-session branch before blaming the socket.</li>
+      </ul>
+      <div class="codeblock">
+        <span class="codeblock-lang">&lt;/&gt; ts</span>
+        <pre><code><span class="k">const</span> state = <span class="f">createTranscriptState</span>()
+<span class="k">const</span> frame = { <span class="a">sessionId</span>: <span class="s">'ghost'</span>, <span class="a">kind</span>: <span class="s">'assistant'</span> }
+<span class="f">projectServerFrame</span>(state, frame)</code></pre>
+      </div>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Store</th><th>Rows</th><th>Context</th></tr></thead>
+        <tbody>
+          <tr><td>transcript</td><td>0</td><td>none</td></tr>
+          <tr><td>context</td><td>41</td><td>39%</td></tr>
+        </tbody>
+      </table></div>
+    </div></div>
+  </div>
+
+  <div class="row row-card">
+    <div class="card"><div class="card-btn">
+      <span class="card-mark fam-grep">&#8981;</span>
+      <span class="card-word fam-grep">Search</span>
+      <span class="card-target">3 patterns</span>
+      <span class="card-dot"></span>
+    </div></div>
+  </div>
+</template>
+
+<script>
+(function () {
+  var frag = document.getElementById('frag');
+  var hosts = document.querySelectorAll('[data-variant]');
+  for (var i = 0; i < hosts.length; i++) {
+    hosts[i].appendChild(frag.content.cloneNode(true));
+  }
+  var buttons = document.querySelectorAll('.x-btn');
+  function setWidth(px) {
+    document.body.style.maxWidth = px + 'px';
+    document.body.style.margin = '0 auto';
+    for (var j = 0; j < buttons.length; j++) {
+      buttons[j].setAttribute('aria-pressed', buttons[j].dataset.w === px ? 'true' : 'false');
+    }
+  }
+  for (var k = 0; k < buttons.length; k++) {
+    buttons[k].addEventListener('click', function (e) {
+      setWidth(e.currentTarget.dataset.w);
+    });
+  }
+  setWidth('1520');
+})();
+</script>
+</body>
+</html>

@@ -159,8 +159,9 @@ test('renders an assistant text row as markdown, not raw source', () => {
   )
 
   expect(html).toContain(
-    '<strong><button class="font-mono text-accent underline decoration-accent/45 underline-offset-2 hover:text-accent-soft" type="button" aria-label="Open package.json">package.json</button></strong>',
+    '<strong><button class="inline-flex items-center gap-0.5 rounded-sm align-baseline font-mono text-accent hover:text-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent" type="button" aria-label="Open package.json"><svg',
   )
+  expect(html).toContain('</svg>package.json</button></strong>')
   expect(html).not.toContain('**package.json**')
 })
 
@@ -175,20 +176,23 @@ test('renders workspace file paths as open-file controls without linkifying web 
   })
 
   expect(html).toContain(
-    '<button class="font-mono text-accent underline decoration-accent/45 underline-offset-2 hover:text-accent-soft" type="button" aria-label="Open docs/reports/2026-08-13-session-label-flow.md">docs/reports/2026-08-13-session-label-flow.md</button>',
+    '<button class="inline-flex items-center gap-0.5 rounded-sm align-baseline font-mono text-accent hover:text-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent" type="button" aria-label="Open docs/reports/2026-08-13-session-label-flow.md"><svg',
   )
   expect(html).toContain('https://example.com/readme.md')
   expect(html).not.toContain('aria-label="Open /example.com/readme.md"')
   expect(html).toContain(
-    'aria-label="Open src/main.ts"><code>src/main.ts</code>',
+    'aria-label="Open src/main.ts"><svg',
   )
-  expect(html).toContain('aria-label="Open README.md">README.md</button>')
+  expect(html).toContain('</svg><code>src/main.ts</code>')
+  expect(html).toContain('aria-label="Open README.md"><svg')
+  expect(html).toContain('</svg>README.md</button>')
   expect(html).toContain(
-    '<strong><button class="font-mono text-accent underline decoration-accent/45 underline-offset-2 hover:text-accent-soft" type="button" aria-label="Open package.json">package.json</button></strong>',
+    'aria-label="Open package.json"><svg',
   )
   expect(html).toContain(
-    'aria-label="Open docs/My Report.md"><code>docs/My Report.md</code>',
+    'aria-label="Open docs/My Report.md"><svg',
   )
+  expect(html).toContain('</svg><code>docs/My Report.md</code>')
   expect(html).not.toContain('aria-label="Open example.com/readme.md"')
   expect(html).not.toContain('aria-label="Open www.example.com/readme.md"')
 })

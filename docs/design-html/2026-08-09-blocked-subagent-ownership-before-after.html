@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blocked subagent · before / after</title>
+<style>
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;font-display:swap;
+  src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:swap;
+  src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:500;font-display:swap;
+  src:url('../../app/renderer/src/assets/fonts/DMMono-Medium.woff2') format('woff2')}
+
+:root{
+  /* app tokens, theme.css */
+  --app-bg:#09090b; --shell-chrome:#070709; --shell-seam:rgba(255,255,255,.06);
+  --surface-panel:#0a0a0c;
+  --text-primary:#f4f4f5; --text-muted:#a1a1aa; --text-subtle:#98989f;
+  --text-faint:#838389; --text-ghost:#75757b;
+  --accent:#f472b6; --tone-warn:#fbbf24; --tone-good:#4ade80;
+  --purple-400:#c084fc; --purple-200:#ddd6fe; --violet-300:#c4b5fd;
+  --blue-400:#60a5fa; --stone-400:#a8a29e; --zinc-600:#52525b;
+  --font-sans:"DM Sans",-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+  --font-mono:"DM Mono",ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
+  /* chrome only */
+  --x-ink:#6b6b72; --x-rule:rgba(255,255,255,.07);
+}
+
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--app-bg)}
+body{font-family:var(--font-sans);color:var(--text-primary);
+  -webkit-font-smoothing:antialiased}
+
+/* ─── chrome ─────────────────────────────────────────────────────────── */
+.x-wrap{max-width:1160px;margin:0 auto;padding:40px 28px 96px}
+.x-title{font-family:var(--font-mono);font-size:10px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--x-ink);margin:0 0 34px}
+.x-sec{margin:0 0 6px;padding-top:26px;border-top:1px solid var(--x-rule);
+  font-family:var(--font-mono);font-size:9.5px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--x-ink)}
+.x-sec:first-of-type{border-top:0;padding-top:0}
+.x-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 26px;margin:0 0 30px}
+.x-col{font-family:var(--font-mono);font-size:9px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--x-ink);padding:12px 0 9px}
+.x-cell{padding:0}
+.x-mode{display:flex;gap:16px;align-items:center;margin:0 0 30px;
+  font-family:var(--font-mono);font-size:9.5px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--x-ink)}
+.x-mode button{font:inherit;letter-spacing:inherit;text-transform:inherit;
+  color:var(--x-ink);background:none;border:0;border-bottom:1px solid transparent;
+  padding:0 0 3px;cursor:pointer}
+.x-mode button[aria-pressed=true]{color:#c9c9d1;border-bottom-color:#c9c9d1}
+body[data-view=after] .x-grid{grid-template-columns:1fr}
+body[data-view=after] .x-cell.is-before,body[data-view=after] .x-col.is-before{display:none}
+body[data-view=before] .x-grid{grid-template-columns:1fr}
+body[data-view=before] .x-cell.is-after,body[data-view=before] .x-col.is-after{display:none}
+@media (max-width:900px){.x-grid{grid-template-columns:1fr}}
+
+/* ─── specimen primitives, values read from source ───────────────────── */
+.pip{display:inline-block;flex:none;border-radius:9999px}
+.pip.sm{width:8px;height:8px}
+.pip.xs{width:6px;height:6px}
+.pip.fill-warn{background:var(--tone-warn)}
+.pip.ring-purple{border:1.6px solid var(--purple-400);background:transparent}
+.pip.pulse-blue{background:var(--blue-400);animation:pulse 2s cubic-bezier(.4,0,.6,1) infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+
+.roledot{display:inline-block;flex:none;width:6px;height:6px;border-radius:9999px;
+  background:var(--violet-300)}
+.handle{flex:none;white-space:nowrap;font-family:var(--font-mono);font-size:12.5px;
+  font-weight:600;color:var(--purple-200)}
+.typelabel{flex:none;white-space:nowrap;font-family:var(--font-mono);font-size:10.5px;
+  font-weight:500;color:var(--violet-300)}
+.statelabel{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;
+  font-size:11px;font-weight:500}
+.statelabel.warn{color:var(--tone-warn)}
+.statelabel.purple{color:var(--purple-400)}
+
+.baton{display:inline-flex;flex:none;align-items:center;gap:4px;white-space:nowrap;
+  border-radius:5px;border:1px solid;padding:1px 6px;font-family:var(--font-mono);
+  font-size:10px;font-weight:600}
+.baton .arw{opacity:.8}
+.baton.you{border-color:rgba(251,191,36,.3);background:rgba(251,191,36,.1);color:var(--tone-warn)}
+.baton.assistant{border-color:rgba(192,132,252,.3);background:transparent;color:var(--purple-400)}
+
+.seclabel{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.1em}
+.seclabel.accent{color:var(--purple-400)}
+
+/* docked roster (OrchestratorRoster.tsx) */
+.roster{margin:0 4px 2px;border-radius:10px;background:var(--app-bg);padding:3px 4px}
+.rrow{display:flex;width:100%;align-items:center;gap:8px;border-radius:7px;
+  border:1px solid transparent;padding:5px 7px;text-align:left;background:none}
+.rtask{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:11.5px;color:var(--text-subtle)}
+.restdot{display:inline-block;flex:none;width:7px;height:7px;border-radius:9999px;
+  background:var(--text-ghost)}
+.rcount{flex:none;font-family:var(--font-mono);font-size:11px;font-weight:600;
+  color:var(--text-subtle)}
+.sep{flex:none;color:var(--text-ghost)}
+.tail{display:inline-flex;min-width:0;flex-wrap:wrap;align-items:center;gap:7px}
+.tail span.t{white-space:nowrap;font-family:var(--font-mono);font-size:11.5px;font-weight:500}
+.t.working{color:var(--blue-400)}
+.t.waiting{color:var(--stone-400)}
+.t.done{color:var(--text-faint)}
+.chev{flex:none;font-family:var(--font-mono);font-size:13px;line-height:1;color:var(--text-ghost)}
+.spacer{flex:1}
+
+/* workers-tab counts strip (TasksDialog.tsx) */
+.strip{display:flex;flex-wrap:wrap;gap:12px;padding:10px 10px 8px;font-size:11px;
+  color:var(--text-muted)}
+.strip span.c{display:inline-flex;align-items:center;gap:6px}
+.c.purple{color:var(--purple-400)}
+.c.warn{color:var(--tone-warn)}
+
+/* worker detail (TasksDialog.tsx) */
+.dhead{display:flex;flex-wrap:wrap;align-items:center;gap:8px;
+  border-bottom:1px solid var(--shell-seam);padding-bottom:12px}
+.note{border-radius:8px;border:1px solid rgba(192,132,252,.3);
+  background:rgba(192,132,252,.08);padding:10px 12px;margin-top:14px}
+.note .reason{margin-top:6px;font-size:12.5px;line-height:1.625;color:var(--purple-200)}
+.note .sub{margin-top:6px;font-size:10.5px;color:var(--text-subtle)}
+
+/* tasks-tab row (TasksDialog.tsx) */
+.trow{display:flex;align-items:center;gap:10px;border-radius:8px;padding:8px 10px}
+.tmark{display:flex;width:14px;flex:none;justify-content:center}
+.spin{display:inline-block;width:10px;height:10px;flex:none;border-radius:9999px;
+  border:1.5px solid var(--shell-seam);border-top-color:var(--text-muted);
+  animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.dot-warn{display:inline-block;width:8px;height:8px;flex:none;border-radius:9999px;
+  background:var(--tone-warn)}
+.kind{flex:none;border-radius:4px;border:1px solid rgba(192,132,252,.5);padding:2px 6px;
+  font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;
+  color:var(--purple-400)}
+.tlabel{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:12.5px;color:var(--text-primary)}
+.tstate{flex:none;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:var(--font-mono);font-size:11px}
+.tstate.warn{color:var(--tone-warn)}
+.tstate.subtle{color:var(--text-subtle)}
+
+/* footer pill (App.tsx TasksStrip) */
+.pillbed{position:relative;height:64px}
+.pill{position:absolute;bottom:8px;right:8px;display:flex;align-items:center;gap:6px;
+  border-radius:9999px;border:1px solid;padding:6px 12px;font-size:12px;
+  box-shadow:0 10px 30px rgba(0,0,0,.5)}
+.pill .pdot{width:6px;height:6px;border-radius:9999px;
+  animation:pulse 2s cubic-bezier(.4,0,.6,1) infinite}
+.pill.warn{border-color:rgba(251,191,36,.3);background:rgba(251,191,36,.1);
+  font-weight:600;color:var(--tone-warn)}
+.pill.warn .pdot{background:var(--tone-warn)}
+.pill.neutral{border-color:var(--shell-seam);background:var(--shell-chrome);color:var(--text-muted)}
+.pill.neutral .pdot{background:var(--accent)}
+.pill.neutral .plabel{color:var(--accent)}
+
+/* terminal notification (Notifications.tsx) */
+.term{font-family:var(--font-mono);font-size:12.5px;color:var(--tone-warn);
+  white-space:pre;padding:6px 2px}
+</style>
+</head>
+<body data-view="split">
+<div class="x-wrap">
+
+  <p class="x-title">Blocked subagent &middot; ownership</p>
+
+  <div class="x-mode">
+    <button type="button" data-v="split" aria-pressed="true">Split</button>
+    <button type="button" data-v="before" aria-pressed="false">Before</button>
+    <button type="button" data-v="after" aria-pressed="false">After</button>
+  </div>
+
+  <p class="x-sec">Composer roster &middot; one worker</p>
+  <div class="x-grid">
+    <div class="x-col is-before">Before</div><div class="x-col is-after">After</div>
+    <div class="x-cell is-before">
+      <div class="roster"><div class="rrow">
+        <span class="roledot"></span>
+        <span class="handle">Turing</span>
+        <span class="rtask">Port the roster</span>
+        <span class="pip sm fill-warn"></span>
+        <span class="typelabel">Coding worker</span>
+        <span class="baton you"><span class="arw">&rarr;</span>you</span>
+      </div></div>
+    </div>
+    <div class="x-cell is-after">
+      <div class="roster"><div class="rrow">
+        <span class="roledot"></span>
+        <span class="handle">Turing</span>
+        <span class="rtask">Port the roster</span>
+        <span class="pip sm ring-purple"></span>
+        <span class="typelabel">Coding worker</span>
+        <span class="baton assistant"><span class="arw">&rarr;</span>assistant</span>
+      </div></div>
+    </div>
+  </div>
+
+  <p class="x-sec">Composer roster &middot; three workers</p>
+  <div class="x-grid">
+    <div class="x-col is-before">Before</div><div class="x-col is-after">After</div>
+    <div class="x-cell is-before">
+      <div class="roster"><div class="rrow">
+        <span class="pip sm fill-warn"></span>
+        <span class="handle">Turing</span>
+        <span class="typelabel">Coding worker</span>
+        <span class="sep">&middot;</span>
+        <span class="tail"><span class="t working">1 working</span><span class="sep">&middot;</span><span class="t done">+1 more</span></span>
+        <span class="baton you"><span class="arw">&rarr;</span>you</span>
+        <span class="chev">&rsaquo;</span>
+      </div></div>
+    </div>
+    <div class="x-cell is-after">
+      <div class="roster"><div class="rrow">
+        <span class="restdot"></span>
+        <span class="rcount">3 subagents</span>
+        <span class="sep">&middot;</span>
+        <span class="tail"><span class="t working">1 working</span><span class="sep">&middot;</span><span class="t waiting">2 on the assistant</span></span>
+        <span class="spacer"></span>
+        <span class="chev">&rsaquo;</span>
+      </div></div>
+    </div>
+  </div>
+
+  <p class="x-sec">Workers tab &middot; counts</p>
+  <div class="x-grid">
+    <div class="x-col is-before">Before</div><div class="x-col is-after">After</div>
+    <div class="x-cell is-before">
+      <div class="strip">
+        <span class="c"><span class="pip xs pulse-blue"></span>1 working</span>
+        <span class="c warn"><span class="pip xs fill-warn"></span>1 needs you</span>
+      </div>
+    </div>
+    <div class="x-cell is-after">
+      <div class="strip">
+        <span class="c"><span class="pip xs pulse-blue"></span>1 working</span>
+        <span class="c purple"><span class="pip xs ring-purple"></span>1 on the assistant</span>
+      </div>
+    </div>
+  </div>
+
+  <p class="x-sec">Workers tab &middot; detail</p>
+  <div class="x-grid">
+    <div class="x-col is-before">Before</div><div class="x-col is-after">After</div>
+    <div class="x-cell is-before">
+      <div class="dhead">
+        <span class="handle">scout</span>
+        <span class="typelabel">Coding worker</span>
+        <span class="statelabel warn"><span class="pip sm fill-warn"></span>Needs you</span>
+        <span class="baton you"><span class="arw">&rarr;</span>you</span>
+      </div>
+      <div class="note">
+        <div class="seclabel accent">Waiting on you</div>
+        <div class="reason">pick a schema for the cache header</div>
+      </div>
+    </div>
+    <div class="x-cell is-after">
+      <div class="dhead">
+        <span class="handle">scout</span>
+        <span class="typelabel">Coding worker</span>
+        <span class="statelabel purple"><span class="pip sm ring-purple"></span>Waiting on the assistant</span>
+        <span class="baton assistant"><span class="arw">&rarr;</span>assistant</span>
+      </div>
+      <div class="note">
+        <div class="seclabel accent">Waiting on the assistant</div>
+        <div class="reason">pick a schema for the cache header</div>
+        <div class="sub">The assistant resolves this or relays it to you in its own turn.</div>
+      </div>
+    </div>
+  </div>
+
+  <p class="x-sec">Tasks tab &middot; row</p>
+  <div class="x-grid">
+    <div class="x-col is-before">Before</div><div class="x-col is-after">After</div>
+    <div class="x-cell is-before">
+      <div class="trow">
+        <span class="tmark"><span class="dot-warn"></span></span>
+        <span class="kind">Agent</span>
+        <span class="tlabel">Fix the flaky test</span>
+        <span class="tstate warn">Needs you</span>
+      </div>
+    </div>
+    <div class="x-cell is-after">
+      <div class="trow">
+        <span class="tmark"><span class="spin"></span></span>
+        <span class="kind">Agent</span>
+        <span class="tlabel">Fix the flaky test</span>
+        <span class="tstate subtle">Waiting on the assistant</span>
+      </div>
+    </div>
+  </div>
+
+  <p class="x-sec">Footer pill</p>
+  <div class="x-grid">
+    <div class="x-col is-before">Before</div><div class="x-col is-after">After</div>
+    <div class="x-cell is-before">
+      <div class="pillbed"><div class="pill warn">
+        <span class="pdot"></span><span class="plabel">1 needs you</span>
+      </div></div>
+    </div>
+    <div class="x-cell is-after">
+      <div class="pillbed"><div class="pill neutral">
+        <span class="pdot"></span><span class="plabel">1 subagent active</span>
+      </div></div>
+    </div>
+  </div>
+
+  <p class="x-sec">Terminal notification</p>
+  <div class="x-grid">
+    <div class="x-col is-before">Before</div><div class="x-col is-after">After</div>
+    <div class="x-cell is-before">
+      <div class="term">? @Curie (implementor) needs your input        &crarr; to open</div>
+    </div>
+    <div class="x-cell is-after">
+      <div class="term">? @Curie (implementor) is blocked        &crarr; to open</div>
+    </div>
+  </div>
+
+</div>
+<script>
+(function () {
+  var btns = document.querySelectorAll('.x-mode button');
+  for (var i = 0; i < btns.length; i++) {
+    btns[i].addEventListener('click', function (e) {
+      var v = e.currentTarget.getAttribute('data-v');
+      document.body.setAttribute('data-view', v);
+      for (var j = 0; j < btns.length; j++) {
+        btns[j].setAttribute('aria-pressed', String(btns[j] === e.currentTarget));
+      }
+    });
+  }
+})();
+</script>
+</body>
+</html>

@@ -39,9 +39,10 @@ import {
 
 const SID = 'app-session-1'
 
-test('the production sidecar runtime enables the classifier feature', () => {
+test('the production sidecar runtime enables the desktop engine features', () => {
   expect(SIDECAR_RUNTIME_ARGS).toEqual([
     '--feature=TRANSCRIPT_CLASSIFIER',
+    '--feature=REACTIVE_COMPACT',
     'run',
   ])
 })
