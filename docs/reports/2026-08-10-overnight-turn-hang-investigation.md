@@ -128,5 +128,7 @@ and the app otherwise responds (other sessions fine, window paints).
   hung shutdown; it is not. The windowless Electron process it leaves is not a
   leak.
 - The 2026-08-09 renderer OOM fixes (`6ee65a56`, `fb518346`, `2fc7440c`) did
-  not regress and were not involved: no renderer death occurred, and the new
-  `visible`/`heapUsedBytes` telemetry is what ruled the renderer out quickly.
+  not regress and were not involved: no renderer death occurred, and the
+  `visible` telemetry ruled out hidden-page throttling. The then-named
+  `heapUsedBytes` field (now `jsHeapUsedBytes`) measures only the V8 heap, not
+  process memory.

@@ -110,11 +110,12 @@ Three commits on `migration`:
 
 - `6ee65a56` - the two crash-handling defects below.
 - `fb518346` - health telemetry: the probe response now carries `visible` and
-  `heapUsedBytes` (validated fail-closed in main, 8 pinned keys);
-  `renderer.health.sample`/`recovered` log both, and `missed`/`unavailable` are
-  annotated with last-known visibility. This closes the hidden-vs-hung ambiguity
-  that manufactured the freeze narrative, and gives the next memory incident a
-  growth curve.
+  the then-named `heapUsedBytes` (now `jsHeapUsedBytes`, validated fail-closed
+  in main, 8 pinned keys); `renderer.health.sample`/`recovered` log both, and
+  `missed`/`unavailable` are annotated with last-known visibility. The
+  visibility field closes the hidden-vs-hung ambiguity that manufactured the
+  freeze narrative. The JavaScript-heap field was later shown not to provide a
+  process memory growth curve.
 - `2fc7440c` - fixes for all valid findings from a two-agent review of
   `6ee65a56`, plus removal of the never-emitted `renderer.navigation.completed`
   vocabulary entry. The review caught one HIGH bug in the recovery mechanism as

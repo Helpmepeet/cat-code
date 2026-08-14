@@ -157,7 +157,7 @@ itself flagged as inferred in that report.
 
 | Probe | Reality |
 |---|---|
-| `heapUsedBytes` | `performance.memory.usedJSHeapSize` (`app/preload/preload.ts:148`) — V8 JS heap ONLY. Reported 102-115 MB while the renderer process held **6.7 GB** (peak 6.9 GB). The 2026-08-09 report added this field "to give the next memory incident a growth curve". It did not. |
+| `jsHeapUsedBytes` (formerly `heapUsedBytes`) | `performance.memory.usedJSHeapSize` (`app/preload/preload.ts:148`) — V8 JS heap ONLY. Reported 102-115 MB while the renderer process held **6.7 GB** (peak 6.9 GB). The 2026-08-09 report added the field "to give the next memory incident a growth curve". It did not. |
 | `eventLoopLagMs` | A cached value written by a nested `setTimeout(0)` off a 5 s interval (`app/preload/preload.ts:88`) and read verbatim at probe time, floored around 4 ms. "4.5 ms, healthy" proves timers fire, nothing more. |
 | Process `sample` | Carries `Physical footprint`, the number that mattered. Check the sample's own `Date/Time` header: the samples taken in this incident are stamped 07:38:26.545Z, three minutes *before* the earliest surviving trace record and inside an engine-idle gap, so they do not characterise the freeze window. |
 
@@ -203,7 +203,8 @@ Symptom: a session shows working, no new rows, and the app otherwise responds.
    `renderer.state.queued` keeps counting up while `renderer.state.applied`
    stays flat. This single comparison routes the whole investigation, and
    getting it wrong costs a pass.
-3. **Sample the renderer and read `Physical footprint`**, not `heapUsedBytes`.
+3. **Sample the renderer and read `Physical footprint`**, not
+   `jsHeapUsedBytes` (formerly `heapUsedBytes`).
    Check the sample's `Date/Time` header against the window you are reasoning
    about. Sampling is read-only; do not pattern-kill anything (CLAUDE.md §4).
 4. **Copy the session's delivery-trace files immediately.** Retention is six

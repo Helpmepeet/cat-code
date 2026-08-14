@@ -1,6 +1,7 @@
 # OBSERVABILITY-MINIMUM — making absence of a record mean something
 
-> **STATUS: PROPOSED 2026-08-10, NOT operator-ruled.** Written from two
+> **STATUS: OPERATOR-RULED 2026-08-15.** Adopted after the 2026-08-14 renderer
+> freeze and crash investigation. Written from two
 > consecutive incidents whose consumers filed the same complaint in different
 > words: `docs/reports/2026-08-09-renderer-sigtrap-root-cause.md` (via
 > `docs/reports/2026-08-10-desktop-logging-incident-feedback.md`) and
@@ -110,10 +111,17 @@ So the rule is deliberately narrow:
   last, samples shed first) are what keep this rule affordable. A start marker
   is worthless if it is the first thing dropped under load.
 
-## 6. Status and what is not decided
+## 6. Decision and what is not decided
 
-Proposed, not ruled. The items implementing it are tracked as their own
-cross-cutting rows in `docs/migration/STATUS.md` rather than by this document.
+The operator adopts the rule in §2 and the constraints in §§3-5. Any operation
+that can block indefinitely must log its start or have a watchdog that logs its
+failure to finish. A diagnostic watchdog must not abort the operation unless
+that abort has a separately justified liveness or recovery purpose. The
+implementation remains bounded, closed-vocabulary, payload-free, and subject to
+the existing shedding priorities and private-diagnostics contract.
+
+The items implementing this decision are tracked as their own cross-cutting
+rows in `docs/migration/STATUS.md` rather than by this document.
 
 Explicitly left open:
 
