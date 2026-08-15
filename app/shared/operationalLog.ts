@@ -127,6 +127,11 @@ const OPERATIONAL_EVENT_FIELD_KEYS: Partial<Record<OperationalEvent, readonly st
   'renderer.recovery.succeeded': ['pid'],
   'renderer.recovery.exhausted': ['count', 'reason'],
   'renderer.responsive': ['durationMs'],
+  // Three narrowly-scoped numbers that are routinely read as one broad verdict.
+  // `eventLoopLagMs` is timer-scheduling latency: it cannot show that anything
+  // rendered, and it read 4.5 ms throughout the 2026-08-14 freeze. `rendersCommitted`
+  // is the render-liveness field. `jsHeapUsedBytes` is the V8 heap only, which was
+  // 182 MB of a 3.9 GB renderer; `rendererWorkingSetKiB` is the process figure.
   'renderer.health.sample': ['sessions', 'eventLoopLagMs', 'visible', 'jsHeapUsedBytes', 'rendererWorkingSetKiB', 'rendersCommitted'],
   'renderer.health.missed': ['missed', 'elapsedMs', 'visible'],
   'renderer.health.unavailable': ['missed', 'elapsedMs', 'visible'],
@@ -153,7 +158,10 @@ const OPERATIONAL_EVENT_FIELD_KEYS: Partial<Record<OperationalEvent, readonly st
   // already been running when it went silent.
   'session.turn.stalled': ['phase', 'elapsedMs'],
   'session.restore.completed': ['messageCount'],
-  diagnostic: ['source', 'category', 'queuedBytes', 'reason'],
+  // `count` is how many of a thing the mechanism in `reason` affected. It is a
+  // number, so it can carry no payload, and a drop reported without its
+  // magnitude reads the same whether one frame or a whole restore was lost.
+  diagnostic: ['source', 'category', 'queuedBytes', 'reason', 'count'],
   'log.coverage.incomplete': ['source', 'reason', 'expected'],
   'log.suppressed': ['count', 'reason', 'category'],
 }

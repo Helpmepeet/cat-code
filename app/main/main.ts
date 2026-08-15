@@ -1825,12 +1825,19 @@ function registerIpcHandlers(): void {
     rendererDocumentId = payload.documentId
     rendererSubscriptionEpoch++
     // Stamp only what `deliver` will actually hand to `webContents.send`. The
-    // gate has already consumed its buffer by this point, so a replay that
-    // cannot be delivered is a real loss and gets its own record rather than a
-    // silent absence (D1).
+    // gate's one-shot replay latch is spent for this document by the call below
+    // (the buffer itself survives, and `onNavigationStart` re-arms it), so a
+    // replay this load cannot deliver gets its own record rather than a silent
+    // absence (D1). `count` is the magnitude that distinguishes a lost frame
+    // from a lost restore; reading the record without it was the 2026-08-14
+    // mistake in miniature.
     const pending = attachmentGate.onRendererReady()
     if (pending.length > 0 && !deliverableContents()) {
-      logOperational('diagnostic', 'warn', { source: 'attachmentReplay', reason: 'renderer_unavailable' })
+      logOperational('diagnostic', 'warn', {
+        source: 'attachmentReplay',
+        reason: 'renderer_unavailable',
+        count: pending.length,
+      })
     } else {
       deliver(pending.map(frame => traceFrame(frame, 'attachment.replayed')))
     }

@@ -468,11 +468,14 @@ test('a rollup outlives the restarts that follow it, not just the frames', () =>
   // file cap of 4 that evicted the oldest launch on the fifth start, defeating
   // the 72h age cap the byte budget was sized for: the 2026-08-14 freeze onset
   // was gone the next day with the lane at 2% of its 4 MB budget.
-  const launches = 9
+  // Zero-padded: `laneRecords` sorts filenames lexicographically, so raising
+  // this past 9 with bare numbers would fail on ordering rather than retention.
+  const launches = 12
+  const launchId = (index: number): string => `launch-${String(index).padStart(3, '0')}`
   for (let launch = 1; launch <= launches; launch++) {
     const clock = { ms: 0 }
     const sink = createDeliveryTraceSink({
-      configDir: root, launchId: `launch-${launch}`, sweepIntervalMs: 0, monotonicNow: () => clock.ms,
+      configDir: root, launchId: launchId(launch), sweepIntervalMs: 0, monotonicNow: () => clock.ms,
     })
     traceThroughMain(sink, launch, ASSISTANT_FRAME)
     clock.ms = 60_000
@@ -481,7 +484,7 @@ test('a rollup outlives the restarts that follow it, not just the frames', () =>
 
   const rollups = laneRecords(root, 'delivery-rollup-')
   expect(rollups.map(record => record.launchId)).toEqual(
-    Array.from({ length: launches }, (_, index) => `launch-${index + 1}`),
+    Array.from({ length: launches }, (_, index) => launchId(index + 1)),
   )
 })
 

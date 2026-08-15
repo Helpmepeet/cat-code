@@ -61,6 +61,31 @@ test('a dropped outbound frame carries its mechanism and kind, and nothing else'
   )).toThrow('unsafe field category')
 })
 
+test('a diagnostic drop carries its magnitude, and still no payload slot', () => {
+  const dropped = createOperationalRecord(
+    {
+      level: 'warn',
+      event: 'diagnostic',
+      process: 'main',
+      fields: { source: 'attachmentReplay', reason: 'renderer_unavailable', count: 1_883 },
+    },
+    { launchId: 'launch', processInstanceId: 'process' },
+  )
+  // One lost frame and a whole lost restore read identically without this.
+  expect(dropped.fields).toEqual({ source: 'attachmentReplay', reason: 'renderer_unavailable', count: 1_883 })
+  expect(parseOperationalRecord(dropped)).not.toBeNull()
+  // Widening the row to a number must not have widened it to free text.
+  expect(() => createOperationalRecord(
+    {
+      level: 'warn',
+      event: 'diagnostic',
+      process: 'main',
+      fields: { source: 'attachmentReplay', samples: 'the frames that were dropped' },
+    },
+    { launchId: 'launch', processInstanceId: 'process' },
+  )).toThrow('unsafe field samples')
+})
+
 test('the macOS park has its own event so it cannot read as a hung shutdown', () => {
   const parked = createOperationalRecord(
     { level: 'info', event: 'app.parked.windowless', process: 'main' },

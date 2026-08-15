@@ -37,8 +37,15 @@ export const MAX_DELIVERY_TRACE_AGE_MS = 72 * 60 * 60 * 1000
  * before age or bytes are consulted. At the original 4 that made the age cap
  * unreachable: this machine held four rollup files totalling 79 KB against the
  * 4 MB budget, and the 2026-08-14 freeze onset had already been evicted by
- * ordinary restarts the next day. Bytes and age are the intended governors; this
- * only bounds directory entries.
+ * ordinary restarts the next day.
+ *
+ * 128 buys margin, not a guarantee. The lane is still keyed on launch rather
+ * than time, so more than ~43 rollup-writing launches a day would evict inside
+ * the 72h window again; at a realistic dev rate it holds about six days. A
+ * launch that never observes a frame writes no rollup and costs no slot. If
+ * that margin is ever spent, key the filename on the UTC day instead — every
+ * record already carries `launchId`, so per-launch FILES buy nothing the
+ * records do not already answer.
  */
 export const MAX_DELIVERY_ROLLUP_FILE_BYTES = 1024 * 1024
 export const MAX_DELIVERY_ROLLUP_TOTAL_BYTES = 4 * 1024 * 1024
