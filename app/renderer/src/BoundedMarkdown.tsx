@@ -181,7 +181,12 @@ export function BoundedMarkdown({
                   if (!clipboard) return
                   void clipboard
                     .writeText(source)
-                    .then(() => setCopiedAtomicLeaf(unit.key))
+                    .then(() => {
+                      setCopiedAtomicLeaf(unit.key)
+                      // Matches `CodeBlock`'s acknowledgement window; without a
+                      // reset the label reads Copied for the rest of the session.
+                      window.setTimeout(() => setCopiedAtomicLeaf(null), 1200)
+                    })
                     .catch(() => {})
                 }}
               >

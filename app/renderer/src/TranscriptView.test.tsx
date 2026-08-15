@@ -3452,7 +3452,8 @@ test('CC-59: a folded reasoning run stays folded through a remount', () => {
     ),
   ).toContain('aria-expanded="true"')
 
-  store.set('reasoning-run:s:m:0:thinking:0', false)
+  // The RUN's id, not the first visible step's. See the streaming case below.
+  store.set('reasoning-run:s:m:0:thinking', false)
 
   const folded = renderToStaticMarkup(
     <ToolCardExpansionContext.Provider value={store}>
@@ -3462,4 +3463,37 @@ test('CC-59: a folded reasoning run stays folded through a remount', () => {
   expect(folded).toContain('aria-expanded="false"')
   expect(folded).toContain('2 steps') // the head still counts the whole run
   expect(folded).not.toContain('Checking the projector')
+})
+
+/**
+ * Review finding: the fold key was minted from the first VISIBLE step. A first
+ * member still streaming has no visible step, so the key pointed at the second
+ * member and flipped the moment the first member's content arrived, springing
+ * the run the user had folded back open.
+ */
+test('CC-59: a folded reasoning run stays folded when its first member fills in', () => {
+  const store = createToolCardExpansionStore()
+  // Three members so the run is still collapsible while the first is empty.
+  const streaming = [
+    thinkingRow('s:m:0:thinking', ''),
+    thinkingRow('s:m:1:thinking', 'Checking the projector'),
+    thinkingRow('s:m:2:thinking', 'Reading the seam'),
+  ]
+  const settled = [
+    thinkingRow('s:m:0:thinking', 'Planning the change'),
+    thinkingRow('s:m:1:thinking', 'Checking the projector'),
+    thinkingRow('s:m:2:thinking', 'Reading the seam'),
+  ]
+  const render = (rows: typeof streaming) =>
+    renderToStaticMarkup(
+      <ToolCardExpansionContext.Provider value={store}>
+        <TranscriptRowsView rows={rows} />
+      </ToolCardExpansionContext.Provider>,
+    )
+
+  render(streaming)
+  store.set('reasoning-run:s:m:0:thinking', false)
+
+  expect(render(streaming)).toContain('aria-expanded="false"')
+  expect(render(settled)).toContain('aria-expanded="false"')
 })

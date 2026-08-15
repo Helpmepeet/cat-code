@@ -506,7 +506,7 @@ function DisplayItemView({ item }: { item: TranscriptLayoutItem }) {
     case 'agent-group':
       return <DelegateGroup members={item.members} />
     case 'reasoning-run':
-      return <ReasoningRun steps={item.steps} />
+      return <ReasoningRun runId={item.id} steps={item.steps} />
     case 'tool-run':
       return <ToolRunCard family={item.family} members={item.members} />
     case 'single':
@@ -760,7 +760,7 @@ const TranscriptRowView = memo(function TranscriptRowView({
       ) : reasoningMode === 'blocks' ? (
         <ThinkingBlock content={row.content} sourceId={row.id} />
       ) : (
-        <ReasoningRun steps={reasoningStepsForRow(row)} />
+        <ReasoningRun runId={`reasoning-run:${row.id}`} steps={reasoningStepsForRow(row)} />
       )
 
     case 'redacted-thinking':
@@ -3427,7 +3427,7 @@ function isVisibleStep(step: ReasoningStepModel): step is VisibleReasoningStep {
  * the head + rail + steps. The whole run collapses from its head; individual
  * steps never fold away.
  */
-function ReasoningRun({ steps }: { steps: ReasoningStepModel[] }) {
+function ReasoningRun({ runId, steps }: { runId: string; steps: ReasoningStepModel[] }) {
   const listId = useId()
   const visible = steps.filter(isVisibleStep)
   // Kept OUTSIDE this component, for the same reason a tool card's expansion is
@@ -3436,11 +3436,11 @@ function ReasoningRun({ steps }: { steps: ReasoningStepModel[] }) {
   // after the user folded it away. The step key is minted from the run's first
   // member row id, so it survives the row being re-projected. Namespaced because
   // the store is keyed by string and a run is not a tool call, exactly as
-  // `ToolRunCard` already stores `run:<id>`.
-  const [expanded, setExpanded] = useToolCardExpanded(
-    visible.length === 0 ? null : `reasoning-run:${visible[0].key}`,
-    true,
-  )
+  // `ToolRunCard` already stores `run:<id>`. It is the RUN's id, not the first
+  // visible step's: a first member that is still streaming has no visible step,
+  // so a visibility-derived key flips when its content arrives and the fold the
+  // user chose is lost.
+  const [expanded, setExpanded] = useToolCardExpanded(runId, true)
   const collapsed = !expanded
 
   if (visible.length === 0) return null
