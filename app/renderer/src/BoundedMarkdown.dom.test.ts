@@ -88,6 +88,44 @@ function paragraphs(count: number): string {
   return Array.from({ length: count }, (_unused, index) => `Paragraph ${index}.`).join('\n\n')
 }
 
+/**
+ * happy-dom reports 0 for every box, so both halves of a height correction are
+ * injected: the scroller's own geometry, and the body root's rectangle. The
+ * `box` object stays mutable, which is how a later commit can render a taller
+ * body than the one before it.
+ */
+function injectRect(element: HTMLElement, box: { top: number; height: number }): void {
+  Object.defineProperty(element, 'getBoundingClientRect', {
+    configurable: true,
+    value: () => ({
+      top: box.top,
+      bottom: box.top + box.height,
+      left: 0,
+      right: 0,
+      width: 0,
+      height: box.height,
+    }),
+  })
+}
+
+function injectScrollGeometry(
+  element: HTMLElement,
+  geometry: { scrollTop: number; clientHeight: number; scrollHeight: number },
+): void {
+  let scrollTop = geometry.scrollTop
+  Object.defineProperties(element, {
+    scrollTop: {
+      configurable: true,
+      get: () => scrollTop,
+      set: (next: number) => {
+        scrollTop = next
+      },
+    },
+    clientHeight: { configurable: true, get: () => geometry.clientHeight },
+    scrollHeight: { configurable: true, get: () => geometry.scrollHeight },
+  })
+}
+
 describe('BoundedMarkdown pane registration', () => {
   test('a streamed body registers once and never re-attaches the pane scroller', async () => {
     const tree = await harness.mount(createElement(Pane, { source: paragraphs(20) }))
@@ -129,6 +167,53 @@ describe('BoundedMarkdown pane registration', () => {
     expect(small).toBeGreaterThan(0)
     expect(large).toBe(small)
     expect(large).toBeLessThan(400)
+  })
+
+  test('a body that grows above the anchor corrects the pane scroll by its own delta', async () => {
+    const tree = await harness.mount(createElement(Pane, { source: paragraphs(20) }))
+    const pane = tree.container.querySelector<HTMLElement>('[data-testid="pane"]')
+    const root = pane!.firstElementChild as HTMLElement
+
+    injectScrollGeometry(pane!, { scrollTop: 1_000, clientHeight: 800, scrollHeight: 40_000 })
+    injectRect(pane!, { top: 0, height: 800 })
+    // Placed far above the scroller's top edge: this body has been read past.
+    const rootBox = { top: -5_000, height: 900 }
+    injectRect(root, rootBox)
+
+    // One settling commit, so the body's first real box is the baseline rather
+    // than a correction. Only what happens after it is a replaced estimate.
+    await tree.render(createElement(Pane, { source: paragraphs(21) }))
+    await harness.nextFrame()
+    pane!.scrollTop = 1_000
+
+    rootBox.height = 950
+    await tree.render(createElement(Pane, { source: paragraphs(22) }))
+    await harness.nextFrame()
+
+    expect(pane!.scrollTop).toBe(1_050)
+    expect(coordinator.paneSubscriberCount(pane!)).toBe(1)
+  })
+
+  test('a body that grows below the anchor does not move the pane', async () => {
+    const tree = await harness.mount(createElement(Pane, { source: paragraphs(20) }))
+    const pane = tree.container.querySelector<HTMLElement>('[data-testid="pane"]')
+    const root = pane!.firstElementChild as HTMLElement
+
+    injectScrollGeometry(pane!, { scrollTop: 1_000, clientHeight: 800, scrollHeight: 40_000 })
+    injectRect(pane!, { top: 0, height: 800 })
+    // Below the scroller's top edge: this body has not been reached yet.
+    const rootBox = { top: 400, height: 900 }
+    injectRect(root, rootBox)
+
+    await tree.render(createElement(Pane, { source: paragraphs(21) }))
+    await harness.nextFrame()
+    pane!.scrollTop = 1_000
+
+    rootBox.height = 950
+    await tree.render(createElement(Pane, { source: paragraphs(22) }))
+    await harness.nextFrame()
+
+    expect(pane!.scrollTop).toBe(1_000)
   })
 
   test('a long table keeps its header row in the mounted window', async () => {

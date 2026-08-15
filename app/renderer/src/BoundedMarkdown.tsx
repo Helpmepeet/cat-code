@@ -12,7 +12,10 @@ import {
   type MarkdownLeafWindow,
   type MountedMarkdownLeaf,
 } from './markdownRenderPlan.js'
-import { observePaneScroll } from './markdownScrollCoordinator.js'
+import {
+  observePaneScroll,
+  reportPaneHeightCorrection,
+} from './markdownScrollCoordinator.js'
 
 const INITIAL_VIEWPORT_HEIGHT = 800
 
@@ -67,6 +70,8 @@ export function BoundedMarkdown({
   const rootRef = useRef<HTMLDivElement | null>(null)
   const measuredLeavesRef = useRef<readonly MarkdownRenderLeaf[]>(measuredLeaves)
   const scheduleRef = useRef<() => void>(() => {})
+  const scrollerRef = useRef<HTMLElement | null>(null)
+  const geometryRef = useRef<{ height: number; topSpacer: number } | null>(null)
 
   const mounted = useMemo(
     () => mergeMountedMarkdownLeaves(measuredLeaves, leafWindow.start, leafWindow.end),
@@ -108,17 +113,44 @@ export function BoundedMarkdown({
       if (frame === 0) frame = window.requestAnimationFrame(update)
     }
     scheduleRef.current = schedule
+    scrollerRef.current = scroller
     const rootObserver = new ResizeObserver(schedule)
     rootObserver.observe(root)
     const releasePane = observePaneScroll(scroller, schedule)
     schedule()
     return () => {
       scheduleRef.current = () => {}
+      scrollerRef.current = null
       if (frame !== 0) window.cancelAnimationFrame(frame)
       rootObserver.disconnect()
       releasePane()
     }
   }, [])
+
+  // Reports this body's own height change to the pane, on EVERY commit and with
+  // no dependency list on purpose. A measured height replaces an estimate one or
+  // more frames after the commit that used the estimate, so no value in this
+  // component's render inputs marks the commit where the document actually grew
+  // or shrank; only the rendered box does. The pane decides what to do with it.
+  useEffect(() => {
+    const root = rootRef.current
+    const scroller = scrollerRef.current
+    if (root === null || scroller === null) return
+    const rect = root.getBoundingClientRect()
+    const previous = geometryRef.current
+    geometryRef.current = { height: rect.height, topSpacer: leafWindow.topSpacerHeight }
+    // The first commit is where this body's box came into existence, which is
+    // layout rather than a correction of anything.
+    if (previous === null) return
+    const delta = rect.height - previous.height
+    if (delta === 0) return
+    // The change cannot be above the shorter of the two top spacers: that band
+    // is blank in both layouts, so everything before it kept its position.
+    const unchangedPrefix = Math.min(previous.topSpacer, leafWindow.topSpacerHeight)
+    const offset =
+      rect.top - scroller.getBoundingClientRect().top + scroller.scrollTop + unchangedPrefix
+    reportPaneHeightCorrection(scroller, { offset, delta })
+  })
 
   // Keyed on the mounted leaf identities rather than the numeric window, so a
   // replacement node inside an unchanged window is observed immediately.

@@ -18,7 +18,12 @@ import { createElement, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { _forTest as domHarness, createDomTestHarness } from './domTestHarness.js'
 import type { DomTestHarness } from './domTestHarness.js'
-import { _forTest as coordinator, observePaneScroll } from './markdownScrollCoordinator.js'
+import {
+  _forTest as coordinator,
+  observePaneBottomLock,
+  observePaneScroll,
+  reportPaneHeightCorrection,
+} from './markdownScrollCoordinator.js'
 
 const SCROLLER_TEST_ID = 'pane-scroller'
 
@@ -115,6 +120,29 @@ function watchResizeObservers(): { targets: EventTarget[]; restore: () => void }
       globalThis.ResizeObserver = original
     },
   }
+}
+
+/**
+ * happy-dom reports 0 for every box, so the geometry the coordinator reads is
+ * injected. `scrollTop` stays a real read/write property, which is what lets a
+ * test assert the position the coordinator actually wrote.
+ */
+function injectScrollGeometry(
+  element: HTMLElement,
+  geometry: { scrollTop: number; clientHeight: number; scrollHeight: number },
+): void {
+  let scrollTop = geometry.scrollTop
+  Object.defineProperties(element, {
+    scrollTop: {
+      configurable: true,
+      get: () => scrollTop,
+      set: (next: number) => {
+        scrollTop = next
+      },
+    },
+    clientHeight: { configurable: true, get: () => geometry.clientHeight },
+    scrollHeight: { configurable: true, get: () => geometry.scrollHeight },
+  })
 }
 
 let harness: DomTestHarness
@@ -215,6 +243,93 @@ describe('observePaneScroll in a real DOM', () => {
     expect(pane.listeners.counts.added).toBe(2)
     expect(pane.listeners.counts.removed).toBe(1)
     expect(pane.observers.targets).toEqual([pane.scroller, pane.scroller])
+  })
+
+  test('reported corrections become ONE scroll write on the real scroller', async () => {
+    const pane = await mountInstrumentedPane(() => {})
+    await pane.setBodyCount(3)
+    injectScrollGeometry(pane.scroller, {
+      scrollTop: 5_000,
+      clientHeight: 800,
+      scrollHeight: 40_000,
+    })
+
+    reportPaneHeightCorrection(pane.scroller, { offset: 1_000, delta: 40 })
+    reportPaneHeightCorrection(pane.scroller, { offset: 3_040, delta: 60 })
+    reportPaneHeightCorrection(pane.scroller, { offset: 30_000, delta: 500 })
+    expect(pane.scroller.scrollTop).toBe(5_000)
+
+    await harness.nextFrame()
+
+    expect(pane.scroller.scrollTop).toBe(5_100)
+    // Correction did not cost the pane a second listener or observer.
+    expect(pane.listeners.counts.added).toBe(1)
+    expect(pane.observers.targets).toEqual([pane.scroller])
+  })
+
+  test('a correction below the visible anchor leaves the real scroller alone', async () => {
+    const pane = await mountInstrumentedPane(() => {})
+    await pane.setBodyCount(3)
+    injectScrollGeometry(pane.scroller, {
+      scrollTop: 5_000,
+      clientHeight: 800,
+      scrollHeight: 40_000,
+    })
+
+    reportPaneHeightCorrection(pane.scroller, { offset: 20_000, delta: 900 })
+    await harness.nextFrame()
+
+    expect(pane.scroller.scrollTop).toBe(5_000)
+  })
+
+  test('a registered bottom lock wins and pins the real scroller to the end', async () => {
+    const pane = await mountInstrumentedPane(() => {})
+    await pane.setBodyCount(1)
+    injectScrollGeometry(pane.scroller, {
+      scrollTop: 39_000,
+      clientHeight: 800,
+      scrollHeight: 40_500,
+    })
+    const releaseLock = observePaneBottomLock(pane.scroller, () => true)
+
+    reportPaneHeightCorrection(pane.scroller, { offset: 40_000, delta: 500 })
+    await harness.nextFrame()
+
+    expect(pane.scroller.scrollTop).toBe(39_700)
+    releaseLock()
+  })
+
+  test('a locked pane is not re-pinned by a scroll that corrected nothing', async () => {
+    const pane = await mountInstrumentedPane(() => {})
+    await pane.setBodyCount(1)
+    injectScrollGeometry(pane.scroller, {
+      scrollTop: 120,
+      clientHeight: 800,
+      scrollHeight: 40_000,
+    })
+    const releaseLock = observePaneBottomLock(pane.scroller, () => true)
+
+    pane.scroller.dispatchEvent(new Event('scroll'))
+    await harness.nextFrame()
+
+    expect(pane.scroller.scrollTop).toBe(120)
+    releaseLock()
+  })
+
+  test('the bottom-lock owner holds the pane open after the last body unmounts', async () => {
+    const pane = await mountInstrumentedPane(() => {})
+    const releaseLock = observePaneBottomLock(pane.scroller, () => false)
+    await pane.setBodyCount(4)
+
+    expect(pane.listeners.counts.added).toBe(1)
+
+    await pane.setBodyCount(0)
+    expect(coordinator.isPaneAttached(pane.scroller)).toBe(true)
+    expect(pane.listeners.counts.removed).toBe(0)
+
+    releaseLock()
+    expect(coordinator.isPaneAttached(pane.scroller)).toBe(false)
+    expect(pane.listeners.counts.removed).toBe(1)
   })
 
   // Last on purpose: `bun test app/` shares one process across all 215 files, so

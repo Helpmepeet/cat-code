@@ -101,6 +101,7 @@ import {
   selectStartupPreloadCandidates,
 } from './sessionPreload.js'
 import { TranscriptView, type RestorePhase } from './TranscriptView.js'
+import { observePaneBottomLock } from './markdownScrollCoordinator.js'
 import { SlashCommandPicker } from './SlashCommandPicker.js'
 import {
   MENTION_LISTBOX_ID,
@@ -4151,6 +4152,15 @@ export function SessionPane({
   // (the same gate the composer uses). `paused` = a pending permission request.
   const transcriptScrollRef = useRef<HTMLDivElement>(null)
   const [atBottom, setAtBottom] = useState(true)
+  // Mirrored into a ref because the pane coordinator asks for this answer from
+  // an animation frame, where React state is a render old. The scroll handler
+  // writes the ref during the event itself, so a reader who has just scrolled up
+  // is never pulled back by a correction landing in the frame that follows.
+  const atBottomRef = useRef(true)
+  const applyAtBottom = (next: boolean): void => {
+    atBottomRef.current = next
+    setAtBottom(next)
+  }
   const [stopError, setStopError] = useState<string | null>(null)
   const generating = !!activeSessionId && isTurnRunning(activeConnection)
   // CC-16 — the composer's three gates, kept apart: `engineInputEnabled` sends
@@ -4265,8 +4275,21 @@ export function SessionPane({
     const el = transcriptScrollRef.current
     if (!el) return
     el.scrollTop = el.scrollHeight
-    setAtBottom(true)
+    applyAtBottom(true)
   }, [activeSessionId])
+
+  // The pane's stick-to-bottom owner. A restored transcript binds with every
+  // off-window body still an estimate, and a streaming one commits with an
+  // estimate for the body being written, so the height worth following changes
+  // AFTER the commit that rendered it. The row count below cannot see that
+  // change; the bodies that cause it report it to the pane, and the pane re-pins
+  // from the same signal. Both paths are needed: rows that carry no measured
+  // body still only move the height at commit time.
+  useEffect(() => {
+    const el = transcriptScrollRef.current
+    if (!el) return
+    return observePaneBottomLock(el, () => atBottomRef.current)
+  }, [])
   // Derived from the RENDERED transcript, never from `activeLog`: the raw log is
   // capped per session, so once it fills, `messages.length` pins at the cap and
   // any message that does not also move `partialCount` yields an identical
@@ -4348,13 +4371,13 @@ export function SessionPane({
     const el = transcriptScrollRef.current
     if (!el) return
     const gap = el.scrollHeight - el.scrollTop - el.clientHeight
-    setAtBottom(gap < 120)
+    applyAtBottom(gap < 120)
   }
   const jumpToBottom = (): void => {
     const el = transcriptScrollRef.current
     if (!el) return
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
-    setAtBottom(true)
+    applyAtBottom(true)
   }
 
   // A large paste collapses to a pill (App holds the full text aside and inserts
