@@ -37,9 +37,11 @@
 
 import { useMemo, useState, type ReactNode } from 'react'
 import type {
+  ToolDiffProjection,
   ToolUseRow,
 } from './transcriptProjector.js'
 import { describeToolForInspector } from './toolInspectorModel.js'
+import { selectRawDiffLines } from './diffRowModel.js'
 import {
   describeOutputSearch,
   selectOutputLineChunk,
@@ -99,29 +101,34 @@ export function ToolInspector({
         {model.diff ? (
           <>
             <SectionLabel>Diff · {model.diff.filePath}</SectionLabel>
-            <div className="mb-4 overflow-hidden rounded-lg border border-shell-seam">
-              {model.diff.hunks.map((hunk, hunkIndex) => (
-                <div key={`${hunk.oldStart}:${hunk.newStart}:${hunkIndex}`}>
-                  {hunk.lines.map((line, lineIndex) => (
-                    <div
-                      key={lineIndex}
-                      className={
-                        'whitespace-pre px-3 font-mono text-[11.5px] leading-relaxed ' +
-                        diffLineClass(line)
-                      }
-                    >
-                      {line}
-                    </div>
-                  ))}
-                </div>
-              ))}
-            </div>
+            <DiffPanel diff={model.diff} />
           </>
         ) : null}
 
         {model.output ? <OutputPanel text={model.output} /> : null}
       </div>
     </div>
+  )
+}
+
+/**
+ * The drawer's own diff body: the raw patch lines, tinted by sign.
+ *
+ * Windowed for the same reason the card's diff is (CC-62): nothing upstream
+ * caps a patch, so a whole-file write reaches here as thousands of lines and
+ * this panel used to mount every one of them. The row list stays complete; only
+ * the mounted range is bounded, and the virtualizer bounds each row's
+ * characters too, which is what a minified line needs.
+ */
+function DiffPanel({ diff }: { diff: ToolDiffProjection }) {
+  const lines = useMemo(() => selectRawDiffLines(diff), [diff])
+  return (
+    <VirtualLineList
+      lines={lines}
+      activeIndex={null}
+      className="mb-4 max-h-96 overflow-auto rounded-lg border border-shell-seam whitespace-pre px-3 font-mono text-[11.5px] leading-relaxed"
+      renderLine={line => <div className={diffLineClass(line)}>{line}</div>}
+    />
   )
 }
 

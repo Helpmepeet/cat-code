@@ -2714,6 +2714,15 @@ function readRow(content: string, filePath: string): NestedTranscriptRow {
   })
 }
 
+/**
+ * The read gutter is a CELL of its row, not a column beside the source, since
+ * the rows were virtualized (CC-62). Matching on its own class is what keeps
+ * these assertions off a `1` that happens to be a syntax-colored literal.
+ */
+function readGutter(number: number): string {
+  return `text-text-subtle/60">${number}</span>`
+}
+
 test('a real read paints ONE gutter, not the engine numbers plus its own', () => {
   const html = render(
     readRow('1\timport os\n2\t\n3\tdef f():\n4\t    return 1', '/w/a.py'),
@@ -2724,16 +2733,16 @@ test('a real read paints ONE gutter, not the engine numbers plus its own', () =>
   expect(html).not.toContain('1\timport os')
   expect(html).toContain('>import</span> os')
   // …and each number appears once, in the gutter.
-  expect(occurrences(html, '>1</div>')).toBe(1)
-  expect(occurrences(html, '>4</div>')).toBe(1)
+  expect(occurrences(html, readGutter(1))).toBe(1)
+  expect(occurrences(html, readGutter(4))).toBe(1)
 })
 
 test('an offset read is numbered with the file lines it really is', () => {
   const html = render(readRow('812\tconst x = 1\n813\tconst y = 2', '/w/a.ts'))
 
-  expect(html).toContain('>812</div>')
-  expect(html).toContain('>813</div>')
-  expect(html).not.toContain('>1</div>') // the old gutter restarted at 1 here
+  expect(html).toContain(readGutter(812))
+  expect(html).toContain(readGutter(813))
+  expect(html).not.toContain(readGutter(1)) // the old gutter restarted at 1 here
 })
 
 test('read source is syntax-colored by the theme the transcript already uses', () => {
@@ -2750,7 +2759,7 @@ test('a file we cannot name a language for stays uncolored rather than guessed',
 
   expect(html).not.toContain('hljs')
   expect(html).toContain('some notes')
-  expect(html).toContain('>1</div>') // still numbered from the payload
+  expect(html).toContain(readGutter(1)) // still numbered from the payload
 })
 
 test('a read result that is not a numbered file keeps the plain rendering', () => {
@@ -2758,7 +2767,7 @@ test('a read result that is not a numbered file keeps the plain rendering', () =
 
   expect(html).not.toContain('hljs')
   expect(html).toContain('EISDIR: illegal operation')
-  expect(html).toContain('>1</div>') // counted, since the payload carried none
+  expect(html).toContain(readGutter(1)) // counted, since the payload carried none
 })
 
 test('a truncated real read numbers its tail with the file lines, not 1..6', () => {
@@ -2769,9 +2778,9 @@ test('a truncated real read numbers its tail with the file lines, not 1..6', () 
   const html = render(readRow(content, '/w/big.ts'))
 
   expect(html).toContain('864 lines hidden')
-  expect(html).toContain('>895</div>')
-  expect(html).toContain('>900</div>')
-  expect(html).not.toContain('>500</div>') // the gap really is hidden
+  expect(html).toContain(readGutter(895))
+  expect(html).toContain(readGutter(900))
+  expect(html).not.toContain(readGutter(500)) // the gap really is hidden
 })
 
 /* --------------------------------------------------------------------------- *
@@ -3245,7 +3254,7 @@ test('inline output reveal depth uses the same tool_use-keyed store across regro
   expect(store.getInlineOutputHead(toolUseId)).toBe(230)
   expect(
     readFileSync(new URL('./TranscriptView.tsx', import.meta.url), 'utf8'),
-  ).toContain('useInlineOutputWindow(source.lines, toolUseId)')
+  ).toContain('useInlineOutputWindow(\n    source.lines,\n    toolUseId,\n  )')
 })
 
 test('a run head keeps its own expansion as the run grows', () => {

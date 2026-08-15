@@ -40,7 +40,6 @@ import {
 } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { diffWordsWithSpace } from 'diff'
 import type { AccountsSnapshot, SessionId } from '../../shared/protocol.js'
 import { WelcomeScreen } from './WelcomeScreen.js'
 import { BoundedMarkdown } from './BoundedMarkdown.js'
@@ -109,21 +108,29 @@ import { ToolInspector } from './ToolInspector.js'
 import { ActionFileIcon } from './SessionActionIcons.js'
 import { parseToolAck, type ToolAck } from './toolAck.js'
 import {
-  AdditionSourceLines,
-  GrepSourceLines,
-  ReadSourceLines,
+  AdditionSourceRow,
+  GrepSourceRow,
+  ReadSourceRow,
 } from './ReadSourceLines.js'
 import {
   parseReadSource,
   readLineNumbers,
   readSourceLanguage,
-  sourceFence,
 } from './readSource.js'
+import { highlightedWordSegments } from './diffHighlight.js'
+import { selectHighlightedSourceRows } from './sourceHighlight.js'
 import {
-  highlightedLines,
-  highlightedWordSegments,
-  type HighlightedLine,
-} from './diffHighlight.js'
+  selectDiffRows,
+  selectRowWordSegments,
+  type DiffLineKind,
+  type DiffRow,
+  type WordDiffSide,
+} from './diffRowModel.js'
+import {
+  selectGrepHighlightedRows,
+  selectGrepRows,
+  type GrepRow,
+} from './grepRowModel.js'
 import { basename, commonDirPrefix, dirname } from './pathUtils.js'
 import {
   createToolCardExpansionStore,
@@ -150,7 +157,6 @@ import {
   findNestedToolUseRow,
   logLineClass,
   resolveToolCardExpanded,
-  groupGrepLines,
   selectPeekLines,
   type QuotePosition,
 } from './transcriptViewModel.js'
@@ -2518,11 +2524,11 @@ function BashBody({
   onOpenFull: (() => void) | null
   toolUseId: string
 }) {
-  const lines = content.split('\n')
-  const { window, revealMore } = useInlineOutputWindow(lines, toolUseId)
-  const visibleLines = window.truncated
-    ? [...window.head, ...window.tail]
-    : window.head
+  const lines = useMemo(() => content.split('\n'), [content])
+  const { window, visibleLines, revealMore } = useInlineOutputWindow(
+    lines,
+    toolUseId,
+  )
   return (
     <VirtualLineList
       lines={visibleLines}
@@ -2576,6 +2582,13 @@ const LOG_GUTTER_CLASS =
 const INLINE_OUTPUT_SCROLLER = 'max-h-[340px] overflow-auto'
 
 /**
+ * The same box for the bodies whose rows are source: type, size and leading are
+ * set here and inherited by every row, so a row carries only its own gutter and
+ * colour. `whitespace-pre` here is also what a wide line scrolls against.
+ */
+const SOURCE_OUTPUT_SCROLLER = `${INLINE_OUTPUT_SCROLLER} whitespace-pre font-mono text-[11.5px] leading-relaxed`
+
+/**
  * `useState` half of the head+tail window. The reveal is monotonic, matching the
  * prototype: `headShown` only grows, and the band removes itself once the gap
  * closes, so there is no collapse control to un-reveal.
@@ -2585,8 +2598,20 @@ function useInlineOutputWindow(lines: string[], toolUseId: string) {
   const [headShown, setHeadShown] = useState(INLINE_HEAD_LINES)
   const rememberedHead = store?.getInlineOutputHead(toolUseId)
   const visibleHead = rememberedHead ?? headShown
+  // Memoized on the source and the reveal extent, both of which change rarely.
+  // The coloured bodies parse `visibleLines` once per identity change, so a
+  // fresh array per render would re-tokenize the whole slice on every frame.
+  const window = useMemo(
+    () => selectInlineOutputWindow(lines, visibleHead),
+    [lines, visibleHead],
+  )
+  const visibleLines = useMemo(
+    () => (window.truncated ? [...window.head, ...window.tail] : window.head),
+    [window],
+  )
   return {
-    window: selectInlineOutputWindow(lines, visibleHead),
+    window,
+    visibleLines,
     revealMore: () => {
       const next = revealMoreLines(visibleHead, lines.length)
       store?.setInlineOutputHead(toolUseId, next)
@@ -2744,38 +2769,56 @@ function NumberedBody({
   onOpenFull: (() => void) | null
   toolUseId: string
 }) {
-  const source = parseReadSource(content)
+  const source = useMemo(() => parseReadSource(content), [content])
   // No numbers means we could not recognise the payload as a file read, so we
   // cannot claim to know what language it is in either.
   const lang = source.numbers === null ? null : readSourceLanguage(filePath)
-  const { window, revealMore } = useInlineOutputWindow(source.lines, toolUseId)
+  const { window, visibleLines, revealMore } = useInlineOutputWindow(
+    source.lines,
+    toolUseId,
+  )
+  const coloured = useMemo(
+    () => selectHighlightedSourceRows(visibleLines, lang),
+    [visibleLines, lang],
+  )
+  // The file's own numbers for both halves of the window, as one array indexed
+  // by painted position, so a row states its real line whatever it took to
+  // reach it.
+  const numbers = useMemo(
+    () => [
+      ...readLineNumbers(source, 0, window.head.length),
+      ...(window.truncated
+        ? readLineNumbers(source, window.tailStartLine - 1, window.tail.length)
+        : []),
+    ],
+    [source, window],
+  )
   return (
-    <div className={INLINE_OUTPUT_SCROLLER}>
-      <ReadSourceLines
-        lines={window.head}
-        numbers={readLineNumbers(source, 0, window.head.length)}
-        lang={lang}
-      />
-      {window.truncated ? (
-        <>
-          <InlineRevealBand
-            hidden={window.hidden}
-            revealStep={window.revealStep}
-            onReveal={revealMore}
-            onOpenFull={onOpenFull}
-          />
-          <ReadSourceLines
-            lines={window.tail}
-            numbers={readLineNumbers(
-              source,
-              window.tailStartLine - 1,
-              window.tail.length,
-            )}
-            lang={lang}
-          />
-        </>
-      ) : null}
-    </div>
+    <VirtualLineList
+      lines={visibleLines}
+      activeIndex={null}
+      className={SOURCE_OUTPUT_SCROLLER}
+      renderBeforeIndex={
+        window.truncated
+          ? index =>
+              index === window.head.length ? (
+                <InlineRevealBand
+                  hidden={window.hidden}
+                  revealStep={window.revealStep}
+                  onReveal={revealMore}
+                  onOpenFull={onOpenFull}
+                />
+              ) : null
+          : undefined
+      }
+      renderLine={(line, index) => (
+        <ReadSourceRow
+          number={numbers[index] ?? index + 1}
+          body={coloured?.[index] ?? line}
+          coloured={lang !== null}
+        />
+      )}
+    />
   )
 }
 
@@ -2790,24 +2833,38 @@ function AdditionsBody({
   onOpenFull: (() => void) | null
   toolUseId: string
 }) {
-  const lines = content.split('\n')
+  const lines = useMemo(() => content.split('\n'), [content])
   const lang = readSourceLanguage(filePath)
-  const { window, revealMore } = useInlineOutputWindow(lines, toolUseId)
+  const { window, visibleLines, revealMore } = useInlineOutputWindow(
+    lines,
+    toolUseId,
+  )
+  const coloured = useMemo(
+    () => selectHighlightedSourceRows(visibleLines, lang),
+    [visibleLines, lang],
+  )
   return (
-    <div className={INLINE_OUTPUT_SCROLLER}>
-      <AdditionSourceLines lines={window.head} lang={lang} />
-      {window.truncated ? (
-        <>
-          <InlineRevealBand
-            hidden={window.hidden}
-            revealStep={window.revealStep}
-            onReveal={revealMore}
-            onOpenFull={onOpenFull}
-          />
-          <AdditionSourceLines lines={window.tail} lang={lang} />
-        </>
-      ) : null}
-    </div>
+    <VirtualLineList
+      lines={visibleLines}
+      activeIndex={null}
+      className={SOURCE_OUTPUT_SCROLLER}
+      renderBeforeIndex={
+        window.truncated
+          ? index =>
+              index === window.head.length ? (
+                <InlineRevealBand
+                  hidden={window.hidden}
+                  revealStep={window.revealStep}
+                  onReveal={revealMore}
+                  onOpenFull={onOpenFull}
+                />
+              ) : null
+          : undefined
+      }
+      renderLine={(line, index) => (
+        <AdditionSourceRow body={coloured?.[index] ?? line} />
+      )}
+    />
   )
 }
 
@@ -2890,59 +2947,69 @@ function GrepBody({
   onOpenFull: (() => void) | null
   toolUseId: string
 }) {
-  const lines = content.split('\n')
-  const { window, revealMore } = useInlineOutputWindow(lines, toolUseId)
-  const renderSegments = (slice: string[], keyPrefix: string) =>
-    groupGrepLines(slice).map((segment, index) =>
-      segment.kind === 'plain' ? (
-        <pre
-          key={`${keyPrefix}:${index}`}
-          className="col-span-2 whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-text-muted"
-        >
-          {segment.lines.join('\n')}
-        </pre>
-      ) : (
-        <GrepSourceLines
-          key={`${keyPrefix}:${index}`}
-          locators={segment.locators}
-          bodies={segment.bodies}
-          lang={readSourceLanguage(segment.path)}
-        />
-      ),
-    )
+  const lines = useMemo(() => content.split('\n'), [content])
+  const { window, visibleLines, revealMore } = useInlineOutputWindow(
+    lines,
+    toolUseId,
+  )
+  // Locators padded to the body's widest, so every run's source starts at the
+  // same x. The shared `max-content` grid this replaces cannot survive
+  // windowing: it would resize its column as the mounted rows moved.
+  const rows: readonly GrepRow[] = useMemo(
+    () => selectGrepRows(visibleLines),
+    [visibleLines],
+  )
+  const coloured = useMemo(() => selectGrepHighlightedRows(rows), [rows])
+  // The virtualizer bounds the text it hands back, so it is given the BODIES,
+  // never the raw lines: a match on a minified bundle is one logical line whose
+  // locator is a few characters and whose body is a megabyte.
+  const bodies = useMemo(() => rows.map(row => row.body), [rows])
   // A failed search has no results to color — it has an error message, which
   // takes the error tone whole rather than being parsed for locators.
-  if (isError) {
-    return (
-      <div className={INLINE_OUTPUT_SCROLLER}>
-        <pre className="whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-tone-danger">
-          {content}
-        </pre>
-      </div>
-    )
-  }
+  if (isError) return <ErrorLinesBody content={content} />
   return (
-    <div className={INLINE_OUTPUT_SCROLLER}>
-      {/* ONE grid for the whole body, head and tail alike: `max-content` sizes
-       * the locator column to the widest locator anywhere in it, so every run's
-       * source starts at the same x instead of each file group sizing its own. */}
-      <div className="grid grid-cols-[max-content_1fr]">
-        {renderSegments(window.head, 'head')}
-        {window.truncated ? (
-          <>
-            <div className="col-span-2">
-              <InlineRevealBand
-                hidden={window.hidden}
-                revealStep={window.revealStep}
-                onReveal={revealMore}
-                onOpenFull={onOpenFull}
-              />
-            </div>
-            {renderSegments(window.tail, 'tail')}
-          </>
-        ) : null}
-      </div>
-    </div>
+    <VirtualLineList
+      lines={bodies}
+      activeIndex={null}
+      className={SOURCE_OUTPUT_SCROLLER}
+      renderBeforeIndex={
+        window.truncated
+          ? index =>
+              index === window.head.length ? (
+                <InlineRevealBand
+                  hidden={window.hidden}
+                  revealStep={window.revealStep}
+                  onReveal={revealMore}
+                  onOpenFull={onOpenFull}
+                />
+              ) : null
+          : undefined
+      }
+      renderLine={(body, index) => (
+        <GrepSourceRow
+          locator={rows[index]?.locator ?? null}
+          body={coloured[index] ?? body}
+          coloured={coloured[index] !== null}
+        />
+      )}
+    />
+  )
+}
+
+/**
+ * A failed search or a failed image call: one message in the error tone, still
+ * windowed. A stack trace is as long as any other output, and the reason the
+ * call failed is no reason to mount all of it.
+ */
+function ErrorLinesBody({ content }: { content: string }) {
+  const lines = useMemo(() => content.split('\n'), [content])
+  return (
+    <VirtualLineList
+      lines={lines}
+      activeIndex={null}
+      className={`${INLINE_OUTPUT_SCROLLER} whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-tone-danger`}
+      renderLine={line => <div>{line}</div>}
+    />
   )
 }
 
@@ -3116,15 +3183,23 @@ function CompletedGeneratedImageCard({ row }: { row: ToolUseNestedRow }) {
   )
 }
 
+/**
+ * The image call's TEXT result, which is normally one sentence and is not
+ * normally what a generation card shows at all (`CompletedGeneratedImageCard`
+ * owns the picture). It reaches this body when the call failed or returned no
+ * preview, and a failure carries whatever the provider sent, so it is windowed
+ * like every other output rather than mounted whole.
+ */
 function ImageResultBody({ content, isError }: { content: string; isError: boolean }) {
+  const lines = useMemo(() => content.split('\n'), [content])
+  if (isError) return <ErrorLinesBody content={content} />
   return (
-    <pre
-      className={`overflow-auto whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed ${
-        isError ? 'text-tone-danger' : 'text-text-muted'
-      }`}
-    >
-      {content}
-    </pre>
+    <VirtualLineList
+      lines={lines}
+      activeIndex={null}
+      className={`${INLINE_OUTPUT_SCROLLER} whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-text-muted`}
+      renderLine={line => <div>{line}</div>}
+    />
   )
 }
 
@@ -4048,8 +4123,6 @@ function diffCountBadge(row: ToolUseNestedRow): ReactNode {
   )
 }
 
-type DiffLineKind = 'add' | 'del' | 'ctx'
-
 // Diff semantics live on the add/delete wash and glyph, while source text takes
 // its base and token colors from the selected code theme.
 const DIFF_ROW_CLASS: Record<DiffLineKind, string> = {
@@ -4080,141 +4153,76 @@ const WORD_DIM_CLASS: Record<'del' | 'add', string> = {
   add: 'opacity-60',
 }
 
-type WordDiffSide = { value: string; changed: boolean }[]
-type DiffHunkModel = ToolDiffProjection['hunks'][number]
-type DiffHunkWithPath = DiffHunkModel & { filePath: string }
-
 /**
- * Word-level intra-line highlight for a replaced line pair (prototype DiffView,
- * Messages.jsx:132-151). `diffWordsWithSpace` tokenizes old vs new; the prototype
- * only word-highlights when < 90% of the line changed (a near-total rewrite reads
- * better line-level). Returns null (→ line-level fallback) on that guard, on an
- * empty diff, or on ANY throw — DiffView is not under the prose error boundary
- * and SSR would not catch a throw here, so this must degrade in-place, never
- * bubble (display = degrade gracefully).
+ * One file's hunks, with the current-file line number in one gutter. The header
+ * already carries the path and counts, so the body renders source only.
+ *
+ * Every hunk in the file is ONE row list and ONE parse (CC-62). Before that,
+ * each hunk mounted every line it held and ran its own highlighter pass, and
+ * nothing upstream caps a patch: `extractDiffProjection` applies no line or hunk
+ * limit, and a Write of an existing file emits a structured patch covering the
+ * whole file, so one tool call mounted one DOM row per file line. The row list
+ * is complete; the virtualizer decides which of it is near the viewport.
  */
-function wordDiffPair(
-  oldLine: string,
-  newLine: string,
-): { del: WordDiffSide; add: WordDiffSide } | null {
-  try {
-    const parts = diffWordsWithSpace(oldLine, newLine)
-    let changed = 0
-    let total = 0
-    for (const part of parts) {
-      total += part.value.length
-      if (part.added || part.removed) changed += part.value.length
-    }
-    if (total === 0 || changed / total >= 0.9) return null
-    const del: WordDiffSide = []
-    const add: WordDiffSide = []
-    for (const part of parts) {
-      if (!part.added) del.push({ value: part.value, changed: part.removed === true })
-      if (!part.removed) add.push({ value: part.value, changed: part.added === true })
-    }
-    return { del, add }
-  } catch {
-    return null
-  }
-}
-
-/**
- * One hunk: classify each line, walk the current-file gutter from the hunk's
- * `oldStart`/`newStart`, and pair consecutive del-runs with add-runs for the
- * word-level intra-line highlight (prototype pairing, Messages.jsx:134-150).
- */
-function DiffHunk({ hunk, hunkIndex }: { hunk: DiffHunkWithPath; hunkIndex: number }) {
-  let oldNo = hunk.oldStart
-  let newNo = hunk.newStart
-  const rows = hunk.lines.map(line => {
-    const kind: DiffLineKind = line.startsWith('+')
-      ? 'add'
-      : line.startsWith('-')
-        ? 'del'
-        : 'ctx'
-    const body = kind === 'ctx' ? line : line.slice(1)
-    const currentLabel = kind === 'del' ? '' : String(newNo)
-    if (kind !== 'add') oldNo++
-    if (kind !== 'del') newNo++
-    return { kind, body, currentLabel }
-  })
-  // Pair each consecutive run of removes with the following run of adds; a
-  // successful pair carries the per-side word segments for that row index.
-  const wordInfo: Record<number, WordDiffSide> = {}
-  let i = 0
-  while (i < rows.length) {
-    if (rows[i].kind !== 'del') {
-      i++
-      continue
-    }
-    const dels: number[] = []
-    while (i < rows.length && rows[i].kind === 'del') dels.push(i++)
-    const adds: number[] = []
-    while (i < rows.length && rows[i].kind === 'add') adds.push(i++)
-    const pairs = Math.min(dels.length, adds.length)
-    for (let p = 0; p < pairs; p++) {
-      const seg = wordDiffPair(rows[dels[p]].body, rows[adds[p]].body)
-      if (seg) {
-        wordInfo[dels[p]] = seg.del
-        wordInfo[adds[p]] = seg.add
-      }
-    }
-  }
-  const lang = readSourceLanguage(hunk.filePath)
-  const renderRow = (row: (typeof rows)[number], lineIndex: number, line: HighlightedLine) => {
-    const sign = row.kind === 'add' ? '+' : row.kind === 'del' ? '−' : ' '
-    const segments = wordInfo[lineIndex]
-    const body = segments
-      ? highlightedWordSegments(
-          line,
-          segments,
-          WORD_EMPH_CLASS[row.kind === 'del' ? 'del' : 'add'],
-          WORD_DIM_CLASS[row.kind === 'del' ? 'del' : 'add'],
-        )
-      : line
-    return (
-      <div key={`${hunkIndex}:${lineIndex}`} className={`flex whitespace-pre ${DIFF_ROW_CLASS[row.kind]}`}>
-        <span className="w-[26px] shrink-0 select-none pr-[7px] text-right tabular-nums text-text-ghost">
-          {row.currentLabel}
-        </span>
-        <span className="min-w-0 flex-1 border-l border-white/[0.05] pl-2.5 pr-3.5 hljs">
-          <span className={DIFF_SIGN_CLASS[row.kind]}>{sign}</span>{' '}
-          {body}
-        </span>
-      </div>
-    )
-  }
-  if (lang === null) {
-    return <>{rows.map((row, index) => renderRow(row, index, [row.body]))}</>
-  }
+function DiffView({ diff }: { diff: ToolDiffProjection }) {
+  const rows = useMemo(() => selectDiffRows(diff), [diff])
+  const bodies = useMemo(() => rows.map(row => row.body), [rows])
+  const lang = readSourceLanguage(diff.filePath)
+  const coloured = useMemo(
+    () => selectHighlightedSourceRows(bodies, lang),
+    [bodies, lang],
+  )
   return (
-    <Markdown
-      components={{
-        pre: ({ children }) => <>{children}</>,
-        code: ({ children }) => {
-          const lines = highlightedLines(children)
-          return <>{rows.map((row, index) => renderRow(row, index, lines[index] ?? []))}</>
-        },
-      }}
-      rehypePlugins={REHYPE_PLUGINS}
-    >
-      {sourceFence(rows.map(row => row.body).join('\n'), lang)}
-    </Markdown>
+    <VirtualLineList
+      lines={bodies}
+      activeIndex={null}
+      className={`${INLINE_OUTPUT_SCROLLER} whitespace-pre font-mono text-xs leading-[1.65]`}
+      renderLine={(body, index) => (
+        <DiffRowView
+          row={rows[index]}
+          body={coloured?.[index] ?? body}
+          segments={selectRowWordSegments(rows, index)}
+        />
+      )}
+    />
   )
 }
 
 /**
- * One file's hunks, with the current-file line number in one gutter. The header
- * already carries the path and counts, so the body renders source only.
+ * One diff row: the current-file gutter, the sign, and the source. `body` is
+ * already bounded — either the coloured row `sourceHighlight.ts` cut, or the
+ * chunk the virtualizer cut — so a minified line cannot mount whole.
  */
-function DiffView({ diff }: { diff: ToolDiffProjection }) {
+function DiffRowView({
+  row,
+  body,
+  segments,
+}: {
+  row: DiffRow | undefined
+  body: ReactNode
+  segments: WordDiffSide | null
+}) {
+  if (row === undefined) return null
+  const sign = row.kind === 'add' ? '+' : row.kind === 'del' ? '−' : ' '
+  const side = row.kind === 'del' ? 'del' : 'add'
+  const painted =
+    segments === null
+      ? body
+      : highlightedWordSegments(
+          [body],
+          segments,
+          WORD_EMPH_CLASS[side],
+          WORD_DIM_CLASS[side],
+        )
   return (
-    <div className="font-mono text-xs leading-[1.65]">
-      <div className="overflow-x-auto">
-        {diff.hunks.map((hunk, hunkIndex) => (
-          <DiffHunk key={hunkIndex} hunk={{ ...hunk, filePath: diff.filePath }} hunkIndex={hunkIndex} />
-        ))}
-      </div>
+    <div className={`flex ${DIFF_ROW_CLASS[row.kind]}`}>
+      <span className="w-[26px] shrink-0 select-none pr-[7px] text-right tabular-nums text-text-ghost">
+        {row.currentLabel}
+      </span>
+      <span className="min-w-0 flex-1 border-l border-white/[0.05] pl-2.5 pr-3.5 hljs">
+        <span className={DIFF_SIGN_CLASS[row.kind]}>{sign}</span>{' '}
+        {painted}
+      </span>
     </div>
   )
 }

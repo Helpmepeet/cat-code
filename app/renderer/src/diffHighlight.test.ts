@@ -36,7 +36,9 @@ test('an added blank line inside a multi-line token does not reprint the token',
     }),
   )
 
-  const rows = html.split('<div class="flex whitespace-pre')
+  // `whitespace-pre` moved onto the diff body's scroll box when the rows were
+  // virtualized (CC-62), so a row now opens on its own wash class alone.
+  const rows = html.split('<div class="flex ')
   const blankRow = rows.find(row => row.includes('text-tone-success'))
   expect(blankRow).toBeDefined()
   expect(blankRow).not.toContain('alpha')
