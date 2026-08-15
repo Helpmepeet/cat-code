@@ -12,6 +12,12 @@
  * child can neither grow main's buffers without bound nor smuggle a malformed
  * snapshot past the redaction contract.
  *
+ * The record also carries the Accounts page's usage analytics for both ranges
+ * (`usageStats`, optional — see the field). Same owner, same page, same reason:
+ * that surface must work with no session open, and the numbers are a local-disk
+ * aggregation this run can afford. It is aggregate arithmetic over transcript
+ * metadata — token counts, dates, model names — and carries no prompt text.
+ *
  * The payload reuses the existing `AccountsSnapshot` protocol type, which is
  * ALREADY the redacted projection (`accountsDomain.ts` `buildAccountsSnapshot`):
  * no `accessToken`, no `refreshToken`, no `vaultFilePath`, no `idToken` by
@@ -24,6 +30,12 @@ import type {
   AccountStatus,
   AccountsSnapshot,
   AnthropicAccountStatus,
+  UsageStatsByRange,
+  UsageStatsDailyActivityItem,
+  UsageStatsDailyModelTokens,
+  UsageStatsModelUsageItem,
+  UsageStatsRange,
+  UsageStatsSnapshot,
 } from './protocol.js'
 
 export const ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION = 1
@@ -40,6 +52,22 @@ export type AccountsPoolWorkerPoolResult = {
   type: 'pool'
   version: typeof ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION
   pool: AccountsSnapshot
+  /**
+   * Usage analytics for both ranges, aggregated from the engine's own transcript
+   * logs in the SAME run that reads the pool. It rides this record rather than a
+   * second worker because it serves the same page for the same reason (the
+   * Accounts page must work with no session open) off the same disposable
+   * engine-graph process, and the read is local disk (~1.2 s for both ranges,
+   * ~5 KB) against a worker that already pays the engine import and a network
+   * usage fetch every run.
+   *
+   * OPTIONAL on purpose, and the reason this stayed boundary-version 1: a stats
+   * read that fails must not cost the pool its delivery, so the worker omits the
+   * field and main still emits the accounts event. Absent means "this run had
+   * none", never "the user has no history" — the renderer keeps its last good
+   * value, exactly as it does for a failed pool run.
+   */
+  usageStats?: UsageStatsByRange
 }
 
 export type AccountsPoolWorkerFailureResult = {
@@ -74,10 +102,181 @@ export function parseAccountsPoolWorkerResult(
     }
   }
   if (value.type !== 'pool') return null
-  if (!hasExactKeys(value, ['type', 'version', 'pool'])) return null
+  // `usageStats` is optional (see the field's doc): accept the record with OR
+  // without it, but no OTHER key — the closed-vocabulary gate stands. A PRESENT
+  // malformed value is malformed child output and fails the WHOLE record.
+  if (
+    !hasExactKeys(value, ['type', 'version', 'pool', 'usageStats']) &&
+    !hasExactKeys(value, ['type', 'version', 'pool'])
+  ) {
+    return null
+  }
   const pool = parseAccountsSnapshot(value.pool)
   if (!pool) return null
-  return { type: 'pool', version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION, pool }
+  const result: AccountsPoolWorkerResult = {
+    type: 'pool',
+    version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+    pool,
+  }
+  if (value.usageStats !== undefined) {
+    const usageStats = parseUsageStatsByRange(value.usageStats)
+    if (!usageStats) return null
+    result.usageStats = usageStats
+  }
+  return result
+}
+
+/**
+ * Fail-closed `UsageStatsByRange` validator. Both ranges must be present, and
+ * each snapshot's own `range` must MATCH the key it arrived under — otherwise a
+ * compromised child could file 30-day totals under the 7-day toggle, which the
+ * renderer keys by and would never re-check.
+ */
+export function parseUsageStatsByRange(value: unknown): UsageStatsByRange | null {
+  if (!isRecord(value)) return null
+  if (!hasExactKeys(value, ['7d', '30d'])) return null
+  const sevenDay = parseUsageStatsSnapshot(value['7d'])
+  const thirtyDay = parseUsageStatsSnapshot(value['30d'])
+  if (!sevenDay || !thirtyDay) return null
+  if (sevenDay.range !== '7d' || thirtyDay.range !== '30d') return null
+  return { '7d': sevenDay, '30d': thirtyDay }
+}
+
+/**
+ * Fail-closed `UsageStatsSnapshot` validator — the ONE place this untrusted
+ * shape is narrowed. Numbers are required to be FINITE: the record arrives as
+ * JSON, where `NaN`/`Infinity` cannot survive `JSON.stringify` (they serialize
+ * to `null`), so a non-finite number here is malformed output, and letting one
+ * through would poison every chart axis it divides.
+ */
+export function parseUsageStatsSnapshot(value: unknown): UsageStatsSnapshot | null {
+  if (!isRecord(value)) return null
+  if (
+    !hasExactKeys(value, [
+      'range',
+      'totalTokens',
+      'dailyModelTokens',
+      'modelUsage',
+      'dailyActivity',
+      'cacheHitRate',
+      'cacheReadTokens',
+      'cacheWriteTokens',
+      'freshInputTokens',
+      'totalSessions',
+      'totalMessages',
+      'activeDays',
+    ])
+  ) {
+    return null
+  }
+  const range = value.range
+  if (!isUsageStatsRange(range)) return null
+  if (!isFiniteNumber(value.totalTokens)) return null
+  if (!isFiniteNumber(value.cacheHitRate)) return null
+  if (!isFiniteNumber(value.cacheReadTokens)) return null
+  if (!isFiniteNumber(value.cacheWriteTokens)) return null
+  if (!isFiniteNumber(value.freshInputTokens)) return null
+  if (!isFiniteNumber(value.totalSessions)) return null
+  if (!isFiniteNumber(value.totalMessages)) return null
+  if (!isFiniteNumber(value.activeDays)) return null
+
+  if (!Array.isArray(value.dailyModelTokens)) return null
+  const dailyModelTokens: UsageStatsDailyModelTokens[] = []
+  for (const candidate of value.dailyModelTokens) {
+    if (!isRecord(candidate)) return null
+    if (!hasExactKeys(candidate, ['date', 'tokensByModel'])) return null
+    if (typeof candidate.date !== 'string') return null
+    const tokensByModel = parseNumberMap(candidate.tokensByModel)
+    if (!tokensByModel) return null
+    dailyModelTokens.push({ date: candidate.date, tokensByModel })
+  }
+
+  if (!Array.isArray(value.dailyActivity)) return null
+  const dailyActivity: UsageStatsDailyActivityItem[] = []
+  for (const candidate of value.dailyActivity) {
+    if (!isRecord(candidate)) return null
+    if (
+      !hasExactKeys(candidate, [
+        'date',
+        'messageCount',
+        'sessionCount',
+        'toolCallCount',
+      ])
+    ) {
+      return null
+    }
+    if (typeof candidate.date !== 'string') return null
+    if (!isFiniteNumber(candidate.messageCount)) return null
+    if (!isFiniteNumber(candidate.sessionCount)) return null
+    if (!isFiniteNumber(candidate.toolCallCount)) return null
+    dailyActivity.push({
+      date: candidate.date,
+      messageCount: candidate.messageCount,
+      sessionCount: candidate.sessionCount,
+      toolCallCount: candidate.toolCallCount,
+    })
+  }
+
+  if (!isRecord(value.modelUsage)) return null
+  const modelUsage: Record<string, UsageStatsModelUsageItem> = {}
+  for (const [model, candidate] of Object.entries(value.modelUsage)) {
+    if (!isRecord(candidate)) return null
+    if (
+      !hasExactKeys(candidate, [
+        'inputTokens',
+        'outputTokens',
+        'cacheCreationInputTokens',
+        'cacheReadInputTokens',
+      ])
+    ) {
+      return null
+    }
+    if (!isFiniteNumber(candidate.inputTokens)) return null
+    if (!isFiniteNumber(candidate.outputTokens)) return null
+    if (!isFiniteNumber(candidate.cacheCreationInputTokens)) return null
+    if (!isFiniteNumber(candidate.cacheReadInputTokens)) return null
+    modelUsage[model] = {
+      inputTokens: candidate.inputTokens,
+      outputTokens: candidate.outputTokens,
+      cacheCreationInputTokens: candidate.cacheCreationInputTokens,
+      cacheReadInputTokens: candidate.cacheReadInputTokens,
+    }
+  }
+
+  // Field-by-field so the return is a real `UsageStatsSnapshot`, no `as` on the
+  // untrusted worker output (each read above narrowed its field).
+  return {
+    range,
+    totalTokens: value.totalTokens,
+    dailyModelTokens,
+    modelUsage,
+    dailyActivity,
+    cacheHitRate: value.cacheHitRate,
+    cacheReadTokens: value.cacheReadTokens,
+    cacheWriteTokens: value.cacheWriteTokens,
+    freshInputTokens: value.freshInputTokens,
+    totalSessions: value.totalSessions,
+    totalMessages: value.totalMessages,
+    activeDays: value.activeDays,
+  }
+}
+
+function parseNumberMap(value: unknown): Record<string, number> | null {
+  if (!isRecord(value)) return null
+  const out: Record<string, number> = {}
+  for (const [key, candidate] of Object.entries(value)) {
+    if (!isFiniteNumber(candidate)) return null
+    out[key] = candidate
+  }
+  return out
+}
+
+function isUsageStatsRange(value: unknown): value is UsageStatsRange {
+  return value === '7d' || value === '30d'
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
 }
 
 /**

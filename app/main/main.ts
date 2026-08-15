@@ -848,6 +848,10 @@ function startSessionsCatalogRefresh(): void {
  * emitted). The immediate first run means the Accounts page is populated without
  * requiring a session to exist, which is the whole point of moving this read off
  * the per-session plane.
+ *
+ * The same run also carries that page's usage analytics, emitted as its own
+ * `usage-stats` event for the same reason and with the same last-good-value
+ * failure posture.
  */
 function startAccountsPoolRefresh(): void {
   if (accountsPoolDriver) return
@@ -864,6 +868,11 @@ function startAccountsPoolRefresh(): void {
         onWorkerLifecycle,
         onPool: pool => {
           sendHostEvent({ type: 'accounts-pool', pool })
+        },
+        // Same run, same page, separate event: the two are independent reads and
+        // a stats failure must not withhold the pool (nor the reverse).
+        onUsageStats: stats => {
+          sendHostEvent({ type: 'usage-stats', stats })
         },
         log: line => process.stderr.write(`${line}\n`),
       })

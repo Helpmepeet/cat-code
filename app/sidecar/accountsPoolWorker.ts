@@ -54,6 +54,11 @@
  * interval — see `accountsPoolRunner.ts`'s cadence comment for the actual
  * reason the interval is 60 s.
  *
+ * It also aggregates the Accounts page's usage analytics for both ranges in the
+ * same run (`readUsageStats`), for the same reason the pool read moved here: that
+ * page must work with no session open. Local disk only, and best-effort — a
+ * failure omits the field and never fails the run.
+ *
  * The emitted record is the ALREADY-redacted `AccountsSnapshot` (no token, no
  * vault path by construction), and it is `secretGuard`-scanned here AND again at
  * main's parse boundary. stderr is diagnostics only.
@@ -65,6 +70,7 @@ import {
   type AccountsPoolWorkerResult,
 } from '../shared/accountsPoolWorker.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
+import type { UsageStatsByRange } from '../shared/protocol.js'
 
 // Set the one-switch minimal mode before ANY engine module is dynamically
 // imported (mirrors `sessionsCatalogWorker.ts:33`): a pool read must not drag in
@@ -154,6 +160,8 @@ async function main(): Promise<void> {
     version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
     pool,
   }
+  const usageStats = await readUsageStats()
+  if (usageStats) result.usageStats = usageStats
   const secret = scanForSecrets(result)
   if (!secret.ok) {
     process.stderr.write('[accounts-worker] blocked secret-keyed pool result\n')
@@ -169,6 +177,38 @@ async function main(): Promise<void> {
   // disposable single-shot process, so terminate explicitly instead of waiting
   // for those unrelated handles to drain (mirrors the sibling workers).
   process.exit(0)
+}
+
+/**
+ * Usage analytics for both ranges, through the SAME `statsDomain` projection a
+ * session sidecar uses (CLAUDE.md §8 rule 10 — reuse the real entry point, do
+ * not re-derive the aggregation here). Local disk only: no network, no
+ * credential, no config write.
+ *
+ * Best-effort by contract. `getUsageStatsSnapshot` is already throw-free and
+ * degrades to an empty snapshot, so the only way to land here with a null is a
+ * failure of the import itself; either way an omitted field leaves the renderer
+ * on its last good value instead of publishing zeros as though they were the
+ * user's real history.
+ *
+ * `bypassCache` is deliberately NOT set: the domain's 5-second TTL cannot span
+ * two runs of this disposable process (a fresh one starts cold every time), so
+ * asking for a bypass would claim a behavioural difference that does not exist.
+ */
+async function readUsageStats(): Promise<UsageStatsByRange | null> {
+  try {
+    const { getUsageStatsSnapshot } = await import('./statsDomain.js')
+    const [sevenDay, thirtyDay] = await Promise.all([
+      getUsageStatsSnapshot('7d'),
+      getUsageStatsSnapshot('30d'),
+    ])
+    return { '7d': sevenDay, '30d': thirtyDay }
+  } catch (error) {
+    process.stderr.write(
+      `[accounts-worker] usage stats skipped: ${errorText(error)}\n`,
+    )
+    return null
+  }
 }
 
 /**

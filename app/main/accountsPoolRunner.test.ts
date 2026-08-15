@@ -2,7 +2,13 @@ import { describe, expect, test } from 'bun:test'
 import { EventEmitter } from 'node:events'
 import type { spawn } from 'node:child_process'
 
-import type { AccountStatus, AccountsSnapshot } from '../shared/protocol.js'
+import type {
+  AccountStatus,
+  AccountsSnapshot,
+  UsageStatsByRange,
+  UsageStatsRange,
+  UsageStatsSnapshot,
+} from '../shared/protocol.js'
 import { ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION } from '../shared/accountsPoolWorker.js'
 import {
   createAccountsPoolDriver,
@@ -101,6 +107,34 @@ function ndjson(record: unknown): string {
   return `${JSON.stringify(record)}\n`
 }
 
+function usageStats(range: UsageStatsRange, totalTokens: number): UsageStatsSnapshot {
+  return {
+    range,
+    totalTokens,
+    dailyModelTokens: [
+      { date: '2026-08-13', tokensByModel: { 'gpt-5.6-sol': totalTokens } },
+    ],
+    modelUsage: {
+      'gpt-5.6-sol': {
+        inputTokens: 400_000,
+        outputTokens: 162_713,
+        cacheCreationInputTokens: 12_000,
+        cacheReadInputTokens: 900_000,
+      },
+    },
+    dailyActivity: [
+      { date: '2026-08-13', messageCount: 812, sessionCount: 9, toolCallCount: 240 },
+    ],
+    cacheHitRate: 68,
+    cacheReadTokens: 900_000,
+    cacheWriteTokens: 12_000,
+    freshInputTokens: 400_000,
+    totalSessions: 76,
+    totalMessages: 33_482,
+    activeDays: 4,
+  }
+}
+
 describe('runAccountsPoolWorker — accept + deliver', () => {
   test('delivers the single pool record to onPool', async () => {
     const delivered: AccountsSnapshot[] = []
@@ -139,6 +173,80 @@ describe('runAccountsPoolWorker — accept + deliver', () => {
     })
     expect(outcome).toBe('delivered')
     expect(delivered[0]!.accounts).toEqual([])
+  })
+
+  test('usageStats reaches onUsageStats when the record carries it', async () => {
+    const stats: UsageStatsByRange = {
+      '7d': usageStats('7d', 2_138_901),
+      '30d': usageStats('30d', 4_421_134),
+    }
+    const pools: AccountsSnapshot[] = []
+    const delivered: UsageStatsByRange[] = []
+    const outcome = await runAccountsPoolWorker({
+      command: 'bun',
+      args: [],
+      cwd: process.cwd(),
+      spawnWorker: fakeSpawn({
+        stdout: ndjson({
+          type: 'pool',
+          version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+          pool: pool(['work']),
+          usageStats: stats,
+        }),
+      }),
+      onPool: snapshot => pools.push(snapshot),
+      onUsageStats: value => delivered.push(value),
+    })
+    expect(outcome).toBe('delivered')
+    expect(pools).toHaveLength(1)
+    expect(delivered).toEqual([stats])
+  })
+
+  test('a record without usageStats still delivers the pool and skips onUsageStats', async () => {
+    // The stats read is best-effort; failing it must not cost the pool its
+    // delivery, and must not publish a zeroed snapshot as the user's history.
+    const pools: AccountsSnapshot[] = []
+    let statsCalls = 0
+    const outcome = await runAccountsPoolWorker({
+      command: 'bun',
+      args: [],
+      cwd: process.cwd(),
+      spawnWorker: fakeSpawn({
+        stdout: ndjson({
+          type: 'pool',
+          version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+          pool: pool(['work']),
+        }),
+      }),
+      onPool: snapshot => pools.push(snapshot),
+      onUsageStats: () => {
+        statsCalls += 1
+      },
+    })
+    expect(outcome).toBe('delivered')
+    expect(pools).toHaveLength(1)
+    expect(statsCalls).toBe(0)
+  })
+
+  test('a malformed usageStats rejects the WHOLE record, pool included', async () => {
+    await expect(
+      runAccountsPoolWorker({
+        command: 'bun',
+        args: [],
+        cwd: process.cwd(),
+        spawnWorker: fakeSpawn({
+          stdout: ndjson({
+            type: 'pool',
+            version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+            pool: pool(['work']),
+            usageStats: { '7d': 'nope', '30d': 'nope' },
+          }),
+        }),
+        onPool: () => {
+          throw new Error('onPool must not run for a rejected record')
+        },
+      }),
+    ).rejects.toThrow(/failed validation/)
   })
 
   test('a clean worker-reported failure resolves "failure" and never calls onPool (keeps last good)', async () => {

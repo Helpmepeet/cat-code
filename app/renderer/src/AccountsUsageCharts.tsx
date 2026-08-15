@@ -2,9 +2,14 @@
  * Real usage analytics charts (Anti-Potemkin compliant).
  * Renders actual historical token usage from `UsageStatsSnapshot`.
  * Exports ONLY React components (Fast Refresh rule).
+ *
+ * Every chart takes `pending`, which is NOT-LOADED and must never be drawn as an
+ * empty result: an empty-state message is a claim about the user's history, and
+ * only a snapshot that actually arrived entitles us to make it. See the section
+ * module for the theme-token rule these files broke.
  */
 
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import {
   computeChartSeries,
   computeModelBreakdown,
@@ -20,6 +25,17 @@ import type {
 export type DailyModelTokenChartProps = {
   dailyModelTokens: UsageStatsDailyModelTokens[]
   range: '7d' | '30d'
+  /** No snapshot has arrived yet — say so, never claim an empty history. */
+  pending?: boolean
+}
+
+/** Shared frame for the pending and empty states, so neither shifts the layout. */
+function ChartPlaceholder({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex h-56 flex-col items-center justify-center rounded-xl border border-dashed border-shell-seam bg-shell-hover/35 p-6 text-center text-[12px] text-text-subtle">
+      {children}
+    </div>
+  )
 }
 
 /**
@@ -28,15 +44,25 @@ export type DailyModelTokenChartProps = {
 export function DailyModelTokenChart({
   dailyModelTokens,
   range,
+  pending = false,
 }: DailyModelTokenChartProps) {
   const chartData: ChartMultiSeries = computeChartSeries(dailyModelTokens)
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
 
+  if (pending) {
+    return (
+      <ChartPlaceholder>
+        <span className="mb-2.5 h-4 w-4 animate-spin rounded-full border-2 border-shell-seam border-t-text-muted" />
+        <span className="font-medium text-text-muted">Loading usage analytics</span>
+      </ChartPlaceholder>
+    )
+  }
+
   if (chartData.dates.length === 0 || chartData.totalWindowTokens === 0) {
     return (
-      <div className="flex h-56 flex-col items-center justify-center rounded-xl border border-dashed border-border/70 bg-muted/20 p-6 text-center text-xs text-muted-foreground">
+      <ChartPlaceholder>
         <svg
-          className="mb-2.5 h-7 w-7 text-muted-foreground/50"
+          className="mb-2.5 h-7 w-7 text-text-ghost"
           fill="none"
           viewBox="0 0 24 24"
           strokeWidth="1.5"
@@ -49,13 +75,14 @@ export function DailyModelTokenChart({
             d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z"
           />
         </svg>
-        <span className="font-medium text-foreground">
+        <span className="font-medium text-text-muted">
           No session activity recorded
         </span>
-        <span className="mt-0.5 text-muted-foreground/80">
-          No tokens were consumed in the selected {range === '30d' ? '30-day' : '7-day'} period.
+        <span className="mt-0.5 text-text-subtle">
+          No tokens were consumed in the selected{' '}
+          {range === '30d' ? '30-day' : '7-day'} period.
         </span>
-      </div>
+      </ChartPlaceholder>
     )
   }
 
@@ -92,7 +119,7 @@ export function DailyModelTokenChart({
   return (
     <div className="flex flex-col gap-3">
       {/* Chart Canvas */}
-      <div className="relative w-full overflow-hidden rounded-lg bg-card/40 p-2">
+      <div className="relative w-full overflow-hidden rounded-lg bg-white/[0.02] p-2">
         <svg
           viewBox={`0 0 ${width} ${height}`}
           className="w-full select-none"
@@ -111,7 +138,7 @@ export function DailyModelTokenChart({
                   x2={width - padRight}
                   y2={y}
                   stroke="currentColor"
-                  className="text-border/40"
+                  className="text-text-ghost/40"
                   strokeDasharray="3 3"
                   strokeWidth="1"
                 />
@@ -120,7 +147,7 @@ export function DailyModelTokenChart({
                   y={y + 3.5}
                   textAnchor="end"
                   fontSize="10"
-                  className="fill-muted-foreground font-mono"
+                  className="fill-text-subtle font-mono"
                 >
                   {formatTokens(Math.round(val))}
                 </text>
@@ -159,7 +186,10 @@ export function DailyModelTokenChart({
                     cy={getY(v)}
                     r={hoveredIndex === i ? '4.5' : '2.5'}
                     fill={s.color}
-                    stroke="var(--card, #1e293b)"
+                    // The card this sits on, so a dot reads as punched out of it.
+                    // Was `var(--card, …)`: undefined here, so every dot took the
+                    // slate-blue fallback instead of the panel colour.
+                    stroke="var(--color-surface-panel)"
                     strokeWidth="1.5"
                     className="transition-all"
                   />
@@ -176,7 +206,7 @@ export function DailyModelTokenChart({
               x2={getX(hoveredIndex)}
               y2={padTop + plotHeight}
               stroke="currentColor"
-              className="text-muted-foreground/60"
+              className="text-text-muted"
               strokeWidth="1"
               strokeDasharray="2 2"
             />
@@ -213,7 +243,7 @@ export function DailyModelTokenChart({
                 y={height - 6}
                 textAnchor="middle"
                 fontSize="10"
-                className="fill-muted-foreground font-mono"
+                className="fill-text-subtle font-mono"
               >
                 {dateLabel}
               </text>
@@ -224,12 +254,12 @@ export function DailyModelTokenChart({
 
       {/* Tooltip / Selected Day Inspector */}
       {hoveredIndex !== null && hoveredDate && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/80 bg-card/90 px-3.5 py-2 text-xs backdrop-blur-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-shell-seam bg-surface-raised px-3.5 py-2 text-xs backdrop-blur-sm">
           <div className="flex items-center gap-2">
-            <span className="font-semibold text-foreground font-mono">
+            <span className="font-semibold text-text-primary font-mono">
               {hoveredDisplayDate}
             </span>
-            <span className="text-muted-foreground font-mono text-[11px]">
+            <span className="text-text-subtle font-mono text-[11px]">
               ({hoveredDate})
             </span>
           </div>
@@ -243,8 +273,8 @@ export function DailyModelTokenChart({
                     className="h-2 w-2 rounded-full"
                     style={{ backgroundColor: s.color }}
                   />
-                  <span className="text-muted-foreground">{s.displayName}:</span>
-                  <span className="font-mono font-medium text-foreground">
+                  <span className="text-text-subtle">{s.displayName}:</span>
+                  <span className="font-mono font-medium text-text-primary">
                     {formatTokens(count)}
                   </span>
                 </div>
@@ -262,8 +292,8 @@ export function DailyModelTokenChart({
               className="h-2.5 w-2.5 rounded-full"
               style={{ backgroundColor: s.color }}
             />
-            <span className="text-foreground font-medium">{s.displayName}</span>
-            <span className="text-muted-foreground font-mono text-[11px]">
+            <span className="text-text-primary font-medium">{s.displayName}</span>
+            <span className="text-text-subtle font-mono text-[11px]">
               ({formatTokens(s.totalTokens)})
             </span>
           </div>
@@ -275,17 +305,28 @@ export function DailyModelTokenChart({
 
 export type ModelBreakdownBarsProps = {
   modelUsage: Record<string, UsageStatsModelUsageItem>
+  /** No snapshot has arrived yet — say so, never claim an empty history. */
+  pending?: boolean
 }
 
 /**
  * Horizontal progress bars visualizing token share per model.
  */
-export function ModelBreakdownBars({ modelUsage }: ModelBreakdownBarsProps) {
+export function ModelBreakdownBars({
+  modelUsage,
+  pending = false,
+}: ModelBreakdownBarsProps) {
   const items: ModelBreakdownItem[] = computeModelBreakdown(modelUsage)
+
+  if (pending) {
+    return (
+      <div className="p-4 text-center text-[12px] text-text-ghost">Loading</div>
+    )
+  }
 
   if (items.length === 0) {
     return (
-      <div className="p-4 text-center text-xs text-muted-foreground">
+      <div className="p-4 text-center text-[12px] text-text-subtle">
         No model activity in this period.
       </div>
     )
@@ -301,21 +342,21 @@ export function ModelBreakdownBars({ modelUsage }: ModelBreakdownBarsProps) {
                 className="h-2.5 w-2.5 rounded-full"
                 style={{ backgroundColor: item.color }}
               />
-              <span className="font-medium text-foreground">
+              <span className="font-medium text-text-primary">
                 {item.displayName}
               </span>
             </div>
             <div className="flex items-center gap-2 font-mono">
-              <span className="text-foreground font-medium">
+              <span className="text-text-primary font-medium">
                 {formatTokens(item.totalTokens)}
               </span>
-              <span className="text-muted-foreground text-[11px]">
+              <span className="text-text-subtle text-[11px]">
                 ({item.percentage}%)
               </span>
             </div>
           </div>
           {/* Track and fill bar */}
-          <div className="h-2 w-full overflow-hidden rounded-full bg-muted/40">
+          <div className="h-2 w-full overflow-hidden rounded-full bg-white/[0.07]">
             <div
               className="h-full rounded-full transition-all duration-300"
               style={{
@@ -335,6 +376,8 @@ export type CacheUsageBarProps = {
   cacheWriteTokens: number
   freshInputTokens: number
   cacheHitRate: number
+  /** No snapshot has arrived yet — say so, never claim an empty history. */
+  pending?: boolean
 }
 
 /**
@@ -345,7 +388,14 @@ export function CacheUsageBar({
   cacheWriteTokens,
   freshInputTokens,
   cacheHitRate,
+  pending = false,
 }: CacheUsageBarProps) {
+  if (pending) {
+    return (
+      <div className="p-4 text-center text-[12px] text-text-ghost">Loading</div>
+    )
+  }
+
   const total = cacheReadTokens + cacheWriteTokens + freshInputTokens
 
   const readPct = total > 0 ? Math.round((cacheReadTokens / total) * 100) : 0
@@ -355,21 +405,21 @@ export function CacheUsageBar({
   return (
     <div className="flex flex-col gap-4">
       {/* Hit Rate Banner */}
-      <div className="flex items-center justify-between rounded-lg border border-border/70 bg-card/40 px-3.5 py-2.5">
+      <div className="flex items-center justify-between rounded-lg border border-shell-seam bg-white/[0.02] px-3.5 py-2.5">
         <div className="flex flex-col">
-          <span className="text-xs text-muted-foreground">Cache Hit Rate</span>
-          <span className="text-lg font-semibold text-foreground font-mono">
+          <span className="text-xs text-text-subtle">Cache Hit Rate</span>
+          <span className="text-lg font-semibold text-text-primary font-mono">
             {cacheHitRate}%
           </span>
         </div>
-        <div className="text-right text-[11px] text-muted-foreground">
+        <div className="text-right text-[11px] text-text-subtle">
           <span>{formatTokens(cacheReadTokens)} tokens read from cache</span>
         </div>
       </div>
 
       {/* Stacked 3-segment Bar */}
       <div className="flex flex-col gap-1.5">
-        <div className="flex h-3 w-full overflow-hidden rounded-full bg-muted/40">
+        <div className="flex h-3 w-full overflow-hidden rounded-full bg-white/[0.07]">
           {readPct > 0 && (
             <div
               className="h-full bg-emerald-500 transition-all duration-300"
@@ -398,9 +448,9 @@ export function CacheUsageBar({
           <div className="flex flex-col">
             <div className="flex items-center gap-1.5">
               <span className="h-2 w-2 rounded-full bg-emerald-500" />
-              <span className="text-muted-foreground">Cache Read</span>
+              <span className="text-text-subtle">Cache Read</span>
             </div>
-            <span className="font-mono font-medium text-foreground pl-3.5">
+            <span className="font-mono font-medium text-text-primary pl-3.5">
               {formatTokens(cacheReadTokens)} ({readPct}%)
             </span>
           </div>
@@ -408,9 +458,9 @@ export function CacheUsageBar({
           <div className="flex flex-col">
             <div className="flex items-center gap-1.5">
               <span className="h-2 w-2 rounded-full bg-blue-500" />
-              <span className="text-muted-foreground">Fresh Input</span>
+              <span className="text-text-subtle">Fresh Input</span>
             </div>
-            <span className="font-mono font-medium text-foreground pl-3.5">
+            <span className="font-mono font-medium text-text-primary pl-3.5">
               {formatTokens(freshInputTokens)} ({inputPct}%)
             </span>
           </div>
@@ -418,9 +468,9 @@ export function CacheUsageBar({
           <div className="flex flex-col">
             <div className="flex items-center gap-1.5">
               <span className="h-2 w-2 rounded-full bg-amber-500" />
-              <span className="text-muted-foreground">Cache Write</span>
+              <span className="text-text-subtle">Cache Write</span>
             </div>
-            <span className="font-mono font-medium text-foreground pl-3.5">
+            <span className="font-mono font-medium text-text-primary pl-3.5">
               {formatTokens(cacheWriteTokens)} ({writePct}%)
             </span>
           </div>
@@ -442,7 +492,9 @@ export type ActivitySparklineProps = {
  */
 export function ActivitySparkline({
   data,
-  color = '#3b82f6',
+  // Follows the theme by default (`text-accent` on the svg below) rather than a
+  // hardcoded blue that no accent choice ever moves.
+  color = 'currentColor',
   width = 64,
   height = 24,
 }: ActivitySparklineProps) {
@@ -466,7 +518,7 @@ export function ActivitySparkline({
       viewBox={`0 0 ${width} ${height}`}
       width={width}
       height={height}
-      className="shrink-0 overflow-visible"
+      className="shrink-0 overflow-visible text-accent"
       aria-hidden="true"
     >
       <polyline

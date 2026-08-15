@@ -1016,6 +1016,13 @@ export function App() {
         dispatchAccounts({ type: 'pool', pool: event.pool })
         return
       }
+      // Usage analytics ride the same accounts worker run, for the same reason:
+      // the Accounts page opens with no session attached, and the per-session
+      // stats frame cannot reach it there. Also NOT a roster row.
+      if (event.type === 'usage-stats') {
+        dispatchAccounts({ type: 'usage-stats', stats: event.stats })
+        return
+      }
       // A new/restored tab appears in the bar but does NOT steal the pane — a
       // spawning session has nothing to show; it becomes active when it starts
       // streaming (the frame path above), when the user clicks it, or via the

@@ -24,7 +24,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 
 import { scanForSecrets } from '../shared/secretGuard.js'
-import type { AccountsSnapshot } from '../shared/protocol.js'
+import type { AccountsSnapshot, UsageStatsByRange } from '../shared/protocol.js'
 import {
   MAX_ACCOUNTS_POOL_WORKER_RECORD_BYTES,
   parseAccountsPoolWorkerResult,
@@ -55,6 +55,12 @@ export type AccountsPoolRunOptions = {
   spawnWorker?: typeof spawn
   /** Called at most ONCE, only for an accepted + secret-clean pool record. */
   onPool: (pool: AccountsSnapshot) => void
+  /**
+   * Called at most ONCE, and only when the accepted record actually carried
+   * `usageStats` — the field is optional so a failed stats read still delivers
+   * the pool. Fired AFTER `onPool` so the two never land out of order.
+   */
+  onUsageStats?: (stats: UsageStatsByRange) => void
   /** Metadata-only process lifecycle hook; it never receives worker output. */
   onWorkerLifecycle?: (event: WorkerProcessLifecycle) => void
   log?: (line: string) => void
@@ -168,6 +174,7 @@ export async function runAccountsPoolWorker(
       }
       try {
         options.onPool(result.pool)
+        if (result.usageStats) options.onUsageStats?.(result.usageStats)
         outcome = 'delivered'
       } catch (error) {
         callbackError = error

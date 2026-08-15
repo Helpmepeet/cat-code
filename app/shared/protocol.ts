@@ -2103,6 +2103,15 @@ export type UsageStatsSnapshot = {
   activeDays: number
 }
 
+/**
+ * Both ranges together, as the HOST plane delivers them (accounts owner).
+ * The per-session `stats.usage.snapshot` frame carries ONE range because a
+ * session answers the range the renderer asked for; main's disposable worker has
+ * no asker, so it aggregates both in the one run it pays for and the renderer
+ * never waits on a round trip to flip the toggle.
+ */
+export type UsageStatsByRange = Record<UsageStatsRange, UsageStatsSnapshot>
+
 export type UsageStatsSnapshotFrame = {
   kind: 'stats.usage.snapshot'
   protocolVersion: typeof PROTOCOL_VERSION

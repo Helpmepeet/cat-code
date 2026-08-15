@@ -356,4 +356,48 @@ describe('accountsState selectors', () => {
     })
     expect(state.activeStatsRange).toBe('30d')
   })
+
+  test('the usage-stats host event fills BOTH ranges with no session open', () => {
+    // The reason this feed exists: the Accounts page is reachable with zero
+    // sessions, where no `stats.usage.snapshot` frame can ever arrive, and the
+    // page used to render that as "No session activity recorded".
+    const base = {
+      dailyModelTokens: [],
+      modelUsage: {},
+      dailyActivity: [],
+      cacheHitRate: 68,
+      cacheReadTokens: 900_000,
+      cacheWriteTokens: 12_000,
+      freshInputTokens: 400_000,
+      totalMessages: 33_482,
+    }
+    const stats = {
+      '7d': {
+        ...base,
+        range: '7d' as const,
+        totalTokens: 2_138_901,
+        totalSessions: 76,
+        activeDays: 4,
+      },
+      '30d': {
+        ...base,
+        range: '30d' as const,
+        totalTokens: 4_421_134,
+        totalSessions: 76,
+        activeDays: 20,
+      },
+    }
+
+    let state = createAccountsState()
+    state = reduceAccountsState(state, { type: 'usage-stats', stats })
+
+    expect(state.usageStats['7d']).toEqual(stats['7d'])
+    expect(state.usageStats['30d']).toEqual(stats['30d'])
+    // No round trip needed to flip the toggle: both ranges are already resolved.
+    expect(selectUsageStatsForRange(state, '30d')).toEqual(stats['30d'])
+    expect(state.latestUsageStats).toEqual(stats['7d'])
+
+    state = reduceAccountsState(state, { type: 'set-stats-range', range: '30d' })
+    expect(selectUsageStatsForRange(state)).toEqual(stats['30d'])
+  })
 })

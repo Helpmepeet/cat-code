@@ -28,6 +28,7 @@ import type {
   AccountsSnapshot,
   SessionId,
   SessionsCatalogSnapshot,
+  UsageStatsByRange,
 } from './protocol.js'
 
 /* ------------------------------------------------------------------------- *
@@ -232,6 +233,15 @@ export type SaveTextInput = {
  *    ALREADY redacted (no token, no vault path by construction); `secretGuard`
  *    ran on it at the worker and again at main's parse boundary. Account WRITES
  *    remain session-plane `account.*` verbs — this event never carries one.
+ *  - `usage-stats` — the Accounts page's usage analytics for BOTH ranges,
+ *    aggregated by that same accounts worker run (`accountsPoolWorker.ts`
+ *    `usageStats`). It exists for the same reason `accounts-pool` does: the
+ *    Accounts page is reachable with no session open, and the per-session
+ *    `stats.usage.snapshot` frame can only arrive from an attached sidecar, so
+ *    without this the page rendered zeros and told the user they had no history.
+ *    Read-only OUTBOUND display metadata (C3 precedent): aggregate token counts,
+ *    dates and model names, never prompt text. Emitted only when a run actually
+ *    carried the field, so a failed stats read leaves the last good value.
  *
  * The first three carry the full descriptor (except `removed`, which carries only
  * the id) so a subscriber can update without a follow-up read.
@@ -242,6 +252,7 @@ export type HostEvent =
   | { type: 'session-removed'; appSessionId: SessionId }
   | { type: 'sessions-catalog'; catalog: SessionsCatalogSnapshot }
   | { type: 'accounts-pool'; pool: AccountsSnapshot }
+  | { type: 'usage-stats'; stats: UsageStatsByRange }
 
 /* ------------------------------------------------------------------------- *
  * Bounds (HC4 + title cap)

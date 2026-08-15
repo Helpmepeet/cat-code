@@ -1,10 +1,17 @@
 import { describe, expect, test } from 'bun:test'
 
-import type { AccountStatus, AccountsSnapshot } from './protocol.js'
+import type {
+  AccountStatus,
+  AccountsSnapshot,
+  UsageStatsByRange,
+  UsageStatsSnapshot,
+} from './protocol.js'
 import {
   ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
   parseAccountsPoolWorkerResult,
   parseAccountsSnapshot,
+  parseUsageStatsByRange,
+  parseUsageStatsSnapshot,
 } from './accountsPoolWorker.js'
 
 function account(over: Partial<AccountStatus> = {}): AccountStatus {
@@ -199,5 +206,176 @@ describe('parseAccountsPoolWorkerResult — fails closed', () => {
     expect(parseAccountsPoolWorkerResult(null)).toBeNull()
     expect(parseAccountsPoolWorkerResult('pool')).toBeNull()
     expect(parseAccountsPoolWorkerResult([])).toBeNull()
+  })
+})
+
+/* ------------------------------------------------------------------------- *
+ * usageStats — the Accounts page's analytics, riding the same worker record
+ * ------------------------------------------------------------------------- */
+
+function stats(over: Partial<UsageStatsSnapshot> = {}): UsageStatsSnapshot {
+  return {
+    range: '7d',
+    totalTokens: 2_138_901,
+    dailyModelTokens: [
+      { date: '2026-08-13', tokensByModel: { 'gpt-5.6-sol': 562_713 } },
+    ],
+    modelUsage: {
+      'gpt-5.6-sol': {
+        inputTokens: 400_000,
+        outputTokens: 162_713,
+        cacheCreationInputTokens: 12_000,
+        cacheReadInputTokens: 900_000,
+      },
+    },
+    dailyActivity: [
+      { date: '2026-08-13', messageCount: 812, sessionCount: 9, toolCallCount: 240 },
+    ],
+    cacheHitRate: 68,
+    cacheReadTokens: 900_000,
+    cacheWriteTokens: 12_000,
+    freshInputTokens: 400_000,
+    totalSessions: 76,
+    totalMessages: 33_482,
+    activeDays: 4,
+    ...over,
+  }
+}
+
+function byRange(over: Partial<UsageStatsByRange> = {}): UsageStatsByRange {
+  return {
+    '7d': stats(),
+    '30d': stats({ range: '30d', totalTokens: 4_421_134, activeDays: 20 }),
+    ...over,
+  }
+}
+
+function poolWithStats(usageStats: unknown): unknown {
+  return {
+    type: 'pool',
+    version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+    pool: pool(),
+    usageStats,
+  }
+}
+
+describe('parseAccountsPoolWorkerResult — usageStats accepts', () => {
+  test('a well-formed both-ranges record round-trips', () => {
+    const result = parseAccountsPoolWorkerResult(poolWithStats(byRange()))
+    expect(result?.type).toBe('pool')
+    expect(result?.type === 'pool' && result.usageStats).toEqual(byRange())
+  })
+
+  test('an absent usageStats stays absent, not defaulted to an empty snapshot', () => {
+    // The whole point of the optional field: a failed stats read must not be
+    // published as "this user has no history".
+    const result = parseAccountsPoolWorkerResult(record(pool()))
+    expect(result?.type).toBe('pool')
+    expect(result?.type === 'pool' && 'usageStats' in result).toBe(false)
+  })
+
+  test('a genuinely empty history is a valid snapshot, not a rejection', () => {
+    const empty = stats({
+      totalTokens: 0,
+      dailyModelTokens: [],
+      modelUsage: {},
+      dailyActivity: [],
+      cacheHitRate: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      freshInputTokens: 0,
+      totalSessions: 0,
+      totalMessages: 0,
+      activeDays: 0,
+    })
+    expect(parseUsageStatsSnapshot(empty)).toEqual(empty)
+  })
+})
+
+describe('parseAccountsPoolWorkerResult — usageStats fails closed', () => {
+  test('a present-but-malformed usageStats fails the WHOLE record', () => {
+    // Not "drop the bad field and keep the pool": a child emitting garbage in one
+    // field is not trusted in the others.
+    expect(parseAccountsPoolWorkerResult(poolWithStats({ '7d': 1 }))).toBeNull()
+  })
+
+  test('a missing range is rejected — both or neither', () => {
+    expect(
+      parseAccountsPoolWorkerResult(poolWithStats({ '7d': stats() })),
+    ).toBeNull()
+  })
+
+  test('a snapshot filed under the wrong range key is rejected', () => {
+    // The renderer keys its store by this and never re-checks, so 30-day totals
+    // must not be able to arrive under the 7-day toggle.
+    expect(
+      parseUsageStatsByRange({ '7d': stats({ range: '30d' }), '30d': stats() }),
+    ).toBeNull()
+  })
+
+  test('an unknown range value is rejected', () => {
+    expect(parseUsageStatsSnapshot(stats({ range: '90d' as never }))).toBeNull()
+  })
+
+  test('an extra key on the snapshot is rejected', () => {
+    expect(
+      parseUsageStatsSnapshot({ ...stats(), surprise: 1 } as never),
+    ).toBeNull()
+  })
+
+  test('a missing snapshot field is rejected', () => {
+    const { activeDays: _dropped, ...missing } = stats()
+    expect(parseUsageStatsSnapshot(missing)).toBeNull()
+  })
+
+  test('a non-finite number is rejected everywhere it can appear', () => {
+    expect(parseUsageStatsSnapshot(stats({ totalTokens: NaN }))).toBeNull()
+    expect(parseUsageStatsSnapshot(stats({ cacheHitRate: Infinity }))).toBeNull()
+    expect(
+      parseUsageStatsSnapshot(
+        stats({ dailyModelTokens: [{ date: 'd', tokensByModel: { m: NaN } }] }),
+      ),
+    ).toBeNull()
+    expect(
+      parseUsageStatsSnapshot(
+        stats({
+          modelUsage: {
+            m: {
+              inputTokens: NaN,
+              outputTokens: 0,
+              cacheCreationInputTokens: 0,
+              cacheReadInputTokens: 0,
+            },
+          },
+        }),
+      ),
+    ).toBeNull()
+    expect(
+      parseUsageStatsSnapshot(
+        stats({
+          dailyActivity: [
+            { date: 'd', messageCount: NaN, sessionCount: 0, toolCallCount: 0 },
+          ],
+        }),
+      ),
+    ).toBeNull()
+  })
+
+  test('a string where a number belongs is rejected', () => {
+    expect(parseUsageStatsSnapshot(stats({ totalSessions: '76' as never }))).toBeNull()
+  })
+
+  test('a malformed daily row fails the whole snapshot', () => {
+    expect(
+      parseUsageStatsSnapshot(
+        stats({ dailyModelTokens: [{ date: 'd' } as never] }),
+      ),
+    ).toBeNull()
+  })
+
+  test('non-record input is rejected', () => {
+    expect(parseUsageStatsByRange(null)).toBeNull()
+    expect(parseUsageStatsByRange([])).toBeNull()
+    expect(parseUsageStatsSnapshot('stats')).toBeNull()
   })
 })
