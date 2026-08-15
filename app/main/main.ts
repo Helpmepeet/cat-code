@@ -20,6 +20,7 @@ import {
   nativeImage,
   session,
   shell,
+  type WebContents,
 } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -915,12 +916,28 @@ function startIdleParkDriver(): void {
 // `ServerFrame[]` (was a single `ServerFrame`). Outbound-only: no new channel or
 // bridge method, and the on-wire `ServerFrame`/`PROTOCOL_VERSION` are unchanged —
 // a batch is just the delivery envelope, so no protocol version bump.
-function deliver(frames: ServerFrame[]): void {
+/**
+ * The one predicate `deliver` refuses on, exposed so a caller that stamps a
+ * delivery-trace stage can ask BEFORE stamping it. Stamping a stage that
+ * `deliver` then declines makes the trace record deliveries that never
+ * happened: 1,883 `attachment.replayed` marks with no matching
+ * `preload.received` were reported as a delivery pathology on 2026-08-14 and
+ * were partly this artefact (`docs/reports/2026-08-14-desktop-logging-feedback.md` D1).
+ * Same tick, no await between the check and the send, so the answer cannot go
+ * stale in between.
+ */
+function deliverableContents(): WebContents | null {
   const contents = mainWindow?.webContents
   // `isDestroyed` because a send is only ever scheduled, never immediate: an
   // in-flight frame can land after the window went away. `rendererGone`
   // because a crashed renderer leaves the window open and `isDestroyed` false.
-  if (!contents || contents.isDestroyed() || rendererGone) return
+  if (!contents || contents.isDestroyed() || rendererGone) return null
+  return contents
+}
+
+function deliver(frames: ServerFrame[]): void {
+  const contents = deliverableContents()
+  if (!contents) return
   if (frames.length === 0) return
   const traced = frames.map(frame => traceFrame(frame, 'main.ipc.queued'))
   contents.send(CH_SERVER_FRAME, traced satisfies ServerFrame[])
@@ -1807,8 +1824,16 @@ function registerIpcHandlers(): void {
     rendererGone = false
     rendererDocumentId = payload.documentId
     rendererSubscriptionEpoch++
-    const replay = attachmentGate.onRendererReady().map(frame => traceFrame(frame, 'attachment.replayed'))
-    deliver(replay)
+    // Stamp only what `deliver` will actually hand to `webContents.send`. The
+    // gate has already consumed its buffer by this point, so a replay that
+    // cannot be delivered is a real loss and gets its own record rather than a
+    // silent absence (D1).
+    const pending = attachmentGate.onRendererReady()
+    if (pending.length > 0 && !deliverableContents()) {
+      logOperational('diagnostic', 'warn', { source: 'attachmentReplay', reason: 'renderer_unavailable' })
+    } else {
+      deliver(pending.map(frame => traceFrame(frame, 'attachment.replayed')))
+    }
     readinessLatch.rendererReady()
   })
 

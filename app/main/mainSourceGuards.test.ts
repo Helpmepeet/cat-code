@@ -66,6 +66,15 @@ test('renderer frame forwarding rejects non-supervisor session ids before buffer
   expect(forward).toContain('if (!SESSION_ID_RE.test(sessionId)) return')
 })
 
+test('a replay is never stamped delivered before delivery is decided', () => {
+  const rendererReady = region('ipcMain.on(CH_RENDERER_READY', 'ipcMain.on(CH_DELIVERY_ACK')
+  // The 2026-08-14 defect in one expression: chaining the stage onto the gate's
+  // output stamps every replayed frame, including the ones `deliver` then
+  // declines. It reported 1,883 deliveries that never happened
+  // (`docs/reports/2026-08-14-desktop-logging-feedback.md` D1).
+  expect(rendererReady).not.toContain('attachmentGate.onRendererReady().map(')
+})
+
 test('a normal startup never opts into the sidecar probe', () => {
   const createSupervisor = region(
     'function createSupervisor(): SidecarSupervisor',

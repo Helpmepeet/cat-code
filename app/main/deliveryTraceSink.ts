@@ -31,10 +31,18 @@ export const MAX_DELIVERY_TRACE_AGE_MS = 72 * 60 * 60 * 1000
  * measured against real identifier lengths, one per stream per minute at most, so
  * the whole three days of one continuously active stream is 2.7 MB. Concurrent
  * active streams divide that, since the cap is a total across all of them.
+ *
+ * The file cap is high on purpose. Lane files are named per launch, so a restart
+ * always starts a new one and `retain()` drops the oldest on `count > maxFiles`
+ * before age or bytes are consulted. At the original 4 that made the age cap
+ * unreachable: this machine held four rollup files totalling 79 KB against the
+ * 4 MB budget, and the 2026-08-14 freeze onset had already been evicted by
+ * ordinary restarts the next day. Bytes and age are the intended governors; this
+ * only bounds directory entries.
  */
 export const MAX_DELIVERY_ROLLUP_FILE_BYTES = 1024 * 1024
 export const MAX_DELIVERY_ROLLUP_TOTAL_BYTES = 4 * 1024 * 1024
-export const MAX_DELIVERY_ROLLUP_FILES = 4
+export const MAX_DELIVERY_ROLLUP_FILES = 128
 export const DELIVERY_TRACE_FILE_PREFIX = 'delivery-trace-'
 export const DELIVERY_ROLLUP_FILE_PREFIX = 'delivery-rollup-'
 /**

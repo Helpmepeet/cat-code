@@ -87,6 +87,22 @@ let deliverySubscriptionEpoch = 0
 let rendererFaultWindowStartedAt = Date.now()
 let rendererFaultCount = 0
 const MAX_RENDERER_FAULTS_PER_MINUTE = 12
+/**
+ * Timer-scheduling latency, and nothing more. It is measured off the interval
+ * below rather than at probe time, so a health sample reports the last interval's
+ * value, and its practical floor is around 4 ms.
+ *
+ * It cannot show that the renderer is drawing. During the 2026-08-14 freeze it
+ * read 4.2 to 4.7 ms continuously while `<App>` had not committed a render for
+ * over two minutes; the event loop genuinely was idle, so sampling it at probe
+ * time would have reported the same thing. That reading was quoted as evidence
+ * of a responsive renderer and it cost the investigation hours
+ * (`docs/reports/2026-08-14-desktop-logging-feedback.md` A2).
+ *
+ * `rendersCommitted` is the field that answers render liveness. Read this one
+ * only for what it measures: timers not firing at all. Sustained values near
+ * 1000 ms or 59999 ms are hidden-window throttling, not a hang (2026-08-09).
+ */
 let lastMeasuredEventLoopLagMs = 0
 let rendersCommitted = 0
 

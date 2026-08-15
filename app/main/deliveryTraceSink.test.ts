@@ -462,6 +462,29 @@ test('a stream summary outlives the per-frame records it summarizes', () => {
   })
 })
 
+test('a rollup outlives the restarts that follow it, not just the frames', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-rollup-launches-'))
+  // Rollup files are named per launch, so restarts alone rotate this lane. At a
+  // file cap of 4 that evicted the oldest launch on the fifth start, defeating
+  // the 72h age cap the byte budget was sized for: the 2026-08-14 freeze onset
+  // was gone the next day with the lane at 2% of its 4 MB budget.
+  const launches = 9
+  for (let launch = 1; launch <= launches; launch++) {
+    const clock = { ms: 0 }
+    const sink = createDeliveryTraceSink({
+      configDir: root, launchId: `launch-${launch}`, sweepIntervalMs: 0, monotonicNow: () => clock.ms,
+    })
+    traceThroughMain(sink, launch, ASSISTANT_FRAME)
+    clock.ms = 60_000
+    sink.close()
+  }
+
+  const rollups = laneRecords(root, 'delivery-rollup-')
+  expect(rollups.map(record => record.launchId)).toEqual(
+    Array.from({ length: launches }, (_, index) => `launch-${index + 1}`),
+  )
+})
+
 test('a rollup carries the stream facts an investigation opens first', () => {
   const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-rollup-facts-'))
   const clock = { ms: 0 }
