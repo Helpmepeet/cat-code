@@ -12,6 +12,7 @@
  */
 import { describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { REHYPE_PLUGINS } from './markdownPlugins.js'
 import {
   MAX_MARKDOWN_LEAF_CHARACTERS,
   MAX_MOUNTED_MARKDOWN_LEAVES,
@@ -436,5 +437,43 @@ describe('selectMarkdownLeafWindow', () => {
     expect(leafWindow.end - leafWindow.start).toBeLessThanOrEqual(3)
     expect(leafWindow.topSpacerHeight).toBeGreaterThan(0)
     expect(leafWindow.bottomSpacerHeight).toBeGreaterThan(0)
+  })
+})
+
+/**
+ * Gate B in the CC-59 plan assumed bounded highlighting was impossible, because
+ * `highlight.js` has no API for tokenizing a line window with the continuation
+ * state of the lines before it. Highlighting the whole document ONCE and then
+ * slicing the tokenized tree dissolves that: a token opened long before the
+ * mounted window is already closed correctly by the time anything is cut.
+ */
+describe('highlighting survives chunk boundaries', () => {
+  const fence = [
+    '```ts',
+    'const before = 1',
+    'const banner = `',
+    ...Array.from({ length: 400 }, (_, index) => `template line ${index}`),
+    '`',
+    'const after = 2',
+    '```',
+  ].join('\n')
+
+  test('a string opened before the window is still a string inside it', () => {
+    const leaves = planMarkdownLeaves('row-1', fence, { rehypePlugins: REHYPE_PLUGINS })
+    const code = leaves.filter(leaf => leaf.kind === 'code')
+    expect(code.length).toBeGreaterThan(1)
+
+    // A chunk deep inside the template literal, far past the line that opened it.
+    const inside = leaves
+      .map((leaf, index) => ({ leaf, index }))
+      .filter(entry => entry.leaf.kind === 'code')
+      .map(entry => ({ ...entry, html: mount(leaves, entry.index, entry.index + 1) }))
+      .find(entry => entry.html.includes('template line 399'))
+
+    expect(inside).toBeDefined()
+    expect(inside!.html).toContain('hljs-string')
+    // The line that opened the string is not mounted, so the token class cannot
+    // have come from re-tokenizing this chunk on its own.
+    expect(inside!.html).not.toContain('const banner')
   })
 })
