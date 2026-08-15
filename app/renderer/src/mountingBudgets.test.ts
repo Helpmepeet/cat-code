@@ -27,6 +27,12 @@ import {
   MAX_RETAINED_MARKDOWN_MEASUREMENTS,
 } from './markdownRenderPlan.js'
 import { MAX_RENDERED_HIGHLIGHT_SEGMENTS } from './outputSearchModel.js'
+import { MAX_WORD_DIFF_CHARS, MAX_WORD_DIFF_SEGMENTS } from './diffRowModel.js'
+import {
+  MAX_HIGHLIGHTED_SOURCE_CHARS,
+  MAX_HIGHLIGHTED_SOURCE_LINES,
+  MAX_MOUNTED_SOURCE_TOKENS,
+} from './sourceHighlight.js'
 
 describe('mounting budgets are pinned to their measured values', () => {
   test('markdown leaves', () => {
@@ -53,6 +59,18 @@ describe('mounting budgets are pinned to their measured values', () => {
     expect(MAX_MOUNTED_OUTPUT_LINES).toBe(200)
     expect(MAX_MOUNTED_CHUNK_CHARS).toBe(4_000)
     expect(MAX_RENDERED_HIGHLIGHT_SEGMENTS).toBe(300)
+  })
+
+  /**
+   * Colouring is refused above these sizes rather than attempted and dying,
+   * which is what the old per-hunk and head/tail fences did.
+   */
+  test('source colouring and word diffs', () => {
+    expect(MAX_HIGHLIGHTED_SOURCE_LINES).toBe(2_000)
+    expect(MAX_HIGHLIGHTED_SOURCE_CHARS).toBe(200_000)
+    expect(MAX_MOUNTED_SOURCE_TOKENS).toBe(300)
+    expect(MAX_WORD_DIFF_CHARS).toBe(2_000)
+    expect(MAX_WORD_DIFF_SEGMENTS).toBe(120)
   })
 
   test('composite container children', () => {
