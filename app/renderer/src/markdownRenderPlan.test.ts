@@ -477,3 +477,33 @@ describe('highlighting survives chunk boundaries', () => {
     expect(inside!.html).not.toContain('const banner')
   })
 })
+
+/**
+ * Review finding: `usableChildren` dropped every whitespace-only text child of a
+ * block container so hast's inter-block filler would not become a leaf. Inside a
+ * list item those same nodes are word separators, so a list item past the line
+ * ceiling rendered `*a* *b*` as `ab` with the space deleted from the DOM.
+ */
+describe('text conservation across bounded leaves', () => {
+  test('a space between inline elements in a long list item survives', () => {
+    const filler = Array.from({ length: 260 }, () => '  continuation line').join('\n')
+    const leaves = planMarkdownLeaves('row-1', `- *a* *b*\n${filler}\n`)
+    expect(mount(leaves, 0, leaves.length)).toContain('<em>a</em> <em>b</em>')
+  })
+
+  test('whitespace filler between block siblings never becomes its own leaf', () => {
+    // Long enough that the list item is split, which is the only path where
+    // `usableChildren` runs at all.
+    const paragraphs = Array.from({ length: 300 }, (_, index) => `  Paragraph ${index}.`).join('\n\n')
+    const leaves = planMarkdownLeaves('row-1', `- lead in\n\n${paragraphs}\n`)
+
+    expect(leaves.length).toBeGreaterThan(1)
+    for (const leaf of leaves) {
+      const text = leaf.children
+        .map(child => (child.type === 'text' ? child.value : 'x'))
+        .join('')
+      expect(text.trim()).not.toBe('')
+    }
+    expect(mount(leaves, 0, leaves.length)).toContain('Paragraph 299')
+  })
+})

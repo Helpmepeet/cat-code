@@ -71,7 +71,10 @@ export function BoundedMarkdown({
     () => mergeMountedMarkdownLeaves(measuredLeaves, leafWindow.start, leafWindow.end),
     [measuredLeaves, leafWindow.start, leafWindow.end],
   )
-  const mountedKeys = mounted.map(unit => unit.measurementKey).join('|')
+  // Identity only. `measurementKey` carries the content revision, which changes
+  // on every streamed token, so keying the observer on it would tear down and
+  // rebuild every observation per token inside the loop this file bounds.
+  const mountedKeys = mounted.map(unit => unit.key).join('|')
 
   useEffect(() => {
     measuredLeavesRef.current = measuredLeaves

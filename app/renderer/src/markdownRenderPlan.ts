@@ -416,6 +416,27 @@ const BLOCK_CONTAINERS = new Set([
   'ul',
 ])
 
+/**
+ * Elements that start their own line. Whitespace between two of these is hast
+ * serialization filler; whitespace next to anything else is a word separator.
+ */
+const BLOCK_LEVEL_TAGS = new Set([
+  ...BLOCK_CONTAINERS,
+  'dd',
+  'dt',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'hr',
+  'p',
+  'pre',
+  'td',
+  'th',
+])
+
 /** Table parts that belong to every chunk of the body, not to one of them. */
 const TABLE_STICKY = new Set(['caption', 'colgroup', 'thead'])
 
@@ -597,8 +618,37 @@ function usableChildren(
 ): readonly ElementContent[] {
   const parent = wrappers.length === 0 ? null : wrappers[wrappers.length - 1].element
   if (parent !== null && !BLOCK_CONTAINERS.has(parent.tagName)) return children
-  const kept = children.filter(child => child.type !== 'text' || child.value.trim() !== '')
+  // Whitespace between two block siblings is hast's serialization filler and is
+  // safe to drop. The identical-looking node between two inline siblings is a
+  // word separator: dropping it renders `*a* *b*` as `ab`, deleting text the
+  // author wrote. Only the filler case is droppable.
+  const kept = children.filter((child, index) => {
+    if (child.type !== 'text' || child.value.trim() !== '') return true
+    return !isBlockBoundary(children, index)
+  })
   return kept.length === children.length ? children : kept
+}
+
+/** True when nothing inline sits on either side of `index`. */
+function isBlockBoundary(children: readonly ElementContent[], index: number): boolean {
+  return isBlockSideOrEdge(children, index, -1) && isBlockSideOrEdge(children, index, 1)
+}
+
+function isBlockSideOrEdge(
+  children: readonly ElementContent[],
+  index: number,
+  step: number,
+): boolean {
+  for (let at = index + step; at >= 0 && at < children.length; at += step) {
+    const sibling = children[at]
+    if (sibling.type === 'text') {
+      if (sibling.value.trim() === '') continue
+      return false
+    }
+    if (sibling.type !== 'element') continue
+    return BLOCK_LEVEL_TAGS.has(sibling.tagName)
+  }
+  return true
 }
 
 function splitWrapper(element: Element): {
