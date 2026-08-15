@@ -473,3 +473,38 @@ function reasoningToggle(root: ParentNode): HTMLElement | null {
     ) ?? null
   )
 }
+
+/**
+ * A composite container grows inline in the transcript, so a measured child
+ * height replacing an estimate moves everything below it and the pane must
+ * correct for it. `VirtualLineList` deliberately does NOT report: it lives
+ * inside its own bounded scroll box, so its measurements never change the
+ * pane's height.
+ */
+test('CC-63: a composite container reports its height change to the pane', async () => {
+  const store = createToolCardExpansionStore()
+  store.set('run:toolu_read_0', true)
+  const { tree, pane } = await mountPane(reads(400), store)
+  const container = containerRootOf(tree.container)
+
+  // The container sits above the reader, and the pane is parked mid document.
+  pane.scrollTop = 5_000
+  Object.defineProperty(pane, 'clientHeight', { configurable: true, value: 800 })
+  Object.defineProperty(pane, 'scrollHeight', { configurable: true, value: 40_000 })
+  placeAt(pane, 0)
+  placeAt(container, -3_000)
+  await scrollPane(pane)
+
+  // The container's own box grows: a measured child turned out taller than its
+  // estimate. The next commit is what reports it.
+  const grown = pane.scrollTop
+  Object.defineProperty(container, 'getBoundingClientRect', {
+    configurable: true,
+    value: () => ({ top: -3_600, bottom: 0, left: 0, right: 0, width: 0, height: 900 }),
+  })
+  await scrollPane(pane)
+
+  // Something above the reader got taller, so the pane compensated rather than
+  // letting the content they were reading slide down the screen.
+  expect(pane.scrollTop).toBeGreaterThan(grown)
+})

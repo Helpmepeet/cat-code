@@ -49,7 +49,10 @@ import {
   type MountedMarkdownLeaf,
 } from './markdownRenderPlan.js'
 import { VirtualLineList } from './VirtualLineList.js'
-import { observePaneScroll } from './markdownScrollCoordinator.js'
+import {
+  observePaneScroll,
+  reportPaneHeightCorrection,
+} from './markdownScrollCoordinator.js'
 import {
   createCompositeChildState,
   reduceCompositeChildState,
@@ -580,6 +583,8 @@ function BoundedChildList({
   const rootRef = useRef<HTMLDivElement | null>(null)
   const entriesRef = useRef(entries)
   const scheduleRef = useRef<() => void>(() => {})
+  const paneScrollerRef = useRef<HTMLElement | null>(null)
+  const boxRef = useRef<{ height: number; topSpacer: number } | null>(null)
 
   useEffect(() => {
     entriesRef.current = entries
@@ -593,6 +598,7 @@ function BoundedChildList({
     const root = rootRef.current
     if (root === null || typeof window === 'undefined') return
     const scroller = findPaneScroller(root)
+    paneScrollerRef.current = scroller
     let frame = 0
     const update = () => {
       frame = 0
@@ -618,11 +624,32 @@ function BoundedChildList({
     schedule()
     return () => {
       scheduleRef.current = () => {}
+      paneScrollerRef.current = null
       if (frame !== 0) window.cancelAnimationFrame(frame)
       rootObserver?.disconnect()
       releasePane()
     }
   }, [])
+
+  // Reports this container's own height change to the pane, on EVERY commit and
+  // with no dependency list, for the same reason `BoundedMarkdown` does: a
+  // measured child height replaces an estimate frames after the commit that used
+  // it, so only the rendered box marks where the document actually moved.
+  useEffect(() => {
+    const root = rootRef.current
+    const scroller = paneScrollerRef.current
+    if (root === null || scroller === null) return
+    const rect = root.getBoundingClientRect()
+    const previous = boxRef.current
+    boxRef.current = { height: rect.height, topSpacer: childWindow.topSpacerHeight }
+    if (previous === null) return
+    const delta = rect.height - previous.height
+    if (delta === 0) return
+    const unchangedPrefix = Math.min(previous.topSpacer, childWindow.topSpacerHeight)
+    const offset =
+      rect.top - scroller.getBoundingClientRect().top + scroller.scrollTop + unchangedPrefix
+    reportPaneHeightCorrection(scroller, { offset, delta })
+  })
 
   const mounted = useMemo(
     () => entries.slice(childWindow.start, childWindow.end),
