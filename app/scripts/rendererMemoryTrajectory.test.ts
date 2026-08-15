@@ -381,3 +381,37 @@ describe('buildTrajectoryRun', () => {
     expect(formatSummary(hidden)).toContain('window hidden')
   })
 })
+
+/**
+ * Review finding: the runner follows a `renderer.recovery.succeeded` record to
+ * the new pid and keeps appending. A restart drops footprint by hundreds of MB,
+ * so a slope fitted straight across it reads as flattening and the gate passes
+ * on a trajectory describing two different processes.
+ */
+describe('a renderer restart is visible in the analysis', () => {
+  test('one process reports one pid', () => {
+    expect(analyseRun(RUN_SAMPLES, OPTIONS).rendererPidCount).toBe(1)
+  })
+
+  test('a restart mid run is counted', () => {
+    const restarted = RUN_SAMPLES.map((entry, index) =>
+      index < RUN_SAMPLES.length / 2 ? entry : { ...entry, rendererPid: 5150 },
+    )
+    expect(analyseRun(restarted, OPTIONS).rendererPidCount).toBe(2)
+  })
+
+  test('the summary warns instead of presenting the fit as a verdict', () => {
+    const restarted = RUN_SAMPLES.map((entry, index) =>
+      index < RUN_SAMPLES.length / 2 ? entry : { ...entry, rendererPid: 5150 },
+    )
+    const text = formatSummary({
+      label: 'restart-probe',
+      workload: 'three-pane',
+      rendererPid: 5150,
+      startedIso: RUN_SAMPLES[0].atIso,
+      analysis: analyseRun(restarted, OPTIONS),
+      verdicts: evaluateThresholds(analyseRun(restarted, OPTIONS), 'three-pane'),
+    })
+    expect(text).toContain('the renderer restarted during this run')
+  })
+})

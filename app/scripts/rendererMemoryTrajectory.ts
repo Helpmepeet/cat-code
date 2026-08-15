@@ -273,7 +273,12 @@ export function analyseSeries(points: readonly SeriesPoint[], options: SeriesOpt
     else shape = 'steady'
   }
 
-  const finalWindow = valid.filter(point => point.atMs >= lastAtMs - options.finalWindowMs)
+  // Drawn from the post-warm-up points, not from every point: a final window
+  // wider than the run's settled part would score warm-up allocation and
+  // report it as a measured failure.
+  const finalWindow = postWarmUp.filter(
+    point => point.atMs >= lastAtMs - options.finalWindowMs,
+  )
   const windowFirst = finalWindow.length >= 2 ? finalWindow[0].value : null
   const windowLast = finalWindow.length >= 2 ? finalWindow[finalWindow.length - 1].value : null
   const finalWindowGrowthPercent =
@@ -309,6 +314,12 @@ export type TrajectoryAnalysis = Readonly<{
   measuredSampleCount: number
   /** Samples taken while the window was hidden, which Chromium throttles. */
   hiddenSampleCount: number
+  /**
+   * Distinct renderer pids seen. A restart drops footprint by hundreds of MB,
+   * so a slope fitted across one reads as flattening and the gate passes on a
+   * trajectory that describes two different processes.
+   */
+  rendererPidCount: number
   /**
    * Most panes seen open at once. A three-pane limit graded against a run the
    * operator did in one pane is the quiet way this gate would go wrong, so the
@@ -354,6 +365,11 @@ export function analyseRun(
     sampleCount: samples.length,
     measuredSampleCount: samples.filter(sample => sample.footprintBytes !== null).length,
     hiddenSampleCount: samples.filter(sample => sample.visible === false).length,
+    rendererPidCount: new Set(
+      samples
+        .map(sample => sample.rendererPid)
+        .filter((pid): pid is number => typeof pid === 'number'),
+    ).size,
     maxPaneCount: samples.reduce<number | null>(
       (max, sample) => (sample.paneCount === null ? max : Math.max(max ?? 0, sample.paneCount)),
       null,
@@ -637,6 +653,9 @@ export function formatSummary(run: TrajectoryRun): string {
   lines.push(
     `  panes open       ${run.analysis.maxPaneCount ?? 'not reported, run the app with CATCODE_DEBUG_STATE=1 to record it'}`,
   )
+  if (run.analysis.rendererPidCount > 1) {
+    lines.push(`  WARNING          the renderer restarted during this run (${run.analysis.rendererPidCount} processes). Footprint drops to near zero at a restart, so the slope and shape below describe two different processes and must not be read as a verdict. Re-run without a restart.`)
+  }
   if (run.analysis.hiddenSampleCount > 0) {
     lines.push(`  WARNING          ${run.analysis.hiddenSampleCount} samples were taken with the window hidden. Chromium throttles a hidden renderer, so the trajectory is not comparable. Re-run with the window visible.`)
   }

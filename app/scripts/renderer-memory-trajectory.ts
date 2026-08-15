@@ -274,6 +274,13 @@ async function main(): Promise<void> {
   if (![minutes, intervalSec, warmUpMin, finalWindowMin].every(value => Number.isFinite(value) && value > 0)) {
     fail('minutes, interval-sec, warmup-min, and final-window-min must all be positive numbers')
   }
+  // Otherwise the run has no settled stretch to measure and the gate scores
+  // warm-up allocation as if it were the steady state.
+  if (warmUpMin + finalWindowMin >= minutes) {
+    fail(
+      `warmup-min (${warmUpMin}) plus final-window-min (${finalWindowMin}) must be less than minutes (${minutes})`,
+    )
+  }
 
   const registryDir = defaultRegistryDir()
   const logPath = args.log ?? join(registryDir, 'logs', 'latest-operational')
