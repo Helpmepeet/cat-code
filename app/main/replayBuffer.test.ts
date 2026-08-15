@@ -25,9 +25,14 @@ const SID: SessionId = 'sess-1'
 
 /**
  * The once-per-attach burst, in the exact order `SidecarServer.addConnection`
- * sends it (`app/sidecar/sidecarServer.ts:510-566`). Written out here rather
+ * sends it (`app/sidecar/sidecarServer.ts:709-812`). Written out here rather
  * than derived from the buffer's own table so a reordering or a demotion to the
  * evictable ring is a test failure, not a silently agreeing constant.
+ *
+ * This is CALL order, not arrival order: the two `void`-invoked async sends
+ * (`agent-mode`, `stats.usage`) await before their first send, so their frames
+ * land after the synchronous burst. The buffer keys on arrival, and this suite
+ * supplies arrival itself, so call order is what the list can honestly mirror.
  */
 const ATTACH_BURST_KINDS = [
   'permission.context',
@@ -41,6 +46,7 @@ const ATTACH_BURST_KINDS = [
   'run-controls.snapshot',
   'context-breakdown.snapshot',
   'accounts.snapshot',
+  'stats.usage.snapshot',
   'workspace-trust.snapshot',
   'diagnostics.snapshot',
   'extensions.snapshot',
