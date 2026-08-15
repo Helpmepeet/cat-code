@@ -41,6 +41,7 @@ import {
   reduceLineGeometryState,
   selectCentredScrollTop,
   selectGeometryMode,
+  selectRowIsPinned,
   selectIsMeasured,
   selectLineWindow,
   selectVisualChunk,
@@ -242,12 +243,10 @@ export function VirtualLineList({
       selectGeometryMode(geometry) === 'fixed' ||
       selectIsMeasured(geometry, index)
     ) {
-      setCommitted(state => reduceLineGeometryState(state, { kind: 'centred' }))
+      setCommitted(state => reduceLineGeometryState(state, { kind: 'centred', index }))
     }
   }, [geometry, viewportHeight])
 
-  const rowClass =
-    selectGeometryMode(geometry) === 'fixed' ? FIXED_ROW_HEIGHT_CLASS : undefined
 
   return (
     <div
@@ -277,7 +276,9 @@ export function VirtualLineList({
             )}
             <div
               ref={boxRef(rowRefs.current, rowNodes.current, index)}
-              className={rowClass}
+              className={
+                selectRowIsPinned(geometry, index) ? FIXED_ROW_HEIGHT_CLASS : undefined
+              }
             >
               {renderLine(text, index)}
             </div>

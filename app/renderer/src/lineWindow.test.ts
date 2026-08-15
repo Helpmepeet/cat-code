@@ -8,6 +8,7 @@ import {
   reduceLineGeometryState,
   selectCentredScrollTop,
   selectGeometryMode,
+  selectRowIsPinned,
   selectIsMeasured,
   selectLineAtOffset,
   selectLineHeight,
@@ -263,7 +264,28 @@ describe('search centring', () => {
 
     // …and the request is spent, so nothing scrolls a third time.
     expect(
-      reduceLineGeometryState(settled, { kind: 'centred' }).pendingCentreIndex,
+      reduceLineGeometryState(settled, { kind: 'centred', index: 500 })
+        .pendingCentreIndex,
+    ).toBeNull()
+  })
+
+  test('an acknowledgement for a superseded index leaves the newer one pending', () => {
+    // Both effects fire in one commit: the newer `centre` lands first, then the
+    // acknowledgement for the index the previous pass scrolled to. Clearing on
+    // that stale acknowledgement would strand the pane on the old match.
+    const state = createLineGeometryState(
+      Array.from({ length: 50 }, (_, index) => `line ${index}`),
+    )
+    const first = reduceLineGeometryState(state, { kind: 'centre', index: 10 })
+    const second = reduceLineGeometryState(first, { kind: 'centre', index: 20 })
+
+    expect(
+      reduceLineGeometryState(second, { kind: 'centred', index: 10 })
+        .pendingCentreIndex,
+    ).toBe(20)
+    expect(
+      reduceLineGeometryState(second, { kind: 'centred', index: 20 })
+        .pendingCentreIndex,
     ).toBeNull()
   })
 
@@ -392,5 +414,34 @@ describe('the character budget for one logical line', () => {
 
     expect(chunk.text.length).toBe(100)
     expect([...chunk.text]).toHaveLength(50)
+  })
+})
+
+/**
+ * Review finding: the row pin was applied per MODE, so one wrapped row unpinned
+ * every row in the body. Each ordinary row then reported its natural height,
+ * deviated from the grid, and earned a permanent index entry, which an
+ * always-wrapping body turns into one entry per line re-sorted every frame.
+ */
+describe('row pinning survives the switch to measured mode', () => {
+  test('only rows with their own measurement are unpinned', () => {
+    const state = measure(createLineGeometryState(sourceLines(500)), [
+      { index: 7, height: 60 },
+    ])
+
+    expect(selectGeometryMode(state)).toBe('measured')
+    expect(selectRowIsPinned(state, 7)).toBe(false)
+    for (const index of [0, 6, 8, 250, 499]) {
+      expect(selectRowIsPinned(state, index)).toBe(true)
+    }
+  })
+
+  test('a body where one row wraps keeps a single index entry', () => {
+    const state = measure(createLineGeometryState(sourceLines(500)), [
+      { index: 7, height: 60 },
+    ])
+
+    // 500 lines on the grid plus one row 40px taller than its slot.
+    expect(selectTotalHeight(state)).toBe(500 * 20 + 40)
   })
 })

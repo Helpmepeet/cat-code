@@ -124,7 +124,12 @@ export type LineGeometryAction =
   | { kind: 'layout'; layoutRevision: string }
   | { kind: 'measure'; entries: readonly LineMeasureEntry[] }
   | { kind: 'centre'; index: number | null }
-  | { kind: 'centred' }
+  /**
+   * Carries the index it centred. Two search steps in one commit queue
+   * `centre B` and `centred` together; an index-free acknowledgement clears
+   * whatever is pending, so B would be dropped and the pane left on A.
+   */
+  | { kind: 'centred'; index: number }
 
 export function createLineGeometryState(
   lines: readonly string[],
@@ -218,7 +223,7 @@ export function reduceLineGeometryState(
       return { ...state, pendingCentreIndex: action.index }
     }
     case 'centred': {
-      if (state.pendingCentreIndex === null) return state
+      if (state.pendingCentreIndex !== action.index) return state
       return { ...state, pendingCentreIndex: null }
     }
     default: {
@@ -291,6 +296,18 @@ export function selectGeometryMode(
   state: LineGeometryState,
 ): 'fixed' | 'measured' {
   return deltaIndex(state).indices.length === 0 ? 'fixed' : 'measured'
+}
+
+/**
+ * Whether a row should keep `FIXED_ROW_HEIGHT_CLASS`. Pinning only in `fixed`
+ * mode unpins EVERY row as soon as one deviates, so every ordinary row then
+ * reports its natural height, deviates from the grid, and earns a permanent
+ * index entry: an always-wrapping body would retain one entry per line and
+ * re-sort them per frame. A row that has no measurement of its own is still on
+ * the grid, and `scrollHeight` reveals its overflow through the pinned box.
+ */
+export function selectRowIsPinned(state: LineGeometryState, index: number): boolean {
+  return validMeasurement(state, index) === null
 }
 
 export function selectTotalHeight(state: LineGeometryState): number {
