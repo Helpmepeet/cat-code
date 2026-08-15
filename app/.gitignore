@@ -10,7 +10,8 @@ scripts/harness-demo-driver.cjs
 # Rebranded dev Electron.app copy (scripts/prepare-dev-electron.ts)
 .dev-electron/
 
-# Probe scratch output (scripts/ram-probe.ts, ram-fleet.ts, ram-measure.ts)
+# Probe scratch output (scripts/ram-probe.ts, ram-fleet.ts, ram-measure.ts,
+# renderer-memory-trajectory.ts)
 .ram-scratch/
 
 # Deps
