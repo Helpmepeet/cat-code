@@ -18,13 +18,21 @@ against source on the day it was written.
 
 ## A. Records the investigation needed and did not have
 
+**Dispositions below are as of 2026-08-15 and are a record of what was true when
+written, not current state. Verify in source before acting on any row.** A status
+column reads as present tense in a way surrounding prose does not: row B3 read
+"Dispatched" for a field that had already landed, and on 2026-08-14 an
+investigation trusted it, concluded frame composition was unknowable, and left
+its central claim resting on a weaker argument
+(`docs/reports/2026-08-14-desktop-logging-feedback.md` §G).
+
 | # | Request | Disposition |
 |---|---|---|
 | A1 | Turn lifecycle from the sidecar: `session.turn.started` / `completed` / `stalled`, the stall firing once after N minutes of an empty tool queue and no engine events, naming the pending post-turn phase. Called "the single highest-value addition". | ✅ `319d541b` (CC-50). **This row previously claimed A1 needed `app/sidecar/sessionController.ts` and was blocked behind another session holding it. That was wrong on the second half and it cost a dispatch window.** That file builds the engine config; the turn boundary is `activeTurn` in `app/sidecar/sidecarServer.ts`, which was clean throughout. The lesson is the ordinary one: ownership was asserted from a plausible file name instead of being traced in source. |
 | A2 | Slow-await diagnostics on the post-turn path, log-only, no timeout. | ✅ `3a0b066c` (CC-46) |
 | A3 | Provider request START visibility, since `codex_send_path` / `codex_stream_surface` are end-of-stream summaries and a hung request writes nothing. | ✅ `de506a11` (CC-46), as the start marker. The alternative offered — arming `CLAUDE_ENABLE_STREAM_WATCHDOG` — was **declined**: see §D. |
 | A4 | Websocket conversation-lock wait telemetry before any send. | ✅ `caddcd90` (CC-46) |
-| A5 | `frame.dropped` in the operational log; the sidecar's outbound drop paths log only to inherited stderr. | Dispatched. |
+| A5 | `frame.dropped` in the operational log; the sidecar's outbound drop paths log only to inherited stderr. | **Open as an owner decision, not dispatched work** (checked in source 2026-08-15). §E declines the wholesale-stderr form and offers the closed-vocabulary drop reasons as the alternative; that alternative is still undecided and is carried as open item 7 in `docs/reports/2026-08-15-renderer-incidents-final.md`. |
 | A6 | Keep the priority of the four already-filed tasks in `docs/reports/2026-08-10-desktop-logging-incident-feedback.md`. | ✅ All four landed: CC-41 through CC-44. |
 
 ## B. Changes to existing behavior

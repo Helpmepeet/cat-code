@@ -11,6 +11,39 @@ Where a probe misled me, I say so and name the wrong conclusion I drew from it,
 because the failure mode being reported is not "a log was missing" but "a log
 was believed".
 
+## Disposition, as of 2026-08-15
+
+Recorded here because this report is a request list, and a request list with no
+dispositions ages exactly the way §G warns about. **Verify in source before
+acting on any line.**
+
+- **A1** done the same evening (`dd866ad0`), with `rendererWorkingSetKiB`
+  (`e7aab83e`) supplying the figure the old field was being read for.
+- **A2** done as documentation at the definition, not as a behavior change. The
+  field measures correctly; re-sampling it at probe time was considered and
+  rejected, because the event loop was genuinely idle during the freeze and
+  would have reported the same value. `rendersCommitted` answers the question
+  that was actually being asked of it.
+- **B** re-diagnosed. The premise is wrong: a rollup lane built for exactly this
+  landed on 2026-08-10 (`6bc3aac3`), four days before this incident, and carries
+  per-stream per-minute watermarks on files the per-frame lane's rotation cannot
+  reach. It was never read. It was also being evicted by its own file cap, which
+  is per-launch and therefore rotated on restarts rather than on age; fixed
+  2026-08-15. What remains is the owner decision on per-frame stage detail in
+  `docs/reports/2026-08-10-delivery-trace-retention-measurement.md`.
+- **D1** done 2026-08-15.
+- **D2** deferred behind the replay-burst fix in
+  `docs/plans/2026-08-14-renderer-freeze-fix-plan.md`. Instrumenting a behavior
+  that is about to be removed is the wrong order.
+- **E** done the same evening (`b110d99e`). Its secondary request, an
+  applied-versus-queued comparison over a window, is a detector rather than a
+  record and is carried as an open decision.
+- **F** recorded in the playbook in
+  `docs/reports/2026-08-15-renderer-incidents-final.md` §7.
+- **G** applied to `docs/reports/2026-08-10-overnight-hang-log-request.md`: the
+  table now carries an as-of date and row A5 no longer reads "Dispatched" for
+  what is an open decision.
+
 ## Summary
 
 The structural work done after 2026-08-10 paid off and should be preserved. The

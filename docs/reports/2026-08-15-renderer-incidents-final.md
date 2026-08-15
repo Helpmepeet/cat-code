@@ -322,24 +322,35 @@ memory and interaction workloads.
 ## 7. Playbook for the next occurrence
 
 1. **Do not open DevTools.** It can mutate and kill the renderer being diagnosed.
-2. **Route the failure before quitting.** If `engine.produced` has stopped and no
+2. **Open `latest-delivery-rollup` first, before the per-frame trace.** The rollup
+   lane carries one record per stream per minute with the full watermark set,
+   `quietMs`, `lastMessageKind` and the anomaly counts, on files the per-frame
+   lane's rotation cannot reach. A freeze is `applied` flat while `ipcSent` and
+   `preloadReceived` climb, so this pins onset to the minute. It existed during
+   the 2026-08-14 incident and went unread for a full day while the investigation
+   watched the per-frame files rotate away.
+3. **Route the failure before quitting.** If `engine.produced` has stopped and no
    result follows, investigate the separate engine-hang class. If
    `renderer.state.queued` continues while `renderer.state.applied` is flat,
    investigate a renderer freeze.
-3. **Copy the delivery trace immediately.** Current retention can erase onset
-   evidence within minutes under streaming or replay load.
-4. **Capture the live sidecar stack before teardown** when the engine route is
+4. **Copy the per-frame delivery trace immediately.** It holds the stage detail
+   the rollup summarizes, and under streaming or replay load it can rotate away
+   within minutes.
+5. **Capture the live sidecar stack before teardown** when the engine route is
    indicated. Sampling the known sidecar PID is read-only and can identify an
    unbounded await that no post-mortem log can recover.
-5. **Use external renderer measurements.** Sample the live renderer with
+6. **Use external renderer measurements.** Sample the live renderer with
    `footprint -p <pid>` and `vmmap --summary <pid>`. Read PartitionAlloc dirty or
    resident bytes and region count; do not use `jsHeapUsedBytes` as process
    memory and do not treat the fixed 32 GB virtual reservation as a leak.
-6. **Compare the numeric renderer counters.** `rendersCommitted`, queued versus
+7. **Compare the numeric renderer counters.** `rendersCommitted`, queued versus
    applied counts, and the timestamped working-set sample should turn the next
    occurrence into a mechanism-level report rather than a reconstruction.
+   `eventLoopLagMs` is not one of them: it measures timer scheduling only.
 
 ## 8. Open work
+
+**As of 2026-08-15. Verify each item against source before acting on it.**
 
 1. Establish the mechanism of the 2026-08-14 renderer freeze and recover its true
    onset on a recurrence.
@@ -350,10 +361,19 @@ memory and interaction workloads.
    keyboard focus, and bounded native selection in a live renderer. The explicit
    parity adaptations are the fixed selection corridor, bounded handling for one
    pathological atomic body, and virtualized painting of long tool output.
-4. Fix or explicitly scope delivery-trace retention so incident onset survives
-   the investigation window.
-5. Stamp replay records after delivery is decided, or record the dropped stage.
-6. Give `eventLoopLagMs` a name and contract that do not imply render liveness.
+4. Decide the per-frame lane's retention from the three costed options in
+   `docs/reports/2026-08-10-delivery-trace-retention-measurement.md`. This is an
+   owner decision, not an engineering gap. **Narrowed 2026-08-15:** the rollup
+   lane already answers onset and was being evicted by its own file cap, which
+   is fixed; what remains open is only how much per-frame stage detail to keep.
+5. ~~Stamp replay records after delivery is decided.~~ **Done 2026-08-15**:
+   `attachment.replayed` is stamped only on frames handed to `webContents.send`,
+   and an undeliverable replay writes its own `diagnostic` record.
+6. ~~Give `eventLoopLagMs` a contract that does not imply render liveness.~~
+   **Done 2026-08-15** as documentation. The field measures correctly; the
+   failure was reading it as render liveness, which `rendersCommitted` now
+   answers. Re-sampling it at probe time was considered and rejected: the event
+   loop was genuinely idle during the freeze, so it would report the same value.
 7. Decide separately whether to enable the stream watchdog for liveness and
    whether to persist bounded sidecar drop reasons.
 

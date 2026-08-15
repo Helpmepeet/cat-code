@@ -85,6 +85,20 @@ class, populate it only from state the emitter directly holds. A confidently
 wrong label sends the next investigation down a false path, which is strictly
 worse than the silence this document is otherwise trying to eliminate.
 
+**A field's name must not claim more than it measures.** Two probes read
+correctly and were still the largest single cost of the 2026-08-14 renderer
+investigation, because their names were read as answers to a broader question
+than either one asks. `heapUsedBytes` reported 102 MB of V8 heap while the
+process held 6.7 GB, and was quoted three times as evidence that the renderer
+was healthy; it is now `jsHeapUsedBytes`, with `rendererWorkingSetKiB` carrying
+the real figure. `eventLoopLagMs` reported 4.5 ms throughout a freeze in which
+nothing had rendered for two minutes, because the event loop genuinely was idle
+and timer scheduling is all it measures; `rendersCommitted` now answers render
+liveness. Two narrow probes read together as a broad verdict is the compound
+failure to watch for, since they carry the false authority of independent
+instruments agreeing. Where a rename is not wanted, the constraint belongs at
+the definition, not in the reader's head.
+
 ## 5. What this rule does not license
 
 It is not "log more". Volume is a real cost with a real failure mode here: the
