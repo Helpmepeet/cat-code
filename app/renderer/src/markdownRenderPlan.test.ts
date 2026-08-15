@@ -11,6 +11,7 @@
  * bounded window actually mounts.
  */
 import { describe, expect, test } from 'bun:test'
+import type { ElementContent } from 'hast'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { REHYPE_PLUGINS } from './markdownPlugins.js'
 import {
@@ -33,6 +34,40 @@ function mount(leaves: readonly MarkdownRenderLeaf[], start: number, end: number
 
 function count(html: string, needle: RegExp): number {
   return html.match(needle)?.length ?? 0
+}
+
+/** Element and text nodes a bounded window actually puts in the DOM. */
+function mountedNodeCount(source: string): number {
+  const leaves = planMarkdownLeaves('row-1', source)
+  const leafWindow = selectMarkdownLeafWindow(leaves, 0, 800)
+  let total = 0
+  for (const unit of mergeMountedMarkdownLeaves(leaves, leafWindow.start, leafWindow.end)) {
+    total += countNodes(unit.tree.children as ElementContent[])
+  }
+  return total
+}
+
+function countNodes(children: readonly ElementContent[]): number {
+  let total = 0
+  for (const child of children) {
+    if (child.type === 'element') total += 1 + countNodes(child.children)
+    else if (child.type === 'text') total += 1
+  }
+  return total
+}
+
+/** A table of `columns` headed columns over one empty body row. */
+function wideTable(columns: number): string {
+  const header = `|${Array.from({ length: columns }, (_, index) => `h${index}`).join('|')}|`
+  const rule = `|${Array.from({ length: columns }, () => '---').join('|')}|`
+  const body = `|${Array.from({ length: columns }, () => '').join('|')}|`
+  return `${header}\n${rule}\n${body}`
+}
+
+function headerCellCount(source: string): number {
+  const leaves = planMarkdownLeaves('row-1', source)
+  const leafWindow = selectMarkdownLeafWindow(leaves, 0, 800)
+  return count(mount(leaves, leafWindow.start, leafWindow.end), /<th[ >]/g)
 }
 
 describe('semantic leaves keep their document context', () => {
@@ -505,6 +540,146 @@ describe('text conservation across bounded leaves', () => {
       expect(text.trim()).not.toBe('')
     }
     expect(mount(leaves, 0, leaves.length)).toContain('Paragraph 299')
+  })
+})
+
+/**
+ * The second defect (CC-61): `weigh` measured text characters and source line
+ * span only, so a child that is element-dense and text-sparse was never
+ * oversized, was never recursed into, and mounted whole. Fifty thousand empty
+ * anchors on ONE source line cost a single leaf and fifty thousand mounted
+ * nodes: exactly linear in the input, which is what this file exists to stop.
+ *
+ * Every number below is absolute. `expect(measured).toBeLessThanOrEqual(BUDGET)`
+ * compares a budget against itself and stays green however high the budget
+ * goes, which is how a whole dimension of bounding stayed missing. See the
+ * header of `mountingBudgets.test.ts`.
+ */
+describe('element density is bounded like text density', () => {
+  const pathological: readonly {
+    name: string
+    build: (columns: number) => string
+    small: number
+    large: number
+    mounted: number
+  }[] = [
+    {
+      name: 'inline links',
+      build: n => Array.from({ length: n }, (_, index) => `[](u${index})`).join(''),
+      small: 2_000,
+      large: 20_000,
+      mounted: 201,
+    },
+    {
+      name: 'images',
+      build: n => Array.from({ length: n }, (_, index) => `![](b${index}.svg)`).join(''),
+      small: 1_000,
+      large: 10_000,
+      mounted: 201,
+    },
+    {
+      name: 'nested blockquotes',
+      build: n => `${'> '.repeat(n)}note`,
+      small: 500,
+      large: 5_000,
+      mounted: 823,
+    },
+    {
+      name: 'inline code spans',
+      build: n => Array.from({ length: n }, () => '`a`').join(' '),
+      small: 500,
+      large: 5_000,
+      mounted: 301,
+    },
+    {
+      name: 'wide table columns',
+      build: wideTable,
+      small: 400,
+      large: 4_000,
+      mounted: 799,
+    },
+  ]
+
+  for (const entry of pathological) {
+    test(`${entry.name}: ten times the source still mounts ${entry.mounted} nodes`, () => {
+      const small = entry.build(entry.small)
+      const large = entry.build(entry.large)
+
+      expect(large.length).toBeGreaterThan(small.length * 5)
+      expect(mountedNodeCount(small)).toBe(entry.mounted)
+      expect(mountedNodeCount(large)).toBe(entry.mounted)
+    })
+  }
+
+  test('bounding is mounted DOM only: the whole plan still holds every element', () => {
+    const source = Array.from({ length: 2_000 }, (_, index) => `[](u${index})`).join('')
+    const leaves = planMarkdownLeaves('row-1', source)
+
+    // The source was cut into many leaves rather than buffered into one.
+    expect(leaves.length).toBe(10)
+    expect(count(mount(leaves, 0, leaves.length), /<a /g)).toBe(2_000)
+  })
+
+  test('a linear nesting chain is truncated, because no window can cut it', () => {
+    // Every level of `> > > …` is an ancestor of the text, so there is no
+    // sibling run to window. The retained chain stops at a depth past any
+    // readable nesting and the remainder is dropped from the DOM.
+    const html = mount(planMarkdownLeaves('row-1', `${'> '.repeat(5_000)}note`), 0, 1)
+    expect(count(html, /<blockquote/g)).toBe(424)
+  })
+})
+
+/**
+ * The wrapper prefix is the other half of the same defect: `<thead>` is
+ * re-emitted into EVERY mounted unit of the table body, so a header wide enough
+ * was charged to every window no matter how well the body chunked.
+ */
+describe('the sticky table header carries a bounded number of cells', () => {
+  test('an ordinary header is untouched and a pathological one is cut', () => {
+    expect(headerCellCount(wideTable(20))).toBe(20)
+    expect(headerCellCount(wideTable(400))).toBe(198)
+    expect(headerCellCount(wideTable(4_000))).toBe(198)
+  })
+})
+
+/**
+ * Review finding: `mergeMountedMarkdownLeaves` folded CONSECUTIVE leaves of one
+ * group, but an oversized child interrupts its parent's group and leaves two
+ * non-consecutive runs behind. A table whose body contained one oversized row
+ * emitted leaves at three depths and rendered as four stacked tables, each
+ * paying for the header again. Units are keyed on the outermost retained
+ * wrapper now, so the whole container folds back into one.
+ */
+describe('a container interrupted by an oversized child stays one container', () => {
+  const interrupted = [
+    '| Alpha | Beta |',
+    '| --- | --- |',
+    '| a0 | b0 |',
+    '| a1 | b1 |',
+    `| ${'y'.repeat(60_000)} | mid |`,
+    '| a3 | b3 |',
+    '| a4 | b4 |',
+  ].join('\n')
+
+  test('a table body split around an oversized row renders as ONE table', () => {
+    const leaves = planMarkdownLeaves('row-1', interrupted)
+
+    // The plan really does emit non-consecutive runs of the body's own group.
+    expect(new Set(leaves.map(leaf => leaf.groupId)).size).toBe(3)
+    expect(leaves[0].groupId).toBe(leaves[leaves.length - 1].groupId)
+    expect(leaves[0].groupId).not.toBe(leaves[1].groupId)
+    // All of them belong to the same mounted unit regardless.
+    expect(new Set(leaves.map(leaf => leaf.unitId)).size).toBe(1)
+
+    const html = mount(leaves, 0, leaves.length)
+    expect(mergeMountedMarkdownLeaves(leaves, 0, leaves.length)).toHaveLength(1)
+    expect(count(html, /<table/g)).toBe(1)
+    expect(count(html, /<thead/g)).toBe(1)
+    expect(count(html, /<tr/g)).toBe(6)
+    // Nothing was reordered or dropped on the way back into one table.
+    expect(html.indexOf('>a0<')).toBeLessThan(html.indexOf('>a3<'))
+    expect(html).toContain('>a4<')
+    expect(html).toContain('>mid<')
   })
 })
 

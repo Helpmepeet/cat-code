@@ -29,8 +29,37 @@ export const MAX_MARKDOWN_LEAF_LINES = 200
 export const MAX_MARKDOWN_LEAF_CHARACTERS = 12_000
 /** Mounted-children ceiling for one semantic parent's leaf. */
 export const MAX_MARKDOWN_LEAF_CHILDREN = 200
+/**
+ * Element ceiling for one mounted leaf.
+ *
+ * Lines and characters both measure TEXT, so a child that is element-dense and
+ * text-sparse weighed nothing and was buffered whole: fifty thousand empty
+ * anchors on one source line produced one leaf and fifty thousand mounted
+ * nodes. This is the dimension those inputs are dense in.
+ */
+export const MAX_MARKDOWN_LEAF_ELEMENTS = 400
 /** Leaf ceiling for one mounted window. */
 export const MAX_MOUNTED_MARKDOWN_LEAVES = 120
+/**
+ * Element ceiling for one mounted window. Element-dense content can be far
+ * shorter than it is expensive, so the leaf ceiling alone would still admit
+ * `MAX_MOUNTED_MARKDOWN_LEAVES` dense leaves into a viewport that estimates
+ * them at one row each.
+ */
+export const MAX_MOUNTED_MARKDOWN_ELEMENTS = 4_000
+/**
+ * Retained-ancestor ceiling. A linear nesting chain cannot be windowed at all,
+ * because every one of its levels is an ancestor of the content: five thousand
+ * nested blockquotes are five thousand mounted nodes however the body is cut.
+ * Past this depth the tail is truncated instead of retained.
+ */
+export const MAX_MARKDOWN_WRAPPER_DEPTH = 24
+/**
+ * Element ceiling for a retained wrapper's sticky prefix. The prefix re-mounts
+ * with every unit that shows any part of its parent, so a table with ten
+ * thousand header cells charged them to every window.
+ */
+export const MAX_MARKDOWN_WRAPPER_PREFIX_ELEMENTS = 200
 /**
  * Retained measured runs. A key names a contiguous RUN of leaves, so scrolling
  * one group mints a new key per distinct run the window ever framed: pruning
@@ -50,6 +79,12 @@ export type MarkdownComponents = Components
  * table body keeps its `<thead>` at any scroll position.
  */
 export type MarkdownLeafWrapper = {
+  /**
+   * Tree path of the element this wrapper was cut from. Two leaves are inside
+   * the SAME wrapper when the ids match, which survives the cloning
+   * `withOrderedStart` does to carry an ordered list's running number.
+   */
+  id: string
   element: Element
   prefix: readonly ElementContent[]
 }
@@ -58,6 +93,13 @@ export type MarkdownRenderLeaf = {
   id: string
   /** Consecutive leaves sharing this render inside ONE semantic wrapper. */
   groupId: string
+  /**
+   * The outermost retained wrapper's group, or `groupId` when nothing is
+   * retained. Leaves of one top-level container share it however deeply the
+   * container was recursed into, which is what folds a table whose body was
+   * interrupted by an oversized row back into ONE table.
+   */
+  unitId: string
   kind: MarkdownLeafKind
   wrappers: readonly MarkdownLeafWrapper[]
   children: readonly ElementContent[]
@@ -69,6 +111,8 @@ export type MarkdownRenderLeaf = {
   /** Content revision. Never part of a React key. */
   characters: number
   lines: number
+  /** Upper bound on this leaf's mounted elements, retained ancestors included. */
+  elements: number
   estimatedHeight: number
 }
 
@@ -208,6 +252,7 @@ export function planPlainTextLeaves(
 
 function planPlainText(value: string, path: string, state: PlanState): void {
   const wrapper: MarkdownLeafWrapper = {
+    id: `${path}#text`,
     element: {
       type: 'element',
       tagName: 'div',
@@ -270,14 +315,14 @@ export function resolveMarkdownMeasurements(
 
     let characters = 0
     let estimated = 0
-    let sameGroup = true
+    let sameUnit = true
     for (let index = start; index < end; index += 1) {
       const leaf = leaves[index]
-      if (leaf.groupId !== leaves[start].groupId) sameGroup = false
+      if (leaf.unitId !== leaves[start].unitId) sameUnit = false
       characters += leaf.characters
       estimated += leaf.estimatedHeight
     }
-    if (!sameGroup || characters !== decoded.characters) continue
+    if (!sameUnit || characters !== decoded.characters) continue
 
     live.add(key)
     const total = estimated > 0 ? estimated : 1
@@ -330,8 +375,14 @@ export function selectMarkdownLeafWindow(
 
   let end = start
   let covered = offset
+  let elements = 0
   while (end < leaves.length && covered < endOffset && end - start < maxMountedLeaves) {
+    // Element-dense content is charged nothing by the height estimate, so the
+    // leaf count alone would let a viewport's worth of one-row leaves mount
+    // tens of thousands of nodes.
+    if (end > start && elements + leaves[end].elements > MAX_MOUNTED_MARKDOWN_ELEMENTS) break
     covered += leaves[end].estimatedHeight
+    elements += leaves[end].elements
     end += 1
   }
 
@@ -358,7 +409,7 @@ export function mergeMountedMarkdownLeaves(
   while (index < limit) {
     const first = leaves[index]
     let last = index
-    while (last + 1 < limit && leaves[last + 1].groupId === first.groupId) last += 1
+    while (last + 1 < limit && leaves[last + 1].unitId === first.unitId) last += 1
 
     const members = leaves.slice(index, last + 1)
     const children: ElementContent[] = []
@@ -372,7 +423,7 @@ export function mergeMountedMarkdownLeaves(
       key: first.id,
       measurementKey: markdownUnitKey(members),
       kind: first.kind,
-      tree: { type: 'root', children: applyWrappers(first.wrappers, children) },
+      tree: { type: 'root', children: foldWrappers(members, 0) },
       content: { type: 'root', children },
       text,
       codeSource: first.codeSource,
@@ -401,7 +452,7 @@ export function renderMarkdownTree(tree: Root, components?: Components): ReactNo
 
 type PlanState = { sourceId: string; leaves: MarkdownRenderLeaf[] }
 
-type Weight = { lines: number; characters: number }
+type Weight = { lines: number; characters: number; elements: number }
 
 /**
  * Containers whose inter-child whitespace carries no meaning. Dropping it stops
@@ -452,12 +503,19 @@ function planChildren(
   wrappers: readonly MarkdownLeafWrapper[],
   path: string,
   state: PlanState,
+  parentUnitId?: string,
 ): void {
   const usable = usableChildren(children, wrappers)
   const groupId = `${state.sourceId}:${path === '' ? 'root' : path}`
+  // The outermost wrapper's own group names the mounted unit. A recursion that
+  // adds the FIRST wrapper starts a new unit; deeper ones inherit it.
+  const unitId = parentUnitId ?? groupId
+  const nestedUnitId = wrappers.length === 0 ? undefined : unitId
+  const wrapperElements = countWrapperElements(wrappers)
   let buffer: ElementContent[] = []
   let bufferLines = 0
   let bufferCharacters = 0
+  let bufferElements = 0
   let bufferStart = 0
   let chunkIndex = 0
 
@@ -466,10 +524,12 @@ function planChildren(
     firstIndex: number,
     lines: number,
     characters: number,
+    elements: number,
   ): void => {
     state.leaves.push({
       id: `${groupId}:${chunkIndex}`,
       groupId,
+      unitId,
       kind: 'block',
       wrappers: withOrderedStart(wrappers, usable, firstIndex),
       children: leafChildren,
@@ -478,6 +538,7 @@ function planChildren(
       codeLanguage: '',
       characters,
       lines,
+      elements: elements + wrapperElements,
       estimatedHeight: estimateHeight(lines, characters),
     })
     chunkIndex += 1
@@ -485,10 +546,11 @@ function planChildren(
 
   const flush = (): void => {
     if (buffer.length === 0) return
-    push(buffer, bufferStart, bufferLines, bufferCharacters)
+    push(buffer, bufferStart, bufferLines, bufferCharacters, bufferElements)
     buffer = []
     bufferLines = 0
     bufferCharacters = 0
+    bufferElements = 0
   }
 
   for (let index = 0; index < usable.length; index += 1) {
@@ -497,7 +559,8 @@ function planChildren(
     const weight = weigh(child)
     const oversized =
       weight.lines > MAX_MARKDOWN_LEAF_LINES ||
-      weight.characters > MAX_MARKDOWN_LEAF_CHARACTERS
+      weight.characters > MAX_MARKDOWN_LEAF_CHARACTERS ||
+      weight.elements > MAX_MARKDOWN_LEAF_ELEMENTS
 
     if (oversized) {
       flush()
@@ -511,7 +574,7 @@ function planChildren(
       }
       if (child.type === 'text') {
         for (const slice of sliceBoundedText(child.value)) {
-          push([{ type: 'text', value: slice }], index, countBreaks(slice), slice.length)
+          push([{ type: 'text', value: slice }], index, countBreaks(slice), slice.length, 0)
         }
         continue
       }
@@ -520,18 +583,30 @@ function planChildren(
           planAtomicProse(child, `${path}/${index}`, state)
           continue
         }
-        if (child.children.length > 0) {
-          const { wrapper, rest } = splitWrapper(child)
+        // A chain deeper than any reader can follow is dense in nesting rather
+        // than in siblings, so recursing one more level would retain a wrapper
+        // instead of windowing anything. Mount what fits and stop.
+        const exhausted =
+          wrappers.length >= MAX_MARKDOWN_WRAPPER_DEPTH &&
+          weight.elements > MAX_MARKDOWN_LEAF_ELEMENTS
+        if (child.children.length > 0 && !exhausted) {
+          const { wrapper, rest } = splitWrapper(child, `${path}/${index}`)
           planChildren(
             rest,
             [...withOrderedStart(wrappers, usable, index), wrapper],
             `${path}/${index}`,
             state,
+            nestedUnitId,
           )
           continue
         }
+        if (weight.elements > MAX_MARKDOWN_LEAF_ELEMENTS) {
+          const bounded = boundElements([child], MAX_MARKDOWN_LEAF_ELEMENTS)
+          push(bounded, index, weight.lines, weight.characters, countElementList(bounded))
+          continue
+        }
       }
-      push([child], index, weight.lines, weight.characters)
+      push([child], index, weight.lines, weight.characters, weight.elements)
       continue
     }
 
@@ -539,7 +614,8 @@ function planChildren(
       buffer.length > 0 &&
       (buffer.length + 1 > MAX_MARKDOWN_LEAF_CHILDREN ||
         bufferLines + weight.lines > MAX_MARKDOWN_LEAF_LINES ||
-        bufferCharacters + weight.characters > MAX_MARKDOWN_LEAF_CHARACTERS)
+        bufferCharacters + weight.characters > MAX_MARKDOWN_LEAF_CHARACTERS ||
+        bufferElements + weight.elements > MAX_MARKDOWN_LEAF_ELEMENTS)
     ) {
       flush()
     }
@@ -547,6 +623,7 @@ function planChildren(
     buffer.push(child)
     bufferLines += weight.lines
     bufferCharacters += weight.characters
+    bufferElements += weight.elements
   }
 
   flush()
@@ -576,8 +653,8 @@ function planCodeBlock(
     code.children,
     [
       ...wrappers,
-      { element: { ...pre, children: [] }, prefix: [] },
-      { element: { ...code, children: [] }, prefix: [] },
+      { id: `${path}#pre`, element: { ...pre, children: [] }, prefix: [] },
+      { id: `${path}#code`, element: { ...code, children: [] }, prefix: [] },
     ],
     path,
     state,
@@ -605,6 +682,7 @@ function planAtomicProse(element: Element, path: string, state: PlanState): void
     state.leaves.push({
       id: `${groupId}:${chunkIndex}`,
       groupId,
+      unitId: groupId,
       kind: 'atomic-text',
       wrappers: [],
       children: [],
@@ -613,6 +691,7 @@ function planAtomicProse(element: Element, path: string, state: PlanState): void
       codeLanguage: '',
       characters: slice.length,
       lines: countBreaks(slice),
+      elements: 0,
       estimatedHeight: estimateHeight(countBreaks(slice), slice.length),
     })
     chunkIndex += 1
@@ -658,20 +737,32 @@ function isBlockSideOrEdge(
   return true
 }
 
-function splitWrapper(element: Element): {
+function splitWrapper(
+  element: Element,
+  id: string,
+): {
   wrapper: MarkdownLeafWrapper
   rest: ElementContent[]
 } {
   if (element.tagName !== 'table') {
-    return { wrapper: { element: { ...element, children: [] }, prefix: [] }, rest: element.children }
+    return {
+      wrapper: { id, element: { ...element, children: [] }, prefix: [] },
+      rest: element.children,
+    }
   }
-  const prefix: ElementContent[] = []
+  const sticky: ElementContent[] = []
   const rest: ElementContent[] = []
   for (const child of element.children) {
-    if (child.type === 'element' && TABLE_STICKY.has(child.tagName)) prefix.push(child)
+    if (child.type === 'element' && TABLE_STICKY.has(child.tagName)) sticky.push(child)
     else rest.push(child)
   }
-  return { wrapper: { element: { ...element, children: [] }, prefix }, rest }
+  // The header travels with EVERY chunk of the body, so its cost is charged
+  // once per mounted unit rather than once per document.
+  const prefix =
+    countElementList(sticky) <= MAX_MARKDOWN_WRAPPER_PREFIX_ELEMENTS
+      ? sticky
+      : boundElements(sticky, MAX_MARKDOWN_WRAPPER_PREFIX_ELEMENTS)
+  return { wrapper: { id, element: { ...element, children: [] }, prefix }, rest }
 }
 
 /**
@@ -708,15 +799,47 @@ function withOrderedStart(
   ]
 }
 
-function applyWrappers(
-  wrappers: readonly MarkdownLeafWrapper[],
-  children: readonly ElementContent[],
+/**
+ * Rebuilds one mounted unit by nesting its leaves back under the wrappers they
+ * were cut from, level by level.
+ *
+ * Folding each leaf's chain on its own instead would re-emit the whole chain
+ * per leaf: a table body interrupted by an oversized row emits leaves at three
+ * different depths, which used to render as three stacked tables, each paying
+ * for the sticky header again.
+ */
+function foldWrappers(
+  members: readonly MarkdownRenderLeaf[],
+  depth: number,
 ): ElementContent[] {
-  let content: ElementContent[] = [...children]
-  for (let index = wrappers.length - 1; index >= 0; index -= 1) {
-    const wrapper = wrappers[index]
-    content = [{ ...wrapper.element, children: [...wrapper.prefix, ...content] }]
+  const content: ElementContent[] = []
+  let index = 0
+
+  while (index < members.length) {
+    const leaf = members[index]
+    if (leaf.wrappers.length <= depth) {
+      for (const child of leaf.children) content.push(child)
+      index += 1
+      continue
+    }
+
+    const wrapper = leaf.wrappers[depth]
+    let last = index
+    while (
+      last + 1 < members.length &&
+      members[last + 1].wrappers.length > depth &&
+      members[last + 1].wrappers[depth].id === wrapper.id
+    ) {
+      last += 1
+    }
+
+    content.push({
+      ...wrapper.element,
+      children: [...wrapper.prefix, ...foldWrappers(members.slice(index, last + 1), depth + 1)],
+    })
+    index = last + 1
   }
+
   return content
 }
 
@@ -803,7 +926,7 @@ function weigh(node: ElementContent): Weight {
   const start = node.position?.start.line
   const end = node.position?.end.line
   const spanned = start === undefined || end === undefined ? 0 : Math.max(1, end - start + 1)
-  return { lines: Math.max(spanned, breaks), characters }
+  return { lines: Math.max(spanned, breaks), characters, elements: countElements(node) }
 }
 
 function countCharacters(node: ElementContent): number {
@@ -812,6 +935,56 @@ function countCharacters(node: ElementContent): number {
   let total = 0
   for (const child of node.children) total += countCharacters(child)
   return total
+}
+
+/** Elements this node mounts, itself included. Text nodes cost nothing here. */
+function countElements(node: ElementContent): number {
+  if (node.type !== 'element') return 0
+  let total = 1
+  for (const child of node.children) total += countElements(child)
+  return total
+}
+
+function countElementList(nodes: readonly ElementContent[]): number {
+  let total = 0
+  for (const node of nodes) total += countElements(node)
+  return total
+}
+
+/**
+ * Every retained wrapper and its sticky prefix mounts with each unit, so the
+ * chain is charged to the leaves that pull it in. Over-counting inside one unit
+ * is deliberate: the window budget must bound mounted nodes from above.
+ */
+function countWrapperElements(wrappers: readonly MarkdownLeafWrapper[]): number {
+  let total = 0
+  for (const wrapper of wrappers) total += 1 + countElementList(wrapper.prefix)
+  return total
+}
+
+/**
+ * A copy of `nodes` cut to at most `budget` mounted elements, depth first, so
+ * the structure that survives is still the structure the author opened.
+ */
+function boundElements(
+  nodes: readonly ElementContent[],
+  budget: number,
+): ElementContent[] {
+  let remaining = budget
+  const walk = (list: readonly ElementContent[]): ElementContent[] => {
+    const kept: ElementContent[] = []
+    for (const node of list) {
+      if (remaining <= 0) break
+      if (node.type !== 'element') {
+        kept.push(node)
+        continue
+      }
+      remaining -= 1
+      kept.push({ ...node, children: walk(node.children) })
+    }
+    return kept
+  }
+  return walk(nodes)
 }
 
 /** Cuts one unbroken run of text at whichever ceiling it reaches first. */
