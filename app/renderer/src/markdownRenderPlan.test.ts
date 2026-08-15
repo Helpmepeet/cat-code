@@ -3,6 +3,7 @@ import {
   MAX_MARKDOWN_LEAF_CHARACTERS,
   MAX_MARKDOWN_LEAF_LINES,
   MAX_MOUNTED_MARKDOWN_LEAVES,
+  markdownMeasurementKey,
   planMarkdownLeaves,
   selectMarkdownLeafWindow,
 } from './markdownRenderPlan.js'
@@ -39,6 +40,30 @@ describe('planMarkdownLeaves', () => {
     expect(leaves.every(leaf => leaf.kind === 'atomic-text')).toBe(true)
     expect(leaves.every(leaf => leaf.content.length <= MAX_MARKDOWN_LEAF_CHARACTERS)).toBe(true)
     expect(leaves.map(leaf => leaf.content).join('')).toBe(source)
+  })
+})
+
+describe('markdownMeasurementKey', () => {
+  test('a streamed leaf keeps its id but not its measurement key', () => {
+    const [before] = planMarkdownLeaves('row-1', 'The answer is')
+    const [after] = planMarkdownLeaves('row-1', 'The answer is forty two.')
+
+    expect(after.id).toBe(before.id)
+    expect(markdownMeasurementKey(after)).not.toBe(markdownMeasurementKey(before))
+  })
+
+  test('a settled leaf ahead of the streaming tail keeps its measurement key', () => {
+    // The scanner splits prose only at MAX_MARKDOWN_LEAF_LINES, so a source
+    // needs more than one chunk before any leaf is settled.
+    const source = Array.from({ length: MAX_MARKDOWN_LEAF_LINES + 10 }, (_, index) => `Line ${index}`).join('\n')
+    const first = planMarkdownLeaves('row-1', source)
+    const second = planMarkdownLeaves('row-1', `${source}\nLine appended`)
+
+    expect(first.length).toBeGreaterThan(1)
+    expect(markdownMeasurementKey(second[0])).toBe(markdownMeasurementKey(first[0]))
+    expect(markdownMeasurementKey(second[second.length - 1])).not.toBe(
+      markdownMeasurementKey(first[first.length - 1]),
+    )
   })
 })
 

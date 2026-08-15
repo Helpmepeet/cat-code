@@ -124,6 +124,15 @@ export function planMarkdownLeaves(
 }
 
 /**
+ * Qualifies a measured height by leaf identity and content revision together. A
+ * streamed leaf keeps its id while its content grows, so an id-only key would
+ * retain a height measured for shorter content.
+ */
+export function markdownMeasurementKey(leaf: MarkdownRenderLeaf): string {
+  return `${leaf.id}#${leaf.content.length}`
+}
+
+/**
  * Selects a bounded range using estimated leaf heights. Browser measurement can
  * replace the estimates without changing the source leaf identities.
  */

@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
+  markdownMeasurementKey,
   planMarkdownLeaves,
   selectMarkdownLeafWindow,
   type MarkdownRenderLeaf,
   type MarkdownLeafWindow,
 } from './markdownRenderPlan.js'
+import { observePaneScroll } from './markdownScrollCoordinator.js'
 
 const INITIAL_VIEWPORT_HEIGHT = 800
 
@@ -25,7 +27,7 @@ export function BoundedMarkdown({
     () =>
       leaves.map(leaf => ({
         ...leaf,
-        estimatedHeight: measuredHeights.get(leaf.id) ?? leaf.estimatedHeight,
+        estimatedHeight: measuredHeights.get(markdownMeasurementKey(leaf)) ?? leaf.estimatedHeight,
       })),
     [leaves, measuredHeights],
   )
@@ -34,7 +36,21 @@ export function BoundedMarkdown({
   )
   const [copiedAtomicLeaf, setCopiedAtomicLeaf] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const measuredLeavesRef = useRef(measuredLeaves)
+  const scheduleRef = useRef<() => void>(() => {})
+  const mountedKeys = measuredLeaves
+    .slice(leafWindow.start, leafWindow.end)
+    .map(markdownMeasurementKey)
+    .join('|')
 
+  useEffect(() => {
+    measuredLeavesRef.current = measuredLeaves
+    scheduleRef.current()
+  }, [measuredLeaves])
+
+  // Attaches once for the lifetime of the body. Streamed source updates reach
+  // the window through the ref above, so they never detach and re-attach the
+  // shared pane scroller.
   useEffect(() => {
     const root = rootRef.current
     if (!root || typeof window === 'undefined') return
@@ -47,7 +63,7 @@ export function BoundedMarkdown({
       const scrollOffset = scrollerRect.top - rootRect.top
       setLeafWindow(current => {
         const next = selectMarkdownLeafWindow(
-          measuredLeaves,
+          measuredLeavesRef.current,
           scrollOffset,
           scroller.clientHeight || INITIAL_VIEWPORT_HEIGHT,
         )
@@ -57,20 +73,21 @@ export function BoundedMarkdown({
     const schedule = () => {
       if (frame === 0) frame = window.requestAnimationFrame(update)
     }
-    const observer = new ResizeObserver(schedule)
-    observer.observe(root)
-    observer.observe(scroller)
-    const scrollTarget: EventTarget =
-      scroller === document.documentElement ? window : scroller
-    scrollTarget.addEventListener('scroll', schedule, { passive: true })
+    scheduleRef.current = schedule
+    const rootObserver = new ResizeObserver(schedule)
+    rootObserver.observe(root)
+    const releasePane = observePaneScroll(scroller, schedule)
     schedule()
     return () => {
+      scheduleRef.current = () => {}
       if (frame !== 0) window.cancelAnimationFrame(frame)
-      observer.disconnect()
-      scrollTarget.removeEventListener('scroll', schedule)
+      rootObserver.disconnect()
+      releasePane()
     }
-  }, [measuredLeaves])
+  }, [])
 
+  // Keyed on the mounted leaf identities rather than the numeric window, so a
+  // replacement node inside an unchanged window is observed immediately.
   useEffect(() => {
     const root = rootRef.current
     if (!root || typeof ResizeObserver === 'undefined') return
@@ -78,12 +95,12 @@ export function BoundedMarkdown({
       setMeasuredHeights(current => {
         let next: Map<string, number> | null = null
         for (const entry of entries) {
-          const id = entry.target.getAttribute('data-markdown-leaf')
-          if (id === null) continue
+          const key = entry.target.getAttribute('data-markdown-leaf')
+          if (key === null) continue
           const height = Math.ceil(entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height)
-          if (height <= 0 || Math.abs((current.get(id) ?? 0) - height) < 1) continue
+          if (height <= 0 || Math.abs((current.get(key) ?? 0) - height) < 1) continue
           if (next === null) next = new Map(current)
-          next.set(id, height)
+          next.set(key, height)
         }
         return next ?? current
       })
@@ -92,7 +109,22 @@ export function BoundedMarkdown({
       observer.observe(element)
     }
     return () => observer.disconnect()
-  }, [leafWindow])
+  }, [mountedKeys])
+
+  // Heights measured for leaves that have left the plan must not accumulate.
+  useEffect(() => {
+    setMeasuredHeights(current => {
+      if (current.size === 0) return current
+      const live = new Set(leaves.map(markdownMeasurementKey))
+      let next: Map<string, number> | null = null
+      for (const key of current.keys()) {
+        if (live.has(key)) continue
+        if (next === null) next = new Map(current)
+        next.delete(key)
+      }
+      return next ?? current
+    })
+  }, [leaves])
 
   return (
     <div ref={rootRef}>
@@ -102,7 +134,7 @@ export function BoundedMarkdown({
       {measuredLeaves.slice(leafWindow.start, leafWindow.end).map(leaf =>
         leaf.kind === 'atomic-text' ? (
           <div
-            data-markdown-leaf={leaf.id}
+            data-markdown-leaf={markdownMeasurementKey(leaf)}
             className="my-2 rounded border border-shell-seam bg-shell-hover/40 p-3 font-mono text-xs text-text-muted"
             key={leaf.id}
           >
@@ -124,7 +156,7 @@ export function BoundedMarkdown({
             <pre className="whitespace-pre-wrap break-words">{leaf.content}</pre>
           </div>
         ) : (
-          <div data-markdown-leaf={leaf.id} key={leaf.id}>
+          <div data-markdown-leaf={markdownMeasurementKey(leaf)} key={leaf.id}>
             {renderLeaf(leaf)}
           </div>
         ),
