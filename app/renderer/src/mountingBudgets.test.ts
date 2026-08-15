@@ -18,8 +18,13 @@ import { MAX_MOUNTED_CHUNK_CHARS, MAX_MOUNTED_OUTPUT_LINES } from './lineWindow.
 import {
   MAX_MARKDOWN_LEAF_CHARACTERS,
   MAX_MARKDOWN_LEAF_CHILDREN,
+  MAX_MARKDOWN_LEAF_ELEMENTS,
   MAX_MARKDOWN_LEAF_LINES,
+  MAX_MARKDOWN_WRAPPER_DEPTH,
+  MAX_MARKDOWN_WRAPPER_PREFIX_ELEMENTS,
+  MAX_MOUNTED_MARKDOWN_ELEMENTS,
   MAX_MOUNTED_MARKDOWN_LEAVES,
+  MAX_RETAINED_MARKDOWN_MEASUREMENTS,
 } from './markdownRenderPlan.js'
 import { MAX_RENDERED_HIGHLIGHT_SEGMENTS } from './outputSearchModel.js'
 
@@ -29,6 +34,19 @@ describe('mounting budgets are pinned to their measured values', () => {
     expect(MAX_MARKDOWN_LEAF_CHARACTERS).toBe(12_000)
     expect(MAX_MARKDOWN_LEAF_CHILDREN).toBe(200)
     expect(MAX_MOUNTED_MARKDOWN_LEAVES).toBe(120)
+    expect(MAX_RETAINED_MARKDOWN_MEASUREMENTS).toBe(MAX_MOUNTED_MARKDOWN_LEAVES * 3)
+  })
+
+  /**
+   * Lines and characters both measure text, so these bound the dimension an
+   * element-dense, text-sparse child is actually dense in. Without them, fifty
+   * thousand empty anchors on one source line mounted fifty thousand nodes.
+   */
+  test('markdown elements', () => {
+    expect(MAX_MARKDOWN_LEAF_ELEMENTS).toBe(400)
+    expect(MAX_MOUNTED_MARKDOWN_ELEMENTS).toBe(4_000)
+    expect(MAX_MARKDOWN_WRAPPER_DEPTH).toBe(24)
+    expect(MAX_MARKDOWN_WRAPPER_PREFIX_ELEMENTS).toBe(200)
   })
 
   test('tool output lines and chunks', () => {
