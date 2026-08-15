@@ -121,10 +121,17 @@ export function reduceCompositeChildState(
         next.set(measurement.key, height)
       }
       if (next === null) return state
-      while (next.size > MAX_RETAINED_CHILD_MEASUREMENTS) {
-        const oldest = next.keys().next()
-        if (oldest.done === true) break
-        next.delete(oldest.value)
+      // Insertion order is renewed only when a height CHANGES, so a mounted
+      // child whose height is stable ages like an unmounted one and can be
+      // evicted while it is still on screen: the model would then hand it the
+      // estimate while the DOM renders its real height, moving every spacer
+      // below it. Everything in this batch is mounted right now, so it is never
+      // the eviction candidate.
+      const mounted = new Set(action.measurements.map(measurement => measurement.key))
+      for (const key of next.keys()) {
+        if (next.size <= MAX_RETAINED_CHILD_MEASUREMENTS) break
+        if (mounted.has(key)) continue
+        next.delete(key)
       }
       return { heights: next }
     }

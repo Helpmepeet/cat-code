@@ -245,3 +245,51 @@ describe('sameCompositeChildWindow', () => {
     ).toBe(false)
   })
 })
+
+/**
+ * Review finding: insertion order was renewed only when a height CHANGED, so a
+ * mounted child whose height is stable aged like an unmounted one. Eviction
+ * could then drop it while it was still on screen, and the model handed it the
+ * estimate while the DOM rendered its real height.
+ */
+describe('eviction never drops a mounted child', () => {
+  test('a stable child measured in the overflowing batch is not the eviction candidate', () => {
+    const stable = Array.from({ length: 80 }, (_, index) => ({
+      key: `a${index}`,
+      height: 30,
+    }))
+    // Oldest entries in the map, and their height never changes again.
+    let state = reduceCompositeChildState(createCompositeChildState(), {
+      kind: 'measured',
+      measurements: stable,
+    })
+    // Fill exactly to the ceiling with newer, unrelated children.
+    state = reduceCompositeChildState(state, {
+      kind: 'measured',
+      measurements: Array.from(
+        { length: MAX_RETAINED_CHILD_MEASUREMENTS - stable.length },
+        (_, index) => ({ key: `b${index}`, height: 50 }),
+      ),
+    })
+    expect(state.heights.size).toBe(MAX_RETAINED_CHILD_MEASUREMENTS)
+
+    // One flush reporting every mounted child: the stable ones at the height
+    // they already had, plus enough new ones to overflow. Reporting an
+    // unchanged height renews nothing, so the stable keys are still the oldest.
+    state = reduceCompositeChildState(state, {
+      kind: 'measured',
+      measurements: [
+        ...stable,
+        ...Array.from({ length: 80 }, (_, index) => ({
+          key: `c${index}`,
+          height: 70,
+        })),
+      ],
+    })
+
+    expect(state.heights.size).toBeLessThanOrEqual(MAX_RETAINED_CHILD_MEASUREMENTS)
+    for (const measurement of stable) {
+      expect(state.heights.get(measurement.key)).toBe(30)
+    }
+  })
+})
