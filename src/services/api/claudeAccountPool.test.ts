@@ -252,7 +252,10 @@ describe('loadClaudePoolForObservation vs initClaudeAccountPool (disk-write boun
   // Writes a vault JSON file directly (bypassing the module under test) to
   // seed a pre-existing vault account, matching the on-disk shape
   // loadVaultAccounts() expects.
-  function writeVaultAccountFile(account: ClaudePoolAccount): void {
+  function writeVaultAccountFile(
+    account: ClaudePoolAccount,
+    lastRefresh = new Date().toISOString(),
+  ): void {
     mkdirSync(accountsDir(), { recursive: true })
     const data = {
       tokens: {
@@ -267,7 +270,7 @@ describe('loadClaudePoolForObservation vs initClaudeAccountPool (disk-write boun
         account_uuid: account.accountUuid,
         email_address: account.emailAddress,
       },
-      last_refresh: new Date().toISOString(),
+      last_refresh: lastRefresh,
     }
     writeFileSync(vaultFilePathFor(account.accountUuid), JSON.stringify(data, null, 2) + '\n', 'utf-8')
   }
@@ -285,6 +288,18 @@ describe('loadClaudePoolForObservation vs initClaudeAccountPool (disk-write boun
     expect(status.accounts.map((a) => a.accountUuid)).toEqual(['vault-uuid'])
     expect(status.accounts[0]?.status).toBe('healthy')
     expect(status.activeIndex).toBe(0)
+  })
+
+  test('loads an account with an eight-day-old refresh timestamp as healthy', () => {
+    writeVaultAccountFile(
+      buildClaudeAccount({ accountUuid: 'vault-uuid', emailAddress: 'vault@example.com' }),
+      new Date(Date.now() - 8 * 24 * 3600_000).toISOString(),
+    )
+    setClaudeConfigAccountForTest({ active: true, value: null })
+
+    loadClaudePoolForObservation()
+
+    expect(getClaudePoolStatus().accounts[0]?.status).toBe('healthy')
   })
 
   test('loadClaudePoolForObservation merges a config-only account into memory without writing to the vault', () => {

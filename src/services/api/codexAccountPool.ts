@@ -1007,18 +1007,17 @@ function loadVaultAccounts(vaultPath: string): PoolAccount[] {
         continue
       }
 
-      // last_refresh is when we refreshed, not when the token expires.
-      // Prefer the real `expires_at` written by the refresh path; fall back to
-      // 0 (forces an immediate refresh) when absent.
+      // last_refresh is informational, not a health predicate. Prefer the real
+      // `expires_at` written by the refresh path; fall back to 0 (forces an
+      // immediate refresh) when absent.
       const lastRefresh = data.last_refresh as string | undefined
       const expiresAtRaw = tokens.expires_at
       const expiresAt =
         typeof expiresAtRaw === 'number' && Number.isFinite(expiresAtRaw)
           ? expiresAtRaw
           : 0
-      const health = checkAccountHealth(lastRefresh)
       const refresh = data.refresh as Record<string, unknown> | undefined
-      const refreshStatus = getVaultRefreshPoolStatus(refresh, health, tokens.refresh_token)
+      const refreshStatus = getVaultRefreshPoolStatus(refresh, tokens.refresh_token)
       const status = refreshStatus.status
       const planMetadata = getCodexPlanMetadataFromIdToken(
         typeof tokens.id_token === 'string' ? tokens.id_token : undefined,
@@ -1131,17 +1130,6 @@ export function isAccountLocked(locksDir: string, accountId: string): boolean {
   }
 }
 
-// ── Health check ───────────────────────────────────────────────────────────
-
-/** Check vault account health based on last_refresh timestamp. */
-function checkAccountHealth(lastRefresh: string | undefined): 'healthy' | 'dead' {
-  if (!lastRefresh) return 'healthy' // no timestamp, assume OK
-  const refreshMs = new Date(lastRefresh).getTime()
-  const daysSinceRefresh = (Date.now() - refreshMs) / (1000 * 60 * 60 * 24)
-  // Match codex-nootp's CRITICAL threshold of 7 days
-  return daysSinceRefresh > 7 ? 'dead' : 'healthy'
-}
-
 function isStaleInFlightRefresh(refresh: Record<string, unknown> | undefined): boolean {
   if (!refresh) return false
   if (refresh.state === 'stale_in_flight') return true
@@ -1187,21 +1175,12 @@ function correlateRefreshVerdict(
 
 function getVaultRefreshPoolStatus(
   refresh: Record<string, unknown> | undefined,
-  health: 'healthy' | 'dead',
   currentRefreshToken: unknown,
 ): {
   status: PoolAccount['status']
   statusReason?: PoolAccountStatusReason
   lastError?: string
 } {
-  if (health === 'dead') {
-    return {
-      status: 'dead',
-      statusReason: 'auth_dead',
-      lastError: 'Token expired (>7 days since last refresh)',
-    }
-  }
-
   const reason = typeof refresh?.reason === 'string' ? refresh.reason : undefined
   if (
     refresh?.state === 'unknown' ||
@@ -1570,6 +1549,12 @@ function getPlanMetadataWarnings(
   return warnings
 }
 
+/**
+ * Every `blocked` answer must trace to a scoped, self-clearing fact: a verdict
+ * correlated to the current token hash (`dead`), a quota belief with an
+ * unexpired reset (`capped`), or a transport observation with a pending probe
+ * (`quarantined`).
+ */
 export function getCodexAccountAvailability(
   account: CodexAccountAvailabilityAccount,
   now = Date.now(),

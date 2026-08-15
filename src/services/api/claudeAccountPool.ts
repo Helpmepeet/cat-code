@@ -749,10 +749,6 @@ function loadVaultAccounts(): ClaudePoolAccount[] {
         continue
       }
 
-      // Check health by last_refresh
-      const lastRefresh = data.last_refresh as string | undefined
-      const status = checkAccountHealth(lastRefresh)
-
       results.push({
         accountUuid: String(profile.account_uuid),
         emailAddress: String(profile.email_address),
@@ -762,7 +758,7 @@ function loadVaultAccounts(): ClaudePoolAccount[] {
         scopes: Array.isArray(tokens.scopes) ? tokens.scopes as string[] : undefined,
         subscriptionType: tokens.subscription_type as string | null ?? null,
         rateLimitTier: tokens.rate_limit_tier as string | null ?? null,
-        status,
+        status: 'healthy',
         alias: typeof data.alias === 'string' && data.alias ? data.alias : undefined,
         displayName: typeof profile.display_name === 'string' ? profile.display_name : undefined,
         organizationUuid: typeof profile.organization_uuid === 'string' ? profile.organization_uuid : undefined,
@@ -830,13 +826,6 @@ function loadConfigAccount(): ClaudePoolAccount | null {
   } catch {
     return null
   }
-}
-
-function checkAccountHealth(lastRefresh: string | undefined): 'healthy' | 'dead' {
-  if (!lastRefresh) return 'healthy'
-  const refreshMs = new Date(lastRefresh).getTime()
-  const daysSinceRefresh = (Date.now() - refreshMs) / (1000 * 60 * 60 * 24)
-  return daysSinceRefresh > 7 ? 'dead' : 'healthy'
 }
 
 export function seedClaudeAccountPoolForTest({

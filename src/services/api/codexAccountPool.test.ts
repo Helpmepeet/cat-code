@@ -175,12 +175,12 @@ describe('codexAccountPool availability', () => {
       accountId: 'dead-account',
       status: 'dead',
       statusReason: 'auth_dead',
-      lastError: 'Token expired (>7 days since last refresh)',
+      lastError: 'Reauthentication required',
     })
 
     expect(getCodexAccountAvailability(account, NOW)).toEqual({
       kind: 'blocked',
-      reason: 'Token expired (>7 days since last refresh)',
+      reason: 'Reauthentication required',
     })
   })
 
@@ -549,7 +549,7 @@ describe('codexAccountPool appendAccount', () => {
           accountId: 'stale-account',
           alias: 'backup1',
           status: 'dead',
-          lastError: 'Token expired (>7 days since last refresh)',
+          lastError: 'Reauthentication required',
         }),
       ],
     })
@@ -1039,19 +1039,22 @@ describe('loadVaultAccounts correlates a terminal verdict with the token it name
     dir: string,
     refresh: Record<string, unknown> | undefined,
     refreshToken = 'current-refresh-token',
+    lastRefresh = new Date().toISOString(),
+    expiresAt = Date.now() + 8 * 24 * 3600_000,
+    accountId = ACCOUNT_ID,
   ): void {
     const accountsDir = join(dir, 'accounts')
     mkdirSync(accountsDir, { recursive: true })
     writeFileSync(
-      join(accountsDir, `${ACCOUNT_ID}.json`),
+      join(accountsDir, `${accountId}.json`),
       JSON.stringify({
         tokens: {
           access_token: 'access',
           refresh_token: refreshToken,
-          account_id: ACCOUNT_ID,
-          expires_at: Date.now() + 8 * 24 * 3600_000,
+          account_id: accountId,
+          expires_at: expiresAt,
         },
-        last_refresh: new Date().toISOString(),
+        last_refresh: lastRefresh,
         alias: 'bluesky',
         ...(refresh ? { refresh } : {}),
       }),
@@ -1071,6 +1074,37 @@ describe('loadVaultAccounts correlates a terminal verdict with the token it name
 
     expect(statSync(accountsDir).mode & 0o777).toBe(0o700)
     expect(statSync(filePath).mode & 0o777).toBe(0o600)
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('loads a day-eight account healthy when its ten-day token has no verdict', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-pool-verdict-'))
+    const now = Date.now()
+    writeProfile(
+      dir,
+      undefined,
+      'day-eight-refresh-token',
+      new Date(now - 8 * 24 * 3600_000).toISOString(),
+      now + 2 * 24 * 3600_000,
+    )
+
+    const accounts = loadVaultAccountsForTest(dir)
+    expect(accounts).toHaveLength(1)
+    expect(accounts[0]?.status).toBe('healthy')
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('keeps a synchronously rotated pool healthy without verdicts', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-pool-verdict-'))
+    const now = Date.now()
+    const lastRefresh = new Date(now - 8 * 24 * 3600_000).toISOString()
+    const expiresAt = now + 2 * 24 * 3600_000
+    writeProfile(dir, undefined, 'rotated-refresh-a', lastRefresh, expiresAt, 'rotated-a')
+    writeProfile(dir, undefined, 'rotated-refresh-b', lastRefresh, expiresAt, 'rotated-b')
+
+    const accounts = loadVaultAccountsForTest(dir)
+    expect(accounts).toHaveLength(2)
+    expect(accounts.filter(account => account.status === 'healthy')).toHaveLength(2)
     rmSync(dir, { recursive: true, force: true })
   })
 
@@ -1722,7 +1756,7 @@ describe('applyRedeemedUsageReset', () => {
           accountId: 'dead-acct',
           status: 'dead',
           statusReason: 'auth_dead',
-          lastError: 'Token expired',
+          lastError: 'Reauthentication required',
         }),
       ],
     })
@@ -1732,7 +1766,7 @@ describe('applyRedeemedUsageReset', () => {
     const acct = getPoolStatus().accounts[0]!
     expect(acct.status).toBe('dead')
     expect(acct.statusReason).toBe('auth_dead')
-    expect(acct.lastError).toBe('Token expired')
+    expect(acct.lastError).toBe('Reauthentication required')
     // Still sets redeemedAt (it's a no-op on status but stamps the time)
     expect(acct.redeemedAt).toBeGreaterThan(0)
   })
@@ -2033,7 +2067,7 @@ describe('getRedemptionEligibility', () => {
       accountId: 'acct-1',
       status: 'dead',
       statusReason: 'auth_dead',
-      lastError: 'Token expired',
+      lastError: 'Reauthentication required',
     })
     const result = getRedemptionEligibility(acct)
     expect(result.eligible).toBe(false)
