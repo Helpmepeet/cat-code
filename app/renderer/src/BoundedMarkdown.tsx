@@ -1,47 +1,77 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import type { PluggableList } from 'unified'
 import {
-  markdownMeasurementKey,
+  createMarkdownPlanCache,
+  mergeMountedMarkdownLeaves,
   planMarkdownLeaves,
+  planPlainTextLeaves,
+  resolveMarkdownMeasurements,
   selectMarkdownLeafWindow,
   type MarkdownRenderLeaf,
   type MarkdownLeafWindow,
+  type MountedMarkdownLeaf,
 } from './markdownRenderPlan.js'
 import { observePaneScroll } from './markdownScrollCoordinator.js'
 
 const INITIAL_VIEWPORT_HEIGHT = 800
 
+/**
+ * Mounts a bounded range of ONE parsed Markdown document. The plan owns the
+ * parse and the semantic slicing; this component owns geometry: which range is
+ * near the pane viewport, how tall the unmounted remainder is, and how measured
+ * heights replace estimates.
+ */
 export function BoundedMarkdown({
   sourceId,
   source,
+  rehypePlugins,
   renderLeaf,
 }: {
   sourceId: string
   source: string
-  renderLeaf: (leaf: MarkdownRenderLeaf) => ReactNode
+  rehypePlugins?: PluggableList
+  renderLeaf: (leaf: MountedMarkdownLeaf) => ReactNode
 }): ReactNode {
-  const leaves = useMemo(() => planMarkdownLeaves(sourceId, source), [sourceId, source])
-  const [measuredHeights, setMeasuredHeights] = useState<ReadonlyMap<string, number>>(
-    new Map(),
+  const cacheRef = useRef(createMarkdownPlanCache())
+  const leaves = useMemo(() => {
+    try {
+      return planMarkdownLeaves(sourceId, source, {
+        rehypePlugins,
+        cache: cacheRef.current,
+      })
+    } catch {
+      // Display degrades gracefully: an unreadable document still shows its
+      // author's text rather than taking the transcript down with it.
+      return planPlainTextLeaves(sourceId, source)
+    }
+  }, [sourceId, source, rehypePlugins])
+
+  const [unitHeights, setUnitHeights] = useState<ReadonlyMap<string, number>>(new Map())
+  const measurement = useMemo(
+    () => resolveMarkdownMeasurements(leaves, unitHeights),
+    [leaves, unitHeights],
   )
   const measuredLeaves = useMemo(
     () =>
       leaves.map(leaf => ({
         ...leaf,
-        estimatedHeight: measuredHeights.get(markdownMeasurementKey(leaf)) ?? leaf.estimatedHeight,
+        estimatedHeight: measurement.heights.get(leaf.id) ?? leaf.estimatedHeight,
       })),
-    [leaves, measuredHeights],
+    [leaves, measurement],
   )
   const [leafWindow, setLeafWindow] = useState<MarkdownLeafWindow>(() =>
     selectMarkdownLeafWindow(leaves, 0, INITIAL_VIEWPORT_HEIGHT),
   )
   const [copiedAtomicLeaf, setCopiedAtomicLeaf] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
-  const measuredLeavesRef = useRef(measuredLeaves)
+  const measuredLeavesRef = useRef<readonly MarkdownRenderLeaf[]>(measuredLeaves)
   const scheduleRef = useRef<() => void>(() => {})
-  const mountedKeys = measuredLeaves
-    .slice(leafWindow.start, leafWindow.end)
-    .map(markdownMeasurementKey)
-    .join('|')
+
+  const mounted = useMemo(
+    () => mergeMountedMarkdownLeaves(measuredLeaves, leafWindow.start, leafWindow.end),
+    [measuredLeaves, leafWindow.start, leafWindow.end],
+  )
+  const mountedKeys = mounted.map(unit => unit.measurementKey).join('|')
 
   useEffect(() => {
     measuredLeavesRef.current = measuredLeaves
@@ -92,7 +122,7 @@ export function BoundedMarkdown({
     const root = rootRef.current
     if (!root || typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(entries => {
-      setMeasuredHeights(current => {
+      setUnitHeights(current => {
         let next: Map<string, number> | null = null
         for (const entry of entries) {
           const key = entry.target.getAttribute('data-markdown-leaf')
@@ -111,32 +141,31 @@ export function BoundedMarkdown({
     return () => observer.disconnect()
   }, [mountedKeys])
 
-  // Heights measured for leaves that have left the plan must not accumulate.
+  // Heights measured for runs that have left the plan must not accumulate.
   useEffect(() => {
-    setMeasuredHeights(current => {
+    setUnitHeights(current => {
       if (current.size === 0) return current
-      const live = new Set(leaves.map(markdownMeasurementKey))
       let next: Map<string, number> | null = null
       for (const key of current.keys()) {
-        if (live.has(key)) continue
+        if (measurement.live.has(key)) continue
         if (next === null) next = new Map(current)
         next.delete(key)
       }
       return next ?? current
     })
-  }, [leaves])
+  }, [measurement])
 
   return (
     <div ref={rootRef}>
       {leafWindow.topSpacerHeight > 0 ? (
         <div aria-hidden style={{ height: `${leafWindow.topSpacerHeight}px` }} />
       ) : null}
-      {measuredLeaves.slice(leafWindow.start, leafWindow.end).map(leaf =>
-        leaf.kind === 'atomic-text' ? (
+      {mounted.map(unit =>
+        unit.kind === 'atomic-text' ? (
           <div
-            data-markdown-leaf={markdownMeasurementKey(leaf)}
+            data-markdown-leaf={unit.measurementKey}
             className="my-2 rounded border border-shell-seam bg-shell-hover/40 p-3 font-mono text-xs text-text-muted"
-            key={leaf.id}
+            key={unit.key}
           >
             <div className="mb-2 flex items-center justify-between gap-3">
               <span>Long unbroken text is shown in parts.</span>
@@ -147,17 +176,20 @@ export function BoundedMarkdown({
                   const clipboard =
                     typeof navigator === 'undefined' ? undefined : navigator.clipboard
                   if (!clipboard) return
-                  void clipboard.writeText(source).then(() => setCopiedAtomicLeaf(leaf.id)).catch(() => {})
+                  void clipboard
+                    .writeText(source)
+                    .then(() => setCopiedAtomicLeaf(unit.key))
+                    .catch(() => {})
                 }}
               >
-                {copiedAtomicLeaf === leaf.id ? 'Copied' : 'Copy full text'}
+                {copiedAtomicLeaf === unit.key ? 'Copied' : 'Copy full text'}
               </button>
             </div>
-            <pre className="whitespace-pre-wrap break-words">{leaf.content}</pre>
+            <pre className="whitespace-pre-wrap break-words">{unit.text}</pre>
           </div>
         ) : (
-          <div data-markdown-leaf={markdownMeasurementKey(leaf)} key={leaf.id}>
-            {renderLeaf(leaf)}
+          <div data-markdown-leaf={unit.measurementKey} key={unit.key}>
+            {renderLeaf(unit)}
           </div>
         ),
       )}

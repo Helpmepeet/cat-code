@@ -1,16 +1,84 @@
+/**
+ * Bounded Markdown rendering plan.
+ *
+ * The whole source is parsed ONCE into a single hast document, and the plan
+ * then slices that ONE tree into leaves. Every leaf keeps the chain of semantic
+ * ancestors it was cut out of, so a mounted range still renders a table with its
+ * header row, a list with correct numbering and nesting, a blockquote with its
+ * border, and a code fence as one card. Reference-link definitions resolve
+ * because the definition and its use were parsed together, not as two
+ * independent documents.
+ *
+ * Bounding is about MOUNTED DOM only. The authoritative source string and the
+ * parsed tree stay in JavaScript state at full fidelity.
+ */
+import type { Element, ElementContent, Root, RootContent } from 'hast'
+import type { Root as MdastRoot } from 'mdast'
+import type { ReactNode } from 'react'
+import { toJsxRuntime, type Components } from 'hast-util-to-jsx-runtime'
+import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
+import { defaultUrlTransform } from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import remarkParse from 'remark-parse'
+import remarkRehype from 'remark-rehype'
+import { unified, type PluggableList } from 'unified'
+
+/** Line ceiling for one mounted leaf. */
 export const MAX_MARKDOWN_LEAF_LINES = 200
+/** Character ceiling for one mounted leaf. */
 export const MAX_MARKDOWN_LEAF_CHARACTERS = 12_000
+/** Mounted-children ceiling for one semantic parent's leaf. */
+export const MAX_MARKDOWN_LEAF_CHILDREN = 200
+/** Leaf ceiling for one mounted window. */
 export const MAX_MOUNTED_MARKDOWN_LEAVES = 120
 
-export type MarkdownLeafKind = 'markdown' | 'fenced-code' | 'atomic-text'
+export type MarkdownLeafKind = 'block' | 'code' | 'atomic-text'
+
+/** Tag-name to component overrides, applied to every mounted range alike. */
+export type MarkdownComponents = Components
+
+/**
+ * One retained semantic ancestor. `prefix` holds children that must stay with
+ * every chunk of the parent rather than being windowed away, which is how a
+ * table body keeps its `<thead>` at any scroll position.
+ */
+export type MarkdownLeafWrapper = {
+  element: Element
+  prefix: readonly ElementContent[]
+}
 
 export type MarkdownRenderLeaf = {
   id: string
+  /** Consecutive leaves sharing this render inside ONE semantic wrapper. */
+  groupId: string
   kind: MarkdownLeafKind
-  content: string
-  startLine: number
-  endLine: number
+  wrappers: readonly MarkdownLeafWrapper[]
+  children: readonly ElementContent[]
+  /** Disclosed plain-text chunk; empty for every kind but `atomic-text`. */
+  text: string
+  /** Complete fence source for the group's single copy action. */
+  codeSource: string
+  codeLanguage: string
+  /** Content revision. Never part of a React key. */
+  characters: number
+  lines: number
   estimatedHeight: number
+}
+
+/** A merged run of consecutive same-group leaves: what actually mounts. */
+export type MountedMarkdownLeaf = {
+  /** React key: source identity plus semantic kind, no content revision. */
+  key: string
+  /** Height-cache key: identity AND content revision. */
+  measurementKey: string
+  kind: MarkdownLeafKind
+  /** Ready to render, semantic ancestors applied. */
+  tree: Root
+  /** The mounted children alone, without the retained ancestors. */
+  content: Root
+  text: string
+  codeSource: string
+  codeLanguage: string
 }
 
 export type MarkdownLeafWindow = {
@@ -21,120 +89,217 @@ export type MarkdownLeafWindow = {
 }
 
 /**
- * Produces bounded source leaves before Markdown creates a React tree. The
- * scanner intentionally recognizes only block boundaries that can be preserved
- * without importing an undocumented parser dependency. An oversized atomic
- * paragraph is emitted as plain text leaves rather than handing Blink one huge
- * wrapping text node.
+ * Holds the hast of the settled prefix while a fence is still open, so a
+ * streamed token does not reparse blocks that can no longer change. Owned by
+ * the mounted body, so nothing survives its unmount.
+ */
+export type MarkdownPlanCache = { current: { body: string; tree: Root } | null }
+
+export function createMarkdownPlanCache(): MarkdownPlanCache {
+  return { current: null }
+}
+
+const NO_PLUGINS: PluggableList = []
+const processors = new WeakMap<PluggableList, ReturnType<typeof buildProcessor>>()
+
+function buildProcessor(rehypePlugins: PluggableList) {
+  // Same shape react-markdown builds: raw HTML is admitted as `raw` nodes here
+  // and demoted to literal text below, which is what keeps HTML disabled while
+  // still showing the author what they wrote.
+  return unified()
+    .use(remarkParse)
+    .use(remarkGfm)
+    .use(remarkRehype, { allowDangerousHtml: true })
+    .use(rehypePlugins)
+}
+
+function markdownProcessor(rehypePlugins: PluggableList) {
+  const cached = processors.get(rehypePlugins)
+  if (cached !== undefined) return cached
+  const created = buildProcessor(rehypePlugins)
+  processors.set(rehypePlugins, created)
+  return created
+}
+
+/**
+ * Parses the complete source once and cuts the resulting document into bounded
+ * leaves.
  */
 export function planMarkdownLeaves(
   sourceId: string,
   source: string,
+  options?: {
+    rehypePlugins?: PluggableList
+    cache?: MarkdownPlanCache
+  },
 ): MarkdownRenderLeaf[] {
-  const lines = source.split('\n')
-  const leaves: MarkdownRenderLeaf[] = []
-  let blockStart = 0
-  let block: string[] = []
+  const processor = markdownProcessor(options?.rehypePlugins ?? NO_PLUGINS)
+  const cached = options?.cache?.current
 
-  const append = (kind: MarkdownLeafKind, content: string[], startLine: number) => {
-    if (content.length === 0) return
-    const text = content.join('\n')
-    if (text.length > MAX_MARKDOWN_LEAF_CHARACTERS && content.length === 1) {
-      for (let offset = 0; offset < text.length; offset += MAX_MARKDOWN_LEAF_CHARACTERS) {
-        const chunk = text.slice(offset, offset + MAX_MARKDOWN_LEAF_CHARACTERS)
-        leaves.push({
-          id: `${sourceId}:${startLine}:${offset}`,
-          kind: 'atomic-text',
-          content: chunk,
-          startLine,
-          endLine: startLine,
-          estimatedHeight: estimateHeight(chunk, 1),
-        })
-      }
-      return
+  let tree: Root
+  let tailOffset: number | null
+
+  // Fast path while a fence is open. The cached body ends exactly at that
+  // fence, so the remainder can be read on its own: if it is still nothing but
+  // an unterminated fence, no settled block can have changed and the parsed
+  // prefix stands. Every other case reparses the whole document.
+  const appendedToOpenFence =
+    cached !== null &&
+    cached !== undefined &&
+    source.length > cached.body.length &&
+    source.startsWith(cached.body) &&
+    isWholeUnterminatedFence(processor, source.slice(cached.body.length))
+
+  if (appendedToOpenFence) {
+    tree = cached.tree
+    tailOffset = cached.body.length
+  } else {
+    const mdast = processor.parse(source)
+    tailOffset = findUnterminatedFence(mdast, source)
+    const body = tailOffset === null ? source : source.slice(0, tailOffset)
+    if (cached !== null && cached !== undefined && cached.body === body) {
+      tree = cached.tree
+    } else {
+      tree = processor.runSync(body === source ? mdast : processor.parse(body))
+      normalizeTree(tree)
     }
-
-    let start = 0
-    while (start < content.length) {
-      let end = Math.min(start + MAX_MARKDOWN_LEAF_LINES, content.length)
-      let textLength = content.slice(start, end).join('\n').length
-      while (end > start + 1 && textLength > MAX_MARKDOWN_LEAF_CHARACTERS) {
-        end -= 1
-        textLength = content.slice(start, end).join('\n').length
-      }
-      const chunk = content.slice(start, end)
-      const chunkStartLine = startLine + start
-      const chunkText = chunk.join('\n')
-      leaves.push({
-        id: `${sourceId}:${chunkStartLine}:0`,
-        kind,
-        content: chunkText,
-        startLine: chunkStartLine,
-        endLine: chunkStartLine + chunk.length - 1,
-        estimatedHeight: estimateHeight(chunkText, chunk.length),
-      })
-      start = end
+    // Only a settled prefix is worth holding: while a fence is open the body is
+    // constant across tokens, and the entry is replaced outright on settlement.
+    if (options?.cache !== undefined) {
+      options.cache.current = tailOffset === null ? null : { body, tree }
     }
   }
 
-  const flushBlock = () => {
-    append('markdown', block, blockStart)
-    block = []
+  const state: PlanState = { sourceId, leaves: [] }
+  const roots: ElementContent[] = []
+  for (const child of tree.children) {
+    if (child.type !== 'doctype') roots.push(child)
+  }
+  planChildren(roots, [], '', state)
+
+  if (tailOffset !== null) {
+    // An open fence is not a code block yet. It renders as the plain text it
+    // currently is, final line included, and becomes a card when it settles.
+    planPlainText(source.slice(tailOffset), 'tail', state)
   }
 
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index]
-    const fence = /^ {0,3}(`{3,}|~{3,})[^`~]*$/.exec(line)
-    if (!fence) {
-      if (block.length === 0) blockStart = index
-      block.push(line)
-      continue
-    }
-
-    flushBlock()
-    const marker = fence[1]
-    const closing = new RegExp(`^ {0,3}${marker[0]}{${marker.length},}\\s*$`)
-    let close = index + 1
-    while (close < lines.length && !closing.test(lines[close])) close += 1
-
-    const end = close < lines.length ? close : lines.length - 1
-    const header = lines[index]
-    const body = lines.slice(index + 1, end)
-    const chunks = Math.max(1, Math.ceil(body.length / MAX_MARKDOWN_LEAF_LINES))
-    for (let chunkIndex = 0; chunkIndex < chunks; chunkIndex += 1) {
-      const from = chunkIndex * MAX_MARKDOWN_LEAF_LINES
-      const to = Math.min(from + MAX_MARKDOWN_LEAF_LINES, body.length)
-      const chunk = body.slice(from, to)
-      const content = [header, ...chunk, marker]
-      const startLine = index + from
-      leaves.push({
-        id: `${sourceId}:${startLine}:fence`,
-        kind: 'fenced-code',
-        content: content.join('\n'),
-        startLine,
-        endLine: index + to,
-        estimatedHeight: estimateHeight(chunk.join('\n'), Math.max(1, chunk.length)) + 56,
-      })
-    }
-    index = end
-  }
-
-  flushBlock()
-  return leaves
+  return state.leaves
 }
 
 /**
- * Qualifies a measured height by leaf identity and content revision together. A
- * streamed leaf keeps its id while its content grows, so an id-only key would
- * retain a height measured for shorter content.
+ * Bounded plain-text leaves for source that must not be interpreted: an open
+ * streaming fence, or a document the parser could not read at all.
+ */
+export function planPlainTextLeaves(
+  sourceId: string,
+  source: string,
+): MarkdownRenderLeaf[] {
+  const state: PlanState = { sourceId, leaves: [] }
+  planPlainText(source, 'text', state)
+  return state.leaves
+}
+
+function planPlainText(value: string, path: string, state: PlanState): void {
+  const wrapper: MarkdownLeafWrapper = {
+    element: {
+      type: 'element',
+      tagName: 'div',
+      properties: {
+        className: [
+          'whitespace-pre-wrap',
+          'break-words',
+          'font-mono',
+          'text-xs',
+          'text-text-muted',
+        ],
+      },
+      children: [],
+    },
+    prefix: [],
+  }
+  planChildren([{ type: 'text', value }], [wrapper], path, state)
+}
+
+/**
+ * Qualifies a measured height by mounted identity and content revision
+ * together. A streamed leaf keeps its id while its content grows, so an id-only
+ * key would retain a height measured for shorter content.
  */
 export function markdownMeasurementKey(leaf: MarkdownRenderLeaf): string {
-  return `${leaf.id}#${leaf.content.length}`
+  return markdownUnitKey([leaf])
+}
+
+function markdownUnitKey(members: readonly MarkdownRenderLeaf[]): string {
+  let characters = 0
+  for (const member of members) characters += member.characters
+  return `${members[0].id}#${members.length}#${characters}`
+}
+
+/**
+ * Resolves heights measured against merged mounted units back onto the plan's
+ * individual leaves, and reports which cache entries still describe a run that
+ * exists in the current plan. Everything else has left the plan and is pruned.
+ */
+export function resolveMarkdownMeasurements(
+  leaves: readonly MarkdownRenderLeaf[],
+  unitHeights: ReadonlyMap<string, number>,
+): { heights: Map<string, number>; live: Set<string> } {
+  const heights = new Map<string, number>()
+  const live = new Set<string>()
+  if (unitHeights.size === 0) return { heights, live }
+
+  const positions = new Map<string, number>()
+  for (let index = 0; index < leaves.length; index += 1) {
+    positions.set(leaves[index].id, index)
+  }
+
+  for (const [key, height] of unitHeights) {
+    const decoded = decodeUnitKey(key)
+    if (decoded === null) continue
+    const start = positions.get(decoded.id)
+    if (start === undefined) continue
+    const end = start + decoded.count
+    if (end > leaves.length) continue
+
+    let characters = 0
+    let estimated = 0
+    let sameGroup = true
+    for (let index = start; index < end; index += 1) {
+      const leaf = leaves[index]
+      if (leaf.groupId !== leaves[start].groupId) sameGroup = false
+      characters += leaf.characters
+      estimated += leaf.estimatedHeight
+    }
+    if (!sameGroup || characters !== decoded.characters) continue
+
+    live.add(key)
+    const total = estimated > 0 ? estimated : 1
+    for (let index = start; index < end; index += 1) {
+      const leaf = leaves[index]
+      heights.set(leaf.id, Math.max(1, Math.round((height * leaf.estimatedHeight) / total)))
+    }
+  }
+
+  return { heights, live }
+}
+
+function decodeUnitKey(
+  key: string,
+): { id: string; count: number; characters: number } | null {
+  const second = key.lastIndexOf('#')
+  if (second <= 0) return null
+  const first = key.lastIndexOf('#', second - 1)
+  if (first <= 0) return null
+  const count = Number(key.slice(first + 1, second))
+  const characters = Number(key.slice(second + 1))
+  if (!Number.isInteger(count) || count < 1) return null
+  if (!Number.isInteger(characters) || characters < 0) return null
+  return { id: key.slice(0, first), count, characters }
 }
 
 /**
  * Selects a bounded range using estimated leaf heights. Browser measurement can
- * replace the estimates without changing the source leaf identities.
+ * replace the estimates without changing the leaf identities.
  */
 export function selectMarkdownLeafWindow(
   leaves: readonly MarkdownRenderLeaf[],
@@ -169,9 +334,491 @@ export function selectMarkdownLeafWindow(
   return { start, end, topSpacerHeight, bottomSpacerHeight }
 }
 
-function estimateHeight(content: string, lineCount: number): number {
-  const wrappedLines = Math.ceil(content.length / 120)
-  return Math.max(lineCount, wrappedLines, 1) * 24
+/**
+ * Folds the selected range into the units that actually mount. Consecutive
+ * leaves of one semantic parent share ONE wrapper, so a windowed fence stays a
+ * single card and a windowed table stays a single table.
+ */
+export function mergeMountedMarkdownLeaves(
+  leaves: readonly MarkdownRenderLeaf[],
+  start: number,
+  end: number,
+): MountedMarkdownLeaf[] {
+  const units: MountedMarkdownLeaf[] = []
+  let index = Math.max(0, start)
+  const limit = Math.min(end, leaves.length)
+
+  while (index < limit) {
+    const first = leaves[index]
+    let last = index
+    while (last + 1 < limit && leaves[last + 1].groupId === first.groupId) last += 1
+
+    const members = leaves.slice(index, last + 1)
+    const children: ElementContent[] = []
+    let text = ''
+    for (const member of members) {
+      for (const child of member.children) children.push(child)
+      text += member.text
+    }
+
+    units.push({
+      key: first.id,
+      measurementKey: markdownUnitKey(members),
+      kind: first.kind,
+      tree: { type: 'root', children: applyWrappers(first.wrappers, children) },
+      content: { type: 'root', children },
+      text,
+      codeSource: first.codeSource,
+      codeLanguage: first.codeLanguage,
+    })
+    index = last + 1
+  }
+
+  return units
+}
+
+/** Renders a hast tree through the caller's own component overrides. */
+export function renderMarkdownTree(tree: Root, components?: Components): ReactNode {
+  return toJsxRuntime(tree, {
+    Fragment,
+    components,
+    ignoreInvalidStyle: true,
+    jsx,
+    jsxs,
+    passKeys: true,
+    passNode: true,
+  })
+}
+
+/* ── planning ──────────────────────────────────────────────────────────────── */
+
+type PlanState = { sourceId: string; leaves: MarkdownRenderLeaf[] }
+
+type Weight = { lines: number; characters: number }
+
+/**
+ * Containers whose inter-child whitespace carries no meaning. Dropping it stops
+ * a lone `"\n"` between `<thead>` and `<tbody>` from becoming its own leaf.
+ */
+const BLOCK_CONTAINERS = new Set([
+  'blockquote',
+  'details',
+  'div',
+  'dl',
+  'li',
+  'ol',
+  'section',
+  'table',
+  'tbody',
+  'tfoot',
+  'thead',
+  'tr',
+  'ul',
+])
+
+/** Table parts that belong to every chunk of the body, not to one of them. */
+const TABLE_STICKY = new Set(['caption', 'colgroup', 'thead'])
+
+function planChildren(
+  children: readonly ElementContent[],
+  wrappers: readonly MarkdownLeafWrapper[],
+  path: string,
+  state: PlanState,
+): void {
+  const usable = usableChildren(children, wrappers)
+  const groupId = `${state.sourceId}:${path === '' ? 'root' : path}`
+  let buffer: ElementContent[] = []
+  let bufferLines = 0
+  let bufferCharacters = 0
+  let bufferStart = 0
+  let chunkIndex = 0
+
+  const push = (
+    leafChildren: readonly ElementContent[],
+    firstIndex: number,
+    lines: number,
+    characters: number,
+  ): void => {
+    state.leaves.push({
+      id: `${groupId}:${chunkIndex}`,
+      groupId,
+      kind: 'block',
+      wrappers: withOrderedStart(wrappers, usable, firstIndex),
+      children: leafChildren,
+      text: '',
+      codeSource: '',
+      codeLanguage: '',
+      characters,
+      lines,
+      estimatedHeight: estimateHeight(lines, characters),
+    })
+    chunkIndex += 1
+  }
+
+  const flush = (): void => {
+    if (buffer.length === 0) return
+    push(buffer, bufferStart, bufferLines, bufferCharacters)
+    buffer = []
+    bufferLines = 0
+    bufferCharacters = 0
+  }
+
+  for (let index = 0; index < usable.length; index += 1) {
+    const child = usable[index]
+
+    const weight = weigh(child)
+    const oversized =
+      weight.lines > MAX_MARKDOWN_LEAF_LINES ||
+      weight.characters > MAX_MARKDOWN_LEAF_CHARACTERS
+
+    if (oversized) {
+      flush()
+      // A fence too long to mount whole becomes its own group, so however many
+      // chunks the window takes they fold back into ONE card. A fence that fits
+      // stays an ordinary child and keeps rendering through the caller's own
+      // `pre`/`code` overrides.
+      if (wrappers.length === 0 && isCodeBlock(child)) {
+        planCodeBlock(child, wrappers, `${path}/${index}`, state)
+        continue
+      }
+      if (child.type === 'text') {
+        for (const slice of sliceBoundedText(child.value)) {
+          push([{ type: 'text', value: slice }], index, countBreaks(slice), slice.length)
+        }
+        continue
+      }
+      if (child.type === 'element') {
+        if (wrappers.length === 0 && !hasElementChild(child)) {
+          planAtomicProse(child, `${path}/${index}`, state)
+          continue
+        }
+        if (child.children.length > 0) {
+          const { wrapper, rest } = splitWrapper(child)
+          planChildren(
+            rest,
+            [...withOrderedStart(wrappers, usable, index), wrapper],
+            `${path}/${index}`,
+            state,
+          )
+          continue
+        }
+      }
+      push([child], index, weight.lines, weight.characters)
+      continue
+    }
+
+    if (
+      buffer.length > 0 &&
+      (buffer.length + 1 > MAX_MARKDOWN_LEAF_CHILDREN ||
+        bufferLines + weight.lines > MAX_MARKDOWN_LEAF_LINES ||
+        bufferCharacters + weight.characters > MAX_MARKDOWN_LEAF_CHARACTERS)
+    ) {
+      flush()
+    }
+    if (buffer.length === 0) bufferStart = index
+    buffer.push(child)
+    bufferLines += weight.lines
+    bufferCharacters += weight.characters
+  }
+
+  flush()
+}
+
+/**
+ * A fence always gets its own group, so however many chunks the window mounts
+ * they fold back into ONE card whose copy action carries the whole fence.
+ */
+function planCodeBlock(
+  pre: Element,
+  wrappers: readonly MarkdownLeafWrapper[],
+  path: string,
+  state: PlanState,
+): void {
+  const code = pre.children.find(
+    (child): child is Element => child.type === 'element' && child.tagName === 'code',
+  )
+  if (code === undefined) return
+
+  const raw = textOf(code)
+  const codeSource = raw.endsWith('\n') ? raw.slice(0, -1) : raw
+  const codeLanguage = languageOf(code)
+  const before = state.leaves.length
+
+  planChildren(
+    code.children,
+    [
+      ...wrappers,
+      { element: { ...pre, children: [] }, prefix: [] },
+      { element: { ...code, children: [] }, prefix: [] },
+    ],
+    path,
+    state,
+  )
+
+  for (let index = before; index < state.leaves.length; index += 1) {
+    const leaf = state.leaves[index]
+    leaf.kind = 'code'
+    leaf.codeSource = codeSource
+    leaf.codeLanguage = codeLanguage
+    if (index === before) leaf.estimatedHeight += 56
+  }
+}
+
+/**
+ * A top-level block whose bulk is one unbroken run of text has no semantic
+ * children to window, so it goes to the disclosed bounded viewer instead of
+ * handing the layout engine one enormous wrapping text node.
+ */
+function planAtomicProse(element: Element, path: string, state: PlanState): void {
+  const groupId = `${state.sourceId}:${path}`
+  const value = textOf(element)
+  let chunkIndex = 0
+  for (const slice of sliceBoundedText(value)) {
+    state.leaves.push({
+      id: `${groupId}:${chunkIndex}`,
+      groupId,
+      kind: 'atomic-text',
+      wrappers: [],
+      children: [],
+      text: slice,
+      codeSource: '',
+      codeLanguage: '',
+      characters: slice.length,
+      lines: countBreaks(slice),
+      estimatedHeight: estimateHeight(countBreaks(slice), slice.length),
+    })
+    chunkIndex += 1
+  }
+}
+
+function usableChildren(
+  children: readonly ElementContent[],
+  wrappers: readonly MarkdownLeafWrapper[],
+): readonly ElementContent[] {
+  const parent = wrappers.length === 0 ? null : wrappers[wrappers.length - 1].element
+  if (parent !== null && !BLOCK_CONTAINERS.has(parent.tagName)) return children
+  const kept = children.filter(child => child.type !== 'text' || child.value.trim() !== '')
+  return kept.length === children.length ? children : kept
+}
+
+function splitWrapper(element: Element): {
+  wrapper: MarkdownLeafWrapper
+  rest: ElementContent[]
+} {
+  if (element.tagName !== 'table') {
+    return { wrapper: { element: { ...element, children: [] }, prefix: [] }, rest: element.children }
+  }
+  const prefix: ElementContent[] = []
+  const rest: ElementContent[] = []
+  for (const child of element.children) {
+    if (child.type === 'element' && TABLE_STICKY.has(child.tagName)) prefix.push(child)
+    else rest.push(child)
+  }
+  return { wrapper: { element: { ...element, children: [] }, prefix }, rest }
+}
+
+/**
+ * An ordered list cut mid-body must not restart at 1: each chunk's retained
+ * `<ol>` declares the number its first mounted item actually carries.
+ */
+function withOrderedStart(
+  wrappers: readonly MarkdownLeafWrapper[],
+  children: readonly ElementContent[],
+  firstIndex: number,
+): readonly MarkdownLeafWrapper[] {
+  if (wrappers.length === 0) return wrappers
+  const last = wrappers[wrappers.length - 1]
+  if (last.element.tagName !== 'ol') return wrappers
+
+  let offset = 0
+  for (let index = 0; index < firstIndex && index < children.length; index += 1) {
+    const child = children[index]
+    if (child.type === 'element' && child.tagName === 'li') offset += 1
+  }
+  if (offset === 0) return wrappers
+
+  const declared = last.element.properties?.start
+  const base = typeof declared === 'number' ? declared : 1
+  return [
+    ...wrappers.slice(0, -1),
+    {
+      ...last,
+      element: {
+        ...last.element,
+        properties: { ...last.element.properties, start: base + offset },
+      },
+    },
+  ]
+}
+
+function applyWrappers(
+  wrappers: readonly MarkdownLeafWrapper[],
+  children: readonly ElementContent[],
+): ElementContent[] {
+  let content: ElementContent[] = [...children]
+  for (let index = wrappers.length - 1; index >= 0; index -= 1) {
+    const wrapper = wrappers[index]
+    content = [{ ...wrapper.element, children: [...wrapper.prefix, ...content] }]
+  }
+  return content
+}
+
+/* ── tree normalization ────────────────────────────────────────────────────── */
+
+/**
+ * Raw HTML stays disabled: every `raw` node becomes the literal text the author
+ * wrote, exactly as react-markdown demotes it. URL-bearing properties go
+ * through react-markdown's own transform, so a `javascript:` href is emptied
+ * here rather than reaching the DOM.
+ */
+function normalizeTree(node: Root | RootContent): void {
+  if (node.type !== 'root' && node.type !== 'element') return
+  if (node.type === 'element') {
+    for (const key of ['href', 'src']) {
+      if (!Object.hasOwn(node.properties, key)) continue
+      node.properties[key] = defaultUrlTransform(String(node.properties[key] ?? ''))
+    }
+  }
+  for (let index = 0; index < node.children.length; index += 1) {
+    const child = node.children[index]
+    if (child.type === 'raw') {
+      node.children[index] = { type: 'text', value: child.value }
+      continue
+    }
+    normalizeTree(child)
+  }
+}
+
+/* ── streaming ─────────────────────────────────────────────────────────────── */
+
+/**
+ * Offset of a trailing fence that has no closing delimiter yet, or null.
+ *
+ * CommonMark closes an open fence at end of document, so the parser hands back
+ * a finished code block for text the model is still writing. Classifying the
+ * already-parsed node's own slice (never re-parsing the source) tells the two
+ * apart: a closed fence's slice ends with its delimiter, an open one's ends
+ * with the code itself.
+ */
+function findUnterminatedFence(mdast: MdastRoot, source: string): number | null {
+  const last = mdast.children[mdast.children.length - 1]
+  if (last === undefined || last.type !== 'code') return null
+  const start = last.position?.start.offset
+  const end = last.position?.end.offset
+  if (start === undefined || end === undefined) return null
+  if (source.slice(end).trim() !== '') return null
+
+  const raw = source.slice(start, end)
+  if (fenceRunLength(raw) === 0) return null
+
+  const firstBreak = raw.indexOf('\n')
+  if (firstBreak === -1) return start
+  const body = raw.slice(firstBreak + 1)
+  const trimmed = body.endsWith('\n') ? body.slice(0, -1) : body
+  return trimmed === last.value ? start : null
+}
+
+/** Whether a slice is one unterminated fence and nothing else. */
+function isWholeUnterminatedFence(
+  processor: ReturnType<typeof markdownProcessor>,
+  tail: string,
+): boolean {
+  const mdast = processor.parse(tail)
+  return mdast.children.length === 1 && findUnterminatedFence(mdast, tail) === 0
+}
+
+/** Length of an opening fence run, or 0 when the slice does not open one. */
+function fenceRunLength(raw: string): number {
+  let index = 0
+  while (index < 3 && raw[index] === ' ') index += 1
+  const marker = raw[index]
+  if (marker !== '`' && marker !== '~') return 0
+  let run = 0
+  while (raw[index + run] === marker) run += 1
+  return run >= 3 ? run : 0
+}
+
+/* ── measurement ───────────────────────────────────────────────────────────── */
+
+function weigh(node: ElementContent): Weight {
+  const characters = countCharacters(node)
+  const breaks = countBreaks(textOf(node))
+  const start = node.position?.start.line
+  const end = node.position?.end.line
+  const spanned = start === undefined || end === undefined ? 0 : Math.max(1, end - start + 1)
+  return { lines: Math.max(spanned, breaks), characters }
+}
+
+function countCharacters(node: ElementContent): number {
+  if (node.type === 'text' || node.type === 'raw') return node.value.length
+  if (node.type !== 'element') return 0
+  let total = 0
+  for (const child of node.children) total += countCharacters(child)
+  return total
+}
+
+/** Cuts one unbroken run of text at whichever ceiling it reaches first. */
+function sliceBoundedText(value: string): string[] {
+  const slices: string[] = []
+  let start = 0
+  while (start < value.length) {
+    let end = Math.min(start + MAX_MARKDOWN_LEAF_CHARACTERS, value.length)
+    let breaks = 0
+    for (let index = start; index < end; index += 1) {
+      if (value.charCodeAt(index) !== 10) continue
+      breaks += 1
+      if (breaks >= MAX_MARKDOWN_LEAF_LINES) {
+        end = index + 1
+        break
+      }
+    }
+    slices.push(value.slice(start, end))
+    start = end
+  }
+  return slices
+}
+
+function countBreaks(value: string): number {
+  let total = 0
+  for (let index = 0; index < value.length; index += 1) {
+    if (value.charCodeAt(index) === 10) total += 1
+  }
+  return total
+}
+
+function textOf(node: ElementContent): string {
+  if (node.type === 'text' || node.type === 'raw') return node.value
+  if (node.type !== 'element') return ''
+  let total = ''
+  for (const child of node.children) total += textOf(child)
+  return total
+}
+
+function hasElementChild(element: Element): boolean {
+  return element.children.some(child => child.type === 'element')
+}
+
+function isCodeBlock(node: ElementContent): node is Element {
+  return (
+    node.type === 'element' &&
+    node.tagName === 'pre' &&
+    node.children.some(child => child.type === 'element' && child.tagName === 'code')
+  )
+}
+
+function languageOf(code: Element): string {
+  const className = code.properties?.className
+  if (!Array.isArray(className)) return ''
+  for (const entry of className) {
+    const name = String(entry)
+    if (name.startsWith('language-')) return name.slice('language-'.length)
+  }
+  return ''
+}
+
+function estimateHeight(lines: number, characters: number): number {
+  const wrapped = Math.ceil(characters / 120)
+  return Math.max(lines, wrapped, 1) * 24
 }
 
 function sumHeights(

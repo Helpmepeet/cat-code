@@ -232,6 +232,56 @@ test('bounds a giant assistant response before react-markdown creates its full t
   expect(html).toContain('aria-hidden="true"')
 })
 
+/* CC-59: the bounded body used to hand each source chunk to its own Markdown
+ * parse, so a table cut mid-body lost its header, an ordered list restarted at
+ * 1, and a long fence became one card per chunk. The whole reply is parsed once
+ * now and only a range of that ONE tree mounts. */
+
+test('CC-59: a long fence stays one card with one copy control while its lines are bounded', () => {
+  const fence = [
+    '```ts',
+    ...Array.from({ length: 400 }, (_, index) => `const line${index} = ${index}`),
+    '```',
+  ].join('\n')
+  const html = render(proseRow(fence, 'longfence'))
+
+  // One card: one framed <pre>, one floating language label, one copy control.
+  expect(occurrences(html, 'pt-[38px]')).toBe(1)
+  expect(occurrences(html, '&lt;/&gt;')).toBe(1)
+  expect(occurrences(html, '>copy</button>')).toBe(1)
+  expect(html).toContain('hljs-keyword')
+
+  // Bounded: the window mounts a fraction of the 400 lines, and a spacer stands
+  // in for the rest.
+  const mounted = html.match(/line\d+/g)?.length ?? 0
+  expect(mounted).toBeGreaterThan(0)
+  expect(mounted).toBeLessThan(400)
+  expect(html).toContain('aria-hidden="true"')
+})
+
+test('CC-59: a table longer than one window keeps its header row and prototype chrome', () => {
+  const rows = Array.from({ length: 500 }, (_, index) => `| a${index} | b${index} |`).join('\n')
+  const html = render(proseRow(`| Name | Role |\n|------|------|\n${rows}`, 'longtable'))
+
+  expect(html).toContain('<thead>')
+  expect(html).toContain('Name')
+  expect(html).toContain('Role')
+  expect(html).toContain('bg-white/[0.03]') // header wash still applied
+  expect(html).toContain('a0')
+  expect(html).not.toContain('a499')
+  expect(occurrences(html, '<table')).toBe(1)
+})
+
+test('CC-59: a reference link resolves even though its definition never renders', () => {
+  const html = render(
+    proseRow('See the [manual][ref] for details.\n\n[ref]: https://example.com/manual\n', 'reflink'),
+  )
+
+  expect(html).toContain('href="https://example.com/manual"')
+  expect(html).not.toContain('[manual][ref]')
+  expect(html).not.toContain('[ref]:')
+})
+
 test('a blockquote gets its own per-quote copy control', () => {
   const html = render({
     ...blockSource,

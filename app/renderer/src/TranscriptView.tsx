@@ -43,6 +43,11 @@ import { diffWordsWithSpace } from 'diff'
 import type { AccountsSnapshot, SessionId } from '../../shared/protocol.js'
 import { WelcomeScreen } from './WelcomeScreen.js'
 import { BoundedMarkdown } from './BoundedMarkdown.js'
+import {
+  renderMarkdownTree,
+  type MarkdownComponents,
+  type MountedMarkdownLeaf,
+} from './markdownRenderPlan.js'
 import { VirtualLineList } from './VirtualLineList.js'
 import { REHYPE_PLUGINS } from './markdownPlugins.js'
 import { useModalFocus } from './overlayFocus.js'
@@ -719,22 +724,27 @@ function AssistantProse({
       <BoundedMarkdown
         sourceId={sourceId}
         source={content}
-        renderLeaf={leaf => (
-          <div
-            className="md-prose font-sans font-medium text-sm leading-relaxed"
-            key={leaf.id}
-          >
-            <MarkdownErrorBoundary fallback={leaf.content}>
-              <Markdown
-                remarkPlugins={REMARK_PLUGINS}
-                rehypePlugins={REHYPE_PLUGINS}
-                components={components}
-              >
-                {leaf.content}
-              </Markdown>
+        rehypePlugins={REHYPE_PLUGINS}
+        renderLeaf={leaf =>
+          // A fence too long to mount whole arrives as one merged code leaf:
+          // the card and its copy action own the WHOLE fence, while only the
+          // windowed lines are mounted inside it.
+          leaf.kind === 'code' ? (
+            <MarkdownErrorBoundary fallback={leaf.codeSource}>
+              <CodeBlock
+                lang={leaf.codeLanguage}
+                code={leaf.codeSource}
+                highlighted={<MarkdownTree tree={leaf.content} components={components} />}
+              />
             </MarkdownErrorBoundary>
-          </div>
-        )}
+          ) : (
+            <div className="md-prose font-sans font-medium text-sm leading-relaxed">
+              <MarkdownErrorBoundary fallback={content}>
+                <MarkdownTree tree={leaf.tree} components={components} />
+              </MarkdownErrorBoundary>
+            </div>
+          )
+        }
       />
       {streaming ? (
         <span
@@ -903,6 +913,21 @@ class MarkdownErrorBoundary extends Component<
     }
     return this.props.children
   }
+}
+
+/**
+ * Renders one mounted range of the message's single parsed document. It has to
+ * be a component rather than a bare call so a throw lands inside
+ * `MarkdownErrorBoundary` instead of taking the transcript subtree with it.
+ */
+function MarkdownTree({
+  tree,
+  components,
+}: {
+  tree: MountedMarkdownLeaf['tree']
+  components?: MarkdownComponents
+}) {
+  return <>{renderMarkdownTree(tree, components)}</>
 }
 
 /** Flatten react-markdown code children (a string, a node array, or the
@@ -3146,9 +3171,9 @@ function ThinkingBlock({ content, sourceId }: { content: string; sourceId: strin
           sourceId={sourceId}
           source={content}
           renderLeaf={leaf => (
-            <div className="md-prose" key={leaf.id}>
-              <MarkdownErrorBoundary fallback={leaf.content}>
-                <Markdown remarkPlugins={REMARK_PLUGINS}>{leaf.content}</Markdown>
+            <div className="md-prose">
+              <MarkdownErrorBoundary fallback={content}>
+                <MarkdownTree tree={leaf.tree} />
               </MarkdownErrorBoundary>
             </div>
           )}
@@ -3334,10 +3359,8 @@ function ReasoningProse({ content, sourceId }: { content: string; sourceId: stri
             sourceId={sourceId}
             source={content}
             renderLeaf={leaf => (
-              <MarkdownErrorBoundary fallback={leaf.content} key={leaf.id}>
-                <Markdown key={leaf.id} remarkPlugins={REMARK_PLUGINS}>
-                  {leaf.content}
-                </Markdown>
+              <MarkdownErrorBoundary fallback={content}>
+                <MarkdownTree tree={leaf.tree} />
               </MarkdownErrorBoundary>
             )}
           />
