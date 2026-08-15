@@ -31,6 +31,13 @@ export const MAX_MARKDOWN_LEAF_CHARACTERS = 12_000
 export const MAX_MARKDOWN_LEAF_CHILDREN = 200
 /** Leaf ceiling for one mounted window. */
 export const MAX_MOUNTED_MARKDOWN_LEAVES = 120
+/**
+ * Retained measured runs. A key names a contiguous RUN of leaves, so scrolling
+ * one group mints a new key per distinct run the window ever framed: pruning
+ * drops runs whose content changed, but an unchanged group keeps every run it
+ * has ever shown, which is quadratic in its leaf count.
+ */
+export const MAX_RETAINED_MARKDOWN_MEASUREMENTS = MAX_MOUNTED_MARKDOWN_LEAVES * 3
 
 export type MarkdownLeafKind = 'block' | 'code' | 'atomic-text'
 

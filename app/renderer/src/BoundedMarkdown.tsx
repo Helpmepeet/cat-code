@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { PluggableList } from 'unified'
 import {
+  MAX_RETAINED_MARKDOWN_MEASUREMENTS,
   createMarkdownPlanCache,
   mergeMountedMarkdownLeaves,
   planMarkdownLeaves,
@@ -133,9 +134,25 @@ export function BoundedMarkdown({
           const height = Math.ceil(entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height)
           if (height <= 0 || Math.abs((current.get(key) ?? 0) - height) < 1) continue
           if (next === null) next = new Map(current)
+          next.delete(key)
           next.set(key, height)
         }
-        return next ?? current
+        if (next === null) return current
+        // Pruning only drops runs whose content changed. An unchanged group
+        // keeps a key for every distinct run its window has ever framed, which
+        // grows with the square of its leaf count, so the map needs its own
+        // ceiling. Nothing measured in this flush is a candidate.
+        const measured = new Set(
+          entries
+            .map(entry => entry.target.getAttribute('data-markdown-leaf'))
+            .filter((key): key is string => key !== null),
+        )
+        for (const key of next.keys()) {
+          if (next.size <= MAX_RETAINED_MARKDOWN_MEASUREMENTS) break
+          if (measured.has(key)) continue
+          next.delete(key)
+        }
+        return next
       })
     })
     for (const element of root.querySelectorAll<HTMLElement>('[data-markdown-leaf]')) {

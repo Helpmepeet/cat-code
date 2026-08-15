@@ -507,3 +507,34 @@ describe('text conservation across bounded leaves', () => {
     expect(mount(leaves, 0, leaves.length)).toContain('Paragraph 299')
   })
 })
+
+/**
+ * Review finding: neutering the content-revision half of the liveness check
+ * failed nothing, so the pruning that keeps a streamed message's measurement
+ * map from growing one entry per token had no coverage at all.
+ */
+describe('measurement liveness follows content, not just position', () => {
+  test('a run whose content changed is no longer live', () => {
+    const settled = planMarkdownLeaves('row-1', 'The answer is')
+    const key = markdownMeasurementKey(settled[0])
+    const heights = new Map([[key, 84]])
+
+    expect(resolveMarkdownMeasurements(settled, heights).live.has(key)).toBe(true)
+
+    // Same leaf id and same position; one more token of content.
+    const streamed = planMarkdownLeaves('row-1', 'The answer is forty two.')
+    expect(streamed[0].id).toBe(settled[0].id)
+    expect(resolveMarkdownMeasurements(streamed, heights).live.has(key)).toBe(false)
+    expect(resolveMarkdownMeasurements(streamed, heights).heights.size).toBe(0)
+  })
+
+  test('an unchanged run stays live across a replan', () => {
+    const source = Array.from({ length: 400 }, (_, index) => `Line ${index}`).join('\n')
+    const first = planMarkdownLeaves('row-1', source)
+    const key = markdownMeasurementKey(first[0])
+    const heights = new Map([[key, 96]])
+    const second = planMarkdownLeaves('row-1', `${source}\nLine appended`)
+
+    expect(resolveMarkdownMeasurements(second, heights).live.has(key)).toBe(true)
+  })
+})
