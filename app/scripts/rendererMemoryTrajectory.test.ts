@@ -404,14 +404,20 @@ describe('a renderer restart is visible in the analysis', () => {
     const restarted = RUN_SAMPLES.map((entry, index) =>
       index < RUN_SAMPLES.length / 2 ? entry : { ...entry, rendererPid: 5150 },
     )
-    const text = formatSummary({
-      label: 'restart-probe',
-      workload: 'three-pane',
-      rendererPid: 5150,
-      startedIso: RUN_SAMPLES[0].atIso,
-      analysis: analyseRun(restarted, OPTIONS),
-      verdicts: evaluateThresholds(analyseRun(restarted, OPTIONS), 'three-pane'),
-    })
+    const text = formatSummary(
+      buildTrajectoryRun({
+        label: 'restart-probe',
+        workload: 'three-pane',
+        startedAtIso: '2026-08-15T12:00:00.000Z',
+        finishedAtIso: '2026-08-15T12:15:00.000Z',
+        rendererPid: 5150,
+        intervalMs: 30_000,
+        plannedDurationMs: 15 * 60_000,
+        stoppedReason: 'run length reached',
+        samples: restarted,
+        seriesOptions: OPTIONS,
+      }),
+    )
     expect(text).toContain('the renderer restarted during this run')
   })
 })
