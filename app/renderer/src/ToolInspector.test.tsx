@@ -287,6 +287,57 @@ test('P4-37: a row with no output has no toolbar to hang controls on', () => {
   expect(html).not.toContain('aria-label="Copy output"')
 })
 
+/* --------------------------------------------------------------------------- *
+ * Bounded mounting (CC-59). The drawer is the only route to a complete output,
+ * so what it must NOT do is mount all of one. SSR proves the first paint; the
+ * geometry and the budgets themselves are proven in `lineWindow.test.ts` and
+ * `outputSearchModel.test.ts`.
+ * --------------------------------------------------------------------------- */
+
+test('a multi-megabyte single line mounts a bounded chunk, and copy still holds it whole', () => {
+  const line = `${'x'.repeat(3_000_000)}needle`
+  const html = renderToStaticMarkup(
+    <ToolInspector row={bashRowWithOutput(`first\n${line}\nlast`)} />,
+  )
+
+  // One logical line, and the row budget alone would have mounted all of it.
+  expect(html.length).toBeLessThan(200_000)
+  expect(html).toContain('…')
+  expect(html).toContain('first')
+  // The model is untouched by the render bound: copy writes this string.
+  const model = describeToolForInspector(
+    bashRowWithOutput(`first\n${line}\nlast`),
+  )
+  expect(model.output?.length).toBe(3_000_017)
+  const source = readFileSync(new URL('./ToolInspector.tsx', import.meta.url), 'utf8')
+  expect(source).toContain('.writeText(body)')
+})
+
+test('a repetitive one-character query mounts a bounded number of highlights', () => {
+  const html = renderToStaticMarkup(
+    <ToolInspector row={bashRowWithOutput('a'.repeat(20_000))} />,
+  )
+  const marks = html.split('<mark').length - 1
+  // No query yet: nothing is painted at all.
+  expect(marks).toBe(0)
+
+  // The steppers cannot be typed into under SSR, so the ceiling that matters is
+  // proven directly on the model in `outputSearchModel.test.ts`; this pins that
+  // the drawer routes through it rather than splitting the raw line.
+  const drawer = readFileSync(new URL('./ToolInspector.tsx', import.meta.url), 'utf8')
+  expect(drawer).toContain('selectOutputLineChunk(')
+  expect(drawer).not.toContain('splitLineByQuery(')
+})
+
+test('the wrap toggle lives on the scroll box, so it qualifies the measurements', () => {
+  // Geometry: `VirtualLineList` folds its container class list into the layout
+  // revision, so wrap has to be a container class and not a per-line one.
+  const source = readFileSync(new URL('./ToolInspector.tsx', import.meta.url), 'utf8')
+  const list = source.slice(source.indexOf('<VirtualLineList'))
+  expect(list).toContain('wrap ? LINE_TEXT_CLASS.wrap : LINE_TEXT_CLASS.nowrap')
+  expect(list.indexOf('className=')).toBeLessThan(list.indexOf('renderLine='))
+})
+
 test('no em dash reaches the drawer (CLAUDE.md §7)', () => {
   const html = renderToStaticMarkup(
     <ToolInspector row={bashRowWithOutput('a\nb')} />,

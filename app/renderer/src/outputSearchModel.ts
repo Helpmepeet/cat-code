@@ -14,10 +14,41 @@
  * those characters instead of throwing or matching everything.
  */
 
+import {
+  MAX_MOUNTED_CHUNK_CHARS,
+  selectVisualChunk,
+} from './lineWindow.js'
+
+/**
+ * Budget 3 of 3 (`lineWindow.ts` owns the other two): highlight descendants
+ * mounted for one chunk. A one-character query over a repetitive line produces
+ * one segment per two characters, so a 4,000-character chunk of `aaaa…`
+ * searched for `a` would build 8,000 React children for a single row. Past this
+ * ceiling the rest of the chunk paints as one plain run: the matches are all
+ * still counted, stepped through and centred, they just stop being tinted
+ * somewhere no reader was going to look.
+ *
+ * 300 is well past any readable density. An inspector row shows around 60
+ * characters, so 300 segments covers several full visual lines of back-to-back
+ * matches.
+ */
+export const MAX_RENDERED_HIGHLIGHT_SEGMENTS = 300
+
 /** One run of a line, split so the DOM layer can paint the matched parts. */
 export type OutputSegment = {
   text: string
   match: boolean
+}
+
+/**
+ * What one row actually mounts: a bounded slice of the logical line, already
+ * split into runs, plus whether characters were cut off either end so the row
+ * can say so.
+ */
+export type OutputLineChunk = {
+  segments: OutputSegment[]
+  truncatedStart: boolean
+  truncatedEnd: boolean
 }
 
 /**
@@ -112,19 +143,27 @@ export function stepMatchIndex(
 
 /**
  * Split one line into matched / unmatched runs so the matched text can be
- * painted. Always returns at least one segment, and every segment is rendered
- * as a text node — this never produces markup.
+ * painted. Always returns at least one segment, never more than `maxSegments`,
+ * and every segment is rendered as a text node — this never produces markup.
  */
-export function splitLineByQuery(line: string, query: string): OutputSegment[] {
+export function splitLineByQuery(
+  line: string,
+  query: string,
+  maxSegments: number = MAX_RENDERED_HIGHLIGHT_SEGMENTS,
+): OutputSegment[] {
   const needle = query.toLowerCase()
   if (needle.length === 0 || line.length === 0) {
     return [{ text: line, match: false }]
   }
+  const limit = Math.max(1, Math.floor(maxSegments))
   const haystack = line.toLowerCase()
   const segments: OutputSegment[] = []
   let from = 0
   let at = haystack.indexOf(needle, from)
   while (at !== -1) {
+    // One match can add two runs, and the remainder always needs a slot of its
+    // own, so stop while there is room for all three.
+    if (segments.length + 2 >= limit) break
     if (at > from) segments.push({ text: line.slice(from, at), match: false })
     segments.push({ text: line.slice(at, at + needle.length), match: true })
     from = at + needle.length
@@ -133,6 +172,37 @@ export function splitLineByQuery(line: string, query: string): OutputSegment[] {
   if (segments.length === 0) return [{ text: line, match: false }]
   if (from < line.length) segments.push({ text: line.slice(from), match: false })
   return segments
+}
+
+/**
+ * The bounded, painted form of one logical line.
+ *
+ * `anchorToMatch` is what keeps a match on a pathological line reachable: on
+ * the active row the slice is centred on the first occurrence instead of taken
+ * from the start, so stepping onto a match five megabytes into one line still
+ * shows it. Every other row slices from the start, which is where a reader
+ * looks first.
+ */
+export function selectOutputLineChunk(
+  line: string,
+  query: string,
+  options: { anchorToMatch?: boolean; maxChars?: number } = {},
+): OutputLineChunk {
+  const needle = query.toLowerCase()
+  const anchor =
+    options.anchorToMatch === true && needle.length > 0
+      ? line.toLowerCase().indexOf(needle)
+      : -1
+  const chunk = selectVisualChunk(
+    line,
+    anchor < 0 ? 0 : anchor,
+    options.maxChars ?? MAX_MOUNTED_CHUNK_CHARS,
+  )
+  return {
+    segments: splitLineByQuery(chunk.text, query),
+    truncatedStart: chunk.truncatedStart,
+    truncatedEnd: chunk.truncatedEnd,
+  }
 }
 
 function wrapIndex(index: number, total: number): number {

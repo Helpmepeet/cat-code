@@ -1,9 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  MAX_RENDERED_HIGHLIGHT_SEGMENTS,
   describeOutputSearch,
+  selectOutputLineChunk,
   splitLineByQuery,
   stepMatchIndex,
 } from './outputSearchModel.js'
+import { MAX_MOUNTED_CHUNK_CHARS } from './lineWindow.js'
 
 const OUTPUT = ['alpha', 'BETA', 'gamma beta', 'delta', 'beta'].join('\n')
 
@@ -157,5 +160,78 @@ describe('splitLineByQuery', () => {
       .map(segment => segment.text)
       .join('')
     expect(joined).toBe(line)
+  })
+
+  test('a repetitive one-character query cannot build an unbounded run list', () => {
+    // 4,000 `a` searched for `a` is 4,000 matches, and one React child each
+    // would be the whole defect: the row is bounded, the highlighting was not.
+    const line = 'a'.repeat(4_000)
+    const segments = splitLineByQuery(line, 'a')
+
+    expect(segments.length).toBeLessThanOrEqual(MAX_RENDERED_HIGHLIGHT_SEGMENTS)
+    // Nothing is dropped: past the ceiling the remainder is one plain run.
+    expect(segments.map(segment => segment.text).join('')).toBe(line)
+    expect(segments[segments.length - 1].match).toBe(false)
+  })
+
+  test('the ceiling still leaves an ordinary line fully highlighted', () => {
+    const segments = splitLineByQuery('beta beta beta', 'beta')
+    expect(segments.filter(segment => segment.match)).toHaveLength(3)
+  })
+})
+
+describe('selectOutputLineChunk', () => {
+  const HUGE = 3_000_000
+
+  test('a multi-megabyte logical line mounts bounded characters and bounded runs', () => {
+    const line = 'a'.repeat(HUGE)
+    const chunk = selectOutputLineChunk(line, 'a')
+
+    const mounted = chunk.segments.map(segment => segment.text).join('')
+    expect(mounted.length).toBe(MAX_MOUNTED_CHUNK_CHARS)
+    expect(chunk.segments.length).toBeLessThanOrEqual(
+      MAX_RENDERED_HIGHLIGHT_SEGMENTS,
+    )
+    expect(chunk.truncatedEnd).toBe(true)
+  })
+
+  test('search over that line is still complete, because it never reads the chunk', () => {
+    const line = `${'x'.repeat(HUGE)}needle`
+    const model = describeOutputSearch(`first\n${line}\nlast`, 'needle', 0)
+
+    expect(model.matches).toEqual([2])
+    expect(model.activeLine).toBe(2)
+    expect(model.label).toBe('1/1')
+    expect(model.lines[1].length).toBe(HUGE + 6)
+  })
+
+  test('the active row re-cuts around the match, so a deep match is on screen', () => {
+    const line = `${'x'.repeat(HUGE)}needle${'x'.repeat(HUGE)}`
+
+    const fromStart = selectOutputLineChunk(line, 'needle')
+    expect(fromStart.segments.some(segment => segment.match)).toBe(false)
+    expect(fromStart.truncatedStart).toBe(false)
+
+    const anchored = selectOutputLineChunk(line, 'needle', {
+      anchorToMatch: true,
+    })
+    expect(anchored.segments.some(segment => segment.match)).toBe(true)
+    expect(anchored.segments.find(segment => segment.match)?.text).toBe('needle')
+    expect(anchored.truncatedStart).toBe(true)
+    expect(anchored.truncatedEnd).toBe(true)
+    expect(anchored.segments.map(segment => segment.text).join('').length).toBe(
+      MAX_MOUNTED_CHUNK_CHARS,
+    )
+  })
+
+  test('an ordinary line is mounted whole, unmarked and fully highlighted', () => {
+    const chunk = selectOutputLineChunk('gamma beta', 'beta')
+
+    expect(chunk.truncatedStart).toBe(false)
+    expect(chunk.truncatedEnd).toBe(false)
+    expect(chunk.segments).toEqual([
+      { text: 'gamma ', match: false },
+      { text: 'beta', match: true },
+    ])
   })
 })

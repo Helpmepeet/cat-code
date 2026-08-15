@@ -42,7 +42,7 @@ import type {
 import { describeToolForInspector } from './toolInspectorModel.js'
 import {
   describeOutputSearch,
-  splitLineByQuery,
+  selectOutputLineChunk,
   stepMatchIndex,
 } from './outputSearchModel.js'
 import { parseReadSource } from './readSource.js'
@@ -131,7 +131,18 @@ const WRAP_BUTTON_CLASS = {
   off: 'border-shell-seam text-text-muted hover:text-text-primary',
 } as const
 
-/** Literal classes only — an interpolated arbitrary value never reaches the JIT. */
+/**
+ * Literal classes only — an interpolated arbitrary value never reaches the JIT.
+ *
+ * These sit on the SCROLL BOX rather than on each line, and `white-space` and
+ * `overflow-wrap` both inherit, so the rows read the same rule either way. The
+ * reason for moving them is geometry: `VirtualLineList` folds its container's
+ * class list into the layout revision that qualifies every measured row height,
+ * and a wrap toggle changes every one of those heights without changing a
+ * character of text. Toggling Wrap therefore invalidates the measurements taken
+ * under the old mode instead of leaving stale ones behind rows that no longer
+ * match them.
+ */
 const LINE_TEXT_CLASS = {
   wrap: 'whitespace-pre-wrap break-words',
   nowrap: 'whitespace-pre',
@@ -279,25 +290,34 @@ function OutputPanel({ text }: { text: string }) {
       <VirtualLineList
         lines={search.lines}
         activeIndex={search.activeLine === null ? null : search.activeLine - 1}
-        className="relative max-h-96 overflow-auto rounded-lg border border-shell-seam bg-black/40 py-2 font-mono text-[11.5px] leading-relaxed text-text-muted"
-        renderLine={(line, index) => {
+        className={`relative max-h-96 overflow-auto rounded-lg border border-shell-seam bg-black/40 py-2 font-mono text-[11.5px] leading-relaxed text-text-muted ${
+          wrap ? LINE_TEXT_CLASS.wrap : LINE_TEXT_CLASS.nowrap
+        }`}
+        renderLine={(_bounded, index) => {
           // Two different numbers. The search model tracks POSITION in the
           // painted body; the gutter shows the file's own line when the
           // payload carried one.
           const position = index + 1
           const lineNumber = source.numbers?.[index] ?? position
           const active = search.activeLine === position
+          // The list hands over a chunk already cut to the character budget,
+          // from the start of the line. This panel holds the full line itself,
+          // so it re-cuts around the active match instead: a match a megabyte
+          // into one logical line has to be reachable, and only the search
+          // model knows where it is.
+          const chunk = selectOutputLineChunk(
+            search.lines[index] ?? '',
+            query,
+            { anchorToMatch: active },
+          )
           return (
             <div key={index} className={`flex ${active ? 'bg-accent/15' : ''}`}>
               <span className="sticky left-0 w-[42px] shrink-0 select-none bg-app-bg pr-2.5 text-right text-text-ghost [font-variant-numeric:tabular-nums]">
                 {lineNumber}
               </span>
-              <span
-                className={`flex-1 pl-3 pr-4 ${
-                  wrap ? LINE_TEXT_CLASS.wrap : LINE_TEXT_CLASS.nowrap
-                }`}
-              >
-                {splitLineByQuery(line, query).map((segment, segmentIndex) =>
+              <span className="flex-1 pl-3 pr-4">
+                {chunk.truncatedStart ? '…' : null}
+                {chunk.segments.map((segment, segmentIndex) =>
                   segment.match ? (
                     <mark
                       key={segmentIndex}
@@ -309,6 +329,7 @@ function OutputPanel({ text }: { text: string }) {
                     <span key={segmentIndex}>{segment.text}</span>
                   ),
                 )}
+                {chunk.truncatedEnd ? '…' : null}
               </span>
             </div>
           )
