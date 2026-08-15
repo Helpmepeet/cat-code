@@ -39,6 +39,7 @@ import {
   ReasoningLayoutContext,
   type ReasoningLayoutMode,
 } from './reasoningLayout.js'
+import { MAX_MOUNTED_COMPOSITE_CHILDREN } from './compositeChildWindow.js'
 import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
 
 // P4-24 empty-state Welcome fixtures — a real `AccountsSnapshot` shape (mirrors
@@ -3344,4 +3345,121 @@ test('a run under the ceiling states its plain count', () => {
 
   expect(renderRows(rows, 'trail')).toContain('5 steps')
   expect(renderRows(rows, 'trail')).not.toContain('of 5 steps')
+})
+
+// ---------------------------------------------------------------------------
+// CC-59: bounded composite containers, at FIRST PAINT.
+//
+// The window that tracks the pane viewport needs geometry and therefore a real
+// browser (`TranscriptView.dom.test.ts`). What this suite covers is the other
+// half: the first commit, before any geometry exists, which is also the only
+// thing a server render ever produces. It must already be bounded — otherwise a
+// pane full of large containers mounts everything once, on the frame that
+// matters most.
+//
+// Every case pairs the mounted bound with the count the chrome prints, because
+// the two are meant to disagree: the DOM is windowed, the model is complete.
+// ---------------------------------------------------------------------------
+
+/** Children the container actually mounted, counted from the markup. */
+function mountedChildCount(html: string): number {
+  return occurrences(html, 'data-transcript-child=')
+}
+
+test('CC-59: a grouped run of thousands mounts a bounded number and counts them all', () => {
+  const store = createToolCardExpansionStore()
+  store.set('run:toolu_r0', true) // the head the user opened
+  const html = renderWithStore(
+    Array.from({ length: 5_000 }, (_, index) =>
+      runReadRow(`r${index}`, `/repo/pkg/file${index}.ts`),
+    ),
+    store,
+  )
+
+  expect(html).toContain('5000 files')
+  expect(mountedChildCount(html)).toBeGreaterThan(0)
+  expect(mountedChildCount(html)).toBeLessThanOrEqual(MAX_MOUNTED_COMPOSITE_CHILDREN)
+  expect(visibleText(html)).toContain('file0.ts')
+  expect(visibleText(html)).not.toContain('file4999.ts')
+})
+
+test('CC-59: an expanded nested transcript mounts a bounded number and counts them all', () => {
+  const store = createToolCardExpansionStore()
+  store.set('toolu_agent_solo', true)
+  const children = Array.from({ length: 5_000 }, (_, index) =>
+    toolRow({
+      id: `bash-${index}`,
+      toolName: 'Bash',
+      toolFamily: 'bash',
+      input: { command: `echo ${index}` },
+      status: 'success',
+      result: { content: `out ${index}`, isError: false, diff: null },
+    }),
+  )
+  const html = renderWithStore(
+    [agentRow('solo', { subagent_type: 'Explore' }, 'success', children)],
+    store,
+  )
+
+  expect(html).toContain('5000 tool calls')
+  expect(mountedChildCount(html)).toBeGreaterThan(0)
+  expect(mountedChildCount(html)).toBeLessThanOrEqual(MAX_MOUNTED_COMPOSITE_CHILDREN)
+})
+
+test('CC-59: a delegate group of thousands mounts a bounded number and counts them all', () => {
+  const html = renderWithStore(
+    Array.from({ length: 5_000 }, (_, index) =>
+      agentRow(`d${index}`, { subagent_type: 'Explore' }, 'success'),
+    ),
+    createToolCardExpansionStore(),
+  )
+
+  expect(html).toContain('5000 Explore agents finished')
+  expect(mountedChildCount(html)).toBeGreaterThan(0)
+  expect(mountedChildCount(html)).toBeLessThanOrEqual(MAX_MOUNTED_COMPOSITE_CHILDREN)
+})
+
+test('CC-59: a container under the ceiling still mounts every child', () => {
+  // The bound must not become a truncation the reader can hit in ordinary use.
+  const store = createToolCardExpansionStore()
+  store.set('run:toolu_r0', true)
+  const html = renderWithStore(
+    Array.from({ length: 6 }, (_, index) =>
+      runReadRow(`r${index}`, `/repo/pkg/file${index}.ts`),
+    ),
+    store,
+  )
+
+  expect(html).toContain('6 files')
+  expect(mountedChildCount(html)).toBe(6)
+  expect(visibleText(html)).toContain('file5.ts')
+})
+
+test('CC-59: a folded reasoning run stays folded through a remount', () => {
+  // The run unmounts whenever it leaves a container's mounted range, so its
+  // fold cannot live in component state.
+  const store = createToolCardExpansionStore()
+  const rows = [
+    thinkingRow('s:m:0:thinking', 'Reading the seam'),
+    thinkingRow('s:m:1:thinking', 'Checking the projector'),
+  ]
+
+  expect(
+    renderToStaticMarkup(
+      <ToolCardExpansionContext.Provider value={store}>
+        <TranscriptRowsView rows={rows} />
+      </ToolCardExpansionContext.Provider>,
+    ),
+  ).toContain('aria-expanded="true"')
+
+  store.set('reasoning-run:s:m:0:thinking:0', false)
+
+  const folded = renderToStaticMarkup(
+    <ToolCardExpansionContext.Provider value={store}>
+      <TranscriptRowsView rows={rows} />
+    </ToolCardExpansionContext.Provider>,
+  )
+  expect(folded).toContain('aria-expanded="false"')
+  expect(folded).toContain('2 steps') // the head still counts the whole run
+  expect(folded).not.toContain('Checking the projector')
 })

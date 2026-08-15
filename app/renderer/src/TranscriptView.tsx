@@ -32,6 +32,7 @@ import {
   useEffect,
   useId,
   useMemo,
+  useReducer,
   useRef,
   useState,
   type ComponentPropsWithoutRef,
@@ -49,6 +50,18 @@ import {
   type MountedMarkdownLeaf,
 } from './markdownRenderPlan.js'
 import { VirtualLineList } from './VirtualLineList.js'
+import { observePaneScroll } from './markdownScrollCoordinator.js'
+import {
+  createCompositeChildState,
+  reduceCompositeChildState,
+  sameCompositeChildWindow,
+  selectCompositeChildEntries,
+  selectCompositeChildWindow,
+  selectInitialCompositeChildWindow,
+  INITIAL_CHILD_VIEWPORT_HEIGHT,
+  type CompositeChildMeasurement,
+  type CompositeChildWindow,
+} from './compositeChildWindow.js'
 import { REHYPE_PLUGINS } from './markdownPlugins.js'
 import { useModalFocus } from './overlayFocus.js'
 import { useToast } from './toastContext.js'
@@ -507,21 +520,194 @@ function DisplayItemView({ item }: { item: TranscriptLayoutItem }) {
 }
 
 /**
+ * Per-container height estimates, used only until the browser measures a child.
+ *
+ * A nested transcript row is whatever the transcript can hold (prose, a tool
+ * card, a seam), so its estimate is a middling row. A tool-run member is one
+ * collapsed line. A delegate member is a collapsed agent card with its identity
+ * strip. All three are replaced per child by the first measurement.
+ */
+const NESTED_ROW_ESTIMATED_HEIGHT = 120
+const RUN_MEMBER_ESTIMATED_HEIGHT = 28
+const DELEGATE_MEMBER_ESTIMATED_HEIGHT = 120
+
+/**
+ * Mounts a bounded range of ONE composite container's children.
+ *
+ * Same division of labour as `BoundedMarkdown`: `compositeChildWindow.ts` owns
+ * the range and the measurement state, and this owns geometry — where the
+ * container sits relative to the pane viewport, and how measured heights
+ * replace the estimate. The caller keeps its complete child list and every
+ * count it prints; only the mounted range comes from here.
+ *
+ * Scroller observation goes through the SHARED pane coordinator, so a
+ * transcript full of these adds no scroll listeners to the pane. The two
+ * observers each container does own watch its own elements: its root box, and
+ * its own direct children.
+ */
+function BoundedChildList({
+  keys,
+  estimatedChildHeight,
+  renderChild,
+  className,
+}: {
+  /** One stable identity per child, in order. Length is the true child count. */
+  keys: readonly string[]
+  estimatedChildHeight: number
+  /** Draws the child at an index into `keys`. Called only for mounted children. */
+  renderChild: (index: number) => ReactNode
+  /** Layout classes the replaced wrapper carried, so spacing is unchanged. */
+  className?: string
+}) {
+  const [state, dispatch] = useReducer(
+    reduceCompositeChildState,
+    undefined,
+    createCompositeChildState,
+  )
+  const entries = useMemo(
+    () => selectCompositeChildEntries(keys, estimatedChildHeight, state),
+    [keys, estimatedChildHeight, state],
+  )
+  const [childWindow, setChildWindow] = useState<CompositeChildWindow>(() =>
+    selectInitialCompositeChildWindow(entries),
+  )
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const entriesRef = useRef(entries)
+  const scheduleRef = useRef<() => void>(() => {})
+
+  useEffect(() => {
+    entriesRef.current = entries
+    scheduleRef.current()
+  }, [entries])
+
+  // Attaches once for the lifetime of the container. Streamed child arrivals
+  // reach the window through the ref above, so a growing run never detaches and
+  // re-attaches the shared pane scroller.
+  useEffect(() => {
+    const root = rootRef.current
+    if (root === null || typeof window === 'undefined') return
+    const scroller = findPaneScroller(root)
+    let frame = 0
+    const update = () => {
+      frame = 0
+      const rootRect = root.getBoundingClientRect()
+      const scrollerRect = scroller.getBoundingClientRect()
+      setChildWindow(current => {
+        const next = selectCompositeChildWindow(
+          entriesRef.current,
+          scrollerRect.top - rootRect.top,
+          scroller.clientHeight || INITIAL_CHILD_VIEWPORT_HEIGHT,
+        )
+        return sameCompositeChildWindow(current, next) ? current : next
+      })
+    }
+    const schedule = () => {
+      if (frame === 0) frame = window.requestAnimationFrame(update)
+    }
+    scheduleRef.current = schedule
+    const rootObserver =
+      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule)
+    rootObserver?.observe(root)
+    const releasePane = observePaneScroll(scroller, schedule)
+    schedule()
+    return () => {
+      scheduleRef.current = () => {}
+      if (frame !== 0) window.cancelAnimationFrame(frame)
+      rootObserver?.disconnect()
+      releasePane()
+    }
+  }, [])
+
+  const mounted = useMemo(
+    () => entries.slice(childWindow.start, childWindow.end),
+    [entries, childWindow.start, childWindow.end],
+  )
+  const mountedSignature = mounted.map(entry => entry.key).join('|')
+
+  // Keyed on the mounted identities rather than the numeric range, so a child
+  // replaced inside an unchanged window is observed immediately.
+  useEffect(() => {
+    const root = rootRef.current
+    if (root === null || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(records => {
+      const measurements: CompositeChildMeasurement[] = []
+      for (const record of records) {
+        const key = record.target.getAttribute('data-transcript-child')
+        if (key === null) continue
+        const height = record.borderBoxSize[0]?.blockSize ?? record.contentRect.height
+        measurements.push({ key, height })
+      }
+      if (measurements.length > 0) dispatch({ kind: 'measured', measurements })
+    })
+    // DIRECT children only. A descendant query would also reach a nested
+    // container's children and file their heights under this container's cache.
+    for (const element of root.children) {
+      if (!(element instanceof HTMLElement)) continue
+      if (element.getAttribute('data-transcript-child') === null) continue
+      observer.observe(element)
+    }
+    return () => observer.disconnect()
+  }, [mountedSignature])
+
+  return (
+    <div className={className} ref={rootRef}>
+      {childWindow.topSpacerHeight > 0 ? (
+        <div aria-hidden style={{ height: `${childWindow.topSpacerHeight}px` }} />
+      ) : null}
+      {mounted.map((entry, offset) => (
+        <div data-transcript-child={entry.key} key={entry.key}>
+          {renderChild(childWindow.start + offset)}
+        </div>
+      ))}
+      {childWindow.bottomSpacerHeight > 0 ? (
+        <div aria-hidden style={{ height: `${childWindow.bottomSpacerHeight}px` }} />
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * The pane scroller this container lives in. Same walk `BoundedMarkdown` does;
+ * duplicated rather than shared because that module is a component file and may
+ * not export a helper under the Fast Refresh boundary rule.
+ */
+function findPaneScroller(element: HTMLElement): HTMLElement {
+  let current: HTMLElement | null = element.parentElement
+  while (current !== null) {
+    if (/(auto|scroll)/.test(window.getComputedStyle(current).overflowY)) return current
+    current = current.parentElement
+  }
+  return document.documentElement
+}
+
+/**
  * A nested row list (subagent children under an Agent card, tool-card children).
  * These never carry agent grouping — co-spawned siblings are a TOP-LEVEL
  * derivation (C4 keeps children under their owning card) — but their reasoning
  * and tool runs group exactly like the top level, so a delegated GPT turn reads
  * the same inside a card as outside one.
+ *
+ * The list is bounded: an agent that ran for an hour hands its card thousands of
+ * child rows, and expanding it used to mount every one. Recursion is bounded at
+ * both levels, because a grouped run inside these items bounds its own members.
  */
-function NestedRowList({ rows }: { rows: NestedTranscriptRow[] }) {
+function NestedRowList({
+  rows,
+  className,
+}: {
+  rows: NestedTranscriptRow[]
+  className?: string
+}) {
   const { mode } = useContext(ReasoningLayoutContext)
   const items = groupToolRuns(groupDisplayItems(toDisplayItems(rows), mode))
+  const keys = useMemo(() => items.map(displayItemKey), [items])
   return (
-    <>
-      {items.map(item => (
-        <DisplayItemView item={item} key={displayItemKey(item)} />
-      ))}
-    </>
+    <BoundedChildList
+      className={className}
+      estimatedChildHeight={NESTED_ROW_ESTIMATED_HEIGHT}
+      keys={keys}
+      renderChild={index => <DisplayItemView item={items[index]} />}
+    />
   )
 }
 
@@ -1450,8 +1636,8 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
         <ToolCardBody row={row} content={content} ack={ack} />
       </ToolCardShell>
       {row.children.length > 0 ? (
-        <div className="mt-2 flex flex-col gap-2 border-l border-accent/20 pl-3">
-          <NestedRowList rows={row.children} />
+        <div className="mt-2 border-l border-accent/20 pl-3">
+          <NestedRowList className="flex flex-col gap-2" rows={row.children} />
         </div>
       ) : null}
     </div>
@@ -1526,6 +1712,7 @@ function ToolRunCard({
   // alone would not stop a collapsed run re-parsing whole files on every frame.
   const digests = members.map(member => toolRunDigest(family, member))
   const head = toolRunHead(family, members)
+  const memberKeys = useMemo(() => members.map(member => member.id), [members])
   return (
     <ToolCardShell
       family={family}
@@ -1539,18 +1726,22 @@ function ToolRunCard({
       // run keeps it open.
       expansionKey={runKey}
     >
-      <div className="flex flex-col">
-        {members.map((member, index) => (
+      {/* Bounded: a run can accumulate thousands of members over a long turn,
+          and the head above still counts every one of them. */}
+      <BoundedChildList
+        className="flex flex-col"
+        estimatedChildHeight={RUN_MEMBER_ESTIMATED_HEIGHT}
+        keys={memberKeys}
+        renderChild={index => (
           <ToolRunRow
-            key={member.id}
             family={family}
-            row={member}
+            row={members[index]}
             digest={digests[index]}
             hoistedPrefix={head.hoistedPrefix}
             runKey={runKey}
           />
-        ))}
-      </div>
+        )}
+      />
     </ToolCardShell>
   )
 }
@@ -2071,8 +2262,8 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
     childCount === 0 && completion === null ? null : (
       <div className="flex flex-col gap-2">
         {childCount > 0 ? (
-          <div className="flex flex-col gap-2 border-l border-accent/20 pl-3">
-            <NestedRowList rows={row.children} />
+          <div className="border-l border-accent/20 pl-3">
+            <NestedRowList className="flex flex-col gap-2" rows={row.children} />
           </div>
         ) : null}
         {/* A background agent's real outcome, joined in from its
@@ -2143,6 +2334,7 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
  * or message type (C3).
  */
 function DelegateGroup({ members }: { members: NestedToolUseRow[] }) {
+  const memberKeys = useMemo(() => members.map(member => member.id), [members])
   const vocabs = members.map(member => deriveAgentDisplayVocabulary(agentToolSourceOf(member)))
   // Member state, not raw `status`: a backgrounded member's `tool_result` only
   // says it started (`deriveAgentToolState`), so the group header must track
@@ -2178,11 +2370,13 @@ function DelegateGroup({ members }: { members: NestedToolUseRow[] }) {
         </span>
         <span className={`text-[11px] ${tone.text}`}>{label}</span>
       </div>
-      <div className="flex flex-col gap-2 p-2">
-        {members.map(member => (
-          <AgentToolCard key={member.id} row={member} />
-        ))}
-      </div>
+      {/* Bounded: the header above keeps counting every member. */}
+      <BoundedChildList
+        className="flex flex-col gap-2 p-2"
+        estimatedChildHeight={DELEGATE_MEMBER_ESTIMATED_HEIGHT}
+        keys={memberKeys}
+        renderChild={index => <AgentToolCard row={members[index]} />}
+      />
     </div>
   )
 }
@@ -3234,10 +3428,21 @@ function isVisibleStep(step: ReasoningStepModel): step is VisibleReasoningStep {
  * steps never fold away.
  */
 function ReasoningRun({ steps }: { steps: ReasoningStepModel[] }) {
-  const [collapsed, setCollapsed] = useState(false)
   const listId = useId()
-
   const visible = steps.filter(isVisibleStep)
+  // Kept OUTSIDE this component, for the same reason a tool card's expansion is
+  // (`toolCardExpansion.ts`): a run inside a bounded container unmounts when it
+  // scrolls out of the mounted range, and local state would hand it back open
+  // after the user folded it away. The step key is minted from the run's first
+  // member row id, so it survives the row being re-projected. Namespaced because
+  // the store is keyed by string and a run is not a tool call, exactly as
+  // `ToolRunCard` already stores `run:<id>`.
+  const [expanded, setExpanded] = useToolCardExpanded(
+    visible.length === 0 ? null : `reasoning-run:${visible[0].key}`,
+    true,
+  )
+  const collapsed = !expanded
+
   if (visible.length === 0) return null
   if (visible.length === 1) {
     const [step] = visible
@@ -3254,7 +3459,7 @@ function ReasoningRun({ steps }: { steps: ReasoningStepModel[] }) {
         type="button"
         aria-controls={listId}
         aria-expanded={!collapsed}
-        onClick={() => setCollapsed(value => !value)}
+        onClick={() => setExpanded(collapsed)}
         title={REASONING_TITLE}
         className="flex w-full items-center gap-2.5 py-px text-left focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-accent/40"
       >
