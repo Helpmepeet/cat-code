@@ -795,6 +795,11 @@ commit. The growth is gone regardless. That report proposed a two-fixture
 discriminator and did not run it; this is effectively that experiment, and it
 went against its verdict.
 
+It is also the second kill, not the first: §3's V9 already removed all forced
+layout reads and writes from the harness and the leak was unchanged, and P4
+removed React entirely in favour of raw DOM writes at the same cadence and hit
+the floor. The confirming run adds the in-app version of the same result.
+
 ### 18.4 Still open, unaffected by the fix
 
 - Which component minted the ~2.1 MB details was never observed by name
