@@ -275,3 +275,47 @@ describe('the stick-to-bottom owner shares the pane lifetime', () => {
     release()
   })
 })
+
+describe('the pane does not feed itself', () => {
+  test('the scroll event a correction causes schedules no further frame', () => {
+    installGlobals()
+    const scroller = createScroller(READING_GEOMETRY)
+    const release = observePaneScroll(scroller, () => {})
+
+    reportPaneHeightCorrection(scroller, { offset: 0, delta: 120 })
+    runFrames()
+    expect(scroller.scrollTop).toBe(5_120)
+    expect(pendingFrames).toHaveLength(0)
+
+    // The browser now reports the scroll the correction itself performed.
+    // Treating it as user input would recompute every window, change the
+    // mounted content, and report the next correction, with no end while a
+    // message streams.
+    scroller.emitScroll()
+    expect(pendingFrames).toHaveLength(0)
+
+    // A scroll the reader actually performs is still honoured.
+    scroller.scrollTop = 4_000
+    scroller.emitScroll()
+    expect(pendingFrames).toHaveLength(1)
+
+    runFrames()
+    release()
+  })
+
+  test('a correction landing on the position the reader is already at still settles', () => {
+    installGlobals()
+    const scroller = createScroller(READING_GEOMETRY)
+    const release = observePaneScroll(scroller, () => {})
+
+    reportPaneHeightCorrection(scroller, { offset: 0, delta: 120 })
+    runFrames()
+    scroller.emitScroll()
+    // The guard is spent by that one event, so the next genuine scroll works.
+    scroller.emitScroll()
+    expect(pendingFrames).toHaveLength(1)
+
+    runFrames()
+    release()
+  })
+})

@@ -32,6 +32,8 @@ type PaneRecord = {
   subscribers: Set<() => void>
   bottomLocks: Set<() => boolean>
   corrections: PaneHeightCorrection[]
+  /** `scrollTop` this pane wrote itself, pending its own scroll event. */
+  selfScrollTop: number | null
   frame: number
   schedule: () => void
   detach: () => void
@@ -102,6 +104,7 @@ function createPane(scroller: HTMLElement): PaneRecord {
     subscribers: new Set(),
     bottomLocks: new Set(),
     corrections: [],
+    selfScrollTop: null,
     frame: 0,
     schedule: () => {},
     detach: () => {},
@@ -115,20 +118,34 @@ function createPane(scroller: HTMLElement): PaneRecord {
   const schedule = () => {
     if (pane.frame === 0) pane.frame = globalThis.requestAnimationFrame(flush)
   }
+  // The scroll event our OWN correction causes must not schedule another frame.
+  // Without this the pane feeds itself: correcting writes `scrollTop`, the
+  // browser reports a scroll, subscribers recompute their windows, the mounted
+  // content changes height, and that reports the next correction. While a
+  // message is streaming the cycle never settles, which reads on screen as
+  // content blinking and the viewport drifting under the reader.
+  const onScroll = () => {
+    if (pane.selfScrollTop !== null && scroller.scrollTop === pane.selfScrollTop) {
+      pane.selfScrollTop = null
+      return
+    }
+    pane.selfScrollTop = null
+    schedule()
+  }
   pane.schedule = schedule
 
   // A document-level scroller reports its scroll events on the window, not on
   // the element itself.
   const scrollTarget: EventTarget =
     scroller === globalThis.document?.documentElement ? globalThis.window : scroller
-  scrollTarget.addEventListener('scroll', schedule, { passive: true })
+  scrollTarget.addEventListener('scroll', onScroll, { passive: true })
 
   const observer =
     typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule)
   observer?.observe(scroller)
 
   pane.detach = () => {
-    scrollTarget.removeEventListener('scroll', schedule)
+    scrollTarget.removeEventListener('scroll', onScroll)
     observer?.disconnect()
   }
   return pane
@@ -157,7 +174,9 @@ function applyPendingCorrections(scroller: HTMLElement, pane: PaneRecord): void 
   // Sub-pixel answers are noise from rounded box metrics, and writing scrollTop
   // costs a layout plus a scroll event.
   if (Math.abs(adjustment) < 1) return
-  scroller.scrollTop += adjustment
+  const next = scroller.scrollTop + adjustment
+  pane.selfScrollTop = next
+  scroller.scrollTop = next
 }
 
 function readPaneMetrics(scroller: HTMLElement): PaneScrollMetrics {
