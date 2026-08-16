@@ -1,0 +1,712 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Proposed subagents panel</title>
+  <style>
+    @font-face {
+      font-family: "DM Sans";
+      font-style: normal;
+      font-weight: 100 1000;
+      src: url("../app/renderer/src/assets/fonts/DMSans-Variable.woff2") format("woff2");
+    }
+    @font-face {
+      font-family: "DM Mono";
+      font-style: normal;
+      font-weight: 400;
+      src: url("../app/renderer/src/assets/fonts/DMMono-Regular.woff2") format("woff2");
+    }
+    @font-face {
+      font-family: "DM Mono";
+      font-style: normal;
+      font-weight: 500;
+      src: url("../app/renderer/src/assets/fonts/DMMono-Medium.woff2") format("woff2");
+    }
+
+    :root {
+      --app-bg: #09090b;
+      --surface-panel: #0a0a0c;
+      --seam: rgba(255, 255, 255, 0.06);
+      --hover: rgba(255, 255, 255, 0.035);
+      --active: rgba(255, 255, 255, 0.06);
+      --primary: #f4f4f5;
+      --muted: #a1a1aa;
+      --subtle: #98989f;
+      --faint: #838389;
+      --ghost: #75757b;
+
+      --handle: #e9d5ff;
+      --purple: #c084fc;
+      --violet: #c4b5fd;
+      --teal: #5eead4;
+      --blue: #60a5fa;
+      --good: #4ade80;
+      --warn: #fbbf24;
+      --danger: #f87171;
+      --stone: #a8a29e;
+      --zinc: #71717a;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      background: #e8e8e8;
+      color: #222;
+      font-family: "DM Sans", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .x-page {
+      width: min(1120px, calc(100% - 48px));
+      margin: 0 auto;
+      padding: 34px 0 56px;
+    }
+    .x-kicker {
+      color: #555;
+      font-family: "DM Mono", ui-monospace, monospace;
+      font-size: 10px;
+      font-weight: 500;
+      letter-spacing: .14em;
+      line-height: 1.4;
+      text-transform: uppercase;
+    }
+    .x-rule {
+      height: 1px;
+      margin: 30px 0;
+      background: #c9c9c9;
+    }
+
+    .specimen {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 10px;
+      padding: 28px 32px;
+      background: var(--app-bg);
+    }
+    .specimen.center { justify-content: center; padding: 0; }
+
+    @keyframes pip-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: .5; }
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── agent chrome primitives (as the app renders them) ───── */
+    .pip {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      flex: 0 0 auto;
+      border-radius: 50%;
+    }
+    .pip.fill-info { background: var(--blue); }
+    .pip.pulse-info { background: var(--blue); animation: pip-pulse 2s cubic-bezier(.4, 0, .6, 1) infinite; }
+    .pip.ring-purple { border: 1.6px solid var(--purple); }
+    .pip.ring-good { border: 1.6px solid var(--good); }
+    .pip.ring-neutral { border: 1.6px solid var(--stone); }
+    .pip.ring-muted { border: 1.6px solid var(--zinc); }
+    .pip.fill-good { background: var(--good); }
+    .pip.fill-warn { background: var(--warn); }
+    .pip.fill-danger { background: var(--danger); }
+
+    .handle {
+      flex: 0 0 auto;
+      color: var(--handle);
+      font: 600 12.5px/1.3 "DM Mono", ui-monospace, monospace;
+      white-space: nowrap;
+    }
+    .state-word {
+      flex: 0 0 auto;
+      font: 400 10.5px/1.3 "DM Mono", ui-monospace, monospace;
+      white-space: nowrap;
+    }
+    .t-info { color: var(--blue); }
+    .t-purple { color: var(--purple); }
+    .t-good { color: var(--good); }
+    .t-warn { color: var(--warn); }
+    .t-danger { color: var(--danger); }
+    .t-neutral { color: var(--stone); }
+    .t-muted { color: var(--zinc); }
+
+    .cap {
+      color: var(--faint);
+      font-size: 9.5px;
+      font-weight: 700;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+    .cap.accent { color: var(--purple); }
+    .cap.lease { color: var(--teal); }
+
+    .type-chip {
+      display: inline-flex;
+      flex: 0 0 auto;
+      align-items: center;
+      padding: 1px 6px;
+      border: 1px solid;
+      border-radius: 5px;
+      font: 700 9.5px/1.35 "DM Mono", ui-monospace, monospace;
+      letter-spacing: .05em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .type-chip.purple { border-color: rgba(196, 181, 253, .3); background: rgba(196, 181, 253, .1); color: var(--violet); }
+    .type-chip.teal { border-color: rgba(94, 234, 212, .3); background: rgba(94, 234, 212, .1); color: var(--teal); }
+
+    .baton {
+      display: inline-flex;
+      flex: 0 0 auto;
+      align-items: center;
+      gap: 4px;
+      padding: 1px 6px;
+      border: 1px solid;
+      border-radius: 5px;
+      font: 600 10px/1.4 "DM Mono", ui-monospace, monospace;
+      white-space: nowrap;
+    }
+    .baton.orch { border-color: rgba(192, 132, 252, .3); background: transparent; color: var(--purple); }
+    .baton.you { border-color: rgba(251, 191, 36, .3); background: rgba(251, 191, 36, .1); color: var(--warn); }
+    .baton .arrow { opacity: .8; }
+
+    /* ── the panel ───────────────────────────────────────────── */
+    .panel {
+      width: 288px;
+      overflow: hidden;
+      border: 1px solid var(--seam);
+      border-radius: 10px;
+      background: var(--surface-panel);
+    }
+    .panel-head {
+      padding: 9px 11px 4px;
+      color: var(--faint);
+      font: 400 9px/1.4 "DM Mono", ui-monospace, monospace;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+    .rows { padding: 0 4px 5px; }
+    .row {
+      display: flex;
+      width: 100%;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 7px;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      text-align: left;
+    }
+    .row:hover { border-color: rgba(255, 255, 255, .06); background: var(--hover); }
+    .row .grow { flex: 1; min-width: 0; }
+
+    .accounts {
+      padding: 9px 11px 11px;
+      border-top: 1px solid var(--seam);
+    }
+    .acct {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin-top: 7px;
+    }
+    .acct-name {
+      flex: 0 0 auto;
+      color: var(--teal);
+      font: 500 11.5px/1.3 "DM Mono", ui-monospace, monospace;
+    }
+    .acct-count {
+      flex: 0 0 auto;
+      padding: 0 5px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, .05);
+      color: var(--muted);
+      font: 400 10px/1.5 "DM Mono", ui-monospace, monospace;
+    }
+    .acct-holders {
+      min-width: 0;
+      overflow: hidden;
+      color: var(--subtle);
+      font-size: 10.5px;
+      line-height: 1.4;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* ── detail ──────────────────────────────────────────────── */
+    .back {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 9px 11px 8px;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      font: 400 11.5px/1.2 "DM Sans", sans-serif;
+    }
+    .back:hover { color: var(--primary); }
+    .detail { padding: 0 11px 12px; }
+    .detail-ident {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      padding-bottom: 11px;
+      border-bottom: 1px solid var(--seam);
+    }
+    .state-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    .detail-meta {
+      margin-top: 12px;
+      color: var(--subtle);
+      font: 400 10.5px/1.5 "DM Mono", ui-monospace, monospace;
+    }
+    .detail-meta .sep { padding: 0 4px; color: #3f3f46; }
+    .detail-meta .fail { color: var(--warn); }
+    .sect { margin-top: 13px; }
+    .sect-body {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 12.5px;
+      line-height: 1.55;
+    }
+    .sect-body.boxed {
+      padding: 8px 10px;
+      border: 1px solid var(--seam);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, .02);
+    }
+    .block {
+      margin-top: 13px;
+      padding: 9px 11px;
+      border: 1px solid rgba(192, 132, 252, .3);
+      border-radius: 8px;
+      background: rgba(192, 132, 252, .08);
+    }
+    .block-body {
+      margin-top: 6px;
+      color: #e9d5ff;
+      font-size: 12.5px;
+      line-height: 1.5;
+    }
+    .block-note {
+      margin-top: 6px;
+      color: var(--subtle);
+      font-size: 10.5px;
+      line-height: 1.45;
+    }
+    .stop {
+      margin-top: 14px;
+      padding: 4px 11px;
+      border: 1px solid rgba(248, 113, 113, .3);
+      border-radius: 7px;
+      background: transparent;
+      color: var(--danger);
+      font: 500 11.5px/1.4 "DM Sans", sans-serif;
+    }
+
+    /* ── tasks dialog (current grammar, tab row removed) ─────── */
+    .overlay {
+      display: flex;
+      width: 100%;
+      min-height: 430px;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, .55);
+    }
+    .dialog {
+      display: flex;
+      width: 640px;
+      max-width: calc(100% - 48px);
+      flex-direction: column;
+      overflow: hidden;
+      border: 1px solid var(--seam);
+      border-radius: 14px;
+      background: var(--surface-panel);
+      box-shadow: 0 30px 80px rgba(0, 0, 0, .6);
+    }
+    .dialog-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--seam);
+    }
+    .dialog-title { color: var(--primary); font-size: 14px; font-weight: 600; }
+    .dialog-count { margin-top: 2px; color: var(--subtle); font-size: 12px; }
+    .close {
+      display: flex;
+      width: 28px;
+      height: 28px;
+      align-items: center;
+      justify-content: center;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--subtle);
+      font: 16px/1 "DM Sans", sans-serif;
+    }
+    .dialog-body { padding: 6px 8px 12px; }
+    .group-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 10px 6px;
+    }
+    .group-label {
+      color: var(--subtle);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+    .group-line { height: 1px; flex: 1; background: var(--seam); }
+    .group-count { color: rgba(152, 152, 159, .6); font-size: 10.5px; }
+    .task {
+      display: flex;
+      min-height: 36px;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      border-radius: 8px;
+    }
+    .task.selected { background: var(--active); }
+    .task.done { opacity: .7; }
+    .marker-slot { display: flex; width: 14px; flex: 0 0 auto; justify-content: center; }
+    .spinner {
+      display: block;
+      width: 10px;
+      height: 10px;
+      border: 1.5px solid var(--seam);
+      border-top-color: var(--muted);
+      border-radius: 50%;
+      animation: spin .9s linear infinite;
+    }
+    .dot { display: block; width: 8px; height: 8px; border-radius: 50%; }
+    .dot.good { background: var(--good); }
+    .dot.warn { background: var(--warn); }
+    .dot.info { background: var(--blue); }
+    .kind {
+      flex: 0 0 auto;
+      padding: 2px 6px;
+      border: 1px solid;
+      border-radius: 4px;
+      font: 700 9px/1.2 "DM Sans", sans-serif;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+    .kind.bash { border-color: rgba(94, 234, 212, .35); color: var(--teal); }
+    .kind.dream { border-color: rgba(251, 191, 36, .35); color: var(--warn); }
+    .kind.session { border-color: rgba(113, 113, 122, .35); color: var(--zinc); }
+    .task-label {
+      min-width: 0;
+      flex: 1;
+      overflow: hidden;
+      color: var(--primary);
+      font-size: 12.5px;
+      line-height: 1.25;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .task-label.mono { color: #c4c4c8; font-family: "DM Mono", ui-monospace, monospace; }
+    .task-state {
+      max-width: 220px;
+      flex: 0 0 auto;
+      overflow: hidden;
+      color: var(--subtle);
+      font: 400 11px/1.3 "DM Mono", ui-monospace, monospace;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .task-state.good { color: var(--good); }
+    .dialog-foot {
+      display: flex;
+      gap: 14px;
+      padding: 9px 16px;
+      border-top: 1px solid var(--seam);
+      color: var(--subtle);
+      font: 400 10.5px/1.2 "DM Mono", ui-monospace, monospace;
+    }
+    .dialog-foot .push { margin-left: auto; }
+    .dialog-foot kbd { color: var(--muted); font: inherit; }
+    .empty { padding: 46px 0; text-align: center; }
+    .empty-title { margin-bottom: 4px; color: var(--subtle); font-size: 13px; font-weight: 500; }
+    .empty-copy { color: rgba(152, 152, 159, .7); font-size: 11.5px; }
+  </style>
+</head>
+<body>
+  <main class="x-page">
+
+    <div class="x-kicker">subagents panel / resting</div>
+    <section class="specimen" aria-label="Subagents panel, resting">
+      <div class="panel">
+        <div class="panel-head">5 subagents</div>
+        <div class="rows">
+          <button class="row" type="button">
+            <span class="pip pulse-info"></span>
+            <span class="handle">Arendt</span>
+            <span class="grow"></span>
+            <span class="state-word t-info">running</span>
+          </button>
+          <button class="row" type="button">
+            <span class="pip pulse-info"></span>
+            <span class="handle">Hilbert</span>
+            <span class="grow"></span>
+            <span class="state-word t-info">running</span>
+          </button>
+          <button class="row" type="button">
+            <span class="pip ring-good"></span>
+            <span class="handle">Russell</span>
+            <span class="grow"></span>
+            <span class="state-word t-good">done</span>
+          </button>
+          <button class="row" type="button">
+            <span class="pip fill-good"></span>
+            <span class="handle">Aquinas</span>
+            <span class="grow"></span>
+            <span class="state-word t-good">done</span>
+          </button>
+          <button class="row" type="button">
+            <span class="pip ring-neutral"></span>
+            <span class="handle">Tesla</span>
+            <span class="grow"></span>
+            <span class="state-word t-neutral">done</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <div class="x-rule"></div>
+    <div class="x-kicker">subagents panel / one needs you</div>
+    <section class="specimen" aria-label="Subagents panel, attention">
+      <div class="panel">
+        <div class="panel-head">5 subagents</div>
+        <div class="rows">
+          <button class="row" type="button">
+            <span class="pip fill-warn"></span>
+            <span class="handle">Tesla</span>
+            <span class="grow"></span>
+            <span class="state-word t-warn">needs you</span>
+          </button>
+          <button class="row" type="button">
+            <span class="pip ring-purple"></span>
+            <span class="handle">Russell</span>
+            <span class="grow"></span>
+            <span class="state-word t-purple">needs input</span>
+          </button>
+          <button class="row" type="button">
+            <span class="pip fill-danger"></span>
+            <span class="handle">Hilbert</span>
+            <span class="grow"></span>
+            <span class="state-word t-danger">failed</span>
+          </button>
+          <button class="row" type="button">
+            <span class="pip pulse-info"></span>
+            <span class="handle">Arendt</span>
+            <span class="grow"></span>
+            <span class="state-word t-info">running</span>
+          </button>
+          <button class="row" type="button">
+            <span class="pip fill-good"></span>
+            <span class="handle">Aquinas</span>
+            <span class="grow"></span>
+            <span class="state-word t-good">done</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <div class="x-rule"></div>
+    <div class="x-kicker">subagents panel / accounts</div>
+    <section class="specimen" aria-label="Subagents panel with accounts">
+      <div class="panel">
+        <div class="panel-head">3 subagents</div>
+        <div class="rows">
+          <button class="row" type="button">
+            <span class="pip pulse-info"></span>
+            <span class="handle">Arendt</span>
+            <span class="grow"></span>
+            <span class="state-word t-info">running</span>
+          </button>
+          <button class="row" type="button">
+            <span class="pip pulse-info"></span>
+            <span class="handle">Hilbert</span>
+            <span class="grow"></span>
+            <span class="state-word t-info">running</span>
+          </button>
+          <button class="row" type="button">
+            <span class="pip fill-good"></span>
+            <span class="handle">Tesla</span>
+            <span class="grow"></span>
+            <span class="state-word t-good">done</span>
+          </button>
+        </div>
+        <div class="accounts">
+          <div class="cap lease">Accounts in use · 2</div>
+          <div class="acct">
+            <span class="acct-name">acct-main</span>
+            <span class="acct-count">2</span>
+            <span class="acct-holders">Main session, Arendt</span>
+          </div>
+          <div class="acct">
+            <span class="acct-name">acct-review</span>
+            <span class="acct-count">1</span>
+            <span class="acct-holders">Hilbert</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="x-rule"></div>
+    <div class="x-kicker">subagents panel / detail, waiting</div>
+    <section class="specimen" aria-label="Subagent detail, waiting">
+      <div class="panel">
+        <button class="back" type="button"><span aria-hidden="true">‹</span>All subagents</button>
+        <div class="detail">
+          <div class="detail-ident">
+            <span class="handle">Russell</span>
+            <span class="type-chip purple">Implementor</span>
+            <span class="state-label t-purple"><span class="pip ring-purple"></span>Waiting on orchestrator</span>
+            <span class="baton orch"><span class="arrow" aria-hidden="true">→</span>orchestrator</span>
+          </div>
+          <div class="detail-meta">
+            acct-main<span class="sep">·</span>held 2m<span class="sep">·</span>backgrounded
+          </div>
+
+          <div class="block">
+            <div class="cap accent">Waiting on the assistant</div>
+            <div class="block-body">Which auth strategy should I use?</div>
+            <div class="block-note">The assistant resolves this or relays it to you in its own turn.</div>
+          </div>
+
+          <div class="sect">
+            <div class="cap">Prompt</div>
+            <div class="sect-body">Add the sign-in route and cover it with tests</div>
+          </div>
+
+          <button class="stop" type="button">Stop</button>
+        </div>
+      </div>
+    </section>
+
+    <div class="x-rule"></div>
+    <div class="x-kicker">subagents panel / detail, verdict</div>
+    <section class="specimen" aria-label="Subagent detail, verdict">
+      <div class="panel">
+        <button class="back" type="button"><span aria-hidden="true">‹</span>All subagents</button>
+        <div class="detail">
+          <div class="detail-ident">
+            <span class="handle">Hilbert</span>
+            <span class="type-chip teal">Verification</span>
+            <span class="state-label t-good"><span class="pip ring-good"></span>Result ready</span>
+            <span class="baton orch"><span class="arrow" aria-hidden="true">→</span>orchestrator</span>
+          </div>
+          <div class="detail-meta">
+            acct-review<span class="sep">·</span>held 6m<span class="sep">·</span><span class="fail">failed over ×1</span>
+          </div>
+
+          <div class="sect">
+            <div class="cap">Prompt</div>
+            <div class="sect-body">Review the sign-in route for missing cases</div>
+          </div>
+
+          <div class="sect">
+            <div class="cap">Verdict</div>
+            <div class="sect-body boxed">PARTIAL: the happy path is covered, the expired-token case is not</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="x-rule"></div>
+    <div class="x-kicker">tasks dialog</div>
+    <section class="specimen center" aria-label="Tasks dialog">
+      <div class="overlay">
+        <div class="dialog">
+          <div class="dialog-head">
+            <div>
+              <div class="dialog-title">Tasks</div>
+              <div class="dialog-count">3 active · 1 completed</div>
+            </div>
+            <button class="close" type="button" aria-label="Close (Esc)">×</button>
+          </div>
+          <div class="dialog-body">
+            <div class="group-head">
+              <span class="group-label">Active</span>
+              <span class="group-line"></span>
+              <span class="group-count">3</span>
+            </div>
+            <div class="task selected">
+              <span class="marker-slot"><span class="spinner" aria-hidden="true"></span></span>
+              <span class="kind bash">Bash</span>
+              <span class="task-label mono">bun test app/renderer/src</span>
+              <span class="task-state">Running</span>
+            </div>
+            <div class="task">
+              <span class="marker-slot"><span class="spinner" aria-hidden="true"></span></span>
+              <span class="kind dream">Dream</span>
+              <span class="task-label">Summarize the day's changes</span>
+              <span class="task-state">Running</span>
+            </div>
+            <div class="task">
+              <span class="marker-slot"><span class="dot info" aria-hidden="true"></span></span>
+              <span class="kind session">Session</span>
+              <span class="task-label">Main session</span>
+              <span class="task-state">In background</span>
+            </div>
+
+            <div class="group-head">
+              <span class="group-label">Completed</span>
+              <span class="group-line"></span>
+              <span class="group-count">1</span>
+            </div>
+            <div class="task done">
+              <span class="marker-slot"><span class="dot good" aria-hidden="true"></span></span>
+              <span class="kind bash">Bash</span>
+              <span class="task-label mono">git status --porcelain</span>
+              <span class="task-state good">Completed</span>
+            </div>
+          </div>
+          <div class="dialog-foot">
+            <span><kbd>↑↓</kbd> select</span>
+            <span><kbd>K</kbd> stop</span>
+            <span class="push"><kbd>esc</kbd> close</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="x-rule"></div>
+    <div class="x-kicker">tasks dialog / empty</div>
+    <section class="specimen center" aria-label="Tasks dialog, empty">
+      <div class="overlay">
+        <div class="dialog">
+          <div class="dialog-head">
+            <div>
+              <div class="dialog-title">Tasks</div>
+              <div class="dialog-count">0 active · 0 completed</div>
+            </div>
+            <button class="close" type="button" aria-label="Close (Esc)">×</button>
+          </div>
+          <div class="empty">
+            <div class="empty-title">No tasks in this session</div>
+            <div class="empty-copy">Run a background bash or dream to see it here</div>
+          </div>
+          <div class="dialog-foot">
+            <span class="push"><kbd>esc</kbd> close</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</body>
+</html>
