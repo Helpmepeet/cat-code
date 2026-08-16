@@ -90,7 +90,13 @@ TUI: `processQueueIfReady` dequeues all non-slash commands sharing a mode and pa
 
 Desktop: `drainOneQueuedPrompt` dequeues exactly one, and each turn finalizer re-schedules (`app/sidecar/sidecarServer.ts:1286-1338`, `:1477`).
 
-Three messages queued at a boundary produce one turn in the terminal and three sequential turns on the desktop. Already recorded as D2 of `docs/reports/2026-08-08-migration-branch-review/X02a-atomic-writes-duplication.md:193`.
+**Corrected 2026-08-16 after a scoping pass:** an earlier draft of this row said three queued messages simply produce three sequential turns on the desktop. That holds only when each drained turn ends **without** a tool round. If drained turn 1 calls a tool, prompts 2..N are folded into it by the engine's own mid-turn drain as attachments rather than as leading user messages — still not parity, but not N turns either. The clean N-turn reproduction therefore needs prompts that yield tool-free answers.
+
+**Scoped and stopped, not implemented.** Terminal parity here is specifically *N distinct user messages, N distinct uuids, one query* (`src/utils/handlePromptSubmit.ts:552-645`, `uuid: cmd.uuid` at `:566`, single `onQuery` at `:637`). Every desktop layer between the drain and the engine is singular: `controller.submit(prompt, {uuid})` (`sidecarServer.ts:1448`), `AppSessionController.submit` (`src/app-runtime/AppSessionController.ts:135-138`), `createQueryEngineSessionController.ts:36-41`, `createQueryEngineAppSession.ts:39-48`, and one `processUserInput` in `src/QueryEngine.ts:462-473`. Merging N prompts into one `ContentBlockParam[]` is not a shortcut: `processUserInputBase` (`src/utils/processUserInput/processUserInput.ts:281-345`) folds an array into ONE user message, so it would produce one uuid where the sidecar already broadcast N, leaving N-1 renderer rows with no engine counterpart. Closing D4 honestly is a plural-prompt change to the app-runtime contract with two consumers (the desktop sidecar and `src/web/AppSessionWebSocketServer.ts:174`), which needs its own session and a decision record.
+
+**Found while scoping, unfixed:** `drainOneQueuedPrompt`'s `onSettled` retry path (`sidecarServer.ts:1329`) re-enqueues by **appending**, so a retried prompt loses its queue position relative to later arrivals. The refusal branch beside it (`:1332-1337`) has the same property and its comment already argues that branch is unreachable; the retry branch is reachable. Harmless while prompts drain one at a time, load-bearing the moment batching lands, since batching makes queue order the thing being preserved.
+
+Already recorded as D2 of `docs/reports/2026-08-08-migration-branch-review/X02a-atomic-writes-duplication.md:193`.
 
 ### D5 — The depth-cap rejection arrives after the composer has been emptied
 
