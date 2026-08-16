@@ -8,7 +8,15 @@ import { ToastHost } from './ToastHost.js'
 import { ToolsExpandedProvider } from './ToolsExpandedProvider.js'
 import { RendererErrorBoundary } from './RendererErrorBoundary.js'
 import { getBridge } from './bridge.js'
+import { installReactDevPerformanceTrackFilter } from './reactDevPerformanceTrack.js'
 import './theme.css'
+
+// Before the first render: React's dev build otherwise retains a native copy of
+// every component's props for every commit, which is fatal to a long streaming
+// session. See reactDevPerformanceTrack.ts for the mechanism.
+if (import.meta.env?.DEV) {
+  installReactDevPerformanceTrackFilter()
+}
 
 const root = document.getElementById('root')
 if (!root) {
