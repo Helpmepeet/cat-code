@@ -1921,6 +1921,35 @@ test('D1b — a message the engine took after a recall still reaches the transcr
   end()
 })
 
+test('D1b — a recall the engine outran corrects the answer it already gave', async () => {
+  // The synchronous arithmetic in `handlePromptRecall` cannot see this: every
+  // transition that unstages a prompt also dequeues it in the same block, so
+  // the recall observes a clean success and says so. Delivery is the only
+  // point where that turns out to be false, so it is where the user has to be
+  // told. Without this they are holding a message the model is answering, and
+  // they send it again.
+  const { server, conn, received, end } =
+    await serverWithStagedPrompt('and the logs')
+  const uuid = getCommandQueueSnapshot()[0]?.uuid as string
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'prompt.recall', requestId: 'recall-outrun' }),
+  )
+  expect(recallResults(received).at(-1)?.ok).toBe(true)
+
+  notifyCommandLifecycle(uuid, 'started')
+
+  const corrective = recallResults(received).at(-1)
+  expect(corrective?.requestId).toBe('recall-outrun')
+  expect(corrective?.ok).toBe(false)
+  expect(corrective?.alreadyDelivered).toBe(1)
+  expect(corrective?.recalled).toEqual([])
+  expect(corrective?.message).toBe('That message already went to the model.')
+
+  end()
+})
+
 test('D1b — a recall with nothing waiting takes nothing back', async () => {
   const controller = new AppSessionController(probeAdapter())
   const server = makeServer(controller)

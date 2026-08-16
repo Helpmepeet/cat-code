@@ -26,7 +26,14 @@ export type QueuedPromptsState = {
   sessions: Record<SessionId, readonly QueuedPromptItem[]>
 }
 
-export type QueuedPromptsAction = { type: 'frame'; frame: ServerFrame }
+export type QueuedPromptsAction =
+  | { type: 'frame'; frame: ServerFrame }
+  /**
+   * The session left the roster. A `lifecycle` frame empties the list but keeps
+   * the key, which is right while the row still exists; a removed session has
+   * no row to publish into, so its entry is dropped outright.
+   */
+  | { type: 'session-removed'; sessionId: SessionId }
 
 const EMPTY: readonly QueuedPromptItem[] = []
 
@@ -38,6 +45,12 @@ export function reduceQueuedPromptsState(
   state: QueuedPromptsState,
   action: QueuedPromptsAction,
 ): QueuedPromptsState {
+  if (action.type === 'session-removed') {
+    if (!(action.sessionId in state.sessions)) return state
+    const { [action.sessionId]: _removed, ...rest } = state.sessions
+    return { ...state, sessions: rest }
+  }
+
   const { frame } = action
 
   if (frame.kind === 'queued-prompts.snapshot') {
@@ -70,17 +83,20 @@ export function reduceQueuedPromptsState(
  * is a pure function so the outcome is testable without driving the composer,
  * which the SSR-only renderer harness cannot do.
  *
- * Images are collected across all recalled messages in the same order. The
- * composer holds one at a time (`reduceImageAttachmentAdded`), and
- * `reduceSessionImagesReplaced` is what decides which survives; ids are assigned
- * here so the fold has no dependency on what is currently attached.
+ * Text joins across every recalled message; images do NOT. The composer holds
+ * exactly one image at a time (`reduceImageAttachmentAdded` replaces the whole
+ * array with a single element) and the submit schema caps base64 as a TOTAL
+ * across the prompt, so restoring one image per recalled message would build a
+ * draft the sidecar then refuses, which the refusal path restores again: the
+ * user cannot send and cannot easily clear. The most recent image wins, which
+ * is what attaching them one after another would have produced anyway.
  */
 export function foldRecalledPrompts(prompts: readonly RecalledPrompt[]): {
   text: string
   images: ImageAttachment[]
 } {
   const texts: string[] = []
-  const images: ImageAttachment[] = []
+  let lastImage: ImageAttachment | null = null
   for (const { prompt } of prompts) {
     if (typeof prompt === 'string') {
       if (prompt.length > 0) texts.push(prompt)
@@ -91,16 +107,24 @@ export function foldRecalledPrompts(prompts: readonly RecalledPrompt[]): {
         if (block.text.length > 0) texts.push(block.text)
         continue
       }
-      images.push({
-        id: images.length + 1,
-        mediaType: block.source.media_type,
-        data: block.source.data,
-        // The sent message carries no filename; only the picker ever had one.
-        name: 'image',
-      })
+      if (block.type === 'image') {
+        lastImage = {
+          id: 1,
+          mediaType: block.source.media_type,
+          data: block.source.data,
+          // The sent message carries no filename; only the picker ever had one.
+          name: 'image',
+        }
+        continue
+      }
+      // Closed union tripwire: a third block kind must be handled here rather
+      // than falling through into an image with undefined source fields, which
+      // renders as `data:undefined;base64,undefined`.
+      const exhaustive: never = block
+      void exhaustive
     }
   }
-  return { text: texts.join('\n'), images }
+  return { text: texts.join('\n'), images: lastImage ? [lastImage] : [] }
 }
 
 /** What this session has waiting, oldest first (empty before any snapshot). */

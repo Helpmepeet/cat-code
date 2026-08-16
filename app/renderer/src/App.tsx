@@ -976,9 +976,13 @@ export function App() {
         preloadReservedBytesRef.current.delete(sessionId)
       }
       // D5 — resolve every retained submit against this batch, IN ARRIVAL
-      // ORDER. Order is what makes the reading honest: an accepted submit's
-      // user message is broadcast inside the sidecar's own dispatch of that
-      // submit, so it can never arrive behind the refusal of the same submit.
+      // ORDER. Order is what makes the reading honest: the sidecar publishes an
+      // acceptance inside its own dispatch of the submit it accepted, so that
+      // acceptance can never arrive behind the refusal of the same submit.
+      // Which frame carries it depends on the path, and D1a changed one of
+      // them: an idle submit is announced as a user message, a mid-turn submit
+      // is staged and announced only on delivery, so its acceptance is the
+      // queued-prompts snapshot. `classifySubmitOutcomeFrame` owns that map.
       for (const frame of frames) {
         if (selectRetainedSubmit(retainedSubmitsRef.current, frame.sessionId) === null) {
           continue
@@ -1144,6 +1148,19 @@ export function App() {
         // only by a send or a release, so a row that leaves the roster with one
         // still held would leave the drain acting on a session that is gone.
         releasePendingSubmit(event.appSessionId)
+        // Same rule, two stores the release above does not reach: a submit
+        // awaiting its answer holds the user's text and a full base64 image,
+        // and the staged rows describe a queue that is going away with the
+        // session. Left behind, a later error frame could restore a message
+        // from a session the user deleted.
+        retainedSubmitsRef.current = reduceRetainedSubmitCleared(
+          retainedSubmitsRef.current,
+          event.appSessionId,
+        )
+        dispatchQueuedPrompts({
+          type: 'session-removed',
+          sessionId: event.appSessionId,
+        })
         dispatchPreviewTranscript({
           type: 'preview-reset',
           sessionId: event.appSessionId,

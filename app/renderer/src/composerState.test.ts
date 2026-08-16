@@ -1188,6 +1188,43 @@ describe('D5 — a refused submit comes back, images included', () => {
     ).toBe('none')
   })
 
+  test('a main-synthesized transport error is not a refusal', () => {
+    // These two codes are raised by Electron main when it cannot reach the
+    // supervisor at all, so they are NOT ordered against a sidecar frame
+    // already crossing the socket and can overtake an acceptance. Reading one
+    // as a refusal hands back a message that is on its way to the model, and
+    // the user sends it twice.
+    for (const code of ['session_not_found', 'session_not_ready'] as const) {
+      expect(
+        classifySubmitOutcomeFrame({
+          kind: 'error',
+          protocolVersion: 1,
+          sessionId: S1,
+          requestId: 'main-synthesized',
+          code,
+          message: 'session is not available',
+          retryable: true,
+        } as ServerFrame),
+      ).toBe('none')
+    }
+  })
+
+  test('a sidecar-emitted refusal is still a refusal', () => {
+    // The guard above must not swallow the case the whole mechanism exists for:
+    // the depth-cap rejection is the reachable one.
+    expect(
+      classifySubmitOutcomeFrame({
+        kind: 'error',
+        protocolVersion: 1,
+        sessionId: S1,
+        requestId: 'submit-1',
+        code: 'bad_request',
+        message: 'Too many messages are already waiting for this response.',
+        retryable: false,
+      } as ServerFrame),
+    ).toBe('refused')
+  })
+
   test('streaming and assistant output leave the retained submit alone', () => {
     // The depth-cap refusal lands mid-turn, so the assistant is streaming while
     // the submit waits. Counting those frames would drop the copy before the

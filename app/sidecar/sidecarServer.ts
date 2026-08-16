@@ -546,13 +546,17 @@ export class SidecarServer {
    * a message the model received — the exact inverse of the bug D1a fixed, and
    * just as silent.
    *
-   * Bounded by `MAX_QUEUED_PROMPTS` with oldest-out eviction: an entry is only
-   * meaningful until the running turn's next drain, so the cap can never be
-   * reached by anything but recalls nobody raced.
+   * Carries the recall's `requestId` so the correction can be addressed to the
+   * answer the user already saw: this branch is the ONLY place the race is
+   * observable, so it is where the "it went anyway" result comes from.
+   *
+   * Bounded by `MAX_QUEUED_PROMPTS` with oldest-out eviction, and cleared when
+   * the running turn ends: no delivery signal for these uuids can arrive after
+   * that, so an entry that survives it is dead weight holding a full prompt.
    */
   private readonly recalledPrompts = new Map<
     string,
-    { prompt: AppSubmitPrompt; isMeta?: boolean }
+    { prompt: AppSubmitPrompt; isMeta?: boolean; requestId: string }
   >()
   /**
    * IDLE-PARK (decisions/IDLE-PARK.md §3, R2-F2) — the parking latch. Set
@@ -1596,7 +1600,16 @@ export class SidecarServer {
         this.activeTurn = false
         this.endTurnObservation(rejection ? 'failed' : 'ok')
         onSettled?.(rejection)
-        if (generateTitle) {
+        // D1b — the late-delivery window closes with the turn: no engine
+        // consumption signal for these uuids can arrive after it. Holding them
+        // past this pins a full prompt each, images included, for a message the
+        // user took back.
+        this.recalledPrompts.clear()
+        // The generator is one-shot and flips its guard even on an early
+        // return, so an image-only prompt (no text to title with, reachable
+        // since the boundary drain began claiming them) would silently burn the
+        // session's only attempt.
+        if (generateTitle && promptText(prompt).trim().length > 0) {
           void this.titleGenerator.maybeGenerate(promptText(prompt), title =>
             this.broadcastSessionTitle(title),
           )
@@ -1753,6 +1766,24 @@ export class SidecarServer {
       if (!recalled) return
       this.recalledPrompts.delete(uuid)
       this.broadcastPromptMessage(recalled.prompt, uuid, recalled.isMeta)
+      // The recall answered "took it back" a moment ago, and this is the only
+      // point where that turns out to be false. Correcting it here is what
+      // makes the promise honest: without this the user is told the message is
+      // theirs again while the model answers it, and they resend. Broadcast
+      // rather than unicast because the connection that asked may be gone; the
+      // renderer ignores a result it did not mint.
+      for (const connection of this.connections) {
+        this.send(connection, {
+          kind: 'prompt-recall.result',
+          protocolVersion: PROTOCOL_VERSION,
+          sessionId: this.sessionId,
+          requestId: recalled.requestId,
+          ok: false,
+          message: promptRecallMessage(0, 1),
+          recalled: [],
+          alreadyDelivered: 1,
+        })
+      }
       return
     }
     this.stagedPrompts.delete(uuid)
@@ -1801,8 +1832,13 @@ export class SidecarServer {
   private broadcastQueuedPrompts(): void {
     const key = JSON.stringify(this.queuedPromptItems())
     if (key === this.lastQueuedPromptsKey) return
-    this.lastQueuedPromptsKey = key
+    // Commit the key only once it is actually published. Recording it against
+    // zero connections would remember a change nobody received, and the attach
+    // path only re-sends a NON-empty list, so a list that emptied during a
+    // disconnect could never be corrected: main's sticky slot would keep
+    // showing a message as waiting that the turn had already taken.
     if (this.connections.size === 0) return
+    this.lastQueuedPromptsKey = key
     for (const connection of this.connections) {
       this.sendQueuedPrompts(connection)
     }
@@ -1863,16 +1899,18 @@ export class SidecarServer {
       const staged = this.stagedPrompts.get(uuid)
       if (!staged) continue
       this.stagedPrompts.delete(uuid)
-      this.rememberRecalledPrompt(uuid, staged)
+      this.rememberRecalledPrompt(uuid, { ...staged, requestId })
       recalled.push({ id: uuid, prompt: staged.prompt })
     }
     this.broadcastQueuedPrompts()
 
-    // A staged message the queue no longer held is one a drain already claimed:
-    // `drainOneQueuedPrompt` takes it off the queue and awaits `startTurn`
-    // before it stops being staged, and the engine's own mid-turn drain has the
-    // same shape. Either way the model is getting it, so say so rather than
-    // claiming it came back.
+    // Defensive only, and deliberately not the mechanism. Every transition that
+    // unstages a prompt also takes it off the queue in the SAME synchronous
+    // block (`src/query.ts:1836-1842`; the boundary drain's unawaited
+    // `startTurn` then `stagedPrompts.delete`), and this handler runs
+    // synchronously off `handleData`, so it cannot observe the gap. The race
+    // that is real leaves the command queued and recalls it successfully, and
+    // is corrected from `commitStagedPrompt` when the delivery signal lands.
     const alreadyDelivered = Math.max(0, stagedCount - recalled.length)
     this.send(connection, {
       kind: 'prompt-recall.result',
@@ -1889,7 +1927,7 @@ export class SidecarServer {
   /** D1b — remember a recalled message, oldest out past the queue depth cap. */
   private rememberRecalledPrompt(
     uuid: string,
-    entry: { prompt: AppSubmitPrompt; isMeta?: boolean },
+    entry: { prompt: AppSubmitPrompt; isMeta?: boolean; requestId: string },
   ): void {
     this.recalledPrompts.set(uuid, entry)
     while (this.recalledPrompts.size > MAX_QUEUED_PROMPTS) {

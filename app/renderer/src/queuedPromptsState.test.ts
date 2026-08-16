@@ -127,6 +127,40 @@ describe('D1b — folding recalled messages back into the composer', () => {
     ])
   })
 
+  test('two image-bearing messages fold to ONE image, the most recent', () => {
+    // The composer holds exactly one image and the submit schema caps base64 as
+    // a total across the prompt, so restoring one per message would build a
+    // draft the sidecar refuses, which the refusal path restores again: the
+    // user can neither send nor easily clear it.
+    const folded = foldRecalledPrompts([
+      {
+        id: 'a',
+        prompt: [
+          { type: 'text', text: 'first' },
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: 'image/png', data: 'AAAA' },
+          },
+        ],
+      },
+      {
+        id: 'b',
+        prompt: [
+          { type: 'text', text: 'second' },
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: 'image/webp', data: 'BBBB' },
+          },
+        ],
+      },
+    ])
+
+    expect(folded.text).toBe('first\nsecond')
+    expect(folded.images).toEqual([
+      { id: 1, mediaType: 'image/webp', data: 'BBBB', name: 'image' },
+    ])
+  })
+
   test('an image-only message folds to no text at all', () => {
     // The composer merges this text under whatever is being typed, so an empty
     // string is what keeps a blank line out of a draft in progress.

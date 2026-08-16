@@ -861,6 +861,11 @@ export function reduceRetainedSubmitCleared(
  * same submit. That makes "an error frame reached this session before any
  * acceptance did" an honest reading of "this submit was refused".
  *
+ * That guarantee covers only errors the SIDECAR produced. Electron main
+ * synthesizes its own error frames when it cannot reach the supervisor at all,
+ * and those are not ordered against a sidecar frame already travelling over the
+ * socket: one can overtake an acceptance. They are excluded below by code.
+ *
  * `settled` is the other half: anything that proves the submit's window is over
  * (its user message, a turn boundary, a lifecycle change) drops the retained
  * copy, so a stale one cannot be resurrected by an unrelated error much later.
@@ -885,6 +890,17 @@ export function classifySubmitOutcomeFrame(frame: ServerFrame): SubmitOutcomeSig
     if (
       frame.requestId === REPLAY_BUFFER_TRUNCATION_REQUEST_ID ||
       frame.requestId === HISTORY_REPLAY_TRUNCATION_REQUEST_ID
+    ) {
+      return 'none'
+    }
+    // Main-synthesized, not sidecar-emitted: raised when main cannot forward to
+    // the supervisor at all, so it is outside the single-dispatch ordering the
+    // reading above rests on and can overtake an acceptance already in flight.
+    // Treating it as a refusal would hand back a message that IS on its way to
+    // the model, and the user would send it twice.
+    if (
+      frame.code === 'session_not_found' ||
+      frame.code === 'session_not_ready'
     ) {
       return 'none'
     }
