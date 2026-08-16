@@ -257,6 +257,52 @@ export function computeChartSeries(
   }
 }
 
+/**
+ * Pick x-axis label positions that cannot overlap.
+ *
+ * Every chart here samples labels with `i % step`, then force-draws the LAST
+ * one so the window's end is named. Those two rules fight: the final label lands
+ * wherever the data ends, which can be one index after a sampled label, and at
+ * that width the two render on top of each other. Measured before this existed:
+ * the 640-wide chart collided at 20, 22 and 26 points, the 320-wide one at 11,
+ * 14, 17, 18 and 21. The operator saw it as a smear reading "Aug 1Aug 16".
+ *
+ * Walks left to right keeping the first index, taking a candidate only when it
+ * clears both its predecessor AND leaves room for the last label, then appends
+ * the last. So both ends are always named and nothing collides, at any count.
+ *
+ * `minGap` and `plotWidth` are in the caller's viewBox units; the caller owns
+ * the font metric, since the two charts do not share a font size.
+ */
+export function selectAxisLabelIndices(
+  pointCount: number,
+  plotWidth: number,
+  minGap: number,
+): number[] {
+  if (pointCount <= 0) return []
+  if (pointCount === 1) return [0]
+
+  const positionOf = (index: number) => (index / (pointCount - 1)) * plotWidth
+  const lastPosition = plotWidth
+  const kept: number[] = [0]
+
+  for (let i = 1; i < pointCount - 1; i++) {
+    const position = positionOf(i)
+    const previous = positionOf(kept[kept.length - 1] ?? 0)
+    if (position - previous < minGap) continue
+    if (lastPosition - position < minGap) continue
+    kept.push(i)
+  }
+
+  // The last label is never dropped: it names where the window ends. The loop
+  // above already refused anything that would crowd it.
+  if (lastPosition - positionOf(kept[kept.length - 1] ?? 0) < minGap) {
+    if (kept.length > 1) kept.pop()
+  }
+  kept.push(pointCount - 1)
+  return kept
+}
+
 export type DailyActivitySeries = {
   dates: string[]
   displayDates: string[]

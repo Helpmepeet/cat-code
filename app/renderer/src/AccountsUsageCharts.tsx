@@ -16,6 +16,7 @@ import {
   computeModelBreakdown,
   computeTokensPerSessionSeries,
   formatTokens,
+  selectAxisLabelIndices,
   type ChartMultiSeries,
   type ModelBreakdownItem,
   type UsageStatsDisplayState,
@@ -125,6 +126,9 @@ export function DailyModelTokenChart({
 
   // Y-axis gridlines (0%, 50%, 100%)
   const yTicks = [0, maxVal * 0.5, maxVal]
+
+  // 10px monospace, six glyphs ("Aug 16"), plus breathing room.
+  const labelIndices = selectAxisLabelIndices(pointCount, plotWidth, 42)
 
   // Hovered day summary
   const hoveredDate = hoveredIndex !== null ? chartData.dates[hoveredIndex] : null
@@ -248,9 +252,7 @@ export function DailyModelTokenChart({
 
           {/* X Axis Date Labels */}
           {chartData.displayDates.map((dateLabel, i) => {
-            // Show all labels if <= 8 points, else sample
-            const step = pointCount > 14 ? Math.ceil(pointCount / 7) : 1
-            if (i !== 0 && i !== pointCount - 1 && i % step !== 0) return null
+            if (!labelIndices.includes(i)) return null
             return (
               <text
                 key={`xlabel-${i}`}
@@ -550,7 +552,8 @@ export function TokensPerSessionChart({
 
   const averageY = getY(series.averagePerSession)
   const showAverageLine = series.averagePerSession > 0 && series.averagePerSession <= maxVal
-  const labelStep = pointCount > 8 ? Math.ceil(pointCount / 4) : 1
+  // 9px monospace, six glyphs ("Aug 16"), plus breathing room.
+  const labelIndices = selectAxisLabelIndices(pointCount, plotWidth, 38)
 
   return (
     <div className="flex flex-col gap-3" data-testid="tokens-per-session-chart">
@@ -653,7 +656,7 @@ export function TokensPerSessionChart({
           })}
 
           {series.displayDates.map((dateLabel, i) => {
-            if (i !== 0 && i !== pointCount - 1 && i % labelStep !== 0) return null
+            if (!labelIndices.includes(i)) return null
             return (
               <text
                 key={`xlabel-${i}`}

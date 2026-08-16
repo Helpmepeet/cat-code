@@ -8,6 +8,7 @@ import {
   formatModelDisplayName,
   formatTokens,
   getModelColor,
+  selectAxisLabelIndices,
 } from './statsState.js'
 
 describe('statsState', () => {
@@ -108,6 +109,55 @@ describe('statsState', () => {
     })
     expect(breakdown[0]?.inputTokens).toBe(30000)
     expect(breakdown[0]?.outputTokens).toBe(10000)
+  })
+
+  /* --------------------------------------------------------------------- *
+   * X-axis label placement
+   * --------------------------------------------------------------------- */
+
+  test('selectAxisLabelIndices never lets two labels overlap, at any point count', () => {
+    // THE REGRESSION, operator-reported: the old rule sampled with `i % step`
+    // and then force-drew the last index, which lands wherever the data ends.
+    // At 20/22/26 points on the wide chart and 11/14/17/18/21 on the narrow one
+    // the final label rendered on top of its neighbour, reading "Aug 1Aug 16".
+    // Swept rather than spot-checked, because the failure is arithmetic and only
+    // appears at counts nobody thinks to pick by hand.
+    for (const [plotWidth, minGap] of [
+      [578, 42], // DailyModelTokenChart
+      [272, 38], // TokensPerSessionChart
+    ] as const) {
+      for (let pointCount = 2; pointCount <= 60; pointCount++) {
+        const indices = selectAxisLabelIndices(pointCount, plotWidth, minGap)
+        const positions = indices.map(i => (i / (pointCount - 1)) * plotWidth)
+        for (let k = 1; k < positions.length; k++) {
+          const gap = (positions[k] ?? 0) - (positions[k - 1] ?? 0)
+          expect(gap).toBeGreaterThanOrEqual(minGap)
+        }
+      }
+    }
+  })
+
+  test('selectAxisLabelIndices always names both ends of the window', () => {
+    // The reason the old code force-drew the last index. Dropping it to fix the
+    // overlap would trade one bug for another: an axis that stops short reads as
+    // a window that stops short.
+    for (let pointCount = 2; pointCount <= 60; pointCount++) {
+      const indices = selectAxisLabelIndices(pointCount, 272, 38)
+      expect(indices[0]).toBe(0)
+      expect(indices[indices.length - 1]).toBe(pointCount - 1)
+      // Strictly ascending, no repeats: a duplicated index double-paints.
+      for (let k = 1; k < indices.length; k++) {
+        expect(indices[k]!).toBeGreaterThan(indices[k - 1]!)
+      }
+    }
+  })
+
+  test('selectAxisLabelIndices handles the degenerate counts', () => {
+    expect(selectAxisLabelIndices(0, 272, 38)).toEqual([])
+    expect(selectAxisLabelIndices(1, 272, 38)).toEqual([0])
+    // Two points closer together than one label: both ends still get named,
+    // because naming neither is worse than a tight pair at the extremes.
+    expect(selectAxisLabelIndices(2, 10, 38)).toEqual([0, 1])
   })
 
   /* --------------------------------------------------------------------- *
