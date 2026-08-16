@@ -108,6 +108,7 @@ test('applyServerFrameBatch dispatches ONCE per store for the whole batch', () =
     dispatchContextBreakdown: count('contextBreakdown') as never,
     dispatchRemoteSettings: count('remoteSettings') as never,
     dispatchSlashCatalog: count('slashCatalog') as never,
+    dispatchQueuedPrompts: count('queuedPrompts') as never,
     dispatchSessionActionRuntime: count('sessionActionRuntime') as never,
     dispatchVerbAckResult: count('verbAckResult') as never,
     dispatchTranscript: action => {
@@ -140,6 +141,7 @@ test('applyServerFrameBatch dispatches ONCE per store for the whole batch', () =
     'contextBreakdown',
     'remoteSettings',
     'slashCatalog',
+    'queuedPrompts',
     'sessionActionRuntime',
     'verbAckResult',
     'transcript',
@@ -175,6 +177,7 @@ test('an empty delivery dispatches nothing', () => {
     dispatchContextBreakdown: mark as never,
     dispatchRemoteSettings: mark as never,
     dispatchSlashCatalog: mark as never,
+    dispatchQueuedPrompts: mark as never,
     dispatchSessionActionRuntime: mark as never,
     dispatchVerbAckResult: mark as never,
     dispatchTranscript: mark as never,

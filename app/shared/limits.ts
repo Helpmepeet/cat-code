@@ -67,6 +67,17 @@ export const MAX_PROMPT_BYTES = 96 * 1024
  */
 export const MAX_QUEUED_PROMPTS = 32
 
+/**
+ * How much of a waiting message's text the staged-prompt snapshot carries.
+ *
+ * That snapshot is re-sent on every queue change and each waiting message may be
+ * `MAX_PROMPT_BYTES` (96 KiB) on its own, so the whole depth would otherwise be
+ * ~3 MiB re-broadcast per keystroke-sized event. The renderer draws one
+ * truncated line per waiting message, so nothing past this is ever readable; the
+ * message itself is untouched and reaches the model in full.
+ */
+export const MAX_QUEUED_PROMPT_PREVIEW_CHARS = 500
+
 /** Max length for free-text fields (abort reason, ping nonce), in chars. */
 export const MAX_TEXT_FIELD_CHARS = 4_096
 

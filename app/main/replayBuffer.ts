@@ -135,6 +135,11 @@ const FRAME_RETENTION: Record<ServerFrame['kind'], FrameRetention> = {
   'remoteSettings.snapshot': 'sticky',
   'slash-catalog.snapshot': 'sticky',
   'stats.usage.snapshot': 'sticky',
+  // Sticky, not ring: this is the list of messages waiting for the running
+  // response, applied wholesale and replaced by the next one. A reload during a
+  // long turn would otherwise lose the rows for messages the user has already
+  // sent, putting them back in the state D1a exists to fix — invisible.
+  'queued-prompts.snapshot': 'sticky',
 
   event: 'ring',
   'generated-image-preview': 'preview',

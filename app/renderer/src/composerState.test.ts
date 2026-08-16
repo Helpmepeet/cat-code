@@ -1154,6 +1154,22 @@ describe('D5 — a refused submit comes back, images included', () => {
     ).toBe('settled')
   })
 
+  test('D1a — a staged mid-turn message settles the submit that produced it', () => {
+    // D5's acceptance signal for a mid-turn submit used to be the user message
+    // the sidecar broadcast at enqueue time. D1a moved that broadcast to
+    // delivery, which can be a whole turn later, so the staged snapshot is now
+    // what says "accepted". Without this, an ordinary error arriving during the
+    // wait would hand an accepted message back to the composer.
+    expect(
+      classifySubmitOutcomeFrame({
+        kind: 'queued-prompts.snapshot',
+        protocolVersion: 1,
+        sessionId: S1,
+        prompts: [{ id: 'q-1', text: 'and check the logs' }],
+      } as ServerFrame),
+    ).toBe('settled')
+  })
+
   test('streaming and assistant output leave the retained submit alone', () => {
     // The depth-cap refusal lands mid-turn, so the assistant is streaming while
     // the submit waits. Counting those frames would drop the copy before the

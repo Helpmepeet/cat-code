@@ -113,6 +113,7 @@ import {
   getCommandQueueSnapshot,
   resetCommandQueue,
 } from '../../src/utils/messageQueueManager.js'
+import { notifyCommandLifecycle } from '../../src/utils/commandLifecycle.js'
 
 const SESSION = 'test-session'
 const ENGINE_SESSION = 'engine-test-session'
@@ -1342,19 +1343,10 @@ test('a mid-turn submit is queued INTO the running turn, not refused', async () 
   // be reached by a Sleep round.
   expect(queued[0]?.priority).toBe('next')
 
-  // The user sees it land immediately — the composer has already cleared.
-  const userTexts = received.flatMap(frame => {
-    if (
-      frame.kind !== 'event' ||
-      frame.event.type !== 'message' ||
-      frame.event.message.type !== 'user'
-    ) {
-      return []
-    }
-    const content = frame.event.message.message?.content
-    return typeof content === 'string' ? [content] : []
-  })
-  expect(userTexts).toEqual(['first', 'and also check the logs'])
+  // D1a — the user sees it staged above the composer, not in the transcript:
+  // the model has not received it yet. The staged row is pinned by its own
+  // tests below.
+  expect(userMessageTexts(received)).toEqual(['first'])
 
   release?.()
 })
@@ -1560,7 +1552,8 @@ test('a queued image prompt no tool round drained still gets its own turn', asyn
   expect(prompts[1]).toEqual(IMAGE_PROMPT)
   expect(getCommandQueueSnapshot()).toHaveLength(0)
 
-  // Broadcast at enqueue, so the drained turn must not announce it again.
+  // D1a — staged while it waited, announced by the turn that finally took it,
+  // and exactly once.
   const announcements = received.filter(
     frame =>
       frame.kind === 'event' &&
@@ -1571,6 +1564,193 @@ test('a queued image prompt no tool round drained still gets its own turn', asyn
   expect(announcements).toBe(1)
 
   releases.shift()?.()
+})
+
+/**
+ * D1a — a message sent mid-turn is STAGED, not committed.
+ *
+ * The terminal renders a queued message above the composer and only lets it into
+ * the transcript when the engine actually takes it
+ * (`src/components/PromptInput/PromptInputQueuedCommands.tsx`). The desktop used
+ * to broadcast the user row at enqueue time, so a message still waiting looked
+ * exactly like one the model had already received.
+ */
+function queuedPromptSnapshots(received: ServerFrame[]) {
+  return received.flatMap(frame =>
+    frame.kind === 'queued-prompts.snapshot' ? [frame.prompts] : [],
+  )
+}
+
+function userMessageTexts(received: ServerFrame[]): string[] {
+  return received.flatMap(frame => {
+    if (
+      frame.kind !== 'event' ||
+      frame.event.type !== 'message' ||
+      frame.event.message.type !== 'user'
+    ) {
+      return []
+    }
+    const content = frame.event.message.message?.content
+    return typeof content === 'string' ? [content] : []
+  })
+}
+
+test('D1a — a mid-turn message stages above the composer and stays out of the transcript', async () => {
+  let release: (() => void) | undefined
+  const controller = new AppSessionController({
+    async *runTurn({ options }) {
+      options?.onInputPersisted?.()
+      await new Promise<void>(resolve => {
+        release = resolve
+      })
+      yield buildProbeToolUseMessage()
+    },
+  })
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'turn', prompt: 'start' }),
+  )
+  await new Promise(resolve => setTimeout(resolve, 0))
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'mid', prompt: 'and the logs' }),
+  )
+
+  // The turn's own prompt is in the transcript; the queued one is not.
+  expect(userMessageTexts(received)).toEqual(['start'])
+  const staged = queuedPromptSnapshots(received).at(-1)
+  expect(staged).toHaveLength(1)
+  expect(staged?.[0]?.text).toBe('and the logs')
+  // The id is the uuid the message will carry when it is delivered.
+  const queued = getCommandQueueSnapshot()
+  expect(staged?.[0]?.id).toBe(queued[0]?.uuid)
+
+  release?.()
+})
+
+test('D1a — the engine consuming a staged message is what commits it', async () => {
+  // `notifyCommandLifecycle(uuid, 'started')` fires on the drain that actually
+  // takes the command into the running turn (`src/query.ts`), just before
+  // `removeFromQueue`. That is the moment the message becomes real.
+  let release: (() => void) | undefined
+  const controller = new AppSessionController({
+    async *runTurn({ options }) {
+      options?.onInputPersisted?.()
+      await new Promise<void>(resolve => {
+        release = resolve
+      })
+      yield buildProbeToolUseMessage()
+    },
+  })
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'turn', prompt: 'start' }),
+  )
+  await new Promise(resolve => setTimeout(resolve, 0))
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'mid', prompt: 'and the logs' }),
+  )
+
+  const uuid = getCommandQueueSnapshot()[0]?.uuid
+  expect(uuid).toBeTruthy()
+  notifyCommandLifecycle(uuid as string, 'started')
+
+  expect(userMessageTexts(received)).toEqual(['start', 'and the logs'])
+  // And the staged row is gone, so the message is shown exactly once.
+  expect(queuedPromptSnapshots(received).at(-1)).toEqual([])
+
+  release?.()
+})
+
+test('D1a — a refused mid-turn message leaves nothing staged', async () => {
+  let release: (() => void) | undefined
+  const controller = new AppSessionController({
+    async *runTurn({ options }) {
+      options?.onInputPersisted?.()
+      await new Promise<void>(resolve => {
+        release = resolve
+      })
+      yield buildProbeToolUseMessage()
+    },
+  })
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'turn', prompt: 'start' }),
+  )
+  await new Promise(resolve => setTimeout(resolve, 0))
+
+  for (let i = 0; i < MAX_QUEUED_PROMPTS; i += 1) {
+    server.handleData(
+      conn,
+      clientFrame({ type: 'app.submit', requestId: `q${i}`, prompt: `queued ${i}` }),
+    )
+  }
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'overflow', prompt: 'one too many' }),
+  )
+
+  expect(received.filter(frame => frame.kind === 'error')).toHaveLength(1)
+  const staged = queuedPromptSnapshots(received).at(-1) ?? []
+  expect(staged).toHaveLength(MAX_QUEUED_PROMPTS)
+  expect(staged.some(item => item.text === 'one too many')).toBe(false)
+  // D5 leans on this order: the refusal is the LAST word on that submit, with
+  // no acceptance of any kind behind it, which is what lets the composer take
+  // the message back.
+  expect(received.at(-1)?.kind).toBe('error')
+
+  release?.()
+})
+
+test('D1a — a renderer attaching mid-turn learns what is already staged', async () => {
+  // A reload drops everything the renderer held. The staged rows must come back
+  // with it, or a message waiting on the running turn is invisible again.
+  let release: (() => void) | undefined
+  const controller = new AppSessionController({
+    async *runTurn({ options }) {
+      options?.onInputPersisted?.()
+      await new Promise<void>(resolve => {
+        release = resolve
+      })
+      yield buildProbeToolUseMessage()
+    },
+  })
+  const server = makeServer(controller)
+  const first = makeSocket()
+  const conn = server.addConnection(first.socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'turn', prompt: 'start' }),
+  )
+  await new Promise(resolve => setTimeout(resolve, 0))
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'mid', prompt: 'and the logs' }),
+  )
+
+  const reattached = makeSocket()
+  server.addConnection(reattached.socket)
+
+  const staged = queuedPromptSnapshots(reattached.received).at(-1)
+  expect(staged).toHaveLength(1)
+  expect(staged?.[0]?.text).toBe('and the logs')
+
+  release?.()
 })
 
 // The third consumer, the park gate, is deliberately NOT pinned by a test here.

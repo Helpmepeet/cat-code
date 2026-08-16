@@ -2805,6 +2805,50 @@ export type GeneratedImagePreviewFrame = {
   data: string
 }
 
+/* ------------------------------------------------------------------------- *
+ * D1a — messages waiting for the running response
+ * ------------------------------------------------------------------------- *
+ *
+ * A message sent while a response is running is handed to the engine's own
+ * command queue, and the running turn injects it at its next tool round
+ * (`src/query.ts` `getQueuedCommandAttachments`). Until that happens it has not
+ * reached the model, so it is not transcript history: the terminal renders it
+ * above the composer and only lets it into the transcript on delivery
+ * (`src/components/PromptInput/PromptInputQueuedCommands.tsx`). This snapshot is
+ * how the desktop learns the same thing.
+ *
+ * Outbound only, and deliberately so: displaying what is waiting needs no new
+ * inbound vocabulary. Taking a message BACK would (a dequeue verb), and that is
+ * a separate security-baseline change, not part of this frame.
+ *
+ * The sidecar re-sends the whole list on every command-queue change and once per
+ * attach, so it is point-in-time state a reader applies wholesale (retention
+ * class `sticky`, `app/main/replayBuffer.ts`) — never an append.
+ */
+export type QueuedPromptItem = {
+  /**
+   * The engine-minted uuid of the queued command. It is the SAME uuid the user
+   * message will carry once the message is delivered, so a reader can match a
+   * staged row to the transcript row that replaces it.
+   */
+  id: string
+  /**
+   * Display text only, folded from the message's text blocks and truncated to
+   * `MAX_QUEUED_PROMPT_PREVIEW_CHARS`. Empty when the message carries only
+   * images. Never the message the engine will receive — that is not re-derivable
+   * from this and is not meant to be.
+   */
+  text: string
+}
+
+export type QueuedPromptsSnapshotFrame = {
+  kind: 'queued-prompts.snapshot'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  /** Oldest first, matching the order the engine will drain them in. */
+  prompts: QueuedPromptItem[]
+}
+
 export type ServerFramePayload =
   | ReadyFrame
   | SessionTitleFrame
@@ -2840,6 +2884,7 @@ export type ServerFramePayload =
   | GeneratedImagePreviewFrame
   | SettingsResultFrame
   | UsageStatsSnapshotFrame
+  | QueuedPromptsSnapshotFrame
 
 /**
  * Metadata-only delivery envelope. Optional so an older sidecar remains
@@ -2894,6 +2939,7 @@ const SERVER_FRAME_KINDS: Record<ServerFrameKind, true> = {
   'slash-catalog.snapshot': true,
   'generated-image-preview': true,
   'stats.usage.snapshot': true,
+  'queued-prompts.snapshot': true,
 }
 
 export function isServerFrameKind(value: unknown): value is ServerFrameKind {

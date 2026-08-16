@@ -52,6 +52,7 @@ const ATTACH_BURST_KINDS = [
   'extensions.snapshot',
   'remoteSettings.snapshot',
   'slash-catalog.snapshot',
+  'queued-prompts.snapshot',
 ] as const satisfies readonly ServerFrame['kind'][]
 
 /**

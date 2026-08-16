@@ -791,6 +791,36 @@ test('a cold-spawn prompt announces its wait, while a park restore stays silent'
   }
 })
 
+test('D1a: a message waiting for the running response shows above the composer', () => {
+  // Sending during a response used to drop the message straight into the
+  // transcript, which reads as "the model has this" when it does not. It waits
+  // above the composer instead, the way the terminal has always shown it.
+  const base = idleSessionPaneProps()
+
+  const idle = renderToStaticMarkup(<SessionPane {...base} />)
+  expect(idle).not.toContain('Queued')
+
+  const waiting = renderToStaticMarkup(
+    <SessionPane
+      {...base}
+      activeConnection={{ status: 'ready', inputEnabled: false }}
+      activeLog={{ ...base.activeLog, inputEnabled: false }}
+      queuedPrompts={[
+        { id: 'q-1', text: 'and check the logs too' },
+        { id: 'q-2', text: '' },
+      ]}
+    />,
+  )
+  expect(waiting).toContain('and check the logs too')
+  expect(waiting).toContain('Queued')
+  // An image-only message has no text to show, and says so the same way the
+  // cold-spawn row does rather than rendering an empty line.
+  expect(waiting).toContain('Image attachment')
+  // No second explanation: the cold-spawn row's promise is about a session that
+  // is not ready yet, which is not what is happening here.
+  expect(waiting).not.toContain('Sends when the session is ready.')
+})
+
 test('CC-16: a dead session stays read-only and does not pretend to be typeable', () => {
   const props = {
     accountsSnapshot: null,

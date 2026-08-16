@@ -274,6 +274,11 @@ import {
   selectSlashCatalog,
 } from './slashCatalogState.js'
 import {
+  createQueuedPromptsState,
+  reduceQueuedPromptsState,
+  selectQueuedPrompts,
+} from './queuedPromptsState.js'
+import {
   createRemoteSettingsState,
   reduceRemoteSettingsState,
   selectRemoteSettingsSnapshot,
@@ -384,6 +389,7 @@ import type {
   CatCodeBridge,
   PermissionResponseInput,
   PermissionSetModeMode,
+  QueuedPromptItem,
   RemoteVerbMessage,
   RunControlsSnapshot,
   ContextBreakdownSnapshot,
@@ -436,6 +442,9 @@ const reduceDiagnosticsStateBatched = withBatch(reduceDiagnosticsState)
 const reduceRunControlsStateBatched = withBatch(reduceRunControlsState)
 const reduceContextBreakdownStateBatched = withBatch(reduceContextBreakdownState)
 const reduceSlashCatalogStateBatched = withBatch(reduceSlashCatalogState)
+const reduceQueuedPromptsStateBatched = withBatch(reduceQueuedPromptsState)
+/** Stable empty list so a session with nothing waiting keeps one identity. */
+const EMPTY_QUEUED_PROMPTS: readonly QueuedPromptItem[] = []
 /** Stable empty catalog so an omitted `slashCatalog` prop keeps one identity. */
 const EMPTY_SLASH_CATALOG: readonly SlashCatalogEntry[] = []
 /** Stable empty notice list so a healthy pool re-renders nothing (P4-50). */
@@ -704,6 +713,14 @@ export function App() {
     undefined,
     createSlashCatalogState,
   )
+  // D1a — what each session has waiting for its running response. Rendered
+  // above the composer, never in the transcript: until the engine takes one of
+  // these the model has not seen it.
+  const [queuedPrompts, dispatchQueuedPrompts] = useReducer(
+    reduceQueuedPromptsStateBatched,
+    undefined,
+    createQueuedPromptsState,
+  )
   const [remoteSettings, dispatchRemoteSettings] = useReducer(
     reduceRemoteSettingsStateBatched,
     undefined,
@@ -938,6 +955,7 @@ export function App() {
               dispatchRunControls,
               dispatchContextBreakdown,
               dispatchSlashCatalog,
+              dispatchQueuedPrompts,
               dispatchRemoteSettings,
               dispatchSessionActionRuntime,
               dispatchVerbAckResult,
@@ -3113,6 +3131,7 @@ export function App() {
 	            pastes={selectSessionPasteList(pasteState, sessionId)}
 	            images={selectImageAttachments(imageAttachmentState, sessionId)}
 	            pendingSubmit={selectPendingSubmit(pendingSubmits, sessionId)}
+	            queuedPrompts={selectQueuedPrompts(queuedPrompts, sessionId)}
 	            history={selectHistory(historyState, sessionId)}
 	            onPaste={(content, selectionStart, selectionEnd) =>
 	              addSessionPaste(
@@ -4003,6 +4022,7 @@ export function SessionPane({
   partialCount,
   pastes,
   pendingSubmit = null,
+  queuedPrompts = EMPTY_QUEUED_PROMPTS,
   permissionContext,
   permissionKeyTargetRequestId = null,
   permissionQueue,
@@ -4856,6 +4876,24 @@ export function SessionPane({
         </div>
       ) : null}
 
+      {/* D1a — a message sent during a response waits here until the engine
+       * takes it, exactly as the terminal shows it above its own composer. It
+       * is deliberately not in the transcript: the model has not received it.
+       * Same row shape as the cold-spawn row above, minus the trailing promise,
+       * which is about a session that is not ready yet. */}
+      {queuedPrompts.map(queued => (
+        <div
+          className="flex items-baseline gap-2 text-xs"
+          key={queued.id}
+          role="status"
+        >
+          <span className="shrink-0 font-medium text-text-muted">Queued</span>
+          <span className="min-w-0 flex-1 truncate text-text-subtle">
+            {queued.text || 'Image attachment'}
+          </span>
+        </div>
+      ))}
+
       {generating ? (
         <ActivityIndicator
           verb={activity.verb}
@@ -5459,6 +5497,9 @@ type SessionPaneProps = {
   /** CC-16 — a prompt submitted before the engine could accept it. The cold-spawn
    * row is presentation metadata; every pending prompt still blocks a second hold. */
   pendingSubmit?: PendingSubmit | null
+  /** D1a — messages this session has waiting for its running response, oldest
+   * first. Display only: they stay out of the transcript until delivered. */
+  queuedPrompts?: readonly QueuedPromptItem[]
   /** Bug fix — hands `pendingSubmit` back to the composer without sending it.
    * `stopTurn` calls this so Stop cancels a queued prompt along with the turn,
    * instead of the CC-16 drain firing it as a fresh turn the instant the

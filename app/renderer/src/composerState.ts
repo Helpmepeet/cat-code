@@ -849,13 +849,17 @@ export function reduceRetainedSubmitCleared(
  *  - accepted while idle → `startTurn` broadcasts the user message before it
  *    hands the prompt to the controller (`app/sidecar/sidecarServer.ts`,
  *    `announcePrompt` defaults true);
- *  - accepted mid-turn → `enqueueMidTurnPrompt` broadcasts it before enqueueing;
- *  - refused → `sendError` with no broadcast at all.
+ *  - accepted mid-turn → `enqueueMidTurnPrompt` stages the message and the
+ *    queue's change signal publishes the staged snapshot, synchronously, before
+ *    the handler returns (D1a). The user message no longer rides this path: it
+ *    is broadcast on DELIVERY, which is far too late to answer "was this
+ *    accepted", so the staged snapshot is the acceptance here;
+ *  - refused → `sendError` with neither.
  *
  * The sidecar dispatches one frame at a time on a single thread and the socket
  * preserves order, so the acceptance can never arrive after a refusal for the
- * same submit. That makes "an error frame reached this session before any user
- * message did" an honest reading of "this submit was refused".
+ * same submit. That makes "an error frame reached this session before any
+ * acceptance did" an honest reading of "this submit was refused".
  *
  * `settled` is the other half: anything that proves the submit's window is over
  * (its user message, a turn boundary, a lifecycle change) drops the retained
@@ -887,6 +891,10 @@ export function classifySubmitOutcomeFrame(frame: ServerFrame): SubmitOutcomeSig
     return 'refused'
   }
   if (frame.kind === 'lifecycle') return 'settled'
+  // D1a — a mid-turn submit's acceptance. The list it carries is irrelevant
+  // here: the sidecar publishes it inside the dispatch of the submit it
+  // accepted, and publishes nothing at all when it refuses one.
+  if (frame.kind === 'queued-prompts.snapshot') return 'settled'
   if (frame.kind !== 'event') return 'none'
   // A restore replays the transcript; those user messages are history, not this
   // submit's acceptance.

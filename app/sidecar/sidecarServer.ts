@@ -50,6 +50,7 @@ import {
   reserveTaskNotification,
   subscribeToCommandQueue,
 } from '../../src/utils/messageQueueManager.js'
+import { setCommandLifecycleListener } from '../../src/utils/commandLifecycle.js'
 import { queuedCommandOrigin } from '../../src/utils/taskNotification.js'
 import { toSDKMessageOriginProp } from '../../src/utils/messages/mappers.js'
 import { permissionRuleValueFromString } from '../../src/utils/permissions/permissionRuleParser.js'
@@ -81,6 +82,7 @@ import {
   MAX_HISTORY_REPLAY_FRAMES,
   MAX_OUTBOUND_FRAME_BYTES,
   MAX_PROMPT_BYTES,
+  MAX_QUEUED_PROMPT_PREVIEW_CHARS,
   MAX_QUEUED_PROMPTS,
   MAX_QUESTION_ANSWER_CHARS,
   MAX_SUGGESTION_SELECTIONS,
@@ -100,6 +102,7 @@ import {
   type ClientFrame,
   type OAuthLoginProgress,
   type PermissionContextSnapshot,
+  type QueuedPromptItem,
   type RemoteVerbMessage,
   type RunControlVerbMessage,
   type ServerFrame,
@@ -408,6 +411,14 @@ export type SidecarServerOptions = {
 }
 
 /**
+ * Which server currently holds the engine's single-slot command-lifecycle
+ * listener (D1a). Module-scoped because the slot itself is module-scoped in the
+ * engine: without this, a second server's `close()` would silently disarm a
+ * live one.
+ */
+let commandLifecycleOwner: SidecarServer | null = null
+
+/**
  * Wires a controller to a connection-handling façade. The transport (Bun's
  * `Bun.listen({ unix })`) is created by the caller and delivers raw byte chunks
  * to `handleData`; this class owns framing, validation, and forwarding. Keeping
@@ -499,6 +510,26 @@ export class SidecarServer {
    * as a turn durably accepts the prompt, so this only ever holds failures.
    */
   private readonly retriedQueuedPromptKeys = new Set<string>()
+  /**
+   * D1a — messages sent mid-turn that are waiting for the running response and
+   * have NOT been announced to the transcript yet, keyed by the uuid they will
+   * carry when they are. Holding the prompt here (rather than reading it back
+   * off the queue) is what lets the commit happen from the engine's consumption
+   * signal, which reports a uuid and nothing else.
+   *
+   * Exactly one path removes an entry, and each removal announces the message:
+   * the engine consuming it mid-turn (the lifecycle listener below), or
+   * `drainOneQueuedPrompt` starting a turn of its own for it. A staged row is
+   * additionally intersected with the LIVE queue when the snapshot is built, so
+   * a row cannot outlive the message even if a future path drops a command
+   * without telling this map.
+   */
+  private readonly stagedPrompts = new Map<
+    string,
+    { prompt: AppSessionPrompt; isMeta?: boolean }
+  >()
+  /** Last staged list actually published, for `broadcastQueuedPrompts`. */
+  private lastQueuedPromptsKey: string | null = null
   /**
    * IDLE-PARK (decisions/IDLE-PARK.md §3, R2-F2) — the parking latch. Set
    * synchronously in `handlePark` once the gate passes; a submit arriving AFTER
@@ -599,8 +630,32 @@ export class SidecarServer {
     // straight to this sidecar, so this process owns the idle wake-up for its
     // single engine session. Never submit from this synchronous listener.
     this.unsubscribeTaskNotificationQueue = subscribeToCommandQueue(() => {
+      // D1a — the queue is the source of truth for what is still waiting, so
+      // every change to it republishes the staged list. Synchronous, unlike the
+      // drain below: this is a read, not a turn.
+      this.broadcastQueuedPrompts()
       this.scheduleBoundaryDrain()
     })
+    // D1a — the engine's own consumption signal. `notifyCommandLifecycle(uuid,
+    // 'started')` fires on the drain that actually takes a queued command into
+    // the running turn (`src/query.ts:1839`), immediately before
+    // `removeFromQueue`, which makes it the exact moment a staged message
+    // becomes real. The sidecar's older comment claimed no such signal existed
+    // without reaching into engine internals; it was already wrong when written.
+    //
+    // FRAGILE BY CONSTRUCTION: `setCommandLifecycleListener` holds ONE slot
+    // (`src/utils/commandLifecycle.ts:8`), not a subscriber set, so a second
+    // claimant in this process silently takes the signal away from whoever
+    // claimed it first. Nothing else claims it here: the only other setter is
+    // `src/cli/remoteIO.ts:159`, reached solely by constructing `RemoteIO`,
+    // which only `src/cli/print.ts` does and no sidecar path imports. The
+    // N-process model (one engine session per process) is what keeps this to one
+    // SidecarServer per process; `close()` releases the slot.
+    setCommandLifecycleListener((uuid, state) => {
+      if (state !== 'started') return
+      this.commitStagedPrompt(uuid)
+    })
+    commandLifecycleOwner = this
 
     // C3 (PERMISSION-BOUNDARY.md §4) — emit a fresh snapshot on EVERY live
     // context change. Store-subscription (not emit-after-boundary-writes) is
@@ -807,6 +862,13 @@ export class SidecarServer {
     // rows on a fresh session's very first keystroke. Single-socket ordering
     // guarantees the renderer projects it before the user could type `/`.
     this.sendSlashCatalogSnapshot(connection)
+    // D1a — messages already waiting for a running response. A renderer that
+    // reloaded mid-turn has to get these back or a message the user already sent
+    // is invisible until the turn ends. Sent only when there is something to
+    // report: an attaching reader's own list already starts empty, and an empty
+    // frame on every handshake is noise (the `slash-catalog.snapshot`
+    // precedent). What RETIRES a row is the change broadcast, not this.
+    if (this.queuedPromptItems().length > 0) this.sendQueuedPrompts(connection)
     // F2 — restored-history replay, after ready + C3 and before any live event
     // (single-socket ordering guarantees the renderer sees history first).
     this.sendHistoryReplay(connection)
@@ -966,6 +1028,14 @@ export class SidecarServer {
     this.unsubscribeRunControlsSnapshot = null
     this.unsubscribeTaskNotificationQueue?.()
     this.unsubscribeTaskNotificationQueue = null
+    // Release the single-slot lifecycle listener, but only if it is still OURS:
+    // in a process that built a second server (the boundary tests do), clearing
+    // unconditionally would take the signal away from the live one.
+    if (commandLifecycleOwner === this) {
+      setCommandLifecycleListener(null)
+      commandLifecycleOwner = null
+    }
+    this.stagedPrompts.clear()
     this.stopPanelTaskReaper?.()
     this.stopPanelTaskReaper = null
     for (const connection of this.connections) {
@@ -1297,8 +1367,18 @@ export class SidecarServer {
     const command = dequeue(isDeliverableParentPrompt)
     if (!command) return false
 
-    // The user already watched this leave the composer and saw it in the
-    // transcript, so a turn that never accepts it must not end in silence.
+    // D1a — this turn is where a still-staged message becomes a transcript row,
+    // so it announces. A command that is NOT staged has already been announced:
+    // the only way back onto the queue is the retry below, after a turn that
+    // announced it and then failed. Announcing on that retry would print it
+    // twice.
+    const stagedUuid =
+      command.uuid !== undefined && this.stagedPrompts.has(command.uuid)
+        ? command.uuid
+        : null
+
+    // The user already watched this leave the composer and saw it staged above
+    // the composer, so a turn that never accepts it must not end in silence.
     // `onInputPersisted` is the durable-acceptance signal: past it the turn
     // genuinely ran, and a later rejection is an ordinary turn failure the
     // engine reports itself. Before it, nothing took the prompt, so requeue for
@@ -1312,8 +1392,7 @@ export class SidecarServer {
       ...(command.uuid !== undefined ? { uuid: command.uuid } : {}),
       ...(command.isMeta !== undefined ? { isMeta: command.isMeta } : {}),
       generateTitle: true,
-      // Broadcast already happened at `enqueueMidTurnPrompt`.
-      announcePrompt: false,
+      announcePrompt: stagedUuid !== null,
       onInputPersisted: () => {
         persisted = true
         this.retriedQueuedPromptKeys.delete(retryKey)
@@ -1331,6 +1410,13 @@ export class SidecarServer {
         enqueue(command)
       },
     })
+    if (started && stagedUuid !== null) {
+      // Announced by `startTurn` a moment ago, so it is transcript history now
+      // and must stop being staged. Deliberately AFTER the start: an unstarted
+      // turn leaves the message staged, which is the honest state.
+      this.stagedPrompts.delete(stagedUuid)
+      this.broadcastQueuedPrompts()
+    }
     if (!started) {
       // Put it back rather than dropping it; the next boundary retries. Note
       // this appends, so with several queued prompts a refused one loses its
@@ -1427,9 +1513,11 @@ export class SidecarServer {
     onInputPersisted?: () => void
     generateTitle: boolean
     /**
-     * False for a prompt whose user message was already broadcast when it was
-     * queued mid-turn: the turn it was queued into ended without draining it,
-     * so it starts a turn of its own. Announcing again would print it twice.
+     * False only for a prompt whose user message has ALREADY been broadcast: a
+     * boundary-drained message whose turn failed and was requeued
+     * (`drainOneQueuedPrompt`). Announcing it again would print it twice. A
+     * message still waiting for its first turn announces here, which is what
+     * makes the announcement happen at delivery rather than at send time (D1a).
      */
     announcePrompt?: boolean
     onRejected?: (error: Error) => void
@@ -1590,21 +1678,86 @@ export class SidecarServer {
    * that drain filters on; `agentId` stays undefined so it addresses the main
    * thread and never a subagent.
    *
-   * The user message is broadcast NOW, not on consumption: the prompt has left
-   * the composer, and the queue offers no consumption signal the sidecar can
-   * observe without reaching into engine internals. If the turn ends before any
-   * tool round drains it, `drainOneQueuedPrompt` starts a turn for it with
-   * `announcePrompt: false` so it is never printed twice.
+   * D1a — the user message is NOT broadcast here. Until the engine takes it, the
+   * message has not reached the model, and a transcript row says it has. It is
+   * staged instead (`stagedPrompts` + the outbound snapshot), which is what the
+   * terminal does with a queued message, and announced exactly once by whichever
+   * path delivers it: `commitStagedPrompt` when the running turn consumes it, or
+   * `drainOneQueuedPrompt` when the turn ends first and it gets a turn of its
+   * own. Staging BEFORE the enqueue matters: the queue's change signal is
+   * synchronous, so the snapshot it publishes must already know about this one.
    */
   private enqueueMidTurnPrompt(prompt: AppSessionPrompt, isMeta?: boolean): void {
     const uuid = randomUUID()
-    this.broadcastPromptMessage(prompt, uuid, isMeta)
+    this.stagedPrompts.set(uuid, { prompt, ...(isMeta ? { isMeta } : {}) })
     enqueue({
       value: prompt,
       mode: 'prompt',
       uuid,
       ...(isMeta ? { isMeta: true } : {}),
     })
+  }
+
+  /**
+   * D1a — a staged message the engine has just taken into the running turn. The
+   * transcript row is written HERE, at delivery, and the staged row disappears
+   * with it. Unknown uuids (a worker result, a prompt already announced) are
+   * ignored: the map is the whole vocabulary of what is still owed a row.
+   */
+  private commitStagedPrompt(uuid: string): void {
+    const staged = this.stagedPrompts.get(uuid)
+    if (!staged) return
+    this.stagedPrompts.delete(uuid)
+    this.broadcastPromptMessage(staged.prompt, uuid, staged.isMeta)
+    this.broadcastQueuedPrompts()
+  }
+
+  /**
+   * D1a — what is waiting for the running response, oldest first.
+   *
+   * Built from the LIVE queue intersected with the not-yet-announced map, so it
+   * carries exactly the messages that are both still queued and still absent
+   * from the transcript. A message the engine consumed has left the queue; a
+   * message a boundary drain started a turn for has left the map. Neither can
+   * leave a row behind.
+   */
+  private queuedPromptItems(): QueuedPromptItem[] {
+    const items: QueuedPromptItem[] = []
+    for (const command of getCommandQueueSnapshot()) {
+      if (!isDeliverableParentPrompt(command)) continue
+      const uuid = command.uuid
+      if (uuid === undefined || !this.stagedPrompts.has(uuid)) continue
+      items.push({
+        id: uuid,
+        text: promptText(command.value).slice(0, MAX_QUEUED_PROMPT_PREVIEW_CHARS),
+      })
+    }
+    return items
+  }
+
+  private sendQueuedPrompts(connection: Connection): void {
+    this.send(connection, {
+      kind: 'queued-prompts.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      prompts: this.queuedPromptItems(),
+    })
+  }
+
+  /**
+   * Change-detected: the queue signal this rides also fires for worker results
+   * and for every task-notification enqueue, none of which move this list. A
+   * session with busy subagents would otherwise pay a frame (and a delivery
+   * trace) per unrelated queue event to say nothing changed.
+   */
+  private broadcastQueuedPrompts(): void {
+    const key = JSON.stringify(this.queuedPromptItems())
+    if (key === this.lastQueuedPromptsKey) return
+    this.lastQueuedPromptsKey = key
+    if (this.connections.size === 0) return
+    for (const connection of this.connections) {
+      this.sendQueuedPrompts(connection)
+    }
   }
 
   private handleSubmit(connection: Connection, message: AppSubmitMessage): void {
