@@ -3,10 +3,10 @@
  * Renders actual historical token usage from `UsageStatsSnapshot`.
  * Exports ONLY React components (Fast Refresh rule).
  *
- * Every chart takes `pending`, which is NOT-LOADED and must never be drawn as an
- * empty result: an empty-state message is a claim about the user's history, and
- * only a snapshot that actually arrived entitles us to make it. See the section
- * module for the theme-token rule these files broke.
+ * Every chart takes `dataState`. Neither `pending` nor `unavailable` may be
+ * drawn as an empty RESULT: an empty-state message is a claim about the user's
+ * history, and only a snapshot that actually arrived entitles us to make it. See
+ * the section module for the theme-token rule these files broke.
  */
 
 import { useState, type ReactNode } from 'react'
@@ -16,6 +16,7 @@ import {
   formatTokens,
   type ChartMultiSeries,
   type ModelBreakdownItem,
+  type UsageStatsDisplayState,
 } from './statsState.js'
 import type {
   UsageStatsDailyModelTokens,
@@ -25,8 +26,8 @@ import type {
 export type DailyModelTokenChartProps = {
   dailyModelTokens: UsageStatsDailyModelTokens[]
   range: '7d' | '30d'
-  /** No snapshot has arrived yet — say so, never claim an empty history. */
-  pending?: boolean
+  /** Whether a snapshot arrived, is still coming, or failed to. */
+  dataState?: UsageStatsDisplayState
 }
 
 /** Shared frame for the pending and empty states, so neither shifts the layout. */
@@ -44,16 +45,27 @@ function ChartPlaceholder({ children }: { children: ReactNode }) {
 export function DailyModelTokenChart({
   dailyModelTokens,
   range,
-  pending = false,
+  dataState = 'loaded',
 }: DailyModelTokenChartProps) {
   const chartData: ChartMultiSeries = computeChartSeries(dailyModelTokens)
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
 
-  if (pending) {
+  if (dataState === 'pending') {
     return (
       <ChartPlaceholder>
         <span className="mb-2.5 h-4 w-4 animate-spin rounded-full border-2 border-shell-seam border-t-text-muted" />
         <span className="font-medium text-text-muted">Loading usage analytics</span>
+      </ChartPlaceholder>
+    )
+  }
+
+  if (dataState === 'unavailable') {
+    return (
+      <ChartPlaceholder>
+        <span className="font-medium text-text-muted">
+          Could not read session history
+        </span>
+        <span className="mt-0.5 text-text-subtle">This retries automatically.</span>
       </ChartPlaceholder>
     )
   }
@@ -305,8 +317,8 @@ export function DailyModelTokenChart({
 
 export type ModelBreakdownBarsProps = {
   modelUsage: Record<string, UsageStatsModelUsageItem>
-  /** No snapshot has arrived yet — say so, never claim an empty history. */
-  pending?: boolean
+  /** Whether a snapshot arrived, is still coming, or failed to. */
+  dataState?: UsageStatsDisplayState
 }
 
 /**
@@ -314,13 +326,16 @@ export type ModelBreakdownBarsProps = {
  */
 export function ModelBreakdownBars({
   modelUsage,
-  pending = false,
+  dataState = 'loaded',
 }: ModelBreakdownBarsProps) {
   const items: ModelBreakdownItem[] = computeModelBreakdown(modelUsage)
 
-  if (pending) {
+  if (dataState !== 'loaded') {
+    // One word, because the chart card above already carries the full message.
     return (
-      <div className="p-4 text-center text-[12px] text-text-ghost">Loading</div>
+      <div className="p-4 text-center text-[12px] text-text-ghost">
+        {dataState === 'pending' ? 'Loading' : 'Unavailable'}
+      </div>
     )
   }
 
@@ -376,8 +391,8 @@ export type CacheUsageBarProps = {
   cacheWriteTokens: number
   freshInputTokens: number
   cacheHitRate: number
-  /** No snapshot has arrived yet — say so, never claim an empty history. */
-  pending?: boolean
+  /** Whether a snapshot arrived, is still coming, or failed to. */
+  dataState?: UsageStatsDisplayState
 }
 
 /**
@@ -388,11 +403,13 @@ export function CacheUsageBar({
   cacheWriteTokens,
   freshInputTokens,
   cacheHitRate,
-  pending = false,
+  dataState = 'loaded',
 }: CacheUsageBarProps) {
-  if (pending) {
+  if (dataState !== 'loaded') {
     return (
-      <div className="p-4 text-center text-[12px] text-text-ghost">Loading</div>
+      <div className="p-4 text-center text-[12px] text-text-ghost">
+        {dataState === 'pending' ? 'Loading' : 'Unavailable'}
+      </div>
     )
   }
 

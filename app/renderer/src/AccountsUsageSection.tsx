@@ -7,7 +7,10 @@
  * `stats === null` is NOT-LOADED and is rendered as such, never as zeros. The
  * two states look identical in the data (`0` tokens either way) and mean
  * opposite things, and collapsing them with `?? 0` is what made this section
- * tell users with real history that they had no session activity.
+ * tell users with real history that they had no session activity. Not-loaded is
+ * itself two states (`useUsageStatsDisplayState`): still coming, or long enough
+ * that the read demonstrably failed, because a spinner that never ends is its
+ * own wrong answer.
  *
  * Styling note: this section previously used `bg-card` / `text-foreground` /
  * `text-muted-foreground` / `border-border` / `bg-muted`. Those are shadcn
@@ -23,7 +26,11 @@ import {
   CacheUsageBar,
   ActivitySparkline,
 } from './AccountsUsageCharts.js'
-import { formatTokens } from './statsState.js'
+import {
+  formatTokens,
+  useUsageStatsDisplayState,
+  type UsageStatsDisplayState,
+} from './statsState.js'
 import type { UsageStatsRange, UsageStatsSnapshot } from '../../shared/protocol.js'
 
 export type AccountsUsageSectionProps = {
@@ -33,14 +40,15 @@ export type AccountsUsageSectionProps = {
 }
 
 /**
- * A KPI value that is not known yet. Deliberately not `0` and not a dash.
- * `leading-7` matches the 1.75rem line box of the `text-xl` value it stands in
- * for, so the card does not resize when the real number lands.
+ * A KPI value that is not known. Deliberately not `0` and not a dash: both read
+ * as a measured result. `leading-7` matches the 1.75rem line box of the
+ * `text-xl` value it stands in for, so the card does not resize when the real
+ * number lands.
  */
-function PendingValue() {
+function UnknownValue({ dataState }: { dataState: UsageStatsDisplayState }) {
   return (
     <span className="text-[13px] font-medium leading-7 text-text-ghost">
-      Loading
+      {dataState === 'pending' ? 'Loading' : 'Unavailable'}
     </span>
   )
 }
@@ -50,7 +58,8 @@ export function AccountsUsageSection({
   activeRange,
   onRangeChange,
 }: AccountsUsageSectionProps) {
-  const pending = stats === null
+  const dataState = useUsageStatsDisplayState(stats !== null)
+  const isUnknown = dataState !== 'loaded'
   const totalTokens = stats?.totalTokens ?? 0
   const activeDays = stats?.activeDays ?? 0
   const dailyAverage =
@@ -138,8 +147,8 @@ export function AccountsUsageSection({
             Tokens in {activeRange === '30d' ? '30d' : '7d'}
           </span>
           <div className="mt-1.5 flex items-baseline justify-between">
-            {pending ? (
-              <PendingValue />
+            {isUnknown ? (
+              <UnknownValue dataState={dataState} />
             ) : (
               <span className="font-mono text-xl font-bold tracking-tight text-text-primary">
                 {formatTokens(totalTokens)}
@@ -153,8 +162,8 @@ export function AccountsUsageSection({
         <div className="flex flex-col justify-between rounded-xl border border-shell-seam bg-surface-panel p-3.5">
           <span className="text-[12px] text-text-subtle">Daily Average</span>
           <div className="mt-1.5">
-            {pending ? (
-              <PendingValue />
+            {isUnknown ? (
+              <UnknownValue dataState={dataState} />
             ) : (
               <>
                 <span className="font-mono text-xl font-bold tracking-tight text-text-primary">
@@ -170,8 +179,8 @@ export function AccountsUsageSection({
         <div className="flex flex-col justify-between rounded-xl border border-shell-seam bg-surface-panel p-3.5">
           <span className="text-[12px] text-text-subtle">Cache Hit Rate</span>
           <div className="mt-1.5 flex items-baseline gap-1.5">
-            {pending ? (
-              <PendingValue />
+            {isUnknown ? (
+              <UnknownValue dataState={dataState} />
             ) : (
               <>
                 <span className="font-mono text-xl font-bold tracking-tight text-text-primary">
@@ -189,8 +198,8 @@ export function AccountsUsageSection({
         <div className="flex flex-col justify-between rounded-xl border border-shell-seam bg-surface-panel p-3.5">
           <span className="text-[12px] text-text-subtle">Active Sessions</span>
           <div className="mt-1.5">
-            {pending ? (
-              <PendingValue />
+            {isUnknown ? (
+              <UnknownValue dataState={dataState} />
             ) : (
               <>
                 <span className="font-mono text-xl font-bold tracking-tight text-text-primary">
@@ -221,7 +230,7 @@ export function AccountsUsageSection({
         <DailyModelTokenChart
           dailyModelTokens={stats?.dailyModelTokens ?? []}
           range={activeRange}
-          pending={pending}
+          dataState={dataState}
         />
       </div>
 
@@ -238,7 +247,7 @@ export function AccountsUsageSection({
           <div className="flex flex-1 flex-col justify-center">
             <ModelBreakdownBars
               modelUsage={stats?.modelUsage ?? {}}
-              pending={pending}
+              dataState={dataState}
             />
           </div>
         </div>
@@ -257,7 +266,7 @@ export function AccountsUsageSection({
               cacheWriteTokens={stats?.cacheWriteTokens ?? 0}
               freshInputTokens={stats?.freshInputTokens ?? 0}
               cacheHitRate={cacheHitRate}
-              pending={pending}
+              dataState={dataState}
             />
           </div>
         </div>

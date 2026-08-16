@@ -11,6 +11,11 @@ import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 
 import { AccountsUsageSection } from './AccountsUsageSection.js'
+import {
+  CacheUsageBar,
+  DailyModelTokenChart,
+  ModelBreakdownBars,
+} from './AccountsUsageCharts.js'
 import type { UsageStatsSnapshot } from '../../shared/protocol.js'
 
 const EMPTY_CLAIM = 'No session activity recorded'
@@ -113,4 +118,59 @@ test('the section carries no undefined Tailwind colour tokens', () => {
   ]) {
     expect(html).not.toContain(token)
   }
+})
+
+/* ------------------------------------------------------------------------- *
+ * The third state: the read demonstrably failed
+ * ------------------------------------------------------------------------- */
+
+test('the failed state names what failed and says it recovers on its own', () => {
+  const html = renderToStaticMarkup(
+    <DailyModelTokenChart dailyModelTokens={[]} range="7d" dataState="unavailable" />,
+  )
+  expect(html).toContain('Could not read session history')
+  expect(html).toContain('This retries automatically.')
+  // Still not the empty-history claim: a failed read measured nothing.
+  expect(html).not.toContain(EMPTY_CLAIM)
+  expect(html).not.toContain('Loading')
+})
+
+test('a failed read never shows a spinner', () => {
+  // The point of the third state. `animate-spin` belongs to `pending` only;
+  // leaving it on a failed read is the eternal-spinner bug this replaces.
+  const failed = renderToStaticMarkup(
+    <DailyModelTokenChart dailyModelTokens={[]} range="7d" dataState="unavailable" />,
+  )
+  const waiting = renderToStaticMarkup(
+    <DailyModelTokenChart dailyModelTokens={[]} range="7d" dataState="pending" />,
+  )
+  expect(failed).not.toContain('animate-spin')
+  expect(waiting).toContain('animate-spin')
+})
+
+test('the breakdown cards stay terse, the message lives in one place', () => {
+  // Four copies of the full sentence would be noise; the chart card carries it.
+  for (const html of [
+    renderToStaticMarkup(<ModelBreakdownBars modelUsage={{}} dataState="unavailable" />),
+    renderToStaticMarkup(
+      <CacheUsageBar
+        cacheReadTokens={0}
+        cacheWriteTokens={0}
+        freshInputTokens={0}
+        cacheHitRate={0}
+        dataState="unavailable"
+      />,
+    ),
+  ]) {
+    expect(html).toContain('Unavailable')
+    expect(html).not.toContain('Could not read session history')
+    expect(html).not.toContain(EMPTY_CLAIM)
+  }
+})
+
+test('an unavailable breakdown card does not claim no model activity', () => {
+  const html = renderToStaticMarkup(
+    <ModelBreakdownBars modelUsage={{}} dataState="unavailable" />,
+  )
+  expect(html).not.toContain('No model activity')
 })

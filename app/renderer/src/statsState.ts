@@ -1,7 +1,9 @@
 /**
  * Renderer state helpers and formatters for real engine-backed token usage analytics.
- * Pure logic only — zero React components in this module (Fast Refresh safe).
+ * Pure logic and hooks only — zero React components in this module (Fast Refresh safe).
  */
+
+import { useEffect, useState } from 'react'
 
 import type {
   UsageStatsDailyModelTokens,
@@ -11,6 +13,65 @@ import type {
 } from '../../shared/protocol.js'
 
 export type { UsageStatsRange, UsageStatsSnapshot }
+
+/**
+ * What the analytics section is entitled to say right now.
+ *
+ *  - `loaded`      a snapshot arrived; render it, including a genuinely empty one.
+ *  - `pending`     nothing yet, and not long enough to conclude anything.
+ *  - `unavailable` long enough that a run had its full budget and did not deliver.
+ *
+ * The middle and last states are both "no data" and must not be drawn the same:
+ * an empty-history claim needs a snapshot, and an eternal spinner is its own
+ * wrong answer once the feed has demonstrably failed.
+ */
+export type UsageStatsDisplayState = 'loaded' | 'pending' | 'unavailable'
+
+/**
+ * How long to wait for a first snapshot before reporting failure.
+ *
+ * Deliberately equal to the worker's own budget
+ * (`ACCOUNTS_POOL_WORKER_TIMEOUT_MS`, `app/main/accountsPoolRunner.ts`): below
+ * that, a run can still be legitimately in flight (the first one pays a ~189 MB
+ * engine import), so a shorter wait would report failure at a working system and
+ * then take it back. At this value, "unavailable" means a run had its whole
+ * budget and produced nothing.
+ */
+export const USAGE_STATS_PENDING_TIMEOUT_MS = 2 * 60 * 1000
+
+/**
+ * Resolve the display state, flipping `pending` to `unavailable` once the wait
+ * exceeds `timeoutMs`.
+ *
+ * The clock starts when this mounts without data, NOT when the app launched, so
+ * re-opening the page while the feed is broken spends the wait again before
+ * saying so. Accepted: the alternative is a launch timestamp in reducer state,
+ * and being briefly over-optimistic about a failure is the harmless direction.
+ *
+ * Renders `pending` under SSR, where effects never run — which is the correct
+ * first paint in the browser too.
+ */
+export function useUsageStatsDisplayState(
+  hasStats: boolean,
+  timeoutMs: number = USAGE_STATS_PENDING_TIMEOUT_MS,
+): UsageStatsDisplayState {
+  const [timedOut, setTimedOut] = useState(false)
+
+  useEffect(() => {
+    // Data present: no clock, and any previous verdict is retracted — a feed
+    // that recovers must not leave the page reporting a failure it healed from.
+    if (hasStats) {
+      setTimedOut(false)
+      return
+    }
+    setTimedOut(false)
+    const handle = setTimeout(() => setTimedOut(true), timeoutMs)
+    return () => clearTimeout(handle)
+  }, [hasStats, timeoutMs])
+
+  if (hasStats) return 'loaded'
+  return timedOut ? 'unavailable' : 'pending'
+}
 
 /**
  * Human-friendly token formatting (e.g. "2.26M", "850.4k", "1,200", "0").
