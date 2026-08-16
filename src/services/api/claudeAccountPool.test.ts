@@ -185,8 +185,23 @@ describe('resolveClaudeAccountByPrefix', () => {
 })
 
 describe('updateClaudeAccountTokens', () => {
+  // This suite WRITES: `updateClaudeAccountTokens` ends in
+  // `saveClaudeTokenToVault`. `resetClaudeAccountPoolForTest` clears
+  // `vaultPathOverrideForTest`, so without an override re-set AFTER it, the
+  // vault path falls back to the real `~/claude-vault` and the fixtures below
+  // land in the operator's own credential store. That happened: an
+  // `account-a@example.com` file sat in the real vault until 2026-08-16.
+  let vaultDir: string
+
   beforeEach(() => {
     resetClaudeAccountPoolForTest()
+    vaultDir = mkdtempSync(join(tmpdir(), 'claude-vault-test-'))
+    setClaudeVaultPathForTest(vaultDir)
+  })
+
+  afterEach(() => {
+    resetClaudeAccountPoolForTest()
+    rmSync(vaultDir, { recursive: true, force: true })
   })
 
   test('updates the refresh source account when another account is active', () => {
