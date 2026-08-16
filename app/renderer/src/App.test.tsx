@@ -243,6 +243,44 @@ test('wiring tripwire: the usage popover asks no engine that is not there', () =
   expect(gateBody).toContain('contextBreakdownVerb(sessionId')
 })
 
+test('wiring tripwire: the usage range toggle asks no session anything', () => {
+  // SECOND INSTANCE of the defect pinned by the context-breakdown tripwire
+  // above (2026-08-16, operator-reported): a view control fired a session-scoped
+  // request under an `if (activeSessionId)` guard, which tests that an id EXISTS
+  // and not that its session is LIVE. The Accounts page is an unconditional
+  // sidebar item reachable with no sidecar at all, so a remembered id sailed
+  // through, main answered `session_not_found`, and because the preload mints a
+  // requestId for `stats.query` the error came back CORRELATED — so the user got
+  // a toast naming a raw session id (itself a §7 violation) and
+  // `reduceConnectionState` moved that session to `dead`.
+  //
+  // There is nothing to fetch: the host `usage-stats` event fills BOTH ranges in
+  // one worker run and the store holds both. A liveness check would not have
+  // fixed this — the session can die between the check and the send — so the
+  // gate is the absence of the call, which is what this pins.
+  //
+  // LAYER HONESTY: the renderer suite is SSR-only, so no toggle can be clicked.
+  // This asserts the call site.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const start = source.indexOf('  const handleStatsRangeChange = useCallback')
+  expect(start).toBeGreaterThan(-1)
+
+  // Comments are STRIPPED first, exactly as the park-policy tripwire below
+  // learned to do: the explanatory comment on this very handler names both
+  // `queryStats` and `activeSessionId`, so asserting on the raw slice would fail
+  // on the prose while the code was fine, and any later rewrite of the prose
+  // would silently disarm it.
+  const body = source
+    .slice(start, source.indexOf('\n  }, [', start))
+    .split('\n')
+    .filter(line => !line.trim().startsWith('//'))
+    .join('\n')
+
+  expect(body).toContain('set-stats-range')
+  expect(body).not.toContain('queryStats')
+  expect(body).not.toContain('activeSessionId')
+})
+
 test('wiring tripwire: the park policy is told which panes are on screen', () => {
   // IDLE-PARK §4(b) — main cannot derive this (workspace panels are renderer
   // state and switching panes bumps no registry stamp), so if this effect stops
