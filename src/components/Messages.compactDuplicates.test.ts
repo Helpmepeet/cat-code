@@ -7,14 +7,17 @@ import {
   createCompactBoundaryMessage,
   createUserMessage,
   dropPreservedMessageDuplicates,
+  isCompactBoundaryMessage,
   normalizeMessages,
 } from '../utils/messages.js'
+import { selectableUserMessagesFilter } from './MessageSelector.js'
 
 /**
- * Messages.tsx renders through Ink, which does not exit under the test runner,
- * so these cover the projection step the component applies to its `messages`
- * prop plus the wiring that makes it run. What no test here can see: how the
- * seam and the rounds below it actually look in a live terminal.
+ * Messages.tsx and MessageSelector.tsx render through Ink, which does not exit
+ * under the test runner, so these cover the projection step both components
+ * apply to their `messages` prop plus the wiring that makes it run. What no
+ * test here can see: how the seam and the rounds below it actually look in a
+ * live terminal, or how the rewind picker paints them.
  */
 
 /**
@@ -106,6 +109,74 @@ describe('transcript projection after a preserving compaction', () => {
 
     expect(source).toContain(
       'normalizeMessages(dropPreservedMessageDuplicates(messages))',
+    )
+  })
+})
+
+/**
+ * The rewind picker resolves the message to restore by uuid
+ * (computeDiffStatsBetweenMessages, handleSelect), while REPL's
+ * rewindConversationTo resolves it by object identity with lastIndexOf. On a
+ * raw array holding a preserved round twice those land on different copies, so
+ * the row's diff stats describe a span the rewind does not cut.
+ */
+describe('rewind selection after a preserving compaction', () => {
+  test('the raw array resolves the same message to two different copies', () => {
+    const { messages, keptAskUuid } = conversationWithPreservingCompaction()
+
+    const byUuid = messages.findIndex(m => m.uuid === keptAskUuid)
+    const keptAsk = messages[byUuid]!
+    const byIdentity = messages.lastIndexOf(keptAsk)
+
+    expect(byUuid).not.toBe(byIdentity)
+    // And the disagreement is what makes the stats wrong: the uuid lookup
+    // starts above the seam, so its span swallows the boundary and summary.
+    expect(
+      messages.slice(byUuid, byIdentity).some(isCompactBoundaryMessage),
+    ).toBe(true)
+  })
+
+  test('the projection makes both resolutions land on the surviving copy', () => {
+    const { messages, keptAskUuid } = conversationWithPreservingCompaction()
+    const projected = dropPreservedMessageDuplicates(messages)
+
+    const keptAsk = messages[messages.findIndex(m => m.uuid === keptAskUuid)]!
+    const rewindTarget = messages[messages.lastIndexOf(keptAsk)]
+
+    const byUuid = projected.findIndex(m => m.uuid === keptAskUuid)
+    expect(projected[byUuid]).toBe(rewindTarget)
+    expect(projected.slice(byUuid).some(isCompactBoundaryMessage)).toBe(false)
+  })
+
+  test('the picker offers the preserved round once, not twice', () => {
+    const { messages, keptAskUuid } = conversationWithPreservingCompaction()
+
+    expect(
+      messages.filter(selectableUserMessagesFilter).filter(m => m.uuid === keptAskUuid),
+    ).toHaveLength(2)
+    expect(
+      dropPreservedMessageDuplicates(messages)
+        .filter(selectableUserMessagesFilter)
+        .filter(m => m.uuid === keptAskUuid),
+    ).toHaveLength(1)
+  })
+
+  test('MessageSelector projects its prop, and REPL resolves the same copy', async () => {
+    const selector = await Bun.file(
+      new URL('./MessageSelector.tsx', import.meta.url),
+    ).text()
+    expect(selector).toContain(
+      'dropPreservedMessageDuplicates(rawMessages)',
+    )
+
+    // findRawIndex feeds messagesAfterAreOnlySynthetic, which decides whether a
+    // message-actions edit skips the confirm dialog. Scanning from the earlier
+    // copy crosses the seam and always finds something non-synthetic.
+    const repl = await Bun.file(
+      new URL('../screens/REPL.tsx', import.meta.url),
+    ).text()
+    expect(repl).toContain(
+      'messages.findLastIndex(m => m.uuid.slice(0, 24) === prefix)',
     )
   })
 })

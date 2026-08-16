@@ -13,7 +13,7 @@ import { Box, Text } from '../ink.js';
 import { useKeybinding, useKeybindings } from '../keybindings/useKeybinding.js';
 import type { Message, PartialCompactDirection, UserMessage } from '../types/message.js';
 import { stripDisplayTags } from '../utils/displayTags.js';
-import { createUserMessage, extractTag, isEmptyMessageText, isSyntheticMessage, isToolUseResultMessage } from '../utils/messages.js';
+import { createUserMessage, dropPreservedMessageDuplicates, extractTag, isEmptyMessageText, isSyntheticMessage, isToolUseResultMessage } from '../utils/messages.js';
 import { isTaskNotificationText } from '../utils/taskNotification.js';
 import { type OptionWithDescription, Select } from './CustomSelect/select.js';
 import { Spinner } from './Spinner.js';
@@ -45,7 +45,7 @@ type Props = {
 };
 const MAX_VISIBLE_MESSAGES = 7;
 export function MessageSelector({
-  messages,
+  messages: rawMessages,
   onPreRestore,
   onRestoreMessage,
   onRestoreCode,
@@ -53,6 +53,15 @@ export function MessageSelector({
   onClose,
   preselectedMessage
 }: Props): React.ReactNode {
+  // A preserving compaction re-lists the rounds it kept after the boundary
+  // while the originals stay where they were, so the REPL array holds them
+  // twice. Every lookup below has to land on the same copy the REPL's rewind
+  // does: rewindConversationTo resolves by object identity with lastIndexOf,
+  // and this projection keeps the last occurrence. Without it the picker shows
+  // the round twice and computeDiffStatsBetweenMessages (findIndex by uuid)
+  // measures the span from the pre-boundary copy, so the stats on the row
+  // describe a different span than the one the rewind actually cuts.
+  const messages = useMemo(() => dropPreservedMessageDuplicates(rawMessages), [rawMessages]);
   const fileHistory = useAppState(s => s.fileHistory);
   const [error, setError] = useState<string | undefined>(undefined);
   const isFileHistoryEnabled = fileHistoryEnabled();

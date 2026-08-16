@@ -4319,9 +4319,13 @@ export function REPL({
 
   // Not memoized — hook stores caps via ref, reads latest closure at dispatch.
   // 24-char prefix: deriveUUID preserves first 24, renderable uuid prefix-matches raw source.
+  // findLastIndex, not findIndex: a preserving compaction lists the rounds it
+  // kept twice, and rewindConversationTo targets the later copy (lastIndexOf).
+  // Resolving the earlier one makes messagesAfterAreOnlySynthetic scan across
+  // the boundary and summary, so a lossless edit is sent to the confirm dialog.
   const findRawIndex = (uuid: string) => {
     const prefix = uuid.slice(0, 24);
-    return messages.findIndex(m => m.uuid.slice(0, 24) === prefix);
+    return messages.findLastIndex(m => m.uuid.slice(0, 24) === prefix);
   };
   const messageActionCaps: MessageActionCaps = {
     copy: text =>
