@@ -2436,3 +2436,53 @@ test('each App commit increments the health payload counter before delivery ackn
   )
 })
 
+
+test('D5 wiring tripwire: a refused submit is retained at send and restored from the frame stream', () => {
+  // LAYER HONESTY: the renderer suite is SSR-only, so App cannot be mounted, no
+  // frame can be delivered and no composer can be refilled. The decision logic
+  // lives in `classifySubmitOutcomeFrame` and is exercised in
+  // composerState.test.ts; what only source can decide is that the three call
+  // sites exist and sit in the order the behaviour depends on. Slices are
+  // anchored on CODE, never on a comment.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+
+  const submitStart = source.indexOf('  function submitSession(')
+  const submitEnd = source.indexOf('\n  // CC-16 drain', submitStart)
+  expect(submitStart).toBeGreaterThan(-1)
+  expect(submitEnd).toBeGreaterThan(submitStart)
+  const submitBody = source.slice(submitStart, submitEnd)
+
+  // The whole message is retained, images included — the half `↑` history
+  // cannot carry. Retention must happen BEFORE the optimistic clear, or the
+  // images it copies are already gone.
+  expect(submitBody).toContain('retainedSubmitsRef.current = reduceRetainedSubmitHeld(')
+  expect(submitBody).toContain('{ text, images: [...images] }')
+  expect(
+    submitBody.indexOf('retainedSubmitsRef.current = reduceRetainedSubmitHeld('),
+  ).toBeLessThan(submitBody.lastIndexOf('retireDraft()'))
+
+  const subscribeStart = source.indexOf('const unsubscribe = bridge.subscribe(frames => {')
+  const subscribeEnd = source.indexOf('bridge.rendererReady()', subscribeStart)
+  expect(subscribeStart).toBeGreaterThan(-1)
+  expect(subscribeEnd).toBeGreaterThan(subscribeStart)
+  const subscribeBody = source.slice(subscribeStart, subscribeEnd)
+
+  expect(subscribeBody).toContain('const signal = classifySubmitOutcomeFrame(frame)')
+  expect(subscribeBody).toContain("if (signal === 'refused') restoreRefusedSubmit(frame.sessionId)")
+  expect(subscribeBody).toContain("else if (signal === 'settled') {")
+
+  const restoreStart = source.indexOf('const restoreRefusedSubmit = useCallback(')
+  const restoreEnd = source.indexOf('\n  const closeTab = useCallback(', restoreStart)
+  expect(restoreStart).toBeGreaterThan(-1)
+  expect(restoreEnd).toBeGreaterThan(restoreStart)
+  const restoreBody = source.slice(restoreStart, restoreEnd)
+
+  // Text merges under whatever was typed during the round trip; images replace,
+  // because only one is ever held.
+  expect(restoreBody).toContain('restoreDraftWithPending(')
+  expect(restoreBody).toContain('reduceSessionImagesReplaced(state, sessionId, retained.images)')
+  // Cleared first, so a second frame in the same batch cannot restore twice.
+  expect(restoreBody.indexOf('reduceRetainedSubmitCleared(')).toBeLessThan(
+    restoreBody.indexOf('restoreDraftWithPending('),
+  )
+})

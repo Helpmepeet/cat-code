@@ -1,6 +1,15 @@
 import { describe, expect, test } from 'bun:test'
 
-import type { AgentConfigSnapshot } from '../../shared/protocol.js'
+import type { AgentConfigSnapshot, ServerFrame } from '../../shared/protocol.js'
+import { HISTORY_REPLAY_TRUNCATION_REQUEST_ID } from '../../shared/protocol.js'
+import { REPLAY_BUFFER_TRUNCATION_REQUEST_ID } from './rawMessageLog.js'
+import {
+  classifySubmitOutcomeFrame,
+  createRetainedSubmitState,
+  reduceRetainedSubmitCleared,
+  reduceRetainedSubmitHeld,
+  selectRetainedSubmit,
+} from './composerState.js'
 import {
   applyMention,
   buildSubmitPrompt,
@@ -1033,5 +1042,166 @@ describe('Bug 3 — transport error is per-session, not one app-wide string', ()
     )
     expect(selectTransportError(state, S1)).toBeNull()
     expect(selectTransportError(state, S2)).toBe('session B failed')
+  })
+})
+
+describe('D5 — a refused submit comes back, images included', () => {
+  const image = {
+    id: 1,
+    mediaType: 'image/png' as const,
+    data: 'AAAA',
+    name: 'screenshot.png',
+  }
+
+  function userMessageFrame(sessionId: string, replay?: true): ServerFrame {
+    return {
+      kind: 'event',
+      protocolVersion: 1,
+      sessionId,
+      ...(replay ? { replay } : {}),
+      event: {
+        type: 'message',
+        message: {
+          type: 'user',
+          message: { role: 'user', content: 'look at this' },
+          parent_tool_use_id: null,
+          session_id: 'engine-1',
+          uuid: '00000000-0000-4000-8000-000000000001',
+        },
+      },
+    } as ServerFrame
+  }
+
+  function errorFrame(sessionId: string, requestId?: string): ServerFrame {
+    return {
+      kind: 'error',
+      protocolVersion: 1,
+      sessionId,
+      ...(requestId === undefined ? {} : { requestId }),
+      code: 'bad_request',
+      message: 'Too many messages are already waiting for this response.',
+      retryable: false,
+    } as ServerFrame
+  }
+
+  test('the retained copy carries the images the draft never could', () => {
+    // `↑` history stores strings (`reduceHistoryPushed`), so before this store
+    // existed a refused image-bearing submit had NO recovery path at all.
+    let state = createRetainedSubmitState()
+    expect(selectRetainedSubmit(state, S1)).toBeNull()
+    state = reduceRetainedSubmitHeld(state, S1, {
+      text: 'look at this',
+      images: [image],
+    })
+    state = reduceRetainedSubmitHeld(state, S2, { text: 'other', images: [] })
+    expect(selectRetainedSubmit(state, S1)).toEqual({
+      text: 'look at this',
+      images: [image],
+    })
+    expect(selectRetainedSubmit(state, null)).toBeNull()
+    state = reduceRetainedSubmitCleared(state, S1)
+    expect(selectRetainedSubmit(state, S1)).toBeNull()
+    expect(selectRetainedSubmit(state, S2)).toEqual({ text: 'other', images: [] })
+  })
+
+  test('clearing an absent session is identity (no needless re-render)', () => {
+    const state = createRetainedSubmitState()
+    expect(reduceRetainedSubmitCleared(state, S1)).toBe(state)
+  })
+
+  test('an error frame is the refusal signal; the user message is the acceptance', () => {
+    expect(classifySubmitOutcomeFrame(errorFrame(S1))).toBe('refused')
+    expect(classifySubmitOutcomeFrame(userMessageFrame(S1))).toBe('settled')
+  })
+
+  test('a replayed user message is history, not this submit’s acceptance', () => {
+    expect(classifySubmitOutcomeFrame(userMessageFrame(S1, true))).toBe('none')
+  })
+
+  test('a replay-truncation notice is a retention notice, never a refusal', () => {
+    // Both ids mark a capped replay. Treating either as a refusal would hand a
+    // restored session's composer a message it already sent.
+    expect(
+      classifySubmitOutcomeFrame(
+        errorFrame(S1, REPLAY_BUFFER_TRUNCATION_REQUEST_ID),
+      ),
+    ).toBe('none')
+    expect(
+      classifySubmitOutcomeFrame(
+        errorFrame(S1, HISTORY_REPLAY_TRUNCATION_REQUEST_ID),
+      ),
+    ).toBe('none')
+  })
+
+  test('a turn boundary or a lifecycle change settles a retained submit', () => {
+    // Bounded staleness: without these, a submit whose answer never arrived
+    // would sit retained until an unrelated error much later restored it.
+    expect(
+      classifySubmitOutcomeFrame({
+        kind: 'event',
+        protocolVersion: 1,
+        sessionId: S1,
+        event: { type: 'turn.status', activeTurn: false },
+      } as ServerFrame),
+    ).toBe('settled')
+    expect(
+      classifySubmitOutcomeFrame({
+        kind: 'lifecycle',
+        protocolVersion: 1,
+        sessionId: S1,
+        status: 'exited',
+      } as ServerFrame),
+    ).toBe('settled')
+  })
+
+  test('streaming and assistant output leave the retained submit alone', () => {
+    // The depth-cap refusal lands mid-turn, so the assistant is streaming while
+    // the submit waits. Counting those frames would drop the copy before the
+    // refusal arrived.
+    expect(
+      classifySubmitOutcomeFrame({
+        kind: 'event',
+        protocolVersion: 1,
+        sessionId: S1,
+        event: {
+          type: 'message',
+          message: {
+            type: 'stream_event',
+            event: {
+              type: 'content_block_delta',
+              index: 0,
+              delta: { type: 'text_delta', text: 'hi' },
+            },
+            parent_tool_use_id: null,
+            session_id: 'engine-1',
+            uuid: '00000000-0000-4000-8000-000000000002',
+          },
+        },
+      } as ServerFrame),
+    ).toBe('none')
+    expect(
+      classifySubmitOutcomeFrame({
+        kind: 'ready',
+        protocolVersion: 1,
+        sessionId: S1,
+        engineSessionId: 'engine-1',
+        payload: {
+          type: 'app.ready',
+          protocolVersion: 1,
+          inputEnabled: true,
+          activeTurn: false,
+          abort: { status: 'idle' },
+          goalSnapshot: null,
+          pendingPermissionRequests: [],
+        },
+      } as ServerFrame),
+    ).toBe('none')
+  })
+
+  test('an image-only submit restores without prepending a blank line', () => {
+    // `restoreDraftWithPending('typed after', '')` used to return
+    // '\ntyped after' — the image-only submit carries no text at all.
+    expect(restoreDraftWithPending('typed after', '')).toBe('typed after')
+    expect(restoreDraftWithPending('', '')).toBe('')
   })
 })

@@ -121,11 +121,13 @@ import {
   applyMention,
   buildSubmitPrompt,
   caretAtHistoryEdge,
+  classifySubmitOutcomeFrame,
   createHistoryState,
   createImageAttachmentState,
   createPasteState,
   canSendUntypedSubmit,
   createPendingSubmitState,
+  createRetainedSubmitState,
   createTransportErrorState,
   EMPTY_HISTORY_NAV,
   formatPasteRef,
@@ -141,6 +143,8 @@ import {
   reducePasteStateForDraftWrite,
   reducePendingSubmitCleared,
   reducePendingSubmitHeld,
+  reduceRetainedSubmitCleared,
+  reduceRetainedSubmitHeld,
   reduceSessionImagesReplaced,
   reduceSessionPastesCleared,
   removePasteOccurrence,
@@ -153,6 +157,7 @@ import {
   selectHistory,
   selectImageAttachments,
   selectPendingSubmit,
+  selectRetainedSubmit,
   selectSessionPasteList,
   selectSessionPasteState,
   selectTransportError,
@@ -167,6 +172,7 @@ import {
   type PasteState,
   type PendingSubmit,
   type PendingSubmitState,
+  type RetainedSubmitState,
   type TransportErrorState,
 } from './composerState.js'
 import {
@@ -500,6 +506,17 @@ export function App() {
   )
   const pendingSubmitsRef = useRef(pendingSubmits)
   pendingSubmitsRef.current = pendingSubmits
+  // D5 — a submit the sidecar refuses (the mid-turn depth cap is the reachable
+  // case) used to leave the composer empty and the images gone: `↑` history is
+  // text-only, so the attachments had no recovery path at all. The submitted
+  // message is retained HERE across the optimistic clear, and handed back when
+  // the frame stream says it was refused (`classifySubmitOutcomeFrame`, which
+  // documents what that reading can and cannot know). A ref, not state: nothing
+  // renders it, and the frame subscription below is mounted once with no deps,
+  // so a state value read inside it would always be the first one.
+  const retainedSubmitsRef = useRef<RetainedSubmitState>(
+    createRetainedSubmitState(),
+  )
   // Bug fix — per-session (was one app-wide string shown on every pane
   // regardless of which session actually failed; `selectTransportError`
   // resolves it for the pane it belongs to).
@@ -932,6 +949,23 @@ export function App() {
       )
       for (const sessionId of swapSessions) {
         preloadReservedBytesRef.current.delete(sessionId)
+      }
+      // D5 — resolve every retained submit against this batch, IN ARRIVAL
+      // ORDER. Order is what makes the reading honest: an accepted submit's
+      // user message is broadcast inside the sidecar's own dispatch of that
+      // submit, so it can never arrive behind the refusal of the same submit.
+      for (const frame of frames) {
+        if (selectRetainedSubmit(retainedSubmitsRef.current, frame.sessionId) === null) {
+          continue
+        }
+        const signal = classifySubmitOutcomeFrame(frame)
+        if (signal === 'refused') restoreRefusedSubmit(frame.sessionId)
+        else if (signal === 'settled') {
+          retainedSubmitsRef.current = reduceRetainedSubmitCleared(
+            retainedSubmitsRef.current,
+            frame.sessionId,
+          )
+        }
       }
       for (const frame of frames) {
         if (!frame.deliveryTrace) continue
@@ -2009,12 +2043,53 @@ export function App() {
     )
   }, [])
 
+  // D5 — the composer half of a refused submit. No notice of its own: the
+  // sidecar's typed error is already rendered directly above the composer and
+  // says why the message bounced, and the message reappearing in the composer
+  // is the rest of the story. A second red line restating it would be noise.
+  //
+  // The attachments REPLACE whatever is attached now, the same way a released
+  // parked prompt does: only one image is ever held
+  // (`reduceImageAttachmentAdded`), and the refused one is the one the user is
+  // waiting on. Text is merged instead, so a draft typed during the round trip
+  // survives underneath it.
+  const restoreRefusedSubmit = useCallback((sessionId: SessionId) => {
+    const retained = selectRetainedSubmit(retainedSubmitsRef.current, sessionId)
+    if (retained === null) return
+    retainedSubmitsRef.current = reduceRetainedSubmitCleared(
+      retainedSubmitsRef.current,
+      sessionId,
+    )
+    setPromptDrafts(drafts =>
+      reducePromptDrafts(
+        drafts,
+        sessionId,
+        restoreDraftWithPending(
+          selectPromptDraft(drafts, sessionId),
+          retained.text,
+        ),
+      ),
+    )
+    if (retained.images.length > 0) {
+      setImageAttachmentState(state =>
+        reduceSessionImagesReplaced(state, sessionId, retained.images),
+      )
+    }
+  }, [])
+
   const closeTab = useCallback(async (sessionId: SessionId) => {
     // Closing is the user saying they are done with this session, so a prompt
     // still queued for it is handed back rather than left to drain into a
     // session that is going away. The text lands in this session's draft, which
     // is renderer-local and survives the close, so reopening finds it intact.
     releasePendingSubmit(sessionId)
+    // A submit awaiting its answer is DROPPED rather than handed back: it was
+    // sent, and its retained copy holds base64 image data this closed session
+    // would otherwise keep alive with nothing left to resolve it.
+    retainedSubmitsRef.current = reduceRetainedSubmitCleared(
+      retainedSubmitsRef.current,
+      sessionId,
+    )
     if (shellRef.current.previews[sessionId]) {
       const plan = previewClosePlan(
         shellRef.current.tabs[sessionId] === true,
@@ -2324,6 +2399,16 @@ export function App() {
     // sidecar's T4 parseThreadGoal validation remains the trust boundary.
     try {
       getBridge().submit(sessionId, submitPrompt)
+      // D5 — the clear below is OPTIMISTIC: the sidecar can still refuse this
+      // (the mid-turn depth cap), and its answer arrives long after. Retain the
+      // exact message, images included, until the frame stream says which way
+      // it went. `↑` history keeps only the text, so without this the
+      // attachments are unrecoverable in principle, not just in practice.
+      retainedSubmitsRef.current = reduceRetainedSubmitHeld(
+        retainedSubmitsRef.current,
+        sessionId,
+        { text, images: [...images] },
+      )
       retireDraft()
       setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))
     } catch (error) {
@@ -2362,6 +2447,14 @@ export function App() {
         getBridge().submit(
           sessionId,
           buildSubmitPrompt(pending.text, pending.images ?? []),
+        )
+        // D5 — the drain hands over the SAME `app.submit`, so it can be refused
+        // the same way; clearing the park below is as optimistic as the
+        // composer clear in `submitSession`.
+        retainedSubmitsRef.current = reduceRetainedSubmitHeld(
+          retainedSubmitsRef.current,
+          sessionId,
+          { text: pending.text, images: [...(pending.images ?? [])] },
         )
         setPendingSubmits(prev => reducePendingSubmitCleared(prev, sessionId))
         setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))

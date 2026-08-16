@@ -26,11 +26,14 @@
 
 import type { ConnectionSnapshot } from './connectionState.js'
 import type { MentionItem } from './MentionPicker.js'
+import { HISTORY_REPLAY_TRUNCATION_REQUEST_ID } from '../../shared/protocol.js'
 import type {
   AgentConfigSnapshot,
+  ServerFrame,
   SessionId,
   SubmitPrompt,
 } from '../../shared/protocol.js'
+import { REPLAY_BUFFER_TRUNCATION_REQUEST_ID } from './rawMessageLog.js'
 import type { AcceptedImageType } from './imageAttachment.js'
 
 // ── @-mention ──────────────────────────────────────────────────────────────
@@ -776,12 +779,123 @@ export const PENDING_SUBMIT_RELEASED_MESSAGE =
  * Give a released prompt back to the composer without clobbering whatever the
  * user typed while it was parked: the parked text goes FIRST (it was submitted
  * first) and the live draft keeps its own line.
+ *
+ * An image-only submit carries no text (`reducePendingSubmitHeld` parks it on
+ * the strength of its attachments alone), so the empty case is real and must
+ * return the draft untouched — otherwise the restore prepends a blank line to
+ * text the user is still typing.
  */
 export function restoreDraftWithPending(
   draft: string,
   pending: string,
 ): string {
+  if (pending.length === 0) return draft
   return draft.length === 0 ? pending : `${pending}\n${draft}`
+}
+
+// ── The submit the sidecar can still refuse (D5) ─────────────────────────────
+
+/**
+ * What a `send` submit optimistically cleared out of the composer, kept until
+ * the sidecar's answer arrives. Text alone is not enough: `↑` history stores
+ * strings, so a refused image-bearing submit used to lose its attachments with
+ * no recovery path at all.
+ */
+export type RetainedSubmit = {
+  text: string
+  images: ImageAttachment[]
+}
+export type RetainedSubmitState = Record<SessionId, RetainedSubmit>
+
+export function createRetainedSubmitState(): RetainedSubmitState {
+  return {}
+}
+
+export function selectRetainedSubmit(
+  state: RetainedSubmitState,
+  sessionId: SessionId | null,
+): RetainedSubmit | null {
+  if (!sessionId) return null
+  return state[sessionId] ?? null
+}
+
+export function reduceRetainedSubmitHeld(
+  state: RetainedSubmitState,
+  sessionId: SessionId,
+  retained: RetainedSubmit,
+): RetainedSubmitState {
+  return { ...state, [sessionId]: retained }
+}
+
+export function reduceRetainedSubmitCleared(
+  state: RetainedSubmitState,
+  sessionId: SessionId,
+): RetainedSubmitState {
+  if (!(sessionId in state)) return state
+  const next = { ...state }
+  delete next[sessionId]
+  return next
+}
+
+/**
+ * What one incoming frame says about a submit still waiting for its answer.
+ *
+ * There is NO acknowledgement to correlate against: main mints the transport
+ * request id (`app/main/main.ts`, `CH_SUBMIT` → `generateRequestId()`) and the
+ * preload sender neither returns nor receives it, so the renderer cannot tell
+ * which submit an error frame belongs to. What source does guarantee is an
+ * ACCEPTANCE signal, and it is synchronous with the submit's own dispatch:
+ *
+ *  - accepted while idle → `startTurn` broadcasts the user message before it
+ *    hands the prompt to the controller (`app/sidecar/sidecarServer.ts`,
+ *    `announcePrompt` defaults true);
+ *  - accepted mid-turn → `enqueueMidTurnPrompt` broadcasts it before enqueueing;
+ *  - refused → `sendError` with no broadcast at all.
+ *
+ * The sidecar dispatches one frame at a time on a single thread and the socket
+ * preserves order, so the acceptance can never arrive after a refusal for the
+ * same submit. That makes "an error frame reached this session before any user
+ * message did" an honest reading of "this submit was refused".
+ *
+ * `settled` is the other half: anything that proves the submit's window is over
+ * (its user message, a turn boundary, a lifecycle change) drops the retained
+ * copy, so a stale one cannot be resurrected by an unrelated error much later.
+ *
+ * KNOWN LIMITS, both narrow and both bounded to a wrong composer restore (never
+ * a send, never a discard):
+ *  - TWO SUBMITS IN FLIGHT: one slot per session, latest wins. Enter twice
+ *    inside the round trip and the first submit's copy is overwritten; if the
+ *    first is the one refused, the second is what comes back.
+ *  - AN UNRELATED ERROR: an error frame the sidecar emitted BEFORE it dispatched
+ *    the submit (a permission or verb failure already on the wire) arrives
+ *    first and reads as this submit's refusal, so accepted text is handed back
+ *    while the turn it started runs. Anything emitted after the dispatch is
+ *    ordered behind the acceptance and cannot do this.
+ */
+export type SubmitOutcomeSignal = 'refused' | 'settled' | 'none'
+
+export function classifySubmitOutcomeFrame(frame: ServerFrame): SubmitOutcomeSignal {
+  if (frame.kind === 'error') {
+    // Retention notices, not refusals: both are emitted around a replay with a
+    // well-known request id and no verb behind them.
+    if (
+      frame.requestId === REPLAY_BUFFER_TRUNCATION_REQUEST_ID ||
+      frame.requestId === HISTORY_REPLAY_TRUNCATION_REQUEST_ID
+    ) {
+      return 'none'
+    }
+    return 'refused'
+  }
+  if (frame.kind === 'lifecycle') return 'settled'
+  if (frame.kind !== 'event') return 'none'
+  // A restore replays the transcript; those user messages are history, not this
+  // submit's acceptance.
+  if (frame.replay === true) return 'none'
+  if (frame.event.type === 'turn.status') return 'settled'
+  if (frame.event.type === 'message' && frame.event.message.type === 'user') {
+    return 'settled'
+  }
+  return 'none'
 }
 
 // ── Per-session transport error ──────────────────────────────────────────────
