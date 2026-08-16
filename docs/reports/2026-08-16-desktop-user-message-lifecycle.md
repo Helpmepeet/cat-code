@@ -13,6 +13,23 @@ They are in one document because they operate on the same substrate: the process
 
 All claims are anchored to current source. Dated docs are not evidence; where this report and source disagree, source wins. Claims that rest on an exhaustive search finding nothing are labelled **(absence claim)**.
 
+## Resolution ledger (added 2026-08-16, after implementation)
+
+The findings below are left as they were found. What happened to each:
+
+| Finding | Outcome | Commit | Row |
+|---|---|---|---|
+| D1a — a queued message reads as sent | **Fixed.** Mid-turn messages now stage above the composer and enter the transcript only on delivery, via a `stagedPrompts` map and the engine's `notifyCommandLifecycle` consumption signal. The stale sidecar comment denying that signal exists is corrected. | `72594238` | CC-65 |
+| D1b — no way to take a message back | **Fixed.** A `prompt.recall` verb carrying only a `requestId`, with a `Take back` control on the staged group. | `d5c364b1` | CC-67 |
+| D2 — mid-turn image messages dropped, depth bound bypassed | **Fixed.** `isDeliverableParentPrompt` no longer requires a string value. | `0190fd66` | CC-62 |
+| D3 — slash commands: instant in the terminal, an extra turn on the desktop | **Closed as not applicable**, with evidence. Every `immediate: true` command is `type: 'local-jsx'`, an Ink panel the desktop discards under `isNonInteractiveSession` (`src/utils/processUserInput/processSlashCommand.tsx:646-653`), and the desktop already has native live surfaces for the valuable ones (`model.set`, `effort.set`, `fast.set`, context, rename, stats). Porting the terminal mechanism would re-implement working features worse. | — | — |
+| D4 — boundary drain runs one turn per message | **Scoped and stopped.** Parity is N user messages with N uuids in one query; every desktop layer from `controller.submit` to `processUserInput` is singular, and merging prompts into one block array collapses them to one uuid. Needs a plural-prompt app-runtime contract change with two consumers, so it is deferred to its own session. | — | — |
+| D5 — a refused submit discarded the message, images unrecoverable | **Fixed.** Optimistic clear with restore on refusal, using the sidecar's dispatch-ordering guarantee in place of the correlation id the renderer cannot have. | `780a4135` | CC-63 |
+
+Three things found during implementation that this report did not predict, each recorded in its row: the boundary drain's retry path re-announces an already-announced prompt unless `announcePrompt` is keyed on staged-ness; recall has a second race window that is **not** detectable, where deleting a staged entry would leave a model-answered message with no transcript row (handled with a bounded `recalledPrompts` map); and D1a broke D5's acceptance signal, which was repaired rather than papered over.
+
+All GUI-dependent acceptance across CC-63, CC-65, and CC-67 remains **operator-owned and unverified**. The renderer suite is SSR-only: it proves reducers and markup, never that a frame reaches a pane, that a click fires, or that a composer visibly refills.
+
 ---
 
 # Part A — Sending during a running response
