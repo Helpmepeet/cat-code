@@ -6,6 +6,7 @@
 import { useEffect, useState } from 'react'
 
 import type {
+  UsageStatsDailyActivityItem,
   UsageStatsDailyModelTokens,
   UsageStatsModelUsageItem,
   UsageStatsRange,
@@ -253,6 +254,156 @@ export function computeChartSeries(
     series,
     maxDailyTotal,
     totalWindowTokens,
+  }
+}
+
+export type DailyActivitySeries = {
+  dates: string[]
+  displayDates: string[]
+  sessions: number[]
+  messages: number[]
+  toolCalls: number[]
+  maxSessions: number
+  maxMessages: number
+  maxToolCalls: number
+  totalSessions: number
+  totalMessages: number
+  totalToolCalls: number
+}
+
+/**
+ * Transforms `dailyActivity` into three aligned per-day series.
+ *
+ * They are deliberately kept apart with their own maxima rather than merged onto
+ * one axis: message counts run one to two orders of magnitude above session
+ * counts, so a shared scale flattens sessions into the baseline, and a second
+ * y-axis to rescue them is the one chart form that is never correct. The three
+ * are drawn as small multiples instead.
+ *
+ * Order is the engine's own (ascending by date, `src/utils/stats.ts:389`); this
+ * does not re-sort, matching `computeChartSeries`.
+ */
+export function computeDailyActivitySeries(
+  dailyActivity: UsageStatsDailyActivityItem[],
+): DailyActivitySeries {
+  const dates: string[] = []
+  const displayDates: string[] = []
+  const sessions: number[] = []
+  const messages: number[] = []
+  const toolCalls: number[] = []
+
+  for (const entry of dailyActivity ?? []) {
+    dates.push(entry.date)
+    displayDates.push(formatDateLabel(entry.date))
+    sessions.push(entry.sessionCount ?? 0)
+    messages.push(entry.messageCount ?? 0)
+    toolCalls.push(entry.toolCallCount ?? 0)
+  }
+
+  const sum = (values: number[]) => values.reduce((acc, val) => acc + val, 0)
+
+  return {
+    dates,
+    displayDates,
+    sessions,
+    messages,
+    toolCalls,
+    maxSessions: Math.max(0, ...sessions),
+    maxMessages: Math.max(0, ...messages),
+    maxToolCalls: Math.max(0, ...toolCalls),
+    totalSessions: sum(sessions),
+    totalMessages: sum(messages),
+    totalToolCalls: sum(toolCalls),
+  }
+}
+
+export type TokensPerSessionSeries = {
+  dates: string[]
+  displayDates: string[]
+  /** Tokens divided by sessions, for each day that recorded a session. */
+  values: number[]
+  maxValue: number
+  /** Window-wide tokens per session. See the weighting note below. */
+  averagePerSession: number
+  /** Window-wide tokens per message. */
+  averagePerMessage: number
+  /** Days carrying tokens that no session start was recorded against. */
+  subagentOnlyDays: number
+}
+
+/**
+ * Joins the two daily series into a per-day efficiency ratio.
+ *
+ * Joined BY DATE, never zipped by index: the two arrays are built from different
+ * predicates upstream and their date sets genuinely differ. `dailyModelTokens`
+ * gains a date whenever any file logged tokens, subagent files included
+ * (`src/utils/stats.ts:373`), while `dailyActivity` gains one only for a real
+ * session file (`:269`, `:290`). So a day whose only traffic was subagent runs
+ * carries tokens and no sessions, and dividing those positionally would pair a
+ * day's tokens with another day's session count.
+ *
+ * Such days are counted in `subagentOnlyDays` and left unplotted rather than
+ * drawn as a spike: their tokens are real but the denominator is not zero, it is
+ * unknown, and an infinite ratio is not a data point.
+ *
+ * `averagePerSession` is a window aggregate (all tokens over all sessions),
+ * which is NOT the mean of `values` — it includes the unplotted days' tokens and
+ * weights each day by its session count. That is the honest figure for "what a
+ * session costs here", and it is why the reference line can sit off the visual
+ * centre of the dots.
+ */
+export function computeTokensPerSessionSeries(
+  dailyModelTokens: UsageStatsDailyModelTokens[],
+  dailyActivity: UsageStatsDailyActivityItem[],
+): TokensPerSessionSeries {
+  const tokensByDate = new Map<string, number>()
+  let totalTokens = 0
+  for (const entry of dailyModelTokens ?? []) {
+    let dayTotal = 0
+    for (const count of Object.values(entry.tokensByModel ?? {})) {
+      dayTotal += count ?? 0
+    }
+    tokensByDate.set(entry.date, (tokensByDate.get(entry.date) ?? 0) + dayTotal)
+    totalTokens += dayTotal
+  }
+
+  const dates: string[] = []
+  const displayDates: string[] = []
+  const values: number[] = []
+  const datesWithSessions = new Set<string>()
+  let maxValue = 0
+  let totalSessions = 0
+  let totalMessages = 0
+
+  for (const entry of dailyActivity ?? []) {
+    const sessionCount = entry.sessionCount ?? 0
+    totalSessions += sessionCount
+    totalMessages += entry.messageCount ?? 0
+    if (sessionCount <= 0) continue
+    datesWithSessions.add(entry.date)
+
+    const perSession = Math.round((tokensByDate.get(entry.date) ?? 0) / sessionCount)
+    dates.push(entry.date)
+    displayDates.push(formatDateLabel(entry.date))
+    values.push(perSession)
+    if (perSession > maxValue) maxValue = perSession
+  }
+
+  let subagentOnlyDays = 0
+  for (const [date, tokens] of tokensByDate) {
+    if (tokens > 0 && !datesWithSessions.has(date)) subagentOnlyDays++
+  }
+
+  return {
+    dates,
+    displayDates,
+    values,
+    maxValue,
+    averagePerSession:
+      totalSessions > 0 ? Math.round(totalTokens / totalSessions) : 0,
+    averagePerMessage:
+      totalMessages > 0 ? Math.round(totalTokens / totalMessages) : 0,
+    subagentOnlyDays,
   }
 }
 

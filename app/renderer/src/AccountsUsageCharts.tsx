@@ -12,13 +12,16 @@
 import { useState, type ReactNode } from 'react'
 import {
   computeChartSeries,
+  computeDailyActivitySeries,
   computeModelBreakdown,
+  computeTokensPerSessionSeries,
   formatTokens,
   type ChartMultiSeries,
   type ModelBreakdownItem,
   type UsageStatsDisplayState,
 } from './statsState.js'
 import type {
+  UsageStatsDailyActivityItem,
   UsageStatsDailyModelTokens,
   UsageStatsModelUsageItem,
 } from '../../shared/protocol.js'
@@ -315,14 +318,422 @@ export function DailyModelTokenChart({
   )
 }
 
+/**
+ * The terse not-loaded treatment for the cards that sit BESIDE the big chart.
+ * The full "Could not read session history" sentence lives in one place, on the
+ * chart card above; four copies of it would be noise.
+ */
+function TerseDataState({ dataState }: { dataState: UsageStatsDisplayState }) {
+  return (
+    <div className="p-4 text-center text-[12px] text-text-ghost">
+      {dataState === 'pending' ? 'Loading' : 'Unavailable'}
+    </div>
+  )
+}
+
+const STRIP_WIDTH = 320
+const STRIP_HEIGHT = 44
+const STRIP_BAR_GAP = 2
+
+type ActivityStripProps = {
+  values: number[]
+  max: number
+  hoveredIndex: number | null
+  onHover: (index: number | null) => void
+  label: string
+}
+
+/**
+ * One row of the small-multiples strip: bars on their own scale.
+ *
+ * A day that recorded zero draws a baseline stub rather than nothing, so an idle
+ * day is visibly idle instead of looking like a gap in the data.
+ */
+function ActivityStrip({ values, max, hoveredIndex, onHover, label }: ActivityStripProps) {
+  const count = Math.max(1, values.length)
+  const colWidth = STRIP_WIDTH / count
+  const barWidth = Math.max(1.5, colWidth - STRIP_BAR_GAP)
+  const scale = max > 0 ? max : 1
+
+  return (
+    <svg
+      viewBox={`0 0 ${STRIP_WIDTH} ${STRIP_HEIGHT}`}
+      className="w-full text-accent"
+      style={{ height: 'auto' }}
+      role="img"
+      aria-label={`${label} per day`}
+    >
+      {values.map((value, i) => {
+        const barHeight = value > 0 ? Math.max(2, (value / scale) * STRIP_HEIGHT) : 1.5
+        const x = i * colWidth + (colWidth - barWidth) / 2
+        return (
+          <rect
+            key={`bar-${i}`}
+            x={x}
+            y={STRIP_HEIGHT - barHeight}
+            width={barWidth}
+            height={barHeight}
+            rx="1.5"
+            fill="currentColor"
+            fillOpacity={value > 0 ? (hoveredIndex === i ? 1 : 0.7) : 0.25}
+            className="transition-opacity"
+          />
+        )
+      })}
+      {/* Hover targets, wider than the bars so thin days stay reachable. */}
+      {values.map((_, i) => (
+        <rect
+          key={`hit-${i}`}
+          x={i * colWidth}
+          y={0}
+          width={colWidth}
+          height={STRIP_HEIGHT}
+          fill="transparent"
+          className="cursor-pointer"
+          onMouseEnter={() => onHover(i)}
+        />
+      ))}
+    </svg>
+  )
+}
+
+export type DailyActivityChartProps = {
+  dailyActivity: UsageStatsDailyActivityItem[]
+  range: '7d' | '30d'
+  /** Whether a snapshot arrived, is still coming, or failed to. */
+  dataState?: UsageStatsDisplayState
+}
+
+/**
+ * Sessions, messages, and tool calls per day, as three small multiples.
+ *
+ * Small multiples rather than grouped bars because the three measures differ by
+ * one to two orders of magnitude; see `computeDailyActivitySeries` for why a
+ * second y-axis is not the alternative.
+ */
+export function DailyActivityChart({
+  dailyActivity,
+  range,
+  dataState = 'loaded',
+}: DailyActivityChartProps) {
+  const series = computeDailyActivitySeries(dailyActivity)
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
+
+  if (dataState !== 'loaded') return <TerseDataState dataState={dataState} />
+
+  if (series.dates.length === 0) {
+    return (
+      <div className="p-4 text-center text-[12px] text-text-subtle">
+        No sessions in this {range === '30d' ? '30-day' : '7-day'} period.
+      </div>
+    )
+  }
+
+  const rows = [
+    { label: 'Sessions', values: series.sessions, max: series.maxSessions },
+    { label: 'Messages', values: series.messages, max: series.maxMessages },
+    { label: 'Tool calls', values: series.toolCalls, max: series.maxToolCalls },
+  ]
+
+  const firstDate = series.displayDates[0] ?? ''
+  const lastDate = series.displayDates[series.displayDates.length - 1] ?? ''
+
+  return (
+    <div
+      className="flex flex-col gap-3"
+      onMouseLeave={() => setHoveredIndex(null)}
+      data-testid="daily-activity-chart"
+    >
+      {rows.map(row => (
+        <div key={row.label} className="flex flex-col gap-1">
+          <div className="flex items-baseline justify-between text-[11px]">
+            <span className="font-medium text-text-primary">{row.label}</span>
+            <span className="font-mono text-text-subtle">
+              peak {row.max.toLocaleString()}
+            </span>
+          </div>
+          <ActivityStrip
+            values={row.values}
+            max={row.max}
+            hoveredIndex={hoveredIndex}
+            onHover={setHoveredIndex}
+            label={row.label}
+          />
+        </div>
+      ))}
+
+      {/* Window ends only. Per-day labels collide at 30 points in a half-width
+          card, and the hover readout already names any specific day. */}
+      <div className="flex items-center justify-between font-mono text-[10px] text-text-subtle">
+        <span>{firstDate}</span>
+        <span>{lastDate}</span>
+      </div>
+
+      {hoveredIndex !== null && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-shell-seam bg-surface-raised px-3 py-2 text-[11px]">
+          <span className="font-mono font-semibold text-text-primary">
+            {series.displayDates[hoveredIndex]}
+          </span>
+          {rows.map(row => (
+            <span key={row.label} className="text-text-subtle">
+              {row.label}{' '}
+              <span className="font-mono font-medium text-text-primary">
+                {(row.values[hoveredIndex] ?? 0).toLocaleString()}
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export type TokensPerSessionChartProps = {
+  dailyModelTokens: UsageStatsDailyModelTokens[]
+  dailyActivity: UsageStatsDailyActivityItem[]
+  range: '7d' | '30d'
+  /** Whether a snapshot arrived, is still coming, or failed to. */
+  dataState?: UsageStatsDisplayState
+}
+
+/**
+ * Tokens consumed per session, day by day, against the window average.
+ *
+ * One series, so no legend: the card title names it. The dashed reference line
+ * is the window aggregate, which is weighted by session count and is not the
+ * mean of the plotted dots (`computeTokensPerSessionSeries`).
+ */
+export function TokensPerSessionChart({
+  dailyModelTokens,
+  dailyActivity,
+  range,
+  dataState = 'loaded',
+}: TokensPerSessionChartProps) {
+  const series = computeTokensPerSessionSeries(dailyModelTokens, dailyActivity)
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
+
+  if (dataState !== 'loaded') return <TerseDataState dataState={dataState} />
+
+  if (series.values.length === 0) {
+    return (
+      <div className="p-4 text-center text-[12px] text-text-subtle">
+        No sessions to measure in this {range === '30d' ? '30-day' : '7-day'} period.
+      </div>
+    )
+  }
+
+  const width = 320
+  const height = 130
+  const padLeft = 40
+  const padRight = 8
+  const padTop = 12
+  const padBottom = 20
+  const plotWidth = width - padLeft - padRight
+  const plotHeight = height - padTop - padBottom
+
+  const pointCount = series.values.length
+  const maxVal = series.maxValue > 0 ? series.maxValue * 1.15 : 1000
+
+  const getX = (i: number) => {
+    if (pointCount <= 1) return padLeft + plotWidth / 2
+    return padLeft + (i / (pointCount - 1)) * plotWidth
+  }
+  const getY = (val: number) =>
+    padTop + plotHeight - (Math.max(0, val) / maxVal) * plotHeight
+
+  const linePoints = series.values.map((v, i) => `${getX(i)},${getY(v)}`).join(' ')
+  const areaPoints = [
+    `${getX(0)},${padTop + plotHeight}`,
+    ...series.values.map((v, i) => `${getX(i)},${getY(v)}`),
+    `${getX(pointCount - 1)},${padTop + plotHeight}`,
+  ].join(' ')
+
+  const averageY = getY(series.averagePerSession)
+  const showAverageLine = series.averagePerSession > 0 && series.averagePerSession <= maxVal
+  const labelStep = pointCount > 8 ? Math.ceil(pointCount / 4) : 1
+
+  return (
+    <div className="flex flex-col gap-3" data-testid="tokens-per-session-chart">
+      <div className="relative w-full overflow-hidden rounded-lg bg-white/[0.02] p-2">
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          className="w-full select-none text-accent"
+          style={{ height: 'auto' }}
+          role="img"
+          aria-label="Tokens per session by day"
+          onMouseLeave={() => setHoveredIndex(null)}
+        >
+          {[0, maxVal * 0.5, maxVal].map((val, idx) => (
+            <g key={`ytick-${idx}`}>
+              <line
+                x1={padLeft}
+                y1={getY(val)}
+                x2={width - padRight}
+                y2={getY(val)}
+                stroke="currentColor"
+                className="text-text-ghost/40"
+                strokeDasharray="3 3"
+                strokeWidth="1"
+              />
+              <text
+                x={padLeft - 6}
+                y={getY(val) + 3}
+                textAnchor="end"
+                fontSize="9"
+                className="fill-text-subtle font-mono"
+              >
+                {formatTokens(Math.round(val))}
+              </text>
+            </g>
+          ))}
+
+          <polygon points={areaPoints} fill="currentColor" fillOpacity="0.08" />
+          <polyline
+            points={linePoints}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+
+          {showAverageLine && (
+            <line
+              x1={padLeft}
+              y1={averageY}
+              x2={width - padRight}
+              y2={averageY}
+              stroke="currentColor"
+              className="text-text-muted"
+              strokeWidth="1"
+              strokeDasharray="4 3"
+            />
+          )}
+
+          {series.values.map((v, i) => (
+            <circle
+              key={`dot-${i}`}
+              cx={getX(i)}
+              cy={getY(v)}
+              r={hoveredIndex === i ? '4' : '2.5'}
+              fill="currentColor"
+              stroke="var(--color-surface-panel)"
+              strokeWidth="1.5"
+              className="transition-all"
+            />
+          ))}
+
+          {hoveredIndex !== null && (
+            <line
+              x1={getX(hoveredIndex)}
+              y1={padTop}
+              x2={getX(hoveredIndex)}
+              y2={padTop + plotHeight}
+              stroke="currentColor"
+              className="text-text-muted"
+              strokeWidth="1"
+              strokeDasharray="2 2"
+            />
+          )}
+
+          {series.values.map((_, i) => {
+            const colWidth = plotWidth / Math.max(1, pointCount)
+            return (
+              <rect
+                key={`hit-${i}`}
+                x={Math.max(0, getX(i) - colWidth / 2)}
+                y={padTop}
+                width={Math.max(12, colWidth)}
+                height={plotHeight}
+                fill="transparent"
+                className="cursor-pointer"
+                onMouseEnter={() => setHoveredIndex(i)}
+              />
+            )
+          })}
+
+          {series.displayDates.map((dateLabel, i) => {
+            if (i !== 0 && i !== pointCount - 1 && i % labelStep !== 0) return null
+            return (
+              <text
+                key={`xlabel-${i}`}
+                x={getX(i)}
+                y={height - 5}
+                textAnchor="middle"
+                fontSize="9"
+                className="fill-text-subtle font-mono"
+              >
+                {dateLabel}
+              </text>
+            )
+          })}
+        </svg>
+      </div>
+
+      {hoveredIndex !== null ? (
+        <div className="flex items-center justify-between rounded-lg border border-shell-seam bg-surface-raised px-3 py-2 text-[11px]">
+          <span className="font-mono font-semibold text-text-primary">
+            {series.displayDates[hoveredIndex]}
+          </span>
+          <span className="text-text-subtle">
+            <span className="font-mono font-medium text-text-primary">
+              {formatTokens(series.values[hoveredIndex] ?? 0)}
+            </span>{' '}
+            per session
+          </span>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-x-3 text-[11px] text-text-subtle">
+          <span>
+            Average{' '}
+            <span className="font-mono font-medium text-text-primary">
+              {formatTokens(series.averagePerSession)}
+            </span>{' '}
+            per session
+          </span>
+          <span>
+            <span className="font-mono font-medium text-text-primary">
+              {formatTokens(series.averagePerMessage)}
+            </span>{' '}
+            per message
+          </span>
+        </div>
+      )}
+
+      {series.subagentOnlyDays > 0 && (
+        <p className="text-[11px] text-text-subtle">
+          {series.subagentOnlyDays}{' '}
+          {series.subagentOnlyDays === 1 ? 'day is' : 'days are'} not plotted:
+          those tokens came from subagent runs with no session of their own.
+        </p>
+      )}
+    </div>
+  )
+}
+
 export type ModelBreakdownBarsProps = {
   modelUsage: Record<string, UsageStatsModelUsageItem>
   /** Whether a snapshot arrived, is still coming, or failed to. */
   dataState?: UsageStatsDisplayState
 }
 
+/** Input's share of one model's own tokens; the output segment takes the rest. */
+function inputShare(item: ModelBreakdownItem): number {
+  if (item.totalTokens <= 0) return 0
+  return (item.inputTokens / item.totalTokens) * 100
+}
+
 /**
- * Horizontal progress bars visualizing token share per model.
+ * Horizontal progress bars visualizing token share per model, split by direction.
+ *
+ * The bar's LENGTH is the model's share of all tokens; the split WITHIN it is
+ * input versus output, which `computeModelBreakdown` has always returned and
+ * this chart used to discard. Output is the number that separates one model from
+ * another, and it was the one number the card could not show.
+ *
+ * Direction is carried by lightness of the single model hue plus a printed
+ * figure for each side, never by hue alone: the hue is the model's identity, and
+ * spending it on a second variable would collide with the legend above.
  */
 export function ModelBreakdownBars({
   modelUsage,
@@ -370,15 +781,50 @@ export function ModelBreakdownBars({
               </span>
             </div>
           </div>
-          {/* Track and fill bar */}
+          {/* Track, then the model's share split input / output */}
           <div className="h-2 w-full overflow-hidden rounded-full bg-white/[0.07]">
             <div
-              className="h-full rounded-full transition-all duration-300"
-              style={{
-                width: `${Math.max(item.percentage, 2)}%`,
-                backgroundColor: item.color,
-              }}
-            />
+              className="flex h-full gap-[2px] overflow-hidden rounded-full transition-all duration-300"
+              style={{ width: `${Math.max(item.percentage, 2)}%` }}
+            >
+              <div
+                className="h-full"
+                style={{
+                  width: `${inputShare(item)}%`,
+                  backgroundColor: item.color,
+                  opacity: 0.45,
+                }}
+                title={`Input: ${formatTokens(item.inputTokens)}`}
+              />
+              <div
+                className="h-full flex-1"
+                style={{ backgroundColor: item.color }}
+                title={`Output: ${formatTokens(item.outputTokens)}`}
+              />
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 text-[10px] text-text-subtle">
+            <span className="flex items-center gap-1.5">
+              <span
+                className="h-1.5 w-1.5 rounded-full"
+                style={{ backgroundColor: item.color, opacity: 0.45 }}
+              />
+              in{' '}
+              <span className="font-mono text-text-muted">
+                {formatTokens(item.inputTokens)}
+              </span>
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span
+                className="h-1.5 w-1.5 rounded-full"
+                style={{ backgroundColor: item.color }}
+              />
+              out{' '}
+              <span className="font-mono text-text-muted">
+                {formatTokens(item.outputTokens)}
+              </span>
+            </span>
           </div>
         </div>
       ))}

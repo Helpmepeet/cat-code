@@ -22,6 +22,8 @@
 
 import {
   DailyModelTokenChart,
+  DailyActivityChart,
+  TokensPerSessionChart,
   ModelBreakdownBars,
   CacheUsageBar,
   ActivitySparkline,
@@ -234,6 +236,44 @@ export function AccountsUsageSection({
         />
       </div>
 
+      {/* Workload Grid: what the tokens were spent on, and what a session costs */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {/* Work per Day */}
+        <div className="flex flex-col rounded-xl border border-shell-seam bg-surface-panel p-4">
+          <h3 className="mb-1 text-[12px] font-semibold text-text-primary">
+            Work per Day
+          </h3>
+          <p className="mb-4 text-[11px] text-text-subtle">
+            Sessions, messages, and tool calls, each on its own scale
+          </p>
+          <div className="flex flex-1 flex-col justify-center">
+            <DailyActivityChart
+              dailyActivity={stats?.dailyActivity ?? []}
+              range={activeRange}
+              dataState={dataState}
+            />
+          </div>
+        </div>
+
+        {/* Tokens per Session */}
+        <div className="flex flex-col rounded-xl border border-shell-seam bg-surface-panel p-4">
+          <h3 className="mb-1 text-[12px] font-semibold text-text-primary">
+            Tokens per Session
+          </h3>
+          <p className="mb-4 text-[11px] text-text-subtle">
+            What one session costs, day by day, against the window average
+          </p>
+          <div className="flex flex-1 flex-col justify-center">
+            <TokensPerSessionChart
+              dailyModelTokens={stats?.dailyModelTokens ?? []}
+              dailyActivity={stats?.dailyActivity ?? []}
+              range={activeRange}
+              dataState={dataState}
+            />
+          </div>
+        </div>
+      </div>
+
       {/* Breakdown Grid */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {/* Token Distribution by Model */}
@@ -242,7 +282,7 @@ export function AccountsUsageSection({
             Token Distribution by Model
           </h3>
           <p className="mb-4 text-[11px] text-text-subtle">
-            Total tokens consumed per model during this period
+            Share of tokens per model, split into input and output
           </p>
           <div className="flex flex-1 flex-col justify-center">
             <ModelBreakdownBars

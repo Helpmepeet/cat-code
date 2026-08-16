@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import {
   computeChartSeries,
+  computeDailyActivitySeries,
   computeModelBreakdown,
+  computeTokensPerSessionSeries,
   formatDateLabel,
   formatModelDisplayName,
   formatTokens,
@@ -93,5 +95,117 @@ describe('statsState', () => {
     expect(breakdown[1]?.modelName).toBe('gpt-4o')
     expect(breakdown[1]?.totalTokens).toBe(10000)
     expect(breakdown[1]?.percentage).toBe(20)
+  })
+
+  test('computeModelBreakdown keeps the input/output split the bars now draw', () => {
+    const breakdown = computeModelBreakdown({
+      'claude-3-5-sonnet': {
+        inputTokens: 30000,
+        outputTokens: 10000,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 0,
+      },
+    })
+    expect(breakdown[0]?.inputTokens).toBe(30000)
+    expect(breakdown[0]?.outputTokens).toBe(10000)
+  })
+
+  /* --------------------------------------------------------------------- *
+   * Work per day
+   * --------------------------------------------------------------------- */
+
+  test('computeDailyActivitySeries keeps each measure on its own scale', () => {
+    const series = computeDailyActivitySeries([
+      { date: '2026-08-13', messageCount: 812, sessionCount: 9, toolCallCount: 240 },
+      { date: '2026-08-14', messageCount: 400, sessionCount: 12, toolCallCount: 90 },
+    ])
+
+    expect(series.dates).toEqual(['2026-08-13', '2026-08-14'])
+    expect(series.displayDates).toEqual(['Aug 13', 'Aug 14'])
+    expect(series.sessions).toEqual([9, 12])
+    expect(series.messages).toEqual([812, 400])
+    expect(series.toolCalls).toEqual([240, 90])
+    // Separate maxima are the whole point: one shared scale would flatten
+    // sessions (peak 12) against messages (peak 812) into the baseline.
+    expect(series.maxSessions).toBe(12)
+    expect(series.maxMessages).toBe(812)
+    expect(series.maxToolCalls).toBe(240)
+    expect(series.totalSessions).toBe(21)
+    expect(series.totalMessages).toBe(1212)
+    expect(series.totalToolCalls).toBe(330)
+  })
+
+  test('computeDailyActivitySeries handles an empty window without NaN maxima', () => {
+    const series = computeDailyActivitySeries([])
+    expect(series.dates).toEqual([])
+    expect(series.maxSessions).toBe(0)
+    expect(series.maxMessages).toBe(0)
+    expect(series.totalSessions).toBe(0)
+  })
+
+  /* --------------------------------------------------------------------- *
+   * Tokens per session
+   * --------------------------------------------------------------------- */
+
+  test('computeTokensPerSessionSeries divides each day by its own sessions', () => {
+    const series = computeTokensPerSessionSeries(
+      [
+        { date: '2026-08-13', tokensByModel: { 'gpt-5.6-sol': 90_000 } },
+        { date: '2026-08-14', tokensByModel: { 'gpt-5.6-sol': 40_000, 'o3-mini': 20_000 } },
+      ],
+      [
+        { date: '2026-08-13', messageCount: 300, sessionCount: 9, toolCallCount: 40 },
+        { date: '2026-08-14', messageCount: 100, sessionCount: 4, toolCallCount: 10 },
+      ],
+    )
+
+    expect(series.values).toEqual([10_000, 15_000])
+    expect(series.maxValue).toBe(15_000)
+    // Window aggregate: 150,000 tokens over 13 sessions and 400 messages.
+    expect(series.averagePerSession).toBe(11_538)
+    expect(series.averagePerMessage).toBe(375)
+    expect(series.subagentOnlyDays).toBe(0)
+  })
+
+  test('computeTokensPerSessionSeries joins by date, never by position', () => {
+    // THE TRAP. The two series come from different upstream predicates, so their
+    // date sets differ: a subagent-only day carries tokens and no session start
+    // (`src/utils/stats.ts:290` vs `:373`). Zipping by index would pair Aug 14's
+    // tokens with Aug 12's session count and plot a number that is nobody's.
+    const series = computeTokensPerSessionSeries(
+      [
+        { date: '2026-08-12', tokensByModel: { 'gpt-5.6-sol': 84_720 } },
+        { date: '2026-08-14', tokensByModel: { 'gpt-5.6-sol': 60_000 } },
+      ],
+      [{ date: '2026-08-14', messageCount: 200, sessionCount: 4, toolCallCount: 30 }],
+    )
+
+    expect(series.dates).toEqual(['2026-08-14'])
+    expect(series.values).toEqual([15_000])
+    // Not dropped, not drawn as a spike: counted and reported.
+    expect(series.subagentOnlyDays).toBe(1)
+    // The unplotted day's tokens still count toward what a session really costs.
+    expect(series.averagePerSession).toBe(Math.round(144_720 / 4))
+  })
+
+  test('computeTokensPerSessionSeries never divides by a zero session count', () => {
+    const series = computeTokensPerSessionSeries(
+      [{ date: '2026-08-14', tokensByModel: { 'gpt-5.6-sol': 60_000 } }],
+      [{ date: '2026-08-14', messageCount: 0, sessionCount: 0, toolCallCount: 0 }],
+    )
+    expect(series.values).toEqual([])
+    expect(series.values.every(Number.isFinite)).toBe(true)
+    expect(series.averagePerSession).toBe(0)
+    expect(series.subagentOnlyDays).toBe(1)
+  })
+
+  test('computeTokensPerSessionSeries plots a session day that spent nothing', () => {
+    // Sessions with no token entry are a measured zero, not a missing day.
+    const series = computeTokensPerSessionSeries(
+      [],
+      [{ date: '2026-08-14', messageCount: 3, sessionCount: 2, toolCallCount: 0 }],
+    )
+    expect(series.values).toEqual([0])
+    expect(series.averagePerSession).toBe(0)
   })
 })

@@ -13,8 +13,10 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { AccountsUsageSection } from './AccountsUsageSection.js'
 import {
   CacheUsageBar,
+  DailyActivityChart,
   DailyModelTokenChart,
   ModelBreakdownBars,
+  TokensPerSessionChart,
 } from './AccountsUsageCharts.js'
 import type { UsageStatsSnapshot } from '../../shared/protocol.js'
 
@@ -173,4 +175,99 @@ test('an unavailable breakdown card does not claim no model activity', () => {
     <ModelBreakdownBars modelUsage={{}} dataState="unavailable" />,
   )
   expect(html).not.toContain('No model activity')
+})
+
+/* ------------------------------------------------------------------------- *
+ * Work per day, tokens per session, and the input/output split
+ *
+ * All three read data the snapshot already carried and the section threw away:
+ * `dailyActivity` crossed the wire with no consumer at all, and
+ * `computeModelBreakdown` returned an input/output split the bars never drew.
+ * ------------------------------------------------------------------------- */
+
+test('the section renders the workload the tokens were spent on', () => {
+  const html = render(stats())
+  expect(html).toContain('Work per Day')
+  expect(html).toContain('Sessions')
+  expect(html).toContain('Messages')
+  expect(html).toContain('Tool calls')
+  // Each measure's own peak, because they do not share a scale.
+  expect(html).toContain('peak 9')
+  expect(html).toContain('peak 812')
+  expect(html).toContain('peak 240')
+})
+
+test('the section renders what one session costs', () => {
+  const html = render(stats())
+  expect(html).toContain('Tokens per Session')
+  // 647,433 tokens over 9 sessions and 812 messages, through the shared formatter.
+  expect(html).toContain('71.9k')
+  expect(html).toContain('per session')
+  expect(html).toContain('797')
+  expect(html).toContain('per message')
+})
+
+test('the section says when a day could not be plotted, rather than dropping it', () => {
+  // The fixture's Aug 12 carries tokens with no session start of its own. A
+  // silently missing day would make the average look wrong and unexplainable.
+  const html = render(stats())
+  expect(html).toContain('1 day is')
+  expect(html).toContain('not plotted')
+})
+
+test('the model bars show output, not just the total', () => {
+  const html = renderToStaticMarkup(
+    <ModelBreakdownBars
+      modelUsage={{
+        'gpt-5.6-sol': {
+          inputTokens: 400_000,
+          outputTokens: 162_713,
+          cacheCreationInputTokens: 12_000,
+          cacheReadInputTokens: 900_000,
+        },
+      }}
+    />,
+  )
+  expect(html).toContain('400k')
+  expect(html).toContain('163k')
+})
+
+test('neither new chart claims an empty history before a snapshot arrives', () => {
+  // Same conflation the section shipped with, one card over: these read
+  // `dailyActivity`, which is `[]` both when nothing arrived and when the user
+  // genuinely had no sessions.
+  for (const dataState of ['pending', 'unavailable'] as const) {
+    const html =
+      renderToStaticMarkup(
+        <DailyActivityChart dailyActivity={[]} range="7d" dataState={dataState} />,
+      ) +
+      renderToStaticMarkup(
+        <TokensPerSessionChart
+          dailyModelTokens={[]}
+          dailyActivity={[]}
+          range="7d"
+          dataState={dataState}
+        />,
+      )
+    expect(html).not.toContain('No sessions')
+    expect(html).toContain(dataState === 'pending' ? 'Loading' : 'Unavailable')
+  }
+})
+
+test('a loaded but genuinely empty window earns the empty claim', () => {
+  const html =
+    renderToStaticMarkup(
+      <DailyActivityChart dailyActivity={[]} range="30d" dataState="loaded" />,
+    ) +
+    renderToStaticMarkup(
+      <TokensPerSessionChart
+        dailyModelTokens={[]}
+        dailyActivity={[]}
+        range="30d"
+        dataState="loaded"
+      />,
+    )
+  expect(html).toContain('No sessions in this 30-day period.')
+  expect(html).toContain('No sessions to measure in this 30-day period.')
+  expect(html).not.toContain('Loading')
 })
