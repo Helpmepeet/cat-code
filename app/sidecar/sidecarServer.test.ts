@@ -1456,6 +1456,130 @@ test('T7 — the mid-turn queue has a DEPTH cap, not just a rate cap', async () 
   release?.()
 })
 
+/**
+ * A composer submit carrying an image is a content-block ARRAY, and the attach
+ * control stays live mid-turn, so this is an ordinary thing for a user to do.
+ * `isDeliverableParentPrompt` used to require a string, which made the depth
+ * cap, the boundary drain, and the park gate all blind to it at once. The three
+ * tests below pin each consumer; the middle one is the message loss.
+ */
+const IMAGE_PROMPT = [
+  { type: 'text' as const, text: 'what is wrong here' },
+  {
+    type: 'image' as const,
+    source: {
+      type: 'base64' as const,
+      media_type: 'image/png' as const,
+      data: 'AAAA',
+    },
+  },
+]
+
+test('T7 — a mid-turn prompt carrying an image counts toward the DEPTH cap', async () => {
+  // Without this the accumulation bound MAX_QUEUED_PROMPTS exists to impose is
+  // open: image-bearing prompts pile up limited only by the arrival-rate caps.
+  let release: (() => void) | undefined
+  const controller = new AppSessionController({
+    async *runTurn({ options }) {
+      options?.onInputPersisted?.()
+      await new Promise<void>(resolve => {
+        release = resolve
+      })
+      yield buildProbeToolUseMessage()
+    },
+  })
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'turn', prompt: 'start' }),
+  )
+  await new Promise(resolve => setTimeout(resolve, 0))
+
+  for (let i = 0; i < MAX_QUEUED_PROMPTS; i += 1) {
+    server.handleData(
+      conn,
+      clientFrame({
+        type: 'app.submit',
+        requestId: `img${i}`,
+        prompt: IMAGE_PROMPT,
+      }),
+    )
+  }
+  expect(getCommandQueueSnapshot()).toHaveLength(MAX_QUEUED_PROMPTS)
+  expect(received.filter(frame => frame.kind === 'error')).toHaveLength(0)
+
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'app.submit',
+      requestId: 'overflow',
+      prompt: IMAGE_PROMPT,
+    }),
+  )
+  expect(received.filter(frame => frame.kind === 'error')).toHaveLength(1)
+  expect(getCommandQueueSnapshot()).toHaveLength(MAX_QUEUED_PROMPTS)
+
+  release?.()
+})
+
+test('a queued image prompt no tool round drained still gets its own turn', async () => {
+  // The message loss. The user watched it leave the composer and saw it in the
+  // transcript; a turn that ends without a tool round must still deliver it.
+  const prompts: unknown[] = []
+  const releases: Array<() => void> = []
+  const controller = new AppSessionController({
+    async *runTurn({ prompt, options }) {
+      prompts.push(prompt)
+      options?.onInputPersisted?.()
+      await new Promise<void>(resolve => releases.push(resolve))
+    },
+  })
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'human-1', prompt: 'first' }),
+  )
+  await waitFor(() => prompts.length === 1)
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'app.submit',
+      requestId: 'human-2',
+      prompt: IMAGE_PROMPT,
+    }),
+  )
+
+  releases.shift()?.()
+  await waitFor(() => prompts.length === 2)
+  expect(prompts[1]).toEqual(IMAGE_PROMPT)
+  expect(getCommandQueueSnapshot()).toHaveLength(0)
+
+  // Broadcast at enqueue, so the drained turn must not announce it again.
+  const announcements = received.filter(
+    frame =>
+      frame.kind === 'event' &&
+      frame.event.type === 'message' &&
+      frame.event.message.type === 'user' &&
+      Array.isArray(frame.event.message.message?.content),
+  ).length
+  expect(announcements).toBe(1)
+
+  releases.shift()?.()
+})
+
+// The third consumer, the park gate, is deliberately NOT pinned by a test here.
+// `isParkGateOpen` refuses on `activeTurn` before it reads the queue, and the
+// boundary drain now claims a queued image prompt into a turn of its own, so
+// the state the gate guards against — an idle session with an undrained prompt
+// — is one the sidecar prevents from arising. A test would pass on the
+// `activeTurn` branch and prove nothing about the predicate.
+
 test('T4 — a mid-turn submit carrying a goalSnapshot is refused, not silently stripped', async () => {
   // The queue turns a command into an ATTACHMENT, not a submit, so there is
   // nowhere for session identity to ride. Validating the field and then dropping

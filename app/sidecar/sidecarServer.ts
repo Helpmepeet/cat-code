@@ -3919,13 +3919,20 @@ const MAX_ERROR_MESSAGE_CHARS = 1_000
  * `agentId === undefined` addresses the main thread, matching the filter the
  * engine's own mid-turn drain applies (`src/query.ts:1641`), so a subagent's
  * queued work is never mistaken for the user's.
+ *
+ * Deliberately does NOT require a string value. A composer submit carrying an
+ * image is a `ContentBlockParam[]` (`buildSubmitPrompt`), and `QueuedCommand`
+ * `value` is the same union as `AppSessionPrompt`, so the array is a prompt
+ * this session owes a turn exactly like the text case. Narrowing to strings
+ * made all three consumers blind to it at once: the depth cap stopped counting
+ * it (defeating the accumulation bound `MAX_QUEUED_PROMPTS` exists to impose),
+ * the boundary drain stopped rescuing it, and the park gate stopped holding —
+ * so a mid-turn image message the running turn never drained was broadcast to
+ * the transcript and then silently lost. Its twin below stays string-only on
+ * purpose: that one's payload becomes banner text.
  */
 function isDeliverableParentPrompt(command: QueuedCommand): boolean {
-  return (
-    command.mode === 'prompt' &&
-    command.agentId === undefined &&
-    typeof command.value === 'string'
-  )
+  return command.mode === 'prompt' && command.agentId === undefined
 }
 
 /** Its twin for worker results: same addressing rule, different mode. */
