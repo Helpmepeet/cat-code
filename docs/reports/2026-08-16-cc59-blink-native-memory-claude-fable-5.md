@@ -716,3 +716,95 @@ Session-scratchpad (ephemeral, session `5d4a371d`, contents summarized fully
 in this report): `vmmap-full-87508.txt` (§2 source), `vmmap-harness-baseline.txt`,
 per-variant sample logs (`harness-*-samples.txt`), `pa253.sh`, and the harness
 (`cc59-harness/index.html`, `main.tsx`, `vite.config.ts`).
+
+---
+
+## 18. Resolution (appended 2026-08-16, after the operator authorized the fix)
+
+**§14 option 1 is implemented and confirmed in the app.** `eda3055e`:
+`app/renderer/src/reactDevPerformanceTrack.ts` wraps `performance.measure`,
+drops calls carrying React's `detail.devtools` payload, and forwards every
+other caller untouched. Installed from `app/renderer/src/main.tsx` behind
+`import.meta.env?.DEV`; `renderer:build` then confirmed zero occurrences in
+`renderer/dist`, so packaged builds are byte-unchanged.
+
+The filter keys on `detail.devtools` rather than the `​` name prefix
+(§14's alternative): every React measure call site passes a reusable options
+object carrying that payload, and the payload is the thing being cloned, so it
+identifies the calls and the cost together. `performance.mark` needed no
+handling — the dev bundle contains no `performance.mark` call sites.
+
+### 18.1 The mechanism now has a test, not a description
+
+`app/renderer/src/reactDevPerformanceTrack.dom.test.ts` drives the real
+`react-dom/client` commit path under the existing happy-dom harness.
+`supportsUserTiming` is true there (both `console.timeStamp` and
+`performance.measure` are functions), so React really instruments.
+
+Six renders of one component produced **12 retained measures**, every one
+carrying `detail.devtools`, named `Update`, `Mount`, `Update Blocked`,
+`Cascading Update` and `​<ComponentName>` — the §7 population, reproduced
+in-repo. The component's full prop string appears **verbatim and uncapped**
+inside a retained entry, which is §8.1's `addValueToProperties` claim promoted
+from source reading to executable evidence.
+
+That baseline assertion is the load-bearing half: if React ever stops
+serializing props, it fails loudly instead of leaving the filter silently
+guarding nothing. Mutating the predicate fails 4 of the 7 tests across both
+new files.
+
+### 18.2 §13's first gap is closed
+
+The app renderer had never been probed. It has now been measured
+behaviourally, by a different route than §15 prescribed: the operator declined
+DevTools, so the renderer was sampled by external `vmmap` from a second
+terminal against a fresh dev launch (`bun run --cwd app dev`, Vite on :5173,
+no packaged-branch warning, so the dev branch is proven live).
+
+| | Failing run (05:17) | Confirming run (16:35–17:06) |
+|---|---:|---:|
+| Duration | 11.5 min, died | 31 min, healthy |
+| Sessions | 1 pane | 3 panes, 2 resumed (273 and 38 messages) |
+| First sample | 154 MB | 161.8 MB, released to 79 MB |
+| Final | 6,451 MB, PA OOM abort | 120.2 MB |
+| Peak | 6,451 MB | 194.9 MB, during the *light* phase |
+| Heavy fenced-code turns | turn 8 alone: +4,600 MB | 4 turns over 16 min, peak 138.8 MB |
+| Reclamation | none, ever | repeated: 194.9→119.2, 138.8→118.4, 138.4→120.2 |
+
+The trailing five minutes are flat (120.1, 120.1, 120.1, then 110–138 with no
+trend), so `curve-not-accelerating` and `region-growth-final-window` both pass
+where they failed on 2026-08-16, and the 750 MB single-turn ceiling follows by
+a wide margin.
+
+Two properties matter more than the totals. **Memory is released repeatedly**,
+which the failing run never did once (§2.2: plateaus flat, tag-253 regions
+crept by zero). And **the per-commit cost no longer escalates** — §1's table
+climbed 0.18 → 2.5 MB per commit across turns, whereas here four heavy
+fenced-code turns peaked *lower* than the earlier light ones. The confirming
+workload was harder than the fatal one on every axis.
+
+### 18.3 This run discriminates against the competing mechanism
+
+`2026-08-16-cc59-blink-native-memory-gpt-5.6-sol.md` attributes the growth to
+whole-value `nodeValue` replacement, LayoutNG replace-all invalidation, and
+full-node reshaping, and prescribes restructuring the streaming render path.
+
+This fix touches none of that. Every text replacement, layout invalidation,
+reshape and synchronous `getBoundingClientRect` flush still happens on every
+commit. The growth is gone regardless. That report proposed a two-fixture
+discriminator and did not run it; this is effectively that experiment, and it
+went against its verdict.
+
+### 18.4 Still open, unaffected by the fix
+
+- Which component minted the ~2.1 MB details was never observed by name
+  (§13). The fix makes the question moot operationally but leaves it unanswered.
+- The ~2,144K clone-buffer clustering was never traced to Blink's growth policy.
+- **Paint and compositor buffers remain untested by anyone.** The harness page
+  was hidden and never painted, so §6's matrix could not see them; the
+  companion report named them a plausible secondary contributor. The confirming
+  run's flat curve bounds their share as small at this workload, but does not
+  measure it.
+- `app/sidecar/subagentRestore.probe.test.ts` fails in full-suite runs and
+  passes in isolation. Pre-existing and unowned: verified by re-running the
+  suite with this work's two test files removed.
