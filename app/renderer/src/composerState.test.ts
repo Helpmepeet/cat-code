@@ -1170,6 +1170,24 @@ describe('D5 — a refused submit comes back, images included', () => {
     ).toBe('settled')
   })
 
+  test('D1b — a recall result is not a refusal, so it hands back no duplicate', () => {
+    // A recall already returns the message itself. If it also read as a refusal,
+    // the composer would restore the retained copy on top and the user would be
+    // holding the same message twice.
+    expect(
+      classifySubmitOutcomeFrame({
+        kind: 'prompt-recall.result',
+        protocolVersion: 1,
+        sessionId: S1,
+        requestId: 'recall-1',
+        ok: true,
+        message: 'Took the message back.',
+        recalled: [{ id: 'q-1', prompt: 'and check the logs' }],
+        alreadyDelivered: 0,
+      } as ServerFrame),
+    ).toBe('none')
+  })
+
   test('streaming and assistant output leave the retained submit alone', () => {
     // The depth-cap refusal lands mid-turn, so the assistant is streaming while
     // the submit waits. Counting those frames would drop the copy before the

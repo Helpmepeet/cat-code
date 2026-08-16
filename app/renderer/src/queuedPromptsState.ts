@@ -16,9 +16,11 @@
 
 import type {
   QueuedPromptItem,
+  RecalledPrompt,
   ServerFrame,
   SessionId,
 } from '../../shared/protocol.js'
+import type { ImageAttachment } from './composerState.js'
 
 export type QueuedPromptsState = {
   sessions: Record<SessionId, readonly QueuedPromptItem[]>
@@ -57,6 +59,48 @@ export function reduceQueuedPromptsState(
   }
 
   return state
+}
+
+/**
+ * D1b — fold the messages a recall took back into one composer draft.
+ *
+ * The terminal's `↑` pops EVERY editable queued command into the input at once,
+ * joined by newlines, with pasted images restored
+ * (`src/utils/messageQueueManager.ts` `popAllEditable`). This is that join. It
+ * is a pure function so the outcome is testable without driving the composer,
+ * which the SSR-only renderer harness cannot do.
+ *
+ * Images are collected across all recalled messages in the same order. The
+ * composer holds one at a time (`reduceImageAttachmentAdded`), and
+ * `reduceSessionImagesReplaced` is what decides which survives; ids are assigned
+ * here so the fold has no dependency on what is currently attached.
+ */
+export function foldRecalledPrompts(prompts: readonly RecalledPrompt[]): {
+  text: string
+  images: ImageAttachment[]
+} {
+  const texts: string[] = []
+  const images: ImageAttachment[] = []
+  for (const { prompt } of prompts) {
+    if (typeof prompt === 'string') {
+      if (prompt.length > 0) texts.push(prompt)
+      continue
+    }
+    for (const block of prompt) {
+      if (block.type === 'text') {
+        if (block.text.length > 0) texts.push(block.text)
+        continue
+      }
+      images.push({
+        id: images.length + 1,
+        mediaType: block.source.media_type,
+        data: block.source.data,
+        // The sent message carries no filename; only the picker ever had one.
+        name: 'image',
+      })
+    }
+  }
+  return { text: texts.join('\n'), images }
 }
 
 /** What this session has waiting, oldest first (empty before any snapshot). */

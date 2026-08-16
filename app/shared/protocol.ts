@@ -493,6 +493,7 @@ export type SidecarClientMessage =
   | SessionActionVerbMessage
   | ContextBreakdownVerbMessage
   | StatsQueryMessage
+  | PromptRecallMessage
   | AppParkMessage
 
 /**
@@ -2818,8 +2819,9 @@ export type GeneratedImagePreviewFrame = {
  * how the desktop learns the same thing.
  *
  * Outbound only, and deliberately so: displaying what is waiting needs no new
- * inbound vocabulary. Taking a message BACK would (a dequeue verb), and that is
- * a separate security-baseline change, not part of this frame.
+ * inbound vocabulary. Taking a message BACK does, which is why that is a
+ * separate verb with its own boundary treatment (D1b, below) rather than
+ * anything this frame carries.
  *
  * The sidecar re-sends the whole list on every command-queue change and once per
  * attach, so it is point-in-time state a reader applies wholesale (retention
@@ -2847,6 +2849,87 @@ export type QueuedPromptsSnapshotFrame = {
   sessionId: SessionId
   /** Oldest first, matching the order the engine will drain them in. */
   prompts: QueuedPromptItem[]
+}
+
+/* ------------------------------------------------------------------------- *
+ * D1b — taking a waiting message back
+ * ------------------------------------------------------------------------- *
+ *
+ * The terminal lets `↑` on an empty composer pop EVERY editable queued command
+ * back into the input, joined by newlines, with pasted images restored
+ * (`src/utils/messageQueueManager.ts` `popAllEditable`, driven from
+ * `src/components/PromptInput/PromptInput.tsx`). It is a pop-to-EDIT, not a
+ * delete: the message returns to where the user can change it.
+ *
+ * This is the app's version, and unlike the D1a snapshot above it IS new inbound
+ * vocabulary, so it carries the full boundary treatment (sidecar-local Zod
+ * schema, closed `checkStrictKeys` entry, boundary tests). What keeps that
+ * surface as small as it can be: the renderer authors NOTHING but a correlation
+ * id. There is no target field, because recall means "everything of mine that is
+ * still waiting", exactly as `↑` does. So there is no id to forge, and a
+ * subagent's queued work is unreachable from here by construction (the sidecar
+ * filters on its own `isDeliverableParentPrompt`, which requires
+ * `agentId === undefined`).
+ *
+ * The RACE this cannot close, and does not pretend to: the engine snapshots the
+ * queue (`src/query.ts:1768`), awaits, and only then removes what it consumed
+ * (`:1842`). A boundary drain has its own window — it takes a command off the
+ * queue and awaits `startTurn` before the message stops being staged. A recall
+ * landing inside either window can find less than the user was shown. No lock
+ * closes it and none is being added to the engine, so the frame reports what
+ * actually happened instead: {@link PromptRecallResultFrame.recalled} is what
+ * came back, {@link PromptRecallResultFrame.alreadyDelivered} is what the engine
+ * had already taken. The renderer says the true thing for each.
+ */
+export const PROMPT_RECALL_VERB_TYPES = ['prompt.recall'] as const
+
+export type PromptRecallVerbType = (typeof PROMPT_RECALL_VERB_TYPES)[number]
+
+/**
+ * Take back every message this session has waiting for its running response.
+ * Deliberately parameterless beyond the T5a-analog `requestId`.
+ */
+export type PromptRecallMessage = {
+  type: 'prompt.recall'
+  requestId: string
+}
+
+export type RecalledPrompt = {
+  /** The uuid its staged row carried, so a reader can match the two up. */
+  id: string
+  /**
+   * The message as it was SENT, not the truncated preview `QueuedPromptItem`
+   * carries: the composer has to be able to restore it whole, images included
+   * (an image-bearing mid-turn prompt is a content-block array, and losing the
+   * image is the failure the terminal's `pastedContents` restore exists to
+   * avoid). Bounded by `MAX_QUEUED_PROMPTS` × `MAX_PROMPT_BYTES`, well inside
+   * `MAX_OUTBOUND_FRAME_BYTES`, and it only ever rides an explicit user action.
+   */
+  prompt: AppSubmitPrompt
+}
+
+/**
+ * Outbound result echoing the verb's `requestId` (T5a-analog). Carries the
+ * messages themselves because the renderer cannot re-derive them: the staged
+ * snapshot is a truncated, image-less preview by design.
+ */
+export type PromptRecallResultFrame = {
+  kind: 'prompt-recall.result'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  requestId: string
+  /**
+   * True when everything that was waiting came back. False when the engine got
+   * to at least one of them first, which is the only outcome worth telling the
+   * user about.
+   */
+  ok: boolean
+  /** Redacted, human-readable outcome; NEVER carries token material. */
+  message: string
+  /** What came back, oldest first. Restore into the composer in this order. */
+  recalled: RecalledPrompt[]
+  /** How many waiting messages the engine had already taken. */
+  alreadyDelivered: number
 }
 
 export type ServerFramePayload =
@@ -2885,6 +2968,7 @@ export type ServerFramePayload =
   | SettingsResultFrame
   | UsageStatsSnapshotFrame
   | QueuedPromptsSnapshotFrame
+  | PromptRecallResultFrame
 
 /**
  * Metadata-only delivery envelope. Optional so an older sidecar remains
@@ -2940,6 +3024,7 @@ const SERVER_FRAME_KINDS: Record<ServerFrameKind, true> = {
   'generated-image-preview': true,
   'stats.usage.snapshot': true,
   'queued-prompts.snapshot': true,
+  'prompt-recall.result': true,
 }
 
 export function isServerFrameKind(value: unknown): value is ServerFrameKind {
@@ -3145,6 +3230,16 @@ export type CatCodeBridge = {
    * engine session id. No engine object, no path, no token crosses.
    */
   sessionActionVerb(sessionId: SessionId, verb: SessionActionVerbMessage): void
+  /**
+   * D1b — take back every message the addressed session has waiting for its
+   * running response, the way `↑` pops queued commands back into the terminal's
+   * composer. The renderer authors ONLY a `requestId`: there is no target, so
+   * nothing selects which message (or whose) is taken. The sidecar removes them
+   * from the engine's OWN command queue with its own main-thread-prompt filter,
+   * and answers with a `prompt-recall.result` carrying what actually came back.
+   * No engine object, no path, no token crosses.
+   */
+  recallPrompts(sessionId: SessionId, verb: PromptRecallMessage): void
   /** Ask for a fresh context breakdown; answered by a `context-breakdown.snapshot`. */
   contextBreakdownVerb(
     sessionId: SessionId,

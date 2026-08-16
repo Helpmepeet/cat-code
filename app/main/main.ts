@@ -132,6 +132,7 @@ import { mintDeliveryTrace, replayDeliveryTrace, type DeliveryAcknowledgement, t
 import {
   ACCOUNT_VERB_TYPES,
   PERMISSION_SET_MODE_MODES,
+  PROMPT_RECALL_VERB_TYPES,
   PROTOCOL_VERSION,
   REMOTE_VERB_TYPES,
   RUN_CONTROL_VERB_TYPES,
@@ -146,6 +147,8 @@ import {
   type PermissionSetModeMode,
   type RemoteVerbMessage,
   type RemoteVerbType,
+  type PromptRecallMessage,
+  type PromptRecallVerbType,
   type RunControlVerbMessage,
   type RunControlVerbType,
   type ServerFrame,
@@ -178,6 +181,7 @@ const CH_WORKSPACE_TRUST_VERB = 'catcode:workspace-trust-verb'
 const CH_AGENT_MODE_SET = 'catcode:agent-mode-set'
 const CH_TASK_CONTROL_VERB = 'catcode:task-control-verb'
 const CH_RUN_CONTROL_VERB = 'catcode:run-control-verb'
+const CH_PROMPT_RECALL = 'catcode:prompt-recall'
 const CH_CONTEXT_BREAKDOWN_VERB = 'catcode:context-breakdown-verb'
 const CH_SESSION_ACTION_VERB = 'catcode:session-action-verb'
 const CH_REMOTE_SETTINGS_VERB = 'catcode:remote-settings-verb'
@@ -1700,6 +1704,26 @@ function registerIpcHandlers(): void {
         return
       }
       forward(arg.sessionId, arg.verb as RunControlVerbMessage)
+    },
+  )
+
+  ipcMain.on(
+    CH_PROMPT_RECALL,
+    (_e, arg: { sessionId: SessionId; verb: unknown }) => {
+      if (typeof arg?.sessionId !== 'string') return
+      // D1b — light UX coercion only; the SIDECAR is the trust boundary and fully
+      // re-validates (Zod schema), then decides for itself what is recallable.
+      // Drop any frame whose `type` is not the recall verb fail-closed. There is
+      // no other field to coerce: the verb carries no target, only the renderer's
+      // `requestId` for result correlation (a UX field, not a security one).
+      const verb = arg.verb as { type?: unknown } | null | undefined
+      if (
+        typeof verb?.type !== 'string' ||
+        !PROMPT_RECALL_VERB_TYPES.includes(verb.type as PromptRecallVerbType)
+      ) {
+        return
+      }
+      forward(arg.sessionId, arg.verb as PromptRecallMessage)
     },
   )
 

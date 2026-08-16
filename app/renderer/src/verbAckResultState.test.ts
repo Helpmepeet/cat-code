@@ -203,3 +203,50 @@ for (const [kind, build] of BUILDERS) {
     expect(verbAckErrorToast(build('s1', true, 'ok'))).toBeNull()
   })
 }
+
+/* ── D1b: a recall that lost the race is a report, not a fault ─────────────── */
+
+function promptRecallResult(
+  ok: boolean,
+  message: string,
+  alreadyDelivered: number,
+): VerbAckResultFrame {
+  return {
+    kind: 'prompt-recall.result',
+    protocolVersion: 1,
+    sessionId: 's1',
+    requestId: `recall-${ok}`,
+    ok,
+    message,
+    recalled: [],
+    alreadyDelivered,
+  }
+}
+
+test('D1b — a full recall says nothing; the text landing back in the composer is the story', () => {
+  expect(
+    verbAckErrorToast(promptRecallResult(true, 'Took the message back.', 0)),
+  ).toBeNull()
+})
+
+test('D1b — a recall the engine beat warns in the softer tone, not danger', () => {
+  // Danger red would claim something went wrong. Nothing did: the message is on
+  // its way to the model, and saying so before the user retypes it is the whole
+  // point of the frame.
+  const message = 'That message already went to the model.'
+  expect(verbAckErrorToast(promptRecallResult(false, message, 1))).toEqual({
+    message,
+    tone: 'warn',
+  })
+})
+
+test('D1b — a recall result is kept per session like the other verb acks', () => {
+  const state = reduceVerbAckResultState(createVerbAckResultState(), {
+    type: 'frame',
+    frame: promptRecallResult(false, 'already gone', 1) as ServerFrame,
+  })
+  expect(selectLatestVerbAckResult(state, 's1')?.kind).toBe(
+    'prompt-recall.result',
+  )
+  expect(selectLatestVerbAckResult(state, 's2')).toBeNull()
+})

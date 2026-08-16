@@ -23,6 +23,7 @@ import type {
   PermissionResponseInput,
   PermissionSetModeMode,
   RemoteVerbMessage,
+  PromptRecallMessage,
   RunControlVerbMessage,
   SessionActionVerbMessage,
   ContextBreakdownVerbMessage,
@@ -63,6 +64,7 @@ const CH_WORKSPACE_TRUST_VERB = 'catcode:workspace-trust-verb'
 const CH_AGENT_MODE_SET = 'catcode:agent-mode-set'
 const CH_TASK_CONTROL_VERB = 'catcode:task-control-verb'
 const CH_RUN_CONTROL_VERB = 'catcode:run-control-verb'
+const CH_PROMPT_RECALL = 'catcode:prompt-recall'
 const CH_CONTEXT_BREAKDOWN_VERB = 'catcode:context-breakdown-verb'
 const CH_SESSION_ACTION_VERB = 'catcode:session-action-verb'
 const CH_REMOTE_SETTINGS_VERB = 'catcode:remote-settings-verb'
@@ -296,6 +298,17 @@ const bridge: CatCodeBridge = {
     const payload = { sessionId, verb }
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_RUN_CONTROL_VERB, payload)
+  },
+  recallPrompts(sessionId: SessionId, verb: PromptRecallMessage): void {
+    // D1b — HC3 fixed sender for taking back a message that is still waiting for
+    // the running response. The thinnest of the verbs: the payload is a
+    // requestId and nothing else, because the recall has no target — the sidecar
+    // decides what is recallable from its own live queue. main light-coerces the
+    // type and the sidecar is the trust boundary (Zod schema + the engine's own
+    // queue primitive). The messages come back on `prompt-recall.result`.
+    const payload = { sessionId, verb }
+    sendGuard.assertAllowed(payload)
+    ipcRenderer.send(CH_PROMPT_RECALL, payload)
   },
   contextBreakdownVerb(
     sessionId: SessionId,

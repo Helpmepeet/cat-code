@@ -275,6 +275,7 @@ import {
 } from './slashCatalogState.js'
 import {
   createQueuedPromptsState,
+  foldRecalledPrompts,
   reduceQueuedPromptsState,
   selectQueuedPrompts,
 } from './queuedPromptsState.js'
@@ -390,6 +391,7 @@ import type {
   PermissionResponseInput,
   PermissionSetModeMode,
   QueuedPromptItem,
+  RecalledPrompt,
   RemoteVerbMessage,
   RunControlsSnapshot,
   ContextBreakdownSnapshot,
@@ -526,6 +528,11 @@ export function App() {
   const retainedSubmitsRef = useRef<RetainedSubmitState>(
     createRetainedSubmitState(),
   )
+  // D1b — recall requests this page is still waiting on. A ref for the same
+  // reason as the one above, and the reason it exists at all is the replay ring:
+  // a `prompt-recall.result` is request-scoped, so only the page that asked may
+  // act on it.
+  const recalledRequestIdsRef = useRef<Set<string>>(new Set())
   // Bug fix — per-session (was one app-wide string shown on every pane
   // regardless of which session actually failed; `selectTransportError`
   // resolves it for the pane it belongs to).
@@ -984,6 +991,16 @@ export function App() {
             frame.sessionId,
           )
         }
+      }
+      // D1b — the messages a recall took back, put where the user can edit them.
+      // Gated on a requestId THIS page minted, which is what makes the result
+      // safe to keep in the evictable replay ring: a reload starts with an empty
+      // set, so a replayed recall from before it cannot push text the user has
+      // long since resent or abandoned back into the composer.
+      for (const frame of frames) {
+        if (frame.kind !== 'prompt-recall.result') continue
+        if (!recalledRequestIdsRef.current.delete(frame.requestId)) continue
+        restoreRecalledPrompts(frame.sessionId, frame.recalled)
       }
       for (const frame of frames) {
         if (!frame.deliveryTrace) continue
@@ -2102,6 +2119,47 @@ export function App() {
     }
   }, [])
 
+  // D1b — the composer half of a recall, and deliberately the SAME shape as the
+  // refused-submit restore above: text merges under whatever is being typed,
+  // attachments replace. A recalled message is one the user is taking back to
+  // edit, so it must not overwrite a draft they started while it waited.
+  const restoreRecalledPrompts = useCallback(
+    (sessionId: SessionId, prompts: readonly RecalledPrompt[]) => {
+      const { text, images } = foldRecalledPrompts(prompts)
+      if (text.length === 0 && images.length === 0) return
+      setPromptDrafts(drafts =>
+        reducePromptDrafts(
+          drafts,
+          sessionId,
+          restoreDraftWithPending(selectPromptDraft(drafts, sessionId), text),
+        ),
+      )
+      if (images.length > 0) {
+        setImageAttachmentState(state =>
+          reduceSessionImagesReplaced(state, sessionId, images),
+        )
+      }
+    },
+    [],
+  )
+
+  // D1b — ask for every message still waiting on this session's running
+  // response. Nothing is removed here: the sidecar owns the engine's queue and
+  // answers with what it actually managed to take back, which is what the
+  // restore above then applies.
+  const recallQueuedPrompts = useCallback((sessionId: SessionId) => {
+    const requestId = newRequestId()
+    recalledRequestIdsRef.current.add(requestId)
+    try {
+      getBridge().recallPrompts(sessionId, { type: 'prompt.recall', requestId })
+    } catch (error) {
+      recalledRequestIdsRef.current.delete(requestId)
+      setTransportErrors(prev =>
+        reduceTransportErrorSet(prev, sessionId, errorMessage(error)),
+      )
+    }
+  }, [])
+
   const closeTab = useCallback(async (sessionId: SessionId) => {
     // Closing is the user saying they are done with this session, so a prompt
     // still queued for it is handed back rather than left to drain into a
@@ -3139,6 +3197,7 @@ export function App() {
 	            images={selectImageAttachments(imageAttachmentState, sessionId)}
 	            pendingSubmit={selectPendingSubmit(pendingSubmits, sessionId)}
 	            queuedPrompts={selectQueuedPrompts(queuedPrompts, sessionId)}
+	            onRecallQueuedPrompts={() => recallQueuedPrompts(sessionId)}
 	            history={selectHistory(historyState, sessionId)}
 	            onPaste={(content, selectionStart, selectionEnd) =>
 	              addSessionPaste(
@@ -4029,6 +4088,7 @@ export function SessionPane({
   partialCount,
   pastes,
   pendingSubmit = null,
+  onRecallQueuedPrompts = null,
   queuedPrompts = EMPTY_QUEUED_PROMPTS,
   permissionContext,
   permissionKeyTargetRequestId = null,
@@ -4887,19 +4947,41 @@ export function SessionPane({
        * takes it, exactly as the terminal shows it above its own composer. It
        * is deliberately not in the transcript: the model has not received it.
        * Same row shape as the cold-spawn row above, minus the trailing promise,
-       * which is about a session that is not ready yet. */}
-      {queuedPrompts.map(queued => (
-        <div
-          className="flex items-baseline gap-2 text-xs"
-          key={queued.id}
-          role="status"
-        >
-          <span className="shrink-0 font-medium text-text-muted">Queued</span>
-          <span className="min-w-0 flex-1 truncate text-text-subtle">
-            {queued.text || 'Image attachment'}
-          </span>
+       * which is about a session that is not ready yet.
+       *
+       * D1b — and the way back out. The control sits BELOW the rows rather than
+       * on one of them because it takes back everything waiting, the way the
+       * terminal's `↑` pops every queued command at once; a per-row control
+       * would promise a choice the verb deliberately does not offer. It is a
+       * real button, so it is in the tab order immediately before the composer.
+       */}
+      {queuedPrompts.length > 0 ? (
+        <div className="flex flex-col gap-1">
+          {queuedPrompts.map(queued => (
+            <div
+              className="flex items-baseline gap-2 text-xs"
+              key={queued.id}
+              role="status"
+            >
+              <span className="shrink-0 font-medium text-text-muted">
+                Queued
+              </span>
+              <span className="min-w-0 flex-1 truncate text-text-subtle">
+                {queued.text || 'Image attachment'}
+              </span>
+            </div>
+          ))}
+          {onRecallQueuedPrompts ? (
+            <button
+              className="self-start text-xs text-text-subtle underline underline-offset-2 transition-colors hover:text-text-primary"
+              onClick={onRecallQueuedPrompts}
+              type="button"
+            >
+              {queuedPrompts.length === 1 ? 'Take back' : 'Take back all'}
+            </button>
+          ) : null}
         </div>
-      ))}
+      ) : null}
 
       {generating ? (
         <ActivityIndicator
@@ -5507,6 +5589,9 @@ type SessionPaneProps = {
   /** D1a — messages this session has waiting for its running response, oldest
    * first. Display only: they stay out of the transcript until delivered. */
   queuedPrompts?: readonly QueuedPromptItem[]
+  /** D1b — take every waiting message back into the composer. Omitted where
+   * there is no live session to ask, which hides the control. */
+  onRecallQueuedPrompts?: (() => void) | null
   /** Bug fix — hands `pendingSubmit` back to the composer without sending it.
    * `stopTurn` calls this so Stop cancels a queued prompt along with the turn,
    * instead of the CC-16 drain firing it as a fresh turn the instant the

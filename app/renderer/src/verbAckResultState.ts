@@ -17,6 +17,7 @@
 import type {
   AgentModeSetResultFrame,
   ErrorFrame,
+  PromptRecallResultFrame,
   RunControlResultFrame,
   ServerFrame,
   SessionId,
@@ -34,6 +35,13 @@ export type VerbAckResultFrame =
   | TaskControlResultFrame
   | RunControlResultFrame
   | SettingsResultFrame
+  /**
+   * D1b. Its `ok:false` is not a failed verb: the recall ran, and the engine
+   * simply had already taken one of the messages. It joins this union because
+   * that outcome is the one thing about a recall the user has to be told, and
+   * it is otherwise as silent as the four above.
+   */
+  | PromptRecallResultFrame
   /** A boundary rejection can be correlated only when the renderer-minted id survived. */
   | (ErrorFrame & { code: 'bad_request'; requestId: string })
 
@@ -72,6 +80,7 @@ export function reduceVerbAckResultState(
     frame.kind === 'task-control.result' ||
     frame.kind === 'run-control.result' ||
     frame.kind === 'settings.result' ||
+    frame.kind === 'prompt-recall.result' ||
     isCorrelatedBadRequest(frame)
   ) {
     return {
@@ -113,6 +122,14 @@ export function selectLatestVerbAckResult(
 export function verbAckErrorToast(
   frame: VerbAckResultFrame,
 ): { message: string; tone: ToastTone } | null {
+  // D1b — a recall the engine beat to one of the messages is a report about the
+  // world, not a fault: the message is on its way to the model and the user is
+  // being told before they retype it. Danger red would be a lie about what
+  // happened, so it takes the softer tone. A full recall says nothing at all;
+  // the text landing back in the composer is the whole story (the D5 precedent).
+  if (frame.kind === 'prompt-recall.result') {
+    return frame.ok ? null : { message: frame.message, tone: 'warn' }
+  }
   if (frame.kind !== 'error' && frame.ok) return null
   return { message: frame.message, tone: 'danger' }
 }

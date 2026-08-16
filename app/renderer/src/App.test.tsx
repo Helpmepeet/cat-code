@@ -859,6 +859,45 @@ test('D1a: a message waiting for the running response shows above the composer',
   expect(waiting).not.toContain('Sends when the session is ready.')
 })
 
+test('D1b: a waiting message offers a way to take it back', () => {
+  // The terminal has `↑` for this. A multi-line composer has no such key free,
+  // so the affordance is a real control next to what it acts on.
+  const base = idleSessionPaneProps()
+
+  expect(renderToStaticMarkup(<SessionPane {...base} />)).not.toContain(
+    'Take back',
+  )
+
+  const one = renderToStaticMarkup(
+    <SessionPane
+      {...base}
+      activeConnection={{ status: 'ready', inputEnabled: false }}
+      activeLog={{ ...base.activeLog, inputEnabled: false }}
+      queuedPrompts={[{ id: 'q-1', text: 'and check the logs too' }]}
+      onRecallQueuedPrompts={() => {}}
+    />,
+  )
+  expect(one).toContain('>Take back<')
+  // A button, so it is reachable from the keyboard on the way to the composer.
+  expect(one).toContain('type="button"')
+
+  // Recall takes back everything waiting, the way `↑` does, so the label says so
+  // rather than letting one row's control look like it speaks for itself.
+  const several = renderToStaticMarkup(
+    <SessionPane
+      {...base}
+      activeConnection={{ status: 'ready', inputEnabled: false }}
+      activeLog={{ ...base.activeLog, inputEnabled: false }}
+      queuedPrompts={[
+        { id: 'q-1', text: 'and check the logs too' },
+        { id: 'q-2', text: 'and the config' },
+      ]}
+      onRecallQueuedPrompts={() => {}}
+    />,
+  )
+  expect(several).toContain('>Take back all<')
+})
+
 test('CC-16: a dead session stays read-only and does not pretend to be typeable', () => {
   const props = {
     accountsSnapshot: null,

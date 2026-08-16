@@ -43,6 +43,7 @@ import type { QueuedCommand } from '../../src/types/textInputTypes.js'
 import type { PermissionUpdate } from '../../src/types/permissions.js'
 import {
   dequeue,
+  dequeueAllMatching,
   enqueue,
   enqueuePendingNotification,
   getCommandQueueSnapshot,
@@ -63,6 +64,7 @@ import { ASK_USER_QUESTION_TOOL_NAME } from '../../src/tools/AskUserQuestionTool
 import type {
   AppClientMessage,
   AppSubmitMessage,
+  AppSubmitPrompt,
   PermissionResponseMessage,
 } from '../../src/web/appSessionProtocol.js'
 import { parseThreadGoal } from '../../src/utils/threadGoal.js'
@@ -92,6 +94,7 @@ import {
 import {
   HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
   PERMISSION_SET_MODE_MODES,
+  PROMPT_RECALL_VERB_TYPES,
   PROTOCOL_VERSION,
   RUN_CONTROL_VERB_TYPES,
   SESSION_ACTION_VERB_TYPES,
@@ -103,6 +106,7 @@ import {
   type OAuthLoginProgress,
   type PermissionContextSnapshot,
   type QueuedPromptItem,
+  type RecalledPrompt,
   type RemoteVerbMessage,
   type RunControlVerbMessage,
   type ServerFrame,
@@ -526,10 +530,30 @@ export class SidecarServer {
    */
   private readonly stagedPrompts = new Map<
     string,
-    { prompt: AppSessionPrompt; isMeta?: boolean }
+    { prompt: AppSubmitPrompt; isMeta?: boolean }
   >()
   /** Last staged list actually published, for `broadcastQueuedPrompts`. */
   private lastQueuedPromptsKey: string | null = null
+  /**
+   * D1b — staged messages a recall took off the queue, kept only so a LATE
+   * delivery signal can still write their transcript row.
+   *
+   * The window is real: the engine snapshots the queue, awaits, and only then
+   * fires `notifyCommandLifecycle` + `removeFromQueue` (`src/query.ts:1768` →
+   * `:1842`). A recall inside it removes a command the model has already been
+   * given. If recall simply forgot the message, the delivery signal that arrives
+   * a moment later would find nothing staged and the transcript would never show
+   * a message the model received — the exact inverse of the bug D1a fixed, and
+   * just as silent.
+   *
+   * Bounded by `MAX_QUEUED_PROMPTS` with oldest-out eviction: an entry is only
+   * meaningful until the running turn's next drain, so the cap can never be
+   * reached by anything but recalls nobody raced.
+   */
+  private readonly recalledPrompts = new Map<
+    string,
+    { prompt: AppSubmitPrompt; isMeta?: boolean }
+  >()
   /**
    * IDLE-PARK (decisions/IDLE-PARK.md §3, R2-F2) — the parking latch. Set
    * synchronously in `handlePark` once the gate passes; a submit arriving AFTER
@@ -1036,6 +1060,7 @@ export class SidecarServer {
       commandLifecycleOwner = null
     }
     this.stagedPrompts.clear()
+    this.recalledPrompts.clear()
     this.stopPanelTaskReaper?.()
     this.stopPanelTaskReaper = null
     for (const connection of this.connections) {
@@ -1211,6 +1236,19 @@ export class SidecarServer {
       (RUN_CONTROL_VERB_TYPES as readonly string[]).includes(messageType)
     ) {
       this.handleRunControlVerb(connection, frame.message)
+      return
+    }
+
+    // D1b — taking a waiting message back is app-owned vocabulary (like C2 and
+    // the account/settings/workspace/agent-mode/run-control verbs), validated by
+    // a sidecar-LOCAL schema and served from the engine's OWN command queue.
+    // NOT part of the engine's shared schema. It carries no target, so the only
+    // renderer-authored byte is the correlation id.
+    if (
+      typeof messageType === 'string' &&
+      (PROMPT_RECALL_VERB_TYPES as readonly string[]).includes(messageType)
+    ) {
+      this.handlePromptRecall(connection, frame.message)
       return
     }
 
@@ -1687,7 +1725,7 @@ export class SidecarServer {
    * own. Staging BEFORE the enqueue matters: the queue's change signal is
    * synchronous, so the snapshot it publishes must already know about this one.
    */
-  private enqueueMidTurnPrompt(prompt: AppSessionPrompt, isMeta?: boolean): void {
+  private enqueueMidTurnPrompt(prompt: AppSubmitPrompt, isMeta?: boolean): void {
     const uuid = randomUUID()
     this.stagedPrompts.set(uuid, { prompt, ...(isMeta ? { isMeta } : {}) })
     enqueue({
@@ -1706,7 +1744,17 @@ export class SidecarServer {
    */
   private commitStagedPrompt(uuid: string): void {
     const staged = this.stagedPrompts.get(uuid)
-    if (!staged) return
+    if (!staged) {
+      // D1b — a message a recall took back that the engine turns out to have
+      // taken first. It IS in the model's context now, so it belongs in the
+      // transcript regardless of what the user was told a moment ago; the
+      // alternative is a message the model answers and the transcript denies.
+      const recalled = this.recalledPrompts.get(uuid)
+      if (!recalled) return
+      this.recalledPrompts.delete(uuid)
+      this.broadcastPromptMessage(recalled.prompt, uuid, recalled.isMeta)
+      return
+    }
     this.stagedPrompts.delete(uuid)
     this.broadcastPromptMessage(staged.prompt, uuid, staged.isMeta)
     this.broadcastQueuedPrompts()
@@ -1757,6 +1805,97 @@ export class SidecarServer {
     if (this.connections.size === 0) return
     for (const connection of this.connections) {
       this.sendQueuedPrompts(connection)
+    }
+  }
+
+  /**
+   * D1b — take back every message waiting for the running response (protocol.ts:
+   * PROMPT_RECALL_VERB_TYPES). Same fail-closed order as the other app-owned
+   * verbs: sidecar-LOCAL structural schema → the engine's OWN queue primitive →
+   * a `prompt-recall.result` echoing the requestId (T5a-analog).
+   *
+   * Removal is `dequeueAllMatching` composed with this server's own
+   * `isDeliverableParentPrompt`, which is what keeps the blast radius honest:
+   * it returns the commands in queue order (so the composer can be rebuilt in
+   * the order they were sent), and `agentId === undefined` means a subagent's
+   * queued work is not reachable. `popAllEditable` is deliberately NOT used —
+   * its editable filter has no `agentId` check — and neither is
+   * `clearCommandQueue`, which would also drop task notifications and abandon
+   * the deferred continuations they carry.
+   *
+   * The staged intersection narrows it once more, to exactly what the user was
+   * shown: a prompt that is queued but NOT staged is one whose turn already
+   * announced it and failed (`drainOneQueuedPrompt`'s requeue). It has a
+   * transcript row, so handing it back to the composer would duplicate it.
+   */
+  private handlePromptRecall(connection: Connection, rawMessage: unknown): void {
+    const raw = rawMessage as { requestId?: unknown }
+    const rawRequestId =
+      typeof raw.requestId === 'string' ? raw.requestId : undefined
+
+    const parsed = promptRecallMessageSchema.safeParse(rawMessage)
+    if (!parsed.success) {
+      this.sendError(
+        connection,
+        rawRequestId,
+        'bad_request',
+        parsed.error.issues[0]?.message ?? 'invalid prompt-recall verb',
+        false,
+      )
+      return
+    }
+    const { requestId } = parsed.data
+
+    // Read BEFORE the removal: it is the count the user was looking at, and the
+    // only thing the gap below can be measured against.
+    const stagedCount = this.stagedPrompts.size
+    const removed = dequeueAllMatching(
+      command =>
+        isDeliverableParentPrompt(command) &&
+        command.uuid !== undefined &&
+        this.stagedPrompts.has(command.uuid),
+    )
+
+    const recalled: RecalledPrompt[] = []
+    for (const command of removed) {
+      const uuid = command.uuid
+      if (uuid === undefined) continue
+      const staged = this.stagedPrompts.get(uuid)
+      if (!staged) continue
+      this.stagedPrompts.delete(uuid)
+      this.rememberRecalledPrompt(uuid, staged)
+      recalled.push({ id: uuid, prompt: staged.prompt })
+    }
+    this.broadcastQueuedPrompts()
+
+    // A staged message the queue no longer held is one a drain already claimed:
+    // `drainOneQueuedPrompt` takes it off the queue and awaits `startTurn`
+    // before it stops being staged, and the engine's own mid-turn drain has the
+    // same shape. Either way the model is getting it, so say so rather than
+    // claiming it came back.
+    const alreadyDelivered = Math.max(0, stagedCount - recalled.length)
+    this.send(connection, {
+      kind: 'prompt-recall.result',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      requestId,
+      ok: alreadyDelivered === 0,
+      message: promptRecallMessage(recalled.length, alreadyDelivered),
+      recalled,
+      alreadyDelivered,
+    })
+  }
+
+  /** D1b — remember a recalled message, oldest out past the queue depth cap. */
+  private rememberRecalledPrompt(
+    uuid: string,
+    entry: { prompt: AppSubmitPrompt; isMeta?: boolean },
+  ): void {
+    this.recalledPrompts.set(uuid, entry)
+    while (this.recalledPrompts.size > MAX_QUEUED_PROMPTS) {
+      const oldest = this.recalledPrompts.keys().next()
+      if (oldest.done) break
+      this.recalledPrompts.delete(oldest.value)
     }
   }
 
@@ -4266,6 +4405,11 @@ function checkStrictKeys(message: unknown): string | null {
     // The terminal counterpart (CC-32 follow-up): same single renderer-authored
     // key, so a forged `evictAfter`/`retain` never reaches the engine's guards.
     ['task.dismiss', new Set(['type', 'requestId', 'taskId'])],
+    // D1b prompt recall (app-owned; see PROMPT_RECALL_VERB_TYPES). It takes back
+    // everything of the user's that is still waiting, so it has no target and
+    // the renderer authors NOTHING but the correlation id. A forged `id`,
+    // `agentId`, or `all` key is rejected here before the Zod parse.
+    ['prompt.recall', new Set(['type', 'requestId'])],
     // P4-24c composer run-control verbs (app-owned; see RUN_CONTROL_VERB_TYPES). The
     // renderer authors ONLY the value/selection — any other key is rejected.
     ['model.set', new Set(['type', 'requestId', 'model'])],
@@ -4539,6 +4683,41 @@ const taskControlVerbMessageSchema = z.discriminatedUnion('type', [
     taskId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
   }),
 ])
+
+/**
+ * D1b — sidecar-LOCAL schema for the prompt-recall verb (protocol.ts:
+ * PROMPT_RECALL_VERB_TYPES). App-owned, NOT part of the engine's shared schema.
+ * The verb carries no parameters at all, so this is shape + a bounded
+ * `requestId`; WHAT gets recalled is decided entirely server-side from the live
+ * queue. Same posture as `context-breakdown.request`.
+ */
+const promptRecallMessageSchema = z.object({
+  type: z.literal('prompt.recall'),
+  requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+})
+
+/**
+ * D1b — what the user is told about a recall, and nothing more. The ordinary
+ * outcome is silent at the renderer (the message reappearing in the composer is
+ * the whole story, the D5 refused-submit precedent), so these strings exist for
+ * the case that contradicts what the user just did.
+ */
+function promptRecallMessage(
+  recalled: number,
+  alreadyDelivered: number,
+): string {
+  if (alreadyDelivered === 0) {
+    return recalled === 0 ? 'Nothing was waiting.' : 'Took the message back.'
+  }
+  if (recalled === 0) {
+    return alreadyDelivered === 1
+      ? 'That message already went to the model.'
+      : 'Those messages already went to the model.'
+  }
+  return alreadyDelivered === 1
+    ? '1 message already went to the model, so it stayed.'
+    : `${alreadyDelivered} messages already went to the model, so they stayed.`
+}
 
 /**
  * P4-24c — sidecar-LOCAL schema for the composer run-control set verbs (protocol.ts:

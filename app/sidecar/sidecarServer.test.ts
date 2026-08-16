@@ -108,12 +108,14 @@ import {
   type OperationalRecord,
 } from '../shared/operationalLog.js'
 import {
+  dequeue,
   enqueue,
   enqueuePendingNotification,
   getCommandQueueSnapshot,
   resetCommandQueue,
 } from '../../src/utils/messageQueueManager.js'
 import { notifyCommandLifecycle } from '../../src/utils/commandLifecycle.js'
+import { asAgentId } from '../../src/types/ids.js'
 
 const SESSION = 'test-session'
 const ENGINE_SESSION = 'engine-test-session'
@@ -1751,6 +1753,254 @@ test('D1a — a renderer attaching mid-turn learns what is already staged', asyn
   expect(staged?.[0]?.text).toBe('and the logs')
 
   release?.()
+})
+
+/**
+ * D1b — taking a waiting message back.
+ *
+ * The terminal's `↑` pops every editable queued command back into the composer,
+ * images included (`src/utils/messageQueueManager.ts` `popAllEditable`). These
+ * pin the desktop's version at the trust boundary: the verb carries no target,
+ * the removal reaches only this session's own waiting messages, and the result
+ * reports what actually came back rather than what was asked for.
+ */
+function recallResults(received: ServerFrame[]) {
+  return received.flatMap(frame =>
+    frame.kind === 'prompt-recall.result' ? [frame] : [],
+  )
+}
+
+type SubmitPromptValue = Extract<
+  ClientFrame['message'],
+  { type: 'app.submit' }
+>['prompt']
+
+/** A server mid-turn with `prompt` staged, plus the handle that ends the turn. */
+async function serverWithStagedPrompt(prompt: SubmitPromptValue) {
+  let release: (() => void) | undefined
+  const controller = new AppSessionController({
+    async *runTurn({ options }) {
+      options?.onInputPersisted?.()
+      await new Promise<void>(resolve => {
+        release = resolve
+      })
+      yield buildProbeToolUseMessage()
+    },
+  })
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'turn', prompt: 'start' }),
+  )
+  await new Promise(resolve => setTimeout(resolve, 0))
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'mid', prompt }),
+  )
+  return { server, conn, received, end: () => release?.() }
+}
+
+test('D1b — a recall takes the waiting message back and clears its staged row', async () => {
+  const { server, conn, received, end } =
+    await serverWithStagedPrompt('and the logs')
+  expect(getCommandQueueSnapshot()).toHaveLength(1)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'prompt.recall', requestId: 'recall-1' }),
+  )
+
+  const result = recallResults(received).at(-1)
+  expect(result?.requestId).toBe('recall-1')
+  expect(result?.ok).toBe(true)
+  expect(result?.alreadyDelivered).toBe(0)
+  // The message comes back WHOLE, not the truncated preview the staged row
+  // carries: the composer has to be able to restore what was sent.
+  expect(result?.recalled.map(item => item.prompt)).toEqual(['and the logs'])
+  // Off the engine's queue, so no turn can still pick it up …
+  expect(getCommandQueueSnapshot()).toHaveLength(0)
+  // … and out of the staged list, so no row outlives the message.
+  expect(queuedPromptSnapshots(received).at(-1)).toEqual([])
+  // It never reached the model, so it never reached the transcript either.
+  expect(userMessageTexts(received)).toEqual(['start'])
+
+  end()
+})
+
+test('D1b — a recalled image-bearing message comes back with its image', async () => {
+  // D2: a mid-turn prompt carrying an image is a content-block array, and the
+  // image is exactly what `↑` restores in the terminal. A recall that handed
+  // back only the text would lose it with no other copy anywhere.
+  const { server, conn, received, end } = await serverWithStagedPrompt(IMAGE_PROMPT)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'prompt.recall', requestId: 'recall-image' }),
+  )
+
+  const result = recallResults(received).at(-1)
+  expect(result?.ok).toBe(true)
+  expect(result?.recalled).toHaveLength(1)
+  expect(result?.recalled[0]?.prompt).toEqual(IMAGE_PROMPT)
+
+  end()
+})
+
+test('D1b — a recall leaves subagent work and task notifications alone', async () => {
+  const { server, conn, received, end } =
+    await serverWithStagedPrompt('and the logs')
+
+  // Neither of these is the user's waiting message: one is addressed to a
+  // subagent, the other is a worker result the engine owes the main thread.
+  // `clearCommandQueue` would take both; `popAllEditable` would take the first.
+  enqueue({
+    value: 'worker prompt',
+    mode: 'prompt',
+    agentId: asAgentId('agent-1'),
+  })
+  enqueue({ value: 'worker finished', mode: 'task-notification' })
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'prompt.recall', requestId: 'recall-scope' }),
+  )
+
+  expect(recallResults(received).at(-1)?.recalled).toHaveLength(1)
+  expect(
+    getCommandQueueSnapshot().map(command => command.value),
+  ).toEqual(['worker prompt', 'worker finished'])
+
+  end()
+})
+
+test('D1b — a recall racing the engine reports the message as already delivered', async () => {
+  // The window is real and unclosable from here: a drain takes the command off
+  // the queue and awaits before the message stops being staged
+  // (`drainOneQueuedPrompt`; `src/query.ts:1768` → `:1842` has the same shape).
+  // A recall landing inside it must not claim it took anything back.
+  const { server, conn, received, end } =
+    await serverWithStagedPrompt('and the logs')
+  dequeue(command => command.mode === 'prompt')
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'prompt.recall', requestId: 'recall-race' }),
+  )
+
+  const result = recallResults(received).at(-1)
+  expect(result?.ok).toBe(false)
+  expect(result?.recalled).toEqual([])
+  expect(result?.alreadyDelivered).toBe(1)
+  expect(result?.message).toBe('That message already went to the model.')
+
+  end()
+})
+
+test('D1b — a message the engine took after a recall still reaches the transcript', async () => {
+  // The other half of that window: the recall DOES get the command off the
+  // queue, but the running turn already folded its text into an attachment and
+  // fires the delivery signal a moment later. The model has it, so the
+  // transcript must show it; forgetting the message outright would be the
+  // inverse of the bug D1a fixed, and just as silent.
+  const { server, conn, received, end } =
+    await serverWithStagedPrompt('and the logs')
+  const uuid = getCommandQueueSnapshot()[0]?.uuid as string
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'prompt.recall', requestId: 'recall-late' }),
+  )
+  expect(recallResults(received).at(-1)?.recalled).toHaveLength(1)
+
+  notifyCommandLifecycle(uuid, 'started')
+  expect(userMessageTexts(received)).toEqual(['start', 'and the logs'])
+
+  end()
+})
+
+test('D1b — a recall with nothing waiting takes nothing back', async () => {
+  const controller = new AppSessionController(probeAdapter())
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'prompt.recall', requestId: 'recall-empty' }),
+  )
+
+  const result = recallResults(received).at(-1)
+  expect(result?.ok).toBe(true)
+  expect(result?.recalled).toEqual([])
+  expect(result?.alreadyDelivered).toBe(0)
+  expect(result?.message).toBe('Nothing was waiting.')
+})
+
+test('D1b boundary — rejects prompt.recall carrying an unexpected key (checkStrictKeys), nothing recalled', async () => {
+  const { server, conn, received, end } =
+    await serverWithStagedPrompt('and the logs')
+
+  server.handleData(
+    conn,
+    // A forged target is the whole point of the closed key set: the verb takes
+    // back everything of the user's, so naming one message is not in the
+    // contract and must not be silently stripped into a full recall.
+    clientFrame({
+      type: 'prompt.recall',
+      requestId: 'recall-forged',
+      id: 'some-other-uuid',
+    } as unknown as ClientFrame['message']),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(
+    true,
+  )
+  expect(recallResults(received)).toHaveLength(0)
+  expect(getCommandQueueSnapshot()).toHaveLength(1)
+
+  end()
+})
+
+test('D1b boundary — rejects prompt.recall with a non-string requestId, nothing recalled', async () => {
+  const { server, conn, received, end } =
+    await serverWithStagedPrompt('and the logs')
+
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'prompt.recall',
+      requestId: 42,
+    } as unknown as ClientFrame['message']),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(
+    true,
+  )
+  expect(recallResults(received)).toHaveLength(0)
+  expect(getCommandQueueSnapshot()).toHaveLength(1)
+
+  end()
+})
+
+test('D1b boundary — rejects prompt.recall with no requestId, nothing recalled', async () => {
+  const { server, conn, received, end } =
+    await serverWithStagedPrompt('and the logs')
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'prompt.recall' } as unknown as ClientFrame['message']),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(
+    true,
+  )
+  expect(recallResults(received)).toHaveLength(0)
+  expect(getCommandQueueSnapshot()).toHaveLength(1)
+
+  end()
 })
 
 // The third consumer, the park gate, is deliberately NOT pinned by a test here.

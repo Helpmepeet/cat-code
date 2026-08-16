@@ -157,6 +157,14 @@ const FRAME_RETENTION: Record<ServerFrame['kind'], FrameRetention> = {
   'workspace.trust.result': 'ring',
   'remoteSettings.result': 'ring',
   'settings.result': 'ring',
+  // Ring, with the same request-scoped reasoning as its `*.result` siblings, and
+  // deliberately NOT sticky: it is the answer to one recall the user asked for,
+  // not state a fresh reader should be brought up to date on. Pinning it would
+  // hand the recalled text back to every later attach, long after the user
+  // resent or discarded it. The renderer additionally ignores a replayed result
+  // it did not mint the requestId for, so an evicting ring is the only thing
+  // this classification has to get right.
+  'prompt-recall.result': 'ring',
 }
 
 /** The once-per-attach kinds that survive ring eviction, for tests + callers. */
