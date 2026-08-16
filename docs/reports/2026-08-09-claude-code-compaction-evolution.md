@@ -1031,7 +1031,9 @@ Do not copy:
 5. Persist structured interrupted-turn continuation tied to the active leaf.
 6. Add context-window provenance and dynamic effective-window clamps.
 7. Define compaction-generation events for local, desktop, and remote clients.
+   Designed 2026-08-16: `docs/plans/2026-08-16-compaction-generation-events-design.md`.
 8. Design hot active transcript plus cold immutable archive before adding any physical pruning.
+   Designed 2026-08-16: `docs/plans/2026-08-16-compaction-hot-cold-history-design.md`.
 9. Consider precomputation only after latency evidence justifies its usage cost.
 
 ## 12. Final verdict
@@ -1150,6 +1152,19 @@ signals cache eviction on clear while the Codex path silently does not, which
 looks unintended rather than designed. Not fixed: confirm intent first. A fix
 would rebind in `clearConversation`, either by emitting `sessionSwitched` from
 `regenerateSessionId` or by calling `resetCodexCacheContext()` directly.
+
+**Resolved 2026-08-16, treated as a defect.** `regenerateSessionId` now emits
+`sessionSwitched` (`bootstrap/state.ts`), which reaches both existing
+subscribers. Two corrections to the paragraph above. First, the same missing
+emit also left the PID file's sessionId stale after `/clear`, so `claude ps`
+read the pre-clear transcript (`utils/concurrentSessions.ts:101`); one emit
+fixes both, which is why it was preferred over calling the setter directly.
+Second, the emit alone would have been cosmetic: `conversationIdsByCacheKey`
+memoizes the derived `conversation_id` per `accountId:model` and nothing
+invalidated it, so `setCodexPromptCacheKey` now clears it when the key changes
+(`services/api/codex-fetch-adapter.ts`). That also makes the pre-existing
+`--resume` rebind at `setup.ts:95` real for a mid-session `/resume`, which it
+was not. Covered by `services/api/providerSessionIdentity.test.ts`.
 
 ### 15.5 Line-citation drift
 
