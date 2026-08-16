@@ -473,6 +473,13 @@ export function regenerateSessionId(
   STATE.apiSessionId = sessionId
   STATE.sessionId = sessionId
   STATE.sessionProjectDir = null
+  // Same signal switchSession emits: the active sessionId changed, and every
+  // subscriber that tracks it has to follow. /clear reaches here rather than
+  // switchSession, and without this the Codex prompt_cache_key stays pinned to
+  // the cleared conversation for the life of the process (setup.ts) and the PID
+  // file keeps pointing `claude ps` at the pre-clear transcript
+  // (concurrentSessions.ts).
+  sessionSwitched.emit(sessionId)
   return STATE.sessionId
 }
 
@@ -509,8 +516,9 @@ export function switchSession(
 const sessionSwitched = createSignal<[id: SessionId]>()
 
 /**
- * Register a callback that fires when switchSession changes the active
- * sessionId. bootstrap can't import listeners directly (DAG leaf), so
+ * Register a callback that fires when switchSession or regenerateSessionId
+ * changes the active sessionId. bootstrap can't import listeners directly
+ * (DAG leaf), so
  * callers register themselves. concurrentSessions.ts uses this to keep the
  * PID file's sessionId in sync with --resume.
  */

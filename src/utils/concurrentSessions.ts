@@ -95,9 +95,9 @@ export async function registerSession(): Promise<boolean> {
           : {}),
       }),
     )
-    // --resume / /resume mutates getSessionId() via switchSession. Without
-    // this, the PID file's sessionId goes stale and `claude ps` sparkline
-    // reads the wrong transcript.
+    // --resume / /resume mutates getSessionId() via switchSession, /clear via
+    // regenerateSessionId. Without this, the PID file's sessionId goes stale
+    // and `claude ps` sparkline reads the wrong transcript.
     onSessionSwitch(id => {
       void updatePidFile({ sessionId: id })
     })

@@ -91,7 +91,9 @@ export async function setup(
   // --resume mutates getSessionId() via switchSession AFTER setup() runs
   // (see sessionRestore.ts). Without this re-bind, the Codex conversation_id
   // stays pinned to the fresh-startup UUID and turn 1 after resume misses
-  // the server-side cache.
+  // the server-side cache. /clear reaches the same signal via
+  // regenerateSessionId, which is what starts a fresh Codex conversation
+  // identity instead of appending the new conversation to the cleared one.
   onSessionSwitch(id => {
     setCodexPromptCacheKey(id)
   })

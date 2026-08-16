@@ -99,7 +99,16 @@ function now(): number {
 }
 
 export function setCodexPromptCacheKey(sessionId: string): void {
+  const changed = codexPromptCacheKey !== sessionId
   codexPromptCacheKey = sessionId
+  // conversationIdsByCacheKey memoizes the derived conversation_id per
+  // accountId:model and nothing else invalidates it, so leaving it in place
+  // would keep sending the previous session's conversation_id after the key
+  // moves. That makes both rebind paths real: /resume mid-session, and /clear
+  // (regenerateSessionId -> onSessionSwitch -> setup.ts).
+  if (changed) {
+    conversationIdsByCacheKey.clear()
+  }
   logForDebugging(`[codex-cache] prompt_cache_key set to session ${sessionId.slice(0, 8)}`)
 }
 
