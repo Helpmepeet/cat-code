@@ -388,6 +388,8 @@ async function main(): Promise<void> {
       footprintPeakBytes: summary.footprintPeakBytes,
       partitionAllocResidentBytes: partitionAlloc?.residentBytes ?? null,
       partitionAllocDirtyBytes: partitionAlloc?.dirtyBytes ?? null,
+      partitionAllocSwappedBytes: partitionAlloc?.swappedBytes ?? null,
+      totalSwappedBytes: summary.totalSwappedBytes,
       partitionAllocRegionCount: partitionAlloc?.regionCount ?? null,
       v8ResidentBytes: v8?.residentBytes ?? null,
       v8DirtyBytes: v8?.dirtyBytes ?? null,

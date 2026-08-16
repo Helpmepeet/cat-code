@@ -234,6 +234,8 @@ function sample(index: number, overrides: Partial<TrajectorySample> = {}): Traje
     footprintPeakBytes: (500 + 2 * minutes) * BYTES_PER_MB,
     partitionAllocResidentBytes: 140 * BYTES_PER_MB,
     partitionAllocDirtyBytes: 95 * BYTES_PER_MB,
+    partitionAllocSwappedBytes: 0,
+    totalSwappedBytes: 0,
     partitionAllocRegionCount: 1200,
     v8ResidentBytes: 440 * BYTES_PER_MB,
     v8DirtyBytes: 430 * BYTES_PER_MB,
@@ -419,5 +421,32 @@ describe('a renderer restart is visible in the analysis', () => {
       }),
     )
     expect(text).toContain('the renderer restarted during this run')
+  })
+})
+
+/**
+ * Measured 2026-08-16: a renderer at 6.0G physical footprint reported 187M
+ * resident because 5.7G was swapped, and the app's own working-set metric read
+ * 424MB while the machine thrashed and the renderer then died of a
+ * PartitionAlloc abort. Resident figures alone cannot see that failure.
+ */
+describe('swapped pages are captured', () => {
+  test('a summary carries swapped bytes per row and in total', () => {
+    const text = [
+      'Physical footprint:         6.0G',
+      'Physical footprint (peak):  6.1G',
+      'REGION TYPE                    VIRTUAL RESIDENT   DIRTY  SWAPPED VOLATILE  NONVOL   EMPTY  REGION',
+      'Memory Tag 253                   32.0G   187.4M   165.0M     5.7G       0K      0K      0K   21477',
+      'TOTAL                            33.1G   307.3M   276.4M     5.7G       0K      0K      0K   23105',
+    ].join('\n')
+    const summary = parseVmmapSummary(text)
+
+    expect(summary.footprintBytes).toBe(6 * 1024 ** 3)
+    expect(summary.totalSwappedBytes).toBe(5.7 * 1024 ** 3)
+    const partitionAlloc = selectTagRow(summary, 'partitionAlloc')
+    expect(partitionAlloc?.swappedBytes).toBe(5.7 * 1024 ** 3)
+    // The reading that looked healthy at the same moment.
+    expect(partitionAlloc?.residentBytes).toBe(187.4 * 1024 ** 2)
+    expect(partitionAlloc?.regionCount).toBe(21_477)
   })
 })

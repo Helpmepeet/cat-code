@@ -51,6 +51,13 @@ export type VmmapRegionRow = Readonly<{
   virtualBytes: number | null
   residentBytes: number | null
   dirtyBytes: number | null
+  /**
+   * Pages the OS has paged out. Measured 2026-08-16: a renderer at 6.0G
+   * physical footprint reported only 187M resident because 5.7G was swapped,
+   * so the app's own working-set metric read healthy while the machine
+   * thrashed. Resident alone cannot see this failure.
+   */
+  swappedBytes: number | null
   regionCount: number | null
 }>
 
@@ -59,6 +66,7 @@ export type VmmapSummary = Readonly<{
   footprintPeakBytes: number | null
   totalResidentBytes: number | null
   totalDirtyBytes: number | null
+  totalSwappedBytes: number | null
   totalRegionCount: number | null
   rows: readonly VmmapRegionRow[]
 }>
@@ -88,6 +96,7 @@ export function parseVmmapSummary(text: string): VmmapSummary {
   let footprintPeakBytes: number | null = null
   let totalResidentBytes: number | null = null
   let totalDirtyBytes: number | null = null
+  let totalSwappedBytes: number | null = null
   let totalRegionCount: number | null = null
   const rows: VmmapRegionRow[] = []
   // The MALLOC ZONE table further down has its own differently shaped rows and
@@ -115,10 +124,12 @@ export function parseVmmapSummary(text: string): VmmapSummary {
     const type = row[1].trim()
     const residentBytes = parseSizeToken(row[3])
     const dirtyBytes = parseSizeToken(row[4])
+    const swappedBytes = parseSizeToken(row[5])
     const regionCount = Number.parseInt(row[9], 10)
     if (type.startsWith('TOTAL')) {
       totalResidentBytes = residentBytes
       totalDirtyBytes = dirtyBytes
+      totalSwappedBytes = swappedBytes
       totalRegionCount = Number.isFinite(regionCount) ? regionCount : null
       inRegionTable = false
       continue
@@ -128,11 +139,20 @@ export function parseVmmapSummary(text: string): VmmapSummary {
       virtualBytes: parseSizeToken(row[2]),
       residentBytes,
       dirtyBytes,
+      swappedBytes,
       regionCount: Number.isFinite(regionCount) ? regionCount : null,
     })
   }
 
-  return { footprintBytes, footprintPeakBytes, totalResidentBytes, totalDirtyBytes, totalRegionCount, rows }
+  return {
+    footprintBytes,
+    footprintPeakBytes,
+    totalResidentBytes,
+    totalDirtyBytes,
+    totalSwappedBytes,
+    totalRegionCount,
+    rows,
+  }
 }
 
 /**
@@ -158,6 +178,9 @@ export type TrajectorySample = Readonly<{
   footprintPeakBytes: number | null
   partitionAllocResidentBytes: number | null
   partitionAllocDirtyBytes: number | null
+  /** Paged out. Resident alone reads healthy while the machine thrashes. */
+  partitionAllocSwappedBytes: number | null
+  totalSwappedBytes: number | null
   partitionAllocRegionCount: number | null
   v8ResidentBytes: number | null
   v8DirtyBytes: number | null
@@ -331,6 +354,8 @@ export type TrajectoryAnalysis = Readonly<{
   finalWindowMs: number
   footprintMB: SeriesTrend
   partitionAllocDirtyMB: SeriesTrend
+  /** Paged out. A renderer can thrash while every resident figure reads fine. */
+  swappedMB: SeriesTrend
   partitionAllocResidentMB: SeriesTrend
   partitionAllocRegionCount: SeriesTrend
   v8ResidentMB: SeriesTrend
@@ -379,6 +404,7 @@ export function analyseRun(
     finalWindowMs: options.finalWindowMs,
     footprintMB: series(samples, s => s.footprintBytes, mb, options),
     partitionAllocDirtyMB: series(samples, s => s.partitionAllocDirtyBytes, mb, options),
+    swappedMB: series(samples, s => s.totalSwappedBytes, mb, options),
     partitionAllocResidentMB: series(samples, s => s.partitionAllocResidentBytes, mb, options),
     partitionAllocRegionCount: series(samples, s => s.partitionAllocRegionCount, 1, options),
     v8ResidentMB: series(samples, s => s.v8ResidentBytes, mb, options),
@@ -666,6 +692,7 @@ export function formatSummary(run: TrajectoryRun): string {
   lines.push('Trajectory')
   lines.push(trendLine('renderer footprint (MB)', run.analysis.footprintMB, 'MB'))
   lines.push(trendLine('PartitionAlloc dirty (MB)', run.analysis.partitionAllocDirtyMB, 'MB'))
+  lines.push(trendLine('swapped (MB)', run.analysis.swappedMB, 'MB'))
   lines.push(trendLine('PartitionAlloc resident (MB)', run.analysis.partitionAllocResidentMB, 'MB'))
   lines.push(trendLine('PartitionAlloc regions', run.analysis.partitionAllocRegionCount, 'regions'))
   lines.push(trendLine('V8 resident (MB)', run.analysis.v8ResidentMB, 'MB'))
