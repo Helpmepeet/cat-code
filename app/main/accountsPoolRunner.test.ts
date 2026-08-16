@@ -11,8 +11,11 @@ import type {
 } from '../shared/protocol.js'
 import { ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION } from '../shared/accountsPoolWorker.js'
 import {
+  ACCOUNTS_POOL_REFRESH_INTERVAL_MS,
   createAccountsPoolDriver,
   runAccountsPoolWorker,
+  runCarriesUsageStats,
+  USAGE_STATS_EVERY_N_RUNS,
 } from './accountsPoolRunner.js'
 
 const flush = () => new Promise<void>(resolve => setTimeout(resolve, 0))
@@ -478,5 +481,29 @@ describe('createAccountsPoolDriver — single-flight + keeps-last-good', () => {
     driver.start()
     await flush()
     expect(runCount).toBe(0)
+  })
+})
+
+describe('usage-stats cadence', () => {
+  test('the FIRST run always carries them (cold launch must not wait)', () => {
+    // The Accounts page exists to be readable with no session open. If run 0
+    // skipped the analytics, a fresh launch would sit on "Loading" for five
+    // minutes, which is the state this feed was added to remove.
+    expect(runCarriesUsageStats(0)).toBe(true)
+  })
+
+  test('then every Nth run, and no others', () => {
+    const carried = Array.from({ length: 12 }, (_, i) => i).filter(
+      runCarriesUsageStats,
+    )
+    expect(carried).toEqual([0, 5, 10])
+    expect(USAGE_STATS_EVERY_N_RUNS).toBe(5)
+  })
+
+  test('skipped runs still deliver the pool at the full interval', () => {
+    // The cadence gate is about the transcript aggregation only. Every run is
+    // still a pool run; the analytics just do not ride most of them.
+    expect(runCarriesUsageStats(1)).toBe(false)
+    expect(ACCOUNTS_POOL_REFRESH_INTERVAL_MS).toBe(60_000)
   })
 })

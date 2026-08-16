@@ -67,11 +67,15 @@ export type AccountsState = {
    *    main's timer and exists with no session open. This is the primary feed.
    *  - a session's own `stats.usage.snapshot` frame fills ONE range, in answer to
    *    a range toggle, and only while a sidecar is attached.
-   * Both write the same slots; whichever lands last wins, and they agree because
-   * both come from the same engine aggregation.
+   *
+   * Both write the same slots and last-write-wins. They run the same engine
+   * aggregation but not at the same MOMENT, so a host event carrying data
+   * measured at the start of a worker run can overwrite a fresher session-plane
+   * snapshot and briefly walk the numbers backwards. Bounded by the refresh
+   * period and self-healing on the next run; do not read a decrease here as
+   * usage being reclaimed.
    */
   usageStats: Record<UsageStatsRange, UsageStatsSnapshot | null>
-  latestUsageStats: UsageStatsSnapshot | null
   activeStatsRange: UsageStatsRange
 }
 
@@ -98,7 +102,6 @@ export function createAccountsState(): AccountsState {
       '7d': null,
       '30d': null,
     },
-    latestUsageStats: null,
     activeStatsRange: '7d',
   }
 }
@@ -133,7 +136,6 @@ export function reduceAccountsState(
     return {
       ...state,
       usageStats: { '7d': action.stats['7d'], '30d': action.stats['30d'] },
-      latestUsageStats: action.stats[state.activeStatsRange],
     }
   }
 
@@ -177,7 +179,6 @@ export function reduceAccountsState(
         ...state.usageStats,
         [frame.stats.range]: frame.stats,
       },
-      latestUsageStats: frame.stats,
     }
   }
 
@@ -323,10 +324,5 @@ export function selectUsageStatsForRange(
   range?: UsageStatsRange,
 ): UsageStatsSnapshot | null {
   const targetRange = range ?? state.activeStatsRange
-  return (
-    state.usageStats[targetRange] ??
-    (state.latestUsageStats?.range === targetRange
-      ? state.latestUsageStats
-      : null)
-  )
+  return state.usageStats[targetRange]
 }

@@ -141,7 +141,7 @@ import type { SidecarDiagnosticsDomain } from './diagnosticsDomain.js'
 import type { SidecarExtensionsDomain } from './extensionsDomain.js'
 import type { SidecarRemoteSettingsDomain } from './remoteSettingsDomain.js'
 import type { PermissionDisplayFacts } from './permissionDomain.js'
-import { getUsageStatsSnapshot } from './statsDomain.js'
+import { tryGetUsageStatsSnapshot } from './statsDomain.js'
 import type { UsageStatsRange } from '../shared/protocol.js'
 
 /**
@@ -3523,7 +3523,15 @@ export class SidecarServer {
     range: UsageStatsRange = '7d',
   ): Promise<void> {
     try {
-      const raw = await getUsageStatsSnapshot(range)
+      // `tryGet…`, not the throw-free variant: its empty-snapshot fallback would
+      // send zeros the read never measured, and the renderer draws those as
+      // "No session activity recorded". Sending nothing leaves the page on its
+      // last good value, or pending.
+      const raw = await tryGetUsageStatsSnapshot(range)
+      if (!raw) {
+        this.log('[sidecar] stats.usage.snapshot skipped (usage stats read failed)')
+        return
+      }
       const snapshot = this.prepareOutboundPayload(raw, 'stats.usage.snapshot')
       if (!snapshot) {
         return

@@ -54,10 +54,13 @@
  * interval — see `accountsPoolRunner.ts`'s cadence comment for the actual
  * reason the interval is 60 s.
  *
- * It also aggregates the Accounts page's usage analytics for both ranges in the
- * same run (`readUsageStats`), for the same reason the pool read moved here: that
- * page must work with no session open. Local disk only, and best-effort — a
- * failure omits the field and never fails the run.
+ * It also aggregates the Accounts page's usage analytics for both ranges
+ * (`readUsageStats`), for the same reason the pool read moved here: that page
+ * must work with no session open. Local disk only, and best-effort — a failure
+ * omits the field and never fails the run. Unlike everything else here it runs
+ * only when main passes `--usage-stats`, because it is a full pass over the
+ * transcript corpus rather than a bounded vault read; the cadence and its
+ * reasoning live on `USAGE_STATS_EVERY_N_RUNS` in `app/main/accountsPoolRunner.ts`.
  *
  * The emitted record is the ALREADY-redacted `AccountsSnapshot` (no token, no
  * vault path by construction), and it is `secretGuard`-scanned here AND again at
@@ -67,6 +70,7 @@
 import {
   ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
   MAX_ACCOUNTS_POOL_WORKER_RECORD_BYTES,
+  shedOversizeUsageStats,
   type AccountsPoolWorkerResult,
 } from '../shared/accountsPoolWorker.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
@@ -160,8 +164,17 @@ async function main(): Promise<void> {
     version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
     pool,
   }
-  const usageStats = await readUsageStats()
+  // Only when main asked. It gates this per run because the read is a full pass
+  // over the transcript corpus, unlike everything else in this worker — see
+  // `USAGE_STATS_EVERY_N_RUNS` in `app/main/accountsPoolRunner.ts` for the
+  // cadence and its reason.
+  const usageStats = process.argv.includes('--usage-stats')
+    ? await readUsageStats()
+    : null
   if (usageStats) result.usageStats = usageStats
+  if (shedOversizeUsageStats(result).shed) {
+    process.stderr.write('[accounts-worker] usage stats dropped: record too large\n')
+  }
   const secret = scanForSecrets(result)
   if (!secret.ok) {
     process.stderr.write('[accounts-worker] blocked secret-keyed pool result\n')
@@ -185,11 +198,11 @@ async function main(): Promise<void> {
  * not re-derive the aggregation here). Local disk only: no network, no
  * credential, no config write.
  *
- * Best-effort by contract. `getUsageStatsSnapshot` is already throw-free and
- * degrades to an empty snapshot, so the only way to land here with a null is a
- * failure of the import itself; either way an omitted field leaves the renderer
- * on its last good value instead of publishing zeros as though they were the
- * user's real history.
+ * Best-effort by contract, and it must FAIL rather than degrade. Either range
+ * reading null omits the WHOLE field, so the renderer keeps its last good value
+ * and the empty-history claim stays something only a successful read can make.
+ * Degrading a failure to a zeroed snapshot instead would publish "you have no
+ * history" as measured fact, which is the exact bug this feed was built to fix.
  *
  * `bypassCache` is deliberately NOT set: the domain's 5-second TTL cannot span
  * two runs of this disposable process (a fresh one starts cold every time), so
@@ -197,11 +210,15 @@ async function main(): Promise<void> {
  */
 async function readUsageStats(): Promise<UsageStatsByRange | null> {
   try {
-    const { getUsageStatsSnapshot } = await import('./statsDomain.js')
+    const { tryGetUsageStatsSnapshot } = await import('./statsDomain.js')
     const [sevenDay, thirtyDay] = await Promise.all([
-      getUsageStatsSnapshot('7d'),
-      getUsageStatsSnapshot('30d'),
+      tryGetUsageStatsSnapshot('7d'),
+      tryGetUsageStatsSnapshot('30d'),
     ])
+    if (!sevenDay || !thirtyDay) {
+      process.stderr.write('[accounts-worker] usage stats read failed\n')
+      return null
+    }
     return { '7d': sevenDay, '30d': thirtyDay }
   } catch (error) {
     process.stderr.write(

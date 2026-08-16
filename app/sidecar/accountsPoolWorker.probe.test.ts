@@ -90,11 +90,14 @@ function assertHermeticHome(fakeHome: string): void {
   }
 }
 
-async function runWorker(env: Record<string, string | undefined>) {
+async function runWorker(
+  env: Record<string, string | undefined>,
+  extraArgs: string[] = [],
+) {
   const cwd = temp('catcode-accounts-worker-cwd-')
   const fakeHome = temp('catcode-accounts-worker-home-')
   assertHermeticHome(fakeHome)
-  const proc = Bun.spawn(['bun', 'run', worker, '--bare'], {
+  const proc = Bun.spawn(['bun', 'run', worker, '--bare', ...extraArgs], {
     cwd,
     env: {
       ...process.env,
@@ -157,3 +160,36 @@ test('the accounts worker reports the Anthropic route it can actually see, not t
  * in both directions: before the fix the flags were false no matter what the
  * host carried, and with this env they are true no matter what it carries.
  */
+
+/**
+ * The usage-analytics read is the one thing in this worker that costs a full
+ * pass over the transcript corpus, so main asks for it only every Nth run
+ * (`USAGE_STATS_EVERY_N_RUNS`). These prove the gate at the real process
+ * boundary rather than trusting the argv check by inspection: a regression that
+ * ran the aggregation unconditionally would be invisible to every unit test and
+ * would just quietly cost ~22 minutes of disk a day.
+ *
+ * The probe's fake HOME has no projects directory, so the aggregation measures
+ * an empty history rather than failing — which is the point of the second case:
+ * a MEASURED zero is a legitimate snapshot, and it is the field being present at
+ * all that proves the read ran.
+ */
+test('the worker skips the transcript aggregation unless main asks for it', async () => {
+  const { code, records } = await runWorker({})
+  expect(code).toBe(0)
+  const pool = records.find(record => record?.type === 'pool')
+  expect(pool?.type).toBe('pool')
+  if (pool?.type !== 'pool') return
+  expect(pool.usageStats).toBeUndefined()
+}, 180_000)
+
+test('--usage-stats makes the worker carry both ranges', async () => {
+  const { code, records } = await runWorker({}, ['--usage-stats'])
+  expect(code).toBe(0)
+  const pool = records.find(record => record?.type === 'pool')
+  expect(pool?.type).toBe('pool')
+  if (pool?.type !== 'pool') return
+  expect(pool.usageStats).toBeDefined()
+  expect(pool.usageStats?.['7d'].range).toBe('7d')
+  expect(pool.usageStats?.['30d'].range).toBe('30d')
+}, 180_000)

@@ -6,8 +6,11 @@ import type {
   UsageStatsByRange,
   UsageStatsSnapshot,
 } from './protocol.js'
+import type { AccountsPoolWorkerResult } from './accountsPoolWorker.js'
 import {
   ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+  fitsAccountsPoolRecordLimit,
+  shedOversizeUsageStats,
   parseAccountsPoolWorkerResult,
   parseAccountsSnapshot,
   parseUsageStatsByRange,
@@ -377,5 +380,107 @@ describe('parseAccountsPoolWorkerResult — usageStats fails closed', () => {
     expect(parseUsageStatsByRange(null)).toBeNull()
     expect(parseUsageStatsByRange([])).toBeNull()
     expect(parseUsageStatsSnapshot('stats')).toBeNull()
+  })
+})
+
+describe('parseAccountsPoolWorkerResult — prototype-key hygiene', () => {
+  // Model names come from transcript files. `__proto__` survives `JSON.parse` as
+  // an enumerable own property, and assigning it into an object LITERAL invokes
+  // the prototype setter: the row silently vanishes and the validator's return
+  // carries a caller-shaped prototype. The accumulators use `Object.create(null)`
+  // so it stays an ordinary key.
+  //
+  // The fixtures are raw JSON TEXT on purpose. A `{'__proto__': …}` literal in
+  // source sets the prototype at construction, so it would serialize to `{}` and
+  // the test would pass against the very bug it is meant to catch.
+  function withRawJson(field: string, json: string): unknown {
+    const base = JSON.stringify(stats())
+    const merged = `${base.slice(0, -1)},"${field}":${json}}`
+    return JSON.parse(merged)
+  }
+
+  test('a __proto__ model name is kept as data and does not touch the prototype', () => {
+    const raw = withRawJson(
+      'modelUsage',
+      '{"__proto__":{"inputTokens":1,"outputTokens":2,"cacheCreationInputTokens":3,"cacheReadInputTokens":4}}',
+    )
+    const parsed = parseUsageStatsSnapshot(raw)
+    expect(parsed).not.toBeNull()
+    if (!parsed) return
+    expect(Object.keys(parsed.modelUsage)).toEqual(['__proto__'])
+    expect(Object.getPrototypeOf(parsed.modelUsage)).toBeNull()
+    expect(parsed.modelUsage['__proto__']!.inputTokens).toBe(1)
+  })
+
+  test('a __proto__ key in a daily token map is kept as data', () => {
+    const raw = withRawJson(
+      'dailyModelTokens',
+      '[{"date":"2026-08-13","tokensByModel":{"__proto__":7}}]',
+    )
+    const parsed = parseUsageStatsSnapshot(raw)
+    expect(parsed).not.toBeNull()
+    if (!parsed) return
+    const map = parsed.dailyModelTokens[0]!.tokensByModel
+    expect(Object.keys(map)).toEqual(['__proto__'])
+    expect(map['__proto__']).toBe(7)
+    expect(Object.getPrototypeOf(map)).toBeNull()
+  })
+
+  test('the fixture really does carry __proto__ as an own key', () => {
+    // Guards the test itself: if this ever reads 0, the two above are vacuous.
+    const raw = withRawJson('modelUsage', '{"__proto__":{"inputTokens":1,"outputTokens":2,"cacheCreationInputTokens":3,"cacheReadInputTokens":4}}')
+    expect(Object.keys((raw as Record<string, object>).modelUsage)).toEqual([
+      '__proto__',
+    ])
+  })
+})
+
+describe('shedOversizeUsageStats', () => {
+  test('an oversize record keeps the pool and loses only the optional half', () => {
+    // Before this, `emit` threw on an oversize record, the worker exited
+    // non-zero, and the runner treated that as a protocol error — so the POOL
+    // was lost too, on every run, permanently.
+    const fat = stats({
+      dailyModelTokens: Array.from({ length: 30 }, (_, day) => ({
+        date: `2026-08-${String(day + 1).padStart(2, '0')}`,
+        tokensByModel: Object.fromEntries(
+          Array.from({ length: 400 }, (_, m) => [`model-${'x'.repeat(60)}-${m}`, m]),
+        ),
+      })),
+    })
+    const record: AccountsPoolWorkerResult = {
+      type: 'pool',
+      version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+      pool: pool(),
+      usageStats: { '7d': fat, '30d': fat },
+    }
+    expect(fitsAccountsPoolRecordLimit(record)).toBe(false)
+
+    const { result, shed } = shedOversizeUsageStats(record)
+    expect(shed).toBe(true)
+    expect(result.type === 'pool' && result.usageStats).toBeUndefined()
+    expect(result.type === 'pool' && result.pool.accounts).toHaveLength(1)
+    expect(fitsAccountsPoolRecordLimit(result)).toBe(true)
+  })
+
+  test('a record that fits is left exactly as it was', () => {
+    const record: AccountsPoolWorkerResult = {
+      type: 'pool',
+      version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+      pool: pool(),
+      usageStats: byRange(),
+    }
+    const { shed } = shedOversizeUsageStats(record)
+    expect(shed).toBe(false)
+    expect(record.type === 'pool' && record.usageStats).toEqual(byRange())
+  })
+
+  test('a failure record is not a pool record and is left alone', () => {
+    const record: AccountsPoolWorkerResult = {
+      type: 'failure',
+      version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+      reason: 'internal',
+    }
+    expect(shedOversizeUsageStats(record).shed).toBe(false)
   })
 })

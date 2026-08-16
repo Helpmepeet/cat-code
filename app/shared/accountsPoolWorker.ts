@@ -81,6 +81,38 @@ export type AccountsPoolWorkerResult =
   | AccountsPoolWorkerFailureResult
 
 /**
+ * Drop the optional half of a record that would not fit the size cap, in place,
+ * and report whether it did. Returns the same object so the caller can emit it
+ * either way.
+ *
+ * The two halves have very different size behaviour: the pool is a bounded list
+ * of accounts, while `usageStats` carries a per-day map keyed by every model
+ * name seen in a 30-day window, so its cardinality follows user data. Without
+ * this the oversize case would throw at emit, exit the worker non-zero, and cost
+ * the POOL its delivery too, on every run, permanently. Shedding the optional
+ * half is exactly what makes it optional.
+ */
+export function shedOversizeUsageStats(result: AccountsPoolWorkerResult): {
+  result: AccountsPoolWorkerResult
+  shed: boolean
+} {
+  if (result.type !== 'pool' || !result.usageStats) return { result, shed: false }
+  if (fitsAccountsPoolRecordLimit(result)) return { result, shed: false }
+  delete result.usageStats
+  return { result, shed: true }
+}
+
+/** The same measurement the worker's `emit` throws on, asked in advance. */
+export function fitsAccountsPoolRecordLimit(
+  result: AccountsPoolWorkerResult,
+): boolean {
+  return (
+    Buffer.byteLength(JSON.stringify(result), 'utf8') <=
+    MAX_ACCOUNTS_POOL_WORKER_RECORD_BYTES
+  )
+}
+
+/**
  * Parse + validate one worker result record fail-closed. Returns the typed
  * result only when every gate passes; a wrong version, unknown discriminant,
  * extra keys, or a single malformed account row fails the WHOLE record (null).
@@ -218,7 +250,15 @@ export function parseUsageStatsSnapshot(value: unknown): UsageStatsSnapshot | nu
   }
 
   if (!isRecord(value.modelUsage)) return null
-  const modelUsage: Record<string, UsageStatsModelUsageItem> = {}
+  // `Object.create(null)`, not `{}`: model names come from transcript files, and
+  // a key of `__proto__` survives `JSON.parse` as an enumerable own property.
+  // Assigning it into an object literal invokes the prototype SETTER, so the row
+  // vanishes and the object this validator returns carries a caller-shaped
+  // prototype. A null-prototype accumulator makes every such key an ordinary
+  // own property, which is what a fail-closed narrower of untrusted child output
+  // has to guarantee.
+  const modelUsage: Record<string, UsageStatsModelUsageItem> =
+    Object.create(null)
   for (const [model, candidate] of Object.entries(value.modelUsage)) {
     if (!isRecord(candidate)) return null
     if (
@@ -263,7 +303,8 @@ export function parseUsageStatsSnapshot(value: unknown): UsageStatsSnapshot | nu
 
 function parseNumberMap(value: unknown): Record<string, number> | null {
   if (!isRecord(value)) return null
-  const out: Record<string, number> = {}
+  // Null-prototype for the same reason as `modelUsage` above.
+  const out: Record<string, number> = Object.create(null)
   for (const [key, candidate] of Object.entries(value)) {
     if (!isFiniteNumber(candidate)) return null
     out[key] = candidate

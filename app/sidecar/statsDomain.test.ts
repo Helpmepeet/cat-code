@@ -3,7 +3,7 @@ import type { ClaudeCodeStats } from '../../src/utils/stats.js'
 import {
   buildUsageStatsSnapshot,
   getEmptyUsageStatsSnapshot,
-  getUsageStatsSnapshot,
+  tryGetUsageStatsSnapshot,
 } from './statsDomain.js'
 
 describe('statsDomain', () => {
@@ -69,13 +69,33 @@ describe('statsDomain', () => {
     expect(empty.dailyActivity).toEqual([])
   })
 
-  test('getUsageStatsSnapshot runs throw-free and returns a valid UsageStatsSnapshot', async () => {
-    const snap = await getUsageStatsSnapshot('7d')
+  test('tryGetUsageStatsSnapshot runs throw-free and returns a valid UsageStatsSnapshot', async () => {
+    const snap = await tryGetUsageStatsSnapshot('7d')
+    // Null is reserved for a FAILED read. This machine has a readable projects
+    // directory, so a null here is a real failure, not an empty history.
+    expect(snap).not.toBeNull()
+    if (!snap) return
     expect(snap.range).toBe('7d')
     expect(typeof snap.totalTokens).toBe('number')
     expect(typeof snap.cacheHitRate).toBe('number')
     expect(Array.isArray(snap.dailyModelTokens)).toBe(true)
     expect(Array.isArray(snap.dailyActivity)).toBe(true)
     expect(typeof snap.modelUsage).toBe('object')
+  })
+
+  test('a failed aggregation reads as null, never as an empty snapshot', async () => {
+    // The distinction the whole fix rests on: an empty snapshot is a measured
+    // fact ("no activity in this range") and the UI is entitled to say so; a
+    // failed read is not, and publishing it as zeros is what printed
+    // "No session activity recorded" at a user with 33k messages.
+    const { _forTest } = await import('./statsDomain.js')
+    const restore = _forTest.setAggregatorForTest(() => {
+      throw new Error('transcript directory unreadable')
+    })
+    try {
+      expect(await tryGetUsageStatsSnapshot('30d', true)).toBeNull()
+    } finally {
+      restore()
+    }
   })
 })

@@ -43,6 +43,35 @@ import {
  */
 export const ACCOUNTS_POOL_REFRESH_INTERVAL_MS = 60_000
 export const ACCOUNTS_POOL_WORKER_TIMEOUT_MS = 2 * 60 * 1000
+
+/**
+ * Usage analytics ride only every Nth pool run (5 min at the 60 s cadence
+ * above), requested with the `--usage-stats` argv flag.
+ *
+ * Their cost is nothing like the pool's. The pool read is a vault/config read
+ * plus one usage GET; the stats read is a full stat-and-parse pass over every
+ * transcript in the projects directory, ~0.9 s for both ranges on a corpus of
+ * ~130 sessions and growing with history. Paying that every minute is ~22
+ * minutes of disk work a day for numbers that are 7-day and 30-day totals: they
+ * cannot meaningfully move inside a minute, and the whole scan happens whether
+ * or not the Accounts page is even open.
+ *
+ * A shorter interval for the pool is the right trade (usage headroom IS live and
+ * the page shows it per-account); the same interval for the analytics is not.
+ * Runs that skip it deliver the pool exactly as before and simply carry no
+ * `usageStats`, which the renderer already treats as "keep the last good value".
+ * The FIRST run always includes them, so a cold launch is never gated on this.
+ */
+export const USAGE_STATS_EVERY_N_RUNS = 5
+
+/**
+ * Does run `runIndex` (0-based) carry the analytics? Run 0 must, or a cold
+ * launch would leave the Accounts page pending for the first five minutes,
+ * which is the state this whole feed exists to remove.
+ */
+export function runCarriesUsageStats(runIndex: number): boolean {
+  return runIndex % USAGE_STATS_EVERY_N_RUNS === 0
+}
 const MAX_ACCOUNTS_STDERR_BYTES = 64 * 1024
 
 export type AccountsPoolRunOptions = {

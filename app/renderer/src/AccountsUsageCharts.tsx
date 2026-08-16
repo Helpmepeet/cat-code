@@ -482,19 +482,18 @@ export function CacheUsageBar({
 
 export type ActivitySparklineProps = {
   data: number[]
-  color?: string
   width?: number
   height?: number
 }
 
 /**
- * Compact mini SVG sparkline for summary cards.
+ * Compact mini SVG sparkline for summary cards. Draws in `currentColor` from the
+ * `text-accent` on the svg, so it tracks the accent theme; it carries no colour
+ * prop because nothing needs one, and the hardcoded blue it used to default to
+ * was invisible to every accent choice.
  */
 export function ActivitySparkline({
   data,
-  // Follows the theme by default (`text-accent` on the svg below) rather than a
-  // hardcoded blue that no accent choice ever moves.
-  color = 'currentColor',
   width = 64,
   height = 24,
 }: ActivitySparklineProps) {
@@ -523,7 +522,7 @@ export function ActivitySparkline({
     >
       <polyline
         fill="none"
-        stroke={color}
+        stroke="currentColor"
         strokeWidth="1.5"
         strokeLinecap="round"
         strokeLinejoin="round"

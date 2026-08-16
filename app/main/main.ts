@@ -102,6 +102,7 @@ import {
 import {
   createAccountsPoolDriver,
   runAccountsPoolWorker,
+  runCarriesUsageStats,
   type AccountsPoolDriver,
 } from './accountsPoolRunner.js'
 import {
@@ -857,12 +858,23 @@ function startAccountsPoolRefresh(): void {
   if (accountsPoolDriver) return
   const abort = new AbortController()
   accountsPoolAbort = abort
+  // Which run this is, so the expensive transcript aggregation rides only every
+  // Nth one (see `USAGE_STATS_EVERY_N_RUNS`). Run 0 always carries it, so the
+  // Accounts page is populated at launch rather than up to 5 minutes later.
+  let runIndex = 0
   accountsPoolDriver = createAccountsPoolDriver({
     run: () => {
       const onWorkerLifecycle = createWorkerLifecycleLogger('accounts-pool')
+      const withUsageStats = runCarriesUsageStats(runIndex)
+      runIndex += 1
       return runAccountsPoolWorker({
         command: process.env.CATCODE_BUN_BIN ?? 'bun',
-        args: ['run', ACCOUNTS_POOL_WORKER_ENTRY, '--bare'],
+        args: [
+          'run',
+          ACCOUNTS_POOL_WORKER_ENTRY,
+          '--bare',
+          ...(withUsageStats ? ['--usage-stats'] : []),
+        ],
         cwd: process.cwd(),
         signal: abort.signal,
         onWorkerLifecycle,

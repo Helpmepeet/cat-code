@@ -124,14 +124,41 @@ const statsMemoryCache: Partial<
 > = {}
 
 /**
+ * Indirection so a test can drive the FAILURE path. The read-failed branch below
+ * is the whole point of this module's return type, and without a seam the only
+ * way to exercise it is to make the real transcript directory unreadable.
+ */
+type StatsAggregator = (range: StatsDateRange) => Promise<ClaudeCodeStats>
+let aggregate: StatsAggregator = aggregateClaudeCodeStatsForRange
+
+export const _forTest = {
+  /** Swap the aggregator; returns the restore function. */
+  setAggregatorForTest(next: StatsAggregator): () => void {
+    const previous = aggregate
+    aggregate = next
+    return () => {
+      aggregate = previous
+    }
+  },
+}
+
+/**
  * Fetch real usage statistics from the engine for the given range ('7d' or '30d').
  * Cached in memory with a 5-second TTL to avoid redundant disk I/O on rapid attaches.
- * Throw-free: returns an empty snapshot on any read failure.
+ *
+ * Returns `null` when the READ FAILED, which is a different fact from an empty
+ * snapshot. An empty snapshot means the aggregation ran and measured no activity
+ * (`aggregateClaudeCodeStatsForRange` returns empty stats for zero session files
+ * without throwing, `src/utils/stats.ts:764`); a null means we do not know. They
+ * are indistinguishable downstream once collapsed, and collapsing them is what
+ * printed "No session activity recorded" at a user with 33k messages. Callers
+ * must not publish a null as zeros: omit the frame or event and leave the
+ * renderer on its last good value.
  */
-export async function getUsageStatsSnapshot(
+export async function tryGetUsageStatsSnapshot(
   range: UsageStatsRange = '7d',
   bypassCache = false,
-): Promise<UsageStatsSnapshot> {
+): Promise<UsageStatsSnapshot | null> {
   const now = Date.now()
   const cached = statsMemoryCache[range]
   if (!bypassCache && cached && now - cached.timestamp < CACHE_TTL_MS) {
@@ -140,11 +167,11 @@ export async function getUsageStatsSnapshot(
 
   try {
     const statsRange: StatsDateRange = range === '30d' ? '30d' : '7d'
-    const stats = await aggregateClaudeCodeStatsForRange(statsRange)
+    const stats = await aggregate(statsRange)
     const snapshot = buildUsageStatsSnapshot(stats, range)
     statsMemoryCache[range] = { snapshot, timestamp: now }
     return snapshot
   } catch {
-    return getEmptyUsageStatsSnapshot(range)
+    return null
   }
 }

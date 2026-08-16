@@ -32,10 +32,16 @@ export type AccountsUsageSectionProps = {
   onRangeChange: (range: UsageStatsRange) => void
 }
 
-/** A KPI value that is not known yet. Deliberately not `0` and not a dash. */
+/**
+ * A KPI value that is not known yet. Deliberately not `0` and not a dash.
+ * `leading-7` matches the 1.75rem line box of the `text-xl` value it stands in
+ * for, so the card does not resize when the real number lands.
+ */
 function PendingValue() {
   return (
-    <span className="text-[13px] font-medium text-text-ghost">Loading</span>
+    <span className="text-[13px] font-medium leading-7 text-text-ghost">
+      Loading
+    </span>
   )
 }
 

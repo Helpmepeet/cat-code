@@ -346,7 +346,6 @@ describe('accountsState selectors', () => {
     })
 
     expect(state.usageStats['7d']).toEqual(snap7d)
-    expect(state.latestUsageStats).toEqual(snap7d)
     expect(selectUsageStatsForRange(state, '7d')).toEqual(snap7d)
     expect(selectUsageStatsForRange(state, '30d')).toBeNull()
 
@@ -395,7 +394,7 @@ describe('accountsState selectors', () => {
     expect(state.usageStats['30d']).toEqual(stats['30d'])
     // No round trip needed to flip the toggle: both ranges are already resolved.
     expect(selectUsageStatsForRange(state, '30d')).toEqual(stats['30d'])
-    expect(state.latestUsageStats).toEqual(stats['7d'])
+    expect(selectUsageStatsForRange(state, '7d')).toEqual(stats['7d'])
 
     state = reduceAccountsState(state, { type: 'set-stats-range', range: '30d' })
     expect(selectUsageStatsForRange(state)).toEqual(stats['30d'])
