@@ -20,6 +20,7 @@ import { hasExactErrorMessage, isAbortError } from '../../utils/errors.js'
 import type { CacheSafeParams } from '../../utils/forkedAgent.js'
 import { executePreCompactHooks } from '../../utils/hooks.js'
 import { logError } from '../../utils/log.js'
+import { getCanonicalName } from '../../utils/model/model.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { tokenCountWithEstimation } from '../../utils/tokens.js'
 import { roughTokenCountEstimationForContent } from '../tokenEstimation.js'
@@ -61,6 +62,18 @@ export type AutoCompactTrackingState = {
   // irrecoverably over the limit (e.g., prompt_too_long).
   consecutiveFailures?: number
 }
+
+/**
+ * Codex's own recommended auto-compact limit for GPT-5.6 Sol
+ * (`model_auto_compact_token_limit = 900000`, paired with its 1M window).
+ *
+ * This is a CEILING, never a floor. The buffer math below lands near 927,000 at
+ * a full 1M window, so Sol normally compacts here instead; but any narrower
+ * effective window — an operator ceiling, CLAUDE_CODE_AUTO_COMPACT_WINDOW, a
+ * latched entitlement refusal — still wins, because a threshold above the
+ * window a session can actually spend would never fire.
+ */
+export const GPT_5_6_SOL_AUTOCOMPACT_THRESHOLD = 900_000
 
 export const AUTOCOMPACT_BUFFER_TOKENS = 13_000
 export const WARNING_THRESHOLD_BUFFER_TOKENS = 20_000
@@ -203,11 +216,24 @@ export function getAutoCompactBufferTokens(model: string): number {
   )
 }
 
+/**
+ * The model's own recommended compaction limit, or Infinity when it has none.
+ * Keyed on canonical identity so a dated or provider-prefixed Sol id resolves
+ * the same way, and so no display label can decide a token budget.
+ */
+function getModelAutoCompactCeiling(model: string): number {
+  return getCanonicalName(model) === 'gpt-5.6-sol'
+    ? GPT_5_6_SOL_AUTOCOMPACT_THRESHOLD
+    : Number.POSITIVE_INFINITY
+}
+
 export function getAutoCompactThreshold(model: string): number {
   const effectiveContextWindow = getEffectiveContextWindowSize(model)
 
-  const autocompactThreshold =
-    effectiveContextWindow - getAutoCompactBufferTokens(model)
+  const autocompactThreshold = Math.min(
+    effectiveContextWindow - getAutoCompactBufferTokens(model),
+    getModelAutoCompactCeiling(model),
+  )
 
   // Override for easier testing of autocompact
   const envPercent = process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE

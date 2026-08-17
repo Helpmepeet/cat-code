@@ -119,10 +119,11 @@ export type NativeContextWindowOptions = {
 /**
  * The window the MODEL advertises, plus which branch said so.
  *
- * Ten branches, in precedence order: the ant operator override, the `[1m]`
+ * Eleven branches, in precedence order: the ant operator override, the `[1m]`
  * suffix, the Claude 5 frontier default, the first-party capability cache, the
- * 1M beta header, the Sonnet 1M experiment, GPT-5.6 Codex, other `gpt-*`, the
- * ant model catalog, and the 200,000 fallback. Every 1M branch is nullified by
+ * 1M beta header, the Sonnet 1M experiment, GPT-5.6 Sol, other GPT-5.6 Codex,
+ * other `gpt-*`, the ant model catalog, and the 200,000 fallback. Every
+ * Claude-side 1M branch is nullified by
  * `CLAUDE_CODE_DISABLE_1M_CONTEXT`, and the capability-cache branch clamps back
  * to 200,000 under it rather than falling through.
  */
@@ -174,12 +175,18 @@ export function resolveNativeContextWindow(
     return { window: 1_000_000, source: 'sonnet_1m_experiment' }
   }
   const canonicalModel = getCanonicalName(model)
-  // GPT-5.6 Sol, Terra, and Luna have a 372k Codex context window.
-  if (
-    canonicalModel === 'gpt-5.6-sol' ||
-    canonicalModel === 'gpt-5.6-terra' ||
-    canonicalModel === 'gpt-5.6-luna'
-  ) {
+  // GPT-5.6 Sol runs a 1M Codex context window. It shares the `gpt_5_6_codex`
+  // source with its 372k siblings on purpose: the source is what exempts a
+  // Codex window from the Anthropic long-context entitlement cap (see
+  // isLongContextEntitlementScoped), and that exemption is not about the size.
+  // For the same reason it is not routed through the 1M branches above —
+  // CLAUDE_CODE_DISABLE_1M_CONTEXT is a first-party compliance switch and has
+  // never narrowed a Codex window.
+  if (canonicalModel === 'gpt-5.6-sol') {
+    return { window: 1_000_000, source: 'gpt_5_6_codex' }
+  }
+  // GPT-5.6 Terra and Luna have a 372k Codex context window.
+  if (canonicalModel === 'gpt-5.6-terra' || canonicalModel === 'gpt-5.6-luna') {
     return { window: 372_000, source: 'gpt_5_6_codex' }
   }
   // GPT/Codex models: 272k max input tokens (400k total budget minus 128k output reserve)
@@ -303,10 +310,11 @@ export function _resetLongContextEntitlementForTest(): void {
 /**
  * Does the long-context entitlement cap govern a window from this branch?
  *
- * Extra usage is an Anthropic first-party entitlement, so a Codex model's 272K
- * or 372K window is not the provider's to refuse. Without this, one Anthropic
- * refusal would silently cut a later `gpt-5.6-luna` turn's budget by 172,000
- * tokens for the rest of the session.
+ * Extra usage is an Anthropic first-party entitlement, so a Codex model's 272K,
+ * 372K, or 1M window is not the provider's to refuse. Without this, one
+ * Anthropic refusal would silently cut a later `gpt-5.6-luna` turn's budget by
+ * 172,000 tokens for the rest of the session, and a `gpt-5.6-sol` turn's by
+ * 800,000.
  */
 export function isLongContextEntitlementScoped(
   source: ContextWindowSource,

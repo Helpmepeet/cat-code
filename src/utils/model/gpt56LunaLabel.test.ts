@@ -55,7 +55,10 @@ describe('GPT-5.6 Sol, Terra, and Luna', () => {
       expect(getPublicModelDisplayName(model)).toBe(label.replace('-', ' '))
       expect(getAgentModelOptions().find(option => option.value === model)?.label).toBe(label)
       expect(CODEX_MODELS.find(entry => entry.id === model)?.label).toBe(label)
-      expect(getContextWindowForModel(model)).toBe(372_000)
+      // Sol runs Codex's 1M window; Terra and Luna stay on 372k.
+      expect(getContextWindowForModel(model)).toBe(
+        model === 'gpt-5.6-sol' ? 1_000_000 : 372_000,
+      )
       expect(getDefaultEffortForModel(model)).toBe(
         model === 'gpt-5.6-luna' ? 'low' : 'medium',
       )

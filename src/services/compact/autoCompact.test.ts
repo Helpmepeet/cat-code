@@ -2,10 +2,13 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
 import {
   _resetToolSchemaTokensMemoForTest,
+  calculateTokenWarningState,
   getAutoCompactRecoveryWindowTokens,
   getAutoCompactThreshold,
   getBlockingLimit,
   getEffectiveContextWindowSize,
+  GPT_5_6_SOL_AUTOCOMPACT_THRESHOLD,
+  isAutoCompactEnabled,
   MANUAL_COMPACT_BUFFER_TOKENS,
   measureNonMessageOverheadTokens,
   shouldAutoCompact,
@@ -22,6 +25,7 @@ const ENV_KEYS = [
   'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
   'CLAUDE_CODE_MAX_CONTEXT_TOKENS',
   'CLAUDE_CODE_DISABLE_1M_CONTEXT',
+  'DISABLE_AUTO_COMPACT',
 ] as const
 
 const envSnapshot = new Map<string, string | undefined>()
@@ -104,6 +108,81 @@ describe('autoCompact thresholds', () => {
   test('respects the compliance 1M disablement for Claude 5 models', () => {
     process.env.CLAUDE_CODE_DISABLE_1M_CONTEXT = 'true'
     expect(getContextWindowForModel('claude-sonnet-5')).toBe(200_000)
+  })
+
+  test('gives GPT-5.6 Sol a 1M window and Codex’s 900k compaction limit', () => {
+    expect(getContextWindowForModel('gpt-5.6-sol')).toBe(1_000_000)
+    expect(getEffectiveContextWindowSize('gpt-5.6-sol')).toBe(980_000)
+    // The buffer math alone would land on 927,000 here, exactly as it does for
+    // the Claude 5 models above. Sol stops earlier because Codex publishes its
+    // own limit for this model.
+    expect(getAutoCompactThreshold('gpt-5.6-sol')).toBe(
+      GPT_5_6_SOL_AUTOCOMPACT_THRESHOLD,
+    )
+    expect(getAutoCompactThreshold('gpt-5.6-sol')).toBe(900_000)
+  })
+
+  test('leaves the other GPT-5.6 Codex models on their 372k window', () => {
+    for (const model of ['gpt-5.6-terra', 'gpt-5.6-luna']) {
+      expect(getContextWindowForModel(model)).toBe(372_000)
+      expect(getEffectiveContextWindowSize(model)).toBe(352_000)
+      // 352,000 - (3,000 + min(50,000, floor(352,000 * 0.08))) = 320,840
+      expect(getAutoCompactThreshold(model)).toBe(320_840)
+    }
+  })
+
+  test('never lets the Sol limit sit above a narrowed window', () => {
+    process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = '400000'
+    const effective = getEffectiveContextWindowSize('gpt-5.6-sol')
+    expect(effective).toBe(380_000)
+    const threshold = getAutoCompactThreshold('gpt-5.6-sol')
+    // The 900k ceiling is inert here: a threshold above the window the session
+    // can spend would simply never fire.
+    expect(threshold).toBeLessThan(effective)
+    expect(threshold).toBe(346_600)
+  })
+
+  test('keeps the percentage override able to lower the Sol threshold', () => {
+    process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = '50'
+    expect(getAutoCompactThreshold('gpt-5.6-sol')).toBe(490_000)
+  })
+
+  test('does not let the percentage override raise the Sol threshold', () => {
+    // 99% of the 980,000 effective window is 970,200, above Codex's limit.
+    process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = '99'
+    expect(getAutoCompactThreshold('gpt-5.6-sol')).toBe(900_000)
+  })
+
+  test('confines the Sol limit to Sol', () => {
+    for (const model of [
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+      'claude-sonnet-5',
+      'claude-opus-5',
+      'claude-sonnet-4-6',
+    ]) {
+      expect(getAutoCompactThreshold(model)).not.toBe(
+        GPT_5_6_SOL_AUTOCOMPACT_THRESHOLD,
+      )
+    }
+  })
+
+  test('still honours DISABLE_AUTO_COMPACT for Sol above 900k', () => {
+    // 950,000 is past Sol's threshold, so this fires unless something disables
+    // it. Baselined against the real setting rather than assumed true: whether
+    // auto-compact is on at all is the machine's config, not this test's.
+    const enabledByConfig = isAutoCompactEnabled()
+    expect(
+      calculateTokenWarningState(950_000, 'gpt-5.6-sol')
+        .isAboveAutoCompactThreshold,
+    ).toBe(enabledByConfig)
+
+    process.env.DISABLE_AUTO_COMPACT = '1'
+    expect(isAutoCompactEnabled()).toBe(false)
+    expect(
+      calculateTokenWarningState(950_000, 'gpt-5.6-sol')
+        .isAboveAutoCompactThreshold,
+    ).toBe(false)
   })
 })
 

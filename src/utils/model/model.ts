@@ -308,7 +308,7 @@ export function getRuntimeMainLoopModel(params: {
  */
 export function getDefaultMainLoopModelSetting(): ModelName | ModelAlias {
   if (isCodexSubscriber()) {
-    return getModelStrings().gpt56terra
+    return getModelStrings().gpt56sol
   }
 
   // Ants default to defaultModel from flag config, or Opus 1M if not configured
@@ -442,7 +442,7 @@ export function getClaudeAiUserDefaultModelDescription(
   fastMode = false,
 ): string {
   if (isCodexSubscriber()) {
-    return 'GPT-5.6 Terra · Balanced model for everyday work'
+    return 'GPT-5.6 Sol · Frontier model with 1M context'
   }
   if (isMaxSubscriber() || isTeamPremiumSubscriber()) {
     if (isOpus1mMergeEnabled()) {

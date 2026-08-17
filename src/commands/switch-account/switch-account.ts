@@ -105,14 +105,14 @@ function switchRuntimeProvider(
 ): void {
   if (target === 'openai') {
     setSessionProvider('openai')
-    setMainLoopModelOverride('gpt-5.6-terra')
+    setMainLoopModelOverride('gpt-5.6-sol')
     persistStartupProviderPreference('openai')
     context.setAppState(prev => ({
       ...prev,
-      mainLoopModel: 'gpt-5.6-terra',
+      mainLoopModel: 'gpt-5.6-sol',
       mainLoopModelForSession: null,
       effortValue: reconcileEffortForModel(
-        'gpt-5.6-terra',
+        'gpt-5.6-sol',
         prev.effortValue,
       ),
     }))

@@ -2129,7 +2129,7 @@ async function run(): Promise<CommanderCommand> {
     const initialMainLoopModel = getInitialMainLoopModel();
     const implicitStartupProvider = getEnvAPIProvider();
     const defaultStartupModel = implicitStartupProvider === 'openai'
-      ? 'gpt-5.6-terra'
+      ? 'gpt-5.6-sol'
       : getDefaultMainLoopModel();
     let resolvedInitialModel = parseUserSpecifiedModel(initialMainLoopModel ?? defaultStartupModel);
     // A model chosen for THIS launch (--model, CAT_CODE_MODEL/ANTHROPIC_MODEL,
