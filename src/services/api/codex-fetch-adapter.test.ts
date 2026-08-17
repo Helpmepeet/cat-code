@@ -15,6 +15,7 @@ import {
   CodexAccountAuthError,
   CodexAccountCapError,
   createCodexFetch,
+  mapClaudeModelToCodex,
   mapConversationIdToTrackingKey,
   mapEffortToCodex,
   resetCodexCacheContext,
@@ -3307,6 +3308,43 @@ describe('codex request-start diagnostic', () => {
       _setWebSocketFactoryForTest(null)
       clearWebSocketSession(conv)
       resetCodexCacheContext()
+    }
+  })
+})
+
+// First coverage for this function. It is reached on every Codex-session
+// request whose model string is not `gpt-*` (`getProviderForModel` forces a
+// provider only for that prefix, so everything else rides the session
+// provider), which makes it the thing that decides which GPT actually serves a
+// subagent pinned to a Claude tier.
+describe('mapClaudeModelToCodex', () => {
+  test('maps the top Claude tier to the top Codex tier', () => {
+    // The regression this locks: `opus` used to land on Terra, the MIDDLE rung,
+    // so naming the most capable model got you less than naming nothing (which
+    // inherits the session default, Sol).
+    expect(mapClaudeModelToCodex('opus')).toBe('gpt-5.6-sol')
+    expect(mapClaudeModelToCodex('claude-opus-5')).toBe('gpt-5.6-sol')
+    expect(mapClaudeModelToCodex('claude-opus-4-6[1m]')).toBe('gpt-5.6-sol')
+  })
+
+  test('maps the cheaper Claude tiers to Luna', () => {
+    for (const model of ['sonnet', 'claude-sonnet-5', 'haiku', 'claude-haiku-4-5']) {
+      expect(mapClaudeModelToCodex(model)).toBe('gpt-5.6-luna')
+    }
+  })
+
+  // Deliberately NOT Sol. A caller that named no model is almost always a cheap
+  // auxiliary call, so making this "consistent" with the top rung would move
+  // that traffic onto the frontier model.
+  test('keeps both fallbacks mid tier', () => {
+    expect(mapClaudeModelToCodex(null)).toBe('gpt-5.6-terra')
+    expect(mapClaudeModelToCodex('')).toBe('gpt-5.6-terra')
+    expect(mapClaudeModelToCodex('some-unrecognized-model')).toBe('gpt-5.6-terra')
+  })
+
+  test('passes a Codex model through untouched', () => {
+    for (const model of ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']) {
+      expect(mapClaudeModelToCodex(model)).toBe(model)
     }
   })
 })

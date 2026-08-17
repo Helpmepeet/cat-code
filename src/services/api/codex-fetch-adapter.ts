@@ -588,6 +588,18 @@ export const DEFAULT_CODEX_MODEL = 'gpt-5.6-terra'
 
 /**
  * Maps Claude model names to corresponding Codex model names.
+ *
+ * Reached whenever a Claude model string is served by the Codex path, which is
+ * the normal case on a Codex session rather than an exotic one:
+ * `getProviderForModel` (`utils/model/providers.ts:67`) forces a provider only
+ * for `gpt-*`, so every other id falls through to the SESSION provider.
+ *
+ * The ladder is by TIER, and the two fallbacks are deliberately not the same
+ * value as the top rung. A caller naming `opus` is asking for the most capable
+ * model and gets the Codex frontier; a caller naming nothing is almost always a
+ * cheap auxiliary call, so it stays mid tier and must not be "consistently"
+ * pointed at Sol.
+ *
  * @param claudeModel - The Claude model name to map
  * @returns The corresponding Codex model ID
  */
@@ -595,7 +607,7 @@ export function mapClaudeModelToCodex(claudeModel: string | null): string {
   if (!claudeModel) return DEFAULT_CODEX_MODEL
   if (isCodexModel(claudeModel)) return claudeModel
   const lower = claudeModel.toLowerCase()
-  if (lower.includes('opus')) return 'gpt-5.6-terra'
+  if (lower.includes('opus')) return 'gpt-5.6-sol'
   if (lower.includes('haiku') || lower.includes('sonnet')) return 'gpt-5.6-luna'
   return DEFAULT_CODEX_MODEL
 }
