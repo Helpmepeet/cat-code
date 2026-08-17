@@ -2581,7 +2581,7 @@ test('each App commit increments the health payload counter before delivery ackn
 })
 
 
-test.skip('D5 wiring tripwire: a refused submit is retained at send and restored from the frame stream', () => {
+test('D5 wiring tripwire: a refused submit is retained at send and restored from the frame stream', () => {
   // LAYER HONESTY: the renderer suite is SSR-only, so App cannot be mounted, no
   // frame can be delivered and no composer can be refilled. The decision logic
   // lives in `classifySubmitOutcomeFrame` and is exercised in
@@ -2600,7 +2600,12 @@ test.skip('D5 wiring tripwire: a refused submit is retained at send and restored
   // cannot carry. Retention must happen BEFORE the optimistic clear, or the
   // images it copies are already gone.
   expect(submitBody).toContain('retainedSubmitsRef.current = reduceRetainedSubmitHeld(')
-  expect(submitBody).toContain('{ text, images: [...images] }')
+  expect(submitBody).toContain('{ submitId, text, images: [...images] }')
+  // The id has to reach the sidecar, or the answer below can never name which
+  // submit it belongs to and the pairing silently degrades to positional again.
+  expect(submitBody).toContain(
+    'getBridge().submit(sessionId, submitPrompt, { submitId })',
+  )
   expect(
     submitBody.indexOf('retainedSubmitsRef.current = reduceRetainedSubmitHeld('),
   ).toBeLessThan(submitBody.lastIndexOf('retireDraft()'))
@@ -2611,9 +2616,18 @@ test.skip('D5 wiring tripwire: a refused submit is retained at send and restored
   expect(subscribeEnd).toBeGreaterThan(subscribeStart)
   const subscribeBody = source.slice(subscribeStart, subscribeEnd)
 
-  expect(subscribeBody).toContain('const signal = classifySubmitOutcomeFrame(frame)')
-  expect(subscribeBody).toContain("if (signal === 'refused') restoreRefusedSubmit(frame.sessionId)")
-  expect(subscribeBody).toContain("else if (signal === 'settled') {")
+  // Answers are resolved by id against the whole batch, not inferred frame by
+  // frame. The old inference read `settled` off ordinary traffic a submit merely
+  // waits through, which retired the wrong copy; pin the batch call so nobody
+  // reintroduces a per-frame guess.
+  expect(subscribeBody).toContain(
+    'const answers = reduceSubmitAnswers(retainedSubmitsRef.current, frames)',
+  )
+  expect(subscribeBody).toContain('restoreRefusedSubmit(sessionId, retained)')
+  // Settling now happens inside the batch reducer, so the property to pin is
+  // that its result is written back. Dropping this line would leave every
+  // answered submit retained forever, holding its base64 image with it.
+  expect(subscribeBody).toContain('retainedSubmitsRef.current = answers.state')
 
   const restoreStart = source.indexOf('const restoreRefusedSubmit = useCallback(')
   const restoreEnd = source.indexOf('\n  const closeTab = useCallback(', restoreStart)
@@ -2625,17 +2639,21 @@ test.skip('D5 wiring tripwire: a refused submit is retained at send and restored
   // because only one is ever held.
   expect(restoreBody).toContain('restoreDraftWithPending(')
   expect(restoreBody).toContain('reduceSessionImagesReplaced(state, sessionId, retained.images)')
-  // Taken off the queue first, so a second frame in the same batch cannot
-  // restore the same copy twice. It takes the HEAD, never the whole queue: a
-  // second submit sent inside the same round trip is still waiting for its own
-  // answer.
-  expect(restoreBody).toContain('reduceRetainedSubmitSettled(')
-  expect(restoreBody.indexOf('reduceRetainedSubmitSettled(')).toBeLessThan(
-    restoreBody.indexOf('restoreDraftWithPending('),
+  // The copy is handed IN rather than looked up, because the batch reducer has
+  // already removed it by `submitId`. That is what stops a second frame in the
+  // same batch restoring the same copy twice, and it is why this function takes
+  // a `RetainedSubmit` instead of reaching into the ref.
+  expect(restoreBody).not.toContain('selectRetainedSubmit(')
+  expect(source).toContain('const restoreRefusedSubmit = useCallback((\n    sessionId: SessionId,\n    retained: RetainedSubmit,\n  ) => {')
+
+  // And the removal is committed BEFORE anything is restored from it. Reversed,
+  // a restore could run against state that still holds the answered copy.
+  expect(subscribeBody.indexOf('retainedSubmitsRef.current = answers.state')).toBeLessThan(
+    subscribeBody.indexOf('restoreRefusedSubmit(sessionId, retained)'),
   )
 })
 
-test.skip('D1b wiring tripwire: only a recall this page asked for is acted on, and its id is always released', () => {
+test('D1b wiring tripwire: only a recall this page asked for is acted on, and its id is always released', () => {
   // LAYER HONESTY: SSR cannot mount App, deliver a frame, or raise a toast. The
   // decisions live in `verbAckErrorToast` / `recallDeliveryFailureNotice` /
   // `forgetRecallRequests` and are exercised in verbAckResultState.test.ts;
@@ -2651,11 +2669,25 @@ test.skip('D1b wiring tripwire: only a recall this page asked for is acted on, a
   expect(subscribeEnd).toBeGreaterThan(subscribeStart)
   const subscribeBody = source.slice(subscribeStart, subscribeEnd)
 
-  // One gate, consuming the minted id, in front of the restore AND the toast:
-  // the replay ring re-delivers a result to a page that never asked for it.
+  // One gate in front of the restore AND the toast, because the replay ring
+  // re-delivers a result to a page that never asked for it.
+  //
+  // It is a CLASSIFIER, not a consume-and-forget. The earlier version deleted
+  // the id on the first answer, so the sidecar's correction — the frame that
+  // tells the user a message it said came back actually reached the model —
+  // was dropped on arrival and the whole correction path was dead code. Three
+  // dispositions keep it alive: ignore what this page did not mint, restore on
+  // the first answer only, and toast a correction without restoring anything.
   expect(subscribeBody).toContain(
-    'if (!recallRequestsRef.current.delete(frame.requestId)) continue',
+    'const disposition = classifyRecallAnswer(',
   )
+  expect(subscribeBody).toContain("if (disposition === 'ignore') continue")
+  expect(subscribeBody).toContain("if (disposition === 'first') {")
+  // The restore is INSIDE the first-answer branch: a correction that restored
+  // would hand the user a second copy of a message the model already has.
+  expect(
+    subscribeBody.indexOf("if (disposition === 'first') {"),
+  ).toBeLessThan(subscribeBody.indexOf('restoreRecalledPrompts(frame.sessionId'))
   expect(subscribeBody).toContain('verbAckErrorToast(frame)')
   expect(subscribeBody).toContain('recallDeliveryFailureNotice(frame)')
 

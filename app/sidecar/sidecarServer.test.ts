@@ -2117,7 +2117,7 @@ test('D1b — a message the engine took after a recall still reaches the transcr
   end()
 })
 
-test.skip('D1b — a recall the engine outran corrects the answer it already gave', async () => {
+test('D1b — a recall the engine outran corrects the answer it already gave', async () => {
   // The synchronous arithmetic in `handlePromptRecall` cannot see this: every
   // transition that unstages a prompt also dequeues it in the same block, so
   // the recall observes a clean success and says so. Delivery is the only
@@ -2135,6 +2135,10 @@ test.skip('D1b — a recall the engine outran corrects the answer it already gav
   expect(recallResults(received).at(-1)?.ok).toBe(true)
 
   notifyCommandLifecycle(uuid, 'started')
+  // The correction is counted, not sent, so that one recall yields one frame
+  // whatever the engine consumed in that block. It leaves on the next microtask.
+  await Promise.resolve()
+  await Promise.resolve()
 
   const corrective = recallResults(received).at(-1)
   expect(corrective?.requestId).toBe('recall-outrun')
@@ -2402,10 +2406,13 @@ test('D5 — the depth-cap refusal is answered refused, naming that submit', asy
   release?.()
 })
 
-test.skip('D5 — a submit refused while parking is answered, so its message comes back', () => {
+test('D5 — a submit refused while parking is answered, so its message comes back', () => {
   // Before the answer existed this refusal was read positionally, alongside the
   // recall park refusal that carries a DIFFERENT verb's request id.
-  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined)
+  // `makeParkServer`, not `makeServer`: the parking latch is only set once the
+  // gate passes AND the host is told to park, so a server without `onPark` never
+  // latches and the submit below would be accepted for the wrong reason.
+  const { server } = makeParkServer(new AppSessionController(probeAdapter()))
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -2580,7 +2587,7 @@ test('D5 — a submit with no correlation id is answered by nothing at all', asy
 
 /* ── D1b — one recall, one correction ─────────────────────────────────────── */
 
-test.skip('D1b — three messages the engine outran produce ONE correction with the true count', async () => {
+test('D1b — three messages the engine outran produce ONE correction with the true count', async () => {
   // The engine signals consumption one uuid at a time in a synchronous loop
   // (`src/query.ts:1836-1842`), so this used to emit three corrections, each
   // claiming exactly one message. The user read three contradictory statements
@@ -2631,8 +2638,13 @@ test.skip('D1b — three messages the engine outran produce ONE correction with 
   expect(corrections[0]?.requestId).toBe('recall-outrun-all')
   expect(corrections[0]?.ok).toBe(false)
   expect(corrections[0]?.alreadyDelivered).toBe(3)
+  // The "so they stayed" wording belongs to a MIXED answer, where some messages
+  // came back and others did not. A correction is never mixed: it recalls
+  // nothing, and the user is already holding every message in the composer from
+  // the first answer. Telling them these stayed would contradict what they can
+  // see, so the correction says only what is true and actionable.
   expect(corrections[0]?.message).toBe(
-    '3 messages already went to the model, so they stayed.',
+    'Those messages already went to the model.',
   )
 
   release?.()
