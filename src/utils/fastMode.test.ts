@@ -32,8 +32,20 @@ describe('fast mode', () => {
   test('uses a Codex fast model for Codex/OpenAI provider sessions', () => {
     setSessionProvider('openai')
 
-    expect(getFastModeModel()).toBe('gpt-5.6-terra')
+    expect(getFastModeModel()).toBe('gpt-5.6-sol')
     expect(getFastModeModelDisplay()).toBe('supported GPT models')
+  })
+
+  // Config.tsx's fast toggle assigns this straight to `mainLoopModel` with no
+  // support check, so anything below the Codex default (`gpt-5.6-sol`,
+  // `model.ts` `getDefaultMainLoopModelSetting`) is a silent downgrade for a
+  // session already running that default. Asserted as the literal rather than
+  // against the getter, which reaches real subscription state.
+  test('never lands fast mode below the Codex default model', () => {
+    setSessionProvider('openai')
+
+    expect(getFastModeModel()).toBe('gpt-5.6-sol')
+    expect(isFastModeSupportedByModel(getFastModeModel())).toBe(true)
   })
 
   test('is available for Codex/OpenAI provider sessions', () => {

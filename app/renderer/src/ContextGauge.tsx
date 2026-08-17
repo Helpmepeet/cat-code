@@ -81,7 +81,7 @@ export function ContextGauge({ usage }: { usage: ContextUsage }) {
           r={RADIUS}
           fill="none"
           stroke="rgba(255,255,255,0.1)"
-          strokeWidth="3"
+          strokeWidth={STROKE_WIDTH}
         />
         <circle
           cx="8"
@@ -89,7 +89,7 @@ export function ContextGauge({ usage }: { usage: ContextUsage }) {
           r={RADIUS}
           fill="none"
           stroke="currentColor"
-          strokeWidth="3"
+          strokeWidth={STROKE_WIDTH}
           strokeLinecap="round"
           strokeDasharray={`${arcLength} ${CIRCUMFERENCE}`}
         />

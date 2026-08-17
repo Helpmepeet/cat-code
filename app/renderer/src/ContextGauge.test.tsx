@@ -82,8 +82,10 @@ test('places the tick at the same angle whether or not the arc has reached it', 
   expect(lineOf(below)).toBe(lineOf(above))
 })
 
-// A 372,000-token model would put the tick exactly on the ring's end, where it
-// marks nothing and reads as a defect in the donut.
+// A window at or below the reference puts the tick on or past the ring's end,
+// where it marks nothing and reads as a defect in the donut. 352,000 is what a
+// live Terra or Luna session actually reports; 372,000 is the same models
+// through the result-frame fallback.
 test('omits the tick when the window is not bigger than the reference', () => {
   for (const contextWindow of [372_000, 352_000, 200_000]) {
     const html = renderToStaticMarkup(

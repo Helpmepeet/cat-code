@@ -119,10 +119,17 @@ export const CONTEXT_REFERENCE_TOKENS = 372_000
  * Where the reference tick sits on the ring, as a 0-1 fraction of the window, or
  * null when it has no place on this gauge.
  *
- * Null on any window at or below the reference: on a 372,000-token model the
- * tick would land exactly on the ring's end, marking nothing and reading as a
- * flaw in the donut. The mark only means something while the window is bigger
- * than the limit it draws.
+ * Null on any window at or below the reference, where the tick would land on or
+ * past the ring's end, marking nothing and reading as a flaw in the donut. The
+ * mark only means something while the window is bigger than the limit it draws.
+ *
+ * Terra and Luna are the live case, and they reach here as 352,000, not 372,000:
+ * this reads the sidecar's effective window (`readContextWindow`,
+ * `app/sidecar/runControlsDomain.ts:576`, the engine's
+ * `getEffectiveContextWindowSize`), which has already taken the summary
+ * reservation off the 372,000 those models advertise. Their advertised figure
+ * only reaches the gauge through the result-frame fallback. Both are at or
+ * below the reference, so the guard covers them either way.
  */
 export function selectContextReferenceFraction(
   usage: ContextUsage,

@@ -581,8 +581,10 @@ describe('selectContextReferenceFraction', () => {
     expect(at(1_000_000)!).toBeLessThan(at(500_000)!)
   })
 
-  // At or below the reference the tick would land on the ring's end, marking
-  // nothing. Terra and Luna run exactly 372,000, so this is the live case.
+  // At or below the reference the tick would land on or past the ring's end,
+  // marking nothing. Terra and Luna are the live case at BOTH values here:
+  // 352,000 through the sidecar's effective window, 372,000 through the
+  // result-frame fallback.
   test.each([CONTEXT_REFERENCE_TOKENS, 352_000, 200_000])(
     'has no place on a %p window',
     contextWindow => {

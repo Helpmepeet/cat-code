@@ -153,6 +153,12 @@ describe('autoCompact thresholds', () => {
     expect(getAutoCompactThreshold('gpt-5.6-sol')).toBe(900_000)
   })
 
+  // getModelAutoCompactCeiling keys on canonical identity precisely so a dated
+  // or provider-prefixed id is not a different model to the budget.
+  test('applies the Sol limit to a non-canonical Sol id', () => {
+    expect(getAutoCompactThreshold('gpt-5.6-sol-20260101')).toBe(900_000)
+  })
+
   test('confines the Sol limit to Sol', () => {
     for (const model of [
       'gpt-5.6-terra',
