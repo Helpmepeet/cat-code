@@ -343,7 +343,11 @@ function getUsingYourToolsSection(enabledTools: Set<string>): string {
 function getAgentToolSection(): string {
   return isForkSubagentEnabled()
     ? `Calling ${AGENT_TOOL_NAME} without a subagent_type creates a fork, which runs in the background and keeps its tool output out of your context \u2014 so you can keep chatting with the user while it works. Reach for it when research or multi-step implementation work would otherwise fill your context with raw output you won't need again. **If you ARE the fork** \u2014 execute directly; do not re-delegate.`
-    : `Use the ${AGENT_TOOL_NAME} tool with specialized agents when the task at hand matches the agent's description. Subagents are valuable for parallelizing independent queries or for protecting the main context window from excessive results, but they should not be used excessively when not needed. Handing a task to a single subagent when you could do it yourself is not delegation: it is the same work relayed through an extra layer, and you end up reading its summary instead of what you would have seen firsthand. Before you spawn one, name the reason it beats doing the work in this thread: several agents running in parallel, an independent perspective on work you did yourself, or a sweep whose raw output you don't want in your context. If you cannot name one, do the work yourself. Importantly, avoid duplicating work that subagents are already doing - if you delegate research to a subagent, do not also perform the same searches yourself.`
+    : `Use the ${AGENT_TOOL_NAME} tool with specialized agents when the task clearly benefits from delegation. Subagents are useful for parallelizing independent work or protecting the main context from large amounts of raw output, but should not be used when the work can reasonably be done in this thread.
+
+Do not spawn a subagent solely to review, verify, critique, or double-check your own work. Routine self-review should be done directly in the main thread. Use a subagent for an independent review only when the user explicitly requests one.
+
+Before spawning, require a concrete reason based on parallelism, context isolation, or explicit user request. If none applies, do the work yourself. Importantly, avoid duplicating work that subagents are already doing - if you delegate research to a subagent, do not also perform the same searches yourself.`
 }
 
 /**

@@ -106,6 +106,20 @@ describe('Normal mode static delegation guidance', () => {
       'In normal mode, prefer a worker over main-thread execution for any implementation expected to touch multiple files',
     )
   })
+
+  test('keeps routine review inline unless the user requests an independent review', () => {
+    const reviewRule =
+      'Do not spawn a subagent solely to review, verify, critique, or double-check your own work. Routine self-review should be done directly in the main thread. Use a subagent for an independent review only when the user explicitly requests one.'
+    const delegationReasons =
+      'Before spawning, require a concrete reason based on parallelism, context isolation, or explicit user request.'
+
+    expect(promptsSource).toContain(reviewRule)
+    expect(promptsSource).toContain(delegationReasons)
+
+    const gptGuidance = getGPTSessionGuidanceSection(new Set(['Agent']), [])
+    expect(gptGuidance).toContain(reviewRule)
+    expect(gptGuidance).toContain(delegationReasons)
+  })
 })
 
 describe('GPT read discipline guidance', () => {

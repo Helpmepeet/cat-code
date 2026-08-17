@@ -127,7 +127,7 @@ Watch these trims before debugging "missing" instructions in a worker:
 - Explore and Plan agents drop inherited `gitStatus`; they can run git commands when they need fresh state.
 - Built-in agents can receive extra Agent Mode prompt injections.
 - Fork children that use exact tools preserve more parent context to maximize cache compatibility.
-- The default Agent-tool guidance says to work inline unless delegation has a named advantage: parallel work, an independent perspective, or isolating a raw-output-heavy sweep.
+- The default Agent-tool guidance says to work inline unless delegation has a clear structural advantage: parallel work, context isolation, or an explicitly requested independent review; routine self-review must stay in the main thread.
 
 ## Tests And Validation
 
