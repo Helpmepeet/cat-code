@@ -1,4 +1,5 @@
 import { feature } from 'bun:bundle'
+import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
 import { randomUUID } from 'crypto'
 import type { UUID } from 'crypto'
 import { constants as fsConstants, type Dirent } from 'fs'
@@ -4860,12 +4861,22 @@ async function loadSessionFile(
 }
 
 export type SessionQueueOperation = {
-  operation: 'enqueue' | 'dequeue' | 'remove'
+  /**
+   * Anything other than `enqueue` is a retraction: the command left the queue.
+   * `popAll` (the terminal's UP-arrow pull-back) is written by
+   * `messageQueueManager.logOperation` too, so readers must treat the set as
+   * open and test for `enqueue` rather than enumerate the retractions.
+   */
+  operation: 'enqueue' | 'dequeue' | 'remove' | 'popAll'
   timestamp: string
   sessionId: string
   uuid?: UUID
   mode?: string
-  content?: string
+  /**
+   * Recorded on `enqueue` only. A prompt carrying images is a
+   * `ContentBlockParam[]`, so this is not a string in every session.
+   */
+  content?: string | ContentBlockParam[]
 }
 
 export async function getSessionQueueOperations(

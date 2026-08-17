@@ -27,6 +27,21 @@ export type SetAppState = (f: (prev: AppState) => AppState) => void
 // Logging helper
 // ============================================================================
 
+/**
+ * One durable record per queue mutation. These records outlive the process and
+ * are the only account of what was waiting when it died: the desktop's restore
+ * rebuilds the queue from them by subtracting every retraction from the
+ * enqueues (`app/sidecar/sessionResume.ts`). So EVERY caller must pass the
+ * command it acted on — a retraction that records no uuid is indistinguishable
+ * from no retraction at all, and its enqueue then looks undelivered forever.
+ *
+ * Content rides on `enqueue` alone. It is the only operation whose content any
+ * consumer reads, and the retraction copies it used to duplicate are what made
+ * recording an image-bearing prompt costly: the value can be a whole
+ * `ContentBlockParam[]` with inline image data, and it is recorded now because
+ * a text prompt that survives a crash while its image-bearing twin vanishes is
+ * the harder behavior to explain.
+ */
 function logOperation(operation: QueueOperation, command?: QueuedCommand): void {
   const sessionId = getSessionId()
   const queueOp: QueueOperationMessage = {
@@ -36,7 +51,8 @@ function logOperation(operation: QueueOperation, command?: QueuedCommand): void 
     sessionId,
     ...(command?.uuid !== undefined && { uuid: command.uuid }),
     ...(command?.mode !== undefined && { mode: command.mode }),
-    ...(typeof command?.value === 'string' && { content: command.value }),
+    ...(operation === 'enqueue' &&
+      command?.value !== undefined && { content: command.value }),
   }
   void recordQueueOperation(queueOp)
 }
@@ -249,8 +265,8 @@ export function dequeueAll(): QueuedCommand[] {
   commandQueue.length = 0
   notifySubscribers()
 
-  for (const _cmd of commands) {
-    logOperation('dequeue')
+  for (const cmd of commands) {
+    logOperation('dequeue', cmd)
   }
 
   return commands
@@ -303,8 +319,8 @@ export function dequeueAllMatching(
   commandQueue.length = 0
   commandQueue.push(...remaining)
   notifySubscribers()
-  for (const _cmd of matched) {
-    logOperation('dequeue')
+  for (const cmd of matched) {
+    logOperation('dequeue', cmd)
   }
   return matched
 }
@@ -320,21 +336,20 @@ export function remove(commandsToRemove: QueuedCommand[]): void {
   }
 
   const commandsToRemoveSet = new Set(commandsToRemove)
-  let removedCount = 0
+  const removed: QueuedCommand[] = []
   for (let i = commandQueue.length - 1; i >= 0; i--) {
     if (commandsToRemoveSet.has(commandQueue[i]!)) {
-      commandQueue.splice(i, 1)
-      removedCount++
+      removed.push(commandQueue.splice(i, 1)[0]!)
     }
   }
 
-  if (removedCount === 0) {
+  if (removed.length === 0) {
     return
   }
 
   notifySubscribers()
-  for (let i = 0; i < removedCount; i++) {
-    logOperation('remove')
+  for (const cmd of removed) {
+    logOperation('remove', cmd)
   }
 }
 
@@ -358,8 +373,8 @@ export function removeByFilter(
 
   removed.reverse()
   notifySubscribers()
-  for (const _cmd of removed) {
-    logOperation('remove')
+  for (const cmd of removed) {
+    logOperation('remove', cmd)
   }
 
   return removed
@@ -382,6 +397,12 @@ export function clearCommandQueue(): void {
     abandonForegroundDeferredAttempt(command.origin)
   }
   notifySubscribers()
+  // ESC discards these for good, so the durable log has to say so. Without it
+  // the enqueue records stand alone and a later restore reads them as messages
+  // that were still waiting.
+  for (const command of discarded) {
+    logOperation('remove', command)
+  }
 }
 
 /**
@@ -526,10 +547,7 @@ export function popAllEditable(
   }
 
   for (const command of editable) {
-    logOperation(
-      'popAll',
-      typeof command.value === 'string' ? command.value : undefined,
-    )
+    logOperation('popAll', command)
   }
 
   // Replace queue contents with only the non-editable commands
