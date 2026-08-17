@@ -423,6 +423,15 @@ export type SidecarServerOptions = {
 let commandLifecycleOwner: SidecarServer | null = null
 
 /**
+ * The published-key value for "nothing is waiting" (D1a). A session starts here
+ * rather than at `null`, because `null` is a state no snapshot can ever equal:
+ * the first unrelated queue event of the session would read as a change and
+ * publish an empty list, which is precisely the frame the attach path suppresses
+ * as noise.
+ */
+const EMPTY_QUEUED_PROMPTS_KEY = JSON.stringify([])
+
+/**
  * Wires a controller to a connection-handling façade. The transport (Bun's
  * `Bun.listen({ unix })`) is created by the caller and delivers raw byte chunks
  * to `handleData`; this class owns framing, validation, and forwarding. Keeping
@@ -533,7 +542,7 @@ export class SidecarServer {
     { prompt: AppSubmitPrompt; isMeta?: boolean }
   >()
   /** Last staged list actually published, for `broadcastQueuedPrompts`. */
-  private lastQueuedPromptsKey: string | null = null
+  private lastQueuedPromptsKey: string = EMPTY_QUEUED_PROMPTS_KEY
   /**
    * D1b — staged messages a recall took off the queue, kept only so a LATE
    * delivery signal can still write their transcript row.
@@ -679,6 +688,28 @@ export class SidecarServer {
     // which only `src/cli/print.ts` does and no sidecar path imports. The
     // N-process model (one engine session per process) is what keeps this to one
     // SidecarServer per process; `close()` releases the slot.
+    //
+    // The engine HAS its own emitter for this and it is deliberately unused.
+    // `QueryEngine` already yields a `type:'user'` SDK message for a consumed
+    // `queued_command`, keyed on `source_uuid` (`src/QueryEngine.ts:1009-1031`),
+    // and it is inert here only because nothing in the sidecar sets
+    // `replayUserMessages` (default false, `src/QueryEngine.ts:258`). Turning it
+    // on is not free: the same flag also builds `messagesToAck`
+    // (`src/QueryEngine.ts:553`), which re-yields the turn's own initial user
+    // messages as replays (`:866-883`). The sidecar already broadcasts that row
+    // itself, so every ordinary turn would gain a duplicate user row in the raw
+    // event stream and in the transcript built from it. Paying that on every
+    // turn to avoid the slot below was the worse trade.
+    //
+    // The single-server-per-process invariant is load-bearing (a second
+    // claimant leaves the first's staged messages with no path to the
+    // transcript), so a takeover from a LIVE owner is logged loudly rather than
+    // left to be inferred from messages that never appear.
+    if (commandLifecycleOwner !== null && !commandLifecycleOwner.closed) {
+      this.log(
+        '[sidecar] command-lifecycle listener taken over by a second SidecarServer in this process; the previous session will not commit its staged messages',
+      )
+    }
     setCommandLifecycleListener((uuid, state) => {
       if (state !== 'started') return
       this.commitStagedPrompt(uuid)
@@ -896,7 +927,10 @@ export class SidecarServer {
     // report: an attaching reader's own list already starts empty, and an empty
     // frame on every handshake is noise (the `slash-catalog.snapshot`
     // precedent). What RETIRES a row is the change broadcast, not this.
-    if (this.queuedPromptItems().length > 0) this.sendQueuedPrompts(connection)
+    const stagedForAttach = this.queuedPromptItems()
+    if (stagedForAttach.length > 0) {
+      this.sendQueuedPrompts(connection, stagedForAttach)
+    }
     // F2 — restored-history replay, after ready + C3 and before any live event
     // (single-socket ordering guarantees the renderer sees history first).
     this.sendHistoryReplay(connection)
@@ -1585,6 +1619,17 @@ export class SidecarServer {
     } catch (error) {
       this.activeTurn = false
       this.endTurnObservation('failed')
+      // D1a — the announcement above already happened, so this prompt is
+      // transcript history even though no turn survived to carry it. Leaving it
+      // staged would have the next boundary drain announce it a second time,
+      // and the retry cap cannot intervene: `onSettled` rides the promise this
+      // path never created. Kept rather than removed with the catch, because
+      // the catch is also what keeps `activeTurn` and the turn-observation pair
+      // (A1) honest; without it a synchronous throw would wedge the session for
+      // good.
+      if (announcePrompt && this.stagedPrompts.delete(uuid)) {
+        this.broadcastQueuedPrompts()
+      }
       this.scheduleBoundaryDrain()
       return false
     }
@@ -1769,21 +1814,17 @@ export class SidecarServer {
       // The recall answered "took it back" a moment ago, and this is the only
       // point where that turns out to be false. Correcting it here is what
       // makes the promise honest: without this the user is told the message is
-      // theirs again while the model answers it, and they resend. Broadcast
-      // rather than unicast because the connection that asked may be gone; the
-      // renderer ignores a result it did not mint.
-      for (const connection of this.connections) {
-        this.send(connection, {
-          kind: 'prompt-recall.result',
-          protocolVersion: PROTOCOL_VERSION,
-          sessionId: this.sessionId,
-          requestId: recalled.requestId,
-          ok: false,
-          message: promptRecallMessage(0, 1),
-          recalled: [],
-          alreadyDelivered: 1,
-        })
-      }
+      // theirs again while the model answers it, and they resend.
+      this.broadcastPromptRecallResult({
+        kind: 'prompt-recall.result',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        requestId: recalled.requestId,
+        ok: false,
+        message: promptRecallMessage(0, 1),
+        recalled: [],
+        alreadyDelivered: 1,
+      })
       return
     }
     this.stagedPrompts.delete(uuid)
@@ -1808,18 +1849,21 @@ export class SidecarServer {
       if (uuid === undefined || !this.stagedPrompts.has(uuid)) continue
       items.push({
         id: uuid,
-        text: promptText(command.value).slice(0, MAX_QUEUED_PROMPT_PREVIEW_CHARS),
+        text: promptPreviewText(command.value, MAX_QUEUED_PROMPT_PREVIEW_CHARS),
       })
     }
     return items
   }
 
-  private sendQueuedPrompts(connection: Connection): void {
+  private sendQueuedPrompts(
+    connection: Connection,
+    prompts: QueuedPromptItem[],
+  ): void {
     this.send(connection, {
       kind: 'queued-prompts.snapshot',
       protocolVersion: PROTOCOL_VERSION,
       sessionId: this.sessionId,
-      prompts: this.queuedPromptItems(),
+      prompts,
     })
   }
 
@@ -1828,9 +1872,22 @@ export class SidecarServer {
    * and for every task-notification enqueue, none of which move this list. A
    * session with busy subagents would otherwise pay a frame (and a delivery
    * trace) per unrelated queue event to say nothing changed.
+   *
+   * The staged map is read FIRST because change detection only suppresses the
+   * frame, not the work behind it: building the key walks the whole live queue,
+   * folds each command's text blocks, and stringifies the result. With nothing
+   * staged the answer is already known to be the empty list, and every one of a
+   * busy subagent session's queue events lands here.
    */
   private broadcastQueuedPrompts(): void {
-    const key = JSON.stringify(this.queuedPromptItems())
+    if (
+      this.stagedPrompts.size === 0 &&
+      this.lastQueuedPromptsKey === EMPTY_QUEUED_PROMPTS_KEY
+    ) {
+      return
+    }
+    const prompts = this.queuedPromptItems()
+    const key = JSON.stringify(prompts)
     if (key === this.lastQueuedPromptsKey) return
     // Commit the key only once it is actually published. Recording it against
     // zero connections would remember a change nobody received, and the attach
@@ -1840,7 +1897,7 @@ export class SidecarServer {
     if (this.connections.size === 0) return
     this.lastQueuedPromptsKey = key
     for (const connection of this.connections) {
-      this.sendQueuedPrompts(connection)
+      this.sendQueuedPrompts(connection, prompts)
     }
   }
 
@@ -1868,6 +1925,23 @@ export class SidecarServer {
     const raw = rawMessage as { requestId?: unknown }
     const rawRequestId =
       typeof raw.requestId === 'string' ? raw.requestId : undefined
+
+    // IDLE-PARK (decisions/IDLE-PARK.md §3, R2-F2) — same first line as
+    // `handleSubmit`, same code, same retryability. A latched sidecar is
+    // exiting, so accepting a recall here would take messages off the queue and
+    // hand them back over a connection that is about to go away: the composer
+    // never receives them and the queue no longer holds them. The user unparks
+    // and asks again.
+    if (this.parking) {
+      this.sendError(
+        connection,
+        rawRequestId,
+        'session_disconnected',
+        'session parking',
+        true,
+      )
+      return
+    }
 
     const parsed = promptRecallMessageSchema.safeParse(rawMessage)
     if (!parsed.success) {
@@ -1912,7 +1986,7 @@ export class SidecarServer {
     // that is real leaves the command queued and recalls it successfully, and
     // is corrected from `commitStagedPrompt` when the delivery signal lands.
     const alreadyDelivered = Math.max(0, stagedCount - recalled.length)
-    this.send(connection, {
+    this.broadcastPromptRecallResult({
       kind: 'prompt-recall.result',
       protocolVersion: PROTOCOL_VERSION,
       sessionId: this.sessionId,
@@ -1922,6 +1996,23 @@ export class SidecarServer {
       recalled,
       alreadyDelivered,
     })
+  }
+
+  /**
+   * D1b — both recall answers take this path. The messages are OFF the queue and
+   * out of the staged map by the time either is built, so this frame is the only
+   * vehicle carrying them anywhere the user can reach: a unicast that lost its
+   * race with the connection being removed would leave the text nowhere at all.
+   * The renderer acts only on a requestId it minted itself, so the fan-out costs
+   * a frame per extra connection and changes nothing for the ones that did not
+   * ask.
+   */
+  private broadcastPromptRecallResult(
+    frame: Extract<ServerFrame, { kind: 'prompt-recall.result' }>,
+  ): void {
+    for (const connection of this.connections) {
+      this.send(connection, frame)
+    }
   }
 
   /** D1b — remember a recalled message, oldest out past the queue depth cap. */
@@ -4300,6 +4391,33 @@ function promptText(prompt: AppSessionPrompt): string {
   return prompt
     .flatMap(block => (block.type === 'text' ? [block.text] : []))
     .join('\n')
+}
+
+/**
+ * The staged-row preview: `promptText(prompt).slice(0, maxChars)` without
+ * building the fold first. A prompt may carry `MAX_PROMPT_BYTES` of text while
+ * the preview keeps a few hundred characters of it, so folding the whole thing
+ * on every snapshot build allocated the entire prompt to throw nearly all of it
+ * away.
+ *
+ * It must agree with that fold exactly, so the separator is owned by "have I
+ * passed a text block yet" rather than by the accumulator: image blocks are
+ * dropped without a separator, and a text block that folds to nothing still
+ * takes one. (The wire schema requires every text block to be non-empty, so
+ * that last case is not reachable through `app.submit` today.)
+ */
+function promptPreviewText(prompt: AppSessionPrompt, maxChars: number): string {
+  if (typeof prompt === 'string') return prompt.slice(0, maxChars)
+  let out = ''
+  let seenTextBlock = false
+  for (const block of prompt) {
+    if (block.type !== 'text') continue
+    if (out.length >= maxChars) break
+    if (seenTextBlock) out += '\n'
+    seenTextBlock = true
+    out += block.text.slice(0, maxChars - out.length)
+  }
+  return out
 }
 
 async function readGeneratedImageForPreview(

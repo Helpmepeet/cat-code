@@ -103,10 +103,10 @@ type FrameRetention = 'head' | 'sticky' | 'ring' | 'preview'
  * `sticky` lists exactly the once-per-attach state frames, in the send order of
  * `SidecarServer.addConnection`. A few of them also re-broadcast on change
  * (settings / run-controls / accounts / goal / memory / tasks / agent-mode /
- * workspace-trust / remoteSettings / permission.context); a re-broadcast
- * replaces the slot's value and keeps its original position, because these are
- * point-in-time state a reader applies wholesale, not transcript rows whose
- * position carries meaning.
+ * workspace-trust / remoteSettings / permission.context / queued-prompts); a
+ * re-broadcast replaces the slot's value and keeps its original position,
+ * because these are point-in-time state a reader applies wholesale, not
+ * transcript rows whose position carries meaning.
  *
  * `ring` covers transcript traffic (`event`), request-scoped replies
  * (`*.result`, `pong`, `error`, `oauth.login.progress`), `lifecycle`, and the
@@ -139,6 +139,12 @@ const FRAME_RETENTION: Record<ServerFrame['kind'], FrameRetention> = {
   // response, applied wholesale and replaced by the next one. A reload during a
   // long turn would otherwise lose the rows for messages the user has already
   // sent, putting them back in the state D1a exists to fix — invisible.
+  //
+  // The re-broadcast is what makes that classification correct rather than
+  // merely safe: the sidecar republishes this list on every change, so a
+  // replaced slot always holds the current list. It is also the one attach frame
+  // the sidecar may not send at all (skipped when nothing is waiting), which the
+  // slot handles by never being filled.
   'queued-prompts.snapshot': 'sticky',
 
   event: 'ring',

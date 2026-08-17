@@ -34,6 +34,7 @@ import {
   MAX_FRAMES_PER_WINDOW,
   MAX_OUTBOUND_FRAME_BYTES,
   MAX_PROMPT_BYTES,
+  MAX_QUEUED_PROMPT_PREVIEW_CHARS,
   MAX_QUEUED_PROMPTS,
   MAX_TEXT_FIELD_CHARS,
 } from '../shared/limits.js'
@@ -1755,6 +1756,115 @@ test('D1a — a renderer attaching mid-turn learns what is already staged', asyn
   release?.()
 })
 
+test('D1a — an unrelated queue event does not publish an empty staged list', () => {
+  // Nothing is waiting, and an attaching reader's own list already starts
+  // empty, which is why the attach path suppresses this exact frame as noise.
+  // Sending it anyway on the first worker enqueue of the session put the noise
+  // back through the other door.
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+  expect(queuedPromptSnapshots(received)).toEqual([])
+
+  // A worker result can never appear in this list, but it moves the queue the
+  // list rides on.
+  enqueue({ value: 'worker finished', mode: 'task-notification' })
+
+  expect(queuedPromptSnapshots(received)).toEqual([])
+})
+
+test('D1a — a submit that throws synchronously announces its staged message once', async () => {
+  // `AppSessionController.submit` is `async`, so this throw cannot happen
+  // through the real controller; it is the state `startTurn`'s catch exists
+  // for, and the announcement has already gone out by the time that catch runs.
+  // Leaving the message staged there had the next boundary drain announce it a
+  // second time, with no retry cap in reach: `onSettled` rides the promise this
+  // path never created.
+  let releaseFirst: (() => void) | undefined
+  let turns = 0
+  const controller = new AppSessionController({
+    async *runTurn({ options }) {
+      turns += 1
+      options?.onInputPersisted?.()
+      if (turns === 1) {
+        await new Promise<void>(resolve => {
+          releaseFirst = resolve
+        })
+      }
+      yield buildProbeToolUseMessage()
+    },
+  })
+  const realSubmit = controller.submit.bind(controller)
+  let submits = 0
+  ;(controller as { submit: AppSessionController['submit'] }).submit = ((
+    ...args: Parameters<AppSessionController['submit']>
+  ) => {
+    submits += 1
+    if (submits === 2) throw new Error('submit exploded')
+    return realSubmit(...args)
+  }) as AppSessionController['submit']
+
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'turn', prompt: 'start' }),
+  )
+  await new Promise(resolve => setTimeout(resolve, 0))
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'mid', prompt: 'and the logs' }),
+  )
+
+  // The first turn ends, the boundary drain claims the staged message, and its
+  // turn throws before any promise exists to carry a failure.
+  releaseFirst?.()
+  await waitFor(() => submits >= 3)
+  await new Promise(resolve => setTimeout(resolve, 5))
+
+  expect(
+    userMessageTexts(received).filter(text => text === 'and the logs'),
+  ).toHaveLength(1)
+})
+
+/** A server whose log lines are captured rather than discarded. */
+function makeLoggingServer(logs: string[]): SidecarServer {
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
+    controller: new AppSessionController(probeAdapter()),
+    log: line => logs.push(line),
+  })
+  servers.push(server)
+  return server
+}
+
+test('D1a — a second server in one process says so when it takes the lifecycle slot', () => {
+  // `setCommandLifecycleListener` is a single slot, so the second claimant
+  // silently disarms the first and the first session's staged messages then
+  // reach no transcript at all. The invariant that keeps this to one server per
+  // process is the N-process model, which nothing in here can assert.
+  const owner = makeServer(new AppSessionController(probeAdapter()))
+  owner.close()
+
+  // Claiming a released slot is the ordinary case and says nothing.
+  const freshLogs: string[] = []
+  makeLoggingServer(freshLogs)
+  expect(freshLogs.filter(line => line.includes('command-lifecycle'))).toEqual([])
+
+  // Claiming it over the server that still holds it is the one that has to be
+  // audible.
+  const takeoverLogs: string[] = []
+  makeLoggingServer(takeoverLogs)
+  expect(
+    takeoverLogs.some(line =>
+      line.includes('command-lifecycle listener taken over'),
+    ),
+  ).toBe(true)
+})
+
 /**
  * D1b — taking a waiting message back.
  *
@@ -1802,6 +1912,35 @@ async function serverWithStagedPrompt(prompt: SubmitPromptValue) {
   )
   return { server, conn, received, end: () => release?.() }
 }
+
+test('D1a — the staged preview is the folded prompt, truncated at the cap', async () => {
+  // Perf pin for the preview builder, which stops folding once it is past the
+  // cap instead of joining a prompt that may carry MAX_PROMPT_BYTES of text.
+  // The image between the two text blocks is the part a separator rule can get
+  // wrong: it contributes no text and no newline.
+  const blocks = [
+    { type: 'text' as const, text: 'a'.repeat(400) },
+    {
+      type: 'image' as const,
+      source: {
+        type: 'base64' as const,
+        media_type: 'image/png' as const,
+        data: 'AAAA',
+      },
+    },
+    { type: 'text' as const, text: 'b'.repeat(400) },
+  ]
+  const { received, end } = await serverWithStagedPrompt(blocks)
+
+  const folded = blocks
+    .flatMap(block => (block.type === 'text' ? [block.text] : []))
+    .join('\n')
+  expect(queuedPromptSnapshots(received).at(-1)?.[0]?.text).toBe(
+    folded.slice(0, MAX_QUEUED_PROMPT_PREVIEW_CHARS),
+  )
+
+  end()
+})
 
 test('D1b — a recall takes the waiting message back and clears its staged row', async () => {
   const { server, conn, received, end } =
@@ -2028,6 +2167,62 @@ test('D1b boundary — rejects prompt.recall with no requestId, nothing recalled
   )
   expect(recallResults(received)).toHaveLength(0)
   expect(getCommandQueueSnapshot()).toHaveLength(1)
+
+  end()
+})
+
+test('D1b — a recall is refused while the sidecar is parking, exactly as a submit is', () => {
+  // A latched sidecar is exiting. Accepting a recall there is worse than
+  // refusing it: the messages come off the queue and the answer carrying them
+  // goes out over a connection that is about to disappear, so the queue no
+  // longer holds them and the composer never received them. Same code and same
+  // retryability as `handleSubmit`, so the user unparks and asks again.
+  const { server, parkCount } = makeParkServer(
+    new AppSessionController(probeAdapter()),
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(conn, clientFrame({ type: 'app.park', requestId: 'park-1' }))
+  expect(parkCount()).toBe(1)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'prompt.recall', requestId: 'recall-parked' }),
+  )
+
+  const err = received.find(
+    f => f.kind === 'error' && f.code === 'session_disconnected',
+  )
+  expect(err).toBeDefined()
+  if (err?.kind === 'error') {
+    expect(err.requestId).toBe('recall-parked')
+    expect(err.retryable).toBe(true)
+  }
+  expect(recallResults(received)).toHaveLength(0)
+})
+
+test('D1b — the recall answer reaches every connection, like the correction does', async () => {
+  // By the time this frame is built the messages are off the queue AND out of
+  // the staged map, so the frame is the only thing carrying them anywhere the
+  // user can reach. A unicast that loses its race with the requesting
+  // connection being removed leaves the text nowhere at all. The renderer acts
+  // only on a requestId it minted, so the extra copies change nothing for a
+  // connection that did not ask.
+  const { server, conn, received, end } =
+    await serverWithStagedPrompt('and the logs')
+  const second = makeSocket()
+  server.addConnection(second.socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'prompt.recall', requestId: 'recall-fanout' }),
+  )
+
+  const answer = recallResults(second.received).at(-1)
+  expect(answer?.requestId).toBe('recall-fanout')
+  expect(answer?.recalled.map(item => item.prompt)).toEqual(['and the logs'])
+  expect(recallResults(received).at(-1)?.requestId).toBe('recall-fanout')
 
   end()
 })

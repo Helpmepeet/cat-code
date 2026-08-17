@@ -24,15 +24,21 @@ import { PROTOCOL_VERSION, type ServerFrame, type SessionId } from '../shared/pr
 const SID: SessionId = 'sess-1'
 
 /**
- * The once-per-attach burst, in the exact order `SidecarServer.addConnection`
- * sends it (`app/sidecar/sidecarServer.ts:709-812`). Written out here rather
- * than derived from the buffer's own table so a reordering or a demotion to the
- * evictable ring is a test failure, not a silently agreeing constant.
+ * The once-per-attach burst, in the order `SidecarServer.addConnection` sends it
+ * (`app/sidecar/sidecarServer.ts`). Written out here rather than derived from
+ * the buffer's own table so a reordering or a demotion to the evictable ring is
+ * a test failure, not a silently agreeing constant.
  *
  * This is CALL order, not arrival order: the two `void`-invoked async sends
  * (`agent-mode`, `stats.usage`) await before their first send, so their frames
  * land after the synchronous burst. The buffer keys on arrival, and this suite
  * supplies arrival itself, so call order is what the list can honestly mirror.
+ *
+ * `queued-prompts.snapshot` is the one entry that is NOT sent every time:
+ * `addConnection` skips it when nothing is waiting for a running response, which
+ * is the ordinary case. It belongs in the list all the same, because what the
+ * list is for is retention (every kind here must survive ring eviction), and
+ * this suite supplies its own arrivals rather than observing a real attach.
  */
 const ATTACH_BURST_KINDS = [
   'permission.context',
@@ -273,7 +279,7 @@ test('no slash-catalog frame recorded means none is replayed (never a fabricated
 /*
  * Once-per-attach state frames (the operator-reported reattach failure).
  *
- * The sidecar sends each of ATTACH_BURST_KINDS exactly once per connect, right
+ * The sidecar sends each of ATTACH_BURST_KINDS at most once per connect, right
  * after `ready` and before history replay. Main never re-runs connect() on a
  * renderer reload, so whatever this buffer dropped is gone: the operator saw a
  * reattach replay plenty of transcript but leave settings claiming it had read
