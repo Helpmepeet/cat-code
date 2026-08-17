@@ -59,8 +59,12 @@ test('renderer frame forwarding rejects non-supervisor session ids before buffer
   // application. The runtime behavior is covered by the focused sidecar and
   // host tests; here we pin the sole forwarding choke point against a future
   // handler-level validation regression.
+  // The signature is matched only as far as its first parameter: `forward` now
+  // RETURNS the refusal code so a submit can be answered with why it failed,
+  // and pinning the whole signature made this guard fail for a change that left
+  // the property below untouched. The property is what matters, not the shape.
   const forward = region(
-    'function forward(sessionId: SessionId, message: SidecarClientMessage): void',
+    'function forward(\n  sessionId: SessionId,',
     'function sanitizeSubmitOptions(',
   )
   expect(forward).toContain('if (!SESSION_ID_RE.test(sessionId)) return')

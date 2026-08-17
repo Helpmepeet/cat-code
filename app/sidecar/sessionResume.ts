@@ -62,14 +62,27 @@ export class SidecarResumeError extends Error {
  * delivery (a restore that starts a turn and spends tokens, which restore must
  * not do) or shows a message as waiting for a turn that will never come. The
  * row is a record of what was written, not a claim about what the model saw.
- * What is still missing is that the row does not SAY so: nothing renders
- * `isReplay`, so it is indistinguishable from a delivered message.
+ * What is still missing is that the row does not SAY so. `isReplay` is set on
+ * the projected frame and IS consumed, but only for turn state:
+ * `app/renderer/src/transcriptProjector.ts:1232` reads it so a restored prompt
+ * does not clear `turnInterrupted`. Nothing marks the row visually, which is the
+ * real gap. The flag is load-bearing, so do not delete it as unused.
  */
 export type UndeliveredPrompt = {
   uuid: string
   /** Verbatim, so an image-bearing message restores as what was sent. */
   content: string | ContentBlockParam[]
   timestamp: string
+}
+
+/**
+ * The reconstructed queue, plus how many enqueue records it had to discard. A
+ * restore that recovered less than the log held is countable rather than silent
+ * (`session.restore.completed` in `index.ts`).
+ */
+export type UndeliveredPromptSelection = {
+  prompts: UndeliveredPrompt[]
+  droppedRecords: number
 }
 
 export type SidecarResumeResult = {
@@ -90,6 +103,41 @@ export type SidecarResumeResult = {
   initialState: AppState
   turnInterrupted: boolean
   undeliveredPrompts: UndeliveredPrompt[]
+  /** See `UndeliveredPromptSelection.droppedRecords`. */
+  droppedQueueRecords: number
+}
+
+/**
+ * Block kinds a queued prompt can actually carry, so a record that holds
+ * anything else is not restored as if the user had typed it.
+ *
+ * A queued prompt's value comes from a composer submit: the terminal's is a
+ * string (`src/utils/handlePromptSubmit.ts:414`), and the desktop and bridge
+ * paths can send `text` and `image` blocks. A `tool_use`, `tool_result` or
+ * `document` block in a `type:'user'` frame would be a shape no composer can
+ * produce, so it is a corrupt or hand-edited record rather than lost input.
+ */
+function restorableContent(
+  content: SessionQueueOperation['content'],
+): string | ContentBlockParam[] | null {
+  if (typeof content === 'string') return content.length > 0 ? content : null
+  if (!Array.isArray(content) || content.length === 0) return null
+  for (const block of content) {
+    if (block === null || typeof block !== 'object') return null
+    const candidate = block as { type?: unknown; text?: unknown; source?: unknown }
+    if (candidate.type === 'text') {
+      if (typeof candidate.text !== 'string') return null
+      continue
+    }
+    if (candidate.type === 'image') {
+      if (candidate.source === null || typeof candidate.source !== 'object') {
+        return null
+      }
+      continue
+    }
+    return null
+  }
+  return content
 }
 
 /**
@@ -109,6 +157,19 @@ export type SidecarResumeResult = {
  * which is exactly why the resent copy is still recovered while the recalled
  * one is not.
  *
+ * The walk is IN ORDER, over a live map, because a uuid can stop waiting and
+ * start again: `drainOneQueuedPrompt` re-enqueues the same command object after
+ * a turn that rejected before `onInputPersisted`, and again when `startTurn`
+ * refuses outright (`app/sidecar/sidecarServer.ts`). The log then reads
+ * enqueue-dequeue-enqueue for a message that is genuinely still queued.
+ * Collecting the retracted uuids as an order-independent set destroyed exactly
+ * that message, silently. Order is safe to rely on: `logOperation` writes
+ * through `recordQueueOperation` to one per-file queue that drains in push
+ * order (`src/utils/sessionStorage.ts` enqueueWrite / drainWriteQueue), and the
+ * reader appends in file order (`loadTranscriptFile`). If it ever were in
+ * doubt, the fix is a stable sort on `timestamp`, never discarding order:
+ * same-tick records share a millisecond, so only file order separates them.
+ *
  * `content` is runtime-narrowed rather than trusted: these records come off
  * disk, and a row that cannot be represented faithfully is dropped instead of
  * being restored as something the user did not send.
@@ -116,35 +177,37 @@ export type SidecarResumeResult = {
 export function selectUndeliveredPrompts(queueState: {
   operations: readonly SessionQueueOperation[]
   messageUuids: ReadonlySet<string>
-}): UndeliveredPrompt[] {
-  const retracted = new Set<string>()
+}): UndeliveredPromptSelection {
+  const waiting = new Map<string, UndeliveredPrompt>()
+  let droppedRecords = 0
   for (const operation of queueState.operations) {
-    if (operation.operation === 'enqueue' || operation.uuid === undefined) {
+    if (operation.operation !== 'enqueue') {
+      // A retraction written before the verbs recorded their command cannot say
+      // WHICH message stopped waiting, and matching by text would take back the
+      // wrong one. Replaying one stale row is the lesser harm.
+      if (operation.uuid !== undefined) waiting.delete(operation.uuid)
       continue
     }
-    retracted.add(operation.uuid)
-  }
-
-  const undeliveredByUuid = new Map<string, UndeliveredPrompt>()
-  for (const operation of queueState.operations) {
-    if (
-      operation.operation !== 'enqueue' ||
-      operation.mode !== 'prompt' ||
-      operation.uuid === undefined ||
-      retracted.has(operation.uuid) ||
-      queueState.messageUuids.has(operation.uuid)
-    ) {
+    if (operation.mode !== 'prompt') continue
+    const content = restorableContent(operation.content)
+    if (operation.uuid === undefined || content === null) {
+      droppedRecords++
       continue
     }
-    const content = operation.content
-    if (typeof content !== 'string' && !Array.isArray(content)) continue
-    undeliveredByUuid.set(operation.uuid, {
+    // Re-inserting on a requeue also moves it to the back of the map, matching
+    // the real queue: `drainOneQueuedPrompt`'s put-back appends.
+    waiting.set(operation.uuid, {
       uuid: operation.uuid,
       content,
       timestamp: operation.timestamp,
     })
   }
-  return [...undeliveredByUuid.values()]
+  return {
+    prompts: [...waiting.values()].filter(
+      prompt => !queueState.messageUuids.has(prompt.uuid),
+    ),
+    droppedRecords,
+  }
 }
 
 /**
@@ -173,7 +236,7 @@ export async function resumeEngineSession(
   }
 
   const queueState = await getSessionQueueOperations(resumeEngineSessionId)
-  const undeliveredPrompts = selectUndeliveredPrompts(queueState)
+  const undelivered = selectUndeliveredPrompts(queueState)
 
   const processed = await processResumedConversation(
     loaded,
@@ -211,6 +274,7 @@ export async function resumeEngineSession(
     messages: processed.messages,
     initialState: processed.initialState,
     turnInterrupted: loaded.turnInterruptionState.kind === 'interrupted_prompt',
-    undeliveredPrompts,
+    undeliveredPrompts: undelivered.prompts,
+    droppedQueueRecords: undelivered.droppedRecords,
   }
 }

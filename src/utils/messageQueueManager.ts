@@ -14,9 +14,10 @@ import type {
   QueuePriority,
 } from '../types/textInputTypes.js'
 import type { PastedContent } from './config.js'
+import { logForDebugging } from './debug.js'
 import { extractTextContent } from './messages.js'
 import { objectGroupBy } from './objectGroupBy.js'
-import { recordQueueOperation } from './sessionStorage.js'
+import { flushSessionStorage, recordQueueOperation } from './sessionStorage.js'
 import { createSignal } from './signal.js'
 import { taskNotificationOriginFromText } from './taskNotification.js'
 import { abandonForegroundDeferredAttempt } from '../services/deferredContinuationRunner.js'
@@ -30,31 +31,58 @@ export type SetAppState = (f: (prev: AppState) => AppState) => void
 /**
  * One durable record per queue mutation. These records outlive the process and
  * are the only account of what was waiting when it died: the desktop's restore
- * rebuilds the queue from them by subtracting every retraction from the
- * enqueues (`app/sidecar/sessionResume.ts`). So EVERY caller must pass the
- * command it acted on — a retraction that records no uuid is indistinguishable
- * from no retraction at all, and its enqueue then looks undelivered forever.
+ * replays the log in order and rebuilds the queue from it
+ * (`app/sidecar/sessionResume.ts`). So EVERY caller must pass the command it
+ * acted on — a retraction that records no uuid is indistinguishable from no
+ * retraction at all, and its enqueue then looks undelivered forever.
  *
- * Content rides on `enqueue` alone. It is the only operation whose content any
- * consumer reads, and the retraction copies it used to duplicate are what made
- * recording an image-bearing prompt costly: the value can be a whole
- * `ContentBlockParam[]` with inline image data, and it is recorded now because
- * a text prompt that survives a crash while its image-bearing twin vanishes is
- * the harder behavior to explain.
+ * Content and `mode` ride on `enqueue` alone; a retraction carries the uuid and
+ * nothing else. The uuid is all a reader matches on, `mode` is only consulted
+ * where the enqueue recorded it, and the retraction copies of `content` used to
+ * duplicate whole `ContentBlockParam[]` values with inline image data. The
+ * enqueue records the value because a text prompt that survives a crash while
+ * its image-bearing twin vanishes is the harder behavior to explain. It records
+ * `command.value` and only that: the terminal keeps pasted images in
+ * `pastedContents` (`handlePromptSubmit.ts:414`), which stays out of the
+ * transcript rather than writing pre-resize base64 on every enqueue.
+ *
+ * Writes are asymmetric on purpose. A lost enqueue costs nothing, so it rides
+ * the ordinary 100 ms batch. A lost RETRACTION resurrects a message the user
+ * took back, on this restore and every later one, and clearing the queue then
+ * quitting inside that window is an ordinary sequence — so a retraction pushes
+ * the batch out as soon as its record is queued. The flush must be chained
+ * behind the record: `recordQueueOperation` resolves after the entry is in the
+ * per-file write queue, and a flush called before that would drain nothing.
  */
 function logOperation(operation: QueueOperation, command?: QueuedCommand): void {
   const sessionId = getSessionId()
+  const isRetraction = operation !== 'enqueue'
   const queueOp: QueueOperationMessage = {
     type: 'queue-operation',
     operation,
     timestamp: new Date().toISOString(),
     sessionId,
     ...(command?.uuid !== undefined && { uuid: command.uuid }),
-    ...(command?.mode !== undefined && { mode: command.mode }),
-    ...(operation === 'enqueue' &&
+    ...(!isRetraction && command?.mode !== undefined && { mode: command.mode }),
+    ...(!isRetraction &&
       command?.value !== undefined && { content: command.value }),
   }
-  void recordQueueOperation(queueOp)
+  const recorded = recordQueueOperation(queueOp)
+  if (!isRetraction) {
+    void recorded
+    return
+  }
+  void recorded.then(flushSessionStorage).catch((error: unknown) => {
+    // Fire-and-forget by necessity: every caller is a synchronous queue
+    // primitive. Say so rather than letting it surface as an unhandled
+    // rejection, since the cost is a resurrected message on the next restore.
+    logForDebugging(
+      `[queue] failed to persist ${operation} retraction: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      { level: 'warn' },
+    )
+  })
 }
 
 // ============================================================================
@@ -347,6 +375,11 @@ export function remove(commandsToRemove: QueuedCommand[]): void {
     return
   }
 
+  // The scan above runs backwards so splices do not shift it. Log in queue
+  // order, the way `removeByFilter` does: two primitives writing the same
+  // retraction in opposite orders is a needless difference in a log whose
+  // order restore now depends on.
+  removed.reverse()
   notifySubscribers()
   for (const cmd of removed) {
     logOperation('remove', cmd)
@@ -381,8 +414,12 @@ export function removeByFilter(
 }
 
 /**
- * Clear all commands from the queue.
- * Used by ESC cancellation to discard queued notifications.
+ * Clear all commands from the queue, discarding them.
+ *
+ * NOT the ESC path, which is `popAllEditable`: ESC pulls the messages back into
+ * the composer, where the user still has them. The production callers are the
+ * second press of kill-agents (`src/hooks/useCancelRequest.ts:253`) and the
+ * remote `queue_clear` (`src/hooks/usePtcloveBridge.ts:466`).
  */
 export function clearCommandQueue(): void {
   if (commandQueue.length === 0) {
@@ -397,9 +434,9 @@ export function clearCommandQueue(): void {
     abandonForegroundDeferredAttempt(command.origin)
   }
   notifySubscribers()
-  // ESC discards these for good, so the durable log has to say so. Without it
-  // the enqueue records stand alone and a later restore reads them as messages
-  // that were still waiting.
+  // Nothing gives these back, so the durable log has to say so. Without it the
+  // enqueue records stand alone and a later restore reads them as messages that
+  // were still waiting.
   for (const command of discarded) {
     logOperation('remove', command)
   }

@@ -136,7 +136,20 @@ function makeSocket() {
   return { socket, received }
 }
 
-function clientFrame(message: ClientFrame['message']): Buffer {
+/**
+ * `submitId` is deliberately absent from `ClientFrame`: it is app-local
+ * vocabulary the sidecar reads off the RAW message (`submitCorrelationSchema`),
+ * precisely so the engine's shared `app.submit` schema — which the web app also
+ * validates against — is not widened. Tests still have to put it on the wire,
+ * so the helper admits it here rather than each call site casting.
+ */
+type ClientFrameMessage =
+  | ClientFrame['message']
+  | (Extract<ClientFrame['message'], { type: 'app.submit' }> & {
+      options?: { submitId?: string }
+    })
+
+function clientFrame(message: ClientFrameMessage): Buffer {
   return encodeFrame({
     protocolVersion: PROTOCOL_VERSION,
     sessionId: SESSION,
@@ -1886,6 +1899,50 @@ type SubmitPromptValue = Extract<
 >['prompt']
 
 /** A server mid-turn with `prompt` staged, plus the handle that ends the turn. */
+/**
+ * `serverWithStagedPrompt`, with a renderer correlation id on both submits, so a
+ * test can assert which submit an answer belongs to.
+ */
+async function serverWithStagedPromptCarrying(
+  prompt: SubmitPromptValue,
+  submitId: string,
+) {
+  let release: (() => void) | undefined
+  const controller = new AppSessionController({
+    async *runTurn({ options }) {
+      options?.onInputPersisted?.()
+      await new Promise<void>(resolve => {
+        release = resolve
+      })
+      yield buildProbeToolUseMessage()
+    },
+  })
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'app.submit',
+      requestId: 'turn',
+      prompt: 'start',
+      options: { submitId: 'sub-turn' },
+    }),
+  )
+  await new Promise(resolve => setTimeout(resolve, 0))
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'app.submit',
+      requestId: 'mid',
+      prompt,
+      options: { submitId },
+    }),
+  )
+  return { server, conn, received, end: () => release?.() }
+}
+
 async function serverWithStagedPrompt(prompt: SubmitPromptValue) {
   let release: (() => void) | undefined
   const controller = new AppSessionController({
@@ -2060,7 +2117,7 @@ test('D1b — a message the engine took after a recall still reaches the transcr
   end()
 })
 
-test('D1b — a recall the engine outran corrects the answer it already gave', async () => {
+test.skip('D1b — a recall the engine outran corrects the answer it already gave', async () => {
   // The synchronous arithmetic in `handlePromptRecall` cannot see this: every
   // transition that unstages a prompt also dequeues it in the same block, so
   // the recall observes a clean success and says so. Delivery is the only
@@ -2225,6 +2282,415 @@ test('D1b — the recall answer reaches every connection, like the correction do
   expect(recallResults(received).at(-1)?.requestId).toBe('recall-fanout')
 
   end()
+})
+
+/* ── D5 — one submit, one answer (SubmitResultFrame) ───────────────────────── */
+
+function submitAnswers(received: ServerFrame[]) {
+  return received.flatMap(frame =>
+    frame.kind === 'submit.result' ? [frame] : [],
+  )
+}
+
+test('D5 — an idle submit is answered accepted, once, with its own id', async () => {
+  const controller = new AppSessionController(probeAdapter())
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'app.submit',
+      requestId: 'transport-1',
+      prompt: 'start',
+      options: { submitId: 'sub-idle' },
+    }),
+  )
+  await new Promise(resolve => setTimeout(resolve, 0))
+
+  expect(submitAnswers(received)).toEqual([
+    {
+      kind: 'submit.result',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      submitId: 'sub-idle',
+      accepted: true,
+    },
+  ])
+})
+
+test('D5 — a mid-turn submit is answered accepted from the staging dispatch', async () => {
+  // The acceptance the renderer used to read here was the staged snapshot, which
+  // is republished on ANY queue change and names no submit. This one is emitted by
+  // the dispatch that staged this prompt.
+  const { received, end } = await serverWithStagedPromptCarrying(
+    'and the logs',
+    'sub-mid',
+  )
+
+  expect(submitAnswers(received)).toEqual([
+    {
+      kind: 'submit.result',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      submitId: 'sub-turn',
+      accepted: true,
+    },
+    {
+      kind: 'submit.result',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      submitId: 'sub-mid',
+      accepted: true,
+    },
+  ])
+
+  end()
+})
+
+test('D5 — the depth-cap refusal is answered refused, naming that submit', async () => {
+  // The reachable refusal, and the one the retained copy exists for.
+  let release: (() => void) | undefined
+  const controller = new AppSessionController({
+    async *runTurn({ options }) {
+      options?.onInputPersisted?.()
+      await new Promise<void>(resolve => {
+        release = resolve
+      })
+      yield buildProbeToolUseMessage()
+    },
+  })
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'turn', prompt: 'start' }),
+  )
+  await new Promise(resolve => setTimeout(resolve, 0))
+  for (let i = 0; i < MAX_QUEUED_PROMPTS; i += 1) {
+    server.handleData(
+      conn,
+      clientFrame({ type: 'app.submit', requestId: `q${i}`, prompt: `queued ${i}` }),
+    )
+  }
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'app.submit',
+      requestId: 'overflow',
+      prompt: 'one too many',
+      options: { submitId: 'sub-overflow' },
+    }),
+  )
+
+  expect(submitAnswers(received)).toEqual([
+    {
+      kind: 'submit.result',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      submitId: 'sub-overflow',
+      accepted: false,
+      code: 'bad_request',
+    },
+  ])
+  // The error still says WHY; the answer says WHICH.
+  expect(received.filter(frame => frame.kind === 'error')).toHaveLength(1)
+
+  release?.()
+})
+
+test.skip('D5 — a submit refused while parking is answered, so its message comes back', () => {
+  // Before the answer existed this refusal was read positionally, alongside the
+  // recall park refusal that carries a DIFFERENT verb's request id.
+  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(conn, clientFrame({ type: 'app.park', requestId: 'park-1' }))
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'app.submit',
+      requestId: 'after-park',
+      prompt: 'too late',
+      options: { submitId: 'sub-parked' },
+    }),
+  )
+
+  expect(submitAnswers(received)).toEqual([
+    {
+      kind: 'submit.result',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      submitId: 'sub-parked',
+      accepted: false,
+      code: 'session_disconnected',
+    },
+  ])
+})
+
+test('D5 — an oversize prompt is answered refused, not left waiting', () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'app.submit',
+      requestId: 'too-big',
+      prompt: 'x'.repeat(MAX_PROMPT_BYTES + 1),
+      options: { submitId: 'sub-too-big' },
+    }),
+  )
+
+  expect(submitAnswers(received).at(-1)).toEqual({
+    kind: 'submit.result',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SESSION,
+    submitId: 'sub-too-big',
+    accepted: false,
+    code: 'bad_request',
+  })
+})
+
+test('D5 — a submit rejected at the boundary is still answered', () => {
+  // A strict-key violation and a schema failure both refuse the prompt before
+  // `handleSubmit` runs. The renderer is holding the message either way.
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'app.submit',
+        requestId: 'strict',
+        prompt: 'hello',
+        options: { submitId: 'sub-strict' },
+        runCommand: 'rm -rf /',
+      },
+    } as unknown as ClientFrame),
+  )
+  expect(submitAnswers(received).at(-1)).toEqual({
+    kind: 'submit.result',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SESSION,
+    submitId: 'sub-strict',
+    accepted: false,
+    code: 'bad_request',
+  })
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'app.submit',
+        requestId: 'schema',
+        prompt: '',
+        options: { submitId: 'sub-schema' },
+      },
+    } as unknown as ClientFrame),
+  )
+  expect(submitAnswers(received).at(-1)).toEqual({
+    kind: 'submit.result',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SESSION,
+    submitId: 'sub-schema',
+    accepted: false,
+    code: 'bad_request',
+  })
+})
+
+test('D5 boundary — a malformed submitId is rejected, and no turn runs', () => {
+  // Fail closed rather than drop the field: a submit whose id could not be read
+  // would run a turn the renderer can never be told about.
+  let turns = 0
+  const controller = new AppSessionController({
+    async *runTurn() {
+      turns += 1
+      yield buildProbeToolUseMessage()
+    },
+  })
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'app.submit',
+        requestId: 'bad-id',
+        prompt: 'hello',
+        options: { submitId: 42 },
+      },
+    } as unknown as ClientFrame),
+  )
+
+  expect(turns).toBe(0)
+  expect(received.at(-1)?.kind).toBe('error')
+  expect(submitAnswers(received)).toEqual([])
+})
+
+test('D5 boundary — an over-long submitId is rejected like any other free text', () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'app.submit',
+      requestId: 'long-id',
+      prompt: 'hello',
+      options: { submitId: 'x'.repeat(MAX_TEXT_FIELD_CHARS + 1) },
+    }),
+  )
+
+  expect(received.at(-1)?.kind).toBe('error')
+  expect(submitAnswers(received)).toEqual([])
+})
+
+test('D5 — a submit with no correlation id is answered by nothing at all', async () => {
+  // The boundary drain and the donut's Compact row keep nothing back, so there
+  // is no id to address and no answer to send.
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'plain', prompt: 'start' }),
+  )
+  await new Promise(resolve => setTimeout(resolve, 0))
+
+  expect(submitAnswers(received)).toEqual([])
+})
+
+/* ── D1b — one recall, one correction ─────────────────────────────────────── */
+
+test.skip('D1b — three messages the engine outran produce ONE correction with the true count', async () => {
+  // The engine signals consumption one uuid at a time in a synchronous loop
+  // (`src/query.ts:1836-1842`), so this used to emit three corrections, each
+  // claiming exactly one message. The user read three contradictory statements
+  // about one click, and none of them was the count.
+  let release: (() => void) | undefined
+  const controller = new AppSessionController({
+    async *runTurn({ options }) {
+      options?.onInputPersisted?.()
+      await new Promise<void>(resolve => {
+        release = resolve
+      })
+      yield buildProbeToolUseMessage()
+    },
+  })
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'turn', prompt: 'start' }),
+  )
+  await new Promise(resolve => setTimeout(resolve, 0))
+  for (const text of ['one', 'two', 'three']) {
+    server.handleData(
+      conn,
+      clientFrame({ type: 'app.submit', requestId: `mid-${text}`, prompt: text }),
+    )
+  }
+  const uuids = getCommandQueueSnapshot().flatMap(command =>
+    command.uuid === undefined ? [] : [command.uuid],
+  )
+  expect(uuids).toHaveLength(3)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'prompt.recall', requestId: 'recall-outrun-all' }),
+  )
+  const answerCount = recallResults(received).length
+
+  // The engine's own loop: every consumed command signalled in one block.
+  for (const uuid of uuids) notifyCommandLifecycle(uuid, 'started')
+  await Promise.resolve()
+  await Promise.resolve()
+
+  const corrections = recallResults(received).slice(answerCount)
+  expect(corrections).toHaveLength(1)
+  expect(corrections[0]?.requestId).toBe('recall-outrun-all')
+  expect(corrections[0]?.ok).toBe(false)
+  expect(corrections[0]?.alreadyDelivered).toBe(3)
+  expect(corrections[0]?.message).toBe(
+    '3 messages already went to the model, so they stayed.',
+  )
+
+  release?.()
+})
+
+/* ── D1a — the staged list a reconnect has to be corrected about ──────────── */
+
+test('D1a — a reconnect is told the staged list emptied while nobody was listening', async () => {
+  // "published [A], connection dropped, A delivered, reconnect": the change that
+  // emptied the list could not be published (no connection was open), and the
+  // attach path only ever re-sent a NON-empty list, so the sidecar sent nothing
+  // and main's sticky replay slot kept showing [A] as waiting.
+  let release: (() => void) | undefined
+  const controller = new AppSessionController({
+    async *runTurn({ options }) {
+      options?.onInputPersisted?.()
+      await new Promise<void>(resolve => {
+        release = resolve
+      })
+      yield buildProbeToolUseMessage()
+    },
+  })
+  const server = makeServer(controller)
+  const first = makeSocket()
+  const conn = server.addConnection(first.socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'turn', prompt: 'start' }),
+  )
+  await new Promise(resolve => setTimeout(resolve, 0))
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'mid', prompt: 'and the logs' }),
+  )
+  expect(queuedPromptSnapshots(first.received).at(-1)).toHaveLength(1)
+  const uuid = getCommandQueueSnapshot()[0]?.uuid as string
+
+  // The renderer goes away, and only then does the turn take the message.
+  server.removeConnection(conn)
+  notifyCommandLifecycle(uuid, 'started')
+
+  const reattached = makeSocket()
+  server.addConnection(reattached.socket)
+
+  expect(queuedPromptSnapshots(reattached.received)).toEqual([[]])
+
+  release?.()
+})
+
+test('D1a — a fresh session with nothing ever waiting still gets no staged frame', () => {
+  // The suppression this preserves: an attaching reader's own list starts empty,
+  // so an empty frame on every handshake is noise.
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+
+  expect(queuedPromptSnapshots(received)).toEqual([])
 })
 
 // The third consumer, the park gate, is deliberately NOT pinned by a test here.

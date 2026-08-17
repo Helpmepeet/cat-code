@@ -157,7 +157,11 @@ const OPERATIONAL_EVENT_FIELD_KEYS: Partial<Record<OperationalEvent, readonly st
   // fixed quiet threshold, so the interesting unknown is how long the turn had
   // already been running when it went silent.
   'session.turn.stalled': ['phase', 'elapsedMs'],
-  'session.restore.completed': ['messageCount'],
+  // `count` is queue-operation records the restore could not represent and
+  // therefore dropped (`selectUndeliveredPrompts`). Zero is the ordinary case
+  // and still written: this path exists because a restore once got its row set
+  // wrong, so "nothing was dropped" has to be evidence rather than silence.
+  'session.restore.completed': ['messageCount', 'count'],
   // `count` is how many of a thing the mechanism in `reason` affected. It is a
   // number, so it can carry no payload, and a drop reported without its
   // magnitude reads the same whether one frame or a whole restore was lost.

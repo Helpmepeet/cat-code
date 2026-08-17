@@ -123,7 +123,7 @@ import {
   isAppOrigin,
   type NavigationConfig,
 } from './navigationPolicy.js'
-import { MAX_SUGGESTION_SELECTIONS } from '../shared/limits.js'
+import { MAX_SUGGESTION_SELECTIONS, MAX_TEXT_FIELD_CHARS } from '../shared/limits.js'
 import { createOperationalLogSink } from './operationalLogSink.js'
 import { createOperationalRecord } from '../shared/operationalLog.js'
 import { createDeliveryTraceSink, deliveryMessageKindOfFrame } from './deliveryTraceSink.js'
@@ -156,6 +156,7 @@ import {
   type SessionActionVerbType,
   type ContextBreakdownVerbType,
   type ContextBreakdownVerbMessage,
+  type ErrorFrame,
   type SessionId,
   type SessionsCatalogSnapshot,
   type SettingsVerbMessage,
@@ -1550,12 +1551,19 @@ function registerIpcHandlers(): void {
     ) {
       return
     }
-    forward(arg.sessionId, {
+    const options = sanitizeSubmitOptions(arg.options)
+    const failure = forward(arg.sessionId, {
       type: 'app.submit',
       requestId: generateRequestId(),
       prompt: arg.prompt,
-      options: sanitizeSubmitOptions(arg.options),
+      options,
     })
+    // The submit never left main, so no sidecar will ever answer it. Say so with
+    // the renderer's own id rather than letting the retained message sit forever
+    // waiting for a frame that cannot come.
+    if (failure !== null) {
+      answerUnforwardedSubmit(arg.sessionId, options?.submitId, failure)
+    }
   })
 
   ipcMain.on(
@@ -2412,8 +2420,19 @@ function readString(payload: unknown, key: string): string | undefined {
   return typeof value === 'string' ? value : undefined
 }
 
-function forward(sessionId: SessionId, message: SidecarClientMessage): void {
-  if (!SESSION_ID_RE.test(sessionId)) return
+/**
+ * Hand a renderer message to the supervisor. Returns the closed code of the
+ * failure it synthesized, or null when the message was handed over.
+ *
+ * The return value exists for one caller: a submit that never reached the
+ * supervisor is a certain loss, and only main knows it happened
+ * (`answerUnforwardedSubmit`). Every other caller ignores it, exactly as before.
+ */
+function forward(
+  sessionId: SessionId,
+  message: SidecarClientMessage,
+): ErrorFrame['code'] | null {
+  if (!SESSION_ID_RE.test(sessionId)) return 'bad_request'
 
   if (!supervisor) {
     const frame: ServerFrame = {
@@ -2429,10 +2448,11 @@ function forward(sessionId: SessionId, message: SidecarClientMessage): void {
     }
     deliver(attachmentGate.onFrame(sessionId, frame))
     process.stderr.write(`[main] forward to ${sessionId} failed: no live host\n`)
-    return
+    return 'session_not_found'
   }
   try {
     supervisor.send(sessionId, message)
+    return null
   } catch (error) {
     const messageText = error instanceof Error ? error.message : String(error)
     const code = isSidecarSendError(error) ? error.code : 'bad_request'
@@ -2451,17 +2471,66 @@ function forward(sessionId: SessionId, message: SidecarClientMessage): void {
     process.stderr.write(
       `[main] forward to ${sessionId} failed: ${messageText}\n`,
     )
+    return code
   }
 }
 
-function sanitizeSubmitOptions(options: unknown): { isMeta?: boolean; goalSnapshot?: unknown } | undefined {
+function sanitizeSubmitOptions(options: unknown): {
+  isMeta?: boolean
+  goalSnapshot?: unknown
+  submitId?: string
+} | undefined {
   if (typeof options !== 'object' || options === null) return undefined
-  const o = options as { isMeta?: unknown; goalSnapshot?: unknown }
-  const result: { isMeta?: boolean; goalSnapshot?: unknown } = {}
+  const o = options as {
+    isMeta?: unknown
+    goalSnapshot?: unknown
+    submitId?: unknown
+  }
+  const result: { isMeta?: boolean; goalSnapshot?: unknown; submitId?: string } = {}
   if (typeof o.isMeta === 'boolean') result.isMeta = o.isMeta
   // goalSnapshot passed through as-is; the SIDECAR validates it (T4).
   if ('goalSnapshot' in o) result.goalSnapshot = o.goalSnapshot
+  // The renderer's own correlation id (SubmitOptions.submitId). Admitted rather
+  // than stripped, because it is what lets the renderer pair the answer with the
+  // message it is holding. Bounded here for UX and re-validated at the sidecar,
+  // which is the trust boundary; anything else is dropped, exactly like a
+  // non-boolean `isMeta`.
+  if (
+    typeof o.submitId === 'string' &&
+    o.submitId.length > 0 &&
+    o.submitId.length <= MAX_TEXT_FIELD_CHARS
+  ) {
+    result.submitId = o.submitId
+  }
   return result
+}
+
+/**
+ * Answer a submit main could not forward at all, with the renderer's own
+ * correlation id (SubmitResultFrame). `forward` already synthesized the `error`
+ * frame that says WHY; this is what tells the renderer WHICH message is gone, so
+ * the copy it is holding comes back with its image instead of being stranded.
+ *
+ * Main is the only party that can send this one: the supervisor never saw the
+ * frame, so no sidecar will ever answer it. It is a certain loss, and the
+ * renderer used to be told nothing at all.
+ */
+function answerUnforwardedSubmit(
+  sessionId: SessionId,
+  submitId: string | undefined,
+  code: ErrorFrame['code'],
+): void {
+  if (submitId === undefined) return
+  deliver(
+    attachmentGate.onFrame(sessionId, {
+      kind: 'submit.result',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId,
+      submitId,
+      accepted: false,
+      code,
+    }),
+  )
 }
 
 type CoercedPermissionResponse =

@@ -103,6 +103,7 @@ import {
   type AccountVerbMessage,
   type AskUserQuestionAnswerMessage,
   type ClientFrame,
+  type ErrorFrame,
   type OAuthLoginProgress,
   type PermissionContextSnapshot,
   type QueuedPromptItem,
@@ -568,6 +569,19 @@ export class SidecarServer {
     { prompt: AppSubmitPrompt; isMeta?: boolean; requestId: string }
   >()
   /**
+   * D1b — how many of ONE recall's messages turned out to have been delivered,
+   * accumulated per recall requestId until the microtask below reports them.
+   *
+   * The engine signals consumption one uuid at a time, in a synchronous loop
+   * (`src/query.ts:1836-1842`), so a recall of three messages that all went
+   * anyway produced three corrections, each of them claiming exactly one message.
+   * The user read three contradictory statements about one action, and none of
+   * them was the true count. Coalescing on the microtask boundary is what makes
+   * the correction one true statement: the whole loop has run by then.
+   */
+  private readonly lateRecallDeliveries = new Map<string, number>()
+  private lateRecallFlushScheduled = false
+  /**
    * IDLE-PARK (decisions/IDLE-PARK.md §3, R2-F2) — the parking latch. Set
    * synchronously in `handlePark` once the gate passes; a submit arriving AFTER
    * the latch is rejected `session_disconnected` before `activeTurn` is touched,
@@ -923,13 +937,27 @@ export class SidecarServer {
     this.sendSlashCatalogSnapshot(connection)
     // D1a — messages already waiting for a running response. A renderer that
     // reloaded mid-turn has to get these back or a message the user already sent
-    // is invisible until the turn ends. Sent only when there is something to
-    // report: an attaching reader's own list already starts empty, and an empty
-    // frame on every handshake is noise (the `slash-catalog.snapshot`
-    // precedent). What RETIRES a row is the change broadcast, not this.
+    // is invisible until the turn ends. Normally sent only when there is
+    // something to report: an attaching reader's own list already starts empty,
+    // and an empty frame on every handshake is noise (the
+    // `slash-catalog.snapshot` precedent).
+    //
+    // The exception is the one case where an attaching reader's list does NOT
+    // start empty: main keeps the last published list in a sticky replay slot, so
+    // a reader that attaches after "published [A], connection dropped, A
+    // delivered" is handed [A] out of the replay and would keep showing a message
+    // as waiting that the turn has already taken. The change that emptied the list
+    // could not be published (no connection was open, so `broadcastQueuedPrompts`
+    // sent nothing and committed nothing), which is exactly why the last PUBLISHED
+    // key is the condition here: non-empty means somebody may still be holding it,
+    // so send the empty snapshot once and commit it.
     const stagedForAttach = this.queuedPromptItems()
-    if (stagedForAttach.length > 0) {
+    if (
+      stagedForAttach.length > 0 ||
+      this.lastQueuedPromptsKey !== EMPTY_QUEUED_PROMPTS_KEY
+    ) {
       this.sendQueuedPrompts(connection, stagedForAttach)
+      this.lastQueuedPromptsKey = JSON.stringify(stagedForAttach)
     }
     // F2 — restored-history replay, after ready + C3 and before any live event
     // (single-socket ordering guarantees the renderer sees history first).
@@ -1053,8 +1081,9 @@ export class SidecarServer {
       }
 
       if (!this.checkRate(connection)) {
-        this.sendError(
+        this.rejectFrameWithSubmitAnswer(
           connection,
+          result.payload,
           requestIdForRejectedFrame(result.payload),
           'bad_request',
           'rate limit exceeded',
@@ -1099,6 +1128,7 @@ export class SidecarServer {
     }
     this.stagedPrompts.clear()
     this.recalledPrompts.clear()
+    this.lateRecallDeliveries.clear()
     this.stopPanelTaskReaper?.()
     this.stopPanelTaskReaper = null
     for (const connection of this.connections) {
@@ -1155,7 +1185,14 @@ export class SidecarServer {
     const strictError = checkStrictKeys(frame.message)
     if (strictError) {
       this.log(`[sidecar] rejected frame with unexpected keys: ${strictError}`)
-      this.sendError(connection, requestId, 'bad_request', strictError, false)
+      this.rejectFrameWithSubmitAnswer(
+        connection,
+        payload,
+        requestId,
+        'bad_request',
+        strictError,
+        false,
+      )
       return
     }
 
@@ -1320,8 +1357,9 @@ export class SidecarServer {
     // the trust boundary, never trust the preload).
     const parsed = appClientMessageSchema.safeParse(frame.message)
     if (!parsed.success) {
-      this.sendError(
+      this.rejectFrameWithSubmitAnswer(
         connection,
+        payload,
         undefined,
         'bad_request',
         parsed.error.issues[0]?.message ?? 'invalid message',
@@ -1370,9 +1408,24 @@ export class SidecarServer {
         this.handlePermissionResponse(connection, message, rawMessage)
         return
 
-      case 'app.submit':
-        this.handleSubmit(connection, message)
+      case 'app.submit': {
+        // The correlation id is read from the RAW message: the engine's shared
+        // schema strips it (see `submitCorrelationSchema`). Fail closed on a
+        // malformed one rather than run the turn with no way to answer it.
+        const correlation = submitCorrelationSchema.safeParse(rawMessage)
+        if (!correlation.success) {
+          this.sendError(
+            connection,
+            message.requestId,
+            'bad_request',
+            correlation.error.issues[0]?.message ?? 'invalid submitId',
+            false,
+          )
+          return
+        }
+        this.handleSubmit(connection, message, correlation.data.options?.submitId)
         return
+      }
     }
   }
 
@@ -1814,17 +1867,9 @@ export class SidecarServer {
       // The recall answered "took it back" a moment ago, and this is the only
       // point where that turns out to be false. Correcting it here is what
       // makes the promise honest: without this the user is told the message is
-      // theirs again while the model answers it, and they resend.
-      this.broadcastPromptRecallResult({
-        kind: 'prompt-recall.result',
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: this.sessionId,
-        requestId: recalled.requestId,
-        ok: false,
-        message: promptRecallMessage(0, 1),
-        recalled: [],
-        alreadyDelivered: 1,
-      })
+      // theirs again while the model answers it, and they resend. Counted rather
+      // than sent, so one recall produces one correction with the true number.
+      this.noteLateRecallDelivery(recalled.requestId)
       return
     }
     this.stagedPrompts.delete(uuid)
@@ -2015,6 +2060,41 @@ export class SidecarServer {
     }
   }
 
+  /**
+   * D1b — record that one more of a recall's messages went to the model anyway,
+   * and make sure exactly one correction reports the whole count.
+   *
+   * The flush is a microtask, not a timer: the engine's consumption loop is
+   * synchronous, so every uuid it is about to signal has been counted by the time
+   * the microtask runs, and nothing observable happens in between.
+   */
+  private noteLateRecallDelivery(requestId: string): void {
+    this.lateRecallDeliveries.set(
+      requestId,
+      (this.lateRecallDeliveries.get(requestId) ?? 0) + 1,
+    )
+    if (this.lateRecallFlushScheduled) return
+    this.lateRecallFlushScheduled = true
+    queueMicrotask(() => {
+      this.lateRecallFlushScheduled = false
+      const corrections = [...this.lateRecallDeliveries]
+      this.lateRecallDeliveries.clear()
+      if (this.closed) return
+      for (const [correctedRequestId, alreadyDelivered] of corrections) {
+        this.broadcastPromptRecallResult({
+          kind: 'prompt-recall.result',
+          protocolVersion: PROTOCOL_VERSION,
+          sessionId: this.sessionId,
+          requestId: correctedRequestId,
+          ok: false,
+          message: promptRecallMessage(0, alreadyDelivered),
+          recalled: [],
+          alreadyDelivered,
+        })
+      }
+    })
+  }
+
   /** D1b — remember a recalled message, oldest out past the queue depth cap. */
   private rememberRecalledPrompt(
     uuid: string,
@@ -2028,7 +2108,33 @@ export class SidecarServer {
     }
   }
 
-  private handleSubmit(connection: Connection, message: AppSubmitMessage): void {
+  /**
+   * ONE SUBMIT, ONE ANSWER. Every exit from this method either accepts the
+   * prompt or refuses it, and each one answers `submitId` exactly once
+   * (`refuseSubmit` / `answerSubmit`), from the same synchronous dispatch that
+   * decided the outcome. That is what makes the renderer's retained copy exact
+   * instead of inferred (SubmitResultFrame).
+   *
+   * `startTurn`'s ASYNC `onRejected` is deliberately not one of those exits: by
+   * the time it fires the prompt has been accepted AND announced as a transcript
+   * row, so the turn failed with the message already delivered. It reports that
+   * as an ordinary error, and handing the text back on top of its own transcript
+   * row would give the user the same message twice.
+   */
+  private handleSubmit(
+    connection: Connection,
+    message: AppSubmitMessage,
+    submitId: string | undefined,
+  ): void {
+    const refuseSubmit = (
+      code: ErrorFrame['code'],
+      text: string,
+      retryable: boolean,
+    ): void => {
+      this.sendError(connection, message.requestId, code, text, retryable)
+      this.answerSubmit(connection, submitId, { accepted: false, code })
+    }
+
     // IDLE-PARK (decisions/IDLE-PARK.md §3, R2-F2) — a submit that arrives AFTER
     // the parking latch is rejected before `activeTurn` is touched: the turn
     // never starts (`controller.submit` never called) → NO turn loss. This is
@@ -2037,13 +2143,7 @@ export class SidecarServer {
     // folds to disconnected/inputEnabled:false — no new error code, no renderer
     // change. Retryable: the user unparks (restore-on-click) and re-sends.
     if (this.parking) {
-      this.sendError(
-        connection,
-        message.requestId,
-        'session_disconnected',
-        'session parking',
-        true,
-      )
+      refuseSubmit('session_disconnected', 'session parking', true)
       return
     }
 
@@ -2062,9 +2162,7 @@ export class SidecarServer {
     // The domain-absent path (no trust domain constructed, e.g. a probe) stays
     // permissive so it isn't a submit gate on non-session code paths.
     if (this.workspaceTrust && this.workspaceTrust.getSnapshot()?.trusted !== true) {
-      this.sendError(
-        connection,
-        message.requestId,
+      refuseSubmit(
         'unauthorized',
         'Workspace is not trusted. Accept the trust prompt before running a turn.',
         false,
@@ -2082,13 +2180,7 @@ export class SidecarServer {
       'utf8',
     )
     if (promptBytes > MAX_PROMPT_BYTES) {
-      this.sendError(
-        connection,
-        message.requestId,
-        'bad_request',
-        `prompt exceeds ${MAX_PROMPT_BYTES} bytes`,
-        false,
-      )
+      refuseSubmit('bad_request', `prompt exceeds ${MAX_PROMPT_BYTES} bytes`, false)
       return
     }
 
@@ -2103,9 +2195,7 @@ export class SidecarServer {
       if (raw !== undefined) {
         const validated = parseThreadGoal(raw)
         if (!validated) {
-          this.sendError(
-            connection,
-            message.requestId,
+          refuseSubmit(
             'bad_request',
             'goalSnapshot is not a valid ThreadGoal',
             false,
@@ -2141,9 +2231,7 @@ export class SidecarServer {
       // restores the terminal's behaviour, so the depth needs its own cap or a
       // flooding renderer fills the running turn's context wholesale.
       if (this.countQueuedParentPrompts() >= MAX_QUEUED_PROMPTS) {
-        this.sendError(
-          connection,
-          message.requestId,
+        refuseSubmit(
           'bad_request',
           'Too many messages are already waiting for this response.',
           false,
@@ -2157,9 +2245,7 @@ export class SidecarServer {
       // today, so this rejects nothing that exists; it exists so the first
       // caller that does gets told, instead of losing it silently.
       if (goalSnapshot !== undefined) {
-        this.sendError(
-          connection,
-          message.requestId,
+        refuseSubmit(
           'bad_request',
           // Phrased as an identifier diagnostic, like the `goalSnapshot is not
           // a valid ThreadGoal` rejection above it: no legitimate renderer takes
@@ -2170,6 +2256,11 @@ export class SidecarServer {
         return
       }
       this.enqueueMidTurnPrompt(message.prompt, message.options?.isMeta)
+      // Staged, so the prompt is taken: the running turn's next tool round
+      // drains it. Answered HERE rather than off the staged snapshot the enqueue
+      // publishes, because that snapshot is republished on every queue change and
+      // says nothing about which submit caused this one.
+      this.answerSubmit(connection, submitId, { accepted: true })
       return
     }
 
@@ -2191,14 +2282,12 @@ export class SidecarServer {
       },
     })
     if (!started) {
-      this.sendError(
-        connection,
-        message.requestId,
-        'turn_already_running',
-        'Session turn already running',
-        true,
-      )
+      refuseSubmit('turn_already_running', 'Session turn already running', true)
+      return
     }
+    // The turn is running and the user message has been broadcast. Nothing later
+    // can un-accept this submit (see the method doc on `onRejected`).
+    this.answerSubmit(connection, submitId, { accepted: true })
   }
 
   /**
@@ -4282,6 +4371,56 @@ export class SidecarServer {
    * either way (it scans KEY names, not values), so bound the text and strip
    * absolute paths before it leaves.
    */
+  /**
+   * The one answer a submit gets (SubmitResultFrame). Unicast, like `sendError`:
+   * it settles a copy held by the renderer that sent the submit, and no other
+   * reader has one to settle.
+   *
+   * A submit with no `submitId` gets no answer, because there is no id to address
+   * it with. That is every non-renderer caller (the boundary drain, a probe) plus
+   * any renderer submit that keeps nothing back.
+   */
+  private answerSubmit(
+    connection: Connection,
+    submitId: string | undefined,
+    outcome: { accepted: true } | { accepted: false; code: ErrorFrame['code'] },
+  ): void {
+    if (submitId === undefined) return
+    this.send(connection, {
+      kind: 'submit.result',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      submitId,
+      accepted: outcome.accepted,
+      ...(outcome.accepted ? {} : { code: outcome.code }),
+    })
+  }
+
+  /**
+   * A boundary rejection that may be refusing a SUBMIT: the error says why, and
+   * the submit answer says which message it was. Used by the rejection sites that
+   * run BEFORE `handleSubmit` (rate limit, strict keys, schema parse), where the
+   * only thing known about the frame is its structure.
+   *
+   * The envelope checks (protocol version, session addressing) deliberately do
+   * NOT call this: a frame that fails those is not speaking this sidecar's
+   * protocol or is not addressed to it, so an answer frame buys nothing.
+   */
+  private rejectFrameWithSubmitAnswer(
+    connection: Connection,
+    payload: unknown,
+    requestId: string | undefined,
+    code: ErrorFrame['code'],
+    message: string,
+    retryable: boolean,
+  ): void {
+    this.sendError(connection, requestId, code, message, retryable)
+    this.answerSubmit(connection, submitIdForRejectedFrame(payload), {
+      accepted: false,
+      code,
+    })
+  }
+
   private sendError(
     connection: Connection,
     requestId: string | undefined,
@@ -4326,6 +4465,48 @@ function requestIdForRejectedFrame(payload: unknown): string | undefined {
     requestId.length > 0 &&
     requestId.length <= MAX_TEXT_FIELD_CHARS
     ? requestId
+    : undefined
+}
+
+/**
+ * The renderer's submit correlation id (SubmitOptions.submitId), validated
+ * sidecar-locally rather than by the engine's shared `appClientMessageSchema`.
+ *
+ * It has to be a separate schema because the shared one is deliberately NOT
+ * extended (the WS server shares it) and its `options` object STRIPS unknown
+ * keys, so the parsed message the dispatcher receives has already lost this
+ * field. Read it off the RAW message instead, with the same bound every other
+ * renderer-minted id carries. Fail-closed: present-but-malformed rejects the
+ * whole submit rather than dropping the field and leaving the renderer waiting
+ * for an answer that would never be addressed.
+ */
+const submitCorrelationSchema = z.object({
+  options: z
+    .object({
+      submitId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS).optional(),
+    })
+    .optional(),
+})
+
+/**
+ * The submit correlation id of a frame that is being REJECTED before
+ * `handleSubmit` could parse it (a rate limit, a strict-key violation, a schema
+ * failure). Deliberately structural and permissive about everything else, like
+ * `requestIdForRejectedFrame`: it lets a refused submit settle the renderer's
+ * retained copy without trusting any other field the frame carries.
+ */
+function submitIdForRejectedFrame(payload: unknown): string | undefined {
+  if (typeof payload !== 'object' || payload === null) return undefined
+  const message = (payload as { message?: unknown }).message
+  if (typeof message !== 'object' || message === null) return undefined
+  if ((message as { type?: unknown }).type !== 'app.submit') return undefined
+  const options = (message as { options?: unknown }).options
+  if (typeof options !== 'object' || options === null) return undefined
+  const submitId = (options as { submitId?: unknown }).submitId
+  return typeof submitId === 'string' &&
+    submitId.length > 0 &&
+    submitId.length <= MAX_TEXT_FIELD_CHARS
+    ? submitId
     : undefined
 }
 
@@ -4598,7 +4779,12 @@ function checkStrictKeys(message: unknown): string | null {
     ['context-breakdown.request', new Set(['type', 'requestId'])],
     ['app.ping', new Set(['type', 'nonce'])],
   ])
-  const allowedOptionKeys = new Set(['isMeta', 'goalSnapshot'])
+  // `submitId` is admitted (SubmitOptions.submitId): the renderer's own
+  // correlation id, which the sidecar answers with a `submit.result`. It is
+  // renderer-authored, so it is bounded and type-checked by
+  // `submitCorrelationSchema` below, and it authorizes nothing — unlike
+  // `options.uuid`, which is engine identity and stays rejected.
+  const allowedOptionKeys = new Set(['isMeta', 'goalSnapshot', 'submitId'])
   // The renderer-facing permission contract (protocol.ts PermissionResponseInput)
   // exposes ONLY these keys. The reused Zod schema additionally accepts host-only
   // escalations (allow.updatedPermissions, deny.interrupt) that the renderer must

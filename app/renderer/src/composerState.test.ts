@@ -1,16 +1,16 @@
 import { describe, expect, test } from 'bun:test'
 
 import type { AgentConfigSnapshot, ServerFrame } from '../../shared/protocol.js'
-import { HISTORY_REPLAY_TRUNCATION_REQUEST_ID } from '../../shared/protocol.js'
-import { REPLAY_BUFFER_TRUNCATION_REQUEST_ID } from './rawMessageLog.js'
 import {
-  classifySubmitOutcomeFrame,
   createRetainedSubmitState,
   foldRecalledPrompts,
   reduceRetainedSubmitCleared,
   reduceRetainedSubmitHeld,
   reduceRetainedSubmitSettled,
+  reduceSubmitAnswers,
+  RETAINED_SUBMIT_CAP,
   selectRetainedSubmit,
+  selectSubmitAnswer,
 } from './composerState.js'
 import {
   applyMention,
@@ -1086,24 +1086,91 @@ describe('D5 — a refused submit comes back, images included', () => {
     } as ServerFrame
   }
 
+  function submitAnswerFrame(
+    sessionId: string,
+    submitId: string,
+    accepted: boolean,
+  ): ServerFrame {
+    return {
+      kind: 'submit.result',
+      protocolVersion: 1,
+      sessionId,
+      submitId,
+      accepted,
+      ...(accepted ? {} : { code: 'bad_request' }),
+    } as ServerFrame
+  }
+
+  /** A tool result: it rides a USER SDKMessage, exactly like a submitted prompt. */
+  function toolResultFrame(sessionId: string): ServerFrame {
+    return {
+      kind: 'event',
+      protocolVersion: 1,
+      sessionId,
+      event: {
+        type: 'message',
+        message: {
+          type: 'user',
+          message: {
+            role: 'user',
+            content: [
+              { type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' },
+            ],
+          },
+          parent_tool_use_id: null,
+          session_id: 'engine-1',
+          uuid: '00000000-0000-4000-8000-000000000004',
+        },
+      },
+    } as ServerFrame
+  }
+
+  function stagedSnapshotFrame(sessionId: string): ServerFrame {
+    return {
+      kind: 'queued-prompts.snapshot',
+      protocolVersion: 1,
+      sessionId,
+      prompts: [{ id: 'q-1', text: 'and check the logs' }],
+    } as ServerFrame
+  }
+
+  function turnStatusFrame(sessionId: string, activeTurn: boolean): ServerFrame {
+    return {
+      kind: 'event',
+      protocolVersion: 1,
+      sessionId,
+      event: { type: 'turn.status', activeTurn },
+    } as ServerFrame
+  }
+
   test('the retained copy carries the images the draft never could', () => {
     // `↑` history stores strings (`reduceHistoryPushed`), so before this store
     // existed a refused image-bearing submit had NO recovery path at all.
     let state = createRetainedSubmitState()
-    expect(selectRetainedSubmit(state, S1)).toBeNull()
+    expect(selectRetainedSubmit(state, S1, 'sub-1')).toBeNull()
     state = reduceRetainedSubmitHeld(state, S1, {
+      submitId: 'sub-1',
       text: 'look at this',
       images: [image],
     })
-    state = reduceRetainedSubmitHeld(state, S2, { text: 'other', images: [] })
-    expect(selectRetainedSubmit(state, S1)).toEqual({
+    state = reduceRetainedSubmitHeld(state, S2, {
+      submitId: 'sub-2',
+      text: 'other',
+      images: [],
+    })
+    expect(selectRetainedSubmit(state, S1, 'sub-1')).toEqual({
+      submitId: 'sub-1',
       text: 'look at this',
       images: [image],
     })
-    expect(selectRetainedSubmit(state, null)).toBeNull()
+    expect(selectRetainedSubmit(state, null, 'sub-1')).toBeNull()
     state = reduceRetainedSubmitCleared(state, S1)
-    expect(selectRetainedSubmit(state, S1)).toBeNull()
-    expect(selectRetainedSubmit(state, S2)).toEqual({ text: 'other', images: [] })
+    expect(selectRetainedSubmit(state, S1, 'sub-1')).toBeNull()
+    expect(selectRetainedSubmit(state, S2, 'sub-2')).toEqual({
+      submitId: 'sub-2',
+      text: 'other',
+      images: [],
+    })
   })
 
   test('clearing an absent session is identity (no needless re-render)', () => {
@@ -1111,214 +1178,208 @@ describe('D5 — a refused submit comes back, images included', () => {
     expect(reduceRetainedSubmitCleared(state, S1)).toBe(state)
   })
 
-  test('an accepted-then-refused pair hands back the refused message', () => {
-    // Two submits inside one round trip: the first is accepted mid-turn, the
-    // second is sent before that acceptance lands and is refused at the depth
-    // cap. With ONE slot per session the second overwrote the first, the first
-    // acceptance emptied the slot, and the refusal that followed had nothing
-    // left to give back: that message and its image were simply gone, since `↑`
-    // history carries text only.
+  test('an answer retires the submit it names, not the oldest one', () => {
+    // Two submits inside one round trip. Retiring by POSITION made the first
+    // answer take the first entry no matter which submit it was for, so the
+    // refusal that followed handed back the wrong message and the refused one
+    // was lost with its image.
     let state = createRetainedSubmitState()
-    state = reduceRetainedSubmitHeld(state, S1, { text: 'first', images: [] })
     state = reduceRetainedSubmitHeld(state, S1, {
+      submitId: 'sub-first',
+      text: 'first',
+      images: [],
+    })
+    state = reduceRetainedSubmitHeld(state, S1, {
+      submitId: 'sub-second',
       text: 'second',
       images: [image],
     })
 
-    // The first answer takes the first submit; the second is still waiting.
-    state = reduceRetainedSubmitSettled(state, S1)
-    expect(selectRetainedSubmit(state, S1)).toEqual({
-      text: 'second',
-      images: [image],
+    state = reduceRetainedSubmitSettled(state, S1, 'sub-second')
+    expect(selectRetainedSubmit(state, S1, 'sub-second')).toBeNull()
+    expect(selectRetainedSubmit(state, S1, 'sub-first')).toEqual({
+      submitId: 'sub-first',
+      text: 'first',
+      images: [],
     })
 
-    state = reduceRetainedSubmitSettled(state, S1)
-    expect(selectRetainedSubmit(state, S1)).toBeNull()
+    state = reduceRetainedSubmitSettled(state, S1, 'sub-first')
+    expect(selectRetainedSubmit(state, S1, 'sub-first')).toBeNull()
   })
 
-  test('one answer drains one submit, and never another session’s', () => {
+  test('an answer for an id this page never held changes nothing', () => {
+    // What makes a replayed `submit.result` inert after a reload: the retained
+    // map starts empty, so the id matches nothing.
     const empty = createRetainedSubmitState()
-    expect(reduceRetainedSubmitSettled(empty, S1)).toBe(empty)
+    expect(reduceRetainedSubmitSettled(empty, S1, 'sub-1')).toBe(empty)
 
-    let state = reduceRetainedSubmitHeld(empty, S1, { text: 'a', images: [] })
-    state = reduceRetainedSubmitHeld(state, S2, { text: 'b', images: [] })
-    state = reduceRetainedSubmitSettled(state, S1)
-    expect(selectRetainedSubmit(state, S1)).toBeNull()
-    expect(selectRetainedSubmit(state, S2)).toEqual({ text: 'b', images: [] })
+    const state = reduceRetainedSubmitHeld(empty, S1, {
+      submitId: 'sub-1',
+      text: 'a',
+      images: [],
+    })
+    expect(reduceRetainedSubmitSettled(state, S1, 'sub-other')).toBe(state)
+    expect(reduceRetainedSubmitSettled(state, S2, 'sub-1')).toBe(state)
+  })
+
+  test('the retained store drops the oldest copy past its cap', () => {
+    // Nothing infers an answer any more, so an unanswered copy is released only
+    // by the cap. Each holds a full base64 image, so an uncapped store grew for
+    // the life of the session.
+    let state = createRetainedSubmitState()
+    for (let index = 0; index < RETAINED_SUBMIT_CAP + 2; index += 1) {
+      state = reduceRetainedSubmitHeld(state, S1, {
+        submitId: `sub-${index}`,
+        text: `message ${index}`,
+        images: [image],
+      })
+    }
+    expect(state[S1]).toHaveLength(RETAINED_SUBMIT_CAP)
+    expect(selectRetainedSubmit(state, S1, 'sub-0')).toBeNull()
+    expect(selectRetainedSubmit(state, S1, 'sub-1')).toBeNull()
+    expect(selectRetainedSubmit(state, S1, 'sub-2')).not.toBeNull()
   })
 
   test('a closed session drops every retained copy, not just the head', () => {
     // Each copy holds a full base64 image and a closed session has nothing left
-    // to resolve it, so the whole queue goes.
+    // to resolve it, so the whole map goes.
     let state = createRetainedSubmitState()
     state = reduceRetainedSubmitHeld(state, S1, {
+      submitId: 'sub-1',
       text: 'first',
       images: [image],
     })
-    state = reduceRetainedSubmitHeld(state, S1, { text: 'second', images: [] })
+    state = reduceRetainedSubmitHeld(state, S1, {
+      submitId: 'sub-2',
+      text: 'second',
+      images: [],
+    })
     state = reduceRetainedSubmitCleared(state, S1)
-    expect(selectRetainedSubmit(state, S1)).toBeNull()
-    expect(reduceRetainedSubmitSettled(state, S1)).toBe(state)
+    expect(selectRetainedSubmit(state, S1, 'sub-1')).toBeNull()
+    expect(reduceRetainedSubmitSettled(state, S1, 'sub-2')).toBe(state)
   })
 
-  test('an error frame is the refusal signal; the user message is the acceptance', () => {
-    expect(classifySubmitOutcomeFrame(errorFrame(S1))).toBe('refused')
-    expect(classifySubmitOutcomeFrame(userMessageFrame(S1))).toBe('settled')
-  })
-
-  test('a replayed user message is history, not this submit’s acceptance', () => {
-    expect(classifySubmitOutcomeFrame(userMessageFrame(S1, true))).toBe('none')
-  })
-
-  test('a replay-truncation notice is a retention notice, never a refusal', () => {
-    // Both ids mark a capped replay. Treating either as a refusal would hand a
-    // restored session's composer a message it already sent.
+  test('only a submit answer is an answer', () => {
+    expect(selectSubmitAnswer(submitAnswerFrame(S1, 'sub-1', false))).toEqual({
+      submitId: 'sub-1',
+      accepted: false,
+    })
+    expect(selectSubmitAnswer(submitAnswerFrame(S1, 'sub-1', true))).toEqual({
+      submitId: 'sub-1',
+      accepted: true,
+    })
+    // Every frame the old reading leaned on. Each of these settled a retained
+    // submit before, and each has producers that have nothing to do with one.
+    expect(selectSubmitAnswer(userMessageFrame(S1))).toBeNull()
+    expect(selectSubmitAnswer(errorFrame(S1))).toBeNull()
+    expect(selectSubmitAnswer(stagedSnapshotFrame(S1))).toBeNull()
+    expect(selectSubmitAnswer(turnStatusFrame(S1, false))).toBeNull()
     expect(
-      classifySubmitOutcomeFrame(
-        errorFrame(S1, REPLAY_BUFFER_TRUNCATION_REQUEST_ID),
-      ),
-    ).toBe('none')
-    expect(
-      classifySubmitOutcomeFrame(
-        errorFrame(S1, HISTORY_REPLAY_TRUNCATION_REQUEST_ID),
-      ),
-    ).toBe('none')
-  })
-
-  test('a turn boundary or a lifecycle change settles a retained submit', () => {
-    // Bounded staleness: without these, a submit whose answer never arrived
-    // would sit retained until an unrelated error much later restored it.
-    expect(
-      classifySubmitOutcomeFrame({
-        kind: 'event',
-        protocolVersion: 1,
-        sessionId: S1,
-        event: { type: 'turn.status', activeTurn: false },
-      } as ServerFrame),
-    ).toBe('settled')
-    expect(
-      classifySubmitOutcomeFrame({
+      selectSubmitAnswer({
         kind: 'lifecycle',
         protocolVersion: 1,
         sessionId: S1,
         status: 'exited',
       } as ServerFrame),
-    ).toBe('settled')
+    ).toBeNull()
   })
 
-  test('D1a — a staged mid-turn message settles the submit that produced it', () => {
-    // D5's acceptance signal for a mid-turn submit used to be the user message
-    // the sidecar broadcast at enqueue time. D1a moved that broadcast to
-    // delivery, which can be a whole turn later, so the staged snapshot is now
-    // what says "accepted". Without this, an ordinary error arriving during the
-    // wait would hand an accepted message back to the composer.
-    expect(
-      classifySubmitOutcomeFrame({
-        kind: 'queued-prompts.snapshot',
-        protocolVersion: 1,
+  test('a realistic mid-turn batch restores the submit that was actually refused', () => {
+    // THE REGRESSION THIS FILE EXISTS FOR, and it is only visible against a real
+    // frame sequence. Two submits are outstanding; the first was staged into the
+    // running turn, the second hit the depth cap. In between comes the ordinary
+    // traffic of a running turn: a tool result (which rides a USER SDKMessage), a
+    // republished staged snapshot, and the turn's closing bracket. Read
+    // positionally, those three retired both copies before the refusal arrived,
+    // so the refused message and its image were gone and the accepted one was
+    // handed back instead.
+    let state = createRetainedSubmitState()
+    state = reduceRetainedSubmitHeld(state, S1, {
+      submitId: 'sub-accepted',
+      text: 'and check the logs',
+      images: [],
+    })
+    state = reduceRetainedSubmitHeld(state, S1, {
+      submitId: 'sub-refused',
+      text: 'look at this',
+      images: [image],
+    })
+
+    const batch: ServerFrame[] = [
+      submitAnswerFrame(S1, 'sub-accepted', true),
+      toolResultFrame(S1),
+      stagedSnapshotFrame(S1),
+      turnStatusFrame(S1, false),
+      submitAnswerFrame(S1, 'sub-refused', false),
+    ]
+    const outcome = reduceSubmitAnswers(state, batch)
+
+    expect(outcome.restored).toEqual([
+      {
         sessionId: S1,
-        prompts: [{ id: 'q-1', text: 'and check the logs' }],
-      } as ServerFrame),
-    ).toBe('settled')
+        retained: {
+          submitId: 'sub-refused',
+          text: 'look at this',
+          images: [image],
+        },
+      },
+    ])
+    expect(outcome.state[S1]).toBeUndefined()
   })
 
-  test('D1b — a recall result is not a refusal, so it hands back no duplicate', () => {
-    // A recall already returns the message itself. If it also read as a refusal,
-    // the composer would restore the retained copy on top and the user would be
-    // holding the same message twice.
-    expect(
-      classifySubmitOutcomeFrame({
-        kind: 'prompt-recall.result',
-        protocolVersion: 1,
-        sessionId: S1,
-        requestId: 'recall-1',
-        ok: true,
-        message: 'Took the message back.',
-        recalled: [{ id: 'q-1', prompt: 'and check the logs' }],
-        alreadyDelivered: 0,
-      } as ServerFrame),
-    ).toBe('none')
-  })
-
-  test('a main-synthesized transport error is not a refusal', () => {
-    // These two codes are raised by Electron main when it cannot reach the
-    // supervisor at all, so they are NOT ordered against a sidecar frame
-    // already crossing the socket and can overtake an acceptance. Reading one
-    // as a refusal hands back a message that is on its way to the model, and
-    // the user sends it twice.
-    for (const code of ['session_not_found', 'session_not_ready'] as const) {
-      expect(
-        classifySubmitOutcomeFrame({
-          kind: 'error',
-          protocolVersion: 1,
-          sessionId: S1,
-          requestId: 'main-synthesized',
-          code,
-          message: 'session is not available',
-          retryable: true,
-        } as ServerFrame),
-      ).toBe('none')
-    }
-  })
-
-  test('a sidecar-emitted refusal is still a refusal', () => {
-    // The guard above must not swallow the case the whole mechanism exists for:
-    // the depth-cap rejection is the reachable one.
-    expect(
-      classifySubmitOutcomeFrame({
+  test('a park refusal carrying a recall’s id cannot refuse a submit', () => {
+    // `handlePromptRecall`'s parking branch answers with the RECALL's requestId
+    // on an error frame. Positionally that read as a refusal of whatever submit
+    // was at the head, and handed the user back a message that was on its way to
+    // the model.
+    const state = reduceRetainedSubmitHeld(createRetainedSubmitState(), S1, {
+      submitId: 'sub-1',
+      text: 'live message',
+      images: [],
+    })
+    const outcome = reduceSubmitAnswers(state, [
+      {
         kind: 'error',
         protocolVersion: 1,
         sessionId: S1,
-        requestId: 'submit-1',
-        code: 'bad_request',
-        message: 'Too many messages are already waiting for this response.',
-        retryable: false,
-      } as ServerFrame),
-    ).toBe('refused')
+        requestId: 'recall-1',
+        code: 'session_disconnected',
+        message: 'session parking',
+        retryable: true,
+      } as ServerFrame,
+    ])
+
+    expect(outcome.restored).toEqual([])
+    expect(outcome.state).toBe(state)
   })
 
-  test('streaming and assistant output leave the retained submit alone', () => {
-    // The depth-cap refusal lands mid-turn, so the assistant is streaming while
-    // the submit waits. Counting those frames would drop the copy before the
-    // refusal arrived.
-    expect(
-      classifySubmitOutcomeFrame({
-        kind: 'event',
+  test('a submit main never forwarded is restored, not stranded', () => {
+    // Main answers this one itself (`answerUnforwardedSubmit`): the frame never
+    // reached the supervisor, so no sidecar will ever answer it. Classifying the
+    // synthesized `session_not_found` error as "not a refusal" turned a certain
+    // loss into a silent one, and the image was unrecoverable.
+    const state = reduceRetainedSubmitHeld(createRetainedSubmitState(), S1, {
+      submitId: 'sub-1',
+      text: 'look at this',
+      images: [image],
+    })
+    const outcome = reduceSubmitAnswers(state, [
+      {
+        kind: 'submit.result',
         protocolVersion: 1,
         sessionId: S1,
-        event: {
-          type: 'message',
-          message: {
-            type: 'stream_event',
-            event: {
-              type: 'content_block_delta',
-              index: 0,
-              delta: { type: 'text_delta', text: 'hi' },
-            },
-            parent_tool_use_id: null,
-            session_id: 'engine-1',
-            uuid: '00000000-0000-4000-8000-000000000002',
-          },
-        },
-      } as ServerFrame),
-    ).toBe('none')
-    expect(
-      classifySubmitOutcomeFrame({
-        kind: 'ready',
-        protocolVersion: 1,
+        submitId: 'sub-1',
+        accepted: false,
+        code: 'session_not_found',
+      } as ServerFrame,
+    ])
+
+    expect(outcome.restored).toEqual([
+      {
         sessionId: S1,
-        engineSessionId: 'engine-1',
-        payload: {
-          type: 'app.ready',
-          protocolVersion: 1,
-          inputEnabled: true,
-          activeTurn: false,
-          abort: { status: 'idle' },
-          goalSnapshot: null,
-          pendingPermissionRequests: [],
-        },
-      } as ServerFrame),
-    ).toBe('none')
+        retained: { submitId: 'sub-1', text: 'look at this', images: [image] },
+      },
+    ])
   })
 
   test('an image-only submit restores without prepending a blank line', () => {

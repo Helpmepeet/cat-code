@@ -140,12 +140,20 @@ const FRAME_RETENTION: Record<ServerFrame['kind'], FrameRetention> = {
   // long turn would otherwise lose the rows for messages the user has already
   // sent, putting them back in the state D1a exists to fix — invisible.
   //
-  // The re-broadcast is what makes that classification correct rather than
-  // merely safe: the sidecar republishes this list on every change, so a
-  // replaced slot always holds the current list. It is also the one attach frame
-  // the sidecar may not send at all (skipped when nothing is waiting), which the
-  // slot handles by never being filled.
+  // What makes that classification correct rather than merely safe is that the
+  // slot's value is always replaced by a LATER list for the same session — but
+  // the sidecar does NOT republish on every change: a change with no connection
+  // open is deliberately not published at all, so its own list can move on while
+  // this slot still holds the last one it sent. The corrective is at attach,
+  // where the sidecar re-sends its current list (including the EMPTY one) if the
+  // last list it published was not empty. On a fresh session with nothing ever
+  // waiting there is no frame and no slot, which is also correct.
   'queued-prompts.snapshot': 'sticky',
+  // Ring, with the same request-scoped reasoning as the `*.result` frames below:
+  // it answers ONE submit, addressed to a correlation id the renderer minted, so
+  // a reader that did not mint it has nothing to do with it. A replayed one is
+  // inert for the same reason (a reload starts with no retained submits).
+  'submit.result': 'ring',
 
   event: 'ring',
   'generated-image-preview': 'preview',

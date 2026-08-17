@@ -1442,12 +1442,26 @@ class Project {
       clearTimeout(this.flushTimer)
       this.flushTimer = null
     }
-    // Wait for any in-flight drain to finish
+    // Wait for any in-flight drain to finish — including one started by ANOTHER
+    // flush, not only by the timer. `drainWriteQueue` splices each queue out
+    // before it writes, so an overlapping drain finds nothing left to do and
+    // this flush would report durability for a write still in flight. A caller
+    // that flushes and then exits the process loses exactly that write.
     if (this.activeDrain) {
       await this.activeDrain
     }
-    // Drain anything remaining in the queues
-    await this.drainWriteQueue()
+    // Drain anything remaining in the queues. Published on `activeDrain` for
+    // the same reason: the next flush in has to be able to wait for it.
+    const drain = this.drainWriteQueue()
+    this.activeDrain = drain
+    try {
+      await drain
+    } finally {
+      // Only clear what this call published: a later drain may already own the
+      // slot, and stomping it would let the next flush return over an in-flight
+      // write, which is the bug this whole block exists to close.
+      if (this.activeDrain === drain) this.activeDrain = null
+    }
 
     // Wait for non-queue tracked operations (e.g. removeMessageByUuid)
     if (this.pendingWriteCount === 0) {
@@ -4871,14 +4885,27 @@ export type SessionQueueOperation = {
   timestamp: string
   sessionId: string
   uuid?: UUID
+  /**
+   * Recorded on `enqueue` only, like `content`, and read there: it is how a
+   * reader tells a user prompt from a task notification. A retraction is matched
+   * by uuid alone, so repeating the mode on it told no reader anything.
+   */
   mode?: string
   /**
    * Recorded on `enqueue` only. A prompt carrying images is a
-   * `ContentBlockParam[]`, so this is not a string in every session.
+   * `ContentBlockParam[]`, so this is not a string in every session. Absent for
+   * a terminal prompt's pasted images, which live outside `command.value`
+   * (`messageQueueManager.logOperation`).
    */
   content?: string | ContentBlockParam[]
 }
 
+/**
+ * The queue-operation log in FILE order, which is call order (`enqueueWrite`
+ * drains per file in push order). Order is load-bearing: one uuid can be
+ * enqueued, retracted and enqueued again, so readers must replay rather than
+ * fold the records into per-uuid sets (`app/sidecar/sessionResume.ts`).
+ */
 export async function getSessionQueueOperations(
   sessionId: string,
 ): Promise<{

@@ -26,7 +26,6 @@
 
 import type { ConnectionSnapshot } from './connectionState.js'
 import type { MentionItem } from './MentionPicker.js'
-import { HISTORY_REPLAY_TRUNCATION_REQUEST_ID } from '../../shared/protocol.js'
 import type {
   AgentConfigSnapshot,
   RecalledPrompt,
@@ -34,7 +33,6 @@ import type {
   SessionId,
   SubmitPrompt,
 } from '../../shared/protocol.js'
-import { REPLAY_BUFFER_TRUNCATION_REQUEST_ID } from './rawMessageLog.js'
 import type { AcceptedImageType } from './imageAttachment.js'
 
 // ── @-mention ──────────────────────────────────────────────────────────────
@@ -798,57 +796,88 @@ export function restoreDraftWithPending(
 
 /**
  * What a `send` submit optimistically cleared out of the composer, kept until
- * the sidecar's answer arrives. Text alone is not enough: `↑` history stores
- * strings, so a refused image-bearing submit used to lose its attachments with
- * no recovery path at all.
+ * its answer arrives. Text alone is not enough: `↑` history stores strings, so a
+ * refused image-bearing submit used to lose its attachments with no recovery path
+ * at all.
+ *
+ * `submitId` is the renderer-minted correlation id that went out with the submit
+ * (`SubmitOptions.submitId`) and comes back on its answer.
  */
 export type RetainedSubmit = {
+  submitId: string
   text: string
   images: ImageAttachment[]
 }
 
 /**
- * A QUEUE per session, oldest first, because two submits can be outstanding at
- * once: press Enter twice inside one round trip and the second is sent before
- * the first is answered. One slot per session lost a message outright when the
- * first was accepted and the second refused, since the acceptance emptied the
- * slot the refusal then needed.
+ * KEYED BY `submitId`, not positional. Several submits can be outstanding at
+ * once (press Enter twice inside one round trip), and the shape has been both
+ * wrong ways: one slot per session lost the second message outright, and a
+ * positional FIFO retired whichever entry happened to be at the head when
+ * something that looked like an answer arrived. Both failed for the same reason,
+ * which was that the renderer could not tell WHICH submit an answer belonged to.
  *
- * Answers are paired POSITIONALLY, not by id: there is none to match on (see
- * `classifySubmitOutcomeFrame`), and the sidecar answers submits in the order
- * it received them, so each answer takes the head.
+ * Now it can (`selectSubmitAnswer`), so the identity is the key and position
+ * carries no meaning at all. A map is what that asks for; the per-session value
+ * is an insertion-ordered array because it is also how the cap evicts (oldest
+ * out, `RETAINED_SUBMIT_CAP`) and because a plain array keeps this module's
+ * immutable-value style. Entries are never more than a handful, so the by-id
+ * scan costs nothing.
+ *
+ * Order-independence is not a nicety here: an answer can come from the sidecar
+ * OR from Electron main (a submit that was never forwarded), and those two are
+ * not ordered against each other.
  */
 export type RetainedSubmitState = Record<SessionId, readonly RetainedSubmit[]>
+
+/**
+ * How many unanswered submits one session keeps. Each entry holds a full base64
+ * image, so this is a memory bound, and it is the ONLY bound: nothing infers an
+ * answer any more, so a submit whose answer never arrives (its connection went
+ * away mid-flight) is evicted by a later submit rather than by a passing frame.
+ * A handful is already generous — outstanding submits are the ones sent inside a
+ * single round trip.
+ */
+export const RETAINED_SUBMIT_CAP = 8
 
 export function createRetainedSubmitState(): RetainedSubmitState {
   return {}
 }
 
-/** The submit still waiting for the next answer, or null when none is. */
+/** The submit this answer belongs to, or null when this page is not holding it. */
 export function selectRetainedSubmit(
   state: RetainedSubmitState,
   sessionId: SessionId | null,
+  submitId: string,
 ): RetainedSubmit | null {
   if (!sessionId) return null
-  return state[sessionId]?.[0] ?? null
+  return state[sessionId]?.find(entry => entry.submitId === submitId) ?? null
 }
 
+/** Oldest out past the cap: a copy nothing will ever answer must not pin an image. */
 export function reduceRetainedSubmitHeld(
   state: RetainedSubmitState,
   sessionId: SessionId,
   retained: RetainedSubmit,
 ): RetainedSubmitState {
-  return { ...state, [sessionId]: [...(state[sessionId] ?? []), retained] }
+  const held = [...(state[sessionId] ?? []), retained]
+  return {
+    ...state,
+    [sessionId]:
+      held.length > RETAINED_SUBMIT_CAP ? held.slice(-RETAINED_SUBMIT_CAP) : held,
+  }
 }
 
-/** One answer retires one submit, leaving anything sent after it waiting. */
+/** Retire exactly the submit that was answered; everything else keeps waiting. */
 export function reduceRetainedSubmitSettled(
   state: RetainedSubmitState,
   sessionId: SessionId,
+  submitId: string,
 ): RetainedSubmitState {
   const queue = state[sessionId]
   if (queue === undefined) return state
-  const rest = queue.slice(1)
+  const rest = queue.filter(entry => entry.submitId !== submitId)
+  if (rest.length === queue.length) return state
   if (rest.length === 0) return reduceRetainedSubmitCleared(state, sessionId)
   return { ...state, [sessionId]: rest }
 }
@@ -868,95 +897,63 @@ export function reduceRetainedSubmitCleared(
 }
 
 /**
- * What one incoming frame says about a submit still waiting for its answer.
+ * The answer to one submit, or null for a frame that is not one.
  *
- * There is NO acknowledgement to correlate against: main mints the transport
- * request id (`app/main/main.ts`, `CH_SUBMIT` → `generateRequestId()`) and the
- * preload sender neither returns nor receives it, so the renderer cannot tell
- * which submit an error frame belongs to. What source does guarantee is an
- * ACCEPTANCE signal, and it is synchronous with the submit's own dispatch:
+ * There is nothing to infer here any more, and that is the point. This used to
+ * READ acceptance and refusal out of unrelated frames, because there was no id
+ * to correlate on: main minted the transport request id inside its own IPC
+ * handler and `submit()` returned void. Every signal it leaned on had producers
+ * that have nothing to do with a submit:
  *
- *  - accepted while idle → `startTurn` broadcasts the user message before it
- *    hands the prompt to the controller (`app/sidecar/sidecarServer.ts`,
- *    `announcePrompt` defaults true);
- *  - accepted mid-turn → `enqueueMidTurnPrompt` stages the message and the
- *    queue's change signal publishes the staged snapshot, synchronously, before
- *    the handler returns (D1a). The user message no longer rides this path: it
- *    is broadcast on DELIVERY, which is far too late to answer "was this
- *    accepted", so the staged snapshot is the acceptance here;
- *  - refused → `sendError` with neither.
+ *  - a user `event` message is also every tool result (they ride user SDKMessages);
+ *  - `queued-prompts.snapshot` is republished on ANY queue change, including a
+ *    subagent's;
+ *  - both `turn.status` brackets fire for turns nobody submitted;
+ *  - an `error` can be a refusal of something else entirely — the park refusal
+ *    carries the RECALL's request id, and read positionally it retired a submit.
  *
- * The sidecar dispatches one frame at a time on a single thread and the socket
- * preserves order, so the acceptance can never arrive after a refusal for the
- * same submit. That makes "an error frame reached this session before any
- * acceptance did" an honest reading of "this submit was refused".
- *
- * That guarantee covers only errors the SIDECAR produced. Electron main
- * synthesizes its own error frames when it cannot reach the supervisor at all,
- * and those are not ordered against a sidecar frame already travelling over the
- * socket: one can overtake an acceptance. They are excluded below by code.
- *
- * `settled` is the other half: anything that proves a submit's window is over
- * (its user message, a turn boundary, a lifecycle change) retires the copy at
- * the head of the queue, so a stale one cannot be resurrected by an unrelated
- * error much later.
- *
- * Each signal consumes ONE submit, the oldest outstanding
- * (`reduceRetainedSubmitSettled`). That is what a pair of submits inside one
- * round trip needs: accepted-then-refused now hands the refused message back,
- * where a single slot handed back nothing at all.
- *
- * KNOWN LIMITS, all narrow and all bounded to a wrong composer restore (never a
- * send, never a discard):
- *  - AN UNRELATED ERROR: an error frame the sidecar emitted BEFORE it dispatched
- *    the submit (a permission or verb failure already on the wire) arrives
- *    first and reads as a refusal of the OLDEST outstanding submit, so accepted
- *    text is handed back while the turn it started runs. Anything emitted after
- *    the dispatch is ordered behind the acceptance and cannot do this.
- *  - A LIFECYCLE CHANGE retires one, not the queue: copies sent after it keep
- *    waiting for a signal that will not come, until the next frame for that
- *    session drains one, or the session is closed or leaves the roster, which
- *    drops the queue outright (`reduceRetainedSubmitCleared`).
+ * With `SubmitOptions.submitId` on the way out and `submit.result` on the way
+ * back, a frame either is this submit's answer or it is not, and only the answer
+ * settles it (`reduceSubmitAnswers`).
  */
-export type SubmitOutcomeSignal = 'refused' | 'settled' | 'none'
+export type SubmitAnswer = { submitId: string; accepted: boolean }
 
-export function classifySubmitOutcomeFrame(frame: ServerFrame): SubmitOutcomeSignal {
-  if (frame.kind === 'error') {
-    // Retention notices, not refusals: both are emitted around a replay with a
-    // well-known request id and no verb behind them.
-    if (
-      frame.requestId === REPLAY_BUFFER_TRUNCATION_REQUEST_ID ||
-      frame.requestId === HISTORY_REPLAY_TRUNCATION_REQUEST_ID
-    ) {
-      return 'none'
-    }
-    // Main-synthesized, not sidecar-emitted: raised when main cannot forward to
-    // the supervisor at all, so it is outside the single-dispatch ordering the
-    // reading above rests on and can overtake an acceptance already in flight.
-    // Treating it as a refusal would hand back a message that IS on its way to
-    // the model, and the user would send it twice.
-    if (
-      frame.code === 'session_not_found' ||
-      frame.code === 'session_not_ready'
-    ) {
-      return 'none'
-    }
-    return 'refused'
+export function selectSubmitAnswer(frame: ServerFrame): SubmitAnswer | null {
+  if (frame.kind !== 'submit.result') return null
+  return { submitId: frame.submitId, accepted: frame.accepted }
+}
+
+/**
+ * Resolve a whole arrival batch against the retained copies: the state after it,
+ * plus the messages that must go back into a composer, in arrival order.
+ *
+ * Batch-shaped rather than frame-shaped so the pairing is testable against a
+ * REALISTIC stream. The defects this replaces were invisible to a test that
+ * called the reducer directly: they only appeared once ordinary traffic (a tool
+ * result, a staged snapshot, a turn bracket) flowed past the retained copies
+ * ahead of the frame that actually answered one.
+ *
+ * An answer for an id this page is not holding is a no-op, which is what makes a
+ * replayed `submit.result` inert after a reload.
+ */
+export function reduceSubmitAnswers(
+  state: RetainedSubmitState,
+  frames: readonly ServerFrame[],
+): {
+  state: RetainedSubmitState
+  restored: readonly { sessionId: SessionId; retained: RetainedSubmit }[]
+} {
+  let next = state
+  const restored: { sessionId: SessionId; retained: RetainedSubmit }[] = []
+  for (const frame of frames) {
+    const answer = selectSubmitAnswer(frame)
+    if (answer === null) continue
+    const retained = selectRetainedSubmit(next, frame.sessionId, answer.submitId)
+    if (retained === null) continue
+    next = reduceRetainedSubmitSettled(next, frame.sessionId, answer.submitId)
+    if (!answer.accepted) restored.push({ sessionId: frame.sessionId, retained })
   }
-  if (frame.kind === 'lifecycle') return 'settled'
-  // D1a — a mid-turn submit's acceptance. The list it carries is irrelevant
-  // here: the sidecar publishes it inside the dispatch of the submit it
-  // accepted, and publishes nothing at all when it refuses one.
-  if (frame.kind === 'queued-prompts.snapshot') return 'settled'
-  if (frame.kind !== 'event') return 'none'
-  // A restore replays the transcript; those user messages are history, not this
-  // submit's acceptance.
-  if (frame.replay === true) return 'none'
-  if (frame.event.type === 'turn.status') return 'settled'
-  if (frame.event.type === 'message' && frame.event.message.type === 'user') {
-    return 'settled'
-  }
-  return 'none'
+  return { state: next, restored }
 }
 
 // ── The messages a recall takes back (D1b) ───────────────────────────────────

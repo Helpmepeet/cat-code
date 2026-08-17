@@ -121,7 +121,6 @@ import {
   applyMention,
   buildSubmitPrompt,
   caretAtHistoryEdge,
-  classifySubmitOutcomeFrame,
   createHistoryState,
   createImageAttachmentState,
   createPasteState,
@@ -146,7 +145,7 @@ import {
   reducePendingSubmitHeld,
   reduceRetainedSubmitCleared,
   reduceRetainedSubmitHeld,
-  reduceRetainedSubmitSettled,
+  reduceSubmitAnswers,
   reduceSessionImagesReplaced,
   reduceSessionPastesCleared,
   removePasteOccurrence,
@@ -159,7 +158,6 @@ import {
   selectHistory,
   selectImageAttachments,
   selectPendingSubmit,
-  selectRetainedSubmit,
   selectSessionPasteList,
   selectSessionPasteState,
   selectTransportError,
@@ -174,6 +172,7 @@ import {
   type PasteState,
   type PendingSubmit,
   type PendingSubmitState,
+  type RetainedSubmit,
   type RetainedSubmitState,
   type TransportErrorState,
 } from './composerState.js'
@@ -371,13 +370,19 @@ import {
   selectLatestSessionActionResult,
 } from './sessionActionRuntimeState.js'
 import {
+  classifyRecallAnswer,
+  createRecallRequests,
   createVerbAckResultState,
   forgetRecallRequests,
   recallDeliveryFailureNotice,
   reduceVerbAckResultState,
+  releaseRecallRequest,
   selectLatestVerbAckResult,
+  takeRecallErrorRequest,
+  trackRecallRequest,
   verbAckErrorToast,
 } from './verbAckResultState.js'
+import type { RecallRequests } from './verbAckResultState.js'
 import { SettingsShell } from './SettingsShell.js'
 import { selectSettingsProjectBinding } from './settingsProjectBinding.js'
 import type { SettingWriteInput } from './SettingsEditors.js'
@@ -524,21 +529,22 @@ export function App() {
   // D5 — a submit the sidecar refuses (the mid-turn depth cap is the reachable
   // case) used to leave the composer empty and the images gone: `↑` history is
   // text-only, so the attachments had no recovery path at all. The submitted
-  // message is retained HERE across the optimistic clear, and handed back when
-  // the frame stream says it was refused (`classifySubmitOutcomeFrame`, which
-  // documents what that reading can and cannot know). A ref, not state: nothing
+  // message is retained HERE across the optimistic clear, keyed by the
+  // correlation id that went out with it, and handed back when its OWN answer
+  // says it was refused (`reduceSubmitAnswers`). A ref, not state: nothing
   // renders it, and the frame subscription below is mounted once with no deps,
   // so a state value read inside it would always be the first one.
   const retainedSubmitsRef = useRef<RetainedSubmitState>(
     createRetainedSubmitState(),
   )
-  // D1b — recall requests this page is still waiting on, each against the
-  // session it was asked for. A ref for the same reason as the one above, and
+  // D1b — recall requests this page is waiting on or has answered, each against
+  // the session it was asked for. A ref for the same reason as the one above, and
   // the reason it exists at all is the replay ring: a `prompt-recall.result` is
-  // request-scoped, so only the page that asked may act on it, and only once.
-  // The session is what lets an unanswered request be released when the row it
-  // belongs to goes away (`forgetRecallRequests`).
-  const recallRequestsRef = useRef<Map<string, SessionId>>(new Map())
+  // request-scoped, so only the page that asked may act on it. It keeps ANSWERED
+  // ids for one more frame because a recall can correct its own answer
+  // (`classifyRecallAnswer`). The session is what lets a request be released when
+  // the row it belongs to goes away (`forgetRecallRequests`).
+  const recallRequestsRef = useRef<RecallRequests>(createRecallRequests())
   // Bug fix — per-session (was one app-wide string shown on every pane
   // regardless of which session actually failed; `selectTransportError`
   // resolves it for the pane it belongs to).
@@ -981,26 +987,17 @@ export function App() {
       for (const sessionId of swapSessions) {
         preloadReservedBytesRef.current.delete(sessionId)
       }
-      // D5 — resolve every retained submit against this batch, IN ARRIVAL
-      // ORDER. Order is what makes the reading honest: the sidecar publishes an
-      // acceptance inside its own dispatch of the submit it accepted, so that
-      // acceptance can never arrive behind the refusal of the same submit.
-      // Which frame carries it depends on the path, and D1a changed one of
-      // them: an idle submit is announced as a user message, a mid-turn submit
-      // is staged and announced only on delivery, so its acceptance is the
-      // queued-prompts snapshot. `classifySubmitOutcomeFrame` owns that map.
-      for (const frame of frames) {
-        if (selectRetainedSubmit(retainedSubmitsRef.current, frame.sessionId) === null) {
-          continue
-        }
-        const signal = classifySubmitOutcomeFrame(frame)
-        if (signal === 'refused') restoreRefusedSubmit(frame.sessionId)
-        else if (signal === 'settled') {
-          retainedSubmitsRef.current = reduceRetainedSubmitSettled(
-            retainedSubmitsRef.current,
-            frame.sessionId,
-          )
-        }
+      // D5 — resolve the retained submits against this batch. Each answer names
+      // the submit it belongs to (`SubmitOptions.submitId` out,
+      // `submit.result` back), so nothing here reads an outcome out of a frame
+      // that was not addressed to one: the ordinary traffic a submit waits
+      // through (a tool result on a user message, a republished staged snapshot,
+      // both turn brackets, an error belonging to some other verb) passes by
+      // without touching a retained copy.
+      const answers = reduceSubmitAnswers(retainedSubmitsRef.current, frames)
+      retainedSubmitsRef.current = answers.state
+      for (const { sessionId, retained } of answers.restored) {
+        restoreRefusedSubmit(sessionId, retained)
       }
       // D1b — the messages a recall took back, put where the user can edit them,
       // plus the one thing about the outcome the user has to be told. BOTH sit
@@ -1010,20 +1007,34 @@ export function App() {
       // can neither push text the user has long since resent back into the
       // composer nor re-announce an outcome they already read.
       //
-      // An error carrying the same id is the OTHER answer a recall can get:
-      // main raises one when it cannot reach the session at all. It releases
-      // the id just the same, so an undeliverable recall is neither silent nor
-      // remembered forever.
+      // A recall gets ONE answer, and then possibly one correction to it: a
+      // message it reported as taken back can turn out to have reached the model,
+      // and the sidecar says so from the delivery signal. A correction is toasted
+      // and restores NOTHING — the text is already in the composer from the first
+      // answer, and the corrected message is the one that stayed with the model.
+      //
+      // An error carrying the same id is the OTHER answer a recall can get: main
+      // raises one when it cannot reach the session at all, and the sidecar raises
+      // one while parking. It releases the id just the same, so an undeliverable
+      // recall is neither silent nor remembered forever.
       for (const frame of frames) {
         if (frame.kind === 'prompt-recall.result') {
-          if (!recallRequestsRef.current.delete(frame.requestId)) continue
-          restoreRecalledPrompts(frame.sessionId, frame.recalled)
+          const disposition = classifyRecallAnswer(
+            recallRequestsRef.current,
+            frame,
+          )
+          if (disposition === 'ignore') continue
+          if (disposition === 'first') {
+            restoreRecalledPrompts(frame.sessionId, frame.recalled)
+          }
           const outcome = verbAckErrorToast(frame)
           if (outcome) toast(outcome.message, { tone: outcome.tone })
           continue
         }
         if (frame.kind !== 'error' || frame.requestId === undefined) continue
-        if (!recallRequestsRef.current.delete(frame.requestId)) continue
+        if (!takeRecallErrorRequest(recallRequestsRef.current, frame.requestId)) {
+          continue
+        }
         const notice = recallDeliveryFailureNotice(frame)
         if (notice === null) continue
         setTransportErrors(prev =>
@@ -2141,13 +2152,13 @@ export function App() {
   // (`reduceImageAttachmentAdded`), and the refused one is the one the user is
   // waiting on. Text is merged instead, so a draft typed during the round trip
   // survives underneath it.
-  const restoreRefusedSubmit = useCallback((sessionId: SessionId) => {
-    const retained = selectRetainedSubmit(retainedSubmitsRef.current, sessionId)
-    if (retained === null) return
-    retainedSubmitsRef.current = reduceRetainedSubmitSettled(
-      retainedSubmitsRef.current,
-      sessionId,
-    )
+  // The copy is handed IN rather than looked up: `reduceSubmitAnswers` already
+  // retired exactly the entry this answer named, so there is nothing left here to
+  // find and no head to take by mistake.
+  const restoreRefusedSubmit = useCallback((
+    sessionId: SessionId,
+    retained: RetainedSubmit,
+  ) => {
     setPromptDrafts(drafts =>
       reducePromptDrafts(
         drafts,
@@ -2195,11 +2206,11 @@ export function App() {
   // restore above then applies.
   const recallQueuedPrompts = useCallback((sessionId: SessionId) => {
     const requestId = newRequestId()
-    recallRequestsRef.current.set(requestId, sessionId)
+    trackRecallRequest(recallRequestsRef.current, requestId, sessionId)
     try {
       getBridge().recallPrompts(sessionId, { type: 'prompt.recall', requestId })
     } catch (error) {
-      recallRequestsRef.current.delete(requestId)
+      releaseRecallRequest(recallRequestsRef.current, requestId)
       setTransportErrors(prev =>
         reduceTransportErrorSet(prev, sessionId, errorMessage(error)),
       )
@@ -2528,17 +2539,21 @@ export function App() {
     // This is the existing transport-agnostic app.submit path. Do not send a
     // goalSnapshot unless the renderer actually owns one; if added later, the
     // sidecar's T4 parseThreadGoal validation remains the trust boundary.
+    // D5 — the correlation id for THIS submit. Minted here, before the send, and
+    // carried back on the one answer this submit gets, which is what lets the
+    // retained copy below be paired exactly rather than by position.
+    const submitId = newRequestId()
     try {
-      getBridge().submit(sessionId, submitPrompt)
+      getBridge().submit(sessionId, submitPrompt, { submitId })
       // D5 — the clear below is OPTIMISTIC: the sidecar can still refuse this
       // (the mid-turn depth cap), and its answer arrives long after. Retain the
-      // exact message, images included, until the frame stream says which way
-      // it went. `↑` history keeps only the text, so without this the
-      // attachments are unrecoverable in principle, not just in practice.
+      // exact message, images included, until that answer says which way it went.
+      // `↑` history keeps only the text, so without this the attachments are
+      // unrecoverable in principle, not just in practice.
       retainedSubmitsRef.current = reduceRetainedSubmitHeld(
         retainedSubmitsRef.current,
         sessionId,
-        { text, images: [...images] },
+        { submitId, text, images: [...images] },
       )
       retireDraft()
       setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))
@@ -2574,10 +2589,12 @@ export function App() {
         releasePendingSubmit(sessionId)
         continue
       }
+      const submitId = newRequestId()
       try {
         getBridge().submit(
           sessionId,
           buildSubmitPrompt(pending.text, pending.images ?? []),
+          { submitId },
         )
         // D5 — the drain hands over the SAME `app.submit`, so it can be refused
         // the same way; clearing the park below is as optimistic as the
@@ -2585,7 +2602,11 @@ export function App() {
         retainedSubmitsRef.current = reduceRetainedSubmitHeld(
           retainedSubmitsRef.current,
           sessionId,
-          { text: pending.text, images: [...(pending.images ?? [])] },
+          {
+            submitId,
+            text: pending.text,
+            images: [...(pending.images ?? [])],
+          },
         )
         setPendingSubmits(prev => reducePendingSubmitCleared(prev, sessionId))
         setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))
@@ -5022,15 +5043,21 @@ export function SessionPane({
        * would promise a choice the verb deliberately does not offer. It is a
        * real button, so it is in the tab order immediately before the composer.
        *
-       * ONE live region around the whole group, not one per row: three waiting
+       * ONE live region around the ROWS, not one per row: three waiting
        * messages are one change to announce, and a region each made a screen
-       * reader read three.
+       * reader read three. The button sits OUTSIDE it, because a live region
+       * re-announces everything inside it on every change, so wrapping the
+       * control made "Take back all" part of the announcement each time a
+       * message arrived or left. It is a real button in the tab order right
+       * before the composer; it does not need announcing as news.
        */}
       {queuedPrompts.length > 0 ? (
-        <div className="flex flex-col gap-1" role="status">
-          {queuedPrompts.map(queued => (
-            <QueuedRow key={queued.id} text={queued.text} />
-          ))}
+        <div className="flex flex-col gap-1">
+          <div className="flex flex-col gap-1" role="status">
+            {queuedPrompts.map(queued => (
+              <QueuedRow key={queued.id} text={queued.text} />
+            ))}
+          </div>
           {onRecallQueuedPrompts ? (
             <button
               className="self-start text-xs text-text-subtle underline underline-offset-2 transition-colors hover:text-text-primary"

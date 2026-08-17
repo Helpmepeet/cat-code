@@ -1,15 +1,46 @@
 import { expect, test } from 'bun:test'
 import {
+  classifyRecallAnswer,
+  createRecallRequests,
   createVerbAckResultState,
   forgetRecallRequests,
+  RECALL_REQUEST_CAP,
   RECALL_UNDELIVERABLE_MESSAGE,
   recallDeliveryFailureNotice,
   reduceVerbAckResultState,
+  releaseRecallRequest,
   selectLatestVerbAckResult,
+  takeRecallErrorRequest,
+  trackRecallRequest,
   verbAckErrorToast,
   type VerbAckResultFrame,
 } from './verbAckResultState.js'
-import type { ServerFrame } from '../../shared/protocol.js'
+import type {
+  PromptRecallResultFrame,
+  ServerFrame,
+} from '../../shared/protocol.js'
+
+/**
+ * A recall answer addressed to a specific request id, which is what the
+ * disposition tests turn on (the builder below fixes its id by `ok`).
+ */
+function recallAnswer(
+  requestId: string,
+  ok: boolean,
+  alreadyDelivered: number,
+  message = ok ? 'Took the message back.' : 'That message already went to the model.',
+): PromptRecallResultFrame {
+  return {
+    kind: 'prompt-recall.result',
+    protocolVersion: 1,
+    sessionId: 's1',
+    requestId,
+    ok,
+    message,
+    recalled: [],
+    alreadyDelivered,
+  }
+}
 
 /* ── frame builders (the four previously-unconsumed verb-ack results) ──────── */
 
@@ -276,18 +307,141 @@ test('D1b — the recall’s own answer is not a delivery failure', () => {
   ).toBeNull()
 })
 
-test('D1b — a session going away takes its unanswered recall ids with it', () => {
-  // The minted ids are otherwise removed only by an answer, and a session whose
+test('D1b — a session going away takes its recall ids with it', () => {
+  // The tracked ids are otherwise removed only by an answer, and a session whose
   // engine is gone never sends one, so the id stayed for the life of the page.
-  const requests = new Map([
-    ['recall-1', 's1'],
-    ['recall-2', 's2'],
-    ['recall-3', 's1'],
-  ])
+  const requests = createRecallRequests()
+  trackRecallRequest(requests, 'recall-1', 's1')
+  trackRecallRequest(requests, 'recall-2', 's2')
+  trackRecallRequest(requests, 'recall-3', 's1')
   forgetRecallRequests(requests, 's1')
   expect([...requests.keys()]).toEqual(['recall-2'])
   forgetRecallRequests(requests, 's3')
   expect([...requests.keys()]).toEqual(['recall-2'])
+})
+
+test('D1b — a SECOND answer for the same recall reaches the user as a correction', () => {
+  // THE DEAD CORRECTION. The sidecar emits a second `prompt-recall.result` when a
+  // message it reported as taken back turns out to have reached the model
+  // (`commitStagedPrompt`). A one-shot consume on the first answer threw that
+  // away, so the user was told their message was theirs again while the model
+  // answered it, and they resent it.
+  const requests = createRecallRequests()
+  trackRecallRequest(requests, 'recall-1', 's1')
+
+  const first = recallAnswer('recall-1', true, 0)
+  expect(classifyRecallAnswer(requests, first)).toBe('first')
+  // A full recall says nothing: the text landing back in the composer is the story.
+  expect(verbAckErrorToast(first)).toBeNull()
+
+  const correction = recallAnswer(
+    'recall-1',
+    false,
+    1,
+    'That message already went to the model.',
+  )
+  expect(classifyRecallAnswer(requests, correction)).toBe('correction')
+  // …and the correction is what the user actually reads.
+  expect(verbAckErrorToast(correction)).toEqual({
+    message: 'That message already went to the model.',
+    tone: 'warn',
+  })
+})
+
+test('D1b — exactly one correction is accepted, and then the id is gone', () => {
+  // The frames are request-scoped and live in an evictable replay ring, so an id
+  // held forever would let a replay re-announce an outcome already read.
+  const requests = createRecallRequests()
+  trackRecallRequest(requests, 'recall-1', 's1')
+  expect(classifyRecallAnswer(requests, recallAnswer('recall-1', true, 0))).toBe(
+    'first',
+  )
+  expect(classifyRecallAnswer(requests, recallAnswer('recall-1', false, 1))).toBe(
+    'correction',
+  )
+  expect(classifyRecallAnswer(requests, recallAnswer('recall-1', false, 1))).toBe(
+    'ignore',
+  )
+  expect(requests.size).toBe(0)
+})
+
+test('D1b — a repeated SUCCESS is not a correction', () => {
+  // Only a self-correction may follow an answer. A replayed success carries no
+  // new information and must not restore the recalled text a second time.
+  const requests = createRecallRequests()
+  trackRecallRequest(requests, 'recall-1', 's1')
+  expect(classifyRecallAnswer(requests, recallAnswer('recall-1', true, 0))).toBe(
+    'first',
+  )
+  expect(classifyRecallAnswer(requests, recallAnswer('recall-1', true, 0))).toBe(
+    'ignore',
+  )
+})
+
+test('D1b — a recall this page never asked for is ignored', () => {
+  const requests = createRecallRequests()
+  expect(classifyRecallAnswer(requests, recallAnswer('recall-9', true, 0))).toBe(
+    'ignore',
+  )
+})
+
+test('D1b — an error answers only a recall still WAITING for one', () => {
+  const requests = createRecallRequests()
+  trackRecallRequest(requests, 'recall-1', 's1')
+  expect(takeRecallErrorRequest(requests, 'recall-1')).toBe(true)
+  expect(requests.size).toBe(0)
+
+  // An already-answered recall is left alone: saying nothing came back would
+  // contradict the answer the user just read.
+  trackRecallRequest(requests, 'recall-2', 's1')
+  classifyRecallAnswer(requests, recallAnswer('recall-2', true, 0))
+  expect(takeRecallErrorRequest(requests, 'recall-2')).toBe(false)
+  expect(requests.size).toBe(0)
+
+  expect(takeRecallErrorRequest(requests, 'recall-unknown')).toBe(false)
+})
+
+test('D1b — the recall id store drops the oldest past its cap', () => {
+  const requests = createRecallRequests()
+  for (let index = 0; index < RECALL_REQUEST_CAP + 2; index += 1) {
+    trackRecallRequest(requests, `recall-${index}`, 's1')
+  }
+  expect(requests.size).toBe(RECALL_REQUEST_CAP)
+  expect(requests.has('recall-0')).toBe(false)
+  expect(requests.has('recall-1')).toBe(false)
+  expect(requests.has('recall-2')).toBe(true)
+})
+
+test('D1b — a send that threw releases the id it minted', () => {
+  const requests = createRecallRequests()
+  trackRecallRequest(requests, 'recall-1', 's1')
+  releaseRecallRequest(requests, 'recall-1')
+  expect(requests.size).toBe(0)
+})
+
+test('D1b — the undeliverable notice claims only what the renderer knows', () => {
+  // It used to add "The messages are still waiting for the response." That is not
+  // the renderer's to say for any of these codes: main's two mean the session
+  // could not be reached at all, so its queue is unobservable from here, and the
+  // sidecar's parking refusal means the process is on its way out.
+  expect(RECALL_UNDELIVERABLE_MESSAGE).toBe('Nothing was taken back.')
+  for (const code of [
+    'session_not_found',
+    'session_not_ready',
+    'session_disconnected',
+  ] as const) {
+    expect(
+      recallDeliveryFailureNotice({
+        kind: 'error',
+        protocolVersion: 1,
+        sessionId: 's1',
+        requestId: 'recall-1',
+        code,
+        message: 'session is not available',
+        retryable: code !== 'session_not_found',
+      }),
+    ).toBe(RECALL_UNDELIVERABLE_MESSAGE)
+  }
 })
 
 test('D1b — a recall result is kept per session like the other verb acks', () => {

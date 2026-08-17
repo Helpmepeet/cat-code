@@ -33,7 +33,7 @@ function select(
   return selectUndeliveredPrompts({
     operations,
     messageUuids: new Set(delivered),
-  }).map(prompt => prompt.uuid)
+  }).prompts.map(prompt => prompt.uuid)
 }
 
 test('every retraction verb subtracts its message, whichever primitive wrote it', () => {
@@ -62,12 +62,21 @@ test('a message resent after a take-back is recovered, because it is a new messa
   ).toEqual(['second-attempt'])
 })
 
-test('a retraction subtracts its enqueue whatever order the records land in', () => {
-  // The log is appended from a fire-and-forget writer, so a reader that only
-  // looked backwards from each retraction would be betting on write ordering.
+test('a message put back on the queue under the same uuid survives', () => {
+  // `drainOneQueuedPrompt` re-enqueues the SAME command object after a turn that
+  // rejected before `onInputPersisted`, and again when `startTurn` refuses
+  // outright (`app/sidecar/sidecarServer.ts` onSettled / !started). So a uuid
+  // legitimately stops and starts waiting again, and the log reads
+  // enqueue-dequeue-enqueue while the message is genuinely on the queue. Read as
+  // an order-independent set of retracted uuids, that destroyed the user's text
+  // on restore with no trace.
   expect(
-    select([op('dequeue', 'recalled'), op('enqueue', 'recalled')]),
-  ).toEqual([])
+    select([
+      op('enqueue', 'requeued'),
+      op('dequeue', 'requeued'),
+      op('enqueue', 'requeued'),
+    ]),
+  ).toEqual(['requeued'])
 })
 
 test('a delivered message is left to the transcript that already holds it', () => {
@@ -99,7 +108,7 @@ test('an image-bearing message restores as the blocks that were sent', () => {
     selectUndeliveredPrompts({
       operations: [op('enqueue', 'with-image', { content })],
       messageUuids: new Set<string>(),
-    })[0]?.content,
+    }).prompts[0]?.content,
   ).toEqual(content)
 })
 
@@ -115,14 +124,57 @@ test('a record with no usable content is dropped rather than half-restored', () 
   ).toEqual(['intact'])
 })
 
-test('a retraction that recorded no uuid subtracts nothing', () => {
-  // Sessions written before the retraction verbs recorded their command. The
-  // enqueue is all that survives, so restore still recovers it: guessing by
-  // text would be worse than replaying one stale row.
+test('only blocks a composer submit can produce are restored as user content', () => {
+  // These all satisfied the old `string or array` check and went into a
+  // `type:'user'` frame unexamined. None of them is a message anyone typed.
+  const unrestorable: SessionQueueOperation['content'][] = [
+    '',
+    [],
+    [1, 2, 3] as unknown as SessionQueueOperation['content'],
+    [{}] as unknown as SessionQueueOperation['content'],
+    [{ type: 'text' }] as unknown as SessionQueueOperation['content'],
+    [
+      { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: {} },
+    ] as unknown as SessionQueueOperation['content'],
+    [
+      { type: 'document', source: { type: 'base64', data: 'x' } },
+    ] as unknown as SessionQueueOperation['content'],
+  ]
+  for (const content of unrestorable) {
+    expect(select([op('enqueue', 'unrestorable', { content })])).toEqual([])
+  }
+})
+
+test('every discarded enqueue record is counted, not just skipped', () => {
+  // The restore records this count (`session.restore.completed`), because this
+  // whole path exists to stop a restore getting its row set wrong in silence.
+  const selection = selectUndeliveredPrompts({
+    operations: [
+      op('enqueue', 'corrupt', { content: [] }),
+      { ...op('enqueue', 'uuid-less'), uuid: undefined },
+      op('enqueue', 'intact'),
+      op('enqueue', 'notification', { mode: 'task-notification' }),
+      op('dequeue', 'intact'),
+    ],
+    messageUuids: new Set<string>(),
+  })
+  expect(selection.prompts).toEqual([])
+  // The corrupt one and the uuid-less one. A retraction is not a discard, and a
+  // task notification was never a candidate.
+  expect(selection.droppedRecords).toBe(2)
+})
+
+test('a retraction that recorded no uuid takes back nothing, not everything', () => {
+  // Sessions written before the retraction verbs recorded their command. Such a
+  // record cannot name what stopped waiting, and `dequeueAll`/`clearCommandQueue`
+  // do clear the whole queue, so reading it as clear-all is the tempting wrong
+  // move: it would discard the message the paired retraction was not about.
   expect(
     select([
-      op('enqueue', 'legacy-waiting'),
+      op('enqueue', 'still-waiting'),
+      op('enqueue', 'recalled'),
       { ...op('dequeue', 'ignored'), uuid: undefined },
+      op('dequeue', 'recalled'),
     ]),
-  ).toEqual(['legacy-waiting'])
+  ).toEqual(['still-waiting'])
 })

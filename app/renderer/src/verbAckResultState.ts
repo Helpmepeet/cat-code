@@ -61,20 +61,28 @@ function isCorrelatedBadRequest(
   )
 }
 
-export const RECALL_UNDELIVERABLE_MESSAGE =
-  'Nothing was taken back. The messages are still waiting for the response.'
+export const RECALL_UNDELIVERABLE_MESSAGE = 'Nothing was taken back.'
 
 /**
- * D1b — what an error frame answering a recall has to SAY. Electron main
- * synthesizes one when it cannot reach the session at all, copying the
- * renderer's own `requestId` onto it, so the renderer can tell which recall it
- * answers. It is not a `bad_request`, so the reducer above ignores it, and the
- * recall was answered by silence: nothing came back and nothing was said.
+ * D1b — what an error frame answering a recall has to SAY.
+ *
+ * TWO producers, not one. Electron main synthesizes `session_not_found` /
+ * `session_not_ready` when it cannot reach the session at all, copying the
+ * renderer's own `requestId` onto it. The SIDECAR also answers a recall with an
+ * error: `session_disconnected` when it is parking, and a `bad_request` for a
+ * malformed verb. This returns for every one of those except `bad_request`,
+ * where the verb-ack toast already carries the sidecar's own reason and saying
+ * it twice would be noise.
+ *
+ * It says only what the renderer actually knows: nothing came back. The claim it
+ * used to add, that the messages are still waiting, is not the renderer's to
+ * make for any of these codes: main's two mean the session could not be reached,
+ * so its queue is unobservable from here, and the sidecar's parking refusal means
+ * the process is on its way out. What the messages are doing is already on screen
+ * anyway, in the rows above the composer, so the notice does not need to guess.
  *
  * Call it only for a frame whose `requestId` this page minted for a recall.
- * Null where the verb-ack toast already carries the sidecar's own reason, so
- * the user is not told the same thing twice, and null for anything that is not
- * an error at all.
+ * Null for anything that is not an error at all.
  */
 export function recallDeliveryFailureNotice(frame: ServerFrame): string | null {
   if (frame.kind !== 'error') return null
@@ -83,18 +91,123 @@ export function recallDeliveryFailureNotice(frame: ServerFrame): string | null {
 }
 
 /**
- * D1b — release the recall requests belonging to a session that is going away.
- * A minted id is otherwise removed only by its answer, and a session whose
- * engine is gone never sends one, so the id would be held for the life of the
- * page. Mutates in place: the caller holds this across renders in a ref, not in
- * React state.
+ * D1b — the recalls this page is waiting on, and the ones it has answered but may
+ * still owe the user a CORRECTION for. `answered` is the whole difference between
+ * the two, and the reason this is not a one-shot consume.
+ *
+ * A recall can legitimately be answered twice. The first answer says what came
+ * back; then a message it took off the queue turns out to have reached the model
+ * anyway, and the sidecar corrects itself from the delivery signal
+ * (`commitStagedPrompt`). A one-shot `delete` on the first answer threw that
+ * correction away, so the user was told their message was theirs again while the
+ * model answered it, and they resent it.
+ *
+ * Exactly ONE correction is accepted per recall, and then the id is gone — the
+ * frames are request-scoped and live in an evictable replay ring, so an id that
+ * stayed forever would let a replay re-announce an outcome the user already read.
  */
-export function forgetRecallRequests(
-  requests: Map<string, SessionId>,
+export type RecallRequest = { sessionId: SessionId; answered: boolean }
+export type RecallRequests = Map<string, RecallRequest>
+
+/**
+ * How many recall ids one page tracks. Each is two small fields, so this is not
+ * about bytes: it bounds a map whose entries are otherwise removed only by an
+ * answer, and a session that never answers one would grow it for the life of the
+ * page. Oldest out, and a recall is one deliberate click, so reaching this at all
+ * means every earlier one went unanswered.
+ */
+export const RECALL_REQUEST_CAP = 8
+
+export function createRecallRequests(): RecallRequests {
+  return new Map()
+}
+
+/**
+ * Start waiting on a recall. Mutates in place: the caller holds this across
+ * renders in a ref, not in React state (nothing renders it).
+ */
+export function trackRecallRequest(
+  requests: RecallRequests,
+  requestId: string,
   sessionId: SessionId,
 ): void {
-  for (const [requestId, owner] of requests) {
-    if (owner === sessionId) requests.delete(requestId)
+  requests.set(requestId, { sessionId, answered: false })
+  while (requests.size > RECALL_REQUEST_CAP) {
+    const oldest = requests.keys().next()
+    if (oldest.done) break
+    requests.delete(oldest.value)
+  }
+}
+
+export function releaseRecallRequest(
+  requests: RecallRequests,
+  requestId: string,
+): void {
+  requests.delete(requestId)
+}
+
+/**
+ * What to do with a `prompt-recall.result`.
+ *  - `first`      — the answer this page was waiting for: restore what came back
+ *                   and say whatever the frame says.
+ *  - `correction` — the sidecar taking back its own answer, because a message it
+ *                   reported as recalled reached the model after all. Tell the
+ *                   user; restore NOTHING, because the first answer already put
+ *                   the recalled text in the composer and the corrected message
+ *                   is the one that stayed with the model.
+ *  - `ignore`     — not this page's recall, or already corrected. A replayed
+ *                   result out of the ring lands here after a reload, which is
+ *                   what keeps the ring safe.
+ *
+ * Mutates the map, like `forgetRecallRequests`.
+ */
+export type RecallAnswerDisposition = 'first' | 'correction' | 'ignore'
+
+export function classifyRecallAnswer(
+  requests: RecallRequests,
+  frame: PromptRecallResultFrame,
+): RecallAnswerDisposition {
+  const request = requests.get(frame.requestId)
+  if (!request) return 'ignore'
+  if (!request.answered) {
+    requests.set(frame.requestId, { ...request, answered: true })
+    return 'first'
+  }
+  // Only a self-correction may follow an answer, and only once.
+  if (!frame.ok && frame.alreadyDelivered > 0) {
+    requests.delete(frame.requestId)
+    return 'correction'
+  }
+  return 'ignore'
+}
+
+/**
+ * Whether an error frame is answering a recall this page is still WAITING on, and
+ * release it if so. An already-answered recall is left alone: the answer arrived,
+ * so telling the user nothing came back would contradict what they just read.
+ */
+export function takeRecallErrorRequest(
+  requests: RecallRequests,
+  requestId: string,
+): boolean {
+  const request = requests.get(requestId)
+  if (!request) return false
+  requests.delete(requestId)
+  return !request.answered
+}
+
+/**
+ * D1b — release the recall requests belonging to a session that is going away.
+ * A tracked id is otherwise removed only by its answer (or the correction that
+ * follows it), and a session whose engine is gone never sends one, so the id
+ * would be held for the life of the page. Mutates in place.
+ */
+export function forgetRecallRequests(
+  requests: RecallRequests,
+  sessionId: SessionId,
+): void {
+  for (const [requestId, request] of requests) {
+    if (request.sessionId === sessionId) requests.delete(requestId)
   }
 }
 

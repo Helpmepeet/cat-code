@@ -2932,6 +2932,49 @@ export type PromptRecallResultFrame = {
   alreadyDelivered: number
 }
 
+/**
+ * The answer to one `app.submit`, addressed to the renderer's own
+ * `options.submitId` (SubmitOptions). Exactly one of these per submit that
+ * carried an id.
+ *
+ * WHY IT EXISTS. A submit is optimistically cleared out of the composer, so the
+ * renderer holds the message (text AND images, which `↑` history cannot carry)
+ * until it learns whether the prompt was taken. Before this frame it had nothing
+ * to correlate on: main mints the transport `requestId` inside its own IPC
+ * handler and the preload's `submit()` returns void, so the renderer had to READ
+ * acceptance and refusal out of unrelated frames (a user message, a staged
+ * snapshot, a turn boundary) and pair them positionally. Every one of those
+ * frames has producers that have nothing to do with a submit: a tool result
+ * rides a user SDKMessage, a staged snapshot is republished on any queue change,
+ * a park refusal carries the recall's id. Positional pairing therefore retired
+ * the WRONG message, and the message that was actually refused was lost with its
+ * image. This frame replaces that reading; nothing else settles a submit.
+ *
+ * TWO PRODUCERS, and both are exact:
+ *  - the SIDECAR, from the same synchronous dispatch that decides the outcome,
+ *    for both the idle-turn path and the mid-turn staging path;
+ *  - Electron MAIN, when it could not forward the submit to the supervisor at
+ *    all. That case is a certain loss (nothing downstream ever saw the prompt),
+ *    and main is the only party that knows it happened, so it answers with the
+ *    renderer's id rather than leaving the copy stranded.
+ *
+ * It carries no prompt and no message text: the copy it settles is already in
+ * the renderer that sent it. `code` is the refusal's closed error code, for a
+ * reader that wants to distinguish the outcomes; the human-readable reason
+ * travels on the accompanying `error` frame as it always has.
+ */
+export type SubmitResultFrame = {
+  kind: 'submit.result'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  /** The `options.submitId` of the submit this answers. */
+  submitId: string
+  /** True when the prompt was taken: a turn started, or it was staged into the running turn. */
+  accepted: boolean
+  /** The refusal's code. Absent when `accepted`. */
+  code?: ErrorFrame['code']
+}
+
 export type ServerFramePayload =
   | ReadyFrame
   | SessionTitleFrame
@@ -2969,6 +3012,7 @@ export type ServerFramePayload =
   | UsageStatsSnapshotFrame
   | QueuedPromptsSnapshotFrame
   | PromptRecallResultFrame
+  | SubmitResultFrame
 
 /**
  * Metadata-only delivery envelope. Optional so an older sidecar remains
@@ -3025,6 +3069,7 @@ const SERVER_FRAME_KINDS: Record<ServerFrameKind, true> = {
   'stats.usage.snapshot': true,
   'queued-prompts.snapshot': true,
   'prompt-recall.result': true,
+  'submit.result': true,
 }
 
 export function isServerFrameKind(value: unknown): value is ServerFrameKind {
@@ -3432,6 +3477,17 @@ export type CatCodeBridge = {
 export type SubmitOptions = {
   isMeta?: boolean
   goalSnapshot?: unknown
+  /**
+   * The renderer's own correlation id for THIS submit, answered exactly once by
+   * a {@link SubmitResultFrame} carrying it back. See that frame for why the
+   * renderer cannot correlate without one.
+   *
+   * Renderer-authored, so it is bounded (`MAX_TEXT_FIELD_CHARS`) and validated
+   * at the sidecar like every other renderer-minted id. It authorizes nothing:
+   * it names no target, and the only thing it can reach is the renderer's own
+   * retained copy of the message it sent.
+   */
+  submitId?: string
 }
 
 export type SubmitPrompt = AppSubmitPrompt

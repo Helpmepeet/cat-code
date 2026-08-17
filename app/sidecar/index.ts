@@ -217,7 +217,10 @@ async function main(): Promise<void> {
       event: 'session.restore.completed',
       appSessionId: args.sessionId,
       engineSessionId: resumed.engineSessionId,
-      fields: { messageCount: resumed.messages.length },
+      fields: {
+        messageCount: resumed.messages.length,
+        count: resumed.droppedQueueRecords,
+      },
     })
   }
   // Resume may restore a persisted worktree and move the engine's cwd. All
