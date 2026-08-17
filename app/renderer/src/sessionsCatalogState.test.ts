@@ -18,6 +18,7 @@ import {
   resolveSessionOpenRoute,
   selectMergedSessionRows,
   selectRecentWorkspaces,
+  selectRowEngineSessionId,
   selectSessionsCatalog,
   sortSessionRows,
   withResolvedTitle,
@@ -687,6 +688,44 @@ function row(partial: Partial<MergedSessionRow> & { sessionId: string }): Merged
     ...partial,
   }
 }
+
+describe('selectRowEngineSessionId (the merge key read back apart)', () => {
+  test('a history row is keyed by its engine id', () => {
+    expect(selectRowEngineSessionId(row({ sessionId: 'engine-1' }))).toBe('engine-1')
+  })
+
+  test('a registry row the engine has named returns that id, not the app address', () => {
+    expect(
+      selectRowEngineSessionId(
+        row({ sessionId: 'engine-1', appSessionId: 'app-1', inRegistry: true }),
+      ),
+    ).toBe('engine-1')
+  })
+
+  test('a registry row with NO engine id yet returns null, not its app id', () => {
+    // The merge falls back to the app address for the key
+    // (`selectMergedSessionRows`), so reading `sessionId` raw here would report
+    // an app id as if the engine had minted it.
+    expect(
+      selectRowEngineSessionId(
+        row({ sessionId: 'app-1', appSessionId: 'app-1', inRegistry: true }),
+      ),
+    ).toBeNull()
+  })
+
+  test('it agrees with the merge for both row kinds it produces', () => {
+    const merged = selectMergedSessionRows(
+      [
+        descriptor({ appSessionId: 'app-live', engineSessionId: 'engine-live' }),
+        descriptor({ appSessionId: 'app-fresh', engineSessionId: null }),
+      ],
+      null,
+    )
+    const byApp = new Map(merged.map(r => [r.appSessionId, r]))
+    expect(selectRowEngineSessionId(byApp.get('app-live')!)).toBe('engine-live')
+    expect(selectRowEngineSessionId(byApp.get('app-fresh')!)).toBeNull()
+  })
+})
 
 describe('resolveSessionOpenRoute (P4-29 — one open decision, no per-caller copies)', () => {
   test('a live registry row is pure UI focus', () => {

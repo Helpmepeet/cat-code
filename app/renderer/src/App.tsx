@@ -298,6 +298,7 @@ import {
   resolveSessionOpenRoute,
   selectMergedSessionRows,
   selectRecentWorkspaces,
+  selectRowEngineSessionId,
   selectSessionsCatalog,
   withResolvedTitle,
   type MergedSessionRow,
@@ -2820,6 +2821,24 @@ export function App() {
     void navigator.clipboard.writeText(text)
   }
 
+  /**
+   * The ⋯ menu's `copy-ids` verb: the two ids that address one session, in the
+   * `app … / engine …` labelling the deleted composer debug line used, so a
+   * paste into a log search or a `--resume` still reads the same. Missing id →
+   * `none`, which is the honest answer and what that line printed too.
+   */
+  function copySessionIds(row: MergedSessionRow): void {
+    const text =
+      `app ${row.appSessionId ?? 'none'}\n` +
+      `engine ${selectRowEngineSessionId(row) ?? 'none'}`
+    void navigator.clipboard
+      .writeText(text)
+      .then(() => toast('Session ids copied to clipboard', { tone: 'success' }))
+      .catch(() =>
+        toast('Could not write to the clipboard', { tone: 'warn' }),
+      )
+  }
+
   const workspacePanels: WorkspacePanelView[] = workspaceLayout.panels
     .map(panel => {
 	      const sessionId = panel.sessionId
@@ -3538,6 +3557,10 @@ export function App() {
                     // `copy` is the flyout HOST and is never dispatched; P4-30
                     // split the real action out as `copy-text`.
                     else if (kind === 'copy-text') copyForLlm(targetId)
+                    // Reads the catalog row only, so it answers for ANY row —
+                    // including a closed or history one the renderer holds no
+                    // transcript for.
+                    else if (kind === 'copy-ids') copySessionIds(targetRow)
                     // P4-36 — transcript mode for THIS session. Purely a read
                     // preference; nothing is sent to the engine.
                     else if (kind === 'reveal-hidden')
@@ -5243,33 +5266,6 @@ export function SessionPane({
           toolbarRef={actionBarRef}
           onFocusComposer={() => composerRef.current?.focus()}
         />
-
-        {/* TEMPORARY debug line (2026-07-28, operator request). DELETE ME.
-         *
-         * It prints session ids, which §7 forbids on a real text surface, so it
-         * is dev-gated and Vite drops it from a production build. On a
-         * preview it also names which run facts the rail actually RECEIVED,
-         * which is the one signal that separates "the cache never got the
-         * facts" from "the rail got them and did not render" — the ambiguity
-         * that made this bug expensive to find. Delete once the rail settles. */}
-        {import.meta.env.DEV ? (
-          <div className="mt-2 select-all rounded-[4px] bg-white/[0.04] px-2 py-1 font-mono text-[11px] leading-tight text-[#a1a1aa]">
-            app {activeSessionId ?? 'none'} · engine{' '}
-            {activeDescriptor?.engineSessionId ?? 'none'}
-            {preview
-              ? ` · facts ${
-                  [
-                    previewRunFacts?.model ? 'model' : null,
-                    previewRunFacts?.permissionMode ? 'mode' : null,
-                    previewRunFacts?.effort ? 'effort' : null,
-                    previewRunFacts?.contextUsage ? 'ctx' : null,
-                  ]
-                    .filter(Boolean)
-                    .join(',') || 'none'
-                }`
-              : ''}
-          </div>
-        ) : null}
       </form>
       </div>
 

@@ -120,6 +120,47 @@ describe('resolveSessionActions', () => {
     expect(inactive.get('metadata')!.enabled).toBe(false)
   })
 
+  test('Copy-session-ids is NOT active-open gated: it reads the row, not the transcript', () => {
+    // The point of the row. It replaced a composer debug line that could only
+    // speak for the attached tab, and the ids you usually want belong to a
+    // session that is closed or came from the terminal.
+    for (const isActiveOpen of [true, false]) {
+      const item = byKind(resolveSessionActions(row(), { isActiveOpen })).get(
+        'copy-ids',
+      )!
+      expect(item.label).toBe('Copy session ids')
+      expect(item.section).toBe('transfer')
+      expect(item.enabled).toBe(true)
+      expect(item.reason).toBeUndefined()
+    }
+
+    // A history row has no app id and a closed row has no live engine; both
+    // still have an id to copy.
+    const history = byKind(
+      resolveSessionActions(
+        row({
+          sessionId: 'engine-9',
+          appSessionId: null,
+          inRegistry: false,
+          live: false,
+          status: 'history',
+        }),
+        { isActiveOpen: false },
+      ),
+    )
+    expect(history.get('copy-ids')!.enabled).toBe(true)
+
+    // A registry row the engine has not named yet (merge key === app id) keeps
+    // it too: the app id alone is worth copying, and `none` is the honest value
+    // for the other half.
+    const unnamed = byKind(
+      resolveSessionActions(row({ sessionId: 'app-1', appSessionId: 'app-1' }), {
+        isActiveOpen: false,
+      }),
+    )
+    expect(unnamed.get('copy-ids')!.enabled).toBe(true)
+  })
+
   test('Rename / Export / Branch are ENABLED for a LIVE row (P4-6b wired verbs)', () => {
     const items = byKind(resolveSessionActions(row({ live: true }), { isActiveOpen: true }))
     expect(items.get('rename')!.enabled).toBe(true)

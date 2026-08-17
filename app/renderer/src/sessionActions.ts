@@ -60,6 +60,15 @@ export type SessionActionKind =
   | 'copy'
   | 'copy-md'
   | 'copy-text'
+  /**
+   * The two ids that address this session — the app's own and the engine's
+   * transcript key. It replaces the dev-only debug line the composer carried
+   * from 2026-07-28 to 2026-08-17, which printed them for the ACTIVE pane only
+   * and could not ship to a real build (§7 forbids a session id on a text
+   * surface). Copying them is not the same as displaying them, so this row is
+   * live in every build and for EVERY row, not just the attached tab.
+   */
+  | 'copy-ids'
   | 'export'
   /**
    * P4-36 — the transcript-mode hidden-row reveal (`Chat.jsx:1199-1203`). TWO
@@ -239,6 +248,23 @@ export function resolveSessionActions(
           ...(ctx.isActiveOpen ? {} : { reason: DEFER.notOpen }),
         },
       ],
+    },
+    {
+      // A SIBLING of the Copy group, not a child of it: that group's host is
+      // gated on `isActiveOpen` because every child reads the transcript, and
+      // these two ids are held by the catalog row itself. Folding them into the
+      // flyout would have hidden the ids behind the one gate they do not need,
+      // for exactly the rows (a closed or history session) whose ids you most
+      // often want.
+      //
+      // It is also the one unconditionally enabled row in this menu: the merge
+      // key guarantees at least one id (`selectRowEngineSessionId`), so there is
+      // no state in which it has nothing to answer with. A row missing the OTHER
+      // id copies `none` for it, which is the honest value, not a failure.
+      kind: 'copy-ids',
+      label: 'Copy session ids',
+      section: 'transfer',
+      enabled: true,
     },
     {
       kind: 'export',

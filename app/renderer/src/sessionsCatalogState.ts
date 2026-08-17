@@ -431,6 +431,21 @@ export function resolveSessionOpenRoute(
   return { kind: 'none' }
 }
 
+/**
+ * The row's ENGINE session id, or null when nothing has named this session yet.
+ *
+ * `sessionId` is the merge key `engineSessionId ?? appSessionId`
+ * (`selectMergedSessionRows` above), so the key EQUALLING `appSessionId` is
+ * exactly the "no engine id yet" case: a registry row the app minted whose
+ * sidecar has not relayed one on its ready frame (`app/host/host.ts`). A
+ * history row has no `appSessionId` at all, so its key is always the engine id.
+ */
+export function selectRowEngineSessionId(
+  row: Pick<MergedSessionRow, 'sessionId' | 'appSessionId'>,
+): string | null {
+  return row.sessionId === row.appSessionId ? null : row.sessionId
+}
+
 /** The distinct tags across rows, for the tag-filter tabs (sorted, no nulls). */
 export function collectSessionTags(rows: readonly MergedSessionRow[]): string[] {
   const tags = new Set<string>()
