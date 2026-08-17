@@ -19,6 +19,10 @@ import type { ToolUseContext } from '../../Tool.js'
 import type { Message } from '../../types/message.js'
 import { NON_MESSAGE_REQUEST_OVERHEAD_TOKENS } from '../../utils/tokens.js'
 
+const tokenWarningSource = await Bun.file(
+  new URL('../../components/TokenWarning.tsx', import.meta.url),
+).text()
+
 const ENV_KEYS = [
   'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE',
   'CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE',
@@ -29,6 +33,13 @@ const ENV_KEYS = [
 ] as const
 
 const envSnapshot = new Map<string, string | undefined>()
+
+test('TokenWarning uses the reactive compaction runtime predicate', () => {
+  expect(tokenWarningSource).toContain('isReactiveCompactEnabled()')
+  expect(tokenWarningSource).not.toContain(
+    'getFeatureValue_CACHED_MAY_BE_STALE("tengu_cobalt_raccoon"',
+  )
+})
 
 describe('autoCompact thresholds', () => {
   beforeEach(() => {
