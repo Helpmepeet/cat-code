@@ -5,6 +5,7 @@ import type {
 import type { Message } from '../../src/types/message.js'
 import { isInternalNoResponseSentinel } from '../../src/utils/messages.js'
 import { toSDKMessages } from '../../src/utils/messages/mappers.js'
+import type { UndeliveredPrompt } from './sessionResume.js'
 
 /**
  * Project engine resume state into user-visible restored history.
@@ -22,7 +23,7 @@ export function projectResumedHistory(messages: Message[]): SDKMessage[] {
 }
 
 export function projectUndeliveredPrompts(
-  prompts: readonly { uuid: string; content: string; timestamp: string }[],
+  prompts: readonly UndeliveredPrompt[],
   engineSessionId: string,
 ): SDKMessage[] {
   return prompts.map(prompt => ({

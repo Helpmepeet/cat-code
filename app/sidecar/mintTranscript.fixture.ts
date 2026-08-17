@@ -18,7 +18,10 @@ import { randomUUID } from 'node:crypto'
 import { init } from '../../src/entrypoints/init.js'
 import { switchSession } from '../../src/bootstrap/state.js'
 import { asAgentId, asSessionId } from '../../src/types/ids.js'
-import { enqueue } from '../../src/utils/messageQueueManager.js'
+import {
+  dequeueAllMatching,
+  enqueue,
+} from '../../src/utils/messageQueueManager.js'
 import {
   createAssistantMessage,
   createCompactBoundaryMessage,
@@ -42,6 +45,7 @@ async function main(): Promise<void> {
   const unresolvedToolTail = process.argv.includes('--unresolved-tool-tail')
   const subagentBranch = process.argv.includes('--subagent-branch')
   const interruptedQueued = process.argv.includes('--interrupted-queued')
+  const recalledQueued = process.argv.includes('--recalled-queued')
   if (!sessionId) {
     throw new Error('usage: mintTranscript.fixture.ts <sessionId> [marker]')
   }
@@ -193,6 +197,35 @@ async function main(): Promise<void> {
     })
     await Bun.sleep(0)
     process.stdout.write(`MINTED_QUEUED_UUID=${queuedUuid}\n`)
+  }
+  if (recalledQueued) {
+    // D1b — two messages sent into a running turn, then Take back on one of
+    // them, through the same queue primitives the desktop's recall handler
+    // composes (`app/sidecar/sidecarServer.ts` handlePromptRecall). The one
+    // left alone is the control: restore must still recover it.
+    const recalledUuid = randomUUID()
+    const waitingUuid = randomUUID()
+    enqueue({ value: `recalled input ${marker}`, mode: 'prompt', uuid: recalledUuid })
+    enqueue({ value: `waiting input ${marker}`, mode: 'prompt', uuid: waitingUuid })
+    // An image-bearing message has no text value at all, so its durable record
+    // is the one that used to carry nothing a restore could use.
+    const imageUuid = randomUUID()
+    enqueue({
+      value: [
+        { type: 'text', text: `image caption ${marker}` },
+        {
+          type: 'image',
+          source: { type: 'base64', media_type: 'image/png', data: 'aGVsbG8=' },
+        },
+      ],
+      mode: 'prompt',
+      uuid: imageUuid,
+    })
+    dequeueAllMatching(command => command.uuid === recalledUuid)
+    await Bun.sleep(0)
+    process.stdout.write(`MINTED_RECALLED_UUID=${recalledUuid}\n`)
+    process.stdout.write(`MINTED_WAITING_UUID=${waitingUuid}\n`)
+    process.stdout.write(`MINTED_IMAGE_UUID=${imageUuid}\n`)
   }
   if (compacted) {
     process.stdout.write('MINTED_TRANSCRIPT_SHAPE=compacted\n')
