@@ -52,6 +52,66 @@ test('the arc geometry is a computed SVG attribute, not a style object', () => {
   expect(html).not.toContain('style=')
 })
 
+test('draws the reference tick on a window bigger than the reference', () => {
+  const html = renderToStaticMarkup(
+    <ContextGauge
+      usage={{ usedTokens: 441_000, contextWindow: 980_000, percentUsed: 45 }}
+    />,
+  )
+  // 372,000 / 980,000 = 0.37959…, so the tick sits at that fraction of a turn
+  // from 12 o'clock. Endpoints are computed attributes, never a style object.
+  expect(html).toContain('<line')
+  expect(html).toContain('stroke="rgba(255,255,255,0.75)"')
+  expect(html).not.toContain('style=')
+})
+
+test('places the tick at the same angle whether or not the arc has reached it', () => {
+  const below = renderToStaticMarkup(
+    <ContextGauge
+      usage={{ usedTokens: 352_800, contextWindow: 980_000, percentUsed: 36 }}
+    />,
+  )
+  const above = renderToStaticMarkup(
+    <ContextGauge
+      usage={{ usedTokens: 441_000, contextWindow: 980_000, percentUsed: 45 }}
+    />,
+  )
+  const lineOf = (html: string) => /<line[^>]*>/.exec(html)?.[0]
+  // The mark is a property of the WINDOW, not of usage: identical on both sides.
+  expect(lineOf(below)).toBeDefined()
+  expect(lineOf(below)).toBe(lineOf(above))
+})
+
+// A 372,000-token model would put the tick exactly on the ring's end, where it
+// marks nothing and reads as a defect in the donut.
+test('omits the tick when the window is not bigger than the reference', () => {
+  for (const contextWindow of [372_000, 352_000, 200_000]) {
+    const html = renderToStaticMarkup(
+      <ContextGauge usage={{ usedTokens: 10_000, contextWindow, percentUsed: 3 }} />,
+    )
+    expect(html).not.toContain('<line')
+  }
+})
+
+// Crossing the reference must change exactly one thing on screen: the tick's
+// position relative to the arc. Not the tone, not a warning.
+test('crossing the reference leaves the tone ladder alone', () => {
+  const below = renderToStaticMarkup(
+    <ContextGauge
+      usage={{ usedTokens: 352_800, contextWindow: 980_000, percentUsed: 36 }}
+    />,
+  )
+  const above = renderToStaticMarkup(
+    <ContextGauge
+      usage={{ usedTokens: 441_000, contextWindow: 980_000, percentUsed: 45 }}
+    />,
+  )
+  expect(below).toContain('text-accent')
+  expect(above).toContain('text-accent')
+  expect(above).not.toContain('text-tone-warn')
+  expect(above).not.toContain('text-tone-danger')
+})
+
 // The empty state is the one value where the two dash forms disagree: the
 // prototype's `0 CIRCUMFERENCE` under a round linecap draws a DOT at 12 o'clock,
 // where `strokeDashoffset={CIRCUMFERENCE}` would draw nothing at all.

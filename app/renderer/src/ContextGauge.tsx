@@ -1,4 +1,8 @@
-import { pressureTone, type ContextUsage } from './contextUsage.js'
+import {
+  pressureTone,
+  selectContextReferenceFraction,
+  type ContextUsage,
+} from './contextUsage.js'
 import { toneClasses } from './tone.js'
 
 /**
@@ -8,6 +12,14 @@ import { toneClasses } from './tone.js'
  * {@link selectContextUsage} — real result-frame usage, no invented data. The
  * pink brand hue while there is headroom, taking on warn/danger tone as the
  * window fills.
+ *
+ * A DEVIATION from the prototype, added deliberately (operator call,
+ * 2026-08-17): the white reference tick at
+ * {@link CONTEXT_REFERENCE_TOKENS}, on windows large enough for it to mean
+ * something. It is a scale mark and nothing more — the tone ladder, the warning
+ * glyph beside it and the compaction threshold are all unchanged, so crossing it
+ * changes exactly one thing on screen. Do not "restore parity" by removing it,
+ * and do not grow it into a second warning.
  *
  * Tailwind discipline: the tone is a STATIC class map (no interpolated
  * `text-[${…}]` — the v4 dynamic-class trap); the arc rides `stroke="currentColor"`
@@ -24,11 +36,38 @@ import { toneClasses } from './tone.js'
  */
 const RADIUS = 6.5
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS
+const STROKE_WIDTH = 3
+/** The tick overhangs the band by this much at each end, so it reads as a mark
+ * ACROSS the ring rather than a chip out of it. */
+const REFERENCE_TICK_OVERHANG = 0.4
+
+/**
+ * The two endpoints of the reference tick, in the gauge's own unrotated frame.
+ * The `-rotate-90` on the svg is what puts fraction 0 at 12 o'clock, exactly as
+ * it does for the arc, so this measures the angle from the +x axis and lets the
+ * shared rotation place both.
+ */
+function referenceTick(fraction: number) {
+  const angle = fraction * 2 * Math.PI
+  const inner = RADIUS - STROKE_WIDTH / 2 - REFERENCE_TICK_OVERHANG
+  const outer = RADIUS + STROKE_WIDTH / 2 + REFERENCE_TICK_OVERHANG
+  return {
+    x1: 8 + inner * Math.cos(angle),
+    y1: 8 + inner * Math.sin(angle),
+    x2: 8 + outer * Math.cos(angle),
+    y2: 8 + outer * Math.sin(angle),
+  }
+}
 
 export function ContextGauge({ usage }: { usage: ContextUsage }) {
   const { percentUsed, usedTokens, contextWindow } = usage
   const tone = toneClasses(pressureTone(percentUsed)).text
   const arcLength = (percentUsed / 100) * CIRCUMFERENCE
+  // Drawn AFTER the arc, and in white rather than `currentColor`, so it stays
+  // legible on both sides of itself: over the tinted arc once the session has
+  // passed it, and over the faint track while it has not.
+  const referenceFraction = selectContextReferenceFraction(usage)
+  const tick = referenceFraction == null ? null : referenceTick(referenceFraction)
   return (
     <span
       className={`flex shrink-0 items-center gap-1.5 self-center ${tone}`}
@@ -54,6 +93,17 @@ export function ContextGauge({ usage }: { usage: ContextUsage }) {
           strokeLinecap="round"
           strokeDasharray={`${arcLength} ${CIRCUMFERENCE}`}
         />
+        {tick ? (
+          <line
+            x1={tick.x1}
+            y1={tick.y1}
+            x2={tick.x2}
+            y2={tick.y2}
+            stroke="rgba(255,255,255,0.75)"
+            strokeWidth="1.2"
+            strokeLinecap="round"
+          />
+        ) : null}
       </svg>
       <span className="text-[12.5px] font-semibold tabular-nums">{percentUsed}%</span>
     </span>

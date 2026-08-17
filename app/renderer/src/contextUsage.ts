@@ -104,6 +104,33 @@ export function pressureTone(percent: number): Tone {
 /** Prototype default when no turn has reported a real window yet (`Surfaces.jsx:472`). */
 const DEFAULT_CONTEXT_WINDOW = 200_000
 
+/**
+ * The reference the composer donut draws a tick at (operator call, 2026-08-17).
+ *
+ * It is a self-imposed working limit, not an engine threshold: 372,000 is the
+ * Codex window the operator considers well tuned, and the tick says whether this
+ * session has run past that much context. Nothing downstream reads it. It never
+ * recolours the ring, never mounts a warning, and never moves compaction, which
+ * stays on `getAutoCompactThreshold` alone.
+ */
+export const CONTEXT_REFERENCE_TOKENS = 372_000
+
+/**
+ * Where the reference tick sits on the ring, as a 0-1 fraction of the window, or
+ * null when it has no place on this gauge.
+ *
+ * Null on any window at or below the reference: on a 372,000-token model the
+ * tick would land exactly on the ring's end, marking nothing and reading as a
+ * flaw in the donut. The mark only means something while the window is bigger
+ * than the limit it draws.
+ */
+export function selectContextReferenceFraction(
+  usage: ContextUsage,
+): number | null {
+  if (usage.contextWindow <= CONTEXT_REFERENCE_TOKENS) return null
+  return CONTEXT_REFERENCE_TOKENS / usage.contextWindow
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

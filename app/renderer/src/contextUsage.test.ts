@@ -1,6 +1,10 @@
-import { expect, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import type { SDKMessage } from '@cat-code/engine/sdk'
-import { selectContextUsage } from './contextUsage.js'
+import {
+  CONTEXT_REFERENCE_TOKENS,
+  selectContextReferenceFraction,
+  selectContextUsage,
+} from './contextUsage.js'
 
 /** A minimal `result` frame (SDKBaseMessage is all-optional + index-signature).
  * Its `usage` is the session-LIFETIME accumulator (`QueryEngine.totalUsage`), so
@@ -553,4 +557,42 @@ test('defaults the window when the result omits contextWindow (still shows the d
     result({ input_tokens: 9_999_999 }, { m: { inputTokens: 10_000 } }),
   ])
   expect(usage).toEqual({ usedTokens: 10_000, contextWindow: 200_000, percentUsed: 5 })
+})
+
+describe('selectContextReferenceFraction', () => {
+  test('is the reference share of a window bigger than the reference', () => {
+    expect(
+      selectContextReferenceFraction({
+        usedTokens: 0,
+        contextWindow: 980_000,
+        percentUsed: 0,
+      }),
+    ).toBeCloseTo(CONTEXT_REFERENCE_TOKENS / 980_000, 10)
+  })
+
+  test('tracks the window rather than a fixed angle', () => {
+    const at = (contextWindow: number) =>
+      selectContextReferenceFraction({
+        usedTokens: 0,
+        contextWindow,
+        percentUsed: 0,
+      })
+    // A bigger window pushes the same token count further round the ring.
+    expect(at(1_000_000)!).toBeLessThan(at(500_000)!)
+  })
+
+  // At or below the reference the tick would land on the ring's end, marking
+  // nothing. Terra and Luna run exactly 372,000, so this is the live case.
+  test.each([CONTEXT_REFERENCE_TOKENS, 352_000, 200_000])(
+    'has no place on a %p window',
+    contextWindow => {
+      expect(
+        selectContextReferenceFraction({
+          usedTokens: 0,
+          contextWindow,
+          percentUsed: 0,
+        }),
+      ).toBeNull()
+    },
+  )
 })
