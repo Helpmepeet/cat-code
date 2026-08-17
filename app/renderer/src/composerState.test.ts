@@ -6,8 +6,10 @@ import { REPLAY_BUFFER_TRUNCATION_REQUEST_ID } from './rawMessageLog.js'
 import {
   classifySubmitOutcomeFrame,
   createRetainedSubmitState,
+  foldRecalledPrompts,
   reduceRetainedSubmitCleared,
   reduceRetainedSubmitHeld,
+  reduceRetainedSubmitSettled,
   selectRetainedSubmit,
 } from './composerState.js'
 import {
@@ -1109,6 +1111,56 @@ describe('D5 — a refused submit comes back, images included', () => {
     expect(reduceRetainedSubmitCleared(state, S1)).toBe(state)
   })
 
+  test('an accepted-then-refused pair hands back the refused message', () => {
+    // Two submits inside one round trip: the first is accepted mid-turn, the
+    // second is sent before that acceptance lands and is refused at the depth
+    // cap. With ONE slot per session the second overwrote the first, the first
+    // acceptance emptied the slot, and the refusal that followed had nothing
+    // left to give back: that message and its image were simply gone, since `↑`
+    // history carries text only.
+    let state = createRetainedSubmitState()
+    state = reduceRetainedSubmitHeld(state, S1, { text: 'first', images: [] })
+    state = reduceRetainedSubmitHeld(state, S1, {
+      text: 'second',
+      images: [image],
+    })
+
+    // The first answer takes the first submit; the second is still waiting.
+    state = reduceRetainedSubmitSettled(state, S1)
+    expect(selectRetainedSubmit(state, S1)).toEqual({
+      text: 'second',
+      images: [image],
+    })
+
+    state = reduceRetainedSubmitSettled(state, S1)
+    expect(selectRetainedSubmit(state, S1)).toBeNull()
+  })
+
+  test('one answer drains one submit, and never another session’s', () => {
+    const empty = createRetainedSubmitState()
+    expect(reduceRetainedSubmitSettled(empty, S1)).toBe(empty)
+
+    let state = reduceRetainedSubmitHeld(empty, S1, { text: 'a', images: [] })
+    state = reduceRetainedSubmitHeld(state, S2, { text: 'b', images: [] })
+    state = reduceRetainedSubmitSettled(state, S1)
+    expect(selectRetainedSubmit(state, S1)).toBeNull()
+    expect(selectRetainedSubmit(state, S2)).toEqual({ text: 'b', images: [] })
+  })
+
+  test('a closed session drops every retained copy, not just the head', () => {
+    // Each copy holds a full base64 image and a closed session has nothing left
+    // to resolve it, so the whole queue goes.
+    let state = createRetainedSubmitState()
+    state = reduceRetainedSubmitHeld(state, S1, {
+      text: 'first',
+      images: [image],
+    })
+    state = reduceRetainedSubmitHeld(state, S1, { text: 'second', images: [] })
+    state = reduceRetainedSubmitCleared(state, S1)
+    expect(selectRetainedSubmit(state, S1)).toBeNull()
+    expect(reduceRetainedSubmitSettled(state, S1)).toBe(state)
+  })
+
   test('an error frame is the refusal signal; the user message is the acceptance', () => {
     expect(classifySubmitOutcomeFrame(errorFrame(S1))).toBe('refused')
     expect(classifySubmitOutcomeFrame(userMessageFrame(S1))).toBe('settled')
@@ -1274,5 +1326,98 @@ describe('D5 — a refused submit comes back, images included', () => {
     // '\ntyped after' — the image-only submit carries no text at all.
     expect(restoreDraftWithPending('typed after', '')).toBe('typed after')
     expect(restoreDraftWithPending('', '')).toBe('')
+  })
+})
+
+describe('D1b — folding recalled messages back into the composer', () => {
+  test('several recalled messages join with newlines, oldest first', () => {
+    // Terminal parity: `↑` pops EVERY editable queued command into the input at
+    // once, joined by newlines, rather than making the user recall them one by
+    // one (`src/utils/messageQueueManager.ts` popAllEditable).
+    expect(
+      foldRecalledPrompts([
+        { id: 'a', prompt: 'first' },
+        { id: 'b', prompt: 'second' },
+      ]),
+    ).toEqual({ text: 'first\nsecond', images: [] })
+  })
+
+  test('an image-bearing message comes back with its image, not just its text', () => {
+    // D2: a mid-turn prompt carrying an image is a content-block array, and the
+    // renderer holds no other copy of the bytes once the composer cleared.
+    const folded = foldRecalledPrompts([
+      {
+        id: 'a',
+        prompt: [
+          { type: 'text', text: 'what is wrong here' },
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: 'image/png', data: 'AAAA' },
+          },
+        ],
+      },
+    ])
+
+    expect(folded.text).toBe('what is wrong here')
+    expect(folded.images).toEqual([
+      { id: 1, mediaType: 'image/png', data: 'AAAA', name: 'image' },
+    ])
+  })
+
+  test('two image-bearing messages fold to ONE image, the most recent', () => {
+    // The composer holds exactly one image and the submit schema caps base64 as
+    // a total across the prompt, so restoring one per message would build a
+    // draft the sidecar refuses, which the refusal path restores again: the
+    // user can neither send nor easily clear it.
+    const folded = foldRecalledPrompts([
+      {
+        id: 'a',
+        prompt: [
+          { type: 'text', text: 'first' },
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: 'image/png', data: 'AAAA' },
+          },
+        ],
+      },
+      {
+        id: 'b',
+        prompt: [
+          { type: 'text', text: 'second' },
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: 'image/webp', data: 'BBBB' },
+          },
+        ],
+      },
+    ])
+
+    expect(folded.text).toBe('first\nsecond')
+    expect(folded.images).toEqual([
+      { id: 1, mediaType: 'image/webp', data: 'BBBB', name: 'image' },
+    ])
+  })
+
+  test('an image-only message folds to no text at all', () => {
+    // The composer merges this text under whatever is being typed, so an empty
+    // string is what keeps a blank line out of a draft in progress.
+    const folded = foldRecalledPrompts([
+      {
+        id: 'a',
+        prompt: [
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: 'image/webp', data: 'BBBB' },
+          },
+        ],
+      },
+    ])
+
+    expect(folded.text).toBe('')
+    expect(folded.images).toHaveLength(1)
+  })
+
+  test('nothing recalled folds to nothing', () => {
+    expect(foldRecalledPrompts([])).toEqual({ text: '', images: [] })
   })
 })

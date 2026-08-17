@@ -2,7 +2,6 @@ import { describe, expect, test } from 'bun:test'
 import { PROTOCOL_VERSION, type ServerFrame } from '../../shared/protocol.js'
 import {
   createQueuedPromptsState,
-  foldRecalledPrompts,
   reduceQueuedPromptsState,
   selectQueuedPrompts,
 } from './queuedPromptsState.js'
@@ -89,98 +88,5 @@ describe('messages waiting for the running response', () => {
     expect(selectQueuedPrompts(state, 'session-2')).toEqual([
       { id: 'z', text: 'elsewhere' },
     ])
-  })
-})
-
-describe('D1b — folding recalled messages back into the composer', () => {
-  test('several recalled messages join with newlines, oldest first', () => {
-    // Terminal parity: `↑` pops EVERY editable queued command into the input at
-    // once, joined by newlines, rather than making the user recall them one by
-    // one (`src/utils/messageQueueManager.ts` popAllEditable).
-    expect(
-      foldRecalledPrompts([
-        { id: 'a', prompt: 'first' },
-        { id: 'b', prompt: 'second' },
-      ]),
-    ).toEqual({ text: 'first\nsecond', images: [] })
-  })
-
-  test('an image-bearing message comes back with its image, not just its text', () => {
-    // D2: a mid-turn prompt carrying an image is a content-block array, and the
-    // renderer holds no other copy of the bytes once the composer cleared.
-    const folded = foldRecalledPrompts([
-      {
-        id: 'a',
-        prompt: [
-          { type: 'text', text: 'what is wrong here' },
-          {
-            type: 'image',
-            source: { type: 'base64', media_type: 'image/png', data: 'AAAA' },
-          },
-        ],
-      },
-    ])
-
-    expect(folded.text).toBe('what is wrong here')
-    expect(folded.images).toEqual([
-      { id: 1, mediaType: 'image/png', data: 'AAAA', name: 'image' },
-    ])
-  })
-
-  test('two image-bearing messages fold to ONE image, the most recent', () => {
-    // The composer holds exactly one image and the submit schema caps base64 as
-    // a total across the prompt, so restoring one per message would build a
-    // draft the sidecar refuses, which the refusal path restores again: the
-    // user can neither send nor easily clear it.
-    const folded = foldRecalledPrompts([
-      {
-        id: 'a',
-        prompt: [
-          { type: 'text', text: 'first' },
-          {
-            type: 'image',
-            source: { type: 'base64', media_type: 'image/png', data: 'AAAA' },
-          },
-        ],
-      },
-      {
-        id: 'b',
-        prompt: [
-          { type: 'text', text: 'second' },
-          {
-            type: 'image',
-            source: { type: 'base64', media_type: 'image/webp', data: 'BBBB' },
-          },
-        ],
-      },
-    ])
-
-    expect(folded.text).toBe('first\nsecond')
-    expect(folded.images).toEqual([
-      { id: 1, mediaType: 'image/webp', data: 'BBBB', name: 'image' },
-    ])
-  })
-
-  test('an image-only message folds to no text at all', () => {
-    // The composer merges this text under whatever is being typed, so an empty
-    // string is what keeps a blank line out of a draft in progress.
-    const folded = foldRecalledPrompts([
-      {
-        id: 'a',
-        prompt: [
-          {
-            type: 'image',
-            source: { type: 'base64', media_type: 'image/webp', data: 'BBBB' },
-          },
-        ],
-      },
-    ])
-
-    expect(folded.text).toBe('')
-    expect(folded.images).toHaveLength(1)
-  })
-
-  test('nothing recalled folds to nothing', () => {
-    expect(foldRecalledPrompts([])).toEqual({ text: '', images: [] })
   })
 })

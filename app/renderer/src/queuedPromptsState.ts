@@ -16,11 +16,9 @@
 
 import type {
   QueuedPromptItem,
-  RecalledPrompt,
   ServerFrame,
   SessionId,
 } from '../../shared/protocol.js'
-import type { ImageAttachment } from './composerState.js'
 
 export type QueuedPromptsState = {
   sessions: Record<SessionId, readonly QueuedPromptItem[]>
@@ -72,59 +70,6 @@ export function reduceQueuedPromptsState(
   }
 
   return state
-}
-
-/**
- * D1b — fold the messages a recall took back into one composer draft.
- *
- * The terminal's `↑` pops EVERY editable queued command into the input at once,
- * joined by newlines, with pasted images restored
- * (`src/utils/messageQueueManager.ts` `popAllEditable`). This is that join. It
- * is a pure function so the outcome is testable without driving the composer,
- * which the SSR-only renderer harness cannot do.
- *
- * Text joins across every recalled message; images do NOT. The composer holds
- * exactly one image at a time (`reduceImageAttachmentAdded` replaces the whole
- * array with a single element) and the submit schema caps base64 as a TOTAL
- * across the prompt, so restoring one image per recalled message would build a
- * draft the sidecar then refuses, which the refusal path restores again: the
- * user cannot send and cannot easily clear. The most recent image wins, which
- * is what attaching them one after another would have produced anyway.
- */
-export function foldRecalledPrompts(prompts: readonly RecalledPrompt[]): {
-  text: string
-  images: ImageAttachment[]
-} {
-  const texts: string[] = []
-  let lastImage: ImageAttachment | null = null
-  for (const { prompt } of prompts) {
-    if (typeof prompt === 'string') {
-      if (prompt.length > 0) texts.push(prompt)
-      continue
-    }
-    for (const block of prompt) {
-      if (block.type === 'text') {
-        if (block.text.length > 0) texts.push(block.text)
-        continue
-      }
-      if (block.type === 'image') {
-        lastImage = {
-          id: 1,
-          mediaType: block.source.media_type,
-          data: block.source.data,
-          // The sent message carries no filename; only the picker ever had one.
-          name: 'image',
-        }
-        continue
-      }
-      // Closed union tripwire: a third block kind must be handled here rather
-      // than falling through into an image with undefined source fields, which
-      // renders as `data:undefined;base64,undefined`.
-      const exhaustive: never = block
-      void exhaustive
-    }
-  }
-  return { text: texts.join('\n'), images: lastImage ? [lastImage] : [] }
 }
 
 /** What this session has waiting, oldest first (empty before any snapshot). */

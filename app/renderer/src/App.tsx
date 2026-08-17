@@ -130,6 +130,7 @@ import {
   createRetainedSubmitState,
   createTransportErrorState,
   EMPTY_HISTORY_NAV,
+  foldRecalledPrompts,
   formatPasteRef,
   navigateHistory,
   parseMentionQuery,
@@ -145,6 +146,7 @@ import {
   reducePendingSubmitHeld,
   reduceRetainedSubmitCleared,
   reduceRetainedSubmitHeld,
+  reduceRetainedSubmitSettled,
   reduceSessionImagesReplaced,
   reduceSessionPastesCleared,
   removePasteOccurrence,
@@ -275,7 +277,6 @@ import {
 } from './slashCatalogState.js'
 import {
   createQueuedPromptsState,
-  foldRecalledPrompts,
   reduceQueuedPromptsState,
   selectQueuedPrompts,
 } from './queuedPromptsState.js'
@@ -370,6 +371,8 @@ import {
 } from './sessionActionRuntimeState.js'
 import {
   createVerbAckResultState,
+  forgetRecallRequests,
+  recallDeliveryFailureNotice,
   reduceVerbAckResultState,
   selectLatestVerbAckResult,
   verbAckErrorToast,
@@ -528,11 +531,13 @@ export function App() {
   const retainedSubmitsRef = useRef<RetainedSubmitState>(
     createRetainedSubmitState(),
   )
-  // D1b — recall requests this page is still waiting on. A ref for the same
-  // reason as the one above, and the reason it exists at all is the replay ring:
-  // a `prompt-recall.result` is request-scoped, so only the page that asked may
-  // act on it.
-  const recalledRequestIdsRef = useRef<Set<string>>(new Set())
+  // D1b — recall requests this page is still waiting on, each against the
+  // session it was asked for. A ref for the same reason as the one above, and
+  // the reason it exists at all is the replay ring: a `prompt-recall.result` is
+  // request-scoped, so only the page that asked may act on it, and only once.
+  // The session is what lets an unanswered request be released when the row it
+  // belongs to goes away (`forgetRecallRequests`).
+  const recallRequestsRef = useRef<Map<string, SessionId>>(new Map())
   // Bug fix — per-session (was one app-wide string shown on every pane
   // regardless of which session actually failed; `selectTransportError`
   // resolves it for the pane it belongs to).
@@ -990,21 +995,39 @@ export function App() {
         const signal = classifySubmitOutcomeFrame(frame)
         if (signal === 'refused') restoreRefusedSubmit(frame.sessionId)
         else if (signal === 'settled') {
-          retainedSubmitsRef.current = reduceRetainedSubmitCleared(
+          retainedSubmitsRef.current = reduceRetainedSubmitSettled(
             retainedSubmitsRef.current,
             frame.sessionId,
           )
         }
       }
-      // D1b — the messages a recall took back, put where the user can edit them.
-      // Gated on a requestId THIS page minted, which is what makes the result
-      // safe to keep in the evictable replay ring: a reload starts with an empty
-      // set, so a replayed recall from before it cannot push text the user has
-      // long since resent or abandoned back into the composer.
+      // D1b — the messages a recall took back, put where the user can edit them,
+      // plus the one thing about the outcome the user has to be told. BOTH sit
+      // behind the same gate: a requestId THIS page minted. That gate is what
+      // makes the result safe to keep in the evictable replay ring, since a
+      // reload starts with an empty set, so a replayed recall from before it
+      // can neither push text the user has long since resent back into the
+      // composer nor re-announce an outcome they already read.
+      //
+      // An error carrying the same id is the OTHER answer a recall can get:
+      // main raises one when it cannot reach the session at all. It releases
+      // the id just the same, so an undeliverable recall is neither silent nor
+      // remembered forever.
       for (const frame of frames) {
-        if (frame.kind !== 'prompt-recall.result') continue
-        if (!recalledRequestIdsRef.current.delete(frame.requestId)) continue
-        restoreRecalledPrompts(frame.sessionId, frame.recalled)
+        if (frame.kind === 'prompt-recall.result') {
+          if (!recallRequestsRef.current.delete(frame.requestId)) continue
+          restoreRecalledPrompts(frame.sessionId, frame.recalled)
+          const outcome = verbAckErrorToast(frame)
+          if (outcome) toast(outcome.message, { tone: outcome.tone })
+          continue
+        }
+        if (frame.kind !== 'error' || frame.requestId === undefined) continue
+        if (!recallRequestsRef.current.delete(frame.requestId)) continue
+        const notice = recallDeliveryFailureNotice(frame)
+        if (notice === null) continue
+        setTransportErrors(prev =>
+          reduceTransportErrorSet(prev, frame.sessionId, notice),
+        )
       }
       for (const frame of frames) {
         if (!frame.deliveryTrace) continue
@@ -1157,6 +1180,7 @@ export function App() {
           retainedSubmitsRef.current,
           event.appSessionId,
         )
+        forgetRecallRequests(recallRequestsRef.current, event.appSessionId)
         dispatchQueuedPrompts({
           type: 'session-removed',
           sessionId: event.appSessionId,
@@ -1979,6 +2003,10 @@ export function App() {
   useEffect(() => {
     const result = latestVerbAckResult
     if (!result) return
+    // D1b — a recall is announced from the frame gate that owns its minted
+    // request id, never from here. This dedupe is per page load, so a replayed
+    // result would re-announce an outcome the user read before the reload.
+    if (result.kind === 'prompt-recall.result') return
     if (toastedVerbAckRequestsRef.current.has(result.requestId)) return
     toastedVerbAckRequestsRef.current.add(result.requestId)
     const errorToast = verbAckErrorToast(result)
@@ -2115,7 +2143,7 @@ export function App() {
   const restoreRefusedSubmit = useCallback((sessionId: SessionId) => {
     const retained = selectRetainedSubmit(retainedSubmitsRef.current, sessionId)
     if (retained === null) return
-    retainedSubmitsRef.current = reduceRetainedSubmitCleared(
+    retainedSubmitsRef.current = reduceRetainedSubmitSettled(
       retainedSubmitsRef.current,
       sessionId,
     )
@@ -2166,11 +2194,11 @@ export function App() {
   // restore above then applies.
   const recallQueuedPrompts = useCallback((sessionId: SessionId) => {
     const requestId = newRequestId()
-    recalledRequestIdsRef.current.add(requestId)
+    recallRequestsRef.current.set(requestId, sessionId)
     try {
       getBridge().recallPrompts(sessionId, { type: 'prompt.recall', requestId })
     } catch (error) {
-      recalledRequestIdsRef.current.delete(requestId)
+      recallRequestsRef.current.delete(requestId)
       setTransportErrors(prev =>
         reduceTransportErrorSet(prev, sessionId, errorMessage(error)),
       )
@@ -2185,11 +2213,13 @@ export function App() {
     releasePendingSubmit(sessionId)
     // A submit awaiting its answer is DROPPED rather than handed back: it was
     // sent, and its retained copy holds base64 image data this closed session
-    // would otherwise keep alive with nothing left to resolve it.
+    // would otherwise keep alive with nothing left to resolve it. A recall
+    // still waiting for its answer goes the same way, for the same reason.
     retainedSubmitsRef.current = reduceRetainedSubmitCleared(
       retainedSubmitsRef.current,
       sessionId,
     )
+    forgetRecallRequests(recallRequestsRef.current, sessionId)
     if (shellRef.current.previews[sessionId]) {
       const plan = previewClosePlan(
         shellRef.current.tabs[sessionId] === true,
@@ -4949,14 +4979,11 @@ export function SessionPane({
        * deliberately silent: it keeps the same held prompt and failure recovery,
        * but must not narrate the reclaimed engine while it reconnects. */}
       {pendingSubmit?.showQueuedRow ? (
-        <div className="flex items-baseline gap-2 text-xs" role="status">
-          <span className="shrink-0 font-medium text-text-muted">Queued</span>
-          <span className="min-w-0 flex-1 truncate text-text-subtle">
-            {pendingSubmit.text || 'Image attachment'}
-          </span>
-          <span className="shrink-0 text-text-subtle">
-            Sends when the session is ready.
-          </span>
+        <div role="status">
+          <QueuedRow
+            text={pendingSubmit.text}
+            trailing="Sends when the session is ready."
+          />
         </div>
       ) : null}
 
@@ -4971,22 +4998,15 @@ export function SessionPane({
        * terminal's `↑` pops every queued command at once; a per-row control
        * would promise a choice the verb deliberately does not offer. It is a
        * real button, so it is in the tab order immediately before the composer.
+       *
+       * ONE live region around the whole group, not one per row: three waiting
+       * messages are one change to announce, and a region each made a screen
+       * reader read three.
        */}
       {queuedPrompts.length > 0 ? (
-        <div className="flex flex-col gap-1">
+        <div className="flex flex-col gap-1" role="status">
           {queuedPrompts.map(queued => (
-            <div
-              className="flex items-baseline gap-2 text-xs"
-              key={queued.id}
-              role="status"
-            >
-              <span className="shrink-0 font-medium text-text-muted">
-                Queued
-              </span>
-              <span className="min-w-0 flex-1 truncate text-text-subtle">
-                {queued.text || 'Image attachment'}
-              </span>
-            </div>
+            <QueuedRow key={queued.id} text={queued.text} />
           ))}
           {onRecallQueuedPrompts ? (
             <button
@@ -5275,6 +5295,37 @@ export function SessionPane({
         </section>
       ) : null}
     </main>
+  )
+}
+
+/**
+ * One waiting message, above the composer. Two surfaces show one: the CC-16
+ * cold-spawn park (which adds the trailing promise, because that session is not
+ * ready yet) and the D1a staged rows (which do not). They were the same markup
+ * typed twice and free to drift apart.
+ *
+ * NOT exported, and not exportable: this is a production `.tsx` module under
+ * the Fast Refresh boundary rule, so a second component export would break HMR.
+ * The live region belongs to the CALLER, so a group of rows is announced once
+ * (`role="status"` per row made a screen reader read one change several times).
+ */
+function QueuedRow({
+  text,
+  trailing,
+}: {
+  text: string
+  trailing?: string
+}) {
+  return (
+    <div className="flex items-baseline gap-2 text-xs">
+      <span className="shrink-0 font-medium text-text-muted">Queued</span>
+      <span className="min-w-0 flex-1 truncate text-text-subtle">
+        {text || 'Image attachment'}
+      </span>
+      {trailing ? (
+        <span className="shrink-0 text-text-subtle">{trailing}</span>
+      ) : null}
+    </div>
   )
 }
 
@@ -5606,8 +5657,9 @@ type SessionPaneProps = {
   /** D1a — messages this session has waiting for its running response, oldest
    * first. Display only: they stay out of the transcript until delivered. */
   queuedPrompts?: readonly QueuedPromptItem[]
-  /** D1b — take every waiting message back into the composer. Omitted where
-   * there is no live session to ask, which hides the control. */
+  /** D1b — take every waiting message back into the composer. The pane always
+   * passes it; what hides the control is having nothing waiting, since the rows
+   * and the control are rendered together. */
   onRecallQueuedPrompts?: (() => void) | null
   /** Bug fix — hands `pendingSubmit` back to the composer without sending it.
    * `stopTurn` calls this so Stop cancels a queued prompt along with the turn,

@@ -1,6 +1,9 @@
 import { expect, test } from 'bun:test'
 import {
   createVerbAckResultState,
+  forgetRecallRequests,
+  RECALL_UNDELIVERABLE_MESSAGE,
+  recallDeliveryFailureNotice,
   reduceVerbAckResultState,
   selectLatestVerbAckResult,
   verbAckErrorToast,
@@ -238,6 +241,53 @@ test('D1b — a recall the engine beat warns in the softer tone, not danger', ()
     message,
     tone: 'warn',
   })
+})
+
+test('D1b — a recall that never reached the session says so', () => {
+  // Electron main raises this when it cannot reach the session at all, and it
+  // copies the renderer's own requestId onto it. It is not a `bad_request`, so
+  // the reducer above ignores it and the recall was answered by silence: no
+  // text came back, no message was shown, and the control sat there as if the
+  // click had not happened.
+  expect(
+    recallDeliveryFailureNotice({
+      kind: 'error',
+      protocolVersion: 1,
+      sessionId: 's1',
+      requestId: 'recall-1',
+      code: 'session_not_found',
+      message: 'session 3f2 was not found',
+      retryable: false,
+    }),
+  ).toBe(RECALL_UNDELIVERABLE_MESSAGE)
+})
+
+test('D1b — a boundary rejection is left to the verb-ack toast, not said twice', () => {
+  // That frame IS folded above and toasts the sidecar's own redacted reason, so
+  // a second line under the composer would restate it.
+  expect(
+    recallDeliveryFailureNotice(correlatedBadRequest('s1', 'unexpected field')),
+  ).toBeNull()
+})
+
+test('D1b — the recall’s own answer is not a delivery failure', () => {
+  expect(
+    recallDeliveryFailureNotice(promptRecallResult(true, 'ok', 0)),
+  ).toBeNull()
+})
+
+test('D1b — a session going away takes its unanswered recall ids with it', () => {
+  // The minted ids are otherwise removed only by an answer, and a session whose
+  // engine is gone never sends one, so the id stayed for the life of the page.
+  const requests = new Map([
+    ['recall-1', 's1'],
+    ['recall-2', 's2'],
+    ['recall-3', 's1'],
+  ])
+  forgetRecallRequests(requests, 's1')
+  expect([...requests.keys()]).toEqual(['recall-2'])
+  forgetRecallRequests(requests, 's3')
+  expect([...requests.keys()]).toEqual(['recall-2'])
 })
 
 test('D1b — a recall result is kept per session like the other verb acks', () => {

@@ -29,6 +29,7 @@ import type { MentionItem } from './MentionPicker.js'
 import { HISTORY_REPLAY_TRUNCATION_REQUEST_ID } from '../../shared/protocol.js'
 import type {
   AgentConfigSnapshot,
+  RecalledPrompt,
   ServerFrame,
   SessionId,
   SubmitPrompt,
@@ -805,18 +806,31 @@ export type RetainedSubmit = {
   text: string
   images: ImageAttachment[]
 }
-export type RetainedSubmitState = Record<SessionId, RetainedSubmit>
+
+/**
+ * A QUEUE per session, oldest first, because two submits can be outstanding at
+ * once: press Enter twice inside one round trip and the second is sent before
+ * the first is answered. One slot per session lost a message outright when the
+ * first was accepted and the second refused, since the acceptance emptied the
+ * slot the refusal then needed.
+ *
+ * Answers are paired POSITIONALLY, not by id: there is none to match on (see
+ * `classifySubmitOutcomeFrame`), and the sidecar answers submits in the order
+ * it received them, so each answer takes the head.
+ */
+export type RetainedSubmitState = Record<SessionId, readonly RetainedSubmit[]>
 
 export function createRetainedSubmitState(): RetainedSubmitState {
   return {}
 }
 
+/** The submit still waiting for the next answer, or null when none is. */
 export function selectRetainedSubmit(
   state: RetainedSubmitState,
   sessionId: SessionId | null,
 ): RetainedSubmit | null {
   if (!sessionId) return null
-  return state[sessionId] ?? null
+  return state[sessionId]?.[0] ?? null
 }
 
 export function reduceRetainedSubmitHeld(
@@ -824,9 +838,25 @@ export function reduceRetainedSubmitHeld(
   sessionId: SessionId,
   retained: RetainedSubmit,
 ): RetainedSubmitState {
-  return { ...state, [sessionId]: retained }
+  return { ...state, [sessionId]: [...(state[sessionId] ?? []), retained] }
 }
 
+/** One answer retires one submit, leaving anything sent after it waiting. */
+export function reduceRetainedSubmitSettled(
+  state: RetainedSubmitState,
+  sessionId: SessionId,
+): RetainedSubmitState {
+  const queue = state[sessionId]
+  if (queue === undefined) return state
+  const rest = queue.slice(1)
+  if (rest.length === 0) return reduceRetainedSubmitCleared(state, sessionId)
+  return { ...state, [sessionId]: rest }
+}
+
+/**
+ * Drop the whole queue: the session is closing or has left the roster, so
+ * nothing is coming to resolve the copies, and each holds a full base64 image.
+ */
 export function reduceRetainedSubmitCleared(
   state: RetainedSubmitState,
   sessionId: SessionId,
@@ -866,20 +896,27 @@ export function reduceRetainedSubmitCleared(
  * and those are not ordered against a sidecar frame already travelling over the
  * socket: one can overtake an acceptance. They are excluded below by code.
  *
- * `settled` is the other half: anything that proves the submit's window is over
- * (its user message, a turn boundary, a lifecycle change) drops the retained
- * copy, so a stale one cannot be resurrected by an unrelated error much later.
+ * `settled` is the other half: anything that proves a submit's window is over
+ * (its user message, a turn boundary, a lifecycle change) retires the copy at
+ * the head of the queue, so a stale one cannot be resurrected by an unrelated
+ * error much later.
  *
- * KNOWN LIMITS, both narrow and both bounded to a wrong composer restore (never
- * a send, never a discard):
- *  - TWO SUBMITS IN FLIGHT: one slot per session, latest wins. Enter twice
- *    inside the round trip and the first submit's copy is overwritten; if the
- *    first is the one refused, the second is what comes back.
+ * Each signal consumes ONE submit, the oldest outstanding
+ * (`reduceRetainedSubmitSettled`). That is what a pair of submits inside one
+ * round trip needs: accepted-then-refused now hands the refused message back,
+ * where a single slot handed back nothing at all.
+ *
+ * KNOWN LIMITS, all narrow and all bounded to a wrong composer restore (never a
+ * send, never a discard):
  *  - AN UNRELATED ERROR: an error frame the sidecar emitted BEFORE it dispatched
  *    the submit (a permission or verb failure already on the wire) arrives
- *    first and reads as this submit's refusal, so accepted text is handed back
- *    while the turn it started runs. Anything emitted after the dispatch is
- *    ordered behind the acceptance and cannot do this.
+ *    first and reads as a refusal of the OLDEST outstanding submit, so accepted
+ *    text is handed back while the turn it started runs. Anything emitted after
+ *    the dispatch is ordered behind the acceptance and cannot do this.
+ *  - A LIFECYCLE CHANGE retires one, not the queue: copies sent after it keep
+ *    waiting for a signal that will not come, until the next frame for that
+ *    session drains one, or the session is closed or leaves the roster, which
+ *    drops the queue outright (`reduceRetainedSubmitCleared`).
  */
 export type SubmitOutcomeSignal = 'refused' | 'settled' | 'none'
 
@@ -920,6 +957,61 @@ export function classifySubmitOutcomeFrame(frame: ServerFrame): SubmitOutcomeSig
     return 'settled'
   }
   return 'none'
+}
+
+// ── The messages a recall takes back (D1b) ───────────────────────────────────
+
+/**
+ * D1b — fold the messages a recall took back into one composer draft.
+ *
+ * The terminal's `↑` pops EVERY editable queued command into the input at once,
+ * joined by newlines, with pasted images restored
+ * (`src/utils/messageQueueManager.ts` `popAllEditable`). This is that join. It
+ * is a pure function so the outcome is testable without driving the composer,
+ * which the SSR-only renderer harness cannot do.
+ *
+ * Text joins across every recalled message; images do NOT. The composer holds
+ * exactly one image at a time (`reduceImageAttachmentAdded` replaces the whole
+ * array with a single element) and the submit schema caps base64 as a TOTAL
+ * across the prompt, so restoring one image per recalled message would build a
+ * draft the sidecar then refuses, which the refusal path restores again: the
+ * user cannot send and cannot easily clear. The most recent image wins, which
+ * is what attaching them one after another would have produced anyway.
+ */
+export function foldRecalledPrompts(prompts: readonly RecalledPrompt[]): {
+  text: string
+  images: ImageAttachment[]
+} {
+  const texts: string[] = []
+  let lastImage: ImageAttachment | null = null
+  for (const { prompt } of prompts) {
+    if (typeof prompt === 'string') {
+      if (prompt.length > 0) texts.push(prompt)
+      continue
+    }
+    for (const block of prompt) {
+      if (block.type === 'text') {
+        if (block.text.length > 0) texts.push(block.text)
+        continue
+      }
+      if (block.type === 'image') {
+        lastImage = {
+          id: 1,
+          mediaType: block.source.media_type,
+          data: block.source.data,
+          // The sent message carries no filename; only the picker ever had one.
+          name: 'image',
+        }
+        continue
+      }
+      // Closed union tripwire: a third block kind must be handled here rather
+      // than falling through into an image with undefined source fields, which
+      // renders as `data:undefined;base64,undefined`.
+      const exhaustive: never = block
+      void exhaustive
+    }
+  }
+  return { text: texts.join('\n'), images: lastImage ? [lastImage] : [] }
 }
 
 // ── Per-session transport error ──────────────────────────────────────────────

@@ -61,6 +61,43 @@ function isCorrelatedBadRequest(
   )
 }
 
+export const RECALL_UNDELIVERABLE_MESSAGE =
+  'Nothing was taken back. The messages are still waiting for the response.'
+
+/**
+ * D1b — what an error frame answering a recall has to SAY. Electron main
+ * synthesizes one when it cannot reach the session at all, copying the
+ * renderer's own `requestId` onto it, so the renderer can tell which recall it
+ * answers. It is not a `bad_request`, so the reducer above ignores it, and the
+ * recall was answered by silence: nothing came back and nothing was said.
+ *
+ * Call it only for a frame whose `requestId` this page minted for a recall.
+ * Null where the verb-ack toast already carries the sidecar's own reason, so
+ * the user is not told the same thing twice, and null for anything that is not
+ * an error at all.
+ */
+export function recallDeliveryFailureNotice(frame: ServerFrame): string | null {
+  if (frame.kind !== 'error') return null
+  if (isCorrelatedBadRequest(frame)) return null
+  return RECALL_UNDELIVERABLE_MESSAGE
+}
+
+/**
+ * D1b — release the recall requests belonging to a session that is going away.
+ * A minted id is otherwise removed only by its answer, and a session whose
+ * engine is gone never sends one, so the id would be held for the life of the
+ * page. Mutates in place: the caller holds this across renders in a ref, not in
+ * React state.
+ */
+export function forgetRecallRequests(
+  requests: Map<string, SessionId>,
+  sessionId: SessionId,
+): void {
+  for (const [requestId, owner] of requests) {
+    if (owner === sessionId) requests.delete(requestId)
+  }
+}
+
 export type VerbAckResultAction = { type: 'frame'; frame: ServerFrame }
 
 export function createVerbAckResultState(): VerbAckResultState {

@@ -898,6 +898,43 @@ test('D1b: a waiting message offers a way to take it back', () => {
   expect(several).toContain('>Take back all<')
 })
 
+test('D1a: several waiting messages are announced once, not once each', () => {
+  // `role="status"` sat on every row, so three messages waiting made a screen
+  // reader read three separate announcements for one change.
+  const base = idleSessionPaneProps()
+  const midTurn = {
+    activeConnection: { status: 'ready', inputEnabled: false } as const,
+    activeLog: { ...base.activeLog, inputEnabled: false },
+  }
+  const quiet = renderToStaticMarkup(<SessionPane {...base} {...midTurn} />)
+  const waiting = renderToStaticMarkup(
+    <SessionPane
+      {...base}
+      {...midTurn}
+      queuedPrompts={[
+        { id: 'q-1', text: 'one' },
+        { id: 'q-2', text: 'two' },
+        { id: 'q-3', text: 'three' },
+      ]}
+      onRecallQueuedPrompts={() => {}}
+    />,
+  )
+  const count = (html: string) => (html.match(/role="status"/g) ?? []).length
+
+  expect(count(waiting) - count(quiet)).toBe(1)
+})
+
+test('the waiting-message row is written once and used at both call sites', () => {
+  // The cold-spawn park row and the D1a staged row were the same markup typed
+  // twice: same label, same classes, same image fallback, free to drift apart.
+  // SSR proves each row still renders (the two tests above); only source can
+  // say they come from one place.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+
+  expect(source.match(/'Image attachment'/g) ?? []).toHaveLength(1)
+  expect(source.match(/<QueuedRow/g) ?? []).toHaveLength(2)
+})
+
 test('CC-16: a dead session stays read-only and does not pretend to be typeable', () => {
   const props = {
     accountsSnapshot: null,
@@ -2588,8 +2625,49 @@ test('D5 wiring tripwire: a refused submit is retained at send and restored from
   // because only one is ever held.
   expect(restoreBody).toContain('restoreDraftWithPending(')
   expect(restoreBody).toContain('reduceSessionImagesReplaced(state, sessionId, retained.images)')
-  // Cleared first, so a second frame in the same batch cannot restore twice.
-  expect(restoreBody.indexOf('reduceRetainedSubmitCleared(')).toBeLessThan(
+  // Taken off the queue first, so a second frame in the same batch cannot
+  // restore the same copy twice. It takes the HEAD, never the whole queue: a
+  // second submit sent inside the same round trip is still waiting for its own
+  // answer.
+  expect(restoreBody).toContain('reduceRetainedSubmitSettled(')
+  expect(restoreBody.indexOf('reduceRetainedSubmitSettled(')).toBeLessThan(
     restoreBody.indexOf('restoreDraftWithPending('),
   )
+})
+
+test('D1b wiring tripwire: only a recall this page asked for is acted on, and its id is always released', () => {
+  // LAYER HONESTY: SSR cannot mount App, deliver a frame, or raise a toast. The
+  // decisions live in `verbAckErrorToast` / `recallDeliveryFailureNotice` /
+  // `forgetRecallRequests` and are exercised in verbAckResultState.test.ts;
+  // what only source can decide is that the gate sits in front of BOTH answers
+  // to a recall, and that nothing else can announce one.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+
+  const subscribeStart = source.indexOf(
+    'const unsubscribe = bridge.subscribe(frames => {',
+  )
+  const subscribeEnd = source.indexOf('bridge.rendererReady()', subscribeStart)
+  expect(subscribeStart).toBeGreaterThan(-1)
+  expect(subscribeEnd).toBeGreaterThan(subscribeStart)
+  const subscribeBody = source.slice(subscribeStart, subscribeEnd)
+
+  // One gate, consuming the minted id, in front of the restore AND the toast:
+  // the replay ring re-delivers a result to a page that never asked for it.
+  expect(subscribeBody).toContain(
+    'if (!recallRequestsRef.current.delete(frame.requestId)) continue',
+  )
+  expect(subscribeBody).toContain('verbAckErrorToast(frame)')
+  expect(subscribeBody).toContain('recallDeliveryFailureNotice(frame)')
+
+  // …and the ungated verb-ack toast must not announce a recall behind its back.
+  const toastStart = source.indexOf('const toastedVerbAckRequestsRef =')
+  const toastEnd = source.indexOf('const focusWorkspacePanelSession', toastStart)
+  expect(toastStart).toBeGreaterThan(-1)
+  expect(toastEnd).toBeGreaterThan(toastStart)
+  expect(source.slice(toastStart, toastEnd)).toContain(
+    "if (result.kind === 'prompt-recall.result') return",
+  )
+
+  // A session that goes away never answers, so its ids are released with it.
+  expect(source.match(/forgetRecallRequests\(recallRequestsRef\.current,/g) ?? []).toHaveLength(2)
 })
