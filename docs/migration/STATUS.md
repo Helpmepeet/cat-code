@@ -542,33 +542,32 @@ repo can press a key, fire focus, or run an effect, so their whole interaction l
   has no recorded workspace) must stay pinned at the BOTTOM and refuse to drag. (9) Drag a TAB to a
   pane edge — the split drop must still work, unaffected by the new drag type.
 
-## PHASE 5 — production hardening and release
+## PHASE 5 — make it a real local app
 
-Gate: one immutable release-candidate artifact is reproducibly packaged, carries the decided
-identity/signing posture, runs without development dependencies, updates safely, preserves or
-rejects persisted state according to an explicit compatibility contract, passes the canonical
-test/security/performance/soak/accessibility/recovery gates, and completes the authorized
-install/update/rollback rehearsal. **Backlog generated 2026-08-17 → `backlog/phase5.md` (16
-sessions).**
+> 🔻 **RESCOPED 2026-08-19 BY OPERATOR RULING: 16 sessions → 4.** Distribution scope is
+> **local only — one machine, one user, no distribution**, so version authority is the git SHA and
+> there is no release, channel, feed, or installer. The original backlog was a product-release plan
+> whose expensive half (signing, notarization, auto-update, CI gate, state-migration matrices,
+> release-candidate certification) exists to protect strangers on other machines. Waived rows are
+> listed below with their reason and are **reinstated as originally written if distribution scope
+> ever changes**. Not waived: SECURITY-MINIMUM (the threat is injection through displayed model
+> output, not other users), anything protecting `~/.cat-code`, and the restore-honesty rule.
+
+Gate: the operator can open Cat Code from the dock, it runs with the repository moved aside, it does
+not clobber terminal Cat Code's shared state, and it does not leak or lie about restore. **Backlog
+rescoped 2026-08-19 → `backlog/phase5.md` (4 sessions).**
 
 | Session | Model | Diff | Status | Note |
 |---|---|---:|---|---|
-| **P5-0** Release contract and distribution decision | CLAUDE (system-architecture) | 8 | ⬜ | Platform, identity, artifacts, signing, update source/channel, live-session update behavior, rollback, and external prerequisites. |
-| **P5-1** Reproducible package assembly and artifact manifest | ANY | 8 | ⬜ | Clean unsigned artifact with declared resources, version, notices, and secret/repository-file exclusions. |
-| **P5-2** Packaged runtime and sidecar smoke | ANY 🖐 GUI | 8 | ⬜ | Prove the real packaged branch, renderer, host/supervisor, and two sidecars run without Vite/repo/global-runtime fallbacks. |
-| **P5-3** Signing, notarization, and artifact verification | ANY 🖐 GUI | 7 | ⬜ | Credential-safe pipeline plus fail-closed verification of the outer app and nested runtime executables. |
-| **P5-4** Automatic update and live-session lifecycle | ANY 🖐 GUI | 9 | ⬜ | Local-feed update proof, signature/integrity rejection, explicit states, relaunch proof, and die-with-window honesty. |
-| **P5-5a** Persisted-state compatibility and rollback contract | CLAUDE (system-architecture) | 8 | ⬜ | Version/migration/unknown-newer/corrupt/rollback rules for every desktop-owned format. |
-| **P5-5b** State migrations, upgrade, and rollback implementation | ANY 🖐 GUI | 9 | ⬜ | Isolated old/current/corrupt/newer fixtures and process-level upgrade/downgrade proof. |
-| **P5-5c** TUI and desktop coexistence certification | ANY 🖐 GUI | 8 | ⬜ | Shared-state, version-skew, same-transcript, process-visibility, migration-owner, and cleanup behavior under simultaneous use. |
-| **P5-6** Canonical release test matrix and CI gate | ANY | 8 | ⬜ | Deterministic engine/app/sidecar/renderer/hardening/package matrix; credentialed and GUI checks separated honestly. |
-| **P5-7** Packaged security and privacy audit | ANY 🖐 GUI | 9 | ⬜ | Built-artifact verification of SECURITY-MINIMUM, navigation/CSP/preload/IPC/update boundaries, and private-data exclusions. |
-| **P5-8** Performance budgets and reproducible benchmarks | ANY 🖐 GUI | 8 | ⬜ | Numeric packaged startup, interaction, memory, CPU, transcript, and multi-session budgets with stable measurement. |
-| **P5-9** Soak, resource lifetime, and cleanup | ANY 🖐 GUI | 8 | ⬜ | Repeated lifecycle/crash/reload workload with leak, growth, isolation, and exact-PID cleanup gates. |
-| **P5-10** Whole-app accessibility gate | ANY 🖐 GUI | 8 | ⬜ | Keyboard, focus, semantics, announcements, contrast, scaling, reduced motion, native-window, and VoiceOver acceptance. |
-| **P5-11** Failure recovery and support diagnostics | ANY 🖐 GUI | 8 | ⬜ | Deterministic packaged failure matrix, honest recovery states, and bounded redacted support evidence. |
-| **P5-12** Fresh install, update, and rollback rehearsal | ANY 🖐 GUI | 8 | ⬜ | Isolated end-to-end rehearsal with artifact/state assertions; live system/external actions remain operator-authorized. |
-| **P5-13** Release-candidate integration gate | ANY 🖐 GUI | 9 | ⬜ | Certify one hashed artifact against every prior Phase-5 result; verdict is SHIPPABLE or NOT SHIPPABLE. |
+| **P5-0** Local-use contract | ANY | 3 | ⬜ | One page: identity, version authority (git SHA vs `0.0.0`/`2.1.87` split), artifact type, ad-hoc signing, rebuild-to-update, ratify existing move-aside state policy. |
+| **P5-1** Package assembly and packaged launch | ANY 🖐 GUI | 8 | ⬜ | Absorbs old P5-2. The only substantial new engineering: the sidecar is unpackaged today (`app/main/main.ts:973-1035` resolves `bun` from PATH and runs repo TypeScript), so a `.app` must vendor it, then prove the real packaged branch launches with the checkout moved aside. |
+| **P5-5c** TUI and desktop coexistence | ANY 🖐 GUI | 8 | ⬜ | Kept at full scope: the only session guarding state that cannot be rebuilt. Shared `~/.cat-code` writes, same-transcript resume, who runs engine migrations on a desktop-only launch, `cat-code ps` visibility. Prior art: P3-5b `persistPermissionUpdates` lost-update race. |
+| **P5-7** Packaged safety, leak, and honest-failure pass | ANY 🖐 GUI | 7 | ⬜ | Distills old P5-7/9/11 into three narrow jobs: packaging security delta only (not a re-audit), re-baseline `memory:trajectory` against the packaged build post-CC-59, and enforce that a failed restore never silently opens a fresh session impersonating the old one. |
+
+**Waived (local-only scope):** P5-3 signing/notarization · P5-4 auto-update · P5-12 rehearsal ·
+P5-13 release gate · P5-6 CI gate · P5-5a/P5-5b state contract + migrations (four desktop-owned
+files, three of them derived caches) · P5-8 perf budget gate (tooling kept, gate dropped) ·
+P5-10 a11y certification. Reasons per row: `backlog/phase5.md` § Waived.
 
 ---
 

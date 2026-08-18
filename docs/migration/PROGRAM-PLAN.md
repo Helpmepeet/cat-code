@@ -254,6 +254,14 @@ Coarse on purpose — each phase's session list is fleshed out only when we open
   accessibility, the full test suite. Whatever "shippable" demands that a feature slice
   doesn't.
 - **Gate:** installable, signed, updating, tested build. Shippable.
+- 🔻 **RESCOPED 2026-08-19.** The operator ruled distribution scope to be **local only** (one
+  machine, one user, no distribution), which retires the half of this phase that protects
+  strangers on other machines: signing/notarization, auto-update, the CI gate, the
+  state-migration matrices, and the release-candidate certification are waived, and the gate
+  above is replaced by "opens from the dock, runs with the checkout moved aside, does not
+  clobber terminal Cat Code, does not leak or lie about restore." Sixteen sessions became four.
+  Reasons per row and the reinstatement condition: `backlog/phase5.md` and the Phase-5 section
+  of `STATUS.md`. Security, `~/.cat-code` protection, and restore honesty are NOT waived.
 
 Front-loading rationale: the two things that kill migrations like this are **an
 unproven seam** (no facade → prove it in Phase 1) and **wrong decomposition** (→ the
