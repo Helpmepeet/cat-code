@@ -13,7 +13,6 @@ import {
   isMaxSubscriber,
   isProSubscriber,
   isTeamPremiumSubscriber,
-  isCodexSubscriber,
 } from '../auth.js'
 import { getAntModelOverrideConfig, resolveAntModel } from './antModels.js'
 import {
