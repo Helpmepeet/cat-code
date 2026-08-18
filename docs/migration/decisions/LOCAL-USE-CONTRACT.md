@@ -52,9 +52,10 @@ what must be revised first, and `backlog/phase5.md` § Waived lists what comes b
 ## 4. Artifact
 
 A macOS `.app` bundle, arm64, built to a deterministic path under `app/`, produced by one
-documented command. No installer, no `.dmg`, no archive for transport. Minimum OS follows
-whatever the pinned Electron 33 requires; P5-1 records the number it actually gets rather
-than asserting one here.
+documented command. No installer, no `.dmg`, no archive for transport, and **no artifact
+manifest** — a manifest proves contents to someone who cannot inspect the build, and the
+only person who runs this build can. A minimum-OS floor is likewise a distribution
+concept: the build targets the machine it is built on.
 
 ## 5. Signing posture
 
