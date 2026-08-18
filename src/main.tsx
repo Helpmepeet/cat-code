@@ -118,7 +118,7 @@ import { getGhAuthStatus } from './utils/github/ghAuthStatus.js';
 import { safeParseJSON } from './utils/json.js';
 import { logError } from './utils/log.js';
 import { getModelDeprecationWarning } from './utils/model/deprecation.js';
-import { getDefaultMainLoopModel, getModelEnvOverride, getUserSpecifiedModelSetting, normalizeModelStringForAPI, parseUserSpecifiedModel } from './utils/model/model.js';
+import { getDefaultCodexModel, getDefaultMainLoopModel, getModelEnvOverride, getUserSpecifiedModelSetting, normalizeModelStringForAPI, parseUserSpecifiedModel } from './utils/model/model.js';
 import { ensureModelStringsInitialized } from './utils/model/modelStrings.js';
 import {
   getEnvAPIProvider,
@@ -2129,7 +2129,7 @@ async function run(): Promise<CommanderCommand> {
     const initialMainLoopModel = getInitialMainLoopModel();
     const implicitStartupProvider = getEnvAPIProvider();
     const defaultStartupModel = implicitStartupProvider === 'openai'
-      ? 'gpt-5.6-sol'
+      ? getDefaultCodexModel()
       : getDefaultMainLoopModel();
     let resolvedInitialModel = parseUserSpecifiedModel(initialMainLoopModel ?? defaultStartupModel);
     // A model chosen for THIS launch (--model, CAT_CODE_MODEL/ANTHROPIC_MODEL,

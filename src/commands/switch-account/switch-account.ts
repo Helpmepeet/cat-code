@@ -26,6 +26,7 @@ import {
 } from '../../bootstrap/state.js'
 import { clearOAuthTokenCache } from '../../utils/auth.js'
 import { reconcileEffortForModel } from '../../utils/effort.js'
+import { getDefaultCodexModel } from '../../utils/model/model.js'
 import { stripSignatureBlocks } from '../../utils/messages.js'
 import {
   getAPIProvider,
@@ -104,17 +105,15 @@ function switchRuntimeProvider(
   context: Parameters<LocalCommandCall>[1],
 ): void {
   if (target === 'openai') {
+    const codexModel = getDefaultCodexModel()
     setSessionProvider('openai')
-    setMainLoopModelOverride('gpt-5.6-sol')
+    setMainLoopModelOverride(codexModel)
     persistStartupProviderPreference('openai')
     context.setAppState(prev => ({
       ...prev,
-      mainLoopModel: 'gpt-5.6-sol',
+      mainLoopModel: codexModel,
       mainLoopModelForSession: null,
-      effortValue: reconcileEffortForModel(
-        'gpt-5.6-sol',
-        prev.effortValue,
-      ),
+      effortValue: reconcileEffortForModel(codexModel, prev.effortValue),
     }))
     return
   }

@@ -57,6 +57,7 @@ import {
   isAutoCompactEnabled,
 } from '../../src/services/compact/autoCompact.js'
 import {
+  getDefaultCodexModel,
   getMainLoopModel,
   getMarketingNameForModel,
 } from '../../src/utils/model/model.js'
@@ -169,7 +170,7 @@ export function createRealRunControlExecutor(
     activateProvider(provider) {
       const route =
         provider === 'openai' ? 'openai' : getConfiguredAnthropicProvider()
-      const model = provider === 'openai' ? 'gpt-5.6-sol' : null
+      const model = provider === 'openai' ? getDefaultCodexModel() : null
       setSessionProvider(route)
       setMainLoopModelOverride(model)
       persistStartupProviderPreference(route)

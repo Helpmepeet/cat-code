@@ -65,6 +65,24 @@ test('draws the reference tick on a window bigger than the reference', () => {
   expect(html).not.toContain('style=')
 })
 
+test('names the mark in the hover text only where one is drawn', () => {
+  const marked = renderToStaticMarkup(
+    <ContextGauge
+      usage={{ usedTokens: 441_000, contextWindow: 980_000, percentUsed: 45 }}
+    />,
+  )
+  expect(marked).toContain('mark at 372,000')
+  // The terse percentage label is unchanged: the tick is visual, and the svg it
+  // lives in is aria-hidden.
+  expect(marked).toContain('aria-label="Context 45% used"')
+
+  const unmarked = renderToStaticMarkup(
+    <ContextGauge usage={{ usedTokens: 100_000, contextWindow: 352_000, percentUsed: 28 }} />,
+  )
+  expect(unmarked).not.toContain('mark at')
+  expect(unmarked).toContain('28% used')
+})
+
 test('places the tick at the same angle whether or not the arc has reached it', () => {
   const below = renderToStaticMarkup(
     <ContextGauge

@@ -1,4 +1,5 @@
 import {
+  CONTEXT_REFERENCE_TOKENS,
   pressureTone,
   selectContextReferenceFraction,
   type ContextUsage,
@@ -68,10 +69,19 @@ export function ContextGauge({ usage }: { usage: ContextUsage }) {
   // passed it, and over the faint track while it has not.
   const referenceFraction = selectContextReferenceFraction(usage)
   const tick = referenceFraction == null ? null : referenceTick(referenceFraction)
+  // The hover text names the mark only where one is drawn, and only in `title`,
+  // which is where this gauge already keeps its token detail. `aria-label` stays
+  // the terse percentage it has always been: the tick is a visual reference, and
+  // the svg is aria-hidden, so announcing a line nobody can see would be noise.
+  const readout = `Context: ${usedTokens.toLocaleString()} / ${contextWindow.toLocaleString()} tokens (${percentUsed}% used)`
   return (
     <span
       className={`flex shrink-0 items-center gap-1.5 self-center ${tone}`}
-      title={`Context: ${usedTokens.toLocaleString()} / ${contextWindow.toLocaleString()} tokens (${percentUsed}% used)`}
+      title={
+        tick
+          ? `${readout}, mark at ${CONTEXT_REFERENCE_TOKENS.toLocaleString()}`
+          : readout
+      }
       aria-label={`Context ${percentUsed}% used`}
     >
       <svg width="16" height="16" viewBox="0 0 16 16" className="-rotate-90" aria-hidden>

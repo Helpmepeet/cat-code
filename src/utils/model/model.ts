@@ -298,6 +298,21 @@ export function getRuntimeMainLoopModel(params: {
 }
 
 /**
+ * The Codex model a session lands on when nothing else has chosen one.
+ *
+ * ONE definition, because this is asked in four places that cannot share a
+ * predicate: the built-in default below (`isCodexSubscriber()`), the startup
+ * resolver (`main.tsx`, `getEnvAPIProvider() === 'openai'`), `/switch-account`,
+ * and the desktop's first-run provider activation (both plain `provider ===
+ * 'openai'`). They drifted before: three of them held a bare literal, which
+ * also meant they silently ignored a `modelOverrides` entry that this one
+ * honours through `getModelStrings()`.
+ */
+export function getDefaultCodexModel(): ModelName {
+  return getModelStrings().gpt56sol
+}
+
+/**
  * Get the default main loop model setting.
  *
  * This handles the built-in default:
@@ -308,7 +323,7 @@ export function getRuntimeMainLoopModel(params: {
  */
 export function getDefaultMainLoopModelSetting(): ModelName | ModelAlias {
   if (isCodexSubscriber()) {
-    return getModelStrings().gpt56sol
+    return getDefaultCodexModel()
   }
 
   // Ants default to defaultModel from flag config, or Opus 1M if not configured
