@@ -480,6 +480,37 @@ export function caretAtHistoryEdge(
     : !value.slice(caret).includes('\n')
 }
 
+/**
+ * Terminal parity — `↑` takes back everything waiting BEFORE it walks prompt
+ * history. `handleHistoryUp` in `src/components/PromptInput/PromptInput.tsx`
+ * checks for an editable queued command first and pops all of them, ahead of
+ * history and with no loading guard, so `↑` is the terminal's mid-turn
+ * take-back. Escape is NOT: with a turn running it cancels and leaves the queue
+ * alone, popping only when nothing is running (`src/hooks/useCancelRequest.ts`
+ * `handleCancel`, priority 1). The desktop keeps that split, so Escape on the
+ * composer stays the interrupt.
+ *
+ * CC-67 rejected an `↑` binding, on two grounds. The first, that `↑` moves the
+ * caret in a multi-line composer, is answered by `caretAtHistoryEdge`, which
+ * the caller applies BEFORE this: an arrow inside a draft never reaches here.
+ * The second, that `↑` is already the history key, is real and accepted rather
+ * than argued away — while messages wait, `↑` reaches the queue instead of
+ * history, exactly as the terminal behaves. That shadowing lasts only as long
+ * as something is waiting, and the button stays for anyone who does not know
+ * the key. Operator call, 2026-08-18.
+ *
+ * `canRecall` is the caller's own handler being wired, not a permission: recall
+ * is one verb that takes back everything of this page's, so there is nothing
+ * here to target or forge.
+ */
+export function shouldRecallWaitingMessages(
+  direction: 'up' | 'down',
+  queuedCount: number,
+  canRecall: boolean,
+): boolean {
+  return direction === 'up' && queuedCount > 0 && canRecall
+}
+
 // ── Connect-then-type gating + the parked submit (CC-16) ─────────────────────
 
 /**

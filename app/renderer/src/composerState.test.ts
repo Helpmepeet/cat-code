@@ -26,6 +26,7 @@ import {
   formatPasteRef,
   HISTORY_CAP,
   navigateHistory,
+  shouldRecallWaitingMessages,
   parseMentionQuery,
   pasteIdAtCaret,
   pasteTokenBeforeCaret,
@@ -1480,5 +1481,24 @@ describe('D1b — folding recalled messages back into the composer', () => {
 
   test('nothing recalled folds to nothing', () => {
     expect(foldRecalledPrompts([])).toEqual({ text: '', images: [] })
+  })
+})
+
+describe('↑ takes waiting messages back before it walks history', () => {
+  // Terminal parity: `handleHistoryUp` pops every editable queued command ahead
+  // of prompt history (`src/components/PromptInput/PromptInput.tsx`). Escape is
+  // deliberately NOT this key, so the composer's interrupt is untouched.
+  test('waiting messages win over history, but only on ↑ and only with a handler', () => {
+    expect(shouldRecallWaitingMessages('up', 1, true)).toBe(true)
+    expect(shouldRecallWaitingMessages('up', 3, true)).toBe(true)
+
+    // Nothing waiting: ↑ is the history key it has always been.
+    expect(shouldRecallWaitingMessages('up', 0, true)).toBe(false)
+    // ↓ never recalls. Recall means "everything still waiting", which has no
+    // direction; the newer end of history is what ↓ is for.
+    expect(shouldRecallWaitingMessages('down', 2, true)).toBe(false)
+    // No handler wired (a pane with no recall path) must fall through to
+    // history rather than swallow the keystroke.
+    expect(shouldRecallWaitingMessages('up', 2, false)).toBe(false)
   })
 })

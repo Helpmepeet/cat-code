@@ -162,6 +162,7 @@ import {
   selectSessionPasteState,
   selectTransportError,
   shouldCollapsePaste,
+  shouldRecallWaitingMessages,
   shouldReleasePendingSubmitOnStop,
   type DraftWriteReason,
   type HistoryNav,
@@ -4836,6 +4837,21 @@ export function SessionPane({
       const direction = event.key === 'ArrowUp' ? 'up' : 'down'
       const caret = composerRef.current?.selectionStart ?? prompt.length
       if (!caretAtHistoryEdge(prompt, caret, direction)) return
+      // D1b, terminal parity — waiting messages come back before history does,
+      // the way `↑` behaves in the terminal. The reasoning, and what CC-67's
+      // rejection of this binding got right, is on `shouldRecallWaitingMessages`.
+      // Same handler the button fires, so the two paths cannot drift.
+      if (
+        shouldRecallWaitingMessages(
+          direction,
+          queuedPrompts.length,
+          onRecallQueuedPrompts !== null,
+        )
+      ) {
+        event.preventDefault()
+        onRecallQueuedPrompts?.()
+        return
+      }
       const result = navigateHistory(history, historyNav, direction, prompt)
       if (result) {
         event.preventDefault()

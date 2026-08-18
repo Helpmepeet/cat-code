@@ -935,6 +935,42 @@ test('the waiting-message row is written once and used at both call sites', () =
   expect(source.match(/<QueuedRow/g) ?? []).toHaveLength(2)
 })
 
+test('D1b: ↑ takes waiting messages back before it walks history, and Escape still interrupts', () => {
+  // The keyboard path cannot be exercised here (the renderer suite is SSR-only,
+  // so no keydown is ever dispatched), and the ORDER is the whole behavior: a ↑
+  // that reached `navigateHistory` first would swap the draft for a history
+  // entry while messages sat waiting, and the take-back would be unreachable
+  // from the keyboard. Comments are stripped before asserting, so rewriting the
+  // prose above the branch cannot disarm this.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const start = source.indexOf(
+    "    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {",
+  )
+  expect(start).toBeGreaterThan(-1)
+  const body = source
+    .slice(start)
+    .split('\n')
+    .filter(line => !line.trim().startsWith('//'))
+    .join('\n')
+
+  const recall = body.indexOf('shouldRecallWaitingMessages(')
+  const history = body.indexOf('navigateHistory(')
+  expect(recall).toBeGreaterThan(-1)
+  expect(history).toBeGreaterThan(-1)
+  expect(recall).toBeLessThan(history)
+  // It fires the caller's handler, not a second recall path of its own.
+  expect(body).toContain('onRecallQueuedPrompts?.()')
+
+  // Escape is NOT this key. In the terminal a running turn takes Escape as the
+  // interrupt and leaves the queue alone (`useCancelRequest.ts` `handleCancel`,
+  // priority 1); the composer keeps that split.
+  const escape = source.indexOf("if (event.key === 'Escape' && generating) {")
+  expect(escape).toBeGreaterThan(-1)
+  expect(
+    source.slice(escape, source.indexOf('\n    }', escape)),
+  ).toContain('stopTurn()')
+})
+
 test('CC-16: a dead session stays read-only and does not pretend to be typeable', () => {
   const props = {
     accountsSnapshot: null,

@@ -1411,6 +1411,68 @@ test('a queued prompt no tool round drained still gets its own turn, announced o
   releases.shift()?.()
 })
 
+test('Stop does not eat a message queued into the turn it interrupts', async () => {
+  // Terminal parity, and the answer to a question the CC-71 row left open.
+  // Escape/Stop cancels the RUNNING turn and leaves the queue alone
+  // (`src/hooks/useCancelRequest.ts` `handleCancel` priority 1 pops nothing),
+  // and the terminal's `useQueueProcessor` then runs what is waiting as the
+  // next turn. The sidecar reaches the same place by a different road: the turn
+  // finalizer runs on EVERY exit, aborted included, and schedules the boundary
+  // drain. Pinned because the alternative failure is silent — a message the
+  // user watched be accepted would vanish with the turn it was queued into.
+  const prompts: string[] = []
+  let releaseTurn: (() => void) | undefined
+  const controller = new AppSessionController({
+    async *runTurn({ prompt, options }) {
+      prompts.push(String(prompt))
+      options?.onInputPersisted?.()
+      await new Promise<void>(resolve => {
+        releaseTurn = resolve
+      })
+    },
+    // What a real adapter does with an abort: end the turn it is running.
+    abort() {
+      releaseTurn?.()
+    },
+  })
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'human-1', prompt: 'first' }),
+  )
+  await waitFor(() => prompts.length === 1)
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'human-2', prompt: 'second' }),
+  )
+  expect(getCommandQueueSnapshot()).toHaveLength(1)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.abort', requestId: 'stop-1', reason: 'user-stop' }),
+  )
+
+  await waitFor(() => prompts.length === 2)
+  expect(prompts).toEqual(['first', 'second'])
+  expect(getCommandQueueSnapshot()).toHaveLength(0)
+
+  // Once in the transcript, not twice: the drain announces a still-staged
+  // message, and nothing else does.
+  const secondCount = received.filter(
+    frame =>
+      frame.kind === 'event' &&
+      frame.event.type === 'message' &&
+      frame.event.message.type === 'user' &&
+      frame.event.message.message?.content === 'second',
+  ).length
+  expect(secondCount).toBe(1)
+
+  releaseTurn?.()
+})
+
 test('T7 — the mid-turn queue has a DEPTH cap, not just a rate cap', async () => {
   // Refusing a mid-turn submit used to bound how much could pile up. Queueing
   // removed that bound, so a flooding renderer could fill the running turn's
