@@ -1847,9 +1847,17 @@ class Project {
       if (entry.type === 'queue-operation') {
         // Queue operations are always appended to the session file
         void this.enqueueWrite(sessionFile, entry)
+      } else if (!isTranscriptMessage(entry)) {
+        // Restoring `messageQueueTypes.ts` un-`any`ed `Entry` and showed this
+        // branch was reading `.uuid`, `.isSidechain` and `.agentId` off a union
+        // that still admits subagent-spawned/terminal and thread-goal entries.
+        // Unreachable today — those reach disk through `appendEntryToFile`
+        // (`:452`, `:463`), never here — but the old code would not have failed
+        // loudly if one arrived: `.uuid` is `undefined`, the first would write,
+        // and every later one would dedup against `undefined` and be DROPPED.
+        // Route it like any other non-transcript entry instead of assuming.
+        void this.enqueueWrite(sessionFile, entry)
       } else {
-        // At this point, entry must be a TranscriptMessage (user/assistant/attachment/system)
-        // All other entry types have been handled above
         const isAgentSidechain =
           entry.isSidechain && entry.agentId !== undefined
         const targetFile = isAgentSidechain
