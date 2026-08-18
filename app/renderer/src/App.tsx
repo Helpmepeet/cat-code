@@ -5023,11 +5023,12 @@ export function SessionPane({
        * deliberately silent: it keeps the same held prompt and failure recovery,
        * but must not narrate the reclaimed engine while it reconnects. */}
       {pendingSubmit?.showQueuedRow ? (
-        <div role="status">
-          <QueuedRow
-            text={pendingSubmit.text}
-            trailing="Sends when the session is ready."
-          />
+        <div className="flex flex-col items-end gap-1.5" role="status">
+          <span className="pr-1 text-[11px] text-text-ghost">Queued</span>
+          <QueuedRow text={pendingSubmit.text} />
+          <span className="pr-1 text-[11.5px] text-text-ghost">
+            Sends when the session is ready.
+          </span>
         </div>
       ) : null}
 
@@ -5036,6 +5037,11 @@ export function SessionPane({
        * is deliberately not in the transcript: the model has not received it.
        * Same row shape as the cold-spawn row above, minus the trailing promise,
        * which is about a session that is not ready yet.
+       *
+       * One caption over the stack, inside the live region so the announcement
+       * still names what these rows are. It is not repeated per row: three
+       * waiting messages used to print the word `Queued` three times and
+       * truncate the text that actually distinguishes them.
        *
        * D1b — and the way back out. The control sits BELOW the rows rather than
        * on one of them because it takes back everything waiting, the way the
@@ -5052,15 +5058,16 @@ export function SessionPane({
        * before the composer; it does not need announcing as news.
        */}
       {queuedPrompts.length > 0 ? (
-        <div className="flex flex-col gap-1">
-          <div className="flex flex-col gap-1" role="status">
+        <div className="flex flex-col items-end gap-1.5">
+          <div className="flex w-full flex-col items-end gap-1.5" role="status">
+            <span className="pr-1 text-[11px] text-text-ghost">Queued</span>
             {queuedPrompts.map(queued => (
               <QueuedRow key={queued.id} text={queued.text} />
             ))}
           </div>
           {onRecallQueuedPrompts ? (
             <button
-              className="self-start text-xs text-text-subtle underline underline-offset-2 transition-colors hover:text-text-primary"
+              className="rounded-lg border border-white/[0.08] px-2.5 py-1 text-[11.5px] text-text-subtle transition-colors hover:border-white/[0.14] hover:text-text-primary"
               onClick={onRecallQueuedPrompts}
               type="button"
             >
@@ -5323,31 +5330,31 @@ export function SessionPane({
 
 /**
  * One waiting message, above the composer. Two surfaces show one: the CC-16
- * cold-spawn park (which adds the trailing promise, because that session is not
- * ready yet) and the D1a staged rows (which do not). They were the same markup
- * typed twice and free to drift apart.
+ * cold-spawn park and the D1a staged rows. They were the same markup typed
+ * twice and free to drift apart.
+ *
+ * It is `UserBubble` (`TranscriptView.tsx`) unfilled: same geometry, same
+ * bottom-right notch, same 82% measure, with a dashed accent hairline instead
+ * of the solid one and no fill. That is the whole point of the shape. What is
+ * waiting here IS the user's own turn, carrying the same uuid the transcript
+ * row will carry, so it reads as their message before it is delivered and then
+ * simply fills in when the engine takes it. The previous flat gray line said
+ * "system text" about a message the user wrote. Clamped to two lines: a queued
+ * prompt is a reminder of what is waiting, not a place to re-read it.
+ *
+ * The caption and the cold-spawn promise belong to the CALLER, not here: one
+ * caption over a stack, not the word `Queued` repeated down the left of every
+ * row.
  *
  * NOT exported, and not exportable: this is a production `.tsx` module under
  * the Fast Refresh boundary rule, so a second component export would break HMR.
  * The live region belongs to the CALLER, so a group of rows is announced once
  * (`role="status"` per row made a screen reader read one change several times).
  */
-function QueuedRow({
-  text,
-  trailing,
-}: {
-  text: string
-  trailing?: string
-}) {
+function QueuedRow({ text }: { text: string }) {
   return (
-    <div className="flex items-baseline gap-2 text-xs">
-      <span className="shrink-0 font-medium text-text-muted">Queued</span>
-      <span className="min-w-0 flex-1 truncate text-text-subtle">
-        {text || 'Image attachment'}
-      </span>
-      {trailing ? (
-        <span className="shrink-0 text-text-subtle">{trailing}</span>
-      ) : null}
+    <div className="line-clamp-2 max-w-[82%] whitespace-pre-wrap break-words rounded-2xl rounded-br border border-dashed border-accent/30 bg-accent/[0.035] px-4 py-2.5 text-sm leading-relaxed text-text-subtle">
+      {text || 'Image attachment'}
     </div>
   )
 }

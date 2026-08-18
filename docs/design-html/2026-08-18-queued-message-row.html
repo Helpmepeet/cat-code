@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Queued message row</title>
+<style>
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:500;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMMono-Medium.woff2') format('woff2')}
+
+:root{
+  --app-bg:#09090b;
+  --accent:#f472b6;
+  --accent-rgb:244 114 182;
+  --text-primary:#f4f4f5;
+  --text-muted:#a1a1aa;
+  --text-subtle:#98989f;
+  --text-faint:#838389;
+  --text-ghost:#75757b;
+  --font-sans:"DM Sans",-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+  --font-mono:"DM Mono",ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
+  --transcript-width:900px;
+}
+*{box-sizing:border-box}
+html,body{background:var(--app-bg);margin:0}
+body{font-family:var(--font-sans);-webkit-font-smoothing:antialiased;color:var(--text-primary)}
+
+/* ---- chrome (x-) ---- */
+.x-page{max-width:1140px;margin:0 auto;padding:56px 24px 120px}
+.x-tag{font-family:var(--font-mono);font-size:9px;letter-spacing:.22em;text-transform:uppercase;color:#4a4a52}
+.x-top{display:flex;justify-content:space-between;align-items:baseline;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,.05)}
+.x-variant{margin-top:64px}
+.x-variant-head{display:flex;gap:14px;align-items:baseline;padding-bottom:8px;border-bottom:1px solid rgba(255,255,255,.05)}
+.x-state{display:grid;grid-template-columns:96px 1fr;gap:24px;align-items:start;margin-top:36px}
+.x-state > .x-tag{padding-top:2px;text-align:right}
+.x-switch{display:flex;gap:6px;align-items:center}
+.x-switch button{font-family:var(--font-mono);font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:#4a4a52;background:transparent;border:1px solid rgba(255,255,255,.07);border-radius:3px;padding:4px 8px;cursor:pointer}
+.x-switch button[aria-pressed="true"]{color:#9a9aa2;border-color:rgba(255,255,255,.18)}
+
+/* ---- specimen (s-) : values from app/renderer/src/App.tsx + theme.css ---- */
+.s-dock{width:100%;max-width:var(--transcript-width);display:flex;flex-direction:column;gap:16px}
+
+/* composer, App.tsx:5148-5262 */
+.s-composer-form{display:flex;flex-direction:column}
+.s-composer-line{display:flex;align-items:flex-end;gap:14px;padding:0 4px}
+.s-composer-field{flex:1;min-width:0;padding:6px 0;font-size:15px;font-weight:500;line-height:normal;color:var(--text-faint);min-height:24px}
+.s-send{height:30px;width:30px;flex-shrink:0;display:flex;align-items:center;justify-content:center;border-radius:8px;color:var(--text-ghost)}
+.s-rule{height:2px;border-radius:2px;background:rgba(255,255,255,.08)}
+.s-actions{display:flex;align-items:center;gap:10px;padding:8px 4px 0;font-size:11.5px;color:var(--text-ghost)}
+
+/* activity row, App.tsx:5399 */
+.s-activity{display:flex;align-items:center;gap:10px;padding:6px 4px;font-size:12px}
+.s-dots{display:flex;align-items:center;gap:4px}
+.s-dot{height:6px;width:6px;border-radius:9999px;background:var(--accent)}
+.s-verb{font-weight:600;color:var(--accent)}
+.s-elapsed{font-family:var(--font-mono);font-size:11px;font-variant-numeric:tabular-nums;color:var(--text-subtle)}
+
+/* CURRENT, App.tsx:5054-5069 + QueuedRow App.tsx:5335 */
+.s-cur-block{display:flex;flex-direction:column;gap:4px}
+.s-cur-rows{display:flex;flex-direction:column;gap:4px}
+.s-cur-row{display:flex;align-items:baseline;gap:8px;font-size:12px;line-height:16px}
+.s-cur-label{flex-shrink:0;font-weight:500;color:var(--text-muted)}
+.s-cur-text{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-subtle)}
+.s-cur-trailing{flex-shrink:0;color:var(--text-subtle)}
+.s-cur-takeback{align-self:flex-start;font-size:12px;color:var(--text-subtle);text-decoration:underline;text-underline-offset:2px;background:none;border:0;padding:0;cursor:pointer;font-family:inherit}
+
+/* A: ghost of the bubble it becomes (UserBubble, TranscriptView.tsx:3389) */
+.s-a-block{display:flex;flex-direction:column;gap:6px;align-items:flex-end}
+.s-a-cap{font-size:11px;color:var(--text-ghost);padding-right:2px}
+.s-a-bubble{max-width:82%;border-radius:16px 16px 4px 16px;border:1px dashed rgb(var(--accent-rgb) / .30);background:rgb(var(--accent-rgb) / .035);padding:10px 16px;font-size:14px;line-height:1.6;color:var(--text-subtle);white-space:pre-wrap;overflow-wrap:break-word}
+.s-a-bubble.is-clamped{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.s-a-trailing{font-size:11.5px;color:var(--text-ghost)}
+.s-a-takeback{font-size:11.5px;color:var(--text-subtle);background:transparent;border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:3px 9px;cursor:pointer;font-family:inherit}
+
+/* B: rail stack */
+.s-b-block{border-left:2px solid rgb(var(--accent-rgb) / .35);padding-left:12px;display:flex;flex-direction:column;gap:6px}
+.s-b-head{display:flex;align-items:baseline;gap:8px}
+.s-b-title{font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--text-ghost)}
+.s-b-count{font-family:var(--font-mono);font-size:11px;color:var(--text-ghost)}
+.s-b-spacer{flex:1}
+.s-b-takeback{font-size:11.5px;color:var(--text-subtle);background:none;border:0;padding:0;cursor:pointer;font-family:inherit}
+.s-b-row{font-size:13px;line-height:1.5;color:var(--text-subtle);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.s-b-trailing{font-size:11.5px;color:var(--text-ghost)}
+
+/* C: chips, in the composer's own attachment grammar (App.tsx:5127) */
+.s-c-block{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:0 4px}
+.s-c-lead{font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--text-ghost);margin-right:2px}
+.s-c-chip{max-width:min(420px,60%);display:flex;align-items:center;gap:6px;border-radius:8px;border:1px solid rgb(var(--accent-rgb) / .20);background:rgb(var(--accent-rgb) / .06);padding:4px 10px;font-size:12.5px;color:var(--text-subtle)}
+.s-c-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.s-c-x{flex-shrink:0;color:var(--text-ghost);font-size:13px;line-height:1;background:none;border:0;padding:0;cursor:pointer;font-family:inherit}
+.s-c-trailing{font-size:11.5px;color:var(--text-ghost)}
+.s-c-takeback{font-size:11.5px;color:var(--text-subtle);background:none;border:0;padding:0 2px;cursor:pointer;font-family:inherit}
+</style>
+</head>
+<body>
+<div class="x-page">
+
+  <div class="x-top">
+    <span class="x-tag">Queued message row</span>
+    <span class="x-switch">
+      <button type="button" data-count="1" aria-pressed="false">1 queued</button>
+      <button type="button" data-count="3" aria-pressed="true">3 queued</button>
+    </span>
+  </div>
+
+  <!-- CURRENT -->
+  <section class="x-variant">
+    <div class="x-variant-head"><span class="x-tag">Current</span></div>
+
+    <div class="x-state">
+      <span class="x-tag">Mid turn</span>
+      <div class="s-dock">
+        <div class="s-cur-block">
+          <div class="s-cur-rows" data-rows="cur">
+            <div class="s-cur-row"><span class="s-cur-label">Queued</span><span class="s-cur-text">Add the retry path to the upload handler and cover it with a test</span></div>
+            <div class="s-cur-row" data-extra><span class="s-cur-label">Queued</span><span class="s-cur-text">Then check whether the same handler is used by the batch importer, and if it is, make both take the same timeout from settings instead of hardcoding it</span></div>
+            <div class="s-cur-row" data-extra><span class="s-cur-label">Queued</span><span class="s-cur-text">Image attachment</span></div>
+          </div>
+          <button class="s-cur-takeback" type="button" data-takeback="cur">Take back all</button>
+        </div>
+        <div class="s-activity">
+          <span class="s-dots"><i class="s-dot"></i><i class="s-dot"></i><i class="s-dot"></i></span>
+          <span class="s-verb">Working</span>
+          <span class="s-elapsed">1m 12s</span>
+        </div>
+        <form class="s-composer-form">
+          <div class="s-composer-line">
+            <div class="s-composer-field">Ask Cat Code anything or describe a task…</div>
+            <span class="s-send"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></span>
+          </div>
+          <div class="s-rule"></div>
+          <div class="s-actions"><span>+</span><span>Sonnet</span><span>Auto</span></div>
+        </form>
+      </div>
+    </div>
+
+    <div class="x-state">
+      <span class="x-tag">Cold spawn</span>
+      <div class="s-dock">
+        <div class="s-cur-block">
+          <div class="s-cur-rows">
+            <div class="s-cur-row"><span class="s-cur-label">Queued</span><span class="s-cur-text">Add the retry path to the upload handler and cover it with a test</span><span class="s-cur-trailing">Sends when the session is ready.</span></div>
+          </div>
+        </div>
+        <form class="s-composer-form">
+          <div class="s-composer-line">
+            <div class="s-composer-field">Ask Cat Code anything or describe a task…</div>
+            <span class="s-send"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></span>
+          </div>
+          <div class="s-rule"></div>
+          <div class="s-actions"><span>+</span><span>Sonnet</span><span>Auto</span></div>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <!-- A -->
+  <section class="x-variant">
+    <div class="x-variant-head"><span class="x-tag">A</span></div>
+
+    <div class="x-state">
+      <span class="x-tag">Mid turn</span>
+      <div class="s-dock">
+        <div class="s-a-block">
+          <span class="s-a-cap">Queued</span>
+          <div class="s-a-bubble is-clamped">Add the retry path to the upload handler and cover it with a test</div>
+          <div class="s-a-bubble is-clamped" data-extra>Then check whether the same handler is used by the batch importer, and if it is, make both take the same timeout from settings instead of hardcoding it</div>
+          <div class="s-a-bubble is-clamped" data-extra>Image attachment</div>
+          <button class="s-a-takeback" type="button" data-takeback="a">Take back all</button>
+        </div>
+        <div class="s-activity">
+          <span class="s-dots"><i class="s-dot"></i><i class="s-dot"></i><i class="s-dot"></i></span>
+          <span class="s-verb">Working</span>
+          <span class="s-elapsed">1m 12s</span>
+        </div>
+        <form class="s-composer-form">
+          <div class="s-composer-line">
+            <div class="s-composer-field">Ask Cat Code anything or describe a task…</div>
+            <span class="s-send"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></span>
+          </div>
+          <div class="s-rule"></div>
+          <div class="s-actions"><span>+</span><span>Sonnet</span><span>Auto</span></div>
+        </form>
+      </div>
+    </div>
+
+    <div class="x-state">
+      <span class="x-tag">Cold spawn</span>
+      <div class="s-dock">
+        <div class="s-a-block">
+          <span class="s-a-cap">Queued</span>
+          <div class="s-a-bubble is-clamped">Add the retry path to the upload handler and cover it with a test</div>
+          <span class="s-a-trailing">Sends when the session is ready.</span>
+        </div>
+        <form class="s-composer-form">
+          <div class="s-composer-line">
+            <div class="s-composer-field">Ask Cat Code anything or describe a task…</div>
+            <span class="s-send"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></span>
+          </div>
+          <div class="s-rule"></div>
+          <div class="s-actions"><span>+</span><span>Sonnet</span><span>Auto</span></div>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <!-- B -->
+  <section class="x-variant">
+    <div class="x-variant-head"><span class="x-tag">B</span></div>
+
+    <div class="x-state">
+      <span class="x-tag">Mid turn</span>
+      <div class="s-dock">
+        <div class="s-b-block">
+          <div class="s-b-head">
+            <span class="s-b-title">Queued</span>
+            <span class="s-b-count" data-count-label="b">3</span>
+            <span class="s-b-spacer"></span>
+            <button class="s-b-takeback" type="button" data-takeback="b">Take back all</button>
+          </div>
+          <div class="s-b-row">Add the retry path to the upload handler and cover it with a test</div>
+          <div class="s-b-row" data-extra>Then check whether the same handler is used by the batch importer, and if it is, make both take the same timeout from settings instead of hardcoding it</div>
+          <div class="s-b-row" data-extra>Image attachment</div>
+        </div>
+        <div class="s-activity">
+          <span class="s-dots"><i class="s-dot"></i><i class="s-dot"></i><i class="s-dot"></i></span>
+          <span class="s-verb">Working</span>
+          <span class="s-elapsed">1m 12s</span>
+        </div>
+        <form class="s-composer-form">
+          <div class="s-composer-line">
+            <div class="s-composer-field">Ask Cat Code anything or describe a task…</div>
+            <span class="s-send"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></span>
+          </div>
+          <div class="s-rule"></div>
+          <div class="s-actions"><span>+</span><span>Sonnet</span><span>Auto</span></div>
+        </form>
+      </div>
+    </div>
+
+    <div class="x-state">
+      <span class="x-tag">Cold spawn</span>
+      <div class="s-dock">
+        <div class="s-b-block">
+          <div class="s-b-head">
+            <span class="s-b-title">Queued</span>
+            <span class="s-b-spacer"></span>
+            <span class="s-b-trailing">Sends when the session is ready.</span>
+          </div>
+          <div class="s-b-row">Add the retry path to the upload handler and cover it with a test</div>
+        </div>
+        <form class="s-composer-form">
+          <div class="s-composer-line">
+            <div class="s-composer-field">Ask Cat Code anything or describe a task…</div>
+            <span class="s-send"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></span>
+          </div>
+          <div class="s-rule"></div>
+          <div class="s-actions"><span>+</span><span>Sonnet</span><span>Auto</span></div>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <!-- C -->
+  <section class="x-variant">
+    <div class="x-variant-head"><span class="x-tag">C</span></div>
+
+    <div class="x-state">
+      <span class="x-tag">Mid turn</span>
+      <div class="s-dock">
+        <div class="s-c-block">
+          <span class="s-c-lead">Queued</span>
+          <span class="s-c-chip"><span>Add the retry path to the upload handler and cover it with a test</span></span>
+          <span class="s-c-chip" data-extra><span>Then check whether the same handler is used by the batch importer, and if it is, make both take the same timeout from settings instead of hardcoding it</span></span>
+          <span class="s-c-chip" data-extra><span>Image attachment</span></span>
+          <button class="s-c-takeback" type="button" data-takeback="c">Take back all</button>
+        </div>
+        <div class="s-activity">
+          <span class="s-dots"><i class="s-dot"></i><i class="s-dot"></i><i class="s-dot"></i></span>
+          <span class="s-verb">Working</span>
+          <span class="s-elapsed">1m 12s</span>
+        </div>
+        <form class="s-composer-form">
+          <div class="s-composer-line">
+            <div class="s-composer-field">Ask Cat Code anything or describe a task…</div>
+            <span class="s-send"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></span>
+          </div>
+          <div class="s-rule"></div>
+          <div class="s-actions"><span>+</span><span>Sonnet</span><span>Auto</span></div>
+        </form>
+      </div>
+    </div>
+
+    <div class="x-state">
+      <span class="x-tag">Cold spawn</span>
+      <div class="s-dock">
+        <div class="s-c-block">
+          <span class="s-c-lead">Queued</span>
+          <span class="s-c-chip"><span>Add the retry path to the upload handler and cover it with a test</span></span>
+          <span class="s-c-trailing">Sends when the session is ready.</span>
+        </div>
+        <form class="s-composer-form">
+          <div class="s-composer-line">
+            <div class="s-composer-field">Ask Cat Code anything or describe a task…</div>
+            <span class="s-send"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg></span>
+          </div>
+          <div class="s-rule"></div>
+          <div class="s-actions"><span>+</span><span>Sonnet</span><span>Auto</span></div>
+        </form>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+(function () {
+  var buttons = document.querySelectorAll('.x-switch button')
+  function apply(count) {
+    document.querySelectorAll('[data-extra]').forEach(function (node) {
+      node.style.display = count === 3 ? '' : 'none'
+    })
+    document.querySelectorAll('[data-takeback]').forEach(function (node) {
+      node.textContent = count === 3 ? 'Take back all' : 'Take back'
+    })
+    document.querySelectorAll('[data-count-label]').forEach(function (node) {
+      node.textContent = String(count)
+    })
+    buttons.forEach(function (b) {
+      b.setAttribute('aria-pressed', String(Number(b.dataset.count) === count))
+    })
+  }
+  buttons.forEach(function (b) {
+    b.addEventListener('click', function () { apply(Number(b.dataset.count)) })
+  })
+  apply(3)
+})()
+</script>
+</body>
+</html>
