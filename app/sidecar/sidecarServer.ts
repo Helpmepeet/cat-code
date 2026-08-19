@@ -183,6 +183,30 @@ type Connection = {
   /** Removed connections must not route late transport chunks into the engine. */
   closed: boolean
   deliveryConnectionEpoch: number
+  /**
+   * The oldest message THIS reader has already been sent as restored history,
+   * and therefore the point its deeper read has to reach back from. Set from
+   * the tail `sendHistoryReplay` actually put on this socket (which is what the
+   * caps kept, not what was loaded), and moved further back by each successful
+   * `history.loadEarlier` on this connection.
+   *
+   * Per CONNECTION, not per session: every attaching reader is replayed the
+   * same original tail, so a session-wide anchor advanced by one reader would
+   * leave the next one asking for a prefix it was never sent, and recovering
+   * nothing. Null means this reader was sent no identifiable restored history,
+   * so there is no anchor to diff a deeper read against.
+   */
+  loadEarlierAnchorUuid: string | null
+  /** True once `sendHistoryReplay` put at least one frame on this socket. */
+  loadEarlierReplayed: boolean
+  /**
+   * Latched when a deeper read reaches this reader's head. Later requests are
+   * answered from the flag, so an already-whole transcript never pays another
+   * 16 MiB read plus its subagent files. Per connection for the same reason the
+   * anchor is: a reader that never recovered anything is not complete because
+   * another one is.
+   */
+  loadEarlierComplete: boolean
 }
 
 /**
@@ -487,15 +511,6 @@ export class SidecarServer {
   private readonly history: readonly SDKMessage[]
   private readonly historySourceTruncated: boolean
   private readonly loadEarlierHistory: HistoryLoadEarlierReader
-  /**
-   * The oldest message this session has already put on the wire as restored
-   * history, and therefore the point a deeper read has to reach BACK from. Set
-   * once, from the first attach's retained tail (which is what the caps actually
-   * kept, not what was loaded), and moved further back by each successful
-   * `history.loadEarlier`. Null means nothing was restored from disk at all, so
-   * there is no earlier to reach for.
-   */
-  private loadEarlierAnchorUuid: string | null = null
   /**
    * One deeper read per session at a time (decisions/HISTORY-LOAD-EARLIER.md
    * §Bounds). Enforced HERE and not in the renderer's disabled control, per
@@ -877,6 +892,9 @@ export class SidecarServer {
       rateCount: 0,
       closed: false,
       deliveryConnectionEpoch: ++this.deliveryConnectionEpoch,
+      loadEarlierAnchorUuid: null,
+      loadEarlierReplayed: false,
+      loadEarlierComplete: false,
     }
     this.connections.add(connection)
     // Re-home the `app.ready` handshake onto IPC (AppSessionWebSocketServer.ts
@@ -1066,19 +1084,19 @@ export class SidecarServer {
       retained.push(frame)
       retainedBytes += frameBytes
       // Walking newest -> oldest, so the LAST message accepted is the oldest one
-      // this session ever put on the wire. That, not the loaded array, is where
+      // put on THIS socket. That, not the loaded array, is where
       // `history.loadEarlier` has to reach back from: the caps may have dropped
       // an older prefix that was loaded but never sent, and that prefix is
-      // exactly what the deeper read exists to recover. Set once (the first
-      // attach); later attaches replay the same tail, and a successful deeper
-      // read moves it further back.
+      // exactly what the deeper read exists to recover.
       if (typeof message.uuid === 'string') {
         oldestRetainedUuid = message.uuid
       }
     }
-    if (this.loadEarlierAnchorUuid === null && oldestRetainedUuid !== undefined) {
-      this.loadEarlierAnchorUuid = oldestRetainedUuid
-    }
+    // Per connection, and reset on every attach: this reader has just been sent
+    // the ORIGINAL tail, whatever an earlier reader already recovered past.
+    connection.loadEarlierAnchorUuid = oldestRetainedUuid ?? null
+    connection.loadEarlierReplayed = retained.length > 0
+    connection.loadEarlierComplete = false
     retained.reverse()
 
     if (truncated) {
@@ -4031,14 +4049,44 @@ export class SidecarServer {
       return
     }
 
-    // Nothing was restored from disk for this session, so there is no earlier
-    // to reach for: a fresh session's whole conversation is already on screen.
-    if (this.loadEarlierAnchorUuid === null) {
+    // Already whole for this reader: a previous read reached the head, so there
+    // is provably nothing above it. Answered from the latch, because the read
+    // that would confirm it costs the full ceiling plus every subagent file.
+    if (connection.loadEarlierComplete) {
       this.sendLoadEarlierResult(connection, requestId, {
         ok: true,
-        message: 'No earlier messages to load.',
+        message: loadEarlierMessage(0, true),
         added: 0,
-        complete: !this.historySourceTruncated,
+        complete: true,
+      })
+      return
+    }
+
+    // Nothing was restored from disk for this session, so there is no earlier
+    // to reach for: a fresh session's whole conversation is already on screen.
+    if (this.history.length === 0 && !this.historySourceTruncated) {
+      connection.loadEarlierComplete = true
+      this.sendLoadEarlierResult(connection, requestId, {
+        ok: true,
+        message: loadEarlierMessage(0, true),
+        added: 0,
+        complete: true,
+      })
+      return
+    }
+
+    const anchorUuid = connection.loadEarlierAnchorUuid
+    // History WAS restored, yet none of what reached this reader carries an
+    // identity to diff a deeper read against. Everything read would look
+    // missing and the reader would see the conversation twice, so refuse rather
+    // than duplicate it. (Not the same case as an empty replay below, where
+    // nothing went out and everything read really is missing.)
+    if (anchorUuid === null && connection.loadEarlierReplayed) {
+      this.sendLoadEarlierResult(connection, requestId, {
+        ok: false,
+        message: 'Earlier messages could not be loaded.',
+        added: 0,
+        complete: false,
       })
       return
     }
@@ -4048,9 +4096,12 @@ export class SidecarServer {
       const read = await this.loadEarlierHistory(line => this.log(line))
       if (this.closed || connection.closed) return
 
-      const anchorIndex = read.messages.findIndex(
-        message => message.uuid === this.loadEarlierAnchorUuid,
-      )
+      // With no anchor, this reader was sent nothing, so the whole read is the
+      // missing prefix. Otherwise the prefix is what sits above the anchor.
+      const anchorIndex =
+        anchorUuid === null
+          ? read.messages.length
+          : read.messages.findIndex(message => message.uuid === anchorUuid)
       if (anchorIndex < 0) {
         // The deeper read could not find the message the reader is currently
         // oldest on, so there is no prefix that is provably missing rather than
@@ -4095,12 +4146,19 @@ export class SidecarServer {
           oldestSentUuid = message.uuid
         }
       }
-      // Only what actually went out moves the anchor, so a message dropped above
-      // stays recoverable by a later request rather than being skipped over.
+      // The anchor moves to the OLDEST message that actually went out, so only
+      // omissions strictly OLDER than it stay recoverable by a later request. A
+      // message dropped mid-prefix (newer than the oldest send) now sits inside
+      // the range a later read treats as already delivered, and is permanently
+      // out of this reader's reach. Nothing lies about that: `omitted` forces
+      // `complete: false` below, and blocks the head latch.
       if (oldestSentUuid !== undefined) {
-        this.loadEarlierAnchorUuid = oldestSentUuid
+        connection.loadEarlierAnchorUuid = oldestSentUuid
+        connection.loadEarlierReplayed = true
       }
       const complete = !read.truncated && !omitted
+      // Latch the head so a repeat request answers without touching disk.
+      if (complete) connection.loadEarlierComplete = true
       this.sendLoadEarlierResult(connection, requestId, {
         ok: true,
         message: loadEarlierMessage(added, complete),

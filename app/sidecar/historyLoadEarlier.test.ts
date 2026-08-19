@@ -284,7 +284,10 @@ test('a second request while one is in flight is refused, never queued', async (
       await new Promise<void>(resolve => {
         release = resolve
       })
-      return { messages: [older, anchor], truncated: false }
+      // Deliberately still truncated, so the head-reached latch does not engage
+      // and the probe at the end of this test measures the IN-FLIGHT guard
+      // releasing rather than the already-whole fast path.
+      return { messages: [older, anchor], truncated: true }
     },
   })
   const { socket, received } = makeSocket()
@@ -488,3 +491,180 @@ test(
   },
   30_000,
 )
+
+/* ------------------------------------------------------------------------- *
+ * Per-reader recovery state
+ * ------------------------------------------------------------------------- */
+
+test('a second connection can still recover after the first one already did', async () => {
+  const older = historyMessage('older-1', 'recovered')
+  const anchor = historyMessage('anchor-1', 'on screen')
+  let reads = 0
+  const server = makeServer({
+    history: [anchor],
+    historySourceTruncated: true,
+    loadEarlierHistory: async () => {
+      reads += 1
+      return { messages: [older, anchor], truncated: false }
+    },
+  })
+
+  const first = makeSocket()
+  const firstConnection = server.addConnection(first.socket)
+  server.handleData(
+    firstConnection,
+    frame({ type: 'history.loadEarlier', requestId: 'first' }),
+  )
+  await Bun.sleep(0)
+  expect(results(first.received).at(-1)).toMatchObject({
+    requestId: 'first',
+    ok: true,
+    added: 1,
+    complete: true,
+  })
+
+  // The renderer reloads. The new connection is replayed the SAME original
+  // tail, so its own request has to reach back from THAT tail, not from where
+  // the previous reader's recovery left off.
+  const second = makeSocket()
+  const secondConnection = server.addConnection(second.socket)
+  const attached = second.received.length
+  server.handleData(
+    secondConnection,
+    frame({ type: 'history.loadEarlier', requestId: 'second' }),
+  )
+  await Bun.sleep(0)
+
+  expect(reads).toBe(2)
+  expect(replayedText(second.received.slice(attached))).toEqual(['recovered'])
+  expect(results(second.received).at(-1)).toMatchObject({
+    requestId: 'second',
+    ok: true,
+    added: 1,
+    complete: true,
+  })
+})
+
+test('a truncated source with an empty replay reads deeper instead of contradicting itself', async () => {
+  // Everything loaded was dropped before the wire, so this reader was sent no
+  // history at all while the source says more exists above. The old answer said
+  // "nothing to load" and "more remains" in the same frame.
+  const first = historyMessage('m-1', 'oldest')
+  const second = historyMessage('m-2', 'newer')
+  let reads = 0
+  const server = makeServer({
+    historySourceTruncated: true,
+    loadEarlierHistory: async () => {
+      reads += 1
+      return { messages: [first, second], truncated: false }
+    },
+  })
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  const attached = received.length
+
+  server.handleData(
+    connection,
+    frame({ type: 'history.loadEarlier', requestId: 'empty-replay' }),
+  )
+  await Bun.sleep(0)
+
+  expect(reads).toBe(1)
+  expect(replayedText(received.slice(attached))).toEqual(['oldest', 'newer'])
+  expect(results(received)).toEqual([
+    {
+      kind: 'history.loadEarlier.result',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      requestId: 'empty-replay',
+      ok: true,
+      message: 'Earlier messages loaded.',
+      added: 2,
+      complete: true,
+    },
+  ])
+})
+
+test('a reader whose transcript is already whole never reads disk again', async () => {
+  const older = historyMessage('older-1', 'recovered')
+  const anchor = historyMessage('anchor-1', 'on screen')
+  let reads = 0
+  const server = makeServer({
+    history: [anchor],
+    historySourceTruncated: true,
+    loadEarlierHistory: async () => {
+      reads += 1
+      return { messages: [older, anchor], truncated: false }
+    },
+  })
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+
+  server.handleData(
+    connection,
+    frame({ type: 'history.loadEarlier', requestId: 'req-1' }),
+  )
+  await Bun.sleep(0)
+  expect(reads).toBe(1)
+  expect(results(received).at(-1)).toMatchObject({ added: 1, complete: true })
+
+  server.handleData(
+    connection,
+    frame({ type: 'history.loadEarlier', requestId: 'req-2' }),
+  )
+  await Bun.sleep(0)
+
+  // Answered from the latch: no second 16 MiB read, no subagent files.
+  expect(reads).toBe(1)
+  expect(results(received).at(-1)).toEqual({
+    kind: 'history.loadEarlier.result',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SESSION,
+    requestId: 'req-2',
+    ok: true,
+    message: 'No earlier messages to load.',
+    added: 0,
+    complete: true,
+  })
+})
+
+test('an incomplete read does NOT latch, so the head stays reachable', async () => {
+  const oldest = historyMessage('m-1', 'oldest')
+  const older = historyMessage('m-2', 'older')
+  const anchor = historyMessage('anchor-1', 'on screen')
+  let reads = 0
+  const server = makeServer({
+    history: [anchor],
+    historySourceTruncated: true,
+    loadEarlierHistory: async () => {
+      reads += 1
+      // First read stops at the ceiling; a later one reaches further back.
+      return reads === 1
+        ? { messages: [older, anchor], truncated: true }
+        : { messages: [oldest, older, anchor], truncated: false }
+    },
+  })
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+
+  server.handleData(
+    connection,
+    frame({ type: 'history.loadEarlier', requestId: 'req-1' }),
+  )
+  await Bun.sleep(0)
+  expect(results(received).at(-1)).toMatchObject({ added: 1, complete: false })
+
+  server.handleData(
+    connection,
+    frame({ type: 'history.loadEarlier', requestId: 'req-2' }),
+  )
+  await Bun.sleep(0)
+
+  expect(reads).toBe(2)
+  expect(results(received).at(-1)).toMatchObject({
+    requestId: 'req-2',
+    ok: true,
+    added: 1,
+    complete: true,
+  })
+})
