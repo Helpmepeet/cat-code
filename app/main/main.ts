@@ -68,7 +68,8 @@ import {
   selectRendererWorkingSetKiB,
   type RendererDeathReason,
   type WindowVisibilityReason,
-  SIDECAR_RUNTIME_ARGS,
+  resolveSidecarLaunch,
+  type SidecarLaunchPlan,
   selectTranscriptBackfillCandidates,
   supervisorEventToServerFrame,
   validateSaveTextRequest,
@@ -746,12 +747,8 @@ async function backfillTranscriptCaches(): Promise<void> {
   try {
     const summary = await runTranscriptBackfill({
       items,
-      command: process.env.CATCODE_BUN_BIN ?? 'bun',
-      args: [
-        'run',
-        TRANSCRIPT_BACKFILL_WORKER_ENTRY,
-        '--bare',
-      ],
+      command: sidecarLaunch().command,
+      args: sidecarLaunch().argsFor('transcript-backfill', ['--bare']),
       cwd: process.cwd(),
       signal: abort.signal,
       onWorkerLifecycle,
@@ -829,8 +826,8 @@ function startSessionsCatalogRefresh(): void {
     run: () => {
       const onWorkerLifecycle = createWorkerLifecycleLogger('sessions-catalog')
       return runSessionsCatalogWorker({
-        command: process.env.CATCODE_BUN_BIN ?? 'bun',
-        args: ['run', SESSIONS_CATALOG_WORKER_ENTRY, '--bare'],
+        command: sidecarLaunch().command,
+        args: sidecarLaunch().argsFor('catalog', ['--bare']),
         cwd: process.cwd(),
         signal: abort.signal,
         onWorkerLifecycle,
@@ -873,13 +870,11 @@ function startAccountsPoolRefresh(): void {
       const withUsageStats = runCarriesUsageStats(runIndex)
       runIndex += 1
       return runAccountsPoolWorker({
-        command: process.env.CATCODE_BUN_BIN ?? 'bun',
-        args: [
-          'run',
-          ACCOUNTS_POOL_WORKER_ENTRY,
+        command: sidecarLaunch().command,
+        args: sidecarLaunch().argsFor('accounts-pool', [
           '--bare',
           ...(withUsageStats ? ['--usage-stats'] : []),
-        ],
+        ]),
         cwd: process.cwd(),
         signal: abort.signal,
         onWorkerLifecycle,
@@ -970,42 +965,30 @@ function deliver(frames: ServerFrame[]): void {
   for (const frame of traced) traceFrame(frame, 'main.ipc.sent')
 }
 
-/** The sidecar entry path — also the registry's orphan-identity marker (§9-A3). */
-const SIDECAR_ENTRY = join(__dirname, '..', '..', 'app', 'sidecar', 'index.ts')
-/** Same dev/packaged source topology as SIDECAR_ENTRY; separate worker mode. */
-const TRANSCRIPT_BACKFILL_WORKER_ENTRY = join(
-  __dirname,
-  '..',
-  '..',
-  'app',
-  'sidecar',
-  'transcriptBackfillWorker.ts',
-)
-/** Catalog owner (decision #4): the disposable sessions-catalog worker entry. */
-const SESSIONS_CATALOG_WORKER_ENTRY = join(
-  __dirname,
-  '..',
-  '..',
-  'app',
-  'sidecar',
-  'sessionsCatalogWorker.ts',
-)
-/** Accounts owner: the disposable account-pool worker entry. */
-const ACCOUNTS_POOL_WORKER_ENTRY = join(
-  __dirname,
-  '..',
-  '..',
-  'app',
-  'sidecar',
-  'accountsPoolWorker.ts',
-)
-const DEBUG_CLEANUP_WORKER_ENTRY = join(__dirname, '..', '..', 'app', 'sidecar', 'debugCleanupWorker.ts')
+/**
+ * How to launch every sidecar mode, for the topology this process is running
+ * (P5-1). Development spawns repository TypeScript under `bun`; a packaged
+ * build spawns the compiled binary inside the bundle. Memoized rather than
+ * computed at module scope so importing main never depends on Electron having
+ * resolved `resourcesPath`, and lazily so the hardening harness — which forces
+ * `isPackaged` on a source tree — still evaluates this module.
+ */
+let sidecarLaunchPlan: SidecarLaunchPlan | null = null
+function sidecarLaunch(): SidecarLaunchPlan {
+  sidecarLaunchPlan ??= resolveSidecarLaunch({
+    packaged: app.isPackaged,
+    mainDir: __dirname,
+    resourcesPath: process.resourcesPath,
+    bunBin: process.env.CATCODE_BUN_BIN,
+  })
+  return sidecarLaunchPlan
+}
 
 function scheduleDebugCleanup(): void {
   // A disposable, main-supervised worker gives all session sidecars one shared
   // daily lock/marker.  Its result is intentionally non-fatal diagnostics.
   try {
-    const child = spawn(process.env.CATCODE_BUN_BIN ?? 'bun', [...SIDECAR_RUNTIME_ARGS, DEBUG_CLEANUP_WORKER_ENTRY], {
+    const child = spawn(sidecarLaunch().command, sidecarLaunch().argsFor('debug-cleanup'), {
       stdio: 'ignore', detached: false,
       env: { ...process.env, CATCODE_DEBUG_CLEANUP_MARKER_DIR: defaultRegistryDir() },
     })
@@ -1024,11 +1007,13 @@ function scheduleDebugCleanup(): void {
 
 function createSupervisor(): SidecarSupervisor {
   // The sidecar runs the desktop engine feature set declared in
-  // `SIDECAR_RUNTIME_ARGS`. Without the Bun runtime flags every `feature(...)`
-  // branch is compiled false and the desktop can silently lose engine behavior.
+  // `SIDECAR_RUNTIME_ARGS`. Without those features every `feature(...)` branch
+  // is false and the desktop silently loses engine behavior — development
+  // passes them as Bun runtime flags, and the packaged build bakes the same
+  // list in at compile time (`app/scripts/package-app.ts`).
   return new SidecarSupervisor({
-    sidecarCommand: process.env.CATCODE_BUN_BIN ?? 'bun',
-    sidecarArgs: [...SIDECAR_RUNTIME_ARGS, SIDECAR_ENTRY],
+    sidecarCommand: sidecarLaunch().command,
+    sidecarArgs: sidecarLaunch().argsFor('session'),
     // Default boot cwd for the single startup session. Per-session cwd now flows
     // through the host API (createSession → native picker, HC1); this stays only
     // as the supervisor-wide default for probe/legacy callers.
@@ -2605,11 +2590,11 @@ function ensureHost(): Host {
   wireRendererBridge(supervisor)
 
   // The registry lives beside the supervisor in the host plane. Default storage
-  // dir (<config-home>/desktop) unless overridden for tests. The sidecar entry
-  // path is the §9-A3 orphan-identity marker so the launch sweep never SIGTERMs
-  // an innocent same-pid process.
+  // dir (<config-home>/desktop) unless overridden for tests. The session
+  // sidecar's own launch string is the §9-A3 orphan-identity marker so the
+  // launch sweep never SIGTERMs an innocent same-pid process.
   const registry = new SessionRegistry({
-    sidecarCommandMarker: SIDECAR_ENTRY,
+    sidecarCommandMarker: sidecarLaunch().identityMarker,
     log: line => logLegacyDiagnostic(line, 'registry', 'host'),
   })
   registryForDebug = registry

@@ -22,6 +22,8 @@ import {
   RENDERER_HEALTH_RING_CAPACITY,
   RENDERER_RECOVERY_MAX_ATTEMPTS,
   RENDERER_RECOVERY_WINDOW_MS,
+  PACKAGED_SIDECAR_BINARY,
+  SIDECAR_MODE_ENTRIES,
   SIDECAR_RUNTIME_ARGS,
   createCwdTokenStore,
   createRendererHealthFlightRecorder,
@@ -35,6 +37,7 @@ import {
   sanitizeSaveFileName,
   selectTranscriptBackfillCandidates,
   supervisorEventToServerFrame,
+  resolveSidecarLaunch,
   validateSaveTextRequest,
 } from './mainDecisions.js'
 
@@ -46,6 +49,100 @@ test('the production sidecar runtime enables the desktop engine features', () =>
     '--feature=REACTIVE_COMPACT',
     'run',
   ])
+})
+
+describe('sidecar launch resolution (P5-1)', () => {
+  const DEV = { packaged: false, mainDir: '/repo/app/main' } as const
+  const PACKAGED = {
+    packaged: true,
+    mainDir: '/Apps/Cat Code.app/Contents/Resources/app/main',
+    resourcesPath: '/Apps/Cat Code.app/Contents/Resources',
+  } as const
+
+  test('development spawns repository TypeScript under bun, unchanged from before packaging existed', () => {
+    const plan = resolveSidecarLaunch(DEV)
+    expect(plan.command).toBe('bun')
+    expect(plan.argsFor('session')).toEqual([
+      '--feature=TRANSCRIPT_CLASSIFIER',
+      '--feature=REACTIVE_COMPACT',
+      'run',
+      '/repo/app/sidecar/index.ts',
+    ])
+  })
+
+  test('CATCODE_BUN_BIN still overrides the development interpreter', () => {
+    expect(resolveSidecarLaunch({ ...DEV, bunBin: '/opt/bun' }).command).toBe('/opt/bun')
+  })
+
+  test('the disposable workers keep their own argument shape: no feature flags, own CLI args last', () => {
+    const plan = resolveSidecarLaunch(DEV)
+    expect(plan.argsFor('catalog', ['--bare'])).toEqual([
+      'run',
+      '/repo/app/sidecar/sessionsCatalogWorker.ts',
+      '--bare',
+    ])
+    expect(plan.argsFor('accounts-pool', ['--bare', '--usage-stats'])).toEqual([
+      'run',
+      '/repo/app/sidecar/accountsPoolWorker.ts',
+      '--bare',
+      '--usage-stats',
+    ])
+  })
+
+  test('debug cleanup keeps the feature flags the session sidecar has', () => {
+    expect(resolveSidecarLaunch(DEV).argsFor('debug-cleanup')).toEqual([
+      '--feature=TRANSCRIPT_CLASSIFIER',
+      '--feature=REACTIVE_COMPACT',
+      'run',
+      '/repo/app/sidecar/debugCleanupWorker.ts',
+    ])
+  })
+
+  test('packaged spawns the compiled binary inside the bundle and never names bun or a .ts file', () => {
+    const plan = resolveSidecarLaunch(PACKAGED)
+    expect(plan.command).toBe(`/Apps/Cat Code.app/Contents/Resources/sidecar/${PACKAGED_SIDECAR_BINARY}`)
+    for (const mode of Object.keys(SIDECAR_MODE_ENTRIES) as Array<keyof typeof SIDECAR_MODE_ENTRIES>) {
+      const args = plan.argsFor(mode, ['--bare'])
+      expect(args).toEqual([mode, '--bare'])
+      expect(args.some(arg => arg.endsWith('.ts'))).toBe(false)
+    }
+    expect(plan.command).not.toContain('bun')
+  })
+
+  test('no mode token prefixes another, so the packaged marker cannot match a worker', () => {
+    const modes = Object.keys(SIDECAR_MODE_ENTRIES)
+    for (const mode of modes) {
+      for (const other of modes) {
+        if (mode === other) continue
+        expect(other.startsWith(mode)).toBe(false)
+      }
+    }
+  })
+
+  test('packaged resolution falls back to the bundle layout when resourcesPath is absent', () => {
+    expect(resolveSidecarLaunch({ packaged: true, mainDir: PACKAGED.mainDir }).command).toBe(
+      resolveSidecarLaunch(PACKAGED).command,
+    )
+  })
+
+  test('the orphan-identity marker selects session sidecars alone in both topologies', () => {
+    // Development: the session entry path, which no worker command line contains.
+    const dev = resolveSidecarLaunch(DEV)
+    expect(dev.identityMarker).toBe('/repo/app/sidecar/index.ts')
+    for (const mode of ['catalog', 'accounts-pool', 'transcript-backfill'] as const) {
+      expect(dev.argsFor(mode).join(' ')).not.toContain(dev.identityMarker)
+    }
+
+    // Packaged: every mode shares one executable, so the marker carries the mode
+    // token. Without that a pid recycled onto a live worker would be swept.
+    const packaged = resolveSidecarLaunch(PACKAGED)
+    const commandLine = (mode: Parameters<typeof packaged.argsFor>[0]): string =>
+      `${packaged.command} ${packaged.argsFor(mode).join(' ')}`
+    expect(commandLine('session')).toContain(packaged.identityMarker)
+    for (const mode of ['catalog', 'accounts-pool', 'transcript-backfill'] as const) {
+      expect(commandLine(mode)).not.toContain(packaged.identityMarker)
+    }
+  })
 })
 
 describe('renderer health evidence', () => {

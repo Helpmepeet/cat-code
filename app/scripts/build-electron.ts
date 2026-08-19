@@ -40,10 +40,30 @@ async function buildOne(
   for (const output of result.outputs) console.log(`  built ${output.path}`)
 }
 
+/**
+ * Build-time identity stamp (P5-1 / LOCAL-USE-CONTRACT §3).
+ *
+ * `main.ts` reads `process.env.CATCODE_BUILD_ID` and `CATCODE_COMMIT_ID` for the
+ * diagnostics bundle, but a double-clicked `.app` inherits no shell
+ * environment, so in a packaged run those can only ever arrive as build-time
+ * constants. `package-app.ts` sets them; a development build leaves them
+ * `undefined`, which is what main saw before this existed.
+ */
+function stampDefines(): Record<string, string> {
+  const stamp: Record<string, string> = {}
+  for (const key of ['CATCODE_BUILD_ID', 'CATCODE_COMMIT_ID'] as const) {
+    const value = process.env[key]
+    stamp[`process.env.${key}`] = value ? JSON.stringify(value) : 'undefined'
+  }
+  return stamp
+}
+
 async function build(): Promise<void> {
   // main as ESM .js (package is type:module); preload as CJS .cjs (sandboxed
   // preload must be CommonJS, and .cjs opts out of the package's ESM default).
-  await buildOne(join(appRoot, 'main', 'main.ts'), 'esm', 'js')
+  await buildOne(join(appRoot, 'main', 'main.ts'), 'esm', 'js', {
+    define: stampDefines(),
+  })
   await buildOne(join(appRoot, 'preload', 'preload.ts'), 'cjs', 'cjs', {
     define: { __CATCODE_DEV_HARNESS__: 'false' },
   })

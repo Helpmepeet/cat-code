@@ -10,6 +10,8 @@
     "sidecar:dev": "bun --feature=TRANSCRIPT_CLASSIFIER --feature=REACTIVE_COMPACT run sidecar/index.ts",
     "renderer:dev": "bun run lint:fast-refresh && vite --config renderer/vite.config.ts",
     "renderer:build": "bun run lint:fast-refresh && vite build --config renderer/vite.config.ts",
+    "package": "bun run scripts/package-app.ts",
+    "smoke:packaged": "bun run scripts/packaged-launch-smoke.ts",
     "lint:fast-refresh": "eslint \"renderer/src/**/*.tsx\"",
     "typecheck": "bun run lint:fast-refresh && tsc --noEmit -p tsconfig.json",
     "test": "cd .. && bun test app/",

@@ -11,7 +11,8 @@
  *   - translating a `SupervisorEvent` into the `ServerFrame` the renderer sees;
  *   - the HC1 one-time directory-token store;
  *   - choosing which rows a PL-B transcript backfill should read;
- *   - the Bun runtime flags required by the real engine sidecar;
+ *   - the Bun runtime flags required by the real engine sidecar, and where that
+ *     sidecar comes from in a development versus a packaged topology;
  *   - the HC1 validation of a `saveTextToFile` request (P4-35);
  *   - the cancellable post-paint window that arms the background drivers.
  *   - deciding when renderer health loss becomes durable error evidence.
@@ -21,6 +22,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { join } from 'node:path'
 
 import {
   MAX_LIVE_SESSIONS,
@@ -38,15 +40,116 @@ import type { TranscriptBackfillItem } from '../shared/transcriptBackfill.js'
 import type { SupervisorEvent } from '../supervisor/supervisor.js'
 
 /**
- * Keep the unbundled desktop sidecar on the engine's default runtime features.
- * Without these runtime flags Bun folds the corresponding feature branches
- * away, so the desktop would silently run a different engine than `cli-dev`.
+ * Keep the desktop sidecar on the engine's default runtime features. Without
+ * these Bun folds the corresponding feature branches away, so the desktop would
+ * silently run a different engine than `cli-dev`. Development passes them as
+ * runtime flags to `bun run`; the packaged build compiles the same list in
+ * (`app/scripts/package-app.ts`), which is why both read this one array.
  */
 export const SIDECAR_RUNTIME_ARGS = [
   '--feature=TRANSCRIPT_CLASSIFIER',
   '--feature=REACTIVE_COMPACT',
   'run',
 ] as const
+
+/**
+ * Every sidecar entry main can spawn, mode token -> dev entry file (P5-1).
+ *
+ * Development runs each file directly under `bun run`. A packaged build has
+ * neither `bun` nor a checkout, so one compiled binary serves all five and
+ * picks the module by mode token (`app/sidecar/packagedEntry.ts`). Both sides
+ * read this table, so a new entry cannot exist in one topology only.
+ *
+ * No mode token may be a PREFIX of another. The packaged orphan-identity marker
+ * is the session mode's command line, matched as a substring, so a token like
+ * `sessions-catalog` would make `<binary> session` match the catalog worker too
+ * and expose it to the launch sweep. `mainDecisions.test.ts` asserts this.
+ *
+ * `runtimeFlags` records which modes carry `SIDECAR_RUNTIME_ARGS`. The three
+ * disposable workers deliberately do not: they run under `CLAUDE_CODE_SIMPLE`
+ * and never reach the feature-gated branches those flags exist for. That split
+ * is preserved rather than tidied, because widening it would change which
+ * engine each worker runs.
+ */
+export const SIDECAR_MODE_ENTRIES = {
+  session: { file: 'index.ts', runtimeFlags: true },
+  'transcript-backfill': { file: 'transcriptBackfillWorker.ts', runtimeFlags: false },
+  'catalog': { file: 'sessionsCatalogWorker.ts', runtimeFlags: false },
+  'accounts-pool': { file: 'accountsPoolWorker.ts', runtimeFlags: false },
+  'debug-cleanup': { file: 'debugCleanupWorker.ts', runtimeFlags: true },
+} as const
+
+export type SidecarMode = keyof typeof SIDECAR_MODE_ENTRIES
+
+/** Basename of the compiled sidecar inside the bundle's `Resources/sidecar/`. */
+export const PACKAGED_SIDECAR_BINARY = 'cat-code-sidecar'
+
+export type SidecarLaunchPlan = Readonly<{
+  packaged: boolean
+  command: string
+  /** `extra` carries the worker's own CLI arguments (`--bare`, `--usage-stats`). */
+  argsFor: (mode: SidecarMode, extra?: readonly string[]) => string[]
+  /**
+   * The §9-A3 orphan-identity substring, matched against a candidate pid's
+   * command line before the launch sweep will SIGTERM it.
+   *
+   * It has to select SESSION sidecars alone. Development gets that for free
+   * because every mode has a distinct entry path, but the packaged build gives
+   * all five the same executable, so the marker carries the mode token too.
+   * Without it a pid recycled onto a live catalog or accounts worker would
+   * satisfy the identity check and be killed.
+   */
+  identityMarker: string
+}>
+
+/**
+ * Where the sidecar comes from, for the topology actually running.
+ *
+ * Development: `bun` off PATH (or `CATCODE_BUN_BIN`) running repository
+ * TypeScript, resolved relative to the built `main/` directory exactly as the
+ * five entry constants did before.
+ *
+ * Packaged: the compiled binary inside the bundle. No PATH lookup, no `.ts`,
+ * and no path that can reach back into a checkout, which is what makes a
+ * launched `.app` self-contained.
+ */
+export function resolveSidecarLaunch(options: {
+  packaged: boolean
+  /** `__dirname` of the running `main.js`. */
+  mainDir: string
+  /** Electron's `process.resourcesPath`; derived from `mainDir` when absent. */
+  resourcesPath?: string
+  /** `CATCODE_BUN_BIN`, development only. */
+  bunBin?: string
+}): SidecarLaunchPlan {
+  const { packaged, mainDir, resourcesPath, bunBin } = options
+
+  if (!packaged) {
+    const entryPath = (mode: SidecarMode): string =>
+      join(mainDir, '..', '..', 'app', 'sidecar', SIDECAR_MODE_ENTRIES[mode].file)
+    return {
+      packaged: false,
+      command: bunBin ?? 'bun',
+      argsFor: (mode, extra = []) => [
+        ...(SIDECAR_MODE_ENTRIES[mode].runtimeFlags ? SIDECAR_RUNTIME_ARGS : ['run']),
+        entryPath(mode),
+        ...extra,
+      ],
+      identityMarker: entryPath('session'),
+    }
+  }
+
+  // `Resources/app/main` -> `Resources`. Only a fallback: Electron supplies the
+  // real value, and this keeps the module Electron-free and testable.
+  const resources = resourcesPath ?? join(mainDir, '..', '..')
+  const command = join(resources, 'sidecar', PACKAGED_SIDECAR_BINARY)
+  return {
+    packaged: true,
+    command,
+    argsFor: (mode, extra = []) => [mode, ...extra],
+    identityMarker: `${command} session`,
+  }
+}
 
 export const RENDERER_HEALTH_DEGRADED_MISSES = 3
 export const RENDERER_HEALTH_UNAVAILABLE_MISSES = 6
