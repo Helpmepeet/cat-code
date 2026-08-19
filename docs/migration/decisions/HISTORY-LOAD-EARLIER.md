@@ -61,7 +61,16 @@ unchanged. There are no other fields, and the sidecar's local schema must
 REJECT any frame carrying extra properties rather than ignoring them.
 
 **Outbound**: the recovered messages ride existing `event` frames with
-`replay: true` — no new outbound transcript vocabulary. They are followed by
+`replay: true` — no new outbound transcript vocabulary.
+
+Verified contract (2026-08-19), so the implementer does not rediscover it:
+`loadDisplayTranscriptFromJsonlPath(filePath, { maxMessages, maxBytes })` lives
+in the ENGINE at `src/utils/sessionStorage.ts:4811` and returns
+`{ messages, truncated }`. `maxBytes` bounds the file read; `maxMessages`
+slices the tail of the display chain. Its `truncated` is
+`capped || (sourceTruncated && missingPredecessor)` — i.e. exactly the
+"anything still above this?" signal the completion frame needs. No engine
+change is required, which is what keeps this inside the reuse rule. They are followed by
 `history.loadEarlier.result` carrying whether the transcript is now complete,
 and the honest count of what was added.
 
