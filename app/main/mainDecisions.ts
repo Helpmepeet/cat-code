@@ -65,11 +65,19 @@ export const SIDECAR_RUNTIME_ARGS = [
  * `sessions-catalog` would make `<binary> session` match the catalog worker too
  * and expose it to the launch sweep. `mainDecisions.test.ts` asserts this.
  *
- * `runtimeFlags` records which modes carry `SIDECAR_RUNTIME_ARGS`. The three
- * disposable workers deliberately do not: they run under `CLAUDE_CODE_SIMPLE`
- * and never reach the feature-gated branches those flags exist for. That split
- * is preserved rather than tidied, because widening it would change which
- * engine each worker runs.
+ * `runtimeFlags` records which modes carry `SIDECAR_RUNTIME_ARGS` in
+ * DEVELOPMENT. The three disposable workers deliberately do not: they run under
+ * `CLAUDE_CODE_SIMPLE` and never reach the feature-gated branches those flags
+ * exist for.
+ *
+ * KNOWN DIVERGENCE — the packaged build does not reproduce that split. Features
+ * are folded in at compile time, and `package-app.ts` compiles ONE binary for
+ * all five modes, so the three workers run WITH `TRANSCRIPT_CLASSIFIER` and
+ * `REACTIVE_COMPACT` when packaged and without them in development. Preserving
+ * the split would mean shipping a second ~80 MB feature-free binary for the
+ * workers. That was not judged worth it for a difference with no observed
+ * behavioural harm, but it is a real dev-versus-packaged engine difference, not
+ * an equivalence: see the P5-1 row in `docs/migration/STATUS.md`.
  */
 export const SIDECAR_MODE_ENTRIES = {
   session: { file: 'index.ts', runtimeFlags: true },

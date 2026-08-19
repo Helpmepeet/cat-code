@@ -975,12 +975,27 @@ function deliver(frames: ServerFrame[]): void {
  */
 let sidecarLaunchPlan: SidecarLaunchPlan | null = null
 function sidecarLaunch(): SidecarLaunchPlan {
-  sidecarLaunchPlan ??= resolveSidecarLaunch({
+  if (sidecarLaunchPlan) return sidecarLaunchPlan
+  sidecarLaunchPlan = resolveSidecarLaunch({
     packaged: app.isPackaged,
     mainDir: __dirname,
     resourcesPath: process.resourcesPath,
     bunBin: process.env.CATCODE_BUN_BIN,
   })
+  // Same class of trap as the CATCODE_RENDERER_URL warning below, and now the
+  // more expensive half of it. `app.isPackaged` comes from the executable's
+  // BASENAME, so a renamed development binary reports packaged, and every
+  // sidecar spawn then resolves into the stock Electron bundle where no
+  // compiled sidecar exists. The only symptom would be an ENOENT naming a
+  // directory nobody recognizes, once per worker, with no session ever
+  // starting. Say it once, plainly, at the point the path is decided.
+  if (sidecarLaunchPlan.packaged && !existsSync(sidecarLaunchPlan.command)) {
+    process.stderr.write(
+      `[main] no compiled sidecar at ${sidecarLaunchPlan.command}. This process reports packaged, so no session can start. ` +
+        'Expected a dev launch? Check that the Electron executable is still named "electron". ' +
+        'Expected a packaged launch? Rebuild with "bun run --cwd app package".\n',
+    )
+  }
   return sidecarLaunchPlan
 }
 

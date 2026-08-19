@@ -78,6 +78,12 @@ only its own row in `docs/migration/STATUS.md` as its final bookkeeping step.
 
 Source-verified 2026-08-17, re-confirmed 2026-08-19. Re-check before acting.
 
+> **P5-1 landed 2026-08-19 (`35dbd8ec`).** The packaging bullets below describe
+> the state P5-1 STARTED from and are kept as that record, not as current truth:
+> packaging tooling now exists (`bun run --cwd app package`) and the sidecar is
+> bundled. P5-5c and P5-7 should read the P5-1 row in `STATUS.md` for what is
+> actually there now. Everything else in this section still holds.
+
 - **No packaging tooling exists at all.** No `electron-builder`, `electron-forge`,
   `@electron/packager`, or `electron-updater` in `app/package.json` or the root
   package. `app/package.json` is private, reports version `0.0.0`, and has no

@@ -35,7 +35,7 @@ const DENIED_PATHS: ReadonlyArray<{ test: (relPath: string) => boolean; reason: 
   { test: p => basename(p) === 'preload.dev.cjs', reason: 'development harness preload' },
   { test: p => /\.(test|probe\.test)\.(ts|tsx|js|cjs|mjs)$/.test(p), reason: 'test source' },
   { test: p => /\.map$/.test(p), reason: 'source map' },
-  { test: p => /(^|\/)\.env(\.|$)/.test(p), reason: 'environment file' },
+  { test: p => /(^|\/)\.env(rc)?(\.|$)/.test(p), reason: 'environment file' },
   { test: p => /\.(pem|key|p12|pfx|keychain)$/.test(p), reason: 'key material' },
   { test: p => /(^|\/)id_(rsa|dsa|ecdsa|ed25519)(\.|$)/.test(p), reason: 'ssh private key' },
   { test: p => basename(p) === 'default_app.asar', reason: "Electron's placeholder app" },
@@ -56,22 +56,43 @@ const SECRET_PATTERNS: ReadonlyArray<{ pattern: RegExp; reason: string }> = [
   { pattern: /ghp_[A-Za-z0-9]{36}/, reason: 'GitHub token' },
   { pattern: /github_pat_[A-Za-z0-9_]{50,}/, reason: 'GitHub fine-grained token' },
   { pattern: /xox[baprs]-[A-Za-z0-9-]{20,}/, reason: 'Slack token' },
+  // The engine's real Codex credentials are JWTs, so the shape this repository
+  // is most likely to leak was the one shape not covered.
+  { pattern: /eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/, reason: 'JWT' },
+  { pattern: /AKIA[0-9A-Z]{16}/, reason: 'AWS access key id' },
 ]
 
 /** Extensions worth reading as text. The compiled sidecar is scanned too. */
-const SCANNED_CONTENT = /\.(js|cjs|mjs|ts|tsx|json|html|css|txt|md|plist|sh)$/
+const SCANNED_CONTENT =
+  /\.(js|cjs|mjs|ts|tsx|json|jsonl|html|css|txt|md|plist|sh|ya?ml|toml|log|env|envrc)$/
+
+type WalkEntry = { path: string; symlink: boolean }
 
 function segments(relPath: string): string[] {
   return relPath.split(sep)
 }
 
-function walk(root: string, dir: string, out: string[]): void {
+/**
+ * Symlinks the stock Electron framework ships and `cp -Rc` faithfully preserves.
+ * Everything else that is a symlink is reported, because a local bundle has no
+ * reason to point outside itself and a link is how every rule below gets
+ * bypassed.
+ */
+const ALLOWED_SYMLINK_PREFIXES = [join('Contents', 'Frameworks')]
+
+function walk(root: string, dir: string, out: WalkEntry[]): void {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name)
-    if (entry.isDirectory()) {
+    // Checked FIRST and never followed. A Dirent for a symlink is neither a
+    // file nor a directory, so a plain isDirectory/isFile walk silently skips
+    // it — which made every rule in this module bypassable by linking to the
+    // denied content instead of copying it.
+    if (entry.isSymbolicLink()) {
+      out.push({ path: relative(root, full), symlink: true })
+    } else if (entry.isDirectory()) {
       walk(root, full, out)
     } else if (entry.isFile()) {
-      out.push(relative(root, full))
+      out.push({ path: relative(root, full), symlink: false })
     }
   }
 }
@@ -86,11 +107,21 @@ export function scanPackagedBundle(
   bundlePath: string,
   sidecarBinary = 'cat-code-sidecar',
 ): BundleScanFinding[] {
-  const files: string[] = []
-  walk(bundlePath, bundlePath, files)
+  const entries: WalkEntry[] = []
+  walk(bundlePath, bundlePath, entries)
 
   const findings: BundleScanFinding[] = []
-  for (const relPath of files) {
+  for (const entry of entries) {
+    const relPath = entry.path
+    if (entry.symlink) {
+      if (!ALLOWED_SYMLINK_PREFIXES.some(prefix => relPath.startsWith(prefix))) {
+        findings.push({ path: relPath, reason: 'symbolic link' })
+      }
+      // Never read through it: the target may sit outside the bundle entirely,
+      // and reporting the link is already the finding.
+      continue
+    }
+
     for (const rule of DENIED_PATHS) {
       if (rule.test(relPath)) findings.push({ path: relPath, reason: rule.reason })
     }

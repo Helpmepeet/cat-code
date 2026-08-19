@@ -21,16 +21,31 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { resolveSidecarLaunch } from '../main/mainDecisions.js'
+
 const here = dirname(fileURLToPath(import.meta.url))
 const appRoot = join(here, '..')
 const bundle = join(appRoot, 'dist-app', 'Cat Code.app')
-const executable = join(bundle, 'Contents', 'MacOS', 'Cat Code')
-const sidecar = join(bundle, 'Contents', 'Resources', 'sidecar', 'cat-code-sidecar')
+const contents = join(bundle, 'Contents')
+const executable = join(contents, 'MacOS', 'Cat Code')
+
+/**
+ * Resolved through the SAME function the packaged app uses, never a literal
+ * path. A hardcoded path here would let a wrong `PACKAGED_SIDECAR_BINARY`, a
+ * wrong resources derivation, or mode-token drift between `SIDECAR_MODE_ENTRIES`
+ * and `packagedEntry.ts` pass every assertion below.
+ */
+const launchPlan = resolveSidecarLaunch({
+  packaged: true,
+  mainDir: join(contents, 'Resources', 'app', 'main'),
+  resourcesPath: join(contents, 'Resources'),
+})
+const sidecar = launchPlan.command
 
 /**
  * A PATH with no `bun` on it. `bun` lives in `~/.bun/bin` here, so the system
@@ -56,16 +71,30 @@ if (!existsSync(bundle)) {
   process.exit(3)
 }
 
-// Scratch homes so nothing here can reach the operator's ~/.cat-code.
-const configHome = mkdtempSync(join(tmpdir(), 'catcode-packaged-config-'))
-const workDir = mkdtempSync(join(tmpdir(), 'catcode-packaged-cwd-'))
+/**
+ * Scratch homes so nothing here can reach the operator's ~/.cat-code. Removed on
+ * exit rather than at the end of the happy path: a throw anywhere below (a
+ * missing executable, a spawn failure) would otherwise leave them behind.
+ */
+const scratchDirs: string[] = []
+function scratch(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix))
+  scratchDirs.push(dir)
+  return dir
+}
+process.on('exit', () => {
+  for (const dir of scratchDirs) rmSync(dir, { recursive: true, force: true })
+})
+
+const configHome = scratch('catcode-packaged-config-')
+const workDir = scratch('catcode-packaged-cwd-')
 
 console.log('A. compiled sidecar, no bun on PATH, outside the checkout')
 
 // A1 — the engine graph really is inside the binary. Without socket env the
 // sidecar hits its own startup guard, and the stack frame names the embedded
 // filesystem rather than a .ts file in the repository.
-const guard = spawnSync(sidecar, ['session'], {
+const guard = spawnSync(sidecar, launchPlan.argsFor('session'), {
   encoding: 'utf8',
   cwd: workDir,
   env: { PATH: NO_BUN_PATH, HOME: configHome },
@@ -100,8 +129,8 @@ assert(
 // A3 — a mode that does real engine work, end to end. debug-cleanup imports the
 // engine's cleanup path and writes its marker, so a pass here means the bundled
 // engine graph EXECUTES, not merely that an argument guard fired.
-const markerDir = mkdtempSync(join(tmpdir(), 'catcode-packaged-marker-'))
-const cleanup = spawnSync(sidecar, ['debug-cleanup'], {
+const markerDir = scratch('catcode-packaged-marker-')
+const cleanup = spawnSync(sidecar, launchPlan.argsFor('debug-cleanup'), {
   encoding: 'utf8',
   cwd: workDir,
   env: {
@@ -123,8 +152,8 @@ assert(
 // packaged entry keeps that working only because its dispatch imports lazily. A
 // static dispatch would load the live-session machinery first and this emits
 // nothing.
-const catalogHome = mkdtempSync(join(tmpdir(), 'catcode-packaged-catalog-'))
-const catalog = spawnSync(sidecar, ['catalog', '--bare'], {
+const catalogHome = scratch('catcode-packaged-catalog-')
+const catalog = spawnSync(sidecar, launchPlan.argsFor('catalog', ['--bare']), {
   encoding: 'utf8',
   cwd: workDir,
   env: { PATH: NO_BUN_PATH, HOME: catalogHome, CLAUDE_CONFIG_DIR: catalogHome },
@@ -135,7 +164,6 @@ assert(
   'catalog mode enumerates and emits its record',
   `${catalog.stdout ?? ''}${catalog.stderr ?? ''}`.slice(0, 400),
 )
-rmSync(catalogHome, { recursive: true, force: true })
 
 console.log('B. packaged application launch')
 
@@ -167,61 +195,128 @@ console.log(`  (launched pid ${app.pid})`)
  * The marker can land on either stream, so completion is signalled once and
  * shared rather than awaited per-stream: waiting for BOTH readers would always
  * burn the full deadline, since the quiet stream never sees the marker.
+ *
+ * Output accumulates into `launchLog` and the readers keep running after the
+ * marker resolves this promise. A snapshot returned here instead would miss
+ * everything the app prints afterwards, which is exactly where a worker spawn
+ * failure lands.
  */
-function collect(deadlineMs: number): Promise<string> {
-  let text = ''
+let launchLog = ''
+function collect(deadlineMs: number): Promise<void> {
   const decoder = new TextDecoder()
-  return new Promise<string>(resolve => {
-    const timer = setTimeout(() => resolve(text), deadlineMs)
+  return new Promise<void>(resolve => {
+    const timer = setTimeout(resolve, deadlineMs)
     const done = (): void => {
       clearTimeout(timer)
-      resolve(text)
+      resolve()
     }
     for (const stream of [app.stdout, app.stderr]) {
       void (async () => {
         for await (const chunk of stream as ReadableStream<Uint8Array>) {
-          text += decoder.decode(chunk, { stream: true })
-          if (text.includes('[main] renderer ready')) return done()
+          launchLog += decoder.decode(chunk, { stream: true })
+          if (launchLog.includes('[main] renderer ready')) done()
         }
       })()
     }
   })
 }
 
-const launchText = await collect(60_000)
+await collect(60_000)
+
+/**
+ * Wait for the app to spawn a sidecar ITSELF. Main arms the catalog and
+ * accounts-pool drivers just after first paint, and both go through
+ * `sidecarLaunch()` — so their worker-lifecycle records are the only evidence in
+ * this file that the packaged app resolved and executed the in-bundle binary.
+ * Everything in part A spawns the binary from the test, which proves the binary
+ * and nothing about the app.
+ *
+ * The records land in main's own operational log under the scratch config home,
+ * so this reads the app's durable account of what it did rather than a string it
+ * happened to print.
+ */
+const logsDir = join(configHome, 'desktop', 'logs')
+function workerRecords(): Array<Record<string, unknown>> {
+  if (!existsSync(logsDir)) return []
+  return readdirSync(logsDir)
+    .filter(name => name.endsWith('.jsonl'))
+    .flatMap(name =>
+      readFileSync(join(logsDir, name), 'utf8')
+        .split('\n')
+        .filter(Boolean)
+        .flatMap(line => {
+          try {
+            return [JSON.parse(line) as Record<string, unknown>]
+          } catch {
+            return []
+          }
+        }),
+    )
+    .filter(record => record.process === 'worker')
+}
+
+const workerDeadline = Date.now() + 45_000
+let workers = workerRecords()
+while (Date.now() < workerDeadline && !workers.some(r => r.event === 'process.exited')) {
+  await Bun.sleep(500)
+  workers = workerRecords()
+}
+
 // Own the process by the exact pid recorded above; never sweep.
 app.kill()
-await app.exited
+// Bounded: a main that ignores SIGTERM must not hang the battery forever.
+await Promise.race([app.exited, Bun.sleep(15_000)])
 
 // B1 — the renderer actually loaded and attached its bridge. Main prints this
 // only after the window and the renderer bridge are up.
 assert(
-  launchText.includes('[main] renderer ready'),
+  launchLog.includes('[main] renderer ready'),
   'packaged app launched and its renderer attached',
-  launchText.slice(-1200),
+  launchLog.slice(-1200),
 )
 
 // B2 — production main's own words: the packaged branch ran and the renderer
 // came from disk, while a development renderer URL was set in the environment.
 // This is the assertion that fails if packaging silently falls back to dev.
 assert(
-  launchText.includes('app.isPackaged is true, so the packaged renderer is being loaded from disk'),
+  launchLog.includes('app.isPackaged is true, so the packaged renderer is being loaded from disk'),
   'packaged branch taken with a development renderer URL present',
-  launchText.slice(-1200),
+  launchLog.slice(-1200),
 )
 
 // B3 — the development-only diagnostics line must be absent. Main writes it
 // under IS_DEV, so its presence would mean the executable name trick failed
 // and this whole run proved nothing.
 assert(
-  !launchText.includes('[main] desktop diagnostics:'),
+  !launchLog.includes('[main] desktop diagnostics:'),
   'no development-only startup output',
-  launchText.slice(-600),
+  launchLog.slice(-600),
 )
 
-rmSync(configHome, { recursive: true, force: true })
-rmSync(workDir, { recursive: true, force: true })
-rmSync(markerDir, { recursive: true, force: true })
+// B4 — the assertion that makes this a packaged proof for the SIDECAR half. A
+// started/exited pair means the app resolved the in-bundle binary, spawned it,
+// and it ran to a clean exit. A resolver regression that pointed back at the
+// checkout, or at a path that does not exist, cannot produce these.
+// A `process.started` record alone proves nothing: main writes it when it asks
+// to spawn, and an ENOENT for a wrong path arrives asynchronously afterwards.
+// The clean EXIT is the load-bearing half.
+assert(
+  workers.some(
+    r =>
+      r.event === 'process.exited' &&
+      (r.fields as { expected?: boolean } | undefined)?.expected === true,
+  ),
+  'the packaged app spawned an in-bundle sidecar worker itself and it exited cleanly',
+  `worker records: ${JSON.stringify(workers).slice(0, 600)}`,
+)
+
+// B5 — the same fact from the failure side. These lines are what a wrong
+// packaged sidecar path actually produces; main writes them unconditionally.
+assert(
+  !/\[(catalog|accounts)-runner\] refresh failed/.test(launchLog),
+  'no worker spawn failure on the packaged path',
+  launchLog.slice(-800),
+)
 
 if (failed > 0) {
   process.stderr.write(`\n[packaged-launch-smoke] ${failed} assertion(s) failed\n`)
@@ -233,14 +328,17 @@ console.log(`
 
 Operator steps for the live acceptance this cannot cover:
 
-  1. Move the checkout aside so nothing can fall back to it:
-       cd /Users/pt && mv cat-code cat-code.moved
-  2. Open ~/cat-code.moved/app/dist-app/Cat Code.app from Finder (double-click).
+  1. Copy the app somewhere with no checkout above it. This removes the
+     repository from the app's ancestry entirely, which proves more than
+     renaming the checkout would, and it leaves the shared working tree alone
+     for the other sessions using it:
+       cp -R "app/dist-app/Cat Code.app" /tmp/
+  2. Open /tmp/Cat Code.app from Finder (double-click).
   3. Create a session in one project, then a second session in a different
      project. Run a tool in each, approve one permission prompt, and switch
      between the two sessions.
   4. Close the window, reopen the app, and confirm the sessions behave as
      die-with-window v1 specifies.
-  5. Quit, then restore the checkout:
-       cd /Users/pt && mv cat-code.moved cat-code
+  5. Quit, then remove the copy:
+       rm -rf "/tmp/Cat Code.app"
 `)

@@ -117,7 +117,10 @@ function buildSidecar(): void {
   mkdirSync(join(RESOURCES, 'sidecar'), { recursive: true })
   const outfile = join(RESOURCES, 'sidecar', PACKAGED_SIDECAR_BINARY)
   // Features are baked in from the SAME list the development spawn passes as
-  // Bun runtime flags, so the packaged engine is the engine that was tested.
+  // Bun runtime flags for the SESSION sidecar, so the packaged engine is the
+  // engine that was tested. One binary serves all five modes, so the three
+  // disposable workers get those features here even though development starts
+  // them without: see the divergence note on `SIDECAR_MODE_ENTRIES`.
   const features = SIDECAR_RUNTIME_ARGS.filter(arg => arg.startsWith('--feature='))
   const cmd = [
     'bun',

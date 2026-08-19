@@ -32,7 +32,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { defaultRegistryDir, REGISTRY_VERSION } from '../host/registry.js'
 
-/** Default cmdline marker: the dev sidecar entry. Override for packaged builds. */
+/**
+ * Default cmdline marker: the dev sidecar entry.
+ *
+ * For a packaged build the equivalent is the session mode's launch string,
+ * `<bundle>/Contents/Resources/sidecar/cat-code-sidecar session` — the same
+ * value `resolveSidecarLaunch` hands the registry as its identity marker. Pass
+ * it explicitly; the mode token is load-bearing, because without it the marker
+ * also matches the disposable workers.
+ */
 const DEFAULT_MARKER = 'app/sidecar/index.ts'
 
 export type OrphanProc = {
