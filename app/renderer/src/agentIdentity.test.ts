@@ -460,42 +460,55 @@ test('declares prototype-only fields that must not become vocabulary inputs', ()
 /* ── the face's state half (2026-08-19 subagent card) ─────────────────────── */
 
 test('colour and expression are the state, and the pulse is only ever a running one', () => {
-  expect(agentFaceExpression('running', { hasName: true, isLaunchRecord: false })).toEqual({
+  expect(agentFaceExpression('running', { isLaunchRecord: false })).toEqual({
     eyes: 'open',
     tone: 'info',
     pulse: true,
   })
-  expect(agentFaceExpression('completed', { hasName: true, isLaunchRecord: false })).toEqual({
+  expect(agentFaceExpression('completed', { isLaunchRecord: false })).toEqual({
     eyes: 'shut',
     tone: 'success',
     pulse: false,
   })
   // Failed and Stopped are told by colour alone — no sad face, no wince.
-  expect(agentFaceExpression('failed', { hasName: true, isLaunchRecord: false })).toEqual({
+  expect(agentFaceExpression('failed', { isLaunchRecord: false })).toEqual({
     eyes: 'open',
     tone: 'danger',
     pulse: false,
   })
-  expect(agentFaceExpression('stopped', { hasName: true, isLaunchRecord: false })).toEqual({
+  expect(agentFaceExpression('stopped', { isLaunchRecord: false })).toEqual({
     eyes: 'open',
     tone: 'warning',
     pulse: false,
   })
 })
 
-test('a worker with no name yet is featureless, whatever state it is in', () => {
-  for (const state of ['running', 'completed', 'failed', 'stopped'] as const) {
-    expect(
-      agentFaceExpression(state, { hasName: false, isLaunchRecord: false }).eyes,
-    ).toBe('closed')
-  }
+test('eyes are state only — a nameless worker is featureless in its AXES, not shut', () => {
+  // "Featureless" is `axesForName(null)`: no mouth, no marking, nothing to
+  // individuate. Its EYES still follow the state, because otherwise "nobody has
+  // told us who this is yet" and "this one is facing away" draw the same
+  // picture. The design source draws the nameless running card wide awake.
+  expect(agentFaceExpression('running', { isLaunchRecord: false }).eyes).toBe('open')
+  expect(agentFaceExpression('completed', { isLaunchRecord: false }).eyes).toBe('shut')
+  expect(agentFaceExpression('background', { isLaunchRecord: false }).eyes).toBe('closed')
+})
+
+test('a background launch that ERRORED reads as the failure it is, not as backgrounded', () => {
+  // `deriveAgentToolState` returns `failed` for a launch whose tool_result came
+  // back an error. Colouring it teal put "went to the background" on the face
+  // beside line 2's "Failed".
+  expect(agentFaceExpression('failed', { isLaunchRecord: true })).toEqual({
+    eyes: 'open',
+    tone: 'danger',
+    pulse: false,
+  })
 })
 
 test('a backgrounded worker faces away, and a launch RECORD is teal rather than blue', () => {
   // Both say "backgrounded" on the card, so the colour is what separates "this
   // is all we were ever told" from "this one is genuinely under way".
-  const launch = agentFaceExpression('background', { hasName: true, isLaunchRecord: true })
-  const resumed = agentFaceExpression('background', { hasName: true, isLaunchRecord: false })
+  const launch = agentFaceExpression('background', { isLaunchRecord: true })
+  const resumed = agentFaceExpression('background', { isLaunchRecord: false })
   expect(launch).toEqual({ eyes: 'closed', tone: 'launch', pulse: false })
   expect(resumed).toEqual({ eyes: 'closed', tone: 'info', pulse: false })
 })

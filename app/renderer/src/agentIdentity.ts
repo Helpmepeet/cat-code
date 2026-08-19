@@ -326,28 +326,39 @@ export function agentTranscriptStateWord(state: AgentStateKey): string {
  * record rather than a run, and it wears the teal launch tone instead of the
  * blue a resumed worker running in the background wears.
  *
- * Eyes, in the order the rules apply:
- *  - no name yet -> `closed`, the featureless base. There is nothing to
- *    individuate, and drawing a face on an unidentified worker claims otherwise.
- *  - backgrounded -> `closed` as well: facing away, because this card will never
- *    learn the outcome (it arrives lower down as its own finish row).
+ * Eyes are STATE ONLY, which is why `hasName` does not reach them. A worker with
+ * no name yet is drawn featureless because its AXES are the featureless base
+ * (`agentFace.ts` `axesForName(null)`), not because its eyes are shut — the
+ * design source draws that card wide awake, and it has to, or "nobody has told
+ * us who this is yet" and "this one is facing away" become the same picture.
+ *
+ *  - backgrounded -> `closed`: facing away, because this card will never learn
+ *    the outcome (it arrives lower down as its own finish row).
  *  - completed -> `shut`, the only settled state that gets an expression.
  *  - everything else -> `open`. Failed and Stopped are told by colour alone, and
  *    line 2 carries their word.
+ *
+ * `isLaunchRecord` only colours a launch that is still ONLY a launch. A
+ * background launch whose `tool_result` came back an error is a failure, and it
+ * has to read as one: teal there would have the card saying "went to the
+ * background" beside line 2's "Failed".
  */
 export function agentFaceExpression(
   state: AgentStateKey,
-  options: { hasName: boolean; isLaunchRecord: boolean },
+  options: { isLaunchRecord: boolean },
 ): { eyes: FaceEyes; tone: AgentFaceTone; pulse: boolean } {
-  const backgrounded = options.isLaunchRecord || state === 'background'
-  const eyes: FaceEyes = !options.hasName || backgrounded
+  const backgrounded = state === 'background'
+  const eyes: FaceEyes = backgrounded
     ? 'closed'
     : state === 'completed'
       ? 'shut'
       : 'open'
   return {
     eyes,
-    tone: options.isLaunchRecord ? 'launch' : agentStateMeta(state).tone,
+    tone:
+      options.isLaunchRecord && backgrounded
+        ? 'launch'
+        : agentStateMeta(state).tone,
     // The card's ONLY animation, and only a genuinely live worker gets it. A
     // settled card is completely still, and so is a launch record: it is not
     // reporting a run, it is reporting that a run began.

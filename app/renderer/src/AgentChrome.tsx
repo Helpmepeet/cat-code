@@ -46,10 +46,12 @@ const PIP_SIZE_CLASS: Record<PipSize, string> = {
  * nothing depends on a sub-pixel stroke: the rects must land on device pixels at
  * 17px as squarely as at 19px.
  *
- * ARIA: the face is decorative in every place it appears. On a card the name and
- * the state word next to it already say who and what; on a finish row the
- * engine's own sentence does. A label here would make a screen reader announce
- * the same fact twice.
+ * ARIA: `label` is what the face is the ONLY carrier of. Colour and expression
+ * are the whole of a card's lifecycle now, so a reader who cannot see either is
+ * left with a name and a task and no idea whether the worker is still going —
+ * pass the state there. Leave it null wherever the state is already in text
+ * beside the stamp (line 2's Failed/Stopped word, the engine's own sentence on a
+ * finish row, the group header's own tail), or it gets announced twice.
  */
 export function AgentFace({
   axes,
@@ -57,12 +59,15 @@ export function AgentFace({
   tone,
   pulse = false,
   size = 19,
+  label = null,
 }: {
   axes: FaceAxes
   eyes: FaceEyes
   tone: AgentFaceTone
   pulse?: boolean
+  /** 19 in a card, 17 in a finish row or a group header. */
   size?: 19 | 17
+  label?: string | null
 }) {
   return (
     <svg
@@ -71,7 +76,7 @@ export function AgentFace({
       viewBox="0 0 9 9"
       shapeRendering="crispEdges"
       className={`shrink-0 ${AGENT_FACE_FILL_CLASS[tone]}${pulse ? ' animate-face-pulse' : ''}`}
-      aria-hidden
+      {...(label === null ? { 'aria-hidden': true } : { role: 'img', 'aria-label': label })}
     >
       {faceRects(axes, eyes).map(rect => (
         <rect

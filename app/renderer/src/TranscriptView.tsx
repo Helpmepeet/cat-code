@@ -103,6 +103,7 @@ import {
   createAgentFaceRegistry,
   useAgentFaceRegistry,
   AgentFaceRegistryContext,
+  type AgentFaceRegistry,
   type FaceAxes,
   type FaceEyes,
 } from './agentFace.js'
@@ -310,12 +311,22 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   // the rows' own session rather than a prop: `selectNestedTranscriptRows`
   // already filtered to one session, and a registry that outlived a session
   // switch would carry the previous transcript's names into the next one.
+  //
+  // A ref for the same reason `expansionStore` above is one, and a stronger one:
+  // this store's whole job is to hand out an answer that never changes, and
+  // `useMemo` is documented as a cache React may discard. Re-keyed only on a
+  // real session change — `rows` empties transiently during a restore, and
+  // rebuilding on `null` would re-roll every collided worker's silhouette for
+  // no reason.
   const faceSessionId = rows.length === 0 ? null : rows[0].sessionId
-  const faceRegistry = useMemo(
-    () => createAgentFaceRegistry(),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- the session IS the key
-    [faceSessionId],
-  )
+  const faceRef = useRef<{ session: SessionId | null; registry: AgentFaceRegistry } | null>(null)
+  if (
+    faceRef.current === null ||
+    (faceSessionId !== null && faceRef.current.session !== faceSessionId)
+  ) {
+    faceRef.current = { session: faceSessionId, registry: createAgentFaceRegistry() }
+  }
+  const faceRegistry = faceRef.current.registry
   // Re-derive from the LIVE rows so a late tool_result updates the drawer and a
   // vanished row closes it, instead of pinning the open-time snapshot (F1).
   const inspected = inspectedId === null ? null : findNestedToolUseRow(rows, inspectedId)
@@ -2223,10 +2234,11 @@ function agentProgressBadge(
   // all-or-nothing narrowing as a valid number. Printing it renders "we never
   // got usage" as the claim "0 tokens", beside a worker that made 55 tool calls.
   //
-  // A FAILED worker drops the figure whatever its value: the run did not finish,
-  // so its totals are a partial tally, and printing them next to a red face
+  // A worker that did not FINISH drops the figure whatever its value: its
+  // totals are a partial tally, and printing them beside a red or amber face
   // invites the reader to compare a broken run's cost against a whole one's.
-  if (state !== 'failed' && settledUsage && settledUsage.totalTokens > 0) {
+  const settledWhole = state !== 'failed' && state !== 'stopped'
+  if (settledWhole && settledUsage && settledUsage.totalTokens > 0) {
     parts.push(`${compactCount(settledUsage.totalTokens)} tokens`)
   }
   return parts.length === 0 ? null : parts.join(' · ')
@@ -2309,6 +2321,7 @@ function AgentIdentityLine({
   typeWord,
   slot,
   slotLive,
+  stateLabel,
 }: {
   axes: FaceAxes
   eyes: FaceEyes
@@ -2319,10 +2332,13 @@ function AgentIdentityLine({
   typeWord: string | null
   slot: string | null
   slotLive: boolean
+  stateLabel: string | null
 }) {
+  // `span`, not `div`: on a card with a body the whole two-line block IS the
+  // collapse button, and only phrasing content may live inside a `button`.
   return (
-    <div className="flex items-center gap-[9px] px-3 py-[7px]">
-      <AgentFace axes={axes} eyes={eyes} tone={tone} pulse={pulse} />
+    <span className="flex items-center gap-[9px] px-3 py-[7px]">
+      <AgentFace axes={axes} eyes={eyes} tone={tone} pulse={pulse} label={stateLabel} />
       <span className="inline-flex min-w-0 items-baseline gap-1.5">
         {/* The name is absent until the worker's first nested frame lands, and
             on old or failed records it never arrives — so the slot has to stand
@@ -2351,7 +2367,7 @@ function AgentIdentityLine({
           {slot}
         </span>
       )}
-    </div>
+    </span>
   )
 }
 
@@ -2380,7 +2396,7 @@ function AgentTaskLine({
   model: string | null
 }) {
   return (
-    <div className="flex items-center gap-2.5 border-t border-shell-seam px-3 py-[7px]">
+    <span className="flex items-center gap-2.5 border-t border-shell-seam px-3 py-[7px]">
       {stateWord === null ? null : (
         <span
           className={`shrink-0 whitespace-nowrap text-[11px] font-medium ${stateToneClass}`}
@@ -2396,7 +2412,7 @@ function AgentTaskLine({
           {model}
         </span>
       )}
-    </div>
+    </span>
   )
 }
 
@@ -2410,8 +2426,17 @@ function AgentTaskLine({
  * result, because an ack that carries more than a message would otherwise lose
  * everything else it said.
  */
-function RejectedResumeCard({ row, ack }: { row: ToolUseNestedRow; ack: ToolAck }) {
-  const [expanded, setExpanded] = useToolCardExpanded(row.toolUseId, false)
+function RejectedResumeCard({
+  row,
+  ack,
+  expanded,
+  setExpanded,
+}: {
+  row: ToolUseNestedRow
+  ack: ToolAck
+  expanded: boolean
+  setExpanded: (next: boolean) => void
+}) {
   return (
     <div className="w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.025] font-sans">
       <button
@@ -2495,26 +2520,40 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
         ) : null}
       </div>
     )
-  // A resumed run opens when its completion supplies the answer; ordinary
-  // foreground and launch-record cards keep the C4 collapsed default.
+  // A resumed run opens when its completion supplies the answer, and an errored
+  // row still opens itself; ordinary foreground and launch-record cards keep the
+  // C4 collapsed default. ONE subscription for both card shapes — the rejected
+  // resume below is handed this pair rather than claiming the same key twice.
   const [expanded, setExpanded] = useToolCardExpanded(
     row.toolUseId,
-    completion !== null,
+    completion !== null || row.status === 'error',
   )
 
   if (resumeAck && !resumeAck.ok) {
-    return <RejectedResumeCard row={row} ack={resumeAck} />
+    return (
+      <RejectedResumeCard
+        row={row}
+        ack={resumeAck}
+        expanded={expanded}
+        setExpanded={setExpanded}
+      />
+    )
   }
 
   const state = vocab.state.key
-  const face = agentFaceExpression(state, {
-    hasName: vocab.identity.name !== null,
-    isLaunchRecord,
-  })
+  const face = agentFaceExpression(state, { isLaunchRecord })
   const nameToneClass = (
     vocab.type ? AGENT_TYPE_TONE_CLASS[vocab.type.tone] : AGENT_TYPE_TONE_CLASS.neutral
   ).text
-  const slot = isLaunchRecord ? 'backgrounded' : agentProgressBadge(row, state)
+  // NOT gated on `isLaunchRecord`: `agentProgressBadge` already answers
+  // "backgrounded" for `state === 'background'`, and overriding on the record
+  // shape instead of the state made a launch whose `tool_result` errored say
+  // "backgrounded" beside line 2's "Failed".
+  const slot = agentProgressBadge(row, state)
+  // The two states that need to stop a reader mid-scan keep their word; every
+  // other state is told by the face's colour alone.
+  const stateWord =
+    state === 'failed' || state === 'stopped' ? vocab.state.label : null
   const lines = (
     <>
       <AgentIdentityLine
@@ -2529,13 +2568,10 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
         }
         slot={slot}
         slotLive={!isLaunchRecord && (state === 'running' || state === 'background')}
+        stateLabel={stateWord === null ? vocab.state.label : null}
       />
       <AgentTaskLine
-        // The two states that need to stop a reader mid-scan keep their word;
-        // every other state is told by the face's colour alone.
-        stateWord={
-          state === 'failed' || state === 'stopped' ? vocab.state.label : null
-        }
+        stateWord={stateWord}
         stateToneClass={AGENT_STATE_TONE_CLASS[vocab.state.tone].text}
         task={deriveTarget(row)}
         model={agentModelLabel(row)}
@@ -2616,7 +2652,6 @@ function DelegateGroup({ members }: { members: NestedToolUseRow[] }) {
           {members.slice(0, MAX_STACKED_GROUP_FACES).map((member, index) => {
             const vocab = vocabs[index]
             const memberFace = agentFaceExpression(vocab.state.key, {
-              hasName: vocab.identity.name !== null,
               isLaunchRecord:
                 (member.toolName === 'Agent' || member.toolName === 'Task') &&
                 member.input.run_in_background === true,
@@ -4063,7 +4098,14 @@ function agentCompletionState(status: string | null): AgentStateKey {
  * honest stamp for a finish we cannot attribute to anyone.
  */
 function agentNameInSummary(summary: string): string | null {
-  const match = /^Agent @(\S+)/.exec(summary)
+  // Anchored on the three whole sentences the engine mints, because a worker
+  // name may contain SPACES: `normalizeExplicitSubagentName`
+  // (`src/tools/AgentTool/AgentTool.tsx:282`) rejects only `@`, `:` and `*`. A
+  // `\\S+` capture read "Ada Lovelace" as "Ada" and handed the finish row a
+  // different face from the card's, breaking the one invariant the stamp has.
+  // Anything else returns null and keeps the featureless face, which is the
+  // honest stamp for a finish we cannot attribute.
+  const match = /^Agent @(.+?)(?: completed| failed:| was stopped)$/.exec(summary)
   return match === null ? null : match[1]
 }
 
@@ -4095,7 +4137,6 @@ function TaskNotificationBox({
   if (summary === null) return null
   const name = agentNameInSummary(summary)
   const face = agentFaceExpression(agentCompletionState(status), {
-    hasName: name !== null,
     isLaunchRecord: false,
   })
   const handle = name === null ? null : `@${name}`

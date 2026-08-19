@@ -219,13 +219,27 @@ function drawFace(axes: FaceAxes, eyes: FaceEyes, level: number): boolean[][] {
     set(R, 7)
   }
 
+  // The ladder, ported as the design source wrote it: level 2 drops the mouth
+  // AND softens a deep ear fill in the same step, rather than as the two
+  // separate steps the spec prose describes. Kept as-is — it only decides which
+  // feature survives on the ~64 combinations that need a fallback at all, and
+  // the source is the artifact the faces were judged against.
   const fill: FaceFill =
     level >= 3 ? 'solid' : level === 2 && axes.fill === 'deep' ? 'notch' : axes.fill
-  // Mouth and chin-dot both live in row 6, so a face gets one or the other. The
-  // ladder drops the mouth one step before it drops the markings, which is the
-  // order that keeps the two off each other.
   const mouth: FaceMouth = level >= 2 ? 'none' : axes.mouth
-  const mark: FaceMark = level >= 1 ? 'none' : axes.mark
+  // EXCLUSION: mouth and chin-dot both carve row 6, so a face gets one or the
+  // other, never both. Without this, `chindot` + `omega` clears exactly the
+  // three cells `slit` does and the two faces become the same drawing — 360 of
+  // the 2,400 combinations pair them. The mouth wins because markings are the
+  // weaker axis: the ladder above drops them first.
+  //
+  // The design source does NOT enforce this (its own prose says to, its JS does
+  // not); enforcing it is deliberate, on the same reasoning as the shared
+  // fallback level below. It costs distinct stamps — 975 rather than 1,101 of
+  // the 2,400 combinations draw uniquely — which is still ~30x any plausible
+  // session, and buys a face that never mimics a mouth shape it does not have.
+  const mark: FaceMark =
+    level >= 1 || (axes.mark === 'chindot' && mouth !== 'none') ? 'none' : axes.mark
 
   if (fill !== 'solid') {
     // Ear-tip columns are the filled columns of the TOPMOST filled row, so the
@@ -356,13 +370,26 @@ export function faceRects(axes: FaceAxes, eyes: FaceEyes): FaceRect[] {
   return gridToRects(drawFace(axes, eyes, fallbackLevelFor(axes)))
 }
 
+const silhouetteByAxes = new Map<string, string>()
+
 /**
  * Silhouette identity: the drawn mass with EYES EXCLUDED, which is what dedupe
  * compares. Eyes are state, so two workers whose stamps differ only by an eye
  * row are the same face as far as a reader is concerned.
+ *
+ * Memoised on the same bound as `levelByAxes` (the axis product), because the
+ * dedupe sweep below asks for up to 2,400 of these in one call and each one is a
+ * fresh draw plus a stringify. Without it a session past the distinct-silhouette
+ * supply pays that sweep, in the render phase, for every worker after the first
+ * collision.
  */
 function silhouetteKey(axes: FaceAxes): string {
-  return JSON.stringify(faceRects(axes, 'closed'))
+  const key = axesKey(axes)
+  const cached = silhouetteByAxes.get(key)
+  if (cached !== undefined) return cached
+  const drawn = JSON.stringify(faceRects(axes, 'closed'))
+  silhouetteByAxes.set(key, drawn)
+  return drawn
 }
 
 /**
@@ -468,6 +495,7 @@ export type AgentFaceRegistry = {
 export function createAgentFaceRegistry(): AgentFaceRegistry {
   const assigned = new Map<string, FaceAxes>()
   const taken = new Set<string>([silhouetteKey(FEATURELESS_AXES)])
+  let exhausted = false
 
   return {
     axesFor(name) {
@@ -493,9 +521,13 @@ export function createAgentFaceRegistry(): AgentFaceRegistry {
       // axis product, so a silhouette is shared only when the space is genuinely
       // exhausted. It runs at most once per colliding name and never in the
       // ordinary case.
-      if (taken.has(silhouetteKey(axes))) {
+      if (!exhausted && taken.has(silhouetteKey(axes))) {
         const unique = firstFreeAxes(taken)
-        if (unique !== null) axes = unique
+        // `taken` only ever grows, so once the sweep comes back empty it can
+        // never succeed again. Latch it rather than re-running a full scan of
+        // the axis space for every remaining worker in the session.
+        if (unique === null) exhausted = true
+        else axes = unique
       }
       taken.add(silhouetteKey(axes))
       assigned.set(name, axes)

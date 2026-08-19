@@ -564,7 +564,11 @@ test('a resumed agent is an independent agent card named by the follow-up prompt
           message: `Resumed "@Ramanujan" ${RESUME_ACK}`,
         }),
         diff: null,
-        agentName: 'Ramanujan',
+        // NO `agentName`: ResumeAgentTool's structured result is `{success,
+        // message}` and nothing else (`src/tools/ResumeAgentTool/
+        // ResumeAgentTool.tsx:38-39,156-160`), and a backgrounded resume sends
+        // this card no nested frames to carry one either. A resume card is
+        // nameless on real data — see the flag test below.
       },
       agentCompletion: {
         status: 'completed',
@@ -577,7 +581,6 @@ test('a resumed agent is an independent agent card named by the follow-up prompt
 
   // Titled with the RESUME PROMPT, not the original task, and typed `resumed`.
   expect(html).toContain('measure the card height')
-  expect(html).toContain('Ramanujan')
   expect(html).toContain('resumed')
   expect(html).toContain('The card is 84 pixels high.')
   expect(html).toContain('~9.5k tokens')
@@ -587,7 +590,8 @@ test('a resumed agent is an independent agent card named by the follow-up prompt
   // Settled green face; the lifecycle WORD is gone from every state but the two
   // that need to stop a reader (Failed, Stopped).
   expect(html).toContain('fill-tone-good')
-  expect(html).not.toContain('Completed')
+  expect(html).not.toContain('>Completed<') // no visible word
+  expect(html).toContain('aria-label="Completed"') // the face is the only carrier
   // The ◇ mark went with the family word; only a REJECTED resume still carries
   // one, because it has no face to identify it.
   expect(html).not.toContain('◇')
@@ -869,7 +873,7 @@ test('P4-8c: an Agent card derives type/state/task from the row input + status (
   // a lifecycle word, and never the ◆ AGENT family header the redesign removed.
   expect(html).toContain('fill-tone-info')
   expect(html).toContain('animate-face-pulse')
-  expect(html).not.toContain('Running')
+  expect(html).not.toContain('>Running<') // no visible word
   expect(html).not.toContain('◆')
 })
 
@@ -879,7 +883,7 @@ test('P4-8c: a completed Agent card settles to a still green face, with no word'
   )
 
   expect(html).toContain('fill-tone-good') // deriveAgentToolState: success → completed
-  expect(html).not.toContain('Completed')
+  expect(html).not.toContain('>Completed<')
   // A settled card is completely still.
   expect(html).not.toContain('animate-face-pulse')
 })
@@ -946,8 +950,8 @@ test('a background agent card remains a launch record without completion output'
   expect(html).not.toContain('Sidebar lives in app/renderer/src/Sidebar.tsx')
   expect(html).not.toContain('~12.4k tokens')
   expect(html).not.toContain('Agent @Ada completed')
-  expect(html).not.toContain('In background')
-  expect(html).not.toContain('Completed')
+  expect(html).not.toContain('>In background<')
+  expect(html).not.toContain('>Completed<')
 })
 
 test('a foreground agent card grows no result section, and offers no way to open one', () => {
@@ -981,8 +985,8 @@ test('a backgrounded agent is a neutral past-tense launch record without a lifec
     ),
   )
   expect(html).toContain('backgrounded')
-  expect(html).not.toContain('In background')
-  expect(html).not.toContain('Completed')
+  expect(html).not.toContain('>In background<')
+  expect(html).not.toContain('>Completed<')
 })
 
 test('a backgrounded agent remains byte-stable in meaning if completion data is present', () => {
@@ -996,7 +1000,7 @@ test('a backgrounded agent remains byte-stable in meaning if completion data is 
     ),
   )
   expect(html).toContain('backgrounded')
-  expect(html).not.toContain('Completed')
+  expect(html).not.toContain('>Completed<')
   expect(html).not.toContain('Sidebar lives in app/renderer/src/Sidebar.tsx')
 })
 
@@ -1472,6 +1476,160 @@ test('two named workers on screen never share a silhouette', () => {
   const stamps = [...html.matchAll(/<svg[^>]*>(.*?)<\/svg>/g)].map(match => match[1])
   expect(stamps).toHaveLength(4)
   expect(new Set(stamps).size).toBe(2)
+})
+
+test('a resume card is nameless, because the engine never tells it a name', () => {
+  // §0 flag — 🔁 deferred(resume identity). The design shows a resumed worker
+  // wearing its own name in its own subagent-type colour. Neither fact reaches
+  // this card: `ResumeAgentTool`'s structured result is `{success, message}`
+  // (`src/tools/ResumeAgentTool/ResumeAgentTool.tsx:38-39`), a resume runs in
+  // the background so no nested frame carries `agent_name` here, and the input
+  // is an agentId plus a prompt with no `subagent_type`. Closing this needs a
+  // new field on the resume result, which is an engine/protocol change.
+  const html = render({
+    ...agentRow('anon-resume', { agentId: '@Ramanujan', prompt: 'carry on' }, 'success', [], {
+      status: 'completed',
+      summary: null,
+      result: 'done',
+      usage: null,
+    }, {
+      isError: false,
+      content: JSON.stringify({ success: true, message: 'Resumed "@Ramanujan".' }),
+      diff: null,
+    }),
+    toolName: 'ResumeAgent',
+  })
+
+  expect(html).toContain('AGENT')
+  expect(html).toContain('resumed')
+  expect(html).toContain('carry on')
+  expect(html).not.toContain('text-sky-300')
+})
+
+test('a background launch that errored reads as failed, not as backgrounded', () => {
+  // `deriveAgentToolState` gives a launch record with an errored tool_result the
+  // `failed` state. The card used to override the slot on the RECORD shape, so
+  // it said "backgrounded" in the slot, drew a teal face, and printed "Failed"
+  // on line 2 — three different claims about one worker.
+  const html = render(
+    agentRow(
+      'bgfail',
+      { subagent_type: 'Explore', description: 'audit', run_in_background: true },
+      'error',
+      [],
+      null,
+      { isError: true, content: 'boom', diff: null, agentUsage: { totalTokens: 900, toolUses: 2 } },
+    ),
+  )
+
+  expect(html).toContain('Failed')
+  expect(html).toContain('fill-tone-danger')
+  expect(html).not.toContain('fill-teal-300')
+  expect(html).not.toContain('backgrounded')
+  expect(html).toContain('2 tool calls')
+  expect(html).not.toContain('900 tokens')
+})
+
+test('a stopped worker shows tool calls and no token figure, like a failed one', () => {
+  const html = render(
+    {
+      ...agentRow('halted', { agentId: 'agent-1', prompt: 'keep going' }, 'success', [], {
+        status: 'killed',
+        summary: null,
+        result: null,
+        usage: null,
+      }, {
+        isError: false,
+        content: 'x',
+        diff: null,
+        agentUsage: { totalTokens: 4200, toolUses: 4 },
+      }),
+      toolName: 'ResumeAgent',
+    },
+  )
+
+  expect(html).toContain('Stopped')
+  expect(html).toContain('4 tool calls')
+  expect(html).not.toContain('4.2k tokens')
+})
+
+test('a nameless running worker is featureless but wide awake', () => {
+  // "Featureless" is the AXES — no mouth, no marking. Shutting its eyes as well
+  // would draw it exactly as a worker facing away in the background.
+  const live = render(
+    agentRow('anon', { subagent_type: 'Explore', description: 'x' }, 'pending'),
+  )
+  const away = render(
+    agentRow('away', { subagent_type: 'Explore', description: 'x', run_in_background: true }, 'success'),
+  )
+  const stamp = (html: string) => /<svg[^>]*>(.*?)<\/svg>/.exec(html)?.[1] ?? ''
+
+  expect(stamp(live).length).toBeGreaterThan(0)
+  expect(stamp(live)).not.toBe(stamp(away))
+})
+
+test('the card never puts a div inside its collapse button', () => {
+  // Only phrasing content may live in a `button`; React does not warn and
+  // browsers render it anyway, so nothing else would catch this.
+  const html = render(
+    agentRow('btn', { subagent_type: 'Explore', description: 'x' }, 'pending', [
+      toolRow({ toolName: 'Grep', toolFamily: 'grep', input: { pattern: 'x' }, status: 'pending' }),
+    ]),
+  )
+  const button = /<button[^>]*>([\s\S]*?)<\/button>/.exec(html)?.[1] ?? ''
+
+  expect(button.length).toBeGreaterThan(0)
+  expect(button).not.toContain('<div')
+})
+
+test('the finish row keeps a multi-word worker name whole', () => {
+  // Engine names may contain spaces (`normalizeExplicitSubagentName` rejects
+  // only @, : and *). A `\\S+` capture read "Ada Lovelace" as "Ada", which gave
+  // the finish row a different face from the worker's card and left a stray
+  // " Lovelace completed" in body text.
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[
+        {
+          ...blockSource,
+          id: 's:m:0:task-notification',
+          kind: 'task-notification',
+          status: 'completed',
+          summary: 'Agent @Ada Lovelace completed',
+          toolUseId: null,
+          isReplay: false,
+          children: [],
+        },
+      ]}
+    />,
+  )
+
+  expect(html).toContain('>@Ada Lovelace<')
+  expect(html).not.toContain('>@Ada<')
+})
+
+test('a finish row the engine worded differently still draws, with no face claimed', () => {
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[
+        {
+          ...blockSource,
+          id: 's:m:0:task-notification',
+          kind: 'task-notification',
+          status: 'completed',
+          // The engine's own no-name fallback shape.
+          summary: 'Agent "sweep the renderer" completed',
+          toolUseId: null,
+          isReplay: false,
+          children: [],
+        },
+      ]}
+    />,
+  )
+
+  expect(html).toContain('sweep the renderer')
+  expect(html).toContain('shape-rendering') // featureless stamp, still drawn
+  expect(html).not.toContain('font-mono text-[#e4e4e7]') // nothing claimed as a handle
 })
 
 test('P4-8c: the Agent card + DelegateGroup emit only static tone utilities (no interpolated/arbitrary classes)', () => {
