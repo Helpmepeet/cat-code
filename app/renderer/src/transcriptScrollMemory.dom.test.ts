@@ -24,6 +24,7 @@ import {
   captureTranscriptScrollAnchor,
   createTranscriptScrollCapturePump,
   restoreTranscriptScroll,
+  TRANSCRIPT_ROW_KEY_ATTRIBUTE,
   type TranscriptScrollAnchor,
   type TranscriptScrollFrames,
 } from './transcriptScrollMemory.js'
@@ -48,6 +49,14 @@ type FakePane = {
   setContentHeight: (height: number) => void
 }
 
+/**
+ * The identity `TranscriptView` publishes on each row wrapper. A pane built
+ * without an explicit list gets one key per row, in order.
+ */
+function defaultRowKeys(count: number): string[] {
+  return Array.from({ length: count }, (_, index) => `row-${index}`)
+}
+
 function stubRect(element: Element, top: () => number): void {
   Object.defineProperty(element, 'getBoundingClientRect', {
     configurable: true,
@@ -68,6 +77,7 @@ function createFakePane(input: {
   rowOffsets: readonly number[]
   viewportHeight: number
   contentHeight: number
+  rowKeys?: readonly string[]
 }): FakePane {
   const document = harness.document
   const scroller = document.createElement('div')
@@ -76,6 +86,7 @@ function createFakePane(input: {
   document.body.appendChild(scroller)
 
   let offsets = [...input.rowOffsets]
+  const rowKeys = [...(input.rowKeys ?? defaultRowKeys(input.rowOffsets.length))]
   let contentHeight = input.contentHeight
 
   stubRect(scroller, () => VIEWPORT_TOP)
@@ -97,7 +108,10 @@ function createFakePane(input: {
     }
     for (let index = 0; index < offsets.length; index += 1) {
       const row = column.children.item(index)
-      if (row) stubRect(row, () => VIEWPORT_TOP + offsets[index] - scroller.scrollTop)
+      if (!row) continue
+      const key = rowKeys[index]
+      if (key !== undefined) row.setAttribute(TRANSCRIPT_ROW_KEY_ATTRIBUTE, key)
+      stubRect(row, () => VIEWPORT_TOP + offsets[index] - scroller.scrollTop)
     }
   }
   syncRows()
@@ -114,8 +128,6 @@ function createFakePane(input: {
   }
 }
 
-const TOKEN = 'blocks:default:row-0'
-
 test('a scroller reports its rows in content coordinates', () => {
   const pane = createFakePane({
     rowOffsets: [0, 400, 900, 1_500],
@@ -125,11 +137,8 @@ test('a scroller reports its rows in content coordinates', () => {
   pane.scroller.scrollTop = 950
 
   expect(
-    captureTranscriptScrollAnchor(pane.scroller, {
-      atBottom: false,
-      rowsToken: TOKEN,
-    }),
-  ).toEqual({ kind: 'row', rowsToken: TOKEN, rowIndex: 2, offsetIntoRow: 50 })
+    captureTranscriptScrollAnchor(pane.scroller, { atBottom: false }),
+  ).toEqual({ kind: 'row', rowKey: 'row-2', offsetIntoRow: 50 })
 })
 
 test('a pane the reader left scrolled up comes back to the same row', () => {
@@ -141,7 +150,6 @@ test('a pane the reader left scrolled up comes back to the same row', () => {
   away.scroller.scrollTop = 950
   const anchor = captureTranscriptScrollAnchor(away.scroller, {
     atBottom: false,
-    rowsToken: TOKEN,
   })
   away.scroller.remove()
 
@@ -151,10 +159,7 @@ test('a pane the reader left scrolled up comes back to the same row', () => {
     viewportHeight: 600,
     contentHeight: 2_400,
   })
-  const restored = restoreTranscriptScroll(back.scroller, {
-    anchor,
-    rowsToken: TOKEN,
-  })
+  const restored = restoreTranscriptScroll(back.scroller, { anchor })
 
   expect(restored).toEqual({ kind: 'offset', scrollTop: 950 })
   expect(back.scroller.scrollTop).toBe(950)
@@ -169,7 +174,6 @@ test('rows that measured taller in between still put the same row under the top'
   away.scroller.scrollTop = 950
   const anchor = captureTranscriptScrollAnchor(away.scroller, {
     atBottom: false,
-    rowsToken: TOKEN,
   })
   away.scroller.remove()
 
@@ -180,7 +184,7 @@ test('rows that measured taller in between still put the same row under the top'
     viewportHeight: 600,
     contentHeight: 3_600,
   })
-  restoreTranscriptScroll(back.scroller, { anchor, rowsToken: TOKEN })
+  restoreTranscriptScroll(back.scroller, { anchor })
 
   // A remembered pixel offset would have landed at 950, which is now inside the
   // SECOND row. The anchor row is back under the top of the viewport instead.
@@ -200,7 +204,6 @@ test('a pane left at the end comes back to the end of what streamed in', () => {
   away.scroller.scrollTop = 800
   const anchor = captureTranscriptScrollAnchor(away.scroller, {
     atBottom: true,
-    rowsToken: TOKEN,
   })
   expect(anchor).toEqual({ kind: 'bottom' })
   away.scroller.remove()
@@ -210,10 +213,7 @@ test('a pane left at the end comes back to the end of what streamed in', () => {
     viewportHeight: 600,
     contentHeight: 2_400,
   })
-  const restored = restoreTranscriptScroll(back.scroller, {
-    anchor,
-    rowsToken: TOKEN,
-  })
+  const restored = restoreTranscriptScroll(back.scroller, { anchor })
 
   expect(restored).toEqual({ kind: 'bottom' })
   expect(back.scroller.scrollTop).toBe(2_400)
@@ -225,20 +225,49 @@ test('a session this window has not shown opens at the end', () => {
     viewportHeight: 600,
     contentHeight: 1_400,
   })
-  const restored = restoreTranscriptScroll(pane.scroller, {
-    anchor: null,
-    rowsToken: TOKEN,
-  })
+  const restored = restoreTranscriptScroll(pane.scroller, { anchor: null })
 
   expect(restored).toEqual({ kind: 'bottom' })
   expect(pane.scroller.scrollTop).toBe(1_400)
 })
 
-test('a transcript truncated while the pane was away opens at the end', () => {
+test('earlier messages recovered above the reader keep the reader on their row', () => {
+  // B5 through the DOM layer. The reader was on row 1; three earlier messages
+  // and a boundary row are now above it, so the row that was second in the
+  // column is fifth, and 400px further down the document.
+  const away = createFakePane({
+    rowOffsets: [0, 400, 900],
+    viewportHeight: 600,
+    contentHeight: 1_400,
+  })
+  away.scroller.scrollTop = 450
+  const anchor = captureTranscriptScrollAnchor(away.scroller, { atBottom: false })
+  expect(anchor).toEqual({ kind: 'row', rowKey: 'row-1', offsetIntoRow: 50 })
+  away.scroller.remove()
+
+  const back = createFakePane({
+    rowOffsets: [0, 100, 200, 300, 700, 1_200],
+    rowKeys: [
+      'history-boundary',
+      'older-0',
+      'older-1',
+      'row-0',
+      'row-1',
+      'row-2',
+    ],
+    viewportHeight: 600,
+    contentHeight: 1_700,
+  })
+  const restored = restoreTranscriptScroll(back.scroller, { anchor })
+
+  expect(restored).toEqual({ kind: 'offset', scrollTop: 750 })
+  expect(back.scroller.scrollTop).toBe(750)
+})
+
+test('a row the pane no longer holds opens at the end', () => {
   const anchor: TranscriptScrollAnchor = {
     kind: 'row',
-    rowsToken: TOKEN,
-    rowIndex: 2,
+    rowKey: 'row-9',
     offsetIntoRow: 50,
   }
   const back = createFakePane({
@@ -246,15 +275,29 @@ test('a transcript truncated while the pane was away opens at the end', () => {
     viewportHeight: 600,
     contentHeight: 1_400,
   })
-  const restored = restoreTranscriptScroll(back.scroller, {
-    anchor,
-    // A boundary row now heads the list, so the remembered index counts from a
-    // row that is no longer there.
-    rowsToken: 'blocks:default:history-boundary',
-  })
+  const restored = restoreTranscriptScroll(back.scroller, { anchor })
 
   expect(restored).toEqual({ kind: 'bottom' })
   expect(back.scroller.scrollTop).toBe(1_400)
+})
+
+test('a column whose children publish no identity takes no anchor', () => {
+  // The welcome and restore surfaces render where the row column would, and a
+  // pane showing one has no row to come back to.
+  const pane = createFakePane({
+    rowOffsets: [0, 400, 900],
+    viewportHeight: 600,
+    contentHeight: 1_400,
+  })
+  const rows = pane.scroller.firstElementChild?.children
+  for (let index = 0; index < (rows?.length ?? 0); index += 1) {
+    rows?.item(index)?.removeAttribute(TRANSCRIPT_ROW_KEY_ATTRIBUTE)
+  }
+  pane.scroller.scrollTop = 450
+
+  expect(
+    captureTranscriptScrollAnchor(pane.scroller, { atBottom: false }),
+  ).toEqual({ kind: 'bottom' })
 })
 
 test('a pane following the end measures nothing to say so', () => {
@@ -271,16 +314,10 @@ test('a pane following the end measures nothing to say so', () => {
     return VIEWPORT_TOP
   })
 
-  captureTranscriptScrollAnchor(pane.scroller, {
-    atBottom: true,
-    rowsToken: TOKEN,
-  })
+  captureTranscriptScrollAnchor(pane.scroller, { atBottom: true })
   expect(measured).toBe(0)
 
-  captureTranscriptScrollAnchor(pane.scroller, {
-    atBottom: false,
-    rowsToken: TOKEN,
-  })
+  captureTranscriptScrollAnchor(pane.scroller, { atBottom: false })
   expect(measured).toBe(1)
 })
 
@@ -291,10 +328,7 @@ test('an empty pane takes no anchor and opens at the end', () => {
     contentHeight: 0,
   })
   expect(
-    captureTranscriptScrollAnchor(pane.scroller, {
-      atBottom: false,
-      rowsToken: null,
-    }),
+    captureTranscriptScrollAnchor(pane.scroller, { atBottom: false }),
   ).toEqual({ kind: 'bottom' })
 })
 
@@ -374,10 +408,7 @@ test('a dragged pane measures once per frame, not once per scroll event', () => 
     pane.scroller.scrollTop = 20_000 + event * 37
     pump.request(() => {
       reported.push(
-        captureTranscriptScrollAnchor(pane.scroller, {
-          atBottom: false,
-          rowsToken: TOKEN,
-        }),
+        captureTranscriptScrollAnchor(pane.scroller, { atBottom: false }),
       )
     })
   }
@@ -386,7 +417,7 @@ test('a dragged pane measures once per frame, not once per scroll event', () => 
   frames.runFrame()
   const burst = boxes()
   expect(reported).toEqual([
-    { kind: 'row', rowsToken: TOKEN, rowIndex: 506, offsetIntoRow: 19 },
+    { kind: 'row', rowKey: 'row-506', offsetIntoRow: 19 },
   ])
 
   // What one capture costs on a transcript this long: a binary search over
@@ -394,10 +425,7 @@ test('a dragged pane measures once per frame, not once per scroll event', () => 
   // burst of eight events paid that ONCE. Unthrottled it was paid eight times,
   // while the reader dragged.
   const before = boxes()
-  captureTranscriptScrollAnchor(pane.scroller, {
-    atBottom: false,
-    rowsToken: TOKEN,
-  })
+  captureTranscriptScrollAnchor(pane.scroller, { atBottom: false })
   const oneCapture = boxes() - before
   expect(oneCapture).toBe(13)
   expect(burst).toBe(oneCapture)
@@ -413,10 +441,7 @@ test('the position of the last event before an unbind survives the unbind', () =
     pump.request(() => {
       if (!pane.scroller.isConnected) return
       reported.push(
-        captureTranscriptScrollAnchor(pane.scroller, {
-          atBottom: false,
-          rowsToken: TOKEN,
-        }),
+        captureTranscriptScrollAnchor(pane.scroller, { atBottom: false }),
       )
     })
   }
@@ -428,8 +453,8 @@ test('the position of the last event before an unbind survives the unbind', () =
   pump.flush()
 
   expect(reported).toEqual([
-    { kind: 'row', rowsToken: TOKEN, rowIndex: 500, offsetIntoRow: 0 },
-    { kind: 'row', rowsToken: TOKEN, rowIndex: 750, offsetIntoRow: 0 },
+    { kind: 'row', rowKey: 'row-500', offsetIntoRow: 0 },
+    { kind: 'row', rowKey: 'row-750', offsetIntoRow: 0 },
   ])
 
   // And the pane that has already lost its rows reports nothing rather than the

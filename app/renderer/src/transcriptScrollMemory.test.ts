@@ -19,22 +19,31 @@ import {
   type TranscriptScrollFrames,
 } from './transcriptScrollMemory.js'
 
-/** Rows at known content offsets, counting the reads the callers make. */
-function geometry(offsets: readonly number[]): TranscriptRowGeometry & {
-  reads: () => number
-} {
+/**
+ * Rows at known content offsets, counting the reads the callers make. Each row
+ * also reports an identity, the way a rendered row wrapper does; a row given a
+ * null identity is one of the pane's non-row children (the welcome or restore
+ * surface).
+ */
+function geometry(
+  offsets: readonly number[],
+  keys?: readonly (string | null)[],
+): TranscriptRowGeometry & { reads: () => number } {
   let reads = 0
+  const rowKeys: readonly (string | null)[] =
+    keys ?? offsets.map((_, index) => `row-${index}`)
+  const readRowKey = (index: number): string | null => rowKeys[index] ?? null
   return {
     rowCount: offsets.length,
     readRowOffset: index => {
       reads += 1
       return offsets[index]
     },
+    readRowKey,
+    findRowIndex: key => rowKeys.indexOf(key),
     reads: () => reads,
   }
 }
-
-const TOKEN = 'blocks:default:row-0'
 
 test('a fresh memory answers null for every session', () => {
   const state = createTranscriptScrollMemoryState()
@@ -48,7 +57,7 @@ test('remembering one session leaves the others alone', () => {
     {
       type: 'remember',
       sessionId: 'a',
-      anchor: { kind: 'row', rowsToken: TOKEN, rowIndex: 3, offsetIntoRow: 12 },
+      anchor: { kind: 'row', rowKey: 'row-3', offsetIntoRow: 12 },
     },
   )
   const second = reduceTranscriptScrollMemoryState(first, {
@@ -59,8 +68,7 @@ test('remembering one session leaves the others alone', () => {
 
   expect(selectTranscriptScrollAnchor(second, 'a')).toEqual({
     kind: 'row',
-    rowsToken: TOKEN,
-    rowIndex: 3,
+    rowKey: 'row-3',
     offsetIntoRow: 12,
   })
   expect(selectTranscriptScrollAnchor(second, 'b')).toEqual({ kind: 'bottom' })
@@ -74,7 +82,7 @@ test('a later anchor for the same session replaces the earlier one', () => {
     {
       type: 'remember',
       sessionId: 'a',
-      anchor: { kind: 'row', rowsToken: TOKEN, rowIndex: 3, offsetIntoRow: 12 },
+      anchor: { kind: 'row', rowKey: 'row-3', offsetIntoRow: 12 },
     },
   )
   state = reduceTranscriptScrollMemoryState(state, {
@@ -90,7 +98,6 @@ test('a pane following the end remembers the end, not a row', () => {
     selectTranscriptRowAnchor({
       scrollTop: 4_000,
       atBottom: true,
-      rowsToken: TOKEN,
       geometry: geometry([0, 100, 200]),
     }),
   ).toEqual({ kind: 'bottom' })
@@ -101,7 +108,6 @@ test('a pane with no rows remembers the end', () => {
     selectTranscriptRowAnchor({
       scrollTop: 0,
       atBottom: false,
-      rowsToken: null,
       geometry: geometry([]),
     }),
   ).toEqual({ kind: 'bottom' })
@@ -112,10 +118,9 @@ test('a scrolled pane remembers the row under the top of the viewport', () => {
     selectTranscriptRowAnchor({
       scrollTop: 250,
       atBottom: false,
-      rowsToken: TOKEN,
       geometry: geometry([0, 100, 200, 300, 400]),
     }),
-  ).toEqual({ kind: 'row', rowsToken: TOKEN, rowIndex: 2, offsetIntoRow: 50 })
+  ).toEqual({ kind: 'row', rowKey: 'row-2', offsetIntoRow: 50 })
 })
 
 test('a row boundary exactly at the viewport top belongs to the lower row', () => {
@@ -123,10 +128,9 @@ test('a row boundary exactly at the viewport top belongs to the lower row', () =
     selectTranscriptRowAnchor({
       scrollTop: 200,
       atBottom: false,
-      rowsToken: TOKEN,
       geometry: geometry([0, 100, 200, 300]),
     }),
-  ).toEqual({ kind: 'row', rowsToken: TOKEN, rowIndex: 2, offsetIntoRow: 0 })
+  ).toEqual({ kind: 'row', rowKey: 'row-2', offsetIntoRow: 0 })
 })
 
 test('a pane scrolled above its first row anchors on that first row', () => {
@@ -134,10 +138,9 @@ test('a pane scrolled above its first row anchors on that first row', () => {
     selectTranscriptRowAnchor({
       scrollTop: 0,
       atBottom: false,
-      rowsToken: TOKEN,
       geometry: geometry([24, 124, 224]),
     }),
-  ).toEqual({ kind: 'row', rowsToken: TOKEN, rowIndex: 0, offsetIntoRow: 0 })
+  ).toEqual({ kind: 'row', rowKey: 'row-0', offsetIntoRow: 0 })
 })
 
 test('finding the anchor row does not measure every row', () => {
@@ -146,14 +149,12 @@ test('finding the anchor row does not measure every row', () => {
   const anchor = selectTranscriptRowAnchor({
     scrollTop: 77_777,
     atBottom: false,
-    rowsToken: TOKEN,
     geometry: probe,
   })
 
   expect(anchor).toEqual({
     kind: 'row',
-    rowsToken: TOKEN,
-    rowIndex: 777,
+    rowKey: 'row-777',
     offsetIntoRow: 77,
   })
   // Binary search plus the one read that turns the row into an offset. A linear
@@ -165,7 +166,6 @@ test('a session with no remembered place opens at the end', () => {
   expect(
     selectTranscriptScrollRestore({
       anchor: null,
-      rowsToken: TOKEN,
       geometry: geometry([0, 100, 200]),
       viewportHeight: 500,
       contentHeight: 3_000,
@@ -177,7 +177,6 @@ test('a session left at the end opens at the end', () => {
   expect(
     selectTranscriptScrollRestore({
       anchor: { kind: 'bottom' },
-      rowsToken: TOKEN,
       geometry: geometry([0, 100, 200]),
       viewportHeight: 500,
       contentHeight: 9_000,
@@ -188,8 +187,7 @@ test('a session left at the end opens at the end', () => {
 test('a remembered row is restored to the same place in the viewport', () => {
   expect(
     selectTranscriptScrollRestore({
-      anchor: { kind: 'row', rowsToken: TOKEN, rowIndex: 2, offsetIntoRow: 50 },
-      rowsToken: TOKEN,
+      anchor: { kind: 'row', rowKey: 'row-2', offsetIntoRow: 50 },
       geometry: geometry([0, 100, 200, 300, 400]),
       viewportHeight: 200,
       contentHeight: 3_000,
@@ -200,8 +198,7 @@ test('a remembered row is restored to the same place in the viewport', () => {
 test('restoring measures only the anchor row', () => {
   const probe = geometry(Array.from({ length: 1_024 }, (_, index) => index * 100))
   selectTranscriptScrollRestore({
-    anchor: { kind: 'row', rowsToken: TOKEN, rowIndex: 777, offsetIntoRow: 77 },
-    rowsToken: TOKEN,
+    anchor: { kind: 'row', rowKey: 'row-777', offsetIntoRow: 77 },
     geometry: probe,
     viewportHeight: 500,
     contentHeight: 102_400,
@@ -217,20 +214,17 @@ test('rows that measured taller while the pane was away move the anchor with the
   const anchor = selectTranscriptRowAnchor({
     scrollTop: 320,
     atBottom: false,
-    rowsToken: TOKEN,
     geometry: geometry([0, 100, 200, 300, 400]),
   })
   expect(anchor).toEqual({
     kind: 'row',
-    rowsToken: TOKEN,
-    rowIndex: 3,
+    rowKey: 'row-3',
     offsetIntoRow: 20,
   })
 
   expect(
     selectTranscriptScrollRestore({
       anchor,
-      rowsToken: TOKEN,
       geometry: geometry([0, 180, 360, 540, 720]),
       viewportHeight: 200,
       contentHeight: 3_000,
@@ -238,16 +232,57 @@ test('rows that measured taller while the pane was away move the anchor with the
   ).toEqual({ kind: 'offset', scrollTop: 560 })
 })
 
-test('a transcript truncated behind a boundary row opens at the end', () => {
-  // The head of the list changed, so the remembered index counts from somewhere
-  // that no longer exists. The end is the honest answer.
+test('rows recovered above the reader leave the reader where they were', () => {
+  // B5, the case index anchoring got wrong: three earlier messages arrive ABOVE
+  // the row under the top of the viewport. Every surviving row is renumbered —
+  // the anchored one was 1, and is now 4 — and it is still the row the reader
+  // was on, now 300px further down the document.
+  const anchor = selectTranscriptRowAnchor({
+    scrollTop: 150,
+    atBottom: false,
+    geometry: geometry([0, 100, 200], ['row-0', 'row-1', 'row-2']),
+  })
+  expect(anchor).toEqual({ kind: 'row', rowKey: 'row-1', offsetIntoRow: 50 })
+
   expect(
     selectTranscriptScrollRestore({
-      anchor: { kind: 'row', rowsToken: TOKEN, rowIndex: 2, offsetIntoRow: 50 },
-      rowsToken: 'blocks:default:history-boundary',
-      geometry: geometry([0, 100, 200, 300]),
+      anchor,
+      geometry: geometry(
+        [0, 100, 200, 300, 400, 500],
+        ['history-boundary', 'older-0', 'older-1', 'row-0', 'row-1', 'row-2'],
+      ),
       viewportHeight: 200,
       contentHeight: 3_000,
+    }),
+  ).toEqual({ kind: 'offset', scrollTop: 450 })
+})
+
+test('a boundary row appearing at the head does not throw the reader to the end', () => {
+  // The same insertion, at the smallest scale that used to break: ONE row at the
+  // head. An index-based anchor read row 2 as the row it remembered; the reader
+  // was thrown to the bottom instead, at the moment they asked to read further
+  // back.
+  expect(
+    selectTranscriptScrollRestore({
+      anchor: { kind: 'row', rowKey: 'row-2', offsetIntoRow: 50 },
+      geometry: geometry(
+        [0, 100, 200, 300],
+        ['history-boundary', 'row-0', 'row-1', 'row-2'],
+      ),
+      viewportHeight: 200,
+      contentHeight: 3_000,
+    }),
+  ).toEqual({ kind: 'offset', scrollTop: 350 })
+})
+
+test('a pane whose children are not rows takes no anchor', () => {
+  // The welcome and restore surfaces render in the same place the row column
+  // does. They carry no identity, so there is nothing to come back to.
+  expect(
+    selectTranscriptRowAnchor({
+      scrollTop: 150,
+      atBottom: false,
+      geometry: geometry([0, 100, 200], [null, null, null]),
     }),
   ).toEqual({ kind: 'bottom' })
 })
@@ -255,8 +290,7 @@ test('a transcript truncated behind a boundary row opens at the end', () => {
 test('a pane whose rows have not arrived yet opens at the end', () => {
   expect(
     selectTranscriptScrollRestore({
-      anchor: { kind: 'row', rowsToken: TOKEN, rowIndex: 2, offsetIntoRow: 50 },
-      rowsToken: null,
+      anchor: { kind: 'row', rowKey: 'row-2', offsetIntoRow: 50 },
       geometry: geometry([]),
       viewportHeight: 200,
       contentHeight: 0,
@@ -267,8 +301,7 @@ test('a pane whose rows have not arrived yet opens at the end', () => {
 test('a remembered row that is no longer rendered opens at the end', () => {
   expect(
     selectTranscriptScrollRestore({
-      anchor: { kind: 'row', rowsToken: TOKEN, rowIndex: 9, offsetIntoRow: 0 },
-      rowsToken: TOKEN,
+      anchor: { kind: 'row', rowKey: 'row-9', offsetIntoRow: 0 },
       geometry: geometry([0, 100, 200]),
       viewportHeight: 200,
       contentHeight: 300,
@@ -279,8 +312,7 @@ test('a remembered row that is no longer rendered opens at the end', () => {
 test('a restore is clamped to the scrollable range', () => {
   expect(
     selectTranscriptScrollRestore({
-      anchor: { kind: 'row', rowsToken: TOKEN, rowIndex: 2, offsetIntoRow: 50 },
-      rowsToken: TOKEN,
+      anchor: { kind: 'row', rowKey: 'row-2', offsetIntoRow: 50 },
       geometry: geometry([0, 100, 200]),
       viewportHeight: 200,
       contentHeight: 300,

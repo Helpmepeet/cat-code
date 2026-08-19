@@ -2807,3 +2807,51 @@ test('D1b wiring tripwire: only a recall this page asked for is acted on, and it
   // A session that goes away never answers, so its ids are released with it.
   expect(source.match(/forgetRecallRequests\(recallRequestsRef\.current,/g) ?? []).toHaveLength(2)
 })
+
+test('load-earlier wiring tripwire: only an engaged pane can ask, and only its own answer counts', () => {
+  // LAYER HONESTY: SSR cannot mount App, press the control, or deliver a frame.
+  // The decisions that can be proven by running code live in
+  // `historyLoadEarlierState.ts` (which answers count) and in
+  // `TranscriptView.tsx` (which panes show the control); what only source can
+  // decide is that App sends the real verb, gates it on a pane with a process
+  // behind it, and routes the answer to the row rather than to a toast.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+
+  // The gate. A cached preview and a session whose engine is gone both keep the
+  // truncation row and lose the control: there is nobody to ask.
+  const gateStart = source.indexOf('onLoadEarlierHistory={')
+  expect(gateStart).toBeGreaterThan(-1)
+  const gate = source.slice(gateStart, gateStart + 1_600)
+  expect(gate).toContain('panelTranscript.preview ||')
+  expect(gate).toContain('!connectionHasEngine(sessionConnection.status)')
+  expect(gate).toContain('? undefined')
+
+  // The real verb, with the requestId as its only renderer-authored byte.
+  expect(gate).toContain('getBridge().loadEarlierHistory(sessionId, {')
+  expect(gate).toContain("type: 'history.loadEarlier',")
+  expect(gate).toContain('requestId,')
+  // No cursor, offset, count or path is reachable from here.
+  expect(gate).not.toContain('maxMessages')
+  expect(gate).not.toContain('cursor')
+
+  // The press is recorded BEFORE the send, so an answer can never arrive
+  // against a session that is not yet waiting for one.
+  expect(gate.indexOf("type: 'requested',")).toBeLessThan(
+    gate.indexOf('getBridge().loadEarlierHistory('),
+  )
+  // A send that throws resolves the control instead of leaving it spinning.
+  expect(gate).toContain("type: 'unreachable',")
+
+  const subscribeStart = source.indexOf(
+    'const unsubscribe = bridge.subscribe(frames => {',
+  )
+  const subscribeEnd = source.indexOf('bridge.rendererReady()', subscribeStart)
+  const subscribeBody = source.slice(subscribeStart, subscribeEnd)
+  expect(subscribeBody).toContain(
+    "if (frame.kind === 'history.loadEarlier.result') {",
+  )
+  expect(subscribeBody).toContain("reduceHistoryLoadEarlierState(prev, { type: 'result', frame })")
+  // A lifecycle frame is only ever disconnected/failed/exited, so a session
+  // that reaches one is never going to answer.
+  expect(subscribeBody).toContain("type: 'engine-gone',")
+})

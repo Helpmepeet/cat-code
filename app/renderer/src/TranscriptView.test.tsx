@@ -16,6 +16,7 @@ import {
   splitGrepLine,
 } from './transcriptViewModel.js'
 import { ToolsExpandedContext } from './toolsExpanded.js'
+import { TRANSCRIPT_ROW_KEY_ATTRIBUTE } from './transcriptScrollMemory.js'
 import {
   createToolCardExpansionStore,
   ToolCardExpansionContext,
@@ -2077,7 +2078,11 @@ test('P4-45: no notice type prints its discriminant', () => {
   ] as const) {
     const html = render({
       ...frameSource,
-      id: `s:f:${noticeType}`,
+      // NOT `s:f:${noticeType}`: the row's id is published as its wrapper's
+      // identity for the scroll memory, so a fixture id built out of the
+      // discriminant would fail this test on its own fixture rather than on
+      // anything the component printed.
+      id: 's:f:system-notice',
       kind: 'system-notice',
       noticeType,
       content: 'something happened',
@@ -4066,4 +4071,101 @@ test('a restored Agent card whose steps did not survive says so, and quietly', (
   expect(html).toContain("This agent&#x27;s steps aren&#x27;t loaded.")
   // Not an error: no danger tone, and the card keeps its ordinary chrome.
   expect(html).not.toContain('tone-danger')
+})
+
+/* ---------------------------------------------------------------------------
+ * The top of an incomplete transcript, and the way out of it
+ * (decisions/HISTORY-LOAD-EARLIER.md).
+ *
+ * WHAT THESE CANNOT PROVE. This suite renders to static markup, so no click is
+ * ever delivered: what a press does is App's wiring and the sidecar's answer,
+ * and only a live window shows it. What is proven here is the whole of the
+ * decision that lives in this component — which panes get the control, what it
+ * says, and that a refusal is readable without taking the control away.
+ * --------------------------------------------------------------------------- */
+
+const historyBoundaryRow: NestedTranscriptRow = {
+  ...frameSource,
+  id: 's:history-boundary',
+  kind: 'history-boundary',
+}
+
+test('an incomplete transcript offers the way out of itself', () => {
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView rows={[historyBoundaryRow]} onLoadEarlier={() => {}} />,
+  )
+  expect(html).toContain('Earlier messages from this session aren')
+  expect(html).toContain('Load earlier messages')
+})
+
+test('a whole transcript has no boundary row, so it has no control', () => {
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[userRow('carry on')]}
+      onLoadEarlier={() => {}}
+    />,
+  )
+  expect(html).not.toContain('Load earlier messages')
+  expect(html).not.toContain('Earlier messages from this session aren')
+})
+
+test('a pane with nothing to ask keeps the row and drops the control', () => {
+  // The preview case: a cached transcript with no engine behind it. The row is
+  // a fact about the transcript and stays; the control would have nowhere to
+  // send the ask. Engaging with the session is what gains it.
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView rows={[historyBoundaryRow]} restorePhase="preview" />,
+  )
+  expect(html).toContain('Earlier messages from this session aren')
+  expect(html).not.toContain('Load earlier messages')
+})
+
+test('a read in flight says so and cannot be pressed again', () => {
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[historyBoundaryRow]}
+      loadEarlierPending
+      onLoadEarlier={() => {}}
+    />,
+  )
+  expect(html).toContain('Loading')
+  expect(html).not.toContain('Load earlier messages')
+  expect(html).toContain('disabled=""')
+  expect(html).toContain('aria-busy="true"')
+})
+
+test('a read that did not work says so, and the control stays usable', () => {
+  // The refusal's own sentence, which is written for a reader. Not a toast: the
+  // row is what was pressed, and it is where it will be pressed again.
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[historyBoundaryRow]}
+      loadEarlierFailure="Already loading earlier messages."
+      onLoadEarlier={() => {}}
+    />,
+  )
+  expect(html).toContain('Already loading earlier messages.')
+  expect(html).toContain('Load earlier messages')
+  expect(html).not.toContain('disabled=""')
+})
+
+test('a pane with no control has nothing to report about a read', () => {
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[historyBoundaryRow]}
+      loadEarlierFailure="Already loading earlier messages."
+    />,
+  )
+  expect(html).not.toContain('Already loading earlier messages.')
+})
+
+test('every row publishes its identity, which is what the reading position holds', () => {
+  // `transcriptScrollMemory` reads this attribute back off the DOM. Rows
+  // recovered above the reader renumber the list, and an anchor that named a
+  // position would be discarded at exactly that moment (B5).
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView rows={[historyBoundaryRow, userRow('carry on')]} />,
+  )
+  expect(html).toContain(`${TRANSCRIPT_ROW_KEY_ATTRIBUTE}="s:history-boundary"`)
+  expect(html).toContain(`${TRANSCRIPT_ROW_KEY_ATTRIBUTE}="s:m:0:user-text"`)
 })

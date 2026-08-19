@@ -1,6 +1,5 @@
 import {
   useCallback,
-  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -115,7 +114,13 @@ import {
   type TranscriptScrollCapturePump,
   type TranscriptScrollMemoryState,
 } from './transcriptScrollMemory.js'
-import { ReasoningLayoutContext } from './reasoningLayout.js'
+import {
+  createHistoryLoadEarlierState,
+  reduceHistoryLoadEarlierState,
+  selectHistoryLoadEarlierFailure,
+  selectHistoryLoadEarlierPending,
+  type HistoryLoadEarlierState,
+} from './historyLoadEarlierState.js'
 import { SlashCommandPicker } from './SlashCommandPicker.js'
 import {
   MENTION_LISTBOX_ID,
@@ -715,6 +720,12 @@ export function App() {
     },
     [],
   )
+  // Which sessions are waiting on a read further back, and what the last one
+  // that failed said. State, not a ref: the control on the boundary row renders
+  // from it. Held here rather than in the pane for the reason above — a pane is
+  // unmounted while its session is off screen, and a read outlives that.
+  const [historyLoadEarlier, setHistoryLoadEarlier] =
+    useState<HistoryLoadEarlierState>(createHistoryLoadEarlierState)
   const [settings, dispatchSettings] = useReducer(
     reduceSettingsStateBatched,
     undefined,
@@ -1062,6 +1073,29 @@ export function App() {
           }
           const outcome = verbAckErrorToast(frame)
           if (outcome) toast(outcome.message, { tone: outcome.tone })
+          continue
+        }
+        // The answer to a read further back. It resolves the control on the
+        // boundary row and nothing else: the recovered messages arrived ahead of
+        // it as ordinary replay events, and whether the transcript is now whole
+        // is read off the row's own presence, not from here. A refusal is shown
+        // ON the row rather than toasted — the row is what the user pressed, and
+        // it is where they will press again.
+        if (frame.kind === 'history.loadEarlier.result') {
+          setHistoryLoadEarlier(prev =>
+            reduceHistoryLoadEarlierState(prev, { type: 'result', frame }),
+          )
+          continue
+        }
+        // A session that lost its engine is not going to answer. Without this
+        // the control would stay disabled for the life of the window.
+        if (frame.kind === 'lifecycle') {
+          setHistoryLoadEarlier(prev =>
+            reduceHistoryLoadEarlierState(prev, {
+              type: 'engine-gone',
+              sessionId: frame.sessionId,
+            }),
+          )
           continue
         }
         if (frame.kind !== 'error' || frame.requestId === undefined) continue
@@ -3302,6 +3336,53 @@ export function App() {
 	            onScrollAnchorChange={anchor =>
 	              rememberTranscriptScroll(sessionId, anchor)
 	            }
+	            historyLoadEarlierPending={selectHistoryLoadEarlierPending(
+	              historyLoadEarlier,
+	              sessionId,
+	            )}
+	            historyLoadEarlierFailure={selectHistoryLoadEarlierFailure(
+	              historyLoadEarlier,
+	              sessionId,
+	            )}
+	            // The same gate its sibling `onRequestContextBreakdown` uses, and
+	            // for the same reason: only a pane with a process behind it can be
+	            // asked anything. A cached preview and a parked or dead session
+	            // both keep the truncation row — the row states a fact about the
+	            // transcript — and neither gets the control, because there is
+	            // nobody to send the ask to. Engaging with the session is what
+	            // gains it (decisions/HISTORY-LOAD-EARLIER.md).
+	            onLoadEarlierHistory={
+	              panelTranscript.preview ||
+	              !connectionHasEngine(sessionConnection.status)
+	                ? undefined
+	                : () => {
+	                    const requestId = newRequestId()
+	                    setHistoryLoadEarlier(prev =>
+	                      reduceHistoryLoadEarlierState(prev, {
+	                        type: 'requested',
+	                        sessionId,
+	                        requestId,
+	                      }),
+	                    )
+	                    try {
+	                      getBridge().loadEarlierHistory(sessionId, {
+	                        type: 'history.loadEarlier',
+	                        requestId,
+	                      })
+	                    } catch {
+	                      // User-initiated, so it says so where it was pressed
+	                      // instead of leaving the control spinning forever. No
+	                      // retry from here: pressing again is the retry.
+	                      setHistoryLoadEarlier(prev =>
+	                        reduceHistoryLoadEarlierState(prev, {
+	                          type: 'unreachable',
+	                          sessionId,
+	                          requestId,
+	                        }),
+	                      )
+	                    }
+	                  }
+	            }
 	            setPermissionMode={mode => {
 	              try {
 	                getBridge().setPermissionMode(sessionId, mode)
@@ -4230,6 +4311,9 @@ export function SessionPane({
   revealHidden = false,
   scrollAnchor = null,
   onScrollAnchorChange,
+  historyLoadEarlierPending = false,
+  historyLoadEarlierFailure = null,
+  onLoadEarlierHistory,
   setPermissionMode,
   setPrompt,
   submit,
@@ -4237,9 +4321,6 @@ export function SessionPane({
   transportError,
 }: SessionPaneProps) {
   const toast = useToast()
-  // Read for the scroll memory's row token only: `TranscriptView` consumes the
-  // same context to decide how many rows a run of reasoning renders as.
-  const { mode: reasoningMode } = useContext(ReasoningLayoutContext)
   // ACCT-5 — correlate the composer profile popover's account switch by the
   // requestId SessionPane itself mints (switchVerb), matching AccountsPage's
   // pendingRef/lastResult pattern: NO optimistic UI, toast only on the real
@@ -4514,38 +4595,14 @@ export function SessionPane({
   // `deriveActivity` and the token estimate share one projection.
   const nestedRows = selectNestedTranscriptRows(transcript, activeSessionId)
   const activity = deriveActivity(nestedRows)
-  // Names the head of the row list the scroll memory's row index counts from:
-  // the oldest surviving row (history truncated behind a boundary row), the
-  // hidden-row reveal, and the reasoning layout, which is what decides how many
-  // rows a run of reasoning renders as. A pane with no rows has no head, and no
-  // anchor is taken from one.
-  //
-  // These three do NOT cover everything that can renumber the list, and the
-  // token does not pretend to. What the anchor indexes is the DOM list, which is
-  // the display items `TranscriptView` groups these nested rows into
-  // (`groupToolRuns(groupDisplayItems(groupAgentDelegates(rows), reasoningMode))`),
-  // so a regrouping alone moves indices without moving this token. It is safe
-  // for one reason: the projector store is APPEND-ONLY, so every regrouping
-  // happens at the tail of the list, below any row an earlier capture could be
-  // anchored to.
-  //
-  // A change that lets the projector insert rows anywhere but the tail (loading
-  // earlier history into the head is the planned one,
-  // `docs/migration/decisions/HISTORY-LOAD-EARLIER.md` B5) breaks index-based
-  // anchoring outright, and this token is not what would catch it.
-  const paneRows = selectNestedTranscriptRows(
-    transcript,
-    activeSessionId,
-    revealHidden,
-  )
-  const paneRowsToken =
-    paneRows.length === 0
-      ? null
-      : [
-          reasoningMode,
-          revealHidden ? 'revealed' : 'default',
-          paneRows[0]?.id ?? '',
-        ].join(':')
+  // The scroll memory anchors on row IDENTITY, so nothing here names the head
+  // of the list any more: rows recovered above the reader renumber every row
+  // below them, and an index-based anchor would have been discarded at exactly
+  // the moment the reader asked to read further back
+  // (`docs/migration/decisions/HISTORY-LOAD-EARLIER.md` B5). The identity is
+  // published on each row wrapper by `TranscriptView` and read back off the DOM,
+  // which is also what lets it survive the grouping passes the pane applies
+  // (delegate groups, reasoning runs, tool runs) without this file knowing them.
 
   // IS-C (M5) — the restore affordance phase for TranscriptView. A preview pane
   // reads as "restored" (pulsing "resuming" once engaged); a no-cache restore
@@ -4636,10 +4693,7 @@ export function SessionPane({
   useEffect(() => {
     const el = transcriptScrollRef.current
     if (!el) return
-    const restored = restoreTranscriptScroll(el, {
-      anchor: scrollAnchor,
-      rowsToken: paneRowsToken,
-    })
+    const restored = restoreTranscriptScroll(el, { anchor: scrollAnchor })
     applyAtBottom(restored.kind === 'bottom')
     // Read at bind only: the pane is remounted per session (`WorkspacePanels`
     // keys each panel by session id), so a later anchor is this pane reporting
@@ -4767,10 +4821,7 @@ export function SessionPane({
       // truer answer.
       if (!el.isConnected) return
       report(
-        captureTranscriptScrollAnchor(el, {
-          atBottom: nextAtBottom,
-          rowsToken: paneRowsToken,
-        }),
+        captureTranscriptScrollAnchor(el, { atBottom: nextAtBottom }),
       )
     })
   }
@@ -5037,6 +5088,9 @@ export function SessionPane({
             restorePhase={restorePhase}
             revealHidden={revealHidden}
             state={transcript}
+            loadEarlierPending={historyLoadEarlierPending}
+            loadEarlierFailure={historyLoadEarlierFailure}
+            onLoadEarlier={onLoadEarlierHistory}
           />
         </div>
         {!atBottom ? (
@@ -5807,6 +5861,17 @@ type SessionPaneProps = {
   scrollAnchor?: TranscriptScrollAnchor | null
   /** Report the reading position back, on every scroll of this pane. */
   onScrollAnchorChange?: (anchor: TranscriptScrollAnchor) => void
+  /** A read further back is running for this session. */
+  historyLoadEarlierPending?: boolean
+  /** What to say about this session's last read that did not work. */
+  historyLoadEarlierFailure?: string | null
+  /**
+   * Read further back into this session's transcript. Owned by App because the
+   * answer arrives as a frame, and a pane is unmounted while its session is off
+   * screen. ABSENT on a pane with no engine to ask, which is what withholds the
+   * control from the boundary row.
+   */
+  onLoadEarlierHistory?: () => void
   setPermissionMode: (mode: PermissionSetModeMode) => void
   setPrompt: (value: string, reason?: DraftWriteReason) => void
   submit: (event: FormEvent<HTMLFormElement>) => void

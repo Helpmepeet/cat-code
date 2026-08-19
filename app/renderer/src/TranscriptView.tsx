@@ -228,6 +228,9 @@ export const TranscriptView = memo(function TranscriptView({
   sandboxed,
   restorePhase,
   revealHidden,
+  loadEarlierPending,
+  loadEarlierFailure,
+  onLoadEarlier,
 }: {
   state: TranscriptState
   activeSessionId: SessionId | null
@@ -251,6 +254,16 @@ export const TranscriptView = memo(function TranscriptView({
    * actions menu; false is the ordinary transcript.
    */
   revealHidden?: boolean
+  /** A read further back is running for this session. */
+  loadEarlierPending?: boolean
+  /** What to say about the last read that did not work. */
+  loadEarlierFailure?: string | null
+  /**
+   * Read further back into this session. ABSENT is the whole gate on the
+   * control: a pane with no engine behind it (a cached preview, a session whose
+   * process is gone) still shows the boundary row, and has nothing to ask.
+   */
+  onLoadEarlier?: () => void
 }) {
   return (
     <TranscriptRowsView
@@ -262,6 +275,9 @@ export const TranscriptView = memo(function TranscriptView({
       branch={branch ?? null}
       sandboxed={sandboxed ?? false}
       restorePhase={restorePhase ?? null}
+      loadEarlierPending={loadEarlierPending ?? false}
+      loadEarlierFailure={loadEarlierFailure ?? null}
+      onLoadEarlier={onLoadEarlier}
     />
   )
 })
@@ -275,6 +291,9 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   branch = null,
   sandboxed = false,
   restorePhase = null,
+  loadEarlierPending = false,
+  loadEarlierFailure = null,
+  onLoadEarlier,
 }: {
   rows: NestedTranscriptRow[]
   accounts?: AccountsSnapshot | null
@@ -284,6 +303,9 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   branch?: string | null
   sandboxed?: boolean
   restorePhase?: RestorePhase | null
+  loadEarlierPending?: boolean
+  loadEarlierFailure?: string | null
+  onLoadEarlier?: () => void
 }) {
   // P4-1: the tool row a card asked to inspect (null = drawer closed). Owned here
   // — above the memoized rows — so opening the drawer never mutates a row and the
@@ -400,20 +422,35 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
       // for legibility on this near-black background. It stays scoped to
       // assistant prose, NOT the whole column.
       <div className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-2.5 px-8 pt-6">
-        {items.map(item =>
+        {items.map(item => {
+          // The wrapper publishes the row's identity to the pane's scroll memory
+          // (`transcriptScrollMemory.ts`): the reading position is remembered as
+          // a row rather than a place in the list, so recovering earlier
+          // messages above the reader moves nothing they were looking at.
+          //
           // P4-36 — a revealed hidden row reads dimmed (`Chat.jsx:1285`
           // `opacity: 0.55`), so transcript mode never passes engine bookkeeping
           // off as ordinary conversation. `isHidden` is only ever present when
-          // the caller asked for the revealed view, so the default transcript
-          // takes the untouched branch and keeps its DOM exactly as before.
-          isRevealedHiddenItem(item) ? (
-            <div className="opacity-55" key={displayItemKey(item)}>
-              <DisplayItemView item={item} />
+          // the caller asked for the revealed view.
+          const key = displayItemKey(item)
+          return (
+            <div
+              data-row-key={key}
+              key={key}
+              className={isRevealedHiddenItem(item) ? 'opacity-55' : undefined}
+            >
+              {isHistoryBoundaryItem(item) ? (
+                <HistoryBoundaryRow
+                  pending={loadEarlierPending}
+                  failure={loadEarlierFailure}
+                  onLoad={onLoadEarlier}
+                />
+              ) : (
+                <DisplayItemView item={item} />
+              )}
             </div>
-          ) : (
-            <DisplayItemView item={item} key={displayItemKey(item)} />
-          ),
-        )}
+          )
+        })}
       </div>
     )
   }
@@ -531,6 +568,15 @@ function displayItemKey(item: TranscriptLayoutItem): string {
  */
 function isRevealedHiddenItem(item: TranscriptLayoutItem): boolean {
   return item.kind === 'single' && item.row.isHidden === true
+}
+
+/**
+ * Is this the top of an incomplete transcript? Only a single row can be: no
+ * grouping pass ever folds the boundary in with a message, and the row is
+ * synthesized at the head of the list.
+ */
+function isHistoryBoundaryItem(item: TranscriptLayoutItem): boolean {
+  return item.kind === 'single' && item.row.kind === 'history-boundary'
 }
 
 /**
@@ -779,6 +825,54 @@ function NestedRowList({
  * that would differ on the next path into the same session.
  */
 const HISTORY_BOUNDARY_LABEL = "Earlier messages from this session aren't loaded."
+
+/** What the control offers, in the words of the thing it does. */
+const HISTORY_LOAD_LABEL = 'Load earlier messages'
+
+/** The same control while the read is running, so the row says what it is doing. */
+const HISTORY_LOADING_LABEL = 'Loading…'
+
+/**
+ * The top of an incomplete transcript, with the way out of it.
+ *
+ * The control is present only when a caller supplied `onLoad`, and the row is
+ * present only while the transcript is incomplete — so a whole transcript has
+ * neither, and a pane with no engine to ask keeps the row and drops the control.
+ * That asymmetry is deliberate (decisions/HISTORY-LOAD-EARLIER.md): engaging
+ * with a session is what GAINS the way out, where the defect this replaced had
+ * engaging withdraw the warning.
+ */
+function HistoryBoundaryRow({
+  pending,
+  failure,
+  onLoad,
+}: {
+  pending: boolean
+  failure: string | null
+  onLoad?: () => void
+}) {
+  return (
+    <div className="flex flex-col items-center gap-1">
+      <div className="w-full">
+        <Seam tone="neutral" label={HISTORY_BOUNDARY_LABEL} />
+      </div>
+      {onLoad ? (
+        <button
+          type="button"
+          onClick={onLoad}
+          disabled={pending}
+          aria-busy={pending ? true : undefined}
+          className="rounded-full border border-shell-seam px-3 py-0.5 text-[11px] text-text-muted transition-colors hover:border-accent/50 hover:text-accent disabled:cursor-default disabled:border-shell-seam disabled:text-text-subtle"
+        >
+          {pending ? HISTORY_LOADING_LABEL : HISTORY_LOAD_LABEL}
+        </button>
+      ) : null}
+      {onLoad && failure !== null ? (
+        <span className="text-[11px] text-tone-danger">{failure}</span>
+      ) : null}
+    </div>
+  )
+}
 
 /**
  * The same sentence, one card down. An Agent card in an incomplete pane can come

@@ -1,6 +1,6 @@
 # Load earlier messages — the one inbound verb that reaches back to disk
 
-**Status: DECIDED (operator-approved 2026-08-19). WIRE HALF IMPLEMENTED 2026-08-20 (`a14d94bc`), inert. B1/B2/B4 CLOSED 2026-08-20; B5 in progress; still inert until the control ships — see §Blockers.**
+**Status: DECIDED (operator-approved 2026-08-19). WIRE HALF IMPLEMENTED 2026-08-20 (`a14d94bc`). RENDERER HALF IMPLEMENTED 2026-08-20: the control ships on the boundary row and the reading position now anchors on row identity. B1/B2/B4/B5 all CLOSED — see §Blockers. What remains is operator acceptance of a live press, which no headless suite can give.**
 Owns the single inbound vocabulary addition needed to make a truncated
 transcript recoverable from inside the app. Origin: the message-visibility UX
 review (`reviews/2026-08-19-transcript-message-visibility-ux-review.md`,
@@ -242,6 +242,7 @@ wrongly is not. The `complete` doc comment in `protocol.ts` no longer carries th
 "NOT yet implemented" caveat.
 
 ### B5 — index-based scroll anchoring assumes the projector only appends
+**CLOSED 2026-08-20.**
 
 The per-session scroll memory (`transcriptScrollMemory.ts`) anchors on row
 INDEX plus intra-row offset. That is exact under appends and wrong under
@@ -252,10 +253,24 @@ user would be thrown to the bottom at the exact moment they loaded earlier
 history, which is the opposite of the promised "you stay where you were
 reading".
 
-Fix shape, unbuilt: anchor on row IDENTITY rather than index. That needs one
-`data-row-key` attribute on the row wrappers in `TranscriptView.tsx`, which the
-scroll work already identified as its clean follow-up. With identity anchoring,
-prepending is transparent to the anchor and B1 stops interacting with it.
+Built as that fix shape. `TranscriptScrollAnchor` carries a `rowKey` instead of
+a `rowIndex`, `TranscriptView` publishes each display item's key on its row
+wrapper as `data-row-key`, and `readTranscriptRowGeometry` reads the key back
+off the DOM — which is what lets the anchor survive the grouping passes
+(delegate groups, reasoning runs, tool runs) without the scroll memory knowing
+them. The `rowsToken` guard is GONE rather than relaxed: with identity
+anchoring, its whole job (notice that the head moved) is the case that must NOT
+discard the anchor. Every earlier guarantee is pinned by the same tests it
+always was: a never-opened session opens at the end, a pane left pinned to the
+end lands at the new end, a key no longer in the list falls back to the end, and
+one capture per frame still costs 13 boxes on a 2,000-row pane.
+
+Cost, accepted: every top-level row now renders inside a wrapper `div` that
+carries the key. The nested lists already did this (`data-transcript-child`), and
+the revealed-hidden branch already wrapped its rows, so the shape is not new —
+but it is one DOM level per row across the whole column, and the flex item is
+now the wrapper rather than the row. Nothing in the headless suite can see a
+layout difference; a live pane is what would.
 
 ### B3 — subagent branches on the recovered prefix
 

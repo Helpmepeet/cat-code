@@ -17,27 +17,38 @@
  * so the position is built from whatever the heights are worth at that moment,
  * and every correction landing after it is the pane's own job again.
  *
- * The row is addressed by INDEX, not by id: the pane's DOM rows are grouped
- * display items (delegate groups, reasoning runs, tool runs) that carry no id
- * outside `TranscriptView`. An index is exact under the one thing that happens
- * to a transcript while its pane is away — rows appended at the end — and wrong
- * under anything that changes what the list starts with. So an anchor carries a
- * token naming the head of the list, and a token that no longer matches
- * (history truncated behind a boundary row, the hidden-row reveal toggled, the
- * reasoning layout changed) discards the anchor and opens the pane at the end,
+ * The row is addressed by IDENTITY, not by position. It was a position once, and
+ * that was exact under the one thing that used to happen to a transcript while
+ * its pane was away — rows appended at the end — but wrong under anything that
+ * renumbers the head of the list. Loading earlier messages does exactly that
+ * (`docs/migration/decisions/HISTORY-LOAD-EARLIER.md` B5): every surviving row
+ * moves down by however many were recovered, so an index would name a different
+ * row and the guard that caught it would throw the reader to the bottom at the
+ * precise moment they asked to read further back. An identity does not move.
+ *
+ * The identity is the key `TranscriptView` already gives each row, published on
+ * the row wrapper as `data-row-key` — the display items are grouped (delegate
+ * groups, reasoning runs, tool runs) and carry no id the pane could otherwise
+ * reach. A key that is no longer in the list (the reasoning layout changed, the
+ * hidden-row reveal toggled, the session was pruned) opens the pane at the end,
  * which is where it opened before any of this existed.
  */
 
 import type { SessionId } from '../../shared/protocol.js'
 
+/**
+ * The attribute each row wrapper publishes its identity under. Written by
+ * `TranscriptView`, read by `readTranscriptRowGeometry` below; the two halves
+ * are useless apart, so the name is stated once here.
+ */
+export const TRANSCRIPT_ROW_KEY_ATTRIBUTE = 'data-row-key'
+
 export type TranscriptScrollAnchor =
   | { kind: 'bottom' }
   | {
       kind: 'row'
-      /** Identity of the head of the row list when the anchor was taken. */
-      rowsToken: string
-      /** Index, from the top, of the row under the top of the viewport. */
-      rowIndex: number
+      /** Identity of the row under the top of the viewport. */
+      rowKey: string
       /** Pixels of that row already scrolled past the top of the viewport. */
       offsetIntoRow: number
     }
@@ -89,6 +100,14 @@ export type TranscriptRowGeometry = {
    * two reads of the same geometry.
    */
   readRowOffset: (index: number) => number
+  /**
+   * Identity of the row at `index`, or null when it carries none — the welcome
+   * and restore surfaces render children that are not rows, and a pane showing
+   * one takes no anchor.
+   */
+  readRowKey: (index: number) => string | null
+  /** Index of the row with this identity, or -1 when it is no longer here. */
+  findRowIndex: (key: string) => number
 }
 
 export type TranscriptScrollRestore =
@@ -103,18 +122,17 @@ export type TranscriptScrollRestore =
 export function selectTranscriptRowAnchor(input: {
   scrollTop: number
   atBottom: boolean
-  rowsToken: string | null
   geometry: TranscriptRowGeometry
 }): TranscriptScrollAnchor {
-  const { geometry, rowsToken } = input
-  if (input.atBottom || rowsToken === null || geometry.rowCount <= 0) {
-    return { kind: 'bottom' }
-  }
+  const { geometry } = input
+  if (input.atBottom || geometry.rowCount <= 0) return { kind: 'bottom' }
   const rowIndex = findTopRowIndex(geometry, input.scrollTop)
+  const rowKey = geometry.readRowKey(rowIndex)
+  // A pane whose children are not rows has nothing to come back to.
+  if (rowKey === null) return { kind: 'bottom' }
   return {
     kind: 'row',
-    rowsToken,
-    rowIndex,
+    rowKey,
     offsetIntoRow: Math.max(0, input.scrollTop - geometry.readRowOffset(rowIndex)),
   }
 }
@@ -128,20 +146,20 @@ export function selectTranscriptRowAnchor(input: {
  */
 export function selectTranscriptScrollRestore(input: {
   anchor: TranscriptScrollAnchor | null
-  rowsToken: string | null
   geometry: TranscriptRowGeometry
   viewportHeight: number
   contentHeight: number
 }): TranscriptScrollRestore {
   const { anchor, geometry } = input
   if (anchor === null || anchor.kind === 'bottom') return { kind: 'bottom' }
-  if (input.rowsToken === null || input.rowsToken !== anchor.rowsToken) {
-    return { kind: 'bottom' }
-  }
-  if (anchor.rowIndex >= geometry.rowCount) return { kind: 'bottom' }
+  // Rows that arrived ABOVE this one since it was remembered move it down the
+  // list, and it is still the row the reader was on: the search is for the key,
+  // never for the place it used to hold.
+  const rowIndex = geometry.findRowIndex(anchor.rowKey)
+  if (rowIndex < 0) return { kind: 'bottom' }
 
   const maxScrollTop = Math.max(0, input.contentHeight - input.viewportHeight)
-  const target = geometry.readRowOffset(anchor.rowIndex) + anchor.offsetIntoRow
+  const target = geometry.readRowOffset(rowIndex) + anchor.offsetIntoRow
   return { kind: 'offset', scrollTop: Math.min(maxScrollTop, Math.max(0, target)) }
 }
 
@@ -166,23 +184,35 @@ function findTopRowIndex(geometry: TranscriptRowGeometry, scrollTop: number): nu
  * Measures the live pane. `TranscriptView` renders its row column as the
  * scroller's only element child, so the rows are that column's children. An
  * empty session renders the welcome or restore surface there instead, whose
- * children are not rows — the caller's token is null in that case, and neither
- * function above will build an anchor out of it.
+ * children carry no `data-row-key` — so they report no identity, and neither
+ * function above will build an anchor out of them.
  */
 export function readTranscriptRowGeometry(scroller: HTMLElement): TranscriptRowGeometry {
   const rows = scroller.firstElementChild?.children ?? null
+  const rowCount = rows?.length ?? 0
+  // Reading an attribute costs no layout, which is what lets the key lookup be a
+  // plain walk while the offset lookup stays a binary search.
+  const readRowKey = (index: number): string | null =>
+    rows?.item(index)?.getAttribute(TRANSCRIPT_ROW_KEY_ATTRIBUTE) ?? null
   // Content origin in viewport coordinates, measured on the first row read and
   // reused, so every offset comes from one layout pass and a pane that needs no
   // row at all — one still following the end of its document, which is the case
   // that runs on every frame of a streaming turn — forces no layout.
   let originTop: number | null = null
   return {
-    rowCount: rows?.length ?? 0,
+    rowCount,
     readRowOffset: index => {
       const row = rows?.item(index)
       if (!row) return 0
       originTop ??= scroller.getBoundingClientRect().top - scroller.scrollTop
       return row.getBoundingClientRect().top - originTop
+    },
+    readRowKey,
+    findRowIndex: key => {
+      for (let index = 0; index < rowCount; index += 1) {
+        if (readRowKey(index) === key) return index
+      }
+      return -1
     },
   }
 }
@@ -190,12 +220,11 @@ export function readTranscriptRowGeometry(scroller: HTMLElement): TranscriptRowG
 /** The anchor to remember for the pane as it currently stands. */
 export function captureTranscriptScrollAnchor(
   scroller: HTMLElement,
-  input: { atBottom: boolean; rowsToken: string | null },
+  input: { atBottom: boolean },
 ): TranscriptScrollAnchor {
   return selectTranscriptRowAnchor({
     scrollTop: scroller.scrollTop,
     atBottom: input.atBottom,
-    rowsToken: input.rowsToken,
     geometry: readTranscriptRowGeometry(scroller),
   })
 }
@@ -277,11 +306,10 @@ export function createTranscriptScrollCapturePump(
  */
 export function restoreTranscriptScroll(
   scroller: HTMLElement,
-  input: { anchor: TranscriptScrollAnchor | null; rowsToken: string | null },
+  input: { anchor: TranscriptScrollAnchor | null },
 ): TranscriptScrollRestore {
   const restore = selectTranscriptScrollRestore({
     anchor: input.anchor,
-    rowsToken: input.rowsToken,
     geometry: readTranscriptRowGeometry(scroller),
     viewportHeight: scroller.clientHeight,
     contentHeight: scroller.scrollHeight,
