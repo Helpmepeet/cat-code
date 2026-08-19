@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { SDKMessage } from '@cat-code/engine/sdk'
 import {
   CONTEXT_REFERENCE_TOKENS,
+  selectContextPercent,
   selectContextReferenceFraction,
   selectContextUsage,
 } from './contextUsage.js'
@@ -481,8 +482,13 @@ test('clamps to 100% when the context exceeds the window', () => {
   expect(usage.percentUsed).toBe(100)
 })
 
-test('shows a 0% default gauge before any turn (the prototype donut is always on)', () => {
-  const empty = { usedTokens: 0, contextWindow: 200_000, percentUsed: 0 }
+test('shows a default gauge before any turn (the prototype donut is always on)', () => {
+  const empty = {
+    usedTokens: 0,
+    contextWindow: 200_000,
+    percentUsed: 0,
+    windowIsFallback: true,
+  }
   expect(selectContextUsage([])).toEqual(empty)
   expect(selectContextUsage([filler])).toEqual(empty)
 })
@@ -556,7 +562,70 @@ test('defaults the window when the result omits contextWindow (still shows the d
     ...anthropicTurn(10_000, 0, 0),
     result({ input_tokens: 9_999_999 }, { m: { inputTokens: 10_000 } }),
   ])
-  expect(usage).toEqual({ usedTokens: 10_000, contextWindow: 200_000, percentUsed: 5 })
+  expect(usage).toEqual({
+    usedTokens: 10_000,
+    contextWindow: 200_000,
+    percentUsed: 5,
+    windowIsFallback: true,
+  })
+})
+
+/**
+ * Finding 8 (2026-08-19 transcript message-visibility review): the gauge used to
+ * print a confident percentage over `DEFAULT_CONTEXT_WINDOW` for a pane that had
+ * never been told a window. The donut still ALWAYS renders (prototype parity),
+ * but the NUMBER is now withheld until the denominator is real.
+ */
+describe('selectContextPercent', () => {
+  test('is null when the window is the fallback constant, not a reported one', () => {
+    // A retained tail with real usage and no window anywhere: the numerator is
+    // honest, the denominator is invented, so the ratio is not a measurement.
+    const usage = selectContextUsage([
+      ...anthropicTurn(10_000, 0, 0),
+      result({ input_tokens: 9_999_999 }, { m: { inputTokens: 10_000 } }),
+    ])
+    expect(usage.windowIsFallback).toBe(true)
+    expect(selectContextPercent(usage)).toBeNull()
+    // The tokens counted are still real, and still on offer to the readout.
+    expect(usage.usedTokens).toBe(10_000)
+  })
+
+  test('is null before any turn, when nothing has reported a window yet', () => {
+    expect(selectContextPercent(selectContextUsage([]))).toBeNull()
+  })
+
+  test('is the percentage as soon as a real window arrives', () => {
+    // Same transcript, now with the engine-resolved window from run controls.
+    const resolved = selectContextUsage(
+      [...anthropicTurn(10_000, 0, 0)],
+      'gpt-5.6-terra',
+      352_000,
+    )
+    expect(resolved.windowIsFallback).toBeUndefined()
+    expect(selectContextPercent(resolved)).toBe(3)
+
+    // And through the result-frame fallback denominator.
+    const fromResult = selectContextUsage([
+      ...anthropicTurn(50_000, 0, 0),
+      result({ input_tokens: 9_999_999 }, { m: { contextWindow: 200_000 } }),
+    ])
+    expect(fromResult.windowIsFallback).toBeUndefined()
+    expect(selectContextPercent(fromResult)).toBe(25)
+  })
+
+  test('a real 200,000-token window is not mistaken for the fallback', () => {
+    // The flag exists precisely because the constant is a plausible real window:
+    // comparing `contextWindow` to 200,000 would blank this gauge.
+    const usage = selectContextUsage([], 'claude-opus-5', 200_000)
+    expect(usage.windowIsFallback).toBeUndefined()
+    expect(selectContextPercent(usage)).toBe(0)
+  })
+
+  test('passes through a usage built by another caller, which is always known', () => {
+    expect(
+      selectContextPercent({ usedTokens: 5, contextWindow: 10, percentUsed: 50 }),
+    ).toBe(50)
+  })
 })
 
 describe('selectContextReferenceFraction', () => {

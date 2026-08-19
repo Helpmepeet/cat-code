@@ -401,7 +401,11 @@ ${JSON.stringify(transcriptRows, null, 2)}
 ## Raw SDKMessage events
 
 Raw retention: ${rawLog.truncated ? 'TRUNCATED' : 'complete'} (${rawLog.retainedBytes} UTF-8 JSON bytes retained)
-
+${
+  rawLog.truncated
+    ? 'Expect this section to be SHORTER than the projected transcript above. The raw log is capped per session and drops its oldest events once the cap is hit; the projected transcript is not capped. The two sections covering different spans is normal, not a bug.\n'
+    : ''
+}
 \`\`\`json
 ${JSON.stringify(rawLog.messages, null, 2)}
 \`\`\`

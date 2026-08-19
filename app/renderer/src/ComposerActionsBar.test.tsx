@@ -1096,3 +1096,27 @@ test('the detached account face keeps its status dot', () => {
   })
   expect(limited).toContain(toneClasses('warn').dot)
 })
+
+/**
+ * Finding 8 (2026-08-19 transcript message-visibility review). With no window
+ * reported, the donut face withholds its percentage; the popover it opens must
+ * not then assert the same percentage two pixels away. Its header falls back to
+ * the one number that IS real, the token total.
+ */
+test('the usage popover withholds the percentage on a fallback window', () => {
+  const html = renderToStaticMarkup(
+    <ContextUsagePanel usage={{ ...USAGE, windowIsFallback: true }} />,
+  )
+  expect(html).toContain('Context')
+  expect(html).toContain('42k used')
+  expect(html).not.toContain('21%')
+  expect(html).not.toContain('200k')
+})
+
+test('the donut trigger drops the percentage from its label on a fallback window', () => {
+  const html = render({ contextUsage: { ...USAGE, windowIsFallback: true } })
+  // The donut still renders and still opens the popover.
+  expect(countOccurrences(html, 'aria-haspopup="dialog"')).toBe(1)
+  expect(html).toContain('aria-label="Open context usage"')
+  expect(html).not.toContain('Context 21% used')
+})

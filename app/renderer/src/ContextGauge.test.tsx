@@ -143,3 +143,36 @@ test('0% keeps the prototype dot rather than an empty ring', () => {
   expect(html).toContain('stroke-linecap="round"')
   expect(html).not.toContain('stroke-dashoffset')
 })
+
+// Finding 8 (2026-08-19 transcript message-visibility review). The donut is
+// never hidden, so the unknown state has to be a state OF the donut: ring at
+// rest, no number, and the token count moved into the hover text.
+test('withholds the percent when the window is the fallback constant', () => {
+  const html = renderToStaticMarkup(
+    <ContextGauge
+      usage={{
+        usedTokens: 10_000,
+        contextWindow: 200_000,
+        percentUsed: 5,
+        windowIsFallback: true,
+      }}
+    />,
+  )
+  // Still rendered, still on the prototype's empty-state dot.
+  expect(html).toContain('<svg')
+  expect(html).toContain('stroke-dasharray="0 40.840704496667314"')
+  // No percentage anywhere: not in the face, not in the label, not in the title.
+  expect(html).not.toContain('5%')
+  expect(html).not.toContain('% used')
+  expect(html).toContain('aria-label="Context 10,000 tokens used"')
+  expect(html).toContain('window size not reported yet')
+})
+
+test('fills the percent in as soon as a real window arrives', () => {
+  const html = renderToStaticMarkup(
+    <ContextGauge usage={{ usedTokens: 10_000, contextWindow: 200_000, percentUsed: 5 }} />,
+  )
+  expect(html).toContain('5%')
+  expect(html).toContain('aria-label="Context 5% used"')
+  expect(html).not.toContain('window size not reported yet')
+})

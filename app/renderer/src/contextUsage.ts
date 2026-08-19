@@ -7,7 +7,9 @@ import type { Tone } from './tone.js'
  * it renders `Math.round(tokens / (contextMax || 200000) * 100)` with `tokens`
  * defaulting to 0 (`Surfaces.jsx:471-473`), so a fresh session shows a 0% donut,
  * never a hidden gauge. This selector matches that: it ALWAYS returns a usage,
- * defaulting to 0% over a 200k window before any turn.
+ * defaulting to 0% over a 200k window before any turn. Where that 200k window is
+ * a guess rather than a reported one, the usage says so (`windowIsFallback`) and
+ * the gauge draws the ring without a percentage.
  *
  * ## `usedTokens` — the size of ONE message's context, never a running total
  *
@@ -68,13 +70,39 @@ import type { Tone } from './tone.js'
  *
  * `DEFAULT_CONTEXT_WINDOW` remains the last resort, for a pane with no live
  * snapshot at all (a preview, or the moment before attach), exactly like the
- * prototype's `status.contextMax || 200000`.
+ * prototype's `status.contextMax || 200000`. It keeps the ring on a scale, but a
+ * ratio against it is not a measurement of anything, so that case is flagged
+ * (`windowIsFallback`) and the percentage is withheld until a real window lands.
  */
 export type ContextUsage = {
   usedTokens: number
   contextWindow: number
   /** 0–100, clamped. Context-window fullness = usedTokens ÷ contextWindow. */
   percentUsed: number
+  /**
+   * True when `contextWindow` is `DEFAULT_CONTEXT_WINDOW` rather than a window
+   * anything actually reported, which makes `percentUsed` a ratio against a
+   * denominator we invented. The gauge keeps rendering, and withholds the
+   * number: read it through {@link selectContextPercent} rather than testing
+   * `contextWindow` against the constant, because a model whose real window IS
+   * 200,000 is indistinguishable that way.
+   *
+   * OPTIONAL, and ABSENT MEANS KNOWN, so callers that build a `ContextUsage`
+   * from a denominator of their own keep their current behaviour untouched.
+   */
+  windowIsFallback?: boolean
+}
+
+/**
+ * The percentage to PRINT, or null when there is none to print.
+ *
+ * Null is the honest answer for a pane whose window nothing has reported: the
+ * ring still draws (the prototype's `ContextChip` never hides) but it draws at
+ * rest, because the only percentage available is measured against a constant
+ * this session may never run under.
+ */
+export function selectContextPercent(usage: ContextUsage): number | null {
+  return usage.windowIsFallback === true ? null : usage.percentUsed
 }
 
 /**
@@ -396,11 +424,16 @@ export function selectContextUsage(
   }
 
   // Always show the donut (the prototype's ContextChip never hides). A pane
-  // with neither an effective snapshot nor a retained result uses the constant.
-  if (contextWindow <= 0) contextWindow = DEFAULT_CONTEXT_WINDOW
+  // with neither an effective snapshot nor a retained result has no denominator
+  // at all: it keeps the constant so the ring still has a scale, and says so, so
+  // the gauge can withhold a percentage rather than assert one it cannot back.
+  const windowIsFallback = contextWindow <= 0
+  if (windowIsFallback) contextWindow = DEFAULT_CONTEXT_WINDOW
   const percentUsed = Math.min(
     100,
     Math.max(0, Math.round((usedTokens / contextWindow) * 100)),
   )
-  return { usedTokens, contextWindow, percentUsed }
+  return windowIsFallback
+    ? { usedTokens, contextWindow, percentUsed, windowIsFallback: true }
+    : { usedTokens, contextWindow, percentUsed }
 }

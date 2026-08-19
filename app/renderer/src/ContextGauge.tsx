@@ -1,6 +1,7 @@
 import {
   CONTEXT_REFERENCE_TOKENS,
   pressureTone,
+  selectContextPercent,
   selectContextReferenceFraction,
   type ContextUsage,
 } from './contextUsage.js'
@@ -13,6 +14,12 @@ import { toneClasses } from './tone.js'
  * {@link selectContextUsage} — real result-frame usage, no invented data. The
  * pink brand hue while there is headroom, taking on warn/danger tone as the
  * window fills.
+ *
+ * The gauge NEVER hides, but it does go quiet. When nothing has reported this
+ * pane's window ({@link selectContextPercent} returns null) there is no honest
+ * percentage to print, only a ratio against a default constant, so the ring
+ * draws at rest with no number beside it and the token count moves to the hover
+ * text. The moment a real window lands it fills in normally.
  *
  * A DEVIATION from the prototype, added deliberately (operator call,
  * 2026-08-17): the white reference tick at
@@ -61,9 +68,13 @@ function referenceTick(fraction: number) {
 }
 
 export function ContextGauge({ usage }: { usage: ContextUsage }) {
-  const { percentUsed, usedTokens, contextWindow } = usage
-  const tone = toneClasses(pressureTone(percentUsed)).text
-  const arcLength = (percentUsed / 100) * CIRCUMFERENCE
+  const { usedTokens, contextWindow } = usage
+  // Null when nothing has reported this pane's window, so the only percentage
+  // on offer is measured against a constant. The ring still draws (never hide
+  // the donut), at rest and untinted, and the number is simply absent.
+  const percent = selectContextPercent(usage)
+  const tone = toneClasses(pressureTone(percent ?? 0)).text
+  const arcLength = ((percent ?? 0) / 100) * CIRCUMFERENCE
   // Drawn AFTER the arc, and in white rather than `currentColor`, so it stays
   // legible on both sides of itself: over the tinted arc once the session has
   // passed it, and over the faint track while it has not.
@@ -73,7 +84,10 @@ export function ContextGauge({ usage }: { usage: ContextUsage }) {
   // which is where this gauge already keeps its token detail. `aria-label` stays
   // the terse percentage it has always been: the tick is a visual reference, and
   // the svg is aria-hidden, so announcing a line nobody can see would be noise.
-  const readout = `Context: ${usedTokens.toLocaleString()} / ${contextWindow.toLocaleString()} tokens (${percentUsed}% used)`
+  const readout =
+    percent == null
+      ? `Context: ${usedTokens.toLocaleString()} tokens used, window size not reported yet`
+      : `Context: ${usedTokens.toLocaleString()} / ${contextWindow.toLocaleString()} tokens (${percent}% used)`
   return (
     <span
       className={`flex shrink-0 items-center gap-1.5 self-center ${tone}`}
@@ -82,7 +96,11 @@ export function ContextGauge({ usage }: { usage: ContextUsage }) {
           ? `${readout}, mark at ${CONTEXT_REFERENCE_TOKENS.toLocaleString()}`
           : readout
       }
-      aria-label={`Context ${percentUsed}% used`}
+      aria-label={
+        percent == null
+          ? `Context ${usedTokens.toLocaleString()} tokens used`
+          : `Context ${percent}% used`
+      }
     >
       <svg width="16" height="16" viewBox="0 0 16 16" className="-rotate-90" aria-hidden>
         <circle
@@ -115,7 +133,9 @@ export function ContextGauge({ usage }: { usage: ContextUsage }) {
           />
         ) : null}
       </svg>
-      <span className="text-[12.5px] font-semibold tabular-nums">{percentUsed}%</span>
+      {percent == null ? null : (
+        <span className="text-[12.5px] font-semibold tabular-nums">{percent}%</span>
+      )}
     </span>
   )
 }

@@ -11,7 +11,11 @@ import {
 } from './accountsPageModel.js'
 import { handleMenuRovingKeyDown, usePopover } from './composerPopover.js'
 import { ContextGauge } from './ContextGauge.js'
-import { pressureTone, type ContextUsage } from './contextUsage.js'
+import {
+  pressureTone,
+  selectContextPercent,
+  type ContextUsage,
+} from './contextUsage.js'
 import {
   selectBreakdownRows,
   selectDonutView,
@@ -66,7 +70,8 @@ import type {
  *    pane with no engine does not silently lose the signal.
  *  - CONTEXT donut is ALWAYS shown (the prototype's `ContextChip` never hides,
  *    `Surfaces.jsx:471-473`): `selectContextUsage` returns real result-frame usage
- *    once a turn provides it, and a 0% / default-window gauge before then.
+ *    once a turn provides it. Before a window is known the ring still draws, at
+ *    rest and without a percentage, rather than dividing by the default constant.
  *
  * The prototype's RECAP icon (Chat.jsx:1438) is intentionally omitted (user
  * decision, 2026-07-13) — only the attach glyph remains in the icon slot.
@@ -791,12 +796,14 @@ export function ContextUsagePanel({
    */
   onCompact?: () => void
 }) {
-  const { percentUsed, usedTokens, contextWindow } = selectPanelUsage(
-    usage,
-    breakdown,
-  )
+  const panelUsage = selectPanelUsage(usage, breakdown)
+  const { percentUsed, usedTokens, contextWindow } = panelUsage
+  // Null while nothing has reported the window, exactly as on the donut face.
+  // A breakdown carries its own real window, so this is only ever null in the
+  // aggregate-row-only state, where the row prints the token total alone.
+  const percent = selectContextPercent(panelUsage)
   // Context fullness, NOT account quota — the same ladder the donut face reads.
-  const tone = pressureTone(percentUsed)
+  const tone = pressureTone(percent ?? 0)
   const t = toneClasses(tone)
   // Past the pressure threshold the panel's action escalates. The threshold is
   // `pressureTone`'s OWN ladder (warn at 70, danger at 90), deliberately not a
@@ -824,8 +831,14 @@ export function ContextUsagePanel({
         >
           <span className="text-[11.5px] text-text-subtle">Context</span>
           <span className="text-[11.5px] tabular-nums text-text-muted">
-            <span className={`font-semibold ${t.text}`}>{percentUsed}%</span> ·{' '}
-            {fmtTokens(usedTokens)} / {fmtTokens(contextWindow)}
+            {percent == null ? (
+              `${fmtTokens(usedTokens)} used`
+            ) : (
+              <>
+                <span className={`font-semibold ${t.text}`}>{percent}%</span> ·{' '}
+                {fmtTokens(usedTokens)} / {fmtTokens(contextWindow)}
+              </>
+            )}
           </span>
         </div>
         {rows.length > 0 ? (
@@ -1057,6 +1070,9 @@ function ContextChip({
   faceProps?: ComposerFaceProps
 }) {
   const { open, setOpen, close, ref, triggerRef } = usePopover()
+  // Null on a fallback window, where the face itself shows no percentage: the
+  // label must not announce one the donut is deliberately withholding.
+  const percent = selectContextPercent(usage)
   return (
     <div ref={ref} className="relative flex shrink-0">
       <button
@@ -1065,7 +1081,11 @@ function ContextChip({
         type="button"
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label={`Context ${usage.percentUsed}% used, open usage`}
+        aria-label={
+          percent == null
+            ? 'Open context usage'
+            : `Context ${percent}% used, open usage`
+        }
         onClick={() => {
           // Recompute on the OPENING edge only: the analysis costs ~10 token
           // counts, so it is paid when the panel is actually being read, never on
