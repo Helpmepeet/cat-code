@@ -74,7 +74,7 @@ instead of assuming.
 When writing or changing Cat Code tests, use the global `writing-cat-code-tests` skill.
 
 ```bash
-bun run build:dev:full        # THE build gate: branch-diff lint + ./cli-dev + version print
+bun run build:dev:full        # THE build gate: maps:lint + branch-diff lint + ./cli-dev + version print
 bun test <specific paths>     # focused tests only — there is NO root test script
 ```
 
@@ -82,8 +82,8 @@ bun test <specific paths>     # focused tests only — there is NO root test scr
 - Never bare `bun test` on the whole repo; some suites (Codex account suites)
   only pass file-isolated.
 - Test routing per subsystem: `docs/maps/build-release-testing.md` §Test Routing.
-- **Root `bun run typecheck` is KNOWN-RED** (~1,862 pre-existing errors across
-  `src/` as of 2026-07-07; tsconfig is `strict:false` and test files dominate).
+- **Root `bun run typecheck` is KNOWN-RED** (1,974 pre-existing errors across
+  `src/` as of 2026-08-19; tsconfig is `strict:false` and test files dominate).
   It is NOT a gate and not your job to fix. The engine gate is
   `build:dev:full` + focused tests. If you must reason about types in `src/`,
   compare error output before/after your change — zero NEW errors is the bar.
@@ -147,10 +147,13 @@ tears down all three (`app/scripts/dev.ts`). Facts that follow from that:
   and hooks into adjacent `.ts` files; type-only exports are fine. The desktop
   dev, typecheck, and renderer-build scripts enforce this with
   `lint:fast-refresh`, backed by `fastRefreshBoundaries.test.ts`.
-- Live baseline as of 2026-07-07 (re-measure, don't assume): `bun test app/`
-  485 pass / 0 fail · app tsc clean · sidecar wrapper green (5,548 upstream
-  ignored) · hardening 19 checks. The counts grow; a DROP in pass count or any
-  new owned diagnostic is a regression.
+- Live baseline as of 2026-08-19 (re-measure, don't assume): `bun test app/`
+  3,675 pass / 1 fail across 234 files · app tsc clean · sidecar wrapper green
+  (5,577 upstream ignored) · hardening 19/19. The counts grow; a DROP in pass
+  count or any new owned diagnostic is a regression. The 1 fail is
+  `app/sidecar/subagentRestore.probe.test.ts`: live-sidecar probes need
+  `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` and fail without one, so
+  read the `[sidecar] … env var is required` line before calling it yours.
 - Root `bun run lint` does not cover `app/**` (Phase-5 CI item). Do not cite a
   clean root lint as evidence for an `app/` change.
 - **Private desktop diagnostics:** Electron main owns bounded, local operational
@@ -347,14 +350,22 @@ Anything a user can read on screen: JSX text, `desc`/`title`/`placeholder`,
   or use a comma or colon. This includes the `'—'` no-value placeholder (write
   `none`) and ` — ` as an aria-label separator (write `, `). Check with
   `rg -n '—' app/renderer/src --glob '!*.test.*'` and confirm every remaining
-  hit is a code comment. Code comments and `docs/` are NOT a text surface and
-  are unaffected.
+  hit is a code comment or a dev-only fixture name in `sdkMessageFixtures.ts`
+  (the one standing exclusion). That sweep returns well over a thousand lines,
+  nearly all of them comments, so read it as a diff against a clean run, not as
+  a hit list. Code comments and `docs/` are NOT a text surface and are
+  unaffected. Nothing enforces this half of §7 automatically: the sweep is the
+  only check.
 - **Never render engineering notes.** No `file.ts:123` citations, no session
   ids (`P4-6b`, `CC-19`), no internal vocabulary (read seam, write allowlist,
   sidecar review, registry row, host-API gap, `MAX_*` constant names). A
   deviation belongs in your report and the STATUS row, which is what §9 asks
   for; a component that exists to print your to-do list on the page is the bug
   (`DeferredNote`, deleted 2026-07-27 after the operator rejected the page).
+  **This half IS enforced:** `app/renderer/src/userVisibleText.test.ts` sweeps
+  every prose-shaped string across renderer, main, host, and sidecar. A genuine
+  exception needs `§7-ok` in a comment on the same line, never a widened word
+  list.
 - **Say only what is surprising.** Restating the state the user just chose is
   noise; spend prose on what contradicts it. See `settingsRowNote`
   (`app/renderer/src/settingsScope.ts`), which returns null for the ordinary
