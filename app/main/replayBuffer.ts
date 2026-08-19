@@ -30,7 +30,8 @@
  *  - `ring` — everything else (transcript `event` traffic, request-scoped
  *    replies, lifecycle). Bounded by BOTH count and serialized UTF-8 JSON
  *    bytes; oldest evicted until both limits hold, and a frame larger than the
- *    whole byte budget is not retained.
+ *    whole byte budget is not retained. One `event` frame is exempt from
+ *    retention entirely — a `recovered` one, see `record` (B2).
  *  - `preview` — generated-image bytes, keyed by tool-use id and bounded by
  *    their own byte budget. A preview can be larger than the transcript ring;
  *    keeping it outside that ring prevents one image from erasing the result
@@ -277,6 +278,27 @@ export class FrameReplayBuffer {
       }
       return
     }
+    // B2 (decisions/HISTORY-LOAD-EARLIER.md). Recovered history is NOT retained.
+    //
+    // It cannot be discriminated in `FRAME_RETENTION` above: that table is keyed
+    // by frame KIND, and a recovered frame and a restore replay are both
+    // `event`. So the decision lives here, where the ring decides to retain, and
+    // the table's exhaustiveness tripwire is left alone.
+    //
+    // The ring evicts oldest-BY-ARRIVAL, and recovered frames are the oldest
+    // messages arriving LAST. Retaining them would evict live frames from the
+    // middle of the session while keeping ancient ones, so a renderer reload
+    // would replay a transcript with a hole in it — strictly worse than the
+    // contiguous tail the boundary row promises. Recovered history is
+    // re-fetchable from disk on demand, so dropping it costs one more click and
+    // keeps every retained tail contiguous.
+    //
+    // Deliberately NOT marking `entry.truncated`: nothing was evicted and the
+    // retained tail is exactly as complete as it was a moment ago. The boundary
+    // row the renderer draws from the sidecar's own signal still says what is
+    // true, that there is more above what this pane holds.
+    if (frame.kind === 'event' && frame.recovered === true) return
+
     const frameBytes = serializedUtf8Bytes(frame)
     if (frameBytes > this.maxRecentBytes) {
       // Drop ONLY the oversized frame. `MAX_OUTBOUND_FRAME_BYTES` (32 MiB) is

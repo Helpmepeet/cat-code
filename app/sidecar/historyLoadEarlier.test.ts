@@ -668,3 +668,44 @@ test('an incomplete read does NOT latch, so the head stays reachable', async () 
     complete: true,
   })
 })
+
+/**
+ * B1/B2 (decisions/HISTORY-LOAD-EARLIER.md). `recovered` is what tells the
+ * renderer's projector to INSERT rather than append, and what tells main's
+ * replay ring not to retain. Both consumers read it off the frame, so setting
+ * it here is the whole mechanism — and setting it on the ATTACH replay too
+ * would break both: that replay is the retained tail itself.
+ */
+test('recovered frames are marked, and the attach replay is not', async () => {
+  const older = historyMessage('older-1', 'recovered')
+  const anchor = historyMessage('anchor-1', 'on screen')
+  const server = makeServer({
+    history: [anchor],
+    historySourceTruncated: true,
+    loadEarlierHistory: async () => ({
+      messages: [older, anchor],
+      truncated: false,
+    }),
+  })
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+
+  const attachReplay = received.filter(
+    f => f.kind === 'event' && f.replay === true,
+  )
+  expect(attachReplay).toHaveLength(1)
+  expect(attachReplay[0]).not.toHaveProperty('recovered')
+
+  const attached = received.length
+  server.handleData(
+    connection,
+    frame({ type: 'history.loadEarlier', requestId: 'req-1' }),
+  )
+  await Bun.sleep(0)
+
+  const emitted = received
+    .slice(attached)
+    .filter(f => f.kind === 'event')
+  expect(emitted).toHaveLength(1)
+  expect(emitted[0]).toMatchObject({ replay: true, recovered: true })
+})

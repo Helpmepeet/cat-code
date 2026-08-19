@@ -4060,3 +4060,231 @@ type _ProseDoesNot = NestedRowOfKind<'assistant-text'>['stepsNotLoaded']
 type _BoundaryDoesNot = NestedRowOfKind<'history-boundary'>['stepsNotLoaded']
 // @ts-expect-error — the orphan placeholder is the missing card, not a loaded one.
 type _OrphanDoesNot = NestedRowOfKind<'orphaned-agent'>['stepsNotLoaded']
+
+/* ── B1/B4: recovered history (decisions/HISTORY-LOAD-EARLIER.md) ── */
+
+/**
+ * One message recovered by `history.loadEarlier`. Same `replay` as a restore
+ * frame; `recovered` is the whole difference, and it is what tells an INSERTION
+ * apart from an append.
+ */
+function recoveredFrame(sessionId: string, label: string) {
+  return {
+    ...messageFrame(sessionId, {
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: label }],
+      },
+      parent_tool_use_id: null,
+      uuid: `00000000-0000-4000-8000-recovered-${label}`,
+    } as unknown as SDKMessage),
+    replay: true as const,
+    recovered: true as const,
+  }
+}
+
+function recoveredUserFrame(sessionId: string, label: string) {
+  return {
+    ...messageFrame(sessionId, {
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'text', text: label }] },
+      parent_tool_use_id: null,
+      uuid: `00000000-0000-4000-8000-recovered-user-${label}`,
+    } as unknown as SDKMessage),
+    replay: true as const,
+    recovered: true as const,
+  }
+}
+
+function loadEarlierResult(
+  sessionId: string,
+  complete: boolean,
+  requestId = 'req-1',
+) {
+  return {
+    kind: 'history.loadEarlier.result' as const,
+    protocolVersion: 1 as const,
+    sessionId,
+    requestId,
+    ok: true,
+    message: 'Loaded earlier messages.',
+    added: 1,
+    complete,
+  }
+}
+
+function bodies(state: ReturnType<typeof createTranscriptState>): string[] {
+  return selectTranscriptRows(state, 'session-1').flatMap(row =>
+    row.kind === 'assistant-text' || row.kind === 'user-text'
+      ? [row.content]
+      : [],
+  )
+}
+
+/**
+ * The defect this pins (B1): `appendFrameRows` appended unconditionally and
+ * nothing in the module sorts, so messages recovered mid-session rendered
+ * UNDERNEATH the conversation they precede.
+ */
+test('a recovered batch lands above the conversation, oldest first', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(state, assistantFrame('session-1', 1))
+  state = projectServerFrame(state, assistantFrame('session-1', 2))
+
+  // The sidecar emits the missing prefix oldest-first.
+  state = projectServerFrame(state, recoveredFrame('session-1', 'old-a'))
+  state = projectServerFrame(state, recoveredUserFrame('session-1', 'old-b'))
+  state = projectServerFrame(state, recoveredFrame('session-1', 'old-c'))
+  state = projectServerFrame(state, loadEarlierResult('session-1', false))
+
+  expect(bodies(state)).toEqual([
+    'old-a',
+    'old-b',
+    'old-c',
+    'body 1',
+    'body 2',
+  ])
+})
+
+/** The other half: nothing about the ordinary append path moved. */
+test('an ordinary frame still appends after a recovery batch has closed', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(state, assistantFrame('session-1', 1))
+  state = projectServerFrame(state, recoveredFrame('session-1', 'old-a'))
+  state = projectServerFrame(state, loadEarlierResult('session-1', false))
+  state = projectServerFrame(state, assistantFrame('session-1', 2))
+
+  expect(bodies(state)).toEqual(['old-a', 'body 1', 'body 2'])
+})
+
+/**
+ * An interrupted batch cannot corrupt what follows: the closing result never
+ * arrives (the connection dropped), and the next live frame must still append.
+ * The cursor is re-derived from every frame, so a frame without `recovered`
+ * cannot reach the insertion branch at all.
+ */
+test('a live frame appends even when the closing result never arrived', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(state, assistantFrame('session-1', 1))
+  state = projectServerFrame(state, recoveredFrame('session-1', 'old-a'))
+  // No `history.loadEarlier.result` here.
+  state = projectServerFrame(state, assistantFrame('session-1', 2))
+
+  expect(bodies(state)).toEqual(['old-a', 'body 1', 'body 2'])
+})
+
+/**
+ * Successive recoveries reach FURTHER back, so each batch stacks above the
+ * previous one. That only holds because the result frame resets the cursor.
+ */
+test('a second recovery stacks above the first', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(state, assistantFrame('session-1', 1))
+
+  state = projectServerFrame(state, recoveredFrame('session-1', 'near-a'))
+  state = projectServerFrame(state, recoveredFrame('session-1', 'near-b'))
+  state = projectServerFrame(
+    state,
+    loadEarlierResult('session-1', false, 'req-1'),
+  )
+
+  state = projectServerFrame(state, recoveredFrame('session-1', 'far-a'))
+  state = projectServerFrame(state, recoveredFrame('session-1', 'far-b'))
+  state = projectServerFrame(
+    state,
+    loadEarlierResult('session-1', false, 'req-2'),
+  )
+
+  expect(bodies(state)).toEqual([
+    'far-a',
+    'far-b',
+    'near-a',
+    'near-b',
+    'body 1',
+  ])
+})
+
+/** Rows are never rewritten: an insertion places rows, it does not touch them. */
+test('an insertion leaves every existing row object identical', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(state, assistantFrame('session-1', 1))
+  const before = selectTranscriptRows(state, 'session-1')
+
+  state = projectServerFrame(state, recoveredFrame('session-1', 'old-a'))
+  const after = selectTranscriptRows(state, 'session-1')
+
+  expect(after).toHaveLength(2)
+  expect(after[1]).toBe(before[0])
+})
+
+/**
+ * The boundary row is synthesized above `rows[0]`, and `rows[0]` is exactly what
+ * an insertion changes.
+ */
+test('the boundary row stays above the newly inserted rows', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    truncationFrame('session-1', 'catcode.history-truncated'),
+  )
+  state = projectServerFrame(state, assistantFrame('session-1', 1))
+  state = projectServerFrame(state, recoveredFrame('session-1', 'old-a'))
+  state = projectServerFrame(state, loadEarlierResult('session-1', false))
+
+  expect(
+    selectNestedTranscriptRows(state, 'session-1').map(row => row.kind),
+  ).toEqual(['history-boundary', 'assistant-text', 'assistant-text'])
+  expect(bodies(state)).toEqual(['old-a', 'body 1'])
+})
+
+/**
+ * The defect this pins (B4): `historyTruncated` latched permanently, so a
+ * renderer wired to this frame would leave the boundary row standing over a
+ * transcript that is now whole — inverting the design's own completeness
+ * signal, that the row's ABSENCE means you are seeing everything.
+ */
+test('a complete result clears the boundary row, an incomplete one leaves it', () => {
+  for (const complete of [true, false]) {
+    let state = createTranscriptState()
+    state = projectServerFrame(state, ready('session-1'))
+    state = projectServerFrame(
+      state,
+      truncationFrame('session-1', 'catcode.history-truncated'),
+    )
+    state = projectServerFrame(state, assistantFrame('session-1', 1))
+    state = projectServerFrame(state, recoveredFrame('session-1', 'old-a'))
+    state = projectServerFrame(state, loadEarlierResult('session-1', complete))
+
+    const kinds = selectNestedTranscriptRows(state, 'session-1').map(
+      row => row.kind,
+    )
+    expect(kinds.includes('history-boundary')).toBe(!complete)
+  }
+})
+
+/** A refusal learned nothing, so it cannot claim the transcript is whole. */
+test('a refused result never clears the boundary row', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    truncationFrame('session-1', 'catcode.history-truncated'),
+  )
+  state = projectServerFrame(state, assistantFrame('session-1', 1))
+  state = projectServerFrame(state, {
+    ...loadEarlierResult('session-1', true),
+    ok: false,
+    added: 0,
+  })
+
+  expect(
+    selectNestedTranscriptRows(state, 'session-1').map(row => row.kind),
+  ).toContain('history-boundary')
+})

@@ -635,6 +635,29 @@ export type EventFrame = {
    * Never set on live events.
    */
   replay?: true
+  /**
+   * Present (`true`) ONLY on the frames one `history.loadEarlier` recovered
+   * from disk (decisions/HISTORY-LOAD-EARLIER.md, blockers B1 and B2).
+   *
+   * It exists to tell an INSERTION apart from an append. Transcript order is
+   * frame ARRIVAL order — the projector has no sort — so a restore replay only
+   * lands in the right place because it arrives before anything else. Messages
+   * recovered mid-session are OLDER than everything on screen and must be
+   * placed above it, which is a different operation from the append every other
+   * event frame gets, and nothing else on the wire distinguishes the two.
+   *
+   * A recovered frame IS genuinely replayed history, so it sets BOTH this and
+   * `replay`. Restore-on-attach frames set only `replay`. Consumers that care
+   * about "this is not a live event" keep reading `replay` and are unaffected;
+   * the two consumers that care about the difference are the renderer's
+   * projector (inserts at the head instead of appending, B1) and main's replay
+   * ring (does not retain it at all, so eviction can never leave a retained
+   * tail with a hole in it, B2).
+   *
+   * Additive under v1 — no `PROTOCOL_VERSION` bump. A consumer that ignores it
+   * behaves exactly as before.
+   */
+  recovered?: true
   event: AppSessionEvent
 }
 
@@ -3053,15 +3076,20 @@ export type SubmitResultFrame = {
  * (`loadDisplayTranscriptFromJsonlPath`, `src/utils/sessionStorage.ts`), not
  * from a count comparison the app would have to keep honest.
  *
- * INTENDED contract, NOT yet implemented: when `complete` is true the
- * transcript is whole and the truncation-boundary row should disappear, its
- * absence being the completeness signal the user reads. No clearing path
- * exists today. `TranscriptSessionState.historyTruncated` latches permanently
- * and is cleared only by `resetTranscriptSession` on the preview-to-live
- * handover, so a renderer wired to this frame without adding that path would
- * leave the boundary row standing over a transcript that is now whole. Tracked
- * as blocker B4 in `decisions/HISTORY-LOAD-EARLIER.md`; read it before
- * building the control.
+ * When `complete` is true the transcript is whole and the truncation-boundary
+ * row disappears, its absence being the completeness signal the user reads.
+ * The projector implements that: an `ok` result with `complete` clears
+ * `TranscriptSessionState.historyTruncated` for the session, which is the one
+ * thing the read-time boundary row is synthesized from (blocker B4 in
+ * `decisions/HISTORY-LOAD-EARLIER.md`, closed 2026-08-20). A refused result
+ * reports `complete: false` and therefore leaves the row standing, which is the
+ * fail-safe direction: a boundary claiming there is more is recoverable by
+ * pressing again, an absent one is not.
+ *
+ * This frame also CLOSES a recovery batch renderer-side (B1): the head
+ * insertion cursor the recovered `event` frames advanced is reset here, so the
+ * next recovery — which reaches further back — stacks above this one instead of
+ * continuing beneath it.
  */
 export type HistoryLoadEarlierResultFrame = {
   kind: 'history.loadEarlier.result'

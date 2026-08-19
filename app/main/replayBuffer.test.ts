@@ -583,3 +583,65 @@ test('the truncation notice counts retained MESSAGES, not retained frames', () =
     'Only the 2 most recent messages are shown.',
   )
 })
+
+/* ── B2: recovered history is never retained (HISTORY-LOAD-EARLIER.md) ── */
+
+/**
+ * A frame from one `history.loadEarlier`. Same `kind` and same `replay` as a
+ * restore replay — the ONLY difference is `recovered`, which is why the
+ * discrimination cannot live in the kind-keyed retention table.
+ */
+function recoveredEventFrame(
+  index: number,
+  sessionId: SessionId = SID,
+): ServerFrame {
+  const base = assistantEventFrame(index, sessionId)
+  if (base.kind !== 'event') throw new Error('not an event frame')
+  return { ...base, replay: true, recovered: true }
+}
+
+function restoreReplayEventFrame(
+  index: number,
+  sessionId: SessionId = SID,
+): ServerFrame {
+  const base = assistantEventFrame(index, sessionId)
+  if (base.kind !== 'event') throw new Error('not an event frame')
+  return { ...base, replay: true }
+}
+
+/**
+ * The defect this pins (B1/B2 review, 2026-08-20): the ring evicts
+ * oldest-by-ARRIVAL, and recovered frames are the OLDEST messages arriving
+ * LAST. Retained, a large recovery evicts live frames from the middle of the
+ * session while keeping ancient ones, so a reload replays a transcript with a
+ * hole in it.
+ */
+test('a recovered frame is not retained, and does not evict the live tail', () => {
+  const buffer = new FrameReplayBuffer(4)
+  buffer.record(SID, readyFrame())
+  buffer.record(SID, assistantEventFrame(1))
+  buffer.record(SID, assistantEventFrame(2))
+  for (let index = 90; index < 96; index++) {
+    buffer.record(SID, recoveredEventFrame(index))
+  }
+
+  const snapshot = buffer.snapshot()
+  expect(snapshot.some(frame => frame.kind === 'event' && frame.recovered === true)).toBe(
+    false,
+  )
+  // The live tail is intact AND uncut: nothing was evicted, so no truncation
+  // notice was minted either.
+  expect(snapshot.map(frame => frame.kind)).toEqual(['ready', 'event', 'event'])
+  expect(snapshot.find(isReplayTruncationFrame)).toBeUndefined()
+})
+
+/** The other half: `replay` alone is still ordinary retained transcript. */
+test('a restore-replay frame IS retained', () => {
+  const buffer = new FrameReplayBuffer()
+  buffer.record(SID, readyFrame())
+  buffer.record(SID, restoreReplayEventFrame(1))
+
+  const snapshot = buffer.snapshot()
+  expect(snapshot.map(frame => frame.kind)).toEqual(['ready', 'event'])
+  expect(snapshot[1]).toMatchObject({ replay: true })
+})

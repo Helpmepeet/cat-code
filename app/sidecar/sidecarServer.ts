@@ -4139,6 +4139,14 @@ export class SidecarServer {
           protocolVersion: PROTOCOL_VERSION,
           sessionId: this.sessionId,
           replay: true,
+          // B1/B2 (decisions/HISTORY-LOAD-EARLIER.md). This is the ONLY place
+          // that sets it: these messages are older than everything the reader
+          // already has, so they must be INSERTED above the conversation rather
+          // than appended after it, and main must not retain them in a ring
+          // that evicts by arrival. `sendHistoryReplay` deliberately does not
+          // set it — a restore replay arrives before anything else and is the
+          // retained tail itself.
+          recovered: true,
           event: prepared,
         })
         added += 1

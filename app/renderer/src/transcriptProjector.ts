@@ -506,6 +506,25 @@ type TranscriptSessionState = {
    * the same way the orphaned-agent placeholder is synthesized.
    */
   historyTruncated: boolean
+  /**
+   * Head-insertion cursor for the recovery batch currently arriving, or `null`
+   * when nothing is being recovered — which is every ordinary frame's case and
+   * the state a session is created in (B1,
+   * decisions/HISTORY-LOAD-EARLIER.md).
+   *
+   * `appendFrameRows` reads THIS, not the frame, so the value must never be
+   * left standing for a frame that is not recovered. `projectServerFrame`
+   * therefore re-derives it from every event frame it projects: a frame
+   * without `recovered` forces it back to `null`. That is what makes an
+   * interrupted batch (the closing `history.loadEarlier.result` never arrives
+   * because the connection dropped) harmless — the next ordinary frame closes
+   * it, and it cannot corrupt a later batch.
+   *
+   * It counts UP through a batch because recovered frames arrive oldest-first:
+   * inserting each at 0 would reverse them. It resets on the result frame, so
+   * the next recovery — which reaches further back — stacks above this one.
+   */
+  recoveryInsertAt: number | null
 }
 
 export type TranscriptState = {
@@ -527,6 +546,7 @@ function createTranscriptSessionState(): TranscriptSessionState {
     hiddenFrameIds: {},
     turnInterrupted: false,
     historyTruncated: false,
+    recoveryInsertAt: null,
   }
 }
 
@@ -1193,6 +1213,19 @@ export function selectTranscriptDisplayItems(
   )
 }
 
+/**
+ * One display item's stable identity: the row's own id, or the group's.
+ *
+ * Exported because it is no longer only a React key. Scroll anchoring on row
+ * IDENTITY rather than row INDEX is what keeps a reading position correct once
+ * the projector can INSERT at the head (B5, decisions/HISTORY-LOAD-EARLIER.md),
+ * and the anchor and the key must be the same string or the two disagree about
+ * which item is which.
+ */
+export function displayItemKey(item: TranscriptDisplayItem): string {
+  return item.kind === 'single' ? item.row.id : item.id
+}
+
 /** Reducer over addressed server frames; unknown sessions are rejected. */
 export function projectServerFrame(
   state: TranscriptState,
@@ -1270,13 +1303,54 @@ export function projectServerFrame(
     }
   }
 
+  if (frame.kind === 'history.loadEarlier.result') {
+    const session = state.sessions[frame.sessionId]
+    if (!session) return state
+    // B4: `complete` is the documented signal that the boundary row goes away
+    // (protocol.ts), and the row is synthesized from this flag alone. Gated on
+    // `ok` too because a refusal learned nothing: leaving the boundary standing
+    // is the recoverable direction (press again), removing it is not.
+    const complete = frame.ok === true && frame.complete === true
+    // B1: this frame closes the batch. The next recovery reaches FURTHER back,
+    // so it must start at the head again rather than continue beneath the rows
+    // this one inserted.
+    if (!complete && session.recoveryInsertAt === null) return state
+    return {
+      ...state,
+      sessions: {
+        ...state.sessions,
+        [frame.sessionId]: {
+          ...session,
+          recoveryInsertAt: null,
+          historyTruncated: complete ? false : session.historyTruncated,
+        },
+      },
+    }
+  }
+
   if (frame.kind !== 'event') return state
   const session = state.sessions[frame.sessionId]
   if (!session) return state
   if (frame.event.type !== 'message') return state
 
-  const projected = projectMessage(frame.sessionId, session, frame.event.message)
-  if (projected === session) return state
+  // B1: the head-insertion cursor is derived from THIS frame, every time. An
+  // ordinary frame always projects with it null and therefore cannot reach the
+  // insertion branch in `appendFrameRows`/`upsertFrameRows` — including when it
+  // follows a recovery batch whose closing result never arrived because the
+  // connection dropped. A recovered frame continues the open batch, or opens
+  // one at the head.
+  const recoveryInsertAt =
+    frame.recovered === true ? (session.recoveryInsertAt ?? 0) : null
+  const source =
+    recoveryInsertAt === session.recoveryInsertAt
+      ? session
+      : { ...session, recoveryInsertAt }
+
+  const projected = projectMessage(frame.sessionId, source, frame.event.message)
+  // Compared against what was HANDED to `projectMessage`: a frame that
+  // projected nothing must stay a total no-op, and the cursor above is
+  // re-derived on the next frame anyway.
+  if (projected === source) return state
   return {
     ...state,
     sessions: { ...state.sessions, [frame.sessionId]: projected },
@@ -1469,9 +1543,12 @@ function projectAssistantFrame(
       ? state.streamingTextBlocks
       : nextStreamingTextBlocks
 
+  const placed = upsertFrameRows(state, rows)
+
   return {
     ...state,
-    rows: rows.length === 0 ? state.rows : upsertRows(state.rows, rows),
+    rows: placed.rows,
+    recoveryInsertAt: placed.recoveryInsertAt,
     streamingTextBlocks,
     nextBlockIndexByMessageId: {
       ...state.nextBlockIndexByMessageId,
@@ -1761,9 +1838,45 @@ function appendFrameRows(
   rows: TranscriptRow[],
 ): TranscriptSessionState {
   if (state.seenFrameIds[frameId] || rows.length === 0) return state
+  // B1: the ONE branch a recovered frame takes. Every frame in the app reaches
+  // this function, so the condition is a session field that only a `recovered`
+  // event frame can leave non-null (`projectServerFrame` re-derives it per
+  // frame and forces it back to null for anything else). An ordinary frame
+  // therefore cannot reach the insertion, and the append below is untouched.
+  if (state.recoveryInsertAt !== null) {
+    return insertFrameRows(state, state.recoveryInsertAt, frameId, rows)
+  }
   return {
     ...state,
     rows: [...state.rows, ...rows],
+    seenFrameIds: { ...state.seenFrameIds, [frameId]: true },
+  }
+}
+
+/**
+ * Place one recovered frame's rows ABOVE the conversation they precede (B1).
+ *
+ * Nothing existing is rewritten: the rows on either side of the cut are the
+ * same objects in the same order, so the read-time caches keyed on a row (the
+ * nested-row wrapper, the orphan group) still hit for every one of them. Only
+ * the session slice is new, which is exactly what the WeakMap caches keyed on
+ * the SLICE (`nestedRowsCache` / `revealedNestedRowsCache`) need in order to
+ * recompute — and recomputing is required here, because the boundary row is
+ * synthesized above `rows[0]` and `rows[0]` has just changed.
+ *
+ * The cursor advances by what was inserted, so the next frame of the same
+ * batch lands after this one and the batch keeps its own oldest-first order.
+ */
+function insertFrameRows(
+  state: TranscriptSessionState,
+  at: number,
+  frameId: string,
+  rows: TranscriptRow[],
+): TranscriptSessionState {
+  return {
+    ...state,
+    rows: [...state.rows.slice(0, at), ...rows, ...state.rows.slice(at)],
+    recoveryInsertAt: at + rows.length,
     seenFrameIds: { ...state.seenFrameIds, [frameId]: true },
   }
 }
@@ -2296,13 +2409,56 @@ function upsertRows(
   replacements: TranscriptRow[],
 ): TranscriptRow[] {
   if (replacements.length === 0) return rows
+  const upserted = upsertExistingRows(rows, replacements)
+  for (const row of upserted.added) upserted.rows.push(row)
+  return upserted.rows
+}
+
+/**
+ * Split one frame's rows into the ones that REPLACE a row already in the list
+ * (streaming finalization: same id, so it keeps its position) and the ones that
+ * are new to it. Shared by both placements below so the two can never disagree
+ * about which is which.
+ */
+function upsertExistingRows(
+  rows: TranscriptRow[],
+  replacements: TranscriptRow[],
+): { rows: TranscriptRow[]; added: TranscriptRow[] } {
   const byId = new Map(replacements.map(row => [row.id, row]))
   const nextRows = rows.map(row => byId.get(row.id) ?? row)
   const existingIds = new Set(rows.map(row => row.id))
-  for (const row of replacements) {
-    if (!existingIds.has(row.id)) nextRows.push(row)
+  return {
+    rows: nextRows,
+    added: replacements.filter(row => !existingIds.has(row.id)),
   }
-  return nextRows
+}
+
+/**
+ * Where the assistant path's rows go, which is the same question
+ * `appendFrameRows` answers for every other path (B1,
+ * decisions/HISTORY-LOAD-EARLIER.md). Kept separate because this path upserts:
+ * a row whose id is already present is a finalized stream and must stay where
+ * it stands, on both placements.
+ */
+function upsertFrameRows(
+  state: TranscriptSessionState,
+  replacements: TranscriptRow[],
+): { rows: TranscriptRow[]; recoveryInsertAt: number | null } {
+  if (replacements.length === 0) {
+    return { rows: state.rows, recoveryInsertAt: state.recoveryInsertAt }
+  }
+  // B1: the same single branch `appendFrameRows` carries, on the same
+  // condition. Only a `recovered` event frame can leave the cursor non-null, so
+  // an ordinary assistant frame still lands on the plain upsert below.
+  if (state.recoveryInsertAt !== null) {
+    const upserted = upsertExistingRows(state.rows, replacements)
+    upserted.rows.splice(state.recoveryInsertAt, 0, ...upserted.added)
+    return {
+      rows: upserted.rows,
+      recoveryInsertAt: state.recoveryInsertAt + upserted.added.length,
+    }
+  }
+  return { rows: upsertRows(state.rows, replacements), recoveryInsertAt: null }
 }
 
 function upsertStreamingRows(

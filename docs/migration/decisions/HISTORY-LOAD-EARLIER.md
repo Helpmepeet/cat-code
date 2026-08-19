@@ -1,6 +1,6 @@
 # Load earlier messages — the one inbound verb that reaches back to disk
 
-**Status: DECIDED (operator-approved 2026-08-19). WIRE HALF IMPLEMENTED 2026-08-20 (`a14d94bc`), inert. RENDERER HALF BLOCKED — see §Blockers.**
+**Status: DECIDED (operator-approved 2026-08-19). WIRE HALF IMPLEMENTED 2026-08-20 (`a14d94bc`), inert. B1/B2/B4 CLOSED 2026-08-20; B5 in progress; still inert until the control ships — see §Blockers.**
 Owns the single inbound vocabulary addition needed to make a truncated
 transcript recoverable from inside the app. Origin: the message-visibility UX
 review (`reviews/2026-08-19-transcript-message-visibility-ux-review.md`,
@@ -152,7 +152,15 @@ The wire half is landed and inert. Two problems the design above did not
 anticipate must be settled before a control can be shown. Neither is a reason
 to change the wire contract.
 
+B1, B2 and B4 are CLOSED (2026-08-20). They share one mechanism: an additive
+optional `recovered?: true` on `EventFrame`, set by the load-earlier path alone
+and never by the attach replay. A recovered frame is genuinely replayed history
+and therefore sets BOTH `recovered` and `replay`; the marker exists only to tell
+an INSERTION apart from an append. No version bump, no cap moved, no new inbound
+surface.
+
 ### B1 — the projector is append-only, so recovered rows would land at the BOTTOM
+**CLOSED 2026-08-20.**
 
 `appendFrameRows` (`app/renderer/src/transcriptProjector.ts:1757`) does
 `rows: [...state.rows, ...rows]` and there is no `.sort()` anywhere in the
@@ -164,15 +172,34 @@ The wire half's report claimed "the projector needs no change at all". That is
 false, and it was reasoned from the restore path. Verified by reading, not
 assumed.
 
-Fix shape, unbuilt: recovered frames need to be distinguishable from
-restore-replay frames, and `appendFrameRows` needs an insertion path that
-prepends a recovered BLOCK while preserving order within it (a running
-insertion index, since frames arrive oldest-first and prepending each at 0
-would reverse them). This touches the most memory-sensitive module in the app
-and every read-time cache keyed on the row slice, so it wants an operator
-present and a measured pass, not an unattended one.
+Built: `TranscriptSessionState.recoveryInsertAt` is a head-insertion cursor,
+`null` for every ordinary frame. `appendFrameRows` and the assistant path's
+`upsertFrameRows` each carry ONE extra branch, taken only when that cursor is
+non-null, so the append every other frame gets is untouched. The cursor counts
+up through a batch (frames arrive oldest-first; inserting each at 0 would
+reverse them) and resets on the closing `history.loadEarlier.result`, so a
+second recovery — which reaches further back — stacks above the first.
+
+`projectServerFrame` re-derives the cursor from EVERY event frame it projects: a
+frame without `recovered` forces it back to `null`. That is what makes an
+interrupted batch harmless — if the closing result never arrives because the
+connection dropped, the next ordinary frame closes it, and it cannot corrupt a
+later batch.
+
+The read-time caches hold: rows on both sides of the cut are the same objects in
+the same order, so the row-keyed caches still hit; the slice-keyed
+`nestedRowsCache` / `revealedNestedRowsCache` miss, which is required, because
+the boundary row is synthesized above `rows[0]` and `rows[0]` just changed.
+Pinned by `transcriptProjector.test.ts` ("the boundary row stays above the newly
+inserted rows", "an insertion leaves every existing row object identical").
+
+Still open on the memory axis: the measured pass this note asked for was NOT
+run. The insertion allocates one new row array per recovered frame, the same
+per-frame cost the append path already pays, so nothing new is expected — but
+expected is not measured, and the §Known cost note above still governs.
 
 ### B2 — recovered frames enter main's replay ring and can evict live history
+**CLOSED 2026-08-20.**
 
 Recovered `event` frames flow through the normal outbound path into main's
 per-session ring (8,000 frames / 8 MiB, `app/main/replayBuffer.ts`). The ring
@@ -181,14 +208,21 @@ while retaining the ancient ones that just arrived. A renderer reload after a
 big recovery could then replay a transcript with a hole in the middle, which
 is strictly worse than the contiguous tail the boundary row promises.
 
-Recommended ruling (not yet made): **recovered frames should not be retained in
-the ring at all.** The ring exists to restore a reloaded renderer to what it
-was showing; recovered history is by definition re-fetchable from disk on
-demand, so dropping it on reload costs one more click and keeps every retained
-tail contiguous. That needs main to tell a recovered frame from a restore
-replay, which is the same marker B1 needs.
+Ruling, made and built: **recovered frames are not retained in the ring at
+all.** The ring exists to restore a reloaded renderer to what it was showing;
+recovered history is by definition re-fetchable from disk on demand, so dropping
+it on reload costs one more click and keeps every retained tail contiguous.
+
+`FRAME_RETENTION` is keyed by frame KIND and both a restore replay and a
+recovered frame are kind `'event'`, so the discrimination cannot live in that
+table — it sits in `record`, where the ring decides to retain, and the table's
+exhaustiveness tripwire is untouched. It deliberately does NOT set
+`entry.truncated`: nothing was evicted, so the retained tail is exactly as
+complete as it was, and the boundary row the renderer draws from the sidecar's
+own signal still says what is true. No cap value moved.
 
 ### B4 — nothing clears the boundary row when the transcript becomes whole
+**CLOSED 2026-08-20.**
 
 `HistoryLoadEarlierResultFrame.complete` is documented as the signal that the
 truncation-boundary row goes away. No such path exists.
@@ -199,10 +233,13 @@ clearing path would leave the row standing over a transcript that is now
 complete, which inverts the design's own completeness signal ("absence of the
 row means you are seeing everything").
 
-Fix shape, unbuilt: clear `historyTruncated` when a `history.loadEarlier.result`
-with `complete: true` arrives for that session. Cheap on its own; listed here
-because it is invisible until the control ships, and the protocol doc promised
-it.
+Built: `projectServerFrame` clears `historyTruncated` when a
+`history.loadEarlier.result` arrives with `ok` AND `complete` for that session,
+which removes the read-time boundary row because the row is synthesized from
+that flag alone. Gated on `ok` too: a refusal learned nothing, and leaving the
+boundary standing is the recoverable direction (press again) while removing it
+wrongly is not. The `complete` doc comment in `protocol.ts` no longer carries the
+"NOT yet implemented" caveat.
 
 ### B5 — index-based scroll anchoring assumes the projector only appends
 
