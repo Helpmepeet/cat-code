@@ -7,7 +7,6 @@ import {
 } from '../../shared/protocol.js'
 import type { SDKMessage } from '@cat-code/engine/sdk'
 import { selectContextUsage, type ContextUsage } from './contextUsage.js'
-import { REPLAY_BUFFER_TRUNCATION_REQUEST_ID } from './rawMessageLog.js'
 import {
   batch,
   withBatch,
@@ -23,7 +22,6 @@ import {
 
 export type PreviewTranscriptEntry = {
   transcript: TranscriptState
-  truncationMessage: string | null
   /**
    * What the composer rail can honestly say about a session with no engine.
    *
@@ -132,22 +130,13 @@ export function projectPreviewTranscriptCache(
     createTranscriptState(),
     previewReadyFrame(cache),
   )
+  // Both retention boundaries are kept by `transcriptCache.ts`, so this pass
+  // gives an incomplete cache the same boundary row every other path draws. A
+  // preview-only banner used to say it instead, and withdrew itself at the
+  // exact moment the pane went live and the fact became actionable.
   transcript = projectServerFrameBatched(transcript, batch(cacheFrames))
-  // The replay buffer's retention notice is not a boundary message: retention is
-  // working as designed and there is nothing for the user to act on, which is
-  // why the live pane drops it too (`rawMessageLog.ts`). `transcriptCache.ts:129`
-  // keeps the frame deliberately, so it has to be excluded here rather than
-  // upstream. The history-replay sibling IS a real boundary and still shows.
-  let truncationMessage: string | null = null
-  for (const frame of cacheFrames) {
-    if (frame.kind !== 'error') continue
-    if (frame.requestId === REPLAY_BUFFER_TRUNCATION_REQUEST_ID) continue
-    truncationMessage = frame.message
-    break
-  }
   return {
     transcript,
-    truncationMessage,
     runFacts: selectPreviewRunFacts(cache),
   }
 }
@@ -291,17 +280,9 @@ export function selectPreviewRunFactsFor(
   return sessionId ? (state.bySession[sessionId]?.runFacts ?? null) : null
 }
 
-export function selectPreviewTruncationMessage(
-  state: PreviewTranscriptState,
-  sessionId: SessionId,
-): string | null {
-  return state.bySession[sessionId]?.truncationMessage ?? null
-}
-
 export type PaneTranscriptSelection = {
   transcript: TranscriptState
   preview: boolean
-  truncationMessage: string | null
   runFacts: PreviewRunFacts | null
 }
 
@@ -321,14 +302,12 @@ export function selectPaneTranscript({
     return {
       transcript: liveTranscript,
       preview: false,
-      truncationMessage: null,
       runFacts: null,
     }
   }
   return {
     transcript: entry.transcript,
     preview: true,
-    truncationMessage: entry.truncationMessage,
     runFacts: entry.runFacts,
   }
 }

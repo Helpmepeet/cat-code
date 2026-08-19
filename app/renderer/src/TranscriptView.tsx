@@ -773,6 +773,13 @@ function NestedRowList({
   )
 }
 
+/**
+ * The whole of what an incomplete pane says. One line, stating the fact and
+ * nothing else: not why retention exists, not what was dropped, not a number
+ * that would differ on the next path into the same session.
+ */
+const HISTORY_BOUNDARY_LABEL = "Earlier messages from this session aren't loaded."
+
 // Memoized per row: a slice-cached read reuses unchanged row objects, so only
 // the rows that actually changed re-render (markdown re-parses once per body).
 const TranscriptRowView = memo(function TranscriptRowView({
@@ -874,6 +881,14 @@ const TranscriptRowView = memo(function TranscriptRowView({
       return (
         <Seam tone="neutral" dashed faded label="message removed" italicLabel />
       )
+
+    case 'history-boundary':
+      // The top of an incomplete transcript. A quiet seam, never an alert: the
+      // pane is working as designed and there is nothing to dismiss. No count —
+      // how much survived is decided by a byte budget and differs per session
+      // and per path, so the honest thing to say on every path is the fact
+      // alone.
+      return <Seam tone="neutral" label={HISTORY_BOUNDARY_LABEL} />
 
     case 'orphaned-agent':
       return <OrphanedAgentCard row={row} />

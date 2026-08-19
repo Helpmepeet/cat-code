@@ -21,17 +21,78 @@ import {
   shouldShowAnthropicPoolAccount,
   shouldShowFirstRunOAuth,
 } from './appModel.js'
+import type { SDKMessage } from '@cat-code/engine/session-events'
 import type { ConnectionSnapshot } from './connectionState.js'
-import { createTranscriptState } from './transcriptProjector.js'
+import {
+  createTranscriptState,
+  projectServerFrame,
+  type TranscriptState,
+} from './transcriptProjector.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
-import type {
-  AccountsSnapshot,
-  AccountStatus,
-  AgentModeWorkerItem,
-  RunControlsSnapshot,
-  TaskSnapshotItem,
-  TasksSnapshot,
+import {
+  PROTOCOL_VERSION,
+  REPLAY_BUFFER_TRUNCATION_REQUEST_ID,
+  type AccountsSnapshot,
+  type AccountStatus,
+  type AgentModeWorkerItem,
+  type RunControlsSnapshot,
+  type ServerFrame,
+  type TaskSnapshotItem,
+  type TasksSnapshot,
 } from '../../shared/protocol.js'
+
+const TRUNCATED_PANE_SESSION = 'truncated-pane-session'
+
+/** The boundary line as `renderToStaticMarkup` escapes it. */
+const HISTORY_BOUNDARY_HTML = 'Earlier messages from this session aren&#x27;t loaded.'
+
+/** A pane whose replay arrived behind a retention boundary, plus one message. */
+function truncatedTranscriptForTest(): TranscriptState {
+  const frames: ServerFrame[] = [
+    {
+      kind: 'ready',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: TRUNCATED_PANE_SESSION,
+      engineSessionId: 'engine-truncated-pane-session',
+      payload: {
+        type: 'app.ready',
+        protocolVersion: PROTOCOL_VERSION,
+        inputEnabled: true,
+        activeTurn: false,
+        abort: { status: 'idle' },
+        goalSnapshot: null,
+        pendingPermissionRequests: [],
+      },
+    },
+    {
+      kind: 'error',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: TRUNCATED_PANE_SESSION,
+      requestId: REPLAY_BUFFER_TRUNCATION_REQUEST_ID,
+      code: 'internal_error',
+      message: 'Only the 12 most recent messages are shown.',
+      retryable: false,
+    },
+    {
+      kind: 'event',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: TRUNCATED_PANE_SESSION,
+      replay: true,
+      event: {
+        type: 'message',
+        message: {
+          type: 'assistant',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'surviving tail' }],
+          },
+          uuid: '00000000-0000-4000-8000-00000000ab01',
+        } as unknown as SDKMessage,
+      },
+    },
+  ]
+  return frames.reduce(projectServerFrame, createTranscriptState())
+}
 
 /**
  * The composer field's opening tag. It is a contentEditable `<div>` (so a
@@ -198,9 +259,6 @@ test('parked tabs keep their live transcript when a cache is admitted', () => {
   expect(body).toContain('const panelTranscript = selectPaneTranscript({')
   expect(body).toContain('previewOpen: shell.previews[sessionId] === true')
   expect(body).toContain('transcript={panelTranscript.transcript}')
-  expect(body).toContain(
-    'previewTruncationMessage={panelTranscript.truncationMessage}',
-  )
 })
 
 test('wiring tripwire: the usage popover asks no engine that is not there', () => {
@@ -570,7 +628,7 @@ test('CC-16: a preview pane paints cached rows and its composer accepts typing',
         messageBytes: [],
       }}
       activeAccount={null}
-      activeSessionId="session-1"
+      activeSessionId={TRUNCATED_PANE_SESSION}
       isActivePane={true}
       branch={null}
       allowPermission={() => {}}
@@ -595,14 +653,13 @@ test('CC-16: a preview pane paints cached rows and its composer accepts typing',
       onAnswerQuestions={() => {}}
       onCancelQuestions={() => {}}
       preview
-      previewTruncationMessage="Earlier restored history was omitted."
       prompt=""
       releasePendingSubmit={() => {}}
       restorePermission={() => {}}
       setPermissionMode={() => {}}
       setPrompt={() => {}}
       submit={() => {}}
-      transcript={createTranscriptState()}
+      transcript={truncatedTranscriptForTest()}
       transportError={null}
     />,
   )
@@ -618,7 +675,11 @@ test('CC-16: a preview pane paints cached rows and its composer accepts typing',
   )
   expect(field).not.toContain('Focus to reconnect')
   expect(field).not.toContain('Connecting')
-  expect(html).toContain('Earlier restored history was omitted.')
+  // Cached rows, and the boundary above the oldest of them: a preview pane is
+  // the transcript it holds, not a special read-only surface with its own
+  // notices.
+  expect(html).toContain('surviving tail')
+  expect(html).toContain(HISTORY_BOUNDARY_HTML)
   // The send arrow is still quiet for an EMPTY draft (prototype parity,
   // `Chat.jsx:1419` — `disabled={!input.trim()}`).
   expect(html).toContain('aria-label="Send prompt"')
@@ -2066,16 +2127,32 @@ test('P4-32a — WIRING TRIPWIRE (source text, NOT reachability) for the mode jo
   )
 })
 
-test('a truncated transcript is styled as a warning, with a tone the theme actually defines', () => {
-  // `tone-warning` is not a token: theme.css declares --color-tone-warn (and
-  // -danger/-good/-success/-info), so Tailwind emitted NOTHING for
-  // text-tone-warning / border-tone-warning and the only signal that a
-  // transcript is incomplete rendered as ordinary body text.
-  const html = renderToStaticMarkup(
+test('an incomplete transcript says so inside the pane, on a preview and once live', () => {
+  // The banner this replaces lived OUTSIDE the scroller and was passed only
+  // while the pane was a read-only preview, so engaging the session withdrew
+  // the warning at the moment it became actionable. The boundary is now a row
+  // of the transcript, and the pane renders it from `transcript` alone, so
+  // `preview` cannot decide whether it appears.
+  const truncated = truncatedTranscriptForTest()
+  for (const preview of [true, false]) {
+    const html = renderToStaticMarkup(
+      <SessionPane
+        {...idleSessionPaneProps()}
+        preview={preview}
+        activeSessionId={TRUNCATED_PANE_SESSION}
+        transcript={truncated}
+      />,
+    )
+    expect(html).toContain(HISTORY_BOUNDARY_HTML)
+  }
+
+  // A full raw-message log is internal bookkeeping the user cannot see: the
+  // rendered transcript comes from `transcript`, not `activeLog`. The warning
+  // that used to sit here announced a loss with no visible content behind it.
+  const rawOnly = renderToStaticMarkup(
     <SessionPane
       {...idleSessionPaneProps()}
       preview
-      previewTruncationMessage="Earlier restored history was omitted."
       activeLog={{
         inputEnabled: true,
         messages: [],
@@ -2086,17 +2163,8 @@ test('a truncated transcript is styled as a warning, with a tone the theme actua
       }}
     />,
   )
-
-  expect(html).toContain('Earlier restored history was omitted.')
-  expect(html).not.toContain('tone-warning')
-  // The trailing delimiters matter: `text-tone-warning` contains `text-tone-warn`,
-  // so a bare substring check would pass on the broken class too.
-  expect(html).toContain('text-tone-warn"')
-  expect(html).toContain('border-tone-warn ')
-  // A full raw-message log is internal bookkeeping the user cannot see: the
-  // rendered transcript comes from `transcript`, not `activeLog`. The warning
-  // that used to sit here announced a loss with no visible content behind it.
-  expect(html).not.toContain('Raw message history')
+  expect(rawOnly).not.toContain('Raw message history')
+  expect(rawOnly).not.toContain(HISTORY_BOUNDARY_HTML)
 })
 
 test('the autoscroll signature tracks the RENDERED transcript, not the capped raw log', () => {

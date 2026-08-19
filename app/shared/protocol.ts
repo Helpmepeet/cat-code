@@ -594,10 +594,24 @@ export type EventFrame = {
  * restored transcript exceeded the replay caps (`MAX_HISTORY_REPLAY_FRAMES` /
  * `MAX_HISTORY_REPLAY_BYTES`), so older events were omitted. Emitted BEFORE the
  * retained tail — same boundary idiom as main's replay-buffer truncation frame
- * (`catcode.replay-truncated`) — so a consumer can never mistake a capped
- * replay for complete history.
+ * (`REPLAY_BUFFER_TRUNCATION_REQUEST_ID` below) — so a consumer can never
+ * mistake a capped replay for complete history.
  */
 export const HISTORY_REPLAY_TRUNCATION_REQUEST_ID = 'catcode.history-truncated'
+
+/**
+ * Well-known `ErrorFrame.requestId` marking a LOSSY replay out of main's
+ * per-session frame ring: retention evicted the oldest frames, so a renderer
+ * that attached late (or reloaded) receives a tail rather than the whole
+ * session. Emitted BEFORE the retained tail, the same boundary idiom as its
+ * history-replay sibling above.
+ *
+ * Declared HERE because both processes need it and neither can import the
+ * other: main mints it (`app/main/replayBuffer.ts`) and the renderer reads it
+ * (`app/renderer/src/rawMessageLog.ts`, `transcriptProjector.ts`). It used to
+ * be two private copies of the same literal, one per side.
+ */
+export const REPLAY_BUFFER_TRUNCATION_REQUEST_ID = 'catcode.replay-truncated'
 
 /**
  * A `pong` in reply to `app.ping` (liveness only, no side effects —

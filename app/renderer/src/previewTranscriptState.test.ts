@@ -27,13 +27,17 @@ import {
   selectPaneTranscript,
   selectPreviewSwapSessions,
   selectPreviewTranscript,
-  selectPreviewTruncationMessage,
 } from './previewTranscriptState.js'
 import {
   createTranscriptState,
   projectServerFrame,
+  selectNestedTranscriptRows,
   selectTranscriptRows,
 } from './transcriptProjector.js'
+import {
+  HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
+  REPLAY_BUFFER_TRUNCATION_REQUEST_ID,
+} from '../../shared/protocol.js'
 
 const SID = 'preview-session'
 
@@ -174,7 +178,7 @@ test('cache ready and permission frames are structurally isolated from operation
   expect(selectTranscriptRows(selectPreviewTranscript(preview, SID)!, SID)).toHaveLength(1)
 })
 
-test('a truncation-only cache preserves its visible boundary message', () => {
+test('a truncation-only cache still reads as incomplete, with no message rows', () => {
   const boundary: ServerFrame = {
     kind: 'error',
     protocolVersion: PROTOCOL_VERSION,
@@ -189,10 +193,11 @@ test('a truncation-only cache preserves its visible boundary message', () => {
     cache: cache([boundary]),
   })
 
-  expect(selectTranscriptRows(selectPreviewTranscript(preview, SID)!, SID)).toEqual([])
-  expect(selectPreviewTruncationMessage(preview, SID)).toBe(
-    'Earlier restored history was omitted.',
-  )
+  const projected = selectPreviewTranscript(preview, SID)!
+  expect(selectTranscriptRows(projected, SID)).toEqual([])
+  // No surviving row to sit above, so no boundary row: the pane draws its
+  // restore/welcome state rather than a hairline over nothing.
+  expect(selectNestedTranscriptRows(projected, SID)).toEqual([])
 
   let liveLog = reduceServerFrame(createRawMessageLogState(), ready())
   liveLog = reduceServerFrame(liveLog, boundary)
@@ -225,7 +230,6 @@ test('pane selection uses an admitted cache only for an explicit preview', () =>
   ).toEqual({
     transcript: live,
     preview: false,
-    truncationMessage: null,
     runFacts: null,
   })
 
@@ -237,9 +241,11 @@ test('pane selection uses an admitted cache only for an explicit preview', () =>
   })
   expect(selectedPreview.transcript).toBe(preview.bySession[SID]!.transcript)
   expect(selectedPreview.preview).toBe(true)
-  expect(selectedPreview.truncationMessage).toBe(
-    'Earlier restored history was omitted.',
-  )
+  expect(
+    selectNestedTranscriptRows(selectedPreview.transcript, SID).map(
+      row => row.kind,
+    ),
+  ).toEqual(['history-boundary', 'assistant-text'])
   expect(selectedPreview.runFacts).toBe(preview.bySession[SID]?.runFacts)
 })
 
@@ -273,7 +279,6 @@ test('pane selection falls back to live after preview handover resets the cache'
   ).toEqual({
     transcript: live,
     preview: false,
-    truncationMessage: null,
     runFacts: null,
   })
 })
@@ -338,6 +343,7 @@ function handover(cached?: TranscriptCache) {
       })
     },
     rows: () => selectTranscriptRows(live, SID),
+    rowKinds: () => selectNestedTranscriptRows(live, SID).map(row => row.kind),
     cached: () => selectPreviewTranscript(preview, SID),
   }
 }
@@ -827,4 +833,68 @@ test('with no header, the frame scan still answers what the frames can', () => {
   )
   expect(entry.runFacts.model).toBe('claude-sonnet-5')
   expect(entry.runFacts.contextUsage?.usedTokens).toBe(42_000)
+})
+
+/* ── the retention boundary, across every path into the same pane ── */
+
+function truncationFrame(requestId: string): ServerFrame {
+  return {
+    kind: 'error',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID,
+    requestId,
+    code: 'internal_error',
+    message: 'Only the 3 most recent messages are shown.',
+    retryable: false,
+  }
+}
+
+/**
+ * The defect this pins (2026-08-19 review, finding 4): the incomplete-history
+ * warning was returned only while a pane was a read-only preview, so clicking
+ * into the session withdrew it at the exact moment it became actionable. The
+ * boundary is now a row of the transcript, restated by the live replay, so the
+ * handover cannot take it away.
+ */
+test('the boundary row survives the preview to live handover', () => {
+  const boundary = truncationFrame(REPLAY_BUFFER_TRUNCATION_REQUEST_ID)
+  const h = handover(cache([boundary, messageFrame(0)]))
+
+  expect(
+    selectNestedTranscriptRows(h.cached()!, SID).map(row => row.kind),
+  ).toEqual(['history-boundary', 'assistant-text'])
+
+  h.previewing.add(SID)
+  h.deliver([
+    ready(),
+    truncationFrame(HISTORY_REPLAY_TRUNCATION_REQUEST_ID),
+    messageFrame(0),
+    messageFrame(1),
+  ])
+
+  expect(h.cached()).toBeNull()
+  expect(h.rowKinds()).toEqual([
+    'history-boundary',
+    'assistant-text',
+    'assistant-text',
+  ])
+})
+
+/**
+ * The other half of the same rule: absence of the row is the signal that a
+ * transcript is whole. A resume that recovers the full history from disk must
+ * NOT inherit the boundary the cached preview showed.
+ */
+test('a complete live replay drops a boundary the cached preview showed', () => {
+  const h = handover(
+    cache([truncationFrame(REPLAY_BUFFER_TRUNCATION_REQUEST_ID), messageFrame(0)]),
+  )
+  expect(
+    selectNestedTranscriptRows(h.cached()!, SID).map(row => row.kind),
+  ).toEqual(['history-boundary', 'assistant-text'])
+
+  h.previewing.add(SID)
+  h.deliver([ready(), messageFrame(0), messageFrame(1)])
+
+  expect(h.rowKinds()).toEqual(['assistant-text', 'assistant-text'])
 })

@@ -20,6 +20,7 @@ import {
   STICKY_FRAME_KINDS,
 } from './replayBuffer.js'
 import { PROTOCOL_VERSION, type ServerFrame, type SessionId } from '../shared/protocol.js'
+import type { SDKMessage } from '../shared/engine-types.snapshot.js'
 
 const SID: SessionId = 'sess-1'
 
@@ -513,4 +514,72 @@ test('snapshotSession includes the truncation marker when the session was lossy'
     'n2',
     'n3',
   ])
+})
+
+/* ── the retained count in the truncation notice ── */
+
+function assistantEventFrame(index: number, sessionId: SessionId = SID): ServerFrame {
+  return {
+    kind: 'event',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId,
+    event: {
+      type: 'message',
+      message: {
+        type: 'assistant',
+        message: { role: 'assistant', content: [{ type: 'text', text: `m${index}` }] },
+        uuid: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+      } as unknown as SDKMessage,
+    },
+  }
+}
+
+function streamDeltaFrame(index: number, sessionId: SessionId = SID): ServerFrame {
+  return {
+    kind: 'event',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId,
+    event: {
+      type: 'message',
+      message: {
+        type: 'stream_event',
+        uuid: `00000000-0000-4000-8000-1000000000${index}`,
+        event: {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text: 'x' },
+        },
+      } as unknown as SDKMessage,
+    },
+  }
+}
+
+/**
+ * The defect this pins (2026-08-19 review, finding 3): the notice reported
+ * `recent.length`, a FRAME tally including pongs, lifecycle and streamed
+ * partials, under the word "messages". On a streaming session that overstated
+ * the retained message count several times over.
+ */
+test('the truncation notice counts retained MESSAGES, not retained frames', () => {
+  const cap = 6
+  const buffer = new FrameReplayBuffer(cap)
+  buffer.record(SID, readyFrame())
+  // Enough traffic to evict, then a tail of exactly `cap` frames of which only
+  // two are finished messages: one pong, one partial, and two assistants.
+  for (let i = 0; i < 8; i++) buffer.record(SID, pongFrame(`old${i}`))
+  buffer.record(SID, pongFrame('recent'))
+  buffer.record(SID, streamDeltaFrame(1))
+  buffer.record(SID, assistantEventFrame(1))
+  buffer.record(SID, streamDeltaFrame(2))
+  buffer.record(SID, assistantEventFrame(2))
+  buffer.record(SID, pongFrame('newest'))
+
+  const snapshot = buffer.snapshot()
+  const notice = snapshot.find(isReplayTruncationFrame)
+  expect(notice?.kind).toBe('error')
+  // The ring holds `cap` frames here, which is what the old count printed.
+  expect(snapshot.filter(frame => frame.kind === 'pong')).toHaveLength(2)
+  expect(notice && notice.kind === 'error' ? notice.message : '').toBe(
+    'Only the 2 most recent messages are shown.',
+  )
 })

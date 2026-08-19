@@ -45,6 +45,7 @@
 
 import {
   PROTOCOL_VERSION,
+  REPLAY_BUFFER_TRUNCATION_REQUEST_ID,
   type ServerFrame,
   type SessionId,
 } from '../shared/protocol.js'
@@ -88,7 +89,6 @@ export const DEFAULT_MAX_BUFFERED_PREVIEW_BYTES = MAX_OUTBOUND_FRAME_BYTES
 /** Max retained generated-image preview frames per live session. */
 export const DEFAULT_MAX_BUFFERED_PREVIEWS = 32
 
-const REPLAY_TRUNCATION_REQUEST_ID = 'catcode.replay-truncated'
 const PREVIEW_REPLAY_TRUNCATION_REQUEST_ID =
   'catcode.preview-replay-truncated'
 
@@ -330,7 +330,9 @@ export class FrameReplayBuffer {
     if (entry.ready) frames.push(entry.ready)
     frames.push(...entry.sticky.values())
     if (entry.truncated) {
-      frames.push(replayTruncationFrame(sessionId, entry.recent.length))
+      frames.push(
+        replayTruncationFrame(sessionId, retainedMessageCount(entry.recent)),
+      )
     }
     frames.push(...entry.recent)
     if (entry.previewTruncated) {
@@ -356,7 +358,7 @@ export function isReplayTruncationFrame(
 ): boolean {
   return (
     frame?.kind === 'error' &&
-    frame.requestId === REPLAY_TRUNCATION_REQUEST_ID
+    frame.requestId === REPLAY_BUFFER_TRUNCATION_REQUEST_ID
   )
 }
 
@@ -369,6 +371,32 @@ export function isPreviewReplayTruncationFrame(
   )
 }
 
+/**
+ * How many MESSAGES survived in the ring, which is not how many frames did.
+ *
+ * The ring budget is spent by everything that rides it: lifecycle, pongs,
+ * request-scoped results, and — on a streaming provider — one `stream_event`
+ * frame per delta alongside the finished assistant message. Reporting
+ * `recent.length` as a message count therefore overstated it, on a chatty
+ * session by several times (2026-08-19 review, finding 3). The retained count
+ * varies per session because the BYTE budget is what actually binds
+ * (`docs/reports/2026-08-19-transcript-retention-cap-measurement.md` §3), so it
+ * is counted here at the moment of the cut and never derived from a constant.
+ *
+ * A `stream_event` is a partial of a message this ring also holds in full, so
+ * counting it would double-count that message rather than measure history.
+ */
+function retainedMessageCount(frames: readonly ServerFrame[]): number {
+  let retained = 0
+  for (const frame of frames) {
+    if (frame.kind !== 'event') continue
+    if (frame.event.type !== 'message') continue
+    if (frame.event.message.type === 'stream_event') continue
+    retained += 1
+  }
+  return retained
+}
+
 function replayTruncationFrame(
   sessionId: SessionId,
   retained: number,
@@ -377,7 +405,7 @@ function replayTruncationFrame(
     kind: 'error',
     protocolVersion: PROTOCOL_VERSION,
     sessionId,
-    requestId: REPLAY_TRUNCATION_REQUEST_ID,
+    requestId: REPLAY_BUFFER_TRUNCATION_REQUEST_ID,
     code: 'internal_error',
     message: `Only the ${retained} most recent messages are shown.`,
     retryable: false,

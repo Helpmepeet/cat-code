@@ -3002,7 +3002,6 @@ export function App() {
 	            activeSessionId={sessionId}
                 isActivePane={sessionId === activeSessionId}
                 preview={panelTranscript.preview}
-                previewTruncationMessage={panelTranscript.truncationMessage}
                 onPreviewEngage={() => engagePreview(sessionId)}
                 previewRunFacts={panelTranscript.runFacts}
 	            branch={panelBranch}
@@ -4141,7 +4140,6 @@ export function SessionPane({
   activeSessionId,
   isActivePane,
   preview = false,
-  previewTruncationMessage = null,
   onPreviewEngage,
   previewRunFacts = null,
   allowPermission,
@@ -4904,14 +4902,6 @@ export function SessionPane({
           onScroll={onTranscriptScroll}
           className="min-h-0 flex-1 overflow-auto"
         >
-          {previewTruncationMessage ? (
-            <div
-              className="mx-auto mb-3 w-full max-w-[var(--transcript-width)] border-l-2 border-tone-warn px-3 py-2 text-xs text-tone-warn"
-              role="status"
-            >
-              {previewTruncationMessage}
-            </div>
-          ) : null}
           <TranscriptView
             accounts={accountsSnapshot}
             activeSessionId={activeSessionId}
@@ -5591,8 +5581,6 @@ type SessionPaneProps = {
   isActivePane: boolean
   /** Cache-backed transcript is currently painted; operational stores stay live-only. */
   preview?: boolean
-  /** Visible-lossiness boundary retained beside a truncation-only cache. */
-  previewTruncationMessage?: string | null
   /** First focus, pointer-down, or pane dwell lazily restores the real session. */
   onPreviewEngage?: () => void
   /** What the cached transcript says this session ran on; feeds the rail while

@@ -38,9 +38,11 @@
  */
 
 import type { SDKMessage } from '@cat-code/engine/session-events'
-import type {
-  ServerFrame,
-  SessionId,
+import {
+  HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
+  REPLAY_BUFFER_TRUNCATION_REQUEST_ID,
+  type ServerFrame,
+  type SessionId,
 } from '../../shared/protocol.js'
 import { isAppReadyFrame } from './connectionState.js'
 
@@ -487,6 +489,23 @@ type TranscriptSessionState = {
    */
   hiddenFrameIds: Record<string, true>
   turnInterrupted: boolean
+  /**
+   * This pane's history is INCOMPLETE: a retention boundary frame arrived, so
+   * the rows below it are a tail rather than the whole session.
+   *
+   * Both producers mint the same idiom, one `kind:'error'` frame emitted before
+   * the retained tail: main's frame ring on the reload path
+   * (`REPLAY_BUFFER_TRUNCATION_REQUEST_ID`) and the sidecar's history replay on
+   * the resume path (`HISTORY_REPLAY_TRUNCATION_REQUEST_ID`). Recorded as one
+   * flag because the reader's question is the same either way, and because a
+   * pane can legitimately carry both.
+   *
+   * A FLAG, not a row: rows are never rewritten after the fact, and there is no
+   * frame the boundary could be appended after (it arrives BEFORE the rows it
+   * describes). `selectNestedTranscriptRows` synthesizes the row at read time,
+   * the same way the orphaned-agent placeholder is synthesized.
+   */
+  historyTruncated: boolean
 }
 
 export type TranscriptState = {
@@ -507,6 +526,7 @@ function createTranscriptSessionState(): TranscriptSessionState {
     slashCommands: [],
     hiddenFrameIds: {},
     turnInterrupted: false,
+    historyTruncated: false,
   }
 }
 
@@ -698,8 +718,37 @@ export function selectSlashCommands(
  * is gathered under a synthetic `OrphanedAgentRow`, so subagent traffic still
  * reads as subagent traffic when its card is gone.
  */
-export type NestedTranscriptRow = (TranscriptRow | OrphanedAgentRow) & {
+export type NestedTranscriptRow = (
+  | TranscriptRow
+  | OrphanedAgentRow
+  | HistoryBoundaryRow
+) & {
   children: NestedTranscriptRow[]
+}
+
+/**
+ * The top of an INCOMPLETE transcript: everything before it is not loaded.
+ *
+ * One row, in the transcript itself, above the oldest surviving message — so
+ * reaching it IS reaching the top of what this pane holds, and its ABSENCE is
+ * the signal that a transcript is whole. It replaces three surfaces that each
+ * told a different story: a red error line the reader could not dismiss, a
+ * preview-only banner that withdrew itself the moment the pane went live, and
+ * on the reload path nothing at all
+ * (`docs/migration/reviews/2026-08-19-transcript-message-visibility-ux-review.md`
+ * findings 1, 4 and 6).
+ *
+ * It carries no count. The number that survives is set by a byte budget and
+ * differs per session and per path (`docs/reports/2026-08-19-transcript-retention-cap-measurement.md`
+ * §5), and the one number this row could reach honestly on every path is no
+ * number, so it states the fact and stops.
+ *
+ * Synthesized at READ TIME from `TranscriptSessionState.historyTruncated`, like
+ * the orphaned-agent placeholder: nothing is stored and no stored row is
+ * rewritten. Deliberately NOT a member of `TranscriptRow` — no frame mints one.
+ */
+export type HistoryBoundaryRow = FrameRowSource & {
+  kind: 'history-boundary'
 }
 
 /**
@@ -768,6 +817,11 @@ const nestedRowBySource = new WeakMap<TranscriptRow, NestedTranscriptRow>()
 // it gathers: it has no source row of its own, and rebuilding it on every slice
 // would re-render a card holding a whole subagent run on every streamed delta.
 const orphanedAgentRowByFirstRow = new WeakMap<TranscriptRow, NestedTranscriptRow>()
+// The boundary row is one constant row per session, but it must keep object
+// identity across slices or the memoized view re-renders it on every streamed
+// delta. Keyed on the OLDEST surviving row, which is the row it sits above and
+// the only thing about it that can change.
+const historyBoundaryRowByFirstRow = new WeakMap<TranscriptRow, NestedTranscriptRow>()
 
 function sameReferences<T>(left: readonly T[], right: readonly T[]) {
   return left.length === right.length && left.every((item, index) => item === right[index])
@@ -886,8 +940,40 @@ export function selectNestedTranscriptRows(
   const result = topLevel.map(entry =>
     'missingToolUseId' in entry ? attachOrphans(entry) : attachChildren(entry),
   )
+  // Above the oldest surviving row, so reaching it is reaching the top. Gated on
+  // there BEING one: a pane with no rows draws the welcome/restore state, and a
+  // lone hairline over an empty pane would replace it with a claim about
+  // messages that are not on screen to be missing from.
+  const oldestRow = rows[0]
+  if (session.historyTruncated && oldestRow !== undefined) {
+    result.unshift(historyBoundaryRow(oldestRow))
+  }
   cache.set(session, result)
   return result
+}
+
+const HISTORY_BOUNDARY_FRAME_ID = 'history-boundary'
+
+/**
+ * No `isHidden`, in either view: this describes the PANE, not a message, so the
+ * reveal control has nothing to dim about it.
+ */
+function historyBoundaryRow(oldestRow: TranscriptRow): NestedTranscriptRow {
+  const cached = historyBoundaryRowByFirstRow.get(oldestRow)
+  if (cached) return cached
+  const row: NestedTranscriptRow = {
+    kind: 'history-boundary',
+    id: frameRowId(
+      oldestRow.sessionId,
+      HISTORY_BOUNDARY_FRAME_ID,
+      'history_boundary',
+    ),
+    sessionId: oldestRow.sessionId,
+    frameId: HISTORY_BOUNDARY_FRAME_ID,
+    children: [],
+  }
+  historyBoundaryRowByFirstRow.set(oldestRow, row)
+  return row
 }
 
 /** A nested tool-use row (the shape an Agent card / DelegateGroup member carries). */
@@ -1024,6 +1110,34 @@ export function projectServerFrame(
           ...session,
           turnInterrupted: frame.turnInterrupted === true,
         },
+      },
+    }
+  }
+
+  if (frame.kind === 'error') {
+    // The only error frames this store reads. Every other one is a live
+    // failure the error line owns, and projecting it as transcript would put a
+    // transient condition into permanent history.
+    if (
+      frame.requestId !== REPLAY_BUFFER_TRUNCATION_REQUEST_ID &&
+      frame.requestId !== HISTORY_REPLAY_TRUNCATION_REQUEST_ID
+    ) {
+      return state
+    }
+    const session = state.sessions[frame.sessionId]
+    // Unknown session: same rule as every other frame here. The boundary always
+    // follows a `ready` on both producers, and inventing a session from an
+    // error frame would resurrect one the pane just removed.
+    if (!session) return state
+    // Latches. A pane that received a boundary once cannot become complete by
+    // receiving more frames; only a reset (the preview-to-live handover) clears
+    // it, and the replay that follows re-states it if it is still true.
+    if (session.historyTruncated) return state
+    return {
+      ...state,
+      sessions: {
+        ...state.sessions,
+        [frame.sessionId]: { ...session, historyTruncated: true },
       },
     }
   }

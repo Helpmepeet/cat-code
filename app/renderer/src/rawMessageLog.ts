@@ -1,33 +1,11 @@
 import type { SDKMessage } from '@cat-code/engine/sdk'
 import {
   HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
+  REPLAY_BUFFER_TRUNCATION_REQUEST_ID,
   type ServerFrame,
   type SessionId,
 } from '../../shared/protocol.js'
 import { isAppReadyFrame } from './connectionState.js'
-
-/**
- * The replay buffer's retention notice ("Only the N most recent messages are
- * shown.", `app/main/replayBuffer.ts:281`, N = `DEFAULT_MAX_BUFFERED_FRAMES`
- * 8,000) rides `kind:'error'` to reuse the channel, but it is not an error:
- * retention is working as designed and there is nothing for the user to act on.
- * Nothing ever clears `error`, so displaying it pinned an undismissable red line
- * above the composer for the rest of the session.
- *
- * Dropped at DISPLAY only. The frames are still minted
- * (`replayBuffer.ts:279`, carrying the retained count) and still kept in the
- * transcript cache by `app/main/transcriptCache.ts:129`, which keys off them.
- * The preview/restore surface reads the history-replay boundary directly from
- * that cache; neither retention notice belongs in the live error line.
- *
- * The id is minted at exactly one site but declared privately in
- * `app/main/replayBuffer.ts:76`, across a process boundary the renderer cannot
- * import from, so this is a second copy. Exported so tests bind to it rather
- * than adding a third. Promote it to `shared/protocol.ts` beside its sibling
- * (whose doc comment there already names it) and import it here once that file
- * is no longer being rewritten.
- */
-export const REPLAY_BUFFER_TRUNCATION_REQUEST_ID = 'catcode.replay-truncated'
 
 /**
  * Sized so the BYTE budget below is what binds, the same correction
@@ -131,6 +109,15 @@ export function reduceServerFrameWithLimits(
   }
 
   if (frame.kind === 'error') {
+    // Both retention notices ride `kind:'error'` to reuse the channel, but
+    // neither is an error: retention is working as designed. Nothing ever
+    // clears `error`, so routing them here pinned an undismissable red line
+    // above the composer for the rest of the session. They are dropped at THIS
+    // display only — the frames are still minted, still kept by the transcript
+    // cache (`app/main/transcriptCache.ts`), and the transcript itself now
+    // draws the boundary as a quiet seam at the top of the pane
+    // (`transcriptProjector.ts` `HistoryBoundaryRow`), which is where an
+    // incomplete history belongs.
     if (
       frame.requestId === REPLAY_BUFFER_TRUNCATION_REQUEST_ID ||
       frame.requestId === HISTORY_REPLAY_TRUNCATION_REQUEST_ID

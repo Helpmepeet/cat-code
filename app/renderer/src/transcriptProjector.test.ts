@@ -3730,3 +3730,131 @@ test('a breadcrumb under a FRESH uuid duplicates — the defect the producer own
     rows.every(row => 'content' in row && row.content === '/compact'),
   ).toBe(true)
 })
+
+/* ── the retention boundary at the top of an incomplete transcript ── */
+
+function truncationFrame(sessionId: string, requestId: string) {
+  return {
+    kind: 'error' as const,
+    protocolVersion: 1 as const,
+    sessionId,
+    requestId,
+    code: 'internal_error' as const,
+    message: 'Only the 2 most recent messages are shown.',
+    retryable: false,
+  }
+}
+
+function assistantFrame(sessionId: string, index: number) {
+  return messageFrame(sessionId, {
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      content: [{ type: 'text', text: `body ${index}` }],
+    },
+    parent_tool_use_id: null,
+    uuid: `00000000-0000-4000-8000-0000000ab0${index}`,
+  } as unknown as SDKMessage)
+}
+
+/**
+ * The defect this pins (2026-08-19 review, finding 1): both boundary frames
+ * were minted end to end and both were dropped before display, so a pane whose
+ * history had been cut opened mid-conversation with no cue that anything was
+ * missing.
+ */
+test('a truncation frame yields exactly one boundary row, above the oldest message', () => {
+  for (const requestId of [
+    'catcode.replay-truncated',
+    'catcode.history-truncated',
+  ]) {
+    let state = createTranscriptState()
+    state = projectServerFrame(state, ready('session-1'))
+    state = projectServerFrame(state, truncationFrame('session-1', requestId))
+    state = projectServerFrame(state, assistantFrame('session-1', 1))
+    state = projectServerFrame(state, assistantFrame('session-1', 2))
+
+    const rows = selectNestedTranscriptRows(state, 'session-1')
+    expect(rows.map(row => row.kind)).toEqual([
+      'history-boundary',
+      'assistant-text',
+      'assistant-text',
+    ])
+    // Read-time only: nothing was stored, so the message rows are untouched.
+    expect(selectTranscriptRows(state, 'session-1')).toHaveLength(2)
+  }
+})
+
+test('a pane carrying BOTH boundary frames still draws exactly one row', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    truncationFrame('session-1', 'catcode.replay-truncated'),
+  )
+  state = projectServerFrame(
+    state,
+    truncationFrame('session-1', 'catcode.history-truncated'),
+  )
+  state = projectServerFrame(state, assistantFrame('session-1', 1))
+
+  expect(
+    selectNestedTranscriptRows(state, 'session-1').filter(
+      row => row.kind === 'history-boundary',
+    ),
+  ).toHaveLength(1)
+})
+
+test('a complete transcript draws no boundary row, and no ordinary error mints one', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(state, assistantFrame('session-1', 1))
+  expect(
+    selectNestedTranscriptRows(state, 'session-1').map(row => row.kind),
+  ).toEqual(['assistant-text'])
+
+  // A live failure is the error line's business. Projecting it as transcript
+  // would write a transient condition into permanent history.
+  const before = state
+  state = projectServerFrame(state, {
+    kind: 'error' as const,
+    protocolVersion: 1 as const,
+    sessionId: 'session-1',
+    requestId: 'req-1',
+    code: 'internal_error' as const,
+    message: 'something went wrong',
+    retryable: false,
+  })
+  expect(state).toBe(before)
+  expect(
+    selectNestedTranscriptRows(state, 'session-1').map(row => row.kind),
+  ).toEqual(['assistant-text'])
+})
+
+test('a truncated session with no surviving row draws nothing at all', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    truncationFrame('session-1', 'catcode.history-truncated'),
+  )
+  // The pane owes the reader its welcome/restore state here, not a hairline
+  // over messages that are not on screen to be missing from.
+  expect(selectNestedTranscriptRows(state, 'session-1')).toEqual([])
+})
+
+test('the boundary row keeps its identity while the oldest surviving row is unchanged', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    truncationFrame('session-1', 'catcode.replay-truncated'),
+  )
+  state = projectServerFrame(state, assistantFrame('session-1', 1))
+  const first = selectNestedTranscriptRows(state, 'session-1')[0]
+
+  state = projectServerFrame(state, assistantFrame('session-1', 2))
+  const second = selectNestedTranscriptRows(state, 'session-1')[0]
+
+  expect(second).toBe(first)
+})

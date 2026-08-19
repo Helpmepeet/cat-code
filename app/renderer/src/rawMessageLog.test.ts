@@ -1,12 +1,14 @@
 import { expect, test } from 'bun:test'
 import type { ServerFrame } from '../../shared/protocol.js'
-import { HISTORY_REPLAY_TRUNCATION_REQUEST_ID } from '../../shared/protocol.js'
+import {
+  HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
+  REPLAY_BUFFER_TRUNCATION_REQUEST_ID,
+} from '../../shared/protocol.js'
 import {
   createRawMessageLogState,
   reduceServerFrame,
   reduceServerFrameWithLimits,
   selectRawMessageLog,
-  REPLAY_BUFFER_TRUNCATION_REQUEST_ID,
 } from './rawMessageLog.js'
 
 test('captures the ready session and appends every raw SDKMessage in arrival order', () => {
