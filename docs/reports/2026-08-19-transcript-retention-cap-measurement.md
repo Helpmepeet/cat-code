@@ -81,10 +81,11 @@ not isolated here.
    is set by bytes and varies per session: in simulation, over-budget sessions
    retained 52-67% of their messages under a 4 MiB tail. The notice must report
    the count that actually survived, or no count at all.
-2. **`limits.ts:161` overstates per-message size** (recorded p50 1.9 KB / p90
-   3.7 KB; measured here p50 724 B / p90 822 B on distilled frames). The
-   conclusion it supports still holds, so this is a comment accuracy issue, not
-   a sizing error.
+2. **`limits.ts:161`'s per-message figures are NOT contradicted here.** It
+   records p50 1.9 KB / p90 3.7 KB; this run measured p50 724 B / p90 822 B on
+   distilled cache frames and a 4,165 B mean per raw JSONL record. All three
+   count different objects, so none of them refutes the others. No change to
+   that comment is justified on this evidence.
 3. **The caps stay as they are.** The defect is reporting, not retention.
 
 ## 6. Uncertainty
