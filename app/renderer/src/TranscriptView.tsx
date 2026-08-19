@@ -2633,9 +2633,19 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
  */
 function OrphanedAgentCard({ row }: { row: OrphanedAgentNestedRow }) {
   // Keyed by the missing parent, so the reader's open/closed choice survives a
-  // remount the same way a real card's does.
+  // remount the same way a real card's does. Deliberately the SAME key a real
+  // Agent card uses: no collision is possible while this row exists (it exists
+  // because that id has no card here), and if a deeper resume later brings the
+  // real card back, it should open the way the reader left this one.
   const [expanded, setExpanded] = useToolCardExpanded(row.missingToolUseId, false)
-  const count = row.children.length
+  // MESSAGES, not rows. One assistant message projects one row per content
+  // block, so counting `children` reports "4 messages" for a single reply that
+  // thought, spoke twice and called a tool.
+  const count = new Set(
+    row.children.map(child =>
+      'messageId' in child ? child.messageId : child.frameId,
+    ),
+  ).size
   return (
     <div className="w-full overflow-hidden rounded-md border border-dashed border-shell-seam bg-white/[0.025] font-sans">
       <button
@@ -2650,16 +2660,16 @@ function OrphanedAgentCard({ row }: { row: OrphanedAgentNestedRow }) {
         >
           ◇
         </span>
-        <span className="min-w-0 flex-1 truncate text-[13.5px] leading-[18px] text-text-primary">
+        <span className="min-w-0 flex-1 truncate font-mono text-[13px] font-semibold leading-[18px] text-text-muted">
           {row.agentName ?? NAMELESS_AGENT_LABEL}
         </span>
         <span className="shrink-0 whitespace-nowrap font-mono text-[11px] text-text-subtle">
           {count} {count === 1 ? 'message' : 'messages'}
         </span>
       </button>
-      <span className="flex items-center border-t border-shell-seam px-3 py-[7px] text-[13.5px] leading-[18px] text-text-muted">
+      <div className="flex items-center border-t border-shell-seam px-3 py-[7px] text-[13.5px] leading-[18px] text-text-muted">
         The rest of this agent run is no longer shown.
-      </span>
+      </div>
       {expanded ? (
         <div className="border-t border-shell-seam bg-black/[0.28] px-3 pb-2.5 pt-1">
           <div className="border-l border-accent/20 pl-3">

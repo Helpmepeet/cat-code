@@ -951,7 +951,7 @@ function stateWithBackgroundAgent(origin: unknown) {
         ],
       },
       uuid: '00000000-0000-4000-8000-000000000401',
-    } as unknown as SDKMessage),
+    }),
   )
   const raw = JSON.stringify({
     type: 'user',
@@ -1073,7 +1073,7 @@ test('a background SHELL finish keeps its own row', () => {
         ],
       },
       uuid: '00000000-0000-4000-8000-000000000501',
-    } as unknown as SDKMessage),
+    }),
   )
   const raw = JSON.stringify({
     type: 'user',
@@ -2937,7 +2937,7 @@ function orphanedSubagentSession() {
       parent_tool_use_id: 'toolu_never_seen',
       agent_name: 'Ada',
       uuid: '00000000-0000-4000-8000-0000000d0003',
-    } as unknown as SDKMessage),
+    }),
   )
   state = projectServerFrame(
     state,
@@ -2951,7 +2951,7 @@ function orphanedSubagentSession() {
       parent_tool_use_id: 'toolu_never_seen',
       agent_name: 'Ada',
       uuid: '00000000-0000-4000-8000-0000000d0004',
-    } as unknown as SDKMessage),
+    }),
   )
   return state
 }
@@ -2992,7 +2992,7 @@ test('the orphaned-agent placeholder holds its position and keeps one group per 
       type: 'user',
       message: { role: 'user', content: 'what the operator actually typed' },
       uuid: '00000000-0000-4000-8000-0000000d0010',
-    } as unknown as SDKMessage),
+    }),
   )
   for (const [index, parent] of ['toolu_gone_a', 'toolu_gone_b', 'toolu_gone_a'].entries()) {
     state = projectServerFrame(
@@ -3006,7 +3006,7 @@ test('the orphaned-agent placeholder holds its position and keeps one group per 
         },
         parent_tool_use_id: parent,
         uuid: `00000000-0000-4000-8000-0000000d001${index + 1}`,
-      } as unknown as SDKMessage),
+      }),
     )
   }
 
@@ -3030,6 +3030,33 @@ test('the orphaned-agent placeholder holds its position and keeps one group per 
   expect(first.id).not.toBe(second.id)
 })
 
+test('an orphaned-agent placeholder built entirely from hidden rows reads as hidden itself', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'user',
+      message: { role: 'user', content: 'engine bookkeeping inside a worker' },
+      parent_tool_use_id: 'toolu_never_seen',
+      isSynthetic: true,
+      uuid: '00000000-0000-4000-8000-0000000d0020',
+    }),
+  )
+
+  // Default view: the hidden tier is filtered BEFORE nesting, so nothing is
+  // orphaned and no placeholder forms at all.
+  expect(selectNestedTranscriptRows(state, 'session-1')).toEqual([])
+
+  // Revealed view: the placeholder exists, and P4-36 requires it to read dimmed
+  // like the traffic it holds. The wrapper is a fresh object, so it has to be
+  // marked deliberately.
+  const revealed = selectNestedTranscriptRows(state, 'session-1', true)
+  expect(revealed).toHaveLength(1)
+  expect(revealed[0]?.kind).toBe('orphaned-agent')
+  expect(revealed[0]?.isHidden).toBe(true)
+})
+
 test('an orphaned-agent placeholder keeps its identity while its own rows are unchanged', () => {
   let state = orphanedSubagentSession()
   const before = selectNestedTranscriptRows(state, 'session-1')[0]
@@ -3042,7 +3069,7 @@ test('an orphaned-agent placeholder keeps its identity while its own rows are un
       type: 'user',
       message: { role: 'user', content: 'a real operator turn' },
       uuid: '00000000-0000-4000-8000-0000000d0005',
-    } as unknown as SDKMessage),
+    }),
   )
 
   const after = selectNestedTranscriptRows(state, 'session-1')

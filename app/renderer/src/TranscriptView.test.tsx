@@ -2928,14 +2928,17 @@ test('an orphaned subagent tail renders as an agent frame, never as user or assi
       message: {
         id: 'msg_orphan',
         role: 'assistant',
-        content: [{ type: 'text', text: 'what the worker reported back' }],
+        content: [
+          { type: 'text', text: 'what the worker reported back' },
+          { type: 'text', text: 'and one more block of it' },
+        ],
       },
       parent_tool_use_id: 'toolu_truncated_away',
       agent_name: 'Ada',
       session_id: 's',
       uuid: '00000000-0000-4000-8000-0000000036c2',
     },
-  ] as unknown as SDKMessage[]
+  ]
   for (const message of orphaned) {
     state = projectServerFrame(state, {
       kind: 'event',
@@ -2951,12 +2954,15 @@ test('an orphaned subagent tail renders as an agent frame, never as user or assi
 
   // The frame names the worker and says why it stands alone.
   expect(html).toContain('Ada')
+  // MESSAGES, not projected rows: the assistant reply above is ONE message
+  // carrying two text blocks, which the projector splits into two rows.
   expect(html).toContain('2 messages')
   expect(html).toContain('The rest of this agent run is no longer shown.')
   // Collapsed by default, exactly as an Agent card keeps its children (C4), so
   // neither body reaches the transcript flow.
   expect(html).not.toContain('internal task prompt for the worker')
   expect(html).not.toContain('what the worker reported back')
+  expect(html).not.toContain('and one more block of it')
   // The failure this guard exists for: the user bubble (`UserBubble`) drawn for
   // a message the user never sent.
   expect(html).not.toContain('rounded-2xl rounded-br')

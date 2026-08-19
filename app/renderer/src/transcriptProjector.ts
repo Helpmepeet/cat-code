@@ -693,8 +693,8 @@ export function selectSlashCommands(
  * owning Agent tool card, never interleave at the transcript top level. This
  * arranges the flat, arrival-ordered `selectTranscriptRows` output into a
  * tree: top-level rows in arrival order, each carrying the child rows whose
- * `parentToolUseId` matches its own `toolUseId`. A child row whose parent
- * never arrived (or isn't a tool-use row) is neither dropped nor promoted: it
+ * `parentToolUseId` matches its own `toolUseId`. A child row whose parent is
+ * absent from that set is neither dropped nor promoted: it
  * is gathered under a synthetic `OrphanedAgentRow`, so subagent traffic still
  * reads as subagent traffic when its card is gone.
  */
@@ -860,6 +860,14 @@ export function selectNestedTranscriptRows(
       frameId,
       missingToolUseId: slot.missingToolUseId,
       ...(agentName !== undefined ? { agentName } : {}),
+      // P4-36: the wrapper is a fresh object, so it inherits nothing. A group
+      // that is ENTIRELY hidden traffic must still read dimmed in the revealed
+      // view, or the reveal control shows engine bookkeeping at full strength.
+      // (Only reachable there: the default view filters hidden rows out before
+      // nesting, so an all-hidden group never forms in it.)
+      ...(childRows.every(child => child.isHidden === true)
+        ? { isHidden: true as const }
+        : {}),
       children: childRows.map(attachChildren),
     }
     orphanedAgentRowByFirstRow.set(slot.firstRow, { childRows, nested })
