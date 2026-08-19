@@ -90,6 +90,15 @@ and the honest count of what was added.
   observed session (18.1 MiB) only if the implementer records why; the
   recommended starting value is 16 MiB with no message-count cap, since the
   measurement shows counts never bind.
+- **Per-reader state (amended 2026-08-20).** The recovery anchor and the
+  completeness latch are per-`Connection`, not per-session, and are reassigned
+  every time a connection attaches and is replayed. This doc originally implied
+  session state; that was wrong in a way only a reload exposes. Because every
+  new connection is replayed the same original tail, a session-scoped anchor
+  advanced by an earlier reader would leave a reloaded renderer computing its
+  missing prefix from an anchor it was never sent, and recovering nothing. The
+  in-flight guard below IS still per-session, which is correct: it bounds work,
+  not reader position.
 - **One in-flight request per session.** A second `history.loadEarlier` while
   one is outstanding is rejected, not queued. The renderer's control is
   disabled while in flight, but the sidecar must not depend on that: the
