@@ -3030,6 +3030,142 @@ test('the orphaned-agent placeholder holds its position and keeps one group per 
   expect(first.id).not.toBe(second.id)
 })
 
+test('a grandchild arriving under a nested agent reaches the tree, and unchanged branches keep their identity', () => {
+  // The nesting caches key on a row's SOURCE object and that object survives
+  // untouched when a row arrives BELOW it, so a cache that only compared direct
+  // children served a stale subtree: an agent running inside an agent had its
+  // frames filed under a parent that never showed them.
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_outer',
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_outer_agent',
+            name: 'Agent',
+            input: { subagent_type: 'general-purpose', prompt: 'delegate' },
+          },
+        ],
+      },
+      uuid: '00000000-0000-4000-8000-0000000d0030',
+    }),
+  )
+  // The outer worker spawns its own agent: a tool_use row that is a CHILD here
+  // and a parent one level down.
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_inner',
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_inner_agent',
+            name: 'Agent',
+            input: { subagent_type: 'general-purpose', prompt: 'sub-delegate' },
+          },
+        ],
+      },
+      parent_tool_use_id: 'toolu_outer_agent',
+      uuid: '00000000-0000-4000-8000-0000000d0031',
+    }),
+  )
+
+  // Read once so both levels are cached before the deep frame arrives.
+  const before = selectNestedTranscriptRows(state, 'session-1')
+  const outerBefore = before[0]
+  if (outerBefore?.kind !== 'tool-use') throw new Error('expected the outer agent row')
+  expect(outerBefore.children).toHaveLength(1)
+  expect(outerBefore.children[0]?.children).toEqual([])
+
+  // The grandchild. Nothing above it changes: `selectTranscriptRows` hands back
+  // the same source objects for both agent rows.
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_grandchild',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'the inner worker reporting' }],
+      },
+      parent_tool_use_id: 'toolu_inner_agent',
+      uuid: '00000000-0000-4000-8000-0000000d0032',
+    }),
+  )
+
+  const after = selectNestedTranscriptRows(state, 'session-1')
+  const outerAfter = after[0]
+  if (outerAfter?.kind !== 'tool-use') throw new Error('expected the outer agent row')
+  const innerAfter = outerAfter.children[0]
+  expect(innerAfter?.children).toHaveLength(1)
+  const grandchild = innerAfter?.children[0]
+  if (grandchild?.kind !== 'assistant-text') throw new Error('expected the grandchild row')
+  expect(grandchild.content).toBe('the inner worker reporting')
+  // A change deep in one branch rebuilds only that branch's spine.
+  expect(outerAfter).not.toBe(outerBefore)
+})
+
+test('an untouched branch keeps its whole subtree identity across an unrelated frame', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_agent',
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_settled_agent',
+            name: 'Agent',
+            input: { subagent_type: 'general-purpose', prompt: 'delegate' },
+          },
+        ],
+      },
+      uuid: '00000000-0000-4000-8000-0000000d0040',
+    }),
+  )
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_agent_child',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'worker prose' }],
+      },
+      parent_tool_use_id: 'toolu_settled_agent',
+      uuid: '00000000-0000-4000-8000-0000000d0041',
+    }),
+  )
+  const before = selectNestedTranscriptRows(state, 'session-1')[0]
+
+  // An unrelated top-level turn invalidates the slice cache, so this exercises
+  // the per-row cache: the memoized `TranscriptView` rows must not re-render
+  // just because something else in the transcript moved.
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'user',
+      message: { role: 'user', content: 'an unrelated operator turn' },
+      uuid: '00000000-0000-4000-8000-0000000d0042',
+    }),
+  )
+
+  expect(selectNestedTranscriptRows(state, 'session-1')[0]).toBe(before)
+})
+
 test('an orphaned-agent placeholder built entirely from hidden rows reads as hidden itself', () => {
   let state = createTranscriptState()
   state = projectServerFrame(state, ready('session-1'))

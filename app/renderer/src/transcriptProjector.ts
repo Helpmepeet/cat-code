@@ -759,24 +759,18 @@ type OrphanSlot = {
   firstRow: TranscriptRow
 }
 
-type NestedRowCacheEntry = {
-  /** Source children used to derive `row.children`, in their arrival order. */
-  childRows: TranscriptRow[]
-  nested: NestedTranscriptRow
-}
-
 // A session slice changes for every streamed delta, but `selectTranscriptRows`
 // preserves the source object for rows that did not change. Retain the nested
-// wrapper for those rows too, provided their direct child list is identical.
+// wrapper for those rows too, provided their SUBTREE is identical.
 // Weak keys keep this cross-slice cache bounded by the projector's row lifetime.
-const nestedRowBySource = new WeakMap<TranscriptRow, NestedRowCacheEntry>()
+const nestedRowBySource = new WeakMap<TranscriptRow, NestedTranscriptRow>()
 // Same discipline for the synthetic orphan placeholder, keyed on the FIRST row
 // it gathers: it has no source row of its own, and rebuilding it on every slice
 // would re-render a card holding a whole subagent run on every streamed delta.
-const orphanedAgentRowByFirstRow = new WeakMap<TranscriptRow, NestedRowCacheEntry>()
+const orphanedAgentRowByFirstRow = new WeakMap<TranscriptRow, NestedTranscriptRow>()
 
-function sameRowReferences(left: TranscriptRow[], right: TranscriptRow[]) {
-  return left.length === right.length && left.every((row, index) => row === right[index])
+function sameReferences<T>(left: readonly T[], right: readonly T[]) {
+  return left.length === right.length && left.every((item, index) => item === right[index])
 }
 
 export function selectNestedTranscriptRows(
@@ -826,21 +820,36 @@ export function selectNestedTranscriptRows(
     const childRows =
       row.kind === 'tool-use' ? (childrenByParentId.get(row.toolUseId) ?? []) : []
     const cached = nestedRowBySource.get(row)
-    if (cached && sameRowReferences(cached.childRows, childRows)) {
-      return cached.nested
+    // LEAF FAST PATH, and the reason the deep check below is affordable: nothing
+    // can have changed beneath a row that has no children, so the overwhelming
+    // majority of a transcript (every prose, thinking, user and childless tool
+    // row) still returns in O(1) and allocates nothing. Only a row that owns
+    // children pays to look down.
+    if (cached && childRows.length === 0 && cached.children.length === 0) {
+      return cached
     }
 
-    const nested = { ...row, children: childRows.map(attachChildren) }
-    nestedRowBySource.set(row, { childRows, nested })
+    const children = childRows.map(attachChildren)
+    // Compared on the NESTED children, not the source rows. A grandchild
+    // arriving under one of these children (an agent inside an agent) leaves
+    // every direct child's SOURCE object identical, because
+    // `selectTranscriptRows` preserves unchanged rows — so a source-level
+    // comparison kept serving a subtree that was missing the new row until some
+    // direct child happened to change for an unrelated reason.
+    if (cached && sameReferences(cached.children, children)) return cached
+
+    const nested = { ...row, children }
+    nestedRowBySource.set(row, nested)
     return nested
   }
 
   const attachOrphans = (slot: OrphanSlot): NestedTranscriptRow => {
     const childRows = orphansByParentId.get(slot.missingToolUseId) ?? []
+    // No leaf shortcut here: a group always holds at least the row that minted
+    // it, and its rows can own children of their own.
+    const children = childRows.map(attachChildren)
     const cached = orphanedAgentRowByFirstRow.get(slot.firstRow)
-    if (cached && sameRowReferences(cached.childRows, childRows)) {
-      return cached.nested
-    }
+    if (cached && sameReferences(cached.children, children)) return cached
 
     // Identity is whatever the orphaned frames themselves carry. Nothing else
     // is invented: no status, no result, no usage — the card that held those
@@ -868,9 +877,9 @@ export function selectNestedTranscriptRows(
       ...(childRows.every(child => child.isHidden === true)
         ? { isHidden: true as const }
         : {}),
-      children: childRows.map(attachChildren),
+      children,
     }
-    orphanedAgentRowByFirstRow.set(slot.firstRow, { childRows, nested })
+    orphanedAgentRowByFirstRow.set(slot.firstRow, nested)
     return nested
   }
 
