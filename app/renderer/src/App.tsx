@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useReducer,
@@ -102,6 +103,16 @@ import {
 } from './sessionPreload.js'
 import { TranscriptView, type RestorePhase } from './TranscriptView.js'
 import { observePaneBottomLock } from './markdownScrollCoordinator.js'
+import {
+  captureTranscriptScrollAnchor,
+  createTranscriptScrollMemoryState,
+  reduceTranscriptScrollMemoryState,
+  restoreTranscriptScroll,
+  selectTranscriptScrollAnchor,
+  type TranscriptScrollAnchor,
+  type TranscriptScrollMemoryState,
+} from './transcriptScrollMemory.js'
+import { ReasoningLayoutContext } from './reasoningLayout.js'
 import { SlashCommandPicker } from './SlashCommandPicker.js'
 import {
   MENTION_LISTBOX_ID,
@@ -683,6 +694,24 @@ export function App() {
   useEffect(() => {
     setTurnStarts(prev => reduceTurnStarts(prev, connection, Date.now()))
   }, [connection])
+  // Where the reader is in each session's transcript, held above the panes for
+  // the same reason `turnStarts` is: a pane is unmounted while its session is
+  // off screen, so it cannot remember its own place across a tab switch. A ref
+  // rather than state — the pane reports on every scroll event and nothing
+  // renders from this, so storing it in state would re-render the window at
+  // scroll rate.
+  const transcriptScrollMemoryRef = useRef<TranscriptScrollMemoryState>(
+    createTranscriptScrollMemoryState(),
+  )
+  const rememberTranscriptScroll = useCallback(
+    (sessionId: SessionId, anchor: TranscriptScrollAnchor): void => {
+      transcriptScrollMemoryRef.current = reduceTranscriptScrollMemoryState(
+        transcriptScrollMemoryRef.current,
+        { type: 'remember', sessionId, anchor },
+      )
+    },
+    [],
+  )
   const [settings, dispatchSettings] = useReducer(
     reduceSettingsStateBatched,
     undefined,
@@ -3263,6 +3292,13 @@ export function App() {
 	              })
 	            }}
 	            revealHidden={revealHiddenSessions[sessionId] === true}
+	            scrollAnchor={selectTranscriptScrollAnchor(
+	              transcriptScrollMemoryRef.current,
+	              sessionId,
+	            )}
+	            onScrollAnchorChange={anchor =>
+	              rememberTranscriptScroll(sessionId, anchor)
+	            }
 	            setPermissionMode={mode => {
 	              try {
 	                getBridge().setPermissionMode(sessionId, mode)
@@ -4189,6 +4225,8 @@ export function SessionPane({
   releasePendingSubmit,
   restorePermission,
   revealHidden = false,
+  scrollAnchor = null,
+  onScrollAnchorChange,
   setPermissionMode,
   setPrompt,
   submit,
@@ -4196,6 +4234,9 @@ export function SessionPane({
   transportError,
 }: SessionPaneProps) {
   const toast = useToast()
+  // Read for the scroll memory's row token only: `TranscriptView` consumes the
+  // same context to decide how many rows a run of reasoning renders as.
+  const { mode: reasoningMode } = useContext(ReasoningLayoutContext)
   // ACCT-5 — correlate the composer profile popover's account switch by the
   // requestId SessionPane itself mints (switchVerb), matching AccountsPage's
   // pendingRef/lastResult pattern: NO optimistic UI, toast only on the real
@@ -4465,6 +4506,25 @@ export function SessionPane({
   // `deriveActivity` and the token estimate share one projection.
   const nestedRows = selectNestedTranscriptRows(transcript, activeSessionId)
   const activity = deriveActivity(nestedRows)
+  // Names the head of the row list the scroll memory's row index counts from.
+  // The three inputs are everything that can renumber the list without the
+  // reader touching it: the oldest surviving row (history truncated behind a
+  // boundary row), the hidden-row reveal, and the reasoning layout, which is
+  // what decides how many rows a run of reasoning renders as. A pane with no
+  // rows has no head, and no anchor is taken from one.
+  const paneRows = selectNestedTranscriptRows(
+    transcript,
+    activeSessionId,
+    revealHidden,
+  )
+  const paneRowsToken =
+    paneRows.length === 0
+      ? null
+      : [
+          reasoningMode,
+          revealHidden ? 'revealed' : 'default',
+          paneRows[0]?.id ?? '',
+        ].join(':')
 
   // IS-C (M5) — the restore affordance phase for TranscriptView. A preview pane
   // reads as "restored" (pulsing "resuming" once engaged); a no-cache restore
@@ -4546,13 +4606,23 @@ export function SessionPane({
     }
   }
 
-  // Instant jump to bottom when the pane binds to a session (prototype: no slow
-  // crawl on open); live-turn content then follows the bottom while stuck.
+  // Instant placement when the pane binds to a session (prototype: no slow crawl
+  // on open). A session this window has already shown opens where its reader
+  // left off; one that was left following the end opens at the end, including
+  // whatever streamed in meanwhile, and live-turn content then follows the
+  // bottom while stuck. `transcriptScrollMemory` explains why the place is a row
+  // and not a pixel offset.
   useEffect(() => {
     const el = transcriptScrollRef.current
     if (!el) return
-    el.scrollTop = el.scrollHeight
-    applyAtBottom(true)
+    const restored = restoreTranscriptScroll(el, {
+      anchor: scrollAnchor,
+      rowsToken: paneRowsToken,
+    })
+    applyAtBottom(restored.kind === 'bottom')
+    // Read at bind only: the pane is remounted per session (`WorkspacePanels`
+    // keys each panel by session id), so a later anchor is this pane reporting
+    // its own position, not a new place to jump to.
   }, [activeSessionId])
 
   // The pane's stick-to-bottom owner. A restored transcript binds with every
@@ -4648,7 +4718,19 @@ export function SessionPane({
     const el = transcriptScrollRef.current
     if (!el) return
     const gap = el.scrollHeight - el.scrollTop - el.clientHeight
-    applyAtBottom(gap < 120)
+    const nextAtBottom = gap < 120
+    applyAtBottom(nextAtBottom)
+    // Reported here rather than at unmount: a pane's DOM is already gone by the
+    // time its cleanup runs, and this is the last moment the position it holds
+    // can still be measured.
+    if (activeSessionId && onScrollAnchorChange) {
+      onScrollAnchorChange(
+        captureTranscriptScrollAnchor(el, {
+          atBottom: nextAtBottom,
+          rowsToken: paneRowsToken,
+        }),
+      )
+    }
   }
   const jumpToBottom = (): void => {
     const el = transcriptScrollRef.current
@@ -5674,6 +5756,15 @@ type SessionPaneProps = {
    * defaults to the ordinary transcript.
    */
   revealHidden?: boolean
+  /**
+   * Where this session's reader was when the pane last held it, or null for a
+   * session this window has not shown yet. Owned by App (`transcriptScrollMemory`)
+   * because a pane is unmounted while its session is off screen, exactly like
+   * `turnStartedAt`. Read once, at bind.
+   */
+  scrollAnchor?: TranscriptScrollAnchor | null
+  /** Report the reading position back, on every scroll of this pane. */
+  onScrollAnchorChange?: (anchor: TranscriptScrollAnchor) => void
   setPermissionMode: (mode: PermissionSetModeMode) => void
   setPrompt: (value: string, reason?: DraftWriteReason) => void
   submit: (event: FormEvent<HTMLFormElement>) => void
