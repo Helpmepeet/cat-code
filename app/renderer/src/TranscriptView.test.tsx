@@ -575,16 +575,22 @@ test('a resumed agent is an independent agent card named by the follow-up prompt
     }),
   )
 
+  // Titled with the RESUME PROMPT, not the original task, and typed `resumed`.
   expect(html).toContain('measure the card height')
   expect(html).toContain('Ramanujan')
-  expect(html).toContain('Completed')
+  expect(html).toContain('resumed')
   expect(html).toContain('The card is 84 pixels high.')
   expect(html).toContain('~9.5k tokens')
   expect(html).not.toContain('resume @Ramanujan')
   expect(html).not.toContain(RESUME_ACK)
   expect(html).not.toContain('"success"')
-  expect(html).toContain('◇') // hollow mark against the spawn card's ◆
-  expect(html).toContain('text-[#a78bfa]')
+  // Settled green face; the lifecycle WORD is gone from every state but the two
+  // that need to stop a reader (Failed, Stopped).
+  expect(html).toContain('fill-tone-good')
+  expect(html).not.toContain('Completed')
+  // The ◇ mark went with the family word; only a REJECTED resume still carries
+  // one, because it has no face to identify it.
+  expect(html).not.toContain('◇')
 })
 
 test('ack card: a FAILED ack tints the peek while the header still reports the call', () => {
@@ -857,18 +863,58 @@ test('P4-8c: an Agent card derives type/state/task from the row input + status (
     agentRow('solo', { subagent_type: 'Explore', description: 'map the seam' }, 'pending'),
   )
 
-  expect(html).toContain('Agent') // family word (◆ Agent header)
-  expect(html).toContain('Explore') // worker type from input.subagent_type
-  expect(html).toContain('map the seam') // description line (header target)
-  expect(html).toContain('Running') // derived AgentStateLabel (pending → running)
+  expect(html).toContain('explore') // worker type from input.subagent_type
+  expect(html).toContain('map the seam') // the task, on line 2
+  // Running reads as a pulsing blue face plus what the worker is doing — never
+  // a lifecycle word, and never the ◆ AGENT family header the redesign removed.
+  expect(html).toContain('fill-tone-info')
+  expect(html).toContain('animate-face-pulse')
+  expect(html).not.toContain('Running')
+  expect(html).not.toContain('◆')
 })
 
-test('P4-8c: a completed Agent card shows the Completed agent state', () => {
+test('P4-8c: a completed Agent card settles to a still green face, with no word', () => {
   const html = render(
     agentRow('done', { subagent_type: 'Explore', description: 'done task' }, 'success'),
   )
 
-  expect(html).toContain('Completed') // deriveAgentToolState: success → completed
+  expect(html).toContain('fill-tone-good') // deriveAgentToolState: success → completed
+  expect(html).not.toContain('Completed')
+  // A settled card is completely still.
+  expect(html).not.toContain('animate-face-pulse')
+})
+
+test('a failed card keeps its word and its tool calls, and drops the token figure', () => {
+  const html = render(
+    agentRow('boom', { subagent_type: 'Explore', description: 'audit' }, 'error', [], null, {
+      isError: true,
+      content: 'failed',
+      diff: null,
+      agentUsage: { totalTokens: 9100, toolUses: 6 },
+    }),
+  )
+
+  expect(html).toContain('fill-tone-danger')
+  expect(html).toContain('Failed') // one of the two states that keeps its word
+  expect(html).toContain('6 tool calls')
+  expect(html).not.toContain('9.1k tokens')
+})
+
+test('a stopped card keeps its word', () => {
+  const html = render(
+    {
+      ...agentRow('halt', { agentId: 'agent-1', prompt: 'keep going' }, 'success', [], {
+        status: 'killed',
+        summary: null,
+        result: null,
+        usage: null,
+      }),
+      toolName: 'ResumeAgent',
+    },
+  )
+
+  expect(html).toContain('fill-tone-warn')
+  expect(html).toContain('Stopped')
 })
 
 /* ── the finished background agent (leak fix, 2026-08-01) ─────────────────── */
@@ -904,11 +950,23 @@ test('a background agent card remains a launch record without completion output'
   expect(html).not.toContain('Completed')
 })
 
-test('a foreground agent card keeps the C4 collapsed default and grows no result section', () => {
+test('a foreground agent card grows no result section, and offers no way to open one', () => {
   const html = render(
     agentRow('fg', { subagent_type: 'Explore', description: 'inline work' }, 'success'),
   )
   expect(html).not.toContain('Result')
+  // No children and no separate completion means nothing to expand to, so the
+  // card must not promise content it does not have.
+  expect(html).not.toContain('aria-expanded')
+  expect(html).not.toContain('<button')
+})
+
+test('a foreground agent card WITH children keeps the C4 collapsed default', () => {
+  const html = render(
+    agentRow('fgkids', { subagent_type: 'Explore', description: 'inline work' }, 'success', [
+      toolRow({ toolName: 'Grep', toolFamily: 'grep', input: { pattern: 'x' }, status: 'success' }),
+    ]),
+  )
   expect(html).toContain('aria-expanded="false"')
 })
 
@@ -1007,7 +1065,10 @@ test('an unmergeable completion renders one line, never the model-facing banner'
       ]}
     />,
   )
-  expect(html).toContain('Agent @Ada completed')
+  // Printed verbatim, with the worker's own name set in mono inside the line.
+  expect(html).toContain('Agent ')
+  expect(html).toContain('@Ada')
+  expect(html).toContain(' completed')
   // The words the operator should never see again.
   for (const leaked of ['Task notification', 'Task ID', 'Output file', 'Tool use ID', 'Agent task']) {
     expect(html).not.toContain(leaked)
@@ -1048,8 +1109,11 @@ test('D2/C4: an owning Agent card nests its subagent COLLAPSED by default with a
     ]),
   )
 
-  expect(html).toContain('Agent') // parent family word (always-visible header)
-  // The header digests the children rather than counting them: while the worker
+  // Nameless until the first nested frame carries an identity, so line 1 leads
+  // with the fallback word and the type has to stand on its own.
+  expect(html).toContain('AGENT')
+  expect(html).toContain('explore')
+  // The slot digests the children rather than counting them: while the worker
   // runs, that digest is its most recent nested tool call.
   expect(html).toContain('Grep foo')
   // C4: the child ROWS stay COLLAPSED — the header summarising them is not the
@@ -1068,14 +1132,15 @@ test('a finished Agent card leads with the worker NAME, taken from its own resul
   )
   expect(html).toContain('Ada')
   // The type stays as the qualifier beside it, never replaced by the name.
-  expect(html).toContain('Explore')
+  expect(html).toContain('explore')
 })
 
 test('a running Agent card shows no name, because the transcript has not been told one', () => {
   const html = render(
     agentRow('owner', { subagent_type: 'Explore', description: 'investigate' }, 'pending'),
   )
-  expect(html).toContain('Explore')
+  expect(html).toContain('explore')
+  expect(html).toContain('AGENT') // the nameless fallback, until identity lands
   expect(html).not.toContain('Ada')
 })
 
@@ -1098,7 +1163,7 @@ test('a running Agent card leads with the worker name carried by its nested prog
     ),
   )
   expect(html).toContain('Ada')
-  expect(html).toContain('Explore')
+  expect(html).toContain('explore')
 })
 
 test('a leading @ on the engine name is stripped before display', () => {
@@ -1226,27 +1291,206 @@ test('D2/§3: two co-spawned Agent rows (same messageId) render as ONE DelegateG
     />,
   )
 
-  expect(html).toContain('Delegate') // group eyebrow
-  expect(html).toContain('Running 2 Explore agents') // engine-faithful group summary
+  // The header names the set and closes with what has NOT settled. It can never
+  // say finished while a member is still out, and the eyebrow + composed
+  // "N agents finished" summary are gone.
+  expect(html).toContain('2 explore workers')
+  expect(html).toContain('2 still running')
+  expect(html).not.toContain('Delegate')
+  expect(html).not.toContain('finished')
   expect(html).toContain('audit A') // member A card
   expect(html).toContain('audit B') // member B card
+})
+
+test('the task is the only element on the card allowed to shrink', () => {
+  const html = render(
+    agentRow(
+      'long',
+      {
+        subagent_type: 'Explore',
+        description:
+          'Trace the permission response path through the preload, the supervisor and the sidecar, and report which one validates the id',
+      },
+      'pending',
+      [],
+      null,
+      { isError: false, content: 'x', diff: null, agentUsage: { totalTokens: 1000, toolUses: 2 } },
+    ),
+  )
+
+  // One line, ellipsised, and it is the only `flex-1 min-w-0` on the card.
+  expect(html).toContain('min-w-0 flex-1 truncate')
+  expect(html.match(/min-w-0 flex-1 truncate/g)).toHaveLength(1)
+  // Nothing else on line 2 may reflow around it.
+  expect(html).toContain('shrink-0 whitespace-nowrap')
+})
+
+test('an unfamiliar 30-character subagent type does not break line 1', () => {
+  const type = 'deeply-specialised-audit-agent'
+  expect(type).toHaveLength(30)
+  const html = render(
+    agentRow('odd', { subagent_type: type, description: 'audit' }, 'pending'),
+  )
+
+  // Printed as configured (lowercased), never matched against a known set, and
+  // never allowed to push the slot off the row.
+  expect(html).toContain(type)
+  expect(html).toContain('min-w-0 truncate font-mono text-[11px] lowercase')
+})
+
+test('a rejected resume has no identity line at all', () => {
+  const html = render({
+    ...agentRow('rej', { agentId: '@Ghost', prompt: 'pick this back up' }, 'success', [], null, {
+      isError: false,
+      content: JSON.stringify({
+        success: false,
+        message: 'No agent found with id agent_01H9Z4',
+      }),
+      diff: null,
+    }),
+    toolName: 'ResumeAgent',
+  })
+
+  // There is no worker to describe, so there is no face and no name — just the
+  // hollow mark, the resume prompt, and the refusal under it. The green dot says
+  // the CALL succeeded; only its answer was a refusal.
+  expect(html).toContain('◇')
+  expect(html).toContain('pick this back up')
+  expect(html).toContain('No agent found with id agent_01H9Z4')
+  expect(html).toContain('bg-tone-good')
+  expect(html).not.toContain('shape-rendering')
+  expect(html).not.toContain('AGENT')
+})
+
+test('a backgrounded launch faces away in its own colour and reports no outcome', () => {
+  const html = render(
+    agentRow(
+      'bglaunch',
+      { subagent_type: 'verification', description: 'sweep for stale references', run_in_background: true },
+      'success',
+      [],
+      ADA_COMPLETION,
+    ),
+  )
+
+  // Teal, not the blue a worker genuinely running in the background wears: this
+  // card only ever knew that the launch was acknowledged.
+  expect(html).toContain('fill-teal-300')
+  expect(html).toContain('backgrounded')
+  expect(html).not.toContain('animate-face-pulse')
+  expect(html).not.toContain('Completed')
+  expect(html).not.toContain('Sidebar lives in app/renderer/src/Sidebar.tsx')
+})
+
+test('the pulse runs on a running face and on nothing else on the card', () => {
+  const running = render(
+    agentRow('p1', { subagent_type: 'Explore', description: 'live' }, 'pending'),
+  )
+  expect(running.match(/animate-face-pulse/g)).toHaveLength(1)
+  expect(running).not.toContain('animate-pulse"')
+
+  const settled = render(
+    agentRow('p2', { subagent_type: 'Explore', description: 'done' }, 'success'),
+  )
+  expect(settled).not.toContain('animate-face-pulse')
+})
+
+test('the model closes line 2, in the vocabulary the rest of the app speaks', () => {
+  const settled = render(
+    agentRow('m1', { subagent_type: 'Explore', description: 'audit' }, 'success', [], null, {
+      isError: false,
+      content: 'done',
+      diff: null,
+      agentId: 'agent_1',
+      agentModel: 'claude-sonnet-5-20260115',
+    }),
+  )
+  expect(settled).toContain('Sonnet 5')
+  expect(settled).not.toContain('claude-sonnet-5-20260115')
+
+  // A RUNNING worker has no result yet, so the model comes off its own nested
+  // frames instead.
+  const live = render(
+    agentRow('m2', { subagent_type: 'Explore', description: 'audit' }, 'pending', [
+      {
+        ...toolRow({ toolName: 'Grep', toolFamily: 'grep', input: { pattern: 'x' }, status: 'pending' }),
+        model: 'gpt-5.6-luna',
+      },
+    ]),
+  )
+  expect(live).toContain('GPT-5.6 Luna')
+})
+
+test('a worker with no model stated says nothing about one', () => {
+  const html = render(
+    agentRow('m3', { subagent_type: 'Explore', description: 'audit' }, 'success'),
+  )
+  expect(html).not.toContain('Sonnet')
+  expect(html).not.toContain('Unknown Model')
+})
+
+test('an image result never lends its model to an agent card', () => {
+  // `model` is a generic key: ImageGen's own structured result names its model
+  // too, and an ungated read would print it on the worker's line 2.
+  const html = render(
+    agentRow('m4', { subagent_type: 'Explore', description: 'audit' }, 'success', [], null, {
+      isError: false,
+      content: 'done',
+      diff: null,
+      generatedImage: {
+        filePath: '/tmp/a.png',
+        model: 'dall-e-3',
+        size: '1024x1024',
+        outputFormat: 'png',
+        bytes: 10,
+      },
+    }),
+  )
+  expect(html).not.toContain('dall-e-3')
+})
+
+test('two named workers on screen never share a silhouette', () => {
+  const named = (suffix: string, name: string) =>
+    agentRow(suffix, { subagent_type: 'Explore', description: `job ${suffix}` }, 'pending', [
+      {
+        ...toolRow({
+          toolName: 'Grep',
+          toolFamily: 'grep',
+          input: { pattern: suffix },
+          status: 'pending',
+        }),
+        agentName: name,
+      },
+    ])
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView rows={[named('x', 'Scout'), named('y', 'Wick')]} />,
+  )
+
+  // Four stamps: the group header shows each worker once, and each member card
+  // shows its own again. TWO distinct silhouettes, one per worker — a worker
+  // wears the same face everywhere it appears, and no two workers share one.
+  const stamps = [...html.matchAll(/<svg[^>]*>(.*?)<\/svg>/g)].map(match => match[1])
+  expect(stamps).toHaveLength(4)
+  expect(new Set(stamps).size).toBe(2)
 })
 
 test('P4-8c: the Agent card + DelegateGroup emit only static tone utilities (no interpolated/arbitrary classes)', () => {
   const html = renderToStaticMarkup(
     <TranscriptRowsView
       rows={[
-        agentRow('a', { subagent_type: 'Explore', description: 'x' }, 'pending'),
+        agentRow('a', { subagent_type: 'Explore', description: 'x' }, 'pending', [
+          { ...toolRow({ toolName: 'Grep', toolFamily: 'grep', input: { pattern: 'q' }, status: 'pending' }), agentName: 'Ada' },
+        ]),
         agentRow('b', { subagent_type: 'Explore', description: 'y' }, 'pending'),
       ]}
     />,
   )
 
   // Static utilities from the 8a tone maps actually reach the DOM (a dynamic
-  // `text-[${hex}]` would silently never generate — the P4-9 trap).
-  expect(html).toContain('text-blue-400') // running state tone (AGENT_STATE_TONE_CLASS.info)
-  expect(html).toContain('bg-blue-400')
-  expect(html).toContain('text-sky-300') // Explore type tone (AGENT_TYPE_TONE_CLASS.sky)
+  // `text-[${hex}]`/`fill-[${hex}]` would silently never generate — the P4-9 trap).
+  expect(html).toContain('text-blue-400') // live slot tone (AGENT_STATE_TONE_CLASS.info)
+  expect(html).toContain('fill-tone-info') // running face fill
+  expect(html).toContain('text-sky-300') // Explore type tone on the NAME (AGENT_TYPE_TONE_CLASS.sky)
   // No template-literal interpolation ever leaks into a className.
   expect(html).not.toContain('${')
 })
@@ -3423,7 +3667,10 @@ test('CC-59: a delegate group of thousands mounts a bounded number and counts th
     createToolCardExpansionStore(),
   )
 
-  expect(html).toContain('5000 Explore agents finished')
+  // The label counts every member; the face stack is a glance, not a census, so
+  // a group of thousands must not put thousands of stamps in its own header.
+  expect(html).toContain('5000 explore workers')
+  expect(html.match(/shape-rendering/g) ?? []).not.toHaveLength(5_000)
   expect(mountedChildCount(html)).toBeGreaterThan(0)
   expect(mountedChildCount(html)).toBeLessThanOrEqual(MAX_MOUNTED_COMPOSITE_CHILDREN)
 })

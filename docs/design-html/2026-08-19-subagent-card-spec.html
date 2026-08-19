@@ -1,0 +1,830 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  html,body{margin:0;background:#09090b;overflow:hidden}
+  *{box-sizing:border-box}
+  a{color:#f9a8d4;text-decoration:none}
+  a:hover{color:#f472b6}
+  @keyframes p{50%{opacity:.5}}
+</style>
+</helmet>
+
+<section style="display:flex;height:100vh;overflow:hidden;font-family:'DM Sans',-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;color:#f4f4f5;background:#09090b;line-height:1.5">
+
+<div style="flex:1 1 0;min-width:0;height:100vh;overflow-y:auto;overflow-x:hidden">
+  <div style="position:sticky;top:0;z-index:2;background:#09090b;border-bottom:1px solid #26262a;padding:15px 32px 11px;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:#8a8a90">Proposed</div>
+
+  <div style="max-width:900px;margin:0 auto;padding:30px 32px 0">
+    <div style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:#6e6e73;padding-bottom:7px;border-bottom:1px solid #26262a">Collapsed</div>
+  </div>
+  <div style="max-width:900px;margin:0 auto;padding:20px 32px 0;font-size:12.5px;line-height:1.6;color:#8b8b92;text-wrap:pretty">Two lines, both always visible. Line one is identity: face, name, type, and one right-hand slot. Line two is the task, closed by model and account. The state word is gone everywhere except Failed and Stopped. Faces are computed from the worker's name through the six axes; eyes come from state, never identity.</div>
+
+  <div style="max-width:900px;margin:0 auto;padding:26px 32px 7px;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:#5b5b60">Running</div>
+  <div style="max-width:900px;margin:0 auto;padding:0 32px;display:flex;flex-direction:column;gap:10px">
+    <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+        <svg width="19" height="19" style="flex-shrink:0;animation:p 1.4s ease-in-out infinite" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#60a5fa"><sc-for list="{{ faces.Scout_open }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+        <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;color:oklch(82.8% .111 230.318)">Scout</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">explore</span></span>
+        <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#60a5fa">Read sidecarServer.ts</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+        <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Trace the permission response path</span>
+        <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">Claude Sonnet 5</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">onbi</span></span>
+      </div>
+    </div>
+  </div>
+
+  <div style="max-width:900px;margin:0 auto;padding:26px 32px 7px;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:#5b5b60">Running, no nested frame yet</div>
+  <div style="max-width:900px;margin:0 auto;padding:0 32px;display:flex;flex-direction:column;gap:10px">
+    <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+        <svg width="19" height="19" style="flex-shrink:0;animation:p 1.4s ease-in-out infinite" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#60a5fa"><sc-for list="{{ faces.anon_open }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+        <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;letter-spacing:.04em;color:#a1a1aa">{{ nameFallback }}</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">explore</span></span>
+        <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#60a5fa">{{ startingWord }}</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+        <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Trace the permission response path</span>
+        <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">Claude Sonnet 5</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">onbi</span></span>
+      </div>
+    </div>
+  </div>
+
+  <div style="max-width:900px;margin:0 auto;padding:26px 32px 7px;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:#5b5b60">Completed</div>
+  <div style="max-width:900px;margin:0 auto;padding:0 32px;display:flex;flex-direction:column;gap:10px">
+    <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+        <svg width="19" height="19" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#4ade80"><sc-for list="{{ faces.Scout_shut }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+        <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;color:oklch(82.8% .111 230.318)">Scout</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">explore</span></span>
+        <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;font-variant-numeric:tabular-nums;color:#98989f">12 tool calls · 34.5k tokens</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+        <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Trace the permission response path</span>
+        <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">Claude Sonnet 5</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">onbi</span></span>
+      </div>
+    </div>
+  </div>
+
+  <div style="max-width:900px;margin:0 auto;padding:26px 32px 7px;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:#5b5b60">Failed</div>
+  <div style="max-width:900px;margin:0 auto;padding:0 32px;display:flex;flex-direction:column;gap:10px">
+    <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+        <svg width="19" height="19" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#f87171"><sc-for list="{{ faces.Ash_open }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+        <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;color:oklch(81.1% .111 293.571)">Ash</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">coding worker</span></span>
+        <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;font-variant-numeric:tabular-nums;color:#98989f">3 tool calls</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+        <span style="flex-shrink:0;white-space:nowrap;font-size:11px;font-weight:500;color:#f87171">Failed</span>
+        <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Trace the permission response path</span>
+        <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">GPT 5.6 Terra</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">main</span></span>
+      </div>
+    </div>
+  </div>
+
+  <div style="max-width:900px;margin:0 auto;padding:26px 32px 7px;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:#5b5b60">Stopped</div>
+  <div style="max-width:900px;margin:0 auto;padding:0 32px;display:flex;flex-direction:column;gap:10px">
+    <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+        <svg width="19" height="19" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#fbbf24"><sc-for list="{{ faces.Marn_open }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+        <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;color:oklch(82.8% .111 230.318)">Marn</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">explore</span></span>
+        <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;font-variant-numeric:tabular-nums;color:#98989f">4 tool calls</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+        <span style="flex-shrink:0;white-space:nowrap;font-size:11px;font-weight:500;color:#fbbf24">Stopped</span>
+        <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Cross-check the docs for the same helper</span>
+        <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">Claude Sonnet 5</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">onbi</span></span>
+      </div>
+    </div>
+  </div>
+
+  <div style="max-width:900px;margin:0 auto;padding:26px 32px 7px;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:#5b5b60">Backgrounded launch record</div>
+  <div style="max-width:900px;margin:0 auto;padding:0 32px;display:flex;flex-direction:column;gap:10px">
+    <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+        <svg width="19" height="19" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#5eead4"><sc-for list="{{ faces.anon_closed }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+        <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;letter-spacing:.04em;color:#a1a1aa">{{ nameFallback }}</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">verification</span></span>
+        <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#98989f">backgrounded</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+        <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Sweep the renderer for stale references</span>
+        <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">Claude Sonnet 5</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">onbi</span></span>
+      </div>
+    </div>
+  </div>
+
+  <div style="max-width:900px;margin:0 auto;padding:26px 32px 7px;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:#5b5b60">Unknown subagent type</div>
+  <div style="max-width:900px;margin:0 auto;padding:0 32px;display:flex;flex-direction:column;gap:10px">
+    <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+        <svg width="19" height="19" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#4ade80"><sc-for list="{{ faces.Wren_shut }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+        <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;color:#a1a1aa">Wren</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">statusline-setup</span></span>
+        <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;font-variant-numeric:tabular-nums;color:#98989f">6 tool calls · 9.1k tokens</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+        <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Summarize the delivery trace sink</span>
+        <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">Claude Sonnet 5</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">onbi</span></span>
+      </div>
+    </div>
+  </div>
+
+  <div style="max-width:900px;margin:0 auto;padding:26px 32px 7px;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:#5b5b60">Resume, in background</div>
+  <div style="max-width:900px;margin:0 auto;padding:0 32px;display:flex;flex-direction:column;gap:10px">
+    <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+        <svg width="19" height="19" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#60a5fa"><sc-for list="{{ faces.anon_closed }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+        <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;letter-spacing:.04em;color:#a1a1aa">{{ nameFallback }}</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">resumed</span></span>
+        <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#98989f">backgrounded</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+        <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Also check the two sibling paths and report back</span>
+        <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">Claude Sonnet 5</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">onbi</span></span>
+      </div>
+    </div>
+  </div>
+
+  <div style="max-width:900px;margin:0 auto;padding:26px 32px 7px;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:#5b5b60">Resume, stopped</div>
+  <div style="max-width:900px;margin:0 auto;padding:0 32px;display:flex;flex-direction:column;gap:10px">
+    <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+        <svg width="19" height="19" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#fbbf24"><sc-for list="{{ faces.Scout_open }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+        <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;color:oklch(82.8% .111 230.318)">Scout</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">resumed</span></span>
+        <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;font-variant-numeric:tabular-nums;color:#98989f">4 tool calls</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+        <span style="flex-shrink:0;white-space:nowrap;font-size:11px;font-weight:500;color:#fbbf24">Stopped</span>
+        <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Also check the two sibling paths and report back</span>
+        <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">Claude Sonnet 5</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">onbi</span></span>
+      </div>
+    </div>
+  </div>
+
+  <div style="max-width:900px;margin:0 auto;padding:26px 32px 7px;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:#5b5b60">Resume, rejected</div>
+  <div style="max-width:900px;margin:0 auto;padding:0 32px;display:flex;flex-direction:column;gap:10px">
+    <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 12px">
+        <span style="flex-shrink:0;font-size:12px;line-height:12px;color:#75757b">◇</span>
+        <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Also check the two sibling paths and report back</span>
+        <span style="height:7px;width:7px;flex-shrink:0;border-radius:9999px;background:#4ade80"></span>
+      </div>
+      <div style="border-top:1px solid rgba(255,255,255,0.06);background:rgba(0,0,0,0.2);padding:6px 12px"><span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;line-height:1.625;color:#f87171">No agent found with id agent_01H9Z4</span></div>
+    </div>
+  </div>
+
+  <div style="height:44px"></div>
+  <div style="max-width:900px;margin:0 auto;padding:30px 32px 0">
+    <div style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:#6e6e73;padding-bottom:7px;border-bottom:1px solid #26262a">Expanded</div>
+  </div>
+  <div style="max-width:900px;margin:0 auto;padding:20px 32px 0;font-size:12.5px;line-height:1.6;color:#8b8b92;text-wrap:pretty">The body is unchanged. It still holds the worker's own rows, and it still collapses; only the two lines above it are new.</div>
+
+  <div style="max-width:900px;margin:0 auto;padding:26px 32px 7px;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:#5b5b60">Nested rows</div>
+  <div style="max-width:900px;margin:0 auto;padding:0 32px;display:flex;flex-direction:column;gap:10px">
+    <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+        <svg width="19" height="19" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#4ade80"><sc-for list="{{ faces.Scout_shut }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+        <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;color:oklch(82.8% .111 230.318)">Scout</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">explore</span></span>
+        <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;font-variant-numeric:tabular-nums;color:#98989f">12 tool calls · 34.5k tokens</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+        <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Trace the permission response path</span>
+        <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">Claude Sonnet 5</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">onbi</span></span>
+      </div>
+      <div style="border-top:1px solid rgba(255,255,255,0.06);background:rgba(0,0,0,0.28)"><div style="padding:4px 12px 10px">
+        <div style="display:flex;flex-direction:column;gap:8px;border-left:1px solid rgba(244,114,182,0.2);padding-left:12px">
+          <div style="font-weight:500;font-size:14px;line-height:1.625;color:#f4f4f5">I looked at the sidecar boundary first, then followed the response id back to the engine.</div>
+          <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+            <div style="display:flex;align-items:center;gap:10px;padding:8px 12px">
+              <span style="width:16px;flex-shrink:0;text-align:center;font-size:13px;color:#fbbf24">⌕</span>
+              <span style="flex-shrink:0;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#fbbf24">Search</span>
+              <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:12px;line-height:16px;color:#f4f4f5">permission_response</span>
+              <span style="height:6px;width:6px;flex-shrink:0;border-radius:9999px;background:#4ade80"></span>
+            </div>
+          </div>
+          <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+            <div style="display:flex;align-items:center;gap:10px;padding:8px 12px">
+              <span style="width:16px;flex-shrink:0;text-align:center;font-size:13px;color:#60a5fa">≡</span>
+              <span style="flex-shrink:0;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#60a5fa">Read</span>
+              <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:12px;line-height:16px;color:#f4f4f5">3 files</span>
+              <span style="flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#98989f">/Users/pt/cat-code/app/sidecar/</span>
+              <span style="height:6px;width:6px;flex-shrink:0;border-radius:9999px;background:#4ade80"></span>
+            </div>
+          </div>
+          <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+            <div style="display:flex;align-items:center;gap:10px;padding:8px 12px">
+              <span style="width:16px;flex-shrink:0;text-align:center;font-size:13px;color:#a3e635">$</span>
+              <span style="flex-shrink:0;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#a3e635">Bash</span>
+              <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:12px;line-height:16px;color:#f4f4f5">bun test app/sidecar</span>
+              <span style="height:6px;width:6px;flex-shrink:0;border-radius:9999px;background:#f472b6;animation:p 2s cubic-bezier(.4,0,.6,1) infinite"></span>
+            </div>
+          </div>
+        </div>
+      </div></div>
+    </div>
+  </div>
+
+  <div style="max-width:900px;margin:0 auto;padding:26px 32px 7px;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:#5b5b60">Completion joined back</div>
+  <div style="max-width:900px;margin:0 auto;padding:0 32px;display:flex;flex-direction:column;gap:10px">
+    <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+        <svg width="19" height="19" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#4ade80"><sc-for list="{{ faces.Wick_shut }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+        <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;color:oklch(82.8% .111 230.318)">Wick</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">resumed</span></span>
+        <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;font-variant-numeric:tabular-nums;color:#98989f">9 tool calls · 18.2k tokens</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+        <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Also check the two sibling paths and report back</span>
+        <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">Claude Sonnet 5</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">onbi</span></span>
+      </div>
+      <div style="border-top:1px solid rgba(255,255,255,0.06);background:rgba(0,0,0,0.28)"><div style="padding:8px 12px 10px;display:flex;flex-direction:column;gap:6px">
+        <span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#98989f">Result</span>
+        <div style="font-size:12px;line-height:1.625;color:#a1a1aa">Both siblings call the same guard. Neither re-implements it, and neither reads the body before the id check returns.</div>
+        <span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:10px;color:#98989f">~18.2k tokens · 9 tools · 1m 12s</span>
+      </div></div>
+    </div>
+  </div>
+
+  <div style="max-width:900px;margin:0 auto;padding:26px 32px 7px;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:#5b5b60">No nested rows, no completion</div>
+  <div style="max-width:900px;margin:0 auto;padding:0 32px;display:flex;flex-direction:column;gap:10px">
+    <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+        <svg width="19" height="19" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#4ade80"><sc-for list="{{ faces.Odo_shut }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+        <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;color:#a1a1aa">Odo</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">agent</span></span>
+        <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;font-variant-numeric:tabular-nums;color:#98989f">4.4k tokens</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+        <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Name the owner of the retry ledger</span>
+        <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">Claude Sonnet 5</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">onbi</span></span>
+      </div>
+    </div>
+  </div>
+
+  <div style="height:44px"></div>
+  <div style="max-width:900px;margin:0 auto;padding:30px 32px 0">
+    <div style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:#6e6e73;padding-bottom:7px;border-bottom:1px solid #26262a">Co-spawned in one turn</div>
+  </div>
+  <div style="max-width:900px;margin:0 auto;padding:24px 32px 0;display:flex;flex-direction:column;gap:10px">
+    <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.02);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:9px;border-bottom:1px solid rgba(255,255,255,0.06);padding:6px 12px">
+        <span style="display:inline-flex;align-items:center">
+          <svg width="17" height="17" style="flex-shrink:0;animation:p 1.4s ease-in-out infinite" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#60a5fa"><sc-for list="{{ faces.Scout_open }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+          <span style="margin-left:-3px"><svg width="17" height="17" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#4ade80"><sc-for list="{{ faces.Wick_shut }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg></span>
+          <span style="margin-left:-3px"><svg width="17" height="17" style="flex-shrink:0;animation:p 1.4s ease-in-out infinite" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#60a5fa"><sc-for list="{{ faces.Bly_open }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg></span>
+        </span>
+        <span style="font-size:12.5px;font-weight:600;color:#c9c9cf">3 explore workers</span>
+        <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#60a5fa">2 still running</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;padding:8px">
+        <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+          <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+            <svg width="19" height="19" style="flex-shrink:0;animation:p 1.4s ease-in-out infinite" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#60a5fa"><sc-for list="{{ faces.Scout_open }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+            <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;color:oklch(82.8% .111 230.318)">Scout</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">explore</span></span>
+            <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#60a5fa">Grep hostApi</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+            <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Map the host control plane</span>
+            <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">Claude Sonnet 5</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">onbi</span></span>
+          </div>
+        </div>
+        <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+          <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+            <svg width="19" height="19" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#4ade80"><sc-for list="{{ faces.Wick_shut }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+            <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;color:oklch(82.8% .111 230.318)">Wick</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">explore</span></span>
+            <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;font-variant-numeric:tabular-nums;color:#98989f">7 tool calls · 12.8k tokens</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+            <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Map the supervisor lifetime</span>
+            <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">Claude Sonnet 5</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">onbi</span></span>
+          </div>
+        </div>
+        <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+          <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+            <svg width="19" height="19" style="flex-shrink:0;animation:p 1.4s ease-in-out infinite" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#60a5fa"><sc-for list="{{ faces.Bly_open }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+            <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;color:oklch(82.8% .111 230.318)">Bly</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">explore</span></span>
+            <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#60a5fa">Read preload.ts</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+            <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Map the preload allowlist</span>
+            <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">Claude Sonnet 5</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">onbi</span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="height:44px"></div>
+  <div style="max-width:900px;margin:0 auto;padding:30px 32px 0">
+    <div style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:#6e6e73;padding-bottom:7px;border-bottom:1px solid #26262a">Finish row for a backgrounded agent</div>
+  </div>
+  <div style="max-width:900px;margin:0 auto;padding:24px 32px 0;display:flex;flex-direction:column;gap:10px">
+    <div style="display:flex;align-items:center;gap:10px;border:1px solid rgba(255,255,255,0.06);border-radius:8px;background:rgba(255,255,255,0.018);padding:5px 12px">
+      <svg width="17" height="17" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#4ade80"><sc-for list="{{ faces.Wren_shut }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+      <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:16px;color:#c9c9cf">Agent <span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;color:#e4e4e7">@Wren</span> completed</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;border:1px solid rgba(255,255,255,0.06);border-radius:8px;background:rgba(255,255,255,0.018);padding:5px 12px">
+      <svg width="17" height="17" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#f87171"><sc-for list="{{ faces.Ash_open }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+      <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:16px;color:#c9c9cf">Agent <span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;color:#e4e4e7">@Ash</span> failed: the sidecar typecheck wrapper reported 2 owned errors</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;border:1px solid rgba(255,255,255,0.06);border-radius:8px;background:rgba(255,255,255,0.018);padding:5px 12px">
+      <svg width="17" height="17" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#fbbf24"><sc-for list="{{ faces.Marn_open }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+      <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:16px;color:#c9c9cf">Agent <span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;color:#e4e4e7">@Marn</span> was stopped</span>
+    </div>
+  </div>
+
+  <div style="height:44px"></div>
+  <div style="max-width:900px;margin:0 auto;padding:30px 32px 0">
+    <div style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:#6e6e73;padding-bottom:7px;border-bottom:1px solid #26262a">The faces on this page, magnified</div>
+  </div>
+  <div style="max-width:900px;margin:0 auto;padding:20px 32px 0;font-size:12.5px;line-height:1.6;color:#8b8b92;text-wrap:pretty">Each one is the FNV-1a hash of the name over six axes, with the connectivity fallback applied before it draws. Because that fallback can drop the only axis separating two names, the stamps are then deduped against the ones already live: a clash walks the axis lists — mouth, markings, chin, ears, ear fill, head width — until the drawn silhouette is unique. The axis values printed under each face are the ones it ended up with, not the ones the hash first proposed. No lookup table, so the canon faces from turn 15 are not preserved — the open conflict recorded in <span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11.5px;color:#a1a1aa">CONTEXT.md</span>.</div>
+  <div style="max-width:900px;margin:0 auto;padding:22px 32px 0;display:flex;flex-wrap:wrap;gap:26px">
+    <sc-for list="{{ legend }}" as="w" hint-placeholder-count="10">
+      <div style="display:flex;flex-direction:column;gap:7px;width:132px">
+        <svg width="54" height="54" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#a1a1aa"><sc-for list="{{ w.rects }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+        <span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11.5px;color:#d4d4d8">{{ w.name }}</span>
+        <span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:9.5px;line-height:1.5;color:#6e6e73">{{ w.axes }}</span>
+      </div>
+    </sc-for>
+  </div>
+
+  <div style="height:96px"></div>
+</div>
+
+<div style="flex:1 1 0;min-width:0;height:100vh;overflow-y:auto;overflow-x:hidden;border-left:1px solid #26262a">
+  <div style="position:sticky;top:0;z-index:2;background:#09090b;border-bottom:1px solid #26262a;padding:15px 32px 11px;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:#8a8a90">In a transcript</div>
+  <div style="max-width:900px;margin:0 auto;padding:24px 32px 0;display:flex;flex-direction:column;gap:10px">
+
+    <div style="display:flex;justify-content:flex-end"><div style="max-width:82%;border:1px solid rgba(244,114,182,0.2);background:rgba(244,114,182,0.1);border-radius:16px;border-bottom-right-radius:4px;padding:10px 16px;font-size:14px;line-height:1.625;color:#f4f4f5">Find where a permission response id gets validated, and check the sibling paths do the same thing.</div></div>
+
+    <div style="display:flex;flex-direction:column">
+      <div style="display:flex;align-items:center;gap:10px;padding:1px 0">
+        <span style="display:inline-block;width:16px;flex-shrink:0;text-align:center;font-size:9px;line-height:1;color:#75757b">▾</span>
+        <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#98989f">Reasoning</span>
+        <span style="font-size:10.5px;color:#838389">4 steps</span>
+      </div>
+      <ol style="margin:2px 0 0 8px;padding-left:17px;border-left:1px solid rgba(255,255,255,0.1);list-style:none">
+        <li style="position:relative;padding:2px 0;font-size:12.5px;color:#98989f"><span style="position:absolute;top:9px;left:-20px;height:5px;width:5px;border-radius:9999px;background:#75757b"></span>Three surfaces could own this check</li>
+        <li style="position:relative;padding:2px 0;font-size:12.5px;color:#98989f"><span style="position:absolute;top:9px;left:-20px;height:5px;width:5px;border-radius:9999px;background:#75757b"></span>The sidecar is the trust boundary, so start there</li>
+        <li style="position:relative;padding:2px 0;font-size:12.5px;color:#98989f"><span style="position:absolute;top:9px;left:-20px;height:5px;width:5px;border-radius:9999px;background:#75757b"></span>The preload cannot be the only gate</li>
+        <li style="position:relative;padding:2px 0;font-size:12.5px;color:#98989f"><span style="position:absolute;top:9px;left:-20px;height:5px;width:5px;border-radius:9999px;background:#75757b"></span>Fan out rather than guess which one</li>
+      </ol>
+    </div>
+
+    <div style="font-weight:500;font-size:14px;line-height:1.625;color:#f4f4f5">Three places could own this, so I'll look at all three at once rather than guess.</div>
+
+    <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.02);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:9px;border-bottom:1px solid rgba(255,255,255,0.06);padding:6px 12px">
+        <span style="display:inline-flex;align-items:center">
+          <svg width="17" height="17" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#4ade80"><sc-for list="{{ faces.Scout_shut }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+          <span style="margin-left:-3px"><svg width="17" height="17" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#4ade80"><sc-for list="{{ faces.Wick_shut }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg></span>
+          <span style="margin-left:-3px"><svg width="17" height="17" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#f87171"><sc-for list="{{ faces.Bly_open }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg></span>
+        </span>
+        <span style="font-size:12.5px;font-weight:600;color:#c9c9cf">3 explore workers</span>
+        <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#f87171">1 failed</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;padding:8px">
+        <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+          <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+            <svg width="19" height="19" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#4ade80"><sc-for list="{{ faces.Scout_shut }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+            <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;color:oklch(82.8% .111 230.318)">Scout</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">explore</span></span>
+            <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;font-variant-numeric:tabular-nums;color:#98989f">9 tool calls · 21.4k tokens</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+            <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Find the sidecar validation of permission response ids</span>
+            <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">Claude Sonnet 5</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">onbi</span></span>
+          </div>
+        </div>
+        <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+          <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+            <svg width="19" height="19" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#4ade80"><sc-for list="{{ faces.Wick_shut }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+            <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;color:oklch(82.8% .111 230.318)">Wick</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">explore</span></span>
+            <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;font-variant-numeric:tabular-nums;color:#98989f">7 tool calls · 12.8k tokens</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+            <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Find the preload channel allowlist</span>
+            <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">Claude Sonnet 5</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">onbi</span></span>
+          </div>
+        </div>
+        <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+          <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+            <svg width="19" height="19" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#f87171"><sc-for list="{{ faces.Bly_open }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+            <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;color:oklch(82.8% .111 230.318)">Bly</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">explore</span></span>
+            <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;font-variant-numeric:tabular-nums;color:#98989f">3 tool calls</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+            <span style="flex-shrink:0;white-space:nowrap;font-size:11px;font-weight:500;color:#f87171">Failed</span>
+            <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Find the engine side that mints the id</span>
+            <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">Claude Sonnet 5</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">onbi</span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="font-weight:500;font-size:14px;line-height:1.625;color:#f4f4f5">Two came back with the boundary. The third died on a bad path, so I'll take the siblings myself.</div>
+
+    <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+        <svg width="19" height="19" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#4ade80"><sc-for list="{{ faces.Pell_shut }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+        <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;color:oklch(82.8% .111 230.318)">Pell</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">explore</span></span>
+        <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;font-variant-numeric:tabular-nums;color:#98989f">6 tool calls · 15.2k tokens</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+        <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Check the two sibling paths reuse the same guard</span>
+        <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">Claude Sonnet 5</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">onbi</span></span>
+      </div>
+      <div style="border-top:1px solid rgba(255,255,255,0.06);background:rgba(0,0,0,0.28)"><div style="padding:4px 12px 10px">
+        <div style="display:flex;flex-direction:column;gap:8px;border-left:1px solid rgba(244,114,182,0.2);padding-left:12px">
+          <div style="font-weight:500;font-size:14px;line-height:1.625;color:#f4f4f5">I started at the socket handler, then followed the id back to whoever minted it.</div>
+          <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+            <div style="display:flex;align-items:center;gap:10px;padding:8px 12px">
+              <span style="width:16px;flex-shrink:0;text-align:center;font-size:13px;color:#fbbf24">⌕</span>
+              <span style="flex-shrink:0;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#fbbf24">Search</span>
+              <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:12px;line-height:16px;color:#f4f4f5">2 patterns</span>
+              <span style="height:6px;width:6px;flex-shrink:0;border-radius:9999px;background:#4ade80"></span>
+            </div>
+          </div>
+          <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+            <div style="display:flex;align-items:center;gap:10px;padding:8px 12px">
+              <span style="width:16px;flex-shrink:0;text-align:center;font-size:13px;color:#60a5fa">≡</span>
+              <span style="flex-shrink:0;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#60a5fa">Read</span>
+              <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:12px;line-height:16px;color:#f4f4f5">4 files</span>
+              <span style="flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#98989f">/Users/pt/cat-code/app/sidecar/</span>
+              <span style="height:6px;width:6px;flex-shrink:0;border-radius:9999px;background:#4ade80"></span>
+            </div>
+            <div style="border-top:1px solid rgba(255,255,255,0.06);background:rgba(0,0,0,0.28)">
+              <div style="padding:6px 12px 0;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:9.5px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:#98989f">4 files read</div>
+              <div style="padding:4px 12px 10px;display:flex;flex-direction:column">
+                <div style="display:flex;align-items:center;gap:10px;padding:2px 0"><span style="width:10px;flex-shrink:0;font-size:9px;color:#75757b">▸</span><span style="width:14px;flex-shrink:0;text-align:center;font-size:13px;color:#60a5fa">≡</span><span style="min-width:0;flex:1 1 0%;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:12px;color:#f4f4f5">sidecarServer.ts</span><span style="flex-shrink:0;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#98989f">Read 240 lines</span></div>
+                <div style="display:flex;align-items:center;gap:10px;padding:2px 0"><span style="width:10px;flex-shrink:0;font-size:9px;color:#75757b">▸</span><span style="width:14px;flex-shrink:0;text-align:center;font-size:13px;color:#60a5fa">≡</span><span style="min-width:0;flex:1 1 0%;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:12px;color:#f4f4f5">permissionDomain.ts</span><span style="flex-shrink:0;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#98989f">Read 118 lines</span></div>
+                <div style="display:flex;align-items:center;gap:10px;padding:2px 0"><span style="width:10px;flex-shrink:0;font-size:9px;color:#75757b">▸</span><span style="width:14px;flex-shrink:0;text-align:center;font-size:13px;color:#60a5fa">≡</span><span style="min-width:0;flex:1 1 0%;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:12px;color:#f4f4f5">frameGuards.ts</span><span style="flex-shrink:0;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#98989f">Read 96 lines</span></div>
+                <div style="display:flex;align-items:center;gap:10px;padding:2px 0"><span style="width:10px;flex-shrink:0;font-size:9px;color:#75757b">▸</span><span style="width:14px;flex-shrink:0;text-align:center;font-size:13px;color:#60a5fa">≡</span><span style="min-width:0;flex:1 1 0%;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:12px;color:#f4f4f5">secretGuard.ts</span><span style="flex-shrink:0;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#98989f">Read 61 lines</span></div>
+              </div>
+            </div>
+          </div>
+          <div style="font-weight:500;font-size:14px;line-height:1.625;color:#f4f4f5">The check is one branch, and it rejects before the payload is read.</div>
+          <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+            <div style="display:flex;align-items:center;gap:10px;padding:8px 12px">
+              <span style="width:16px;flex-shrink:0;text-align:center;font-size:13px;color:#a3e635">$</span>
+              <span style="flex-shrink:0;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#a3e635">Bash</span>
+              <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:12px;line-height:16px;color:#f4f4f5">bun test app/sidecar/sidecarServer.test.ts</span>
+              <span style="height:6px;width:6px;flex-shrink:0;border-radius:9999px;background:#4ade80"></span>
+            </div>
+            <div style="border-top:1px solid rgba(255,255,255,0.06);background:rgba(0,0,0,0.28)"><div style="padding:4px 12px 10px">
+              <div style="max-height:340px;overflow:auto;white-space:pre;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11.5px;line-height:1.625;color:#a1a1aa">
+                <div style="display:flex"><span style="width:48px;flex-shrink:0;text-align:right;padding-right:11px;color:#75757b">1</span><span>bun test v1.2.4</span></div>
+                <div style="display:flex"><span style="width:48px;flex-shrink:0;text-align:right;padding-right:11px;color:#75757b">2</span><span> </span></div>
+                <div style="display:flex"><span style="width:48px;flex-shrink:0;text-align:right;padding-right:11px;color:#75757b">3</span><span style="color:#86efac">✓ rejects a response id the engine never minted</span></div>
+                <div style="display:flex"><span style="width:48px;flex-shrink:0;text-align:right;padding-right:11px;color:#75757b">4</span><span style="color:#86efac">✓ strips renderer-authored rules</span></div>
+                <div style="display:flex"><span style="width:48px;flex-shrink:0;text-align:right;padding-right:11px;color:#75757b">5</span><span> </span></div>
+                <div style="display:flex"><span style="width:48px;flex-shrink:0;text-align:right;padding-right:11px;color:#75757b">6</span><span style="color:#86efac">2 pass, 0 fail</span></div>
+              </div>
+            </div></div>
+          </div>
+        </div>
+      </div></div>
+    </div>
+
+    <div style="font-weight:500;font-size:14px;line-height:1.625;color:#f4f4f5">The id is checked in one place, at the socket boundary, before anything reads the body. The two sibling paths do not repeat the check, they reuse it.</div>
+
+    <div style="display:flex;justify-content:flex-end"><div style="max-width:82%;border:1px solid rgba(244,114,182,0.2);background:rgba(244,114,182,0.1);border-radius:16px;border-bottom-right-radius:4px;padding:10px 16px;font-size:14px;line-height:1.625;color:#f4f4f5">Good. Kick off the background checks while I read that.</div></div>
+
+    <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+        <svg width="19" height="19" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#5eead4"><sc-for list="{{ faces.anon_closed }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+        <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;letter-spacing:.04em;color:#a1a1aa">{{ nameFallback }}</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">verification</span></span>
+        <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#98989f">backgrounded</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+        <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Sweep the renderer for stale references to the removed helper</span>
+        <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">Claude Sonnet 5</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">onbi</span></span>
+      </div>
+    </div>
+
+    <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+        <svg width="19" height="19" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#5eead4"><sc-for list="{{ faces.anon_closed }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+        <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;letter-spacing:.04em;color:#a1a1aa">{{ nameFallback }}</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">coding worker</span></span>
+        <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#98989f">backgrounded</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+        <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Run the sidecar typecheck wrapper and report owned errors</span>
+        <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">GPT 5.6 Terra</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">main</span></span>
+      </div>
+    </div>
+
+    <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+        <svg width="19" height="19" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#5eead4"><sc-for list="{{ faces.anon_closed }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+        <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;letter-spacing:.04em;color:#a1a1aa">{{ nameFallback }}</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">verification</span></span>
+        <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#98989f">backgrounded</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+        <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Cross-check the docs for the same helper</span>
+        <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">Claude Sonnet 5</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">onbi</span></span>
+      </div>
+    </div>
+
+    <div style="font-weight:500;font-size:14px;line-height:1.625;color:#f4f4f5">Three are running. While they work I'll pin the boundary with a test.</div>
+
+    <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 12px">
+        <span style="width:16px;flex-shrink:0;text-align:center;font-size:13px;color:#f472b6">±</span>
+        <span style="flex-shrink:0;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#f472b6">Edit</span>
+        <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:12px;line-height:16px;color:#f4f4f5">/Users/pt/cat-code/app/sidecar/sidecarServer.test.ts</span>
+        <span style="flex-shrink:0;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:10.5px;color:#86efac">+18</span>
+        <span style="height:6px;width:6px;flex-shrink:0;border-radius:9999px;background:#4ade80"></span>
+      </div>
+    </div>
+
+    <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+        <svg width="19" height="19" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#4ade80"><sc-for list="{{ faces.Odo_shut }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+        <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;color:#a1a1aa">Odo</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">agent</span></span>
+        <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;font-variant-numeric:tabular-nums;color:#98989f">4.4k tokens</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+        <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Name the owner of the retry ledger</span>
+        <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">Claude Sonnet 5</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">onbi</span></span>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:10px;border:1px solid rgba(255,255,255,0.06);border-radius:8px;background:rgba(255,255,255,0.018);padding:5px 12px">
+      <svg width="17" height="17" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#4ade80"><sc-for list="{{ faces.Wren_shut }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+      <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:16px;color:#c9c9cf">Agent <span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;color:#e4e4e7">@Wren</span> completed</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;border:1px solid rgba(255,255,255,0.06);border-radius:8px;background:rgba(255,255,255,0.018);padding:5px 12px">
+      <svg width="17" height="17" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#f87171"><sc-for list="{{ faces.Ash_open }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+      <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:16px;color:#c9c9cf">Agent <span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;color:#e4e4e7">@Ash</span> failed: the sidecar typecheck wrapper reported 2 owned errors</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;border:1px solid rgba(255,255,255,0.06);border-radius:8px;background:rgba(255,255,255,0.018);padding:5px 12px">
+      <svg width="17" height="17" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#fbbf24"><sc-for list="{{ faces.Marn_open }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+      <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:16px;color:#c9c9cf">Agent <span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;color:#e4e4e7">@Marn</span> was stopped</span>
+    </div>
+
+    <div style="font-weight:500;font-size:14px;line-height:1.625;color:#f4f4f5">Wren found four stale imports. Ash died on the typecheck wrapper, and I stopped Marn once Wren had already answered the same question.</div>
+
+    <div style="display:flex;justify-content:flex-end"><div style="max-width:82%;border:1px solid rgba(244,114,182,0.2);background:rgba(244,114,182,0.1);border-radius:16px;border-bottom-right-radius:4px;padding:10px 16px;font-size:14px;line-height:1.625;color:#f4f4f5">Summarize the delivery trace sink too, and pick Scout back up on the siblings.</div></div>
+
+    <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+        <svg width="19" height="19" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#4ade80"><sc-for list="{{ faces.Nim_shut }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+        <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;color:#a1a1aa">Nim</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">statusline-setup</span></span>
+        <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;font-variant-numeric:tabular-nums;color:#98989f">6 tool calls · 9.1k tokens</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+        <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Summarize the delivery trace sink</span>
+        <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">Claude Sonnet 5</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">onbi</span></span>
+      </div>
+    </div>
+
+    <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 12px">
+        <span style="flex-shrink:0;font-size:12px;line-height:12px;color:#75757b">◇</span>
+        <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Also check the two sibling paths and report back</span>
+        <span style="height:7px;width:7px;flex-shrink:0;border-radius:9999px;background:#4ade80"></span>
+      </div>
+      <div style="border-top:1px solid rgba(255,255,255,0.06);background:rgba(0,0,0,0.2);padding:6px 12px"><span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;line-height:1.625;color:#f87171">No agent found with id agent_01H9Z4</span></div>
+    </div>
+
+    <div style="font-weight:500;font-size:14px;line-height:1.625;color:#f4f4f5">Scout's run is gone, so there is nothing to pick up there. Wick covered the same ground, so I resumed that one instead.</div>
+
+    <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+        <svg width="19" height="19" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#4ade80"><sc-for list="{{ faces.Wick_shut }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+        <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;color:oklch(82.8% .111 230.318)">Wick</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">resumed</span></span>
+        <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;font-variant-numeric:tabular-nums;color:#98989f">9 tool calls · 18.2k tokens</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+        <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Also check the two sibling paths and report back</span>
+        <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">Claude Sonnet 5</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">onbi</span></span>
+      </div>
+      <div style="border-top:1px solid rgba(255,255,255,0.06);background:rgba(0,0,0,0.28)"><div style="padding:8px 12px 10px;display:flex;flex-direction:column;gap:6px">
+        <span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#98989f">Result</span>
+        <div style="font-size:12px;line-height:1.625;color:#a1a1aa">Both siblings call the same guard. Neither re-implements it, and neither reads the body before the id check returns.</div>
+        <span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:10px;color:#98989f">~18.2k tokens · 9 tools · 1m 12s</span>
+      </div></div>
+    </div>
+
+    <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+        <svg width="19" height="19" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#fbbf24"><sc-for list="{{ faces.Nim_open }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+        <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;color:#a1a1aa">Nim</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">resumed</span></span>
+        <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;font-variant-numeric:tabular-nums;color:#98989f">4 tool calls</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+        <span style="flex-shrink:0;white-space:nowrap;font-size:11px;font-weight:500;color:#fbbf24">Stopped</span>
+        <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Take another pass over the docs snippet</span>
+        <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">Claude Sonnet 5</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">onbi</span></span>
+      </div>
+    </div>
+
+    <div style="font-weight:500;font-size:14px;line-height:1.625;color:#f4f4f5">Wick confirms it. I stopped Nim partway once that answer landed, so its pass is incomplete.</div>
+
+    <div style="display:flex;justify-content:flex-end"><div style="max-width:82%;border:1px solid rgba(244,114,182,0.2);background:rgba(244,114,182,0.1);border-radius:16px;border-bottom-right-radius:4px;padding:10px 16px;font-size:14px;line-height:1.625;color:#f4f4f5">Now sweep the renderer for those four imports.</div></div>
+
+    <div style="font-weight:500;font-size:14px;line-height:1.625;color:#f4f4f5">Two workers on it, one per half of the tree.</div>
+
+    <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.02);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:9px;border-bottom:1px solid rgba(255,255,255,0.06);padding:6px 12px">
+        <span style="display:inline-flex;align-items:center">
+          <svg width="17" height="17" style="flex-shrink:0;animation:p 1.4s ease-in-out infinite" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#60a5fa"><sc-for list="{{ faces.Ash_open }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+          <span style="margin-left:-3px"><svg width="17" height="17" style="flex-shrink:0;animation:p 1.4s ease-in-out infinite" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#60a5fa"><sc-for list="{{ faces.anon_open }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg></span>
+        </span>
+        <span style="font-size:12.5px;font-weight:600;color:#c9c9cf">2 coding workers</span>
+        <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#60a5fa">2 still running</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;padding:8px">
+        <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+          <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+            <svg width="19" height="19" style="flex-shrink:0;animation:p 1.4s ease-in-out infinite" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#60a5fa"><sc-for list="{{ faces.Ash_open }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+            <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;color:oklch(81.1% .111 293.571)">Ash</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">coding worker</span></span>
+            <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#60a5fa">Edit deliveryTraceSink.ts</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+            <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Replace the stale imports under app/renderer</span>
+            <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">GPT 5.6 Terra</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">main</span></span>
+          </div>
+        </div>
+        <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+          <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+            <svg width="19" height="19" style="flex-shrink:0;animation:p 1.4s ease-in-out infinite" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#60a5fa"><sc-for list="{{ faces.anon_open }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+            <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;letter-spacing:.04em;color:#a1a1aa">{{ nameFallback }}</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">coding worker</span></span>
+            <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#60a5fa">{{ startingWord }}</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+            <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Replace the stale imports under app/scripts</span>
+            <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">GPT 5.6 Terra</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">main</span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="width:100%;border:1px solid rgba(255,255,255,0.06);border-radius:6px;background:rgba(255,255,255,0.025);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:9px;padding:7px 12px">
+        <svg width="19" height="19" style="flex-shrink:0" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#60a5fa"><sc-for list="{{ faces.anon_closed }}" as="r" hint-placeholder-count="11"><rect x="{{ r.x }}" y="{{ r.y }}" width="{{ r.w }}" height="{{ r.h }}"></rect></sc-for></svg>
+        <span style="display:inline-flex;align-items:baseline;gap:6px"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:13px;font-weight:600;letter-spacing:.04em;color:#a1a1aa">{{ nameFallback }}</span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#8b8b92">resumed</span></span>
+        <span style="margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#98989f">backgrounded</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,0.06);padding:7px 12px">
+        <span style="min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px;line-height:18px;color:#e4e4e7">Pick the doc snippet back up while the sweep runs</span>
+        <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:8px;white-space:nowrap"><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#9a9aa1">Claude Sonnet 5</span><span style="height:10px;width:1px;background:rgba(255,255,255,0.14)"></span><span style="font-family:'DM Mono',ui-monospace,Menlo,monospace;font-size:11px;color:#d4d4d8">onbi</span></span>
+      </div>
+    </div>
+
+  </div>
+  <div style="height:96px"></div>
+</div>
+
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;nameFallback&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;AGENT&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Open questions&quot;},&quot;startingWord&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;starting&quot;,&quot;Initializing…&quot;],&quot;default&quot;:&quot;starting&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Open questions&quot;}}">
+class Component extends DCLogic {
+  hash(s, salt) {
+    var x = 2166136261 ^ salt;
+    for (var i = 0; i < s.length; i++) { x ^= s.charCodeAt(i); x = Math.imul(x, 16777619); }
+    return x >>> 0;
+  }
+  axesFor(name) {
+    if (!name) return { ear: 'pointy', fill: 'solid', width: 'wide', chin: 'round', mouth: 'none', mark: 'none' };
+    var EARS = ['pointy','outer','tuft','folded','tall'], FILL = ['solid','notch','deep'],
+        WIDTH = ['wide','narrow'], CHIN = ['round','flat','pointed','fringe'],
+        MOUTH = ['none','slit','smile','omega'], MARK = ['none','brow','cheek','temple','chindot'];
+    return {
+      ear: EARS[this.hash(name, 1) % 5], fill: FILL[this.hash(name, 2) % 3], width: WIDTH[this.hash(name, 3) % 2],
+      chin: CHIN[this.hash(name, 4) % 4], mouth: MOUTH[this.hash(name, 5) % 4], mark: MARK[this.hash(name, 6) % 5]
+    };
+  }
+  blank() { var g = [], r, c; for (r = 0; r < 9; r++) { g.push([]); for (c = 0; c < 9; c++) g[r].push(false); } return g; }
+  connected(g) {
+    var seen = this.blank(), n = 0, r, c, start = null;
+    for (r = 0; r < 9; r++) for (c = 0; c < 9; c++) if (g[r][c]) { n++; if (!start) start = [c, r]; }
+    if (!n) return false;
+    var st = [start], hit = 0; seen[start[1]][start[0]] = true;
+    while (st.length) {
+      var p = st.pop(); hit++;
+      var d = [[1,0],[-1,0],[0,1],[0,-1]];
+      for (var i = 0; i < 4; i++) {
+        var x = p[0] + d[i][0], y = p[1] + d[i][1];
+        if (x >= 0 && x < 9 && y >= 0 && y < 9 && g[y][x] && !seen[y][x]) { seen[y][x] = true; st.push([x, y]); }
+      }
+    }
+    return hit === n;
+  }
+  draw(a, mode, level) {
+    var g = this.blank(), r, c;
+    var L = a.width === 'wide' ? 0 : 1, R = a.width === 'wide' ? 8 : 7, mid = Math.round((L + R) / 2);
+    var set = function (x, y) { if (x >= 0 && x < 9 && y >= 0 && y < 9) g[y][x] = true; };
+    var clr = function (x, y) { if (x >= 0 && x < 9 && y >= 0 && y < 9) g[y][x] = false; };
+    for (r = 2; r <= 6; r++) for (c = L; c <= R; c++) set(c, r);
+    var eL = L + 1, eR = R - 1;
+    if (a.ear === 'pointy' || a.ear === 'tuft' || a.ear === 'folded') {
+      for (c = L; c <= L + 2; c++) set(c, 1);
+      for (c = R - 2; c <= R; c++) set(c, 1);
+      if (a.ear === 'pointy') { set(eL, 0); set(eR, 0); }
+      if (a.ear === 'tuft') { set(L, 0); set(eL, 0); set(eR, 0); set(R, 0); }
+    } else if (a.ear === 'outer') {
+      set(L, 0); set(R, 0); set(L, 1); set(L + 1, 1); set(R - 1, 1); set(R, 1);
+    } else {
+      set(eL, 0); set(eL, 1); set(eR, 0); set(eR, 1);
+    }
+    if (a.chin === 'round') { for (c = L + 1; c <= R - 1; c++) set(c, 7); for (c = L + 2; c <= R - 2; c++) set(c, 8); }
+    else if (a.chin === 'flat') { for (c = L + 1; c <= R - 1; c++) set(c, 7); }
+    else if (a.chin === 'pointed') { for (c = L + 2; c <= R - 2; c++) set(c, 7); for (c = mid - 1; c <= mid + 1; c++) set(c, 8); }
+    else { set(L, 7); set(L + 1, 7); for (c = mid - 1; c <= mid + 1; c++) set(c, 7); set(R - 1, 7); set(R, 7); }
+    var fill = level >= 3 ? 'solid' : (level === 2 && a.fill === 'deep' ? 'notch' : a.fill);
+    var mouth = level >= 2 ? 'none' : a.mouth;
+    var mark = level >= 1 ? 'none' : a.mark;
+    if (fill !== 'solid') {
+      var cols = [];
+      for (r = 0; r < 9 && !cols.length; r++) for (c = 0; c < 9; c++) if (g[r][c]) cols.push(c);
+      for (var k = 0; k < cols.length; k++) { clr(cols[k], 2); if (fill === 'deep') clr(cols[k], 3); }
+    }
+    if (mouth === 'slit') { clr(mid - 1, 6); clr(mid, 6); clr(mid + 1, 6); }
+    else if (mouth === 'smile') { clr(mid - 1, 6); clr(mid + 1, 6); clr(mid, 7); }
+    else if (mouth === 'omega') { clr(mid, 5); clr(mid - 1, 6); clr(mid + 1, 6); }
+    if (mark === 'brow') { clr(mid - 1, 2); clr(mid + 1, 2); }
+    else if (mark === 'cheek') { clr(L + 1, 5); }
+    else if (mark === 'temple') { clr(R - 1, 2); }
+    else if (mark === 'chindot') { clr(mid, 6); }
+    if (mode === 'open') { clr(L + 2, 4); clr(R - 2, 4); }
+    else if (mode === 'shut') { clr(L + 1, 4); clr(L + 2, 4); clr(R - 2, 4); clr(R - 1, 4); }
+    return g;
+  }
+  faceFromAxes(a, mode) {
+    var g = null;
+    for (var level = 0; level <= 3; level++) { g = this.draw(a, mode, level); if (this.connected(g)) break; }
+    return this.rects(g);
+  }
+  // 19a's dedupe: the hash proposes, but a stamp already live in the session wins.
+  // Compare the drawn silhouette (eyes excluded), and on a clash walk the axis lists
+  // until the stamp is unique — the fallback ladder can otherwise collapse the only
+  // axis that separated two names.
+  resolve(names) {
+    if (this._axes) return this._axes;
+    var LISTS = {
+      mouth: ['none','slit','smile','omega'], mark: ['none','brow','cheek','temple','chindot'],
+      chin: ['round','flat','pointed','fringe'], ear: ['pointy','outer','tuft','folded','tall'],
+      fill: ['solid','notch','deep'], width: ['wide','narrow']
+    };
+    var ORDER = ['mouth','mark','chin','ear','fill','width'];
+    var self = this, taken = {}, out = {};
+    var sig = function (a) { return JSON.stringify(self.faceFromAxes(a, 'closed')); };
+    taken[sig(this.axesFor(''))] = true;
+    for (var i = 0; i < names.length; i++) {
+      var a = this.axesFor(names[i]);
+      if (taken[sig(a)]) {
+        for (var o = 0; o < ORDER.length && taken[sig(a)]; o++) {
+          var key = ORDER[o], list = LISTS[key], at = list.indexOf(a[key]);
+          for (var s = 1; s < list.length; s++) {
+            var b = Object.assign({}, a); b[key] = list[(at + s) % list.length];
+            if (!taken[sig(b)]) { a = b; break; }
+          }
+        }
+      }
+      taken[sig(a)] = true; out[names[i]] = a;
+    }
+    this._axes = out;
+    return out;
+  }
+  rects(g) {
+    var out = [], r = 0;
+    var runs = function (row) { var o = [], c = 0; while (c < 9) { if (row[c]) { var s = c; while (c < 9 && row[c]) c++; o.push([s, c - s]); } else c++; } return o; };
+    while (r < 9) {
+      var sig = JSON.stringify(runs(g[r])), span = 1;
+      while (r + span < 9 && JSON.stringify(runs(g[r + span])) === sig) span++;
+      var list = JSON.parse(sig);
+      for (var i = 0; i < list.length; i++) out.push({ x: list[i][0], y: r, w: list[i][1], h: span });
+      r += span;
+    }
+    return out;
+  }
+  renderVals() {
+    var NAMES = ['Scout','Wick','Bly','Pell','Odo','Wren','Ash','Marn','Nim'];
+    var axes = this.resolve(NAMES);
+    var faces = {}, i, j, modes = ['open','shut','closed'];
+    for (i = 0; i < NAMES.length; i++)
+      for (j = 0; j < 3; j++) faces[NAMES[i] + '_' + modes[j]] = this.faceFromAxes(axes[NAMES[i]], modes[j]);
+    for (j = 0; j < 3; j++) faces['anon_' + modes[j]] = this.faceFromAxes(this.axesFor(''), modes[j]);
+    var self = this;
+    var legend = NAMES.map(function (n) {
+      var a = axes[n];
+      return { name: n, axes: [a.ear, a.fill, a.width, a.chin, a.mouth, a.mark].join(' · '), rects: self.faceFromAxes(a, 'open') };
+    });
+    legend.push({ name: 'no name yet', axes: 'featureless base · no hash input', rects: this.faceFromAxes(this.axesFor(''), 'open') });
+    return {
+      faces: faces,
+      legend: legend,
+      nameFallback: this.props.nameFallback ?? 'AGENT',
+      startingWord: this.props.startingWord ?? 'starting'
+    };
+  }
+}
+</script>
+</body>
+</html>

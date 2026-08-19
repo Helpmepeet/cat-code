@@ -16,11 +16,14 @@ import {
   agentStateMeta,
   agentTranscriptStateWord,
   agentTypeMeta,
+  type AgentFaceTone,
   type AgentStateKey,
 } from './agentIdentity.js'
+import { faceRects, type FaceAxes, type FaceEyes } from './agentFace.js'
 import type { WorkerOwner } from './orchestratorState.js'
 import {
   ACTION_BUTTON_TONE_CLASS,
+  AGENT_FACE_FILL_CLASS,
   AGENT_STATE_TONE_CLASS,
   AGENT_TYPE_TONE_CLASS,
   SECTION_LABEL_TONE_CLASS,
@@ -32,6 +35,55 @@ type PipSize = 'xs' | 'sm'
 const PIP_SIZE_CLASS: Record<PipSize, string> = {
   xs: 'h-1.5 w-1.5',
   sm: 'h-2 w-2',
+}
+
+/**
+ * The worker's face — a filled 9x9 pixel stamp in the state colour, with every
+ * feature cut through to the background (`agentFace.ts` owns the algorithm and
+ * the reasons).
+ *
+ * `shape-rendering="crispEdges"` because the whole point of the redesign is that
+ * nothing depends on a sub-pixel stroke: the rects must land on device pixels at
+ * 17px as squarely as at 19px.
+ *
+ * ARIA: the face is decorative in every place it appears. On a card the name and
+ * the state word next to it already say who and what; on a finish row the
+ * engine's own sentence does. A label here would make a screen reader announce
+ * the same fact twice.
+ */
+export function AgentFace({
+  axes,
+  eyes,
+  tone,
+  pulse = false,
+  size = 19,
+}: {
+  axes: FaceAxes
+  eyes: FaceEyes
+  tone: AgentFaceTone
+  pulse?: boolean
+  size?: 19 | 17
+}) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 9 9"
+      shapeRendering="crispEdges"
+      className={`shrink-0 ${AGENT_FACE_FILL_CLASS[tone]}${pulse ? ' animate-face-pulse' : ''}`}
+      aria-hidden
+    >
+      {faceRects(axes, eyes).map(rect => (
+        <rect
+          key={`${rect.x}:${rect.y}`}
+          x={rect.x}
+          y={rect.y}
+          width={rect.w}
+          height={rect.h}
+        />
+      ))}
+    </svg>
+  )
 }
 
 /** Status dot — filled (terminal), ringed (pending/idle), or pulsing (running). */

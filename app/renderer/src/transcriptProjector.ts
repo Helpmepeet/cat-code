@@ -82,6 +82,14 @@ type RowSource = FrameRowSource & {
    * sidecar's name (`app/sidecar/subagentHistory.ts`).
    */
   agentName?: string
+  /**
+   * The model that produced this frame (`SDKAssistantMessage.message.model`).
+   * Carried for the same reason `agentName` is: a subagent's nested frames are
+   * the only transcript-plane statement of what a RUNNING worker is running on,
+   * and its own result does not exist yet. Absent on frames the engine sent
+   * without one, and on every non-assistant row.
+   */
+  model?: string
 }
 
 export type AssistantTextRow = RowSource & {
@@ -211,6 +219,15 @@ export type ToolResultProjection = {
    * changing the wire contract or mutating the original card.
    */
   agentId?: string
+  /**
+   * The model the subagent actually ran on, from that same structured result
+   * (`AgentToolResult.model`, `agentToolUtils.ts:734`). Transcript plane like
+   * everything else here, so it replays from history; absent on results written
+   * before the engine started recording it, and absent while the worker is still
+   * running (a running worker is modelled from the `model` its nested assistant
+   * frames carry instead — see `RowSource.model`).
+   */
+  agentModel?: string
   /**
    * The finished Agent tool's own totals, from that same structured result
    * (`totalTokens` / `totalToolUseCount`, `agentToolUtils.ts:734-735`).
@@ -1090,6 +1107,7 @@ function projectAssistantFrame(
       ? message.parent_tool_use_id
       : null
   const agentName = normalizeAgentName(message.agent_name)
+  const model = nonEmptyString(body.model)
 
   // NB: `message.error` (SDKAssistantMessageError) may ride this frame with
   // empty content — P2-1's ApiErrorRow scope; blocks below still project.
@@ -1110,6 +1128,7 @@ function projectAssistantFrame(
       blockIndex,
       parentToolUseId,
       ...(agentName ? { agentName } : {}),
+      ...(model !== null ? { model } : {}),
     })
     return row === null ? [] : [row]
   })
@@ -1530,6 +1549,7 @@ function projectToolResultBlock(
 ): ToolResultProjection {
   const agentName = extractAgentName(toolUseResult)
   const agentId = extractAgentId(toolUseResult)
+  const agentModel = extractAgentModel(toolUseResult)
   const agentUsage = extractAgentUsage(toolUseResult)
   const taskOutput = extractTaskOutput(toolUseResult)
   return {
@@ -1539,6 +1559,7 @@ function projectToolResultBlock(
     ...extractGeneratedImageProjection(toolUseResult),
     ...(agentName !== null ? { agentName } : {}),
     ...(agentId !== null ? { agentId } : {}),
+    ...(agentModel !== null ? { agentModel } : {}),
     ...(agentUsage !== null ? { agentUsage } : {}),
     ...(taskOutput !== null ? { taskOutput } : {}),
   }
@@ -1614,6 +1635,24 @@ function extractAgentName(toolUseResult: unknown): string | null {
 function extractAgentId(toolUseResult: unknown): string | null {
   if (!isRecord(toolUseResult)) return null
   return nonEmptyString(toolUseResult.agentId)
+}
+
+/**
+ * The model a finished subagent actually ran on
+ * (`AgentToolResult.model = resolvedAgentModel`,
+ * `src/tools/AgentTool/agentToolUtils.ts:734`; optional in the schema at `:384`
+ * because older persisted sessions predate it).
+ *
+ * GATED on a sibling `agentId`, unlike `agentName` — `model` is a generic key
+ * that other structured results already carry (ImageGen's own result names its
+ * model, see `extractGeneratedImageProjection` right above), and an ungated read
+ * would print the image model on an agent card. `agentId` is present on every
+ * AgentToolResult and on nothing else, so it is the shape check.
+ */
+function extractAgentModel(toolUseResult: unknown): string | null {
+  if (!isRecord(toolUseResult)) return null
+  if (nonEmptyString(toolUseResult.agentId) === null) return null
+  return nonEmptyString(toolUseResult.model)
 }
 
 function extractTaskOutput(

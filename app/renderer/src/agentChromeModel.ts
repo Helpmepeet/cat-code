@@ -1,4 +1,5 @@
 import type {
+  AgentFaceTone,
   AgentStateTone,
   AgentTypeTone,
 } from './agentIdentity.js'
@@ -14,6 +15,27 @@ export const AGENT_STATE_TONE_CLASS: Record<
   neutral: { text: 'text-stone-400', dot: 'bg-stone-400', border: 'border-stone-400', soft: 'bg-stone-400/10', line: 'border-stone-400/30' },
   muted: { text: 'text-zinc-500', dot: 'bg-zinc-500', border: 'border-zinc-500', soft: 'bg-zinc-500/10', line: 'border-zinc-500/30' },
   purple: { text: 'text-purple-400', dot: 'bg-purple-400', border: 'border-purple-400', soft: 'bg-purple-400/10', line: 'border-purple-400/30' },
+}
+
+/**
+ * The face stamp's fill (2026-08-19 subagent card). Same static-literal rule as
+ * every map here: an interpolated `fill-[${hex}]` would silently no-op.
+ *
+ * `launch` is the one tone with no `AgentStateTone` behind it. A backgrounded
+ * LAUNCH record and a resumed worker running in the background are both facing
+ * away and both say "backgrounded", so the colour is the only thing that
+ * separates "this is all we were ever told" from "this one is genuinely under
+ * way": teal for the launch ack, blue for the run.
+ */
+export const AGENT_FACE_FILL_CLASS: Record<AgentFaceTone, string> = {
+  info: 'fill-tone-info',
+  success: 'fill-tone-good',
+  danger: 'fill-tone-danger',
+  warning: 'fill-tone-warn',
+  neutral: 'fill-stone-400',
+  muted: 'fill-zinc-500',
+  purple: 'fill-purple-400',
+  launch: 'fill-teal-300',
 }
 
 /** P4-32b — `AgentSectionLabel` caption tones (the prototype's `WLabel` colour arg). */

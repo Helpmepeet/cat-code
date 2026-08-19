@@ -93,20 +93,25 @@ import {
   type ReasoningStepModel,
 } from './reasoningLayout.js'
 import {
+  agentFaceExpression,
   deriveAgentDisplayVocabulary,
+  type AgentFaceTone,
   type AgentStateKey,
   type AgentToolSource,
 } from './agentIdentity.js'
 import {
-  AgentHandle,
-  AgentRoleDot,
-  AgentStateLabel,
-  Baton,
-} from './AgentChrome.js'
+  createAgentFaceRegistry,
+  useAgentFaceRegistry,
+  AgentFaceRegistryContext,
+  type FaceAxes,
+  type FaceEyes,
+} from './agentFace.js'
+import { AgentFace } from './AgentChrome.js'
 import {
   AGENT_STATE_TONE_CLASS,
   AGENT_TYPE_TONE_CLASS,
 } from './agentChromeModel.js'
+import { formatModelDisplayName } from './statsState.js'
 import { ToolInspector } from './ToolInspector.js'
 import { ActionFileIcon } from './SessionActionIcons.js'
 import { parseToolAck, type ToolAck } from './toolAck.js'
@@ -300,6 +305,17 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   const expansionRef = useRef<ToolCardExpansionStore | null>(null)
   expansionRef.current ??= createToolCardExpansionStore()
   const expansionStore = inheritedStore ?? expansionRef.current
+  // One face registry per SESSION, so every worker on screen is deduped against
+  // every other one and none of them changes silhouette mid-session. Keyed off
+  // the rows' own session rather than a prop: `selectNestedTranscriptRows`
+  // already filtered to one session, and a registry that outlived a session
+  // switch would carry the previous transcript's names into the next one.
+  const faceSessionId = rows.length === 0 ? null : rows[0].sessionId
+  const faceRegistry = useMemo(
+    () => createAgentFaceRegistry(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the session IS the key
+    [faceSessionId],
+  )
   // Re-derive from the LIVE rows so a late tool_result updates the drawer and a
   // vanished row closes it, instead of pinning the open-time snapshot (F1).
   const inspected = inspectedId === null ? null : findNestedToolUseRow(rows, inspectedId)
@@ -393,10 +409,12 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
 
   return (
     <ToolCardExpansionContext.Provider value={expansionStore}>
-      <ToolInspectorContext.Provider value={openInspector}>
-        {content}
-        <ToolInspectorOverlay row={inspected} onClose={closeInspector} />
-      </ToolInspectorContext.Provider>
+      <AgentFaceRegistryContext.Provider value={faceRegistry}>
+        <ToolInspectorContext.Provider value={openInspector}>
+          {content}
+          <ToolInspectorOverlay row={inspected} onClose={closeInspector} />
+        </ToolInspectorContext.Provider>
+      </AgentFaceRegistryContext.Provider>
     </ToolCardExpansionContext.Provider>
   )
 })
@@ -1518,9 +1536,7 @@ function ToolCardShell({
   status,
   sub,
   headerBadge,
-  alwaysExtra,
   collapsedExtra,
-  suppressStatus,
   defaultExpanded,
   expansionKey,
   children,
@@ -1531,10 +1547,7 @@ function ToolCardShell({
   sub?: string
   /** Optional right-cluster chip before the state (C4 child-count for agents). */
   headerBadge?: ReactNode
-  /** Always-visible sub-header row under the header (Agent identity strip). */
-  alwaysExtra?: ReactNode
   collapsedExtra?: ReactNode
-  suppressStatus?: boolean
   defaultExpanded?: boolean
   /**
    * The engine's `toolUseId`, so the user's expansion outlives this component.
@@ -1572,27 +1585,15 @@ function ToolCardShell({
           {target}
         </span>
         {headerBadge}
-        {/* An agent card's `alwaysExtra` row always carries its own
-            `AgentStateLabel` (the real, richer lifecycle word) — this generic
-            3-state pill would just repeat it with a different, coarser word
-            (e.g. "done" beside "Completed") and, for a backgrounded agent
-            whose tool_result only says it started, an outright wrong one. */}
-        {family === 'agent' || suppressStatus ? null : (
-          // The word ("done"/"failed"/"running") next to a dot that already
-          // carries the same state in color is redundant chrome; the dot
-          // alone, colour-coded, is enough (operator call).
-          <span
-            className={`h-1.5 w-1.5 shrink-0 rounded-full ${st.dot} ${st.pulse ? 'animate-pulse' : ''}`}
-            role="img"
-            aria-label={st.word}
-          />
-        )}
+        {/* The word ("done"/"failed"/"running") next to a dot that already
+            carries the same state in color is redundant chrome; the dot alone,
+            colour-coded, is enough (operator call). */}
+        <span
+          className={`h-1.5 w-1.5 shrink-0 rounded-full ${st.dot} ${st.pulse ? 'animate-pulse' : ''}`}
+          role="img"
+          aria-label={st.word}
+        />
       </button>
-      {alwaysExtra ? (
-        <div className="flex flex-wrap items-center gap-2 border-t border-shell-seam px-3 py-1.5">
-          {alwaysExtra}
-        </div>
-      ) : null}
       {!expanded && collapsedExtra ? collapsedExtra : null}
       {expanded && hasBody ? (
         <div className="border-t border-shell-seam bg-black/[0.28]">
@@ -2184,9 +2185,11 @@ function agentToolCallCount(row: ToolUseNestedRow): number {
 }
 
 /**
- * What a foreground card's header says about progress: live activity while the
- * worker runs, then a settled digest from its structured result. Counting
- * nested rows is the last resort when restored result usage is absent.
+ * The card's ONE right-hand slot, which holds exactly one thing: while a worker
+ * is live it says what the worker is doing, and once it settles it says what the
+ * worker cost. Never both, never a state word, and it may be absent.
+ *
+ * Counting nested rows is the last resort when restored result usage is absent.
  */
 function agentProgressBadge(
   row: ToolUseNestedRow,
@@ -2197,9 +2200,12 @@ function agentProgressBadge(
   // A BACKGROUNDED agent yields no nested progress to this card: the async
   // branch returns its launch ack (`AgentTool.tsx:1279`) before the branch that
   // calls `onProgress` (`:1320`). So it has no activity to report, and
-  // `starting` would sit there for the worker's entire life. Its state word
-  // already reads "In background", which is the honest thing to say.
-  if (state === 'background') return activity
+  // `starting` would sit there for the worker's entire life.
+  //
+  // It says so itself now. The redesign took the lifecycle word off the card
+  // (2026-08-19), so with the slot empty and the face turned away this card
+  // carried no statement at all that the worker went to the background.
+  if (state === 'background') return 'backgrounded'
   const settledUsage = row.result?.agentUsage ?? null
   const toolCalls = settledUsage?.toolUses ?? agentToolCallCount(row)
   const parts: string[] = []
@@ -2216,81 +2222,263 @@ function agentProgressBadge(
   // `finalize_missing_usage`), and that zero survives the projector's
   // all-or-nothing narrowing as a valid number. Printing it renders "we never
   // got usage" as the claim "0 tokens", beside a worker that made 55 tool calls.
-  if (settledUsage && settledUsage.totalTokens > 0) {
+  //
+  // A FAILED worker drops the figure whatever its value: the run did not finish,
+  // so its totals are a partial tally, and printing them next to a red face
+  // invites the reader to compare a broken run's cost against a whole one's.
+  if (state !== 'failed' && settledUsage && settledUsage.totalTokens > 0) {
     parts.push(`${compactCount(settledUsage.totalTokens)} tokens`)
   }
   return parts.length === 0 ? null : parts.join(' · ')
 }
 
 /**
- * The worker's human label: the `subagent_type`, except the generic
- * `general-purpose`/`worker` types collapse to "Agent" (source: `userFacingName`,
- * `src/tools/AgentTool/UI.tsx:860-874`).
+ * What line 1 calls a worker whose name has not arrived. Identity arrives LATE —
+ * only after the first nested frame, and never at all on old or failed records —
+ * so this is the first thing anyone sees, and the type word beside it has to
+ * carry the row on its own until the name lands.
  */
-function agentWorkerType(vocab: ReturnType<typeof deriveAgentDisplayVocabulary>): string {
-  const type = vocab.type
-  return type && type.key !== 'general-purpose' && type.key !== 'worker'
-    ? type.label
-    : 'Agent'
+const NAMELESS_AGENT_LABEL = 'AGENT'
+
+/**
+ * A ResumeAgent card's type word. It has no `subagent_type` of its own — the
+ * input is an agent id and a follow-up prompt — and what matters about it is
+ * that it is a second run of a worker that already existed.
+ */
+const RESUMED_TYPE_WORD = 'resumed'
+
+/**
+ * The model this worker actually ran on, transcript-plane only.
+ *
+ * Two sources for the same fact at two moments in a run: a SETTLED worker's own
+ * structured result carries `model` (`AgentToolResult.model`), and a RUNNING one
+ * has no result yet, so it is read off the `model` its nested assistant frames
+ * carry. Both replay from history; neither joins a live snapshot (D2 §4).
+ *
+ * The first nested frame, not the last: it is the same value for the whole run
+ * (the engine resolves the subagent's model once), and reading forward keeps the
+ * card from re-rendering a different string as children arrive.
+ */
+function agentModelOf(row: ToolUseNestedRow): string | null {
+  const settled = row.result?.agentModel
+  if (settled !== undefined) return settled
+  for (const child of row.children) {
+    if (!('model' in child) || child.model === undefined) continue
+    return child.model
+  }
+  return null
+}
+
+/**
+ * The model as a reader knows it. The raw id is a dated slug
+ * (`claude-sonnet-5-20260115`), and the app already speaks the engine's own
+ * marketing vocabulary on the composer rail, so the card speaks it too:
+ * `Sonnet 5`, `GPT-5.6 Luna` (`formatModelDisplayName`).
+ *
+ * An unrecognised id falls through as itself rather than being hidden — a model
+ * this renderer has not been taught is still a true statement about the run.
+ */
+function agentModelLabel(row: ToolUseNestedRow): string | null {
+  const model = agentModelOf(row)
+  return model === null ? null : formatModelDisplayName(model)
+}
+
+/**
+ * The type suffix on line 1: the engine's own `subagent_type`, lowercased so it
+ * reads as a qualifier on the name rather than a second token competing with it.
+ *
+ * Deliberately NOT `agentTypeMeta().label`, which title-cases and folds
+ * `general-purpose` into "Agent". The redesign dropped the AGENT family word, so
+ * this is now the only place the row says what KIND of worker it is, and folding
+ * two distinct configured types into one word costs the reader the distinction.
+ * It can be any string from config, so it is only ever printed, never matched.
+ */
+function agentTypeWord(vocab: ReturnType<typeof deriveAgentDisplayVocabulary>): string | null {
+  const type = vocab.identity.type
+  return type === null ? null : type.toLowerCase()
+}
+
+/** Line 1: face, name, type, and the one right-hand slot. */
+function AgentIdentityLine({
+  axes,
+  eyes,
+  tone,
+  pulse,
+  name,
+  nameToneClass,
+  typeWord,
+  slot,
+  slotLive,
+}: {
+  axes: FaceAxes
+  eyes: FaceEyes
+  tone: AgentFaceTone
+  pulse: boolean
+  name: string | null
+  nameToneClass: string
+  typeWord: string | null
+  slot: string | null
+  slotLive: boolean
+}) {
+  return (
+    <div className="flex items-center gap-[9px] px-3 py-[7px]">
+      <AgentFace axes={axes} eyes={eyes} tone={tone} pulse={pulse} />
+      <span className="inline-flex min-w-0 items-baseline gap-1.5">
+        {/* The name is absent until the worker's first nested frame lands, and
+            on old or failed records it never arrives — so the slot has to stand
+            on its own rather than collapse (see `agentToolSourceOf`). */}
+        {name === null ? (
+          <span className="shrink-0 font-mono text-[13px] font-semibold tracking-[0.04em] text-text-muted">
+            {NAMELESS_AGENT_LABEL}
+          </span>
+        ) : (
+          <span className={`shrink-0 font-mono text-[13px] font-semibold ${nameToneClass}`}>
+            {name}
+          </span>
+        )}
+        {typeWord === null ? null : (
+          <span className="min-w-0 truncate font-mono text-[11px] lowercase text-[#8b8b92]">
+            {typeWord}
+          </span>
+        )}
+      </span>
+      {slot === null ? null : (
+        <span
+          className={`ml-auto shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums ${
+            slotLive ? 'text-blue-400' : 'text-text-subtle'
+          }`}
+        >
+          {slot}
+        </span>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Line 2: the task, closed by the model. The task is the ONLY element on the
+ * card allowed to shrink — everything else is `shrink-0` and `whitespace-nowrap`,
+ * so a long task ellipsises and nothing else on the line reflows.
+ *
+ * §0 flag — 🔁 deferred(account): the design closes this line with the account
+ * the worker ran on, and no such fact exists on the transcript plane. The only
+ * account fact the app holds is `LeaseOwnerRow.accountAlias` on the session-plane
+ * `lease.snapshot` (Codex-only, and gone with the engine process), and joining
+ * that onto a transcript card is exactly the cross-plane read
+ * `decisions/AGENT-CHROME.md` §4 forbids. Surfacing it needs a transcript-plane
+ * field, which is a protocol decision, not a render choice.
+ */
+function AgentTaskLine({
+  stateWord,
+  stateToneClass,
+  task,
+  model,
+}: {
+  stateWord: string | null
+  stateToneClass: string
+  task: string
+  model: string | null
+}) {
+  return (
+    <div className="flex items-center gap-2.5 border-t border-shell-seam px-3 py-[7px]">
+      {stateWord === null ? null : (
+        <span
+          className={`shrink-0 whitespace-nowrap text-[11px] font-medium ${stateToneClass}`}
+        >
+          {stateWord}
+        </span>
+      )}
+      <span className="min-w-0 flex-1 truncate text-[13.5px] leading-[18px] text-[#e4e4e7]">
+        {task}
+      </span>
+      {model === null ? null : (
+        <span className="shrink-0 whitespace-nowrap font-mono text-[11px] text-[#9a9aa1]">
+          {model}
+        </span>
+      )}
+    </div>
+  )
+}
+
+/**
+ * A resume the engine refused. There is no worker to describe, so the card has
+ * no identity line at all: a dim hollow mark, the resume prompt, and a green dot
+ * — the CALL succeeded, only its answer was a refusal — with the refusal itself
+ * on a line below.
+ *
+ * The band under it is the ack's own message; the body still expands to the full
+ * result, because an ack that carries more than a message would otherwise lose
+ * everything else it said.
+ */
+function RejectedResumeCard({ row, ack }: { row: ToolUseNestedRow; ack: ToolAck }) {
+  const [expanded, setExpanded] = useToolCardExpanded(row.toolUseId, false)
+  return (
+    <div className="w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.025] font-sans">
+      <button
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+        aria-expanded={expanded}
+        className="flex w-full items-center gap-2.5 px-3 py-2 text-left"
+      >
+        <span className="shrink-0 text-[12px] leading-[12px] text-text-ghost" aria-hidden>
+          ◇
+        </span>
+        <span className="min-w-0 flex-1 truncate text-[13.5px] leading-[18px] text-[#e4e4e7]">
+          {deriveTarget(row)}
+        </span>
+        <span className="size-[7px] shrink-0 rounded-full bg-tone-good" aria-hidden />
+      </button>
+      <div className="border-t border-shell-seam bg-black/20 px-3 py-1.5">
+        <span className="block truncate font-mono text-[11px] leading-relaxed text-tone-danger">
+          {ack.message}
+        </span>
+      </div>
+      {expanded ? (
+        <div className="border-t border-shell-seam bg-black/[0.28] px-3 pb-2.5 pt-1">
+          <ToolCardBody row={row} content={row.result?.content ?? ''} ack={ack} />
+        </div>
+      ) : null}
+    </div>
+  )
 }
 
 /**
  * D2/C4 inline Agent card — the Agent member of the P2-2 tool-card family
- * (`decisions/AGENT-CHROME.md` §2). Reuses the 8a chrome primitives
- * (`AgentRoleDot`/`AgentStateLabel`/`Baton`, `AgentChrome.tsx`) but feeds them
- * from TRANSCRIPT-derived data only (`agentToolSourceOf`): identity from the
- * row's `input`, state from its read-time `status` (`deriveAgentToolState`),
- * activity from its nested child rows.
+ * (`decisions/AGENT-CHROME.md` §2), fed from TRANSCRIPT-derived data only
+ * (`agentToolSourceOf`): identity from the row's `input` and its nested frames,
+ * state from its read-time `status` (`deriveAgentToolState`), activity and cost
+ * from its children and its structured result.
+ *
+ * Two lines, both always visible (2026-08-19 redesign). Line 1 is identity: the
+ * face, the name, the type, and ONE right-hand slot. Line 2 is the task, closed
+ * by the model. What the redesign REMOVED is as load-bearing as what it added,
+ * so none of it comes back: the ◆ mark and the AGENT family word (every row here
+ * is an agent, and the two glyphs spent ~90px of the left edge saying so), the
+ * role dot (the face already carries state, so a second coloured mark answered
+ * the same question twice), the identity strip as its own band, and the
+ * lifecycle word everywhere except Failed and Stopped, which need to stop a
+ * reader scanning.
  *
  * C4: subagent child rows NEST inside this card's collapsible body, COLLAPSED by
- * default, never interleaved at the transcript top level; the header carries the
- * child count as the expand affordance. Owner/handoff (the Baton) lives on
- * `LocalAgentTask` (session plane), NOT on this frame — so the Baton is always
- * `'none'` here (renders nothing); blocked/owner state is never fabricated on the
- * card (task rule).
+ * default, never interleaved at the transcript top level. A card with no
+ * children and no separate completion has nothing to expand to and so gets no
+ * click affordance at all, rather than a button that opens onto nothing.
+ * Owner/handoff is a session-plane (`LocalAgentTask`) fact, absent from this
+ * frame, and is never fabricated here.
  */
 function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
+  const faces = useAgentFaceRegistry()
   const resumeAck =
     row.toolName === 'ResumeAgent' ? toolAckForResult(row.result) : null
-  if (resumeAck && !resumeAck.ok) {
-    return (
-      <ToolCardShell
-        family="agent-control"
-        target={deriveTarget(row)}
-        status={row.status}
-        expansionKey={row.toolUseId}
-        defaultExpanded={row.status === 'error'}
-        collapsedExtra={<AckPeek ack={resumeAck} />}
-      >
-        <ToolCardBody
-          row={row}
-          content={row.result?.content ?? ''}
-          ack={resumeAck}
-        />
-      </ToolCardShell>
-    )
-  }
   const vocab = deriveAgentDisplayVocabulary(agentToolSourceOf(row))
-  const workerType = agentWorkerType(vocab)
-  const typeTone = vocab.type
-    ? AGENT_TYPE_TONE_CLASS[vocab.type.tone]
-    : AGENT_TYPE_TONE_CLASS.neutral
-  const childCount = row.children.length
   const isLaunchRecord =
     (row.toolName === 'Agent' || row.toolName === 'Task') &&
     row.input.run_in_background === true
   const completion = isLaunchRecord ? null : row.agentCompletion
-  const isLive =
-    !isLaunchRecord &&
-    (vocab.state.key === 'running' || vocab.state.key === 'background')
-  const progress = isLaunchRecord
-    ? 'backgrounded'
-    : completion !== null
-      ? null
-      : agentProgressBadge(row, vocab.state.key)
-  // ONE expression, so `ToolCardShell`'s `hasBody` stays null when there is
-  // genuinely no body — two sibling expressions would make it an array and give
-  // every childless agent card a body that expands to nothing.
+  const childCount = row.children.length
+  // ONE expression, so the card's `body` stays null when there is genuinely no
+  // body — two sibling expressions would make it an array and give every
+  // childless agent card an affordance that expands to nothing.
   const body =
     childCount === 0 && completion === null ? null : (
       <div className="flex flex-col gap-2">
@@ -2307,101 +2495,155 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
         ) : null}
       </div>
     )
+  // A resumed run opens when its completion supplies the answer; ordinary
+  // foreground and launch-record cards keep the C4 collapsed default.
+  const [expanded, setExpanded] = useToolCardExpanded(
+    row.toolUseId,
+    completion !== null,
+  )
+
+  if (resumeAck && !resumeAck.ok) {
+    return <RejectedResumeCard row={row} ack={resumeAck} />
+  }
+
+  const state = vocab.state.key
+  const face = agentFaceExpression(state, {
+    hasName: vocab.identity.name !== null,
+    isLaunchRecord,
+  })
+  const nameToneClass = (
+    vocab.type ? AGENT_TYPE_TONE_CLASS[vocab.type.tone] : AGENT_TYPE_TONE_CLASS.neutral
+  ).text
+  const slot = isLaunchRecord ? 'backgrounded' : agentProgressBadge(row, state)
+  const lines = (
+    <>
+      <AgentIdentityLine
+        axes={faces.axesFor(vocab.identity.name)}
+        eyes={face.eyes}
+        tone={face.tone}
+        pulse={face.pulse}
+        name={vocab.identity.name}
+        nameToneClass={nameToneClass}
+        typeWord={
+          row.toolName === 'ResumeAgent' ? RESUMED_TYPE_WORD : agentTypeWord(vocab)
+        }
+        slot={slot}
+        slotLive={!isLaunchRecord && (state === 'running' || state === 'background')}
+      />
+      <AgentTaskLine
+        // The two states that need to stop a reader mid-scan keep their word;
+        // every other state is told by the face's colour alone.
+        stateWord={
+          state === 'failed' || state === 'stopped' ? vocab.state.label : null
+        }
+        stateToneClass={AGENT_STATE_TONE_CLASS[vocab.state.tone].text}
+        task={deriveTarget(row)}
+        model={agentModelLabel(row)}
+      />
+    </>
+  )
   return (
-    <ToolCardShell
-      family={row.toolName === 'ResumeAgent' ? 'agent-control' : 'agent'}
-      target={deriveTarget(row)}
-      status={row.status}
-      suppressStatus
-      expansionKey={row.toolUseId}
-      // A resumed run opens when its completion supplies the answer; ordinary
-      // foreground and launch-record cards keep the C4 collapsed default.
-      defaultExpanded={completion !== null}
-      headerBadge={
-        progress === null ? undefined : (
-          <span
-            className={`min-w-0 max-w-[240px] truncate font-mono text-[10px] ${
-              isLive ? 'text-blue-400' : 'text-text-subtle'
-            }`}
-          >
-            {progress}
-          </span>
-        )
-      }
-      // The identity strip is ALWAYS visible; only the subagent child rows
-      // collapse (C4). Reuses the 8a chrome primitives, all fed from this row.
-      alwaysExtra={
-        <>
-          <AgentRoleDot role={vocab.identity.type} />
-          {/* The name leads when the row knows it: a worker is referred to by
-              name, and the type is the qualifier. Still absent until the agent's
-              first nested frame lands, so the type has to stand alone until
-              then (see `agentToolSourceOf`). */}
-          {vocab.identity.name !== null ? (
-            <AgentHandle name={vocab.identity.name} />
-          ) : null}
-          <span className={`shrink-0 text-[12.5px] font-semibold ${typeTone.text}`}>
-            {workerType}
-          </span>
-          {isLaunchRecord ? null : <AgentStateLabel state={vocab.state.key} />}
-          {/* Owner/handoff is a session-plane (`LocalAgentTask`) fact, absent
-              from this frame — never fabricated here (D2/§4). Renders nothing. */}
-          <Baton owner="none" />
-        </>
-      }
-    >
-      {body}
-    </ToolCardShell>
+    <div className="w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.025] font-sans">
+      {body === null ? (
+        lines
+      ) : (
+        <button
+          type="button"
+          onClick={() => setExpanded(!expanded)}
+          aria-expanded={expanded}
+          className="block w-full text-left"
+        >
+          {lines}
+        </button>
+      )}
+      {expanded && body !== null ? (
+        <div className="border-t border-shell-seam bg-black/[0.28] px-3 pb-2.5 pt-1">
+          {body}
+        </div>
+      ) : null}
+    </div>
   )
 }
 
 /**
  * D2/§3 DelegateGroup — parallel agents the orchestrator co-spawned in one turn
  * (same `message.id` — `src/utils/groupToolUses.ts:76`) render as ONE grouped
- * card instead of N sibling cards. The header mirrors the engine's grouped
- * summary (`renderGroupedAgentToolUse`, `src/tools/AgentTool/UI.tsx:838-856`):
- * "Running N agents…" while any member is pending, else "N [type] agents
- * finished"; the common type shows only when every member shares it. Members
- * stack as ordinary inline Agent cards (each keeps its own C4 child nesting).
- * Grouping is a read-time DERIVATION (`groupAgentDelegates`), never a new frame
- * or message type (C3).
+ * card instead of N sibling cards; a member never also appears on its own
+ * elsewhere. Grouping is a read-time DERIVATION (`groupAgentDelegates`), never a
+ * new frame or message type (C3).
+ *
+ * The header stacks its members' own faces, names the set, and closes with what
+ * has NOT settled. It can never say finished while a member is still out, which
+ * is why the tail is built from member STATE and not from raw `status`: a
+ * backgrounded member's `tool_result` only says it started
+ * (`deriveAgentToolState`), so counting statuses would report the set complete
+ * while a member was still running.
  */
+/**
+ * How many member faces the group header stacks. The stack is a glance at WHO is
+ * in the set, not a census — the label beside it already counts them — and a
+ * group can hold thousands (CC-59), which is a thousand SVGs in a header that
+ * exists to be read in one look.
+ */
+const MAX_STACKED_GROUP_FACES = 5
+
 function DelegateGroup({ members }: { members: NestedToolUseRow[] }) {
+  const faces = useAgentFaceRegistry()
   const memberKeys = useMemo(() => members.map(member => member.id), [members])
   const vocabs = members.map(member => deriveAgentDisplayVocabulary(agentToolSourceOf(member)))
-  // Member state, not raw `status`: a backgrounded member's `tool_result` only
-  // says it started (`deriveAgentToolState`), so the group header must track
-  // the same real-completion signal the member cards show, or it reads
-  // "finished" while a background member is still running.
-  const anyPending = vocabs.some(
+  const runningCount = vocabs.filter(
     vocab => vocab.state.key === 'running' || vocab.state.key === 'background',
-  )
-  const anyError = vocabs.some(vocab => vocab.state.key === 'failed')
-  const types = vocabs.map(vocab => agentWorkerType(vocab))
+  ).length
+  const failedCount = vocabs.filter(vocab => vocab.state.key === 'failed').length
+  const types = vocabs.map(vocab => agentTypeWord(vocab))
   const commonType =
-    types.length > 0 && types.every(type => type === types[0]) && types[0] !== 'Agent'
+    types.length > 0 && types[0] !== null && types.every(type => type === types[0])
       ? types[0]
       : null
-  const noun = commonType ? `${commonType} agents` : 'agents'
-  const label = anyPending
-    ? `Running ${members.length} ${noun}…`
-    : `${members.length} ${noun} finished`
-  const tone = anyPending
-    ? AGENT_STATE_TONE_CLASS.info
-    : anyError
-      ? AGENT_STATE_TONE_CLASS.danger
-      : AGENT_STATE_TONE_CLASS.success
+  const label = `${members.length} ${commonType === null ? '' : `${commonType} `}${
+    members.length === 1 ? 'worker' : 'workers'
+  }`
+  const tail =
+    runningCount > 0
+      ? { text: `${runningCount} still running`, tone: 'text-blue-400' }
+      : failedCount > 0
+        ? { text: `${failedCount} failed`, tone: 'text-tone-danger' }
+        : null
   return (
     <div className="w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.02]">
-      <div className="flex items-center gap-2 border-b border-shell-seam px-3 py-1.5">
-        <span
-          className={`h-1.5 w-1.5 shrink-0 rounded-full ${tone.dot} ${anyPending ? 'animate-pulse' : ''}`}
-          aria-hidden
-        />
-        <span className="shrink-0 text-[10.5px] font-bold uppercase tracking-[0.08em] text-accent">
-          Delegate
+      <div className="flex items-center gap-[9px] border-b border-shell-seam px-3 py-1.5">
+        <span className="inline-flex shrink-0 items-center">
+          {members.slice(0, MAX_STACKED_GROUP_FACES).map((member, index) => {
+            const vocab = vocabs[index]
+            const memberFace = agentFaceExpression(vocab.state.key, {
+              hasName: vocab.identity.name !== null,
+              isLaunchRecord:
+                (member.toolName === 'Agent' || member.toolName === 'Task') &&
+                member.input.run_in_background === true,
+            })
+            return (
+              <span key={member.id} className={index === 0 ? '' : '-ml-[3px]'}>
+                <AgentFace
+                  axes={faces.axesFor(vocab.identity.name)}
+                  eyes={memberFace.eyes}
+                  tone={memberFace.tone}
+                  pulse={memberFace.pulse}
+                  size={17}
+                />
+              </span>
+            )
+          })}
         </span>
-        <span className={`text-[11px] ${tone.text}`}>{label}</span>
+        <span className="min-w-0 truncate text-[12.5px] font-semibold text-[#c9c9cf]">
+          {label}
+        </span>
+        {tail === null ? null : (
+          <span
+            className={`ml-auto shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums ${tail.tone}`}
+          >
+            {tail.text}
+          </span>
+        )}
       </div>
       {/* Bounded: the header above keeps counting every member. */}
       <BoundedChildList
@@ -3798,32 +4040,49 @@ const NOTICE_STYLE: Record<
   turn_interrupted: { glyph: '!', glyphTone: 'text-tone-warn' },
 }
 
-/** Status → dot tone, shared by the standalone row and the agent card's finish. */
-function agentCompletionTone(status: string | null): string {
-  return status === 'failed' || status === 'killed'
-    ? 'bg-tone-danger'
-    : status === 'completed'
-      ? 'bg-tone-good'
-      : 'bg-text-subtle'
+/**
+ * A completion status as a lifecycle state, so the finish row's face is toned by
+ * the same vocabulary its card was. `killed` reads amber, not red: it is a
+ * worker someone stopped, and colouring it as a failure blames the run for
+ * something a person did.
+ */
+function agentCompletionState(status: string | null): AgentStateKey {
+  if (status === 'failed') return 'failed'
+  if (status === 'killed') return 'stopped'
+  if (status === 'completed') return 'completed'
+  // An outcome word this renderer was never taught: neutral, still shown. The
+  // engine's own sentence below says what happened.
+  return 'reviewed'
 }
 
 /**
- * TaskNotificationRow: a background agent's finish in transcript arrival
- * order. One line, the way both references render it: the prototype's `AgentEventRow`
- * (`Messages.jsx:843-870`) is a pip plus a name plus a state word, and the
- * terminal's `UserAgentNotificationMessage.tsx:46` is `● {summary}` and nothing
- * else.
+ * The worker's own name out of the engine's summary. The engine mints exactly
+ * `Agent @Name completed` / `… failed: …` / `… was stopped`, falling back to
+ * `Agent "description" …` when the task had no name (`LocalAgentTask.tsx:325`),
+ * so the `@` form is the presence test. Null keeps the featureless face — the
+ * honest stamp for a finish we cannot attribute to anyone.
+ */
+function agentNameInSummary(summary: string): string | null {
+  const match = /^Agent @(\S+)/.exec(summary)
+  return match === null ? null : match[1]
+}
+
+/**
+ * TaskNotificationRow: a background agent's finish, in transcript arrival order.
  *
- * The banner text this row rides is MODEL-facing — it carries the task id, the
- * output-file path and the tool-use id — so it is never printed; only the
- * engine's own one-line `summary` is (bug, 2026-08-01). No summary means no
- * row, exactly as the terminal returns null without one: an empty banner shell
- * tells the operator less than nothing.
+ * The engine's wording is printed VERBATIM, including the failure reason a card
+ * never carries — this row is the only place a background worker's outcome is
+ * stated, because its launch card is a past-tense record that never learns what
+ * happened (a transcript row is never rewritten). The banner text this row rides
+ * is MODEL-facing — it carries the task id, the output-file path and the
+ * tool-use id — so only the engine's one-line `summary` is printed (bug,
+ * 2026-08-01). No summary means no row, exactly as the terminal returns null
+ * without one.
  *
- * No status word rides alongside: every summary the engine mints already ends
- * in its outcome (`Agent @Ada completed`, `… failed: …`, `… was stopped`,
- * `LocalAgentTask.tsx:325`), so a chip would print the same word twice. The
- * dot carries it as tone.
+ * No status word rides alongside: every summary already ends in its outcome, so
+ * a chip would print the same word twice. The face carries it as colour, and the
+ * worker's own name inside the sentence is set in mono so the row is scannable
+ * against the card it belongs to.
  */
 function TaskNotificationBox({
   status,
@@ -3832,18 +4091,42 @@ function TaskNotificationBox({
   status: string | null
   summary: string | null
 }) {
+  const faces = useAgentFaceRegistry()
   if (summary === null) return null
+  const name = agentNameInSummary(summary)
+  const face = agentFaceExpression(agentCompletionState(status), {
+    hasName: name !== null,
+    isLaunchRecord: false,
+  })
+  const handle = name === null ? null : `@${name}`
+  const [before, after] =
+    handle === null ? [summary, ''] : splitOnce(summary, handle)
   return (
-    <div className="flex items-center gap-2.5 rounded-lg border border-shell-seam bg-shell-hover/40 px-3 py-1.5">
-      <span
-        className={`size-1.5 shrink-0 rounded-full ${agentCompletionTone(status)}`}
-        aria-hidden
+    <div className="flex items-center gap-2.5 rounded-lg border border-shell-seam bg-white/[0.018] px-3 py-[5px]">
+      <AgentFace
+        axes={faces.axesFor(name)}
+        eyes={face.eyes}
+        tone={face.tone}
+        pulse={face.pulse}
+        size={17}
       />
-      <span className="min-w-0 flex-1 truncate text-xs text-text-muted">
-        {summary}
+      <span className="min-w-0 flex-1 truncate text-[12px] leading-4 text-[#c9c9cf]">
+        {before}
+        {handle === null ? null : (
+          <span className="font-mono text-[#e4e4e7]">{handle}</span>
+        )}
+        {after}
       </span>
     </div>
   )
+}
+
+/** `text` around its first occurrence of `needle`; the needle itself is dropped. */
+function splitOnce(text: string, needle: string): [string, string] {
+  const at = text.indexOf(needle)
+  return at === -1
+    ? [text, '']
+    : [text.slice(0, at), text.slice(at + needle.length)]
 }
 
 /** `1234` → `1.2k`; the agent card's stat line has no room for full counts. */

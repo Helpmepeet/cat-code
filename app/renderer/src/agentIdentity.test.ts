@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import {
+  agentFaceExpression,
   agentStateMeta,
   agentTypeMeta,
   deriveAgentDisplayVocabulary,
@@ -454,4 +455,47 @@ test('declares prototype-only fields that must not become vocabulary inputs', ()
       progress: [{ label: 'demo' }],
     }),
   ).toBe('running')
+})
+
+/* ── the face's state half (2026-08-19 subagent card) ─────────────────────── */
+
+test('colour and expression are the state, and the pulse is only ever a running one', () => {
+  expect(agentFaceExpression('running', { hasName: true, isLaunchRecord: false })).toEqual({
+    eyes: 'open',
+    tone: 'info',
+    pulse: true,
+  })
+  expect(agentFaceExpression('completed', { hasName: true, isLaunchRecord: false })).toEqual({
+    eyes: 'shut',
+    tone: 'success',
+    pulse: false,
+  })
+  // Failed and Stopped are told by colour alone — no sad face, no wince.
+  expect(agentFaceExpression('failed', { hasName: true, isLaunchRecord: false })).toEqual({
+    eyes: 'open',
+    tone: 'danger',
+    pulse: false,
+  })
+  expect(agentFaceExpression('stopped', { hasName: true, isLaunchRecord: false })).toEqual({
+    eyes: 'open',
+    tone: 'warning',
+    pulse: false,
+  })
+})
+
+test('a worker with no name yet is featureless, whatever state it is in', () => {
+  for (const state of ['running', 'completed', 'failed', 'stopped'] as const) {
+    expect(
+      agentFaceExpression(state, { hasName: false, isLaunchRecord: false }).eyes,
+    ).toBe('closed')
+  }
+})
+
+test('a backgrounded worker faces away, and a launch RECORD is teal rather than blue', () => {
+  // Both say "backgrounded" on the card, so the colour is what separates "this
+  // is all we were ever told" from "this one is genuinely under way".
+  const launch = agentFaceExpression('background', { hasName: true, isLaunchRecord: true })
+  const resumed = agentFaceExpression('background', { hasName: true, isLaunchRecord: false })
+  expect(launch).toEqual({ eyes: 'closed', tone: 'launch', pulse: false })
+  expect(resumed).toEqual({ eyes: 'closed', tone: 'info', pulse: false })
 })

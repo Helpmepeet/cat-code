@@ -266,7 +266,7 @@ describe('bounded composite containers', () => {
     )
     const { pane } = await mountPane(members)
 
-    expect(pane.textContent).toContain('3000 Explore agents finished')
+    expect(pane.textContent).toContain('3000 explore workers')
     const mounted = mountedChildren(pane)
     expect(mounted.length).toBeGreaterThan(0)
     expect(mounted.length).toBeLessThanOrEqual(MAX_MOUNTED_COMPOSITE_CHILDREN)

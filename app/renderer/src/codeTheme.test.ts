@@ -172,6 +172,7 @@ describe('theme.css', () => {
       .sort()
     expect(selectors).toEqual(
       [
+        '.animate-face-pulse',
         '.animate-ping',
         '.animate-pulse',
         '.animate-sa-pop',

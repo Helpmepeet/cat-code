@@ -297,6 +297,21 @@
   }
 }
 
+/* The subagent face's breath (2026-08-19 subagent card) — the ONE animation on
+ * an agent card, and it runs only on the face of a running worker. Distinct from
+ * Tailwind's `animate-pulse` (2s, cubic-bezier easing) because the design source
+ * specifies 1.4s ease-in-out: the stamp is 19px of solid colour, and at the
+ * slower curve it reads as a flicker rather than a breath. */
+@keyframes catcode-face-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
 @layer components {
   /* The design source's own opt-out class (`no-scrollbar`, "CatCode Web App.html":49-50)
    * for a scroller that should not advertise itself: a short inline list, a tab
@@ -321,6 +336,10 @@
 
   .animate-token-warn-in {
     animation: catcode-token-warn-in 0.18s ease both;
+  }
+
+  .animate-face-pulse {
+    animation: catcode-face-pulse 1.4s ease-in-out infinite;
   }
 
   /* Sidebar row actions (design source `components/sidebar/index.html`) — the
@@ -576,7 +595,8 @@
   .animate-spin,
   .animate-toast-in,
   .animate-sa-pop,
-  .animate-token-warn-in {
+  .animate-token-warn-in,
+  .animate-face-pulse {
     animation: none !important;
   }
 }

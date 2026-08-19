@@ -1,3 +1,5 @@
+import type { FaceEyes } from './agentFace.js'
+
 export type AgentTypeTone = 'teal' | 'blue' | 'purple' | 'sky' | 'neutral'
 export type AgentStateTone =
   | 'info'
@@ -8,6 +10,13 @@ export type AgentStateTone =
   | 'muted'
   | 'purple'
 export type AgentPipIcon = 'pip-fill' | 'pip-ring' | 'pip-pulse'
+
+/**
+ * Face fill vocabulary: every lifecycle tone, plus `launch` — the teal a
+ * BACKGROUND LAUNCH record wears. See `AGENT_FACE_FILL_CLASS` for why that one
+ * has no lifecycle state behind it.
+ */
+export type AgentFaceTone = AgentStateTone | 'launch'
 
 export type AgentTypeKey =
   | 'verification'
@@ -304,6 +313,45 @@ export function agentTranscriptStateWord(state: AgentStateKey): string {
       const exhaustive: never = state
       return exhaustive
     }
+  }
+}
+
+/**
+ * How a worker's face reads (2026-08-19 subagent card). Colour and expression
+ * ARE the state; the silhouette is the identity and never changes, which is why
+ * eyes are derived here and axes are not.
+ *
+ * `isLaunchRecord` is the one input that is not a lifecycle state: a background
+ * launch's `tool_result` only confirms it started, so its card is a past-tense
+ * record rather than a run, and it wears the teal launch tone instead of the
+ * blue a resumed worker running in the background wears.
+ *
+ * Eyes, in the order the rules apply:
+ *  - no name yet -> `closed`, the featureless base. There is nothing to
+ *    individuate, and drawing a face on an unidentified worker claims otherwise.
+ *  - backgrounded -> `closed` as well: facing away, because this card will never
+ *    learn the outcome (it arrives lower down as its own finish row).
+ *  - completed -> `shut`, the only settled state that gets an expression.
+ *  - everything else -> `open`. Failed and Stopped are told by colour alone, and
+ *    line 2 carries their word.
+ */
+export function agentFaceExpression(
+  state: AgentStateKey,
+  options: { hasName: boolean; isLaunchRecord: boolean },
+): { eyes: FaceEyes; tone: AgentFaceTone; pulse: boolean } {
+  const backgrounded = options.isLaunchRecord || state === 'background'
+  const eyes: FaceEyes = !options.hasName || backgrounded
+    ? 'closed'
+    : state === 'completed'
+      ? 'shut'
+      : 'open'
+  return {
+    eyes,
+    tone: options.isLaunchRecord ? 'launch' : agentStateMeta(state).tone,
+    // The card's ONLY animation, and only a genuinely live worker gets it. A
+    // settled card is completely still, and so is a launch record: it is not
+    // reporting a run, it is reporting that a run began.
+    pulse: !options.isLaunchRecord && state === 'running',
   }
 }
 
