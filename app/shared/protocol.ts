@@ -3051,9 +3051,17 @@ export type SubmitResultFrame = {
  *
  * `complete` is the second one, and it comes from the loader's own `truncated`
  * (`loadDisplayTranscriptFromJsonlPath`, `src/utils/sessionStorage.ts`), not
- * from a count comparison the app would have to keep honest. When it is true
- * the transcript is whole and the renderer's truncation-boundary row goes away;
- * its absence is the completeness signal the user reads.
+ * from a count comparison the app would have to keep honest.
+ *
+ * INTENDED contract, NOT yet implemented: when `complete` is true the
+ * transcript is whole and the truncation-boundary row should disappear, its
+ * absence being the completeness signal the user reads. No clearing path
+ * exists today. `TranscriptSessionState.historyTruncated` latches permanently
+ * and is cleared only by `resetTranscriptSession` on the preview-to-live
+ * handover, so a renderer wired to this frame without adding that path would
+ * leave the boundary row standing over a transcript that is now whole. Tracked
+ * as blocker B4 in `decisions/HISTORY-LOAD-EARLIER.md`; read it before
+ * building the control.
  */
 export type HistoryLoadEarlierResultFrame = {
   kind: 'history.loadEarlier.result'

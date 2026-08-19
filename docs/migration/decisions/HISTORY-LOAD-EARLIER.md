@@ -179,6 +179,38 @@ demand, so dropping it on reload costs one more click and keeps every retained
 tail contiguous. That needs main to tell a recovered frame from a restore
 replay, which is the same marker B1 needs.
 
+### B4 — nothing clears the boundary row when the transcript becomes whole
+
+`HistoryLoadEarlierResultFrame.complete` is documented as the signal that the
+truncation-boundary row goes away. No such path exists.
+`TranscriptSessionState.historyTruncated` latches permanently once set and is
+cleared only by `resetTranscriptSession` on the preview-to-live handover
+(`transcriptProjector.ts`). A renderer wired to this frame without adding a
+clearing path would leave the row standing over a transcript that is now
+complete, which inverts the design's own completeness signal ("absence of the
+row means you are seeing everything").
+
+Fix shape, unbuilt: clear `historyTruncated` when a `history.loadEarlier.result`
+with `complete: true` arrives for that session. Cheap on its own; listed here
+because it is invisible until the control ships, and the protocol doc promised
+it.
+
+### B5 — index-based scroll anchoring assumes the projector only appends
+
+The per-session scroll memory (`transcriptScrollMemory.ts`) anchors on row
+INDEX plus intra-row offset. That is exact under appends and wrong under
+anything that renumbers the head of the list, which is precisely what B1's fix
+would introduce. The `rowsToken` guard fails safe (a changed first-row id
+discards the anchor and opens at the end), so nothing renders wrongly, but the
+user would be thrown to the bottom at the exact moment they loaded earlier
+history, which is the opposite of the promised "you stay where you were
+reading".
+
+Fix shape, unbuilt: anchor on row IDENTITY rather than index. That needs one
+`data-row-key` attribute on the row wrappers in `TranscriptView.tsx`, which the
+scroll work already identified as its clean follow-up. With identity anchoring,
+prepending is transparent to the anchor and B1 stops interacting with it.
+
 ### B3 — subagent branches on the recovered prefix
 
 `withRestoredSubagentHistory` keeps its existing budget, so on a session
