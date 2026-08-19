@@ -22,7 +22,12 @@ build/test/typecheck battery applies (§3). Never mix them.**
 | `app/` | The Electron desktop app (active migration program). Own package `@cat-code/desktop` with own scripts. Sub-folders are trust boundaries: `renderer/` `preload/` `main/` `supervisor/` (Electron-free) `host/` (Electron-free host plane: durable registry + typed control-plane API) `sidecar/` (runs the real engine) `shared/` (wire protocol). |
 | `web/` | Browser chat frontend (Vite React). Own package. |
 | `renderer-theme/`, `scripts/typecheck/renderer-engine-types/` | Temporary migration harnesses. Do not extend. |
-| `docs/` | Plans, maps, reports. Dated filenames (`2026-05-12-…`) are historical records, NOT current truth. |
+| `docs/` | Plans, maps, reports. Dated filenames (`2026-05-12-…`) are historical records, NOT current truth. Two exceptions are kept current: `docs/maps/` (undated, each map stamped with its own `Last refreshed`) and `docs/migration/STATUS.md`. |
+
+Everything else at the repo root is untracked or ignored: build output (`dist/`,
+`app/dist-app/`, `ds-bundle/`), scratch (`scratchpad/`, `tmp/`), and whatever a
+concurrent session left behind. Untracked does not mean stray — see the
+expect-company note above and §4.
 
 ## 2. Navigation — read before you search
 
@@ -31,10 +36,10 @@ build/test/typecheck battery applies (§3). Never mix them.**
   Cat Code; use each system's native execution path instead.
 - **Repository routing for implementation and diagnosis:** when ownership is not
   established and the task requires broad repository navigation, open
-  `docs/maps/WORKSPACE_MAP.md` before the first broad search, choose only the
-  relevant focused map, then verify the route in source. If exact owner files or
-  a focused map were supplied, start there and skip the workspace router. Maps
-  route; source is authoritative.
+  `docs/maps/WORKSPACE_MAP.md` before the first broad search, choose only one of
+  the 17 focused maps it indexes, then verify the route in source. If exact
+  owner files or a focused map were supplied, start there and skip the workspace
+  router. Maps route; source is authoritative.
 - Prompt/instruction/output-style work → `docs/prompts/2026-04-30-prompt-surfaces.md` first.
 - Desktop-app / migration work → `docs/migration/STATUS.md` (single source of
   truth for program state) + `.claude/rules/migration.md` (orchestrator rules).
@@ -47,7 +52,8 @@ build/test/typecheck battery applies (§3). Never mix them.**
   `// SOURCE:` anchors are routing hints (~83% exact), re-verify each in `src/`.
 - Docs index: `docs/2026-04-30-docs-readme.md`. Canonical-vs-historical is
   stated per folder there.
-- `README.md`, `CLAUDE.md`, `AGENTS.md` stay the only root entrypoints. New
+- `README.md`, `CLAUDE.md`, `AGENTS.md` stay the only root entrypoints (`DONE.md`
+  is a ledger, not an entrypoint — §4). New
   plans/reports go under `docs/<topic>/YYYY-MM-DD-slug.md`. Maps are the one
   exception: no dates in map filenames.
 
