@@ -2912,11 +2912,33 @@ test('D2/C4: subagent tool_use + tool_result nest under the owning agent card, n
   expect(childRow.status).toBe('success')
 })
 
-test('a child row whose parent never arrived surfaces at top level (degraded placement, not data loss)', () => {
+/* ─────────────────────────────────────────────────────────────────────────
+ * Orphaned subagent rows. Truncation drops the OLDEST frames first on both
+ * retention paths (`app/main/replayBuffer.ts` eviction, `sidecarServer.ts`
+ * newest-first replay tail), and an Agent `tool_use` is always older than the
+ * children it spawned, so a boundary landing inside an agent run keeps the
+ * children and drops the card. Those children must never be promoted to
+ * ordinary top-level rows: `user-text` renders as a user bubble and
+ * `assistant-text` as the main assistant's reply, so the transcript would
+ * attribute a subagent's internal messages to the two participants who did not
+ * write them (review 2026-08-19 §4).
+ * ───────────────────────────────────────────────────────────────────────── */
+
+function orphanedSubagentSession() {
   let state = createTranscriptState()
   state = projectServerFrame(state, ready('session-1'))
-  // Only the child frame arrives — its claimed parent tool_use_id was never
-  // projected as a row (e.g. truncated replay window).
+  // The surviving tail of a subagent run whose Agent `tool_use` fell off the
+  // front of the window: the worker's own task prompt, then its prose.
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'user',
+      message: { role: 'user', content: 'find every call site' },
+      parent_tool_use_id: 'toolu_never_seen',
+      agent_name: 'Ada',
+      uuid: '00000000-0000-4000-8000-0000000d0003',
+    } as unknown as SDKMessage),
+  )
   state = projectServerFrame(
     state,
     messageFrame('session-1', {
@@ -2927,14 +2949,105 @@ test('a child row whose parent never arrived surfaces at top level (degraded pla
         content: [{ type: 'text', text: 'orphaned subagent text' }],
       },
       parent_tool_use_id: 'toolu_never_seen',
-      uuid: '00000000-0000-4000-8000-0000000d0003',
-    }),
+      agent_name: 'Ada',
+      uuid: '00000000-0000-4000-8000-0000000d0004',
+    } as unknown as SDKMessage),
   )
+  return state
+}
+
+test('a child row whose parent is missing is gathered under an orphaned-agent placeholder, never promoted to top level', () => {
+  const state = orphanedSubagentSession()
+
+  // The rows themselves are all still there, flat and in arrival order: the
+  // guard is a placement rule, not a filter.
+  const flat = selectTranscriptRows(state, 'session-1')
+  expect(flat.map(row => row.kind)).toEqual(['user-text', 'assistant-text'])
 
   const nested = selectNestedTranscriptRows(state, 'session-1')
   expect(nested).toHaveLength(1)
-  expect(nested[0]?.kind).toBe('assistant-text')
-  expect(nested[0]?.children).toEqual([])
+  const placeholder = nested[0]
+  if (placeholder?.kind !== 'orphaned-agent') {
+    throw new Error('expected an orphaned-agent placeholder')
+  }
+  expect(placeholder.missingToolUseId).toBe('toolu_never_seen')
+  // Identity comes from the orphaned frames themselves; nothing else about the
+  // missing card is invented.
+  expect(placeholder.agentName).toBe('Ada')
+  expect(placeholder.children.map(child => child.kind)).toEqual([
+    'user-text',
+    'assistant-text',
+  ])
+  // The point of the guard, stated directly.
+  expect(nested.some(row => row.kind === 'user-text')).toBe(false)
+  expect(nested.some(row => row.kind === 'assistant-text')).toBe(false)
+})
+
+test('the orphaned-agent placeholder holds its position and keeps one group per missing parent', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'user',
+      message: { role: 'user', content: 'what the operator actually typed' },
+      uuid: '00000000-0000-4000-8000-0000000d0010',
+    } as unknown as SDKMessage),
+  )
+  for (const [index, parent] of ['toolu_gone_a', 'toolu_gone_b', 'toolu_gone_a'].entries()) {
+    state = projectServerFrame(
+      state,
+      messageFrame('session-1', {
+        type: 'assistant',
+        message: {
+          id: `msg_orphan_${index}`,
+          role: 'assistant',
+          content: [{ type: 'text', text: `orphan ${index}` }],
+        },
+        parent_tool_use_id: parent,
+        uuid: `00000000-0000-4000-8000-0000000d001${index + 1}`,
+      } as unknown as SDKMessage),
+    )
+  }
+
+  const nested = selectNestedTranscriptRows(state, 'session-1')
+  // The operator's own message stays exactly where it was; each missing parent
+  // gets ONE placeholder, emitted where its first surviving child arrived.
+  expect(nested.map(row => row.kind)).toEqual([
+    'user-text',
+    'orphaned-agent',
+    'orphaned-agent',
+  ])
+  const first = nested[1]
+  const second = nested[2]
+  if (first?.kind !== 'orphaned-agent' || second?.kind !== 'orphaned-agent') {
+    throw new Error('expected two orphaned-agent placeholders')
+  }
+  expect(first.missingToolUseId).toBe('toolu_gone_a')
+  expect(first.children).toHaveLength(2)
+  expect(second.missingToolUseId).toBe('toolu_gone_b')
+  expect(second.children).toHaveLength(1)
+  expect(first.id).not.toBe(second.id)
+})
+
+test('an orphaned-agent placeholder keeps its identity while its own rows are unchanged', () => {
+  let state = orphanedSubagentSession()
+  const before = selectNestedTranscriptRows(state, 'session-1')[0]
+
+  // An unrelated later frame invalidates the slice cache, so this exercises the
+  // per-group cache rather than the per-slice one.
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'user',
+      message: { role: 'user', content: 'a real operator turn' },
+      uuid: '00000000-0000-4000-8000-0000000d0005',
+    } as unknown as SDKMessage),
+  )
+
+  const after = selectNestedTranscriptRows(state, 'session-1')
+  expect(after).toHaveLength(2)
+  expect(after[0]).toBe(before)
 })
 
 /* ─────────────────────────────────────────────────────────────────────────

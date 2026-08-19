@@ -694,11 +694,43 @@ export function selectSlashCommands(
  * arranges the flat, arrival-ordered `selectTranscriptRows` output into a
  * tree: top-level rows in arrival order, each carrying the child rows whose
  * `parentToolUseId` matches its own `toolUseId`. A child row whose parent
- * never arrived (or isn't a tool-use row) surfaces at top level rather than
- * being silently dropped — degraded placement, not data loss.
+ * never arrived (or isn't a tool-use row) is neither dropped nor promoted: it
+ * is gathered under a synthetic `OrphanedAgentRow`, so subagent traffic still
+ * reads as subagent traffic when its card is gone.
  */
-export type NestedTranscriptRow = TranscriptRow & {
+export type NestedTranscriptRow = (TranscriptRow | OrphanedAgentRow) & {
   children: NestedTranscriptRow[]
+}
+
+/**
+ * A subagent's rows whose owning Agent card is NOT in the transcript, gathered
+ * under one read-time placeholder that holds the position the card would have
+ * held.
+ *
+ * TRUNCATION is why this exists. Both retention paths drop OLDEST first (the
+ * main-process replay ring evicts oldest, `app/main/replayBuffer.ts`; a resume
+ * replays a newest-first tail, `app/sidecar/sidecarServer.ts`) and an Agent
+ * `tool_use` is always older than the children it spawned, so a boundary that
+ * lands inside an agent run keeps the children and drops their parent. Those
+ * children used to fall through to the TOP level, where the top-level renderers
+ * ignore `agentName` and draw by kind alone: a subagent's own task prompt
+ * became a `UserBubble` and its prose became the main assistant's reply
+ * (`docs/migration/reviews/2026-08-19-transcript-message-visibility-ux-review.md`
+ * §4, probe-confirmed). The transcript stated that the user and the assistant
+ * said things neither of them said, which is worse than any placement problem
+ * it was avoiding.
+ *
+ * Synthesized at READ TIME only, like the hidden-tier mark and the
+ * interrupted-turn notice: nothing is stored and no stored row is rewritten.
+ * Deliberately NOT a member of `TranscriptRow` — no frame can ever mint one,
+ * and the stored vocabulary stays exactly what the seam produces.
+ */
+export type OrphanedAgentRow = FrameRowSource & {
+  kind: 'orphaned-agent'
+  /** The `tool_use` id these rows named as their parent, which is not present. */
+  missingToolUseId: string
+  /** Engine-minted worker identity, when the orphaned frames carried one. */
+  agentName?: string
 }
 
 // Perf (2026-07-08, F3): the nested-row tree is a pure function of ONE session
@@ -720,6 +752,13 @@ const revealedNestedRowsCache = new WeakMap<
 >()
 const EMPTY_NESTED_ROWS: NestedTranscriptRow[] = []
 
+/** One top-level placeholder to build: which parent is missing, and where. */
+type OrphanSlot = {
+  missingToolUseId: string
+  /** Ordering anchor and cache key: the first surviving child of that parent. */
+  firstRow: TranscriptRow
+}
+
 type NestedRowCacheEntry = {
   /** Source children used to derive `row.children`, in their arrival order. */
   childRows: TranscriptRow[]
@@ -731,6 +770,10 @@ type NestedRowCacheEntry = {
 // wrapper for those rows too, provided their direct child list is identical.
 // Weak keys keep this cross-slice cache bounded by the projector's row lifetime.
 const nestedRowBySource = new WeakMap<TranscriptRow, NestedRowCacheEntry>()
+// Same discipline for the synthetic orphan placeholder, keyed on the FIRST row
+// it gathers: it has no source row of its own, and rebuilding it on every slice
+// would re-render a card holding a whole subagent run on every streamed delta.
+const orphanedAgentRowByFirstRow = new WeakMap<TranscriptRow, NestedRowCacheEntry>()
 
 function sameRowReferences(left: TranscriptRow[], right: TranscriptRow[]) {
   return left.length === right.length && left.every((row, index) => row === right[index])
@@ -754,16 +797,28 @@ export function selectNestedTranscriptRows(
   }
 
   const childrenByParentId = new Map<string, TranscriptRow[]>()
-  const topLevel: TranscriptRow[] = []
+  const orphansByParentId = new Map<string, TranscriptRow[]>()
+  // A top-level slot is either a real row or the placeholder standing in for one
+  // missing parent, emitted where that parent's FIRST surviving child arrived.
+  const topLevel: (TranscriptRow | OrphanSlot)[] = []
   for (const row of rows) {
     const parentId =
       'parentToolUseId' in row ? row.parentToolUseId : null
-    if (parentId && byToolUseId.has(parentId)) {
+    if (!parentId) {
+      topLevel.push(row)
+      continue
+    }
+    if (byToolUseId.has(parentId)) {
       const siblings = childrenByParentId.get(parentId)
       if (siblings) siblings.push(row)
       else childrenByParentId.set(parentId, [row])
-    } else {
-      topLevel.push(row)
+      continue
+    }
+    const orphans = orphansByParentId.get(parentId)
+    if (orphans) orphans.push(row)
+    else {
+      orphansByParentId.set(parentId, [row])
+      topLevel.push({ missingToolUseId: parentId, firstRow: row })
     }
   }
 
@@ -779,7 +834,41 @@ export function selectNestedTranscriptRows(
     nestedRowBySource.set(row, { childRows, nested })
     return nested
   }
-  const result = topLevel.map(attachChildren)
+
+  const attachOrphans = (slot: OrphanSlot): NestedTranscriptRow => {
+    const childRows = orphansByParentId.get(slot.missingToolUseId) ?? []
+    const cached = orphanedAgentRowByFirstRow.get(slot.firstRow)
+    if (cached && sameRowReferences(cached.childRows, childRows)) {
+      return cached.nested
+    }
+
+    // Identity is whatever the orphaned frames themselves carry. Nothing else
+    // is invented: no status, no result, no usage — the card that held those
+    // is precisely what is missing.
+    let agentName: string | undefined
+    for (const orphan of childRows) {
+      if ('agentName' in orphan && orphan.agentName !== undefined) {
+        agentName = orphan.agentName
+        break
+      }
+    }
+    const frameId = `orphaned-agent:${slot.missingToolUseId}`
+    const nested: NestedTranscriptRow = {
+      kind: 'orphaned-agent',
+      id: frameRowId(slot.firstRow.sessionId, frameId, 'orphaned_agent'),
+      sessionId: slot.firstRow.sessionId,
+      frameId,
+      missingToolUseId: slot.missingToolUseId,
+      ...(agentName !== undefined ? { agentName } : {}),
+      children: childRows.map(attachChildren),
+    }
+    orphanedAgentRowByFirstRow.set(slot.firstRow, { childRows, nested })
+    return nested
+  }
+
+  const result = topLevel.map(entry =>
+    'missingToolUseId' in entry ? attachOrphans(entry) : attachChildren(entry),
+  )
   cache.set(session, result)
   return result
 }

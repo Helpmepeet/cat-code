@@ -875,6 +875,9 @@ const TranscriptRowView = memo(function TranscriptRowView({
         <Seam tone="neutral" dashed faded label="message removed" italicLabel />
       )
 
+    case 'orphaned-agent':
+      return <OrphanedAgentCard row={row} />
+
     case 'tool-use':
       return <ToolCard row={row} />
 
@@ -1402,6 +1405,10 @@ export function CodeBlock({
 }
 
 type ToolUseNestedRow = Extract<NestedTranscriptRow, { kind: 'tool-use' }>
+type OrphanedAgentNestedRow = Extract<
+  NestedTranscriptRow,
+  { kind: 'orphaned-agent' }
+>
 
 /**
  * P4-18b tool-card FAMILY grammar (`Messages.jsx` FrameEShell). Each family's
@@ -2604,6 +2611,60 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
       {expanded && body !== null ? (
         <div className="border-t border-shell-seam bg-black/[0.28] px-3 pb-2.5 pt-1">
           {body}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * The stand-in for an agent whose card is NOT in the transcript
+ * (`OrphanedAgentRow` — truncation drops the oldest frames first, so a long
+ * agent run outlives the `tool_use` that launched it).
+ *
+ * It is a frame, not a card: no face, no state word, no cost, no task line.
+ * Every one of those is a claim the missing parent carried, and the whole point
+ * of this row is that the parent is not here to make them. It carries the one
+ * thing the loose rows could not say for themselves, that an AGENT produced
+ * them, and it keeps them collapsed by default exactly as an Agent card keeps
+ * its children (C4). Without it those rows render by kind alone at the top
+ * level, where a subagent's task prompt is a user bubble and its prose is the
+ * main assistant's reply.
+ */
+function OrphanedAgentCard({ row }: { row: OrphanedAgentNestedRow }) {
+  // Keyed by the missing parent, so the reader's open/closed choice survives a
+  // remount the same way a real card's does.
+  const [expanded, setExpanded] = useToolCardExpanded(row.missingToolUseId, false)
+  const count = row.children.length
+  return (
+    <div className="w-full overflow-hidden rounded-md border border-dashed border-shell-seam bg-white/[0.025] font-sans">
+      <button
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+        aria-expanded={expanded}
+        className="flex w-full items-center gap-2.5 px-3 py-2 text-left"
+      >
+        <span
+          className="shrink-0 text-[12px] leading-[12px] text-text-ghost"
+          aria-hidden
+        >
+          ◇
+        </span>
+        <span className="min-w-0 flex-1 truncate text-[13.5px] leading-[18px] text-text-primary">
+          {row.agentName ?? NAMELESS_AGENT_LABEL}
+        </span>
+        <span className="shrink-0 whitespace-nowrap font-mono text-[11px] text-text-subtle">
+          {count} {count === 1 ? 'message' : 'messages'}
+        </span>
+      </button>
+      <span className="flex items-center border-t border-shell-seam px-3 py-[7px] text-[13.5px] leading-[18px] text-text-muted">
+        The rest of this agent run is no longer shown.
+      </span>
+      {expanded ? (
+        <div className="border-t border-shell-seam bg-black/[0.28] px-3 pb-2.5 pt-1">
+          <div className="border-l border-accent/20 pl-3">
+            <NestedRowList className="flex flex-col gap-2" rows={row.children} />
+          </div>
         </div>
       ) : null}
     </div>

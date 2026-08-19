@@ -2894,6 +2894,74 @@ test('P4-36: a revealed hidden row renders DIMMED, and only when revealed', () =
   expect(revealed).toContain('opacity-55')
 })
 
+test('an orphaned subagent tail renders as an agent frame, never as user or assistant messages', () => {
+  // Built from the REAL projection of subagent frames whose Agent `tool_use`
+  // is absent (what a truncated replay hands the renderer), because the guard
+  // lives in the nesting selector: hand-made rows would prove nothing about it.
+  let state = createTranscriptState()
+  state = projectServerFrame(state, {
+    kind: 'ready',
+    protocolVersion: 1,
+    sessionId: 's',
+    engineSessionId: 'engine-s',
+    payload: {
+      type: 'app.ready',
+      protocolVersion: 1,
+      inputEnabled: true,
+      activeTurn: false,
+      abort: { status: 'idle' },
+      goalSnapshot: null,
+      pendingPermissionRequests: [],
+    },
+  })
+  const orphaned: SDKMessage[] = [
+    {
+      type: 'user',
+      message: { role: 'user', content: 'internal task prompt for the worker' },
+      parent_tool_use_id: 'toolu_truncated_away',
+      agent_name: 'Ada',
+      session_id: 's',
+      uuid: '00000000-0000-4000-8000-0000000036c1',
+    },
+    {
+      type: 'assistant',
+      message: {
+        id: 'msg_orphan',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'what the worker reported back' }],
+      },
+      parent_tool_use_id: 'toolu_truncated_away',
+      agent_name: 'Ada',
+      session_id: 's',
+      uuid: '00000000-0000-4000-8000-0000000036c2',
+    },
+  ] as unknown as SDKMessage[]
+  for (const message of orphaned) {
+    state = projectServerFrame(state, {
+      kind: 'event',
+      protocolVersion: 1,
+      sessionId: 's',
+      event: { type: 'message', message },
+    })
+  }
+
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView rows={selectNestedTranscriptRows(state, 's')} />,
+  )
+
+  // The frame names the worker and says why it stands alone.
+  expect(html).toContain('Ada')
+  expect(html).toContain('2 messages')
+  expect(html).toContain('The rest of this agent run is no longer shown.')
+  // Collapsed by default, exactly as an Agent card keeps its children (C4), so
+  // neither body reaches the transcript flow.
+  expect(html).not.toContain('internal task prompt for the worker')
+  expect(html).not.toContain('what the worker reported back')
+  // The failure this guard exists for: the user bubble (`UserBubble`) drawn for
+  // a message the user never sent.
+  expect(html).not.toContain('rounded-2xl rounded-br')
+})
+
 test('P4-1/F1: findNestedToolUseRow re-derives the row by id, or null when gone', () => {
   const row = projectedBashRow()
   // Found at the top level.
