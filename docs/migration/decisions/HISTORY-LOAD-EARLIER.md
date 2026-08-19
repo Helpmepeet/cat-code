@@ -1,6 +1,6 @@
 # Load earlier messages — the one inbound verb that reaches back to disk
 
-**Status: DECIDED (operator-approved 2026-08-19, AFK delegation), IMPLEMENTATION PENDING.**
+**Status: DECIDED (operator-approved 2026-08-19). WIRE HALF IMPLEMENTED 2026-08-20 (`a14d94bc`), inert. RENDERER HALF BLOCKED — see §Blockers.**
 Owns the single inbound vocabulary addition needed to make a truncated
 transcript recoverable from inside the app. Origin: the message-visibility UX
 review (`reviews/2026-08-19-transcript-message-visibility-ux-review.md`,
@@ -52,9 +52,18 @@ that loader already owns is inherited rather than reimplemented.
 
 ## Shape
 
-**Inbound** (`app/shared/protocol.ts`, additive, no version bump):
+**Inbound** (`app/shared/protocol.ts`, additive, no version bump).
 
-    { kind: 'history.loadEarlier', protocolVersion, sessionId, requestId }
+CORRECTED 2026-08-20 against source. This doc originally specified a top-level
+`kind`, which no inbound frame in this app has. Every inbound frame is a
+`ClientFrame` envelope (`protocol.ts:505`) and `handleFrame` validates the
+envelope before dispatch, so the shipped shape carries the same four pieces of
+information in the repo's real envelope:
+
+    { protocolVersion, sessionId, message: { type: 'history.loadEarlier', requestId } }
+
+`requestId` is the only renderer-authored byte. No cursor, offset, count or
+path exists on the frame.
 
 `requestId` is the standard request-scoped correlation id, engine-minted rules
 unchanged. There are no other fields, and the sidecar's local schema must
@@ -127,3 +136,53 @@ that gate.
 - `bun run --cwd app test:hardening` all-pass with the new inbound kind present.
 - A renderer test proving the control is absent when the transcript is complete
   and absent on a preview pane.
+
+## Blockers on the renderer half (found 2026-08-20, before any UI was written)
+
+The wire half is landed and inert. Two problems the design above did not
+anticipate must be settled before a control can be shown. Neither is a reason
+to change the wire contract.
+
+### B1 — the projector is append-only, so recovered rows would land at the BOTTOM
+
+`appendFrameRows` (`app/renderer/src/transcriptProjector.ts:1757`) does
+`rows: [...state.rows, ...rows]` and there is no `.sort()` anywhere in the
+module. **Transcript order is frame ARRIVAL order.** Restore works only because
+replayed history happens to arrive before anything else. Messages recovered
+mid-session would therefore render underneath the conversation they precede.
+
+The wire half's report claimed "the projector needs no change at all". That is
+false, and it was reasoned from the restore path. Verified by reading, not
+assumed.
+
+Fix shape, unbuilt: recovered frames need to be distinguishable from
+restore-replay frames, and `appendFrameRows` needs an insertion path that
+prepends a recovered BLOCK while preserving order within it (a running
+insertion index, since frames arrive oldest-first and prepending each at 0
+would reverse them). This touches the most memory-sensitive module in the app
+and every read-time cache keyed on the row slice, so it wants an operator
+present and a measured pass, not an unattended one.
+
+### B2 — recovered frames enter main's replay ring and can evict live history
+
+Recovered `event` frames flow through the normal outbound path into main's
+per-session ring (8,000 frames / 8 MiB, `app/main/replayBuffer.ts`). The ring
+evicts oldest-by-ARRIVAL, so a large recovery evicts the OLDEST LIVE frames
+while retaining the ancient ones that just arrived. A renderer reload after a
+big recovery could then replay a transcript with a hole in the middle, which
+is strictly worse than the contiguous tail the boundary row promises.
+
+Recommended ruling (not yet made): **recovered frames should not be retained in
+the ring at all.** The ring exists to restore a reloaded renderer to what it
+was showing; recovered history is by definition re-fetchable from disk on
+demand, so dropping it on reload costs one more click and keeps every retained
+tail contiguous. That needs main to tell a recovered frame from a restore
+replay, which is the same marker B1 needs.
+
+### B3 — subagent branches on the recovered prefix
+
+`withRestoredSubagentHistory` keeps its existing budget, so on a session
+already at the replay cap a recovered Agent card can arrive without children.
+That degrades to the card built for exactly this case (CC-73, "This agent's
+steps aren't loaded.") and is never a wrong tree, so it is acceptable as-is and
+recorded rather than fixed.
