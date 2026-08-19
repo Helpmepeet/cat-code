@@ -2353,7 +2353,7 @@ function AgentIdentityLine({
           </span>
         )}
         {typeWord === null ? null : (
-          <span className="min-w-0 truncate font-mono text-[11px] lowercase text-[#8b8b92]">
+          <span className="min-w-0 truncate font-mono text-[11px] lowercase text-text-faint">
             {typeWord}
           </span>
         )}
@@ -2372,8 +2372,17 @@ function AgentIdentityLine({
 }
 
 /**
- * Line 2: the task, closed by the model. The task is the ONLY element on the
- * card allowed to shrink — everything else is `shrink-0` and `whitespace-nowrap`,
+ * Line 2: the task, closed by the model.
+ *
+ * Colour comes from `theme.css`'s text ramp, NOT from the design source's own
+ * hexes. The source was authored without knowledge of the ramp, and its greys
+ * land beside existing tokens rather than on them (`#9a9aa1` is `text-subtle`
+ * two units off); the ramp is tuned, WCAG-checked and moves as a set, so the
+ * card moves with it. Each value is mapped by what this exact spot already used:
+ * the one-line target has always been `text-primary`, the model sits one step
+ * down at `text-subtle`.
+ *
+ * The task is the ONLY element on the card allowed to shrink — everything else is `shrink-0` and `whitespace-nowrap`,
  * so a long task ellipsises and nothing else on the line reflows.
  *
  * §0 flag — 🔁 deferred(account): the design closes this line with the account
@@ -2404,11 +2413,11 @@ function AgentTaskLine({
           {stateWord}
         </span>
       )}
-      <span className="min-w-0 flex-1 truncate text-[13.5px] leading-[18px] text-[#e4e4e7]">
+      <span className="min-w-0 flex-1 truncate text-[13.5px] leading-[18px] text-text-primary">
         {task}
       </span>
       {model === null ? null : (
-        <span className="shrink-0 whitespace-nowrap font-mono text-[11px] text-[#9a9aa1]">
+        <span className="shrink-0 whitespace-nowrap font-mono text-[11px] text-text-subtle">
           {model}
         </span>
       )}
@@ -2448,7 +2457,7 @@ function RejectedResumeCard({
         <span className="shrink-0 text-[12px] leading-[12px] text-text-ghost" aria-hidden>
           ◇
         </span>
-        <span className="min-w-0 flex-1 truncate text-[13.5px] leading-[18px] text-[#e4e4e7]">
+        <span className="min-w-0 flex-1 truncate text-[13.5px] leading-[18px] text-text-primary">
           {deriveTarget(row)}
         </span>
         <span className="size-[7px] shrink-0 rounded-full bg-tone-good" aria-hidden />
@@ -2669,7 +2678,7 @@ function DelegateGroup({ members }: { members: NestedToolUseRow[] }) {
             )
           })}
         </span>
-        <span className="min-w-0 truncate text-[12.5px] font-semibold text-[#c9c9cf]">
+        <span className="min-w-0 truncate text-[12.5px] font-semibold text-text-primary">
           {label}
         </span>
         {tail === null ? null : (
@@ -4143,7 +4152,7 @@ function TaskNotificationBox({
   const [before, after] =
     handle === null ? [summary, ''] : splitOnce(summary, handle)
   return (
-    <div className="flex items-center gap-2.5 rounded-lg border border-shell-seam bg-white/[0.018] px-3 py-[5px]">
+    <div className="flex items-center gap-2.5 rounded-lg border border-shell-seam bg-shell-hover/40 px-3 py-[5px]">
       <AgentFace
         axes={faces.axesFor(name)}
         eyes={face.eyes}
@@ -4151,10 +4160,10 @@ function TaskNotificationBox({
         pulse={face.pulse}
         size={17}
       />
-      <span className="min-w-0 flex-1 truncate text-[12px] leading-4 text-[#c9c9cf]">
+      <span className="min-w-0 flex-1 truncate text-[12px] leading-4 text-text-muted">
         {before}
         {handle === null ? null : (
-          <span className="font-mono text-[#e4e4e7]">{handle}</span>
+          <span className="font-mono text-text-primary">{handle}</span>
         )}
         {after}
       </span>
