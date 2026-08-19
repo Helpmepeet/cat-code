@@ -9,12 +9,14 @@
 
 import { expect, test } from 'bun:test'
 import {
+  createTranscriptScrollCapturePump,
   createTranscriptScrollMemoryState,
   reduceTranscriptScrollMemoryState,
   selectTranscriptRowAnchor,
   selectTranscriptScrollAnchor,
   selectTranscriptScrollRestore,
   type TranscriptRowGeometry,
+  type TranscriptScrollFrames,
 } from './transcriptScrollMemory.js'
 
 /** Rows at known content offsets, counting the reads the callers make. */
@@ -284,4 +286,92 @@ test('a restore is clamped to the scrollable range', () => {
       contentHeight: 300,
     }),
   ).toEqual({ kind: 'offset', scrollTop: 100 })
+})
+
+/**
+ * A frame clock with the tick under the test's control, so "one capture per
+ * frame" is stated as a fact about the pump rather than about a real display.
+ */
+function manualFrames(): TranscriptScrollFrames & {
+  runFrame: () => void
+  pendingFrames: () => number
+} {
+  const callbacks = new Map<number, () => void>()
+  let nextHandle = 1
+  return {
+    request: callback => {
+      const handle = nextHandle
+      nextHandle += 1
+      callbacks.set(handle, callback)
+      return handle
+    },
+    cancel: handle => {
+      callbacks.delete(handle)
+    },
+    runFrame: () => {
+      const due = [...callbacks.values()]
+      callbacks.clear()
+      for (const callback of due) callback()
+    },
+    pendingFrames: () => callbacks.size,
+  }
+}
+
+test('a burst of scroll events inside one frame captures once, at the last position', () => {
+  const frames = manualFrames()
+  const pump = createTranscriptScrollCapturePump(frames)
+  const captured: number[] = []
+
+  for (const scrollTop of [100, 240, 900, 1_500, 1_512]) {
+    pump.request(() => captured.push(scrollTop))
+  }
+  // Nothing has been measured yet: the frame is what pays, not the event.
+  expect(captured).toEqual([])
+  expect(frames.pendingFrames()).toBe(1)
+
+  frames.runFrame()
+  expect(captured).toEqual([1_512])
+})
+
+test('each new frame captures again', () => {
+  const frames = manualFrames()
+  const pump = createTranscriptScrollCapturePump(frames)
+  const captured: number[] = []
+
+  pump.request(() => captured.push(1))
+  frames.runFrame()
+  pump.request(() => captured.push(2))
+  frames.runFrame()
+
+  expect(captured).toEqual([1, 2])
+  expect(frames.pendingFrames()).toBe(0)
+})
+
+test('an unbind captures the position the pending frame was holding', () => {
+  const frames = manualFrames()
+  const pump = createTranscriptScrollCapturePump(frames)
+  const captured: number[] = []
+
+  pump.request(() => captured.push(1_512))
+  pump.flush()
+
+  // Taken now, and the frame that would have taken it is off the clock: a pane
+  // whose rows are about to go cannot be measured a frame later.
+  expect(captured).toEqual([1_512])
+  expect(frames.pendingFrames()).toBe(0)
+  frames.runFrame()
+  expect(captured).toEqual([1_512])
+})
+
+test('an unbind with nothing pending captures nothing', () => {
+  const frames = manualFrames()
+  const pump = createTranscriptScrollCapturePump(frames)
+  const captured: number[] = []
+
+  pump.flush()
+  pump.request(() => captured.push(1))
+  frames.runFrame()
+  pump.flush()
+
+  expect(captured).toEqual([1])
 })

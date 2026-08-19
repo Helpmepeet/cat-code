@@ -22,8 +22,10 @@ import { createDomTestHarness } from './domTestHarness.js'
 import type { DomTestHarness } from './domTestHarness.js'
 import {
   captureTranscriptScrollAnchor,
+  createTranscriptScrollCapturePump,
   restoreTranscriptScroll,
   type TranscriptScrollAnchor,
+  type TranscriptScrollFrames,
 } from './transcriptScrollMemory.js'
 
 let harness: DomTestHarness
@@ -294,4 +296,146 @@ test('an empty pane takes no anchor and opens at the end', () => {
       rowsToken: null,
     }),
   ).toEqual({ kind: 'bottom' })
+})
+
+/**
+ * A frame clock the test ticks itself. The pane's real handler lives in
+ * `SessionPane` (`App.tsx`), which this SSR-only suite cannot mount or scroll —
+ * what the two tests below mount is the same sequence that handler performs, so
+ * what they prove is the mechanism and its cost, not App's wiring of it.
+ */
+function manualFrames(): TranscriptScrollFrames & { runFrame: () => void } {
+  const callbacks = new Map<number, () => void>()
+  let nextHandle = 1
+  return {
+    request: callback => {
+      const handle = nextHandle
+      nextHandle += 1
+      callbacks.set(handle, callback)
+      return handle
+    },
+    cancel: handle => {
+      callbacks.delete(handle)
+    },
+    runFrame: () => {
+      const due = [...callbacks.values()]
+      callbacks.clear()
+      for (const callback of due) callback()
+    },
+  }
+}
+
+/** Counts every box the pane is asked for, scroller and rows alike. */
+function countBoxes(pane: FakePane): () => number {
+  let boxes = 0
+  const count = (element: Element): void => {
+    const read = element.getBoundingClientRect.bind(element)
+    Object.defineProperty(element, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => {
+        boxes += 1
+        return read()
+      },
+    })
+  }
+  count(pane.scroller)
+  const rows = pane.scroller.firstElementChild?.children
+  for (let index = 0; index < (rows?.length ?? 0); index += 1) {
+    const row = rows?.item(index)
+    if (row) count(row)
+  }
+  return () => boxes
+}
+
+const LONG_ROW_COUNT = 2_000
+const LONG_ROW_HEIGHT = 40
+
+function longPane(): FakePane {
+  return createFakePane({
+    rowOffsets: Array.from(
+      { length: LONG_ROW_COUNT },
+      (_, index) => index * LONG_ROW_HEIGHT,
+    ),
+    viewportHeight: 600,
+    contentHeight: LONG_ROW_COUNT * LONG_ROW_HEIGHT,
+  })
+}
+
+test('a dragged pane measures once per frame, not once per scroll event', () => {
+  const pane = longPane()
+  const boxes = countBoxes(pane)
+  const frames = manualFrames()
+  const pump = createTranscriptScrollCapturePump(frames)
+  const reported: TranscriptScrollAnchor[] = []
+
+  // The scroll handler's work, at the rate a dragged scrollbar delivers it:
+  // several events inside one frame, none of them at the bottom.
+  for (let event = 0; event < 8; event += 1) {
+    pane.scroller.scrollTop = 20_000 + event * 37
+    pump.request(() => {
+      reported.push(
+        captureTranscriptScrollAnchor(pane.scroller, {
+          atBottom: false,
+          rowsToken: TOKEN,
+        }),
+      )
+    })
+  }
+  expect(boxes()).toBe(0)
+
+  frames.runFrame()
+  const burst = boxes()
+  expect(reported).toEqual([
+    { kind: 'row', rowsToken: TOKEN, rowIndex: 506, offsetIntoRow: 19 },
+  ])
+
+  // What one capture costs on a transcript this long: a binary search over
+  // 2,000 rows, plus the row it lands on, plus the scroller's own origin. The
+  // burst of eight events paid that ONCE. Unthrottled it was paid eight times,
+  // while the reader dragged.
+  const before = boxes()
+  captureTranscriptScrollAnchor(pane.scroller, {
+    atBottom: false,
+    rowsToken: TOKEN,
+  })
+  const oneCapture = boxes() - before
+  expect(oneCapture).toBe(13)
+  expect(burst).toBe(oneCapture)
+})
+
+test('the position of the last event before an unbind survives the unbind', () => {
+  const pane = longPane()
+  const frames = manualFrames()
+  const pump = createTranscriptScrollCapturePump(frames)
+  const reported: TranscriptScrollAnchor[] = []
+  const scroll = (scrollTop: number): void => {
+    pane.scroller.scrollTop = scrollTop
+    pump.request(() => {
+      if (!pane.scroller.isConnected) return
+      reported.push(
+        captureTranscriptScrollAnchor(pane.scroller, {
+          atBottom: false,
+          rowsToken: TOKEN,
+        }),
+      )
+    })
+  }
+
+  scroll(20_000)
+  frames.runFrame()
+  // The frame this one is waiting for never arrives: the pane unbinds first.
+  scroll(30_000)
+  pump.flush()
+
+  expect(reported).toEqual([
+    { kind: 'row', rowsToken: TOKEN, rowIndex: 500, offsetIntoRow: 0 },
+    { kind: 'row', rowsToken: TOKEN, rowIndex: 750, offsetIntoRow: 0 },
+  ])
+
+  // And the pane that has already lost its rows reports nothing rather than the
+  // zeros a detached box measures, leaving the frame-old position standing.
+  scroll(10_000)
+  pane.scroller.remove()
+  frames.runFrame()
+  expect(reported).toHaveLength(2)
 })

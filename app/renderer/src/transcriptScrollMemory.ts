@@ -200,6 +200,77 @@ export function captureTranscriptScrollAnchor(
   })
 }
 
+/** The frame clock, injected so the coalescing below is provable without one. */
+export type TranscriptScrollFrames = {
+  request: (callback: () => void) => number
+  cancel: (handle: number) => void
+}
+
+/**
+ * Holds a pane's pending capture, so a drag of the scrollbar measures the pane
+ * once per FRAME instead of once per scroll event.
+ *
+ * WHY. A pane that is not at the end is measured by binary search
+ * (`findTopRowIndex`), so one capture costs about `log2(rowCount) + 1` forced
+ * layout reads — a dozen on a long transcript. Scroll events arrive at the
+ * native scroll rate, several per frame while a reader drags, and every one of
+ * them was paying that. Nothing consumes the anchor between frames: it is read
+ * when the pane unbinds, so a capture that a later event supersedes inside the
+ * same frame was work no one could see.
+ *
+ * WHAT IT RETAINS. One handle and one closure per pane, and the closure is
+ * dropped the moment it runs. There is deliberately no queue, no history and no
+ * per-frame allocation held past the frame (CC-59: the renderer's last memory
+ * incident was an unbounded per-frame structure, so a fix for a per-event cost
+ * must not introduce one).
+ */
+export type TranscriptScrollCapturePump = {
+  /**
+   * Note that the pane moved. `capture` runs on the next frame, unless a later
+   * event replaces it first — the last position of the frame is the true one.
+   */
+  request: (capture: () => void) => void
+  /**
+   * Run the pending capture NOW and stop the frame it was waiting for. For a
+   * pane about to lose its DOM: the frame would land after the rows are gone,
+   * and the position of the last event before an unbind is exactly the one
+   * worth keeping.
+   */
+  flush: () => void
+}
+
+const browserFrames: TranscriptScrollFrames = {
+  request: callback => globalThis.requestAnimationFrame(callback),
+  cancel: handle => {
+    globalThis.cancelAnimationFrame(handle)
+  },
+}
+
+export function createTranscriptScrollCapturePump(
+  frames: TranscriptScrollFrames = browserFrames,
+): TranscriptScrollCapturePump {
+  let handle: number | null = null
+  let pending: (() => void) | null = null
+  const run = (): void => {
+    const capture = pending
+    handle = null
+    pending = null
+    capture?.()
+  }
+  return {
+    request: capture => {
+      pending = capture
+      if (handle !== null) return
+      handle = frames.request(run)
+    },
+    flush: () => {
+      if (handle === null) return
+      frames.cancel(handle)
+      run()
+    },
+  }
+}
+
 /**
  * Puts a rebinding pane back and reports what it did, so its caller sets the
  * stick-to-bottom flag from the same decision rather than a second one.

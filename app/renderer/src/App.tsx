@@ -2,6 +2,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useReducer,
   useRef,
@@ -105,11 +106,13 @@ import { TranscriptView, type RestorePhase } from './TranscriptView.js'
 import { observePaneBottomLock } from './markdownScrollCoordinator.js'
 import {
   captureTranscriptScrollAnchor,
+  createTranscriptScrollCapturePump,
   createTranscriptScrollMemoryState,
   reduceTranscriptScrollMemoryState,
   restoreTranscriptScroll,
   selectTranscriptScrollAnchor,
   type TranscriptScrollAnchor,
+  type TranscriptScrollCapturePump,
   type TranscriptScrollMemoryState,
 } from './transcriptScrollMemory.js'
 import { ReasoningLayoutContext } from './reasoningLayout.js'
@@ -4479,6 +4482,11 @@ export function SessionPane({
     atBottomRef.current = next
     setAtBottom(next)
   }
+  // One pump for the pane's lifetime, built on first use so a render that never
+  // scrolls (every server render among them) builds nothing.
+  const scrollCapturePumpRef = useRef<TranscriptScrollCapturePump | null>(null)
+  const scrollCapturePump = (): TranscriptScrollCapturePump =>
+    (scrollCapturePumpRef.current ??= createTranscriptScrollCapturePump())
   const [stopError, setStopError] = useState<string | null>(null)
   const generating = !!activeSessionId && isTurnRunning(activeConnection)
   // CC-16 — the composer's three gates, kept apart: `engineInputEnabled` sends
@@ -4506,12 +4514,25 @@ export function SessionPane({
   // `deriveActivity` and the token estimate share one projection.
   const nestedRows = selectNestedTranscriptRows(transcript, activeSessionId)
   const activity = deriveActivity(nestedRows)
-  // Names the head of the row list the scroll memory's row index counts from.
-  // The three inputs are everything that can renumber the list without the
-  // reader touching it: the oldest surviving row (history truncated behind a
-  // boundary row), the hidden-row reveal, and the reasoning layout, which is
-  // what decides how many rows a run of reasoning renders as. A pane with no
-  // rows has no head, and no anchor is taken from one.
+  // Names the head of the row list the scroll memory's row index counts from:
+  // the oldest surviving row (history truncated behind a boundary row), the
+  // hidden-row reveal, and the reasoning layout, which is what decides how many
+  // rows a run of reasoning renders as. A pane with no rows has no head, and no
+  // anchor is taken from one.
+  //
+  // These three do NOT cover everything that can renumber the list, and the
+  // token does not pretend to. What the anchor indexes is the DOM list, which is
+  // the display items `TranscriptView` groups these nested rows into
+  // (`groupToolRuns(groupDisplayItems(groupAgentDelegates(rows), reasoningMode))`),
+  // so a regrouping alone moves indices without moving this token. It is safe
+  // for one reason: the projector store is APPEND-ONLY, so every regrouping
+  // happens at the tail of the list, below any row an earlier capture could be
+  // anchored to.
+  //
+  // A change that lets the projector insert rows anywhere but the tail (loading
+  // earlier history into the head is the planned one,
+  // `docs/migration/decisions/HISTORY-LOAD-EARLIER.md` B5) breaks index-based
+  // anchoring outright, and this token is not what would catch it.
   const paneRows = selectNestedTranscriptRows(
     transcript,
     activeSessionId,
@@ -4637,6 +4658,19 @@ export function SessionPane({
     if (!el) return
     return observePaneBottomLock(el, () => atBottomRef.current)
   }, [])
+
+  // Unbinding is the one moment the anchor is READ, so a capture still waiting
+  // on a frame has to happen first, or the last stretch of a drag is the part
+  // that gets forgotten. A LAYOUT effect for the reason the scroll handler
+  // measures at all: React removes a deleted subtree's nodes after running this
+  // cleanup, so the rows are still there to measure here, and gone by the time
+  // a passive cleanup or the frame itself would have run.
+  useLayoutEffect(() => {
+    const pump = scrollCapturePump()
+    return () => {
+      pump.flush()
+    }
+  }, [activeSessionId])
   // Derived from the RENDERED transcript, never from `activeLog`: the raw log is
   // capped per session, so once it fills, `messages.length` pins at the cap and
   // any message that does not also move `partialCount` yields an identical
@@ -4720,17 +4754,25 @@ export function SessionPane({
     const gap = el.scrollHeight - el.scrollTop - el.clientHeight
     const nextAtBottom = gap < 120
     applyAtBottom(nextAtBottom)
-    // Reported here rather than at unmount: a pane's DOM is already gone by the
-    // time its cleanup runs, and this is the last moment the position it holds
-    // can still be measured.
-    if (activeSessionId && onScrollAnchorChange) {
-      onScrollAnchorChange(
+    // Measured from a scroll event rather than at unmount, because a pane's DOM
+    // is already gone by the time its ordinary cleanup runs — but COALESCED to
+    // one measurement per frame (`createTranscriptScrollCapturePump` states the
+    // cost it is dropping). Nothing reads the anchor between frames, so of the
+    // several events a single dragged frame delivers only the last one is real.
+    if (!activeSessionId || !onScrollAnchorChange) return
+    const report = onScrollAnchorChange
+    scrollCapturePump().request(() => {
+      // A frame that survived past the rows measures a detached box, which is
+      // zeros: the previously reported position, at most a frame old, is the
+      // truer answer.
+      if (!el.isConnected) return
+      report(
         captureTranscriptScrollAnchor(el, {
           atBottom: nextAtBottom,
           rowsToken: paneRowsToken,
         }),
       )
-    }
+    })
   }
   const jumpToBottom = (): void => {
     const el = transcriptScrollRef.current

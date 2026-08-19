@@ -9,6 +9,7 @@ import {
   selectSlashCommands,
   selectTranscriptDisplayItems,
   selectTranscriptRows,
+  type NestedTranscriptRow,
 } from './transcriptProjector.js'
 import {
   AGENT_WITH_NESTED_SUBAGENT_TURN,
@@ -4040,3 +4041,22 @@ test('a late child row un-labels the card rather than serving the cached one', (
   expect(row?.stepsNotLoaded).toBeUndefined()
   expect(row?.children).toHaveLength(1)
 })
+
+/**
+ * Compile-time half of the same fact: the flag is declared on the agent card's
+ * arm of the union, so the rows that can never carry it cannot be asked about
+ * it either. Each `@ts-expect-error` below fails the typecheck the moment the
+ * flag is widened back across the whole union — `bun test` cannot see this, only
+ * `bun run --cwd app typecheck` can.
+ */
+type NestedRowOfKind<Kind extends NestedTranscriptRow['kind']> = Extract<
+  NestedTranscriptRow,
+  { kind: Kind }
+>
+type _AgentCardCarriesIt = NestedRowOfKind<'tool-use'>['stepsNotLoaded']
+// @ts-expect-error — prose is not an agent card.
+type _ProseDoesNot = NestedRowOfKind<'assistant-text'>['stepsNotLoaded']
+// @ts-expect-error — the retention boundary describes the pane, not a run.
+type _BoundaryDoesNot = NestedRowOfKind<'history-boundary'>['stepsNotLoaded']
+// @ts-expect-error — the orphan placeholder is the missing card, not a loaded one.
+type _OrphanDoesNot = NestedRowOfKind<'orphaned-agent'>['stepsNotLoaded']

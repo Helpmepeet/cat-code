@@ -718,32 +718,41 @@ export function selectSlashCommands(
  * is gathered under a synthetic `OrphanedAgentRow`, so subagent traffic still
  * reads as subagent traffic when its card is gone.
  */
-export type NestedTranscriptRow = (
-  | TranscriptRow
-  | OrphanedAgentRow
-  | HistoryBoundaryRow
-) & {
-  children: NestedTranscriptRow[]
+export type NestedTranscriptRow =
   /**
-   * This Agent card's own steps are MISSING, not absent: the agent ran and
-   * answered, and the transcript this pane holds is known to be incomplete.
-   *
-   * The mirror image of `OrphanedAgentRow`. That one is a surviving branch whose
-   * card was dropped; this one is a surviving card whose branch was dropped —
-   * a restored pane loads subagent branches only into whatever room the main
-   * transcript left, so a long session comes back with its Agent cards intact
-   * and empty (`app/sidecar/subagentHistory.ts` `withRestoredSubagentHistory`;
-   * `docs/migration/reviews/2026-08-19-transcript-message-visibility-ux-review.md`
-   * finding 5). Nothing on the wire says so, and the card is otherwise
-   * indistinguishable from an agent that ran and produced nothing.
-   *
-   * DERIVED at read time from `TranscriptSessionState.historyTruncated` plus the
-   * session's own rows, like the boundary and orphan placeholders: nothing is
-   * stored and no stored row is rewritten. Absent unless it is true, so every
-   * card in a whole transcript keeps exactly the shape it had.
+   * `stepsNotLoaded` sits on THIS arm alone, not on the whole union. Only an
+   * agent tool-use row can ever carry it (`hasUnloadedSteps`), and declaring it
+   * union-wide let prose rows, the boundary row and the orphan placeholder be
+   * asked a question none of them can answer.
    */
-  stepsNotLoaded?: true
-}
+  | (ToolUseRow & {
+      children: NestedTranscriptRow[]
+      /**
+       * This Agent card's own steps are MISSING, not absent: the agent ran and
+       * answered, and the transcript this pane holds is known to be incomplete.
+       *
+       * The mirror image of `OrphanedAgentRow`. That one is a surviving branch
+       * whose card was dropped; this one is a surviving card whose branch was
+       * dropped — a restored pane loads subagent branches only into whatever
+       * room the main transcript left, so a long session comes back with its
+       * Agent cards intact and empty (`app/sidecar/subagentHistory.ts`
+       * `withRestoredSubagentHistory`;
+       * `docs/migration/reviews/2026-08-19-transcript-message-visibility-ux-review.md`
+       * finding 5). Nothing on the wire says so, and the card is otherwise
+       * indistinguishable from an agent that ran and produced nothing.
+       *
+       * DERIVED at read time from `TranscriptSessionState.historyTruncated` plus
+       * the session's own rows, like the boundary and orphan placeholders:
+       * nothing is stored and no stored row is rewritten. Absent unless it is
+       * true, so every card in a whole transcript keeps exactly the shape it had.
+       */
+      stepsNotLoaded?: true
+    })
+  | (Exclude<TranscriptRow, { kind: 'tool-use' }> & {
+      children: NestedTranscriptRow[]
+    })
+  | (OrphanedAgentRow & { children: NestedTranscriptRow[] })
+  | (HistoryBoundaryRow & { children: NestedTranscriptRow[] })
 
 /**
  * The top of an INCOMPLETE transcript: everything before it is not loaded.
@@ -1017,7 +1026,7 @@ function collectReferencedParentIds(
 function hasUnloadedSteps(
   row: TranscriptRow,
   parentsWithRows: ReadonlySet<string>,
-): boolean {
+): row is ToolUseRow {
   return (
     row.kind === 'tool-use' &&
     row.toolFamily === 'agent' &&
@@ -1038,7 +1047,7 @@ function hasUnloadedSteps(
  * a tool-use row that has resolved is rebuilt on every read anyway, because
  * `selectTranscriptRows` joins its status and result in from the correlation map.
  */
-function unloadedStepsRow(row: TranscriptRow): NestedTranscriptRow {
+function unloadedStepsRow(row: ToolUseRow): NestedTranscriptRow {
   return { ...row, children: [], stepsNotLoaded: true }
 }
 
