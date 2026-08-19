@@ -215,6 +215,11 @@ async function runProductionHardeningSmoke(
       // one-way sender; the renderer authors only a correlation id, so it names
       // no target and cannot reach a subagent's queued work.
       'recallPrompts',
+      // Load earlier messages (decisions/HISTORY-LOAD-EARLIER.md). Fixed one-way
+      // sender; the renderer authors only a correlation id, so it names no file,
+      // no offset and no extent. The sidecar resolves the transcript from its own
+      // session identity and owns the ceiling and the in-flight guard.
+      'loadEarlierHistory',
       'workspaceTrustVerb',
       'remoteSettingsVerb',
       'rendererReady',

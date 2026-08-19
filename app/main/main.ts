@@ -139,6 +139,7 @@ import {
   RUN_CONTROL_VERB_TYPES,
   SESSION_ACTION_VERB_TYPES,
   CONTEXT_BREAKDOWN_VERB_TYPES,
+  HISTORY_LOAD_EARLIER_VERB_TYPES,
   SETTINGS_VERB_TYPES,
   TASK_CONTROL_VERB_TYPES,
   WORKSPACE_TRUST_VERB_TYPES,
@@ -157,6 +158,8 @@ import {
   type SessionActionVerbType,
   type ContextBreakdownVerbType,
   type ContextBreakdownVerbMessage,
+  type HistoryLoadEarlierVerbType,
+  type HistoryLoadEarlierMessage,
   type ErrorFrame,
   type SessionId,
   type SessionsCatalogSnapshot,
@@ -185,6 +188,7 @@ const CH_TASK_CONTROL_VERB = 'catcode:task-control-verb'
 const CH_RUN_CONTROL_VERB = 'catcode:run-control-verb'
 const CH_PROMPT_RECALL = 'catcode:prompt-recall'
 const CH_CONTEXT_BREAKDOWN_VERB = 'catcode:context-breakdown-verb'
+const CH_HISTORY_LOAD_EARLIER = 'catcode:history-load-earlier'
 const CH_SESSION_ACTION_VERB = 'catcode:session-action-verb'
 const CH_REMOTE_SETTINGS_VERB = 'catcode:remote-settings-verb'
 const CH_SETTINGS_VERB = 'catcode:settings-verb'
@@ -1732,6 +1736,30 @@ function registerIpcHandlers(): void {
         return
       }
       forward(arg.sessionId, arg.verb as PromptRecallMessage)
+    },
+  )
+
+  ipcMain.on(
+    CH_HISTORY_LOAD_EARLIER,
+    (_e, arg: { sessionId: SessionId; verb: unknown }) => {
+      if (typeof arg?.sessionId !== 'string') return
+      // Load earlier messages (decisions/HISTORY-LOAD-EARLIER.md) — light UX
+      // coercion only; the SIDECAR is the trust boundary and fully re-validates
+      // (Zod schema + closed key allowlist), then decides for itself which file
+      // it reads and how much of it. Drop any frame whose `type` is not the
+      // load-earlier verb fail-closed. There is no other field to coerce: the
+      // verb carries no target and no extent, only the renderer's `requestId`
+      // for result correlation (a UX field, not a security one).
+      const verb = arg.verb as { type?: unknown } | null | undefined
+      if (
+        typeof verb?.type !== 'string' ||
+        !HISTORY_LOAD_EARLIER_VERB_TYPES.includes(
+          verb.type as HistoryLoadEarlierVerbType,
+        )
+      ) {
+        return
+      }
+      forward(arg.sessionId, arg.verb as HistoryLoadEarlierMessage)
     },
   )
 

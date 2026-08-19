@@ -179,6 +179,12 @@ const FRAME_RETENTION: Record<ServerFrame['kind'], FrameRetention> = {
   // it did not mint the requestId for, so an evicting ring is the only thing
   // this classification has to get right.
   'prompt-recall.result': 'ring',
+  // Ring, same request-scoped reasoning: it closes ONE load-earlier the user
+  // asked for, addressed to a requestId that reader minted. The messages it
+  // completes ride `event` frames and are retained as transcript traffic like
+  // every other event; pinning the completion itself would replay a finished
+  // answer to every later attach.
+  'history.loadEarlier.result': 'ring',
 }
 
 /** The once-per-attach kinds that survive ring eviction, for tests + callers. */

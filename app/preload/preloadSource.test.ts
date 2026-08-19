@@ -62,6 +62,12 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
     "const CH_CONTEXT_BREAKDOWN_VERB = 'catcode:context-breakdown-verb'",
   )
   expect(source).toContain('contextBreakdownVerb(')
+  // Load-earlier read sender rides its own fixed channel (HC3). Carries only a
+  // requestId: the sidecar owns which transcript is read and how much of it.
+  expect(source).toContain(
+    "const CH_HISTORY_LOAD_EARLIER = 'catcode:history-load-earlier'",
+  )
+  expect(source).toContain('loadEarlierHistory(')
   // P4-8b — task-control (worker Stop/kill) verb sender rides its own fixed channel (HC3).
   expect(source).toContain("const CH_TASK_CONTROL_VERB = 'catcode:task-control-verb'")
   expect(source).toContain(
@@ -73,11 +79,11 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
     "const CH_HOST_OPEN_HISTORY = 'catcode:host:open-history'",
   )
   expect(source).toContain('openHistorySession(')
-  // 19 frame-plane senders (including the fixed metadata-only delivery ack; no
+  // 20 frame-plane senders (including the fixed metadata-only delivery ack; no
   // generic logging IPC) (incl. P4-5 accountVerb + P4-15 workspaceTrustVerb +
   // P4-8b setAgentMode + P4-8b taskControlVerb + P4-13 remoteSettingsVerb + P4-19
   // settingsVerb + P4-24c runControlVerb + P4-6b sessionActionVerb + C5/P4-20
-  // answerQuestions + contextBreakdownVerb + D1b recallPrompts) + 10 payload-bearing control-plane
+  // answerQuestions + contextBreakdownVerb + D1b recallPrompts + loadEarlierHistory) + 10 payload-bearing control-plane
   // senders plus openWorkspaceFile + the DEV-only
   // debug-state sender (compiled out of the packaged preload.cjs). (pickDirectory/
   // createSession/createSessionInWorkspace/restoreSession/closeSession/listSessions/
@@ -93,7 +99,7 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
     "const CH_HOST_VISIBLE_SESSIONS = 'catcode:host:visible-sessions'",
   )
   expect(source).toContain('reportVisibleSessions(sessionIds: SessionId[]): void')
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(37)
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(38)
   // D1b — the recall sender is fixed and one-way like the rest (HC3).
   expect(source).toContain("const CH_PROMPT_RECALL = 'catcode:prompt-recall'")
   expect(source).toContain(

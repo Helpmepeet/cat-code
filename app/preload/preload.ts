@@ -27,6 +27,7 @@ import type {
   RunControlVerbMessage,
   SessionActionVerbMessage,
   ContextBreakdownVerbMessage,
+  HistoryLoadEarlierMessage,
   ServerFrame,
   SessionId,
   SessionsCatalogSnapshot,
@@ -66,6 +67,7 @@ const CH_TASK_CONTROL_VERB = 'catcode:task-control-verb'
 const CH_RUN_CONTROL_VERB = 'catcode:run-control-verb'
 const CH_PROMPT_RECALL = 'catcode:prompt-recall'
 const CH_CONTEXT_BREAKDOWN_VERB = 'catcode:context-breakdown-verb'
+const CH_HISTORY_LOAD_EARLIER = 'catcode:history-load-earlier'
 const CH_SESSION_ACTION_VERB = 'catcode:session-action-verb'
 const CH_REMOTE_SETTINGS_VERB = 'catcode:remote-settings-verb'
 const CH_SETTINGS_VERB = 'catcode:settings-verb'
@@ -309,6 +311,23 @@ const bridge: CatCodeBridge = {
     const payload = { sessionId, verb }
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_PROMPT_RECALL, payload)
+  },
+  loadEarlierHistory(
+    sessionId: SessionId,
+    verb: HistoryLoadEarlierMessage,
+  ): void {
+    // HC3 fixed sender for the load-earlier read
+    // (decisions/HISTORY-LOAD-EARLIER.md). As thin as `recallPrompts`: the
+    // payload is a requestId and nothing else, because the verb has no target
+    // and no extent. The renderer cannot name a file, an offset or a count, so
+    // the only thing crossing is the intent to read further back. main
+    // light-coerces the type and the sidecar is the trust boundary (Zod schema
+    // + closed key allowlist + its own in-flight guard). What comes back is the
+    // existing `replay: true` event vocabulary, closed by one
+    // `history.loadEarlier.result`.
+    const payload = { sessionId, verb }
+    sendGuard.assertAllowed(payload)
+    ipcRenderer.send(CH_HISTORY_LOAD_EARLIER, payload)
   },
   contextBreakdownVerb(
     sessionId: SessionId,

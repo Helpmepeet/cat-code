@@ -99,6 +99,7 @@ import {
   RUN_CONTROL_VERB_TYPES,
   SESSION_ACTION_VERB_TYPES,
   CONTEXT_BREAKDOWN_VERB_TYPES,
+  HISTORY_LOAD_EARLIER_VERB_TYPES,
   TASK_CONTROL_VERB_TYPES,
   type AccountVerbMessage,
   type AskUserQuestionAnswerMessage,
@@ -121,6 +122,10 @@ import {
   EDITABLE_SETTING_SOURCES,
   validateEditableSettingWrite,
 } from '../shared/settingsEditable.js'
+import {
+  readEarlierDisplayHistory,
+  type HistoryLoadEarlierReader,
+} from './historyLoadEarlier.js'
 import type { SidecarPermissionDomain } from './permissionDomain.js'
 import type { SidecarSettingsDomain } from './settingsDomain.js'
 import type { SidecarAgentConfigDomain } from './agentConfigDomain.js'
@@ -366,6 +371,15 @@ export type SidecarServerOptions = {
   history?: readonly SDKMessage[]
   /** Display loader omitted an older archival prefix before wire capping. */
   historySourceTruncated?: boolean
+  /**
+   * The deeper transcript read behind `history.loadEarlier`
+   * (decisions/HISTORY-LOAD-EARLIER.md). Defaults to the REAL engine-backed
+   * reader (`historyLoadEarlier.ts`), so production never has to remember to
+   * wire it and a stubbed one is only ever a deliberate test choice. It takes no
+   * arguments on purpose: the transcript is resolved from the engine's own live
+   * session identity, never from frame content.
+   */
+  loadEarlierHistory?: HistoryLoadEarlierReader
   /** True when resume detected a turn that ended before an assistant response. */
   turnInterrupted?: boolean
   /**
@@ -472,6 +486,22 @@ export class SidecarServer {
   private readonly slashCatalog: readonly SlashCatalogEntry[]
   private readonly history: readonly SDKMessage[]
   private readonly historySourceTruncated: boolean
+  private readonly loadEarlierHistory: HistoryLoadEarlierReader
+  /**
+   * The oldest message this session has already put on the wire as restored
+   * history, and therefore the point a deeper read has to reach BACK from. Set
+   * once, from the first attach's retained tail (which is what the caps actually
+   * kept, not what was loaded), and moved further back by each successful
+   * `history.loadEarlier`. Null means nothing was restored from disk at all, so
+   * there is no earlier to reach for.
+   */
+  private loadEarlierAnchorUuid: string | null = null
+  /**
+   * One deeper read per session at a time (decisions/HISTORY-LOAD-EARLIER.md
+   * §Bounds). Enforced HERE and not in the renderer's disabled control, per
+   * SECURITY-MINIMUM R2: renderer-side checks are UX, never the boundary.
+   */
+  private loadEarlierInFlight = false
   private readonly turnInterrupted: boolean
   private readonly idleTtlMs: number
   private readonly onIdle: (() => void) | null
@@ -636,6 +666,8 @@ export class SidecarServer {
     this.slashCatalog = options.slashCatalog ?? []
     this.history = options.history ?? []
     this.historySourceTruncated = options.historySourceTruncated ?? false
+    this.loadEarlierHistory =
+      options.loadEarlierHistory ?? readEarlierDisplayHistory
     this.turnInterrupted = options.turnInterrupted ?? false
     this.idleTtlMs = options.idleTtlMs ?? 0
     this.onIdle = options.onIdle ?? null
@@ -998,6 +1030,7 @@ export class SidecarServer {
 
     const retained: ServerFrame[] = []
     let retainedBytes = 0
+    let oldestRetainedUuid: string | undefined
     let truncated = this.historySourceTruncated
     // Walk newest → oldest so the cap keeps the most recent history. Stop (not
     // skip) at the first frame that would overflow: a contiguous newest tail,
@@ -1032,6 +1065,19 @@ export class SidecarServer {
       }
       retained.push(frame)
       retainedBytes += frameBytes
+      // Walking newest -> oldest, so the LAST message accepted is the oldest one
+      // this session ever put on the wire. That, not the loaded array, is where
+      // `history.loadEarlier` has to reach back from: the caps may have dropped
+      // an older prefix that was loaded but never sent, and that prefix is
+      // exactly what the deeper read exists to recover. Set once (the first
+      // attach); later attaches replay the same tail, and a successful deeper
+      // read moves it further back.
+      if (typeof message.uuid === 'string') {
+        oldestRetainedUuid = message.uuid
+      }
+    }
+    if (this.loadEarlierAnchorUuid === null && oldestRetainedUuid !== undefined) {
+      this.loadEarlierAnchorUuid = oldestRetainedUuid
     }
     retained.reverse()
 
@@ -1335,6 +1381,21 @@ export class SidecarServer {
       (CONTEXT_BREAKDOWN_VERB_TYPES as readonly string[]).includes(messageType)
     ) {
       this.handleContextBreakdownRequest(frame.message)
+      return
+    }
+
+    // The load-earlier read verb (decisions/HISTORY-LOAD-EARLIER.md) is
+    // app-owned vocabulary validated by a sidecar-LOCAL schema, like C2 and the
+    // context-breakdown request. It carries NO renderer-authored state beyond a
+    // correlation id, so acceptance decides only WHETHER to spend a deeper read
+    // of THIS session's own transcript, never which file is read or how much of
+    // it. The engine's shared `appClientMessageSchema` is deliberately NOT
+    // extended.
+    if (
+      typeof messageType === 'string' &&
+      (HISTORY_LOAD_EARLIER_VERB_TYPES as readonly string[]).includes(messageType)
+    ) {
+      void this.handleHistoryLoadEarlier(connection, frame.message)
       return
     }
 
@@ -3904,6 +3965,181 @@ export class SidecarServer {
     void this.broadcastContextBreakdown()
   }
 
+  /**
+   * Load earlier messages (decisions/HISTORY-LOAD-EARLIER.md).
+   *
+   * Re-reads THIS session's display transcript through the engine's own loader
+   * with a larger budget, diffs it against what has already gone out, and emits
+   * only the missing prefix as ordinary `replay: true` event frames — the same
+   * vocabulary `sendHistoryReplay` uses, through the same outbound path
+   * (prepareOutboundPayload's clone + JSON-safe assert, then send's secretGuard
+   * and size cap). No new outbound transcript shape comes into existence.
+   *
+   * Three things are decided here rather than trusted from the frame: WHICH
+   * file (the reader resolves it from the engine's live session identity), HOW
+   * MUCH of it (the ceiling in `limits.ts`), and WHETHER a read may start at all
+   * (one in flight per session; a second is refused, never queued, because each
+   * one re-reads the whole transcript and two interleaved prefixes on one socket
+   * would be indistinguishable from a gap).
+   *
+   * The answer is unicast to the asking connection: it settles a click that
+   * reader made, and a second reader's own view is already whole or has its own
+   * control to press.
+   */
+  private async handleHistoryLoadEarlier(
+    connection: Connection,
+    rawMessage: unknown,
+  ): Promise<void> {
+    const raw = rawMessage as { requestId?: unknown }
+    const rawRequestId =
+      typeof raw?.requestId === 'string' ? raw.requestId : undefined
+
+    // IDLE-PARK — same first line as `handleSubmit`/`handlePromptRecall`. A
+    // latched sidecar is exiting, so a read started here would finish onto a
+    // connection that is going away.
+    if (this.parking) {
+      this.sendError(
+        connection,
+        rawRequestId,
+        'session_disconnected',
+        'session parking',
+        true,
+      )
+      return
+    }
+
+    const parsed = historyLoadEarlierMessageSchema.safeParse(rawMessage)
+    if (!parsed.success) {
+      this.sendError(
+        connection,
+        rawRequestId,
+        'bad_request',
+        parsed.error.issues[0]?.message ?? 'invalid history.loadEarlier verb',
+        false,
+      )
+      return
+    }
+    const { requestId } = parsed.data
+
+    if (this.loadEarlierInFlight) {
+      this.sendLoadEarlierResult(connection, requestId, {
+        ok: false,
+        message: 'Still loading earlier messages.',
+        added: 0,
+        complete: false,
+      })
+      return
+    }
+
+    // Nothing was restored from disk for this session, so there is no earlier
+    // to reach for: a fresh session's whole conversation is already on screen.
+    if (this.loadEarlierAnchorUuid === null) {
+      this.sendLoadEarlierResult(connection, requestId, {
+        ok: true,
+        message: 'No earlier messages to load.',
+        added: 0,
+        complete: !this.historySourceTruncated,
+      })
+      return
+    }
+
+    this.loadEarlierInFlight = true
+    try {
+      const read = await this.loadEarlierHistory(line => this.log(line))
+      if (this.closed || connection.closed) return
+
+      const anchorIndex = read.messages.findIndex(
+        message => message.uuid === this.loadEarlierAnchorUuid,
+      )
+      if (anchorIndex < 0) {
+        // The deeper read could not find the message the reader is currently
+        // oldest on, so there is no prefix that is provably missing rather than
+        // duplicated. Refuse instead of guessing: inbound fails closed.
+        this.log(
+          '[sidecar] history.loadEarlier: replayed history not found in the deeper read',
+        )
+        this.sendLoadEarlierResult(connection, requestId, {
+          ok: false,
+          message: 'Earlier messages could not be loaded.',
+          added: 0,
+          complete: false,
+        })
+        return
+      }
+
+      const missing = read.messages.slice(0, anchorIndex)
+      let omitted = false
+      let oldestSentUuid: string | undefined
+      let added = 0
+      for (const message of missing) {
+        const prepared = this.prepareOutboundPayload(
+          createMessageEvent(message),
+          'event',
+          'load earlier',
+        )
+        if (!prepared) {
+          // Un-serializable recovered message: an omission, so the transcript
+          // above this point stays incomplete no matter what the loader said.
+          omitted = true
+          continue
+        }
+        this.send(connection, {
+          kind: 'event',
+          protocolVersion: PROTOCOL_VERSION,
+          sessionId: this.sessionId,
+          replay: true,
+          event: prepared,
+        })
+        added += 1
+        if (oldestSentUuid === undefined && typeof message.uuid === 'string') {
+          oldestSentUuid = message.uuid
+        }
+      }
+      // Only what actually went out moves the anchor, so a message dropped above
+      // stays recoverable by a later request rather than being skipped over.
+      if (oldestSentUuid !== undefined) {
+        this.loadEarlierAnchorUuid = oldestSentUuid
+      }
+      const complete = !read.truncated && !omitted
+      this.sendLoadEarlierResult(connection, requestId, {
+        ok: true,
+        message: loadEarlierMessage(added, complete),
+        added,
+        complete,
+      })
+    } catch (error) {
+      this.log(
+        `[sidecar] history.loadEarlier failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
+      if (!this.closed && !connection.closed) {
+        this.sendLoadEarlierResult(connection, requestId, {
+          ok: false,
+          message: 'Earlier messages could not be loaded.',
+          added: 0,
+          complete: false,
+        })
+      }
+    } finally {
+      this.loadEarlierInFlight = false
+    }
+  }
+
+  private sendLoadEarlierResult(
+    connection: Connection,
+    requestId: string,
+    outcome: { ok: boolean; message: string; added: number; complete: boolean },
+  ): void {
+    this.send(connection, {
+      kind: 'history.loadEarlier.result',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      requestId,
+      ...outcome,
+    })
+  }
+
   /** Frame + send one breakdown snapshot to every attached connection. */
   private sendContextBreakdown(raw: ContextBreakdownSnapshot): void {
     const breakdown = this.prepareOutboundPayload(
@@ -4777,6 +5013,11 @@ function checkStrictKeys(message: unknown): string | null {
     // The renderer authors NOTHING but a correlation id: the analysis reads
     // engine-side session state only. Any other key is rejected fail-closed.
     ['context-breakdown.request', new Set(['type', 'requestId'])],
+    // Load earlier messages (decisions/HISTORY-LOAD-EARLIER.md). Parameterless
+    // by decision: the renderer authors NOTHING but a correlation id, so there
+    // is no cursor, offset, count or path to forge. A frame carrying any other
+    // key is rejected fail-closed here, BEFORE the sidecar-local Zod parse.
+    ['history.loadEarlier', new Set(['type', 'requestId'])],
     ['app.ping', new Set(['type', 'nonce'])],
   ])
   // `submitId` is admitted (SubmitOptions.submitId): the renderer's own
@@ -4866,6 +5107,21 @@ const permissionSetModeMessageSchema = z.object({
  */
 const appParkMessageSchema = z.object({
   type: z.literal('app.park'),
+  requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+})
+
+/**
+ * Sidecar-LOCAL schema for `history.loadEarlier`
+ * (decisions/HISTORY-LOAD-EARLIER.md §Shape). App-owned, NOT part of the
+ * engine's shared `appClientMessageSchema`. The frame carries no
+ * renderer-authored state beyond a length-bounded `requestId`, and
+ * `checkStrictKeys` has already REJECTED (not stripped) any key beyond
+ * `{type, requestId}`, so this parse only enforces the value types. Everything
+ * the read is bounded by — which file, how many bytes, whether one is already
+ * running — is decided on this side of the boundary and appears nowhere here.
+ */
+const historyLoadEarlierMessageSchema = z.object({
+  type: z.literal('history.loadEarlier'),
   requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
 })
 
@@ -5059,6 +5315,22 @@ function promptRecallMessage(
   return alreadyDelivered === 1
     ? '1 message already went to the model, so it stayed.'
     : `${alreadyDelivered} messages already went to the model, so they stayed.`
+}
+
+/**
+ * The load-earlier outcome, in the user's terms. Says only what is surprising
+ * (CLAUDE.md §7): that more is still out of reach, or that there was nothing
+ * left to fetch. A successful, complete load says the plain thing and stops.
+ */
+function loadEarlierMessage(added: number, complete: boolean): string {
+  if (added === 0) {
+    return complete
+      ? 'No earlier messages to load.'
+      : 'No earlier messages could be loaded.'
+  }
+  return complete
+    ? 'Earlier messages loaded.'
+    : 'Earlier messages loaded. Some older ones are still out of reach.'
 }
 
 /**

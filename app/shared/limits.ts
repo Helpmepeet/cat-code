@@ -168,6 +168,43 @@ export const MAX_HISTORY_REPLAY_FRAMES = 4_000
 export const MAX_HISTORY_REPLAY_BYTES = 4 * 1024 * 1024
 
 /**
+ * Load-earlier read ceiling (decisions/HISTORY-LOAD-EARLIER.md §Bounds).
+ *
+ * The caps above are what a session replays on ATTACH, every time, for every
+ * session. This one is what a single user-initiated "load earlier messages"
+ * request is allowed to re-read from the transcript file, so it is sized for the
+ * whole conversation rather than for a per-attach budget. Nothing else uses it,
+ * and no cap above moves: the measurement that produced this number
+ * (`docs/reports/2026-08-19-transcript-retention-cap-measurement.md`) concluded
+ * the retention values are correctly sized and the defect is reporting, not
+ * retention.
+ *
+ * SIZING, from that report's 1,849-transcript corpus. Bytes per session: p50
+ * 326 KiB, p90 1.34 MiB, p99 4.32 MiB, max 18.1 MiB. 16 MiB clears p99 by
+ * roughly 3.7x, so an ordinary session is read whole in one bounded read, and
+ * sits just under the largest transcript that corpus contained — deliberately,
+ * because the ceiling has to bound a hostile-adjacent read too: every recovered
+ * message stays mounted for the life of the pane (no virtualization; CC-59
+ * Stage Two is deferred), so the ceiling is also the renderer's memory bound.
+ * A session past it recovers a prefix and reports that more remains, which is
+ * the honest outcome, not a failure.
+ *
+ * NO MESSAGE-COUNT CAP. Records per session in the same corpus: p50 82, p90
+ * 332, p99 1,075, max 2,988 — no session came within 25% of any count cap in
+ * this file, so a count here would never bind and could only truncate a session
+ * the byte budget already fits. `loadDisplayTranscriptFromJsonlPath` REQUIRES a
+ * `maxMessages`, so the disabling value is spelled out rather than left implicit:
+ * `chain.length > MAX_SAFE_INTEGER` is false for any real chain, which keeps the
+ * loader's `capped` flag off and leaves its `truncated` reporting purely about
+ * the byte ceiling above.
+ *
+ * Raising either of these re-opens the CC-59 memory gate (same decision doc,
+ * §Known cost). Do not raise them without it.
+ */
+export const MAX_HISTORY_LOAD_EARLIER_BYTES = 16 * 1024 * 1024
+export const MAX_HISTORY_LOAD_EARLIER_MESSAGES = Number.MAX_SAFE_INTEGER
+
+/**
  * IDLE-PARK (decisions/IDLE-PARK.md §2) — the sidecar's dedicated non-zero exit
  * code for a host-initiated park (alongside `RESUME_FAILED_EXIT_CODE` below). A
  * parked engine self-exits with THIS code; the host

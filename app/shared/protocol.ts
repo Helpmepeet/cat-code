@@ -474,10 +474,58 @@ export type AppParkMessage = {
   requestId: string
 }
 
+/* ------------------------------------------------------------------------- *
+ * Load earlier messages (decisions/HISTORY-LOAD-EARLIER.md)
+ * ------------------------------------------------------------------------- *
+ *
+ * The one inbound verb that reaches back to disk. A restored transcript is
+ * replayed under the `MAX_HISTORY_REPLAY_*` caps, so a long session opens on a
+ * TAIL and the rest of it — which exists, whole, in the engine's own JSONL —
+ * had no route back into the app at all. This verb is that route.
+ *
+ * PARAMETERLESS BY DECISION, and that is the entire security story. The frame
+ * names a session and a verb; it carries no cursor, no offset, no count, no
+ * path, so there is nothing on it for the sidecar to trust and nothing for a
+ * compromised renderer to aim. The sidecar owns every number: the read ceiling
+ * (`MAX_HISTORY_LOAD_EARLIER_BYTES`), how much is already on screen, and where
+ * the file is — the transcript path is resolved from the sidecar's OWN session
+ * identity via the engine's `getTranscriptPath()`, never from frame content
+ * (SECURITY-MINIMUM HC1's posture, applied to a read).
+ *
+ * Paging was rejected: the measured corpus has a 2,988-record maximum, so a
+ * whole real transcript fits one bounded read, and a cursor would buy nothing
+ * while putting a validated, attacker-reachable offset on the trust boundary.
+ *
+ * App-owned vocabulary — the engine's shared `appClientMessageSchema` is
+ * deliberately NOT extended (the WS server shares it and has no handler for
+ * this frame). The sidecar validates it with its own local Zod schema plus a
+ * closed `checkStrictKeys` entry that REJECTS any extra property rather than
+ * stripping it, and enforces one in-flight request per session at the boundary
+ * rather than trusting the renderer's disabled control. Additive under v1 — no
+ * `PROTOCOL_VERSION` bump.
+ */
+export const HISTORY_LOAD_EARLIER_VERB_TYPES = [
+  'history.loadEarlier',
+] as const
+
+export type HistoryLoadEarlierVerbType =
+  (typeof HISTORY_LOAD_EARLIER_VERB_TYPES)[number]
+
+/**
+ * Read further back into THIS session's transcript. Carries nothing but the
+ * T5a-analog `requestId`; the envelope supplies the protocol version and the
+ * session address.
+ */
+export type HistoryLoadEarlierMessage = {
+  type: 'history.loadEarlier'
+  requestId: string
+}
+
 /**
  * Everything a client may send toward a sidecar: the engine's allowlisted
  * vocabulary plus the app-owned C2 frame, the P4-5 account verbs, the P4-13
- * RemoteSettings verbs, the P4-19 settings write verb, and the IDLE-PARK frame.
+ * RemoteSettings verbs, the P4-19 settings write verb, the IDLE-PARK frame, and
+ * the load-earlier read verb.
  */
 export type SidecarClientMessage =
   | AppClientMessage
@@ -495,6 +543,7 @@ export type SidecarClientMessage =
   | StatsQueryMessage
   | PromptRecallMessage
   | AppParkMessage
+  | HistoryLoadEarlierMessage
 
 /**
  * The complete set of frames a client may send toward a sidecar. The `message`
@@ -2989,6 +3038,46 @@ export type SubmitResultFrame = {
   code?: ErrorFrame['code']
 }
 
+/**
+ * The answer to one `history.loadEarlier` (decisions/HISTORY-LOAD-EARLIER.md).
+ *
+ * The recovered messages do NOT ride this frame. They are emitted first, as
+ * ordinary `event` frames with `replay: true` — the same vocabulary the restore
+ * replay already uses — so the projector needs no new transcript shape and no
+ * new outbound kind carries conversation content. This frame is the completion
+ * signal that follows them, and it exists because two things cannot be derived
+ * renderer-side: how many messages the read actually recovered, and whether
+ * anything still sits above the ceiling.
+ *
+ * `complete` is the second one, and it comes from the loader's own `truncated`
+ * (`loadDisplayTranscriptFromJsonlPath`, `src/utils/sessionStorage.ts`), not
+ * from a count comparison the app would have to keep honest. When it is true
+ * the transcript is whole and the renderer's truncation-boundary row goes away;
+ * its absence is the completeness signal the user reads.
+ */
+export type HistoryLoadEarlierResultFrame = {
+  kind: 'history.loadEarlier.result'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  /** Echoes the verb's `requestId` (T5a-analog). */
+  requestId: string
+  /**
+   * True when the deeper read ran. False when it was refused (one is already in
+   * flight) or could not be completed — in that case `added` is 0 and
+   * `complete` is false, and nothing was emitted ahead of this frame.
+   */
+  ok: boolean
+  /** Redacted, human-readable outcome. NEVER a path, never token material. */
+  message: string
+  /** How many `replay: true` event frames were emitted just before this one. */
+  added: number
+  /**
+   * True when nothing remains above what the reader now holds. Only meaningful
+   * when `ok`; a refusal reports false because it learned nothing.
+   */
+  complete: boolean
+}
+
 export type ServerFramePayload =
   | ReadyFrame
   | SessionTitleFrame
@@ -3027,6 +3116,7 @@ export type ServerFramePayload =
   | QueuedPromptsSnapshotFrame
   | PromptRecallResultFrame
   | SubmitResultFrame
+  | HistoryLoadEarlierResultFrame
 
 /**
  * Metadata-only delivery envelope. Optional so an older sidecar remains
@@ -3084,6 +3174,7 @@ const SERVER_FRAME_KINDS: Record<ServerFrameKind, true> = {
   'queued-prompts.snapshot': true,
   'prompt-recall.result': true,
   'submit.result': true,
+  'history.loadEarlier.result': true,
 }
 
 export function isServerFrameKind(value: unknown): value is ServerFrameKind {
@@ -3299,6 +3390,20 @@ export type CatCodeBridge = {
    * No engine object, no path, no token crosses.
    */
   recallPrompts(sessionId: SessionId, verb: PromptRecallMessage): void
+  /**
+   * Read further back into the addressed session's transcript
+   * (decisions/HISTORY-LOAD-EARLIER.md). The renderer authors ONLY a
+   * `requestId`: there is no cursor, offset, count or path, so it cannot
+   * influence how much is read or from where. The sidecar re-reads through the
+   * engine's OWN display loader against the transcript it resolves from its own
+   * session identity, emits whatever is missing as `replay: true` event frames,
+   * and closes with a `history.loadEarlier.result`. One request per session may
+   * be in flight; a second is refused at the sidecar, not queued.
+   */
+  loadEarlierHistory(
+    sessionId: SessionId,
+    verb: HistoryLoadEarlierMessage,
+  ): void
   /** Ask for a fresh context breakdown; answered by a `context-breakdown.snapshot`. */
   contextBreakdownVerb(
     sessionId: SessionId,
