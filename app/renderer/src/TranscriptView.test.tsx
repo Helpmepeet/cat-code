@@ -3985,3 +3985,85 @@ test('CC-59: a folded reasoning run stays folded when its first member fills in'
   expect(render(streaming)).toContain('aria-expanded="false"')
   expect(render(settled)).toContain('aria-expanded="false"')
 })
+
+test('a restored Agent card whose steps did not survive says so, and quietly', () => {
+  // Built from the REAL projection, like the orphan guard above: the discriminator
+  // lives in the nesting selector, so hand-made rows would prove nothing.
+  let state = createTranscriptState()
+  state = projectServerFrame(state, {
+    kind: 'ready',
+    protocolVersion: 1,
+    sessionId: 's',
+    engineSessionId: 'engine-s',
+    payload: {
+      type: 'app.ready',
+      protocolVersion: 1,
+      inputEnabled: true,
+      activeTurn: false,
+      abort: { status: 'idle' },
+      goalSnapshot: null,
+      pendingPermissionRequests: [],
+    },
+  })
+  state = projectServerFrame(state, {
+    kind: 'error',
+    protocolVersion: 1,
+    sessionId: 's',
+    requestId: 'catcode.history-truncated',
+    code: 'internal_error',
+    message: 'Only the most recent messages are shown.',
+    retryable: false,
+  })
+  const restored: SDKMessage[] = [
+    {
+      type: 'assistant',
+      message: {
+        id: 'msg_spawn',
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_agent_restored',
+            name: 'Agent',
+            input: { subagent_type: 'Explore', description: 'Find the owner files' },
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+      session_id: 's',
+      uuid: '00000000-0000-4000-8000-0000000037c1',
+    },
+    {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'toolu_agent_restored',
+            content: 'the owner files are app/renderer/src/TranscriptView.tsx',
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+      session_id: 's',
+      uuid: '00000000-0000-4000-8000-0000000037c2',
+    },
+  ]
+  for (const message of restored) {
+    state = projectServerFrame(state, {
+      kind: 'event',
+      protocolVersion: 1,
+      sessionId: 's',
+      event: { type: 'message', message },
+    })
+  }
+
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView rows={selectNestedTranscriptRows(state, 's')} />,
+  )
+
+  expect(html).toContain("This agent&#x27;s steps aren&#x27;t loaded.")
+  // Not an error: no danger tone, and the card keeps its ordinary chrome.
+  expect(html).not.toContain('tone-danger')
+})

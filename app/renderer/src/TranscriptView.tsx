@@ -780,6 +780,14 @@ function NestedRowList({
  */
 const HISTORY_BOUNDARY_LABEL = "Earlier messages from this session aren't loaded."
 
+/**
+ * The same sentence, one card down. An Agent card in an incomplete pane can come
+ * back with its whole run missing and look exactly like an agent that did
+ * nothing, so it says which of the two it is and stops. Deliberately the
+ * boundary's wording, because it is the boundary's fact.
+ */
+const STEPS_NOT_LOADED_LABEL = "This agent's steps aren't loaded."
+
 // Memoized per row: a slice-cached read reuses unchanged row objects, so only
 // the rows that actually changed re-render (markdown re-parses once per body).
 const TranscriptRowView = memo(function TranscriptRowView({
@@ -2623,6 +2631,14 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
           {lines}
         </button>
       )}
+      {/* The card ran and answered; only its steps are gone. Said in the same
+          quiet register as the orphan placeholder's band and the retention
+          boundary, because nothing here failed and there is nothing to fix. */}
+      {row.stepsNotLoaded === true ? (
+        <div className="flex items-center border-t border-shell-seam px-3 py-[7px] text-[13.5px] leading-[18px] text-text-muted">
+          {STEPS_NOT_LOADED_LABEL}
+        </div>
+      ) : null}
       {expanded && body !== null ? (
         <div className="border-t border-shell-seam bg-black/[0.28] px-3 pb-2.5 pt-1">
           {body}

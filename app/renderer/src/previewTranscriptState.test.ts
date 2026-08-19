@@ -7,6 +7,7 @@ import {
   type TranscriptCache,
 } from '../../shared/protocol.js'
 import { createConnectionState } from './connectionState.js'
+import { selectContextPercent } from './contextUsage.js'
 import { createPermissionState } from './permissionState.js'
 import {
   createRawMessageLogState,
@@ -809,11 +810,25 @@ test('a header window other than 200k drives the donut, not the fallback', () =>
   expect(real.contextUsage?.contextWindow).toBe(372_000)
   expect(real.contextUsage?.percentUsed).toBe(50)
 
-  // A source that stated no window still falls back, so an older cache written
-  // before the worker resolved one keeps rendering exactly as it did.
+  expect(real.contextUsage?.windowIsFallback).toBeUndefined()
+  expect(
+    real.contextUsage === null ? null : selectContextPercent(real.contextUsage),
+  ).toBe(50)
+
+  // A source that stated no window still falls back for the RING, so an older
+  // cache written before the worker resolved one keeps drawing exactly as it
+  // did. What it must not do is print 93%: that ratio is against a constant
+  // this session may never have run under, so the number is withheld here the
+  // same way the live path withholds it.
   const unstated = projectPreviewTranscriptCache(withWindow(null)).runFacts
   expect(unstated.contextUsage?.contextWindow).toBe(200_000)
   expect(unstated.contextUsage?.percentUsed).toBe(93)
+  expect(unstated.contextUsage?.windowIsFallback).toBe(true)
+  expect(
+    unstated.contextUsage === null
+      ? null
+      : selectContextPercent(unstated.contextUsage),
+  ).toBeNull()
 })
 
 /**

@@ -173,14 +173,7 @@ export function selectPreviewRunFacts(cache: TranscriptCache): PreviewRunFacts {
       contextUsage:
         header.usedTokens === null
           ? null
-          : {
-              usedTokens: header.usedTokens,
-              contextWindow: header.contextWindow ?? DEFAULT_PREVIEW_WINDOW,
-              percentUsed: percentOf(
-                header.usedTokens,
-                header.contextWindow ?? DEFAULT_PREVIEW_WINDOW,
-              ),
-            },
+          : previewContextUsage(header.usedTokens, header.contextWindow),
     }
   }
   return selectRunFactsFromFrames(frames)
@@ -188,6 +181,27 @@ export function selectPreviewRunFacts(cache: TranscriptCache): PreviewRunFacts {
 
 /** Matches `contextUsage.ts`'s default when no turn reported a real window. */
 const DEFAULT_PREVIEW_WINDOW = 200_000
+
+/**
+ * A cached header's usage, carrying whether its denominator is real.
+ *
+ * A header that recorded no window leaves only `DEFAULT_PREVIEW_WINDOW`, and a
+ * ratio against a constant this session may never have run under is not a
+ * measurement. `windowIsFallback` is the same flag the live path sets
+ * (`contextUsage.ts` `selectContextUsage`), so the gauge withholds the number
+ * here exactly as it does there instead of printing a confident percentage the
+ * cache cannot back.
+ */
+function previewContextUsage(
+  usedTokens: number,
+  contextWindow: number | null,
+): ContextUsage {
+  const window = contextWindow ?? DEFAULT_PREVIEW_WINDOW
+  const percentUsed = percentOf(usedTokens, window)
+  return contextWindow === null
+    ? { usedTokens, contextWindow: window, percentUsed, windowIsFallback: true }
+    : { usedTokens, contextWindow: window, percentUsed }
+}
 
 function percentOf(used: number, window: number): number {
   if (window <= 0) return 0

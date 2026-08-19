@@ -3858,3 +3858,185 @@ test('the boundary row keeps its identity while the oldest surviving row is unch
 
   expect(second).toBe(first)
 })
+
+/* ── an Agent card whose branch did not survive the restore ──────────────── */
+
+/**
+ * The defect this pins (2026-08-19 review, finding 5): a restored session loads
+ * subagent branches only into the room its main transcript left over, so a long
+ * session's Agent cards come back correct in every visible detail and completely
+ * empty — indistinguishable from an agent that ran and produced nothing.
+ */
+function agentSpawnFrame(
+  sessionId: string,
+  toolUseId: string,
+  input: Record<string, unknown> = {
+    subagent_type: 'Explore',
+    description: 'Find the owner files',
+  },
+) {
+  return messageFrame(sessionId, {
+    type: 'assistant',
+    message: {
+      id: `msg-${toolUseId}`,
+      content: [{ type: 'tool_use', id: toolUseId, name: 'Agent', input }],
+    },
+    parent_tool_use_id: null,
+    uuid: `00000000-0000-4000-8000-00000000a${toolUseId.slice(-3)}`,
+  } as unknown as SDKMessage)
+}
+
+function agentResultFrame(
+  sessionId: string,
+  toolUseId: string,
+  isError = false,
+) {
+  return messageFrame(sessionId, {
+    type: 'user',
+    message: {
+      role: 'user',
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: toolUseId,
+          content: 'the agent answered',
+          ...(isError ? { is_error: true } : {}),
+        },
+      ],
+    },
+    parent_tool_use_id: null,
+    uuid: `00000000-0000-4000-8000-00000000b${toolUseId.slice(-3)}`,
+  } as unknown as SDKMessage)
+}
+
+/** One step of a live agent run, nested under its card by `parent_tool_use_id`. */
+function agentChildFrame(
+  sessionId: string,
+  toolUseId: string,
+  index: number,
+  isSynthetic = false,
+) {
+  return messageFrame(sessionId, {
+    type: 'user',
+    message: { role: 'user', content: `step ${index}` },
+    parent_tool_use_id: toolUseId,
+    agent_name: 'Ada',
+    uuid: `00000000-0000-4000-8000-00000000c${toolUseId.slice(-2)}${index}`,
+    ...(isSynthetic ? { isSynthetic: true } : {}),
+  } as unknown as SDKMessage)
+}
+
+function restoredAgentState(
+  spawn: ReturnType<typeof agentSpawnFrame>,
+  ...rest: ReturnType<typeof messageFrame>[]
+) {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    truncationFrame('session-1', 'catcode.history-truncated'),
+  )
+  state = projectServerFrame(state, spawn)
+  for (const frame of rest) state = projectServerFrame(state, frame)
+  return state
+}
+
+function agentRow(state: ReturnType<typeof createTranscriptState>) {
+  return selectNestedTranscriptRows(state, 'session-1').find(
+    row => row.kind === 'tool-use',
+  )
+}
+
+test('a restored Agent card that answered with no steps beneath it says so', () => {
+  const state = restoredAgentState(
+    agentSpawnFrame('session-1', 'toolu_agent_1'),
+    agentResultFrame('session-1', 'toolu_agent_1'),
+  )
+  const row = agentRow(state)
+  expect(row).toMatchObject({ kind: 'tool-use', stepsNotLoaded: true })
+  expect(row?.children).toEqual([])
+  // Read-time only: the stored row is untouched, exactly as the boundary row is.
+  expect(
+    selectTranscriptRows(state, 'session-1').every(
+      stored => !('stepsNotLoaded' in stored),
+    ),
+  ).toBe(true)
+})
+
+test('a LIVE agent run in the same incomplete pane is never labelled', () => {
+  // The false positive that would matter most: this agent really ran here, and
+  // its own steps are on screen under it.
+  const state = restoredAgentState(
+    agentSpawnFrame('session-1', 'toolu_agent_1'),
+    agentChildFrame('session-1', 'toolu_agent_1', 1),
+    agentResultFrame('session-1', 'toolu_agent_1'),
+  )
+  const row = agentRow(state)
+  expect(row?.stepsNotLoaded).toBeUndefined()
+  expect(row?.children).toHaveLength(1)
+})
+
+test('an agent whose every step is hidden-tier traffic is never labelled', () => {
+  // Its steps ARE loaded; the default view simply does not draw them. Read off
+  // the filtered list this would flip with the reveal control.
+  const state = restoredAgentState(
+    agentSpawnFrame('session-1', 'toolu_agent_1'),
+    agentChildFrame('session-1', 'toolu_agent_1', 1, true),
+    agentResultFrame('session-1', 'toolu_agent_1'),
+  )
+  expect(agentRow(state)?.stepsNotLoaded).toBeUndefined()
+  const revealed = selectNestedTranscriptRows(state, 'session-1', true).find(
+    row => row.kind === 'tool-use',
+  )
+  expect(revealed?.stepsNotLoaded).toBeUndefined()
+})
+
+test('a background launch record is never labelled: its steps never join this pane', () => {
+  const state = restoredAgentState(
+    agentSpawnFrame('session-1', 'toolu_agent_1', {
+      subagent_type: 'Explore',
+      description: 'Find the owner files',
+      run_in_background: true,
+    }),
+    agentResultFrame('session-1', 'toolu_agent_1'),
+  )
+  expect(agentRow(state)?.stepsNotLoaded).toBeUndefined()
+})
+
+test('a refused or interrupted agent is never labelled: nothing ran to be missing', () => {
+  const state = restoredAgentState(
+    agentSpawnFrame('session-1', 'toolu_agent_1'),
+    agentResultFrame('session-1', 'toolu_agent_1', true),
+  )
+  expect(agentRow(state)?.stepsNotLoaded).toBeUndefined()
+})
+
+test('an agent still running is never labelled: its steps have not happened yet', () => {
+  const state = restoredAgentState(agentSpawnFrame('session-1', 'toolu_agent_1'))
+  expect(agentRow(state)?.stepsNotLoaded).toBeUndefined()
+})
+
+test('a WHOLE transcript never labels an empty Agent card', () => {
+  // Without a retention boundary there is no reason to believe anything is
+  // missing, so an agent that genuinely produced nothing keeps saying so.
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(state, agentSpawnFrame('session-1', 'toolu_agent_1'))
+  state = projectServerFrame(state, agentResultFrame('session-1', 'toolu_agent_1'))
+  expect(agentRow(state)?.stepsNotLoaded).toBeUndefined()
+})
+
+test('a late child row un-labels the card rather than serving the cached one', () => {
+  let state = restoredAgentState(
+    agentSpawnFrame('session-1', 'toolu_agent_1'),
+    agentResultFrame('session-1', 'toolu_agent_1'),
+  )
+  expect(agentRow(state)?.stepsNotLoaded).toBe(true)
+  state = projectServerFrame(
+    state,
+    agentChildFrame('session-1', 'toolu_agent_1', 9),
+  )
+  const row = agentRow(state)
+  expect(row?.stepsNotLoaded).toBeUndefined()
+  expect(row?.children).toHaveLength(1)
+})

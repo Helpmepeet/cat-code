@@ -24,6 +24,7 @@ import { join } from 'node:path'
 import {
   PROTOCOL_VERSION,
   HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
+  REPLAY_BUFFER_TRUNCATION_REQUEST_ID,
   type ServerFrame,
   type SessionId,
   type TranscriptCache,
@@ -51,7 +52,6 @@ import { FrameReplayBuffer, STICKY_FRAME_KINDS } from './replayBuffer.js'
 const SID: SessionId = '11111111-1111-4111-8111-111111111111'
 /** A session with no cache file at all. */
 const OTHER_SID: SessionId = '33333333-3333-4333-8333-333333333333'
-const REPLAY_TRUNCATION_REQUEST_ID = 'catcode.replay-truncated'
 
 const tempDirs: string[] = []
 afterEach(() => {
@@ -128,7 +128,7 @@ function replayTruncationFrame(id: SessionId = SID): ServerFrame {
     kind: 'error',
     protocolVersion: PROTOCOL_VERSION,
     sessionId: id,
-    requestId: REPLAY_TRUNCATION_REQUEST_ID,
+    requestId: REPLAY_BUFFER_TRUNCATION_REQUEST_ID,
     code: 'internal_error',
     message: 'truncated',
     retryable: false,
@@ -188,7 +188,7 @@ test('distill keeps message events + both truncation boundaries; drops ready/per
     .filter(f => f.kind === 'error')
     .map(f => (f.kind === 'error' ? f.requestId : undefined))
   expect(keptErrorIds).toEqual([
-    REPLAY_TRUNCATION_REQUEST_ID,
+    REPLAY_BUFFER_TRUNCATION_REQUEST_ID,
     HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
   ])
 })

@@ -724,6 +724,25 @@ export type NestedTranscriptRow = (
   | HistoryBoundaryRow
 ) & {
   children: NestedTranscriptRow[]
+  /**
+   * This Agent card's own steps are MISSING, not absent: the agent ran and
+   * answered, and the transcript this pane holds is known to be incomplete.
+   *
+   * The mirror image of `OrphanedAgentRow`. That one is a surviving branch whose
+   * card was dropped; this one is a surviving card whose branch was dropped —
+   * a restored pane loads subagent branches only into whatever room the main
+   * transcript left, so a long session comes back with its Agent cards intact
+   * and empty (`app/sidecar/subagentHistory.ts` `withRestoredSubagentHistory`;
+   * `docs/migration/reviews/2026-08-19-transcript-message-visibility-ux-review.md`
+   * finding 5). Nothing on the wire says so, and the card is otherwise
+   * indistinguishable from an agent that ran and produced nothing.
+   *
+   * DERIVED at read time from `TranscriptSessionState.historyTruncated` plus the
+   * session's own rows, like the boundary and orphan placeholders: nothing is
+   * stored and no stored row is rewritten. Absent unless it is true, so every
+   * card in a whole transcript keeps exactly the shape it had.
+   */
+  stepsNotLoaded?: true
 }
 
 /**
@@ -839,6 +858,15 @@ export function selectNestedTranscriptRows(
   if (cached) return cached
 
   const rows = selectTranscriptRows(state, sessionId, revealHidden)
+  // Only a pane whose history is known incomplete can hold an Agent card whose
+  // branch was left behind, so a whole transcript never walks this and never
+  // pays for it. Built from the session's OWN rows, not the filtered view: an
+  // agent whose every child is hidden-tier traffic has its steps loaded, and
+  // reading the filtered list here would call that card empty in the default
+  // view and full in the revealed one.
+  const parentsWithRows = session.historyTruncated
+    ? collectReferencedParentIds(session.rows)
+    : null
   const byToolUseId = new Map<string, TranscriptRow>()
   for (const row of rows) {
     if (row.kind === 'tool-use') byToolUseId.set(row.toolUseId, row)
@@ -871,6 +899,9 @@ export function selectNestedTranscriptRows(
   }
 
   const attachChildren = (row: TranscriptRow): NestedTranscriptRow => {
+    if (parentsWithRows !== null && hasUnloadedSteps(row, parentsWithRows)) {
+      return unloadedStepsRow(row)
+    }
     const childRows =
       row.kind === 'tool-use' ? (childrenByParentId.get(row.toolUseId) ?? []) : []
     const cached = nestedRowBySource.get(row)
@@ -950,6 +981,65 @@ export function selectNestedTranscriptRows(
   }
   cache.set(session, result)
   return result
+}
+
+function collectReferencedParentIds(
+  rows: readonly TranscriptRow[],
+): Set<string> {
+  const parents = new Set<string>()
+  for (const row of rows) {
+    const parentId = 'parentToolUseId' in row ? row.parentToolUseId : null
+    if (parentId) parents.add(parentId)
+  }
+  return parents
+}
+
+/**
+ * Does this row's agent have steps that were not loaded?
+ *
+ * Every clause is here to keep the answer from being YES about a healthy card,
+ * which would put a lie on a card that is working:
+ *
+ *  - `toolFamily === 'agent'`, not ResumeAgent, not a background launch — the
+ *    same three clauses `isAgentToolUseRow` uses. A background launch's
+ *    `tool_result` is only an ack that the worker started and its steps never
+ *    join this transcript at all, so it is childless BY DESIGN and would be the
+ *    first false positive.
+ *  - `status === 'success'` — the agent ran and ANSWERED. A refused, denied or
+ *    interrupted agent resolves to an error result with nothing under it, which
+ *    is the second false positive; a still-running one is `pending`.
+ *  - no row in the session names this `tool_use` as its parent. A live run emits
+ *    its prompt as the first child frame before the worker says anything
+ *    (`src/tools/AgentTool/AgentTool.tsx:1345-1357`, then every later message at
+ *    :1803-1817), so a foreground agent that reached `success` in THIS pane has
+ *    at least one row pointing at it and can never reach this line.
+ */
+function hasUnloadedSteps(
+  row: TranscriptRow,
+  parentsWithRows: ReadonlySet<string>,
+): boolean {
+  return (
+    row.kind === 'tool-use' &&
+    row.toolFamily === 'agent' &&
+    row.toolName !== 'ResumeAgent' &&
+    row.input.run_in_background !== true &&
+    row.status === 'success' &&
+    !parentsWithRows.has(row.toolUseId)
+  )
+}
+
+/**
+ * Always a leaf: the row qualifies precisely because nothing points at it.
+ *
+ * Deliberately NOT written into `nestedRowBySource`. Whether the flag applies is
+ * a fact about the SESSION (is its history complete?) rather than about the row,
+ * so one source row can legitimately need both shapes over its lifetime, and a
+ * shared cache line would hand back the wrong one. It costs nothing to skip:
+ * a tool-use row that has resolved is rebuilt on every read anyway, because
+ * `selectTranscriptRows` joins its status and result in from the correlation map.
+ */
+function unloadedStepsRow(row: TranscriptRow): NestedTranscriptRow {
+  return { ...row, children: [], stepsNotLoaded: true }
 }
 
 const HISTORY_BOUNDARY_FRAME_ID = 'history-boundary'
