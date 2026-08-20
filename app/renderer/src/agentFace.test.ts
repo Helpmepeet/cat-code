@@ -206,3 +206,86 @@ describe('the session registry', () => {
     }
   })
 })
+
+describe('the relaxation search', () => {
+  const EAR = ['pointy', 'outer', 'tuft', 'folded', 'tall'] as const
+  const FILL = ['solid', 'notch', 'deep'] as const
+  const WIDTH = ['wide', 'narrow'] as const
+  const CHIN = ['round', 'flat', 'pointed', 'fringe'] as const
+  const MOUTH = ['none', 'slit', 'smile', 'omega'] as const
+  const MARK = ['none', 'brow', 'cheek', 'temple', 'chindot'] as const
+
+  /** Every axis combination the hash can propose. */
+  function everyAxes(): FaceAxes[] {
+    const out: FaceAxes[] = []
+    for (const ear of EAR)
+      for (const fill of FILL)
+        for (const width of WIDTH)
+          for (const chin of CHIN)
+            for (const mouth of MOUTH)
+              for (const mark of MARK) out.push({ ear, fill, width, chin, mouth, mark })
+    return out
+  }
+
+  /**
+   * A face with nothing cut out of its head reads as a slab with ears, not as an
+   * animal. Rows 2, 3, 5 and 6 are where every interior carve lands (ear fill,
+   * mouth, markings); solid across all four means the search gave everything up.
+   */
+  function isFeatureless(axes: FaceAxes): boolean {
+    const grid = rasterize(faceRects(axes, 'closed'))
+    const left = axes.width === 'wide' ? 0 : 1
+    const right = axes.width === 'wide' ? 8 : 7
+    const solid = (row: number): boolean => {
+      for (let c = left; c <= right; c += 1) if (!grid[row][c]) return false
+      return true
+    }
+    return solid(2) && solid(3) && solid(5) && solid(6)
+  }
+
+  test('the reported case draws a face, not a slab', () => {
+    // @Backus, seen on a real card as a featureless blob (2026-08-19). Its hash
+    // asked for a deep ear fill, an omega mouth and a chin-dot; the design
+    // source's linear ladder dropped all three. The omega really does sever a
+    // narrow pointed chin, so the mouth has to go — but giving it up RESTORES
+    // the chin-dot the mouth-vs-chin-dot exclusion was suppressing, and the face
+    // keeps a mark of its own.
+    const backus: FaceAxes = {
+      ear: 'folded',
+      fill: 'deep',
+      width: 'narrow',
+      chin: 'pointed',
+      mouth: 'omega',
+      mark: 'chindot',
+    }
+    expect(isFeatureless(backus)).toBe(false)
+    expect(isOneMass(rasterize(faceRects(backus, 'closed')))).toBe(true)
+  })
+
+  test('a featureless slab stays the rare exception, not a third of the space', () => {
+    // The linear ladder this replaced left 838 of 2,400 (35%) with no interior
+    // feature at all — 75% of `folded` ears and 76% of `tall`. Pinned well above
+    // the current 168 so ordinary tuning does not trip it, and far below the
+    // regression it exists to catch.
+    const all = everyAxes()
+    const bare = all.filter(isFeatureless).length
+    expect(all).toHaveLength(2400)
+    expect(bare).toBeLessThan(300)
+  })
+
+  test('a face gives up the cheaper carve before the more legible one', () => {
+    // The search is ordered by what a relaxation costs a reader. Concretely: no
+    // face may lose its mouth while a merely-softened ear fill would have kept
+    // it whole, which is the mistake the fixed ladder made on every `folded` and
+    // `tall` ear.
+    const keptMouth = everyAxes().filter(axes => {
+      if (axes.mouth === 'none') return false
+      const grid = rasterize(faceRects(axes, 'closed'))
+      const mid = axes.width === 'wide' ? 4 : 4
+      // Any mouth carves row 5 or row 6 near the midline.
+      return !grid[5][mid] || !grid[6][mid - 1] || !grid[6][mid + 1] || !grid[6][mid]
+    }).length
+    // 1,800 combinations ask for a mouth; the fixed ladder delivered 960.
+    expect(keptMouth).toBeGreaterThan(1400)
+  })
+})

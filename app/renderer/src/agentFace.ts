@@ -154,11 +154,53 @@ function isConnected(grid: boolean[][]): boolean {
 }
 
 /**
- * Draw one grid at a given fallback `level`. Level 0 is what the hash asked for;
- * each step up drops the next-weakest carve so a severed silhouette can recover:
- * markings -> none, then mouth -> none, then ear fill deep -> notch -> solid.
- * Narrow ears that join the head in a single column cannot be notched and land
- * here by construction.
+ * What a face may give up to stay in one piece, cheapest first.
+ *
+ * A SEARCH, not the design source's linear ladder, because the conflicts that
+ * sever a silhouette are PAIRWISE and a fixed order cannot see them. The source
+ * relaxes markings, then the mouth, then the ear fill, and stops at the first
+ * level that connects — so a face severed by its ear fill loses its mouth and
+ * markings on the way to fixing it, and a face severed by a mouth-chin
+ * collision loses its marking for nothing. Measured on the source's order: 35%
+ * of all 2,400 combinations drew as a bare slab with no interior feature at all
+ * (75% of `folded` ears, 76% of `tall`), and 840 faces asked for a mouth and did
+ * not get one. That is what put a featureless blob on a card whose hash had
+ * asked for a deep ear fill, an omega mouth and a chin-dot.
+ *
+ * Each candidate is scored by what it costs the reader: an ear fill is one or
+ * two cells at the tips, a marking is a single cell, a mouth is the most legible
+ * carve on the face. First candidate that draws as one mass in ALL THREE eye
+ * states wins; ties break by list order, so the choice stays deterministic.
+ *
+ * Dropping the mouth can RESTORE a chin-dot the exclusion above had suppressed,
+ * which is why the two are searched rather than stripped in sequence.
+ */
+type Relaxation = {
+  readonly fill: FaceFill | 'keep' | 'soften'
+  readonly dropMouth: boolean
+  readonly dropMark: boolean
+}
+
+const RELAXATIONS: readonly Relaxation[] = ([] as Relaxation[])
+  .concat(
+    ...(['keep', 'soften', 'solid'] as const).map(fill =>
+      [false, true].flatMap(dropMark =>
+        [false, true].map(dropMouth => ({ fill, dropMouth, dropMark })),
+      ),
+    ),
+  )
+  .map(candidate => ({
+    candidate,
+    cost:
+      (candidate.fill === 'keep' ? 0 : candidate.fill === 'soften' ? 1 : 2) +
+      (candidate.dropMark ? 3 : 0) +
+      (candidate.dropMouth ? 5 : 0),
+  }))
+  .sort((a, b) => a.cost - b.cost)
+  .map(scored => scored.candidate)
+
+/**
+ * Draw one grid under a given relaxation (an index into `RELAXATIONS`).
  */
 function drawFace(axes: FaceAxes, eyes: FaceEyes, level: number): boolean[][] {
   const grid = blankGrid()
@@ -219,14 +261,16 @@ function drawFace(axes: FaceAxes, eyes: FaceEyes, level: number): boolean[][] {
     set(R, 7)
   }
 
-  // The ladder, ported as the design source wrote it: level 2 drops the mouth
-  // AND softens a deep ear fill in the same step, rather than as the two
-  // separate steps the spec prose describes. Kept as-is — it only decides which
-  // feature survives on the ~64 combinations that need a fallback at all, and
-  // the source is the artifact the faces were judged against.
+  const step = RELAXATIONS[Math.min(level, RELAXATIONS.length - 1)] as Relaxation
   const fill: FaceFill =
-    level >= 3 ? 'solid' : level === 2 && axes.fill === 'deep' ? 'notch' : axes.fill
-  const mouth: FaceMouth = level >= 2 ? 'none' : axes.mouth
+    step.fill === 'keep'
+      ? axes.fill
+      : step.fill === 'soften'
+        ? axes.fill === 'deep'
+          ? 'notch'
+          : axes.fill
+        : step.fill
+  const mouth: FaceMouth = step.dropMouth ? 'none' : axes.mouth
   // EXCLUSION: mouth and chin-dot both carve row 6, so a face gets one or the
   // other, never both. Without this, `chindot` + `omega` clears exactly the
   // three cells `slit` does and the two faces become the same drawing — 360 of
@@ -239,7 +283,7 @@ function drawFace(axes: FaceAxes, eyes: FaceEyes, level: number): boolean[][] {
   // the 2,400 combinations draw uniquely — which is still ~30x any plausible
   // session, and buys a face that never mimics a mouth shape it does not have.
   const mark: FaceMark =
-    level >= 1 || (axes.mark === 'chindot' && mouth !== 'none') ? 'none' : axes.mark
+    step.dropMark || (axes.mark === 'chindot' && mouth !== 'none') ? 'none' : axes.mark
 
   if (fill !== 'solid') {
     // Ear-tip columns are the filled columns of the TOPMOST filled row, so the
@@ -350,8 +394,8 @@ function fallbackLevelFor(axes: FaceAxes): number {
   const key = axesKey(axes)
   const cached = levelByAxes.get(key)
   if (cached !== undefined) return cached
-  let chosen = 3
-  for (let level = 0; level <= 3; level += 1) {
+  let chosen = RELAXATIONS.length - 1
+  for (let level = 0; level < RELAXATIONS.length; level += 1) {
     if (EYE_MODES.every(eyes => isConnected(drawFace(axes, eyes, level)))) {
       chosen = level
       break
