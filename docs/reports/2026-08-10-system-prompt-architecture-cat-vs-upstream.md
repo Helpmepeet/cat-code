@@ -613,6 +613,28 @@ the qualifying contexts.
    has already taken its largest available cut, and it is a smaller lever than it
    looked when this item was written.
 
+   **The GPT half is closed (2026-08-20).** This item bundles the Claude
+   assembly and the GPT restatement into one decision. They have different
+   comparators and must be decided separately.
+   [`2026-08-20-codex-cli-harness-prompt-trend.md`](2026-08-20-codex-cli-harness-prompt-trend.md)
+   supplies the missing one: Codex CLI, measured across its release history and
+   at one named v0.148 configuration. Cat Code's GPT prompt is **69%** of Codex's
+   delivered total (18,100 against 26,408) and 78% on the behavioral bucket, so
+   **no lean cut should be applied to `promptStyles/gpt.ts`** — it would be a
+   change made against no evidence. The Claude half stays open and is untouched
+   by that finding, because Codex evidence does not transfer across model
+   families.
+
+   That report also revises the premise this item reasons from. Of the three
+   coding agents now measured, upstream's lean path (6,832 behavioral) is the
+   outlier; Codex (17,571) and Cat Code (15,341) sit in the same band. And it
+   argues against this item's proposed *shape*: between v0.80 and v0.148 Codex
+   shrank a prompt by deleting one coherent block and left the retained text
+   byte-identical, while extracting configuration-dependent material to a runtime
+   fragment saved only 2.5% in the default interactive configuration. Gate or
+   delete whole blocks; do not expect much from conditionalizing a block that is
+   usually operative, and do not budget for a prose rewrite.
+
    **What this report could not supply on its own.** No size was measured here,
    because §4.2 and §4.3 establish there was no working way to emit one.
    Second, the adopt list that follows (items 4, 5, 6, 9) all add text to the

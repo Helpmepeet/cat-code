@@ -812,15 +812,20 @@ the §6.3.3 residual on those three stays open.
 - The Cat Code dump passes `tools: []`, so any tool-gated section is missing.
   **32,738 is a floor, not a ceiling.**
 - Upstream's tool-conditional total is specific to this session's six MCP
-  servers. A different tool set produces a different number, and a plain
-  terminal session should produce 11,966 — which is what the outstanding
-  baseline capture would confirm.
+  servers. A different tool set produces a different number. This bullet
+  originally predicted a plain terminal session would produce 11,966; the
+  baseline capture has since been taken and measured **11,188** (§6.3.4), so the
+  prediction was 7% high and the residual is accounted for there.
 - Both `# Environment` blocks carry machine-specific values. They are compared as
   a category, not as identical content.
 
 ## 7. What this capture does not establish
 
-- **Anything about a plain terminal session.** Every conclusion here is scoped to
+- ~~**Anything about a plain terminal session.**~~ **Closed 2026-08-12** by
+  [`2026-08-12-upstream-baseline-no-mcp.md`](2026-08-12-upstream-baseline-no-mcp.md),
+  measured at 11,188 chars and cross-checked against this capture in §6.3.4. The
+  original text, which the rest of this section still reads against, was:
+  Every conclusion here is scoped to
   the desktop entrypoint with six MCP servers loaded. The baseline capture has
   not been taken and is the obvious next artifact. It would also convert §6.2's
   upstream core figure from "the unconditional blocks I could identify" into a
