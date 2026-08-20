@@ -18,6 +18,7 @@ import type {
   ServerFrame,
   SessionId,
 } from '../../shared/protocol.js'
+import { createContext } from 'react'
 import { selectWorkerDisplayName } from './orchestratorState.js'
 
 export type LeaseStateStore = {
@@ -113,6 +114,20 @@ export function leaseHeldLabel(createdAtMs: number, nowMs: number): string {
   const hours = Math.floor(minutes / 60)
   const remainder = minutes % 60
   return remainder === 0 ? `${hours}h` : `${hours}h ${remainder}m`
+}
+
+/**
+ * The account as a SHORT label: the pool's redacted alias, else the first few
+ * characters of its identifier. An un-aliased account is the ordinary case (the
+ * alias is set only by an explicit rename), and a full UUID does not belong in a
+ * transcript card or a panel heading. Two un-aliased accounts still read as
+ * different, which `'Unnamed account'` would not give.
+ */
+export function leaseAccountShortLabel(row: {
+  accountId: string
+  accountAlias: string | null
+}): string {
+  return row.accountAlias ?? row.accountId.slice(0, ACCOUNT_ID_PREVIEW_CHARS)
 }
 
 /** The account's display label: the pool's redacted alias, else its identifier. */
@@ -262,9 +277,7 @@ function leaseAgentNote(owner: LeaseOwnerRow): LeaseAgentNote | null {
  * would not give.
  */
 function leaseGroupLabel(owner: LeaseOwnerRow): string {
-  return (
-    owner.accountAlias ?? owner.accountId.slice(0, ACCOUNT_ID_PREVIEW_CHARS)
-  )
+  return leaseAccountShortLabel(owner)
 }
 
 function toLeaseAgentRow(
@@ -357,3 +370,16 @@ export function selectLeaseConcentrationNote(
   if (!only || only.isStranded || only.agents.length < 2) return null
   return `All ${only.agents.length} agents landed on one account.`
 }
+
+/**
+ * The session's lease snapshot, handed down so a transcript row can name the
+ * account its worker is holding. Null outside a session, and null on every
+ * Anthropic-path session — the lease plane is Codex-only.
+ *
+ * This is a LIVE overlay, not a transcript fact: the lease map is per-process and
+ * in-memory, so a restored transcript shows no account on rows whose worker died
+ * with its engine. That is the same policy `reduceLeaseState` already applies on
+ * `lifecycle` (drop the snapshot rather than show a stale one), and it is why the
+ * account is rendered only when present rather than as a slot that can go blank.
+ */
+export const LeaseSnapshotContext = createContext<LeaseSnapshot | null>(null)

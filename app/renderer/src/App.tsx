@@ -417,6 +417,7 @@ import type {
   AgentModeWorkerItem,
   AskUserQuestionAnswer,
   CatCodeBridge,
+  LeaseSnapshot,
   PermissionResponseInput,
   PermissionSetModeMode,
   QueuedPromptItem,
@@ -3039,6 +3040,9 @@ export function App() {
 	        connection: sessionConnection,
 	        content: (
 	          <SessionPane
+	            /* P4-32b read seam, reused: the agent card names the Codex account
+	             * its worker holds. This pane's own session, not the active one. */
+	            leases={selectLeaseSnapshot(leases, sessionId)}
 	            accountsSnapshot={panelAccounts}
 	            activeAccount={panelActiveCodexAccount}
 	            activeAnthropicAccount={panelActiveAnthropicAccount}
@@ -4245,6 +4249,7 @@ export function TasksStrip({
  * session id; switching focus never tears down a background session's state.
  */
 export function SessionPane({
+  leases = null,
   accountsSnapshot,
   activeAccount,
   activeAnthropicAccount,
@@ -5088,6 +5093,7 @@ export function SessionPane({
             restorePhase={restorePhase}
             revealHidden={revealHidden}
             state={transcript}
+            leases={leases}
             loadEarlierPending={historyLoadEarlierPending}
             loadEarlierFailure={historyLoadEarlierFailure}
             onLoadEarlier={onLoadEarlierHistory}
@@ -5724,6 +5730,12 @@ function reduceShell(state: ShellState, action: ShellAction): ShellState {
 }
 
 type SessionPaneProps = {
+  /**
+   * This session's Codex leases (the P4-32b read seam), forwarded to the
+   * transcript so an agent card can name the account its worker holds. Null on
+   * an Anthropic-path session, which holds no Codex lease at all.
+   */
+  leases?: LeaseSnapshot | null
   /** In-session empty-state Welcome context: this session's real Codex pool
    * snapshot (P4-5), read-only (HC1). Null before any pool frame lands. */
   accountsSnapshot: AccountsSnapshot | null

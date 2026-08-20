@@ -113,6 +113,12 @@ import {
   AGENT_TYPE_TONE_CLASS,
 } from './agentChromeModel.js'
 import { formatModelDisplayName } from './statsState.js'
+import {
+  leaseAccountShortLabel,
+  LeaseSnapshotContext,
+  selectLeaseForOwner,
+} from './leaseState.js'
+import type { LeaseSnapshot } from '../../shared/protocol.js'
 import { ToolInspector } from './ToolInspector.js'
 import { ActionFileIcon } from './SessionActionIcons.js'
 import { parseToolAck, type ToolAck } from './toolAck.js'
@@ -264,6 +270,11 @@ export const TranscriptView = memo(function TranscriptView({
    * process is gone) still shows the boundary row, and has nothing to ask.
    */
   onLoadEarlier?: () => void
+  /**
+   * This session's Codex leases, so an agent card can name the account its worker
+   * holds. Optional and null-tolerant: the plane is Codex-only and per-process.
+   */
+  leases?: LeaseSnapshot | null
 }) {
   return (
     <TranscriptRowsView
@@ -284,6 +295,7 @@ export const TranscriptView = memo(function TranscriptView({
 
 export const TranscriptRowsView = memo(function TranscriptRowsView({
   rows,
+  leases = null,
   accounts = null,
   orchestratorActive = false,
   onToggleOrchestrator,
@@ -296,6 +308,8 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   onLoadEarlier,
 }: {
   rows: NestedTranscriptRow[]
+  /** This session's Codex leases; null on an Anthropic path and after a restore. */
+  leases?: LeaseSnapshot | null
   accounts?: AccountsSnapshot | null
   orchestratorActive?: boolean
   onToggleOrchestrator?: (next: boolean) => void
@@ -458,10 +472,12 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   return (
     <ToolCardExpansionContext.Provider value={expansionStore}>
       <AgentFaceRegistryContext.Provider value={faceRegistry}>
-        <ToolInspectorContext.Provider value={openInspector}>
-          {content}
-          <ToolInspectorOverlay row={inspected} onClose={closeInspector} />
-        </ToolInspectorContext.Provider>
+        <LeaseSnapshotContext.Provider value={leases}>
+          <ToolInspectorContext.Provider value={openInspector}>
+            {content}
+            <ToolInspectorOverlay row={inspected} onClose={closeInspector} />
+          </ToolInspectorContext.Provider>
+        </LeaseSnapshotContext.Provider>
       </AgentFaceRegistryContext.Provider>
     </ToolCardExpansionContext.Provider>
   )
@@ -2406,6 +2422,32 @@ function agentModelOf(row: ToolUseNestedRow): string | null {
 }
 
 /**
+ * The Codex account this worker is holding, or null.
+ *
+ * A LIVE join, and the only thing on the card that is not transcript-plane. It is
+ * deliberate and operator-ruled (2026-08-19): the account is the one fact a
+ * reader needs to answer "which of my accounts is this burning", and the
+ * transcript carries no such field. The join key needs no new plumbing on either
+ * side — `LeaseOwnerRow.ownerId` IS the subagent's `agentId`
+ * (`protocol.ts` JOIN KEY note), and the Agent tool's own structured result
+ * carries that `agentId` for both the sync and the background paths
+ * (`AgentTool.tsx:1306` async ack).
+ *
+ * Null is the ORDINARY case and must stay silent, not blank: an Anthropic-path
+ * session holds no Codex lease at all, a worker that has not made a request yet
+ * has none yet, and a restored transcript has none because the lease map died
+ * with its engine process. The account renders when it is knowable and is absent
+ * otherwise; nothing on the row claims a slot that can empty.
+ */
+function agentAccountLabel(
+  row: ToolUseNestedRow,
+  leases: LeaseSnapshot | null,
+): string | null {
+  const lease = selectLeaseForOwner(leases, row.result?.agentId ?? null)
+  return lease === null ? null : leaseAccountShortLabel(lease)
+}
+
+/**
  * The model as a reader knows it. The raw id is a dated slug
  * (`claude-sonnet-5-20260115`), and the app already speaks the engine's own
  * marketing vocabulary on the composer rail, so the card speaks it too:
@@ -2522,11 +2564,13 @@ function AgentTaskLine({
   stateToneClass,
   task,
   model,
+  account,
 }: {
   stateWord: string | null
   stateToneClass: string
   task: string
   model: string | null
+  account: string | null
 }) {
   return (
     <span className="flex items-center gap-2.5 border-t border-shell-seam px-3 py-[7px]">
@@ -2540,9 +2584,18 @@ function AgentTaskLine({
       <span className="min-w-0 flex-1 truncate text-[13.5px] leading-[18px] text-text-primary">
         {task}
       </span>
-      {model === null ? null : (
-        <span className="shrink-0 whitespace-nowrap font-mono text-[11px] text-text-subtle">
-          {model}
+      {model === null && account === null ? null : (
+        <span className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap">
+          {model === null ? null : (
+            <span className="font-mono text-[11px] text-text-subtle">{model}</span>
+          )}
+          {/* The hairline earns its place only between two things. */}
+          {model !== null && account !== null ? (
+            <span className="h-2.5 w-px bg-white/15" aria-hidden />
+          ) : null}
+          {account === null ? null : (
+            <span className="font-mono text-[11px] text-text-muted">{account}</span>
+          )}
         </span>
       )}
     </span>
@@ -2626,6 +2679,7 @@ function RejectedResumeCard({
  */
 function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
   const faces = useAgentFaceRegistry()
+  const leases = useContext(LeaseSnapshotContext)
   const resumeAck =
     row.toolName === 'ResumeAgent' ? toolAckForResult(row.result) : null
   const vocab = deriveAgentDisplayVocabulary(agentToolSourceOf(row))
@@ -2708,6 +2762,7 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
         stateToneClass={AGENT_STATE_TONE_CLASS[vocab.state.tone].text}
         task={deriveTarget(row)}
         model={agentModelLabel(row)}
+        account={agentAccountLabel(row, leases)}
       />
     </>
   )

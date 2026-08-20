@@ -1633,6 +1633,116 @@ test('a finish row the engine worded differently still draws, with no face claim
   expect(html).not.toContain('font-mono text-[#e4e4e7]') // nothing claimed as a handle
 })
 
+test('a worker card names the Codex account its lease holds', () => {
+  // The join needs no new field on either side: `LeaseOwnerRow.ownerId` IS the
+  // subagent's agentId (protocol.ts JOIN KEY), and the Agent tool's structured
+  // result carries that same agentId on both the sync and the background paths.
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      leases={{
+        strategy: 'spread',
+        accounts: [],
+        owners: [
+          {
+            leaseId: 'agent_backus',
+            ownerId: 'agent_backus',
+            ownerType: 'subagent',
+            ownerLabel: 'Trace desktop runtime state',
+            accountId: '0f9c1d22-aaaa-bbbb-cccc-1234567890ab',
+            accountAlias: 'onbi',
+            strategy: 'spread',
+            state: 'active',
+            createdAt: 1,
+            updatedAt: 1,
+            failoverCount: 0,
+            selectionKind: 'initial',
+            selectionReason: 'initial pick',
+          },
+        ],
+      }}
+      rows={[
+        agentRow(
+          'leased',
+          { subagent_type: 'general-purpose', description: 'Trace desktop runtime state', run_in_background: true },
+          'success',
+          [],
+          null,
+          {
+            isError: false,
+            content: 'launched',
+            diff: null,
+            agentId: 'agent_backus',
+            agentModel: 'gpt-5.6-sol',
+          },
+        ),
+      ]}
+    />,
+  )
+
+  expect(html).toContain('onbi')
+  expect(html).toContain('GPT-5.6 Sol')
+  // The redacted alias, never the raw account UUID.
+  expect(html).not.toContain('0f9c1d22-aaaa-bbbb-cccc-1234567890ab')
+})
+
+test('an un-aliased account is named by a short id, never a whole UUID', () => {
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      leases={{
+        strategy: 'spread',
+        accounts: [],
+        owners: [
+          {
+            leaseId: 'agent_x',
+            ownerId: 'agent_x',
+            ownerType: 'subagent',
+            ownerLabel: 'work',
+            accountId: '0f9c1d22-aaaa-bbbb-cccc-1234567890ab',
+            accountAlias: null,
+            strategy: 'spread',
+            state: 'active',
+            createdAt: 1,
+            updatedAt: 1,
+            failoverCount: 0,
+            selectionKind: 'initial',
+            selectionReason: 'initial pick',
+          },
+        ],
+      }}
+      rows={[
+        agentRow('unaliased', { subagent_type: 'Explore', description: 'work' }, 'success', [], null, {
+          isError: false,
+          content: 'done',
+          diff: null,
+          agentId: 'agent_x',
+        }),
+      ]}
+    />,
+  )
+
+  expect(html).toContain('0f9c1d22')
+  expect(html).not.toContain('0f9c1d22-aaaa')
+})
+
+test('a session with no lease plane says nothing about an account', () => {
+  // The ordinary case on an Anthropic-path session, on a worker that has not made
+  // a request yet, and on any restored transcript — the lease map is per-process
+  // and dies with its engine. Absent, never a blank slot or an empty separator.
+  const html = render(
+    agentRow('noleases', { subagent_type: 'Explore', description: 'work' }, 'success', [], null, {
+      isError: false,
+      content: 'done',
+      diff: null,
+      agentId: 'agent_y',
+      agentModel: 'claude-sonnet-5',
+    }),
+  )
+
+  expect(html).toContain('Sonnet 5')
+  // No hairline: it only earns its place between two things.
+  expect(html).not.toContain('w-px')
+})
+
 test('P4-8c: the Agent card + DelegateGroup emit only static tone utilities (no interpolated/arbitrary classes)', () => {
   const html = renderToStaticMarkup(
     <TranscriptRowsView
