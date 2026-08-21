@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import type { LocalAgentTaskState } from '../tasks/LocalAgentTask/LocalAgentTask.js'
+import {
+  completeAgentTask,
+  type LocalAgentTaskState,
+} from '../tasks/LocalAgentTask/LocalAgentTask.js'
 import type { InProcessTeammateTaskState } from '../tasks/InProcessTeammateTask/types.js'
 import type { RemoteAgentTaskState } from '../tasks/RemoteAgentTask/RemoteAgentTask.js'
 import type { TaskState } from '../tasks/types.js'
@@ -665,30 +668,41 @@ describe('deriveDelegatedTaskStatus: working states', () => {
 })
 
 describe('deriveDelegatedTaskStatus: waiting states', () => {
-  // KNOWN GAP, verified against source 2026-08-21: production cannot currently
-  // reach the nonterminal-blocked state this branch is written for.
-  // completeAgentTask (src/tasks/LocalAgentTask/LocalAgentTask.tsx:538) is the
-  // ONLY writer of handoffStatus and always sets status:'completed' in the same
-  // literal, so handoffStatus==='blocked' implies terminal and the terminal
-  // guard returns 'none' first. The footer pill (src/tasks/pillLabel.ts:117)
-  // does NOT gate on terminal status, so it shows "needs input" while session
-  // status says idle. Do not delete these two tests without deciding that
-  // question: the first pins what production actually produces today, the
-  // second pins the branch contract if a nonterminal blocked row ever exists.
-  test('a blocked local agent as production writes it is excluded, not waiting', () => {
+  // The shape production actually writes: completeAgentTask is the only writer
+  // of handoffStatus and always sets status:'completed' in the same literal, so
+  // a blocked handoff is ALWAYS terminal. This is the case that must work; a
+  // nonterminal fixture here would test a state that cannot occur.
+  test('a blocked local agent is waiting even though it is terminal', () => {
     expect(
       deriveDelegatedTaskStatus(
         tasksOf(localAgent({ status: 'completed', handoffStatus: 'blocked' })),
       ),
-    ).toEqual({ hasWorkingDelegatedTask: false })
+    ).toEqual({ hasWorkingDelegatedTask: false, waitingReason: 'input-needed' })
   })
 
-  test('a nonterminal blocked local agent would be waiting, not working', () => {
+  test('a blocked local agent stays waiting once notified and retained', () => {
+    // evictAfter is left undefined for blocked rows, so the row persists and
+    // the session keeps reporting waiting until the user dismisses or resumes.
     expect(
       deriveDelegatedTaskStatus(
-        tasksOf(localAgent({ handoffStatus: 'blocked' })),
+        tasksOf(
+          localAgent({
+            status: 'completed',
+            handoffStatus: 'blocked',
+            notified: true,
+            evictAfter: undefined,
+          }),
+        ),
       ),
     ).toEqual({ hasWorkingDelegatedTask: false, waitingReason: 'input-needed' })
+  })
+
+  test('a done handoff on a terminal local agent is not waiting', () => {
+    expect(
+      deriveDelegatedTaskStatus(
+        tasksOf(localAgent({ status: 'completed', handoffStatus: 'done' })),
+      ),
+    ).toEqual({ hasWorkingDelegatedTask: false })
   })
 
   test('a teammate awaiting plan approval is waiting, not working', () => {
@@ -749,12 +763,13 @@ describe('deriveDelegatedTaskStatus: excluded states', () => {
   )
 
   for (const status of TERMINAL_STATUSES) {
+    // A blocked handoff is deliberately absent here: it is terminal by
+    // construction and still waiting. Covered above.
     test(`every task type is excluded when ${status}`, () => {
       expect(
         deriveDelegatedTaskStatus(
           tasksOf(
             localAgent({ status }),
-            localAgent({ status, handoffStatus: 'blocked' }),
             remoteAgent({ status }),
             remoteAgent({ status, ultraplanPhase: 'needs_input' }),
             teammate({ status }),
@@ -788,9 +803,20 @@ describe('deriveDelegatedTaskStatus: mixed sets', () => {
   test('a blocked agent alone is waiting without work', () => {
     expect(
       deriveDelegatedTaskStatus(
-        tasksOf(localAgent({ handoffStatus: 'blocked' })),
+        tasksOf(localAgent({ status: 'completed', handoffStatus: 'blocked' })),
       ),
     ).toEqual({ hasWorkingDelegatedTask: false, waitingReason: 'input-needed' })
+  })
+
+  test('a blocked agent beside a running agent reports both facts', () => {
+    expect(
+      deriveDelegatedTaskStatus(
+        tasksOf(
+          localAgent({ status: 'completed', handoffStatus: 'blocked' }),
+          localAgent(),
+        ),
+      ),
+    ).toEqual({ hasWorkingDelegatedTask: true, waitingReason: 'input-needed' })
   })
 
   test('ultraplan needs_input alongside a running agent reports both facts', () => {
@@ -809,6 +835,72 @@ describe('deriveDelegatedTaskStatus: mixed sets', () => {
         tasksOf(remoteAgent({ isLongRunning: true }), teammate({ isIdle: true })),
       ),
     ).toEqual({ hasWorkingDelegatedTask: false })
+  })
+})
+
+// -- Production-shaped delegated state
+//
+// Every fixture above is hand-written, and TaskState widens to `any`, so none
+// of them prove the classifier agrees with the object production actually
+// builds. This drives the real writer instead: the earlier version of this
+// suite asserted a nonterminal blocked row, which completeAgentTask cannot
+// produce, and the dead branch went unnoticed until review.
+
+describe('deriveDelegatedTaskStatus: against the real task writer', () => {
+  function runCompleteAgentTask(agentText: string): Record<string, TaskState> {
+    let state = {
+      tasks: {
+        a1: {
+          id: 'a1',
+          type: 'local_agent',
+          status: 'running',
+          description: 'probe agent',
+          startTime: 0,
+          outputFile: '/dev/null',
+          outputOffset: 0,
+          notified: false,
+          isBackgrounded: true,
+          retain: false,
+        },
+      },
+    } as unknown as Parameters<Parameters<typeof completeAgentTask>[1]>[0]
+
+    completeAgentTask(
+      {
+        agentId: 'a1',
+        agentName: 'probe',
+        content: [{ type: 'text', text: agentText }],
+      } as unknown as Parameters<typeof completeAgentTask>[0],
+      updater => {
+        state = updater(state)
+      },
+    )
+    return (state as unknown as { tasks: Record<string, TaskState> }).tasks
+  }
+
+  test('a real blocked handoff reports waiting', () => {
+    const tasks = runCompleteAgentTask(
+      'status: blocked\n\nOpen questions / blockers:\n- which database?',
+    )
+    // Pin the shape the classifier depends on, so a change in either module
+    // shows up here rather than as a silently dead branch.
+    expect(tasks.a1).toMatchObject({
+      status: 'completed',
+      handoffStatus: 'blocked',
+      evictAfter: undefined,
+    })
+    expect(deriveDelegatedTaskStatus(tasks)).toEqual({
+      hasWorkingDelegatedTask: false,
+      waitingReason: 'input-needed',
+    })
+  })
+
+  test('a real done handoff does not report waiting', () => {
+    const tasks = runCompleteAgentTask('status: done\n\nAll set.')
+    expect(tasks.a1).toMatchObject({ status: 'completed', handoffStatus: 'done' })
+    expect(deriveDelegatedTaskStatus(tasks)).toEqual({
+      hasWorkingDelegatedTask: false,
+    })
   })
 })
 
@@ -1107,7 +1199,7 @@ describe('REPL integration facts', () => {
 
   test('goal continuation stays blocked while a delegated task needs input', () => {
     const { hasWorkingDelegatedTask, waitingReason } = deriveDelegatedTaskStatus(
-      tasksOf(localAgent({ handoffStatus: 'blocked' })),
+      tasksOf(localAgent({ status: 'completed', handoffStatus: 'blocked' })),
     )
     expect(
       deriveTuiSessionStatus({

@@ -307,6 +307,23 @@ type DelegatedContribution = 'working' | 'waiting' | 'none'
  * session permanently busy.
  */
 function classifyDelegatedTask(task: DelegatedTaskFacts): DelegatedContribution {
+  // Deliberately ahead of the terminal guard. `completeAgentTask`
+  // (src/tasks/LocalAgentTask/LocalAgentTask.tsx) is the only writer of
+  // `handoffStatus` and always sets `status: 'completed'` in the same literal,
+  // so a blocked handoff is ALWAYS terminal — checking it after the guard makes
+  // this branch unreachable. The agent stopped to ask the user something, and
+  // the row is retained indefinitely (`evictAfter: undefined`) for exactly that
+  // reason, so the session is waiting on a person even though the task is done.
+  // The footer pill reports "needs input" off the same rule
+  // (src/tasks/pillLabel.ts), and the two must not contradict each other.
+  //
+  // This holds `waiting` until the user acts: dismissing the row
+  // (src/state/teammateViewHelpers.ts sets `evictAfter: 0`) or resuming the
+  // agent (which re-registers a fresh row with no `handoffStatus`) clears it.
+  if (task.type === 'local_agent' && task.handoffStatus === 'blocked') {
+    return 'waiting'
+  }
+
   if (isTerminalTaskStatus(task.status)) return 'none'
 
   switch (task.type) {
@@ -318,8 +335,9 @@ function classifyDelegatedTask(task: DelegatedTaskFacts): DelegatedContribution 
       return 'none'
 
     // Includes a backgrounded main session, which runs as a local_agent.
+    // A blocked handoff already returned above.
     case 'local_agent':
-      return task.handoffStatus === 'blocked' ? 'waiting' : 'working'
+      return 'working'
 
     case 'in_process_teammate':
       if (task.awaitingPlanApproval === true) return 'waiting'
