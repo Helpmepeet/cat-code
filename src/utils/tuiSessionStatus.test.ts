@@ -14,6 +14,7 @@ import {
   deriveDelegatedTaskStatus,
   deriveFocusedInputDialog,
   deriveHasOperationalWork,
+  deriveHasSuppressedDialog,
   deriveLocalWaitingReason,
   deriveTuiSessionStatus,
   deriveTuiWaitingDetail,
@@ -314,6 +315,140 @@ describe('getDialogWaitingReason', () => {
       'plugin-hint',
       'desktop-upsell',
     ])
+  })
+})
+
+describe('deriveHasSuppressedDialog', () => {
+  const BLOCKING = PRIORITY_ORDER.filter(
+    d => getDialogWaitingReason(d) !== undefined,
+  )
+  const NON_BLOCKING = PRIORITY_ORDER.filter(
+    d => getDialogWaitingReason(d) === undefined,
+  )
+
+  test('no hint when the user is not typing', () => {
+    expect(deriveHasSuppressedDialog(factsFor(PRIORITY_ORDER))).toBe(false)
+  })
+
+  test('no hint when nothing is queued', () => {
+    expect(
+      deriveHasSuppressedDialog(
+        factsFor([], { suppressInterruptDialogs: true }),
+      ),
+    ).toBe(false)
+  })
+
+  for (const dialog of BLOCKING) {
+    test(`${dialog} hidden by typing is hinted`, () => {
+      expect(
+        deriveHasSuppressedDialog(
+          factsFor([dialog], { suppressInterruptDialogs: true }),
+        ),
+      ).toBe(true)
+    })
+  }
+
+  for (const dialog of NON_BLOCKING) {
+    test(`${dialog} hidden by typing is not hinted`, () => {
+      expect(
+        deriveHasSuppressedDialog(
+          factsFor([dialog], { suppressInterruptDialogs: true }),
+        ),
+      ).toBe(false)
+    })
+  }
+
+  test('the hint fires for every dialog the session waits on, and only those', () => {
+    // Pins the set rather than the count: the old hand-written OR chain in
+    // REPL named six queues and missed five blocking dialogs.
+    const hinted = PRIORITY_ORDER.filter(d =>
+      deriveHasSuppressedDialog(
+        factsFor([d], { suppressInterruptDialogs: true }),
+      ),
+    )
+    expect(hinted).toEqual([
+      'sandbox-permission',
+      'tool-permission',
+      'prompt',
+      'worker-sandbox-permission',
+      'elicitation',
+      'cost',
+      'idle-return',
+      'resume-paused-goal',
+      'ultraplan-choice',
+      'ultraplan-launch',
+      'ide-onboarding',
+    ])
+  })
+
+  test('exiting is not hinted: no dialog can appear once typing stops', () => {
+    expect(
+      deriveHasSuppressedDialog(
+        factsFor(PRIORITY_ORDER, {
+          suppressInterruptDialogs: true,
+          isExiting: true,
+        }),
+      ),
+    ).toBe(false)
+  })
+
+  test('an open exit flow is not hinted', () => {
+    expect(
+      deriveHasSuppressedDialog(
+        factsFor(PRIORITY_ORDER, {
+          suppressInterruptDialogs: true,
+          hasExitFlow: true,
+        }),
+      ),
+    ).toBe(false)
+  })
+
+  test('a queue the animation gate hides is not hinted', () => {
+    // The session is still waiting (deriveLocalWaitingReason re-checks these),
+    // but the hint promises a dialog that stopping typing would reveal, and a
+    // tool owning the frame keeps it hidden either way.
+    expect(
+      deriveHasSuppressedDialog(
+        factsFor(['tool-permission', 'prompt'], {
+          suppressInterruptDialogs: true,
+          allowDialogsWithAnimation: false,
+        }),
+      ),
+    ).toBe(false)
+  })
+
+  test('the local sandbox prompt is hinted through the animation gate', () => {
+    expect(
+      deriveHasSuppressedDialog(
+        factsFor(['sandbox-permission'], {
+          suppressInterruptDialogs: true,
+          allowDialogsWithAnimation: false,
+        }),
+      ),
+    ).toBe(true)
+  })
+
+  test('a non-blocking winner hides a blocking dialog it outranks', () => {
+    // The message selector renders instead of the prompt input, so the hint is
+    // unreachable; reporting it would still be a claim about a dialog the user
+    // is not being kept from.
+    expect(
+      deriveHasSuppressedDialog(
+        factsFor(['message-selector', 'tool-permission'], {
+          suppressInterruptDialogs: true,
+        }),
+      ),
+    ).toBe(false)
+  })
+
+  test('a blocking dialog under a callout is still hinted', () => {
+    expect(
+      deriveHasSuppressedDialog(
+        factsFor(['cost', 'effort-callout'], {
+          suppressInterruptDialogs: true,
+        }),
+      ),
+    ).toBe(true)
   })
 })
 
