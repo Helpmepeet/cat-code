@@ -23,9 +23,19 @@ import {
   deriveSessionStateTrackingObjective,
   finalizeFailedAgentLaunch,
   inputSchema,
+  registerWorkerCodexLease,
   reportableAccount,
   resolveSystemSubagentName,
 } from './AgentTool.js'
+import {
+  getCodexLeaseForOwner,
+  resetCodexLeaseManagerForTest,
+} from '../../services/api/codexAccountLeaseManager.js'
+import {
+  resetCodexAccountPoolForTest,
+  seedCodexAccountPoolForTest,
+  type PoolAccount,
+} from '../../services/api/codexAccountPool.js'
 import { renderGroupedAgentToolUse, renderToolResultMessage } from './UI.js'
 
 async function renderToPlainText(node: React.ReactNode): Promise<string> {
@@ -855,10 +865,10 @@ describe('reportableAccount', () => {
   const account = { accountId: 'acct-1', accountAlias: 'scout' }
 
   test('withholds the account from a worker that is not on the Codex path', () => {
-    // A Codex lease is registered for EVERY worker regardless of its model
-    // (unlike the main thread's, which query.ts gates on the provider), so an
-    // Anthropic worker holds one it never spends. Reporting it would name an
-    // account in the transcript that the run never touched.
+    // Second gate on the same routing function that registerWorkerCodexLease
+    // uses: registration decides whether to TAKE an account, this decides
+    // whether the run SPENT one, and only the second is what the transcript
+    // claims.
     expect(reportableAccount(account, 'claude-sonnet-5', 'firstParty')).toBeUndefined()
   })
 
@@ -870,5 +880,112 @@ describe('reportableAccount', () => {
 
   test('reports nothing when no lease was held, even on the Codex path', () => {
     expect(reportableAccount(undefined, 'gpt-5.6-luna', 'openai')).toBeUndefined()
+  })
+})
+
+function buildLeasePoolAccount(accountId: string, status: PoolAccount['status'] = 'healthy'): PoolAccount {
+  return {
+    accountId,
+    accessToken: `token-${accountId}`,
+    refreshToken: `refresh-${accountId}`,
+    expiresAt: Date.now() + 5 * 60_000,
+    source: 'config',
+    status,
+    lastUsedAt: 0,
+    usageFetchedAt: Date.now(),
+  }
+}
+
+describe('registerWorkerCodexLease', () => {
+  afterEach(() => {
+    resetCodexLeaseManagerForTest()
+    resetCodexAccountPoolForTest()
+  })
+
+  test('does not throw when no Codex account is configured', () => {
+    // An Anthropic-only machine has an empty pool, and selectAccountForLease
+    // throws there. Both spawn sites sit outside the launch try/catch, so an
+    // unguarded registration failed every Agent tool call on such a machine.
+    resetCodexAccountPoolForTest()
+
+    expect(() =>
+      registerWorkerCodexLease({
+        ownerId: 'agent_anthropic_only',
+        ownerLabel: 'explore the repo',
+        model: 'claude-sonnet-5',
+        baseProvider: 'firstParty',
+      }),
+    ).not.toThrow()
+    expect(getCodexLeaseForOwner('agent_anthropic_only')).toBeUndefined()
+  })
+
+  test('withholds a lease from an Anthropic worker even with a healthy pool', () => {
+    seedCodexAccountPoolForTest({
+      accounts: [buildLeasePoolAccount('acct-1')],
+      activeAccountId: 'acct-1',
+    })
+
+    registerWorkerCodexLease({
+      ownerId: 'agent_anthropic',
+      ownerLabel: 'explore the repo',
+      model: 'claude-sonnet-5',
+      baseProvider: 'firstParty',
+    })
+
+    expect(getCodexLeaseForOwner('agent_anthropic')).toBeUndefined()
+  })
+
+  test('still leases for a non-gpt model inside a Codex session', () => {
+    // Only `gpt-` prefixes decide routing on their own; every other model id
+    // falls back to the session provider, and that request really does enter
+    // the Codex adapter. Gating on the model name alone would strand it.
+    seedCodexAccountPoolForTest({
+      accounts: [buildLeasePoolAccount('acct-1')],
+      activeAccountId: 'acct-1',
+    })
+
+    registerWorkerCodexLease({
+      ownerId: 'agent_codex_session',
+      ownerLabel: 'explore the repo',
+      model: 'claude-sonnet-5',
+      baseProvider: 'openai',
+    })
+
+    expect(getCodexLeaseForOwner('agent_codex_session')?.accountId).toBe('acct-1')
+  })
+
+  test('leases for a gpt worker whatever the session provider is', () => {
+    seedCodexAccountPoolForTest({
+      accounts: [buildLeasePoolAccount('acct-1')],
+      activeAccountId: 'acct-1',
+    })
+
+    registerWorkerCodexLease({
+      ownerId: 'agent_codex',
+      ownerLabel: 'explore the repo',
+      model: 'gpt-5.6-luna',
+      baseProvider: 'firstParty',
+    })
+
+    const lease = getCodexLeaseForOwner('agent_codex')
+    expect(lease?.accountId).toBe('acct-1')
+    expect(lease?.ownerLabel).toBe('explore the repo')
+    expect(lease?.ownerType).toBe('subagent')
+  })
+
+  test('swallows exhaustion so a capped pool surfaces on the request path', () => {
+    seedCodexAccountPoolForTest({
+      accounts: [buildLeasePoolAccount('acct-1', 'capped')],
+    })
+
+    expect(() =>
+      registerWorkerCodexLease({
+        ownerId: 'agent_capped',
+        ownerLabel: 'explore the repo',
+        model: 'gpt-5.6-luna',
+        baseProvider: 'openai',
+      }),
+    ).not.toThrow()
+    expect(getCodexLeaseForOwner('agent_capped')).toBeUndefined()
   })
 })

@@ -19,6 +19,7 @@ import { clearDumpState } from '../../services/api/dumpPrompts.js';
 import { EMPTY_USAGE } from '../../services/api/emptyUsage.js';
 import { completeAgentTask as completeAsyncAgent, createActivityDescriptionResolver, createProgressTracker, enqueueAgentNotification, failAgentTask as failAsyncAgent, getProgressUpdate, getTokenCountFromTracker, isLocalAgentTask, killAsyncAgent, registerAgentForeground, registerAsyncAgent, unregisterAgentForeground, updateAgentProgress as updateAsyncAgentProgress, updateProgressFromMessage } from '../../tasks/LocalAgentTask/LocalAgentTask.js';
 import { registerCodexLease, releaseCodexLease, snapshotLeaseAccount, type CodexLeaseAccount } from '../../services/api/codexAccountLeaseManager.js';
+import { poolManagesCredentials } from '../../services/api/codexAccountPool.js';
 import { clearWebSocketSession } from '../../services/api/codex-websocket-transport.js';
 import { checkRemoteAgentEligibility, formatPreconditionError, getRemoteTaskSessionUrl, registerRemoteAgentTask } from '../../tasks/RemoteAgentTask/RemoteAgentTask.js';
 import { assembleToolPool } from '../../tools.js';
@@ -246,12 +247,13 @@ export function releaseSynchronousAgentCodexResources(agentId: string): void {
  *
  * Two guards, and both are load-bearing:
  *
- *  - **Provider.** A lease is registered for every worker regardless of the
- *    model it runs on (unlike the main thread's, which `query.ts` gates on
- *    `getAPIProvider() === 'openai'`), so an Anthropic worker holds a Codex
- *    lease it never spends. Reporting that would put an account in the
- *    transcript the run never touched. The gate is the engine's OWN routing
- *    function, so it cannot disagree with where the request actually went.
+ *  - **Provider.** `registerWorkerCodexLease` already refuses to take a lease
+ *    for a non-Codex worker, so this is a second gate on the same routing
+ *    function rather than the only one. Kept because the two answer different
+ *    questions: registration asks whether to TAKE an account, this asks
+ *    whether the run SPENT one, and only the second is what the transcript
+ *    claims. The gate is the engine's OWN routing function, so it cannot
+ *    disagree with where the request actually went.
  *  - **Liveness.** `releaseCodexLease` deletes the entry, so this returns
  *    undefined once the worker's lease is released. Callers must take the
  *    snapshot while the lease is alive; there is no reading it back afterwards.
@@ -271,6 +273,49 @@ function reportableLeaseAccount(
   baseProvider: APIProvider | undefined,
 ): CodexLeaseAccount | undefined {
   return reportableAccount(snapshotLeaseAccount(agentId), model, baseProvider);
+}
+
+/**
+ * Take a Codex account lease for a worker, when the worker will spend one.
+ *
+ * Two guards, mirroring the main thread's at `query.ts:370`:
+ *
+ *  - **Provider.** The lease plane is Codex-only. A worker on an Anthropic
+ *    model that took a lease would hold an account it never spends: a false
+ *    holder in the lease panel, and a phantom entry in the live-lease counts
+ *    that `spread` selection balances real Codex workers across.
+ *  - **Pool authority.** With no pool inventory there is nothing to lease, and
+ *    `selectAccountForLease` throws rather than returning nothing.
+ *
+ * Selection failure is caught, not propagated. Both call sites sit outside the
+ * launch try/catch, so a throw here escaped as a raw tool failure with no
+ * worktree or worker-name cleanup behind it. An exhausted pool is a
+ * REQUEST-path condition anyway: `claude.ts` registers a subagent lease lazily
+ * when one is missing, and `errors.ts` classifies the exhaustion message there
+ * into the message the user is meant to read. Losing the lease here costs the
+ * worker only the description-shaped `ownerLabel`.
+ */
+export function registerWorkerCodexLease({
+  ownerId,
+  ownerLabel,
+  model,
+  baseProvider,
+}: {
+  ownerId: string;
+  ownerLabel: string;
+  model: string;
+  baseProvider: APIProvider | undefined;
+}): void {
+  if (resolveRequestProvider(model, baseProvider) !== 'openai') return;
+  if (!poolManagesCredentials()) return;
+  try {
+    registerCodexLease({ ownerId, ownerType: 'subagent', ownerLabel });
+  } catch (error) {
+    logForDebugging(
+      `Codex lease not assigned to worker ${ownerId}: ${errorMessage(error)}`,
+      { level: 'warn' },
+    );
+  }
 }
 
 // Auto-background agent tasks after this many ms (0 = disabled)
@@ -1293,10 +1338,11 @@ export const AgentTool = buildTool({
         // They are killed explicitly via chat:killAgents.
         toolUseId: toolUseContext.toolUseId
       });
-      registerCodexLease({
+      registerWorkerCodexLease({
         ownerId: asyncAgentId,
-        ownerType: 'subagent',
         ownerLabel: description,
+        model: resolvedAgentModel,
+        baseProvider: toolUseContext.options.mainLoopProvider,
       });
       const asyncLeaseAccount = reportableLeaseAccount(
         asyncAgentId,
@@ -1441,10 +1487,11 @@ export const AgentTool = buildTool({
             toolUseId: toolUseContext.toolUseId,
             autoBackgroundMs: getAutoBackgroundMs() || undefined
           });
-          registerCodexLease({
+          registerWorkerCodexLease({
             ownerId: syncAgentId,
-            ownerType: 'subagent',
             ownerLabel: description,
+            model: resolvedAgentModel,
+            baseProvider: toolUseContext.options.mainLoopProvider,
           });
           syncLeaseAccount = reportableLeaseAccount(
             syncAgentId,
