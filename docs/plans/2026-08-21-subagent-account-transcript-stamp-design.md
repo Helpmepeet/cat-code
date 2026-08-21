@@ -160,15 +160,40 @@ Two ways to close it, both needing an operator ruling before implementation:
 - **(a) Accept and document it** — the card names the account the work was
   dispatched to. Cheapest, and wrong only in the failover case, which
   `failoverCount` says is rare.
-- **(b) Surface the final account on the completion row instead** — the
-  task-notification row is a genuinely new row at finish, so putting the settled
-  account there breaks no immutability rule. Costs a wire field on
-  `SDKUserMessage.origin` + `AgentCompletionProjection` and a second display
-  decision about what that row shows.
+- **(b) Carry the settled account on the completion turn** — measured below.
+
+**(b) is an ADD-ON, not an alternative.** A foreground subagent produces no
+task-notification turn at all (`TranscriptView.tsx:2777`), so §2's result stamp
+is required either way; (b) buys exactly one case, the background worker that
+failed over mid-run.
+
+Its cost, measured:
+
+| layer | files | note |
+|---|---|---|
+| engine | `types/message.ts:12`, `utils/taskNotification.ts:170`, `LocalAgentTask.tsx:560,587`, `utils/messages/mappers.ts:137` | the last is the governed one |
+| SDK types | `coreSchemas.ts:1324`, `coreTypes.generated.ts:308`, 2 snapshot copies | drift auto-caught by `engineTypeDriftCheck.ts` |
+| renderer | `InjectedOrigin`, `AgentCompletionProjection`, display | |
+
+Two boundaries §2 does not touch:
+
+1. **The origin narrowing allowlist** (`mappers.ts:137-150`) is a
+   SECURITY-MINIMUM §4 enforcement, not a convenience — `taskId`/`outputFile`
+   are dropped there because a UI once put both on screen (2026-08-01 leak).
+   Widening it needs its own recorded justification plus a `secretGuard.test.ts`
+   extension.
+2. **Row immutability.** The completion is ALREADY joined by `toolUseId` onto
+   every tool-use row; the launch record discards it in one line —
+   `const completion = isLaunchRecord ? null : row.agentCompletion`
+   (`TranscriptView.tsx:2764`). That line IS the 2026-08-14 ruling in force. (b)
+   needs either a narrow exception for this one field or a new slot on the
+   completion row (`TaskNotificationBox`, `:964`, renders only status +
+   summary today).
 
 Recommendation: (a) for this change, with the failover case left visibly
-unclaimed rather than silently wrong; revisit (b) only if failover turns out to
-be common enough to notice.
+unclaimed rather than silently wrong. (b) is a clean follow-on that nothing in
+§2 forecloses; take it only if `failoverCount > 0` turns out to be common enough
+to notice.
 
 ## 4. Tests
 
