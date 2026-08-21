@@ -1027,6 +1027,39 @@ describe('deriveHasOperationalWork', () => {
 })
 
 describe('deriveHasUnblockedDelegatedWork', () => {
+  test('two teams sharing a teammate name keep caffeinate held', () => {
+    // allocateTeamRecipient allocates per team file, so `researcher` can exist
+    // in two live teams at once, and the in-process runner badges the prompt
+    // with the bare name. Matching it blindly would exclude BOTH rows and let
+    // the machine sleep while the second teammate is still computing.
+    const tasks = tasksOf(
+      teammate({ identity: { agentName: 'researcher', agentId: 'researcher@team-a', teamName: 'team-a' } }),
+      teammate({ identity: { agentName: 'researcher', agentId: 'researcher@team-b', teamName: 'team-b' } }),
+    )
+    expect(
+      deriveHasUnblockedDelegatedWork(tasks, new Set(['researcher'])),
+    ).toBe(true)
+  })
+
+  test('a team-qualified badge resolves the same collision precisely', () => {
+    const tasks = tasksOf(
+      teammate({ identity: { agentName: 'researcher', agentId: 'researcher@team-a', teamName: 'team-a' } }),
+    )
+    expect(
+      deriveHasUnblockedDelegatedWork(tasks, new Set(['researcher@team-a'])),
+    ).toBe(false)
+  })
+
+  test('a terminal namesake does not make a live name ambiguous', () => {
+    const tasks = tasksOf(
+      teammate({ status: 'completed', identity: { agentName: 'researcher', agentId: 'researcher@old', teamName: 'old' } }),
+      teammate({ identity: { agentName: 'researcher', agentId: 'researcher@team-a', teamName: 'team-a' } }),
+    )
+    expect(
+      deriveHasUnblockedDelegatedWork(tasks, new Set(['researcher'])),
+    ).toBe(false)
+  })
+
   const NONE: ReadonlySet<string> = new Set()
 
   test('a running teammate with no prompt queued is unblocked work', () => {

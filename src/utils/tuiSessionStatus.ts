@@ -396,14 +396,39 @@ function classifyDelegatedTask(task: DelegatedTaskFacts): DelegatedContribution 
 function isPromptedForPermission(
   task: DelegatedTaskFacts,
   promptedWorkerHandles: ReadonlySet<string>,
+  ambiguousAgentNames: ReadonlySet<string>,
 ): boolean {
   if (task.type !== 'in_process_teammate') return false
   const identity = task.identity
   if (identity === undefined) return false
-  return (
-    promptedWorkerHandles.has(identity.agentName) ||
-    promptedWorkerHandles.has(identity.agentId)
-  )
+  // `agentId` is team-qualified, so it always names exactly one teammate.
+  if (promptedWorkerHandles.has(identity.agentId)) return true
+  // A bare `agentName` does not. Names are allocated per team file
+  // (`allocateTeamRecipient`, src/utils/swarm/teamHelpers.ts), so two live
+  // teams can each hold a `researcher`, and the in-process runner badges the
+  // prompt with just that name. When it cannot say which teammate is blocked,
+  // exclude neither: holding `caffeinate` too long is the safe error, sleeping
+  // through a teammate that is still computing is not.
+  if (ambiguousAgentNames.has(identity.agentName)) return false
+  return promptedWorkerHandles.has(identity.agentName)
+}
+
+/** Bare teammate names shared by more than one live row, so a name-only badge cannot resolve them. */
+function collectAmbiguousAgentNames(
+  tasks: Readonly<Record<string, TaskState>>,
+): ReadonlySet<string> {
+  const seen = new Set<string>()
+  const ambiguous = new Set<string>()
+  for (const task of Object.values(tasks)) {
+    const facts: DelegatedTaskFacts = task
+    if (facts.type !== 'in_process_teammate') continue
+    if (isTerminalTaskStatus(facts.status)) continue
+    const name = facts.identity?.agentName
+    if (name === undefined) continue
+    if (seen.has(name)) ambiguous.add(name)
+    seen.add(name)
+  }
+  return ambiguous
 }
 
 /**
@@ -419,10 +444,15 @@ export function deriveHasUnblockedDelegatedWork(
   tasks: Readonly<Record<string, TaskState>>,
   promptedWorkerHandles: ReadonlySet<string>,
 ): boolean {
+  const ambiguousAgentNames = collectAmbiguousAgentNames(tasks)
   for (const task of Object.values(tasks)) {
     const facts: DelegatedTaskFacts = task
     if (classifyDelegatedTask(facts) !== 'working') continue
-    if (isPromptedForPermission(facts, promptedWorkerHandles)) continue
+    if (
+      isPromptedForPermission(facts, promptedWorkerHandles, ambiguousAgentNames)
+    ) {
+      continue
+    }
     return true
   }
   return false
