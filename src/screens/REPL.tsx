@@ -183,6 +183,7 @@ import { roughTokenCountEstimation } from '../services/tokenEstimation.js';
 import { doesMostRecentAssistantMessageExceed200k, tokenCountWithEstimation } from '../utils/tokens.js';
 import { accountThreadGoalUsage, buildThreadGoalDisplayState, calculateThreadGoalContextTokenDelta, deriveThreadGoalContinuationResetState, nextThreadGoalContinuationStallCount, pauseActiveThreadGoalOnAbort, renderThreadGoalBudgetLimitPrompt, renderThreadGoalContinuationPrompt, shouldPromptToResumePausedGoal, shouldResetThreadGoalContinuationStallCount, type ThreadGoal, type ThreadGoalContinuationKind } from '../utils/threadGoal.js';
 import { getThreadGoalContinuationAction } from '../utils/threadGoalController.js';
+import { deriveDelegatedTaskStatus, deriveFocusedInputDialog, deriveHasOperationalWork, deriveLocalWaitingReason, deriveTuiSessionStatus, deriveTuiWaitingDetail, type FocusedInputDialog, type FocusedInputDialogFacts } from '../utils/tuiSessionStatus.js';
 import { updateThreadGoalStatusAction } from '../utils/threadGoalActions.js';
 import { getDisplayedEffortLevel } from '../utils/effort.js';
 import { getCodexLeaseSnapshot } from '../services/api/codexAccountLeaseManager.js';
@@ -1042,7 +1043,7 @@ export function REPL({
 
   // Ref to track current focusedInputDialog for use in callbacks
   // This avoids stale closures when checking dialog state in timer callbacks
-  const focusedInputDialogRef = React.useRef<ReturnType<typeof getFocusedInputDialog>>(undefined);
+  const focusedInputDialogRef = React.useRef<FocusedInputDialog | undefined>(undefined);
 
   // How long after the last keystroke before deferred dialogs are shown
   const PROMPT_SUPPRESSION_MS = 1500;
@@ -1239,46 +1240,20 @@ export function REPL({
   const haikuTitleAttemptedRef = useRef((initialMessages?.length ?? 0) > 0);
   const agentTitle = mainThreadAgentDefinition?.agentType;
   const terminalTitle = sessionTitle ?? agentTitle ?? haikuTitle ?? 'Free Code';
-  const isWaitingForApproval = toolUseConfirmQueue.length > 0 || promptQueue.length > 0 || pendingWorkerRequest || pendingSandboxRequest;
   // Local-jsx commands (like /plugin, /config) show user-facing dialogs that
   // wait for input. Require jsx != null — if the flag is stuck true but jsx
   // is null, treat as not-showing so TextInput focus and queue processor
   // aren't deadlocked by a phantom overlay.
   const isShowingLocalJSXCommand = toolJSX?.isLocalJSXCommand === true && toolJSX?.jsx != null;
-  const titleIsAnimating = isLoading && !isWaitingForApproval && !isShowingLocalJSXCommand;
   // Title animation state lives in <AnimatedTerminalTitle> so the 960ms tick
   // doesn't re-render REPL. titleDisabled/terminalTitle are still computed
   // here because onQueryImpl reads them (background session description,
   // haiku title extraction gate).
-
-  // Prevent macOS from sleeping while Claude is working
-  useEffect(() => {
-    if (isLoading && !isWaitingForApproval && !isShowingLocalJSXCommand) {
-      startPreventSleep();
-      return () => stopPreventSleep();
-    }
-  }, [isLoading, isWaitingForApproval, isShowingLocalJSXCommand]);
-  const sessionStatus: TabStatusKind = isWaitingForApproval || isShowingLocalJSXCommand ? 'waiting' : isLoading ? 'busy' : 'idle';
-  const waitingFor = sessionStatus !== 'waiting' ? undefined : toolUseConfirmQueue.length > 0 ? `approve ${toolUseConfirmQueue[0]!.tool.name}` : pendingWorkerRequest ? 'worker request' : pendingSandboxRequest ? 'sandbox request' : isShowingLocalJSXCommand ? 'dialog open' : 'input needed';
-
-  // Push status to the PID file for `claude ps`. Fire-and-forget; ps falls
-  // back to transcript-tail derivation when this is missing/stale.
-  useEffect(() => {
-    if (feature('BG_SESSIONS')) {
-      void updateSessionActivity({
-        status: sessionStatus,
-        waitingFor
-      });
-    }
-  }, [sessionStatus, waitingFor]);
-
-  // 3P default: off — OSC 21337 is ant-only while the spec stabilizes.
-  // Gated so we can roll back if the sidebar indicator conflicts with
-  // the title spinner in terminals that render both. When the flag is
-  // on, the user-facing config setting controls whether it's active.
-  const tabStatusGateEnabled = getFeatureValue_CACHED_MAY_BE_STALE('tengu_terminal_sidebar', false);
-  const showStatusInTerminalTab = tabStatusGateEnabled && (getGlobalConfig().showStatusInTerminalTab ?? false);
-  useTabStatus(titleDisabled || !showStatusInTerminalTab ? null : sessionStatus);
+  //
+  // Session status, title animation, sleep prevention, the `claude ps` record,
+  // and the OSC tab indicator are all derived below focusedInputDialog: they
+  // depend on which dialog actually owns input, so they cannot be computed
+  // before that is known.
 
   // Register the leader's setToolUseConfirmQueue for in-process teammates
   useEffect(() => {
@@ -2229,66 +2204,126 @@ export function REPL({
   // Calculate if cost dialog should be shown
   const showingCostDialog = !isLoading && showCostDialog;
 
-  // Determine which dialog should have focus (if any)
+  // Determine which dialog should have focus (if any). Priority itself lives
+  // in deriveFocusedInputDialog — REPL only supplies facts, so status and the
+  // visible dialog cannot rank the queues differently.
   // Permission and interactive dialogs can show even when toolJSX is set,
   // as long as shouldContinueAnimation is true. This prevents deadlocks when
   // agents set background hints while waiting for user interaction.
-  function getFocusedInputDialog(): 'message-selector' | 'sandbox-permission' | 'tool-permission' | 'prompt' | 'worker-sandbox-permission' | 'elicitation' | 'cost' | 'idle-return' | 'resume-paused-goal' | 'init-onboarding' | 'ide-onboarding' | 'model-switch' | 'undercover-callout' | 'effort-callout' | 'remote-callout' | 'lsp-recommendation' | 'plugin-hint' | 'desktop-upsell' | 'ultraplan-choice' | 'ultraplan-launch' | undefined {
-    // Exit states always take precedence
-    if (isExiting || exitFlow) return undefined;
-
-    // High priority dialogs (always show regardless of typing)
-    if (isMessageSelectorVisible) return 'message-selector';
-
+  const focusedInputDialogFacts: FocusedInputDialogFacts = {
+    isExiting,
+    hasExitFlow: exitFlow != null,
+    isMessageSelectorVisible,
     // Suppress interrupt dialogs while user is actively typing
-    if (isPromptInputActive) return undefined;
-    if (sandboxPermissionRequestQueue[0]) return 'sandbox-permission';
-
-    // Permission/interactive dialogs (show unless blocked by toolJSX)
-    const allowDialogsWithAnimation = !toolJSX || toolJSX.shouldContinueAnimation;
-    if (allowDialogsWithAnimation && toolUseConfirmQueue[0]) return 'tool-permission';
-    if (allowDialogsWithAnimation && promptQueue[0]) return 'prompt';
+    suppressInterruptDialogs: isPromptInputActive,
+    allowDialogsWithAnimation: !toolJSX || !!toolJSX.shouldContinueAnimation,
+    hasSandboxPermission: sandboxPermissionRequestQueue[0] != null,
+    hasToolPermission: toolUseConfirmQueue[0] != null,
+    hasPrompt: promptQueue[0] != null,
     // Worker sandbox permission prompts (network access) from swarm workers
-    if (allowDialogsWithAnimation && workerSandboxPermissions.queue[0]) return 'worker-sandbox-permission';
-    if (allowDialogsWithAnimation && elicitation.queue[0]) return 'elicitation';
-    if (allowDialogsWithAnimation && showingCostDialog) return 'cost';
-    if (allowDialogsWithAnimation && idleReturnPending) return 'idle-return';
-    if (allowDialogsWithAnimation && resumePausedGoalPrompt) return 'resume-paused-goal';
-    if (feature('ULTRAPLAN') && allowDialogsWithAnimation && !isLoading && ultraplanPendingChoice) return 'ultraplan-choice';
-    if (feature('ULTRAPLAN') && allowDialogsWithAnimation && !isLoading && ultraplanLaunchPending) return 'ultraplan-launch';
-
+    hasWorkerSandboxPermission: workerSandboxPermissions.queue[0] != null,
+    hasElicitation: elicitation.queue[0] != null,
+    hasCostDialog: showingCostDialog,
+    hasIdleReturn: idleReturnPending != null,
+    hasResumePausedGoal: resumePausedGoalPrompt != null,
+    hasUltraplanChoice: feature('ULTRAPLAN') ? !isLoading && ultraplanPendingChoice != null : false,
+    hasUltraplanLaunch: feature('ULTRAPLAN') ? !isLoading && ultraplanLaunchPending != null : false,
     // Onboarding dialogs (special conditions)
-    if (allowDialogsWithAnimation && showIdeOnboarding) return 'ide-onboarding';
-
+    hasIdeOnboarding: showIdeOnboarding,
     // Model switch callout (ant-only, eliminated from external builds)
-    if ("external" === 'ant' && allowDialogsWithAnimation && showModelSwitchCallout) return 'model-switch';
-
+    hasModelSwitchCallout: "external" === 'ant' && showModelSwitchCallout,
     // Undercover auto-enable explainer (ant-only, eliminated from external builds)
-    if ("external" === 'ant' && allowDialogsWithAnimation && showUndercoverCallout) return 'undercover-callout';
-
+    hasUndercoverCallout: "external" === 'ant' && showUndercoverCallout,
     // Effort callout (shown once for Opus 4.6 users when effort is enabled)
-    if (allowDialogsWithAnimation && showEffortCallout) return 'effort-callout';
-
+    hasEffortCallout: showEffortCallout,
     // Remote callout (shown once before first bridge enable)
-    if (allowDialogsWithAnimation && showRemoteCallout) return 'remote-callout';
-
+    hasRemoteCallout: showRemoteCallout,
     // LSP plugin recommendation (lowest priority - non-blocking suggestion)
-    if (allowDialogsWithAnimation && lspRecommendation) return 'lsp-recommendation';
-
+    hasLspRecommendation: lspRecommendation != null,
     // Plugin hint from CLI/SDK stderr (same priority band as LSP rec)
-    if (allowDialogsWithAnimation && hintRecommendation) return 'plugin-hint';
-
+    hasPluginHint: hintRecommendation != null,
     // Desktop app upsell (max 3 launches, lowest priority)
-    if (allowDialogsWithAnimation && showDesktopUpsellStartup) return 'desktop-upsell';
-    return undefined;
-  }
-  const focusedInputDialog = getFocusedInputDialog();
+    hasDesktopUpsell: showDesktopUpsellStartup
+  };
+  const focusedInputDialog = deriveFocusedInputDialog(focusedInputDialogFacts);
+  // What typing is currently hiding. Same selector with one fact flipped, so
+  // waiting status never invents a dialog the visible surface disagrees with.
+  const prospectiveInputDialog = focusedInputDialog === undefined && isPromptInputActive ? deriveFocusedInputDialog({
+    ...focusedInputDialogFacts,
+    suppressInterruptDialogs: false
+  }) : focusedInputDialog;
 
   // True when permission prompts exist but are hidden because the user is typing
   const hasSuppressedDialogs = isPromptInputActive && (sandboxPermissionRequestQueue[0] || toolUseConfirmQueue[0] || promptQueue[0] || workerSandboxPermissions.queue[0] || elicitation.queue[0] || showingCostDialog);
 
   // Keep ref in sync so timer callbacks can read the current value
   focusedInputDialogRef.current = focusedInputDialog;
+
+  // -- Live session status
+  // Delegated work and delegated attention are independent aggregate facts:
+  // a blocked agent and a running agent coexist, and dropping either one
+  // reports a wrong session. Kept separate from hasRunningTeammates, which
+  // only drives the swarm turn-duration message.
+  const delegatedTaskStatus = useMemo(() => deriveDelegatedTaskStatus(tasks), [tasks]);
+  const hasWorkingDelegatedTask = delegatedTaskStatus.hasWorkingDelegatedTask;
+  const delegatedWaitingReason = delegatedTaskStatus.waitingReason;
+
+  // The dialog typing is hiding still blocks the session, so waiting reads
+  // the prospective dialog. Outgoing worker/sandbox requests render outside
+  // the dialog switch and apply only when no dialog is observed.
+  const localWaitingReason = deriveLocalWaitingReason({
+    focusedInputDialog: prospectiveInputDialog,
+    isExiting,
+    hasExitFlow: exitFlow != null,
+    hasPendingWorkerRequest: pendingWorkerRequest != null,
+    hasPendingSandboxRequest: pendingSandboxRequest != null,
+    isShowingLocalJsxCommand: isShowingLocalJSXCommand
+  });
+  const sessionStatus: TabStatusKind = deriveTuiSessionStatus({
+    isLoading,
+    hasWorkingDelegatedTask,
+    localWaitingReason,
+    delegatedWaitingReason
+  });
+  const hasOperationalWork = deriveHasOperationalWork({
+    isLoading,
+    hasWorkingDelegatedTask,
+    localWaitingReason
+  });
+  const waitingFor = deriveTuiWaitingDetail({
+    reason: localWaitingReason ?? delegatedWaitingReason,
+    toolName: toolUseConfirmQueue[0]?.tool.name
+  });
+  const titleIsAnimating = sessionStatus === 'busy';
+
+  // Prevent macOS from sleeping while real work is in flight. Deliberately
+  // narrower than "not idle": a turn parked on a local prompt releases
+  // caffeinate, but delegated work that is still running holds it.
+  useEffect(() => {
+    if (hasOperationalWork) {
+      startPreventSleep();
+      return () => stopPreventSleep();
+    }
+  }, [hasOperationalWork]);
+
+  // Push status to the PID file for `claude ps`. Fire-and-forget; ps falls
+  // back to transcript-tail derivation when this is missing/stale.
+  useEffect(() => {
+    if (feature('BG_SESSIONS')) {
+      void updateSessionActivity({
+        status: sessionStatus,
+        waitingFor
+      });
+    }
+  }, [sessionStatus, waitingFor]);
+
+  // 3P default: off — OSC 21337 is ant-only while the spec stabilizes.
+  // Gated so we can roll back if the sidebar indicator conflicts with
+  // the title spinner in terminals that render both. When the flag is
+  // on, the user-facing config setting controls whether it's active.
+  const tabStatusGateEnabled = getFeatureValue_CACHED_MAY_BE_STALE('tengu_terminal_sidebar', false);
+  const showStatusInTerminalTab = tabStatusGateEnabled && (getGlobalConfig().showStatusInTerminalTab ?? false);
+  useTabStatus(titleDisabled || !showStatusInTerminalTab ? null : sessionStatus);
 
   // Immediately capture pause/resume when focusedInputDialog changes
   // This ensures accurate timing even under high system load, rather than

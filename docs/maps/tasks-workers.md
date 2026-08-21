@@ -1,6 +1,6 @@
 # Tasks And Workers Routing Map
 
-Last refreshed: 2026-08-14.
+Last refreshed: 2026-08-21.
 
 Purpose: route local agents, shell tasks, teammate tasks, remote agent tasks, task panel UI, lifecycle, kill/stop behavior, and tests. This is a navigation map, not a replacement for source inspection. Start here, then verify behavior in the owner files below.
 
@@ -19,7 +19,8 @@ Purpose: route local agents, shell tasks, teammate tasks, remote agent tasks, ta
 |---|---|---|---|
 | Registered task types | `src/tasks.ts` | `src/Task.ts`, `src/tasks/types.ts` | `getAllTasks()` exposes `local_bash`, `local_agent`, `remote_agent`, `dream`, plus feature-gated workflow and monitor tasks. `in_process_teammate` is a task type but is not currently registered through `src/tasks.ts`; teammate kill/navigation imports it directly. |
 | Base task contract | `src/Task.ts` | `src/utils/task/framework.ts`, `src/utils/task/diskOutput.ts` | The polymorphic task interface is now just `kill(taskId, setAppState)`. Spawn/render are owned by concrete task modules and tools. |
-| Background-task filtering | `src/tasks/types.ts` | `src/components/tasks/BackgroundTaskStatus.tsx`, `src/components/tasks/BackgroundTasksDialog.tsx` | `isBackgroundTask()` requires `running` or `pending`, and excludes foreground tasks with `isBackgrounded === false`. |
+| Background-task filtering | `src/tasks/types.ts` | `src/components/tasks/BackgroundTaskStatus.tsx`, `src/components/tasks/BackgroundTasksDialog.tsx` | `isBackgroundTask()` requires `running` or `pending`, and excludes foreground tasks with `isBackgrounded === false`. This is a UI-visibility predicate, not an activity predicate. |
+| Operational task activity (session busy/waiting) | `src/utils/tuiSessionStatus.ts` | `src/screens/REPL.tsx`, `docs/maps/terminal-ui-state.md` | `deriveDelegatedTaskStatus()` answers a different question from `isBackgroundTask()`: does this session own active delegated work, and is any delegated task stalled on the user. Working and waiting are independent aggregate facts. Excluded from work: terminal tasks, idle teammates, blocked local agents, teammates awaiting plan approval, remote ultraplan attention phases, deliberately long-running remote agents, and `local_bash` / `monitor_mcp` / `dream`. A backgrounded main session counts as work, because it runs as `local_agent`. |
 | AppState updates and eviction | `src/utils/task/framework.ts` | `src/state/teammateViewHelpers.ts`, concrete task files | `registerTask()`, `updateTaskState()`, `pollTasks()`, and `evictTerminalTask()` are the shared state helpers. Local-agent panel retention uses `PANEL_GRACE_MS`. |
 | Task output files | `src/utils/task/diskOutput.ts` | task detail dialogs, notification code | Bash and remote tasks write output files directly; local agents symlink task output to sidechain transcripts. Reads should use deltas/tails, not full unbounded reads. |
 
@@ -166,6 +167,7 @@ Focused existing tests:
 
 - `bun test src/tasks/LocalAgentTask/LocalAgentTask.test.ts`
 - `bun test src/tasks/RemoteAgentTask/RemoteAgentTask.test.ts`
+- `bun test src/utils/tuiSessionStatus.test.ts` (delegated working/waiting classification)
 - `bun test src/tools/AgentTool/AgentTool.test.ts`
 - `bun test src/tools/AgentTool/agentToolUtils.test.ts`
 - `bun test src/tools/AgentTool/resumeAgent.test.ts`
@@ -183,6 +185,8 @@ When changing task UI, search for component tests first; this snapshot does not 
 
 - Do not update `src/tasks.ts` alone. UI grouping, stop dispatch, task state union, and tests may also need updates.
 - Do not use `isBackgroundTask()` as "all tasks"; it intentionally hides completed tasks and foreground tasks.
+- Do not reuse `isBackgroundTask()` to decide whether the session is busy. It answers "should this row show in the task pill", so it counts a blocked agent and a long-running remote as active. Session status uses `deriveDelegatedTaskStatus()` in `src/utils/tuiSessionStatus.ts`.
+- Do not report a task that is stalled on the user as working. A blocked local-agent handoff, a teammate awaiting plan approval, and remote ultraplan `needs_input` / `plan_ready` all stay `running`, but the session is waiting, not busy.
 - Do not kill a teammate's whole task when the intended action is "stop current work"; use `currentWorkAbortController` where the UI already does.
 - Do not emit duplicate task notifications. Many task types set `notified` atomically before enqueueing.
 - Do not let terminal local-agent tasks disappear while retained in a viewed transcript; `retain`, `diskLoaded`, and `evictAfter` are coupled.

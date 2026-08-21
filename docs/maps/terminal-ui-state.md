@@ -1,6 +1,6 @@
 # Terminal UI And State Routing Map
 
-Last refreshed: 2026-07-31
+Last refreshed: 2026-08-21
 
 Purpose: route terminal UI work to the right owners. Keep this focused on
 where behavior lives, not on full call-by-call walkthroughs.
@@ -39,7 +39,8 @@ Use `docs/maps/tasks-workers.md` for task lifecycle details and
 | Keybinding system | `src/keybindings/defaultBindings.ts` | `src/keybindings/resolver.ts`, `src/keybindings/parser.ts`, `src/keybindings/match.ts`, `src/keybindings/useKeybinding.ts` | Defaults, parsing, context resolution, and action dispatch live here; matched bindings stop propagation through Ink input listeners. |
 | User keybinding validation | `src/keybindings/validate.ts` | `src/keybindings/loadUserBindings.ts`, `src/keybindings/reservedShortcuts.ts` | Validation owns parse errors, reserved shortcuts, context checks, and command-binding restrictions. |
 | REPL/global shortcut behavior | `src/hooks/useGlobalKeybindings.tsx` | `src/hooks/useCommandKeybindings.tsx`, `src/hooks/useCancelRequest.ts`, `src/hooks/useBackgroundTaskNavigation.ts` | Hooks map resolved actions into REPL behavior: transcript toggles, slash-command launch, cancel/interrupt, and teammate/task navigation. |
-| Dialog and overlay focus | `src/screens/REPL.tsx` | `src/components/design-system/Dialog.tsx`, `src/context/overlayContext.tsx`, `src/context/promptOverlayContext.tsx` | `getFocusedInputDialog()` in `REPL.tsx` is the priority owner for blocking UI such as message selector, permissions, prompts, cost/idle dialogs, onboarding, and callouts. |
+| Dialog and overlay focus | `src/utils/tuiSessionStatus.ts` | `src/screens/REPL.tsx`, `src/components/design-system/Dialog.tsx`, `src/context/overlayContext.tsx`, `src/context/promptOverlayContext.tsx` | `deriveFocusedInputDialog()` owns the `FocusedInputDialog` type and the priority order for blocking UI: message selector, permissions, prompts, cost/idle dialogs, onboarding, and callouts. `REPL.tsx` only assembles the facts and calls it, including the second call that reveals the dialog typing is hiding. |
+| Live session status (busy/waiting/idle) | `src/utils/tuiSessionStatus.ts` | `src/screens/REPL.tsx`, `src/ink/hooks/use-tab-status.ts`, `src/services/preventSleep.ts`, `src/utils/concurrentSessions.ts` | `deriveTuiSessionStatus()` is the only `waiting > busy > idle` implementation; `deriveHasOperationalWork()` is the separate sleep-prevention primitive. Delegated task classification is `deriveDelegatedTaskStatus()`. REPL derives all of it below `focusedInputDialog` and feeds title animation, `caffeinate`, goal continuation, OSC, and the feature-gated `claude ps` record from primitives. |
 | Resume picker presentation | `src/screens/ResumeConversation.tsx` | `src/utils/sessionStorage.ts`, `src/components/LogSelector.tsx`, `src/types/logs.ts`, `src/screens/REPL.tsx` | The picker sorts enriched logs and displays session title/prompt/time. Session storage owns progressive enrichment and timestamp/name fallback data; REPL re-appends current metadata before opening the picker. |
 | Prompt/message/task local JSX | `src/screens/REPL.tsx` | `src/utils/immediateCommand.ts`, `src/components/PromptInput/PromptInputQueuedCommands.tsx`, `src/components/TaskListV2.tsx`, slash-command implementations | REPL controls whether local JSX renders inline, in the fullscreen modal slot, or while hiding prompt input. It restores the live viewport across local-panel visibility changes so a completed response is not left off-screen. |
 | Theme and design system | `src/utils/theme.ts` | `src/components/design-system/ThemeProvider.tsx`, `src/components/design-system/`, `src/components/ThemePicker.tsx` | Concrete palette tokens live in `theme.ts`; themed primitives and dialogs live under `design-system/`. |
@@ -76,9 +77,9 @@ Use `docs/maps/tasks-workers.md` for task lifecycle details and
 
 ## Dialog And Overlay Priority
 
-For blocking UI, inspect `getFocusedInputDialog()` in `src/screens/REPL.tsx`
-before changing any individual dialog. That function decides when prompt typing
-suppresses dialogs and the order among:
+For blocking UI, inspect `deriveFocusedInputDialog()` in
+`src/utils/tuiSessionStatus.ts` before changing any individual dialog. That
+function decides when prompt typing suppresses dialogs and the order among:
 
 - message selector
 - sandbox/tool/worker permissions
@@ -87,6 +88,20 @@ suppresses dialogs and the order among:
 - paused-goal resume prompt
 - onboarding and callout surfaces
 - ultraplan dialogs
+
+Two rules keep this from drifting again:
+
+- There is one `FocusedInputDialog` type and one priority function. `REPL.tsx`
+  supplies facts; it must not rank queues itself. When typing suppresses
+  dialogs, REPL re-calls the same selector with `suppressInterruptDialogs`
+  flipped rather than keeping a second list.
+- Every dialog member makes an explicit waiting/non-waiting choice in
+  `WAITING_REASON_BY_DIALOG`. Voluntary navigation, callouts, recommendations,
+  and the upsell own keyboard focus without the session waiting on anyone, so
+  they map to no reason. A new member fails to compile until it decides.
+
+`init-onboarding` was removed from the union in 2026-08: it had no producer and
+no render branch.
 
 ## Tests And Validation
 
@@ -100,7 +115,8 @@ Use focused checks first:
 | Ink rendering core | `bun test src/ink/output.test.ts` |
 | Query/message-adjacent behavior | `bun test src/query.test.ts src/utils/providerPromptRegressions.test.ts` |
 | Task/view switching adjacency | `bun test src/tasks/LocalAgentTask/LocalAgentTask.test.ts src/tasks/RemoteAgentTask/RemoteAgentTask.test.ts` |
-| Goal/dialog local JSX adjacency | `bun test src/commands/goal/goal.test.ts` |
+| Goal/dialog local JSX adjacency | `bun test src/commands/goal/goal.test.ts src/utils/threadGoalController.test.ts` |
+| Dialog priority and session status | `bun test src/utils/tuiSessionStatus.test.ts` |
 | Deferred continuation command, notices, runner, and foreground/background races | `bun test src/commands/continue-after-limit/continue-after-limit.test.ts src/services/deferredContinuationRunner.test.ts src/services/deferredContinuation.test.ts src/services/deferredContinuation.probe.test.ts` |
 | Full documented build | `bun run build:dev:full` |
 
@@ -111,6 +127,12 @@ inspection and manual REPL verification are still normal.
 
 - Do not change shared state from `REPL.tsx` without checking
   `src/state/AppStateStore.ts`.
+- Do not add a second dialog priority list or a second `waiting > busy > idle`
+  derivation. Both live in `src/utils/tuiSessionStatus.ts`; a local copy is how
+  the exported status and the visible dialog disagreed before.
+- Do not make an effect depend on a freshly allocated derivation result.
+  `deriveDelegatedTaskStatus()` returns an object; REPL destructures it into
+  primitives before any dependency array sees it.
 - Do not assume leader messages are what the user is seeing; viewed-agent mode
   swaps transcript ownership.
 - Do not add raw `useInput` handlers without checking listener ordering and key
