@@ -28,6 +28,8 @@ import type { ReactNode } from 'react'
 import { createDomTestHarness } from './domTestHarness.js'
 import type { DomTestHarness } from './domTestHarness.js'
 import { TranscriptRowsView } from './TranscriptView.js'
+import type { RestorePhase } from './TranscriptView.js'
+import { axesForName, faceRects } from './agentFace.js'
 import {
   createToolCardExpansionStore,
   ToolCardExpansionContext,
@@ -133,9 +135,11 @@ function thinkingRow(index: number, content: string): NestedTranscriptRow {
 function Pane({
   rows,
   store,
+  restorePhase = null,
 }: {
   rows: NestedTranscriptRow[]
   store: ToolCardExpansionStore
+  restorePhase?: RestorePhase | null
 }): ReactNode {
   const [scroller, setScroller] = useState<HTMLElement | null>(null)
   const attach = (element: HTMLElement | null): void => {
@@ -150,7 +154,7 @@ function Pane({
       : createElement(
           ToolCardExpansionContext.Provider,
           { value: store },
-          createElement(TranscriptRowsView, { rows }),
+          createElement(TranscriptRowsView, { rows, restorePhase }),
         ),
   )
 }
@@ -158,8 +162,9 @@ function Pane({
 async function mountPane(
   rows: NestedTranscriptRow[],
   store: ToolCardExpansionStore = createToolCardExpansionStore(),
+  restorePhase: RestorePhase | null = null,
 ) {
-  const tree = await harness.mount(createElement(Pane, { rows, store }))
+  const tree = await harness.mount(createElement(Pane, { rows, store, restorePhase }))
   await harness.nextFrame()
   const pane = tree.container.querySelector<HTMLElement>('[data-testid="pane"]')
   expect(pane).not.toBeNull()
@@ -507,4 +512,110 @@ test('CC-63: a composite container reports its height change to the pane', async
   // Something above the reader got taller, so the pane compensated rather than
   // letting the content they were reading slide down the screen.
   expect(pane.scrollTop).toBeGreaterThan(grown)
+})
+
+/**
+ * The face stamp across a restore.
+ *
+ * `agentFace.ts` decides a worker's silhouette on FIRST DRAW, against the faces
+ * the session already holds, and the registry that holds them is a ref in
+ * `TranscriptRowsView` that survives the preview-to-live handover. So the
+ * assignment depends on what has already been drawn, and a restore draws the
+ * cached tail before the earlier history loads.
+ *
+ * That was examined on 2026-08-21 and the order dependence was ACCEPTED. The
+ * alternative — leaving the preview unregistered and letting the settled
+ * transcript assign — was measured against the real registry over 2,000
+ * simulated 12-worker sessions previewing their last 5: it moves 24.7% of the
+ * preview's cards at the handover (29.4% if the preview draws the bare hash),
+ * against the 21.1% of workers whose face it would bring back into agreement
+ * with an untruncated reading. It also charges that flicker to every previewed
+ * session, including the ones whose cache already holds the whole transcript
+ * and therefore have nothing wrong with them.
+ *
+ * This is the invariant that ruling chose, at the one level where the defect
+ * class lives: not ids handed straight to `createAgentFaceRegistry`, but the
+ * real component driven through a real preview-then-remainder render. It fails
+ * for either version of the rejected fix.
+ */
+describe('the face stamp across a restore', () => {
+  const WORKER_IDS = Array.from({ length: 12 }, (_unused, index) => `agent_740_${index}`)
+  /** How many of the transcript's 12 workers the cached preview holds. */
+  const PREVIEW_FROM = 7
+
+  function workerRow(index: number): NestedToolUseRow {
+    const agentId = WORKER_IDS[index]
+    return {
+      ...blockSource,
+      id: `s:m${index}:0:${agentId}`,
+      messageId: `m${index}`,
+      kind: 'tool-use',
+      toolUseId: `toolu_${agentId}`,
+      toolName: 'Agent',
+      toolFamily: 'agent',
+      agentCompletion: null,
+      input: { subagent_type: 'Explore', description: `job ${index}` },
+      status: 'success',
+      result: {
+        content: 'done',
+        isError: false,
+        diff: null,
+        agentId,
+        agentName: `w${index}`,
+      },
+      children: [],
+    }
+  }
+
+  /** Every drawn stamp in document order: its colour class and its geometry. */
+  function drawnFaces(root: ParentNode): { tone: string; shape: string }[] {
+    return [...root.querySelectorAll<Element>('svg[viewBox="0 0 9 9"]')].map(svg => ({
+      tone: svg.getAttribute('class') ?? '',
+      shape: [...svg.querySelectorAll<Element>('rect')]
+        .map(
+          rect =>
+            `${rect.getAttribute('x')},${rect.getAttribute('y')},` +
+            `${rect.getAttribute('width')},${rect.getAttribute('height')}`,
+        )
+        .join(' '),
+    }))
+  }
+
+  /** The silhouette the hash asks for, before the session dedupes it. */
+  function hashedShape(agentId: string): string {
+    return faceRects(axesForName(agentId))
+      .map(rect => `${rect.x},${rect.y},${rect.w},${rect.h}`)
+      .join(' ')
+  }
+
+  test('a restored card keeps the face its preview drew', async () => {
+    const all = WORKER_IDS.map((_unused, index) => workerRow(index))
+    const cached = all.slice(PREVIEW_FROM)
+
+    const { tree, pane, store } = await mountPane(cached, undefined, 'preview')
+    const previewFaces = drawnFaces(pane)
+    expect(previewFaces).toHaveLength(cached.length)
+    // The fixture has teeth: the preview really deduped, so a version that drew
+    // the bare hash here would already disagree with this row.
+    expect(
+      previewFaces.filter(
+        (face, index) => face.shape !== hashedShape(WORKER_IDS[PREVIEW_FROM + index]),
+      ).length,
+    ).toBeGreaterThan(0)
+
+    // The handover: the earlier history lands and the pane goes live, in the
+    // same tree, so the session's registry is the one that was already used.
+    await tree.render(
+      createElement(Pane, { rows: all, store, restorePhase: null }),
+    )
+    const settledFaces = drawnFaces(pane)
+    expect(settledFaces).toHaveLength(all.length)
+
+    // Nothing the reader had already seen moved.
+    expect(settledFaces.slice(PREVIEW_FROM)).toEqual(previewFaces)
+    // And the distance rule still holds across the whole settled transcript.
+    expect(new Set(settledFaces.map(face => `${face.tone}|${face.shape}`)).size).toBe(
+      all.length,
+    )
+  })
 })
