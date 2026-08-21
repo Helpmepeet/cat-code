@@ -99,10 +99,9 @@ import {
   type AgentToolSource,
 } from './agentIdentity.js'
 import {
-  createAgentFaceRegistry,
   useAgentFaceRegistry,
+  useSessionAgentFaceRegistry,
   AgentFaceRegistryContext,
-  type AgentFaceRegistry,
   type FaceAxes,
 } from './agentFace.js'
 import { AgentFace } from './AgentChrome.js'
@@ -341,26 +340,23 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   expansionRef.current ??= createToolCardExpansionStore()
   const expansionStore = inheritedStore ?? expansionRef.current
   // One face registry per SESSION, so every worker on screen is deduped against
-  // every other one and none of them changes silhouette mid-session. Keyed off
-  // the rows' own session rather than a prop: `selectNestedTranscriptRows`
-  // already filtered to one session, and a registry that outlived a session
-  // switch would carry the previous transcript's names into the next one.
+  // every other one and none of them changes silhouette mid-session.
   //
-  // A ref for the same reason `expansionStore` above is one, and a stronger one:
-  // this store's whole job is to hand out an answer that never changes, and
-  // `useMemo` is documented as a cache React may discard. Re-keyed only on a
-  // real session change — `rows` empties transiently during a restore, and
-  // rebuilding on `null` would re-roll every collided worker's silhouette for
-  // no reason.
-  const faceSessionId = rows.length === 0 ? null : rows[0].sessionId
-  const faceRef = useRef<{ session: SessionId | null; registry: AgentFaceRegistry } | null>(null)
-  if (
-    faceRef.current === null ||
-    (faceSessionId !== null && faceRef.current.session !== faceSessionId)
-  ) {
-    faceRef.current = { session: faceSessionId, registry: createAgentFaceRegistry() }
-  }
-  const faceRegistry = faceRef.current.registry
+  // The SHELL owns it now (`App.tsx`), because the same worker is drawn outside
+  // this pane as well — the docked roster, the Workers list, a relayed
+  // permission card. A registry mounted here was invisible to all of them, so
+  // they fell back to the raw hash and the roster disagreed with the transcript
+  // about any worker the dedupe had moved.
+  //
+  // The own-registry fallback below is what keeps this component standalone (it
+  // renders alone in tests, and is exported). It keys off the rows' own session
+  // rather than a prop: `selectNestedTranscriptRows` already filtered to one
+  // session, and it survives the transient empty `rows` of a restore.
+  const inheritedFaces = useContext(AgentFaceRegistryContext)
+  const ownFaces = useSessionAgentFaceRegistry(
+    rows.length === 0 ? null : rows[0].sessionId,
+  )
+  const faceRegistry = inheritedFaces ?? ownFaces
   // Re-derive from the LIVE rows so a late tool_result updates the drawer and a
   // vanished row closes it, instead of pinning the open-time snapshot (F1).
   const inspected = inspectedId === null ? null : findNestedToolUseRow(rows, inspectedId)

@@ -41,6 +41,13 @@ import {
   type ReasoningLayoutMode,
 } from './reasoningLayout.js'
 import { MAX_MOUNTED_COMPOSITE_CHILDREN } from './compositeChildWindow.js'
+import {
+  AgentFaceRegistryContext,
+  createAgentFaceRegistry,
+  faceHash,
+  FACE_FILL_COUNT,
+} from './agentFace.js'
+import { AGENT_FACE_IDENTITY_FILL } from './agentChromeModel.js'
 import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
 
 // P4-24 empty-state Welcome fixtures — a real `AccountsSnapshot` shape (mirrors
@@ -1676,6 +1683,46 @@ test('the finish row keeps a multi-word worker name whole', () => {
 
   expect(html).toContain('>Ada Lovelace<')
   expect(html).not.toContain('>Ada<')
+})
+
+test('a face drawn in the transcript comes from the shell registry, not a private one', () => {
+  // The registry is mounted at the shell so the transcript and the docked
+  // surfaces agree about every worker. A transcript that minted its own would
+  // dedupe against a different set and hand the same worker a second colour on
+  // the roster.
+  //
+  // The discriminator is colour. Ada's hashed colour is claimed here by another
+  // worker first, so a SHARED registry must move her off it; a private registry
+  // would have nothing taken and would hand her the hashed one.
+  const registry = createAgentFaceRegistry()
+  const hashedFill = faceHash('Ada', 8) % FACE_FILL_COUNT
+  for (let index = 0; index < FACE_FILL_COUNT; index += 1) {
+    if (registry.faceFor(`squatter-${index}`).fill === hashedFill) break
+  }
+  const shared = registry.faceFor(null, 'Ada')
+  expect(shared.fill).not.toBe(hashedFill)
+
+  const html = renderToStaticMarkup(
+    <AgentFaceRegistryContext.Provider value={registry}>
+      <TranscriptRowsView
+        rows={[
+          {
+            ...blockSource,
+            id: 's:m:0:task-notification',
+            kind: 'task-notification',
+            status: 'completed',
+            summary: 'Agent @Ada completed',
+            toolUseId: null,
+            isReplay: false,
+            children: [],
+          },
+        ]}
+      />
+    </AgentFaceRegistryContext.Provider>,
+  )
+
+  expect(html).toContain(AGENT_FACE_IDENTITY_FILL[shared.fill])
+  expect(html).not.toContain(AGENT_FACE_IDENTITY_FILL[hashedFill])
 })
 
 test('the finish row highlights the name, and prints no at-sign anywhere', () => {

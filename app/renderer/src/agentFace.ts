@@ -27,7 +27,7 @@
  * for step.
  */
 
-import { createContext, useContext } from 'react'
+import { createContext, useContext, useRef } from 'react'
 
 export type FaceEar = 'pointy' | 'outer' | 'tuft' | 'folded' | 'tall'
 export type FaceFill = 'solid' | 'notch' | 'deep'
@@ -737,9 +737,34 @@ export function createAgentFaceRegistry(): AgentFaceRegistry {
 
 /**
  * The session's registry, handed down so every face on screen is deduped against
- * every other one. Null outside a transcript.
+ * every other one. Null when nothing above has provided one.
+ *
+ * Mounted at the SHELL, not at the transcript, because a worker is on screen in
+ * more than one place at once: the transcript's card, the docked roster, the
+ * Workers list, a relayed permission card. Two registries would dedupe
+ * separately, and the same worker would wear two different faces in two panes.
  */
 export const AgentFaceRegistryContext = createContext<AgentFaceRegistry | null>(null)
+
+/**
+ * Hold one session's registry across renders, re-minting it only on a real
+ * session change.
+ *
+ * A ref rather than `useMemo`: this store's whole job is to hand out an answer
+ * that never changes, and `useMemo` is documented as a cache React may discard.
+ *
+ * A NULL `sessionId` keeps the registry it already has. That is deliberate and
+ * load-bearing at both mount points: a shell between sessions and a transcript
+ * whose `rows` empty transiently during a restore both read null, and rebuilding
+ * on it would re-roll every collided worker's silhouette for no reason.
+ */
+export function useSessionAgentFaceRegistry(sessionId: string | null): AgentFaceRegistry {
+  const held = useRef<{ session: string | null; registry: AgentFaceRegistry } | null>(null)
+  if (held.current === null || (sessionId !== null && held.current.session !== sessionId)) {
+    held.current = { session: sessionId, registry: createAgentFaceRegistry() }
+  }
+  return held.current.registry
+}
 
 /**
  * The fallback when no transcript is above: the raw hash, with no dedupe.

@@ -334,6 +334,10 @@ import {
   selectDockedOrchestratorWorkers,
 } from './orchestratorState.js'
 import {
+  AgentFaceRegistryContext,
+  useSessionAgentFaceRegistry,
+} from './agentFace.js'
+import {
   createLeaseState,
   reduceLeaseState,
   selectLeaseSnapshot,
@@ -576,6 +580,12 @@ export function App() {
   const [layoutNotice, setLayoutNotice] = useState<string | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [activeSessionId, setActiveSessionId] = useState<SessionId | null>(null)
+  // The session's face registry, mounted at the SHELL so every surface that
+  // draws a worker shares one. The transcript, the docked roster, the Workers
+  // list and a relayed permission card can all show the same worker at the same
+  // moment; separate registries would dedupe separately and put that worker on
+  // screen twice wearing two different faces.
+  const faceRegistry = useSessionAgentFaceRegistry(activeSessionId)
   // P4-6b — the tab ⋯ actions overflow (SessionActionsMenu) + its MetadataInspector
   // drawer + the inline rename editor. The menu is bound to the session it was
   // OPENED for (the clicked tab's `sessionId`, NOT `activeSessionId`), so it never
@@ -3588,595 +3598,597 @@ export function App() {
   }, [oauthContext, oauthProgress, activeSessionId])
 
   return (
-    <div className="flex h-screen bg-app-bg font-sans text-text-primary">
-      {/* Sidebar rail (P3-5b): the full roster (live ∪ restorable) + the
-       * restore-offer, alongside the TabBar's live ∪ preview view. */}
-      <Sidebar
-        rows={sessionCatalogRows}
-        activeSessionId={activeSessionId}
-        activeView={activeView}
-        onSelectView={setActiveView}
-        onSelectLive={selectTab}
-        onRestore={sessionId => void performRestore(sessionId)}
-        onOpenHistory={engineSessionId => void openHistorySession(engineSessionId)}
-        onOpenRowActions={(sessionId, anchor) =>
-          setSessionActionsTarget({ sessionId, anchor, origin: 'sidebar' })
-        }
-        /* P4-33 (Sidebar.jsx:80) — the row's ⋮ menu and rename editor are
-         * App-level `fixed` overlays, so they float OUTSIDE the rail's hover box:
-         * moving the pointer toward one fires onMouseLeave and collapses the
-         * sidebar out from under a menu still anchored to a now-hidden row. Hold
-         * it open while a SIDEBAR-anchored overlay is up. */
-        menuActive={
-          sessionActionsTarget?.origin === 'sidebar' ||
-          renamingSession?.origin === 'sidebar'
-        }
-        onNewSessionInWorkspace={repId => void newSessionInWorkspace(repId)}
-        onNewChat={() => void newChat()}
-        /* The Projects header's "+": the native picker, so the renderer never
-         * authors a cwd (HC1). The session created in the chosen folder is what
-         * makes the group appear — there is no empty-workspace record to keep. */
-        onAddProject={() => void newSession()}
-        accountAlias={
-          selectActiveAccount(selectGlobalAccountsSnapshot(accounts))?.alias ??
-          null
-        }
-        /* The row subtitle's "· model" reads the LIVE run-controls seam, which is
-         * re-broadcast on every model change (P4-24c). The diagnostics snapshot is
-         * spawn-frozen, so on its own it kept printing the model a session started
-         * with after the picker moved it — it stays only as the pre-snapshot
-         * fallback.
-         *
-         * `currentLabel` before `current`: the engine's own marketing name
-         * ("Opus 5", "GPT-5.6 Sol"), the same string the composer face and the
-         * picker row show, so a row and the chip above it never disagree. Only a
-         * model the engine has no name for (a custom model, a Foundry deployment
-         * id) falls back to the raw id. Operator ruling 2026-08-09: the row used
-         * to print the id's last hyphen segment, which reads as a bare "5" for
-         * every claude-* model. */
-        modelForSession={id => {
-          const live = selectRunControlsSnapshot(runControls, id)?.model
-          return (
-            live?.currentLabel ??
-            live?.current ??
-            selectDiagnosticsSnapshot(diagnostics, id)?.mainLoopModelForSession ??
-            null
-          )
-        }}
-      />
-
-      <div className="relative flex min-w-0 flex-1 flex-col">
-        <TabBar
-          tabs={tabs}
+    <AgentFaceRegistryContext.Provider value={faceRegistry}>
+      <div className="flex h-screen bg-app-bg font-sans text-text-primary">
+        {/* Sidebar rail (P3-5b): the full roster (live ∪ restorable) + the
+         * restore-offer, alongside the TabBar's live ∪ preview view. */}
+        <Sidebar
+          rows={sessionCatalogRows}
           activeSessionId={activeSessionId}
-          onSelect={selectTab}
-          onClose={closeTab}
-          onRestart={restartTab}
-          onNewTab={newSession}
-          onOpenActions={(sessionId, anchor) =>
-            setSessionActionsTarget({ sessionId, anchor, origin: 'tab' })
+          activeView={activeView}
+          onSelectView={setActiveView}
+          onSelectLive={selectTab}
+          onRestore={sessionId => void performRestore(sessionId)}
+          onOpenHistory={engineSessionId => void openHistorySession(engineSessionId)}
+          onOpenRowActions={(sessionId, anchor) =>
+            setSessionActionsTarget({ sessionId, anchor, origin: 'sidebar' })
           }
-          panelCount={workspaceLayout.panels.length}
-          canAddPanel={paneSessionIds.length > workspaceLayout.panels.length}
-          onAddPanel={addWorkspacePanel}
-          onRemovePanel={removeWorkspacePanel}
+          /* P4-33 (Sidebar.jsx:80) — the row's ⋮ menu and rename editor are
+           * App-level `fixed` overlays, so they float OUTSIDE the rail's hover box:
+           * moving the pointer toward one fires onMouseLeave and collapses the
+           * sidebar out from under a menu still anchored to a now-hidden row. Hold
+           * it open while a SIDEBAR-anchored overlay is up. */
+          menuActive={
+            sessionActionsTarget?.origin === 'sidebar' ||
+            renamingSession?.origin === 'sidebar'
+          }
+          onNewSessionInWorkspace={repId => void newSessionInWorkspace(repId)}
+          onNewChat={() => void newChat()}
+          /* The Projects header's "+": the native picker, so the renderer never
+           * authors a cwd (HC1). The session created in the chosen folder is what
+           * makes the group appear — there is no empty-workspace record to keep. */
+          onAddProject={() => void newSession()}
+          accountAlias={
+            selectActiveAccount(selectGlobalAccountsSnapshot(accounts))?.alias ??
+            null
+          }
+          /* The row subtitle's "· model" reads the LIVE run-controls seam, which is
+           * re-broadcast on every model change (P4-24c). The diagnostics snapshot is
+           * spawn-frozen, so on its own it kept printing the model a session started
+           * with after the picker moved it — it stays only as the pre-snapshot
+           * fallback.
+           *
+           * `currentLabel` before `current`: the engine's own marketing name
+           * ("Opus 5", "GPT-5.6 Sol"), the same string the composer face and the
+           * picker row show, so a row and the chip above it never disagree. Only a
+           * model the engine has no name for (a custom model, a Foundry deployment
+           * id) falls back to the raw id. Operator ruling 2026-08-09: the row used
+           * to print the id's last hyphen segment, which reads as a bare "5" for
+           * every claude-* model. */
+          modelForSession={id => {
+            const live = selectRunControlsSnapshot(runControls, id)?.model
+            return (
+              live?.currentLabel ??
+              live?.current ??
+              selectDiagnosticsSnapshot(diagnostics, id)?.mainLoopModelForSession ??
+              null
+            )
+          }}
         />
 
-        {/* P4-6b — the tab ⋯ actions overflow + its MetadataInspector drawer +
-         * inline rename editor. The menu resolves and acts against the row it was
-         * OPENED for (`sessionActionsTarget.sessionId`), never the active tab.
-         * rename/export/branch dispatch the real WRITE verbs to that session's
-         * sidecar; metadata + copy + open read state the renderer already holds. */}
-        {sessionActionsTarget
-          ? (() => {
-              const targetRow = sessionCatalogRows.find(
-                row => row.appSessionId === sessionActionsTarget.sessionId,
-              )
-              if (!targetRow) return null
-              const targetId = sessionActionsTarget.sessionId
-              return (
-                <SessionActionsMenu
-                  items={(() => {
-                    // The shared menu component stays presentation-only; the
-                    // per-entry-point hide list is a resolver decision
-                    // (`selectSessionsPageActions`, which is where it is tested).
-                    const items = resolveSessionActions(targetRow, {
-                      isActiveOpen: targetId === activeSessionId,
-                      hasEngine: connectionHasEngine(
-                        selectConnection(connection, targetId).status,
-                      ),
-                      // P4-36 — read the tier straight off the transcript slice, so
-                      // the row appears only for a session that really has hidden
-                      // messages (and only while the menu is open, which is the
-                      // only time this is computed).
-                      hasHiddenRows: selectHasHiddenRows(transcript, targetId),
-                      hiddenRevealed: revealHiddenSessions[targetId] === true,
-                    })
-                    return sessionActionsTarget.fromSessionsPage
-                      ? selectSessionsPageActions(items)
-                      : items
-                  })()}
-                  anchor={sessionActionsTarget.anchor}
-                  onAction={kind => {
-                    if (kind === 'metadata') setMetadataOpen(true)
-                    // `copy` is the flyout HOST and is never dispatched; P4-30
-                    // split the real action out as `copy-text`.
-                    else if (kind === 'copy-text') copyForLlm(targetId)
-                    // Reads the catalog row only, so it answers for ANY row —
-                    // including a closed or history one the renderer holds no
-                    // transcript for.
-                    else if (kind === 'copy-ids') copySessionIds(targetRow)
-                    // P4-36 — transcript mode for THIS session. Purely a read
-                    // preference; nothing is sent to the engine.
-                    else if (kind === 'reveal-hidden')
-                      setRevealHiddenSessions(current => ({
-                        ...current,
-                        [targetId]: true,
-                      }))
-                    else if (kind === 'hide-hidden')
-                      setRevealHiddenSessions(current => {
-                        const next = { ...current }
-                        delete next[targetId]
-                        return next
-                      })
-                    // P4-29 — was a bare `selectTab`, which merely re-focused a
-                    // stale pane for the very rows whose menu says "Restore".
-                    else if (kind === 'open') openCatalogRow(targetRow)
-                    else if (kind === 'rename')
-                      sessionActionsTarget.fromSessionsPage
-                        ? setSessionsRenameRequest({
-                            sessionId: targetRow.sessionId,
-                          })
-                        : setRenamingSession({
-                            sessionId: targetId,
-                            anchor: sessionActionsTarget.anchor,
-                            initial: targetRow.title ?? '',
-                            // P4-33 — the rename editor replaces the menu in
-                            // place, so it inherits whichever surface anchored it.
-                            origin: sessionActionsTarget.origin,
-                          })
-                    else if (kind === 'export') {
-                      // P4-30 — dispatch AND open: the dialog exists to show the
-                      // transcript the sidecar renders, so it opens pending and
-                      // fills in when its own result arrives.
-                      const requestId = newRequestId()
-                      setExportDialog({
-                        sessionId: targetId,
-                        requestId,
-                        title: targetRow.title ?? null,
-                      })
-                      sendSessionActionVerb(targetId, {
-                        type: 'session.export',
-                        requestId,
-                      })
-                    } else if (kind === 'branch')
-                      // P4-30 — CONFIRM FIRST. The verb writes a real fork on
-                      // disk; it is dispatched by the dialog, not by this click.
-                      setBranchConfirm({
-                        sessionId: targetId,
-                        title: targetRow.title ?? null,
-                      })
-                  }}
-                  onClose={() => setSessionActionsTarget(null)}
-                />
-              )
-            })()
-          : null}
+        <div className="relative flex min-w-0 flex-1 flex-col">
+          <TabBar
+            tabs={tabs}
+            activeSessionId={activeSessionId}
+            onSelect={selectTab}
+            onClose={closeTab}
+            onRestart={restartTab}
+            onNewTab={newSession}
+            onOpenActions={(sessionId, anchor) =>
+              setSessionActionsTarget({ sessionId, anchor, origin: 'tab' })
+            }
+            panelCount={workspaceLayout.panels.length}
+            canAddPanel={paneSessionIds.length > workspaceLayout.panels.length}
+            onAddPanel={addWorkspacePanel}
+            onRemovePanel={removeWorkspacePanel}
+          />
 
-        {renamingSession ? (
-          <SessionRenamePopover
-            anchor={renamingSession.anchor}
-            initial={renamingSession.initial}
-            onCancel={() => setRenamingSession(null)}
-            onCommit={title => {
-              const trimmed = title.trim()
-              if (trimmed && trimmed !== renamingSession.initial) {
-                sendSessionActionVerb(renamingSession.sessionId, {
+          {/* P4-6b — the tab ⋯ actions overflow + its MetadataInspector drawer +
+           * inline rename editor. The menu resolves and acts against the row it was
+           * OPENED for (`sessionActionsTarget.sessionId`), never the active tab.
+           * rename/export/branch dispatch the real WRITE verbs to that session's
+           * sidecar; metadata + copy + open read state the renderer already holds. */}
+          {sessionActionsTarget
+            ? (() => {
+                const targetRow = sessionCatalogRows.find(
+                  row => row.appSessionId === sessionActionsTarget.sessionId,
+                )
+                if (!targetRow) return null
+                const targetId = sessionActionsTarget.sessionId
+                return (
+                  <SessionActionsMenu
+                    items={(() => {
+                      // The shared menu component stays presentation-only; the
+                      // per-entry-point hide list is a resolver decision
+                      // (`selectSessionsPageActions`, which is where it is tested).
+                      const items = resolveSessionActions(targetRow, {
+                        isActiveOpen: targetId === activeSessionId,
+                        hasEngine: connectionHasEngine(
+                          selectConnection(connection, targetId).status,
+                        ),
+                        // P4-36 — read the tier straight off the transcript slice, so
+                        // the row appears only for a session that really has hidden
+                        // messages (and only while the menu is open, which is the
+                        // only time this is computed).
+                        hasHiddenRows: selectHasHiddenRows(transcript, targetId),
+                        hiddenRevealed: revealHiddenSessions[targetId] === true,
+                      })
+                      return sessionActionsTarget.fromSessionsPage
+                        ? selectSessionsPageActions(items)
+                        : items
+                    })()}
+                    anchor={sessionActionsTarget.anchor}
+                    onAction={kind => {
+                      if (kind === 'metadata') setMetadataOpen(true)
+                      // `copy` is the flyout HOST and is never dispatched; P4-30
+                      // split the real action out as `copy-text`.
+                      else if (kind === 'copy-text') copyForLlm(targetId)
+                      // Reads the catalog row only, so it answers for ANY row —
+                      // including a closed or history one the renderer holds no
+                      // transcript for.
+                      else if (kind === 'copy-ids') copySessionIds(targetRow)
+                      // P4-36 — transcript mode for THIS session. Purely a read
+                      // preference; nothing is sent to the engine.
+                      else if (kind === 'reveal-hidden')
+                        setRevealHiddenSessions(current => ({
+                          ...current,
+                          [targetId]: true,
+                        }))
+                      else if (kind === 'hide-hidden')
+                        setRevealHiddenSessions(current => {
+                          const next = { ...current }
+                          delete next[targetId]
+                          return next
+                        })
+                      // P4-29 — was a bare `selectTab`, which merely re-focused a
+                      // stale pane for the very rows whose menu says "Restore".
+                      else if (kind === 'open') openCatalogRow(targetRow)
+                      else if (kind === 'rename')
+                        sessionActionsTarget.fromSessionsPage
+                          ? setSessionsRenameRequest({
+                              sessionId: targetRow.sessionId,
+                            })
+                          : setRenamingSession({
+                              sessionId: targetId,
+                              anchor: sessionActionsTarget.anchor,
+                              initial: targetRow.title ?? '',
+                              // P4-33 — the rename editor replaces the menu in
+                              // place, so it inherits whichever surface anchored it.
+                              origin: sessionActionsTarget.origin,
+                            })
+                      else if (kind === 'export') {
+                        // P4-30 — dispatch AND open: the dialog exists to show the
+                        // transcript the sidecar renders, so it opens pending and
+                        // fills in when its own result arrives.
+                        const requestId = newRequestId()
+                        setExportDialog({
+                          sessionId: targetId,
+                          requestId,
+                          title: targetRow.title ?? null,
+                        })
+                        sendSessionActionVerb(targetId, {
+                          type: 'session.export',
+                          requestId,
+                        })
+                      } else if (kind === 'branch')
+                        // P4-30 — CONFIRM FIRST. The verb writes a real fork on
+                        // disk; it is dispatched by the dialog, not by this click.
+                        setBranchConfirm({
+                          sessionId: targetId,
+                          title: targetRow.title ?? null,
+                        })
+                    }}
+                    onClose={() => setSessionActionsTarget(null)}
+                  />
+                )
+              })()
+            : null}
+
+          {renamingSession ? (
+            <SessionRenamePopover
+              anchor={renamingSession.anchor}
+              initial={renamingSession.initial}
+              onCancel={() => setRenamingSession(null)}
+              onCommit={title => {
+                const trimmed = title.trim()
+                if (trimmed && trimmed !== renamingSession.initial) {
+                  sendSessionActionVerb(renamingSession.sessionId, {
+                    type: 'session.rename',
+                    requestId: newRequestId(),
+                    title: trimmed,
+                  })
+                }
+                setRenamingSession(null)
+              }}
+            />
+          ) : null}
+
+          {/* P4-30 — the SAModal dialog layer (PARITY-LEDGER §17). Branch gates the
+           * fork behind a confirmation; Export shows the engine-rendered transcript
+           * with its file name before anything is copied. */}
+          {branchConfirm ? (
+            <BranchDialog
+              title={branchConfirm.title}
+              onClose={() => setBranchConfirm(null)}
+              onConfirm={() => {
+                sendSessionActionVerb(branchConfirm.sessionId, {
+                  type: 'session.branch',
+                  requestId: newRequestId(),
+                })
+                setBranchConfirm(null)
+              }}
+            />
+          ) : null}
+
+          {exportDialog
+            ? (() => {
+                const preview = selectLatchedExportPreview(
+                  latchedExport,
+                  exportDialog.requestId,
+                )
+                return (
+                  <ExportDialog
+                    title={exportDialog.title}
+                    fileName={exportFileName(exportDialog.title)}
+                    preview={preview}
+                    {...(preview.status === 'ready'
+                      ? {
+                          onCopy: () => {
+                            void navigator.clipboard
+                              .writeText(preview.text)
+                              .then(() =>
+                                toast('Transcript copied to clipboard', {
+                                  tone: 'success',
+                                }),
+                              )
+                              .catch(() =>
+                                toast('Could not write to the clipboard', {
+                                  tone: 'warn',
+                                }),
+                              )
+                          },
+                          // P4-35 — the file sink. The renderer hands over the
+                          // engine-rendered text plus the derived name as a
+                          // SUGGESTION; main asks the user where it goes (HC1).
+                          onDownload: () => {
+                            void saveTranscript(
+                              preview.text,
+                              exportFileName(exportDialog.title),
+                              'Transcript saved',
+                            ).finally(() =>
+                              dispatchSessionActionRuntime({
+                                type: 'discard-result',
+                                sessionId: exportDialog.sessionId,
+                                requestId: exportDialog.requestId,
+                              }),
+                            )
+                          },
+                        }
+                      : {})}
+                    onClose={() => {
+                      dispatchSessionActionRuntime({
+                        type: 'discard-result',
+                        sessionId: exportDialog.sessionId,
+                        requestId: exportDialog.requestId,
+                      })
+                      setLatchedExport(null)
+                      setExportDialog(null)
+                    }}
+                  />
+                )
+              })()
+            : null}
+
+          {metadataOpen && activeSessionId ? (
+            <MetadataInspector
+              session={buildSessionMetadataView({
+                sessionId: activeSessionId,
+                row: activeSessionRow,
+                permissionMode:
+                  selectPermissionContext(permissions, activeSessionId)?.mode ??
+                  null,
+                threadGoal: selectThreadGoalSnapshot(goalMemory, activeSessionId),
+              })}
+              sessionState={buildSessionInspectorState({
+                cwd: tabDescriptorsById.get(activeSessionId)?.cwd ?? null,
+                settings: selectSettingsSnapshot(settings, activeSessionId),
+                permissionContext: selectPermissionContext(
+                  permissions,
+                  activeSessionId,
+                ),
+                workspaceTrust: selectWorkspaceTrustSnapshot(
+                  workspaceTrust,
+                  activeSessionId,
+                ),
+                diagnostics: selectDiagnosticsSnapshot(diagnostics, activeSessionId),
+                runControls: selectRunControlsSnapshot(
+                  runControls,
+                  activeSessionId,
+                ),
+              })}
+              log={selectRawMessageLog(state, activeSessionId)}
+              tasks={selectTasksSnapshot(tasks, activeSessionId)}
+              onClose={() => setMetadataOpen(false)}
+            />
+          ) : null}
+
+          {shellError ? (
+            <div className="flex items-center gap-3 border-b border-shell-seam bg-shell-chrome px-6 py-1.5 text-xs text-tone-danger">
+              <span className="min-w-0 flex-1">{shellError}</span>
+              <button
+                type="button"
+                onClick={() => setShellError(null)}
+                title="Dismiss"
+                aria-label="Dismiss shell error"
+                className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded text-sm leading-none text-text-subtle transition-colors hover:text-text-primary"
+              >
+                ×
+              </button>
+            </div>
+          ) : null}
+
+          {/* The all-dead wall, per-account reauth banners, and the collapsed chip
+           * were REMOVED entirely (#12, 2026-07-20 —
+           * `docs/migration/decisions/STARTUP-GATES.md`): zero-healthy no longer
+           * renders a surface or blocks submit; the pool error surfaces inline at
+           * request time. P4-34 removed the last remnant, a floating
+           * `ReauthOAuthProgress` card: with the banner gone, the only thing that
+           * could put the OAuth flow into a `'reauth'` context was that card's own
+           * Retry button, so nothing could ever open it. Re-authentication now runs
+           * through the same `StartupOAuth`/add-account surfaces as any other
+           * sign-in. */}
+
+          {/* P4-15 — a "add account" (AddAccountDialog) OAuth flow started with no
+           * owning surface: adopt it into the shared OAuth surface as a top-level
+           * overlay so it can complete (incl. the alias step), regardless of the
+           * active view. First-run owns its own surface above. */}
+          {adoptOrphanOAuth || showAddAccountOAuthSurface ? (
+            <div className="absolute inset-0 z-50">
+                <StartupOAuth
+                  view={firstRunOAuthView}
+                  provider={oauthProvider}
+                  onBegin={provider => beginOAuth('add-account', provider)}
+                  onCancel={clearOAuth}
+                onPasteCode={submitOAuthPasteCode}
+                onSubmitAlias={submitOAuthAlias}
+                  onRetry={() => beginOAuth('add-account', oauthProvider)}
+              />
+            </div>
+          ) : null}
+
+          {/* The workspace panels are renderer-owned layout over the P3-4
+           * session-keyed stores. Each panel reads its own session slice, so visible
+           * background sessions keep rendering without becoming the active tab. */}
+          {activeView === 'settings' ? (
+            <SettingsShell
+              agentsSnapshot={selectAgentConfigSnapshot(agentConfig, activeSessionId)}
+              cwd={activeSessionId ? tabDescriptorsById.get(activeSessionId)?.cwd ?? null : null}
+              extensionsSnapshot={selectExtensionsSnapshot(extensions, activeSessionId)}
+              initialCategory="agents"
+              memorySnapshot={selectMemorySnapshot(goalMemory, activeSessionId)}
+              onRemoteVerb={sendRemoteSettingsVerb}
+              onOpenLogs={() => getBridge().openLogsFolder()}
+              onSaveDiagnostics={() => void getBridge().saveDiagnosticsBundle()}
+              onSettingWrite={sendSettingWrite}
+              remoteLastResult={remoteSettings.lastResult}
+              remoteSnapshot={selectRemoteSettingsSnapshot(remoteSettings, activeSessionId)}
+              projectBinding={settingsProjectBinding}
+              snapshot={selectSettingsSnapshot(settings, activeSessionId)}
+            />
+          ) : activeView === 'goals' ? (
+            <GoalsPage
+              sessionLabel={
+                activeSessionId
+                  ? tabDescriptorsById.get(activeSessionId)?.cwd ?? activeSessionId
+                  : undefined
+              }
+              snapshot={selectThreadGoalSnapshot(goalMemory, activeSessionId)}
+            />
+          ) : activeView === 'accounts' ? (
+            <AccountsPage
+              snapshot={selectGlobalAccountsSnapshot(accounts)}
+              lastResult={accounts.lastResult}
+              usageStats={selectUsageStatsForRange(accounts)}
+              activeStatsRange={accounts.activeStatsRange}
+              onRangeChange={handleStatsRangeChange}
+              onVerb={sendAccountVerb}
+            />
+          ) : activeView === 'sessions' ? (
+            <SessionsPage
+              rows={sessionCatalogRows}
+              activeCwd={
+                activeSessionId
+                  ? tabDescriptorsById.get(activeSessionId)?.cwd ?? null
+                  : null
+              }
+              truncated={sessionCatalogSnapshot?.truncated ?? false}
+              catalogLoaded={sessionCatalogSnapshot !== null}
+              onOpenRow={openCatalogRow}
+              onNewSession={() => void newSession()}
+              onOpenRowActions={(row, anchor) => {
+                if (row.appSessionId == null) return
+                setSessionActionsTarget({
+                  sessionId: row.appSessionId,
+                  anchor,
+                  fromSessionsPage: true,
+                  origin: 'sessions-page',
+                })
+              }}
+              onRenameRow={(row, title) => {
+                if (row.appSessionId == null) return
+                sendSessionActionVerb(row.appSessionId, {
                   type: 'session.rename',
                   requestId: newRequestId(),
-                  title: trimmed,
+                  title,
                 })
-              }
-              setRenamingSession(null)
-            }}
-          />
-        ) : null}
-
-        {/* P4-30 — the SAModal dialog layer (PARITY-LEDGER §17). Branch gates the
-         * fork behind a confirmation; Export shows the engine-rendered transcript
-         * with its file name before anything is copied. */}
-        {branchConfirm ? (
-          <BranchDialog
-            title={branchConfirm.title}
-            onClose={() => setBranchConfirm(null)}
-            onConfirm={() => {
-              sendSessionActionVerb(branchConfirm.sessionId, {
-                type: 'session.branch',
-                requestId: newRequestId(),
-              })
-              setBranchConfirm(null)
-            }}
-          />
-        ) : null}
-
-        {exportDialog
-          ? (() => {
-              const preview = selectLatchedExportPreview(
-                latchedExport,
-                exportDialog.requestId,
-              )
-              return (
-                <ExportDialog
-                  title={exportDialog.title}
-                  fileName={exportFileName(exportDialog.title)}
-                  preview={preview}
-                  {...(preview.status === 'ready'
-                    ? {
-                        onCopy: () => {
-                          void navigator.clipboard
-                            .writeText(preview.text)
-                            .then(() =>
-                              toast('Transcript copied to clipboard', {
-                                tone: 'success',
-                              }),
-                            )
-                            .catch(() =>
-                              toast('Could not write to the clipboard', {
-                                tone: 'warn',
-                              }),
-                            )
-                        },
-                        // P4-35 — the file sink. The renderer hands over the
-                        // engine-rendered text plus the derived name as a
-                        // SUGGESTION; main asks the user where it goes (HC1).
-                        onDownload: () => {
-                          void saveTranscript(
-                            preview.text,
-                            exportFileName(exportDialog.title),
-                            'Transcript saved',
-                          ).finally(() =>
-                            dispatchSessionActionRuntime({
-                              type: 'discard-result',
-                              sessionId: exportDialog.sessionId,
-                              requestId: exportDialog.requestId,
-                            }),
-                          )
-                        },
-                      }
-                    : {})}
-                  onClose={() => {
-                    dispatchSessionActionRuntime({
-                      type: 'discard-result',
-                      sessionId: exportDialog.sessionId,
-                      requestId: exportDialog.requestId,
-                    })
-                    setLatchedExport(null)
-                    setExportDialog(null)
-                  }}
-                />
-              )
-            })()
-          : null}
-
-        {metadataOpen && activeSessionId ? (
-          <MetadataInspector
-            session={buildSessionMetadataView({
-              sessionId: activeSessionId,
-              row: activeSessionRow,
-              permissionMode:
-                selectPermissionContext(permissions, activeSessionId)?.mode ??
-                null,
-              threadGoal: selectThreadGoalSnapshot(goalMemory, activeSessionId),
-            })}
-            sessionState={buildSessionInspectorState({
-              cwd: tabDescriptorsById.get(activeSessionId)?.cwd ?? null,
-              settings: selectSettingsSnapshot(settings, activeSessionId),
-              permissionContext: selectPermissionContext(
-                permissions,
-                activeSessionId,
-              ),
-              workspaceTrust: selectWorkspaceTrustSnapshot(
-                workspaceTrust,
-                activeSessionId,
-              ),
-              diagnostics: selectDiagnosticsSnapshot(diagnostics, activeSessionId),
-              runControls: selectRunControlsSnapshot(
-                runControls,
-                activeSessionId,
-              ),
-            })}
-            log={selectRawMessageLog(state, activeSessionId)}
-            tasks={selectTasksSnapshot(tasks, activeSessionId)}
-            onClose={() => setMetadataOpen(false)}
-          />
-        ) : null}
-
-        {shellError ? (
-          <div className="flex items-center gap-3 border-b border-shell-seam bg-shell-chrome px-6 py-1.5 text-xs text-tone-danger">
-            <span className="min-w-0 flex-1">{shellError}</span>
-            <button
-              type="button"
-              onClick={() => setShellError(null)}
-              title="Dismiss"
-              aria-label="Dismiss shell error"
-              className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded text-sm leading-none text-text-subtle transition-colors hover:text-text-primary"
-            >
-              ×
-            </button>
-          </div>
-        ) : null}
-
-        {/* The all-dead wall, per-account reauth banners, and the collapsed chip
-         * were REMOVED entirely (#12, 2026-07-20 —
-         * `docs/migration/decisions/STARTUP-GATES.md`): zero-healthy no longer
-         * renders a surface or blocks submit; the pool error surfaces inline at
-         * request time. P4-34 removed the last remnant, a floating
-         * `ReauthOAuthProgress` card: with the banner gone, the only thing that
-         * could put the OAuth flow into a `'reauth'` context was that card's own
-         * Retry button, so nothing could ever open it. Re-authentication now runs
-         * through the same `StartupOAuth`/add-account surfaces as any other
-         * sign-in. */}
-
-        {/* P4-15 — a "add account" (AddAccountDialog) OAuth flow started with no
-         * owning surface: adopt it into the shared OAuth surface as a top-level
-         * overlay so it can complete (incl. the alias step), regardless of the
-         * active view. First-run owns its own surface above. */}
-        {adoptOrphanOAuth || showAddAccountOAuthSurface ? (
-          <div className="absolute inset-0 z-50">
+              }}
+              onTagRows={(targets, tag) => {
+                // One verb per row: each write runs inside that session's OWN
+                // engine (N-process, LOCKED). The ids are remembered so the
+                // confirmed result can be echoed back to the page.
+                for (const row of targets) {
+                  if (!isWritableSessionRow(row)) continue
+                  const requestId = newRequestId()
+                  pendingTagWritesRef.current.set(requestId, {
+                    sessionIds: [row.sessionId],
+                    tag,
+                  })
+                  sendSessionActionVerb(row.appSessionId, {
+                    type: 'session.tag',
+                    requestId,
+                    tag: tag ?? '',
+                  })
+                }
+              }}
+              onExportRows={targets => {
+                // P4-35 — one verb per LIVE row, which is what the bar's own
+                // disabled reason already tells the user. Each export is rendered by
+                // that session's OWN engine (N-process, LOCKED); the results are
+                // folded into one file by the effect above.
+                const requests: BulkExportRequest[] = []
+                for (const row of targets) {
+                  if (!isWritableSessionRow(row)) continue
+                  const requestId = newRequestId()
+                  requests.push({
+                    sessionId: row.appSessionId,
+                    requestId,
+                    title: row.title ?? null,
+                  })
+                  // Claimed here so the general result effect stays silent: this
+                  // batch reports itself ONCE, when the file is written.
+                  toastedActionRequestsRef.current.add(requestId)
+                  sendSessionActionVerb(row.appSessionId, {
+                    type: 'session.export',
+                    requestId,
+                  })
+                }
+                // Bounded by MAX_LIVE_SESSIONS (32) live engines, comfortably under
+                // the inbound rate cap, so a select-all cannot trip T7.
+                pendingBulkExportRef.current = requests.length > 0 ? requests : null
+                if (requests.length === 0) {
+                  toast('Open or restore a session to export it.', { tone: 'warn' })
+                }
+              }}
+              renameRequest={sessionsRenameRequest}
+              tagEcho={sessionsTagEcho}
+            />
+          ) : showTrustGate && activeSessionId ? (
+            // Per-session-create trust gate (D4 §1.1): this session's cwd is
+            // untrusted. Trust persists via the engine's own store + re-broadcast;
+            // decline closes the tab (Q1 TUI parity — no read-only mode).
+            <div className="relative flex min-h-0 flex-1">
+              <WorkspaceTrustGate
+                cwd={tabDescriptorsById.get(activeSessionId)?.cwd ?? activeSessionId}
+                // The scope the accept actually writes at (git root, not the cwd) —
+                // straight off the engine snapshot so the prompt names what it does.
+                trustRoot={activeTrustSnapshot?.trustRoot ?? null}
+                onTrust={sendWorkspaceTrust}
+                onDecline={() => closeTab(activeSessionId)}
+                errorMessage={selectWorkspaceTrustError(workspaceTrust, activeSessionId)}
+              />
+            </div>
+          ) : showFirstRunOAuthSurface ? (
+            // First-run: no credentialed Codex account exists. Surface the OAuth
+            // flow — its sub-states (waiting/paste-code/alias/success/error) are
+            // DRIVEN by the real `oauth.login.progress` back-channel; the engine
+            // owns the token. Unmounts after the success dwell once the pool gains
+            // the account (the snapshot re-broadcast on `success`).
+            <div className="relative flex min-h-0 flex-1">
               <StartupOAuth
                 view={firstRunOAuthView}
                 provider={oauthProvider}
-                onBegin={provider => beginOAuth('add-account', provider)}
+                onBegin={provider => beginOAuth('first-run', provider)}
                 onCancel={clearOAuth}
-              onPasteCode={submitOAuthPasteCode}
-              onSubmitAlias={submitOAuthAlias}
-                onRetry={() => beginOAuth('add-account', oauthProvider)}
+                onPasteCode={submitOAuthPasteCode}
+                onSubmitAlias={submitOAuthAlias}
+                onRetry={() => beginOAuth('first-run', oauthProvider)}
+              />
+            </div>
+          ) : workspacePanels.length === 0 || !activeSessionId ? (
+            // P4-17 — the rich launcher replaces the minimal empty shell. Reads
+            // derived recents (D5) + the P4-5 pool + agent-mode, wires open/restore/
+            // open-from-history (HC1 id-only, P4-40) and the HC1 folder picker
+            // (post-spawn trust gate).
+            <WelcomeScreen
+              recents={welcomeRecents}
+              accounts={activeAccountsSnapshot ?? selectGlobalAccountsSnapshot(accounts)}
+              orchestratorActive={
+                selectAgentModeSnapshot(orchestrator, activeSessionId)?.active ?? false
+              }
+              onOpenRecent={openRecentWorkspace}
+              onOpenFolder={() => void newSession()}
+              rosterFailure={
+                rosterBootstrap.status === 'failure'
+                  ? {
+                      retrying: rosterBootstrap.retrying,
+                      onRetry: () => void hydrateHostRoster(),
+                    }
+                  : undefined
+              }
             />
-          </div>
-        ) : null}
+          ) : (
+            /* P4-50 (O2a) — the account-health bar is pinned HERE, above the
+             * transcript, rather than left to scroll away inside it. It sits in
+             * the chat branch alone, so it never doubles the Accounts page's own
+             * cap row, and OUTSIDE `WorkspaceLayout`, so a split view shows one
+             * bar rather than one per pane. It is a sibling of the transcript and
+             * never of the composer: nothing here can gate a send. Shell lifecycle
+             * errors keep their own surface (`shellError` above) and are not
+             * routed into this plane. */
+            <div className="flex min-h-0 flex-1 flex-col">
+              <BannerStack
+                banners={accountHealthBanners}
+                onAction={() => setActiveView('accounts')}
+                onDismiss={banner => setDismissedAccountHealthId(banner.id)}
+              />
+  	          <WorkspaceLayout
+  	            layout={workspaceLayout}
+  	            panels={workspacePanels}
+  	            sessions={tabs.map(tab => tab.descriptor)}
+  	            notice={layoutNotice}
+  	            onClosePanel={closeWorkspacePanelAt}
+  	            onFocusPanel={focusWorkspacePanelSession}
+  	            onSelectSession={selectWorkspacePanelSession}
+  	            onSplitPanel={splitWorkspacePanelWithSession}
+  	            onWidthsChange={updateWorkspaceWidths}
+              />
+            </div>
+          )}
 
-        {/* The workspace panels are renderer-owned layout over the P3-4
-         * session-keyed stores. Each panel reads its own session slice, so visible
-         * background sessions keep rendering without becoming the active tab. */}
-        {activeView === 'settings' ? (
-          <SettingsShell
-            agentsSnapshot={selectAgentConfigSnapshot(agentConfig, activeSessionId)}
-            cwd={activeSessionId ? tabDescriptorsById.get(activeSessionId)?.cwd ?? null : null}
-            extensionsSnapshot={selectExtensionsSnapshot(extensions, activeSessionId)}
-            initialCategory="agents"
-            memorySnapshot={selectMemorySnapshot(goalMemory, activeSessionId)}
-            onRemoteVerb={sendRemoteSettingsVerb}
-            onOpenLogs={() => getBridge().openLogsFolder()}
-            onSaveDiagnostics={() => void getBridge().saveDiagnosticsBundle()}
-            onSettingWrite={sendSettingWrite}
-            remoteLastResult={remoteSettings.lastResult}
-            remoteSnapshot={selectRemoteSettingsSnapshot(remoteSettings, activeSessionId)}
-            projectBinding={settingsProjectBinding}
-            snapshot={selectSettingsSnapshot(settings, activeSessionId)}
-          />
-        ) : activeView === 'goals' ? (
-          <GoalsPage
-            sessionLabel={
-              activeSessionId
-                ? tabDescriptorsById.get(activeSessionId)?.cwd ?? activeSessionId
-                : undefined
-            }
-            snapshot={selectThreadGoalSnapshot(goalMemory, activeSessionId)}
-          />
-        ) : activeView === 'accounts' ? (
-          <AccountsPage
-            snapshot={selectGlobalAccountsSnapshot(accounts)}
-            lastResult={accounts.lastResult}
-            usageStats={selectUsageStatsForRange(accounts)}
-            activeStatsRange={accounts.activeStatsRange}
-            onRangeChange={handleStatsRangeChange}
-            onVerb={sendAccountVerb}
-          />
-        ) : activeView === 'sessions' ? (
-          <SessionsPage
-            rows={sessionCatalogRows}
-            activeCwd={
-              activeSessionId
-                ? tabDescriptorsById.get(activeSessionId)?.cwd ?? null
-                : null
-            }
-            truncated={sessionCatalogSnapshot?.truncated ?? false}
-            catalogLoaded={sessionCatalogSnapshot !== null}
-            onOpenRow={openCatalogRow}
-            onNewSession={() => void newSession()}
-            onOpenRowActions={(row, anchor) => {
-              if (row.appSessionId == null) return
-              setSessionActionsTarget({
-                sessionId: row.appSessionId,
-                anchor,
-                fromSessionsPage: true,
-                origin: 'sessions-page',
-              })
-            }}
-            onRenameRow={(row, title) => {
-              if (row.appSessionId == null) return
-              sendSessionActionVerb(row.appSessionId, {
-                type: 'session.rename',
-                requestId: newRequestId(),
-                title,
-              })
-            }}
-            onTagRows={(targets, tag) => {
-              // One verb per row: each write runs inside that session's OWN
-              // engine (N-process, LOCKED). The ids are remembered so the
-              // confirmed result can be echoed back to the page.
-              for (const row of targets) {
-                if (!isWritableSessionRow(row)) continue
-                const requestId = newRequestId()
-                pendingTagWritesRef.current.set(requestId, {
-                  sessionIds: [row.sessionId],
-                  tag,
-                })
-                sendSessionActionVerb(row.appSessionId, {
-                  type: 'session.tag',
-                  requestId,
-                  tag: tag ?? '',
-                })
-              }
-            }}
-            onExportRows={targets => {
-              // P4-35 — one verb per LIVE row, which is what the bar's own
-              // disabled reason already tells the user. Each export is rendered by
-              // that session's OWN engine (N-process, LOCKED); the results are
-              // folded into one file by the effect above.
-              const requests: BulkExportRequest[] = []
-              for (const row of targets) {
-                if (!isWritableSessionRow(row)) continue
-                const requestId = newRequestId()
-                requests.push({
-                  sessionId: row.appSessionId,
-                  requestId,
-                  title: row.title ?? null,
-                })
-                // Claimed here so the general result effect stays silent: this
-                // batch reports itself ONCE, when the file is written.
-                toastedActionRequestsRef.current.add(requestId)
-                sendSessionActionVerb(row.appSessionId, {
-                  type: 'session.export',
-                  requestId,
-                })
-              }
-              // Bounded by MAX_LIVE_SESSIONS (32) live engines, comfortably under
-              // the inbound rate cap, so a select-all cannot trip T7.
-              pendingBulkExportRef.current = requests.length > 0 ? requests : null
-              if (requests.length === 0) {
-                toast('Open or restore a session to export it.', { tone: 'warn' })
-              }
-            }}
-            renameRequest={sessionsRenameRequest}
-            tagEcho={sessionsTagEcho}
-          />
-        ) : showTrustGate && activeSessionId ? (
-          // Per-session-create trust gate (D4 §1.1): this session's cwd is
-          // untrusted. Trust persists via the engine's own store + re-broadcast;
-          // decline closes the tab (Q1 TUI parity — no read-only mode).
-          <div className="relative flex min-h-0 flex-1">
-            <WorkspaceTrustGate
-              cwd={tabDescriptorsById.get(activeSessionId)?.cwd ?? activeSessionId}
-              // The scope the accept actually writes at (git root, not the cwd) —
-              // straight off the engine snapshot so the prompt names what it does.
-              trustRoot={activeTrustSnapshot?.trustRoot ?? null}
-              onTrust={sendWorkspaceTrust}
-              onDecline={() => closeTab(activeSessionId)}
-              errorMessage={selectWorkspaceTrustError(workspaceTrust, activeSessionId)}
+          {/* In-session background-task strip (P4-9). The prototype's `TasksPanel`
+           * (OrchestratorMode.jsx) is unanchored GUI (⚓0, INVENTORY §W4) — it's
+           * really P4-8's unbuilt orchestrator worker/lease roster, not this
+           * dialog's entry point. This pill is the grounded analog: the real
+           * footer summary pill (`BackgroundTaskStatus.tsx`, `getPillLabel`),
+           * scoped to the active session, opening the same TasksDialog ⌘K does. */}
+          {activeView === 'chat' && activeSessionId ? (
+            <TasksStrip
+              snapshot={selectTasksSnapshot(tasks, activeSessionId)}
+              workers={activeAgentModeSnapshot?.workers ?? EMPTY_WORKERS}
+              onOpen={() => setTasksOpen(true)}
             />
-          </div>
-        ) : showFirstRunOAuthSurface ? (
-          // First-run: no credentialed Codex account exists. Surface the OAuth
-          // flow — its sub-states (waiting/paste-code/alias/success/error) are
-          // DRIVEN by the real `oauth.login.progress` back-channel; the engine
-          // owns the token. Unmounts after the success dwell once the pool gains
-          // the account (the snapshot re-broadcast on `success`).
-          <div className="relative flex min-h-0 flex-1">
-            <StartupOAuth
-              view={firstRunOAuthView}
-              provider={oauthProvider}
-              onBegin={provider => beginOAuth('first-run', provider)}
-              onCancel={clearOAuth}
-              onPasteCode={submitOAuthPasteCode}
-              onSubmitAlias={submitOAuthAlias}
-              onRetry={() => beginOAuth('first-run', oauthProvider)}
-            />
-          </div>
-        ) : workspacePanels.length === 0 || !activeSessionId ? (
-          // P4-17 — the rich launcher replaces the minimal empty shell. Reads
-          // derived recents (D5) + the P4-5 pool + agent-mode, wires open/restore/
-          // open-from-history (HC1 id-only, P4-40) and the HC1 folder picker
-          // (post-spawn trust gate).
-          <WelcomeScreen
-            recents={welcomeRecents}
-            accounts={activeAccountsSnapshot ?? selectGlobalAccountsSnapshot(accounts)}
-            orchestratorActive={
-              selectAgentModeSnapshot(orchestrator, activeSessionId)?.active ?? false
-            }
-            onOpenRecent={openRecentWorkspace}
-            onOpenFolder={() => void newSession()}
-            rosterFailure={
-              rosterBootstrap.status === 'failure'
-                ? {
-                    retrying: rosterBootstrap.retrying,
-                    onRetry: () => void hydrateHostRoster(),
-                  }
-                : undefined
-            }
-          />
-        ) : (
-          /* P4-50 (O2a) — the account-health bar is pinned HERE, above the
-           * transcript, rather than left to scroll away inside it. It sits in
-           * the chat branch alone, so it never doubles the Accounts page's own
-           * cap row, and OUTSIDE `WorkspaceLayout`, so a split view shows one
-           * bar rather than one per pane. It is a sibling of the transcript and
-           * never of the composer: nothing here can gate a send. Shell lifecycle
-           * errors keep their own surface (`shellError` above) and are not
-           * routed into this plane. */
-          <div className="flex min-h-0 flex-1 flex-col">
-            <BannerStack
-              banners={accountHealthBanners}
-              onAction={() => setActiveView('accounts')}
-              onDismiss={banner => setDismissedAccountHealthId(banner.id)}
-            />
-	          <WorkspaceLayout
-	            layout={workspaceLayout}
-	            panels={workspacePanels}
-	            sessions={tabs.map(tab => tab.descriptor)}
-	            notice={layoutNotice}
-	            onClosePanel={closeWorkspacePanelAt}
-	            onFocusPanel={focusWorkspacePanelSession}
-	            onSelectSession={selectWorkspacePanelSession}
-	            onSplitPanel={splitWorkspacePanelWithSession}
-	            onWidthsChange={updateWorkspaceWidths}
-            />
-          </div>
-        )}
+          ) : null}
+        </div>
 
-        {/* In-session background-task strip (P4-9). The prototype's `TasksPanel`
-         * (OrchestratorMode.jsx) is unanchored GUI (⚓0, INVENTORY §W4) — it's
-         * really P4-8's unbuilt orchestrator worker/lease roster, not this
-         * dialog's entry point. This pill is the grounded analog: the real
-         * footer summary pill (`BackgroundTaskStatus.tsx`, `getPillLabel`),
-         * scoped to the active session, opening the same TasksDialog ⌘K does. */}
-        {activeView === 'chat' && activeSessionId ? (
-          <TasksStrip
-            snapshot={selectTasksSnapshot(tasks, activeSessionId)}
-            workers={activeAgentModeSnapshot?.workers ?? EMPTY_WORKERS}
-            onOpen={() => setTasksOpen(true)}
-          />
-        ) : null}
+        {/* ⌘K command palette (P3-7): a fixed overlay above the whole shell. */}
+        <CommandPalette
+          open={paletteOpen}
+          onClose={() => setPaletteOpen(false)}
+          onRunItem={itemId =>
+            setRecentPaletteItemIds(previous => [
+              itemId,
+              ...previous.filter(id => id !== itemId),
+            ].slice(0, 5))
+          }
+          items={paletteItems}
+        />
+
+        {/* Background tasks dialog (P4-9): ⌘K → "Background tasks" or the strip pill. */}
+        <TasksDialog
+          open={tasksOpen}
+          onClose={() => setTasksOpen(false)}
+          snapshot={selectTasksSnapshot(tasks, activeSessionId)}
+          hasActiveSession={activeSessionId !== null}
+          onStopTask={activeSessionId ? sendStopTask : undefined}
+          onDismissTask={activeSessionId ? sendDismissTask : undefined}
+          /* P4-32b — the Workers + Leases tabs of the same dialog: the read-only
+           * worker drilldown (inspection ruling D1) and the session-scoped Codex
+           * lease roster (L1). Both are read seams; no verb rides them. */
+          agentMode={selectAgentModeSnapshot(orchestrator, activeSessionId)}
+          leases={selectLeaseSnapshot(leases, activeSessionId)}
+        />
       </div>
-
-      {/* ⌘K command palette (P3-7): a fixed overlay above the whole shell. */}
-      <CommandPalette
-        open={paletteOpen}
-        onClose={() => setPaletteOpen(false)}
-        onRunItem={itemId =>
-          setRecentPaletteItemIds(previous => [
-            itemId,
-            ...previous.filter(id => id !== itemId),
-          ].slice(0, 5))
-        }
-        items={paletteItems}
-      />
-
-      {/* Background tasks dialog (P4-9): ⌘K → "Background tasks" or the strip pill. */}
-      <TasksDialog
-        open={tasksOpen}
-        onClose={() => setTasksOpen(false)}
-        snapshot={selectTasksSnapshot(tasks, activeSessionId)}
-        hasActiveSession={activeSessionId !== null}
-        onStopTask={activeSessionId ? sendStopTask : undefined}
-        onDismissTask={activeSessionId ? sendDismissTask : undefined}
-        /* P4-32b — the Workers + Leases tabs of the same dialog: the read-only
-         * worker drilldown (inspection ruling D1) and the session-scoped Codex
-         * lease roster (L1). Both are read seams; no verb rides them. */
-        agentMode={selectAgentModeSnapshot(orchestrator, activeSessionId)}
-        leases={selectLeaseSnapshot(leases, activeSessionId)}
-      />
-    </div>
+    </AgentFaceRegistryContext.Provider>
   )
 }
 
