@@ -618,8 +618,20 @@ export type AgentFaceRegistry = {
  * faces while the supply lasts and only then falls back to the merely-distinct
  * ones.
  *
- * Assignment order is first-render order, which is transcript order, so the
- * answer is stable for the life of the session without anything being stored.
+ * Assignment order is first-DRAW order, which is NOT transcript order and must
+ * not be reasoned about as if it were. A group header stacks only
+ * `MAX_STACKED_GROUP_FACES` member faces, `BoundedChildList` mounts a window of
+ * children rather than all of them, and a collapsed card renders no children at
+ * all, so a worker registers when the reader reaches it. Two readings of one
+ * settled transcript, scrolled and expanded differently, can hand the same
+ * worker different faces.
+ *
+ * The consequence, stated because it is easy to promise otherwise: a face is
+ * stable for the life of a window, and identical across sessions only for the
+ * ~89% of workers the distance rule never had to move. Making it stable in
+ * general needs the assignment persisted with the transcript, or the drawn face
+ * made a pure function of the identifier, which reopens `MIN_FACE_DISTANCE`.
+ * Both are larger than this module.
  * A name that survives every bar still crowded keeps its own stamp rather than
  * none: a shared silhouette is a worse reading than a missing one, but a blank
  * card is worse than both.
