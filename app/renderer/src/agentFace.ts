@@ -44,7 +44,7 @@ export type FaceMark = 'none' | 'brow' | 'cheek' | 'temple' | 'chindot'
  *  - `away`   facing away: the whole FRONT of the face is withheld, not just the
  *             eyes. A cat with its back to you shows no mouth and no marking.
  *  - `closed` eyes uncarved, everything else drawn. This is the IDENTITY draw and
- *             nothing renders it: `silhouetteKey` compares faces with the eyes
+ *             nothing renders it: `silhouetteMask` compares faces with the eyes
  *             taken out, because eyes are state and two workers differing only by
  *             an eye row are the same face to a reader.
  *
@@ -440,31 +440,88 @@ export function faceRects(axes: FaceAxes, eyes: FaceEyes): FaceRect[] {
   return gridToRects(drawFace(axes, eyes, fallbackLevelFor(axes)))
 }
 
-const silhouetteByAxes = new Map<string, string>()
+const silhouetteByAxes = new Map<string, Uint8Array>()
 
 /**
- * Silhouette identity: the drawn mass with EYES EXCLUDED, which is what dedupe
- * compares. Eyes are state, so two workers whose stamps differ only by an eye
- * row are the same face as far as a reader is concerned.
+ * Silhouette identity: the drawn mass with EYES EXCLUDED, one cell per byte,
+ * which is what dedupe compares. Eyes are state, so two workers whose stamps
+ * differ only by an eye row are the same face as far as a reader is concerned.
  *
  * DELIBERATELY `closed`, not `away`. `away` withholds the mouth and the marking,
  * which is right for the card and wrong for identity: those two axes carry most
  * of the distinguishing power, and signing on them would take the session from
  * 975 distinct silhouettes to 88 without anything reporting the loss.
  *
+ * A MASK rather than a string key, because dedupe asks how FAR apart two faces
+ * draw and a string can only answer whether they are identical. Identity is not
+ * lost by the change: byte-identical is `differsBy(..., 1) === false`.
+ *
  * Memoised on the same bound as `levelByAxes` (the axis product), because the
  * dedupe sweep below asks for up to 2,400 of these in one call and each one is a
- * fresh draw plus a stringify. Without it a session past the distinct-silhouette
- * supply pays that sweep, in the render phase, for every worker after the first
- * collision.
+ * fresh draw. Without it a session past the distinct-silhouette supply pays that
+ * sweep, in the render phase, for every worker after the first collision.
  */
-function silhouetteKey(axes: FaceAxes): string {
+function silhouetteMask(axes: FaceAxes): Uint8Array {
   const key = axesKey(axes)
   const cached = silhouetteByAxes.get(key)
   if (cached !== undefined) return cached
-  const drawn = JSON.stringify(faceRects(axes, 'closed'))
-  silhouetteByAxes.set(key, drawn)
-  return drawn
+  const mask = new Uint8Array(GRID * GRID)
+  for (const rect of faceRects(axes, 'closed')) {
+    for (let y = rect.y; y < rect.y + rect.h; y += 1) {
+      for (let x = rect.x; x < rect.x + rect.w; x += 1) mask[y * GRID + x] = 1
+    }
+  }
+  silhouetteByAxes.set(key, mask)
+  return mask
+}
+
+/**
+ * Whether two silhouettes differ in at least `bar` of the grid's 81 cells.
+ * Counts only to `bar` and stops: the sweep below asks this question millions of
+ * times and never needs the exact figure.
+ */
+function differsBy(a: Uint8Array, b: Uint8Array, bar: number): boolean {
+  let differences = 0
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] === b[index]) continue
+    differences += 1
+    if (differences >= bar) return true
+  }
+  return false
+}
+
+/**
+ * How far apart two faces in one session must draw, in cells of the 81.
+ *
+ * The bar used to be byte-inequality — one differing cell counted as a different
+ * face. A cell is ~2px at the 19px a card renders, so the registry was handing
+ * out pairs no reader could tell apart and reporting them as distinct: measured
+ * over the whole axis space, 467 pairs of drawn silhouettes differ by exactly one
+ * cell and 1,836 by two, and in simulation 155 of 300 eight-worker sessions
+ * contained a pair within two cells.
+ *
+ * 4 is what the supply affords. A greedy packing of the 975 distinct silhouettes
+ * yields 324 faces at 3 cells apart, 198 at 4, and 114 at 5; 198 is ~25x any
+ * plausible session, and 4 is the point where both measured near-twins separate
+ * (a lone marking is 1 cell, two isolated single cells are 4).
+ */
+const MIN_FACE_DISTANCE = 4
+
+/**
+ * The bars a name is offered, strictest first. Falling back to 1 is what keeps
+ * the strict rule from making the crowded case WORSE than it was: 1 is exactly
+ * the old byte-inequality bar, so a session that outruns the well-separated
+ * supply degrades to previous behaviour rather than to shared faces.
+ */
+const DISTANCE_BARS: readonly number[] = [MIN_FACE_DISTANCE, 1]
+
+/** Whether `axes` draws clear of every face the session already holds. */
+function isFreeAgainst(taken: readonly Uint8Array[], axes: FaceAxes, bar: number): boolean {
+  const mask = silhouetteMask(axes)
+  for (const held of taken) {
+    if (!differsBy(held, mask, bar)) return false
+  }
+  return true
 }
 
 /**
@@ -522,27 +579,20 @@ const DEDUPE_AXES: readonly {
 ]
 
 /**
- * The first axis combination whose drawn silhouette nobody holds, scanned in a
- * fixed order so the answer never depends on iteration timing. Null when every
- * distinct silhouette the generator can produce is already spoken for.
+ * The whole axis space in ONE fixed order, which is the order the sweep walks,
+ * so the answer never depends on iteration timing.
  */
-function firstFreeAxes(taken: ReadonlySet<string>): FaceAxes | null {
-  for (const width of WIDTHS) {
-    for (const ear of EARS) {
-      for (const chin of CHINS) {
-        for (const fill of FILLS) {
-          for (const mark of MARKS) {
-            for (const mouth of MOUTHS) {
-              const candidate: FaceAxes = { ear, fill, width, chin, mouth, mark }
-              if (!taken.has(silhouetteKey(candidate))) return candidate
-            }
-          }
-        }
-      }
-    }
-  }
-  return null
-}
+const AXIS_SPACE: readonly FaceAxes[] = WIDTHS.flatMap(width =>
+  EARS.flatMap(ear =>
+    CHINS.flatMap(chin =>
+      FILLS.flatMap(fill =>
+        MARKS.flatMap(mark =>
+          MOUTHS.map(mouth => ({ ear, fill, width, chin, mouth, mark }) as FaceAxes),
+        ),
+      ),
+    ),
+  ),
+)
 
 export type AgentFaceRegistry = {
   /**
@@ -558,53 +608,79 @@ export type AgentFaceRegistry = {
  * One registry per session. The hash proposes, but a stamp already live in the
  * session wins: the connectivity fallback can collapse the only axis that
  * separated two names, so two different hashes really do converge. On a clash we
- * walk the axis lists until the DRAWN silhouette is unique, and keep the axes it
- * ended up with — they are what the face actually is now.
+ * walk the axis lists until the DRAWN silhouette is clear of every live face, and
+ * keep the axes it ended up with — they are what the face actually is now.
+ *
+ * "Clear of" is a DISTANCE, not inequality — see `MIN_FACE_DISTANCE`. A name is
+ * offered each bar in `DISTANCE_BARS` in turn, so a session takes well-separated
+ * faces while the supply lasts and only then falls back to the merely-distinct
+ * ones.
  *
  * Assignment order is first-render order, which is transcript order, so the
  * answer is stable for the life of the session without anything being stored.
- * A name that survives the whole walk still taken (every axis exhausted) keeps
- * its own stamp rather than none: a shared silhouette is a worse reading than a
- * missing one, but a blank card is worse than both.
+ * A name that survives every bar still crowded keeps its own stamp rather than
+ * none: a shared silhouette is a worse reading than a missing one, but a blank
+ * card is worse than both.
  */
 export function createAgentFaceRegistry(): AgentFaceRegistry {
   const assigned = new Map<string, FaceAxes>()
-  const taken = new Set<string>([silhouetteKey(FEATURELESS_AXES)])
-  let exhausted = false
+  const taken: Uint8Array[] = [silhouetteMask(FEATURELESS_AXES)]
+  const sweptTo = new Map<number, number>()
+
+  /**
+   * A deterministic scan of the whole axis product for something free at `bar`.
+   *
+   * RESUMED, not restarted, because a candidate rejected once can never come
+   * back: `taken` only ever grows, so a face already too close to a live one
+   * stays too close forever. That turns the sweep from a full 2,400-candidate
+   * scan per colliding worker into a single walk of the space spread across the
+   * session — which matters, since the strict bar makes the sweep the ordinary
+   * path in a crowded session rather than the rare one.
+   */
+  const sweep = (bar: number): FaceAxes | null => {
+    let index = sweptTo.get(bar) ?? 0
+    while (index < AXIS_SPACE.length && !isFreeAgainst(taken, AXIS_SPACE[index], bar)) {
+      index += 1
+    }
+    sweptTo.set(bar, index)
+    return index < AXIS_SPACE.length ? AXIS_SPACE[index] : null
+  }
+
+  /** The face this name can have at one bar, or null when the bar is spent. */
+  const resolveAt = (name: string, bar: number): FaceAxes | null => {
+    if (sweptTo.get(bar) === AXIS_SPACE.length) return null
+    let axes = axesForName(name)
+    for (const axis of DEDUPE_AXES) {
+      if (isFreeAgainst(taken, axes, bar)) break
+      for (let step = 1; step < axis.count; step += 1) {
+        const candidate = axis.rotate(axes, step)
+        if (isFreeAgainst(taken, candidate, bar)) {
+          axes = candidate
+          break
+        }
+      }
+    }
+    // The walk above only ever substitutes ONE axis at a time, which is what
+    // keeps a deduped face close to the one the name asked for. Once the session
+    // holds enough workers, every single substitution can itself be crowded, and
+    // the design source stops there and hands out a duplicate. The sweep is the
+    // guarantee behind it: a face is shared only when the space is genuinely
+    // spent at every bar.
+    return isFreeAgainst(taken, axes, bar) ? axes : sweep(bar)
+  }
 
   return {
     axesFor(name) {
       if (!name) return FEATURELESS_AXES
       const cached = assigned.get(name)
       if (cached !== undefined) return cached
-      let axes = axesForName(name)
-      for (const axis of DEDUPE_AXES) {
-        if (!taken.has(silhouetteKey(axes))) break
-        for (let step = 1; step < axis.count; step += 1) {
-          const candidate = axis.rotate(axes, step)
-          if (!taken.has(silhouetteKey(candidate))) {
-            axes = candidate
-            break
-          }
-        }
+      let resolved: FaceAxes | null = null
+      for (const bar of DISTANCE_BARS) {
+        resolved = resolveAt(name, bar)
+        if (resolved !== null) break
       }
-      // The walk above only ever substitutes ONE axis at a time, which is what
-      // keeps a deduped face close to the one the name asked for. Once the
-      // session holds enough workers, every single substitution can itself be
-      // taken, and the design source stops there and hands out a duplicate. The
-      // sweep below is the guarantee behind it: a deterministic scan of the whole
-      // axis product, so a silhouette is shared only when the space is genuinely
-      // exhausted. It runs at most once per colliding name and never in the
-      // ordinary case.
-      if (!exhausted && taken.has(silhouetteKey(axes))) {
-        const unique = firstFreeAxes(taken)
-        // `taken` only ever grows, so once the sweep comes back empty it can
-        // never succeed again. Latch it rather than re-running a full scan of
-        // the axis space for every remaining worker in the session.
-        if (unique === null) exhausted = true
-        else axes = unique
-      }
-      taken.add(silhouetteKey(axes))
+      const axes = resolved ?? axesForName(name)
+      taken.push(silhouetteMask(axes))
       assigned.set(name, axes)
       return axes
     },

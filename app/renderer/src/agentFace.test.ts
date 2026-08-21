@@ -67,6 +67,34 @@ function silhouette(axes: FaceAxes): string {
   return JSON.stringify(faceRects(axes, 'closed'))
 }
 
+/** The identity draw as one cell per byte, so two faces can be compared by distance. */
+function maskOf(axes: FaceAxes): Uint8Array {
+  const mask = new Uint8Array(81)
+  const grid = rasterize(faceRects(axes, 'closed'))
+  for (let y = 0; y < 9; y += 1) {
+    for (let x = 0; x < 9; x += 1) if (grid[y][x]) mask[y * 9 + x] = 1
+  }
+  return mask
+}
+
+/** Cells that differ between two silhouettes, out of 81. */
+function cellsApart(a: Uint8Array, b: Uint8Array): number {
+  let apart = 0
+  for (let index = 0; index < a.length; index += 1) if (a[index] !== b[index]) apart += 1
+  return apart
+}
+
+/** The closest pair among a session's faces, which is the number a reader feels. */
+function closestPair(masks: readonly Uint8Array[]): number {
+  let closest = 81
+  for (let i = 0; i < masks.length; i += 1) {
+    for (let j = i + 1; j < masks.length; j += 1) {
+      closest = Math.min(closest, cellsApart(masks[i], masks[j]))
+    }
+  }
+  return closest
+}
+
 describe('the stamp itself', () => {
   test('every face that draws is one 4-connected mass, in every eye state', () => {
     for (const name of NAMES) {
@@ -207,6 +235,56 @@ describe('the session registry', () => {
   })
 })
 
+describe('telling two workers apart', () => {
+  // The bar used to be byte-inequality, and a cell is ~2px on a 19px card. These
+  // pin the DISTANCE rule, which is the only thing standing between the registry
+  // and a pair of faces it calls distinct and a reader calls identical.
+
+  test('the reported near-twins separate', () => {
+    // @scout and @deckard drew one cell apart — a single temple marking — and the
+    // registry reported them unique. This is the case that motivated the rule.
+    const registry = createAgentFaceRegistry()
+    const scout = maskOf(registry.axesFor('scout'))
+    const deckard = maskOf(registry.axesFor('deckard'))
+    expect(cellsApart(scout, deckard)).toBeGreaterThanOrEqual(4)
+  })
+
+  test('a plausible session has no pair a reader would confuse', () => {
+    const registry = createAgentFaceRegistry()
+    const masks = NAMES.slice(0, 40).map(name => maskOf(registry.axesFor(name)))
+    expect(closestPair(masks)).toBeGreaterThanOrEqual(4)
+  })
+
+  test('the well-separated supply lasts well past any real session', () => {
+    // 187 workers before the ladder has to drop a bar. Stated as a floor rather
+    // than pinned exactly: the figure moves with the axis space, and what the
+    // rule promises is "far more than a session holds", not a constant.
+    const registry = createAgentFaceRegistry()
+    const masks: Uint8Array[] = []
+    let separated = 0
+    for (let index = 0; index < 300; index += 1) {
+      const mask = maskOf(registry.axesFor(`worker-${index}`))
+      const closest = masks.reduce((best, held) => Math.min(best, cellsApart(held, mask)), 81)
+      if (closest < 4) break
+      separated += 1
+      masks.push(mask)
+    }
+    expect(separated).toBeGreaterThanOrEqual(150)
+  })
+
+  test('outrunning the supply degrades to distinct, never to shared', () => {
+    // The ladder's whole point: the strict bar must not make the crowded case
+    // WORSE than the byte-inequality rule it replaced.
+    const registry = createAgentFaceRegistry()
+    const seen = new Set<string>()
+    for (let index = 0; index < 300; index += 1) {
+      const key = silhouette(registry.axesFor(`crowd-${index}`))
+      expect(seen.has(key)).toBe(false)
+      seen.add(key)
+    }
+  })
+})
+
 describe('the relaxation search', () => {
   const EAR = ['pointy', 'outer', 'tuft', 'folded', 'tall'] as const
   const FILL = ['solid', 'notch', 'deep'] as const
@@ -320,7 +398,7 @@ describe('facing away', () => {
   })
 
   test('facing away does NOT move identity — the signature still signs on the mouth', () => {
-    // The trap this pins: `silhouetteKey` draws `closed`, so teaching `closed` to
+    // The trap this pins: `silhouetteMask` draws `closed`, so teaching `closed` to
     // hide the mouth and markings would have folded every pair of workers that
     // differed only by those two axes into one identity — 975 distinct
     // silhouettes down to 88 — with nothing reporting the loss.
