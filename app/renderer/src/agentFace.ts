@@ -35,6 +35,17 @@ export type FaceWidth = 'wide' | 'narrow'
 export type FaceChin = 'round' | 'flat' | 'pointed' | 'fringe'
 export type FaceMouth = 'none' | 'slit' | 'smile' | 'omega'
 export type FaceMark = 'none' | 'brow' | 'cheek' | 'temple' | 'chindot'
+/**
+ * The head's own outline: `rounded` clears the four corners of the head block.
+ *
+ * A SHAPE axis, deliberately, not another carve. Under the distance rule
+ * (`MIN_FACE_DISTANCE`) an axis that moves fewer cells than the bar adds no
+ * distinguishable faces at all — it produces near-twins the registry then
+ * refuses. A carve worth one or two cells would have been free supply on paper
+ * and none in practice. Four corners is the smallest change that clears the bar
+ * on its own.
+ */
+export type FaceHead = 'square' | 'rounded'
 
 /**
  * State, not identity.
@@ -51,7 +62,7 @@ export type FaceMark = 'none' | 'brow' | 'cheek' | 'temple' | 'chindot'
  * `away` and `closed` were one mode until 2026-08-19. Splitting them is what lets
  * the facing-away card hide the mouth WITHOUT collapsing identity: the mouth and
  * markings carry most of the distinguishing power, so folding them out of the
- * signature would have taken it from 975 distinct silhouettes to 88.
+ * signature would have taken it from 1,862 distinct silhouettes to 168.
  */
 export type FaceEyes = 'open' | 'shut' | 'closed' | 'away'
 
@@ -62,6 +73,7 @@ export type FaceAxes = {
   chin: FaceChin
   mouth: FaceMouth
   mark: FaceMark
+  head: FaceHead
 }
 
 /** One run-length rect of filled cells, in the 9x9 viewBox's own units. */
@@ -75,6 +87,7 @@ const WIDTHS: readonly FaceWidth[] = ['wide', 'narrow']
 const CHINS: readonly FaceChin[] = ['round', 'flat', 'pointed', 'fringe']
 const MOUTHS: readonly FaceMouth[] = ['none', 'slit', 'smile', 'omega']
 const MARKS: readonly FaceMark[] = ['none', 'brow', 'cheek', 'temple', 'chindot']
+const HEADS: readonly FaceHead[] = ['square', 'rounded']
 
 /**
  * The nameless card's stamp: pointy ears, solid fill, wide head, round chin, no
@@ -88,6 +101,7 @@ const FEATURELESS_AXES: FaceAxes = {
   chin: 'round',
   mouth: 'none',
   mark: 'none',
+  head: 'square',
 }
 
 /** FNV-1a over the name, one salt per axis. Same name, same face, every session. */
@@ -100,7 +114,7 @@ export function faceHash(text: string, salt: number): number {
   return x >>> 0
 }
 
-/** The six axes the hash proposes. An empty/absent name uses the featureless base. */
+/** The seven axes the hash proposes. An empty/absent name uses the featureless base. */
 export function axesForName(name: string | null | undefined): FaceAxes {
   if (!name) return FEATURELESS_AXES
   return {
@@ -110,6 +124,7 @@ export function axesForName(name: string | null | undefined): FaceAxes {
     chin: CHINS[faceHash(name, 4) % CHINS.length],
     mouth: MOUTHS[faceHash(name, 5) % MOUTHS.length],
     mark: MARKS[faceHash(name, 6) % MARKS.length],
+    head: HEADS[faceHash(name, 7) % HEADS.length],
   }
 }
 
@@ -173,15 +188,16 @@ function isConnected(grid: boolean[][]): boolean {
  * relaxes markings, then the mouth, then the ear fill, and stops at the first
  * level that connects — so a face severed by its ear fill loses its mouth and
  * markings on the way to fixing it, and a face severed by a mouth-chin
- * collision loses its marking for nothing. Measured on the source's order: 35%
- * of all 2,400 combinations drew as a bare slab with no interior feature at all
+ * collision loses its marking for nothing. Measured on the source's order, in
+ * the six-axis space it was measured on: 35% of all 2,400 combinations drew as a
+ * bare slab with no interior feature at all
  * (75% of `folded` ears, 76% of `tall`), and 840 faces asked for a mouth and did
  * not get one. That is what put a featureless blob on a card whose hash had
  * asked for a deep ear fill, an omega mouth and a chin-dot.
  *
  * Each candidate is scored by what it costs the reader: an ear fill is one or
  * two cells at the tips, a marking is a single cell, a mouth is the most legible
- * carve on the face. First candidate that draws as one mass in ALL THREE eye
+ * carve on the face. First candidate that draws as one mass in EVERY eye
  * states wins; ties break by list order, so the choice stays deterministic.
  *
  * Dropping the mouth can RESTORE a chin-dot the exclusion above had suppressed,
@@ -257,6 +273,15 @@ function drawFace(axes: FaceAxes, eyes: FaceEyes, level: number): boolean[][] {
     set(eR, 1)
   }
 
+  // The head's corners, cleared before every carve below so a marking or a mouth
+  // that lands on a corner cell is not silently spent on an already-empty one.
+  if (axes.head === 'rounded') {
+    clr(L, 2)
+    clr(R, 2)
+    clr(L, 6)
+    clr(R, 6)
+  }
+
   if (axes.chin === 'round') {
     for (let c = L + 1; c <= R - 1; c += 1) set(c, 7)
     for (let c = L + 2; c <= R - 2; c += 1) set(c, 8)
@@ -288,21 +313,18 @@ function drawFace(axes: FaceAxes, eyes: FaceEyes, level: number): boolean[][] {
   // why the rule is the front of the face and not "the mouth".
   const facingAway = eyes === 'away'
   const mouth: FaceMouth = step.dropMouth || facingAway ? 'none' : axes.mouth
-  // EXCLUSION: mouth and chin-dot both carve row 6, so a face gets one or the
-  // other, never both. Without this, `chindot` + `omega` clears exactly the
-  // three cells `slit` does and the two faces become the same drawing — 360 of
-  // the 2,400 combinations pair them. The mouth wins because markings are the
-  // weaker axis: the ladder above drops them first.
-  //
-  // The design source does NOT enforce this (its own prose says to, its JS does
-  // not); enforcing it is deliberate, on the same reasoning as the shared
-  // fallback level below. It costs distinct stamps — 975 rather than 1,101 of
-  // the 2,400 combinations draw uniquely — which is still ~30x any plausible
-  // session, and buys a face that never mimics a mouth shape it does not have.
+  // A chin-dot and a mouth both want row 6, so the dot MOVES DOWN to row 7 when
+  // a mouth is present rather than being dropped, which is what it used to be
+  // against any mouth at all — a face lost its only marking to a collision a
+  // slit does not have. Only `smile` still takes it outright, because a smile
+  // already clears (mid, 7) and a dot there would be invisible. An omega loses it
+  // too, but by the connectivity search rather than by rule: a dot at (mid, 7)
+  // strands (mid, 6), and a severed face costs more than a marking.
   const mark: FaceMark =
-    step.dropMark || facingAway || (axes.mark === 'chindot' && mouth !== 'none')
+    step.dropMark || facingAway || (axes.mark === 'chindot' && mouth === 'smile')
       ? 'none'
       : axes.mark
+  const chinDotRow = mouth === 'none' ? 6 : 7
 
   if (fill !== 'solid') {
     // Ear-tip columns are the filled columns of the TOPMOST filled row, so the
@@ -339,7 +361,7 @@ function drawFace(axes: FaceAxes, eyes: FaceEyes, level: number): boolean[][] {
   } else if (mark === 'temple') {
     clr(R - 1, 2)
   } else if (mark === 'chindot') {
-    clr(mid, 6)
+    clr(mid, chinDotRow)
   }
 
   if (eyes === 'open') {
@@ -410,10 +432,10 @@ const levelByAxes = new Map<string, number>()
  * settles: the same worker, a different silhouette, mid-session. That is the one
  * thing the spec's own prose says must never happen ("a worker must never change
  * silhouette mid-session"), so the level is picked from the strictest mode — the
- * lowest at which ALL THREE draw as one mass — and identity holds across states.
+ * lowest at which EVERY mode draws as one mass — and identity holds across states.
  *
  * Memoised by axes rather than by name: the map is bounded by the axis product
- * (2,400 entries at the absolute worst), and a face is redrawn on every render of
+ * (4,800 entries at the absolute worst), and a face is redrawn on every render of
  * every card.
  */
 function fallbackLevelFor(axes: FaceAxes): number {
@@ -432,7 +454,7 @@ function fallbackLevelFor(axes: FaceAxes): number {
 }
 
 function axesKey(axes: FaceAxes): string {
-  return `${axes.ear}|${axes.fill}|${axes.width}|${axes.chin}|${axes.mouth}|${axes.mark}`
+  return `${axes.ear}|${axes.fill}|${axes.width}|${axes.chin}|${axes.mouth}|${axes.mark}|${axes.head}`
 }
 
 /** The drawn stamp for one set of axes, with the connectivity fallback applied. */
@@ -450,14 +472,14 @@ const silhouetteByAxes = new Map<string, Uint8Array>()
  * DELIBERATELY `closed`, not `away`. `away` withholds the mouth and the marking,
  * which is right for the card and wrong for identity: those two axes carry most
  * of the distinguishing power, and signing on them would take the session from
- * 975 distinct silhouettes to 88 without anything reporting the loss.
+ * 1,862 distinct silhouettes to 168 without anything reporting the loss.
  *
  * A MASK rather than a string key, because dedupe asks how FAR apart two faces
  * draw and a string can only answer whether they are identical. Identity is not
  * lost by the change: byte-identical is `differsBy(..., 1) === false`.
  *
  * Memoised on the same bound as `levelByAxes` (the axis product), because the
- * dedupe sweep below asks for up to 2,400 of these in one call and each one is a
+ * dedupe sweep below asks for up to 4,800 of these in one call and each one is a
  * fresh draw. Without it a session past the distinct-silhouette supply pays that
  * sweep, in the render phase, for every worker after the first collision.
  */
@@ -500,10 +522,11 @@ function differsBy(a: Uint8Array, b: Uint8Array, bar: number): boolean {
  * cell and 1,836 by two, and in simulation 155 of 300 eight-worker sessions
  * contained a pair within two cells.
  *
- * 4 is what the supply affords. A greedy packing of the 975 distinct silhouettes
- * yields 324 faces at 3 cells apart, 198 at 4, and 114 at 5; 198 is ~25x any
- * plausible session, and 4 is the point where both measured near-twins separate
- * (a lone marking is 1 cell, two isolated single cells are 4).
+ * 4 is what the supply affords. A greedy packing of the 1,862 distinct
+ * silhouettes yields 589 faces at 3 cells apart, 339 at 4, and 196 at 5; 339 is
+ * far past any plausible session, and 4 is the point where both measured
+ * near-twins separate (a lone marking is 1 cell, two isolated single cells are
+ * 4).
  */
 const MIN_FACE_DISTANCE = 4
 
@@ -576,6 +599,13 @@ const DEDUPE_AXES: readonly {
       width: WIDTHS[(WIDTHS.indexOf(a.width) + step) % WIDTHS.length],
     }),
   },
+  {
+    count: HEADS.length,
+    rotate: (a, step) => ({
+      ...a,
+      head: HEADS[(HEADS.indexOf(a.head) + step) % HEADS.length],
+    }),
+  },
 ]
 
 /**
@@ -585,9 +615,11 @@ const DEDUPE_AXES: readonly {
 const AXIS_SPACE: readonly FaceAxes[] = WIDTHS.flatMap(width =>
   EARS.flatMap(ear =>
     CHINS.flatMap(chin =>
-      FILLS.flatMap(fill =>
-        MARKS.flatMap(mark =>
-          MOUTHS.map(mouth => ({ ear, fill, width, chin, mouth, mark }) as FaceAxes),
+      HEADS.flatMap(head =>
+        FILLS.flatMap(fill =>
+          MARKS.flatMap(mark =>
+            MOUTHS.map(mouth => ({ ear, fill, width, chin, mouth, mark, head }) as FaceAxes),
+          ),
         ),
       ),
     ),
@@ -632,7 +664,7 @@ export function createAgentFaceRegistry(): AgentFaceRegistry {
    *
    * RESUMED, not restarted, because a candidate rejected once can never come
    * back: `taken` only ever grows, so a face already too close to a live one
-   * stays too close forever. That turns the sweep from a full 2,400-candidate
+   * stays too close forever. That turns the sweep from a full 4,800-candidate
    * scan per colliding worker into a single walk of the space spread across the
    * session — which matters, since the strict bar makes the sweep the ordinary
    * path in a crowded session rather than the rare one.

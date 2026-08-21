@@ -149,6 +149,7 @@ describe('identity', () => {
       chin: 'round',
       mouth: 'none',
       mark: 'none',
+      head: 'square',
     }
     expect(axesForName(null)).toEqual(base)
     expect(axesForName('')).toEqual(base)
@@ -176,7 +177,7 @@ describe('identity', () => {
   })
 
   test('the hash is FNV-1a over the name, salted per axis', () => {
-    // A different salt must actually change the draw, or five of the six axes
+    // A different salt must actually change the draw, or six of the seven axes
     // would be perfectly correlated.
     const salts = new Set([1, 2, 3, 4, 5, 6].map(salt => faceHash('Scout', salt)))
     expect(salts.size).toBe(6)
@@ -256,7 +257,7 @@ describe('telling two workers apart', () => {
   })
 
   test('the well-separated supply lasts well past any real session', () => {
-    // 187 workers before the ladder has to drop a bar. Stated as a floor rather
+    // 335 workers before the ladder has to drop a bar. Stated as a floor rather
     // than pinned exactly: the figure moves with the axis space, and what the
     // rule promises is "far more than a session holds", not a constant.
     const registry = createAgentFaceRegistry()
@@ -269,7 +270,7 @@ describe('telling two workers apart', () => {
       separated += 1
       masks.push(mask)
     }
-    expect(separated).toBeGreaterThanOrEqual(150)
+    expect(separated).toBeGreaterThanOrEqual(250)
   })
 
   test('outrunning the supply degrades to distinct, never to shared', () => {
@@ -292,6 +293,7 @@ describe('the relaxation search', () => {
   const CHIN = ['round', 'flat', 'pointed', 'fringe'] as const
   const MOUTH = ['none', 'slit', 'smile', 'omega'] as const
   const MARK = ['none', 'brow', 'cheek', 'temple', 'chindot'] as const
+  const HEAD = ['square', 'rounded'] as const
 
   /** Every axis combination the hash can propose. */
   function everyAxes(): FaceAxes[] {
@@ -301,7 +303,9 @@ describe('the relaxation search', () => {
         for (const width of WIDTH)
           for (const chin of CHIN)
             for (const mouth of MOUTH)
-              for (const mark of MARK) out.push({ ear, fill, width, chin, mouth, mark })
+              for (const mark of MARK)
+                for (const head of HEAD)
+                  out.push({ ear, fill, width, chin, mouth, mark, head })
     return out
   }
 
@@ -335,6 +339,7 @@ describe('the relaxation search', () => {
       chin: 'pointed',
       mouth: 'omega',
       mark: 'chindot',
+      head: 'square',
     }
     expect(isFeatureless(backus)).toBe(false)
     expect(isOneMass(rasterize(faceRects(backus, 'closed')))).toBe(true)
@@ -343,11 +348,12 @@ describe('the relaxation search', () => {
   test('a featureless slab stays the rare exception, not a third of the space', () => {
     // The linear ladder this replaced left 838 of 2,400 (35%) with no interior
     // feature at all — 75% of `folded` ears and 76% of `tall`. Pinned well above
-    // the current 168 so ordinary tuning does not trip it, and far below the
-    // regression it exists to catch.
+    // the current 168 of 4,800 so ordinary tuning does not trip it, and far below
+    // the regression it exists to catch. `head` is a shape axis, so doubling the
+    // space with it left the slab COUNT untouched and halved its share.
     const all = everyAxes()
     const bare = all.filter(isFeatureless).length
-    expect(all).toHaveLength(2400)
+    expect(all).toHaveLength(4800)
     expect(bare).toBeLessThan(300)
   })
 
@@ -368,6 +374,54 @@ describe('the relaxation search', () => {
   })
 })
 
+describe('the head axis and the chin-dot', () => {
+  const BASE: FaceAxes = {
+    ear: 'pointy',
+    fill: 'solid',
+    width: 'wide',
+    chin: 'round',
+    mouth: 'none',
+    mark: 'none',
+    head: 'square',
+  }
+
+  test('a rounded head clears the distance bar on its own', () => {
+    // The reason `head` is a SHAPE axis and not another carve: under the distance
+    // rule an axis worth one or two cells adds no faces the registry will accept,
+    // because every pair it creates is a near-twin it then refuses.
+    for (const ear of ['pointy', 'outer', 'tuft', 'folded', 'tall'] as const) {
+      const square = maskOf({ ...BASE, ear })
+      const rounded = maskOf({ ...BASE, ear, head: 'rounded' })
+      expect(cellsApart(square, rounded)).toBeGreaterThanOrEqual(4)
+    }
+  })
+
+  test('a chin-dot moves down beside a slit instead of being dropped', () => {
+    // It used to be dropped against ANY mouth, which cost the face its only
+    // marking for a collision a slit does not actually have.
+    const withDot = rasterize(faceRects({ ...BASE, mouth: 'slit', mark: 'chindot' }, 'closed'))
+    const without = rasterize(faceRects({ ...BASE, mouth: 'slit', mark: 'none' }, 'closed'))
+    expect(withDot).not.toEqual(without)
+  })
+
+  test('an omega still loses the dot, because the two really do conflict', () => {
+    // Not the old blanket exclusion — a genuine geometric collision the
+    // connectivity search finds on its own. An omega clears (mid, 5), (mid-1, 6)
+    // and (mid+1, 6); a dot at (mid, 7) would strand (mid, 6) with no filled
+    // neighbour left, so the face would draw severed and the ladder gives the
+    // marking up to keep it whole.
+    const withDot = rasterize(faceRects({ ...BASE, mouth: 'omega', mark: 'chindot' }, 'closed'))
+    const without = rasterize(faceRects({ ...BASE, mouth: 'omega', mark: 'none' }, 'closed'))
+    expect(withDot).toEqual(without)
+  })
+
+  test('a chin-dot still gives way to a smile, which already takes its row', () => {
+    const withDot = rasterize(faceRects({ ...BASE, mouth: 'smile', mark: 'chindot' }, 'closed'))
+    const without = rasterize(faceRects({ ...BASE, mouth: 'smile', mark: 'none' }, 'closed'))
+    expect(withDot).toEqual(without)
+  })
+})
+
 describe('facing away', () => {
   const RITCHIE: FaceAxes = {
     ear: 'tuft',
@@ -376,6 +430,7 @@ describe('facing away', () => {
     chin: 'flat',
     mouth: 'smile',
     mark: 'temple',
+    head: 'square',
   }
 
   test('a worker facing away shows no mouth and no marking', () => {
@@ -400,8 +455,8 @@ describe('facing away', () => {
   test('facing away does NOT move identity — the signature still signs on the mouth', () => {
     // The trap this pins: `silhouetteMask` draws `closed`, so teaching `closed` to
     // hide the mouth and markings would have folded every pair of workers that
-    // differed only by those two axes into one identity — 975 distinct
-    // silhouettes down to 88 — with nothing reporting the loss.
+    // differed only by those two axes into one identity — 1,862 distinct
+    // silhouettes down to 168 — with nothing reporting the loss.
     const withMouth = JSON.stringify(faceRects(RITCHIE, 'closed'))
     const without = JSON.stringify(
       faceRects({ ...RITCHIE, mouth: 'none' }, 'closed'),
