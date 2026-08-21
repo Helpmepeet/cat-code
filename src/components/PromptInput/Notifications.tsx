@@ -4,6 +4,7 @@ import * as React from 'react';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { type Notification, useNotifications } from 'src/context/notifications.js';
 import { logEvent } from 'src/services/analytics/index.js';
+import { isBlockedLocalAgent } from 'src/tasks/attention.js';
 import { useAppState } from 'src/state/AppState.js';
 import { useVoiceState } from '../../context/voice.js';
 import type { VerificationStatus } from '../../hooks/useApiKeyVerification.js';
@@ -384,7 +385,7 @@ function getLocalAgentNotification(
   if (!task) return undefined
 
   const identity = formatLocalAgentNotificationIdentity(task)
-  if (task.handoffStatus === 'blocked') {
+  if (isBlockedLocalAgent(task)) {
     // Not "needs your input": the subagent's blocker is queued back to THIS
     // conversation and picked up on the next turn without you
     // (`src/tasks/LocalAgentTask/LocalAgentTask.tsx:273` →

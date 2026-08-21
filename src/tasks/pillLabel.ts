@@ -1,4 +1,5 @@
 import { DIAMOND_FILLED, DIAMOND_OPEN } from '../constants/figures.js'
+import { isBlockedLocalAgent, isUltraplanAttentionPhase } from './attention.js'
 import { count } from '../utils/array.js'
 import figures from 'figures'
 import type {
@@ -105,7 +106,7 @@ export function pillNeedsCta(tasks: TaskState[]): boolean {
   return (
     t.type === 'remote_agent' &&
     t.isUltraplan === true &&
-    t.ultraplanPhase !== undefined
+    isUltraplanAttentionPhase(t.ultraplanPhase)
   )
 }
 
@@ -115,10 +116,6 @@ export function pillCtaText(tasks: TaskState[]): string | undefined {
   }
   if (pillNeedsCta(tasks)) return `${figures.arrowDown} to view`
   return undefined
-}
-
-export function isBlockedLocalAgent(task: LocalAgentTaskState): boolean {
-  return task.handoffStatus === 'blocked'
 }
 
 export function localAgentStatusIcon(task: LocalAgentTaskState): string {

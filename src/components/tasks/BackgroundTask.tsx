@@ -1,6 +1,7 @@
 import { c as _c } from "react/compiler-runtime";
 import * as React from 'react';
 import { Text } from 'src/ink.js';
+import { isBlockedLocalAgent } from 'src/tasks/attention.js';
 import { localAgentStatusIcon } from 'src/tasks/pillLabel.js';
 import type { BackgroundTaskState } from 'src/tasks/types.js';
 import type { DeepImmutable } from 'src/types/utils.js';
@@ -323,7 +324,7 @@ export function BackgroundTask(t0) {
 }
 function getLocalAgentRowLabel(task: DeepImmutable<BackgroundTaskState>): string {
   if (task.type !== 'local_agent') return task.status;
-  if (task.handoffStatus === 'blocked') return 'needs input';
+  if (isBlockedLocalAgent(task)) return 'needs input';
   if (task.agentType === 'verification' && task.verdict) return task.verdict;
   if (task.status === 'completed') return 'done';
   return task.status;
