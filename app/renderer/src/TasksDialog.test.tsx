@@ -499,6 +499,37 @@ test('Workers rows and detail headers omit null and legacy-id names without inve
   expect(detail).toContain('Explore')
 })
 
+test('the Workers row and the detail header both draw the worker face', () => {
+  // Same worker, two places in one dialog: the compact row and the drilldown
+  // header. Both read the session registry, so they draw one face, not two.
+  const worker = workerFixture({
+    agentId: 'agent-face-1',
+    handle: 'Turing',
+    role: 'Explore',
+    description: 'Inspect the repository',
+  })
+
+  const roster = renderToStaticMarkup(
+    <WorkerRosterPanel onSelect={noop} workers={[worker]} />,
+  )
+  const detail = renderToStaticMarkup(
+    <WorkerDetailPanel lease={null} onBack={noop} worker={worker} />,
+  )
+
+  const rects = (html: string): string =>
+    (/<svg[^>]*shape-rendering="crispEdges"[\s\S]*?<\/svg>/.exec(html) ?? [''])[0]
+
+  expect(rects(roster)).not.toBe('')
+  // Identical but for the size the two surfaces draw at.
+  expect(rects(roster).replace(/"15"/g, '')).toBe(
+    rects(detail).replace(/"19"/g, ''),
+  )
+  // The face LEADS the compact row, and the lifecycle pip is still behind it:
+  // the face is identity only, so it cannot stand in for the pip.
+  expect(roster.indexOf('shape-rendering')).toBeLessThan(roster.indexOf('>Turing<'))
+  expect(roster).toContain('rounded-full')
+})
+
 test('Workers compact rows normalize general-purpose and keep Resumable accessible but not visible', () => {
   const worker = workerFixture({
     agentId: 'legacy-resumable-id',

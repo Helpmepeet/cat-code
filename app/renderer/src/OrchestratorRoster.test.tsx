@@ -8,6 +8,13 @@ import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { OrchestratorRoster } from './OrchestratorRoster.js'
 import type { AgentModeWorkerItem } from '../../shared/protocol.js'
+import {
+  AgentFaceRegistryContext,
+  createAgentFaceRegistry,
+  faceHash,
+  FACE_FILL_COUNT,
+} from './agentFace.js'
+import { AGENT_FACE_IDENTITY_FILL } from './agentChromeModel.js'
 
 /** The baton's rendered text, matched literally so a tone swap cannot hide. */
 const BATON_ASSISTANT = '→</span>assistant'
@@ -38,11 +45,16 @@ test('one worker renders the named row: handle, task, normalized type, and lifec
   expect(html).toContain('Coding worker')
   expect(html).toContain('status Running')
   expect(html).not.toContain('>Running<')
-  // One leading role dot + one trailing lifecycle pip. The type is text only,
-  // so the reviewed double-ring regression cannot return.
-  expect(html.match(/rounded-full/g)).toHaveLength(2)
+  // The worker's face leads the row and one lifecycle pip trails it. The role
+  // dot is gone: the face took the row's leading identity slot, and the type is
+  // still spelled out in text, so the reviewed double-ring regression cannot
+  // return either.
+  expect(html.match(/rounded-full/g)).toHaveLength(1)
   expect(html).not.toContain('border-[1.4px]')
-  expect(html.indexOf('h-1.5 w-1.5')).toBeLessThan(html.indexOf('>Turing<'))
+  expect(html.indexOf('shape-rendering="crispEdges"')).toBeLessThan(
+    html.indexOf('>Turing<'),
+  )
+  expect(html).not.toContain('h-1.5 w-1.5')
   expect(html.indexOf('h-2 w-2')).toBeGreaterThan(html.indexOf('>Port the roster<'))
   expect(html.indexOf('>Coding worker<')).toBeGreaterThan(html.indexOf('h-2 w-2'))
   // A running worker needs nobody, so no baton is drawn at all.
@@ -204,4 +216,50 @@ test('the mention sigil is stripped from a handle for display', () => {
   )
   expect(html).toContain('>Turing<')
   expect(html).not.toContain('@Turing')
+})
+
+/* ── the face, on a surface that is not the transcript (2026-08-21) ────────── */
+
+test('a roster row draws its worker from the SHELL registry, not the raw hash', () => {
+  // The roster sits outside the transcript, so before the registry moved to the
+  // shell it fell back to the undeduped hash and could put the same worker on
+  // screen twice wearing two different faces.
+  //
+  // Colour is the discriminator: this worker's hashed colour is claimed by
+  // someone else first, so a shared registry must move it off that colour and an
+  // unshared one cannot know to.
+  const registry = createAgentFaceRegistry()
+  const hashedFill = faceHash('w-1', 8) % FACE_FILL_COUNT
+  for (let index = 0; index < FACE_FILL_COUNT; index += 1) {
+    if (registry.faceFor(`squatter-${index}`).fill === hashedFill) break
+  }
+  const shared = registry.faceFor('w-1', 'Turing')
+  expect(shared.fill).not.toBe(hashedFill)
+
+  const html = renderToStaticMarkup(
+    <AgentFaceRegistryContext.Provider value={registry}>
+      <OrchestratorRoster workers={[worker()]} />
+    </AgentFaceRegistryContext.Provider>,
+  )
+
+  expect(html).toContain(AGENT_FACE_IDENTITY_FILL[shared.fill])
+  expect(html).not.toContain(AGENT_FACE_IDENTITY_FILL[hashedFill])
+})
+
+test('an unnamed worker still gets its own face, keyed on the agent id', () => {
+  // Unnamed is the COMMON case on this surface. Keying on the id rather than the
+  // name is what stops the column becoming a run of identical featureless
+  // stamps, which would read worse than no stamp at all.
+  const html = renderToStaticMarkup(
+    <OrchestratorRoster
+      workers={[
+        worker({ agentId: 'w-1', handle: null }),
+        worker({ agentId: 'w-2', handle: null }),
+      ]}
+    />,
+  )
+  const faces = html.match(/<svg[^>]*shape-rendering="crispEdges"[\s\S]*?<\/svg>/g) ?? []
+
+  expect(faces).toHaveLength(2)
+  expect(faces[0]).not.toBe(faces[1])
 })

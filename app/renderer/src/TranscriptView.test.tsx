@@ -3316,6 +3316,32 @@ test('an orphaned subagent tail renders as an agent frame, never as user or assi
   // The failure this guard exists for: the user bubble (`UserBubble`) drawn for
   // a message the user never sent.
   expect(html).not.toContain('rounded-2xl rounded-br')
+  // The face replaced the hollow diamond: the frame's other unanswered question
+  // is WHO, and an identity-only stamp answers it without claiming anything
+  // about a run the missing parent was carrying.
+  expect(html).toContain('shape-rendering="crispEdges"')
+  expect(html).not.toContain('◇')
+  // Named, so the stamp is that name's own, not the featureless base.
+  const named = /<svg[^>]*shape-rendering="crispEdges"[\s\S]*?<\/svg>/.exec(html)?.[0] ?? ''
+  const anonymous = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[
+        {
+          ...blockSource,
+          id: 's:m:0:task-notification',
+          kind: 'task-notification',
+          status: 'completed',
+          summary: 'Agent "sweep the renderer" completed',
+          toolUseId: null,
+          isReplay: false,
+          children: [],
+        },
+      ]}
+    />,
+  )
+  expect(named).not.toBe(
+    /<svg[^>]*shape-rendering="crispEdges"[\s\S]*?<\/svg>/.exec(anonymous)?.[0] ?? '',
+  )
 })
 
 test('P4-1/F1: findNestedToolUseRow re-derives the row by id, or null when gone', () => {

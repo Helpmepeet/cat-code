@@ -67,8 +67,11 @@ export function AgentFace({
    */
   fill: number
   pulse?: boolean
-  /** 19 in a card, 17 in a finish row or a group header. */
-  size?: 19 | 17
+  /**
+   * 19 in a card or a worker detail header, 17 in a finish row, a group header
+   * or an orphan row, 15 in a docked list row, 13 inline in a sentence.
+   */
+  size?: 19 | 17 | 15 | 13
   label?: string | null
 }) {
   const colour = AGENT_FACE_IDENTITY_FILL[fill % AGENT_FACE_IDENTITY_FILL.length]

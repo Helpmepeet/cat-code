@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { AgentModeWorkerItem } from '../../shared/protocol.js'
 import { agentTypeMeta, resolveAgentIdentity } from './agentIdentity.js'
+import { AgentFace } from './AgentChrome.js'
+import { useAgentFaceRegistry } from './agentFace.js'
 import type { PermissionRequest } from './permissionState.js'
 import {
   buildPermissionOptions,
@@ -140,6 +142,11 @@ export function PermissionPrompt({
   const workerName = relayingWorker
     ? resolveAgentIdentity({ handle: relayingWorker.handle ?? undefined }).name
     : null
+  // The relaying worker's own stamp, from the session registry the shell mounts,
+  // so the card, the roster and that worker's transcript agree on one face.
+  // Keyed on the engine's `agent_id` even when the worker snapshot has not
+  // reached this pane: the id is what the transcript keys on too.
+  const workerFace = useAgentFaceRegistry().faceFor(workerId ?? null, workerName)
   const workerRole =
     agentTypeMeta(relayingWorker?.role)?.label.toLowerCase() ??
     'coding worker'
@@ -387,6 +394,16 @@ export function PermissionPrompt({
           Relayed from{' '}
           {workerName ? (
             <>
+              {/* A span, because the stamp rides inside a sentence: an svg is
+                  inline and would sit on the baseline a couple of pixels low
+                  against 11px text. */}
+              <span className="inline-block align-text-bottom">
+                <AgentFace
+                  axes={workerFace.axes}
+                  fill={workerFace.fill}
+                  size={13}
+                />
+              </span>{' '}
               <span className="font-mono text-violet-300">{workerName}</span>,{' '}
             </>
           ) : null}

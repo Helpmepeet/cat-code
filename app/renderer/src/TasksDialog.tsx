@@ -60,6 +60,7 @@ import { agentStateMeta } from './agentIdentity.js'
 import { useModalFocus } from './overlayFocus.js'
 import {
   AgentActionButton,
+  AgentFace,
   AgentHandle,
   AgentPip,
   AgentSectionLabel,
@@ -67,6 +68,7 @@ import {
   AgentTypeLabel,
   Baton,
 } from './AgentChrome.js'
+import { useAgentFaceRegistry } from './agentFace.js'
 import {
   deriveWorkerOwner,
   orchestratorWorkerState,
@@ -477,7 +479,15 @@ export function WorkerRosterPanel({
   )
 }
 
-/** One worker row: lifecycle pip, genuine name when available, task text, type. */
+/**
+ * One worker row: the worker's face, lifecycle pip, genuine name when available,
+ * task text, type.
+ *
+ * The face LEADS the row and the pip stays behind it rather than being replaced.
+ * The face is identity only (operator ruling, 2026-08-21), so handing it the
+ * row's leading slot would otherwise have left a running worker and a finished
+ * one looking the same on every row this list does not print a state word for.
+ */
 function WorkerRow({
   worker,
   onSelect,
@@ -487,6 +497,7 @@ function WorkerRow({
 }) {
   const state = orchestratorWorkerState(worker)
   const name = selectWorkerDisplayName(worker)
+  const face = useAgentFaceRegistry().faceFor(worker.agentId, name)
   return (
     <button
       aria-label={workerAccessibleLabel(worker)}
@@ -494,6 +505,7 @@ function WorkerRow({
       onClick={onSelect}
       type="button"
     >
+      <AgentFace axes={face.axes} fill={face.fill} size={15} />
       <AgentPip size="sm" state={state} />
       {name ? <AgentHandle name={name} /> : null}
       <span className="min-w-0 flex-1 truncate text-[11.5px] text-text-subtle">
@@ -536,6 +548,7 @@ export function WorkerDetailPanel({
 }) {
   const state = orchestratorWorkerState(worker)
   const name = selectWorkerDisplayName(worker)
+  const face = useAgentFaceRegistry().faceFor(worker.agentId, name)
   const result = selectWorkerResult(worker)
   const stopTargetId = selectWorkerStopTargetId(worker)
   const dismissTargetId = selectWorkerDismissTargetId(worker)
@@ -550,6 +563,7 @@ export function WorkerDetailPanel({
         <span aria-hidden="true">‹</span>All workers
       </button>
       <div className="flex flex-wrap items-center gap-2 border-b border-shell-seam pb-3">
+        <AgentFace axes={face.axes} fill={face.fill} size={19} />
         {name ? <AgentHandle name={name} /> : null}
         <AgentTypeLabel role={worker.role} />
         <AgentStateLabel state={state} />

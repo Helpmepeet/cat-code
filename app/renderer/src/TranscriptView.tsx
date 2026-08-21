@@ -2889,12 +2889,18 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
  * (`OrphanedAgentRow` — truncation drops the oldest frames first, so a long
  * agent run outlives the `tool_use` that launched it).
  *
- * It is a frame, not a card: no face, no state word, no cost, no task line.
- * Every one of those is a claim the missing parent carried, and the whole point
- * of this row is that the parent is not here to make them. It carries the one
- * thing the loose rows could not say for themselves, that an AGENT produced
- * them, and it keeps them collapsed by default exactly as an Agent card keeps
- * its children (C4). Without it those rows render by kind alone at the top
+ * It is a frame, not a card: no state word, no cost, no task line. Every one of
+ * those is a claim the missing parent carried, and the whole point of this row
+ * is that the parent is not here to make them. It carries the one thing the
+ * loose rows could not say for themselves, that an AGENT produced them, and it
+ * keeps them collapsed by default exactly as an Agent card keeps its children
+ * (C4).
+ *
+ * The face is the one exception, added 2026-08-21 once the stamp became identity
+ * only: it says WHO, which is the missing parent's other unanswered question,
+ * and it makes no claim about a run. It is keyed on the NAME alone, because the
+ * agent id lives on the card that is gone. A run with no name left behind draws
+ * the featureless stamp, exactly as an unattributable finish row does. Without it those rows render by kind alone at the top
  * level, where a subagent's task prompt is a user bubble and its prose is the
  * main assistant's reply.
  */
@@ -2905,6 +2911,7 @@ function OrphanedAgentCard({ row }: { row: OrphanedAgentNestedRow }) {
   // because that id has no card here), and if a deeper resume later brings the
   // real card back, it should open the way the reader left this one.
   const [expanded, setExpanded] = useToolCardExpanded(row.missingToolUseId, false)
+  const orphanFace = useAgentFaceRegistry().faceFor(null, row.agentName)
   // MESSAGES, not rows. One assistant message projects one row per content
   // block, so counting `children` reports "4 messages" for a single reply that
   // thought, spoke twice and called a tool.
@@ -2921,12 +2928,7 @@ function OrphanedAgentCard({ row }: { row: OrphanedAgentNestedRow }) {
         aria-expanded={expanded}
         className="flex w-full items-center gap-2.5 px-3 py-2 text-left"
       >
-        <span
-          className="shrink-0 text-[12px] leading-[12px] text-text-ghost"
-          aria-hidden
-        >
-          ◇
-        </span>
+        <AgentFace axes={orphanFace.axes} fill={orphanFace.fill} size={17} />
         <span className="min-w-0 flex-1 truncate font-mono text-[13px] font-semibold leading-[18px] text-text-muted">
           {row.agentName ?? NAMELESS_AGENT_LABEL}
         </span>

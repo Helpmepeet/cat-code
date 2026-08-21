@@ -29,12 +29,13 @@
  * on that thread actually owned it. There is no `active` axis on this surface now.
  */
 import {
+  AgentFace,
   AgentHandle,
   AgentPip,
-  AgentRoleDot,
   AgentTypeLabel,
   Baton,
 } from './AgentChrome.js'
+import { useAgentFaceRegistry } from './agentFace.js'
 import {
   deriveWorkerOwner,
   orchestratorWorkerState,
@@ -150,6 +151,7 @@ function PromotedLead({
   const name = selectWorkerDisplayName(worker)
   return (
     <>
+      <WorkerFace worker={worker} size={15} />
       <AgentPip state={state} />
       <WorkerName worker={worker} />
       {!name && worker.description ? (
@@ -166,8 +168,10 @@ function PromotedLead({
 }
 
 /**
- * One full roster row: role dot, genuine handle, delegated task, lifecycle pip,
- * normalized worker type, and baton.
+ * One full roster row: the worker's face, genuine handle, delegated task,
+ * lifecycle pip, normalized worker type, and baton. The face replaced the role
+ * dot rather than joining it: both are identity marks in the row's leading slot,
+ * and the normalized type is still spelled out in text further along.
  * The prototype's `elapsed` subfield is a ruled waiver (§10 waiver 8): no
  * elapsed field crosses `AgentModeWorkerItem`, and inventing one would be a mock.
  */
@@ -190,7 +194,7 @@ function WorkerRow({
       onClick={() => onOpen?.(worker.agentId)}
       title={role?.label ?? undefined}
     >
-      <AgentRoleDot role={worker.role} />
+      <WorkerFace worker={worker} size={15} />
       <WorkerName worker={worker} />
       {worker.description ? (
         <span className="min-w-0 flex-1 truncate text-[11.5px] text-text-subtle">
@@ -217,6 +221,30 @@ function WorkerRow({
 function WorkerName({ worker }: { worker: AgentModeWorkerItem }) {
   const name = selectWorkerDisplayName(worker)
   return name ? <AgentHandle name={name} /> : null
+}
+
+/**
+ * The worker's stamp, from the SESSION registry the shell mounts, so this row
+ * and that worker's transcript card draw the same face.
+ *
+ * Keyed on the agent id with the name as the alias, exactly as the transcript
+ * keys it. The id is what makes this worth drawing on a roster at all: an
+ * unnamed worker is the common case here, and a face hashed from the id still
+ * separates one from another where a name-only stamp would leave a column of
+ * identical blanks.
+ */
+function WorkerFace({
+  worker,
+  size,
+}: {
+  worker: AgentModeWorkerItem
+  size: 19 | 15
+}) {
+  const face = useAgentFaceRegistry().faceFor(
+    worker.agentId,
+    selectWorkerDisplayName(worker),
+  )
+  return <AgentFace axes={face.axes} fill={face.fill} size={size} />
 }
 
 function rosterAccessibleLabel(
