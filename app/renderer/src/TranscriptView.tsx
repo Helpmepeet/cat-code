@@ -1289,7 +1289,18 @@ function createPathAwareAnchor(openFile: (path: string) => void) {
   }: ComponentPropsWithoutRef<'a'> & { node?: unknown }) {
     void _node
     const path = workspaceFileHref(href)
-    if (path === null) return <a {...props} href={href}>{children}</a>
+    // Everything else is an outside address. A same-window navigation is
+    // refused by the navigation lockdown (T3), so an in-place <a> is a dead
+    // control; `target="_blank"` reaches the window-open policy instead, which
+    // hands https to the OS browser and denies the rest
+    // (`app/main/navigationPolicy.ts`).
+    if (path === null) {
+      return (
+        <a {...props} href={href} target="_blank" rel="noreferrer">
+          {children}
+        </a>
+      )
+    }
     return (
       <button
         className="inline-flex items-center gap-0.5 rounded-sm align-baseline text-accent hover:text-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"

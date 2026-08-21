@@ -214,8 +214,11 @@ test('a markdown link to a workspace path opens the file, and a line suffix is d
   // The `:42` addresses a line, not a file on disk: main stats the path itself.
   expect(html).toContain('aria-label="Open app/components/Bar.tsx"><svg')
   expect(html).toContain('</svg>Bar.tsx:42</button>')
-  // An external link stays an anchor, never an open-file control.
-  expect(html).toContain('href="https://example.com/readme.md"')
+  // An external link stays an anchor, never an open-file control, and carries
+  // the target that routes it to the OS browser through the window-open policy.
+  expect(html).toContain(
+    '<a href="https://example.com/readme.md" target="_blank" rel="noreferrer">the docs</a>',
+  )
   expect(html).not.toContain('aria-label="Open https://example.com/readme.md"')
 })
 
