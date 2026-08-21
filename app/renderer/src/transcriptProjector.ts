@@ -231,6 +231,21 @@ export type ToolResultProjection = {
    */
   agentModel?: string
   /**
+   * The Codex account the subagent leased, from that same structured result
+   * (`AgentToolResult.account`). Transcript plane, and it HAS to be: the lease
+   * plane is per-process and `releaseCodexLease` deletes a worker's entry at its
+   * terminal, so a live join answers null for every finished worker and for
+   * every restored transcript. Absent for an Anthropic-path worker (no lease
+   * exists), and on results persisted before the engine recorded it.
+   *
+   * For a BACKGROUND worker this is the account leased at dispatch: the launch
+   * record's result is its acknowledgment, and a lease that later moves
+   * (failover, repair, follow-main reassignment) cannot amend a row that has
+   * already been written. A foreground worker's is read at its terminal and so
+   * reflects any move.
+   */
+  agentAccount?: { accountId: string; accountAlias: string | null }
+  /**
    * The finished Agent tool's own totals, from that same structured result
    * (`totalTokens` / `totalToolUseCount`, `agentToolUtils.ts:734-735`).
    *
@@ -1982,6 +1997,7 @@ function projectToolResultBlock(
   const agentName = extractAgentName(toolUseResult)
   const agentId = extractAgentId(toolUseResult)
   const agentModel = extractAgentModel(toolUseResult)
+  const agentAccount = extractAgentAccount(toolUseResult)
   const agentUsage = extractAgentUsage(toolUseResult)
   const taskOutput = extractTaskOutput(toolUseResult)
   return {
@@ -1992,6 +2008,7 @@ function projectToolResultBlock(
     ...(agentName !== null ? { agentName } : {}),
     ...(agentId !== null ? { agentId } : {}),
     ...(agentModel !== null ? { agentModel } : {}),
+    ...(agentAccount !== null ? { agentAccount } : {}),
     ...(agentUsage !== null ? { agentUsage } : {}),
     ...(taskOutput !== null ? { taskOutput } : {}),
   }
@@ -2085,6 +2102,24 @@ function extractAgentModel(toolUseResult: unknown): string | null {
   if (!isRecord(toolUseResult)) return null
   if (nonEmptyString(toolUseResult.agentId) === null) return null
   return nonEmptyString(toolUseResult.model)
+}
+
+/**
+ * Gated on `agentId` like `extractAgentModel`, then narrowed field by field: a
+ * foreign tool result carrying some other `account` shape yields null rather
+ * than a half-populated object the card would render with a hole in it.
+ */
+function extractAgentAccount(
+  toolUseResult: unknown,
+): ToolResultProjection['agentAccount'] | null {
+  if (!isRecord(toolUseResult)) return null
+  if (nonEmptyString(toolUseResult.agentId) === null) return null
+  const account = toolUseResult.account
+  if (!isRecord(account)) return null
+  const accountId = nonEmptyString(account.accountId)
+  if (accountId === null) return null
+  const alias = nonEmptyString(account.accountAlias)
+  return { accountId, accountAlias: alias }
 }
 
 function extractTaskOutput(

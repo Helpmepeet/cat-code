@@ -1,6 +1,9 @@
 # Subagent account: stamp it into the transcript plane
 
-**Status:** design, not implemented. **Date:** 2026-08-21.
+**Status:** IMPLEMENTED 2026-08-21 (option (a)). This file is the design plus
+the record of what shipped; the adversarial review that reshaped it is
+`docs/reports/2026-08-21-subagent-account-transcript-stamp-adversarial-review.md`.
+**Date:** 2026-08-21.
 **Surfaces:** engine (`src/tools/AgentTool/`, `src/tasks/LocalAgentTask/`,
 `src/services/api/codexAccountLeaseManager.ts`) + desktop renderer
 (`app/renderer/src/transcriptProjector.ts`, `TranscriptView.tsx`).
@@ -86,42 +89,49 @@ takes the stamp with no new label code and no second redaction rule.
 Optional, not nullable: only a Codex-path worker ever has one, so absence is the
 ordinary case (an Anthropic-path session holds no lease at all).
 
-### 2.2 Engine
+### 2.2 Engine — as built
 
-**New helper**, beside `getCodexLeaseForOwner` in
-`codexAccountLeaseManager.ts`:
+**New helper** `snapshotLeaseAccount(ownerId)` beside `getCodexLeaseForOwner` in
+`codexAccountLeaseManager.ts`: the account an owner holds, as a value that
+outlives the lease. Throw-free (`getPoolStatus` cannot throw).
 
-```ts
-export function snapshotLeaseAccount(ownerId: string):
-  { accountId: string; accountAlias: string | null } | null
-```
+**Provider gate — `reportableAccount` (`AgentTool.tsx`).** A Codex lease is
+registered for EVERY worker (`AgentTool.tsx:1257,1387`), unlike the main
+thread's, which `query.ts:370` gates on
+`getAPIProvider() === 'openai' && poolManagesCredentials()`. An Anthropic worker
+therefore holds a Codex lease it never spends, and reporting it would name an
+account in the transcript the run never touched. Every capture is gated on the
+engine's own `resolveRequestProvider(model, …)`, so the stamp cannot disagree
+with where the request went. (The unconditional registration itself is a
+separate pre-existing defect; it is not touched here.)
 
-Reads the live lease + `getPoolStatus()` for the alias. Returns null when the
-owner holds no lease. Throw-free.
+**Four capture points**, one per shape a worker's card can take:
 
-**Capture points — each is the last moment the lease is alive on that path:**
+| path | captured at | semantic |
+|---|---|---|
+| background spawn | after `registerCodexLease` → the `async_launched` ack | dispatch |
+| auto-backgrounded | the transition ack that REPLACES the card's result | dispatch |
+| foreground | the value returned BY `unregisterAgentForeground` | terminal |
+| background lifecycle | before `completeAgentTask`/`failAgentTask` release, into the stored task result | terminal |
 
-1. **Background ack.** Capture immediately after `registerCodexLease`
-   (`AgentTool.tsx:1257`), add to the ack object literal (`:1307-1319`) beside
-   the `model` field it already carries.
-2. **Foreground.** Capture after `registerCodexLease` (`:1387`), then RE-READ it
-   immediately before `unregisterAgentForeground(foregroundTaskId, …)`
-   (`:1881`) so a mid-run failover is reflected. Thread through
-   `finalizeAgentTool`'s metadata (`:2002`) into its return object
-   (`agentToolUtils.ts:729-742`).
-3. **Auto-backgrounded mid-run.** Same metadata field on the `finalizeAgentTool`
-   call at `:1521`. Low value on its own (the launch card will not consume it,
-   §3) but it keeps ResumeAgent cards and TaskOutput consistent.
+The foreground capture is **structural, not ordering-tested**:
+`unregisterAgentForeground` now RETURNS the account it released
+(`LocalAgentTask.tsx`), because `releaseCodexLease` deletes the entry and a
+separate read ordered before the call would be silently order-dependent. The
+value can only be obtained from the release itself, so it cannot be sequenced
+wrong. `LocalAgentTask.test.ts` proves it by asserting the returned value and
+the deletion together; moving the read after the release fails that test
+(verified by mutation).
 
-The ordering in (2) is the fragile part and the one a future edit will break:
-`unregisterAgentForeground` releases the lease
-(`LocalAgentTask.tsx:822-824`), and it currently runs in a `finally` **before**
-the result is built. A test must fail if those move.
+**Schemas.** BOTH result shapes carry the field: `agentToolResultSchema`
+(sync/completed) and the separate `asyncOutputSchema` (`AgentTool.tsx:536`) that
+the async acknowledgment is validated against.
 
-**Schema.** Add the optional field to `agentToolResultSchema`
-(`agentToolUtils.ts:372-427`), commented like its neighbours: optional because
-older persisted sessions have no such field and resume replays results without
-re-validation.
+**Explicitly NOT covered.** A foreground worker that aborts or fails before any
+assistant message rethrows before a structured result exists
+(`AgentTool.tsx` `AbortError` / `syncAgentError` rethrow), so those terminals
+carry no account. That is existing behaviour for `agentName` and `agentModel`
+too, not a new gap.
 
 ### 2.3 Renderer
 
@@ -195,44 +205,40 @@ unclaimed rather than silently wrong. (b) is a clean follow-on that nothing in
 §2 forecloses; take it only if `failoverCount > 0` turns out to be common enough
 to notice.
 
-## 4. Tests
+## 4. Tests — as built
 
-**Engine**
-- `finalizeAgentTool` carries `account` when the owner holds a lease, omits it
-  when it does not.
-- The background ack carries `account` (fixture: a registered lease).
-- Ordering tripwire: a foreground run whose lease was released before capture
-  yields no account, so a future reorder of `:1881` fails loudly rather than
-  silently regressing to today's behaviour.
-- No Anthropic-path regression: a session with no Codex lease produces a result
-  with no `account` key at all.
+- `LocalAgentTask.test.ts`: the release hands back the account AND deletes the
+  lease (mutation-verified: reading after the release fails it); a worker that
+  leased nothing reports nothing.
+- `AgentTool.test.ts` (`reportableAccount`): withheld for a `claude-*` worker
+  even though a lease exists, reported for a `gpt-*` worker whatever the session
+  provider is, absent when no lease was held.
+- `transcriptProjector.test.ts`: the account narrows off a real
+  `tool_use_result`; a missing alias becomes null; absent and foreign shapes
+  degrade to absent rather than half-populating the slot.
+- `TranscriptView.test.tsx`: a finished worker names its account with
+  `leases={null}` (the state after a terminal, and after a restore); a live
+  lease outranks the stamp when they disagree.
 
-**Renderer**
-- Projector: result with account / without / with a malformed account degrades
-  to absent, never throws.
-- `agentAccountLabel` precedence: live lease beats stamp; stamp survives when
-  the lease is gone; both absent renders nothing.
-- `userVisibleText.test.ts` stays green — the label is alias-first and falls
-  back to a truncated id, never a full UUID (`leaseAccountShortLabel`).
-
-## 5. Battery
-
-Engine and desktop are both touched, so both batteries run (CLAUDE.md §3):
+## 5. Battery — as run
 
 ```bash
-cd /Users/pt/cat-code && bun run build:dev:full
+bun run build:dev:full
 ```
+green, `2.1.87-dev.20260821.t164355.sha41dfbac1`.
 
 ```bash
 cd /Users/pt/cat-code && bun test src/tools/AgentTool src/tasks/LocalAgentTask src/services/api/codexAccountLeaseManager.test.ts
 ```
+163 pass / 0 fail across 9 files.
 
 ```bash
-cd /Users/pt/cat-code && bun test app/ && bun run --cwd app typecheck && bun run --cwd app test:hardening
+cd /Users/pt/cat-code && bun test app/ && bun run --cwd app typecheck && bun run --cwd app typecheck:sidecar && bun run --cwd app test:hardening && bun run --cwd app renderer:build
 ```
-
-Hardening must stay 19/19; it should be unaffected, since nothing inbound
-changes.
+3805 pass / 1 fail (the fail is `desktopSystemPrompt.ts` tripping the §7 sweep,
+committed by another session in `c3745ab0` and untouched here) · app tsc clean ·
+sidecar wrapper green, 5586 upstream ignored · hardening 19/19 · renderer build
+clean.
 
 ## 6. Open questions
 

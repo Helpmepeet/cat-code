@@ -15,6 +15,7 @@ import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
   logEvent,
 } from '../../services/analytics/index.js'
+import { snapshotLeaseAccount, type CodexLeaseAccount } from '../../services/api/codexAccountLeaseManager.js'
 import { clearDumpState } from '../../services/api/dumpPrompts.js'
 import { recordWorkerSessionTerminal } from '../../agent-mode/sessionState.js'
 import type { AppState } from '../../state/AppState.js'
@@ -43,6 +44,7 @@ import { asAgentId } from '../../types/ids.js'
 import type { Message as MessageType } from '../../types/message.js'
 import { isAgentSwarmsEnabled } from '../../utils/agentSwarmsEnabled.js'
 import { logForDebugging } from '../../utils/debug.js'
+import { resolveRequestProvider } from '../../utils/model/providers.js'
 import { isInProtectedNamespace } from '../../utils/envUtils.js'
 import { AbortError, errorMessage } from '../../utils/errors.js'
 import type { CacheSafeParams } from '../../utils/forkedAgent.js'
@@ -382,6 +384,15 @@ export const agentToolResultSchema = lazySchema(() =>
     // Optional: the resolved model name used by the subagent. Older
     // persisted sessions won't have this field.
     model: z.string().optional(),
+    // Optional: the Codex account this subagent leased, captured while the
+    // lease was still alive. A live read of the lease plane cannot answer this
+    // after the fact — `releaseCodexLease` deletes the entry at every terminal —
+    // so the account is carried here or it is unknowable. Absent for an
+    // Anthropic-path subagent (no lease exists) and for sessions persisted
+    // before this field.
+    account: z
+      .object({ accountId: z.string(), accountAlias: z.string().nullable() })
+      .optional(),
     changedFiles: z
       .array(
         z.object({
@@ -626,6 +637,13 @@ export function finalizeAgentTool(
     isAsync: boolean
     totalTokensOverride?: number
     continuationCapabilities?: AgentContinuationCapabilities
+    /**
+     * The Codex account this run leased, snapshotted by the caller while the
+     * lease was alive. Passed in rather than read here: by the time a result is
+     * finalized the lease is already released on some paths, so only the caller
+     * knows a moment at which the answer still exists.
+     */
+    account?: CodexLeaseAccount
   },
 ): AgentToolResult {
   const {
@@ -638,6 +656,7 @@ export function finalizeAgentTool(
     isAsync,
     totalTokensOverride,
     continuationCapabilities,
+    account,
   } = metadata
 
   const lastAssistantMessage = getLastAssistantMessage(agentMessages)
@@ -732,6 +751,7 @@ export function finalizeAgentTool(
     ...(agentName ? { agentName } : {}),
     ...(continuationCapabilities ? { continuationCapabilities } : {}),
     model: resolvedAgentModel,
+    ...(account ? { account } : {}),
     changedFiles,
     ...(changedFilesTruncated !== undefined ? { changedFilesTruncated } : {}),
     content,
@@ -1000,9 +1020,21 @@ export async function runAsyncAgentLifecycle({
 
     stopSummarization?.()
 
+    // Read while the lease is still alive: `completeAgentTask`/`failAgentTask`
+    // below release it, and the release DELETES the entry. Reaches the stored
+    // task result (TaskOutput, the resumed-run card), NOT the launch record,
+    // whose account was stamped on its acknowledgment at dispatch.
+    // Gated on the worker's own model, like every other capture: a Codex lease
+    // is registered for EVERY worker, so an Anthropic one holds an account it
+    // never spends and must not be reported as having used it.
+    const terminalAccount =
+      resolveRequestProvider(metadata.resolvedAgentModel) === 'openai'
+        ? snapshotLeaseAccount(taskId)
+        : undefined
     const agentResult = finalizeAgentTool(agentMessages, taskId, {
       ...metadata,
       totalTokensOverride: getTokenCountFromTracker(tracker),
+      ...(terminalAccount ? { account: terminalAccount } : {}),
     })
 
     // Mark task completed FIRST so TaskOutput(block=true) unblocks

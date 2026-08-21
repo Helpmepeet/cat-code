@@ -23,6 +23,7 @@ import {
   deriveSessionStateTrackingObjective,
   finalizeFailedAgentLaunch,
   inputSchema,
+  reportableAccount,
   resolveSystemSubagentName,
 } from './AgentTool.js'
 import { renderGroupedAgentToolUse, renderToolResultMessage } from './UI.js'
@@ -846,5 +847,28 @@ describe('finalizeFailedAgentLaunch', () => {
     } finally {
       await rm(tempProjectDir, { recursive: true, force: true })
     }
+  })
+})
+
+
+describe('reportableAccount', () => {
+  const account = { accountId: 'acct-1', accountAlias: 'scout' }
+
+  test('withholds the account from a worker that is not on the Codex path', () => {
+    // A Codex lease is registered for EVERY worker regardless of its model
+    // (unlike the main thread's, which query.ts gates on the provider), so an
+    // Anthropic worker holds one it never spends. Reporting it would name an
+    // account in the transcript that the run never touched.
+    expect(reportableAccount(account, 'claude-sonnet-5', 'firstParty')).toBeUndefined()
+  })
+
+  test('reports it for a gpt model whatever the session provider is', () => {
+    // The model string decides the request's provider, so the gate has to read
+    // it and not the session default.
+    expect(reportableAccount(account, 'gpt-5.6-luna', 'firstParty')).toEqual(account)
+  })
+
+  test('reports nothing when no lease was held, even on the Codex path', () => {
+    expect(reportableAccount(undefined, 'gpt-5.6-luna', 'openai')).toBeUndefined()
   })
 })

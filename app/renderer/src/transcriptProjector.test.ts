@@ -2577,6 +2577,71 @@ test('an Agent tool_use_result carries the worker name onto the row, @-stripped'
   expect(row.result?.agentId).toBe('agent-1')
 })
 
+test('an Agent tool_use_result carries the leased Codex account, or nothing at all', () => {
+  const project = (result: unknown) => {
+    let state = createTranscriptState()
+    state = projectServerFrame(state, ready('session-1'))
+    state = projectServerFrame(
+      state,
+      messageFrame('session-1', {
+        type: 'assistant',
+        message: {
+          id: 'msg_agent_account',
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_agent_account',
+              name: 'Task',
+              input: { subagent_type: 'Explore', description: 'trace the seam' },
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+        uuid: '00000000-0000-4000-8000-0000000e0001',
+      }),
+    )
+    state = projectServerFrame(
+      state,
+      messageFrame('session-1', {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: 'toolu_agent_account', content: 'done', is_error: false },
+          ],
+        },
+        parent_tool_use_id: null,
+        tool_use_result: result,
+        uuid: '00000000-0000-4000-8000-0000000e0002',
+      }),
+    )
+    const row = selectTranscriptRows(state, 'session-1')[0]
+    if (row?.kind !== 'tool-use') throw new Error('expected tool-use row')
+    return row.result?.agentAccount
+  }
+
+  expect(
+    project({
+      agentId: 'agent-1',
+      account: { accountId: 'acct-1', accountAlias: 'onbi' },
+    }),
+  ).toEqual({ accountId: 'acct-1', accountAlias: 'onbi' })
+
+  // An account the pool cannot name is still a true statement about the run.
+  expect(
+    project({ agentId: 'agent-1', account: { accountId: 'acct-1' } }),
+  ).toEqual({ accountId: 'acct-1', accountAlias: null })
+
+  // Absent for an Anthropic-path worker, and for results recorded before the
+  // engine stamped one.
+  expect(project({ agentId: 'agent-1' })).toBeUndefined()
+
+  // A foreign shape degrades to absent rather than half-populating the slot.
+  expect(project({ agentId: 'agent-1', account: { alias: 'onbi' } })).toBeUndefined()
+  expect(project({ agentId: 'agent-1', account: 'onbi' })).toBeUndefined()
+})
+
 test('ResumeAgent projects as an independent agent card joined to the original identity and its own completion', () => {
   let state = createTranscriptState()
   state = projectServerFrame(state, ready('session-1'))

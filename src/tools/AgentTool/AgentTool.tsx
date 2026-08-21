@@ -18,7 +18,7 @@ import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEve
 import { clearDumpState } from '../../services/api/dumpPrompts.js';
 import { EMPTY_USAGE } from '../../services/api/emptyUsage.js';
 import { completeAgentTask as completeAsyncAgent, createActivityDescriptionResolver, createProgressTracker, enqueueAgentNotification, failAgentTask as failAsyncAgent, getProgressUpdate, getTokenCountFromTracker, isLocalAgentTask, killAsyncAgent, registerAgentForeground, registerAsyncAgent, unregisterAgentForeground, updateAgentProgress as updateAsyncAgentProgress, updateProgressFromMessage } from '../../tasks/LocalAgentTask/LocalAgentTask.js';
-import { registerCodexLease, releaseCodexLease } from '../../services/api/codexAccountLeaseManager.js';
+import { registerCodexLease, releaseCodexLease, snapshotLeaseAccount, type CodexLeaseAccount } from '../../services/api/codexAccountLeaseManager.js';
 import { clearWebSocketSession } from '../../services/api/codex-websocket-transport.js';
 import { checkRemoteAgentEligibility, formatPreconditionError, getRemoteTaskSessionUrl, registerRemoteAgentTask } from '../../tasks/RemoteAgentTask/RemoteAgentTask.js';
 import { assembleToolPool } from '../../tools.js';
@@ -62,7 +62,7 @@ import { agentToolResultSchema, classifyHandoffIfNeeded, emitTaskProgress, extra
 import { GENERAL_PURPOSE_AGENT } from './built-in/generalPurposeAgent.js';
 import { AGENT_TOOL_NAME, LEGACY_AGENT_TOOL_NAME, ONE_SHOT_BUILTIN_AGENT_TYPES } from './constants.js';
 import { buildForkedMessages, buildWorktreeNotice, FORK_AGENT, isForkSubagentEnabled, isInForkChild } from './forkSubagent.js';
-import { resolveRequestProvider } from '../../utils/model/providers.js';
+import { resolveRequestProvider, type APIProvider } from '../../utils/model/providers.js';
 import type { AgentDefinition } from './loadAgentsDir.js';
 import { filterAgentsByMcpRequirements, hasRequiredMcpServers, isBuiltInAgent } from './loadAgentsDir.js';
 import { getPrompt } from './prompt.js';
@@ -239,6 +239,38 @@ const isBackgroundTasksDisabled =
 export function releaseSynchronousAgentCodexResources(agentId: string): void {
   releaseCodexLease(agentId);
   clearWebSocketSession(`${getSessionId()}/${agentId}`);
+}
+
+/**
+ * The Codex account to REPORT for a worker, or undefined.
+ *
+ * Two guards, and both are load-bearing:
+ *
+ *  - **Provider.** A lease is registered for every worker regardless of the
+ *    model it runs on (unlike the main thread's, which `query.ts` gates on
+ *    `getAPIProvider() === 'openai'`), so an Anthropic worker holds a Codex
+ *    lease it never spends. Reporting that would put an account in the
+ *    transcript the run never touched. The gate is the engine's OWN routing
+ *    function, so it cannot disagree with where the request actually went.
+ *  - **Liveness.** `releaseCodexLease` deletes the entry, so this returns
+ *    undefined once the worker's lease is released. Callers must take the
+ *    snapshot while the lease is alive; there is no reading it back afterwards.
+ */
+export function reportableAccount(
+  account: CodexLeaseAccount | undefined,
+  model: string,
+  baseProvider: APIProvider | undefined,
+): CodexLeaseAccount | undefined {
+  if (resolveRequestProvider(model, baseProvider) !== 'openai') return undefined;
+  return account;
+}
+
+function reportableLeaseAccount(
+  agentId: string,
+  model: string,
+  baseProvider: APIProvider | undefined,
+): CodexLeaseAccount | undefined {
+  return reportableAccount(snapshotLeaseAccount(agentId), model, baseProvider);
 }
 
 // Auto-background agent tasks after this many ms (0 = disabled)
@@ -522,6 +554,13 @@ export const outputSchema = lazySchema(() => {
     // model it runs on — it yields no nested frames to its caller and its final
     // result goes to a task-notification, not back to this tool_use.
     model: z.string().optional().describe('The resolved model the async agent runs on'),
+    // Same reasoning as `model`, plus: a background worker's lease is gone by
+    // the time anything reads its card, so this acknowledgment is the only
+    // place the account can be recorded at all.
+    account: z
+      .object({ accountId: z.string(), accountAlias: z.string().nullable() })
+      .optional()
+      .describe('The Codex account leased for the async agent at dispatch'),
     description: z.string().describe('The description of the task'),
     prompt: z.string().describe('The prompt for the agent'),
     outputFile: z.string().describe('Debug transcript path; prefer TaskOutput for progress and final results'),
@@ -1259,6 +1298,11 @@ export const AgentTool = buildTool({
         ownerType: 'subagent',
         ownerLabel: description,
       });
+      const asyncLeaseAccount = reportableLeaseAccount(
+        asyncAgentId,
+        resolvedAgentModel,
+        toolUseContext.options.mainLoopProvider,
+      );
 
       // Wrap async agent execution in agent context for analytics attribution
       const asyncAgentContext = {
@@ -1312,6 +1356,13 @@ export const AgentTool = buildTool({
           agentName,
           agentType: selectedAgent.agentType,
           model: resolvedAgentModel,
+          // Dispatch-time, and it has to be: this acknowledgment is the only
+          // result a background launch record ever carries, and its completion
+          // is deliberately not folded back into the card
+          // (`transcriptProjector.ts` `recordAgentCompletion`). A lease that
+          // later fails over or is repaired moves off this account without the
+          // card being able to say so.
+          ...(asyncLeaseAccount ? { account: asyncLeaseAccount } : {}),
           description: description,
           prompt: prompt,
           outputFile: getTaskOutputPath(agentBackgroundTask.agentId),
@@ -1366,6 +1417,12 @@ export const AgentTool = buildTool({
         // Register as foreground task immediately so it can be backgrounded at any time
         // Skip registration if background tasks are disabled
         let foregroundTaskId: string | undefined;
+        // Seeded at spawn and refreshed at the terminal, because the two
+        // moments can disagree (failover, repair, follow-main reassignment) and
+        // only the terminal read is still true. Undefined for an Anthropic
+        // worker and when background tasks are disabled — no lease is
+        // registered on that path at all.
+        let syncLeaseAccount: CodexLeaseAccount | undefined;
         // Create the background race promise once outside the loop — otherwise
         // each iteration adds a new .then() reaction to the same pending
         // promise, accumulating callbacks for the lifetime of the agent.
@@ -1389,6 +1446,11 @@ export const AgentTool = buildTool({
             ownerType: 'subagent',
             ownerLabel: description,
           });
+          syncLeaseAccount = reportableLeaseAccount(
+            syncAgentId,
+            resolvedAgentModel,
+            toolUseContext.options.mainLoopProvider,
+          );
           foregroundTaskId = registration.taskId;
           backgroundPromise = registration.backgroundSignal.then(() => ({
             type: 'background' as const
@@ -1518,10 +1580,23 @@ export const AgentTool = buildTool({
                         emitTaskProgress(tracker, backgroundedTaskId, toolUseContext.toolUseId, description, startTime, lastToolName);
                       }
                     }
+                    const terminalLeaseAccount = reportableLeaseAccount(
+                      backgroundedTaskId,
+                      resolvedAgentModel,
+                      toolUseContext.options.mainLoopProvider,
+                    );
                     const agentResult = finalizeAgentTool(agentMessages, backgroundedTaskId, {
                       ...metadata,
                       agentName,
-                      totalTokensOverride: getTokenCountFromTracker(tracker)
+                      totalTokensOverride: getTokenCountFromTracker(tracker),
+                      // Read here because `completeAgentTask`/`failAgentTask`
+                      // release the lease immediately after this result is
+                      // built. Reaches TaskOutput and the resumed-run card, NOT
+                      // the launch record, whose account was stamped on the
+                      // acknowledgment that replaced its result.
+                      ...(terminalLeaseAccount
+                        ? { account: terminalLeaseAccount }
+                        : {}),
                     });
 
                     // If the backgrounded subagent ended with a synthetic
@@ -1734,6 +1809,11 @@ export const AgentTool = buildTool({
 
                 // Return async_launched result immediately
                 const canCheckProgress = toolUseContext.options.tools.some(t => toolMatchesName(t, TASK_OUTPUT_TOOL_NAME));
+                const backgroundedLeaseAccount = reportableLeaseAccount(
+                  backgroundedTaskId,
+                  resolvedAgentModel,
+                  toolUseContext.options.mainLoopProvider,
+                );
                 return {
                   data: {
                     isAsync: true as const,
@@ -1741,6 +1821,13 @@ export const AgentTool = buildTool({
                     agentId: backgroundedTaskId,
                     agentName,
                     agentType: selectedAgent.agentType,
+                    // Stamped here as well as at spawn: an auto-backgrounded
+                    // agent REPLACES its card's result with this
+                    // acknowledgment, so a stamp written only on the
+                    // synchronous completion path would never reach the card.
+                    ...(backgroundedLeaseAccount
+                      ? { account: backgroundedLeaseAccount }
+                      : {}),
                     description: description,
                     prompt: prompt,
                     outputFile: getTaskOutputPath(backgroundedTaskId),
@@ -1878,7 +1965,16 @@ export const AgentTool = buildTool({
 
           // Unregister foreground task if agent completed without being backgrounded
           if (foregroundTaskId) {
-            unregisterAgentForeground(foregroundTaskId, rootSetAppState);
+            // The account comes back FROM the release, not from a read ordered
+            // before it: `releaseCodexLease` deletes the entry, so a separate
+            // read here would be silently order-dependent. Preferred over the
+            // spawn-time seed because a lease that failed over, was repaired, or
+            // was reassigned mid-run ends somewhere else.
+            syncLeaseAccount = reportableAccount(
+              unregisterAgentForeground(foregroundTaskId, rootSetAppState),
+              resolvedAgentModel,
+              toolUseContext.options.mainLoopProvider,
+            ) ?? syncLeaseAccount;
             // Notify SDK consumers (e.g. VS Code subagent panel) that this
             // foreground agent is done. Goes through drainSdkEvents() — does
             // NOT trigger the print.ts XML task_notification parser or the LLM loop.
@@ -2002,7 +2098,8 @@ export const AgentTool = buildTool({
         const agentResult = finalizeAgentTool(agentMessages, syncAgentId, {
           ...metadata,
           agentName,
-          totalTokensOverride: getTokenCountFromTracker(syncTracker)
+          totalTokensOverride: getTokenCountFromTracker(syncTracker),
+          ...(syncLeaseAccount ? { account: syncLeaseAccount } : {}),
         });
         if (feature('TRANSCRIPT_CLASSIFIER')) {
           const currentAppState = toolUseContext.getAppState();

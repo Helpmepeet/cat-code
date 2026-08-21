@@ -8,6 +8,7 @@ import {
   createCodexLeaseForTest,
   getCodexLeaseForOwner,
   resetCodexLeaseManagerForTest,
+  snapshotLeaseAccount,
 } from '../../services/api/codexAccountLeaseManager.js'
 import {
   resetCodexAccountPoolForTest,
@@ -128,6 +129,66 @@ describe('LocalAgentTask foreground cleanup', () => {
 
     expect(getCodexLeaseForOwner(agentId)).toBeUndefined()
     expect(appState.tasks[agentId]).toBeUndefined()
+  })
+
+  test('unregisterAgentForeground hands back the account it just released', () => {
+    // The regression this protects: the account is readable ONLY in the instant
+    // before the release, because `releaseCodexLease` deletes the entry rather
+    // than marking it. Returning it from the release is what makes the caller's
+    // ordering impossible to get wrong, so this asserts the value AND the
+    // deletion together — a return that arrived after the delete would be
+    // undefined here.
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'main-account', alias: 'main', lastUsedAt: 0 }),
+        buildPoolAccount({ accountId: 'worker-a', alias: 'scout', lastUsedAt: 100 }),
+      ],
+    })
+
+    const agentId = 'sync-agent-account'
+    registerAgentForeground({
+      agentId,
+      description: 'Sync foreground agent',
+      prompt: 'test prompt',
+      selectedAgent: { name: 'general-purpose', prompt: 'test prompt' },
+      setAppState,
+    })
+    const lease = createCodexLeaseForTest({
+      ownerId: agentId,
+      ownerType: 'subagent',
+      ownerLabel: 'Sync foreground agent',
+    })
+
+    const released = unregisterAgentForeground(agentId, setAppState)
+
+    expect(released).toEqual({
+      accountId: lease.accountId,
+      accountAlias: lease.accountId === 'worker-a' ? 'scout' : 'main',
+    })
+    expect(getCodexLeaseForOwner(agentId)).toBeUndefined()
+    expect(snapshotLeaseAccount(agentId)).toBeUndefined()
+  })
+
+  test('unregisterAgentForeground reports no account when nothing was leased', () => {
+    // An Anthropic-path worker registers a foreground task and no lease. The
+    // release must not invent one, or the card would name an account the run
+    // never touched.
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [buildPoolAccount({ accountId: 'main-account', alias: 'main', lastUsedAt: 0 })],
+    })
+
+    const agentId = 'sync-agent-no-lease'
+    registerAgentForeground({
+      agentId,
+      description: 'Sync foreground agent',
+      prompt: 'test prompt',
+      selectedAgent: { name: 'general-purpose', prompt: 'test prompt' },
+      setAppState,
+    })
+
+    expect(unregisterAgentForeground(agentId, setAppState)).toBeUndefined()
   })
 
   test('markAgentTaskResumed tracks visible resume state on local agent tasks', () => {

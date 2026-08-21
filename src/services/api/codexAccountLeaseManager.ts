@@ -231,6 +231,34 @@ export function getCurrentCodexLease(): CodexLease | undefined {
   return ownerId ? codexLeasesByOwnerId.get(ownerId) : undefined
 }
 
+/**
+ * The account an owner is leasing, as a value that outlives the lease.
+ *
+ * Exists because `releaseCodexLease` DELETES the map entry, so any consumer that
+ * reads the lease plane after a worker's terminal gets nothing. Callers that
+ * need to REPORT which account a run used must take this snapshot while the
+ * lease is still alive and carry it themselves.
+ *
+ * `accountAlias` is the pool's redacted display alias, never an email and never
+ * a token; it is null for an account the pool cannot name. The pair matches what
+ * the desktop lease seam already projects (`app/sidecar/leaseDomain.ts`).
+ */
+export type CodexLeaseAccount = {
+  accountId: string
+  accountAlias: string | null
+}
+
+export function snapshotLeaseAccount(
+  ownerId: string,
+): CodexLeaseAccount | undefined {
+  const lease = codexLeasesByOwnerId.get(ownerId)
+  if (!lease) return undefined
+  const account = getPoolStatus().accounts.find(
+    poolAccount => poolAccount.accountId === lease.accountId,
+  )
+  return { accountId: lease.accountId, accountAlias: account?.alias ?? null }
+}
+
 export function repairCodexLeaseIfNonSelectable(
   ownerId: string,
 ): CodexLease | undefined {
