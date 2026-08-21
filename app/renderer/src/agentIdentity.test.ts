@@ -87,7 +87,6 @@ test('resolves identity from real worker, local-agent task, teammate, and Agent 
   ).toEqual({
     hasName: true,
     name: 'Ada',
-    handle: '@Ada',
     type: 'agent-mode-coding-worker',
     description: 'Patch renderer state',
     id: 'agent-123',
@@ -104,7 +103,6 @@ test('resolves identity from real worker, local-agent task, teammate, and Agent 
     }),
   ).toMatchObject({
     name: 'Grace',
-    handle: '@Grace',
     type: 'verification',
     description: 'Verify changed files',
     id: 'agent-456',
@@ -122,7 +120,6 @@ test('resolves identity from real worker, local-agent task, teammate, and Agent 
     }),
   ).toMatchObject({
     name: 'researcher',
-    handle: '@researcher',
     id: 'researcher@team',
     description: 'Search for source anchors',
   })
@@ -137,10 +134,23 @@ test('resolves identity from real worker, local-agent task, teammate, and Agent 
   ).toMatchObject({
     hasName: false,
     name: null,
-    handle: null,
     type: 'implementor',
     description: 'Implement the slice',
   })
+})
+
+test('identity offers no at-signed form of a name, whatever the wire sent', () => {
+  // Operator ruling, 2026-08-21: the at-sign is engine mention syntax and never
+  // reaches the screen. The resolver is the choke point, so it must not hand any
+  // caller a prefixed string to render — an unused `handle` field is one edit
+  // away from being printed again.
+  for (const source of [{ handle: '@Ada' }, { handle: 'Ada' }, { agentName: '@Grace' }]) {
+    const identity = resolveAgentIdentity(source)
+    expect(identity.name).not.toContain('@')
+    expect(Object.values(identity).filter(value => typeof value === 'string')).not.toContain(
+      `@${identity.name}`,
+    )
+  }
 })
 
 test('compresses durable Agent Mode worker sessions using workerUxSummary semantics', () => {
@@ -424,7 +434,7 @@ test('returns complete display vocabulary for P4-8 and P4-9 consumers', () => {
 
   expect(display).toMatchObject({
     identity: {
-      handle: '@Ada',
+      name: 'Ada',
       type: 'agent-mode-coding-worker',
       description: 'Patch renderer state',
     },

@@ -79,7 +79,8 @@ test('threads the engine worker snapshot to a relayed card', () => {
     />,
   )
 
-  expect(html).toContain('@Vale')
+  expect(html).toContain('>Vale<')
+  expect(html).not.toContain('@Vale')
   expect(html).toContain('a coding worker. You decide.')
   expect(html).not.toContain('worker-42')
 })

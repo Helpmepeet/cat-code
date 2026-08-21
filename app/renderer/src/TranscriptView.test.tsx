@@ -1110,8 +1110,9 @@ test('an unmergeable completion renders one line, never the model-facing banner'
     />,
   )
   // Printed verbatim, with the worker's own name set in mono inside the line.
+  // Bare: the engine's at-sign is the split's needle, never the reader's text.
   expect(html).toContain('Agent ')
-  expect(html).toContain('@Ada')
+  expect(html).toContain('>Ada</span>')
   expect(html).toContain(' completed')
   // The words the operator should never see again.
   for (const leaked of ['Task notification', 'Task ID', 'Output file', 'Tool use ID', 'Agent task']) {
@@ -1673,8 +1674,40 @@ test('the finish row keeps a multi-word worker name whole', () => {
     />,
   )
 
-  expect(html).toContain('>@Ada Lovelace<')
-  expect(html).not.toContain('>@Ada<')
+  expect(html).toContain('>Ada Lovelace<')
+  expect(html).not.toContain('>Ada<')
+})
+
+test('the finish row highlights the name, and prints no at-sign anywhere', () => {
+  // The at-sign has two jobs on this row and only one of them is the reader's:
+  // it is the needle that finds the name inside the ENGINE's own sentence, and
+  // it used to be rendered as well. Dropping it from the needle would silently
+  // stop the split matching, leaving the sentence whole and the name unmarked
+  // with nothing failing. Both halves are asserted here.
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[
+        {
+          ...blockSource,
+          id: 's:m:0:task-notification',
+          kind: 'task-notification',
+          status: 'completed',
+          summary: 'Agent @Ada completed',
+          toolUseId: null,
+          isReplay: false,
+          children: [],
+        },
+      ]}
+    />,
+  )
+
+  // Split still happened: the name is its own marked span, and the engine's
+  // sentence is no longer one unbroken run of text.
+  expect(html).toContain('>Ada</span>')
+  expect(html).toContain('Agent ')
+  expect(html).toContain(' completed')
+  expect(html).not.toContain('Agent @Ada completed')
+  expect(html).not.toContain('@')
 })
 
 test('a finish row the engine worded differently still draws, with no face claimed', () => {

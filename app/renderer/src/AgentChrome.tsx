@@ -162,7 +162,11 @@ export function AgentTypeChip({ role }: { role: string | null }) {
   )
 }
 
-/** @handle in mono — a web-native mention convention, not a terminal tree row. */
+/**
+ * The worker's name in mono — a web-native mention, not a terminal tree row.
+ * BARE, with no at-sign: the prefix is engine mention syntax and the operator
+ * ruled (2026-08-21) that it never reaches the screen.
+ */
 export function AgentHandle({ name, className }: { name: string; className?: string }) {
   return (
     <span className={`shrink-0 whitespace-nowrap font-mono text-[12.5px] font-semibold text-purple-200 ${className ?? ''}`}>

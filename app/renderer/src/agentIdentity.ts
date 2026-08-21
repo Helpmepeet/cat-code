@@ -52,10 +52,16 @@ export type AgentStateMeta = {
   attention: boolean
 }
 
+/**
+ * A worker's identity as the UI reads it. There is deliberately NO `@`-prefixed
+ * form here: the at-sign is the ENGINE's mention syntax and the operator ruled
+ * (2026-08-21) that it never reaches the screen. Where a summary sentence has to
+ * be searched for `@name`, the needle is built at that one site and the name is
+ * rendered bare.
+ */
 export type AgentIdentity = {
   hasName: boolean
   name: string | null
-  handle: string | null
   type: string | null
   description: string | null
   id: string | null
@@ -348,7 +354,6 @@ export function resolveAgentIdentity(data: AgentIdentitySource = {}): AgentIdent
   return {
     hasName: name !== null,
     name,
-    handle: name ? `@${name}` : null,
     type,
     description,
     id,

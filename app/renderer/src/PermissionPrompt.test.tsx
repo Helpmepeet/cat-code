@@ -247,9 +247,12 @@ test('a relayed request reads as running another agent command', () => {
   expect(html).toContain('Run')
   expect(html).not.toContain('>Allow<')
   expect(html).toContain('Worker request')
+  // Bare name: the at-sign is engine mention syntax and never reaches the screen
+  // (operator ruling, 2026-08-21).
   expect(html).toContain(
-    'Relayed from <span class="font-mono text-violet-300">@Vale</span>, a coding worker. You decide.',
+    'Relayed from <span class="font-mono text-violet-300">Vale</span>, a coding worker. You decide.',
   )
+  expect(html).not.toContain('@Vale')
 })
 
 test('a relayed request with an unnamed worker names the engine role only', () => {
@@ -600,7 +603,8 @@ test('renders worker-relay chrome from the engine request agent_id', () => {
   )
   expect(html).toContain('>worker<')
   expect(html).toContain('Relayed from ')
-  expect(html).toContain('@Vale')
+  expect(html).toContain('>Vale<')
+  expect(html).not.toContain('@Vale')
   expect(html).toContain('a coding worker. You decide.')
   expect(html).not.toContain('worker-42')
 })

@@ -4468,9 +4468,14 @@ function TaskNotificationBox({ summary }: { summary: string | null }) {
   if (summary === null) return null
   const name = agentNameInSummary(summary)
   const notificationFace = faces.faceFor(null, name)
-  const handle = name === null ? null : `@${name}`
+  // TWO jobs, and only one of them is the reader's. `mention` is the needle the
+  // ENGINE wrote into its own sentence ("Agent @Ada completed"), so it keeps the
+  // at-sign or the split silently stops matching and the name stops being
+  // highlighted at all. What is rendered below is the bare name: the at-sign
+  // never reaches the screen (operator ruling, 2026-08-21).
+  const mention = name === null ? null : `@${name}`
   const [before, after] =
-    handle === null ? [summary, ''] : splitOnce(summary, handle)
+    mention === null ? [summary, ''] : splitOnce(summary, mention)
   return (
     <div className="flex items-center gap-2.5 rounded-lg border border-shell-seam bg-shell-hover/40 px-3 py-[5px]">
       <AgentFace
@@ -4480,8 +4485,8 @@ function TaskNotificationBox({ summary }: { summary: string | null }) {
       />
       <span className="min-w-0 flex-1 truncate text-[12px] leading-4 text-text-muted">
         {before}
-        {handle === null ? null : (
-          <span className="font-mono text-text-primary">{handle}</span>
+        {name === null ? null : (
+          <span className="font-mono text-text-primary">{name}</span>
         )}
         {after}
       </span>

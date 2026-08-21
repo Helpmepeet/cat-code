@@ -134,8 +134,11 @@ export function PermissionPrompt({
   const relayingWorker = relayed
     ? workers.find(worker => worker.agentId === workerId)
     : undefined
-  const workerHandle = relayingWorker
-    ? resolveAgentIdentity({ handle: relayingWorker.handle ?? undefined }).handle
+  // The bare name, never `@name`: the at-sign is engine mention syntax and does
+  // not reach the screen (operator ruling, 2026-08-21). `resolveAgentIdentity`
+  // is what strips whatever prefix the wire carried.
+  const workerName = relayingWorker
+    ? resolveAgentIdentity({ handle: relayingWorker.handle ?? undefined }).name
     : null
   const workerRole =
     agentTypeMeta(relayingWorker?.role)?.label.toLowerCase() ??
@@ -382,9 +385,9 @@ export function PermissionPrompt({
       {relayed ? (
         <p className="mt-1 text-[11px] text-text-subtle">
           Relayed from{' '}
-          {workerHandle ? (
+          {workerName ? (
             <>
-              <span className="font-mono text-violet-300">{workerHandle}</span>,{' '}
+              <span className="font-mono text-violet-300">{workerName}</span>,{' '}
             </>
           ) : null}
           a {workerRole}. You decide.
