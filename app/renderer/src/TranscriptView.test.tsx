@@ -628,10 +628,11 @@ test('a resumed agent is an independent agent card named by the follow-up prompt
   expect(html).not.toContain(RESUME_ACK)
   expect(html).not.toContain('"success"')
   // The lifecycle WORD is gone from every state but the two that need to stop a
-  // reader (Failed, Stopped). The face no longer carries state at all
-  // (2026-08-21), so the aria label is what a screen reader gets.
-  expect(html).not.toContain('>Completed<') // no visible word
-  expect(html).toContain('aria-label="Completed"')
+  // reader (Failed, Stopped). The face carries no state at all (2026-08-21),
+  // including to a screen reader: it is the identity mark beside the worker's own
+  // name, so it is decorative and the row's text is what announces the run.
+  expect(html).not.toContain('>Completed<')
+  expect(html).not.toContain('aria-label="Completed"')
   // The ◇ mark went with the family word; only a REJECTED resume still carries
   // one, because it has no face to identify it.
   expect(html).not.toContain('◇')
@@ -1594,6 +1595,33 @@ test('a stopped worker shows tool calls and no token figure, like a failed one',
   expect(html).not.toContain('4.2k tokens')
 })
 
+test('two workers under one handle draw two faces, through the real render path', () => {
+  // The test that would have caught the id never reaching the card: every
+  // registry test calls `faceFor` directly with literal ids, so none of them
+  // touch `agentToolSourceOf`, which is where the id has to be copied off the
+  // result for any of it to run.
+  const settled = (suffix: string, agentId: string): NestedToolUseRow =>
+    agentRow(suffix, { subagent_type: 'Explore', description: 'x' }, 'success', [], null, {
+      isError: false,
+      content: 'done',
+      diff: null,
+      agentName: 'scout',
+      agentId,
+    } as ToolResultProjection)
+  // The face is the 9x9 svg; a card can carry other icons.
+  const stamps = (html: string) =>
+    [...html.matchAll(/<svg[^>]*viewBox="0 0 9 9"[^>]*>(.*?)<\/svg>/g)].map(m => m[1])
+
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView rows={[settled('one', 'agent_aaa'), settled('two', 'agent_bbb')]} />,
+  )
+  // Four stamps, not two: two sibling Agent rows form a delegate group, whose
+  // header stacks a face per member above the cards themselves. Two DISTINCT
+  // stamps is the property. Keyed on the name it would be one.
+  expect(stamps(html)).toHaveLength(4)
+  expect(new Set(stamps(html)).size).toBe(2)
+})
+
 test('a worker draws the same stamp whatever it is doing', () => {
   // 2026-08-21: the face is identity. A backgrounded worker used to withhold its
   // whole front, which is what made a fan-out of five render as five blank slabs.
@@ -1723,6 +1751,93 @@ test('a worker card names the Codex account its lease holds', () => {
   expect(html).toContain('GPT-5.6 Sol')
   // The redacted alias, never the raw account UUID.
   expect(html).not.toContain('0f9c1d22-aaaa-bbbb-cccc-1234567890ab')
+})
+
+test('a finished worker still names its account, with no lease left to join', () => {
+  // The defect this closes: the account was a LIVE join only, and the engine
+  // DELETES a worker's lease at its terminal. Every finished worker, and every
+  // restored transcript, therefore answered null — the card went blank exactly
+  // when a reader went looking. `leases` is null here on purpose: that is the
+  // state after the worker finished.
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      leases={null}
+      rows={[
+        agentRow(
+          'settled',
+          { subagent_type: 'general-purpose', description: 'Trace desktop runtime state' },
+          'success',
+          [],
+          null,
+          {
+            isError: false,
+            content: 'done',
+            diff: null,
+            agentId: 'agent_backus',
+            agentModel: 'gpt-5.6-sol',
+            agentAccount: {
+              accountId: '0f9c1d22-aaaa-bbbb-cccc-1234567890ab',
+              accountAlias: 'onbi',
+            },
+          },
+        ),
+      ]}
+    />,
+  )
+
+  expect(html).toContain('onbi')
+  expect(html).not.toContain('0f9c1d22-aaaa-bbbb-cccc-1234567890ab')
+})
+
+test('a live lease outranks the stamp, which can only be dispatch-time', () => {
+  // The two can disagree for exactly one reason: a background worker's stamp is
+  // written at dispatch and its row can never be amended, so a lease that moved
+  // mid-run is only knowable from the live plane. Live therefore wins while it
+  // exists.
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      leases={{
+        strategy: 'spread',
+        accounts: [],
+        owners: [
+          {
+            leaseId: 'agent_moved',
+            ownerId: 'agent_moved',
+            ownerType: 'subagent',
+            ownerLabel: 'work',
+            accountId: 'account-after',
+            accountAlias: 'after',
+            strategy: 'spread',
+            state: 'active',
+            createdAt: 1,
+            updatedAt: 1,
+            failoverCount: 1,
+            selectionKind: 'failover',
+            selectionReason: 'failover',
+          },
+        ],
+      }}
+      rows={[
+        agentRow(
+          'moved',
+          { subagent_type: 'general-purpose', description: 'work', run_in_background: true },
+          'success',
+          [],
+          null,
+          {
+            isError: false,
+            content: 'launched',
+            diff: null,
+            agentId: 'agent_moved',
+            agentAccount: { accountId: 'account-before', accountAlias: 'before' },
+          },
+        ),
+      ]}
+    />,
+  )
+
+  expect(html).toContain('after')
+  expect(html).not.toContain('before')
 })
 
 test('an un-aliased account is named by a short id, never a whole UUID', () => {

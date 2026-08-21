@@ -148,27 +148,9 @@ describe('identity', () => {
     expect(axesForName(null)).toEqual(base)
     expect(axesForName('')).toEqual(base)
     expect(axesForName(undefined)).toEqual(base)
-    // "Featureless" is literal: the eyes are the only thing `closed` withholds,
-    // and this face has no mouth or marking to withhold either.
-    expect(faceRects(axesForName(null))).toEqual(
-      faceRects(axesForName(null)),
-    )
   })
 
-  test('eyes are state, not identity: they never move the silhouette', () => {
-    for (const name of NAMES.slice(0, 30)) {
-      const axes = axesForName(name)
-      const open = rasterize(faceRects(axes))
-      const shut = rasterize(faceRects(axes))
-      const closed = rasterize(faceRects(axes))
-      // Row 4 is the only row eyes touch; every other row is identical.
-      for (let y = 0; y < 9; y += 1) {
-        if (y === 4) continue
-        expect(open[y]).toEqual(closed[y])
-        expect(shut[y]).toEqual(closed[y])
-      }
-    }
-  })
+
 
   test('the hash is FNV-1a over the name, salted per axis', () => {
     // A different salt must actually change the draw, or six of the seven axes
@@ -185,7 +167,7 @@ describe('the session registry', () => {
     const registry = createAgentFaceRegistry()
     const seen = new Set<string>()
     for (const name of NAMES) {
-      const key = silhouette(registry.axesFor(name))
+      const key = silhouette(registry.faceFor(name).axes)
       expect(seen.has(key)).toBe(false)
       seen.add(key)
     }
@@ -193,20 +175,20 @@ describe('the session registry', () => {
 
   test('a named worker never wears the nameless stamp', () => {
     const registry = createAgentFaceRegistry()
-    const nameless = silhouette(registry.axesFor(null))
+    const nameless = silhouette(registry.faceFor(null).axes)
     for (const name of NAMES) {
-      expect(silhouette(registry.axesFor(name))).not.toBe(nameless)
+      expect(silhouette(registry.faceFor(name).axes)).not.toBe(nameless)
     }
   })
 
   test('a worker keeps its silhouette for the whole session', () => {
     const registry = createAgentFaceRegistry()
-    const first = NAMES.map(name => registry.axesFor(name))
+    const first = NAMES.map(name => registry.faceFor(name).axes)
     // Interleave other names between the repeat reads: a registry that recomputed
     // instead of remembering would drift as the taken set grew.
     for (let index = 0; index < NAMES.length; index += 1) {
-      registry.axesFor(`late-arrival-${index}`)
-      expect(registry.axesFor(NAMES[index])).toEqual(first[index])
+      registry.faceFor(`late-arrival-${index}`)
+      expect(registry.faceFor(NAMES[index]).axes).toEqual(first[index])
     }
   })
 
@@ -215,7 +197,7 @@ describe('the session registry', () => {
     // level, so its result has to be re-checked rather than assumed.
     const registry = createAgentFaceRegistry()
     for (const name of NAMES) {
-      expect(isOneMass(rasterize(faceRects(registry.axesFor(name))))).toBe(true)
+      expect(isOneMass(rasterize(faceRects(registry.faceFor(name).axes)))).toBe(true)
     }
   })
 
@@ -223,7 +205,7 @@ describe('the session registry', () => {
     const a = createAgentFaceRegistry()
     const b = createAgentFaceRegistry()
     for (const name of NAMES.slice(0, 40)) {
-      expect(a.axesFor(name)).toEqual(b.axesFor(name))
+      expect(a.faceFor(name)).toEqual(b.faceFor(name))
     }
   })
 })
@@ -237,26 +219,26 @@ describe('telling two workers apart', () => {
     // @scout and @deckard drew one cell apart — a single temple marking — and the
     // registry reported them unique. This is the case that motivated the rule.
     const registry = createAgentFaceRegistry()
-    const scout = maskOf(registry.axesFor('scout'))
-    const deckard = maskOf(registry.axesFor('deckard'))
+    const scout = maskOf(registry.faceFor('scout').axes)
+    const deckard = maskOf(registry.faceFor('deckard').axes)
     expect(cellsApart(scout, deckard)).toBeGreaterThanOrEqual(4)
   })
 
   test('a plausible session has no pair a reader would confuse', () => {
     const registry = createAgentFaceRegistry()
-    const masks = NAMES.slice(0, 40).map(name => maskOf(registry.axesFor(name)))
+    const masks = NAMES.slice(0, 40).map(name => maskOf(registry.faceFor(name).axes))
     expect(closestPair(masks)).toBeGreaterThanOrEqual(4)
   })
 
   test('the well-separated supply lasts well past any real session', () => {
-    // 335 workers before the ladder has to drop a bar. Stated as a floor rather
+    // 336 workers before the ladder has to drop a bar. Stated as a floor rather
     // than pinned exactly: the figure moves with the axis space, and what the
     // rule promises is "far more than a session holds", not a constant.
     const registry = createAgentFaceRegistry()
     const masks: Uint8Array[] = []
     let separated = 0
     for (let index = 0; index < 300; index += 1) {
-      const mask = maskOf(registry.axesFor(`worker-${index}`))
+      const mask = maskOf(registry.faceFor(`worker-${index}`).axes)
       const closest = masks.reduce((best, held) => Math.min(best, cellsApart(held, mask)), 81)
       if (closest < 4) break
       separated += 1
@@ -271,7 +253,7 @@ describe('telling two workers apart', () => {
     const registry = createAgentFaceRegistry()
     const seen = new Set<string>()
     for (let index = 0; index < 300; index += 1) {
-      const key = silhouette(registry.axesFor(`crowd-${index}`))
+      const key = silhouette(registry.faceFor(`crowd-${index}`).axes)
       expect(seen.has(key)).toBe(false)
       seen.add(key)
     }
@@ -424,8 +406,8 @@ describe('the face is identity, not state', () => {
     // There is no state input left to vary, which is the property: the drawing
     // function cannot be told what the worker is up to.
     const registry = createAgentFaceRegistry()
-    const first = NAMES.map(name => silhouette(registry.axesFor(name)))
-    const second = NAMES.map(name => silhouette(registry.axesFor(name)))
+    const first = NAMES.map(name => silhouette(registry.faceFor(name).axes))
+    const second = NAMES.map(name => silhouette(registry.faceFor(name).axes))
     expect(second).toEqual(first)
   })
 
@@ -443,23 +425,58 @@ describe('the face is identity, not state', () => {
     // The completion notification has only a name; the card has an id. Without
     // the alias the same worker would wear two faces in one transcript.
     const registry = createAgentFaceRegistry()
-    const fromCard = silhouette(registry.axesFor('agent_01H', 'scout'))
-    expect(silhouette(registry.axesFor('scout'))).toBe(fromCard)
-    expect(silhouette(registry.axesFor('agent_01H'))).toBe(fromCard)
+    const fromCard = silhouette(registry.faceFor('agent_01H', 'scout').axes)
+    expect(silhouette(registry.faceFor('scout').axes)).toBe(fromCard)
+    expect(silhouette(registry.faceFor('agent_01H').axes)).toBe(fromCard)
+  })
+
+  test('the id arriving after the name does not move the face', () => {
+    // The order a foreground card actually takes: it draws by name while it runs,
+    // because the id only rides the settled result. Adopting the name's face is
+    // what keeps the card from redrawing the moment the worker finishes.
+    const registry = createAgentFaceRegistry()
+    const byName = silhouette(registry.faceFor(null, 'lambert').axes)
+    expect(silhouette(registry.faceFor('agent_05C', 'lambert').axes)).toBe(byName)
+  })
+
+  test('a second worker under a taken name does NOT adopt the first one', () => {
+    // The other half of the same rule. An alias already owned by an id is spoken
+    // for; only an unowned one is adoptable.
+    const registry = createAgentFaceRegistry()
+    const first = silhouette(registry.faceFor('agent_06D', 'kane').axes)
+    expect(silhouette(registry.faceFor('agent_07E', 'kane').axes)).not.toBe(first)
+  })
+
+  test('colour is deduped like shape, so a plausible session has no repeat', () => {
+    // Ten hashes over ten fills collide about 70% of the time at five workers.
+    // The registry walks up from the proposed fill instead.
+    const registry = createAgentFaceRegistry()
+    const fills = NAMES.slice(0, 10).map(name => registry.faceFor(name).fill)
+    expect(new Set(fills).size).toBe(10)
+  })
+
+  test('past the palette a colour repeats rather than going blank', () => {
+    const registry = createAgentFaceRegistry()
+    const fills = NAMES.slice(0, 14).map(name => registry.faceFor(name).fill)
+    expect(new Set(fills).size).toBe(10)
+    for (const fill of fills) {
+      expect(fill).toBeGreaterThanOrEqual(0)
+      expect(fill).toBeLessThan(10)
+    }
   })
 
   test('the name arriving after the id does not move the face', () => {
     const registry = createAgentFaceRegistry()
-    const byId = silhouette(registry.axesFor('agent_02K'))
-    expect(silhouette(registry.axesFor('agent_02K', 'ripley'))).toBe(byId)
-    expect(silhouette(registry.axesFor('ripley'))).toBe(byId)
+    const byId = silhouette(registry.faceFor('agent_02K').axes)
+    expect(silhouette(registry.faceFor('agent_02K', 'ripley').axes)).toBe(byId)
+    expect(silhouette(registry.faceFor('ripley').axes)).toBe(byId)
   })
 
   test('two workers sharing a name still get two faces', () => {
     // The reason identity is keyed on the id: a name is not unique per spawn.
     const registry = createAgentFaceRegistry()
-    const first = silhouette(registry.axesFor('agent_03A', 'scout'))
-    const second = silhouette(registry.axesFor('agent_04B', 'scout'))
+    const first = silhouette(registry.faceFor('agent_03A', 'scout').axes)
+    const second = silhouette(registry.faceFor('agent_04B', 'scout').axes)
     expect(second).not.toBe(first)
   })
 })

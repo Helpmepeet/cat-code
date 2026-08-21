@@ -23,8 +23,14 @@ export const AGENT_STATE_TONE_CLASS: Record<
  * interpolated `fill-[${hex}]` silently no-ops under Tailwind.
  *
  * Ten, not more: the palette has to stay separable at 19px against #09090b, and
- * every hue here is one the app already ships. Deliberately NOT including the
- * accent pink, which the shell uses for "the thing you are pointing at".
+ * the registry hands each live worker a different one, so ten is also the number
+ * of workers that can be on screen before a colour has to repeat. Deliberately
+ * NOT including the accent pink, which the shell uses for "the thing you are
+ * pointing at". `lime`, `fuchsia` and `rose` are new to this app; the other
+ * seven were already in use.
+ *
+ * Length is pinned to `FACE_FILL_COUNT` by a test: the registry reasons about
+ * the count without importing the classes.
  */
 export const AGENT_FACE_IDENTITY_FILL: readonly string[] = [
   'fill-teal-300',

@@ -1,5 +1,3 @@
-import { faceHash } from './agentFace.js'
-
 export type AgentTypeTone = 'teal' | 'blue' | 'purple' | 'sky' | 'neutral'
 export type AgentStateTone =
   | 'info'
@@ -307,20 +305,6 @@ export function agentTranscriptStateWord(state: AgentStateKey): string {
       return exhaustive
     }
   }
-}
-
-/**
- * The face's colour, which is IDENTITY and not state (operator ruling,
- * 2026-08-21). An index into `AGENT_FACE_IDENTITY_FILL`, hashed from the same
- * identifier the silhouette uses, so a worker's colour is as stable as its
- * shape and two workers differ in both.
- *
- * Salt 8 continues `axesForName`'s series (1-7). Sharing a salt with an axis
- * would tie colour to that axis, and two workers that differed only in it would
- * come out the same colour as well as nearly the same shape.
- */
-export function agentFaceFill(identifier: string | null | undefined): number {
-  return identifier ? faceHash(identifier, 8) : 0
 }
 
 /**

@@ -60,17 +60,18 @@ export function AgentFace({
   label = null,
 }: {
   axes: FaceAxes
-  /** Index into `AGENT_FACE_IDENTITY_FILL`; the worker's own colour, not a state. */
+  /**
+   * The worker's own colour as an index into `AGENT_FACE_IDENTITY_FILL`, handed
+   * out by the session registry so two workers on screen do not share one. Never
+   * a state.
+   */
   fill: number
   pulse?: boolean
   /** 19 in a card, 17 in a finish row or a group header. */
   size?: 19 | 17
   label?: string | null
 }) {
-  const colour = AGENT_FACE_IDENTITY_FILL[
-    ((fill % AGENT_FACE_IDENTITY_FILL.length) + AGENT_FACE_IDENTITY_FILL.length) %
-      AGENT_FACE_IDENTITY_FILL.length
-  ]
+  const colour = AGENT_FACE_IDENTITY_FILL[fill % AGENT_FACE_IDENTITY_FILL.length]
   return (
     <svg
       width={size}

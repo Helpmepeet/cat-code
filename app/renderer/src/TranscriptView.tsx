@@ -93,7 +93,6 @@ import {
   type ReasoningStepModel,
 } from './reasoningLayout.js'
 import {
-  agentFaceFill,
   agentFacePulse,
   deriveAgentDisplayVocabulary,
   type AgentStateKey,
@@ -962,7 +961,7 @@ const TranscriptRowView = memo(function TranscriptRowView({
       )
 
     case 'task-notification':
-      return <TaskNotificationBox status={row.status} summary={row.summary} />
+      return <TaskNotificationBox summary={row.summary} />
 
     case 'injected-turn':
       return (
@@ -2352,9 +2351,18 @@ function agentToolSourceOf(row: ToolUseNestedRow): AgentToolSource {
   const agentName =
     row.result?.agentName ??
     nestedAgentName
+  // The worker's own id, which is what the face is keyed on: a name is not
+  // unique per spawn and two workers can be told to run under one handle. It
+  // rides the structured result (`transcriptProjector.ts` `agentId`), so a launch
+  // ack has it immediately and a foreground worker only once it settles. A
+  // running foreground card therefore draws by name first and adopts the id when
+  // it lands, which does not move the face: the registry binds both to whichever
+  // arrived first.
+  const agentId = row.result?.agentId
   return {
     toolName: row.toolName === 'Task' ? 'Task' : 'Agent',
     status: row.status,
+    ...(agentId !== undefined ? { agentId } : {}),
     ...(agentName !== undefined ? { agentName } : {}),
     ...(input.run_in_background === true || row.toolName === 'ResumeAgent'
       ? { run_in_background: true }
@@ -2510,18 +2518,27 @@ function agentModelOf(row: ToolUseNestedRow): string | null {
  * carries that `agentId` for both the sync and the background paths
  * (`AgentTool.tsx:1306` async ack).
  *
- * Null is the ORDINARY case and must stay silent, not blank: an Anthropic-path
- * session holds no Codex lease at all, a worker that has not made a request yet
- * has none yet, and a restored transcript has none because the lease map died
- * with its engine process. The account renders when it is knowable and is absent
- * otherwise; nothing on the row claims a slot that can empty.
+ * TWO sources, live first. The lease join answers while the worker is running
+ * and follows it across a failover; it goes null the moment the worker finishes,
+ * because `releaseCodexLease` DELETES the entry rather than marking it, so the
+ * settled answer comes from the result's own stamp (`agentAccount`) instead.
+ * Live is preferred over the stamp for the one case where they can disagree: a
+ * background worker's stamp is written at dispatch and cannot be amended.
+ *
+ * Null is still the ORDINARY case and must stay silent, not blank: an
+ * Anthropic-path worker holds no Codex lease at all, and a run recorded before
+ * the engine stamped its result carries neither. The account renders when it is
+ * knowable and is absent otherwise; nothing on the row claims a slot that can
+ * empty.
  */
 function agentAccountLabel(
   row: ToolUseNestedRow,
   leases: LeaseSnapshot | null,
 ): string | null {
   const lease = selectLeaseForOwner(leases, row.result?.agentId ?? null)
-  return lease === null ? null : leaseAccountShortLabel(lease)
+  if (lease !== null) return leaseAccountShortLabel(lease)
+  const stamped = row.result?.agentAccount
+  return stamped === undefined ? null : leaseAccountShortLabel(stamped)
 }
 
 /**
@@ -2563,7 +2580,6 @@ function AgentIdentityLine({
   typeWord,
   slot,
   slotLive,
-  stateLabel,
 }: {
   axes: FaceAxes
   fill: number
@@ -2573,13 +2589,12 @@ function AgentIdentityLine({
   typeWord: string | null
   slot: string | null
   slotLive: boolean
-  stateLabel: string | null
 }) {
   // `span`, not `div`: on a card with a body the whole two-line block IS the
   // collapse button, and only phrasing content may live inside a `button`.
   return (
     <span className="flex items-center gap-[9px] px-3 py-[7px]">
-      <AgentFace axes={axes} fill={fill} pulse={pulse} label={stateLabel} />
+      <AgentFace axes={axes} fill={fill} pulse={pulse} />
       <span className="inline-flex min-w-0 items-baseline gap-1.5">
         {/* The name is absent until the worker's first nested frame lands, and
             on old or failed records it never arrives — so the slot has to stand
@@ -2805,7 +2820,7 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
   const state = vocab.state.key
   // The id, with the name only as an alias: an id is unique per spawn and a name
   // is not, so two workers running under one handle stay two faces.
-  const faceAxes = faces.axesFor(vocab.identity.id, vocab.identity.name)
+  const face = faces.faceFor(vocab.identity.id, vocab.identity.name)
   const facePulse = agentFacePulse(state, { isLaunchRecord })
   const nameToneClass = (
     vocab.type ? AGENT_TYPE_TONE_CLASS[vocab.type.tone] : AGENT_TYPE_TONE_CLASS.neutral
@@ -2822,8 +2837,8 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
   const lines = (
     <>
       <AgentIdentityLine
-        axes={faceAxes}
-        fill={agentFaceFill(vocab.identity.id ?? vocab.identity.name)}
+        axes={face.axes}
+        fill={face.fill}
         pulse={facePulse}
         name={vocab.identity.name}
         nameToneClass={nameToneClass}
@@ -2832,7 +2847,6 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
         }
         slot={slot}
         slotLive={!isLaunchRecord && (state === 'running' || state === 'background')}
-        stateLabel={stateWord === null ? vocab.state.label : null}
       />
       <AgentTaskLine
         stateWord={stateWord}
@@ -2988,6 +3002,7 @@ function DelegateGroup({ members }: { members: NestedToolUseRow[] }) {
         <span className="inline-flex shrink-0 items-center">
           {members.slice(0, MAX_STACKED_GROUP_FACES).map((member, index) => {
             const vocab = vocabs[index]
+            const memberFace = faces.faceFor(vocab.identity.id, vocab.identity.name)
             const memberPulse = agentFacePulse(vocab.state.key, {
               isLaunchRecord:
                 (member.toolName === 'Agent' || member.toolName === 'Task') &&
@@ -2996,8 +3011,8 @@ function DelegateGroup({ members }: { members: NestedToolUseRow[] }) {
             return (
               <span key={member.id} className={index === 0 ? '' : '-ml-[3px]'}>
                 <AgentFace
-                  axes={faces.axesFor(vocab.identity.id, vocab.identity.name)}
-                  fill={agentFaceFill(vocab.identity.id ?? vocab.identity.name)}
+                  axes={memberFace.axes}
+                  fill={memberFace.fill}
                   pulse={memberPulse}
                   size={17}
                 />
@@ -4411,20 +4426,6 @@ const NOTICE_STYLE: Record<
   turn_interrupted: { glyph: '!', glyphTone: 'text-tone-warn' },
 }
 
-/**
- * A completion status as a lifecycle state, so the finish row's face is toned by
- * the same vocabulary its card was. `killed` reads amber, not red: it is a
- * worker someone stopped, and colouring it as a failure blames the run for
- * something a person did.
- */
-function agentCompletionState(status: string | null): AgentStateKey {
-  if (status === 'failed') return 'failed'
-  if (status === 'killed') return 'stopped'
-  if (status === 'completed') return 'completed'
-  // An outcome word this renderer was never taught: neutral, still shown. The
-  // engine's own sentence below says what happened.
-  return 'reviewed'
-}
 
 /**
  * The worker's own name out of the engine's summary. The engine mints exactly
@@ -4462,24 +4463,19 @@ function agentNameInSummary(summary: string): string | null {
  * worker's own name inside the sentence is set in mono so the row is scannable
  * against the card it belongs to.
  */
-function TaskNotificationBox({
-  status,
-  summary,
-}: {
-  status: string | null
-  summary: string | null
-}) {
+function TaskNotificationBox({ summary }: { summary: string | null }) {
   const faces = useAgentFaceRegistry()
   if (summary === null) return null
   const name = agentNameInSummary(summary)
+  const notificationFace = faces.faceFor(null, name)
   const handle = name === null ? null : `@${name}`
   const [before, after] =
     handle === null ? [summary, ''] : splitOnce(summary, handle)
   return (
     <div className="flex items-center gap-2.5 rounded-lg border border-shell-seam bg-shell-hover/40 px-3 py-[5px]">
       <AgentFace
-        axes={faces.axesFor(name)}
-        fill={agentFaceFill(name)}
+        axes={notificationFace.axes}
+        fill={notificationFace.fill}
         size={17}
       />
       <span className="min-w-0 flex-1 truncate text-[12px] leading-4 text-text-muted">

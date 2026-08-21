@@ -1,6 +1,5 @@
 import { expect, test } from 'bun:test'
 import {
-  agentFaceFill,
   agentFacePulse,
   agentStateMeta,
   agentTypeMeta,
@@ -460,13 +459,7 @@ test('declares prototype-only fields that must not become vocabulary inputs', ()
 
 /* ── the face's identity half (2026-08-21 ruling) ─────────────────────────── */
 
-test('the face carries identity and the pulse is the only state left on it', () => {
-  // Colour is hashed from the worker's own identifier, so it is as stable as the
-  // silhouette and says nothing about the run.
-  expect(agentFaceFill('scout')).toBe(agentFaceFill('scout'))
-  expect(agentFaceFill('scout')).not.toBe(agentFaceFill('deckard'))
-  expect(agentFaceFill(null)).toBe(0)
-
+test('the pulse is the only state left on the face', () => {
   // Motion is the card's only at-a-glance mark of a live worker, and a launch
   // record is not a live worker: it reports that a run began.
   expect(agentFacePulse('running', { isLaunchRecord: false })).toBe(true)
