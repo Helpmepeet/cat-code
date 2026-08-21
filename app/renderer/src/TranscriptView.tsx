@@ -1265,9 +1265,13 @@ function createPathAwareListItem(openFile: (path: string) => void) {
 }
 
 /**
- * A markdown link is the ONE unambiguous file reference in assistant prose: the
- * harness prompt asks for `[foo.ts](src/foo.ts)`, optionally with a `:line`
- * suffix. Returns the path to open, or null for anything addressed elsewhere
+ * A markdown link is the ONE unambiguous file reference in assistant prose.
+ * Desktop sessions ask the model for `[foo.ts](src/foo.ts)`, optionally with a
+ * `:line` suffix, through the sidecar's own prompt addendum
+ * (`app/sidecar/desktopSystemPrompt.ts`) — the engine's tone section teaches
+ * the terminal's bare `file_path:line_number` instead, which only the regex
+ * below can (approximately) resolve.
+ * Returns the path to open, or null for anything addressed elsewhere
  * (a scheme, a protocol-relative host, a bare fragment). Containment inside the
  * session workspace is main's call, not the renderer's
  * (`app/main/openWorkspaceFile.ts`).

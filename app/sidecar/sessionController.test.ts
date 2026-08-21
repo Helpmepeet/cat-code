@@ -14,6 +14,7 @@ import { resetSettingsCache } from '../../src/utils/settings/settingsCache.js'
 import { clearCommandMemoizationCaches } from '../../src/commands.js'
 import { clearAgentDefinitionsCache } from '../../src/tools/AgentTool/loadAgentsDir.js'
 import { hasProviderBoundHistory } from '../../src/utils/model/providers.js'
+import { DESKTOP_SYSTEM_PROMPT_ADDENDUM } from './desktopSystemPrompt.js'
 import {
   createNormalSidecarQueryEngineConfig,
   createSidecarSessionController,
@@ -223,6 +224,21 @@ test('normal startup exposes the permission-context tools to the model', async (
 
   expect(queryEngineConfig.tools.length).toBeGreaterThan(0)
   expect(queryEngineConfig.tools.some(tool => tool.name === 'Bash')).toBe(true)
+})
+
+test('normal startup appends the desktop file-reference instruction', async () => {
+  // The engine's tone section teaches the TERMINAL convention
+  // (`src/constants/prompts.ts:502` — bare `file_path:line_number`, an OSC 8
+  // hyperlink in the TUI). A renderer has no OSC 8, so a desktop session must
+  // carry the markdown-link instruction its transcript can resolve exactly.
+  const { queryEngineConfig } = await createNormalSidecarQueryEngineConfig(
+    process.cwd(),
+  )
+
+  expect(queryEngineConfig.appendSystemPrompt).toBe(
+    DESKTOP_SYSTEM_PROMPT_ADDENDUM,
+  )
+  expect(DESKTOP_SYSTEM_PROMPT_ADDENDUM).toContain('[foo.ts](src/utils/foo.ts)')
 })
 
 test('normal startup loads the real command catalog (P3-7: commands: [] retired)', async () => {

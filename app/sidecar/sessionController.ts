@@ -48,6 +48,7 @@ import {
 } from '../../src/utils/fileStateCache.js'
 import type { Message } from '../../src/types/message.js'
 import { SYNTHETIC_MODEL } from '../../src/utils/messages.js'
+import { DESKTOP_SYSTEM_PROMPT_ADDENDUM } from './desktopSystemPrompt.js'
 import { createProbeAdapter } from './probeAdapter.js'
 import {
   createSidecarPermissionDomain,
@@ -410,6 +411,7 @@ export async function createNormalSidecarQueryEngineConfig(
         readFileCache: createFileStateCacheWithSizeLimit(
           READ_FILE_STATE_CACHE_SIZE,
         ),
+        appendSystemPrompt: DESKTOP_SYSTEM_PROMPT_ADDENDUM,
       }),
       // F1 (host-plane review 2026-07-05): seed the resumed transcript into the
       // QueryEngine's live turn context (`initialMessages` → `mutableMessages`,
