@@ -199,6 +199,22 @@ test('renders workspace file paths as open-file controls without linkifying web 
   expect(html).not.toContain('aria-label="Open www.example.com/readme.md"')
 })
 
+test('a version number is not a file path', () => {
+  const html = render({
+    ...blockSource,
+    id: 's:m:0:version',
+    kind: 'assistant-text',
+    role: 'assistant',
+    content:
+      'Claude Code 2.1.238 has a regression, and `2.1.234` fixed one. Read src/main.ts.',
+  })
+
+  expect(html).not.toContain('aria-label="Open .1.238"')
+  expect(html).not.toContain('aria-label="Open 2.1.234"')
+  expect(html).toContain('2.1.238')
+  expect(html).toContain('aria-label="Open src/main.ts"><svg')
+})
+
 test('P4-18c: a fenced code block renders framed + copyable with syntax highlight tokens', () => {
   const html = render({
     ...blockSource,

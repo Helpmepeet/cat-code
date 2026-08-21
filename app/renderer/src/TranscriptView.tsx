@@ -1152,6 +1152,15 @@ function isWebPath(path: string): boolean {
   return WEB_PATH_RE.test(path)
 }
 
+/**
+ * A version string ("2.1.238", "v1.2.3") ends in a digits-only trailing segment,
+ * so the path shapes below would otherwise linkify it. Every real extension
+ * carries at least one letter.
+ */
+function hasLetteredExtension(path: string): boolean {
+  return /[A-Za-z]/.test(path.slice(path.lastIndexOf('.') + 1))
+}
+
 function isInlineFilePath(path: string): boolean {
   return (
     path.length > 0 &&
@@ -1160,6 +1169,7 @@ function isInlineFilePath(path: string): boolean {
     !path.includes('\n') &&
     !path.includes('\0') &&
     !isWebPath(path) &&
+    hasLetteredExtension(path) &&
     /(?:^|\/)[^/]+\.[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/.test(path)
   )
 }
@@ -1176,7 +1186,8 @@ function linkifyFilePathText(
     if (
       text.slice(0, index).endsWith(':/') ||
       path.startsWith('//') ||
-      isWebPath(path)
+      isWebPath(path) ||
+      !hasLetteredExtension(path)
     ) {
       continue
     }
