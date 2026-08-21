@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import {
-  agentFaceExpression,
+  agentFaceFill,
+  agentFacePulse,
   agentStateMeta,
   agentTypeMeta,
   deriveAgentDisplayVocabulary,
@@ -457,60 +458,23 @@ test('declares prototype-only fields that must not become vocabulary inputs', ()
   ).toBe('running')
 })
 
-/* ── the face's state half (2026-08-19 subagent card) ─────────────────────── */
+/* ── the face's identity half (2026-08-21 ruling) ─────────────────────────── */
 
-test('colour and expression are the state, and the pulse is only ever a running one', () => {
-  expect(agentFaceExpression('running', { isLaunchRecord: false })).toEqual({
-    eyes: 'open',
-    tone: 'info',
-    pulse: true,
-  })
-  expect(agentFaceExpression('completed', { isLaunchRecord: false })).toEqual({
-    eyes: 'shut',
-    tone: 'success',
-    pulse: false,
-  })
-  // Failed and Stopped are told by colour alone — no sad face, no wince.
-  expect(agentFaceExpression('failed', { isLaunchRecord: false })).toEqual({
-    eyes: 'open',
-    tone: 'danger',
-    pulse: false,
-  })
-  expect(agentFaceExpression('stopped', { isLaunchRecord: false })).toEqual({
-    eyes: 'open',
-    tone: 'warning',
-    pulse: false,
-  })
+test('the face carries identity and the pulse is the only state left on it', () => {
+  // Colour is hashed from the worker's own identifier, so it is as stable as the
+  // silhouette and says nothing about the run.
+  expect(agentFaceFill('scout')).toBe(agentFaceFill('scout'))
+  expect(agentFaceFill('scout')).not.toBe(agentFaceFill('deckard'))
+  expect(agentFaceFill(null)).toBe(0)
+
+  // Motion is the card's only at-a-glance mark of a live worker, and a launch
+  // record is not a live worker: it reports that a run began.
+  expect(agentFacePulse('running', { isLaunchRecord: false })).toBe(true)
+  expect(agentFacePulse('running', { isLaunchRecord: true })).toBe(false)
+  for (const state of ['completed', 'background', 'failed', 'stopped'] as const) {
+    expect(agentFacePulse(state, { isLaunchRecord: false })).toBe(false)
+  }
 })
 
-test('eyes are state only — a nameless worker is featureless in its AXES, not shut', () => {
-  // "Featureless" is `axesForName(null)`: no mouth, no marking, nothing to
-  // individuate. Its EYES still follow the state, because otherwise "nobody has
-  // told us who this is yet" and "this one is facing away" draw the same
-  // picture. The design source draws the nameless running card wide awake.
-  expect(agentFaceExpression('running', { isLaunchRecord: false }).eyes).toBe('open')
-  expect(agentFaceExpression('completed', { isLaunchRecord: false }).eyes).toBe('shut')
-  expect(agentFaceExpression('background', { isLaunchRecord: false }).eyes).toBe('away')
-})
 
-test('a background launch that ERRORED reads as the failure it is, not as backgrounded', () => {
-  // `deriveAgentToolState` returns `failed` for a launch whose tool_result came
-  // back an error. Colouring it teal put "went to the background" on the face
-  // beside line 2's "Failed".
-  expect(agentFaceExpression('failed', { isLaunchRecord: true })).toEqual({
-    eyes: 'open',
-    tone: 'danger',
-    pulse: false,
-  })
-})
 
-test('a backgrounded worker faces away, and a launch RECORD is teal rather than blue', () => {
-  // Both say "backgrounded" on the card, so the colour is what separates "this
-  // is all we were ever told" from "this one is genuinely under way".
-  const launch = agentFaceExpression('background', { isLaunchRecord: true })
-  const resumed = agentFaceExpression('background', { isLaunchRecord: false })
-  // `away`, not `closed`: facing away withholds the whole front of the face, so
-  // a named worker's mouth cannot be mistaken for its eyes (`agentFace.ts`).
-  expect(launch).toEqual({ eyes: 'away', tone: 'launch', pulse: false })
-  expect(resumed).toEqual({ eyes: 'away', tone: 'info', pulse: false })
-})

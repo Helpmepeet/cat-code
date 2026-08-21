@@ -1,8 +1,4 @@
-import type {
-  AgentFaceTone,
-  AgentStateTone,
-  AgentTypeTone,
-} from './agentIdentity.js'
+import type { AgentStateTone, AgentTypeTone } from './agentIdentity.js'
 
 export const AGENT_STATE_TONE_CLASS: Record<
   AgentStateTone,
@@ -18,25 +14,30 @@ export const AGENT_STATE_TONE_CLASS: Record<
 }
 
 /**
- * The face stamp's fill (2026-08-19 subagent card). Same static-literal rule as
- * every map here: an interpolated `fill-[${hex}]` would silently no-op.
+ * The face stamp's fill, chosen by the worker's own identity and never by its
+ * state (operator ruling, 2026-08-21). Colour joins the silhouette as a way to
+ * tell two workers apart, which is worth more on a fan-out than a lifecycle hue
+ * a reader can already get from the row's slot.
  *
- * `launch` is the one tone with no `AgentStateTone` behind it. A backgrounded
- * LAUNCH record and a resumed worker running in the background are both facing
- * away and both say "backgrounded", so the colour is the only thing that
- * separates "this is all we were ever told" from "this one is genuinely under
- * way": teal for the launch ack, blue for the run.
+ * Static literals, one per entry, on the same rule as every map here: an
+ * interpolated `fill-[${hex}]` silently no-ops under Tailwind.
+ *
+ * Ten, not more: the palette has to stay separable at 19px against #09090b, and
+ * every hue here is one the app already ships. Deliberately NOT including the
+ * accent pink, which the shell uses for "the thing you are pointing at".
  */
-export const AGENT_FACE_FILL_CLASS: Record<AgentFaceTone, string> = {
-  info: 'fill-tone-info',
-  success: 'fill-tone-good',
-  danger: 'fill-tone-danger',
-  warning: 'fill-tone-warn',
-  neutral: 'fill-stone-400',
-  muted: 'fill-zinc-500',
-  purple: 'fill-purple-400',
-  launch: 'fill-teal-300',
-}
+export const AGENT_FACE_IDENTITY_FILL: readonly string[] = [
+  'fill-teal-300',
+  'fill-blue-300',
+  'fill-violet-300',
+  'fill-amber-300',
+  'fill-emerald-300',
+  'fill-sky-300',
+  'fill-rose-300',
+  'fill-lime-300',
+  'fill-fuchsia-300',
+  'fill-orange-300',
+]
 
 /** P4-32b — `AgentSectionLabel` caption tones (the prototype's `WLabel` colour arg). */
 export type SectionLabelTone = 'muted' | 'accent' | 'lease' | 'warn'

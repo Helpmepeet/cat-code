@@ -16,14 +16,13 @@ import {
   agentStateMeta,
   agentTranscriptStateWord,
   agentTypeMeta,
-  type AgentFaceTone,
   type AgentStateKey,
 } from './agentIdentity.js'
-import { faceRects, type FaceAxes, type FaceEyes } from './agentFace.js'
+import { faceRects, type FaceAxes } from './agentFace.js'
 import type { WorkerOwner } from './orchestratorState.js'
 import {
   ACTION_BUTTON_TONE_CLASS,
-  AGENT_FACE_FILL_CLASS,
+  AGENT_FACE_IDENTITY_FILL,
   AGENT_STATE_TONE_CLASS,
   AGENT_TYPE_TONE_CLASS,
   SECTION_LABEL_TONE_CLASS,
@@ -55,30 +54,33 @@ const PIP_SIZE_CLASS: Record<PipSize, string> = {
  */
 export function AgentFace({
   axes,
-  eyes,
-  tone,
+  fill,
   pulse = false,
   size = 19,
   label = null,
 }: {
   axes: FaceAxes
-  eyes: FaceEyes
-  tone: AgentFaceTone
+  /** Index into `AGENT_FACE_IDENTITY_FILL`; the worker's own colour, not a state. */
+  fill: number
   pulse?: boolean
   /** 19 in a card, 17 in a finish row or a group header. */
   size?: 19 | 17
   label?: string | null
 }) {
+  const colour = AGENT_FACE_IDENTITY_FILL[
+    ((fill % AGENT_FACE_IDENTITY_FILL.length) + AGENT_FACE_IDENTITY_FILL.length) %
+      AGENT_FACE_IDENTITY_FILL.length
+  ]
   return (
     <svg
       width={size}
       height={size}
       viewBox="0 0 9 9"
       shapeRendering="crispEdges"
-      className={`shrink-0 ${AGENT_FACE_FILL_CLASS[tone]}${pulse ? ' animate-face-pulse' : ''}`}
+      className={`shrink-0 ${colour}${pulse ? ' animate-face-pulse' : ''}`}
       {...(label === null ? { 'aria-hidden': true } : { role: 'img', 'aria-label': label })}
     >
-      {faceRects(axes, eyes).map(rect => (
+      {faceRects(axes).map(rect => (
         <rect
           key={`${rect.x}:${rect.y}`}
           x={rect.x}

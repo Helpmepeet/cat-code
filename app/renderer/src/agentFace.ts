@@ -48,24 +48,13 @@ export type FaceMark = 'none' | 'brow' | 'cheek' | 'temple' | 'chindot'
 export type FaceHead = 'square' | 'rounded'
 
 /**
- * State, not identity.
- *
- *  - `open`   a live or unsettled worker
- *  - `shut`   a completed one
- *  - `away`   facing away: the whole FRONT of the face is withheld, not just the
- *             eyes. A cat with its back to you shows no mouth and no marking.
- *  - `closed` eyes uncarved, everything else drawn. This is the IDENTITY draw and
- *             nothing renders it: `silhouetteMask` compares faces with the eyes
- *             taken out, because eyes are state and two workers differing only by
- *             an eye row are the same face to a reader.
- *
- * `away` and `closed` were one mode until 2026-08-19. Splitting them is what lets
- * the facing-away card hide the mouth WITHOUT collapsing identity: the mouth and
- * markings carry most of the distinguishing power, so folding them out of the
- * signature would have taken it from 1,862 distinct silhouettes to 168.
+ * IDENTITY ONLY. Operator ruling, 2026-08-21: a worker draws one face and never
+ * redraws it. Eyes used to be state (`open` live, `shut` completed, `away`
+ * backgrounded, `closed` the signature), which is why a fan-out of five
+ * backgrounded workers rendered as five blank slabs at the one moment a reader
+ * most needs to tell them apart. State is carried by the row's own slot and its
+ * lifecycle word, not by the face.
  */
-export type FaceEyes = 'open' | 'shut' | 'closed' | 'away'
-
 export type FaceAxes = {
   ear: FaceEar
   fill: FaceFill
@@ -230,7 +219,7 @@ const RELAXATIONS: readonly Relaxation[] = ([] as Relaxation[])
 /**
  * Draw one grid under a given relaxation (an index into `RELAXATIONS`).
  */
-function drawFace(axes: FaceAxes, eyes: FaceEyes, level: number): boolean[][] {
+function drawFace(axes: FaceAxes, level: number): boolean[][] {
   const grid = blankGrid()
   const L = axes.width === 'wide' ? 0 : 1
   const R = axes.width === 'wide' ? 8 : 7
@@ -307,12 +296,7 @@ function drawFace(axes: FaceAxes, eyes: FaceEyes, level: number): boolean[][] {
           ? 'notch'
           : axes.fill
         : step.fill
-  // Facing away withholds the whole front of the face. Not a style choice: with
-  // the eyes uncarved, a mouth is the only PAIR of holes left, so a reader's eye
-  // takes it for the eyes two rows too low. `brow` fails the same way, which is
-  // why the rule is the front of the face and not "the mouth".
-  const facingAway = eyes === 'away'
-  const mouth: FaceMouth = step.dropMouth || facingAway ? 'none' : axes.mouth
+  const mouth: FaceMouth = step.dropMouth ? 'none' : axes.mouth
   // A chin-dot and a mouth both want row 6, so the dot MOVES DOWN to row 7 when
   // a mouth is present rather than being dropped, which is what it used to be
   // against any mouth at all — a face lost its only marking to a collision a
@@ -321,7 +305,7 @@ function drawFace(axes: FaceAxes, eyes: FaceEyes, level: number): boolean[][] {
   // too, but by the connectivity search rather than by rule: a dot at (mid, 7)
   // strands (mid, 6), and a severed face costs more than a marking.
   const mark: FaceMark =
-    step.dropMark || facingAway || (axes.mark === 'chindot' && mouth === 'smile')
+    step.dropMark || (axes.mark === 'chindot' && mouth === 'smile')
       ? 'none'
       : axes.mark
   const chinDotRow = mouth === 'none' ? 6 : 7
@@ -364,15 +348,8 @@ function drawFace(axes: FaceAxes, eyes: FaceEyes, level: number): boolean[][] {
     clr(mid, chinDotRow)
   }
 
-  if (eyes === 'open') {
-    clr(L + 2, 4)
-    clr(R - 2, 4)
-  } else if (eyes === 'shut') {
-    clr(L + 1, 4)
-    clr(L + 2, 4)
-    clr(R - 2, 4)
-    clr(R - 1, 4)
-  }
+  clr(L + 2, 4)
+  clr(R - 2, 4)
 
   return grid
 }
@@ -411,32 +388,14 @@ function gridToRects(grid: boolean[][]): FaceRect[] {
   return out
 }
 
-/**
- * The modes the connectivity check has to satisfy. `away` is included even though
- * it can only ever clear FEWER cells than `closed` — so it cannot be severed when
- * `closed` is whole — because that argument depends on what `away` suppresses,
- * and a later change to that list should not be able to break connectivity in
- * silence.
- */
-const EYE_MODES: readonly FaceEyes[] = ['open', 'shut', 'closed', 'away']
-
 const levelByAxes = new Map<string, number>()
 
 /**
- * The fallback level this face draws at, chosen ONCE per identity and shared by
- * every eye state.
+ * The fallback level this face draws at.
  *
- * DELIBERATE DEVIATION from the design source, which re-runs the ladder per eye
- * mode. Clearing the eyes can sever a silhouette that was whole without them, so
- * per-mode laddering means a worker's mouth or marking can vanish the moment it
- * settles: the same worker, a different silhouette, mid-session. That is the one
- * thing the spec's own prose says must never happen ("a worker must never change
- * silhouette mid-session"), so the level is picked from the strictest mode — the
- * lowest at which EVERY mode draws as one mass — and identity holds across states.
- *
- * Memoised by axes rather than by name: the map is bounded by the axis product
- * (4,800 entries at the absolute worst), and a face is redrawn on every render of
- * every card.
+ * Memoised by axes rather than by identity: the map is bounded by the axis
+ * product (4,800 entries at the absolute worst), and a face is redrawn on every
+ * render of every card.
  */
 function fallbackLevelFor(axes: FaceAxes): number {
   const key = axesKey(axes)
@@ -444,7 +403,7 @@ function fallbackLevelFor(axes: FaceAxes): number {
   if (cached !== undefined) return cached
   let chosen = RELAXATIONS.length - 1
   for (let level = 0; level < RELAXATIONS.length; level += 1) {
-    if (EYE_MODES.every(eyes => isConnected(drawFace(axes, eyes, level)))) {
+    if (isConnected(drawFace(axes, level))) {
       chosen = level
       break
     }
@@ -458,21 +417,15 @@ function axesKey(axes: FaceAxes): string {
 }
 
 /** The drawn stamp for one set of axes, with the connectivity fallback applied. */
-export function faceRects(axes: FaceAxes, eyes: FaceEyes): FaceRect[] {
-  return gridToRects(drawFace(axes, eyes, fallbackLevelFor(axes)))
+export function faceRects(axes: FaceAxes): FaceRect[] {
+  return gridToRects(drawFace(axes, fallbackLevelFor(axes)))
 }
 
 const silhouetteByAxes = new Map<string, Uint8Array>()
 
 /**
- * Silhouette identity: the drawn mass with EYES EXCLUDED, one cell per byte,
- * which is what dedupe compares. Eyes are state, so two workers whose stamps
- * differ only by an eye row are the same face as far as a reader is concerned.
- *
- * DELIBERATELY `closed`, not `away`. `away` withholds the mouth and the marking,
- * which is right for the card and wrong for identity: those two axes carry most
- * of the distinguishing power, and signing on them would take the session from
- * 1,862 distinct silhouettes to 168 without anything reporting the loss.
+ * Silhouette identity: the drawn mass, one cell per byte, which is what dedupe
+ * compares.
  *
  * A MASK rather than a string key, because dedupe asks how FAR apart two faces
  * draw and a string can only answer whether they are identical. Identity is not
@@ -488,7 +441,7 @@ function silhouetteMask(axes: FaceAxes): Uint8Array {
   const cached = silhouetteByAxes.get(key)
   if (cached !== undefined) return cached
   const mask = new Uint8Array(GRID * GRID)
-  for (const rect of faceRects(axes, 'closed')) {
+  for (const rect of faceRects(axes)) {
     for (let y = rect.y; y < rect.y + rect.h; y += 1) {
       for (let x = rect.x; x < rect.x + rect.w; x += 1) mask[y * GRID + x] = 1
     }
@@ -628,12 +581,22 @@ const AXIS_SPACE: readonly FaceAxes[] = WIDTHS.flatMap(width =>
 
 export type AgentFaceRegistry = {
   /**
-   * The axes this worker wears for the rest of the session. First call for a
-   * name decides them; every later call returns the same answer, so a card never
-   * changes silhouette underneath the reader. A null/empty name is the
-   * featureless base and is never registered.
+   * The axes this worker wears for the rest of the session. First call decides
+   * them; every later call returns the same answer, so a card never changes face
+   * underneath the reader.
+   *
+   * `key` is the worker's agent id where the surface has one, because an id is
+   * unique per spawn and a name is not: two workers told to run under the same
+   * handle are two workers and must not share a face.
+   *
+   * `alias` is the same worker's name, and it exists because ONE surface has no
+   * id to offer. A completion notification is parsed out of a summary string
+   * (`TranscriptView.tsx` `TaskNotificationBox`) and knows only `@name`. Without
+   * the alias that box would mint a second face for a worker whose card is
+   * already on screen, which is the exact defect the registry exists to prevent,
+   * committed against the same worker rather than a different one.
    */
-  axesFor: (name: string | null | undefined) => FaceAxes
+  axesFor: (key: string | null | undefined, alias?: string | null) => FaceAxes
 }
 
 /**
@@ -666,8 +629,7 @@ export function createAgentFaceRegistry(): AgentFaceRegistry {
    * back: `taken` only ever grows, so a face already too close to a live one
    * stays too close forever. That turns the sweep from a full 4,800-candidate
    * scan per colliding worker into a single walk of the space spread across the
-   * session — which matters, since the strict bar makes the sweep the ordinary
-   * path in a crowded session rather than the rare one.
+   * session.
    */
   const sweep = (bar: number): FaceAxes | null => {
     let index = sweptTo.get(bar) ?? 0
@@ -678,10 +640,10 @@ export function createAgentFaceRegistry(): AgentFaceRegistry {
     return index < AXIS_SPACE.length ? AXIS_SPACE[index] : null
   }
 
-  /** The face this name can have at one bar, or null when the bar is spent. */
-  const resolveAt = (name: string, bar: number): FaceAxes | null => {
+  /** The face this key can have at one bar, or null when the bar is spent. */
+  const resolveAt = (key: string, bar: number): FaceAxes | null => {
     if (sweptTo.get(bar) === AXIS_SPACE.length) return null
-    let axes = axesForName(name)
+    let axes = axesForName(key)
     for (const axis of DEDUPE_AXES) {
       if (isFreeAgainst(taken, axes, bar)) break
       for (let step = 1; step < axis.count; step += 1) {
@@ -693,7 +655,7 @@ export function createAgentFaceRegistry(): AgentFaceRegistry {
       }
     }
     // The walk above only ever substitutes ONE axis at a time, which is what
-    // keeps a deduped face close to the one the name asked for. Once the session
+    // keeps a deduped face close to the one the key asked for. Once the session
     // holds enough workers, every single substitution can itself be crowded, and
     // the design source stops there and hands out a duplicate. The sweep is the
     // guarantee behind it: a face is shared only when the space is genuinely
@@ -702,19 +664,33 @@ export function createAgentFaceRegistry(): AgentFaceRegistry {
   }
 
   return {
-    axesFor(name) {
-      if (!name) return FEATURELESS_AXES
-      const cached = assigned.get(name)
-      if (cached !== undefined) return cached
+    axesFor(key, alias = null) {
+      // The KEY decides, and the alias only fills in for a surface that has no
+      // key at all. Consulting the alias first would hand the second worker
+      // running under a shared handle the first one's face, which is the whole
+      // reason identity is keyed on a per-spawn id.
+      //
+      // An alias is bound once and never rebound, so a name that two workers
+      // share resolves to whichever of them the transcript introduced first. A
+      // key-less surface cannot do better than that: it has been given a name and
+      // a name is not, on its own, a worker.
+      const known = key ? assigned.get(key) : alias ? assigned.get(alias) : undefined
+      const bind = (axes: FaceAxes): FaceAxes => {
+        if (key) assigned.set(key, axes)
+        if (alias && !assigned.has(alias)) assigned.set(alias, axes)
+        return axes
+      }
+      if (known !== undefined) return bind(known)
+      const identifier = key ?? alias
+      if (!identifier) return FEATURELESS_AXES
       let resolved: FaceAxes | null = null
       for (const bar of DISTANCE_BARS) {
-        resolved = resolveAt(name, bar)
+        resolved = resolveAt(identifier, bar)
         if (resolved !== null) break
       }
-      const axes = resolved ?? axesForName(name)
+      const axes = resolved ?? axesForName(identifier)
       taken.push(silhouetteMask(axes))
-      assigned.set(name, axes)
-      return axes
+      return bind(axes)
     },
   }
 }
@@ -731,7 +707,9 @@ export const AgentFaceRegistryContext = createContext<AgentFaceRegistry | null>(
  * of workers, and a module-level one would carry names between sessions and make
  * a face depend on what some other transcript rendered first.
  */
-const UNSCOPED_REGISTRY: AgentFaceRegistry = { axesFor: axesForName }
+const UNSCOPED_REGISTRY: AgentFaceRegistry = {
+  axesFor: (key, alias = null) => axesForName(key ?? alias),
+}
 
 /**
  * Read the registry, not one face: a group header draws one stamp per member, and

@@ -627,11 +627,11 @@ test('a resumed agent is an independent agent card named by the follow-up prompt
   expect(html).not.toContain('resume @Ramanujan')
   expect(html).not.toContain(RESUME_ACK)
   expect(html).not.toContain('"success"')
-  // Settled green face; the lifecycle WORD is gone from every state but the two
-  // that need to stop a reader (Failed, Stopped).
-  expect(html).toContain('fill-tone-good')
+  // The lifecycle WORD is gone from every state but the two that need to stop a
+  // reader (Failed, Stopped). The face no longer carries state at all
+  // (2026-08-21), so the aria label is what a screen reader gets.
   expect(html).not.toContain('>Completed<') // no visible word
-  expect(html).toContain('aria-label="Completed"') // the face is the only carrier
+  expect(html).toContain('aria-label="Completed"')
   // The ◇ mark went with the family word; only a REJECTED resume still carries
   // one, because it has no face to identify it.
   expect(html).not.toContain('◇')
@@ -909,20 +909,19 @@ test('P4-8c: an Agent card derives type/state/task from the row input + status (
 
   expect(html).toContain('explore') // worker type from input.subagent_type
   expect(html).toContain('map the seam') // the task, on line 2
-  // Running reads as a pulsing blue face plus what the worker is doing — never
-  // a lifecycle word, and never the ◆ AGENT family header the redesign removed.
-  expect(html).toContain('fill-tone-info')
+  // Running reads as a pulsing face plus what the worker is doing — never a
+  // lifecycle word, and never the ◆ AGENT family header the redesign removed.
+  // The pulse is the only state left on the face; its colour is identity.
   expect(html).toContain('animate-face-pulse')
   expect(html).not.toContain('>Running<') // no visible word
   expect(html).not.toContain('◆')
 })
 
-test('P4-8c: a completed Agent card settles to a still green face, with no word', () => {
+test('P4-8c: a completed Agent card settles to a still face, with no word', () => {
   const html = render(
     agentRow('done', { subagent_type: 'Explore', description: 'done task' }, 'success'),
   )
 
-  expect(html).toContain('fill-tone-good') // deriveAgentToolState: success → completed
   expect(html).not.toContain('>Completed<')
   // A settled card is completely still.
   expect(html).not.toContain('animate-face-pulse')
@@ -938,7 +937,6 @@ test('a failed card keeps its word and its tool calls, and drops the token figur
     }),
   )
 
-  expect(html).toContain('fill-tone-danger')
   expect(html).toContain('Failed') // one of the two states that keeps its word
   expect(html).toContain('6 tool calls')
   expect(html).not.toContain('9.1k tokens')
@@ -957,7 +955,6 @@ test('a stopped card keeps its word', () => {
     },
   )
 
-  expect(html).toContain('fill-tone-warn')
   expect(html).toContain('Stopped')
 })
 
@@ -985,7 +982,9 @@ test('a background agent card remains a launch record without completion output'
     ),
   )
 
-  expect(html).toContain('backgrounded')
+  // `launched`: an ack, not a run under way. Teal-versus-blue on the face used
+  // to carry that; it is a word now.
+  expect(html).toContain('launched')
   expect(html).not.toContain('Result')
   expect(html).not.toContain('Sidebar lives in app/renderer/src/Sidebar.tsx')
   expect(html).not.toContain('~12.4k tokens')
@@ -1024,7 +1023,7 @@ test('a backgrounded agent is a neutral past-tense launch record without a lifec
       'success',
     ),
   )
-  expect(html).toContain('backgrounded')
+  expect(html).toContain('launched')
   expect(html).not.toContain('>In background<')
   expect(html).not.toContain('>Completed<')
 })
@@ -1039,7 +1038,7 @@ test('a backgrounded agent remains byte-stable in meaning if completion data is 
       ADA_COMPLETION,
     ),
   )
-  expect(html).toContain('backgrounded')
+  expect(html).toContain('launched')
   expect(html).not.toContain('>Completed<')
   expect(html).not.toContain('Sidebar lives in app/renderer/src/Sidebar.tsx')
 })
@@ -1061,7 +1060,7 @@ test('background launch records do not form a stale lifecycle group', () => {
       ]}
     />,
   )
-  expect(html.match(/backgrounded/g)).toHaveLength(2)
+  expect(html.match(/launched/g)).toHaveLength(2)
   expect(html).not.toContain('Running 2 Explore agents')
   expect(html).not.toContain('Delegate')
 })
@@ -1087,7 +1086,7 @@ test('background launch records stay independent even if completion facts are pr
       ]}
     />,
   )
-  expect(html.match(/backgrounded/g)).toHaveLength(2)
+  expect(html.match(/launched/g)).toHaveLength(2)
   expect(html).not.toContain('Running 2 Explore agents')
   expect(html).not.toContain('Delegate')
 })
@@ -1406,7 +1405,7 @@ test('a rejected resume has no identity line at all', () => {
   expect(html).not.toContain('AGENT')
 })
 
-test('a backgrounded launch faces away in its own colour and reports no outcome', () => {
+test('a backgrounded launch says it launched and reports no outcome', () => {
   const html = render(
     agentRow(
       'bglaunch',
@@ -1417,10 +1416,10 @@ test('a backgrounded launch faces away in its own colour and reports no outcome'
     ),
   )
 
-  // Teal, not the blue a worker genuinely running in the background wears: this
-  // card only ever knew that the launch was acknowledged.
-  expect(html).toContain('fill-teal-300')
-  expect(html).toContain('backgrounded')
+  // `launched`, not `backgrounded`: this card only ever knew that the launch was
+  // acknowledged. The two used to be told apart by teal versus blue on the face,
+  // which the identity-colour ruling took away, so the distinction is a word now.
+  expect(html).toContain('launched')
   expect(html).not.toContain('animate-face-pulse')
   expect(html).not.toContain('Completed')
   expect(html).not.toContain('Sidebar lives in app/renderer/src/Sidebar.tsx')
@@ -1562,9 +1561,11 @@ test('a background launch that errored reads as failed, not as backgrounded', ()
     ),
   )
 
+  // A launch whose ack came back an error is a failure and has to read as one.
+  // It used to be told by the face going danger-red instead of teal; the word is
+  // the carrier now, and the slot must not still claim the worker launched.
   expect(html).toContain('Failed')
-  expect(html).toContain('fill-tone-danger')
-  expect(html).not.toContain('fill-teal-300')
+  expect(html).not.toContain('launched')
   expect(html).not.toContain('backgrounded')
   expect(html).toContain('2 tool calls')
   expect(html).not.toContain('900 tokens')
@@ -1593,19 +1594,19 @@ test('a stopped worker shows tool calls and no token figure, like a failed one',
   expect(html).not.toContain('4.2k tokens')
 })
 
-test('a nameless running worker is featureless but wide awake', () => {
-  // "Featureless" is the AXES — no mouth, no marking. Shutting its eyes as well
-  // would draw it exactly as a worker facing away in the background.
+test('a worker draws the same stamp whatever it is doing', () => {
+  // 2026-08-21: the face is identity. A backgrounded worker used to withhold its
+  // whole front, which is what made a fan-out of five render as five blank slabs.
   const live = render(
-    agentRow('anon', { subagent_type: 'Explore', description: 'x' }, 'pending'),
+    agentRow('same', { subagent_type: 'Explore', description: 'x' }, 'pending'),
   )
-  const away = render(
-    agentRow('away', { subagent_type: 'Explore', description: 'x', run_in_background: true }, 'success'),
+  const background = render(
+    agentRow('same', { subagent_type: 'Explore', description: 'x', run_in_background: true }, 'success'),
   )
   const stamp = (html: string) => /<svg[^>]*>(.*?)<\/svg>/.exec(html)?.[1] ?? ''
 
   expect(stamp(live).length).toBeGreaterThan(0)
-  expect(stamp(live)).not.toBe(stamp(away))
+  expect(stamp(live)).toBe(stamp(background))
 })
 
 test('the card never puts a div inside its collapse button', () => {
@@ -1797,7 +1798,7 @@ test('P4-8c: the Agent card + DelegateGroup emit only static tone utilities (no 
   // Static utilities from the 8a tone maps actually reach the DOM (a dynamic
   // `text-[${hex}]`/`fill-[${hex}]` would silently never generate — the P4-9 trap).
   expect(html).toContain('text-blue-400') // live slot tone (AGENT_STATE_TONE_CLASS.info)
-  expect(html).toContain('fill-tone-info') // running face fill
+  expect(html).toMatch(/class="shrink-0 fill-[a-z]+-300/) // identity face fill
   expect(html).toContain('text-sky-300') // Explore type tone on the NAME (AGENT_TYPE_TONE_CLASS.sky)
   // No template-literal interpolation ever leaks into a className.
   expect(html).not.toContain('${')

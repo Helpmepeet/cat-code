@@ -93,9 +93,9 @@ import {
   type ReasoningStepModel,
 } from './reasoningLayout.js'
 import {
-  agentFaceExpression,
+  agentFaceFill,
+  agentFacePulse,
   deriveAgentDisplayVocabulary,
-  type AgentFaceTone,
   type AgentStateKey,
   type AgentToolSource,
 } from './agentIdentity.js'
@@ -105,7 +105,6 @@ import {
   AgentFaceRegistryContext,
   type AgentFaceRegistry,
   type FaceAxes,
-  type FaceEyes,
 } from './agentFace.js'
 import { AgentFace } from './AgentChrome.js'
 import {
@@ -2423,7 +2422,18 @@ function agentProgressBadge(
   // It says so itself now. The redesign took the lifecycle word off the card
   // (2026-08-19), so with the slot empty and the face turned away this card
   // carried no statement at all that the worker went to the background.
-  if (state === 'background') return 'backgrounded'
+  //
+  // A LAUNCH RECORD says `launched`, not `backgrounded`. Both are state
+  // `background` and both used to be told apart by the face alone — teal for the
+  // ack, blue for a run genuinely under way. The face carries identity now
+  // (2026-08-21), so the distinction moved into the word, where it says what it
+  // means instead of relying on a reader knowing two shades of the same stamp.
+  if (state === 'background') {
+    const isLaunchRecord =
+      (row.toolName === 'Agent' || row.toolName === 'Task') &&
+      row.input.run_in_background === true
+    return isLaunchRecord ? 'launched' : 'backgrounded'
+  }
   const settledUsage = row.result?.agentUsage ?? null
   const toolCalls = settledUsage?.toolUses ?? agentToolCallCount(row)
   const parts: string[] = []
@@ -2546,8 +2556,7 @@ function agentTypeWord(vocab: ReturnType<typeof deriveAgentDisplayVocabulary>): 
 /** Line 1: face, name, type, and the one right-hand slot. */
 function AgentIdentityLine({
   axes,
-  eyes,
-  tone,
+  fill,
   pulse,
   name,
   nameToneClass,
@@ -2557,8 +2566,7 @@ function AgentIdentityLine({
   stateLabel,
 }: {
   axes: FaceAxes
-  eyes: FaceEyes
-  tone: AgentFaceTone
+  fill: number
   pulse: boolean
   name: string | null
   nameToneClass: string
@@ -2571,7 +2579,7 @@ function AgentIdentityLine({
   // collapse button, and only phrasing content may live inside a `button`.
   return (
     <span className="flex items-center gap-[9px] px-3 py-[7px]">
-      <AgentFace axes={axes} eyes={eyes} tone={tone} pulse={pulse} label={stateLabel} />
+      <AgentFace axes={axes} fill={fill} pulse={pulse} label={stateLabel} />
       <span className="inline-flex min-w-0 items-baseline gap-1.5">
         {/* The name is absent until the worker's first nested frame lands, and
             on old or failed records it never arrives — so the slot has to stand
@@ -2795,7 +2803,10 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
   }
 
   const state = vocab.state.key
-  const face = agentFaceExpression(state, { isLaunchRecord })
+  // The id, with the name only as an alias: an id is unique per spawn and a name
+  // is not, so two workers running under one handle stay two faces.
+  const faceAxes = faces.axesFor(vocab.identity.id, vocab.identity.name)
+  const facePulse = agentFacePulse(state, { isLaunchRecord })
   const nameToneClass = (
     vocab.type ? AGENT_TYPE_TONE_CLASS[vocab.type.tone] : AGENT_TYPE_TONE_CLASS.neutral
   ).text
@@ -2811,10 +2822,9 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
   const lines = (
     <>
       <AgentIdentityLine
-        axes={faces.axesFor(vocab.identity.name)}
-        eyes={face.eyes}
-        tone={face.tone}
-        pulse={face.pulse}
+        axes={faceAxes}
+        fill={agentFaceFill(vocab.identity.id ?? vocab.identity.name)}
+        pulse={facePulse}
         name={vocab.identity.name}
         nameToneClass={nameToneClass}
         typeWord={
@@ -2978,7 +2988,7 @@ function DelegateGroup({ members }: { members: NestedToolUseRow[] }) {
         <span className="inline-flex shrink-0 items-center">
           {members.slice(0, MAX_STACKED_GROUP_FACES).map((member, index) => {
             const vocab = vocabs[index]
-            const memberFace = agentFaceExpression(vocab.state.key, {
+            const memberPulse = agentFacePulse(vocab.state.key, {
               isLaunchRecord:
                 (member.toolName === 'Agent' || member.toolName === 'Task') &&
                 member.input.run_in_background === true,
@@ -2986,10 +2996,9 @@ function DelegateGroup({ members }: { members: NestedToolUseRow[] }) {
             return (
               <span key={member.id} className={index === 0 ? '' : '-ml-[3px]'}>
                 <AgentFace
-                  axes={faces.axesFor(vocab.identity.name)}
-                  eyes={memberFace.eyes}
-                  tone={memberFace.tone}
-                  pulse={memberFace.pulse}
+                  axes={faces.axesFor(vocab.identity.id, vocab.identity.name)}
+                  fill={agentFaceFill(vocab.identity.id ?? vocab.identity.name)}
+                  pulse={memberPulse}
                   size={17}
                 />
               </span>
@@ -4463,9 +4472,6 @@ function TaskNotificationBox({
   const faces = useAgentFaceRegistry()
   if (summary === null) return null
   const name = agentNameInSummary(summary)
-  const face = agentFaceExpression(agentCompletionState(status), {
-    isLaunchRecord: false,
-  })
   const handle = name === null ? null : `@${name}`
   const [before, after] =
     handle === null ? [summary, ''] : splitOnce(summary, handle)
@@ -4473,9 +4479,7 @@ function TaskNotificationBox({
     <div className="flex items-center gap-2.5 rounded-lg border border-shell-seam bg-shell-hover/40 px-3 py-[5px]">
       <AgentFace
         axes={faces.axesFor(name)}
-        eyes={face.eyes}
-        tone={face.tone}
-        pulse={face.pulse}
+        fill={agentFaceFill(name)}
         size={17}
       />
       <span className="min-w-0 flex-1 truncate text-[12px] leading-4 text-text-muted">

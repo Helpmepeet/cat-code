@@ -15,11 +15,8 @@ import {
   faceHash,
   faceRects,
   type FaceAxes,
-  type FaceEyes,
   type FaceRect,
 } from './agentFace.js'
-
-const EYES: readonly FaceEyes[] = ['open', 'shut', 'closed']
 
 /** A wide, unremarkable sample: real worker names, plus enough noise to hit every axis. */
 const NAMES = [
@@ -64,13 +61,13 @@ function isOneMass(grid: boolean[][]): boolean {
 }
 
 function silhouette(axes: FaceAxes): string {
-  return JSON.stringify(faceRects(axes, 'closed'))
+  return JSON.stringify(faceRects(axes))
 }
 
 /** The identity draw as one cell per byte, so two faces can be compared by distance. */
 function maskOf(axes: FaceAxes): Uint8Array {
   const mask = new Uint8Array(81)
-  const grid = rasterize(faceRects(axes, 'closed'))
+  const grid = rasterize(faceRects(axes))
   for (let y = 0; y < 9; y += 1) {
     for (let x = 0; x < 9; x += 1) if (grid[y][x]) mask[y * 9 + x] = 1
   }
@@ -96,18 +93,15 @@ function closestPair(masks: readonly Uint8Array[]): number {
 }
 
 describe('the stamp itself', () => {
-  test('every face that draws is one 4-connected mass, in every eye state', () => {
+  test('every face that draws is one 4-connected mass', () => {
     for (const name of NAMES) {
-      for (const eyes of EYES) {
-        const grid = rasterize(faceRects(axesForName(name), eyes))
-        expect(isOneMass(grid)).toBe(true)
-      }
+      expect(isOneMass(rasterize(faceRects(axesForName(name))))).toBe(true)
     }
   })
 
   test('a face is drawn entirely inside the 9x9 grid', () => {
     for (const name of NAMES) {
-      for (const rect of faceRects(axesForName(name), 'open')) {
+      for (const rect of faceRects(axesForName(name))) {
         expect(rect.x).toBeGreaterThanOrEqual(0)
         expect(rect.y).toBeGreaterThanOrEqual(0)
         expect(rect.x + rect.w).toBeLessThanOrEqual(9)
@@ -120,7 +114,7 @@ describe('the stamp itself', () => {
     // Overlapping rects would still LOOK right (they paint the same colour) and
     // would quietly multiply the node count on every card.
     for (const name of NAMES.slice(0, 20)) {
-      const rects = faceRects(axesForName(name), 'open')
+      const rects = faceRects(axesForName(name))
       const covered = new Set<string>()
       for (const rect of rects) {
         for (let y = rect.y; y < rect.y + rect.h; y += 1) {
@@ -156,17 +150,17 @@ describe('identity', () => {
     expect(axesForName(undefined)).toEqual(base)
     // "Featureless" is literal: the eyes are the only thing `closed` withholds,
     // and this face has no mouth or marking to withhold either.
-    expect(faceRects(axesForName(null), 'closed')).toEqual(
-      faceRects(axesForName(null), 'closed'),
+    expect(faceRects(axesForName(null))).toEqual(
+      faceRects(axesForName(null)),
     )
   })
 
   test('eyes are state, not identity: they never move the silhouette', () => {
     for (const name of NAMES.slice(0, 30)) {
       const axes = axesForName(name)
-      const open = rasterize(faceRects(axes, 'open'))
-      const shut = rasterize(faceRects(axes, 'shut'))
-      const closed = rasterize(faceRects(axes, 'closed'))
+      const open = rasterize(faceRects(axes))
+      const shut = rasterize(faceRects(axes))
+      const closed = rasterize(faceRects(axes))
       // Row 4 is the only row eyes touch; every other row is identical.
       for (let y = 0; y < 9; y += 1) {
         if (y === 4) continue
@@ -221,9 +215,7 @@ describe('the session registry', () => {
     // level, so its result has to be re-checked rather than assumed.
     const registry = createAgentFaceRegistry()
     for (const name of NAMES) {
-      for (const eyes of EYES) {
-        expect(isOneMass(rasterize(faceRects(registry.axesFor(name), eyes)))).toBe(true)
-      }
+      expect(isOneMass(rasterize(faceRects(registry.axesFor(name))))).toBe(true)
     }
   })
 
@@ -315,7 +307,7 @@ describe('the relaxation search', () => {
    * mouth, markings); solid across all four means the search gave everything up.
    */
   function isFeatureless(axes: FaceAxes): boolean {
-    const grid = rasterize(faceRects(axes, 'closed'))
+    const grid = rasterize(faceRects(axes))
     const left = axes.width === 'wide' ? 0 : 1
     const right = axes.width === 'wide' ? 8 : 7
     const solid = (row: number): boolean => {
@@ -342,7 +334,7 @@ describe('the relaxation search', () => {
       head: 'square',
     }
     expect(isFeatureless(backus)).toBe(false)
-    expect(isOneMass(rasterize(faceRects(backus, 'closed')))).toBe(true)
+    expect(isOneMass(rasterize(faceRects(backus)))).toBe(true)
   })
 
   test('a featureless slab stays the rare exception, not a third of the space', () => {
@@ -364,7 +356,7 @@ describe('the relaxation search', () => {
     // `tall` ear.
     const keptMouth = everyAxes().filter(axes => {
       if (axes.mouth === 'none') return false
-      const grid = rasterize(faceRects(axes, 'closed'))
+      const grid = rasterize(faceRects(axes))
       const mid = axes.width === 'wide' ? 4 : 4
       // Any mouth carves row 5 or row 6 near the midline.
       return !grid[5][mid] || !grid[6][mid - 1] || !grid[6][mid + 1] || !grid[6][mid]
@@ -399,8 +391,8 @@ describe('the head axis and the chin-dot', () => {
   test('a chin-dot moves down beside a slit instead of being dropped', () => {
     // It used to be dropped against ANY mouth, which cost the face its only
     // marking for a collision a slit does not actually have.
-    const withDot = rasterize(faceRects({ ...BASE, mouth: 'slit', mark: 'chindot' }, 'closed'))
-    const without = rasterize(faceRects({ ...BASE, mouth: 'slit', mark: 'none' }, 'closed'))
+    const withDot = rasterize(faceRects({ ...BASE, mouth: 'slit', mark: 'chindot' }))
+    const without = rasterize(faceRects({ ...BASE, mouth: 'slit', mark: 'none' }))
     expect(withDot).not.toEqual(without)
   })
 
@@ -410,76 +402,64 @@ describe('the head axis and the chin-dot', () => {
     // and (mid+1, 6); a dot at (mid, 7) would strand (mid, 6) with no filled
     // neighbour left, so the face would draw severed and the ladder gives the
     // marking up to keep it whole.
-    const withDot = rasterize(faceRects({ ...BASE, mouth: 'omega', mark: 'chindot' }, 'closed'))
-    const without = rasterize(faceRects({ ...BASE, mouth: 'omega', mark: 'none' }, 'closed'))
+    const withDot = rasterize(faceRects({ ...BASE, mouth: 'omega', mark: 'chindot' }))
+    const without = rasterize(faceRects({ ...BASE, mouth: 'omega', mark: 'none' }))
     expect(withDot).toEqual(without)
   })
 
   test('a chin-dot still gives way to a smile, which already takes its row', () => {
-    const withDot = rasterize(faceRects({ ...BASE, mouth: 'smile', mark: 'chindot' }, 'closed'))
-    const without = rasterize(faceRects({ ...BASE, mouth: 'smile', mark: 'none' }, 'closed'))
+    const withDot = rasterize(faceRects({ ...BASE, mouth: 'smile', mark: 'chindot' }))
+    const without = rasterize(faceRects({ ...BASE, mouth: 'smile', mark: 'none' }))
     expect(withDot).toEqual(without)
   })
 })
 
-describe('facing away', () => {
-  const RITCHIE: FaceAxes = {
-    ear: 'tuft',
-    fill: 'solid',
-    width: 'wide',
-    chin: 'flat',
-    mouth: 'smile',
-    mark: 'temple',
-    head: 'square',
-  }
+describe('the face is identity, not state', () => {
+  // 2026-08-21 operator ruling. The eyes used to be state — `open` live, `shut`
+  // completed, `away` backgrounded — which is what made a fan-out of five
+  // backgrounded workers render as five blank slabs. There is now ONE drawing per
+  // worker, and the row's own slot carries the run.
 
-  test('a worker facing away shows no mouth and no marking', () => {
-    // @Ritchie, seen on a real card (2026-08-19): backgrounded, so its eyes were
-    // uncarved, which left the mouth as the only PAIR of holes on the face. It
-    // read as a cat whose eyes sat two rows too low above a bitten chin.
-    const away = rasterize(faceRects(RITCHIE, 'away'))
-    const bare = rasterize(faceRects({ ...RITCHIE, mouth: 'none', mark: 'none' }, 'closed'))
-    expect(away).toEqual(bare)
-    expect(isOneMass(away)).toBe(true)
-  })
-
-  test('a worker facing away keeps the silhouette that identifies it', () => {
-    // Ears, head width, chin and ear fill are the back of the head; they stay.
-    const away = rasterize(faceRects(RITCHIE, 'away'))
-    const other = rasterize(
-      faceRects({ ...RITCHIE, ear: 'outer', chin: 'round' }, 'away'),
-    )
-    expect(away).not.toEqual(other)
-  })
-
-  test('facing away does NOT move identity — the signature still signs on the mouth', () => {
-    // The trap this pins: `silhouetteMask` draws `closed`, so teaching `closed` to
-    // hide the mouth and markings would have folded every pair of workers that
-    // differed only by those two axes into one identity — 1,862 distinct
-    // silhouettes down to 168 — with nothing reporting the loss.
-    const withMouth = JSON.stringify(faceRects(RITCHIE, 'closed'))
-    const without = JSON.stringify(
-      faceRects({ ...RITCHIE, mouth: 'none' }, 'closed'),
-    )
-    expect(withMouth).not.toBe(without)
-
+  test('a worker draws the same face whatever it is doing', () => {
+    // There is no state input left to vary, which is the property: the drawing
+    // function cannot be told what the worker is up to.
     const registry = createAgentFaceRegistry()
-    const seen = new Set<string>()
-    for (const name of NAMES) seen.add(silhouette(registry.axesFor(name)))
-    expect(seen.size).toBe(NAMES.length)
+    const first = NAMES.map(name => silhouette(registry.axesFor(name)))
+    const second = NAMES.map(name => silhouette(registry.axesFor(name)))
+    expect(second).toEqual(first)
   })
 
-  test('two workers facing away MAY look alike, and that is the ruling', () => {
-    // Only 88 distinct backgrounded drawings exist, because hiding the front of
-    // the face hides most of what separates two workers. Accepted deliberately:
-    // a backgrounded card prints the worker's NAME beside the stamp, so the face
-    // is not carrying identity there — it is carrying "this one is facing away".
-    const a = faceRects({ ...RITCHIE, mouth: 'slit', mark: 'brow' }, 'away')
-    const b = faceRects({ ...RITCHIE, mouth: 'omega', mark: 'cheek' }, 'away')
-    expect(a).toEqual(b)
-    // The same two are still distinct identities.
-    expect(silhouette({ ...RITCHIE, mouth: 'slit', mark: 'brow' })).not.toBe(
-      silhouette({ ...RITCHIE, mouth: 'omega', mark: 'cheek' }),
-    )
+  test('every face has eyes', () => {
+    // The eye carve is unconditional now. Two cleared cells on row 4 are what
+    // makes the stamp read as an animal rather than a brick.
+    for (const name of NAMES.slice(0, 60)) {
+      const grid = rasterize(faceRects(axesForName(name)))
+      const cleared = grid[4].filter(cell => !cell).length
+      expect(cleared).toBeGreaterThanOrEqual(2)
+    }
+  })
+
+  test('an id and a name for one worker resolve to one face', () => {
+    // The completion notification has only a name; the card has an id. Without
+    // the alias the same worker would wear two faces in one transcript.
+    const registry = createAgentFaceRegistry()
+    const fromCard = silhouette(registry.axesFor('agent_01H', 'scout'))
+    expect(silhouette(registry.axesFor('scout'))).toBe(fromCard)
+    expect(silhouette(registry.axesFor('agent_01H'))).toBe(fromCard)
+  })
+
+  test('the name arriving after the id does not move the face', () => {
+    const registry = createAgentFaceRegistry()
+    const byId = silhouette(registry.axesFor('agent_02K'))
+    expect(silhouette(registry.axesFor('agent_02K', 'ripley'))).toBe(byId)
+    expect(silhouette(registry.axesFor('ripley'))).toBe(byId)
+  })
+
+  test('two workers sharing a name still get two faces', () => {
+    // The reason identity is keyed on the id: a name is not unique per spawn.
+    const registry = createAgentFaceRegistry()
+    const first = silhouette(registry.axesFor('agent_03A', 'scout'))
+    const second = silhouette(registry.axesFor('agent_04B', 'scout'))
+    expect(second).not.toBe(first)
   })
 })
