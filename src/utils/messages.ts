@@ -785,15 +785,16 @@ export function normalizeMessages(messages: Message[]): NormalizedMessage[] {
   >()
   for (const message of messages) {
     if (message.type !== 'assistant') continue
+    const content = message.message.content.filter(block => block != null)
     const providerMessageId = message.message.id
     if (typeof providerMessageId !== 'string') continue
     const hasDisplayMetadata =
       message.hasRawReasoning !== undefined ||
-      hasReasoningDisplayMetadata(message.message.content)
+      hasReasoningDisplayMetadata(content)
     if (!hasDisplayMetadata) continue
     const hasRawReasoning =
       message.hasRawReasoning ??
-      hasUsableRawReasoning(message.message.content)
+      hasUsableRawReasoning(content)
     const previous = reasoningDisplayByProviderMessageId.get(providerMessageId)
     reasoningDisplayByProviderMessageId.set(providerMessageId, {
       hasRawReasoning: previous?.hasRawReasoning === true || hasRawReasoning,
@@ -804,7 +805,8 @@ export function normalizeMessages(messages: Message[]): NormalizedMessage[] {
   return messages.flatMap(message => {
     switch (message.type) {
       case 'assistant': {
-        isNewChain = isNewChain || message.message.content.length > 1
+        const content = message.message.content.filter(block => block != null)
+        isNewChain = isNewChain || content.length > 1
         const providerReasoningDisplay =
           typeof message.message.id === 'string'
             ? reasoningDisplayByProviderMessageId.get(message.message.id)
@@ -812,12 +814,12 @@ export function normalizeMessages(messages: Message[]): NormalizedMessage[] {
         const shouldAttachReasoningDisplayMetadata =
           providerReasoningDisplay !== undefined ||
           message.hasRawReasoning !== undefined ||
-          hasReasoningDisplayMetadata(message.message.content)
+          hasReasoningDisplayMetadata(content)
         const hasRawReasoning =
           providerReasoningDisplay?.hasRawReasoning ??
           message.hasRawReasoning ??
-          hasUsableRawReasoning(message.message.content)
-        return message.message.content.map((_, index) => {
+          hasUsableRawReasoning(content)
+        return content.map((_, index) => {
           const uuid = isNewChain
             ? deriveUUID(message.uuid, index)
             : message.uuid

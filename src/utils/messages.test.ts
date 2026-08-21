@@ -6,6 +6,7 @@ import {
   createCompactBoundaryMessage,
   createUserMessage,
   dropPreservedMessageDuplicates,
+  normalizeMessages,
   wrapCommandText,
 } from './messages.js'
 
@@ -86,6 +87,31 @@ describe('dropPreservedMessageDuplicates', () => {
     ]
 
     expect(dropPreservedMessageDuplicates(messages)).toBe(messages)
+  })
+})
+
+describe('normalizeMessages', () => {
+  test('discards null assistant content blocks before rendering', () => {
+    const messages = [
+      {
+        type: 'assistant' as const,
+        uuid: '00000000-0000-0000-0000-000000000001',
+        message: {
+          role: 'assistant' as const,
+          content: [
+            null,
+            { type: 'thinking' as const, thinking: 'reasoning', signature: '' },
+          ],
+        },
+      },
+    ]
+
+    const normalized = normalizeMessages(messages as Parameters<typeof normalizeMessages>[0])
+
+    expect(normalized).toHaveLength(1)
+    expect(normalized[0]?.message.content).toEqual([
+      { type: 'thinking', thinking: 'reasoning', signature: '' },
+    ])
   })
 })
 
