@@ -517,6 +517,11 @@ export const outputSchema = lazySchema(() => {
     agentId: z.string().describe('The ID of the async agent'),
     agentName: z.string().optional().describe('The friendly name of the async agent'),
     agentType: z.string().optional().describe('The type of async agent'),
+    // Optional for the same reason the sync result's is: older persisted
+    // sessions predate it. A BACKGROUND agent has no other way to report the
+    // model it runs on — it yields no nested frames to its caller and its final
+    // result goes to a task-notification, not back to this tool_use.
+    model: z.string().optional().describe('The resolved model the async agent runs on'),
     description: z.string().describe('The description of the task'),
     prompt: z.string().describe('The prompt for the agent'),
     outputFile: z.string().describe('Debug transcript path; prefer TaskOutput for progress and final results'),
@@ -1306,6 +1311,7 @@ export const AgentTool = buildTool({
           agentId: agentBackgroundTask.agentId,
           agentName,
           agentType: selectedAgent.agentType,
+          model: resolvedAgentModel,
           description: description,
           prompt: prompt,
           outputFile: getTaskOutputPath(agentBackgroundTask.agentId),
