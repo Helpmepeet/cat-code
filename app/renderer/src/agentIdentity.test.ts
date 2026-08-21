@@ -490,7 +490,7 @@ test('eyes are state only — a nameless worker is featureless in its AXES, not 
   // picture. The design source draws the nameless running card wide awake.
   expect(agentFaceExpression('running', { isLaunchRecord: false }).eyes).toBe('open')
   expect(agentFaceExpression('completed', { isLaunchRecord: false }).eyes).toBe('shut')
-  expect(agentFaceExpression('background', { isLaunchRecord: false }).eyes).toBe('closed')
+  expect(agentFaceExpression('background', { isLaunchRecord: false }).eyes).toBe('away')
 })
 
 test('a background launch that ERRORED reads as the failure it is, not as backgrounded', () => {
@@ -509,6 +509,8 @@ test('a backgrounded worker faces away, and a launch RECORD is teal rather than 
   // is all we were ever told" from "this one is genuinely under way".
   const launch = agentFaceExpression('background', { isLaunchRecord: true })
   const resumed = agentFaceExpression('background', { isLaunchRecord: false })
-  expect(launch).toEqual({ eyes: 'closed', tone: 'launch', pulse: false })
-  expect(resumed).toEqual({ eyes: 'closed', tone: 'info', pulse: false })
+  // `away`, not `closed`: facing away withholds the whole front of the face, so
+  // a named worker's mouth cannot be mistaken for its eyes (`agentFace.ts`).
+  expect(launch).toEqual({ eyes: 'away', tone: 'launch', pulse: false })
+  expect(resumed).toEqual({ eyes: 'away', tone: 'info', pulse: false })
 })

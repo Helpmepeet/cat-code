@@ -289,3 +289,64 @@ describe('the relaxation search', () => {
     expect(keptMouth).toBeGreaterThan(1400)
   })
 })
+
+describe('facing away', () => {
+  const RITCHIE: FaceAxes = {
+    ear: 'tuft',
+    fill: 'solid',
+    width: 'wide',
+    chin: 'flat',
+    mouth: 'smile',
+    mark: 'temple',
+  }
+
+  test('a worker facing away shows no mouth and no marking', () => {
+    // @Ritchie, seen on a real card (2026-08-19): backgrounded, so its eyes were
+    // uncarved, which left the mouth as the only PAIR of holes on the face. It
+    // read as a cat whose eyes sat two rows too low above a bitten chin.
+    const away = rasterize(faceRects(RITCHIE, 'away'))
+    const bare = rasterize(faceRects({ ...RITCHIE, mouth: 'none', mark: 'none' }, 'closed'))
+    expect(away).toEqual(bare)
+    expect(isOneMass(away)).toBe(true)
+  })
+
+  test('a worker facing away keeps the silhouette that identifies it', () => {
+    // Ears, head width, chin and ear fill are the back of the head; they stay.
+    const away = rasterize(faceRects(RITCHIE, 'away'))
+    const other = rasterize(
+      faceRects({ ...RITCHIE, ear: 'outer', chin: 'round' }, 'away'),
+    )
+    expect(away).not.toEqual(other)
+  })
+
+  test('facing away does NOT move identity — the signature still signs on the mouth', () => {
+    // The trap this pins: `silhouetteKey` draws `closed`, so teaching `closed` to
+    // hide the mouth and markings would have folded every pair of workers that
+    // differed only by those two axes into one identity — 975 distinct
+    // silhouettes down to 88 — with nothing reporting the loss.
+    const withMouth = JSON.stringify(faceRects(RITCHIE, 'closed'))
+    const without = JSON.stringify(
+      faceRects({ ...RITCHIE, mouth: 'none' }, 'closed'),
+    )
+    expect(withMouth).not.toBe(without)
+
+    const registry = createAgentFaceRegistry()
+    const seen = new Set<string>()
+    for (const name of NAMES) seen.add(silhouette(registry.axesFor(name)))
+    expect(seen.size).toBe(NAMES.length)
+  })
+
+  test('two workers facing away MAY look alike, and that is the ruling', () => {
+    // Only 88 distinct backgrounded drawings exist, because hiding the front of
+    // the face hides most of what separates two workers. Accepted deliberately:
+    // a backgrounded card prints the worker's NAME beside the stamp, so the face
+    // is not carrying identity there — it is carrying "this one is facing away".
+    const a = faceRects({ ...RITCHIE, mouth: 'slit', mark: 'brow' }, 'away')
+    const b = faceRects({ ...RITCHIE, mouth: 'omega', mark: 'cheek' }, 'away')
+    expect(a).toEqual(b)
+    // The same two are still distinct identities.
+    expect(silhouette({ ...RITCHIE, mouth: 'slit', mark: 'brow' })).not.toBe(
+      silhouette({ ...RITCHIE, mouth: 'omega', mark: 'cheek' }),
+    )
+  })
+})

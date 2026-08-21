@@ -37,11 +37,23 @@ export type FaceMouth = 'none' | 'slit' | 'smile' | 'omega'
 export type FaceMark = 'none' | 'brow' | 'cheek' | 'temple' | 'chindot'
 
 /**
- * State, not identity. `open` is a live or unsettled worker, `shut` a completed
- * one, `closed` a face with nothing cleared at all — the featureless base, worn
- * both by a worker with no name yet and by a worker facing away (backgrounded).
+ * State, not identity.
+ *
+ *  - `open`   a live or unsettled worker
+ *  - `shut`   a completed one
+ *  - `away`   facing away: the whole FRONT of the face is withheld, not just the
+ *             eyes. A cat with its back to you shows no mouth and no marking.
+ *  - `closed` eyes uncarved, everything else drawn. This is the IDENTITY draw and
+ *             nothing renders it: `silhouetteKey` compares faces with the eyes
+ *             taken out, because eyes are state and two workers differing only by
+ *             an eye row are the same face to a reader.
+ *
+ * `away` and `closed` were one mode until 2026-08-19. Splitting them is what lets
+ * the facing-away card hide the mouth WITHOUT collapsing identity: the mouth and
+ * markings carry most of the distinguishing power, so folding them out of the
+ * signature would have taken it from 975 distinct silhouettes to 88.
  */
-export type FaceEyes = 'open' | 'shut' | 'closed'
+export type FaceEyes = 'open' | 'shut' | 'closed' | 'away'
 
 export type FaceAxes = {
   ear: FaceEar
@@ -270,7 +282,12 @@ function drawFace(axes: FaceAxes, eyes: FaceEyes, level: number): boolean[][] {
           ? 'notch'
           : axes.fill
         : step.fill
-  const mouth: FaceMouth = step.dropMouth ? 'none' : axes.mouth
+  // Facing away withholds the whole front of the face. Not a style choice: with
+  // the eyes uncarved, a mouth is the only PAIR of holes left, so a reader's eye
+  // takes it for the eyes two rows too low. `brow` fails the same way, which is
+  // why the rule is the front of the face and not "the mouth".
+  const facingAway = eyes === 'away'
+  const mouth: FaceMouth = step.dropMouth || facingAway ? 'none' : axes.mouth
   // EXCLUSION: mouth and chin-dot both carve row 6, so a face gets one or the
   // other, never both. Without this, `chindot` + `omega` clears exactly the
   // three cells `slit` does and the two faces become the same drawing — 360 of
@@ -283,7 +300,9 @@ function drawFace(axes: FaceAxes, eyes: FaceEyes, level: number): boolean[][] {
   // the 2,400 combinations draw uniquely — which is still ~30x any plausible
   // session, and buys a face that never mimics a mouth shape it does not have.
   const mark: FaceMark =
-    step.dropMark || (axes.mark === 'chindot' && mouth !== 'none') ? 'none' : axes.mark
+    step.dropMark || facingAway || (axes.mark === 'chindot' && mouth !== 'none')
+      ? 'none'
+      : axes.mark
 
   if (fill !== 'solid') {
     // Ear-tip columns are the filled columns of the TOPMOST filled row, so the
@@ -370,7 +389,14 @@ function gridToRects(grid: boolean[][]): FaceRect[] {
   return out
 }
 
-const EYE_MODES: readonly FaceEyes[] = ['open', 'shut', 'closed']
+/**
+ * The modes the connectivity check has to satisfy. `away` is included even though
+ * it can only ever clear FEWER cells than `closed` — so it cannot be severed when
+ * `closed` is whole — because that argument depends on what `away` suppresses,
+ * and a later change to that list should not be able to break connectivity in
+ * silence.
+ */
+const EYE_MODES: readonly FaceEyes[] = ['open', 'shut', 'closed', 'away']
 
 const levelByAxes = new Map<string, number>()
 
@@ -420,6 +446,11 @@ const silhouetteByAxes = new Map<string, string>()
  * Silhouette identity: the drawn mass with EYES EXCLUDED, which is what dedupe
  * compares. Eyes are state, so two workers whose stamps differ only by an eye
  * row are the same face as far as a reader is concerned.
+ *
+ * DELIBERATELY `closed`, not `away`. `away` withholds the mouth and the marking,
+ * which is right for the card and wrong for identity: those two axes carry most
+ * of the distinguishing power, and signing on them would take the session from
+ * 975 distinct silhouettes to 88 without anything reporting the loss.
  *
  * Memoised on the same bound as `levelByAxes` (the axis product), because the
  * dedupe sweep below asks for up to 2,400 of these in one call and each one is a

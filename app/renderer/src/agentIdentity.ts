@@ -332,8 +332,13 @@ export function agentTranscriptStateWord(state: AgentStateKey): string {
  * design source draws that card wide awake, and it has to, or "nobody has told
  * us who this is yet" and "this one is facing away" become the same picture.
  *
- *  - backgrounded -> `closed`: facing away, because this card will never learn
- *    the outcome (it arrives lower down as its own finish row).
+ *  - backgrounded -> `away`: facing away, because this card will never learn the
+ *    outcome (it arrives lower down as its own finish row). `away`, not merely
+ *    eyes-shut: the design source draws every facing-away card featureless
+ *    (`anon_closed`, six times, the only closed face in the page) and never draws
+ *    a NAMED worker facing away, so keeping a named worker's own mouth here was
+ *    an inference — and a bad one. With the eyes uncarved the mouth becomes the
+ *    only pair of holes on the face and gets read as the eyes, two rows too low.
  *  - completed -> `shut`, the only settled state that gets an expression.
  *  - everything else -> `open`. Failed and Stopped are told by colour alone, and
  *    line 2 carries their word.
@@ -349,7 +354,7 @@ export function agentFaceExpression(
 ): { eyes: FaceEyes; tone: AgentFaceTone; pulse: boolean } {
   const backgrounded = state === 'background'
   const eyes: FaceEyes = backgrounded
-    ? 'closed'
+    ? 'away'
     : state === 'completed'
       ? 'shut'
       : 'open'
