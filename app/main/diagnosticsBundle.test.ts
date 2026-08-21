@@ -318,7 +318,10 @@ test('a rollup reaches the bundle even when per-frame records fill the export bu
     for (let sequence = 1; sequence <= 2000; sequence++) lines.push(frame(sequence))
     writeFileSync(join(logs, `delivery-trace-launch-${index}.jsonl`), `${lines.join('\n')}\n`)
   }
-  const older = new Date('2026-08-06T00:00:00.000Z')
+  // Older than the trace files so those are read first, but still inside the
+  // retention window the bundle filters on. An absolute date here ages out of
+  // that window on its own and turns this into a failure with no code change.
+  const older = new Date(Date.now() - 60_000)
   utimesSync(join(logs, 'delivery-rollup-launch-1.jsonl'), older, older)
 
   const bundle = JSON.parse(buildDiagnosticsBundle({ logsDirectory: logs, appVersion: 'test', currentLaunchId: 'launch' }))
