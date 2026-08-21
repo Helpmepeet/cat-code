@@ -37,20 +37,19 @@ const PIP_SIZE_CLASS: Record<PipSize, string> = {
 }
 
 /**
- * The worker's face — a filled 9x9 pixel stamp in the state colour, with every
- * feature cut through to the background (`agentFace.ts` owns the algorithm and
- * the reasons).
+ * The worker's face — a filled 9x9 pixel stamp in that worker's OWN colour, with
+ * every feature cut through to the background (`agentFace.ts` owns the algorithm
+ * and the reasons).
  *
  * `shape-rendering="crispEdges"` because the whole point of the redesign is that
  * nothing depends on a sub-pixel stroke: the rects must land on device pixels at
  * 17px as squarely as at 19px.
  *
- * ARIA: `label` is what the face is the ONLY carrier of. Colour and expression
- * are the whole of a card's lifecycle now, so a reader who cannot see either is
- * left with a name and a task and no idea whether the worker is still going —
- * pass the state there. Leave it null wherever the state is already in text
- * beside the stamp (line 2's Failed/Stopped word, the engine's own sentence on a
- * finish row, the group header's own tail), or it gets announced twice.
+ * ARIA: leave `label` null. The stamp says WHO, never what a worker is doing
+ * (operator ruling, 2026-08-21), and it sits beside that worker's own name, so
+ * it is decorative and labelling it only announces the name twice. The state is
+ * carried in text every place the face appears. This comment used to say the
+ * opposite, back when colour and expression were the lifecycle.
  */
 export function AgentFace({
   axes,
