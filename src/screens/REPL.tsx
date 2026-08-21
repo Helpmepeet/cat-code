@@ -183,7 +183,7 @@ import { roughTokenCountEstimation } from '../services/tokenEstimation.js';
 import { doesMostRecentAssistantMessageExceed200k, tokenCountWithEstimation } from '../utils/tokens.js';
 import { accountThreadGoalUsage, buildThreadGoalDisplayState, calculateThreadGoalContextTokenDelta, deriveThreadGoalContinuationResetState, nextThreadGoalContinuationStallCount, pauseActiveThreadGoalOnAbort, renderThreadGoalBudgetLimitPrompt, renderThreadGoalContinuationPrompt, shouldPromptToResumePausedGoal, shouldResetThreadGoalContinuationStallCount, type ThreadGoal, type ThreadGoalContinuationKind } from '../utils/threadGoal.js';
 import { getThreadGoalContinuationAction } from '../utils/threadGoalController.js';
-import { deriveDelegatedTaskStatus, deriveFocusedInputDialog, deriveHasOperationalWork, deriveLocalWaitingReason, deriveTuiSessionStatus, deriveTuiWaitingDetail, type FocusedInputDialog, type FocusedInputDialogFacts } from '../utils/tuiSessionStatus.js';
+import { deriveDelegatedTaskStatus, deriveFocusedInputDialog, deriveHasOperationalWork, deriveHasUnblockedDelegatedWork, deriveLocalWaitingReason, deriveTuiSessionStatus, deriveTuiWaitingDetail, type FocusedInputDialog, type FocusedInputDialogFacts } from '../utils/tuiSessionStatus.js';
 import { updateThreadGoalStatusAction } from '../utils/threadGoalActions.js';
 import { getDisplayedEffortLevel } from '../utils/effort.js';
 import { getCodexLeaseSnapshot } from '../services/api/codexAccountLeaseManager.js';
@@ -2268,6 +2268,19 @@ export function REPL({
   const delegatedTaskStatus = useMemo(() => deriveDelegatedTaskStatus(tasks), [tasks]);
   const hasWorkingDelegatedTask = delegatedTaskStatus.hasWorkingDelegatedTask;
   const delegatedWaitingReason = delegatedTaskStatus.waitingReason;
+  // Which workers are stalled on a prompt sitting in this queue. Only the
+  // queue knows: a teammate blocked on its own permission request keeps a
+  // running task row, so status alone cannot tell it from one that is
+  // computing. Unbadged entries are the leader's own and stay out of the set.
+  const promptedWorkerHandles = useMemo(() => {
+    const handles = new Set<string>();
+    for (const entry of toolUseConfirmQueue) {
+      const handle = entry.workerBadge?.name;
+      if (handle !== undefined) handles.add(handle);
+    }
+    return handles;
+  }, [toolUseConfirmQueue]);
+  const hasUnblockedDelegatedWork = useMemo(() => deriveHasUnblockedDelegatedWork(tasks, promptedWorkerHandles), [tasks, promptedWorkerHandles]);
 
   // The dialog typing is hiding still blocks the session, so waiting reads
   // the prospective dialog. Worker/sandbox requests render outside the dialog
@@ -2292,7 +2305,7 @@ export function REPL({
   });
   const hasOperationalWork = deriveHasOperationalWork({
     isLoading,
-    hasWorkingDelegatedTask,
+    hasUnblockedDelegatedWork,
     localWaitingReason
   });
   const waitingFor = deriveTuiWaitingDetail({
@@ -2303,7 +2316,8 @@ export function REPL({
 
   // Prevent macOS from sleeping while real work is in flight. Deliberately
   // narrower than "not idle": a turn parked on a local prompt releases
-  // caffeinate, but delegated work that is still running holds it.
+  // caffeinate, but delegated work that is still running holds it, unless the
+  // prompt on screen is the one that delegated task is itself blocked on.
   useEffect(() => {
     if (hasOperationalWork) {
       startPreventSleep();

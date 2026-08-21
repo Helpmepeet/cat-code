@@ -294,6 +294,16 @@ export type DelegatedTaskFacts = {
   ultraplanPhase?: 'needs_input' | 'plan_ready'
   /** remote_agent: deliberately never completes, so it is not pending work. */
   isLongRunning?: boolean
+  /**
+   * in_process_teammate: the handles a queued permission prompt can name.
+   * Both spellings are needed because the two producers disagree: the
+   * in-process runner badges the prompt with `agentName`
+   * (src/utils/swarm/inProcessRunner.ts), the mailbox poller badges it with
+   * the team-qualified `agentId` (src/hooks/useInboxPoller.ts). The two are
+   * disjoint: `agentId` is `name@team` and `canonicalizeNewTeammateName`
+   * (src/utils/recipientIdentity.ts) rejects `@` in a name.
+   */
+  identity?: { agentName: string; agentId: string }
 }
 
 type DelegatedContribution = 'working' | 'waiting' | 'none'
@@ -364,6 +374,61 @@ function classifyDelegatedTask(task: DelegatedTaskFacts): DelegatedContribution 
 }
 
 /**
+ * Whether this task is the one stalled on a permission prompt the leader is
+ * currently showing.
+ *
+ * A teammate that asks for permission blocks inside its own turn: the row stays
+ * `running`, so `classifyDelegatedTask` reports it working while the request
+ * sits in the leader's queue. Only the queue can tell the two apart, so the
+ * caller passes the handles the queued prompts are badged with.
+ *
+ * Deliberately scoped to `in_process_teammate`, the only task type whose
+ * requests reach that queue: the in-process runner and the mailbox poller are
+ * the only two writers of `workerBadge`, and both back `in_process_teammate`
+ * rows (the mailbox one via `registerOutOfProcessTeammateTask`,
+ * src/tools/shared/spawnMultiAgent.ts).
+ *
+ * An unbadged prompt is the leader's own, and `localWaitingReason` already
+ * covers it. A badge that matches no row leaves the task working, so a producer
+ * that stops badging degrades to holding `caffeinate`, never to sleeping
+ * through live work.
+ */
+function isPromptedForPermission(
+  task: DelegatedTaskFacts,
+  promptedWorkerHandles: ReadonlySet<string>,
+): boolean {
+  if (task.type !== 'in_process_teammate') return false
+  const identity = task.identity
+  if (identity === undefined) return false
+  return (
+    promptedWorkerHandles.has(identity.agentName) ||
+    promptedWorkerHandles.has(identity.agentId)
+  )
+}
+
+/**
+ * Whether any delegated task is actually computing right now.
+ *
+ * Separate from `deriveDelegatedTaskStatus` on purpose. Session status must
+ * keep counting a prompted teammate as working, because demoting it to waiting
+ * would flip `sessionStatus` to `waiting` in the cases where the local reason
+ * is suppressed (exiting, or the message selector holding focus). This answers
+ * the narrower sleep question only.
+ */
+export function deriveHasUnblockedDelegatedWork(
+  tasks: Readonly<Record<string, TaskState>>,
+  promptedWorkerHandles: ReadonlySet<string>,
+): boolean {
+  for (const task of Object.values(tasks)) {
+    const facts: DelegatedTaskFacts = task
+    if (classifyDelegatedTask(facts) !== 'working') continue
+    if (isPromptedForPermission(facts, promptedWorkerHandles)) continue
+    return true
+  }
+  return false
+}
+
+/**
  * Aggregate delegated facts. Working and waiting are independent: a blocked
  * agent and a running agent can coexist, and losing either fact produces a
  * wrong answer (false idle, or a machine that sleeps mid-run).
@@ -426,20 +491,19 @@ export function deriveTuiSessionStatus(args: {
  * permission dialog stops holding `caffeinate`, which is existing behavior,
  * while delegated work that is still running keeps holding it.
  *
- * Known limit: the two terms are independent, so this cannot tell "a worker is
- * computing while the leader waits" from "the worker is waiting on the prompt
- * the leader is showing". In the second case the task row still reads
- * `running`, so `caffeinate` is held even though nothing can progress until a
- * human answers. Resolving that needs a task-to-request correlation this
- * derivation does not have.
+ * The delegated term is `deriveHasUnblockedDelegatedWork`, NOT
+ * `hasWorkingDelegatedTask`. The two differ exactly when the prompt the leader
+ * is showing belongs to the delegated task itself: the row still reads
+ * `running`, but nothing can progress until a human answers, so holding
+ * `caffeinate` would keep the machine awake on a prompt nobody is reading.
  */
 export function deriveHasOperationalWork(args: {
   isLoading: boolean
-  hasWorkingDelegatedTask: boolean
+  hasUnblockedDelegatedWork: boolean
   localWaitingReason: TuiWaitingReason | undefined
 }): boolean {
   return (
     (args.isLoading && args.localWaitingReason === undefined) ||
-    args.hasWorkingDelegatedTask
+    args.hasUnblockedDelegatedWork
   )
 }
