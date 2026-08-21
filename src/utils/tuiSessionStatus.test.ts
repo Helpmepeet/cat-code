@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import type { AppState } from '../state/AppState.js'
 import {
   completeAgentTask,
   type LocalAgentTaskState,
@@ -6,6 +7,14 @@ import {
 import type { InProcessTeammateTaskState } from '../tasks/InProcessTeammateTask/types.js'
 import type { RemoteAgentTaskState } from '../tasks/RemoteAgentTask/RemoteAgentTask.js'
 import type { TaskState } from '../tasks/types.js'
+import type { Tool, ToolUseContext } from '../Tool.js'
+import type { ToolUseConfirm } from '../components/permissions/PermissionRequest.js'
+import {
+  registerLeaderToolUseConfirmQueue,
+  unregisterLeaderToolUseConfirmQueue,
+} from './swarm/leaderPermissionBridge.js'
+import { spawnInProcessTeammate } from './swarm/spawnInProcess.js'
+import { _forTest as inProcessRunnerForTest } from './swarm/inProcessRunner.js'
 import {
   type DelegatedTaskFacts,
   type FocusedInputDialog,
@@ -15,6 +24,7 @@ import {
   deriveFocusedInputDialog,
   deriveHasOperationalWork,
   deriveHasSuppressedDialog,
+  deriveHasUnblockedDelegatedWork,
   deriveLocalWaitingReason,
   deriveTuiSessionStatus,
   deriveTuiWaitingDetail,
@@ -751,6 +761,12 @@ const teammate = (extra: TaskFixture = {}): TaskFixture => ({
   ...extra,
 })
 
+// Shaped like the identity spawnInProcessTeammate writes: a canonical bare
+// name plus the `name@team` id formatAgentId builds from it. The live-path
+// test below drives that producer instead of trusting this pair.
+const TEAMMATE_IDENTITY = { agentName: 'alice', agentId: 'alice@review-team' }
+const OTHER_TEAMMATE_IDENTITY = { agentName: 'bob', agentId: 'bob@review-team' }
+
 describe('deriveDelegatedTaskStatus: working states', () => {
   test('no tasks is neither working nor waiting', () => {
     expect(deriveDelegatedTaskStatus({})).toEqual({
@@ -1104,7 +1120,7 @@ describe('deriveTuiSessionStatus', () => {
 describe('deriveHasOperationalWork', () => {
   const base = {
     isLoading: false,
-    hasWorkingDelegatedTask: false,
+    hasUnblockedDelegatedWork: false,
     localWaitingReason: undefined as TuiWaitingReason | undefined,
   }
 
@@ -1132,7 +1148,7 @@ describe('deriveHasOperationalWork', () => {
       deriveHasOperationalWork({
         ...base,
         isLoading: true,
-        hasWorkingDelegatedTask: true,
+        hasUnblockedDelegatedWork: true,
         localWaitingReason: 'tool-approval',
       }),
     ).toBe(true)
@@ -1140,7 +1156,109 @@ describe('deriveHasOperationalWork', () => {
 
   test('delegated work alone is work', () => {
     expect(
-      deriveHasOperationalWork({ ...base, hasWorkingDelegatedTask: true }),
+      deriveHasOperationalWork({ ...base, hasUnblockedDelegatedWork: true }),
+    ).toBe(true)
+  })
+})
+
+describe('deriveHasUnblockedDelegatedWork', () => {
+  test('two teams sharing a teammate name keep caffeinate held', () => {
+    // allocateTeamRecipient allocates per team file, so `researcher` can exist
+    // in two live teams at once, and the in-process runner badges the prompt
+    // with the bare name. Matching it blindly would exclude BOTH rows and let
+    // the machine sleep while the second teammate is still computing.
+    const tasks = tasksOf(
+      teammate({ identity: { agentName: 'researcher', agentId: 'researcher@team-a', teamName: 'team-a' } }),
+      teammate({ identity: { agentName: 'researcher', agentId: 'researcher@team-b', teamName: 'team-b' } }),
+    )
+    expect(
+      deriveHasUnblockedDelegatedWork(tasks, new Set(['researcher'])),
+    ).toBe(true)
+  })
+
+  test('a team-qualified badge resolves the same collision precisely', () => {
+    const tasks = tasksOf(
+      teammate({ identity: { agentName: 'researcher', agentId: 'researcher@team-a', teamName: 'team-a' } }),
+    )
+    expect(
+      deriveHasUnblockedDelegatedWork(tasks, new Set(['researcher@team-a'])),
+    ).toBe(false)
+  })
+
+  test('a terminal namesake does not make a live name ambiguous', () => {
+    const tasks = tasksOf(
+      teammate({ status: 'completed', identity: { agentName: 'researcher', agentId: 'researcher@old', teamName: 'old' } }),
+      teammate({ identity: { agentName: 'researcher', agentId: 'researcher@team-a', teamName: 'team-a' } }),
+    )
+    expect(
+      deriveHasUnblockedDelegatedWork(tasks, new Set(['researcher'])),
+    ).toBe(false)
+  })
+
+  const NONE: ReadonlySet<string> = new Set()
+
+  test('a running teammate with no prompt queued is unblocked work', () => {
+    expect(
+      deriveHasUnblockedDelegatedWork(
+        tasksOf(teammate({ identity: TEAMMATE_IDENTITY })),
+        NONE,
+      ),
+    ).toBe(true)
+  })
+
+  test('a teammate prompted under its display handle is not unblocked work', () => {
+    // The in-process runner badges the prompt with identity.agentName.
+    expect(
+      deriveHasUnblockedDelegatedWork(
+        tasksOf(teammate({ identity: TEAMMATE_IDENTITY })),
+        new Set([TEAMMATE_IDENTITY.agentName]),
+      ),
+    ).toBe(false)
+  })
+
+  test('a teammate prompted under its team-qualified id is not unblocked work', () => {
+    // The mailbox poller badges the prompt with the agent_id it parsed from
+    // the request, which is identity.agentId (src/hooks/useInboxPoller.ts).
+    expect(
+      deriveHasUnblockedDelegatedWork(
+        tasksOf(teammate({ identity: TEAMMATE_IDENTITY })),
+        new Set([TEAMMATE_IDENTITY.agentId]),
+      ),
+    ).toBe(false)
+  })
+
+  test('one prompted teammate does not silence another that is computing', () => {
+    // The plan's own bullet: active delegated work holds caffeinate even while
+    // ANOTHER task is waiting.
+    expect(
+      deriveHasUnblockedDelegatedWork(
+        tasksOf(
+          teammate({ identity: TEAMMATE_IDENTITY }),
+          teammate({ identity: OTHER_TEAMMATE_IDENTITY }),
+        ),
+        new Set([TEAMMATE_IDENTITY.agentName]),
+      ),
+    ).toBe(true)
+  })
+
+  test('a prompt naming no live row leaves delegated work holding', () => {
+    // Fail-safe direction: an unmatched badge must never release caffeinate.
+    expect(
+      deriveHasUnblockedDelegatedWork(
+        tasksOf(teammate({ identity: TEAMMATE_IDENTITY })),
+        new Set(['someone-else']),
+      ),
+    ).toBe(true)
+  })
+
+  test('a queued prompt does not exclude a local agent', () => {
+    // Only in_process_teammate rows can own a badged queue entry, so a name
+    // collision must not reach any other task type.
+    expect(
+      deriveHasUnblockedDelegatedWork(
+        tasksOf(localAgent({ identity: TEAMMATE_IDENTITY })),
+        new Set([TEAMMATE_IDENTITY.agentName]),
+      ),
     ).toBe(true)
   })
 })
@@ -1154,7 +1272,13 @@ describe('session status and sleep policy together', () => {
   }) {
     return {
       status: deriveTuiSessionStatus(args),
-      work: deriveHasOperationalWork(args),
+      // No delegated task is prompted in this table, so working and unblocked
+      // coincide. Where they diverge has its own describe above.
+      work: deriveHasOperationalWork({
+        isLoading: args.isLoading,
+        hasUnblockedDelegatedWork: args.hasWorkingDelegatedTask,
+        localWaitingReason: args.localWaitingReason,
+      }),
     }
   }
 
@@ -1362,5 +1486,107 @@ describe('REPL integration facts', () => {
         delegatedWaitingReason: waitingReason,
       }),
     ).toBe('idle')
+  })
+})
+
+describe('live path: a teammate blocked on the prompt the leader is showing', () => {
+  // Both halves come from production. The defect is exactly that the task row
+  // and the queue entry look independent, so a hand-written pair would prove
+  // nothing about whether they can coexist: spawnInProcessTeammate writes the
+  // row, createInProcessCanUseTool writes the queue entry, and neither knows
+  // about the other.
+  test('the real spawn row plus the real queue entry release caffeinate', async () => {
+    let appState = { tasks: {} } as unknown as AppState
+    const setAppState = (f: (prev: AppState) => AppState) => {
+      appState = f(appState)
+    }
+
+    const spawn = await spawnInProcessTeammate(
+      {
+        name: 'alice',
+        teamName: 'review-team',
+        prompt: 'audit the parser',
+        color: 'cyan',
+        planModeRequired: false,
+      },
+      { setAppState },
+    )
+    expect(spawn.success).toBe(true)
+    const row = appState.tasks[spawn.taskId!] as InProcessTeammateTaskState
+    expect(row.status).toBe('running')
+    expect(row.isIdle).toBe(false)
+
+    // Without a queued prompt this row is working, so the assertion below
+    // cannot pass by landing on an already-excluded row.
+    expect(deriveHasUnblockedDelegatedWork(appState.tasks, new Set())).toBe(true)
+
+    const queue: ToolUseConfirm[] = []
+    registerLeaderToolUseConfirmQueue(update => {
+      queue.splice(0, queue.length, ...update([...queue]))
+    })
+    try {
+      const canUseTool = inProcessRunnerForTest.createInProcessCanUseTool(
+        row.identity,
+        new AbortController(),
+      )
+      // Deliberately not awaited: the unresolved promise IS the blocked state.
+      void canUseTool(
+        {
+          name: 'Bash',
+          description: async () => 'Run pwd',
+        } as unknown as Tool,
+        { command: 'pwd' },
+        {
+          getAppState: () => appState,
+          options: { isNonInteractiveSession: false, tools: [] },
+        } as unknown as ToolUseContext,
+        {} as never,
+        'tool-use-blocked-teammate',
+        { behavior: 'ask', message: 'Claude needs your permission to use Bash' },
+      )
+      const deadline = Date.now() + 2000
+      while (queue.length === 0 && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 5))
+      }
+      expect(queue).toHaveLength(1)
+
+      // Exactly what REPL builds from the queue it renders.
+      const promptedWorkerHandles = new Set<string>()
+      for (const entry of queue) {
+        const handle = entry.workerBadge?.name
+        if (handle !== undefined) promptedWorkerHandles.add(handle)
+      }
+      expect(promptedWorkerHandles.size).toBe(1)
+
+      const hasUnblockedDelegatedWork = deriveHasUnblockedDelegatedWork(
+        appState.tasks,
+        promptedWorkerHandles,
+      )
+      expect(hasUnblockedDelegatedWork).toBe(false)
+      expect(
+        deriveHasOperationalWork({
+          isLoading: false,
+          hasUnblockedDelegatedWork,
+          localWaitingReason: 'tool-approval',
+        }),
+      ).toBe(false)
+
+      // Session status is untouched: the row still reports working, and the
+      // local reason still owns the answer.
+      expect(
+        deriveDelegatedTaskStatus(appState.tasks).hasWorkingDelegatedTask,
+      ).toBe(true)
+      expect(
+        deriveTuiSessionStatus({
+          isLoading: false,
+          hasWorkingDelegatedTask: true,
+          localWaitingReason: 'tool-approval',
+          delegatedWaitingReason: undefined,
+        }),
+      ).toBe('waiting')
+    } finally {
+      unregisterLeaderToolUseConfirmQueue()
+      row.abortController?.abort()
+    }
   })
 })
