@@ -130,7 +130,7 @@ local configuration.
 ## Run from source
 
 Cat Code does not currently have a supported end-user installation path. For an
-existing source checkout, use Bun 1.3.11 or newer and Git:
+existing source checkout, use Bun 1.4.0 or newer and Git:
 
 ```bash
 cd /path/to/cat-code && bun install
