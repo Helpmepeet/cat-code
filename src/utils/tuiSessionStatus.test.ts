@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test'
+import type { LocalAgentTaskState } from '../tasks/LocalAgentTask/LocalAgentTask.js'
+import type { InProcessTeammateTaskState } from '../tasks/InProcessTeammateTask/types.js'
+import type { RemoteAgentTaskState } from '../tasks/RemoteAgentTask/RemoteAgentTask.js'
 import type { TaskState } from '../tasks/types.js'
 import {
+  type DelegatedTaskFacts,
   type FocusedInputDialog,
   type FocusedInputDialogFacts,
   type TuiWaitingReason,
@@ -114,8 +118,15 @@ describe('deriveFocusedInputDialog: membership', () => {
   })
 
   test('does not contain the dead init-onboarding member', () => {
-    // REPL has no producer and no render branch for it.
-    expect(PRIORITY_ORDER).not.toContain('init-onboarding' as FocusedInputDialog)
+    // Type-level, not a runtime check on a test-local array: asserting that an
+    // array literal lacks a string the test author never wrote into it cannot
+    // fail. This reads the production union instead. REPL has no producer and
+    // no render branch for init-onboarding.
+    type HasInitOnboarding = 'init-onboarding' extends FocusedInputDialog
+      ? true
+      : false
+    const noInitOnboarding: HasInitOnboarding = false
+    expect(noInitOnboarding).toBe(false)
   })
 
   test('no dialog facts yields no focused dialog', () => {
@@ -309,6 +320,9 @@ const NO_LOCAL_WAITING = {
   focusedInputDialog: undefined as FocusedInputDialog | undefined,
   isExiting: false,
   hasExitFlow: false,
+  allowDialogsWithAnimation: true,
+  hasToolPermission: false,
+  hasPrompt: false,
   hasPendingWorkerRequest: false,
   hasPendingSandboxRequest: false,
   isShowingLocalJsxCommand: false,
@@ -328,14 +342,61 @@ describe('deriveLocalWaitingReason', () => {
     ).toBe('tool-approval')
   })
 
-  test('a visible voluntary dialog does not report hidden tool waiting', () => {
+  test('a visible voluntary dialog does not report a queue it outranks', () => {
+    // The tool queue lost the priority contest to the message selector, which
+    // is what focusedInputDialog reports. It is behind the selector, so the
+    // session is not waiting on it.
+    expect(
+      deriveLocalWaitingReason({
+        ...NO_LOCAL_WAITING,
+        focusedInputDialog: 'message-selector',
+        hasToolPermission: true,
+      }),
+    ).toBeUndefined()
+  })
+
+  test('a voluntary dialog does NOT mask a request rendered beside it', () => {
+    // WorkerPendingPermission renders outside the focused-dialog switch, so it
+    // is on screen next to the selector rather than behind it. Reporting idle
+    // here let goal continuation fire while a worker was blocked on the leader.
     expect(
       deriveLocalWaitingReason({
         ...NO_LOCAL_WAITING,
         focusedInputDialog: 'message-selector',
         hasPendingWorkerRequest: true,
       }),
-    ).toBeUndefined()
+    ).toBe('worker-request')
+  })
+
+  test('a non-blocking callout does not mask a pending sandbox request', () => {
+    expect(
+      deriveLocalWaitingReason({
+        ...NO_LOCAL_WAITING,
+        focusedInputDialog: 'desktop-upsell',
+        hasPendingSandboxRequest: true,
+      }),
+    ).toBe('sandbox-request')
+  })
+
+  test('a non-blocking callout does not mask a visible local JSX command', () => {
+    expect(
+      deriveLocalWaitingReason({
+        ...NO_LOCAL_WAITING,
+        focusedInputDialog: 'lsp-recommendation',
+        isShowingLocalJsxCommand: true,
+      }),
+    ).toBe('dialog-open')
+  })
+
+  test('a blocking dialog still wins over every fallback', () => {
+    expect(
+      deriveLocalWaitingReason({
+        ...NO_LOCAL_WAITING,
+        focusedInputDialog: 'tool-permission',
+        hasPendingWorkerRequest: true,
+        isShowingLocalJsxCommand: true,
+      }),
+    ).toBe('tool-approval')
   })
 
   test('a pending worker request reports worker-request when no dialog is observed', () => {
@@ -375,11 +436,68 @@ describe('deriveLocalWaitingReason', () => {
     ).toBe('worker-request')
   })
 
+  test('a queue hidden by the toolJSX animation gate still reports waiting', () => {
+    // A tool owns the frame with shouldContinueAnimation unset, so no dialog
+    // can render and none is observed, but the queued approval still blocks
+    // the session. Producers: computerUse/wrapper.tsx and processBashCommand.tsx.
+    expect(
+      deriveLocalWaitingReason({
+        ...NO_LOCAL_WAITING,
+        allowDialogsWithAnimation: false,
+        hasToolPermission: true,
+      }),
+    ).toBe('tool-approval')
+  })
+
+  test('a prompt hidden by the animation gate reports input needed', () => {
+    expect(
+      deriveLocalWaitingReason({
+        ...NO_LOCAL_WAITING,
+        allowDialogsWithAnimation: false,
+        hasPrompt: true,
+      }),
+    ).toBe('input-needed')
+  })
+
+  test('an ungated queue that simply lost to a dialog does not double-report', () => {
+    // Gate open: the queue is representable, so the dialog selector owns it and
+    // the direct queue check must stay quiet.
+    expect(
+      deriveLocalWaitingReason({
+        ...NO_LOCAL_WAITING,
+        allowDialogsWithAnimation: true,
+        hasToolPermission: true,
+      }),
+    ).toBeUndefined()
+  })
+
+  test('the animation-gated queue does not outrank a visible request', () => {
+    expect(
+      deriveLocalWaitingReason({
+        ...NO_LOCAL_WAITING,
+        allowDialogsWithAnimation: false,
+        hasToolPermission: true,
+        hasPendingWorkerRequest: true,
+      }),
+    ).toBe('worker-request')
+  })
+
+  test('exit suppresses a queue hidden by the animation gate', () => {
+    expect(
+      deriveLocalWaitingReason({
+        ...NO_LOCAL_WAITING,
+        hasExitFlow: true,
+        allowDialogsWithAnimation: false,
+        hasToolPermission: true,
+      }),
+    ).toBeUndefined()
+  })
+
   test('exit suppresses every pending queue', () => {
     expect(
       deriveLocalWaitingReason({
+        ...NO_LOCAL_WAITING,
         focusedInputDialog: 'tool-permission',
-        isExiting: false,
         hasExitFlow: true,
         hasPendingWorkerRequest: true,
         hasPendingSandboxRequest: true,
@@ -391,9 +509,8 @@ describe('deriveLocalWaitingReason', () => {
   test('isExiting suppresses every pending queue', () => {
     expect(
       deriveLocalWaitingReason({
-        focusedInputDialog: undefined,
+        ...NO_LOCAL_WAITING,
         isExiting: true,
-        hasExitFlow: false,
         hasPendingWorkerRequest: true,
         hasPendingSandboxRequest: true,
         isShowingLocalJsxCommand: true,
@@ -430,6 +547,40 @@ describe('deriveTuiWaitingDetail', () => {
 })
 
 // -- Delegated tasks
+
+/**
+ * Compile-time anchor for the five fields the classifier reads off real task
+ * rows. `TaskState` widens to `any` (src/tasks/types.ts imports two modules
+ * that do not exist on disk), so nothing else in the repo checks these names:
+ * a rename in an owning module would silently reclassify every task as working
+ * with this whole suite still green.
+ *
+ * Two separate assertions, because they catch different mistakes:
+ *
+ * 1. Key presence. Assignability alone does NOT catch a rename here, since
+ *    every field is optional on DelegatedTaskFacts and a source type that
+ *    lacks an optional property stays assignable. Verified by experiment:
+ *    renaming handoffStatus in LocalAgentTask.tsx produced no error from the
+ *    assignment below, and does produce one from this table.
+ * 2. Type compatibility, for a field that keeps its name but changes shape
+ *    (e.g. ultraplanPhase gaining a third phase).
+ */
+type HasKey<T, K extends string> = K extends keyof T ? true : false
+
+const _delegatedFieldNamesExist: [
+  HasKey<LocalAgentTaskState, 'handoffStatus'>,
+  HasKey<InProcessTeammateTaskState, 'awaitingPlanApproval'>,
+  HasKey<InProcessTeammateTaskState, 'isIdle'>,
+  HasKey<RemoteAgentTaskState, 'ultraplanPhase'>,
+  HasKey<RemoteAgentTaskState, 'isLongRunning'>,
+] = [true, true, true, true, true]
+void _delegatedFieldNamesExist
+
+const _delegatedFieldTypesMatch: DelegatedTaskFacts = {} as
+  | LocalAgentTaskState
+  | RemoteAgentTaskState
+  | InProcessTeammateTaskState
+void _delegatedFieldTypesMatch
 
 type TaskFixture = Record<string, unknown>
 
@@ -514,7 +665,25 @@ describe('deriveDelegatedTaskStatus: working states', () => {
 })
 
 describe('deriveDelegatedTaskStatus: waiting states', () => {
-  test('a blocked local agent is waiting, not working', () => {
+  // KNOWN GAP, verified against source 2026-08-21: production cannot currently
+  // reach the nonterminal-blocked state this branch is written for.
+  // completeAgentTask (src/tasks/LocalAgentTask/LocalAgentTask.tsx:538) is the
+  // ONLY writer of handoffStatus and always sets status:'completed' in the same
+  // literal, so handoffStatus==='blocked' implies terminal and the terminal
+  // guard returns 'none' first. The footer pill (src/tasks/pillLabel.ts:117)
+  // does NOT gate on terminal status, so it shows "needs input" while session
+  // status says idle. Do not delete these two tests without deciding that
+  // question: the first pins what production actually produces today, the
+  // second pins the branch contract if a nonterminal blocked row ever exists.
+  test('a blocked local agent as production writes it is excluded, not waiting', () => {
+    expect(
+      deriveDelegatedTaskStatus(
+        tasksOf(localAgent({ status: 'completed', handoffStatus: 'blocked' })),
+      ),
+    ).toEqual({ hasWorkingDelegatedTask: false })
+  })
+
+  test('a nonterminal blocked local agent would be waiting, not working', () => {
     expect(
       deriveDelegatedTaskStatus(
         tasksOf(localAgent({ handoffStatus: 'blocked' })),
@@ -833,26 +1002,11 @@ describe('session status and sleep policy together', () => {
 // -- Integration facts REPL depends on
 
 describe('REPL integration facts', () => {
-  test('exitFlow is a null check, not a truthiness check', () => {
-    // exitFlow is a ReactNode; an empty-string or 0 flow still means exiting.
-    const exitFlow: unknown = ''
-    expect(
-      deriveFocusedInputDialog(
-        factsFor(['tool-permission'], { hasExitFlow: exitFlow != null }),
-      ),
-    ).toBeUndefined()
-  })
-
-  test('the cost dialog uses the already-gated showingCostDialog fact', () => {
-    // showingCostDialog is `!isLoading && showCostDialog`; the raw flag must
-    // not reach the selector while a turn is running.
-    const isLoading = true
-    const showCostDialog = true
-    const showingCostDialog = !isLoading && showCostDialog
-    expect(
-      deriveFocusedInputDialog({ ...NO_DIALOGS, hasCostDialog: showingCostDialog }),
-    ).toBeUndefined()
-  })
+  // Deliberately absent: tests that recompute REPL's own fact conversion
+  // (`exitFlow != null`, `!isLoading && showCostDialog`) in the test body and
+  // then assert on the result. They pass whatever REPL does, so they would give
+  // false confidence in exactly the wiring this module cannot see. Verifying
+  // those conversions needs a REPL-level render test, which does not exist yet.
 
   test('visible local sandbox plus a tool queue reports sandbox waiting', () => {
     const dialog = deriveFocusedInputDialog(
@@ -916,8 +1070,8 @@ describe('REPL integration facts', () => {
     const facts = factsFor(PRIORITY_ORDER, { hasExitFlow: true })
     const dialog = deriveFocusedInputDialog(facts)
     const reason = deriveLocalWaitingReason({
+      ...NO_LOCAL_WAITING,
       focusedInputDialog: dialog,
-      isExiting: false,
       hasExitFlow: true,
       hasPendingWorkerRequest: true,
       hasPendingSandboxRequest: true,

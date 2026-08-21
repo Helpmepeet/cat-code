@@ -130,6 +130,16 @@ inspection and manual REPL verification are still normal.
 - Do not add a second dialog priority list or a second `waiting > busy > idle`
   derivation. Both live in `src/utils/tuiSessionStatus.ts`; a local copy is how
   the exported status and the visible dialog disagreed before.
+- Do not treat "a dialog is focused" as "the session is waiting". Only the
+  members that map to a reason in `WAITING_REASON_BY_DIALOG` block; a callout
+  or the message selector owns focus while the session waits on nobody. And a
+  focused non-blocking dialog must not mask a worker or sandbox request, which
+  renders outside the dialog switch and is therefore on screen beside it.
+- Do not assume an unrenderable queue is an inactive one. When a tool owns the
+  frame without `shouldContinueAnimation`, no dialog below the local sandbox
+  prompt can render, so a queued approval is invisible and still blocking;
+  `deriveLocalWaitingReason` re-checks the tool and prompt queues directly in
+  that state.
 - Do not make an effect depend on a freshly allocated derivation result.
   `deriveDelegatedTaskStatus()` returns an object; REPL destructures it into
   primitives before any dependency array sees it.

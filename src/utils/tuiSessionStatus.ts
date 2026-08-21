@@ -183,6 +183,15 @@ export type LocalWaitingFacts = {
   focusedInputDialog: FocusedInputDialog | undefined
   isExiting: boolean
   hasExitFlow: boolean
+  /**
+   * False when a tool owns the frame (`toolJSX` without
+   * `shouldContinueAnimation`). Every dialog below the local sandbox prompt is
+   * then unrenderable, so a queued approval is invisible while still blocking
+   * the session.
+   */
+  allowDialogsWithAnimation: boolean
+  hasToolPermission: boolean
+  hasPrompt: boolean
   hasPendingWorkerRequest: boolean
   hasPendingSandboxRequest: boolean
   isShowingLocalJsxCommand: boolean
@@ -191,21 +200,39 @@ export type LocalWaitingFacts = {
 /**
  * Why the session is blocked on this user, if it is.
  *
- * Outgoing worker and sandbox requests render outside the focused-dialog
- * switch, so they only apply when no dialog is observed. A visible local-JSX
- * command is the last fallback. Exit suppresses all of it: a session on its
- * way out is not waiting on anybody.
+ * Only a dialog that actually blocks ends the search. Voluntary navigation, a
+ * callout, or an upsell owns keyboard focus without the session waiting on
+ * anyone, and must not mask a request rendered *beside* it: outgoing worker and
+ * sandbox prompts render outside the focused-dialog switch
+ * (`REPL.tsx` `<WorkerPendingPermission>`), so they are on screen at the same
+ * time as the dialog, not behind it.
+ *
+ * Queues that lost the priority contest to a visible dialog are already
+ * excluded, because losing that contest is what `focusedInputDialog` reports.
+ * The one exception is the animation gate: it hides the queue without any
+ * dialog winning, so the tool and prompt queues are re-checked directly there,
+ * which is the ungated check the pre-refactor code always did.
+ *
+ * Exit suppresses all of it: a session on its way out is not waiting on anybody.
  */
 export function deriveLocalWaitingReason(
   facts: LocalWaitingFacts,
 ): TuiWaitingReason | undefined {
   if (facts.isExiting || facts.hasExitFlow) return undefined
-  if (facts.focusedInputDialog !== undefined) {
-    return getDialogWaitingReason(facts.focusedInputDialog)
-  }
+
+  const dialogReason = getDialogWaitingReason(facts.focusedInputDialog)
+  if (dialogReason !== undefined) return dialogReason
+
   if (facts.hasPendingWorkerRequest) return 'worker-request'
   if (facts.hasPendingSandboxRequest) return 'sandbox-request'
   if (facts.isShowingLocalJsxCommand) return 'dialog-open'
+
+  // Ordered after the visible surfaces so the reported detail names what the
+  // user can actually see when both are true.
+  if (!facts.allowDialogsWithAnimation) {
+    if (facts.hasToolPermission) return 'tool-approval'
+    if (facts.hasPrompt) return 'input-needed'
+  }
   return undefined
 }
 
@@ -217,9 +244,11 @@ export function deriveTuiWaitingDetail(args: {
   reason: TuiWaitingReason | undefined
   toolName?: string
 }): string | undefined {
+  // Hoisted, not a `case undefined:`. With `strictNullChecks` off, undefined is
+  // erased from the union, so a case for it stops the default clause from
+  // narrowing to `never` and silently disarms the exhaustiveness tripwire.
+  if (args.reason === undefined) return undefined
   switch (args.reason) {
-    case undefined:
-      return undefined
     case 'tool-approval':
       return args.toolName === undefined
         ? 'input needed'
@@ -252,7 +281,7 @@ export type DelegatedTaskStatus = {
  * (`LocalWorkflowTask`, `MonitorMcpTask`). Naming the fields here keeps this
  * classification checked regardless of that.
  */
-type DelegatedTaskFacts = {
+export type DelegatedTaskFacts = {
   type: TaskType
   status: TaskStatus
   /** local_agent: 'blocked' means the agent handed a question back to the user. */
@@ -375,10 +404,16 @@ export function deriveTuiSessionStatus(args: {
 /**
  * Whether the machine should be kept awake.
  *
- * Deliberately not `sessionStatus !== 'idle'`. A foreground turn parked on a
- * permission dialog must stop holding `caffeinate`, which is existing
- * behavior, but delegated work that is still running must keep holding it even
- * while something else waits on the user.
+ * Deliberately not `sessionStatus !== 'idle'`. A local turn parked on a
+ * permission dialog stops holding `caffeinate`, which is existing behavior,
+ * while delegated work that is still running keeps holding it.
+ *
+ * Known limit: the two terms are independent, so this cannot tell "a worker is
+ * computing while the leader waits" from "the worker is waiting on the prompt
+ * the leader is showing". In the second case the task row still reads
+ * `running`, so `caffeinate` is held even though nothing can progress until a
+ * human answers. Resolving that needs a task-to-request correlation this
+ * derivation does not have.
  */
 export function deriveHasOperationalWork(args: {
   isLoading: boolean

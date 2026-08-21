@@ -2210,13 +2210,14 @@ export function REPL({
   // Permission and interactive dialogs can show even when toolJSX is set,
   // as long as shouldContinueAnimation is true. This prevents deadlocks when
   // agents set background hints while waiting for user interaction.
+  const allowDialogsWithAnimation = !toolJSX || !!toolJSX.shouldContinueAnimation;
   const focusedInputDialogFacts: FocusedInputDialogFacts = {
     isExiting,
     hasExitFlow: exitFlow != null,
     isMessageSelectorVisible,
     // Suppress interrupt dialogs while user is actively typing
     suppressInterruptDialogs: isPromptInputActive,
-    allowDialogsWithAnimation: !toolJSX || !!toolJSX.shouldContinueAnimation,
+    allowDialogsWithAnimation,
     hasSandboxPermission: sandboxPermissionRequestQueue[0] != null,
     hasToolPermission: toolUseConfirmQueue[0] != null,
     hasPrompt: promptQueue[0] != null,
@@ -2269,12 +2270,16 @@ export function REPL({
   const delegatedWaitingReason = delegatedTaskStatus.waitingReason;
 
   // The dialog typing is hiding still blocks the session, so waiting reads
-  // the prospective dialog. Outgoing worker/sandbox requests render outside
-  // the dialog switch and apply only when no dialog is observed.
+  // the prospective dialog. Worker/sandbox requests render outside the dialog
+  // switch, so a voluntary dialog must not mask them; and a queue hidden by
+  // the toolJSX animation gate is still blocking even though it cannot render.
   const localWaitingReason = deriveLocalWaitingReason({
     focusedInputDialog: prospectiveInputDialog,
     isExiting,
     hasExitFlow: exitFlow != null,
+    allowDialogsWithAnimation,
+    hasToolPermission: toolUseConfirmQueue[0] != null,
+    hasPrompt: promptQueue[0] != null,
     hasPendingWorkerRequest: pendingWorkerRequest != null,
     hasPendingSandboxRequest: pendingSandboxRequest != null,
     isShowingLocalJsxCommand: isShowingLocalJSXCommand
