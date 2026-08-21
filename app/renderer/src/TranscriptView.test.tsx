@@ -199,6 +199,26 @@ test('renders workspace file paths as open-file controls without linkifying web 
   expect(html).not.toContain('aria-label="Open www.example.com/readme.md"')
 })
 
+test('a markdown link to a workspace path opens the file, and a line suffix is dropped', () => {
+  const html = render({
+    ...blockSource,
+    id: 's:m:0:filelink',
+    kind: 'assistant-text',
+    role: 'assistant',
+    content:
+      'See [foo.ts](src/utils/foo.ts) and [Bar.tsx:42](app/components/Bar.tsx:42), plus [the docs](https://example.com/readme.md).',
+  })
+
+  expect(html).toContain('aria-label="Open src/utils/foo.ts"><svg')
+  expect(html).toContain('</svg>foo.ts</button>')
+  // The `:42` addresses a line, not a file on disk: main stats the path itself.
+  expect(html).toContain('aria-label="Open app/components/Bar.tsx"><svg')
+  expect(html).toContain('</svg>Bar.tsx:42</button>')
+  // An external link stays an anchor, never an open-file control.
+  expect(html).toContain('href="https://example.com/readme.md"')
+  expect(html).not.toContain('aria-label="Open https://example.com/readme.md"')
+})
+
 test('a version number is not a file path', () => {
   const html = render({
     ...blockSource,

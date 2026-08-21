@@ -1092,6 +1092,7 @@ function AssistantProse({
     () => ({
       ...MARKDOWN_COMPONENTS,
       blockquote: createBlockquoteComponent(content),
+      a: createPathAwareAnchor(openFile),
       p: createPathAwareParagraph(openFile),
       li: createPathAwareListItem(openFile),
       code: createPathAwareCode(openFile),
@@ -1260,6 +1261,46 @@ function createPathAwareListItem(openFile: (path: string) => void) {
   }: ComponentPropsWithoutRef<'li'> & { node?: unknown }) {
     void _node
     return <li {...props}>{linkifyFilePathChildren(children, openFile)}</li>
+  }
+}
+
+/**
+ * A markdown link is the ONE unambiguous file reference in assistant prose: the
+ * harness prompt asks for `[foo.ts](src/foo.ts)`, optionally with a `:line`
+ * suffix. Returns the path to open, or null for anything addressed elsewhere
+ * (a scheme, a protocol-relative host, a bare fragment). Containment inside the
+ * session workspace is main's call, not the renderer's
+ * (`app/main/openWorkspaceFile.ts`).
+ */
+function workspaceFileHref(href: string | undefined): string | null {
+  if (href === undefined || href.length === 0) return null
+  if (href.startsWith('#') || href.startsWith('//')) return null
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(href)) return null
+  const path = href.replace(/[?#].*$/, '').replace(/:\d+(?::\d+)?$/, '')
+  return path.length === 0 ? null : path
+}
+
+function createPathAwareAnchor(openFile: (path: string) => void) {
+  return function PathAwareAnchor({
+    children,
+    href,
+    node: _node,
+    ...props
+  }: ComponentPropsWithoutRef<'a'> & { node?: unknown }) {
+    void _node
+    const path = workspaceFileHref(href)
+    if (path === null) return <a {...props} href={href}>{children}</a>
+    return (
+      <button
+        className="inline-flex items-center gap-0.5 rounded-sm align-baseline text-accent hover:text-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+        type="button"
+        aria-label={`Open ${path}`}
+        onClick={() => openFile(path)}
+      >
+        <ActionFileIcon />
+        {children}
+      </button>
+    )
   }
 }
 
