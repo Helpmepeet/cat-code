@@ -174,6 +174,32 @@ export function getDialogWaitingReason(
   return dialog === undefined ? undefined : WAITING_REASON_BY_DIALOG[dialog]
 }
 
+/**
+ * Whether typing is hiding a dialog that actually blocks the user, which is
+ * what the prompt-input hint reports.
+ *
+ * Derived from the same facts and the same selector as everything else here,
+ * because the hint used to be a hand-written OR over the raw queues in
+ * `REPL.tsx` and had drifted in both directions: silent for the idle-return,
+ * paused-goal, ultraplan, and IDE-onboarding dialogs, and shown while exiting
+ * or while a tool owned the frame, where no dialog can appear once typing
+ * stops.
+ *
+ * Non-blocking dialogs are excluded by `getDialogWaitingReason`: a callout,
+ * recommendation, or upsell that typing is hiding is not something the user is
+ * being kept from.
+ */
+export function deriveHasSuppressedDialog(
+  facts: FocusedInputDialogFacts,
+): boolean {
+  if (!facts.suppressInterruptDialogs) return false
+  const prospective = deriveFocusedInputDialog({
+    ...facts,
+    suppressInterruptDialogs: false,
+  })
+  return getDialogWaitingReason(prospective) !== undefined
+}
+
 export type LocalWaitingFacts = {
   /**
    * The dialog the session is observed to be on: the visible one, or the one
