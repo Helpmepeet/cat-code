@@ -1024,12 +1024,21 @@ export async function runAsyncAgentLifecycle({
     // below release it, and the release DELETES the entry. Reaches the stored
     // task result (TaskOutput, the resumed-run card), NOT the launch record,
     // whose account was stamped on its acknowledgment at dispatch.
-    // Gated on the worker's own model, like every other capture. Registration
-    // is gated the same way now (`registerWorkerCodexLease`), so an Anthropic
-    // worker holds nothing to report; this stays as the gate on the CLAIM,
-    // since naming an account the run never touched is the failure that counts.
+    // Gated on the worker's own model AND its own provider, like every other
+    // capture (`reportableAccount`, `registerWorkerCodexLease`). Both arguments
+    // are load-bearing: a non-gpt model leaves routing to the base provider,
+    // and omitting it falls back to the process-global session provider, which
+    // is the PARENT's. A gpt worker's background child runs on
+    // mainLoopProvider='openai' with a Claude model while the session sits on
+    // Anthropic, so the global answer drops a lease the child really spent.
+    // Registration is gated the same way, so an Anthropic worker holds nothing
+    // to report; this stays as the gate on the CLAIM, since naming an account
+    // the run never touched is the failure that counts.
     const terminalAccount =
-      resolveRequestProvider(metadata.resolvedAgentModel) === 'openai'
+      resolveRequestProvider(
+        metadata.resolvedAgentModel,
+        toolUseContext.options.mainLoopProvider,
+      ) === 'openai'
         ? snapshotLeaseAccount(taskId)
         : undefined
     const agentResult = finalizeAgentTool(agentMessages, taskId, {
