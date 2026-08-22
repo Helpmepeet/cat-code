@@ -1,4 +1,6 @@
 import { expect, mock, test } from 'bun:test'
+import { getSessionProvider, setSessionProvider } from '../bootstrap/state.js'
+import type { Tool, ToolUseContext } from '../Tool.js'
 
 const source = await Bun.file(new URL('./analyzeContext.ts', import.meta.url)).text()
 const usage = {
@@ -83,7 +85,9 @@ test('the display estimate is opt-in, so the tool-search sentinel survives', () 
     /async function countTokensForDisplay[\s\S]*?return estimateTokensForDisplay/,
   )
   // countToolDefinitionTokens estimates only when explicitly asked.
-  expect(source).toContain('options?: { estimateWhenUnavailable?: boolean }')
+  expect(source).toMatch(
+    /options\?: \{\s*estimateWhenUnavailable\?: boolean/,
+  )
   expect(source).toMatch(
     /if \(options\?\.estimateWhenUnavailable\) \{\s*return estimateTokensForDisplay/,
   )
@@ -117,4 +121,44 @@ test('/context headline includes cached usage on the raw context window basis', 
   expect(result.maxTokens).toBe(372_000)
   expect(result.rawMaxTokens).toBe(372_000)
   expect(result.percentage).toBe(42)
+})
+
+test('/context renders tool schemas with the worker provider, not the session provider', async () => {
+  const previousProvider = getSessionProvider()
+  setSessionProvider('firstParty')
+  const providerSensitiveTool = {
+    name: 'ProviderSensitiveTool',
+    inputJSONSchema: { type: 'object', properties: {} },
+    prompt: async ({ provider }: { provider?: string }) =>
+      provider === 'openai' ? 'o'.repeat(30_000) : 'a',
+  } as unknown as Tool
+
+  try {
+    const result = await analyzeContextUsage(
+      [],
+      'claude-sonnet-4-6',
+      async () => ({
+        mode: 'default',
+        additionalWorkingDirectories: new Map(),
+        alwaysAllowRules: {},
+        alwaysDenyRules: {},
+        alwaysAskRules: {},
+        isBypassPermissionsModeAvailable: false,
+      }),
+      [providerSensitiveTool],
+      { activeAgents: [] } as never,
+      undefined,
+      { options: { mainLoopProvider: 'openai' } } as Pick<
+        ToolUseContext,
+        'options'
+      >,
+    )
+
+    expect(
+      result.categories.find(category => category.name === 'System tools')
+        ?.tokens,
+    ).toBeGreaterThan(9_000)
+  } finally {
+    setSessionProvider(previousProvider)
+  }
 })

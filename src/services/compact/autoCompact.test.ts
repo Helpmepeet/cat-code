@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { resetStateForTests, setSessionProvider } from '../../bootstrap/state.js'
 
 import {
   _resetToolSchemaTokensMemoForTest,
@@ -343,10 +344,13 @@ describe('measureNonMessageOverheadTokens', () => {
 
   beforeEach(() => {
     _resetToolSchemaTokensMemoForTest()
+    resetStateForTests()
+    setSessionProvider('firstParty')
   })
 
   afterEach(() => {
     _resetToolSchemaTokensMemoForTest()
+    resetStateForTests()
   })
 
   function fakeTool(name: string, descriptionChars: number): Tool {
@@ -357,11 +361,15 @@ describe('measureNonMessageOverheadTokens', () => {
     } as unknown as Tool
   }
 
-  function contextWith(tools: Tool[]): ToolUseContext {
+  function contextWith(
+    tools: Tool[],
+    mainLoopProvider?: 'openai' | 'firstParty',
+  ): ToolUseContext {
     return {
       options: {
         tools,
         agentDefinitions: { activeAgents: [], allowedAgentTypes: [] },
+        mainLoopProvider,
       },
       getAppState: () => ({
         toolPermissionContext: getEmptyToolPermissionContext(),
@@ -369,10 +377,14 @@ describe('measureNonMessageOverheadTokens', () => {
     } as unknown as ToolUseContext
   }
 
-  function measure(tools: Tool[], systemPrompt: string[] = []) {
+  function measure(
+    tools: Tool[],
+    systemPrompt: string[] = [],
+    mainLoopProvider?: 'openai' | 'firstParty',
+  ) {
     return measureNonMessageOverheadTokens({
       model: MODEL,
-      toolUseContext: contextWith(tools),
+      toolUseContext: contextWith(tools, mainLoopProvider),
       systemPrompt,
       userContext: {},
       systemContext: {},
@@ -425,5 +437,28 @@ describe('measureNonMessageOverheadTokens', () => {
 
     expect(mainAgain).toBe(mainFirst)
     expect(forkTokens).toBeLessThan(mainFirst)
+  })
+
+  test('uses each worker provider when rendering and memoizing an ambiguous-model schema', async () => {
+    const providerSensitiveTool = {
+      name: 'ProviderSensitiveTool',
+      inputJSONSchema: { type: 'object', properties: {} },
+      prompt: async ({ provider }: { provider?: string }) =>
+        provider === 'openai' ? 'o'.repeat(30_000) : 'a',
+    } as unknown as Tool
+
+    const openaiTokens = await measure(
+      [providerSensitiveTool],
+      [],
+      'openai',
+    )
+    const firstPartyTokens = await measure(
+      [providerSensitiveTool],
+      [],
+      'firstParty',
+    )
+
+    expect(openaiTokens).toBeGreaterThan(9_000)
+    expect(firstPartyTokens).toBeLessThan(1_000)
   })
 })

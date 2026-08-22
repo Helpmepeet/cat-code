@@ -339,7 +339,8 @@ const TOOL_SCHEMA_CHARS_PER_TOKEN = 3
  * the prompt cache — so re-serializing every tool on every turn buys nothing.
  * The memo key is the tool set itself, because that is the one thing that does
  * change mid-session: deferred-tool discovery grows `tools`, and MCP reconnects
- * add or drop names. Model is in the key too (openai renames schema properties).
+ * add or drop names. Model and provider are in the key too (openai renames
+ * schema properties).
  *
  * A map rather than a single slot because several tool sets are live at once in
  * one process: subagents carry their own, and the compact and session-memory
@@ -386,7 +387,8 @@ async function measureToolSchemaTokens(
   const sentTools = mayDefer
     ? allTools.filter(tool => !isDeferredTool(tool))
     : allTools
-  const key = `${model}|${mayDefer}|${sentTools.length}|${sentTools
+  const provider = toolUseContext.options.mainLoopProvider
+  const key = `${model}|${provider ?? 'default'}|${mayDefer}|${sentTools.length}|${sentTools
     .map(tool => tool.name)
     .join(',')}`
   const memoized = toolSchemaTokensMemo.get(key)
@@ -408,6 +410,7 @@ async function measureToolSchemaTokens(
         agents: agentDefinitions?.activeAgents ?? [],
         allowedAgentTypes: agentDefinitions?.allowedAgentTypes,
         model,
+        provider,
       }),
     ),
   )

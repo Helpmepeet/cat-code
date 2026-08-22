@@ -56,6 +56,7 @@ import { errorMessage, toError } from './errors.js'
 import { logError } from './log.js'
 import { normalizeMessagesForAPI } from './messages.js'
 import { getRuntimeMainLoopModel } from './model/model.js'
+import type { APIProvider } from './model/providers.js'
 import type { SettingSource } from './settings/constants.js'
 import { jsonStringify } from './slowOperations.js'
 import { buildEffectiveSystemPrompt } from './systemPrompt.js'
@@ -314,7 +315,10 @@ export async function countToolDefinitionTokens(
   getToolPermissionContext: () => Promise<ToolPermissionContext>,
   agentInfo: AgentDefinitionsResult | null,
   model?: string,
-  options?: { estimateWhenUnavailable?: boolean },
+  options?: {
+    estimateWhenUnavailable?: boolean
+    provider?: APIProvider
+  },
 ): Promise<number> {
   const toolSchemas = await Promise.all(
     tools.map(tool =>
@@ -323,6 +327,7 @@ export async function countToolDefinitionTokens(
         tools,
         agents: agentInfo?.activeAgents ?? [],
         model,
+        provider: options?.provider,
       }),
     ),
   )
@@ -448,6 +453,7 @@ async function countBuiltInToolTokens(
   agentInfo: AgentDefinitionsResult | null,
   model?: string,
   messages?: Message[],
+  provider?: APIProvider,
 ): Promise<{
   builtInToolTokens: number
   deferredBuiltinDetails: DeferredBuiltinTool[]
@@ -487,7 +493,7 @@ async function countBuiltInToolTokens(
           getToolPermissionContext,
           agentInfo,
           model,
-          { estimateWhenUnavailable: true },
+          { estimateWhenUnavailable: true, provider },
         )
       : 0
 
@@ -552,7 +558,7 @@ async function countBuiltInToolTokens(
           getToolPermissionContext,
           agentInfo,
           model,
-          { estimateWhenUnavailable: true },
+          { estimateWhenUnavailable: true, provider },
         ),
       ),
     )
@@ -580,7 +586,7 @@ async function countBuiltInToolTokens(
       getToolPermissionContext,
       agentInfo,
       model,
-      { estimateWhenUnavailable: true },
+      { estimateWhenUnavailable: true, provider },
     )
     return {
       builtInToolTokens: alwaysLoadedTokens + deferredTokens,
@@ -607,6 +613,7 @@ async function countSlashCommandTokens(
   tools: Tools,
   getToolPermissionContext: () => Promise<ToolPermissionContext>,
   agentInfo: AgentDefinitionsResult | null,
+  provider?: APIProvider,
 ): Promise<{
   slashCommandTokens: number
   commandInfo: { totalCommands: number; includedCommands: number }
@@ -626,7 +633,7 @@ async function countSlashCommandTokens(
     getToolPermissionContext,
     agentInfo,
     undefined,
-    { estimateWhenUnavailable: true },
+    { estimateWhenUnavailable: true, provider },
   )
 
   return {
@@ -642,6 +649,7 @@ async function countSkillTokens(
   tools: Tools,
   getToolPermissionContext: () => Promise<ToolPermissionContext>,
   agentInfo: AgentDefinitionsResult | null,
+  provider?: APIProvider,
 ): Promise<{
   skillTokens: number
   skillInfo: {
@@ -670,7 +678,7 @@ async function countSkillTokens(
       getToolPermissionContext,
       agentInfo,
       undefined,
-      { estimateWhenUnavailable: true },
+      { estimateWhenUnavailable: true, provider },
     )
 
     // Calculate per-skill token estimates based on frontmatter only
@@ -708,6 +716,7 @@ export async function countMcpToolTokens(
   agentInfo: AgentDefinitionsResult | null,
   model: string,
   messages?: Message[],
+  provider?: APIProvider,
 ): Promise<{
   mcpToolTokens: number
   mcpToolDetails: McpTool[]
@@ -722,7 +731,7 @@ export async function countMcpToolTokens(
     getToolPermissionContext,
     agentInfo,
     model,
-    { estimateWhenUnavailable: true },
+    { estimateWhenUnavailable: true, provider },
   )
   // Subtract the single overhead since we made one bulk call
   const totalTokens = Math.max(
@@ -1018,6 +1027,7 @@ export async function analyzeContextUsage(
   originalMessages?: Message[],
 ): Promise<ContextData> {
   const toolPermissionContext = await getToolPermissionContext()
+  const provider = toolUseContext?.options.mainLoopProvider
   const runtimeModel = getRuntimeMainLoopModel({
     permissionMode: toolPermissionContext.mode,
     mainLoopModel: model,
@@ -1085,6 +1095,7 @@ export async function analyzeContextUsage(
       agentDefinitions,
       runtimeModel,
       messages,
+      provider,
     ),
     countMcpToolTokens(
       tools,
@@ -1092,9 +1103,15 @@ export async function analyzeContextUsage(
       agentDefinitions,
       runtimeModel,
       messages,
+      provider,
     ),
     countCustomAgentTokens(agentDefinitions),
-    countSlashCommandTokens(tools, getToolPermissionContext, agentDefinitions),
+    countSlashCommandTokens(
+      tools,
+      getToolPermissionContext,
+      agentDefinitions,
+      provider,
+    ),
     approximateMessageTokens(messages),
   ])
 
@@ -1103,6 +1120,7 @@ export async function analyzeContextUsage(
     tools,
     getToolPermissionContext,
     agentDefinitions,
+    provider,
   )
   const skillInfo = skillResult.skillInfo
   // Use sum of individual skill token estimates (matches what's shown in details)
