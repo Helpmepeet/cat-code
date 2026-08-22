@@ -2456,8 +2456,9 @@ function agentProgressBadge(
   // got usage" as the claim "0 tokens", beside a worker that made 55 tool calls.
   //
   // A worker that did not FINISH drops the figure whatever its value: its
-  // totals are a partial tally, and printing them beside a red or amber face
-  // invites the reader to compare a broken run's cost against a whole one's.
+  // totals are a partial tally, and printing them beside a row that has just
+  // said Failed or Stopped invites the reader to compare a broken run's cost
+  // against a whole one's.
   const settledWhole = state !== 'failed' && state !== 'stopped'
   if (settledWhole && settledUsage && settledUsage.totalTokens > 0) {
     parts.push(`${compactCount(settledUsage.totalTokens)} tokens`)
@@ -2751,8 +2752,8 @@ function RejectedResumeCard({
  * by the model. What the redesign REMOVED is as load-bearing as what it added,
  * so none of it comes back: the ◆ mark and the AGENT family word (every row here
  * is an agent, and the two glyphs spent ~90px of the left edge saying so), the
- * role dot (the face already carries state, so a second coloured mark answered
- * the same question twice), the identity strip as its own band, and the
+ * role dot (the face is the identity mark now, so a second coloured identity
+ * mark answered the same question twice), the identity strip as its own band, and the
  * lifecycle word everywhere except Failed and Stopped, which need to stop a
  * reader scanning.
  *
@@ -2827,7 +2828,9 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
   // "backgrounded" beside line 2's "Failed".
   const slot = agentProgressBadge(row, state)
   // The two states that need to stop a reader mid-scan keep their word; every
-  // other state is told by the face's colour alone.
+  // other state is told by the face's pulse and the right-hand slot. NOT by its
+  // colour: that is the worker's own identity, handed out by the session
+  // registry, and it never moves with a state.
   const stateWord =
     state === 'failed' || state === 'stopped' ? vocab.state.label : null
   const lines = (
@@ -4457,8 +4460,8 @@ function agentNameInSummary(summary: string): string | null {
  * without one.
  *
  * No status word rides alongside: every summary already ends in its outcome, so
- * a chip would print the same word twice. The face carries it as colour, and the
- * worker's own name inside the sentence is set in mono so the row is scannable
+ * a chip would print the same word twice. The face here is identity only, drawn
+ * with no pulse, so it carries no outcome at all. The worker's own name inside the sentence is set in mono so the row is scannable
  * against the card it belongs to.
  */
 function TaskNotificationBox({ summary }: { summary: string | null }) {

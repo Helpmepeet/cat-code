@@ -214,7 +214,7 @@ function WorkerRow({
  * How a worker is named on the line. `handle` is null whenever the Agent tool ran
  * unnamed, which is the COMMON case, so there are three honest faces and no
  * invented one:
- *   - a genuine handle → the mono `@handle` vocabulary;
+ *   - a genuine handle → the mono bare-name vocabulary;
  *   - null, blank, or legacy `handle === agentId` → nothing;
  *   - the task description and normalized type remain separate row fields.
  */
