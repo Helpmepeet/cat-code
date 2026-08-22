@@ -21,10 +21,7 @@ Three things are actually wrong, and none of them is "the code is slop":
 
 This report is the evidence. Appendices carry the raw tables.
 
-- Appendix A — [re-verification of 33 VALID findings against source](2026-08-22-review-impl-audit-appendix-a-reverification.md)
-- Appendix B — [finding corpus, taxonomy, and the false-positive causes](2026-08-22-review-impl-audit-appendix-b-corpus.md)
-- Appendix C — [escapes, reverted fixes, and recurring defect shapes](2026-08-22-review-impl-audit-appendix-c-escapes.md)
-- Appendix D — [yield normalization, trend, and battery-catchability](2026-08-22-review-impl-audit-appendix-d-normalization.md)
+- [Appendices A–D — consolidated evidence tables](2026-08-22-review-impl-audit-appendices.md)
 
 ---
 
