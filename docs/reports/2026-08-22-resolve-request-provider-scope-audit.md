@@ -46,7 +46,7 @@ there, and most of what is left is fine.
 | ~~`src/constants/prompts.ts:742`~~ (FIXED `3d8f5893`) | the whole system-prompt style | Anthropic-style core policy sent to a Codex request, or GPT-style to Claude. Also moves the prompt-cache prefix. |
 | ~~`src/constants/prompts.ts:575`~~ (FIXED `3d8f5893`) | agent-mode sections | same family |
 | ~~`src/constants/prompts.ts:1012`~~ (FIXED `3d8f5893`) | model-description env block | same family, reached only via the two above |
-| `src/services/deferredContinuationRunner.ts:252` | is this persisted job a Codex job | a legitimately queued continue-after-limit job is killed and marked needs-attention; the resumed turn never runs |
+| `src/services/deferredContinuationRunner.ts:252` (RULED: keep, fail-closed) | is this persisted job a Codex job | a legitimately queued continue-after-limit job is killed and marked needs-attention; the resumed turn never runs |
 | `src/services/deferredContinuationRunner.ts:256` | the terminal reason for the above | wrong reason recorded |
 
 **Both top findings sit on the hot path**, and in both cases the correctly-scoped value is
@@ -78,13 +78,21 @@ Fixed since this audit was written: `api.ts:165` and `claude.ts:507` (`7664e580`
 whole `prompts.ts` family plus `skillImprovement.ts:215` and the dead `promptStyle.ts` export
 (`3d8f5893`).
 
-**`autoCompact.ts:401` / `analyzeContext.ts:321` got WORSE, not better.** This audit allowed
-the hopeful outcome that both might be session-scoped and need no change. The follow-up pass
-looked and could not justify that: `measureNonMessageOverheadTokens()` is invoked from the
-generic query path at `src/query.ts:730`, and `analyzeContextUsage()` receives a
-`ToolUseContext` in normal `/context` execution. So both are plausibly worker-reachable and
-remain **unresolved potential defects**, not no-ops. Closing them needs a worker-path test and
-provider plumbing, which was out of that pass's scope.
+**`autoCompact.ts:401` / `analyzeContext.ts:321` — FIXED in `9dfde0b9`.** This audit allowed
+the hopeful outcome that both might be session-scoped and need no change. That was wrong:
+`measureNonMessageOverheadTokens()` runs from the generic query path at `src/query.ts:730`,
+and `analyzeContextUsage()` receives a `ToolUseContext` in normal `/context` execution, so
+both are genuinely worker-reachable. Both now thread the worker's provider.
+
+The detail worth keeping: `autoCompact`'s schema memo key did NOT include the provider, so a
+memoized measurement taken for one provider was served for another. That is the same
+cache-poisoning class as the `api.ts:165` bug, in a second place, and it was not in this
+audit. The key is now `${model}|${provider ?? 'default'}|…` (`autoCompact.ts:391`).
+
+Regression proof, observed before the fix: `/context renders tool schemas with the worker
+provider, not the session provider` expected `> 9000`, received `50`; the autoCompact twin
+received `34`. Mutation-checked independently after the fact: revert both provider passes and
+it is 29 pass / 2 fail.
 
 **The deferred-continuation pair stays deliberately unfixed**, and the reasoning sharpened:
 eligibility already proves the job originated as Codex before persisting it, so the later
