@@ -50,17 +50,31 @@ and `:3601` (the single `AgentFaceRegistryContext.Provider` wrapping the whole s
    reload. Before `20fb9057` the registry was a ref inside `TranscriptRowsView` and survived
    this case.
 
-**Prescription (not implemented — see Parked).** Keep the shell provider for shell-level
-surfaces, which legitimately follow the active session: the docked roster, the Workers list,
-a relayed permission card. Give each **panel** its own session's registry and provide it to
-that panel's subtree. That needs a per-session registry store at the shell rather than a
-single ref, with eviction when a session closes. This changes where the provider mounts in
-a large, high-traffic file, and it is a design call on a just-landed feature, so it is the
-owning session's or the operator's to make.
+**FIXED in `c61c4a75`.** A per-session store (`createAgentFaceRegistryStore`) holds the
+registries; each pane resolves its own inside `SessionPane`, and the same session still
+resolves to the same object, so what `20fb9057` fixed holds.
 
-**Not covered by any test**, and `agentFace.dom.test.ts:59-67` currently pins "a different
-session gets a different registry" as correct, which is right for a single-pane shell and is
-exactly what breaks the split-pane one.
+**Two corrections to the prescription this report originally gave.**
+
+1. It listed the docked roster as a shell-level surface that should follow the active
+   session. Wrong: `OrchestratorRoster` renders at `App.tsx:5201`, inside `SessionPane`
+   (declared `:4276`), from that pane's own workers. It correctly follows its pane's session.
+   The genuinely shell-level consumers are the Workers list, the sidebar, and the palette.
+2. It said to evict when a session closes. The implementation bounds the store at 12 instead,
+   and the reasoning is better: a session ends down several paths (tab closed, engine dies,
+   restore handover) and the one nobody wires is an unbounded map in a renderer that has
+   already been OOMed once. A bound cannot be forgotten, and it cannot evict something on
+   screen, because one render asks for at most three panes plus the active session and
+   eviction takes the least-recently-asked.
+
+The test gap this section named is closed too: `App.test.tsx:2153` renders two panes on two
+sessions in one tree with B squatting A's hashed fill. Mutation-checked twice — make every
+pane resolve one shared registry and A's worker is pushed off its colour, 68 pass / 1 fail.
+
+`agentFace.dom.test.ts:59-67` did NOT have to move: it pins `useSessionAgentFaceRegistry`,
+which is still `TranscriptView.tsx`'s standalone fallback, and "a different session gets a
+different registry" is right for that hook. The bug was never in the hook; it was in the
+shell passing one session id for three panes.
 
 ## MEDIUM — the async terminal stamp is the one gate that ignores the worker's own provider
 
