@@ -590,6 +590,7 @@ export function createUserInterruptionMessage({
         text: content,
       },
     ],
+    isMeta: true,
   })
 }
 

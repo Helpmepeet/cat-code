@@ -59,7 +59,13 @@ import {
 import { headlessProfilerCheckpoint } from './utils/headlessProfiler.js'
 import { registerStructuredOutputEnforcement } from './utils/hooks/hookHelpers.js'
 import { getInMemoryErrors } from './utils/log.js'
-import { countToolCalls, SYNTHETIC_MESSAGES } from './utils/messages.js'
+import {
+  countToolCalls,
+  INTERRUPT_MESSAGE,
+  INTERRUPT_MESSAGE_FOR_TOOL_USE,
+  isSyntheticMessage,
+  SYNTHETIC_MESSAGES,
+} from './utils/messages.js'
 import {
   getMainLoopModel,
   parseUserSpecifiedModel,
@@ -1219,6 +1225,37 @@ export class QueryEngine {
       }
     }
 
+    const isInterrupted =
+      this.abortController.signal.aborted ||
+      (result !== undefined &&
+        isSyntheticMessage(result) &&
+        Array.isArray(result.message.content) &&
+        (result.message.content[0]?.text === INTERRUPT_MESSAGE ||
+          result.message.content[0]?.text === INTERRUPT_MESSAGE_FOR_TOOL_USE))
+
+    if (isInterrupted) {
+      yield {
+        type: 'result',
+        subtype: 'interrupted',
+        duration_ms: Date.now() - startTime,
+        duration_api_ms: getTotalAPIDuration(),
+        is_error: false,
+        num_turns: turnCount,
+        stop_reason: lastStopReason ?? 'interrupted',
+        session_id: getSessionId(),
+        total_cost_usd: getTotalCost(),
+        usage: this.totalUsage,
+        modelUsage: getModelUsage(),
+        permission_denials: this.permissionDenials,
+        fast_mode_state: getFastModeState(
+          mainLoopModel,
+          initialAppState.fastMode,
+        ),
+        uuid: randomUUID(),
+      }
+      return
+    }
+
     if (!isResultSuccessful(result, lastStopReason)) {
       yield {
         type: 'result',
@@ -1260,6 +1297,7 @@ export class QueryEngine {
     // Extract the text result based on message type
     let textResult = ''
     let isApiError = false
+    let isAuthError = false
 
     if (result.type === 'assistant') {
       const lastContent = last(result.message.content)
@@ -1268,14 +1306,23 @@ export class QueryEngine {
         !SYNTHETIC_MESSAGES.has(lastContent.text)
       ) {
         textResult = lastContent.text
+        if (
+          lastContent.text.includes('authentication_error') ||
+          lastContent.text.includes('token_revoked') ||
+          lastContent.text.includes('OAuth access token has been revoked') ||
+          lastContent.text.startsWith('Failed to authenticate') ||
+          lastContent.text.startsWith('Please run /login')
+        ) {
+          isAuthError = true
+        }
       }
       isApiError = Boolean(result.isApiErrorMessage)
     }
 
     yield {
       type: 'result',
-      subtype: 'success',
-      is_error: isApiError,
+      subtype: isAuthError ? 'error_auth_required' : 'success',
+      is_error: isApiError || isAuthError,
       duration_ms: Date.now() - startTime,
       duration_api_ms: getTotalAPIDuration(),
       num_turns: turnCount,

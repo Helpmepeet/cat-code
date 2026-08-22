@@ -1508,12 +1508,12 @@ export const SDKPermissionDenialSchema = lazySchema(() =>
 export const SDKResultSuccessSchema = lazySchema(() =>
   z.object({
     type: z.literal('result'),
-    subtype: z.literal('success'),
+    subtype: z.enum(['success', 'interrupted']),
     duration_ms: z.number(),
     duration_api_ms: z.number(),
     is_error: z.boolean(),
     num_turns: z.number(),
-    result: z.string(),
+    result: z.string().optional(),
     stop_reason: z.string().nullable(),
     total_cost_usd: z.number(),
     usage: NonNullableUsagePlaceholder(),
@@ -1534,6 +1534,7 @@ export const SDKResultErrorSchema = lazySchema(() =>
       'error_max_turns',
       'error_max_budget_usd',
       'error_max_structured_output_retries',
+      'error_auth_required',
     ]),
     duration_ms: z.number(),
     duration_api_ms: z.number(),

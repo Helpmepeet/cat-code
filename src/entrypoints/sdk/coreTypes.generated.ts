@@ -122,7 +122,7 @@ export type SDKPartialAssistantMessage = SDKBaseMessage & {
 
 export type SDKResultMessage = SDKBaseMessage & {
   type: 'result'
-  subtype?: 'success' | 'error_during_execution' | 'error_max_turns' | 'error_max_budget_usd' | 'error_max_structured_output_retries'
+  subtype?: 'success' | 'interrupted' | 'error_during_execution' | 'error_max_turns' | 'error_max_budget_usd' | 'error_max_structured_output_retries' | 'error_auth_required'
   is_error?: boolean
   result?: string
   errors?: string[]

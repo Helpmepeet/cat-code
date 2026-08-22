@@ -117,6 +117,11 @@ import {
 } from './leaseState.js'
 import type { LeaseSnapshot } from '../../shared/protocol.js'
 import { ToolInspector } from './ToolInspector.js'
+import { FilePathActionsMenu } from './FilePathActionsMenu.js'
+import {
+  FilePathMenuContext,
+  type FilePathActionsAnchor,
+} from './filePathActions.js'
 import { ActionFileIcon } from './SessionActionIcons.js'
 import { parseToolAck, type ToolAck } from './toolAck.js'
 import {
@@ -324,6 +329,22 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   const [inspectedId, setInspectedId] = useState<string | null>(null)
   const openInspector = useCallback((row: ToolUseNestedRow) => setInspectedId(row.id), [])
   const closeInspector = useCallback(() => setInspectedId(null), [])
+  const [filePathMenuState, setFilePathMenuState] = useState<{
+    anchor: FilePathActionsAnchor
+    rawPath: string
+    sessionId: SessionId
+  } | null>(null)
+  const openFilePathMenu = useCallback(
+    (anchor: FilePathActionsAnchor, rawPath: string, sessionId: SessionId) => {
+      setFilePathMenuState({ anchor, rawPath, sessionId })
+    },
+    [],
+  )
+  const closeFilePathMenu = useCallback(() => setFilePathMenuState(null), [])
+  const filePathMenuContextValue = useMemo(
+    () => ({ cwd: cwd ?? null, openFilePathMenu }),
+    [cwd, openFilePathMenu],
+  )
   const { mode: reasoningMode } = useContext(ReasoningLayoutContext)
   // Owned ABOVE the derivations below, which is the whole point: a card that gets
   // re-keyed or re-typed when rows regroup finds its own expansion again through
@@ -468,8 +489,19 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
       <AgentFaceRegistryContext.Provider value={faceRegistry}>
         <LeaseSnapshotContext.Provider value={leases}>
           <ToolInspectorContext.Provider value={openInspector}>
-            {content}
-            <ToolInspectorOverlay row={inspected} onClose={closeInspector} />
+            <FilePathMenuContext.Provider value={filePathMenuContextValue}>
+              {content}
+              <ToolInspectorOverlay row={inspected} onClose={closeInspector} />
+              {filePathMenuState ? (
+                <FilePathActionsMenu
+                  anchor={filePathMenuState.anchor}
+                  rawPath={filePathMenuState.rawPath}
+                  cwd={cwd}
+                  sessionId={filePathMenuState.sessionId}
+                  onClose={closeFilePathMenu}
+                />
+              ) : null}
+            </FilePathMenuContext.Provider>
           </ToolInspectorContext.Provider>
         </LeaseSnapshotContext.Provider>
       </AgentFaceRegistryContext.Provider>
@@ -1063,6 +1095,7 @@ function AssistantProse({
   streaming?: true
 }) {
   const toast = useToast()
+  const filePathContext = useContext(FilePathMenuContext)
   const openFile = useCallback(
     (path: string): void => {
       void window.catcode
@@ -1073,6 +1106,12 @@ function AssistantProse({
         .catch(() => toast('Could not open this file', { tone: 'warn' }))
     },
     [sessionId, toast],
+  )
+  const onContextMenu = useCallback(
+    (anchor: FilePathActionsAnchor, path: string) => {
+      filePathContext?.openFilePathMenu(anchor, path, sessionId)
+    },
+    [filePathContext, sessionId],
   )
   // The prototype's `showCopy` gate (Messages.jsx:2068): no chip while the reply
   // is still arriving (there is no settled answer to take yet, and the caret owns
@@ -1086,12 +1125,12 @@ function AssistantProse({
     () => ({
       ...MARKDOWN_COMPONENTS,
       blockquote: createBlockquoteComponent(content),
-      a: createPathAwareAnchor(openFile),
-      p: createPathAwareParagraph(openFile),
-      li: createPathAwareListItem(openFile),
-      code: createPathAwareCode(openFile),
+      a: createPathAwareAnchor(openFile, onContextMenu),
+      p: createPathAwareParagraph(openFile, onContextMenu),
+      li: createPathAwareListItem(openFile, onContextMenu),
+      code: createPathAwareCode(openFile, onContextMenu),
     }),
-    [content, openFile],
+    [content, openFile, onContextMenu],
   )
   return (
     // P4-38 host contract for `BubbleCopyChip`: `group relative` makes this body
@@ -1172,6 +1211,7 @@ function isInlineFilePath(path: string): boolean {
 function linkifyFilePathText(
   text: string,
   openFile: (path: string) => void,
+  onContextMenu?: (anchor: FilePathActionsAnchor, path: string) => void,
 ): ReactNode {
   const parts: ReactNode[] = []
   let cursor = 0
@@ -1194,6 +1234,15 @@ function linkifyFilePathText(
         type="button"
         aria-label={`Open ${path}`}
         onClick={() => openFile(path)}
+        onContextMenu={event => {
+          if (!onContextMenu) return
+          event.preventDefault()
+          event.stopPropagation()
+          onContextMenu(
+            { type: 'pointer', x: event.clientX, y: event.clientY },
+            path,
+          )
+        }}
       >
         <ActionFileIcon />
         {path}
@@ -1209,9 +1258,10 @@ function linkifyFilePathText(
 function linkifyFilePathChildren(
   children: ReactNode,
   openFile: (path: string) => void,
+  onContextMenu?: (anchor: FilePathActionsAnchor, path: string) => void,
 ): ReactNode {
   if (typeof children === 'string') {
-    return linkifyFilePathText(children, openFile)
+    return linkifyFilePathText(children, openFile, onContextMenu)
   }
   if (isValidElement<{ children?: ReactNode }>(children)) {
     if (
@@ -1225,36 +1275,42 @@ function linkifyFilePathChildren(
     return cloneElement(
       children,
       undefined,
-      linkifyFilePathChildren(children.props.children, openFile),
+      linkifyFilePathChildren(children.props.children, openFile, onContextMenu),
     )
   }
   if (!Array.isArray(children)) return children
   return children.map((child, index) => (
     <Fragment key={index}>
-      {linkifyFilePathChildren(child, openFile)}
+      {linkifyFilePathChildren(child, openFile, onContextMenu)}
     </Fragment>
   ))
 }
 
-function createPathAwareParagraph(openFile: (path: string) => void) {
+function createPathAwareParagraph(
+  openFile: (path: string) => void,
+  onContextMenu?: (anchor: FilePathActionsAnchor, path: string) => void,
+) {
   return function PathAwareParagraph({
     children,
     node: _node,
     ...props
   }: ComponentPropsWithoutRef<'p'> & { node?: unknown }) {
     void _node
-    return <p {...props}>{linkifyFilePathChildren(children, openFile)}</p>
+    return <p {...props}>{linkifyFilePathChildren(children, openFile, onContextMenu)}</p>
   }
 }
 
-function createPathAwareListItem(openFile: (path: string) => void) {
+function createPathAwareListItem(
+  openFile: (path: string) => void,
+  onContextMenu?: (anchor: FilePathActionsAnchor, path: string) => void,
+) {
   return function PathAwareListItem({
     children,
     node: _node,
     ...props
   }: ComponentPropsWithoutRef<'li'> & { node?: unknown }) {
     void _node
-    return <li {...props}>{linkifyFilePathChildren(children, openFile)}</li>
+    return <li {...props}>{linkifyFilePathChildren(children, openFile, onContextMenu)}</li>
   }
 }
 
@@ -1278,7 +1334,10 @@ function workspaceFileHref(href: string | undefined): string | null {
   return path.length === 0 ? null : path
 }
 
-function createPathAwareAnchor(openFile: (path: string) => void) {
+function createPathAwareAnchor(
+  openFile: (path: string) => void,
+  onContextMenu?: (anchor: FilePathActionsAnchor, path: string) => void,
+) {
   return function PathAwareAnchor({
     children,
     href,
@@ -1299,12 +1358,22 @@ function createPathAwareAnchor(openFile: (path: string) => void) {
         </a>
       )
     }
+    const rawPath = href ?? path
     return (
       <button
         className="inline-flex items-center gap-0.5 rounded-sm align-baseline text-accent hover:text-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
         type="button"
         aria-label={`Open ${path}`}
         onClick={() => openFile(path)}
+        onContextMenu={event => {
+          if (!onContextMenu) return
+          event.preventDefault()
+          event.stopPropagation()
+          onContextMenu(
+            { type: 'pointer', x: event.clientX, y: event.clientY },
+            rawPath,
+          )
+        }}
       >
         <ActionFileIcon />
         {children}
@@ -1313,7 +1382,10 @@ function createPathAwareAnchor(openFile: (path: string) => void) {
   }
 }
 
-function createPathAwareCode(openFile: (path: string) => void) {
+function createPathAwareCode(
+  openFile: (path: string) => void,
+  onContextMenu?: (anchor: FilePathActionsAnchor, path: string) => void,
+) {
   return function PathAwareCode({
     className,
     children,
@@ -1326,6 +1398,15 @@ function createPathAwareCode(openFile: (path: string) => void) {
           type="button"
           aria-label={`Open ${text}`}
           onClick={() => openFile(text)}
+          onContextMenu={event => {
+            if (!onContextMenu) return
+            event.preventDefault()
+            event.stopPropagation()
+            onContextMenu(
+              { type: 'pointer', x: event.clientX, y: event.clientY },
+              text,
+            )
+          }}
         >
           <ActionFileIcon />
           <code>{children}</code>
@@ -4648,6 +4729,8 @@ const INJECTED_TURN_FALLBACK: InjectedTurnStyle = {
  * errored; duration and cost ride as middot-separated detail.
  */
 const RESULT_ERROR_LABELS = new Map([
+  ['interrupted', 'Stopped by user'],
+  ['error_auth_required', 'Authentication failed'],
   ['error_during_execution', 'Errored during execution'],
   ['error_max_turns', 'Stopped · max turns reached'],
   ['error_max_budget_usd', 'Stopped · budget limit reached'],
@@ -4669,9 +4752,10 @@ function ResultSeam({
   totalCostUsd?: number
 }) {
   // #6 (operator, 2026-07-19): the success turn-footer was removed — a completed
-  // turn shows no seam. Only error/abort turns (isError) still surface a seam so
-  // a broken turn stays visible. `isError` is the same signal that drives tone.
-  if (!isError) return null
+  // turn shows no seam. Only error/abort/interrupted turns still surface a seam so
+  // a stopped or broken turn stays visible.
+  if (!isError && subtype !== 'interrupted') return null
+  const isInterrupted = subtype === 'interrupted'
   const label = RESULT_ERROR_LABELS.get(subtype) ?? 'Turn failed'
   const detail = [
     durationMs === undefined ? null : `${(durationMs / 1000).toFixed(1)}s`,
@@ -4681,7 +4765,7 @@ function ResultSeam({
     .join(' · ')
   return (
     <Seam
-      tone={isError ? 'danger' : 'success'}
+      tone={isInterrupted ? 'neutral' : isError ? 'danger' : 'success'}
       label={label}
       detail={detail || undefined}
       boldLabel

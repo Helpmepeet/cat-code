@@ -2346,6 +2346,8 @@ test('P4-60/#6: a successful result row renders no turn-footer', () => {
 })
 
 test.each([
+  ['interrupted', 'Stopped by user'],
+  ['error_auth_required', 'Authentication failed'],
   ['error_during_execution', 'Errored during execution'],
   ['error_max_turns', 'Stopped · max turns reached'],
   ['error_max_budget_usd', 'Stopped · budget limit reached'],
@@ -2359,7 +2361,7 @@ test.each([
     id: `s:f:result:${subtype}`,
     kind: 'result',
     subtype,
-    isError: true,
+    isError: subtype !== 'interrupted',
     errors: ['Detailed failure text stays outside the label-only seam'],
     durationMs: 4200,
     totalCostUsd: 0.0123,
@@ -4539,4 +4541,16 @@ test('every row publishes its identity, which is what the reading position holds
   )
   expect(html).toContain(`${TRANSCRIPT_ROW_KEY_ATTRIBUTE}="s:history-boundary"`)
   expect(html).toContain(`${TRANSCRIPT_ROW_KEY_ATTRIBUTE}="s:m:0:user-text"`)
+})
+
+test('assistant prose renders markdown links and inline paths as file action buttons', () => {
+  const markdownRow = assistantRow(
+    'Check out [foo.ts](src/foo.ts) and also `src/utils/bar.ts` for details.',
+  )
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView rows={[markdownRow]} cwd="/Users/test/cat-code" />,
+  )
+  expect(html).toContain('aria-label="Open src/foo.ts"')
+  expect(html).toContain('aria-label="Open src/utils/bar.ts"')
+  expect(html).toContain('<svg')
 })

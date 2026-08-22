@@ -502,6 +502,32 @@ test('leaves state untouched for unhandled messages and non-message events', () 
   expect(state).toBe(initial)
 })
 
+test('projects result with subtype: interrupted as a non-error result row', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'result',
+      subtype: 'interrupted',
+      is_error: false,
+      duration_ms: 1800,
+      total_cost_usd: 0,
+      uuid: 'result-interrupted-1',
+    }),
+  )
+
+  const rows = selectTranscriptRows(state, 'session-1')
+  expect(rows).toHaveLength(1)
+  expect(rows[0]).toMatchObject({
+    kind: 'result',
+    subtype: 'interrupted',
+    isError: false,
+    durationMs: 1800,
+    totalCostUsd: 0,
+  })
+})
+
 /* ─────────────────────────────────────────────────────────────────────────
  * P2-0 exhaustive SDKMessage coverage (PROGRAM-PLAN §5 acceptance artifact).
  * The fixture's mapped type already fails to COMPILE if the union grows a
