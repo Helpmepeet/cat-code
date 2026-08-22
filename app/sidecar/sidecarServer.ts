@@ -4367,9 +4367,15 @@ export class SidecarServer {
    * back-channel). Carries non-secret state only; `send()`'s secretGuard is the
    * proof (a token-keyed field would drop the whole frame). On `success` the
    * account has just been written engine-side, so re-broadcast the accounts
-   * snapshot too — the SAME mechanism that clears the first-run OAuth surface and
-   * the reauth banner (both derive from `accounts.snapshot`), for BOTH the
-   * new-account (alias-submit) and re-link (auto-persist) paths uniformly.
+   * snapshot too, for BOTH the new-account (alias-submit) and re-link
+   * (auto-persist) paths uniformly.
+   *
+   * That re-broadcast reaches the SESSION-scoped surfaces only. It does NOT move
+   * the Accounts page or the account-health bar: both read the host-plane pool
+   * (`selectGlobalAccountsSnapshot`), which prefers main's worker snapshot over
+   * any session's, so a session frame cannot update them once main's first run
+   * has landed. Main re-reads the pool itself on this frame
+   * (`frameMutatedAccountsPool`, `app/main/mainDecisions.ts`).
    */
   private broadcastOAuthLoginProgress(progress: OAuthLoginProgress): void {
     if (this.connections.size === 0) {

@@ -269,7 +269,7 @@ function AddAccountDialog({
       title={account ? 'Sign in again' : 'Add Codex account'}
       sub={
         account
-          ? `Restores ${name} with a fresh sign-in. Its name and history stay as they are.`
+          ? `Restores ${name}. Its name and history stay as they are.`
           : 'Signs in with your ChatGPT Plus/Pro subscription via OAuth.'
       }
       onClose={onClose}
@@ -782,13 +782,18 @@ export function AccountsPage({
     ? rows.find(a => a.id !== capAccount.id && a.switchable) ?? null
     : null
 
-  // Dispatch a toast-and-close verb; `tone` overrides the ok/err default (login
-  // uses 'info' for the P4-15-deferred message).
+  // Dispatch a toast-and-close verb; `tone` softens the SUCCESS tone only (a
+  // started sign-in is an 'info', not a completion). A refusal keeps the failure
+  // tone whatever the caller asked for: the sign-in verbs are refused outright
+  // when no session is open, and an override would paint that refusal as neutral
+  // news while nothing had happened.
   function submit(verb: AccountVerbMessage, tone?: ToastTone): void {
     pendingRef.current = {
       requestId: verb.requestId,
       onDone: result => {
-        toast(result.message, { tone: tone ?? resultToastTone(result.ok) })
+        toast(result.message, {
+          tone: result.ok ? tone ?? resultToastTone(true) : resultToastTone(false),
+        })
         setDialog(null)
       },
     }

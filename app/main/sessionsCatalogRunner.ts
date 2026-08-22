@@ -276,6 +276,12 @@ export function createSessionsCatalogDriver(deps: {
    */
   const schedule = (startedAt: number) => {
     if (stopped) return
+    // Deliberate divergence from the accounts twin, which clears the pending
+    // handle here. This driver has no out-of-band entry point, so `tick()` is
+    // only ever reached with `timer === null` (from `start()`, or from the timer
+    // callback that nulls it first) and there is no live handle to overwrite.
+    // Adding one — the accounts driver's `refreshNow()` — makes the clear
+    // load-bearing: without it each call forks a second self-rescheduling chain.
     const delay = Math.max(0, intervalMs - (now() - startedAt))
     timer = setTimer(() => {
       timer = null

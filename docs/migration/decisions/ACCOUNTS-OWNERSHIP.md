@@ -63,9 +63,30 @@ projection `buildAccountsSnapshot` (`app/sidecar/accountsDomain.ts:430`) rather
 than re-deriving the shape (CLAUDE.md §8 rule 10).
 
 **Cadence: 60 s.** Longer than the catalog's 30 s because usage headroom is
-coarser (percent buckets on a 5-hour window) and the underlying engine fetch is
-1-minute-cached anyway (`fetchPoolUsage`), so a shorter period would spend a
-~189 MB engine boot to re-read a cached value.
+coarser (percent buckets on a 5-hour window).
+
+**Correction (2026-08-22).** This paragraph originally also argued that the
+underlying engine fetch is 1-minute-cached (`fetchPoolUsage`), so a shorter
+period would spend a ~189 MB engine boot to re-read a cached value. That is
+wrong, and the runner says so at the definition
+(`app/main/accountsPoolRunner.ts`): the cache is module-level inside the
+DISPOSABLE worker this driver spawns fresh every run, so it never survives
+between runs and every run performs a live authenticated fetch. Polling faster
+multiplies real network calls against the account's usage endpoint. The 60 s
+choice stands; only its second reason was false.
+
+**Event-driven addition (2026-08-22, CC-74).** The timer is no longer the only
+trigger: `AccountsPoolDriver.refreshNow()` performs one out-of-band run when a
+frame reports that the pool actually changed (a completed sign-in, or an account
+verb the sidecar applied — `frameMutatedAccountsPool`, `app/main/mainDecisions.ts`).
+This is a read on the same path, not a second owner: main still owns the read and
+the session snapshot is still not promoted. It exists because both the Accounts
+page and the account-health bar read the host-plane pool, so the sidecar's own
+`accounts.snapshot` re-broadcast cannot move them, and a mutation would otherwise
+sit invisible for up to a full interval. Cost per trigger is one worker boot plus
+one live usage fetch (see the correction above); it is bounded by the driver's
+single-flight guard, by coalescing concurrent requests into one re-run, and by
+the triggers being human-paced.
 
 ### What does NOT change
 

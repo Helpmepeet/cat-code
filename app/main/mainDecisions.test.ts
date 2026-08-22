@@ -31,6 +31,7 @@ import {
   createRendererRecoveryPolicy,
   createStartupTimers,
   createWindowVisibilityTracker,
+  frameMutatedAccountsPool,
   isTerminalLifecycleFrame,
   parseVisibleSessions,
   selectRendererWorkingSetKiB,
@@ -637,6 +638,82 @@ describe('isTerminalLifecycleFrame', () => {
     // as terminal would evict the replay buffer under a live conversation.
     expect(isTerminalLifecycleFrame(errorFrame())).toBe(false)
     expect(isTerminalLifecycleFrame(pongFrame())).toBe(false)
+  })
+})
+
+describe('frameMutatedAccountsPool', () => {
+  const oauth = (state: string): ServerFrame =>
+    ({
+      kind: 'oauth.login.progress',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: 's1',
+      progress: { state },
+    }) as unknown as ServerFrame
+
+  const accountResult = (
+    verb: string,
+    ok: boolean,
+  ): ServerFrame =>
+    ({
+      kind: 'account.result',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: 's1',
+      requestId: 'r1',
+      verb,
+      ok,
+      message: 'done',
+    }) as unknown as ServerFrame
+
+  test('a completed sign-in mutates the pool; its earlier phases do not', () => {
+    expect(frameMutatedAccountsPool(oauth('success'))).toBe(true)
+    for (const state of [
+      'starting',
+      'waiting_for_login',
+      'waiting_for_alias',
+      'error',
+    ]) {
+      expect(frameMutatedAccountsPool(oauth(state))).toBe(false)
+    }
+  })
+
+  test('an account verb that landed mutates the pool; a refused one does not', () => {
+    // These are the surfaces the operator asked about: without a re-read, a
+    // deleted account keeps rendering and a renamed one keeps its old name until
+    // the next interval, because the page reads main's pool, not the session's.
+    for (const verb of [
+      'account.delete',
+      'account.rename',
+      'account.logout',
+      'account.switch',
+      'account.touchAll',
+    ]) {
+      expect(frameMutatedAccountsPool(accountResult(verb, true))).toBe(true)
+      expect(frameMutatedAccountsPool(accountResult(verb, false))).toBe(false)
+    }
+  })
+
+  test('account.login is excluded: its ack means the browser handoff started', () => {
+    // The pool changes at the oauth success above, not here. Refreshing on the
+    // ack would spend a worker process reading state that has not changed.
+    expect(frameMutatedAccountsPool(accountResult('account.login', true))).toBe(
+      false,
+    )
+  })
+
+  test('no other frame kind refreshes, and a malformed frame does not throw', () => {
+    expect(frameMutatedAccountsPool(errorFrame())).toBe(false)
+    expect(frameMutatedAccountsPool(pongFrame())).toBe(false)
+    expect(frameMutatedAccountsPool(lifecycle('exited'))).toBe(false)
+    // main's handler runs inside the supervisor socket loop, which has no
+    // try/catch: a nested read on a frame missing its payload must not throw the
+    // loop out and drop delivery for that session.
+    const malformed = {
+      kind: 'oauth.login.progress',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: 's1',
+    } as unknown as ServerFrame
+    expect(() => frameMutatedAccountsPool(malformed)).not.toThrow()
+    expect(frameMutatedAccountsPool(malformed)).toBe(false)
   })
 })
 

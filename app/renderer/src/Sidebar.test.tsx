@@ -894,14 +894,14 @@ test('the collapsed rail keeps the account glyph above the destination icons', (
 
 test('an account needing sign-in is marked on the Accounts destination, in both nav variants', () => {
   const rail = renderSidebar({ accountsNeedingSignIn: 1 })
-  expect(rail).toContain('title="Accounts, 1 account needs sign-in"')
+  expect(rail).toContain('title="Accounts, 1 Codex account needs sign-in"')
   expect(rail).toContain('data-sidebar-nav-badge="accounts"')
 
   const expanded = renderSidebar({
     accountsNeedingSignIn: 2,
     menuActive: true,
   })
-  expect(expanded).toContain('aria-label="Accounts, 2 accounts need sign-in"')
+  expect(expanded).toContain('aria-label="Accounts, 2 Codex accounts need sign-in"')
   expect(expanded).toContain('data-sidebar-nav-badge="accounts"')
 })
 
@@ -909,8 +909,11 @@ test('the mark is the WHOLE treatment: no destination other than Accounts carrie
   // A dead account among healthy ones must not raise a bar over the transcript
   // (STARTUP-GATES, the P4-24 revision and #12). This passive count is what
   // replaces that, so it must not grow into a second alert surface.
+  // Two marks while the list is folded: the Accounts row inside the fold, and the
+  // toggle that opens it. Never more, and never a mark on another destination.
   const marked = renderSidebar({ accountsNeedingSignIn: 3, menuActive: true })
-  expect(marked.match(/data-sidebar-nav-badge/g)).toHaveLength(1)
+  expect(marked.match(/data-sidebar-nav-badge="accounts"/g)).toHaveLength(1)
+  expect(marked.match(/data-sidebar-nav-badge/g)).toHaveLength(2)
 
   const healthy = renderSidebar({ accountsNeedingSignIn: 0, menuActive: true })
   expect(healthy).not.toContain('data-sidebar-nav-badge')
@@ -918,4 +921,19 @@ test('the mark is the WHOLE treatment: no destination other than Accounts carrie
   // Unmarked, the expanded row keeps its visible label as its accessible name
   // rather than carrying an aria-label that would have to be kept in sync.
   expect(healthy).toContain('>Accounts</span>')
+})
+
+test('the folded destination list carries its mark out to the toggle that opens it', () => {
+  // The expanded fold is `inert` + `opacity-0` and starts shut, so a mark only
+  // inside it is unreadable in the sidebar's default state: the signal has to
+  // reach a control that is actually on screen.
+  const folded = renderSidebar({ accountsNeedingSignIn: 1, menuActive: true })
+  expect(folded).toContain('data-sidebar-nav-badge="destinations"')
+  expect(folded).toContain(
+    'aria-label="Show destinations, 1 Codex account needs sign-in"',
+  )
+
+  const healthy = renderSidebar({ accountsNeedingSignIn: 0, menuActive: true })
+  expect(healthy).not.toContain('data-sidebar-nav-badge="destinations"')
+  expect(healthy).toContain('aria-label="Show destinations"')
 })

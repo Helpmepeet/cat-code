@@ -186,6 +186,26 @@ whether even that blocks or just disables submit is §5-Q2.
 > it does not reintroduce `ReauthWall.tsx` or `reauthBannerState.ts`. Scope is **account health
 > only** — shell lifecycle errors are a separate surface and a separate finding (audit finding 8);
 > do not merge the two error classes into one banner plane.
+>
+> **Revision (2026-08-22 — operator ruling, in-session). #12 stands. A dead account among healthy
+> ones gets a PASSIVE MARK on the Accounts destination, and still no transcript-plane surface.**
+> Prompted by CC-74: the sign-in, re-link, and delete verbs were all real, but one dead account in a
+> healthy pool was discoverable only by opening the Accounts page, because the health bar fires only
+> when EVERY account is blocked (`accountHealthBanner.ts`) and that all-blocked trigger is #12/P4-24
+> working as ruled. The operator was offered a banner extension and DECLINED it, choosing the passive
+> treatment instead.
+>
+> **Ruled:** a count of accounts needing sign-in may be marked on the Accounts nav destination, in
+> both the collapsed rail and the expanded list, plus the destinations toggle while that list is
+> folded shut (the fold is `inert` and `opacity-0`, so a mark inside it is unreadable in the sidebar's
+> default state). Bounds that keep this compatible with #12 rather than a reversal of it: it is
+> passive (no pulse, no dismissal state, no action of its own, `aria-hidden` visuals with the count in
+> the button's own label), it never blocks submit, it carries no re-auth wall semantics, it does not
+> reintroduce `ReauthWall.tsx` / `reauthBannerState.ts` / the `'reauth'` `OAuthContext` (P4-34), and
+> it does NOT change `selectAccountHealthBanner`'s all-blocked trigger. Scope is the Codex pool only;
+> the Anthropic pool has no repair affordance yet, so it is deliberately uncounted.
+> Implemented in `1f1c0fa3`; the repair action itself is the `dead`-only "Sign in again" row item,
+> which reuses `account.login` and adds no vocabulary.
 - **"Read-only mode is obviously useful; why not just build it?"** Because "read-only" is a
   security claim, and no one has defined it against the threat model (does the engine still
   read CLAUDE.md? run MCP servers? LSP?). Shipping the *label* without the defined semantics

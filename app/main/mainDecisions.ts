@@ -513,6 +513,36 @@ export function supervisorEventToServerFrame(
   return null
 }
 
+/**
+ * Does this frame report a pool mutation that main must re-read the accounts
+ * pool for?
+ *
+ * The Accounts page and the account-health bar both read the HOST-plane pool
+ * (`selectGlobalAccountsSnapshot`, `app/renderer/src/accountsState.ts`), which
+ * prefers main's worker snapshot over any session's. A sidecar re-broadcast
+ * therefore cannot move either surface once main's first run has landed, so
+ * without an out-of-band read they keep showing pre-mutation state until the
+ * next interval: the deleted account still listed, the renamed one under its old
+ * name, the account just signed in to still marked as needing sign-in.
+ *
+ * `account.login` is deliberately excluded even though it succeeds: its ack
+ * means the browser handoff STARTED, and the pool changes later, at the
+ * `oauth.login.progress` success that this predicate also matches. Refreshing on
+ * the ack would spend a worker process reading state that has not changed yet.
+ */
+export function frameMutatedAccountsPool(frame: ServerFrame): boolean {
+  // Optional chaining, not a bare read: main's frame handler runs inside the
+  // supervisor's socket data loop, which has no try/catch, so a malformed frame
+  // must not throw the whole loop out on a nested property.
+  if (frame.kind === 'oauth.login.progress') {
+    return frame.progress?.state === 'success'
+  }
+  if (frame.kind === 'account.result') {
+    return frame.ok && frame.verb !== 'account.login'
+  }
+  return false
+}
+
 /** A frame after which the session has no live process left to talk to. */
 export function isTerminalLifecycleFrame(frame: ServerFrame): boolean {
   return (

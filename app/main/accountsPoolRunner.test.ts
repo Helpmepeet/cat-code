@@ -574,6 +574,39 @@ describe('createAccountsPoolDriver — refreshNow', () => {
     driver.stop()
   })
 
+  test('arming is idempotent: no entry point can leave two chains running', async () => {
+    // The invariant lives in `schedule()` now, not in `refreshNow`'s caller. Its
+    // other entry point is a second `start()`, which before the move left the
+    // first chain armed and permanently doubled the worker spawn rate.
+    let cleared = 0
+    let armed = 0
+    const fire: Array<() => void> = []
+    const driver = createAccountsPoolDriver({
+      run: async () => {},
+      intervalMs: 60_000,
+      setTimer: cb => {
+        armed++
+        fire.push(cb)
+        return { unref() {} } as unknown as ReturnType<typeof setTimeout>
+      },
+      clearTimer: () => {
+        cleared++
+      },
+    })
+
+    driver.start()
+    await flush()
+    driver.start()
+    await flush()
+    driver.refreshNow()
+    await flush()
+
+    // Three arm attempts, and every one past the first cleared its predecessor,
+    // so exactly one chain is live however the runs were triggered.
+    expect(armed - cleared).toBe(1)
+    driver.stop()
+  })
+
   test('is inert after stop()', async () => {
     let runCount = 0
     const driver = createAccountsPoolDriver({

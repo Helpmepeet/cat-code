@@ -373,6 +373,11 @@ export function Sidebar({
   const [hovering, setHovering] = useState(false)
   const [focusWithin, setFocusWithin] = useState(false)
   const [navOpen, setNavOpen] = useState(false)
+  /** The sign-in mark while the destination list is shut, and only then: open, the
+   * Accounts row carries it and two marks for one fact would read as two. */
+  const foldedSignInLabel = navOpen
+    ? null
+    : formatAccountsNeedingSignIn(accountsNeedingSignIn)
   const [dismissed, setDismissed] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH)
   const [resizing, setResizing] = useState(false)
@@ -1060,16 +1065,40 @@ export function Sidebar({
                   type="button"
                   onClick={() => setNavOpen(value => !value)}
                   aria-expanded={navOpen}
-                  aria-label={navOpen ? 'Hide destinations' : 'Show destinations'}
-                  title={navOpen ? 'Hide destinations' : 'Show destinations'}
+                  aria-label={
+                    navOpen
+                      ? 'Hide destinations'
+                      : foldedSignInLabel
+                        ? `Show destinations, ${foldedSignInLabel}`
+                        : 'Show destinations'
+                  }
+                  title={
+                    navOpen
+                      ? 'Hide destinations'
+                      : foldedSignInLabel
+                        ? `Show destinations, ${foldedSignInLabel}`
+                        : 'Show destinations'
+                  }
                   className={
-                    'ml-auto flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-md transition-[background-color,color,transform] duration-200 ' +
+                    'relative ml-auto flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-md transition-[background-color,color,transform] duration-200 ' +
                     (navOpen
                       ? 'rotate-90 text-accent-soft'
                       : 'text-text-faint hover:bg-shell-hover hover:text-text-muted')
                   }
                 >
                   <GridIcon />
+                  {/* The destination list this toggle opens is folded by default,
+                   * and folded it is `opacity-0` and `inert` — so the mark on the
+                   * Accounts row inside it is unreadable in the state the sidebar
+                   * spends most of its time in. Carry the signal out to the one
+                   * control that is always visible while the list is shut. */}
+                  {foldedSignInLabel ? (
+                    <span
+                      aria-hidden="true"
+                      data-sidebar-nav-badge="destinations"
+                      className="absolute right-[3px] top-[3px] h-[6px] w-[6px] rounded-full bg-tone-warn"
+                    />
+                  ) : null}
                 </button>
               </div>
 

@@ -61,6 +61,12 @@ export const ACCOUNTS_POOL_WORKER_TIMEOUT_MS = 2 * 60 * 1000
  * Runs that skip it deliver the pool exactly as before and simply carry no
  * `usageStats`, which the renderer already treats as "keep the last good value".
  * The FIRST run always includes them, so a cold launch is never gated on this.
+ *
+ * "Every 5 minutes" is therefore approximate, not a clock. The counter advances
+ * per RUN, and `refreshNow()` runs are runs, so an out-of-band refresh both
+ * shifts the phase and can be the run that pays the scan. Harmless in both
+ * directions (the numbers are 7-day and 30-day totals), and worth knowing before
+ * reading the interval off this constant.
  */
 export const USAGE_STATS_EVERY_N_RUNS = 5
 
@@ -335,6 +341,10 @@ export function createAccountsPoolDriver(deps: {
 
   const schedule = (startedAt: number) => {
     if (stopped) return
+    // The invariant belongs to the function that arms the timer, not to its
+    // callers: assigning over a live handle leaves the old one armed and forks a
+    // second self-rescheduling chain, permanently doubling the worker spawn rate.
+    clearPendingTimer()
     const delay = Math.max(0, intervalMs - (now() - startedAt))
     timer = setTimer(() => {
       timer = null

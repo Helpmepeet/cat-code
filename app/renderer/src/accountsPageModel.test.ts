@@ -122,6 +122,37 @@ describe('selectAccountsNeedingSignIn', () => {
     expect(selectAccountsNeedingSignIn(snapshot([account()]))).toBe(0)
     expect(selectAccountsNeedingSignIn(null)).toBe(0)
   })
+
+  test('an uninitialized pool counts nothing, matching the health bar', () => {
+    // Reachable: initAccountPool resets the flag in its catch AFTER the pool has
+    // been populated, so an unfinished read can carry dead rows. The bar refuses
+    // to act on such a snapshot; marking off it would make the two disagree.
+    const unfinished = { ...snapshot([dead('a')]), initialized: false }
+    expect(selectAccountsNeedingSignIn(unfinished)).toBe(0)
+  })
+
+  test('the Anthropic pool is not counted, and the label says Codex', () => {
+    // Those rows offer no repair at all, so counting them would advertise an
+    // action that does not exist.
+    const withAnthropic: AccountsSnapshot = {
+      ...snapshot([account()]),
+      anthropicAccounts: [
+        {
+          id: 'ant-1',
+          alias: 'claude',
+          status: 'dead',
+          isDefault: true,
+          hasVaultProfile: true,
+          emailAddress: null,
+          organizationName: null,
+          subscriptionType: null,
+          routeAvailable: false,
+        } as unknown as AccountsSnapshot['anthropicAccounts'][number],
+      ],
+      anthropicPoolCount: 1,
+    }
+    expect(selectAccountsNeedingSignIn(withAnthropic)).toBe(0)
+  })
 })
 
 describe('formatAccountsNeedingSignIn', () => {
@@ -131,7 +162,7 @@ describe('formatAccountsNeedingSignIn', () => {
   })
 
   test('singular and plural', () => {
-    expect(formatAccountsNeedingSignIn(1)).toBe('1 account needs sign-in')
-    expect(formatAccountsNeedingSignIn(3)).toBe('3 accounts need sign-in')
+    expect(formatAccountsNeedingSignIn(1)).toBe('1 Codex account needs sign-in')
+    expect(formatAccountsNeedingSignIn(3)).toBe('3 Codex accounts need sign-in')
   })
 })

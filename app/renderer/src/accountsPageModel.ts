@@ -114,18 +114,29 @@ export function statusLabelTone(account: AccountStatus): Tone {
 }
 
 /**
- * How many pool accounts need a fresh sign-in.
+ * How many CODEX pool accounts need a fresh sign-in.
  *
  * Deliberately NOT a banner trigger. A dead account among healthy ones stays
  * silent above the transcript by operator ruling (`decisions/STARTUP-GATES.md`,
  * the P4-24 revision and #12): the pool fails over, so interrupting is the wrong
  * behavior. This drives a passive count on the Accounts destination instead, so
  * the state is discoverable without being raised.
+ *
+ * Codex only, and the label says so. `anthropicAccounts` also carries a `dead`
+ * status, but those rows offer no repair at all (their only control is Switch,
+ * gated on healthy), so counting them would advertise an action that does not
+ * exist. Giving that pool the same treatment is a separate change.
+ *
+ * `initialized` is the same guard the health bar uses: an unfinished or failed
+ * pool read can still carry rows (`initAccountPool` resets the flag in its catch
+ * AFTER `loadPoolForObservation` has populated the pool,
+ * `src/services/api/codexAccountPool.ts:241`), and marking off a snapshot the
+ * bar would refuse to act on makes the two surfaces disagree about one fact.
  */
 export function selectAccountsNeedingSignIn(
   snapshot: AccountsSnapshot | null,
 ): number {
-  if (!snapshot) return 0
+  if (!snapshot || !snapshot.initialized) return 0
   return snapshot.accounts.filter(account => account.status === 'dead').length
 }
 
@@ -133,8 +144,8 @@ export function selectAccountsNeedingSignIn(
 export function formatAccountsNeedingSignIn(count: number): string | null {
   if (count <= 0) return null
   return count === 1
-    ? '1 account needs sign-in'
-    : `${count} accounts need sign-in`
+    ? '1 Codex account needs sign-in'
+    : `${count} Codex accounts need sign-in`
 }
 
 export type AccountMenuKey =
