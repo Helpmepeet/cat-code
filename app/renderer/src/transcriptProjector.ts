@@ -546,6 +546,21 @@ type TranscriptSessionState = {
    * the next recovery — which reaches further back — stacks above this one.
    */
   recoveryInsertAt: number | null
+  /**
+   * A compaction is running in this session right now.
+   *
+   * The engine pushes `system/subtype:'status'` with `status:'compacting'` when
+   * it starts and `null` when it finishes (`src/services/compact/compact.ts`),
+   * re-emitting the live value every 30s as a transport keep-alive. A FLAG, not
+   * a row: the only durable record of a compaction is the `compact_boundary`
+   * frame that lands at the end, and rows are never rewritten after the fact.
+   *
+   * Cleared defensively by the boundary and by `result` as well as by an
+   * explicit null, because an aborted turn can end without the engine reaching
+   * the `finally` that clears it — a stuck flag would pin the activity verb to
+   * "Compacting" for the rest of the session.
+   */
+  compacting: boolean
 }
 
 export type TranscriptState = {
@@ -567,6 +582,7 @@ function createTranscriptSessionState(): TranscriptSessionState {
     hiddenFrameIds: {},
     historyTruncated: false,
     recoveryInsertAt: null,
+    compacting: false,
   }
 }
 
@@ -736,6 +752,15 @@ export function selectSlashCommands(
 ): string[] {
   const session = sessionId ? state.sessions[sessionId] : undefined
   return session?.slashCommands ?? []
+}
+
+/** Whether a compaction is running in this session (see `compacting`). */
+export function selectIsCompacting(
+  state: TranscriptState,
+  sessionId: SessionId | null,
+): boolean {
+  const session = sessionId ? state.sessions[sessionId] : undefined
+  return session?.compacting ?? false
 }
 
 /**
@@ -1397,10 +1422,12 @@ function projectMessage(
 
     case 'result':
       // Result is the only turn-end marker: prune orphan previews before
-      // projecting the authoritative P2-1 boundary row.
+      // projecting the authoritative P2-1 boundary row. A turn cannot end with
+      // a compaction still running, and an aborted one never reaches the
+      // engine's own clear, so the turn boundary is the backstop.
       return projectResultFrame(
         sessionId,
-        finalizeStreamingTurn(state),
+        clearCompacting(finalizeStreamingTurn(state)),
         message,
       )
 
@@ -1793,6 +1820,13 @@ function projectSystemFrame(
       }
     }
 
+    case 'status':
+      // The engine's compaction signal. Not a row: `compact_boundary` is the
+      // durable record, and this only says a summarization call is in flight.
+      // Returns the SAME state object when nothing moved, so the 30s keep-alive
+      // re-emits do not bust the row-slice caches downstream.
+      return setCompacting(state, message.status === 'compacting')
+
     case 'compact_boundary': {
       const metadata = message.compact_metadata
       if (
@@ -1802,7 +1836,7 @@ function projectSystemFrame(
       ) {
         return state
       }
-      return appendFrameRows(state, frameId, [
+      return appendFrameRows(clearCompacting(state), frameId, [
         {
           id: frameRowId(sessionId, frameId, 'compact-boundary'),
           sessionId,
@@ -1851,6 +1885,19 @@ function projectSystemFrame(
     default:
       return state
   }
+}
+
+function setCompacting(
+  state: TranscriptSessionState,
+  compacting: boolean,
+): TranscriptSessionState {
+  return state.compacting === compacting ? state : { ...state, compacting }
+}
+
+function clearCompacting(
+  state: TranscriptSessionState,
+): TranscriptSessionState {
+  return setCompacting(state, false)
 }
 
 function appendSystemNotice(
@@ -2739,13 +2786,15 @@ function projectUserContentBlock(
     // `<command-message>` must not be re-read as an operator command.
     const commandOutput = parseCommandOutput(block.text)
     if (commandOutput !== null) {
+      const notice = stripCompactionEcho(commandOutput)
+      if (notice === null) return null
       return {
         id: rowId(source, 'local-command-output'),
         sessionId: source.sessionId,
         frameId: source.frameId,
         kind: 'system-notice',
         noticeType: 'local_command_output',
-        content: commandOutput,
+        content: notice,
       }
     }
     const command = parseCommandEcho(block.text)
@@ -2890,6 +2939,29 @@ function parseCommandOutput(text: string): string | null {
     .map(payload => stripAnsiSequences(payload ?? '').trim())
     .filter(payload => payload.length > 0)
   return payloads.length === 0 ? COMMAND_OUTPUT_NO_CONTENT : payloads.join('\n')
+}
+
+/**
+ * `/compact`'s own stdout, minus the part that is only true in a terminal.
+ *
+ * The engine prints `Compacted (ctrl+o to see full summary)`
+ * (`src/commands/compact/compact.ts` `buildDisplayText`), where the shortcut
+ * comes from the TUI keymap. This app has neither that binding nor a
+ * full-summary view, so the line advertises an affordance that does not exist,
+ * and the sentence it introduces is already the compaction seam's job.
+ *
+ * Only that preamble is dropped. A PreCompact/PostCompact hook's
+ * `userDisplayMessage` is joined onto the same string and is real output, so
+ * whatever follows survives as an ordinary notice; a row is dropped only when
+ * nothing but the preamble was there. The shortcut is matched as "a
+ * parenthesised group on the first line" rather than the literal `ctrl+o`,
+ * because `getShortcutDisplay` reports the user's own binding.
+ */
+export function stripCompactionEcho(content: string): string | null {
+  const match = /^Compacted(?:[ \t]+\([^)\n]*\))?[ \t]*(?:\n|$)/.exec(content)
+  if (match === null) return content
+  const rest = content.slice(match[0].length).trim()
+  return rest.length === 0 ? null : rest
 }
 
 /**

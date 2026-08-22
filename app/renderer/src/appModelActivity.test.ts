@@ -251,3 +251,26 @@ test('a pending tool with no operator turn ahead of it is not reported', () => {
   expect(kinds(rows)).toEqual(['tool-use'])
   expect(deriveActivity(rows)).toEqual({ verb: 'Working', target: null })
 })
+
+test('a running compaction reports Compacting, outranking a pending tool', () => {
+  // Compaction mints no row while it runs, so the rows say "Working" (or name
+  // whatever tool the turn that triggered an auto-compaction left pending).
+  // Neither is what the session is doing; the flag comes from the engine's own
+  // status signal (`selectIsCompacting`) and wins outright.
+  const quiet = project([userTurn('hello')])
+  expect(deriveActivity(quiet)).toEqual({ verb: 'Working', target: null })
+  expect(deriveActivity(quiet, true)).toEqual({
+    verb: 'Compacting',
+    target: null,
+  })
+
+  const midTool = project([
+    userTurn('hello'),
+    toolCalls([{ id: 'toolu_live', name: 'Bash' }]),
+  ])
+  expect(deriveActivity(midTool)).toEqual({ verb: 'Running', target: 'Bash' })
+  expect(deriveActivity(midTool, true)).toEqual({
+    verb: 'Compacting',
+    target: null,
+  })
+})

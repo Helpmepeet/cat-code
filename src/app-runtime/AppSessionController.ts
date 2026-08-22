@@ -199,6 +199,21 @@ export class AppSessionController {
     return this.goalSnapshot?.threadId ?? this.fallbackDiagnosticSessionId
   }
 
+  /**
+   * Out-of-band engine message injection, for a message the engine PUSHES
+   * through a callback instead of yielding from the turn generator. The
+   * compaction status is the only one today: `setSDKStatus` fires from inside
+   * the compaction service (`src/services/compact/compact.ts`), which is not a
+   * point in the message stream, so there is nothing to yield it from.
+   *
+   * Same shape as the stream-json account-diagnostic hook already wired inside
+   * `submit`, lifted to a method because `createRuntimeBackedWebAppSession`
+   * builds its callback before the controller exists.
+   */
+  emitMessage(message: SDKMessage): void {
+    this.emit(createMessageEvent(message))
+  }
+
   private emit(event: AppSessionEvent): void {
     for (const listener of this.listeners) {
       listener(event)

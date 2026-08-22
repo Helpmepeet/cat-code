@@ -5,10 +5,12 @@ import {
   groupAgentDelegates,
   projectServerFrame,
   selectHasHiddenRows,
+  selectIsCompacting,
   selectNestedTranscriptRows,
   selectSlashCommands,
   selectTranscriptDisplayItems,
   selectTranscriptRows,
+  stripCompactionEcho,
   type NestedTranscriptRow,
 } from './transcriptProjector.js'
 import {
@@ -1616,6 +1618,129 @@ test('captures the init frame slash_commands catalog per session (P3-7)', () => 
   // P4-23: a degraded (non-array slash_commands) init still captures `[]` and
   // emits no row — the frame handler runs, the banner row is gone.
   expect(selectTranscriptRows(degraded, 'session-3')).toEqual([])
+})
+
+/* ── compaction status (2026-08-22) ────────────────────────────────────────
+ * Compaction is invisible to the transcript while it runs: it mints no row
+ * until `compact_boundary` lands at the end. The engine's own signal is a
+ * pushed `system/subtype:'status'` (`src/services/compact/compact.ts`
+ * `setSDKStatus`), wired onto this path by
+ * `src/app-runtime/createRuntimeBackedWebAppSession.ts`. Without it the
+ * activity verb read "Working" for the whole compaction. */
+
+function statusFrame(status: string | null, uuid: string) {
+  return messageFrame('session-1', {
+    type: 'system',
+    subtype: 'status',
+    status,
+    uuid,
+  } as unknown as SDKMessage)
+}
+
+test('the engine status signal raises and clears the compacting flag', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  expect(selectIsCompacting(state, 'session-1')).toBe(false)
+
+  state = projectServerFrame(
+    state,
+    statusFrame('compacting', '00000000-0000-4000-8000-0000000002a1'),
+  )
+  expect(selectIsCompacting(state, 'session-1')).toBe(true)
+  // No row: the boundary at the end is the durable record.
+  expect(selectTranscriptRows(state, 'session-1')).toHaveLength(0)
+
+  // The 30s keep-alive re-emits the SAME status. Identity must survive it, or
+  // every read-time slice cache downstream busts twice a minute.
+  const before = state
+  state = projectServerFrame(
+    state,
+    statusFrame('compacting', '00000000-0000-4000-8000-0000000002a2'),
+  )
+  expect(state.sessions['session-1']).toBe(before.sessions['session-1'])
+
+  state = projectServerFrame(
+    state,
+    statusFrame(null, '00000000-0000-4000-8000-0000000002a3'),
+  )
+  expect(selectIsCompacting(state, 'session-1')).toBe(false)
+})
+
+test('the boundary and the turn end both clear a compaction left running', () => {
+  const start = statusFrame('compacting', '00000000-0000-4000-8000-0000000002b1')
+
+  let viaBoundary = createTranscriptState()
+  viaBoundary = projectServerFrame(viaBoundary, ready('session-1'))
+  viaBoundary = projectServerFrame(viaBoundary, start)
+  viaBoundary = projectServerFrame(
+    viaBoundary,
+    messageFrame('session-1', {
+      type: 'system',
+      subtype: 'compact_boundary',
+      compact_metadata: { trigger: 'manual', pre_tokens: 147150 },
+      uuid: '00000000-0000-4000-8000-0000000002b2',
+    } as unknown as SDKMessage),
+  )
+  expect(selectIsCompacting(viaBoundary, 'session-1')).toBe(false)
+  expect(selectTranscriptRows(viaBoundary, 'session-1')[0]).toMatchObject({
+    kind: 'compact-boundary',
+    trigger: 'manual',
+    preTokens: 147150,
+  })
+
+  // An ABORTED compaction never reaches the engine's own clear, so the turn
+  // boundary is the backstop: without it the verb stays "Compacting" forever.
+  let viaResult = createTranscriptState()
+  viaResult = projectServerFrame(viaResult, ready('session-1'))
+  viaResult = projectServerFrame(viaResult, start)
+  viaResult = projectServerFrame(
+    viaResult,
+    messageFrame('session-1', {
+      type: 'result',
+      subtype: 'error_during_execution',
+      is_error: true,
+      duration_ms: 10,
+      uuid: '00000000-0000-4000-8000-0000000002b3',
+    } as unknown as SDKMessage),
+  )
+  expect(selectIsCompacting(viaResult, 'session-1')).toBe(false)
+})
+
+test('the compaction echo drops its terminal-only shortcut, keeps hook output', () => {
+  // `buildDisplayText` (src/commands/compact/compact.ts) joins the TUI shortcut
+  // line and any PreCompact/PostCompact `userDisplayMessage` into one string.
+  expect(stripCompactionEcho('Compacted (ctrl+o to see full summary)')).toBeNull()
+  expect(stripCompactionEcho('Compacted')).toBeNull()
+  // A remapped binding still matches: the shortcut is whatever the keymap says.
+  expect(stripCompactionEcho('Compacted (cmd+t to see full summary)')).toBeNull()
+  expect(
+    stripCompactionEcho('Compacted (ctrl+o to see full summary)\nHook wrote notes.md'),
+  ).toBe('Hook wrote notes.md')
+  // Verbose mode omits the shortcut line entirely.
+  expect(stripCompactionEcho('Compacted\nHook wrote notes.md')).toBe(
+    'Hook wrote notes.md',
+  )
+  // Any other command's output is untouched.
+  expect(stripCompactionEcho('Total cost: $0.42')).toBe('Total cost: $0.42')
+})
+
+test('the whole compaction echo row is dropped, boundary seam aside', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'user',
+      message: {
+        role: 'user',
+        content:
+          '<local-command-stdout>Compacted (ctrl+o to see full summary)</local-command-stdout>',
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000000002c1',
+    } as unknown as SDKMessage),
+  )
+  expect(selectTranscriptRows(state, 'session-1')).toHaveLength(0)
 })
 
 test('projects user-visible system notices and emits boundary rows once', () => {
@@ -3903,10 +4028,13 @@ test('a replayed slash breadcrumb sharing the submit uuid does not add a row', (
     slashFrame(SLASH_BREADCRUMB, SLASH_UUID, true),
   )
   // Its output row is separately identified and must survive the dedupe.
+  // Deliberately NOT `/compact`'s own stdout: that one preamble is dropped on
+  // purpose now (`stripCompactionEcho`), and this test is about uuid-keyed
+  // replay, not about which commands print something.
   state = projectServerFrame(
     state,
     slashFrame(
-      '<local-command-stdout>Compacted</local-command-stdout>',
+      '<local-command-stdout>Total cost: $0.42</local-command-stdout>',
       '00000000-0000-4000-8000-0000000009f2',
       true,
     ),

@@ -172,6 +172,11 @@ describe('theme.css', () => {
       .sort()
     expect(selectors).toEqual(
       [
+        '.animate-compact-absorb',
+        '.animate-compact-ingest',
+        '.animate-compact-star',
+        '.animate-compact-sweep-left',
+        '.animate-compact-sweep-right',
         '.animate-face-pulse',
         '.animate-ping',
         '.animate-pulse',

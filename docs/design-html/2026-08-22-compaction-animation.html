@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Compaction animation</title>
+<style>
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:500;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMMono-Medium.woff2') format('woff2')}
+
+:root{
+  --color-app-bg:#09090b;
+  --color-text-primary:#f4f4f5;
+  --color-text-muted:#a1a1aa;
+  --color-text-subtle:#98989f;
+  --color-shell-seam:rgba(255,255,255,0.06);
+  --accent:#f472b6;
+  --accent-20:rgba(244,114,182,.2);
+  --accent-15:rgba(244,114,182,.15);
+  --font-sans:"DM Sans",-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+  --font-mono:"DM Mono",ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--color-app-bg);color:var(--color-text-primary);font-family:var(--font-sans);-webkit-font-smoothing:antialiased}
+
+/* ---- chrome (x-) : never applied inside a specimen ---- */
+.x-page{max-width:1180px;margin:0 auto;padding:56px 32px 120px}
+.x-title{font-family:var(--font-mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:#6b6b72;margin:0 0 40px}
+.x-sec{padding-top:34px;border-top:1px solid rgba(255,255,255,.07);margin-bottom:12px}
+.x-sec-name{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:#6b6b72;margin-bottom:20px}
+.x-row{display:flex;align-items:flex-start;gap:24px;margin-bottom:26px}
+.x-key{flex:0 0 68px;padding-top:5px;font-family:var(--font-mono);font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:#5c5c63}
+.x-stage{width:836px;max-width:100%;min-width:0}
+.x-grid{display:grid;grid-template-columns:1fr 1fr;gap:36px}
+.x-col{min-width:0}
+.x-col-name{font-family:var(--font-mono);font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:#5c5c63;margin-bottom:14px}
+.x-col .x-stage{width:100%}
+.x-sub{font-family:var(--font-mono);font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:#5c5c63;margin:0 0 8px}
+.x-slot{margin-bottom:26px}
+
+/* ---- specimen : app values only ---- */
+/* activity byline — App.tsx ActivityIndicator */
+.act{display:flex;align-items:center;gap:10px;background:transparent;padding:6px 4px;font-size:12px;line-height:16px}
+.act-verb{font-weight:600;color:var(--accent)}
+.act-clock{flex-shrink:0;font-family:var(--font-mono);font-size:11px;font-variant-numeric:tabular-nums;color:var(--color-text-subtle)}
+
+.dots{display:flex;align-items:center;gap:4px}
+.dots i{display:block;height:6px;width:6px;border-radius:9999px;background:var(--accent);animation:pulse 2s cubic-bezier(.4,0,.6,1) infinite}
+.dots i:nth-child(2){animation-delay:150ms}
+.dots i:nth-child(3){animation-delay:300ms}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+
+.fold{display:flex;align-items:center;gap:3px;height:12px}
+.fold i{display:block;width:1.5px;height:11px;border-radius:1px;background:var(--accent);transform-origin:center;animation:foldbar 1.55s cubic-bezier(.4,0,.2,1) infinite}
+.fold i:nth-child(2),.fold i:nth-child(6){animation-delay:.1s}
+.fold i:nth-child(3),.fold i:nth-child(5){animation-delay:.2s}
+.fold i:nth-child(4){animation-delay:.3s}
+@keyframes foldbar{0%,100%{transform:scaleY(1);opacity:.95}45%,70%{transform:scaleY(.14);opacity:.28}}
+
+.drain{width:38px;height:3px;border-radius:2px;background:var(--accent-15);overflow:hidden}
+.drain i{display:block;height:100%;border-radius:2px;background:var(--accent);animation:drain 1.9s cubic-bezier(.4,0,.2,1) infinite}
+@keyframes drain{0%{width:100%;opacity:1}58%{width:18%;opacity:1}76%{width:18%;opacity:.4}77%{width:100%;opacity:0}100%{width:100%;opacity:1}}
+
+.star{display:inline-block;font-size:12px;line-height:1;color:var(--accent);animation:starspin 2.4s cubic-bezier(.4,0,.6,1) infinite}
+@keyframes starspin{0%{transform:rotate(0deg) scale(1);opacity:.95}50%{transform:rotate(180deg) scale(.7);opacity:.55}100%{transform:rotate(360deg) scale(1);opacity:.95}}
+
+.ingest{position:relative;width:30px;height:6px}
+.ingest b{position:absolute;left:0;top:0;height:6px;width:6px;border-radius:9999px;background:var(--accent);animation:anchor 1.5s ease-out infinite}
+@keyframes anchor{0%,58%{transform:scale(1)}72%{transform:scale(1.45)}100%{transform:scale(1)}}
+.ingest i{position:absolute;top:1px;height:4px;width:4px;border-radius:9999px;background:var(--accent);opacity:0;animation:ingest 1.5s linear infinite}
+.ingest i:nth-of-type(2){animation-delay:.5s}
+.ingest i:nth-of-type(3){animation-delay:1s}
+@keyframes ingest{0%{transform:translateX(26px);opacity:0}18%,82%{opacity:.75}100%{transform:translateX(1px);opacity:0}}
+
+/* seam — TranscriptView.tsx Seam, tone accent */
+.seam{display:flex;align-items:center;gap:12px;padding:4px 0}
+.seam-rule{height:1px;flex:1;background:var(--accent-20)}
+.seam-body{display:flex;align-items:center;gap:6px;white-space:nowrap;font-size:11px}
+.seam-glyph,.seam-label{color:var(--color-text-muted)}
+.seam-detail{color:rgba(152,152,159,.7)}
+
+/* system notice — TranscriptView.tsx SystemNoticeBox, local_command_output */
+.notice{display:flex;align-items:flex-start;gap:8px;border-radius:8px;border:1px solid var(--color-shell-seam);background:rgba(255,255,255,.018);padding:6px 12px}
+.notice-glyph{font-size:12px;line-height:20px;color:var(--color-text-muted)}
+.notice-text{min-width:0;flex:1;font-size:12px;line-height:16px;color:var(--color-text-muted)}
+
+/* live seam — same geometry as .seam, two states */
+.lseam{display:flex;align-items:center;gap:12px;padding:4px 0}
+.lseam-rule{position:relative;height:1px;flex:1;background:var(--accent-20);overflow:hidden}
+.lseam-rule span{position:absolute;top:0;height:1px;width:40%;background:linear-gradient(90deg,rgba(244,114,182,0),var(--accent),rgba(244,114,182,0));opacity:0}
+.lseam.is-live .lseam-rule.l span{opacity:1;animation:sweepl 1.5s cubic-bezier(.4,0,.2,1) infinite}
+.lseam.is-live .lseam-rule.r span{opacity:1;animation:sweepr 1.5s cubic-bezier(.4,0,.2,1) infinite}
+@keyframes sweepl{0%{left:-40%}100%{left:100%}}
+@keyframes sweepr{0%{right:-40%}100%{right:100%}}
+.lseam-body{display:flex;align-items:center;gap:6px;white-space:nowrap;font-size:11px}
+.lseam-glyph{color:var(--color-text-muted);display:inline-block}
+.lseam.is-live .lseam-glyph{color:var(--accent);animation:starspin 2.4s cubic-bezier(.4,0,.6,1) infinite}
+.lseam-word{color:var(--color-text-muted)}
+.lseam .lseam-word.live{display:none}
+.lseam.is-live .lseam-word.live{display:inline}
+.lseam.is-live .lseam-word.done{display:none}
+.lseam-detail{color:rgba(152,152,159,.7)}
+.lseam.is-live .lseam-detail{opacity:0}
+
+.stack{display:flex;flex-direction:column;align-items:center;gap:3px;overflow:hidden;height:0;transition:height .35s ease}
+.lseam-wrap.is-live .stack{height:19px}
+.stack i{display:block;height:2px;border-radius:1px;background:rgba(244,114,182,.3)}
+.lseam-wrap.is-live .stack i{animation:eat 1.6s cubic-bezier(.4,0,.2,1) infinite}
+.stack i:nth-child(1){width:180px}
+.stack i:nth-child(2){width:132px;animation-delay:.14s}
+.stack i:nth-child(3){width:208px;animation-delay:.28s}
+.stack i:nth-child(4){width:96px;animation-delay:.42s}
+@keyframes eat{0%{transform:scaleX(1);opacity:1}55%,80%{transform:scaleX(.06);opacity:.15}100%{transform:scaleX(1);opacity:1}}
+</style>
+</head>
+<body>
+<div class="x-page">
+<div class="x-title">Compaction</div>
+
+<section class="x-sec">
+<div class="x-sec-name">Compacting / activity byline</div>
+
+<div class="x-row">
+  <div class="x-key">Baseline</div>
+  <div class="x-stage">
+    <div class="act">
+      <span class="dots"><i></i><i></i><i></i></span>
+      <span class="act-verb">Working</span>
+      <span class="act-clock">1m 12s</span>
+    </div>
+  </div>
+</div>
+
+<div class="x-row">
+  <div class="x-key">A</div>
+  <div class="x-stage">
+    <div class="act">
+      <span class="fold"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+      <span class="act-verb">Compacting</span>
+      <span class="act-clock">1m 12s</span>
+    </div>
+  </div>
+</div>
+
+<div class="x-row">
+  <div class="x-key">B</div>
+  <div class="x-stage">
+    <div class="act">
+      <span class="drain"><i></i></span>
+      <span class="act-verb">Compacting</span>
+      <span class="act-clock">1m 12s</span>
+    </div>
+  </div>
+</div>
+
+<div class="x-row">
+  <div class="x-key">C</div>
+  <div class="x-stage">
+    <div class="act">
+      <span class="star">&#10043;</span>
+      <span class="act-verb">Compacting</span>
+      <span class="act-clock">1m 12s</span>
+    </div>
+  </div>
+</div>
+
+<div class="x-row">
+  <div class="x-key">D</div>
+  <div class="x-stage">
+    <div class="act">
+      <span class="ingest"><b></b><i></i><i></i><i></i></span>
+      <span class="act-verb">Compacting</span>
+      <span class="act-clock">1m 12s</span>
+    </div>
+  </div>
+</div>
+</section>
+
+<section class="x-sec">
+<div class="x-sec-name">Compacting / transcript seam</div>
+
+<div class="x-row">
+  <div class="x-key">None</div>
+  <div class="x-stage"><div style="height:22px"></div></div>
+</div>
+
+<div class="x-row">
+  <div class="x-key">E</div>
+  <div class="x-stage">
+    <div class="lseam-wrap">
+      <div class="lseam is-live">
+        <div class="lseam-rule l"><span></span></div>
+        <div class="lseam-body">
+          <span class="lseam-glyph">&#10043;</span>
+          <span class="lseam-word live">Compacting conversation</span>
+          <span class="lseam-word done">Conversation compacted</span>
+          <span class="lseam-detail">&middot; 147,150 tokens</span>
+        </div>
+        <div class="lseam-rule r"><span></span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="x-row">
+  <div class="x-key">F</div>
+  <div class="x-stage">
+    <div class="lseam-wrap is-live">
+      <div class="stack"><i></i><i></i><i></i><i></i></div>
+      <div class="lseam is-live">
+        <div class="lseam-rule l"></div>
+        <div class="lseam-body">
+          <span class="lseam-glyph">&#10043;</span>
+          <span class="lseam-word live">Compacting conversation</span>
+          <span class="lseam-word done">Conversation compacted</span>
+          <span class="lseam-detail">&middot; 147,150 tokens</span>
+        </div>
+        <div class="lseam-rule r"></div>
+      </div>
+    </div>
+  </div>
+</div>
+</section>
+
+<section class="x-sec">
+<div class="x-sec-name">After</div>
+<div class="x-grid">
+  <div class="x-col">
+    <div class="x-col-name">Current</div>
+    <div class="x-slot">
+      <div class="x-sub">Now</div>
+      <div class="x-stage">
+        <div class="seam">
+          <div class="seam-rule"></div>
+          <div class="seam-body">
+            <span class="seam-glyph">&#10043;</span>
+            <span class="seam-label">Conversation compacted</span>
+            <span class="seam-detail">&middot; manual &middot; 147,150 tokens</span>
+          </div>
+          <div class="seam-rule"></div>
+        </div>
+        <div style="height:8px"></div>
+        <div class="notice">
+          <span class="notice-glyph">&rsaquo;</span>
+          <span class="notice-text">Compacted (ctrl+o to see full summary)</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="x-col">
+    <div class="x-col-name">Proposed</div>
+    <div class="x-slot">
+      <div class="x-sub">P1</div>
+      <div class="x-stage">
+        <div class="seam">
+          <div class="seam-rule"></div>
+          <div class="seam-body">
+            <span class="seam-glyph">&#10043;</span>
+            <span class="seam-label">Conversation compacted</span>
+            <span class="seam-detail">&middot; 147,150 tokens</span>
+          </div>
+          <div class="seam-rule"></div>
+        </div>
+      </div>
+    </div>
+    <div class="x-slot">
+      <div class="x-sub">P2</div>
+      <div class="x-stage">
+        <div class="seam">
+          <div class="seam-rule"></div>
+          <div class="seam-body">
+            <span class="seam-glyph">&#10043;</span>
+            <span class="seam-label">Conversation compacted</span>
+          </div>
+          <div class="seam-rule"></div>
+        </div>
+      </div>
+    </div>
+    <div class="x-slot">
+      <div class="x-sub">P3</div>
+      <div class="x-stage"><div style="height:22px"></div></div>
+    </div>
+  </div>
+</div>
+</section>
+</div>
+<script>
+setInterval(function () {
+  var live = document.querySelectorAll('.lseam.is-live, .lseam-wrap.is-live')
+  if (live.length > 0) {
+    live.forEach(function (el) { el.classList.remove('is-live') })
+    return
+  }
+  document.querySelectorAll('.lseam, .lseam-wrap').forEach(function (el) {
+    el.classList.add('is-live')
+  })
+}, 3200)
+</script>
+</body>
+</html>

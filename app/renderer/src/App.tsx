@@ -76,6 +76,7 @@ import {
 import {
   createTranscriptState,
   selectHasHiddenRows,
+  selectIsCompacting,
   selectNestedTranscriptRows,
   selectSlashCommands,
   selectTranscriptRows,
@@ -4647,7 +4648,10 @@ export function SessionPane({
   // Slice-cached: stable ref while the session's rows are unchanged, so both
   // `deriveActivity` and the token estimate share one projection.
   const nestedRows = selectNestedTranscriptRows(transcript, activeSessionId)
-  const activity = deriveActivity(nestedRows)
+  // Compaction is the one activity the rows cannot report: it runs between
+  // turns of the loop and mints nothing until its boundary lands at the end.
+  const compacting = selectIsCompacting(transcript, activeSessionId)
+  const activity = deriveActivity(nestedRows, compacting)
   // The scroll memory anchors on row IDENTITY, so nothing here names the head
   // of the list any more: rows recovered above the reader renumber every row
   // below them, and an index-based anchor would have been discarded at exactly
@@ -5144,6 +5148,7 @@ export function SessionPane({
             restorePhase={restorePhase}
             revealHidden={revealHidden}
             state={transcript}
+            compacting={compacting}
             leases={leases}
             loadEarlierPending={historyLoadEarlierPending}
             loadEarlierFailure={historyLoadEarlierFailure}
@@ -5327,6 +5332,7 @@ export function SessionPane({
           elapsedMs={elapsedMs}
           liveTokens={liveTokens}
           paused={paused}
+          compacting={compacting}
           stopError={stopError}
         />
       ) : null}
@@ -5634,6 +5640,7 @@ function ActivityIndicator({
   elapsedMs,
   liveTokens,
   paused,
+  compacting,
   stopError,
 }: {
   verb: string
@@ -5641,6 +5648,8 @@ function ActivityIndicator({
   elapsedMs: number
   liveTokens: number
   paused: boolean
+  /** Swaps the pulse dots for the compaction glyph (see `CompactingGlyph`). */
+  compacting?: boolean
   stopError: string | null
 }) {
   const tone = paused ? 'text-tone-warn' : 'text-accent'
@@ -5648,6 +5657,9 @@ function ActivityIndicator({
   const showTokens = liveTokens > 0 && elapsedMs > SHOW_TOKENS_AFTER_MS
   return (
     <div className="flex items-center gap-2.5 bg-transparent px-1 py-1.5 text-xs">
+      {compacting && !paused ? (
+        <CompactingGlyph />
+      ) : (
       <span className="flex items-center gap-1" aria-hidden>
         <span className={`h-1.5 w-1.5 animate-pulse rounded-full ${dot}`} />
         <span
@@ -5657,6 +5669,7 @@ function ActivityIndicator({
           className={`h-1.5 w-1.5 animate-pulse rounded-full ${dot} [animation-delay:300ms]`}
         />
       </span>
+      )}
       <span className={`font-semibold ${tone}`}>
         {paused ? 'Waiting for approval' : verb}
       </span>
@@ -5680,6 +5693,31 @@ function ActivityIndicator({
         <span className="shrink-0 text-[11px] text-tone-danger">{stopError}</span>
       ) : null}
     </div>
+  )
+}
+
+/**
+ * The compaction verb's own motion: three marks travelling into one that
+ * absorbs them. Compaction is the one activity the pulse dots misrepresent —
+ * they say "a turn is running", and what is running is the conversation being
+ * folded into a summary.
+ *
+ * Occupies the same 30px the three dots do, so swapping it in does not shift
+ * the verb. The motion lives in `theme.css` as named classes
+ * (`animate-compact-ingest` / `animate-compact-absorb`), NOT as interpolated
+ * arbitrary-value utilities: an `[animation:name_1.5s_…]` class silently
+ * no-ops unless Tailwind saw that exact literal, and `codeTheme.test.ts`
+ * enforces that every renderer animation class is neutralised under
+ * `prefers-reduced-motion`, which only sees named classes.
+ */
+function CompactingGlyph() {
+  return (
+    <span className="relative block h-1.5 w-[30px] shrink-0" aria-hidden>
+      <span className="animate-compact-absorb absolute left-0 top-0 h-1.5 w-1.5 rounded-full bg-accent" />
+      <span className="animate-compact-ingest absolute top-px h-1 w-1 rounded-full bg-accent opacity-0" />
+      <span className="animate-compact-ingest absolute top-px h-1 w-1 rounded-full bg-accent opacity-0 [animation-delay:500ms]" />
+      <span className="animate-compact-ingest absolute top-px h-1 w-1 rounded-full bg-accent opacity-0 [animation-delay:1000ms]" />
+    </span>
   )
 }
 

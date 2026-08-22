@@ -101,11 +101,22 @@ function lastOperatorTurnStart(rows: readonly NestedTranscriptRow[]): number {
  * own message. It is deliberately NOT synthesized from the absence of other
  * activity, which would assert a state the renderer cannot observe; it becomes
  * real once thinking streams.
+ *
+ * `Compacting` outranks even a pending tool, and is the one verb that does not
+ * come from the rows: compaction runs between turns of the loop, mints no row
+ * while it works, and used to fall all the way through to "Working". Its source
+ * is the engine's own status signal, projected to `selectIsCompacting`. A tool
+ * left pending by the turn that triggered an auto-compaction is not what the
+ * session is doing.
  */
-export function deriveActivity(rows: NestedTranscriptRow[]): {
+export function deriveActivity(
+  rows: NestedTranscriptRow[],
+  compacting = false,
+): {
   verb: string
   target: string | null
 } {
+  if (compacting) return { verb: 'Compacting', target: null }
   const working = { verb: 'Working', target: null }
   const last = rows[rows.length - 1]
   if (!last) return working

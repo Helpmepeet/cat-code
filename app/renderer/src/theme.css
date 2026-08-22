@@ -312,6 +312,71 @@
   }
 }
 
+/* Compaction, the two halves of one idea (2026-08-22): marks travelling into a
+ * mark that absorbs them, in the activity byline; hairlines closing toward the
+ * glyph, in the transcript seam. Compaction is invisible to the transcript
+ * while it runs — it mints no row until its boundary lands at the end — so the
+ * motion is the only report the reader gets, and the pulse dots it replaces
+ * said nothing more specific than "a turn is running".
+ *
+ * Written as keyframes rather than Tailwind utilities because all four animate
+ * `transform`/`left`/`right` over a cycle, which no utility expresses. */
+@keyframes catcode-compact-ingest {
+  0% {
+    transform: translateX(26px);
+    opacity: 0;
+  }
+  18%,
+  82% {
+    opacity: 0.75;
+  }
+  100% {
+    transform: translateX(1px);
+    opacity: 0;
+  }
+}
+
+@keyframes catcode-compact-absorb {
+  0%,
+  58%,
+  100% {
+    transform: scale(1);
+  }
+  72% {
+    transform: scale(1.45);
+  }
+}
+
+@keyframes catcode-compact-star {
+  0%,
+  100% {
+    transform: rotate(0deg) scale(1);
+    opacity: 0.95;
+  }
+  50% {
+    transform: rotate(180deg) scale(0.7);
+    opacity: 0.55;
+  }
+}
+
+@keyframes catcode-compact-sweep-left {
+  from {
+    left: -40%;
+  }
+  to {
+    left: 100%;
+  }
+}
+
+@keyframes catcode-compact-sweep-right {
+  from {
+    right: -40%;
+  }
+  to {
+    right: 100%;
+  }
+}
+
 @layer components {
   /* The design source's own opt-out class (`no-scrollbar`, "CatCode Web App.html":49-50)
    * for a scroller that should not advertise itself: a short inline list, a tab
@@ -340,6 +405,36 @@
 
   .animate-face-pulse {
     animation: catcode-face-pulse 1.4s ease-in-out infinite;
+  }
+
+  .animate-compact-ingest {
+    animation: catcode-compact-ingest 1.5s linear infinite;
+  }
+
+  .animate-compact-absorb {
+    animation: catcode-compact-absorb 1.5s ease-out infinite;
+  }
+
+  .animate-compact-star {
+    display: inline-block;
+    animation: catcode-compact-star 2.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+
+  /* The resting `left`/`right` is a real declaration, not just the keyframe's
+   * `from`. Parked off-track it is clipped away by the rule's own
+   * `overflow-hidden`, so `animation: none` under reduced motion removes the
+   * highlight instead of freezing a bright stub at the start of the hairline —
+   * and the reduced-motion block below stays the single rule its guard expects. */
+  .animate-compact-sweep-left {
+    left: -40%;
+    animation: catcode-compact-sweep-left 1.5s cubic-bezier(0.4, 0, 0.2, 1)
+      infinite;
+  }
+
+  .animate-compact-sweep-right {
+    right: -40%;
+    animation: catcode-compact-sweep-right 1.5s cubic-bezier(0.4, 0, 0.2, 1)
+      infinite;
   }
 
   /* Sidebar row actions (design source `components/sidebar/index.html`) — the
@@ -596,7 +691,12 @@
   .animate-toast-in,
   .animate-sa-pop,
   .animate-token-warn-in,
-  .animate-face-pulse {
+  .animate-face-pulse,
+  .animate-compact-ingest,
+  .animate-compact-absorb,
+  .animate-compact-star,
+  .animate-compact-sweep-left,
+  .animate-compact-sweep-right {
     animation: none !important;
   }
 }
