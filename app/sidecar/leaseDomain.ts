@@ -21,7 +21,8 @@
  *  4. **Reactivity = emit-on-attach + store-driven re-emit (NOT a poll).** The
  *     lease map is a bare module singleton with no emitter, but leases move on
  *     exactly the events that mutate `AppState.tasks`: a worker spawn registers a
- *     lease (`AgentTool.tsx:1226,1354`) and a worker finish releases one
+ *     lease when that worker is on the Codex path (`registerWorkerCodexLease`,
+ *     `AgentTool.tsx`) and a worker finish releases one
  *     (`LocalAgentTask.tsx:388,554,581,817`). So this domain subscribes to the
  *     SAME app-state store that drives the `agent-mode.snapshot` re-broadcast.
  *
@@ -199,8 +200,10 @@ export function leaseSnapshot(
  * the `agentId` the Agent tool registered the lease under
  * (`createTaskStateBase(agentId, 'local_agent', …)`,
  * `src/tasks/LocalAgentTask/LocalAgentTask.tsx:618`;
- * `registerCodexLease({ ownerId: asyncAgentId })`,
- * `src/tools/AgentTool/AgentTool.tsx:1226`), so no extra join field is needed.
+ * `registerWorkerCodexLease({ ownerId: asyncAgentId, … })`,
+ * `src/tools/AgentTool/AgentTool.tsx`), so no extra join field is needed. A
+ * worker that is not on the Codex path registers none, which §Reactivity
+ * above and the `!lease` skip in `leaseSnapshot` both already expect.
  */
 function liveWorkerOwnerIds(
   tasks: Record<string, TaskState> | undefined,

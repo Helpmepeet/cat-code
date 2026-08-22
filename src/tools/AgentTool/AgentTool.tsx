@@ -247,13 +247,13 @@ export function releaseSynchronousAgentCodexResources(agentId: string): void {
  *
  * Two guards, and both are load-bearing:
  *
- *  - **Provider.** `registerWorkerCodexLease` already refuses to take a lease
- *    for a non-Codex worker, so this is a second gate on the same routing
- *    function rather than the only one. Kept because the two answer different
- *    questions: registration asks whether to TAKE an account, this asks
- *    whether the run SPENT one, and only the second is what the transcript
- *    claims. The gate is the engine's OWN routing function, so it cannot
- *    disagree with where the request actually went.
+ *  - **Provider.** Redundant today, and deliberately kept:
+ *    `registerWorkerCodexLease` computes the same predicate from the same two
+ *    values, so a worker off the Codex path holds no lease to report anyway.
+ *    This is the last gate before the transcript, the only one standing on the
+ *    CLAIM rather than on the account, and it fails toward reporting nothing.
+ *    The gate is the engine's OWN routing function, so it cannot disagree with
+ *    where the request actually went.
  *  - **Liveness.** `releaseCodexLease` deletes the entry, so this returns
  *    undefined once the worker's lease is released. Callers must take the
  *    snapshot while the lease is alive; there is no reading it back afterwards.
@@ -284,16 +284,26 @@ function reportableLeaseAccount(
  *    model that took a lease would hold an account it never spends: a false
  *    holder in the lease panel, and a phantom entry in the live-lease counts
  *    that `spread` selection balances real Codex workers across.
- *  - **Pool authority.** With no pool inventory there is nothing to lease, and
- *    `selectAccountForLease` throws rather than returning nothing.
+ *  - **Pool authority.** With no pool inventory there is nothing to lease.
+ *    This one is a fast path, not the safety net: `selectAccountForLease`
+ *    throws rather than returning nothing, so the catch below is what actually
+ *    keeps an empty pool from failing the spawn. It mirrors the main thread's
+ *    guard and skips minting an exception per spawn.
  *
  * Selection failure is caught, not propagated. Both call sites sit outside the
  * launch try/catch, so a throw here escaped as a raw tool failure with no
- * worktree or worker-name cleanup behind it. An exhausted pool is a
- * REQUEST-path condition anyway: `claude.ts` registers a subagent lease lazily
- * when one is missing, and `errors.ts` classifies the exhaustion message there
- * into the message the user is meant to read. Losing the lease here costs the
- * worker only the description-shaped `ownerLabel`.
+ * worktree or worker-name cleanup behind it. An exhausted pool is a REQUEST-path
+ * condition anyway: `claude.ts` re-registers a subagent lease lazily when one is
+ * missing, and a pool still exhausted by then fails the request instead of the
+ * spawn. Note it fails there UNCLASSIFIED: that lazy registration sits outside
+ * `queryModel`'s try, so `errors.ts`'s lease-exhaustion branch never sees it and
+ * the raw message reaches the user. Same text either way, so this is not a
+ * regression, but it is not the handled path either.
+ *
+ * Losing the lease here costs the worker its description-shaped `ownerLabel`,
+ * and on the background path the launch record's account stamp: that record is
+ * snapshotted once at spawn and never refolded, unlike the sync and
+ * auto-background stamps, which re-read from the release.
  */
 export function registerWorkerCodexLease({
   ownerId,

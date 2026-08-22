@@ -1024,9 +1024,10 @@ export async function runAsyncAgentLifecycle({
     // below release it, and the release DELETES the entry. Reaches the stored
     // task result (TaskOutput, the resumed-run card), NOT the launch record,
     // whose account was stamped on its acknowledgment at dispatch.
-    // Gated on the worker's own model, like every other capture: a Codex lease
-    // is registered for EVERY worker, so an Anthropic one holds an account it
-    // never spends and must not be reported as having used it.
+    // Gated on the worker's own model, like every other capture. Registration
+    // is gated the same way now (`registerWorkerCodexLease`), so an Anthropic
+    // worker holds nothing to report; this stays as the gate on the CLAIM,
+    // since naming an account the run never touched is the failure that counts.
     const terminalAccount =
       resolveRequestProvider(metadata.resolvedAgentModel) === 'openai'
         ? snapshotLeaseAccount(taskId)

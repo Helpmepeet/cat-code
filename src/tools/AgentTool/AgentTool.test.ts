@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
 import { randomUUID } from 'crypto'
 import { mkdtempSync } from 'fs'
@@ -897,6 +897,11 @@ function buildLeasePoolAccount(accountId: string, status: PoolAccount['status'] 
 }
 
 describe('registerWorkerCodexLease', () => {
+  beforeEach(() => {
+    resetCodexLeaseManagerForTest()
+    resetCodexAccountPoolForTest()
+  })
+
   afterEach(() => {
     resetCodexLeaseManagerForTest()
     resetCodexAccountPoolForTest()
@@ -906,6 +911,8 @@ describe('registerWorkerCodexLease', () => {
     // An Anthropic-only machine has an empty pool, and selectAccountForLease
     // throws there. Both spawn sites sit outside the launch try/catch, so an
     // unguarded registration failed every Agent tool call on such a machine.
+    // This is the Anthropic worker on that machine; the gpt case below is the
+    // one that reaches the pool gate.
     resetCodexAccountPoolForTest()
 
     expect(() =>
@@ -973,7 +980,24 @@ describe('registerWorkerCodexLease', () => {
     expect(lease?.ownerType).toBe('subagent')
   })
 
-  test('swallows exhaustion so a capped pool surfaces on the request path', () => {
+  test('leaves a Codex worker leaseless rather than throwing on an empty pool', () => {
+    // The provider gate cannot carry this case: the worker really is on the
+    // Codex path, so only the pool gate and the catch stand between an
+    // uninitialised pool and a failed spawn.
+    resetCodexAccountPoolForTest()
+
+    expect(() =>
+      registerWorkerCodexLease({
+        ownerId: 'agent_codex_no_pool',
+        ownerLabel: 'explore the repo',
+        model: 'gpt-5.6-luna',
+        baseProvider: 'openai',
+      }),
+    ).not.toThrow()
+    expect(getCodexLeaseForOwner('agent_codex_no_pool')).toBeUndefined()
+  })
+
+  test('swallows a lease-selection failure instead of failing the spawn', () => {
     seedCodexAccountPoolForTest({
       accounts: [buildLeasePoolAccount('acct-1', 'capped')],
     })
