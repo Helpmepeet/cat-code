@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import {
-  FIXED_ROW_HEIGHT_CLASS,
+  MIN_ROW_HEIGHT_CLASS,
   MAX_MOUNTED_CHUNK_CHARS,
   MAX_MOUNTED_OUTPUT_LINES,
   OUTPUT_LINE_HEIGHT,
@@ -77,9 +77,11 @@ describe('fixed geometry (unwrapped output)', () => {
     expect(selectTotalHeight(state)).toBe(50 * OUTPUT_LINE_HEIGHT)
   })
 
-  test('the row class the list pins an unwrapped box to matches the constant', () => {
-    // The CSS and the arithmetic are one number or the geometry is a guess.
-    expect(FIXED_ROW_HEIGHT_CLASS).toBe(`h-[${OUTPUT_LINE_HEIGHT}px]`)
+  test('the row class keeps the grid as a minimum so wrapped output never starts clipped', () => {
+    // An exact height makes a wrapped error paint at 20px, then jump to its
+    // measured height one animation frame later. The minimum preserves the
+    // fixed grid for an ordinary line while allowing the first layout to wrap.
+    expect(MIN_ROW_HEIGHT_CLASS).toBe(`min-h-[${OUTPUT_LINE_HEIGHT}px]`)
   })
 
   test('mounted rows stay bounded however long the output is', () => {

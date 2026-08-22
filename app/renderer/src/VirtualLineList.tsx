@@ -36,7 +36,7 @@ import {
   type ReactNode,
 } from 'react'
 import {
-  FIXED_ROW_HEIGHT_CLASS,
+  MIN_ROW_HEIGHT_CLASS,
   createLineGeometryState,
   reduceLineGeometryState,
   selectCentredScrollTop,
@@ -109,10 +109,9 @@ export function VirtualLineList({
       const chromeNode = chromeNodes.current.get(index)
       entries.push({
         index,
-        // `scrollHeight` and not `clientHeight`: while the geometry is fixed the
-        // row box is pinned to the grid, so the natural height of a row that
-        // does not fit shows up only as overflow. That overflow is exactly the
-        // signal that this body wraps.
+        // `scrollHeight` and not `clientHeight`: the minimum-height grid keeps
+        // ordinary rows exact while wrapped rows take their natural height on
+        // the first layout. `scrollHeight` records either shape for geometry.
         height: node.scrollHeight,
         chromeHeight: chromeNode === undefined ? 0 : chromeNode.scrollHeight,
         layoutRevision: revision,
@@ -277,7 +276,7 @@ export function VirtualLineList({
             <div
               ref={boxRef(rowRefs.current, rowNodes.current, index)}
               className={
-                selectRowIsPinned(geometry, index) ? FIXED_ROW_HEIGHT_CLASS : undefined
+                selectRowIsPinned(geometry, index) ? MIN_ROW_HEIGHT_CLASS : undefined
               }
             >
               {renderLine(text, index)}

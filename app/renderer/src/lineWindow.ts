@@ -9,9 +9,9 @@
  * instead of one:
  *
  * - `fixed`: no measurement deviates from the grid, so every offset is exact
- *   arithmetic and nothing is allocated. `VirtualLineList` holds the row box to
- *   `FIXED_ROW_HEIGHT_CLASS` while in this mode so the CSS matches the constant
- *   rather than the other way round.
+ *   arithmetic and nothing is allocated. `VirtualLineList` gives the row box
+ *   `MIN_ROW_HEIGHT_CLASS` while in this mode so an ordinary line matches the
+ *   grid without clipping a wrapped line to that estimate for one frame.
  * - `measured`: at least one row (or one piece of interstitial chrome) reported
  *   a height the grid does not predict. Offsets come from a prefix index over
  *   the DEVIATIONS only, so a 100k-line body with 40 measured rows carries 40
@@ -53,13 +53,16 @@ export const MAX_MOUNTED_CHUNK_CHARS = 4_000
 export const OUTPUT_LINE_HEIGHT = 20
 
 /**
- * Holds an unwrapped row to exactly `OUTPUT_LINE_HEIGHT`. The bodies routed
- * through `VirtualLineList` are `text-[11.5px] leading-relaxed`, which computes
- * to 18.6875px, so the fixed arithmetic was wrong by 6.5% per row before this
- * class existed. A literal, because an interpolated arbitrary value never
- * reaches the Tailwind JIT; `lineWindow.test.ts` pins it to the constant.
+ * Gives an ordinary row the grid's `OUTPUT_LINE_HEIGHT` without forcing wrapped
+ * content to that estimate. The bodies routed through `VirtualLineList` are
+ * `text-[11.5px] leading-relaxed`, which computes to 18.6875px, so the fixed
+ * arithmetic was wrong by 6.5% per row before this class existed. `min-height`
+ * is load-bearing: `height` briefly clips a wrapped tool error to one visual line
+ * before its first measurement, then expands the card on the next animation
+ * frame. A literal, because an interpolated arbitrary value never reaches the
+ * Tailwind JIT; `lineWindow.test.ts` pins it to the constant.
  */
-export const FIXED_ROW_HEIGHT_CLASS = 'h-[20px]'
+export const MIN_ROW_HEIGHT_CLASS = 'min-h-[20px]'
 
 /** Rows kept mounted on each side of the viewport. */
 export const DEFAULT_OVERSCAN_LINES = 20
@@ -299,12 +302,11 @@ export function selectGeometryMode(
 }
 
 /**
- * Whether a row should keep `FIXED_ROW_HEIGHT_CLASS`. Pinning only in `fixed`
- * mode unpins EVERY row as soon as one deviates, so every ordinary row then
- * reports its natural height, deviates from the grid, and earns a permanent
- * index entry: an always-wrapping body would retain one entry per line and
- * re-sort them per frame. A row that has no measurement of its own is still on
- * the grid, and `scrollHeight` reveals its overflow through the pinned box.
+ * Whether a row should keep `MIN_ROW_HEIGHT_CLASS`. Pinning only an unmeasured
+ * row keeps ordinary output on the grid without constraining wrapped output.
+ * Once measured, a row uses its natural height. This avoids retaining a
+ * deviation entry for every ordinary line while `scrollHeight` still records
+ * the final height of wrapped content.
  */
 export function selectRowIsPinned(state: LineGeometryState, index: number): boolean {
   return validMeasurement(state, index) === null

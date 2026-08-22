@@ -68,9 +68,9 @@ function render(row: NestedTranscriptRow): string {
   return renderToStaticMarkup(<TranscriptRowsView rows={[row]} />)
 }
 
-/** Rows the virtualizer actually mounted: it boxes each one on the fixed grid. */
+/** Rows the virtualizer actually mounted: each gets the grid's minimum height. */
 function mountedRows(html: string): number {
-  return occurrences(html, 'class="h-[20px]"')
+  return occurrences(html, 'class="min-h-[20px]"')
 }
 
 /** Every element in the render, the card chrome included. */
