@@ -144,7 +144,13 @@ export type MarkdownLeafWindow = {
  * streamed token does not reparse blocks that can no longer change. Owned by
  * the mounted body, so nothing survives its unmount.
  */
-export type MarkdownPlanCache = { current: { body: string; tree: Root } | null }
+export type MarkdownPlanCache = {
+  current: {
+    body: string
+    tree: Root
+    recognizeCallouts: boolean
+  } | null
+}
 
 export function createMarkdownPlanCache(): MarkdownPlanCache {
   return { current: null }
@@ -182,9 +188,11 @@ export function planMarkdownLeaves(
   options?: {
     rehypePlugins?: PluggableList
     cache?: MarkdownPlanCache
+    recognizeCallouts?: boolean
   },
 ): MarkdownRenderLeaf[] {
   const processor = markdownProcessor(options?.rehypePlugins ?? NO_PLUGINS)
+  const recognizeCallouts = options?.recognizeCallouts ?? false
   const cached = options?.cache?.current
 
   let tree: Root
@@ -197,6 +205,7 @@ export function planMarkdownLeaves(
   const appendedToOpenFence =
     cached !== null &&
     cached !== undefined &&
+    cached.recognizeCallouts === recognizeCallouts &&
     source.length > cached.body.length &&
     source.startsWith(cached.body) &&
     isWholeUnterminatedFence(processor, source.slice(cached.body.length))
@@ -208,16 +217,22 @@ export function planMarkdownLeaves(
     const mdast = processor.parse(source)
     tailOffset = findUnterminatedFence(mdast, source)
     const body = tailOffset === null ? source : source.slice(0, tailOffset)
-    if (cached !== null && cached !== undefined && cached.body === body) {
+    if (
+      cached !== null &&
+      cached !== undefined &&
+      cached.body === body &&
+      cached.recognizeCallouts === recognizeCallouts
+    ) {
       tree = cached.tree
     } else {
       tree = processor.runSync(body === source ? mdast : processor.parse(body))
-      normalizeTree(tree)
+      normalizeTree(tree, recognizeCallouts)
     }
     // Only a settled prefix is worth holding: while a fence is open the body is
     // constant across tokens, and the entry is replaced outright on settlement.
     if (options?.cache !== undefined) {
-      options.cache.current = tailOffset === null ? null : { body, tree }
+      options.cache.current =
+        tailOffset === null ? null : { body, tree, recognizeCallouts }
     }
   }
 
@@ -459,6 +474,7 @@ type Weight = { lines: number; characters: number; elements: number }
  * a lone `"\n"` between `<thead>` and `<tbody>` from becoming its own leaf.
  */
 const BLOCK_CONTAINERS = new Set([
+  'aside',
   'blockquote',
   'details',
   'div',
@@ -851,9 +867,13 @@ function foldWrappers(
  * through react-markdown's own transform, so a `javascript:` href is emptied
  * here rather than reaching the DOM.
  */
-function normalizeTree(node: Root | RootContent): void {
+function normalizeTree(
+  node: Root | RootContent,
+  recognizeCallouts: boolean,
+): void {
   if (node.type !== 'root' && node.type !== 'element') return
   if (node.type === 'element') {
+    if (recognizeCallouts) normalizeCallout(node)
     for (const key of ['href', 'src']) {
       if (!Object.hasOwn(node.properties, key)) continue
       node.properties[key] = defaultUrlTransform(String(node.properties[key] ?? ''))
@@ -865,7 +885,71 @@ function normalizeTree(node: Root | RootContent): void {
       node.children[index] = { type: 'text', value: child.value }
       continue
     }
-    normalizeTree(child)
+    normalizeTree(child, recognizeCallouts)
+  }
+}
+
+const CALLOUT_MARKER =
+  /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][\t ]*(?:\n|$)/
+
+/**
+ * GitHub-style alerts are ordinary CommonMark blockquotes whose first line is a
+ * reserved marker. Promote only that already-parsed shape, then remove only the
+ * marker from its first paragraph. Unknown markers and malformed fences stay
+ * exactly as the Markdown parser interpreted them.
+ */
+function normalizeCallout(element: Element): void {
+  if (element.tagName !== 'blockquote') return
+
+  const paragraphIndex = element.children.findIndex(
+    child =>
+      child.type === 'element' &&
+      child.tagName === 'p',
+  )
+  if (paragraphIndex < 0) return
+
+  for (let index = 0; index < paragraphIndex; index += 1) {
+    const child = element.children[index]
+    if (child.type !== 'text' || child.value.trim() !== '') return
+  }
+
+  const paragraph = element.children[paragraphIndex]
+  if (paragraph.type !== 'element') return
+  const first = paragraph.children[0]
+  if (first?.type !== 'text') return
+
+  const match = CALLOUT_MARKER.exec(first.value)
+  if (match === null) return
+
+  const kind = calloutKind(match[1])
+  if (kind === null) return
+
+  element.tagName = 'aside'
+  element.properties = {
+    ...element.properties,
+    className: ['md-callout'],
+    dataCalloutKind: kind,
+  }
+
+  first.value = first.value.slice(match[0].length)
+  if (first.value.length === 0) paragraph.children.shift()
+  if (paragraph.children.length === 0) element.children.splice(paragraphIndex, 1)
+}
+
+function calloutKind(marker: string): string | null {
+  switch (marker) {
+    case 'NOTE':
+      return 'note'
+    case 'TIP':
+      return 'tip'
+    case 'IMPORTANT':
+      return 'important'
+    case 'WARNING':
+      return 'warning'
+    case 'CAUTION':
+      return 'caution'
+    default:
+      return null
   }
 }
 

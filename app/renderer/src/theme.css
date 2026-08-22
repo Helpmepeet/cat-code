@@ -654,6 +654,29 @@
     margin-top: 0.7em;
   }
 
+  .md-prose .md-callout {
+    border: 1px solid var(--color-shell-seam);
+    border-left: 3px solid var(--color-accent);
+    border-radius: 0.5em;
+    background: var(--color-shell-hover);
+    padding: 0.8em 0.95em 0.9em;
+    color: var(--color-text-primary);
+  }
+
+  .md-callout-label {
+    margin-bottom: 0.55em;
+    color: var(--color-accent-soft);
+    font-size: 0.78em;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    line-height: 1.2;
+    text-transform: uppercase;
+  }
+
+  .md-callout-body > * + * {
+    margin-top: 0.7em;
+  }
+
   /* Preflight leaves `hr` a 1px rule in currentColor — a near-white line across
    * the column, louder than any heading on the page. */
   .md-prose hr {

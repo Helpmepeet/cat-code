@@ -1173,6 +1173,7 @@ function AssistantProse({
         sourceId={sourceId}
         source={content}
         rehypePlugins={REHYPE_PLUGINS}
+        recognizeCallouts
         renderLeaf={leaf =>
           // A fence too long to mount whole arrives as one merged code leaf:
           // the card and its copy action own the WHOLE fence, while only the
@@ -1507,6 +1508,7 @@ const MARKDOWN_COMPONENTS = {
   // the <code> renderer own the framed CodeBlock (avoids a nested <pre>).
   pre: ({ children }: ComponentPropsWithoutRef<'pre'>) => <>{children}</>,
   code: MarkdownCode,
+  aside: MarkdownCallout,
   // GFM pipe tables (remark-gfm). Exact prototype ProseTable values
   // (Messages.jsx:1890-1906): rounded 8px scroll wrapper w/ a 0.08 white border,
   // horizontal-only rules (header 0.12, body 0.05), a 0.03 header wash, 13px, and
@@ -1550,6 +1552,57 @@ function MarkdownCode({
       highlighted={children}
     />
   )
+}
+
+type CalloutKind = 'note' | 'tip' | 'important' | 'warning' | 'caution'
+
+function MarkdownCallout({
+  node,
+  children,
+}: ComponentPropsWithoutRef<'aside'> & {
+  node?: { properties?: Record<string, unknown> }
+}) {
+  const kind = calloutKindOf(node?.properties?.dataCalloutKind)
+  if (kind === null) return <aside>{children}</aside>
+
+  return (
+    <aside className="md-callout" data-callout-kind={kind}>
+      <div className="md-callout-label">{calloutLabel(kind)}</div>
+      <div className="md-callout-body">{children}</div>
+    </aside>
+  )
+}
+
+function calloutKindOf(value: unknown): CalloutKind | null {
+  switch (value) {
+    case 'note':
+    case 'tip':
+    case 'important':
+    case 'warning':
+    case 'caution':
+      return value
+    default:
+      return null
+  }
+}
+
+function calloutLabel(kind: CalloutKind): string {
+  switch (kind) {
+    case 'note':
+      return 'Note'
+    case 'tip':
+      return 'Tip'
+    case 'important':
+      return 'Important'
+    case 'warning':
+      return 'Warning'
+    case 'caution':
+      return 'Caution'
+    default: {
+      const exhaustive: never = kind
+      return exhaustive
+    }
+  }
 }
 
 /**

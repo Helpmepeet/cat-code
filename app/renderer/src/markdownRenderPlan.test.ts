@@ -169,6 +169,29 @@ describe('semantic leaves keep their document context', () => {
     expect(html).not.toContain('Quoted 0<')
   })
 
+  test('a callout cut across leaf windows retains one callout container', () => {
+    const body = Array.from(
+      { length: 400 },
+      (_, index) => `> Paragraph ${index}.`,
+    ).join('\n>\n')
+    const leaves = planMarkdownLeaves('row-1', `> [!NOTE]\n>\n${body}`, {
+      recognizeCallouts: true,
+    })
+    expect(leaves.length).toBeGreaterThan(1)
+
+    for (const [start, end] of [
+      [0, 1],
+      [Math.floor(leaves.length / 2), Math.floor(leaves.length / 2) + 1],
+      [leaves.length - 1, leaves.length],
+    ] as [number, number][]) {
+      const html = mount(leaves, start, end)
+      expect(count(html, /<aside/g)).toBe(1)
+      expect(html).toContain('class="md-callout"')
+      expect(html).toContain('data-callout-kind="note"')
+      expect(html).not.toContain('[!NOTE]')
+    }
+  })
+
   test('a reference link resolves when its definition is outside the mounted range', () => {
     const prose = Array.from({ length: 300 }, (_, index) => `Paragraph ${index}.`).join('\n\n')
     const source = `${prose}\n\nSee the [manual][ref] for details.\n\n[ref]: https://example.com/manual\n`

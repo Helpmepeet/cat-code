@@ -342,6 +342,63 @@ test('a blockquote gets its own per-quote copy control', () => {
   expect(html).toContain('<blockquote')
   expect(html).toContain('Ship the fix today.')
   expect(html).toContain('aria-label="Copy quote"') // per-quote copy control
+  expect(html).not.toContain('md-callout')
+})
+
+test('a recognized alert renders as rich Markdown with its fenced code card intact', () => {
+  const html = render(
+    proseRow(
+      [
+        '> [!NOTE]',
+        '> Keep **this structure** together.',
+        '>',
+        '> - First item',
+        '> - Second item',
+        '>',
+        '> ```ts',
+        '> const value = 1',
+        '> ```',
+      ].join('\n'),
+      'callout-rich',
+    ),
+  )
+
+  expect(html).toContain('<aside class="md-callout" data-callout-kind="note">')
+  expect(html).toContain('<div class="md-callout-label">Note</div>')
+  expect(html).not.toContain('[!NOTE]')
+  expect(html).toContain('<strong>this structure</strong>')
+  expect(html).toContain('<ul>')
+  expect(html).toContain('First item')
+  expect(html).toContain('hljs-keyword')
+  expect(html).toContain('const')
+  expect(html).toContain('pt-[38px]')
+  expect(html).toContain('&lt;/&gt;')
+  expect(html).toContain('>copy</button>')
+  expect(html).toContain('>ts</span>')
+  expect(html).not.toContain('aria-label="Copy quote"')
+})
+
+test.each([
+  ['TIP', 'tip', 'Tip'],
+  ['IMPORTANT', 'important', 'Important'],
+  ['WARNING', 'warning', 'Warning'],
+  ['CAUTION', 'caution', 'Caution'],
+])('the %s alert marker renders the %s callout', (marker, kind, label) => {
+  const html = render(proseRow(`> [!${marker}]\n> Body`, `callout-${kind}`))
+
+  expect(html).toContain(`data-callout-kind="${kind}"`)
+  expect(html).toContain(`>${label}</div>`)
+  expect(html).not.toContain(`[!${marker}]`)
+})
+
+test('an unknown alert marker stays visible in an ordinary blockquote', () => {
+  const html = render(proseRow('> [!TEXT]\n> Keep this literal.', 'unknown-callout'))
+
+  expect(html).toContain('<blockquote')
+  expect(html).toContain('[!TEXT]')
+  expect(html).toContain('Keep this literal.')
+  expect(html).toContain('aria-label="Copy quote"')
+  expect(html).not.toContain('md-callout')
 })
 
 test('quote and reasoning markdown component types stay stable between content changes', () => {
