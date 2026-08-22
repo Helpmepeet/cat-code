@@ -14,13 +14,13 @@ import type { HostEvent, SessionDescriptor } from '../../shared/hostApi.js'
 
 /**
  * The shell's session roster: a stable id order plus the descriptor map. Order
- * is insertion order of `session-added` (a new tab appears at the end of the
- * bar); a status change never reorders. 5b's Sidebar orders its OWN list by
- * `lastAttachedAt` off `listSessions()` — the TabBar keeps arrival order so a
- * tab does not jump under the user mid-session.
+ * is insertion/open order: `session-added` appends a new live tab, and opening a
+ * restorable preview appends that newly-opened tab. A status change never
+ * reorders. The Sidebar sorts its OWN projection by message activity, so that
+ * recency order cannot move a tab under the user mid-session.
  */
 export type ShellState = {
-  /** Tab order = arrival order of live sessions. */
+  /** Tab/pane order = the order panes were opened this run. */
   order: SessionId[]
   byId: Record<SessionId, SessionDescriptor>
   /**
@@ -49,7 +49,7 @@ export type ShellStateAction =
  * Fold one `HostEvent` into the roster. `added` appends (idempotent — a
  * re-added id refreshes in place, never duplicates the tab); `status` replaces
  * the descriptor without reordering; `removed` drops the id from both order and
- * map. A `status`/`removed` for an unknown id is ignored (no ghost tab).
+ * map. Opening a restorable preview appends it like any other newly-opened tab.
  */
 export function reduceShellState(
   state: ShellState,
@@ -57,11 +57,17 @@ export function reduceShellState(
 ): ShellState {
   switch (event.type) {
     case 'preview-open': {
-      const descriptor = state.byId[event.sessionId]
-      if (!descriptor?.restorable || state.previews[event.sessionId]) return state
+      const id = event.sessionId
+      const descriptor = state.byId[id]
+      if (!descriptor?.restorable || state.previews[id]) return state
       return {
         ...state,
-        previews: { ...state.previews, [event.sessionId]: true },
+        // A hydrated/restorable row may sit anywhere in the roster because the
+        // Sidebar has its own recency order. Once the user OPENS that row as a
+        // preview, it becomes a new tab and belongs at the end of the tab strip.
+        // If it is already a live/crashed tab, keep its existing spatial slot.
+        order: state.tabs[id] ? state.order : moveToEnd(state.order, id),
+        previews: { ...state.previews, [id]: true },
       }
     }
     case 'preview-close': {
@@ -162,6 +168,12 @@ function foldTabMembership(
   return next
 }
 
+/** Put a newly-opened pane at the end while keeping every other pane stable. */
+function moveToEnd(order: SessionId[], id: SessionId): SessionId[] {
+  if (order[order.length - 1] === id) return order
+  return [...order.filter(candidate => candidate !== id), id]
+}
+
 /**
  * Where an id lands in `order` on `session-added` / `session-status`:
  *  - unknown id → append (a genuinely new tab arrives at the end);
@@ -189,7 +201,7 @@ function reorderOnArrival(
   if (!present) return [...order, id]
   const becameTab = !wasTab && !wasPreview && tabs[id] === true
   if (!becameTab) return order
-  return [...order.filter(candidate => candidate !== id), id]
+  return moveToEnd(order, id)
 }
 
 /** Every descriptor in the roster (arrival order) — the Sidebar's live∪restorable source. */
