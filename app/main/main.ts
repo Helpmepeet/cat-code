@@ -1287,7 +1287,16 @@ function createWindow(): void {
   })
 
   window.once('ready-to-show', () => {
-    window.show()
+    // Capture-run hook (verification only), sibling to CATCODE_SMOKE_EXIT_MS below.
+    // A headless acceptance run photographs this window with `capturePage` and
+    // drives it with `sendInputEvent`; both work on a window that is never shown,
+    // measured on Electron 33.4.11. Showing it would raise and focus it over
+    // whatever the operator is doing, which is the one thing that path must never
+    // do (`docs/migration/process/GUI-VERIFICATION.md`). Only the show is skipped:
+    // the window is real, it has painted by now, and everything below still runs.
+    if (process.env.CATCODE_HEADLESS_CAPTURE !== '1') {
+      window.show()
+    }
     logOperational('renderer.load.ready', 'info')
     readinessLatch.windowReady()
     // Paint first. The worker import is the ~189 MB engine-graph cost; never pay

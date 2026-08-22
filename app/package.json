@@ -17,6 +17,7 @@
     "test": "cd .. && bun test app/",
     "typecheck:sidecar": "bun run scripts/sidecar-typecheck.ts",
     "test:hardening": "bun run scripts/run-hardening-smoke.ts",
+    "visual:capture": "bun run scripts/visual-acceptance.ts",
     "reap:orphans": "bun run scripts/reap-orphan-sidecars.ts",
     "memory:trajectory": "bun run scripts/renderer-memory-trajectory.ts",
     "preview:transcript": "bun run scripts/preview-transcript.tsx"

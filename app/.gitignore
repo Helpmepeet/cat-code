@@ -19,3 +19,7 @@ dist-app/
 
 # Deps
 node_modules/
+
+# headless visual-acceptance captures (scripts/visual-acceptance.ts)
+.visual-acceptance/
+scripts/visual-acceptance-driver.cjs
