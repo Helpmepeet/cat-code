@@ -1998,6 +1998,86 @@ test('a session with no lease plane says nothing about an account', () => {
   expect(html).not.toContain('w-px')
 })
 
+test('a card names the account WHILE a foreground worker is still running', () => {
+  // The case the stamp design ruled unreachable: a foreground worker's agentId
+  // arrives with its RESULT, so the agentId join cannot answer until the run is
+  // over. Both planes already carry the description, though — the engine
+  // registers the lease under it (`AgentTool.tsx:1502`) and the row holds it as
+  // `input.description` — so the running card can name the account after all.
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      leases={{
+        strategy: 'spread',
+        accounts: [],
+        owners: [
+          {
+            leaseId: 'af5c4971',
+            ownerId: 'af5c4971',
+            ownerType: 'subagent',
+            ownerLabel: 'Repair typed SDK error contract',
+            accountId: '93ce612e-1315-4466-859d-be060ef879be',
+            accountAlias: 'bluesky',
+            strategy: 'spread',
+            state: 'active',
+            createdAt: 1,
+            updatedAt: 1,
+            failoverCount: 0,
+            selectionKind: 'initial',
+            selectionReason: 'initial pick',
+          },
+        ],
+      }}
+      rows={[
+        // RUNNING: no result at all, which is the whole point.
+        agentRow(
+          'running',
+          { subagent_type: 'implementor', description: 'Repair typed SDK error contract' },
+          'pending',
+        ),
+      ]}
+    />,
+  )
+
+  expect(html).toContain('bluesky')
+  // Still the redacted alias, never the raw account UUID.
+  expect(html).not.toContain('93ce612e-1315-4466-859d-be060ef879be')
+})
+
+test('a running card stays silent when two workers share one description', () => {
+  // Ambiguity resolves to silence, not to a guess: naming the wrong account is
+  // worse than naming none, and null is what the card already renders as absent.
+  const owner = (id: string, alias: string) => ({
+    leaseId: id,
+    ownerId: id,
+    ownerType: 'subagent' as const,
+    ownerLabel: 'run the battery',
+    accountId: `acct-${id}`,
+    accountAlias: alias,
+    strategy: 'spread' as const,
+    state: 'active' as const,
+    createdAt: 1,
+    updatedAt: 1,
+    failoverCount: 0,
+    selectionKind: 'initial' as const,
+    selectionReason: 'initial pick',
+  })
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      leases={{
+        strategy: 'spread',
+        accounts: [],
+        owners: [owner('agent_a', 'bluesky'), owner('agent_b', 'onbi')],
+      }}
+      rows={[
+        agentRow('ambiguous', { subagent_type: 'Explore', description: 'run the battery' }, 'pending'),
+      ]}
+    />,
+  )
+
+  expect(html).not.toContain('bluesky')
+  expect(html).not.toContain('onbi')
+})
+
 test('P4-8c: the Agent card + DelegateGroup emit only static tone utilities (no interpolated/arbitrary classes)', () => {
   const html = renderToStaticMarkup(
     <TranscriptRowsView
@@ -2390,6 +2470,43 @@ test.each([
   expect(html).not.toContain('Detailed failure text')
 })
 
+test('renders the stopped seam without a user interruption body', () => {
+  const html = render({
+    ...frameSource,
+    id: 's:f:stopped',
+    kind: 'turn-stopped',
+  })
+
+  expect(html).toContain('Stopped')
+  expect(html).not.toContain('interruption')
+})
+
+test('renders curated auth and execution failures without raw errors', () => {
+  const auth = render({
+    ...frameSource,
+    id: 's:f:auth',
+    kind: 'result',
+    subtype: 'error_auth_required',
+    isError: true,
+    errors: ['OAuth access token has been revoked'],
+  })
+  const execution = render({
+    ...frameSource,
+    id: 's:f:execution',
+    kind: 'result',
+    subtype: 'error_during_execution',
+    isError: true,
+    errors: ['provider stack trace'],
+  })
+
+  expect(auth).toContain('Sign-in expired')
+  expect(auth).toContain('Sign in again in Accounts to continue.')
+  expect(auth).not.toContain('OAuth access token has been revoked')
+  expect(execution).toContain('This turn could not finish')
+  expect(execution).toContain('save a diagnostics bundle')
+  expect(execution).not.toContain('provider stack trace')
+})
+
 test('P4-60: an unknown error subtype renders a generic failure label', () => {
   const html = render({
     ...frameSource,
@@ -2469,43 +2586,6 @@ test('P4-18a: snip-boundary and tombstone typed-degraded rows still render', () 
   })
 
   expect(snip).toContain('Stale tool output snipped')
-test('renders the stopped seam without a user interruption body', () => {
-  const html = render({
-    ...frameSource,
-    id: 's:f:stopped',
-    kind: 'turn-stopped',
-  })
-
-  expect(html).toContain('Stopped')
-  expect(html).not.toContain('interruption')
-})
-
-test('renders curated auth and execution failures without raw errors', () => {
-  const auth = render({
-    ...frameSource,
-    id: 's:f:auth',
-    kind: 'result',
-    subtype: 'error_auth_required',
-    isError: true,
-    errors: ['OAuth access token has been revoked'],
-  })
-  const execution = render({
-    ...frameSource,
-    id: 's:f:execution',
-    kind: 'result',
-    subtype: 'error_during_execution',
-    isError: true,
-    errors: ['provider stack trace'],
-  })
-
-  expect(auth).toContain('Sign-in expired')
-  expect(auth).toContain('Sign in again in Accounts to continue.')
-  expect(auth).not.toContain('OAuth access token has been revoked')
-  expect(execution).toContain('This turn could not finish')
-  expect(execution).toContain('save a diagnostics bundle')
-  expect(execution).not.toContain('provider stack trace')
-})
-
   expect(tombstone).toContain('message removed')
 })
 
@@ -4606,4 +4686,48 @@ test('assistant prose renders markdown links and inline paths as file action but
   expect(html).toContain('aria-label="Open src/foo.ts"')
   expect(html).toContain('aria-label="Open src/utils/bar.ts"')
   expect(html).toContain('<svg')
+})
+
+/* ── compaction (2026-08-22) ───────────────────────────────────────────────
+ * Two rows for one event, one of them advertising a shortcut this app does not
+ * have, and a trigger word nobody reads. What is left is one seam, plus a live
+ * element while the compaction actually runs. */
+
+const compactBoundaryRow: NestedTranscriptRow = {
+  ...frameSource,
+  id: 'compact-1',
+  kind: 'compact-boundary',
+  trigger: 'manual',
+  preTokens: 147150,
+}
+
+test('the compaction seam names the event and nothing else', () => {
+  const html = render(compactBoundaryRow)
+  expect(html).toContain('Conversation compacted')
+  // Both still ride the row, and the inspector reads them off the raw frame
+  // (`messageMetadata.ts` `readCompaction`); the seam just stopped printing them.
+  expect(html).not.toContain('manual')
+  expect(html).not.toContain('147,150')
+})
+
+test('the live seam mounts only while a compaction runs, and never doubles up', () => {
+  const idle = renderToStaticMarkup(
+    <TranscriptRowsView rows={[compactBoundaryRow]} />,
+  )
+  expect(idle).not.toContain('Compacting conversation')
+
+  const live = renderToStaticMarkup(
+    <TranscriptRowsView rows={[compactBoundaryRow]} compacting />,
+  )
+  expect(live).toContain('Compacting conversation')
+  // Same geometry as the settled seam it hands off to, so the swap reads as one
+  // element resolving rather than a second row appearing.
+  expect(live).toContain('animate-compact-sweep-left')
+  expect(live).toContain('animate-compact-sweep-right')
+
+  // An empty pane has no transcript column to hang it on, and a compaction
+  // cannot happen there anyway.
+  expect(
+    renderToStaticMarkup(<TranscriptRowsView rows={[]} compacting />),
+  ).not.toContain('Compacting conversation')
 })

@@ -113,6 +113,7 @@ import { formatModelDisplayName } from './statsState.js'
 import {
   leaseAccountShortLabel,
   LeaseSnapshotContext,
+  selectLeaseForLabel,
   selectLeaseForOwner,
 } from './leaseState.js'
 import type { LeaseSnapshot } from '../../shared/protocol.js'
@@ -231,6 +232,7 @@ export type RestorePhase = 'preview' | 'resuming' | 'connecting'
 // `rows` handed to TranscriptRowsView keep identity when nothing changed.
 export const TranscriptView = memo(function TranscriptView({
   state,
+  compacting,
   activeSessionId,
   accounts,
   orchestratorActive,
@@ -247,6 +249,8 @@ export const TranscriptView = memo(function TranscriptView({
   onSaveDiagnostics,
 }: {
   state: TranscriptState
+  /** A compaction is running in this session (`selectIsCompacting`). */
+  compacting?: boolean
   activeSessionId: SessionId | null
   /** In-session empty-state Welcome context (Chat.jsx:1272) — the real P4-5 Codex
    * pool snapshot + agent-mode active flag + fixed cwd + git branch; read-only (HC1). */
@@ -289,6 +293,7 @@ export const TranscriptView = memo(function TranscriptView({
   return (
     <TranscriptRowsView
       rows={selectNestedTranscriptRows(state, activeSessionId, revealHidden)}
+      compacting={compacting ?? false}
       accounts={accounts ?? null}
       orchestratorActive={orchestratorActive ?? false}
       onToggleOrchestrator={onToggleOrchestrator}
@@ -307,6 +312,7 @@ export const TranscriptView = memo(function TranscriptView({
 
 export const TranscriptRowsView = memo(function TranscriptRowsView({
   rows,
+  compacting = false,
   leases = null,
   accounts = null,
   orchestratorActive = false,
@@ -322,6 +328,8 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   onSaveDiagnostics,
 }: {
   rows: NestedTranscriptRow[]
+  /** A compaction is running: mounts the live seam under the last row. */
+  compacting?: boolean
   /** This session's Codex leases; null on an Anthropic path and after a restore. */
   leases?: LeaseSnapshot | null
   accounts?: AccountsSnapshot | null
@@ -494,6 +502,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
             </div>
           )
         })}
+        {compacting ? <CompactingSeam /> : null}
       </div>
     )
   }
@@ -1032,7 +1041,7 @@ const TranscriptRowView = memo(function TranscriptRowView({
       return <Seam tone="neutral" label="Stopped" boldLabel />
 
     case 'compact-boundary':
-      return <CompactBoundarySeam trigger={row.trigger} preTokens={row.preTokens} />
+      return <CompactBoundarySeam />
 
     case 'snip-boundary':
       // Typed-but-unminted at today's SDK seam (ledger §5 ✂️ cut); render-ready
@@ -2661,10 +2670,30 @@ function agentAccountLabel(
   row: ToolUseNestedRow,
   leases: LeaseSnapshot | null,
 ): string | null {
-  const lease = selectLeaseForOwner(leases, row.result?.agentId ?? null)
+  const lease =
+    selectLeaseForOwner(leases, row.result?.agentId ?? null) ??
+    selectLeaseForLabel(leases, agentLeaseLabelOf(row))
   if (lease !== null) return leaseAccountShortLabel(lease)
   const stamped = row.result?.agentAccount
   return stamped === undefined ? null : leaseAccountShortLabel(stamped)
+}
+
+/**
+ * The label this row's lease was registered under: the Agent tool's own
+ * `description` argument, which `registerWorkerCodexLease` passes straight
+ * through as `ownerLabel` (`src/tools/AgentTool/AgentTool.tsx:1502`).
+ *
+ * Read raw off the input rather than from `deriveTarget`, which is display text
+ * and may be shortened or fall back to other fields — the join needs the exact
+ * string the engine registered. A ResumeAgent row has no `description` and needs
+ * none: the projector resolves its `agentId` from the input, so it joins on the
+ * key above.
+ */
+function agentLeaseLabelOf(row: ToolUseNestedRow): string | null {
+  const description = row.input.description
+  return typeof description === 'string' && description.length > 0
+    ? description
+    : null
 }
 
 /**
@@ -4870,20 +4899,45 @@ function TurnErrorCard({
 }
 
 /** CompactBoundaryRow: the ✻ pink "memory" seam for conversation compaction. */
-function CompactBoundarySeam({
-  trigger,
-  preTokens,
-}: {
-  trigger: 'manual' | 'auto'
-  preTokens: number
-}) {
+function CompactBoundarySeam() {
+  // No detail (operator, 2026-08-22). The trigger was the first thing to go:
+  // manual or auto is the engine's bookkeeping, and the reader either typed
+  // `/compact` or did not. The pre-compaction token count went with it: the
+  // seam's job is to mark where the conversation was folded, and a number no
+  // decision depends on is just something else to read past. Both still ride
+  // the row, and the inspector reads them off the raw frame anyway
+  // (`messageMetadata.ts` `readCompaction`), so nothing was lost.
+  return <Seam tone="accent" glyph="✻" label="Conversation compacted" />
+}
+
+/**
+ * The same seam while the compaction is still running: hairlines closing in
+ * toward a turning glyph, and the present-tense sentence.
+ *
+ * Not a projected row, and deliberately so. Compaction mints nothing until its
+ * `compact_boundary` frame lands at the end, so a row minted here would have to
+ * be rewritten by that frame, and rows are never rewritten after the fact. This
+ * is a read-time tail element instead: it exists while the session's
+ * `compacting` flag is set and is gone the moment the real boundary row
+ * appears, so what looks like one seam settling is a live element handing off
+ * to a durable row of the same geometry.
+ */
+function CompactingSeam() {
   return (
-    <Seam
-      tone="accent"
-      glyph="✻"
-      label="Conversation compacted"
-      detail={`${trigger} · ${preTokens.toLocaleString()} tokens`}
-    />
+    <div className="flex items-center gap-3 py-1">
+      <div className="relative h-px flex-1 overflow-hidden bg-accent/20">
+        <span className="animate-compact-sweep-left absolute top-0 h-px w-2/5 bg-gradient-to-r from-transparent via-accent to-transparent" />
+      </div>
+      <div className="flex items-center gap-1.5 whitespace-nowrap text-[11px]">
+        <span className="animate-compact-star text-accent" aria-hidden>
+          ✻
+        </span>
+        <span className="text-text-muted">Compacting conversation</span>
+      </div>
+      <div className="relative h-px flex-1 overflow-hidden bg-accent/20">
+        <span className="animate-compact-sweep-right absolute top-0 h-px w-2/5 bg-gradient-to-l from-transparent via-accent to-transparent" />
+      </div>
+    </div>
   )
 }
 
