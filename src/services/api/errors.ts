@@ -928,8 +928,9 @@ function getAssistantMessageFromErrorInternal(
   // Check for OAuth token revocation error
   if (
     error instanceof APIError &&
-    error.status === 403 &&
-    error.message.includes('OAuth token has been revoked')
+    (error.status === 401 || error.status === 403) &&
+    (error.message.includes('OAuth token has been revoked') ||
+      error.message.includes('OAuth access token has been revoked'))
   ) {
     return createAssistantAPIErrorMessage({
       error: 'authentication_failed',
@@ -1238,8 +1239,9 @@ export function classifyAPIError(error: unknown): string {
 
   if (
     error instanceof APIError &&
-    error.status === 403 &&
-    error.message.includes('OAuth token has been revoked')
+    (error.status === 401 || error.status === 403) &&
+    (error.message.includes('OAuth token has been revoked') ||
+      error.message.includes('OAuth access token has been revoked'))
   ) {
     return 'token_revoked'
   }
