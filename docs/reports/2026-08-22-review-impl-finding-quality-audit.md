@@ -422,8 +422,9 @@ finding #1 in Appendix A, independently re-verified by recomputing both encoding
   non-numeric tables (four whole reviews) and double-counts restated rows (~10%). Appendix D
   recovered the four missing reviews but not an estimated further ~28 non-numeric rows scattered
   across sessions already in the table. Denominators are far stronger than numerators here.
-- **Three diff denominators are soft**, one of them (`2d5da6ab`, possibly understated 2–4×)
-  sitting among the high outliers. Appendix D §8 names all three.
+- **Three diff denominators are soft.** The worst, `2d5da6ab`, brackets 120 to ~310 lines, so
+  its rate is 3.0–7.5 per 100 — elevated but not securely a top-four outlier. Appendix D §8
+  names all three and gives the bracket.
 - **The 0.5% battery-catchability figure is judgment-laden.** A different reader drawing the
   behavioral/non-behavioral line differently could move the split by ±25. The direction is
   robust — the rate stays under 1% across that whole range — but the specific figure should not

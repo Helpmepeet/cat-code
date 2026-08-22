@@ -111,10 +111,14 @@ Two consequences worth stating plainly:
 
 **High.** `aee64f62` 13.19/100 is the smallest diff in the corpus (91 lines) and half its rows
 are restatements — really ~6.6/100, all six findings being comment-accuracy items on a logging
-change, the cheapest class to find per line. `379fa640` 7.59 and `2d5da6ab` 7.50 are likewise
-restatement artifacts (→ ~3.8 and ~4.2). **`1ba97aa9` 7.14/100 is the genuine high**: a small
-model-display fix where two `??` operators each resurrected a stale override because `null` was
-a meaningful value.
+change, the cheapest class to find per line. `379fa640` 7.59 is likewise a restatement artifact
+(→ ~3.8). **`1ba97aa9` 7.14/100 is the genuine high**: a small model-display fix where two `??`
+operators each resurrected a stale override because `null` was a meaningful value.
+
+`2d5da6ab`'s 7.50 is **elevated but imprecise, and should not be counted as a top-four
+outlier.** Its denominator brackets 120 to ~310 lines (see §8), putting the true rate somewhere
+in **3.0 to 7.5 per 100**. That stays above the corpus median of 1.97 across the whole range,
+but at the upper end it lands mid-pack, below `d595a8ba` and `3aacc503`.
 
 **Low.** `f6a7c289` 0.00 (the real zero). `36e61c86` 0.40 — 1,517 lines, 6 findings, **3 of them
 false positives**, and 682 of those lines are a docs audit report. `3d21ec77` 0.77 has the
@@ -247,14 +251,39 @@ recorded: `66f06b65` (agent said ~800, git 427 — it counted `+++`/`---` patch 
 `77fbf5d0` (agent ~2,000, git 2,446), `8f9051b7` (agent 1,268, git 1,252).
 
 **Four are git-only**, reconstructed from the exact file or SHA list in the command that built
-the reviewers' packet; the risk there is wrong scope, not wrong arithmetic.
+the reviewers' packet; the risk there is wrong scope, not wrong arithmetic. A follow-up scan
+over the wider pattern set (prose `~N lines`, `+N/-M`, `N added, M removed`, and full Agent
+prompt bodies) confirmed the scope choice on the two that carried the most risk:
 
-**Three are genuinely soft.** `2d5da6ab`'s 120 counts only *added* lines in files another session
-was concurrently editing — the raw three-file dirty diff was 521 patch lines, so it could be
-understated 2–4×, and it is one of the four high outliers. `3dd55442`'s 225 is an agent-scoped
-estimate after excluding a third session's hunks (raw numstat 336). `05d68ce0`'s second round is
-inferred from a 1,940-line patch containing six whole new modules, so ~1,300 could be off by
-±300.
+- **`36e61c86`** — the whole dirty tree at that moment was 55 files / 3,111 lines, and the agent
+  reviewed only its three commits (287 + 437 + 793 = **1,517**). The scope matches what was
+  actually handed to the reviewers.
+- **`6d0ce8ac`** — full commit `b74b583` is 8 files / 556 lines; the **518** used here is the
+  6-code-file subset passed to the reviewers. The 38-line gap is docs. Both bounds now on record.
+
+**Three are genuinely soft.**
+
+`2d5da6ab` is the one to treat with care, and an earlier draft of this appendix overstated the
+problem by comparing incompatible units. The bracket:
+
+| Basis | Lines | Rate |
+|---|---:|---:|
+| Agent's own count of its *added* lines | 120 | 7.50/100 |
+| `git diff --stat` added+removed on `ComposerActionsBar.tsx`, contaminated by a concurrent session's edits to the same file | 191 | 4.71/100 |
+| 3-file scope, converting 521 *patch* lines at a typical 40–60% signal ratio | ~210–310 | 3.0–4.3/100 |
+
+The earlier claim that this was "understated 2–4×" reasoned from the 521 patch-line figure,
+which counts context and headers and is not comparable to added+removed. **True rate: 3.0 to 7.5
+per 100.** The other high outliers are unaffected — `aee64f62` and `379fa640` have
+exactly-verified denominators, and `1ba97aa9` is verified with no restatement.
+
+`3dd55442`'s 225 is an agent-scoped estimate after excluding a third session's hunks (raw
+numstat 336). `05d68ce0`'s second round is inferred from a 1,940-line patch containing six whole
+new modules, so ~1,300 could be off by ±300.
+
+None of this touches §4 (flat trend), §5 (agent count), §6 (gate-catchability), or §7 (area
+split): `2d5da6ab` contributes 9 rows to a 416-row corpus and sits near none of those
+conclusions' hinges.
 
 **The finding counts are weaker than the denominators.** `rows.txt` double-counts restated
 findings (~10%) and silently drops every table whose `#` column is non-numeric — which is how a
