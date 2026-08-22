@@ -85,7 +85,14 @@ account, but at its terminal the global provider says `firstParty`, the gate dro
 account, and the stored result carries no stamp. Also fires when the session switches back to
 Anthropic while a background Codex worker is still running.
 
-Fail-safe in direction: it silently drops true stamps, it cannot invent false ones.
+**CORRECTION (2026-08-22, when this was fixed in `a5345456`).** This report originally
+called the bug fail-safe: "it silently drops true stamps, it cannot invent false ones." That
+is wrong about the gate, and only accidentally right about the system. A test written against
+the unfixed line, with the session on Codex and the worker on Anthropic, showed the old code
+stamping `acct-1` onto a worker that never spent it. The gate was wrong in BOTH directions.
+What makes it fail-safe in production is a different guard one layer up: `registerWorkerCodexLease`
+refuses that lease, so `snapshotLeaseAccount` finds nothing to return. Worth knowing before
+anyone relaxes the registration gate, because the safety lives there and not here.
 
 **The one-line fix**, for whoever owns this file next:
 
@@ -100,7 +107,21 @@ Fail-safe in direction: it silently drops true stamps, it cannot invent false on
 `toolUseContext` is already a destructured parameter of `runAsyncAgentLifecycle`
 (`agentToolUtils.ts:921`), so nothing else has to move.
 
-**Not fixed here**, deliberately. Those three files were dirty with another session's live
+**FIXED in `a5345456`** — the one-line change below, plus a rewritten comment (the old one
+asserted the false premise outright) and `agentToolUtils.terminalAccount.test.ts`, two tests
+that drive the real `runAsyncAgentLifecycle`. Mutation-checked twice, independently: revert
+the line and it is 0 pass / 2 fail.
+
+**Follow-up this opened, NOT swept:** `resolveRequestProvider` has roughly 40 other
+single-argument call sites across `src/` (`constants/prompts.ts:575,742,1012`,
+`utils/queryContext.ts:124`, `services/api/claude.ts:507,3601`,
+`services/deferredContinuationRunner.ts:252,256`, `screens/REPL.tsx:2748`, and more). Each
+inherits the same process-global fallback. Some are certainly correct, because a main-thread
+call site genuinely wants the session provider. Which are which was not audited.
+
+The original parking note follows, for the record.
+
+**Not fixed at the time**, deliberately. Those three files were dirty with another session's live
 edits during the review, and that session then landed `2763a080` while this report was being
 written. That commit is **comment-only on this exact block** and does not fix it; worse, its
 new wording now asserts the false premise outright ("Gated on the worker's own model, like
