@@ -2264,6 +2264,14 @@ test('the autoscroll signature tracks the RENDERED transcript, not the capped ra
   expect(line).toContain('renderedRowCount')
 })
 
+test('a one-pixel upward transcript scroll releases the bottom lock', () => {
+  // The pane coordinator is allowed to re-pin only while this lock is true.
+  // Keeping it through a 120px grace range made ordinary upward scrolling fight
+  // measurement corrections after a turn had stopped.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  expect(source).toContain('const nextAtBottom = gap <= 1')
+})
+
 test('a cold-spawn prompt is visible, and the send arrow says so', () => {
   // CC-16 parks a prompt submitted before the engine can take it, and clears the
   // composer as if it had been sent. Nothing rendered the parked text, so the

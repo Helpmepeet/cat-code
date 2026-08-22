@@ -4851,7 +4851,7 @@ export function SessionPane({
     const el = transcriptScrollRef.current
     if (!el) return
     const gap = el.scrollHeight - el.scrollTop - el.clientHeight
-    const nextAtBottom = gap < 120
+    const nextAtBottom = gap <= 1
     applyAtBottom(nextAtBottom)
     // Measured from a scroll event rather than at unmount, because a pane's DOM
     // is already gone by the time its ordinary cleanup runs — but COALESCED to
