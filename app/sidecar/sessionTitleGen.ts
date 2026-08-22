@@ -3,7 +3,7 @@
  *
  * A fresh desktop session opens with `descriptor.title === null`, so the sidebar
  * and tab fall back to the cwd basename. The TUI already fills that gap
- * (`REPL.tsx:3032-3042`): after the first turn it feeds the first user message to
+ * (`REPL.tsx:3032-3042`): it feeds the first user message to
  * `generateSessionTitle` (Haiku, sentence-case) and, if no custom title exists,
  * persists the result with `saveAiGeneratedTitle`. This module runs the SAME
  * machinery from the sidecar — never a re-implementation (mistakes #1/#10).
@@ -51,7 +51,7 @@ export const realSessionTitleDeps: SessionTitleDeps = {
 
 export type SessionTitleGenerator = {
   /**
-   * Run at most once, after the first turn of a FRESH session. On success it
+   * Run at most once, after the first durable input of a FRESH session. On success it
    * persists the title (durable) and invokes `onTitle` so the caller can push it
    * live. Never throws; a resumed session, an existing title, an empty prompt, or
    * a null generation result all resolve to a silent no-op.
@@ -90,10 +90,13 @@ export function createSessionTitleGenerator(opts: {
         title = await deps.generate(trimmed, new AbortController().signal)
       } catch {
         // generateSessionTitle already swallows + returns null; this is a belt so
-        // a deps override can never throw out of a turn's finally.
+        // a deps override can never throw out of the caller's background task.
         title = null
       }
-      if (!title) return
+      // A user can rename the session while the background title request is in
+      // flight. Re-check immediately before writing or broadcasting so the
+      // generated title never overwrites that live label.
+      if (!title || deps.hasExistingTitle(opts.engineSessionId)) return
 
       try {
         deps.persist(opts.engineSessionId, title)

@@ -1738,6 +1738,7 @@ export class SidecarServer {
     if (announcePrompt) {
       this.broadcastPromptMessage(prompt, uuid, isMeta, origin)
     }
+    const titlePrompt = generateTitle ? promptText(prompt).trim() : ''
 
     let submitPromise: Promise<void>
     try {
@@ -1746,7 +1747,14 @@ export class SidecarServer {
         isMeta,
         ...(goalSnapshot !== undefined ? { goalSnapshot } : {}),
         ...(origin !== undefined ? { origin } : {}),
-        ...(onInputPersisted !== undefined ? { onInputPersisted } : {}),
+        onInputPersisted: () => {
+          onInputPersisted?.()
+          if (titlePrompt) {
+            void this.titleGenerator.maybeGenerate(titlePrompt, title =>
+              this.broadcastSessionTitle(title),
+            )
+          }
+        },
       })
     } catch (error) {
       this.activeTurn = false
@@ -1782,15 +1790,6 @@ export class SidecarServer {
         // past this pins a full prompt each, images included, for a message the
         // user took back.
         this.recalledPrompts.clear()
-        // The generator is one-shot and flips its guard even on an early
-        // return, so an image-only prompt (no text to title with, reachable
-        // since the boundary drain began claiming them) would silently burn the
-        // session's only attempt.
-        if (generateTitle && promptText(prompt).trim().length > 0) {
-          void this.titleGenerator.maybeGenerate(promptText(prompt), title =>
-            this.broadcastSessionTitle(title),
-          )
-        }
         this.scheduleBoundaryDrain()
       })
     return true
@@ -4268,7 +4267,7 @@ export class SidecarServer {
    * `send` applies the clone/JSON checks, the outbound secretGuard, and the size
    * cap (the title is plain display text, guard-clean by construction). Main taps
    * this frame → `host.setTitle` → registry, relabelling the sidebar/tab. Two
-   * callers: the one-shot AI-title generator (after a fresh session's first turn),
+   * callers: the one-shot AI-title generator (after a fresh session's first durable input),
    * and the P4-6b `session.rename` verb (a user rename, on success). Deliberately
    * NOT part of attach/replay.
    */

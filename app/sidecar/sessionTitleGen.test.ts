@@ -68,6 +68,33 @@ describe('createSessionTitleGenerator', () => {
     expect(titles).toEqual([])
   })
 
+  test('a rename during generation prevents an AI title write or broadcast', async () => {
+    let hasExistingTitle = false
+    let resolveGeneration: (title: string | null) => void = () => {}
+    const calls = { persist: [] as Array<[string, string]> }
+    const gen = createSessionTitleGenerator({
+      engineSessionId: 'sess-1',
+      resumed: false,
+      deps: {
+        generate: () =>
+          new Promise(resolve => {
+            resolveGeneration = resolve
+          }),
+        hasExistingTitle: () => hasExistingTitle,
+        persist: (id, title) => calls.persist.push([id, title]),
+      },
+    })
+    const titles: string[] = []
+    const generation = gen.maybeGenerate('a prompt', title => titles.push(title))
+
+    hasExistingTitle = true
+    resolveGeneration('Generated title')
+    await generation
+
+    expect(calls.persist).toEqual([])
+    expect(titles).toEqual([])
+  })
+
   test('empty / whitespace prompt: skipped, no generate call', async () => {
     const { deps, calls } = fakeDeps()
     const gen = createSessionTitleGenerator({ engineSessionId: 'sess-1', resumed: false, deps })

@@ -548,7 +548,7 @@ export class Host implements HostApi {
    * setTitle — the P4-6 title-rider's GENERATION half (wired 2026-07-14)
    * --------------------------------------------------------------------- *
    *
-   * The sidecar generates an AI session title after a fresh session's first turn
+   * The sidecar generates an AI session title after a fresh session's first durable input
    * (reusing the engine's `generateSessionTitle`, the same machinery the TUI
    * uses) and pushes it via the one-shot `session-title` frame; main relays it
    * here. Durable via the registry (survives restart → restorable rows keep the

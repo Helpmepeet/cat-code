@@ -2982,9 +2982,12 @@ test('catalog owner (decision #4) — the sidecar no longer enumerates, arms a c
   expect(received.filter(f => f.kind === 'sessions.snapshot')).toHaveLength(0)
 })
 
-test('P4-6 title-rider — after a fresh session first turn, broadcasts a session-title frame', async () => {
+test('P4-6 title-rider — generates after durable input acceptance before the turn settles', async () => {
+  let releaseTurn: (() => void) | undefined
+  let turnSettled = false
   const controller = new AppSessionController({
-    async *runTurn() {
+    async *runTurn({ options }) {
+      options?.onInputPersisted?.()
       yield {
         type: 'assistant',
         message: {
@@ -2996,10 +2999,14 @@ test('P4-6 title-rider — after a fresh session first turn, broadcasts a sessio
         session_id: ENGINE_SESSION,
         uuid: '00000000-0000-4000-8000-00000000b001',
       } as never
+      await new Promise<void>(resolve => {
+        releaseTurn = resolve
+      })
+      turnSettled = true
     },
   })
-  // Inject fake title deps so the seam is proven without a Haiku round-trip: the
-  // server must run the generator after the turn and broadcast the frame.
+  // Inject fake title deps so the entry-point ordering is proven without a
+  // Haiku round-trip.
   const server = new SidecarServer({
     sessionId: SESSION,
     engineSessionId: ENGINE_SESSION,
@@ -3021,6 +3028,7 @@ test('P4-6 title-rider — after a fresh session first turn, broadcasts a sessio
     clientFrame({ type: 'app.submit', requestId: 'r1', prompt: 'fix the login button' }),
   )
   await waitFor(() => received.some(f => f.kind === 'session-title'))
+  expect(turnSettled).toBe(false)
 
   expect(received.find(f => f.kind === 'session-title')).toEqual({
     kind: 'session-title',
@@ -3028,6 +3036,7 @@ test('P4-6 title-rider — after a fresh session first turn, broadcasts a sessio
     sessionId: SESSION,
     title: 'Fix login button',
   })
+  releaseTurn?.()
 })
 
 test('T4 — rejects a submit whose goalSnapshot is not a valid ThreadGoal', () => {
