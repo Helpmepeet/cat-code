@@ -62,7 +62,11 @@ import { logForDebugging } from '../utils/debug.js'
 import { loadMemoryPrompt } from '../memdir/memdir.js'
 import { isUndercover } from '../utils/undercover.js'
 import { isMcpInstructionsDeltaEnabled } from '../utils/mcpInstructionsDelta.js'
-import { getAPIProvider, resolveRequestProvider } from '../utils/model/providers.js'
+import {
+  getAPIProvider,
+  resolveRequestProvider,
+  type APIProvider,
+} from '../utils/model/providers.js'
 import { isGPTPromptStyle } from './promptStyle.js'
 import {
   getGPTIntroSection,
@@ -561,6 +565,7 @@ export async function getAgentModeSystemPromptSections(
   model: string,
   additionalWorkingDirectories?: string[],
   mcpClients?: MCPServerConnection[],
+  provider?: APIProvider,
 ): Promise<string[]> {
   const { getAgentModeSystemPrompt } =
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -569,10 +574,10 @@ export async function getAgentModeSystemPromptSections(
   const [skillToolCommands, outputStyleConfig, envInfo] = await Promise.all([
     getSkillToolCommands(getCwd()),
     getOutputStyleConfig(),
-    computeSimpleEnvInfo(model, additionalWorkingDirectories),
+    computeSimpleEnvInfo(model, additionalWorkingDirectories, provider),
   ])
 
-  const requestProvider = resolveRequestProvider(model)
+  const requestProvider = resolveRequestProvider(model, provider)
   const gpt = isGPTPromptStyle(requestProvider)
   const settings = getInitialSettings()
   const enabledTools = new Set(tools.map(_ => _.name))
@@ -598,7 +603,7 @@ export async function getAgentModeSystemPromptSections(
     systemPromptSection(
       'env_info_simple',
       { model, additionalWorkingDirectories },
-      () => computeSimpleEnvInfo(model, additionalWorkingDirectories),
+      () => computeSimpleEnvInfo(model, additionalWorkingDirectories, provider),
     ),
     // Not keyed on settings.language: language is read once per session and a
     // change takes effect on the next /clear, /compact, or restart. The full
@@ -692,6 +697,7 @@ export async function getSystemPrompt(
   model: string,
   additionalWorkingDirectories?: string[],
   mcpClients?: MCPServerConnection[],
+  provider?: APIProvider,
 ): Promise<string[]> {
   const startTime = Date.now()
   logForDebugging(`[SystemPrompt] getSystemPrompt start`, {
@@ -732,14 +738,14 @@ export async function getSystemPrompt(
       })
       return result
     }),
-    computeSimpleEnvInfo(model, additionalWorkingDirectories).then(result => {
+    computeSimpleEnvInfo(model, additionalWorkingDirectories, provider).then(result => {
       logForDebugging(`[SystemPrompt] computeSimpleEnvInfo complete`, {
         envInfoLength: result.length
       })
       return result
     }),
   ])
-  const requestProvider = resolveRequestProvider(model)
+  const requestProvider = resolveRequestProvider(model, provider)
   const gpt = isGPTPromptStyle(requestProvider)
 
   const settings = getInitialSettings()
@@ -804,7 +810,7 @@ export async function getSystemPrompt(
     systemPromptSection(
       'env_info_simple',
       { model, additionalWorkingDirectories },
-      () => computeSimpleEnvInfo(model, additionalWorkingDirectories),
+      () => computeSimpleEnvInfo(model, additionalWorkingDirectories, provider),
     ),
     // CONTRACT: language is read once per session. The picker writes the
     // setting immediately (components/LanguagePicker.tsx, applied at
@@ -1007,9 +1013,10 @@ ${modelDescription}${knowledgeCutoffMessage}`
 export async function computeSimpleEnvInfo(
   modelId: string,
   additionalWorkingDirectories?: string[],
+  provider?: APIProvider,
 ): Promise<string> {
   const [isGit, unameSR] = await Promise.all([getIsGit(), getUnameSR()])
-  const apiProvider = resolveRequestProvider(modelId)
+  const apiProvider = resolveRequestProvider(modelId, provider)
 
   // Undercover: strip all model name/ID references. See computeEnvInfo.
   // DCE: inline the USER_TYPE check at each site — do NOT hoist to a const.

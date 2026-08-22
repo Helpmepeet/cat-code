@@ -200,6 +200,7 @@ async function resumeAgentBackgroundLocked(
         toolUseContext.options.mainLoopModel,
         additionalWorkingDirectories,
         toolUseContext.options.mcpClients,
+        toolUseContext.options.mainLoopProvider,
       )
       forkParentSystemPrompt = buildEffectiveSystemPrompt({
         mainThreadAgentDefinition,

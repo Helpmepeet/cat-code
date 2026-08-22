@@ -10,6 +10,7 @@ import { getTools } from '../tools.js'
 import {
   getAgentModeSystemPromptSections,
   getDefaultAgentPrompt,
+  getSystemPrompt,
   SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
 } from '../constants/prompts.js'
 import {
@@ -171,6 +172,24 @@ describe('provider and prompt regressions', () => {
         process.env.ANTHROPIC_API_KEY = originalAnthropicApiKey
       }
     }
+  })
+
+  test('an OpenAI worker on an ambiguous model gets the OpenAI prompt style', async () => {
+    setSessionProvider('firstParty')
+
+    const prompt = await (
+      getSystemPrompt as (
+        tools: Parameters<typeof getSystemPrompt>[0],
+        model: string,
+        additionalWorkingDirectories?: string[],
+        mcpClients?: [],
+        provider?: 'openai',
+      ) => ReturnType<typeof getSystemPrompt>
+    )([], 'claude-opus-5', [], [], 'openai')
+
+    expect(prompt.join('\n')).toContain(
+      'This session is running through the OpenAI Codex provider.',
+    )
   })
 
   test('OpenAI exports Apply_patch as a custom tool schema', async () => {

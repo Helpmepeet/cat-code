@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 
+const skillImprovementSource = await Bun.file(
+  new URL('../hooks/skillImprovement.ts', import.meta.url),
+).text()
+
 // getSmallFastModelForProvider() routes cheap secondary calls (WebFetch
 // post-processing, session titles, hook evaluations) to the GPT mini on the
 // Codex/OpenAI fork, where the Anthropic Haiku default has no working
@@ -52,6 +56,11 @@ afterEach(() => {
 })
 
 describe('getSmallFastModelForProvider', () => {
+  test('skill improvement selects its side-call model through the provider-aware helper', () => {
+    expect(skillImprovementSource).toContain('getSmallFastModelForProvider()')
+    expect(skillImprovementSource).not.toContain('getSmallFastModel()')
+  })
+
   test('uses GPT-5.6 Sol as the Codex main-loop default', async () => {
     codexSubscriber = true
     const { getDefaultMainLoopModelSetting } = await import('./model.js')

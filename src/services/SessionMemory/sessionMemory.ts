@@ -417,9 +417,9 @@ export async function manuallyExtractSessionMemory(
     )
 
     // Get system prompt for cache-safe params
-    const { tools, mainLoopModel } = toolUseContext.options
+    const { tools, mainLoopModel, mainLoopProvider } = toolUseContext.options
     const [rawSystemPrompt, userContext, systemContext] = await Promise.all([
-      getSystemPrompt(tools, mainLoopModel),
+      getSystemPrompt(tools, mainLoopModel, undefined, undefined, mainLoopProvider),
       getUserContext(),
       getSystemContext(),
     ])

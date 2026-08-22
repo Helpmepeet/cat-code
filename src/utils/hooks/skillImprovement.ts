@@ -21,7 +21,7 @@ import {
   extractTextContent,
   normalizeMessagesForAPI,
 } from '../messages.js'
-import { getSmallFastModel } from '../model/model.js'
+import { getSmallFastModelForProvider } from '../model/model.js'
 import { resolveRequestProvider } from '../model/providers.js'
 import { jsonParse } from '../slowOperations.js'
 import { asSystemPrompt } from '../systemPromptType.js'
@@ -211,7 +211,7 @@ export async function applySkillImprovement(
   }
 
   const updateList = updates.map(u => `- ${u.section}: ${u.change}`).join('\n')
-  const model = getSmallFastModel()
+  const model = getSmallFastModelForProvider()
   const provider = resolveRequestProvider(model)
   // Build a provider-native instruction assembly so the OpenAI/Codex path (the
   // default on the Codex fork) gets the payload translateToCodexBody requires;
