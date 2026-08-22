@@ -120,7 +120,18 @@ export function AgentPip({
   return <span className={`inline-block shrink-0 rounded-full ${sizeClass} ${tone.dot}`} />
 }
 
-/** Role/type dot (roster row leader) coloured by the agent type. */
+/**
+ * Role/type dot coloured by the agent type — the prototype's roster row leader
+ * (`OrchestratorMode.jsx:262`, a 6px role-coloured dot).
+ *
+ * NOT RENDERED ANYWHERE as of `bbec14cd`: the roster row leads with the worker's
+ * face now, both being identity marks competing for one leading slot, and that
+ * row was this dot's last consumer. Kept anyway, and not dead code to sweep: the
+ * parity ledger carries it as a built primitive against the prototype element
+ * above, and the design-system sync pins it by name as one of this file's
+ * exported parts. Deleting it flips a built parity row to unbuilt, which is the
+ * operator's call.
+ */
 export function AgentRoleDot({ role }: { role: string | null }) {
   const meta = agentTypeMeta(role)
   const tone = meta ? AGENT_TYPE_TONE_CLASS[meta.tone] : AGENT_TYPE_TONE_CLASS.neutral
