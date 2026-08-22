@@ -210,6 +210,47 @@ whether even that blocks or just disables submit is §5-Q2.
 > action itself is the `dead`-only "Sign in again" row item, which reuses `account.login` and adds no
 > vocabulary. The `app/main` wiring that drives the count's refresh is not yet committed; see the
 > CC-74 row in STATUS.md.
+>
+> **Revision (2026-08-22 — recon, no code change). The Anthropic pool stays uncounted, and the
+> reason is now stronger than "no repair affordance yet": a dead Anthropic row is not reachable on
+> this surface at all.** The revision above deferred the Anthropic half on the assumption that it
+> merely lacked a repair control. It was investigated to decide whether to give it the Codex
+> treatment; the answer is that the affordance would key off a state the page's feed cannot produce.
+>
+> **Established:** the Accounts page and the sidebar mark both read `selectGlobalAccountsSnapshot`
+> (`app/renderer/src/accountsState.ts:258`), which PREFERS the polled global snapshot from the
+> disposable accounts worker over any session's own. That worker
+> (`app/sidecar/accountsPoolWorker.ts:115`) is a fresh process per run and populates the Anthropic
+> pool with `loadClaudePoolForObservation()` (`src/services/api/claudeAccountPool.ts:101`), whose two
+> account sources can never yield `dead`: `loadVaultAccounts()` hardcodes `status: 'healthy'`
+> (`claudeAccountPool.ts:761`), and `loadConfigAccount()`'s `'dead'` ternary
+> (`claudeAccountPool.ts:815`) is unreachable, because the function already returned null on a
+> missing refresh token twelve lines earlier (`claudeAccountPool.ts:798`). The only live producer of
+> a dead Anthropic account is `failoverClaudeAccount` (`claudeAccountPool.ts:375`), reached from one
+> call site inside request retry (`src/services/api/withRetry.ts:565`); it mutates in-memory pool
+> state in whichever SESSION process made the failing request, and deliberately does not persist
+> (`claudeAccountPool.ts:360-364`). So the dead verdict lives in a different process from the one
+> that feeds the page, and every worker run re-derives that same account as healthy.
+>
+> This is the asymmetry with Codex, and it is why the sibling feature works: a dead Codex account is
+> derived from `refresh.state === 'reauth_required'` (`codexAccountPool.ts:1197`, verdict at
+> `:1221`), which is PERSISTED in the vault file, so a fresh worker load reproduces it — and clearing
+> it on a new token is what makes "Sign in again" visibly repair the row.
+>
+> **Not a blocker, for the record:** the Anthropic heal path itself is real and would have worked.
+> The sidecar runner's `persist()` (`app/sidecar/accountsDomain.ts:351`) calls `installOAuthTokens`
+> (`src/cli/handlers/auth.ts:113`), which for a claude.ai login calls `appendClaudeAccount`
+> (`auth.ts:156`); that upserts on `accountUuid` and explicitly resets `acct.status = 'healthy'`
+> (`claudeAccountPool.ts:429`), keeping the alias and creating no duplicate row. The mechanism is
+> sound; there is simply no dead row on this surface for it to heal.
+>
+> **Ruled:** no "Sign in again" control on Anthropic rows, and `selectAccountsNeedingSignIn` stays
+> Codex-scoped with its label unchanged. A control gated on `status === 'dead'` would be unreachable
+> in the preferred feed, and in the one narrow window where a session's own snapshot still fills the
+> page (the launch gap before main's first worker run, `accountsState.ts:257`) its effect would be
+> indistinguishable from the next worker run healing the row anyway. Reopen this ONLY if the
+> Anthropic dead verdict becomes persistent the way the Codex one is — that is an engine-side change
+> to `claudeAccountPool.ts`, not a renderer one, and it is the actual prerequisite.
 - **"Read-only mode is obviously useful; why not just build it?"** Because "read-only" is a
   security claim, and no one has defined it against the threat model (does the engine still
   read CLAUDE.md? run MCP servers? LSP?). Shipping the *label* without the defined semantics
