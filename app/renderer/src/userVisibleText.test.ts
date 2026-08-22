@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import ts from 'typescript'
 
 /**
  * Repo-wide enforcement of CLAUDE.md §7 "Never render engineering notes".
@@ -202,12 +203,12 @@ function candidateStrings(source: string): Candidate[] {
     out.push({ index: match.index! + 1, text })
   }
 
-  // Quoted literals stay LINE-scoped: prose containing an apostrophe ("engine's")
-  // otherwise opens a bogus literal that runs to the next quote anywhere in the
-  // file, swallowing code and reporting nonsense.
+  // Single- and double-quoted literals stay LINE-scoped: prose containing an
+  // apostrophe ("engine's") otherwise opens a bogus literal that runs to the
+  // next quote anywhere in the file, swallowing code and reporting nonsense.
   let offset = 0
   for (const line of source.split('\n')) {
-    for (const match of line.matchAll(/(['"`])((?:\\.|(?!\1)[^\\])*)\1/g)) {
+    for (const match of line.matchAll(/(['"])((?:\\.|(?!\1)[^\\])*)\1/g)) {
       // Drop `${…}` bodies: identifiers, not words a user reads.
       // `${snapshot.readyCount} of ${snapshot.poolCount} ready` renders "1 of 2 ready".
       const text = match[2]!.replace(/\$\{[^}]*\}/g, ' ')
@@ -215,6 +216,24 @@ function candidateStrings(source: string): Candidate[] {
     }
     offset += line.length + 1
   }
+  const sourceFile = ts.createSourceFile(
+    'source.tsx',
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  )
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isNoSubstitutionTemplateLiteral(node) &&
+      node.getText(sourceFile).includes('\n') &&
+      node.text.includes(' ')
+    ) {
+      out.push({ index: node.getStart(sourceFile) + 1, text: node.text })
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sourceFile)
   return out
 }
 
@@ -302,6 +321,11 @@ test('the scan distinguishes prose from code (guards its own precision)', () => 
   // missed exactly this shape, which is how "Read-only snapshot" survived.
   expect(
     offences(`<span\n  className="chip"\n>\n  Read-only snapshot\n</span>\n`),
+  ).not.toEqual([])
+  // Template literals may wrap as naturally as JSX. The apostrophe-safe quoted
+  // literal extractor must still scan their complete text.
+  expect(
+    offences('const copy = `Waiting for the engine\'s\nmemory snapshot`\n'),
   ).not.toEqual([])
 })
 
