@@ -13,6 +13,7 @@ import {
   reduceLeaseState,
   selectLeaseAgentCount,
   selectLeaseConcentrationNote,
+  selectLeaseForLabel,
   selectLeaseForOwner,
   selectLeaseGroups,
   selectLeaseSnapshot,
@@ -105,6 +106,56 @@ test('selectLeaseForOwner joins by the roster agentId, null-safe', () => {
   expect(selectLeaseForOwner(snap, 'agent_missing')).toBeNull()
   expect(selectLeaseForOwner(snap, null)).toBeNull()
   expect(selectLeaseForOwner(null, 'agent_b')).toBeNull()
+})
+
+test('selectLeaseForLabel joins a RUNNING worker by the description both planes carry', () => {
+  // The key `selectLeaseForOwner` cannot use while a foreground worker runs: its
+  // agentId arrives with the result, i.e. only once the run is over. The engine
+  // registers the lease under the Agent tool's own `description`
+  // (`AgentTool.tsx:1502`), which is exactly what the card holds as `input.description`.
+  const snap = snapshot({
+    owners: [
+      owner({ ownerId: 'main-thread', ownerType: 'main', ownerLabel: 'Main thread' }),
+      owner({ ownerId: 'agent_b', leaseId: 'agent_b', ownerLabel: 'repair the sdk contract' }),
+    ],
+  })
+  expect(selectLeaseForLabel(snap, 'repair the sdk contract')?.leaseId).toBe('agent_b')
+  expect(selectLeaseForLabel(snap, 'no such task')).toBeNull()
+  expect(selectLeaseForLabel(snap, '')).toBeNull()
+  expect(selectLeaseForLabel(snap, null)).toBeNull()
+  expect(selectLeaseForLabel(null, 'repair the sdk contract')).toBeNull()
+})
+
+test('selectLeaseForLabel never names an account for a description two workers share', () => {
+  // A description is 3-5 words and is not unique. Picking the first match would
+  // name an account the reader's worker may not be burning at all.
+  const snap = snapshot({
+    owners: [
+      owner({ ownerId: 'agent_a', leaseId: 'agent_a', accountAlias: 'bluesky' }),
+      owner({ ownerId: 'agent_b', leaseId: 'agent_b', accountAlias: 'onbi' }),
+    ],
+  })
+  expect(snap.owners[0]?.ownerLabel).toBe(snap.owners[1]?.ownerLabel ?? '')
+  expect(selectLeaseForLabel(snap, 'audit the auth path')).toBeNull()
+})
+
+test('selectLeaseForLabel ignores the main thread and any lease that is not holding', () => {
+  // A failed lease keeps the account id it could NOT use, so naming it would
+  // report a worker as burning an account that refused it.
+  const failed = snapshot({
+    owners: [owner({ ownerId: 'agent_b', leaseId: 'agent_b', state: 'failed' })],
+  })
+  expect(selectLeaseForLabel(failed, 'audit the auth path')).toBeNull()
+
+  const released = snapshot({
+    owners: [owner({ ownerId: 'agent_b', leaseId: 'agent_b', state: 'released' })],
+  })
+  expect(selectLeaseForLabel(released, 'audit the auth path')).toBeNull()
+
+  const mainOnly = snapshot({
+    owners: [owner({ ownerId: 'main-thread', ownerType: 'main', ownerLabel: 'shared label' })],
+  })
+  expect(selectLeaseForLabel(mainOnly, 'shared label')).toBeNull()
 })
 
 test('the tab count equals the number of rows the panel prints', () => {

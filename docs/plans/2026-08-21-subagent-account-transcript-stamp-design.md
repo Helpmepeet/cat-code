@@ -1,6 +1,8 @@
 # Subagent account: stamp it into the transcript plane
 
-**Status:** IMPLEMENTED 2026-08-21 (option (a)). This file is the design plus
+**Status:** IMPLEMENTED 2026-08-21 (option (a)); §1 corrected 2026-08-22 —
+the foreground live window WAS closable, see the correction note there. This
+file is the design plus
 the record of what shipped; the adversarial review that reshaped it is
 `docs/reports/2026-08-21-subagent-account-transcript-stamp-adversarial-review.md`.
 **Date:** 2026-08-21.
@@ -48,6 +50,27 @@ For a foreground subagent the two preconditions are mutually exclusive by
 construction, so the account has never once rendered on that card. For a
 background subagent it renders during the run and is permanently gone the
 instant the worker finishes — which is when a reader goes looking.
+
+> **Correction, 2026-08-22.** "Mutually exclusive by construction" is true of
+> `agentId` and false of the problem. The table asks when `agentId` is alive on
+> both sides; it never asks what the two planes already share while a worker
+> runs. They share the task description: `registerWorkerCodexLease` stamps the
+> lease's `ownerLabel` with the Agent tool's own `description` argument
+> (`src/tools/AgentTool/AgentTool.tsx:1502`), which is required (`:520`) and is
+> the same string the card holds as `input.description` — and
+> `LeaseOwnerRow.ownerLabel` is documented on the wire as "the delegated task
+> description" (`app/shared/protocol.ts:1431`). So the foreground live window
+> was closable all along, with no new field on either plane, by joining on that
+> key instead. Shipped as `selectLeaseForLabel` (`app/renderer/src/leaseState.ts`),
+> tried after the `agentId` join and before the stamp. It refuses two cases
+> rather than guess, because the card renders null as silence: an ambiguous
+> label (a 3-5 word description is not unique) and any lease that is not
+> `active` (a failed lease keeps the account id it could NOT use).
+>
+> This does not retract §2. The stamp is still the only answer for a settled or
+> restored row, where the lease is deleted or the whole map is gone with its
+> process. The live join and the stamp cover disjoint windows, which is what the
+> precedence order in §4 already assumed.
 
 "Which account did this worker burn" is a stable historical fact being served
 from state that is destroyed at exactly the moment it is asked for. It is also

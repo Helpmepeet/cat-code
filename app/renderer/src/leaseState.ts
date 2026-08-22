@@ -87,6 +87,51 @@ export function selectLeaseForOwner(
 }
 
 /**
+ * The lease held by the worker a transcript row describes, matched on the label
+ * both planes already carry.
+ *
+ * `registerWorkerCodexLease` stamps `ownerLabel` with the Agent tool's own
+ * `description` argument (`src/tools/AgentTool/AgentTool.tsx:1502`), which is
+ * required (`:520`) and is the same string the card reads as `input.description`.
+ * The wire contract says so directly: `LeaseOwnerRow.ownerLabel` is documented as
+ * "the delegated task description".
+ *
+ * This is the only key alive WHILE a foreground worker runs. Its `agentId`
+ * reaches the transcript with the RESULT, so `selectLeaseForOwner` cannot answer
+ * until the run is already over. The stamp design proved those two windows
+ * disjoint and concluded the gap could not be closed
+ * (`docs/plans/2026-08-21-subagent-account-transcript-stamp-design.md` §1); that
+ * held for `agentId` and not for the problem, which this key closes with no new
+ * field on either plane.
+ *
+ * TWO deliberate refusals, because a wrong account is worse than no account and
+ * the card already renders null as silence:
+ *
+ *  - **Ambiguity.** A description is 3-5 words and is not unique, so two
+ *    concurrent workers can share one. More than one match returns null rather
+ *    than picking the first.
+ *  - **Non-holding leases.** A failed lease keeps the account id it could NOT
+ *    use (`codexAccountLeaseManager.ts:356-362`) — the same trap
+ *    `selectLeaseGroups` avoids by filing it under the stranded bucket instead of
+ *    a healthy-looking account. Only an active lease names an account here.
+ */
+export function selectLeaseForLabel(
+  snapshot: LeaseSnapshot | null,
+  label: string | null,
+): LeaseOwnerRow | null {
+  if (!snapshot || !label) return null
+  let found: LeaseOwnerRow | null = null
+  for (const owner of snapshot.owners) {
+    if (owner.ownerType !== 'subagent') continue
+    if (owner.ownerLabel !== label) continue
+    if (LEASE_STATE_ROLE[owner.state] !== 'holding') continue
+    if (found !== null) return null
+    found = owner
+  }
+  return found
+}
+
+/**
  * The tab's count chip. Deliberately every owner row, not just the active ones:
  * it has to equal the sum of the group counts the panel prints, and an agent that
  * failed to get an account still occupies a row. The engine's own per-account
