@@ -201,6 +201,10 @@ import {
 const ToolInspectorContext = createContext<((row: ToolUseNestedRow) => void) | null>(
   null,
 )
+const TurnErrorActionsContext = createContext<{
+  openAccounts?: () => void
+  saveDiagnostics?: () => void
+}>({})
 
 /**
  * Re-derive the inspected tool row from the CURRENT rows by id (review F1). The
@@ -239,6 +243,8 @@ export const TranscriptView = memo(function TranscriptView({
   loadEarlierPending,
   loadEarlierFailure,
   onLoadEarlier,
+  onOpenAccounts,
+  onSaveDiagnostics,
 }: {
   state: TranscriptState
   activeSessionId: SessionId | null
@@ -272,6 +278,8 @@ export const TranscriptView = memo(function TranscriptView({
    * process is gone) still shows the boundary row, and has nothing to ask.
    */
   onLoadEarlier?: () => void
+  onOpenAccounts?: () => void
+  onSaveDiagnostics?: () => void
   /**
    * This session's Codex leases, so an agent card can name the account its worker
    * holds. Optional and null-tolerant: the plane is Codex-only and per-process.
@@ -291,6 +299,8 @@ export const TranscriptView = memo(function TranscriptView({
       loadEarlierPending={loadEarlierPending ?? false}
       loadEarlierFailure={loadEarlierFailure ?? null}
       onLoadEarlier={onLoadEarlier}
+      onOpenAccounts={onOpenAccounts}
+      onSaveDiagnostics={onSaveDiagnostics}
     />
   )
 })
@@ -308,6 +318,8 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   loadEarlierPending = false,
   loadEarlierFailure = null,
   onLoadEarlier,
+  onOpenAccounts,
+  onSaveDiagnostics,
 }: {
   rows: NestedTranscriptRow[]
   /** This session's Codex leases; null on an Anthropic path and after a restore. */
@@ -322,6 +334,8 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   loadEarlierPending?: boolean
   loadEarlierFailure?: string | null
   onLoadEarlier?: () => void
+  onOpenAccounts?: () => void
+  onSaveDiagnostics?: () => void
 }) {
   // P4-1: the tool row a card asked to inspect (null = drawer closed). Owned here
   // — above the memoized rows — so opening the drawer never mutates a row and the
@@ -489,19 +503,23 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
       <AgentFaceRegistryContext.Provider value={faceRegistry}>
         <LeaseSnapshotContext.Provider value={leases}>
           <ToolInspectorContext.Provider value={openInspector}>
-            <FilePathMenuContext.Provider value={filePathMenuContextValue}>
-              {content}
-              <ToolInspectorOverlay row={inspected} onClose={closeInspector} />
-              {filePathMenuState ? (
-                <FilePathActionsMenu
-                  anchor={filePathMenuState.anchor}
-                  rawPath={filePathMenuState.rawPath}
-                  cwd={cwd}
-                  sessionId={filePathMenuState.sessionId}
-                  onClose={closeFilePathMenu}
-                />
-              ) : null}
-            </FilePathMenuContext.Provider>
+            <TurnErrorActionsContext.Provider
+              value={{ openAccounts: onOpenAccounts, saveDiagnostics: onSaveDiagnostics }}
+            >
+              <FilePathMenuContext.Provider value={filePathMenuContextValue}>
+                {content}
+                <ToolInspectorOverlay row={inspected} onClose={closeInspector} />
+                {filePathMenuState ? (
+                  <FilePathActionsMenu
+                    anchor={filePathMenuState.anchor}
+                    rawPath={filePathMenuState.rawPath}
+                    cwd={cwd}
+                    sessionId={filePathMenuState.sessionId}
+                    onClose={closeFilePathMenu}
+                  />
+                ) : null}
+              </FilePathMenuContext.Provider>
+            </TurnErrorActionsContext.Provider>
           </ToolInspectorContext.Provider>
         </LeaseSnapshotContext.Provider>
       </AgentFaceRegistryContext.Provider>
@@ -1009,6 +1027,9 @@ const TranscriptRowView = memo(function TranscriptRowView({
           totalCostUsd={row.totalCostUsd}
         />
       )
+
+    case 'turn-stopped':
+      return <Seam tone="neutral" label="Stopped" boldLabel />
 
     case 'compact-boundary':
       return <CompactBoundarySeam trigger={row.trigger} preTokens={row.preTokens} />
@@ -1721,11 +1742,9 @@ const FAMILY_STYLE: Record<
 }
 
 /**
- * The projector derives only THREE statuses (pending/success/error) — the
- * prototype's richer vocab (queued/needs-permission/cancelled/denied/truncated)
- * has no correlated seam signal, so this maps the real three to running/done/
- * failed (§5 ledger: "adapted to 3 states"). `pending` pulses like the
- * prototype's running dot.
+ * Cancellation is an engine-persisted result status. It is distinct from a
+ * failed tool invocation and deliberately does not surface its interruption
+ * protocol body.
  */
 const STATE_STYLE: Record<
   ToolCardStatus,
@@ -1742,6 +1761,12 @@ const STATE_STYLE: Record<
     word: 'failed',
     color: 'text-tone-danger',
     dot: 'bg-tone-danger',
+    pulse: false,
+  },
+  cancelled: {
+    word: 'stopped',
+    color: 'text-tone-warn',
+    dot: 'bg-tone-warn',
     pulse: false,
   },
 }
@@ -1917,6 +1942,19 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
   // (`resolveToolCardExpanded`), and a failed or finished-image card still opens
   // itself, for reasons this preference knows nothing about.
   const { expanded: toolsExpanded } = useContext(ToolsExpandedContext)
+  if (row.status === 'cancelled') {
+    return (
+      <ToolCardShell
+        family={row.toolFamily}
+        target={deriveTarget(row)}
+        status={row.status}
+        expansionKey={row.toolUseId}
+        defaultExpanded
+      >
+        <ToolCancelledBody />
+      </ToolCardShell>
+    )
+  }
   // D2/C2: the Agent tool_use is rendered as the Agent member of this same
   // tool-card family (specialized body + C4 child nesting), not a sibling row.
   if (row.toolFamily === 'agent') return <AgentToolCard row={row} />
@@ -1968,6 +2006,14 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
         </div>
       ) : null}
     </div>
+  )
+}
+
+function ToolCancelledBody() {
+  return (
+    <p className="text-xs text-text-muted">
+      This tool was stopped before it finished.
+    </p>
   )
 }
 
@@ -2167,10 +2213,12 @@ function memberGrepDigest(row: ToolRunMember): GrepDigest | null {
  */
 function deriveToolRunStatus(members: ToolRunMember[]): ToolCardStatus {
   if (members.some(member => member.status === 'error')) return 'error'
+  if (members.some(member => member.status === 'cancelled')) return 'cancelled'
   if (members.some(member => member.status === 'pending')) return 'pending'
   // Closed-union tripwire (house rule): a fourth `ToolCardStatus` must be ranked
   // here deliberately, not silently fold into `success` on a run head.
-  const remaining: Exclude<ToolCardStatus, 'error' | 'pending'> = 'success'
+  const remaining: Exclude<ToolCardStatus, 'error' | 'cancelled' | 'pending'> =
+    'success'
   return remaining
 }
 
@@ -4479,7 +4527,6 @@ function SystemNoticeBox({
     | 'api_retry'
     | 'local_command_output'
     | 'account_diagnostic'
-    | 'turn_interrupted'
   content: string
 }) {
   const { glyph, glyphTone } = NOTICE_STYLE[noticeType]
@@ -4498,14 +4545,12 @@ function SystemNoticeBox({
 const NOTICE_STYLE: Record<
   | 'api_retry'
   | 'local_command_output'
-  | 'account_diagnostic'
-  | 'turn_interrupted',
+  | 'account_diagnostic',
   { glyph: string; glyphTone: string }
 > = {
   api_retry: { glyph: '↻', glyphTone: 'text-tone-warn' },
   local_command_output: { glyph: '›', glyphTone: 'text-text-muted' },
   account_diagnostic: { glyph: '!', glyphTone: 'text-tone-warn' },
-  turn_interrupted: { glyph: '!', glyphTone: 'text-tone-warn' },
 }
 
 
@@ -4729,9 +4774,6 @@ const INJECTED_TURN_FALLBACK: InjectedTurnStyle = {
  * errored; duration and cost ride as middot-separated detail.
  */
 const RESULT_ERROR_LABELS = new Map([
-  ['interrupted', 'Stopped by user'],
-  ['error_auth_required', 'Authentication failed'],
-  ['error_during_execution', 'Errored during execution'],
   ['error_max_turns', 'Stopped · max turns reached'],
   ['error_max_budget_usd', 'Stopped · budget limit reached'],
   [
@@ -4751,11 +4793,35 @@ function ResultSeam({
   durationMs?: number
   totalCostUsd?: number
 }) {
+  const { openAccounts, saveDiagnostics } = useContext(TurnErrorActionsContext)
   // #6 (operator, 2026-07-19): the success turn-footer was removed — a completed
   // turn shows no seam. Only error/abort/interrupted turns still surface a seam so
   // a stopped or broken turn stays visible.
   if (!isError && subtype !== 'interrupted') return null
   const isInterrupted = subtype === 'interrupted'
+  if (isInterrupted) {
+    return <Seam tone="neutral" label="Stopped" boldLabel />
+  }
+  if (subtype === 'error_auth_required') {
+    return (
+      <TurnErrorCard
+        title="Sign-in expired"
+        detail="Sign in again in Accounts to continue."
+        actionLabel="Open Accounts"
+        onAction={openAccounts}
+      />
+    )
+  }
+  if (subtype === 'error_during_execution') {
+    return (
+      <TurnErrorCard
+        title="This turn could not finish"
+        detail="Try again. If this keeps happening, save a diagnostics bundle."
+        actionLabel="Save diagnostics bundle"
+        onAction={saveDiagnostics}
+      />
+    )
+  }
   const label = RESULT_ERROR_LABELS.get(subtype) ?? 'Turn failed'
   const detail = [
     durationMs === undefined ? null : `${(durationMs / 1000).toFixed(1)}s`,
@@ -4765,11 +4831,41 @@ function ResultSeam({
     .join(' · ')
   return (
     <Seam
-      tone={isInterrupted ? 'neutral' : isError ? 'danger' : 'success'}
+      tone={isError ? 'danger' : 'success'}
       label={label}
       detail={detail || undefined}
       boldLabel
     />
+  )
+}
+
+function TurnErrorCard({
+  title,
+  detail,
+  actionLabel,
+  onAction,
+}: {
+  title: string
+  detail: string
+  actionLabel: string
+  onAction?: () => void
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-tone-danger/30 bg-tone-danger/5 px-3 py-2">
+      <div className="min-w-0 flex-1">
+        <div className="text-xs font-semibold text-text-primary">{title}</div>
+        <div className="mt-0.5 text-xs text-text-muted">{detail}</div>
+      </div>
+      {onAction ? (
+        <button
+          type="button"
+          onClick={onAction}
+          className="rounded-md border border-shell-seam px-2 py-1 text-[11px] text-text-muted transition-colors hover:border-accent/50 hover:text-accent"
+        >
+          {actionLabel}
+        </button>
+      ) : null}
+    </div>
   )
 }
 

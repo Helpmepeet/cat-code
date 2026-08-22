@@ -32,6 +32,7 @@ import {
   isNotEmptyMessage,
   normalizeMessages,
 } from './messages.js'
+import { toSDKMessageOriginProp } from './messages/mappers.js'
 import { expandPath } from './path.js'
 import type {
   inputSchema as permissionToolInputSchema,
@@ -171,6 +172,10 @@ export function* normalizeMessage(message: Message): Generator<SDKMessage> {
                 tool_use_result: _.mcpMeta
                   ? { content: _.toolUseResult, ..._.mcpMeta }
                   : _.toolUseResult,
+                ...(message.data.message.toolResultStatus !== undefined
+                  ? { tool_result_status: message.data.message.toolResultStatus }
+                  : {}),
+                ...toSDKMessageOriginProp(message.data.message.origin),
               }
               break
           }
@@ -234,6 +239,10 @@ export function* normalizeMessage(message: Message): Generator<SDKMessage> {
           tool_use_result: _.mcpMeta
             ? { content: _.toolUseResult, ..._.mcpMeta }
             : _.toolUseResult,
+          ...(message.toolResultStatus !== undefined
+            ? { tool_result_status: message.toolResultStatus }
+            : {}),
+          ...toSDKMessageOriginProp(message.origin),
         }
       }
       return

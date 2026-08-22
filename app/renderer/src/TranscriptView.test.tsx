@@ -428,6 +428,26 @@ test('P4-18b: a Read tool card renders the filename, not its full path', () => {
   expect(html).toContain('aria-label="running"')
 })
 
+test('renders a cancelled tool without its interruption body', () => {
+  const html = render(
+    toolRow({
+      toolName: 'Bash',
+      toolFamily: 'bash',
+      status: 'cancelled',
+      result: {
+        isError: true,
+        isCancelled: true,
+        content: 'Interrupted by user with provider details',
+        diff: null,
+      },
+    }),
+  )
+
+  expect(html).toContain('aria-label="stopped"')
+  expect(html).toContain('This tool was stopped before it finished.')
+  expect(html).not.toContain('Interrupted by user with provider details')
+})
+
 test('renders the rich WelcomeScreen (hero + real Codex table + cwd) when no rows are projected yet', () => {
   // Chat.jsx:1272 renders the SAME WelcomeScreen when the session is empty. The
   // in-session variant shows the cat|wordmark hero, the read-only cwd, and the
@@ -2346,22 +2366,19 @@ test('P4-60/#6: a successful result row renders no turn-footer', () => {
 })
 
 test.each([
-  ['interrupted', 'Stopped by user'],
-  ['error_auth_required', 'Authentication failed'],
-  ['error_during_execution', 'Errored during execution'],
   ['error_max_turns', 'Stopped · max turns reached'],
   ['error_max_budget_usd', 'Stopped · budget limit reached'],
   [
     'error_max_structured_output_retries',
     'Stopped · max output retries',
   ],
-] as const)('P4-60: %s renders its truthful result label', (subtype, label) => {
+] as const)('P4-60: %s retains its result seam', (subtype, label) => {
   const html = render({
     ...frameSource,
     id: `s:f:result:${subtype}`,
     kind: 'result',
     subtype,
-    isError: subtype !== 'interrupted',
+    isError: true,
     errors: ['Detailed failure text stays outside the label-only seam'],
     durationMs: 4200,
     totalCostUsd: 0.0123,
@@ -2421,7 +2438,6 @@ test('P4-45: no notice type prints its discriminant', () => {
     'api_retry',
     'local_command_output',
     'account_diagnostic',
-    'turn_interrupted',
   ] as const) {
     const html = render({
       ...frameSource,
@@ -2453,6 +2469,43 @@ test('P4-18a: snip-boundary and tombstone typed-degraded rows still render', () 
   })
 
   expect(snip).toContain('Stale tool output snipped')
+test('renders the stopped seam without a user interruption body', () => {
+  const html = render({
+    ...frameSource,
+    id: 's:f:stopped',
+    kind: 'turn-stopped',
+  })
+
+  expect(html).toContain('Stopped')
+  expect(html).not.toContain('interruption')
+})
+
+test('renders curated auth and execution failures without raw errors', () => {
+  const auth = render({
+    ...frameSource,
+    id: 's:f:auth',
+    kind: 'result',
+    subtype: 'error_auth_required',
+    isError: true,
+    errors: ['OAuth access token has been revoked'],
+  })
+  const execution = render({
+    ...frameSource,
+    id: 's:f:execution',
+    kind: 'result',
+    subtype: 'error_during_execution',
+    isError: true,
+    errors: ['provider stack trace'],
+  })
+
+  expect(auth).toContain('Sign-in expired')
+  expect(auth).toContain('Sign in again in Accounts to continue.')
+  expect(auth).not.toContain('OAuth access token has been revoked')
+  expect(execution).toContain('This turn could not finish')
+  expect(execution).toContain('save a diagnostics bundle')
+  expect(execution).not.toContain('provider stack trace')
+})
+
   expect(tombstone).toContain('message removed')
 })
 

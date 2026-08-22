@@ -406,12 +406,7 @@ export const SDK_MESSAGE_FIXTURE: {
           stop_sequence: null,
           usage: { input_tokens: 0, output_tokens: 0, service_tier: null },
         },
-        error: {
-          type: 'assistant_error',
-          message: 'Overloaded',
-          status: 529,
-          error: 'overloaded_error',
-        },
+        error: 'rate_limit',
         parent_tool_use_id: null,
         session_id: SESSION,
         uuid: '00000000-0000-4000-8000-00000000a009',

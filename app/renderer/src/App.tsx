@@ -5148,6 +5148,8 @@ export function SessionPane({
             loadEarlierPending={historyLoadEarlierPending}
             loadEarlierFailure={historyLoadEarlierFailure}
             onLoadEarlier={onLoadEarlierHistory}
+            onOpenAccounts={onManageAccounts}
+            onSaveDiagnostics={() => void getBridge().saveDiagnosticsBundle()}
           />
         </div>
         {!atBottom ? (

@@ -10,7 +10,7 @@ import type {
   BetaStopReason,
 } from '@anthropic-ai/sdk/resources/beta/messages/messages.mjs'
 import { AFK_MODE_BETA_HEADER } from 'src/constants/betas.js'
-import type { SDKAssistantMessageError } from 'src/entrypoints/agentSdkTypes.js'
+import type { SDKAssistantErrorCode } from 'src/entrypoints/agentSdkTypes.js'
 import type {
   AssistantMessage,
   DeferredTerminalFailureV1,
@@ -185,7 +185,7 @@ const CODEX_CONNECTIVITY_EXHAUSTED_MESSAGE =
 
 function getCodexLeaseExhaustedAssistantError(): {
   content: string
-  error: SDKAssistantMessageError
+  error: SDKAssistantErrorCode
 } {
   const accounts = getPoolStatus().accounts
   if (accounts.length > 0) {
@@ -1294,7 +1294,7 @@ export function classifyAPIError(error: unknown): string {
 
 export function categorizeRetryableAPIError(
   error: APIError,
-): SDKAssistantMessageError {
+): SDKAssistantErrorCode {
   if (
     error.status === 529 ||
     error.message?.includes('"type":"overloaded_error"')

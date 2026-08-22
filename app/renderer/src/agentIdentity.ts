@@ -419,6 +419,7 @@ export function deriveAgentToolState(tool: AgentToolSource): AgentStateKey {
   // Its real outcome is the separate task-notification (`hasCompletion`);
   // until that lands, a backgrounded agent reads as still running.
   if (tool.run_in_background === true && !tool.hasCompletion) {
+    if (tool.status === 'cancelled') return 'stopped'
     return tool.status === 'error' ? 'failed' : 'background'
   }
   if (tool.hasCompletion) {
@@ -427,6 +428,7 @@ export function deriveAgentToolState(tool: AgentToolSource): AgentStateKey {
     return 'completed'
   }
   if (tool.status === 'error') return 'failed'
+  if (tool.status === 'cancelled') return 'stopped'
   if (tool.status === 'success') return 'completed'
   return 'running'
 }
@@ -512,7 +514,7 @@ export type TaskAgentSource = AgentIdentitySource & {
 
 export type AgentToolSource = AgentIdentitySource & {
   toolName: 'Agent' | 'Task'
-  status: 'pending' | 'success' | 'error'
+  status: 'pending' | 'success' | 'error' | 'cancelled'
   run_in_background?: boolean
   /**
    * A background agent's `tool_result` only says it started (the launch ack),

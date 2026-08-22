@@ -106,7 +106,7 @@ import type {
 } from '@anthropic-ai/sdk/resources/beta/messages/messages.mjs'
 import type {
   HookEvent,
-  SDKAssistantMessageError,
+  SDKAssistantErrorCode,
 } from 'src/entrypoints/agentSdkTypes.js'
 import { EXPLORE_AGENT } from 'src/tools/AgentTool/built-in/exploreAgent.js'
 import { PLAN_AGENT } from 'src/tools/AgentTool/built-in/planAgent.js'
@@ -403,7 +403,7 @@ function baseCreateAssistantMessage({
   content: BetaContentBlock[]
   isApiErrorMessage?: boolean
   apiError?: AssistantMessage['apiError']
-  error?: SDKAssistantMessageError
+  error?: SDKAssistantErrorCode
   errorDetails?: string
   deferredTerminalFailure?: AssistantMessage['deferredTerminalFailure']
   isVirtual?: true
@@ -468,7 +468,7 @@ export function createAssistantAPIErrorMessage({
 }: {
   content: string
   apiError?: AssistantMessage['apiError']
-  error?: SDKAssistantMessageError
+  error?: SDKAssistantErrorCode
   errorDetails?: string
   deferredTerminalFailure?: AssistantMessage['deferredTerminalFailure']
 }): AssistantMessage {
@@ -499,6 +499,7 @@ export function createUserMessage({
   isCompactSummary,
   summarizeMetadata,
   toolUseResult,
+  toolResultStatus,
   mcpMeta,
   uuid,
   timestamp,
@@ -513,6 +514,7 @@ export function createUserMessage({
   isVirtual?: true
   isCompactSummary?: true
   toolUseResult?: unknown // Matches tool's `Output` type
+  toolResultStatus?: 'cancelled'
   /** MCP protocol metadata to pass through to SDK consumers (never sent to model) */
   mcpMeta?: {
     _meta?: Record<string, unknown>
@@ -547,6 +549,7 @@ export function createUserMessage({
     uuid: (uuid as UUID | undefined) || randomUUID(),
     timestamp: timestamp ?? new Date().toISOString(),
     toolUseResult,
+    toolResultStatus,
     mcpMeta,
     imagePasteIds,
     sourceToolAssistantUUID,
@@ -591,6 +594,7 @@ export function createUserInterruptionMessage({
       },
     ],
     isMeta: true,
+    origin: { kind: 'interruption' },
   })
 }
 

@@ -62,11 +62,9 @@ export class SidecarResumeError extends Error {
  * delivery (a restore that starts a turn and spends tokens, which restore must
  * not do) or shows a message as waiting for a turn that will never come. The
  * row is a record of what was written, not a claim about what the model saw.
- * What is still missing is that the row does not SAY so. `isReplay` is set on
- * the projected frame and IS consumed, but only for turn state:
- * `app/renderer/src/transcriptProjector.ts:1232` reads it so a restored prompt
- * does not clear `turnInterrupted`. Nothing marks the row visually, which is the
- * real gap. The flag is load-bearing, so do not delete it as unused.
+ * `isReplay` is preserved on the projected frame so consumers can distinguish
+ * restored history from a newly accepted prompt. It is not a delivery signal and
+ * must not be used as interruption provenance.
  */
 export type UndeliveredPrompt = {
   uuid: string

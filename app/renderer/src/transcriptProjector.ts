@@ -166,7 +166,7 @@ export type ToolFamily =
   | 'imagegen'
   | 'other'
 
-export type ToolCardStatus = 'pending' | 'success' | 'error'
+export type ToolCardStatus = 'pending' | 'success' | 'error' | 'cancelled'
 
 /**
  * One correlated `tool_result` content block (rides a `user` SDKMessage,
@@ -181,6 +181,8 @@ export type ToolCardStatus = 'pending' | 'success' | 'error'
  */
 export type ToolResultProjection = {
   isError: boolean
+  /** Engine-minted cancellation status, never inferred from tool output text. */
+  isCancelled?: true
   content: string
   diff: ToolDiffProjection | null
   generatedImage?: {
@@ -414,8 +416,12 @@ export type SystemNoticeRow = FrameRowSource & {
     | 'api_retry'
     | 'local_command_output'
     | 'account_diagnostic'
-    | 'turn_interrupted'
   content: string
+}
+
+/** Durable user-interruption provenance, rendered without its hidden body. */
+export type TurnStoppedRow = FrameRowSource & {
+  kind: 'turn-stopped'
 }
 
 export type ResultRow = FrameRowSource & {
@@ -449,6 +455,7 @@ export type TranscriptRow =
   | TaskNotificationRow
   | InjectedTurnRow
   | SystemNoticeRow
+  | TurnStoppedRow
   | ResultRow
   | CompactBoundaryRow
   | SnipBoundaryRow
@@ -503,7 +510,6 @@ type TranscriptSessionState = {
    * to show.
    */
   hiddenFrameIds: Record<string, true>
-  turnInterrupted: boolean
   /**
    * This pane's history is INCOMPLETE: a retention boundary frame arrived, so
    * the rows below it are a tail rather than the whole session.
@@ -559,7 +565,6 @@ function createTranscriptSessionState(): TranscriptSessionState {
     agentCompletionsByToolUseId: {},
     slashCommands: [],
     hiddenFrameIds: {},
-    turnInterrupted: false,
     historyTruncated: false,
     recoveryInsertAt: null,
   }
@@ -676,9 +681,11 @@ export function selectTranscriptRows(
             agentId: resumedAgentId,
           }
     const status: ToolCardStatus = result
-      ? result.isError
-        ? 'error'
-        : 'success'
+      ? result.isCancelled === true
+        ? 'cancelled'
+        : result.isError
+          ? 'error'
+          : 'success'
       : 'pending'
     const agentCompletion = resumedToolUseIds.has(row.toolUseId)
       ? (completions[row.toolUseId] ?? null)
@@ -692,19 +699,7 @@ export function selectTranscriptRows(
     }
     return [{ ...row, status, result, agentCompletion }]
   })
-  if (!session.turnInterrupted) return projected
-  const frameId = `restore-interrupted:${sessionId}`
-  return [
-    ...projected,
-    {
-      id: frameRowId(sessionId, frameId, 'turn_interrupted'),
-      sessionId,
-      frameId,
-      kind: 'system-notice',
-      noticeType: 'turn_interrupted',
-      content: 'The previous turn was interrupted. Send a message to continue.',
-    },
-  ]
+  return projected
 }
 
 /** The read-time hidden-tier mark. Returns a COPY; the stored row is untouched. */
@@ -1253,10 +1248,10 @@ export function projectServerFrame(
       ...state,
       sessions: {
         ...state.sessions,
-        [frame.sessionId]: {
-          ...session,
-          turnInterrupted: frame.turnInterrupted === true,
-        },
+        // Interruption display comes only from the persisted message-origin
+        // marker. `app.ready` is a live attachment snapshot, never replayable
+        // transcript provenance.
+        [frame.sessionId]: session,
       },
     }
   }
@@ -1505,6 +1500,17 @@ function projectAssistantFrame(
   // `user`-frame path so both shapes resolve the same ToolCard.
   state = foldToolResultBlocks(state, body.content)
 
+  // Typed assistant error codes classify provider failure. Their content is not
+  // safe assistant prose; the terminal result renders the curated explanation.
+  if (typeof message.error === 'string') {
+    return {
+      ...state,
+      seenFrameIds: frameId
+        ? { ...state.seenFrameIds, [frameId]: true }
+        : state.seenFrameIds,
+    }
+  }
+
   const messageId =
     typeof body.id === 'string' && body.id.length > 0 ? body.id : frameId
   if (!messageId) return state
@@ -1516,9 +1522,6 @@ function projectAssistantFrame(
       : null
   const agentName = normalizeAgentName(message.agent_name)
   const model = nonEmptyString(body.model)
-
-  // NB: `message.error` (SDKAssistantMessageError) may ride this frame with
-  // empty content — P2-1's ApiErrorRow scope; blocks below still project.
 
   const fallbackIndex = state.nextBlockIndexByMessageId[messageId] ?? 0
   const firstBlockIndex =
@@ -1631,6 +1634,18 @@ function projectUserFrame(
   // Message-level provenance: `origin` describes the whole turn, so every text
   // block in it is attributed the same way (image blocks stay image rows).
   const origin = projectMessageOrigin(message.origin)
+  if (origin?.kind === 'interruption') {
+    // The body is model-facing interruption protocol, not operator prose. Its
+    // explicit, persisted origin is the durable display fact for live and replay.
+    return appendFrameRows(state, frameId, [
+      {
+        id: frameRowId(sessionId, frameId, 'turn_stopped'),
+        sessionId,
+        frameId,
+        kind: 'turn-stopped',
+      },
+    ])
+  }
 
   const rows = blocks.flatMap((block, blockIndex) => {
     const row = projectUserContentBlock(block, {
@@ -1658,17 +1673,13 @@ function projectUserFrame(
   }
   const withCompletion = recordAgentCompletion(state, origin)
   const appended = appendFrameRows(withCompletion, frameId, rows)
-  const continued =
-    message.isReplay === true || isHidden || !appended.turnInterrupted
-      ? appended
-      : { ...appended, turnInterrupted: false }
   // Identity is compared against what was HANDED to `appendFrameRows`, not the
   // original `state`: `recordAgentCompletion` may already have returned a new
   // object, so comparing to `state` would read a no-op append as a real one.
-  if (!isHidden || appended === withCompletion) return continued
+  if (!isHidden || appended === withCompletion) return appended
   return {
-    ...continued,
-    hiddenFrameIds: { ...continued.hiddenFrameIds, [frameId]: true },
+    ...appended,
+    hiddenFrameIds: { ...appended.hiddenFrameIds, [frameId]: true },
   }
 }
 
@@ -1716,6 +1727,20 @@ function projectResultFrame(
     totalCostUsd === null
   ) {
     return state
+  }
+
+  // A current engine writes an origin-tagged interruption user frame before its
+  // result. That durable marker is the one transcript seam; the result is a
+  // live lifecycle byproduct and would otherwise duplicate it. Legacy emitters
+  // without the origin retain their existing interrupted result seam.
+  if (
+    subtype === 'interrupted' &&
+    state.rows.some(row => row.kind === 'turn-stopped')
+  ) {
+    return {
+      ...state,
+      seenFrameIds: { ...state.seenFrameIds, [frameId]: true },
+    }
   }
 
   const row: ResultRow = {
@@ -1910,7 +1935,12 @@ function correlateToolResults(
 ): TranscriptSessionState {
   const body: unknown = message.message
   if (!isRecord(body) || !Array.isArray(body.content)) return state
-  return foldToolResultBlocks(state, body.content, message.tool_use_result)
+  return foldToolResultBlocks(
+    state,
+    body.content,
+    message.tool_use_result,
+    message.tool_result_status,
+  )
 }
 
 /**
@@ -1935,6 +1965,7 @@ function foldToolResultBlocks(
   state: TranscriptSessionState,
   content: unknown[],
   toolUseResult?: unknown,
+  toolResultStatus?: unknown,
 ): TranscriptSessionState {
   let next: Record<string, ToolResultProjection> | null = null
   for (const block of content) {
@@ -1943,7 +1974,11 @@ function foldToolResultBlocks(
     const toolUseId = block.tool_use_id
     if (typeof toolUseId !== 'string' || toolUseId.length === 0) continue
 
-    const projection = projectToolResultBlock(block, toolUseResult)
+    const projection = projectToolResultBlock(
+      block,
+      toolUseResult,
+      toolResultStatus === 'cancelled',
+    )
     const preview = state.generatedImagePreviewsByUseId[toolUseId]
     const projected =
       preview && projection.generatedImage
@@ -1993,6 +2028,7 @@ function isToolResultBlockType(blockType: string): boolean {
 function projectToolResultBlock(
   block: Record<string, unknown>,
   toolUseResult: unknown,
+  isCancelled: boolean,
 ): ToolResultProjection {
   const agentName = extractAgentName(toolUseResult)
   const agentId = extractAgentId(toolUseResult)
@@ -2002,6 +2038,7 @@ function projectToolResultBlock(
   const taskOutput = extractTaskOutput(toolUseResult)
   return {
     isError: block.is_error === true,
+    ...(isCancelled ? { isCancelled: true as const } : {}),
     content: flattenToolResultContent(block.content),
     diff: extractDiffProjection(toolUseResult),
     ...extractGeneratedImageProjection(toolUseResult),
@@ -2427,8 +2464,17 @@ function finalizeStreamingTurn(
     Object.keys(state.streamingTextBlocks).length > 0
   if (!hasStreamingRows && !hasStreamingState) return state
 
-  const rows = state.rows.filter(
-    row => row.kind !== 'assistant-text' || row.isStreaming !== true,
+  // A terminal result can arrive before a stopped assistant block's full frame.
+  // Keep its streamed text as final content rather than deleting the only
+  // assistant response the transcript received.
+  const rows = state.rows.map(row =>
+    row.kind === 'assistant-text' && row.isStreaming === true
+      ? (() => {
+          const { isStreaming: _streaming, ...finalized } = row
+          void _streaming
+          return finalized
+        })()
+      : row,
   )
   return {
     ...state,

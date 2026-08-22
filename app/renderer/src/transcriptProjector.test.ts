@@ -51,7 +51,7 @@ function messageFrame(
   }
 }
 
-test('restored interruption notice clears after the next live user message', () => {
+test('does not derive a durable interruption row from app-ready state', () => {
   let state = createTranscriptState()
   state = projectServerFrame(state, ready('session-1', true))
   state = projectServerFrame(
@@ -70,11 +70,6 @@ test('restored interruption notice clears after the next live user message', () 
       kind: 'user-text',
       frameId: '00000000-0000-4000-8000-000000000902',
       content: 'accepted before close',
-    },
-    {
-      kind: 'system-notice',
-      noticeType: 'turn_interrupted',
-      content: 'The previous turn was interrupted. Send a message to continue.',
     },
   ])
 
@@ -96,6 +91,128 @@ test('restored interruption notice clears after the next live user message', () 
       kind: 'user-text',
       content: 'continue now',
     },
+  ])
+})
+
+test('projects one durable stopped seam without interruption protocol text', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  const play = (message: SDKMessage) => {
+    state = projectServerFrame(state, messageFrame('session-1', message))
+  }
+
+  play({
+    type: 'user',
+    message: {
+      role: 'user',
+      content: '<interruption-protocol body that must not render>',
+    },
+    parent_tool_use_id: null,
+    uuid: '00000000-0000-4000-8000-000000000904',
+    origin: { kind: 'interruption' },
+  })
+  play({
+    type: 'result',
+    subtype: 'interrupted',
+    duration_ms: 10,
+    duration_api_ms: 8,
+    is_error: false,
+    num_turns: 1,
+    stop_reason: 'interrupted',
+    total_cost_usd: 0,
+    usage: { input_tokens: 1, output_tokens: 1 },
+    modelUsage: {},
+    permission_denials: [],
+    session_id: 'engine-session-1',
+    uuid: '00000000-0000-4000-8000-000000000905',
+  })
+
+  expect(selectTranscriptRows(state, 'session-1')).toEqual([
+    expect.objectContaining({ kind: 'turn-stopped' }),
+  ])
+})
+
+test('marks a persisted cancelled tool result separately from a failure', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  const play = (message: SDKMessage) => {
+    state = projectServerFrame(state, messageFrame('session-1', message))
+  }
+  play({
+    type: 'assistant',
+    message: {
+      id: 'msg-tool-stopped',
+      role: 'assistant',
+      content: [{ type: 'tool_use', id: 'toolu-stopped', name: 'Bash', input: {} }],
+    },
+    parent_tool_use_id: null,
+    session_id: 'engine-session-1',
+    uuid: '00000000-0000-4000-8000-000000000906',
+  })
+  play({
+    type: 'user',
+    message: {
+      role: 'user',
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 'toolu-stopped',
+          is_error: true,
+          content: 'Interrupted by user',
+        },
+      ],
+    },
+    parent_tool_use_id: null,
+    tool_result_status: 'cancelled',
+    uuid: '00000000-0000-4000-8000-000000000907',
+  })
+
+  expect(selectTranscriptRows(state, 'session-1')).toEqual([
+    expect.objectContaining({
+      kind: 'tool-use',
+      status: 'cancelled',
+      result: expect.objectContaining({ isCancelled: true, isError: true }),
+    }),
+  ])
+})
+
+test('suppresses typed provider error text before the curated result seam', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  const play = (message: SDKMessage) => {
+    state = projectServerFrame(state, messageFrame('session-1', message))
+  }
+  play({
+    type: 'assistant',
+    error: 'authentication_failed',
+    message: {
+      id: 'msg-auth',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'OAuth access token has been revoked' }],
+    },
+    parent_tool_use_id: null,
+    session_id: 'engine-session-1',
+    uuid: '00000000-0000-4000-8000-000000000908',
+  })
+  play({
+    type: 'result',
+    subtype: 'error_auth_required',
+    duration_ms: 10,
+    duration_api_ms: 8,
+    is_error: true,
+    num_turns: 1,
+    stop_reason: null,
+    total_cost_usd: 0,
+    usage: { input_tokens: 1, output_tokens: 1 },
+    modelUsage: {},
+    permission_denials: [],
+    errors: [],
+    session_id: 'engine-session-1',
+    uuid: '00000000-0000-4000-8000-000000000909',
+  })
+
+  expect(selectTranscriptRows(state, 'session-1')).toEqual([
+    expect.objectContaining({ kind: 'result', subtype: 'error_auth_required' }),
   ])
 })
 
@@ -416,7 +533,7 @@ test('result is the only turn-end marker and assistant stop_reason is ignored', 
     selectTranscriptRows(state, 'session-1')
       .filter(row => row.kind === 'assistant-text')
       .map(row => row.content),
-  ).toEqual(['First API message.'])
+  ).toEqual(['First API message.', 'Still streaming before result.'])
 })
 
 test('skips malformed blocks without dropping valid siblings', () => {

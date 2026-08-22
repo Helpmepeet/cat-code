@@ -137,6 +137,7 @@ const taskSummaryModule = feature('BG_SESSIONS')
 function* yieldMissingToolResultBlocks(
   assistantMessages: AssistantMessage[],
   errorMessage: string,
+  toolResultStatus?: 'cancelled',
 ) {
   for (const assistantMessage of assistantMessages) {
     // Extract all tool use blocks from this assistant message
@@ -156,6 +157,7 @@ function* yieldMissingToolResultBlocks(
           },
         ],
         toolUseResult: errorMessage,
+        ...(toolResultStatus === undefined ? {} : { toolResultStatus }),
         sourceToolAssistantUUID: assistantMessage.uuid,
       })
     }
@@ -1150,6 +1152,7 @@ async function* queryLoop(
         yield* yieldMissingToolResultBlocks(
           assistantMessages,
           'Interrupted by user',
+          'cancelled',
         )
       }
       // chicago MCP: auto-unhide + lock release on interrupt. Same cleanup

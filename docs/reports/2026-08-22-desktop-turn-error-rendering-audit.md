@@ -112,3 +112,22 @@ VERIFICATION
 Stale-reference sweep: the observed wording appears in the two updated engine classifiers, their test, this historical report, and one existing plan. Legacy phrase matches remain in distinct retry/HTTP paths that already retry all 401 responses.
 Not run: desktop end-to-end tests. The transcript-design work remains intentionally deferred.
 ```
+
+## Implementation update, 22 August 2026
+
+The approved desktop presentation is now implemented.
+
+- Interruption markers carry a persisted `MessageOrigin` and project to one
+  neutral `Stopped` seam. The model-facing interruption text is never rendered
+  as an operator message, and the `app.ready` abort snapshot is no longer used
+  as transcript provenance.
+- Cancelled tools carry a separate persisted result status. Their cards read as
+  stopped and do not reveal the interruption body.
+- Authentication and execution failures render curated cards. Authentication
+  offers Accounts navigation, execution failures offer the existing diagnostics
+  export action when the shell supplies it, and neither renders raw provider
+  text or `errors[]`.
+- Limit result seams are unchanged. Partial streamed assistant text is retained
+  when a terminal result arrives before a complete assistant frame.
+
+Focused engine, projector, and renderer tests cover the new boundary behavior.

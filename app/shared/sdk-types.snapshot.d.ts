@@ -107,6 +107,15 @@ export type SDKBaseMessage = {
   [key: string]: unknown
 }
 
+export type SDKAssistantErrorCode =
+  | 'authentication_failed'
+  | 'billing_error'
+  | 'rate_limit'
+  | 'invalid_request'
+  | 'server_error'
+  | 'unknown'
+  | 'max_output_tokens'
+
 export type SDKAssistantMessage = SDKBaseMessage & {
   type: 'assistant'
   message: {
@@ -118,7 +127,7 @@ export type SDKAssistantMessage = SDKBaseMessage & {
   }
   parent_tool_use_id?: string | null
   agent_name?: string
-  error?: SDKAssistantMessageError
+  error?: SDKAssistantErrorCode
   requestId?: string | null
   timestamp?: string
 }
@@ -236,7 +245,7 @@ export type SDKSystemMessage = SDKBaseMessage & {
   failed?: Array<{ filename: string; error: string }>
   processed_at?: string
   state?: 'idle' | 'running' | 'requires_action'
-  error?: SDKAssistantMessageError
+  error?: SDKAssistantErrorCode | SDKAssistantMessageError
   error_status?: number | null
   attempt?: number
   max_retries?: number
@@ -327,6 +336,7 @@ export type SDKRateLimitInfo = {
  */
 export type SDKMessageOrigin =
   | { kind: 'human' }
+  | { kind: 'interruption' }
   | {
       kind: 'task-notification'
       status?: 'completed' | 'failed' | 'killed' | 'running' | 'pending'
@@ -352,6 +362,7 @@ export type SDKUserMessage = SDKBaseMessage & {
   agent_name?: string
   isSynthetic?: boolean
   tool_use_result?: unknown
+  tool_result_status?: 'cancelled'
   priority?: 'now' | 'next' | 'later'
   timestamp?: string
   uuid?: UUID

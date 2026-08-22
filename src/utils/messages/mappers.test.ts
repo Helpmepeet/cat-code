@@ -124,6 +124,11 @@ describe('toSDKMessages carries provenance', () => {
     const [sdk] = toSDKMessages([userMessage()])
     expect(sdk).not.toHaveProperty('origin')
   })
+
+  test('a restored interruption retains its display-safe provenance', () => {
+    const [sdk] = toSDKMessages([userMessage({ kind: 'interruption' })])
+    expect(sdk).toMatchObject({ type: 'user', origin: { kind: 'interruption' } })
+  })
 })
 
 describe('toSDKMessages hides internal no-response sentinels', () => {

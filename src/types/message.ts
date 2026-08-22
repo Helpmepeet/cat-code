@@ -9,6 +9,8 @@ import type { TeammateMessageContract } from '../utils/teammateMessage.js'
 
 export type MessageOrigin =
   | { kind: 'human' }
+  /** A user-initiated cancellation marker, kept for transcript replay. */
+  | { kind: 'interruption' }
   | {
       kind: 'task-notification'
       summary?: string
@@ -73,6 +75,12 @@ export type UserMessage = {
     direction?: PartialCompactDirection
   }
   toolUseResult?: unknown
+  /**
+   * Terminal state for a tool result that is deliberately not a tool failure.
+   * This survives transcript persistence and lets displays distinguish a user
+   * cancellation from a failed invocation without parsing its model-facing body.
+   */
+  toolResultStatus?: 'cancelled'
   mcpMeta?: {
     _meta?: Record<string, unknown>
     structuredContent?: Record<string, unknown>

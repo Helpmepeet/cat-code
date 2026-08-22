@@ -530,7 +530,7 @@ export const StopFailureHookInputSchema = lazySchema(() =>
   BaseHookInputSchema().and(
     z.object({
       hook_event_name: z.literal('StopFailure'),
-      error: SDKAssistantMessageErrorSchema(),
+      error: SDKAssistantErrorCodeSchema(),
       error_details: z.string().optional(),
       last_assistant_message: z.string().optional(),
     }),
@@ -1256,7 +1256,13 @@ export const NonNullableUsagePlaceholder = lazySchema(() => z.unknown())
 // SDK Message Types
 // ============================================================================
 
-export const SDKAssistantMessageErrorSchema = lazySchema(() =>
+/**
+ * Closed engine-minted classifications carried on assistant frames.
+ *
+ * This is deliberately distinct from `SDKAssistantMessageErrorSchema`, the
+ * legacy top-level `assistant_error` message shape.
+ */
+export const SDKAssistantErrorCodeSchema = lazySchema(() =>
   z.enum([
     'authentication_failed',
     'billing_error',
@@ -1266,6 +1272,25 @@ export const SDKAssistantMessageErrorSchema = lazySchema(() =>
     'unknown',
     'max_output_tokens',
   ]),
+)
+
+/**
+ * Legacy top-level assistant error message retained in `SDKMessage`.
+ *
+ * New assistant frames carry `SDKAssistantErrorCodeSchema` in their `error`
+ * field instead of embedding this message shape.
+ */
+export const SDKAssistantMessageErrorSchema = lazySchema(() =>
+  z.object({
+    type: z.literal('assistant_error'),
+    message: z.string().optional(),
+    request_id: z.string().optional(),
+    status: z.number().optional(),
+    error: z.string().optional(),
+    details: z.unknown().optional(),
+    uuid: UUIDPlaceholder().optional(),
+    session_id: z.string().optional(),
+  }),
 )
 
 export const SDKStatusSchema = lazySchema(() =>
@@ -1303,7 +1328,7 @@ export const SDKAccountDiagnosticProviderSchema = lazySchema(() =>
 
 /**
  * Display-safe projection of the internal `MessageOrigin` (`src/types/message.ts`).
- * Five of the six kinds are engine-injected turns that nonetheless carry
+ * Six of the seven kinds are engine-injected turns that nonetheless carry
  * `role: 'user'`; without this discriminant an out-of-process consumer cannot
  * tell them apart from something the operator typed and renders them all as the
  * operator's own message.
@@ -1324,6 +1349,7 @@ export const SDKAccountDiagnosticProviderSchema = lazySchema(() =>
 export const SDKMessageOriginSchema = lazySchema(() =>
   z.discriminatedUnion('kind', [
     z.object({ kind: z.literal('human') }),
+    z.object({ kind: z.literal('interruption') }),
     z.object({
       kind: z.literal('task-notification'),
       status: z
@@ -1370,6 +1396,12 @@ const SDKUserMessageContentSchema = lazySchema(() =>
     agent_name: z.string().optional(),
     isSynthetic: z.boolean().optional(),
     tool_use_result: z.unknown().optional(),
+    /**
+     * An engine-minted terminal classification for the paired `tool_result`.
+     * It remains outside the model-facing content block so cancellation never
+     * changes provider protocol semantics.
+     */
+    tool_result_status: z.literal('cancelled').optional(),
     priority: z.enum(['now', 'next', 'later']).optional(),
     timestamp: z
       .string()
@@ -1450,7 +1482,7 @@ export const SDKAssistantMessageSchema = lazySchema(() =>
     // See SDKUserMessageContentSchema: this stays with the replayable nested
     // frame rather than being joined from live task state by a consumer.
     agent_name: z.string().optional(),
-    error: SDKAssistantMessageErrorSchema().optional(),
+    error: SDKAssistantErrorCodeSchema().optional(),
     uuid: UUIDPlaceholder(),
     session_id: z.string(),
   }),
@@ -1708,7 +1740,10 @@ export const SDKAPIRetryMessageSchema = lazySchema(() =>
       max_retries: z.number(),
       retry_delay_ms: z.number(),
       error_status: z.number().nullable(),
-      error: SDKAssistantMessageErrorSchema(),
+      error: z.union([
+        SDKAssistantErrorCodeSchema(),
+        SDKAssistantMessageErrorSchema(),
+      ]),
       uuid: UUIDPlaceholder(),
       session_id: z.string(),
     })
@@ -1984,6 +2019,7 @@ export const SDKSessionInfoSchema = lazySchema(() =>
 export const SDKMessageSchema = lazySchema(() =>
   z.union([
     SDKAssistantMessageSchema(),
+    SDKAssistantMessageErrorSchema(),
     SDKUserMessageSchema(),
     SDKUserMessageReplaySchema(),
     SDKResultMessageSchema(),

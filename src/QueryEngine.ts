@@ -1297,7 +1297,9 @@ export class QueryEngine {
     // Extract the text result based on message type
     let textResult = ''
     let isApiError = false
-    let isAuthError = false
+    const isAuthError =
+      result.type === 'assistant' &&
+      result.error === 'authentication_failed'
 
     if (result.type === 'assistant') {
       const lastContent = last(result.message.content)
@@ -1306,22 +1308,17 @@ export class QueryEngine {
         !SYNTHETIC_MESSAGES.has(lastContent.text)
       ) {
         textResult = lastContent.text
-        if (
-          lastContent.text.includes('authentication_error') ||
-          lastContent.text.includes('token_revoked') ||
-          lastContent.text.includes('OAuth access token has been revoked') ||
-          lastContent.text.startsWith('Failed to authenticate') ||
-          lastContent.text.startsWith('Please run /login')
-        ) {
-          isAuthError = true
-        }
       }
       isApiError = Boolean(result.isApiErrorMessage)
     }
 
     yield {
       type: 'result',
-      subtype: isAuthError ? 'error_auth_required' : 'success',
+      subtype: isAuthError
+        ? 'error_auth_required'
+        : isApiError
+          ? 'error_during_execution'
+          : 'success',
       is_error: isApiError || isAuthError,
       duration_ms: Date.now() - startTime,
       duration_api_ms: getTotalAPIDuration(),
@@ -1338,6 +1335,7 @@ export class QueryEngine {
         mainLoopModel,
         initialAppState.fastMode,
       ),
+      ...(isApiError || isAuthError ? { errors: [] } : {}),
       uuid: randomUUID(),
     }
   }

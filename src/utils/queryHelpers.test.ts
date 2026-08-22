@@ -27,7 +27,7 @@ describe('normalizeMessage internal no-response handling', () => {
 
   test('emits the API-error classification on the SDK assistant frame', () => {
     const apiError = createAssistantAPIErrorMessage({
-      content: 'OAuth token revoked · Please run /login',
+      content: 'The request could not be completed.',
       error: 'authentication_failed',
     })
 
@@ -35,6 +35,43 @@ describe('normalizeMessage internal no-response handling', () => {
       {
         type: 'assistant',
         error: 'authentication_failed',
+      },
+    ])
+  })
+
+  test('preserves the engine-minted code when display text resembles an auth error', () => {
+    const apiError = createAssistantAPIErrorMessage({
+      content: 'OAuth access token has been revoked. Please run /login.',
+      error: 'unknown',
+    })
+
+    expect([...normalizeMessage(apiError)]).toMatchObject([
+      {
+        type: 'assistant',
+        error: 'unknown',
+      },
+    ])
+  })
+
+  test('carries durable interruption provenance and cancelled tool status', () => {
+    const message = createUserMessage({
+      content: [
+        {
+          type: 'tool_result',
+          content: 'Interrupted by user',
+          is_error: true,
+          tool_use_id: 'toolu-stopped',
+        },
+      ],
+      toolResultStatus: 'cancelled',
+      origin: { kind: 'interruption' },
+    })
+
+    expect([...normalizeMessage(message)]).toMatchObject([
+      {
+        type: 'user',
+        origin: { kind: 'interruption' },
+        tool_result_status: 'cancelled',
       },
     ])
   })

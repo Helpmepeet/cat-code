@@ -134,6 +134,8 @@ export function toSDKMessageOrigin(
   switch (origin.kind) {
     case 'human':
       return { kind: 'human' }
+    case 'interruption':
+      return { kind: 'interruption' }
     case 'task-notification':
       return {
         kind: 'task-notification',
@@ -219,6 +221,9 @@ export function toSDKMessages(messages: Message[]): SDKMessage[] {
             // without it polluting model context.
             ...(message.toolUseResult !== undefined
               ? { tool_use_result: message.toolUseResult }
+              : {}),
+            ...(message.toolResultStatus !== undefined
+              ? { tool_result_status: message.toolResultStatus }
               : {}),
             // Provenance for restored transcripts: a resumed session's stored
             // messages carry `origin`, and dropping it here is what made an

@@ -35,12 +35,14 @@ const STATUS_TONE: Record<ToolCardStatus, Tone> = {
   pending: 'accent',
   success: 'good',
   error: 'danger',
+  cancelled: 'warn',
 }
 
 const STATUS_LABEL: Record<ToolCardStatus, string> = {
   pending: 'running',
   success: 'success',
   error: 'error',
+  cancelled: 'stopped',
 }
 
 export function describeToolForInspector(row: ToolUseRow): ToolInspectorModel {
@@ -82,6 +84,7 @@ function selectOutput(
   row: ToolUseRow,
   input: Record<string, unknown>,
 ): string | null {
+  if (row.result?.isCancelled === true) return null
   const result = nonEmpty(row.result?.content)
   if (row.toolFamily !== 'write' || row.result?.isError === true) return result
   const written = input['content']

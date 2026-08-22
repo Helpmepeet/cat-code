@@ -43,6 +43,12 @@ async function withStore(fn: () => Promise<void>): Promise<void> {
 const PARTIAL_TEXT =
   'I read src/query.ts and found the abort branch at line 1094.'
 
+test('interruption marker records durable non-human provenance', () => {
+  expect(createUserInterruptionMessage({ toolUse: true }).origin).toEqual({
+    kind: 'interruption',
+  })
+})
+
 /**
  * The transcript an interrupted tool trajectory leaves behind: prompt,
  * assistant text plus tool_use, then the interruption marker.

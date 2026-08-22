@@ -175,6 +175,7 @@ export class StreamingToolExecutor {
           },
         ],
         toolUseResult: 'User rejected tool use',
+        toolResultStatus: 'cancelled',
         sourceToolAssistantUUID: assistantMessage.uuid,
       })
     }

@@ -35,6 +35,28 @@ const diagnosticUnion = [
   '',
 ].join('\n')
 
+const assistantErrorCodeSchemaMatch = schemas.match(
+  /export const SDKAssistantErrorCodeSchema = lazySchema\(\(\) =>\s+z\.enum\(\[([\s\S]*?)\]\),\s*\)/,
+)
+if (!assistantErrorCodeSchemaMatch?.[1]) {
+  throw new Error('Could not find SDKAssistantErrorCodeSchema enum values')
+}
+
+const assistantErrorCodes = Array.from(
+  assistantErrorCodeSchemaMatch[1].matchAll(/'([^']+)'/g),
+  match => match[1],
+)
+if (assistantErrorCodes.length === 0) {
+  throw new Error('SDKAssistantErrorCodeSchema did not contain any values')
+}
+
+const assistantErrorCodeUnion = [
+  'export type SDKAssistantErrorCode =',
+  ...assistantErrorCodes.map(code => `  | '${code}'`),
+  '',
+  '',
+].join('\n')
+
 const effortLevelsMatch = schemas.match(
   /supportedEffortLevels:\s*z\s*\.array\(z\.enum\(\[([^\]]+)\]\)\)/,
 )
@@ -127,11 +149,90 @@ function replaceTypeDeclaration(
   return `${contents.slice(0, start)}${update(declaration)}${contents.slice(declarationEnd)}`
 }
 
+function syncAssistantErrorCode(contents: string): string {
+  const withoutStaleDeclaration = contents.replace(
+    /export type SDKAssistantErrorCode =\n(?:  \| '[^']+'\n)+(?:\n)?/g,
+    '',
+  )
+  const assistantMessageStart = withoutStaleDeclaration.indexOf(
+    'export type SDKAssistantMessage =',
+  )
+  if (assistantMessageStart < 0) return withoutStaleDeclaration
+
+  const withCodeDeclaration = `${withoutStaleDeclaration.slice(0, assistantMessageStart)}${assistantErrorCodeUnion}${withoutStaleDeclaration.slice(assistantMessageStart)}`
+  const withAssistantFrameCode = replaceTypeDeclaration(
+    withCodeDeclaration,
+    'SDKAssistantMessage',
+    declaration =>
+      declaration.replace(
+        '  error?: SDKAssistantMessageError\n',
+        '  error?: SDKAssistantErrorCode\n',
+      ),
+  )
+  return replaceTypeDeclaration(
+    withAssistantFrameCode,
+    'SDKSystemMessage',
+    declaration =>
+      declaration.replace(
+        '  error?: SDKAssistantMessageError\n',
+        '  error?: SDKAssistantErrorCode | SDKAssistantMessageError\n',
+      ),
+  )
+}
+
+function syncInterruptionOrigin(contents: string): string {
+  const field = "  | { kind: 'interruption' }\n"
+  const hasInterruptionSchema =
+    /z\.object\(\{ kind: z\.literal\('interruption'\) \}\)/.test(schemas)
+  const start = contents.indexOf('export type SDKMessageOrigin =')
+  if (start < 0) return contents
+  const end = contents.indexOf('\n\nexport type SDKUserMessage =', start)
+  if (end < 0) return contents
+  const declaration = contents.slice(start, end)
+  const withoutField = declaration.replace(field, '')
+  const nextDeclaration = hasInterruptionSchema
+    ? withoutField.replace("  | { kind: 'human' }\n", `  | { kind: 'human' }\n${field}`)
+    : withoutField
+  return `${contents.slice(0, start)}${nextDeclaration}${contents.slice(end)}`
+}
+
+function syncToolResultStatus(contents: string): string {
+  const field = "  tool_result_status?: 'cancelled'\n"
+  const hasStatusSchema =
+    /tool_result_status:\s*z\.literal\('cancelled'\)\.optional\(\)/.test(schemas)
+  return replaceTypeDeclaration(contents, 'SDKUserMessage', declaration => {
+    const withoutField = declaration.replace(field, '')
+    if (!hasStatusSchema) return withoutField
+    return withoutField.replace(
+      '  tool_use_result?: unknown\n',
+      `  tool_use_result?: unknown\n${field}`,
+    )
+  })
+}
+
 for (const path of effortSnapshotPaths) {
   const contents = readFileSync(path, 'utf-8')
   const nextContents = syncAgentNameField(contents)
   if (nextContents !== contents) {
     writeFileSync(path, nextContents, 'utf-8')
     console.log(`Synced subagent frame identity in ${path.slice(repoRoot.length + 1)}.`)
+  }
+}
+
+for (const path of effortSnapshotPaths) {
+  const contents = readFileSync(path, 'utf-8')
+  const nextContents = syncAssistantErrorCode(contents)
+  if (nextContents !== contents) {
+    writeFileSync(path, nextContents, 'utf-8')
+    console.log(`Synced assistant error codes in ${path.slice(repoRoot.length + 1)}.`)
+  }
+}
+
+for (const path of effortSnapshotPaths) {
+  const contents = readFileSync(path, 'utf-8')
+  const nextContents = syncToolResultStatus(syncInterruptionOrigin(contents))
+  if (nextContents !== contents) {
+    writeFileSync(path, nextContents, 'utf-8')
+    console.log(`Synced user-turn status fields in ${path.slice(repoRoot.length + 1)}.`)
   }
 }
