@@ -87,10 +87,27 @@ Anthropic while a background Codex worker is still running.
 
 Fail-safe in direction: it silently drops true stamps, it cannot invent false ones.
 
-**Not fixed here.** `AgentTool.tsx`, `agentToolUtils.ts` and `AgentTool.test.ts` were all
-dirty with another session's live comment-only edits during this review, so per the
-not-yours-and-unfixed rule this is reported rather than touched. Those edits do not address
-it; one of them rewords the very comment block that carries the bug.
+**The one-line fix**, for whoever owns this file next:
+
+```diff
+-      resolveRequestProvider(metadata.resolvedAgentModel) === 'openai'
++      resolveRequestProvider(
++        metadata.resolvedAgentModel,
++        toolUseContext.options.mainLoopProvider,
++      ) === 'openai'
+```
+
+`toolUseContext` is already a destructured parameter of `runAsyncAgentLifecycle`
+(`agentToolUtils.ts:921`), so nothing else has to move.
+
+**Not fixed here**, deliberately. Those three files were dirty with another session's live
+edits during the review, and that session then landed `2763a080` while this report was being
+written. That commit is **comment-only on this exact block** and does not fix it; worse, its
+new wording now asserts the false premise outright ("Gated on the worker's own model, like
+every other capture. Registration is gated the same way now"), when registration passes
+`baseProvider` and this call does not. A session is demonstrably live in this file, and §9's
+engine bar wants a test that fails before and passes after, which here means driving a whole
+async lifecycle. Both reasons point the same way: hand it over rather than half-land it.
 
 ## MEDIUM — three deviations from the design spec, one recorded
 
