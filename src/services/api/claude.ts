@@ -1171,11 +1171,21 @@ async function* queryModel(
     !getCurrentCodexLease()
 
   if (registeredQueryLease) {
-    registerCodexLease({
-      ownerId: options.agentId,
-      ownerType: 'subagent',
-      ownerLabel: `Subagent ${options.agentId}`,
-    })
+    try {
+      registerCodexLease({
+        ownerId: options.agentId,
+        ownerType: 'subagent',
+        ownerLabel: `Subagent ${options.agentId}`,
+      })
+    } catch (error) {
+      // Pool exhaustion here is raised before the request try block below, so
+      // it would otherwise bypass getAssistantMessageFromError and reach the
+      // user as the raw internal string. Classify it the same way the request
+      // path does. No deferredTerminalFailure exists at this point:
+      // selectAccountForLease throws a plain Error, never a CannotRetryError.
+      yield getAssistantMessageFromError(error, options.model)
+      return
+    }
   }
   const resolvedModel =
     requestProvider === 'bedrock' &&
