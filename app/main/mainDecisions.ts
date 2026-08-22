@@ -525,11 +525,29 @@ export function supervisorEventToServerFrame(
  * next interval: the deleted account still listed, the renamed one under its old
  * name, the account just signed in to still marked as needing sign-in.
  *
- * `account.login` is deliberately excluded even though it succeeds: its ack
- * means the browser handoff STARTED, and the pool changes later, at the
- * `oauth.login.progress` success that this predicate also matches. Refreshing on
- * the ack would spend a worker process reading state that has not changed yet.
+ * An ALLOWLIST, not "succeeded and is not one of the ones I thought of". The
+ * sidecar already knows the answer: it computes a `poolChanged` per verb
+ * (`app/sidecar/accountsDomain.ts`) and consumes it locally, but the
+ * `account.result` frame carries only `ok`, so main has to mirror that judgment.
+ * Mirroring it as a denylist gets it wrong in the expensive direction: FOUR
+ * verbs answer `ok` without touching the pool — `account.login`, whose ack means
+ * only that the browser handoff started, plus the three sub-protocol steps
+ * `oauthPasteCode` / `oauthAlias` / `oauthCancel`. Each false trigger costs a
+ * ~189 MB worker boot and a live authenticated usage fetch, and `oauthAlias` is
+ * the worst of them: it emits the `success` progress below BEFORE returning its
+ * own ok, so a denylist bought two spawns for one sign-in.
+ *
+ * Closed by construction: a verb added later refreshes nothing until it is
+ * listed here, which is the safe direction to be wrong in.
  */
+const POOL_MUTATING_VERBS: ReadonlySet<string> = new Set([
+  'account.switch',
+  'account.rename',
+  'account.delete',
+  'account.logout',
+  'account.touchAll',
+])
+
 export function frameMutatedAccountsPool(frame: ServerFrame): boolean {
   // Optional chaining, not a bare read: main's frame handler runs inside the
   // supervisor's socket data loop, which has no try/catch, so a malformed frame
@@ -538,7 +556,7 @@ export function frameMutatedAccountsPool(frame: ServerFrame): boolean {
     return frame.progress?.state === 'success'
   }
   if (frame.kind === 'account.result') {
-    return frame.ok && frame.verb !== 'account.login'
+    return frame.ok && POOL_MUTATING_VERBS.has(frame.verb)
   }
   return false
 }

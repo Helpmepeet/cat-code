@@ -204,8 +204,12 @@ whether even that blocks or just disables submit is §5-Q2.
 > reintroduce `ReauthWall.tsx` / `reauthBannerState.ts` / the `'reauth'` `OAuthContext` (P4-34), and
 > it does NOT change `selectAccountHealthBanner`'s all-blocked trigger. Scope is the Codex pool only;
 > the Anthropic pool has no repair affordance yet, so it is deliberately uncounted.
-> Implemented in `1f1c0fa3`; the repair action itself is the `dead`-only "Sign in again" row item,
-> which reuses `account.login` and adds no vocabulary.
+> Implemented in `1f1c0fa3` (count on the rail and in the expanded list) and `09d8cd9e` (the mark on
+> the destinations toggle, which the bound above requires: the expanded list is folded shut by
+> default and `inert` while folded, so a mark only inside it is unreadable in that state). The repair
+> action itself is the `dead`-only "Sign in again" row item, which reuses `account.login` and adds no
+> vocabulary. The `app/main` wiring that drives the count's refresh is not yet committed; see the
+> CC-74 row in STATUS.md.
 - **"Read-only mode is obviously useful; why not just build it?"** Because "read-only" is a
   security claim, and no one has defined it against the threat model (does the engine still
   read CLAUDE.md? run MCP servers? LSP?). Shipping the *label* without the defined semantics

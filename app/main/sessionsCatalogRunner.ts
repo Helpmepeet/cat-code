@@ -277,11 +277,14 @@ export function createSessionsCatalogDriver(deps: {
   const schedule = (startedAt: number) => {
     if (stopped) return
     // Deliberate divergence from the accounts twin, which clears the pending
-    // handle here. This driver has no out-of-band entry point, so `tick()` is
-    // only ever reached with `timer === null` (from `start()`, or from the timer
-    // callback that nulls it first) and there is no live handle to overwrite.
-    // Adding one — the accounts driver's `refreshNow()` — makes the clear
-    // load-bearing: without it each call forks a second self-rescheduling chain.
+    // handle here. NOT because this driver cannot double-arm: a second `start()`
+    // arms a second self-rescheduling chain here exactly as it did there
+    // (measured: armed 2, cleared 0). What prevents it is the call-site guard
+    // `if (sessionsCatalogDriver) return` in `main.ts`, which is the only reason
+    // this is a latent shape rather than a live bug. The accounts twin has the
+    // same call-site guard and was still fixed at the owner, because its
+    // `refreshNow()` gave `tick()` a second entry point. Give this driver one and
+    // the clear becomes load-bearing here too.
     const delay = Math.max(0, intervalMs - (now() - startedAt))
     timer = setTimer(() => {
       timer = null

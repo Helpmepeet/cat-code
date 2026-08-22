@@ -391,9 +391,9 @@ export function createAccountsPoolDriver(deps: {
         rerunRequested = true
         return
       }
-      // Drop the pending timer FIRST. `schedule()` overwrites the handle without
-      // clearing it, so ticking on top of a live timer would leave the old one
-      // armed and fork a second self-rescheduling chain off every call.
+      // `schedule()` clears the handle itself, so this is not what keeps the
+      // chain single. It saves the pending callback from firing a tick that the
+      // in-flight guard would drop anyway, one interval from now.
       clearPendingTimer()
       void tick()
     },

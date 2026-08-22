@@ -692,12 +692,26 @@ describe('frameMutatedAccountsPool', () => {
     }
   })
 
-  test('account.login is excluded: its ack means the browser handoff started', () => {
-    // The pool changes at the oauth success above, not here. Refreshing on the
-    // ack would spend a worker process reading state that has not changed.
-    expect(frameMutatedAccountsPool(accountResult('account.login', true))).toBe(
-      false,
-    )
+  test('every verb the sidecar marks poolChanged:false is excluded, not just login', () => {
+    // These four answer ok without touching the pool
+    // (`app/sidecar/accountsDomain.ts`). Each false trigger is a ~189 MB worker
+    // boot plus a live usage fetch, and `oauthAlias` emits the success progress
+    // BEFORE its own ok, so counting it here bought two spawns for one sign-in.
+    for (const verb of [
+      'account.login',
+      'account.oauthPasteCode',
+      'account.oauthAlias',
+      'account.oauthCancel',
+    ]) {
+      expect(frameMutatedAccountsPool(accountResult(verb, true))).toBe(false)
+    }
+  })
+
+  test('the allowlist is closed: an unrecognised verb refreshes nothing', () => {
+    // A verb added later must cost nothing until it is listed, rather than
+    // silently spawning a worker on every occurrence.
+    expect(frameMutatedAccountsPool(accountResult('account.somethingNew', true)))
+      .toBe(false)
   })
 
   test('no other frame kind refreshes, and a malformed frame does not throw', () => {
