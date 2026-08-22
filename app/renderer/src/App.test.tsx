@@ -24,6 +24,15 @@ import {
 import type { SDKMessage } from '@cat-code/engine/session-events'
 import type { ConnectionSnapshot } from './connectionState.js'
 import {
+  AgentFaceRegistryContext,
+  AgentFaceRegistryStoreContext,
+  createAgentFaceRegistryStore,
+  faceHash,
+  FACE_FILL_COUNT,
+} from './agentFace.js'
+import { AGENT_FACE_IDENTITY_FILL } from './agentChromeModel.js'
+import { OrchestratorRoster } from './OrchestratorRoster.js'
+import {
   createTranscriptState,
   projectServerFrame,
   type TranscriptState,
@@ -2125,6 +2134,79 @@ test('P4-32a — WIRING TRIPWIRE (source text, NOT reachability) for the mode jo
   expect(source).toContain(
     'const panelOrchestratorWorkers = panelAgentMode?.workers ?? EMPTY_WORKERS',
   )
+})
+
+/* ── the per-session face registry, across panes (2026-08-22) ──────────────── */
+
+/**
+ * An agent id whose own hash lands on `fill`, so registering it FIRST into an
+ * empty registry claims exactly that colour.
+ */
+function faceSquatterId(fill: number): string {
+  for (let index = 0; index < 500; index += 1) {
+    const candidate = `w-squat-${index}`
+    if (faceHash(candidate, 8) % FACE_FILL_COUNT === fill) return candidate
+  }
+  throw new Error(`no squatter id hashes to fill ${fill}`)
+}
+
+test('two panes on two sessions never spend one face pool, and one session agrees with itself', () => {
+  // Split view renders up to MAX_WORKSPACE_PANELS panes at once, each on its own
+  // session (`workspaceLayout.ts`). The shell used to hand every one of them the
+  // SAME registry, minted from the active session, so the ten identity colours
+  // were spent across unrelated transcripts and a worker's face depended on what
+  // some other session had drawn first.
+  //
+  // Colour is the discriminator, the same recipe OrchestratorRoster.test uses:
+  // the pane that renders FIRST draws a worker whose colour is the one the
+  // second pane's worker hashes to. A shared pool must therefore move the second
+  // worker off that colour; a per-session pool cannot know to.
+  const adaFill = faceHash('w-ada', 8) % FACE_FILL_COUNT
+  const store = createAgentFaceRegistryStore()
+  const ada = agentWorkerForTest({
+    agentId: 'w-ada',
+    handle: 'Ada',
+    description: 'Session A work',
+  })
+
+  const html = renderToStaticMarkup(
+    <AgentFaceRegistryStoreContext.Provider value={store}>
+      <>
+        <SessionPane
+          {...idleSessionPaneProps()}
+          activeSessionId="session-b"
+          orchestratorWorkers={[
+            agentWorkerForTest({
+              agentId: faceSquatterId(adaFill),
+              handle: 'Bo',
+              description: 'Session B work',
+            }),
+          ]}
+        />
+        <SessionPane
+          {...idleSessionPaneProps()}
+          activeSessionId="session-a"
+          orchestratorWorkers={[ada]}
+        />
+        {/* The shell's own furniture follows the ACTIVE session, which is A. It
+         * has to draw the very face that pane just drew — the regression the
+         * registry was lifted out of the transcript to fix. */}
+        <AgentFaceRegistryContext.Provider value={store.registryFor('session-a')}>
+          <OrchestratorRoster workers={[ada]} />
+        </AgentFaceRegistryContext.Provider>
+      </>
+    </AgentFaceRegistryStoreContext.Provider>,
+  )
+
+  const faces =
+    html.match(/<svg[^>]*shape-rendering="crispEdges"[\s\S]*?<\/svg>/g) ?? []
+  expect(faces).toHaveLength(3)
+  // Session B took that colour first, and session A's worker keeps it anyway:
+  // the two panes are not drawing from one pool.
+  expect(faces[0]).toContain(AGENT_FACE_IDENTITY_FILL[adaFill])
+  expect(faces[1]).toContain(AGENT_FACE_IDENTITY_FILL[adaFill])
+  // One session, two surfaces, one face.
+  expect(faces[2]).toBe(faces[1])
 })
 
 test('an incomplete transcript says so inside the pane, on a preview and once live', () => {

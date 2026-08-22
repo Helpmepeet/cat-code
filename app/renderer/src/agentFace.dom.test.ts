@@ -17,8 +17,10 @@ import { createElement } from 'react'
 import { createDomTestHarness } from './domTestHarness.js'
 import type { DomTestHarness } from './domTestHarness.js'
 import {
+  useAgentFaceRegistryStore,
   useSessionAgentFaceRegistry,
   type AgentFaceRegistry,
+  type AgentFaceRegistryStore,
 } from './agentFace.js'
 
 let harness: DomTestHarness
@@ -76,4 +78,41 @@ test('the same session hands every caller the same faces', async () => {
 
   expect(again).toEqual(first)
   expect(registry.faceFor('agent-2', 'Grace').fill).not.toBe(first.fill)
+})
+
+/* ── the shell's per-session store (2026-08-22) ─────────────────────────────── */
+
+const stores: AgentFaceRegistryStore[] = []
+const paneRegistries: AgentFaceRegistry[] = []
+
+/** The shell, re-rendering as another pane takes focus. */
+function ShellProbe({ activeSessionId }: { activeSessionId: string | null }) {
+  const store = useAgentFaceRegistryStore()
+  stores.push(store)
+  // Both panes of a split view ask on every one of the shell's renders.
+  paneRegistries.push(store.registryFor('session-a'))
+  paneRegistries.push(store.registryFor('session-b'))
+  store.registryFor(activeSessionId)
+  return null
+}
+
+test('focusing another pane re-mints nothing the panes are already drawing into', async () => {
+  // The defect: the shell held ONE registry minted from the active session, so
+  // moving focus between panes handed every still-mounted pane a fresh empty
+  // pool and re-rolled faces on rows that were already settled. A registry is
+  // now per session, so the only thing a focus change moves is which session the
+  // SHELL's own furniture reads.
+  stores.length = 0
+  paneRegistries.length = 0
+  const tree = await harness.mount(
+    createElement(ShellProbe, { activeSessionId: 'session-a' }),
+  )
+  await tree.render(createElement(ShellProbe, { activeSessionId: 'session-b' }))
+  await tree.render(createElement(ShellProbe, { activeSessionId: null }))
+  await tree.render(createElement(ShellProbe, { activeSessionId: 'session-a' }))
+
+  expect(stores.length).toBe(4)
+  expect(new Set(stores).size).toBe(1)
+  // Two sessions, two registries, and neither moved across the four renders.
+  expect(new Set(paneRegistries).size).toBe(2)
 })

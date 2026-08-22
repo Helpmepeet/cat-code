@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -335,7 +336,8 @@ import {
 } from './orchestratorState.js'
 import {
   AgentFaceRegistryContext,
-  useSessionAgentFaceRegistry,
+  AgentFaceRegistryStoreContext,
+  useAgentFaceRegistryStore,
 } from './agentFace.js'
 import {
   createLeaseState,
@@ -580,12 +582,21 @@ export function App() {
   const [layoutNotice, setLayoutNotice] = useState<string | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [activeSessionId, setActiveSessionId] = useState<SessionId | null>(null)
-  // The session's face registry, mounted at the SHELL so every surface that
-  // draws a worker shares one. The transcript, the docked roster, the Workers
-  // list and a relayed permission card can all show the same worker at the same
-  // moment; separate registries would dedupe separately and put that worker on
-  // screen twice wearing two different faces.
-  const faceRegistry = useSessionAgentFaceRegistry(activeSessionId)
+  // The window's face registries, one per SESSION, mounted at the shell so every
+  // surface that draws a worker shares one. The transcript, the docked roster,
+  // the Workers list and a relayed permission card can all show the same worker
+  // at the same moment; separate registries would dedupe separately and put that
+  // worker on screen twice wearing two different faces.
+  //
+  // Per session and not per ACTIVE session, because split view renders up to
+  // MAX_WORKSPACE_PANELS panes at once on different sessions. One registry for
+  // all of them spent the ten identity colours across unrelated transcripts, and
+  // focusing a pane re-minted it under panes that never unmounted, re-rolling
+  // faces on rows that were already settled. `SessionPane` therefore re-provides
+  // its OWN session's registry to its subtree; what stays on the active session
+  // here is the shell's own furniture (the Workers list, the ⌘K palette).
+  const faceRegistries = useAgentFaceRegistryStore()
+  const faceRegistry = faceRegistries.registryFor(activeSessionId)
   // P4-6b — the tab ⋯ actions overflow (SessionActionsMenu) + its MetadataInspector
   // drawer + the inline rename editor. The menu is bound to the session it was
   // OPENED for (the clicked tab's `sessionId`, NOT `activeSessionId`), so it never
@@ -3598,6 +3609,7 @@ export function App() {
   }, [oauthContext, oauthProgress, activeSessionId])
 
   return (
+    <AgentFaceRegistryStoreContext.Provider value={faceRegistries}>
     <AgentFaceRegistryContext.Provider value={faceRegistry}>
       <div className="flex h-screen bg-app-bg font-sans text-text-primary">
         {/* Sidebar rail (P3-5b): the full roster (live ∪ restorable) + the
@@ -4189,6 +4201,7 @@ export function App() {
         />
       </div>
     </AgentFaceRegistryContext.Provider>
+    </AgentFaceRegistryStoreContext.Provider>
   )
 }
 
@@ -4338,6 +4351,21 @@ export function SessionPane({
   transportError,
 }: SessionPaneProps) {
   const toast = useToast()
+  // THIS pane's face registry, keyed on the pane's own session and never the
+  // globally-active one. Split view renders up to MAX_WORKSPACE_PANELS panes
+  // side by side on different sessions, and a single shell registry made them
+  // spend one pool of ten identity colours between them, so a worker's face
+  // depended on what an unrelated session had drawn first. Focusing a pane also
+  // re-minted that registry without unmounting anyone, which re-rolled faces on
+  // rows the reader had already settled on.
+  //
+  // No store above means this pane is standing alone (a test, or any future
+  // mount outside the shell). Then it inherits whatever registry it was given,
+  // which is what it did before, and null keeps the undeduped fallback.
+  const faceStore = useContext(AgentFaceRegistryStoreContext)
+  const inheritedFaces = useContext(AgentFaceRegistryContext)
+  const paneFaces =
+    faceStore === null ? inheritedFaces : faceStore.registryFor(activeSessionId)
   // ACCT-5 — correlate the composer profile popover's account switch by the
   // requestId SessionPane itself mints (switchVerb), matching AccountsPage's
   // pendingRef/lastResult pattern: NO optimistic UI, toast only on the real
@@ -5070,6 +5098,9 @@ export function SessionPane({
   }
 
   return (
+    /* Wrapped without re-indenting the pane below, the same way the composer
+     * dock's own column wrapper is. */
+    <AgentFaceRegistryContext.Provider value={paneFaces}>
     <main className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden px-8 pb-8">
       {/* No chat header row: the prototype's ChatView has none (the session
        * title lives in the TabBar; the title + actions overflow menu is the
@@ -5527,6 +5558,7 @@ export function SessionPane({
         </section>
       ) : null}
     </main>
+    </AgentFaceRegistryContext.Provider>
   )
 }
 

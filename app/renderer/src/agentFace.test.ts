@@ -12,6 +12,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   axesForName,
   createAgentFaceRegistry,
+  createAgentFaceRegistryStore,
   faceHash,
   faceRects,
   type FaceAxes,
@@ -478,5 +479,55 @@ describe('the face is identity, not state', () => {
     const first = silhouette(registry.faceFor('agent_03A', 'scout').axes)
     const second = silhouette(registry.faceFor('agent_04B', 'scout').axes)
     expect(second).not.toBe(first)
+  })
+})
+
+describe('the window store, one registry per session', () => {
+  test('one session is one registry, and two sessions are two', () => {
+    // The defect this replaced: the shell minted ONE registry from the active
+    // session while up to MAX_WORKSPACE_PANELS panes rendered side by side, so
+    // unrelated transcripts spent one pool of ten identity colours between them.
+    const store = createAgentFaceRegistryStore()
+    const first = store.registryFor('session-a')
+
+    expect(store.registryFor('session-a')).toBe(first)
+    expect(store.registryFor('session-b')).not.toBe(first)
+    // Coming back is not re-minting. This is the focus change that used to
+    // re-roll faces on rows a reader had already settled on.
+    expect(store.registryFor('session-a')).toBe(first)
+  })
+
+  test('a session that is not there yet gets one stable registry, not a new one each ask', () => {
+    // The shell reads null between sessions, and during a restore handover.
+    const store = createAgentFaceRegistryStore()
+    expect(store.registryFor(null)).toBe(store.registryFor(null))
+    expect(store.registryFor(null)).not.toBe(store.registryFor('session-a'))
+  })
+
+  test('the store is bounded, and evicts the session nobody has asked for', () => {
+    // Bounded rather than released on session close: a session ends down
+    // several paths and the one nobody wires is an unbounded map in a renderer
+    // that has already been OOMed once.
+    const store = createAgentFaceRegistryStore(2)
+    const a = store.registryFor('session-a')
+    store.registryFor('session-b')
+    // Asking for A again makes B the least recently asked for, so B is what
+    // goes when C arrives — never a session still being drawn.
+    expect(store.registryFor('session-a')).toBe(a)
+    const c = store.registryFor('session-c')
+
+    expect(store.heldCount()).toBe(2)
+    expect(store.registryFor('session-a')).toBe(a)
+    expect(store.registryFor('session-c')).toBe(c)
+    expect(store.registryFor('session-b')).not.toBe(c)
+  })
+
+  test('an evicted session re-mints rather than throwing', () => {
+    const store = createAgentFaceRegistryStore(1)
+    const first = store.registryFor('session-a')
+    store.registryFor('session-b')
+
+    expect(store.heldCount()).toBe(1)
+    expect(store.registryFor('session-a')).not.toBe(first)
   })
 })

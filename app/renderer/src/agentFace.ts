@@ -748,13 +748,19 @@ export function createAgentFaceRegistry(): AgentFaceRegistry {
 }
 
 /**
- * The session's registry, handed down so every face on screen is deduped against
- * every other one. Null when nothing above has provided one.
+ * The registry in force here, handed down so every face on screen is deduped
+ * against every other one of the SAME session. Null when nothing above has
+ * provided one.
  *
- * Mounted at the SHELL, not at the transcript, because a worker is on screen in
- * more than one place at once: the transcript's card, the docked roster, the
+ * Provided above the transcript rather than by it, because a worker is on screen
+ * in more than one place at once: the transcript's card, the docked roster, the
  * Workers list, a relayed permission card. Two registries would dedupe
  * separately, and the same worker would wear two different faces in two panes.
+ *
+ * WHICH registry is a question of session, not of position: the shell provides
+ * the active session's for its own furniture, and each pane re-provides its own
+ * session's over the top (`AgentFaceRegistryStoreContext`). Never provide a
+ * registry that outlives or crosses a session.
  */
 export const AgentFaceRegistryContext = createContext<AgentFaceRegistry | null>(null)
 
@@ -776,6 +782,104 @@ export function useSessionAgentFaceRegistry(sessionId: string | null): AgentFace
     held.current = { session: sessionId, registry: createAgentFaceRegistry() }
   }
   return held.current.registry
+}
+
+/**
+ * How many sessions' registries one window holds at once.
+ *
+ * A BOUND rather than a release-on-close, and the choice is deliberate. A
+ * session ends down several paths — the tab is closed, its engine dies, a
+ * restore hands its id over — and a store that leaks on the one path nobody
+ * wired is an unbounded map in a renderer that has already been OOMed once.
+ * A bound cannot be forgotten.
+ *
+ * It also cannot evict something on screen: one render asks for at most
+ * `MAX_WORKSPACE_PANELS` panes plus the shell's active session, and the
+ * least-recently-ASKED entry is the one that goes.
+ *
+ * The cost of an eviction is that a session nobody has drawn a worker for in
+ * this many session-switches re-rolls the ~11% of its faces the distance rule
+ * had moved. That is the same re-roll a reload already produces, and it is the
+ * price of not holding every session a window has ever shown.
+ */
+export const MAX_HELD_FACE_REGISTRIES = 12
+
+/**
+ * The window's registries, one per session, handed down so a pane can ask for
+ * its OWN session's rather than the shell's active one.
+ *
+ * This exists because up to `MAX_WORKSPACE_PANELS` panes render at once, each on
+ * a different session. A single shell registry made those panes share one dedupe
+ * pool — one session's silhouettes then depended on what an unrelated session
+ * drew first, which is exactly what `UNSCOPED_REGISTRY` below refuses to do —
+ * and re-minted on every focus change, re-rolling faces in panes that never
+ * unmounted.
+ */
+export type AgentFaceRegistryStore = {
+  /**
+   * This session's registry, the same object every time it is asked for, so the
+   * transcript, the docked roster and a relayed permission card of ONE session
+   * still agree with each other.
+   *
+   * A null session (a shell between sessions) gets one stable registry of its
+   * own rather than null, so a surface reading it during that gap still dedupes
+   * and the provider value does not churn.
+   */
+  registryFor: (sessionId: string | null) => AgentFaceRegistry
+  /** How many sessions are held right now. The bound is the point; pin it. */
+  heldCount: () => number
+}
+
+export function createAgentFaceRegistryStore(
+  capacity: number = MAX_HELD_FACE_REGISTRIES,
+): AgentFaceRegistryStore {
+  // Insertion order IS recency order: a hit re-inserts, so the first key is
+  // always the least recently asked for.
+  const held = new Map<string, AgentFaceRegistry>()
+  let unkeyed: AgentFaceRegistry | null = null
+  return {
+    registryFor(sessionId) {
+      if (sessionId === null) {
+        unkeyed ??= createAgentFaceRegistry()
+        return unkeyed
+      }
+      const existing = held.get(sessionId)
+      if (existing !== undefined) {
+        held.delete(sessionId)
+        held.set(sessionId, existing)
+        return existing
+      }
+      const minted = createAgentFaceRegistry()
+      held.set(sessionId, minted)
+      while (held.size > capacity) {
+        const oldest = held.keys().next()
+        if (oldest.done === true) break
+        held.delete(oldest.value)
+      }
+      return minted
+    },
+    heldCount: () => held.size,
+  }
+}
+
+/**
+ * The store, provided once by the shell. Null when nothing above has one, which
+ * is the standalone case a pane rendered on its own is in.
+ */
+export const AgentFaceRegistryStoreContext =
+  createContext<AgentFaceRegistryStore | null>(null)
+
+/**
+ * Hold the window's store across renders.
+ *
+ * A ref rather than `useMemo` for the same reason `useSessionAgentFaceRegistry`
+ * is one: the whole job is to hand out an answer that never changes, and
+ * `useMemo` is documented as a cache React may discard.
+ */
+export function useAgentFaceRegistryStore(): AgentFaceRegistryStore {
+  const held = useRef<AgentFaceRegistryStore | null>(null)
+  held.current ??= createAgentFaceRegistryStore()
+  return held.current
 }
 
 /**
