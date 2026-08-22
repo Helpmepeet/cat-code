@@ -113,6 +113,7 @@ import { formatModelDisplayName } from './statsState.js'
 import {
   leaseAccountShortLabel,
   LeaseSnapshotContext,
+  selectLeaseForLabel,
   selectLeaseForOwner,
 } from './leaseState.js'
 import type { LeaseSnapshot } from '../../shared/protocol.js'
@@ -2661,10 +2662,30 @@ function agentAccountLabel(
   row: ToolUseNestedRow,
   leases: LeaseSnapshot | null,
 ): string | null {
-  const lease = selectLeaseForOwner(leases, row.result?.agentId ?? null)
+  const lease =
+    selectLeaseForOwner(leases, row.result?.agentId ?? null) ??
+    selectLeaseForLabel(leases, agentLeaseLabelOf(row))
   if (lease !== null) return leaseAccountShortLabel(lease)
   const stamped = row.result?.agentAccount
   return stamped === undefined ? null : leaseAccountShortLabel(stamped)
+}
+
+/**
+ * The label this row's lease was registered under: the Agent tool's own
+ * `description` argument, which `registerWorkerCodexLease` passes straight
+ * through as `ownerLabel` (`src/tools/AgentTool/AgentTool.tsx:1502`).
+ *
+ * Read raw off the input rather than from `deriveTarget`, which is display text
+ * and may be shortened or fall back to other fields — the join needs the exact
+ * string the engine registered. A ResumeAgent row has no `description` and needs
+ * none: the projector resolves its `agentId` from the input, so it joins on the
+ * key above.
+ */
+function agentLeaseLabelOf(row: ToolUseNestedRow): string | null {
+  const description = row.input.description
+  return typeof description === 'string' && description.length > 0
+    ? description
+    : null
 }
 
 /**

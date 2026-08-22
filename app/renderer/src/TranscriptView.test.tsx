@@ -1998,6 +1998,86 @@ test('a session with no lease plane says nothing about an account', () => {
   expect(html).not.toContain('w-px')
 })
 
+test('a card names the account WHILE a foreground worker is still running', () => {
+  // The case the stamp design ruled unreachable: a foreground worker's agentId
+  // arrives with its RESULT, so the agentId join cannot answer until the run is
+  // over. Both planes already carry the description, though — the engine
+  // registers the lease under it (`AgentTool.tsx:1502`) and the row holds it as
+  // `input.description` — so the running card can name the account after all.
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      leases={{
+        strategy: 'spread',
+        accounts: [],
+        owners: [
+          {
+            leaseId: 'af5c4971',
+            ownerId: 'af5c4971',
+            ownerType: 'subagent',
+            ownerLabel: 'Repair typed SDK error contract',
+            accountId: '93ce612e-1315-4466-859d-be060ef879be',
+            accountAlias: 'bluesky',
+            strategy: 'spread',
+            state: 'active',
+            createdAt: 1,
+            updatedAt: 1,
+            failoverCount: 0,
+            selectionKind: 'initial',
+            selectionReason: 'initial pick',
+          },
+        ],
+      }}
+      rows={[
+        // RUNNING: no result at all, which is the whole point.
+        agentRow(
+          'running',
+          { subagent_type: 'implementor', description: 'Repair typed SDK error contract' },
+          'pending',
+        ),
+      ]}
+    />,
+  )
+
+  expect(html).toContain('bluesky')
+  // Still the redacted alias, never the raw account UUID.
+  expect(html).not.toContain('93ce612e-1315-4466-859d-be060ef879be')
+})
+
+test('a running card stays silent when two workers share one description', () => {
+  // Ambiguity resolves to silence, not to a guess: naming the wrong account is
+  // worse than naming none, and null is what the card already renders as absent.
+  const owner = (id: string, alias: string) => ({
+    leaseId: id,
+    ownerId: id,
+    ownerType: 'subagent' as const,
+    ownerLabel: 'run the battery',
+    accountId: `acct-${id}`,
+    accountAlias: alias,
+    strategy: 'spread' as const,
+    state: 'active' as const,
+    createdAt: 1,
+    updatedAt: 1,
+    failoverCount: 0,
+    selectionKind: 'initial' as const,
+    selectionReason: 'initial pick',
+  })
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      leases={{
+        strategy: 'spread',
+        accounts: [],
+        owners: [owner('agent_a', 'bluesky'), owner('agent_b', 'onbi')],
+      }}
+      rows={[
+        agentRow('ambiguous', { subagent_type: 'Explore', description: 'run the battery' }, 'pending'),
+      ]}
+    />,
+  )
+
+  expect(html).not.toContain('bluesky')
+  expect(html).not.toContain('onbi')
+})
+
 test('P4-8c: the Agent card + DelegateGroup emit only static tone utilities (no interpolated/arbitrary classes)', () => {
   const html = renderToStaticMarkup(
     <TranscriptRowsView
