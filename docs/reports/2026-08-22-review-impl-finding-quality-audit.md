@@ -24,6 +24,7 @@ This report is the evidence. Appendices carry the raw tables.
 - Appendix A — [re-verification of 33 VALID findings against source](2026-08-22-review-impl-audit-appendix-a-reverification.md)
 - Appendix B — [finding corpus, taxonomy, and the false-positive causes](2026-08-22-review-impl-audit-appendix-b-corpus.md)
 - Appendix C — [escapes, reverted fixes, and recurring defect shapes](2026-08-22-review-impl-audit-appendix-c-escapes.md)
+- Appendix D — [yield normalization, trend, and battery-catchability](2026-08-22-review-impl-audit-appendix-d-normalization.md)
 
 ---
 
@@ -38,15 +39,25 @@ history and is useless.
 | | |
 |---|---|
 | Transcript files containing an invocation | 41 |
-| Of those, compaction-summary artifacts of other sessions (excluded) | 7 |
-| Sessions that produced a Step-3 validation table | 34 |
-| Sessions with parseable finding rows | **30** |
-| Deduped finding rows | **382** |
+| Of those, compaction artifacts and one forked duplicate (excluded) | 7 |
+| **Review runs** | **34** (38 invocations — four sessions ran it twice) |
+| Sessions with integer-numbered finding rows scraped | 30 |
+| Deduped scraped rows | 382 |
+| **Best estimate of distinct findings** | **~375** |
 | Date span | 2026-07-26 → 2026-08-22 |
-| Mean findings per review | ~12.7 |
+| **Median findings per run** | **10** (IQR 8–13) |
 
-Rows were deduped because several sessions print the validation table more than once as it
-fills in; the raw label occurrences are higher than the deduped row counts below.
+> **Correction, from Appendix D.** The scrape used through most of this report undercounts in
+> one direction and overcounts in another, and both need stating. It **silently drops every
+> validation table whose `#` column is non-numeric**, which is how four whole reviews
+> (`76e10e2b`, `cc9feb6e`, `97b04c6f`, `1ba97aa9` — 46 findings between them) appear as 1, 0, 0
+> and 0. It also **double-counts findings restated in a Step-4/5 summary**, inflating by ~10%.
+> Row-based figures below are kept as-is so they stay comparable, but the finding column is a
+> floor. Appendix D §1 has the full reconciliation.
+
+**One review found nothing at all.** `f6a7c289` (2026-08-09, 121-line diff, one agent) returned
+zero findings; its report walks four specific claims and clears each. That is a real zero, not a
+scrape gap, and it retires the premise that the skill *always* finds a problem.
 
 ### Verdict distribution as self-labeled by the reviewing sessions
 
@@ -224,12 +235,58 @@ rules). The most striking is a literal NUL byte written into a TypeScript source
 a test guarding only *its own module*. Verified at audit time — five such per-module tests
 exist, there is no repo-wide sweep, and nothing prevents a fourth.
 
-## 5b. Lane five — pending
+## 5b. Lane five — the denominators
 
-**Yield normalization** — findings per 100 lines of task-scoped diff, the trend across
-2026-07-26 → 2026-08-22, whether 2-agent reviews outproduce 1-agent reviews per unit of diff,
-and how many behavioral findings the repo's own gates could plausibly have caught. This report
-will be revised in place when it lands.
+Full detail in Appendix D. Every one of the 34 runs had its task-scoped diff recovered; 25 are
+corroborated twice (stated in transcript *and* reproduced from git). **Zero unknowns.**
+
+### The reviewer returns a fixed budget of findings
+
+**Spearman(diff size, findings per 100 lines) = −0.78.** Against *absolute* findings it is only
++0.53. A 4,277-line review produced 33 findings; a 91-line review produced 12. Median findings
+by size band: 4.51 per 100 under 300 lines, 1.09 per 100 over 1,600.
+
+**The reviewers return roughly 10 findings — IQR 8 to 13 — almost regardless of how much code
+they are given.** That single fact explains the feeling that prompted this audit better than any
+other number in the report: to a first approximation the count *is* constant, because it is
+partly a property of the reviewer's reporting budget rather than of defect density. It also
+means "findings per 100 lines" is not a size-invariant quality metric here — it is largely a
+proxy for `1/diff-size`, and the instinct to normalize has to be discounted accordingly.
+
+### The trend is flat
+
+| | Spearman vs date |
+|---|---|
+| Findings per 100 lines | −0.06 |
+| Absolute findings | −0.09 |
+| Diff size | −0.04 |
+
+All noise. Neither candidate story survives: diffs did not grow (median 518 → 358 → 501 across
+date-thirds) and raw counts did not rise (13 → 10 → 10.5, a mild decline if anything). **Over
+four weeks and 34 runs the yield is statistically indistinguishable. The code is not getting
+sloppier and the review is not getting stricter.**
+
+### More reviewers does not mean more findings
+
+Within the only size band where both occur (under 250 lines): 1 agent → median 9.5 findings,
+2 agents → 9.0. **Same absolute yield.** The second agent adds a *lens*, not volume — visible in
+composition, not count. Findings per agent falls monotonically 9.5 → 5.0 → 4.0. The skill's
+1-or-2 rule was followed in 27 of 34 runs, and all seven deviations were announced in-transcript.
+
+### The gates catch 1 behavioral defect in 210
+
+Of 416 rows, 210 describe a behavioral defect. **Exactly one would have turned a gate red
+without someone first writing a new test** — a test committed red, where the gate existed and
+was simply skipped. On the widest defensible reading, three. Root `bun run typecheck`, the
+sidecar wrapper's upstream diagnostics, and `bun run lint` were given no credit, per CLAUDE.md §3.
+
+**0.5%.** And ~33 rows — 8% of the corpus — are findings *about the gates themselves being
+blind*: inert tripwires, `as unknown as` casts defeating `tsc`, *"3 of 4 new tests do not fail on
+revert"*, and one case where deleting a single token kept 1,958 tests green while restoring the
+exact starvation the decision exists to prevent.
+
+Once normalized, the apparent `app/` concentration also disappears: `app/` 1.62 findings per 100
+lines, `src/` 1.57. Findings track where the code was, not where the bugs were.
 
 ---
 
@@ -360,4 +417,17 @@ finding #1 in Appendix A, independently re-verified by recomputing both encoding
   shares are indicative only and several rows are visibly misfiled by the classifier.
 - Severity labels in the corpus are sparse — only 19 rows carry an explicit HIGH/MED/LOW —
   which is itself the finding in section 6, but it means severity distribution across the full
-  382 cannot be stated, only sampled.
+  corpus cannot be stated, only sampled.
+- **The finding counts are the weakest numbers in this report set.** The scrape drops
+  non-numeric tables (four whole reviews) and double-counts restated rows (~10%). Appendix D
+  recovered the four missing reviews but not an estimated further ~28 non-numeric rows scattered
+  across sessions already in the table. Denominators are far stronger than numerators here.
+- **Three diff denominators are soft**, one of them (`2d5da6ab`, possibly understated 2–4×)
+  sitting among the high outliers. Appendix D §8 names all three.
+- **The 0.5% battery-catchability figure is judgment-laden.** A different reader drawing the
+  behavioral/non-behavioral line differently could move the split by ±25. The direction is
+  robust — the rate stays under 1% across that whole range — but the specific figure should not
+  be quoted without the rubric.
+- **No lane measured the counterfactual**: how many defects would have escaped had the pass not
+  run. That number is not recoverable from these transcripts, and every claim about the review's
+  value is correspondingly bounded.

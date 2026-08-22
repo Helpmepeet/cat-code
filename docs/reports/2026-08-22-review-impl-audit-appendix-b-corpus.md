@@ -8,6 +8,14 @@ Companion to [the main audit](2026-08-22-review-impl-finding-quality-audit.md).
 
 382 deduped finding rows, 30 sessions, 2026-07-26 → 2026-08-22.
 
+> **Superseded in part by [Appendix D](2026-08-22-review-impl-audit-appendix-d-normalization.md) §1.**
+> The real corpus is **34 review runs** across 38 invocations, and ~375 distinct findings. The
+> scrape these tables are built on drops every validation table with a non-numeric `#` column —
+> four whole reviews (`76e10e2b`, `cc9feb6e`, `97b04c6f`, `1ba97aa9`, 46 findings between them)
+> — and double-counts findings restated in a Step-4/5 summary, inflating by ~10%. The shares in
+> this appendix are computed over the 382 scraped rows and remain internally consistent; treat
+> them as proportions, not as a census.
+
 | Verdict as self-labeled | Rows | Share |
 |---|---:|---:|
 | VALID | 291 | 76.2% |
