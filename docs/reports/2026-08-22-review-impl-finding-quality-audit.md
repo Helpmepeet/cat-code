@@ -331,6 +331,22 @@ why the second-round reviews in §5 paid off so consistently.
 actionable artifact in this audit. Findings get fixed; the shape that produced them almost never
 gets a guard, so the same class returns weeks later in a different file.
 
+### The tightest illustration of the review earning its cost
+
+All three timestamps are from 2026-07-30 and verified against git:
+
+| Time | Event |
+|---|---|
+| 14:56:59 | `183276f5` removes a literal NUL byte from the section cache key and picks `#` as the replacement separator |
+| **14:57:52** | `/review-impl` runs — **53 seconds later** |
+| — | It finds that `#` now collides: `('a','ab#z')` and `('a#s4:ab', null)` both encode to `a#s4:ab#z`. A key collision serves a wrong system prompt silently |
+| 15:15:00 | `d2783756` fixes it, 18 minutes after the review started |
+
+This is the whole argument in one hour of history. A fix for one real bug introduced a second,
+subtler one; no gate could see it (the collision is unreachable with today's section names, so
+nothing fails); the review caught it inside a minute; and it cost one line to fix. It is also
+finding #1 in Appendix A, independently re-verified by recomputing both encodings by hand.
+
 ---
 
 ## 8. Uncertainties
