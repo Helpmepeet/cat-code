@@ -45,6 +45,7 @@ import { logForDebugging } from './debug.js'
 import { isEnvTruthy } from './envUtils.js'
 import { createUserMessage } from './messages.js'
 import {
+  type APIProvider,
   getAPIProvider,
   isFirstPartyAnthropicBaseUrl,
   resolveRequestProvider,
@@ -142,6 +143,16 @@ export async function toolToAPISchema(
     agents: AgentDefinition[]
     allowedAgentTypes?: string[]
     model?: string
+    /**
+     * The caller's own provider. Load-bearing whenever the model is not
+     * `gpt-*`: without it `resolveRequestProvider` falls back to the
+     * process-global session provider, which is the PARENT session's, not
+     * this request's. A gpt worker's child runs on `mainLoopProvider:
+     * 'openai'` with a Claude model (runAgent.ts:764) while the session sits
+     * on Anthropic, and the resolved provider decides the schema shape, the
+     * description text, and the process-wide schema cache key.
+     */
+    provider?: APIProvider
     /** When true, mark this tool with defer_loading for tool search */
     deferLoading?: boolean
     cacheControl?: {
@@ -162,7 +173,10 @@ export async function toolToAPISchema(
   // call — name-only keying returned a stale schema (5.4% → 51% err rate, see
   // PR#25424). MCP tools also set inputJSONSchema but each has a stable schema,
   // so including it preserves their GB-flip cache stability.
-  const resolvedProvider = resolveRequestProvider(options.model)
+  const resolvedProvider = resolveRequestProvider(
+    options.model,
+    options.provider,
+  )
   const cacheKeyBase =
     'inputJSONSchema' in tool && tool.inputJSONSchema
       ? `${tool.name}:${jsonStringify(tool.inputJSONSchema)}`

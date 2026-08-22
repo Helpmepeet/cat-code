@@ -490,12 +490,13 @@ function should1hCacheTTL(querySource?: QuerySource): boolean {
  * Configure effort parameters for API request.
  *
  */
-function configureEffortParams(
+export function configureEffortParams(
   effortValue: EffortValue | undefined,
   outputConfig: BetaOutputConfig,
   extraBodyParams: Record<string, unknown>,
   betas: string[],
   model: string,
+  provider: APIProvider,
 ): void {
   if (!modelSupportsEffort(model) || 'effort' in outputConfig) {
     return
@@ -504,7 +505,14 @@ function configureEffortParams(
   // Codex path (OpenAI provider): only set output_config.effort so the fetch
   // adapter can read it. Skip EFFORT_BETA_HEADER (Anthropic-specific) and the
   // anthropic_internal numeric override path (meaningless to Codex).
-  const isCodex = resolveRequestProvider(model) === 'openai'
+  //
+  // `provider` is load-bearing whenever the model is not `gpt-*`: dropping it
+  // falls back to the process-global session provider, which is the PARENT
+  // session's. A gpt worker's child runs on `mainLoopProvider: 'openai'` with
+  // a Claude model (runAgent.ts:764) while the session sits on Anthropic, and
+  // it wrongly gains the Anthropic beta; the reverse pairing silently strips
+  // the beta from a real Anthropic worker on a Codex session.
+  const isCodex = resolveRequestProvider(model, provider) === 'openai'
 
   if (effortValue === undefined) {
     if (!isCodex) betas.push(EFFORT_BETA_HEADER)
@@ -1379,6 +1387,7 @@ async function* queryModel(
         agents: options.agents,
         allowedAgentTypes: options.allowedAgentTypes,
         model: options.model,
+        provider: requestProvider,
         deferLoading: willDefer(tool),
       }),
     ),
@@ -1749,6 +1758,7 @@ async function* queryModel(
       extraBodyParams,
       betasParams,
       options.model,
+      requestProvider,
     )
 
     configureTaskBudgetParams(
