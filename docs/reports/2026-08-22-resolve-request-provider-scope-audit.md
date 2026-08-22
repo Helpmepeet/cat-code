@@ -41,8 +41,8 @@ there, and most of what is left is fine.
 
 | `file:line` | Decides | Consequence when wrong |
 |---|---|---|
-| **`src/utils/api.ts:165`** | tool-schema cache key, OpenAI property renaming, `tool.prompt({provider})` text, `Apply_patch` grammar, `eager_input_streaming` | Codex request carries Anthropic-shaped schemas and descriptions; `Apply_patch` loses its grammar fields; a first-party-only flag set on a Codex request. **And `getToolSchemaCache()` is process-wide and keyed on that provider, so the poisoned entry is then served to correctly-routed callers.** The damage escapes the worker that caused it. |
-| **`src/services/api/claude.ts:507`** | `isCodex` in `configureEffortParams` | `EFFORT_BETA_HEADER` (an Anthropic beta) pushed onto a Codex request. Reverse direction: a real Anthropic worker on a Codex session silently loses its effort beta header. |
+| **`src/utils/api.ts:165`** (FIXED `7664e580`) | tool-schema cache key, OpenAI property renaming, `tool.prompt({provider})` text, `Apply_patch` grammar, `eager_input_streaming` | Codex request carries Anthropic-shaped schemas and descriptions; `Apply_patch` loses its grammar fields; a first-party-only flag set on a Codex request. **And `getToolSchemaCache()` is process-wide and keyed on that provider, so the poisoned entry is then served to correctly-routed callers.** The damage escapes the worker that caused it. |
+| **`src/services/api/claude.ts:507`** (FIXED `7664e580`) | `isCodex` in `configureEffortParams` | `EFFORT_BETA_HEADER` (an Anthropic beta) pushed onto a Codex request. Reverse direction: a real Anthropic worker on a Codex session silently loses its effort beta header. |
 | `src/constants/prompts.ts:742` (`getSystemPrompt`) | the whole system-prompt style | Anthropic-style core policy sent to a Codex request, or GPT-style to Claude. Also moves the prompt-cache prefix. |
 | `src/constants/prompts.ts:575` | agent-mode sections | same family |
 | `src/constants/prompts.ts:1012` | model-description env block | same family, reached only via the two above |
@@ -72,6 +72,17 @@ means a schema migration, not an argument. The gate may also be redundant, since
 non-Codex at creation. The same gap exists in the argv the worker builds: `--model
 job.context.model` with no `--provider`.
 
+## Correction found while fixing
+
+This audit said the `toolToAPISchema` fix was a one-call-site change. It is not:
+`toolToAPISchema` has **three** call sites — `claude.ts:1384` (fixed), plus
+`src/services/compact/autoCompact.ts:401` and `src/utils/analyzeContext.ts:321`. The new
+`provider` option was therefore made OPTIONAL, so those two keep the `getAPIProvider()`
+fallback and their behaviour is unchanged. They remain latently mis-scoped in the same way if
+either is ever reached from a worker whose provider diverges. Note also that
+`autoCompact.ts:360` carries a comment claiming it mirrors "the same `toolToAPISchema` the
+request path itself uses", which is now one argument less true. Follow-up, not swept.
+
 ## Adjacent findings, different shape
 
 - `src/utils/hooks/skillImprovement.ts:215` uses `getSmallFastModel()` while all five sibling
@@ -84,10 +95,10 @@ job.context.model` with no `--provider`.
 
 ## Order of work
 
-1. **`src/utils/api.ts:165`** — hot path for every request a divergent worker makes, corrupts
-   four request fields at once, and poisons a process-wide cache.
-2. **`src/services/api/claude.ts:507`** — same requests, three-line mechanical patch,
-   `requestProvider` already in scope.
+1. ~~**`src/utils/api.ts:165`**~~ — **FIXED in `7664e580`.**
+2. ~~**`src/services/api/claude.ts:507`**~~ — **FIXED in `7664e580`.** Four tests, both
+   directions of the effort bug covered, mutation-checked twice: revert both lines and it is
+   0 pass / 4 fail.
 3. **The `prompts.ts` family** — largest per-occurrence blast radius but narrower
    reachability, and it needs a threaded parameter rather than an argument. Precedent exists
    in the same file: `enhanceSystemPromptWithEnvDetails` already takes an optional 5th
