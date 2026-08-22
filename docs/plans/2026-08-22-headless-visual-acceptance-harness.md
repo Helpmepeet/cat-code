@@ -1,6 +1,6 @@
 # Plan — a headless visual-acceptance harness
 
-**Date:** 2026-08-22 · **Status:** proposal, not started · **Area:** `app/` (desktop) ·
+**Date:** 2026-08-22 · **Status:** **Stage 1 SHIPPED** (`0648513d`); Stages 2-3 open · **Area:** `app/` (desktop) ·
 **Size:** M, in three stages that each ship something usable.
 
 ## TL;DR
@@ -81,19 +81,43 @@ Promote the orphan to a maintained script. Keep its isolation exactly as-is. Add
 `capture(name)` step that writes `capturePage().toPNG()` into an output directory, and a
 scenario file listing named states.
 
-Non-interference is the hard requirement, and `show: false` is **not** the way to get it:
-a hidden window's input pipeline is unreliable, which Stage 2 depends on. Use
-`showInactive()` with the window positioned offscreen (`setPosition(-10000, …)`) and
-`backgroundThrottling: false` so it keeps painting. That is visible to the compositor,
-never on the operator's screen, never focused.
+**The spike is done and this section is the corrected result. An earlier draft of this
+plan prescribed `showInactive()` on an offscreen window and warned against `show: false`,
+claiming a hidden window's input pipeline is unreliable. That was wrong.** Measured on
+this machine, Electron 33.4.11:
 
-**Spike first, before building on it:** confirm on this machine that an offscreen
-`showInactive` window (a) captures non-blank pixels and (b) accepts `sendInputEvent`.
-If either fails, the fallback is Electron's offscreen-rendering mode (`webPreferences.offscreen`),
-which guarantees (a) but complicates (b). Do not write Stage 2 until this is settled.
+| Variant | capture | hover | focus stolen |
+|---|---|---|---|
+| `showInactive()`, offscreen at `-10000` | PASS | PASS | **YES** (`focused=true`) |
+| `app.dock.hide()` + `showInactive()` | PASS | PASS | no |
+| **`show: false`, never shown** | **PASS** | **PASS** | **no** (`visible=false`) |
+
+So the correct configuration is the simplest one: **`show: false` and never call `show()`**,
+with `backgroundThrottling: false`. A never-shown window still paints
+(`paintWhenInitiallyHidden` defaults true), `capturePage()` returns real pixels from it,
+and `sendInputEvent` still drives real CSS `:hover` in it — confirmed by both
+`matches(':hover') === true` and the pixel actually changing colour. `showInactive()` is
+the trap: it takes focus, which is the one thing this harness must never do.
+
+Reproduction is `scratchpad/spike/main2.cjs` behind `SPIKE_MODE=hidden|dockhide`.
+
+**The other spike result: colour is not exact.** Captured pixels came back `(0,0,245)`
+where the CSS said `#0000ff`, and `(234,51,35)` where it said `#ff0000` — colour-profile
+conversion in the capture path. This confirms byte equality is useless and settles
+Stage 1's comparison design: a perceptual threshold, never `Buffer.equals`.
 
 **Gate:** run it against two commits and diff the PNGs. If a known visual change does not
 show up, the harness is lying and nothing built on it counts.
+
+**Shipped in `0648513d`.** `bun run --cwd app visual:capture` boots the real app against a
+throwaway config dir and writes `app/.visual-acceptance/shell-default.png`, a 2200x1384
+frame of the actual shell. Nothing appears on screen; nothing takes focus. `main.ts` skips
+only its `show()` under `CATCODE_HEADLESS_CAPTURE=1`; everything else in `ready-to-show`
+still runs. Guard tests in `visualAcceptanceSource.test.ts` pin the non-interference
+property, not the picture, and were mutation-checked by deleting the gate.
+
+Still owed for Stage 1: the two-commit diff gate itself, and the perceptual comparison the
+colour-profile finding requires. Today the harness captures; it does not yet compare.
 
 ### Stage 2 — interaction (M)
 
