@@ -5201,7 +5201,7 @@ export function SessionPane({
        * auto'`) so the input aligns under the message column; a top seam
        * separates it from the scrolling transcript above. Inner blocks keep
        * their existing indent (wrapped without re-indentation). */}
-      <div className="mx-auto flex w-full max-w-[var(--transcript-width)] shrink-0 flex-col gap-2">
+      <div className="mx-auto flex w-full max-w-[var(--transcript-width)] shrink-0 flex-col">
       {/* P4-32a (R1) — the orchestrator worker roster is the prototype's declared
        * host for this block: above the composer, in the transcript's own measure,
        * ahead of the permission/question stack. It dims while the assistant is
