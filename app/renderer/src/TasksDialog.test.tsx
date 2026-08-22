@@ -14,6 +14,13 @@ import {
   WorkerDetailPanel,
   WorkerRosterPanel,
 } from './TasksDialog.js'
+import {
+  AgentFaceRegistryContext,
+  createAgentFaceRegistry,
+  faceHash,
+  FACE_FILL_COUNT,
+} from './agentFace.js'
+import { AGENT_FACE_IDENTITY_FILL } from './agentChromeModel.js'
 import { tasksDialogKeyAction } from './tasksState.js'
 
 /**
@@ -528,6 +535,45 @@ test('the Workers row and the detail header both draw the worker face', () => {
   // the face is identity only, so it cannot stand in for the pip.
   expect(roster.indexOf('shape-rendering')).toBeLessThan(roster.indexOf('>Turing<'))
   expect(roster).toContain('rounded-full')
+})
+
+test('both Workers surfaces draw from the session registry, not the raw hash', () => {
+  // The test above renders both panels with NO provider, so both fall back to
+  // the unscoped hash and agree with each other no matter how the registry is
+  // wired, including when it is not wired at all. Colour is the discriminator:
+  // squat this worker's hashed fill so a shared registry has to move it off,
+  // and a panel that never consults one cannot know to.
+  const worker = workerFixture({ agentId: 'agent-face-1', handle: 'Turing' })
+  const registry = createAgentFaceRegistry()
+  const hashedFill = faceHash('agent-face-1', 8) % FACE_FILL_COUNT
+  for (let index = 0; index < FACE_FILL_COUNT; index += 1) {
+    if (registry.faceFor(`squatter-${index}`).fill === hashedFill) break
+  }
+  const shared = registry.faceFor('agent-face-1', 'Turing')
+  expect(shared.fill).not.toBe(hashedFill)
+
+  const inSession = (node: React.ReactNode): string =>
+    renderToStaticMarkup(
+      <AgentFaceRegistryContext.Provider value={registry}>
+        {node}
+      </AgentFaceRegistryContext.Provider>,
+    )
+
+  for (const html of [
+    inSession(<WorkerRosterPanel onSelect={noop} workers={[worker]} />),
+    inSession(<WorkerDetailPanel lease={null} onBack={noop} worker={worker} />),
+  ]) {
+    expect(html).toContain(AGENT_FACE_IDENTITY_FILL[shared.fill])
+    expect(html).not.toContain(AGENT_FACE_IDENTITY_FILL[hashedFill])
+  }
+
+  // And the discriminator really discriminates: with no session above it, the
+  // same panel falls back to the unscoped hash and draws the squatted colour.
+  // Without this line the two asserts above could hold for a panel that reads
+  // no registry at all.
+  expect(
+    renderToStaticMarkup(<WorkerRosterPanel onSelect={noop} workers={[worker]} />),
+  ).toContain(AGENT_FACE_IDENTITY_FILL[hashedFill])
 })
 
 test('Workers compact rows normalize general-purpose and keep Resumable accessible but not visible', () => {

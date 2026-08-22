@@ -20,6 +20,13 @@ import {
   summariseCommandForTitle,
 } from './permissionPromptModel.js'
 import type { PermissionRequest } from './permissionState.js'
+import {
+  AgentFaceRegistryContext,
+  createAgentFaceRegistry,
+  faceHash,
+  FACE_FILL_COUNT,
+} from './agentFace.js'
+import { AGENT_FACE_IDENTITY_FILL } from './agentChromeModel.js'
 
 const REQUEST: PermissionRequest = {
   requestId: 'perm-1',
@@ -256,6 +263,55 @@ test('a relayed request reads as running another agent command', () => {
   expect(html).not.toContain('@Vale')
   // The relaying worker's own stamp rides beside the name.
   expect(html).toContain('shape-rendering="crispEdges"')
+})
+
+test('the relayed card draws from the session registry, not the raw hash', () => {
+  // The test above proves a stamp is THERE, which it would be even if this card
+  // minted its own face and disagreed with the roster and the transcript about
+  // who this worker is. Colour is the discriminator: squat the worker's hashed
+  // fill so a shared registry has to move it off, and a card that never reads
+  // one cannot know to.
+  const registry = createAgentFaceRegistry()
+  const hashedFill = faceHash('worker-42', 8) % FACE_FILL_COUNT
+  for (let index = 0; index < FACE_FILL_COUNT; index += 1) {
+    if (registry.faceFor(`squatter-${index}`).fill === hashedFill) break
+  }
+  const shared = registry.faceFor('worker-42', 'Vale')
+  expect(shared.fill).not.toBe(hashedFill)
+
+  const html = renderToStaticMarkup(
+    <AgentFaceRegistryContext.Provider value={registry}>
+      <PermissionPrompt
+        onAllow={() => {}}
+        onDeny={() => {}}
+        request={{
+          ...REQUEST,
+          request: { ...REQUEST.request, agent_id: 'worker-42' },
+        }}
+        workers={[worker()]}
+      />
+    </AgentFaceRegistryContext.Provider>,
+  )
+
+  expect(html).toContain(AGENT_FACE_IDENTITY_FILL[shared.fill])
+  expect(html).not.toContain(AGENT_FACE_IDENTITY_FILL[hashedFill])
+
+  // And the discriminator really discriminates: with no session above it, the
+  // card falls back to the unscoped hash and draws the squatted colour. Without
+  // this line the asserts above could hold for a card that reads no registry.
+  expect(
+    renderToStaticMarkup(
+      <PermissionPrompt
+        onAllow={() => {}}
+        onDeny={() => {}}
+        request={{
+          ...REQUEST,
+          request: { ...REQUEST.request, agent_id: 'worker-42' },
+        }}
+        workers={[worker()]}
+      />,
+    ),
+  ).toContain(AGENT_FACE_IDENTITY_FILL[hashedFill])
 })
 
 test('a relayed request with an unnamed worker names the engine role only', () => {
