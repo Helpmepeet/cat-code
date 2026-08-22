@@ -891,3 +891,31 @@ test('the collapsed rail keeps the account glyph above the destination icons', (
     expect(html).toContain(`data-sidebar-nav-id="${id}"`)
   }
 })
+
+test('an account needing sign-in is marked on the Accounts destination, in both nav variants', () => {
+  const rail = renderSidebar({ accountsNeedingSignIn: 1 })
+  expect(rail).toContain('title="Accounts, 1 account needs sign-in"')
+  expect(rail).toContain('data-sidebar-nav-badge="accounts"')
+
+  const expanded = renderSidebar({
+    accountsNeedingSignIn: 2,
+    menuActive: true,
+  })
+  expect(expanded).toContain('aria-label="Accounts, 2 accounts need sign-in"')
+  expect(expanded).toContain('data-sidebar-nav-badge="accounts"')
+})
+
+test('the mark is the WHOLE treatment: no destination other than Accounts carries it, and a healthy pool carries none', () => {
+  // A dead account among healthy ones must not raise a bar over the transcript
+  // (STARTUP-GATES, the P4-24 revision and #12). This passive count is what
+  // replaces that, so it must not grow into a second alert surface.
+  const marked = renderSidebar({ accountsNeedingSignIn: 3, menuActive: true })
+  expect(marked.match(/data-sidebar-nav-badge/g)).toHaveLength(1)
+
+  const healthy = renderSidebar({ accountsNeedingSignIn: 0, menuActive: true })
+  expect(healthy).not.toContain('data-sidebar-nav-badge')
+  expect(healthy).not.toContain('aria-label="Accounts,')
+  // Unmarked, the expanded row keeps its visible label as its accessible name
+  // rather than carrying an aria-label that would have to be kept in sync.
+  expect(healthy).toContain('>Accounts</span>')
+})

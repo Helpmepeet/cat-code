@@ -113,11 +113,53 @@ export function statusLabelTone(account: AccountStatus): Tone {
   return 'default'
 }
 
-export type AccountMenuKey = 'switch' | 'rename' | 'logout' | 'delete'
+/**
+ * How many pool accounts need a fresh sign-in.
+ *
+ * Deliberately NOT a banner trigger. A dead account among healthy ones stays
+ * silent above the transcript by operator ruling (`decisions/STARTUP-GATES.md`,
+ * the P4-24 revision and #12): the pool fails over, so interrupting is the wrong
+ * behavior. This drives a passive count on the Accounts destination instead, so
+ * the state is discoverable without being raised.
+ */
+export function selectAccountsNeedingSignIn(
+  snapshot: AccountsSnapshot | null,
+): number {
+  if (!snapshot) return 0
+  return snapshot.accounts.filter(account => account.status === 'dead').length
+}
+
+/** The count as a label, or null when nothing needs attention. */
+export function formatAccountsNeedingSignIn(count: number): string | null {
+  if (count <= 0) return null
+  return count === 1
+    ? '1 account needs sign-in'
+    : `${count} accounts need sign-in`
+}
+
+export type AccountMenuKey =
+  | 'switch'
+  | 'relink'
+  | 'rename'
+  | 'logout'
+  | 'delete'
 export type AccountMenuItem = {
   key: AccountMenuKey
   label: string
   danger?: boolean
+}
+
+/**
+ * `dead` ONLY, never the other unusable states. `dead` means `auth_dead`: the
+ * refresh verdict correlates to the token in the file, so a fresh sign-in is
+ * what repairs it (`codexAccountPool.ts:1219`). A `capped` account is a live
+ * credential waiting on a usage window, and `quarantined` is an unverified
+ * verdict the engine's own probe is still re-deriving
+ * (`codexAccountPool.ts:1190`); offering sign-in on either would send the user
+ * through a browser round trip that changes nothing.
+ */
+function isRelinkable(account: AccountStatus): boolean {
+  return account.status === 'dead'
 }
 
 export function selectAccountMenuItems(
@@ -126,6 +168,9 @@ export function selectAccountMenuItems(
   const items: AccountMenuItem[] = []
   if (account.switchable) {
     items.push({ key: 'switch', label: 'Switch to this account' })
+  }
+  if (isRelinkable(account)) {
+    items.push({ key: 'relink', label: 'Sign in again' })
   }
   if (account.hasVaultProfile) items.push({ key: 'rename', label: 'Rename' })
   if (account.isDefault) items.push({ key: 'logout', label: 'Sign out' })

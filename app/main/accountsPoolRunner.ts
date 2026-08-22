@@ -273,6 +273,21 @@ function waitForClose(
 export type AccountsPoolDriver = {
   /** Run once now (respecting single-flight), then keep refreshing on the timer. */
   start(): void
+  /**
+   * Run out of band because a KNOWN pool mutation just landed, and re-anchor the
+   * cadence to it. Only for events that change the pool itself (a completed
+   * sign-in); the timer covers everything else, and calling this on renderer
+   * activity would turn a 60 s cadence into a per-interaction engine boot.
+   *
+   * WHY THIS EXISTS. The Accounts page and the account-health bar both read the
+   * host-plane pool (`selectGlobalAccountsSnapshot`, `accountsState.ts:261`),
+   * which prefers this worker's snapshot over any session's. A sidecar that
+   * re-broadcasts `accounts.snapshot` on OAuth success therefore cannot move
+   * either surface, so without this a finished sign-in left the dead row dead
+   * and the danger bar up for up to a full interval, which reads as the sign-in
+   * having failed.
+   */
+  refreshNow(): void
   /** Stop the timer and prevent any further scheduled runs. */
   stop(): void
 }
@@ -303,6 +318,20 @@ export function createAccountsPoolDriver(deps: {
   let inFlight = false
   let stopped = false
   let timer: ReturnType<typeof setTimeout> | null = null
+  /**
+   * An out-of-band refresh that arrived mid-run. The in-flight run started
+   * BEFORE the mutation it is meant to observe, so finishing it proves nothing
+   * and dropping the request the way an ordinary tick is dropped would put the
+   * caller back on the full interval. One re-run is enough however many arrive.
+   */
+  let rerunRequested = false
+
+  const clearPendingTimer = () => {
+    if (timer !== null) {
+      clearTimer(timer)
+      timer = null
+    }
+  }
 
   const schedule = (startedAt: number) => {
     if (stopped) return
@@ -330,7 +359,12 @@ export function createAccountsPoolDriver(deps: {
       )
     } finally {
       inFlight = false
-      schedule(startedAt)
+      if (rerunRequested && !stopped) {
+        rerunRequested = false
+        void tick()
+      } else {
+        schedule(startedAt)
+      }
     }
   }
 
@@ -341,12 +375,22 @@ export function createAccountsPoolDriver(deps: {
       // then self-reschedule from its completion.
       void tick()
     },
-    stop() {
-      stopped = true
-      if (timer !== null) {
-        clearTimer(timer)
-        timer = null
+    refreshNow() {
+      if (stopped) return
+      if (inFlight) {
+        rerunRequested = true
+        return
       }
+      // Drop the pending timer FIRST. `schedule()` overwrites the handle without
+      // clearing it, so ticking on top of a live timer would leave the old one
+      // armed and fork a second self-rescheduling chain off every call.
+      clearPendingTimer()
+      void tick()
+    },
+    stop() {
+      rerunRequested = false
+      stopped = true
+      clearPendingTimer()
     },
   }
 }

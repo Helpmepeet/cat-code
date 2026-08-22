@@ -240,18 +240,38 @@ function ALDialog({
 
 /* ── lifecycle dialogs ── */
 
+/**
+ * Sign-in, in both of its meanings: adding an account and restoring one whose
+ * credentials died. It is deliberately ONE dialog on ONE verb, because the
+ * engine flow is one flow. `account.login` carries no account id: which account
+ * a sign-in lands on is decided by whoever the user picks in the browser, and
+ * the sidecar re-links by comparing the returned identity against the pool
+ * (`accountsDomain.ts:263`).
+ *
+ * That is exactly why the repair copy exists. The identity is chosen out in the
+ * browser where nothing can guard it, so naming the expected account is the only
+ * thing standing between a repair and a silently-added second account.
+ */
 function AddAccountDialog({
+  account,
   onAuthorize,
   onClose,
 }: {
+  /** The account being restored, or undefined when adding a new one. */
+  account?: AccountStatus
   onAuthorize: () => void
   onClose: () => void
 }) {
   const [submitting, setSubmitting] = useState(false)
+  const name = account ? account.alias ?? account.id : null
   return (
     <ALDialog
-      title="Add Codex account"
-      sub="Signs in with your ChatGPT Plus/Pro subscription via OAuth."
+      title={account ? 'Sign in again' : 'Add Codex account'}
+      sub={
+        account
+          ? `Restores ${name} with a fresh sign-in. Its name and history stay as they are.`
+          : 'Signs in with your ChatGPT Plus/Pro subscription via OAuth.'
+      }
       onClose={onClose}
       footer={
         submitting ? (
@@ -280,8 +300,20 @@ function AddAccountDialog({
         <p className="text-[12.5px] leading-relaxed text-text-muted">
           We&apos;ll open your browser to authorize, then capture the callback
           locally on{' '}
-          <code className="font-mono text-text-primary">127.0.0.1:1455</code>. No
-          API key needed: this is an OpenAI account (ChatGPT subscription) login.
+          <code className="font-mono text-text-primary">127.0.0.1:1455</code>.{' '}
+          {account ? (
+            <>
+              Pick the same ChatGPT account you used for{' '}
+              <span className="font-semibold text-text-primary">{name}</span>:
+              signing in with a different one adds a second account instead of
+              restoring this one.
+            </>
+          ) : (
+            <>
+              No API key needed: this is an OpenAI account (ChatGPT subscription)
+              login.
+            </>
+          )}
         </p>
       )}
     </ALDialog>
@@ -691,6 +723,7 @@ function WaitingState() {
 
 type DialogState =
   | { kind: 'add' }
+  | { kind: 'relink'; account: AccountStatus }
   | { kind: 'touchall' }
   | { kind: 'rename'; account: AccountStatus }
   | { kind: 'delete'; account: AccountStatus }
@@ -976,6 +1009,13 @@ export function AccountsPage({
 
       {dialog?.kind === 'add' ? (
         <AddAccountDialog
+          onAuthorize={() => submit(loginVerb('openai'), 'info')}
+          onClose={() => setDialog(null)}
+        />
+      ) : null}
+      {dialog?.kind === 'relink' ? (
+        <AddAccountDialog
+          account={dialog.account}
           onAuthorize={() => submit(loginVerb('openai'), 'info')}
           onClose={() => setDialog(null)}
         />

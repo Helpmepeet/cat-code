@@ -1,0 +1,137 @@
+import { describe, expect, test } from 'bun:test'
+import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
+import {
+  formatAccountsNeedingSignIn,
+  selectAccountMenuItems,
+  selectAccountsNeedingSignIn,
+} from './accountsPageModel.js'
+
+function account(overrides: Partial<AccountStatus> = {}): AccountStatus {
+  return {
+    id: 'acct-1',
+    alias: 'one',
+    status: 'healthy',
+    statusReason: null,
+    availability: 'available',
+    availabilityLabel: 'Ready',
+    isDefault: false,
+    hasVaultProfile: true,
+    source: 'vault',
+    usagePrimary: null,
+    usageWeekly: null,
+    usageLimitReached: false,
+    usageResetAt: null,
+    lastRefreshIso: null,
+    lastError: null,
+    planType: null,
+    switchable: true,
+    ...overrides,
+  }
+}
+
+function snapshot(accounts: AccountStatus[]): AccountsSnapshot {
+  return {
+    accounts,
+    activeAccountId: accounts[0]?.id ?? null,
+    readyCount: accounts.filter(a => a.status === 'healthy').length,
+    poolCount: accounts.length,
+    initialized: true,
+    anthropicAccounts: [],
+    anthropicActiveAccountId: null,
+    anthropicReadyCount: 0,
+    anthropicPoolCount: 0,
+    anthropicInitialized: true,
+    anthropicRouteAvailable: false,
+  }
+}
+
+const dead = (id: string) =>
+  account({
+    id,
+    status: 'dead',
+    statusReason: 'auth_dead',
+    availability: 'blocked',
+    availabilityLabel: 'Signed out',
+    lastError: 'Reauthentication required',
+    switchable: false,
+  })
+
+const menuKeys = (a: AccountStatus) => selectAccountMenuItems(a).map(i => i.key)
+
+describe('selectAccountMenuItems — sign in again', () => {
+  test('a dead account offers it', () => {
+    expect(menuKeys(dead('a'))).toContain('relink')
+  })
+
+  test('a healthy account does not', () => {
+    expect(menuKeys(account())).not.toContain('relink')
+  })
+
+  test('a capped account does not: the credential is live, the window is not', () => {
+    const capped = account({
+      status: 'capped',
+      statusReason: 'usage_cap',
+      availability: 'blocked',
+      usageLimitReached: true,
+      switchable: false,
+    })
+    expect(menuKeys(capped)).not.toContain('relink')
+  })
+
+  test('a quarantined account does not: the engine is still re-deriving the verdict', () => {
+    const quarantined = account({
+      status: 'quarantined',
+      statusReason: 'probe_pending_transport',
+      availability: 'blocked',
+      switchable: false,
+    })
+    expect(menuKeys(quarantined)).not.toContain('relink')
+  })
+
+  test('it does not depend on a vault profile, unlike rename and delete', () => {
+    // A fresh sign-in writes the profile; it does not edit an existing one.
+    const keys = menuKeys(
+      account({
+        status: 'dead',
+        statusReason: 'auth_dead',
+        hasVaultProfile: false,
+        switchable: false,
+      }),
+    )
+    expect(keys).toContain('relink')
+    expect(keys).not.toContain('rename')
+    expect(keys).not.toContain('delete')
+  })
+})
+
+describe('selectAccountsNeedingSignIn', () => {
+  test('counts only dead accounts', () => {
+    const count = selectAccountsNeedingSignIn(
+      snapshot([
+        account({ id: 'a' }),
+        dead('b'),
+        account({ id: 'c', status: 'capped', usageLimitReached: true }),
+        account({ id: 'd', status: 'quarantined' }),
+        dead('e'),
+      ]),
+    )
+    expect(count).toBe(2)
+  })
+
+  test('a healthy pool and a missing snapshot are both zero', () => {
+    expect(selectAccountsNeedingSignIn(snapshot([account()]))).toBe(0)
+    expect(selectAccountsNeedingSignIn(null)).toBe(0)
+  })
+})
+
+describe('formatAccountsNeedingSignIn', () => {
+  test('null at zero, so the mark renders nothing', () => {
+    expect(formatAccountsNeedingSignIn(0)).toBeNull()
+    expect(formatAccountsNeedingSignIn(-1)).toBeNull()
+  })
+
+  test('singular and plural', () => {
+    expect(formatAccountsNeedingSignIn(1)).toBe('1 account needs sign-in')
+    expect(formatAccountsNeedingSignIn(3)).toBe('3 accounts need sign-in')
+  })
+})

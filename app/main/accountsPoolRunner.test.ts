@@ -484,6 +484,116 @@ describe('createAccountsPoolDriver — single-flight + keeps-last-good', () => {
   })
 })
 
+describe('createAccountsPoolDriver — refreshNow', () => {
+  test('runs immediately instead of waiting out the interval', async () => {
+    let runCount = 0
+    const driver = createAccountsPoolDriver({
+      run: async () => {
+        runCount++
+      },
+      intervalMs: 60_000,
+      setTimer: () => ({ unref() {} }) as unknown as ReturnType<typeof setTimeout>,
+      clearTimer: () => {},
+    })
+
+    driver.start()
+    await flush()
+    expect(runCount).toBe(1)
+
+    driver.refreshNow()
+    await flush()
+    expect(runCount).toBe(2)
+    driver.stop()
+  })
+
+  test('clears the pending timer, so it cannot fork a second self-scheduling chain', async () => {
+    // The regression this pins: `schedule()` overwrites `timer` without clearing
+    // it. Ticking on top of a live timer leaves the old one armed, and every
+    // refresh would then add one more chain that reschedules forever.
+    let cleared = 0
+    let scheduled = 0
+    const driver = createAccountsPoolDriver({
+      run: async () => {},
+      intervalMs: 60_000,
+      setTimer: () => {
+        scheduled++
+        return { unref() {} } as unknown as ReturnType<typeof setTimeout>
+      },
+      clearTimer: () => {
+        cleared++
+      },
+    })
+
+    driver.start()
+    await flush()
+    expect(scheduled).toBe(1)
+
+    driver.refreshNow()
+    await flush()
+    // One armed timer at a time: the second schedule is preceded by a clear.
+    expect(cleared).toBe(1)
+    expect(scheduled).toBe(2)
+    driver.stop()
+  })
+
+  test('a refresh during a run re-runs after it, rather than being dropped', async () => {
+    // The in-flight run STARTED before the sign-in it is meant to observe, so
+    // finishing it proves nothing. Dropping the request the way an ordinary tick
+    // is dropped would leave the caller on the full interval.
+    let runCount = 0
+    let release: (() => void) | null = null
+    const driver = createAccountsPoolDriver({
+      run: () =>
+        new Promise<void>(resolve => {
+          runCount++
+          release = resolve
+        }),
+      intervalMs: 60_000,
+      setTimer: () => ({ unref() {} }) as unknown as ReturnType<typeof setTimeout>,
+      clearTimer: () => {},
+    })
+
+    driver.start()
+    await flush()
+    expect(runCount).toBe(1)
+
+    driver.refreshNow()
+    driver.refreshNow()
+    await flush()
+    // Still single-flight: nothing starts while the first run is open.
+    expect(runCount).toBe(1)
+
+    release!()
+    await flush()
+    // One re-run however many requests arrived, not one per request.
+    expect(runCount).toBe(2)
+
+    release!()
+    await flush()
+    expect(runCount).toBe(2)
+    driver.stop()
+  })
+
+  test('is inert after stop()', async () => {
+    let runCount = 0
+    const driver = createAccountsPoolDriver({
+      run: async () => {
+        runCount++
+      },
+      intervalMs: 60_000,
+      setTimer: () => ({ unref() {} }) as unknown as ReturnType<typeof setTimeout>,
+      clearTimer: () => {},
+    })
+
+    driver.start()
+    await flush()
+    driver.stop()
+    driver.refreshNow()
+    await flush()
+    expect(runCount).toBe(1)
+  })
+})
+
 describe('usage-stats cadence', () => {
   test('the FIRST run always carries them (cold launch must not wait)', () => {
     // The Accounts page exists to be readable with no session open. If run 0

@@ -353,6 +353,7 @@ import {
   oauthCancelVerb,
   oauthPasteCodeVerb,
   resultToastTone,
+  selectAccountsNeedingSignIn,
   switchVerb,
 } from './accountsPageModel.js'
 import {
@@ -3644,6 +3645,13 @@ export function App() {
             selectActiveAccount(selectGlobalAccountsSnapshot(accounts))?.alias ??
             null
           }
+          /* The passive half of the account-health treatment. The pinned bar
+           * above the transcript stays reserved for a pool with nothing left to
+           * fail over to (STARTUP-GATES #12); one dead account among healthy ones
+           * is marked here instead, where acting on it is one click away. */
+          accountsNeedingSignIn={selectAccountsNeedingSignIn(
+            selectGlobalAccountsSnapshot(accounts),
+          )}
           /* The row subtitle's "· model" reads the LIVE run-controls seam, which is
            * re-broadcast on every model change (P4-24c). The diagnostics snapshot is
            * spawn-frozen, so on its own it kept printing the model a session started

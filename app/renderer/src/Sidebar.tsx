@@ -107,6 +107,7 @@ import {
   type ReactNode,
 } from 'react'
 import type { SessionId } from '../../shared/protocol.js'
+import { formatAccountsNeedingSignIn } from './accountsPageModel.js'
 import { usePopoverFocus } from './overlayFocus.js'
 import {
   SESSION_ACTIONS_MENU_WIDTH,
@@ -286,6 +287,7 @@ export function Sidebar({
   onNewChat,
   onAddProject,
   accountAlias = null,
+  accountsNeedingSignIn = 0,
   modelForSession,
   menuActive = false,
   storage,
@@ -334,6 +336,16 @@ export function Sidebar({
    * resolved yet — in which case the footer shows only the nav toggle rather
    * than an empty avatar. */
   accountAlias?: string | null
+  /**
+   * How many pool accounts need a fresh sign-in, marked passively on the
+   * Accounts destination. Zero renders nothing.
+   *
+   * This is the whole treatment on purpose. A dead account among healthy ones
+   * must not raise a bar over the transcript (`decisions/STARTUP-GATES.md`, the
+   * P4-24 revision and #12), so the count waits where the user goes to act on
+   * it rather than interrupting.
+   */
+  accountsNeedingSignIn?: number
   /** The DISPLAY NAME of the model a session is running (the subtitle's
    * "· model"), rendered verbatim: the engine's own marketing name for it, or the
    * raw model id when it has none. null when unknown, e.g. a restorable row that
@@ -1081,6 +1093,9 @@ export function Sidebar({
                       item={item}
                       key={item.id}
                       navOpen={navOpen}
+                      needsSignIn={
+                        item.id === 'accounts' ? accountsNeedingSignIn : 0
+                      }
                       unfoldDelay={NAV_UNFOLD_DELAY[index] ?? ''}
                       onSelectView={onSelectView}
                     />
@@ -1110,6 +1125,7 @@ export function Sidebar({
                 activeView={activeView}
                 item={item}
                 key={item.id}
+                needsSignIn={item.id === 'accounts' ? accountsNeedingSignIn : 0}
                 onSelectView={onSelectView}
               />
             ))}
@@ -1921,6 +1937,7 @@ function NavItemExpanded({
   activeView,
   buttonRef,
   navOpen,
+  needsSignIn = 0,
   unfoldDelay,
   onSelectView,
 }: {
@@ -1930,10 +1947,13 @@ function NavItemExpanded({
   /** The footer is unfolded — items rise into place; folded, they drop back
    * with no stagger (the delays are an entrance effect only). */
   navOpen: boolean
+  /** Accounts needing a fresh sign-in; 0 renders no mark. */
+  needsSignIn?: number
   unfoldDelay: string
   onSelectView: (view: SidebarView) => void
 }) {
   const active = item.enabled && item.id === activeView
+  const signInLabel = formatAccountsNeedingSignIn(needsSignIn)
   const motion = navOpen
     ? `translate-y-0 scale-100 opacity-100 ${unfoldDelay}`
     : 'translate-y-1.5 scale-95 opacity-0'
@@ -1963,6 +1983,7 @@ function NavItemExpanded({
       ref={buttonRef}
       type="button"
       aria-current={active ? 'page' : undefined}
+      aria-label={signInLabel ? `${item.label}, ${signInLabel}` : undefined}
       data-sidebar-nav-id={item.id}
       onClick={() => {
         const view = resolveNavSelection(item)
@@ -1982,6 +2003,16 @@ function NavItemExpanded({
       <span className={'text-[13px] ' + (active ? 'font-medium' : '')}>
         {item.label}
       </span>
+      {signInLabel ? (
+        <span
+          aria-hidden="true"
+          title={signInLabel}
+          data-sidebar-nav-badge={item.id}
+          className="ml-auto mr-1 flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-tone-warn/[0.16] px-1 text-[9.5px] font-semibold tabular-nums text-tone-warn"
+        >
+          {needsSignIn}
+        </span>
+      ) : null}
     </button>
   )
 }
@@ -1989,13 +2020,17 @@ function NavItemExpanded({
 function NavItemRail({
   item,
   activeView,
+  needsSignIn = 0,
   onSelectView,
 }: {
   item: NavItem
   activeView: SidebarView
+  /** Accounts needing a fresh sign-in; 0 renders no mark. */
+  needsSignIn?: number
   onSelectView: (view: SidebarView) => void
 }) {
   const active = item.enabled && item.id === activeView
+  const signInLabel = formatAccountsNeedingSignIn(needsSignIn)
   if (!item.enabled) {
     return (
       <button
@@ -2015,21 +2050,30 @@ function NavItemRail({
     <button
       type="button"
       aria-current={active ? 'page' : undefined}
-      aria-label={item.label}
+      aria-label={signInLabel ? `${item.label}, ${signInLabel}` : item.label}
       data-sidebar-nav-id={item.id}
-      title={item.label}
+      title={signInLabel ? `${item.label}, ${signInLabel}` : item.label}
       onClick={() => {
         const view = resolveNavSelection(item)
         if (view) onSelectView(view)
       }}
       className={
-        'flex h-8 w-8 items-center justify-center rounded-md ' +
+        'relative flex h-8 w-8 items-center justify-center rounded-md ' +
         (active
           ? 'bg-accent/[0.12] text-accent-soft'
           : 'text-text-subtle hover:text-[#d4d4d8]')
       }
     >
       {item.icon}
+      {/* A dot, not the count: the rail is 8 units wide and the number would not
+       * read at that size. The count stays in the label and the tooltip. */}
+      {signInLabel ? (
+        <span
+          aria-hidden="true"
+          data-sidebar-nav-badge={item.id}
+          className="absolute right-[5px] top-[5px] h-[6px] w-[6px] rounded-full bg-tone-warn"
+        />
+      ) : null}
     </button>
   )
 }
