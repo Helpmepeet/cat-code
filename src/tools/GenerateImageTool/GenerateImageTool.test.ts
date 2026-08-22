@@ -652,6 +652,74 @@ describe('GenerateImageTool', () => {
     expect(await readFile(outputPath)).toEqual(generatedBytes)
   })
 
+  test('leases an account for a subagent that arrives without one, so a 429 does not rotate the pool', async () => {
+    delete process.env.CAT_CODE_IMAGE_BACKEND
+    delete process.env.OPENAI_API_KEY
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount('main-account'),
+        buildPoolAccount('second-account'),
+        buildPoolAccount('third-account'),
+      ],
+    })
+    seedCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'Main thread',
+      accountId: 'main-account',
+    })
+
+    const outputPath = join(tempDir!, 'generated.png')
+    const generatedBytes = Buffer.from('generated image')
+    const requestAccounts: string[] = []
+    globalThis.fetch = (async (_input, init) => {
+      requestAccounts.push(
+        new Headers(init?.headers).get('chatgpt-account-id') ?? '',
+      )
+      if (requestAccounts.length === 1) {
+        return new Response('rate limited', { status: 429 })
+      }
+      return new Response(
+        [
+          'event: response.output_item.done',
+          `data: ${JSON.stringify({
+            type: 'response.output_item.done',
+            item: {
+              type: 'image_generation_call',
+              result: generatedBytes.toString('base64'),
+            },
+          })}`,
+          '',
+        ].join('\n'),
+        { status: 200 },
+      )
+    }) as typeof fetch
+
+    await GenerateImageTool.call(
+      {
+        prompt: 'generate from an Anthropic-model worker',
+        output_path: outputPath,
+      },
+      {
+        abortController: new AbortController(),
+        agentId: 'unleased-agent',
+        options: { mainLoopModel: 'gpt-5.6-terra' },
+      } as ToolUseContext,
+    )
+
+    const lease = getCodexLeaseForOwner('unleased-agent')
+    expect(lease?.ownerType).toBe('subagent')
+    expect(requestAccounts).toHaveLength(2)
+    // The retry followed the worker's own lease, not the pool's active account.
+    expect(lease?.accountId).toBe(requestAccounts[1]!)
+    expect(requestAccounts[1]).not.toBe(requestAccounts[0])
+    const pool = getPoolStatus()
+    expect(pool.accounts[pool.activeIndex]?.accountId).toBe('main-account')
+    expect(getCodexLeaseForOwner('main-thread')?.accountId).toBe('main-account')
+    expect(await readFile(outputPath)).toEqual(generatedBytes)
+  })
+
   test('fails over the main lease after a Codex image endpoint 401 without a refresh token', async () => {
     delete process.env.CAT_CODE_IMAGE_BACKEND
     delete process.env.OPENAI_API_KEY

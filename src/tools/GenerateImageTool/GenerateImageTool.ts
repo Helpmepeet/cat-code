@@ -12,6 +12,8 @@ import {
   CodexAccountAuthError,
   CodexAccountCapError,
 } from '../../services/api/codex-fetch-adapter.js'
+import { registerCodexLease } from '../../services/api/codexAccountLeaseManager.js'
+import { poolManagesCredentials } from '../../services/api/codexAccountPool.js'
 import { withRetry } from '../../services/api/withRetry.js'
 import { buildTool, type ToolDef, type ToolUseContext } from '../../Tool.js'
 import { PNG } from 'pngjs'
@@ -22,6 +24,7 @@ import { expandPath } from '../../utils/path.js'
 import { checkWritePermissionForTool } from '../../utils/permissions/filesystem.js'
 import type { PermissionDecision } from '../../utils/permissions/PermissionResult.js'
 import { lazySchema } from '../../utils/lazySchema.js'
+import { logForDebugging } from '../../utils/debug.js'
 import { errorMessage, isENOENT } from '../../utils/errors.js'
 import { getDisplayPath } from '../../utils/file.js'
 import { formatFileSize } from '../../utils/format.js'
@@ -481,6 +484,49 @@ function GeneratedImageResult({ output }: { output: Output }): React.ReactNode {
   )
 }
 
+/**
+ * Take a Codex account lease for a subagent about to spend one on an image
+ * request, mirroring the chat request path's lazy registration
+ * (`claude.ts:1167-1180`).
+ *
+ * Subagents only, and that is the load-bearing half. `AgentTool` no longer
+ * registers a lease for every worker, only for one whose own model routes to
+ * Codex (`AgentTool.tsx:298`), so a worker chatting on an Anthropic model
+ * reaches this tool unleased. Unleased, `resolveCodexOAuthTokensForLeaseOwner`
+ * falls through to the pool's active account (`client.ts:383`), and a 429 takes
+ * withRetry's no-lease arm, which rotates the pool's GLOBAL active account on
+ * behalf of one worker (`withRetry.ts:678`). The main thread must NOT be given
+ * a lease here: `query.ts:370` mints it only for an openai session, and a real
+ * main lease is authoritative for account routing (`resolveMainAccountId`).
+ *
+ * Selection failure is caught, not propagated. `selectAccountForLease` throws
+ * `NO_HEALTHY_ACCOUNTS_ERROR` on an empty or fully capped pool
+ * (`codexAccountLeaseManager.ts:539`), and an image request degrades to the
+ * unleased path rather than failing the tool.
+ *
+ * Idempotent across retries: `registerCodexLease` returns the existing lease
+ * when one is present (`codexAccountLeaseManager.ts:163`), so re-entry after a
+ * failover keeps the account the failover chose. Release stays with the worker's
+ * own terminal, which keys on the same `agentId` (`AgentTool.tsx:241`,
+ * `LocalAgentTask.tsx:367`, `forkedAgent.ts:613`).
+ */
+function registerImageRequestCodexLease(agentId: string | undefined): void {
+  if (!agentId) return
+  if (!poolManagesCredentials()) return
+  try {
+    registerCodexLease({
+      ownerId: agentId,
+      ownerType: 'subagent',
+      ownerLabel: `Subagent ${agentId}`,
+    })
+  } catch (error) {
+    logForDebugging(
+      `Codex lease not assigned to image request ${agentId}: ${errorMessage(error)}`,
+      { level: 'warn' },
+    )
+  }
+}
+
 async function getImageAuth(context: ToolUseContext): Promise<ImageAuth> {
   if (process.env.CAT_CODE_IMAGE_BACKEND === 'openai-api') {
     const apiKey = process.env.OPENAI_API_KEY
@@ -488,6 +534,8 @@ async function getImageAuth(context: ToolUseContext): Promise<ImageAuth> {
       return { token: apiKey, backend: 'openai-api' }
     }
   }
+
+  registerImageRequestCodexLease(context.agentId)
 
   // Image requests must resolve Codex auth at request time so subagents use
   // their leased account instead of whatever pool.activeIndex currently points at.
