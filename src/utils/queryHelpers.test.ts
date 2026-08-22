@@ -25,6 +25,20 @@ describe('normalizeMessage internal no-response handling', () => {
     )
   })
 
+  test('emits the API-error classification on the SDK assistant frame', () => {
+    const apiError = createAssistantAPIErrorMessage({
+      content: 'OAuth token revoked · Please run /login',
+      error: 'authentication_failed',
+    })
+
+    expect([...normalizeMessage(apiError)]).toMatchObject([
+      {
+        type: 'assistant',
+        error: 'authentication_failed',
+      },
+    ])
+  })
+
   test('carries the engine-minted subagent name on every nested full frame', () => {
     const agentProgress = (nested: Message): Message => ({
       type: 'progress',
