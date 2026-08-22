@@ -69,8 +69,10 @@ scrape gap, and it retires the premise that the skill *always* finds a problem.
 201 rows (53%) cite a concrete `file.ts:line`.
 
 **These labels are self-assigned by the same model family that produced the findings, so on
-their own they prove nothing.** Sections 2 through 5 are four independent attempts to break
-them.
+their own they prove nothing.** Sections 2, 4, 5 and 5b are **three** independent attempts to
+break them: source re-verification, corroboration from an unrelated review path, and escape plus
+normalization analysis. Section 3 was originally counted as a fourth and **has been retracted as
+corroboration** — see the notice there.
 
 ---
 
@@ -127,23 +129,74 @@ Stated plainly, because it matters more than the headline:
 
 ---
 
-## 3. Lane two — what the operator actually did with the findings
+## 3. Lane two — operator disposition of deferred work (NOT evidence of finding quality)
 
-Across roughly 20 sessions of follow-up after a review, **there is not one instance of the
-findings being rejected as bogus.** The recurring reaction is the opposite: repeatedly pulling
-DEFERRED items forward into fix-now.
+> **Retracted as corroboration, 2026-08-22, at the operator's correction.** An earlier revision
+> of this section treated "the operator never rejected a finding, and repeatedly pulled DEFERRED
+> items into fix-now" as evidence that the findings were valid and worth acting on. **That
+> inference is unsound and the lane no longer supports the report's conclusion.**
 
-> "I think we fix it now. Dont defer"
-> "you can just fix both open now. no one gonna do it if not you"
-> "if what deferred worth the fix then it fine. Just gix it"
-> "nah, i think we do it now"
+The inference the report made was:
 
-The one moment the present concern was voiced before is session `3aacc503` on 2026-08-14:
-*"what? why so many problem foudn"*. The answer given then already contained the diagnosis:
+```
+operator approved fixing it  →  operator judged the finding valid
+```
+
+The actual mechanism, per the operator:
+
+```
+review says finding is real but deferred
+      ↓  operator asks WHY it was deferred
+      ↓  reason is size / time / risk only
+      ↓  operator says "just fix it"
+```
+
+**The operator generally did not inspect the individual findings.** What they were ruling on was
+whether to accept the cost or risk that caused an item to be deferred — not whether the finding
+was technically correct. Re-reading every operator quote collected for this lane confirms it:
+each one decides cost, timing, or ownership, and none asserts that a finding is right.
+
+| Quote | What it actually decides |
+|---|---|
+| "how hard for these deferred?" · "give me 1-10 score" | cost |
+| "what is deffered now? does anything worth it?" | delegates the worth judgment back to the agent |
+| "if what deferred worth the fix then it fine. Just gix it" | conditional on the agent's own assessment |
+| "you can just fix both open now. no one gonna do it if not you" | ownership |
+| "I think we fix it now. Dont defer" · "nah, i think we do it now" | timing |
+
+The absence of rejection carries near-zero signal for the same reason: **you cannot reject what
+you did not read.**
+
+### Where the operator did judge independently, they rejected
+
+This is the part the original lane obscured. The operator's genuine independent observations
+were about *visible outcomes*, not finding lists, and in those cases they were **negative**:
+
+> "So i telling you that it not passed" — rejecting GUI acceptance on `Main thread 0s`
+> "This is current. The color is gone."
+> "Why i didnt see the change at all?"
+> "i didnt change anything but now the donut gauge when clicked look like this now"
+
+Two of those are the escapes in §5. So operator behavior, read correctly, is at best neutral for
+the review and at worst mildly adverse — it is the record of what the review *missed*, not of
+what it got right.
+
+### What survives
+
+Only one thing, and it is not corroboration: session `3aacc503`, 2026-08-14 —
+*"what? why so many problem foudn"* — is the present concern voiced before, and the answer given
+then already contained the diagnosis:
 
 > "The raw count is misleading — I relayed the agents' itemized list without triaging it."
 
-That triage was then not applied in later sessions. Section 6 is about that.
+That triage was then not applied in later sessions. §6 is about that. Note this quote is
+evidence of operator *doubt*, which the earlier revision filed under a heading claiming operator
+endorsement.
+
+**Consequence for the report:** the conclusion in §2, §4, §5 and §5b is unaffected — those lanes
+are source-verified, independently corroborated, or measured. But the report now rests on
+**three** independent attempts to break the self-assigned labels, not four. §1's claim to the
+contrary is corrected there.
 
 ---
 

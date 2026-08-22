@@ -267,18 +267,37 @@ session recorded *"Zero false positives across both reviewers."*
 
 ---
 
-### 5. What the operator did with the findings
+### 5. Operator disposition of deferred work (NOT evidence of finding quality)
 
-Across roughly 20 sessions of follow-up, **no finding was ever rejected as bogus.** The
-recurring reaction is the opposite — pulling DEFERRED items forward into fix-now:
+> **Retracted as corroboration, 2026-08-22, at the operator's correction.** This section
+> originally read operator follow-up as evidence that the findings were valid. **It is not**,
+> and the report no longer relies on it. Full reasoning in the main report §3.
 
-> "I think we fix it now. Dont defer"
-> "you can just fix both open now. no one gonna do it if not you"
-> "if what deferred worth the fix then it fine. Just gix it"
-> "nah, i think we do it now"
-> "you can go with other deffered"
+The operator generally **did not inspect the individual findings**. When they asked about a
+DEFERRED item they were asking *why* it was deferred, and when the answer was size, time, or
+risk they accepted that cost. That is a disposition decision, not a technical judgment. Every
+quote collected for this section decides cost, timing, or ownership:
 
-The present concern was voiced once before, in session `3aacc503` on 2026-08-14:
+| Quote | What it actually decides |
+|---|---|
+| "how hard for these deferred?" · "give me 1-10 score" | cost |
+| "what is deffered now? does anything worth it?" | delegates worth back to the agent |
+| "if what deferred worth the fix then it fine. Just gix it" | conditional on the agent's own assessment |
+| "you can just fix both open now. no one gonna do it if not you" | ownership |
+| "I think we fix it now. Dont defer" · "nah, i think we do it now" | timing |
+
+The absence of rejection carries near-zero signal for the same reason: you cannot reject what
+you did not read.
+
+**Where the operator did judge independently, they rejected.** Their genuine observations were
+about visible outcomes, and those were negative: *"So i telling you that it not passed"*,
+*"This is current. The color is gone."*, *"Why i didnt see the change at all?"*, *"i didnt
+change anything but now the donut gauge when clicked look like this now"*. Two are the escapes
+in Appendix C §2. Read correctly, operator behavior is at best neutral for the review and at
+worst mildly adverse.
+
+The one durable item here is **operator doubt**, not endorsement. Session `3aacc503`,
+2026-08-14:
 
 > "what? why so many problem foudn"
 
