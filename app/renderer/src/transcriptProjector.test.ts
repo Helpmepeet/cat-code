@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import type { SDKMessage } from '@cat-code/engine/session-events'
+import type { ServerFrame } from '../../shared/protocol.js'
 import {
   createTranscriptState,
   groupAgentDelegates,
@@ -4623,4 +4624,103 @@ test('a refused result never clears the boundary row', () => {
   expect(
     selectNestedTranscriptRows(state, 'session-1').map(row => row.kind),
   ).toContain('history-boundary')
+})
+
+function projectSequential(
+  frames: readonly ServerFrame[],
+): ReturnType<typeof createTranscriptState> {
+  return frames.reduce(projectServerFrame, createTranscriptState())
+}
+
+function projectSequentialDeliveries(
+  deliveries: readonly (readonly ServerFrame[])[],
+): ReturnType<typeof createTranscriptState> {
+  return deliveries.reduce(
+    (state, delivery) => delivery.reduce(projectServerFrame, state),
+    createTranscriptState(),
+  )
+}
+
+/**
+ * Baseline oracle for the batched projector. It deliberately uses only the
+ * established single-frame reducer: the optimization is added after this
+ * corpus is committed, so its expected state cannot inherit transaction
+ * assumptions. Whole-state equality covers every TranscriptSessionState
+ * collection, rather than only the visible row projection.
+ */
+test('sequential transcript projection is invariant across replay delivery partitions', () => {
+  const sessionId = 'session-1'
+  const secondSessionId = 'session-2'
+  const fixtureFrames = allSdkMessageSamples().map(sample =>
+    messageFrame(sessionId, sample.message),
+  )
+  const frames: ServerFrame[] = [
+    ready(sessionId),
+    ...fixtureFrames,
+    messageFrame(sessionId, {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: 'hidden transcript bookkeeping',
+      },
+      parent_tool_use_id: null,
+      isSynthetic: true,
+      uuid: '00000000-0000-4000-8000-00000000d001',
+    }),
+    {
+      kind: 'generated-image-preview',
+      protocolVersion: 1,
+      sessionId,
+      toolUseId: 'toolu_oracle_image',
+      mediaType: 'image/png',
+      data: 'AAAA',
+    },
+    truncationFrame(sessionId, 'catcode.history-truncated'),
+    recoveredFrame(sessionId, 'oracle-old-a'),
+    recoveredUserFrame(sessionId, 'oracle-old-b'),
+    loadEarlierResult(sessionId, true, 'oracle-recovery'),
+    ready(secondSessionId),
+    assistantFrame(secondSessionId, 1),
+    messageFrame('unknown-session', {
+      type: 'assistant',
+      message: {
+        id: 'must-not-project',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'unknown session' }],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-00000000d002',
+    }),
+  ]
+  const expected = projectSequential(frames)
+
+  expect(projectSequentialDeliveries([frames])).toEqual(expected)
+  expect(projectSequentialDeliveries(frames.map(frame => [frame]))).toEqual(
+    expected,
+  )
+
+  // Every boundary in this bounded adversarial corpus, plus partitions shaped
+  // like frame caps, byte caps, and the lazy replay timer's partial flush.
+  for (let splitAt = 1; splitAt < frames.length; splitAt += 1) {
+    expect(
+      projectSequentialDeliveries([
+        frames.slice(0, splitAt),
+        frames.slice(splitAt),
+      ]),
+    ).toEqual(expected)
+  }
+  for (const partition of [
+    [1, 1, 2, 1, 3],
+    [4, 7, 2],
+    [8, 1, 1],
+  ]) {
+    const deliveries: ServerFrame[][] = []
+    let cursor = 0
+    for (const size of partition) {
+      deliveries.push(frames.slice(cursor, cursor + size))
+      cursor += size
+    }
+    deliveries.push(frames.slice(cursor))
+    expect(projectSequentialDeliveries(deliveries)).toEqual(expected)
+  }
 })
