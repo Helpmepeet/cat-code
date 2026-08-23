@@ -1391,249 +1391,163 @@ export function projectServerFrame(
 }
 
 /**
- * Replay-only projection transaction. Ordinary live delivery keeps using
- * `projectServerFrame`; this path amortizes the assistant-row maps and copies
- * that otherwise make a long replay quadratic.
+ * Replay-only projection transaction.
  *
- * The transaction deliberately handles only contiguous assistant frames. Every
- * other frame still takes the authoritative single-frame path, preserving its
- * exact recovery, streaming, and metadata semantics. An assistant run owns
- * private collections and publishes them once at its boundary.
+ * `projectServerFrame` remains the authoritative single-frame reducer. This
+ * transaction mirrors its ordered behavior in private per-session drafts, then
+ * publishes each changed session once at delivery completion.
  */
 export function projectServerFrames(
   state: TranscriptState,
   frames: readonly ServerFrame[],
 ): TranscriptState {
-  let projected = state
-  for (let index = 0; index < frames.length; ) {
-    const frame = frames[index]
-    if (!frame || !isAssistantMessageFrame(frame)) {
-      projected = projectServerFrame(projected, frame)
-      index += 1
+  if (frames.length === 0) return state
+
+  const drafts = new Map<SessionId, BatchSessionDraft>()
+  for (const frame of frames) {
+    if (isAppReadyFrame(frame)) {
+      drafts.set(frame.sessionId, createBatchReadyDraft(frame.sessionId))
       continue
     }
-
-    const run: ServerFrame[] = [frame]
-    index += 1
-    while (
-      index < frames.length &&
-      frames[index] !== undefined &&
-      isAssistantMessageFrame(frames[index]!)
-    ) {
-      run.push(frames[index]!)
-      index += 1
+    const draft = getBatchSessionDraft(drafts, state, frame.sessionId)
+    if (!draft) continue
+    if (frame.kind === 'error') {
+      if (
+        (frame.requestId === REPLAY_BUFFER_TRUNCATION_REQUEST_ID ||
+          frame.requestId === HISTORY_REPLAY_TRUNCATION_REQUEST_ID) &&
+        !draft.session.historyTruncated
+      ) {
+        draft.session.historyTruncated = true
+        draft.changed = true
+      }
+      continue
     }
-    projected = projectAssistantFrameRun(projected, run)
-  }
-  return projected
-}
+    if (frame.kind === 'generated-image-preview') {
+      projectBatchImagePreview(draft, frame)
+      continue
+    }
+    if (frame.kind === 'history.loadEarlier.result') {
+      const complete = frame.ok === true && frame.complete === true
+      if (complete || draft.session.recoveryInsertAt !== null) {
+        draft.session.recoveryInsertAt = null
+        if (complete) draft.session.historyTruncated = false
+        draft.changed = true
+      }
+      continue
+    }
+    if (frame.kind !== 'event' || frame.event.type !== 'message') continue
 
-type AssistantMessageFrame = Extract<ServerFrame, { kind: 'event' }> & {
-  event: {
-    type: 'message'
-    message: Extract<SDKMessage, { type: 'assistant' }>
-  }
-}
-
-function isAssistantMessageFrame(
-  frame: ServerFrame,
-): frame is AssistantMessageFrame {
-  return frame.kind === 'event' && frame.event.type === 'message' &&
-    frame.event.message.type === 'assistant'
-}
-
-function projectAssistantFrameRun(
-  state: TranscriptState,
-  frames: readonly ServerFrame[],
-): TranscriptState {
-  let sessions: Record<SessionId, TranscriptSessionState> | null = null
-  const drafts = new Map<SessionId, AssistantRunDraft>()
-
-  for (const frame of frames) {
-    if (!isAssistantMessageFrame(frame)) continue
-    const current = sessions?.[frame.sessionId] ?? state.sessions[frame.sessionId]
-    if (!current) continue
-    const draft =
-      drafts.get(frame.sessionId) ??
-      createAssistantRunDraft(current, frame.sessionId)
-    drafts.set(frame.sessionId, draft)
-    if (!projectAssistantMessageIntoRunDraft(draft, frame)) continue
-    if (sessions === null) sessions = { ...state.sessions }
-    sessions[frame.sessionId] = draft.session
+    const previousRecoveryInsertAt = draft.session.recoveryInsertAt
+    const recoveryInsertAt =
+      frame.recovered === true ? (draft.session.recoveryInsertAt ?? 0) : null
+    if (
+      projectBatchMessage(
+        draft,
+        frame.event.message,
+        recoveryInsertAt,
+      )
+    ) {
+      if (recoveryInsertAt === null) {
+        draft.session.recoveryInsertAt = null
+      } else if (draft.session.recoveryInsertAt === previousRecoveryInsertAt) {
+        draft.session.recoveryInsertAt = recoveryInsertAt
+      }
+      draft.changed = true
+    }
   }
 
-  return sessions === null ? state : { ...state, sessions }
+  const changedDrafts = [...drafts.values()].filter(draft => draft.changed)
+  if (changedDrafts.length === 0) return state
+  const sessions = { ...state.sessions }
+  for (const draft of changedDrafts) sessions[draft.sessionId] = draft.session
+  return { ...state, sessions }
 }
 
-type AssistantRunDraft = {
+type BatchSessionDraft = {
   sessionId: SessionId
   session: TranscriptSessionState
+  changed: boolean
   rowsOwned: boolean
   seenFrameIdsOwned: boolean
   streamingTextBlocksOwned: boolean
   nextBlockIndexByMessageIdOwned: boolean
   toolResultsByUseIdOwned: boolean
+  generatedImagePreviewsOwned: boolean
+  agentCompletionsOwned: boolean
+  hiddenFrameIdsOwned: boolean
+  slashCommandsOwned: boolean
   rowIndexes: Map<string, number> | null
 }
 
-function createAssistantRunDraft(
-  session: TranscriptSessionState,
+function createBatchSessionDraft(
   sessionId: SessionId,
-): AssistantRunDraft {
+  session: TranscriptSessionState,
+): BatchSessionDraft {
   return {
     sessionId,
     session: { ...session },
+    changed: false,
     rowsOwned: false,
     seenFrameIdsOwned: false,
     streamingTextBlocksOwned: false,
     nextBlockIndexByMessageIdOwned: false,
     toolResultsByUseIdOwned: false,
+    generatedImagePreviewsOwned: false,
+    agentCompletionsOwned: false,
+    hiddenFrameIdsOwned: false,
+    slashCommandsOwned: false,
     rowIndexes: null,
   }
 }
 
-function projectAssistantMessageIntoRunDraft(
-  draft: AssistantRunDraft,
-  frame: ServerFrame,
-): boolean {
-  if (!isAssistantMessageFrame(frame)) return false
-  const message = frame.event.message
-  const body: unknown = message.message
-  if (!isRecord(body) || !Array.isArray(body.content)) return false
-
-  const frameId = nonEmptyString(message.uuid)
-  if (frameId && draft.session.seenFrameIds[frameId]) return false
-
-  let changed = foldAssistantToolResultBlocksIntoRunDraft(
-    draft,
-    body.content,
-  )
-  if (typeof message.error === 'string') {
-    if (frameId) {
-      markAssistantRunFrameSeen(draft, frameId)
-    }
-    // The single-frame reducer publishes a source carrying the per-frame
-    // recovery cursor even when this typed error has no frame id to dedupe.
-    changed = true
-    if (changed) {
-      draft.session.recoveryInsertAt = recoveryInsertAtFor(frame, draft.session)
-    }
-    return changed
-  }
-
-  const messageId = nonEmptyString(body.id) ?? frameId
-  if (!messageId) {
-    if (changed) {
-      draft.session.recoveryInsertAt = recoveryInsertAtFor(frame, draft.session)
-    }
-    return changed
-  }
-  const parentToolUseId = nonEmptyString(message.parent_tool_use_id)
-  const agentName = normalizeAgentName(message.agent_name)
-  const model = nonEmptyString(body.model)
-  const session = draft.session
-  const fallbackIndex = session.nextBlockIndexByMessageId[messageId] ?? 0
-  const recoveryInsertAt =
-    frame.recovered === true ? (session.recoveryInsertAt ?? 0) : null
-  const firstBlockIndex =
-    session.currentStreamMessageId === messageId &&
-    session.currentStreamBlockIndex !== null
-      ? session.currentStreamBlockIndex
-      : fallbackIndex
-  const stableFrameId = frameId ?? `${messageId}:block-${firstBlockIndex}`
-  const rows = body.content.flatMap((block, localIndex) => {
-    const blockIndex = firstBlockIndex + localIndex
-    const row = projectAssistantContentBlock(block, {
-      sessionId: draft.sessionId,
-      messageId,
-      frameId: stableFrameId,
-      blockIndex,
-      parentToolUseId,
-      ...(agentName ? { agentName } : {}),
-      ...(model !== null ? { model } : {}),
-    })
-    return row === null ? [] : [row]
-  })
-
-  for (const row of rows) {
-    if ('messageId' in row && 'blockIndex' in row) {
-      const key = streamBlockKey(row.messageId, row.blockIndex)
-      if (draft.session.streamingTextBlocks[key]) {
-        ensureAssistantRunStreamingBlocks(draft)
-        delete draft.session.streamingTextBlocks[key]
-      }
-    }
-  }
-  let addedCount = 0
-  if (rows.length > 0) {
-    ensureAssistantRunRows(draft)
-    addedCount = upsertAssistantRunRows(draft, rows, recoveryInsertAt)
-  }
-  ensureAssistantRunNextBlockIndexes(draft)
-  draft.session.nextBlockIndexByMessageId[messageId] = Math.max(
-    fallbackIndex,
-    firstBlockIndex + body.content.length,
-  )
-  if (frameId) markAssistantRunFrameSeen(draft, frameId)
-  draft.session.recoveryInsertAt =
-    recoveryInsertAt === null ? null : recoveryInsertAt + addedCount
-  return true
+function createBatchReadyDraft(sessionId: SessionId): BatchSessionDraft {
+  const draft = createBatchSessionDraft(sessionId, createTranscriptSessionState())
+  draft.changed = true
+  draft.rowsOwned = true
+  draft.seenFrameIdsOwned = true
+  draft.streamingTextBlocksOwned = true
+  draft.nextBlockIndexByMessageIdOwned = true
+  draft.toolResultsByUseIdOwned = true
+  draft.generatedImagePreviewsOwned = true
+  draft.agentCompletionsOwned = true
+  draft.hiddenFrameIdsOwned = true
+  draft.slashCommandsOwned = true
+  return draft
 }
 
-function recoveryInsertAtFor(
-  frame: ServerFrame,
-  session: TranscriptSessionState,
-): number | null {
-  return frame.kind === 'event' && frame.recovered === true
-    ? (session.recoveryInsertAt ?? 0)
-    : null
+function getBatchSessionDraft(
+  drafts: Map<SessionId, BatchSessionDraft>,
+  state: TranscriptState,
+  sessionId: SessionId,
+): BatchSessionDraft | null {
+  const existing = drafts.get(sessionId)
+  if (existing) return existing
+  const session = state.sessions[sessionId]
+  if (!session) return null
+  const draft = createBatchSessionDraft(sessionId, session)
+  drafts.set(sessionId, draft)
+  return draft
 }
 
-function foldAssistantToolResultBlocksIntoRunDraft(
-  draft: AssistantRunDraft,
-  content: unknown[],
-): boolean {
-  let changed = false
-  for (const block of content) {
-    if (!isRecord(block) || typeof block.type !== 'string') continue
-    if (!isToolResultBlockType(block.type)) continue
-    const toolUseId = nonEmptyString(block.tool_use_id)
-    if (!toolUseId) continue
-    const projection = projectToolResultBlock(block, undefined, false)
-    const preview = draft.session.generatedImagePreviewsByUseId[toolUseId]
-    const projected =
-      preview && projection.generatedImage
-        ? {
-            ...projection,
-            generatedImage: { ...projection.generatedImage, preview },
-          }
-        : projection
-    ensureAssistantRunToolResults(draft)
-    draft.session.toolResultsByUseId[toolUseId] = projected
-    changed = true
-  }
-  return changed
-}
-
-function ensureAssistantRunRows(draft: AssistantRunDraft): void {
+function ensureBatchRows(draft: BatchSessionDraft): void {
   if (draft.rowsOwned) return
   draft.session.rows = [...draft.session.rows]
   draft.rowsOwned = true
 }
 
-function ensureAssistantRunSeenFrameIds(draft: AssistantRunDraft): void {
+function ensureBatchSeenFrameIds(draft: BatchSessionDraft): void {
   if (draft.seenFrameIdsOwned) return
   draft.session.seenFrameIds = { ...draft.session.seenFrameIds }
   draft.seenFrameIdsOwned = true
 }
 
-function ensureAssistantRunStreamingBlocks(draft: AssistantRunDraft): void {
+function ensureBatchStreamingBlocks(draft: BatchSessionDraft): void {
   if (draft.streamingTextBlocksOwned) return
   draft.session.streamingTextBlocks = { ...draft.session.streamingTextBlocks }
   draft.streamingTextBlocksOwned = true
 }
 
-function ensureAssistantRunNextBlockIndexes(draft: AssistantRunDraft): void {
+function ensureBatchNextBlockIndexes(draft: BatchSessionDraft): void {
   if (draft.nextBlockIndexByMessageIdOwned) return
   draft.session.nextBlockIndexByMessageId = {
     ...draft.session.nextBlockIndexByMessageId,
@@ -1641,38 +1555,88 @@ function ensureAssistantRunNextBlockIndexes(draft: AssistantRunDraft): void {
   draft.nextBlockIndexByMessageIdOwned = true
 }
 
-function ensureAssistantRunToolResults(draft: AssistantRunDraft): void {
+function ensureBatchToolResults(draft: BatchSessionDraft): void {
   if (draft.toolResultsByUseIdOwned) return
   draft.session.toolResultsByUseId = { ...draft.session.toolResultsByUseId }
   draft.toolResultsByUseIdOwned = true
 }
 
-function markAssistantRunFrameSeen(
-  draft: AssistantRunDraft,
-  frameId: string,
-): void {
-  ensureAssistantRunSeenFrameIds(draft)
+function ensureBatchImagePreviews(draft: BatchSessionDraft): void {
+  if (draft.generatedImagePreviewsOwned) return
+  draft.session.generatedImagePreviewsByUseId = {
+    ...draft.session.generatedImagePreviewsByUseId,
+  }
+  draft.generatedImagePreviewsOwned = true
+}
+
+function ensureBatchAgentCompletions(draft: BatchSessionDraft): void {
+  if (draft.agentCompletionsOwned) return
+  draft.session.agentCompletionsByToolUseId = {
+    ...draft.session.agentCompletionsByToolUseId,
+  }
+  draft.agentCompletionsOwned = true
+}
+
+function ensureBatchHiddenFrameIds(draft: BatchSessionDraft): void {
+  if (draft.hiddenFrameIdsOwned) return
+  draft.session.hiddenFrameIds = { ...draft.session.hiddenFrameIds }
+  draft.hiddenFrameIdsOwned = true
+}
+
+function batchRowIndexes(draft: BatchSessionDraft): Map<string, number> {
+  if (draft.rowIndexes) return draft.rowIndexes
+  const indexes = new Map<string, number>()
+  for (let index = 0; index < draft.session.rows.length; index += 1) {
+    indexes.set(draft.session.rows[index]!.id, index)
+  }
+  draft.rowIndexes = indexes
+  return indexes
+}
+
+function markBatchFrameSeen(draft: BatchSessionDraft, frameId: string): void {
+  ensureBatchSeenFrameIds(draft)
   draft.session.seenFrameIds[frameId] = true
 }
 
-function upsertAssistantRunRows(
-  draft: AssistantRunDraft,
-  replacements: TranscriptRow[],
+function appendBatchRows(
+  draft: BatchSessionDraft,
+  frameId: string,
+  rows: TranscriptRow[],
+  recoveryInsertAt: number | null,
+): boolean {
+  if (draft.session.seenFrameIds[frameId] || rows.length === 0) return false
+  ensureBatchRows(draft)
+  markBatchFrameSeen(draft, frameId)
+  const indexes = batchRowIndexes(draft)
+  if (recoveryInsertAt === null) {
+    const start = draft.session.rows.length
+    draft.session.rows.push(...rows)
+    for (let index = 0; index < rows.length; index += 1) {
+      indexes.set(rows[index]!.id, start + index)
+    }
+    return true
+  }
+  draft.session.rows.splice(recoveryInsertAt, 0, ...rows)
+  for (let index = recoveryInsertAt; index < draft.session.rows.length; index += 1) {
+    indexes.set(draft.session.rows[index]!.id, index)
+  }
+  draft.session.recoveryInsertAt = recoveryInsertAt + rows.length
+  return true
+}
+
+function upsertBatchRows(
+  draft: BatchSessionDraft,
+  rows: TranscriptRow[],
   recoveryInsertAt: number | null,
 ): number {
-  if (replacements.length === 0) return 0
-  const indexes =
-    draft.rowIndexes ??
-    new Map(draft.session.rows.map((row, index) => [row.id, index]))
-  draft.rowIndexes = indexes
+  if (rows.length === 0) return 0
+  ensureBatchRows(draft)
+  const indexes = batchRowIndexes(draft)
   const added: TranscriptRow[] = []
-  for (const replacement of replacements) {
-    const index = indexes.get(replacement.id)
-    if (index === undefined) {
-      added.push(replacement)
-    } else {
-      draft.session.rows[index] = replacement
-    }
+  for (const row of rows) {
+    const index = indexes.get(row.id)
+    if (index === undefined) added.push(row)
+    else draft.session.rows[index] = row
   }
   if (added.length === 0) return 0
   if (recoveryInsertAt === null) {
@@ -1687,7 +1651,456 @@ function upsertAssistantRunRows(
   for (let index = recoveryInsertAt; index < draft.session.rows.length; index += 1) {
     indexes.set(draft.session.rows[index]!.id, index)
   }
+  draft.session.recoveryInsertAt = recoveryInsertAt + added.length
   return added.length
+}
+
+function upsertBatchStreamingRow(
+  draft: BatchSessionDraft,
+  replacement: AssistantTextRow,
+): void {
+  ensureBatchRows(draft)
+  const indexes = batchRowIndexes(draft)
+  const index = indexes.get(replacement.id)
+  if (index === undefined) {
+    indexes.set(replacement.id, draft.session.rows.length)
+    draft.session.rows.push(replacement)
+    return
+  }
+  const existing = draft.session.rows[index]
+  if (existing?.kind === 'assistant-text' && existing.isStreaming === true) {
+    draft.session.rows[index] = replacement
+  }
+}
+
+function projectBatchImagePreview(
+  draft: BatchSessionDraft,
+  frame: Extract<ServerFrame, { kind: 'generated-image-preview' }>,
+): void {
+  ensureBatchImagePreviews(draft)
+  const preview = { mediaType: frame.mediaType, data: frame.data }
+  draft.session.generatedImagePreviewsByUseId[frame.toolUseId] = preview
+  const result = draft.session.toolResultsByUseId[frame.toolUseId]
+  if (result?.generatedImage) {
+    ensureBatchToolResults(draft)
+    draft.session.toolResultsByUseId[frame.toolUseId] = {
+      ...result,
+      generatedImage: { ...result.generatedImage, preview },
+    }
+  }
+  draft.changed = true
+}
+
+function projectBatchMessage(
+  draft: BatchSessionDraft,
+  message: SDKMessage,
+  recoveryInsertAt: number | null,
+): boolean {
+  switch (message.type) {
+    case 'assistant':
+      return projectBatchAssistant(draft, message, recoveryInsertAt)
+    case 'stream_event':
+      return projectBatchStreamEvent(draft, message)
+    case 'user':
+      return projectBatchUser(draft, message, recoveryInsertAt)
+    case 'result':
+      return projectBatchResult(draft, message, recoveryInsertAt)
+    case 'system':
+      return projectBatchSystem(draft, message, recoveryInsertAt)
+    case 'tool_progress':
+    case 'tool_use_summary':
+    case 'status':
+    case 'assistant_error':
+    case 'permission_denial':
+    case 'auth_status':
+    case 'rate_limit_event':
+    case 'prompt_suggestion':
+    case 'streamlined_text':
+    case 'streamlined_tool_use_summary':
+      return false
+    default: {
+      const _exhaustive: never = message
+      void _exhaustive
+      return false
+    }
+  }
+}
+
+function foldBatchToolResultBlocks(
+  draft: BatchSessionDraft,
+  content: unknown[],
+  toolUseResult?: unknown,
+  toolResultStatus?: unknown,
+): boolean {
+  let changed = false
+  for (const block of content) {
+    if (
+      !isRecord(block) ||
+      typeof block.type !== 'string' ||
+      !isToolResultBlockType(block.type)
+    ) continue
+    const toolUseId = nonEmptyString(block.tool_use_id)
+    if (!toolUseId) continue
+    const projection = projectToolResultBlock(
+      block,
+      toolUseResult,
+      toolResultStatus === 'cancelled',
+    )
+    const preview = draft.session.generatedImagePreviewsByUseId[toolUseId]
+    ensureBatchToolResults(draft)
+    draft.session.toolResultsByUseId[toolUseId] =
+      preview && projection.generatedImage
+        ? {
+            ...projection,
+            generatedImage: { ...projection.generatedImage, preview },
+          }
+        : projection
+    changed = true
+  }
+  return changed
+}
+
+function projectBatchAssistant(
+  draft: BatchSessionDraft,
+  message: Extract<SDKMessage, { type: 'assistant' }>,
+  recoveryInsertAt: number | null,
+): boolean {
+  const body: unknown = message.message
+  if (!isRecord(body) || !Array.isArray(body.content)) return false
+  const frameId = nonEmptyString(message.uuid)
+  if (frameId && draft.session.seenFrameIds[frameId]) return false
+
+  let changed = foldBatchToolResultBlocks(draft, body.content)
+  if (typeof message.error === 'string') {
+    if (frameId) markBatchFrameSeen(draft, frameId)
+    return true
+  }
+  const messageId = nonEmptyString(body.id) ?? frameId
+  if (!messageId) return changed
+  const fallbackIndex = draft.session.nextBlockIndexByMessageId[messageId] ?? 0
+  const firstBlockIndex =
+    draft.session.currentStreamMessageId === messageId &&
+    draft.session.currentStreamBlockIndex !== null
+      ? draft.session.currentStreamBlockIndex
+      : fallbackIndex
+  const stableFrameId = frameId ?? `${messageId}:block-${firstBlockIndex}`
+  const parentToolUseId = nonEmptyString(message.parent_tool_use_id)
+  const agentName = normalizeAgentName(message.agent_name)
+  const model = nonEmptyString(body.model)
+  const rows = body.content.flatMap((block, localIndex) => {
+    const row = projectAssistantContentBlock(block, {
+      sessionId: draft.sessionId,
+      messageId,
+      frameId: stableFrameId,
+      blockIndex: firstBlockIndex + localIndex,
+      parentToolUseId,
+      ...(agentName ? { agentName } : {}),
+      ...(model !== null ? { model } : {}),
+    })
+    return row === null ? [] : [row]
+  })
+  for (const row of rows) {
+    if (!('messageId' in row) || !('blockIndex' in row)) continue
+    const key = streamBlockKey(row.messageId, row.blockIndex)
+    if (draft.session.streamingTextBlocks[key]) {
+      ensureBatchStreamingBlocks(draft)
+      delete draft.session.streamingTextBlocks[key]
+    }
+  }
+  upsertBatchRows(draft, rows, recoveryInsertAt)
+  ensureBatchNextBlockIndexes(draft)
+  draft.session.nextBlockIndexByMessageId[messageId] = Math.max(
+    fallbackIndex,
+    firstBlockIndex + body.content.length,
+  )
+  if (frameId) markBatchFrameSeen(draft, frameId)
+  changed = true
+  return changed
+}
+
+function projectBatchStreamEvent(
+  draft: BatchSessionDraft,
+  message: Extract<SDKMessage, { type: 'stream_event' }>,
+): boolean {
+  const event = isRecord(message.event) ? message.event : null
+  if (!event || typeof event.type !== 'string') return false
+  if (event.type === 'message_start') {
+    const started = isRecord(event.message) ? event.message : null
+    if (!started || typeof started.id !== 'string') return false
+    draft.session.currentStreamMessageId = started.id
+    draft.session.currentStreamBlockIndex = null
+    return true
+  }
+  if (
+    event.type === 'content_block_start' &&
+    draft.session.currentStreamMessageId &&
+    typeof event.index === 'number'
+  ) {
+    const key = streamBlockKey(draft.session.currentStreamMessageId, event.index)
+    const block = isRecord(event.content_block) ? event.content_block : null
+    draft.session.currentStreamBlockIndex = event.index
+    if (block?.type === 'text') {
+      ensureBatchStreamingBlocks(draft)
+      draft.session.streamingTextBlocks[key] = {
+        messageId: draft.session.currentStreamMessageId,
+        blockIndex: event.index,
+        content: '',
+      }
+      return true
+    }
+    if (draft.session.streamingTextBlocks[key]) {
+      ensureBatchStreamingBlocks(draft)
+      delete draft.session.streamingTextBlocks[key]
+    }
+    return true
+  }
+  if (
+    event.type === 'content_block_delta' &&
+    draft.session.currentStreamMessageId &&
+    typeof event.index === 'number'
+  ) {
+    const delta = isRecord(event.delta) ? event.delta : null
+    if (delta?.type !== 'text_delta' || typeof delta.text !== 'string') {
+      return false
+    }
+    const key = streamBlockKey(draft.session.currentStreamMessageId, event.index)
+    const existing = draft.session.streamingTextBlocks[key] ?? {
+      messageId: draft.session.currentStreamMessageId,
+      blockIndex: event.index,
+      content: '',
+    }
+    const nextBlock = { ...existing, content: existing.content + delta.text }
+    ensureBatchStreamingBlocks(draft)
+    draft.session.streamingTextBlocks[key] = nextBlock
+    draft.session.currentStreamBlockIndex = event.index
+    upsertBatchStreamingRow(
+      draft,
+      createStreamingTextRow(draft.sessionId, nextBlock),
+    )
+    return true
+  }
+  if (event.type === 'message_stop') {
+    draft.session.currentStreamMessageId = null
+    draft.session.currentStreamBlockIndex = null
+    return true
+  }
+  return false
+}
+
+function projectBatchUser(
+  draft: BatchSessionDraft,
+  message: Extract<SDKMessage, { type: 'user' }>,
+  recoveryInsertAt: number | null,
+): boolean {
+  const frameId = nonEmptyString(message.uuid)
+  if (frameId && draft.session.seenFrameIds[frameId]) return false
+  const body: unknown = message.message
+  let changed =
+    isRecord(body) && Array.isArray(body.content)
+      ? foldBatchToolResultBlocks(
+          draft,
+          body.content,
+          message.tool_use_result,
+          message.tool_result_status,
+        )
+      : false
+  if (!frameId || !isRecord(body)) return changed
+  const rawContent = body.content
+  const blocks: unknown[] =
+    typeof rawContent === 'string'
+      ? [{ type: 'text', text: rawContent }]
+      : Array.isArray(rawContent)
+        ? rawContent
+        : []
+  if (blocks.length === 0) return changed
+  const messageId = nonEmptyString(body.id) ?? frameId
+  const timestamp =
+    message.timestamp === undefined ? undefined : nonEmptyString(message.timestamp)
+  if (message.timestamp !== undefined && timestamp === null) return changed
+  const parentToolUseId = nonEmptyString(message.parent_tool_use_id)
+  const agentName = normalizeAgentName(message.agent_name)
+  const origin = projectMessageOrigin(message.origin)
+  if (origin?.kind === 'interruption') {
+    return appendBatchRows(draft, frameId, [{
+      id: frameRowId(draft.sessionId, frameId, 'turn_stopped'),
+      sessionId: draft.sessionId,
+      frameId,
+      kind: 'turn-stopped',
+    }], recoveryInsertAt) || changed
+  }
+  const rows = blocks.flatMap((block, blockIndex) => {
+    const row = projectUserContentBlock(block, {
+      sessionId: draft.sessionId,
+      messageId,
+      frameId,
+      blockIndex,
+      parentToolUseId,
+      ...(agentName ? { agentName } : {}),
+    }, {
+      isReplay: message.isReplay === true,
+      timestamp: timestamp ?? undefined,
+      origin,
+    })
+    return row === null ? [] : [row]
+  })
+  if (rows.length === 0) {
+    markBatchFrameSeen(draft, frameId)
+    return true
+  }
+  if (origin?.kind === 'task-notification' &&
+    origin.toolUseId !== null && origin.completion !== null) {
+    ensureBatchAgentCompletions(draft)
+    draft.session.agentCompletionsByToolUseId[origin.toolUseId] = origin.completion
+  }
+  const appended = appendBatchRows(draft, frameId, rows, recoveryInsertAt)
+  if (message.isSynthetic === true && appended) {
+    ensureBatchHiddenFrameIds(draft)
+    draft.session.hiddenFrameIds[frameId] = true
+  }
+  return appended || changed
+}
+
+function finalizeBatchStreamingTurn(draft: BatchSessionDraft): boolean {
+  const hasStreamingRows = draft.session.rows.some(
+    row => row.kind === 'assistant-text' && row.isStreaming === true,
+  )
+  const hasStreamingState =
+    draft.session.currentStreamMessageId !== null ||
+    draft.session.currentStreamBlockIndex !== null ||
+    Object.keys(draft.session.streamingTextBlocks).length > 0
+  if (!hasStreamingRows && !hasStreamingState) return false
+  if (hasStreamingRows) {
+    ensureBatchRows(draft)
+    for (let index = 0; index < draft.session.rows.length; index += 1) {
+      const row = draft.session.rows[index]!
+      if (row.kind === 'assistant-text' && row.isStreaming === true) {
+        const { isStreaming: _streaming, ...finalized } = row
+        void _streaming
+        draft.session.rows[index] = finalized
+      }
+    }
+  }
+  draft.session.currentStreamMessageId = null
+  draft.session.currentStreamBlockIndex = null
+  ensureBatchStreamingBlocks(draft)
+  draft.session.streamingTextBlocks = {}
+  return true
+}
+
+function projectBatchResult(
+  draft: BatchSessionDraft,
+  message: Extract<SDKMessage, { type: 'result' }>,
+  recoveryInsertAt: number | null,
+): boolean {
+  let changed = finalizeBatchStreamingTurn(draft)
+  if (draft.session.compacting) {
+    draft.session.compacting = false
+    changed = true
+  }
+  const frameId = nonEmptyString(message.uuid)
+  const subtype = nonEmptyString(message.subtype)
+  if (!frameId || !subtype || typeof message.is_error !== 'boolean') return changed
+  if (draft.session.seenFrameIds[frameId]) return changed
+  const result = optionalString(message.result)
+  const errors = optionalStringArray(message.errors)
+  const durationMs = optionalNumber(message.duration_ms)
+  const totalCostUsd = optionalNumber(message.total_cost_usd)
+  if (result === null || errors === null || durationMs === null || totalCostUsd === null) {
+    return changed
+  }
+  if (
+    subtype === 'interrupted' &&
+    draft.session.rows.some(row => row.kind === 'turn-stopped')
+  ) {
+    markBatchFrameSeen(draft, frameId)
+    return true
+  }
+  return appendBatchRows(draft, frameId, [{
+    id: frameRowId(draft.sessionId, frameId, 'result'),
+    sessionId: draft.sessionId,
+    frameId,
+    kind: 'result',
+    subtype,
+    isError: message.is_error,
+    ...(result === undefined ? {} : { result }),
+    errors: errors ?? [],
+    ...(durationMs === undefined ? {} : { durationMs }),
+    ...(totalCostUsd === undefined ? {} : { totalCostUsd }),
+  }], recoveryInsertAt) || changed
+}
+
+function projectBatchSystem(
+  draft: BatchSessionDraft,
+  message: Extract<SDKMessage, { type: 'system' }>,
+  recoveryInsertAt: number | null,
+): boolean {
+  const frameId = nonEmptyString(message.uuid)
+  if (!frameId || draft.session.seenFrameIds[frameId]) return false
+  switch (message.subtype) {
+    case 'init': {
+      const cwd = nonEmptyString(message.cwd)
+      const model = nonEmptyString(message.model)
+      const tools = stringArray(message.tools)
+      const permissionMode = nonEmptyString(message.permissionMode)
+      if (!cwd || !model || !tools || !permissionMode) return false
+      markBatchFrameSeen(draft, frameId)
+      draft.session.slashCommands = stringArray(message.slash_commands) ?? []
+      draft.slashCommandsOwned = true
+      return true
+    }
+    case 'status':
+      if (draft.session.compacting === (message.status === 'compacting')) return false
+      draft.session.compacting = message.status === 'compacting'
+      return true
+    case 'compact_boundary': {
+      const metadata = message.compact_metadata
+      if (
+        !isRecord(metadata) ||
+        (metadata.trigger !== 'manual' && metadata.trigger !== 'auto') ||
+        typeof metadata.pre_tokens !== 'number'
+      ) return false
+      draft.session.compacting = false
+      return appendBatchRows(draft, frameId, [{
+        id: frameRowId(draft.sessionId, frameId, 'compact-boundary'),
+        sessionId: draft.sessionId,
+        frameId,
+        kind: 'compact-boundary',
+        trigger: metadata.trigger,
+        preTokens: metadata.pre_tokens,
+      }], recoveryInsertAt)
+    }
+    case 'api_retry':
+      return isRecord(message.error) && typeof message.error.message === 'string'
+        ? appendBatchSystemNotice(draft, frameId, 'api_retry', message.error.message, recoveryInsertAt)
+        : false
+    case 'local_command_output':
+      return typeof message.content === 'string'
+        ? appendBatchSystemNotice(draft, frameId, 'local_command_output', message.content, recoveryInsertAt)
+        : false
+    case 'cat_code_account_diagnostic':
+      return typeof message.user_message === 'string'
+        ? appendBatchSystemNotice(draft, frameId, 'account_diagnostic', message.user_message, recoveryInsertAt)
+        : false
+    default:
+      return false
+  }
+}
+
+function appendBatchSystemNotice(
+  draft: BatchSessionDraft,
+  frameId: string,
+  noticeType: SystemNoticeRow['noticeType'],
+  content: string,
+  recoveryInsertAt: number | null,
+): boolean {
+  return appendBatchRows(draft, frameId, [{
+    id: frameRowId(draft.sessionId, frameId, noticeType),
+    sessionId: draft.sessionId,
+    frameId,
+    kind: 'system-notice',
+    noticeType,
+    content,
+  }], recoveryInsertAt)
 }
 
 /**

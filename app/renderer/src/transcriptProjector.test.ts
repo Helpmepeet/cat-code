@@ -4776,6 +4776,117 @@ test('sequential transcript projection is invariant across replay delivery parti
   }
 })
 
+test('batch projection preserves sequential semantics for interleaved sessions and adversarial frames', () => {
+  const primary = 'batch-primary'
+  const secondary = 'batch-secondary'
+  const streamedFinal = messageFrame(primary, {
+    type: 'assistant',
+    message: {
+      id: 'batch-streamed-message',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'streamed final text' }],
+    },
+    parent_tool_use_id: null,
+    uuid: '00000000-0000-4000-8000-00000000b101',
+  } as unknown as SDKMessage)
+  const toolUse = messageFrame(secondary, {
+    type: 'assistant',
+    message: {
+      id: 'batch-tool-message',
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_use',
+          id: 'toolu_batch_correlation',
+          name: 'Read',
+          input: { file_path: '/batch.txt' },
+        },
+      ],
+    },
+    parent_tool_use_id: null,
+    uuid: '00000000-0000-4000-8000-00000000b102',
+  } as unknown as SDKMessage)
+  const frames: ServerFrame[] = [
+    ready(primary),
+    ready(secondary),
+    messageFrame(primary, {
+      type: 'stream_event',
+      event: {
+        type: 'message_start',
+        message: { id: 'batch-streamed-message' },
+      },
+    } as unknown as SDKMessage),
+    toolUse,
+    messageFrame(primary, {
+      type: 'stream_event',
+      event: {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'text', text: '' },
+      },
+    } as unknown as SDKMessage),
+    messageFrame(secondary, {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'toolu_batch_correlation',
+            content: [{ type: 'text', text: 'correlated output' }],
+            is_error: false,
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-00000000b103',
+    } as unknown as SDKMessage),
+    messageFrame(primary, {
+      type: 'stream_event',
+      event: {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text: 'streamed ' },
+      },
+    } as unknown as SDKMessage),
+    streamedFinal,
+    // Duplicate delivery must remain a no-op even when it is interleaved with
+    // frames for another session.
+    toolUse,
+    messageFrame(primary, {
+      type: 'assistant',
+      message: 'malformed assistant payload',
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-00000000b104',
+    } as unknown as SDKMessage),
+    truncationFrame(primary, 'ordinary-live-error'),
+    {
+      ...messageFrame(primary, {
+        type: 'assistant',
+        message: {
+          id: 'batch-recovered',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'recovered without result' }],
+        },
+        parent_tool_use_id: null,
+        uuid: '00000000-0000-4000-8000-00000000b105',
+      } as unknown as SDKMessage),
+      recovered: true as const,
+    },
+    // No history.loadEarlier.result follows. The next ordinary frame must
+    // still close the insertion cursor, exactly as live projection does.
+    assistantFrame(primary, 8),
+  ]
+
+  const expected = projectSequential(frames)
+  expect(projectServerFrames(createTranscriptState(), frames)).toEqual(expected)
+  expect(projectBatchDeliveries([
+    frames.slice(0, 3),
+    frames.slice(3, 8),
+    frames.slice(8),
+  ])).toEqual(expected)
+})
+
 test('batch projection preserves source identities and publishes no-op batches', () => {
   const initial = projectSequential([
     ready('session-1'),
