@@ -362,7 +362,23 @@ stated nothing, and "consistent with" is not "caused by". But the alternatives i
 §4.2 are now materially thinner than at rev 4, and the remaining ones sit upstream.
 
 **One check still outstanding: the account email.** It is now the only cheap step left
-that could replace inference with a stated reason.
+that could replace inference with a stated reason. The operator has since reported
+being unable to access those inboxes, so in practice this check will not happen and
+the cause will remain unattributed.
+
+**Re-login succeeded, 2026-08-23.** Both accounts completed a fresh OAuth
+authorization and hold new tokens (issued 08-23, `exp` 09-02, `refresh.state: idle`).
+This is a further narrowing and cuts against the strongest form of the hypothesis:
+**there is no standing bar on programmatic access for these accounts.** Had the action
+been "this account may not use the API", a new authorization would have been refused
+or its token would have failed immediately. Neither happened. What was done was
+therefore an invalidation of the credentials that existed at that moment, not a
+revocation of the account's eligibility to hold credentials at all.
+
+That is consistent with a one-time action whose trigger, if any, can recur, and it is
+equally consistent with a one-off upstream event. It does not distinguish them. What
+it does establish is that recovery is available and cheap, which lowers the cost of
+being wrong about §4 in either direction.
 
 Sample size is five accounts and four events over two months, from one host. That is
 a suggestive pattern, not a demonstrated mechanism.
