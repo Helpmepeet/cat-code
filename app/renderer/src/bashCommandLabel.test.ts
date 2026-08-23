@@ -49,49 +49,53 @@ describe('extractBashCommentLabel', () => {
 })
 
 describe('selectBashCardText', () => {
-  test('description wins over both the comment and the command', () => {
+  test('keeps the command on the header and the description on hover', () => {
     expect(
-      selectBashCardText('# Inspect auth\nrg -n "auth"', 'Check auth handling'),
+      selectBashCardText('rg -n auth src/', 'Check auth handling'),
     ).toEqual({
-      label: 'Check auth handling',
-      commandLead: '# Inspect auth\nrg -n "auth"',
+      target: 'rg -n auth src/',
+      hover: 'Check auth handling',
     })
   })
 
   test('falls back to the comment when there is no description', () => {
-    expect(selectBashCardText('# Inspect auth\nrg -n "auth"', null)).toEqual({
-      label: 'Inspect auth',
-      commandLead: '# Inspect auth\nrg -n "auth"',
+    expect(
+      selectBashCardText('# Inspect auth\nrg -n auth src/', null),
+    ).toEqual({
+      target: '# Inspect auth\nrg -n auth src/',
+      hover: 'Inspect auth',
     })
   })
 
-  test('falls back to the raw command when there is neither', () => {
+  test('prefers the description over the comment', () => {
+    expect(
+      selectBashCardText('# Inspect auth\nrg -n auth', 'Check auth handling')
+        .hover,
+    ).toBe('Check auth handling')
+  })
+
+  test('reveals nothing when the model sent neither', () => {
     expect(selectBashCardText('git status', null)).toEqual({
-      label: 'git status',
-      commandLead: null,
+      target: 'git status',
+      hover: null,
     })
   })
 
-  test('keeps the comment in the command it hands the body', () => {
-    const command = '# Inspect auth\nrg -n "auth" src/'
-    expect(selectBashCardText(command, 'Check auth').commandLead).toBe(command)
-  })
-
-  test('never repeats the command when it is already the label', () => {
-    expect(selectBashCardText('git status', 'git status').commandLead).toBeNull()
+  test('reveals nothing when the label would repeat the command', () => {
+    expect(selectBashCardText('git status', 'git status').hover).toBeNull()
   })
 
   test('survives a row with no command', () => {
     expect(selectBashCardText(null, 'Check auth')).toEqual({
-      label: 'Check auth',
-      commandLead: null,
+      target: 'Check auth',
+      hover: null,
     })
   })
 
   test('survives a row with neither field', () => {
     expect(selectBashCardText(null, null)).toEqual({
-      label: null,
-      commandLead: null,
+      target: null,
+      hover: null,
     })
   })
 })

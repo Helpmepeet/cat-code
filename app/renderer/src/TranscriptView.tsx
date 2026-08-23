@@ -1843,13 +1843,7 @@ function deriveTarget(row: ToolUseNestedRow): string {
   }
   switch (row.toolFamily) {
     case 'bash':
-      // Summary-first, exactly as the prototype's own bash card
-      // (`Messages.jsx:416,470` `msg.toolSummary || msg.command`). The raw
-      // command is not lost: `bodyLead` puts it back in the expanded body.
-      return (
-        selectBashCardText(str('command'), str('description')).label ??
-        row.toolName
-      )
+      return str('command') ?? row.toolName
     case 'read': {
       const filePath = str('file_path')
       return filePath === null ? row.toolName : basename(filePath) || filePath
@@ -1904,41 +1898,22 @@ function deriveSub(row: ToolUseNestedRow): string | undefined {
 }
 
 /**
- * The raw command, under a header that is showing a label instead of it. Every
- * value here is one the card already uses: the body's own mono size, the
- * family's `$` mark, and the seam it draws under its header.
+ * The model's own words for a bash call, revealed over the target on hover or
+ * keyboard focus. The header itself keeps the command: a column of cards is
+ * read as commands, and a short one loses information when prose replaces it
+ * (operator call, 2026-08-23). `bashCommandLabel.ts` for the two sources.
  */
-function BashCommandLead({ command }: { command: string }) {
-  return (
-    <div className="mb-1.5 flex gap-1.5 border-b border-shell-seam pb-1.5 pt-0.5 font-mono text-[11.5px] leading-relaxed">
-      <span className={`shrink-0 ${FAMILY_STYLE.bash.color}`} aria-hidden>
-        $
-      </span>
-      <span className="min-w-0 whitespace-pre-wrap break-words text-text-primary">
-        {command}
-      </span>
-    </div>
-  )
-}
-
-/**
- * Only once a result exists: until then the body already prints the whole real
- * input (`ToolCardBody`), and printing the command twice is what the header was
- * shortened to avoid.
- */
-function bashCommandLead(row: ToolUseNestedRow): ReactNode {
-  if (row.toolFamily !== 'bash' || row.result === null) return undefined
+function deriveTargetHover(row: ToolUseNestedRow): string | undefined {
+  if (row.toolFamily !== 'bash') return undefined
   const command = row.input['command']
-  if (typeof command !== 'string' || command.length === 0) return undefined
   const description = row.input['description']
-  const { commandLead } = selectBashCardText(
-    command,
-    typeof description === 'string' && description.length > 0
-      ? description
-      : null,
-  )
-  return commandLead === null ? undefined : (
-    <BashCommandLead command={commandLead} />
+  return (
+    selectBashCardText(
+      typeof command === 'string' && command.length > 0 ? command : null,
+      typeof description === 'string' && description.length > 0
+        ? description
+        : null,
+    ).hover ?? undefined
   )
 }
 
@@ -1962,7 +1937,7 @@ function ToolCardShell({
   status,
   sub,
   headerBadge,
-  bodyLead,
+  targetHover,
   collapsedExtra,
   defaultExpanded,
   expansionKey,
@@ -1975,11 +1950,11 @@ function ToolCardShell({
   /** Optional right-cluster chip before the state (C4 child-count for agents). */
   headerBadge?: ReactNode
   /**
-   * Rendered above the body, inside its padding: what the header line had to
-   * drop to stay one line. Bash uses it for the raw command whenever the header
-   * shows a label instead (`bashCommandLabel.ts`).
+   * Swapped in over `target` while the header is hovered or focused. Absent for
+   * every family but bash, and for a bash call whose model sent no words of its
+   * own (`bashCommandLabel.ts`).
    */
-  bodyLead?: ReactNode
+  targetHover?: string
   collapsedExtra?: ReactNode
   defaultExpanded?: boolean
   /**
@@ -2004,7 +1979,7 @@ function ToolCardShell({
         type="button"
         onClick={() => setExpanded(!expanded)}
         aria-expanded={expanded}
-        className="flex w-full items-center gap-2.5 px-3 py-2 text-left"
+        className="group flex w-full items-center gap-2.5 px-3 py-2 text-left"
       >
         <span className={`w-4 shrink-0 text-center text-[13px] ${fam.color}`} aria-hidden>
           {fam.mark}
@@ -2015,7 +1990,20 @@ function ToolCardShell({
           {fam.word}
         </span>
         <span className="min-w-0 flex-1 truncate font-mono text-xs text-text-primary">
-          {target}
+          {targetHover === undefined ? (
+            target
+          ) : (
+            <>
+              <span className="group-hover:hidden group-focus-visible:hidden">
+                {target}
+              </span>
+              {/* Focus as well as hover: the header is a button, so this is the
+                  only way these words are reachable without a pointer. */}
+              <span className="hidden font-sans text-text-subtle group-hover:inline group-focus-visible:inline">
+                {targetHover}
+              </span>
+            </>
+          )}
         </span>
         {headerBadge}
         {/* The word ("done"/"failed"/"running") next to a dot that already
@@ -2035,10 +2023,7 @@ function ToolCardShell({
               {sub}
             </div>
           ) : null}
-          <div className="px-3 pb-2.5 pt-1">
-            {bodyLead}
-            {children}
-          </div>
+          <div className="px-3 pb-2.5 pt-1">{children}</div>
         </div>
       ) : null}
     </div>
@@ -2066,7 +2051,7 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
         family={row.toolFamily}
         target={deriveTarget(row)}
         status={row.status}
-        bodyLead={bashCommandLead(row)}
+        targetHover={deriveTargetHover(row)}
         expansionKey={row.toolUseId}
         defaultExpanded
       >
@@ -2105,7 +2090,7 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
         status={row.status}
         sub={deriveSub(row)}
         headerBadge={headerBadge}
-        bodyLead={bashCommandLead(row)}
+        targetHover={deriveTargetHover(row)}
         expansionKey={row.toolUseId}
         defaultExpanded={
           toolsExpanded || row.status === 'error' || isImageDone

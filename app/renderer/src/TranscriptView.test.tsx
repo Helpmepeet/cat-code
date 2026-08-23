@@ -4789,55 +4789,57 @@ test('the live seam mounts only while a compaction runs, and never doubles up', 
   ).not.toContain('Compacting conversation')
 })
 
-// ─── bash card label (description-first, prototype `Messages.jsx:416,470`) ────
+// ─── bash card hover label (operator call, 2026-08-23) ───────────────────────
 
-test('a bash card headers the description and keeps the command in its body', () => {
-  const row = toolRow({
+function bashRow(input: Record<string, unknown>) {
+  return toolRow({
     toolName: 'Bash',
     toolFamily: 'bash',
-    input: {
+    input,
+    status: 'success',
+    result: { isError: false, content: 'src/auth.ts:12', diff: null },
+  })
+}
+
+test('a bash card keeps the command and hides the description behind hover', () => {
+  const html = render(
+    bashRow({
       command: 'rg -n auth src/ | head -20',
       description: 'Check auth handling',
-    },
-    status: 'success',
-    result: { isError: false, content: 'src/auth.ts:12', diff: null },
-  })
+    }),
+  )
 
-  expect(render(row)).toContain('Check auth handling')
-
-  const expanded = renderMany([row], true)
-  expect(expanded).toContain('Check auth handling')
-  expect(expanded).toContain('rg -n auth src/ | head -20')
+  // The header still reads as a command, which is the whole point of the call.
+  expect(html).toContain('rg -n auth src/ | head -20')
+  expect(html).toContain('Check auth handling')
+  // Reachable without a pointer, since the header is a button.
+  expect(html).toContain('group-hover:inline')
+  expect(html).toContain('group-focus-visible:inline')
 })
 
-test('a bash card falls back to the command, and then does not repeat it', () => {
-  const row = toolRow({
-    toolName: 'Bash',
-    toolFamily: 'bash',
-    input: { command: 'git status' },
-    status: 'success',
-    result: { isError: false, content: 'On branch migration', diff: null },
-  })
+test('a bash card with no description renders no swap at all', () => {
+  const html = render(bashRow({ command: 'git status' }))
 
-  const expanded = renderMany([row], true)
-  expect(expanded).toContain('git status')
-  // Header only: a card that gained no label must not print the command twice.
-  expect(expanded.split('git status')).toHaveLength(2)
+  expect(html).toContain('git status')
+  expect(html).not.toContain('group-hover:inline')
 })
 
-test('a bash card reads a first-line comment when no description was sent', () => {
-  const row = toolRow({
-    toolName: 'Bash',
-    toolFamily: 'bash',
-    input: { command: '# Inspect auth handling\nrg -n auth src/' },
-    status: 'success',
-    result: { isError: false, content: 'src/auth.ts:12', diff: null },
-  })
+test('a bash card reveals a first-line comment when no description was sent', () => {
+  const html = render(
+    bashRow({ command: '# Inspect auth handling\nrg -n auth src/' }),
+  )
 
-  const html = render(row)
-  expect(html).toContain('Inspect auth handling')
-  expect(html).not.toContain('# Inspect auth handling')
+  // Header keeps the command verbatim, comment included.
+  expect(html).toContain('# Inspect auth handling')
+  // The stripped label is what the hover shows.
+  expect(html).toContain('>Inspect auth handling<')
+  expect(html).toContain('group-hover:inline')
+})
 
-  // The body still carries the command with its comment intact.
-  expect(renderMany([row], true)).toContain('# Inspect auth handling')
+test('a bash card whose description repeats the command reveals nothing', () => {
+  const html = render(
+    bashRow({ command: 'git status', description: 'git status' }),
+  )
+
+  expect(html).not.toContain('group-hover:inline')
 })

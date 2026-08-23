@@ -38,6 +38,7 @@ body{color:var(--text-primary);font-family:var(--font-sans);-webkit-font-smoothi
 .x-sec{margin:0 0 10px;padding-top:34px;border-top:1px solid var(--x-rule)}
 .x-sec:first-of-type{padding-top:0;border-top:0}
 .x-grid{display:grid;grid-template-columns:1fr 1fr;gap:26px;align-items:start}
+.x-grid-next{margin-top:30px}
 .x-col{min-width:0}
 .x-colhead{font-family:var(--font-mono);font-size:9.5px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:var(--x-ink);padding-bottom:8px;margin-bottom:14px;border-bottom:1px solid var(--x-rule)}
 .x-state{font-family:var(--font-mono);font-size:9px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:var(--x-ink);margin:20px 0 7px}
@@ -70,6 +71,23 @@ body{color:var(--text-primary);font-family:var(--font-sans);-webkit-font-smoothi
 .b{color:var(--log-bad)}
 .w{color:var(--log-warn)}
 .f{color:var(--text-faint)}
+
+/* hover + conditional variants */
+.s-hover .s-target-desc{display:none;font-family:var(--font-sans);color:var(--text-subtle)}
+.s-hover:hover .s-target-cmd{display:none}
+.s-hover:hover .s-target-desc{display:inline}
+.s-hover{cursor:default}
+
+/* command-first variants: the header row is byte-identical to today */
+.x-wall{max-width:900px;margin:0 auto}
+.s-sub-indent{padding:0 12px 7px 78px;font-family:var(--font-sans);font-size:11.5px;line-height:1.45;color:var(--text-subtle)}
+.s-sub-band{border-top:1px solid var(--shell-seam);padding:5px 12px 6px;font-family:var(--font-sans);font-size:11.5px;line-height:1.45;color:var(--text-subtle)}
+.s-sub-trail{flex-shrink:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-sans);font-size:11.5px;color:var(--text-subtle)}
+.s-sep{flex-shrink:0;color:var(--text-ghost);font-size:11px}
+
+/* header-treatment variants: family only changes, size and colour stay */
+.s-target-sans{font-family:var(--font-sans)}
+.s-target-dim{color:var(--text-subtle)}
 
 /* the one proposed addition: raw command inside the expanded body */
 .s-raw{display:flex;gap:6px;font-family:var(--font-mono);font-size:11.5px;line-height:1.625;padding:3px 0 6px;margin-bottom:5px;border-bottom:1px solid var(--shell-seam)}
@@ -258,6 +276,100 @@ rg -n "identityPrefix" src/ | head -20</span></div>
     </div>
   </div>
 </div>
+
+
+<div class="x-sec"><p class="x-eyebrow">Header treatment</p></div>
+<div class="x-grid">
+  <div class="x-col">
+    <div class="x-colhead">A · mono label</div>
+    <div class="x-stack">
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">Inspect Bash header selector and caller</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">Check projector for description field</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">Measure description-field frequency across every recorded session transcript</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">git status</span><span class="s-dot"></span></div></div>
+    </div>
+  </div>
+  <div class="x-col">
+    <div class="x-colhead">B · sans label</div>
+    <div class="x-stack">
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target s-target-sans">Inspect Bash header selector and caller</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target s-target-sans">Check projector for description field</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target s-target-sans">Measure description-field frequency across every recorded session transcript</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">git status</span><span class="s-dot"></span></div></div>
+    </div>
+  </div>
+</div>
+<div class="x-grid x-grid-next">
+  <div class="x-col">
+    <div class="x-colhead">C · no family word</div>
+    <div class="x-stack">
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-target s-target-sans">Inspect Bash header selector and caller</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-target s-target-sans">Check projector for description field</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-target s-target-sans">Measure description-field frequency across every recorded session transcript</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-target">git status</span><span class="s-dot"></span></div></div>
+    </div>
+  </div>
+  <div class="x-col">
+    <div class="x-colhead">D · dimmed label</div>
+    <div class="x-stack">
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target s-target-dim">Inspect Bash header selector and caller</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target s-target-dim">Check projector for description field</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target s-target-dim">Measure description-field frequency across every recorded session transcript</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">git status</span><span class="s-dot"></span></div></div>
+    </div>
+  </div>
+</div>
+
+
+<div class="x-sec"><p class="x-eyebrow">Command first</p></div>
+
+<p class="x-state">E · second line</p>
+<div class="x-wall"><div class="x-stack">
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">rg -n "deriveTarget" app/renderer/src/TranscriptView.tsx | head -20</span><span class="s-dot"></span></div><div class="s-sub-indent">Inspect Bash header selector and caller</div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">sed -n '1837,1870p' app/renderer/src/TranscriptView.tsx</span><span class="s-dot"></span></div><div class="s-sub-indent">Read the target derivation</div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">rg -n "toolSummary" ~/catcode_prototype/cat-app/*.jsx | head -12</span><span class="s-dot"></span></div><div class="s-sub-indent">Find toolSummary in prototype</div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">bun test app/renderer/src/bashCommandLabel.test.ts</span><span class="s-dot"></span></div><div class="s-sub-indent">Run the label module tests</div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">git status</span><span class="s-dot"></span></div></div>
+</div></div>
+
+<p class="x-state">F · banded line</p>
+<div class="x-wall"><div class="x-stack">
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">rg -n "deriveTarget" app/renderer/src/TranscriptView.tsx | head -20</span><span class="s-dot"></span></div><div class="s-sub-band">Inspect Bash header selector and caller</div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">sed -n '1837,1870p' app/renderer/src/TranscriptView.tsx</span><span class="s-dot"></span></div><div class="s-sub-band">Read the target derivation</div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">rg -n "toolSummary" ~/catcode_prototype/cat-app/*.jsx | head -12</span><span class="s-dot"></span></div><div class="s-sub-band">Find toolSummary in prototype</div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">bun test app/renderer/src/bashCommandLabel.test.ts</span><span class="s-dot"></span></div><div class="s-sub-band">Run the label module tests</div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">git status</span><span class="s-dot"></span></div></div>
+</div></div>
+
+<p class="x-state">G · trailing</p>
+<div class="x-wall"><div class="x-stack">
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">rg -n "deriveTarget" app/renderer/src/TranscriptView.tsx | head -20</span><span class="s-sep">·</span><span class="s-sub-trail">Inspect Bash header selector and caller</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">sed -n '1837,1870p' app/renderer/src/TranscriptView.tsx</span><span class="s-sep">·</span><span class="s-sub-trail">Read the target derivation</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">rg -n "toolSummary" ~/catcode_prototype/cat-app/*.jsx | head -12</span><span class="s-sep">·</span><span class="s-sub-trail">Find toolSummary in prototype</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">bun test app/renderer/src/bashCommandLabel.test.ts</span><span class="s-sep">·</span><span class="s-sub-trail">Run the label module tests</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">git status</span><span class="s-dot"></span></div></div>
+</div></div>
+
+
+<div class="x-sec"><p class="x-eyebrow">On demand</p></div>
+
+<p class="x-state">H · hover swap</p>
+<div class="x-wall"><div class="x-stack">
+      <div class="s-card s-hover"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target"><span class="s-target-cmd">echo hello</span><span class="s-target-desc">Print a greeting</span></span><span class="s-dot"></span></div></div>
+      <div class="s-card s-hover"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target"><span class="s-target-cmd">git status</span><span class="s-target-desc">Check the working tree</span></span><span class="s-dot"></span></div></div>
+      <div class="s-card s-hover"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target"><span class="s-target-cmd">rg -n "deriveTarget" app/renderer/src/TranscriptView.tsx | head -20</span><span class="s-target-desc">Inspect Bash header selector and caller</span></span><span class="s-dot"></span></div></div>
+      <div class="s-card s-hover"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target"><span class="s-target-cmd">sed -n '1837,1870p' app/renderer/src/TranscriptView.tsx</span><span class="s-target-desc">Read the target derivation</span></span><span class="s-dot"></span></div></div>
+      <div class="s-card s-hover"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target"><span class="s-target-cmd">bun test app/renderer/src/bashCommandLabel.test.ts</span><span class="s-target-desc">Run the label module tests</span></span><span class="s-dot"></span></div></div>
+</div></div>
+
+<p class="x-state">I · long commands only</p>
+<div class="x-wall"><div class="x-stack">
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">echo hello</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">git status</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">Inspect Bash header selector and caller</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">Read the target derivation</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">Run the label module tests</span><span class="s-dot"></span></div></div>
+</div></div>
 
 <p class="x-foot">docs/design-html/2026-08-23-bash-command-label-gui.html</p>
 </div>

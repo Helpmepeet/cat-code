@@ -1,28 +1,27 @@
 /**
- * What a Bash tool card says on its header line, and what it therefore has to
- * expose in its body.
+ * What a Bash tool card shows on its header line, and what it reveals when the
+ * pointer or keyboard focus lands on it.
  *
- * The prototype's own bash card is summary-first (`Messages.jsx:416,470`
- * `msg.toolSummary || msg.command`); the permission prompt is the one place it
- * inverts to command-first (`:505,516`), because there the user is approving
- * what will execute. This module is the summary-first half only.
+ * The header keeps the raw command, which is what the card has always shown and
+ * what the operator chose after seeing the alternatives: a wall of cards is read
+ * as commands, and a short one (`git status`, `echo hello`) loses information
+ * when prose replaces it. The model's own words are the second layer, not the
+ * first.
  *
- * Two sources, in the engine's own order of preference:
+ * Two sources for that second layer, in the engine's order of preference:
  *
  *  1. `description` — the Bash tool's optional field, spec'd as "Clear, concise
  *     description of what this command does in active voice"
- *     (`src/tools/BashTool/BashTool.tsx:230`). The engine already prefers it
- *     over the command for its own summary (`getToolUseSummary`, `:504-516`).
- *     Present on 17,721 of 17,726 recorded cat-code Bash calls; every `gpt-*`
- *     model writes one without exception.
+ *     (`src/tools/BashTool/BashTool.tsx:230`), which the engine already prefers
+ *     for its own summary (`getToolUseSummary`, `:504-516`). Present on 17,721
+ *     of 17,726 recorded cat-code Bash calls; every `gpt-*` model writes one,
+ *     though a prompt that dictates the exact command suppresses it.
  *  2. A leading `# comment` on the command — the terminal's label
- *     (`src/tools/BashTool/commentLabel.ts`, used by its tool-use render and
- *     its collapsed-group hint). Recorded rate across both transcript trees:
- *     zero of 62,858. Kept so the app reads the same command the terminal does
- *     if that ever changes, not because it fires today.
+ *     (`src/tools/BashTool/commentLabel.ts`). Recorded rate: zero of 62,858, so
+ *     this rung is parity with the terminal rather than a live path.
  *
- * When neither exists the card falls back to the raw command, which is what it
- * has always shown.
+ * Nothing is revealed when neither exists, or when the label would only repeat
+ * the command.
  */
 
 /**
@@ -38,16 +37,13 @@ export function extractBashCommentLabel(command: string): string | undefined {
 }
 
 export type BashCardText = {
-  /** The header line. Null only when the row carries no command at all. */
-  label: string | null
+  /** The header line. Always the command, null only when the row carries none. */
+  target: string | null
   /**
-   * The raw command, for the body — null when the label already IS the command,
-   * so a card that gained nothing from a label does not print it twice. The
-   * body is the only place it survives: the inspector deliberately stopped
-   * surfacing raw input for a resolved call (`ToolInspector.tsx` header,
-   * 2026-08-13), and the header truncates to one line.
+   * Swapped in over the target on hover or keyboard focus. Null when the model
+   * sent nothing, or when it would only repeat what the header already says.
    */
-  commandLead: string | null
+  hover: string | null
 }
 
 export function selectBashCardText(
@@ -55,8 +51,8 @@ export function selectBashCardText(
   description: string | null,
 ): BashCardText {
   if (command === null) {
-    return { label: description, commandLead: null }
+    return { target: description, hover: null }
   }
-  const label = description ?? extractBashCommentLabel(command) ?? command
-  return { label, commandLead: label === command ? null : command }
+  const hover = description ?? extractBashCommentLabel(command) ?? null
+  return { target: command, hover: hover === command ? null : hover }
 }
