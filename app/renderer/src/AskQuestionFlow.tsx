@@ -16,8 +16,8 @@
  * Container: the prototype's `AskQuestionFlow` renders a bare `<div>` and gets
  * ALL of its chrome from the `PermissionQueue` card hosting it
  * (`Permissions.jsx:437-593`) — the raised `#141416` surface, the accent
- * hairline, the drop shadow, the icon + kicker row, the scrolling body under a
- * height ceiling, and the mono key strip. Lifting the flow out of that card and
+ * hairline, the drop shadow, the icon + kicker row, and the scrolling body under
+ * a height ceiling. Lifting the flow out of that card and
  * docking it in the chat column dropped every one of those, so they are rebuilt
  * here. Three deliberate deviations, each flagged in PARITY-LEDGER §7:
  *   - NOT a `position:fixed` portal (PARITY-LEDGER.md:577): a split workspace
@@ -26,16 +26,10 @@
  *     transcript. What keeps that from reaching the composer is no longer this
  *     card's business: the dock itself now yields and scrolls its panel region
  *     (`App.tsx`, the composer dock), so no docked surface can push the input
- *     off screen. The ceiling below is what stops ONE card monopolising the
- *     dock, and it is what holds the key strip outside the scroll.
- *   - The strip carries the key legend only; the prototype's `Manage rules →`
- *     and `Keep pending →` are behaviour this app does not have for a question
- *     (the flow is excluded from the generic queue, so it has no snooze).
- *   - The per-mode hint therefore MOVED here out of the footer rail, which the
- *     prototype keeps in both places, and it is gated on `keysAdvertised`: the
- *     prototype's strip is unconditional because a modal portal has no rival
- *     focus owner, whereas this card can mount behind a live composer that
- *     keeps every key it advertises.
+ *     off screen. The ceiling below stops ONE card monopolising the dock.
+ *   - The prototype's full-width key strip, `Manage rules →`, and `Keep
+ *     pending →` are omitted by operator request. The Submit and Cancel
+ *     controls retain their compact Enter and Escape chips.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -47,19 +41,14 @@ import {
   buildAskAnswerPayload,
   type DraftAnswer,
 } from './askQuestionFlowModel.js'
-import {
-  isEditableElement,
-  permissionKeysAreLive,
-} from './permissionPromptModel.js'
+import { permissionKeysAreLive } from './permissionPromptModel.js'
 
 /** One question's in-progress answer: engine-option indices + freeform text. */
 
 /**
- * Keys a focused control acts on ITSELF. Inside the card these stay the
- * control's: Enter on Cancel must cancel, Space on Submit must submit, and
- * Enter on an option row toggles that row, which is what its activation means.
- * Everything else inside the card (arrows, digits, o, Escape) belongs to the
- * card, which is what makes the cursor survive a click on a row.
+ * Keys a focused control acts on ITSELF. Footer buttons keep both activation
+ * keys, and option rows keep Space for toggling. Enter on an option row belongs
+ * to the flow so a mouse pick followed by Enter submits it.
  */
 const CONTROL_ACTIVATION_KEYS = new Set([' ', 'Enter'])
 
@@ -69,8 +58,8 @@ const CARD_CONTROL_SELECTOR = 'a[href], button, input, select, textarea'
 /**
  * Whether the flow's shortcuts would fire for `active`. Inside the card they do
  * (the containment rule in the key handler); outside it the shared predicate
- * decides, so the composer keeps the keys it is being typed into. The strip and
- * the key chips read this so they never advertise a dead key.
+ * decides, so the composer keeps the keys it is being typed into. The key chips
+ * read this so they never advertise a dead key.
  */
 function askKeysLive(card: HTMLElement | null, active: Element | null): boolean {
   if (card !== null && active !== null && card.contains(active)) return true
@@ -153,8 +142,7 @@ export function AskQuestionFlow({
   // Take the keyboard on mount, the way the app's other keyboard-owning cards
   // already do (`PermissionPrompt.tsx`, `PlanPanel.tsx` via `useModalFocus`).
   // Without this the composer keeps focus and `permissionKeysAreLive` reports
-  // every advertised key dead, so the flow mounts with a key legend nothing
-  // honours.
+  // the compact key chips dead.
   useEffect(() => {
     if (!isActivePane) {
       setKeysLive(false)
@@ -163,13 +151,6 @@ export function AskQuestionFlow({
     const node = cardRef.current
     if (!node) return
     const previous = document.activeElement
-    // Mid-word: leave focus where the user put it. The strip below is gated on
-    // `keysLive`, so it stops advertising keys this branch just left dead
-    // rather than printing a legend nothing honours.
-    if (isEditableElement(previous)) {
-      setKeysLive(askKeysLive(node, previous))
-      return
-    }
     // A modal owns the screen: this card is docked BEHIND its scrim, so taking
     // the keyboard here would let digits and Enter answer a question the user
     // cannot see while they are looking at the dialog (`PlanPanel` sets both
@@ -264,8 +245,8 @@ export function AskQuestionFlow({
       // here is a `<button>` — an owner — so the marker on the `<section>` is
       // never even read once focus lands on a row. On the permission card that
       // is correct: Enter on its focused Deny button must deny. Here the rows
-      // are TOGGLES, so a click used to leave the row focused and kill the whole
-      // legend — arrows, digits, space, Escape — and the same guard ran ahead of
+      // are TOGGLES, so a click used to leave the row focused and kill all
+      // shortcuts — arrows, digits, space, Escape — and the same guard ran ahead of
       // the freeform branch, so Enter and Escape inside "Other…" were
       // unreachable too.
       //
@@ -276,15 +257,22 @@ export function AskQuestionFlow({
         element !== null && cardRef.current?.contains(element) === true
       if (!inCard && !permissionKeysAreLive(event.target)) return
 
-      // Containment claims the NAVIGATION keys, never a focused control's own
-      // activation. Claiming those too made Enter on the focused Cancel button
-      // submit the answer instead of declining, because `preventDefault()`
-      // suppresses the browser's Enter → click. The freeform input is the one
-      // exemption: the `inOurInput` branch below is what handles Enter/Escape
-      // in it, and it needs them.
+      // Containment claims the NAVIGATION keys. Footer controls keep their own
+      // activation keys, and option rows keep Space. Enter on an option row is
+      // deliberately claimed by the flow: clicking an answer and pressing Enter
+      // submits it instead of toggling it off.
       if (inCard && CONTROL_ACTIVATION_KEYS.has(event.key)) {
         const control = element.closest(CARD_CONTROL_SELECTOR)
-        if (control !== null && control !== otherInputRef.current) return
+        const optionRow = element.closest('[data-ask-option]')
+        const flowClaimsOptionEnter =
+          event.key === 'Enter' && optionRow !== null
+        if (
+          control !== null &&
+          control !== otherInputRef.current &&
+          !flowClaimsOptionEnter
+        ) {
+          return
+        }
       }
       // In flight: the answer is already sent (buttons are disabled too) — the
       // keyboard must not fire a second advance/submit before the resolve lands.
@@ -300,7 +288,7 @@ export function AskQuestionFlow({
           setOtherActive(false)
           setDraft(abandonOtherText(draft))
           // Leaving the field unmounts the focused input, which drops focus to
-          // <body>. Take it back so the card keeps the keyboard it advertises.
+          // <body>. Take it back so the card keeps keyboard ownership.
           cardRef.current?.focus()
           return
         }
@@ -367,15 +355,9 @@ export function AskQuestionFlow({
   const focusedPreview =
     cursor < optionCount ? q.options[cursor]?.preview ?? null : null
   const titleId = `ask-question-${requestId}`
-  const optionShortcutLegend =
-    otherIndex < 9 ? `1–${otherIndex + 1}` : '1–9 · o'
-  const keyLegend = q.multiSelect
-    ? `${optionShortcutLegend} / space toggle · ↑↓ move · ↵ · esc`
-    : `${optionShortcutLegend} pick · ↑↓ move · ↵ · esc`
   // The sibling card's honesty rule (P4-43, PARITY-LEDGER §7): never advertise
-  // a key that will not fire. Both dead states are reachable here — a
-  // background pane registers no listener at all, and a card that mounted while
-  // the composer held focus left every key to the composer.
+  // a key that will not fire. An inactive pane registers no listener, and a card
+  // behind a modal deliberately does not take focus.
   const keysAdvertised = isActivePane && keysLive
 
   return (
@@ -395,14 +377,13 @@ export function AskQuestionFlow({
       tabIndex={isActivePane ? -1 : undefined}
     >
       {/* Body scrolls under a ceiling, the way the prototype bounds the same
-       * growth (`maxHeight: calc(100vh - 150px)` + `overflowY: auto`). Two jobs,
-       * neither of them protecting the composer any more: it keeps one card from
-       * taking the whole dock away from a permission card queued behind it, and
-       * it is what leaves the key strip below OUTSIDE the scrolling body. Sized
+       * growth (`maxHeight: calc(100vh - 150px)` + `overflowY: auto`). It no
+       * longer protects the composer; it keeps one card from taking the whole
+       * dock away from a permission card queued behind it. Sized
        * to the viewport rather than to the dock on purpose, so that in a window
        * with room the card sits at its natural height and the dock's own
        * scroller never engages. */}
-      <div className="max-h-[60vh] overflow-y-auto px-4 py-3">
+      <div className="max-h-[60vh] overflow-y-auto px-4 py-2.5">
       {/* Kicker — glyph + family word + pending count, the grammar the sibling
        * permission card already uses (`PermissionPrompt.tsx` kicker row). */}
       <div className="flex items-center gap-2">
@@ -420,7 +401,7 @@ export function AskQuestionFlow({
       </div>
 
       {/* Header chip + multi-select badge + multi-question stepper */}
-      <div className="mt-2 flex flex-wrap items-center gap-2">
+      <div className="mt-1.5 flex flex-wrap items-center gap-2">
         <span className="rounded border border-accent/30 bg-accent/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-accent">
           {q.header || 'Question'}
         </span>
@@ -454,20 +435,20 @@ export function AskQuestionFlow({
       </div>
 
       <h2
-        className="mt-2 text-sm font-semibold leading-snug text-text-primary"
+        className="mt-1.5 text-sm font-semibold leading-snug text-text-primary"
         id={titleId}
       >
         {q.question}
       </h2>
 
       {/* Options — label + description, radio/checkbox marker, preview badge */}
-      <div className="mt-2 flex flex-col gap-1">
+      <div className="mt-1.5 flex flex-col gap-0.5">
         {q.options.map((option, i) => {
           const active = cursor === i && !otherActive
           const checked = draft.optionIndices.includes(i)
           return (
             <button
-              className={`flex w-full items-start gap-2 rounded-lg px-2.5 py-1.5 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
+              className={`flex w-full items-start gap-2 rounded-lg px-2.5 py-1 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
                 active
                   ? 'border border-accent/45 bg-accent/10'
                   : checked
@@ -475,6 +456,7 @@ export function AskQuestionFlow({
                     : 'border border-transparent'
               }`}
               data-ask-active={active ? 'true' : undefined}
+              data-ask-option
               disabled={submitted}
               key={i}
               onClick={() => toggleOption(i)}
@@ -525,7 +507,7 @@ export function AskQuestionFlow({
 
         {/* Built-in "Other…" freeform row — always appended by this UI */}
         <div
-          className={`flex items-center gap-2 rounded-lg px-2.5 py-1.5 ${
+          className={`flex items-center gap-2 rounded-lg px-2.5 py-1 ${
             cursor === otherIndex
               ? 'border border-accent/45 bg-accent/10'
               : 'border border-transparent'
@@ -579,7 +561,7 @@ export function AskQuestionFlow({
 
       {/* Preview pane — appears when the focused option carries one */}
       {focusedPreview ? (
-        <div className="mt-2 rounded-lg border border-tone-info/20 bg-black/30 px-3 py-2">
+        <div className="mt-1.5 rounded-lg border border-tone-info/20 bg-black/30 px-3 py-1.5">
           <div className="mb-1 text-[9px] font-bold uppercase tracking-wider text-tone-info">
             Preview
           </div>
@@ -590,7 +572,7 @@ export function AskQuestionFlow({
       ) : null}
 
       {/* Footer rail — advance/submit + key hints + cancel */}
-      <div className="mt-3 flex items-center gap-3 border-t border-shell-seam pt-2.5">
+      <div className="mt-2 flex items-center gap-3 border-t border-shell-seam pt-2">
         <button
           className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1 text-xs font-semibold text-app-bg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:bg-text-primary/[0.06] disabled:text-text-faint"
           disabled={!canAdvance || submitted}
@@ -620,16 +602,6 @@ export function AskQuestionFlow({
       </div>
       </div>
 
-      {/* Key strip — outside the scrolling body, so the legend survives a card
-       * tall enough to scroll (`Permissions.jsx:586-593`). Absent rather than
-       * empty while the keys are dead: a bar advertising nothing reads as a
-       * broken bar, and the prototype's unconditional strip had no rival focus
-       * owner to go dead against. */}
-      {keysAdvertised ? (
-        <div className="flex items-center justify-between border-t border-shell-seam bg-[#0d0d0f] px-4 py-[7px] font-mono text-[10px] text-text-faint">
-          <span>{keyLegend}</span>
-        </div>
-      ) : null}
     </section>
   )
 }

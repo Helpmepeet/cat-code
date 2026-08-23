@@ -1421,6 +1421,68 @@ test('P4-18c: a generating session (ready + input disabled) shows the activity i
   expect(activityRow).not.toContain('border-b')
 })
 
+test('a question card replaces the generating activity row', () => {
+  const html = renderToStaticMarkup(
+    <SessionPane
+      {...idleSessionPaneProps()}
+      activeConnection={{ status: 'ready', inputEnabled: false }}
+      askQuestion={{
+        request: {
+          requestId: 'perm-ask',
+          request: {
+            subtype: 'can_use_tool',
+            tool_name: 'AskUserQuestion',
+            input: {},
+            tool_use_id: 'toolu-ask',
+          },
+        },
+        submitted: false,
+        questions: [
+          {
+            question: 'Which library?',
+            header: 'Library',
+            multiSelect: false,
+            options: [
+              { label: 'date-fns', description: '', preview: null },
+              { label: 'luxon', description: '', preview: null },
+            ],
+          },
+        ],
+      }}
+    />,
+  )
+
+  expect(html).toContain('Which library?')
+  expect(html).not.toContain('Waiting for approval')
+  expect(html).not.toMatch(/<div class="[^"]*gap-2\.5[^"]*text-xs"/)
+})
+
+test('an ordinary permission request keeps the approval activity row', () => {
+  const html = renderToStaticMarkup(
+    <SessionPane
+      {...idleSessionPaneProps()}
+      activeConnection={{ status: 'ready', inputEnabled: false }}
+      permissionQueue={[
+        {
+          request: {
+            requestId: 'perm-bash',
+            request: {
+              subtype: 'can_use_tool',
+              tool_name: 'Bash',
+              input: { command: 'date' },
+              tool_use_id: 'toolu-bash',
+            },
+          },
+          submitted: false,
+          dismissed: false,
+        },
+      ]}
+    />,
+  )
+
+  expect(html).toContain('Waiting for approval')
+})
+
 // ── P4-18c activity helpers ─────────────────────────────────────────────────
 
 function blockRow(

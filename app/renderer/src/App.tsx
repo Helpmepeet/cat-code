@@ -4638,7 +4638,8 @@ export function SessionPane({
 
   // P4-18c transcript scroll + live activity. `generating` is the honest
   // turn-active signal: a ready session whose input is disabled is mid-turn
-  // (the same gate the composer uses). `paused` = a pending permission request.
+  // (the same gate the composer uses). `paused` = a generic permission request;
+  // AskQuestionFlow is already the complete visible waiting state for questions.
   const transcriptScrollRef = useRef<HTMLDivElement>(null)
   const [atBottom, setAtBottom] = useState(true)
   // Mirrored into a ref because the pane coordinator asks for this answer from
@@ -4677,7 +4678,7 @@ export function SessionPane({
   const composerPlaceholder = composerGate.editable
     ? 'Ask Cat Code anything or describe a task…'
     : 'Connecting…'
-  const paused = permissionQueue.length > 0 || askQuestion !== null
+  const paused = permissionQueue.length > 0
   // Slice-cached: stable ref while the session's rows are unchanged, so both
   // `deriveActivity` and the token estimate share one projection.
   const nestedRows = selectNestedTranscriptRows(transcript, activeSessionId)
@@ -5396,7 +5397,7 @@ export function SessionPane({
       {/* Outside the scroller: one row, fixed height, and it is the row that
        * hugs the composer. Scrolling it away from the input it belongs to would
        * be the opposite of what it is for. */}
-      {generating ? (
+      {generating && askQuestion === null ? (
         <ActivityIndicator
           verb={activity.verb}
           target={activity.target}

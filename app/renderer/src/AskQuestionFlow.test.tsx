@@ -113,7 +113,7 @@ test('the active pane can be focused at all, and an inactive one cannot', () => 
   expect(render(SINGLE, false)).not.toContain('tabindex')
 })
 
-test('the card is a bounded scroller with the key strip outside it', () => {
+test('the card body is a bounded scroller', () => {
   const html = render(SINGLE)
   // Docked in the column rather than portaled over the transcript, so the card
   // grows into the dock. The ceiling bounds THIS card's share of it, which is
@@ -122,10 +122,9 @@ test('the card is a bounded scroller with the key strip outside it', () => {
   // `composerDock.test.tsx`).
   expect(html).toContain('max-h-[60vh]')
   expect(html).toContain('overflow-y-auto')
-  // The legend lives outside the scrolling body, so it survives a tall card.
-  const stripAt = html.indexOf('bg-[#0d0d0f]')
-  expect(stripAt).toBeGreaterThan(-1)
-  expect(html.indexOf('overflow-y-auto')).toBeLessThan(stripAt)
+  expect(html).toContain('py-2.5')
+  expect(html).toContain('gap-0.5')
+  expect(html).not.toContain('bg-[#0d0d0f]')
 })
 
 test('the kicker names the request family and counts what is queued behind it', () => {
@@ -183,16 +182,13 @@ test('the Other row never shows a number no key can produce', () => {
   // unreachable from the digit shortcuts, which stop at 9.
   expect(html).not.toContain('>10<')
   expect(html).toContain('>o<')
-  expect(html).toContain('1–9 · o pick · ↑↓ move')
-  expect(html).not.toContain('1–10 pick')
+  expect(html).not.toContain('1–9 · o pick')
 })
 
-test('single question shows a Submit footer + accurate single-select key hints, no stepper', () => {
+test('single question shows a Submit footer with no full-width key legend or stepper', () => {
   const html = render(SINGLE)
   expect(html).toContain('Submit')
-  // Two options plus Other make three reachable numbered shortcuts.
-  expect(html).toContain('1–3 pick · ↑↓ move')
-  expect(html).not.toContain('1–9 pick')
+  expect(html).not.toContain('pick · ↑↓ move')
   expect(html).not.toContain('Next question')
   expect(html).not.toContain('multi-select')
 })
@@ -206,12 +202,10 @@ test('multi-question shows Next question + stepper + the multi-select badge on q
   expect(html).toContain('1/2')
 })
 
-test('a multi-select question renders the multi-select badge + toggle hint', () => {
+test('a multi-select question renders the multi-select badge without a full-width key legend', () => {
   const html = render([MULTI[1]!])
   expect(html).toContain('multi-select')
-  // Two options plus Other make three reachable numbered shortcuts.
-  expect(html).toContain('1–3 / space toggle · ↑↓ move')
-  expect(html).not.toContain('1–9 / space toggle')
+  expect(html).not.toContain('space toggle · ↑↓ move')
 })
 
 test('cancel affordance is present (esc)', () => {

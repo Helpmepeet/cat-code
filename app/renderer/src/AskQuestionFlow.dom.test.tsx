@@ -8,11 +8,10 @@
  * exists. Detaching `ref={cardRef}` breaks every behaviour below while leaving
  * all of those pinned strings byte-identical.
  *
- * The rule under test: inside the card the CARD owns navigation (arrows,
- * digits, o, Escape), while a focused control keeps its own ACTIVATION keys
- * (Enter, Space) so that Enter on Cancel cancels. Outside the card the shared
- * `permissionKeysAreLive` predicate still rules, so the composer keeps the keys
- * it is being typed into.
+ * The rule under test: the card takes focus when it appears. Inside it, the
+ * card owns navigation plus Enter on option rows, while footer controls keep
+ * their own activation keys. Outside the card the shared
+ * `permissionKeysAreLive` predicate still rules.
  */
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
 import { act } from 'react'
@@ -157,6 +156,21 @@ test('a focused option row does not kill the navigation keys', async () => {
   expect(calls.answers).toHaveLength(0)
 })
 
+test('Enter submits an option picked with the mouse', async () => {
+  const { card, calls } = await mountFlow()
+  const row = optionRows(card)[1]!
+  await act(async () => {
+    row.click()
+    row.focus()
+  })
+  expect(markerText(row)).toBe('✓')
+  expect(document.activeElement).toBe(row)
+
+  const enter = await press(row, 'Enter')
+  expect(enter.defaultPrevented).toBe(true)
+  expect(calls.answers).toEqual([[{ optionIndices: [1] }]])
+})
+
 test('Enter on the focused Cancel button is left to the button, not claimed as submit', async () => {
   // The regression the containment test introduced: claiming Enter everywhere
   // inside the card meant `preventDefault()` suppressed the browser's
@@ -202,41 +216,16 @@ test('Tab-focusing a row moves the cursor onto it', async () => {
   expect(optionRows(card)[0]!.getAttribute('data-ask-active')).toBe(null)
 })
 
-test('keys typed into the composer never reach the card', async () => {
+test('the card takes focus from the composer when it appears', async () => {
   const composer = document.createElement('textarea')
   document.body.appendChild(composer)
+  composer.focus()
   const { calls, card } = await mountFlow()
-  await focusIn(composer)
-  expect(document.activeElement).toBe(composer)
+  expect(document.activeElement).toBe(card)
 
-  const escape = await press(composer, 'Escape')
-  expect(escape.defaultPrevented).toBe(false)
-  expect(calls.cancels).toBe(0)
-  await press(composer, '1')
-  expect(markerText(optionRows(card)[0]!)).toBe('1') // unchecked
-  composer.remove()
-})
-
-test('the mount effect leaves focus alone when the user is mid-word', async () => {
-  const composer = document.createElement('textarea')
-  document.body.appendChild(composer)
-  composer.focus()
-  const { card } = await mountFlow()
-  expect(document.activeElement).toBe(composer)
-  expect(document.activeElement).not.toBe(card)
-  composer.remove()
-})
-
-test('the key strip is absent while the keys are dead, and present when they are live', async () => {
-  // The sibling card's honesty rule: never advertise a key that will not fire.
-  const composer = document.createElement('textarea')
-  document.body.appendChild(composer)
-  composer.focus()
-  const { card } = await mountFlow()
-  expect(card.textContent).not.toContain('esc')
-
-  await focusIn(card)
-  expect(card.textContent).toContain('esc')
+  await press(card, '1')
+  await press(card, 'Enter')
+  expect(calls.answers).toEqual([[{ optionIndices: [0] }]])
   composer.remove()
 })
 
