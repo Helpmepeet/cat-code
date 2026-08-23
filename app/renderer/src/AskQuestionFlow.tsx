@@ -211,14 +211,20 @@ export function AskQuestionFlow({
   }
 
   function advance() {
-    if (!canAdvance) return
+    let nextAnswers = answers
+    if (!canAdvance) {
+      if (!q || otherActive || cursor >= optionCount) return
+      const selected = { optionIndices: [cursor], other: '' }
+      nextAnswers = answers.map((value, i) => (i === qi ? selected : value))
+    }
     if (!isLast) {
+      setAnswers(nextAnswers)
       setQi(qi + 1)
       return
     }
     // Build the wire payload: option INDICES + trimmed freeform per question. The
     // sidecar re-attaches the engine's own labels and joins them (outputSchema).
-    onAnswer(buildAskAnswerPayload(answers))
+    onAnswer(buildAskAnswerPayload(nextAnswers))
   }
 
   useEffect(() => {

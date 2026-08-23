@@ -61,6 +61,19 @@ const MULTI: AskQuestion[] = [
   },
 ]
 
+const TWO_QUESTIONS: AskQuestion[] = [
+  SINGLE[0]!,
+  {
+    question: 'Which runtime?',
+    header: 'Runtime',
+    multiSelect: false,
+    options: [
+      { label: 'Bun', description: '', preview: null },
+      { label: 'Node', description: '', preview: null },
+    ],
+  },
+]
+
 type Calls = {
   answers: AskUserQuestionAnswer[][]
   cancels: number
@@ -197,13 +210,24 @@ test('Space on a focused footer button is left to the button', async () => {
   expect(calls.answers).toHaveLength(0)
 })
 
-test('Enter with focus on the card itself advances and submits', async () => {
+test('one Enter selects the highlighted option and submits', async () => {
   const { card, calls } = await mountFlow()
-  await press(card, '1')
   const enter = await press(card, 'Enter')
   expect(enter.defaultPrevented).toBe(true)
   expect(calls.answers).toHaveLength(1)
   expect(calls.answers[0]).toEqual([{ optionIndices: [0] }])
+})
+
+test('one Enter per step selects each highlighted option and advances', async () => {
+  const { card, calls } = await mountFlow(TWO_QUESTIONS)
+  await press(card, 'Enter')
+  expect(calls.answers).toHaveLength(0)
+  expect(card.textContent).toContain('Which runtime?')
+
+  await press(card, 'Enter')
+  expect(calls.answers).toEqual([
+    [{ optionIndices: [0] }, { optionIndices: [0] }],
+  ])
 })
 
 test('Tab-focusing a row moves the cursor onto it', async () => {
@@ -223,7 +247,6 @@ test('the card takes focus from the composer when it appears', async () => {
   const { calls, card } = await mountFlow()
   expect(document.activeElement).toBe(card)
 
-  await press(card, '1')
   await press(card, 'Enter')
   expect(calls.answers).toEqual([[{ optionIndices: [0] }]])
   composer.remove()
