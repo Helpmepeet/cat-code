@@ -5,6 +5,16 @@ agent system. This file is the operating manual for any agent working here.
 Every rule is checkable. If a rule conflicts with what you find in source,
 source wins — finish the task by the source, then flag the drift in your report.
 
+**One user, zero others.** This fork has exactly one human user, on one
+machine, and will never have another. Nothing here needs backwards
+compatibility, deprecation windows, shims for "existing users", staged
+rollout, or a stable public API. A change that is only defensive toward users
+who do not exist is waste: cut it. What this does NOT license is carelessness
+with the one user's live state, which is production. Saved sessions in
+`~/.cat-code/`, the Codex account vault, settings, and the running desktop app
+hold real work that cannot be regenerated, so config/schema migrations (§6)
+apply in full.
+
 **Expect company.** More than one agent session usually works this repo at the
 same time, sharing one working tree and one set of branches. Files you didn't
 touch change, the branch tip moves between your own commands, and multi-writer
