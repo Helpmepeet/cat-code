@@ -124,8 +124,9 @@ amendment moves only destructive global profile deletion off the session plane.
   generic invoke. Preload applies the byte/rate guard; main and the worker both
   require the exact `{type, requestId, accountId, confirm:true}` shape before an
   engine module can perform the write. Main also permits only one delete worker
-  at a time, owns its abort controller through teardown, and suppresses any pool
-  read that began before the mutation.
+  at a time, owns its abort controller through teardown, force-kills that child
+  on teardown before `app.exit` can destroy an escalation timer, and suppresses
+  any pool read that began before the mutation.
 - **Host-originated invalidation.** `account.profileDeleted` has no preload
   method. The sidecar still validates its exact bounded shape before applying
   process-local cleanup, but untrusted renderer content has no route to originate

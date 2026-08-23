@@ -2521,6 +2521,7 @@ function registerHostControlPlane(): void {
           ]),
           cwd: process.cwd(),
           signal: abort.signal,
+          forceKillOnAbort: true,
           input: {
             type: 'account-delete',
             version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,

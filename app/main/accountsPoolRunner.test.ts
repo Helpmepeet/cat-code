@@ -493,6 +493,29 @@ describe('runAccountsPoolWorker — fail closed', () => {
     expect(signals).toEqual(['SIGTERM', 'SIGKILL'])
   }, 5_000)
 
+  test('force-kills a destructive worker immediately when teardown aborts', async () => {
+    const controller = new AbortController()
+    const signals: NodeJS.Signals[] = []
+    const run = runAccountsPoolWorker({
+      command: 'bun',
+      args: ['--account-delete'],
+      cwd: process.cwd(),
+      signal: controller.signal,
+      forceKillOnAbort: true,
+      input: deleteInput(),
+      spawnWorker: fakeSpawn({
+        autoClose: false,
+        onKill: signal => signals.push(signal),
+      }),
+      onAccountDelete: () => {},
+    })
+
+    controller.abort()
+
+    await expect(run).rejects.toThrow(/aborted/)
+    expect(signals).toEqual(['SIGKILL'])
+  })
+
   test('rejects when the child fails to spawn', async () => {
     await expect(
       runAccountsPoolWorker({

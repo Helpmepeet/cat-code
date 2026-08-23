@@ -216,6 +216,7 @@ test('account deletion terminates in a one-shot worker, not a session forward', 
   expect(handler).toContain("'--account-delete'")
   expect(handler).toContain('runAccountsPoolWorker({')
   expect(handler).toContain('signal: abort.signal')
+  expect(handler).toContain('forceKillOnAbort: true')
   expect(handler).toContain('accountsPoolPublicationGate.invalidate()')
   expect(handler).toContain('notifySidecarsOfAccountDeletion(')
   expect(handler).not.toContain('activeSessionId')

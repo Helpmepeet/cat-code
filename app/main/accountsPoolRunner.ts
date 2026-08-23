@@ -114,6 +114,11 @@ export type AccountsPoolRunOptions = {
    * The exact closed request is written once to stdin before it is closed.
    */
   input?: AccountsPoolWorkerDeleteRequest
+  /**
+   * Destructive one-shot writes cannot outlive Electron teardown. Abort sends
+   * SIGKILL immediately because app.exit can destroy escalation timers.
+   */
+  forceKillOnAbort?: boolean
   /** Called at most ONCE, only for an accepted + secret-clean pool record. */
   onPool?: (pool: AccountsSnapshot) => void
   /** Called at most once for an accepted account-delete result. */
@@ -176,8 +181,11 @@ export async function runAccountsPoolWorker(
   let childClosed = false
   let forceKillTimer: ReturnType<typeof setTimeout> | null = null
 
-  const terminate = () => {
-    if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM')
+  const terminate = (force = false) => {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill(force ? 'SIGKILL' : 'SIGTERM')
+    }
+    if (force) return
     if (forceKillTimer === null) {
       forceKillTimer = setTimeout(() => {
         if (!childClosed) child.kill('SIGKILL')
@@ -191,7 +199,7 @@ export async function runAccountsPoolWorker(
   }, options.timeoutMs ?? ACCOUNTS_POOL_WORKER_TIMEOUT_MS)
   const onAbort = () => {
     aborted = true
-    terminate()
+    terminate(options.forceKillOnAbort === true)
   }
   options.signal?.addEventListener('abort', onAbort, { once: true })
 
