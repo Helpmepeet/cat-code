@@ -5,21 +5,33 @@ agent system. This file is the operating manual for any agent working here.
 Every rule is checkable. If a rule conflicts with what you find in source,
 source wins — finish the task by the source, then flag the drift in your report.
 
-**One user, zero others.** This fork has exactly one human user, on one
-machine, and will never have another. Nothing here needs backwards
-compatibility, deprecation windows, shims for "existing users", staged
-rollout, or a stable public API. A change that is only defensive toward users
-who do not exist is waste: cut it. What this does NOT license is carelessness
-with the one user's live state, which is production. Saved sessions in
-`~/.cat-code/`, the Codex account vault, settings, and the running desktop app
-hold real work that cannot be regenerated, so config/schema migrations (§6)
-apply in full.
-
 **Expect company.** More than one agent session usually works this repo at the
 same time, sharing one working tree and one set of branches. Files you didn't
 touch change, the branch tip moves between your own commands, and multi-writer
 docs gain rows while you read them. Default assumption for anything you don't
 recognize: it is another session's live work, not yours to clean up (§4).
+
+## Workspace context — one user, zero others
+
+This fork has exactly one human user, on one machine, and will never have
+another. That single fact drives rules in several sections below, so it is
+stated here once instead of only inside §4 Git.
+
+**What it licenses.** No backwards compatibility, no deprecation windows, no
+shims for "existing users", no staged rollout, no stable public API. No PRs,
+no review gates, no branch ceremony (§4). A change that is only defensive
+toward users who do not exist is waste: cut it, and say in your report that
+you cut it.
+
+**What it does NOT license.** The one user's live state is production. Saved
+sessions in `~/.cat-code/`, the Codex account vault, settings, and a running
+desktop app hold real work that cannot be regenerated. Config/schema
+migrations (§6) apply in full, and the destructive-operation gates (§4, §10)
+stand.
+
+**What it does not change.** One user is not one session: several agent
+sessions share this tree at the same time (Expect company, above). Nothing
+here relaxes concurrency discipline.
 
 ## 1. Repo layout — know which world you are in
 
