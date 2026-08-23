@@ -583,6 +583,14 @@ states plainly that the only prevention inside our control is §5.1 plus a polic
 decision about pooling; reducing correlatability is named and declined. Appendix gains
 A11 and A12; A12 is specified but deliberately not run.
 
+Amended later the same day, after the mitigation question was put directly. A13 was
+added and §6.2 rewritten around it: per-account demand had never been measured, and
+measuring it withdrew this revision's own "consolidate onto one account"
+recommendation. All three live accounts have hit 100% of their rolling-window
+allowance, and the pool exceeded one account's allowance on 8 of 30 observed days,
+reaching 3.0 accounts' worth on 2026-08-17. Metered billing is now stated as the only
+mitigation that removes the exposure while preserving the capacity.
+
 **Rev 3 (23 Aug 2026)** — second review pass. WebSocket count corrected 22 → **24**
 distinct failures (rev 2 merged two `bluesky` failures 157 ms apart by truncating
 timestamps to seconds); repeat-dead count corrected "15 cycles" → **14 pairs** (rev 2
