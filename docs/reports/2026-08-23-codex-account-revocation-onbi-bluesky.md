@@ -39,20 +39,25 @@ account-wide, not scoped to the sessions this fork held, which excludes any read
 in which a detector acted on this client's request behaviour and killed only what it
 was using. `main` still answers 200 from the same host under the same client
 identity, so whatever selected the victims selected by account. The operator has since
-confirmed no password reset, security check, or device sign-out on either account, so
-the remaining candidates in §4.2 all sit on OpenAI's side — enforcement, automated
-security, or fault. **That narrowing is by elimination and by testimony, not by
-evidence.** Two cheap non-technical checks could still settle it outright and have not
-been done: reading the account email around 2026-08-22, and attempting a web sign-in
-(§4.2, §6.1).
+confirmed no password reset, security check, or device sign-out on either account, and
+a web sign-in check has since shown that **both accounts sign in to ChatGPT normally**,
+in two browsers, with no suspension notice and no forced reset. Account suspension,
+account disable, and password reset are therefore excluded by direct observation. What
+remains is a revocation scoped to the accounts' programmatic credentials — reaching
+past this fork to the official CLI's own session (§3.6) — while consumer access is
+untouched. That shape fits §4's hypothesis and fits a fault or generic security
+response poorly, but it does not confirm anything: no notice has been read and OpenAI
+has stated nothing. **Reading the account email is the one cheap check still
+outstanding** (§4.2, §6.1).
 
 **On prevention.** Only two levers are inside our control. One is a real defect: the
 spent refresh token in §5.1 is reachable and redeeming it is the canonical
 reuse-detection trigger, so our own code could cause the next revocation unaided. The
 other is not a code change at all but a decision about pooling five subscription
-accounts from one host under one client identity (§4.1, §6.2). If neither applies —
-if this was a password reset or an upstream fault — there was nothing to prevent, and
-the remaining work is making the failure cheaper (§6.3).
+accounts from one host under one client identity (§4.1, §6.2). The "nothing to
+prevent" readings have narrowed with the web sign-in result: a password reset is now
+excluded outright, leaving only an upstream fault, which fits the observed shape
+poorly. Making the failure cheaper (§6.3) remains worth doing regardless.
 
 One latent defect and two hygiene issues were found while investigating; see §5.
 
@@ -330,8 +335,34 @@ technical or available to an agent:
 | The account's email around and after 2026-08-22 | Account-level actions are normally notified. A suspension, policy, or password-change notice would name the cause directly; silence is weak evidence against a deliberate action. |
 | Signing in to the ChatGPT web UI as each account | A normal sign-in means the account is alive and only its sessions were terminated. A suspension notice, forced reset, or verification wall means an account-level action, and says which. |
 
-Until one of those is done, §4 remains a hypothesis. Both are cheap, and either could
-end the question that this report has now spent four revisions failing to answer.
+**Web sign-in check: done 2026-08-23. Both accounts sign in normally.** The operator
+signed in to `onbi` and `bluesky` through the ChatGPT web UI, in two different
+browsers, concurrently. No suspension notice, no forced reset, no verification wall.
+
+This is the strongest narrowing this report has obtained, and unlike §4.2's earlier
+elimination it rests on a direct observation rather than recall. It excludes:
+
+- **Account suspension or disable.** A suspended account does not sign in.
+- **Password reset.** The existing password still authenticates, so it was not
+  changed.
+- **Any account-level termination**, since consumer access is entirely unaffected.
+
+What is left is narrow and specific: **every Codex/OAuth credential for these two
+accounts was invalidated while the accounts themselves remained fully usable.** Recall
+from §3.6 that this reached beyond the sessions this fork held, killing the official
+Codex CLI's independent session for `onbi` as well. So the action was scoped to the
+programmatic surface, applied per account, and left the consumer product untouched.
+
+A revocation shaped like that is hard to explain as a fault and hard to explain as a
+generic security response, both of which would be expected to disturb the account
+rather than only its API credentials. It is the shape one would expect from an action
+taken against how the accounts were being used programmatically — which is §4's
+hypothesis. **This still does not confirm it**: no notice has been read, OpenAI has
+stated nothing, and "consistent with" is not "caused by". But the alternatives in
+§4.2 are now materially thinner than at rev 4, and the remaining ones sit upstream.
+
+**One check still outstanding: the account email.** It is now the only cheap step left
+that could replace inference with a stated reason.
 
 Sample size is five accounts and four events over two months, from one host. That is
 a suggestive pattern, not a demonstrated mechanism.
