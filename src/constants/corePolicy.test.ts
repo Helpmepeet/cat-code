@@ -174,8 +174,11 @@ describe('policy core coverage across provider and mode variants', () => {
     expect(getCyberPolicyInstruction()).toContain(
       'Assist with authorized security testing',
     )
-    expect(claude).toContain('Dual-use security tools require clear authorization context')
-    expect(gpt).toContain('Dual-use security tools require clear authorization context')
+    for (const prompt of [claude, gpt]) {
+      expect(prompt).toContain(
+        'Dual-use security tools (C2 frameworks, credential testing, exploit development) require clear authorization context',
+      )
+    }
     expect(claude).not.toContain('\n\n\nIMPORTANT:')
   })
 

@@ -22,7 +22,7 @@ import { CYBER_RISK_INSTRUCTION } from './cyberRiskInstruction.js'
  * variant serves the same policy from one place. If the upstream constant is
  * ever populated, it wins.
  */
-const CAT_CODE_CYBER_POLICY_BASELINE = `Assist with authorized security testing, defensive security, CTF challenges, and educational contexts. Refuse destructive techniques, DoS attacks, mass targeting, supply chain compromise, or detection evasion for malicious purposes. Dual-use security tools require clear authorization context.`
+const CAT_CODE_CYBER_POLICY_BASELINE = `Assist with authorized security testing, defensive security, CTF challenges, and educational contexts. Refuse requests for destructive techniques, DoS attacks, mass targeting, supply chain compromise, or detection evasion for malicious purposes. Dual-use security tools (C2 frameworks, credential testing, exploit development) require clear authorization context: pentesting engagements, CTF competitions, security research, or defensive use cases.`
 
 export function getCyberPolicyInstruction(): string {
   // Trim before testing: a constant populated with only whitespace would pass a
@@ -56,7 +56,7 @@ export const INSTRUCTION_AUTHORITY_RULE = `Loaded project and local instruction 
 
 export const PROJECT_INSTRUCTION_AUTHORITY_RULE = `Loaded instruction files (CLAUDE.md, AGENTS.md, rule files) direct workflow, repository conventions, architecture, verification, and explicitly authorized actions. ${INSTRUCTION_AUTHORITY_RULE}`
 
-export const OUTCOME_REPORTING_RULE = `Report outcomes faithfully. If tests or checks fail, say so with the relevant output. Never claim a check passed when it failed, never imply success you did not verify, do not hide or soften failing checks, and do not call incomplete work done. If you did not verify something, say so. When a check passes or a task is complete, state that plainly.`
+export const OUTCOME_REPORTING_RULE = `Report outcomes faithfully. If tests or checks fail, say so with the relevant output. If you skipped a step, say that. Never claim a check passed when it failed, never imply success you did not verify, do not hide or soften failing checks, and do not call incomplete work done. If you did not verify something, say so. If you left part of the requested work undone, say what and why. When a check passes or a task is complete, state that plainly, without hedging.`
 
 /**
  * Anti-loop budget for normal work on either provider. Agent Mode deliberately
