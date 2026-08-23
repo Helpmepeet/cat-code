@@ -23,7 +23,11 @@
  *   - NOT a `position:fixed` portal (PARITY-LEDGER.md:577): a split workspace
  *     mounts one flow PER PANE and two body-level portals would stack. The card
  *     therefore grows DOWNWARD in the dock rather than upward over the
- *     transcript, which is what the height ceiling below exists to bound.
+ *     transcript. What keeps that from reaching the composer is no longer this
+ *     card's business: the dock itself now yields and scrolls its panel region
+ *     (`App.tsx`, the composer dock), so no docked surface can push the input
+ *     off screen. The ceiling below is what stops ONE card monopolising the
+ *     dock, and it is what holds the key strip outside the scroll.
  *   - The strip carries the key legend only; the prototype's `Manage rules →`
  *     and `Keep pending →` are behaviour this app does not have for a question
  *     (the flow is excluded from the generic queue, so it has no snooze).
@@ -388,10 +392,14 @@ export function AskQuestionFlow({
       role="group"
       tabIndex={isActivePane ? -1 : undefined}
     >
-      {/* Body scrolls under a ceiling: docked in the column (not a portal over
-       * the transcript), an unbounded card pushes the composer off screen as
-       * soon as a preview opens. The prototype bounds the same growth with
-       * `maxHeight: calc(100vh - 150px)` + `overflowY: auto`. */}
+      {/* Body scrolls under a ceiling, the way the prototype bounds the same
+       * growth (`maxHeight: calc(100vh - 150px)` + `overflowY: auto`). Two jobs,
+       * neither of them protecting the composer any more: it keeps one card from
+       * taking the whole dock away from a permission card queued behind it, and
+       * it is what leaves the key strip below OUTSIDE the scrolling body. Sized
+       * to the viewport rather than to the dock on purpose, so that in a window
+       * with room the card sits at its natural height and the dock's own
+       * scroller never engages. */}
       <div className="max-h-[60vh] overflow-y-auto px-4 py-3">
       {/* Kicker — glyph + family word + pending count, the grammar the sibling
        * permission card already uses (`PermissionPrompt.tsx` kicker row). */}

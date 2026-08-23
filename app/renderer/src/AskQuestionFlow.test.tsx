@@ -116,9 +116,10 @@ test('the active pane can be focused at all, and an inactive one cannot', () => 
 test('the card is a bounded scroller with the key strip outside it', () => {
   const html = render(SINGLE)
   // Docked in the column rather than portaled over the transcript, so the card
-  // grows into the dock. The ceiling bounds THIS card's share of it; it does
-  // not by itself guarantee the composer stays on screen, since the dock as a
-  // whole is unbounded (see the ledger row).
+  // grows into the dock. The ceiling bounds THIS card's share of it, which is
+  // all it was ever able to do: the composer is kept on screen by the dock
+  // itself, which yields and scrolls its panel region (`App.tsx`; asserted by
+  // `composerDock.test.tsx`).
   expect(html).toContain('max-h-[60vh]')
   expect(html).toContain('overflow-y-auto')
   // The legend lives outside the scrolling body, so it survives a tall card.

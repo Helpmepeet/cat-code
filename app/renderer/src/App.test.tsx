@@ -2074,7 +2074,10 @@ test('P4-32a — real workers reach the composer dock, above the permission stac
   )
   expect(html).toContain('Turing')
   expect(html).toContain('Wire the dock')
-  const dockIndex = html.indexOf('max-w-[var(--transcript-width)] shrink-0')
+  // The dock's measure identifies it; its flex classes deliberately do not.
+  // The dock is no longer `shrink-0` (it yields and scrolls so the composer
+  // cannot be clipped), and which classes carry that is `composerDock.test.ts`.
+  const dockIndex = html.indexOf('max-w-[var(--transcript-width)]')
   expect(dockIndex).toBeGreaterThan(-1)
   expect(html.indexOf('Wire the dock')).toBeGreaterThan(dockIndex)
 })

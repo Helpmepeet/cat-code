@@ -5219,17 +5219,49 @@ export function SessionPane({
        * column as the transcript (Chat.jsx:1320 `maxWidth: MSG_MAX, margin: '0
        * auto'`) so the input aligns under the message column; a top seam
        * separates it from the scrolling transcript above. Inner blocks keep
-       * their existing indent (wrapped without re-indentation). */}
-      <div className="mx-auto flex w-full max-w-[var(--transcript-width)] shrink-0 flex-col">
+       * their existing indent (wrapped without re-indentation).
+       *
+       * The dock GIVES rather than overflows. It used to be `shrink-0`, which
+       * made it the one thing in an `overflow-hidden` column that could not
+       * yield: the transcript is the only `flex-1` child, so it collapses to
+       * zero first, and everything the dock needed past that was clipped with
+       * no scrollbar to reach it. The composer is the last child, so the
+       * composer was what vanished. Measured at the 495px window floor
+       * (`main.ts` `minHeight`) with a question card and two permission cards
+       * docked: 839px of dock in 455px of pane, composer 400px below the
+       * viewport, nothing scrollable anywhere.
+       *
+       * `min-h-0` is load-bearing, not decoration: without it the dock's
+       * automatic minimum size is its min-content height, which a scrolling
+       * child does NOT reduce, so the dock freezes at 448px and clips again.
+       * With it, the panel region below is the only child that can give (the
+       * composer is `shrink-0`, the roster and activity rows stop at their own
+       * min-content), so squeeze lands there and turns into scroll. */}
+      <div className="mx-auto flex min-h-0 w-full max-w-[var(--transcript-width)] flex-col">
       {/* P4-32a (R1) — the orchestrator worker roster is the prototype's declared
        * host for this block: above the composer, in the transcript's own measure,
        * ahead of the permission/question stack. It dims while the assistant is
-       * itself generating, and renders nothing when there are no workers. */}
+       * itself generating, and renders nothing when there are no workers.
+       *
+       * OUTSIDE the scrolling region below, deliberately: it is at most one row
+       * tall (a second worker collapses it to a summary line), and its full
+       * roster opens as an `absolute bottom-full` popover that a scroll
+       * container would clip. */}
       <OrchestratorRoster
         compact={generating}
         onOpen={onOpenTasks}
         workers={selectDockedOrchestratorWorkers(orchestratorWorkers)}
       />
+
+      {/* Everything docked that can grow without limit — the question card, the
+       * permission stack, notices, and the waiting-prompt rows — scrolls here
+       * instead of pushing the composer off screen. Empty when nothing is
+       * docked, so the resting layout is byte-identical to before this wrapper
+       * existed. No ceiling of its own: the height it gets is whatever the dock
+       * has left after the composer, which is the bound that matters, and a
+       * fixed ceiling on top of that would make this region scroll in tall
+       * windows where the stack already fits. */}
+      <div className="min-h-0 overflow-y-auto">
 
       {/* Docked above the composer, in Chat.jsx order — live permission-request
        * cards and any error/notice sit directly above the input, then the
@@ -5338,6 +5370,11 @@ export function SessionPane({
         </div>
       ) : null}
 
+      </div>
+
+      {/* Outside the scroller: one row, fixed height, and it is the row that
+       * hugs the composer. Scrolling it away from the input it belongs to would
+       * be the opposite of what it is for. */}
       {generating ? (
         <ActivityIndicator
           verb={activity.verb}
@@ -5360,7 +5397,10 @@ export function SessionPane({
       <form
         aria-keyshortcuts="ArrowUp ArrowDown"
         aria-label="Composer"
-        className="flex flex-col"
+        // `shrink-0`: the one child of the dock that never gives. A multi-line
+        // draft would otherwise be squeezed back toward a single line before
+        // the panel scroller above had finished giving up its own height.
+        className="flex shrink-0 flex-col"
         onKeyDown={onComposerKeyDown}
         onPaste={handlePaste}
         onSubmit={event => {
