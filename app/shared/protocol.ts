@@ -654,11 +654,12 @@ export type EventFrame = {
    * from disk (decisions/HISTORY-LOAD-EARLIER.md, blockers B1 and B2).
    *
    * It exists to tell an INSERTION apart from an append. Transcript order is
-   * frame ARRIVAL order — the projector has no sort — so a restore replay only
-   * lands in the right place because it arrives before anything else. Messages
-   * recovered mid-session are OLDER than everything on screen and must be
-   * placed above it, which is a different operation from the append every other
-   * event frame gets, and nothing else on the wire distinguishes the two.
+   * frame ARRIVAL order — the projector has no sort — and a restore replay
+   * follows its `ready` frame, which resets that session's existing projection
+   * before the replay tail arrives. Messages recovered mid-session are OLDER
+   * than everything on screen and must be placed above it, which is a different
+   * operation from the append every other event frame gets, and nothing else on
+   * the wire distinguishes the two.
    *
    * A recovered frame IS genuinely replayed history, so it sets BOTH this and
    * `replay`. Restore-on-attach frames set only `replay`. Consumers that care

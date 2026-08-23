@@ -4487,6 +4487,32 @@ test('a recovered batch lands above the conversation, oldest first', () => {
   ])
 })
 
+test('a replacement attach rebuilds retained transcript rows from its replay', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(state, assistantFrame('session-1', 99))
+
+  // A replacement sidecar emits ready before the retained historical tail.
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    truncationFrame('session-1', 'catcode.history-truncated'),
+  )
+  state = projectServerFrame(state, {
+    ...assistantFrame('session-1', 1),
+    replay: true,
+  })
+  state = projectServerFrame(state, {
+    ...assistantFrame('session-1', 2),
+    replay: true,
+  })
+
+  expect(bodies(state)).toEqual(['body 1', 'body 2'])
+  expect(
+    selectNestedTranscriptRows(state, 'session-1').map(row => row.kind),
+  ).toContain('history-boundary')
+})
+
 /** The other half: nothing about the ordinary append path moved. */
 test('an ordinary frame still appends after a recovery batch has closed', () => {
   let state = createTranscriptState()

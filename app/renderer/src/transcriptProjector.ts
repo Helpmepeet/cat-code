@@ -1267,15 +1267,13 @@ export function projectServerFrame(
   frame: ServerFrame,
 ): TranscriptState {
   if (isAppReadyFrame(frame)) {
-    const session =
-      state.sessions[frame.sessionId] ?? createTranscriptSessionState()
+    const session = createTranscriptSessionState()
     return {
       ...state,
       sessions: {
         ...state.sessions,
-        // Interruption display comes only from the persisted message-origin
-        // marker. `app.ready` is a live attachment snapshot, never replayable
-        // transcript provenance.
+        // A sidecar emits ready immediately before its history replay. Replacing
+        // existing session state would append that replay below retained newer rows.
         [frame.sessionId]: session,
       },
     }

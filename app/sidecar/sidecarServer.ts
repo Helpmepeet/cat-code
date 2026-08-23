@@ -4187,8 +4187,8 @@ export class SidecarServer {
           // already has, so they must be INSERTED above the conversation rather
           // than appended after it, and main must not retain them in a ring
           // that evicts by arrival. `sendHistoryReplay` deliberately does not
-          // set it — a restore replay arrives before anything else and is the
-          // retained tail itself.
+          // set it: its preceding ready frame resets the session projection, so
+          // the retained tail appends in its own arrival order.
           recovered: true,
           event: prepared,
         })
