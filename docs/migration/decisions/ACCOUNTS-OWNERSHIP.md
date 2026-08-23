@@ -88,19 +88,48 @@ one live usage fetch (see the correction above); it is bounded by the driver's
 single-flight guard, by coalescing concurrent requests into one re-run, and by
 the triggers being human-paced.
 
-### What does NOT change
+### Write-owner amendment (2026-08-23)
 
-The per-session `accounts.snapshot` frame and the `account.*` write verbs stay
-exactly as they are. Sessions keep their own pool view for in-session surfaces
-(the reauth banner, the composer's account chip), and every WRITE still crosses
-the session plane where the T6 re-resolve/re-validate guarantees live. This
-change adds a read path; it removes none.
+Codex profile deletion is global durable state and has no session input. Routing
+it through the active chat sidecar made the Accounts page require an unrelated
+open session and left a parked/dead sidecar unable to return the correlated
+result.
+
+`account.delete` from the Accounts page now uses a fixed HC3 preload method.
+Electron main validates the exact confirmed delete shape, starts the same
+disposable engine worker in one-shot delete mode, and writes the bounded request
+over stdin. The worker freshly loads the vault, dispatches through
+`accountsDomain.runVerb()` so the engine's target/vault checks remain
+authoritative, emits one secret-screened result plus the redacted fresh pool,
+and exits. Deletion and token refresh acquire the same per-profile
+`proper-lockfile` lock; a refresh waiting behind deletion sees the missing
+profile and cannot recreate it. Main rejects mismatched or semantically
+inconsistent worker results before publishing anything.
+
+After a successful durable delete, main returns the correlated `account.result`,
+publishes the pool through the existing `accounts-pool` host event, and sends a
+host-originated `account.profileDeleted` notice to every ready sidecar. Notices
+for sidecars still starting are queued until their `ready` frame. Each sidecar
+then removes the process-local account, repairs/releases affected leases, resets
+Codex/auth caches, and re-broadcasts its redacted snapshots. A profile re-added
+before a delayed notice is preserved.
+
+The per-session `accounts.snapshot` frame and session-local `account.*` route
+remain for composer account switching and the long-lived OAuth flow. This
+amendment moves only destructive global profile deletion off the session plane.
 
 ## 3. Security posture (SECURITY-MINIMUM conformance)
 
-- **Outbound-only.** `accounts-pool` is a read-only host event (C3 precedent).
-  It introduces NO inbound vocabulary, so the inbound allowlist is untouched and
-  no new sidecar boundary validation is required.
+- **Fixed inbound command.** `deleteAccount` is a dedicated preload method, not a
+  generic invoke. Preload applies the byte/rate guard; main and the worker both
+  require the exact `{type, requestId, accountId, confirm:true}` shape before an
+  engine module can perform the write. Main also permits only one delete worker
+  at a time, owns its abort controller through teardown, and suppresses any pool
+  read that began before the mutation.
+- **Host-originated invalidation.** `account.profileDeleted` has no preload
+  method. The sidecar still validates its exact bounded shape before applying
+  process-local cleanup, but untrusted renderer content has no route to originate
+  it.
 - **Redaction proven twice, as before.** The projection omits `accessToken` /
   `refreshToken` / `vaultFilePath` / `idToken` by construction, and the record is
   `scanForSecrets`-checked in the worker before emit AND again at main's parse
@@ -115,10 +144,10 @@ change adds a read path; it removes none.
 - **N-process** — untouched. The accounts worker holds no session, no socket, and
   no turn; it is disposable, exactly as the catalog worker and the PL-B backfill
   worker are not session processes.
-- **UDS transport** — untouched. This is a main → renderer host event, not a
-  change to the sidecar↔supervisor socket.
-- **Raw `AppSessionEvent` fidelity** — untouched. A read-only snapshot, never an
-  event mapper.
+- **UDS transport** — untouched. The delete worker uses bounded stdin/stdout
+  owned by main and is not a session sidecar or a new socket transport.
+- **Raw `AppSessionEvent` fidelity** — untouched. The account result and host
+  pool snapshot are control-plane records, never an event mapper.
 - **Die-with-window v1** — untouched. The driver is main-supervised and stops
   with the app, like the catalog driver.
 - **Two-id model** — untouched. The pool is session-agnostic and keys on neither

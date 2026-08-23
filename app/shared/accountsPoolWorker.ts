@@ -27,6 +27,7 @@
  */
 
 import type {
+  AccountDeleteMessage,
   AccountStatus,
   AccountsSnapshot,
   AnthropicAccountStatus,
@@ -37,6 +38,7 @@ import type {
   UsageStatsRange,
   UsageStatsSnapshot,
 } from './protocol.js'
+import { MAX_TEXT_FIELD_CHARS } from './limits.js'
 
 export const ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION = 1
 
@@ -76,9 +78,63 @@ export type AccountsPoolWorkerFailureResult = {
   reason: 'internal'
 }
 
+export type AccountsPoolWorkerDeleteRequest = {
+  type: 'account-delete'
+  version: typeof ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION
+  verb: AccountDeleteMessage
+}
+
+export type AccountsPoolWorkerDeleteResult = {
+  type: 'account-delete'
+  version: typeof ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION
+  requestId: string
+  verb: 'account.delete'
+  ok: boolean
+  message: string
+  pool: AccountsSnapshot
+}
+
 export type AccountsPoolWorkerResult =
   | AccountsPoolWorkerPoolResult
   | AccountsPoolWorkerFailureResult
+  | AccountsPoolWorkerDeleteResult
+
+export function parseAccountDeleteMessage(
+  value: unknown,
+): AccountDeleteMessage | null {
+  if (!isRecord(value)) return null
+  if (!hasExactKeys(value, ['type', 'requestId', 'accountId', 'confirm'])) {
+    return null
+  }
+  if (value.type !== 'account.delete' || value.confirm !== true) return null
+  if (!isBoundedText(value.requestId) || !isBoundedText(value.accountId)) return null
+  return {
+    type: 'account.delete',
+    requestId: value.requestId,
+    accountId: value.accountId,
+    confirm: true,
+  }
+}
+
+export function parseAccountsPoolWorkerDeleteRequest(
+  value: unknown,
+): AccountsPoolWorkerDeleteRequest | null {
+  if (!isRecord(value)) return null
+  if (!hasExactKeys(value, ['type', 'version', 'verb'])) return null
+  if (
+    value.type !== 'account-delete' ||
+    value.version !== ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION
+  ) {
+    return null
+  }
+  const verb = parseAccountDeleteMessage(value.verb)
+  if (!verb) return null
+  return {
+    type: 'account-delete',
+    version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+    verb,
+  }
+}
 
 /**
  * Drop the optional half of a record that would not fit the size cap, in place,
@@ -124,6 +180,40 @@ export function parseAccountsPoolWorkerResult(
 ): AccountsPoolWorkerResult | null {
   if (!isRecord(value)) return null
   if (value.version !== ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION) return null
+  if (value.type === 'account-delete') {
+    if (
+      !hasExactKeys(value, [
+        'type',
+        'version',
+        'requestId',
+        'verb',
+        'ok',
+        'message',
+        'pool',
+      ])
+    ) {
+      return null
+    }
+    if (
+      !isBoundedText(value.requestId) ||
+      value.verb !== 'account.delete' ||
+      typeof value.ok !== 'boolean' ||
+      !isBoundedText(value.message)
+    ) {
+      return null
+    }
+    const pool = parseAccountsSnapshot(value.pool)
+    if (!pool) return null
+    return {
+      type: 'account-delete',
+      version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+      requestId: value.requestId,
+      verb: 'account.delete',
+      ok: value.ok,
+      message: value.message,
+      pool,
+    }
+  }
   if (value.type === 'failure') {
     if (!hasExactKeys(value, ['type', 'version', 'reason'])) return null
     if (value.reason !== 'internal') return null
@@ -526,6 +616,14 @@ function isStringOrNull(value: unknown): value is string | null {
 
 function isNumberOrNull(value: unknown): value is number | null {
   return typeof value === 'number' || value === null
+}
+
+function isBoundedText(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= MAX_TEXT_FIELD_CHARS
+  )
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

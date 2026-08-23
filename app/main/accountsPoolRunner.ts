@@ -4,8 +4,9 @@
  * Electron imports and is unit-testable. It is the accounts sibling of
  * `sessionsCatalogRunner`: it spawns exactly ONE serialized engine-graph worker,
  * reads bounded NDJSON, validates the single result record fail-closed, re-scans
- * for secret-keyed material, and hands the accepted redacted pool snapshot to
- * main (which forwards it to the renderer as a read-only outbound host event).
+ * for secret-keyed material, and hands the accepted redacted result to main.
+ * Ordinary runs deliver a pool snapshot; the explicit one-shot delete mode writes
+ * one validated request to stdin and delivers its outcome plus the fresh pool.
  *
  * It is deliberately self-contained rather than importing the catalog runner's
  * driver: the two are siblings in the same way `runTranscriptBackfill` and the
@@ -28,6 +29,9 @@ import type { AccountsSnapshot, UsageStatsByRange } from '../shared/protocol.js'
 import {
   MAX_ACCOUNTS_POOL_WORKER_RECORD_BYTES,
   parseAccountsPoolWorkerResult,
+  type AccountsPoolWorkerDeleteRequest,
+  type AccountsPoolWorkerDeleteResult,
+  type AccountsPoolWorkerResult,
 } from '../shared/accountsPoolWorker.js'
 
 /**
@@ -70,6 +74,23 @@ export const ACCOUNTS_POOL_WORKER_TIMEOUT_MS = 2 * 60 * 1000
  */
 export const USAGE_STATS_EVERY_N_RUNS = 5
 
+export type AccountsPoolPublicationGate = {
+  beginRead(): number
+  invalidate(): void
+  canPublish(generation: number): boolean
+}
+
+export function createAccountsPoolPublicationGate(): AccountsPoolPublicationGate {
+  let generation = 0
+  return {
+    beginRead: () => generation,
+    invalidate: () => {
+      generation += 1
+    },
+    canPublish: candidate => candidate === generation,
+  }
+}
+
 /**
  * Does run `runIndex` (0-based) carry the analytics? Run 0 must, or a cold
  * launch would leave the Accounts page pending for the first five minutes,
@@ -88,8 +109,15 @@ export type AccountsPoolRunOptions = {
   signal?: AbortSignal
   timeoutMs?: number
   spawnWorker?: typeof spawn
+  /**
+   * Present only for the one-shot, session-independent account-delete mode.
+   * The exact closed request is written once to stdin before it is closed.
+   */
+  input?: AccountsPoolWorkerDeleteRequest
   /** Called at most ONCE, only for an accepted + secret-clean pool record. */
-  onPool: (pool: AccountsSnapshot) => void
+  onPool?: (pool: AccountsSnapshot) => void
+  /** Called at most once for an accepted account-delete result. */
+  onAccountDelete?: (result: AccountsPoolWorkerDeleteResult) => void
   /**
    * Called at most ONCE, and only when the accepted record actually carried
    * `usageStats` — the field is optional so a failed stats read still delivers
@@ -141,11 +169,21 @@ export async function runAccountsPoolWorker(
   let timedOut = false
   let aborted = false
   let protocolError: string | null = null
-  let callbackError: unknown = null
   let stdinError: unknown = null
+  const accepted: { value: AccountsPoolWorkerResult | null } = {
+    value: null,
+  }
+  let childClosed = false
+  let forceKillTimer: ReturnType<typeof setTimeout> | null = null
 
   const terminate = () => {
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM')
+    if (forceKillTimer === null) {
+      forceKillTimer = setTimeout(() => {
+        if (!childClosed) child.kill('SIGKILL')
+      }, 2_000)
+      forceKillTimer.unref?.()
+    }
   }
   const timeout = setTimeout(() => {
     timedOut = true
@@ -204,18 +242,38 @@ export async function runAccountsPoolWorker(
       }
       recordSeen = true
       if (result.type === 'failure') {
+        accepted.value = result
         outcome = 'failure'
         continue
       }
-      try {
-        options.onPool(result.pool)
-        if (result.usageStats) options.onUsageStats?.(result.usageStats)
-        outcome = 'delivered'
-      } catch (error) {
-        callbackError = error
+      if (result.type === 'account-delete') {
+        if (!options.input || !options.onAccountDelete) {
+          protocolError = 'unexpected accounts worker delete result'
+          terminate()
+          return
+        }
+        if (result.requestId !== options.input.verb.requestId) {
+          protocolError = 'accounts worker delete result requestId mismatch'
+          terminate()
+          return
+        }
+        if (
+          result.ok &&
+          result.pool.accounts.some(
+            account => account.id === options.input!.verb.accountId,
+          )
+        ) {
+          protocolError = 'accounts worker successful delete retained target account'
+          terminate()
+          return
+        }
+      } else if (options.input || !options.onPool) {
+        protocolError = 'unexpected accounts worker pool result'
         terminate()
         return
       }
+      accepted.value = result
+      outcome = 'delivered'
     }
     if (pending.byteLength > MAX_ACCOUNTS_POOL_WORKER_RECORD_BYTES) {
       protocolError = 'accounts worker record exceeds size limit'
@@ -232,13 +290,15 @@ export async function runAccountsPoolWorker(
   let code: number | null
   let signal: NodeJS.Signals | null
   try {
-    // The accounts worker reads no manifest. Close stdin so a worker that reads
-    // it (defense in depth) sees EOF immediately.
-    child.stdin.end()
+    child.stdin.end(
+      options.input ? `${JSON.stringify(options.input)}\n` : undefined,
+    )
     ;({ code, signal } = await closed)
+    childClosed = true
     options.onWorkerLifecycle?.({ phase: 'exited', pid: child.pid ?? 0, code, signal })
   } finally {
     clearTimeout(timeout)
+    if (forceKillTimer !== null) clearTimeout(forceKillTimer)
     options.signal?.removeEventListener('abort', onAbort)
     child.stdin.removeListener('error', onStdinError)
   }
@@ -247,9 +307,6 @@ export async function runAccountsPoolWorker(
   if (diagnostics) options.log?.(diagnostics)
   if (aborted) throw new Error('accounts worker aborted')
   if (timedOut) throw new Error('accounts worker timed out')
-  if (callbackError !== null) {
-    throw new Error('accounts worker result callback failed', { cause: callbackError })
-  }
   if (stdinError !== null) {
     throw new Error('accounts worker stdin failed', { cause: stdinError })
   }
@@ -261,6 +318,23 @@ export async function runAccountsPoolWorker(
   }
   if (pending.byteLength !== 0 || !recordSeen) {
     throw new Error('accounts worker ended without a valid result record')
+  }
+  const acceptedResult = accepted.value
+  if (acceptedResult?.type === 'account-delete') {
+    try {
+      options.onAccountDelete?.(acceptedResult)
+    } catch (error) {
+      throw new Error('accounts worker result callback failed', { cause: error })
+    }
+  } else if (acceptedResult?.type === 'pool') {
+    try {
+      options.onPool?.(acceptedResult.pool)
+      if (acceptedResult.usageStats) {
+        options.onUsageStats?.(acceptedResult.usageStats)
+      }
+    } catch (error) {
+      throw new Error('accounts worker result callback failed', { cause: error })
+    }
   }
   return outcome
 }

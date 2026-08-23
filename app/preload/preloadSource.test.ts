@@ -20,6 +20,10 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   expect(source).toContain(
     'accountVerb(sessionId: SessionId, verb: AccountVerbMessage): void',
   )
+  expect(source).toContain(
+    "const CH_HOST_ACCOUNT_DELETE = 'catcode:host:account-delete'",
+  )
+  expect(source).toContain('deleteAccount(verb: AccountDeleteMessage)')
   // P4-15 — workspace-trust accept verb sender rides its own fixed channel (HC3).
   expect(source).toContain(
     "const CH_WORKSPACE_TRUST_VERB = 'catcode:workspace-trust-verb'",
@@ -83,11 +87,12 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   // generic logging IPC) (incl. P4-5 accountVerb + P4-15 workspaceTrustVerb +
   // P4-8b setAgentMode + P4-8b taskControlVerb + P4-13 remoteSettingsVerb + P4-19
   // settingsVerb + P4-24c runControlVerb + P4-6b sessionActionVerb + C5/P4-20
-  // answerQuestions + contextBreakdownVerb + D1b recallPrompts + loadEarlierHistory) + 10 payload-bearing control-plane
+  // answerQuestions + contextBreakdownVerb + D1b recallPrompts + loadEarlierHistory) + 11 payload-bearing control-plane
   // senders plus openWorkspaceFile + the DEV-only
   // debug-state sender (compiled out of the packaged preload.cjs). (pickDirectory/
   // createSession/createSessionInWorkspace/restoreSession/closeSession/listSessions/
-  // previewSession/readSessionsCatalog/openHistorySession/P4-35 saveTextToFile).
+  // previewSession/readSessionsCatalog/openHistorySession/P4-35 saveTextToFile/
+  // session-independent deleteAccount).
   // subscribe / subscribeHost register a listener and send no payload, so they do
   // NOT (and must not) call the guard.
   // Usage stats query sender rides its own fixed channel (HC3).
@@ -99,7 +104,7 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
     "const CH_HOST_VISIBLE_SESSIONS = 'catcode:host:visible-sessions'",
   )
   expect(source).toContain('reportVisibleSessions(sessionIds: SessionId[]): void')
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(38)
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(39)
   // D1b — the recall sender is fixed and one-way like the rest (HC3).
   expect(source).toContain("const CH_PROMPT_RECALL = 'catcode:prompt-recall'")
   expect(source).toContain(
@@ -114,6 +119,9 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   expect(source).toContain('pickDirectory(activeSessionId?: SessionId | null)')
   expect(source).toContain(
     "const CH_HOST_OPEN_WORKSPACE_FILE = 'catcode:host:open-workspace-file'",
+  )
+  expect(source).toContain(
+    "const CH_HOST_ACCOUNT_DELETE = 'catcode:host:account-delete'",
   )
   expect(source).toContain('openWorkspaceFile(appSessionId: SessionId, path: string)')
 })
@@ -152,7 +160,7 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
   const invokeChannels = [...source.matchAll(/ipcRenderer\.invoke\((\w+)/g)].map(
     m => m[1],
   )
-  expect(invokeChannels.length).toBe(12)
+  expect(invokeChannels.length).toBe(13)
   const allowed = new Set([
     'CH_HOST_CREATE',
     'CH_HOST_CREATE_IN_WORKSPACE',
@@ -165,6 +173,7 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
     'CH_HOST_OPEN_HISTORY',
     'CH_HOST_SAVE_TEXT',
     'CH_HOST_OPEN_WORKSPACE_FILE',
+    'CH_HOST_ACCOUNT_DELETE',
     'CH_SAVE_DIAGNOSTICS',
   ])
   for (const channel of invokeChannels) {
@@ -190,6 +199,30 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
   // is main's `CH_HOST_SAVE_TEXT` handler and only main's.
   expect(code).not.toContain('writeFile')
   expect(code).not.toContain("'node:fs'")
+})
+
+test('account deletion terminates in a one-shot worker, not a session forward', () => {
+  const source = readFileSync(new URL('../main/main.ts', import.meta.url), 'utf8')
+  const start = source.indexOf('ipcMain.handle(\n    CH_HOST_ACCOUNT_DELETE')
+  const end = source.indexOf(
+    'ipcMain.handle(CH_HOST_OPEN_WORKSPACE_FILE',
+    start,
+  )
+  expect(start).toBeGreaterThan(-1)
+  expect(end).toBeGreaterThan(start)
+  const handler = source.slice(start, end)
+
+  expect(handler).toContain('parseAccountDeleteMessage(input)')
+  expect(handler).toContain("'--account-delete'")
+  expect(handler).toContain('runAccountsPoolWorker({')
+  expect(handler).toContain('signal: abort.signal')
+  expect(handler).toContain('accountsPoolPublicationGate.invalidate()')
+  expect(handler).toContain('notifySidecarsOfAccountDeletion(')
+  expect(handler).not.toContain('activeSessionId')
+  expect(handler).not.toContain('forward(')
+  expect(source).toContain('accountDeleteAbort?.abort()')
+  expect(source).toContain('accountsPoolPublicationGate.canPublish(generation)')
+  expect(source).toContain("type: 'account.profileDeleted'")
 })
 
 test('P4-35: the file sink carries no destination the renderer could author (HC1)', () => {

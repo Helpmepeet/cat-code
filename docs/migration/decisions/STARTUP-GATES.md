@@ -47,6 +47,14 @@ From G1+G2, the real, buildable startup surface is:
    > architecturally clean (the user layer is session-invariant by design,
    > `settingsScope.ts:33`) and is untouched by this ruling, but it was not selected and needs its
    > own decision.
+   >
+   > **Amendment 2026-08-23 — destructive global deletion no longer borrows a
+   > session.** The operator revisited the concrete Delete-account failure and
+   > ruled the session dependency wrong. `account.delete` now runs in the
+   > main-owned one-shot accounts worker documented in
+   > `decisions/ACCOUNTS-OWNERSHIP.md`. Trust and the long-lived OAuth flow remain
+   > session-scoped; this amendment does not authorize a generic host-plane
+   > account-write channel.
 
 Both are adapts of real machinery; Phase-4 rows can be generated for them regardless of §5.
 

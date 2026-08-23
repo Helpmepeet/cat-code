@@ -182,11 +182,13 @@ export type AskUserQuestionAnswerMessage = {
  *    sees, sends, or receives a credential. Deletion/logout are availability
  *    operations, not confidentiality ones — the redacted `accounts.snapshot`
  *    read-seam remains the only account data the renderer ever holds.
- *  - **T6 — renderer authors no policy, only a target.** The sidecar RE-RESOLVES
- *    every `accountId` against the live pool (never trusts a renderer-held
- *    record), validates aliases against the engine's OWN regex + uniqueness rule
- *    (`validateCodexAccountAlias`, not a renderer claim), and re-derives every
- *    guard (switchable/vault-backed) from the real pool. The worst a compromised
+ *  - **T6 — renderer authors no policy, only a target.** The engine-side account
+ *    domain RE-RESOLVES every `accountId` against its loaded pool (never trusts a
+ *    renderer-held record), validates aliases against the engine's OWN regex +
+ *    uniqueness rule (`validateCodexAccountAlias`, not a renderer claim), and
+ *    re-derives every guard (switchable/vault-backed) from the real pool. The
+ *    domain runs inside either the addressed session sidecar or, for global
+ *    profile deletion, main's one-shot engine worker. The worst a compromised
  *    renderer gains is the ability to run the same account commands the user can
  *    already run in the TUI (`/switch-account`, `/rename-account`,
  *    `/delete-account`, `/logout`, `/touch-all`, `/login`) — TUI-equivalent, and
@@ -304,6 +306,16 @@ export type AccountOAuthAliasMessage = {
 export type AccountOAuthCancelMessage = {
   type: 'account.oauthCancel'
   requestId: string
+}
+
+/**
+ * Host-originated invalidation after another engine process durably deleted a
+ * Codex profile. No preload method exposes this message to the renderer.
+ */
+export type AccountProfileDeletedMessage = {
+  type: 'account.profileDeleted'
+  requestId: string
+  accountId: string
 }
 
 export type AccountVerbMessage =
@@ -523,15 +535,17 @@ export type HistoryLoadEarlierMessage = {
 
 /**
  * Everything a client may send toward a sidecar: the engine's allowlisted
- * vocabulary plus the app-owned C2 frame, the P4-5 account verbs, the P4-13
- * RemoteSettings verbs, the P4-19 settings write verb, the IDLE-PARK frame, and
- * the load-earlier read verb.
+ * vocabulary plus the app-owned C2 frame, the P4-5 account verbs, main's
+ * host-originated account-deletion invalidation, the P4-13 RemoteSettings verbs,
+ * the P4-19 settings write verb, the IDLE-PARK frame, and the load-earlier read
+ * verb.
  */
 export type SidecarClientMessage =
   | AppClientMessage
   | PermissionSetModeMessage
   | AskUserQuestionAnswerMessage
   | AccountVerbMessage
+  | AccountProfileDeletedMessage
   | WorkspaceTrustMessage
   | RemoteVerbMessage
   | SettingsVerbMessage
@@ -3362,6 +3376,12 @@ export type CatCodeBridge = {
    * `accounts.snapshot` when the pool changed.
    */
   accountVerb(sessionId: SessionId, verb: AccountVerbMessage): void
+  /**
+   * Delete a global Codex vault profile without borrowing a chat session as the
+   * command carrier. Main validates the exact destructive verb and delegates the
+   * write to a one-shot engine worker; no credential material crosses this API.
+   */
+  deleteAccount(verb: AccountDeleteMessage): Promise<AccountResultFrame>
   /**
    * P4-15 — accept trust for the addressed session's OWN cwd (the session-create
    * trust gate). The sidecar persists via the engine's `saveCurrentProjectConfig`

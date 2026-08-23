@@ -2526,14 +2526,18 @@ test('FIX-5 wiring tripwire: the inspector, the meta strip, the accounts page an
   expect(inspectorBody).toContain('selectWorkspaceTrustSnapshot(')
   expect(inspectorBody).toContain('selectDiagnosticsSnapshot(diagnostics, activeSessionId)')
 
-  // An account verb with no session open used to return before sending
-  // anything, so the page's confirmation dialog waited forever for a result
-  // that could never arrive.
+  // Deleting a saved profile is global durable state, so it must take the
+  // session-independent host path before the fallback that rejects other
+  // account verbs when no chat session is open.
   const verbStart = source.indexOf('const sendAccountVerb = useCallback(')
   const verbBody = source.slice(
     verbStart,
     source.indexOf('\n  // The Accounts page reads', verbStart),
   )
+  expect(verbBody.indexOf("verb.type === 'account.delete'")).toBeLessThan(
+    verbBody.indexOf('if (!activeSessionId)'),
+  )
+  expect(verbBody).toContain('.deleteAccount(verb)')
   expect(verbBody).not.toContain('if (!activeSessionId) return')
   expect(verbBody).toContain("kind: 'account.result'")
   expect(verbBody).toContain('requestId: verb.requestId')

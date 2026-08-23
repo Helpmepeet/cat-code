@@ -26,10 +26,12 @@
  * ONE `usageResetAt` (the primary/5h window), so the ↺-reset indicator is shown
  * only on the 5h bar and left blank on the weekly bar — never invented.
  *
- * Writes go ONLY through the `onVerb` prop (the HC3 `accountVerb` channel); the
- * sidecar re-resolves + re-validates every target (T6). Optimistic UI is
- * forbidden: a dialog dispatches its verb, remembers the minted `requestId`, and
- * closes + toasts only when the matching `account.result` (`lastResult`) arrives.
+ * Writes go ONLY through the `onVerb` prop. Session-local verbs use the HC3
+ * `accountVerb` channel; destructive profile deletion uses the fixed
+ * session-independent host sender and a one-shot engine worker. Both re-resolve
+ * the target from engine-owned pool state. Optimistic UI is forbidden: a dialog
+ * dispatches its verb, remembers the minted `requestId`, and closes + toasts only
+ * when the matching `account.result` (`lastResult`) arrives.
  */
 
 import {
@@ -129,15 +131,18 @@ function GhostBtn({
 function DangerBtn({
   children,
   onClick,
+  disabled,
 }: {
   children: ReactNode
   onClick: () => void
+  disabled?: boolean
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="rounded-lg bg-[#ef4444] px-3.5 py-2 text-[13px] font-semibold text-white"
+      disabled={disabled}
+      className="rounded-lg bg-[#ef4444] px-3.5 py-2 text-[13px] font-semibold text-white disabled:opacity-50"
     >
       {children}
     </button>
@@ -382,6 +387,7 @@ function DeleteAccountDialog({
   onClose: () => void
 }) {
   const alias = account.alias ?? account.id
+  const [submitting, setSubmitting] = useState(false)
   return (
     <ALDialog
       title={`Delete “${alias}”?`}
@@ -390,7 +396,16 @@ function DeleteAccountDialog({
       footer={
         <>
           <GhostBtn onClick={onClose}>Cancel</GhostBtn>
-          <DangerBtn onClick={onConfirm}>Delete account</DangerBtn>
+          <DangerBtn
+            disabled={submitting}
+            onClick={() => {
+              if (submitting) return
+              setSubmitting(true)
+              onConfirm()
+            }}
+          >
+            Delete account
+          </DangerBtn>
         </>
       }
     >

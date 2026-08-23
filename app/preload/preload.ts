@@ -17,6 +17,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { DeliveryAcknowledgement } from '../shared/deliveryTrace.js'
 import type {
+  AccountDeleteMessage,
   AccountVerbMessage,
   AskUserQuestionAnswer,
   CatCodeBridge,
@@ -213,6 +214,7 @@ const CH_HOST_SESSIONS_CATALOG = 'catcode:host:sessions-catalog'
 const CH_HOST_OPEN_HISTORY = 'catcode:host:open-history'
 const CH_HOST_SAVE_TEXT = 'catcode:host:save-text'
 const CH_HOST_OPEN_WORKSPACE_FILE = 'catcode:host:open-workspace-file'
+const CH_HOST_ACCOUNT_DELETE = 'catcode:host:account-delete'
 const CH_HOST_EVENT = 'catcode:host:event'
 const CH_HOST_VISIBLE_SESSIONS = 'catcode:host:visible-sessions'
 
@@ -261,6 +263,10 @@ const bridge: CatCodeBridge = {
     const payload = { sessionId, verb }
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_ACCOUNT_VERB, payload)
+  },
+  deleteAccount(verb: AccountDeleteMessage) {
+    sendGuard.assertAllowed(verb)
+    return ipcRenderer.invoke(CH_HOST_ACCOUNT_DELETE, verb)
   },
   workspaceTrustVerb(sessionId: SessionId, verb: WorkspaceTrustMessage): void {
     // P4-15 — HC3 fixed sender for the trust-gate accept. Same posture as

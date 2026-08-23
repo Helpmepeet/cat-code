@@ -1,11 +1,20 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { createHash } from 'crypto'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
 import { getGlobalConfig } from '../../utils/config.js'
 import {
+  acquireCodexVaultFileLock,
   refreshAccountTokens,
   runQuarantineProbeOnce,
   touchAll,
@@ -708,6 +717,53 @@ describe('codexTokenRefresh state machine and concurrency', () => {
   beforeEach(() => {
     resetCodexAccountPoolForTest()
     resetCodexLeaseManagerForTest()
+  })
+
+  test('a refresh waiter does not recreate a profile deleted under the shared vault lock', async () => {
+    const accountId = 'deleted-while-waiting'
+    await withVaultAccount(
+      accountId,
+      {
+        tokens: {
+          access_token: 'old-access',
+          refresh_token: 'old-refresh',
+          account_id: accountId,
+        },
+      },
+      async filePath => {
+        const releaseDeleteLock = await acquireCodexVaultFileLock(
+          filePath,
+          () => {},
+        )
+        const originalFetch = globalThis.fetch
+        let fetchCalled = false
+        globalThis.fetch = async () => {
+          fetchCalled = true
+          return new Response()
+        }
+
+        try {
+          const refresh = refreshAccountTokens(
+            accountId,
+            'old-refresh',
+            filePath,
+          )
+          unlinkSync(filePath)
+          await releaseDeleteLock()
+
+          await expect(refresh).rejects.toThrow(
+            'Codex vault profile no longer exists',
+          )
+          expect(existsSync(filePath)).toBe(false)
+          expect(fetchCalled).toBe(false)
+        } finally {
+          globalThis.fetch = originalFetch
+          if (existsSync(`${filePath}.lock`)) {
+            rmSync(`${filePath}.lock`, { recursive: true, force: true })
+          }
+        }
+      },
+    )
   })
 
   test('fetch transport failure quarantines token with unknown refresh outcome', async () => {

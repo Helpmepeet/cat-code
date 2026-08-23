@@ -1,4 +1,10 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test'
+import * as fsModule from 'node:fs'
+import * as codexPoolModule from '../../src/services/api/codexAccountPool.js'
+import * as codexTokenRefreshModule from '../../src/services/api/codexTokenRefresh.js'
+import * as leaseManagerModule from '../../src/services/api/codexAccountLeaseManager.js'
+import * as codexFetchAdapterModule from '../../src/services/api/codex-fetch-adapter.js'
+import * as logoutModule from '../../src/commands/logout/logout.js'
 import {
   resetCodexAccountPoolForTest,
   seedCodexAccountPoolForTest,
@@ -21,6 +27,7 @@ import {
   buildAccountsSnapshot,
   buildAccountStatus,
   createRealAnthropicOAuthLoginRunner,
+  createRealAccountsExecutor,
   createSidecarAccountsDomain,
   resolveAnthropicSubscriptionActive,
   type AccountsCommandExecutor,
@@ -55,6 +62,7 @@ function poolAccount(overrides: Partial<PoolAccount> = {}): PoolAccount {
 }
 
 afterEach(() => {
+  mock.restore()
   resetCodexAccountPoolForTest()
   resetClaudeAccountPoolForTest()
 })
@@ -223,7 +231,7 @@ function fakeExecutor(over: Partial<AccountsCommandExecutor> = {}): AccountsComm
     switch: () => ok('switched'),
     switchAnthropic: async () => ok('switched anthropic'),
     rename: () => ok('renamed'),
-    delete: () => ok('deleted'),
+    delete: async () => ok('deleted'),
     logout: () => ok('signed out'),
     touchAll: async () => ({ ok: true, message: 'done', touchAllResults: [] }),
     refreshUsage: async () => false,
@@ -233,6 +241,138 @@ function fakeExecutor(over: Partial<AccountsCommandExecutor> = {}): AccountsComm
 
 /** Flush the async OAuth-controller microtask chain (begin → pending → emit). */
 const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+
+describe('real Codex delete executor cleanup', () => {
+  test('serializes profile removal and repairs leases and auth caches', async () => {
+    const deleted = poolAccount({
+      accountId: 'delete-me',
+      vaultFilePath: '/test-vault/accounts/delete-me.json',
+    })
+    const remaining = poolAccount({
+      accountId: 'keep-me',
+      vaultFilePath: '/test-vault/accounts/keep-me.json',
+    })
+    seedCodexAccountPoolForTest({
+      accounts: [deleted, remaining],
+      activeAccountId: deleted.accountId,
+    })
+
+    const order: string[] = []
+    const releaseLock = mock(async () => {
+      order.push('unlock')
+    })
+    const lock = spyOn(
+      codexTokenRefreshModule,
+      'acquireCodexVaultFileLock',
+    ).mockImplementation(async () => {
+      order.push('lock')
+      return releaseLock
+    })
+    spyOn(codexPoolModule, 'removeCodexAccount').mockImplementation(accountId => {
+      order.push(`remove:${accountId}`)
+      seedCodexAccountPoolForTest({
+        accounts: [remaining],
+        activeAccountId: remaining.accountId,
+      })
+      return true
+    })
+    const repair = spyOn(
+      leaseManagerModule,
+      'repairLeasesForDeletedAccount',
+    ).mockImplementation(accountId => {
+      order.push(`repair:${accountId}`)
+    })
+    const reassign = spyOn(
+      leaseManagerModule,
+      'reassignCodexLeaseToActiveAccount',
+    ).mockImplementation(ownerId => {
+      order.push(`reassign:${ownerId}`)
+    })
+    const releaseLease = spyOn(
+      leaseManagerModule,
+      'releaseCodexLease',
+    ).mockImplementation(() => {})
+    const resetCache = spyOn(
+      codexFetchAdapterModule,
+      'resetCodexCacheContext',
+    ).mockImplementation(() => {
+      order.push('reset-cache')
+    })
+    const clearCaches = spyOn(
+      logoutModule,
+      'clearAuthRelatedCaches',
+    ).mockImplementation(async () => {
+      order.push('clear-auth-caches')
+    })
+
+    const result = await createRealAccountsExecutor().delete(deleted.accountId)
+
+    expect(result).toEqual({ ok: true, message: 'Account deleted.' })
+    expect(lock).toHaveBeenCalledWith(
+      deleted.vaultFilePath,
+      expect.any(Function),
+    )
+    expect(repair).toHaveBeenCalledWith(deleted.accountId)
+    expect(reassign).toHaveBeenCalledWith('main-thread')
+    expect(releaseLease).not.toHaveBeenCalled()
+    expect(resetCache).toHaveBeenCalledTimes(1)
+    expect(clearCaches).toHaveBeenCalledTimes(1)
+    expect(order).toEqual([
+      'lock',
+      `remove:${deleted.accountId}`,
+      'unlock',
+      `repair:${deleted.accountId}`,
+      'reassign:main-thread',
+      'reset-cache',
+      'clear-auth-caches',
+    ])
+  })
+
+  test('releases the main-thread lease after deleting the final account', async () => {
+    const deleted = poolAccount({
+      accountId: 'delete-final',
+      vaultFilePath: '/test-vault/accounts/delete-final.json',
+    })
+    seedCodexAccountPoolForTest({
+      accounts: [deleted],
+      activeAccountId: deleted.accountId,
+    })
+
+    spyOn(
+      codexTokenRefreshModule,
+      'acquireCodexVaultFileLock',
+    ).mockResolvedValue(async () => {})
+    spyOn(codexPoolModule, 'removeCodexAccount').mockImplementation(() => {
+      seedCodexAccountPoolForTest({ accounts: [] })
+      return true
+    })
+    spyOn(
+      leaseManagerModule,
+      'repairLeasesForDeletedAccount',
+    ).mockImplementation(() => {})
+    const reassign = spyOn(
+      leaseManagerModule,
+      'reassignCodexLeaseToActiveAccount',
+    ).mockImplementation(() => {})
+    const releaseLease = spyOn(
+      leaseManagerModule,
+      'releaseCodexLease',
+    ).mockImplementation(() => {})
+    spyOn(
+      codexFetchAdapterModule,
+      'resetCodexCacheContext',
+    ).mockImplementation(() => {})
+    spyOn(logoutModule, 'clearAuthRelatedCaches').mockImplementation(
+      async () => {},
+    )
+
+    const result = await createRealAccountsExecutor().delete(deleted.accountId)
+
+    expect(result.ok).toBe(true)
+    expect(reassign).not.toHaveBeenCalled()
+    expect(releaseLease).toHaveBeenCalledWith('main-thread')
+  })
+})
 
 /**
  * A FAKE OAuth runner — never opens a browser, binds port 1455, or writes the
@@ -494,6 +634,126 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
     const domain = makeAccountsDomain({ executor: fakeExecutor() })
     const out = await domain.runVerb({ type: 'account.rename', requestId: 'r', accountId: 'a', alias: 'bad alias!' })
     expect(out.result.ok).toBe(false)
+  })
+
+  test('applyDeletedProfile removes a known local account through the executor', async () => {
+    seedCodexAccountPoolForTest({
+      accounts: [poolAccount({ accountId: 'known' })],
+      activeAccountId: 'known',
+    })
+    const deleted: string[] = []
+    const domain = makeAccountsDomain({
+      executor: fakeExecutor({
+        delete: async accountId => {
+          deleted.push(accountId)
+          seedCodexAccountPoolForTest({ accounts: [] })
+          return { ok: true, message: 'deleted locally' }
+        },
+      }),
+    })
+
+    expect(await domain.applyDeletedProfile('known')).toBe(true)
+    expect(deleted).toEqual(['known'])
+    expect(domain.getSnapshot()?.accounts).toEqual([])
+  })
+
+  test('applyDeletedProfile does nothing for an unknown local account', async () => {
+    seedCodexAccountPoolForTest({
+      accounts: [poolAccount({ accountId: 'known' })],
+      activeAccountId: 'known',
+    })
+    let deletes = 0
+    let reloads = 0
+    const domain = makeAccountsDomain({
+      executor: fakeExecutor({
+        delete: async () => {
+          deletes += 1
+          return { ok: true, message: 'deleted' }
+        },
+      }),
+      reloadPool: async () => {
+        reloads += 1
+      },
+    })
+
+    expect(await domain.applyDeletedProfile('unknown')).toBe(false)
+    expect(deletes).toBe(0)
+    expect(reloads).toBe(0)
+  })
+
+  test('applyDeletedProfile preserves a profile that was re-added before notice delivery', async () => {
+    seedCodexAccountPoolForTest({
+      accounts: [
+        poolAccount({
+          accountId: 're-added',
+          vaultFilePath: '/test-vault/accounts/re-added.json',
+        }),
+      ],
+      activeAccountId: 're-added',
+    })
+    spyOn(fsModule, 'existsSync').mockReturnValue(true)
+    let deletes = 0
+    const domain = makeAccountsDomain({
+      executor: fakeExecutor({
+        delete: async () => {
+          deletes += 1
+          return { ok: true, message: 'deleted' }
+        },
+      }),
+    })
+
+    expect(await domain.applyDeletedProfile('re-added')).toBe(false)
+    expect(deletes).toBe(0)
+  })
+
+  test('concurrent async delete verbs keep their results correlated to their caller', async () => {
+    seedCodexAccountPoolForTest({
+      accounts: [
+        poolAccount({ accountId: 'a' }),
+        poolAccount({ accountId: 'b' }),
+      ],
+      activeAccountId: 'a',
+    })
+    const resolvers = new Map<
+      string,
+      (result: AccountVerbResult) => void
+    >()
+    const domain = makeAccountsDomain({
+      executor: fakeExecutor({
+        delete: accountId =>
+          new Promise(resolve => {
+            resolvers.set(accountId, resolve)
+          }),
+      }),
+    })
+
+    const first = domain.runVerb({
+      type: 'account.delete',
+      requestId: 'delete-a',
+      accountId: 'a',
+      confirm: true,
+    })
+    const second = domain.runVerb({
+      type: 'account.delete',
+      requestId: 'delete-b',
+      accountId: 'b',
+      confirm: true,
+    })
+    await flush()
+
+    resolvers.get('b')?.({ ok: true, message: 'deleted b' })
+    resolvers.get('a')?.({ ok: true, message: 'deleted a' })
+
+    expect(await first).toEqual({
+      verb: 'account.delete',
+      result: { ok: true, message: 'deleted a' },
+      poolChanged: true,
+    })
+    expect(await second).toEqual({
+      verb: 'account.delete',
+      result: { ok: true, message: 'deleted b' },
+      poolChanged: true,
+    })
   })
 
   test('rename/delete reject config-only accounts (no vault profile)', async () => {

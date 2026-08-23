@@ -151,6 +151,33 @@ function readVault(vaultFilePath: string): Record<string, any> {
   }
 }
 
+function readExistingVault(vaultFilePath: string): Record<string, any> {
+  if (!existsSync(vaultFilePath)) {
+    throw new Error('Codex vault profile no longer exists')
+  }
+  return JSON.parse(readFileSync(vaultFilePath, 'utf-8')) as Record<string, any>
+}
+
+export function acquireCodexVaultFileLock(
+  vaultFilePath: string,
+  onCompromised: (error: Error) => void,
+): Promise<() => Promise<void>> {
+  return lock(vaultFilePath, {
+    // Keep refresh and deletion on the same path-based lock after unlink.
+    realpath: false,
+    retries: {
+      retries: 10,
+      factor: 1.5,
+      minTimeout: 250,
+      maxTimeout: 2000,
+      randomize: true,
+    },
+    stale: 120_000,
+    update: 30_000,
+    onCompromised,
+  })
+}
+
 // ── Transport error classifier ─────────────────────────────────────────────
 
 /**
@@ -290,23 +317,15 @@ async function refreshAccountTokensStateful(
   const refreshTokenHash = hashToken(refreshToken)
 
   try {
-    releaseLock = await lock(vaultFilePath, {
-      retries: {
-        retries: 10,
-        factor: 1.5,
-        minTimeout: 250,
-        maxTimeout: 2000,
-        randomize: true,
-      },
-      stale: 120_000,
-      update: 30_000,
-      onCompromised: (err) => {
+    releaseLock = await acquireCodexVaultFileLock(
+      vaultFilePath,
+      (err) => {
         lockCompromised = true
         logForDebugging(`[codex-refresh] Lock compromised: ${err instanceof Error ? err.message : String(err)}`, { level: 'error' })
       },
-    })
+    )
 
-    let vault = readVault(vaultFilePath)
+    let vault = readExistingVault(vaultFilePath)
 
     // 1. Another process already saved a rotated token.
     if (vault.tokens?.refresh_token && vault.tokens.refresh_token !== refreshToken) {

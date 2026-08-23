@@ -1657,12 +1657,33 @@ export function App() {
     setActiveView('chat')
   }, [workspaceLayout])
 
-  // P4-5 — dispatch an account lifecycle verb to the active session's sidecar.
-  // The renderer only NAMES a target; the sidecar re-resolves + re-validates it
-  // (T6). The verb rides the HC3 fixed `accountVerb` channel. The outcome returns
-  // as an `account.result` frame (→ accountsState.lastResult).
+  // Session-local account controls still address their pane's sidecar. Deleting
+  // a saved profile is global durable state instead, so the Accounts page sends
+  // that one verb to main's session-independent engine worker.
   const sendAccountVerb = useCallback(
     (verb: AccountVerbMessage) => {
+      if (verb.type === 'account.delete') {
+        void getBridge()
+          .deleteAccount(verb)
+          .then(frame => {
+            dispatchAccounts({ type: 'frame', frame })
+          })
+          .catch(() => {
+            dispatchAccounts({
+              type: 'frame',
+              frame: {
+                kind: 'account.result',
+                protocolVersion: PROTOCOL_VERSION,
+                sessionId: '',
+                requestId: verb.requestId,
+                verb: 'account.delete',
+                ok: false,
+                message: 'Could not delete that account.',
+              },
+            })
+          })
+        return
+      }
       if (!activeSessionId) {
         // The Accounts page is reachable with no session open, but a verb needs
         // an engine process to carry it. Answer with a real outcome instead of

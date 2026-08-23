@@ -6589,6 +6589,98 @@ test('P4-5 — rejects account.delete without confirm:true (destructive fail-clo
   expect(deleted).toBe(false)
 })
 
+test('host deletion notice clears a live sidecar pool without emitting account.result', async () => {
+  seedCodexAccountPoolForTest({
+    accounts: [acctFixture({ accountId: 'deleted-account' })],
+    activeAccountId: 'deleted-account',
+  })
+  const deleted: string[] = []
+  const accounts = makeAccountsDomain({
+    executor: fakeExecutor({
+      delete: async accountId => {
+        deleted.push(accountId)
+        seedCodexAccountPoolForTest({ accounts: [] })
+        return { ok: true, message: 'deleted locally' }
+      },
+    }),
+  })
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined,
+    undefined,
+    accounts,
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'account.profileDeleted',
+        requestId: 'host-delete',
+        accountId: 'deleted-account',
+      },
+    }),
+  )
+  await flush()
+
+  expect(deleted).toEqual(['deleted-account'])
+  expect(
+    received.some(
+      frame =>
+        frame.kind === 'accounts.snapshot' &&
+        frame.accounts.accounts.length === 0,
+    ),
+  ).toBe(true)
+  expect(received.some(frame => frame.kind === 'account.result')).toBe(false)
+})
+
+test('host deletion notice rejects extra keys before changing local state', () => {
+  seedCodexAccountPoolForTest({
+    accounts: [acctFixture({ accountId: 'keep-account' })],
+    activeAccountId: 'keep-account',
+  })
+  let deleted = false
+  const accounts = makeAccountsDomain({
+    executor: fakeExecutor({
+      delete: async () => {
+        deleted = true
+        return { ok: true, message: 'deleted locally' }
+      },
+    }),
+  })
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined,
+    undefined,
+    accounts,
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'account.profileDeleted',
+        requestId: 'host-delete',
+        accountId: 'keep-account',
+        extra: true,
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+
+  expect(deleted).toBe(false)
+  expect(
+    received.some(frame => frame.kind === 'error' && frame.code === 'bad_request'),
+  ).toBe(true)
+})
+
 test('P4-5 — an account verb with no accounts domain fails closed (internal_error)', () => {
   const server = makeServer(new AppSessionController(probeAdapter()))
   const { socket, received } = makeSocket()

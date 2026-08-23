@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type {
   AccountResultFrame,
@@ -236,6 +237,18 @@ test('deleteVerb builds an account.delete verb with confirm true', () => {
     confirm: true,
   })
   expect(typeof verb.requestId).toBe('string')
+})
+
+test('delete confirmation disables re-entry after the first submit', () => {
+  const source = readFileSync(new URL('./AccountsPage.tsx', import.meta.url), 'utf8')
+  const start = source.indexOf('function DeleteAccountDialog(')
+  const end = source.indexOf('function LogoutAccountDialog(', start)
+  const dialog = source.slice(start, end)
+
+  expect(dialog).toContain('const [submitting, setSubmitting] = useState(false)')
+  expect(dialog).toContain('disabled={submitting}')
+  expect(dialog).toContain('if (submitting) return')
+  expect(dialog).toContain('setSubmitting(true)')
 })
 
 /* ── (e) a null snapshot renders a degraded state without throwing ── */

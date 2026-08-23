@@ -42,6 +42,8 @@
  * `sidecarServer.ts`.
  */
 
+import { existsSync } from 'node:fs'
+
 import {
   appendAccount,
   describeCodexAccountAvailability,
@@ -62,8 +64,17 @@ import {
   syncClaudeAccountToStorage,
   type ClaudePoolAccount,
 } from '../../src/services/api/claudeAccountPool.js'
-import { touchAll } from '../../src/services/api/codexTokenRefresh.js'
+import {
+  acquireCodexVaultFileLock,
+  touchAll,
+} from '../../src/services/api/codexTokenRefresh.js'
 import { fetchPoolUsage } from '../../src/services/api/codexUsage.js'
+import {
+  reassignCodexLeaseToActiveAccount,
+  releaseCodexLease,
+  repairLeasesForDeletedAccount,
+} from '../../src/services/api/codexAccountLeaseManager.js'
+import { resetCodexCacheContext } from '../../src/services/api/codex-fetch-adapter.js'
 import {
   installOAuthTokens,
   parseManualOAuthCallbackInput,
@@ -79,6 +90,7 @@ import {
   validateForceLoginOrgForToken,
 } from '../../src/utils/auth.js'
 import { clearAuthRelatedCaches } from '../../src/commands/logout/logout.js'
+import { logForDebugging } from '../../src/utils/debug.js'
 import { getInitialSettings } from '../../src/utils/settings/settings.js'
 import type {
   AccountResultFrame,
@@ -112,7 +124,7 @@ export type AccountsCommandExecutor = {
   /** Rename a vault account. `alias` already re-validated against the live pool. */
   rename(accountId: string, alias: string): AccountVerbResult
   /** Delete a vault account profile. `accountId` already re-resolved + vault-checked. */
-  delete(accountId: string): AccountVerbResult
+  delete(accountId: string): AccountVerbResult | Promise<AccountVerbResult>
   /** Sign out the active account (clears its token; profile stays). */
   logout(): AccountVerbResult
   /** Refresh OAuth tokens for every unlocked vault account. */
@@ -149,6 +161,11 @@ export type SidecarAccountsDomain = {
    * when usage changed and the sidecar should re-broadcast the snapshot.
    */
   refreshUsage(): Promise<boolean>
+  /**
+   * Apply a deletion already persisted by another process to this sidecar's
+   * process-local account pool without producing a transport result.
+   */
+  applyDeletedProfile(accountId: string): Promise<boolean>
   /**
    * P4-15 — register the sink the OAuth login controller pushes progress through.
    * The server sets it once and broadcasts each `OAuthLoginProgress` as an
@@ -526,11 +543,51 @@ export function createRealAccountsExecutor(): AccountsCommandExecutor {
         ? { ok: true, message: `Renamed to ${alias}` }
         : { ok: false, message: 'Could not rename that account.' }
     },
-    delete(accountId) {
-      const ok = removeCodexAccount(accountId)
-      return ok
-        ? { ok: true, message: 'Account deleted.' }
-        : { ok: false, message: 'Could not delete that account.' }
+    async delete(accountId) {
+      const account = getPoolStatus().accounts.find(
+        candidate => candidate.accountId === accountId,
+      )
+      if (!account?.vaultFilePath) {
+        return { ok: false, message: 'Could not delete that account.' }
+      }
+
+      let releaseLock: undefined | (() => Promise<void>)
+      let lockCompromised = false
+      try {
+        releaseLock = await acquireCodexVaultFileLock(
+          account.vaultFilePath,
+          error => {
+            lockCompromised = true
+            logForDebugging(
+              `[accounts-domain] Codex vault lock compromised during deletion: ${error.message}`,
+              { level: 'error' },
+            )
+          },
+        )
+        if (lockCompromised || !removeCodexAccount(accountId)) {
+          return { ok: false, message: 'Could not delete that account.' }
+        }
+      } catch (error) {
+        logForDebugging(
+          `[accounts-domain] Could not lock Codex profile for deletion: ${error instanceof Error ? error.message : String(error)}`,
+          { level: 'warn' },
+        )
+        return { ok: false, message: 'Could not delete that account.' }
+      } finally {
+        if (releaseLock) {
+          await releaseLock().catch(() => {})
+        }
+      }
+
+      repairLeasesForDeletedAccount(accountId)
+      if (getPoolStatus().activeIndex >= 0) {
+        reassignCodexLeaseToActiveAccount('main-thread')
+      } else {
+        releaseCodexLease('main-thread')
+      }
+      resetCodexCacheContext()
+      await clearAuthRelatedCaches()
+      return { ok: true, message: 'Account deleted.' }
     },
     logout() {
       clearCodexOAuthTokens()
@@ -808,6 +865,14 @@ export function createSidecarAccountsDomain(
       return executor.refreshUsage()
     },
 
+    async applyDeletedProfile(accountId) {
+      const account = resolveAccount(accountId)
+      if (!account) return false
+      if (account.vaultFilePath && existsSync(account.vaultFilePath)) return false
+      const result = await executor.delete(account.accountId)
+      return result.ok
+    },
+
     setOAuthProgressSink(sink) {
       progressSink = sink
     },
@@ -898,7 +963,7 @@ export function createSidecarAccountsDomain(
               poolChanged: false,
             }
           }
-          const result = executor.delete(account.accountId)
+          const result = await executor.delete(account.accountId)
           return { verb: 'account.delete', result, poolChanged: result.ok }
         }
         case 'account.logout': {

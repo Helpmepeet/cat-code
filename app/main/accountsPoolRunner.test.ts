@@ -12,6 +12,7 @@ import type {
 import { ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION } from '../shared/accountsPoolWorker.js'
 import {
   ACCOUNTS_POOL_REFRESH_INTERVAL_MS,
+  createAccountsPoolPublicationGate,
   createAccountsPoolDriver,
   runAccountsPoolWorker,
   runCarriesUsageStats,
@@ -70,6 +71,9 @@ function fakeSpawn(script: {
   exitCode?: number
   signal?: NodeJS.Signals | null
   emitError?: Error
+  onStdinEnd?: (data: unknown) => void
+  autoClose?: boolean
+  onKill?: (signal: NodeJS.Signals) => void
 }): typeof spawn {
   return ((): unknown => {
     const child = new EventEmitter() as EventEmitter & {
@@ -78,36 +82,78 @@ function fakeSpawn(script: {
       kill: (signal?: NodeJS.Signals) => boolean
       stdout: EventEmitter
       stderr: EventEmitter
-      stdin: EventEmitter & { end: () => void }
+      stdin: EventEmitter & { end: (data?: unknown) => void }
     }
     child.exitCode = null
     child.signalCode = null
     child.kill = (signal?: NodeJS.Signals) => {
-      child.signalCode = signal ?? 'SIGTERM'
+      const sent = signal ?? 'SIGTERM'
+      script.onKill?.(sent)
+      child.signalCode = sent
+      if (script.autoClose === false && sent === 'SIGKILL') {
+        child.emit('close', null, sent)
+      }
       return true
     }
     child.stdout = new EventEmitter()
     child.stderr = new EventEmitter()
-    const stdin = new EventEmitter() as EventEmitter & { end: () => void }
-    stdin.end = () => {}
+    const stdin = new EventEmitter() as EventEmitter & {
+      end: (data?: unknown) => void
+    }
+    stdin.end = data => {
+      script.onStdinEnd?.(data)
+    }
     child.stdin = stdin
-    setTimeout(() => {
-      if (script.emitError) {
-        child.emit('error', script.emitError)
-        return
-      }
-      if (script.stdout !== undefined) {
-        child.stdout.emit('data', Buffer.from(script.stdout, 'utf8'))
-      }
-      child.exitCode = script.exitCode ?? 0
-      child.emit('close', script.exitCode ?? 0, script.signal ?? null)
-    }, 0)
+    if (script.autoClose !== false) {
+      setTimeout(() => {
+        if (script.emitError) {
+          child.emit('error', script.emitError)
+          return
+        }
+        if (script.stdout !== undefined) {
+          child.stdout.emit('data', Buffer.from(script.stdout, 'utf8'))
+        }
+        child.exitCode = script.exitCode ?? 0
+        child.emit('close', script.exitCode ?? 0, script.signal ?? null)
+      }, 0)
+    }
     return child
   }) as unknown as typeof spawn
 }
 
 function ndjson(record: unknown): string {
   return `${JSON.stringify(record)}\n`
+}
+
+function deleteInput(accountId = 'acct-0', requestId = 'request-1') {
+  return {
+    type: 'account-delete',
+    version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+    verb: {
+      type: 'account.delete',
+      requestId,
+      accountId,
+      confirm: true,
+    },
+  } as const
+}
+
+function deleteResult(
+  overrides: Partial<{
+    requestId: string
+    ok: boolean
+    accounts: string[]
+  }> = {},
+) {
+  return {
+    type: 'account-delete',
+    version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+    requestId: overrides.requestId ?? 'request-1',
+    verb: 'account.delete',
+    ok: overrides.ok ?? true,
+    message: 'Account deleted.',
+    pool: pool(overrides.accounts ?? []),
+  }
 }
 
 function usageStats(range: UsageStatsRange, totalTokens: number): UsageStatsSnapshot {
@@ -176,6 +222,29 @@ describe('runAccountsPoolWorker — accept + deliver', () => {
     })
     expect(outcome).toBe('delivered')
     expect(delivered[0]!.accounts).toEqual([])
+  })
+
+  test('writes one confirmed delete request to stdin and delivers its result', async () => {
+    const input = deleteInput()
+    let stdin = ''
+    const delivered: string[] = []
+    const outcome = await runAccountsPoolWorker({
+      command: 'bun',
+      args: ['--account-delete'],
+      cwd: process.cwd(),
+      input,
+      spawnWorker: fakeSpawn({
+        onStdinEnd: data => {
+          stdin = String(data)
+        },
+        stdout: ndjson(deleteResult()),
+      }),
+      onAccountDelete: result => delivered.push(result.requestId),
+    })
+
+    expect(outcome).toBe('delivered')
+    expect(JSON.parse(stdin)).toEqual(input)
+    expect(delivered).toEqual(['request-1'])
   })
 
   test('usageStats reaches onUsageStats when the record carries it', async () => {
@@ -341,15 +410,57 @@ describe('runAccountsPoolWorker — fail closed', () => {
       version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
       pool: pool(['work']),
     }
+    let called = false
     await expect(
       runAccountsPoolWorker({
         command: 'bun',
         args: [],
         cwd: process.cwd(),
         spawnWorker: fakeSpawn({ stdout: ndjson(one) + ndjson(one) }),
-        onPool: () => {},
+        onPool: () => {
+          called = true
+        },
       }),
     ).rejects.toThrow()
+    expect(called).toBe(false)
+  })
+
+  test('rejects a mismatched delete result without delivering it', async () => {
+    let called = false
+    await expect(
+      runAccountsPoolWorker({
+        command: 'bun',
+        args: ['--account-delete'],
+        cwd: process.cwd(),
+        input: deleteInput(),
+        spawnWorker: fakeSpawn({
+          stdout: ndjson(deleteResult({ requestId: 'different-request' })),
+        }),
+        onAccountDelete: () => {
+          called = true
+        },
+      }),
+    ).rejects.toThrow(/requestId mismatch/)
+    expect(called).toBe(false)
+  })
+
+  test('rejects a successful delete result that still contains the target', async () => {
+    let called = false
+    await expect(
+      runAccountsPoolWorker({
+        command: 'bun',
+        args: ['--account-delete'],
+        cwd: process.cwd(),
+        input: deleteInput(),
+        spawnWorker: fakeSpawn({
+          stdout: ndjson(deleteResult({ accounts: ['work'] })),
+        }),
+        onAccountDelete: () => {
+          called = true
+        },
+      }),
+    ).rejects.toThrow(/retained target/)
+    expect(called).toBe(false)
   })
 
   test('rejects on a non-zero exit with no record', async () => {
@@ -363,6 +474,24 @@ describe('runAccountsPoolWorker — fail closed', () => {
       }),
     ).rejects.toThrow()
   })
+
+  test('escalates a timed-out worker from SIGTERM to SIGKILL', async () => {
+    const signals: NodeJS.Signals[] = []
+    await expect(
+      runAccountsPoolWorker({
+        command: 'bun',
+        args: [],
+        cwd: process.cwd(),
+        timeoutMs: 1,
+        spawnWorker: fakeSpawn({
+          autoClose: false,
+          onKill: signal => signals.push(signal),
+        }),
+        onPool: () => {},
+      }),
+    ).rejects.toThrow(/timed out/)
+    expect(signals).toEqual(['SIGTERM', 'SIGKILL'])
+  }, 5_000)
 
   test('rejects when the child fails to spawn', async () => {
     await expect(
@@ -378,6 +507,16 @@ describe('runAccountsPoolWorker — fail closed', () => {
 })
 
 describe('createAccountsPoolDriver — single-flight + keeps-last-good', () => {
+  test('a deletion invalidates any pool read that started before it', () => {
+    const gate = createAccountsPoolPublicationGate()
+    const staleRead = gate.beginRead()
+
+    gate.invalidate()
+
+    expect(gate.canPublish(staleRead)).toBe(false)
+    expect(gate.canPublish(gate.beginRead())).toBe(true)
+  })
+
   test('single-flight: a tick while a run is in flight never starts a second worker', async () => {
     let runCount = 0
     let running = 0

@@ -210,6 +210,7 @@ async function runProductionHardeningSmoke(
       'abort',
       'accountVerb',
       'answerQuestions',
+      'deleteAccount',
       'ping',
       // D1b — take back messages still waiting for the running response. Fixed
       // one-way sender; the renderer authors only a correlation id, so it names

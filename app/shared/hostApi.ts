@@ -231,8 +231,9 @@ export type SaveTextInput = {
  *    catalog, and delivers the accepted snapshot here. This is what lets the
  *    Accounts page show live usage with NO session open. Read-only OUTBOUND and
  *    ALREADY redacted (no token, no vault path by construction); `secretGuard`
- *    ran on it at the worker and again at main's parse boundary. Account WRITES
- *    remain session-plane `account.*` verbs — this event never carries one.
+ *    ran on it at the worker and again at main's parse boundary. The event never
+ *    carries a renderer-authored write. A successful session-independent profile
+ *    deletion causes main to emit the worker's freshly redacted pool here.
  *  - `usage-stats` — the Accounts page's usage analytics for BOTH ranges,
  *    aggregated by that same accounts worker run (`accountsPoolWorker.ts`
  *    `usageStats`). It exists for the same reason `accounts-pool` does: the

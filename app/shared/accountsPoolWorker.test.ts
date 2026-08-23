@@ -10,11 +10,13 @@ import type { AccountsPoolWorkerResult } from './accountsPoolWorker.js'
 import {
   ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
   fitsAccountsPoolRecordLimit,
-  shedOversizeUsageStats,
+  parseAccountDeleteMessage,
+  parseAccountsPoolWorkerDeleteRequest,
   parseAccountsPoolWorkerResult,
   parseAccountsSnapshot,
   parseUsageStatsByRange,
   parseUsageStatsSnapshot,
+  shedOversizeUsageStats,
 } from './accountsPoolWorker.js'
 
 function account(over: Partial<AccountStatus> = {}): AccountStatus {
@@ -122,6 +124,74 @@ describe('parseAccountsPoolWorkerResult — accepts', () => {
       reason: 'internal',
     })
     expect(parsed?.type).toBe('failure')
+  })
+})
+
+describe('session-independent account deletion boundary', () => {
+  const verb = {
+    type: 'account.delete',
+    requestId: 'request-1',
+    accountId: 'account-1',
+    confirm: true,
+  } as const
+
+  test('accepts only the explicit confirmed delete verb', () => {
+    expect(parseAccountDeleteMessage(verb)).toEqual(verb)
+    expect(parseAccountDeleteMessage({ ...verb, confirm: false })).toBeNull()
+    expect(parseAccountDeleteMessage({ ...verb, extra: true })).toBeNull()
+    expect(parseAccountDeleteMessage({ ...verb, accountId: '' })).toBeNull()
+  })
+
+  test('round-trips the closed stdin request and redacted worker result', () => {
+    expect(
+      parseAccountsPoolWorkerDeleteRequest({
+        type: 'account-delete',
+        version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+        verb,
+      }),
+    ).toEqual({
+      type: 'account-delete',
+      version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+      verb,
+    })
+
+    expect(
+      parseAccountsPoolWorkerResult({
+        type: 'account-delete',
+        version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+        requestId: verb.requestId,
+        verb: 'account.delete',
+        ok: true,
+        message: 'Account deleted.',
+        pool: pool({ accounts: [], activeAccountId: null, readyCount: 0, poolCount: 0 }),
+      }),
+    ).toMatchObject({
+      type: 'account-delete',
+      requestId: verb.requestId,
+      ok: true,
+    })
+  })
+
+  test('rejects malformed or secret-bearing delete results', () => {
+    const result = {
+      type: 'account-delete',
+      version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+      requestId: verb.requestId,
+      verb: 'account.delete',
+      ok: true,
+      message: 'Account deleted.',
+      pool: pool(),
+    }
+    expect(parseAccountsPoolWorkerResult({ ...result, extra: true })).toBeNull()
+    expect(
+      parseAccountsPoolWorkerResult({
+        ...result,
+        pool: {
+          ...pool(),
+          accounts: [{ ...account(), accessToken: 'must-not-cross' }],
+        },
+      }),
+    ).toBeNull()
   })
 })
 

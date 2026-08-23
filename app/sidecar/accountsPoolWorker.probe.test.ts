@@ -49,12 +49,21 @@
  */
 
 import { afterEach, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { parseAccountsPoolWorkerResult } from '../shared/accountsPoolWorker.js'
+import {
+  ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+  parseAccountsPoolWorkerResult,
+} from '../shared/accountsPoolWorker.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const worker = join(here, 'accountsPoolWorker.ts')
@@ -192,4 +201,77 @@ test('--usage-stats makes the worker carry both ranges', async () => {
   expect(pool.usageStats).toBeDefined()
   expect(pool.usageStats?.['7d'].range).toBe('7d')
   expect(pool.usageStats?.['30d'].range).toBe('30d')
+}, 180_000)
+
+test('the one-shot worker deletes a vault profile without any session process', async () => {
+  const cwd = temp('catcode-accounts-delete-cwd-')
+  const fakeHome = temp('catcode-accounts-delete-home-')
+  const configDir = temp('catcode-accounts-delete-config-')
+  assertHermeticHome(fakeHome)
+  const accountsDir = join(fakeHome, 'codex-vault', 'accounts')
+  mkdirSync(accountsDir, { recursive: true })
+  const accountId = 'account-to-delete'
+  const vaultFile = join(accountsDir, 'account-to-delete.json')
+  writeFileSync(
+    vaultFile,
+    JSON.stringify({
+      tokens: {
+        access_token: 'probe-access-token',
+        refresh_token: 'probe-refresh-token',
+        account_id: accountId,
+      },
+      alias: 'delete-me',
+    }),
+    { mode: 0o600 },
+  )
+
+  const proc = Bun.spawn(
+    ['bun', 'run', worker, '--bare', '--account-delete'],
+    {
+      cwd,
+      env: {
+        ...process.env,
+        NODE_ENV: 'development',
+        CLAUDE_CONFIG_DIR: configDir,
+        HOME: fakeHome,
+        ANTHROPIC_API_KEY: undefined,
+        ANTHROPIC_AUTH_TOKEN: undefined,
+        CLAUDE_CODE_OAUTH_TOKEN: undefined,
+      },
+      stdin: 'pipe',
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+  )
+  proc.stdin.write(
+    `${JSON.stringify({
+      type: 'account-delete',
+      version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+      verb: {
+        type: 'account.delete',
+        requestId: 'delete-request',
+        accountId,
+        confirm: true,
+      },
+    })}\n`,
+  )
+  proc.stdin.end()
+  const [code, stdout, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ])
+  if (!stdout.trim()) {
+    throw new Error(`account delete worker emitted no result: ${stderr.trim()}`)
+  }
+  const result = parseAccountsPoolWorkerResult(JSON.parse(stdout.trim()))
+
+  expect(code).toBe(0)
+  expect(result?.type).toBe('account-delete')
+  if (result?.type !== 'account-delete') return
+  expect(result.ok).toBe(true)
+  expect(result.requestId).toBe('delete-request')
+  expect(result.pool.accounts).toEqual([])
+  expect(JSON.stringify(result)).not.toContain('probe-access-token')
+  expect(existsSync(vaultFile)).toBe(false)
 }, 180_000)

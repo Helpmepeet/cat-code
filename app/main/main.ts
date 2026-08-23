@@ -101,6 +101,12 @@ import {
   type SessionsCatalogDriver,
 } from './sessionsCatalogRunner.js'
 import {
+  ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+  parseAccountDeleteMessage,
+  type AccountsPoolWorkerDeleteResult,
+} from '../shared/accountsPoolWorker.js'
+import {
+  createAccountsPoolPublicationGate,
   createAccountsPoolDriver,
   runAccountsPoolWorker,
   runCarriesUsageStats,
@@ -144,6 +150,7 @@ import {
   TASK_CONTROL_VERB_TYPES,
   WORKSPACE_TRUST_VERB_TYPES,
   type AccountVerbMessage,
+  type AccountResultFrame,
   type AccountVerbType,
   type AskUserQuestionAnswerMessage,
   type PermissionSetModeMode,
@@ -226,6 +233,7 @@ const CH_HOST_OPEN_HISTORY = 'catcode:host:open-history'
 // dialog it cannot answer, and main owns the destination (HC1).
 const CH_HOST_SAVE_TEXT = 'catcode:host:save-text'
 const CH_HOST_OPEN_WORKSPACE_FILE = 'catcode:host:open-workspace-file'
+const CH_HOST_ACCOUNT_DELETE = 'catcode:host:account-delete'
 const CH_HOST_EVENT = 'catcode:host:event'
 const CH_HOST_VISIBLE_SESSIONS = 'catcode:host:visible-sessions'
 
@@ -565,6 +573,13 @@ let sessionsCatalogDriver: SessionsCatalogDriver | null = null
  * lifecycle as `sessionsCatalogDriver`.
  */
 let accountsPoolDriver: AccountsPoolDriver | null = null
+let accountDeleteInFlight = false
+let accountDeleteAbort: AbortController | null = null
+const accountsPoolPublicationGate = createAccountsPoolPublicationGate()
+const pendingAccountDeletionNotices = new Map<
+  SessionId,
+  Map<string, string>
+>()
 
 /**
  * Kill switch for the worker a driver may have IN FLIGHT at teardown. `stop()`
@@ -870,6 +885,8 @@ function startAccountsPoolRefresh(): void {
   let runIndex = 0
   accountsPoolDriver = createAccountsPoolDriver({
     run: () => {
+      if (accountDeleteInFlight) return Promise.resolve()
+      const generation = accountsPoolPublicationGate.beginRead()
       const onWorkerLifecycle = createWorkerLifecycleLogger('accounts-pool')
       const withUsageStats = runCarriesUsageStats(runIndex)
       runIndex += 1
@@ -883,11 +900,13 @@ function startAccountsPoolRefresh(): void {
         signal: abort.signal,
         onWorkerLifecycle,
         onPool: pool => {
+          if (!accountsPoolPublicationGate.canPublish(generation)) return
           sendHostEvent({ type: 'accounts-pool', pool })
         },
         // Same run, same page, separate event: the two are independent reads and
         // a stats failure must not withhold the pool (nor the reverse).
         onUsageStats: stats => {
+          if (!accountsPoolPublicationGate.canPublish(generation)) return
           sendHostEvent({ type: 'usage-stats', stats })
         },
         log: line => process.stderr.write(`${line}\n`),
@@ -896,6 +915,62 @@ function startAccountsPoolRefresh(): void {
     log: line => process.stderr.write(`${line}\n`),
   })
   accountsPoolDriver.start()
+}
+
+function sendAccountDeletionNotice(
+  sessionId: SessionId,
+  accountId: string,
+  requestId: string,
+): boolean {
+  try {
+    supervisor?.send(sessionId, {
+      type: 'account.profileDeleted',
+      requestId,
+      accountId,
+    })
+    return true
+  } catch (error) {
+    process.stderr.write(
+      `[main] account deletion notice to ${sessionId} deferred: ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    )
+    return false
+  }
+}
+
+function notifySidecarsOfAccountDeletion(
+  accountId: string,
+  requestId: string,
+): void {
+  for (const session of supervisor?.listSessions() ?? []) {
+    if (
+      session.status === 'failed' ||
+      session.status === 'exited'
+    ) {
+      continue
+    }
+    if (
+      session.status === 'ready' &&
+      sendAccountDeletionNotice(session.sessionId, accountId, requestId)
+    ) {
+      continue
+    }
+    const pending =
+      pendingAccountDeletionNotices.get(session.sessionId) ?? new Map()
+    pending.set(accountId, requestId)
+    pendingAccountDeletionNotices.set(session.sessionId, pending)
+  }
+}
+
+function flushAccountDeletionNotices(sessionId: SessionId): void {
+  const pending = pendingAccountDeletionNotices.get(sessionId)
+  if (!pending) return
+  for (const [accountId, requestId] of pending) {
+    if (!sendAccountDeletionNotice(sessionId, accountId, requestId)) return
+    pending.delete(accountId)
+  }
+  if (pending.size === 0) pendingAccountDeletionNotices.delete(sessionId)
 }
 
 /**
@@ -1500,6 +1575,10 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
     }
     if (frame.kind === 'ready') {
       logOperational('sidecar.ready', 'info', { frame: 'ready' }, event.sessionId)
+      flushAccountDeletionNotices(event.sessionId)
+    }
+    if (isTerminalLifecycleFrame(frame)) {
+      pendingAccountDeletionNotices.delete(event.sessionId)
     }
     const traced = traceFrame(frame, 'supervisor.socket.received')
     // Receipt is true whether the attachment gate forwards immediately or
@@ -2404,6 +2483,87 @@ function registerHostControlPlane(): void {
     },
   )
 
+  ipcMain.handle(
+    CH_HOST_ACCOUNT_DELETE,
+    async (_e, input: unknown): Promise<AccountResultFrame> => {
+      const verb = parseAccountDeleteMessage(input)
+      const failure = (
+        message: string,
+        requestId = verb?.requestId ?? '',
+      ): AccountResultFrame => ({
+        kind: 'account.result',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: '',
+        requestId,
+        verb: 'account.delete',
+        ok: false,
+        message,
+      })
+      if (!verb) return failure('Invalid account deletion request.', '')
+      if (accountDeleteInFlight) {
+        return failure('Another account deletion is already in progress.')
+      }
+
+      accountDeleteInFlight = true
+      accountsPoolPublicationGate.invalidate()
+      const abort = new AbortController()
+      accountDeleteAbort = abort
+      const delivery: { value: AccountsPoolWorkerDeleteResult | null } = {
+        value: null,
+      }
+      try {
+        const launch = sidecarLaunch()
+        const outcome = await runAccountsPoolWorker({
+          command: launch.command,
+          args: launch.argsFor('accounts-pool', [
+            '--bare',
+            '--account-delete',
+          ]),
+          cwd: process.cwd(),
+          signal: abort.signal,
+          input: {
+            type: 'account-delete',
+            version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+            verb,
+          },
+          onAccountDelete: result => {
+            delivery.value = result
+          },
+          log: line => process.stderr.write(`${line}\n`),
+        })
+        const delivered = delivery.value
+        if (outcome !== 'delivered' || !delivered) {
+          return failure('Could not delete that account.')
+        }
+        sendHostEvent({ type: 'accounts-pool', pool: delivered.pool })
+        if (delivered.ok) {
+          notifySidecarsOfAccountDeletion(
+            verb.accountId,
+            delivered.requestId,
+          )
+        }
+        return {
+          kind: 'account.result',
+          protocolVersion: PROTOCOL_VERSION,
+          sessionId: '',
+          requestId: delivered.requestId,
+          verb: 'account.delete',
+          ok: delivered.ok,
+          message: delivered.message,
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        process.stderr.write(
+          `[main] account delete worker failed: ${message}\n`,
+        )
+        return failure('Could not delete that account.')
+      } finally {
+        if (accountDeleteAbort === abort) accountDeleteAbort = null
+        accountDeleteInFlight = false
+      }
+    },
+  )
+
   ipcMain.handle(CH_HOST_OPEN_WORKSPACE_FILE, (_e, input: unknown): Promise<boolean> => {
     if (!host) return Promise.resolve(false)
     return openWorkspaceFile(input, host.listSessions(), path => shell.openPath(path))
@@ -2799,6 +2959,9 @@ function stopBackgroundDrivers(): void {
   accountsPoolDriver = null
   accountsPoolAbort?.abort()
   accountsPoolAbort = null
+  accountDeleteAbort?.abort()
+  accountDeleteAbort = null
+  pendingAccountDeletionNotices.clear()
   idleParkDriver?.stop()
   idleParkDriver = null
   // The window that reported them is going away; a stale visible set must not

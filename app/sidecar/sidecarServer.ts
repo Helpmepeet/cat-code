@@ -1309,6 +1309,11 @@ export class SidecarServer {
       return
     }
 
+    if (messageType === 'account.profileDeleted') {
+      this.handleAccountProfileDeleted(connection, frame.message)
+      return
+    }
+
     if (typeof messageType === 'string' && messageType.startsWith('account.')) {
       this.handleAccountVerb(connection, frame.message)
       return
@@ -2630,6 +2635,45 @@ export class SidecarServer {
         this.sendError(
           connection,
           verb.requestId,
+          'internal_error',
+          error instanceof Error ? error.message : String(error),
+          false,
+        )
+      })
+      .finally(() => {
+        this.inFlightDurableWrites -= 1
+      })
+  }
+
+  private handleAccountProfileDeleted(
+    connection: Connection,
+    rawMessage: unknown,
+  ): void {
+    const parsed = accountProfileDeletedMessageSchema.safeParse(rawMessage)
+    if (!parsed.success) {
+      this.sendError(
+        connection,
+        undefined,
+        'bad_request',
+        parsed.error.issues[0]?.message ?? 'invalid account deletion notice',
+        false,
+      )
+      return
+    }
+    if (!this.accounts) return
+
+    this.inFlightDurableWrites += 1
+    void this.accounts
+      .applyDeletedProfile(parsed.data.accountId)
+      .then(changed => {
+        if (!changed) return
+        this.broadcastAccountsSnapshot()
+        this.broadcastRunControlsSnapshot()
+      })
+      .catch(error => {
+        this.sendError(
+          connection,
+          parsed.data.requestId,
           'internal_error',
           error instanceof Error ? error.message : String(error),
           false,
@@ -5037,6 +5081,7 @@ function checkStrictKeys(message: unknown): string | null {
     ['account.oauthPasteCode', new Set(['type', 'requestId', 'code'])],
     ['account.oauthAlias', new Set(['type', 'requestId', 'alias'])],
     ['account.oauthCancel', new Set(['type', 'requestId'])],
+    ['account.profileDeleted', new Set(['type', 'requestId', 'accountId'])],
     // P4-15 workspace-trust accept verb (app-owned; see WORKSPACE_TRUST_VERB_TYPES).
     // HC1: no path key — the sidecar trusts only its own spawn cwd.
     ['workspace.trust', new Set(['type', 'requestId'])],
@@ -5284,6 +5329,12 @@ const accountVerbMessageSchema = z.discriminatedUnion('type', [
     requestId: accountRequestIdSchema,
   }),
 ])
+
+const accountProfileDeletedMessageSchema = z.object({
+  type: z.literal('account.profileDeleted'),
+  requestId: accountRequestIdSchema,
+  accountId: accountIdSchema,
+})
 
 /**
  * P4-15 — sidecar-LOCAL schema for the workspace-trust accept verb (protocol.ts:

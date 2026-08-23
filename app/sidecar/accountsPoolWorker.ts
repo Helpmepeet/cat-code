@@ -1,17 +1,17 @@
 /**
  * Accounts-pool worker (accounts owner — `docs/migration/decisions/ACCOUNTS-OWNERSHIP.md`).
- * ONE disposable engine-graph process: it reads the global account pool ONCE,
- * emits a single bounded NDJSON result over stdout, and exits. It is the
- * accounts analogue of `sessionsCatalogWorker` — separate from the live
- * N-process sidecars so the pool read never rides a session process, and it
- * disappears when it exits so it holds NO resident memory between runs.
+ * ONE disposable engine-graph process. In its ordinary mode it reads the global
+ * account pool once. In `--account-delete` mode it accepts one strictly validated
+ * confirmed delete over stdin and runs it through `accountsDomain`. Both modes
+ * emit one bounded NDJSON result and exit. The worker is separate from live
+ * N-process sidecars, so global profile deletion never borrows a chat session.
  *
  * Main re-spawns it on a timer and remains engine-free. This worker reuses the
  * EXISTING redaction (`buildAccountsSnapshot`, the same pure projection the
  * sidecar accounts domain emits) rather than re-deriving the shape
  * (CLAUDE.md §8 rule 10).
  *
- * OBSERVATION-ONLY BOOTSTRAP — now shared by all three disposable workers (the
+ * OBSERVATION-FIRST BOOTSTRAP — now shared by all three disposable workers (the
  * two siblings adopted it after shipping the full bootstrap for a while). Full
  * `init()` fires `void initAccountPool()` (`src/entrypoints/init.ts:90`), which starts
  * periodic token refresh, quarantine probes, and a startup `touchAll()`. On a
@@ -39,8 +39,9 @@
  * pre-vault single-account case or a `/delete-account`'d account's lingering
  * keychain/config remnant, this worker can still show that one edge case in
  * the emitted list — what it guarantees is narrower and disk-only: this
- * unattended worker never re-creates the vault file, so a deletion is never
- * undone on disk by an idle background read. The two Anthropic ROUTE
+ * unattended observation mode never re-creates the vault file, so a deletion is
+ * never undone on disk by an idle background read. Delete mode performs only the
+ * explicitly confirmed write after this same fresh load. The two Anthropic ROUTE
  * booleans below are read through a separate, disk-write-free path and stay
  * accurate regardless.
  *
@@ -70,7 +71,9 @@
 import {
   ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
   MAX_ACCOUNTS_POOL_WORKER_RECORD_BYTES,
+  parseAccountsPoolWorkerDeleteRequest,
   shedOversizeUsageStats,
+  type AccountsPoolWorkerDeleteRequest,
   type AccountsPoolWorkerResult,
 } from '../shared/accountsPoolWorker.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
@@ -82,13 +85,17 @@ import type { UsageStatsByRange } from '../shared/protocol.js'
 process.env.CLAUDE_CODE_SIMPLE = '1'
 
 async function main(): Promise<void> {
+  const deleteRequest = process.argv.includes('--account-delete')
+    ? await readDeleteRequest()
+    : null
+
   // Engine imports happen only after SIMPLE is fixed for the process. The static
   // imports above are engine-free (shared boundary + secretGuard), so the
   // ~189 MB engine import is paid only here, per run.
   const [
     { getPoolStatus, loadPoolForObservation },
     { loadClaudePoolForObservation },
-    { buildAccountsSnapshot },
+    { buildAccountsSnapshot, createSidecarAccountsDomain },
     { ensureEngineMacro },
     { enableConfigs },
   ] = await Promise.all([
@@ -113,6 +120,10 @@ async function main(): Promise<void> {
   // `loadClaudePoolForObservation` just populated — no disk access, no write.
   await loadPoolForObservation()
   loadClaudePoolForObservation()
+
+  const deleteOutcome = deleteRequest
+    ? await createSidecarAccountsDomain().runVerb(deleteRequest.verb)
+    : null
 
   // Live usage headroom — the reason this page polls at all. Best-effort: an
   // offline or stale-token run still emits the pool with whatever usage the
@@ -156,6 +167,30 @@ async function main(): Promise<void> {
       version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
       reason: 'internal',
     })
+    process.exit(0)
+  }
+
+  if (deleteOutcome) {
+    const result: AccountsPoolWorkerResult = {
+      type: 'account-delete',
+      version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+      requestId: deleteRequest!.verb.requestId,
+      verb: 'account.delete',
+      ok: deleteOutcome.result.ok,
+      message: deleteOutcome.result.message,
+      pool,
+    }
+    const secret = scanForSecrets(result)
+    if (!secret.ok) {
+      process.stderr.write('[accounts-worker] blocked secret-keyed delete result\n')
+      await emit({
+        type: 'failure',
+        version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+        reason: 'internal',
+      })
+      process.exit(0)
+    }
+    await emit(result)
     process.exit(0)
   }
 
@@ -284,6 +319,31 @@ function emit(result: AccountsPoolWorkerResult): Promise<void> {
       else resolve()
     })
   })
+}
+
+async function readDeleteRequest(): Promise<AccountsPoolWorkerDeleteRequest> {
+  const input = Buffer.from(
+    await new Response(Bun.stdin.stream()).arrayBuffer(),
+  )
+  if (input.byteLength > MAX_ACCOUNTS_POOL_WORKER_RECORD_BYTES) {
+    throw new Error('accounts delete request exceeds record limit')
+  }
+  const lines = input
+    .toString('utf8')
+    .split('\n')
+    .filter(line => line.length > 0)
+  if (lines.length !== 1) {
+    throw new Error('accounts delete worker requires exactly one request record')
+  }
+  let raw: unknown
+  try {
+    raw = JSON.parse(lines[0]!)
+  } catch {
+    throw new Error('accounts delete request is not valid JSON')
+  }
+  const request = parseAccountsPoolWorkerDeleteRequest(raw)
+  if (!request) throw new Error('accounts delete request failed validation')
+  return request
 }
 
 function errorText(error: unknown): string {
