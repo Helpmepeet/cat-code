@@ -1114,6 +1114,14 @@ const TranscriptRowView = memo(function TranscriptRowView({
 // it tokenizes fenced ```lang blocks into highlight.js `hljs-*` spans.
 const REMARK_PLUGINS = [remarkGfm]
 
+/**
+ * Matches content whose last non-blank line is a closing code fence (three or
+ * more backticks or tildes, optionally indented). When the message ends with a
+ * fenced code block the block's own copy button is already in the bottom-right
+ * corner, so the message-level `BubbleCopyChip` would double up.
+ */
+const TRAILING_CODE_FENCE_RE = /(?:^|\n)[ \t]{0,3}(?:`{3,}|~{3,})[ \t]*\n?\s*$/
+
 function AssistantProse({
   content,
   sourceId,
@@ -1146,8 +1154,11 @@ function AssistantProse({
   )
   // The prototype's `showCopy` gate (Messages.jsx:2068): no chip while the reply
   // is still arriving (there is no settled answer to take yet, and the caret owns
-  // that corner), and none on an empty turn.
-  const copyable = !streaming && content.trim().length > 0
+  // that corner), and none on an empty turn. Also suppressed when the message
+  // ends with a fenced code block: the block's own per-block copy button already
+  // sits in the same corner, so doubling up is confusing (user report 2026-08-23).
+  const endsWithCodeFence = TRAILING_CODE_FENCE_RE.test(content)
+  const copyable = !streaming && content.trim().length > 0 && !endsWithCodeFence
   // The blockquote renderer closes over this message's raw source so its own
   // copy control can dequote by source position rather than re-deriving text
   // from the parsed tree. Keep its component type stable until that source

@@ -3625,6 +3625,20 @@ test('P4-38 — an empty assistant turn gets no copy chip', () => {
   expect(render(assistantRow('   \n  '))).not.toContain('Copy response')
 })
 
+test('P4-38 — no copy chip when the message ends with a fenced code block', () => {
+  const content = 'Here is an example:\n\n```text\nsome code\n```'
+  const html = render(assistantRow(content))
+  // The code block's own per-block copy button is already in the bottom-right
+  // corner; the message-level copy chip would double up.
+  expect(html).not.toContain('Copy response')
+})
+
+test('P4-38 — copy chip still shows when a code block is NOT the last block', () => {
+  const content = '```js\ncode\n```\n\nAnd here is some trailing prose.'
+  const html = render(assistantRow(content))
+  expect(html).toContain('Copy response')
+})
+
 /* --------------------------------------------------------------------------- *
  * P4-36 — inline truncation reveal band (prototype Messages.jsx:438-457,546-556).
  *
