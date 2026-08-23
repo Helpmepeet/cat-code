@@ -74,6 +74,40 @@ const TWO_QUESTIONS: AskQuestion[] = [
   },
 ]
 
+const ALL_TYPES: AskQuestion[] = [
+  SINGLE[0]!,
+  {
+    question: 'Which colors?',
+    header: 'Multiple',
+    multiSelect: true,
+    options: [
+      { label: 'Red', description: '', preview: null },
+      { label: 'Green', description: '', preview: null },
+      { label: 'Blue', description: '', preview: null },
+      { label: 'Yellow', description: '', preview: null },
+    ],
+  },
+  {
+    question: 'Which code style?',
+    header: 'Preview',
+    multiSelect: false,
+    options: [
+      { label: 'Early return', description: '', preview: 'return early' },
+      { label: 'Nested branch', description: '', preview: 'use a branch' },
+      { label: 'Ternary', description: '', preview: 'use a ternary' },
+    ],
+  },
+  {
+    question: 'Custom response?',
+    header: 'Custom',
+    multiSelect: false,
+    options: [
+      { label: 'Preset one', description: '', preview: null },
+      { label: 'Preset two', description: '', preview: null },
+    ],
+  },
+]
+
 type Calls = {
   answers: AskUserQuestionAnswer[][]
   cancels: number
@@ -218,7 +252,7 @@ test('one Enter selects the highlighted option and submits', async () => {
   expect(calls.answers[0]).toEqual([{ optionIndices: [0] }])
 })
 
-test('one Enter per step selects each highlighted option and advances', async () => {
+test('one Enter per single-select step selects each highlighted option and advances', async () => {
   const { card, calls } = await mountFlow(TWO_QUESTIONS)
   await press(card, 'Enter')
   expect(calls.answers).toHaveLength(0)
@@ -228,6 +262,49 @@ test('one Enter per step selects each highlighted option and advances', async ()
   expect(calls.answers).toEqual([
     [{ optionIndices: [0] }, { optionIndices: [0] }],
   ])
+})
+
+test('the full sequence preserves multi-select and reaches the third preview option', async () => {
+  const { card, calls } = await mountFlow(ALL_TYPES)
+  await press(card, 'Enter')
+  expect(card.textContent).toContain('Which colors?')
+
+  // Enter cannot invent a single answer for a multi-select question.
+  await press(card, 'Enter')
+  expect(card.textContent).toContain('Which colors?')
+  expect(calls.answers).toHaveLength(0)
+
+  await press(card, ' ')
+  await press(card, 'ArrowDown')
+  await press(card, ' ')
+  expect(markerText(optionRows(card)[0]!)).toBe('✓')
+  expect(markerText(optionRows(card)[1]!)).toBe('✓')
+
+  await press(card, 'Enter')
+  expect(card.textContent).toContain('Which code style?')
+  await press(card, 'ArrowDown')
+  await press(card, 'ArrowDown')
+  const third = optionRows(card)[2]!
+  expect(third.getAttribute('data-ask-active')).toBe('true')
+  expect(third.textContent).toContain('Ternary')
+  expect(card.textContent).toContain('use a ternary')
+
+  await press(card, 'Enter')
+  expect(card.textContent).toContain('Custom response?')
+  expect(calls.answers).toHaveLength(0)
+})
+
+test('mouse clicks accumulate multiple selections', async () => {
+  const { card } = await mountFlow(MULTI)
+  const rows = optionRows(card)
+  await act(async () => {
+    rows[0]!.click()
+  })
+  await act(async () => {
+    rows[1]!.click()
+  })
+  expect(markerText(optionRows(card)[0]!)).toBe('✓')
+  expect(markerText(optionRows(card)[1]!)).toBe('✓')
 })
 
 test('Tab-focusing a row moves the cursor onto it', async () => {

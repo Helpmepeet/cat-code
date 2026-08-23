@@ -213,7 +213,10 @@ export function AskQuestionFlow({
   function advance() {
     let nextAnswers = answers
     if (!canAdvance) {
-      if (!q || otherActive || cursor >= optionCount) return
+      // A single-select cursor is an implicit default for one-Enter submission.
+      // Multi-select must stay explicit or Enter would end the step after one
+      // choice and make its remaining options unreachable.
+      if (!q || q.multiSelect || otherActive || cursor >= optionCount) return
       const selected = { optionIndices: [cursor], other: '' }
       nextAnswers = answers.map((value, i) => (i === qi ? selected : value))
     }
