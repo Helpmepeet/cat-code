@@ -22,6 +22,7 @@ import {
   REDEEM_HINT_LAG_GRACE_MS,
   removeCodexAccount,
   resetCodexAccountPoolForTest,
+  retireSupersededConfigMirror,
   resolveCodexAccountByPrefix,
   saveCodexTokenToVault,
   seedCodexAccountPoolForTest,
@@ -667,6 +668,68 @@ describe('codexAccountPool appendAccount', () => {
 
     // An unknown account is not a transition either.
     expect(markAccountDead('no-such-account', 'refresh_token_invalidated')).toBe(false)
+  })
+
+  test('retires the config mirror once a vault account owns that id', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'vault-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'vault-account', alias: 'main', source: 'vault' }),
+      ],
+    })
+
+    let cleared = 0
+    const retired = retireSupersededConfigMirror({
+      readMirror: () => ({ accountId: 'vault-account' }),
+      clearMirror: () => {
+        cleared += 1
+      },
+    })
+
+    expect(retired).toBe(true)
+    expect(cleared).toBe(1)
+  })
+
+  test('keeps a config mirror the vault does not hold, so a failed vault write survives', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'vault-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'vault-account', alias: 'main', source: 'vault' }),
+      ],
+    })
+
+    let cleared = 0
+    const retired = retireSupersededConfigMirror({
+      readMirror: () => ({ accountId: 'config-only-account' }),
+      clearMirror: () => {
+        cleared += 1
+      },
+    })
+
+    expect(retired).toBe(false)
+    expect(cleared).toBe(0)
+  })
+
+  test('does not retire a mirror matching a config-sourced pool account', () => {
+    // Vault empty: the pool is running ON the mirror. Clearing it here would
+    // delete the only record of the account.
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'config-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'config-account', alias: 'main', source: 'config' }),
+      ],
+    })
+
+    let cleared = 0
+    const retired = retireSupersededConfigMirror({
+      readMirror: () => ({ accountId: 'config-account' }),
+      clearMirror: () => {
+        cleared += 1
+      },
+    })
+
+    expect(retired).toBe(false)
+    expect(cleared).toBe(0)
   })
 
   test('ignores the legacy config mirror when any vault account exists', () => {

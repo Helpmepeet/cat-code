@@ -210,9 +210,52 @@ export async function loadPoolForObservation(): Promise<void> {
  * Initialize the account pool from vault + config sources.
  * Fire-and-forget — safe to call with `void initAccountPool()`.
  */
+/**
+ * Drop the legacy `codexOAuth` config mirror once a vault account is proven to
+ * own that id.
+ *
+ * The mirror is rewritten by every `/login` (`ConsoleOAuthFlow.persistCodexLogin`)
+ * but is never rotated afterwards, so it decays into a spent refresh token while
+ * the vault chain moves on. Redeeming a spent token from a live chain is the
+ * canonical reuse-detection trigger, and two paths reach for the mirror whenever
+ * vault inventory is empty (`mergePoolAccounts`, `resolveCodexCoreAccount`).
+ *
+ * Retiring it here keeps the mirror useful in the one case it exists for — a
+ * login whose vault write failed, where it is the only record of the account —
+ * while ensuring it never survives long enough to go stale. A mirror naming an
+ * account the vault does NOT hold is left alone for exactly that reason.
+ *
+ * Returns true when a mirror was retired. `deps` is injected by tests only, so
+ * they never read or write the operator's real config.
+ */
+export function retireSupersededConfigMirror(deps?: {
+  readMirror: () => { accountId: string } | null
+  clearMirror: () => void
+}): boolean {
+  const readMirror = deps?.readMirror ?? getCodexOAuthTokens
+  const clearMirror = deps?.clearMirror ?? clearCodexOAuthTokens
+
+  const mirror = readMirror()
+  if (!mirror?.accountId) return false
+
+  const ownedByVault = pool.accounts.some(
+    (a) => a.source === 'vault' && a.accountId === mirror.accountId,
+  )
+  if (!ownedByVault) return false
+
+  clearMirror()
+  logForDebugging(
+    `[codex-profile] profile-merge account=${mirror.accountId} vault=true config=true action=retired-config-mirror`,
+  )
+  return true
+}
+
 export async function initAccountPool(): Promise<void> {
   try {
     await loadPoolForObservation()
+
+    // Superseded mirrors are a live revocation hazard, not stale data (see above).
+    retireSupersededConfigMirror()
 
     // Start periodic token refresh if vault accounts exist, and eagerly
     // refresh now so wham/usage and Codex API calls don't hit a stale
