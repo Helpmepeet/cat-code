@@ -371,12 +371,31 @@ Separated by what they achieve. Only §6.2 bears on whether this recurs; §6.1 a
    refresh token from a live chain is the canonical reuse-detection trigger, and
    §5.1 shows two reachable paths to it. Add resync for the mirror (§5.2).
 5. **Everything else that bears on recurrence is a policy decision, not a code
-   change.** If §4's hypothesis is right, the operative input is that five
-   subscription accounts are pooled and rotated from one host under one client
-   identity (§4.1). The prevention that follows is to stop doing that — consolidate
-   onto one account, or move sustained volume to metered API access. Reducing the
-   *correlatability* of the pattern is not prevention and is deliberately not
-   proposed here.
+   change** — and consolidation is not one of the options. If §4's hypothesis is
+   right, the operative input is that subscription accounts are pooled and rotated
+   from one host under one client identity (§4.1). The obvious prevention is to stop
+   pooling, but the demand measurement (A13) shows that is not available at this
+   workload: all three live accounts have each hit `primary-used-percent=100`, and
+   on 8 of 30 observed days the pool consumed more than one account's entire
+   rolling-window allowance — 3.0 accounts' worth on 2026-08-17, when `main`,
+   `bluesky` and `onbi` were pinned at 100% simultaneously. One subscription would
+   not carry this.
+
+   What follows is that the only mitigation which both removes the exposure and
+   preserves the capacity is **metered billing** — OpenAI platform API keys, or the
+   Anthropic path this fork already supports — where sustained volume is the
+   intended use rather than something to be spread across accounts. A partial
+   measure is to keep the operator's primary account out of the pool so an
+   enforcement event cannot take the account they actually depend on; note this
+   costs capacity too, since `main` is itself a fully-utilised pool member.
+
+   Reducing the *correlatability* of the pattern (address rotation, staggered
+   failover, retaining the official client's identity) is not mitigation. It is
+   deliberately not proposed here and should not be built.
+
+   **Correction.** An earlier draft of this section offered "consolidate onto one
+   account" as a prevention. A13 shows that recommendation was unfounded; it was
+   written before per-account utilisation was measured.
 6. **No change to the token path is indicated.** Classification, failover, and
    terminal recording all behaved correctly.
 
@@ -526,6 +545,17 @@ for f in sorted(glob.glob(os.path.expanduser("~/codex-vault/accounts/*.json"))):
 
 Run the same decode against `~/.codex/auth.json` for the separate `onbi` session
 referenced in §3.6; rev 4 measured `iat` 2026-08-16, `exp` 2026-08-26.
+
+**A13 — per-account demand, for §6.2.** Joins `[codex-cache] request` lines (which
+carry `account=` and `conv=`) to `[codex-cache] route` lines (which carry `conv=` and
+the rate headers), then reports peak `x-codex-primary-used-percent` per account per
+day and the daily sum across accounts. 4,068 route samples, all attributed. Because
+the rate window is 10080 minutes (§3.3), a sum of 300% reads as "three accounts'
+entire weekly allowance consumed", not "300% of one day". The method is stated fully
+above and is rebuildable from it; a working copy was left at `tmp/headroom.py`, which
+is gitignored scratch and may not survive. It prints aliases and percentages only.
+Result cited in §6.2: peak 100% for `main`, `bluesky` and `onbi`; 8 of 30 days above
+100% summed; 2026-08-17 at 300%.
 
 **A12 — liveness probe for the §3.6 discriminator. NOT RUN.** Operator-gated: it
 spends a live credential and, if the §4 hypothesis is right, may itself terminate the
