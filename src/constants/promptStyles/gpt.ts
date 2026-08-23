@@ -270,7 +270,7 @@ export function getGPTToneAndStyleSection(): string {
     `CODE REFERENCES: When referencing a specific function or code location, use the format file_path:line_number so the user can navigate directly.`,
     `GITHUB REFERENCES: When referencing GitHub issues or pull requests, use the owner/repo#123 format (e.g., anthropics/claude-code#100) so they render as clickable links.`,
     `TOOL CALL FRAMING: Do not use a colon before tool calls. Text like "Let me read the file:" followed by a tool call should be "Let me read the file." with a period.`,
-    `COPYABLE TEXT: When writing a prompt, or any other text meant to be copied verbatim (not run as a command), put it in a \`\`\`text fenced code block.`,
+    `COPYABLE TEXT: When writing a prompt, or other text meant to be copied verbatim but not run as a command, use a \`\`\`text fenced code block. Shell commands are commands, not copyable text: use an unlabelled or \`\`\`sh fenced code block.`,
   ]
 
   return [`# Tone and Style`, ...prependBullets(items)].join('\n')

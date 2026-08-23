@@ -4,7 +4,10 @@ import {
   getAgentModeWorkerControlGuidance,
   getSystemPrompt,
 } from './prompts.js'
-import { getGPTSessionGuidanceSection } from './promptStyles/gpt.js'
+import {
+  getGPTSessionGuidanceSection,
+  getGPTToneAndStyleSection,
+} from './promptStyles/gpt.js'
 import { clearSystemPromptSections } from './systemPromptSections.js'
 
 describe('Agent Mode dynamic prompt guidance', () => {
@@ -174,6 +177,17 @@ describe('GPT read discipline guidance', () => {
 
   test('Claude style does not carry the GPT read discipline rule', () => {
     expect(promptsSource).not.toContain('READ DISCIPLINE:')
+  })
+})
+
+describe('GPT copyable text guidance', () => {
+  test('distinguishes shell commands from copyable text', () => {
+    const guidance = getGPTToneAndStyleSection()
+
+    expect(guidance).toContain(
+      'Shell commands are commands, not copyable text',
+    )
+    expect(guidance).toContain('```sh fenced code block')
   })
 })
 
