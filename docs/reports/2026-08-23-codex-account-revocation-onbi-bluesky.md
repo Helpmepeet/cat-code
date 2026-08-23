@@ -1,16 +1,23 @@
 # Incident Report: Codex accounts `onbi` and `bluesky` rejected server-side
 
-**Date of report:** 23 August 2026 (revised same day after review)
+**Date of report:** 23 August 2026 (rev 3)
 **Date of incident:** 22 August 2026, 14:52:38Z and 15:10:33Z (21:52 and 22:10 local, UTC+7)
 **Accounts affected:** `onbi` (`14f2f119…`), `bluesky` (`93ce612e…`)
 **Accounts unaffected:** `main` (`ca889574…`)
 
-> **Identifiers.** Accounts are named by local alias and 8-hex prefix only. Emails,
-> full account UUIDs, and OAuth session identifiers are deliberately omitted, per the
-> redaction targets in `src/services/api/accountDiagnostics.ts:53-56`. Refresh-token
-> SHA-256 prefixes are retained because they are one-way and needed to reproduce the
-> integrity check in §3.2. The one full UUID retained is a local Cat Code debug-log
-> filename, not an OpenAI-issued identity; it is required to locate the evidence.
+> **Identifiers.** Accounts are named by local alias and 8-hex prefix. Emails, full
+> account UUIDs, and OAuth session identifiers are omitted, per the redaction targets
+> in `src/services/api/accountDiagnostics.ts:53-56`. Aliases are themselves local
+> identifiers and are retained deliberately for readability. Refresh-token SHA-256
+> prefixes are retained because they are one-way and needed for §3.2. The one full
+> UUID in this file is a local Cat Code debug-log filename, not an OpenAI-issued
+> identity; it is required to locate the evidence.
+
+> **Counting method.** Log timestamps are observations, not event identifiers.
+> Second-level truncation both merges concurrent events and splits single events
+> across a boundary; two measurements in rev 2 were wrong for exactly that reason
+> (§4.3, §5.3). Counts below identify events by **one canonical log message per
+> event**, and state the message counted. See Appendix B.
 
 ## Executive summary
 
@@ -60,15 +67,15 @@ Both accounts failed the same way:
    `x-openai-ide-root-error-code=token_revoked`, and a `cf-ray` header. The request
    reached OpenAI's edge and returned a verdict; this was not a transport failure.
 2. The access token was **locally unexpired** at the time (`onbi` stored expiry
-   08-28, `bluesky` 08-30). The stored expiry timestamp is a local claim about
-   validity, not proof of server-side validity; the server evidently did not honour
-   it.
+   08-28, `bluesky` 08-30). The stored expiry is a local claim about validity, not
+   proof of server-side validity; the server evidently did not honour it.
 3. `CodexAccountAuthError` triggered a forced refresh in `withRetry.ts:713` and
    `withRetry.ts:739`, entering `maybeRefreshAccount` at `accounts.ts:230`. OpenAI's
    token endpoint responded with the OAuth error code `refresh_token_invalidated`.
-4. `codexTokenRefresh.ts:452-475` wrote that code verbatim into the vault's `refresh`
-   block as `state: reauth_required`, and `markAccountDead` removed the account from
-   rotation.
+4. `codexTokenRefresh.ts:452-480` extracted that code (`credentialReason`, line 472),
+   wrote it into the vault's `refresh` block as `state: reauth_required` with
+   `reason` (line 478, persisted line 480), and `markAccountDead` removed the account
+   from rotation.
 
 Both the access credential and the refresh credential were rejected. **Whether they
 were revoked by a single atomic upstream action was not observed** and is not claimed.
@@ -81,17 +88,25 @@ Ruled out. Stored expiry was 6 days out (`onbi`) and 8 days out (`bluesky`).
 
 ### 3.2 A rotation race in our own refresh machinery
 
-Ruled out on four independent checks (reproduce with §Appendix A):
+Ruled out on four checks. Every one is reproducible from Appendix A, command noted.
 
-- Last local rotation was 2026-08-18 (`onbi`) and 2026-08-20 (`bluesky`). Nothing
-  rotated in the failure window.
-- The only `core-refresh-start` entries for either account on 08-21/08-22 are the two
-  that follow the 401.
-- The durable attempt ledger shows no `in_flight`, no `unknown`, no
-  `raw-refresh-probe`, no `raw-refresh-lock-compromised`.
-- Each vault's live refresh-token SHA-256 still equals the hash recorded at death
-  (`onbi` `5aad821d…`, `bluesky` `1f6da81d…`), so nothing rotated underneath either
-  account.
+| Check | Result | Appendix |
+|---|---|---|
+| Last local rotation predates the window | `onbi` 2026-08-18, `bluesky` 2026-08-20 | A1 |
+| No refresh attempt precedes the 401 | Exactly 2 `core-refresh-start` lines on 08-21/08-22, both *after* their 401 | A4 |
+| No interrupted refresh state recorded | Every vault `refresh.state` is `reauth_required` or `idle`; none `in_flight` or `unknown` | A3 |
+| No raw-path distress markers | `raw-refresh-probe` and `raw-refresh-lock-compromised` occur 0 times corpus-wide | A6 |
+| Live token still matches the hash recorded at death | `onbi` `5aad821d…`, `bluesky` `1f6da81d…`, both match | A1 |
+
+**Correction to rev 2.** Rev 2 cited a "durable attempt ledger" as the state store.
+That was the wrong store for these accounts. The raw-refresh ledger
+(`~/.cat-code/codex-raw-refresh.state.json`) governs only the raw/config refresh path;
+it currently holds nine entries, all test-fixture account names, and **no entries for
+any real account**. Both incident accounts are vault-sourced (`source=vault` in both
+`core-refresh-start` lines), so their durable state is the vault file's own `refresh`
+block, which is what row 3 above actually checks. `raw-refresh-probe` and
+`raw-refresh-lock-compromised` are log markers, not ledger states, and are counted
+separately in row 4.
 
 ### 3.3 Quota exhaustion
 
@@ -127,8 +142,7 @@ mutates account state.
 
 ### 3.5 The stale duplicate credential for `bluesky`
 
-Excluded **for this incident**, but it is a latent defect, not inert hygiene. See
-§5.1.
+Excluded **for this incident**, but it is a latent defect, not inert hygiene (§5.1).
 
 `~/.cat-code/.cat-code.json` `codexOAuth` holds a second, superseded copy of
 `bluesky`'s OAuth session carrying the pre-08-20 token pair: refresh hash `ea440d3f…`
@@ -138,13 +152,14 @@ hypothesis.
 
 It was not used in the observed incident: both `core-refresh-start` lines record
 `source=vault`, and five vault accounts were loaded throughout. **It is not
-unreachable in general** — see §5.1 for the conditions under which it becomes live.
+unreachable in general** — see §5.1.
 
 ### 3.6 A second login for `onbi`
 
 Ruled out for this incident. The official Codex CLI (`~/.codex/auth.json`) is logged
-into `onbi`, but under a different OAuth session and therefore a separate refresh
-chain. That file has not been written since 2026-08-16 and rotated nothing on 08-22.
+into `onbi` under a **different OAuth session** and therefore a separate refresh
+chain (verifiable as a boolean via A5; the session identifiers are not printed). That
+file has not been written since 2026-08-16 and rotated nothing on 08-22.
 
 ## 4. Hypothesis: correlated action against the secondary accounts
 
@@ -172,10 +187,9 @@ Request volume does not separate them: `main` served 359 requests on 08-22, the 
 day the other two were rejected, and ran concurrently with both.
 
 **Correlatable signals from one host.** Five distinct identities and org ids from one
-IP (`cf-ray` suffix `BKK`); six same-second overlaps between `onbi` and `bluesky` plus
-extended overlapping windows on 08-21 and 08-22; and a failover in which one workload
-shape (57,320-byte instructions, hash `d635eab6`, messages=73) crossed between account
-identities inside one second.
+IP (`cf-ray` suffix `BKK`); overlapping concurrent use of `onbi` and `bluesky` on
+08-21 and 08-22; and a failover in which one workload shape (57,320-byte instructions,
+hash `d635eab6`, messages=73) crossed between account identities inside one second.
 
 **Inconsistent client identity.** At authorization, `codex-client.ts:149-160` sends
 `originator=cat-code`. At request time, `codex-fetch-adapter.ts:3385-3389` sends
@@ -192,19 +206,25 @@ the same workload. It does **not** distinguish between:
 - an upstream defect or partial outage affecting a subset of sessions,
 - some other cause correlated with account age or creation method.
 
-Sample size for the account-type split is five accounts and four events over two
-months, from one host. That is a suggestive pattern, not a demonstrated mechanism.
+Sample size is five accounts and four events over two months, from one host. That is
+a suggestive pattern, not a demonstrated mechanism.
 
 ### 4.3 A signal investigated and rejected
 
-An earlier draft of this report cited `WebSocket connect error` events clustering
-around the two rejections as weak corroboration. **That claim was withdrawn.** It was
-an artifact of sampling only the 80 most recent debug logs. Across the full debug
-corpus there are 22 distinct such events from 2026-07-09 to 2026-08-22, on multiple
-accounts and dates, including four lines at `2026-08-20T14:32:03Z` that coincide with
-a *successful* `bluesky` token refresh. WebSocket connect failures are background
-noise in this environment and carry no predictive value here. Recorded so the same
-mistake is not repeated.
+An earlier draft cited `WebSocket connect error` events clustering around the two
+rejections as weak corroboration. **That claim is withdrawn.** It was an artifact of
+sampling only the 80 most recent debug logs.
+
+Counting one canonical `initial_ws_error_classified` line per failure, the full corpus
+holds **24 distinct WebSocket connect failures** from 2026-07-09 to 2026-08-22, across
+multiple accounts and dates. (The paired `WS unavailable, falling back to HTTP` line
+also occurs 24 times, confirming the count.) Two of them — `2026-08-20T14:32:03.737Z`
+and `2026-08-20T14:32:03.894Z` — immediately precede a **successful** `bluesky` token
+refresh at `14:32:04.938Z`.
+
+Rev 2 reported 22 because it deduplicated second-truncated timestamps, merging that
+pair. WebSocket connect failures are background noise here and carry no predictive
+value. Recorded so the same mistake is not repeated.
 
 ## 5. Defect and hygiene findings
 
@@ -220,29 +240,38 @@ empty:
   `poolStatus.accounts.length === 0` (`accounts.ts:90-95`).
 
 An unavailable, unreadable, or emptied vault directory would therefore let a spent
-refresh token be redeemed, which is precisely the reuse-detection trigger. This should
-be treated as a defect to clear, not as harmless stale data. Not actioned here:
-credential state requires operator approval.
+refresh token be redeemed, which is precisely the reuse-detection trigger. Treat this
+as a defect to clear, not harmless stale data. Not actioned here: credential state
+requires operator approval.
 
-### 5.2 Config mirror is out of sync
+### 5.2 Config mirror is not kept in sync
 
 `activeCodexAccountId` is `main` while the mirrored `codexOAuth` block holds
-`bluesky`'s 08-15 tokens. The mirror written at `codexAccountPool.ts:876` has drifted
-from the active account.
+`bluesky`'s 08-15 tokens.
+
+The established defect is that **subsequent refreshes and active-account changes do
+not resynchronize the mirror**. The provenance of this particular stale value was not
+determined: at least two writers exist — login (`ConsoleOAuthFlow.tsx:217`) and
+account removal (`codexAccountPool.ts:876`) — and nothing in the evidence identifies
+which one wrote it.
 
 ### 5.3 Terminal accounts are re-marked dead on every periodic cycle
 
 `hiby` and `yoxrent2` have been terminal since June and July, yet `marked dead` lines
-are re-emitted for them repeatedly: **28 lines across 15 distinct cycles between
-08-15 and 08-21.**
+are re-emitted for them: **28 lines forming 14 two-account pairs** between 08-15 and
+08-21.
 
 The mechanism is not the quarantine probe. That probe runs every second
 (`QUARANTINE_PROBE_INTERVAL_MS = 1_000`, `codexTokenRefresh.ts:782`) and selects only
 `quarantined` accounts. The four-hour path is the periodic refresh timer calling
-`touchAll()` (`codexTokenRefresh.ts:734`, interval from
+`touchAll()` (`codexTokenRefresh.ts:739-755`, interval from
 `codexTokenRefreshIntervalHours`, default 4); the terminal-state short-circuit at
 `codexTokenRefresh.ts:340-345` then calls `markAccountDead` again for an
 already-dead account.
+
+Rev 2 reported "15 cycles" by deduplicating second-truncated timestamps. One cycle
+straddles a second boundary (`hiby` at `2026-08-18T08:44:37.946Z`, `yoxrent2` at
+`…:38.076Z`) and was split in two. Pair the lines by account instead: 14 cycles.
 
 Operational cost: long-dead accounts look like fresh failures in the logs. This is why
 the incident initially appeared to affect four accounts rather than two.
@@ -253,14 +282,16 @@ the incident initially appeared to affect four accounts rather than two.
    only the `refresh` block is terminal.
 2. **Treat re-login as an observation, not a test that settles §4.** A second
    rejection under similar usage would be *consistent with* the hypothesis; it would
-   not confirm it, since the alternatives in §4.2 can also recur. A long survival
-   would weaken the hypothesis without refuting it.
+   not confirm it, since the alternatives in §4.2 can also recur.
 3. **No change to the token path is indicated.** Classification, failover, and
    terminal recording all behaved correctly.
-4. **Clear the stale `codexOAuth` credential and reconcile the mirror** (§5.1, §5.2).
-   §5.1 is a defect, not cosmetic.
+4. **Clear the stale `codexOAuth` credential and add resync for the mirror**
+   (§5.1, §5.2). §5.1 is a defect, not cosmetic.
 5. Consider suppressing repeat `marked dead` emission for already-terminal accounts
    (§5.3).
+6. `markAccountDead` (`codexAccountPool.ts:609-636`) emits only `logForDebugging`;
+   no user-facing surface reports an account dying. Consider adding one, independent
+   of what caused this incident.
 
 ## 7. Open questions and limits of this analysis
 
@@ -278,28 +309,33 @@ the incident initially appeared to affect four accounts rather than two.
 
 ## Appendix A: reproduction commands
 
-Run from the repository root. These are the actual commands behind the numbers above.
+Run from the repository root. Python commands use `uv` per repository convention.
+All commands below were executed for rev 3 and reproduce the numbers cited.
 
-Vault integrity check (§3.2) — compares each live refresh token against the hash
-recorded at death. Prints booleans only; no token or identifier material.
-`main` reports `hash_match=False` because it is `idle` and has no recorded hash; that
-is expected, not a finding:
+**Disclosure.** The `uv run python` commands (A1, A2, A3, A5) print only aliases,
+states, dates, and booleans: no token, email, OAuth session identifier, or full
+account UUID. The `grep` commands (A4, A8, A9, A10) print raw log lines, which **do**
+contain full account UUIDs; redact their output before pasting it anywhere.
+
+**A1 — vault integrity and last rotation (§3.2 rows 1 and 5):**
 
 ```bash
-python3 -c '
+uv run python -c '
 import json,glob,os,hashlib
 for f in sorted(glob.glob(os.path.expanduser("~/codex-vault/accounts/*.json"))):
-    v=json.load(open(f))
+    v=json.load(open(f)); r=v.get("refresh",{})
     live=hashlib.sha256(v["tokens"]["refresh_token"].encode()).hexdigest()
-    rec=v.get("refresh",{}).get("refresh_token_hash")
-    print(v.get("alias"), v.get("refresh",{}).get("state"), "hash_match=", live==rec)
+    print(v.get("alias"), "state=",r.get("state"), "hash_match=",live==r.get("refresh_token_hash"), "last_refresh=",v.get("last_refresh"))
 '
 ```
 
-Auth-method table (§4.1) — decodes the `amr` claim, prints no email or account id:
+`main` reports `hash_match=False` because it is `idle` and has no recorded hash. That
+is expected, not a finding.
+
+**A2 — auth-method table (§4.1):**
 
 ```bash
-python3 -c '
+uv run python -c '
 import json,glob,os,base64
 for f in sorted(glob.glob(os.path.expanduser("~/codex-vault/accounts/*.json"))):
     v=json.load(open(f)); p=v["tokens"]["access_token"].split(".")[1]; p+="="*(-len(p)%4)
@@ -308,27 +344,71 @@ for f in sorted(glob.glob(os.path.expanduser("~/codex-vault/accounts/*.json"))):
 '
 ```
 
-Incident window (§1):
+**A3 — no interrupted refresh state (§3.2 row 3):**
+
+```bash
+uv run python -c '
+import json,glob,os
+for f in sorted(glob.glob(os.path.expanduser("~/codex-vault/accounts/*.json"))):
+    v=json.load(open(f)); r=v.get("refresh",{})
+    print(v.get("alias"), "state=",r.get("state"), "interrupted=", r.get("state") in ("in_flight","unknown"))
+'
+```
+
+**A4 — refresh attempts in the window (§3.2 row 2). Expect exactly 2, both after
+their 401:**
+
+```bash
+cd ~/.cat-code/debug && grep -rh "core-refresh-start" . | grep "14f2f119\|93ce612e" | awk '$1>="2026-08-21" && $1<="2026-08-23"'
+```
+
+**A5 — `onbi` session independence (§3.6). Looks the account up by alias and prints a
+boolean; neither the session identifiers nor the account UUID appear:**
+
+```bash
+uv run python -c '
+import json,glob,os,base64
+def sid(t):
+    p=t.split(".")[1]; p+="="*(-len(p)%4)
+    return json.loads(base64.urlsafe_b64decode(p)).get("session_id")
+cli=json.load(open(os.path.expanduser("~/.codex/auth.json")))["tokens"]["access_token"]
+for f in glob.glob(os.path.expanduser("~/codex-vault/accounts/*.json")):
+    v=json.load(open(f))
+    if v.get("alias")=="onbi":
+        print("onbi vault session == codex-cli session:", sid(cli)==sid(v["tokens"]["access_token"]))
+'
+```
+
+**A6 — raw-path distress markers (§3.2 row 4). Expect 0:**
+
+```bash
+cd ~/.cat-code/debug && grep -rh "raw-refresh-probe\|raw-refresh-lock-compromised" . | wc -l
+```
+
+**A7 — WebSocket failure count (§4.3). Expect 24 from each line:**
+
+```bash
+cd ~/.cat-code/debug
+grep -rh "initial_ws_error_classified" . | grep -c "WebSocket connect error"
+grep -rh "WS unavailable, falling back to HTTP: WebSocket connect error" . | wc -l
+```
+
+**A8 — repeat-dead count (§5.3). Expect 28 lines forming 14 pairs:**
+
+```bash
+cd ~/.cat-code/debug && grep -rh "marked dead" . | grep "9ed41939\|66608311" | awk '$1>="2026-08-15" && $1<="2026-08-22"' | sort
+```
+
+Pair the sorted output by account (`9ed41939` then `66608311`). Do **not** group by
+truncated timestamp: one pair straddles a second boundary (§5.3).
+
+**A9 — incident window (§1):**
 
 ```bash
 grep -h "14f2f119\|85980e5b" ~/.cat-code/debug/8bdf9d62-*.txt | awk '$1 >= "2026-08-22T14:52:19" && $1 <= "2026-08-22T14:52:40"'
 ```
 
-Repeat-dead count (§5.3) — 28 lines, 15 distinct cycles:
-
-```bash
-cd ~/.cat-code/debug
-grep -rh "marked dead" . | grep "9ed41939\|66608311" | awk '$1>="2026-08-15" && $1<="2026-08-22"' | wc -l          # 28 lines
-grep -rh "marked dead" . | grep "9ed41939\|66608311" | awk '$1>="2026-08-15" && $1<="2026-08-22"' | cut -c1-19 | sort -u | wc -l   # 15 cycles
-```
-
-WebSocket-error corpus (§4.3) — full corpus, not a recent-file sample:
-
-```bash
-cd ~/.cat-code/debug && grep -rh "WebSocket connect error" . | cut -c1-20 | sort -u | wc -l
-```
-
-Network-failure control (§3.4):
+**A10 — network-failure control (§3.4):**
 
 ```bash
 cd ~/.cat-code/debug && grep -rh "ENOTFOUND\|ECONNREFUSED\|ENETUNREACH" .
@@ -336,13 +416,30 @@ cd ~/.cat-code/debug && grep -rh "ENOTFOUND\|ECONNREFUSED\|ENETUNREACH" .
 
 ## Appendix B: revision history
 
-**Rev 2 (23 Aug 2026)** — revised after review. Changes: causal language removed from
-the summary, §1, and §4; §4 reframed from attribution to hypothesis with an explicit
-list of causes it cannot separate; the WebSocket corroboration withdrawn as a sampling
-artifact (§4.3); §3.5 corrected from "never redeemed" to a conditional exclusion, with
-the reachable path recorded as a latent defect (§5.1); §5.3 mechanism corrected from
-the quarantine probe to periodic `touchAll()` plus terminal short-circuit, and the
-count corrected from "28 pairs" to 28 lines across 15 cycles; `accounts.ts:519`
-anchor corrected to the real refresh entry point; "valid" narrowed to "locally
-unexpired" and the atomic-revocation claim withdrawn; emails and OAuth session
-identifiers removed; the placeholder appendix replaced with runnable commands.
+**Rev 3 (23 Aug 2026)** — second review pass. WebSocket count corrected 22 → **24**
+distinct failures (rev 2 merged two `bluesky` failures 157 ms apart by truncating
+timestamps to seconds); repeat-dead count corrected "15 cycles" → **14 pairs** (rev 2
+split one cycle that straddles a second boundary); a counting-method note added,
+because both errors share one cause: timestamps are observations, not event
+identifiers. §3.2 restructured into a per-check table with an appendix reference for
+each, and corrected — rev 2 cited the raw-refresh ledger, which governs only the
+raw/config path and holds no real-account entries; the applicable store for these
+vault-sourced accounts is the vault `refresh` block, and the raw-path markers are
+logs, not ledger states. Anchors tightened: `:452-475` → `:452-480`, `:734` →
+`:739-755`. §5.2 no longer attributes the stale mirror value to a specific writer.
+Appendix expanded from 6 commands to 10, covering every §3.2 check plus §3.6, switched
+to `uv run python`, and its disclosure claim corrected (aliases are identifiers).
+Added recommendation 6 (no user-facing surface reports account death).
+
+**Rev 2 (23 Aug 2026)** — first review pass. Causal language removed from the summary,
+§1, and §4; §4 reframed from attribution to hypothesis with an explicit list of causes
+it cannot separate; WebSocket corroboration withdrawn as a sampling artifact (§4.3);
+§3.5 corrected from "never redeemed" to a conditional exclusion with the reachable
+path recorded as a latent defect (§5.1); §5.3 mechanism corrected from the quarantine
+probe to periodic `touchAll()` plus terminal short-circuit; `accounts.ts:519` anchor
+corrected to the real refresh entry point; "valid" narrowed to "locally unexpired";
+atomic-revocation claim withdrawn; emails and OAuth session identifiers removed;
+placeholder appendix replaced with runnable commands.
+
+**Rev 1 (23 Aug 2026)** — initial report. Superseded. Contained account emails and
+OAuth session identifiers, since removed.
