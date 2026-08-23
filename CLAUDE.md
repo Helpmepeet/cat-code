@@ -488,8 +488,11 @@ set or setting stated in the report.
 - Never guess: model/provider routing behavior, feature-gate state, permission
   semantics, or migration program state — all have named sources of truth (§2,
   §5, §6).
-- Unresolved uncertainty goes in the final report as its own section:
-  what is unknown, what you checked, what would resolve it. Do not bury it.
+- Unresolved uncertainty you are NOT blocked on goes in the final report as
+  its own section: what is unknown, what you checked, what would resolve it.
+- A question you need answered is not an uncertainty note. It goes last in
+  the message, alone on its line, after the bookkeeping (§11.6) — never
+  inside a report section, where it gets scrolled past.
 
 ## 11. Required workflow
 
@@ -505,6 +508,8 @@ set or setting stated in the report.
    (§9). Evidence = actual command + actual outcome.
 6. **Report** — outcome first; commands run with results; parity/§0 flags;
    uncertainties; then bookkeeping (STATUS row for migration work).
+   Anything you need the user to answer comes after all of that, last and
+   alone (§10).
 
 Claiming completion requires: battery output pasted, quality-bar checklist
 satisfied, stale-reference sweep done, and zero unreported deviations.
