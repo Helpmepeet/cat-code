@@ -183,12 +183,16 @@ test('the Other row never shows a number no key can produce', () => {
   // unreachable from the digit shortcuts, which stop at 9.
   expect(html).not.toContain('>10<')
   expect(html).toContain('>o<')
+  expect(html).toContain('1–9 · o pick · ↑↓ move')
+  expect(html).not.toContain('1–10 pick')
 })
 
-test('single question shows a Submit footer + single-select key hints, no stepper', () => {
+test('single question shows a Submit footer + accurate single-select key hints, no stepper', () => {
   const html = render(SINGLE)
   expect(html).toContain('Submit')
-  expect(html).toContain('1–9 pick · ↑↓ move')
+  // Two options plus Other make three reachable numbered shortcuts.
+  expect(html).toContain('1–3 pick · ↑↓ move')
+  expect(html).not.toContain('1–9 pick')
   expect(html).not.toContain('Next question')
   expect(html).not.toContain('multi-select')
 })
@@ -205,7 +209,9 @@ test('multi-question shows Next question + stepper + the multi-select badge on q
 test('a multi-select question renders the multi-select badge + toggle hint', () => {
   const html = render([MULTI[1]!])
   expect(html).toContain('multi-select')
-  expect(html).toContain('1–9 / space toggle · ↑↓ move')
+  // Two options plus Other make three reachable numbered shortcuts.
+  expect(html).toContain('1–3 / space toggle · ↑↓ move')
+  expect(html).not.toContain('1–9 / space toggle')
 })
 
 test('cancel affordance is present (esc)', () => {

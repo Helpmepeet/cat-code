@@ -367,9 +367,11 @@ export function AskQuestionFlow({
   const focusedPreview =
     cursor < optionCount ? q.options[cursor]?.preview ?? null : null
   const titleId = `ask-question-${requestId}`
+  const optionShortcutLegend =
+    otherIndex < 9 ? `1–${otherIndex + 1}` : '1–9 · o'
   const keyLegend = q.multiSelect
-    ? '1–9 / space toggle · ↑↓ move · ↵ · esc'
-    : '1–9 pick · ↑↓ move · ↵ · esc'
+    ? `${optionShortcutLegend} / space toggle · ↑↓ move · ↵ · esc`
+    : `${optionShortcutLegend} pick · ↑↓ move · ↵ · esc`
   // The sibling card's honesty rule (P4-43, PARITY-LEDGER §7): never advertise
   // a key that will not fire. Both dead states are reachable here — a
   // background pane registers no listener at all, and a card that mounted while
@@ -538,7 +540,7 @@ export function AskQuestionFlow({
             } ${
               cursor === otherIndex
                 ? 'bg-accent/50 text-app-bg'
-                : 'bg-text-primary/[0.06] text-text-subtle'
+                : 'bg-text-primary/[0.06] text-text-muted'
             }`}
           >
             {/* The row number IS the shortcut, so it may only claim a key that
