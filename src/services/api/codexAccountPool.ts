@@ -605,14 +605,25 @@ export function switchToAccount(idPrefix: string | null): PoolAccount | null {
   return to
 }
 
-/** Mark an account as dead with a reason. Used by token refresh on unrecoverable errors. */
+/**
+ * Mark an account as dead with a reason. Used by token refresh on unrecoverable errors.
+ *
+ * Returns true when this call actually moved the account into (or changed) its
+ * terminal state, false when it was already dead for the same reason. The
+ * terminal short-circuit in `codexTokenRefresh.ts` re-marks every already-dead
+ * account on each periodic `touchAll()` cycle, so an unconditional log makes
+ * accounts that died months ago read as fresh failures. Only the log is gated:
+ * state assignment and the active-account reroll below stay unconditional,
+ * because a rebuilt pool can present a dead account as active again.
+ */
 export function markAccountDead(
   accountId: string,
   reason: string,
   options: MarkPoolAccountStatusOptions = {},
-): void {
+): boolean {
   const acct = pool.accounts.find((a) => a.accountId === accountId)
-  if (!acct) return
+  if (!acct) return false
+  const alreadyTerminal = acct.status === 'dead' && acct.lastError === reason
   acct.status = 'dead'
   acct.lastError = reason
   acct.statusReason = options.statusReason ?? 'auth_dead'
@@ -630,9 +641,12 @@ export function markAccountDead(
       `markAccountDead: ${reason}`,
     )
   }
-  logForDebugging(
-    `[codex-pool] Account ${truncId(accountId)} marked dead: ${reason}`,
-  )
+  if (!alreadyTerminal) {
+    logForDebugging(
+      `[codex-pool] Account ${truncId(accountId)} marked dead: ${reason}`,
+    )
+  }
+  return !alreadyTerminal
 }
 
 export function markPoolAccountQuarantined(

@@ -638,6 +638,37 @@ describe('codexAccountPool appendAccount', () => {
   })
 
 
+  test('markAccountDead reports a repeat mark on an already-terminal account', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'main-account', alias: 'main', lastUsedAt: 10 }),
+        buildPoolAccount({ accountId: 'dead-account', alias: 'hiby', lastUsedAt: 0 }),
+      ],
+    })
+
+    // First terminal verdict for this account is a real transition.
+    expect(markAccountDead('dead-account', 'refresh_token_invalidated')).toBe(true)
+
+    // The periodic touchAll() short-circuit re-marks it every cycle. That must
+    // not read as a fresh failure.
+    expect(markAccountDead('dead-account', 'refresh_token_invalidated')).toBe(false)
+    expect(markAccountDead('dead-account', 'refresh_token_invalidated')).toBe(false)
+
+    // State is still terminal after the repeats.
+    const account = getPoolStatus().accounts.find(a => a.accountId === 'dead-account')
+    expect(account?.status).toBe('dead')
+    expect(account?.lastError).toBe('refresh_token_invalidated')
+
+    // A genuinely different failure reason is still a transition, so a new
+    // problem on an already-dead account is not swallowed.
+    expect(markAccountDead('dead-account', 'account disabled')).toBe(true)
+    expect(markAccountDead('dead-account', 'account disabled')).toBe(false)
+
+    // An unknown account is not a transition either.
+    expect(markAccountDead('no-such-account', 'refresh_token_invalidated')).toBe(false)
+  })
+
   test('ignores the legacy config mirror when any vault account exists', () => {
     const merged = mergePoolAccountsForTest(
       [
