@@ -1,8 +1,8 @@
 # Desktop responsiveness optimization investigation
 
-**Date:** 2026-08-23  
-**Status:** Evidence-backed proposal; no application implementation changes  
-**Scope:** Electron desktop app (`app/`), user-perceived responsiveness  
+**Date:** 2026-08-23
+**Status:** Evidence-backed proposal, corrected after implementation-readiness review; no application implementation changes
+**Scope:** Electron desktop app (`app/`), user-perceived responsiveness
 **Recommendation:** Replace sequential immutable transcript batch folding with a batch-aware transcript projection transaction.
 
 ## Executive summary
@@ -15,13 +15,13 @@ A benchmark importing the production projector reproduced the scaling:
 
 | Replay frames | Median projection time |
 |---:|---:|
-| 1,100 | 35.33 ms |
-| 2,000 | 128.29 ms |
-| 2,200 | 144.99 ms |
-| 4,000 | 524.48 ms |
-| 8,000 | 2,150.18 ms |
+| 1,100 | 41.79 ms |
+| 2,000 | 128.75 ms |
+| 2,200 | 158.01 ms |
+| 4,000 | 505.60 ms |
+| 8,000 | 2,118.90 ms |
 
-Doubling 2,000 to 4,000 frames increased runtime 4.09 times. Doubling 4,000 to 8,000 increased it 4.10 times. The current restored-history limit is 4,000 frames, while the live replay ring permits 8,000 frames.
+Doubling 2,000 to 4,000 frames increased runtime 3.93 times. Doubling 4,000 to 8,000 increased it 4.19 times. The current restored-history limit is 4,000 frames, while the live replay ring permits 8,000 frames.
 
 The recommended change is a transcript-specific `projectServerFrames(state, frames)` path that clones each touched session once, processes the ordered batch through mutable working indexes, then publishes one immutable state. The ordinary `projectServerFrame()` path should remain for single live frames. This keeps protocol, security, event ordering, and raw-event fidelity unchanged while moving append-heavy replay projection toward linear complexity.
 
@@ -80,10 +80,11 @@ The cost occurs when a large frame set is projected before the renderer can comm
 
 - restoring a parked or restorable session;
 - rebuilding live state after a renderer reload;
-- projecting a cached transcript preview;
-- loading an older transcript page into an existing session.
+- projecting a cached transcript preview.
 
 Because the reducer runs synchronously on the renderer thread, projection delays the restored transcript paint and competes with input and layout work. The benchmark isolates reducer CPU and does not include React rendering, markdown parsing, or DOM layout, so it should be interpreted as a lower-level blocking component rather than an end-to-end interaction measurement.
+
+Load-earlier is not a beneficiary of the renderer-only transaction proposed here. The sidecar sends recovered messages one at a time at `app/sidecar/sidecarServer.ts:4164-4194`. Main arms replay coalescing only for lazy restore and open-history at committed-source `app/main/main.ts:2267-2275` and `app/main/main.ts:2364-2427`; without that state, `app/main/attachmentGate.ts:73-78` immediately returns each frame as a one-element delivery. The renderer would therefore invoke the batch projector repeatedly with singleton batches. Optimizing load-earlier would be a separate bounded main-process coalescing change that preserves recovered-head ordering, completion settlement, limit-triggered partitions, timer flush, and interruption behavior.
 
 ## Reproduced benchmark
 
@@ -95,17 +96,46 @@ The benchmark imported the production `createTranscriptState`, `projectServerFra
 - `R` replayed assistant message frames;
 - one short text block and one distinct UUID per assistant frame.
 
-The frames were constructed before timing. Each size ran three times, and the median was reported. The 2,000/4,000/8,000 series included a 100-frame warm-up before measurement. Bun reported version 1.4.0 on macOS arm64.
+The frames were constructed before timing. Each size ran three times after one 100-frame warm-up, and the median was reported. Bun reported version 1.4.0 on macOS arm64.
 
 ### Results
 
 | Frames | Run 1 | Run 2 | Run 3 | Median |
 |---:|---:|---:|---:|---:|
-| 1,100 | 48.06 ms | 35.33 ms | 35.03 ms | 35.33 ms |
-| 2,000 | 136.57 ms | 128.29 ms | 126.88 ms | 128.29 ms |
-| 2,200 | 144.49 ms | 144.99 ms | 148.81 ms | 144.99 ms |
-| 4,000 | 524.48 ms | 528.41 ms | 515.98 ms | 524.48 ms |
-| 8,000 | 2,202.18 ms | 2,150.18 ms | 2,062.94 ms | 2,150.18 ms |
+| 1,100 | 64.31 ms | 41.79 ms | 37.14 ms | 41.79 ms |
+| 2,000 | 119.98 ms | 130.84 ms | 128.75 ms | 128.75 ms |
+| 2,200 | 170.45 ms | 158.01 ms | 152.33 ms | 158.01 ms |
+| 4,000 | 517.68 ms | 505.60 ms | 484.30 ms | 505.60 ms |
+| 8,000 | 2,118.90 ms | 2,116.74 ms | 2,146.49 ms | 2,118.90 ms |
+
+The benchmark is reproducible from the repository with this exact command. Absolute times vary by machine; the scaling ratio is the decision evidence.
+
+```sh
+cd /Users/pt/cat-code && bun -e '
+import { createTranscriptState, projectServerFrame } from "./app/renderer/src/transcriptProjector.ts";
+import { batch, withBatch } from "./app/renderer/src/serverFrameBatch.ts";
+const SID = "replay-session";
+const ready = { kind: "ready", protocolVersion: 1, sessionId: SID, engineSessionId: `engine-${SID}`, payload: { type: "app.ready", protocolVersion: 1, inputEnabled: true, activeTurn: false, abort: { status: "idle" }, goalSnapshot: null, pendingPermissionRequests: [] } };
+const assistantFrame = index => ({ kind: "event", protocolVersion: 1, sessionId: SID, replay: true, event: { type: "message", message: { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: `replay body ${index}` }] }, uuid: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}` } } });
+const reducer = withBatch(projectServerFrame);
+reducer(createTranscriptState(), batch([ready, ...Array.from({ length: 100 }, (_, index) => assistantFrame(index))]));
+const output = [];
+for (const count of [1100, 2000, 2200, 4000, 8000]) {
+  const delivery = [ready, ...Array.from({ length: count }, (_, index) => assistantFrame(index))];
+  const runs = [];
+  for (let run = 0; run < 3; run++) {
+    const started = performance.now();
+    const state = reducer(createTranscriptState(), batch(delivery));
+    const elapsed = performance.now() - started;
+    if (state.sessions[SID]?.rows.length === count) runs.push(elapsed);
+    else throw new Error(`bad row count for ${count}`);
+  }
+  const sorted = [...runs].sort((a, b) => a - b);
+  output.push({ frames: count, runsMilliseconds: runs.map(value => Number(value.toFixed(2))), medianMilliseconds: Number(sorted[1].toFixed(2)) });
+}
+console.log(JSON.stringify(output, null, 2));
+'
+```
 
 The current source limits make these sizes relevant:
 
@@ -149,6 +179,8 @@ Add a transcript-specific batch transaction rather than making generic `withBatc
 
 The implementation should not add a dependency, change the wire protocol, widen IPC, merge protocol planes, alter raw event fidelity, or reopen transcript virtualization. This proposal addresses reducer complexity before DOM rendering; it is separate from CC-59's deferred outer-row virtualization decision.
 
+The scope is deliberately limited to deliveries that already arrive as multi-frame batches. It does not optimize load-earlier or ordinary singleton live deliveries.
+
 ### Important constraint
 
 Adding only a persistent row-ID map is insufficient. It would remove the two row scans but leave per-frame copies of `rows`, `seenFrameIds`, and `nextBlockIndexByMessageId`. The optimization has to make the complete batch the immutable publication boundary.
@@ -157,7 +189,7 @@ Adding only a persistent row-ID map is insufficient. It would remove the two row
 
 ### Semantic equivalence
 
-Batch projection must be deeply equivalent to sequential `projectServerFrame()` application for fixtures covering:
+Batch projection must be deeply equivalent to sequential `projectServerFrame()` application. Differential coverage must include:
 
 - assistant append and same-ID replacement;
 - stream deltas followed by authoritative assistant frames;
@@ -168,12 +200,18 @@ Batch projection must be deeply equivalent to sequential `projectServerFrame()` 
 - recovered head insertion and its closing result;
 - generated-image preview frames;
 - unknown-session and unknown-message no-ops;
-- interleaved frames for multiple sessions.
+- every sample returned by `allSdkMessageSamples()` at `app/renderer/src/sdkMessageFixtures.ts:2001-2003`;
+- interleaved frames for multiple sessions;
+- the complete delivery as one batch, singleton batches, every split point for bounded fixtures, and adversarial partitions matching frame-limit, byte-limit, and lazy-timer flushes.
+
+The differential assertion must compare every `TranscriptSessionState` collection at `app/renderer/src/transcriptProjector.ts:470-564`, not only visible rows: streaming state, block indexes, deduplication, tool results, generated-image previews, agent completions, slash commands, hidden-frame membership, truncation, recovery insertion, and compaction state.
 
 ### Identity preservation
 
 Tests should prove that:
 
+- the optimized path does not mutate a deeply frozen input state;
+- callers retaining the prior state observe it deep-equal and unmodified;
 - unchanged sessions keep their existing references;
 - unchanged rows keep their existing references;
 - a no-op batch returns the original state;
@@ -186,7 +224,9 @@ Use 1,100, 2,200, 4,000, and 8,000 frame fixtures and record p50 and p95 project
 - a 2,000-to-4,000 scaling ratio consistent with near-linear rather than quadratic growth;
 - semantic equality with sequential projection;
 - no extra React dispatches or commits;
-- lower delivery-trace duration from `renderer.subscription.received` to `renderer.state.applied` on representative replay batches.
+- a local monotonic-clock measurement around the pure renderer `projectServerFrames()` transaction, excluding fixture construction and React rendering.
+
+The existing delivery trace is secondary liveness and end-to-end pipeline evidence, not a projector-duration clock. `DeliveryAcknowledgement` carries no occurrence timestamp at `app/shared/deliveryTrace.ts:126-137`; preload queues acknowledgements until 64 records or 50 ms at `app/preload/deliveryAckQueue.ts:119-139` and `app/preload/preload.ts:140-156`; main timestamps them only while processing the eventual batch at committed-source `app/main/main.ts:2016-2073` and `app/main/deliveryTraceSink.ts:611-636`. `renderer.state.applied` is also emitted from the post-commit effect at `app/renderer/src/App.tsx:701-708`, not at reducer completion. Do not widen the acknowledgement schema merely to turn this trace into a benchmark.
 
 A packaged or freshly launched development app must still be measured before claiming an end-to-end user-visible latency reduction. That GUI measurement requires operator authorization for the specific run under the repository's desktop rules.
 
@@ -195,12 +235,12 @@ A packaged or freshly launched development app must still be measured before cla
 An implementation should run at minimum:
 
 ```bash
-bun test app/renderer/src/transcriptProjector.test.ts app/renderer/src/replayBatchRender.test.tsx app/renderer/src/previewTranscriptState.test.ts
-bun test app/
-bun run --cwd app typecheck
-bun run --cwd app typecheck:sidecar
-bun run --cwd app test:hardening
-bun run --cwd app renderer:build
+cd /Users/pt/cat-code && bun test app/renderer/src/transcriptProjector.test.ts app/renderer/src/replayBatchRender.test.tsx app/renderer/src/previewTranscriptState.test.ts
+cd /Users/pt/cat-code && bun test app/
+cd /Users/pt/cat-code && bun run --cwd app typecheck
+cd /Users/pt/cat-code && bun run --cwd app typecheck:sidecar
+cd /Users/pt/cat-code && bun run --cwd app test:hardening
+cd /Users/pt/cat-code && bun run --cwd app renderer:build
 ```
 
 The focused benchmark should run separately from correctness tests so normal test success does not depend on machine-specific timing thresholds.
@@ -227,21 +267,50 @@ Each delivery trace append at `app/main/deliveryTraceSink.ts:242-260`:
 - rotates if necessary;
 - calls `writeSync`.
 
-A normally delivered frame receives three trace writes before `webContents.send` and one immediately afterward through `app/main/main.ts:1047-1053` and `app/main/main.ts:1600-1606`. Renderer acknowledgement stages later create additional main-thread writes at `app/main/main.ts:2033-2090`.
+A normally delivered frame receives three trace writes before `webContents.send` and one immediately afterward through committed-source `app/main/main.ts:1038-1044` and `app/main/main.ts:1583-1589`. Renderer acknowledgement stages later create additional main-thread writes at committed-source `app/main/main.ts:2016-2073`.
 
 The aggregate production evidence in `docs/reports/2026-08-10-delivery-trace-retention-measurement.md:13-20` records approximately 12 stage records and 8.1 KiB per frame, with a 9.85 MiB/min heavy-use burn rate. That proves write volume, not interaction latency.
 
 A disposable benchmark of the exact production sink weakened this candidate as the first priority:
 
-- Five 1,000-frame runs, 12 marks per frame: median 200.78 ms total, or 0.2008 ms per frame.
 - One 10,000-frame run:
-  - p50: 0.2059 ms per frame;
-  - p95: 0.2440 ms;
-  - p99: 0.3810 ms;
-  - p99.9: 4.8595 ms;
-  - maximum: 14.8880 ms.
+  - mean: 0.2316 ms per frame;
+  - p50: 0.2108 ms;
+  - p95: 0.2840 ms;
+  - p99: 0.4887 ms;
+  - p99.9: 3.2465 ms;
+  - maximum: 15.1384 ms.
 
-The tail suggests rotation can consume most of a 16.7 ms frame budget, so moving persistence behind a bounded ordered writer remains worth measuring. The steady-state result is too small to outrank the transcript projector without production evidence connecting trace writes to visible stalls. Any asynchronous design would also need to preserve crash/freeze evidence, ordered records, rotation, bounded backpressure, and explicit loss accounting.
+The benchmark is reproducible with this exact command:
+
+```sh
+cd /Users/pt/cat-code && bun -e '
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { createDeliveryTraceSink } from "./app/main/deliveryTraceSink.ts";
+const stages = ["engine.produced", "sidecar.received", "sidecar.socket.queued", "sidecar.socket.sent", "supervisor.socket.received", "host.received", "main.ipc.queued", "main.ipc.sent", "preload.received", "renderer.subscription.received", "renderer.state.queued", "renderer.state.applied"];
+const frames = 10000;
+const configDir = mkdtempSync(join(tmpdir(), "cat-code-trace-bench-"));
+const sink = createDeliveryTraceSink({ configDir, launchId: "bench-tail", sweepIntervalMs: 0 });
+const durations = [];
+const totalStarted = performance.now();
+for (let sequence = 1; sequence <= frames; sequence++) {
+  const trace = { streamEpoch: "bench-epoch", sequence, traceId: `trace-${sequence}`, deliveryAttempt: 1, replay: false, sourceProcessInstanceId: "bench-sidecar", sourceWallTimestamp: "2026-08-23T00:00:00.000Z", sourceMonotonicTimestampMs: sequence, connectionEpoch: 1 };
+  const started = performance.now();
+  for (const stage of stages) sink.mark({ sessionId: "bench-session", trace, stage, frameKind: "event", messageKind: "stream_event", documentId: "bench-document", subscriptionEpoch: 1 });
+  durations.push(performance.now() - started);
+}
+const elapsed = performance.now() - totalStarted;
+sink.close();
+rmSync(configDir, { recursive: true, force: true });
+durations.sort((a, b) => a - b);
+const at = percentile => durations[Math.min(durations.length - 1, Math.floor((durations.length - 1) * percentile))];
+console.log(JSON.stringify({ frames, marksPerFrame: stages.length, totalMilliseconds: Number(elapsed.toFixed(2)), millisecondsPerFrame: Number((elapsed / frames).toFixed(4)), frameLatencyMilliseconds: { p50: Number(at(0.5).toFixed(4)), p95: Number(at(0.95).toFixed(4)), p99: Number(at(0.99).toFixed(4)), p999: Number(at(0.999).toFixed(4)), max: Number(at(1).toFixed(4)) } }, null, 2));
+'
+```
+
+The tail contains occasional synchronous stalls near a 16.7 ms frame budget, but this benchmark does not identify rotation as their cause. The steady-state result is too small to outrank the transcript projector without production evidence connecting trace writes to visible stalls. Any asynchronous design would also need to preserve crash/freeze evidence, ordered records, rotation, bounded backpressure, and explicit loss accounting.
 
 ## Candidates not selected
 
@@ -276,8 +345,10 @@ This report adds no application code and makes no end-to-end Electron latency cl
 
 ```text
 VERIFICATION
-- git diff --check  → clean
+- git diff --cached --check -- docs/reports/2026-08-23-desktop-responsiveness-optimization.md  → clean
 - bun run maps:lint  → passed: 18 maps validated, 7 existing advisory warnings
-Stale-reference sweep: not applicable; this report renames or removes no interface, file, command, or configuration.
-Not run: desktop code battery; this is a docs-only change and no app source changed.
+- projector benchmark command above  → reproduced quadratic scaling; 128.75 ms at 2,000, 505.60 ms at 4,000, 2,118.90 ms at 8,000
+- delivery-trace benchmark command above  → 10,000 frames, 0.2108 ms p50, 0.4887 ms p99, 15.1384 ms maximum
+Stale-reference sweep: clean; removed benefit and metric claims plus dirty-tree main.ts anchors have zero remaining hits.
+Not run: cd /Users/pt/cat-code && bun test app/; cd /Users/pt/cat-code && bun run --cwd app typecheck; cd /Users/pt/cat-code && bun run --cwd app typecheck:sidecar; cd /Users/pt/cat-code && bun run --cwd app test:hardening; cd /Users/pt/cat-code && bun run --cwd app renderer:build. This correction changes documentation only.
 ```
