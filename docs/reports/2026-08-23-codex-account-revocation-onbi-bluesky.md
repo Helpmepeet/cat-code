@@ -38,10 +38,13 @@ official Codex CLI, and it is **also dead**. The revocation was therefore
 account-wide, not scoped to the sessions this fork held, which excludes any reading
 in which a detector acted on this client's request behaviour and killed only what it
 was using. `main` still answers 200 from the same host under the same client
-identity, so whatever selected the victims selected by account. The remaining
-candidates in §4.2 all act at the account level, and the cheapest way to separate
-them is no longer technical: it is whether the operator performed a password reset or
-device sign-out around 2026-08-22.
+identity, so whatever selected the victims selected by account. The operator has since
+confirmed no password reset, security check, or device sign-out on either account, so
+the remaining candidates in §4.2 all sit on OpenAI's side — enforcement, automated
+security, or fault. **That narrowing is by elimination and by testimony, not by
+evidence.** Two cheap non-technical checks could still settle it outright and have not
+been done: reading the account email around 2026-08-22, and attempting a web sign-in
+(§4.2, §6.1).
 
 **On prevention.** Only two levers are inside our control. One is a real defect: the
 spent refresh token in §5.1 is reachable and redeeming it is the canonical
@@ -304,10 +307,31 @@ sessions. It does **not** distinguish between:
 - some other cause correlated with account age or creation method.
 
 The surviving candidates share a property worth stating: all of them act on the
-account. The cheapest remaining discriminator is not technical — it is whether the
-operator performed a password reset, a device sign-out, or any account-security
-action on `onbi` or `bluesky` around 2026-08-22. That has not been established
-either way.
+account.
+
+**Operator action excluded by report, 2026-08-23.** Asked directly, the operator
+recalls no password reset, security check, or device sign-out on either account
+around 2026-08-22. This is testimony, not evidence, and it does not exclude two
+things: an automated account-security action taken by OpenAI without operator
+involvement, and a third party acting through the account's email. Both incident
+accounts authenticate by email OTP (§4.1), so whoever controls that inbox controls
+the account.
+
+With operator action set aside, the weight shifts to an action taken on OpenAI's
+side — enforcement, automated security, or fault. **That is a shift by elimination,
+which is the weakest way to arrive anywhere**, and it still does not distinguish
+those three.
+
+**Two checks remain that could establish the cause outright**, and neither is
+technical or available to an agent:
+
+| Check | What it would settle |
+|---|---|
+| The account's email around and after 2026-08-22 | Account-level actions are normally notified. A suspension, policy, or password-change notice would name the cause directly; silence is weak evidence against a deliberate action. |
+| Signing in to the ChatGPT web UI as each account | A normal sign-in means the account is alive and only its sessions were terminated. A suspension notice, forced reset, or verification wall means an account-level action, and says which. |
+
+Until one of those is done, §4 remains a hypothesis. Both are cheap, and either could
+end the question that this report has now spent four revisions failing to answer.
 
 Sample size is five accounts and four events over two months, from one host. That is
 a suggestive pattern, not a demonstrated mechanism.
@@ -401,6 +425,12 @@ Separated by what they achieve. Only §6.2 bears on whether this recurs; §6.1 a
 1. ~~Decide on the A12 probe before 2026-08-26.~~ **Done 2026-08-23**: run with
    operator approval, result in §3.6. The separate session was also dead, so the
    revocation was account-wide. No deadline remains here.
+
+1b. **Read the account email, and try a web sign-in** (§4.2 table). These are now the
+   highest-value actions in this report: both are minutes of work, neither needs an
+   agent, and either could replace the whole of §4 with a fact. Do them before
+   re-login, since re-login may clear a notice or a verification wall that is itself
+   the evidence.
 2. **Re-login `onbi` and `bluesky` via `/login`.** Vault files are otherwise intact;
    only the `refresh` block is terminal. A12 has already run, so there is no longer
    any sequencing constraint. Note the official Codex CLI login for `onbi` is dead
@@ -643,6 +673,14 @@ non-technical discriminator; the executive summary and §6.1 are updated. Both p
 controls behaved (`main` 200, dead vault session 401), and the 08-18 `onbi` event was
 verified to be an in-chain refresh rather than a fresh authorization, which is what
 makes the shared-client-id confound unlikely.
+
+Amended once more: the operator was asked directly and recalls no password reset,
+security check, or device sign-out on either account. §4.2 records that, notes it is
+testimony rather than evidence, notes it excludes neither an automated
+account-security action nor a third party with inbox access, and adds the two
+non-technical checks that could still establish the cause outright: the account email
+and a web sign-in. §6.1 promotes both above re-login, since re-login may clear the
+very notice that constitutes the evidence.
 
 **Rev 3 (23 Aug 2026)** — second review pass. WebSocket count corrected 22 → **24**
 distinct failures (rev 2 merged two `bluesky` failures 157 ms apart by truncating
