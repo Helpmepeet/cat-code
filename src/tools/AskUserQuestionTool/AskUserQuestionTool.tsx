@@ -110,7 +110,7 @@ export const AskUserQuestionTool: Tool<InputSchema, Output> = buildTool({
   name: ASK_USER_QUESTION_TOOL_NAME,
   searchHint: 'prompt the user with a multiple-choice question',
   maxResultSizeChars: 100_000,
-  shouldDefer: true,
+  alwaysLoad: true,
   async description() {
     return DESCRIPTION;
   },
