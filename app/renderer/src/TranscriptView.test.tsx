@@ -4788,3 +4788,56 @@ test('the live seam mounts only while a compaction runs, and never doubles up', 
     renderToStaticMarkup(<TranscriptRowsView rows={[]} compacting />),
   ).not.toContain('Compacting conversation')
 })
+
+// ─── bash card label (description-first, prototype `Messages.jsx:416,470`) ────
+
+test('a bash card headers the description and keeps the command in its body', () => {
+  const row = toolRow({
+    toolName: 'Bash',
+    toolFamily: 'bash',
+    input: {
+      command: 'rg -n auth src/ | head -20',
+      description: 'Check auth handling',
+    },
+    status: 'success',
+    result: { isError: false, content: 'src/auth.ts:12', diff: null },
+  })
+
+  expect(render(row)).toContain('Check auth handling')
+
+  const expanded = renderMany([row], true)
+  expect(expanded).toContain('Check auth handling')
+  expect(expanded).toContain('rg -n auth src/ | head -20')
+})
+
+test('a bash card falls back to the command, and then does not repeat it', () => {
+  const row = toolRow({
+    toolName: 'Bash',
+    toolFamily: 'bash',
+    input: { command: 'git status' },
+    status: 'success',
+    result: { isError: false, content: 'On branch migration', diff: null },
+  })
+
+  const expanded = renderMany([row], true)
+  expect(expanded).toContain('git status')
+  // Header only: a card that gained no label must not print the command twice.
+  expect(expanded.split('git status')).toHaveLength(2)
+})
+
+test('a bash card reads a first-line comment when no description was sent', () => {
+  const row = toolRow({
+    toolName: 'Bash',
+    toolFamily: 'bash',
+    input: { command: '# Inspect auth handling\nrg -n auth src/' },
+    status: 'success',
+    result: { isError: false, content: 'src/auth.ts:12', diff: null },
+  })
+
+  const html = render(row)
+  expect(html).toContain('Inspect auth handling')
+  expect(html).not.toContain('# Inspect auth handling')
+
+  // The body still carries the command with its comment intact.
+  expect(renderMany([row], true)).toContain('# Inspect auth handling')
+})

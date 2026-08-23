@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Bash card label — GUI</title>
+<style>
+@font-face{font-family:"DM Sans";src:url("../../app/renderer/src/assets/fonts/DMSans-Variable.woff2") format("woff2");font-weight:100 900;font-display:swap}
+@font-face{font-family:"DM Mono";src:url("../../app/renderer/src/assets/fonts/DMMono-Regular.woff2") format("woff2");font-weight:400;font-display:swap}
+@font-face{font-family:"DM Mono";src:url("../../app/renderer/src/assets/fonts/DMMono-Medium.woff2") format("woff2");font-weight:500;font-display:swap}
+
+:root{
+  --app-bg:#09090b;
+  --shell-seam:rgba(255,255,255,0.06);
+  --text-primary:#f4f4f5;
+  --text-muted:#a1a1aa;
+  --text-subtle:#98989f;
+  --text-faint:#838389;
+  --text-ghost:#75757b;
+  --fam-bash:#a3e635;
+  --tone-good:#4ade80;
+  --tone-danger:#f87171;
+  --log-good:#86efac;
+  --log-bad:#fca5a5;
+  --log-warn:#fcd34d;
+  --font-sans:"DM Sans",-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+  --font-mono:"DM Mono",ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;
+  --x-ink:#6b6b72;
+  --x-rule:rgba(255,255,255,0.09);
+}
+
+*{box-sizing:border-box}
+html,body{background:var(--app-bg);margin:0}
+body{color:var(--text-primary);font-family:var(--font-sans);-webkit-font-smoothing:antialiased}
+
+/* ---------- chrome (x-) : never inside a specimen ---------- */
+.x-page{max-width:1180px;margin:0 auto;padding:40px 28px 90px}
+.x-eyebrow{font-family:var(--font-mono);font-size:9.5px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:var(--x-ink);margin:0 0 14px}
+.x-sec{margin:0 0 10px;padding-top:34px;border-top:1px solid var(--x-rule)}
+.x-sec:first-of-type{padding-top:0;border-top:0}
+.x-grid{display:grid;grid-template-columns:1fr 1fr;gap:26px;align-items:start}
+.x-col{min-width:0}
+.x-colhead{font-family:var(--font-mono);font-size:9.5px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:var(--x-ink);padding-bottom:8px;margin-bottom:14px;border-bottom:1px solid var(--x-rule)}
+.x-state{font-family:var(--font-mono);font-size:9px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:var(--x-ink);margin:20px 0 7px}
+.x-state:first-child{margin-top:0}
+.x-stack{display:flex;flex-direction:column;gap:8px}
+.x-foot{margin-top:56px;padding-top:18px;border-top:1px solid var(--x-rule);font-family:var(--font-mono);font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--x-ink)}
+
+/* ---------- specimen (s-) : values read from source ---------- */
+/* card: TranscriptView.tsx ToolCardShell */
+.s-card{width:100%;overflow:hidden;border-radius:6px;border:1px solid var(--shell-seam);background:rgba(255,255,255,0.025);font-family:var(--font-sans)}
+.s-head{display:flex;width:100%;align-items:center;gap:10px;padding:8px 12px;text-align:left;background:none;border:0;font:inherit;color:inherit}
+.s-mark{width:16px;flex-shrink:0;text-align:center;font-size:13px;color:var(--fam-bash)}
+.s-word{flex-shrink:0;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--fam-bash)}
+.s-target{min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-mono);font-size:12px;color:var(--text-primary)}
+.s-dot{height:6px;width:6px;flex-shrink:0;border-radius:9999px;background:var(--tone-good)}
+.s-dot-err{background:var(--tone-danger)}
+
+/* collapsed peek: BashTailPeek */
+.s-peek{border-top:1px solid var(--shell-seam);background:rgba(0,0,0,0.2);padding:6px 12px}
+.s-peek pre{margin:0;overflow:hidden;white-space:pre;font-family:var(--font-mono);font-size:11px;line-height:1.625}
+
+/* expanded body: ToolCardShell body + BashBody */
+.s-body{border-top:1px solid var(--shell-seam);background:rgba(0,0,0,0.28)}
+.s-body-in{padding:4px 12px 10px}
+.s-log{font-family:var(--font-mono);font-size:11.5px;line-height:1.625;white-space:pre}
+.s-log .r{display:flex}
+.s-gut{width:48px;flex-shrink:0;user-select:none;padding-right:11px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text-ghost)}
+.m{color:var(--text-muted)}
+.g{color:var(--log-good)}
+.b{color:var(--log-bad)}
+.w{color:var(--log-warn)}
+.f{color:var(--text-faint)}
+
+/* the one proposed addition: raw command inside the expanded body */
+.s-raw{display:flex;gap:6px;font-family:var(--font-mono);font-size:11.5px;line-height:1.625;padding:3px 0 6px;margin-bottom:5px;border-bottom:1px solid var(--shell-seam)}
+.s-raw-mark{flex-shrink:0;color:var(--fam-bash)}
+.s-raw-cmd{min-width:0;white-space:pre-wrap;word-break:break-word;color:var(--text-primary)}
+</style>
+</head>
+<body>
+<div class="x-page">
+
+<p class="x-eyebrow">Bash tool card · desktop transcript</p>
+
+<div class="x-sec"><p class="x-eyebrow">Consecutive run</p></div>
+<div class="x-grid">
+  <div class="x-col">
+    <div class="x-colhead">Current</div>
+    <div class="x-stack">
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">cat src/tools/BashTool/commentLabel.ts</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">rg -c --no-messages '"command":"\s*#[^!]' ~/.claude/projects ~/.cat-code 2&gt;/dev/null | head -20</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">python3 /private/tmp/claude-501/-Users-pt-cat-code/9b0aee1d/scratchpad/desc.py</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">rg -n "description" app/renderer/src/transcriptProjector.ts | head -20</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">sed -n '1990,2075p' app/renderer/src/TranscriptView.tsx</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">git status</span><span class="s-dot"></span></div></div>
+    </div>
+  </div>
+  <div class="x-col">
+    <div class="x-colhead">Proposed</div>
+    <div class="x-stack">
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">Read commentLabel.ts</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">Independent grep for leading-# commands</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">Measure description-field frequency on Bash calls</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">Check projector for description field</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">Read tool card render around deriveTarget</span><span class="s-dot"></span></div></div>
+      <div class="s-card"><div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">git status</span><span class="s-dot"></span></div></div>
+    </div>
+  </div>
+</div>
+
+<div class="x-sec"><p class="x-eyebrow">A · description</p></div>
+<div class="x-grid">
+  <div class="x-col">
+    <div class="x-colhead">Current</div>
+    <p class="x-state">Collapsed</p>
+    <div class="s-card">
+      <div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">rg -n "description" app/renderer/src/transcriptProjector.ts | head -20</span><span class="s-dot"></span></div>
+      <div class="s-peek"><pre><div class="m">app/renderer/src/transcriptProjector.ts:270:    description: string</div><div class="m">app/renderer/src/transcriptProjector.ts:2218:  const description = nonEmptyString(task.description)</div><div class="m">app/renderer/src/transcriptProjector.ts:2221:  return { taskId, description, output }</div></pre></div>
+    </div>
+    <p class="x-state">Expanded</p>
+    <div class="s-card">
+      <div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">rg -n "description" app/renderer/src/transcriptProjector.ts | head -20</span><span class="s-dot"></span></div>
+      <div class="s-body"><div class="s-body-in"><div class="s-log">
+        <div class="r"><span class="s-gut">1</span><span class="m">app/renderer/src/transcriptProjector.ts:270:    description: string</span></div>
+        <div class="r"><span class="s-gut">2</span><span class="m">app/renderer/src/transcriptProjector.ts:2218:  const description = nonEmptyString(task.description)</span></div>
+        <div class="r"><span class="s-gut">3</span><span class="m">app/renderer/src/transcriptProjector.ts:2220:  if (taskId === null || description === null) return null</span></div>
+        <div class="r"><span class="s-gut">4</span><span class="m">app/renderer/src/transcriptProjector.ts:2221:  return { taskId, description, output }</span></div>
+      </div></div></div>
+    </div>
+  </div>
+  <div class="x-col">
+    <div class="x-colhead">Proposed</div>
+    <p class="x-state">Collapsed</p>
+    <div class="s-card">
+      <div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">Check projector for description field</span><span class="s-dot"></span></div>
+      <div class="s-peek"><pre><div class="m">app/renderer/src/transcriptProjector.ts:270:    description: string</div><div class="m">app/renderer/src/transcriptProjector.ts:2218:  const description = nonEmptyString(task.description)</div><div class="m">app/renderer/src/transcriptProjector.ts:2221:  return { taskId, description, output }</div></pre></div>
+    </div>
+    <p class="x-state">Expanded</p>
+    <div class="s-card">
+      <div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">Check projector for description field</span><span class="s-dot"></span></div>
+      <div class="s-body"><div class="s-body-in">
+        <div class="s-raw"><span class="s-raw-mark">$</span><span class="s-raw-cmd">rg -n "description" app/renderer/src/transcriptProjector.ts | head -20</span></div>
+        <div class="s-log">
+        <div class="r"><span class="s-gut">1</span><span class="m">app/renderer/src/transcriptProjector.ts:270:    description: string</span></div>
+        <div class="r"><span class="s-gut">2</span><span class="m">app/renderer/src/transcriptProjector.ts:2218:  const description = nonEmptyString(task.description)</span></div>
+        <div class="r"><span class="s-gut">3</span><span class="m">app/renderer/src/transcriptProjector.ts:2220:  if (taskId === null || description === null) return null</span></div>
+        <div class="r"><span class="s-gut">4</span><span class="m">app/renderer/src/transcriptProjector.ts:2221:  return { taskId, description, output }</span></div>
+      </div></div></div>
+    </div>
+  </div>
+</div>
+
+<div class="x-sec"><p class="x-eyebrow">B · no description</p></div>
+<div class="x-grid">
+  <div class="x-col">
+    <div class="x-colhead">Current</div>
+    <p class="x-state">Collapsed</p>
+    <div class="s-card">
+      <div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">git status</span><span class="s-dot"></span></div>
+      <div class="s-peek"><pre><div class="m">On branch migration</div><div class="m">Changes not staged for commit:</div><div class="m">  modified:   app/renderer/src/TranscriptView.tsx</div></pre></div>
+    </div>
+    <p class="x-state">Expanded</p>
+    <div class="s-card">
+      <div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">git status</span><span class="s-dot"></span></div>
+      <div class="s-body"><div class="s-body-in"><div class="s-log">
+        <div class="r"><span class="s-gut">1</span><span class="m">On branch migration</span></div>
+        <div class="r"><span class="s-gut">2</span><span class="m">Changes not staged for commit:</span></div>
+        <div class="r"><span class="s-gut">3</span><span class="m">  modified:   app/renderer/src/TranscriptView.tsx</span></div>
+      </div></div></div>
+    </div>
+  </div>
+  <div class="x-col">
+    <div class="x-colhead">Proposed</div>
+    <p class="x-state">Collapsed</p>
+    <div class="s-card">
+      <div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">git status</span><span class="s-dot"></span></div>
+      <div class="s-peek"><pre><div class="m">On branch migration</div><div class="m">Changes not staged for commit:</div><div class="m">  modified:   app/renderer/src/TranscriptView.tsx</div></pre></div>
+    </div>
+    <p class="x-state">Expanded</p>
+    <div class="s-card">
+      <div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">git status</span><span class="s-dot"></span></div>
+      <div class="s-body"><div class="s-body-in">
+        <div class="s-raw"><span class="s-raw-mark">$</span><span class="s-raw-cmd">git status</span></div>
+        <div class="s-log">
+        <div class="r"><span class="s-gut">1</span><span class="m">On branch migration</span></div>
+        <div class="r"><span class="s-gut">2</span><span class="m">Changes not staged for commit:</span></div>
+        <div class="r"><span class="s-gut">3</span><span class="m">  modified:   app/renderer/src/TranscriptView.tsx</span></div>
+      </div></div></div>
+    </div>
+  </div>
+</div>
+
+<div class="x-sec"><p class="x-eyebrow">C · leading comment</p></div>
+<div class="x-grid">
+  <div class="x-col">
+    <div class="x-colhead">Current</div>
+    <p class="x-state">Collapsed</p>
+    <div class="s-card">
+      <div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target"># Checked existing coverage, test pins, and identity-prefix prepend rg -n "identityPrefix" src/ | head -20</span><span class="s-dot"></span></div>
+      <div class="s-peek"><pre><div class="m">src/utils/agentIdentity.ts:112:  const identityPrefix = resolvePrefix(agent)</div><div class="m">src/utils/agentIdentity.ts:140:  return identityPrefix + body</div><div class="g">3 passed</div></pre></div>
+    </div>
+    <p class="x-state">Expanded</p>
+    <div class="s-card">
+      <div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target"># Checked existing coverage, test pins, and identity-prefix prepend rg -n "identityPrefix" src/ | head -20</span><span class="s-dot"></span></div>
+      <div class="s-body"><div class="s-body-in"><div class="s-log">
+        <div class="r"><span class="s-gut">1</span><span class="m">src/utils/agentIdentity.ts:112:  const identityPrefix = resolvePrefix(agent)</span></div>
+        <div class="r"><span class="s-gut">2</span><span class="m">src/utils/agentIdentity.ts:140:  return identityPrefix + body</span></div>
+        <div class="r"><span class="s-gut">3</span><span class="g">3 passed</span></div>
+      </div></div></div>
+    </div>
+  </div>
+  <div class="x-col">
+    <div class="x-colhead">Proposed</div>
+    <p class="x-state">Collapsed</p>
+    <div class="s-card">
+      <div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">Checked existing coverage, test pins, and identity-prefix prepend</span><span class="s-dot"></span></div>
+      <div class="s-peek"><pre><div class="m">src/utils/agentIdentity.ts:112:  const identityPrefix = resolvePrefix(agent)</div><div class="m">src/utils/agentIdentity.ts:140:  return identityPrefix + body</div><div class="g">3 passed</div></pre></div>
+    </div>
+    <p class="x-state">Expanded</p>
+    <div class="s-card">
+      <div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">Checked existing coverage, test pins, and identity-prefix prepend</span><span class="s-dot"></span></div>
+      <div class="s-body"><div class="s-body-in">
+        <div class="s-raw"><span class="s-raw-mark">$</span><span class="s-raw-cmd"># Checked existing coverage, test pins, and identity-prefix prepend
+rg -n "identityPrefix" src/ | head -20</span></div>
+        <div class="s-log">
+        <div class="r"><span class="s-gut">1</span><span class="m">src/utils/agentIdentity.ts:112:  const identityPrefix = resolvePrefix(agent)</span></div>
+        <div class="r"><span class="s-gut">2</span><span class="m">src/utils/agentIdentity.ts:140:  return identityPrefix + body</span></div>
+        <div class="r"><span class="s-gut">3</span><span class="g">3 passed</span></div>
+      </div></div></div>
+    </div>
+  </div>
+</div>
+
+<div class="x-sec"><p class="x-eyebrow">D · failed</p></div>
+<div class="x-grid">
+  <div class="x-col">
+    <div class="x-colhead">Current</div>
+    <p class="x-state">Expanded</p>
+    <div class="s-card">
+      <div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">bun run --cwd app typecheck</span><span class="s-dot s-dot-err"></span></div>
+      <div class="s-body"><div class="s-body-in"><div class="s-log">
+        <div class="r"><span class="s-gut">1</span><span class="b">app/renderer/src/TranscriptView.tsx(1844,12): error TS2345</span></div>
+        <div class="r"><span class="s-gut">2</span><span class="b">1 error</span></div>
+      </div></div></div>
+    </div>
+  </div>
+  <div class="x-col">
+    <div class="x-colhead">Proposed</div>
+    <p class="x-state">Expanded</p>
+    <div class="s-card">
+      <div class="s-head"><span class="s-mark">$</span><span class="s-word">Bash</span><span class="s-target">Typecheck the desktop package</span><span class="s-dot s-dot-err"></span></div>
+      <div class="s-body"><div class="s-body-in">
+        <div class="s-raw"><span class="s-raw-mark">$</span><span class="s-raw-cmd">bun run --cwd app typecheck</span></div>
+        <div class="s-log">
+        <div class="r"><span class="s-gut">1</span><span class="b">app/renderer/src/TranscriptView.tsx(1844,12): error TS2345</span></div>
+        <div class="r"><span class="s-gut">2</span><span class="b">1 error</span></div>
+      </div></div></div>
+    </div>
+  </div>
+</div>
+
+<p class="x-foot">docs/design-html/2026-08-23-bash-command-label-gui.html</p>
+</div>
+</body>
+</html>

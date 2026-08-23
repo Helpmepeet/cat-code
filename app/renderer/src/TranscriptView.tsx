@@ -81,6 +81,7 @@ import {
   type ToolResultProjection,
   type UserImageSource,
 } from './transcriptProjector.js'
+import { selectBashCardText } from './bashCommandLabel.js'
 import { ToolsExpandedContext } from './toolsExpanded.js'
 import {
   groupReasoningRuns,
@@ -1842,7 +1843,13 @@ function deriveTarget(row: ToolUseNestedRow): string {
   }
   switch (row.toolFamily) {
     case 'bash':
-      return str('command') ?? row.toolName
+      // Summary-first, exactly as the prototype's own bash card
+      // (`Messages.jsx:416,470` `msg.toolSummary || msg.command`). The raw
+      // command is not lost: `bodyLead` puts it back in the expanded body.
+      return (
+        selectBashCardText(str('command'), str('description')).label ??
+        row.toolName
+      )
     case 'read': {
       const filePath = str('file_path')
       return filePath === null ? row.toolName : basename(filePath) || filePath
@@ -1897,6 +1904,45 @@ function deriveSub(row: ToolUseNestedRow): string | undefined {
 }
 
 /**
+ * The raw command, under a header that is showing a label instead of it. Every
+ * value here is one the card already uses: the body's own mono size, the
+ * family's `$` mark, and the seam it draws under its header.
+ */
+function BashCommandLead({ command }: { command: string }) {
+  return (
+    <div className="mb-1.5 flex gap-1.5 border-b border-shell-seam pb-1.5 pt-0.5 font-mono text-[11.5px] leading-relaxed">
+      <span className={`shrink-0 ${FAMILY_STYLE.bash.color}`} aria-hidden>
+        $
+      </span>
+      <span className="min-w-0 whitespace-pre-wrap break-words text-text-primary">
+        {command}
+      </span>
+    </div>
+  )
+}
+
+/**
+ * Only once a result exists: until then the body already prints the whole real
+ * input (`ToolCardBody`), and printing the command twice is what the header was
+ * shortened to avoid.
+ */
+function bashCommandLead(row: ToolUseNestedRow): ReactNode {
+  if (row.toolFamily !== 'bash' || row.result === null) return undefined
+  const command = row.input['command']
+  if (typeof command !== 'string' || command.length === 0) return undefined
+  const description = row.input['description']
+  const { commandLead } = selectBashCardText(
+    command,
+    typeof description === 'string' && description.length > 0
+      ? description
+      : null,
+  )
+  return commandLead === null ? undefined : (
+    <BashCommandLead command={commandLead} />
+  )
+}
+
+/**
  * P4-REVIEW B3: pure resolution of the card's expanded state. `userExpanded`
  * is `null` until the user clicks the header (never toggled); while `null`,
  * `defaultExpanded` wins on EVERY render — so a live pending→error (or
@@ -1916,6 +1962,7 @@ function ToolCardShell({
   status,
   sub,
   headerBadge,
+  bodyLead,
   collapsedExtra,
   defaultExpanded,
   expansionKey,
@@ -1927,6 +1974,12 @@ function ToolCardShell({
   sub?: string
   /** Optional right-cluster chip before the state (C4 child-count for agents). */
   headerBadge?: ReactNode
+  /**
+   * Rendered above the body, inside its padding: what the header line had to
+   * drop to stay one line. Bash uses it for the raw command whenever the header
+   * shows a label instead (`bashCommandLabel.ts`).
+   */
+  bodyLead?: ReactNode
   collapsedExtra?: ReactNode
   defaultExpanded?: boolean
   /**
@@ -1982,7 +2035,10 @@ function ToolCardShell({
               {sub}
             </div>
           ) : null}
-          <div className="px-3 pb-2.5 pt-1">{children}</div>
+          <div className="px-3 pb-2.5 pt-1">
+            {bodyLead}
+            {children}
+          </div>
         </div>
       ) : null}
     </div>
@@ -2010,6 +2066,7 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
         family={row.toolFamily}
         target={deriveTarget(row)}
         status={row.status}
+        bodyLead={bashCommandLead(row)}
         expansionKey={row.toolUseId}
         defaultExpanded
       >
@@ -2048,6 +2105,7 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
         status={row.status}
         sub={deriveSub(row)}
         headerBadge={headerBadge}
+        bodyLead={bashCommandLead(row)}
         expansionKey={row.toolUseId}
         defaultExpanded={
           toolsExpanded || row.status === 'error' || isImageDone
