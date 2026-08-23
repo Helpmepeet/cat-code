@@ -3,7 +3,7 @@
  *   1. A batched replay is folded into every store with ONE dispatch per store
  *      (not one per frame) — asserted on the REAL `applyServerFrameBatch` path,
  *      so the "restore = ~1 render" claim can't silently regress to per-frame.
- *   2. `withBatch` folding is identical to sequential per-frame dispatching.
+ *   2. Transcript batch projection is identical to sequential per-frame dispatching.
  *   3. `selectNestedTranscriptRows` is referentially stable per session slice —
  *      the invariant that lets the `React.memo`'d transcript skip re-rendering on
  *      unrelated App updates (a keystroke, another session's frame).
@@ -23,9 +23,9 @@ import {
 import {
   applyServerFrameBatch,
   batch,
-  withBatch,
   type ServerFrameBatchHandlers,
 } from './serverFrameBatch.js'
+import { reduceLiveTranscriptState } from './previewTranscriptState.js'
 import { TranscriptView } from './TranscriptView.js'
 
 const SID = 'replay-session'
@@ -74,9 +74,9 @@ const events = Array.from({ length: FRAME_COUNT }, (_, i) => assistantFrame(SID,
 const delivery = [ready(SID), ...events] as never[]
 
 function foldBatched() {
-  // Exactly what App does: the batched reducer folds the whole delivery in one
-  // dispatch. (Seed nothing else — `ready` creates the slice inside the fold.)
-  return withBatch(projectServerFrame)(createTranscriptState(), batch(delivery))
+  // Exactly what App does: one transcript dispatch carries the complete
+  // delivery. (Seed nothing else — `ready` creates the slice inside the fold.)
+  return reduceLiveTranscriptState(createTranscriptState(), batch(delivery))
 }
 
 test('applyServerFrameBatch dispatches ONCE per store for the whole batch', () => {
@@ -185,7 +185,7 @@ test('an empty delivery dispatches nothing', () => {
   expect(touched).toBe(false)
 })
 
-test('withBatch folds a delivery identically to sequential per-frame dispatch', () => {
+test('transcript batch reducer matches sequential per-frame dispatch', () => {
   let sequential = createTranscriptState()
   for (const frame of delivery) sequential = projectServerFrame(sequential, frame)
 
