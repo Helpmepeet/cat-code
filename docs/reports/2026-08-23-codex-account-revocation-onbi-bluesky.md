@@ -32,11 +32,16 @@ and account history are consistent with correlated enforcement or an account-sec
 action, but they do not establish it, and this report does not attribute a cause.
 Section 4 states that hypothesis and the alternatives it cannot separate.
 
-**Rev 4 narrows the question without answering it.** One check that would halve the
-candidate set was available all along and never run: `onbi` holds a second, separate
-OAuth session in the official Codex CLI, and whether it still authenticates
-distinguishes an account-wide termination from one scoped to this client's sessions
-(§3.6). That session expires **2026-08-26**, after which the check is gone.
+**Rev 4 narrows the question.** A check that was available all along and never run
+has now been run (A12, §3.6): `onbi` held a second, separate OAuth session in the
+official Codex CLI, and it is **also dead**. The revocation was therefore
+account-wide, not scoped to the sessions this fork held, which excludes any reading
+in which a detector acted on this client's request behaviour and killed only what it
+was using. `main` still answers 200 from the same host under the same client
+identity, so whatever selected the victims selected by account. The remaining
+candidates in §4.2 all act at the account level, and the cheapest way to separate
+them is no longer technical: it is whether the operator performed a password reset or
+device sign-out around 2026-08-22.
 
 **On prevention.** Only two levers are inside our control. One is a real defect: the
 spent refresh token in §5.1 is reachable and redeeming it is the canonical
@@ -187,9 +192,41 @@ locally unexpired at the time of writing. Local expiry is not server-side validi
 | Also rejected | A revocation scoped to this client's sessions | Account-wide termination, by any of the causes in §4.2 |
 
 This does not identify a cause. It halves §4.2. A11 prints the expiry; A12 is the
-probe itself, and is **not run as part of this report** — it spends a live credential
-and is the account's only remaining independent session (§10 operator gate).
-After 2026-08-26 the test is no longer available.
+probe itself.
+
+**A12 was run on 2026-08-23 with operator approval. The separate session is also
+dead.** Both controls behaved, so the result is interpretable:
+
+| Target | Result |
+|---|---|
+| `~/.codex/auth.json` session for `onbi` (issued 08-16, never used by this fork) | **HTTP 401**, `x-openai-ide-error-code=token_invalidated` |
+| vault `onbi` (known dead — control) | HTTP 401, same code |
+| vault `main` (known healthy — control) | HTTP 200, `plan_type=plus` |
+
+**The revocation was account-wide, not scoped to this fork's sessions.** Two
+independent OAuth sessions for `onbi`, with different session identifiers and
+separate refresh chains, are both invalidated. A revocation aimed at the sessions
+Cat Code held is therefore excluded, and with it the reading that some detector
+acted on this client's request behaviour and killed only what it was using.
+
+Two qualifications, neither of which overturns the result:
+
+- **Shared client identity.** Both sessions were minted under the same public client
+  id (§4.1), so a provider that permits one session per (account, client) could have
+  ended the CLI session when this fork acted on the account. Checked: the only
+  `onbi` event between 08-16 and the incident is a `core-refresh-start` from
+  `codex-core.maybeRefreshAccount` at `2026-08-18T03:10:47.750Z`, an in-chain token
+  refresh, not a fresh authorization. A refresh rotates its own chain and does not
+  mint a session, so this path is unlikely — but it is not formally excluded.
+- **Error code differs from the incident.** The probe returned
+  `token_invalidated`; the 08-22 rejections carried `token_revoked` as both
+  `x-openai-ide-error-code` and `-root-error-code`. Whether these are distinct
+  upstream states or the same state reported differently after time is unknown, and
+  no weight is placed on the difference.
+
+Note also that `main` answers 200 from the same host, under the same client identity,
+inside the same pool. Whatever selected `onbi` and `bluesky` selected by account, not
+by host, address, or client.
 
 ## 4. Hypothesis: correlated action against the secondary accounts
 
@@ -255,13 +292,22 @@ any particular upstream response, and §4.2 still applies.
 ### 4.2 What these observations cannot separate
 
 The evidence establishes sequential server-side rejection of two accounts carrying
-the same workload. It does **not** distinguish between:
+the same workload, and — since A12 (§3.6) — that the rejection was **account-wide**
+rather than scoped to the sessions this fork held. That excludes one candidate: a
+detector acting on this client's request behaviour and terminating only its own
+sessions. It does **not** distinguish between:
 
-- policy enforcement against pooled or secondary accounts,
+- policy enforcement applied at the account level,
 - a manual session invalidation (password reset, "log out of all devices"),
 - an automated account-security action unrelated to pooling,
-- an upstream defect or partial outage affecting a subset of sessions,
+- an upstream defect or partial outage affecting a subset of accounts,
 - some other cause correlated with account age or creation method.
+
+The surviving candidates share a property worth stating: all of them act on the
+account. The cheapest remaining discriminator is not technical — it is whether the
+operator performed a password reset, a device sign-out, or any account-security
+action on `onbi` or `bluesky` around 2026-08-22. That has not been established
+either way.
 
 Sample size is five accounts and four events over two months, from one host. That is
 a suggestive pattern, not a demonstrated mechanism.
@@ -352,14 +398,13 @@ Separated by what they achieve. Only §6.2 bears on whether this recurs; §6.1 a
 
 ### 6.1 Time-boxed, do first
 
-1. **Decide on the A12 probe before 2026-08-26.** It is the only available check
-   that halves §4.2 (§3.6), and the session it depends on expires that day. It
-   spends a live credential and is operator-gated; not deciding is also a decision,
-   and after 08-26 it is made by default.
+1. ~~Decide on the A12 probe before 2026-08-26.~~ **Done 2026-08-23**: run with
+   operator approval, result in §3.6. The separate session was also dead, so the
+   revocation was account-wide. No deadline remains here.
 2. **Re-login `onbi` and `bluesky` via `/login`.** Vault files are otherwise intact;
-   only the `refresh` block is terminal. Do this *after* A12 or after declining it:
-   re-login does not disturb the separate CLI session, but sequencing keeps the probe
-   result unambiguous.
+   only the `refresh` block is terminal. A12 has already run, so there is no longer
+   any sequencing constraint. Note the official Codex CLI login for `onbi` is dead
+   too and will need redoing separately if it is still wanted.
 3. **Treat re-login as an observation, not a test that settles §4.** A second
    rejection under similar usage would be *consistent with* the hypothesis; it would
    not confirm it, since the alternatives in §4.2 can also recur.
@@ -557,9 +602,8 @@ is gitignored scratch and may not survive. It prints aliases and percentages onl
 Result cited in §6.2: peak 100% for `main`, `bluesky` and `onbi`; 8 of 30 days above
 100% summed; 2026-08-17 at 300%.
 
-**A12 — liveness probe for the §3.6 discriminator. NOT RUN.** Operator-gated: it
-spends a live credential and, if the §4 hypothesis is right, may itself terminate the
-last independent session for that account. Read-only GET against the usage endpoint
+**A12 — liveness probe for the §3.6 discriminator. RUN 2026-08-23**, with operator
+approval; result and interpretation in §3.6. Read-only GET against the usage endpoint
 (`codexUsage.ts:84`, headers per `codexUsage.ts:216-224`); it does not refresh,
 rotate, or write. Probe the `~/.codex/auth.json` token for `onbi`, with vault `onbi`
 (expected reject) and vault `main` (expected accept) as controls, so the result is
@@ -590,6 +634,15 @@ recommendation. All three live accounts have hit 100% of their rolling-window
 allowance, and the pool exceeded one account's allowance on 8 of 30 observed days,
 reaching 3.0 accounts' worth on 2026-08-17. Metered billing is now stated as the only
 mitigation that removes the exposure while preserving the capacity.
+
+Amended again the same day: **A12 was run** with operator approval. The separate
+`onbi` session in the official Codex CLI is also dead, so the revocation was
+account-wide and not scoped to this fork's sessions. §3.6 carries the result and two
+qualifications; §4.2 drops the session-scoped candidate and names the remaining
+non-technical discriminator; the executive summary and §6.1 are updated. Both probe
+controls behaved (`main` 200, dead vault session 401), and the 08-18 `onbi` event was
+verified to be an in-chain refresh rather than a fresh authorization, which is what
+makes the shared-client-id confound unlikely.
 
 **Rev 3 (23 Aug 2026)** — second review pass. WebSocket count corrected 22 → **24**
 distinct failures (rev 2 merged two `bluesky` failures 157 ms apart by truncating
