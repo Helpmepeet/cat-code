@@ -5,6 +5,7 @@ import {
   createTranscriptState,
   groupAgentDelegates,
   projectServerFrame,
+  projectServerFrames,
   selectHasHiddenRows,
   selectIsCompacting,
   selectNestedTranscriptRows,
@@ -14,6 +15,7 @@ import {
   stripCompactionEcho,
   type NestedTranscriptRow,
 } from './transcriptProjector.js'
+import { reduceLiveTranscriptState } from './previewTranscriptState.js'
 import {
   AGENT_WITH_NESTED_SUBAGENT_TURN,
   allSdkMessageSamples,
@@ -4641,6 +4643,20 @@ function projectSequentialDeliveries(
   )
 }
 
+function projectBatchDeliveries(
+  deliveries: readonly (readonly ServerFrame[])[],
+): ReturnType<typeof createTranscriptState> {
+  return deliveries.reduce(projectServerFrames, createTranscriptState())
+}
+
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== 'object' || value === null || Object.isFrozen(value)) {
+    return value
+  }
+  for (const child of Object.values(value)) deepFreeze(child)
+  return Object.freeze(value)
+}
+
 /**
  * Baseline oracle for the batched projector. It deliberately uses only the
  * established single-frame reducer: the optimization is added after this
@@ -4694,6 +4710,8 @@ test('sequential transcript projection is invariant across replay delivery parti
   ]
   const expected = projectSequential(frames)
 
+  expect(projectServerFrames(createTranscriptState(), frames)).toEqual(expected)
+  expect(projectBatchDeliveries(frames.map(frame => [frame]))).toEqual(expected)
   expect(projectSequentialDeliveries([frames])).toEqual(expected)
   expect(projectSequentialDeliveries(frames.map(frame => [frame]))).toEqual(
     expected,
@@ -4704,6 +4722,12 @@ test('sequential transcript projection is invariant across replay delivery parti
   for (let splitAt = 1; splitAt < frames.length; splitAt += 1) {
     expect(
       projectSequentialDeliveries([
+        frames.slice(0, splitAt),
+        frames.slice(splitAt),
+      ]),
+    ).toEqual(expected)
+    expect(
+      projectBatchDeliveries([
         frames.slice(0, splitAt),
         frames.slice(splitAt),
       ]),
@@ -4722,5 +4746,63 @@ test('sequential transcript projection is invariant across replay delivery parti
     }
     deliveries.push(frames.slice(cursor))
     expect(projectSequentialDeliveries(deliveries)).toEqual(expected)
+    expect(projectBatchDeliveries(deliveries)).toEqual(expected)
   }
+})
+
+test('batch projection preserves source identities and publishes no-op batches', () => {
+  const initial = projectSequential([
+    ready('session-1'),
+    assistantFrame('session-1', 1),
+    ready('session-2'),
+  ])
+  const session = initial.sessions['session-1']!
+  const untouchedSession = initial.sessions['session-2']!
+  const rows = session.rows
+  const sourceSnapshot = structuredClone(initial)
+  deepFreeze(initial)
+
+  expect(projectServerFrames(initial, [])).toBe(initial)
+  expect(
+    projectServerFrames(initial, [
+      assistantFrame('session-1', 1),
+    ]),
+  ).toBe(initial)
+
+  const next = projectServerFrames(initial, [
+    assistantFrame('session-1', 2),
+  ])
+  expect(next).not.toBe(initial)
+  expect(next.sessions['session-1']).not.toBe(session)
+  expect(next.sessions['session-1']!.rows).not.toBe(rows)
+  expect(next.sessions['session-1']!.rows[0]).toBe(rows[0])
+  expect(next.sessions['session-2']).toBe(untouchedSession)
+  expect(initial.sessions['session-1']).toBe(session)
+  expect(initial.sessions['session-1']!.rows).toBe(rows)
+  expect(initial).toEqual(sourceSnapshot)
+})
+
+test('single live reducer projection remains the single-frame projector path', () => {
+  const state = projectSequential([ready('session-1')])
+  const frame = assistantFrame('session-1', 1)
+  expect(reduceLiveTranscriptState(state, frame)).toEqual(
+    projectServerFrame(state, frame),
+  )
+})
+
+test('batch projection retains a recovered typed assistant error without a frame id', () => {
+  const frame = {
+    ...messageFrame('session-1', {
+      type: 'assistant',
+      error: 'overloaded_error',
+      message: { role: 'assistant', content: [] },
+      parent_tool_use_id: null,
+    } as unknown as SDKMessage),
+    recovered: true as const,
+  }
+  const frames = [ready('session-1'), frame]
+
+  expect(projectServerFrames(createTranscriptState(), frames)).toEqual(
+    projectSequential(frames),
+  )
 })

@@ -1393,6 +1393,306 @@ export function projectServerFrame(
 }
 
 /**
+ * Replay-only projection transaction. Ordinary live delivery keeps using
+ * `projectServerFrame`; this path amortizes the assistant-row maps and copies
+ * that otherwise make a long replay quadratic.
+ *
+ * The transaction deliberately handles only contiguous assistant frames. Every
+ * other frame still takes the authoritative single-frame path, preserving its
+ * exact recovery, streaming, and metadata semantics. An assistant run owns
+ * private collections and publishes them once at its boundary.
+ */
+export function projectServerFrames(
+  state: TranscriptState,
+  frames: readonly ServerFrame[],
+): TranscriptState {
+  let projected = state
+  for (let index = 0; index < frames.length; ) {
+    const frame = frames[index]
+    if (!frame || !isAssistantMessageFrame(frame)) {
+      projected = projectServerFrame(projected, frame)
+      index += 1
+      continue
+    }
+
+    const run: ServerFrame[] = [frame]
+    index += 1
+    while (
+      index < frames.length &&
+      frames[index] !== undefined &&
+      isAssistantMessageFrame(frames[index]!)
+    ) {
+      run.push(frames[index]!)
+      index += 1
+    }
+    projected = projectAssistantFrameRun(projected, run)
+  }
+  return projected
+}
+
+type AssistantMessageFrame = Extract<ServerFrame, { kind: 'event' }> & {
+  event: {
+    type: 'message'
+    message: Extract<SDKMessage, { type: 'assistant' }>
+  }
+}
+
+function isAssistantMessageFrame(
+  frame: ServerFrame,
+): frame is AssistantMessageFrame {
+  return frame.kind === 'event' && frame.event.type === 'message' &&
+    frame.event.message.type === 'assistant'
+}
+
+function projectAssistantFrameRun(
+  state: TranscriptState,
+  frames: readonly ServerFrame[],
+): TranscriptState {
+  let sessions: Record<SessionId, TranscriptSessionState> | null = null
+  const drafts = new Map<SessionId, AssistantRunDraft>()
+
+  for (const frame of frames) {
+    if (!isAssistantMessageFrame(frame)) continue
+    const current = sessions?.[frame.sessionId] ?? state.sessions[frame.sessionId]
+    if (!current) continue
+    const draft =
+      drafts.get(frame.sessionId) ??
+      createAssistantRunDraft(current, frame.sessionId)
+    drafts.set(frame.sessionId, draft)
+    if (!projectAssistantMessageIntoRunDraft(draft, frame)) continue
+    if (sessions === null) sessions = { ...state.sessions }
+    sessions[frame.sessionId] = draft.session
+  }
+
+  return sessions === null ? state : { ...state, sessions }
+}
+
+type AssistantRunDraft = {
+  sessionId: SessionId
+  session: TranscriptSessionState
+  rowsOwned: boolean
+  seenFrameIdsOwned: boolean
+  streamingTextBlocksOwned: boolean
+  nextBlockIndexByMessageIdOwned: boolean
+  toolResultsByUseIdOwned: boolean
+  rowIndexes: Map<string, number> | null
+}
+
+function createAssistantRunDraft(
+  session: TranscriptSessionState,
+  sessionId: SessionId,
+): AssistantRunDraft {
+  return {
+    sessionId,
+    session: { ...session },
+    rowsOwned: false,
+    seenFrameIdsOwned: false,
+    streamingTextBlocksOwned: false,
+    nextBlockIndexByMessageIdOwned: false,
+    toolResultsByUseIdOwned: false,
+    rowIndexes: null,
+  }
+}
+
+function projectAssistantMessageIntoRunDraft(
+  draft: AssistantRunDraft,
+  frame: ServerFrame,
+): boolean {
+  if (!isAssistantMessageFrame(frame)) return false
+  const message = frame.event.message
+  const body: unknown = message.message
+  if (!isRecord(body) || !Array.isArray(body.content)) return false
+
+  const frameId = nonEmptyString(message.uuid)
+  if (frameId && draft.session.seenFrameIds[frameId]) return false
+
+  let changed = foldAssistantToolResultBlocksIntoRunDraft(
+    draft,
+    body.content,
+  )
+  if (typeof message.error === 'string') {
+    if (frameId) {
+      markAssistantRunFrameSeen(draft, frameId)
+    }
+    // The single-frame reducer publishes a source carrying the per-frame
+    // recovery cursor even when this typed error has no frame id to dedupe.
+    changed = true
+    if (changed) {
+      draft.session.recoveryInsertAt = recoveryInsertAtFor(frame, draft.session)
+    }
+    return changed
+  }
+
+  const messageId = nonEmptyString(body.id) ?? frameId
+  if (!messageId) {
+    if (changed) {
+      draft.session.recoveryInsertAt = recoveryInsertAtFor(frame, draft.session)
+    }
+    return changed
+  }
+  const parentToolUseId = nonEmptyString(message.parent_tool_use_id)
+  const agentName = normalizeAgentName(message.agent_name)
+  const model = nonEmptyString(body.model)
+  const session = draft.session
+  const fallbackIndex = session.nextBlockIndexByMessageId[messageId] ?? 0
+  const recoveryInsertAt =
+    frame.recovered === true ? (session.recoveryInsertAt ?? 0) : null
+  const firstBlockIndex =
+    session.currentStreamMessageId === messageId &&
+    session.currentStreamBlockIndex !== null
+      ? session.currentStreamBlockIndex
+      : fallbackIndex
+  const stableFrameId = frameId ?? `${messageId}:block-${firstBlockIndex}`
+  const rows = body.content.flatMap((block, localIndex) => {
+    const blockIndex = firstBlockIndex + localIndex
+    const row = projectAssistantContentBlock(block, {
+      sessionId: draft.sessionId,
+      messageId,
+      frameId: stableFrameId,
+      blockIndex,
+      parentToolUseId,
+      ...(agentName ? { agentName } : {}),
+      ...(model !== null ? { model } : {}),
+    })
+    return row === null ? [] : [row]
+  })
+
+  for (const row of rows) {
+    if ('messageId' in row && 'blockIndex' in row) {
+      const key = streamBlockKey(row.messageId, row.blockIndex)
+      if (draft.session.streamingTextBlocks[key]) {
+        ensureAssistantRunStreamingBlocks(draft)
+        delete draft.session.streamingTextBlocks[key]
+      }
+    }
+  }
+  let addedCount = 0
+  if (rows.length > 0) {
+    ensureAssistantRunRows(draft)
+    addedCount = upsertAssistantRunRows(draft, rows, recoveryInsertAt)
+  }
+  ensureAssistantRunNextBlockIndexes(draft)
+  draft.session.nextBlockIndexByMessageId[messageId] = Math.max(
+    fallbackIndex,
+    firstBlockIndex + body.content.length,
+  )
+  if (frameId) markAssistantRunFrameSeen(draft, frameId)
+  draft.session.recoveryInsertAt =
+    recoveryInsertAt === null ? null : recoveryInsertAt + addedCount
+  return true
+}
+
+function recoveryInsertAtFor(
+  frame: ServerFrame,
+  session: TranscriptSessionState,
+): number | null {
+  return frame.kind === 'event' && frame.recovered === true
+    ? (session.recoveryInsertAt ?? 0)
+    : null
+}
+
+function foldAssistantToolResultBlocksIntoRunDraft(
+  draft: AssistantRunDraft,
+  content: unknown[],
+): boolean {
+  let changed = false
+  for (const block of content) {
+    if (!isRecord(block) || typeof block.type !== 'string') continue
+    if (!isToolResultBlockType(block.type)) continue
+    const toolUseId = nonEmptyString(block.tool_use_id)
+    if (!toolUseId) continue
+    const projection = projectToolResultBlock(block, undefined, false)
+    const preview = draft.session.generatedImagePreviewsByUseId[toolUseId]
+    const projected =
+      preview && projection.generatedImage
+        ? {
+            ...projection,
+            generatedImage: { ...projection.generatedImage, preview },
+          }
+        : projection
+    ensureAssistantRunToolResults(draft)
+    draft.session.toolResultsByUseId[toolUseId] = projected
+    changed = true
+  }
+  return changed
+}
+
+function ensureAssistantRunRows(draft: AssistantRunDraft): void {
+  if (draft.rowsOwned) return
+  draft.session.rows = [...draft.session.rows]
+  draft.rowsOwned = true
+}
+
+function ensureAssistantRunSeenFrameIds(draft: AssistantRunDraft): void {
+  if (draft.seenFrameIdsOwned) return
+  draft.session.seenFrameIds = { ...draft.session.seenFrameIds }
+  draft.seenFrameIdsOwned = true
+}
+
+function ensureAssistantRunStreamingBlocks(draft: AssistantRunDraft): void {
+  if (draft.streamingTextBlocksOwned) return
+  draft.session.streamingTextBlocks = { ...draft.session.streamingTextBlocks }
+  draft.streamingTextBlocksOwned = true
+}
+
+function ensureAssistantRunNextBlockIndexes(draft: AssistantRunDraft): void {
+  if (draft.nextBlockIndexByMessageIdOwned) return
+  draft.session.nextBlockIndexByMessageId = {
+    ...draft.session.nextBlockIndexByMessageId,
+  }
+  draft.nextBlockIndexByMessageIdOwned = true
+}
+
+function ensureAssistantRunToolResults(draft: AssistantRunDraft): void {
+  if (draft.toolResultsByUseIdOwned) return
+  draft.session.toolResultsByUseId = { ...draft.session.toolResultsByUseId }
+  draft.toolResultsByUseIdOwned = true
+}
+
+function markAssistantRunFrameSeen(
+  draft: AssistantRunDraft,
+  frameId: string,
+): void {
+  ensureAssistantRunSeenFrameIds(draft)
+  draft.session.seenFrameIds[frameId] = true
+}
+
+function upsertAssistantRunRows(
+  draft: AssistantRunDraft,
+  replacements: TranscriptRow[],
+  recoveryInsertAt: number | null,
+): number {
+  if (replacements.length === 0) return 0
+  const indexes =
+    draft.rowIndexes ??
+    new Map(draft.session.rows.map((row, index) => [row.id, index]))
+  draft.rowIndexes = indexes
+  const added: TranscriptRow[] = []
+  for (const replacement of replacements) {
+    const index = indexes.get(replacement.id)
+    if (index === undefined) {
+      added.push(replacement)
+    } else {
+      draft.session.rows[index] = replacement
+    }
+  }
+  if (added.length === 0) return 0
+  if (recoveryInsertAt === null) {
+    const start = draft.session.rows.length
+    draft.session.rows.push(...added)
+    for (let index = 0; index < added.length; index += 1) {
+      indexes.set(added[index]!.id, start + index)
+    }
+    return added.length
+  }
+  draft.session.rows.splice(recoveryInsertAt, 0, ...added)
+  for (let index = recoveryInsertAt; index < draft.session.rows.length; index += 1) {
+    indexes.set(draft.session.rows[index]!.id, index)
+  }
+  return added.length
+}
+
+/**
  * Full-union dispatch (P2-0). Two variants project today (`assistant` rows,
  * `stream_event` position tracking); every other variant is an explicit,
  * documented no-op returning `state` unchanged (reference-equal — the fixture
