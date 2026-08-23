@@ -1272,8 +1272,8 @@ export function projectServerFrame(
       ...state,
       sessions: {
         ...state.sessions,
-        // A sidecar emits ready immediately before its history replay. Replacing
-        // existing session state would append that replay below retained newer rows.
+        // Ready starts an attach sequence whose history replay replaces retained
+        // newer rows after the sidecar's non-transcript snapshots.
         [frame.sessionId]: session,
       },
     }
