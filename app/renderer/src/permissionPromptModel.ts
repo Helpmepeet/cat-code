@@ -112,6 +112,27 @@ export function permissionKeysAreLive(target: unknown): boolean {
 }
 
 /**
+ * Whether `element` is a control the user could be actively typing into: a
+ * text input, a textarea, or a contenteditable node. Since 4394086 the
+ * mid-turn composer is one of these, so a card mounting mid-word must not
+ * steal its focus — the user's next Enter would land on the card (an unread
+ * allow) instead of sending.
+ *
+ * Deliberately narrower than `permissionKeysAreLive`, which also treats buttons
+ * and the card itself as "owning" the keys; here we only care about text entry.
+ * Lives beside that predicate because both keyboard-owning cards
+ * (`PermissionPrompt`, `AskQuestionFlow`) run the same take-the-keyboard effect
+ * and must not drift apart; neither can export it, since a production `.tsx`
+ * may only export React components at runtime (Fast Refresh boundary).
+ */
+export function isEditableElement(element: Element | null): boolean {
+  if (element === null) return false
+  if (element instanceof HTMLTextAreaElement) return true
+  if (element instanceof HTMLInputElement) return true
+  return (element as HTMLElement).isContentEditable === true
+}
+
+/**
  * Where the rule would be kept, in the words the engine's own save-destination
  * picker shows a user (`src/components/permissions/rules/AddPermissionRules.tsx:20-37`).
  * `session` and `cliArg` are not settings files at all: they last for the run.

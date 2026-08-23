@@ -7,6 +7,10 @@ import {
   buildAskAnswerPayload,
 } from './askQuestionFlowModel.js'
 import type { AskQuestion } from './askQuestionState.js'
+import {
+  PERMISSION_KEY_HOST_ATTR,
+  permissionKeysAreLive,
+} from './permissionPromptModel.js'
 
 const SINGLE: AskQuestion[] = [
   {
@@ -45,22 +49,114 @@ const MULTI: AskQuestion[] = [
 // The source pin below covers the shared key-owner and event-claim guards, but
 // event dispatch remains a GUI-verified surface until the renderer has a DOM
 // harness.
-function render(questions: AskQuestion[], isActivePane = true) {
+function render(
+  questions: AskQuestion[],
+  isActivePane = true,
+  pendingCount?: number,
+) {
   return renderToStaticMarkup(
     <AskQuestionFlow
       isActivePane={isActivePane}
       onAnswer={() => {}}
       onCancel={() => {}}
+      pendingCount={pendingCount}
       questions={questions}
       requestId="perm-1"
     />,
   )
 }
 
+/**
+ * A focus target described the way `Element.closest` answers about it — the
+ * same stand-in `PermissionPrompt.test.tsx` uses, because both cards are read
+ * by the one `permissionKeysAreLive` predicate.
+ */
+function focusTarget(owner: 'host' | 'control' | null) {
+  return {
+    closest: () =>
+      owner === null
+        ? null
+        : {
+            hasAttribute: (name: string) =>
+              owner === 'host' && name === PERMISSION_KEY_HOST_ATTR,
+          },
+  }
+}
+
 test('the window key handler leaves key-owning targets and claimed events alone', () => {
   const source = readFileSync(new URL('./AskQuestionFlow.tsx', import.meta.url), 'utf8')
   expect(source).toContain('!permissionKeysAreLive(event.target)')
   expect(source).toContain('event.defaultPrevented')
+})
+
+test('a keypress inside the card is the card\'s, whatever control holds focus', () => {
+  // The defect: every option row is a <button>, which IS in
+  // FOCUSED_KEY_OWNER_SELECTOR, and `permissionKeysAreLive` resolves the
+  // NEAREST owner. One mouse click left that row focused and reported the whole
+  // legend dead — arrows, 1-9, space, Escape — while Enter fell through to the
+  // browser's default and re-toggled the row instead of advancing. The guard
+  // also runs ahead of the freeform branch, so Enter/Escape inside the "Other…"
+  // field were unreachable too.
+  //
+  // `PermissionPrompt`'s marker cannot fix it: that marker is only read when the
+  // matched owner IS the marked element, and this card is role="group", never an
+  // owner. Its rows are toggles rather than the terminal action, so containment
+  // decides instead — the pin below is the production guard, since SSR can move
+  // no focus.
+  const source = readFileSync(
+    new URL('./AskQuestionFlow.tsx', import.meta.url),
+    'utf8',
+  )
+  expect(source).toContain('cardRef.current?.contains(event.target)')
+  expect(source).toContain(
+    'if (!inCard && !permissionKeysAreLive(event.target)) return',
+  )
+  // Outside the card the shared predicate still rules, so the composer keeps
+  // the keys it is being typed into.
+  expect(permissionKeysAreLive(focusTarget('control'))).toBe(false)
+  expect(permissionKeysAreLive(focusTarget('host'))).toBe(true)
+  expect(permissionKeysAreLive(focusTarget(null))).toBe(true)
+})
+
+test('the active pane can be focused at all, and an inactive one cannot', () => {
+  // A split workspace mounts one flow per visible pane, and only the active
+  // pane listens. A background card must therefore not be a focus stop that
+  // revives shortcuts no listener is behind.
+  expect(render(SINGLE)).toContain('tabindex="-1"')
+  expect(render(SINGLE, false)).not.toContain('tabindex')
+})
+
+test('the mount effect takes the keyboard but never mid-word in the composer', () => {
+  // SSR runs no effects, so pin the production guard: without the editable
+  // check the card steals focus from a half-typed message.
+  const source = readFileSync(
+    new URL('./AskQuestionFlow.tsx', import.meta.url),
+    'utf8',
+  )
+  expect(source).toContain('if (isEditableElement(previous)) return')
+  expect(source).toContain('node.focus()')
+})
+
+test('the card is a bounded scroller with the key strip outside it', () => {
+  const html = render(SINGLE)
+  // Docked in the column rather than portaled over the transcript, so an
+  // unbounded card pushes the composer off screen the moment a preview opens.
+  expect(html).toContain('max-h-[60vh]')
+  expect(html).toContain('overflow-y-auto')
+  // The legend lives outside the scrolling body, so it survives a tall card.
+  const stripAt = html.indexOf('bg-[#0d0d0f]')
+  expect(stripAt).toBeGreaterThan(-1)
+  expect(html.indexOf('overflow-y-auto')).toBeLessThan(stripAt)
+})
+
+test('the kicker names the request family and counts what is queued behind it', () => {
+  // Only past one: a lone question must not imply something follows it.
+  expect(render(SINGLE, true, 1)).not.toContain('pending')
+  expect(render(SINGLE)).not.toContain('pending')
+  const queued = render(SINGLE, true, 3)
+  // Not a bare `>3<`: two options put the "Other…" row at 3 as well.
+  expect(queued).toContain('>3</b>')
+  expect(queued).toContain('pending')
 })
 
 test('renders the question, header chip, option rows with numbers + descriptions', () => {

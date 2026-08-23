@@ -7,6 +7,7 @@ import type { PermissionRequest } from './permissionState.js'
 import {
   buildPermissionOptions,
   formatPermissionInput,
+  isEditableElement,
   permissionKeyIntent,
   permissionKeysAreLive,
   permissionKickerForTool,
@@ -43,21 +44,6 @@ const PREVIEW_LINE_SIGN: Record<PermissionPreviewLine['kind'], string> = {
   ctx: '  ',
 }
 
-/**
- * Whether `element` is a control the user could be actively typing into: a
- * text input, a textarea, or a contenteditable node. Since 4394086 the
- * mid-turn composer is one of these, so a card mounting mid-word must not
- * steal its focus — the user's next Enter would land on the card (an unread
- * allow) instead of sending. Deliberately narrower than
- * `permissionKeysAreLive`'s selector, which also treats buttons and the card
- * itself as "owning" the keys; here we only care about text entry.
- */
-function isEditableElement(element: Element | null): boolean {
-  if (element === null) return false
-  if (element instanceof HTMLTextAreaElement) return true
-  if (element instanceof HTMLInputElement) return true
-  return (element as HTMLElement).isContentEditable === true
-}
 
 /**
  * One permission card, in the prototype's form: an uppercase kicker over a

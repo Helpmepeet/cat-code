@@ -5228,6 +5228,9 @@ export function SessionPane({
           isActivePane={isActivePane}
           onAnswer={onAnswerQuestions}
           onCancel={onCancelQuestions}
+          // The generic queue EXCLUDES this request (it owns its own renderer),
+          // so the total waiting is that queue plus this one.
+          pendingCount={permissionQueue.length + 1}
           questions={askQuestion.questions}
           requestId={askQuestion.request.requestId}
           submitted={askQuestion.submitted}

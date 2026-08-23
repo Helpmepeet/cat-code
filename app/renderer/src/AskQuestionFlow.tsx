@@ -12,6 +12,22 @@
  * prototype's `ASK_ACCENT` (`#f472b6` == `theme.css --accent`), so every accent
  * shade is a static `accent` utility — no interpolated colour classes (the
  * Tailwind v4 dynamic-class trap).
+ *
+ * Container: the prototype's `AskQuestionFlow` renders a bare `<div>` and gets
+ * ALL of its chrome from the `PermissionQueue` card hosting it
+ * (`Permissions.jsx:437-593`) — the raised `#141416` surface, the accent
+ * hairline, the drop shadow, the icon + kicker row, the scrolling body under a
+ * height ceiling, and the mono key strip. Lifting the flow out of that card and
+ * docking it in the chat column dropped every one of those, so they are rebuilt
+ * here. Two deliberate deviations, both flagged in PARITY-LEDGER §7:
+ *   - NOT a `position:fixed` portal (PARITY-LEDGER.md:577): a split workspace
+ *     mounts one flow PER PANE and two body-level portals would stack. The card
+ *     therefore grows DOWNWARD in the dock rather than upward over the
+ *     transcript, which is what the height ceiling below exists to bound.
+ *   - The strip carries the key legend only; the prototype's `Manage rules →`
+ *     and `Keep pending →` are behaviour this app does not have for a question
+ *     (the flow is excluded from the generic queue, so it has no snooze), and
+ *     the legend would otherwise be printed twice on adjacent lines.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -23,7 +39,10 @@ import {
   buildAskAnswerPayload,
   type DraftAnswer,
 } from './askQuestionFlowModel.js'
-import { permissionKeysAreLive } from './permissionPromptModel.js'
+import {
+  isEditableElement,
+  permissionKeysAreLive,
+} from './permissionPromptModel.js'
 
 /** One question's in-progress answer: engine-option indices + freeform text. */
 
@@ -32,6 +51,7 @@ export function AskQuestionFlow({
   requestId,
   submitted,
   isActivePane,
+  pendingCount,
   onAnswer,
   onCancel,
 }: {
@@ -45,6 +65,12 @@ export function AskQuestionFlow({
    * own it — otherwise one keypress resolves every mounted flow at once.
    */
   isActivePane: boolean
+  /**
+   * How many requests are waiting in total, this question included. The kicker
+   * shows it only past one, so answering never looks like the last thing left
+   * when a permission card is queued behind it (`Permissions.jsx:451-456`).
+   */
+  pendingCount?: number
   onAnswer: (answers: AskUserQuestionAnswer[]) => void
   onCancel: () => void
 }) {
@@ -55,6 +81,7 @@ export function AskQuestionFlow({
   const [cursor, setCursor] = useState(0)
   const [otherActive, setOtherActive] = useState(false)
   const otherInputRef = useRef<HTMLInputElement>(null)
+  const cardRef = useRef<HTMLElement>(null)
 
   const q = questions[qi]
   const optionCount = q ? q.options.length : 0
@@ -76,6 +103,31 @@ export function AskQuestionFlow({
   useEffect(() => {
     if (otherActive) otherInputRef.current?.focus()
   }, [otherActive])
+
+  // Take the keyboard on mount, the way the app's other keyboard-owning cards
+  // already do (`PermissionPrompt.tsx`, `PlanPanel.tsx` via `useModalFocus`).
+  // Without this the composer keeps focus and `permissionKeysAreLive` reports
+  // every advertised key dead, so the flow mounts with a key legend nothing
+  // honours.
+  useEffect(() => {
+    if (!isActivePane) return
+    const node = cardRef.current
+    if (!node) return
+    const previous = document.activeElement
+    // Mid-word in the composer: leave focus where the user put it. The legend
+    // stays honest because the window listener re-runs the same predicate on
+    // every keypress rather than trusting a mount-time snapshot.
+    if (isEditableElement(previous)) return
+    const timer = setTimeout(() => node.focus(), 0)
+    return () => {
+      clearTimeout(timer)
+      // Only if this card still holds the keyboard: never yank focus away from
+      // wherever the user moved it in the meantime.
+      if (document.activeElement === node && previous instanceof HTMLElement) {
+        previous.focus()
+      }
+    }
+  }, [isActivePane])
 
   function setDraft(next: DraftAnswer) {
     setAnswers(prev => prev.map((value, i) => (i === qi ? next : value)))
@@ -128,11 +180,31 @@ export function AskQuestionFlow({
         event.defaultPrevented ||
         event.repeat ||
         event.metaKey ||
-        event.altKey ||
-        !permissionKeysAreLive(event.target)
+        event.altKey
       ) {
         return
       }
+      // Inside our own card the CARD owns the keyboard; outside it, defer to the
+      // shared predicate so the composer keeps the keys it is being typed into.
+      //
+      // Not `PermissionPrompt`'s `data-permission-key-host` marker, because the
+      // two cards want opposite things and the marker cannot express this one.
+      // `permissionKeysAreLive` resolves the NEAREST owner, and every option row
+      // here is a `<button>` — an owner — so the marker on the `<section>` is
+      // never even read once focus lands on a row. On the permission card that
+      // is correct: Enter on its focused Deny button must deny. Here the rows
+      // are TOGGLES, not the terminal action, so a click used to leave the row
+      // focused and kill the whole legend — arrows, digits, space, Escape — while
+      // Enter fell through to the browser's default and re-toggled the row
+      // instead of advancing. The same guard runs ahead of the freeform branch,
+      // so Enter and Escape inside the "Other…" field were unreachable too.
+      //
+      // A containment test rather than marking each control: it cannot drift
+      // when a control is added, and it states the actual rule.
+      const inCard =
+        event.target instanceof Node &&
+        cardRef.current?.contains(event.target) === true
+      if (!inCard && !permissionKeysAreLive(event.target)) return
       // In flight: the answer is already sent (buttons are disabled too) — the
       // keyboard must not fire a second advance/submit before the resolve lands.
       if (submitted) return
@@ -211,15 +283,41 @@ export function AskQuestionFlow({
   const focusedPreview =
     cursor < optionCount ? q.options[cursor]?.preview ?? null : null
   const titleId = `ask-question-${requestId}`
+  const keyLegend = q.multiSelect
+    ? '1–9 / space toggle · ↑↓ move · ↵ · esc'
+    : '1–9 pick · ↑↓ move · ↵ · esc'
 
   return (
     <section
       aria-labelledby={titleId}
-      className="border-l-2 border-accent bg-text-primary/[0.04] px-4 py-3"
+      className="overflow-hidden rounded-xl border border-accent/[0.22] bg-[#141416] shadow-[0_14px_38px_rgba(0,0,0,0.5),0_0_0_1px_rgba(0,0,0,0.4)] focus:outline-none"
+      ref={cardRef}
       role="group"
+      tabIndex={isActivePane ? -1 : undefined}
     >
+      {/* Body scrolls under a ceiling: docked in the column (not a portal over
+       * the transcript), an unbounded card pushes the composer off screen as
+       * soon as a preview opens. The prototype bounds the same growth with
+       * `maxHeight: calc(100vh - 150px)` + `overflowY: auto`. */}
+      <div className="max-h-[60vh] overflow-y-auto px-4 py-3">
+      {/* Kicker — glyph + family word + pending count, the grammar the sibling
+       * permission card already uses (`PermissionPrompt.tsx` kicker row). */}
+      <div className="flex items-center gap-2">
+        <span className="flex text-accent">
+          <QuestionGlyph />
+        </span>
+        <span className="text-[9.5px] font-bold uppercase tracking-[0.1em] text-accent">
+          Question
+        </span>
+        {pendingCount !== undefined && pendingCount > 1 ? (
+          <span className="ml-auto font-mono text-[10px] tabular-nums text-text-faint">
+            <b className="text-text-muted">{pendingCount}</b> pending
+          </span>
+        ) : null}
+      </div>
+
       {/* Header chip + multi-select badge + multi-question stepper */}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="mt-2 flex flex-wrap items-center gap-2">
         <span className="rounded border border-accent/30 bg-accent/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-accent">
           {q.header || 'Question'}
         </span>
@@ -391,11 +489,6 @@ export function AskQuestionFlow({
             ↵
           </span>
         </button>
-        <span className="font-mono text-[10px] text-text-faint">
-          {q.multiSelect
-            ? '1–9 / space toggle · ↑↓ move'
-            : '1–9 pick · ↑↓ move'}
-        </span>
         <button
           className="ml-auto inline-flex items-center gap-1.5 bg-transparent text-[11px] text-text-subtle focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-50"
           disabled={submitted}
@@ -408,6 +501,38 @@ export function AskQuestionFlow({
           </span>
         </button>
       </div>
+      </div>
+
+      {/* Key strip — outside the scrolling body, so the legend survives a card
+       * tall enough to scroll (`Permissions.jsx:586-593`). */}
+      <div className="flex items-center justify-between border-t border-shell-seam bg-[#0d0d0f] px-4 py-[7px] font-mono text-[10px] text-text-faint">
+        <span>{keyLegend}</span>
+      </div>
     </section>
+  )
+}
+
+/**
+ * The prototype's `question` glyph (`Permissions.jsx:39`) at the sibling
+ * permission card's kicker size and stroke, so the two cards' kicker rows read
+ * as one family.
+ */
+function QuestionGlyph() {
+  return (
+    <svg
+      aria-hidden
+      fill="none"
+      height="13"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.9"
+      viewBox="0 0 24 24"
+      width="13"
+    >
+      <circle cx="12" cy="12" r="10" />
+      <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+      <line x1="12" y1="17" x2="12.01" y2="17" />
+    </svg>
   )
 }
