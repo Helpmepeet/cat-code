@@ -338,6 +338,18 @@ the incident initially appeared to affect four accounts rather than two.
 Separated by what they achieve. Only §6.2 bears on whether this recurs; §6.1 and
 §6.3 are recovery and cost reduction and are worth doing whatever the cause was.
 
+> **Status, 23 Aug 2026.** Item 4 data cleanup **done**: the stale `codexOAuth`
+> block (`93ce612e`, refresh hash `ea440d3f…`) was removed from
+> `~/.cat-code/.cat-code.json`; backup at
+> `~/.cat-code/.cat-code.json.bak-before-codexoauth-clear`. 41 top-level keys to 40,
+> every surviving value byte-identical, mode `0600`. The desktop app rewrote the
+> config 2m17s later and did **not** resurrect the block. The *code* half of item 4
+> is still open, and matters more: `/login` writes the mirror
+> (`ConsoleOAuthFlow.tsx:217`) and §5.2 says nothing resyncs it, so the next login
+> repopulates what was just deleted. The fallback paths in §5.1 are what make that
+> repopulated value redeemable; closing them is the durable fix.
+> Item 7 **done** in `1c7b4763`. Items 1, 2, 5, 8 open.
+
 ### 6.1 Time-boxed, do first
 
 1. **Decide on the A12 probe before 2026-08-26.** It is the only available check
