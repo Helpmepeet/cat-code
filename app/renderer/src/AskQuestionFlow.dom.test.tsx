@@ -158,10 +158,11 @@ async function press(from: Element, key: string): Promise<KeyboardEvent> {
 }
 
 function optionRows(card: HTMLElement): HTMLButtonElement[] {
-  // The option rows are the buttons carrying a numbered/checked marker; the
-  // footer's Submit and Cancel are the last two buttons in the card.
-  return Array.from(card.querySelectorAll<HTMLButtonElement>('button')).filter(
-    button => button.querySelector('span.font-mono') !== null,
+  // The rows mark themselves. Filtering on a font-mono child used to sweep the
+  // footer's Submit and Cancel in with them, because their key chips are
+  // font-mono too.
+  return Array.from(
+    card.querySelectorAll<HTMLButtonElement>('button[data-ask-option]'),
   )
 }
 
@@ -173,8 +174,18 @@ function buttonWithText(card: HTMLElement, text: string): HTMLButtonElement {
   return match
 }
 
+/**
+ * What the row's checkbox/radio marker shows: '✓' when the option is part of
+ * the answer, empty when it is not. The digit moved out of the marker and onto
+ * a keycap at the row's other end, so the marker now carries ONLY the chosen
+ * state — which is the whole point of the 2026-08-23 vocabulary change.
+ */
 function markerText(row: HTMLElement): string {
-  return row.querySelector('span.font-mono')?.textContent?.trim() ?? ''
+  return row.querySelector('[data-ask-marker]')?.textContent?.trim() ?? ''
+}
+
+function checkedState(row: HTMLElement): string | null {
+  return row.getAttribute('aria-checked')
 }
 
 test('the card takes the keyboard on mount', async () => {
@@ -240,7 +251,8 @@ test('Space on a focused footer button is left to the button', async () => {
   const space = await press(cancel, ' ')
   expect(space.defaultPrevented).toBe(false)
   // ...and it did NOT toggle the cursor's option row behind the user's back.
-  expect(markerText(optionRows(card)[0]!)).toBe('1')
+  expect(markerText(optionRows(card)[0]!)).toBe('')
+  expect(checkedState(optionRows(card)[0]!)).toBe('false')
   expect(calls.answers).toHaveLength(0)
 })
 
@@ -305,6 +317,89 @@ test('mouse clicks accumulate multiple selections', async () => {
   })
   expect(markerText(optionRows(card)[0]!)).toBe('✓')
   expect(markerText(optionRows(card)[1]!)).toBe('✓')
+})
+
+test('two toggles inside ONE task both survive', async () => {
+  // The test above clicks in two separate `act()` calls, so React re-rendered
+  // between them and each toggle read a fresh draft. Batched into one task —
+  // a double-click, a key repeat — both handlers used to read the SAME closed-over
+  // draft and the second overwrote the first, leaving one selection instead of two.
+  const { card } = await mountFlow(MULTI)
+  const rows = optionRows(card)
+  await act(async () => {
+    rows[0]!.click()
+    rows[1]!.click()
+  })
+  expect(markerText(optionRows(card)[0]!)).toBe('✓')
+  expect(markerText(optionRows(card)[1]!)).toBe('✓')
+})
+
+test('a chosen option stays chosen when the cursor moves off it', async () => {
+  // The live failure: the cursor tint outranked the chosen tint, so moving the
+  // pointer to the next row visibly dimmed the answer just picked and the card
+  // read as not selectable at all. Chosen and cursor are now two channels —
+  // `aria-checked` plus a filled marker for chosen, the row tint for cursor.
+  const { card } = await mountFlow(MULTI)
+  await act(async () => {
+    optionRows(card)[0]!.click()
+  })
+  await press(card, 'ArrowDown')
+
+  const rows = optionRows(card)
+  expect(rows[1]!.getAttribute('data-ask-active')).toBe('true')
+  expect(rows[0]!.getAttribute('data-ask-active')).toBe(null)
+  // The cursor moved; the answer did not.
+  expect(checkedState(rows[0]!)).toBe('true')
+  expect(markerText(rows[0]!)).toBe('✓')
+  expect(checkedState(rows[1]!)).toBe('false')
+  expect(markerText(rows[1]!)).toBe('')
+})
+
+test('the multi-select row control is a checkbox and the single-select one a radio', async () => {
+  // The only wordless answer to "may I pick more than one?" — a square outline
+  // against a round one. A filled digit chip said neither.
+  const multi = await mountFlow(MULTI)
+  expect(optionRows(multi.card)[0]!.getAttribute('role')).toBe('checkbox')
+  await multi.tree.unmount()
+
+  const single = await mountFlow(SINGLE)
+  expect(optionRows(single.card)[0]!.getAttribute('role')).toBe('radio')
+})
+
+test('the multi-select count tracks what is selected', async () => {
+  // The second channel: the operator could not tell a click had registered.
+  const { card } = await mountFlow(MULTI)
+  expect(card.textContent).toContain('Pick as many as you like')
+  await act(async () => {
+    optionRows(card)[0]!.click()
+  })
+  expect(card.textContent).toContain('1 selected')
+  await act(async () => {
+    optionRows(card)[1]!.click()
+  })
+  expect(card.textContent).toContain('2 selected')
+  expect(card.textContent).not.toContain('Pick as many as you like')
+})
+
+test('the count includes a freeform answer, which is drawn as chosen too', async () => {
+  const { card } = await mountFlow(MULTI)
+  await act(async () => {
+    optionRows(card)[0]!.click()
+  })
+  await press(card, 'o')
+  const input = card.querySelector('input') as HTMLInputElement
+  await act(async () => {
+    // React installs a value tracker on the node, so assigning `.value`
+    // directly is deduped away and `onChange` never fires. Go through the
+    // prototype setter the way a real keystroke does.
+    const setValue = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      'value',
+    )?.set
+    setValue?.call(input, 'something else')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  expect(card.textContent).toContain('2 selected')
 })
 
 test('Tab-focusing a row moves the cursor onto it', async () => {

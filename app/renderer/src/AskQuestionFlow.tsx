@@ -29,10 +29,17 @@
  *     off screen. The ceiling below stops ONE card monopolising the dock.
  *   - The prototype's full-width key strip, `Manage rules →`, and `Keep
  *     pending →` are omitted by operator request. The Submit and Cancel
- *     controls retain their compact Enter and Escape chips.
+ *     controls retain their compact Enter and Escape chips, and each option row
+ *     carries its own digit keycap in place of the strip.
+ *
+ * Selection vocabulary (2026-08-23): an option row draws its CHOSEN state and
+ * its CURSOR state on two separate channels — see `rowTone` and `markerClass`.
+ * The two used to share one channel with the cursor painted louder, so the
+ * brightest row on the card was whichever one the mouse was over and a picked
+ * answer dimmed as soon as the pointer left it.
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { MAX_QUESTION_ANSWER_CHARS } from '../../shared/limits.js'
 import type { AskUserQuestionAnswer } from '../../shared/protocol.js'
 import type { AskQuestion } from './askQuestionState.js'
@@ -64,6 +71,53 @@ const CARD_CONTROL_SELECTOR = 'a[href], button, input, select, textarea'
 function askKeysLive(card: HTMLElement | null, active: Element | null): boolean {
   if (card !== null && active !== null && card.contains(active)) return true
   return permissionKeysAreLive(active)
+}
+
+/**
+ * Row tint. CHOSEN must outrank WHERE-THE-POINTER-IS, or the loudest thing on
+ * the card is whatever the mouse is passing over — which is what made a
+ * multi-select read as unselectable in live use (the two were `bg-accent/10`
+ * for the cursor against `bg-accent/5` for a pick, so moving the mouse away
+ * from an answer visibly dimmed it). Both states stay in the accent so the
+ * cursor still shows a single-select which row one Enter would submit.
+ */
+function rowTone(checked: boolean, active: boolean): string {
+  if (checked) {
+    return active
+      ? 'border-accent/70 bg-accent/[0.16]'
+      : 'border-accent/50 bg-accent/[0.11]'
+  }
+  return active ? 'border-accent/25 bg-accent/[0.05]' : 'border-transparent'
+}
+
+/**
+ * The marker carries the categorical half of the signal: an EMPTY outlined box
+ * against a FILLED accent one. Alpha steps are a matter of degree and were
+ * missed; empty-versus-filled is not. Its shape is the only place the flow says
+ * how many answers are allowed without words — square for multi-select, round
+ * for single — which is why the row number moved out of it and onto a keycap.
+ */
+function markerClass(
+  multiSelect: boolean,
+  checked: boolean,
+  active: boolean,
+): string {
+  const shape = multiSelect ? 'rounded-[5px]' : 'rounded-full'
+  const tone = checked
+    ? 'border-accent bg-accent text-app-bg'
+    : active
+      ? 'border-accent/60 bg-transparent'
+      : 'border-text-primary/30 bg-transparent'
+  return `mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center border font-mono text-[9px] font-semibold leading-none ${shape} ${tone}`
+}
+
+/** A row's digit shortcut, in the footer chips' keycap grammar. */
+function KeyCap({ children }: { children: ReactNode }) {
+  return (
+    <span className="mt-0.5 shrink-0 rounded border border-shell-seam px-1 font-mono text-[9px] leading-[15px] text-text-faint">
+      {children}
+    </span>
+  )
 }
 
 export function AskQuestionFlow({
@@ -113,6 +167,11 @@ export function AskQuestionFlow({
   const rowCount = optionCount + 1
   const draft = answers[qi] ?? { optionIndices: [], other: '' }
   const otherText = draft.other
+  /** The freeform row is an ANSWER once it carries text, so it shows as one. */
+  const otherFilled = draft.other.trim().length > 0
+  // Counts the freeform row too, or the line reads "2 selected" under three
+  // rows drawn as chosen.
+  const selectedCount = draft.optionIndices.length + (otherFilled ? 1 : 0)
   const canAdvance =
     draft.optionIndices.length > 0 || otherText.trim().length > 0
   const isLast = qi >= questions.length - 1
@@ -181,33 +240,39 @@ export function AskQuestionFlow({
     }
   }, [isActivePane])
 
-  function setDraft(next: DraftAnswer) {
-    setAnswers(prev => prev.map((value, i) => (i === qi ? next : value)))
+  /**
+   * Every draft edit derives from the PREVIOUS draft, never from the `draft`
+   * this render closed over. Two toggles that land in one React task (a
+   * double-click, a key repeat, a test dispatching both in a tick) both read
+   * the same stale closure otherwise, and the second overwrites the first —
+   * a multi-select silently keeping only the last option touched.
+   */
+  function updateDraft(edit: (current: DraftAnswer) => DraftAnswer) {
+    setAnswers(prev => prev.map((value, i) => (i === qi ? edit(value) : value)))
   }
 
   function toggleOption(index: number) {
     if (!q) return
     if (q.multiSelect) {
-      const has = draft.optionIndices.includes(index)
-      setDraft({
-        optionIndices: has
-          ? draft.optionIndices.filter(i => i !== index)
-          : [...draft.optionIndices, index],
-        other: draft.other,
-      })
+      updateDraft(current => ({
+        optionIndices: current.optionIndices.includes(index)
+          ? current.optionIndices.filter(i => i !== index)
+          : [...current.optionIndices, index],
+        other: current.other,
+      }))
     } else {
       // Single-select: one option supersedes any freeform text.
-      setDraft({ optionIndices: [index], other: '' })
+      updateDraft(() => ({ optionIndices: [index], other: '' }))
       setOtherActive(false)
     }
   }
 
   function setOtherText(value: string) {
     // Single-select: typing a freeform answer clears the option pick; multi keeps it.
-    setDraft({
-      optionIndices: q?.multiSelect ? draft.optionIndices : [],
+    updateDraft(current => ({
+      optionIndices: q?.multiSelect ? current.optionIndices : [],
       other: value,
-    })
+    }))
   }
 
   function advance() {
@@ -295,7 +360,7 @@ export function AskQuestionFlow({
         if (key === 'Escape') {
           event.preventDefault()
           setOtherActive(false)
-          setDraft(abandonOtherText(draft))
+          updateDraft(abandonOtherText)
           // Leaving the field unmounts the focused input, which drops focus to
           // <body>. Take it back so the card keeps keyboard ownership.
           cardRef.current?.focus()
@@ -414,11 +479,6 @@ export function AskQuestionFlow({
         <span className="rounded border border-accent/30 bg-accent/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-accent">
           {q.header || 'Question'}
         </span>
-        {q.multiSelect ? (
-          <span className="rounded bg-text-primary/5 px-1.5 py-0.5 text-[9px] font-semibold text-text-muted">
-            multi-select
-          </span>
-        ) : null}
         {questions.length > 1 ? (
           <span className="ml-auto flex items-center gap-1">
             {questions.map((_, i) => (
@@ -450,6 +510,18 @@ export function AskQuestionFlow({
         {q.question}
       </h2>
 
+      {/* Multi-select is the surprising case, so it is the only one that says
+       * anything (§7): a single-select list needs no instruction. The line
+       * doubles as the running confirmation that a pick registered, which is
+       * the second channel the checkboxes alone did not give the operator. */}
+      {q.multiSelect ? (
+        <p className="mt-1 text-[11px] leading-snug text-text-subtle">
+          {selectedCount > 0
+            ? `${selectedCount} selected`
+            : 'Pick as many as you like'}
+        </p>
+      ) : null}
+
       {/* Options — label + description, radio/checkbox marker, preview badge */}
       <div className="mt-1.5 flex flex-col gap-0.5">
         {q.options.map((option, i) => {
@@ -457,18 +529,14 @@ export function AskQuestionFlow({
           const checked = draft.optionIndices.includes(i)
           return (
             <button
-              className={`flex w-full items-start gap-2 rounded-lg px-2.5 py-1 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
-                active
-                  ? 'border border-accent/45 bg-accent/10'
-                  : checked
-                    ? 'border border-accent/25 bg-accent/5'
-                    : 'border border-transparent'
-              }`}
+              aria-checked={checked}
+              className={`flex w-full cursor-pointer items-start gap-2 rounded-lg border px-2.5 py-1 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-default ${rowTone(checked, active)}`}
               data-ask-active={active ? 'true' : undefined}
               data-ask-option
               disabled={submitted}
               key={i}
               onClick={() => toggleOption(i)}
+              role={q.multiSelect ? 'checkbox' : 'radio'}
               // Tab-focusing a row must move the cursor onto it, or the focus
               // ring and the cursor ring sit on different rows and space
               // toggles the one the user is NOT looking at.
@@ -483,17 +551,10 @@ export function AskQuestionFlow({
               type="button"
             >
               <span
-                className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center font-mono text-[9px] font-semibold ${
-                  q.multiSelect ? 'rounded' : 'rounded-full'
-                } ${
-                  checked
-                    ? 'bg-accent text-app-bg'
-                    : active
-                      ? 'bg-accent/50 text-app-bg'
-                      : 'bg-text-primary/[0.06] text-text-subtle'
-                }`}
+                className={markerClass(q.multiSelect, checked, active)}
+                data-ask-marker
               >
-                {checked ? '✓' : i + 1}
+                {checked ? '✓' : ''}
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block text-xs font-medium leading-snug text-text-primary">
@@ -510,34 +571,30 @@ export function AskQuestionFlow({
                   preview
                 </span>
               ) : null}
+              {keysAdvertised && i < 9 ? <KeyCap>{i + 1}</KeyCap> : null}
             </button>
           )
         })}
 
         {/* Built-in "Other…" freeform row — always appended by this UI */}
         <div
-          className={`flex items-center gap-2 rounded-lg px-2.5 py-1 ${
-            cursor === otherIndex
-              ? 'border border-accent/45 bg-accent/10'
-              : 'border border-transparent'
-          }`}
+          className={`flex items-center gap-2 rounded-lg border px-2.5 py-1 ${rowTone(
+            otherFilled,
+            cursor === otherIndex,
+          )}`}
           data-ask-active={cursor === otherIndex ? 'true' : undefined}
           onFocus={() => setCursor(otherIndex)}
           onMouseEnter={() => setCursor(otherIndex)}
         >
           <span
-            className={`flex h-4 w-4 shrink-0 items-center justify-center font-mono text-[9px] font-semibold ${
-              q.multiSelect ? 'rounded' : 'rounded-full'
-            } ${
-              cursor === otherIndex
-                ? 'bg-accent/50 text-app-bg'
-                : 'bg-text-primary/[0.06] text-text-muted'
-            }`}
+            className={markerClass(
+              q.multiSelect,
+              otherFilled,
+              cursor === otherIndex,
+            )}
+            data-ask-marker
           >
-            {/* The row number IS the shortcut, so it may only claim a key that
-             * exists: past 8 options the marker shows the letter key instead of
-             * an unreachable two-digit number. */}
-            {otherIndex < 9 ? otherIndex + 1 : 'o'}
+            {otherFilled ? '✓' : ''}
           </span>
           {otherActive ? (
             <input
@@ -557,7 +614,7 @@ export function AskQuestionFlow({
             />
           ) : (
             <button
-              className="flex-1 bg-transparent text-left text-xs text-text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              className="flex-1 cursor-pointer bg-transparent text-left text-xs text-text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-default"
               disabled={submitted}
               onClick={() => setOtherActive(true)}
               type="button"
@@ -565,6 +622,12 @@ export function AskQuestionFlow({
               {otherText.trim() ? otherText : 'Other…'}
             </button>
           )}
+          {/* The row number IS the shortcut, so it may only claim a key that
+           * exists: past 8 options the cap shows the letter key instead of an
+           * unreachable two-digit number. */}
+          {keysAdvertised ? (
+            <KeyCap>{otherIndex < 9 ? otherIndex + 1 : 'o'}</KeyCap>
+          ) : null}
         </div>
       </div>
 

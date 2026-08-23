@@ -137,7 +137,7 @@ test('the kicker names the request family and counts what is queued behind it', 
   expect(queued).toContain('pending')
 })
 
-test('renders the question, header chip, option rows with numbers + descriptions', () => {
+test('renders the question, header chip, option rows with key caps + descriptions', () => {
   const html = render(SINGLE)
   // Not a raw JSON dump — the real flow.
   expect(html).toContain('Which date library should we use?')
@@ -145,8 +145,28 @@ test('renders the question, header chip, option rows with numbers + descriptions
   expect(html).toContain('date-fns')
   expect(html).toContain('lightweight &amp; tree-shakeable')
   expect(html).toContain('luxon')
-  // Numbered pick affordance (option 1 badge, cursor starts at row 0).
-  expect(html).toContain('1')
+  // The digit is a SHORTCUT, so it reads as a key cap at the row's far end
+  // rather than as the state marker at its head.
+  expect(html).toContain('>1</span>')
+})
+
+test('a row past the ninth advertises no key cap, because no key reaches it', () => {
+  const eleven: AskQuestion[] = [
+    {
+      question: 'Which one?',
+      header: 'Pick',
+      multiSelect: false,
+      options: Array.from({ length: 11 }, (_, i) => ({
+        label: `option ${i + 1}`,
+        description: '',
+        preview: null,
+      })),
+    },
+  ]
+  const html = render(eleven)
+  expect(html).toContain('>9</span>')
+  expect(html).not.toContain('>10</span>')
+  expect(html).not.toContain('>11</span>')
 })
 
 test('renders the preview badge for an option carrying a preview, and the focused preview pane', () => {
@@ -190,7 +210,8 @@ test('single question shows a Submit footer with no full-width key legend or ste
   expect(html).toContain('Submit')
   expect(html).not.toContain('pick · ↑↓ move')
   expect(html).not.toContain('Next question')
-  expect(html).not.toContain('multi-select')
+  // Single-select is the ordinary case and says nothing about how to pick (§7).
+  expect(html).not.toContain('Pick as many as you like')
 })
 
 test('multi-question shows Next question + stepper + the multi-select badge on q2', () => {
@@ -202,10 +223,51 @@ test('multi-question shows Next question + stepper + the multi-select badge on q
   expect(html).toContain('1/2')
 })
 
-test('a multi-select question renders the multi-select badge without a full-width key legend', () => {
+test('a multi-select question says so in words, without a full-width key legend', () => {
   const html = render([MULTI[1]!])
-  expect(html).toContain('multi-select')
+  // The old `multi-select` chip was a 9px metadata tag next to the header chip,
+  // and it read as a label rather than as an instruction. What the operator
+  // needed was to be told what to DO with the list.
+  expect(html).toContain('Pick as many as you like')
+  expect(html).not.toContain('multi-select')
   expect(html).not.toContain('space toggle · ↑↓ move')
+})
+
+test('an option row is a real checkbox or radio, empty until it is chosen', () => {
+  // Chosen state used to live in an alpha step and a digit swapping to a tick
+  // inside an already-filled chip. Empty-outline versus filled-accent is a
+  // difference in KIND, which is what survived live use.
+  const multi = render([MULTI[1]!])
+  expect(multi).toContain('role="checkbox"')
+  expect(multi).toContain('aria-checked="false"')
+  expect(multi).toContain('rounded-[5px]') // square: more than one allowed
+  const single = render(SINGLE)
+  expect(single).toContain('role="radio"')
+  expect(single).toContain('rounded-full') // round: exactly one
+
+  // Nothing is chosen at rest, so no marker anywhere carries a tick — including
+  // the row the cursor starts on, which used to render in the loudest tint on
+  // the card before the operator had touched anything.
+  expect(single).not.toContain('✓')
+})
+
+test('a chosen row outranks the cursor row', () => {
+  // `rowTone`: the cursor is the WEAKER accent step. It was the stronger one,
+  // so the brightest row on the card was whichever the mouse was passing over.
+  const html = render(SINGLE)
+  expect(html).toContain('border-accent/25 bg-accent/[0.05]') // cursor, unchosen
+  expect(html).not.toContain('border-accent/45 bg-accent/10') // the old cursor tint
+})
+
+test('every option row can be clicked, and says so', () => {
+  // Tailwind v4 preflight dropped v3's `button { cursor: pointer }`, so a row
+  // that is a plain <button> shows an arrow. Nothing about the list invited a
+  // click.
+  const html = render(SINGLE)
+  // Both the option rows and the "Other…" row, each named exactly: measured as
+  // a computed `cursor: default` on every row before this change.
+  expect(html).toContain('flex w-full cursor-pointer items-start')
+  expect(html).toContain('flex-1 cursor-pointer bg-transparent')
 })
 
 test('cancel affordance is present (esc)', () => {
