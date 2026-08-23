@@ -1,6 +1,6 @@
 # Incident Report: Codex accounts `onbi` and `bluesky` rejected server-side
 
-**Date of report:** 23 August 2026 (rev 3)
+**Date of report:** 23 August 2026 (rev 4)
 **Date of incident:** 22 August 2026, 14:52:38Z and 15:10:33Z (21:52 and 22:10 local, UTC+7)
 **Accounts affected:** `onbi` (`14f2f119…`), `bluesky` (`93ce612e…`)
 **Accounts unaffected:** `main` (`ca889574…`)
@@ -31,6 +31,20 @@ defect in the token path.
 and account history are consistent with correlated enforcement or an account-security
 action, but they do not establish it, and this report does not attribute a cause.
 Section 4 states that hypothesis and the alternatives it cannot separate.
+
+**Rev 4 narrows the question without answering it.** One check that would halve the
+candidate set was available all along and never run: `onbi` holds a second, separate
+OAuth session in the official Codex CLI, and whether it still authenticates
+distinguishes an account-wide termination from one scoped to this client's sessions
+(§3.6). That session expires **2026-08-26**, after which the check is gone.
+
+**On prevention.** Only two levers are inside our control. One is a real defect: the
+spent refresh token in §5.1 is reachable and redeeming it is the canonical
+reuse-detection trigger, so our own code could cause the next revocation unaided. The
+other is not a code change at all but a decision about pooling five subscription
+accounts from one host under one client identity (§4.1, §6.2). If neither applies —
+if this was a password reset or an upstream fault — there was nothing to prevent, and
+the remaining work is making the failure cheaper (§6.3).
 
 One latent defect and two hygiene issues were found while investigating; see §5.
 
@@ -161,6 +175,22 @@ into `onbi` under a **different OAuth session** and therefore a separate refresh
 chain (verifiable as a boolean via A5; the session identifiers are not printed). That
 file has not been written since 2026-08-16 and rotated nothing on 08-22.
 
+**That session is also an untested discriminator, and it is perishable.** Rev 3 used
+it only to exclude a rotation cause and never asked whether it still authenticates.
+Its access token was issued 2026-08-16 and carries `exp` 2026-08-26 (A11), so it is
+locally unexpired at the time of writing. Local expiry is not server-side validity
+(§2 step 2) — which is exactly why probing it is informative:
+
+| Probe result | What it excludes | What it leaves |
+|---|---|---|
+| Still authenticates | Password reset, "log out of all devices", account-level disable — all of which terminate every session for the account | A revocation scoped to the sessions this client held |
+| Also rejected | A revocation scoped to this client's sessions | Account-wide termination, by any of the causes in §4.2 |
+
+This does not identify a cause. It halves §4.2. A11 prints the expiry; A12 is the
+probe itself, and is **not run as part of this report** — it spends a live credential
+and is the account's only remaining independent session (§10 operator gate).
+After 2026-08-26 the test is no longer available.
+
 ## 4. Hypothesis: correlated action against the secondary accounts
 
 **This section is a hypothesis, not a finding.** It is offered because the pattern is
@@ -184,16 +214,43 @@ the account created by Google SSO has not been rejected.
 | **`main`** | `urn:openai:amr:google` | **never rejected** |
 
 Request volume does not separate them: `main` served 359 requests on 08-22, the same
-day the other two were rejected, and ran concurrently with both.
+day the other two were rejected, and ran concurrently with both. Neither does plan
+tier: all five accounts carry `chatgpt_plan_type=plus` (A11).
+
+**This table is confounded, and rev 3 did not say so.** `amr` is presented as the
+variable, but the four OTP accounts are also the four accounts that exist only to be
+pooled, and the Google account is also the operator's own everyday account. "Created
+by email OTP" and "created to be a pool secondary" select the identical four rows
+here. No observation in this corpus separates them, so the table cannot be read as
+evidence that the *authentication method* is what matters.
 
 **Correlatable signals from one host.** Five distinct identities and org ids from one
 IP (`cf-ray` suffix `BKK`); overlapping concurrent use of `onbi` and `bluesky` on
 08-21 and 08-22; and a failover in which one workload shape (57,320-byte instructions,
 hash `d635eab6`, messages=73) crossed between account identities inside one second.
 
-**Inconsistent client identity.** At authorization, `codex-client.ts:149-160` sends
-`originator=cat-code`. At request time, `codex-fetch-adapter.ts:3385-3389` sends
-`originator: codex_cli_rs`.
+**Client identity: the fork authenticates as the official Codex CLI.** Rev 3 recorded
+this as an inconsistent `originator` and understated it. Cat Code does not merely send
+the official CLI's originator string at request time; it performs the entire OAuth
+flow under the official CLI's own public client identity:
+
+| Surface | Value | Source |
+|---|---|---|
+| OAuth `client_id` | the official Codex CLI's public client id | `src/constants/codex-oauth.ts` |
+| `redirect_uri` | `http://localhost:1455/auth/callback` (the CLI's port) | `src/constants/codex-oauth.ts` |
+| Authorize-time `originator` | `cat-code` | `src/services/oauth/codex-client.ts:160` |
+| Request-time `originator` | `codex_cli_rs` | `src/services/api/codex-fetch-adapter.ts:3389` |
+| Refresh / usage / image paths | `codex_cli_rs` | `codexTokenRefresh.ts:406`, `codexUsage.ts:223`, `GenerateImageTool.ts:879` |
+
+`cat-code` therefore appears exactly once per account, as a non-standard query
+parameter at authorization; every subsequent request is indistinguishable on its
+headers from the official client. Combined with the other signals in this section,
+what an upstream correlator sees is five `plus` accounts on one address presenting
+one client identity, with a single workload shape crossing between two of them
+inside one second.
+
+This is recorded as an observation about what is correlatable. It is not evidence of
+any particular upstream response, and §4.2 still applies.
 
 ### 4.2 What these observations cannot separate
 
@@ -278,20 +335,46 @@ the incident initially appeared to affect four accounts rather than two.
 
 ## 6. Recommendations
 
-1. **Re-login `onbi` and `bluesky` via `/login`.** Vault files are otherwise intact;
-   only the `refresh` block is terminal.
-2. **Treat re-login as an observation, not a test that settles §4.** A second
+Separated by what they achieve. Only §6.2 bears on whether this recurs; §6.1 and
+§6.3 are recovery and cost reduction and are worth doing whatever the cause was.
+
+### 6.1 Time-boxed, do first
+
+1. **Decide on the A12 probe before 2026-08-26.** It is the only available check
+   that halves §4.2 (§3.6), and the session it depends on expires that day. It
+   spends a live credential and is operator-gated; not deciding is also a decision,
+   and after 08-26 it is made by default.
+2. **Re-login `onbi` and `bluesky` via `/login`.** Vault files are otherwise intact;
+   only the `refresh` block is terminal. Do this *after* A12 or after declining it:
+   re-login does not disturb the separate CLI session, but sequencing keeps the probe
+   result unambiguous.
+3. **Treat re-login as an observation, not a test that settles §4.** A second
    rejection under similar usage would be *consistent with* the hypothesis; it would
    not confirm it, since the alternatives in §4.2 can also recur.
-3. **No change to the token path is indicated.** Classification, failover, and
+
+### 6.2 Prevention, honestly scoped
+
+4. **Clear the stale `codexOAuth` credential** (§5.1). This is the only identified
+   mechanism by which *our own code* could cause a revocation: redeeming a spent
+   refresh token from a live chain is the canonical reuse-detection trigger, and
+   §5.1 shows two reachable paths to it. Add resync for the mirror (§5.2).
+5. **Everything else that bears on recurrence is a policy decision, not a code
+   change.** If §4's hypothesis is right, the operative input is that five
+   subscription accounts are pooled and rotated from one host under one client
+   identity (§4.1). The prevention that follows is to stop doing that — consolidate
+   onto one account, or move sustained volume to metered API access. Reducing the
+   *correlatability* of the pattern is not prevention and is deliberately not
+   proposed here.
+6. **No change to the token path is indicated.** Classification, failover, and
    terminal recording all behaved correctly.
-4. **Clear the stale `codexOAuth` credential and add resync for the mirror**
-   (§5.1, §5.2). §5.1 is a defect, not cosmetic.
-5. Consider suppressing repeat `marked dead` emission for already-terminal accounts
-   (§5.3).
-6. `markAccountDead` (`codexAccountPool.ts:609-636`) emits only `logForDebugging`;
-   no user-facing surface reports an account dying. Consider adding one, independent
-   of what caused this incident.
+
+### 6.3 Reduce the cost of the next one
+
+7. Suppress repeat `marked dead` emission for already-terminal accounts (§5.3). The
+   noise is why this incident initially read as four accounts rather than two.
+8. `markAccountDead` (`codexAccountPool.ts:609-636`) emits only `logForDebugging`;
+   no user-facing surface reports an account dying. Add one, independent of what
+   caused this incident.
 
 ## 7. Open questions and limits of this analysis
 
@@ -414,7 +497,49 @@ grep -h "14f2f119\|85980e5b" ~/.cat-code/debug/8bdf9d62-*.txt | awk '$1 >= "2026
 cd ~/.cat-code/debug && grep -rh "ENOTFOUND\|ECONNREFUSED\|ENETUNREACH" .
 ```
 
+**A11 — plan tier, auth method, and token dates for all five accounts (§4.1, §3.6).
+Prints alias, plan, `amr`, issue and expiry dates only:**
+
+```bash
+uv run python -c '
+import json,glob,os,base64,datetime
+for f in sorted(glob.glob(os.path.expanduser("~/codex-vault/accounts/*.json"))):
+    v=json.load(open(f)); t=v["tokens"]["access_token"]
+    p=t.split(".")[1]; p+="="*(-len(p)%4)
+    c=json.loads(base64.urlsafe_b64decode(p)); a=c["https://api.openai.com/auth"]
+    d=lambda k: datetime.datetime.fromtimestamp(c[k],datetime.UTC).strftime("%Y-%m-%d")
+    print(v.get("alias"), a.get("chatgpt_plan_type"), a.get("amr"), d("iat"), d("exp"), (v.get("refresh") or {}).get("state"))
+'
+```
+
+Run the same decode against `~/.codex/auth.json` for the separate `onbi` session
+referenced in §3.6; rev 4 measured `iat` 2026-08-16, `exp` 2026-08-26.
+
+**A12 — liveness probe for the §3.6 discriminator. NOT RUN.** Operator-gated: it
+spends a live credential and, if the §4 hypothesis is right, may itself terminate the
+last independent session for that account. Read-only GET against the usage endpoint
+(`codexUsage.ts:84`, headers per `codexUsage.ts:216-224`); it does not refresh,
+rotate, or write. Probe the `~/.codex/auth.json` token for `onbi`, with vault `onbi`
+(expected reject) and vault `main` (expected accept) as controls, so the result is
+interpretable in both directions. Interpretation table in §3.6.
+
 ## Appendix B: revision history
+
+**Rev 4 (23 Aug 2026)** — third pass, prompted by the question the earlier revisions
+declined to push on: why, and what prevents it. Three changes of substance. §3.6 now
+records that the separate `onbi` CLI session is an **untested discriminator** with a
+hard expiry of 2026-08-26; rev 3 held that session in hand and used it only to exclude
+a rotation cause. §4.1's `amr` table is marked **confounded** — the four OTP accounts
+are also the four pool secondaries, all five accounts are `plus` (A11), and nothing in
+this corpus separates auth method from account role. The client-identity note is
+upgraded from "inconsistent `originator`" to what the code actually does: the fork
+performs OAuth under the official Codex CLI's own public client id and callback port,
+so `cat-code` is emitted once per account at authorization and never again;
+`codex-client.ts` anchors corrected to `src/services/oauth/codex-client.ts:160` and
+`src/constants/codex-oauth.ts`. §6 restructured into recovery / prevention / cost, and
+states plainly that the only prevention inside our control is §5.1 plus a policy
+decision about pooling; reducing correlatability is named and declined. Appendix gains
+A11 and A12; A12 is specified but deliberately not run.
 
 **Rev 3 (23 Aug 2026)** — second review pass. WebSocket count corrected 22 → **24**
 distinct failures (rev 2 merged two `bluesky` failures 157 ms apart by truncating
