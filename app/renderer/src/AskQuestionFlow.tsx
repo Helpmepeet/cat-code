@@ -19,15 +19,19 @@
  * hairline, the drop shadow, the icon + kicker row, the scrolling body under a
  * height ceiling, and the mono key strip. Lifting the flow out of that card and
  * docking it in the chat column dropped every one of those, so they are rebuilt
- * here. Two deliberate deviations, both flagged in PARITY-LEDGER §7:
+ * here. Three deliberate deviations, each flagged in PARITY-LEDGER §7:
  *   - NOT a `position:fixed` portal (PARITY-LEDGER.md:577): a split workspace
  *     mounts one flow PER PANE and two body-level portals would stack. The card
  *     therefore grows DOWNWARD in the dock rather than upward over the
  *     transcript, which is what the height ceiling below exists to bound.
  *   - The strip carries the key legend only; the prototype's `Manage rules →`
  *     and `Keep pending →` are behaviour this app does not have for a question
- *     (the flow is excluded from the generic queue, so it has no snooze), and
- *     the legend would otherwise be printed twice on adjacent lines.
+ *     (the flow is excluded from the generic queue, so it has no snooze).
+ *   - The per-mode hint therefore MOVED here out of the footer rail, which the
+ *     prototype keeps in both places, and it is gated on `keysAdvertised`: the
+ *     prototype's strip is unconditional because a modal portal has no rival
+ *     focus owner, whereas this card can mount behind a live composer that
+ *     keeps every key it advertises.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -45,6 +49,29 @@ import {
 } from './permissionPromptModel.js'
 
 /** One question's in-progress answer: engine-option indices + freeform text. */
+
+/**
+ * Keys a focused control acts on ITSELF. Inside the card these stay the
+ * control's: Enter on Cancel must cancel, Space on Submit must submit, and
+ * Enter on an option row toggles that row, which is what its activation means.
+ * Everything else inside the card (arrows, digits, o, Escape) belongs to the
+ * card, which is what makes the cursor survive a click on a row.
+ */
+const CONTROL_ACTIVATION_KEYS = new Set([' ', 'Enter'])
+
+/** Controls that own their activation keys, per `FOCUSED_KEY_OWNER_SELECTOR`. */
+const CARD_CONTROL_SELECTOR = 'a[href], button, input, select, textarea'
+
+/**
+ * Whether the flow's shortcuts would fire for `active`. Inside the card they do
+ * (the containment rule in the key handler); outside it the shared predicate
+ * decides, so the composer keeps the keys it is being typed into. The strip and
+ * the key chips read this so they never advertise a dead key.
+ */
+function askKeysLive(card: HTMLElement | null, active: Element | null): boolean {
+  if (card !== null && active !== null && card.contains(active)) return true
+  return permissionKeysAreLive(active)
+}
 
 export function AskQuestionFlow({
   questions,
@@ -82,6 +109,10 @@ export function AskQuestionFlow({
   const [otherActive, setOtherActive] = useState(false)
   const otherInputRef = useRef<HTMLInputElement>(null)
   const cardRef = useRef<HTMLElement>(null)
+  // Optimistic, like the sibling card's: the mount effect below is about to take
+  // the keyboard, and it corrects this from the real `activeElement`. Every
+  // later focus move re-derives it through the section's own focus handlers.
+  const [keysLive, setKeysLive] = useState(isActivePane)
 
   const q = questions[qi]
   const optionCount = q ? q.options.length : 0
@@ -104,26 +135,62 @@ export function AskQuestionFlow({
     if (otherActive) otherInputRef.current?.focus()
   }, [otherActive])
 
+  // The height ceiling below made this a keyboard-driven list inside a scroll
+  // container, so the cursor can now leave the viewport: ↑↓ past the visible
+  // rows moved an invisible highlight, and Enter then resolved a row the user
+  // could not see. Same one-liner the app's other four such lists use
+  // (`CommandPalette.tsx:69-74`, `SlashCommandPicker`, `MentionPicker`,
+  // `TasksDialog`).
+  useEffect(() => {
+    const active = cardRef.current?.querySelector('[data-ask-active="true"]')
+    if (active) active.scrollIntoView({ block: 'nearest' })
+  }, [cursor, otherActive, qi])
+
   // Take the keyboard on mount, the way the app's other keyboard-owning cards
   // already do (`PermissionPrompt.tsx`, `PlanPanel.tsx` via `useModalFocus`).
   // Without this the composer keeps focus and `permissionKeysAreLive` reports
   // every advertised key dead, so the flow mounts with a key legend nothing
   // honours.
   useEffect(() => {
-    if (!isActivePane) return
+    if (!isActivePane) {
+      setKeysLive(false)
+      return
+    }
     const node = cardRef.current
     if (!node) return
     const previous = document.activeElement
-    // Mid-word in the composer: leave focus where the user put it. The legend
-    // stays honest because the window listener re-runs the same predicate on
-    // every keypress rather than trusting a mount-time snapshot.
-    if (isEditableElement(previous)) return
-    const timer = setTimeout(() => node.focus(), 0)
+    // Mid-word: leave focus where the user put it. The strip below is gated on
+    // `keysLive`, so it stops advertising keys this branch just left dead
+    // rather than printing a legend nothing honours.
+    if (isEditableElement(previous)) {
+      setKeysLive(askKeysLive(node, previous))
+      return
+    }
+    // A modal owns the screen: this card is docked BEHIND its scrim, so taking
+    // the keyboard here would let digits and Enter answer a question the user
+    // cannot see while they are looking at the dialog (`PlanPanel` sets both
+    // attributes, `overlayFocus.ts` arbitrates the stack this effect is not on).
+    if (previous instanceof Element && previous.closest('[aria-modal="true"]')) {
+      setKeysLive(false)
+      return
+    }
+    let took = false
+    const timer = setTimeout(() => {
+      node.focus()
+      took = document.activeElement === node
+      setKeysLive(took)
+    }, 0)
     return () => {
       clearTimeout(timer)
-      // Only if this card still holds the keyboard: never yank focus away from
-      // wherever the user moved it in the meantime.
-      if (document.activeElement === node && previous instanceof HTMLElement) {
+      if (!took || !(previous instanceof HTMLElement)) return
+      // `document.activeElement === node` is FALSE on the real unmount path:
+      // React runs passive cleanup after the host node is detached, and
+      // detaching the focused node resets `activeElement` to <body>. Checking
+      // only that never restored anything, which is why answering a question
+      // left the keyboard on <body>. Restore when we still hold focus, or when
+      // it fell to the body because our node went away.
+      const active = document.activeElement
+      if (active === node || active === null || active === document.body) {
         previous.focus()
       }
     }
@@ -193,18 +260,28 @@ export function AskQuestionFlow({
       // here is a `<button>` — an owner — so the marker on the `<section>` is
       // never even read once focus lands on a row. On the permission card that
       // is correct: Enter on its focused Deny button must deny. Here the rows
-      // are TOGGLES, not the terminal action, so a click used to leave the row
-      // focused and kill the whole legend — arrows, digits, space, Escape — while
-      // Enter fell through to the browser's default and re-toggled the row
-      // instead of advancing. The same guard runs ahead of the freeform branch,
-      // so Enter and Escape inside the "Other…" field were unreachable too.
+      // are TOGGLES, so a click used to leave the row focused and kill the whole
+      // legend — arrows, digits, space, Escape — and the same guard ran ahead of
+      // the freeform branch, so Enter and Escape inside "Other…" were
+      // unreachable too.
       //
       // A containment test rather than marking each control: it cannot drift
       // when a control is added, and it states the actual rule.
+      const element = event.target instanceof Element ? event.target : null
       const inCard =
-        event.target instanceof Node &&
-        cardRef.current?.contains(event.target) === true
+        element !== null && cardRef.current?.contains(element) === true
       if (!inCard && !permissionKeysAreLive(event.target)) return
+
+      // Containment claims the NAVIGATION keys, never a focused control's own
+      // activation. Claiming those too made Enter on the focused Cancel button
+      // submit the answer instead of declining, because `preventDefault()`
+      // suppresses the browser's Enter → click. The freeform input is the one
+      // exemption: the `inOurInput` branch below is what handles Enter/Escape
+      // in it, and it needs them.
+      if (inCard && CONTROL_ACTIVATION_KEYS.has(event.key)) {
+        const control = element.closest(CARD_CONTROL_SELECTOR)
+        if (control !== null && control !== otherInputRef.current) return
+      }
       // In flight: the answer is already sent (buttons are disabled too) — the
       // keyboard must not fire a second advance/submit before the resolve lands.
       if (submitted) return
@@ -218,6 +295,9 @@ export function AskQuestionFlow({
           event.preventDefault()
           setOtherActive(false)
           setDraft(abandonOtherText(draft))
+          // Leaving the field unmounts the focused input, which drops focus to
+          // <body>. Take it back so the card keeps the keyboard it advertises.
+          cardRef.current?.focus()
           return
         }
         if (key === 'Enter') {
@@ -286,11 +366,24 @@ export function AskQuestionFlow({
   const keyLegend = q.multiSelect
     ? '1–9 / space toggle · ↑↓ move · ↵ · esc'
     : '1–9 pick · ↑↓ move · ↵ · esc'
+  // The sibling card's honesty rule (P4-43, PARITY-LEDGER §7): never advertise
+  // a key that will not fire. Both dead states are reachable here — a
+  // background pane registers no listener at all, and a card that mounted while
+  // the composer held focus left every key to the composer.
+  const keysAdvertised = isActivePane && keysLive
 
   return (
     <section
       aria-labelledby={titleId}
       className="overflow-hidden rounded-xl border border-accent/[0.22] bg-[#141416] shadow-[0_14px_38px_rgba(0,0,0,0.5),0_0_0_1px_rgba(0,0,0,0.4)] focus:outline-none"
+      // Focus events bubble, so these fire for the card AND every control in
+      // it — which is exactly the containment rule the key handler applies.
+      onBlur={event =>
+        setKeysLive(
+          askKeysLive(cardRef.current, event.relatedTarget as Element | null),
+        )
+      }
+      onFocus={() => setKeysLive(true)}
       ref={cardRef}
       role="group"
       tabIndex={isActivePane ? -1 : undefined}
@@ -371,9 +464,17 @@ export function AskQuestionFlow({
                     ? 'border border-accent/25 bg-accent/5'
                     : 'border border-transparent'
               }`}
+              data-ask-active={active ? 'true' : undefined}
               disabled={submitted}
               key={i}
               onClick={() => toggleOption(i)}
+              // Tab-focusing a row must move the cursor onto it, or the focus
+              // ring and the cursor ring sit on different rows and space
+              // toggles the one the user is NOT looking at.
+              onFocus={() => {
+                setCursor(i)
+                setOtherActive(false)
+              }}
               onMouseEnter={() => {
                 setCursor(i)
                 setOtherActive(false)
@@ -419,6 +520,8 @@ export function AskQuestionFlow({
               ? 'border border-accent/45 bg-accent/10'
               : 'border border-transparent'
           }`}
+          data-ask-active={cursor === otherIndex ? 'true' : undefined}
+          onFocus={() => setCursor(otherIndex)}
           onMouseEnter={() => setCursor(otherIndex)}
         >
           <span
@@ -485,9 +588,11 @@ export function AskQuestionFlow({
           type="button"
         >
           {isLast ? 'Submit' : 'Next question'}
-          <span className="rounded border border-app-bg/35 px-1 font-mono text-[9px] leading-none">
-            ↵
-          </span>
+          {keysAdvertised ? (
+            <span className="rounded border border-app-bg/35 px-1 font-mono text-[9px] leading-none">
+              ↵
+            </span>
+          ) : null}
         </button>
         <button
           className="ml-auto inline-flex items-center gap-1.5 bg-transparent text-[11px] text-text-subtle focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-50"
@@ -496,18 +601,25 @@ export function AskQuestionFlow({
           type="button"
         >
           Cancel
-          <span className="rounded border border-text-ghost px-1 font-mono text-[9px] leading-none text-text-faint">
-            esc
-          </span>
+          {keysAdvertised ? (
+            <span className="rounded border border-text-ghost px-1 font-mono text-[9px] leading-none text-text-faint">
+              esc
+            </span>
+          ) : null}
         </button>
       </div>
       </div>
 
       {/* Key strip — outside the scrolling body, so the legend survives a card
-       * tall enough to scroll (`Permissions.jsx:586-593`). */}
-      <div className="flex items-center justify-between border-t border-shell-seam bg-[#0d0d0f] px-4 py-[7px] font-mono text-[10px] text-text-faint">
-        <span>{keyLegend}</span>
-      </div>
+       * tall enough to scroll (`Permissions.jsx:586-593`). Absent rather than
+       * empty while the keys are dead: a bar advertising nothing reads as a
+       * broken bar, and the prototype's unconditional strip had no rival focus
+       * owner to go dead against. */}
+      {keysAdvertised ? (
+        <div className="flex items-center justify-between border-t border-shell-seam bg-[#0d0d0f] px-4 py-[7px] font-mono text-[10px] text-text-faint">
+          <span>{keyLegend}</span>
+        </div>
+      ) : null}
     </section>
   )
 }

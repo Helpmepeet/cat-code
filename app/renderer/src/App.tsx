@@ -2973,6 +2973,16 @@ export function App() {
 	        sessionConnection.status === 'ready'
 	          ? selectAskQuestion(permissions, sessionId)
 	          : null
+	      // What the question card's kicker counts. NOT the generic queue plus
+	      // one: that queue drops the plan review and every ask request, so a
+	      // queued ExitPlanMode went uncounted while already-submitted rows were
+	      // counted — the exact mistake `PermissionQueue`'s `awaitingAnswer`
+	      // exists to avoid. This selector is the session-wide "still needs an
+	      // answer" count, which is what the kicker means.
+	      const sessionAskPendingCount = selectPendingPermissionCount(
+	        permissions,
+	        sessionId,
+	      )
 	      // The generic per-tool card queue = the pending queue minus both
 	      // dedicated-renderer families (plan + ask).
 	      const sessionDisplayQueue =
@@ -3297,6 +3307,7 @@ export function App() {
 	              toast('Sent. The agent will revise the plan.', { tone: 'info' })
 	            }}
 	            askQuestion={sessionAskQuestion}
+	            askPendingCount={sessionAskPendingCount}
 	            onAnswerQuestions={answers => {
 	              // P4-20 — the answer round-trips via the dedicated
 	              // `answerQuestions` verb (NOT respondPermission): the renderer
@@ -4328,6 +4339,7 @@ export function SessionPane({
   onRemovePaste,
   onRevisePlan,
   askQuestion,
+  askPendingCount,
   onAnswerQuestions,
   onCancelQuestions,
   orchestratorActive,
@@ -5228,9 +5240,7 @@ export function SessionPane({
           isActivePane={isActivePane}
           onAnswer={onAnswerQuestions}
           onCancel={onCancelQuestions}
-          // The generic queue EXCLUDES this request (it owns its own renderer),
-          // so the total waiting is that queue plus this one.
-          pendingCount={permissionQueue.length + 1}
+          pendingCount={askPendingCount}
           questions={askQuestion.questions}
           requestId={askQuestion.request.requestId}
           submitted={askQuestion.submitted}
@@ -5947,6 +5957,10 @@ type SessionPaneProps = {
   onRevisePlan: (message: string) => void
   /** P4-20 — the pending AskUserQuestion request, or `null`; drives AskQuestionFlow. */
   askQuestion: AskQuestionReview | null
+  /** Session-wide requests still awaiting an answer, this question included.
+   * Optional like the sibling card's `pendingCount`; absent reads as "nothing
+   * queued behind this", which is what the kicker shows below two. */
+  askPendingCount?: number
   /** Sends the answer via the `answerQuestions` verb (index selection + freeform). */
   onAnswerQuestions: (answers: AskUserQuestionAnswer[]) => void
   /** Declines the AskUserQuestion request (reuses the permission deny path). */

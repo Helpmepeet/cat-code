@@ -46,9 +46,9 @@ const MULTI: AskQuestion[] = [
 ]
 
 // `renderToStaticMarkup` never runs effects, so these tests cover MARKUP only.
-// The source pin below covers the shared key-owner and event-claim guards, but
-// event dispatch remains a GUI-verified surface until the renderer has a DOM
-// harness.
+// Focus, key ownership and event dispatch are NOT GUI-only: they are proved
+// against a real DOM in AskQuestionFlow.dom.test.tsx, which is where any
+// behavioural assertion about this component belongs.
 function render(
   questions: AskQuestion[],
   isActivePane = true,
@@ -83,36 +83,22 @@ function focusTarget(owner: 'host' | 'control' | null) {
   }
 }
 
-test('the window key handler leaves key-owning targets and claimed events alone', () => {
+test('the window key handler ignores already-claimed and modified events', () => {
+  // NOT a pin on `!permissionKeysAreLive(event.target)` any more: that string
+  // survives as a substring of the containment guard, so it passed before the
+  // fix, during the bug, and after — it could never have caught any of them.
+  // Who owns a keypress is proved behaviourally in AskQuestionFlow.dom.test.tsx.
   const source = readFileSync(new URL('./AskQuestionFlow.tsx', import.meta.url), 'utf8')
-  expect(source).toContain('!permissionKeysAreLive(event.target)')
   expect(source).toContain('event.defaultPrevented')
+  expect(source).toContain('event.repeat')
 })
 
-test('a keypress inside the card is the card\'s, whatever control holds focus', () => {
-  // The defect: every option row is a <button>, which IS in
-  // FOCUSED_KEY_OWNER_SELECTOR, and `permissionKeysAreLive` resolves the
-  // NEAREST owner. One mouse click left that row focused and reported the whole
-  // legend dead — arrows, 1-9, space, Escape — while Enter fell through to the
-  // browser's default and re-toggled the row instead of advancing. The guard
-  // also runs ahead of the freeform branch, so Enter/Escape inside the "Other…"
-  // field were unreachable too.
-  //
-  // `PermissionPrompt`'s marker cannot fix it: that marker is only read when the
-  // matched owner IS the marked element, and this card is role="group", never an
-  // owner. Its rows are toggles rather than the terminal action, so containment
-  // decides instead — the pin below is the production guard, since SSR can move
-  // no focus.
-  const source = readFileSync(
-    new URL('./AskQuestionFlow.tsx', import.meta.url),
-    'utf8',
-  )
-  expect(source).toContain('cardRef.current?.contains(event.target)')
-  expect(source).toContain(
-    'if (!inCard && !permissionKeysAreLive(event.target)) return',
-  )
-  // Outside the card the shared predicate still rules, so the composer keeps
-  // the keys it is being typed into.
+test('the shared predicate still rules outside the card', () => {
+  // Inside the card, ownership is behavioural and is proved against real
+  // keydown events in AskQuestionFlow.dom.test.tsx (three mutants: the old
+  // guard, a detached ref, and a guard that claims activation keys). What SSR
+  // can still assert is the untouched half of the rule — outside the card the
+  // composer keeps the keys it is being typed into.
   expect(permissionKeysAreLive(focusTarget('control'))).toBe(false)
   expect(permissionKeysAreLive(focusTarget('host'))).toBe(true)
   expect(permissionKeysAreLive(focusTarget(null))).toBe(true)
@@ -120,27 +106,19 @@ test('a keypress inside the card is the card\'s, whatever control holds focus', 
 
 test('the active pane can be focused at all, and an inactive one cannot', () => {
   // A split workspace mounts one flow per visible pane, and only the active
-  // pane listens. A background card must therefore not be a focus stop that
-  // revives shortcuts no listener is behind.
+  // pane listens. `tabIndex={-1}` is never a TAB stop either way; what it
+  // controls is programmatic focusability, so its absence is what stops the
+  // mount effect from taking the keyboard onto a card nothing listens for.
   expect(render(SINGLE)).toContain('tabindex="-1"')
   expect(render(SINGLE, false)).not.toContain('tabindex')
 })
 
-test('the mount effect takes the keyboard but never mid-word in the composer', () => {
-  // SSR runs no effects, so pin the production guard: without the editable
-  // check the card steals focus from a half-typed message.
-  const source = readFileSync(
-    new URL('./AskQuestionFlow.tsx', import.meta.url),
-    'utf8',
-  )
-  expect(source).toContain('if (isEditableElement(previous)) return')
-  expect(source).toContain('node.focus()')
-})
-
 test('the card is a bounded scroller with the key strip outside it', () => {
   const html = render(SINGLE)
-  // Docked in the column rather than portaled over the transcript, so an
-  // unbounded card pushes the composer off screen the moment a preview opens.
+  // Docked in the column rather than portaled over the transcript, so the card
+  // grows into the dock. The ceiling bounds THIS card's share of it; it does
+  // not by itself guarantee the composer stays on screen, since the dock as a
+  // whole is unbounded (see the ledger row).
   expect(html).toContain('max-h-[60vh]')
   expect(html).toContain('overflow-y-auto')
   // The legend lives outside the scrolling body, so it survives a tall card.

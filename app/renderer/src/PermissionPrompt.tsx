@@ -44,7 +44,6 @@ const PREVIEW_LINE_SIGN: Record<PermissionPreviewLine['kind'], string> = {
   ctx: '  ',
 }
 
-
 /**
  * One permission card, in the prototype's form: an uppercase kicker over a
  * headline, the thing being approved, and a keyboard-driven SELECT LIST where
