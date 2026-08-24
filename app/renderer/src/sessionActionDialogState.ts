@@ -1,6 +1,5 @@
 /**
- * P4-30 — the pure decision core behind the Branch / Export dialogs
- * (`SessionActions.jsx` `BranchDialog` `:280-303`, `ExportDialog` `:351-387`).
+ * P4-30 — the pure decision core behind the Export dialog.
  *
  * Everything here is a function of data the app already holds, kept OUT of the
  * `.tsx` files for two reasons: the renderer's Fast Refresh boundary (CLAUDE.md
@@ -233,36 +232,4 @@ export function buildBulkExportDocument(
   return sections
     .map(section => `=== ${section.title?.trim() || 'Untitled session'} ===\n\n${section.text}`)
     .join('\n\n')
-}
-
-/**
- * The Branch dialog's confirmation callout (`SessionActions.jsx:292-300`).
- *
- * §0 ADAPTED, and this is the row where the prototype and the engine genuinely
- * disagree. The prototype previews a from-message-N fork: a new name
- * `"<title> (branch)"` and "keeps 1–N, drops the M after it". The engine's
- * `createFork` (`src/commands/branch/branch.ts:61`) forks the WHOLE conversation
- * at HEAD, so:
- *
- *  - there is no keeps/drops split to preview: nothing is dropped;
- *  - the new name is NOT `"<title> (branch)"`. The sidecar names the fork
- *    `` `${deriveFirstPrompt(firstUser)} (Branch)` ``
- *    (`app/sidecar/sessionActionsDomain.ts:97-99`), i.e. from the fork's first
- *    USER message, which no frame carries to the renderer before the action
- *    runs. Printing the prototype's string would be inventing a name the user
- *    will not see, so the callout describes the naming RULE instead of guessing
- *    the result.
- */
-export function branchPreviewLines(title: string | null | undefined): {
-  headline: string
-  detail: string
-} {
-  const shown = (title ?? '').trim()
-  return {
-    headline: shown
-      ? `A full copy of "${shown}"`
-      : 'A full copy of this session',
-    detail:
-      'Every message is copied and this session stays untouched. The copy is named after its first prompt, so it will not carry this name.',
-  }
 }

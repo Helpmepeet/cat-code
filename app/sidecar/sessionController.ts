@@ -522,9 +522,8 @@ export type SidecarSession = {
    */
   runControls: SidecarRunControlsDomain | null
   /**
-   * Session-action write domain (P4-6b) — the Rename / Export / Branch verbs over
-   * the engine's OWN `saveCustomTitle` / `renderMessagesToPlainText` / `createFork`.
-   * Null in probe mode (no engine session to rename/export/fork).
+   * Session-action write domain over the engine's own persistence and this
+   * session's live controller. Null in probe mode.
    */
   sessionActions: SidecarSessionActionsDomain | null
   /**
@@ -628,8 +627,9 @@ export async function createSidecarSessionController({
     providerSwitchLocked: providerBoundHistory,
   })
 
+  const controller = createRuntimeBackedWebAppSession({ queryEngineConfig })
   return {
-    controller: createRuntimeBackedWebAppSession({ queryEngineConfig }),
+    controller,
     permissions: createSidecarPermissionDomain(appStateStore),
     settings: createSidecarSettingsDomain(await loadAvailableSettingOptions(cwd)),
     agentConfig: createSidecarAgentConfigDomain({
@@ -659,7 +659,7 @@ export async function createSidecarSessionController({
     taskControl: createSidecarTaskControlDomain(appStateStore),
     panelTaskReaper: createSidecarPanelTaskReaper(appStateStore),
     runControls,
-    sessionActions: createSidecarSessionActionsDomain({ tools }),
+    sessionActions: createSidecarSessionActionsDomain({ tools, controller }),
     // The composer donut's popover breakdown. Fed the SAME tools / agent
     // definitions / permission context the query engine above runs with, and the
     // SAME `getMainLoopModel()` resolver run-controls reads, so `/context` and

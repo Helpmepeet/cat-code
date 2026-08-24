@@ -72,6 +72,34 @@ type ThreadGoalAttempt = {
   updatedAtMs: number
 }
 
+type ThreadGoalCriterion = {
+  id: string
+  description: string
+  required: boolean
+}
+
+type ThreadGoalContract = {
+  criteria: ThreadGoalCriterion[]
+  constraints: string[]
+  boundaries: string[]
+  stopConditions: string[]
+}
+
+type ThreadGoalEvidence = {
+  evidenceId: string
+  source: 'command' | 'artifact' | 'worker'
+  sourceDigest: string
+  label: string
+  sessionId: string
+  contractDigest: string
+  workspaceFingerprint: string
+  outcome: 'pass' | 'fail'
+  exitCode?: number
+  outputDigest: string
+  recordedAtMs: number
+  coversCriterionIds: string[]
+}
+
 type ThreadGoal = {
   schemaVersion: number
   threadId: string
@@ -94,6 +122,8 @@ type ThreadGoal = {
   consecutiveFailures: number
   pendingAttempt: ThreadGoalAttempt | null
   recentWakeKeys: string[]
+  contract: ThreadGoalContract
+  evidence: ThreadGoalEvidence[]
   timeUsedSeconds: number
   createdAtMs: number
   updatedAtMs: number

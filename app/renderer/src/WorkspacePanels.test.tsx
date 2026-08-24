@@ -141,6 +141,7 @@ function descriptor(id: string, title: string): SessionDescriptor {
     engineSessionId: `engine-${id}`,
     cwd: `/tmp/${title.toLowerCase()}`,
     title,
+    forked: false,
     titleUpdatedAt: null,
     status: 'ready',
     restorable: false,

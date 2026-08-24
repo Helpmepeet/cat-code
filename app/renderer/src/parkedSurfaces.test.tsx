@@ -37,6 +37,7 @@ function parkedDescriptor(over: Partial<SessionDescriptor> = {}): SessionDescrip
     engineSessionId: 'engine-a',
     cwd: '/tmp/work',
     title: 'Work',
+    forked: false,
     titleUpdatedAt: null,
     status: 'disconnected',
     restorable: true,

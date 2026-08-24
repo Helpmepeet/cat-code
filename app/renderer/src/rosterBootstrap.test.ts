@@ -18,6 +18,7 @@ function descriptor(
     engineSessionId: null,
     cwd: `/work/${appSessionId}`,
     title: null,
+    forked: false,
     titleUpdatedAt: null,
     status: 'ready',
     restorable: false,

@@ -8,6 +8,11 @@ import {
   type ThreadGoalToolResponse,
 } from '../../utils/threadGoal.js'
 import { checkThreadGoalTransition } from '../../utils/threadGoalState.js'
+import {
+  evaluateThreadGoalCompletion,
+  hashThreadGoalContract,
+} from '../../utils/threadGoalEvidence.js'
+import { getThreadGoalWorkspaceFingerprint } from '../../utils/threadGoalWorkspace.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 
@@ -145,6 +150,31 @@ export const UpdateGoalTool = buildTool({
     // frequently the very thing blocking it.
     if (input.status !== 'complete') {
       return { result: true }
+    }
+
+    // Deterministic gate BEFORE any semantic judgment. The model proposes
+    // completion; this decides it, from evidence the runtime recorded. A goal
+    // with no required criteria is not gated, so plain-objective goals behave
+    // exactly as before.
+    const completion = evaluateThreadGoalCompletion({
+      contract: currentGoal.contract,
+      evidence: currentGoal.evidence,
+      contractDigest: hashThreadGoalContract(
+        currentGoal.objective,
+        currentGoal.contract,
+      ),
+      workspaceFingerprint: await getThreadGoalWorkspaceFingerprint(),
+    })
+    if (!completion.allowed) {
+      const named = completion.criterionIds.join(', ')
+      return {
+        result: false,
+        message:
+          completion.reason === 'required_gate_failed'
+            ? `A required check for this goal is failing: ${named}. Fix it and re-run the check before marking the goal complete.`
+            : `These required criteria have no passing evidence yet: ${named}. Run the checks that cover them before marking the goal complete.`,
+        errorCode: 7,
+      }
     }
 
     const sessionState = await readSessionState(getSessionId())

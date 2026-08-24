@@ -55,6 +55,7 @@ import {
   reduceTransportErrorCleared,
   reduceTransportErrorSet,
   resolvePendingSubmit,
+  restoreSelectedPrompt,
   restoreDraftWithPending,
   selectComposerGate,
   selectPendingSubmit,
@@ -65,6 +66,112 @@ import {
 
 const S1 = 's-1' as unknown as import('../../shared/protocol.js').SessionId
 const S2 = 's-2' as unknown as import('../../shared/protocol.js').SessionId
+
+describe('selected prompt restoration', () => {
+  test('restores a string prompt as composer text', () => {
+    expect(restoreSelectedPrompt({ content: 'Try the smaller model.' })).toEqual({
+      text: 'Try the smaller model.',
+      images: [],
+    })
+  })
+
+  test('restores every accepted image block with composer-local ids', () => {
+    expect(
+      restoreSelectedPrompt({
+        content: [
+          { type: 'text', text: 'Compare these: ' },
+          {
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: 'image/png',
+              data: 'YWJjZA==',
+            },
+          },
+          { type: 'text', text: 'then this one' },
+          {
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: 'image/webp',
+              data: 'ZWZnaA==',
+            },
+          },
+        ],
+        imagePasteIds: [7, 11],
+      }),
+    ).toEqual({
+      text: 'Compare these: \nthen this one',
+      images: [
+        {
+          id: 1,
+          mediaType: 'image/png',
+          data: 'YWJjZA==',
+          name: 'image',
+        },
+        {
+          id: 2,
+          mediaType: 'image/webp',
+          data: 'ZWZnaA==',
+          name: 'image',
+        },
+      ],
+    })
+  })
+
+  test('ignores malformed and unsupported blocks while preserving valid content', () => {
+    expect(
+      restoreSelectedPrompt({
+        content: [
+          { type: 'text', text: 'Keep this' },
+          {
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: 'image/svg+xml',
+              data: 'YWJjZA==',
+            },
+          },
+          { type: 'text', text: 12 },
+          null,
+          { type: 'document', text: 'not a composer block' },
+        ],
+      }),
+    ).toEqual({ text: 'Keep this', images: [] })
+  })
+
+  test('rejects a selected prompt without string or block-array content', () => {
+    expect(restoreSelectedPrompt({ content: 42 })).toBeNull()
+    expect(restoreSelectedPrompt(null)).toBeNull()
+  })
+
+  test('restores an image-only prompt with a generated attachment id', () => {
+    expect(
+      restoreSelectedPrompt({
+        content: [
+          {
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: 'image/jpeg',
+              data: 'YWJjZA==',
+            },
+          },
+        ],
+      }),
+    ).toEqual({
+      text: '',
+      images: [
+        {
+          id: 1,
+          mediaType: 'image/jpeg',
+          data: 'YWJjZA==',
+          name: 'image',
+        },
+      ],
+    })
+  })
+})
 
 function agent(
   agentType: string,

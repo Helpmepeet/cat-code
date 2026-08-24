@@ -1,5 +1,5 @@
 /**
- * P4-30 — `BranchDialog` + `ExportDialog` (PARITY-LEDGER §17 rows 1281-1300).
+ * P4-30 — `ExportDialog` (PARITY-LEDGER §17 rows 1281-1300).
  *
  * The state matrix each dialog is checked against: open-default, a long title,
  * the disabled/invalid button state, and (export) the pending / ready / failed
@@ -8,57 +8,7 @@
  */
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { BranchDialog, ExportDialog } from './SessionActionDialogs.js'
-
-const LONG_TITLE =
-  'Refactor the authentication module to use JWT tokens instead of session cookies everywhere'
-
-test('BranchDialog: confirmation chrome — title, Cancel and the primary action', () => {
-  const html = renderToStaticMarkup(
-    <BranchDialog title="Refactor auth" onConfirm={() => {}} onClose={() => {}} />,
-  )
-  expect(html).toContain('aria-label="Branch session"')
-  expect(html).toContain('Cancel')
-  expect(html).toContain('Create branch')
-  expect(html).toContain('Refactor auth')
-})
-
-test('BranchDialog: the gate is real — nothing is dispatched until the primary action', () => {
-  // The live defect this dialog closes: `session.branch` used to fire straight
-  // off the menu click. Cancel and the primary must be different callbacks.
-  let confirmed = 0
-  let closed = 0
-  const el = BranchDialog({
-    title: 'Refactor auth',
-    onConfirm: () => (confirmed += 1),
-    onClose: () => (closed += 1),
-  }) as never as { props: { footer: { props: { children: { props: Record<string, unknown> }[] } } } }
-  const [cancel, create] = el.props.footer.props.children
-  expect(cancel.props.label).toBe('Cancel')
-  expect(create.props.label).toBe('Create branch')
-  expect(create.props.variant).toBe('primary')
-
-  ;(cancel.props.onClick as () => void)()
-  expect(confirmed).toBe(0)
-  expect(closed).toBe(1)
-  ;(create.props.onClick as () => void)()
-  expect(confirmed).toBe(1)
-})
-
-test('BranchDialog: a long title truncates rather than blowing out the callout', () => {
-  const html = renderToStaticMarkup(
-    <BranchDialog title={LONG_TITLE} onConfirm={() => {}} onClose={() => {}} />,
-  )
-  expect(html).toContain(LONG_TITLE)
-  expect(html).toContain('truncate')
-})
-
-test('BranchDialog: a titleless row still reads as a full sentence', () => {
-  const html = renderToStaticMarkup(
-    <BranchDialog title={null} onConfirm={() => {}} onClose={() => {}} />,
-  )
-  expect(html).toContain('A full copy of this session')
-})
+import { ExportDialog } from './SessionActionDialogs.js'
 
 test('ExportDialog: pending shows an honest wait, not an empty pane or a fake transcript', () => {
   const html = renderToStaticMarkup(

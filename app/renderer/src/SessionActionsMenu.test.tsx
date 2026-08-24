@@ -119,40 +119,24 @@ test('P4-30: the flyout host is Tab-reachable, so folding Copy into it kept it k
   expect(html).toContain('aria-haspopup="menu"')
 })
 
-test('P4-30: the menu renders leading icons, the History section label and the sa-pop entrance', () => {
+test('P4-30: the menu renders leading icons, the View section label and the sa-pop entrance', () => {
   const html = render(true)
   // SA_IC icon slot — every row now carries a glyph, and the panel animates in.
   expect(html).toContain('animate-sa-pop')
   expect(html).toContain('<svg')
-  // SectionLabel: History is the ONE labelled section in the prototype.
-  expect(html).toContain('>History<')
+  expect(html).toContain('>View<')
 })
 
-test('a still-deferred verb (Rewind) renders disabled with a "soon" tag and its reason', () => {
-  const html = render(true)
-  expect(html).toContain('aria-disabled="true"')
-  expect(html).toContain('soon')
-  // Rewind stays deferred (no engine conversation-rewind verb); the reason is
-  // available to both hovering and assistive-technology users.
-  expect(html).toContain('not available in the desktop app yet')
-  expect(
-    html,
-  ).toContain(
-    'aria-label="Rewind…, Rewind is not available in the desktop app yet."',
-  )
-})
-
-test('P4-6b wired verbs (Rename/Export/Branch) render as live buttons for a LIVE row', () => {
+test('Rename and Export render live while obsolete Branch and Rewind rows stay absent', () => {
   const html = render(true)
   expect(html).toContain('Rename')
   expect(html).toContain('Export…')
-  expect(html).toContain('Branch from HEAD…')
-  // None of the three carries a "soon"-tagged deferral title on a live row.
+  expect(html).not.toContain('Branch from HEAD…')
+  expect(html).not.toContain('Rewind…')
   expect(html).not.toContain('exportRenderer.tsx:91')
-  expect(html).not.toContain('branch.ts:61')
 })
 
-test('non-live row: Rename/Export/Branch render disabled with the live-engine reason', () => {
+test('non-live row: Rename and Export render disabled with the live-engine reason', () => {
   const html = render(false, row({ live: false, restorable: true, status: 'exited' }))
   expect(html).toContain('aria-disabled="true"')
   expect(html).toContain('live engine')

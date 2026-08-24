@@ -122,6 +122,7 @@ const hostSessionAdded: HostEvent = {
     engineSessionId: 'hardening-engine-session',
     cwd: '/tmp/catcode-hardening',
     title: null,
+    forked: false,
     titleUpdatedAt: null,
     status: 'ready',
     restorable: false,

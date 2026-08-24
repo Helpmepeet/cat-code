@@ -5,14 +5,12 @@
  * row's hover/tint classes carry the icon with them.
  *
  * PARITY-LEDGER §17 row "SA_IC action-icon vocabulary" asks for one set shared by
- * the menu AND the dialogs, which is why this is its own module rather than a
- * local helper in either. It carries a glyph for every verb the menu actually
- * renders plus the dialog chrome (close / file / markdown / chevron).
+ * the menu, message actions and tab qualifier, which is why this is its own
+ * module rather than a local helper. It carries a glyph for every verb the menu
+ * actually renders plus the dialog chrome and targeted message actions.
  * The prototype's tag / archive / trash glyphs are deliberately absent: those
  * three verbs are a recorded §0 CUT (`sessionActions.ts:34-38`, no local engine
- * backing), so a glyph for them would be dead code for an unreachable row. Its
- * `warn` glyph is absent for the same reason: the only consumer is the
- * RewindDialog, which is owner-flagged and NOT built here.
+ * backing), so a glyph for them would be dead code for an unreachable row.
  *
  * Components-only module: the renderer's Fast Refresh boundary (CLAUDE.md §3)
  * forbids a non-component export here, so the kind→glyph dispatch is the
@@ -41,10 +39,6 @@ export function SessionActionIcon({
       return <ActionOpenIcon />
     case 'rename':
       return <ActionRenameIcon />
-    case 'branch':
-      return <ActionBranchIcon />
-    case 'rewind':
-      return <ActionRewindIcon />
     case 'metadata':
       return <ActionMetadataIcon />
     case 'copy':
@@ -88,14 +82,14 @@ export function ActionRenameIcon(): ReactNode {
   )
 }
 
-export function ActionBranchIcon(): ReactNode {
+export function ActionBranchIcon({ size = 15 }: { size?: number }): ReactNode {
   return (
-    <Glyph>
-      <circle cx="6" cy="6" r="3" />
-      <circle cx="6" cy="18" r="3" />
-      <line x1="6" y1="9" x2="6" y2="15" />
-      <path d="M13 6h3a2 2 0 0 1 2 2v7" />
-      <polyline points="15 12 18 15 21 12" />
+    <Glyph size={size}>
+      <path d="M3 12h5" />
+      <path d="M8 12 16 5" />
+      <path d="M8 12 16 19" />
+      <polyline points="11 5 16 5 16 10" />
+      <polyline points="11 19 16 19 16 14" />
     </Glyph>
   )
 }
@@ -216,14 +210,16 @@ export function ActionCloseIcon(): ReactNode {
 function Glyph({
   children,
   strokeWidth = '1.9',
+  size = 15,
 }: {
   children: ReactNode
   strokeWidth?: string
+  size?: number
 }): ReactNode {
   return (
     <svg
-      width="15"
-      height="15"
+      width={size}
+      height={size}
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"

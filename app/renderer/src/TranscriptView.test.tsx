@@ -3550,15 +3550,14 @@ test('P4-1/F1: findNestedToolUseRow re-derives the row by id, or null when gone'
 })
 
 /* --------------------------------------------------------------------------- *
- * User bubble: no copy affordance (operator call, 2026-08-02) — deviates from
- * the prototype's UserBubble hover chip (Messages.jsx:2094); the assistant
- * twin below keeps it.
+ * User bubble message actions.
  * --------------------------------------------------------------------------- */
 
-function userRow(content: string): NestedTranscriptRow {
+function userRow(content: string, frameId = 'f'): NestedTranscriptRow {
   return {
     ...blockSource,
-    id: 's:m:0:user-text',
+    id: frameId === 'f' ? 's:m:0:user-text' : `s:m:0:user-text:${frameId}`,
+    frameId,
     kind: 'user-text',
     role: 'user',
     content,
@@ -3566,10 +3565,110 @@ function userRow(content: string): NestedTranscriptRow {
   }
 }
 
-test('a user turn carries no copy control', () => {
-  const html = render(userRow('restart the sidecar please'))
-  expect(html).not.toContain('aria-label="Copy message"')
+test('a live user turn renders exactly Copy, Edit, and Branch in the reserved action row', () => {
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[userRow('restart the sidecar please')]}
+      onMessageAction={() => {}}
+    />,
+  )
+  expect(html.match(/<button/g)).toHaveLength(3)
+  expect(html).toContain('aria-label="Copy message"')
+  expect(html).toContain('aria-label="Edit from here"')
+  expect(html).toContain('aria-label="Branch from here"')
+  expect(html).toContain('h-[25px]')
+  expect(html).toContain('gap-0.5')
+  expect(html).toContain('pr-1')
+  expect(html).toContain('pt-0.5')
+  expect(html).toContain('opacity-0')
+  expect(html).toContain('transition-opacity')
+  expect(html).toContain('duration-150')
+  expect(html).toContain('group-hover/message:opacity-100')
+  expect(html).toContain('group-focus-within/message:opacity-100')
+  expect(html.match(/rounded-md p-1 text-text-subtle/g)).toHaveLength(3)
+  expect(html.match(/hover:bg-accent\/15 hover:text-accent/g)).toHaveLength(3)
+  expect(html.match(/focus-visible:outline-accent/g)).toHaveLength(3)
+})
+
+test('the first prompt keeps Branch visible and lets the engine report an honest failure', () => {
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[userRow('first', 'f1'), userRow('second', 'f2')]}
+      onMessageAction={() => {}}
+    />,
+  )
+  expect(html.match(/aria-label="Edit from here"/g)).toHaveLength(2)
+  expect(html.match(/aria-label="Branch from here"/g)).toHaveLength(2)
+})
+
+test('message actions stay absent without a live callback', () => {
+  const noEngine = renderToStaticMarkup(
+    <TranscriptRowsView rows={[userRow('offline')]} />,
+  )
+  expect(noEngine).not.toContain('Copy message')
+  expect(noEngine).not.toContain('Edit from here')
+  expect(noEngine).not.toContain('Branch from here')
+})
+
+test('revealed hidden user-role rows never gain message actions', () => {
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[{ ...userRow('injected context'), isHidden: true }]}
+      onMessageAction={() => {}}
+    />,
+  )
   expect(html).not.toContain('Copy message')
+  expect(html).not.toContain('Edit from here')
+  expect(html).not.toContain('Branch from here')
+})
+
+test('message actions use visible row text for Copy and the producer frame id for targeted verbs', () => {
+  const source = readFileSync(
+    new URL('./TranscriptView.tsx', import.meta.url),
+    'utf8',
+  )
+  const userCaseStart = source.indexOf("case 'user-text':")
+  const userCaseEnd = source.indexOf("case 'command-echo':", userCaseStart)
+  const userCase = source.slice(userCaseStart, userCaseEnd)
+  expect(userCase).toContain(
+    "onMessageAction(row.sessionId, 'edit', row.frameId)",
+  )
+  expect(userCase).toContain(
+    "onMessageAction(row.sessionId, 'branch', row.frameId)",
+  )
+  expect(source).toContain('.writeText(content)')
+  expect(userCase).not.toContain('row.messageId')
+})
+
+test('non-user-text rows do not gain message controls when the action callback is live', () => {
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[
+        assistantRow('No message controls here.'),
+        {
+          ...blockSource,
+          id: 's:m:1:command-echo',
+          kind: 'command-echo',
+          commandName: 'compact',
+          args: null,
+          content: '/compact',
+          skillFormat: false,
+          isReplay: false,
+        },
+        {
+          ...blockSource,
+          id: 's:m:2:user-image',
+          kind: 'user-image',
+          source: { type: 'base64', mediaType: 'image/png', data: 'AAAA' },
+          isReplay: false,
+        },
+      ]}
+      onMessageAction={() => {}}
+    />,
+  )
+  expect(html).not.toContain('Copy message')
+  expect(html).not.toContain('Edit from here')
+  expect(html).not.toContain('Branch from here')
 })
 
 /* --------------------------------------------------------------------------- *

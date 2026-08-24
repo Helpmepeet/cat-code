@@ -1,6 +1,5 @@
 /**
- * Session-action write domain (P4-6b) — the WRITE half of the Sessions `⋯`
- * menu's three MUTATING verbs (Rename / Export / Branch). Like `runControlsDomain`
+ * Session-action write domain (P4-6b). Like `runControlsDomain`
  * (the recipe this copies), each op dispatches to the engine's OWN machinery over
  * an injectable executor seam — never a re-implementation (mistakes #1/#10):
  *
@@ -11,11 +10,8 @@
  *     uses, over the transcript re-read from disk via `loadConversationForResume`
  *     (`src/utils/conversationRecovery.ts:469`, the loader the sidecar's resume
  *     uses) and the session's REAL `tools` (`getTools`, not `[]` — the P1-3 defect).
- *   - Branch → `createFork` (`src/commands/branch/branch.ts:61`), the SAME fork
- *     primitive `/branch` uses; it writes a real fork transcript on disk and
- *     returns the new engine session id. The forked session is NOT auto-opened
- *     (§0-deferred: a fork has no registry row and the sidecar has no host
- *     control-plane channel — see protocol.ts SESSION_ACTION_VERB_TYPES).
+ *   - Message-targeted Edit / Branch → the same live AppSessionController that
+ *     owns turns, which delegates to QueryEngine's raw-message resolver.
  *   - Tag (P4-29) → `saveTag` (`src/utils/sessionStorage.ts:3257`), the SAME
  *     per-session tag write `/tag` uses (`src/commands/tag/tag.tsx:118` set,
  *     `:141` remove-with-empty-string), normalized with the SAME
@@ -30,7 +26,7 @@
  * The executor is behind a seam (like `runControlsDomain`): the real one wires the
  * engine functions; tests inject a fake so the domain round-trip is proven without
  * touching real transcripts on disk. All ops read the current engine session id
- * from `getSessionId()` — the SAME source the engine + `createFork` use — so the
+ * from `getSessionId()` — the SAME source the engine writes use — so the
  * op always targets THIS sidecar's own session (N-process, LOCKED).
  *
  * Failure posture: display = degrade gracefully. Every op is try/catch-wrapped to
@@ -39,10 +35,12 @@
  */
 
 import type { UUID } from 'crypto'
+import type { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
 import { getSessionId } from '../../src/bootstrap/state.js'
-import { createFork, deriveFirstPrompt } from '../../src/commands/branch/branch.js'
+import { createFork } from '../../src/commands/branch/branch.js'
+import type { ConversationForkResult } from '../../src/commands/branch/branch.js'
 import type { Tools } from '../../src/Tool.js'
-import type { SerializedMessage } from '../../src/types/logs.js'
+import type { Message, UserMessage } from '../../src/types/message.js'
 import { loadConversationForResume } from '../../src/utils/conversationRecovery.js'
 import { renderMessagesToPlainText } from '../../src/utils/exportRenderer.js'
 import { recursivelySanitizeUnicode } from '../../src/utils/sanitization.js'
@@ -51,6 +49,7 @@ import {
   saveCustomTitle,
   saveTag,
 } from '../../src/utils/sessionStorage.js'
+import type { SessionActionResultFrame } from '../shared/protocol.js'
 
 /** The redacted outcome of a session-action write (no transport, no secret). */
 export type SessionActionResult = {
@@ -59,8 +58,14 @@ export type SessionActionResult = {
   message: string
   /** The engine-rendered plain-text transcript — present iff a successful export. */
   exportText?: string
-  /** The new fork's engine session id — present iff a successful branch. */
+  /** The new fork's engine session id, present iff a successful targeted branch. */
   branchEngineSessionId?: string
+  /** The engine-derived title, present with a successful targeted branch. */
+  branchTitle?: string
+  /** The selected engine-resolved user prompt for a targeted edit/branch. */
+  selectedPrompt?: SessionActionResultFrame['selectedPrompt']
+  /** Internal-only retained model seed used to rebuild display history after edit. */
+  retainedMessages?: Message[]
 }
 
 /**
@@ -75,13 +80,34 @@ export type SessionActionsExecutor = {
   export(): Promise<string>
   /** Fork the whole conversation at HEAD; return the new session id + title. */
   branch(): Promise<{ engineSessionId: string; title: string; forkPath: string }>
+  /** Rewind before an engine-resolved user message. */
+  selectUserMessage(userMessageId: string): UserMessage
+  editFromMessage(
+    userMessageId: string,
+  ): Promise<{ prompt: UserMessage; retainedMessages: Message[] }>
+  /** Fork before an engine-resolved user message. */
+  branchFromMessage(
+    userMessageId: string,
+  ): Promise<{ engineSessionId: string; title: string; prompt: UserMessage }>
   /** Set (or, with an empty string, clear) THIS session's tag (`saveTag`). */
   tag(tag: string): Promise<void>
 }
 
 export function createRealSessionActionsExecutor(deps: {
   tools: Tools
+  controller: AppSessionController
 }): SessionActionsExecutor {
+  const finalizeFork = async (
+    fork: ConversationForkResult,
+  ): Promise<{ engineSessionId: string; title: string; forkPath: string }> => {
+    if (!fork.title) throw new Error('Fork title was not published')
+    return {
+      engineSessionId: fork.sessionId,
+      title: fork.title,
+      forkPath: fork.forkPath,
+    }
+  }
+
   return {
     async rename(title) {
       // Mirror `/rename` (rename.ts:53-57): the custom-title write, keyed by the
@@ -103,17 +129,29 @@ export function createRealSessionActionsExecutor(deps: {
       return renderMessagesToPlainText(messages, deps.tools)
     },
     async branch() {
-      // The engine's OWN fork primitive: writes a real fork transcript on disk +
-      // returns its new engine session id. Then save the "(Branch)" custom title
-      // so the fork is identifiable, mirroring `/branch`'s call() (branch.ts:250-252).
-      const fork = await createFork()
-      const firstUser = fork.serializedMessages.find(
-        (m): m is Extract<SerializedMessage, { type: 'user' }> =>
-          m.type === 'user',
+      return finalizeFork(await createFork())
+    },
+    async editFromMessage(userMessageId) {
+      return deps.controller.rewindBeforeUserMessage(userMessageId)
+    },
+    selectUserMessage(userMessageId) {
+      return deps.controller.selectUserMessage(userMessageId)
+    },
+    async branchFromMessage(userMessageId) {
+      const source = await loadConversationForResume(getSessionId(), undefined)
+      const sourceTitle = source?.customTitle?.trim() || undefined
+      const fork = await deps.controller.forkBeforeUserMessage(
+        userMessageId,
+        sourceTitle,
       )
-      const title = `${deriveFirstPrompt(firstUser)} (Branch)`
-      await saveCustomTitle(fork.sessionId, title, fork.forkPath, 'user')
-      return { engineSessionId: fork.sessionId, title, forkPath: fork.forkPath }
+      if (!fork.sourcePrompt) {
+        throw new Error('Selected source prompt is unavailable')
+      }
+      // The fork glyph is the persistent qualifier in the desktop. A text suffix
+      // is the first part a capped tab title truncates, so targeted forks keep the
+      // conversation title itself unchanged.
+      const finalized = await finalizeFork(fork)
+      return { ...finalized, prompt: fork.sourcePrompt }
     },
     async tag(tag) {
       // Mirror `/tag` (tag.tsx:118 set / :141 remove): one `saveTag` call keyed by
@@ -131,6 +169,11 @@ export type SidecarSessionActionsDomain = {
   export(): Promise<SessionActionResult>
   /** Fork the conversation at HEAD; report the new engine session id. */
   branch(): Promise<SessionActionResult>
+  /** Rewind before a selected user message and return its raw prompt. */
+  selectUserMessage(userMessageId: string): SessionActionResult
+  editFromMessage(userMessageId: string): Promise<SessionActionResult>
+  /** Fork before a selected user message and return its raw prompt. */
+  branchFromMessage(userMessageId: string): Promise<SessionActionResult>
   /** Set or clear this session's tag; report the redacted outcome. */
   tag(tag: string): Promise<SessionActionResult>
 }
@@ -139,11 +182,18 @@ export function createSidecarSessionActionsDomain(
   options: {
     executor?: SessionActionsExecutor
     tools?: Tools
+    controller?: AppSessionController
   } = {},
 ): SidecarSessionActionsDomain {
-  const executor =
-    options.executor ??
-    createRealSessionActionsExecutor({ tools: options.tools ?? [] })
+  const executor = options.executor ?? (() => {
+    if (!options.controller) {
+      throw new Error('Session actions require the live session controller')
+    }
+    return createRealSessionActionsExecutor({
+      tools: options.tools ?? [],
+      controller: options.controller,
+    })
+  })()
 
   return {
     async rename(title) {
@@ -187,11 +237,67 @@ export function createSidecarSessionActionsDomain(
           ok: true,
           message: `Branched to ${title}.`,
           branchEngineSessionId: engineSessionId,
+          branchTitle: title,
         }
       } catch (error) {
         return {
           ok: false,
           message: `Could not branch: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        }
+      }
+    },
+    async editFromMessage(userMessageId) {
+      try {
+        const { prompt, retainedMessages } =
+          await executor.editFromMessage(userMessageId)
+        return {
+          ok: true,
+          message: 'Conversation rewound.',
+          selectedPrompt: selectedPrompt(prompt),
+          retainedMessages,
+        }
+      } catch (error) {
+        return {
+          ok: false,
+          message: `Could not edit from message: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        }
+      }
+    },
+    selectUserMessage(userMessageId) {
+      try {
+        return {
+          ok: true,
+          message: 'Message selected.',
+          selectedPrompt: selectedPrompt(executor.selectUserMessage(userMessageId)),
+        }
+      } catch (error) {
+        return {
+          ok: false,
+          message: `Could not select message: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        }
+      }
+    },
+    async branchFromMessage(userMessageId) {
+      try {
+        const { engineSessionId, title, prompt } =
+          await executor.branchFromMessage(userMessageId)
+        return {
+          ok: true,
+          message: `Branched to ${title}.`,
+          branchEngineSessionId: engineSessionId,
+          branchTitle: title,
+          selectedPrompt: selectedPrompt(prompt),
+        }
+      } catch (error) {
+        return {
+          ok: false,
+          message: `Could not branch from message: ${
             error instanceof Error ? error.message : String(error)
           }`,
         }
@@ -223,3 +329,44 @@ export function createSidecarSessionActionsDomain(
     },
   }
 }
+
+function selectedPrompt(prompt: UserMessage): NonNullable<
+  SessionActionResult['selectedPrompt']
+> {
+  const content =
+    typeof prompt.message.content === 'string'
+      ? prompt.message.content
+      : prompt.message.content.flatMap<unknown>(block => {
+          if (block.type === 'text' && typeof block.text === 'string') {
+            return [{ type: 'text', text: block.text }]
+          }
+          if (
+            block.type === 'image' &&
+            block.source.type === 'base64' &&
+            ACCEPTED_PROMPT_IMAGE_TYPES.has(block.source.media_type) &&
+            typeof block.source.data === 'string'
+          ) {
+            return [
+              {
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: block.source.media_type,
+                  data: block.source.data,
+                },
+              },
+            ]
+          }
+          return []
+        })
+  return {
+    content,
+  }
+}
+
+const ACCEPTED_PROMPT_IMAGE_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+])

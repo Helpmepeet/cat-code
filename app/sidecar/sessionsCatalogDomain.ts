@@ -194,6 +194,7 @@ export function mapLogOptionToCatalogEntry(
   const cwd = resolveEntryCwd(log, storageDirToCwd)
   return {
     sessionId: log.sessionId,
+    forked: log.forked === true,
     cwd,
     // Default assume-exists; `annotateCwdExistence` (the async worker pass)
     // downgrades a dead cwd to `false`. A direct/pure use of the builder without

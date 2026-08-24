@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 
 import type { SDKMessage } from '../entrypoints/agentSdkTypes.js'
 import type { ThreadGoal } from '../utils/threadGoal.js'
+import { createThreadGoal } from '../utils/threadGoal.js'
 import {
   _resetAccountDiagnosticStreamJsonHookForTesting,
   emitAccountDiagnostic,
@@ -48,14 +49,10 @@ describe('AppSessionController', () => {
 
   test('emits goal snapshot and message events for a normal turn', async () => {
     const goal: ThreadGoal = {
-      threadId: 'session-1',
+      ...createThreadGoal('session-1', 'Finish the app runtime boundary', 1000, 100),
       goalId: 'goal-1',
-      objective: 'Finish the app runtime boundary',
-      status: 'active',
-      tokenBudget: 1000,
       tokensUsed: 10,
       timeUsedSeconds: 2,
-      createdAtMs: 100,
       updatedAtMs: 200,
     }
     const controller = new AppSessionController({
@@ -151,11 +148,13 @@ describe('AppSessionController', () => {
 
   test('emits account diagnostics as message events only for the active submit turn', async () => {
     const goal: ThreadGoal = {
-      threadId: 'session-diagnostic',
+      ...createThreadGoal(
+        'session-diagnostic',
+        'Surface account diagnostics in app runtime events',
+        1000,
+        100,
+      ),
       goalId: 'goal-diagnostic',
-      objective: 'Surface account diagnostics in app runtime events',
-      status: 'active',
-      tokenBudget: 1000,
       tokensUsed: 10,
       timeUsedSeconds: 2,
       createdAtMs: 100,
@@ -294,5 +293,35 @@ describe('AppSessionController', () => {
     expect(controller.respondToPermissionRequest('perm-2', { behavior: 'allow' })).toBe(
       false,
     )
+  })
+
+  test('waitUntilIdle settles from the active-turn writer without polling', async () => {
+    let releaseTurn: (() => void) | undefined
+    const turnGate = new Promise<void>(resolve => {
+      releaseTurn = resolve
+    })
+    const controller = new AppSessionController({
+      async *runTurn() {
+        await turnGate
+        yield createResultMessage('done')
+      },
+    })
+
+    const submit = controller.submit('wait')
+    expect(controller.isTurnActive()).toBe(true)
+    let idleSettled = false
+    const idle = controller.waitUntilIdle().then(() => {
+      idleSettled = true
+    })
+    await Promise.resolve()
+    expect(idleSettled).toBe(false)
+
+    releaseTurn?.()
+    await submit
+    await idle
+
+    expect(controller.isTurnActive()).toBe(false)
+    expect(idleSettled).toBe(true)
+    await expect(controller.waitUntilIdle()).resolves.toBeUndefined()
   })
 })

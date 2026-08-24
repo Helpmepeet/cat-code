@@ -365,6 +365,7 @@ test('createSession spawns, persists a live row, and emits session-added', async
   expect(result.value.cwd).toBe(h.cwd)
   expect(result.value.title).toBe('work')
   expect(result.value.engineSessionId).toBeNull()
+  expect(result.value.forked).toBe(false)
 
   // Row persisted, live, addressed by the same id, cwd captured.
   const row = h.registry.findSession(appSessionId)
@@ -409,6 +410,43 @@ test('a resume-create exposes engineSessionId immediately, before any ready fram
   expect(
     h.supervisor.records.get(result.value.appSessionId)?.resumeEngineSessionId,
   ).toBe('engine-history-7')
+  expect(result.value.forked).toBe(false)
+})
+
+test('trusted fork provenance survives descriptor projection, close/restore, and restart', async () => {
+  const h = makeHost()
+  writeTranscript(h.storageDir, 'engine-fork-7')
+  const created = await h.host.createSession({
+    cwd: h.cwd,
+    resumeEngineSessionId: 'engine-fork-7',
+    forked: true,
+  })
+
+  expect(created.ok).toBe(true)
+  if (!created.ok) return
+  const { appSessionId } = created.value
+  expect(created.value.forked).toBe(true)
+  expect(h.registry.findSession(appSessionId)?.forked).toBe(true)
+  expect(
+    h.events.find(
+      event =>
+        event.type === 'session-added' &&
+        event.session.appSessionId === appSessionId,
+    ),
+  ).toMatchObject({ session: { forked: true } })
+
+  expect((await h.host.closeSession(appSessionId)).ok).toBe(true)
+  const restored = await h.host.restoreSession(appSessionId)
+  expect(restored.ok).toBe(true)
+  if (!restored.ok) return
+  expect(restored.value.forked).toBe(true)
+
+  expect((await h.host.restartSession(appSessionId)).ok).toBe(true)
+  expect(h.registry.findSession(appSessionId)?.forked).toBe(true)
+  expect(
+    h.host.listSessions().find(session => session.appSessionId === appSessionId)
+      ?.forked,
+  ).toBe(true)
 })
 
 test('ready frame bridges engineSessionId into the row and emits session-status', async () => {
@@ -1510,7 +1548,11 @@ test('createSessionInWorkspace ACCEPTS a known registry id: fresh session in the
   // Seed a workspace: a registry row rooted at h.cwd (the "representative" the
   // renderer would name from the group's active/first row).
   const repId = randomUUID()
-  await h.registry.upsertOnSpawn({ appSessionId: repId, cwd: h.cwd })
+  await h.registry.upsertOnSpawn({
+    appSessionId: repId,
+    cwd: h.cwd,
+    forked: true,
+  })
 
   const result = await h.host.createSessionInWorkspace(repId)
   expect(result.ok).toBe(true)
@@ -1521,6 +1563,7 @@ test('createSessionInWorkspace ACCEPTS a known registry id: fresh session in the
   expect(result.value.appSessionId).not.toBe(repId)
   expect(result.value.cwd).toBe(h.cwd)
   expect(result.value.engineSessionId).toBeNull()
+  expect(result.value.forked).toBe(false)
   const spawned = h.supervisor.records.get(result.value.appSessionId)
   expect(spawned?.cwd).toBe(h.cwd)
   expect(spawned?.resumeEngineSessionId).toBeUndefined()

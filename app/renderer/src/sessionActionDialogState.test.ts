@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'bun:test'
 import {
-  branchPreviewLines,
   buildBulkExportDocument,
   bulkExportSavedMessage,
   describeSaveOutcome,
@@ -56,8 +55,8 @@ describe('selectExportPreview', () => {
     expect(selectExportPreview(ready, 'req-2')).toEqual({ status: 'pending' })
   })
 
-  test('a rename/branch result that lands while the dialog is open is ignored', () => {
-    const branch = { ...ready, verb: 'branch' as const }
+  test('a targeted branch result that lands while the dialog is open is ignored', () => {
+    const branch = { ...ready, verb: 'branchFromMessage' as const }
     expect(selectExportPreview(branch, 'req-1')).toEqual({ status: 'pending' })
   })
 
@@ -115,32 +114,6 @@ describe('selectLatchedExportPreview', () => {
       status: 'failed',
       message: 'Transcript unreadable.',
     })
-  })
-})
-
-describe('branchPreviewLines', () => {
-  test('names the session it is forking', () => {
-    expect(branchPreviewLines('Refactor auth').headline).toContain('Refactor auth')
-  })
-
-  test('falls back to a generic headline when the row has no title', () => {
-    expect(branchPreviewLines(null).headline).toBe('A full copy of this session')
-    expect(branchPreviewLines('   ').headline).toBe('A full copy of this session')
-  })
-
-  test('never invents the prototype’s "(branch)" name — the fork is named engine-side', () => {
-    // `createFork` names the fork from its FIRST USER MESSAGE
-    // (`sessionActionsDomain.ts:97-99`), which no frame carries before the
-    // action runs. The callout states the rule instead of guessing the result.
-    const { headline, detail } = branchPreviewLines('Refactor auth')
-    expect(headline).not.toContain('(branch)')
-    expect(detail).toContain('named after its first prompt')
-  })
-
-  test('never claims a keeps/drops split — the engine forks at HEAD and drops nothing', () => {
-    const { detail } = branchPreviewLines('Refactor auth')
-    expect(detail).toContain('Every message is copied')
-    expect(detail).not.toMatch(/drops/i)
   })
 })
 

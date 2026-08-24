@@ -31,6 +31,43 @@ function fakeExecutor(
         forkPath: '/tmp/fork.jsonl',
       }
     },
+    selectUserMessage(userMessageId) {
+      calls.push(`selectUserMessage:${userMessageId}`)
+      return {
+        type: 'user',
+        uuid: userMessageId,
+        timestamp: '2026-08-24T00:00:00.000Z',
+        message: { role: 'user', content: 'selected prompt' },
+        imagePasteIds: [4],
+      }
+    },
+    async editFromMessage(userMessageId) {
+      calls.push(`editFromMessage:${userMessageId}`)
+      return {
+        prompt: {
+          type: 'user',
+          uuid: userMessageId,
+          timestamp: '2026-08-24T00:00:00.000Z',
+          message: { role: 'user', content: 'selected prompt' },
+          imagePasteIds: [4],
+        },
+        retainedMessages: [],
+      }
+    },
+    async branchFromMessage(userMessageId) {
+      calls.push(`branchFromMessage:${userMessageId}`)
+      return {
+        engineSessionId: 'targeted-fork-engine-id',
+        title: 'First prompt (Branch)',
+        prompt: {
+          type: 'user',
+          uuid: userMessageId,
+          timestamp: '2026-08-24T00:00:00.000Z',
+          message: { role: 'user', content: 'selected prompt' },
+          imagePasteIds: [4],
+        },
+      }
+    },
     async tag(tag) {
       calls.push(`tag:${tag}`)
     },
@@ -105,31 +142,34 @@ describe('sessionActionsDomain — export', () => {
   })
 })
 
-describe('sessionActionsDomain — branch', () => {
-  test('carries the new fork engine session id on a successful result', async () => {
-    const { executor } = fakeExecutor()
+describe('sessionActionsDomain — message-targeted mutations', () => {
+  test('edit returns the complete selected prompt and retained replay seed', async () => {
+    const { executor, calls } = fakeExecutor()
     const domain = createSidecarSessionActionsDomain({ executor })
 
-    const result = await domain.branch()
+    const result = await domain.editFromMessage('12345678-1234-4234-8234')
 
-    expect(result.ok).toBe(true)
-    expect(result.branchEngineSessionId).toBe('fork-engine-id')
-    expect(result.message).toContain('Branch')
+    expect(result).toMatchObject({
+      ok: true,
+      selectedPrompt: { content: 'selected prompt' },
+      retainedMessages: [],
+    })
+    expect(calls).toEqual(['editFromMessage:12345678-1234-4234-8234'])
   })
 
-  test('an executor throw degrades to ok:false with no branch id', async () => {
-    const { executor } = fakeExecutor({
-      branch: async () => {
-        throw new Error('No conversation to branch')
-      },
-    })
+  test('targeted branch returns the engine id, title, and complete source prompt', async () => {
+    const { executor, calls } = fakeExecutor()
     const domain = createSidecarSessionActionsDomain({ executor })
 
-    const result = await domain.branch()
+    const result = await domain.branchFromMessage('12345678-1234-4234-8234')
 
-    expect(result.ok).toBe(false)
-    expect(result.branchEngineSessionId).toBeUndefined()
-    expect(result.message).toContain('No conversation to branch')
+    expect(result).toMatchObject({
+      ok: true,
+      branchEngineSessionId: 'targeted-fork-engine-id',
+      branchTitle: 'First prompt (Branch)',
+      selectedPrompt: { content: 'selected prompt' },
+    })
+    expect(calls).toEqual(['branchFromMessage:12345678-1234-4234-8234'])
   })
 })
 

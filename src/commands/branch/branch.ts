@@ -1,23 +1,28 @@
 import { randomUUID, type UUID } from 'crypto'
-import { mkdir, readFile, writeFile } from 'fs/promises'
+import { mkdir, writeFile } from 'fs/promises'
 import { getOriginalCwd, getSessionId } from '../../bootstrap/state.js'
 import type { LocalJSXCommandContext } from '../../commands.js'
 import { logEvent } from '../../services/analytics/index.js'
 import type { LocalJSXCommandOnDone } from '../../types/command.js'
 import type {
   ContentReplacementEntry,
-  Entry,
+  CustomTitleMessage,
+  ForkedSessionEntry,
   LogOption,
   SerializedMessage,
   TranscriptMessage,
 } from '../../types/logs.js'
-import { parseJSONL } from '../../utils/json.js'
+import type { UserMessage } from '../../types/message.js'
+import {
+  isSelectableUserMessage,
+  resolveSelectableUserMessageByProducerPrefix,
+} from '../../utils/conversationRecovery.js'
 import {
   getProjectDir,
   getTranscriptPath,
   getTranscriptPathForSession,
-  isTranscriptMessage,
-  saveCustomTitle,
+  loadTranscriptFile,
+  selectActiveConversation,
   searchSessionsByCustomTitle,
 } from '../../utils/sessionStorage.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
@@ -58,13 +63,31 @@ export function deriveFirstPrompt(
  * Preserves all original metadata (timestamps, gitBranch, etc.) while updating
  * sessionId and adding forkedFrom traceability.
  */
-export async function createFork(customTitle?: string): Promise<{
+export type ConversationForkResult = {
   sessionId: UUID
-  title: string | undefined
+  title: string
   forkPath: string
   serializedMessages: SerializedMessage[]
   contentReplacementRecords: ContentReplacementEntry['replacements']
-}> {
+  sourcePrompt?: UserMessage
+}
+
+function retainedToolResultIds(messages: readonly TranscriptMessage[]): Set<string> {
+  const ids = new Set<string>()
+  for (const message of messages) {
+    if (message.type !== 'user' || !Array.isArray(message.message.content)) continue
+    for (const block of message.message.content) {
+      if (block.type === 'tool_result') ids.add(block.tool_use_id)
+    }
+  }
+  return ids
+}
+
+async function createForkFromActiveConversation(
+  customTitle?: string,
+  targetUuid?: string,
+  preserveTitle = false,
+): Promise<ConversationForkResult> {
   const forkSessionId = randomUUID() as UUID
   const originalSessionId = getSessionId()
   const projectDir = getProjectDir(getOriginalCwd())
@@ -74,45 +97,44 @@ export async function createFork(customTitle?: string): Promise<{
   // Ensure project directory exists
   await mkdir(projectDir, { recursive: true, mode: 0o700 })
 
-  // Read current transcript file
-  let transcriptContent: Buffer
-  try {
-    transcriptContent = await readFile(currentTranscriptPath)
-  } catch {
-    throw new Error('No conversation to branch')
-  }
-
-  if (transcriptContent.length === 0) {
-    throw new Error('No conversation to branch')
-  }
-
-  // Parse all transcript entries (messages + metadata entries like content-replacement)
-  const entries = parseJSONL<Entry>(transcriptContent)
-
-  // Filter to only main conversation messages (exclude sidechains and non-message entries)
-  const mainConversationEntries = entries.filter(
-    (entry): entry is TranscriptMessage =>
-      isTranscriptMessage(entry) && !entry.isSidechain,
+  const loaded = await loadTranscriptFile(currentTranscriptPath)
+  const active = selectActiveConversation(
+    loaded.messages,
+    loaded.leafUuids,
+    loaded.activeConversationTip,
   )
+  let mainConversationEntries = active.messages
+  let sourcePrompt: UserMessage | undefined
 
-  // Content-replacement entries for the original session. These record which
-  // tool_result blocks were replaced with previews by the per-message budget.
-  // Without them in the fork JSONL, `claude -r {forkId}` reconstructs state
-  // with an empty replacements Map → previously-replaced results are classified
-  // as FROZEN and sent as full content (prompt cache miss + permanent overage).
-  // sessionId must be rewritten since loadTranscriptFile keys lookup by the
-  // session's messages' sessionId.
-  const contentReplacementRecords = entries
-    .filter(
-      (entry): entry is ContentReplacementEntry =>
-        entry.type === 'content-replacement' &&
-        entry.sessionId === originalSessionId,
+  if (targetUuid !== undefined) {
+    const target = resolveSelectableUserMessageByProducerPrefix(
+      mainConversationEntries,
+      targetUuid,
     )
-    .flatMap(entry => entry.replacements)
+    const prefix = mainConversationEntries.slice(0, target.index)
+    if (!prefix.some(isSelectableUserMessage)) {
+      throw new Error('Cannot branch before the first prompt')
+    }
+    sourcePrompt = target.message
+    mainConversationEntries = prefix
+  }
+
+  const validToolResultIds = retainedToolResultIds(mainConversationEntries)
+  const contentReplacementRecords = loaded.orderedContentReplacements.filter(
+    record => validToolResultIds.has(record.toolUseId),
+  )
 
   if (mainConversationEntries.length === 0) {
     throw new Error('No messages to branch')
   }
+  const firstUser = mainConversationEntries.find(
+    (message): message is Extract<TranscriptMessage, { type: 'user' }> =>
+      message.type === 'user',
+  )
+  const titleBase = customTitle ?? deriveFirstPrompt(firstUser)
+  const effectiveTitle = preserveTitle
+    ? titleBase
+    : await getUniqueForkName(titleBase)
 
   // Build forked entries with new sessionId and preserved metadata
   let parentUuid: UUID | null = null
@@ -136,6 +158,10 @@ export async function createFork(customTitle?: string): Promise<{
     const serialized: SerializedMessage = {
       ...entry,
       sessionId: forkSessionId,
+      forkedFrom: {
+        sessionId: originalSessionId,
+        messageUuid: entry.uuid,
+      },
     }
 
     serializedMessages.push(serialized)
@@ -156,6 +182,18 @@ export async function createFork(customTitle?: string): Promise<{
     }
     lines.push(jsonStringify(forkedReplacementEntry))
   }
+  const titleEntry: CustomTitleMessage = {
+    type: 'custom-title',
+    sessionId: forkSessionId,
+    customTitle: effectiveTitle,
+  }
+  lines.push(jsonStringify(titleEntry))
+  const forkEntry: ForkedSessionEntry = {
+    type: 'forked-session',
+    sessionId: forkSessionId,
+    sourceSessionId: originalSessionId,
+  }
+  lines.push(jsonStringify(forkEntry))
 
   // Write the fork session file
   await writeFile(forkSessionPath, lines.join('\n') + '\n', {
@@ -165,11 +203,25 @@ export async function createFork(customTitle?: string): Promise<{
 
   return {
     sessionId: forkSessionId,
-    title: customTitle,
+    title: effectiveTitle,
     forkPath: forkSessionPath,
     serializedMessages,
     contentReplacementRecords,
+    sourcePrompt,
   }
+}
+
+export async function createFork(
+  customTitle?: string,
+): Promise<ConversationForkResult> {
+  return createForkFromActiveConversation(customTitle)
+}
+
+export async function createForkBeforeUserMessage(
+  targetUuid: string,
+  customTitle?: string,
+): Promise<ConversationForkResult> {
+  return createForkFromActiveConversation(customTitle, targetUuid, true)
 }
 
 /**
@@ -243,17 +295,9 @@ export async function call(
       serializedMessages.find(m => m.type === 'user'),
     )
 
-    // Save custom title - use provided title or firstPrompt as default
-    // This ensures /status and /resume show the same session name
-    // Always add " (Branch)" suffix to make it clear this is a branched session
-    // Handle collisions by adding a number suffix (e.g., " (Branch 2)", " (Branch 3)")
-    const baseName = title ?? firstPrompt
-    const effectiveTitle = await getUniqueForkName(baseName)
-    await saveCustomTitle(sessionId, effectiveTitle, forkPath)
-
     logEvent('tengu_conversation_forked', {
       message_count: serializedMessages.length,
-      has_custom_title: !!title,
+      has_custom_title: !!customTitle,
     })
 
     const forkLog: LogOption = {
@@ -267,12 +311,12 @@ export async function call(
       messageCount: serializedMessages.length,
       isSidechain: false,
       sessionId,
-      customTitle: effectiveTitle,
+      customTitle: title,
       contentReplacements: contentReplacementRecords,
     }
 
     // Resume into the fork
-    const titleInfo = title ? ` "${title}"` : ''
+    const titleInfo = customTitle ? ` "${customTitle}"` : ''
     const resumeHint = `\nTo resume the original: claude -r ${originalSessionId}`
     const successMessage = `Branched conversation${titleInfo}. You are now in the branch.${resumeHint}`
 

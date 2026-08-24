@@ -124,6 +124,29 @@ type SidecarArgs = {
   probeOnAttach: boolean
 }
 
+async function projectCurrentDisplayHistory(
+  retainedMessages: Message[],
+): Promise<{ history: ReturnType<typeof projectResumedHistory>; truncated: boolean }> {
+  const seedHistoryEvents = projectResumedHistory(retainedMessages)
+  const display = await loadDisplayTranscriptFromJsonlPath(getTranscriptPath(), {
+    maxMessages: MAX_HISTORY_REPLAY_FRAMES,
+    maxBytes: MAX_HISTORY_REPLAY_BYTES * 2,
+  })
+  const merged = mergeDisplayHistoryWithSeed(
+    display.messages,
+    seedHistoryEvents,
+  )
+  const history = await withRestoredSubagentHistory(
+    getSessionId(),
+    merged.history,
+    message => process.stderr.write(`${message}\n`),
+  )
+  return {
+    history,
+    truncated: display.truncated || merged.truncated,
+  }
+}
+
 function parseArgs(): SidecarArgs {
   const socketPath = process.env.CATCODE_SIDECAR_SOCKET
   const sessionId = process.env.CATCODE_SIDECAR_SESSION_ID
@@ -269,33 +292,12 @@ async function main(): Promise<void> {
   let historyEvents: ReturnType<typeof projectResumedHistory> | undefined
   let historySourceTruncated = false
   if (resumedMessages !== undefined) {
-    const seedHistoryEvents = projectResumedHistory(resumedMessages)
-    const display = await loadDisplayTranscriptFromJsonlPath(
-      getTranscriptPath(),
-      {
-        maxMessages: MAX_HISTORY_REPLAY_FRAMES,
-        // JSONL has persistence-only fields stripped by toSDKMessages. Keep a
-        // bounded 2x read window, then apply the exact 4 MiB wire cap below.
-        maxBytes: MAX_HISTORY_REPLAY_BYTES * 2,
-      },
-    )
-    const merged = mergeDisplayHistoryWithSeed(
-      display.messages,
-      seedHistoryEvents,
-    )
-    // Subagent conversations live in their own sidechain transcripts, so the
-    // display load above cannot see them. Splice each one back under the Agent
-    // tool_use that spawned it (subagentHistory.ts) — without this a restored
-    // Agent card has no child rows at all.
-    historyEvents = await withRestoredSubagentHistory(
-      getSessionId(),
-      merged.history,
-      message => process.stderr.write(`${message}\n`),
-    )
+    const projected = await projectCurrentDisplayHistory(resumedMessages)
+    historyEvents = projected.history
     historyEvents.push(
       ...projectUndeliveredPrompts(undeliveredPrompts, getSessionId()),
     )
-    historySourceTruncated = display.truncated || merged.truncated
+    historySourceTruncated = projected.truncated
   }
 
   const idleTtlMs = parseIdleTtlMs(process.env.CATCODE_SIDECAR_IDLE_TTL_MS)
@@ -325,6 +327,7 @@ async function main(): Promise<void> {
     ...(slashCatalog.length > 0 ? { slashCatalog } : {}),
     ...(historyEvents !== undefined ? { history: historyEvents } : {}),
     ...(historySourceTruncated ? { historySourceTruncated: true } : {}),
+    projectHistory: projectCurrentDisplayHistory,
     ...(turnInterrupted ? { turnInterrupted: true } : {}),
     // P4-6 title-rider: a resumed session already has its title + history, so its
     // first turn this run is a continuation — never retitle it from that prompt.

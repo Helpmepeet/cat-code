@@ -84,6 +84,8 @@ function parseSnapshot(value: unknown): SessionsCatalogSnapshot | null {
 function parseEntry(value: unknown): SessionCatalogEntry | null {
   if (!isRecord(value)) return null
   if (typeof value.sessionId !== 'string') return null
+  if (value.forked !== undefined && typeof value.forked !== 'boolean') return null
+  const forked = value.forked === true
   if (typeof value.cwd !== 'string') return null
   // Additive field (bug-sweep #1): a cache file written before it existed lacks
   // it → default `true` (assume-exists, never wrongly hide an old row). A PRESENT
@@ -114,6 +116,7 @@ function parseEntry(value: unknown): SessionCatalogEntry | null {
   // no `as` cast on the untrusted shape (each read above narrowed its field).
   return {
     sessionId: value.sessionId,
+    forked,
     cwd: value.cwd,
     cwdExists,
     title: value.title,

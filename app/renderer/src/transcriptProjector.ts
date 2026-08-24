@@ -1279,6 +1279,10 @@ export function projectServerFrame(
     }
   }
 
+  if (frame.kind === 'transcript.reset') {
+    return resetTranscriptSession(state, frame.sessionId)
+  }
+
   if (frame.kind === 'error') {
     // The only error frames this store reads. Every other one is a live
     // failure the error line owns, and projecting it as transcript would put a
@@ -1409,6 +1413,13 @@ export function projectServerFrames(
       drafts.set(frame.sessionId, createBatchReadyDraft(frame.sessionId))
       continue
     }
+    if (frame.kind === 'transcript.reset') {
+      const current = drafts.get(frame.sessionId)?.session ??
+        state.sessions[frame.sessionId]
+      if (!current) continue
+      drafts.set(frame.sessionId, createBatchResetDraft(frame.sessionId, current))
+      continue
+    }
     const draft = getBatchSessionDraft(drafts, state, frame.sessionId)
     if (!draft) continue
     if (frame.kind === 'error') {
@@ -1502,6 +1513,28 @@ function createBatchSessionDraft(
 
 function createBatchReadyDraft(sessionId: SessionId): BatchSessionDraft {
   const draft = createBatchSessionDraft(sessionId, createTranscriptSessionState())
+  draft.changed = true
+  draft.rowsOwned = true
+  draft.seenFrameIdsOwned = true
+  draft.streamingTextBlocksOwned = true
+  draft.nextBlockIndexByMessageIdOwned = true
+  draft.toolResultsByUseIdOwned = true
+  draft.generatedImagePreviewsOwned = true
+  draft.agentCompletionsOwned = true
+  draft.hiddenFrameIdsOwned = true
+  draft.slashCommandsOwned = true
+  return draft
+}
+
+function createBatchResetDraft(
+  sessionId: SessionId,
+  session: TranscriptSessionState,
+): BatchSessionDraft {
+  const reset = resetTranscriptSession(
+    { sessions: { [sessionId]: session } },
+    sessionId,
+  )
+  const draft = createBatchSessionDraft(sessionId, reset.sessions[sessionId]!)
   draft.changed = true
   draft.rowsOwned = true
   draft.seenFrameIdsOwned = true

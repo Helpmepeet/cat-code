@@ -14,6 +14,7 @@ const sessionA: SessionDescriptor = {
   engineSessionId: 'engine-a',
   cwd: '/Users/pt/catcode-gui-scratch',
   title: 'Scratch',
+  forked: false,
   titleUpdatedAt: null,
   status: 'ready',
   restorable: false,

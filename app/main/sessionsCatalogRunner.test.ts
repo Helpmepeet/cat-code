@@ -15,6 +15,7 @@ function catalog(ids: string[]): SessionsCatalogSnapshot {
   return {
     entries: ids.map(id => ({
       sessionId: id,
+      forked: false,
       cwd: '/w/proj',
       cwdExists: true,
       title: id,

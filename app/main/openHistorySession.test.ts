@@ -14,6 +14,7 @@ const OTHER_ID = '8ad429a8-65bd-4eef-897c-821c0610ed84'
 function entry(over: Partial<SessionCatalogEntry> = {}): SessionCatalogEntry {
   return {
     sessionId: ENGINE_ID,
+    forked: false,
     cwd: '/Users/pt/project',
     cwdExists: true,
     title: 'A terminal session',
@@ -41,6 +42,7 @@ function descriptor(over: Partial<SessionDescriptor> = {}): SessionDescriptor {
     engineSessionId: ENGINE_ID,
     cwd: '/Users/pt/project',
     title: null,
+    forked: false,
     titleUpdatedAt: null,
     status: 'ready',
     restorable: false,
@@ -133,6 +135,7 @@ describe('resolveOpenHistorySession (open-from-history boundary)', () => {
       // The persisted title rides along so the resumed tab/sidebar match the
       // clicked history row instead of the cwd basename (bug-sweep #2, 2026-07-21).
       expect(result.title).toBe('Fix the parser')
+      expect(result.forked).toBeUndefined()
     }
   })
 
@@ -180,5 +183,103 @@ describe('resolveOpenHistorySession (open-from-history boundary)', () => {
       catalog([entry()]),
     )
     expect(result.kind).toBe('spawn')
+  })
+
+  test('a matching trusted branch seed resolves when the catalog has not refreshed', () => {
+    const result = resolveOpenHistorySession(
+      OTHER_ID,
+      [],
+      catalog([entry()]),
+      {
+        engineSessionId: OTHER_ID,
+        cwd: '/Users/pt/source-workspace',
+        title: 'Targeted branch',
+        forked: true,
+      },
+    )
+    expect(result).toEqual({
+      kind: 'spawn',
+      cwd: '/Users/pt/source-workspace',
+      resumeEngineSessionId: OTHER_ID,
+      title: 'Targeted branch',
+      forked: true,
+    })
+  })
+
+  test('catalog fork provenance survives after the trusted seed expires', () => {
+    const result = resolveOpenHistorySession(
+      ENGINE_ID,
+      [],
+      catalog([entry({ forked: true })]),
+    )
+    expect(result).toMatchObject({
+      kind: 'spawn',
+      resumeEngineSessionId: ENGINE_ID,
+      forked: true,
+    })
+  })
+
+  test('a trusted seed cannot resolve a different id or override the catalog', () => {
+    const seed = {
+      engineSessionId: OTHER_ID,
+      cwd: '/Users/pt/seed-workspace',
+      title: 'Seed title',
+      forked: true as const,
+    }
+    const catalogResult = resolveOpenHistorySession(
+      ENGINE_ID,
+      [],
+      catalog([entry()]),
+      seed,
+    )
+    expect(catalogResult).toMatchObject({
+      kind: 'spawn',
+      cwd: '/Users/pt/project',
+    })
+    if (catalogResult.kind === 'spawn') {
+      expect(catalogResult.forked).toBeUndefined()
+    }
+    expect(
+      resolveOpenHistorySession(ENGINE_ID, [], null, seed),
+    ).toMatchObject({ kind: 'reject' })
+  })
+
+  test('a matching seed with no trusted cwd still fails closed', () => {
+    const result = resolveOpenHistorySession(OTHER_ID, [], null, {
+      engineSessionId: OTHER_ID,
+      cwd: '   ',
+      title: 'Unopenable branch',
+      forked: true,
+    })
+    expect(result).toMatchObject({
+      kind: 'reject',
+      error: { code: 'session_not_found' },
+    })
+  })
+
+  test('a matching trusted fork seed keeps catalog cwd/title authority and marks the spawn forked', () => {
+    const result = resolveOpenHistorySession(
+      ENGINE_ID,
+      [],
+      catalog([
+        entry({
+          cwd: '/Users/pt/catalog-workspace',
+          title: 'Catalog title',
+        }),
+      ]),
+      {
+        engineSessionId: ENGINE_ID,
+        cwd: '/Users/pt/seed-workspace',
+        title: 'Seed title',
+        forked: true,
+      },
+    )
+    expect(result).toEqual({
+      kind: 'spawn',
+      cwd: '/Users/pt/catalog-workspace',
+      resumeEngineSessionId: ENGINE_ID,
+      title: 'Catalog title',
+      forked: true,
+    })
   })
 })

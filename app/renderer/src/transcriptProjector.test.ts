@@ -56,6 +56,47 @@ function messageFrame(
   }
 }
 
+test('transcript reset discards projected rows before retained replay', () => {
+  const sessionId = 'session-reset'
+  const discarded = messageFrame(sessionId, {
+    type: 'user',
+    uuid: '11111111-1111-4111-8111-111111111111',
+    session_id: 'engine-reset',
+    parent_tool_use_id: null,
+    message: { role: 'user', content: 'discarded' },
+  })
+  const retained = messageFrame(sessionId, {
+    type: 'user',
+    uuid: '22222222-2222-4222-8222-222222222222',
+    session_id: 'engine-reset',
+    parent_tool_use_id: null,
+    message: { role: 'user', content: 'retained' },
+  })
+  const reset: ServerFrame = {
+    kind: 'transcript.reset',
+    protocolVersion: 1,
+    sessionId,
+  }
+
+  let single = projectServerFrame(createTranscriptState(), ready(sessionId))
+  single = projectServerFrame(single, discarded)
+  single = projectServerFrame(single, reset)
+  single = projectServerFrame(single, retained)
+
+  const batch = projectServerFrames(
+    createTranscriptState(),
+    [ready(sessionId), discarded, reset, retained],
+  )
+  expect(
+    selectTranscriptRows(single, sessionId)
+      .filter(row => row.kind === 'user-text')
+      .map(row => row.content),
+  ).toEqual(['retained'])
+  expect(selectTranscriptRows(batch, sessionId)).toEqual(
+    selectTranscriptRows(single, sessionId),
+  )
+})
+
 test('does not derive a durable interruption row from app-ready state', () => {
   let state = createTranscriptState()
   state = projectServerFrame(state, ready('session-1', true))

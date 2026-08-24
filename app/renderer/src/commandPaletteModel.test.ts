@@ -13,6 +13,7 @@ function descriptor(over: Partial<SessionDescriptor>): SessionDescriptor {
     engineSessionId: null,
     cwd: '/tmp/one',
     title: null,
+    forked: false,
     titleUpdatedAt: null,
     status: 'ready',
     restorable: false,

@@ -38,6 +38,7 @@ describe('mapLogOptionToCatalogEntry', () => {
         sessionId: 's-1',
         projectPath: '/Users/me/proj',
         customTitle: 'Fix the parser',
+        forked: true,
         modified: new Date('2026-07-09T12:00:00Z'),
         created: new Date('2026-07-08T09:00:00Z'),
         messageCount: 12,
@@ -52,6 +53,7 @@ describe('mapLogOptionToCatalogEntry', () => {
     expect(entry).not.toBeNull()
     expect(entry).toMatchObject({
       sessionId: 's-1',
+      forked: true,
       cwd: '/Users/me/proj',
       title: 'Fix the parser',
       messageCount: 12,

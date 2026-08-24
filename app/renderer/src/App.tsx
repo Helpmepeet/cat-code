@@ -103,7 +103,11 @@ import {
   runStartupTranscriptPreload,
   selectStartupPreloadCandidates,
 } from './sessionPreload.js'
-import { TranscriptView, type RestorePhase } from './TranscriptView.js'
+import {
+  TranscriptView,
+  type MessageActionHandler,
+  type RestorePhase,
+} from './TranscriptView.js'
 import { observePaneBottomLock } from './markdownScrollCoordinator.js'
 import {
   captureTranscriptScrollAnchor,
@@ -173,6 +177,7 @@ import {
   reduceTransportErrorCleared,
   reduceTransportErrorSet,
   resolvePendingSubmit,
+  restoreSelectedPrompt,
   restoreDraftWithPending,
   selectAgentMentionItems,
   selectComposerGate,
@@ -376,10 +381,7 @@ import {
   resolveSessionActions,
   selectSessionsPageActions,
 } from './sessionActions.js'
-import {
-  BranchDialog,
-  ExportDialog,
-} from './SessionActionDialogs.js'
+import { ExportDialog } from './SessionActionDialogs.js'
 import {
   buildBulkExportDocument,
   bulkExportSavedMessage,
@@ -497,6 +499,15 @@ const EMPTY_TURN_STARTS: ReadonlyMap<SessionId, number> = new Map()
 /** Renderer-minted correlation id for a run-control verb (T5a-analog; echoed on
  * `run-control.result`). A UX field, not a security one — the sidecar bounds it. */
 const newRequestId = (): string => crypto.randomUUID()
+const TOASTED_ACTION_REQUEST_CAP = 512
+function rememberToastedActionRequest(seen: Set<string>, requestId: string): void {
+  seen.add(requestId)
+  while (seen.size > TOASTED_ACTION_REQUEST_CAP) {
+    const oldest = seen.values().next().value
+    if (oldest === undefined) return
+    seen.delete(oldest)
+  }
+}
 const reduceRemoteSettingsStateBatched = withBatch(reduceRemoteSettingsState)
 const reduceSessionsCatalogStateBatched = withBatch(reduceSessionsCatalogState)
 const reduceSessionActionRuntimeStateBatched = withBatch(
@@ -545,6 +556,9 @@ export function App() {
   const [pasteState, setPasteState] = useState<PasteState>(createPasteState)
   const [imageAttachmentState, setImageAttachmentState] =
     useState<ImageAttachmentState>(createImageAttachmentState)
+  const [composerFocusRequests, setComposerFocusRequests] = useState<
+    Partial<Record<SessionId, number>>
+  >({})
   const [historyState, setHistoryState] = useState<HistoryState>(createHistoryState)
   // CC-16 — a prompt submitted while the session was still spawning. Parked
   // per-session (same keying as `promptDrafts`) and drained through the SAME
@@ -646,21 +660,10 @@ export function App() {
   const [revealHiddenSessions, setRevealHiddenSessions] = useState<
     Record<SessionId, true>
   >({})
-  // P4-30 — the two SAModal dialogs the ⋯ menu opens (PARITY-LEDGER §17). Both
-  // are bound to the row the menu was opened for, like the menu itself.
-  //
-  // Branch is a CONFIRMATION gate: `session.branch` writes a real fork on disk
-  // (`createFork`), and before this it fired straight off the menu click. Nothing
-  // is dispatched until the dialog's primary button.
-  //
-  // Export is the reverse shape: the verb is dispatched WHEN the dialog opens,
+  // P4-30 — Export is dispatched WHEN the dialog opens,
   // because the dialog's whole job is to show the transcript the sidecar renders.
   // The dialog holds the `requestId` it minted so it displays its OWN result and
   // never another action's (T5a-analog).
-  const [branchConfirm, setBranchConfirm] = useState<{
-    sessionId: SessionId
-    title: string | null
-  } | null>(null)
   const [exportDialog, setExportDialog] = useState<{
     sessionId: SessionId
     requestId: string
@@ -672,6 +675,16 @@ export function App() {
   // the transcript back to pending (`selectLatchedExportPreview`).
   const [latchedExport, setLatchedExport] =
     useState<LatchedExportPreview | null>(null)
+  const pendingMessageActionsRef = useRef<
+    Map<
+      SessionId,
+      {
+        requestId: string
+        action: 'edit' | 'branch'
+        awaitingReconnect: boolean
+      }
+    >
+  >(new Map())
   const [rosterBootstrap, dispatchRosterBootstrap] = useReducer(
     reduceRosterBootstrapState,
     undefined,
@@ -1910,6 +1923,28 @@ export function App() {
     [],
   )
 
+  const restorePromptIntoComposer = useCallback(
+    (sessionId: SessionId, selectedPrompt: unknown): boolean => {
+      const restored = restoreSelectedPrompt(selectedPrompt)
+      if (!restored) return false
+      setPromptDrafts(current =>
+        reducePromptDrafts(current, sessionId, restored.text),
+      )
+      setPasteState(current =>
+        reduceSessionPastesCleared(current, sessionId),
+      )
+      setImageAttachmentState(current =>
+        reduceSessionImagesReplaced(current, sessionId, restored.images),
+      )
+      setComposerFocusRequests(current => ({
+        ...current,
+        [sessionId]: (current[sessionId] ?? 0) + 1,
+      }))
+      return true
+    },
+    [],
+  )
+
   // P4-35 (operator ruling 2026-07-30) — the app's only file write, reached the
   // one legal way: hand main the engine-rendered text plus a name SUGGESTION and
   // let it ask the user where the file goes (HC1 — the renderer names no path, and
@@ -1948,6 +1983,34 @@ export function App() {
   const openExportRequestIdRef = useRef<string | null>(null)
   openExportRequestIdRef.current = exportDialog?.requestId ?? null
   const toastedActionRequestsRef = useRef<Set<string>>(new Set())
+  const handleMessageAction = useCallback<MessageActionHandler>(
+    (sessionId, action, userMessageId) => {
+      if (pendingMessageActionsRef.current.has(sessionId)) return
+      const requestId = newRequestId()
+      pendingMessageActionsRef.current.set(sessionId, {
+        requestId,
+        action,
+        awaitingReconnect: false,
+      })
+      // Claim before the generic result effects can observe this id. Targeted
+      // success is silent; its result drives composer restoration below.
+      rememberToastedActionRequest(toastedActionRequestsRef.current, requestId)
+      try {
+        getBridge().sessionActionVerb(sessionId, {
+          type:
+            action === 'edit'
+              ? 'session.editFromMessage'
+              : 'session.branchFromMessage',
+          requestId,
+          userMessageId,
+        })
+      } catch (error) {
+        pendingMessageActionsRef.current.delete(sessionId)
+        toast(errorMessage(error), { tone: 'danger' })
+      }
+    },
+    [toast],
+  )
 
   // P4-29 — tag results, which the effect below cannot handle: a Sessions-page
   // tag targets any LIVE row, not necessarily the active tab, so its result never
@@ -1971,7 +2034,10 @@ export function App() {
       if (toastedActionRequestsRef.current.has(result.requestId)) continue
       const pending = pendingTagWritesRef.current.get(result.requestId)
       if (!pending) continue
-      toastedActionRequestsRef.current.add(result.requestId)
+      rememberToastedActionRequest(
+        toastedActionRequestsRef.current,
+        result.requestId,
+      )
       pendingTagWritesRef.current.delete(result.requestId)
       if (result.ok) entries.push(pending)
       toast(result.message, { tone: result.ok ? 'success' : 'danger' })
@@ -1979,7 +2045,10 @@ export function App() {
     for (const error of Object.values(sessionActionRuntime.errorBySession)) {
       if (!error || toastedActionRequestsRef.current.has(error.requestId)) continue
       if (!pendingTagWritesRef.current.has(error.requestId)) continue
-      toastedActionRequestsRef.current.add(error.requestId)
+      rememberToastedActionRequest(
+        toastedActionRequestsRef.current,
+        error.requestId,
+      )
       pendingTagWritesRef.current.delete(error.requestId)
       toast(error.message, { tone: 'danger' })
     }
@@ -2050,7 +2119,10 @@ export function App() {
     const result = latestSessionActionResult
     if (!result) return
     if (toastedActionRequestsRef.current.has(result.requestId)) return
-    toastedActionRequestsRef.current.add(result.requestId)
+    rememberToastedActionRequest(
+      toastedActionRequestsRef.current,
+      result.requestId,
+    )
     if (result.requestId === openExportRequestIdRef.current) return
     toast(result.message, { tone: result.ok ? 'success' : 'danger' })
   }, [latestSessionActionResult, toast])
@@ -2063,7 +2135,10 @@ export function App() {
     const error = latestSessionActionError
     if (!error || toastedActionRequestsRef.current.has(error.requestId)) return
     if (error.requestId === openExportRequestIdRef.current) return
-    toastedActionRequestsRef.current.add(error.requestId)
+    rememberToastedActionRequest(
+      toastedActionRequestsRef.current,
+      error.requestId,
+    )
     toast(error.message, { tone: 'danger' })
   }, [latestSessionActionError, toast])
 
@@ -2526,27 +2601,106 @@ export function App() {
   // focus of an empty pane; a live/fresh-spawned one is focused directly. An
   // unresolvable id returns a typed error rendered honestly.
   const openHistorySession = useCallback(
-    async (engineSessionId: string) => {
+    async (engineSessionId: string): Promise<SessionDescriptor | null> => {
       const bridge = getBridge()
       try {
         const result = await bridge.openHistorySession(engineSessionId)
         if (!result.ok) {
           setShellError(hostErrorMessage(result.error))
-          return
+          return null
         }
         const descriptor = result.value
         if (descriptor.restorable) {
-          performRestore(descriptor.appSessionId)
-          return
+          void performRestore(descriptor.appSessionId)
+          return descriptor
         }
         setActiveSessionId(descriptor.appSessionId)
         setActiveView('chat')
+        return descriptor
       } catch (error) {
         setShellError(errorMessage(error))
+        return null
       }
     },
     [performRestore],
   )
+
+  useEffect(() => {
+    for (const [sessionId, pending] of pendingMessageActionsRef.current) {
+      const error = sessionActionRuntime.errorBySession[sessionId]
+      if (error?.requestId === pending.requestId) {
+        pendingMessageActionsRef.current.delete(sessionId)
+        dispatchSessionActionRuntime({
+          type: 'discard-result',
+          sessionId,
+          requestId: pending.requestId,
+        })
+        toast(error.message, { tone: 'danger' })
+        continue
+      }
+      const result =
+        sessionActionRuntime.targetedByRequestId[pending.requestId]
+      if (!result) {
+        const hasEngine = connectionHasEngine(
+          selectConnection(connection, sessionId).status,
+        )
+        if (!hasEngine) {
+          pending.awaitingReconnect = true
+        } else if (pending.awaitingReconnect) {
+          pendingMessageActionsRef.current.delete(sessionId)
+        }
+        continue
+      }
+      const expectedVerb =
+        pending.action === 'edit' ? 'editFromMessage' : 'branchFromMessage'
+      if (
+        result.sessionId !== sessionId ||
+        result.verb !== expectedVerb
+      ) {
+        continue
+      }
+      pendingMessageActionsRef.current.delete(sessionId)
+      dispatchSessionActionRuntime({
+        type: 'discard-result',
+        sessionId,
+        requestId: pending.requestId,
+      })
+      if (!result.ok) {
+        toast(result.message, { tone: 'danger' })
+        continue
+      }
+      if (pending.action === 'edit') {
+        if (!restorePromptIntoComposer(sessionId, result.selectedPrompt)) {
+          toast('That message could not be restored.', { tone: 'danger' })
+        }
+        continue
+      }
+      if (
+        !result.branchEngineSessionId ||
+        result.selectedPrompt === undefined
+      ) {
+        toast('That message could not be restored.', { tone: 'danger' })
+        continue
+      }
+      void openHistorySession(result.branchEngineSessionId).then(descriptor => {
+        if (
+          descriptor &&
+          !restorePromptIntoComposer(
+            descriptor.appSessionId,
+            result.selectedPrompt,
+          )
+        ) {
+          toast('That message could not be restored.', { tone: 'danger' })
+        }
+      })
+    }
+  }, [
+    connection,
+    openHistorySession,
+    restorePromptIntoComposer,
+    sessionActionRuntime,
+    toast,
+  ])
 
   // P4-29 — the ONE way a catalog row is opened, shared by the Sessions-page row
   // click and the ⋯ menu's Open/Restore verb. Those two had each re-derived the
@@ -3125,7 +3279,14 @@ export function App() {
 	            activeLog={sessionLog}
 	            activeSessionId={sessionId}
                 isActivePane={sessionId === activeSessionId}
+                composerFocusRequest={composerFocusRequests[sessionId]}
                 preview={panelTranscript.preview}
+                onMessageAction={
+                  !panelTranscript.preview &&
+                  connectionHasEngine(sessionConnection.status)
+                    ? handleMessageAction
+                    : undefined
+                }
                 onPreviewEngage={() => engagePreview(sessionId)}
                 previewRunFacts={panelTranscript.runFacts}
 	            branch={panelBranch}
@@ -3729,7 +3890,7 @@ export function App() {
           {/* P4-6b — the tab ⋯ actions overflow + its MetadataInspector drawer +
            * inline rename editor. The menu resolves and acts against the row it was
            * OPENED for (`sessionActionsTarget.sessionId`), never the active tab.
-           * rename/export/branch dispatch the real WRITE verbs to that session's
+           * rename/export dispatch the real WRITE verbs to that session's
            * sidecar; metadata + copy + open read state the renderer already holds. */}
           {sessionActionsTarget
             ? (() => {
@@ -3813,13 +3974,7 @@ export function App() {
                           type: 'session.export',
                           requestId,
                         })
-                      } else if (kind === 'branch')
-                        // P4-30 — CONFIRM FIRST. The verb writes a real fork on
-                        // disk; it is dispatched by the dialog, not by this click.
-                        setBranchConfirm({
-                          sessionId: targetId,
-                          title: targetRow.title ?? null,
-                        })
+                      }
                     }}
                     onClose={() => setSessionActionsTarget(null)}
                   />
@@ -3842,23 +3997,6 @@ export function App() {
                   })
                 }
                 setRenamingSession(null)
-              }}
-            />
-          ) : null}
-
-          {/* P4-30 — the SAModal dialog layer (PARITY-LEDGER §17). Branch gates the
-           * fork behind a confirmation; Export shows the engine-rendered transcript
-           * with its file name before anything is copied. */}
-          {branchConfirm ? (
-            <BranchDialog
-              title={branchConfirm.title}
-              onClose={() => setBranchConfirm(null)}
-              onConfirm={() => {
-                sendSessionActionVerb(branchConfirm.sessionId, {
-                  type: 'session.branch',
-                  requestId: newRequestId(),
-                })
-                setBranchConfirm(null)
               }}
             />
           ) : null}
@@ -4099,7 +4237,10 @@ export function App() {
                   })
                   // Claimed here so the general result effect stays silent: this
                   // batch reports itself ONCE, when the file is written.
-                  toastedActionRequestsRef.current.add(requestId)
+                  rememberToastedActionRequest(
+                    toastedActionRequestsRef.current,
+                    requestId,
+                  )
                   sendSessionActionVerb(row.appSessionId, {
                     type: 'session.export',
                     requestId,
@@ -4330,8 +4471,10 @@ export function SessionPane({
   activeLog,
   activeSessionId,
   isActivePane,
+  composerFocusRequest,
   preview = false,
   onPreviewEngage,
+  onMessageAction,
   previewRunFacts = null,
   allowPermission,
   model,
@@ -4550,6 +4693,18 @@ export function SessionPane({
   // contentEditable (`ComposerInput`) so a collapsed paste renders as an inline
   // pill; the handle keeps the textarea-shaped selection API these handlers use.
   const composerRef = useRef<ComposerInputHandle>(null)
+  const handledComposerFocusRequestRef = useRef<number | undefined>(undefined)
+  useEffect(() => {
+    if (
+      !isActivePane ||
+      composerFocusRequest === undefined ||
+      handledComposerFocusRequestRef.current === composerFocusRequest
+    ) {
+      return
+    }
+    handledComposerFocusRequestRef.current = composerFocusRequest
+    composerRef.current?.focus()
+  }, [composerFocusRequest, isActivePane])
   const imageInputRef = useRef<HTMLInputElement>(null)
   const imagePreparationInFlightRef = useRef(false)
   const [preparingImage, setPreparingImage] = useState(false)
@@ -5189,6 +5344,7 @@ export function SessionPane({
             onLoadEarlier={onLoadEarlierHistory}
             onOpenAccounts={onManageAccounts}
             onSaveDiagnostics={() => void getBridge().saveDiagnosticsBundle()}
+            onMessageAction={onMessageAction}
           />
         </div>
         {!atBottom ? (
@@ -5936,10 +6092,14 @@ type SessionPaneProps = {
   activeSessionId: SessionId | null
   /** This pane is the operator's focused one — gates window-level keyboard ownership in a split. */
   isActivePane: boolean
+  /** Monotonic request to focus this pane's composer after a historical rewrite. */
+  composerFocusRequest?: number
   /** Cache-backed transcript is currently painted; operational stores stay live-only. */
   preview?: boolean
   /** First focus, pointer-down, or pane dwell lazily restores the real session. */
   onPreviewEngage?: () => void
+  /** Stable App-owned message action dispatcher, absent without a live engine. */
+  onMessageAction?: MessageActionHandler
   /** What the cached transcript says this session ran on; feeds the rail while
    * no engine exists to report it live. */
   previewRunFacts?: PreviewRunFacts | null

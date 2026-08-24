@@ -1,5 +1,8 @@
 import type { SDKMessage } from '../entrypoints/agentSdkTypes.js'
+import type { ConversationRewindResult } from '../QueryEngine.js'
+import type { ConversationForkResult } from '../commands/branch/branch.js'
 import type { MessageOrigin } from '../types/message.js'
+import type { UserMessage } from '../types/message.js'
 import {
   AppSessionController,
   type AppSessionPrompt,
@@ -27,6 +30,14 @@ export type QueryEngineSessionLike = {
   ): AsyncIterable<SDKMessage>
   interrupt?: () => void
   refreshAbortController?: () => AbortController
+  selectUserMessage?: (targetUuid: string) => UserMessage
+  rewindBeforeUserMessage?: (
+    targetUuid: string,
+  ) => Promise<ConversationRewindResult>
+  forkBeforeUserMessage?: (
+    targetUuid: string,
+    customTitle?: string,
+  ) => Promise<ConversationForkResult>
 }
 
 export function createQueryEngineSessionAdapter(
@@ -42,6 +53,16 @@ export function createQueryEngineSessionAdapter(
     abort() {
       session.interrupt?.()
     },
+    selectUserMessage: session.selectUserMessage
+      ? targetUuid => session.selectUserMessage!(targetUuid)
+      : undefined,
+    rewindBeforeUserMessage: session.rewindBeforeUserMessage
+      ? targetUuid => session.rewindBeforeUserMessage!(targetUuid)
+      : undefined,
+    forkBeforeUserMessage: session.forkBeforeUserMessage
+      ? (targetUuid, customTitle) =>
+          session.forkBeforeUserMessage!(targetUuid, customTitle)
+      : undefined,
   }
 }
 

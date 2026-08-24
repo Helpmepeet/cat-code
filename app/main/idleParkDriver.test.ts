@@ -28,6 +28,7 @@ function desc(
     engineSessionId: `engine-${over.appSessionId}`,
     cwd: '/tmp',
     title: null,
+    forked: false,
     titleUpdatedAt: null,
     status: 'ready',
     restorable: false,

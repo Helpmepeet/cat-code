@@ -115,6 +115,59 @@ test('records transport errors without adding non-message events to the raw log'
   expect(active.error).toBe('turn failed')
 })
 
+test('transcript reset replaces the raw log so replay cannot dedupe discarded rows', () => {
+  const sessionId = 'session-reset'
+  const uuid = '11111111-1111-4111-8111-111111111111'
+  const messageFrame = (content: string, replay = false): ServerFrame =>
+    ({
+      kind: 'event',
+      protocolVersion: 1,
+      sessionId,
+      ...(replay ? { replay: true as const } : {}),
+      event: {
+        type: 'message',
+        message: {
+          type: 'user',
+          uuid,
+          session_id: 'engine-reset',
+          parent_tool_use_id: null,
+          message: { role: 'user', content },
+        },
+      },
+    }) as ServerFrame
+  let state = reduceServerFrame(createRawMessageLogState(), {
+    kind: 'ready',
+    protocolVersion: 1,
+    sessionId,
+    engineSessionId: 'engine-reset',
+    payload: {
+      type: 'app.ready',
+      protocolVersion: 1,
+      inputEnabled: true,
+      activeTurn: false,
+      abort: { status: 'idle' },
+      goalSnapshot: null,
+      pendingPermissionRequests: [],
+    },
+  })
+  state = reduceServerFrame(state, messageFrame('discarded'))
+  state = reduceServerFrame(state, {
+    kind: 'transcript.reset',
+    protocolVersion: 1,
+    sessionId,
+  })
+  state = reduceServerFrame(state, messageFrame('retained replay', true))
+
+  const log = selectRawMessageLog(state, sessionId)
+  expect(log.inputEnabled).toBe(true)
+  expect(log.messages).toHaveLength(1)
+  expect(log.messages[0]).toMatchObject({
+    message: { content: 'retained replay' },
+  })
+  expect(log.truncated).toBe(false)
+  expect(log.error).toBeNull()
+})
+
 test('retention notices never reach the live error line', () => {
   // They ride `kind:'error'` to reuse the channel, but retention is working as
   // designed and there is nothing to act on. The history-replay boundary remains

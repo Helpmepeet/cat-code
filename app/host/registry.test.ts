@@ -102,6 +102,7 @@ function baseRow(overrides: Partial<RegistrySession>): RegistrySession {
     // Preserve an explicit `null` engineSessionId — `?? 'engine-x'` would mangle it.
     engineSessionId: 'engineSessionId' in overrides ? overrides.engineSessionId! : 'engine-x',
     cwd: overrides.cwd ?? '/Users/pt/cat-code',
+    forked: overrides.forked ?? false,
     createdAt: overrides.createdAt ?? 1_700_000_000_000,
     lastAttachedAt: overrides.lastAttachedAt ?? 1_700_000_000_000,
     lastMessageSentAt: overrides.lastMessageSentAt ?? null,
@@ -738,6 +739,7 @@ test('upsertOnSpawn creates a live row with null engineSessionId', async () => {
   expect(row.engineSessionId).toBeNull()
   expect(row.shutdown).toBeNull()
   expect(row.title).toBe('first session')
+  expect(row.forked).toBe(false)
   expect(row.enginePid).toBe(4321)
   expect(row.socketPath).toBe('/tmp/catcode/s0.sock')
   expect(row.restartCount).toBe(0)
@@ -763,6 +765,96 @@ test('upsertOnSpawn seeds engineSessionId when the spawn is a resume', async () 
   expect(row.lastMessageSentAt).toBeNull()
   expect(row.shutdown).toBeNull()
   expect(row.restartCount).toBe(0)
+})
+
+test('forked provenance defaults false, persists true, and changes only when explicitly supplied', async () => {
+  const { registry, registryPath, storageDir } = makeRegistry()
+  writeTranscript(storageDir, 'engine-fork')
+
+  await registry.upsertOnSpawn({
+    appSessionId: 'app-fork',
+    cwd: '/Users/pt/cat-code',
+    engineSessionId: 'engine-fork',
+    forked: true,
+  })
+  expect(readDoc(registryPath).sessions[0]!.forked).toBe(true)
+
+  // Restore/restart callers may omit provenance; that must retain the row's
+  // durable value rather than resetting it to the new-row default.
+  await registry.upsertOnSpawn({
+    appSessionId: 'app-fork',
+    cwd: '/Users/pt/cat-code',
+  })
+  expect(readDoc(registryPath).sessions[0]!.forked).toBe(true)
+
+  await registry.markClean('app-fork')
+  const reloaded = makeRegistry({ storageDir })
+  await reloaded.registry.launch()
+  expect(reloaded.registry.findSession('app-fork')?.forked).toBe(true)
+
+  await reloaded.registry.upsertOnSpawn({
+    appSessionId: 'app-fork',
+    cwd: '/Users/pt/cat-code',
+    forked: false,
+  })
+  expect(reloaded.registry.findSession('app-fork')?.forked).toBe(false)
+})
+
+test('pre-forked-field registry rows migrate in place as ordinary sessions', async () => {
+  const storageDir = tempDir()
+  const registryPath = join(storageDir, 'registry.json')
+  writeTranscript(storageDir, 'engine-legacy')
+  const legacy = baseRow({
+    appSessionId: 'app-legacy',
+    engineSessionId: 'engine-legacy',
+    shutdown: 'clean',
+  })
+  const { forked: _forked, ...legacyWithoutForked } = legacy
+  writeFileSync(
+    registryPath,
+    `${JSON.stringify({
+      registryVersion: REGISTRY_VERSION,
+      hostPid: 999999,
+      updatedAt: Date.now(),
+      sessions: [legacyWithoutForked],
+    }, null, 2)}\n`,
+  )
+
+  const { registry } = makeRegistry({ storageDir })
+  await registry.launch()
+
+  expect(registry.findSession('app-legacy')?.forked).toBe(false)
+  expect(readDoc(registryPath).registryVersion).toBe(REGISTRY_VERSION)
+})
+
+test('merge preserves a concurrent forked update across an unrelated stale-row write', async () => {
+  const storageDir = tempDir()
+  const registryPath = join(storageDir, 'registry.json')
+  writeTranscript(storageDir, 'engine-shared')
+  seed(registryPath, [
+    baseRow({
+      appSessionId: 'app-shared',
+      engineSessionId: 'engine-shared',
+      shutdown: 'clean',
+      forked: false,
+    }),
+  ])
+
+  const first = makeRegistry({ storageDir }).registry
+  const stale = makeRegistry({ storageDir }).registry
+  await first.launch()
+  await stale.launch()
+
+  await first.upsertOnSpawn({
+    appSessionId: 'app-shared',
+    cwd: '/Users/pt/cat-code',
+    forked: true,
+  })
+  // This registry still has the pre-update false value. Its unrelated attach
+  // timestamp write must not roll back the trusted provenance written above.
+  await stale.touchAttached('app-shared')
+
+  expect(readDoc(registryPath).sessions[0]!.forked).toBe(true)
 })
 
 test('upsertOnSpawn on an existing appSessionId refreshes advisory fields + bumps restartCount', async () => {

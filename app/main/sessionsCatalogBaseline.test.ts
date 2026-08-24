@@ -29,6 +29,7 @@ const validSnapshot: SessionsCatalogSnapshot = {
   entries: [
     {
       sessionId: 'eng-1',
+      forked: false,
       cwd: '/Users/me/proj',
       cwdExists: true,
       title: 'Fix the parser',

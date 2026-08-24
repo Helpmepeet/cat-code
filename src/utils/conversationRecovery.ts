@@ -16,6 +16,7 @@ import type {
   Message,
   NormalizedMessage,
   NormalizedUserMessage,
+  UserMessage,
 } from '../types/message.js'
 import { PERMISSION_MODES } from '../types/permissions.js'
 import {
@@ -54,7 +55,6 @@ import {
 import { copyPlanForResume } from './plans.js'
 import { processSessionStartHooks } from './sessionStart.js'
 import {
-  buildConversationChain,
   checkResumeConsistency,
   getLastSessionLog,
   getSessionIdFromLog,
@@ -63,6 +63,7 @@ import {
   loadMessageLogs,
   loadTranscriptFile,
   removeExtraFields,
+  selectActiveConversation,
 } from './sessionStorage.js'
 import type { ContentReplacementRecord } from './toolResultStorage.js'
 import type { ThreadGoal } from './threadGoal.js'
@@ -88,6 +89,54 @@ const SEND_USER_FILE_TOOL_NAME: string | null = feature('KAIROS')
     ).SEND_USER_FILE_TOOL_NAME
   : null
 /* eslint-enable @typescript-eslint/no-require-imports */
+
+let selectableUserMessagePredicate:
+  | typeof import('../components/MessageSelector.js').selectableUserMessagesFilter
+  | undefined
+
+function getSelectableUserMessagePredicate(): typeof import('../components/MessageSelector.js').selectableUserMessagesFilter {
+  /* eslint-disable-next-line @typescript-eslint/no-require-imports */
+  return (selectableUserMessagePredicate ??=
+    require('../components/MessageSelector.js').selectableUserMessagesFilter)
+}
+
+export type SelectableUserMessageTarget = {
+  message: UserMessage
+  index: number
+}
+
+export function isSelectableUserMessage(
+  message: Message,
+): message is UserMessage {
+  return getSelectableUserMessagePredicate()(message)
+}
+
+export function resolveSelectableUserMessageByProducerPrefix(
+  messages: readonly Message[],
+  targetUuid: string,
+): SelectableUserMessageTarget {
+  if (targetUuid.length < 24) {
+    throw new Error('Message target is invalid')
+  }
+  const prefix = targetUuid.slice(0, 24)
+  const matches: SelectableUserMessageTarget[] = []
+  const rawUuids = new Set<string>()
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index]!
+    if (!isSelectableUserMessage(message) || !message.uuid.startsWith(prefix))
+      continue
+    matches.push({ message, index })
+    rawUuids.add(message.uuid)
+  }
+
+  if (matches.length === 0) {
+    throw new Error('Selectable user message not found')
+  }
+  if (rawUuids.size > 1) {
+    throw new Error('Message target is ambiguous')
+  }
+  return matches.at(-1)!
+}
 
 /**
  * Transforms legacy attachment types to current types for backward compatibility
@@ -493,46 +542,35 @@ export function restoreSkillStateFromMessages(messages: Message[]): void {
 }
 
 /**
- * Chain-walk a transcript jsonl by path.  Same sequence loadFullLog
- * runs internally — loadTranscriptFile → find newest non-sidechain
- * leaf → buildConversationChain → removeExtraFields — just starting
- * from an arbitrary path instead of the sid-derived one.
+ * Chain-walk a transcript jsonl by path. Same sequence loadFullLog runs
+ * internally: loadTranscriptFile, select the durable active tip or newest
+ * non-sidechain leaf, then remove transcript-only fields.
  *
- * leafUuids is populated by loadTranscriptFile as "uuids that no
- * other message's parentUuid points at" — the chain tips.  There can
- * be several (sidechains, orphans); newest non-sidechain is the main
- * conversation's end.
+ * leafUuids is populated by loadTranscriptFile as "uuids that no other
+ * message's parentUuid points at". There can be several (sidechains, orphans).
  */
 export async function loadMessagesFromJsonlPath(path: string): Promise<{
   messages: SerializedMessage[]
   sessionId: UUID | undefined
   threadGoal: ThreadGoal | null
 }> {
-  const { messages: byUuid, leafUuids, threadGoals } = await loadTranscriptFile(
-    path,
+  const {
+    messages: byUuid,
+    leafUuids,
+    threadGoals,
+    activeConversationTip,
+  } = await loadTranscriptFile(path)
+  const active = selectActiveConversation(
+    byUuid,
+    leafUuids,
+    activeConversationTip,
   )
-  let tip: (typeof byUuid extends Map<UUID, infer T> ? T : never) | null = null
-  let tipTs = 0
-  for (const m of byUuid.values()) {
-    // Only user/assistant leaves are conversation tips. `system` frames (e.g.
-    // Codex diagnostics) can be leaves with a later timestamp than the assistant
-    // turn they follow; picking one collapses the chain to that lone frame.
-    if (m.isSidechain || !leafUuids.has(m.uuid)) continue
-    if (m.type !== 'user' && m.type !== 'assistant') continue
-    const ts = new Date(m.timestamp).getTime()
-    if (ts > tipTs) {
-      tipTs = ts
-      tip = m
-    }
+  const sessionId = active.sessionId
+  if (!sessionId) {
+    return { messages: [], sessionId: undefined, threadGoal: null }
   }
-  if (!tip) return { messages: [], sessionId: undefined, threadGoal: null }
-  const chain = buildConversationChain(byUuid, tip)
-  const sessionId = tip.sessionId as UUID | undefined
   return {
-    messages: removeExtraFields(chain),
-    // Leaf's sessionId — forked sessions copy chain[0] from the source
-    // transcript, so the root retains the source session's ID. Matches
-    // loadFullLog's mostRecentLeaf.sessionId.
+    messages: removeExtraFields(active.messages),
     sessionId,
     threadGoal:
       sessionId && threadGoals.has(sessionId)

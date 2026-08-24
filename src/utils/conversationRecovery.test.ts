@@ -1,6 +1,14 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { randomUUID } from 'crypto'
+import { mkdtempSync, rmSync } from 'fs'
+import { writeFile } from 'fs/promises'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import { compactResumeFixture } from './conversationRecovery.fixture.js'
-import { deserializeMessagesWithInterruptDetection } from './conversationRecovery.js'
+import {
+  deserializeMessagesWithInterruptDetection,
+  loadMessagesFromJsonlPath,
+} from './conversationRecovery.js'
 import {
   NO_RESPONSE_REQUESTED,
   normalizeMessagesForAPI,
@@ -8,6 +16,14 @@ import {
 } from './messages.js'
 
 describe('manual compact recovery', () => {
+  const tempDirs: string[] = []
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   test('keeps API alternation valid without classifying local command records as an unanswered prompt', () => {
     const recovered = deserializeMessagesWithInterruptDetection(
       compactResumeFixture(),
@@ -43,5 +59,63 @@ describe('manual compact recovery', () => {
       throw new Error('expected interrupted prompt')
     }
     expect(recovered.turnInterruptionState.message.message.content).toBe(prompt)
+  })
+
+  test('jsonl-path resume honors the durable active tip', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'conversation-recovery-'))
+    tempDirs.push(tempDir)
+    const sessionId = randomUUID()
+    const firstUser = randomUUID()
+    const firstAssistant = randomUUID()
+    const discardedUser = randomUUID()
+    const path = join(tempDir, `${sessionId}.jsonl`)
+    const base = {
+      isSidechain: false,
+      sessionId,
+      cwd: tempDir,
+      userType: 'external',
+      version: 'test',
+    }
+    const entries = [
+      {
+        parentUuid: null,
+        ...base,
+        type: 'user',
+        uuid: firstUser,
+        timestamp: '2026-08-24T03:00:00.000Z',
+        message: { role: 'user', content: 'retained prompt' },
+      },
+      {
+        parentUuid: firstUser,
+        ...base,
+        type: 'assistant',
+        uuid: firstAssistant,
+        timestamp: '2026-08-24T03:00:01.000Z',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'retained answer' }],
+        },
+      },
+      {
+        parentUuid: firstAssistant,
+        ...base,
+        type: 'user',
+        uuid: discardedUser,
+        timestamp: '2026-08-24T03:00:02.000Z',
+        message: { role: 'user', content: 'discarded prompt' },
+      },
+      { type: 'active-conversation-tip', sessionId, tipUuid: firstAssistant },
+    ]
+    await writeFile(
+      path,
+      `${entries.map(entry => JSON.stringify(entry)).join('\n')}\n`,
+    )
+
+    const loaded = await loadMessagesFromJsonlPath(path)
+    expect(loaded.sessionId).toBe(sessionId)
+    expect(loaded.messages.map(message => message.uuid)).toEqual([
+      firstUser,
+      firstAssistant,
+    ])
   })
 })

@@ -1,5 +1,5 @@
 /**
- * Renderer projection of the P4-6b session-action verbs (Rename / Export / Branch).
+ * Renderer projection of session-action results, including targeted Edit/Branch.
  * The WRITE half of the Sessions `⋯` menu: a reducer over the outbound
  * `session-action.result` frame plus a read-time selector, following the
  * `remoteSettingsState` / `runControlsState` recipe (per-domain state OUT of
@@ -27,6 +27,8 @@ export type SessionActionRuntimeState = {
   lastBySession: Record<SessionId, SessionActionResultFrame | null>
   /** Correlated failures stay separate: ErrorFrame does not name an action verb. */
   errorBySession: Record<SessionId, SessionActionError | null>
+  /** Targeted Edit/Branch results retained by correlation id until consumed. */
+  targetedByRequestId: Record<string, SessionActionResultFrame>
 }
 
 export type SessionActionError = { requestId: string; message: string }
@@ -41,7 +43,7 @@ export type SessionActionRuntimeAction =
   | { type: 'session-removed'; sessionId: SessionId }
 
 export function createSessionActionRuntimeState(): SessionActionRuntimeState {
-  return { lastBySession: {}, errorBySession: {} }
+  return { lastBySession: {}, errorBySession: {}, targetedByRequestId: {} }
 }
 
 export function reduceSessionActionRuntimeState(
@@ -49,35 +51,55 @@ export function reduceSessionActionRuntimeState(
   action: SessionActionRuntimeAction,
 ): SessionActionRuntimeState {
   if (action.type === 'session-removed') {
-    if (!(action.sessionId in state.lastBySession) && !(action.sessionId in state.errorBySession)) {
+    if (
+      !(action.sessionId in state.lastBySession) &&
+      !(action.sessionId in state.errorBySession) &&
+      !Object.values(state.targetedByRequestId).some(
+        result => result.sessionId === action.sessionId,
+      )
+    ) {
       return state
     }
     const lastBySession = { ...state.lastBySession }
     const errorBySession = { ...state.errorBySession }
+    const targetedByRequestId = Object.fromEntries(
+      Object.entries(state.targetedByRequestId).filter(
+        ([, result]) => result.sessionId !== action.sessionId,
+      ),
+    )
     delete lastBySession[action.sessionId]
     delete errorBySession[action.sessionId]
-    return { ...state, lastBySession, errorBySession }
+    return { ...state, lastBySession, errorBySession, targetedByRequestId }
   }
   if (action.type === 'discard-result') {
     const result = state.lastBySession[action.sessionId]
     const error = state.errorBySession[action.sessionId]
     const discardResult = result?.requestId === action.requestId
     const discardError = error?.requestId === action.requestId
-    if (!discardResult && !discardError) return state
+    const discardTargeted = action.requestId in state.targetedByRequestId
+    if (!discardResult && !discardError && !discardTargeted) return state
 
     const lastBySession = { ...state.lastBySession }
     const errorBySession = { ...state.errorBySession }
+    const targetedByRequestId = { ...state.targetedByRequestId }
     if (discardResult) delete lastBySession[action.sessionId]
     if (discardError) delete errorBySession[action.sessionId]
-    return { ...state, lastBySession, errorBySession }
+    if (discardTargeted) delete targetedByRequestId[action.requestId]
+    return { ...state, lastBySession, errorBySession, targetedByRequestId }
   }
 
   const { frame } = action
 
   if (frame.kind === 'session-action.result') {
+    const targeted =
+      frame.verb === 'editFromMessage' || frame.verb === 'branchFromMessage'
+    const targetedByRequestId = targeted
+      ? appendBoundedTargetedResult(state.targetedByRequestId, frame)
+      : state.targetedByRequestId
     return {
       ...state,
       lastBySession: { ...state.lastBySession, [frame.sessionId]: frame },
+      targetedByRequestId,
     }
   }
 
@@ -94,7 +116,14 @@ export function reduceSessionActionRuntimeState(
   // A process/transport reset drops the stale result; a fresh one arrives on the
   // next verb. Untracked sessions are left alone (mirrors the other domains).
   if (frame.kind === 'lifecycle') {
-    if (!(frame.sessionId in state.lastBySession)) return state
+    if (
+      !(frame.sessionId in state.lastBySession) &&
+      !Object.values(state.targetedByRequestId).some(
+        result => result.sessionId === frame.sessionId,
+      )
+    ) {
+      return state
+    }
     return {
       ...state,
       lastBySession: { ...state.lastBySession, [frame.sessionId]: null },
@@ -103,6 +132,20 @@ export function reduceSessionActionRuntimeState(
   }
 
   return state
+}
+
+const TARGETED_RESULT_CAP = 64
+
+function appendBoundedTargetedResult(
+  current: Record<string, SessionActionResultFrame>,
+  frame: SessionActionResultFrame,
+): Record<string, SessionActionResultFrame> {
+  const next = { ...current, [frame.requestId]: frame }
+  const ids = Object.keys(next)
+  for (let index = 0; index < ids.length - TARGETED_RESULT_CAP; index++) {
+    delete next[ids[index]!]
+  }
+  return next
 }
 
 export function selectLatestSessionActionError(

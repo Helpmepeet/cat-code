@@ -29,6 +29,7 @@ import { tabLabel } from './tabBarModel.js'
 
 function entry(partial: Partial<SessionCatalogEntry> & { sessionId: string }): SessionCatalogEntry {
   return {
+    forked: false,
     cwd: '/w/proj',
     cwdExists: true,
     title: null,
@@ -67,6 +68,7 @@ function descriptor(partial: Partial<SessionDescriptor> & { appSessionId: string
     engineSessionId: null,
     cwd: '/w/proj',
     title: null,
+    forked: false,
     titleUpdatedAt: null,
     status: 'ready',
     restorable: false,

@@ -15,6 +15,11 @@ export type SerializedMessage = Message & {
   version: string
   gitBranch?: string
   slug?: string // Session slug for files like plans (used for resume)
+  /** Engine-authored provenance for a transcript created by conversation fork. */
+  forkedFrom?: {
+    sessionId: string
+    messageUuid: UUID
+  }
 }
 
 export type LogOption = {
@@ -56,6 +61,8 @@ export type LogOption = {
   worktreeSession?: PersistedWorktreeSession | null // Worktree state at session end (null = exited, undefined = never entered)
   threadGoal?: ThreadGoal | null // Last-wins thread goal state for resume/hydration
   contentReplacements?: ContentReplacementRecord[] // Replacement decisions for resume reconstruction
+  /** True when the active transcript chain carries engine-authored fork provenance. */
+  forked?: boolean
 }
 
 export type SummaryMessage = {
@@ -202,6 +209,24 @@ export type ContentReplacementEntry = {
   sessionId: UUID
   agentId?: AgentId
   replacements: ContentReplacementRecord[]
+}
+
+/**
+ * Records the active main-thread tip after a conversation-only rewind.
+ * Append order is authoritative: a later main-thread user/assistant message
+ * supersedes this marker without rewriting discarded transcript records.
+ */
+export type ActiveConversationTipEntry = {
+  type: 'active-conversation-tip'
+  sessionId: UUID
+  tipUuid: UUID | null
+}
+
+/** Durable catalog-visible provenance for a transcript created by a fork. */
+export type ForkedSessionEntry = {
+  type: 'forked-session'
+  sessionId: UUID
+  sourceSessionId: UUID
 }
 
 export type FileHistorySnapshotMessage = {
@@ -379,6 +404,8 @@ export type Entry =
   | ThreadGoalClearedEntry
   | WorktreeStateEntry
   | ContentReplacementEntry
+  | ActiveConversationTipEntry
+  | ForkedSessionEntry
   | ContextCollapseCommitEntry
   | ContextCollapseSnapshotEntry
   | SubagentSpawnedMessage

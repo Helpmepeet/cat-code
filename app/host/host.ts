@@ -286,6 +286,7 @@ export class Host implements HostApi {
       cwd,
       title: capTitle(req.title),
       resumeEngineSessionId: req.resumeEngineSessionId,
+      forked: req.forked === true,
     })
   }
 
@@ -366,6 +367,7 @@ export class Host implements HostApi {
       cwd: validated.realpath,
       title: row.title,
       resumeEngineSessionId: row.engineSessionId,
+      forked: row.forked,
     })
   }
 
@@ -414,6 +416,7 @@ export class Host implements HostApi {
       cwd: validated.realpath,
       title: undefined,
       resumeEngineSessionId: undefined,
+      forked: false,
     })
   }
 
@@ -427,8 +430,9 @@ export class Host implements HostApi {
     cwd: string
     title: string | null | undefined
     resumeEngineSessionId: string | undefined
+    forked: boolean
   }): Promise<HostResult<SessionDescriptor>> {
-    const { appSessionId, cwd, resumeEngineSessionId } = input
+    const { appSessionId, cwd, resumeEngineSessionId, forked } = input
     const title = input.title ?? undefined
     this.recordSpawnTime()
 
@@ -448,6 +452,7 @@ export class Host implements HostApi {
       ...(resumeEngineSessionId !== undefined
         ? { engineSessionId: resumeEngineSessionId }
         : {}),
+      forked,
     })
     for (const reapedId of reaped) {
       this.emitRemoved(reapedId)
@@ -648,6 +653,7 @@ export class Host implements HostApi {
       appSessionId,
       cwd: row.cwd,
       ...(row.title !== undefined ? { title: row.title } : {}),
+      forked: row.forked,
       enginePid: this.supervisor.getSessionProcessId(appSessionId),
       socketPath: this.supervisor.getSessionSocketPath(appSessionId),
     })
@@ -820,6 +826,7 @@ export class Host implements HostApi {
       engineSessionId: row?.engineSessionId ?? null,
       cwd: row?.cwd ?? '',
       title: row?.title ?? null,
+      forked: row?.forked ?? false,
       // null ⇒ the app never recorded a title intent for this row, so the
       // renderer lets a real transcript title win (the terminal-rename fix).
       titleUpdatedAt: row?.titleUpdatedAt ?? null,

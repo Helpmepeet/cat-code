@@ -98,6 +98,8 @@ export type RegistrySession = {
   cwd: string
   /** [D] optional app-owned display name. */
   title?: string
+  /** [D] trusted desktop branch provenance. */
+  forked: boolean
   /**
    * [D] Wall-clock at which `title` last CHANGED, or absent when it never has
    * (including rows written before this field existed). The recency half of the
@@ -689,6 +691,11 @@ export class SessionRegistry {
     /** The id this spawn resumes, when it is a resume. New rows only: an
      * existing row already carries the id (restore/restart both require it). */
     engineSessionId?: string
+    /**
+     * Trusted branch provenance. Existing rows retain their value when omitted;
+     * new rows default false for additive migration compatibility.
+     */
+    forked?: boolean
     enginePid?: number
     socketPath?: string
   }): Promise<string[]> {
@@ -704,6 +711,7 @@ export class SessionRegistry {
         if (input.title !== existing.title) existing.titleUpdatedAt = now
         existing.title = input.title
       }
+      if (input.forked !== undefined) existing.forked = input.forked
       existing.enginePid = input.enginePid
       existing.socketPath = input.socketPath
       existing.lastAttachedAt = now
@@ -717,6 +725,7 @@ export class SessionRegistry {
         ...(input.title !== undefined
           ? { title: input.title, titleUpdatedAt: now }
           : {}),
+        forked: input.forked ?? false,
         createdAt: now,
         lastAttachedAt: now,
         // CC-2: a fresh spawn has SENT nothing yet — attach/spawn must not fake
@@ -1089,7 +1098,9 @@ function mergeRegistryDocuments(
 
     mergedById.set(
       appSessionId,
-      latestRow ? mergeRegistryRow(latestRow, localRow) : { ...localRow },
+      latestRow
+        ? mergeRegistryRow(latestRow, localRow, baselineRow)
+        : { ...localRow },
     )
   }
 
@@ -1105,6 +1116,7 @@ function rowsEqual(left: RegistrySession, right: RegistrySession): boolean {
     left.engineSessionId === right.engineSessionId &&
     left.cwd === right.cwd &&
     left.title === right.title &&
+    left.forked === right.forked &&
     left.titleUpdatedAt === right.titleUpdatedAt &&
     left.createdAt === right.createdAt &&
     left.lastAttachedAt === right.lastAttachedAt &&
@@ -1120,6 +1132,7 @@ function rowsEqual(left: RegistrySession, right: RegistrySession): boolean {
 function mergeRegistryRow(
   latest: RegistrySession,
   local: RegistrySession,
+  baseline: RegistrySession | undefined,
 ): RegistrySession {
   const useLocalRuntime = local.lastAttachedAt >= latest.lastAttachedAt
   const runtime = useLocalRuntime ? local : latest
@@ -1127,6 +1140,10 @@ function mergeRegistryRow(
     (local.titleUpdatedAt ?? Number.NEGATIVE_INFINITY) >=
     (latest.titleUpdatedAt ?? Number.NEGATIVE_INFINITY)
   const titleSource = useLocalTitle ? local : latest
+  // Provenance is durable, not a runtime hint. If this writer did not change it
+  // from its baseline, preserve a concurrent writer's newer trusted value.
+  const forked =
+    baseline && local.forked === baseline.forked ? latest.forked : local.forked
 
   return {
     appSessionId: local.appSessionId,
@@ -1136,6 +1153,7 @@ function mergeRegistryRow(
     ...(titleSource.titleUpdatedAt !== undefined
       ? { titleUpdatedAt: titleSource.titleUpdatedAt }
       : {}),
+    forked,
     createdAt: Math.min(latest.createdAt, local.createdAt),
     lastAttachedAt: Math.max(latest.lastAttachedAt, local.lastAttachedAt),
     lastMessageSentAt: maxNullableTimestamp(
@@ -1199,6 +1217,9 @@ function validateRow(candidate: unknown): RegistrySession | null {
     appSessionId: candidate.appSessionId,
     engineSessionId,
     cwd: candidate.cwd,
+    // Additive migration: rows written before branch provenance existed are
+    // ordinary sessions.
+    forked: candidate.forked === true,
     createdAt: typeof candidate.createdAt === 'number' ? candidate.createdAt : Date.now(),
     lastAttachedAt:
       typeof candidate.lastAttachedAt === 'number' ? candidate.lastAttachedAt : Date.now(),

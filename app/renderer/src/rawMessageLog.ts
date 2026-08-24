@@ -108,6 +108,15 @@ export function reduceServerFrameWithLimits(
     }
   }
 
+  if (frame.kind === 'transcript.reset') {
+    const previous = state.sessions[frame.sessionId]
+    if (!previous) return state
+    return updateSession(state, frame.sessionId, {
+      ...EMPTY_SESSION_LOG,
+      inputEnabled: previous.inputEnabled,
+    })
+  }
+
   if (frame.kind === 'error') {
     // Both retention notices ride `kind:'error'` to reuse the channel, but
     // neither is an error: retention is working as designed. Nothing ever

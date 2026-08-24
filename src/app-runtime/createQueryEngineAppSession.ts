@@ -1,4 +1,12 @@
-import { QueryEngine, type QueryEngineConfig } from '../QueryEngine.js'
+import {
+  QueryEngine,
+  type ConversationRewindResult,
+  type QueryEngineConfig,
+} from '../QueryEngine.js'
+import {
+  createForkBeforeUserMessage,
+  type ConversationForkResult,
+} from '../commands/branch/branch.js'
 import { createAbortController } from '../utils/abortController.js'
 import {
   createAppRuntimeCanUseTool,
@@ -55,6 +63,25 @@ export function createQueryEngineAppSession(
     },
     refreshAbortController() {
       return engine.refreshAbortController?.() ?? abortController
+    },
+    selectUserMessage(targetUuid) {
+      if (!engine.selectUserMessage) {
+        throw new Error('Conversation message selection is unavailable')
+      }
+      return engine.selectUserMessage(targetUuid)
+    },
+    rewindBeforeUserMessage(targetUuid): Promise<ConversationRewindResult> {
+      if (!engine.rewindBeforeUserMessage) {
+        throw new Error('Conversation rewind is unavailable')
+      }
+      return engine.rewindBeforeUserMessage(targetUuid)
+    },
+    forkBeforeUserMessage(
+      targetUuid,
+      customTitle,
+    ): Promise<ConversationForkResult> {
+      return engine.forkBeforeUserMessage?.(targetUuid, customTitle) ??
+        createForkBeforeUserMessage(targetUuid, customTitle)
     },
   }
 }

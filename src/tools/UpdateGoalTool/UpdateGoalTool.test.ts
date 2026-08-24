@@ -17,6 +17,8 @@ import {
   updateThreadGoalStatus,
 } from '../../utils/threadGoal.js'
 import { applyThreadGoalTransition } from '../../utils/threadGoalActions.js'
+import { hashThreadGoalContract } from '../../utils/threadGoalEvidence.js'
+import { getThreadGoalWorkspaceFingerprint } from '../../utils/threadGoalWorkspace.js'
 import { UpdateGoalTool } from './UpdateGoalTool.js'
 import { randomUUID } from 'crypto'
 import { mkdtempSync, rmSync } from 'fs'
@@ -204,6 +206,128 @@ describe('UpdateGoalTool', () => {
     )
 
     expect(getState().threadGoal?.status).toBe('complete')
+  })
+
+  test('a red required gate refuses completion at the control plane', async () => {
+    // Real fingerprint from the real repo: the evidence must be genuinely
+    // fresh for the refusal to be about the RED result and nothing else.
+    const fingerprint = await getThreadGoalWorkspaceFingerprint()
+    const base = createThreadGoal(sessionId, 'ship it', undefined, 100)
+    const goal = {
+      ...base,
+      contract: {
+        criteria: [
+          { id: 'tests', description: 'the suite passes', required: true },
+        ],
+        constraints: [],
+        boundaries: [],
+        stopConditions: [],
+      },
+    }
+    const goalWithEvidence = {
+      ...goal,
+      evidence: [
+        {
+          evidenceId: 'ev-red',
+          source: 'command' as const,
+          sourceDigest: 'digest-suite',
+          label: 'test suite',
+          sessionId,
+          contractDigest: hashThreadGoalContract(goal.objective, goal.contract),
+          workspaceFingerprint: fingerprint,
+          outcome: 'fail' as const,
+          exitCode: 1,
+          outputDigest: 'out-red',
+          recordedAtMs: 200,
+          coversCriterionIds: ['tests'],
+        },
+      ],
+    }
+    const { context } = createContext(goalWithEvidence)
+
+    await expect(
+      UpdateGoalTool.validateInput?.({ status: 'complete' }, context as never),
+    ).resolves.toMatchObject({
+      result: false,
+      errorCode: 7,
+    })
+  })
+
+  test('a proven required criterion lets completion through', async () => {
+    const fingerprint = await getThreadGoalWorkspaceFingerprint()
+    const base = createThreadGoal(sessionId, 'ship it', undefined, 100)
+    const contract = {
+      criteria: [
+        { id: 'tests', description: 'the suite passes', required: true },
+      ],
+      constraints: [],
+      boundaries: [],
+      stopConditions: [],
+    }
+    const goal = {
+      ...base,
+      contract,
+      evidence: [
+        {
+          evidenceId: 'ev-green',
+          source: 'command' as const,
+          sourceDigest: 'digest-suite',
+          label: 'test suite',
+          sessionId,
+          contractDigest: hashThreadGoalContract(base.objective, contract),
+          workspaceFingerprint: fingerprint,
+          outcome: 'pass' as const,
+          exitCode: 0,
+          outputDigest: 'out-green',
+          recordedAtMs: 200,
+          coversCriterionIds: ['tests'],
+        },
+      ],
+    }
+    const { context } = createContext(goal)
+
+    await expect(
+      UpdateGoalTool.validateInput?.({ status: 'complete' }, context as never),
+    ).resolves.toEqual({ result: true })
+  })
+
+  test('stale evidence cannot complete a goal whose objective changed', async () => {
+    const fingerprint = await getThreadGoalWorkspaceFingerprint()
+    const base = createThreadGoal(sessionId, 'the NEW objective', undefined, 100)
+    const contract = {
+      criteria: [
+        { id: 'tests', description: 'the suite passes', required: true },
+      ],
+      constraints: [],
+      boundaries: [],
+      stopConditions: [],
+    }
+    const goal = {
+      ...base,
+      contract,
+      evidence: [
+        {
+          evidenceId: 'ev-green',
+          source: 'command' as const,
+          sourceDigest: 'digest-suite',
+          label: 'test suite',
+          sessionId,
+          // Recorded while the goal still had a different objective.
+          contractDigest: hashThreadGoalContract('the OLD objective', contract),
+          workspaceFingerprint: fingerprint,
+          outcome: 'pass' as const,
+          exitCode: 0,
+          outputDigest: 'out-green',
+          recordedAtMs: 200,
+          coversCriterionIds: ['tests'],
+        },
+      ],
+    }
+    const { context } = createContext(goal)
+
+    await expect(
+      UpdateGoalTool.validateInput?.({ status: 'complete' }, context as never),
+    ).resolves.toMatchObject({ result: false, errorCode: 7 })
   })
 
   test('rejects when no goal exists', async () => {

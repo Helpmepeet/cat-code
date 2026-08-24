@@ -33,7 +33,10 @@ import type {
   SessionId,
   SubmitPrompt,
 } from '../../shared/protocol.js'
-import type { AcceptedImageType } from './imageAttachment.js'
+import {
+  ACCEPTED_IMAGE_TYPES,
+  type AcceptedImageType,
+} from './imageAttachment.js'
 
 // ── @-mention ──────────────────────────────────────────────────────────────
 
@@ -178,6 +181,78 @@ export function buildSubmitPrompt(
     })),
     ...(text.length > 0 ? [{ type: 'text' as const, text }] : []),
   ]
+}
+
+export type RestoredSelectedPrompt = {
+  text: string
+  images: ImageAttachment[]
+}
+
+/**
+ * Narrow the engine-selected prompt before it enters renderer composer state.
+ * The wire intentionally carries `unknown[]`: only plain text and accepted
+ * base64 image blocks are restored. Unknown and malformed blocks are ignored,
+ * matching the tolerant read path used for recalled prompts.
+ */
+export function restoreSelectedPrompt(
+  selectedPrompt: unknown,
+): RestoredSelectedPrompt | null {
+  if (!isRecord(selectedPrompt)) return null
+  const content = selectedPrompt.content
+  if (typeof content === 'string') return { text: content, images: [] }
+  if (!Array.isArray(content)) return null
+
+  const texts: string[] = []
+  const imageBlocks: Array<{ mediaType: AcceptedImageType; data: string }> = []
+  for (const block of content) {
+    if (!isRecord(block) || typeof block.type !== 'string') continue
+    if (block.type === 'text') {
+      if (typeof block.text !== 'string') continue
+      texts.push(block.text)
+      continue
+    }
+    if (block.type === 'image') {
+      if (!isRecord(block.source) || block.source.type !== 'base64') continue
+      if (
+        typeof block.source.media_type !== 'string' ||
+        !isAcceptedImageType(block.source.media_type) ||
+        typeof block.source.data !== 'string' ||
+        !isBase64(block.source.data)
+      ) {
+        continue
+      }
+      imageBlocks.push({
+        mediaType: block.source.media_type,
+        data: block.source.data,
+      })
+    }
+  }
+
+  return {
+    text: texts.join('\n'),
+    images: imageBlocks.map((image, index) => ({
+      id: index + 1,
+      mediaType: image.mediaType,
+      data: image.data,
+      name: 'image',
+    })),
+  }
+}
+
+function isAcceptedImageType(value: string): value is AcceptedImageType {
+  return ACCEPTED_IMAGE_TYPES.some(type => type === value)
+}
+
+function isBase64(value: string): boolean {
+  return (
+    value.length > 0 &&
+    value.length % 4 === 0 &&
+    /^[A-Za-z0-9+/]*={0,2}$/.test(value)
+  )
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 export function createPasteState(): PasteState {

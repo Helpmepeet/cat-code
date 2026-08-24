@@ -1,90 +1,11 @@
 /**
- * P4-30 — `BranchDialog` + `ExportDialog` (`SessionActions.jsx:280-303` and
- * `:351-387`), the confirmation/preview layer PARITY-LEDGER §17 recorded as
- * dropped with no §0 flag. P4-35 (operator ruling 2026-07-30) then wired
- * **Download**, which P4-30 had to ship disabled: `saveTextToFile` now exists, so
- * Export finally reaches a file instead of only the clipboard.
- *
- * What each one is FOR, in this app rather than in the prototype:
- *
- *  - **Branch** closes a live defect. `session.branch` runs the engine's own
- *    `createFork` and writes a real fork transcript on disk; before this dialog
- *    it fired straight off a menu click with no gate at all. The dialog IS the
- *    gate: nothing is dispatched until `onConfirm`.
- *  - **Export** turns a fire-and-forget verb into what the prototype shows: the
- *    engine-rendered transcript on screen, with its own file name, before the
- *    user does anything with it. The text is NOT re-derived here; it is the
- *    `exportText` the sidecar rendered with `renderMessagesToPlainText` and sent
- *    back on `session-action.result`, matched by the dialog's own `requestId`.
- *
- * THREE §0 deviations are carried by this file, each recorded on the ledger row
- * it belongs to (they are PROPOSALS to the operator, not closures, and PARITY-
- * LEDGER Part C counts the same three):
- *
- *  1. **No message count in the Export subtitle.** The prototype shows
- *     "N messages · title". The bounded catalog does not expose that count: its
- *     loader intentionally omits it (`sessionsCatalogState.ts:374`),
- *     so every session would read "0 messages".
- *  2. **No format segmented control.** md/json remain the owner-flagged §0 defer
- *     (`sessionActions.ts:20-21`); the engine renders text only, so there is one
- *     format and nothing to segment.
- *  3. **Branch preview describes the naming rule, not a guessed name** — see
- *     `branchPreviewLines`.
+ * The Export confirmation/preview layer. It shows the engine-rendered transcript
+ * and supports the existing clipboard and main-owned file sinks.
  */
 import type { ReactNode } from 'react'
 import { SAButton, SAModal } from './SAModal.js'
-import { ActionBranchIcon, ActionExportIcon } from './SessionActionIcons.js'
-import {
-  branchPreviewLines,
-  type ExportPreviewState,
-} from './sessionActionDialogState.js'
-
-/**
- * Confirm a fork before it happens. Presentation only: `onConfirm` is what
- * dispatches `session.branch`, so a Cancel or a dismissal leaves the transcript
- * completely untouched.
- */
-export function BranchDialog({
-  title,
-  onConfirm,
-  onClose,
-}: {
-  title: string | null
-  onConfirm: () => void
-  onClose: () => void
-}): ReactNode {
-  const preview = branchPreviewLines(title)
-  return (
-    <SAModal
-      icon={<ActionBranchIcon />}
-      tint="info"
-      title="Branch session"
-      subtitle="Fork a copy of this conversation"
-      onClose={onClose}
-      footer={
-        <>
-          <SAButton label="Cancel" onClick={onClose} />
-          <SAButton label="Create branch" variant="primary" onClick={onConfirm} />
-        </>
-      }
-    >
-      <SectionLabel>What happens</SectionLabel>
-      <div className="rounded-[10px] border border-tone-info/[0.18] bg-tone-info/[0.06] px-[13px] py-[11px]">
-        <div className="flex items-center gap-2 text-[12.5px] text-tone-info">
-          <span className="flex shrink-0">
-            <ActionBranchIcon />
-          </span>
-          <span className="min-w-0 truncate font-semibold">
-            {preview.headline}
-          </span>
-        </div>
-        <div className="mt-[5px] pl-[23px] text-[11.5px] text-text-subtle">
-          {preview.detail}
-        </div>
-      </div>
-    </SAModal>
-  )
-}
+import { ActionExportIcon } from './SessionActionIcons.js'
+import type { ExportPreviewState } from './sessionActionDialogState.js'
 
 /**
  * Show the engine-rendered transcript with its file name before it goes

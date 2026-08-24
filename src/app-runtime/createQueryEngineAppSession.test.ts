@@ -7,6 +7,8 @@ describe('createQueryEngineAppSession abort lifecycle', () => {
     let createEngineCalls = 0
     let refreshAbortControllerCalls = 0
     let interruptCalls = 0
+    let rewindTarget = ''
+    let forkTarget = ''
     const session = createQueryEngineAppSession({
       cwd: '/tmp',
       tools: [],
@@ -25,6 +27,14 @@ describe('createQueryEngineAppSession abort lifecycle', () => {
           interrupt() {
             interruptCalls += 1
           },
+          async rewindBeforeUserMessage(targetUuid: string) {
+            rewindTarget = targetUuid
+            return { prompt: {} as never, retainedMessages: [] }
+          },
+          async forkBeforeUserMessage(targetUuid: string) {
+            forkTarget = targetUuid
+            return { sessionId: 'fork' } as never
+          },
           async *submitMessage(prompt: string) {
             yield {
               type: 'assistant',
@@ -39,6 +49,8 @@ describe('createQueryEngineAppSession abort lifecycle', () => {
       // drain
     }
     session.interrupt?.()
+    await session.rewindBeforeUserMessage?.('rewind-target')
+    await session.forkBeforeUserMessage?.('fork-target')
     for await (const _message of session.submitMessage('second')) {
       // drain
     }
@@ -46,5 +58,7 @@ describe('createQueryEngineAppSession abort lifecycle', () => {
     expect(createEngineCalls).toBe(1)
     expect(refreshAbortControllerCalls).toBe(2)
     expect(interruptCalls).toBe(1)
+    expect(rewindTarget).toBe('rewind-target')
+    expect(forkTarget).toBe('fork-target')
   })
 })

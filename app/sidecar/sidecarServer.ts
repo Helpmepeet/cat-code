@@ -38,7 +38,7 @@ import type {
   SDKUserMessage,
 } from '../../src/entrypoints/agentSdkTypes.js'
 import type { ToolPermissionContext, ToolPermissionRulesBySource } from '../../src/Tool.js'
-import type { MessageOrigin } from '../../src/types/message.js'
+import type { Message, MessageOrigin } from '../../src/types/message.js'
 import type { QueuedCommand } from '../../src/types/textInputTypes.js'
 import type { PermissionUpdate } from '../../src/types/permissions.js'
 import {
@@ -112,6 +112,7 @@ import {
   type RemoteVerbMessage,
   type RunControlVerbMessage,
   type ServerFrame,
+  type SessionActionResultFrame,
   type SessionActionVerbMessage,
   type SessionId,
   type SettingsVerbMessage,
@@ -331,10 +332,9 @@ export type SidecarServerOptions = {
    */
   runControls?: SidecarRunControlsDomain
   /**
-   * Session-action write verbs (P4-6b) — Rename / Export / Branch over the
-   * engine's OWN `saveCustomTitle` / `renderMessagesToPlainText` / `createFork`.
-   * Optional because the P1-0 probe fixture has no engine; when absent, the three
-   * verbs fail closed with an internal_error.
+   * Session-action write verbs over the engine's own persistence and live
+   * conversation controller. Optional because the P1-0 probe fixture has no
+   * engine; when absent, the verbs fail closed with an internal_error.
    */
   sessionActions?: SidecarSessionActionsDomain
   /**
@@ -396,6 +396,13 @@ export type SidecarServerOptions = {
   /** Display loader omitted an older archival prefix before wire capping. */
   historySourceTruncated?: boolean
   /**
+   * Rebuild the marker-aware display transcript from a retained engine seed.
+   * Production supplies the same projector used during initial resume.
+   */
+  projectHistory?: (
+    retainedMessages: Message[],
+  ) => Promise<{ history: SDKMessage[]; truncated: boolean }>
+  /**
    * The deeper transcript read behind `history.loadEarlier`
    * (decisions/HISTORY-LOAD-EARLIER.md). Defaults to the REAL engine-backed
    * reader (`historyLoadEarlier.ts`), so production never has to remember to
@@ -449,6 +456,8 @@ export type SidecarServerOptions = {
   titleDeps?: SessionTitleDeps
   /** Test seam for the live generated-image preview read. */
   readGeneratedImage?: (filePath: string) => Promise<Uint8Array | null>
+  /** Test seam for targeted session-action result sizing. */
+  sessionActionResultMaxBytes?: number
   /** Structured logger; defaults to stderr. Never logs secrets. */
   log?: (line: string) => void
 }
@@ -508,8 +517,11 @@ export class SidecarServer {
   private readonly extensions: SidecarExtensionsDomain | null
   private readonly remoteSettings: SidecarRemoteSettingsDomain | null
   private readonly slashCatalog: readonly SlashCatalogEntry[]
-  private readonly history: readonly SDKMessage[]
-  private readonly historySourceTruncated: boolean
+  private history: readonly SDKMessage[]
+  private historySourceTruncated: boolean
+  private readonly projectHistory: ((
+    retainedMessages: Message[],
+  ) => Promise<{ history: SDKMessage[]; truncated: boolean }>) | null
   private readonly loadEarlierHistory: HistoryLoadEarlierReader
   /**
    * One deeper read per session at a time (decisions/HISTORY-LOAD-EARLIER.md
@@ -527,6 +539,7 @@ export class SidecarServer {
   private readonly readGeneratedImage: (
     filePath: string,
   ) => Promise<Uint8Array | null>
+  private readonly sessionActionResultMaxBytes: number
   private readonly generatedImageToolUseIds = new Set<string>()
   private readonly log: (line: string) => void
   private readonly wrapOutboundFrame: ((frame: ServerFrame, trace: DeliveryTrace) => unknown) | null
@@ -634,6 +647,8 @@ export class SidecarServer {
    * sidecar is exiting.
    */
   private parking = false
+  /** Serializes conversation rewinds/forks and fail-closes submit during mutation. */
+  private conversationMutationInFlight = false
   /**
    * IDLE-PARK — count of accepted verbs whose DURABLE write is still in flight
    * (account ops, session actions). The turn/permission/task gates below see
@@ -681,6 +696,7 @@ export class SidecarServer {
     this.slashCatalog = options.slashCatalog ?? []
     this.history = options.history ?? []
     this.historySourceTruncated = options.historySourceTruncated ?? false
+    this.projectHistory = options.projectHistory ?? null
     this.loadEarlierHistory =
       options.loadEarlierHistory ?? readEarlierDisplayHistory
     this.turnInterrupted = options.turnInterrupted ?? false
@@ -694,6 +710,8 @@ export class SidecarServer {
     })
     this.readGeneratedImage =
       options.readGeneratedImage ?? readGeneratedImageForPreview
+    this.sessionActionResultMaxBytes =
+      options.sessionActionResultMaxBytes ?? MAX_OUTBOUND_FRAME_BYTES
     this.log = options.log ?? (line => process.stderr.write(`${line}\n`))
     this.wrapOutboundFrame = options.wrapOutboundFrame ?? null
     this.onDeliveryStage = options.onDeliveryStage ?? null
@@ -1422,12 +1440,11 @@ export class SidecarServer {
       return
     }
 
-    // P4-6b — the session-action WRITE verbs (session.rename / session.export /
-    // session.branch) are app-owned vocabulary (like the account/settings/workspace/
+    // P4-6b — the session-action WRITE verbs are app-owned vocabulary (like the
+    // account/settings/workspace/
     // agent-mode/run-control verbs), validated by a sidecar-LOCAL schema and
-    // dispatched to the engine's OWN saveCustomTitle / renderMessagesToPlainText /
-    // createFork. NOT part of the engine's shared schema. Membership test (three
-    // distinct `session.*` verbs) rather than a broad `session.` prefix.
+    // dispatched to the engine's own domain operations. NOT part of the engine's
+    // shared schema. Membership test rather than a broad `session.` prefix.
     if (
       typeof messageType === 'string' &&
       (SESSION_ACTION_VERB_TYPES as readonly string[]).includes(messageType)
@@ -1736,7 +1753,9 @@ export class SidecarServer {
     onRejected?: (error: Error) => void
     onSettled?: (error?: Error) => void
   }): boolean {
-    if (this.parking || this.activeTurn) return false
+    if (this.parking || this.activeTurn || this.conversationMutationInFlight) {
+      return false
+    }
     this.runControls?.lockProviderSwitches()
     this.activeTurn = true
     this.beginTurnObservation()
@@ -2227,6 +2246,14 @@ export class SidecarServer {
     // change. Retryable: the user unparks (restore-on-click) and re-sends.
     if (this.parking) {
       refuseSubmit('session_disconnected', 'session parking', true)
+      return
+    }
+    if (this.conversationMutationInFlight) {
+      refuseSubmit(
+        'turn_already_running',
+        'Conversation update in progress.',
+        true,
+      )
       return
     }
 
@@ -2961,7 +2988,7 @@ export class SidecarServer {
    * P4-6b — the session-action WRITE verbs (protocol.ts: SESSION_ACTION_VERB_TYPES).
    * Same fail-closed order as the other verbs: sidecar-LOCAL structural schema →
    * domain presence → dispatch to the engine's OWN op (saveCustomTitle /
-   * renderMessagesToPlainText / createFork / saveTag — P4-29 added the last one on
+   * renderMessagesToPlainText / saveTag — P4-29 added the last one on
    * this same closed set) → `session-action.result` frame echoing
    * the requestId (T5a-analog). The domain ops are async (disk reads/writes), so the
    * ack fires after the promise resolves; the domain degrades every failure to an
@@ -3003,24 +3030,31 @@ export class SidecarServer {
 
     const verb: SessionActionVerbMessage = parsed.data
     const domain = this.sessionActions
+    if (
+      verb.type === 'session.editFromMessage' ||
+      verb.type === 'session.branchFromMessage'
+    ) {
+      this.handleMessageTargetedSessionAction(connection, verb, domain)
+      return
+    }
     // The op verb short name echoed on the result frame (protocol.ts).
-    const verbName =
+    const verbName: 'rename' | 'export' | 'branch' | 'tag' =
       verb.type === 'session.rename'
         ? 'rename'
         : verb.type === 'session.export'
           ? 'export'
-          : verb.type === 'session.tag'
-            ? 'tag'
-            : 'branch'
+          : verb.type === 'session.branch'
+            ? 'branch'
+            : 'tag'
 
     const run =
       verb.type === 'session.rename'
         ? domain.rename(verb.title)
         : verb.type === 'session.export'
           ? domain.export()
-          : verb.type === 'session.tag'
-            ? domain.tag(verb.tag)
-            : domain.branch()
+          : verb.type === 'session.branch'
+            ? domain.branch()
+            : domain.tag(verb.tag)
 
     // IDLE-PARK gate 4: a fork writes a new transcript, so hold the park off
     // until this settles (see isParkGateOpen).
@@ -3064,6 +3098,9 @@ export class SidecarServer {
           ...(result.branchEngineSessionId !== undefined
             ? { branchEngineSessionId: result.branchEngineSessionId }
             : {}),
+          ...(result.branchTitle !== undefined
+            ? { branchTitle: result.branchTitle }
+            : {}),
         })
 
         // A successful rename relabels the sidebar/tab live by reusing the existing
@@ -3090,6 +3127,201 @@ export class SidecarServer {
       .finally(() => {
         this.inFlightDurableWrites -= 1
       })
+  }
+
+  private handleMessageTargetedSessionAction(
+    connection: Connection,
+    verb: Extract<
+      SessionActionVerbMessage,
+      { type: 'session.editFromMessage' | 'session.branchFromMessage' }
+    >,
+    domain: SidecarSessionActionsDomain,
+  ): void {
+    const verbName =
+      verb.type === 'session.editFromMessage'
+        ? 'editFromMessage'
+        : 'branchFromMessage'
+    const refuse = (message: string): void => {
+      this.sendSessionActionResult(connection, {
+        kind: 'session-action.result',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        requestId: verb.requestId,
+        verb: verbName,
+        ok: false,
+        message,
+      })
+    }
+
+    if (this.parking || this.conversationMutationInFlight) {
+      refuse('Another conversation update is already in progress.')
+      return
+    }
+    if (
+      verb.type === 'session.editFromMessage' &&
+      (this.hasQueuedParentPrompt() || this.stagedPrompts.size > 0)
+    ) {
+      refuse('Send or recall waiting messages before editing this conversation.')
+      return
+    }
+    if (
+      verb.type === 'session.branchFromMessage' &&
+      (this.activeTurn || this.controller.isTurnActive())
+    ) {
+      refuse('Wait for the current response to finish before branching.')
+      return
+    }
+
+    const selected = domain.selectUserMessage(verb.userMessageId)
+    if (!selected.ok || selected.selectedPrompt === undefined) {
+      refuse(selected.message)
+      return
+    }
+    const preflight: SessionActionResultFrame = {
+      kind: 'session-action.result',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      requestId: verb.requestId,
+      verb: verbName,
+      ok: true,
+      message: 'Conversation action completed.',
+      ...(verb.type === 'session.branchFromMessage'
+        ? {
+            branchEngineSessionId: '00000000-0000-4000-8000-000000000000',
+            branchTitle: 'x'.repeat(128),
+          }
+        : {}),
+      selectedPrompt: selected.selectedPrompt,
+    }
+    if (!this.canSendSessionActionResult(preflight)) {
+      refuse('The selected prompt is too large or unsafe to return in the app.')
+      return
+    }
+
+    this.conversationMutationInFlight = true
+    this.inFlightDurableWrites += 1
+    void (async () => {
+      if (verb.type === 'session.editFromMessage') {
+        if (this.activeTurn || this.controller.isTurnActive()) {
+          this.controller.abort('Editing from an earlier message')
+          await this.controller.waitUntilIdle()
+        }
+        const result = await domain.editFromMessage(verb.userMessageId)
+        if (!result.ok) {
+          refuse(result.message)
+          return
+        }
+        if (
+          !result.retainedMessages ||
+          !this.projectHistory
+        ) {
+          refuse('Conversation history could not be rebuilt after editing.')
+          return
+        }
+        const projected = await this.projectHistory(result.retainedMessages)
+        this.history = projected.history
+        this.historySourceTruncated = projected.truncated
+        this.broadcastTranscriptResetAndReplay()
+        this.sendSessionActionResult(connection, {
+          kind: 'session-action.result',
+          protocolVersion: PROTOCOL_VERSION,
+          sessionId: this.sessionId,
+          requestId: verb.requestId,
+          verb: verbName,
+          ok: true,
+          message: result.message,
+          selectedPrompt: selected.selectedPrompt,
+        })
+        return
+      }
+
+      const result = await domain.branchFromMessage(verb.userMessageId)
+      if (
+        result.ok &&
+        (!result.branchEngineSessionId ||
+          !result.branchTitle)
+      ) {
+        refuse('The branch was created without complete trusted output.')
+        return
+      }
+      this.sendSessionActionResult(connection, {
+        kind: 'session-action.result',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        requestId: verb.requestId,
+        verb: verbName,
+        ok: result.ok,
+        message: result.message,
+        ...(result.branchEngineSessionId !== undefined
+          ? { branchEngineSessionId: result.branchEngineSessionId }
+          : {}),
+        ...(result.branchTitle !== undefined
+          ? { branchTitle: result.branchTitle }
+          : {}),
+        selectedPrompt: selected.selectedPrompt,
+      })
+    })()
+      .catch(error => {
+        refuse(
+          `Session action failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        )
+      })
+      .finally(() => {
+        this.conversationMutationInFlight = false
+        this.inFlightDurableWrites -= 1
+        this.scheduleBoundaryDrain()
+      })
+  }
+
+  private broadcastTranscriptResetAndReplay(): void {
+    for (const connection of this.connections) {
+      this.send(connection, {
+        kind: 'transcript.reset',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+      })
+      this.sendHistoryReplay(connection)
+    }
+  }
+
+  private sendSessionActionResult(
+    connection: Connection,
+    frame: SessionActionResultFrame,
+  ): void {
+    if (!this.canSendSessionActionResult(frame)) {
+      this.send(connection, {
+        kind: 'session-action.result',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        requestId: frame.requestId,
+        verb: frame.verb,
+        ok: false,
+        message:
+          'The conversation changed, but the selected prompt is too large to return in the app.',
+      })
+      return
+    }
+    this.send(connection, frame)
+  }
+
+  private canSendSessionActionResult(frame: SessionActionResultFrame): boolean {
+    const prepared = this.prepareOutboundPayload(
+      frame,
+      'session-action.result',
+      'preflight',
+    )
+    if (!prepared) return false
+    const secret = scanForSecrets(prepared)
+    if (!secret.ok) {
+      this.log(
+        `[sidecar] blocked unsafe selected prompt at ${secret.path}`,
+      )
+      this.onFrameDropped?.('secret_key', frame.kind)
+      return false
+    }
+    return encodeFrame(prepared).byteLength <= this.sessionActionResultMaxBytes
   }
 
   /**
@@ -5105,11 +5337,12 @@ function checkStrictKeys(message: unknown): string | null {
     ['effort.set', new Set(['type', 'requestId', 'effort'])],
     ['fast.set', new Set(['type', 'requestId', 'active'])],
     // P4-6b session-action verbs (app-owned; see SESSION_ACTION_VERB_TYPES). The
-    // renderer authors ONLY intent — a title on rename; export/branch carry no
-    // params (the op targets THIS session). Any other key is rejected fail-closed.
+    // renderer authors ONLY intent. Any other key is rejected fail-closed.
     ['session.rename', new Set(['type', 'requestId', 'title'])],
     ['session.export', new Set(['type', 'requestId'])],
     ['session.branch', new Set(['type', 'requestId'])],
+    ['session.editFromMessage', new Set(['type', 'requestId', 'userMessageId'])],
+    ['session.branchFromMessage', new Set(['type', 'requestId', 'userMessageId'])],
     // P4-29 — the renderer authors ONLY the tag name (empty string = remove).
     ['session.tag', new Set(['type', 'requestId', 'tag'])],
     // Usage stats query verb — real engine-backed aggregation
@@ -5504,6 +5737,24 @@ const sessionActionVerbMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('session.branch'),
     requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  }),
+  z.object({
+    type: z.literal('session.editFromMessage'),
+    requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+    userMessageId: z
+      .string()
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{0,12}$/i,
+      ),
+  }),
+  z.object({
+    type: z.literal('session.branchFromMessage'),
+    requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+    userMessageId: z
+      .string()
+      .regex(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{0,12}$/i,
+      ),
   }),
   // P4-29 tag: unlike `title`, an EMPTY string is meaningful here — it is the
   // engine's own remove form (`src/commands/tag/tag.tsx:141`) — so the bound is

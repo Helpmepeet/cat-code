@@ -161,47 +161,40 @@ describe('resolveSessionActions', () => {
     expect(unnamed.get('copy-ids')!.enabled).toBe(true)
   })
 
-  test('Rename / Export / Branch are ENABLED for a LIVE row (P4-6b wired verbs)', () => {
+  test('Rename and Export are enabled for a live row', () => {
     const items = byKind(resolveSessionActions(row({ live: true }), { isActiveOpen: true }))
     expect(items.get('rename')!.enabled).toBe(true)
     expect(items.get('rename')!.reason).toBeUndefined()
     expect(items.get('export')!.enabled).toBe(true)
     expect(items.get('export')!.reason).toBeUndefined()
-    expect(items.get('branch')!.enabled).toBe(true)
-    expect(items.get('branch')!.label).toBe('Branch from HEAD…')
-    expect(items.get('branch')!.reason).toBeUndefined()
+    expect(items.has('branch' as SessionActionKind)).toBe(false)
+    expect(items.has('rewind' as SessionActionKind)).toBe(false)
   })
 
-  test('Rename / Export / Branch are DISABLED with a reason for a NON-live row', () => {
+  test('Rename and Export are disabled with a reason for a non-live row', () => {
     const items = byKind(
       resolveSessionActions(
         row({ live: false, restorable: true, status: 'exited' }),
         { isActiveOpen: false },
       ),
     )
-    for (const kind of ['rename', 'export', 'branch'] as const) {
+    for (const kind of ['rename', 'export'] as const) {
       expect(items.get(kind)!.enabled).toBe(false)
       expect(items.get(kind)!.reason).toContain('live engine')
     }
   })
 
-  test('Rename / Export / Branch are disabled when the host row is live but its sidecar disconnected', () => {
+  test('Rename and Export are disabled when the host row is live but its sidecar disconnected', () => {
     const items = byKind(
       resolveSessionActions(row({ live: true, status: 'disconnected' }), {
         isActiveOpen: true,
         hasEngine: false,
       }),
     )
-    for (const kind of ['rename', 'export', 'branch'] as const) {
+    for (const kind of ['rename', 'export'] as const) {
       expect(items.get(kind)!.enabled).toBe(false)
       expect(items.get(kind)!.reason).toContain('live engine')
     }
-  })
-
-  test('Rewind stays deferred (disabled) — no engine conversation-rewind verb', () => {
-    const items = byKind(resolveSessionActions(row(), { isActiveOpen: true }))
-    expect(items.get('rewind')!.enabled).toBe(false)
-    expect(items.get('rewind')!.reason).toContain('not available in the desktop app yet')
   })
 
   test('P4-36: the hidden-row reveal appears ONLY when the tier exists', () => {
@@ -218,7 +211,7 @@ describe('resolveSessionActions', () => {
     expect(show.get('reveal-hidden')!.label).toBe('Show hidden messages')
     expect(show.get('reveal-hidden')!.enabled).toBe(true)
     expect(show.get('reveal-hidden')!.reason).toBeUndefined()
-    expect(show.get('reveal-hidden')!.section).toBe('history')
+    expect(show.get('reveal-hidden')!.section).toBe('view')
     expect(show.has('hide-hidden')).toBe(false)
 
     // Revealed ⇒ the "hide" variant replaces it (one row, never both).
@@ -326,7 +319,7 @@ describe('P4-39 — estimateSessionActionsMenuHeight', () => {
     const height = estimateSessionActionsMenuHeight(
       resolveSessionActions(row(), { isActiveOpen: true }),
     )
-    expect(height).toBeGreaterThan(240)
+    expect(height).toBeGreaterThan(180)
     expect(height).toBeLessThan(320)
   })
 
@@ -354,17 +347,13 @@ describe('selectSessionsPageActions (P4-35 — the Sessions-page entry point)', 
     )
   })
 
-  test('Branch and Export SURVIVE the filter for a live row', () => {
-    // The two rows P4-29 deferred: the Sessions page reaches P4-30's dialogs by
-    // reaching the shared menu's branch/export verbs, with no second menu and no
-    // second dialog layer. If this filter ever swallowed them the page would
-    // silently lose both dialogs again.
+  test('Export survives the filter for a live row and Branch stays absent', () => {
     const page = byKind(selectSessionsPageActions(resolveSessionActions(row(), { isActiveOpen: true })))
-    expect(page.get('branch')!.enabled).toBe(true)
     expect(page.get('export')!.enabled).toBe(true)
+    expect(page.has('branch' as SessionActionKind)).toBe(false)
   })
 
-  test('a closed row still offers both, disabled with the actionable reason', () => {
+  test('a closed row still offers Export with the actionable reason', () => {
     const page = byKind(
       selectSessionsPageActions(
         resolveSessionActions(row({ live: false, status: 'exited', restorable: true }), {
@@ -372,10 +361,8 @@ describe('selectSessionsPageActions (P4-35 — the Sessions-page entry point)', 
         }),
       ),
     )
-    for (const kind of ['branch', 'export'] as const) {
-      expect(page.get(kind)!.enabled).toBe(false)
-      expect(page.get(kind)!.reason).toContain('Open or restore this session first.')
-    }
+    expect(page.get('export')!.enabled).toBe(false)
+    expect(page.get('export')!.reason).toContain('Open or restore this session first.')
   })
 
   test('an empty menu filters to an empty menu, never a throw', () => {

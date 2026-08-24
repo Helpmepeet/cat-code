@@ -1024,7 +1024,7 @@ test('IDLE-PARK gate — the park gate reopens once the account verb settles', a
   expect(parkCount()).toBe(1)
 })
 
-test('IDLE-PARK gate — app.park is DECLINED while a session.branch fork is still writing (no exit)', async () => {
+test('IDLE-PARK gate — app.park is declined while a targeted branch is still writing', async () => {
   let settle = () => {}
   const gate = new Promise<void>(resolve => {
     settle = resolve
@@ -1037,8 +1037,27 @@ test('IDLE-PARK gate — app.park is DECLINED while a session.branch fork is sti
       return { ok: true, message: 'Exported.', exportText: '' }
     },
     async branch() {
+      return { ok: false, message: 'Unavailable.' }
+    },
+    selectUserMessage() {
+      return {
+        ok: true,
+        message: 'Message selected.',
+        selectedPrompt: { content: 'selected prompt' },
+      }
+    },
+    async editFromMessage() {
+      return { ok: false, message: 'Unavailable.' }
+    },
+    async branchFromMessage() {
       await gate
-      return { ok: true, message: 'Branched.', branchEngineSessionId: 'fork' }
+      return {
+        ok: true,
+        message: 'Branched.',
+        branchEngineSessionId: '22222222-2222-4222-8222-222222222222',
+        branchTitle: 'Branch title',
+        selectedPrompt: { content: 'selected prompt' },
+      }
     },
     async tag() {
       return { ok: true, message: 'Tagged.' }
@@ -1052,7 +1071,11 @@ test('IDLE-PARK gate — app.park is DECLINED while a session.branch fork is sti
   const { socket } = makeSocket()
   const conn = server.addConnection(socket)
 
-  server.handleData(conn, clientFrame({ type: 'session.branch', requestId: 'b1' }))
+  server.handleData(conn, clientFrame({
+    type: 'session.branchFromMessage',
+    requestId: 'b1',
+    userMessageId: '11111111-1111-4111-8111-1',
+  }))
   await flush()
   server.handleData(conn, clientFrame({ type: 'app.park', requestId: 'park-1' }))
 
@@ -8231,7 +8254,7 @@ test('P4-14 — absent domains (probe mode) emit neither snapshot, without throw
 })
 
 /* ------------------------------------------------------------------------- *
- * P4-6b — session-action WRITE verbs (Rename / Export / Branch) boundary
+ * P4-6b — session-action write-verb boundary
  * ------------------------------------------------------------------------- *
  * Exercises the SERVER boundary (checkStrictKeys + Zod schema + dispatch + async
  * result frame) with a FAKE domain — the engine-op round-trip is proven in
@@ -8258,7 +8281,35 @@ function fakeSessionActionsDomain(): {
       return {
         ok: true,
         message: 'Branched.',
-        branchEngineSessionId: 'fork-id',
+        branchEngineSessionId: '22222222-2222-4222-8222-222222222222',
+        branchTitle: 'Branch title',
+      }
+    },
+    selectUserMessage(userMessageId) {
+      calls.push(`selectUserMessage:${userMessageId}`)
+      return {
+        ok: true,
+        message: 'Message selected.',
+        selectedPrompt: { content: 'selected prompt' },
+      }
+    },
+    async editFromMessage(userMessageId) {
+      calls.push(`editFromMessage:${userMessageId}`)
+      return {
+        ok: true,
+        message: 'Conversation rewound.',
+        selectedPrompt: { content: 'selected prompt' },
+        retainedMessages: [],
+      }
+    },
+    async branchFromMessage(userMessageId) {
+      calls.push(`branchFromMessage:${userMessageId}`)
+      return {
+        ok: true,
+        message: 'Branched.',
+        branchEngineSessionId: '22222222-2222-4222-8222-222222222222',
+        branchTitle: 'Branch title',
+        selectedPrompt: { content: 'selected prompt' },
       }
     },
     async tag(tag) {
@@ -8294,6 +8345,364 @@ function makeSessionActionsServer(): {
   )
   return { server, calls }
 }
+
+const TARGET_USER_MESSAGE_ID = '11111111-1111-4111-8111-1'
+
+test('message-targeted edit resets, replays retained history, then returns the prompt', async () => {
+  const { domain, calls } = fakeSessionActionsDomain()
+  const controller = new AppSessionController(probeAdapter())
+  const retainedMessage = buildProbeToolUseMessage()
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
+    controller,
+    sessionActions: domain,
+    projectHistory: async () => ({
+      history: [retainedMessage],
+      truncated: false,
+    }),
+    log: () => {},
+  })
+  servers.push(server)
+  const first = makeSocket()
+  const connection = server.addConnection(first.socket)
+  first.received.length = 0
+
+  server.handleData(
+    connection,
+    clientFrame({
+      type: 'session.editFromMessage',
+      requestId: 'edit-1',
+      userMessageId: TARGET_USER_MESSAGE_ID,
+    }),
+  )
+  await flush()
+
+  expect(first.received.map(frame => frame.kind)).toEqual([
+    'transcript.reset',
+    'event',
+    'session-action.result',
+  ])
+  expect(
+    first.received[1]?.kind === 'event' && first.received[1].replay,
+  ).toBe(true)
+  expect(first.received[2]).toMatchObject({
+    kind: 'session-action.result',
+    requestId: 'edit-1',
+    verb: 'editFromMessage',
+    ok: true,
+    selectedPrompt: { content: 'selected prompt' },
+  })
+  expect(calls).toEqual([
+    `selectUserMessage:${TARGET_USER_MESSAGE_ID}`,
+    `editFromMessage:${TARGET_USER_MESSAGE_ID}`,
+  ])
+
+  const later = makeSocket()
+  server.addConnection(later.socket)
+  expect(
+    later.received.some(
+      frame =>
+        frame.kind === 'event' &&
+        frame.replay === true &&
+        frame.event.type === 'message' &&
+        frame.event.message.uuid === retainedMessage.uuid,
+    ),
+  ).toBe(true)
+})
+
+test('message-targeted actions reject forged fields and malformed targets before effect', async () => {
+  const { server, calls } = makeSessionActionsServer()
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+
+  server.handleData(
+    connection,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'session.editFromMessage',
+        requestId: 'forged-1',
+        userMessageId: TARGET_USER_MESSAGE_ID,
+        action: 'branch',
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+  server.handleData(
+    connection,
+    encodeFrame({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      message: {
+        type: 'session.branchFromMessage',
+        requestId: 'forged-2',
+        userMessageId: '../../conversation',
+      } as unknown as ClientFrame['message'],
+    }),
+  )
+  await flush()
+
+  expect(received.filter(frame => frame.kind === 'error')).toHaveLength(2)
+  expect(calls).toEqual([])
+})
+
+test('active targeted edit aborts and waits for controller idle before rewinding', async () => {
+  let abortCalls = 0
+  let editSawActive: boolean | undefined
+  const controller = new AppSessionController({
+    async *runTurn({ signal }) {
+      await new Promise<void>(resolve => {
+        signal.addEventListener('abort', () => resolve(), { once: true })
+      })
+    },
+    abort() {
+      abortCalls += 1
+    },
+  })
+  const domain = fakeSessionActionsDomain().domain
+  const wrapped: SidecarSessionActionsDomain = {
+    ...domain,
+    async editFromMessage(userMessageId) {
+      editSawActive = controller.isTurnActive()
+      return domain.editFromMessage(userMessageId)
+    },
+  }
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
+    controller,
+    sessionActions: wrapped,
+    projectHistory: async () => ({ history: [], truncated: false }),
+    log: () => {},
+  })
+  servers.push(server)
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  void controller.submit('active')
+
+  server.handleData(
+    connection,
+    clientFrame({
+      type: 'session.editFromMessage',
+      requestId: 'edit-active',
+      userMessageId: TARGET_USER_MESSAGE_ID,
+    }),
+  )
+  await flush()
+  await flush()
+
+  expect(abortCalls).toBe(1)
+  expect(editSawActive).toBe(false)
+  expect(controller.getAbortState()).toEqual({
+    status: 'aborted',
+    reason: 'Editing from an earlier message',
+  })
+  expect(received).toContainEqual(
+    expect.objectContaining({
+      kind: 'session-action.result',
+      requestId: 'edit-active',
+      ok: true,
+    }),
+  )
+})
+
+test('active targeted branch is rejected without aborting or forking', async () => {
+  const { adapter, release } = gatedTurnAdapter()
+  let abortCalls = 0
+  const controller = new AppSessionController({
+    ...adapter,
+    abort() {
+      abortCalls += 1
+    },
+  })
+  const { domain, calls } = fakeSessionActionsDomain()
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
+    controller,
+    sessionActions: domain,
+    log: () => {},
+  })
+  servers.push(server)
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  const active = controller.submit('active')
+
+  server.handleData(
+    connection,
+    clientFrame({
+      type: 'session.branchFromMessage',
+      requestId: 'branch-active',
+      userMessageId: TARGET_USER_MESSAGE_ID,
+    }),
+  )
+  await flush()
+
+  expect(abortCalls).toBe(0)
+  expect(calls).toEqual([])
+  expect(received).toContainEqual(
+    expect.objectContaining({
+      kind: 'session-action.result',
+      requestId: 'branch-active',
+      ok: false,
+    }),
+  )
+  release()
+  await active
+})
+
+test('targeted edit rejects queued parent prompts instead of discarding them', async () => {
+  const { server, calls } = makeSessionActionsServer()
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  enqueue({ mode: 'prompt', value: 'waiting prompt' })
+
+  server.handleData(
+    connection,
+    clientFrame({
+      type: 'session.editFromMessage',
+      requestId: 'edit-queued',
+      userMessageId: TARGET_USER_MESSAGE_ID,
+    }),
+  )
+  expect(getCommandQueueSnapshot()).toHaveLength(1)
+  await flush()
+
+  expect(calls).toEqual([])
+  expect(received).toContainEqual(
+    expect.objectContaining({
+      kind: 'session-action.result',
+      requestId: 'edit-queued',
+      ok: false,
+    }),
+  )
+})
+
+test('a targeted fork gates new submits until its durable snapshot settles', async () => {
+  let settle: (() => void) | undefined
+  const gate = new Promise<void>(resolve => {
+    settle = resolve
+  })
+  let turnCalls = 0
+  const controller = new AppSessionController({
+    async *runTurn() {
+      turnCalls += 1
+    },
+  })
+  const base = fakeSessionActionsDomain().domain
+  const domain: SidecarSessionActionsDomain = {
+    ...base,
+    async branchFromMessage(userMessageId) {
+      await gate
+      return base.branchFromMessage(userMessageId)
+    },
+  }
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
+    controller,
+    sessionActions: domain,
+    log: () => {},
+  })
+  servers.push(server)
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+
+  server.handleData(
+    connection,
+    clientFrame({
+      type: 'session.branchFromMessage',
+      requestId: 'branch-gate',
+      userMessageId: TARGET_USER_MESSAGE_ID,
+    }),
+  )
+  server.handleData(
+    connection,
+    clientFrame({
+      type: 'app.submit',
+      requestId: 'submit-during-fork',
+      prompt: 'must not race',
+    }),
+  )
+
+  expect(turnCalls).toBe(0)
+  expect(received).toContainEqual(
+    expect.objectContaining({
+      kind: 'error',
+      requestId: 'submit-during-fork',
+      code: 'turn_already_running',
+    }),
+  )
+  settle?.()
+  await flush()
+})
+
+test('an over-cap selected prompt returns a correlated fail-closed result', async () => {
+  const base = fakeSessionActionsDomain().domain
+  let branchCalls = 0
+  const domain: SidecarSessionActionsDomain = {
+    ...base,
+    selectUserMessage() {
+      return {
+        ok: true,
+        message: 'Message selected.',
+        selectedPrompt: { content: 'x'.repeat(512) },
+      }
+    },
+    async branchFromMessage() {
+      branchCalls += 1
+      return {
+        ok: true,
+        message: 'Branched.',
+        branchEngineSessionId: '22222222-2222-4222-8222-222222222222',
+        branchTitle: 'Large branch',
+        selectedPrompt: {
+          content: 'x'.repeat(512),
+        },
+      }
+    },
+  }
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
+    controller: new AppSessionController(probeAdapter()),
+    sessionActions: domain,
+    sessionActionResultMaxBytes: 256,
+    log: () => {},
+  })
+  servers.push(server)
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+
+  server.handleData(
+    connection,
+    clientFrame({
+      type: 'session.branchFromMessage',
+      requestId: 'branch-large',
+      userMessageId: TARGET_USER_MESSAGE_ID,
+    }),
+  )
+  await flush()
+
+  expect(received).toContainEqual(
+    expect.objectContaining({
+      kind: 'session-action.result',
+      requestId: 'branch-large',
+      verb: 'branchFromMessage',
+      ok: false,
+    }),
+  )
+  const result = received.find(
+    frame =>
+      frame.kind === 'session-action.result' &&
+      frame.requestId === 'branch-large',
+  )
+  expect(
+    result?.kind === 'session-action.result' ? result.selectedPrompt : undefined,
+  ).toBeUndefined()
+  expect(branchCalls).toBe(0)
+})
 
 test('P4-6b — a valid session.rename dispatches + acks ok + relabels via session-title', async () => {
   const { server, calls } = makeSessionActionsServer()
@@ -8358,7 +8767,16 @@ test('an over-cap export is refused in words the operator can act on', async () 
       return { ok: true, message: 'Transcript exported.', exportText: oversized }
     },
     async branch() {
-      return { ok: true, message: 'Branched.', branchEngineSessionId: 'fork-id' }
+      return { ok: false, message: 'Unavailable.' }
+    },
+    selectUserMessage() {
+      return { ok: false, message: 'Unavailable.' }
+    },
+    async editFromMessage() {
+      return { ok: false, message: 'Unavailable.' }
+    },
+    async branchFromMessage() {
+      return { ok: false, message: 'Unavailable.' }
     },
     async tag() {
       return { ok: true, message: 'Tagged.' }
@@ -8405,8 +8823,8 @@ test('an over-cap export is refused in words the operator can act on', async () 
   expect(message).toContain('/export in the terminal')
 })
 
-test('P4-6b — a valid session.branch returns the new fork engine session id', async () => {
-  const { server } = makeSessionActionsServer()
+test('the existing session.branch verb remains accepted as additive v1 vocabulary', async () => {
+  const { server, calls } = makeSessionActionsServer()
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -8423,11 +8841,15 @@ test('P4-6b — a valid session.branch returns the new fork engine session id', 
   )
   await flush()
 
-  const result = received.find(f => f.kind === 'session-action.result')
-  expect(result && result.kind === 'session-action.result' && result.verb).toBe('branch')
-  expect(
-    result && result.kind === 'session-action.result' && result.branchEngineSessionId,
-  ).toBe('fork-id')
+  expect(received).toContainEqual(
+    expect.objectContaining({
+      kind: 'session-action.result',
+      requestId: 'sb1',
+      verb: 'branch',
+      ok: true,
+    }),
+  )
+  expect(calls).toEqual(['branch'])
 })
 
 test('P4-6b — rejects session.rename missing requestId at the schema boundary, no domain call', async () => {
@@ -8494,32 +8916,6 @@ test('P4-6b — rejects session.export carrying an unexpected key (checkStrictKe
   )
   await flush()
 
-  expect(received.some(f => f.kind === 'session-action.result')).toBe(false)
-  expect(calls).toEqual([])
-})
-
-test('P4-6b — rejects session.branch carrying an unexpected key (checkStrictKeys), no domain call', async () => {
-  // `session.branch` had an accept test but no reject direction, so the strict
-  // key check for the one verb that FORKS a transcript was unproven.
-  const { server, calls } = makeSessionActionsServer()
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
-
-  server.handleData(
-    conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'session.branch',
-        requestId: 'sb1',
-        engineSessionId: 'forged',
-      } as unknown as ClientFrame['message'],
-    }),
-  )
-  await flush()
-
-  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
   expect(received.some(f => f.kind === 'session-action.result')).toBe(false)
   expect(calls).toEqual([])
 })
@@ -8636,8 +9032,9 @@ test('P4-6b — a session-action verb with NO domain (probe) fails closed with i
       protocolVersion: PROTOCOL_VERSION,
       sessionId: SESSION,
       message: {
-        type: 'session.branch',
+        type: 'session.branchFromMessage',
         requestId: 'sb2',
+        userMessageId: TARGET_USER_MESSAGE_ID,
       } as unknown as ClientFrame['message'],
     }),
   )

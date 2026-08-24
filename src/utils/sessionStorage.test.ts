@@ -10,7 +10,7 @@ import { asAgentId, asSessionId } from '../types/ids.js'
 import type { AssistantMessage } from '../types/message.js'
 import { registerActiveSubagent, unregisterActiveSubagent } from './cleanupRegistry.js'
 import { createUserMessage } from './messages.js'
-import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, flushSessionStorage, getAgentTranscriptPath, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, loadDisplayTranscriptFromJsonlPath, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordPostTurnStall, recordPromptCacheBreak, recordRunFacts, recordTranscript, removeTranscriptMessage, resetProjectForTesting, resetRunFactsDedupeForTest, setSessionFileForTesting } from './sessionStorage.js'
+import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, flushSessionStorage, getAgentTranscriptPath, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, loadDisplayTranscriptFromJsonlPath, loadTranscriptFromFile, markActiveConversationTip, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordPostTurnStall, recordPromptCacheBreak, recordRunFacts, recordTranscript, removeTranscriptMessage, resetProjectForTesting, resetRunFactsDedupeForTest, setSessionFileForTesting } from './sessionStorage.js'
 
 describe('session storage', () => {
   const originalSessionId = getSessionId()
@@ -130,6 +130,308 @@ describe('session storage', () => {
     // Tip is the user/assistant turn, not the lone system frame.
     expect(log!.firstPrompt).toBe('The magic word is NONCE-XYZ.')
     expect(JSON.stringify(log!.messages)).toContain('Acknowledged: NONCE-XYZ.')
+  })
+
+  test('active tip survives restart until a branched turn is appended', async () => {
+    const firstUser = createUserMessage({
+      content: 'first prompt',
+      uuid: randomUUID(),
+    })
+    const firstAssistant: AssistantMessage = {
+      type: 'assistant',
+      uuid: randomUUID(),
+      timestamp: '2026-08-24T00:00:01.000Z',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'first answer' }],
+      },
+    }
+    const discardedUser = createUserMessage({
+      content: 'discarded prompt',
+      uuid: randomUUID(),
+    })
+    const discardedAssistant: AssistantMessage = {
+      type: 'assistant',
+      uuid: randomUUID(),
+      timestamp: '2026-08-24T00:00:03.000Z',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'discarded answer' }],
+      },
+    }
+
+    await recordTranscript([
+      firstUser,
+      firstAssistant,
+      discardedUser,
+      discardedAssistant,
+    ])
+    await markActiveConversationTip(firstAssistant.uuid as UUID)
+    resetProjectForTesting()
+    clearSessionMessagesCache()
+
+    const rewound = await getLastSessionLog(sessionId as UUID)
+    expect(rewound?.messages.map(message => message.uuid)).toEqual([
+      firstUser.uuid,
+      firstAssistant.uuid,
+    ])
+    const explicitPath = await loadTranscriptFromFile(
+      getTranscriptPathForSession(sessionId),
+    )
+    expect(explicitPath.messages.map(message => message.uuid)).toEqual([
+      firstUser.uuid,
+      firstAssistant.uuid,
+    ])
+
+    const branchedUser = createUserMessage({
+      content: 'replacement prompt',
+      uuid: randomUUID(),
+    })
+    const branchedAssistant: AssistantMessage = {
+      type: 'assistant',
+      uuid: randomUUID(),
+      timestamp: '2026-08-24T00:00:05.000Z',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'replacement answer' }],
+      },
+    }
+    await recordTranscript([
+      firstUser,
+      firstAssistant,
+      branchedUser,
+      branchedAssistant,
+    ])
+    await flushSessionStorage()
+    resetProjectForTesting()
+    clearSessionMessagesCache()
+
+    const resumedBranch = await getLastSessionLog(sessionId as UUID)
+    expect(resumedBranch?.messages.map(message => message.uuid)).toEqual([
+      firstUser.uuid,
+      firstAssistant.uuid,
+      branchedUser.uuid,
+      branchedAssistant.uuid,
+    ])
+  })
+
+  test('a stale writer extending the discarded suffix cannot supersede the active tip', async () => {
+    const firstUser = createUserMessage({
+      content: 'first prompt',
+      uuid: randomUUID(),
+    })
+    const firstAssistant: AssistantMessage = {
+      type: 'assistant',
+      uuid: randomUUID(),
+      timestamp: '2026-08-24T00:20:01.000Z',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'first answer' }],
+      },
+    }
+    const discardedUser = createUserMessage({
+      content: 'discarded prompt',
+      uuid: randomUUID(),
+    })
+    const discardedAssistant: AssistantMessage = {
+      type: 'assistant',
+      uuid: randomUUID(),
+      timestamp: '2026-08-24T00:20:03.000Z',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'discarded answer' }],
+      },
+    }
+    await recordTranscript([
+      firstUser,
+      firstAssistant,
+      discardedUser,
+      discardedAssistant,
+    ])
+    await markActiveConversationTip(firstAssistant.uuid as UUID)
+
+    const staleWriterPrompt = createUserMessage({
+      content: 'stale writer prompt',
+      uuid: randomUUID(),
+    })
+    await recordTranscript([
+      firstUser,
+      firstAssistant,
+      discardedUser,
+      discardedAssistant,
+      staleWriterPrompt,
+    ])
+    await flushSessionStorage()
+    resetProjectForTesting()
+    clearSessionMessagesCache()
+
+    const resumed = await getLastSessionLog(sessionId as UUID)
+    expect(resumed?.messages.map(message => message.uuid)).toEqual([
+      firstUser.uuid,
+      firstAssistant.uuid,
+    ])
+  })
+
+  test('null active tip resumes with empty retained context', async () => {
+    const prompt = createUserMessage({
+      content: 'only prompt',
+      uuid: randomUUID(),
+    })
+    const answer: AssistantMessage = {
+      type: 'assistant',
+      uuid: randomUUID(),
+      timestamp: '2026-08-24T00:10:01.000Z',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'only answer' }],
+      },
+    }
+    await recordTranscript([prompt, answer])
+    await markActiveConversationTip(null)
+    resetProjectForTesting()
+    clearSessionMessagesCache()
+
+    const resumed = await getLastSessionLog(sessionId as UUID)
+    expect(resumed).not.toBeNull()
+    expect(resumed?.messages).toEqual([])
+  })
+
+  test('active tip selects a retained chain through large-transcript pruning', async () => {
+    const firstUserUuid = randomUUID()
+    const firstAssistantUuid = randomUUID()
+    const discardedUserUuid = randomUUID()
+    const discardedAssistantUuid = randomUUID()
+    const base = {
+      isSidechain: false,
+      sessionId,
+      cwd: tempDir,
+      version: 'test',
+    }
+    const entries = [
+      {
+        parentUuid: null,
+        ...base,
+        type: 'user',
+        uuid: firstUserUuid,
+        userType: 'external',
+        timestamp: '2026-08-24T01:00:00.000Z',
+        message: { role: 'user', content: 'retained prompt' },
+      },
+      {
+        parentUuid: firstUserUuid,
+        ...base,
+        type: 'assistant',
+        uuid: firstAssistantUuid,
+        timestamp: '2026-08-24T01:00:01.000Z',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'retained answer' }],
+        },
+      },
+      {
+        parentUuid: firstAssistantUuid,
+        ...base,
+        type: 'user',
+        uuid: discardedUserUuid,
+        userType: 'external',
+        timestamp: '2026-08-24T01:00:02.000Z',
+        message: { role: 'user', content: 'discarded prompt' },
+      },
+      {
+        parentUuid: discardedUserUuid,
+        ...base,
+        type: 'assistant',
+        uuid: discardedAssistantUuid,
+        timestamp: '2026-08-24T01:00:03.000Z',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'x'.repeat(6 * 1024 * 1024) }],
+        },
+      },
+      {
+        type: 'active-conversation-tip',
+        sessionId,
+        tipUuid: firstAssistantUuid,
+      },
+    ]
+    await writeFile(
+      getTranscriptPathForSession(sessionId),
+      `${entries.map(entry => JSON.stringify(entry)).join('\n')}\n`,
+    )
+
+    const resumed = await getLastSessionLog(sessionId as UUID)
+    expect(resumed?.messages.map(message => message.uuid)).toEqual([
+      firstUserUuid,
+      firstAssistantUuid,
+    ])
+  })
+
+  test('invalid active-tip markers fail safely to the newest main leaf', async () => {
+    const userUuid = randomUUID()
+    const assistantUuid = randomUUID()
+    const sidechainUuid = randomUUID()
+    const path = getTranscriptPathForSession(sessionId)
+    const messages = [
+      {
+        parentUuid: null,
+        isSidechain: false,
+        type: 'user',
+        uuid: userUuid,
+        timestamp: '2026-08-24T02:00:00.000Z',
+        message: { role: 'user', content: 'main prompt' },
+        sessionId,
+        cwd: tempDir,
+        userType: 'external',
+        version: 'test',
+      },
+      {
+        parentUuid: userUuid,
+        isSidechain: false,
+        type: 'assistant',
+        uuid: assistantUuid,
+        timestamp: '2026-08-24T02:00:01.000Z',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'main answer' }],
+        },
+        sessionId,
+        cwd: tempDir,
+        version: 'test',
+      },
+      {
+        parentUuid: null,
+        isSidechain: true,
+        type: 'assistant',
+        uuid: sidechainUuid,
+        timestamp: '2026-08-24T02:00:02.000Z',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'sidechain answer' }],
+        },
+        sessionId,
+        cwd: tempDir,
+        version: 'test',
+      },
+    ]
+
+    for (const marker of [
+      { type: 'active-conversation-tip', sessionId, tipUuid: 'malformed' },
+      { type: 'active-conversation-tip', sessionId, tipUuid: randomUUID() },
+      { type: 'active-conversation-tip', sessionId, tipUuid: sidechainUuid },
+    ]) {
+      await writeFile(
+        path,
+        `${[...messages, marker]
+          .map(entry => JSON.stringify(entry))
+          .join('\n')}\n`,
+      )
+      clearSessionMessagesCache()
+      const resumed = await getLastSessionLog(sessionId as UUID)
+      expect(resumed?.messages.map(message => message.uuid)).toEqual([
+        userUuid,
+        assistantUuid,
+      ])
+    }
   })
 
   test('concurrent tombstones serialize their transcript rewrites', async () => {

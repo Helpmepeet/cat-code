@@ -18,6 +18,13 @@ import {
   parseThreadGoalAttemptRecord,
   type ThreadGoalAttempt,
 } from './threadGoalAttempt.js'
+import {
+  EMPTY_THREAD_GOAL_CONTRACT,
+  parseThreadGoalContract,
+  parseThreadGoalEvidence,
+  type ThreadGoalContract,
+  type ThreadGoalEvidence,
+} from './threadGoalEvidence.js'
 
 export type { ThreadGoalStatus, ThreadGoalStatusReason }
 
@@ -107,6 +114,14 @@ export type ThreadGoal = {
   pendingAttempt: ThreadGoalAttempt | null
   /** Recently seen wake keys, so a redelivered wake creates no second attempt. */
   recentWakeKeys: string[]
+  /**
+   * Structured acceptance criteria. Empty for a goal created from a plain
+   * objective, which keeps the pre-existing completion behaviour: this gate is
+   * additive and must not retroactively block goals already in flight.
+   */
+  contract: ThreadGoalContract
+  /** Criterion-linked evidence recorded by the runtime, never by the model. */
+  evidence: ThreadGoalEvidence[]
   timeUsedSeconds: number
   createdAtMs: number
   updatedAtMs: number
@@ -532,6 +547,8 @@ export function createThreadGoal(
     consecutiveFailures: 0,
     pendingAttempt: null,
     recentWakeKeys: [],
+    contract: EMPTY_THREAD_GOAL_CONTRACT,
+    evidence: [],
     timeUsedSeconds: 0,
     createdAtMs: nowMs,
     updatedAtMs: nowMs,
@@ -1113,6 +1130,8 @@ function migrateThreadGoalV1(
     consecutiveNoProgressTurns: 0,
     consecutiveFailures: 0,
     ...EMPTY_THREAD_GOAL_ATTEMPT_RECORD,
+    contract: EMPTY_THREAD_GOAL_CONTRACT,
+    evidence: [],
     timeUsedSeconds: base.timeUsedSeconds,
     createdAtMs: base.createdAtMs,
     updatedAtMs: base.updatedAtMs,
@@ -1246,5 +1265,7 @@ export function parseThreadGoal(input: unknown): ThreadGoal | null {
       candidate.pendingAttempt,
       candidate.recentWakeKeys,
     ),
+    contract: parseThreadGoalContract(candidate.contract),
+    evidence: parseThreadGoalEvidence(candidate.evidence),
   }
 }

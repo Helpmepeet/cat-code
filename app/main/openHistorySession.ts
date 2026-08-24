@@ -64,7 +64,22 @@ export type OpenHistoryResolution =
    * clicked instead of falling back to the cwd basename. Absent when the
    * transcript never earned a title.
    */
-  | { kind: 'spawn'; cwd: string; resumeEngineSessionId: string; title?: string }
+  | {
+      kind: 'spawn'
+      cwd: string
+      resumeEngineSessionId: string
+      title?: string
+      /** Present only for a main-trusted just-created desktop fork. */
+      forked?: true
+    }
+
+export type TrustedOpenHistorySeed = {
+  engineSessionId: string
+  cwd: string
+  title?: string
+  /** Main-captured provenance for a just-created desktop fork. */
+  forked: true
+}
 
 /**
  * Decide what opening a history row's engine session id should do, purely from
@@ -77,6 +92,7 @@ export function resolveOpenHistorySession(
   engineSessionId: unknown,
   descriptors: readonly SessionDescriptor[],
   catalog: SessionsCatalogSnapshot | null,
+  trustedSeed?: TrustedOpenHistorySeed,
 ): OpenHistoryResolution {
   if (
     typeof engineSessionId !== 'string' ||
@@ -96,28 +112,51 @@ export function resolveOpenHistorySession(
   // cwd resolution from the engine-written cache only (HC1). No cache entry →
   // fail closed; the renderer tells the user to open it from the terminal.
   const entry = catalog?.entries.find(e => e.sessionId === engineSessionId)
-  if (!entry) {
-    return reject(
-      'session_not_found',
-      'no recorded session for that id. Open it from the terminal.',
-    )
-  }
-  if (typeof entry.cwd !== 'string' || entry.cwd.trim().length === 0) {
-    // MAJOR-1: a transcript whose workspace could not be reconciled. Never guess.
-    return reject(
-      'invalid_cwd',
-      'that session has no recorded workspace. Open it from the terminal.',
-    )
+  if (entry) {
+    if (typeof entry.cwd !== 'string' || entry.cwd.trim().length === 0) {
+      // MAJOR-1: a transcript whose workspace could not be reconciled. Never guess.
+      return reject(
+        'invalid_cwd',
+        'that session has no recorded workspace. Open it from the terminal.',
+      )
+    }
+    return {
+      kind: 'spawn',
+      cwd: entry.cwd,
+      resumeEngineSessionId: engineSessionId,
+      ...(entry.title && entry.title.trim().length > 0
+        ? { title: entry.title }
+        : {}),
+      ...(entry.forked === true ||
+      (trustedSeed?.engineSessionId === engineSessionId &&
+        trustedSeed.forked === true)
+        ? { forked: true as const }
+        : {}),
+    }
   }
 
-  return {
-    kind: 'spawn',
-    cwd: entry.cwd,
-    resumeEngineSessionId: engineSessionId,
-    ...(entry.title && entry.title.trim().length > 0
-      ? { title: entry.title }
-      : {}),
+  if (
+    trustedSeed?.engineSessionId === engineSessionId &&
+    ENGINE_SESSION_ID_RE.test(trustedSeed.engineSessionId) &&
+    typeof trustedSeed.cwd === 'string' &&
+    trustedSeed.cwd.trim().length > 0
+  ) {
+    return {
+      kind: 'spawn',
+      cwd: trustedSeed.cwd,
+      resumeEngineSessionId: engineSessionId,
+      ...(typeof trustedSeed.title === 'string' &&
+      trustedSeed.title.trim().length > 0
+        ? { title: trustedSeed.title }
+        : {}),
+      forked: true,
+    }
   }
+
+  return reject(
+    'session_not_found',
+    'no recorded session for that id. Open it from the terminal.',
+  )
 }
 
 function reject(

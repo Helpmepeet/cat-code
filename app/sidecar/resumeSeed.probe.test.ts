@@ -134,7 +134,8 @@ test('F1/F2 projection wiring: archival display replay preserves the exact visib
   // visible resumedMessages projection replaces its aligned tail byte-for-byte.
   const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8')
   expect(source).toContain('initialMessages: resumedMessages')
-  expect(source).toContain('projectResumedHistory(resumedMessages)')
+  expect(source).toContain('projectCurrentDisplayHistory(resumedMessages)')
+  expect(source).toContain('projectResumedHistory(retainedMessages)')
   expect(source).toContain('loadDisplayTranscriptFromJsonlPath(')
   expect(source).toContain('mergeDisplayHistoryWithSeed(')
   // And resumedMessages has exactly one assignment site (the resume result).

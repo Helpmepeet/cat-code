@@ -794,6 +794,7 @@ function row(overrides: Partial<SessionDescriptor> = {}): SessionDescriptor {
     engineSessionId: 'e-a',
     cwd: '/repo',
     title: null,
+    forked: false,
     titleUpdatedAt: null,
     status: 'exited',
     restorable: true,

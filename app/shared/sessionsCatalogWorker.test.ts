@@ -8,6 +8,7 @@ import {
 
 function entry(partial: Partial<SessionCatalogEntry> & { sessionId: string }): SessionCatalogEntry {
   return {
+    forked: false,
     cwd: '/w/proj',
     cwdExists: true,
     title: null,

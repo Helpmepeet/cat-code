@@ -51,6 +51,7 @@ test('PL-B cache is admitted by PL-A and the later click stays store-first', asy
     engineSessionId: ENGINE_ID,
     cwd: '/tmp',
     title: null,
+    forked: false,
     titleUpdatedAt: null,
     status: 'exited',
     restorable: true,

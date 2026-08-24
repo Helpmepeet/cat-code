@@ -45,6 +45,7 @@ import {
 } from '../types/ids.js'
 import type { AttributionSnapshotMessage } from '../types/logs.js'
 import {
+  type ActiveConversationTipEntry,
   type ContentReplacementEntry,
   type ContextCollapseCommitEntry,
   type ContextCollapseSnapshotEntry,
@@ -153,6 +154,7 @@ function applyThreadGoalEntry(
 // 50MB — prevents OOM in the tombstone slow path which reads + rewrites the
 // entire session file. Session files can grow to multiple GB (inc-3930).
 const MAX_TOMBSTONE_REWRITE_BYTES = 50 * 1024 * 1024
+const ACTIVE_CONVERSATION_TIP_TYPE = 'active-conversation-tip'
 
 const SKIP_FIRST_PROMPT_PATTERN =
   /^(?:\s*<[a-z][\w-]*[\s>]|\[Request interrupted by user[^\]]*\])/
@@ -185,6 +187,29 @@ export function isTranscriptMessage(entry: Entry): entry is TranscriptMessage {
  */
 export function isChainParticipant(m: Pick<Message, 'type'>): boolean {
   return m.type !== 'progress'
+}
+
+function parseActiveConversationTipEntry(
+  entry: unknown,
+): ActiveConversationTipEntry | null {
+  if (
+    typeof entry !== 'object' ||
+    entry === null ||
+    !('type' in entry) ||
+    entry.type !== ACTIVE_CONVERSATION_TIP_TYPE ||
+    !('sessionId' in entry) ||
+    !('tipUuid' in entry)
+  ) {
+    return null
+  }
+  const sessionId = validateUuid(entry.sessionId)
+  const tipUuid = entry.tipUuid === null ? null : validateUuid(entry.tipUuid)
+  if (!sessionId || (entry.tipUuid !== null && !tipUuid)) return null
+  return {
+    type: ACTIVE_CONVERSATION_TIP_TYPE,
+    sessionId,
+    tipUuid,
+  }
 }
 
 type LegacyProgressEntry = {
@@ -1752,6 +1777,16 @@ class Project {
     })
   }
 
+  async markActiveConversationTip(tipUuid: UUID | null): Promise<void> {
+    if (this.shouldSkipPersistence()) return
+    this.ensureCurrentSessionFile()
+    await this.appendEntry({
+      type: ACTIVE_CONVERSATION_TIP_TYPE,
+      sessionId: getSessionId() as UUID,
+      tipUuid,
+    })
+  }
+
   async appendEntry(entry: Entry, sessionId: UUID = getSessionId() as UUID) {
     if (this.shouldSkipPersistence()) {
       return
@@ -2219,6 +2254,13 @@ export async function recordContextCollapseSnapshot(snapshot: {
 
 export async function flushSessionStorage(): Promise<void> {
   await getProject().flush()
+}
+
+export async function markActiveConversationTip(
+  tipUuid: UUID | null,
+): Promise<void> {
+  await getProject().markActiveConversationTip(tipUuid)
+  await flushCurrentTranscriptDurably()
 }
 
 const DEFERRED_CONTINUATION_RESULT_OUTCOMES = new Set<
@@ -2945,6 +2987,55 @@ export function buildConversationChain(
   return recoverOrphanedParallelToolResults(messages, transcript, seen)
 }
 
+export type ActiveConversationSelection = {
+  messages: TranscriptMessage[]
+  tip: TranscriptMessage | null
+  sessionId: UUID | undefined
+}
+
+export function selectActiveConversation(
+  messages: Map<UUID, TranscriptMessage>,
+  leafUuids: Set<UUID>,
+  activeConversationTip?: ActiveConversationTipEntry,
+): ActiveConversationSelection {
+  if (activeConversationTip) {
+    if (activeConversationTip.tipUuid === null) {
+      return {
+        messages: [],
+        tip: null,
+        sessionId: activeConversationTip.sessionId,
+      }
+    }
+    const tip = messages.get(activeConversationTip.tipUuid)
+    if (
+      tip &&
+      !tip.isSidechain &&
+      (tip.type === 'user' || tip.type === 'assistant') &&
+      tip.sessionId === activeConversationTip.sessionId
+    ) {
+      return {
+        messages: buildConversationChain(messages, tip),
+        tip,
+        sessionId: activeConversationTip.sessionId,
+      }
+    }
+  }
+
+  const tip = findLatestMessage(
+    messages.values(),
+    message =>
+      !message.isSidechain &&
+      leafUuids.has(message.uuid) &&
+      (message.type === 'user' || message.type === 'assistant'),
+  )
+  if (!tip) return { messages: [], tip: null, sessionId: undefined }
+  return {
+    messages: buildConversationChain(messages, tip),
+    tip,
+    sessionId: tip.sessionId as UUID | undefined,
+  }
+}
+
 /** Display-only chain walk that preserves archival history across compaction. */
 export function buildDisplayConversationChain(
   messages: Map<UUID, TranscriptMessage>,
@@ -3170,23 +3261,25 @@ export async function loadTranscriptFromFile(
       contentReplacements,
       threadGoals,
       worktreeStates,
+      activeConversationTip,
     } = await loadTranscriptFile(filePath)
 
     if (messages.size === 0) {
       throw new Error('No messages found in JSONL file')
     }
 
-    // Find the most recent leaf message using pre-computed leaf UUIDs
-    const leafMessage = findLatestMessage(messages.values(), msg =>
-      leafUuids.has(msg.uuid),
+    const activeConversation = selectActiveConversation(
+      messages,
+      leafUuids,
+      activeConversationTip,
     )
+    const leafMessage = activeConversation.tip
 
     if (!leafMessage) {
       throw new Error('No valid conversation chain found in JSONL file')
     }
 
-    // Build the conversation chain backwards from leaf to root
-    const transcript = buildConversationChain(messages, leafMessage)
+    const transcript = activeConversation.messages
 
     const summary = summaries.get(leafMessage.uuid)
     const customTitle = customTitles.get(leafMessage.sessionId as UUID)
@@ -3374,6 +3467,7 @@ function convertToLogOption(
     modified,
     firstPrompt,
     messageCount: countVisibleMessages(transcript),
+    forked: transcript.some(message => message.forkedFrom !== undefined),
     isSidechain: firstMessage.isSidechain,
     teamName: firstMessage.teamName,
     agentName: firstMessage.agentName,
@@ -3893,36 +3987,34 @@ export async function loadFullLog(log: LogOption): Promise<LogOption> {
       contextCollapseCommits,
       contextCollapseSnapshot,
       leafUuids,
+      activeConversationTip,
     } = await loadTranscriptFile(sessionFile)
 
     if (messages.size === 0) {
       return log
     }
 
-    // Find the most recent user/assistant leaf message from the transcript
-    const mostRecentLeaf = findLatestMessage(
-      messages.values(),
-      msg =>
-        leafUuids.has(msg.uuid) &&
-        (msg.type === 'user' || msg.type === 'assistant'),
+    const activeConversation = selectActiveConversation(
+      messages,
+      leafUuids,
+      activeConversationTip,
     )
-    if (!mostRecentLeaf) {
+    if (!activeConversation.sessionId) {
       return log
     }
 
-    // Build the conversation chain from this leaf
-    const transcript = buildConversationChain(messages, mostRecentLeaf)
-    // Leaf's sessionId — forked sessions copy chain[0] from the source, but
+    const transcript = activeConversation.messages
+    const mostRecentLeaf = activeConversation.tip
+    // Active tip's sessionId — forked sessions copy chain[0] from the source, but
     // metadata entries (custom-title etc.) are keyed by the current session.
-    const sessionId = mostRecentLeaf.sessionId as UUID | undefined
+    const sessionId = activeConversation.sessionId
     return {
       ...log,
       messages: removeExtraFields(transcript),
-      firstPrompt: extractFirstPrompt(transcript),
+      firstPrompt:
+        transcript.length > 0 ? extractFirstPrompt(transcript) : log.firstPrompt,
       messageCount: countVisibleMessages(transcript),
-      summary: mostRecentLeaf
-        ? summaries.get(mostRecentLeaf.uuid)
-        : log.summary,
+      summary: mostRecentLeaf ? summaries.get(mostRecentLeaf.uuid) : undefined,
       customTitle: sessionId ? customTitles.get(sessionId) : log.customTitle,
       tag: sessionId ? tags.get(sessionId) : log.tag,
       agentName: sessionId ? agentNames.get(sessionId) : log.agentName,
@@ -3941,7 +4033,7 @@ export async function loadFullLog(log: LogOption): Promise<LogOption> {
       gitBranch: mostRecentLeaf?.gitBranch ?? log.gitBranch,
       isSidechain: transcript[0]?.isSidechain ?? log.isSidechain,
       teamName: transcript[0]?.teamName ?? log.teamName,
-      leafUuid: mostRecentLeaf?.uuid ?? log.leafUuid,
+      leafUuid: mostRecentLeaf?.uuid,
       fileHistorySnapshots: buildFileHistorySnapshotChain(
         fileHistorySnapshots,
         transcript,
@@ -4220,7 +4312,98 @@ function pickDepthOneUuidCandidate(
   return candidates.at(-1)!
 }
 
-function walkChainBeforeParse(buf: Buffer): Buffer {
+function findActiveConversationTipInBuffer(
+  buf: Buffer,
+  expectedSessionId?: UUID,
+): ActiveConversationTipEntry | undefined {
+  const NEWLINE = 0x0a
+  const PARENT_PREFIX = Buffer.from('{"parentUuid":')
+  const ACTIVE_TIP_PREFIX = Buffer.from(
+    `{"type":"${ACTIVE_CONVERSATION_TIP_TYPE}"`,
+  )
+  let activeTip: ActiveConversationTipEntry | undefined
+  let activeRoot: UUID | null | undefined
+  const activeDescendants = new Set<UUID>()
+  let pos = 0
+
+  while (pos < buf.length) {
+    const nl = buf.indexOf(NEWLINE, pos)
+    const lineEnd = nl === -1 ? buf.length : nl
+    if (
+      buf.compare(
+        ACTIVE_TIP_PREFIX,
+        0,
+        ACTIVE_TIP_PREFIX.length,
+        pos,
+        Math.min(lineEnd, pos + ACTIVE_TIP_PREFIX.length),
+      ) === 0
+    ) {
+      try {
+        const parsed = parseActiveConversationTipEntry(
+          JSON.parse(buf.toString('utf8', pos, lineEnd)),
+        )
+        activeTip =
+          parsed &&
+          (!expectedSessionId || parsed.sessionId === expectedSessionId)
+            ? parsed
+            : undefined
+        activeRoot = activeTip?.tipUuid
+        activeDescendants.clear()
+      } catch {
+        activeTip = undefined
+        activeRoot = undefined
+        activeDescendants.clear()
+      }
+    } else if (
+      activeTip &&
+      lineEnd - pos > PARENT_PREFIX.length &&
+      buf.compare(
+        PARENT_PREFIX,
+        0,
+        PARENT_PREFIX.length,
+        pos,
+        pos + PARENT_PREFIX.length,
+      ) === 0
+    ) {
+      try {
+        const candidate = JSON.parse(
+          buf.toString('utf8', pos, lineEnd),
+        ) as Entry
+        if (isTranscriptMessage(candidate) && !candidate.isSidechain) {
+          const parent = candidate.parentUuid
+          const extendsActiveBranch =
+            activeRoot === null
+              ? parent === null ||
+                (parent !== null && activeDescendants.has(parent))
+              : parent === activeRoot ||
+                (parent !== null && activeDescendants.has(parent))
+          if (extendsActiveBranch) {
+            activeDescendants.add(candidate.uuid)
+            if (
+              candidate.type === 'user' ||
+              candidate.type === 'assistant'
+            ) {
+              activeTip = { ...activeTip, tipUuid: candidate.uuid }
+            }
+          }
+        }
+      } catch {
+        // Malformed transcript lines do not make an older marker authoritative.
+        activeTip = undefined
+        activeRoot = undefined
+        activeDescendants.clear()
+      }
+    }
+    pos = nl === -1 ? buf.length : nl + 1
+  }
+
+  return activeTip
+}
+
+function walkChainBeforeParse(
+  buf: Buffer,
+  activeTipUuid?: UUID | null,
+): Buffer {
   const NEWLINE = 0x0a
   const OPEN_BRACE = 0x7b
   const QUOTE = 0x22
@@ -4313,16 +4496,29 @@ function walkChainBeforeParse(buf: Buffer): Buffer {
     pos = lineEnd
   }
 
-  // Leaf = last non-sidechain entry. isSidechain is the 2nd or 3rd key
-  // (after parentUuid, maybe logicalParentUuid) so indexOf from lineStart
-  // finds it within a few dozen bytes when present; when absent it spills
-  // into the next line, caught by the bounds check.
-  let leafSlot = -1
-  for (let i = msgIdx.length - 3; i >= 0; i -= 3) {
-    const sc = buf.indexOf(SIDECHAIN_TRUE, msgIdx[i]!)
-    if (sc === -1 || sc >= msgIdx[i + 1]!) {
-      leafSlot = i
-      break
+  // An active rewind marker selects its retained target even though newer
+  // discarded leaves remain in the append-only file. Otherwise use the latest
+  // non-sidechain transcript entry, matching the normal pre-parse behavior.
+  let leafSlot =
+    activeTipUuid === undefined || activeTipUuid === null
+      ? -1
+      : (uuidToSlot.get(activeTipUuid) ?? -1)
+  if (leafSlot >= 0) {
+    const sidechainMarker = buf.indexOf(SIDECHAIN_TRUE, msgIdx[leafSlot]!)
+    if (
+      sidechainMarker !== -1 &&
+      sidechainMarker < msgIdx[leafSlot + 1]!
+    ) {
+      leafSlot = -1
+    }
+  }
+  if (leafSlot < 0) {
+    for (let i = msgIdx.length - 3; i >= 0; i -= 3) {
+      const sc = buf.indexOf(SIDECHAIN_TRUE, msgIdx[i]!)
+      if (sc === -1 || sc >= msgIdx[i + 1]!) {
+        leafSlot = i
+        break
+      }
     }
   }
   if (leafSlot < 0) return buf
@@ -4417,6 +4613,7 @@ export async function loadTranscriptFile(
   queueOperations: SessionQueueOperation[]
   leafUuids: Set<UUID>
   sourceTruncated: boolean
+  activeConversationTip: ActiveConversationTipEntry | undefined
 }> {
   const messages = new Map<UUID, TranscriptMessage>()
   const summaries = new Map<UUID, string>()
@@ -4445,6 +4642,9 @@ export async function loadTranscriptFile(
   let contextCollapseSnapshot: ContextCollapseSnapshotEntry | undefined
   const queueOperations: SessionQueueOperation[] = []
   let sourceTruncated = false
+  let activeConversationTip: ActiveConversationTipEntry | undefined
+  let activeConversationRoot: UUID | null | undefined
+  const activeConversationDescendants = new Set<UUID>()
 
   try {
     // For large transcripts, avoid materializing megabytes of stale content.
@@ -4543,7 +4743,14 @@ export async function loadTranscriptFile(
       !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP) &&
       buf.length > SKIP_PRECOMPACT_THRESHOLD
     ) {
-      buf = walkChainBeforeParse(buf)
+      const fileSessionId = validateUuid(
+        basename(filePath).replace(/\.jsonl$/, ''),
+      )
+      const bufferedActiveTip = findActiveConversationTipInBuffer(
+        buf,
+        fileSessionId ?? undefined,
+      )
+      buf = walkChainBeforeParse(buf, bufferedActiveTip?.tipUuid)
     }
 
     // First pass: process metadata-only lines collected during the boundary scan.
@@ -4616,6 +4823,26 @@ export async function loadTranscriptFile(
         if (entry.parentUuid && progressBridge.has(entry.parentUuid)) {
           entry.parentUuid = progressBridge.get(entry.parentUuid) ?? null
         }
+        if (activeConversationTip && !entry.isSidechain) {
+          const parent = entry.parentUuid
+          const extendsActiveBranch =
+            activeConversationRoot === null
+              ? parent === null ||
+                (parent !== null &&
+                  activeConversationDescendants.has(parent))
+              : parent === activeConversationRoot ||
+                (parent !== null &&
+                  activeConversationDescendants.has(parent))
+          if (extendsActiveBranch) {
+            activeConversationDescendants.add(entry.uuid)
+            if (entry.type === 'user' || entry.type === 'assistant') {
+              activeConversationTip = {
+                ...activeConversationTip,
+                tipUuid: entry.uuid,
+              }
+            }
+          }
+        }
         messages.set(entry.uuid, entry)
         // Compact boundary: prior marble-origami-commit entries reference
         // messages that won't be in the post-boundary chain. The >5MB
@@ -4628,6 +4855,11 @@ export async function loadTranscriptFile(
           contextCollapseCommits.length = 0
           contextCollapseSnapshot = undefined
         }
+      } else if (entry.type === ACTIVE_CONVERSATION_TIP_TYPE) {
+        activeConversationTip =
+          parseActiveConversationTipEntry(entry) ?? undefined
+        activeConversationRoot = activeConversationTip?.tipUuid
+        activeConversationDescendants.clear()
       } else if (entry.type === 'summary' && entry.leafUuid) {
         summaries.set(entry.leafUuid, entry.summary)
       } else if (entry.type === 'custom-title' && entry.sessionId) {
@@ -4695,6 +4927,26 @@ export async function loadTranscriptFile(
     applyPreservedSegmentRelinks(messages)
   }
   applySnipRemovals(messages)
+
+  if (activeConversationTip?.tipUuid) {
+    const tip = messages.get(activeConversationTip.tipUuid)
+    if (
+      !tip ||
+      tip.isSidechain ||
+      (tip.type !== 'user' && tip.type !== 'assistant') ||
+      tip.sessionId !== activeConversationTip.sessionId
+    ) {
+      activeConversationTip = undefined
+    }
+  }
+  const fileSessionId = validateUuid(basename(filePath).replace(/\.jsonl$/, ''))
+  if (
+    activeConversationTip &&
+    fileSessionId &&
+    activeConversationTip.sessionId !== fileSessionId
+  ) {
+    activeConversationTip = undefined
+  }
 
   // Compute leaf UUIDs once at load time
   // Only user/assistant messages should be considered as leaves for anchoring resume.
@@ -4805,6 +5057,7 @@ export async function loadTranscriptFile(
     queueOperations,
     leafUuids,
     sourceTruncated,
+    activeConversationTip,
   }
 }
 
@@ -4816,22 +5069,12 @@ export async function loadDisplayTranscriptFromJsonlPath(
     keepCompactedHistory: true,
     maxReadBytes: options.maxBytes,
   })
-  let tip: TranscriptMessage | undefined
-  let tipTimestamp = -Infinity
-  for (const message of loaded.messages.values()) {
-    if (
-      message.isSidechain ||
-      !loaded.leafUuids.has(message.uuid) ||
-      (message.type !== 'user' && message.type !== 'assistant')
-    ) {
-      continue
-    }
-    const timestamp = Date.parse(message.timestamp)
-    if (timestamp >= tipTimestamp) {
-      tip = message
-      tipTimestamp = timestamp
-    }
-  }
+  const active = selectActiveConversation(
+    loaded.messages,
+    loaded.leafUuids,
+    loaded.activeConversationTip,
+  )
+  const tip = active.tip ?? undefined
   if (!tip) return { messages: [], truncated: loaded.sourceTruncated }
 
   const chain = buildDisplayConversationChain(loaded.messages, tip)
@@ -4874,6 +5117,8 @@ async function loadSessionFile(
   contextCollapseCommits: ContextCollapseCommitEntry[]
   contextCollapseSnapshot: ContextCollapseSnapshotEntry | undefined
   queueOperations: SessionQueueOperation[]
+  leafUuids: Set<UUID>
+  activeConversationTip: ActiveConversationTipEntry | undefined
 }> {
   const sessionFile = join(
     getSessionProjectDir() ?? getProjectDir(getOriginalCwd()),
@@ -4972,6 +5217,8 @@ export async function getLastSessionLog(
     orderedContentReplacements,
     contextCollapseCommits,
     contextCollapseSnapshot,
+    leafUuids,
+    activeConversationTip,
   } = await loadSessionFile(sessionId)
   if (messages.size === 0) return null
   // Prime getSessionMessages cache so recordTranscript (called after REPL
@@ -4986,23 +5233,22 @@ export async function getLastSessionLog(
     )
   }
 
-  // Find the most recent non-sidechain user/assistant message. `system` frames
-  // (e.g. Codex codex_send_path / account.route.selected diagnostics) are written
-  // with parentUuid:null and a timestamp slightly later than the assistant turn
-  // they follow, so without the type filter one becomes the "latest" tip and
-  // buildConversationChain returns just that lone system frame — a resumed session
-  // with none of its prior context. Mirrors loadFullLog's leaf predicate.
-  const lastMessage = findLatestMessage(
+  const activeConversation = selectActiveConversation(
+    messages,
+    leafUuids,
+    activeConversationTip,
+  )
+  if (!activeConversation.sessionId) return null
+  const transcript = activeConversation.messages
+  const lastMessage = activeConversation.tip
+  const fallbackMessage = findLatestMessage(
     messages.values(),
     m => !m.isSidechain && (m.type === 'user' || m.type === 'assistant'),
   )
-  if (!lastMessage) return null
+  if (!fallbackMessage) return null
 
-  // Build the transcript chain from the last message
-  const transcript = buildConversationChain(messages, lastMessage)
-
-  const summary = summaries.get(lastMessage.uuid)
-  const leafSessionId = lastMessage.sessionId as UUID | undefined
+  const summary = lastMessage ? summaries.get(lastMessage.uuid) : undefined
+  const leafSessionId = lastMessage?.sessionId as UUID | undefined
   if (leafSessionId && leafSessionId !== sessionId) {
     logForDebugging(
       `Transcript identity drift: file ${sessionId} contains latest message stamped ${leafSessionId}`,
@@ -5017,9 +5263,13 @@ export async function getLastSessionLog(
   for (const message of messages.values()) {
     if (message.sessionId) mixedSessionIds.add(message.sessionId as UUID)
   }
+  const baseTranscript =
+    transcript.length > 0
+      ? transcript
+      : buildConversationChain(messages, fallbackMessage)
   return {
     ...convertToLogOption(
-      transcript,
+      baseTranscript,
       0,
       summary,
       customTitle,
@@ -5033,6 +5283,9 @@ export async function getLastSessionLog(
         ? (threadGoal ?? null)
         : undefined,
     ),
+    messages: removeExtraFields(transcript),
+    messageCount: countVisibleMessages(transcript),
+    leafUuid: lastMessage?.uuid,
     mode: messages.values().next().value?.type
       ? (getLatestSessionScopedValue(modes) as
           | LogOption['mode']
@@ -5740,6 +5993,7 @@ type LiteMetadata = {
    * than test for the `'(session)'` title fallback below.
    */
   hasConversation?: boolean
+  forked: boolean
 }
 
 /**
@@ -5893,7 +6147,7 @@ async function readLiteMetadata(
   buf: Buffer,
 ): Promise<LiteMetadata> {
   const { head, tail } = await readHeadAndTail(filePath, fileSize, buf)
-  if (!head) return { firstPrompt: '', isSidechain: false }
+  if (!head) return { firstPrompt: '', isSidechain: false, forked: false }
 
   // Extract stable metadata from the first line via string search.
   // Works even when the first line is truncated (>64KB message).
@@ -5969,10 +6223,17 @@ async function readLiteMetadata(
       chunk.includes('"type":"assistant"') ||
       chunk.includes('"type": "assistant"'),
   )
+  const forked = [head, tail].some(
+    chunk =>
+      chunk.includes('"type":"forked-session"') ||
+      chunk.includes('"type": "forked-session"') ||
+      chunk.includes('"forkedFrom"'),
+  )
 
   return {
     firstPrompt,
     hasConversation,
+    forked,
     gitBranch,
     isSidechain,
     projectPath,
@@ -6230,6 +6491,7 @@ async function enrichLog(
     prRepository: meta.prRepository,
     projectPath: meta.projectPath ?? log.projectPath,
     hasConversation: meta.hasConversation,
+    forked: meta.forked,
   }
 
   // Provide a fallback title for sessions where we couldn't extract the first

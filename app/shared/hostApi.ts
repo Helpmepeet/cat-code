@@ -37,13 +37,15 @@ import type {
 
 /**
  * Create (or restore) a session — the INTERNAL (main→host) request. `cwd` and
- * `resumeEngineSessionId` are MAIN-supplied, never renderer-authored (HC1/T8):
+ * `resumeEngineSessionId` and `forked` are MAIN-supplied, never
+ * renderer-authored (HC1/T8):
  * `cwd` is a realpath main resolved from a native-picker token, a registry row,
  * or the engine-written sessions catalog; `resumeEngineSessionId` is only ever
  * set by `restoreSession` from a registry row or main's catalog-backed history
  * open. The host re-validates `cwd` regardless of origin (defense in depth). The
  * renderer's create surface is the separate `CreateSessionInput` (a picker token
- * + a title), which cannot express either field — see `CatCodeBridge.createSession`.
+ * + a title), which cannot express these trusted fields — see
+ * `CatCodeBridge.createSession`.
  */
 export type CreateSessionRequest = {
   /** Session root. Host re-validates (realpath / exists / isDirectory) — HC1. */
@@ -52,6 +54,11 @@ export type CreateSessionRequest = {
   resumeEngineSessionId?: string
   /** Display only; length-capped by the host (`MAX_SESSION_TITLE_CHARS`). */
   title?: string
+  /**
+   * Trusted branch provenance supplied by main. Additive control-plane state,
+   * never renderer-authored and never sent as a protocol frame.
+   */
+  forked?: boolean
 }
 
 /**
@@ -76,6 +83,11 @@ export type SessionDescriptor = {
   engineSessionId: string | null
   cwd: string
   title: string | null
+  /**
+   * Main-supplied branch provenance, persisted by the host registry. Additive
+   * control-plane descriptor state, not a wire frame.
+   */
+  forked: boolean
   /**
    * Wall-clock at which `title` last CHANGED, or null when it never has (also the
    * value for rows persisted before the field existed). Read together with the

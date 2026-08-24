@@ -1,6 +1,6 @@
 import { feature } from 'bun:bundle'
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
-import { randomUUID } from 'crypto'
+import { randomUUID, type UUID } from 'crypto'
 import last from 'lodash-es/last.js'
 import {
   getSessionId,
@@ -39,11 +39,12 @@ import type { AppState } from './state/AppState.js'
 import { type Tools, type ToolUseContext, toolMatchesName } from './Tool.js'
 import type { AgentDefinition } from './tools/AgentTool/loadAgentsDir.js'
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from './tools/SyntheticOutputTool/SyntheticOutputTool.js'
-import type { Message, MessageOrigin } from './types/message.js'
+import type { Message, MessageOrigin, UserMessage } from './types/message.js'
 import type { OrphanedPermission } from './types/textInputTypes.js'
 import { createAbortController } from './utils/abortController.js'
 import type { AttributionState } from './utils/commitAttribution.js'
 import { getGlobalConfig } from './utils/config.js'
+import { resolveSelectableUserMessageByProducerPrefix } from './utils/conversationRecovery.js'
 import { getCwd } from './utils/cwd.js'
 import { isBareMode, isEnvTruthy } from './utils/envUtils.js'
 import { getFastModeState } from './utils/fastMode.js'
@@ -81,6 +82,7 @@ import { setCwd } from './utils/Shell.js'
 import {
   flushCurrentTranscriptDurably,
   flushSessionStorage,
+  markActiveConversationTip,
   recordTranscript,
 } from './utils/sessionStorage.js'
 import { buildEffectiveSystemPrompt } from './utils/systemPrompt.js'
@@ -183,6 +185,7 @@ export type QueryEngineConfig = {
    */
   recordTranscript?: typeof recordTranscript
   flushCurrentTranscriptDurably?: typeof flushCurrentTranscriptDurably
+  markActiveConversationTip?: typeof markActiveConversationTip
   /**
    * Snip-boundary handler: receives each yielded system message plus the
    * current mutableMessages store. Returns undefined if the message is not a
@@ -198,6 +201,11 @@ export type QueryEngineConfig = {
     yieldedSystemMsg: Message,
     store: Message[],
   ) => { messages: Message[]; executed: boolean } | undefined
+}
+
+export type ConversationRewindResult = {
+  prompt: UserMessage
+  retainedMessages: Message[]
 }
 
 /**
@@ -1353,6 +1361,51 @@ export class QueryEngine {
 
   getMessages(): readonly Message[] {
     return this.mutableMessages
+  }
+
+  selectUserMessage(targetUuid: string): UserMessage {
+    return resolveSelectableUserMessageByProducerPrefix(
+      this.mutableMessages,
+      targetUuid,
+    ).message
+  }
+
+  async rewindBeforeUserMessage(
+    targetUuid: string,
+  ): Promise<ConversationRewindResult> {
+    const { message: prompt, index } =
+      resolveSelectableUserMessageByProducerPrefix(
+        this.mutableMessages,
+        targetUuid,
+      )
+    const retainedMessages = this.mutableMessages.slice(0, index)
+    const retainedTip =
+      retainedMessages.findLast(
+        message => message.type === 'user' || message.type === 'assistant',
+      )?.uuid ?? null
+    await (this.config.markActiveConversationTip ?? markActiveConversationTip)(
+      retainedTip as UUID | null,
+    )
+    this.mutableMessages = retainedMessages
+    this.config.setAppState(prev => ({
+      ...prev,
+      toolPermissionContext:
+        prompt.permissionMode &&
+        prev.toolPermissionContext.mode !== prompt.permissionMode
+          ? {
+              ...prev.toolPermissionContext,
+              mode: prompt.permissionMode as PermissionMode,
+            }
+          : prev.toolPermissionContext,
+      promptSuggestion: {
+        text: null,
+        promptId: null,
+        shownAt: 0,
+        acceptedAt: 0,
+        generationRequestId: null,
+      },
+    }))
+    return { prompt, retainedMessages }
   }
 
   getReadFileState(): FileStateCache {

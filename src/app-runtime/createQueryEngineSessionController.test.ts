@@ -86,4 +86,26 @@ describe('createQueryEngineSessionController', () => {
 
     expect(interruptCalls).toBe(1)
   })
+
+  test('exposes message-targeted history operations without changing turn lifecycle', async () => {
+    const targets: string[] = []
+    const controller = createQueryEngineSessionController({
+      async *submitMessage() {
+        yield createAssistantMessage('noop')
+      },
+      async rewindBeforeUserMessage(targetUuid) {
+        targets.push(`rewind:${targetUuid}`)
+        return { prompt: {} as never, retainedMessages: [] }
+      },
+      async forkBeforeUserMessage(targetUuid) {
+        targets.push(`fork:${targetUuid}`)
+        return { sessionId: 'fork' } as never
+      },
+    })
+
+    await controller.rewindBeforeUserMessage('message-a')
+    await controller.forkBeforeUserMessage('message-b')
+
+    expect(targets).toEqual(['rewind:message-a', 'fork:message-b'])
+  })
 })

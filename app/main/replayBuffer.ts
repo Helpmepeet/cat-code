@@ -27,8 +27,8 @@
  *    one slot each, outside the replay budget, replaced (never appended) by a
  *    later snapshot of the same kind, and replayed in the order they first
  *    arrived, which is the order the sidecar deliberately sends them in.
- *  - `ring` — everything else (transcript `event` traffic, request-scoped
- *    replies, lifecycle). Bounded by BOTH count and serialized UTF-8 JSON
+ *  - `ring` — transcript `event` traffic, transcript reset barriers,
+ *    request-scoped replies, and lifecycle. Bounded by BOTH count and serialized UTF-8 JSON
  *    bytes; oldest evicted until both limits hold, and a frame larger than the
  *    whole byte budget is not retained. One `event` frame is exempt from
  *    retention entirely — a `recovered` one, see `record` (B2).
@@ -109,7 +109,7 @@ type FrameRetention = 'head' | 'sticky' | 'ring' | 'preview'
  * because these are point-in-time state a reader applies wholesale, not
  * transcript rows whose position carries meaning.
  *
- * `ring` covers transcript traffic (`event`), request-scoped replies
+ * `ring` covers transcript traffic (`event` and `transcript.reset`), request-scoped replies
  * (`*.result`, `pong`, `error`, `oauth.login.progress`), `lifecycle`, and the
  * two kinds this buffer never sees: `session-title` (main consumes it and
  * relays it to the durable registry, `main.ts:674`) and `sessions.snapshot`
@@ -157,6 +157,7 @@ const FRAME_RETENTION: Record<ServerFrame['kind'], FrameRetention> = {
   'submit.result': 'ring',
 
   event: 'ring',
+  'transcript.reset': 'ring',
   'generated-image-preview': 'preview',
   pong: 'ring',
   error: 'ring',
@@ -243,6 +244,14 @@ export class FrameReplayBuffer {
       this.sessions.set(sessionId, entry)
     }
     const retention = FRAME_RETENTION[frame.kind]
+    if (frame.kind === 'transcript.reset') {
+      entry.recent = []
+      entry.recentBytes = 0
+      entry.truncated = false
+      entry.previews.clear()
+      entry.previewBytes = 0
+      entry.previewTruncated = false
+    }
     if (retention === 'head') {
       entry.ready = frame
       return

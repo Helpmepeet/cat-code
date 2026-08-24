@@ -1,11 +1,8 @@
 /**
  * P4-30 — `SAModal` + `saBtn` (`SessionActions.jsx:206-241`), the two shared
- * primitives the Branch / Export (and a future Rewind) dialogs are built from.
+ * primitives the Export dialog is built from.
  *
- * PARITY-LEDGER §17 promoted this whole shell to ❓ missing-no-owner: the P4-6b
- * menu shipped and its dialog layer did not, which is why `session.branch` fires
- * a real on-disk fork straight off a menu click with no confirmation step. This
- * module is the shell that gate goes in.
+ * Shared modal shell for session-action dialogs.
  *
  * Rebuilt on the P0-2 tokens and the house dialog idiom (`TasksDialog.tsx:100+`),
  * zero ported code, no inline `style` (the anchored menu's data-driven geometry

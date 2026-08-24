@@ -124,7 +124,12 @@ import {
   FilePathMenuContext,
   type FilePathActionsAnchor,
 } from './filePathActions.js'
-import { ActionFileIcon } from './SessionActionIcons.js'
+import {
+  ActionBranchIcon,
+  ActionCopyIcon,
+  ActionFileIcon,
+  ActionRewindIcon,
+} from './SessionActionIcons.js'
 import { parseToolAck, type ToolAck } from './toolAck.js'
 import {
   AdditionSourceRow,
@@ -225,6 +230,12 @@ const TurnErrorActionsContext = createContext<{
  *   pane shows the restore skeleton until live replay lands.
  */
 export type RestorePhase = 'preview' | 'resuming' | 'connecting'
+export type MessageActionKind = 'edit' | 'branch'
+export type MessageActionHandler = (
+  sessionId: SessionId,
+  action: MessageActionKind,
+  userMessageId: string,
+) => void
 
 // Perf (2026-07-08, F3): memoized so an App re-render that did NOT change this
 // session's transcript slice (a keystroke in the composer, another session's
@@ -248,6 +259,7 @@ export const TranscriptView = memo(function TranscriptView({
   onLoadEarlier,
   onOpenAccounts,
   onSaveDiagnostics,
+  onMessageAction,
 }: {
   state: TranscriptState
   /** A compaction is running in this session (`selectIsCompacting`). */
@@ -285,6 +297,8 @@ export const TranscriptView = memo(function TranscriptView({
   onLoadEarlier?: () => void
   onOpenAccounts?: () => void
   onSaveDiagnostics?: () => void
+  /** Present only for an ordinary live pane. */
+  onMessageAction?: MessageActionHandler
   /**
    * This session's Codex leases, so an agent card can name the account its worker
    * holds. Optional and null-tolerant: the plane is Codex-only and per-process.
@@ -307,6 +321,7 @@ export const TranscriptView = memo(function TranscriptView({
       onLoadEarlier={onLoadEarlier}
       onOpenAccounts={onOpenAccounts}
       onSaveDiagnostics={onSaveDiagnostics}
+      onMessageAction={onMessageAction}
     />
   )
 })
@@ -327,6 +342,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   onLoadEarlier,
   onOpenAccounts,
   onSaveDiagnostics,
+  onMessageAction,
 }: {
   rows: NestedTranscriptRow[]
   /** A compaction is running: mounts the live seam under the last row. */
@@ -345,6 +361,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   onLoadEarlier?: () => void
   onOpenAccounts?: () => void
   onSaveDiagnostics?: () => void
+  onMessageAction?: MessageActionHandler
 }) {
   // P4-1: the tool row a card asked to inspect (null = drawer closed). Owned here
   // — above the memoized rows — so opening the drawer never mutates a row and the
@@ -498,7 +515,10 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
                   onLoad={onLoadEarlier}
                 />
               ) : (
-                <DisplayItemView item={item} />
+                <DisplayItemView
+                  item={item}
+                  onMessageAction={onMessageAction}
+                />
               )}
             </div>
           )
@@ -655,7 +675,13 @@ function isHistoryBoundaryItem(item: TranscriptLayoutItem): boolean {
  * as the row switch: a new display-item kind breaks the build here until it gets
  * a case.
  */
-function DisplayItemView({ item }: { item: TranscriptLayoutItem }) {
+function DisplayItemView({
+  item,
+  onMessageAction,
+}: {
+  item: TranscriptLayoutItem
+  onMessageAction?: MessageActionHandler
+}) {
   switch (item.kind) {
     case 'agent-group':
       return <DelegateGroup members={item.members} />
@@ -664,7 +690,16 @@ function DisplayItemView({ item }: { item: TranscriptLayoutItem }) {
     case 'tool-run':
       return <ToolRunCard family={item.family} members={item.members} />
     case 'single':
-      return <TranscriptRowView row={item.row} />
+      return (
+        <TranscriptRowView
+          row={item.row}
+          onMessageAction={
+            item.row.kind === 'user-text' && item.row.isHidden !== true
+              ? onMessageAction
+              : undefined
+          }
+        />
+      )
     default: {
       const _exhaustive: never = item
       void _exhaustive
@@ -956,8 +991,10 @@ const STEPS_NOT_LOADED_LABEL = "This agent's steps aren't loaded."
 // the rows that actually changed re-render (markdown re-parses once per body).
 const TranscriptRowView = memo(function TranscriptRowView({
   row,
+  onMessageAction,
 }: {
   row: NestedTranscriptRow
+  onMessageAction?: MessageActionHandler
 }) {
   const { mode: reasoningMode } = useContext(ReasoningLayoutContext)
   // Captured before the switch narrows `row` to `never` in the default branch,
@@ -975,7 +1012,19 @@ const TranscriptRowView = memo(function TranscriptRowView({
       )
 
     case 'user-text':
-      return <UserBubble content={row.content} />
+      return (
+        <UserBubble
+          content={row.content}
+          {...(onMessageAction
+            ? {
+                onEdit: () =>
+                  onMessageAction(row.sessionId, 'edit', row.frameId),
+                onBranch: () =>
+                  onMessageAction(row.sessionId, 'branch', row.frameId),
+              }
+            : {})}
+        />
+      )
 
     case 'command-echo':
       return (
@@ -4272,14 +4321,75 @@ function BubbleCopyChip({
  * "User side" grammar (Messages.jsx UserBubble): right-aligned, accent-tinted,
  * bottom-right-notched bubble. Shared shape with the command echo + image rows
  * so a user's own turns read as one column against the assistant's left body.
- * No copy affordance (operator call, 2026-08-02): unlike the prototype, own
- * messages carry no chip, so the bubble keeps uniform padding on every side.
+ * Live message actions occupy their own reserved row below the bubble so they
+ * never cover or shift the user's visible text.
  */
-function UserBubble({ content }: { content: string }) {
+function UserBubble({
+  content,
+  onEdit,
+  onBranch,
+}: {
+  content: string
+  onEdit?: () => void
+  onBranch?: () => void
+}) {
+  const toast = useToast()
+  if (!onEdit) {
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-[82%] whitespace-pre-wrap break-words rounded-2xl rounded-br border border-accent/20 bg-accent/10 px-4 py-2.5 text-sm leading-relaxed text-text-primary">
+          {content}
+        </div>
+      </div>
+    )
+  }
+  const copy = (): void => {
+    const clipboard =
+      typeof navigator !== 'undefined' ? navigator.clipboard : undefined
+    if (!clipboard) {
+      toast('Could not write to the clipboard', { tone: 'warn' })
+      return
+    }
+    void clipboard
+      .writeText(content)
+      .then(() => toast('Message copied to clipboard', { tone: 'success' }))
+      .catch(() =>
+        toast('Could not write to the clipboard', { tone: 'warn' }),
+      )
+  }
   return (
-    <div className="flex justify-end">
+    <div className="group/message flex flex-col items-end">
       <div className="max-w-[82%] whitespace-pre-wrap break-words rounded-2xl rounded-br border border-accent/20 bg-accent/10 px-4 py-2.5 text-sm leading-relaxed text-text-primary">
         {content}
+      </div>
+      <div className="flex h-[25px] items-center gap-0.5 pr-1 pt-0.5 opacity-0 transition-opacity duration-150 group-hover/message:opacity-100 group-focus-within/message:opacity-100">
+        <button
+          type="button"
+          onClick={copy}
+          title="Copy message"
+          aria-label="Copy message"
+          className="inline-flex items-center justify-center rounded-md p-1 text-text-subtle transition-colors hover:bg-accent/15 hover:text-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        >
+          <ActionCopyIcon />
+        </button>
+        <button
+          type="button"
+          onClick={onEdit}
+          title="Edit from here"
+          aria-label="Edit from here"
+          className="inline-flex items-center justify-center rounded-md p-1 text-text-subtle transition-colors hover:bg-accent/15 hover:text-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        >
+          <ActionRewindIcon />
+        </button>
+        <button
+          type="button"
+          onClick={onBranch}
+          title="Branch from here"
+          aria-label="Branch from here"
+          className="inline-flex items-center justify-center rounded-md p-1 text-text-subtle transition-colors hover:bg-accent/15 hover:text-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        >
+          <ActionBranchIcon />
+        </button>
       </div>
     </div>
   )

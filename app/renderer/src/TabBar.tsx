@@ -18,6 +18,7 @@ import {
 import { tabLabel } from './tabBarModel.js'
 import type { TabTone, TabVisualState } from './tabStatus.js'
 import { MAX_WORKSPACE_PANELS } from './workspaceLayout.js'
+import { ActionBranchIcon } from './SessionActionIcons.js'
 
 export type TabModel = {
   descriptor: SessionDescriptor
@@ -265,8 +266,8 @@ function Tab({
       // the first tab when nothing is active — never a focus dead-end); arrows
       // move focus among the rest (handled in TabBar).
       tabIndex={isTabbable ? 0 : -1}
-      title={`${descriptor.cwd}${shortcut}`}
-      aria-label={`Session ${title}, ${visual.label}${visual.needsAttention ? ', permission request waiting' : ''}`}
+      title={`${descriptor.cwd}${descriptor.forked ? ' (forked session)' : ''}${shortcut}`}
+      aria-label={`Session ${title}, ${visual.label}${descriptor.forked ? ', forked session' : ''}${visual.needsAttention ? ', permission request waiting' : ''}`}
       draggable
       onClick={() => onSelect(id)}
       onDragStart={event => {
@@ -287,6 +288,12 @@ function Tab({
       ) : (
         <StatusDot tone={visual.tone} />
       )}
+
+      {descriptor.forked ? (
+        <span className="flex shrink-0 text-text-subtle" aria-hidden="true">
+          <ActionBranchIcon size={14} />
+        </span>
+      ) : null}
 
       {/* The tab's IDENTITY, so it is the brightest thing on the tab. An
           inactive title used to sit at `text-text-faint` (the token reserved

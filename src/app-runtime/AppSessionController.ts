@@ -2,6 +2,9 @@ import { randomUUID } from 'crypto'
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
 import type { SDKMessage } from '../entrypoints/agentSdkTypes.js'
 import type { MessageOrigin } from '../types/message.js'
+import type { UserMessage } from '../types/message.js'
+import type { ConversationRewindResult } from '../QueryEngine.js'
+import type { ConversationForkResult } from '../commands/branch/branch.js'
 import { withStreamJsonAccountDiagnosticHook } from '../services/api/accountDiagnostics.js'
 import {
   createAbortStatusEvent,
@@ -44,6 +47,14 @@ export type AppSessionControllerAdapter = {
     ) => Promise<AppPermissionResponse>
   }): AsyncIterable<SDKMessage>
   abort?: () => void
+  selectUserMessage?: (targetUuid: string) => UserMessage
+  rewindBeforeUserMessage?: (
+    targetUuid: string,
+  ) => Promise<ConversationRewindResult>
+  forkBeforeUserMessage?: (
+    targetUuid: string,
+    customTitle?: string,
+  ) => Promise<ConversationForkResult>
 }
 
 type AppSessionEventListener = (event: AppSessionEvent) => void
@@ -64,6 +75,7 @@ export class AppSessionController {
   private goalSnapshot: AppGoalSnapshot = null
   private abortController: AbortController | null = null
   private activeTurn = false
+  private readonly idleWaiters = new Set<() => void>()
   private readonly fallbackDiagnosticSessionId = randomUUID()
 
   constructor(private readonly adapter: AppSessionControllerAdapter) {}
@@ -85,6 +97,17 @@ export class AppSessionController {
 
   getPendingPermissionRequests(): AppPermissionRequest[] {
     return Array.from(this.pendingPermissionRequests.values(), value => value.request)
+  }
+
+  isTurnActive(): boolean {
+    return this.activeTurn
+  }
+
+  waitUntilIdle(): Promise<void> {
+    if (!this.activeTurn) return Promise.resolve()
+    return new Promise(resolve => {
+      this.idleWaiters.add(resolve)
+    })
   }
 
   updateGoalSnapshot(snapshot: AppGoalSnapshot): void {
@@ -130,6 +153,32 @@ export class AppSessionController {
 
     this.abortController?.abort(reason)
     this.adapter.abort?.()
+  }
+
+  rewindBeforeUserMessage(
+    targetUuid: string,
+  ): Promise<ConversationRewindResult> {
+    if (!this.adapter.rewindBeforeUserMessage) {
+      throw new Error('Conversation rewind is unavailable')
+    }
+    return this.adapter.rewindBeforeUserMessage(targetUuid)
+  }
+
+  selectUserMessage(targetUuid: string): UserMessage {
+    if (!this.adapter.selectUserMessage) {
+      throw new Error('Conversation message selection is unavailable')
+    }
+    return this.adapter.selectUserMessage(targetUuid)
+  }
+
+  forkBeforeUserMessage(
+    targetUuid: string,
+    customTitle?: string,
+  ): Promise<ConversationForkResult> {
+    if (!this.adapter.forkBeforeUserMessage) {
+      throw new Error('Conversation fork is unavailable')
+    }
+    return this.adapter.forkBeforeUserMessage(targetUuid, customTitle)
   }
 
   async submit(
@@ -234,6 +283,10 @@ export class AppSessionController {
     if (this.activeTurn === activeTurn) return
     this.activeTurn = activeTurn
     this.emit(createTurnStatusEvent(activeTurn))
+    if (!activeTurn) {
+      for (const resolve of this.idleWaiters) resolve()
+      this.idleWaiters.clear()
+    }
   }
 
   private waitForPermissionResponse(

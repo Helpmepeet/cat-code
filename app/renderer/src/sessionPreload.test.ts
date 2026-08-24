@@ -30,6 +30,7 @@ function descriptor(id: string, lastAttachedAt: number): SessionDescriptor {
     engineSessionId: `engine-${id}`,
     cwd: `/tmp/${id}`,
     title: null,
+    forked: false,
     titleUpdatedAt: null,
     status: 'exited',
     restorable: true,

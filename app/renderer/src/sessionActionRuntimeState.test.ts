@@ -53,13 +53,48 @@ describe('sessionActionRuntimeState', () => {
     })
     state = reduceSessionActionRuntimeState(state, {
       type: 'frame',
-      frame: resultFrame({ requestId: 'r2', verb: 'branch', ok: false, message: 'no' }),
+      frame: resultFrame({
+        requestId: 'r2',
+        verb: 'branchFromMessage',
+        ok: false,
+        message: 'no',
+      }),
     })
 
     const result = selectLatestSessionActionResult(state, SESSION)
     expect(result?.requestId).toBe('r2')
-    expect(result?.verb).toBe('branch')
+    expect(result?.verb).toBe('branchFromMessage')
     expect(result?.ok).toBe(false)
+  })
+
+  test('a targeted result remains correlated after an unrelated result becomes latest', () => {
+    let state = reduceSessionActionRuntimeState(createSessionActionRuntimeState(), {
+      type: 'frame',
+      frame: resultFrame({
+        requestId: 'edit-1',
+        verb: 'editFromMessage',
+        selectedPrompt: { content: 'restore me' },
+      }),
+    })
+    state = reduceSessionActionRuntimeState(state, {
+      type: 'frame',
+      frame: resultFrame({ requestId: 'rename-1', verb: 'rename' }),
+    })
+
+    expect(state.lastBySession[SESSION]?.requestId).toBe('rename-1')
+    expect(state.targetedByRequestId['edit-1']).toMatchObject({
+      sessionId: SESSION,
+      verb: 'editFromMessage',
+      selectedPrompt: { content: 'restore me' },
+    })
+
+    state = reduceSessionActionRuntimeState(state, {
+      type: 'discard-result',
+      sessionId: SESSION,
+      requestId: 'edit-1',
+    })
+    expect(state.targetedByRequestId['edit-1']).toBeUndefined()
+    expect(state.lastBySession[SESSION]?.requestId).toBe('rename-1')
   })
 
   test('discarding a latched export releases its payload without erasing a newer result', () => {
@@ -121,6 +156,33 @@ describe('sessionActionRuntimeState', () => {
     expect(selectLatestSessionActionResult(state, SESSION)).toBeNull()
   })
 
+  test('a lifecycle frame preserves a targeted result until its consumer discards it', () => {
+    let state = reduceSessionActionRuntimeState(createSessionActionRuntimeState(), {
+      type: 'frame',
+      frame: resultFrame({
+        requestId: 'edit-before-disconnect',
+        verb: 'editFromMessage',
+        selectedPrompt: { content: 'restore me' },
+      }),
+    })
+    state = reduceSessionActionRuntimeState(state, {
+      type: 'frame',
+      frame: {
+        kind: 'lifecycle',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: SESSION,
+        status: 'disconnected',
+      } as unknown as ServerFrame,
+    })
+
+    expect(
+      state.targetedByRequestId['edit-before-disconnect'],
+    ).toMatchObject({
+      verb: 'editFromMessage',
+      selectedPrompt: { content: 'restore me' },
+    })
+  })
+
   test('records a correlated error separately from a verb result', () => {
     const state = reduceSessionActionRuntimeState(
       createSessionActionRuntimeState(),
@@ -158,8 +220,9 @@ describe('sessionActionRuntimeState', () => {
     const state = {
       lastBySession: { [SESSION]: resultFrame() as Extract<ServerFrame, { kind: 'session-action.result' }> },
       errorBySession: { [SESSION]: { requestId: 'request', message: 'failed' } },
+      targetedByRequestId: {},
     }
     expect(reduceSessionActionRuntimeState(state, { type: 'session-removed', sessionId: SESSION }))
-      .toEqual({ lastBySession: {}, errorBySession: {} })
+      .toEqual({ lastBySession: {}, errorBySession: {}, targetedByRequestId: {} })
   })
 })

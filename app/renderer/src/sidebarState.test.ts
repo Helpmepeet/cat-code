@@ -26,6 +26,7 @@ function descriptor(
     engineSessionId: `engine-${id}`,
     cwd: `/tmp/${id}`,
     title: null,
+    forked: false,
     titleUpdatedAt: null,
     status: 'ready',
     restorable: false,

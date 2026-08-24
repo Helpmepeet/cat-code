@@ -423,6 +423,61 @@ test('P4-29 wiring tripwire: the ⋯ menu Open verb restores instead of focusing
   expect(applyBody).toContain('void performRestore(route.appSessionId)')
 })
 
+test('message actions use one stable App dispatcher and correlate targeted results across sessions', () => {
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const dispatchStart = source.indexOf(
+    'const handleMessageAction = useCallback<MessageActionHandler>',
+  )
+  const dispatchEnd = source.indexOf('\n  )', dispatchStart) + 4
+  const dispatchBody = source.slice(dispatchStart, dispatchEnd)
+  expect(dispatchBody).toContain(
+    'if (pendingMessageActionsRef.current.has(sessionId)) return',
+  )
+  expect(dispatchBody).toContain(
+    'rememberToastedActionRequest(toastedActionRequestsRef.current, requestId)',
+  )
+  expect(dispatchBody).toContain("'session.editFromMessage'")
+  expect(dispatchBody).toContain("'session.branchFromMessage'")
+  expect(dispatchBody).toContain('userMessageId')
+
+  const resultStart = source.indexOf(
+    'for (const [sessionId, pending] of pendingMessageActionsRef.current)',
+  )
+  const resultEnd = source.indexOf('const applyOpenRoute', resultStart)
+  const resultBody = source.slice(resultStart, resultEnd)
+  expect(resultBody).toContain(
+    'sessionActionRuntime.targetedByRequestId[pending.requestId]',
+  )
+  expect(resultBody).toContain('result.sessionId !== sessionId')
+  expect(resultBody).toContain('pending.awaitingReconnect = true')
+  expect(resultBody).toContain("type: 'discard-result'")
+  expect(resultBody).toContain('if (!result.ok)')
+  expect(resultBody).toContain('result.verb !== expectedVerb')
+  expect(resultBody).toContain(
+    'openHistorySession(result.branchEngineSessionId)',
+  )
+  expect(resultBody).toContain('descriptor.appSessionId')
+  expect(resultBody).toContain('restorePromptIntoComposer')
+  expect(source).toContain('reduceSessionPastesCleared')
+  expect(source).toContain('reduceSessionImagesReplaced')
+  expect(source).toContain('setComposerFocusRequests')
+  const mismatchIndex = resultBody.indexOf(
+    'result.sessionId !== sessionId',
+  )
+  expect(mismatchIndex).toBeGreaterThan(-1)
+  expect(mismatchIndex).toBeLessThan(
+    resultBody.indexOf(
+      'pendingMessageActionsRef.current.delete(sessionId)',
+      mismatchIndex,
+    ),
+  )
+  expect(resultBody.indexOf('if (!result.ok)')).toBeLessThan(
+    resultBody.indexOf('restorePromptIntoComposer(sessionId'),
+  )
+  expect(source).not.toContain('BranchDialog')
+  expect(source).not.toContain("type: 'session.branch'")
+})
+
 test('P4-40 wiring tripwire: a Welcome recent with no app id reaches the history route', () => {
   // The defect this pins: the launcher opened a recent by `appSessionId` alone,
   // and a project whose sessions were ALL created in the terminal carries none —
@@ -497,6 +552,7 @@ test('P4-24: the active session pane renders the multi-line composer + transcrip
         engineSessionId: 'engine-1',
         cwd: '/tmp/project',
         title: null,
+        forked: false,
         titleUpdatedAt: null,
         status: 'ready',
         restorable: false,
@@ -620,6 +676,7 @@ test('CC-16: a preview pane paints cached rows and its composer accepts typing',
         engineSessionId: 'engine-1',
         cwd: '/tmp/project',
         title: null,
+        forked: false,
         titleUpdatedAt: null,
         status: 'exited',
         restorable: true,
@@ -1352,6 +1409,7 @@ test('P4-18c: a generating session (ready + input disabled) shows the activity i
         engineSessionId: 'engine-1',
         cwd: '/tmp/project',
         title: null,
+        forked: false,
         titleUpdatedAt: null,
         status: 'ready',
         restorable: false,
@@ -1607,6 +1665,7 @@ test('composer form owns the ↑/↓ history key scope', () => {
         engineSessionId: 'engine-1',
         cwd: '/tmp/project',
         title: null,
+        forked: false,
         titleUpdatedAt: null,
         status: 'ready',
         restorable: false,
@@ -1674,6 +1733,7 @@ test('collapsed pastes are rendered by the field, not parked in a strip above it
         engineSessionId: 'engine-1',
         cwd: '/tmp/project',
         title: null,
+        forked: false,
         titleUpdatedAt: null,
         status: 'ready',
         restorable: false,

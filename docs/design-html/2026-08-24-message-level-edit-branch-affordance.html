@@ -1,0 +1,284 @@
+<!doctype html>
+<!--
+  Operator UX change, 2026-08-24. Recorded here because this artifact is the
+  handoff and the change must not be lost between sessions.
+
+  1. Neither action opens a confirmation dialog. A click on the glyph performs
+     the action immediately. The SAModal Edit/Branch dialogs designed earlier
+     in this file are withdrawn and are NOT to be built.
+  2. A fork is marked on its tab by a split glyph before the title, not by a
+     "(fork)" text suffix. A suffix is the first thing a 176px tab truncates
+     away, which is what the Truncated specimen shows.
+  3. Consequence the operator should be aware of: the conversation-only vs
+     conversation-and-files choice existed only inside the withdrawn Edit
+     dialog. With no dialog there is nowhere to ask, so this page assumes
+     conversation-only. Workspace files are not rewound by either action.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Message actions</title>
+<style>
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:500;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMMono-Medium.woff2') format('woff2')}
+
+/* ── app tokens (theme.css) ─────────────────────────────── */
+:root{
+  --accent:#f472b6; --accent-rgb:244 114 182;
+  --tone-good:#4ade80; --tone-warn:#fbbf24; --tone-danger:#f87171; --tone-info:#60a5fa;
+  --app-bg:#09090b; --shell-chrome:#070709;
+  --shell-seam:rgba(255,255,255,0.06); --shell-hover:rgba(255,255,255,0.045);
+  --surface-raised:#111113; --surface-panel:#0a0a0c;
+  --text-primary:#f4f4f5; --text-muted:#a1a1aa; --text-subtle:#98989f;
+  --text-faint:#838389; --text-ghost:#75757b;
+  --transcript-width:900px;
+  --sans:"DM Sans",-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+  --mono:"DM Mono",ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--app-bg);color:var(--text-primary);font-family:var(--sans);-webkit-font-smoothing:antialiased;color-scheme:dark}
+
+/* ══ comparison chrome — never applies inside a specimen ══ */
+.x-bar{position:sticky;top:0;z-index:200;display:flex;flex-wrap:wrap;gap:18px;align-items:center;
+  padding:9px 22px;background:#050506;border-bottom:1px solid rgba(255,255,255,.07)}
+.x-bar a{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:9.5px;letter-spacing:.18em;
+  text-transform:uppercase;color:#6a6a70;text-decoration:none}
+.x-bar a:hover{color:#a8a8ae}
+.x-wrap{padding:0 0 120px}
+.x-sec{padding:38px 22px 0}
+.x-h{display:flex;align-items:center;gap:14px;padding-bottom:26px}
+.x-h span{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;letter-spacing:.22em;
+  text-transform:uppercase;color:#77777d}
+.x-h i{flex:1;height:1px;background:rgba(255,255,255,.07);display:block}
+.x-lbl{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:9px;letter-spacing:.18em;
+  text-transform:uppercase;color:#5f5f66;padding-bottom:12px}
+.x-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:30px;padding-bottom:34px}
+.x-cell{min-width:0}
+.x-rule{height:1px;background:rgba(255,255,255,.05);margin:0 0 34px}
+.x-full{padding-bottom:10px}
+.x-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:44px;align-items:start}
+
+/* ══ specimens — app pixels only ══════════════════════════ */
+.sp{font-family:var(--sans);color:var(--text-primary)}
+.sp :where(button){font:inherit;background:none;border:0;padding:0;margin:0;color:inherit;cursor:pointer}
+
+.col{width:100%;max-width:var(--transcript-width);margin:0 auto;padding:0 32px;
+  display:flex;flex-direction:column;gap:10px}
+.col.narrow{padding:0 16px}
+.prose{font-size:14px;font-weight:500;line-height:1.625;color:var(--text-primary);overflow-wrap:break-word}
+
+.mrow{display:flex;flex-direction:column;align-items:flex-end}
+.ub{max-width:82%;white-space:pre-wrap;overflow-wrap:break-word;
+  border-radius:16px 16px 4px 16px;border:1px solid rgb(var(--accent-rgb)/.2);
+  background:rgb(var(--accent-rgb)/.1);padding:10px 16px;font-size:14px;line-height:1.625;
+  color:var(--text-primary)}
+
+/* the action row under the bubble */
+.uacts{display:flex;align-items:center;gap:2px;padding-top:2px;padding-right:4px;
+  opacity:0;transition:opacity .15s}
+.mrow:hover .uacts,.mrow:focus-within .uacts,.mrow.shown .uacts{opacity:1}
+.uact{display:inline-flex;align-items:center;justify-content:center;padding:4px;border-radius:6px;
+  color:var(--text-subtle);transition:color .15s,background-color .15s}
+.uact:hover,.uact.hovered{background:rgb(var(--accent-rgb)/.15);color:var(--accent)}
+.uact:focus-visible,.uact.focused{outline:2px solid var(--accent);outline-offset:2px}
+.uact.done{color:#86efac}
+
+.glyphrow{display:flex;align-items:center;gap:40px;color:var(--text-subtle)}
+
+/* ── TabBar (TabBar.tsx) ── */
+.tabbar{display:flex;height:40px;flex-shrink:0;align-items:stretch;overflow:hidden;
+  border-bottom:1px solid var(--shell-seam);background:var(--shell-chrome)}
+.tab{position:relative;display:flex;min-width:90px;max-width:176px;flex-grow:1;flex-shrink:0;
+  user-select:none;align-items:center;gap:6px;border-right:1px solid rgba(255,255,255,.05);
+  padding-left:12px;padding-right:6px}
+.tab.active{background:rgba(255,255,255,.05)}
+.tab.active::after{content:"";position:absolute;left:0;right:0;bottom:0;height:1.5px;
+  border-radius:2px 2px 0 0;background:var(--accent)}
+.tdot{height:6px;width:6px;flex-shrink:0;border-radius:9999px}
+.tdot.idle{background:var(--text-subtle)}
+.tdot.live{background:var(--tone-good)}
+.tname{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;
+  color:var(--text-subtle)}
+.tab.active .tname{color:var(--text-primary)}
+.tfork{display:flex;flex-shrink:0;color:var(--text-subtle)}
+.tmore{display:flex;height:18px;width:18px;flex-shrink:0;align-items:center;justify-content:center;
+  border-radius:4px;color:rgb(152 152 159/.7)}
+
+</style>
+</head>
+<body>
+
+<nav class="x-bar">
+  <a href="#current">Current</a>
+  <a href="#message">Message</a>
+  <a href="#edit">Edit</a>
+  <a href="#fork">Fork</a>
+  <a href="#glyph">Glyph</a>
+</nav>
+
+<div class="x-wrap">
+
+<!-- ══════════ CURRENT ══════════ -->
+<section class="x-sec" id="current">
+  <div class="x-h"><span>Current</span><i></i></div>
+  <div class="x-full">
+    <div class="sp">
+      <div class="col">
+        <div class="prose">Both files set that value, and they disagree about the fallback. The loader wins at runtime, so the second one never takes effect.</div>
+        <div class="mrow"><div class="ub">Keep the fallback, but read it from the loader only.</div></div>
+        <div class="prose">Changed. The fallback now has a single reader, and the defaults module no longer declares one of its own.</div>
+        <div class="mrow"><div class="ub">Use the second option instead, and keep the earlier naming.</div></div>
+        <div class="prose">Done. The second option is now the default, and the earlier names are unchanged.</div>
+      </div>
+    </div>
+  </div>
+</section>
+<div class="x-rule"></div>
+
+<!-- ══════════ MESSAGE ══════════ -->
+<section class="x-sec" id="message">
+  <div class="x-h"><span>Message</span><i></i></div>
+  <div class="x-grid">
+    <div class="x-cell"><div class="x-lbl">Rest</div>
+      <div class="sp"><div class="col narrow"><div class="mrow">
+        <div class="ub">Use the second option instead.</div>
+        <div class="uacts">
+          <span class="uact" aria-label="Copy message"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+          <span class="uact" aria-label="Edit from here"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg></span>
+          <span class="uact" aria-label="Branch from here"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h5"/><path d="M8 12 16 5"/><path d="M8 12 16 19"/><polyline points="11 5 16 5 16 10"/><polyline points="11 19 16 19 16 14"/></svg></span>
+        </div>
+      </div></div></div>
+    </div>
+    <div class="x-cell"><div class="x-lbl">Hover</div>
+      <div class="sp"><div class="col narrow"><div class="mrow shown">
+        <div class="ub">Use the second option instead.</div>
+        <div class="uacts">
+          <span class="uact" aria-label="Copy message"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+          <span class="uact hovered" aria-label="Edit from here"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg></span>
+          <span class="uact" aria-label="Branch from here"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h5"/><path d="M8 12 16 5"/><path d="M8 12 16 19"/><polyline points="11 5 16 5 16 10"/><polyline points="11 19 16 19 16 14"/></svg></span>
+        </div>
+      </div></div></div>
+    </div>
+    <div class="x-cell"><div class="x-lbl">Focus</div>
+      <div class="sp"><div class="col narrow"><div class="mrow shown">
+        <div class="ub">Use the second option instead.</div>
+        <div class="uacts">
+          <span class="uact" aria-label="Copy message"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+          <span class="uact focused" aria-label="Edit from here"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg></span>
+          <span class="uact" aria-label="Branch from here"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h5"/><path d="M8 12 16 5"/><path d="M8 12 16 19"/><polyline points="11 5 16 5 16 10"/><polyline points="11 19 16 19 16 14"/></svg></span>
+        </div>
+      </div></div></div>
+    </div>
+  </div>
+  <div class="x-lbl">In context</div>
+  <div class="x-full">
+    <div class="sp"><div class="col">
+      <div class="prose">Both files set that value, and they disagree about the fallback. The loader wins at runtime, so the second one never takes effect.</div>
+      <div class="mrow">
+        <div class="ub">Keep the fallback, but read it from the loader only.</div>
+        <div class="uacts">
+          <button class="uact" type="button" aria-label="Copy message" title="Copy message"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+          <button class="uact" type="button" aria-label="Edit from here" title="Edit from here"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg></button>
+          <button class="uact" type="button" aria-label="Branch from here" title="Branch from here"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h5"/><path d="M8 12 16 5"/><path d="M8 12 16 19"/><polyline points="11 5 16 5 16 10"/><polyline points="11 19 16 19 16 14"/></svg></button>
+        </div>
+      </div>
+      <div class="prose">Changed. The fallback now has a single reader, and the defaults module no longer declares one of its own.</div>
+      <div class="mrow">
+        <div class="ub">Use the second option instead, and keep the earlier naming.</div>
+        <div class="uacts">
+          <button class="uact" type="button" aria-label="Copy message" title="Copy message"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+          <button class="uact" type="button" aria-label="Edit from here" title="Edit from here"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg></button>
+          <button class="uact" type="button" aria-label="Branch from here" title="Branch from here"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h5"/><path d="M8 12 16 5"/><path d="M8 12 16 19"/><polyline points="11 5 16 5 16 10"/><polyline points="11 19 16 19 16 14"/></svg></button>
+        </div>
+      </div>
+      <div class="prose">Done. The second option is now the default, and the earlier names are unchanged.</div>
+    </div></div>
+  </div>
+</section>
+<div class="x-rule"></div>
+
+
+<!-- ══════════ EDIT ══════════ -->
+<section class="x-sec" id="edit">
+  <div class="x-h"><span>Edit</span><i></i></div>
+  <div class="x-lbl">Before</div>
+  <div class="x-full">
+    <div class="sp"><div class="col">
+      <div class="prose">Both files set that value, and they disagree about the fallback. The loader wins at runtime, so the second one never takes effect.</div>
+      <div class="mrow"><div class="ub">Keep the fallback, but read it from the loader only.</div>
+        <div class="uacts">
+          <span class="uact" aria-label="Copy message"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+          <span class="uact" aria-label="Edit from here"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg></span>
+          <span class="uact" aria-label="Branch from here"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h5"/><path d="M8 12 16 5"/><path d="M8 12 16 19"/><polyline points="11 5 16 5 16 10"/><polyline points="11 19 16 19 16 14"/></svg></span>
+        </div>
+      </div>
+      <div class="prose">Changed. The fallback now has a single reader, and the defaults module no longer declares one of its own.</div>
+      <div class="mrow"><div class="ub">Use the second option instead, and keep the earlier naming.</div>
+        <div class="uacts">
+          <span class="uact" aria-label="Copy message"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+          <span class="uact" aria-label="Edit from here"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg></span>
+          <span class="uact" aria-label="Branch from here"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h5"/><path d="M8 12 16 5"/><path d="M8 12 16 19"/><polyline points="11 5 16 5 16 10"/><polyline points="11 19 16 19 16 14"/></svg></span>
+        </div>
+      </div>
+      <div class="prose">Done. The second option is now the default, and the earlier names are unchanged.</div>
+    </div></div>
+  </div>
+  <div class="x-lbl" style="padding-top:30px">After</div>
+  <div class="x-full">
+    <div class="sp"><div class="col">
+      <div class="prose">Both files set that value, and they disagree about the fallback. The loader wins at runtime, so the second one never takes effect.</div>
+      <div class="mrow"><div class="ub">Keep the fallback, but read it from the loader only.</div>
+        <div class="uacts">
+          <span class="uact" aria-label="Copy message"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+          <span class="uact" aria-label="Edit from here"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg></span>
+          <span class="uact" aria-label="Branch from here"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h5"/><path d="M8 12 16 5"/><path d="M8 12 16 19"/><polyline points="11 5 16 5 16 10"/><polyline points="11 19 16 19 16 14"/></svg></span>
+        </div>
+      </div>
+      <div class="prose">Changed. The fallback now has a single reader, and the defaults module no longer declares one of its own.</div>
+    </div></div>
+  </div>
+</section>
+<div class="x-rule" style="margin-top:38px"></div>
+
+<!-- ══════════ FORK ══════════ -->
+<section class="x-sec" id="fork">
+  <div class="x-h"><span>Fork</span><i></i></div>
+  <div class="x-lbl">Before</div>
+  <div class="x-full">
+    <div class="sp"><div class="tabbar">
+      <div class="tab active"><span class="tdot live"></span><span class="tname">renderer notes</span><span class="tmore"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg></span></div>
+      <div class="tab"><span class="tdot idle"></span><span class="tname">weekly digest</span></div>
+    </div></div>
+  </div>
+  <div class="x-lbl" style="padding-top:30px">After</div>
+  <div class="x-full">
+    <div class="sp"><div class="tabbar">
+      <div class="tab"><span class="tdot live"></span><span class="tname">renderer notes</span></div>
+      <div class="tab"><span class="tdot idle"></span><span class="tname">weekly digest</span></div>
+      <div class="tab active"><span class="tdot live"></span><span class="tfork"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h5"/><path d="M8 12 16 5"/><path d="M8 12 16 19"/><polyline points="11 5 16 5 16 10"/><polyline points="11 19 16 19 16 14"/></svg></span><span class="tname">renderer notes</span><span class="tmore"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg></span></div>
+    </div></div>
+  </div>
+  <div class="x-lbl" style="padding-top:30px">Truncated</div>
+  <div class="x-full">
+    <div class="sp"><div class="tabbar" style="width:300px">
+      <div class="tab active"><span class="tdot live"></span><span class="tfork"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h5"/><path d="M8 12 16 5"/><path d="M8 12 16 19"/><polyline points="11 5 16 5 16 10"/><polyline points="11 19 16 19 16 14"/></svg></span><span class="tname">a much longer session title</span><span class="tmore"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg></span></div>
+    </div></div>
+  </div>
+</section>
+
+
+<div class="x-rule" style="margin-top:38px"></div>
+
+<!-- ══════════ GLYPH ══════════ -->
+<section class="x-sec" id="glyph">
+  <div class="x-h"><span>Glyph</span><i></i></div>
+  <div class="x-full">
+    <div class="sp glyphrow"><svg width="96" height="96" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h5"/><path d="M8 12 16 5"/><path d="M8 12 16 19"/><polyline points="11 5 16 5 16 10"/><polyline points="11 19 16 19 16 14"/></svg><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h5"/><path d="M8 12 16 5"/><path d="M8 12 16 19"/><polyline points="11 5 16 5 16 10"/><polyline points="11 19 16 19 16 14"/></svg><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h5"/><path d="M8 12 16 5"/><path d="M8 12 16 19"/><polyline points="11 5 16 5 16 10"/><polyline points="11 19 16 19 16 14"/></svg></div>
+  </div>
+</section>
+</div>
+</body>
+</html>

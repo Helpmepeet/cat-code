@@ -247,7 +247,7 @@ export function selectAllVisibleSelected(
 }
 
 /**
- * The rows a bulk write can actually target. Rename / Export / Branch / Tag all
+ * The rows a bulk write can actually target. Rename / Export / Tag all
  * run inside a session's OWN live engine (`sessionActions.ts`), so a selection
  * that includes closed sessions writes only to the live part of it. Returning the
  * ids lets the bar say what will happen instead of silently doing less.

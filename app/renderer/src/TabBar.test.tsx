@@ -14,6 +14,7 @@ function descriptor(
     engineSessionId: `engine-${id}`,
     cwd: `/tmp/${id}`,
     title: null,
+    forked: false,
     titleUpdatedAt: null,
     status: 'ready',
     restorable: false,
@@ -75,6 +76,30 @@ test('renders one tab per session with its label', () => {
   expect(html).toContain('Alpha')
   // Title-less tab falls back to the cwd basename.
   expect(html).toContain('beta-project')
+})
+
+test('forked tabs show the split glyph before the title and qualify the accessible name', () => {
+  const html = render(
+    [tab('fork', {}, { title: 'Renderer notes', forked: true })],
+    'fork',
+  )
+  expect(html).toContain('width="14" height="14"')
+  expect(html).toContain('stroke-width="1.9"')
+  expect(html).toContain('<path d="M3 12h5"></path>')
+  expect(html.indexOf('M3 12h5')).toBeLessThan(
+    html.indexOf('>Renderer notes</span>'),
+  )
+  expect(html).toContain(
+    'aria-label="Session Renderer notes, ready, forked session"',
+  )
+  expect(html).toContain('title="/tmp/fork (forked session)')
+  expect(html).not.toContain('(fork)')
+})
+
+test('ordinary tabs have no fork split glyph or fork identity qualifier', () => {
+  const html = render([tab('ordinary', {}, { title: 'Ordinary session' })], 'ordinary')
+  expect(html).not.toContain('<path d="M3 12h5"></path>')
+  expect(html).not.toContain('forked session')
 })
 
 test('the active tab is marked selected and carries the accent underline', () => {

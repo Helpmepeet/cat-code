@@ -106,6 +106,14 @@ function pongFrame(nonce: string, sessionId: SessionId = SID): ServerFrame {
   return { kind: 'pong', protocolVersion: PROTOCOL_VERSION, sessionId, nonce }
 }
 
+function transcriptResetFrame(sessionId: SessionId = SID): ServerFrame {
+  return {
+    kind: 'transcript.reset',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId,
+  }
+}
+
 function generatedImagePreviewFrame(
   toolUseId: string,
   data: string,
@@ -163,6 +171,32 @@ test('a later ready frame replaces the head rather than duplicating it', () => {
   buffer.record(SID, readyFrame()) // e.g. a fresh sidecar re-announced
   const snapshot = buffer.snapshot()
   expect(snapshot.filter(f => f.kind === 'ready')).toHaveLength(1)
+})
+
+test('transcript reset is a ring barrier that keeps ready and sticky state', () => {
+  const buffer = new FrameReplayBuffer(2)
+  buffer.record(SID, readyFrame())
+  buffer.record(SID, attachSnapshotFrame('settings.snapshot'))
+  buffer.record(SID, pongFrame('discarded-a'))
+  buffer.record(SID, pongFrame('discarded-b'))
+  buffer.record(SID, pongFrame('discarded-c'))
+  buffer.record(SID, generatedImagePreviewFrame('discarded-preview', 'data'))
+
+  const reset = transcriptResetFrame()
+  buffer.record(SID, reset)
+  buffer.record(SID, pongFrame('retained'))
+
+  const snapshot = buffer.snapshot()
+  expect(snapshot.map(frame => frame.kind)).toEqual([
+    'ready',
+    'settings.snapshot',
+    'transcript.reset',
+    'pong',
+  ])
+  expect(snapshot).toContainEqual(reset)
+  expect(snapshot).toContainEqual(pongFrame('retained'))
+  expect(snapshot.some(isReplayTruncationFrame)).toBe(false)
+  expect(snapshot.some(isPreviewReplayTruncationFrame)).toBe(false)
 })
 
 test('a generated-image preview larger than the transcript ring stays replayable without evicting transcript frames', () => {
