@@ -15,6 +15,9 @@ const NOW = 9_000_000
 
 type ScriptedTurn = {
   toolUses?: number
+  toolName?: string
+  toolInput?: unknown
+  toolResult?: unknown
   cumulativeInput?: number
   cumulativeOutput?: number
   assistantError?: { status?: number; error?: string }
@@ -47,7 +50,31 @@ function createFakeController(script: () => ScriptedTurn) {
         type: 'message',
         message: {
           type: 'assistant',
-          message: { content: [{ type: 'tool_use' }] },
+          message: {
+            content: [
+              {
+                type: 'tool_use',
+                id: 'call-' + i,
+                name: turn.toolName ?? 'Read',
+                input: turn.toolInput ?? { file: 'a.ts' },
+              },
+            ],
+          },
+        } as never,
+      })
+      emit({
+        type: 'message',
+        message: {
+          type: 'user',
+          message: {
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'call-' + i,
+                content: turn.toolResult ?? 'same output',
+              },
+            ],
+          },
         } as never,
       })
     }
@@ -280,6 +307,46 @@ describe('the app runtime drives the same loop', () => {
     expect(h.submitted.length).toBeLessThanOrEqual(
       DEFAULT_MAX_GOAL_NO_PROGRESS_TURNS + 1,
     )
+  })
+
+  test('a tool-using loop that repeats itself is stopped, not run forever', async () => {
+    // The coarse signal cannot catch this: every turn calls a tool. What stops
+    // it is that the call and its result are identical each time.
+    const h = harness(activeGoal(), () => ({
+      toolUses: 1,
+      toolResult: 'identical every time',
+    }))
+
+    await h.runClientTurn('kick off')
+    for (let i = 0; i < 30; i++) {
+      await new Promise(resolve => setTimeout(resolve, 0))
+      if (h.getGoal()?.status !== 'active') break
+    }
+
+    expect(h.getGoal()!.status).toBe('stalled')
+    expect(h.getGoal()!.statusReason).toBe('no_progress')
+    // Well inside the 20-turn ceiling: repetition caught it first.
+    expect(h.submitted.length).toBeLessThan(10)
+  })
+
+  test('a tool-using turn whose results keep changing is not stopped', async () => {
+    // The false positive this must avoid: real progress looks like repetition
+    // if the result is ignored.
+    let counter = 0
+    const h = harness(activeGoal(), () => ({
+      toolUses: 1,
+      toolResult: 'output ' + counter++,
+    }))
+
+    await h.runClientTurn('kick off')
+    for (let i = 0; i < 40; i++) {
+      await new Promise(resolve => setTimeout(resolve, 0))
+      if (h.getGoal()?.status !== 'active') break
+    }
+
+    // It ran until the turn ceiling, not until a false stall.
+    expect(h.getGoal()!.statusReason).toBe('turn_budget_exhausted')
+    expect(h.getGoal()!.status).toBe('budget_limited')
   })
 
   test('detach stops the loop', async () => {

@@ -12,6 +12,10 @@ import {
   type ThreadGoalUsageDelta,
 } from '../utils/threadGoalUsage.js'
 import { createThreadGoalDependencyCache } from '../utils/threadGoalDependencies.js'
+import {
+  detectThreadGoalRepetition,
+  type ThreadGoalToolCall,
+} from '../utils/threadGoalRepetition.js'
 
 /**
  * Drives the shared goal scheduler from an AppSessionController.
@@ -122,6 +126,11 @@ export function attachThreadGoalScheduler({
   let turnGoalId: string | null = null
   let turnStartMs = 0
   let turnToolUseCount = 0
+  // Tool calls this turn, joined by tool_use id so a call's identity includes
+  // the result it produced. Without the result, re-running a check that now
+  // passes would look like repetition.
+  const turnToolUses = new Map<string, { toolName: string; input: unknown }>()
+  const turnToolResults = new Map<string, unknown>()
   let turnFailed = false
   let turnUsageLimited = false
   let turnUsage: ThreadGoalUsageDelta = EMPTY_THREAD_GOAL_USAGE_DELTA
@@ -156,6 +165,8 @@ export function attachThreadGoalScheduler({
     turnGoalId = getGoal()?.goalId ?? null
     turnStartMs = now()
     turnToolUseCount = 0
+    turnToolUses.clear()
+    turnToolResults.clear()
     turnFailed = false
     turnUsageLimited = false
     turnUsage = EMPTY_THREAD_GOAL_USAGE_DELTA
@@ -166,6 +177,23 @@ export function attachThreadGoalScheduler({
     const goalId = turnGoalId
     turnAttempt = null
     turnGoalId = null
+
+    // Only calls whose result arrived are judged: a call still in flight has
+    // no identity yet, and guessing one would produce false repetitions.
+    const calls: ThreadGoalToolCall[] = []
+    for (const [id, use] of turnToolUses) {
+      if (!turnToolResults.has(id)) continue
+      calls.push({
+        toolName: use.toolName,
+        input: use.input,
+        result: turnToolResults.get(id),
+      })
+    }
+    const goalNow = getGoal()
+    const repetition = detectThreadGoalRepetition({
+      history: goalNow?.callHistory ?? [],
+      calls,
+    })
 
     if (goalId) {
       scheduler.settle({
@@ -182,7 +210,12 @@ export function attachThreadGoalScheduler({
             0,
             Math.floor((now() - turnStartMs) / 1000),
           ),
-          madeNoProgress: attempt !== null && turnToolUseCount === 0,
+          // A turn that only reproduced calls it had already made, with the
+          // same results, advanced nothing even though it used tools.
+          madeNoProgress:
+            attempt !== null &&
+            (turnToolUseCount === 0 || repetition.repeatedEverything),
+          callHistory: repetition.nextHistory,
           failed: turnFailed,
           providerUsageLimited: turnUsageLimited,
         },
@@ -212,17 +245,25 @@ export function attachThreadGoalScheduler({
       return
     }
 
-    if (sdk.type === 'assistant') {
+    if (sdk.type === 'assistant' || sdk.type === 'user') {
       const inner = sdk.message as { content?: unknown } | undefined
-      if (Array.isArray(inner?.content)) {
-        for (const block of inner.content) {
-          if (
-            block &&
-            typeof block === 'object' &&
-            (block as { type?: unknown }).type === 'tool_use'
-          ) {
-            turnToolUseCount += 1
+      if (!Array.isArray(inner?.content)) return
+      for (const block of inner.content) {
+        if (!block || typeof block !== 'object') continue
+        const typed = block as Record<string, unknown>
+        if (typed.type === 'tool_use') {
+          turnToolUseCount += 1
+          if (typeof typed.id === 'string') {
+            turnToolUses.set(typed.id, {
+              toolName: typeof typed.name === 'string' ? typed.name : 'unknown',
+              input: typed.input,
+            })
           }
+        } else if (
+          typed.type === 'tool_result' &&
+          typeof typed.tool_use_id === 'string'
+        ) {
+          turnToolResults.set(typed.tool_use_id, typed.content)
         }
       }
       return

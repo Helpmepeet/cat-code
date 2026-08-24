@@ -135,6 +135,7 @@ type ThreadGoal = {
   contract: ThreadGoalContract
   evidence: ThreadGoalEvidence[]
   wait: ThreadGoalWait | null
+  callHistory: string[]
   timeUsedSeconds: number
   createdAtMs: number
   updatedAtMs: number

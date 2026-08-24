@@ -19,6 +19,7 @@ import {
   type ThreadGoalAttempt,
 } from './threadGoalAttempt.js'
 import { parseThreadGoalWait, type ThreadGoalWait } from './threadGoalWait.js'
+import { parseThreadGoalCallHistory } from './threadGoalRepetition.js'
 import {
   EMPTY_THREAD_GOAL_CONTRACT,
   parseThreadGoalContract,
@@ -129,6 +130,14 @@ export type ThreadGoal = {
    * survives the process that set it.
    */
   wait: ThreadGoalWait | null
+  /**
+   * Fingerprints of recent tool calls, for repetition detection.
+   *
+   * Kept on the goal rather than derived from the message array because
+   * compaction prunes exactly the messages such a check needs to look back
+   * across.
+   */
+  callHistory: string[]
   timeUsedSeconds: number
   createdAtMs: number
   updatedAtMs: number
@@ -597,6 +606,7 @@ export function createThreadGoal(
     contract: EMPTY_THREAD_GOAL_CONTRACT,
     evidence: [],
     wait: null,
+    callHistory: [],
     timeUsedSeconds: 0,
     createdAtMs: nowMs,
     updatedAtMs: nowMs,
@@ -651,6 +661,8 @@ export type ThreadGoalTurnAccounting = {
   wasAutomaticContinuation: boolean
   /** True when the turn produced no measurable progress. */
   madeNoProgress: boolean
+  /** Updated tool-call fingerprints, if the caller computed them. */
+  callHistory?: readonly string[]
   /** True when the turn ended in a runtime/provider error. */
   failed: boolean
   /**
@@ -709,6 +721,7 @@ export function accountThreadGoalTurn(
       goal.chargedResponseIds,
       turn.chargedResponseIds,
     ),
+    ...(turn.callHistory ? { callHistory: [...turn.callHistory] } : {}),
     continuationTurns,
     consecutiveNoProgressTurns,
     consecutiveFailures,
@@ -1209,6 +1222,7 @@ function migrateThreadGoalV1(
     contract: EMPTY_THREAD_GOAL_CONTRACT,
     evidence: [],
     wait: null,
+    callHistory: [],
     timeUsedSeconds: base.timeUsedSeconds,
     createdAtMs: base.createdAtMs,
     updatedAtMs: base.updatedAtMs,
@@ -1345,5 +1359,6 @@ export function parseThreadGoal(input: unknown): ThreadGoal | null {
     contract: parseThreadGoalContract(candidate.contract),
     evidence: parseThreadGoalEvidence(candidate.evidence),
     wait: parseThreadGoalWait(candidate.wait),
+    callHistory: parseThreadGoalCallHistory(candidate.callHistory),
   }
 }
