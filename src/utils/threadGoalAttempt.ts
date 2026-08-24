@@ -83,22 +83,28 @@ export const MAX_REMEMBERED_WAKE_KEYS = 64
  *
  * The key must be identical for two deliveries of the SAME logical event and
  * different for genuinely separate events. It therefore never includes a
- * timestamp or a random value: those are what made duplicate suppression fail
- * in the first place. `sourceId` is the caller's stable id for the thing that
- * woke the goal (a task id, a process id, a timer id, an idle sequence number).
+ * timestamp or a random value: those are what make duplicate suppression fail.
+ *
+ * It also deliberately excludes the goal revision. Charging a finished turn
+ * bumps the revision, so a revision-keyed wake would stop matching its own
+ * redelivery precisely when suppression is needed. Revision is a FENCING
+ * input, checked by claimThreadGoalAttempt and isThreadGoalAttemptValid; it is
+ * not part of an event's identity.
+ *
+ * `sourceId` is the caller's stable id for the thing that woke the goal: a
+ * task id, a process id, a timer id, or a monotonic idle sequence number.
+ * Genuinely separate events must carry genuinely different source ids.
  */
 export function buildThreadGoalWakeKey({
   goalId,
-  goalRevision,
   trigger,
   sourceId,
 }: {
   goalId: string
-  goalRevision: number
   trigger: ThreadGoalWakeTrigger
   sourceId: string
 }): string {
-  return `${goalId}:${goalRevision}:${trigger}:${sourceId}`
+  return `${goalId}:${trigger}:${sourceId}`
 }
 
 export type ThreadGoalAttemptRecord = {
@@ -141,12 +147,7 @@ export function recordThreadGoalWake({
   nowMs: number
   attemptId?: string
 }): RecordWakeResult {
-  const wakeKey = buildThreadGoalWakeKey({
-    goalId,
-    goalRevision,
-    trigger,
-    sourceId,
-  })
+  const wakeKey = buildThreadGoalWakeKey({ goalId, trigger, sourceId })
 
   if (record.recentWakeKeys.includes(wakeKey)) {
     return { outcome: 'duplicate', record }

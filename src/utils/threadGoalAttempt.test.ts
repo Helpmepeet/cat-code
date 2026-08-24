@@ -63,7 +63,6 @@ describe('wake idempotency', () => {
   test('a wake key is stable across deliveries and distinct across events', () => {
     const base = {
       goalId: 'goal-1',
-      goalRevision: 3,
       trigger: 'task-completed' as const,
       sourceId: 'task-9',
     }
@@ -72,9 +71,26 @@ describe('wake idempotency', () => {
     expect(buildThreadGoalWakeKey(base)).not.toBe(
       buildThreadGoalWakeKey({ ...base, sourceId: 'task-10' }),
     )
-    // A goal edit makes the same source a genuinely new event.
     expect(buildThreadGoalWakeKey(base)).not.toBe(
-      buildThreadGoalWakeKey({ ...base, goalRevision: 4 }),
+      buildThreadGoalWakeKey({ ...base, trigger: 'timer' }),
+    )
+    expect(buildThreadGoalWakeKey(base)).not.toBe(
+      buildThreadGoalWakeKey({ ...base, goalId: 'goal-2' }),
+    )
+  })
+
+  test('charging a turn does not un-suppress that turn\'s own wake', () => {
+    // Accounting bumps the goal revision. A revision-keyed wake would stop
+    // matching its own redelivery exactly when suppression is needed.
+    const created = wake(EMPTY_THREAD_GOAL_ATTEMPT_RECORD, { goalRevision: 1 })
+    const settled = settleThreadGoalAttempt({
+      record: created.record,
+      attemptId: created.record.pendingAttempt!.attemptId,
+      nowMs: NOW + 1,
+    })
+
+    expect(wake(settled, { goalRevision: 2, nowMs: NOW + 2 }).outcome).toBe(
+      'duplicate',
     )
   })
 

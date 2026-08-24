@@ -181,12 +181,11 @@ import { useAppState, useSetAppState, useAppStateStore } from '../state/AppState
 import { getRuntimeMainLoopModel, renderModelName } from '../utils/model/model.js';
 import { roughTokenCountEstimation } from '../services/tokenEstimation.js';
 import { doesMostRecentAssistantMessageExceed200k, tokenCountWithEstimation } from '../utils/tokens.js';
-import { accountThreadGoalTurn, buildThreadGoalDisplayState, calculateThreadGoalContextTokenDelta, deriveThreadGoalContinuationResetState, didThreadGoalTurnMakeProgress, pauseActiveThreadGoalOnAbort, renderThreadGoalBudgetLimitPrompt, renderThreadGoalContinuationPrompt, shouldPromptToResumePausedGoal, type ThreadGoal, type ThreadGoalContinuationKind } from '../utils/threadGoal.js';
+import { buildThreadGoalDisplayState, calculateThreadGoalContextTokenDelta, deriveThreadGoalContinuationResetState, didThreadGoalTurnMakeProgress, pauseActiveThreadGoalOnAbort, shouldPromptToResumePausedGoal, type ThreadGoal } from '../utils/threadGoal.js';
 import { sumRealThreadGoalUsage } from '../utils/threadGoalUsage.js';
-import { getThreadGoalContinuationAction } from '../utils/threadGoalController.js';
-import { isTerminalThreadGoalStatus } from '../utils/threadGoalState.js';
+import { createThreadGoalScheduler, type ThreadGoalRunningAttempt } from '../utils/threadGoalScheduler.js';
 import { deriveDelegatedTaskStatus, deriveFocusedInputDialog, deriveHasOperationalWork, deriveHasSuppressedDialog, deriveHasUnblockedDelegatedWork, deriveLocalWaitingReason, deriveTuiSessionStatus, deriveTuiWaitingDetail, type FocusedInputDialog, type FocusedInputDialogFacts } from '../utils/tuiSessionStatus.js';
-import { persistAccountedThreadGoal, updateThreadGoalStatusAction } from '../utils/threadGoalActions.js';
+import { updateThreadGoalStatusAction } from '../utils/threadGoalActions.js';
 import { getDisplayedEffortLevel } from '../utils/effort.js';
 import { getCodexLeaseSnapshot } from '../services/api/codexAccountLeaseManager.js';
 import { getPoolStatus } from '../services/api/codexAccountPool.js';
@@ -978,10 +977,40 @@ export function REPL({
   const loadingStartTimeRef = React.useRef<number>(0);
   const turnGoalAtStartRef = React.useRef<ThreadGoal | null>(null);
   const turnContextTokensAtStartRef = React.useRef(0);
-  const goalContinuationInFlightRef = React.useRef(false);
-  const goalContinuationKindRef = React.useRef<ThreadGoalContinuationKind | null>(null);
-  const turnGoalContinuationKindRef = React.useRef<ThreadGoalContinuationKind | null>(null);
   const pendingBudgetWrapUpGoalIdRef = React.useRef<string | null>(null);
+  // The attempt the CURRENT turn is running under, or null for a user-driven
+  // turn. Captured at query start so the settle at turn end is fenced against
+  // the goal state the turn was actually decided against.
+  const turnAttemptRef = React.useRef<ThreadGoalRunningAttempt | null>(null);
+  // Gating snapshot the scheduler host reads. Written immediately before each
+  // wake() so the host never closes over a stale render.
+  const goalGateRef = React.useRef({ canStartAutomaticTurn: false });
+  const handleIncomingPromptRef = React.useRef<
+    ((content: string, options?: { isMeta?: boolean }) => boolean) | null
+  >(null);
+  // ONE scheduler for this session. The terminal no longer decides when a
+  // continuation runs; it reports idle and executes what the scheduler asks
+  // for, exactly as the desktop, web, and headless runtimes do.
+  const goalSchedulerRef = React.useRef<ReturnType<typeof createThreadGoalScheduler> | null>(null);
+  if (goalSchedulerRef.current === null) {
+    goalSchedulerRef.current = createThreadGoalScheduler({
+      ownerId: `repl:${getSessionId()}`,
+      now: () => Date.now(),
+      getGoal: () => store.getState().threadGoal,
+      saveGoal: nextGoal => {
+        saveThreadGoal(nextGoal);
+        setAppState(prev =>
+          prev.threadGoal?.goalId === nextGoal.goalId
+            ? { ...prev, threadGoal: nextGoal }
+            : prev
+        );
+      },
+      canStartAutomaticTurn: () => goalGateRef.current.canStartAutomaticTurn,
+      isAgentMode: () => isAgentMode(),
+      startTurn: ({ prompt }) =>
+        handleIncomingPromptRef.current?.(prompt, { isMeta: true }) ?? false
+    });
+  }
   // Whether the just-finished turn advanced the goal. Written at turn end,
   // read by accountCompletedTurnThreadGoal, which persists the streak.
   const turnMadeProgressRef = React.useRef(true);
@@ -1750,17 +1779,9 @@ export function REPL({
 
   const accountCompletedTurnThreadGoal = useCallback(() => {
     const turnGoalAtStart = turnGoalAtStartRef.current;
-    if (!turnGoalAtStart || isTerminalThreadGoalStatus(turnGoalAtStart.status)) {
-      return;
-    }
-
-    const currentGoal = store.getState().threadGoal;
-    // A turn that started against a goal the user has since replaced or
-    // cleared must not charge whatever goal now occupies the session. The
-    // charge is simply dropped: the replacement did not incur it.
-    if (currentGoal?.goalId !== turnGoalAtStart.goalId) {
-      return;
-    }
+    const attempt = turnAttemptRef.current;
+    turnAttemptRef.current = null;
+    if (!turnGoalAtStart) return;
 
     const nowMs = Date.now();
     // Real provider usage, deduped against everything already charged. This
@@ -1781,41 +1802,34 @@ export function REPL({
       ),
     );
 
-    const { goal: nextGoal } = accountThreadGoalTurn(
-      currentGoal,
-      {
+    // The scheduler owns charging, fencing, and the budget stop it derives, so
+    // the terminal has no accounting policy of its own left to drift from the
+    // other runtimes'.
+    const nextGoal = goalSchedulerRef.current!.settle({
+      attempt,
+      goalId: turnGoalAtStart.goalId,
+      accounting: {
         usage,
         chargedResponseIds: usage.chargedResponseIds,
         contextGrowthTokens,
         timeDeltaSeconds,
-        wasAutomaticContinuation:
-          turnGoalContinuationKindRef.current !== null,
         madeNoProgress: !turnMadeProgressRef.current,
         failed: false
-      },
-      nowMs,
-    );
-
-    const persisted = persistAccountedThreadGoal({
-      context: { getAppState: store.getState, setAppState },
-      accounted: nextGoal,
-      expectedRevision: currentGoal.revision
+      }
     });
-    if (!persisted.ok) {
-      return;
-    }
+    if (!nextGoal) return;
 
     for (const id of usage.chargedResponseIds) {
       chargedResponseIdsRef.current.add(id);
     }
 
     if (
-      currentGoal.status === 'active' &&
+      turnGoalAtStart.status === 'active' &&
       nextGoal.status === 'budget_limited'
     ) {
       pendingBudgetWrapUpGoalIdRef.current = nextGoal.goalId;
     }
-  }, [setAppState, store]);
+  }, []);
 
   // Session backgrounding — hook is below, after getToolUseContext
 
@@ -2430,9 +2444,10 @@ export function REPL({
         }));
       }
     }
-    goalContinuationInFlightRef.current = false;
-    goalContinuationKindRef.current = null;
-    turnGoalContinuationKindRef.current = null;
+    if (turnAttemptRef.current) {
+      goalSchedulerRef.current?.release(turnAttemptRef.current.attemptId);
+      turnAttemptRef.current = null;
+    }
     queryGuard.forceEnd();
     skipIdleCheckRef.current = false;
 
@@ -3271,7 +3286,7 @@ export function REPL({
     // below, which persists the streak on the goal. The v1 in-memory stall ref
     // is gone: a restart used to reset it and resume an abandoned loop.
     turnMadeProgressRef.current = didThreadGoalTurnMakeProgress({
-      continuationKind: turnGoalContinuationKindRef.current,
+      continuationKind: turnAttemptRef.current?.kind ?? null,
       toolUseCount: completedTurnToolCount
     });
 
@@ -3378,7 +3393,7 @@ export function REPL({
       // isLoading is derived from queryGuard — tryStart() above already
       // transitioned dispatching→running, so no setter call needed here.
       resetTimingRefs();
-      turnGoalContinuationKindRef.current = goalContinuationKindRef.current;
+      turnAttemptRef.current = goalSchedulerRef.current!.getRunningAttempt();
       turnGoalAtStartRef.current = store.getState().threadGoal;
       turnContextTokensAtStartRef.current = tokenCountWithEstimation(
         messagesRef.current,
@@ -3547,9 +3562,7 @@ export function REPL({
         // controller makes ctrl+c fire onCancel() (aborting nothing) instead of
         // propagating to the double-press exit flow.
         setAbortController(null);
-        goalContinuationInFlightRef.current = false;
-        goalContinuationKindRef.current = null;
-        turnGoalContinuationKindRef.current = null;
+        turnAttemptRef.current = null;
       }
 
       // Auto-restore: if the user interrupted before any meaningful response
@@ -4674,63 +4687,43 @@ export function REPL({
     const sessionIsIdle =
       sessionStatus === 'idle' && initialMessage === null && hasUnhandledIdleSignal;
 
-    const continuationAction = getThreadGoalContinuationAction({
-      sessionIsIdle,
-      goal: threadGoal,
-      goalContinuationInFlight: goalContinuationInFlightRef.current,
-      pendingBudgetWrapUpGoalId: pendingBudgetWrapUpGoalIdRef.current,
-      queuedCommandsCount: queuedCommands.length,
-      hasActiveLocalJsxUI: isShowingLocalJSXCommand,
-      isInPlanMode: toolPermissionContext.mode === 'plan'
-    });
+    handleIncomingPromptRef.current = handleIncomingPrompt;
 
-    if (continuationAction.type === 'budget-wrap-up') {
-      handledGoalContinuationIdleSignalRef.current = goalContinuationIdleSignal;
-      pendingBudgetWrapUpGoalIdRef.current = null;
-      goalContinuationInFlightRef.current = true;
-      goalContinuationKindRef.current = 'budget-wrap-up';
-      if (!handleIncomingPrompt(renderThreadGoalBudgetLimitPrompt(threadGoal!), {
-        isMeta: true
-      })) {
-        pendingBudgetWrapUpGoalIdRef.current = threadGoal!.goalId;
-        goalContinuationInFlightRef.current = false;
-        goalContinuationKindRef.current = null;
-      }
-      return;
-    }
+    // Plan mode is excluded from automatic continuation. Everything else here
+    // is "is the human busy with this session right now"; the durable
+    // questions (is the goal schedulable, is this wake a duplicate, is the
+    // attempt stale) belong to the scheduler, not to this component.
+    const isInPlanMode = toolPermissionContext.mode === 'plan';
+    goalGateRef.current.canStartAutomaticTurn =
+      sessionIsIdle &&
+      queuedCommands.length === 0 &&
+      !isShowingLocalJSXCommand &&
+      !isInPlanMode;
 
-    if (continuationAction.type === 'stalled') {
-      handledGoalContinuationIdleSignalRef.current = goalContinuationIdleSignal;
-      return;
-    }
+    if (!hasUnhandledIdleSignal) return;
 
-    if (continuationAction.type === 'ignored') {
-      return;
-    }
+    // A budget-limited goal gets exactly one wrap-up turn, so its trigger is
+    // consumed here rather than re-derived on every idle.
+    const wantsBudgetWrapUp =
+      threadGoal?.status === 'budget_limited' &&
+      threadGoal.goalId === pendingBudgetWrapUpGoalIdRef.current;
+    const trigger = wantsBudgetWrapUp ? 'budget-wrap-up' as const : 'idle' as const;
+    const signal = goalContinuationIdleSignal;
 
-    if (continuationAction.type !== 'continue') {
-      if (
-        sessionIsIdle &&
-        !goalContinuationInFlightRef.current &&
-        queuedCommands.length === 0 &&
-        !isShowingLocalJSXCommand
-      ) {
-        handledGoalContinuationIdleSignalRef.current = goalContinuationIdleSignal;
-      }
-      return;
-    }
-
-    handledGoalContinuationIdleSignalRef.current = goalContinuationIdleSignal;
-    goalContinuationInFlightRef.current = true;
-    goalContinuationKindRef.current = 'active';
-    if (!handleIncomingPrompt(renderThreadGoalContinuationPrompt(threadGoal!, {
-      agentMode: isAgentMode()
-    }), {
-      isMeta: true
-    })) {
-      goalContinuationInFlightRef.current = false;
-      goalContinuationKindRef.current = null;
-    }
+    void goalSchedulerRef.current!
+      .wake({ trigger, sourceId: `idle:${signal}` })
+      .then(decision => {
+        // `host-busy` is transient: leaving the dialog or plan mode re-runs
+        // this effect, and the signal must still be unhandled for that retry
+        // to reach the scheduler.
+        if (decision.type === 'skipped' && decision.reason === 'host-busy') {
+          return;
+        }
+        handledGoalContinuationIdleSignalRef.current = signal;
+        if (decision.type === 'started' && decision.kind === 'budget-wrap-up') {
+          pendingBudgetWrapUpGoalIdRef.current = null;
+        }
+      });
   }, [
     sessionStatus,
     initialMessage,

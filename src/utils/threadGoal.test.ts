@@ -24,8 +24,6 @@ import {
   renderThreadGoalBudgetLimitPrompt,
   renderThreadGoalContinuationPrompt,
   shouldPromptToResumePausedGoal,
-  shouldStartThreadGoalBudgetWrapUp,
-  shouldStartThreadGoalContinuation,
   updateThreadGoalStatus,
   THREAD_GOAL_SCHEMA_VERSION,
   DEFAULT_MAX_GOAL_CONTINUATION_TURNS,
@@ -875,24 +873,12 @@ describe('thread goal continuation policy', () => {
     })
   })
 
-  test('active goal plus idle starts continuation', () => {
-    const goal = createThreadGoal('session-1', 'finish phase 1C', undefined, 100)
-
-    expect(
-      shouldStartThreadGoalContinuation({
-        sessionIsIdle: true,
-        goal,
-        goalContinuationInFlight: false,
-      }),
-    ).toBe(true)
-  })
-
-  test('a stalled goal is not schedulable, so a restart cannot resume it', () => {
-    // This is the v1 defect the durable status fixes: the scheduler could
-    // return `stalled` while the persisted goal still read `active`, so a
-    // restart cleared the in-memory counter and resumed the abandoned loop.
+  test('no-progress turns leave a durably stalled goal after a reload', () => {
+    // The v1 defect: the scheduler could give up while the persisted goal
+    // still read `active`, so a restart resumed the abandoned loop. The
+    // scheduler's own refusal is covered in threadGoalScheduler.test.ts; this
+    // pins the persisted half it reads.
     let goal = createThreadGoal('session-1', 'finish phase 1C', undefined, 100)
-
     for (let i = 0; i < DEFAULT_MAX_GOAL_NO_PROGRESS_TURNS; i++) {
       goal = accountThreadGoalTurn(
         goal,
@@ -901,105 +887,9 @@ describe('thread goal continuation policy', () => {
       ).goal
     }
 
-    expect(goal.status).toBe('stalled')
-    expect(
-      shouldStartThreadGoalContinuation({
-        sessionIsIdle: true,
-        goal,
-        goalContinuationInFlight: false,
-      }),
-    ).toBe(false)
-
-    // Reloading it from disk keeps it unschedulable.
     const reloaded = parseThreadGoal(JSON.parse(JSON.stringify(goal)))
     expect(reloaded!.status).toBe('stalled')
-    expect(
-      shouldStartThreadGoalContinuation({
-        sessionIsIdle: true,
-        goal: reloaded,
-        goalContinuationInFlight: false,
-      }),
-    ).toBe(false)
-  })
-
-  test('paused, budget-limited, and complete goals do not start normal continuation', () => {
-    const active = createThreadGoal('session-1', 'finish phase 1C', undefined, 100)
-
-    for (const [status, reason] of [
-      ['paused', 'user_paused'],
-      ['budget_limited', 'token_budget_exhausted'],
-      ['complete', 'agent_reported_complete'],
-    ] as const) {
-      expect(
-        shouldStartThreadGoalContinuation({
-          sessionIsIdle: true,
-          goal: updateThreadGoalStatus(active, status, reason, 200),
-          goalContinuationInFlight: false,
-        }),
-      ).toBe(false)
-    }
-  })
-
-  test('queued input, active UI, or in-flight continuation prevents continuation', () => {
-    const goal = createThreadGoal('session-1', 'finish phase 1C', undefined, 100)
-
-    // Human input outranks automatic continuation.
-    expect(
-      shouldStartThreadGoalContinuation({
-        sessionIsIdle: true,
-        goal,
-        goalContinuationInFlight: true,
-      }),
-    ).toBe(false)
-    expect(
-      shouldStartThreadGoalContinuation({
-        sessionIsIdle: true,
-        goal,
-        goalContinuationInFlight: false,
-        queuedCommandsCount: 1,
-      }),
-    ).toBe(false)
-    expect(
-      shouldStartThreadGoalContinuation({
-        sessionIsIdle: true,
-        goal,
-        goalContinuationInFlight: false,
-        hasActiveLocalJsxUI: true,
-      }),
-    ).toBe(false)
-  })
-
-  test('budget-limited goal only starts pending wrap-up, not normal continuation', () => {
-    const goal = updateThreadGoalStatus(
-      createThreadGoal('session-1', 'finish phase 1C', undefined, 100),
-      'budget_limited',
-      'token_budget_exhausted',
-      200,
-    )
-
-    expect(
-      shouldStartThreadGoalContinuation({
-        sessionIsIdle: true,
-        goal,
-        goalContinuationInFlight: false,
-      }),
-    ).toBe(false)
-    expect(
-      shouldStartThreadGoalBudgetWrapUp({
-        sessionIsIdle: true,
-        goal,
-        goalContinuationInFlight: false,
-        pendingBudgetWrapUpGoalId: goal.goalId,
-      }),
-    ).toBe(true)
-    expect(
-      shouldStartThreadGoalBudgetWrapUp({
-        sessionIsIdle: true,
-        goal,
-        goalContinuationInFlight: false,
-        pendingBudgetWrapUpGoalId: null,
-      }),
-    ).toBe(false)
+    expect(reloaded!.statusReason).toBe('no_progress')
   })
 
   test('an automatic turn with no tool calls is judged as no progress', () => {
