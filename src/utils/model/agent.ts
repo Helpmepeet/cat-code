@@ -86,10 +86,7 @@ export function getAgentModel(
   }
 
   // Prioritize tool-specified model if provided
-  if (
-    toolSpecifiedModel &&
-    !isSameFamilyDowngrade(toolSpecifiedModel, parentModel)
-  ) {
+  if (toolSpecifiedModel) {
     if (aliasMatchesParentTier(toolSpecifiedModel, parentModel)) {
       return parentModel
     }
@@ -114,47 +111,6 @@ export function getAgentModel(
   }
   const model = resolveSubagentModel(agentModelWithExp)
   return applyParentRegionPrefix(model, agentModelWithExp)
-}
-
-/**
- * Tier rank of a model within its family (higher = more capable). Only
- * models that can appear as the Agent tool's per-call `model` arg or as a
- * parent main-loop model need ranks; unknown models return undefined and
- * never trigger the downgrade guard.
- */
-function getFamilyTier(
-  model: string,
-): { family: 'gpt' | 'claude'; rank: number } | undefined {
-  const canonical = getCanonicalName(model).toLowerCase()
-  if (canonical.startsWith('gpt-')) {
-    if (canonical === 'gpt-5.6-sol') return { family: 'gpt', rank: 4 }
-    if (canonical === 'gpt-5.6-terra') return { family: 'gpt', rank: 3 }
-    if (canonical === 'gpt-5.6-luna') return { family: 'gpt', rank: 2 }
-    return undefined
-  }
-  if (canonical.includes('opus')) return { family: 'claude', rank: 3 }
-  if (canonical.includes('sonnet')) return { family: 'claude', rank: 2 }
-  if (canonical.includes('haiku')) return { family: 'claude', rank: 1 }
-  return undefined
-}
-
-/**
- * The Agent tool's per-call `model` arg is model-generated, and models
- * habitually pin a lower-tier id from their own family, silently downgrading
- * every subagent despite
- * the param description saying to omit it. Ignore the arg when it would
- * downgrade the subagent below the parent's tier within the same family.
- * Deliberate upgrades and cross-family choices are still honored, and
- * agent-file `model:` pins and CLAUDE_CODE_SUBAGENT_MODEL are unaffected.
- */
-export function isSameFamilyDowngrade(
-  toolSpecifiedModel: string,
-  parentModel: string,
-): boolean {
-  const spec = getFamilyTier(toolSpecifiedModel)
-  const parent = getFamilyTier(parentModel)
-  if (!spec || !parent || spec.family !== parent.family) return false
-  return spec.rank < parent.rank
 }
 
 /**

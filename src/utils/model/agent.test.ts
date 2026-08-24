@@ -1,23 +1,27 @@
 import { beforeAll, describe, expect, test } from 'bun:test'
 
-import { getAgentModel, isSameFamilyDowngrade } from './agent.js'
+import { getAgentModel } from './agent.js'
 import { getCanonicalName } from './model.js'
 
-describe('getAgentModel downgrade guard', () => {
+describe('getAgentModel explicit override', () => {
   beforeAll(() => {
     delete process.env.CLAUDE_CODE_SUBAGENT_MODEL
   })
 
-  test('ignores a Terra subagent request when the parent uses Sol', () => {
+  test('honors an explicit Terra selection when the parent uses Sol', () => {
     expect(
-      getAgentModel(undefined, 'gpt-5.6-sol', 'gpt-5.6-terra', 'default'),
-    ).toBe('gpt-5.6-sol')
+      getCanonicalName(
+        getAgentModel(undefined, 'gpt-5.6-sol', 'gpt-5.6-terra', 'default'),
+      ),
+    ).toBe('gpt-5.6-terra')
   })
 
-  test('ignores a Luna subagent request when the parent uses Terra', () => {
+  test('honors an explicit Luna selection when the parent uses Terra', () => {
     expect(
-      getAgentModel(undefined, 'gpt-5.6-terra', 'gpt-5.6-luna', 'default'),
-    ).toBe('gpt-5.6-terra')
+      getCanonicalName(
+        getAgentModel(undefined, 'gpt-5.6-terra', 'gpt-5.6-luna', 'default'),
+      ),
+    ).toBe('gpt-5.6-luna')
   })
 
   test('honors a Terra subagent request as an upgrade from Luna', () => {
@@ -36,10 +40,12 @@ describe('getAgentModel downgrade guard', () => {
     ).toBe('gpt-5.6-sol')
   })
 
-  test('ignores tool-specified sonnet when parent is opus', () => {
+  test('honors an explicit Sonnet selection when the parent uses Opus', () => {
     expect(
-      getAgentModel(undefined, 'claude-opus-4-6', 'sonnet', 'default'),
-    ).toBe('claude-opus-4-6')
+      getCanonicalName(
+        getAgentModel(undefined, 'claude-opus-4-6', 'sonnet', 'default'),
+      ),
+    ).toContain('sonnet')
   })
 
   test('honors tool-specified opus upgrade from sonnet parent', () => {
@@ -62,29 +68,9 @@ describe('getAgentModel downgrade guard', () => {
     )
   })
 
-  test('falls back to agent-file pin when the tool arg is a downgrade', () => {
+  test('tool-specified model takes precedence over an agent-file pin', () => {
     expect(
-      getAgentModel('gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-luna', 'default'),
+      getAgentModel('gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-5.6-luna', 'default'),
     ).toBe('gpt-5.6-luna')
-  })
-})
-
-describe('isSameFamilyDowngrade', () => {
-  test('same model is not a downgrade', () => {
-    expect(isSameFamilyDowngrade('gpt-5.6-terra', 'gpt-5.6-terra')).toBe(false)
-  })
-
-  test('unknown models never trigger the guard', () => {
-    expect(isSameFamilyDowngrade('gpt-5.2', 'gpt-5.1-codex')).toBe(false)
-    expect(isSameFamilyDowngrade('sonnet', 'claude-fable-5')).toBe(false)
-  })
-
-  test('full parent model ids are canonicalized before comparison', () => {
-    expect(isSameFamilyDowngrade('sonnet', 'claude-opus-4-6-20251101')).toBe(
-      true,
-    )
-    expect(isSameFamilyDowngrade('opus', 'claude-haiku-4-5-20251001')).toBe(
-      false,
-    )
   })
 })
