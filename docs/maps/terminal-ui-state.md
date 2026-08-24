@@ -115,7 +115,7 @@ Use focused checks first:
 | Ink rendering core | `bun test src/ink/output.test.ts` |
 | Query/message-adjacent behavior | `bun test src/query.test.ts src/utils/providerPromptRegressions.test.ts` |
 | Task/view switching adjacency | `bun test src/tasks/LocalAgentTask/LocalAgentTask.test.ts src/tasks/RemoteAgentTask/RemoteAgentTask.test.ts` |
-| Goal/dialog local JSX adjacency | `bun test src/commands/goal/goal.test.ts src/utils/threadGoalController.test.ts` |
+| Goal/dialog local JSX adjacency | `bun test src/commands/goal/goal.test.ts src/utils/threadGoalScheduler.test.ts src/screens/REPL.goalScheduler.test.ts` |
 | Dialog priority and session status | `bun test src/utils/tuiSessionStatus.test.ts` |
 | Deferred continuation command, notices, runner, and foreground/background races | `bun test src/commands/continue-after-limit/continue-after-limit.test.ts src/services/deferredContinuationRunner.test.ts src/services/deferredContinuation.test.ts src/services/deferredContinuation.probe.test.ts` |
 | Full documented build | `bun run build:dev:full` |
