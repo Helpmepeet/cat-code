@@ -1647,7 +1647,10 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
     const gated = attachmentGate.onFrame(event.sessionId, traced)
     if (gated.length === 0) traceFrame(traced, 'attachment.buffered')
     deliver(gated)
-    if (attachmentGate.hasPendingReplayCoalescing(event.sessionId)) {
+    if (
+      attachmentGate.hasPendingReplayCoalescing(event.sessionId) &&
+      attachmentGate.isLazyReplayCoalescing(event.sessionId)
+    ) {
       scheduleReplayFlush(event.sessionId)
     } else if (!attachmentGate.isReplayCoalescing(event.sessionId)) {
       cancelReplayFlush(event.sessionId)

@@ -74,6 +74,58 @@ function replayFrame(index: number): ServerFrame {
   }
 }
 
+function tracedReplayFrame(index: number): ServerFrame {
+  return {
+    ...replayFrame(index),
+    deliveryTrace: {
+      streamEpoch: '00000000-0000-4000-8000-000000000001',
+      sequence: index + 1,
+      traceId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+      deliveryAttempt: 1,
+      replay: false,
+      sourceProcessInstanceId: '00000000-0000-4000-8000-000000000002',
+      sourceWallTimestamp: '2026-08-24T00:00:00.000Z',
+      sourceMonotonicTimestampMs: index + 1,
+      connectionEpoch: 1,
+    },
+  }
+}
+
+function transcriptReset(): ServerFrame {
+  return {
+    kind: 'transcript.reset',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID,
+  }
+}
+
+function sessionActionResult(
+  verb: Extract<ServerFrame, { kind: 'session-action.result' }>['verb'],
+  ok = true,
+): ServerFrame {
+  return {
+    kind: 'session-action.result',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID,
+    requestId: `${verb}-request`,
+    verb,
+    ok,
+    message: `${verb} ${ok ? 'completed' : 'failed'}`,
+  }
+}
+
+function connectionError(): ServerFrame {
+  return {
+    kind: 'error',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID,
+    requestId: 'connection-error',
+    code: 'internal_error',
+    message: 'Connection failed.',
+    retryable: false,
+  }
+}
+
 function historyTruncation(): ServerFrame {
   return {
     kind: 'error',
@@ -178,6 +230,140 @@ test('zero-history lazy restore holds ready until the window flush', () => {
 
   expect(gate.onFrame(SID, readyFrame())).toEqual([])
   expect(gate.flushReplayCoalescing(SID)).toEqual([readyFrame()])
+})
+
+test('rewind reset, retained replay, and Edit result deliver as one batch', () => {
+  const gate = new AttachmentGate()
+  gate.onRendererReady()
+
+  expect(gate.onFrame(SID, transcriptReset())).toEqual([])
+  expect(gate.onFrame(SID, replayFrame(0))).toEqual([])
+  expect(gate.onFrame(SID, replayFrame(1))).toEqual([])
+  expect(gate.isReplayCoalescing(SID)).toBe(true)
+  expect(gate.isLazyReplayCoalescing(SID)).toBe(false)
+
+  expect(gate.onFrame(SID, sessionActionResult('editFromMessage'))).toEqual([
+    transcriptReset(),
+    replayFrame(0),
+    replayFrame(1),
+    sessionActionResult('editFromMessage'),
+  ])
+  expect(gate.isReplayCoalescing(SID)).toBe(false)
+})
+
+test('rewind byte accounting excludes delivery metadata added after sidecar replay caps', () => {
+  const bareReplay = Array.from({ length: 8 }, (_, index) => replayFrame(index))
+  const tracedReplay = Array.from(
+    { length: bareReplay.length },
+    (_, index) => tracedReplayFrame(index),
+  )
+  const sidecarReplayBytes = bareReplay.reduce(
+    (total, frame) => total + serializedBytes(frame),
+    0,
+  )
+  expect(
+    tracedReplay.reduce(
+      (total, frame) => total + serializedBytes(frame),
+      0,
+    ),
+  ).toBeGreaterThan(sidecarReplayBytes)
+  expect(
+    Math.max(...tracedReplay.map(frame => serializedBytes(frame))),
+  ).toBeLessThan(sidecarReplayBytes)
+
+  const gate = new AttachmentGate(new FrameReplayBuffer(), {
+    maxFrames: bareReplay.length,
+    maxBytes: sidecarReplayBytes,
+  })
+  gate.onRendererReady()
+
+  expect(gate.onFrame(SID, transcriptReset())).toEqual([])
+  for (const frame of tracedReplay) {
+    expect(gate.onFrame(SID, frame)).toEqual([])
+  }
+  expect(gate.onFrame(SID, sessionActionResult('editFromMessage'))).toEqual([
+    transcriptReset(),
+    ...tracedReplay,
+    sessionActionResult('editFromMessage'),
+  ])
+})
+
+test('rewind coalescing remains bounded when bare replay limits are exceeded', () => {
+  const gate = new AttachmentGate(new FrameReplayBuffer(), {
+    maxFrames: 1,
+    maxBytes: 1024 * 1024,
+  })
+  gate.onRendererReady()
+
+  expect(gate.onFrame(SID, transcriptReset())).toEqual([])
+  expect(gate.onFrame(SID, tracedReplayFrame(0))).toEqual([])
+  expect(gate.onFrame(SID, tracedReplayFrame(1))).toEqual([
+    transcriptReset(),
+    tracedReplayFrame(0),
+    tracedReplayFrame(1),
+  ])
+  expect(gate.isReplayCoalescing(SID)).toBe(false)
+})
+
+test('zero-history rewind delivers reset and Edit result as one batch', () => {
+  const gate = new AttachmentGate()
+  gate.onRendererReady()
+
+  expect(gate.onFrame(SID, transcriptReset())).toEqual([])
+  expect(gate.onFrame(SID, sessionActionResult('editFromMessage'))).toEqual([
+    transcriptReset(),
+    sessionActionResult('editFromMessage'),
+  ])
+})
+
+test('Branch results and ordinary live frames do not trigger rewind completion', () => {
+  const gate = new AttachmentGate()
+  gate.onRendererReady()
+
+  expect(gate.onFrame(SID, sessionActionResult('branchFromMessage'))).toEqual([
+    sessionActionResult('branchFromMessage'),
+  ])
+  expect(gate.onFrame(SID, pong('live'))).toEqual([pong('live')])
+  expect(gate.isReplayCoalescing(SID)).toBe(false)
+
+  expect(gate.onFrame(SID, transcriptReset())).toEqual([])
+  expect(gate.onFrame(SID, replayFrame(0))).toEqual([])
+  expect(gate.onFrame(SID, sessionActionResult('branchFromMessage'))).toEqual([])
+  expect(gate.isReplayCoalescing(SID)).toBe(true)
+
+  expect(gate.onFrame(SID, sessionActionResult('editFromMessage'))).toEqual([
+    transcriptReset(),
+    replayFrame(0),
+    sessionActionResult('branchFromMessage'),
+    sessionActionResult('editFromMessage'),
+  ])
+})
+
+test('rewind coalescing is not eligible for the lazy restore flush timer', () => {
+  const gate = new AttachmentGate()
+  gate.onRendererReady()
+
+  gate.onFrame(SID, transcriptReset())
+
+  expect(gate.hasPendingReplayCoalescing(SID)).toBe(true)
+  expect(gate.isLazyReplayCoalescing(SID)).toBe(false)
+  expect(gate.flushReplayCoalescing(SID)).toEqual([transcriptReset()])
+})
+
+test('rewind lifecycle and error interruptions flush buffered frames', () => {
+  for (const interruption of [connectionError(), exited()]) {
+    const gate = new AttachmentGate()
+    gate.onRendererReady()
+
+    expect(gate.onFrame(SID, transcriptReset())).toEqual([])
+    expect(gate.onFrame(SID, replayFrame(0))).toEqual([])
+    expect(gate.onFrame(SID, interruption)).toEqual([
+      transcriptReset(),
+      replayFrame(0),
+      interruption,
+    ])
+    expect(gate.isReplayCoalescing(SID)).toBe(false)
+  }
 })
 
 test('lazy replay coalescing enforces frame and byte caps', () => {
@@ -316,3 +502,7 @@ test('an injected buffer is used (cap/retention delegated to FrameReplayBuffer)'
   expect(isReplayTruncationFrame(out[1])).toBe(true)
   expect(out[2]).toMatchObject({ nonce: 'b' })
 })
+
+function serializedBytes(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength
+}

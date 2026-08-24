@@ -35,6 +35,7 @@ import {
 export const LAZY_REPLAY_FLUSH_MS = 50
 
 type ReplayCoalescingEntry = {
+  mode: 'lazy-restore' | 'rewind'
   frames: ServerFrame[]
   replayFrames: number
   replayBytes: number
@@ -75,14 +76,27 @@ export class AttachmentGate {
     if (!this.attached) return []
 
     const entry = this.replayCoalescing.get(sessionId)
-    if (!entry) return [frame]
+    if (!entry) {
+      if (frame.kind !== 'transcript.reset') return [frame]
+      this.replayCoalescing.set(sessionId, {
+        mode: 'rewind',
+        frames: [frame],
+        replayFrames: 0,
+        replayBytes: 0,
+        sawReplay: false,
+      })
+      return []
+    }
 
     const replay = frame.kind === 'event' && frame.replay === true
     const historyTruncation =
       frame.kind === 'error' &&
       frame.requestId === HISTORY_REPLAY_TRUNCATION_REQUEST_ID
     if (replay) {
-      const frameBytes = serializedUtf8Bytes(frame)
+      const frameBytes =
+        entry.mode === 'rewind'
+          ? serializedBareServerFrameUtf8Bytes(frame)
+          : serializedUtf8Bytes(frame)
       if (frameBytes > this.replayLimits.maxBytes) {
         this.replayCoalescing.delete(sessionId)
         return [...entry.frames, frame]
@@ -91,8 +105,13 @@ export class AttachmentGate {
         entry.replayFrames >= this.replayLimits.maxFrames ||
         entry.replayBytes + frameBytes > this.replayLimits.maxBytes
       ) {
+        if (entry.mode === 'rewind') {
+          this.replayCoalescing.delete(sessionId)
+          return [...entry.frames, frame]
+        }
         const flushed = entry.frames
         this.replayCoalescing.set(sessionId, {
+          mode: entry.mode,
           frames: [frame],
           replayFrames: 1,
           replayBytes: frameBytes,
@@ -106,6 +125,17 @@ export class AttachmentGate {
     }
 
     entry.frames.push(frame)
+    if (entry.mode === 'rewind') {
+      if (
+        isSuccessfulEditFromMessageResult(frame) ||
+        (frame.kind === 'error' && !historyTruncation) ||
+        frame.kind === 'lifecycle'
+      ) {
+        this.replayCoalescing.delete(sessionId)
+        return entry.frames
+      }
+      return []
+    }
     if (
       (entry.sawReplay && !replay) ||
       (frame.kind === 'error' && !historyTruncation) ||
@@ -125,6 +155,7 @@ export class AttachmentGate {
   startReplayCoalescing(sessionId: SessionId): void {
     if (this.replayCoalescing.has(sessionId)) return
     this.replayCoalescing.set(sessionId, {
+      mode: 'lazy-restore',
       frames: [],
       replayFrames: 0,
       replayBytes: 0,
@@ -151,6 +182,11 @@ export class AttachmentGate {
 
   isReplayCoalescing(sessionId: SessionId): boolean {
     return this.replayCoalescing.has(sessionId)
+  }
+
+  /** Whether main should arm its bounded lazy-restore flush timer. */
+  isLazyReplayCoalescing(sessionId: SessionId): boolean {
+    return this.replayCoalescing.get(sessionId)?.mode === 'lazy-restore'
   }
 
   /**
@@ -200,4 +236,19 @@ export class AttachmentGate {
 
 function serializedUtf8Bytes(value: unknown): number {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength
+}
+
+// Sidecar applies history caps before its socket envelope adds `deliveryTrace`.
+// Matching that bare payload keeps a sidecar-valid rewind within the same caps.
+function serializedBareServerFrameUtf8Bytes(frame: ServerFrame): number {
+  const { deliveryTrace: _deliveryTrace, ...bareFrame } = frame
+  return serializedUtf8Bytes(bareFrame)
+}
+
+function isSuccessfulEditFromMessageResult(frame: ServerFrame): boolean {
+  return (
+    frame.kind === 'session-action.result' &&
+    frame.verb === 'editFromMessage' &&
+    frame.ok
+  )
 }
