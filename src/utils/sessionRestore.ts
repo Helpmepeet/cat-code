@@ -82,6 +82,29 @@ type ResumeResult = {
   contextCollapseCommits?: ContextCollapseCommitEntry[]
   contextCollapseSnapshot?: ContextCollapseSnapshotEntry
   threadGoal?: ThreadGoal | null
+  worktreeSession?: PersistedWorktreeSession | null
+  customTitle?: string
+  tag?: string
+  agentName?: string
+  agentColor?: string
+  agentSetting?: string
+  mode?: 'agent' | 'coordinator' | 'normal'
+  prNumber?: number
+  prUrl?: string
+  prRepository?: string
+}
+
+/**
+ * Forks retain conversation history but do not adopt metadata whose identity
+ * belongs to the source session.
+ */
+export function prepareSessionRestoreResult(
+  result: ResumeResult,
+  forkSession: boolean,
+): ResumeResult {
+  return forkSession
+    ? { ...result, threadGoal: null, worktreeSession: undefined }
+    : result
 }
 
 /**
@@ -722,11 +745,8 @@ export async function processResumedConversation(
   // Restore session metadata so /status shows the saved name and metadata
   // is re-appended on session exit. Fork doesn't take ownership of the
   // original session's worktree or goal: both embed source-session identity.
-  restoreSessionMetadata(
-    opts.forkSession
-      ? { ...result, threadGoal: null, worktreeSession: undefined }
-      : result,
-  )
+  const restoreResult = prepareSessionRestoreResult(result, opts.forkSession)
+  restoreSessionMetadata(restoreResult)
 
   if (!opts.forkSession) {
     // Re-acquire immediately around adoption. The early check above prevents
@@ -826,7 +846,7 @@ export async function processResumedConversation(
       ...(resumedAgentType && { agent: resumedAgentType }),
       ...(restoredAttribution && { attribution: restoredAttribution }),
       ...(standaloneAgentContext && { standaloneAgentContext }),
-      threadGoal: opts.forkSession ? null : (result.threadGoal ?? null),
+      threadGoal: restoreResult.threadGoal ?? null,
       agentDefinitions: refreshedAgentDefs,
     },
   }

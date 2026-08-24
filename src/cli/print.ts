@@ -309,6 +309,7 @@ import {
   fileHistoryGetDiffStats,
 } from 'src/utils/fileHistory.js'
 import {
+  prepareSessionRestoreResult,
   restoreAgentFromSession,
   restoreSessionStateFromLog,
 } from 'src/utils/sessionRestore.js'
@@ -5016,6 +5017,17 @@ type LoadInitialMessagesResult = {
   agentSetting?: string
 }
 
+/** @internal Exported for production-boundary tests. */
+export function restoreHeadlessSessionFromLog(
+  result: Parameters<typeof prepareSessionRestoreResult>[0],
+  forkSession: boolean,
+  setAppState: (f: (prev: AppState) => AppState) => void,
+): void {
+  const restoreResult = prepareSessionRestoreResult(result, forkSession)
+  restoreSessionStateFromLog(restoreResult, setAppState)
+  restoreSessionMetadata(restoreResult)
+}
+
 async function loadInitialMessages(
   setAppState: (f: (prev: AppState) => AppState) => void,
   options: {
@@ -5080,13 +5092,10 @@ async function loadInitialMessages(
             }
           }
         }
-        restoreSessionStateFromLog(result, setAppState)
-
-        // Restore session metadata so it's re-appended on exit via reAppendSessionMetadata
-        restoreSessionMetadata(
-          options.forkSession
-            ? { ...result, worktreeSession: undefined }
-            : result,
+        restoreHeadlessSessionFromLog(
+          result,
+          !!options.forkSession,
+          setAppState,
         )
 
         // Write mode entry for the resumed session
@@ -5280,14 +5289,7 @@ async function loadInitialMessages(
           await resetSessionFilePointer()
         }
       }
-      restoreSessionStateFromLog(result, setAppState)
-
-      // Restore session metadata so it's re-appended on exit via reAppendSessionMetadata
-      restoreSessionMetadata(
-        options.forkSession
-          ? { ...result, worktreeSession: undefined }
-          : result,
-      )
+      restoreHeadlessSessionFromLog(result, !!options.forkSession, setAppState)
 
       // Write mode entry for the resumed session
       if (feature('COORDINATOR_MODE') && coordinatorModeModule) {

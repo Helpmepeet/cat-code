@@ -1,14 +1,26 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
+import { join } from 'node:path'
 import {
   createPendingDeferredContinuation,
   readPendingDeferredContinuation,
 } from '../services/deferredContinuation.js'
-import { resolveHeadlessDeferredContinuation } from './print.js'
+import type { AppState } from '../state/AppState.js'
+import {
+  reAppendSessionMetadata,
+  resetProjectForTesting,
+  setSessionFileForTesting,
+} from '../utils/sessionStorage.js'
+import type { ThreadGoal } from '../utils/threadGoal.js'
+import {
+  resolveHeadlessDeferredContinuation,
+  restoreHeadlessSessionFromLog,
+} from './print.js'
 
 const cleanup: string[] = []
 
 afterEach(async () => {
+  resetProjectForTesting()
   await Promise.all(
     cleanup.splice(0).map(path => rm(path, { recursive: true, force: true })),
   )
@@ -16,6 +28,16 @@ afterEach(async () => {
 
 const NOW = 1_700_000_000_000
 const SESSION_ID = '44444444-4444-4444-8444-444444444444'
+const SOURCE_GOAL: ThreadGoal = {
+  threadId: SESSION_ID,
+  goalId: 'source-goal',
+  objective: 'finish the source session',
+  status: 'active',
+  tokensUsed: 1_000,
+  timeUsedSeconds: 60,
+  createdAtMs: NOW,
+  updatedAtMs: NOW,
+}
 
 function deferredJob() {
   return {
@@ -54,6 +76,45 @@ async function withStore(fn: () => Promise<void>): Promise<void> {
 }
 
 describe('headless resume against a deferred continuation', () => {
+  test('fork starts goal-free while ordinary resume retains the source goal', async () => {
+    let state = { threadGoal: null } as AppState
+    const setAppState = (update: (prev: AppState) => AppState) => {
+      state = update(state)
+    }
+
+    restoreHeadlessSessionFromLog(
+      { threadGoal: SOURCE_GOAL },
+      false,
+      setAppState,
+    )
+    expect(state.threadGoal).toEqual(SOURCE_GOAL)
+
+    resetProjectForTesting()
+    const root = await mkdtemp('/tmp/cat-code-headless-fork-goal-')
+    cleanup.push(root)
+    const forkTranscript = join(root, 'fork.jsonl')
+    setSessionFileForTesting(forkTranscript)
+
+    restoreHeadlessSessionFromLog(
+      { threadGoal: SOURCE_GOAL },
+      true,
+      setAppState,
+    )
+    expect(state.threadGoal).toBeNull()
+
+    reAppendSessionMetadata()
+    const metadataEntries = (await Bun.file(forkTranscript).text())
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as { type: string })
+    expect(metadataEntries.map(entry => entry.type)).toContain(
+      'thread-goal-cleared',
+    )
+    expect(metadataEntries.map(entry => entry.type)).not.toContain(
+      'thread-goal-updated',
+    )
+  })
+
   // A headless run is a human turn. Merely probing the lock and releasing it
   // left the job pending, so a worker becoming due mid-run appended to the same
   // transcript this process was writing.

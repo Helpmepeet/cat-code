@@ -29,7 +29,7 @@ import { checkCrossProjectResume } from '../utils/crossProjectResume.js';
 import type { FileHistorySnapshot } from '../utils/fileHistory.js';
 import { logError } from '../utils/log.js';
 import { createSystemMessage } from '../utils/messages.js';
-import { checkDeferredContinuationResume, computeStandaloneAgentContext, restoreAgentFromSession, restoreWorktreeForResume, withDeferredContinuationResumeAuthority } from '../utils/sessionRestore.js';
+import { checkDeferredContinuationResume, computeStandaloneAgentContext, prepareSessionRestoreResult, restoreAgentFromSession, restoreWorktreeForResume, withDeferredContinuationResumeAuthority } from '../utils/sessionRestore.js';
 import { adoptResumedSessionFile, enrichLogs, isCustomTitleEnabled, loadAllProjectsMessageLogsProgressive, loadSameRepoMessageLogsProgressive, recordContentReplacement, resetSessionFilePointer, restoreSessionMetadata, type SessionLogResult } from '../utils/sessionStorage.js';
 import type { ThinkingConfig } from '../utils/thinking.js';
 import type { ContentReplacementRecord } from '../utils/toolResultStorage.js';
@@ -272,10 +272,12 @@ export function ResumeConversation({
         }));
       }
       void updateSessionName(result_3.agentName);
-      restoreSessionMetadata(forkSession ? {
-        ...result_3,
-        worktreeSession: undefined
-      } : result_3);
+      const restoreResult = prepareSessionRestoreResult(result_3, !!forkSession);
+      setAppState(prev_3 => ({
+        ...prev_3,
+        threadGoal: restoreResult.threadGoal ?? null
+      }));
+      restoreSessionMetadata(restoreResult);
       if (!forkSession) {
         const adopt = () => {
           restoreWorktreeForResume(result_3.worktreeSession);
