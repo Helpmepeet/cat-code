@@ -26,11 +26,48 @@ import { setCwd } from '../utils/Shell.js'
 import { jsonStringify } from '../utils/slowOperations.js'
 import { getErrorParts } from '../utils/toolErrors.js'
 import { zodToJsonSchema } from '../utils/zodToJsonSchema.js'
+import {
+  formatFileReadTextForModel,
+  type Output as FileReadOutput,
+} from '../tools/FileReadTool/FileReadTool.js'
+import { FILE_READ_TOOL_NAME } from '../tools/FileReadTool/prompt.js'
 
 type ToolInput = Tool['inputSchema']
 type ToolOutput = Tool['outputSchema']
 
 const MCP_COMMANDS: Command[] = [review]
+
+/**
+ * MCP normally returns a tool's structured data as JSON. Text Reads are the
+ * exception: their ordinary execution path adds line gutters and continuation
+ * guidance from private side-channel state, so use its shared formatter.
+ */
+export function serializeMcpToolResult(
+  toolName: string,
+  finalResult: { data: unknown } | string,
+): string {
+  if (
+    toolName === FILE_READ_TOOL_NAME &&
+    typeof finalResult !== 'string' &&
+    isTextFileReadOutput(finalResult.data)
+  ) {
+    return formatFileReadTextForModel(finalResult.data)
+  }
+  return typeof finalResult === 'string'
+    ? finalResult
+    : jsonStringify(finalResult.data)
+}
+
+function isTextFileReadOutput(
+  data: unknown,
+): data is Extract<FileReadOutput, { type: 'text' }> {
+  return (
+    typeof data === 'object' &&
+    data !== null &&
+    'type' in data &&
+    data.type === 'text'
+  )
+}
 
 export async function startMCPServer(
   cwd: string,
@@ -161,10 +198,7 @@ export async function startMCPServer(
           content: [
             {
               type: 'text' as const,
-              text:
-                typeof finalResult === 'string'
-                  ? finalResult
-                  : jsonStringify(finalResult.data),
+              text: serializeMcpToolResult(name, finalResult),
             },
           ],
         }

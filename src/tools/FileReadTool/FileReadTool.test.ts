@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { getAutoMemPath } from '../../memdir/paths.js'
+import { getFileIdentity } from '../../utils/file.js'
 import {
   createFileStateCacheWithSizeLimit,
   isCompleteUnboundedRead,
@@ -396,9 +397,11 @@ describe('whole-file Write authorization provenance', () => {
       createAssistantMessage({ content: [] }),
     )
 
-    expect(
-      isCompleteUnboundedRead(visibleContext.readFileState.get(filePath)),
-    ).toBe(true)
+    const visibleState = visibleContext.readFileState.get(filePath)
+    expect(isCompleteUnboundedRead(visibleState)).toBe(true)
+    expect(visibleState?.fileIdentity?.canonicalPath).toBe(
+      getFileIdentity(filePath).canonicalPath,
+    )
   })
 })
 

@@ -1,5 +1,6 @@
 import { LRUCache } from 'lru-cache'
 import { normalize } from 'path'
+import type { FileIdentity } from './file.js'
 
 export type FileState = {
   content: string
@@ -22,6 +23,9 @@ export type FileState = {
   // isPartialView, which also gates Read's dedup — a truncated read is still a
   // valid dedup target, it just isn't proof the model saw the whole file.
   isTruncatedView?: boolean
+  // Captured alongside a Read. FileWrite uses it only with model-visible,
+  // complete reads and rechecks it just before replacing the file.
+  fileIdentity?: FileIdentity
 }
 
 /**

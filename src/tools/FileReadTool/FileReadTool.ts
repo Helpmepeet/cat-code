@@ -32,8 +32,10 @@ import { getClaudeConfigHomeDir, isEnvTruthy } from '../../utils/envUtils.js'
 import { getErrnoCode, isENOENT } from '../../utils/errors.js'
 import {
   addLineNumbers,
+  fileIdentitiesEqual,
   FILE_NOT_FOUND_CWD_NOTE,
   findSimilarFile,
+  getFileIdentity,
   getFileModificationTimeAsync,
   suggestPathUnderCwd,
 } from '../../utils/file.js'
@@ -708,25 +710,10 @@ export const FileReadTool = buildTool({
           content: FILE_UNCHANGED_STUB,
         }
       case 'text': {
-        let content: string
-
-        if (data.file.content) {
-          content =
-            memoryFileFreshnessPrefix(data) +
-            formatFileLines(data.file) +
-            partialReadNotice(data)
-        } else {
-          // Determine the appropriate warning message
-          content =
-            data.file.totalLines === 0
-              ? '<system-reminder>Warning: the file exists but the contents are empty.</system-reminder>'
-              : `<system-reminder>Warning: the file exists but is shorter than the provided offset (${data.file.startLine}). The file has ${data.file.totalLines} lines.</system-reminder>`
-        }
-
         return {
           tool_use_id: toolUseID,
           type: 'tool_result',
-          content,
+          content: formatFileReadTextForModel(data),
         }
       }
     }
@@ -740,6 +727,27 @@ function pickLineFormatInstruction(): string {
 /** Format file content with line numbers. */
 function formatFileLines(file: { content: string; startLine: number }): string {
   return addLineNumbers(file)
+}
+
+/**
+ * The model-facing representation of a text Read. Kept separate from the
+ * output schema because continuation guidance is presentation metadata, not
+ * a durable tool-result field. MCP uses this same formatter.
+ */
+export function formatFileReadTextForModel(
+  data: Extract<Output, { type: 'text' }>,
+): string {
+  if (data.file.content) {
+    return (
+      memoryFileFreshnessPrefix(data) +
+      formatFileLines(data.file) +
+      partialReadNotice(data)
+    )
+  }
+
+  return data.file.totalLines === 0
+    ? '<system-reminder>Warning: the file exists but the contents are empty.</system-reminder>'
+    : `<system-reminder>Warning: the file exists but is shorter than the provided offset (${data.file.startLine}). The file has ${data.file.totalLines} lines.</system-reminder>`
 }
 
 /**
@@ -782,6 +790,28 @@ const truncatedReads = new WeakSet<object>()
 
 /** Partial reads created to keep a token-overflow result usable. */
 const tokenTruncatedReads = new WeakSet<object>()
+
+function getFileIdentityIfAvailable(filePath: string) {
+  try {
+    return getFileIdentity(filePath)
+  } catch {
+    // A file can disappear or be retargeted while Read is in progress. Keep
+    // any useful result, but do not let it authorize a later replacement.
+    return undefined
+  }
+}
+
+function getStableFileIdentityIfAvailable(
+  filePath: string,
+  identityBeforeRead: ReturnType<typeof getFileIdentity> | undefined,
+) {
+  if (identityBeforeRead === undefined) return undefined
+  const identityAfterRead = getFileIdentityIfAvailable(filePath)
+  return identityAfterRead !== undefined &&
+    fileIdentitiesEqual(identityBeforeRead, identityAfterRead)
+    ? identityAfterRead
+    : undefined
+}
 
 function memoryFileFreshnessPrefix(data: object): string {
   const mtimeMs = memoryFileMtimes.get(data)
@@ -963,6 +993,7 @@ async function callInner(
 }> {
   // --- Notebook ---
   if (ext === 'ipynb') {
+    const identityBeforeRead = getFileIdentityIfAvailable(resolvedFilePath)
     const cells = await readNotebook(resolvedFilePath)
     const cellsJson = jsonStringify(cells)
 
@@ -982,12 +1013,17 @@ async function callInner(
 
     // Get mtime via async stat (single call, no prior existence check)
     const stats = await getFsImplementation().stat(resolvedFilePath)
+    const fileIdentity = getStableFileIdentityIfAvailable(
+      resolvedFilePath,
+      identityBeforeRead,
+    )
     readFileState.set(fullFilePath, {
       content: cellsJson,
       timestamp: Math.floor(stats.mtimeMs),
       offset,
       limit,
       ...(messageId !== undefined ? { isWriteAuthorizedRead: true } : {}),
+      ...(fileIdentity !== undefined ? { fileIdentity } : {}),
     })
     context.nestedMemoryAttachmentTriggers?.add(fullFilePath)
 
@@ -1161,6 +1197,7 @@ async function callInner(
   }
 
   // --- Text file (single async read via readFileInRange) ---
+  const identityBeforeRead = getFileIdentityIfAvailable(resolvedFilePath)
   const lineOffset = offset === 0 ? 0 : offset - 1
   // The prompt promises a default line cap; apply it. Without this a no-limit
   // read selects the whole file and only then discovers it blew maxTokens,
@@ -1263,12 +1300,17 @@ async function callInner(
     truncated = true
   }
 
+  const fileIdentity = getStableFileIdentityIfAvailable(
+    resolvedFilePath,
+    identityBeforeRead,
+  )
   readFileState.set(fullFilePath, {
     content,
     timestamp: Math.floor(mtimeMs),
     offset,
     limit,
     ...(messageId !== undefined ? { isWriteAuthorizedRead: true } : {}),
+    ...(fileIdentity !== undefined ? { fileIdentity } : {}),
     // A line-capped default or token-capped range is not a complete-file view.
     ...(truncated ? { isTruncatedView: true } : {}),
   })

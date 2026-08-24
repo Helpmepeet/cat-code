@@ -34,6 +34,49 @@ export type File = {
 }
 
 /**
+ * The canonical filesystem object and version a Read observed.  A whole-file
+ * Write is allowed only when this still names the same object immediately
+ * before replacement; an mtime alone cannot detect a symlink retarget or a
+ * delete-and-recreate race.
+ */
+export type FileIdentity = {
+  canonicalPath: string
+  device: number
+  inode: number
+  size: number
+  modifiedAtMs: number
+  changedAtMs: number
+}
+
+export function getFileIdentity(filePath: string): FileIdentity {
+  const fs = getFsImplementation()
+  const canonicalPath = fs.realpathSync(filePath)
+  const stats = fs.statSync(canonicalPath)
+  return {
+    canonicalPath,
+    device: stats.dev,
+    inode: stats.ino,
+    size: stats.size,
+    modifiedAtMs: stats.mtimeMs,
+    changedAtMs: stats.ctimeMs,
+  }
+}
+
+export function fileIdentitiesEqual(
+  first: FileIdentity,
+  second: FileIdentity,
+): boolean {
+  return (
+    first.canonicalPath === second.canonicalPath &&
+    first.device === second.device &&
+    first.inode === second.inode &&
+    first.size === second.size &&
+    first.modifiedAtMs === second.modifiedAtMs &&
+    first.changedAtMs === second.changedAtMs
+  )
+}
+
+/**
  * Check if a path exists asynchronously.
  */
 export async function pathExists(path: string): Promise<boolean> {
@@ -95,6 +138,72 @@ export function writeTextContent(
   }
 
   writeFileSyncAndFlush_DEPRECATED(filePath, toWrite, { encoding })
+}
+
+/**
+ * Atomically replaces the exact canonical file a prior Read authorized.
+ * Returns false when that identity changed before the final mutation.  With
+ * no identity this creates only if the destination is still absent, so a file
+ * that appeared after validation is never overwritten.
+ */
+export function writeTextContentWithVerifiedIdentity(
+  filePath: string,
+  content: string,
+  encoding: BufferEncoding,
+  endings: LineEndingType,
+  expectedIdentity: FileIdentity | undefined,
+): boolean {
+  let toWrite = content
+  if (endings === 'CRLF') {
+    toWrite = content.replaceAll('\r\n', '\n').split('\n').join('\r\n')
+  }
+
+  const fs = getFsImplementation()
+  let targetPath = filePath
+  let targetMode: number | undefined
+
+  if (expectedIdentity !== undefined) {
+    const currentIdentity = getFileIdentity(filePath)
+    if (!fileIdentitiesEqual(expectedIdentity, currentIdentity)) return false
+    // Write directly to the target observed by Read. Re-resolving filePath in
+    // the write helper would let a retargeted symlink redirect this mutation.
+    targetPath = expectedIdentity.canonicalPath
+    targetMode = fs.statSync(targetPath).mode
+  }
+
+  const tempPath = `${targetPath}.tmp.${process.pid}.${Date.now()}`
+  try {
+    fsWriteFileSync(tempPath, toWrite, {
+      encoding,
+      flush: true,
+      // A predictable temp name must still never follow an attacker-created
+      // symlink. Retrying is unnecessary: callers can safely try again.
+      flag: 'wx',
+    })
+    if (targetMode !== undefined) chmodSync(tempPath, targetMode)
+
+    if (expectedIdentity === undefined) {
+      // link(2) atomically fails with EEXIST. rename would overwrite a file
+      // that appeared between the missing-file check and this write.
+      fs.linkSync(tempPath, filePath)
+      fs.unlinkSync(tempPath)
+      return true
+    }
+
+    // The temp file can take time to write, so check the version again at the
+    // final mutation boundary. Node has no compare-and-swap rename primitive;
+    // this is the narrowest atomic replacement it exposes.
+    const currentIdentity = getFileIdentity(filePath)
+    if (!fileIdentitiesEqual(expectedIdentity, currentIdentity)) return false
+    fs.renameSync(tempPath, targetPath)
+    return true
+  } finally {
+    try {
+      fs.unlinkSync(tempPath)
+    } catch {
+      // Successful rename/link consumes the temp path. Nothing remains to do.
+    }
+  }
 }
 
 export function detectFileEncoding(filePath: string): BufferEncoding {

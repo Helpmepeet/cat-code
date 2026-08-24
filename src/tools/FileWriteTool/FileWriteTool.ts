@@ -23,7 +23,12 @@ import {
 } from '../../utils/diff.js'
 import { isEnvTruthy } from '../../utils/envUtils.js'
 import { isENOENT } from '../../utils/errors.js'
-import { getFileModificationTime, writeTextContent } from '../../utils/file.js'
+import {
+  fileIdentitiesEqual,
+  getFileIdentity,
+  getFileModificationTime,
+  writeTextContentWithVerifiedIdentity,
+} from '../../utils/file.js'
 import { isCompleteUnboundedRead } from '../../utils/fileStateCache.js'
 import {
   fileHistoryEnabled,
@@ -192,11 +197,9 @@ export const FileWriteTool = buildTool({
       return { result: true }
     }
 
-    const fs = getFsImplementation()
-    let fileMtimeMs: number
+    let currentIdentity: ReturnType<typeof getFileIdentity>
     try {
-      const fileStat = await fs.stat(fullFilePath)
-      fileMtimeMs = fileStat.mtimeMs
+      currentIdentity = getFileIdentity(fullFilePath)
     } catch (e) {
       if (isENOENT(e)) {
         return { result: true }
@@ -214,10 +217,19 @@ export const FileWriteTool = buildTool({
       }
     }
 
-    // Reuse mtime from the stat above — avoids a redundant statSync via
-    // getFileModificationTime. The readTimestamp guard above ensures this
-    // block is always reached when the file exists.
-    const lastWriteTime = Math.floor(fileMtimeMs)
+    if (
+      readTimestamp.fileIdentity === undefined ||
+      !fileIdentitiesEqual(readTimestamp.fileIdentity, currentIdentity)
+    ) {
+      return {
+        result: false,
+        message:
+          'File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.',
+        errorCode: 3,
+      }
+    }
+
+    const lastWriteTime = Math.floor(currentIdentity.modifiedAtMs)
     if (lastWriteTime > readTimestamp.timestamp) {
       return {
         result: false,
@@ -286,21 +298,17 @@ export const FileWriteTool = buildTool({
     }
 
     if (meta !== null) {
-      const lastWriteTime = getFileModificationTime(fullFilePath)
       const lastRead = readFileState.get(fullFilePath)
       // Recheck the same whole-file-read condition used at permission time:
       // another tool call can replace the cache entry while this write waits.
       if (!isCompleteUnboundedRead(lastRead)) {
         throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
       }
-      if (lastWriteTime > lastRead.timestamp) {
-        // Timestamp indicates modification, but on Windows timestamps can change
-        // without content changes (cloud sync, antivirus, etc.). For full reads,
-        // compare content as a fallback to avoid false positives.
-        // meta.content is CRLF-normalized — matches readFileState's normalized form.
-        if (meta.content !== lastRead.content) {
-          throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
-        }
+      if (
+        lastRead.fileIdentity === undefined ||
+        !fileIdentitiesEqual(lastRead.fileIdentity, getFileIdentity(fullFilePath))
+      ) {
+        throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
       }
     }
 
@@ -312,7 +320,16 @@ export const FileWriteTool = buildTool({
     // the old file's line endings (or sampled the repo via ripgrep for new
     // files), which silently corrupted e.g. bash scripts with \r on Linux when
     // overwriting a CRLF file or when binaries in cwd poisoned the repo sample.
-    writeTextContent(fullFilePath, content, enc, 'LF')
+    const didWrite = writeTextContentWithVerifiedIdentity(
+      fullFilePath,
+      content,
+      enc,
+      'LF',
+      meta === null ? undefined : readFileState.get(fullFilePath)?.fileIdentity,
+    )
+    if (!didWrite) {
+      throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
+    }
 
     // Notify LSP servers about file modification (didChange) and save (didSave)
     const lspManager = getLspServerManager()

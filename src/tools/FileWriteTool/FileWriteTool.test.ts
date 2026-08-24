@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { getEmptyToolPermissionContext } from '../../Tool.js'
+import { getFileIdentity } from '../../utils/file.js'
 import { createFileStateCacheWithSizeLimit } from '../../utils/fileStateCache.js'
 import { FileWriteTool } from './FileWriteTool.js'
 
@@ -38,6 +39,7 @@ function createContext(state: {
     offset: state.offset ?? 1,
     limit: state.limit,
     isWriteAuthorizedRead: state.isWriteAuthorizedRead ?? true,
+    fileIdentity: getFileIdentity(state.filePath),
     ...(state.isTruncatedView ? { isTruncatedView: true } : {}),
   })
   return {
@@ -98,5 +100,23 @@ describe('read-before-write gate', () => {
 
     expect(result.result).toBe(false)
     expect(result.message).toContain('not been read completely')
+  })
+
+  test('rejects a write when a symlink is retargeted after Read', async () => {
+    const authorizedTarget = writeFixture('authorized-target.txt')
+    const unreadTarget = writeFixture('unread-target.txt')
+    const filePath = join(tmpDir, 'retargeted-link.txt')
+    symlinkSync(authorizedTarget, filePath)
+    const context = createContext({ filePath })
+    unlinkSync(filePath)
+    symlinkSync(unreadTarget, filePath)
+
+    const result = await FileWriteTool.validateInput(
+      { file_path: filePath, content: 'replacement' },
+      context,
+    )
+
+    expect(result.result).toBe(false)
+    expect(result.message).toContain('modified since read')
   })
 })
