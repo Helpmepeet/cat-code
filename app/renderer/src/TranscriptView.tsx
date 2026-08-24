@@ -4334,6 +4334,16 @@ function UserBubble({
   onBranch?: () => void
 }) {
   const toast = useToast()
+  const [copied, setCopied] = useState(false)
+  const copiedResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(
+    () => () => {
+      if (copiedResetTimer.current !== null) {
+        clearTimeout(copiedResetTimer.current)
+      }
+    },
+    [],
+  )
   if (!onEdit) {
     return (
       <div className="flex justify-end">
@@ -4352,7 +4362,14 @@ function UserBubble({
     }
     void clipboard
       .writeText(content)
-      .then(() => toast('Message copied to clipboard', { tone: 'success' }))
+      .then(() => {
+        setCopied(true)
+        if (copiedResetTimer.current !== null) {
+          clearTimeout(copiedResetTimer.current)
+        }
+        copiedResetTimer.current = setTimeout(() => setCopied(false), 1300)
+        toast('Message copied to clipboard', { tone: 'success' })
+      })
       .catch(() =>
         toast('Could not write to the clipboard', { tone: 'warn' }),
       )
@@ -4367,10 +4384,28 @@ function UserBubble({
           type="button"
           onClick={copy}
           title="Copy message"
-          aria-label="Copy message"
-          className="inline-flex items-center justify-center rounded-md p-1 text-text-subtle transition-colors hover:bg-accent/15 hover:text-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          aria-label={copied ? 'Message copied' : 'Copy message'}
+          className={`inline-flex items-center justify-center rounded-md p-1 transition-colors hover:bg-accent/15 hover:text-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
+            copied ? 'text-[#86efac]' : 'text-text-subtle'
+          }`}
         >
-          <ActionCopyIcon />
+          {copied ? (
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden
+            >
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          ) : (
+            <ActionCopyIcon />
+          )}
         </button>
         <button
           type="button"

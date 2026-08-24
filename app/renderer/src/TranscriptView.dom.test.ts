@@ -223,6 +223,67 @@ async function click(element: HTMLElement | null | undefined): Promise<void> {
   })
 }
 
+test('a successful message copy briefly replaces the copy icon with a checkmark', async () => {
+  const clipboardWrites: string[] = []
+  const clipboardDescriptor = Object.getOwnPropertyDescriptor(
+    globalThis.navigator,
+    'clipboard',
+  )
+  Object.defineProperty(globalThis.navigator, 'clipboard', {
+    configurable: true,
+    value: {
+      writeText: async (content: string) => {
+        clipboardWrites.push(content)
+      },
+    },
+  })
+
+  try {
+    const tree = await harness.mount(
+      createElement(TranscriptRowsView, {
+        rows: [
+          {
+            ...blockSource,
+            id: 's:m:0:user-text',
+            kind: 'user-text',
+            role: 'user',
+            content: 'copy this message',
+            isReplay: false,
+          },
+        ],
+        onMessageAction: () => {},
+      }),
+    )
+    const copyButton = tree.container.querySelector<HTMLElement>(
+      '[aria-label="Copy message"]',
+    )
+
+    await act(async () => {
+      copyButton?.click()
+      await Promise.resolve()
+    })
+
+    expect(clipboardWrites).toEqual(['copy this message'])
+    const copiedButton = tree.container.querySelector<HTMLElement>(
+      '[aria-label="Message copied"]',
+    )
+    expect(copiedButton).not.toBeNull()
+    expect(
+      copiedButton?.querySelector('polyline[points="20 6 9 17 4 12"]'),
+    ).not.toBeNull()
+  } finally {
+    if (clipboardDescriptor) {
+      Object.defineProperty(
+        globalThis.navigator,
+        'clipboard',
+        clipboardDescriptor,
+      )
+    } else {
+      Reflect.deleteProperty(globalThis.navigator, 'clipboard')
+    }
+  }
+})
+
 /** Counts real `scroll` registrations on one element by shadowing its own. */
 function countScrollListeners(element: HTMLElement): () => number {
   let added = 0
