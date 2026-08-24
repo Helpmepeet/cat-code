@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { getAutoMemPath } from '../../memdir/paths.js'
 import {
   createFileStateCacheWithSizeLimit,
   isCompleteUnboundedRead,
@@ -398,5 +399,46 @@ describe('whole-file Write authorization provenance', () => {
     expect(
       isCompleteUnboundedRead(visibleContext.readFileState.get(filePath)),
     ).toBe(true)
+  })
+})
+
+describe('memory freshness token budget', () => {
+  test('includes a stale-memory reminder in the hard rendered limit', async () => {
+    const memoryDir = join(tmpDir, 'memory')
+    const filePath = join(memoryDir, 'stale.md')
+    mkdirSync(memoryDir, { recursive: true })
+    writeFileSync(filePath, `${'x'.repeat(100)}\n`.repeat(30), 'utf-8')
+    const old = new Date(Date.now() - 3 * 86_400_000)
+    utimesSync(filePath, old, old)
+
+    const priorDisable = process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY
+    const priorOverride = process.env.CLAUDE_COWORK_MEMORY_PATH_OVERRIDE
+    process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '0'
+    process.env.CLAUDE_COWORK_MEMORY_PATH_OVERRIDE = memoryDir
+    getAutoMemPath.cache.clear()
+
+    try {
+      const data = await readWith(createContext(1_000), filePath)
+      const rendered = FileReadTool.mapToolResultToToolResultBlockParam(
+        data,
+        'toolu-stale-memory',
+      )
+      const text = typeof rendered.content === 'string' ? rendered.content : ''
+
+      expect(text).toContain('days old')
+      expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(1_000)
+    } finally {
+      if (priorDisable === undefined) {
+        delete process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY
+      } else {
+        process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = priorDisable
+      }
+      if (priorOverride === undefined) {
+        delete process.env.CLAUDE_COWORK_MEMORY_PATH_OVERRIDE
+      } else {
+        process.env.CLAUDE_COWORK_MEMORY_PATH_OVERRIDE = priorOverride
+      }
+      getAutoMemPath.cache.clear()
+    }
   })
 })
