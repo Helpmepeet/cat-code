@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto'
 import { escapeXml } from './xml.js'
 import {
+  getThreadGoalLifecycleClass,
   isResumableThreadGoalStatus,
   isSchedulableThreadGoalStatus,
   isSuccessfulThreadGoalStatus,
@@ -223,6 +224,7 @@ export type ParsedGoalCommand =
   | { type: 'replace'; objective: string; tokenBudget?: number }
   | { type: 'set'; objective: string; tokenBudget?: number }
   | { type: 'require'; criterionId: string; verifyCommand: string }
+  | { type: 'expect'; criterionId: string; description: string }
   | { type: 'unrequire'; criterionId: string }
   | { type: 'error'; message: string }
 
@@ -234,6 +236,7 @@ const GOAL_USAGE =
   '  /goal replace <objective>\n' +
   '  /goal replace --budget N <objective>\n' +
   '  /goal require <name> <command>\n' +
+  '  /goal expect <name> <what must be true>\n' +
   '  /goal unrequire <name>\n' +
   '  /goal pause\n' +
   '  /goal resume\n' +
@@ -525,6 +528,30 @@ export function parseGoalCommand(rawArgs?: string): ParsedGoalCommand {
     }
   }
 
+  if (trimmedArgs === 'expect') {
+    return usageError('Error: /goal expect needs a name and what must be true.')
+  }
+
+  const expectMatch = trimmedArgs.match(/^expect\s+([\s\S]+)$/)
+  if (expectMatch) {
+    const split = splitFirstWhitespaceSeparatedToken(expectMatch[1]!.trim())
+    if (!split || !split.remainder) {
+      return usageError(
+        'Error: /goal expect needs a name and what must be true, for example: /goal expect guide the migration guide explains the breaking change.',
+      )
+    }
+    if (!/^[\w.-]+$/.test(split.token)) {
+      return usageError(
+        'Error: A requirement name can only contain letters, numbers, dots, dashes, and underscores.',
+      )
+    }
+    return {
+      type: 'expect',
+      criterionId: split.token,
+      description: split.remainder,
+    }
+  }
+
   const unrequireMatch = trimmedArgs.match(/^unrequire\s+([\s\S]+)$/)
   if (unrequireMatch) {
     const name = unrequireMatch[1]!.trim()
@@ -665,7 +692,13 @@ export function updateThreadGoalStatus(
     // A resume opens a fresh continuation window and clears the failure and
     // no-progress streaks that stopped the previous one. Without this, a goal
     // resumed after `stalled` would stall again on its very next turn.
-    ...(status === 'active' && goal.status !== 'active'
+    // A fresh window opens only when leaving a STOPPED status, i.e. a real
+    // resume. Unparking from `waiting` is the scheduler's own move on a goal
+    // that never stopped, and resetting there handed every park/unpark cycle a
+    // brand new turn and time budget, defeating the one ceiling that bounds an
+    // unbudgeted goal.
+    ...(status === 'active' &&
+    getThreadGoalLifecycleClass(goal.status) === 'stopped'
       ? {
           continuationTurns: 0,
           consecutiveNoProgressTurns: 0,
@@ -789,7 +822,8 @@ export function accountThreadGoalTurn(
           ? 'turn_budget_exhausted'
           : accounted.timeUsedSeconds >= accounted.maxWallClockSeconds
             ? 'time_budget_exhausted'
-            : (accounted.childAgentIds?.length ?? 0) > accounted.maxChildAgents
+            : (accounted.childAgentIds?.length ?? 0) >=
+                accounted.maxChildAgents
               ? 'subagent_budget_exhausted'
               : consecutiveNoProgressTurns >= accounted.maxNoProgressTurns
                 ? 'no_progress'
@@ -812,6 +846,9 @@ export function accountThreadGoalTurn(
       status: nextStatus,
       statusReason: stoppedBy,
       statusChangedAtMs: nowMs,
+      // A goal that stopped is no longer parked. Leaving the wait behind left
+      // a stale deadline on a stopped goal that could later "time out".
+      wait: null,
     },
     stoppedBy,
   }

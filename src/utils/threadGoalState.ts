@@ -38,6 +38,7 @@ export type ThreadGoalStatusReason =
   | 'created'
   | 'user_paused'
   | 'user_resumed'
+  | 'dependency_resolved'
   | 'user_replaced'
   | 'turn_aborted'
   | 'agent_reported_blocked'
@@ -255,6 +256,7 @@ const STATUS_REASONS: readonly ThreadGoalStatusReason[] = [
   'created',
   'user_paused',
   'user_resumed',
+  'dependency_resolved',
   'user_replaced',
   'turn_aborted',
   'agent_reported_blocked',

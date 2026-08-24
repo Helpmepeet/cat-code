@@ -147,15 +147,26 @@ export function attachThreadGoalScheduler({
     // the turn first, which this then observes.
     canStartAutomaticTurn: () => !activeTurn,
     getUnresolvedDependencies: () => dependencies.read(),
+    scheduleWake: (delayMs, run) => {
+      const handle = setTimeout(run, delayMs)
+      // Never hold the process open for a goal deadline.
+      handle.unref?.()
+      return () => clearTimeout(handle)
+    },
     ...(isAgentMode ? { isAgentMode } : {}),
     ...(hasExternalScheduler ? { hasExternalScheduler } : {}),
-    startTurn: ({ prompt }) => {
-      // Fire and forget: submit resolves when the TURN ends, and awaiting it
-      // would keep the wake in flight for the whole turn. Failures surface as
-      // the turn ending with no result, which settle already handles.
-      void Promise.resolve(
-        controller.submit(prompt, { isMeta: true }),
-      ).catch(() => {})
+    startTurn: ({ prompt, attemptId }) => {
+      // Not awaited: submit resolves when the TURN ends, and awaiting it would
+      // hold the wake open for the whole turn. But a submit can reject
+      // SYNCHRONOUSLY ("Session turn already running") before any turn.status
+      // is emitted, in which case endTurn never runs and the in-memory
+      // `running` guard would stay set for the life of the process with no
+      // reclaim path. Releasing the attempt in the catch closes that.
+      void Promise.resolve(controller.submit(prompt, { isMeta: true })).catch(
+        () => {
+          scheduler.release(attemptId)
+        },
+      )
       return true
     },
   })

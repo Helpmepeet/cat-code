@@ -10,6 +10,9 @@ import {
   type ThreadGoalRunningAttempt,
 } from '../utils/threadGoalScheduler.js'
 import { sumRealThreadGoalUsage } from '../utils/threadGoalUsage.js'
+import { isRateLimitErrorMessage } from '../services/rateLimitMessages.js'
+import { detectThreadGoalRepetition } from '../utils/threadGoalRepetition.js'
+import { collectThreadGoalToolCalls } from '../utils/threadGoalToolCalls.js'
 
 /**
  * The goal loop for headless (`-p`) runs.
@@ -56,6 +59,9 @@ export function createHeadlessGoalLoop({
   let runningAttempt: ThreadGoalRunningAttempt | null = null
   let turnStartMs = Date.now()
   let idleSequence = 0
+  // Where this turn's messages begin. Bounds the usage walk to the turn, so a
+  // long run cannot re-charge responses that aged out of the charged ledger.
+  let turnMessageStartIndex = 0
 
   const scheduler = createThreadGoalScheduler({
     ownerId: `headless:${getSessionId()}`,
@@ -89,8 +95,9 @@ export function createHeadlessGoalLoop({
 
       // Charge the turn that just ended before deciding anything, so a budget
       // or stall stop it triggers is already durable when the scheduler looks.
-      const usage = sumRealThreadGoalUsage(messages, chargedResponseIds)
-      const toolUseCount = messages.filter(
+      const turnMessages = messages.slice(turnMessageStartIndex)
+      const usage = sumRealThreadGoalUsage(turnMessages, chargedResponseIds)
+      const toolUseCount = turnMessages.filter(
         message =>
           message.type === 'assistant' &&
           Array.isArray(message.message?.content) &&
@@ -98,6 +105,39 @@ export function createHeadlessGoalLoop({
             block => (block as { type?: string }).type === 'tool_use',
           ),
       ).length
+
+      // How the turn ended, from the messages it produced. The terminal reads
+      // the same signal; without it `failed` and `usage_limited` were
+      // unreachable here.
+      let turnFailed = false
+      let turnUsageLimited = false
+      for (const message of turnMessages) {
+        if (
+          message.type !== 'assistant' ||
+          !('isApiErrorMessage' in message) ||
+          !message.isApiErrorMessage
+        ) {
+          continue
+        }
+        turnFailed = true
+        const text = Array.isArray(message.message?.content)
+          ? message.message.content
+              .map(block =>
+                (block as { type?: string; text?: string }).type === 'text'
+                  ? ((block as { text?: string }).text ?? '')
+                  : '',
+              )
+              .join('')
+          : ''
+        // A usage limit is not flaky: retrying cannot clear it, so it stops
+        // the goal outright rather than spending the retry allowance.
+        if (isRateLimitErrorMessage(text)) turnUsageLimited = true
+      }
+
+      const repetition = detectThreadGoalRepetition({
+        history: goal.callHistory ?? [],
+        calls: collectThreadGoalToolCalls(turnMessages),
+      })
 
       scheduler.settle({
         attempt: runningAttempt,
@@ -110,16 +150,28 @@ export function createHeadlessGoalLoop({
             0,
             Math.floor((Date.now() - turnStartMs) / 1000),
           ),
-          madeNoProgress: !didThreadGoalTurnMakeProgress({
-            continuationKind: runningAttempt?.kind ?? null,
-            toolUseCount,
-          }),
+          madeNoProgress:
+            !didThreadGoalTurnMakeProgress({
+              continuationKind: runningAttempt?.kind ?? null,
+              toolUseCount,
+            }) || repetition.repeatedEverything,
+          callHistory: repetition.nextHistory,
           childAgentIds: dependencies.readChildAgentIds(),
-          failed: false,
+          // Derived, not assumed. Hardcoding false made `failed` and
+          // `usage_limited` unreachable on -p: a goal whose every turn errored
+          // burned its whole ceiling, and a provider 429 was retried instead
+          // of stopping.
+          failed: turnFailed,
+          providerUsageLimited: turnUsageLimited,
         },
       })
       for (const id of usage.chargedResponseIds) chargedResponseIds.add(id)
       runningAttempt = null
+      // Advance on EVERY path, not just when a continuation is issued.
+      // Otherwise turn 2 of a streaming -p run charged elapsed-since-start
+      // again, and turn 3 again.
+      turnStartMs = Date.now()
+      turnMessageStartIndex = messages.length
 
       await dependencies.refresh()
 
@@ -132,7 +184,6 @@ export function createHeadlessGoalLoop({
 
       if (!pendingPrompt) return null
       runningAttempt = scheduler.getRunningAttempt()
-      turnStartMs = Date.now()
       return pendingPrompt
     },
   }

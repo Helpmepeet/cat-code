@@ -19,6 +19,18 @@ type IsMutuallyAssignable<Left, Right> = [Left] extends [Right]
 
 type Assert<Condition extends true> = Condition
 
+/**
+ * Mutual assignability cannot see a DROPPED OPTIONAL property: a snapshot
+ * missing `foo?: string` is still assignable both ways. `verifyCommand` went
+ * missing from the snapshot's ThreadGoalCriterion and the tripwire stayed
+ * green. Comparing key sets catches that.
+ */
+type SameKeys<Left, Right> = [keyof Left] extends [keyof Right]
+  ? [keyof Right] extends [keyof Left]
+    ? true
+    : false
+  : false
+
 export type EngineSnapshotDriftChecks = [
   Assert<IsMutuallyAssignable<SnapshotSDKMessage, CanonicalSDKMessage>>,
   Assert<IsMutuallyAssignable<SnapshotAppSessionEvent, CanonicalAppSessionEvent>>,

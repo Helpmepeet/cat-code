@@ -1,5 +1,6 @@
 import { feature } from 'bun:bundle';
 import { recordThreadGoalCommandEvidence } from '../../utils/threadGoalEvidenceRecorder.js'
+import { saveThreadGoal } from '../../utils/sessionStorage.js'
 import type { ToolResultBlockParam } from '@anthropic-ai/sdk/resources/index.mjs';
 import { copyFile, stat as fsStat, truncate as fsTruncate, link } from 'fs/promises';
 import * as React from 'react';
@@ -712,6 +713,40 @@ export const BashTool = buildTool({
       if (result.preSpawnError) {
         throw new Error(result.preSpawnError);
       }
+      // Goal evidence is recorded BEFORE the non-zero-exit throw below.
+      // Recording after it meant a FAILING check wrote nothing at all, so a
+      // red gate refused via "no evidence yet" instead of "this check is
+      // failing", and the don't-rerun-a-red-gate optimisation could never
+      // fire because failing evidence never existed.
+      //
+      // This observes a command the tool ALREADY ran under the normal
+      // permission and sandbox path. Nothing is executed here, so a goal
+      // grants no execution authority. The verdict is the real exit code and
+      // coverage comes from the user's contract, so neither is the model's to
+      // write. saveGoal writes BOTH the durable record and app state: the gate
+      // reads app state, and a save that skipped it left the evidence
+      // invisible and then clobbered by the next accounting write.
+      await recordThreadGoalCommandEvidence({
+        goal: getAppState().threadGoal ?? null,
+        outcome: {
+          command: input.command,
+          exitCode: result.code,
+          interrupted: result.interrupted,
+          output: outputWithSbFailures
+        },
+        saveGoal: nextGoal => {
+          saveThreadGoal(nextGoal);
+          setAppState(prev =>
+            prev.threadGoal?.goalId === nextGoal.goalId
+              ? { ...prev, threadGoal: nextGoal }
+              : prev
+          );
+        }
+      }).catch(() => {
+        // Evidence is an observation, never a reason to fail the command the
+        // user actually asked for.
+      });
+
       if (interpretationResult.isError && !isInterrupt) {
         // stderr is merged into stdout (merged fd); outputWithSbFailures
         // already has the full output. Pass '' for stdout to avoid
@@ -752,25 +787,6 @@ export const BashTool = buildTool({
         // File may already be gone — stdout preview is sufficient
       }
     }
-    // Goal evidence: observe the command this tool ALREADY ran under the
-    // normal permission and sandbox path. Nothing is executed here, so a goal
-    // grants no execution authority. The verdict is the real exit code and the
-    // coverage comes from the user's own contract, so neither is the model's
-    // to write. No-ops unless the session has a goal binding a criterion to
-    // this exact command.
-    void recordThreadGoalCommandEvidence({
-      goal: getAppState().threadGoal ?? null,
-      outcome: {
-        command: input.command,
-        exitCode: result.code,
-        interrupted: wasInterrupted,
-        output: stdout
-      }
-    }).catch(() => {
-      // Evidence is an observation, never a reason to fail the command the
-      // user actually asked for.
-    });
-
     const commandType = input.command.split(' ')[0];
     logEvent('tengu_bash_tool_command_executed', {
       command_type: commandType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,

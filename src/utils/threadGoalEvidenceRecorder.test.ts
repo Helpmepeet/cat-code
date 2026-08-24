@@ -116,6 +116,59 @@ describe('recording command evidence', () => {
     expect(record!.outputDigest.length).toBeGreaterThan(0)
   })
 
+  test('a failing command records a red verdict, not nothing', async () => {
+    // BashTool throws on any non-zero exit. When the seam sat after that
+    // throw, a failing check wrote NOTHING, so the gate refused with "no
+    // evidence yet" instead of "this check is failing", and the
+    // don't-rerun-a-red-gate path could never fire.
+    const r = recorder(gatedGoal())
+    const record = await r.run({ command: 'bun test app/', exitCode: 1 })
+
+    expect(record).not.toBeNull()
+    expect(record!.outcome).toBe('fail')
+    expect(r.getSaved()!.evidence).toHaveLength(1)
+  })
+
+  test('evidence is visible to the gate through the store the gate reads', async () => {
+    // The seam that was broken: the recorder persisted durably while the gate
+    // read app state, so a passing check was invisible and then clobbered.
+    // This mirrors the BashTool saveGoal, which writes BOTH.
+    const goal = gatedGoal()
+    let durable: ThreadGoal | null = null
+    let appState: ThreadGoal | null = goal
+
+    await recordThreadGoalCommandEvidence({
+      goal: appState,
+      outcome: {
+        command: 'bun test app/',
+        exitCode: 0,
+        interrupted: false,
+        output: '',
+      },
+      saveGoal: next => {
+        durable = next
+        appState = next
+      },
+      now: () => 500,
+    })
+
+    expect(durable).not.toBeNull()
+    expect(appState!.evidence).toHaveLength(1)
+    // Both stores agree, which is what stops the next accounting write from
+    // spreading an empty ledger back over the durable record.
+    expect(appState!.evidence).toEqual(durable!.evidence)
+
+    const fingerprint = await getThreadGoalWorkspaceFingerprint()
+    expect(
+      evaluateThreadGoalCompletion({
+        contract: appState!.contract,
+        evidence: appState!.evidence,
+        contractDigest: hashThreadGoalContract(goal.objective, goal.contract),
+        workspaceFingerprint: fingerprint,
+      }),
+    ).toMatchObject({ allowed: true, reason: 'all_required_proven' })
+  })
+
   test('a recorded pass actually unblocks the completion gate', async () => {
     // End to end: run the user's command, and the gate that previously refused
     // completion now allows it. Proves the ledger and the gate agree.

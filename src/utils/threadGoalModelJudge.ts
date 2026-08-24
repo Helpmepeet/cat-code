@@ -112,6 +112,12 @@ export function createThreadGoalModelJudge(options?: {
         // in a module that does not exist on disk (src/constants/querySource.ts),
         // so the type degrades to `any` and this string is not checked.
         querySource: 'goal_verification',
+        // Pinned. resolveRequestProvider only derives a provider from gpt-*
+        // model ids; anything else falls through to the SESSION provider, so
+        // on a Codex session this Claude model id was routed to the Codex
+        // backend, failed, and blocked completion. insights.ts and mcp.ts pin
+        // it for the same reason.
+        provider: 'firstParty',
         model: options?.model ?? getDefaultSonnetModel(),
         system: JUDGE_SYSTEM_PROMPT,
         messages: [

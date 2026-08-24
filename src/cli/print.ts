@@ -2507,7 +2507,16 @@ function runHeadlessStreaming(
           // outstanding, which is where the terminal would consider a goal
           // continuation. Asked LAST so real queued input and running tasks
           // always outrank automatic continuation.
-          if (!hasRunningBg && !hasMainThreadQueued && headlessGoalLoop) {
+          // `isShuttingDown()` is load-bearing: SIGINT aborts the query and
+          // ask() returns normally, so without this the drain completes, a
+          // fresh continuation is enqueued, and Ctrl-C starts another model
+          // turn instead of stopping.
+          if (
+            !hasRunningBg &&
+            !hasMainThreadQueued &&
+            headlessGoalLoop &&
+            !isShuttingDown()
+          ) {
             const continuation =
               await headlessGoalLoop.nextContinuation(mutableMessages)
             if (continuation) {

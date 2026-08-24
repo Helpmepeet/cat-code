@@ -34,7 +34,10 @@
  */
 
 import { useRef, useState, type ReactNode } from 'react'
-import type { TasksSnapshot } from '../../shared/protocol.js'
+import type {
+  TasksSnapshot,
+  ThreadGoalSnapshot,
+} from '../../shared/protocol.js'
 import type { SessionMetadataView } from './messageMetadata.js'
 import {
   selectMessageMetadata,
@@ -70,11 +73,30 @@ const ROLE_TONE: Record<string, Tone> = {
   result: 'good',
 }
 
-const GOAL_TONE: Record<string, Tone> = {
+// Keyed by the real union so tsc catches a new status, and labelled so the
+// engine's snake_case tokens never reach the screen as internal vocabulary.
+const GOAL_TONE: Record<ThreadGoalSnapshot['status'], Tone> = {
   active: 'good',
+  waiting: 'default',
   paused: 'warn',
+  blocked: 'warn',
+  stalled: 'warn',
   budget_limited: 'warn',
+  usage_limited: 'warn',
+  failed: 'danger',
   complete: 'info',
+}
+
+const GOAL_STATUS_LABEL: Record<ThreadGoalSnapshot['status'], string> = {
+  active: 'active',
+  waiting: 'waiting',
+  paused: 'paused',
+  blocked: 'blocked',
+  stalled: 'stalled',
+  budget_limited: 'budget limited',
+  usage_limited: 'usage limited',
+  failed: 'failed',
+  complete: 'complete',
 }
 
 export function MetadataInspector({
@@ -608,8 +630,11 @@ function RolePill({ role, subtype }: { role: string; subtype: string | null }) {
 }
 
 function GoalStatus({ status }: { status: string }) {
-  const t = toneClasses(GOAL_TONE[status] ?? 'default')
-  return <span className={t.text}>{status}</span>
+  const known = status as ThreadGoalSnapshot['status']
+  // Tolerant fallback for a status from a newer engine: neutral tone, and the
+  // label reads as unknown rather than borrowing a success or running look.
+  const t = toneClasses(GOAL_TONE[known] ?? 'default')
+  return <span className={t.text}>{GOAL_STATUS_LABEL[known] ?? 'unknown'}</span>
 }
 
 function Section({

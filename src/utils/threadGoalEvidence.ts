@@ -17,9 +17,16 @@ import { hashContent } from './hash.js'
  *    not exist proves nothing, because coverage is intersected with the
  *    contract rather than trusted.
  *
- * 2. Nothing raw is persisted. A command line can carry a token and command
- *    output can carry private diagnostics, and evidence is projected to the
- *    desktop, so only digests and a caller-sanitised label are stored.
+ * 2. Command OUTPUT is never persisted, only its digest: output can carry
+ *    private diagnostics and is the part neither the user nor the model
+ *    inspected before it was recorded.
+ *
+ *    The `label`, by contrast, IS the user's own declared verifyCommand,
+ *    verbatim. It is shown on the goal card and included in the judge bundle.
+ *    Nothing sanitises it and `secretGuard` matches key names rather than
+ *    values, so a credential typed into `/goal require` is persisted and sent
+ *    to the judge. That is the user's own text rather than model- or
+ *    output-derived, but it is not the same as "nothing raw is stored".
  */
 
 export type ThreadGoalCriterion = {

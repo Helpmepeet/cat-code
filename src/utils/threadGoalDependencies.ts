@@ -23,10 +23,7 @@ export async function getUnresolvedThreadGoalDependencies(): Promise<
   if (!sessionState) return []
 
   return sessionState.knownWorkers
-    .filter(
-      worker =>
-        worker.status === 'running' || worker.synthesisStatus === 'pending',
-    )
+    .filter(worker => worker.status === 'running')
     .map(worker => ({
       kind: 'worker' as const,
       subjectId: worker.agentId,
@@ -66,11 +63,12 @@ export function createThreadGoalDependencyCache(): {
         // is still fanning out without bound.
         childAgentIds = workers.map(worker => worker.agentId)
         current = workers
-          .filter(
-            worker =>
-              worker.status === 'running' ||
-              worker.synthesisStatus === 'pending',
-          )
+          // ONLY genuinely running work. `synthesisStatus === 'pending'` is
+          // set when a worker COMPLETES and is cleared by the orchestrator
+          // reading its result, i.e. by this goal's own next turn. Parking on
+          // it deadlocked the goal against itself: it waited for something
+          // only the turn it refused to take could clear.
+          .filter(worker => worker.status === 'running')
           .map(worker => ({
             kind: 'worker' as const,
             subjectId: worker.agentId,

@@ -98,6 +98,16 @@ export type ThreadGoalSchedulerHost = {
   /** Ids for new waits. Injectable so tests are deterministic. */
   createWaitId?(): string
 
+  /**
+   * Schedule a callback. Supplied so a PARKED goal can still reach its own
+   * deadline: a parked goal runs no turns, so it generates no idle wake, and
+   * without a timer the deadline was evaluated only if some unrelated turn
+   * happened to end later. Returns a canceller.
+   *
+   * Omitted in tests that drive the clock by hand.
+   */
+  scheduleWake?(delayMs: number, run: () => void): () => void
+
   /** Optional observability hook. Never user-visible text. */
   onDecision?(decision: ThreadGoalSchedulerDecision): void
 }
@@ -184,6 +194,14 @@ export function createThreadGoalScheduler(
   host: ThreadGoalSchedulerHost,
 ): ThreadGoalScheduler {
   let running: ThreadGoalRunningAttempt | null = null
+  // Wake source ids are per-process counters (idle:1, idle:2, ...) while
+  // `recentWakeKeys` is durable and restored. Without a per-run salt, a
+  // restarted session replays the same ids, every one matches a suppressed key,
+  // and the goal silently stops auto-continuing — breaking the headline case,
+  // resuming a durable goal. Dedup is only ever meaningful WITHIN a run,
+  // because a redelivered wake is a within-process event.
+  const runId = randomUUID()
+  let cancelDeadline: (() => void) | null = null
 
   function report(
     decision: ThreadGoalSchedulerDecision,
@@ -216,16 +234,27 @@ export function createThreadGoalScheduler(
     // falling through would only ever report `not-schedulable` and the park
     // would never end.
     if (goal.status === 'waiting' && goal.wait) {
+      // A dependency that has finished is no longer in the unresolved set, so
+      // its ABSENCE is the completion signal. Deriving it here means an
+      // ordinary idle wake can unpark the goal; requiring a dedicated
+      // `task-completed` event made the unpark unreachable, because no runtime
+      // emits one, and a parked goal could only ever reach its deadline.
+      const outstanding = host.getUnresolvedDependencies?.() ?? []
+      const awaitedStillRunning = outstanding.some(
+        dependency => dependency.subjectId === goal.wait!.subjectId,
+      )
+      const explicitSubject =
+        trigger === 'task-completed' ||
+        trigger === 'process-exited' ||
+        trigger === 'user-resumed'
+          ? sourceId
+          : null
+
       const resolution = resolveThreadGoalWait({
         wait: goal.wait,
-        // Only a completion event names a subject. An idle tick carries none,
-        // so it can move the deadline but never satisfy the dependency.
         completedSubjectId:
-          trigger === 'task-completed' ||
-          trigger === 'process-exited' ||
-          trigger === 'user-resumed'
-            ? sourceId
-            : null,
+          explicitSubject ??
+          (awaitedStillRunning ? null : goal.wait.subjectId),
         nowMs: host.now(),
       })
 
@@ -234,6 +263,8 @@ export function createThreadGoalScheduler(
       }
 
       if (resolution.type === 'timed-out') {
+        cancelDeadline?.()
+        cancelDeadline = null
         // A lost wake must surface as an honest stopped state, never as a goal
         // that looks alive forever.
         host.saveGoal(
@@ -247,13 +278,19 @@ export function createThreadGoalScheduler(
         return report({ type: 'skipped', reason: 'not-schedulable' })
       }
 
-      // The dependency finished. Unpark and fall through to start the turn
-      // that acts on it.
+      // The dependency finished (or the deadline passed). Either way the park
+      // is over, so the armed deadline is no longer wanted.
+      cancelDeadline?.()
+      cancelDeadline = null
+
+      // Unpark and fall through to start the turn that acts on it.
       host.saveGoal(
         updateThreadGoalStatus(
           goal,
           'active',
-          'user_resumed',
+          // Not `user_resumed`: no user was involved. The durable record has
+          // to say what actually happened.
+          'dependency_resolved',
           host.now(),
         ),
       )
@@ -300,6 +337,14 @@ export function createThreadGoalScheduler(
           ),
           wait: nextWait,
         })
+        // Arm the deadline. Without this a park with no other activity sits
+        // forever, because nothing else would ever call wake() to notice the
+        // deadline had passed.
+        cancelDeadline?.()
+        cancelDeadline =
+          host.scheduleWake?.(Math.max(0, nextWait.deadlineMs - nowMs), () => {
+            void wake({ trigger: 'timer', sourceId: nextWait.waitId })
+          }) ?? null
         return report({ type: 'parked', subjectId: nextWait.subjectId })
       }
     }
@@ -308,7 +353,7 @@ export function createThreadGoalScheduler(
       goalId: goal.goalId,
       goalRevision: goal.revision,
       trigger,
-      sourceId,
+      sourceId: `${runId}:${sourceId}`,
       nowMs,
     })
     if (woken.outcome !== 'created') {
@@ -439,7 +484,6 @@ export function createThreadGoalScheduler(
         ownerId: host.ownerId,
         leaseEpoch: attempt.leaseEpoch,
         currentGoalRevision: goal.revision,
-        nowMs,
       })
 
       const settledRecord = settleThreadGoalAttempt({

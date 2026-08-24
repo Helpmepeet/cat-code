@@ -176,6 +176,31 @@ describe('attempt leases', () => {
     expect((b as { heldBy: string }).heldBy).toBe('owner-a')
   })
 
+  test('a long turn is still valid: expiry does not police turn duration', () => {
+    // Expiry means "the scheduler that claimed this is gone", not "this turn
+    // took too long". A turn running a test suite routinely exceeds the lease,
+    // and voiding it there silently disabled every accounting ceiling.
+    const created = wake(EMPTY_THREAD_GOAL_ATTEMPT_RECORD)
+    const attemptId = created.record.pendingAttempt!.attemptId
+    const claimed = claimThreadGoalAttempt({
+      record: created.record,
+      attemptId,
+      ownerId: 'owner-a',
+      currentGoalRevision: 1,
+      nowMs: NOW,
+    }) as { record: ThreadGoalAttemptRecord }
+
+    expect(
+      isThreadGoalAttemptValid({
+        record: claimed.record,
+        attemptId,
+        ownerId: 'owner-a',
+        leaseEpoch: claimed.record.pendingAttempt!.leaseEpoch,
+        currentGoalRevision: 1,
+      }),
+    ).toBe(true)
+  })
+
   test('a takeover after expiry bumps the epoch and invalidates the old owner', () => {
     const created = wake(EMPTY_THREAD_GOAL_ATTEMPT_RECORD)
     const attemptId = created.record.pendingAttempt!.attemptId
@@ -209,7 +234,6 @@ describe('attempt leases', () => {
         ownerId: 'owner-a',
         leaseEpoch: epochA,
         currentGoalRevision: 1,
-        nowMs: takeover,
       }),
     ).toBe(false)
   })
@@ -245,7 +269,6 @@ describe('attempt leases', () => {
         ownerId: 'owner-a',
         leaseEpoch: claimed.record.pendingAttempt!.leaseEpoch,
         currentGoalRevision: 2,
-        nowMs: NOW,
       }),
     ).toBe(false)
   })
@@ -284,7 +307,6 @@ describe('attempt leases', () => {
         ownerId: 'owner-a',
         leaseEpoch: epoch,
         currentGoalRevision: 1,
-        nowMs: NOW + 6,
       }),
     ).toBe(false)
   })

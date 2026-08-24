@@ -186,6 +186,8 @@ import { sumRealThreadGoalUsage } from '../utils/threadGoalUsage.js';
 import { createThreadGoalScheduler, type ThreadGoalRunningAttempt } from '../utils/threadGoalScheduler.js';
 import { isRateLimitErrorMessage } from '../services/rateLimitMessages.js';
 import { createThreadGoalDependencyCache } from '../utils/threadGoalDependencies.js';
+import { detectThreadGoalRepetition } from '../utils/threadGoalRepetition.js';
+import { collectThreadGoalToolCalls } from '../utils/threadGoalToolCalls.js';
 import { deriveDelegatedTaskStatus, deriveFocusedInputDialog, deriveHasOperationalWork, deriveHasSuppressedDialog, deriveHasUnblockedDelegatedWork, deriveLocalWaitingReason, deriveTuiSessionStatus, deriveTuiWaitingDetail, type FocusedInputDialog, type FocusedInputDialogFacts } from '../utils/tuiSessionStatus.js';
 import { updateThreadGoalStatusAction } from '../utils/threadGoalActions.js';
 import { getDisplayedEffortLevel } from '../utils/effort.js';
@@ -979,6 +981,12 @@ export function REPL({
   const loadingStartTimeRef = React.useRef<number>(0);
   const turnGoalAtStartRef = React.useRef<ThreadGoal | null>(null);
   const turnContextTokensAtStartRef = React.useRef(0);
+  // Index into messagesRef at turn start. The usage walk is bounded to THIS
+  // turn: walking the whole conversation re-charged every response that had
+  // aged out of the 512-entry charged ledger, inflating tokensUsed until the
+  // goal tripped a budget it never spent. It also made the live footer
+  // O(total messages) on every streamed update.
+  const turnMessageStartIndexRef = React.useRef(0);
   const pendingBudgetWrapUpGoalIdRef = React.useRef<string | null>(null);
   // The attempt the CURRENT turn is running under, or null for a user-driven
   // turn. Captured at query start so the settle at turn end is fenced against
@@ -1798,10 +1806,18 @@ export function REPL({
     // Real provider usage, deduped against everything already charged. This
     // replaces context growth, which fell to zero across a compaction and
     // charged a long tool-heavy turn almost nothing.
+    const turnMessages = messagesRef.current.slice(turnMessageStartIndexRef.current);
     const usage = sumRealThreadGoalUsage(
-      messagesRef.current,
+      turnMessages,
       chargedResponseIdsRef.current,
     );
+    // Repetition detection runs here too, not only on the app runtime. The
+    // coarse "did any tool run" signal is defeated by exactly the loop this
+    // catches: re-reading the same file, re-running the same failing command.
+    const repetition = detectThreadGoalRepetition({
+      history: store.getState().threadGoal?.callHistory ?? [],
+      calls: collectThreadGoalToolCalls(turnMessages),
+    });
     const contextGrowthTokens = calculateThreadGoalContextTokenDelta(
       turnContextTokensAtStartRef.current,
       tokenCountWithEstimation(messagesRef.current),
@@ -1824,7 +1840,9 @@ export function REPL({
         chargedResponseIds: usage.chargedResponseIds,
         contextGrowthTokens,
         timeDeltaSeconds,
-        madeNoProgress: !turnMadeProgressRef.current,
+        madeNoProgress:
+          !turnMadeProgressRef.current || repetition.repeatedEverything,
+        callHistory: repetition.nextHistory,
         childAgentIds: goalDependenciesRef.current.readChildAgentIds(),
         failed: turnOutcomeRef.current.failed,
         providerUsageLimited: turnOutcomeRef.current.usageLimited
@@ -1842,7 +1860,7 @@ export function REPL({
     ) {
       pendingBudgetWrapUpGoalIdRef.current = nextGoal.goalId;
     }
-  }, []);
+  }, [store]);
 
   // Session backgrounding — hook is below, after getToolUseContext
 
@@ -3422,6 +3440,7 @@ export function REPL({
       resetTimingRefs();
       turnAttemptRef.current = goalSchedulerRef.current!.getRunningAttempt();
       turnOutcomeRef.current = { failed: false, usageLimited: false };
+      turnMessageStartIndexRef.current = messagesRef.current.length;
       turnGoalAtStartRef.current = store.getState().threadGoal;
       turnContextTokensAtStartRef.current = tokenCountWithEstimation(
         messagesRef.current,
@@ -5297,7 +5316,10 @@ export function REPL({
   // budget does not measure. Recomputed on message change only.
   const liveGoalBillableTokens = useMemo(() => {
     if (!isLoading || !turnGoalAtStartRef.current) return 0;
-    return sumRealThreadGoalUsage(messages, chargedResponseIdsRef.current).billableTokens;
+    return sumRealThreadGoalUsage(
+      messages.slice(turnMessageStartIndexRef.current),
+      chargedResponseIdsRef.current,
+    ).billableTokens;
   }, [messages, isLoading]);
   const threadGoalDisplay = useMemo(() => buildThreadGoalDisplayState({
     goal: threadGoal,

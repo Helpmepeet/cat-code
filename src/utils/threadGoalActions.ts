@@ -274,10 +274,12 @@ export async function updateThreadGoalStatusAction<
 /**
  * Replace the goal's contract.
  *
- * Editing the contract changes what "done" means, so it bumps the revision and
- * therefore the contract digest: evidence recorded against the previous
- * contract stops counting, which is the correct outcome rather than a
- * green result silently carrying over to a different requirement.
+ * Editing the contract changes what "done" means, so evidence recorded against
+ * the previous contract stops counting rather than a green result silently
+ * carrying over to a different requirement. That follows from the contract
+ * DIGEST changing (hashThreadGoalContract hashes objective + criteria), not
+ * from the revision bump: freshness is deliberately not revision-keyed,
+ * because the revision changes every turn.
  */
 export async function setThreadGoalContractAction<
   TState extends ThreadGoalState = ThreadGoalState,

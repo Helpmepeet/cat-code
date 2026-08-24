@@ -268,24 +268,33 @@ export function isThreadGoalAttemptValid({
   ownerId,
   leaseEpoch,
   currentGoalRevision,
-  nowMs,
 }: {
   record: ThreadGoalAttemptRecord
   attemptId: string
   ownerId: string
   leaseEpoch: number
   currentGoalRevision: number
-  nowMs: number
 }): boolean {
   const pending = record.pendingAttempt
+  // Deliberately does NOT check lease expiry.
+  //
+  // The lease exists so a scheduler that died without settling cannot wedge
+  // the goal forever; that job belongs to recordThreadGoalWake's reclaim path,
+  // which is the only place expiry is a question. Checking it HERE made expiry
+  // mean "this turn ran too long", and a turn that runs a test suite or a
+  // subagent fan-out routinely exceeds five minutes. The turn then failed its
+  // own validity check at settle, so accounting never ran and every ceiling
+  // silently stopped applying to exactly the long turns that most need them.
+  //
+  // Takeover is still caught: a reclaim bumps `leaseEpoch`, so the previous
+  // owner fails the epoch comparison below.
   return (
     pending !== null &&
     pending.attemptId === attemptId &&
     pending.status !== 'settled' &&
     pending.claimedBy === ownerId &&
     pending.leaseEpoch === leaseEpoch &&
-    pending.goalRevision === currentGoalRevision &&
-    pending.leaseExpiresAtMs > nowMs
+    pending.goalRevision === currentGoalRevision
   )
 }
 

@@ -52,6 +52,24 @@ function harness(goal: ThreadGoal | null) {
   return { loop, getGoal: () => (state as { threadGoal: ThreadGoal | null }).threadGoal }
 }
 
+/**
+ * A growing conversation, like the real caller's `mutableMessages`.
+ *
+ * print.ts passes ONE array that accumulates across turns, so the loop slices
+ * it from the turn's start index. A fresh array per turn would make every
+ * slice empty and every turn look unproductive.
+ */
+function conversation() {
+  const messages: Message[] = []
+  return {
+    all: () => messages,
+    addProductiveTurn: () => {
+      messages.push(...productiveTurn())
+      return messages
+    },
+  }
+}
+
 /** One assistant message with a tool call, so the turn counts as progress. */
 function productiveTurn(): Message[] {
   return [
@@ -105,14 +123,34 @@ describe('the headless goal loop', () => {
     expect(await loop!.nextContinuation(productiveTurn())).toBeNull()
   })
 
+  test('a long run does not re-charge responses from earlier turns', async () => {
+    // The walk is bounded to the turn. Walking the whole conversation
+    // re-charged everything that had aged out of the 512-entry ledger, so
+    // tokensUsed climbed with no matching spend until a budget it never spent
+    // stopped the goal.
+    const sessionId = withSession()
+    const { loop, getGoal } = harness(
+      createThreadGoal(sessionId, 'long run', undefined, 100),
+    )
+    const convo = conversation()
+
+    for (let i = 0; i < 5; i++) {
+      await loop!.nextContinuation(convo.addProductiveTurn())
+    }
+
+    // 5 turns x 15 billable tokens each, charged exactly once.
+    expect(getGoal()!.tokensUsed).toBe(75)
+  })
+
   test('the loop is bounded by the turn ceiling like every other runtime', async () => {
     const sessionId = withSession()
     const base = createThreadGoal(sessionId, 'never ending', undefined, 100)
     const { loop, getGoal } = harness({ ...base, maxContinuationTurns: 3 })
 
+    const convo = conversation()
     let continuations = 0
     for (let i = 0; i < 20; i++) {
-      const prompt = await loop!.nextContinuation(productiveTurn())
+      const prompt = await loop!.nextContinuation(convo.addProductiveTurn())
       if (!prompt) break
       continuations++
     }
@@ -138,7 +176,8 @@ describe('the headless goal loop', () => {
       createThreadGoal(sessionId, 'charge me', undefined, 100),
     )
 
-    await loop!.nextContinuation(productiveTurn())
+    const convo = conversation()
+    await loop!.nextContinuation(convo.addProductiveTurn())
 
     // 10 input + 5 output from the single response above.
     expect(getGoal()!.tokensUsed).toBe(15)

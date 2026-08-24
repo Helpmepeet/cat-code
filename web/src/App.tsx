@@ -115,6 +115,24 @@ function formatTokenCount(value?: number) {
     .replace(".0", "");
 }
 
+// The engine's status tokens are snake_case internal vocabulary; they must not
+// reach the screen verbatim.
+const GOAL_STATUS_LABELS: Record<string, string> = {
+  active: "active",
+  waiting: "waiting",
+  paused: "paused",
+  blocked: "blocked",
+  stalled: "stalled",
+  budget_limited: "budget limited",
+  usage_limited: "usage limited",
+  failed: "failed",
+  complete: "complete",
+};
+
+function formatGoalStatus(status: string): string {
+  return GOAL_STATUS_LABELS[status] ?? "unknown";
+}
+
 function formatGoalSnapshot(goalSnapshot: unknown) {
   if (!goalSnapshot || typeof goalSnapshot !== "object") return undefined;
   const goal = goalSnapshot as {
@@ -127,7 +145,10 @@ function formatGoalSnapshot(goalSnapshot: unknown) {
     return undefined;
   }
 
-  const status = typeof goal.status === "string" ? goal.status : "active";
+  // An unreadable status must NOT read as running. Defaulting to "active"
+  // showed a stopped goal as if it were still working.
+  const status =
+    typeof goal.status === "string" ? formatGoalStatus(goal.status) : "unknown";
   const budget =
     typeof goal.tokensUsed === "number" && typeof goal.tokenBudget === "number"
       ? ` · ${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)} tokens`

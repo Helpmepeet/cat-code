@@ -112,7 +112,11 @@ export const call: LocalJSXCommandCall = async (onDone, context, args) => {
     return null
   }
 
-  if (parsed.type === 'require' || parsed.type === 'unrequire') {
+  if (
+    parsed.type === 'require' ||
+    parsed.type === 'unrequire' ||
+    parsed.type === 'expect'
+  ) {
     if (!currentGoal) {
       onDone(NO_GOAL_MESSAGE, { display: 'system' })
       return null
@@ -138,24 +142,35 @@ export const call: LocalJSXCommandCall = async (onDone, context, args) => {
       return null
     }
 
+    // `require` binds a criterion to a command, so a real exit code decides it.
+    // `expect` states something no command can settle, which is the only case
+    // the semantic judge is allowed to weigh in on.
+    const criterion =
+      parsed.type === 'require'
+        ? {
+            id: parsed.criterionId,
+            description: parsed.verifyCommand,
+            required: true,
+            verifyCommand: parsed.verifyCommand,
+          }
+        : {
+            id: parsed.criterionId,
+            description: parsed.description,
+            required: true,
+          }
+
     await setThreadGoalContractAction({
       context,
       goal: currentGoal,
       contract: {
         ...currentGoal.contract,
-        criteria: [
-          ...withoutCriterion,
-          {
-            id: parsed.criterionId,
-            description: parsed.verifyCommand,
-            required: true,
-            verifyCommand: parsed.verifyCommand,
-          },
-        ],
+        criteria: [...withoutCriterion, criterion],
       },
     })
     onDone(
-      `This goal now requires ${parsed.criterionId} to pass before it can be marked complete. Run it with: ${parsed.verifyCommand}`,
+      parsed.type === 'require'
+        ? `This goal now requires ${parsed.criterionId} to pass before it can be marked complete. Run it with: ${parsed.verifyCommand}`
+        : `This goal now expects ${parsed.criterionId} before it can be marked complete, judged from the recorded evidence: ${parsed.description}`,
       { display: 'system' },
     )
     return null

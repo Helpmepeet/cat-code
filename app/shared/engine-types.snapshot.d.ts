@@ -39,6 +39,7 @@ type ThreadGoalStatusReason =
   | 'created'
   | 'user_paused'
   | 'user_resumed'
+  | 'dependency_resolved'
   | 'user_replaced'
   | 'turn_aborted'
   | 'agent_reported_blocked'
@@ -88,6 +89,7 @@ type ThreadGoalCriterion = {
   id: string
   description: string
   required: boolean
+  verifyCommand?: string
 }
 
 type ThreadGoalContract = {

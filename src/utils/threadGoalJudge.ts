@@ -65,10 +65,11 @@ export function selectThreadGoalJudgeCriteria(
 /**
  * The bundle a judge is allowed to see.
  *
- * Evidence records carry digests rather than raw command output, so this
- * cannot leak credentials or private diagnostics into a model call. The
- * objective and criteria are user-authored. Nothing here is the maker's
- * account of its own work.
+ * Evidence records carry digests rather than raw command OUTPUT, so no command
+ * result reaches the model. What does reach it is user-authored text: the
+ * objective, criterion descriptions, and the `label` (a declared verifyCommand).
+ * A credential typed into one of those is sent; none of it is model-derived or
+ * read from the transcript. Nothing here is the maker's account of its own work.
  */
 export type ThreadGoalEvidenceBundle = {
   objective: string
