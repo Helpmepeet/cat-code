@@ -6,6 +6,11 @@ export type FileState = {
   timestamp: number
   offset: number | undefined
   limit: number | undefined
+  // True only when this state came from a Read tool result returned to the
+  // model. The range/truncation fields below still decide whether the model
+  // saw enough to authorize a whole-file replacement. Internal refreshes and
+  // attachment bookkeeping must never set this.
+  isWriteAuthorizedRead?: boolean
   // True when this entry was populated by auto-injection (e.g. CLAUDE.md) and
   // the injected content did not match disk (stripped HTML comments, stripped
   // frontmatter, truncated MEMORY.md). The model has only seen a partial view;
@@ -29,6 +34,7 @@ export function isCompleteUnboundedRead(
 ): boolean {
   return (
     fileState !== undefined &&
+    fileState.isWriteAuthorizedRead === true &&
     fileState.offset === 1 &&
     fileState.limit === undefined &&
     !fileState.isPartialView &&

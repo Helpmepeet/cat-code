@@ -400,10 +400,11 @@ export function extractReadFilesFromMessages(
         ) {
           // Extract file_path from the tool use input
           const input = content.input as FileReadInput | undefined
-          // Ranged reads are not added to the cache.
+          // Ranged reads are not added to the cache. An explicit offset of 1
+          // with no limit is still an unbounded read from the beginning.
           if (
             input?.file_path &&
-            input?.offset === undefined &&
+            (input.offset === undefined || input.offset === 1) &&
             input?.limit === undefined
           ) {
             // Normalize to absolute path for consistent cache lookups
@@ -457,6 +458,19 @@ export function extractReadFilesFromMessages(
             // overwrite the real entry with stub text.
             !content.content.startsWith(FILE_UNCHANGED_STUB)
           ) {
+            const rawReadResult = message.toolUseResult as
+              | {
+                  type?: string
+                  file?: { numLines?: number; totalLines?: number }
+                }
+              | undefined
+            const isTruncatedView =
+              (rawReadResult?.type === 'text' &&
+                typeof rawReadResult.file?.numLines === 'number' &&
+                typeof rawReadResult.file.totalLines === 'number' &&
+                rawReadResult.file.numLines < rawReadResult.file.totalLines) ||
+              content.content.includes('This is a partial view.')
+
             // Remove system-reminder blocks from the content
             const processedContent = content.content.replace(
               /<system-reminder>[\s\S]*?<\/system-reminder>/g,
@@ -477,8 +491,10 @@ export function extractReadFilesFromMessages(
               cache.set(readFilePath, {
                 content: fileContent,
                 timestamp,
-                offset: undefined,
+                offset: 1,
                 limit: undefined,
+                isWriteAuthorizedRead: true,
+                ...(isTruncatedView ? { isTruncatedView: true } : {}),
               })
             }
           }

@@ -25,6 +25,7 @@ function writeFixture(name: string): string {
 function createContext(state: {
   filePath: string
   isTruncatedView?: boolean
+  isWriteAuthorizedRead?: boolean
   offset?: number
   limit?: number
 }) {
@@ -36,6 +37,7 @@ function createContext(state: {
     timestamp: Date.now() + 60_000,
     offset: state.offset ?? 1,
     limit: state.limit,
+    isWriteAuthorizedRead: state.isWriteAuthorizedRead ?? true,
     ...(state.isTruncatedView ? { isTruncatedView: true } : {}),
   })
   return {
@@ -84,5 +86,17 @@ describe('read-before-write gate', () => {
     expect(result.result).toBe(false)
     expect(result.message).toContain('use an unbounded Read first')
     expect(result.message).toContain('targeted edit tool')
+  })
+
+  test('rejects a complete internal read that was not returned to the model', async () => {
+    const filePath = writeFixture('internal-read.txt')
+
+    const result = await FileWriteTool.validateInput(
+      { file_path: filePath, content: 'replacement' },
+      createContext({ filePath, isWriteAuthorizedRead: false }),
+    )
+
+    expect(result.result).toBe(false)
+    expect(result.message).toContain('not been read completely')
   })
 })

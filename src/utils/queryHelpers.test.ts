@@ -5,8 +5,13 @@ import {
   createUserMessage,
   NO_RESPONSE_REQUESTED,
 } from './messages.js'
-import { normalizeMessage } from './queryHelpers.js'
+import { FILE_READ_TOOL_NAME } from '../tools/FileReadTool/prompt.js'
 import type { Message } from '../types/message.js'
+import { isCompleteUnboundedRead } from './fileStateCache.js'
+import {
+  extractReadFilesFromMessages,
+  normalizeMessage,
+} from './queryHelpers.js'
 
 describe('normalizeMessage internal no-response handling', () => {
   test('does not emit the silent API fallback to live SDK consumers', () => {
@@ -102,5 +107,79 @@ describe('normalizeMessage internal no-response handling', () => {
       parent_tool_use_id: 'toolu_parent',
       agent_name: 'Ada',
     })
+  })
+})
+
+function readTranscript(options: {
+  filePath: string
+  offset?: number
+  partial?: boolean
+}): Message[] {
+  const toolUseId = `toolu-${options.filePath}`
+  const numLines = options.partial ? 1 : 2
+  return [
+    createAssistantMessage({
+      content: [
+        {
+          type: 'tool_use',
+          id: toolUseId,
+          name: FILE_READ_TOOL_NAME,
+          input: {
+            file_path: options.filePath,
+            ...(options.offset === undefined ? {} : { offset: options.offset }),
+          },
+        },
+      ],
+    }),
+    createUserMessage({
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: toolUseId,
+          content:
+            '     1→alpha' +
+            (options.partial
+              ? '\n\n<system-reminder>Showing lines 1 to 1 of 2. This is a partial view. Read again with offset 2 to continue.</system-reminder>'
+              : '\n     2→beta'),
+        },
+      ],
+      toolUseResult: {
+        type: 'text',
+        file: { numLines, totalLines: 2 },
+      },
+    }),
+  ]
+}
+
+describe('extractReadFilesFromMessages Write authorization', () => {
+  test('restores a complete unbounded Read as authorizing', () => {
+    const filePath = '/tmp/restored-complete.txt'
+    const cache = extractReadFilesFromMessages(
+      readTranscript({ filePath }),
+      '/tmp',
+    )
+
+    expect(isCompleteUnboundedRead(cache.get(filePath))).toBe(true)
+  })
+
+  test('restores an explicit offset 1 Read as authorizing', () => {
+    const filePath = '/tmp/restored-offset-one.txt'
+    const cache = extractReadFilesFromMessages(
+      readTranscript({ filePath, offset: 1 }),
+      '/tmp',
+    )
+
+    expect(isCompleteUnboundedRead(cache.get(filePath))).toBe(true)
+  })
+
+  test('preserves truncation so a partial Read cannot authorize Write', () => {
+    const filePath = '/tmp/restored-partial.txt'
+    const cache = extractReadFilesFromMessages(
+      readTranscript({ filePath, partial: true }),
+      '/tmp',
+    )
+
+    expect(cache.get(filePath)?.isTruncatedView).toBe(true)
+    expect(isCompleteUnboundedRead(cache.get(filePath))).toBe(false)
   })
 })

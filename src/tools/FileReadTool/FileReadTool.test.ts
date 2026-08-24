@@ -2,7 +2,11 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { createFileStateCacheWithSizeLimit } from '../../utils/fileStateCache.js'
+import {
+  createFileStateCacheWithSizeLimit,
+  isCompleteUnboundedRead,
+} from '../../utils/fileStateCache.js'
+import { createAssistantMessage } from '../../utils/messages.js'
 import {
   FileReadTool,
   MaxFileReadTokenExceededError,
@@ -44,10 +48,12 @@ afterAll(() => {
 function writeLines(
   name: string,
   count: number,
-  options: { trailingNewline?: boolean } = {},
+  options: { trailingNewline?: boolean; compact?: boolean } = {},
 ): string {
   const filePath = join(tmpDir, name)
-  const lines = Array.from({ length: count }, (_, i) => `line ${i + 1}`)
+  const lines = Array.from({ length: count }, (_, i) =>
+    options.compact ? 'x' : `line ${i + 1}`,
+  )
   const trailing = options.trailingNewline === false ? '' : '\n'
   writeFileSync(filePath, lines.join('\n') + trailing, 'utf-8')
   return filePath
@@ -84,14 +90,16 @@ async function readFile(
 
 describe('default line limit', () => {
   test('a no-limit read stops at MAX_LINES_TO_READ', async () => {
-    const filePath = writeLines('long.txt', MAX_LINES_TO_READ + 500)
+    const filePath = writeLines('long.txt', MAX_LINES_TO_READ + 500, {
+      compact: true,
+    })
 
     const file = await readFile(filePath)
 
     // Before the clamp existed this returned every line, so the read only
     // discovered it had blown maxTokens after paying for the whole file.
     expect(file.numLines).toBe(MAX_LINES_TO_READ)
-    expect(file.content.endsWith(`line ${MAX_LINES_TO_READ}`)).toBe(true)
+    expect(file.content.endsWith('x')).toBe(true)
     // +1: readFileInRange counts a phantom empty line for the trailing
     // newline. Pre-existing, and why the notice cannot derive truncation
     // from these totals.
@@ -136,7 +144,9 @@ describe('partial read notice', () => {
   }
 
   test('a clamped read is marked partial and names the next offset', async () => {
-    const filePath = writeLines('notice.txt', MAX_LINES_TO_READ + 500)
+    const filePath = writeLines('notice.txt', MAX_LINES_TO_READ + 500, {
+      compact: true,
+    })
 
     const rendered = await renderRead(filePath)
 
@@ -164,7 +174,9 @@ describe('partial read notice', () => {
     // The trailing newline makes readFileInRange report totalLines = 2001, so
     // deriving truncation from the line totals alone claims a 2001st line the
     // model can never read.
-    const filePath = writeLines('exactly-cap.txt', MAX_LINES_TO_READ)
+    const filePath = writeLines('exactly-cap.txt', MAX_LINES_TO_READ, {
+      compact: true,
+    })
 
     const rendered = await renderRead(filePath)
 
@@ -174,6 +186,7 @@ describe('partial read notice', () => {
   test('a real line beyond the cap is still called partial', async () => {
     const filePath = writeLines('cap-plus-one.txt', MAX_LINES_TO_READ + 1, {
       trailingNewline: false,
+      compact: true,
     })
 
     const rendered = await renderRead(filePath)
@@ -184,7 +197,9 @@ describe('partial read notice', () => {
 
 describe('truncated reads are not proof the file was read', () => {
   test('a clamped read records isTruncatedView', async () => {
-    const filePath = writeLines('write-gate.txt', MAX_LINES_TO_READ + 500)
+    const filePath = writeLines('write-gate.txt', MAX_LINES_TO_READ + 500, {
+      compact: true,
+    })
     const context = createContext()
 
     await readWith(context, filePath)
@@ -318,6 +333,16 @@ describe('token overflow prefixes', () => {
     )
   })
 
+  test('keeps a small first line when a much larger later line overflows', async () => {
+    const filePath = join(tmpDir, 'token-skewed-lines.txt')
+    writeFileSync(filePath, `ok\n${'x'.repeat(20_000)}`, 'utf-8')
+
+    const data = await readWith(createContext(1_000), filePath)
+
+    expect(data.file.content).toBe('ok')
+    expect(data.file.numLines).toBe(1)
+  })
+
   test('budgets line-number gutters as part of the returned prefix', async () => {
     const filePath = join(tmpDir, 'token-line-gutters.txt')
     writeFileSync(filePath, `${'x'}\n`.repeat(500), 'utf-8')
@@ -331,6 +356,7 @@ describe('token overflow prefixes', () => {
 
     expect(data.file.numLines).toBeLessThan(500)
     expect(text).toContain('partial view')
+    expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(1_000)
   })
 
   test('keeps the rendered overflow prefix below the hard cap', async () => {
@@ -344,9 +370,33 @@ describe('token overflow prefixes', () => {
       'toolu-file-read',
     )
     const text = typeof rendered.content === 'string' ? rendered.content : ''
-    const conservativeTokens = Math.ceil(Buffer.byteLength(text, 'utf8') / 1.4)
-
     expect(data.file.numLines).toBeLessThan(1_000)
-    expect(conservativeTokens).toBeLessThanOrEqual(DEFAULT_MAX_OUTPUT_TOKENS)
+    expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(
+      DEFAULT_MAX_OUTPUT_TOKENS,
+    )
+  })
+})
+
+describe('whole-file Write authorization provenance', () => {
+  test('internal reads do not authorize Write, but model-visible reads do', async () => {
+    const filePath = writeLines('authorization.txt', 2)
+    const internalContext = createContext()
+    await readWith(internalContext, filePath)
+
+    expect(
+      isCompleteUnboundedRead(internalContext.readFileState.get(filePath)),
+    ).toBe(false)
+
+    const visibleContext = createContext()
+    await FileReadTool.call(
+      { file_path: filePath },
+      visibleContext as never,
+      undefined,
+      createAssistantMessage({ content: [] }),
+    )
+
+    expect(
+      isCompleteUnboundedRead(visibleContext.readFileState.get(filePath)),
+    ).toBe(true)
   })
 })

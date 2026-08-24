@@ -350,8 +350,9 @@ export type Output = z.infer<OutputSchema>
 export const FileReadTool = buildTool({
   name: FILE_READ_TOOL_NAME,
   searchHint: 'read files, images, PDFs, notebooks',
-  // Output is bounded by maxTokens (validateContentTokens). Persisting to a
-  // file the model reads back with Read is circular — never persist.
+  // Output is bounded by the format-aware rendered token budget below.
+  // Persisting to a file the model reads back with Read is circular — never
+  // persist.
   maxResultSizeChars: Infinity,
   strict: true,
   async description() {
@@ -560,7 +561,11 @@ export const FileReadTool = buildTool({
     if (
       existingState &&
       !existingState.isPartialView &&
-      existingState.offset !== undefined
+      existingState.offset !== undefined &&
+      // An internal refresh may populate the shared cache without returning
+      // the contents to the model. A later model-invoked Read must not dedup
+      // against that invisible result.
+      (parentMessage === undefined || existingState.isWriteAuthorizedRead)
     ) {
       const rangeMatch =
         existingState.offset === offset && existingState.limit === limit
@@ -817,24 +822,29 @@ async function validateContentTokens(
   }
 }
 
-async function renderedTokenCount(
+const ESTIMATED_BYTES_PER_TOKEN = 1.4
+
+async function measureRenderedTokens(
   content: string,
-  maxTokens?: number,
-): Promise<number> {
+  targetTokens: number,
+  hardTokens: number,
+): Promise<{ targetCount: number; hardCount: number }> {
   const bytes = Buffer.byteLength(content, 'utf8')
-  if (bytes === 0) return 0
-  // Preserve a no-network fast path whenever even the conservative fallback
-  // fits. The measured densest supported text is base64 at about 1.45 bytes
-  // per token (tokenEstimation.ts); 1.4 keeps a small safety margin.
-  const fallbackCount = Math.ceil(bytes / 1.4)
-  if (maxTokens !== undefined && fallbackCount <= maxTokens) {
-    return fallbackCount
+  if (bytes === 0) return { targetCount: 0, hardCount: 0 }
+
+  // The measured fallback keeps prefix sizing useful for ordinary text. The
+  // UTF-8 byte count is the guaranteed upper bound: a byte-level tokenizer
+  // cannot emit more tokens than input bytes. Only skip exact counting when
+  // both the normal target and the absolute ceiling are already satisfied.
+  const estimatedCount = Math.ceil(bytes / ESTIMATED_BYTES_PER_TOKEN)
+  if (estimatedCount <= targetTokens && bytes <= hardTokens) {
+    return { targetCount: estimatedCount, hardCount: bytes }
   }
   const apiCount = await countTokensWithAPI(content)
-  // The rendered result includes line-number gutters and a continuation
-  // notice. When exact counting is unavailable, keep the conservative measured
-  // fallback rather than reverting to the source extension's looser ratio.
-  return apiCount ?? fallbackCount
+  if (apiCount !== null) {
+    return { targetCount: apiCount, hardCount: apiCount }
+  }
+  return { targetCount: estimatedCount, hardCount: bytes }
 }
 
 async function fitTokenPrefix(
@@ -843,6 +853,8 @@ async function fitTokenPrefix(
   totalLines: number,
   initialLineCount: number,
   targetTokens: number,
+  hardTokens: number,
+  renderedPrefix: string,
 ): Promise<{ content: string; lineCount: number } | null> {
   const lines = content.split('\n')
   if (content.endsWith('\n')) lines.pop()
@@ -854,15 +866,29 @@ async function fitTokenPrefix(
     // would make addLineNumbers render a phantom extra numbered line.
     const prefix = lines.slice(0, lineCount).join('\n')
     const rendered =
+      renderedPrefix +
       formatFileLines({ content: prefix, startLine }) +
       renderPartialReadNotice(
         { startLine, numLines: lineCount, totalLines },
         true,
       )
-    const renderedTokens = await renderedTokenCount(rendered, targetTokens)
-    if (renderedTokens <= targetTokens) return { content: prefix, lineCount }
+    const renderedTokens = await measureRenderedTokens(
+      rendered,
+      targetTokens,
+      hardTokens,
+    )
+    if (
+      renderedTokens.targetCount <= targetTokens &&
+      renderedTokens.hardCount <= hardTokens
+    ) {
+      return { content: prefix, lineCount }
+    }
 
-    const nextLineCount = Math.floor((lineCount * targetTokens) / renderedTokens)
+    const overshoot = Math.max(
+      renderedTokens.targetCount / targetTokens,
+      renderedTokens.hardCount / hardTokens,
+    )
+    const nextLineCount = Math.floor(lineCount / overshoot)
     lineCount = Math.min(lineCount - 1, nextLineCount)
   }
 
@@ -961,6 +987,7 @@ async function callInner(
       timestamp: Math.floor(stats.mtimeMs),
       offset,
       limit,
+      ...(messageId !== undefined ? { isWriteAuthorizedRead: true } : {}),
     })
     context.nestedMemoryAttachmentTriggers?.add(fullFilePath)
 
@@ -1178,7 +1205,11 @@ async function callInner(
   // default. On overflow, return a verified complete-line prefix when one can
   // fit under the normal target; never expose an oversized rendered result.
   const hardTokenLimit = Math.min(maxTokens, DEFAULT_MAX_OUTPUT_TOKENS)
+  const freshnessPrefix = isAutoMemFile(fullFilePath)
+    ? memoryFreshnessNote(mtimeMs)
+    : ''
   const renderedCandidate =
+    freshnessPrefix +
     formatFileLines({ content, startLine: offset }) +
     (truncated
       ? renderPartialReadNotice(
@@ -1186,28 +1217,40 @@ async function callInner(
           false,
         )
       : '')
-  const renderedCandidateTokens = await renderedTokenCount(
+  const renderedCandidateTokens = await measureRenderedTokens(
     renderedCandidate,
     hardTokenLimit,
+    hardTokenLimit,
   )
-  const tokenTruncated = renderedCandidateTokens > hardTokenLimit
+  const tokenTruncated =
+    renderedCandidateTokens.hardCount > hardTokenLimit
   if (tokenTruncated) {
     const targetTokens = Math.min(DEFAULT_PREFIX_TARGET_TOKENS, hardTokenLimit)
+    const suggestedPrefixLines = Math.max(
+      1,
+      suggestedRetryLimit(
+        lineCount,
+        targetTokens,
+        renderedCandidateTokens.targetCount,
+      ),
+    )
     const prefix = await fitTokenPrefix(
       content,
       offset,
       totalLines,
-      suggestedRetryLimit(lineCount, targetTokens, renderedCandidateTokens),
+      suggestedPrefixLines,
       targetTokens,
+      hardTokenLimit,
+      freshnessPrefix,
     )
     if (!prefix) {
       const suggestedLimit = suggestedRetryLimit(
         lineCount,
         hardTokenLimit,
-        renderedCandidateTokens,
+        renderedCandidateTokens.hardCount,
       )
       throw new MaxFileReadTokenExceededError(
-        renderedCandidateTokens,
+        renderedCandidateTokens.hardCount,
         hardTokenLimit,
         suggestedLimit > 0
           ? { startLine: Math.max(offset, 1), totalLines, suggestedLimit }
@@ -1225,6 +1268,7 @@ async function callInner(
     timestamp: Math.floor(mtimeMs),
     offset,
     limit,
+    ...(messageId !== undefined ? { isWriteAuthorizedRead: true } : {}),
     // A line-capped default or token-capped range is not a complete-file view.
     ...(truncated ? { isTruncatedView: true } : {}),
   })
