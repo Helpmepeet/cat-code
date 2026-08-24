@@ -7,13 +7,22 @@ import {
   type QueryEngineAppSessionConfig,
 } from './createQueryEngineAppSession.js'
 import { createQueryEngineSessionController } from './createQueryEngineSessionController.js'
+import { attachThreadGoalScheduler } from './attachThreadGoalScheduler.js'
+import { saveThreadGoal } from '../utils/sessionStorage.js'
+import { isAgentMode } from '../agent-mode/agentMode.js'
 
 export type RuntimeBackedWebAppSessionOptions = {
   queryEngineConfig: QueryEngineAppSessionConfig
+  /**
+   * Set when an outer control plane already drives turns for this session. The
+   * native goal loop then yields instead of creating a second scheduler.
+   */
+  hasExternalScheduler?: () => boolean
 }
 
 export function createRuntimeBackedWebAppSession({
   queryEngineConfig,
+  hasExternalScheduler,
 }: RuntimeBackedWebAppSessionOptions) {
   // `setSDKStatus` is a push callback, not a yielded message, so it needs the
   // controller that does not exist yet when the session is built. Captured by
@@ -42,5 +51,27 @@ export function createRuntimeBackedWebAppSession({
     },
   })
   controller = createQueryEngineSessionController(session)
+
+  // The goal loop attaches HERE because this factory is the one seam the
+  // desktop sidecar and web mode share. Before this, both ran a submitted turn
+  // and returned idle: `/goal` was terminal-only behaviour dressed as a
+  // harness guarantee. The scheduler is the same module the terminal drives,
+  // so the four runtimes cannot drift apart.
+  attachThreadGoalScheduler({
+    controller,
+    ownerId: `app-runtime:${getSessionId()}`,
+    getGoal: () => queryEngineConfig.getAppState().threadGoal ?? null,
+    saveGoal: nextGoal => {
+      saveThreadGoal(nextGoal)
+      queryEngineConfig.setAppState(prev =>
+        prev.threadGoal?.goalId === nextGoal.goalId
+          ? { ...prev, threadGoal: nextGoal }
+          : prev,
+      )
+    },
+    isAgentMode: () => isAgentMode(),
+    ...(hasExternalScheduler ? { hasExternalScheduler } : {}),
+  })
+
   return controller
 }
