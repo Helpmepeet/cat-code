@@ -5,6 +5,7 @@ import { App } from './App.js'
 import { CodeThemeProvider } from './CodeThemeProvider.js'
 import { ReasoningLayoutProvider } from './ReasoningLayoutProvider.js'
 import { ToastHost } from './ToastHost.js'
+import { ToolCardStyleProvider } from './ToolCardStyleProvider.js'
 import { ToolsExpandedProvider } from './ToolsExpandedProvider.js'
 import { RendererErrorBoundary } from './RendererErrorBoundary.js'
 import { getBridge } from './bridge.js'
@@ -40,7 +41,9 @@ createRoot(root).render(
           <ReasoningLayoutProvider>
             <CodeThemeProvider>
               <ToolsExpandedProvider>
-                <App />
+                <ToolCardStyleProvider>
+                  <App />
+                </ToolCardStyleProvider>
               </ToolsExpandedProvider>
             </CodeThemeProvider>
           </ReasoningLayoutProvider>

@@ -16,6 +16,11 @@ import {
   splitGrepLine,
 } from './transcriptViewModel.js'
 import { ToolsExpandedContext } from './toolsExpanded.js'
+import {
+  DEFAULT_TOOL_CARD_STYLE,
+  ToolCardStyleContext,
+  type ToolCardStyle,
+} from './toolCardStyle.js'
 import { TRANSCRIPT_ROW_KEY_ATTRIBUTE } from './transcriptScrollMemory.js'
 import {
   createToolCardExpansionStore,
@@ -4955,4 +4960,70 @@ test('a bash card whose description repeats the command reveals nothing', () => 
   )
 
   expect(html).not.toContain('group-hover:inline')
+})
+
+// ── Tool card style (`toolCardStyle.ts`) ────────────────────────────────────
+// The class maps have their own unit tests. THESE render a real tool row through
+// the real component under each style, because a preference that resolves
+// correctly and never reaches the DOM is the failure this file exists to catch.
+
+function renderUnderCardStyle(
+  row: NestedTranscriptRow,
+  style: ToolCardStyle,
+): string {
+  return renderToStaticMarkup(
+    <ToolCardStyleContext.Provider value={{ style, setStyle: () => {} }}>
+      <TranscriptRowsView rows={[row]} />
+    </ToolCardStyleContext.Provider>,
+  )
+}
+
+test('a tool card draws its container under `cards` and drops it under `lines`', () => {
+  const row = toolRow({
+    toolName: 'Read',
+    toolFamily: 'read',
+    input: { file_path: '/repo/src/loader/index.ts' },
+    status: 'success',
+    result: { content: 'export function load() {}', isError: false, diff: null },
+  })
+  const cards = renderUnderCardStyle(row, 'cards')
+  const lines = renderUnderCardStyle(row, 'lines')
+
+  expect(cards).toContain('rounded-md border border-shell-seam')
+  expect(lines).not.toContain('rounded-md border border-shell-seam')
+  // Same row, same column: only the chrome is gone. `deriveTarget` shortens the
+  // path, so assert the label the card actually draws.
+  expect(lines).toContain('>index.ts<')
+  expect(cards).toContain('>index.ts<')
+})
+
+test('the open body swaps its filled panel for an indented rule', () => {
+  const row = toolRow({
+    toolName: 'Bash',
+    toolFamily: 'bash',
+    input: { command: 'bun test' },
+    status: 'error',
+    result: { content: 'boom', isError: true, diff: null },
+  })
+  // A failed card opens itself, so the body is on screen in both renders.
+  const cards = renderUnderCardStyle(row, 'cards')
+  const lines = renderUnderCardStyle(row, 'lines')
+
+  expect(cards).toContain('bg-black/[0.28]')
+  expect(lines).not.toContain('bg-black/[0.28]')
+  expect(lines).toContain('border-l border-shell-seam')
+})
+
+test('the default style renders exactly what the app rendered before', () => {
+  const row = toolRow({
+    toolName: 'Read',
+    toolFamily: 'read',
+    input: { file_path: '/repo/a.ts' },
+    status: 'success',
+    result: { content: 'x', isError: false, diff: null },
+  })
+  // No provider means the context default, which must still be the old drawing.
+  expect(renderToStaticMarkup(<TranscriptRowsView rows={[row]} />)).toBe(
+    renderUnderCardStyle(row, DEFAULT_TOOL_CARD_STYLE),
+  )
 })

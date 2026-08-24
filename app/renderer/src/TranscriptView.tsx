@@ -82,6 +82,15 @@ import {
   type UserImageSource,
 } from './transcriptProjector.js'
 import { selectBashCardText } from './bashCommandLabel.js'
+import {
+  TOOL_CARD_BODY_CLASS,
+  TOOL_CARD_BODY_INNER_CLASS,
+  TOOL_CARD_HEADER_CLASS,
+  TOOL_CARD_PLAIN_HEADER_CLASS,
+  TOOL_CARD_SHELL_CLASS,
+  TOOL_CARD_SUB_CLASS,
+  ToolCardStyleContext,
+} from './toolCardStyle.js'
 import { ToolsExpandedContext } from './toolsExpanded.js'
 import {
   groupReasoningRuns,
@@ -2033,13 +2042,14 @@ function ToolCardShell({
   const fam = FAMILY_STYLE[family]
   const st = STATE_STYLE[status]
   const hasBody = children !== undefined && children !== null
+  const { style } = useContext(ToolCardStyleContext)
   return (
-    <div className="w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.025] font-sans">
+    <div className={TOOL_CARD_SHELL_CLASS[style]}>
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
         aria-expanded={expanded}
-        className="group flex w-full items-center gap-2.5 px-3 py-2 text-left"
+        className={TOOL_CARD_HEADER_CLASS[style]}
       >
         <span className={`w-4 shrink-0 text-center text-[13px] ${fam.color}`} aria-hidden>
           {fam.mark}
@@ -2077,13 +2087,11 @@ function ToolCardShell({
       </button>
       {!expanded && collapsedExtra ? collapsedExtra : null}
       {expanded && hasBody ? (
-        <div className="border-t border-shell-seam bg-black/[0.28]">
+        <div className={TOOL_CARD_BODY_CLASS[style]}>
           {sub ? (
-            <div className="truncate px-3 pt-1.5 font-mono text-[9.5px] font-semibold uppercase tracking-[0.07em] text-text-subtle">
-              {sub}
-            </div>
+            <div className={TOOL_CARD_SUB_CLASS[style]}>{sub}</div>
           ) : null}
-          <div className="px-3 pb-2.5 pt-1">{children}</div>
+          <div className={TOOL_CARD_BODY_INNER_CLASS[style]}>{children}</div>
         </div>
       ) : null}
     </div>
@@ -3024,13 +3032,14 @@ function RejectedResumeCard({
   expanded: boolean
   setExpanded: (next: boolean) => void
 }) {
+  const { style: cardStyle } = useContext(ToolCardStyleContext)
   return (
-    <div className="w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.025] font-sans">
+    <div className={TOOL_CARD_SHELL_CLASS[cardStyle]}>
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
         aria-expanded={expanded}
-        className="flex w-full items-center gap-2.5 px-3 py-2 text-left"
+        className={TOOL_CARD_PLAIN_HEADER_CLASS[cardStyle]}
       >
         <span className="shrink-0 text-[12px] leading-[12px] text-text-ghost" aria-hidden>
           ◇
@@ -3046,8 +3055,10 @@ function RejectedResumeCard({
         </span>
       </div>
       {expanded ? (
-        <div className="border-t border-shell-seam bg-black/[0.28] px-3 pb-2.5 pt-1">
-          <ToolCardBody row={row} content={row.result?.content ?? ''} ack={ack} />
+        <div className={TOOL_CARD_BODY_CLASS[cardStyle]}>
+          <div className={TOOL_CARD_BODY_INNER_CLASS[cardStyle]}>
+            <ToolCardBody row={row} content={row.result?.content ?? ''} ack={ack} />
+          </div>
         </div>
       ) : null}
     </div>
@@ -3079,6 +3090,7 @@ function RejectedResumeCard({
  * frame, and is never fabricated here.
  */
 function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
+  const { style: cardStyle } = useContext(ToolCardStyleContext)
   const faces = useAgentFaceRegistry()
   const leases = useContext(LeaseSnapshotContext)
   const resumeAck =
@@ -3171,7 +3183,7 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
     </>
   )
   return (
-    <div className="w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.025] font-sans">
+    <div className={TOOL_CARD_SHELL_CLASS[cardStyle]}>
       {body === null ? (
         lines
       ) : (
@@ -3193,8 +3205,8 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
         </div>
       ) : null}
       {expanded && body !== null ? (
-        <div className="border-t border-shell-seam bg-black/[0.28] px-3 pb-2.5 pt-1">
-          {body}
+        <div className={TOOL_CARD_BODY_CLASS[cardStyle]}>
+          <div className={TOOL_CARD_BODY_INNER_CLASS[cardStyle]}>{body}</div>
         </div>
       ) : null}
     </div>

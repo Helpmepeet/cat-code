@@ -75,6 +75,13 @@ import {
   DEFAULT_TOOLS_EXPANDED,
   ToolsExpandedContext,
 } from './toolsExpanded.js'
+import {
+  DEFAULT_TOOL_CARD_STYLE,
+  TOOL_CARD_STYLES,
+  TOOL_CARD_STYLE_LABELS,
+  ToolCardStyleContext,
+  isToolCardStyle,
+} from './toolCardStyle.js'
 import { RemoteSettingsPage } from './RemoteSettingsPage.js'
 import { SelectControl, SettingsPane, ToggleSwitch } from './SettingsEditors.js'
 import type { SettingWriteInput } from './SettingsEditors.js'
@@ -841,6 +848,8 @@ function TranscriptDisplaySection({
   const { theme, setTheme } = useContext(CodeThemeContext)
   const { expanded: toolsExpanded, setExpanded: setToolsExpanded } =
     useContext(ToolsExpandedContext)
+  const { style: toolCardStyle, setStyle: setToolCardStyle } =
+    useContext(ToolCardStyleContext)
   // `EditableSettingValue` is `boolean | string | number`, so the identity test
   // both narrows it and keeps an unread snapshot (null) on the enabled path —
   // the key's built-in default is highlighting ON (`settingsEditable.ts:201`).
@@ -849,6 +858,22 @@ function TranscriptDisplaySection({
   const codeThemeNote = selectCodeThemeNote(highlightingOff)
   return (
     <PaneSection title="Transcript">
+      <Field
+        desc="How each tool call is drawn in the transcript. Stored in this app, not in your settings files."
+        label="Tool calls"
+        modified={toolCardStyle !== DEFAULT_TOOL_CARD_STYLE}
+        onReset={() => setToolCardStyle(DEFAULT_TOOL_CARD_STYLE)}
+      >
+        <SelectControl
+          label="Tool calls"
+          onChange={next => {
+            if (isToolCardStyle(next)) setToolCardStyle(next)
+          }}
+          optionLabels={TOOL_CARD_STYLE_LABELS}
+          options={TOOL_CARD_STYLES}
+          value={toolCardStyle}
+        />
+      </Field>
       <Field
         desc="Open every tool card as it arrives, instead of showing a preview you click to expand. Stored in this app, not in your settings files."
         label="Tools open by default"
