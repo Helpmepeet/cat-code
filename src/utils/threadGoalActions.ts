@@ -271,6 +271,37 @@ export async function updateThreadGoalStatusAction<
   return { ok: true, code: 'ok', goal: nextGoal }
 }
 
+/**
+ * Replace the goal's contract.
+ *
+ * Editing the contract changes what "done" means, so it bumps the revision and
+ * therefore the contract digest: evidence recorded against the previous
+ * contract stops counting, which is the correct outcome rather than a
+ * green result silently carrying over to a different requirement.
+ */
+export async function setThreadGoalContractAction<
+  TState extends ThreadGoalState = ThreadGoalState,
+>({
+  context,
+  goal,
+  contract,
+}: {
+  context: ThreadGoalActionContext<TState>
+  goal: ThreadGoal
+  contract: ThreadGoal['contract']
+}): Promise<ThreadGoal> {
+  const nextGoal: ThreadGoal = {
+    ...goal,
+    contract,
+    revision: goal.revision + 1,
+    updatedAtMs: Date.now(),
+  }
+
+  saveThreadGoal(nextGoal)
+  context.setAppState(prev => ({ ...prev, threadGoal: nextGoal }))
+  return nextGoal
+}
+
 export async function completeThreadGoalAction<
   TState extends ThreadGoalState = ThreadGoalState,
 >({

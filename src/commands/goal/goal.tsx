@@ -13,6 +13,7 @@ import {
 import {
   clearThreadGoalAction,
   createThreadGoalAction,
+  setThreadGoalContractAction,
   updateThreadGoalStatusAction,
 } from '../../utils/threadGoalActions.js'
 import { isResumableThreadGoalStatus } from '../../utils/threadGoalState.js'
@@ -108,6 +109,55 @@ export const call: LocalJSXCommandCall = async (onDone, context, args) => {
 
     await clearThreadGoalAction({ context, goal: currentGoal })
     onDone('Cleared current goal.', { display: 'system' })
+    return null
+  }
+
+  if (parsed.type === 'require' || parsed.type === 'unrequire') {
+    if (!currentGoal) {
+      onDone(NO_GOAL_MESSAGE, { display: 'system' })
+      return null
+    }
+
+    const withoutCriterion = currentGoal.contract.criteria.filter(
+      criterion => criterion.id !== parsed.criterionId,
+    )
+
+    if (parsed.type === 'unrequire') {
+      if (withoutCriterion.length === currentGoal.contract.criteria.length) {
+        onDone(`No requirement named ${parsed.criterionId}.`, {
+          display: 'system',
+        })
+        return null
+      }
+      await setThreadGoalContractAction({
+        context,
+        goal: currentGoal,
+        contract: { ...currentGoal.contract, criteria: withoutCriterion },
+      })
+      onDone(`Removed requirement ${parsed.criterionId}.`, { display: 'system' })
+      return null
+    }
+
+    await setThreadGoalContractAction({
+      context,
+      goal: currentGoal,
+      contract: {
+        ...currentGoal.contract,
+        criteria: [
+          ...withoutCriterion,
+          {
+            id: parsed.criterionId,
+            description: parsed.verifyCommand,
+            required: true,
+            verifyCommand: parsed.verifyCommand,
+          },
+        ],
+      },
+    })
+    onDone(
+      `This goal now requires ${parsed.criterionId} to pass before it can be marked complete. Run it with: ${parsed.verifyCommand}`,
+      { display: 'system' },
+    )
     return null
   }
 

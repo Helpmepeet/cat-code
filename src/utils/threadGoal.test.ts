@@ -118,6 +118,27 @@ describe('parseGoalCommand', () => {
     })
   })
 
+  test('parses requirement declarations', () => {
+    expect(parseGoalCommand('require tests bun test app/')).toEqual({
+      type: 'require',
+      criterionId: 'tests',
+      verifyCommand: 'bun test app/',
+    })
+    expect(parseGoalCommand('unrequire tests')).toEqual({
+      type: 'unrequire',
+      criterionId: 'tests',
+    })
+  })
+
+  test('rejects requirement declarations that cannot gate anything', () => {
+    // A name with no command proves nothing, and a name with shell characters
+    // would not match any command the user could actually run.
+    for (const input of ['require', 'require tests', 'unrequire']) {
+      expect(parseGoalCommand(input).type).toBe('error')
+    }
+    expect(parseGoalCommand('require my;name bun test').type).toBe('error')
+  })
+
   test('rejects invalid budget forms and extra args', () => {
     for (const rawArgs of [
       'replace',

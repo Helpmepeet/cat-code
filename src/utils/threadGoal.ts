@@ -183,6 +183,8 @@ export type ParsedGoalCommand =
   | { type: 'resume' }
   | { type: 'replace'; objective: string; tokenBudget?: number }
   | { type: 'set'; objective: string; tokenBudget?: number }
+  | { type: 'require'; criterionId: string; verifyCommand: string }
+  | { type: 'unrequire'; criterionId: string }
   | { type: 'error'; message: string }
 
 const GOAL_USAGE =
@@ -192,6 +194,8 @@ const GOAL_USAGE =
   '  /goal --budget N <objective>\n' +
   '  /goal replace <objective>\n' +
   '  /goal replace --budget N <objective>\n' +
+  '  /goal require <name> <command>\n' +
+  '  /goal unrequire <name>\n' +
   '  /goal pause\n' +
   '  /goal resume\n' +
   '  /goal clear'
@@ -455,6 +459,42 @@ export function parseGoalCommand(rawArgs?: string): ParsedGoalCommand {
   }
   if (/^status\s+/.test(trimmedArgs)) {
     return usageError('Error: /goal status does not accept extra arguments.')
+  }
+
+  if (trimmedArgs === 'require') {
+    return usageError('Error: /goal require needs a name and a command.')
+  }
+
+  const requireMatch = trimmedArgs.match(/^require\s+([\s\S]+)$/)
+  if (requireMatch) {
+    const split = splitFirstWhitespaceSeparatedToken(requireMatch[1]!.trim())
+    if (!split || !split.remainder) {
+      return usageError(
+        'Error: /goal require needs a name and the command that proves it, for example: /goal require tests bun test app/.',
+      )
+    }
+    if (!/^[\w.-]+$/.test(split.token)) {
+      return usageError(
+        'Error: A requirement name can only contain letters, numbers, dots, dashes, and underscores.',
+      )
+    }
+    return {
+      type: 'require',
+      criterionId: split.token,
+      verifyCommand: split.remainder,
+    }
+  }
+
+  const unrequireMatch = trimmedArgs.match(/^unrequire\s+([\s\S]+)$/)
+  if (unrequireMatch) {
+    const name = unrequireMatch[1]!.trim()
+    if (!/^[\w.-]+$/.test(name)) {
+      return usageError('Error: /goal unrequire needs the requirement name.')
+    }
+    return { type: 'unrequire', criterionId: name }
+  }
+  if (trimmedArgs === 'unrequire') {
+    return usageError('Error: /goal unrequire needs the requirement name.')
   }
 
   if (trimmedArgs === 'replace') {
@@ -802,6 +842,18 @@ export function formatThreadGoalSummary(goal: ThreadGoal): string {
     `Automatic turns: ${goal.continuationTurns} of ${goal.maxContinuationTurns}`,
   )
   lines.push(`Time used: ${goal.timeUsedSeconds}s`)
+
+  // Requirements are what decide whether this goal can be marked complete, so
+  // a blocked completion is illegible without them on screen.
+  const required = goal.contract.criteria.filter(c => c.required)
+  if (required.length > 0) {
+    lines.push('', 'Required before complete:')
+    for (const criterion of required) {
+      lines.push(
+        `- ${criterion.id}${criterion.verifyCommand ? `: ${criterion.verifyCommand}` : ''}`,
+      )
+    }
+  }
 
   if (goal.status === 'active') {
     lines.push(

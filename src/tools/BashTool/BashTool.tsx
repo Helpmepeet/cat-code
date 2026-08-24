@@ -1,4 +1,5 @@
 import { feature } from 'bun:bundle';
+import { recordThreadGoalCommandEvidence } from '../../utils/threadGoalEvidenceRecorder.js'
 import type { ToolResultBlockParam } from '@anthropic-ai/sdk/resources/index.mjs';
 import { copyFile, stat as fsStat, truncate as fsTruncate, link } from 'fs/promises';
 import * as React from 'react';
@@ -751,6 +752,25 @@ export const BashTool = buildTool({
         // File may already be gone — stdout preview is sufficient
       }
     }
+    // Goal evidence: observe the command this tool ALREADY ran under the
+    // normal permission and sandbox path. Nothing is executed here, so a goal
+    // grants no execution authority. The verdict is the real exit code and the
+    // coverage comes from the user's own contract, so neither is the model's
+    // to write. No-ops unless the session has a goal binding a criterion to
+    // this exact command.
+    void recordThreadGoalCommandEvidence({
+      goal: getAppState().threadGoal ?? null,
+      outcome: {
+        command: input.command,
+        exitCode: result.code,
+        interrupted: wasInterrupted,
+        output: stdout
+      }
+    }).catch(() => {
+      // Evidence is an observation, never a reason to fail the command the
+      // user actually asked for.
+    });
+
     const commandType = input.command.split(' ')[0];
     logEvent('tengu_bash_tool_command_executed', {
       command_type: commandType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,

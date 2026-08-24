@@ -27,6 +27,19 @@ export type ThreadGoalCriterion = {
   description: string
   /** A required criterion blocks completion until it is proven. */
   required: boolean
+  /**
+   * The command that proves this criterion, as the USER wrote it.
+   *
+   * This is what makes coverage unfakeable. If the maker declared which
+   * criteria its own command covered, it could run `true` and claim the suite
+   * passed. Instead the runtime matches an executed command against this
+   * string and takes the real exit code, so the maker has to actually run the
+   * user's check to get credit for it.
+   *
+   * Absent means the criterion has no automatic proof and can only ever be
+   * covered by evidence recorded some other way.
+   */
+  verifyCommand?: string
 }
 
 /**
@@ -96,7 +109,10 @@ export function hashThreadGoalContract(
     JSON.stringify({
       objective,
       criteria: contract.criteria
-        .map(c => `${c.id}:${c.required ? 'req' : 'opt'}:${c.description}`)
+        .map(
+          c =>
+            `${c.id}:${c.required ? 'req' : 'opt'}:${c.description}:${c.verifyCommand ?? ''}`,
+        )
         .sort(),
       constraints: [...contract.constraints].sort(),
       boundaries: [...contract.boundaries].sort(),
@@ -107,6 +123,43 @@ export function hashThreadGoalContract(
 
 export function digestThreadGoalEvidenceText(text: string): string {
   return hashContent(text)
+}
+
+/**
+ * Normalise a command before matching or digesting it.
+ *
+ * Whitespace-only differences are not meaningful differences between two runs
+ * of the same check, and a model that reproduces the user's command with a
+ * stray trailing space should still get credit for it.
+ */
+export function normalizeThreadGoalCommand(command: string): string {
+  return command.trim().replace(/\s+/g, ' ')
+}
+
+export function digestThreadGoalCommand(command: string): string {
+  return hashContent(normalizeThreadGoalCommand(command))
+}
+
+/**
+ * Which criteria an executed command proves.
+ *
+ * Coverage is derived from the contract, never supplied by the caller: a
+ * command covers exactly those criteria whose user-declared verifyCommand it
+ * matches. Returns an empty list for a command nobody bound to a criterion,
+ * which records nothing rather than recording an unattributable result.
+ */
+export function findCriteriaCoveredByCommand(
+  contract: ThreadGoalContract,
+  command: string,
+): string[] {
+  const normalized = normalizeThreadGoalCommand(command)
+  return contract.criteria
+    .filter(
+      criterion =>
+        criterion.verifyCommand !== undefined &&
+        normalizeThreadGoalCommand(criterion.verifyCommand) === normalized,
+    )
+    .map(criterion => criterion.id)
 }
 
 export type ThreadGoalCriterionVerdict = 'proven' | 'failed' | 'unverified'
@@ -329,6 +382,9 @@ export function parseThreadGoalContract(input: unknown): ThreadGoalContract {
             // Unreadable criteria default to REQUIRED. A criterion that
             // silently became optional is how a gate stops gating.
             required: candidate.required !== false,
+            ...(isNonEmptyString(candidate.verifyCommand)
+              ? { verifyCommand: candidate.verifyCommand }
+              : {}),
           },
         ]
       })
