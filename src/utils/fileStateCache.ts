@@ -12,11 +12,28 @@ export type FileState = {
   // Edit/Write must require an explicit Read first. `content` here holds the
   // RAW disk bytes (for getChangedFiles diffing), not what the model saw.
   isPartialView?: boolean
-  // True when a no-limit Read was cut short by the default line cap, so
-  // `content` holds only the head of a longer file. Kept separate from
-  // isPartialView, which also gates Read's dedup — a line-capped read is
-  // still a valid dedup target, it just isn't proof the model saw the file.
+  // True when Read stopped before the requested file view was complete, either
+  // at the default line cap or at the rendered-token cap. Kept separate from
+  // isPartialView, which also gates Read's dedup — a truncated read is still a
+  // valid dedup target, it just isn't proof the model saw the whole file.
   isTruncatedView?: boolean
+}
+
+/**
+ * FileWrite replaces the entire file, so only a complete, unbounded Read from
+ * the first line can authorize it. Targeted reads remain valid for tools that
+ * make targeted edits, but not for whole-file replacement.
+ */
+export function isCompleteUnboundedRead(
+  fileState: FileState | undefined,
+): boolean {
+  return (
+    fileState !== undefined &&
+    fileState.offset === 1 &&
+    fileState.limit === undefined &&
+    !fileState.isPartialView &&
+    !fileState.isTruncatedView
+  )
 }
 
 // Default max entries for read file state caches

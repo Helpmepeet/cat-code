@@ -219,6 +219,14 @@ describe('provider and prompt regressions', () => {
     ).toEqual(normalizeConstraintLines(getWriteToolDescription('openai')))
   })
 
+  test('FileWrite requires a complete Read before whole-file replacement', () => {
+    const prompt = getWriteToolDescription('openai')
+
+    expect(prompt).toContain('without offset or limit')
+    expect(prompt).toContain('complete, untruncated contents')
+    expect(prompt).toContain('targeted edit tool instead of Write')
+  })
+
   test('OpenAI uses Apply_patch prompt instead of FileEdit prompt', () => {
     expect(getFilePatchToolDescription()).toContain('*** Begin Patch')
     expect(getFilePatchToolDescription()).toContain('*** Update File')

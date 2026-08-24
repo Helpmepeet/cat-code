@@ -8,7 +8,8 @@ export const DESCRIPTION = 'Write a file to the local filesystem.'
 function getWriteConstraintLines(): string[] {
   return [
     'This tool overwrites the existing file at the provided path.',
-    `If the target file already exists, you MUST use the ${FILE_READ_TOOL_NAME} tool first to read its current contents. This tool will fail if you did not read the file first.`,
+    `If the target file already exists, you MUST use the ${FILE_READ_TOOL_NAME} tool first without offset or limit and receive its complete, untruncated contents. A targeted or partial read does not authorize Write.`,
+    'If the file is too large for a complete Read, use a targeted edit tool instead of Write.',
     'Before using Write, check whether Edit is the better tool. Prefer Edit for modifying an existing file because it sends only the diff. Use Write for creating new files or for complete rewrites.',
     'NEVER create documentation files (*.md) or README files unless the user explicitly requests them.',
     'Use emojis only if the user explicitly requests them.',

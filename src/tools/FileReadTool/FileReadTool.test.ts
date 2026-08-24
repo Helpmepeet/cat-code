@@ -9,22 +9,31 @@ import {
   type Output,
   suggestedRetryLimit,
 } from './FileReadTool.js'
+import { DEFAULT_MAX_OUTPUT_TOKENS } from './limits.js'
 import { MAX_LINES_TO_READ, OFFSET_INSTRUCTION_TARGETED } from './prompt.js'
 
 let tmpDir: string
 let priorSimple: string | undefined
+let priorFixturesRoot: string | undefined
 
 beforeAll(() => {
   tmpDir = mkdtempSync(join(tmpdir(), 'file-read-tool-'))
   // Skips skill discovery in call(), which would hit the real filesystem.
   priorSimple = process.env.CLAUDE_CODE_SIMPLE
+  priorFixturesRoot = process.env.CLAUDE_CODE_TEST_FIXTURES_ROOT
   process.env.CLAUDE_CODE_SIMPLE = '1'
+  process.env.CLAUDE_CODE_TEST_FIXTURES_ROOT = tmpDir
 })
 
 afterAll(() => {
   rmSync(tmpDir, { recursive: true, force: true })
   if (priorSimple === undefined) delete process.env.CLAUDE_CODE_SIMPLE
   else process.env.CLAUDE_CODE_SIMPLE = priorSimple
+  if (priorFixturesRoot === undefined) {
+    delete process.env.CLAUDE_CODE_TEST_FIXTURES_ROOT
+  } else {
+    process.env.CLAUDE_CODE_TEST_FIXTURES_ROOT = priorFixturesRoot
+  }
 })
 
 /**
@@ -278,5 +287,66 @@ describe('MaxFileReadTokenExceededError', () => {
     expect(error.message).toContain('offset and limit')
     expect(error.tokenCount).toBe(50_000)
     expect(error.maxTokens).toBe(25_000)
+  })
+})
+
+describe('token overflow prefixes', () => {
+  test('returns a complete-line prefix with continuation and search guidance', async () => {
+    const filePath = join(tmpDir, 'token-prefix.txt')
+    writeFileSync(filePath, `${'x'.repeat(100)}\n`.repeat(100), 'utf-8')
+
+    const data = await readWith(createContext(1_000), filePath)
+    const rendered = FileReadTool.mapToolResultToToolResultBlockParam(
+      data,
+      'toolu-file-read',
+    )
+    const text = typeof rendered.content === 'string' ? rendered.content : ''
+
+    expect(data.file.numLines).toBeLessThan(100)
+    expect(data.file.content.endsWith('\n')).toBe(false)
+    expect(text).toContain('partial view')
+    expect(text).toContain('offset ')
+    expect(text).toContain('Search for specific content')
+  })
+
+  test('still errors when one complete line cannot fit', async () => {
+    const filePath = join(tmpDir, 'token-single-line.txt')
+    writeFileSync(filePath, 'x'.repeat(20_000), 'utf-8')
+
+    await expect(readWith(createContext(1_000), filePath)).rejects.toBeInstanceOf(
+      MaxFileReadTokenExceededError,
+    )
+  })
+
+  test('budgets line-number gutters as part of the returned prefix', async () => {
+    const filePath = join(tmpDir, 'token-line-gutters.txt')
+    writeFileSync(filePath, `${'x'}\n`.repeat(500), 'utf-8')
+
+    const data = await readWith(createContext(1_000), filePath)
+    const rendered = FileReadTool.mapToolResultToToolResultBlockParam(
+      data,
+      'toolu-file-read',
+    )
+    const text = typeof rendered.content === 'string' ? rendered.content : ''
+
+    expect(data.file.numLines).toBeLessThan(500)
+    expect(text).toContain('partial view')
+  })
+
+  test('keeps the rendered overflow prefix below the hard cap', async () => {
+    const filePath = join(tmpDir, 'token-hard-cap.txt')
+    writeFileSync(filePath, `${'x'.repeat(200)}\n`.repeat(1_000), 'utf-8')
+
+    // A caller-supplied higher limit cannot lift the 25k hard ceiling.
+    const data = await readWith(createContext(50_000), filePath)
+    const rendered = FileReadTool.mapToolResultToToolResultBlockParam(
+      data,
+      'toolu-file-read',
+    )
+    const text = typeof rendered.content === 'string' ? rendered.content : ''
+    const conservativeTokens = Math.ceil(Buffer.byteLength(text, 'utf8') / 1.4)
+
+    expect(data.file.numLines).toBeLessThan(1_000)
+    expect(conservativeTokens).toBeLessThanOrEqual(DEFAULT_MAX_OUTPUT_TOKENS)
   })
 })

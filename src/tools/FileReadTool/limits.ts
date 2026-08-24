@@ -25,6 +25,10 @@ import { getFeatureValue_CACHED_MAY_BE_STALE } from 'src/services/analytics/grow
 import { MAX_OUTPUT_SIZE } from 'src/utils/file.js'
 export const DEFAULT_MAX_OUTPUT_TOKENS = 25000
 
+// Prefer a compact prefix on overflow, leaving room in the model context for
+// the surrounding request. DEFAULT_MAX_OUTPUT_TOKENS remains the hard ceiling.
+export const DEFAULT_PREFIX_TARGET_TOKENS = 8000
+
 /**
  * Env var override for max output tokens. Returns undefined when unset/invalid
  * so the caller can fall through to the next precedence tier.
@@ -52,8 +56,10 @@ export type FileReadingLimits = {
  * override. Memoized so the GrowthBook value is fixed at first call — avoids
  * the cap changing mid-session as the flag refreshes in the background.
  *
- * Precedence for maxTokens: env var > GrowthBook > DEFAULT_MAX_OUTPUT_TOKENS.
- * (Env var is a user-set override, should beat experiment infrastructure.)
+ * Precedence for the requested maxTokens: env var > GrowthBook >
+ * DEFAULT_MAX_OUTPUT_TOKENS. FileReadTool treats DEFAULT_MAX_OUTPUT_TOKENS as
+ * the absolute ceiling, so these overrides can lower the live limit but cannot
+ * raise it.
  *
  * Defensive: each field is individually validated; invalid values fall
  * through to the hardcoded defaults (no route to cap=0).

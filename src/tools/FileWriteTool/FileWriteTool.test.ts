@@ -25,6 +25,8 @@ function writeFixture(name: string): string {
 function createContext(state: {
   filePath: string
   isTruncatedView?: boolean
+  offset?: number
+  limit?: number
 }) {
   const readFileState = createFileStateCacheWithSizeLimit(10)
   readFileState.set(state.filePath, {
@@ -32,8 +34,8 @@ function createContext(state: {
     // Comfortably ahead of the fixture's mtime, so the modified-since-read
     // guard cannot be what rejects the write.
     timestamp: Date.now() + 60_000,
-    offset: 1,
-    limit: undefined,
+    offset: state.offset ?? 1,
+    limit: state.limit,
     ...(state.isTruncatedView ? { isTruncatedView: true } : {}),
   })
   return {
@@ -57,7 +59,7 @@ describe('read-before-write gate', () => {
     )
 
     expect(result.result).toBe(false)
-    expect(result.message).toContain('Only the beginning of this file')
+    expect(result.message).toContain('not been read completely')
   })
 
   test('allows a write when the whole file was read', async () => {
@@ -69,5 +71,18 @@ describe('read-before-write gate', () => {
     )
 
     expect(result.result).toBe(true)
+  })
+
+  test('rejects a write after an explicit range read', async () => {
+    const filePath = writeFixture('range-only.txt')
+
+    const result = await FileWriteTool.validateInput(
+      { file_path: filePath, content: 'replacement' },
+      createContext({ filePath, offset: 1, limit: 1 }),
+    )
+
+    expect(result.result).toBe(false)
+    expect(result.message).toContain('use an unbounded Read first')
+    expect(result.message).toContain('targeted edit tool')
   })
 })

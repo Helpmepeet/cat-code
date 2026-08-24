@@ -73,7 +73,11 @@ import { readFileInRange } from '../../utils/readFileInRange.js'
 import { semanticNumber } from '../../utils/semanticNumber.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { BASH_TOOL_NAME } from '../BashTool/toolName.js'
-import { getDefaultFileReadingLimits } from './limits.js'
+import {
+  DEFAULT_MAX_OUTPUT_TOKENS,
+  DEFAULT_PREFIX_TARGET_TOKENS,
+  getDefaultFileReadingLimits,
+} from './limits.js'
 import {
   DESCRIPTION,
   FILE_READ_TOOL_NAME,
@@ -744,9 +748,19 @@ function partialReadNotice(data: {
   file: { startLine: number; numLines: number; totalLines: number }
 }): string {
   if (!truncatedReads.has(data)) return ''
-  const firstLine = Math.max(data.file.startLine, 1)
-  const lastLine = firstLine + data.file.numLines - 1
-  return `\n\n<system-reminder>Showing lines ${firstLine} to ${lastLine} of ${data.file.totalLines}. This is a partial view. Read again with offset ${lastLine + 1} to continue.</system-reminder>`
+  return renderPartialReadNotice(data.file, tokenTruncatedReads.has(data))
+}
+
+function renderPartialReadNotice(
+  file: { startLine: number; numLines: number; totalLines: number },
+  searchFirst: boolean,
+): string {
+  const firstLine = Math.max(file.startLine, 1)
+  const lastLine = firstLine + file.numLines - 1
+  const searchGuidance = searchFirst
+    ? ' Search for specific content before reading another range when possible.'
+    : ''
+  return `\n\n<system-reminder>Showing lines ${firstLine} to ${lastLine} of ${file.totalLines}. This is a partial view. Read again with offset ${lastLine + 1} to continue.${searchGuidance}</system-reminder>`
 }
 
 /**
@@ -760,6 +774,9 @@ const memoryFileMtimes = new WeakMap<object, number>()
 
 /** Same side-channel, for "this read stopped short of the end of the file". */
 const truncatedReads = new WeakSet<object>()
+
+/** Partial reads created to keep a token-overflow result usable. */
+const tokenTruncatedReads = new WeakSet<object>()
 
 function memoryFileFreshnessPrefix(data: object): string {
   const mtimeMs = memoryFileMtimes.get(data)
@@ -798,6 +815,58 @@ async function validateContentTokens(
         : undefined,
     )
   }
+}
+
+async function renderedTokenCount(
+  content: string,
+  maxTokens?: number,
+): Promise<number> {
+  const bytes = Buffer.byteLength(content, 'utf8')
+  if (bytes === 0) return 0
+  // Preserve a no-network fast path whenever even the conservative fallback
+  // fits. The measured densest supported text is base64 at about 1.45 bytes
+  // per token (tokenEstimation.ts); 1.4 keeps a small safety margin.
+  const fallbackCount = Math.ceil(bytes / 1.4)
+  if (maxTokens !== undefined && fallbackCount <= maxTokens) {
+    return fallbackCount
+  }
+  const apiCount = await countTokensWithAPI(content)
+  // The rendered result includes line-number gutters and a continuation
+  // notice. When exact counting is unavailable, keep the conservative measured
+  // fallback rather than reverting to the source extension's looser ratio.
+  return apiCount ?? fallbackCount
+}
+
+async function fitTokenPrefix(
+  content: string,
+  startLine: number,
+  totalLines: number,
+  initialLineCount: number,
+  targetTokens: number,
+): Promise<{ content: string; lineCount: number } | null> {
+  const lines = content.split('\n')
+  if (content.endsWith('\n')) lines.pop()
+  let lineCount = Math.min(initialLineCount, lines.length)
+
+  while (lineCount > 0) {
+    // A partial view ends at a complete line but intentionally omits the
+    // separator after that line. Keeping the source file's trailing newline
+    // would make addLineNumbers render a phantom extra numbered line.
+    const prefix = lines.slice(0, lineCount).join('\n')
+    const rendered =
+      formatFileLines({ content: prefix, startLine }) +
+      renderPartialReadNotice(
+        { startLine, numLines: lineCount, totalLines },
+        true,
+      )
+    const renderedTokens = await renderedTokenCount(rendered, targetTokens)
+    if (renderedTokens <= targetTokens) return { content: prefix, lineCount }
+
+    const nextLineCount = Math.floor((lineCount * targetTokens) / renderedTokens)
+    lineCount = Math.min(lineCount - 1, nextLineCount)
+  }
+
+  return null
 }
 
 /**
@@ -1105,19 +1174,58 @@ async function callInner(
     readBytes = Buffer.byteLength(content, 'utf8')
   }
 
-  await validateContentTokens(content, ext, maxTokens, {
-    startLine: offset,
-    lineCount,
-    totalLines,
-  })
+  // The configured limit can lower the ceiling but cannot raise the hard
+  // default. On overflow, return a verified complete-line prefix when one can
+  // fit under the normal target; never expose an oversized rendered result.
+  const hardTokenLimit = Math.min(maxTokens, DEFAULT_MAX_OUTPUT_TOKENS)
+  const renderedCandidate =
+    formatFileLines({ content, startLine: offset }) +
+    (truncated
+      ? renderPartialReadNotice(
+          { startLine: offset, numLines: lineCount, totalLines },
+          false,
+        )
+      : '')
+  const renderedCandidateTokens = await renderedTokenCount(
+    renderedCandidate,
+    hardTokenLimit,
+  )
+  const tokenTruncated = renderedCandidateTokens > hardTokenLimit
+  if (tokenTruncated) {
+    const targetTokens = Math.min(DEFAULT_PREFIX_TARGET_TOKENS, hardTokenLimit)
+    const prefix = await fitTokenPrefix(
+      content,
+      offset,
+      totalLines,
+      suggestedRetryLimit(lineCount, targetTokens, renderedCandidateTokens),
+      targetTokens,
+    )
+    if (!prefix) {
+      const suggestedLimit = suggestedRetryLimit(
+        lineCount,
+        hardTokenLimit,
+        renderedCandidateTokens,
+      )
+      throw new MaxFileReadTokenExceededError(
+        renderedCandidateTokens,
+        hardTokenLimit,
+        suggestedLimit > 0
+          ? { startLine: Math.max(offset, 1), totalLines, suggestedLimit }
+          : undefined,
+      )
+    }
+    content = prefix.content
+    lineCount = prefix.lineCount
+    readBytes = Buffer.byteLength(content, 'utf8')
+    truncated = true
+  }
 
   readFileState.set(fullFilePath, {
     content,
     timestamp: Math.floor(mtimeMs),
     offset,
     limit,
-    // Only a capped default read is a surprise; an explicit range means the
-    // caller already knows it asked for part of the file.
+    // A line-capped default or token-capped range is not a complete-file view.
     ...(truncated ? { isTruncatedView: true } : {}),
   })
   context.nestedMemoryAttachmentTriggers?.add(fullFilePath)
@@ -1143,6 +1251,7 @@ async function callInner(
   }
   if (truncated) {
     truncatedReads.add(data)
+    if (tokenTruncated) tokenTruncatedReads.add(data)
   }
 
   logFileOperation({

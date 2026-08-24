@@ -24,6 +24,7 @@ import {
 import { isEnvTruthy } from '../../utils/envUtils.js'
 import { isENOENT } from '../../utils/errors.js'
 import { getFileModificationTime, writeTextContent } from '../../utils/file.js'
+import { isCompleteUnboundedRead } from '../../utils/fileStateCache.js'
 import {
   fileHistoryEnabled,
   fileHistoryTrackEdit,
@@ -204,22 +205,11 @@ export const FileWriteTool = buildTool({
     }
 
     const readTimestamp = toolUseContext.readFileState.get(fullFilePath)
-    if (!readTimestamp || readTimestamp.isPartialView) {
+    if (!isCompleteUnboundedRead(readTimestamp)) {
       return {
         result: false,
         message:
-          'File has not been read yet. Read it first before writing to it.',
-        errorCode: 2,
-      }
-    }
-    // A write replaces the whole file, so seeing only its head is not enough.
-    // Reachable without an explicit range: Read caps a no-limit read at
-    // MAX_LINES_TO_READ, so a long file comes back truncated by default.
-    if (readTimestamp.isTruncatedView) {
-      return {
-        result: false,
-        message:
-          'Only the beginning of this file has been read, and writing replaces the whole file. Read the rest of it first, using offset to continue from where the last read stopped.',
+          'File has not been read completely from the beginning. Writing replaces the whole file, so use an unbounded Read first. If the file is too large for that, use a targeted edit tool instead.',
         errorCode: 2,
       }
     }
@@ -298,16 +288,17 @@ export const FileWriteTool = buildTool({
     if (meta !== null) {
       const lastWriteTime = getFileModificationTime(fullFilePath)
       const lastRead = readFileState.get(fullFilePath)
-      if (!lastRead || lastWriteTime > lastRead.timestamp) {
+      // Recheck the same whole-file-read condition used at permission time:
+      // another tool call can replace the cache entry while this write waits.
+      if (!isCompleteUnboundedRead(lastRead)) {
+        throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
+      }
+      if (lastWriteTime > lastRead.timestamp) {
         // Timestamp indicates modification, but on Windows timestamps can change
         // without content changes (cloud sync, antivirus, etc.). For full reads,
         // compare content as a fallback to avoid false positives.
-        const isFullRead =
-          lastRead &&
-          lastRead.offset === undefined &&
-          lastRead.limit === undefined
         // meta.content is CRLF-normalized — matches readFileState's normalized form.
-        if (!isFullRead || meta.content !== lastRead.content) {
+        if (meta.content !== lastRead.content) {
           throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
         }
       }
