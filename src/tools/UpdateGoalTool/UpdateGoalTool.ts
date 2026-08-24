@@ -9,6 +9,7 @@ import {
 } from '../../utils/threadGoal.js'
 import { checkThreadGoalTransition } from '../../utils/threadGoalState.js'
 import {
+  EMPTY_THREAD_GOAL_CONTRACT,
   evaluateThreadGoalCompletion,
   hashThreadGoalContract,
 } from '../../utils/threadGoalEvidence.js'
@@ -156,13 +157,11 @@ export const UpdateGoalTool = buildTool({
     // completion; this decides it, from evidence the runtime recorded. A goal
     // with no required criteria is not gated, so plain-objective goals behave
     // exactly as before.
+    const contract = currentGoal.contract ?? EMPTY_THREAD_GOAL_CONTRACT
     const completion = evaluateThreadGoalCompletion({
-      contract: currentGoal.contract,
-      evidence: currentGoal.evidence,
-      contractDigest: hashThreadGoalContract(
-        currentGoal.objective,
-        currentGoal.contract,
-      ),
+      contract,
+      evidence: currentGoal.evidence ?? [],
+      contractDigest: hashThreadGoalContract(currentGoal.objective, contract),
       workspaceFingerprint: await getThreadGoalWorkspaceFingerprint(),
     })
     if (!completion.allowed) {

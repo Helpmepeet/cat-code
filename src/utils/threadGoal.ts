@@ -815,6 +815,19 @@ export function pauseActiveThreadGoalOnAbort(
 }
 
 /**
+ * Read a goal's contract tolerantly.
+ *
+ * parseThreadGoal always supplies one, but this is also reached from display
+ * and projection paths that receive goal-shaped objects from elsewhere. On the
+ * desktop those run inside the snapshot builder, where a throw does not
+ * surface as an error: the frame is simply never emitted and the goal silently
+ * vanishes from the UI. Display degrades, it does not throw.
+ */
+function readGoalContract(goal: ThreadGoal): ThreadGoal['contract'] {
+  return goal.contract ?? EMPTY_THREAD_GOAL_CONTRACT
+}
+
+/**
  * Why the goal stopped, in one clause, or null when the label already says it.
  */
 export function formatThreadGoalStatusReason(goal: ThreadGoal): string | null {
@@ -845,7 +858,7 @@ export function formatThreadGoalSummary(goal: ThreadGoal): string {
 
   // Requirements are what decide whether this goal can be marked complete, so
   // a blocked completion is illegible without them on screen.
-  const required = goal.contract.criteria.filter(c => c.required)
+  const required = readGoalContract(goal).criteria.filter(c => c.required)
   if (required.length > 0) {
     lines.push('', 'Required before complete:')
     for (const criterion of required) {
