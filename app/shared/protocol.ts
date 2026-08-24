@@ -676,6 +676,13 @@ export type EventFrame = {
   event: AppSessionEvent
 }
 
+/** Transcript-only barrier used before replaying a conversation rewind. */
+export type TranscriptResetFrame = {
+  kind: 'transcript.reset'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+}
+
 /**
  * Well-known `ErrorFrame.requestId` marking a LOSSY history replay (F2): the
  * restored transcript exceeded the replay caps (`MAX_HISTORY_REPLAY_FRAMES` /
@@ -1904,10 +1911,10 @@ export type RunControlsSnapshotFrame = {
 }
 
 /* ------------------------------------------------------------------------- *
- * P4-6b — session-action WRITE verbs (Rename / Export / Branch)
+ * Session-action WRITE verbs
  * ------------------------------------------------------------------------- *
  *
- * The Sessions `⋯` menu's three MUTATING verbs become interactive. Like the P4-5
+ * Session-scoped mutations share one result family. Like the P4-5
  * account verbs, the P4-8b agent-mode set, the P4-15 workspace-trust accept, the
  * P4-19 settings write, and the P4-24c run-controls, these are app-owned inbound
  * vocabulary the engine's shared `appClientMessageSchema` does NOT carry — each is
@@ -1936,14 +1943,11 @@ export type RunControlsSnapshotFrame = {
  *    name SUGGESTION to a basename because HC1 forbids a renderer-authored path.
  *    Nothing about that changes THIS frame: the export result is unchanged, and the
  *    file sink is a main-owned capability that adds no wire vocabulary.
- *  - `session.branch` → the engine's OWN `createFork` (`src/commands/branch/branch.ts:61`,
- *    forks the whole conversation at HEAD — no from-message-N, so the menu label
- *    ADAPTS to "Branch from HEAD…"). It writes a real fork transcript on disk and
- *    the result carries its new engine session id. AUTO-OPENING the fork is
- *    §0-DEFERRED: a fork has no registry row/`appSessionId`, and the sidecar has
- *    no channel to the host control plane (`host.createSession` with
- *    `resumeEngineSessionId` is main-supplied only, HC1) — opening it needs
- *    net-new cross-plane plumbing that would touch the locked frame vocabulary.
+ *  - `session.editFromMessage` / `session.branchFromMessage` → the live
+ *    controller's engine-backed rewind/fork operations, with the target resolved
+ *    again from raw eligible user messages.
+ *    Branch results carry trusted engine identity/title so main can seed the
+ *    existing open-history resolver without adding a host or preload API.
  *
  * Security posture (all preserved): the renderer authors ONLY intent — a session
  * id + (rename) a title string. It NEVER authors an engine object, a path (HC1),
@@ -1976,6 +1980,8 @@ export const SESSION_ACTION_VERB_TYPES = [
   'session.rename',
   'session.export',
   'session.branch',
+  'session.editFromMessage',
+  'session.branchFromMessage',
   'session.tag',
 ] as const
 
@@ -1994,10 +2000,24 @@ export type SessionExportMessage = {
   requestId: string
 }
 
-/** Fork the whole conversation at HEAD into a new engine session (real on disk). */
+/** Fork the current active conversation at HEAD. Retained as additive v1 vocabulary. */
 export type SessionBranchMessage = {
   type: 'session.branch'
   requestId: string
+}
+
+/** Rewind this conversation to immediately before one engine-resolved user message. */
+export type SessionEditFromMessageMessage = {
+  type: 'session.editFromMessage'
+  requestId: string
+  userMessageId: string
+}
+
+/** Fork this conversation immediately before one engine-resolved user message. */
+export type SessionBranchFromMessageMessage = {
+  type: 'session.branchFromMessage'
+  requestId: string
+  userMessageId: string
 }
 
 /**
@@ -2015,15 +2035,18 @@ export type SessionActionVerbMessage =
   | SessionRenameMessage
   | SessionExportMessage
   | SessionBranchMessage
+  | SessionEditFromMessageMessage
+  | SessionBranchFromMessageMessage
   | SessionTagMessage
 
 /**
  * P4-6b outbound result echoing the verb's `requestId` (T5a-analog). ONE frame
- * for all three verbs, discriminated by `verb` (mirrors `run-control.result`):
+ * for all verbs, discriminated by `verb` (mirrors `run-control.result`):
  *  - `exportText` present iff `verb === 'export' && ok` — the engine-rendered
  *    plain-text transcript (trusted-engine outbound; secretGuard-scanned).
- *  - `branchEngineSessionId` present iff `verb === 'branch' && ok` — the new
- *    fork's engine session id (for the honest toast / a future open path).
+ *  - `branchEngineSessionId` present iff
+ *    `verb === 'branchFromMessage' && ok` — the new fork's engine session id
+ *    (and title) for the existing open-history path.
  * `message` is a redacted, human-readable outcome; it NEVER carries a token.
  */
 export type SessionActionResultFrame = {
@@ -2031,11 +2054,22 @@ export type SessionActionResultFrame = {
   protocolVersion: typeof PROTOCOL_VERSION
   sessionId: SessionId
   requestId: string
-  verb: 'rename' | 'export' | 'branch' | 'tag'
+  verb:
+    | 'rename'
+    | 'export'
+    | 'branch'
+    | 'editFromMessage'
+    | 'branchFromMessage'
+    | 'tag'
   ok: boolean
   message: string
   exportText?: string
   branchEngineSessionId?: string
+  branchTitle?: string
+  selectedPrompt?: {
+    content: string | unknown[]
+    imagePasteIds?: number[]
+  }
 }
 
 /* ------------------------------------------------------------------------- *
@@ -2759,6 +2793,8 @@ export type DiagnosticsSnapshotFrame = {
 export type SessionCatalogEntry = {
   /** The transcript session id (matches a live row's `engineSessionId`). */
   sessionId: string
+  /** Engine-authored fork provenance derived from transcript `forkedFrom`. */
+  forked: boolean
   /** Session root (the transcript's project path). */
   cwd: string
   /**
@@ -3153,6 +3189,7 @@ export type ServerFramePayload =
   | ReadyFrame
   | SessionTitleFrame
   | EventFrame
+  | TranscriptResetFrame
   | PongFrame
   | ErrorFrame
   | LifecycleFrame
@@ -3211,6 +3248,7 @@ const SERVER_FRAME_KINDS: Record<ServerFrameKind, true> = {
   ready: true,
   'session-title': true,
   event: true,
+  'transcript.reset': true,
   pong: true,
   error: true,
   lifecycle: true,
@@ -3448,13 +3486,10 @@ export type CatCodeBridge = {
    */
   runControlVerb(sessionId: SessionId, verb: RunControlVerbMessage): void
   /**
-   * P4-6b — request a session-action verb (rename / export / branch) on the
-   * addressed session's sidecar. The renderer authors ONLY intent (a title string
-   * on rename; export/branch carry no params); the sidecar re-validates and runs
-   * the engine's OWN saveCustomTitle / renderMessagesToPlainText / createFork. The
-   * outcome arrives as a `session-action.result` frame echoing `requestId` — a
-   * successful export carries the rendered text; a successful branch, the new
-   * engine session id. No engine object, no path, no token crosses.
+   * Request a session-action verb on the addressed session's sidecar. The
+   * renderer authors intent only; the sidecar re-validates and runs the engine's
+   * own operation. Results echo `requestId`; targeted branch results carry the
+   * trusted new engine session id. No engine object, path, or token crosses.
    */
   sessionActionVerb(sessionId: SessionId, verb: SessionActionVerbMessage): void
   /**

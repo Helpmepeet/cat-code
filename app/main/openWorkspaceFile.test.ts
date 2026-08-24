@@ -19,6 +19,7 @@ function session(cwd: string): SessionDescriptor {
     engineSessionId: null,
     cwd,
     title: null,
+    forked: false,
     titleUpdatedAt: null,
     status: 'ready',
     restorable: false,

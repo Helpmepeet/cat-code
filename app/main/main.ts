@@ -88,7 +88,10 @@ import {
 } from './transcriptCache.js'
 import { readTranscriptRunFacts } from '../shared/transcriptRunFacts.js'
 import { readSessionsCatalogCache } from './sessionsCatalogBaseline.js'
-import { resolveOpenHistorySession } from './openHistorySession.js'
+import {
+  resolveOpenHistorySession,
+  type TrustedOpenHistorySeed,
+} from './openHistorySession.js'
 import { openWorkspaceFile } from './openWorkspaceFile.js'
 import {
   persistTranscriptBackfillResult,
@@ -216,6 +219,60 @@ const CH_DELIVERY_HEALTH_RESPONSE = 'catcode:delivery-health-response'
 // unbounded set of error/replay-buffer keys in main.
 const SESSION_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const BRANCH_OPEN_SEED_TTL_MS = 5 * 60 * 1000
+const MAX_BRANCH_OPEN_SEEDS = 64
+const branchOpenSeeds = new Map<
+  string,
+  TrustedOpenHistorySeed & { expiresAt: number }
+>()
+
+function pruneBranchOpenSeeds(now = Date.now()): void {
+  for (const [engineSessionId, seed] of branchOpenSeeds) {
+    if (seed.expiresAt <= now) branchOpenSeeds.delete(engineSessionId)
+  }
+  while (branchOpenSeeds.size > MAX_BRANCH_OPEN_SEEDS) {
+    const oldest = branchOpenSeeds.keys().next().value
+    if (oldest === undefined) break
+    branchOpenSeeds.delete(oldest)
+  }
+}
+
+function rememberBranchOpenSeed(
+  appSessionId: SessionId,
+  frame: Extract<ServerFrame, { kind: 'session-action.result' }>,
+): void {
+  if (
+    !frame.ok ||
+    frame.verb !== 'branchFromMessage' ||
+    typeof frame.branchEngineSessionId !== 'string' ||
+    !SESSION_ID_RE.test(frame.branchEngineSessionId)
+  ) {
+    return
+  }
+  const source = host
+    ?.listSessions()
+    .find(descriptor => descriptor.appSessionId === appSessionId)
+  if (!source || source.cwd.trim().length === 0) return
+  const now = Date.now()
+  branchOpenSeeds.delete(frame.branchEngineSessionId)
+  branchOpenSeeds.set(frame.branchEngineSessionId, {
+    engineSessionId: frame.branchEngineSessionId,
+    cwd: source.cwd,
+    forked: true,
+    ...(typeof frame.branchTitle === 'string' &&
+    frame.branchTitle.trim().length > 0
+      ? { title: frame.branchTitle }
+      : {}),
+    expiresAt: now + BRANCH_OPEN_SEED_TTL_MS,
+  })
+  pruneBranchOpenSeeds(now)
+}
+
+function branchOpenSeed(engineSessionId: unknown): TrustedOpenHistorySeed | undefined {
+  pruneBranchOpenSeeds()
+  if (typeof engineSessionId !== 'string') return undefined
+  return branchOpenSeeds.get(engineSessionId)
+}
 
 // Control-plane channels (HC3 — fixed, per-method structured senders). `invoke`
 // channels return a typed HostResult; `pick-directory` returns a realpath or
@@ -1580,6 +1637,9 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
     if (isTerminalLifecycleFrame(frame)) {
       pendingAccountDeletionNotices.delete(event.sessionId)
     }
+    if (frame.kind === 'session-action.result') {
+      rememberBranchOpenSeed(event.sessionId, frame)
+    }
     const traced = traceFrame(frame, 'supervisor.socket.received')
     // Receipt is true whether the attachment gate forwards immediately or
     // buffers for replay; record that before deciding its outcome.
@@ -2375,12 +2435,14 @@ function registerHostControlPlane(): void {
         engineSessionId,
         host.listSessions(),
         readSessionsCatalogCache(defaultRegistryDir()),
+        branchOpenSeed(engineSessionId),
       )
       if (resolution.kind === 'reject') {
         return Promise.resolve({ ok: false, error: resolution.error })
       }
       if (resolution.kind === 'existing') {
         // Already a ready app row — the renderer switches/restores it; no spawn.
+        branchOpenSeeds.delete(resolution.descriptor.engineSessionId ?? '')
         return Promise.resolve({ ok: true, value: resolution.descriptor })
       }
       const engineId = resolution.resumeEngineSessionId
@@ -2402,6 +2464,7 @@ function registerHostControlPlane(): void {
           // open-from-history session's tab/sidebar shows its real name instead
           // of the cwd basename (bug-sweep #2, 2026-07-21).
           ...(resolution.title !== undefined ? { title: resolution.title } : {}),
+          ...(resolution.forked === true ? { forked: true } : {}),
         })
         .then(result => {
           // Bootstrap coalescing, the same guard `CH_HOST_RESTORE` arms: this
@@ -2425,6 +2488,7 @@ function registerHostControlPlane(): void {
           // frame, so a resume that replays nothing still goes live.
           if (result.ok) {
             attachmentGate.startReplayCoalescing(result.value.appSessionId)
+            branchOpenSeeds.delete(engineId)
           }
           return result
         })
