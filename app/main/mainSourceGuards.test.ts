@@ -113,7 +113,7 @@ test('HC1: the save-text handler never hands the chosen path back to the rendere
   // token-instead-of-path posture pointless one channel over.
   const save = region(
     'ipcMain.handle(\n    CH_HOST_SAVE_TEXT',
-    'function registerDebugStateHandler',
+    'ipcMain.handle(CH_HOST_OPEN_WORKSPACE_FILE',
   ).replace(/\/\/.*$/gm, '')
 
   // The dialog's answer is used in EXACTLY two places, both pinned below: the
