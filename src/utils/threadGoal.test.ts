@@ -994,7 +994,7 @@ describe('thread goal continuation policy', () => {
     })
     expect(firstActive).toEqual({
       resetKey: `${activeGoal.goalId}:${activeGoal.revision}:${activeGoal.status}`,
-      pendingBudgetWrapUpGoalId: null,
+      budgetWrapUp: { action: 'disarm' },
       shouldBumpIdleSignal: true,
     })
 
@@ -1011,7 +1011,7 @@ describe('thread goal continuation policy', () => {
     })
     expect(resumed).toEqual({
       resetKey: `${resumedGoal.goalId}:${resumedGoal.revision}:${resumedGoal.status}`,
-      pendingBudgetWrapUpGoalId: null,
+      budgetWrapUp: { action: 'disarm' },
       shouldBumpIdleSignal: true,
     })
 
@@ -1021,9 +1021,68 @@ describe('thread goal continuation policy', () => {
     })
     expect(budgetWrap).toEqual({
       resetKey: `${budgetLimitedGoal.goalId}:${budgetLimitedGoal.revision}:${budgetLimitedGoal.status}`,
-      pendingBudgetWrapUpGoalId: budgetLimitedGoal.goalId,
+      budgetWrapUp: { action: 'arm', goalId: budgetLimitedGoal.goalId },
       shouldBumpIdleSignal: true,
     })
+  })
+
+  test('a budget-limited goal arms exactly one wrap-up, however often it is written', () => {
+    // The regression this exists for: the reset key includes `revision`, and
+    // the wrap-up turn itself charges usage, which bumps `revision`. Re-arming
+    // on that bump made the wrap-up turn re-arm itself, so a goal stopped for
+    // exhausting its budget went on spending indefinitely.
+    const activeGoal = createThreadGoal('session-1', 'finish phase 1C', undefined, 100)
+    const budgetLimited = updateThreadGoalStatus(
+      activeGoal,
+      'budget_limited',
+      'token_budget_exhausted',
+      200,
+    )
+
+    const arming = deriveThreadGoalContinuationResetState({
+      previousResetKey: `${activeGoal.goalId}:${activeGoal.revision}:${activeGoal.status}`,
+      goal: budgetLimited,
+    })
+    expect(arming!.budgetWrapUp).toEqual({
+      action: 'arm',
+      goalId: budgetLimited.goalId,
+    })
+
+    // The wrap-up turn runs and settles. Same goal, same status, higher
+    // revision: not a new exhaustion.
+    let goal = budgetLimited
+    for (let turn = 0; turn < 5; turn++) {
+      const written = { ...goal, revision: goal.revision + 1 }
+      const next = deriveThreadGoalContinuationResetState({
+        previousResetKey: `${goal.goalId}:${goal.revision}:${goal.status}`,
+        goal: written,
+      })
+      // The key moved, so fencing still sees the mutation...
+      expect(next).not.toBeNull()
+      // ...but the wrap-up is neither re-armed nor wrongly cleared, and the
+      // scheduler is not nudged awake again.
+      expect(next!.budgetWrapUp).toEqual({ action: 'keep' })
+      expect(next!.shouldBumpIdleSignal).toBe(false)
+      goal = written
+    }
+  })
+
+  test('a goal leaving budget_limited disarms the wrap-up', () => {
+    const activeGoal = createThreadGoal('session-1', 'finish phase 1C', undefined, 100)
+    const budgetLimited = updateThreadGoalStatus(
+      activeGoal,
+      'budget_limited',
+      'token_budget_exhausted',
+      200,
+    )
+    const resumed = updateThreadGoalStatus(budgetLimited, 'active', 'user_resumed', 300)
+
+    const next = deriveThreadGoalContinuationResetState({
+      previousResetKey: `${budgetLimited.goalId}:${budgetLimited.revision}:${budgetLimited.status}`,
+      goal: resumed,
+    })
+    expect(next!.budgetWrapUp).toEqual({ action: 'disarm' })
+    expect(next!.shouldBumpIdleSignal).toBe(true)
   })
 
   test('no-progress turns leave a durably stalled goal after a reload', () => {
@@ -1065,15 +1124,39 @@ describe('thread goal continuation policy', () => {
         toolUseCount: 0,
       }),
     ).toBe(true)
-    // An observed workspace change outranks the tool count, so a turn whose
-    // only calls were repeated reads is not counted as progress.
+    // An automatic turn that called no tool produced nothing; one that did is
+    // credited. Repetition (same call, same args, same result) is judged
+    // separately by detectThreadGoalRepetition and folded in by the caller.
+    expect(
+      didThreadGoalTurnMakeProgress({
+        continuationKind: 'active',
+        toolUseCount: 0,
+      }),
+    ).toBe(false)
     expect(
       didThreadGoalTurnMakeProgress({
         continuationKind: 'active',
         toolUseCount: 5,
-        changedWorkspace: false,
       }),
-    ).toBe(false)
+    ).toBe(true)
+  })
+
+  test('a goal-shaped object missing the counters never prints undefined', () => {
+    // formatThreadGoalSummary runs inside the desktop snapshot builder and is
+    // reached from fixtures holding goal-SHAPED objects. A missing counter
+    // rendered as the literal `undefined of undefined` on the goal card.
+    const goal = createThreadGoal('session-1', 'finish phase 1C', undefined, 100)
+    const partial = { ...goal } as Record<string, unknown>
+    delete partial.continuationTurns
+    delete partial.maxContinuationTurns
+    delete partial.timeUsedSeconds
+    delete partial.tokensUsed
+
+    const summary = formatThreadGoalSummary(partial as unknown as ThreadGoal)
+
+    expect(summary).not.toContain('undefined')
+    expect(summary).not.toContain('NaN')
+    expect(summary).toContain('finish phase 1C')
   })
 
   test('abort pauses active goal only', () => {

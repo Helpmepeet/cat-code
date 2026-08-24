@@ -1,4 +1,8 @@
-import { hashContent } from './hash.js'
+import { stableHashContent } from './hash.js'
+import {
+  UNKNOWN_WORKSPACE_EVIDENCE_TTL_MS,
+  UNKNOWN_WORKSPACE_FINGERPRINT,
+} from './threadGoalWorkspace.js'
 
 /**
  * Criterion-linked evidence and the deterministic completion gate.
@@ -112,7 +116,7 @@ export function hashThreadGoalContract(
   objective: string,
   contract: ThreadGoalContract,
 ): string {
-  return hashContent(
+  return stableHashContent(
     JSON.stringify({
       objective,
       criteria: contract.criteria
@@ -129,7 +133,7 @@ export function hashThreadGoalContract(
 }
 
 export function digestThreadGoalEvidenceText(text: string): string {
-  return hashContent(text)
+  return stableHashContent(text)
 }
 
 /**
@@ -144,7 +148,7 @@ export function normalizeThreadGoalCommand(command: string): string {
 }
 
 export function digestThreadGoalCommand(command: string): string {
-  return hashContent(normalizeThreadGoalCommand(command))
+  return stableHashContent(normalizeThreadGoalCommand(command))
 }
 
 /**
@@ -191,11 +195,24 @@ function isFresh(
   evidence: ThreadGoalEvidence,
   contractDigest: string,
   workspaceFingerprint: string,
+  nowMs: number,
 ): boolean {
-  return (
-    evidence.contractDigest === contractDigest &&
-    evidence.workspaceFingerprint === workspaceFingerprint
-  )
+  if (
+    evidence.contractDigest !== contractDigest ||
+    evidence.workspaceFingerprint !== workspaceFingerprint
+  ) {
+    return false
+  }
+
+  // Outside a git repo the fingerprint is one constant for every workspace
+  // state, so matching it proves only that git could not answer then and
+  // cannot answer now. Left there, a single pass would satisfy the gate
+  // forever. Time-bound it instead: still completable, no longer permanent.
+  if (evidence.workspaceFingerprint === UNKNOWN_WORKSPACE_FINGERPRINT) {
+    return nowMs - evidence.recordedAtMs <= UNKNOWN_WORKSPACE_EVIDENCE_TTL_MS
+  }
+
+  return true
 }
 
 /**
@@ -211,11 +228,13 @@ export function evaluateThreadGoalCriteria({
   evidence,
   contractDigest,
   workspaceFingerprint,
+  nowMs = Date.now(),
 }: {
   contract: ThreadGoalContract
   evidence: readonly ThreadGoalEvidence[]
   contractDigest: string
   workspaceFingerprint: string
+  nowMs?: number
 }): ThreadGoalCriterionState[] {
   const criterionIds = new Set(contract.criteria.map(c => c.id))
 
@@ -228,7 +247,7 @@ export function evaluateThreadGoalCriteria({
         record =>
           record.coversCriterionIds.includes(criterion.id) &&
           criterionIds.has(criterion.id) &&
-          isFresh(record, contractDigest, workspaceFingerprint),
+          isFresh(record, contractDigest, workspaceFingerprint, nowMs),
       )
       .slice()
       .sort((a, b) => b.recordedAtMs - a.recordedAtMs)
@@ -278,11 +297,13 @@ export function evaluateThreadGoalCompletion({
   evidence,
   contractDigest,
   workspaceFingerprint,
+  nowMs = Date.now(),
 }: {
   contract: ThreadGoalContract
   evidence: readonly ThreadGoalEvidence[]
   contractDigest: string
   workspaceFingerprint: string
+  nowMs?: number
 }): ThreadGoalCompletionCheck {
   const required = contract.criteria.filter(c => c.required)
   if (required.length === 0) {
@@ -294,6 +315,7 @@ export function evaluateThreadGoalCompletion({
     evidence,
     contractDigest,
     workspaceFingerprint,
+    nowMs,
   })
   const requiredStates = states.filter(state => state.criterion.required)
 
@@ -318,35 +340,6 @@ export function evaluateThreadGoalCompletion({
   }
 
   return { allowed: true, reason: 'all_required_proven', criterionIds: [] }
-}
-
-/**
- * Whether a failed gate needs re-running.
- *
- * A red gate whose workspace fingerprint still matches cannot have become
- * green, so the recorded failure can be replayed instead of paying for the
- * command again.
- */
-export function findReplayableThreadGoalFailure({
-  evidence,
-  sourceDigest,
-  contractDigest,
-  workspaceFingerprint,
-}: {
-  evidence: readonly ThreadGoalEvidence[]
-  sourceDigest: string
-  contractDigest: string
-  workspaceFingerprint: string
-}): ThreadGoalEvidence | null {
-  const matches = evidence
-    .filter(
-      record =>
-        record.sourceDigest === sourceDigest &&
-        record.outcome === 'fail' &&
-        isFresh(record, contractDigest, workspaceFingerprint),
-    )
-    .sort((a, b) => b.recordedAtMs - a.recordedAtMs)
-  return matches[0] ?? null
 }
 
 export function appendThreadGoalEvidence(

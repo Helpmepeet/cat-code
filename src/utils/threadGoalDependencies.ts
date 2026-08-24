@@ -2,6 +2,12 @@ import { getSessionId } from '../bootstrap/state.js'
 import { readSessionState } from '../agent-mode/sessionState.js'
 import type { ThreadGoalDependency } from './threadGoalWait.js'
 
+type KnownWorker = {
+  agentId: string
+  status: string
+  handle?: string
+}
+
 /**
  * The work a goal is currently waiting on.
  *
@@ -16,13 +22,15 @@ import type { ThreadGoalDependency } from './threadGoalWait.js'
  * approvals, and child sessions use the same wait vocabulary and can be added
  * here without touching the scheduler.
  */
-export async function getUnresolvedThreadGoalDependencies(): Promise<
-  ThreadGoalDependency[]
-> {
-  const sessionState = await readSessionState(getSessionId())
-  if (!sessionState) return []
-
-  return sessionState.knownWorkers
+function toUnresolvedDependencies(
+  workers: readonly KnownWorker[],
+): ThreadGoalDependency[] {
+  return workers
+    // ONLY genuinely running work. `synthesisStatus === 'pending'` is set when
+    // a worker COMPLETES and is cleared by the orchestrator reading its
+    // result, i.e. by this goal's own next turn. Parking on it deadlocked the
+    // goal against itself: it waited for something only the turn it refused to
+    // take could clear.
     .filter(worker => worker.status === 'running')
     .map(worker => ({
       kind: 'worker' as const,
@@ -36,7 +44,7 @@ export async function getUnresolvedThreadGoalDependencies(): Promise<
 }
 
 /**
- * Cached view of the above for the scheduler's synchronous port.
+ * Cached view for the scheduler's synchronous port.
  *
  * The scheduler asks for dependencies inside a synchronous decision, but the
  * session state lives on disk. The runtime refreshes this at turn boundaries,
@@ -62,21 +70,7 @@ export function createThreadGoalDependencyCache(): {
         // still running: a goal that spawns and resolves one worker per turn
         // is still fanning out without bound.
         childAgentIds = workers.map(worker => worker.agentId)
-        current = workers
-          // ONLY genuinely running work. `synthesisStatus === 'pending'` is
-          // set when a worker COMPLETES and is cleared by the orchestrator
-          // reading its result, i.e. by this goal's own next turn. Parking on
-          // it deadlocked the goal against itself: it waited for something
-          // only the turn it refused to take could clear.
-          .filter(worker => worker.status === 'running')
-          .map(worker => ({
-            kind: 'worker' as const,
-            subjectId: worker.agentId,
-            label:
-              worker.handle && worker.handle !== worker.agentId
-                ? worker.handle
-                : worker.agentId,
-          }))
+        current = toUnresolvedDependencies(workers)
       } catch {
         // A read failure must not park the goal on imagined work, and must not
         // fail the turn that triggered the refresh. Previously-seen children

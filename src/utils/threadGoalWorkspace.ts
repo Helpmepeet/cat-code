@@ -1,6 +1,6 @@
 import { execFileNoThrow } from './execFileNoThrow.js'
 import { getCwd } from './cwd.js'
-import { hashContent } from './hash.js'
+import { stableHashContent } from './hash.js'
 
 /**
  * A fingerprint of the workspace state a piece of goal evidence describes.
@@ -32,13 +32,23 @@ const GIT_TIMEOUT_MS = 10_000
 /**
  * Fingerprint for a workspace where git cannot answer.
  *
- * Deliberately a constant rather than a random value: a random one would make
- * every piece of evidence instantly stale and no gated goal could complete,
- * while a constant makes evidence persist exactly as long as the gate can
- * actually tell. Callers that need real freshness in a non-git workspace must
- * supply their own fingerprint.
+ * A constant, not a random value: a random one would make every record stale
+ * the instant it was written and no gated goal could ever complete. But a
+ * constant alone means evidence here NEVER expires, so the gate additionally
+ * time-bounds any record carrying this value
+ * (`UNKNOWN_WORKSPACE_EVIDENCE_TTL_MS`). Bounded staleness is the honest
+ * answer when freshness is genuinely unknowable; unbounded staleness reads as
+ * proof and is not.
  */
 export const UNKNOWN_WORKSPACE_FINGERPRINT = 'workspace:unavailable'
+
+/**
+ * How long evidence recorded against an unknowable workspace stays fresh.
+ *
+ * Only applies to `UNKNOWN_WORKSPACE_FINGERPRINT` records. A real git
+ * fingerprint is compared exactly and needs no clock.
+ */
+export const UNKNOWN_WORKSPACE_EVIDENCE_TTL_MS = 15 * 60 * 1000
 
 export async function getThreadGoalWorkspaceFingerprint(): Promise<string> {
   const cwd = getCwd()
@@ -63,18 +73,24 @@ export async function getThreadGoalWorkspaceFingerprint(): Promise<string> {
 
   // Any git failure means "not a repo" or "git unavailable". Both are the same
   // answer: this cannot report freshness.
-  if (head.code !== 0 || status.code !== 0) {
+  //
+  // `diff` is in that list too. Hashing '' on failure made a timed-out diff
+  // hash IDENTICALLY to a clean tree, so a workspace that had moved kept
+  // matching the fingerprint recorded before it moved, and a red gate could be
+  // skipped as "nothing changed". A degraded freshness check must not be
+  // indistinguishable from a passing one.
+  if (head.code !== 0 || status.code !== 0 || diff.code !== 0) {
     return UNKNOWN_WORKSPACE_FINGERPRINT
   }
 
-  return hashContent(
+  return stableHashContent(
     JSON.stringify({
       cwd,
       head: head.stdout.trim(),
       status: status.stdout,
       // Hashed, not stored: a diff carries file contents, and the fingerprint
       // is projected to other processes.
-      diff: hashContent(diff.code === 0 ? diff.stdout : ''),
+      diff: stableHashContent(diff.stdout),
     }),
   )
 }

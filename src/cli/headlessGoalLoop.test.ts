@@ -160,6 +160,37 @@ describe('the headless goal loop', () => {
     expect(getGoal()!.statusReason).toBe('turn_budget_exhausted')
   })
 
+  test('an interrupted run pauses the goal, so --resume does not relaunch it', async () => {
+    // Skipping the idle boundary stops the CURRENT run. It does not stop the
+    // next one: a goal left durably active is runnable again the moment the
+    // session is resumed, which restarts exactly the work Ctrl-C stopped.
+    const sessionId = withSession()
+    const { loop, getGoal } = harness(
+      createThreadGoal(sessionId, 'interrupted work', undefined, 100),
+    )
+
+    loop!.pauseOnAbort()
+
+    expect(getGoal()!.status).toBe('paused')
+    expect(getGoal()!.statusReason).toBe('turn_aborted')
+    expect(await loop!.nextContinuation(productiveTurn())).toBeNull()
+  })
+
+  test('aborting a goal that is already stopped changes nothing', async () => {
+    const sessionId = withSession()
+    const stopped = updateThreadGoalStatus(
+      createThreadGoal(sessionId, 'already done', undefined, 100),
+      'complete',
+      'agent_reported_complete',
+      200,
+    )
+    const { loop, getGoal } = harness(stopped)
+
+    loop!.pauseOnAbort()
+
+    expect(getGoal()!.status).toBe('complete')
+  })
+
   test('the escape hatch disables it entirely', async () => {
     const sessionId = withSession()
     process.env[DISABLE_HEADLESS_GOAL_LOOP_ENV] = '1'

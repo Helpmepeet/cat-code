@@ -315,48 +315,6 @@ export function markThreadGoalAttemptRunning({
   }
 }
 
-/** Extend a live lease. Only the current owner at the current epoch may renew. */
-export function renewThreadGoalAttemptLease({
-  record,
-  attemptId,
-  ownerId,
-  leaseEpoch,
-  nowMs,
-  leaseMs = THREAD_GOAL_LEASE_MS,
-}: {
-  record: ThreadGoalAttemptRecord
-  attemptId: string
-  ownerId: string
-  leaseEpoch: number
-  nowMs: number
-  leaseMs?: number
-}): ThreadGoalAttemptRecord {
-  const pending = record.pendingAttempt
-  if (
-    !pending ||
-    pending.attemptId !== attemptId ||
-    pending.claimedBy !== ownerId ||
-    pending.leaseEpoch !== leaseEpoch ||
-    pending.status === 'settled'
-  ) {
-    return record
-  }
-  return {
-    ...record,
-    pendingAttempt: {
-      ...pending,
-      leaseExpiresAtMs: nowMs + leaseMs,
-      updatedAtMs: nowMs,
-    },
-  }
-}
-
-/**
- * Retire the attempt.
- *
- * The wake key STAYS in `recentWakeKeys`: a settled attempt whose key is
- * forgotten would let the same wake event start a second turn.
- */
 export function settleThreadGoalAttempt({
   record,
   attemptId,

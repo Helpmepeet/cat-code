@@ -3,7 +3,10 @@ import type { AppState } from '../state/AppState.js'
 import type { Message } from '../types/message.js'
 import { isEnvTruthy } from '../utils/envUtils.js'
 import { saveThreadGoal } from '../utils/sessionStorage.js'
-import { didThreadGoalTurnMakeProgress } from '../utils/threadGoal.js'
+import {
+  didThreadGoalTurnMakeProgress,
+  pauseActiveThreadGoalOnAbort,
+} from '../utils/threadGoal.js'
 import { createThreadGoalDependencyCache } from '../utils/threadGoalDependencies.js'
 import {
   createThreadGoalScheduler,
@@ -40,6 +43,15 @@ export type HeadlessGoalLoop = {
    * depends on are already applied.
    */
   nextContinuation(messages: readonly Message[]): Promise<string | null>
+  /**
+   * Pause an active goal because the run was interrupted.
+   *
+   * Call from the abort path. Skipping the idle boundary stops THIS run from
+   * continuing, but leaves the goal durably active, so the next `--resume`
+   * reads a runnable goal and relaunches the work that was just interrupted.
+   * The terminal already pauses on abort; this is the same rule for `-p`.
+   */
+  pauseOnAbort(): void
 }
 
 export function createHeadlessGoalLoop({
@@ -63,18 +75,20 @@ export function createHeadlessGoalLoop({
   // long run cannot re-charge responses that aged out of the charged ledger.
   let turnMessageStartIndex = 0
 
+  const saveGoal = (nextGoal: NonNullable<AppState['threadGoal']>): void => {
+    saveThreadGoal(nextGoal)
+    setAppState(prev =>
+      prev.threadGoal?.goalId === nextGoal.goalId
+        ? { ...prev, threadGoal: nextGoal }
+        : prev,
+    )
+  }
+
   const scheduler = createThreadGoalScheduler({
     ownerId: `headless:${getSessionId()}`,
     now: () => Date.now(),
     getGoal: () => getAppState().threadGoal ?? null,
-    saveGoal: nextGoal => {
-      saveThreadGoal(nextGoal)
-      setAppState(prev =>
-        prev.threadGoal?.goalId === nextGoal.goalId
-          ? { ...prev, threadGoal: nextGoal }
-          : prev,
-      )
-    },
+    saveGoal,
     // Headless has no user typing alongside it: reaching the idle boundary IS
     // the whole gate. The caller only asks when the queue has drained.
     canStartAutomaticTurn: () => true,
@@ -89,6 +103,12 @@ export function createHeadlessGoalLoop({
   })
 
   return {
+    pauseOnAbort() {
+      const goal = getAppState().threadGoal
+      const paused = pauseActiveThreadGoalOnAbort(goal ?? null)
+      if (paused && paused !== goal) saveGoal(paused)
+    },
+
     async nextContinuation(messages) {
       const goal = getAppState().threadGoal
       if (!goal) return null

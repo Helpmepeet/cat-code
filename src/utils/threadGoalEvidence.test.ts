@@ -3,7 +3,6 @@ import {
   appendThreadGoalEvidence,
   evaluateThreadGoalCompletion,
   evaluateThreadGoalCriteria,
-  findReplayableThreadGoalFailure,
   hashThreadGoalContract,
   MAX_THREAD_GOAL_EVIDENCE,
   parseThreadGoalContract,
@@ -11,6 +10,10 @@ import {
   type ThreadGoalContract,
   type ThreadGoalEvidence,
 } from './threadGoalEvidence.js'
+import {
+  UNKNOWN_WORKSPACE_EVIDENCE_TTL_MS,
+  UNKNOWN_WORKSPACE_FINGERPRINT,
+} from './threadGoalWorkspace.js'
 
 const DIGEST = 'contract-digest-1'
 const FINGERPRINT = 'workspace-abc'
@@ -239,40 +242,49 @@ describe('evidence freshness', () => {
   })
 })
 
-describe('replaying an expensive failure', () => {
-  test('a red gate at an unchanged workspace is replayable', () => {
-    const red = evidence({ outcome: 'fail', exitCode: 1 })
-    expect(
-      findReplayableThreadGoalFailure({
-        evidence: [red],
-        sourceDigest: red.sourceDigest,
-        contractDigest: DIGEST,
-        workspaceFingerprint: FINGERPRINT,
-      }),
-    ).toEqual(red)
+describe('evidence recorded where git cannot report freshness', () => {
+  // UNKNOWN_WORKSPACE_FINGERPRINT is one constant for every workspace state,
+  // so matching it proves only that git could not answer then and cannot
+  // answer now. Without a time bound a single pass satisfied the gate forever.
+  const unknown = (recordedAtMs: number) =>
+    evidence({
+      workspaceFingerprint: UNKNOWN_WORKSPACE_FINGERPRINT,
+      coversCriterionIds: ['tests'],
+      recordedAtMs,
+    })
+
+  test('a fresh record still completes, so a non-git workspace stays usable', () => {
+    const check = evaluateThreadGoalCompletion({
+      contract: contract(),
+      evidence: [unknown(1_000)],
+      contractDigest: DIGEST,
+      workspaceFingerprint: UNKNOWN_WORKSPACE_FINGERPRINT,
+      nowMs: 1_000 + UNKNOWN_WORKSPACE_EVIDENCE_TTL_MS - 1,
+    })
+    expect(check.allowed).toBe(true)
   })
 
-  test('a changed workspace forces a rerun', () => {
-    const red = evidence({ outcome: 'fail' })
-    expect(
-      findReplayableThreadGoalFailure({
-        evidence: [red],
-        sourceDigest: red.sourceDigest,
-        contractDigest: DIGEST,
-        workspaceFingerprint: 'workspace-moved',
-      }),
-    ).toBeNull()
+  test('the same record expires, rather than proving the criterion forever', () => {
+    const check = evaluateThreadGoalCompletion({
+      contract: contract(),
+      evidence: [unknown(1_000)],
+      contractDigest: DIGEST,
+      workspaceFingerprint: UNKNOWN_WORKSPACE_FINGERPRINT,
+      nowMs: 1_000 + UNKNOWN_WORKSPACE_EVIDENCE_TTL_MS + 1,
+    })
+    expect(check.allowed).toBe(false)
+    expect(check.reason).toBe('unverified_criteria')
   })
 
-  test('a passing record is never replayed as a failure', () => {
-    expect(
-      findReplayableThreadGoalFailure({
-        evidence: [evidence({ outcome: 'pass' })],
-        sourceDigest: 'cmd-digest-1',
-        contractDigest: DIGEST,
-        workspaceFingerprint: FINGERPRINT,
-      }),
-    ).toBeNull()
+  test('a real git fingerprint is compared exactly and never ages out', () => {
+    const check = evaluateThreadGoalCompletion({
+      contract: contract(),
+      evidence: [evidence({ coversCriterionIds: ['tests'], recordedAtMs: 1 })],
+      contractDigest: DIGEST,
+      workspaceFingerprint: FINGERPRINT,
+      nowMs: 1 + UNKNOWN_WORKSPACE_EVIDENCE_TTL_MS * 1000,
+    })
+    expect(check.allowed).toBe(true)
   })
 })
 

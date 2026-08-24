@@ -1053,8 +1053,15 @@ export function REPL({
       goal: threadGoal
     });
     if (nextResetState) {
-      pendingBudgetWrapUpGoalIdRef.current =
-        nextResetState.pendingBudgetWrapUpGoalId;
+      // `keep` leaves the ref alone: a revision bump on an already
+      // budget-limited goal is not a fresh exhaustion, and re-arming there
+      // made the single wrap-up turn repeat for as long as the goal existed.
+      if (nextResetState.budgetWrapUp.action === 'arm') {
+        pendingBudgetWrapUpGoalIdRef.current =
+          nextResetState.budgetWrapUp.goalId;
+      } else if (nextResetState.budgetWrapUp.action === 'disarm') {
+        pendingBudgetWrapUpGoalIdRef.current = null;
+      }
       if (nextResetState.shouldBumpIdleSignal) {
         setGoalContinuationIdleSignal(signal => signal + 1);
       }

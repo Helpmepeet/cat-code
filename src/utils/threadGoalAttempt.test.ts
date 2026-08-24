@@ -9,7 +9,6 @@ import {
   parseThreadGoalAttempt,
   parseThreadGoalAttemptRecord,
   recordThreadGoalWake,
-  renewThreadGoalAttemptLease,
   settleThreadGoalAttempt,
   THREAD_GOAL_LEASE_MS,
   type ThreadGoalAttemptRecord,
@@ -309,39 +308,6 @@ describe('attempt leases', () => {
         currentGoalRevision: 1,
       }),
     ).toBe(false)
-  })
-
-  test('only the current owner at the current epoch may renew', () => {
-    const created = wake(EMPTY_THREAD_GOAL_ATTEMPT_RECORD)
-    const attemptId = created.record.pendingAttempt!.attemptId
-    const claimed = claimThreadGoalAttempt({
-      record: created.record,
-      attemptId,
-      ownerId: 'owner-a',
-      currentGoalRevision: 1,
-      nowMs: NOW,
-    }) as { record: ThreadGoalAttemptRecord }
-    const epoch = claimed.record.pendingAttempt!.leaseEpoch
-
-    const renewed = renewThreadGoalAttemptLease({
-      record: claimed.record,
-      attemptId,
-      ownerId: 'owner-a',
-      leaseEpoch: epoch,
-      nowMs: NOW + 1_000,
-    })
-    expect(renewed.pendingAttempt!.leaseExpiresAtMs).toBe(
-      NOW + 1_000 + THREAD_GOAL_LEASE_MS,
-    )
-
-    const rejected = renewThreadGoalAttemptLease({
-      record: renewed,
-      attemptId,
-      ownerId: 'owner-b',
-      leaseEpoch: epoch,
-      nowMs: NOW + 2_000,
-    })
-    expect(rejected).toBe(renewed)
   })
 
   test('running is a state change, not a new claim', () => {

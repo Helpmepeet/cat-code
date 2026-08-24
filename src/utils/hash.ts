@@ -26,6 +26,24 @@ export function hashContent(content: string): string {
 }
 
 /**
+ * Hash content for a digest that gets WRITTEN TO DISK and compared later.
+ *
+ * `hashContent` is not usable for that: it returns wyhash under Bun and
+ * sha256 under Node, so the same input hashes differently across runtimes,
+ * and Bun reseeding wyhash in any release invalidates every stored digest at
+ * once. Both show up as evidence that silently stops matching itself.
+ *
+ * sha256 rather than `djb2Hash` because these digests separate one verifier
+ * run from another; 32 bits is a thin margin for that, and the cost is paid
+ * once per recorded command, not per comparison.
+ */
+export function stableHashContent(content: string): string {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const crypto = require('crypto') as typeof import('crypto')
+  return crypto.createHash('sha256').update(content).digest('hex')
+}
+
+/**
  * Hash two strings without allocating a concatenated temp string. Bun path
  * seed-chains wyhash (hash(a) feeds as seed to hash(b)); Node path uses
  * incremental SHA-256 update. Seed-chaining naturally disambiguates

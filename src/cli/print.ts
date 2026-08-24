@@ -1100,6 +1100,9 @@ function runHeadlessStreaming(
   let shutdownPromptInjected = false
   let heldBackResult: StdoutMessage | null = null
   let abortController: AbortController | undefined
+  // Set once the goal loop exists (below). Held in a mutable slot rather than
+  // closed over directly because SIGINT can land before that line runs.
+  let pauseGoalOnAbort: (() => void) | null = null
   // Same queue sendRequest() enqueues to — one FIFO for everything.
   const output = structuredIO.outbound
 
@@ -1110,6 +1113,14 @@ function runHeadlessStreaming(
     logForDiagnosticsNoPII('info', 'shutdown_signal', { signal: 'SIGINT' })
     if (abortController && !abortController.signal.aborted) {
       abortController.abort()
+    }
+    // Durably pause before shutting down. `isShuttingDown()` keeps THIS run
+    // from continuing, but an interrupted goal left active is relaunched by
+    // the next --resume, which restarts the work the user just stopped.
+    try {
+      pauseGoalOnAbort?.()
+    } catch (error) {
+      logError(error)
     }
     void gracefulShutdown(0)
   }
@@ -1278,6 +1289,9 @@ function runHeadlessStreaming(
   // the terminal, desktop, and web paths do, at headless's own idle boundary.
   // Null when the escape hatch env var is set.
   const headlessGoalLoop = createHeadlessGoalLoop({ getAppState, setAppState })
+  pauseGoalOnAbort = headlessGoalLoop
+    ? () => headlessGoalLoop.pauseOnAbort()
+    : null
 
   const modelOptions = getModelOptions()
   const modelInfos = modelOptions.map(option => {

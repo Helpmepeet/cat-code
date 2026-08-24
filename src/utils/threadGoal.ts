@@ -210,9 +210,23 @@ export type ThreadGoalContinuationSeed = {
   pendingBudgetWrapUpGoalId: string | null
 }
 
+/**
+ * What the reset should do to the pending budget wrap-up.
+ *
+ * Three outcomes, not two, because "the goal changed" and "the goal newly
+ * became budget-limited" are different questions and the reset key can only
+ * answer the first. `keep` is the case that matters: a budget-limited goal
+ * whose revision moved is NOT a fresh exhaustion, and re-arming there is what
+ * turned one wrap-up turn into an unbounded loop.
+ */
+export type ThreadGoalBudgetWrapUpAction =
+  | { action: 'arm'; goalId: string }
+  | { action: 'disarm' }
+  | { action: 'keep' }
+
 export type ThreadGoalContinuationResetState = {
   resetKey: string | null
-  pendingBudgetWrapUpGoalId: string | null
+  budgetWrapUp: ThreadGoalBudgetWrapUpAction
   shouldBumpIdleSignal: boolean
 }
 
@@ -957,15 +971,24 @@ export function formatThreadGoalSummary(goal: ThreadGoal): string {
     lines.push(`Token budget: ${formatBudgetValue(goal.tokenBudget)}`)
   }
 
-  lines.push(`Tokens used: ${formatBudgetValue(goal.tokensUsed)}`)
-  lines.push(
-    `Automatic turns: ${goal.continuationTurns} of ${goal.maxContinuationTurns}`,
-  )
-  lines.push(
-    goal.maxWallClockSeconds
-      ? `Time used: ${goal.timeUsedSeconds}s of ${goal.maxWallClockSeconds}s`
-      : `Time used: ${goal.timeUsedSeconds}s`,
-  )
+  // Tolerant reads throughout. This runs inside the desktop snapshot builder,
+  // where a throw is invisible and silently drops the goal frame, and it is
+  // also reached from fixtures and projections holding goal-SHAPED objects
+  // that predate these counters. A missing counter prints nothing; it must
+  // never reach the user as `undefined of undefined`.
+  lines.push(`Tokens used: ${formatBudgetValue(goal.tokensUsed ?? 0)}`)
+  if (typeof goal.maxContinuationTurns === 'number') {
+    lines.push(
+      `Automatic turns: ${goal.continuationTurns ?? 0} of ${goal.maxContinuationTurns}`,
+    )
+  }
+  if (typeof goal.timeUsedSeconds === 'number') {
+    lines.push(
+      goal.maxWallClockSeconds
+        ? `Time used: ${goal.timeUsedSeconds}s of ${goal.maxWallClockSeconds}s`
+        : `Time used: ${goal.timeUsedSeconds}s`,
+    )
+  }
   // Tolerant like readGoalContract: this runs inside the desktop snapshot
   // builder, where a throw is invisible and silently drops the goal frame.
   const childAgentCount = goal.childAgentIds?.length ?? 0
@@ -1068,7 +1091,7 @@ function formatThreadGoalPromptBudget(
     ...(options.includeRemainingTokens
       ? [`- Tokens remaining: ${remainingTokens ?? 'unbounded'}`]
       : []),
-    `- Automatic turns used: ${goal.continuationTurns} of ${goal.maxContinuationTurns}`,
+    `- Automatic turns used: ${goal.continuationTurns ?? 0} of ${goal.maxContinuationTurns ?? DEFAULT_MAX_GOAL_CONTINUATION_TURNS}`,
   ].join('\n')
 }
 
@@ -1180,28 +1203,56 @@ export function deriveThreadGoalContinuationResetState({
     return null
   }
 
+  // Identity WITHOUT the revision. Widening the reset key to include revision
+  // was right for staleness fencing and wrong for wrap-up arming, because it
+  // silently converted "the goal reached its budget" into "the goal wrote
+  // anything at all". A wrap-up turn charges usage, which bumps the revision,
+  // which re-armed the wrap-up, which ran another turn: a goal that had just
+  // been stopped for spending too much kept spending. Arm on a real
+  // goal-or-status change only.
+  const identity = (key: string | null): string | null => {
+    if (!key) return null
+    const first = key.indexOf(':')
+    const last = key.lastIndexOf(':')
+    if (first < 0 || last <= first) return key
+    return `${key.slice(0, first)}:${key.slice(last + 1)}`
+  }
+  const enteredNewState = identity(previousResetKey) !== identity(resetKey)
+
   const continuationSeed = deriveThreadGoalContinuationSeed(goal)
+  const wrapUpGoalId = continuationSeed.pendingBudgetWrapUpGoalId
+
+  const budgetWrapUp: ThreadGoalBudgetWrapUpAction = !enteredNewState
+    ? // Same goal, same status, new revision. Whatever the wrap-up ref holds
+      // is still correct: re-arming would loop, clearing would drop a wrap-up
+      // that has not run yet.
+      { action: 'keep' }
+    : wrapUpGoalId
+      ? { action: 'arm', goalId: wrapUpGoalId }
+      : { action: 'disarm' }
 
   return {
     resetKey,
-    pendingBudgetWrapUpGoalId: continuationSeed.pendingBudgetWrapUpGoalId,
-    shouldBumpIdleSignal: continuationSeed.shouldBumpIdleSignal,
+    budgetWrapUp,
+    // A budget-limited goal gets an idle nudge only when it ARRIVES there.
+    // Nudging on every later revision was the other half of the loop: it woke
+    // the scheduler again even once the ref was right.
+    shouldBumpIdleSignal:
+      continuationSeed.shouldBumpIdleSignal &&
+      (goal?.status === 'active' || enteredNewState),
   }
 }
 
 export function didThreadGoalTurnMakeProgress({
   continuationKind,
   toolUseCount,
-  changedWorkspace,
 }: {
   continuationKind: ThreadGoalContinuationKind | null
   toolUseCount: number
-  changedWorkspace?: boolean
 }): boolean {
   // Only automatic turns are judged. A user-driven turn is progress by
   // definition: the human is steering.
   if (continuationKind !== 'active') return true
-  if (changedWorkspace !== undefined) return changedWorkspace
   return toolUseCount > 0
 }
 

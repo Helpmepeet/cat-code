@@ -140,38 +140,6 @@ export async function applyThreadGoalTransition<
   return { ok: true, code: 'ok', goal: nextGoal }
 }
 
-/**
- * Persist an accounting result produced by accountThreadGoalTurn.
- *
- * Accounting is not a transition request: it is the runtime recording what a
- * finished turn actually cost, and the stop it derives is already authorized
- * by the budget the user set. It still guards on revision so a turn belonging
- * to a replaced goal cannot charge the new one.
- */
-export function persistAccountedThreadGoal<
-  TState extends ThreadGoalState = ThreadGoalState,
->({
-  context,
-  accounted,
-  expectedRevision,
-}: {
-  context: ThreadGoalActionContext<TState>
-  accounted: ThreadGoal
-  expectedRevision: number
-}): ThreadGoalTransitionResult {
-  const current = readCurrentGoal(context, accounted.goalId)
-  if (!current) {
-    return { ok: false, code: 'missing', goal: null }
-  }
-  if (current.revision !== expectedRevision) {
-    return { ok: false, code: 'stale', goal: current }
-  }
-
-  saveThreadGoal(accounted)
-  context.setAppState(prev => ({ ...prev, threadGoal: accounted }))
-  return { ok: true, code: 'ok', goal: accounted }
-}
-
 export async function createThreadGoalAction<
   TState extends ThreadGoalState = ThreadGoalState,
 >({

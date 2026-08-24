@@ -1,4 +1,4 @@
-import { hashContent } from './hash.js'
+import { stableHashContent } from './hash.js'
 
 /**
  * Detecting a goal that is repeating itself.
@@ -73,7 +73,7 @@ function stableStringify(value: unknown): string {
  * only the pair that also matched on result indicates a loop.
  */
 export function fingerprintThreadGoalToolCall(call: ThreadGoalToolCall): string {
-  return hashContent(
+  return stableHashContent(
     call.toolName +
       ' ' +
       stableStringify(call.input) +
