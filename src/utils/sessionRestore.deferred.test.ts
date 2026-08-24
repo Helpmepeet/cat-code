@@ -21,7 +21,13 @@ import {
   restoreTrustedDeferredContinuationContext,
   withDeferredContinuationResumeAuthority,
 } from './sessionRestore.js'
+import {
+  reAppendSessionMetadata,
+  resetProjectForTesting,
+  setSessionFileForTesting,
+} from './sessionStorage.js'
 import { setCwd } from './Shell.js'
+import type { ThreadGoal } from './threadGoal.js'
 
 const cleanup: string[] = []
 const originalCwd = process.cwd()
@@ -29,6 +35,7 @@ const originalCwd = process.cwd()
 afterEach(async () => {
   process.chdir(originalCwd)
   setCwd(originalCwd)
+  resetProjectForTesting()
   await Promise.all(cleanup.splice(0).map(path => rm(path, { recursive: true, force: true })))
 })
 
@@ -105,6 +112,17 @@ function resumeContext() {
   } as never
 }
 
+const SOURCE_GOAL: ThreadGoal = {
+  threadId: SESSION_ID,
+  goalId: 'source-goal',
+  objective: 'finish the source session',
+  status: 'active',
+  tokensUsed: 1_000,
+  timeUsedSeconds: 60,
+  createdAtMs: NOW,
+  updatedAtMs: NOW,
+}
+
 async function withStore(fn: () => Promise<void>): Promise<void> {
   const root = await mkdtemp('/tmp/cat-code-resume-lock-')
   cleanup.push(root)
@@ -119,6 +137,50 @@ async function withStore(fn: () => Promise<void>): Promise<void> {
 }
 
 describe('resume against a deferred continuation session lock', () => {
+  test('fork starts goal-free while ordinary resume retains the source goal', async () => {
+    await withStore(async () => {
+      const resumed = await processResumedConversation(
+        {
+          messages: [],
+          sessionId: undefined,
+          threadGoal: SOURCE_GOAL,
+        },
+        { forkSession: false },
+        resumeContext(),
+      )
+      expect(resumed.initialState.threadGoal).toEqual(SOURCE_GOAL)
+
+      resetProjectForTesting()
+      const root = await mkdtemp('/tmp/cat-code-fork-goal-')
+      cleanup.push(root)
+      const forkTranscript = join(root, 'fork.jsonl')
+      setSessionFileForTesting(forkTranscript)
+
+      const forked = await processResumedConversation(
+        {
+          messages: [],
+          sessionId: SESSION_ID as `${string}-${string}-${string}-${string}-${string}`,
+          threadGoal: SOURCE_GOAL,
+        },
+        { forkSession: true },
+        resumeContext(),
+      )
+      expect(forked.initialState.threadGoal).toBeNull()
+
+      reAppendSessionMetadata()
+      const metadataEntries = (await Bun.file(forkTranscript).text())
+        .trim()
+        .split('\n')
+        .map(line => JSON.parse(line) as { type: string })
+      expect(metadataEntries.map(entry => entry.type)).toContain(
+        'thread-goal-cleared',
+      )
+      expect(metadataEntries.map(entry => entry.type)).not.toContain(
+        'thread-goal-updated',
+      )
+    })
+  })
+
   test('allows resume when no continuation is scheduled', async () => {
     await withStore(async () => {
       expect(await checkDeferredContinuationResume(SESSION_ID)).toEqual({

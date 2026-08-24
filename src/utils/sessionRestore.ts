@@ -721,11 +721,11 @@ export async function processResumedConversation(
 
   // Restore session metadata so /status shows the saved name and metadata
   // is re-appended on session exit. Fork doesn't take ownership of the
-  // original session's worktree — a "Remove" on the fork's exit dialog
-  // would delete a worktree the original session still references — so
-  // strip worktreeSession from the fork path so the cache stays unset.
+  // original session's worktree or goal: both embed source-session identity.
   restoreSessionMetadata(
-    opts.forkSession ? { ...result, worktreeSession: undefined } : result,
+    opts.forkSession
+      ? { ...result, threadGoal: null, worktreeSession: undefined }
+      : result,
   )
 
   if (!opts.forkSession) {
@@ -826,7 +826,7 @@ export async function processResumedConversation(
       ...(resumedAgentType && { agent: resumedAgentType }),
       ...(restoredAttribution && { attribution: restoredAttribution }),
       ...(standaloneAgentContext && { standaloneAgentContext }),
-      threadGoal: result.threadGoal ?? null,
+      threadGoal: opts.forkSession ? null : (result.threadGoal ?? null),
       agentDefinitions: refreshedAgentDefs,
     },
   }
