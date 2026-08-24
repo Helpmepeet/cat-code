@@ -62,6 +62,27 @@ type ThreadGoalUsageBreakdown = {
   responseCount: number
 }
 
+type ThreadGoalWakeTrigger =
+  | 'idle'
+  | 'budget-wrap-up'
+  | 'task-completed'
+  | 'process-exited'
+  | 'timer'
+  | 'user-resumed'
+
+type ThreadGoalAttempt = {
+  attemptId: string
+  goalRevision: number
+  trigger: ThreadGoalWakeTrigger
+  wakeKey: string
+  status: 'pending' | 'claimed' | 'running' | 'settled'
+  claimedBy: string | null
+  leaseEpoch: number
+  leaseExpiresAtMs: number
+  createdAtMs: number
+  updatedAtMs: number
+}
+
 type ThreadGoal = {
   schemaVersion: number
   threadId: string
@@ -82,6 +103,8 @@ type ThreadGoal = {
   continuationTurns: number
   consecutiveNoProgressTurns: number
   consecutiveFailures: number
+  pendingAttempt: ThreadGoalAttempt | null
+  recentWakeKeys: string[]
   timeUsedSeconds: number
   createdAtMs: number
   updatedAtMs: number

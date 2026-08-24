@@ -13,6 +13,11 @@ import {
   mergeChargedResponseIds,
   type ThreadGoalUsageDelta,
 } from './threadGoalUsage.js'
+import {
+  EMPTY_THREAD_GOAL_ATTEMPT_RECORD,
+  parseThreadGoalAttemptRecord,
+  type ThreadGoalAttempt,
+} from './threadGoalAttempt.js'
 
 export type { ThreadGoalStatus, ThreadGoalStatusReason }
 
@@ -90,6 +95,18 @@ export type ThreadGoal = {
   continuationTurns: number
   consecutiveNoProgressTurns: number
   consecutiveFailures: number
+  /**
+   * The scheduler's in-flight attempt, or null. Lives on the goal so a restart
+   * between deciding a continuation and starting its turn neither loses the
+   * attempt nor duplicates it.
+   *
+   * Attempt bookkeeping deliberately does NOT bump `revision`: revision means
+   * "the goal the user cares about changed", and an attempt that bumped it
+   * would invalidate itself.
+   */
+  pendingAttempt: ThreadGoalAttempt | null
+  /** Recently seen wake keys, so a redelivered wake creates no second attempt. */
+  recentWakeKeys: string[]
   timeUsedSeconds: number
   createdAtMs: number
   updatedAtMs: number
@@ -513,6 +530,8 @@ export function createThreadGoal(
     continuationTurns: 0,
     consecutiveNoProgressTurns: 0,
     consecutiveFailures: 0,
+    pendingAttempt: null,
+    recentWakeKeys: [],
     timeUsedSeconds: 0,
     createdAtMs: nowMs,
     updatedAtMs: nowMs,
@@ -1149,6 +1168,7 @@ function migrateThreadGoalV1(
     continuationTurns: 0,
     consecutiveNoProgressTurns: 0,
     consecutiveFailures: 0,
+    ...EMPTY_THREAD_GOAL_ATTEMPT_RECORD,
     timeUsedSeconds: base.timeUsedSeconds,
     createdAtMs: base.createdAtMs,
     updatedAtMs: base.updatedAtMs,
@@ -1277,6 +1297,10 @@ export function parseThreadGoal(input: unknown): ThreadGoal | null {
     consecutiveFailures: readNonNegativeInteger(
       candidate.consecutiveFailures,
       0,
+    ),
+    ...parseThreadGoalAttemptRecord(
+      candidate.pendingAttempt,
+      candidate.recentWakeKeys,
     ),
   }
 }

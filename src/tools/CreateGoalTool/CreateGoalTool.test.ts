@@ -127,6 +127,7 @@ describe('CreateGoalTool', () => {
     const completedGoal = updateThreadGoalStatus(
       createThreadGoal(sessionId, 'completed goal'),
       'complete',
+      'agent_reported_complete',
     )
     const { context, getState } = createContext(completedGoal)
 

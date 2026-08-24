@@ -32,6 +32,10 @@ import {
   DEFAULT_MAX_GOAL_NO_PROGRESS_TURNS,
 } from './threadGoal.js'
 import { EMPTY_THREAD_GOAL_USAGE_DELTA } from './threadGoalUsage.js'
+import {
+  claimThreadGoalAttempt,
+  recordThreadGoalWake,
+} from './threadGoalAttempt.js'
 
 /** A turn that spent nothing and changed nothing, for tests that vary one axis. */
 const IDLE_TURN = {
@@ -1133,6 +1137,50 @@ describe('thread goal persistence', () => {
     expect(reloaded!.contextGrowthTokens).toBe(77)
     expect(reloaded!.chargedResponseIds).toEqual(['resp-1'])
     expect(reloaded!.tokenBudget).toBe(50_000)
+  })
+
+  test('a pending attempt survives a restart on the durable goal', () => {
+    // A restart between deciding a continuation and starting its turn must
+    // neither lose the attempt nor let the same wake produce a second one.
+    const goal = createThreadGoal(sessionId, 'survive mid-attempt', undefined, 100)
+    const woken = recordThreadGoalWake({
+      record: { pendingAttempt: goal.pendingAttempt, recentWakeKeys: goal.recentWakeKeys },
+      goalId: goal.goalId,
+      goalRevision: goal.revision,
+      trigger: 'idle',
+      sourceId: 'idle-1',
+      nowMs: 200,
+    })
+    const claimed = claimThreadGoalAttempt({
+      record: woken.record,
+      attemptId: woken.record.pendingAttempt!.attemptId,
+      ownerId: 'owner-a',
+      currentGoalRevision: goal.revision,
+      nowMs: 200,
+    }) as { record: { pendingAttempt: unknown; recentWakeKeys: string[] } }
+
+    saveThreadGoal({ ...goal, ...claimed.record } as typeof goal)
+
+    const reloaded = getCurrentThreadGoal(sessionId)
+    expect(reloaded!.pendingAttempt).toEqual(
+      claimed.record.pendingAttempt as never,
+    )
+    expect(reloaded!.recentWakeKeys).toEqual(claimed.record.recentWakeKeys)
+
+    // The same wake, redelivered after the restart, is still suppressed.
+    expect(
+      recordThreadGoalWake({
+        record: {
+          pendingAttempt: reloaded!.pendingAttempt,
+          recentWakeKeys: reloaded!.recentWakeKeys,
+        },
+        goalId: goal.goalId,
+        goalRevision: goal.revision,
+        trigger: 'idle',
+        sourceId: 'idle-1',
+        nowMs: 300,
+      }).outcome,
+    ).toBe('duplicate')
   })
 
   test('a stopped goal never reloads as active', () => {
