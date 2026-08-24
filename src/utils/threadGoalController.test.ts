@@ -3,7 +3,7 @@ import { createThreadGoal, updateThreadGoalStatus } from './threadGoal.js'
 import { getThreadGoalContinuationAction } from './threadGoalController.js'
 
 describe('getThreadGoalContinuationAction', () => {
-  test('returns continue for active idle goals below stall threshold', () => {
+  test('returns continue for an active idle goal', () => {
     const goal = createThreadGoal('session-1', 'finish goal mode')
 
     expect(
@@ -11,7 +11,6 @@ describe('getThreadGoalContinuationAction', () => {
         sessionIsIdle: true,
         goal,
         goalContinuationInFlight: false,
-        goalContinuationStallCount: 0,
         pendingBudgetWrapUpGoalId: null,
         queuedCommandsCount: 0,
         hasActiveLocalJsxUI: false,
@@ -20,27 +19,14 @@ describe('getThreadGoalContinuationAction', () => {
     ).toEqual({ type: 'continue' })
   })
 
-  test('returns stalled when active goal reaches stall threshold', () => {
-    const goal = createThreadGoal('session-1', 'finish goal mode')
-
-    expect(
-      getThreadGoalContinuationAction({
-        sessionIsIdle: true,
-        goal,
-        goalContinuationInFlight: false,
-        goalContinuationStallCount: 2,
-        pendingBudgetWrapUpGoalId: null,
-        queuedCommandsCount: 0,
-        hasActiveLocalJsxUI: false,
-        isInPlanMode: false,
-      }),
-    ).toEqual({ type: 'stalled' })
-  })
-
-  test('returns budget-wrap-up for pending budget-limited goal', () => {
+  test('a stalled goal returns none, not a scheduler-only stall decision', () => {
+    // The scheduler no longer carries its own stall verdict. A goal that
+    // stopped making progress carries the durable `stalled` status, so it is
+    // simply unschedulable, and a restart cannot disagree with that.
     const goal = updateThreadGoalStatus(
       createThreadGoal('session-1', 'finish goal mode'),
-      'budget_limited',
+      'stalled',
+      'no_progress',
     )
 
     expect(
@@ -48,7 +34,52 @@ describe('getThreadGoalContinuationAction', () => {
         sessionIsIdle: true,
         goal,
         goalContinuationInFlight: false,
-        goalContinuationStallCount: 0,
+        pendingBudgetWrapUpGoalId: null,
+        queuedCommandsCount: 0,
+        hasActiveLocalJsxUI: false,
+        isInPlanMode: false,
+      }),
+    ).toEqual({ type: 'none' })
+  })
+
+  test('waiting, blocked, and failed goals are not schedulable either', () => {
+    for (const [status, reason] of [
+      ['waiting', 'waiting_on_dependency'],
+      ['blocked', 'agent_reported_blocked'],
+      ['failed', 'runtime_error'],
+    ] as const) {
+      const goal = updateThreadGoalStatus(
+        createThreadGoal('session-1', 'finish goal mode'),
+        status,
+        reason,
+      )
+
+      expect(
+        getThreadGoalContinuationAction({
+          sessionIsIdle: true,
+          goal,
+          goalContinuationInFlight: false,
+          pendingBudgetWrapUpGoalId: null,
+          queuedCommandsCount: 0,
+          hasActiveLocalJsxUI: false,
+          isInPlanMode: false,
+        }),
+      ).toEqual({ type: 'none' })
+    }
+  })
+
+  test('returns budget-wrap-up for pending budget-limited goal', () => {
+    const goal = updateThreadGoalStatus(
+      createThreadGoal('session-1', 'finish goal mode'),
+      'budget_limited',
+      'token_budget_exhausted',
+    )
+
+    expect(
+      getThreadGoalContinuationAction({
+        sessionIsIdle: true,
+        goal,
+        goalContinuationInFlight: false,
         pendingBudgetWrapUpGoalId: goal.goalId,
         queuedCommandsCount: 0,
         hasActiveLocalJsxUI: false,
@@ -65,7 +96,6 @@ describe('getThreadGoalContinuationAction', () => {
         sessionIsIdle: true,
         goal,
         goalContinuationInFlight: false,
-        goalContinuationStallCount: 0,
         pendingBudgetWrapUpGoalId: null,
         queuedCommandsCount: 1,
         hasActiveLocalJsxUI: false,
@@ -77,7 +107,6 @@ describe('getThreadGoalContinuationAction', () => {
         sessionIsIdle: true,
         goal,
         goalContinuationInFlight: false,
-        goalContinuationStallCount: 0,
         pendingBudgetWrapUpGoalId: null,
         queuedCommandsCount: 0,
         hasActiveLocalJsxUI: true,
@@ -94,7 +123,6 @@ describe('getThreadGoalContinuationAction', () => {
         sessionIsIdle: true,
         goal,
         goalContinuationInFlight: false,
-        goalContinuationStallCount: 0,
         pendingBudgetWrapUpGoalId: null,
         queuedCommandsCount: 0,
         hasActiveLocalJsxUI: false,
@@ -107,6 +135,7 @@ describe('getThreadGoalContinuationAction', () => {
     const goal = updateThreadGoalStatus(
       createThreadGoal('session-1', 'finish goal mode'),
       'budget_limited',
+      'token_budget_exhausted',
     )
 
     expect(
@@ -114,7 +143,6 @@ describe('getThreadGoalContinuationAction', () => {
         sessionIsIdle: true,
         goal,
         goalContinuationInFlight: false,
-        goalContinuationStallCount: 0,
         pendingBudgetWrapUpGoalId: goal.goalId,
         queuedCommandsCount: 0,
         hasActiveLocalJsxUI: false,

@@ -28,6 +28,7 @@ import {
 } from './sessionStorage.js'
 import { setCwd } from './Shell.js'
 import type { ThreadGoal } from './threadGoal.js'
+import { createThreadGoal } from './threadGoal.js'
 
 const cleanup: string[] = []
 const originalCwd = process.cwd()
@@ -113,14 +114,10 @@ function resumeContext() {
 }
 
 const SOURCE_GOAL: ThreadGoal = {
-  threadId: SESSION_ID,
+  ...createThreadGoal(SESSION_ID, 'finish the source session', undefined, NOW),
   goalId: 'source-goal',
-  objective: 'finish the source session',
-  status: 'active',
   tokensUsed: 1_000,
   timeUsedSeconds: 60,
-  createdAtMs: NOW,
-  updatedAtMs: NOW,
 }
 
 async function withStore(fn: () => Promise<void>): Promise<void> {

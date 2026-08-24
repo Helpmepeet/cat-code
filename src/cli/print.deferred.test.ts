@@ -12,6 +12,7 @@ import {
   setSessionFileForTesting,
 } from '../utils/sessionStorage.js'
 import type { ThreadGoal } from '../utils/threadGoal.js'
+import { createThreadGoal } from '../utils/threadGoal.js'
 import {
   resolveHeadlessDeferredContinuation,
   restoreHeadlessSessionFromLog,
@@ -29,14 +30,10 @@ afterEach(async () => {
 const NOW = 1_700_000_000_000
 const SESSION_ID = '44444444-4444-4444-8444-444444444444'
 const SOURCE_GOAL: ThreadGoal = {
-  threadId: SESSION_ID,
+  ...createThreadGoal(SESSION_ID, 'finish the source session', undefined, NOW),
   goalId: 'source-goal',
-  objective: 'finish the source session',
-  status: 'active',
   tokensUsed: 1_000,
   timeUsedSeconds: 60,
-  createdAtMs: NOW,
-  updatedAtMs: NOW,
 }
 
 function deferredJob() {

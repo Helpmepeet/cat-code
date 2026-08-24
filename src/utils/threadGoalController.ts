@@ -1,14 +1,21 @@
 import {
-  MAX_GOAL_CONTINUATION_STALL_COUNT,
   shouldStartThreadGoalBudgetWrapUp,
   shouldStartThreadGoalContinuation,
   type ThreadGoal,
 } from './threadGoal.js'
 
+/**
+ * What the scheduler should do at an idle boundary.
+ *
+ * `stalled` used to be a member of this union, decided from an in-memory
+ * counter. It is gone: a goal that has stopped making progress now carries the
+ * durable `stalled` status, so it simply fails the schedulable check and
+ * returns `none`. That removes the v1 split where the scheduler had given up
+ * but the persisted goal still read `active`, letting a restart resume it.
+ */
 export type ThreadGoalContinuationAction =
   | { type: 'continue' }
   | { type: 'budget-wrap-up' }
-  | { type: 'stalled' }
   | { type: 'ignored' }
   | { type: 'none' }
 
@@ -16,7 +23,6 @@ export function getThreadGoalContinuationAction({
   sessionIsIdle,
   goal,
   goalContinuationInFlight,
-  goalContinuationStallCount,
   pendingBudgetWrapUpGoalId,
   queuedCommandsCount,
   hasActiveLocalJsxUI,
@@ -25,7 +31,6 @@ export function getThreadGoalContinuationAction({
   sessionIsIdle: boolean
   goal: ThreadGoal | null
   goalContinuationInFlight: boolean
-  goalContinuationStallCount: number
   pendingBudgetWrapUpGoalId: string | null
   queuedCommandsCount: number
   hasActiveLocalJsxUI: boolean
@@ -37,6 +42,9 @@ export function getThreadGoalContinuationAction({
     queuedCommandsCount === 0 &&
     !hasActiveLocalJsxUI
 
+  // Plan mode is excluded from automatic continuation, and deliberately
+  // returns `ignored` rather than `none`: the caller must NOT mark the idle
+  // signal handled, so the goal resumes when the user leaves plan mode.
   if (
     isInPlanMode &&
     canHandleGoalContinuation &&
@@ -61,22 +69,10 @@ export function getThreadGoalContinuationAction({
   }
 
   if (
-    goal?.status === 'active' &&
-    sessionIsIdle &&
-    !goalContinuationInFlight &&
-    queuedCommandsCount === 0 &&
-    !hasActiveLocalJsxUI &&
-    goalContinuationStallCount >= MAX_GOAL_CONTINUATION_STALL_COUNT
-  ) {
-    return { type: 'stalled' }
-  }
-
-  if (
     shouldStartThreadGoalContinuation({
       sessionIsIdle,
       goal,
       goalContinuationInFlight,
-      goalContinuationStallCount,
       queuedCommandsCount,
       hasActiveLocalJsxUI,
     })

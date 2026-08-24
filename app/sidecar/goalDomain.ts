@@ -1,5 +1,6 @@
 import type { AppStateStore } from '../../src/state/AppStateStore.js'
 import {
+  formatThreadGoalStatusReason,
   formatThreadGoalSummary,
   type ThreadGoal,
 } from '../../src/utils/threadGoal.js'
@@ -31,11 +32,15 @@ export function threadGoalSnapshot(goal: ThreadGoal | null): ThreadGoalSnapshot 
     goalId: goal.goalId,
     objective: goal.objective,
     status: goal.status,
+    revision: goal.revision,
     ...(goal.tokenBudget !== undefined ? { tokenBudget: goal.tokenBudget } : {}),
     tokensUsed: goal.tokensUsed,
+    continuationTurns: goal.continuationTurns,
+    maxContinuationTurns: goal.maxContinuationTurns,
     timeUsedSeconds: goal.timeUsedSeconds,
     createdAtMs: goal.createdAtMs,
     updatedAtMs: goal.updatedAtMs,
     summary: formatThreadGoalSummary(goal),
+    statusNote: formatThreadGoalStatusReason(goal),
   }
 }

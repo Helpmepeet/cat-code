@@ -181,10 +181,12 @@ import { useAppState, useSetAppState, useAppStateStore } from '../state/AppState
 import { getRuntimeMainLoopModel, renderModelName } from '../utils/model/model.js';
 import { roughTokenCountEstimation } from '../services/tokenEstimation.js';
 import { doesMostRecentAssistantMessageExceed200k, tokenCountWithEstimation } from '../utils/tokens.js';
-import { accountThreadGoalUsage, buildThreadGoalDisplayState, calculateThreadGoalContextTokenDelta, deriveThreadGoalContinuationResetState, nextThreadGoalContinuationStallCount, pauseActiveThreadGoalOnAbort, renderThreadGoalBudgetLimitPrompt, renderThreadGoalContinuationPrompt, shouldPromptToResumePausedGoal, shouldResetThreadGoalContinuationStallCount, type ThreadGoal, type ThreadGoalContinuationKind } from '../utils/threadGoal.js';
+import { accountThreadGoalTurn, buildThreadGoalDisplayState, calculateThreadGoalContextTokenDelta, deriveThreadGoalContinuationResetState, didThreadGoalTurnMakeProgress, pauseActiveThreadGoalOnAbort, renderThreadGoalBudgetLimitPrompt, renderThreadGoalContinuationPrompt, shouldPromptToResumePausedGoal, type ThreadGoal, type ThreadGoalContinuationKind } from '../utils/threadGoal.js';
+import { sumRealThreadGoalUsage } from '../utils/threadGoalUsage.js';
 import { getThreadGoalContinuationAction } from '../utils/threadGoalController.js';
+import { isTerminalThreadGoalStatus } from '../utils/threadGoalState.js';
 import { deriveDelegatedTaskStatus, deriveFocusedInputDialog, deriveHasOperationalWork, deriveHasSuppressedDialog, deriveHasUnblockedDelegatedWork, deriveLocalWaitingReason, deriveTuiSessionStatus, deriveTuiWaitingDetail, type FocusedInputDialog, type FocusedInputDialogFacts } from '../utils/tuiSessionStatus.js';
-import { updateThreadGoalStatusAction } from '../utils/threadGoalActions.js';
+import { persistAccountedThreadGoal, updateThreadGoalStatusAction } from '../utils/threadGoalActions.js';
 import { getDisplayedEffortLevel } from '../utils/effort.js';
 import { getCodexLeaseSnapshot } from '../services/api/codexAccountLeaseManager.js';
 import { getPoolStatus } from '../services/api/codexAccountPool.js';
@@ -979,8 +981,14 @@ export function REPL({
   const goalContinuationInFlightRef = React.useRef(false);
   const goalContinuationKindRef = React.useRef<ThreadGoalContinuationKind | null>(null);
   const turnGoalContinuationKindRef = React.useRef<ThreadGoalContinuationKind | null>(null);
-  const goalContinuationStallCountRef = React.useRef(0);
   const pendingBudgetWrapUpGoalIdRef = React.useRef<string | null>(null);
+  // Whether the just-finished turn advanced the goal. Written at turn end,
+  // read by accountCompletedTurnThreadGoal, which persists the streak.
+  const turnMadeProgressRef = React.useRef(true);
+  // Response ids already charged to the active goal. Mirrors the durable
+  // chargedResponseIds so the live footer and the end-of-turn charge walk the
+  // same message array without charging one response twice.
+  const chargedResponseIdsRef = React.useRef<Set<string>>(new Set());
   const totalPausedMsRef = React.useRef(0);
   const pauseStartTimeRef = React.useRef<number | null>(null);
   const threadGoalContinuationResetKeyRef = React.useRef<string | null>(null);
@@ -997,8 +1005,6 @@ export function REPL({
       goal: threadGoal
     });
     if (nextResetState) {
-      goalContinuationStallCountRef.current =
-        nextResetState.goalContinuationStallCount;
       pendingBudgetWrapUpGoalIdRef.current =
         nextResetState.pendingBudgetWrapUpGoalId;
       if (nextResetState.shouldBumpIdleSignal) {
@@ -1006,6 +1012,7 @@ export function REPL({
       }
       threadGoalContinuationResetKeyRef.current = nextResetState.resetKey;
     }
+    chargedResponseIdsRef.current = new Set(threadGoal?.chargedResponseIds ?? []);
   }, [threadGoal]);
 
   // Reset timing refs inline when isQueryActive transitions false→true.
@@ -1743,23 +1750,27 @@ export function REPL({
 
   const accountCompletedTurnThreadGoal = useCallback(() => {
     const turnGoalAtStart = turnGoalAtStartRef.current;
-    if (
-      !turnGoalAtStart ||
-      (turnGoalAtStart.status !== 'active' &&
-        turnGoalAtStart.status !== 'budget_limited')
-    ) {
+    if (!turnGoalAtStart || isTerminalThreadGoalStatus(turnGoalAtStart.status)) {
       return;
     }
 
     const currentGoal = store.getState().threadGoal;
-    const currentGoalMatchesTurnStart =
-      currentGoal?.goalId === turnGoalAtStart.goalId;
-    const goalToAccount = currentGoalMatchesTurnStart
-      ? currentGoal
-      : turnGoalAtStart;
+    // A turn that started against a goal the user has since replaced or
+    // cleared must not charge whatever goal now occupies the session. The
+    // charge is simply dropped: the replacement did not incur it.
+    if (currentGoal?.goalId !== turnGoalAtStart.goalId) {
+      return;
+    }
 
     const nowMs = Date.now();
-    const tokenDelta = calculateThreadGoalContextTokenDelta(
+    // Real provider usage, deduped against everything already charged. This
+    // replaces context growth, which fell to zero across a compaction and
+    // charged a long tool-heavy turn almost nothing.
+    const usage = sumRealThreadGoalUsage(
+      messagesRef.current,
+      chargedResponseIdsRef.current,
+    );
+    const contextGrowthTokens = calculateThreadGoalContextTokenDelta(
       turnContextTokensAtStartRef.current,
       tokenCountWithEstimation(messagesRef.current),
     );
@@ -1769,38 +1780,37 @@ export function REPL({
         (nowMs - loadingStartTimeRef.current - totalPausedMsRef.current) / 1000,
       ),
     );
-    const nextGoal = accountThreadGoalUsage(
-      goalToAccount,
-      tokenDelta,
-      timeDeltaSeconds,
+
+    const { goal: nextGoal } = accountThreadGoalTurn(
+      currentGoal,
+      {
+        usage,
+        chargedResponseIds: usage.chargedResponseIds,
+        contextGrowthTokens,
+        timeDeltaSeconds,
+        wasAutomaticContinuation:
+          turnGoalContinuationKindRef.current !== null,
+        madeNoProgress: !turnMadeProgressRef.current,
+        failed: false
+      },
       nowMs,
     );
 
-    if (
-      nextGoal.status === goalToAccount.status &&
-      nextGoal.tokensUsed === goalToAccount.tokensUsed &&
-      nextGoal.timeUsedSeconds === goalToAccount.timeUsedSeconds
-    ) {
+    const persisted = persistAccountedThreadGoal({
+      context: { getAppState: store.getState, setAppState },
+      accounted: nextGoal,
+      expectedRevision: currentGoal.revision
+    });
+    if (!persisted.ok) {
       return;
     }
 
-    saveThreadGoal(nextGoal);
-    if (!currentGoalMatchesTurnStart) {
-      if (currentGoal) {
-        saveThreadGoal(currentGoal);
-      } else {
-        clearThreadGoal(turnGoalAtStart.goalId);
-      }
-      return;
+    for (const id of usage.chargedResponseIds) {
+      chargedResponseIdsRef.current.add(id);
     }
 
-    setAppState(prev => ({
-      ...prev,
-      threadGoal: nextGoal
-    }));
-
     if (
-      goalToAccount.status === 'active' &&
+      currentGoal.status === 'active' &&
       nextGoal.status === 'budget_limited'
     ) {
       pendingBudgetWrapUpGoalIdRef.current = nextGoal.goalId;
@@ -3257,10 +3267,12 @@ export function REPL({
     }
     queryCheckpoint('query_end');
     const completedTurnToolCount = getTurnToolCount();
-    goalContinuationStallCountRef.current = nextThreadGoalContinuationStallCount({
+    // Progress is judged here and consumed by accountCompletedTurnThreadGoal
+    // below, which persists the streak on the goal. The v1 in-memory stall ref
+    // is gone: a restart used to reset it and resume an abandoned loop.
+    turnMadeProgressRef.current = didThreadGoalTurnMakeProgress({
       continuationKind: turnGoalContinuationKindRef.current,
-      toolUseCount: completedTurnToolCount,
-      previousStallCount: goalContinuationStallCountRef.current
+      toolUseCount: completedTurnToolCount
     });
 
     // Capture ant-only API metrics before resetLoadingState clears the ref.
@@ -3909,10 +3921,6 @@ export function REPL({
     if (activeRemote.isRemoteMode && !input.trim()) {
       return;
     }
-    if (shouldResetThreadGoalContinuationStallCount(input, inputMode)) {
-      goalContinuationStallCountRef.current = 0;
-    }
-
     // Idle-return: prompt returning users to start fresh when the
     // conversation is large and the cache is cold. tengu_willow_mode
     // controls treatment: "dialog" (blocking), "hint" (notification), "off".
@@ -4670,7 +4678,6 @@ export function REPL({
       sessionIsIdle,
       goal: threadGoal,
       goalContinuationInFlight: goalContinuationInFlightRef.current,
-      goalContinuationStallCount: goalContinuationStallCountRef.current,
       pendingBudgetWrapUpGoalId: pendingBudgetWrapUpGoalIdRef.current,
       queuedCommandsCount: queuedCommands.length,
       hasActiveLocalJsxUI: isShowingLocalJSXCommand,
@@ -5264,13 +5271,19 @@ export function REPL({
   // agent — displayedMessages is a different array there, and onAgentSubmit
   // doesn't use the placeholder anyway.
   const placeholderText = userInputOnProcessing && !viewedAgentTask && displayedMessages.length <= userInputBaselineRef.current ? userInputOnProcessing : undefined;
+  // Live footer usage is REAL provider usage from responses already received
+  // this turn, not context growth: the footer must not show a number the
+  // budget does not measure. Recomputed on message change only.
+  const liveGoalBillableTokens = useMemo(() => {
+    if (!isLoading || !turnGoalAtStartRef.current) return 0;
+    return sumRealThreadGoalUsage(messages, chargedResponseIdsRef.current).billableTokens;
+  }, [messages, isLoading]);
   const threadGoalDisplay = useMemo(() => buildThreadGoalDisplayState({
     goal: threadGoal,
-    liveContextTokens: tokenCountWithEstimation(messages) + liveStreamingTokenEstimate,
-    turnStartContextTokens: turnContextTokensAtStartRef.current,
+    liveBillableTokens: liveGoalBillableTokens,
     turnGoalId: turnGoalAtStartRef.current?.goalId ?? null,
     isTurnRunning: isLoading
-  }), [threadGoal, messages, liveStreamingTokenEstimate, isLoading]);
+  }), [threadGoal, liveGoalBillableTokens, isLoading]);
   const toolPermissionOverlay = focusedInputDialog === 'tool-permission' ? <PermissionRequest key={toolUseConfirmQueue[0]?.toolUseID} onDone={() => setToolUseConfirmQueue(([_, ...tail]) => tail)} onReject={handleQueuedCommandOnCancel} toolUseConfirm={toolUseConfirmQueue[0]!} toolUseContext={getToolUseContext(messages, messages, abortController ?? createAbortController(), mainLoopModel)} verbose={verbose} workerBadge={toolUseConfirmQueue[0]?.workerBadge} setStickyFooter={isFullscreenEnvEnabled() ? setPermissionStickyFooter : undefined} /> : null;
 
   // Narrow terminals: companion collapses to a one-liner that REPL stacks
@@ -5586,6 +5599,8 @@ export function REPL({
                 },
                 goal: currentGoal,
                 status: 'active',
+                reason: 'user_resumed',
+                actor: 'user',
                 objective: currentGoal.objective
               });
             }} />

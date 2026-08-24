@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 
 import type { SDKMessage } from '../entrypoints/agentSdkTypes.js'
 import type { ThreadGoal } from '../utils/threadGoal.js'
+import { createThreadGoal } from '../utils/threadGoal.js'
 import {
   createAbortStatusEvent,
   createGoalSnapshotEvent,
@@ -62,14 +63,10 @@ describe('sessionEvents', () => {
 
   test('goal snapshot and abort helpers emit minimal app-facing payloads', () => {
     const goal: ThreadGoal = {
-      threadId: 'session-1',
+      ...createThreadGoal('session-1', 'Ship the runtime boundary', 1000, 100),
       goalId: 'goal-1',
-      objective: 'Ship the runtime boundary',
-      status: 'active',
-      tokenBudget: 1000,
       tokensUsed: 10,
       timeUsedSeconds: 2,
-      createdAtMs: 100,
       updatedAtMs: 200,
     }
 

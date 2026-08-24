@@ -1,30 +1,121 @@
 import { randomUUID } from 'crypto'
 import { escapeXml } from './xml.js'
+import {
+  isResumableThreadGoalStatus,
+  isSchedulableThreadGoalStatus,
+  isSuccessfulThreadGoalStatus,
+  isThreadGoalStatus,
+  isThreadGoalStatusReason,
+  type ThreadGoalStatus,
+  type ThreadGoalStatusReason,
+} from './threadGoalState.js'
+import {
+  mergeChargedResponseIds,
+  type ThreadGoalUsageDelta,
+} from './threadGoalUsage.js'
 
-export type ThreadGoalStatus =
-  | 'active'
-  | 'paused'
-  | 'budget_limited'
-  | 'complete'
+export type { ThreadGoalStatus, ThreadGoalStatusReason }
+
+/**
+ * Current durable goal schema.
+ *
+ * v1 stored `tokensUsed` as positive conversation-context GROWTH. v2 charges
+ * real provider usage instead, so the same field name carries a different
+ * quantity and the version is not optional bookkeeping: parseThreadGoal keys
+ * its migration off it. See migrateThreadGoalV1 for what a v1 record becomes.
+ */
+export const THREAD_GOAL_SCHEMA_VERSION = 2
+
+/**
+ * Mandatory ceiling on automatic continuation turns.
+ *
+ * v1 had no turn ceiling at all: an active goal with no token budget could
+ * continue indefinitely as long as each turn used a tool. A default matching
+ * the Hermes precedent (20 continuation turns per window) bounds the loop even
+ * when the user sets no budget. `/goal resume` opens a fresh window.
+ */
+export const DEFAULT_MAX_GOAL_CONTINUATION_TURNS = 20
+
+/**
+ * Consecutive runtime/provider errors tolerated before the goal fails.
+ * Bounded retry, then an honest stop: never an indefinitely active goal.
+ */
+export const DEFAULT_MAX_GOAL_CONSECUTIVE_FAILURES = 3
+
+/**
+ * Automatic turns that may make no progress before the goal stalls. Matches
+ * the v1 in-memory stall threshold, which is now durable.
+ */
+export const DEFAULT_MAX_GOAL_NO_PROGRESS_TURNS = 2
+
+/** Per-response provider usage rolled up onto the goal. */
+export type ThreadGoalUsageBreakdown = {
+  inputTokens: number
+  outputTokens: number
+  cachedInputTokens: number
+  responseCount: number
+}
 
 export type ThreadGoal = {
+  schemaVersion: number
   threadId: string
   goalId: string
+  /**
+   * Monotonic revision, bumped by every durable mutation. Delayed and
+   * cross-process actions carry an expected revision so a continuation decided
+   * against an older goal cannot start or complete against a newer one.
+   */
+  revision: number
   objective: string
   status: ThreadGoalStatus
+  statusReason: ThreadGoalStatusReason
+  statusChangedAtMs: number
   tokenBudget?: number
+  maxContinuationTurns: number
+  maxConsecutiveFailures: number
+  maxNoProgressTurns: number
+  /**
+   * Billable tokens charged to this goal: uncached input + output, summed
+   * from real provider usage. NOT context growth.
+   */
   tokensUsed: number
+  usageBreakdown: ThreadGoalUsageBreakdown
+  /**
+   * Context-window growth kept as a diagnostic only. It is what v1 called
+   * `tokensUsed`; no budget is measured against it.
+   */
+  contextGrowthTokens: number
+  /** Response ids already charged, so overlapping walks cannot double-charge. */
+  chargedResponseIds: string[]
+  continuationTurns: number
+  consecutiveNoProgressTurns: number
+  consecutiveFailures: number
   timeUsedSeconds: number
   createdAtMs: number
   updatedAtMs: number
 }
 
+export type ThreadGoalToolStatus =
+  | 'active'
+  | 'waiting'
+  | 'paused'
+  | 'blocked'
+  | 'stalled'
+  | 'budgetLimited'
+  | 'usageLimited'
+  | 'failed'
+  | 'complete'
+
 export type ThreadGoalToolGoal = {
   threadId: string
   objective: string
-  status: 'active' | 'paused' | 'budgetLimited' | 'complete'
+  status: ThreadGoalToolStatus
+  statusReason: ThreadGoalStatusReason
+  revision: number
   tokenBudget?: number
   tokensUsed: number
+  continuationTurns: number
+  maxContinuationTurns: number
   timeUsedSeconds: number
   createdAt: number
   updatedAt: number
@@ -49,7 +140,6 @@ export type ThreadGoalContinuationSeed = {
 
 export type ThreadGoalContinuationResetState = {
   resetKey: string | null
-  goalContinuationStallCount: number
   pendingBudgetWrapUpGoalId: string | null
   shouldBumpIdleSignal: boolean
 }
@@ -76,13 +166,40 @@ const GOAL_USAGE =
 
 const STATUS_LABELS: Record<ThreadGoalStatus, string> = {
   active: 'active',
+  waiting: 'waiting',
   paused: 'paused',
+  blocked: 'blocked',
+  stalled: 'stalled',
   budget_limited: 'limited by budget',
+  usage_limited: 'limited by usage',
+  failed: 'failed',
   complete: 'complete',
 }
 
+/**
+ * Why the goal is in its current status, in the user's words. Only statuses
+ * whose reason is not obvious from the label get an entry: §7 says spend prose
+ * on what is surprising, not on restating the state.
+ */
+const STATUS_REASON_LABELS: Partial<
+  Record<ThreadGoalStatusReason, string>
+> = {
+  no_progress: 'recent turns made no measurable progress',
+  token_budget_exhausted: 'the token budget ran out',
+  turn_budget_exhausted: 'the automatic turn limit was reached',
+  time_budget_exhausted: 'the time limit was reached',
+  provider_usage_limit: 'the provider usage limit was reached',
+  runtime_error: 'repeated errors stopped the run',
+  verification_unavailable: 'completion could not be verified',
+  required_gate_failed: 'a required check did not pass',
+  waiting_on_dependency: 'waiting on other work to finish',
+  dependency_timeout: 'the work it waited on did not finish in time',
+  unresolved_workers: 'some agents have not reported back',
+  agent_reported_blocked: 'the agent reported it cannot proceed',
+  turn_aborted: 'the turn was interrupted',
+}
+
 export const MAX_GOAL_OBJECTIVE_CHARS = 4_000
-export const MAX_GOAL_CONTINUATION_STALL_COUNT = 2
 
 function formatBudgetValue(value: number): string {
   return value.toLocaleString('en-US')
@@ -197,10 +314,22 @@ export function formatThreadGoalStatus(status: ThreadGoalStatus): string {
   return STATUS_LABELS[status]
 }
 
+const TOOL_STATUS_BY_STATUS: Record<ThreadGoalStatus, ThreadGoalToolStatus> = {
+  active: 'active',
+  waiting: 'waiting',
+  paused: 'paused',
+  blocked: 'blocked',
+  stalled: 'stalled',
+  budget_limited: 'budgetLimited',
+  usage_limited: 'usageLimited',
+  failed: 'failed',
+  complete: 'complete',
+}
+
 function formatThreadGoalToolStatus(
   status: ThreadGoalStatus,
-): ThreadGoalToolGoal['status'] {
-  return status === 'budget_limited' ? 'budgetLimited' : status
+): ThreadGoalToolStatus {
+  return TOOL_STATUS_BY_STATUS[status]
 }
 
 function buildCompletionBudgetReport(goal: ThreadGoal): string | undefined {
@@ -208,6 +337,14 @@ function buildCompletionBudgetReport(goal: ThreadGoal): string | undefined {
 
   if (goal.tokenBudget !== undefined) {
     parts.push(`tokens used: ${goal.tokensUsed} of ${goal.tokenBudget}`)
+  } else if (goal.tokensUsed > 0) {
+    parts.push(`tokens used: ${goal.tokensUsed}`)
+  }
+
+  if (goal.continuationTurns > 0) {
+    parts.push(
+      `automatic turns: ${goal.continuationTurns} of ${goal.maxContinuationTurns}`,
+    )
   }
 
   if (goal.timeUsedSeconds > 0) {
@@ -224,8 +361,12 @@ export function formatThreadGoalForTool(goal: ThreadGoal): ThreadGoalToolGoal {
     threadId: goal.threadId,
     objective: goal.objective,
     status: formatThreadGoalToolStatus(goal.status),
+    statusReason: goal.statusReason,
+    revision: goal.revision,
     ...(goal.tokenBudget !== undefined ? { tokenBudget: goal.tokenBudget } : {}),
     tokensUsed: goal.tokensUsed,
+    continuationTurns: goal.continuationTurns,
+    maxContinuationTurns: goal.maxContinuationTurns,
     timeUsedSeconds: goal.timeUsedSeconds,
     createdAt: goal.createdAtMs,
     updatedAt: goal.updatedAtMs,
@@ -248,7 +389,8 @@ export function buildThreadGoalToolResponse(
       ? null
       : Math.max(0, goal.tokenBudget - goal.tokensUsed)
   const completionBudgetReport =
-    options.includeCompletionBudgetReport && goal.status === 'complete'
+    options.includeCompletionBudgetReport &&
+    isSuccessfulThreadGoalStatus(goal.status)
       ? buildCompletionBudgetReport(goal)
       : undefined
 
@@ -343,56 +485,178 @@ export function createThreadGoal(
   objective: string,
   tokenBudget?: number,
   nowMs: number = Date.now(),
+  options: { maxContinuationTurns?: number } = {},
 ): ThreadGoal {
   return {
+    schemaVersion: THREAD_GOAL_SCHEMA_VERSION,
     threadId,
     goalId: randomUUID(),
+    revision: 1,
     objective: objective.trim(),
     status: 'active',
+    statusReason: 'created',
+    statusChangedAtMs: nowMs,
     tokenBudget,
+    maxContinuationTurns:
+      options.maxContinuationTurns ?? DEFAULT_MAX_GOAL_CONTINUATION_TURNS,
+    maxConsecutiveFailures: DEFAULT_MAX_GOAL_CONSECUTIVE_FAILURES,
+    maxNoProgressTurns: DEFAULT_MAX_GOAL_NO_PROGRESS_TURNS,
     tokensUsed: 0,
+    usageBreakdown: {
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedInputTokens: 0,
+      responseCount: 0,
+    },
+    contextGrowthTokens: 0,
+    chargedResponseIds: [],
+    continuationTurns: 0,
+    consecutiveNoProgressTurns: 0,
+    consecutiveFailures: 0,
     timeUsedSeconds: 0,
     createdAtMs: nowMs,
     updatedAtMs: nowMs,
   }
 }
 
+/**
+ * Apply a status change that the caller has ALREADY authorized.
+ *
+ * This is the low-level writer. It bumps the revision and stamps the reason
+ * and timestamp, but it does not consult the transition table: authority and
+ * legality are decided in threadGoalActions.ts, which owns the durable write
+ * and the compare-and-swap precondition. Keeping the check out of here means
+ * there is exactly one place a forbidden transition can be rejected.
+ */
 export function updateThreadGoalStatus(
   goal: ThreadGoal,
   status: ThreadGoalStatus,
+  reason: ThreadGoalStatusReason,
   nowMs: number = Date.now(),
 ): ThreadGoal {
+  const statusChanged = goal.status !== status
   return {
     ...goal,
     status,
+    statusReason: reason,
+    statusChangedAtMs: statusChanged ? nowMs : goal.statusChangedAtMs,
+    revision: goal.revision + 1,
+    // A resume opens a fresh continuation window and clears the failure and
+    // no-progress streaks that stopped the previous one. Without this, a goal
+    // resumed after `stalled` would stall again on its very next turn.
+    ...(status === 'active' && goal.status !== 'active'
+      ? {
+          continuationTurns: 0,
+          consecutiveNoProgressTurns: 0,
+          consecutiveFailures: 0,
+        }
+      : {}),
     updatedAtMs: nowMs,
   }
 }
 
-export function accountThreadGoalUsage(
+export type ThreadGoalTurnAccounting = {
+  usage: ThreadGoalUsageDelta
+  chargedResponseIds: readonly string[]
+  contextGrowthTokens: number
+  timeDeltaSeconds: number
+  /** True when this turn was an automatic continuation, not user input. */
+  wasAutomaticContinuation: boolean
+  /** True when the turn produced no measurable progress. */
+  madeNoProgress: boolean
+  /** True when the turn ended in a runtime/provider error. */
+  failed: boolean
+}
+
+/**
+ * Charge one completed turn to the goal and derive any budget stop.
+ *
+ * Returns the next goal plus the reason it stopped, if it stopped. The caller
+ * persists it; this function performs no IO and no authority check, so it is
+ * the same code path in every runtime.
+ */
+export function accountThreadGoalTurn(
   goal: ThreadGoal,
-  tokenDelta: number,
-  timeDeltaSeconds: number,
+  turn: ThreadGoalTurnAccounting,
   nowMs: number = Date.now(),
-): ThreadGoal {
-  if (goal.status === 'complete') {
-    return goal
+): { goal: ThreadGoal; stoppedBy: ThreadGoalStatusReason | null } {
+  if (isSuccessfulThreadGoalStatus(goal.status)) {
+    return { goal, stoppedBy: null }
   }
 
-  const tokensUsed = goal.tokensUsed + tokenDelta
-  const status =
-    goal.status === 'active' &&
-    goal.tokenBudget !== undefined &&
-    tokensUsed >= goal.tokenBudget
-      ? 'budget_limited'
-      : goal.status
+  const tokensUsed = goal.tokensUsed + turn.usage.billableTokens
+  const continuationTurns =
+    goal.continuationTurns + (turn.wasAutomaticContinuation ? 1 : 0)
+  // A user-driven turn clears the streak outright: the human just steered, so
+  // whatever the loop was stuck on is no longer the current situation. This is
+  // what stops a goal from stalling on turns the user was actively driving.
+  const consecutiveNoProgressTurns = !turn.wasAutomaticContinuation
+    ? 0
+    : turn.madeNoProgress
+      ? goal.consecutiveNoProgressTurns + 1
+      : 0
+  const consecutiveFailures = turn.failed ? goal.consecutiveFailures + 1 : 0
+
+  const accounted: ThreadGoal = {
+    ...goal,
+    revision: goal.revision + 1,
+    tokensUsed,
+    usageBreakdown: {
+      inputTokens: goal.usageBreakdown.inputTokens + turn.usage.inputTokens,
+      outputTokens: goal.usageBreakdown.outputTokens + turn.usage.outputTokens,
+      cachedInputTokens:
+        goal.usageBreakdown.cachedInputTokens + turn.usage.cachedInputTokens,
+      responseCount:
+        goal.usageBreakdown.responseCount + turn.usage.responseCount,
+    },
+    contextGrowthTokens: goal.contextGrowthTokens + turn.contextGrowthTokens,
+    chargedResponseIds: mergeChargedResponseIds(
+      goal.chargedResponseIds,
+      turn.chargedResponseIds,
+    ),
+    continuationTurns,
+    consecutiveNoProgressTurns,
+    consecutiveFailures,
+    timeUsedSeconds: goal.timeUsedSeconds + turn.timeDeltaSeconds,
+    updatedAtMs: nowMs,
+  }
+
+  // Only a running goal can be stopped by this turn's accounting. Order is
+  // deliberate: a hard failure outranks a budget stop, which outranks a
+  // no-progress stop, so the reported reason is the most specific one.
+  if (accounted.status !== 'active' && accounted.status !== 'waiting') {
+    return { goal: accounted, stoppedBy: null }
+  }
+
+  const stoppedBy: ThreadGoalStatusReason | null =
+    consecutiveFailures >= accounted.maxConsecutiveFailures
+      ? 'runtime_error'
+      : accounted.tokenBudget !== undefined &&
+          tokensUsed >= accounted.tokenBudget
+        ? 'token_budget_exhausted'
+        : continuationTurns >= accounted.maxContinuationTurns
+          ? 'turn_budget_exhausted'
+          : consecutiveNoProgressTurns >= accounted.maxNoProgressTurns
+            ? 'no_progress'
+            : null
+
+  if (!stoppedBy) return { goal: accounted, stoppedBy: null }
+
+  const nextStatus: ThreadGoalStatus =
+    stoppedBy === 'runtime_error'
+      ? 'failed'
+      : stoppedBy === 'no_progress'
+        ? 'stalled'
+        : 'budget_limited'
 
   return {
-    ...goal,
-    status,
-    tokensUsed,
-    timeUsedSeconds: goal.timeUsedSeconds + timeDeltaSeconds,
-    updatedAtMs: nowMs,
+    goal: {
+      ...accounted,
+      status: nextStatus,
+      statusReason: stoppedBy,
+      statusChangedAtMs: nowMs,
+    },
+    stoppedBy,
   }
 }
 
@@ -403,16 +667,23 @@ export function calculateThreadGoalContextTokenDelta(
   return Math.max(0, endContextTokens - startContextTokens)
 }
 
+/**
+ * Overlay the current turn's uncommitted usage for display only.
+ *
+ * `liveBillableTokens` is real provider usage from assistant messages already
+ * received this turn, not context growth: the footer must not show a number
+ * the budget does not actually measure. The result is never persisted, so the
+ * projected `budget_limited` here is a preview of the stop the end-of-turn
+ * accounting will commit.
+ */
 export function buildThreadGoalDisplayState({
   goal,
-  liveContextTokens,
-  turnStartContextTokens,
+  liveBillableTokens,
   turnGoalId,
   isTurnRunning,
 }: {
   goal: ThreadGoal | null
-  liveContextTokens: number
-  turnStartContextTokens: number
+  liveBillableTokens: number
   turnGoalId: string | null
   isTurnRunning: boolean
 }): ThreadGoal | null {
@@ -422,16 +693,11 @@ export function buildThreadGoalDisplayState({
   if (goal.status !== 'active' && goal.status !== 'budget_limited') {
     return goal
   }
-
-  const liveDelta = calculateThreadGoalContextTokenDelta(
-    turnStartContextTokens,
-    liveContextTokens,
-  )
-  if (liveDelta === 0) {
+  if (liveBillableTokens <= 0) {
     return goal
   }
 
-  const tokensUsed = goal.tokensUsed + liveDelta
+  const tokensUsed = goal.tokensUsed + liveBillableTokens
   const status =
     goal.status === 'active' &&
     goal.tokenBudget !== undefined &&
@@ -446,13 +712,27 @@ export function buildThreadGoalDisplayState({
   }
 }
 
+/**
+ * An interrupted turn pauses an active goal.
+ *
+ * Pausing rather than leaving it active is what stops the resulting idle state
+ * from immediately relaunching the work the user just interrupted.
+ */
 export function pauseActiveThreadGoalOnAbort(
   goal: ThreadGoal | null,
   nowMs: number = Date.now(),
 ): ThreadGoal | null {
-  return goal?.status === 'active'
-    ? updateThreadGoalStatus(goal, 'paused', nowMs)
+  return goal?.status === 'active' || goal?.status === 'waiting'
+    ? updateThreadGoalStatus(goal, 'paused', 'turn_aborted', nowMs)
     : goal
+}
+
+/**
+ * Why the goal stopped, in one clause, or null when the label already says it.
+ */
+export function formatThreadGoalStatusReason(goal: ThreadGoal): string | null {
+  if (goal.status === 'active' || goal.status === 'complete') return null
+  return STATUS_REASON_LABELS[goal.statusReason] ?? null
 }
 
 export function formatThreadGoalSummary(goal: ThreadGoal): string {
@@ -461,11 +741,19 @@ export function formatThreadGoalSummary(goal: ThreadGoal): string {
     `Objective: ${goal.objective}`,
   ]
 
+  const reason = formatThreadGoalStatusReason(goal)
+  if (reason) {
+    lines.push(`Reason: ${reason}`)
+  }
+
   if (goal.tokenBudget !== undefined) {
     lines.push(`Token budget: ${formatBudgetValue(goal.tokenBudget)}`)
   }
 
   lines.push(`Tokens used: ${formatBudgetValue(goal.tokensUsed)}`)
+  lines.push(
+    `Automatic turns: ${goal.continuationTurns} of ${goal.maxContinuationTurns}`,
+  )
   lines.push(`Time used: ${goal.timeUsedSeconds}s`)
 
   if (goal.status === 'active') {
@@ -475,6 +763,8 @@ export function formatThreadGoalSummary(goal: ThreadGoal): string {
       'Use /goal pause, /goal resume, /goal clear, or /goal replace <objective>.',
       'The agent will mark it complete with update_goal when finished.',
     )
+  } else if (isResumableThreadGoalStatus(goal.status)) {
+    lines.push('', 'Use /goal resume to start a new run, or /goal clear.')
   }
 
   return lines.join('\n')
@@ -507,34 +797,28 @@ function formatCompactDuration(seconds: number): string {
 }
 
 export function formatThreadGoalFooterLabel(goal: ThreadGoal): string {
-  if (goal.status === 'paused') {
-    return `Goal: ${formatThreadGoalStatus(goal.status)}`
-  }
+  const label = `Goal: ${formatThreadGoalStatus(goal.status)}`
 
-  if (goal.status === 'budget_limited') {
-    const detail =
-      goal.tokenBudget === undefined
-        ? null
-        : `${formatCompactNumber(goal.tokensUsed)}/${formatCompactNumber(goal.tokenBudget)} tokens`
-    return detail
-      ? `Goal: ${formatThreadGoalStatus(goal.status)} · ${detail}`
-      : `Goal: ${formatThreadGoalStatus(goal.status)}`
+  // A stopped goal shows why it stopped, which is the only thing the label
+  // does not already say. Usage numbers there would bury the reason.
+  if (goal.status !== 'active' && goal.status !== 'complete') {
+    if (goal.status === 'budget_limited' && goal.tokenBudget !== undefined) {
+      return `${label} · ${formatCompactNumber(goal.tokensUsed)}/${formatCompactNumber(goal.tokenBudget)} tokens`
+    }
+    const reason = formatThreadGoalStatusReason(goal)
+    return reason ? `${label} · ${reason}` : label
   }
 
   const detail =
-    goal.status === 'complete' && goal.tokensUsed > 0
-      ? `${formatCompactNumber(goal.tokensUsed)} context tokens`
-      : goal.tokenBudget !== undefined
-        ? `${formatCompactNumber(goal.tokensUsed)}/${formatCompactNumber(goal.tokenBudget)} ctx`
-        : goal.tokensUsed > 0
-          ? `${formatCompactNumber(goal.tokensUsed)} ctx`
-          : goal.timeUsedSeconds > 0
-            ? formatCompactDuration(goal.timeUsedSeconds)
-            : null
+    goal.tokenBudget !== undefined
+      ? `${formatCompactNumber(goal.tokensUsed)}/${formatCompactNumber(goal.tokenBudget)} tokens`
+      : goal.tokensUsed > 0
+        ? `${formatCompactNumber(goal.tokensUsed)} tokens`
+        : goal.timeUsedSeconds > 0
+          ? formatCompactDuration(goal.timeUsedSeconds)
+          : null
 
-  return detail
-    ? `Goal: ${formatThreadGoalStatus(goal.status)} · ${detail}`
-    : `Goal: ${formatThreadGoalStatus(goal.status)}`
+  return detail ? `${label} · ${detail}` : label
 }
 
 function formatThreadGoalPromptBudget(
@@ -555,6 +839,7 @@ function formatThreadGoalPromptBudget(
     ...(options.includeRemainingTokens
       ? [`- Tokens remaining: ${remainingTokens ?? 'unbounded'}`]
       : []),
+    `- Automatic turns used: ${goal.continuationTurns} of ${goal.maxContinuationTurns}`,
   ].join('\n')
 }
 
@@ -655,8 +940,11 @@ export function deriveThreadGoalContinuationResetState({
   previousResetKey: string | null
   goal: ThreadGoal | null
 }): ThreadGoalContinuationResetState | null {
+  // Revision is in the key so ANY durable mutation invalidates work queued
+  // against the previous state, not only the four fields v1 happened to
+  // compare. An edit, a status change, or a budget change all bump it.
   const resetKey = goal
-    ? `${goal.goalId}:${goal.objective}:${goal.status}:${goal.tokenBudget ?? ''}`
+    ? `${goal.goalId}:${goal.revision}:${goal.status}`
     : null
 
   if (previousResetKey === resetKey) {
@@ -667,34 +955,38 @@ export function deriveThreadGoalContinuationResetState({
 
   return {
     resetKey,
-    goalContinuationStallCount: 0,
     pendingBudgetWrapUpGoalId: continuationSeed.pendingBudgetWrapUpGoalId,
     shouldBumpIdleSignal: continuationSeed.shouldBumpIdleSignal,
   }
 }
 
+/**
+ * Whether an automatic continuation may start.
+ *
+ * The stall and turn-ceiling checks that used to live here are gone on
+ * purpose. Accounting now moves an exhausted or unproductive goal to a
+ * non-schedulable status durably, so "the scheduler gave up" and "the
+ * persisted goal says so" cannot disagree across a restart, which is exactly
+ * the split v1 had.
+ */
 export function shouldStartThreadGoalContinuation({
   sessionIsIdle,
   goal,
   goalContinuationInFlight,
-  goalContinuationStallCount,
-  maxStallCount = MAX_GOAL_CONTINUATION_STALL_COUNT,
   queuedCommandsCount = 0,
   hasActiveLocalJsxUI = false,
 }: {
   sessionIsIdle: boolean
   goal: ThreadGoal | null
   goalContinuationInFlight: boolean
-  goalContinuationStallCount: number
-  maxStallCount?: number
   queuedCommandsCount?: number
   hasActiveLocalJsxUI?: boolean
 }): boolean {
   return (
     sessionIsIdle &&
-    goal?.status === 'active' &&
+    goal !== null &&
+    isSchedulableThreadGoalStatus(goal.status) &&
     !goalContinuationInFlight &&
-    goalContinuationStallCount < maxStallCount &&
     queuedCommandsCount === 0 &&
     !hasActiveLocalJsxUI
   )
@@ -725,26 +1017,30 @@ export function shouldStartThreadGoalBudgetWrapUp({
   )
 }
 
-export function nextThreadGoalContinuationStallCount({
+/**
+ * Whether an automatic turn made progress.
+ *
+ * v1's only progress signal was "did the turn call a tool", and it stays the
+ * baseline here: a continuation that produced pure prose advanced nothing.
+ * `changedWorkspace` lets a caller that CAN observe real change (an artifact
+ * write, a verifier verdict, an external state transition) override the tool
+ * count, so a turn whose only tool calls were repeated reads is not counted as
+ * progress once that signal exists.
+ */
+export function didThreadGoalTurnMakeProgress({
   continuationKind,
   toolUseCount,
-  previousStallCount,
+  changedWorkspace,
 }: {
   continuationKind: ThreadGoalContinuationKind | null
   toolUseCount: number
-  previousStallCount: number
-}): number {
-  if (continuationKind !== 'active') {
-    return previousStallCount
-  }
-  return toolUseCount === 0 ? previousStallCount + 1 : 0
-}
-
-export function shouldResetThreadGoalContinuationStallCount(
-  input: string,
-  mode: 'prompt' | 'bash' | 'orphaned-permission' | 'task-notification',
-): boolean {
-  return mode === 'prompt' && input.trim().length > 0 && !input.trim().startsWith('/')
+  changedWorkspace?: boolean
+}): boolean {
+  // Only automatic turns are judged. A user-driven turn is progress by
+  // definition: the human is steering.
+  if (continuationKind !== 'active') return true
+  if (changedWorkspace !== undefined) return changedWorkspace
+  return toolUseCount > 0
 }
 
 export function shouldPromptToResumePausedGoal({
@@ -767,6 +1063,98 @@ function isNonNegativeInteger(value: unknown): value is number {
   return Number.isInteger(value) && Number(value) >= 0
 }
 
+function readNonNegativeInteger(value: unknown, fallback: number): number {
+  return isNonNegativeInteger(value) ? value : fallback
+}
+
+function readPositiveInteger(value: unknown, fallback: number): number {
+  return isNonNegativeInteger(value) && value > 0 ? value : fallback
+}
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((entry): entry is string => typeof entry === 'string')
+}
+
+function readUsageBreakdown(value: unknown): ThreadGoalUsageBreakdown {
+  const source = (value ?? {}) as Record<string, unknown>
+  return {
+    inputTokens: readNonNegativeInteger(source.inputTokens, 0),
+    outputTokens: readNonNegativeInteger(source.outputTokens, 0),
+    cachedInputTokens: readNonNegativeInteger(source.cachedInputTokens, 0),
+    responseCount: readNonNegativeInteger(source.responseCount, 0),
+  }
+}
+
+/**
+ * Status a v1 record's reason is reconstructed from.
+ *
+ * v1 stored no reason, so the honest reconstruction is the one implied by the
+ * status itself. Nothing is invented: a v1 `active` goal simply reads as
+ * `created`.
+ */
+const V1_REASON_BY_STATUS: Record<string, ThreadGoalStatusReason> = {
+  active: 'created',
+  paused: 'user_paused',
+  budget_limited: 'token_budget_exhausted',
+  complete: 'agent_reported_complete',
+}
+
+/**
+ * Migrate a v1 durable goal.
+ *
+ * The one semantic decision: v1's `tokensUsed` counted conversation-context
+ * GROWTH, not spend. Carrying that number forward as v2 billable usage would
+ * silently reinterpret it, so it moves to `contextGrowthTokens` (diagnostic)
+ * and billable usage restarts at zero. Any user-set `tokenBudget` is
+ * preserved and now measures real usage. That is deliberately generous to an
+ * in-flight goal, and it is safe because v2 adds a mandatory turn ceiling that
+ * bounds the loop whether or not a token budget exists.
+ */
+function migrateThreadGoalV1(
+  candidate: Record<string, unknown>,
+  base: {
+    threadId: string
+    goalId: string
+    objective: string
+    status: ThreadGoalStatus
+    tokenBudget?: number
+    timeUsedSeconds: number
+    createdAtMs: number
+    updatedAtMs: number
+  },
+): ThreadGoal {
+  return {
+    schemaVersion: THREAD_GOAL_SCHEMA_VERSION,
+    threadId: base.threadId,
+    goalId: base.goalId,
+    revision: 1,
+    objective: base.objective,
+    status: base.status,
+    statusReason: V1_REASON_BY_STATUS[base.status] ?? 'created',
+    statusChangedAtMs: base.updatedAtMs,
+    ...(base.tokenBudget !== undefined ? { tokenBudget: base.tokenBudget } : {}),
+    maxContinuationTurns: DEFAULT_MAX_GOAL_CONTINUATION_TURNS,
+    maxConsecutiveFailures: DEFAULT_MAX_GOAL_CONSECUTIVE_FAILURES,
+    maxNoProgressTurns: DEFAULT_MAX_GOAL_NO_PROGRESS_TURNS,
+    tokensUsed: 0,
+    usageBreakdown: {
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedInputTokens: 0,
+      responseCount: 0,
+    },
+    contextGrowthTokens: readNonNegativeInteger(candidate.tokensUsed, 0),
+    chargedResponseIds: [],
+    continuationTurns: 0,
+    consecutiveNoProgressTurns: 0,
+    consecutiveFailures: 0,
+    timeUsedSeconds: base.timeUsedSeconds,
+    createdAtMs: base.createdAtMs,
+    updatedAtMs: base.updatedAtMs,
+  }
+}
+
 export function parseThreadGoal(input: unknown): ThreadGoal | null {
   if (!input || typeof input !== 'object') {
     return null
@@ -779,7 +1167,6 @@ export function parseThreadGoal(input: unknown): ThreadGoal | null {
     objective,
     status,
     tokenBudget,
-    tokensUsed,
     timeUsedSeconds,
     createdAtMs,
     updatedAtMs,
@@ -796,17 +1183,11 @@ export function parseThreadGoal(input: unknown): ThreadGoal | null {
     return null
   }
 
-  if (
-    status !== 'active' &&
-    status !== 'paused' &&
-    status !== 'budget_limited' &&
-    status !== 'complete'
-  ) {
+  if (!isThreadGoalStatus(status)) {
     return null
   }
 
   if (
-    !isNonNegativeInteger(tokensUsed) ||
     !isNonNegativeInteger(timeUsedSeconds) ||
     !isNonNegativeInteger(createdAtMs) ||
     !isNonNegativeInteger(updatedAtMs)
@@ -814,22 +1195,88 @@ export function parseThreadGoal(input: unknown): ThreadGoal | null {
     return null
   }
 
-  if (tokenBudget !== undefined && !isNonNegativeInteger(tokenBudget)) {
-    return null
-  }
-  if (tokenBudget !== undefined && tokenBudget <= 0) {
-    return null
+  let parsedTokenBudget: number | undefined
+  if (tokenBudget !== undefined) {
+    if (!isNonNegativeInteger(tokenBudget) || tokenBudget <= 0) {
+      return null
+    }
+    parsedTokenBudget = tokenBudget
   }
 
-  return {
+  const base: {
+    threadId: string
+    goalId: string
+    objective: string
+    status: ThreadGoalStatus
+    tokenBudget?: number
+    timeUsedSeconds: number
+    createdAtMs: number
+    updatedAtMs: number
+  } = {
     threadId,
     goalId,
     objective: objective.trim(),
     status,
-    ...(tokenBudget !== undefined ? { tokenBudget } : {}),
-    tokensUsed,
+    ...(parsedTokenBudget !== undefined
+      ? { tokenBudget: parsedTokenBudget }
+      : {}),
     timeUsedSeconds,
     createdAtMs,
     updatedAtMs,
+  }
+
+  // A record with no schemaVersion is v1. Rejecting it would silently drop a
+  // live goal from the one user's persisted sessions, so it is migrated.
+  const schemaVersion = candidate.schemaVersion
+  if (!isNonNegativeInteger(schemaVersion) || schemaVersion < 2) {
+    return migrateThreadGoalV1(candidate, base)
+  }
+
+  // v2 fields are read defensively rather than rejected: a durable goal is
+  // production state for the one user, and a single unreadable counter must
+  // not discard the objective. Identity and status above are still strict.
+  if (!isNonNegativeInteger(candidate.tokensUsed)) {
+    return null
+  }
+
+  return {
+    schemaVersion: THREAD_GOAL_SCHEMA_VERSION,
+    ...base,
+    revision: readPositiveInteger(candidate.revision, 1),
+    statusReason: isThreadGoalStatusReason(candidate.statusReason)
+      ? candidate.statusReason
+      : (V1_REASON_BY_STATUS[status] ?? 'created'),
+    statusChangedAtMs: readNonNegativeInteger(
+      candidate.statusChangedAtMs,
+      updatedAtMs,
+    ),
+    maxContinuationTurns: readPositiveInteger(
+      candidate.maxContinuationTurns,
+      DEFAULT_MAX_GOAL_CONTINUATION_TURNS,
+    ),
+    maxConsecutiveFailures: readPositiveInteger(
+      candidate.maxConsecutiveFailures,
+      DEFAULT_MAX_GOAL_CONSECUTIVE_FAILURES,
+    ),
+    maxNoProgressTurns: readPositiveInteger(
+      candidate.maxNoProgressTurns,
+      DEFAULT_MAX_GOAL_NO_PROGRESS_TURNS,
+    ),
+    tokensUsed: candidate.tokensUsed,
+    usageBreakdown: readUsageBreakdown(candidate.usageBreakdown),
+    contextGrowthTokens: readNonNegativeInteger(
+      candidate.contextGrowthTokens,
+      0,
+    ),
+    chargedResponseIds: readStringArray(candidate.chargedResponseIds),
+    continuationTurns: readNonNegativeInteger(candidate.continuationTurns, 0),
+    consecutiveNoProgressTurns: readNonNegativeInteger(
+      candidate.consecutiveNoProgressTurns,
+      0,
+    ),
+    consecutiveFailures: readNonNegativeInteger(
+      candidate.consecutiveFailures,
+      0,
+    ),
   }
 }

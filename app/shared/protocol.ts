@@ -1015,10 +1015,20 @@ export type AgentConfigSnapshotFrame = {
  * Goals + memory read-seams (P4-10) — read-only snapshots
  * ------------------------------------------------------------------------- */
 
+/**
+ * Mirrors the engine's durable goal statuses (src/utils/threadGoalState.ts).
+ * Additive widening: the desktop must be able to show that a goal stopped
+ * rather than falling back to a status that reads like success.
+ */
 export type ThreadGoalStatus =
   | 'active'
+  | 'waiting'
   | 'paused'
+  | 'blocked'
+  | 'stalled'
   | 'budget_limited'
+  | 'usage_limited'
+  | 'failed'
   | 'complete'
 
 export type ThreadGoalSnapshot = {
@@ -1026,12 +1036,22 @@ export type ThreadGoalSnapshot = {
   goalId: string
   objective: string
   status: ThreadGoalStatus
+  /**
+   * Monotonic engine-side revision. Present so a desktop client can tell a
+   * refreshed snapshot from an unchanged one; the renderer never authors it.
+   */
+  revision: number
   tokenBudget?: number
+  /** Real billable provider usage, not conversation-context growth. */
   tokensUsed: number
+  continuationTurns: number
+  maxContinuationTurns: number
   timeUsedSeconds: number
   createdAtMs: number
   updatedAtMs: number
   summary: string
+  /** One clause on why a stopped goal stopped, or null when it is running. */
+  statusNote: string | null
 }
 
 export type ThreadGoalSnapshotFrame = {

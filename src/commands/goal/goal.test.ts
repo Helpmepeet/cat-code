@@ -175,6 +175,7 @@ describe('/goal command', () => {
         timeUsedSeconds: 50,
       },
       'complete',
+      'agent_reported_complete',
       200,
     )
     let state = { threadGoal: completedGoal }

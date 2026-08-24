@@ -2,17 +2,22 @@ import { z } from 'zod/v4'
 import { buildTool, type ToolDef, type ValidationResult } from '../../Tool.js'
 import { getSessionId } from '../../bootstrap/state.js'
 import { readSessionState } from '../../agent-mode/sessionState.js'
-import { completeThreadGoalAction } from '../../utils/threadGoalActions.js'
+import { applyThreadGoalTransition } from '../../utils/threadGoalActions.js'
 import {
   buildThreadGoalToolResponse,
   type ThreadGoalToolResponse,
 } from '../../utils/threadGoal.js'
+import { checkThreadGoalTransition } from '../../utils/threadGoalState.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 
 const inputSchema = lazySchema(() =>
   z.strictObject({
-    status: z.literal('complete'),
+    // The only two statuses the working model may request. Pause, resume,
+    // clear, budget, usage-limit, stall, and failure transitions belong to the
+    // user or the runtime, and threadGoalState.ts enforces that separately so
+    // widening this schema alone cannot widen model authority.
+    status: z.enum(['complete', 'blocked']),
   }),
 )
 
@@ -21,7 +26,7 @@ type InputSchema = ReturnType<typeof inputSchema>
 type Output = ThreadGoalToolResponse
 
 function validateGoalUpdate(input: {
-  status: 'complete'
+  status: 'complete' | 'blocked'
 }): ValidationResult {
   void input.status
   return { result: true }
@@ -65,8 +70,8 @@ export const UpdateGoalTool = buildTool({
   async description() {
     return [
       'Update the existing goal.',
-      'Use this tool only to mark the goal achieved.',
       'Set status to `complete` only when the objective has actually been achieved and no required work remains.',
+      'Set status to `blocked` only when the same blocker has stopped progress on at least three consecutive goal turns and it needs the user or an external change to clear.',
       'Do not mark a goal complete merely because its budget is nearly exhausted or because you are stopping work.',
       'You cannot use this tool to pause, resume, or budget-limit a goal; those status changes are controlled by the user or system.',
       'When marking a budgeted goal achieved with status `complete`, report the final token usage from the tool result to the user.',
@@ -74,7 +79,7 @@ export const UpdateGoalTool = buildTool({
   },
   async prompt() {
     return [
-      'Use this tool only to mark the current thread goal complete.',
+      'Use this tool to mark the current thread goal complete, or to report that it is blocked.',
       '',
       'Before using this tool, verify that:',
       '- every explicit requirement in the goal objective is satisfied',
@@ -87,7 +92,9 @@ export const UpdateGoalTool = buildTool({
       'Do not use this tool because the token budget is nearly exhausted.',
       'Do not use this tool because you are stopping work.',
       '',
-      'The only valid status is "complete".',
+      'Use status "blocked" only when the SAME blocker has stopped progress on at least three consecutive goal turns and clearing it needs the user or an external change. A blocker you have not tried to work around is not a blocked goal.',
+      '',
+      'The only valid statuses are "complete" and "blocked".',
       'You cannot use this tool to pause, resume, clear, or budget-limit a goal; those status changes are controlled by the user or runtime.',
       'When marking a budgeted goal complete, report the final token usage and elapsed time from the tool result to the user.',
     ].join('\n')
@@ -106,13 +113,6 @@ export const UpdateGoalTool = buildTool({
         errorCode: 1,
       }
     }
-    if (currentGoal.status === 'paused') {
-      return {
-        result: false,
-        message: 'Paused goals cannot be marked complete.',
-        errorCode: 3,
-      }
-    }
     if (currentGoal.status === 'complete') {
       return {
         result: false,
@@ -120,15 +120,31 @@ export const UpdateGoalTool = buildTool({
         errorCode: 4,
       }
     }
-    if (
-      currentGoal.status !== 'active' &&
-      currentGoal.status !== 'budget_limited'
-    ) {
+
+    // The transition table is the authority. Asking it here means the tool
+    // rejects an illegal request BEFORE any durable write, and the reason it
+    // gives the model always matches what the control plane would enforce.
+    const check = checkThreadGoalTransition({
+      from: currentGoal.status,
+      to: input.status,
+      actor: 'agent',
+    })
+    if (!check.allowed) {
       return {
         result: false,
-        message: `Goals with status ${currentGoal.status} cannot be marked complete.`,
+        message:
+          check.code === 'unauthorized'
+            ? `Setting status ${input.status} is not something this tool controls.`
+            : `A goal with status ${currentGoal.status} cannot be set to ${input.status}.`,
         errorCode: 5,
       }
+    }
+
+    // Only completion is gated on worker resolution. A blocked report is the
+    // model telling the user it cannot proceed, and unresolved workers are
+    // frequently the very thing blocking it.
+    if (input.status !== 'complete') {
+      return { result: true }
     }
 
     const sessionState = await readSessionState(getSessionId())
@@ -166,20 +182,42 @@ export const UpdateGoalTool = buildTool({
       content: jsonStringify(output),
     }
   },
-  async call(_input, context) {
+  async call(input, context) {
     const currentGoal = context.getAppState().threadGoal
     if (!currentGoal) {
       throw new Error('No current thread goal exists.')
     }
 
-    const nextGoal = await completeThreadGoalAction({
+    const isCompletion = input.status === 'complete'
+    // The revision the model validated against is the compare-and-swap
+    // precondition. If the user paused, edited, replaced, or cleared the goal
+    // between validation and here, the write is refused rather than applied to
+    // whatever goal now occupies the session.
+    const result = await applyThreadGoalTransition({
       context,
-      goal: currentGoal,
+      goalId: currentGoal.goalId,
+      to: input.status,
+      reason: isCompletion
+        ? 'agent_reported_complete'
+        : 'agent_reported_blocked',
+      actor: 'agent',
+      expectedRevision: currentGoal.revision,
+      ...(isCompletion ? { objective: '', resetWorkers: true } : {}),
     })
 
+    if (!result.ok) {
+      throw new Error(
+        result.code === 'stale'
+          ? 'The goal changed while this update was in flight. Re-read the goal with get_goal before updating it.'
+          : result.code === 'missing'
+            ? 'The thread goal was cleared or replaced and no longer exists.'
+            : `This goal cannot be set to ${input.status} from its current status.`,
+      )
+    }
+
     return {
-      data: buildThreadGoalToolResponse(nextGoal, {
-        includeCompletionBudgetReport: true,
+      data: buildThreadGoalToolResponse(result.goal, {
+        includeCompletionBudgetReport: isCompletion,
       }),
     }
   },

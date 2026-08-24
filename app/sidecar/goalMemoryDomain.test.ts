@@ -10,7 +10,9 @@ import {
 import type { MemoryFileInfo } from '../../src/utils/claudemd.js'
 import type { MemoryType as EngineInstructionMemoryType } from '../../src/utils/memory/types.js'
 import {
+  createThreadGoal,
   formatThreadGoalStatus,
+  updateThreadGoalStatus,
   type ThreadGoalStatus,
 } from '../../src/utils/threadGoal.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
@@ -55,14 +57,10 @@ void (null as unknown as ProtocolCoversAutoMemoryTypes)
 
 test('builds a thread goal display snapshot with the engine summary text', () => {
   const snapshot = threadGoalSnapshot({
-    threadId: 'thread-1',
+    ...createThreadGoal('thread-1', 'Finish P4-10', 50_000, 1),
     goalId: 'goal-1',
-    objective: 'Finish P4-10',
-    status: 'active',
-    tokenBudget: 50_000,
     tokensUsed: 1_234,
     timeUsedSeconds: 42,
-    createdAtMs: 1,
     updatedAtMs: 2,
   })
 
@@ -88,33 +86,62 @@ test('builds a thread goal display snapshot with the engine summary text', () =>
 })
 
 test('covers every engine thread-goal status in snapshot and summary formatting', () => {
-  // ThreadGoalStatus: src/utils/threadGoal.ts:4-9. Expected labels are HARDCODED
-  // literals mirroring STATUS_LABELS (src/utils/threadGoal.ts:77-82) so an engine
-  // label-wording change fails this test loudly — deriving the expected string via
-  // formatThreadGoalStatus() would move both sides together and catch no drift.
+  // Expected labels are HARDCODED literals mirroring STATUS_LABELS in
+  // src/utils/threadGoal.ts, so an engine label-wording change fails this test
+  // loudly. Deriving the expected string via formatThreadGoalStatus() would
+  // move both sides together and catch no drift.
   const cases = [
-    { status: 'active', label: 'active' },
-    { status: 'paused', label: 'paused' },
-    { status: 'budget_limited', label: 'limited by budget' },
-    { status: 'complete', label: 'complete' },
-  ] as const satisfies readonly { status: ThreadGoalStatus; label: string }[]
+    { status: 'active', label: 'active', reason: 'created' },
+    { status: 'waiting', label: 'waiting', reason: 'waiting_on_dependency' },
+    { status: 'paused', label: 'paused', reason: 'user_paused' },
+    { status: 'blocked', label: 'blocked', reason: 'agent_reported_blocked' },
+    { status: 'stalled', label: 'stalled', reason: 'no_progress' },
+    {
+      status: 'budget_limited',
+      label: 'limited by budget',
+      reason: 'token_budget_exhausted',
+    },
+    {
+      status: 'usage_limited',
+      label: 'limited by usage',
+      reason: 'provider_usage_limit',
+    },
+    { status: 'failed', label: 'failed', reason: 'runtime_error' },
+    {
+      status: 'complete',
+      label: 'complete',
+      reason: 'agent_reported_complete',
+    },
+  ] as const satisfies readonly {
+    status: ThreadGoalStatus
+    label: string
+    reason: string
+  }[]
 
-  for (const { status, label } of cases) {
+  for (const { status, label, reason } of cases) {
     // Tripwire: the engine's own formatter must still produce the pinned label.
     expect(formatThreadGoalStatus(status)).toBe(label)
+    const base = createThreadGoal(
+      `thread-${status}`,
+      `Goal status ${status}`,
+      status === 'budget_limited' ? 100 : undefined,
+      1,
+    )
     const snapshot = threadGoalSnapshot({
-      threadId: `thread-${status}`,
+      ...(status === 'active'
+        ? base
+        : updateThreadGoalStatus(base, status, reason as never, 2)),
       goalId: `goal-${status}`,
-      objective: `Goal status ${status}`,
-      status,
-      ...(status === 'budget_limited' ? { tokenBudget: 100 } : {}),
       tokensUsed: status === 'budget_limited' ? 100 : 1,
       timeUsedSeconds: 2,
-      createdAtMs: 1,
       updatedAtMs: 2,
     })
     expect(snapshot?.status).toBe(status)
     expect(snapshot?.summary).toContain(`Goal: ${label}`)
+    // No stopped status may render as the success label.
+    if (status !== 'complete') {
+      expect(snapshot?.summary).not.toContain('Goal: complete')
+    }
   }
 })
 

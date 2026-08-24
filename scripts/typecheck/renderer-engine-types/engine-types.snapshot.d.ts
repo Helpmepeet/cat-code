@@ -13,13 +13,64 @@ import type {
 
 export type { SDKMessage }
 
+type ThreadGoalStatus =
+  | 'active'
+  | 'waiting'
+  | 'paused'
+  | 'blocked'
+  | 'stalled'
+  | 'budget_limited'
+  | 'usage_limited'
+  | 'failed'
+  | 'complete'
+
+type ThreadGoalStatusReason =
+  | 'created'
+  | 'user_paused'
+  | 'user_resumed'
+  | 'user_replaced'
+  | 'turn_aborted'
+  | 'agent_reported_blocked'
+  | 'agent_reported_complete'
+  | 'no_progress'
+  | 'token_budget_exhausted'
+  | 'turn_budget_exhausted'
+  | 'time_budget_exhausted'
+  | 'provider_usage_limit'
+  | 'runtime_error'
+  | 'verification_unavailable'
+  | 'required_gate_failed'
+  | 'waiting_on_dependency'
+  | 'dependency_timeout'
+  | 'unresolved_workers'
+
+type ThreadGoalUsageBreakdown = {
+  inputTokens: number
+  outputTokens: number
+  cachedInputTokens: number
+  responseCount: number
+}
+
 type ThreadGoal = {
+  schemaVersion: number
   threadId: string
   goalId: string
+  revision: number
   objective: string
-  status: 'active' | 'paused' | 'budget_limited' | 'complete'
+  status: ThreadGoalStatus
+  statusReason: ThreadGoalStatusReason
+  statusChangedAtMs: number
   tokenBudget?: number
+  maxContinuationTurns: number
+  maxConsecutiveFailures: number
+  maxNoProgressTurns: number
   tokensUsed: number
+  usageBreakdown: ThreadGoalUsageBreakdown
+  contextGrowthTokens: number
+  chargedResponseIds: string[]
+  continuationTurns: number
+  consecutiveNoProgressTurns: number
+  consecutiveFailures: number
   timeUsedSeconds: number
   createdAtMs: number
   updatedAtMs: number

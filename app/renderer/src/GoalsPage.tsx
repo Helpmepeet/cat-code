@@ -68,11 +68,21 @@ function GoalCard({ goal }: { goal: ThreadGoalSnapshot }) {
         {goal.objective}
       </h2>
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      {goal.statusNote ? (
+        <p className="mb-4 text-[13px] leading-relaxed text-text-muted">
+          {goal.statusNote}
+        </p>
+      ) : null}
+
+      <div className="grid gap-3 sm:grid-cols-4">
         <Metric label="Tokens used" value={formatNumber(goal.tokensUsed)} />
         <Metric
           label="Token budget"
           value={goal.tokenBudget === undefined ? 'unbounded' : formatNumber(goal.tokenBudget)}
+        />
+        <Metric
+          label="Automatic turns"
+          value={`${goal.continuationTurns} of ${goal.maxContinuationTurns}`}
         />
         <Metric label="Time used" value={`${goal.timeUsedSeconds}s`} />
       </div>
@@ -95,16 +105,38 @@ function Metric({ label, value }: { label: string; value: string }) {
   )
 }
 
+const GOAL_STATUS_LABELS: Record<ThreadGoalSnapshot['status'], string> = {
+  active: 'active',
+  waiting: 'waiting',
+  paused: 'paused',
+  blocked: 'blocked',
+  stalled: 'stalled',
+  budget_limited: 'budget limited',
+  usage_limited: 'usage limited',
+  failed: 'failed',
+  complete: 'complete',
+}
+
+// Only `complete` gets the success tone. Everything that stopped short reads
+// as a stop, so a stalled or failed goal can never look like an achieved one.
+const GOAL_STATUS_TONES: Record<ThreadGoalSnapshot['status'], string> = {
+  active: 'border-tone-good/30 bg-tone-good/10 text-tone-good',
+  waiting: 'border-shell-seam bg-shell-hover text-text-subtle',
+  paused: 'border-shell-seam bg-shell-hover text-text-subtle',
+  blocked: 'border-tone-warn/30 bg-tone-warn/10 text-tone-warn',
+  stalled: 'border-tone-warn/30 bg-tone-warn/10 text-tone-warn',
+  budget_limited: 'border-tone-warn/30 bg-tone-warn/10 text-tone-warn',
+  usage_limited: 'border-tone-warn/30 bg-tone-warn/10 text-tone-warn',
+  failed: 'border-tone-danger/30 bg-tone-danger/10 text-tone-danger',
+  complete: 'border-accent/30 bg-accent/10 text-accent',
+}
+
 function StatusBadge({ status }: { status: ThreadGoalSnapshot['status'] }) {
-  const label = status === 'budget_limited' ? 'budget limited' : status
+  // Tolerant fallback: an unknown status from a newer engine renders neutrally
+  // rather than throwing, and still never borrows the success tone.
+  const label = GOAL_STATUS_LABELS[status] ?? status
   const tone =
-    status === 'active'
-      ? 'border-tone-good/30 bg-tone-good/10 text-tone-good'
-      : status === 'complete'
-        ? 'border-accent/30 bg-accent/10 text-accent'
-        : status === 'budget_limited'
-          ? 'border-tone-warn/30 bg-tone-warn/10 text-tone-warn'
-          : 'border-shell-seam bg-shell-hover text-text-subtle'
+    GOAL_STATUS_TONES[status] ?? 'border-shell-seam bg-shell-hover text-text-subtle'
   return (
     <span
       className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.07em] ${tone}`}

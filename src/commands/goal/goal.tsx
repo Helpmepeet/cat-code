@@ -15,6 +15,7 @@ import {
   createThreadGoalAction,
   updateThreadGoalStatusAction,
 } from '../../utils/threadGoalActions.js'
+import { isResumableThreadGoalStatus } from '../../utils/threadGoalState.js'
 
 const NO_GOAL_MESSAGE = 'No goal is currently set.'
 
@@ -115,22 +116,25 @@ export const call: LocalJSXCommandCall = async (onDone, context, args) => {
       onDone(NO_GOAL_MESSAGE, { display: 'system' })
       return null
     }
-    if (currentGoal.status === 'budget_limited') {
+    if (currentGoal.status !== 'active' && currentGoal.status !== 'waiting') {
+      // Already stopped, so the summary alone answers what the user asked.
       onDone(formatThreadGoalSummary(currentGoal), { display: 'system' })
       return null
     }
-    if (currentGoal.status !== 'active') {
-      onDone('Only active goals can be paused.', { display: 'system' })
-      return null
-    }
 
-    const nextGoal = await updateThreadGoalStatusAction({
+    const paused = await updateThreadGoalStatusAction({
       context,
       goal: currentGoal,
       status: 'paused',
+      reason: 'user_paused',
+      actor: 'user',
       objective: currentGoal.objective,
     })
-    onDone(formatThreadGoalSummary(nextGoal), { display: 'system' })
+    if (!paused.ok) {
+      onDone('Could not pause this goal.', { display: 'system' })
+      return null
+    }
+    onDone(formatThreadGoalSummary(paused.goal), { display: 'system' })
     return null
   }
 
@@ -139,18 +143,32 @@ export const call: LocalJSXCommandCall = async (onDone, context, args) => {
       onDone(NO_GOAL_MESSAGE, { display: 'system' })
       return null
     }
-    if (currentGoal.status !== 'paused') {
-      onDone('Only paused goals can be resumed.', { display: 'system' })
+    // Every stopped status resumes, not just paused: a goal that stalled, hit
+    // its budget, or failed is exactly the goal a user wants to restart, and
+    // resume opens a fresh continuation window.
+    if (!isResumableThreadGoalStatus(currentGoal.status)) {
+      onDone(
+        currentGoal.status === 'complete'
+          ? 'This goal is already complete. Use /goal clear or /goal replace <objective>.'
+          : 'This goal is already running.',
+        { display: 'system' },
+      )
       return null
     }
 
-    const nextGoal = await updateThreadGoalStatusAction({
+    const resumed = await updateThreadGoalStatusAction({
       context,
       goal: currentGoal,
       status: 'active',
+      reason: 'user_resumed',
+      actor: 'user',
       objective: currentGoal.objective,
     })
-    onDone(formatThreadGoalSummary(nextGoal), { display: 'system' })
+    if (!resumed.ok) {
+      onDone('Could not resume this goal.', { display: 'system' })
+      return null
+    }
+    onDone(formatThreadGoalSummary(resumed.goal), { display: 'system' })
     return null
   }
 
