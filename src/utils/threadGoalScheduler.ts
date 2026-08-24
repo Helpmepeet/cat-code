@@ -1,7 +1,9 @@
+import { randomUUID } from 'crypto'
 import {
   accountThreadGoalTurn,
   renderThreadGoalBudgetLimitPrompt,
   renderThreadGoalContinuationPrompt,
+  updateThreadGoalStatus,
   type ThreadGoal,
   type ThreadGoalContinuationKind,
   type ThreadGoalTurnAccounting,
@@ -19,6 +21,12 @@ import {
   isSchedulableThreadGoalStatus,
   isTerminalThreadGoalStatus,
 } from './threadGoalState.js'
+import {
+  resolveThreadGoalWait,
+  selectThreadGoalWait,
+  threadGoalWaitTimeoutReason,
+  type ThreadGoalDependency,
+} from './threadGoalWait.js'
 
 /**
  * The one continuation scheduler for a logical goal.
@@ -78,12 +86,26 @@ export type ThreadGoalSchedulerHost = {
   /** Agent Mode changes the continuation prompt's guidance. */
   isAgentMode?(): boolean
 
+  /**
+   * Work this goal is waiting on that has not finished.
+   *
+   * Consulted before every continuation. While anything is outstanding the
+   * goal parks instead of taking a turn, which is what stops it spending its
+   * turn ceiling asking whether a worker is done yet.
+   */
+  getUnresolvedDependencies?(): readonly ThreadGoalDependency[]
+
+  /** Ids for new waits. Injectable so tests are deterministic. */
+  createWaitId?(): string
+
   /** Optional observability hook. Never user-visible text. */
   onDecision?(decision: ThreadGoalSchedulerDecision): void
 }
 
 export type ThreadGoalSchedulerDecision =
   | { type: 'started'; kind: ThreadGoalContinuationKind; attemptId: string }
+  | { type: 'parked'; subjectId: string }
+  | { type: 'woke' }
   | {
       type: 'skipped'
       reason:
@@ -190,6 +212,55 @@ export function createThreadGoalScheduler(
     const goal = host.getGoal()
     if (!goal) return report({ type: 'skipped', reason: 'no-goal' })
 
+    // A parked goal is handled first and separately: it is not schedulable, so
+    // falling through would only ever report `not-schedulable` and the park
+    // would never end.
+    if (goal.status === 'waiting' && goal.wait) {
+      const resolution = resolveThreadGoalWait({
+        wait: goal.wait,
+        // Only a completion event names a subject. An idle tick carries none,
+        // so it can move the deadline but never satisfy the dependency.
+        completedSubjectId:
+          trigger === 'task-completed' ||
+          trigger === 'process-exited' ||
+          trigger === 'user-resumed'
+            ? sourceId
+            : null,
+        nowMs: host.now(),
+      })
+
+      if (resolution.type === 'still-waiting') {
+        return report({ type: 'skipped', reason: 'not-schedulable' })
+      }
+
+      if (resolution.type === 'timed-out') {
+        // A lost wake must surface as an honest stopped state, never as a goal
+        // that looks alive forever.
+        host.saveGoal(
+          updateThreadGoalStatus(
+            { ...goal, wait: null },
+            resolution.disposition,
+            threadGoalWaitTimeoutReason(resolution.disposition),
+            host.now(),
+          ),
+        )
+        return report({ type: 'skipped', reason: 'not-schedulable' })
+      }
+
+      // The dependency finished. Unpark and fall through to start the turn
+      // that acts on it.
+      host.saveGoal(
+        updateThreadGoalStatus(
+          goal,
+          'active',
+          'user_resumed',
+          host.now(),
+        ),
+      )
+      report({ type: 'woke' })
+      return wake({ trigger: 'idle', sourceId: `woke:${sourceId}` })
+    }
+
     // `budget_limited` gets exactly one wrap-up turn; every other non-active
     // status is unschedulable, which is how a stalled, blocked, failed, paused,
     // waiting, or complete goal stops the loop without a separate flag.
@@ -208,6 +279,30 @@ export function createThreadGoalScheduler(
     }
 
     const nowMs = host.now()
+
+    // Park rather than spend a turn asking whether known work has finished.
+    // Only ordinary continuations park: a budget wrap-up is the goal's last
+    // turn and must not be deferred behind a dependency.
+    if (kind === 'active') {
+      const dependencies = host.getUnresolvedDependencies?.() ?? []
+      const nextWait = selectThreadGoalWait({
+        dependencies,
+        nowMs,
+        createWaitId: host.createWaitId ?? (() => randomUUID()),
+      })
+      if (nextWait) {
+        host.saveGoal({
+          ...updateThreadGoalStatus(
+            goal,
+            'waiting',
+            'waiting_on_dependency',
+            nowMs,
+          ),
+          wait: nextWait,
+        })
+        return report({ type: 'parked', subjectId: nextWait.subjectId })
+      }
+    }
     const woken = recordThreadGoalWake({
       record: readAttemptRecord(goal),
       goalId: goal.goalId,

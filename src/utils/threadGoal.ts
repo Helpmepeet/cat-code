@@ -18,6 +18,7 @@ import {
   parseThreadGoalAttemptRecord,
   type ThreadGoalAttempt,
 } from './threadGoalAttempt.js'
+import { parseThreadGoalWait, type ThreadGoalWait } from './threadGoalWait.js'
 import {
   EMPTY_THREAD_GOAL_CONTRACT,
   parseThreadGoalContract,
@@ -122,6 +123,12 @@ export type ThreadGoal = {
   contract: ThreadGoalContract
   /** Criterion-linked evidence recorded by the runtime, never by the model. */
   evidence: ThreadGoalEvidence[]
+  /**
+   * What the goal is parked on while `waiting`, or null. Durable so a restart
+   * resumes the park rather than losing it and spinning, and so the deadline
+   * survives the process that set it.
+   */
+  wait: ThreadGoalWait | null
   timeUsedSeconds: number
   createdAtMs: number
   updatedAtMs: number
@@ -589,6 +596,7 @@ export function createThreadGoal(
     recentWakeKeys: [],
     contract: EMPTY_THREAD_GOAL_CONTRACT,
     evidence: [],
+    wait: null,
     timeUsedSeconds: 0,
     createdAtMs: nowMs,
     updatedAtMs: nowMs,
@@ -627,6 +635,9 @@ export function updateThreadGoalStatus(
           consecutiveFailures: 0,
         }
       : {}),
+    // Leaving `waiting` always drops the park. A goal that is no longer parked
+    // must not keep a stale deadline that could later time it out.
+    ...(status !== 'waiting' ? { wait: null } : {}),
     updatedAtMs: nowMs,
   }
 }
@@ -1197,6 +1208,7 @@ function migrateThreadGoalV1(
     ...EMPTY_THREAD_GOAL_ATTEMPT_RECORD,
     contract: EMPTY_THREAD_GOAL_CONTRACT,
     evidence: [],
+    wait: null,
     timeUsedSeconds: base.timeUsedSeconds,
     createdAtMs: base.createdAtMs,
     updatedAtMs: base.updatedAtMs,
@@ -1332,5 +1344,6 @@ export function parseThreadGoal(input: unknown): ThreadGoal | null {
     ),
     contract: parseThreadGoalContract(candidate.contract),
     evidence: parseThreadGoalEvidence(candidate.evidence),
+    wait: parseThreadGoalWait(candidate.wait),
   }
 }

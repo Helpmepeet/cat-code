@@ -185,6 +185,7 @@ import { buildThreadGoalDisplayState, calculateThreadGoalContextTokenDelta, deri
 import { sumRealThreadGoalUsage } from '../utils/threadGoalUsage.js';
 import { createThreadGoalScheduler, type ThreadGoalRunningAttempt } from '../utils/threadGoalScheduler.js';
 import { isRateLimitErrorMessage } from '../services/rateLimitMessages.js';
+import { createThreadGoalDependencyCache } from '../utils/threadGoalDependencies.js';
 import { deriveDelegatedTaskStatus, deriveFocusedInputDialog, deriveHasOperationalWork, deriveHasSuppressedDialog, deriveHasUnblockedDelegatedWork, deriveLocalWaitingReason, deriveTuiSessionStatus, deriveTuiWaitingDetail, type FocusedInputDialog, type FocusedInputDialogFacts } from '../utils/tuiSessionStatus.js';
 import { updateThreadGoalStatusAction } from '../utils/threadGoalActions.js';
 import { getDisplayedEffortLevel } from '../utils/effort.js';
@@ -991,6 +992,9 @@ export function REPL({
   // Gating snapshot the scheduler host reads. Written immediately before each
   // wake() so the host never closes over a stale render.
   const goalGateRef = React.useRef({ canStartAutomaticTurn: false });
+  // Outstanding work the goal should park on rather than spend turns polling.
+  // Refreshed at turn boundaries, which is when it can have changed.
+  const goalDependenciesRef = React.useRef(createThreadGoalDependencyCache());
   const handleIncomingPromptRef = React.useRef<
     ((content: string, options?: { isMeta?: boolean }) => boolean) | null
   >(null);
@@ -1012,6 +1016,7 @@ export function REPL({
         );
       },
       canStartAutomaticTurn: () => goalGateRef.current.canStartAutomaticTurn,
+      getUnresolvedDependencies: () => goalDependenciesRef.current.read(),
       isAgentMode: () => isAgentMode(),
       startTurn: ({ prompt }) =>
         handleIncomingPromptRef.current?.(prompt, { isMeta: true }) ?? false
@@ -3350,6 +3355,9 @@ export function REPL({
 
     // Signal that a query turn has completed successfully
     accountCompletedTurnThreadGoal();
+    // The turn that just ended is the most likely thing to have spawned or
+    // resolved a worker, so re-read before the next scheduling decision.
+    void goalDependenciesRef.current.refresh();
     await onTurnComplete?.(messagesRef.current);
 
     // Surface any pending cache warnings accumulated during this turn

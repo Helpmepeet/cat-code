@@ -11,6 +11,7 @@ import {
   EMPTY_THREAD_GOAL_USAGE_DELTA,
   type ThreadGoalUsageDelta,
 } from '../utils/threadGoalUsage.js'
+import { createThreadGoalDependencyCache } from '../utils/threadGoalDependencies.js'
 
 /**
  * Drives the shared goal scheduler from an AppSessionController.
@@ -112,6 +113,9 @@ export function attachThreadGoalScheduler({
 }: AttachThreadGoalSchedulerOptions): ThreadGoalSchedulerAttachment {
   let activeTurn = false
   let idleSequence = 0
+  // Refreshed at turn boundaries, which is exactly when the set of
+  // outstanding work can have changed.
+  const dependencies = createThreadGoalDependencyCache()
 
   // Per-turn state, reset at every turn start.
   let turnAttempt: ThreadGoalRunningAttempt | null = null
@@ -133,6 +137,7 @@ export function attachThreadGoalScheduler({
     // concept on this path: a client submit simply wins the race by starting
     // the turn first, which this then observes.
     canStartAutomaticTurn: () => !activeTurn,
+    getUnresolvedDependencies: () => dependencies.read(),
     ...(isAgentMode ? { isAgentMode } : {}),
     ...(hasExternalScheduler ? { hasExternalScheduler } : {}),
     startTurn: ({ prompt }) => {
@@ -185,7 +190,11 @@ export function attachThreadGoalScheduler({
     }
 
     idleSequence += 1
-    void scheduler.wake({ trigger: 'idle', sourceId: `idle:${idleSequence}` })
+    // Refresh BEFORE waking: the turn that just ended is the most likely thing
+    // to have spawned or resolved a dependency.
+    void dependencies.refresh().then(() =>
+      scheduler.wake({ trigger: 'idle', sourceId: `idle:${idleSequence}` }),
+    )
   }
 
   function observeMessage(message: unknown): void {

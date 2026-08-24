@@ -100,6 +100,16 @@ type ThreadGoalEvidence = {
   coversCriterionIds: string[]
 }
 
+type ThreadGoalWait = {
+  waitId: string
+  kind: 'task' | 'process' | 'worker' | 'approval' | 'child-session' | 'timer'
+  subjectId: string
+  label: string
+  startedAtMs: number
+  deadlineMs: number
+  timeoutDisposition: 'blocked' | 'stalled' | 'failed'
+}
+
 type ThreadGoal = {
   schemaVersion: number
   threadId: string
@@ -124,6 +134,7 @@ type ThreadGoal = {
   recentWakeKeys: string[]
   contract: ThreadGoalContract
   evidence: ThreadGoalEvidence[]
+  wait: ThreadGoalWait | null
   timeUsedSeconds: number
   createdAtMs: number
   updatedAtMs: number

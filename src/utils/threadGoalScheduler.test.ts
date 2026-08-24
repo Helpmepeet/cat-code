@@ -1,10 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import {
   createThreadGoal,
+  parseThreadGoal,
   updateThreadGoalStatus,
   DEFAULT_MAX_GOAL_NO_PROGRESS_TURNS,
   type ThreadGoal,
 } from './threadGoal.js'
+import { DEFAULT_THREAD_GOAL_WAIT_MS } from './threadGoalWait.js'
 import { EMPTY_THREAD_GOAL_USAGE_DELTA } from './threadGoalUsage.js'
 import {
   createThreadGoalScheduler,
@@ -223,6 +225,152 @@ describe('starting a continuation', () => {
 
     expect(decision).toMatchObject({ type: 'started', kind: 'budget-wrap-up' })
     expect(wrap.started[0]!.prompt).toContain('reached its token budget')
+  })
+})
+
+describe('parking on dependencies', () => {
+  function parkingHarness(deps: { subjectId: string; label: string }[]) {
+    let goal: ThreadGoal | null = activeGoal()
+    let clock = NOW
+    const started: unknown[] = []
+    let dependencies = deps
+    const scheduler = createThreadGoalScheduler({
+      ownerId: 'owner-a',
+      now: () => clock,
+      getGoal: () => goal,
+      saveGoal: next => {
+        goal = next
+      },
+      canStartAutomaticTurn: () => true,
+      getUnresolvedDependencies: () =>
+        dependencies.map(d => ({ kind: 'worker' as const, ...d })),
+      createWaitId: () => 'wait-1',
+      startTurn: input => {
+        started.push(input)
+        return true
+      },
+    })
+    return {
+      scheduler,
+      started,
+      getGoal: () => goal,
+      resolveAll: () => {
+        dependencies = []
+      },
+      advance: (ms: number) => {
+        clock += ms
+      },
+    }
+  }
+
+  test('an outstanding dependency parks the goal instead of taking a turn', async () => {
+    const h = parkingHarness([{ subjectId: 'worker-7', label: 'reviewer' }])
+
+    const decision = await h.scheduler.wake({
+      trigger: 'idle',
+      sourceId: 'idle-1',
+    })
+
+    expect(decision).toEqual({ type: 'parked', subjectId: 'worker-7' })
+    expect(h.started).toHaveLength(0)
+    expect(h.getGoal()!.status).toBe('waiting')
+    expect(h.getGoal()!.statusReason).toBe('waiting_on_dependency')
+    expect(h.getGoal()!.wait!.subjectId).toBe('worker-7')
+  })
+
+  test('a parked goal spends no turns no matter how often it is woken', async () => {
+    // This is the whole point: without parking, each of these ticks would be
+    // a model turn spent asking whether the worker had finished.
+    const h = parkingHarness([{ subjectId: 'worker-7', label: 'reviewer' }])
+    await h.scheduler.wake({ trigger: 'idle', sourceId: 'idle-1' })
+
+    for (let i = 0; i < 10; i++) {
+      const decision = await h.scheduler.wake({
+        trigger: 'idle',
+        sourceId: `idle-${i + 2}`,
+      })
+      expect(decision).toEqual({ type: 'skipped', reason: 'not-schedulable' })
+    }
+
+    expect(h.started).toHaveLength(0)
+    expect(h.getGoal()!.continuationTurns).toBe(0)
+    expect(h.getGoal()!.status).toBe('waiting')
+  })
+
+  test('the awaited work completing wakes the goal and runs one turn', async () => {
+    const h = parkingHarness([{ subjectId: 'worker-7', label: 'reviewer' }])
+    await h.scheduler.wake({ trigger: 'idle', sourceId: 'idle-1' })
+    h.resolveAll()
+
+    const decision = await h.scheduler.wake({
+      trigger: 'task-completed',
+      sourceId: 'worker-7',
+    })
+
+    expect(decision.type).toBe('started')
+    expect(h.started).toHaveLength(1)
+    expect(h.getGoal()!.status).toBe('active')
+    expect(h.getGoal()!.wait).toBeNull()
+  })
+
+  test('a completion for something else leaves the goal parked', async () => {
+    const h = parkingHarness([{ subjectId: 'worker-7', label: 'reviewer' }])
+    await h.scheduler.wake({ trigger: 'idle', sourceId: 'idle-1' })
+
+    const decision = await h.scheduler.wake({
+      trigger: 'task-completed',
+      sourceId: 'some-other-worker',
+    })
+
+    expect(decision).toEqual({ type: 'skipped', reason: 'not-schedulable' })
+    expect(h.getGoal()!.status).toBe('waiting')
+  })
+
+  test('a wake that never arrives times out into an honest stopped state', async () => {
+    const h = parkingHarness([{ subjectId: 'worker-7', label: 'reviewer' }])
+    await h.scheduler.wake({ trigger: 'idle', sourceId: 'idle-1' })
+
+    h.advance(DEFAULT_THREAD_GOAL_WAIT_MS + 1)
+    const decision = await h.scheduler.wake({
+      trigger: 'idle',
+      sourceId: 'idle-later',
+    })
+
+    expect(decision).toEqual({ type: 'skipped', reason: 'not-schedulable' })
+    expect(h.getGoal()!.status).toBe('stalled')
+    expect(h.getGoal()!.statusReason).toBe('dependency_timeout')
+    expect(h.getGoal()!.wait).toBeNull()
+    // Never success, and never left looking alive.
+    expect(h.getGoal()!.status).not.toBe('complete')
+  })
+
+  test('a restart resumes the park rather than losing it', async () => {
+    const h = parkingHarness([{ subjectId: 'worker-7', label: 'reviewer' }])
+    await h.scheduler.wake({ trigger: 'idle', sourceId: 'idle-1' })
+
+    const reloaded = parseThreadGoal(JSON.parse(JSON.stringify(h.getGoal())))
+
+    expect(reloaded!.status).toBe('waiting')
+    expect(reloaded!.wait).toEqual(h.getGoal()!.wait)
+    // The deadline survives the process that set it.
+    expect(reloaded!.wait!.deadlineMs).toBe(
+      NOW + DEFAULT_THREAD_GOAL_WAIT_MS,
+    )
+  })
+
+  test('a user resume clears the park', async () => {
+    const h = parkingHarness([{ subjectId: 'worker-7', label: 'reviewer' }])
+    await h.scheduler.wake({ trigger: 'idle', sourceId: 'idle-1' })
+
+    const resumed = updateThreadGoalStatus(
+      h.getGoal()!,
+      'active',
+      'user_resumed',
+      NOW + 5,
+    )
+
+    expect(resumed.status).toBe('active')
+    expect(resumed.wait).toBeNull()
   })
 })
 
