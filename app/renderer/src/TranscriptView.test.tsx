@@ -5014,16 +5014,73 @@ test('the open body swaps its filled panel for an indented rule', () => {
   expect(lines).toContain('border-l border-shell-seam')
 })
 
-test('the default style renders exactly what the app rendered before', () => {
+test('the default style still renders the exact markup the app had before', () => {
   const row = toolRow({
-    toolName: 'Read',
-    toolFamily: 'read',
-    input: { file_path: '/repo/a.ts' },
-    status: 'success',
-    result: { content: 'x', isError: false, diff: null },
+    toolName: 'Bash',
+    toolFamily: 'bash',
+    input: { command: 'bun test' },
+    status: 'error',
+    result: { content: 'boom', isError: true, diff: null },
   })
-  // No provider means the context default, which must still be the old drawing.
-  expect(renderToStaticMarkup(<TranscriptRowsView rows={[row]} />)).toBe(
-    renderUnderCardStyle(row, DEFAULT_TOOL_CARD_STYLE),
+  const html = renderToStaticMarkup(<TranscriptRowsView rows={[row]} />)
+
+  // These four strings are copied from the pre-change source, NOT derived from
+  // the class maps. Comparing the default render against `renderUnderCardStyle(
+  // row, DEFAULT)` — which is what this test used to do — runs the same
+  // post-change component down both sides and passes even with the whole
+  // feature reverted; it could only ever catch a wrong context default.
+  expect(html).toContain(
+    'class="w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.025] font-sans"',
   )
+  expect(html).toContain(
+    'class="group flex w-full items-center gap-2.5 px-3 py-2 text-left"',
+  )
+  expect(html).toContain('class="border-t border-shell-seam bg-black/[0.28]"')
+  expect(html).toContain('class="px-3 pb-2.5 pt-1"')
+  // And the default really is the old drawing, not merely consistent with it.
+  expect(DEFAULT_TOOL_CARD_STYLE).toBe('cards')
+})
+
+test('the agent and rejected-resume bodies keep their single-element markup', () => {
+  // Splitting the frame from its padding across two nested divs would be
+  // visually equivalent but is a DOM change the `cards` path never had. These
+  // two shells have no sub-label between frame and padding, so one div is both
+  // correct and identical to what shipped before.
+  const source = readFileSync(new URL('./TranscriptView.tsx', import.meta.url), 'utf8')
+  expect(source).toContain(
+    '`${TOOL_CARD_BODY_CLASS[cardStyle]} ${TOOL_CARD_BODY_INNER_CLASS[cardStyle]}`',
+  )
+})
+
+test('adjacent container-less tool rows are marked so `lines` can close the gap', () => {
+  // The flush spacing is a CSS rule in `theme.css` keyed on these two
+  // attributes; SSR cannot see the computed margin, so what is asserted here is
+  // that the hooks the rule needs are actually emitted, on the right rows.
+  const html = renderUnderCardStyle(
+    toolRow({
+      toolName: 'Read',
+      toolFamily: 'read',
+      input: { file_path: '/repo/a.ts' },
+      status: 'success',
+      result: { content: 'x', isError: false, diff: null },
+    }),
+    'lines',
+  )
+  expect(html).toContain('data-card-style="lines"')
+  expect(html).toContain('data-tool-row=""')
+})
+
+test('a prose row carries no tool marker, so it keeps its normal spacing', () => {
+  const html = renderUnderCardStyle(
+    {
+      ...blockSource,
+      id: 's:m:0:t',
+      kind: 'assistant-text',
+      role: 'assistant',
+      content: 'hello',
+    },
+    'lines',
+  )
+  expect(html).toContain('data-card-style="lines"')
+  expect(html).not.toContain('data-tool-row')
 })

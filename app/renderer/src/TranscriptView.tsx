@@ -83,9 +83,13 @@ import {
 } from './transcriptProjector.js'
 import { selectBashCardText } from './bashCommandLabel.js'
 import {
+  TOOL_CARD_BAND_CLASS,
   TOOL_CARD_BODY_CLASS,
   TOOL_CARD_BODY_INNER_CLASS,
+  TOOL_CARD_DIVIDER_CLASS,
   TOOL_CARD_HEADER_CLASS,
+  TOOL_CARD_INSET_CLASS,
+  TOOL_CARD_ORPHAN_SHELL_CLASS,
   TOOL_CARD_PLAIN_HEADER_CLASS,
   TOOL_CARD_SHELL_CLASS,
   TOOL_CARD_SUB_CLASS,
@@ -390,6 +394,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     [],
   )
   const closeFilePathMenu = useCallback(() => setFilePathMenuState(null), [])
+  const { style: cardStyle } = useContext(ToolCardStyleContext)
   const filePathMenuContextValue = useMemo(
     () => ({ cwd: cwd ?? null, openFilePathMenu }),
     [cwd, openFilePathMenu],
@@ -499,7 +504,10 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
       // Prose weight also moved (light to medium) at `AssistantProse` below,
       // for legibility on this near-black background. It stays scoped to
       // assistant prose, NOT the whole column.
-      <div className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-2.5 px-8 pt-6">
+      <div
+        className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-2.5 px-8 pt-6"
+        data-card-style={cardStyle}
+      >
         {items.map(item => {
           // The wrapper publishes the row's identity to the pane's scroll memory
           // (`transcriptScrollMemory.ts`): the reading position is remembered as
@@ -514,6 +522,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
           return (
             <div
               data-row-key={key}
+              data-tool-row={isContainerlessToolItem(item) ? '' : undefined}
               key={key}
               className={isRevealedHiddenItem(item) ? 'opacity-55' : undefined}
             >
@@ -684,6 +693,18 @@ function isHistoryBoundaryItem(item: TranscriptLayoutItem): boolean {
  * as the row switch: a new display-item kind breaks the build here until it gets
  * a case.
  */
+/**
+ * Items that draw NO container of their own under `lines`, so a run of them can
+ * sit flush. Deliberately excludes the shells that keep a box in both styles:
+ * a delegate group (the box is what says "group") and an orphaned agent (dashed
+ * chrome is what says "parent missing"). Butting a bare line against either of
+ * those reads as a mistake, not as density.
+ */
+function isContainerlessToolItem(item: TranscriptLayoutItem): boolean {
+  if (item.kind === 'tool-run') return true
+  return item.kind === 'single' && item.row.kind === 'tool-use'
+}
+
 function DisplayItemView({
   item,
   onMessageAction,
@@ -2909,10 +2930,11 @@ function AgentIdentityLine({
   slot: string | null
   slotLive: boolean
 }) {
+  const { style } = useContext(ToolCardStyleContext)
   // `span`, not `div`: on a card with a body the whole two-line block IS the
   // collapse button, and only phrasing content may live inside a `button`.
   return (
-    <span className="flex items-center gap-[9px] px-3 py-[7px]">
+    <span className={`flex items-center gap-[9px] ${TOOL_CARD_INSET_CLASS[style]}`}>
       <AgentFace axes={axes} fill={fill} pulse={pulse} />
       <span className="inline-flex min-w-0 items-baseline gap-1.5">
         {/* The name is absent until the worker's first nested frame lands, and
@@ -2981,8 +3003,11 @@ function AgentTaskLine({
   model: string | null
   account: string | null
 }) {
+  const { style } = useContext(ToolCardStyleContext)
   return (
-    <span className="flex items-center gap-2.5 border-t border-shell-seam px-3 py-[7px]">
+    <span
+      className={`flex items-center gap-2.5 ${TOOL_CARD_DIVIDER_CLASS[style]} ${TOOL_CARD_INSET_CLASS[style]}`}
+    >
       {stateWord === null ? null : (
         <span
           className={`shrink-0 whitespace-nowrap text-[11px] font-medium ${stateToneClass}`}
@@ -3049,16 +3074,16 @@ function RejectedResumeCard({
         </span>
         <span className="size-[7px] shrink-0 rounded-full bg-tone-good" aria-hidden />
       </button>
-      <div className="border-t border-shell-seam bg-black/20 px-3 py-1.5">
+      <div className={TOOL_CARD_BAND_CLASS[cardStyle]}>
         <span className="block truncate font-mono text-[11px] leading-relaxed text-tone-danger">
           {ack.message}
         </span>
       </div>
       {expanded ? (
-        <div className={TOOL_CARD_BODY_CLASS[cardStyle]}>
-          <div className={TOOL_CARD_BODY_INNER_CLASS[cardStyle]}>
-            <ToolCardBody row={row} content={row.result?.content ?? ''} ack={ack} />
-          </div>
+        <div
+          className={`${TOOL_CARD_BODY_CLASS[cardStyle]} ${TOOL_CARD_BODY_INNER_CLASS[cardStyle]}`}
+        >
+          <ToolCardBody row={row} content={row.result?.content ?? ''} ack={ack} />
         </div>
       ) : null}
     </div>
@@ -3200,13 +3225,17 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
           quiet register as the orphan placeholder's band and the retention
           boundary, because nothing here failed and there is nothing to fix. */}
       {row.stepsNotLoaded === true ? (
-        <div className="flex items-center border-t border-shell-seam px-3 py-[7px] text-[13.5px] leading-[18px] text-text-muted">
+        <div
+          className={`flex items-center ${TOOL_CARD_DIVIDER_CLASS[cardStyle]} ${TOOL_CARD_INSET_CLASS[cardStyle]} text-[13.5px] leading-[18px] text-text-muted`}
+        >
           {STEPS_NOT_LOADED_LABEL}
         </div>
       ) : null}
       {expanded && body !== null ? (
-        <div className={TOOL_CARD_BODY_CLASS[cardStyle]}>
-          <div className={TOOL_CARD_BODY_INNER_CLASS[cardStyle]}>{body}</div>
+        <div
+          className={`${TOOL_CARD_BODY_CLASS[cardStyle]} ${TOOL_CARD_BODY_INNER_CLASS[cardStyle]}`}
+        >
+          {body}
         </div>
       ) : null}
     </div>
@@ -3240,6 +3269,7 @@ function OrphanedAgentCard({ row }: { row: OrphanedAgentNestedRow }) {
   // because that id has no card here), and if a deeper resume later brings the
   // real card back, it should open the way the reader left this one.
   const [expanded, setExpanded] = useToolCardExpanded(row.missingToolUseId, false)
+  const { style: cardStyle } = useContext(ToolCardStyleContext)
   const orphanFace = useAgentFaceRegistry().faceFor(null, row.agentName)
   // MESSAGES, not rows. One assistant message projects one row per content
   // block, so counting `children` reports "4 messages" for a single reply that
@@ -3250,7 +3280,7 @@ function OrphanedAgentCard({ row }: { row: OrphanedAgentNestedRow }) {
     ),
   ).size
   return (
-    <div className="w-full overflow-hidden rounded-md border border-dashed border-shell-seam bg-white/[0.025] font-sans">
+    <div className={TOOL_CARD_ORPHAN_SHELL_CLASS[cardStyle]}>
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
@@ -3622,8 +3652,9 @@ function useInlineOutputWindow(lines: string[], toolUseId: string) {
  * sentence already ends in its own outcome, so a glyph prints it twice.
  */
 function AckPeek({ ack }: { ack: ToolAck }) {
+  const { style } = useContext(ToolCardStyleContext)
   return (
-    <div className="border-t border-shell-seam bg-black/20 px-3 py-1.5">
+    <div className={TOOL_CARD_BAND_CLASS[style]}>
       <span
         className={`block truncate font-mono text-[11px] leading-relaxed ${
           ack.ok ? 'text-text-subtle/80' : 'text-tone-danger'
@@ -3684,9 +3715,10 @@ function AckBody({
 }
 
 function BashTailPeek({ tail }: { tail: string[] }) {
+  const { style } = useContext(ToolCardStyleContext)
   if (tail.length === 0) return null
   return (
-    <div className="border-t border-shell-seam bg-black/20 px-3 py-1.5">
+    <div className={TOOL_CARD_BAND_CLASS[style]}>
       {/* Tinted by the SAME rule as the expanded body. This peek is the only
        * thing a successful card shows until it is opened, and a collapsed card
        * is the default (the prototype's `toolsExpandedByDefault` is false), so

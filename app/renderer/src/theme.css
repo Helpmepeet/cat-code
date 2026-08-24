@@ -253,6 +253,24 @@
   }
 }
 
+/*
+ * Tool-call density under the `lines` card style (`toolCardStyle.ts`).
+ *
+ * A run of container-less tool rows reads as one block of activity rather than
+ * a loose list, which is the density the style was chosen for. Flex `gap`
+ * cannot be cancelled for one PAIR, so the correction is a negative margin on
+ * the second of two adjacent tool rows. Its magnitude must stay equal to the
+ * row container's `gap-2.5` (0.625rem) in `TranscriptView.tsx`; if that gap
+ * changes, change this with it or the rows overlap or drift apart.
+ *
+ * Only rows that draw no container of their own carry `data-tool-row` (see
+ * `isContainerlessToolItem`), so a boxed delegate group or a dashed orphan card
+ * keeps its normal spacing from its neighbours.
+ */
+[data-card-style='lines'] > [data-tool-row] + [data-tool-row] {
+  margin-top: -0.625rem;
+}
+
 /* P4-1 ToastHost entrance — transient toasts fade+rise in (Surfaces.jsx:876
  * `toast-in`). A class, not an inline style, so it stays on the no-inline-style
  * rule; SSR emits the class and skips the animation (no effects run). */

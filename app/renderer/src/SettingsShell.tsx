@@ -64,6 +64,7 @@ import {
   selectCodeThemeNote,
 } from './codeTheme.js'
 import { CodeThemePreview } from './CodeThemePreview.js'
+import { ToolCardStylePreview } from './ToolCardStylePreview.js'
 import { MemoryPage } from './MemoryPage.js'
 import {
   isReasoningLayoutMode,
@@ -827,11 +828,12 @@ const CODE_THEME_DESC =
   'Color theme for fenced code blocks in the transcript. Stored in this app, not in your settings files.'
 
 /**
- * The APP-LOCAL editors: how the transcript renders reasoning summaries
- * (`reasoningLayout.ts`) and which palette colors its code blocks
- * (`codeTheme.ts`). Neither carries a `SourceBadge` because neither has a
- * settings layer — they are renderer view preferences in the renderer's own
- * storage, not `SettingsSchema` keys the sidecar writes.
+ * The APP-LOCAL editors: how each tool call is drawn (`toolCardStyle.ts`),
+ * whether tool cards start open (`toolsExpanded.ts`), how the transcript
+ * renders reasoning summaries (`reasoningLayout.ts`), and which palette colors
+ * its code blocks (`codeTheme.ts`). None carries a `SourceBadge` because none
+ * has a settings layer — they are renderer view preferences in the renderer's
+ * own storage, not `SettingsSchema` keys the sidecar writes.
  *
  * The code theme lives HERE rather than beside the syntax-highlighting toggle
  * the prototype pairs it with (`Settings.jsx:341-347`), because that toggle is a
@@ -858,6 +860,7 @@ function TranscriptDisplaySection({
   const codeThemeNote = selectCodeThemeNote(highlightingOff)
   return (
     <PaneSection title="Transcript">
+      <ToolCardStylePreview />
       <Field
         desc="How each tool call is drawn in the transcript. Stored in this app, not in your settings files."
         label="Tool calls"

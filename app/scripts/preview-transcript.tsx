@@ -29,6 +29,10 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { TranscriptRowsView } from '../renderer/src/TranscriptView.js'
 import { ToolsExpandedContext } from '../renderer/src/toolsExpanded.js'
+import {
+  ToolCardStyleContext,
+  type ToolCardStyle,
+} from '../renderer/src/toolCardStyle.js'
 import type { NestedTranscriptRow } from '../renderer/src/transcriptProjector.js'
 
 const base = {
@@ -124,12 +128,19 @@ const rows: NestedTranscriptRow[] = [
   }),
 ]
 
-/** Collapsed AND expanded, because the default state is the one that hides. */
-function panel(expanded: boolean): string {
+/**
+ * Collapsed AND expanded, because the default state is the one that hides — and
+ * per card style, because `lines` is a whole second drawing whose most common
+ * row (a collapsed bash peek) is exactly the shape the 2024-08-04 incident above
+ * proves assertions do not catch.
+ */
+function panel(expanded: boolean, style: ToolCardStyle = 'cards'): string {
   return renderToStaticMarkup(
-    <ToolsExpandedContext.Provider value={{ expanded, setExpanded: () => {} }}>
-      <TranscriptRowsView rows={rows} />
-    </ToolsExpandedContext.Provider>,
+    <ToolCardStyleContext.Provider value={{ style, setStyle: () => {} }}>
+      <ToolsExpandedContext.Provider value={{ expanded, setExpanded: () => {} }}>
+        <TranscriptRowsView rows={rows} />
+      </ToolsExpandedContext.Provider>
+    </ToolCardStyleContext.Provider>,
   )
 }
 
@@ -152,6 +163,8 @@ const html = `<!doctype html><html><head><meta charset="utf-8"><title>transcript
 ${label('default state &middot; code theme: dracula')}<div>${panel(false)}</div>
 ${label('tools open by default &middot; code theme: dracula')}<div>${panel(true)}</div>
 ${label('tools open by default &middot; code theme: github')}<div data-code-theme="github">${panel(true)}</div>
+${label('card style: lines &middot; default state')}<div>${panel(false, 'lines')}</div>
+${label('card style: lines &middot; tools open by default')}<div>${panel(true, 'lines')}</div>
 </body></html>`
 
 const out = new URL('../renderer/dist/preview.html', import.meta.url).pathname
