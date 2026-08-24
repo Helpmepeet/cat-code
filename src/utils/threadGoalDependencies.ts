@@ -48,17 +48,41 @@ export async function getUnresolvedThreadGoalDependencies(): Promise<
  */
 export function createThreadGoalDependencyCache(): {
   read(): readonly ThreadGoalDependency[]
+  /** Every child agent seen so far, for the goal's expansion budget. */
+  readChildAgentIds(): readonly string[]
   refresh(): Promise<void>
 } {
   let current: readonly ThreadGoalDependency[] = []
+  let childAgentIds: readonly string[] = []
   return {
     read: () => current,
+    readChildAgentIds: () => childAgentIds,
     async refresh() {
       try {
-        current = await getUnresolvedThreadGoalDependencies()
+        const sessionState = await readSessionState(getSessionId())
+        const workers = sessionState?.knownWorkers ?? []
+        // Expansion counts EVERY worker the goal produced, not just the ones
+        // still running: a goal that spawns and resolves one worker per turn
+        // is still fanning out without bound.
+        childAgentIds = workers.map(worker => worker.agentId)
+        current = workers
+          .filter(
+            worker =>
+              worker.status === 'running' ||
+              worker.synthesisStatus === 'pending',
+          )
+          .map(worker => ({
+            kind: 'worker' as const,
+            subjectId: worker.agentId,
+            label:
+              worker.handle && worker.handle !== worker.agentId
+                ? worker.handle
+                : worker.agentId,
+          }))
       } catch {
         // A read failure must not park the goal on imagined work, and must not
-        // fail the turn that triggered the refresh.
+        // fail the turn that triggered the refresh. Previously-seen children
+        // are kept so a transient failure cannot reset the expansion budget.
         current = []
       }
     },

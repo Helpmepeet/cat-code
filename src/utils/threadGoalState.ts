@@ -46,6 +46,7 @@ export type ThreadGoalStatusReason =
   | 'token_budget_exhausted'
   | 'turn_budget_exhausted'
   | 'time_budget_exhausted'
+  | 'subagent_budget_exhausted'
   | 'provider_usage_limit'
   | 'runtime_error'
   | 'verification_unavailable'
@@ -262,6 +263,7 @@ const STATUS_REASONS: readonly ThreadGoalStatusReason[] = [
   'token_budget_exhausted',
   'turn_budget_exhausted',
   'time_budget_exhausted',
+  'subagent_budget_exhausted',
   'provider_usage_limit',
   'runtime_error',
   'verification_unavailable',

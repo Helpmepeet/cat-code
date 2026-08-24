@@ -1825,6 +1825,7 @@ export function REPL({
         contextGrowthTokens,
         timeDeltaSeconds,
         madeNoProgress: !turnMadeProgressRef.current,
+        childAgentIds: goalDependenciesRef.current.readChildAgentIds(),
         failed: turnOutcomeRef.current.failed,
         providerUsageLimited: turnOutcomeRef.current.usageLimited
       }

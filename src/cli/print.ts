@@ -1,5 +1,6 @@
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { feature } from 'bun:bundle'
+import { createHeadlessGoalLoop } from './headlessGoalLoop.js'
 import { readFile, stat } from 'fs/promises'
 import { dirname } from 'path'
 import {
@@ -1273,6 +1274,11 @@ function runHeadlessStreaming(
     })
   }
 
+  // One scheduler implementation across runtimes: this drives the same module
+  // the terminal, desktop, and web paths do, at headless's own idle boundary.
+  // Null when the escape hatch env var is set.
+  const headlessGoalLoop = createHeadlessGoalLoop({ getAppState, setAppState })
+
   const modelOptions = getModelOptions()
   const modelInfos = modelOptions.map(option => {
     const modelId = option.value === null ? 'default' : option.value
@@ -2495,7 +2501,26 @@ function runHeadlessStreaming(
           const hasRunningBg = getRunningTasks(state).some(
             t => isBackgroundTask(t) && t.type !== 'in_process_teammate',
           )
-          const hasMainThreadQueued = peek(isMainThread) !== undefined
+          let hasMainThreadQueued = peek(isMainThread) !== undefined
+
+          // Headless idle boundary: the queue has drained and nothing is
+          // outstanding, which is where the terminal would consider a goal
+          // continuation. Asked LAST so real queued input and running tasks
+          // always outrank automatic continuation.
+          if (!hasRunningBg && !hasMainThreadQueued && headlessGoalLoop) {
+            const continuation =
+              await headlessGoalLoop.nextContinuation(mutableMessages)
+            if (continuation) {
+              enqueue({
+                mode: 'prompt',
+                value: continuation,
+                uuid: randomUUID(),
+                isMeta: true,
+              })
+              hasMainThreadQueued = true
+            }
+          }
+
           if (hasRunningBg || hasMainThreadQueued) {
             waitingForAgents = true
             if (!hasMainThreadQueued) {

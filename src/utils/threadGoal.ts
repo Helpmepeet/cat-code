@@ -62,6 +62,25 @@ export const DEFAULT_MAX_GOAL_CONSECUTIVE_FAILURES = 3
  */
 export const DEFAULT_MAX_GOAL_NO_PROGRESS_TURNS = 2
 
+/**
+ * Wall-clock ceiling for one continuation window.
+ *
+ * Generous, because autonomous goal work is legitimately long-running. The
+ * point is not to cut work short; it is that elapsed time was tracked and
+ * bounded nothing, so a goal making slow steady progress had no time limit at
+ * all. `/goal resume` opens a fresh window.
+ */
+export const DEFAULT_MAX_GOAL_WALL_CLOCK_SECONDS = 4 * 60 * 60
+
+/**
+ * Distinct child agents one goal may spawn.
+ *
+ * Nothing else bounds goal-driven fan-out: the engine caps concurrency, not
+ * total expansion, so a goal that spawns a worker per turn was unbounded in
+ * aggregate even with every other rail in place.
+ */
+export const DEFAULT_MAX_GOAL_CHILD_AGENTS = 16
+
 /** Per-response provider usage rolled up onto the goal. */
 export type ThreadGoalUsageBreakdown = {
   inputTokens: number
@@ -88,6 +107,8 @@ export type ThreadGoal = {
   maxContinuationTurns: number
   maxConsecutiveFailures: number
   maxNoProgressTurns: number
+  maxWallClockSeconds: number
+  maxChildAgents: number
   /**
    * Billable tokens charged to this goal: uncached input + output, summed
    * from real provider usage. NOT context growth.
@@ -138,6 +159,8 @@ export type ThreadGoal = {
    * across.
    */
   callHistory: string[]
+  /** Distinct child agents this goal has spawned, for the expansion bound. */
+  childAgentIds: string[]
   timeUsedSeconds: number
   createdAtMs: number
   updatedAtMs: number
@@ -240,6 +263,7 @@ const STATUS_REASON_LABELS: Partial<
   token_budget_exhausted: 'the token budget ran out',
   turn_budget_exhausted: 'the automatic turn limit was reached',
   time_budget_exhausted: 'the time limit was reached',
+  subagent_budget_exhausted: 'too many agents were spawned for one goal',
   provider_usage_limit: 'the provider usage limit was reached',
   runtime_error: 'repeated errors stopped the run',
   verification_unavailable: 'completion could not be verified',
@@ -589,6 +613,8 @@ export function createThreadGoal(
       options.maxContinuationTurns ?? DEFAULT_MAX_GOAL_CONTINUATION_TURNS,
     maxConsecutiveFailures: DEFAULT_MAX_GOAL_CONSECUTIVE_FAILURES,
     maxNoProgressTurns: DEFAULT_MAX_GOAL_NO_PROGRESS_TURNS,
+    maxWallClockSeconds: DEFAULT_MAX_GOAL_WALL_CLOCK_SECONDS,
+    maxChildAgents: DEFAULT_MAX_GOAL_CHILD_AGENTS,
     tokensUsed: 0,
     usageBreakdown: {
       inputTokens: 0,
@@ -607,6 +633,7 @@ export function createThreadGoal(
     evidence: [],
     wait: null,
     callHistory: [],
+    childAgentIds: [],
     timeUsedSeconds: 0,
     createdAtMs: nowMs,
     updatedAtMs: nowMs,
@@ -643,6 +670,10 @@ export function updateThreadGoalStatus(
           continuationTurns: 0,
           consecutiveNoProgressTurns: 0,
           consecutiveFailures: 0,
+          // Time is a per-window ceiling like the turn count, so resume opens
+          // a fresh one. Total elapsed across windows is not what bounds the
+          // loop, and keeping it would make the second window unusable.
+          timeUsedSeconds: 0,
         }
       : {}),
     // Leaving `waiting` always drops the park. A goal that is no longer parked
@@ -663,6 +694,8 @@ export type ThreadGoalTurnAccounting = {
   madeNoProgress: boolean
   /** Updated tool-call fingerprints, if the caller computed them. */
   callHistory?: readonly string[]
+  /** Every child agent this goal is known to have spawned, if observed. */
+  childAgentIds?: readonly string[]
   /** True when the turn ended in a runtime/provider error. */
   failed: boolean
   /**
@@ -722,6 +755,13 @@ export function accountThreadGoalTurn(
       turn.chargedResponseIds,
     ),
     ...(turn.callHistory ? { callHistory: [...turn.callHistory] } : {}),
+    ...(turn.childAgentIds
+      ? {
+          childAgentIds: Array.from(
+            new Set([...(goal.childAgentIds ?? []), ...turn.childAgentIds]),
+          ),
+        }
+      : {}),
     continuationTurns,
     consecutiveNoProgressTurns,
     consecutiveFailures,
@@ -736,6 +776,8 @@ export function accountThreadGoalTurn(
     return { goal: accounted, stoppedBy: null }
   }
 
+  // Ordered most-specific first, so the reported reason is the most
+  // actionable one when several ceilings trip on the same turn.
   const stoppedBy: ThreadGoalStatusReason | null = turn.providerUsageLimited
     ? 'provider_usage_limit'
     : consecutiveFailures >= accounted.maxConsecutiveFailures
@@ -745,9 +787,13 @@ export function accountThreadGoalTurn(
         ? 'token_budget_exhausted'
         : continuationTurns >= accounted.maxContinuationTurns
           ? 'turn_budget_exhausted'
-          : consecutiveNoProgressTurns >= accounted.maxNoProgressTurns
-            ? 'no_progress'
-            : null
+          : accounted.timeUsedSeconds >= accounted.maxWallClockSeconds
+            ? 'time_budget_exhausted'
+            : (accounted.childAgentIds?.length ?? 0) > accounted.maxChildAgents
+              ? 'subagent_budget_exhausted'
+              : consecutiveNoProgressTurns >= accounted.maxNoProgressTurns
+                ? 'no_progress'
+                : null
 
   if (!stoppedBy) return { goal: accounted, stoppedBy: null }
 
@@ -878,7 +924,17 @@ export function formatThreadGoalSummary(goal: ThreadGoal): string {
   lines.push(
     `Automatic turns: ${goal.continuationTurns} of ${goal.maxContinuationTurns}`,
   )
-  lines.push(`Time used: ${goal.timeUsedSeconds}s`)
+  lines.push(
+    goal.maxWallClockSeconds
+      ? `Time used: ${goal.timeUsedSeconds}s of ${goal.maxWallClockSeconds}s`
+      : `Time used: ${goal.timeUsedSeconds}s`,
+  )
+  // Tolerant like readGoalContract: this runs inside the desktop snapshot
+  // builder, where a throw is invisible and silently drops the goal frame.
+  const childAgentCount = goal.childAgentIds?.length ?? 0
+  if (childAgentCount > 0) {
+    lines.push(`Agents spawned: ${childAgentCount} of ${goal.maxChildAgents}`)
+  }
 
   // Requirements are what decide whether this goal can be marked complete, so
   // a blocked completion is illegible without them on screen.
@@ -1206,6 +1262,8 @@ function migrateThreadGoalV1(
     maxContinuationTurns: DEFAULT_MAX_GOAL_CONTINUATION_TURNS,
     maxConsecutiveFailures: DEFAULT_MAX_GOAL_CONSECUTIVE_FAILURES,
     maxNoProgressTurns: DEFAULT_MAX_GOAL_NO_PROGRESS_TURNS,
+    maxWallClockSeconds: DEFAULT_MAX_GOAL_WALL_CLOCK_SECONDS,
+    maxChildAgents: DEFAULT_MAX_GOAL_CHILD_AGENTS,
     tokensUsed: 0,
     usageBreakdown: {
       inputTokens: 0,
@@ -1223,6 +1281,7 @@ function migrateThreadGoalV1(
     evidence: [],
     wait: null,
     callHistory: [],
+    childAgentIds: [],
     timeUsedSeconds: base.timeUsedSeconds,
     createdAtMs: base.createdAtMs,
     updatedAtMs: base.updatedAtMs,
@@ -1336,6 +1395,14 @@ export function parseThreadGoal(input: unknown): ThreadGoal | null {
       candidate.maxNoProgressTurns,
       DEFAULT_MAX_GOAL_NO_PROGRESS_TURNS,
     ),
+    maxWallClockSeconds: readPositiveInteger(
+      candidate.maxWallClockSeconds,
+      DEFAULT_MAX_GOAL_WALL_CLOCK_SECONDS,
+    ),
+    maxChildAgents: readPositiveInteger(
+      candidate.maxChildAgents,
+      DEFAULT_MAX_GOAL_CHILD_AGENTS,
+    ),
     tokensUsed: candidate.tokensUsed,
     usageBreakdown: readUsageBreakdown(candidate.usageBreakdown),
     contextGrowthTokens: readNonNegativeInteger(
@@ -1360,5 +1427,6 @@ export function parseThreadGoal(input: unknown): ThreadGoal | null {
     evidence: parseThreadGoalEvidence(candidate.evidence),
     wait: parseThreadGoalWait(candidate.wait),
     callHistory: parseThreadGoalCallHistory(candidate.callHistory),
+    childAgentIds: readStringArray(candidate.childAgentIds),
   }
 }

@@ -28,6 +28,8 @@ import {
   THREAD_GOAL_SCHEMA_VERSION,
   DEFAULT_MAX_GOAL_CONTINUATION_TURNS,
   DEFAULT_MAX_GOAL_NO_PROGRESS_TURNS,
+  DEFAULT_MAX_GOAL_WALL_CLOCK_SECONDS,
+  DEFAULT_MAX_GOAL_CHILD_AGENTS,
 } from './threadGoal.js'
 import { EMPTY_THREAD_GOAL_USAGE_DELTA } from './threadGoalUsage.js'
 import {
@@ -187,7 +189,7 @@ describe('thread goal formatting and parsing', () => {
         'Token budget: 50,000',
         'Tokens used: 12,000',
         `Automatic turns: 0 of ${DEFAULT_MAX_GOAL_CONTINUATION_TURNS}`,
-        'Time used: 45s',
+        `Time used: 45s of ${DEFAULT_MAX_GOAL_WALL_CLOCK_SECONDS}s`,
         '',
         'This goal will continue while the session is idle.',
         'Use /goal pause, /goal resume, /goal clear, or /goal replace <objective>.',
@@ -608,6 +610,94 @@ describe('thread goal formatting and parsing', () => {
       expect(isResumableThreadGoalStatus(goal.status)).toBe(true)
       expect(formatThreadGoalSummary(goal)).not.toContain('Goal: complete')
     }
+  })
+
+  test('the wall-clock ceiling stops a goal that is only making slow progress', () => {
+    // Every turn here makes progress and uses almost no tokens, so only the
+    // time ceiling can stop it.
+    const goal = createThreadGoal('session-1', 'slow but steady', undefined, 100)
+
+    const { goal: limited, stoppedBy } = accountThreadGoalTurn(
+      goal,
+      {
+        ...IDLE_TURN,
+        wasAutomaticContinuation: true,
+        timeDeltaSeconds: DEFAULT_MAX_GOAL_WALL_CLOCK_SECONDS,
+      },
+      200,
+    )
+
+    expect(stoppedBy).toBe('time_budget_exhausted')
+    expect(limited.status).toBe('budget_limited')
+    expect(limited.statusReason).toBe('time_budget_exhausted')
+  })
+
+  test('a resume opens a fresh time window as well as a fresh turn window', () => {
+    const exhausted = accountThreadGoalTurn(
+      createThreadGoal('session-1', 'slow but steady', undefined, 100),
+      {
+        ...IDLE_TURN,
+        wasAutomaticContinuation: true,
+        timeDeltaSeconds: DEFAULT_MAX_GOAL_WALL_CLOCK_SECONDS,
+      },
+      200,
+    ).goal
+
+    const resumed = updateThreadGoalStatus(
+      exhausted,
+      'active',
+      'user_resumed',
+      300,
+    )
+
+    // Keeping the old elapsed time would make the second window unusable.
+    expect(resumed.timeUsedSeconds).toBe(0)
+    expect(resumed.continuationTurns).toBe(0)
+  })
+
+  test('goal-driven agent expansion is bounded in aggregate', () => {
+    // Concurrency limits elsewhere cap how many run at once, not how many a
+    // goal spawns over its whole run.
+    let goal = createThreadGoal('session-1', 'fan out forever', undefined, 100)
+    let stoppedBy: string | null = null
+
+    for (let i = 0; i <= DEFAULT_MAX_GOAL_CHILD_AGENTS; i++) {
+      const result = accountThreadGoalTurn(
+        goal,
+        {
+          ...IDLE_TURN,
+          wasAutomaticContinuation: true,
+          childAgentIds: [`agent-${i}`],
+        },
+        200 + i,
+      )
+      goal = result.goal
+      if (result.stoppedBy) stoppedBy = result.stoppedBy
+    }
+
+    expect(stoppedBy).toBe('subagent_budget_exhausted')
+    expect(goal.status).toBe('budget_limited')
+  })
+
+  test('respawning the same agent does not consume the expansion budget', () => {
+    // Child ids are deduped: re-observing a worker across turns is not new
+    // expansion, and counting it would stall a legitimate goal.
+    let goal = createThreadGoal('session-1', 'one worker', undefined, 100)
+    for (let i = 0; i < DEFAULT_MAX_GOAL_CHILD_AGENTS + 5; i++) {
+      goal = accountThreadGoalTurn(
+        goal,
+        {
+          ...IDLE_TURN,
+          wasAutomaticContinuation: true,
+          childAgentIds: ['agent-same'],
+        },
+        200 + i,
+      ).goal
+      if (goal.status !== 'active') break
+    }
+
+    expect(goal.childAgentIds).toEqual(['agent-same'])
+    expect(goal.statusReason).not.toBe('subagent_budget_exhausted')
   })
 
   test('does not account usage after a goal is complete', () => {

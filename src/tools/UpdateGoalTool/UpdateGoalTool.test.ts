@@ -296,7 +296,14 @@ describe('UpdateGoalTool', () => {
     const base = createThreadGoal(sessionId, 'the NEW objective', undefined, 100)
     const contract = {
       criteria: [
-        { id: 'tests', description: 'the suite passes', required: true },
+        {
+          id: 'tests',
+          description: 'the suite passes',
+          required: true,
+          // Command-backed, so this stays on the deterministic path: a stale
+          // green must block without any semantic opinion being consulted.
+          verifyCommand: 'bun test app/',
+        },
       ],
       constraints: [],
       boundaries: [],

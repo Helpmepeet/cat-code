@@ -47,6 +47,7 @@ type ThreadGoalStatusReason =
   | 'token_budget_exhausted'
   | 'turn_budget_exhausted'
   | 'time_budget_exhausted'
+  | 'subagent_budget_exhausted'
   | 'provider_usage_limit'
   | 'runtime_error'
   | 'verification_unavailable'
@@ -134,6 +135,8 @@ type ThreadGoal = {
   maxContinuationTurns: number
   maxConsecutiveFailures: number
   maxNoProgressTurns: number
+  maxWallClockSeconds: number
+  maxChildAgents: number
   tokensUsed: number
   usageBreakdown: ThreadGoalUsageBreakdown
   contextGrowthTokens: number
@@ -147,6 +150,7 @@ type ThreadGoal = {
   evidence: ThreadGoalEvidence[]
   wait: ThreadGoalWait | null
   callHistory: string[]
+  childAgentIds: string[]
   timeUsedSeconds: number
   createdAtMs: number
   updatedAtMs: number

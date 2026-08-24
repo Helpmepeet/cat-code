@@ -216,6 +216,7 @@ export function attachThreadGoalScheduler({
             attempt !== null &&
             (turnToolUseCount === 0 || repetition.repeatedEverything),
           callHistory: repetition.nextHistory,
+          childAgentIds: dependencies.readChildAgentIds(),
           failed: turnFailed,
           providerUsageLimited: turnUsageLimited,
         },

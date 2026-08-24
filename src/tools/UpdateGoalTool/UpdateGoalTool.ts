@@ -14,6 +14,12 @@ import {
   hashThreadGoalContract,
 } from '../../utils/threadGoalEvidence.js'
 import { getThreadGoalWorkspaceFingerprint } from '../../utils/threadGoalWorkspace.js'
+import {
+  buildThreadGoalEvidenceBundle,
+  planThreadGoalJudgement,
+  runThreadGoalJudge,
+} from '../../utils/threadGoalJudge.js'
+import { createThreadGoalModelJudge } from '../../utils/threadGoalModelJudge.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 
@@ -158,22 +164,74 @@ export const UpdateGoalTool = buildTool({
     // with no required criteria is not gated, so plain-objective goals behave
     // exactly as before.
     const contract = currentGoal.contract ?? EMPTY_THREAD_GOAL_CONTRACT
+    const workspaceFingerprint = await getThreadGoalWorkspaceFingerprint()
     const completion = evaluateThreadGoalCompletion({
       contract,
       evidence: currentGoal.evidence ?? [],
       contractDigest: hashThreadGoalContract(currentGoal.objective, contract),
-      workspaceFingerprint: await getThreadGoalWorkspaceFingerprint(),
+      workspaceFingerprint,
     })
-    if (!completion.allowed) {
-      const named = completion.criterionIds.join(', ')
+    // A red gate is final: no semantic opinion overrides a failing check.
+    if (!completion.allowed && completion.reason === 'required_gate_failed') {
       return {
         result: false,
-        message:
-          completion.reason === 'required_gate_failed'
-            ? `A required check for this goal is failing: ${named}. Fix it and re-run the check before marking the goal complete.`
-            : `These required criteria have no passing evidence yet: ${named}. Run the checks that cover them before marking the goal complete.`,
+        message: `A required check for this goal is failing: ${completion.criterionIds.join(', ')}. Fix it and re-run the check before marking the goal complete.`,
         errorCode: 7,
       }
+    }
+
+    if (!completion.allowed) {
+      // Only criteria no command can settle reach the judge. Anything with a
+      // verify command stays the deterministic gate's business and blocks here.
+      const { criterionStates, needsJudge } = planThreadGoalJudgement(
+        { ...currentGoal, contract, evidence: currentGoal.evidence ?? [] },
+        workspaceFingerprint,
+      )
+      const judgeableIds = new Set(needsJudge.map(s => s.criterion.id))
+      const commandBacked = completion.criterionIds.filter(
+        id => !judgeableIds.has(id),
+      )
+      if (commandBacked.length > 0) {
+        return {
+          result: false,
+          message: `These required criteria have no passing evidence yet: ${commandBacked.join(', ')}. Run the checks that cover them before marking the goal complete.`,
+          errorCode: 7,
+        }
+      }
+
+      const judgement = await runThreadGoalJudge({
+        bundle: buildThreadGoalEvidenceBundle(
+          { ...currentGoal, contract, evidence: currentGoal.evidence ?? [] },
+          needsJudge,
+          {
+            contractDigest: hashThreadGoalContract(
+              currentGoal.objective,
+              contract,
+            ),
+            workspaceFingerprint,
+          },
+        ),
+        judge: createThreadGoalModelJudge(),
+      })
+
+      // Unavailable is not a pass. The component whose job is to stop this
+      // being down must never be what lets it through.
+      if (judgement.status === 'unavailable') {
+        return {
+          result: false,
+          message:
+            'Completion could not be verified right now. Try again, or ask the user to confirm the remaining criteria.',
+          errorCode: 8,
+        }
+      }
+      if (judgement.status === 'not-proven') {
+        return {
+          result: false,
+          message: `The recorded evidence does not establish these criteria yet: ${judgement.criterionIds.join(', ')}.`,
+          errorCode: 7,
+        }
+      }
+      void criterionStates
     }
 
     const sessionState = await readSessionState(getSessionId())
