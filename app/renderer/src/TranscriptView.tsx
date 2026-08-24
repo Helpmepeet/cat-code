@@ -4385,9 +4385,7 @@ function UserBubble({
           onClick={copy}
           title="Copy message"
           aria-label={copied ? 'Message copied' : 'Copy message'}
-          className={`inline-flex items-center justify-center rounded-md p-1 transition-colors hover:bg-accent/15 hover:text-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
-            copied ? 'text-[#86efac]' : 'text-text-subtle'
-          }`}
+          className="inline-flex items-center justify-center rounded-md p-1 text-text-subtle transition-colors hover:bg-accent/15 hover:text-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
         >
           {copied ? (
             <svg
