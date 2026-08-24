@@ -184,6 +184,7 @@ import { doesMostRecentAssistantMessageExceed200k, tokenCountWithEstimation } fr
 import { buildThreadGoalDisplayState, calculateThreadGoalContextTokenDelta, deriveThreadGoalContinuationResetState, didThreadGoalTurnMakeProgress, pauseActiveThreadGoalOnAbort, shouldPromptToResumePausedGoal, type ThreadGoal } from '../utils/threadGoal.js';
 import { sumRealThreadGoalUsage } from '../utils/threadGoalUsage.js';
 import { createThreadGoalScheduler, type ThreadGoalRunningAttempt } from '../utils/threadGoalScheduler.js';
+import { isRateLimitErrorMessage } from '../services/rateLimitMessages.js';
 import { deriveDelegatedTaskStatus, deriveFocusedInputDialog, deriveHasOperationalWork, deriveHasSuppressedDialog, deriveHasUnblockedDelegatedWork, deriveLocalWaitingReason, deriveTuiSessionStatus, deriveTuiWaitingDetail, type FocusedInputDialog, type FocusedInputDialogFacts } from '../utils/tuiSessionStatus.js';
 import { updateThreadGoalStatusAction } from '../utils/threadGoalActions.js';
 import { getDisplayedEffortLevel } from '../utils/effort.js';
@@ -982,6 +983,11 @@ export function REPL({
   // turn. Captured at query start so the settle at turn end is fenced against
   // the goal state the turn was actually decided against.
   const turnAttemptRef = React.useRef<ThreadGoalRunningAttempt | null>(null);
+  // How the current turn ended. Written as messages arrive, read once by the
+  // settle at turn end, reset at turn start. Without this the goal's failure
+  // and usage-limit paths are unreachable: an erroring loop would stay active
+  // forever, which is exactly what the bounded-retry rule forbids.
+  const turnOutcomeRef = React.useRef({ failed: false, usageLimited: false });
   // Gating snapshot the scheduler host reads. Written immediately before each
   // wake() so the host never closes over a stale render.
   const goalGateRef = React.useRef({ canStartAutomaticTurn: false });
@@ -1814,7 +1820,8 @@ export function REPL({
         contextGrowthTokens,
         timeDeltaSeconds,
         madeNoProgress: !turnMadeProgressRef.current,
-        failed: false
+        failed: turnOutcomeRef.current.failed,
+        providerUsageLimited: turnOutcomeRef.current.usageLimited
       }
     });
     if (!nextGoal) return;
@@ -3028,6 +3035,17 @@ export function REPL({
       // Block ticks on API errors to prevent tick → error → tick
       // runaway loops (e.g., auth failure, rate limit, blocking limit).
       // Cleared on compact boundary (above) or successful response (below).
+      if (newMessage.type === 'assistant' && 'isApiErrorMessage' in newMessage && newMessage.isApiErrorMessage) {
+        turnOutcomeRef.current.failed = true;
+        const errorText = newMessage.message.content
+          .map(block => (block.type === 'text' ? block.text : ''))
+          .join('');
+        // A usage limit is not a flaky error: retrying cannot clear it, so it
+        // stops the goal outright rather than spending the retry allowance.
+        if (isRateLimitErrorMessage(errorText)) {
+          turnOutcomeRef.current.usageLimited = true;
+        }
+      }
       if (feature('PROACTIVE') || feature('KAIROS')) {
         if (newMessage.type === 'assistant' && 'isApiErrorMessage' in newMessage && newMessage.isApiErrorMessage) {
           proactiveModule?.setContextBlocked(true);
@@ -3394,6 +3412,7 @@ export function REPL({
       // transitioned dispatching→running, so no setter call needed here.
       resetTimingRefs();
       turnAttemptRef.current = goalSchedulerRef.current!.getRunningAttempt();
+      turnOutcomeRef.current = { failed: false, usageLimited: false };
       turnGoalAtStartRef.current = store.getState().threadGoal;
       turnContextTokensAtStartRef.current = tokenCountWithEstimation(
         messagesRef.current,

@@ -585,6 +585,14 @@ export type ThreadGoalTurnAccounting = {
   madeNoProgress: boolean
   /** True when the turn ended in a runtime/provider error. */
   failed: boolean
+  /**
+   * True when the failure was a provider usage/rate limit.
+   *
+   * Distinguished from an ordinary failure because it is not flaky: retrying
+   * cannot clear it, so it stops the goal immediately instead of consuming the
+   * consecutive-failure allowance first.
+   */
+  providerUsageLimited?: boolean
 }
 
 /**
@@ -647,8 +655,9 @@ export function accountThreadGoalTurn(
     return { goal: accounted, stoppedBy: null }
   }
 
-  const stoppedBy: ThreadGoalStatusReason | null =
-    consecutiveFailures >= accounted.maxConsecutiveFailures
+  const stoppedBy: ThreadGoalStatusReason | null = turn.providerUsageLimited
+    ? 'provider_usage_limit'
+    : consecutiveFailures >= accounted.maxConsecutiveFailures
       ? 'runtime_error'
       : accounted.tokenBudget !== undefined &&
           tokensUsed >= accounted.tokenBudget
@@ -662,11 +671,13 @@ export function accountThreadGoalTurn(
   if (!stoppedBy) return { goal: accounted, stoppedBy: null }
 
   const nextStatus: ThreadGoalStatus =
-    stoppedBy === 'runtime_error'
-      ? 'failed'
-      : stoppedBy === 'no_progress'
-        ? 'stalled'
-        : 'budget_limited'
+    stoppedBy === 'provider_usage_limit'
+      ? 'usage_limited'
+      : stoppedBy === 'runtime_error'
+        ? 'failed'
+        : stoppedBy === 'no_progress'
+          ? 'stalled'
+          : 'budget_limited'
 
   return {
     goal: {

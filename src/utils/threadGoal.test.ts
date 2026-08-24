@@ -31,6 +31,10 @@ import {
 } from './threadGoal.js'
 import { EMPTY_THREAD_GOAL_USAGE_DELTA } from './threadGoalUsage.js'
 import {
+  isResumableThreadGoalStatus,
+  isSuccessfulThreadGoalStatus,
+} from './threadGoalState.js'
+import {
   claimThreadGoalAttempt,
   recordThreadGoalWake,
 } from './threadGoalAttempt.js'
@@ -545,6 +549,44 @@ describe('thread goal formatting and parsing', () => {
 
     expect(goal.status).toBe('failed')
     expect(goal.statusReason).toBe('runtime_error')
+  })
+
+  test('a provider usage limit stops the goal without spending retries', () => {
+    const goal = createThreadGoal('session-1', 'rate limited', undefined, 100)
+
+    const { goal: limited, stoppedBy } = accountThreadGoalTurn(
+      goal,
+      {
+        ...IDLE_TURN,
+        wasAutomaticContinuation: true,
+        failed: true,
+        providerUsageLimited: true,
+      },
+      200,
+    )
+
+    // One turn, not maxConsecutiveFailures of them: retrying cannot clear it.
+    expect(limited.status).toBe('usage_limited')
+    expect(limited.statusReason).toBe('provider_usage_limit')
+    expect(stoppedBy).toBe('provider_usage_limit')
+    expect(limited.consecutiveFailures).toBe(1)
+  })
+
+  test('usage_limited and failed are resumable but never read as success', () => {
+    for (const [status, reason] of [
+      ['usage_limited', 'provider_usage_limit'],
+      ['failed', 'runtime_error'],
+    ] as const) {
+      const goal = updateThreadGoalStatus(
+        createThreadGoal('session-1', 'stopped', undefined, 100),
+        status,
+        reason,
+        200,
+      )
+      expect(isSuccessfulThreadGoalStatus(goal.status)).toBe(false)
+      expect(isResumableThreadGoalStatus(goal.status)).toBe(true)
+      expect(formatThreadGoalSummary(goal)).not.toContain('Goal: complete')
+    }
   })
 
   test('does not account usage after a goal is complete', () => {
