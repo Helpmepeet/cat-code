@@ -1305,6 +1305,7 @@ function AssistantProse({
               <CodeBlock
                 lang={leaf.codeLanguage}
                 code={leaf.codeSource}
+                streaming={leaf.codeOpen}
                 highlighted={
                   <MarkdownTree
                     tree={markArrival(leaf.content)}
@@ -1843,13 +1844,17 @@ export function CodeBlock({
   lang,
   code,
   highlighted,
+  streaming = false,
 }: {
   lang: string
   code: string
   highlighted: ReactNode
+  /** The fence is still arriving, so there is no finished block to copy. */
+  streaming?: boolean
 }) {
   const [copied, setCopied] = useState(false)
   const copy = (): void => {
+    if (streaming) return
     const clipboard =
       typeof navigator !== 'undefined' ? navigator.clipboard : undefined
     if (!clipboard) return
@@ -1870,11 +1875,16 @@ export function CodeBlock({
       <button
         type="button"
         onClick={copy}
+        disabled={streaming}
         className={`absolute right-2.5 top-1.5 z-[1] font-mono text-[11px] transition-colors ${
-          copied ? 'text-[#86efac]' : 'text-text-subtle hover:text-text-primary'
+          streaming
+            ? 'cursor-default text-text-ghost'
+            : copied
+              ? 'text-[#86efac]'
+              : 'text-text-subtle hover:text-text-primary'
         }`}
       >
-        {copied ? 'copied' : 'copy'}
+        {streaming ? 'writing' : copied ? 'copied' : 'copy'}
       </button>
       <pre className="overflow-x-auto px-3.5 pb-3.5 pt-[38px] font-mono text-[12.5px] leading-[1.65]">
         <code className="hljs">{highlighted}</code>

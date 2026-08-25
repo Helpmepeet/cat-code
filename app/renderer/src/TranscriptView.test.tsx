@@ -3212,12 +3212,22 @@ test('a code fence still streaming gets its card frame as soon as it opens', () 
   // The frame the settled fence will keep is already up: language chip, copy
   // control, and the body inside the card rather than beneath it.
   expect(html).toContain('python')
-  expect(html).toContain('copy')
   expect(html).toContain('def greet(name):')
+  // The control is present but says there is nothing finished to copy yet.
+  expect(html).toContain('writing')
+  expect(html).toContain('disabled')
+  expect(html).not.toContain('>copy<')
   // The opening delimiter names the card; it is never shown as body text.
   expect(html).not.toContain('```')
   // Colors arrive when the fence settles, so nothing is tokenized yet.
   expect(html).not.toContain('hljs-keyword')
+})
+
+test('the settled fence gets its copy control back', () => {
+  const html = render(proseRow('Here:\n\n```python\ndef greet(name):\n    return name\n```\n', 'shutfence'))
+
+  expect(html).toContain('>copy<')
+  expect(html).not.toContain('writing')
 })
 
 // ── Model-prose typography (`.md-prose`, theme.css)

@@ -108,6 +108,12 @@ export type MarkdownRenderLeaf = {
   /** Complete fence source for the group's single copy action. */
   codeSource: string
   codeLanguage: string
+  /**
+   * True while this leaf's fence has opened but not closed. The card is up
+   * from the opening delimiter on, so its copy action has to say that what it
+   * would copy is not finished yet.
+   */
+  codeOpen: boolean
   /** Content revision. Never part of a React key. */
   characters: number
   lines: number
@@ -130,6 +136,7 @@ export type MountedMarkdownLeaf = {
   text: string
   codeSource: string
   codeLanguage: string
+  codeOpen: boolean
 }
 
 export type MarkdownLeafWindow = {
@@ -441,6 +448,7 @@ export function mergeMountedMarkdownLeaves(
       text,
       codeSource: first.codeSource,
       codeLanguage: first.codeLanguage,
+      codeOpen: first.codeOpen,
     })
     index = last + 1
   }
@@ -550,6 +558,7 @@ function planChildren(
       text: '',
       codeSource: '',
       codeLanguage: '',
+      codeOpen: false,
       characters,
       lines,
       elements: elements + wrapperElements,
@@ -704,12 +713,16 @@ function planOpenFence(tail: string, path: string, state: PlanState): void {
     // finished arriving has still opened, and its card is what says so.
     children: [{ type: 'text', value: firstBreak === -1 ? '' : tail.slice(firstBreak + 1) }],
   }
+  const before = state.leaves.length
   planCodeBlock(
     { type: 'element', tagName: 'pre', properties: {}, children: [code] },
     [],
     path,
     state,
   )
+  for (let index = before; index < state.leaves.length; index += 1) {
+    state.leaves[index].codeOpen = true
+  }
 }
 
 /**
@@ -732,6 +745,7 @@ function planAtomicProse(element: Element, path: string, state: PlanState): void
       text: slice,
       codeSource: '',
       codeLanguage: '',
+      codeOpen: false,
       characters: slice.length,
       lines: countBreaks(slice),
       elements: 0,

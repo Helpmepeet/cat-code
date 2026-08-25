@@ -278,6 +278,24 @@ describe('code fences', () => {
     expect(mount(leaves, 0, leaves.length)).toContain('<pre>')
   })
 
+  test('only an open fence is marked open, and the mark survives the merge', () => {
+    const open = planMarkdownLeaves('row-1', 'Here is the patch.\n\n```ts\nconst a = 1')
+    const settled = planMarkdownLeaves('row-1', 'Here is the patch.\n\n```ts\nconst a = 1\n```')
+
+    expect(open.filter(leaf => leaf.codeOpen)).toHaveLength(1)
+    expect(open.filter(leaf => leaf.kind === 'code')[0].codeOpen).toBe(true)
+    expect(settled.every(leaf => !leaf.codeOpen)).toBe(true)
+
+    // A fence long enough to be cut still carries ONE card's worth of state.
+    const long = planMarkdownLeaves(
+      'row-1',
+      ['```ts', ...Array.from({ length: 400 }, (_, index) => `const line${index} = ${index}`)].join('\n'),
+    )
+    const [unit] = mergeMountedMarkdownLeaves(long, 0, long.length)
+    expect(long.every(leaf => leaf.codeOpen)).toBe(true)
+    expect(unit.codeOpen).toBe(true)
+  })
+
   test('a tilde fence opens the same card a backtick fence does', () => {
     const [tail] = planMarkdownLeaves('row-1', '~~~ruby\nputs 1\n').filter(
       leaf => leaf.kind === 'code',
