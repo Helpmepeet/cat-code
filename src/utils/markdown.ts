@@ -1,5 +1,7 @@
 import chalk from 'chalk'
 import { marked, type Token, type Tokens } from 'marked'
+import { isAbsolute } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import stripAnsi from 'strip-ansi'
 import { color } from '../components/design-system/color.js'
 import { BLOCKQUOTE_BAR } from '../constants/figures.js'
@@ -145,6 +147,9 @@ export function formatToken(
         const email = token.href.replace(/^mailto:/, '')
         return email
       }
+      const hyperlinkTarget = isAbsolute(token.href)
+        ? pathToFileURL(token.href).href
+        : token.href
       // Extract display text from the link's child tokens
       const linkText = (token.tokens ?? [])
         .map(_ => formatToken(_, theme, 0, null, token, highlight))
@@ -154,10 +159,10 @@ export function formatToken(
       // show it as a clickable hyperlink. In terminals that support OSC 8,
       // users see the text and can hover/click to see the URL.
       if (plainLinkText && plainLinkText !== token.href) {
-        return createHyperlink(token.href, linkText)
+        return createHyperlink(hyperlinkTarget, linkText)
       }
       // When the display text matches the URL (or is empty), just show the URL
-      return createHyperlink(token.href)
+      return createHyperlink(hyperlinkTarget)
     }
     case 'list': {
       return token.items
