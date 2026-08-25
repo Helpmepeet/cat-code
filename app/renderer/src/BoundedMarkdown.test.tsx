@@ -62,11 +62,13 @@ describe('BoundedMarkdown', () => {
     expect(html.length).toBeLessThan(200_000)
   })
 
-  test('an open streaming fence shows its final line rather than a card', () => {
+  test('an open streaming fence shows its final line inside the card frame', () => {
     const html = renderBody('test-5', 'Patch:\n\n```ts\nconst first = 1\nconst last = 2')
 
     expect(html).toContain('const last = 2')
-    expect(html).not.toContain('<pre>')
+    expect(html).toContain('<pre>')
+    expect(html).toContain('language-ts')
+    expect(html).not.toContain('```')
   })
 
   test('scroll offset geometry keeps content visible when the message is in view', () => {

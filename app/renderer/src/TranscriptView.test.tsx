@@ -3200,6 +3200,20 @@ test('P4-18c: an unknown code language degrades to plain framed code, never thro
   expect(html).toContain('notalang') // language label passthrough
 })
 
+test('a code fence still streaming gets its card frame as soon as it opens', () => {
+  const html = render(proseRow('Here:\n\n```python\ndef greet(name):', 'openfence'))
+
+  // The frame the settled fence will keep is already up: language chip, copy
+  // control, and the body inside the card rather than beneath it.
+  expect(html).toContain('python')
+  expect(html).toContain('copy')
+  expect(html).toContain('def greet(name):')
+  // The opening delimiter names the card; it is never shown as body text.
+  expect(html).not.toContain('```')
+  // Colors arrive when the fence settles, so nothing is tokenized yet.
+  expect(html).not.toContain('hljs-keyword')
+})
+
 // ── Model-prose typography (`.md-prose`, theme.css)
 //
 // This suite renders to static markup with no stylesheet, so it can prove the

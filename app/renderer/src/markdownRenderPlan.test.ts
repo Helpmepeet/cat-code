@@ -252,25 +252,81 @@ describe('code fences', () => {
     expect(html).toContain('After.')
   })
 
-  test('an unclosed streaming fence keeps its final line and stays plain text', () => {
+  test('an unclosed streaming fence is already the card its settled form will be', () => {
     const streaming = 'Here is the patch.\n\n```ts\nconst first = 1\nconst last = 2'
     const leaves = planMarkdownLeaves('row-1', streaming)
+    const tail = leaves.filter(leaf => leaf.kind === 'code')
     const html = mount(leaves, 0, leaves.length)
 
     expect(html).toContain('Here is the patch.')
     expect(html).toContain('const last = 2')
-    expect(html).toContain('```ts')
-    expect(html).not.toContain('<pre>')
-    expect(leaves.some(leaf => leaf.kind === 'code')).toBe(false)
+    // The opening delimiter is chrome, not body text: it names the card's
+    // language instead of being shown inside it.
+    expect(html).not.toContain('```')
+    expect(tail).toHaveLength(1)
+    expect(tail[0].codeLanguage).toBe('ts')
+    expect(tail[0].codeSource).toBe('const first = 1\nconst last = 2')
   })
 
-  test('the same fence becomes a card once it settles', () => {
-    const settled = 'Here is the patch.\n\n```ts\nconst first = 1\nconst last = 2\n```'
-    const html = mount(planMarkdownLeaves('row-1', settled), 0, 1)
+  test('a fence whose first line has not finished arriving still opens a card', () => {
+    const leaves = planMarkdownLeaves('row-1', 'Here is the patch.\n\n```ts')
+    const tail = leaves.filter(leaf => leaf.kind === 'code')
 
-    expect(html).toContain('<pre>')
-    expect(html).toContain('language-ts')
-    expect(html).toContain('const last = 2')
+    expect(tail).toHaveLength(1)
+    expect(tail[0].codeLanguage).toBe('ts')
+    expect(tail[0].codeSource).toBe('')
+    expect(mount(leaves, 0, leaves.length)).toContain('<pre>')
+  })
+
+  test('a tilde fence opens the same card a backtick fence does', () => {
+    const [tail] = planMarkdownLeaves('row-1', '~~~ruby\nputs 1\n').filter(
+      leaf => leaf.kind === 'code',
+    )
+
+    expect(tail.codeLanguage).toBe('ruby')
+    expect(tail.codeSource).toBe('puts 1')
+  })
+
+  test('an open fence declaring no language leaves the chip to the card', () => {
+    const [tail] = planMarkdownLeaves('row-1', '```\nplain text\n').filter(
+      leaf => leaf.kind === 'code',
+    )
+
+    expect(tail.codeLanguage).toBe('')
+    expect(tail.codeSource).toBe('plain text')
+  })
+
+  test('an open fence keeps its card across the settle transition', () => {
+    const body = 'Here is the patch.\n\n```ts\nconst first = 1\nconst last = 2'
+    const plan = (source: string): MarkdownRenderLeaf[] =>
+      planMarkdownLeaves('row-1', source, { rehypePlugins: REHYPE_PLUGINS })
+    const streaming = mount(plan(body), 0, 8)
+    const settled = mount(plan(`${body}\n\`\`\``), 0, 8)
+
+    for (const html of [streaming, settled]) {
+      expect(count(html, /<pre/g)).toBe(1)
+      expect(html).toContain('language-ts')
+      // Tokenized or not, the same line is inside the same one card.
+      expect(html).toContain(' last = ')
+    }
+    // Colors arrive with the closing delimiter. Until then the body is one raw
+    // text node, so a streamed token costs its own characters and nothing else.
+    expect(streaming).not.toContain('hljs-')
+    expect(settled).toContain('hljs-')
+  })
+
+  test('an open fence too long to mount whole is still ONE card', () => {
+    const open = ['```ts', ...Array.from({ length: 400 }, (_, index) => `const line${index} = ${index}`)].join('\n')
+    const leaves = planMarkdownLeaves('row-1', open)
+
+    expect(leaves.length).toBeGreaterThan(1)
+    expect(leaves.every(leaf => leaf.kind === 'code')).toBe(true)
+    expect(new Set(leaves.map(leaf => leaf.unitId)).size).toBe(1)
+
+    const units = mergeMountedMarkdownLeaves(leaves, 0, leaves.length)
+    expect(units).toHaveLength(1)
+    expect(units[0].codeSource.split('\n')).toHaveLength(400)
+    expect(count(renderToStaticMarkup(renderMarkdownTree(units[0].tree)), /<pre/g)).toBe(1)
   })
 
   test('an indented code block is never mistaken for an open fence', () => {

@@ -244,17 +244,15 @@ export function planMarkdownLeaves(
   planChildren(roots, [], '', state)
 
   if (tailOffset !== null) {
-    // An open fence is not a code block yet. It renders as the plain text it
-    // currently is, final line included, and becomes a card when it settles.
-    planPlainText(source.slice(tailOffset), 'tail', state)
+    planOpenFence(source.slice(tailOffset), 'tail', state)
   }
 
   return state.leaves
 }
 
 /**
- * Bounded plain-text leaves for source that must not be interpreted: an open
- * streaming fence, or a document the parser could not read at all.
+ * Bounded plain-text leaves for a document the parser could not read at all, so
+ * its author still sees the text they wrote.
  */
 export function planPlainTextLeaves(
   sourceId: string,
@@ -686,6 +684,35 @@ function planCodeBlock(
 }
 
 /**
+ * The tail of a fence that has opened but not closed yet. It is planned as the
+ * code block it is already becoming, so the card frame arrives with the opening
+ * delimiter rather than with the closing one. The delimiter line itself is not
+ * body text: its language goes to the card's chip instead.
+ *
+ * Nothing here is highlighted. Tokens land in the card as raw text and gain
+ * their colors from the ordinary parse when the fence settles, which keeps the
+ * per-token cost of a streaming fence at one text node.
+ */
+function planOpenFence(tail: string, path: string, state: PlanState): void {
+  const firstBreak = tail.indexOf('\n')
+  const language = fenceLanguage(firstBreak === -1 ? tail : tail.slice(0, firstBreak))
+  const code: Element = {
+    type: 'element',
+    tagName: 'code',
+    properties: language === '' ? {} : { className: [`language-${language}`] },
+    // Always one child, empty body included: a fence whose first line has not
+    // finished arriving has still opened, and its card is what says so.
+    children: [{ type: 'text', value: firstBreak === -1 ? '' : tail.slice(firstBreak + 1) }],
+  }
+  planCodeBlock(
+    { type: 'element', tagName: 'pre', properties: {}, children: [code] },
+    [],
+    path,
+    state,
+  )
+}
+
+/**
  * A top-level block whose bulk is one unbroken run of text has no semantic
  * children to window, so it goes to the disclosed bounded viewer instead of
  * handing the layout engine one enormous wrapping text node.
@@ -989,6 +1016,24 @@ function isWholeUnterminatedFence(
 ): boolean {
   const mdast = processor.parse(tail)
   return mdast.children.length === 1 && findUnterminatedFence(mdast, tail) === 0
+}
+
+/**
+ * The language word an opening delimiter declares, or empty.
+ *
+ * Only a bare word qualifies, which is the same shape the settled fence's own
+ * `language-` class carries: the chip then reads identically before and after
+ * the fence closes, instead of changing under the reader on settlement.
+ */
+function fenceLanguage(openingLine: string): string {
+  const trimmed = openingLine.trimStart()
+  const marker = trimmed[0]
+  if (marker !== '`' && marker !== '~') return ''
+  let index = 0
+  while (trimmed[index] === marker) index += 1
+  const info = trimmed.slice(index).trim()
+  const word = /^\w+/.exec(info)
+  return word === null ? '' : word[0]
 }
 
 /** Length of an opening fence run, or 0 when the slice does not open one. */
