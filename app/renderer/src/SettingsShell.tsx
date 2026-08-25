@@ -65,6 +65,7 @@ import {
 } from './codeTheme.js'
 import { CodeThemePreview } from './CodeThemePreview.js'
 import { ToolCardStylePreview } from './ToolCardStylePreview.js'
+import { ProseArrivalPreview } from './ProseArrivalPreview.js'
 import { MemoryPage } from './MemoryPage.js'
 import {
   isReasoningLayoutMode,
@@ -76,6 +77,13 @@ import {
   DEFAULT_TOOLS_EXPANDED,
   ToolsExpandedContext,
 } from './toolsExpanded.js'
+import {
+  DEFAULT_PROSE_ARRIVAL,
+  PROSE_ARRIVALS,
+  PROSE_ARRIVAL_LABELS,
+  ProseArrivalContext,
+  isProseArrival,
+} from './proseArrival.js'
 import {
   DEFAULT_TOOL_CARD_STYLE,
   TOOL_CARD_STYLES,
@@ -852,6 +860,7 @@ function TranscriptDisplaySection({
     useContext(ToolsExpandedContext)
   const { style: toolCardStyle, setStyle: setToolCardStyle } =
     useContext(ToolCardStyleContext)
+  const { arrival, setArrival } = useContext(ProseArrivalContext)
   // `EditableSettingValue` is `boolean | string | number`, so the identity test
   // both narrows it and keeps an unread snapshot (null) on the enabled path —
   // the key's built-in default is highlighting ON (`settingsEditable.ts:201`).
@@ -861,6 +870,23 @@ function TranscriptDisplaySection({
   return (
     <PaneSection title="Transcript">
       <ToolCardStylePreview />
+      <ProseArrivalPreview />
+      <Field
+        desc="How a reply appears as it arrives. Every option shows text the moment it is delivered. Stored in this app, not in your settings files."
+        label="Text arrival"
+        modified={arrival !== DEFAULT_PROSE_ARRIVAL}
+        onReset={() => setArrival(DEFAULT_PROSE_ARRIVAL)}
+      >
+        <SelectControl
+          label="Text arrival"
+          onChange={next => {
+            if (isProseArrival(next)) setArrival(next)
+          }}
+          optionLabels={PROSE_ARRIVAL_LABELS}
+          options={PROSE_ARRIVALS}
+          value={arrival}
+        />
+      </Field>
       <Field
         desc="How each tool call is drawn in the transcript. Stored in this app, not in your settings files."
         label="Tool calls"

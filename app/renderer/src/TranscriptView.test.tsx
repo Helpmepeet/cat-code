@@ -428,7 +428,7 @@ test('prose with no blockquote gets no per-quote copy control', () => {
   expect(html).not.toContain('copy')
 })
 
-test('P4-18c: a streaming assistant row renders a caret', () => {
+test('P4-18c: a streaming assistant row marks the text that just arrived', () => {
   const html = render({
     ...blockSource,
     id: 's:m:0:stream',
@@ -438,8 +438,14 @@ test('P4-18c: a streaming assistant row renders a caret', () => {
     isStreaming: true,
   })
 
-  expect(html).toContain('partial answer')
-  expect(html).toContain('animate-pulse') // the blinking streaming caret
+  // The words are separate spans while streaming, so the phrase is no longer
+  // one text node. Both words must still be present and both must be marked:
+  // the marking IS the streaming signal now that the caret is gone.
+  expect(html).toContain('>partial<')
+  expect(html).toContain('>answer<')
+  expect(html).toContain('prose-arrive-smooth')
+  // And nothing is lost between them: the separator survives the split.
+  expect(html.replace(/<[^>]*>/g, '')).toContain('partial answer')
 })
 
 // P4-18b tool-card family helper: builds a tool-use nested row. Cards collapse
@@ -3735,7 +3741,10 @@ test('P4-38 — the assistant body is the positioned hover group the chip needs'
 
 test('P4-38 — no copy chip while the reply is still streaming', () => {
   const html = render(assistantRow('partial ans', true))
-  expect(html).toContain('animate-pulse') // still streaming: the caret is up
+  // Proof the row really is in the streaming state, so the missing chip below
+  // is the suppression under test and not an empty render. The caret used to
+  // carry this; the arrival marking carries it now.
+  expect(html).toContain('prose-arrive-smooth')
   expect(html).not.toContain('Copy response')
 })
 
@@ -5097,4 +5106,27 @@ test('a prose row carries no tool marker, so it keeps its normal spacing', () =>
   )
   expect(html).toContain('data-card-style="lines"')
   expect(html).not.toContain('data-tool-row')
+})
+
+test('the streaming caret is gone, replaced by the arrival fade', () => {
+  // Removed 2026-08-25 with the arrival animation that took over its job:
+  // signalling "still coming". Shipping both meant two signals for one fact.
+  // If it ever comes back, this fails and the redundancy gets reconsidered
+  // rather than reintroduced silently.
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[
+        {
+          ...blockSource,
+          id: 's:m:0',
+          kind: 'assistant-text',
+          role: 'assistant',
+          content: 'still writing',
+          isStreaming: true,
+        },
+      ]}
+    />,
+  )
+  expect(html).not.toContain('animate-pulse bg-accent')
+  expect(html).toContain('still')
 })

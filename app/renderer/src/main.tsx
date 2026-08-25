@@ -5,6 +5,7 @@ import { App } from './App.js'
 import { CodeThemeProvider } from './CodeThemeProvider.js'
 import { ReasoningLayoutProvider } from './ReasoningLayoutProvider.js'
 import { ToastHost } from './ToastHost.js'
+import { ProseArrivalProvider } from './ProseArrivalProvider.js'
 import { ToolCardStyleProvider } from './ToolCardStyleProvider.js'
 import { ToolsExpandedProvider } from './ToolsExpandedProvider.js'
 import { RendererErrorBoundary } from './RendererErrorBoundary.js'
@@ -42,7 +43,9 @@ createRoot(root).render(
             <CodeThemeProvider>
               <ToolsExpandedProvider>
                 <ToolCardStyleProvider>
-                  <App />
+                  <ProseArrivalProvider>
+                    <App />
+                  </ProseArrivalProvider>
                 </ToolCardStyleProvider>
               </ToolsExpandedProvider>
             </CodeThemeProvider>

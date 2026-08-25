@@ -97,6 +97,14 @@ import {
 } from './toolCardStyle.js'
 import { ToolsExpandedContext } from './toolsExpanded.js'
 import {
+  MAX_PROSE_ARRIVAL_STAGGER_MS,
+  PROSE_ARRIVAL_WORD_CLASS,
+  PROSE_ARRIVAL_WORD_STAGGER_MS,
+  ProseArrivalContext,
+} from './proseArrival.js'
+import { markArrivedText } from './proseArrivalMark.js'
+import type { Root as HastRoot } from 'hast'
+import {
   groupReasoningRuns,
   ReasoningLayoutContext,
   REASONING_WITHHELD_TEXT,
@@ -1253,6 +1261,29 @@ function AssistantProse({
     }),
     [content, openFile, onContextMenu],
   )
+  const { arrival } = useContext(ProseArrivalContext)
+  // The source only ever grows by append, so the characters past the length this
+  // row rendered at last is exactly what the newest batch delivered — an answer
+  // that survives the tree restructuring retroactively when closing syntax
+  // lands (`proseArrivalMark.ts`). Read during render, advanced after paint.
+  const renderedLengthRef = useRef(0)
+  const arrivalFrom = streaming === true ? renderedLengthRef.current : -1
+  useEffect(() => {
+    renderedLengthRef.current = streaming === true ? content.length : 0
+  }, [content, streaming])
+  const markArrival = useCallback(
+    (tree: HastRoot): HastRoot => {
+      const className = PROSE_ARRIVAL_WORD_CLASS[arrival]
+      if (className === null || arrivalFrom < 0) return tree
+      return markArrivedText(tree, {
+        fromOffset: arrivalFrom,
+        className,
+        staggerMs: PROSE_ARRIVAL_WORD_STAGGER_MS[arrival],
+        maxStaggerMs: MAX_PROSE_ARRIVAL_STAGGER_MS,
+      })
+    },
+    [arrival, arrivalFrom],
+  )
   return (
     // P4-38 host contract for `BubbleCopyChip`: `group relative` makes this body
     // the hover/focus group the absolute chip anchors to. No reserved right
@@ -1274,24 +1305,23 @@ function AssistantProse({
               <CodeBlock
                 lang={leaf.codeLanguage}
                 code={leaf.codeSource}
-                highlighted={<MarkdownTree tree={leaf.content} components={components} />}
+                highlighted={
+                  <MarkdownTree
+                    tree={markArrival(leaf.content)}
+                    components={components}
+                  />
+                }
               />
             </MarkdownErrorBoundary>
           ) : (
             <div className="md-prose font-sans font-medium text-sm leading-relaxed">
               <MarkdownErrorBoundary fallback={content}>
-                <MarkdownTree tree={leaf.tree} components={components} />
+                <MarkdownTree tree={markArrival(leaf.tree)} components={components} />
               </MarkdownErrorBoundary>
             </div>
           )
         }
       />
-      {streaming ? (
-        <span
-          className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-accent align-text-bottom"
-          aria-hidden
-        />
-      ) : null}
       {copyable ? (
         <BubbleCopyChip content={content} subject="response" />
       ) : null}

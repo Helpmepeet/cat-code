@@ -254,6 +254,39 @@
 }
 
 /*
+ * Streamed-prose arrival (`proseArrival.ts`).
+ *
+ * Applied to the words a delivered batch just appended. Both variants are pure
+ * fades with no transform: a transform needs a box, which would force every
+ * word inline-block and change how prose wraps and how code aligns.
+ *
+ * `both` fill mode matters. Without it a word is fully opaque for the frame
+ * between mount and the animation's first tick, which shows the very flash the
+ * fade exists to remove.
+ *
+ * Timings are the approved reference's
+ * (`docs/design-html/2026-08-25-streaming-prose-arrival.html`, variants B / E).
+ * `flowing` differs only in duration; its per-word delay is set inline by the
+ * renderer, because the offset is per word within a batch and cannot be a class.
+ */
+@keyframes catcode-prose-arrive {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.prose-arrive-smooth {
+  animation: catcode-prose-arrive 220ms linear both;
+}
+
+.prose-arrive-flowing {
+  animation: catcode-prose-arrive 160ms linear both;
+}
+
+/*
  * Tool-call density under the `lines` card style (`toolCardStyle.ts`).
  *
  * A run of container-less tool rows reads as one block of activity rather than
@@ -737,7 +770,9 @@
   .animate-compact-absorb,
   .animate-compact-star,
   .animate-compact-sweep-left,
-  .animate-compact-sweep-right {
+  .animate-compact-sweep-right,
+  .prose-arrive-smooth,
+  .prose-arrive-flowing {
     animation: none !important;
   }
 }

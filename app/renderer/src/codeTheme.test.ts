@@ -184,6 +184,10 @@ describe('theme.css', () => {
         '.animate-spin',
         '.animate-toast-in',
         '.animate-token-warn-in',
+        // Arriving prose fades in; a reader who asked for less motion gets the
+        // honest instant arrival instead (`proseArrival.ts`).
+        '.prose-arrive-smooth',
+        '.prose-arrive-flowing',
       ].sort(),
     )
     expect(mediaRule?.[2].trim()).toBe('animation: none !important;')
