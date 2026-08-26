@@ -5055,9 +5055,20 @@ export function SessionPane({
         return false
       }
     })()
+  // The REF, not the state, and the difference is a bug not a style choice. On
+  // mount this effect and the restore above run in one flush, in declaration
+  // order, so this closure still holds the mount-time `atBottom` — `true`, from
+  // `useState` — even though the restore has just placed the reader on a
+  // remembered row and reported that they are not at the end. Reading the state
+  // therefore threw every restored pane to the bottom of its transcript, which
+  // is precisely what the restore exists to prevent. `applyAtBottom` writes the
+  // ref synchronously, so the ref already knows.
+  //
+  // `atBottom` stays in the deps: the effect must still re-run when the reader
+  // returns to the end, and a ref change schedules nothing on its own.
   useEffect(() => {
     const el = transcriptScrollRef.current
-    if (!el || !atBottom) return
+    if (!el || !atBottomRef.current) return
     el.scrollTop = el.scrollHeight
   }, [contentSignature, atBottom])
 

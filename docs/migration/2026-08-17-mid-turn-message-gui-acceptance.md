@@ -21,8 +21,11 @@ bun run --cwd app dev
 ## A. Staging — a message you send mid-response is not "sent" yet
 
 1. Start a turn that will run several tools. While it runs, type a message and
-   press Enter. It must appear **above the composer** as `Queued`, and must NOT
-   appear in the transcript.
+   press Enter. It must appear at the **end of the transcript** as `Queued`,
+   below the last delivered message and scrolling with it, and must NOT appear
+   as a transcript message. Scroll up: there must be no dead band above the
+   composer where the block used to sit (moved out of the dock 2026-08-26,
+   `63c34935`).
 2. Watch it move into the transcript at the moment the model picks it up. That
    is the engine consuming it; before that moment the model has not seen it.
 3. Repeat with a turn that answers with text only and calls no tools. The message
@@ -44,6 +47,9 @@ bun run --cwd app dev
 9. Stage two messages. The control must read `Take back all`, and one click must
    return both, joined by a newline.
 10. From the composer, Shift+Tab must reach the control, and Enter must fire it.
+    Since the block moved into the transcript it is no longer the last stop
+    before the composer: the jump-to-bottom pill, when showing, comes between
+    them. `↑` on an empty draft is the unchanged fast path.
 11. **The race.** Click `Take back` at the instant a tool round completes. Expect
     a warn-tone toast saying the message already went to the model, and expect
     the message to appear in the transcript rather than vanish. This is the one

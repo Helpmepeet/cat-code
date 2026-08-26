@@ -1697,7 +1697,7 @@ function userMessageTexts(received: ServerFrame[]): string[] {
   })
 }
 
-test('D1a — a mid-turn message stages above the composer and stays out of the transcript', async () => {
+test('D1a — a mid-turn message stages as queued and stays out of the transcript', async () => {
   let release: (() => void) | undefined
   const controller = new AppSessionController({
     async *runTurn({ options }) {

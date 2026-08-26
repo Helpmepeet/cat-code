@@ -182,10 +182,17 @@ function findTopRowIndex(geometry: TranscriptRowGeometry, scrollTop: number): nu
 
 /**
  * Measures the live pane. `TranscriptView` renders its row column as the
- * scroller's only element child, so the rows are that column's children. An
+ * scroller's FIRST element child, so the rows are that column's children. An
  * empty session renders the welcome or restore surface there instead, whose
  * children carry no `data-row-key` — so they report no identity, and neither
  * function above will build an anchor out of them.
+ *
+ * First, not only: the pane may render trailing siblings after that column, and
+ * does (the D1a waiting-message block, `App.tsx`). They are deliberately outside
+ * the row list — nothing in them carries a row key — and they sit BELOW every
+ * row, so they shift no row's offset either. Anything added there must keep
+ * both of those true, or an anchor starts naming something that is not a
+ * message.
  */
 export function readTranscriptRowGeometry(scroller: HTMLElement): TranscriptRowGeometry {
   const rows = scroller.firstElementChild?.children ?? null

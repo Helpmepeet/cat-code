@@ -32,6 +32,7 @@ import {
 } from './agentFace.js'
 import { AGENT_FACE_IDENTITY_FILL } from './agentChromeModel.js'
 import { OrchestratorRoster } from './OrchestratorRoster.js'
+import { idleSessionPaneProps } from './sessionPaneTestProps.js'
 import {
   createTranscriptState,
   projectServerFrame,
@@ -956,10 +957,12 @@ test('a cold-spawn prompt announces its wait, while a park restore stays silent'
   }
 })
 
-test('D1a: a message waiting for the running response shows above the composer', () => {
+test('D1a: a message waiting for the running response renders as waiting, not as sent', () => {
   // Sending during a response used to drop the message straight into the
-  // transcript, which reads as "the model has this" when it does not. It waits
-  // above the composer instead, the way the terminal has always shown it.
+  // transcript as a delivered row, which reads as "the model has this" when it
+  // does not. It renders as a waiting row instead, in the queued treatment.
+  // WHERE it renders is a separate claim with its own tests below; this one is
+  // only about it existing, and never as a delivered message.
   const base = idleSessionPaneProps()
 
   const idle = renderToStaticMarkup(<SessionPane {...base} />)
@@ -1073,18 +1076,33 @@ test('D1a: waiting messages end the transcript document instead of docking above
     />,
   )
 
-  // Both landmarks are unique, so the positions below mean what they say.
-  expect(html.match(/overflow-auto/g) ?? []).toHaveLength(1)
-  const dockPattern =
-    /mx-auto flex min-h-0 w-full max-w-\[var\(--transcript-width\)\] flex-col/g
-  expect(html.match(dockPattern) ?? []).toHaveLength(1)
+  // The dock is found by walking BACK from the composer, not by matching its
+  // exact class list: the transcript's own column carries the same measure, and
+  // keying on the dock's `min-h-0` made an unrelated edit to that class list
+  // fail a test about waiting messages, with a message naming neither.
+  const composer = html.indexOf('aria-label="Composer"')
+  expect(composer).toBeGreaterThan(-1)
+  let dock = -1
+  for (const match of html.matchAll(
+    /mx-auto [^"]*max-w-\[var\(--transcript-width\)\]/g,
+  )) {
+    if (match.index === undefined || match.index > composer) break
+    dock = match.index
+  }
+  expect(dock).toBeGreaterThan(-1)
 
+  // One scroller, so the position below means what it says.
+  expect(html.match(/overflow-auto/g) ?? []).toHaveLength(1)
   const scroller = html.indexOf('overflow-auto')
   const waiting = html.indexOf('and check the logs too')
-  const dock = html.search(dockPattern)
   expect(scroller).toBeGreaterThan(-1)
   expect(waiting).toBeGreaterThan(scroller)
   expect(waiting).toBeLessThan(dock)
+
+  // Order is all a flat string can carry, and order alone cannot tell a child
+  // of the scroller from a sibling band rendered just after it — which is the
+  // same dead full-width band under a different parent. `paneStructure.dom.test`
+  // owns that half; this one is the cheap direction (a move back INTO the dock).
 })
 
 test('D1a: the waiting block follows the rows, and the pane re-pins when it grows', () => {
@@ -1112,6 +1130,24 @@ test('D1a: the waiting block follows the rows, and the pane re-pins when it grow
       'const contentSignature = `${renderedRowCount}:${partialCount}:${queuedPrompts.length}`',
     ),
   ).toBeGreaterThan(-1)
+
+  // The waiting bubble sits on the delivered ones' right edge because its
+  // column and the row column share BOTH halves of the measure. Only one half
+  // is a token: `--transcript-width` is shared through CSS, the horizontal
+  // padding is hand-copied. Nothing else notices when they stop matching, and
+  // the symptom is a bubble quietly 32px off with a green suite.
+  const transcriptViewSource = readFileSync(
+    new URL('./TranscriptView.tsx', import.meta.url),
+    'utf8',
+  )
+  const paddingOf = (text: string, from: number): string | null => {
+    const classes = text.slice(from).match(/"([^"]*max-w-\[var\(--transcript-width\)\][^"]*)"/)
+    return classes?.[1]?.match(/\bpx-[\w.[\]-]+/)?.[0] ?? null
+  }
+  const rowColumn = paddingOf(transcriptViewSource, 0)
+  const waitingColumn = paddingOf(source, waitingBlock)
+  expect(rowColumn).not.toBeNull()
+  expect(waitingColumn).toBe(rowColumn)
 })
 
 test('the waiting-message row is written once and used at both call sites', () => {
@@ -2098,57 +2134,6 @@ test('a previewed pane with an empty cache claims nothing', () => {
  * 2026-07-28 repair wave — FIX-5
  * ------------------------------------------------------------------------- */
 
-/** A minimal live, idle session pane. Spread and override the one field a test
- *  is about, so a prop added to SessionPane fails compilation once, here. */
-function idleSessionPaneProps(): ComponentProps<typeof SessionPane> {
-  return {
-    accountsSnapshot: null,
-    accountsLastResult: null,
-    orchestratorActive: false,
-    activeConnection: { status: 'ready', inputEnabled: true },
-    activeDescriptor: undefined,
-    activeLog: {
-      inputEnabled: true,
-      messages: [],
-      retainedBytes: 0,
-      truncated: false,
-      error: null,
-      messageBytes: [],
-    },
-    activeAccount: null,
-    activeSessionId: 'session-1',
-    isActivePane: true,
-    branch: null,
-    allowPermission: () => {},
-    model: null,
-    reasoningEffort: null,
-    fastMode: false,
-    copyForLlm: () => {},
-    denyPermission: () => {},
-    history: [],
-    mentionItems: [],
-    onApprovePlan: () => {},
-    onPaste: () => {},
-    onRemovePaste: () => {},
-    onRevisePlan: () => {},
-    partialCount: 0,
-    pastes: [],
-    permissionContext: null,
-    permissionQueue: [],
-    planReview: null,
-    askQuestion: null,
-    onAnswerQuestions: () => {},
-    onCancelQuestions: () => {},
-    prompt: '',
-    releasePendingSubmit: () => {},
-    restorePermission: () => {},
-    setPermissionMode: () => {},
-    setPrompt: () => {},
-    submit: () => {},
-    transcript: createTranscriptState(),
-    transportError: null,
-  } satisfies ComponentProps<typeof SessionPane>
-}
 
 /* ── P4-32a: the footer strip carries worker attention (ruling P1) ──────────── */
 

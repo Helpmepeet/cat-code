@@ -46,6 +46,17 @@ function findDock(): { at: number; classes: string } {
     found = { at: match.index, classes: match[1]! }
   }
   expect(found).not.toBeNull()
+  // The walk is POSITIONAL, so a nested wrapper inside the dock that reused the
+  // transcript-width column would silently rebind it to the wrong element and
+  // every assertion below would pass vacuously. The dock is the element that
+  // opens the scrolling panel region, so say so: a rebind fails loudly here
+  // instead of quietly everywhere.
+  const panelsAt = SOURCE.indexOf(PANELS, found!.at)
+  const nextDock = SOURCE.slice(found!.at + 1).search(DOCK)
+  expect(panelsAt).toBeGreaterThan(-1)
+  if (nextDock !== -1) {
+    expect(panelsAt).toBeLessThan(found!.at + 1 + nextDock)
+  }
   return found!
 }
 
