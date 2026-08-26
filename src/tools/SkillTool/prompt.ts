@@ -193,7 +193,7 @@ BINDING CONSTRAINTS:
 - Available skills are listed in system-reminder messages in the conversation.
 - If a skill matches the user's request, invoking the relevant Skill tool is a BLOCKING REQUIREMENT. Do this BEFORE generating any other response about the task.
 - NEVER mention a skill without actually calling this tool.
-- Do not invoke a skill that is already running.
+- Do not invoke a skill whose instructions are already in this conversation, including for a later task in the same session. Invoking re-injects the full skill text verbatim, so a second call costs tokens and adds nothing. If you can no longer see those instructions, loading it again is correct.
 - Do not use this tool for built-in CLI commands such as /help or /clear.
 - If you see a <${COMMAND_NAME_TAG}> tag in the current conversation turn, the skill has already been loaded. In that case, follow the loaded instructions directly instead of calling this tool again.`
     }
@@ -216,7 +216,7 @@ Important:
 - Available skills are listed in system-reminder messages in the conversation
 - When a skill matches the user's request, this is a BLOCKING REQUIREMENT: invoke the relevant Skill tool BEFORE generating any other response about the task
 - NEVER mention a skill without actually calling this tool
-- Do not invoke a skill that is already running
+- Do not invoke a skill whose instructions are already in this conversation, including for a later task in the same session. Invoking re-injects the full skill text verbatim, so a second call costs tokens and adds nothing. If you can no longer see those instructions, loading it again is correct
 - Do not use this tool for built-in CLI commands (like /help, /clear, etc.)
 - If you see a <${COMMAND_NAME_TAG}> tag in the current conversation turn, the skill has ALREADY been loaded - follow the instructions directly instead of calling this tool again
 `
