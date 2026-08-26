@@ -183,7 +183,6 @@ describe('GenerateImageTool', () => {
       tools: [
         {
           type: 'image_generation',
-          quality: 'auto',
           output_format: 'png',
         },
       ],
@@ -1111,6 +1110,11 @@ describe('GenerateImageTool', () => {
       { input_fidelity: 'high' },
       { model: 'gpt-image-1.5' },
       { size: '1024x1024' },
+      // The backend echoes quality back as "auto" whatever is sent.
+      { quality: 'low' },
+      // Verified live: edit with nothing to edit streams a failed status and
+      // returns no image, so reject it before spending the request.
+      { action: 'edit' },
     ]) {
       expect(
         GenerateImageTool.inputSchema.safeParse({

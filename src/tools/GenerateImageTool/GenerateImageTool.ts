@@ -94,10 +94,6 @@ const inputSchema = lazySchema(() =>
       .describe(
         'Optional local image path to use as a visual reference for the generated image. Supported formats: .png, .jpg/.jpeg, and .webp.',
       ),
-    quality: z
-      .enum(['low', 'medium', 'high', 'auto'])
-      .optional()
-      .describe('Generated image quality. Defaults to auto.'),
     background: z
       .enum(['opaque', 'auto'])
       .optional()
@@ -131,7 +127,10 @@ const inputSchema = lazySchema(() =>
       .boolean()
       .optional()
       .describe('Set true to overwrite an existing output file.'),
-  }),
+  }).refine(
+    input => input.action !== 'edit' || input.reference_image_path !== undefined,
+    { message: 'action edit requires a reference_image_path.' },
+  ),
 )
 type InputSchema = ReturnType<typeof inputSchema>
 type Input = z.infer<InputSchema>
@@ -621,7 +620,6 @@ function buildCodexImageGenerationBody(
     tools: [
       {
         type: 'image_generation',
-        quality: input.quality ?? 'auto',
         moderation: input.moderation ?? 'auto',
         output_format: outputFormat,
         action: input.action ?? (input.reference_image_path ? 'edit' : 'auto'),
