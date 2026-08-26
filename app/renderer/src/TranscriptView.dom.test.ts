@@ -85,6 +85,35 @@ function reads(count: number): NestedToolUseRow[] {
   return Array.from({ length: count }, (_unused, index) => readRow(index))
 }
 
+test('right-clicking a Read card path opens the shared file actions menu', async () => {
+  const tree = await harness.mount(
+    createElement(TranscriptRowsView, {
+      rows: [readRow(1)],
+      cwd: '/repo',
+    }),
+  )
+  const path = tree.container.querySelector<HTMLElement>(
+    '[title="Right-click for file actions"]',
+  )
+  expect(path).not.toBeNull()
+
+  const event = new globalThis.MouseEvent('contextmenu', {
+    bubbles: true,
+    cancelable: true,
+    clientX: 100,
+    clientY: 150,
+  })
+  await act(async () => {
+    path?.dispatchEvent(event)
+  })
+  await harness.nextFrame()
+
+  expect(event.defaultPrevented).toBe(true)
+  expect(
+    tree.container.querySelector('[role="menu"][aria-label="File actions for file1.ts"]'),
+  ).not.toBeNull()
+})
+
 /** A tool row that does NOT fold into a run, so a list of them stays N children. */
 function bashRow(index: number, content = `out of call ${index}`): NestedToolUseRow {
   return {

@@ -36,6 +36,7 @@ import {
   useRef,
   useState,
   type ComponentPropsWithoutRef,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from 'react'
 import Markdown from 'react-markdown'
@@ -1977,15 +1978,11 @@ function deriveTarget(
   switch (row.toolFamily) {
     case 'bash':
       return str('command') ?? row.toolName
-    case 'read': {
-      const filePath = str('file_path')
-      return filePath === null ? row.toolName : displayFilePath(filePath, cwd)
-    }
+    case 'read':
     case 'write':
-      return displayFilePath(str('file_path') ?? row.toolName, cwd)
     case 'edit': {
-      const filePath = str('file_path') ?? row.result?.diff?.filePath
-      return filePath === undefined ? row.toolName : displayFilePath(filePath, cwd)
+      const filePath = toolCardFilePath(row)
+      return filePath === null ? row.toolName : displayFilePath(filePath, cwd)
     }
     case 'grep':
       return str('pattern') ?? str('path') ?? row.toolName
@@ -2015,6 +2012,19 @@ function deriveTarget(
     default:
       return row.toolName
   }
+}
+
+function toolCardFilePath(row: ToolUseNestedRow): string | null {
+  if (
+    row.toolFamily !== 'read' &&
+    row.toolFamily !== 'write' &&
+    row.toolFamily !== 'edit'
+  ) {
+    return null
+  }
+  const filePath = row.input['file_path']
+  if (typeof filePath === 'string' && filePath.length > 0) return filePath
+  return row.toolFamily === 'edit' ? row.result?.diff?.filePath ?? null : null
 }
 
 function displayFilePath(filePath: string, cwd: string | null): string {
@@ -2081,6 +2091,7 @@ function ToolCardShell({
   sub,
   headerBadge,
   targetHover,
+  targetFilePath,
   collapsedExtra,
   defaultExpanded,
   expansionKey,
@@ -2098,6 +2109,7 @@ function ToolCardShell({
    * own (`bashCommandLabel.ts`).
    */
   targetHover?: string
+  targetFilePath?: { rawPath: string; sessionId: SessionId }
   collapsedExtra?: ReactNode
   defaultExpanded?: boolean
   /**
@@ -2117,6 +2129,7 @@ function ToolCardShell({
   const st = STATE_STYLE[status]
   const hasBody = children !== undefined && children !== null
   const { style } = useContext(ToolCardStyleContext)
+  const filePathContext = useContext(FilePathMenuContext)
   return (
     <div className={TOOL_CARD_SHELL_CLASS[style]}>
       <button
@@ -2133,7 +2146,25 @@ function ToolCardShell({
         >
           {fam.word}
         </span>
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-text-primary">
+        <span
+          className={`min-w-0 flex-1 truncate font-mono text-xs text-text-primary ${
+            targetFilePath ? 'cursor-context-menu hover:text-accent-soft' : ''
+          }`}
+          title={targetFilePath ? 'Right-click for file actions' : undefined}
+          onContextMenu={
+            targetFilePath
+              ? event => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  filePathContext?.openFilePathMenu(
+                    { type: 'pointer', x: event.clientX, y: event.clientY },
+                    targetFilePath.rawPath,
+                    targetFilePath.sessionId,
+                  )
+                }
+              : undefined
+          }
+        >
           {targetHover === undefined ? (
             target
           ) : (
@@ -2188,12 +2219,16 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
   // itself, for reasons this preference knows nothing about.
   const { expanded: toolsExpanded } = useContext(ToolsExpandedContext)
   const filePathContext = useContext(FilePathMenuContext)
+  const filePath = toolCardFilePath(row)
   const target = deriveTarget(row, filePathContext?.cwd ?? null)
+  const targetFilePath =
+    filePath === null ? undefined : { rawPath: filePath, sessionId: row.sessionId }
   if (row.status === 'cancelled') {
     return (
       <ToolCardShell
         family={row.toolFamily}
         target={target}
+        targetFilePath={targetFilePath}
         status={row.status}
         targetHover={deriveTargetHover(row)}
         expansionKey={row.toolUseId}
@@ -2231,6 +2266,7 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
       <ToolCardShell
         family={row.toolFamily}
         target={target}
+        targetFilePath={targetFilePath}
         status={row.status}
         sub={deriveSub(row)}
         headerBadge={headerBadge}
@@ -2612,6 +2648,7 @@ function ToolRunRowLabel({
   row: ToolRunMember
   hoistedPrefix: string
 }) {
+  const filePathContext = useContext(FilePathMenuContext)
   if (family !== 'read') {
     return (
       <span className="min-w-0 flex-1 truncate font-mono text-xs text-text-primary">
@@ -2624,8 +2661,21 @@ function ToolRunRowLabel({
     ? path.slice(hoistedPrefix.length)
     : path
   const range = readRangeLabel(row)
+  const onContextMenu = (event: ReactMouseEvent<HTMLSpanElement>): void => {
+    event.preventDefault()
+    event.stopPropagation()
+    filePathContext?.openFilePathMenu(
+      { type: 'pointer', x: event.clientX, y: event.clientY },
+      path,
+      row.sessionId,
+    )
+  }
   return (
-    <span className="flex min-w-0 flex-1 font-mono text-xs text-text-primary">
+    <span
+      className="flex min-w-0 flex-1 cursor-context-menu font-mono text-xs text-text-primary hover:text-accent-soft"
+      title="Right-click for file actions"
+      onContextMenu={onContextMenu}
+    >
       <span className="truncate text-text-ghost">{dirname(shown)}</span>
       <span className="shrink-0">{basename(shown) || shown}</span>
       {range === null ? null : (
