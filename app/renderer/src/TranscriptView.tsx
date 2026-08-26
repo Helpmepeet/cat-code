@@ -1828,16 +1828,14 @@ function createBlockquoteComponent(rawSource: string) {
 /**
  * Fenced code block — exact prototype ProseCode grammar (Messages.jsx:1795-1828):
  * a page-black (#09090b = app-bg) panel with an 8px radius + 0.06 white border,
- * a floating top-right copy control, and compact top padding so the pre clears
- * that control. Syntax
+ * and a floating top-right copy control that does not reserve vertical space.
+ * Syntax
  * tokens come from `rehype-highlight` (`hljs-*` <span>s colored by the fixed
  * Dracula stylesheet in theme.css). `highlighted` is the colored span tree for
  * DISPLAY; `code` is the raw source the copy button writes.
  *
- * ADAPTED (§0): the prototype's clipboard/check SVG icons are dropped for a
- * text-only "copy"/"copied" affordance — the app carries no icon library and
- * uses text-glyph chrome throughout. The 5-theme Settings picker is a separate
- * §5 ledger deferral (owner P4-18; needs the Settings code-theme sync seam).
+ * The 5-theme Settings picker is a separate §5 ledger deferral (owner P4-18;
+ * needs the Settings code-theme sync seam).
  */
 export function CodeBlock({
   code,
@@ -1897,7 +1895,7 @@ export function CodeBlock({
           <ActionCopyIcon />
         )}
       </button>
-      <pre className="overflow-x-auto px-3.5 pb-3.5 pt-8 font-mono text-[12.5px] leading-[1.65]">
+      <pre className="overflow-x-auto px-3.5 py-3.5 font-mono text-[12.5px] leading-[1.65]">
         <code className="hljs">{highlighted}</code>
       </pre>
     </div>

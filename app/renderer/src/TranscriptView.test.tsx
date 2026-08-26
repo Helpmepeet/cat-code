@@ -299,7 +299,7 @@ test('CC-59: a long fence stays one card with one copy control while its lines a
   const html = render(proseRow(fence, 'longfence'))
 
   // One card: one framed <pre> and one copy control.
-  expect(occurrences(html, 'pt-8')).toBe(1)
+  expect(occurrences(html, 'py-3.5')).toBe(1)
   expect(html).not.toContain('&lt;/&gt;')
   expect(occurrences(html, 'aria-label="Copy code"')).toBe(1)
   expect(html).toContain('hljs-keyword')
@@ -376,7 +376,7 @@ test('a recognized alert renders as rich Markdown with its fenced code card inta
   expect(html).toContain('First item')
   expect(html).toContain('hljs-keyword')
   expect(html).toContain('const')
-  expect(html).toContain('pt-8')
+  expect(html).toContain('py-3.5')
   expect(html).not.toContain('&lt;/&gt;')
   expect(html).toContain('aria-label="Copy code"')
   expect(html).not.toContain('aria-label="Copy quote"')
