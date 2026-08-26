@@ -540,14 +540,6 @@
       );
   }
 
-  /* P4-17 Welcome hero — the neon-cat pink glow (Welcome.jsx:9 drop-shadow),
-   * moved off the prototype's inline `style` onto a class (no-inline-style
-   * rule). Accent-derived so it tracks the theme, not a hardcoded pink. */
-  .welcome-cat-glow {
-    filter: drop-shadow(0 0 12px rgb(var(--accent-rgb) / 0.5))
-      drop-shadow(0 0 26px rgb(var(--accent-rgb) / 0.24));
-  }
-
   /* ── Model-prose typography ────────────────────────────────────────────────
    * One grammar for every body of model-authored Markdown: assistant answers,
    * long-form reasoning, thinking blocks. Written as CSS rather than the

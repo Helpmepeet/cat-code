@@ -22,8 +22,8 @@
  * gap). "Open folder…" is the only way to author a new cwd — via the native picker.
  *
  * Prototype visual grammar (Welcome.jsx) rebuilt on the P0-2 tokens + the shell
- * idiom (SessionsPage/AccountsPage); no inline style (the cat glow is a CSS class,
- * the data-driven bar width is the one blessed §0 width-only exception, per P4-5).
+ * idiom (SessionsPage/AccountsPage); no inline style (the data-driven bar width
+ * is the one blessed §0 width-only exception, per P4-5).
  *
  * §0 deviations (WELCOME-LAUNCHER §3 keep/cut + seam limits), flagged not dropped:
  *  - Branch chooser + "New worktree" start-in option: CUT/deferred (D5 Q2) — absent.
@@ -56,6 +56,7 @@ import {
   handleMenuRovingKeyDown,
   usePopover,
 } from './composerPopover.js'
+import sleepingCat from './assets/sleeping-cat.png'
 import { basename } from './pathUtils.js'
 import { resolveRecentOpenRoute } from './sessionsCatalogState.js'
 import type { RecentWorkspace } from './sessionsCatalogState.js'
@@ -132,7 +133,12 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
         {/* Hero: cat | wordmark + greeting + meta strip */}
         <div className="mb-12 grid grid-cols-1 items-center gap-6 md:grid-cols-[minmax(200px,300px)_1fr]">
           <div className="flex justify-center">
-            <NeonCat />
+            <img
+              src={sleepingCat}
+              alt=""
+              width={248}
+              height={211}
+            />
           </div>
 
           <div className="min-w-0">
@@ -672,46 +678,6 @@ function formatResetCompact(sec: number): string {
 }
 
 /* ── icons (stroke, currentColor — shell idiom) ─────────────────────────── */
-
-/**
- * The neon sleeping cat — the prototype's hand-drawn `NeonCatSVG` (Welcome.jsx:7),
- * re-expressed on theme tokens: stroke = `currentColor` under a `text-accent`
- * wrapper, glow via the `.welcome-cat-glow` class (no inline style). This IS the
- * asset (the prototype's PNG path has no analog in the packaged app), so it
- * doubles as the img-onError fallback element (ledger §29).
- */
-function NeonCat() {
-  return (
-    <span className="welcome-cat-glow flex text-accent" aria-hidden="true">
-      <svg width="248" height="211" viewBox="0 0 400 340" fill="none">
-        <g
-          stroke="currentColor"
-          strokeWidth="3"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          fill="none"
-        >
-          <path d="M70 250 C 30 230, 30 170, 80 145 C 130 120, 220 120, 270 155 C 310 180, 320 220, 290 250 C 270 270, 220 280, 170 280 C 120 280, 90 270, 70 250 Z" />
-          <path d="M75 250 C 50 220, 60 180, 100 175" />
-          <path d="M210 195 C 200 165, 215 140, 250 138 C 290 138, 310 158, 308 188 C 305 215, 280 230, 250 230 C 230 230, 215 215, 210 195 Z" />
-          <path d="M222 152 L 215 122 L 245 142" />
-          <path d="M285 142 L 300 118 L 305 150" />
-          <path d="M255 178 Q 262 184, 269 178" strokeWidth="2.5" />
-          <path d="M285 195 Q 288 198, 291 195" strokeWidth="2.5" />
-          <line x1="270" y1="200" x2="240" y2="198" strokeWidth="2" opacity="0.85" />
-          <line x1="270" y1="206" x2="240" y2="210" strokeWidth="2" opacity="0.85" />
-          <path d="M285 205 Q 280 212, 274 208" strokeWidth="2" />
-          <path d="M180 280 Q 195 260, 220 262" opacity="0.9" />
-          <g strokeWidth="2.8">
-            <path d="M210 70 L 235 70 L 210 95 L 235 95" />
-            <path d="M250 38 L 270 38 L 250 58 L 270 58" opacity="0.85" />
-            <path d="M280 14 L 295 14 L 280 30 L 295 30" opacity="0.7" />
-          </g>
-        </g>
-      </svg>
-    </span>
-  )
-}
 
 function FolderIcon() {
   return (

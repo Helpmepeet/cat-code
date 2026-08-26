@@ -75,8 +75,18 @@ test('renders the hero wordmark, greeting and meta strip labels', () => {
   expect(html).toContain('Start in')
   expect(html).toContain('Orchestrator')
   expect(html).toContain('Locally')
+  expect(html).toContain('<img')
+  expect(html).toContain('alt=""')
   // The picker trigger reflects the most-recent project name.
   expect(html).toContain('cat-code')
+})
+
+test('uses the packaged cat image rather than embedding the hero as SVG', () => {
+  const source = readFileSync(new URL('./WelcomeScreen.tsx', import.meta.url), 'utf8')
+
+  expect(source).toContain("import sleepingCat from './assets/sleeping-cat.png'")
+  expect(source).toContain('src={sleepingCat}')
+  expect(source).not.toContain('function NeonCat()')
 })
 
 test('the branch chooser + worktree option are CUT (absent)', () => {
