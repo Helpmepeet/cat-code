@@ -1033,6 +1033,13 @@ Rules:
 - Use .png unless the user asks for another supported format.
 - Do not overwrite existing files unless the user explicitly asks to replace them.
 
+Image model limits:
+- Images are generated on a ChatGPT subscription, which pins its own image model (currently gpt-image-2-codex).
+- That backend ignores the model parameter. Do not pass model, and after any failure do NOT retry with a different model value: the request sent is identical and fails the same way.
+- Transparent backgrounds are unavailable on this model. Do not pass background=transparent. If the user wants a cutout, generate the subject on a flat solid background, tell them the file is not transparent, and offer to key that color out afterwards.
+- Do not pass input_fidelity. This model always reads reference images at high fidelity and rejects the parameter.
+- These limits are the backend's, not the prompt's. Rewording the image prompt cannot work around them.
+
 Prompt rewriting:
 - Only when the user explicitly asks you to rewrite, improve, expand, or polish the image prompt, first Read this file for guidance on structuring GPT Image 2 prompts: ${guidePath}
 - Treat the guide as a guideline, not a strict template — adapt to the user's request.

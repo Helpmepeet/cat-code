@@ -1271,6 +1271,21 @@ describe('GenerateImageTool', () => {
     })
   })
 
+  test('prompt states the image model limits that always 400 on this backend', async () => {
+    const prompt = await GenerateImageTool.prompt({
+      getToolPermissionContext: async () => ({} as never),
+      tools: [],
+      agents: [],
+    })
+
+    // Both verified live 2026-08-26 against the ChatGPT backend:
+    // background=transparent and input_fidelity each return a 400, and the
+    // model parameter is overridden to gpt-image-2-codex.
+    expect(prompt).toContain('Do not pass background=transparent')
+    expect(prompt).toContain('Do not pass input_fidelity')
+    expect(prompt).toContain('do NOT retry with a different model value')
+  })
+
   test('prompt instructs callers not to rewrite image prompts by default', async () => {
     const prompt = await GenerateImageTool.prompt({
       getToolPermissionContext: async () => ({} as never),
