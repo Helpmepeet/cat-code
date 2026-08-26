@@ -269,28 +269,6 @@ describe('GenerateImageTool', () => {
     ).toBeUndefined()
   })
 
-  test('recognizes the Codex transparent-background refusal', () => {
-    expect(
-      _generateImageToolInternalsForTest.isTransparentBackgroundRefusal(
-        JSON.stringify({
-          error: {
-            message: 'Transparent background is not supported for this model.',
-            type: 'image_generation_user_error',
-            code: 'invalid_value',
-          },
-        }),
-      ),
-    ).toBe(true)
-    expect(
-      _generateImageToolInternalsForTest.isTransparentBackgroundRefusal(
-        JSON.stringify({ error: { message: 'Rate limit reached.' } }),
-      ),
-    ).toBe(false)
-    expect(
-      _generateImageToolInternalsForTest.isTransparentBackgroundRefusal('not json'),
-    ).toBe(false)
-  })
-
   test('defaults Codex action to auto without a reference image', () => {
     const body =
       _generateImageToolInternalsForTest.buildCodexImageGenerationBody(
@@ -1151,9 +1129,12 @@ describe('GenerateImageTool', () => {
       agents: [],
     })
 
-    expect(prompt).toContain('cannot produce transparent backgrounds')
     expect(prompt).toContain('There is no model to choose')
-    expect(prompt).toContain('no parameter that unlocks it')
+    // Verified live 2026-08-26 with one variable changed: the same prompt with
+    // background omitted returned RGBA with 879,347 fully transparent pixels,
+    // and with background=opaque returned RGB with none.
+    expect(prompt).toContain('Transparency comes from the prompt')
+    expect(prompt).toContain('You MUST omit background entirely')
   })
 
   test('prompt instructs callers not to rewrite image prompts by default', async () => {

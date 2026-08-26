@@ -102,7 +102,7 @@ const inputSchema = lazySchema(() =>
       .enum(['opaque', 'auto'])
       .optional()
       .describe(
-        'Background handling. Defaults to auto. The image model cannot produce transparent backgrounds.',
+        'Force a solid background. Omit this for a transparent image and ask for transparency in the prompt instead: opaque suppresses the alpha channel.',
       ),
     output_format: z
       .enum(outputFormats)
@@ -756,15 +756,6 @@ function summarizeCodexImageResponse(text: string): string {
   return parts.join(' ')
 }
 
-function isTransparentBackgroundRefusal(text: string): boolean {
-  try {
-    const parsed = JSON.parse(text) as { error?: { message?: string } }
-    return /transparent background/i.test(parsed.error?.message ?? '')
-  } catch {
-    return false
-  }
-}
-
 // The ChatGPT backend pins its own image model and overrides the tool spec's
 // `model` field, so the only truthful source for what rendered the image is the
 // resolved tool spec it echoes back on response.created.
@@ -875,11 +866,6 @@ async function generateWithCodexBackend(
     if (response.status === 401) {
       throw new CodexAccountAuthError(auth.accountId, 401)
     }
-    if (isTransparentBackgroundRefusal(responseText)) {
-      throw new Error(
-        'Codex image generation failed: a ChatGPT subscription pins its own image model, and that model cannot produce transparent backgrounds. It ignores the model parameter too, so retrying with a different image model sends the same request and fails the same way. Use background opaque or auto. For a cutout, generate the subject on a flat solid background and key that color out afterwards.',
-      )
-    }
     throw new Error(
       `Codex image generation failed (${response.status}): ${getOpenAIErrorMessage(response.status, responseText)}`,
     )
@@ -967,8 +953,10 @@ Rules:
 Image model limits:
 - Images are generated on a ChatGPT subscription, which pins its own image model. There is no model to choose.
 - That model also picks its own dimensions from the prompt, so there is no size to request. Describe the framing you want in the prompt instead.
-- That model cannot produce transparent backgrounds. When the user asks for one, generate the subject on a flat solid background, tell them the file is not transparent, and offer to key that color out afterwards.
-- This limit is the backend's, not the prompt's. Rewording the image prompt cannot work around it, and there is no parameter that unlocks it.
+
+Transparent backgrounds:
+- Transparency comes from the prompt, not from a parameter. When the user wants a transparent image, say so in the prompt text, for example "on a fully transparent background, no backdrop", and use .png or .webp.
+- You MUST omit background entirely for those requests. Passing background=opaque suppresses the alpha channel and returns a solid image.
 
 Prompt rewriting:
 - Only when the user explicitly asks you to rewrite, improve, expand, or polish the image prompt, first Read this file for guidance on structuring GPT Image 2 prompts: ${guidePath}
@@ -1221,5 +1209,4 @@ export const _generateImageToolInternalsForTest = {
   parseCodexImageGenerationResponse,
   readImageDimensions,
   extractCodexImageModel,
-  isTransparentBackgroundRefusal,
 }
