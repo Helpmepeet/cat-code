@@ -7,11 +7,10 @@
  * renders its own panel would drift from what a fenced block actually looks
  * like the moment either side is touched, and the picker it sits above would
  * then be advertising the wrong thing. So the sample goes through the exported
- * `CodeBlock` (`TranscriptView.tsx`), which brings the real frame, the floating
- * language label, and the copy control with it. The copy control is not in the
- * prototype's preview; it is here because it is part of the block being
- * previewed, and stripping it would be the lookalike this component exists to
- * avoid.
+ * `CodeBlock` (`TranscriptView.tsx`), which brings the real frame and copy
+ * control with it. The copy control is not in the prototype's preview; it is
+ * here because it is part of the block being previewed, and stripping it would
+ * be the lookalike this component exists to avoid.
  *
  * `CodeBlock` does not tokenize: its `highlighted` prop is the already-colored
  * span tree, which in the transcript comes from `rehype-highlight` running
@@ -49,8 +48,8 @@ const PREVIEW_MARKDOWN = ['```' + PREVIEW_CODE_LANG, PREVIEW_CODE, '```'].join(
  * The two-component bridge from react-markdown's `<pre><code>` to `CodeBlock`,
  * mirroring the transcript's own `pre`/`code` renderers: unwrap the `<pre>` so
  * the framed block owns the only one, and hand the `<code>` children over as the
- * colored tree. `code` and `lang` are the constants rather than a re-flatten of
- * the tree, because here the raw source is already in hand.
+ * colored tree. `code` is the constant rather than a re-flatten of the tree,
+ * because here the raw source is already in hand.
  */
 const PREVIEW_COMPONENTS = {
   pre: ({ children }: ComponentPropsWithoutRef<'pre'>) => <>{children}</>,
@@ -58,7 +57,6 @@ const PREVIEW_COMPONENTS = {
     <CodeBlock
       code={PREVIEW_CODE}
       highlighted={children}
-      lang={PREVIEW_CODE_LANG}
     />
   ),
 }

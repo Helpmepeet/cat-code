@@ -1304,7 +1304,6 @@ function AssistantProse({
           leaf.kind === 'code' ? (
             <MarkdownErrorBoundary fallback={leaf.codeSource}>
               <CodeBlock
-                lang={leaf.codeLanguage}
                 code={leaf.codeSource}
                 streaming={leaf.codeOpen}
                 highlighted={
@@ -1670,7 +1669,6 @@ function MarkdownCode({
   // DISPLAY; `text` is the raw source used by the copy button.
   return (
     <CodeBlock
-      lang={match?.[1] ?? ''}
       code={text.replace(/\n$/, '')}
       highlighted={children}
     />
@@ -1830,8 +1828,8 @@ function createBlockquoteComponent(rawSource: string) {
 /**
  * Fenced code block — exact prototype ProseCode grammar (Messages.jsx:1795-1828):
  * a page-black (#09090b = app-bg) panel with an 8px radius + 0.06 white border,
- * a FLOATING top-left accent `</>` + language label, a floating top-right copy
- * control, and 38px top padding so the pre clears the floating chrome. Syntax
+ * a floating top-right copy control, and compact top padding so the pre clears
+ * that control. Syntax
  * tokens come from `rehype-highlight` (`hljs-*` <span>s colored by the fixed
  * Dracula stylesheet in theme.css). `highlighted` is the colored span tree for
  * DISPLAY; `code` is the raw source the copy button writes.
@@ -1842,12 +1840,10 @@ function createBlockquoteComponent(rawSource: string) {
  * §5 ledger deferral (owner P4-18; needs the Settings code-theme sync seam).
  */
 export function CodeBlock({
-  lang,
   code,
   highlighted,
   streaming = false,
 }: {
-  lang: string
   code: string
   highlighted: ReactNode
   /** The fence is still arriving, so there is no finished block to copy. */
@@ -1869,10 +1865,6 @@ export function CodeBlock({
   }
   return (
     <div className="relative my-3 overflow-hidden rounded-lg border border-shell-seam bg-app-bg">
-      <span className="absolute left-3.5 top-2 z-[1] inline-flex items-center gap-1.5 font-mono text-[10px] font-semibold tracking-[0.06em] text-accent">
-        <span className="opacity-70">&lt;/&gt;</span>
-        {lang || 'code'}
-      </span>
       <button
         type="button"
         onClick={copy}
@@ -1887,7 +1879,7 @@ export function CodeBlock({
       >
         {streaming ? 'writing' : copied ? 'copied' : 'copy'}
       </button>
-      <pre className="overflow-x-auto px-3.5 pb-3.5 pt-[38px] font-mono text-[12.5px] leading-[1.65]">
+      <pre className="overflow-x-auto px-3.5 pb-3.5 pt-8 font-mono text-[12.5px] leading-[1.65]">
         <code className="hljs">{highlighted}</code>
       </pre>
     </div>

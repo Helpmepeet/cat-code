@@ -25,13 +25,11 @@ test('the sample renders through the transcript code block, not a copy of it', (
   expect(html).toContain('Obeys no one, especially not the scheduler')
   expect(html).toContain('deemed unworthy of gravity')
 
-  // CodeBlock's own chrome: the floating language label, the copy control, and
-  // the 38px top padding that clears them. A parallel component would have to
-  // reproduce all three.
-  expect(html).toContain('&lt;/&gt;')
-  expect(html).toContain('python')
+  // CodeBlock's own chrome: the copy control and compact top padding that
+  // clears it. A parallel component would have to reproduce both.
   expect(html).toContain('copy')
-  expect(html).toContain('pt-[38px]')
+  expect(html).toContain('pt-8')
+  expect(html).not.toContain('&lt;/&gt;')
 
   // react-markdown wraps a fence in <pre><code>; the bridge has to unwrap the
   // <pre> or the framed block nests one inside another.

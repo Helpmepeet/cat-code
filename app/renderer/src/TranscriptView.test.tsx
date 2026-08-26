@@ -264,7 +264,7 @@ test('P4-18c: a fenced code block renders framed + copyable with syntax highligh
   expect(html).toContain('hljs-keyword') // `const` colored as a keyword token
   expect(html).toContain('const') // code content still present, tokenized
   expect(html).toContain('copy') // per-block copy control
-  expect(html).toContain('ts') // floating language label
+  expect(html).not.toContain('&lt;/&gt;') // no language/type label
 })
 
 test('bounds a giant assistant response before react-markdown creates its full tree', () => {
@@ -298,9 +298,9 @@ test('CC-59: a long fence stays one card with one copy control while its lines a
   ].join('\n')
   const html = render(proseRow(fence, 'longfence'))
 
-  // One card: one framed <pre>, one floating language label, one copy control.
-  expect(occurrences(html, 'pt-[38px]')).toBe(1)
-  expect(occurrences(html, '&lt;/&gt;')).toBe(1)
+  // One card: one framed <pre> and one copy control.
+  expect(occurrences(html, 'pt-8')).toBe(1)
+  expect(html).not.toContain('&lt;/&gt;')
   expect(occurrences(html, '>copy</button>')).toBe(1)
   expect(html).toContain('hljs-keyword')
 
@@ -376,10 +376,9 @@ test('a recognized alert renders as rich Markdown with its fenced code card inta
   expect(html).toContain('First item')
   expect(html).toContain('hljs-keyword')
   expect(html).toContain('const')
-  expect(html).toContain('pt-[38px]')
-  expect(html).toContain('&lt;/&gt;')
+  expect(html).toContain('pt-8')
+  expect(html).not.toContain('&lt;/&gt;')
   expect(html).toContain('>copy</button>')
-  expect(html).toContain('>ts</span>')
   expect(html).not.toContain('aria-label="Copy quote"')
 })
 
@@ -3247,7 +3246,6 @@ test('P4-18c: an explicitly-languaged fenced block gets highlight.js token class
 
   expect(html).toContain('hljs') // highlight.js base class on the <code>
   expect(html).toContain('hljs-keyword') // `def`/`return` keyword tokens
-  expect(html).toContain('python') // floating language label
   expect(html).toContain('greet') // code content still present
 })
 
@@ -3259,15 +3257,14 @@ test('P4-18c: an unknown code language degrades to plain framed code, never thro
   // ignoreMissing → no highlight, so the body stays a contiguous, legible string.
   expect(html).toContain('some plain content')
   expect(html).toContain('copy') // still framed + copyable
-  expect(html).toContain('notalang') // language label passthrough
+  expect(html).not.toContain('&lt;/&gt;') // no language/type label
 })
 
 test('a code fence still streaming gets its card frame as soon as it opens', () => {
   const html = render(proseRow('Here:\n\n```python\ndef greet(name):', 'openfence'))
 
-  // The frame the settled fence will keep is already up: language chip, copy
-  // control, and the body inside the card rather than beneath it.
-  expect(html).toContain('python')
+  // The frame the settled fence will keep is already up: copy control and the
+  // body inside the card rather than beneath it.
   expect(html).toContain('def greet(name):')
   // The control is present but says there is nothing finished to copy yet.
   expect(html).toContain('writing')
