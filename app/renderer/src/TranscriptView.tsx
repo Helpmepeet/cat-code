@@ -2148,7 +2148,7 @@ function ToolCardShell({
         </span>
         <span
           className={`min-w-0 flex-1 truncate font-mono text-xs text-text-primary ${
-            targetFilePath ? 'cursor-context-menu hover:text-accent-soft' : ''
+            targetFilePath ? 'hover:text-accent-soft' : ''
           }`}
           title={targetFilePath ? 'Right-click for file actions' : undefined}
           onContextMenu={
@@ -2672,7 +2672,7 @@ function ToolRunRowLabel({
   }
   return (
     <span
-      className="flex min-w-0 flex-1 cursor-context-menu font-mono text-xs text-text-primary hover:text-accent-soft"
+      className="flex min-w-0 flex-1 font-mono text-xs text-text-primary hover:text-accent-soft"
       title="Right-click for file actions"
       onContextMenu={onContextMenu}
     >
