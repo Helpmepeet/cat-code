@@ -598,6 +598,7 @@ export function App() {
   const [layoutNotice, setLayoutNotice] = useState<string | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [activeSessionId, setActiveSessionId] = useState<SessionId | null>(null)
+  const newChatInFlightRef = useRef(false)
   // The window's face registries, one per SESSION, mounted at the shell so every
   // surface that draws a worker shares one. The transcript, the docked roster,
   // the Workers list and a relayed permission card can all show the same worker
@@ -1633,14 +1634,21 @@ export function App() {
    * the rail two identical buttons.
    */
   const newChat = useCallback(async () => {
-    // Only a REGISTRY row can name a workspace to the host (HC1), so this asks
-    // the merged catalog rather than trusting `activeSessionId` on its own.
-    const repId = activeSessionRow?.appSessionId ?? null
-    if (repId) {
-      await newSessionInWorkspace(repId)
-      return
+    if (newChatInFlightRef.current) return
+    newChatInFlightRef.current = true
+
+    try {
+      // Only a REGISTRY row can name a workspace to the host (HC1), so this asks
+      // the merged catalog rather than trusting `activeSessionId` on its own.
+      const repId = activeSessionRow?.appSessionId ?? null
+      if (repId) {
+        await newSessionInWorkspace(repId)
+        return
+      }
+      await newSession()
+    } finally {
+      newChatInFlightRef.current = false
     }
-    await newSession()
   }, [activeSessionRow, newSession, newSessionInWorkspace])
 
   useEffect(() => {

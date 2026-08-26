@@ -2876,6 +2876,25 @@ test('P4-55: initial roster reads and launcher retries share one truthful hydrat
   )
 })
 
+test('New chat ignores repeated clicks while its fresh session is being created', () => {
+  // The renderer suite is SSR-only, so it cannot mount App and dispatch clicks.
+  // This pins the re-entrancy guard at the caller that starts the host spawn.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const newChatStart = source.indexOf('  const newChat = useCallback(async () => {')
+  const newChatEnd = source.indexOf('\n\n  useEffect(() => {', newChatStart)
+  expect(newChatStart).toBeGreaterThan(-1)
+  expect(newChatEnd).toBeGreaterThan(newChatStart)
+  const newChatBody = source.slice(newChatStart, newChatEnd)
+
+  expect(newChatBody).toContain('if (newChatInFlightRef.current) return')
+  expect(newChatBody).toContain('newChatInFlightRef.current = true')
+  expect(newChatBody).toContain('await newSessionInWorkspace(repId)')
+  expect(newChatBody).toContain('await newSession()')
+  expect(newChatBody).toContain(
+    'finally {\n      newChatInFlightRef.current = false',
+  )
+})
+
 test('clean parking releases live transcript projection and raw log from renderer memory', () => {
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
   const hostSubStart = source.indexOf('const unsubscribe = bridge.subscribeHost(event => {')
