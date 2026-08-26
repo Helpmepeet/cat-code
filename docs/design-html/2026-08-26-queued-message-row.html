@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Queued message placement</title>
+<style>
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 100 1000;
+  src: url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'DM Mono';
+  font-style: normal;
+  font-weight: 400;
+  src: url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2');
+}
+
+:root {
+  --accent: #f472b6;
+  --accent-rgb: 244 114 182;
+  --app-bg: #09090b;
+  --text-primary: #f4f4f5;
+  --text-subtle: #98989f;
+  --text-faint: #838389;
+  --text-ghost: #75757b;
+}
+
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--app-bg);
+  color: var(--text-primary);
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- chrome ---------- */
+.x-bar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 14px 28px;
+  background: #09090b;
+  border-bottom: 1px solid #26262a;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #7d7d7d;
+}
+.x-switch { display: flex; gap: 6px; align-items: center; }
+.x-switch button {
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: #7d7d7d;
+  background: transparent;
+  border: 1px solid #34343a;
+  border-radius: 3px;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+.x-switch button[aria-pressed='true'] { color: #d9d9d9; border-color: #6a6a72; }
+.x-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #7d7d7d;
+  padding: 0 28px;
+  margin: 52px 0 0;
+  max-width: 1024px;
+}
+.x-rule { border: 0; border-top: 1px solid #26262a; margin: 8px 28px 20px; max-width: 1024px; }
+.x-foot { height: 90px; }
+
+/* ---------- specimen ---------- */
+.s-frame {
+  width: 964px;
+  height: 520px;
+  margin: 0 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 0 32px 32px;
+  box-sizing: border-box;
+  background: var(--app-bg);
+}
+.s-section { position: relative; display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; }
+.s-scroll { min-height: 0; flex: 1 1 auto; overflow: auto; }
+.s-scroll::-webkit-scrollbar { width: 8px; }
+.s-scroll::-webkit-scrollbar-thumb { background: rgb(255 255 255 / 0.12); border-radius: 4px; }
+.s-stack { display: flex; flex-direction: column; gap: 16px; }
+.s-prose {
+  font-family: 'DM Sans', sans-serif;
+  font-weight: 500;
+  font-size: 14px;
+  line-height: 1.625;
+  color: var(--text-primary);
+}
+.s-h { font-size: 18.9px; font-weight: 600; line-height: 1.3; }
+.s-userrow { display: flex; justify-content: flex-end; }
+.s-user {
+  max-width: 82%;
+  border-radius: 16px 16px 4px 16px;
+  border: 1px solid rgb(var(--accent-rgb) / 0.2);
+  background: rgb(var(--accent-rgb) / 0.1);
+  padding: 10px 16px;
+  font-size: 14px;
+  line-height: 1.625;
+  color: var(--text-primary);
+}
+
+/* the queued block: identical vocabulary in every variant */
+.s-queue { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.s-caption { padding-right: 4px; font-size: 11px; color: var(--text-ghost); }
+.s-bubble {
+  max-width: 82%;
+  border-radius: 16px 16px 4px 16px;
+  border: 1px dashed rgb(var(--accent-rgb) / 0.3);
+  background: rgb(var(--accent-rgb) / 0.035);
+  padding: 10px 16px;
+  font-size: 14px;
+  line-height: 1.625;
+  color: var(--text-subtle);
+  white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.s-takeback {
+  border-radius: 8px;
+  border: 1px solid rgb(255 255 255 / 0.08);
+  background: transparent;
+  padding: 4px 10px;
+  font-family: inherit;
+  font-size: 11.5px;
+  color: var(--text-subtle);
+  cursor: pointer;
+}
+.s-takeback:hover { border-color: rgb(255 255 255 / 0.14); color: var(--text-primary); }
+.s-takeback-bare {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-family: inherit;
+  font-size: 11.5px;
+  color: var(--text-subtle);
+  cursor: pointer;
+}
+.s-takeback-bare:hover { color: var(--text-primary); }
+
+/* A + B: floated, so the bubble needs its own ground */
+.s-float {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  padding-left: 24px;
+}
+.s-opaque {
+  background: linear-gradient(rgb(var(--accent-rgb) / 0.035), rgb(var(--accent-rgb) / 0.035)), var(--app-bg);
+}
+.s-fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 96px;
+  z-index: 2;
+  pointer-events: none;
+  background: linear-gradient(rgb(9 9 11 / 0), rgb(9 9 11 / 0.92) 62%, var(--app-bg));
+}
+
+/* D: single strip */
+.s-strip {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.s-strip .s-bubble { -webkit-line-clamp: 1; max-width: 70%; }
+
+/* activity + composer */
+.s-activity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 4px;
+  font-size: 12px;
+}
+.s-dots { display: flex; align-items: center; gap: 4px; }
+.s-dots i {
+  display: block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+.s-verb { font-weight: 600; color: var(--accent); }
+.s-clock {
+  font-family: 'DM Mono', ui-monospace, monospace;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-subtle);
+}
+.s-queued-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--text-ghost);
+}
+.s-composer { display: flex; flex-direction: column; }
+.s-inputrow { display: flex; align-items: flex-end; gap: 14px; padding: 0 4px; }
+.s-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 0;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-faint);
+}
+.s-send {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-ghost);
+}
+.s-focusrule { height: 2px; border-radius: 2px; background: rgb(255 255 255 / 0.08); }
+
+body.n1 .s-more { display: none !important; }
+</style>
+</head>
+<body class="n1">
+
+<div class="x-bar">
+  <span>Queued messages, placement</span>
+  <span class="x-switch">
+    <button type="button" data-n="1" aria-pressed="true">1 waiting</button>
+    <button type="button" data-n="3" aria-pressed="false">3 waiting</button>
+  </span>
+</div>
+
+<!-- CURRENT -->
+<p class="x-label"><span>Current</span><span data-height="cur"></span></p>
+<hr class="x-rule" />
+<div class="s-frame">
+  <div class="s-section">
+    <div class="s-scroll" data-scroll>
+      <div class="s-stack" data-body></div>
+    </div>
+  </div>
+  <div data-measure="cur">
+    <div class="s-queue">
+      <span class="s-caption">Queued</span>
+      <div class="s-bubble">Also add a test for the empty case.</div>
+      <div class="s-bubble s-more">And check whether the same thing happens on the other tab, because I saw it there yesterday as well.</div>
+      <div class="s-bubble s-more">Then commit it.</div>
+      <button class="s-takeback" type="button" data-takeback>Take back</button>
+    </div>
+  </div>
+  <div class="s-activity">
+    <span class="s-dots"><i></i><i></i><i></i></span>
+    <span class="s-verb">Responding</span>
+    <span class="s-clock">43s</span>
+  </div>
+  <div class="s-composer">
+    <div class="s-inputrow">
+      <div class="s-input">Ask Cat Code anything or describe a task…</div>
+      <div class="s-send"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg></div>
+    </div>
+    <div class="s-focusrule"></div>
+  </div>
+</div>
+
+<!-- A -->
+<p class="x-label"><span>A · Corner float</span><span data-height="a"></span></p>
+<hr class="x-rule" />
+<div class="s-frame">
+  <div class="s-section">
+    <div class="s-scroll" data-scroll>
+      <div class="s-stack" data-body></div>
+    </div>
+    <div class="s-float">
+      <div class="s-queue" data-measure="a">
+        <span class="s-caption s-opaque" style="padding: 0 4px; border-radius: 4px;">Queued</span>
+        <div class="s-bubble s-opaque">Also add a test for the empty case.</div>
+        <div class="s-bubble s-opaque s-more">And check whether the same thing happens on the other tab, because I saw it there yesterday as well.</div>
+        <div class="s-bubble s-opaque s-more">Then commit it.</div>
+        <button class="s-takeback s-opaque" type="button" data-takeback>Take back</button>
+      </div>
+    </div>
+  </div>
+  <div class="s-activity">
+    <span class="s-dots"><i></i><i></i><i></i></span>
+    <span class="s-verb">Responding</span>
+    <span class="s-clock">43s</span>
+  </div>
+  <div class="s-composer">
+    <div class="s-inputrow">
+      <div class="s-input">Ask Cat Code anything or describe a task…</div>
+      <div class="s-send"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg></div>
+    </div>
+    <div class="s-focusrule"></div>
+  </div>
+</div>
+
+<!-- B -->
+<p class="x-label"><span>B · Corner float over a fade</span><span data-height="b"></span></p>
+<hr class="x-rule" />
+<div class="s-frame">
+  <div class="s-section">
+    <div class="s-scroll" data-scroll>
+      <div class="s-stack" data-body></div>
+    </div>
+    <div class="s-fade"></div>
+    <div class="s-float">
+      <div class="s-queue" data-measure="b">
+        <span class="s-caption">Queued</span>
+        <div class="s-bubble">Also add a test for the empty case.</div>
+        <div class="s-bubble s-more">And check whether the same thing happens on the other tab, because I saw it there yesterday as well.</div>
+        <div class="s-bubble s-more">Then commit it.</div>
+        <button class="s-takeback" type="button" data-takeback>Take back</button>
+      </div>
+    </div>
+  </div>
+  <div class="s-activity">
+    <span class="s-dots"><i></i><i></i><i></i></span>
+    <span class="s-verb">Responding</span>
+    <span class="s-clock">43s</span>
+  </div>
+  <div class="s-composer">
+    <div class="s-inputrow">
+      <div class="s-input">Ask Cat Code anything or describe a task…</div>
+      <div class="s-send"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg></div>
+    </div>
+    <div class="s-focusrule"></div>
+  </div>
+</div>
+
+<!-- C -->
+<p class="x-label"><span>C · Scroller tail</span><span data-height="c"></span></p>
+<hr class="x-rule" />
+<div class="s-frame">
+  <div class="s-section">
+    <div class="s-scroll" data-scroll>
+      <div class="s-stack" data-body></div>
+      <div class="s-queue" style="margin-top: 16px;" data-measure="c">
+        <span class="s-caption">Queued</span>
+        <div class="s-bubble">Also add a test for the empty case.</div>
+        <div class="s-bubble s-more">And check whether the same thing happens on the other tab, because I saw it there yesterday as well.</div>
+        <div class="s-bubble s-more">Then commit it.</div>
+        <button class="s-takeback" type="button" data-takeback>Take back</button>
+      </div>
+    </div>
+  </div>
+  <div class="s-activity">
+    <span class="s-dots"><i></i><i></i><i></i></span>
+    <span class="s-verb">Responding</span>
+    <span class="s-clock">43s</span>
+  </div>
+  <div class="s-composer">
+    <div class="s-inputrow">
+      <div class="s-input">Ask Cat Code anything or describe a task…</div>
+      <div class="s-send"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg></div>
+    </div>
+    <div class="s-focusrule"></div>
+  </div>
+</div>
+
+<!-- D -->
+<p class="x-label"><span>D · One strip</span><span data-height="d"></span></p>
+<hr class="x-rule" />
+<div class="s-frame">
+  <div class="s-section">
+    <div class="s-scroll" data-scroll>
+      <div class="s-stack" data-body></div>
+    </div>
+  </div>
+  <div data-measure="d">
+    <div class="s-strip">
+      <span class="s-caption" data-strip-count>Queued</span>
+      <div class="s-bubble">Also add a test for the empty case.</div>
+      <button class="s-takeback" type="button" data-takeback>Take back</button>
+    </div>
+  </div>
+  <div class="s-activity">
+    <span class="s-dots"><i></i><i></i><i></i></span>
+    <span class="s-verb">Responding</span>
+    <span class="s-clock">43s</span>
+  </div>
+  <div class="s-composer">
+    <div class="s-inputrow">
+      <div class="s-input">Ask Cat Code anything or describe a task…</div>
+      <div class="s-send"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg></div>
+    </div>
+    <div class="s-focusrule"></div>
+  </div>
+</div>
+
+<!-- E -->
+<p class="x-label"><span>E · Activity row</span><span data-height="e"></span></p>
+<hr class="x-rule" />
+<div class="s-frame">
+  <div class="s-section">
+    <div class="s-scroll" data-scroll>
+      <div class="s-stack" data-body></div>
+    </div>
+  </div>
+  <div class="s-activity" data-measure="e">
+    <span class="s-dots"><i></i><i></i><i></i></span>
+    <span class="s-verb">Responding</span>
+    <span class="s-clock">43s</span>
+    <span class="s-queued-inline">
+      <span data-inline-count>1 queued</span>
+      <button class="s-takeback-bare" type="button" data-takeback>Take back</button>
+    </span>
+  </div>
+  <div class="s-composer">
+    <div class="s-inputrow">
+      <div class="s-input">Ask Cat Code anything or describe a task…</div>
+      <div class="s-send"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg></div>
+    </div>
+    <div class="s-focusrule"></div>
+  </div>
+</div>
+
+<div class="x-foot"></div>
+
+<script>
+(function () {
+  var PARAS = [
+    ['h', 'The Hidden Architecture of an Ordinary Day'],
+    ['p', 'Most people imagine that the important parts of life are the dramatic parts: the first day of school, the day someone falls in love, the day a child is born, the day a war begins. These moments stand out because they are easy to recognize.'],
+    ['p', 'But most of life does not happen in those moments.'],
+    ['p', 'Most of life happens in the hours that seem too ordinary to remember. It happens while water boils. It happens when someone folds a shirt and places it in a drawer. It happens during a quiet walk to a bus stop, in the few seconds before answering a message, in the habit of checking whether the door is locked.'],
+    ['p', 'Ordinary life is not empty space between important events. It is the material from which important events are made.'],
+    ['p', 'A person is shaped less by one heroic decision than by hundreds of tiny repetitions. The way they speak to tired people. The way they treat objects that belong to someone else. Whether they return after leaving. Whether they apologize without being forced.'],
+    ['p', 'Character is rarely announced. It accumulates quietly.'],
+    ['p', 'The same is true of societies. A civilization is often described through its monuments, leaders, inventions, wars, and laws. Those things matter, but they are the visible peaks of a much larger landscape. Beneath them is an enormous network of invisible cooperation.'],
+    ['p', 'Every morning, millions of people perform actions that make life possible for strangers they will never meet. Someone maintains a water system. Someone stocks a grocery shelf. Someone writes software that prevents a machine from failing.']
+  ];
+
+  document.querySelectorAll('[data-body]').forEach(function (body) {
+    PARAS.forEach(function (row) {
+      var el = document.createElement('div');
+      el.className = row[0] === 'h' ? 's-prose s-h' : 's-prose';
+      el.textContent = row[1];
+      body.appendChild(el);
+    });
+    var wrap = document.createElement('div');
+    wrap.className = 's-userrow';
+    var u = document.createElement('div');
+    u.className = 's-user';
+    u.textContent = 'Keep going.';
+    wrap.appendChild(u);
+    body.appendChild(wrap);
+  });
+
+  function bottom() {
+    document.querySelectorAll('[data-scroll]').forEach(function (el) {
+      el.scrollTop = el.scrollHeight;
+    });
+  }
+  function measure() {
+    document.querySelectorAll('[data-height]').forEach(function (out) {
+      var el = document.querySelector('[data-measure="' + out.dataset.height + '"]');
+      if (!el) return;
+      var free = !!(el.closest('.s-float') || el.closest('[data-scroll]') || el.classList.contains('s-activity'));
+      var h = free ? 0 : Math.round(el.getBoundingClientRect().height);
+      out.textContent = h === 0 ? 'band 0 px' : 'band ' + (h + 16) + ' px';
+    });
+  }
+
+  var buttons = document.querySelectorAll('.x-switch button');
+  function apply(n) {
+    document.body.classList.toggle('n1', n === 1);
+    document.body.classList.toggle('n3', n === 3);
+    buttons.forEach(function (b) {
+      b.setAttribute('aria-pressed', String(Number(b.dataset.n) === n));
+    });
+    document.querySelectorAll('[data-takeback]').forEach(function (el) {
+      el.textContent = n === 1 ? 'Take back' : 'Take back all';
+    });
+    document.querySelectorAll('[data-strip-count]').forEach(function (el) {
+      el.textContent = n === 1 ? 'Queued' : 'Queued, 3';
+    });
+    document.querySelectorAll('[data-inline-count]').forEach(function (el) {
+      el.textContent = n === 1 ? '1 queued' : '3 queued';
+    });
+    bottom();
+    measure();
+  }
+  buttons.forEach(function (b) {
+    b.addEventListener('click', function () { apply(Number(b.dataset.n)); });
+  });
+  apply(1);
+  window.addEventListener('resize', function () { bottom(); measure(); });
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { bottom(); measure(); });
+})();
+</script>
+</body>
+</html>

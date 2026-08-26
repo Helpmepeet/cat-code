@@ -1051,6 +1051,69 @@ test('D1a: several waiting messages are announced once, not once each', () => {
   expect(count(waiting) - count(quiet)).toBe(1)
 })
 
+test('D1a: waiting messages end the transcript document instead of docking above the composer', () => {
+  // The dock is a flex sibling of the transcript and the transcript is the only
+  // child that gives, so anything docked spends the transcript's height. Caption
+  // + row + control is ~110px of FIXED cost — the same whether the waiting
+  // message is a paragraph or one letter — and it is full-width dead space for
+  // as long as anything waits, which is what the operator rejected on sight
+  // (2026-08-26): "a black box that blocks the text even though the queued
+  // message uses a little space".
+  //
+  // Rendered at the end of the scroller it costs zero: the reader keeps the
+  // whole pane, and the block scrolls away with the conversation.
+  const base = idleSessionPaneProps()
+  const html = renderToStaticMarkup(
+    <SessionPane
+      {...base}
+      activeConnection={{ status: 'ready', inputEnabled: false }}
+      activeLog={{ ...base.activeLog, inputEnabled: false }}
+      queuedPrompts={[{ id: 'q-1', text: 'and check the logs too' }]}
+      onRecallQueuedPrompts={() => {}}
+    />,
+  )
+
+  // Both landmarks are unique, so the positions below mean what they say.
+  expect(html.match(/overflow-auto/g) ?? []).toHaveLength(1)
+  const dockPattern =
+    /mx-auto flex min-h-0 w-full max-w-\[var\(--transcript-width\)\] flex-col/g
+  expect(html.match(dockPattern) ?? []).toHaveLength(1)
+
+  const scroller = html.indexOf('overflow-auto')
+  const waiting = html.indexOf('and check the logs too')
+  const dock = html.search(dockPattern)
+  expect(scroller).toBeGreaterThan(-1)
+  expect(waiting).toBeGreaterThan(scroller)
+  expect(waiting).toBeLessThan(dock)
+})
+
+test('D1a: the waiting block follows the rows, and the pane re-pins when it grows', () => {
+  // Two wiring facts SSR cannot show, both of which fail silently.
+  //
+  // `readTranscriptRowGeometry` reads the scroller's FIRST element child as the
+  // row list, so this block placed ahead of `TranscriptView` would make the
+  // scroll memory anchor on it instead of on a message.
+  //
+  // And the pane's bottom lock only answers measured-body corrections, so the
+  // one thing that re-pins a parked reader to the end is `contentSignature`.
+  // Queue a message with that signature blind to the queue and the new row
+  // lands below the fold.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+
+  const transcriptView = source.indexOf('<TranscriptView')
+  const waitingBlock = source.indexOf('{queuedPrompts.length > 0 ? (')
+  expect(transcriptView).toBeGreaterThan(-1)
+  expect(waitingBlock).toBeGreaterThan(transcriptView)
+
+  // An index, not `toContain`: a failed substring match on a file this size
+  // prints the whole file and buries the result.
+  expect(
+    source.indexOf(
+      'const contentSignature = `${renderedRowCount}:${partialCount}:${queuedPrompts.length}`',
+    ),
+  ).toBeGreaterThan(-1)
+})
+
 test('the waiting-message row is written once and used at both call sites', () => {
   // The cold-spawn park row and the D1a staged row were the same markup typed
   // twice: same label, same classes, same image fallback, free to drift apart.

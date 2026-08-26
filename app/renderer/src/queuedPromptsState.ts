@@ -5,9 +5,11 @@
  *
  * Deliberately OUTSIDE `transcriptProjector.ts`: a message that has not reached
  * the model is not transcript history, and a transcript row is never rewritten
- * after the fact. These rows live above the composer and disappear when the
- * message is delivered, at which point the engine's own user event puts it in
- * the transcript.
+ * after the fact. These rows render at the END of the transcript's scroller
+ * (`App.tsx`, D1a) and disappear when the message is delivered, at which point
+ * the engine's own user event puts a real row in their place. Rendering next to
+ * the rows is not the same as being one: nothing here ever reaches the
+ * projector, and the pane's scroll memory never anchors on them.
  *
  * The sidecar publishes the WHOLE list on every change, so each snapshot
  * replaces the previous one; an empty list is the signal that nothing is

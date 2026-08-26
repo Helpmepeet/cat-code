@@ -320,6 +320,7 @@ import {
 } from './tasksState.js'
 import {
   createSessionsCatalogState,
+  filterInteractiveSessionDescriptors,
   reduceSessionsCatalogState,
   resolveRecentOpenRoute,
   resolveSessionOpenRoute,
@@ -815,9 +816,10 @@ export function App() {
     undefined,
     createSlashCatalogState,
   )
-  // D1a — what each session has waiting for its running response. Rendered
-  // above the composer, never in the transcript: until the engine takes one of
-  // these the model has not seen it.
+  // D1a — what each session has waiting for its running response. Rendered at
+  // the end of the transcript document but never a transcript ROW: until the
+  // engine takes one of these the model has not seen it, so it stays out of
+  // `transcriptProjector` and out of history.
   const [queuedPrompts, dispatchQueuedPrompts] = useReducer(
     reduceQueuedPromptsStateBatched,
     undefined,
@@ -1392,6 +1394,15 @@ export function App() {
   // tab label resolves its title against it too (`withResolvedTitle`), so the tab,
   // the sidebar and the Sessions page all apply one title-precedence rule.
   const sessionCatalogSnapshot = selectSessionsCatalog(sessionsCatalog)
+  const shellDescriptors = useMemo(() => selectShellDescriptors(shell), [shell])
+  const visibleShellDescriptors = useMemo(
+    () =>
+      filterInteractiveSessionDescriptors(
+        shellDescriptors,
+        sessionCatalogSnapshot,
+      ),
+    [shellDescriptors, sessionCatalogSnapshot],
+  )
 
   // Build one tab model per pane session, fusing the host descriptor with the
   // per-session connection view + pending-permission count (the background
@@ -1399,7 +1410,10 @@ export function App() {
   // background tab's status/badge is correct without it being active.
   const tabs: TabModel[] = useMemo(
     () =>
-      selectPaneSessions(shell).map(rawDescriptor => {
+      filterInteractiveSessionDescriptors(
+        selectPaneSessions(shell),
+        sessionCatalogSnapshot,
+      ).map(rawDescriptor => {
         // A terminal `/rename` writes only the engine transcript, so the registry
         // title the descriptor carries can be stale — resolve it the same way the
         // merged sidebar rows do (`sessionsCatalogState.ts` `pickTitle`).
@@ -1451,19 +1465,12 @@ export function App() {
     [tabs],
   )
 
-  // The Sidebar's own projection of the SAME roster (live ∪ restorable), in
-  // stable arrival order (same order the TabBar uses — see sidebarState.ts) —
-  // not a second data source, and not a poll loop: it reads the
-  // HostEvent-driven `shell` state the TabBar reads (App seeded it once from
-  // listSessions, then keeps it live off subscribeHost).
-  const shellDescriptors = useMemo(() => selectShellDescriptors(shell), [shell])
-
   // P4-6a — the merged Sessions catalog: the host registry rows (openable) ∪
   // the sidecar engine-history snapshot (rich metadata), via the shared
   // selector (reused by P4-17 Welcome recents, D5).
   const sessionCatalogRows = useMemo(
-    () => selectMergedSessionRows(shellDescriptors, sessionCatalogSnapshot),
-    [shellDescriptors, sessionCatalogSnapshot],
+    () => selectMergedSessionRows(visibleShellDescriptors, sessionCatalogSnapshot),
+    [visibleShellDescriptors, sessionCatalogSnapshot],
   )
 
   // The active session's merged catalog row — feeds the tab ⋯ actions menu and
@@ -1494,7 +1501,7 @@ export function App() {
   // account table reads the first available pool snapshot (the pool is global).
   const welcomeTrustByCwd = useMemo(() => {
     const map = new Map<string, boolean>()
-    for (const descriptor of shellDescriptors) {
+    for (const descriptor of visibleShellDescriptors) {
       const snap = selectWorkspaceTrustSnapshot(
         workspaceTrust,
         descriptor.appSessionId,
@@ -1502,7 +1509,7 @@ export function App() {
       if (snap) map.set(descriptor.cwd, snap.trusted)
     }
     return map
-  }, [shellDescriptors, workspaceTrust])
+  }, [visibleShellDescriptors, workspaceTrust])
   const welcomeRecents = useMemo(
     () => selectRecentWorkspaces(sessionCatalogRows, welcomeTrustByCwd),
     [sessionCatalogRows, welcomeTrustByCwd],
@@ -1531,10 +1538,10 @@ export function App() {
   // disk write below so the operator's actual layout can persist instead.
   const restorableIds = useMemo(
     () =>
-      shellDescriptors
+      visibleShellDescriptors
         .filter(descriptor => descriptor.restorable)
         .map(descriptor => descriptor.appSessionId),
-    [shellDescriptors],
+    [visibleShellDescriptors],
   )
 
   // PL-A: roster hydration unlocks a store-only preload after the first paint.
@@ -3680,7 +3687,7 @@ export function App() {
   // (and its closures) on those while the palette is closed is pure waste.
   const paletteItems = paletteOpen
     ? buildPaletteItems({
-        rows: shellDescriptors,
+        rows: visibleShellDescriptors,
         activeSessionId,
         hasPanels: workspacePanels.length > 0,
         slashCatalog: selectSlashCatalog(slashCatalog, activeSessionId) ?? [],
@@ -4980,7 +4987,11 @@ export function SessionPane({
   const renderedRowCount = activeSessionId
     ? (transcript.sessions[activeSessionId]?.rows.length ?? 0)
     : 0
-  const contentSignature = `${renderedRowCount}:${partialCount}`
+  // Waiting messages are part of this document too (they render at the end of
+  // the scroller, see the D1a block below), and they are the one part of it the
+  // row count cannot see. Without them in the signature, queuing a message while
+  // parked at the end grows the content and leaves the new row below the fold.
+  const contentSignature = `${renderedRowCount}:${partialCount}:${queuedPrompts.length}`
   // P4-24: context-window fullness for the composer donut. The prototype's
   // ContextChip is always on (`Surfaces.jsx:471-473`), so `selectContextUsage`
   // always returns — real result-frame usage once a turn provides it, a 0% gauge
@@ -5348,6 +5359,77 @@ export function SessionPane({
             onSaveDiagnostics={() => void getBridge().saveDiagnosticsBundle()}
             onMessageAction={onMessageAction}
           />
+
+          {/* D1a — a message sent during a response waits here until the engine
+            * takes it, exactly as the terminal shows it above its own composer.
+            * It is deliberately not transcript STATE: the model has not received
+            * it, so it is not in `transcriptProjector` and it never becomes a
+            * row. What it is is the last thing in the scrolling document, so it
+            * sits under the conversation while the reader is at the end and
+            * scrolls away with everything else when they read back.
+            *
+            * The dock is where this used to live, and the dock is the one place
+            * it cannot go. The dock is a flex sibling of the transcript and the
+            * transcript is the only child that gives, so a docked block spends
+            * the transcript's height: caption, row and control are ~110px of
+            * fixed cost whether the waiting message is a paragraph or one
+            * letter, and that height is full-width dead space above the
+            * composer for as long as anything is waiting. Rejected on sight
+            * (2026-08-26). Nothing here may reintroduce a docked band.
+            *
+            * AFTER `TranscriptView`, never before it: `readTranscriptRowGeometry`
+            * reads the scroller's FIRST element child as the row list, so this
+            * block ahead of the rows would make the scroll memory anchor on it.
+            * Its own column repeats `TranscriptView`'s measure so the waiting
+            * bubble's right edge lands on the delivered ones.
+            *
+            * The pane re-pins to the end when this list changes
+            * (`contentSignature`): the bottom lock only answers measured-body
+            * corrections, so growth here would otherwise leave the newest
+            * waiting message below the fold.
+            *
+            * One caption over the stack, inside the live region so the
+            * announcement still names what these rows are. It is not repeated
+            * per row: three waiting messages used to print the word `Queued`
+            * three times and truncate the text that actually distinguishes
+            * them.
+            *
+            * D1b — and the way back out. The control sits BELOW the rows rather
+            * than on one of them because it takes back everything waiting, the
+            * way the terminal's `↑` pops every queued command at once; a per-row
+            * control would promise a choice the verb deliberately does not
+            * offer. It is a real button, so it is reachable by tab; it is no
+            * longer the last stop before the composer, which is the price of
+            * leaving the dock, and `↑` on an empty draft is the fast path
+            * either way (`shouldRecallWaitingMessages`).
+            *
+            * ONE live region around the ROWS, not one per row: three waiting
+            * messages are one change to announce, and a region each made a
+            * screen reader read three. The button sits OUTSIDE it, because a
+            * live region re-announces everything inside it on every change, so
+            * wrapping the control made "Take back all" part of the announcement
+            * each time a message arrived or left; it does not need announcing as
+            * news.
+            */}
+          {queuedPrompts.length > 0 ? (
+            <div className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col items-end gap-1.5 px-8 pt-2.5">
+              <div className="flex w-full flex-col items-end gap-1.5" role="status">
+                <span className="pr-1 text-[11px] text-text-ghost">Queued</span>
+                {queuedPrompts.map(queued => (
+                  <QueuedRow key={queued.id} text={queued.text} />
+                ))}
+              </div>
+              {onRecallQueuedPrompts ? (
+                <button
+                  className="rounded-lg border border-white/[0.08] px-2.5 py-1 text-[11.5px] text-text-subtle transition-colors hover:border-white/[0.14] hover:text-text-primary"
+                  onClick={onRecallQueuedPrompts}
+                  type="button"
+                >
+                  {queuedPrompts.length === 1 ? 'Take back' : 'Take back all'}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
         </div>
         {!atBottom ? (
           <button
@@ -5502,51 +5584,6 @@ export function SessionPane({
           <span className="pr-1 text-[11.5px] text-text-ghost">
             Sends when the session is ready.
           </span>
-        </div>
-      ) : null}
-
-      {/* D1a — a message sent during a response waits here until the engine
-       * takes it, exactly as the terminal shows it above its own composer. It
-       * is deliberately not in the transcript: the model has not received it.
-       * Same row shape as the cold-spawn row above, minus the trailing promise,
-       * which is about a session that is not ready yet.
-       *
-       * One caption over the stack, inside the live region so the announcement
-       * still names what these rows are. It is not repeated per row: three
-       * waiting messages used to print the word `Queued` three times and
-       * truncate the text that actually distinguishes them.
-       *
-       * D1b — and the way back out. The control sits BELOW the rows rather than
-       * on one of them because it takes back everything waiting, the way the
-       * terminal's `↑` pops every queued command at once; a per-row control
-       * would promise a choice the verb deliberately does not offer. It is a
-       * real button, so it is in the tab order immediately before the composer.
-       *
-       * ONE live region around the ROWS, not one per row: three waiting
-       * messages are one change to announce, and a region each made a screen
-       * reader read three. The button sits OUTSIDE it, because a live region
-       * re-announces everything inside it on every change, so wrapping the
-       * control made "Take back all" part of the announcement each time a
-       * message arrived or left. It is a real button in the tab order right
-       * before the composer; it does not need announcing as news.
-       */}
-      {queuedPrompts.length > 0 ? (
-        <div className="flex flex-col items-end gap-1.5">
-          <div className="flex w-full flex-col items-end gap-1.5" role="status">
-            <span className="pr-1 text-[11px] text-text-ghost">Queued</span>
-            {queuedPrompts.map(queued => (
-              <QueuedRow key={queued.id} text={queued.text} />
-            ))}
-          </div>
-          {onRecallQueuedPrompts ? (
-            <button
-              className="rounded-lg border border-white/[0.08] px-2.5 py-1 text-[11.5px] text-text-subtle transition-colors hover:border-white/[0.14] hover:text-text-primary"
-              onClick={onRecallQueuedPrompts}
-              type="button"
-            >
-              {queuedPrompts.length === 1 ? 'Take back' : 'Take back all'}
-            </button>
-          ) : null}
         </div>
       ) : null}
 
@@ -5812,9 +5849,11 @@ export function SessionPane({
 }
 
 /**
- * One waiting message, above the composer. Two surfaces show one: the CC-16
- * cold-spawn park and the D1a staged rows. They were the same markup typed
- * twice and free to drift apart.
+ * One waiting message. Two surfaces show one: the CC-16 cold-spawn park, which
+ * is docked above the composer, and the D1a staged rows, which end the
+ * transcript's own scroller. They were the same markup typed twice and free to
+ * drift apart. The row itself is placement-agnostic, which is what let D1a move
+ * without touching it.
  *
  * It is `UserBubble` (`TranscriptView.tsx`) unfilled: same geometry, same
  * bottom-right notch, same 82% measure, with a dashed accent hairline instead

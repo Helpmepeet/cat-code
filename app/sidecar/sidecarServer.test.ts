@@ -1382,9 +1382,10 @@ test('a mid-turn submit is queued INTO the running turn, not refused', async () 
   // be reached by a Sleep round.
   expect(queued[0]?.priority).toBe('next')
 
-  // D1a — the user sees it staged above the composer, not in the transcript:
-  // the model has not received it yet. The staged row is pinned by its own
-  // tests below.
+  // D1a — the user sees it staged, not delivered: the model has not received it
+  // yet, so no user event is minted for it here. Where the renderer draws the
+  // staged row is its own decision (`App.tsx`); this side only owes the queue
+  // snapshot. The staged row is pinned by its own tests below.
   expect(userMessageTexts(received)).toEqual(['first'])
 
   release?.()

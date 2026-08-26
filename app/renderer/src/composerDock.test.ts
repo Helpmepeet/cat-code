@@ -21,16 +21,36 @@ import { expect, test } from 'bun:test'
  */
 const SOURCE = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
 
-/** The dock wrapper: the centred column that hosts the composer and its satellites. */
-const DOCK = /<div className="(mx-auto [^"]*max-w-\[var\(--transcript-width\)\][^"]*)">/
+/**
+ * The dock wrapper: the centred column that hosts the composer and its
+ * satellites.
+ *
+ * Found by walking BACK from the composer, not by taking the first match in the
+ * file. The transcript's own column carries the same measure — that is the
+ * point of `--transcript-width` — so the waiting-message block at the end of
+ * the scroller (D1a) matches this shape too and appears first. Keying on
+ * `min-h-0` would separate them, but that is one of the things this file
+ * asserts, and a locator built from the assertion cannot fail.
+ */
+const DOCK = /<div className="(mx-auto [^"]*max-w-\[var\(--transcript-width\)\][^"]*)">/g
 
 /** The scrolling panel region inside the dock. */
 const PANELS = '<div className="min-h-0 overflow-y-auto">'
 
+function findDock(): { at: number; classes: string } {
+  const composerAt = SOURCE.indexOf('aria-label="Composer"')
+  expect(composerAt).toBeGreaterThan(-1)
+  let found: { at: number; classes: string } | null = null
+  for (const match of SOURCE.matchAll(DOCK)) {
+    if (match.index === undefined || match.index > composerAt) break
+    found = { at: match.index, classes: match[1]! }
+  }
+  expect(found).not.toBeNull()
+  return found!
+}
+
 test('the dock yields instead of clipping, and the composer never gives', () => {
-  const dock = SOURCE.match(DOCK)
-  expect(dock).not.toBeNull()
-  const dockClasses = dock![1]!
+  const dockClasses = findDock().classes
 
   // `shrink-0` here is the bug: it makes the dock the one thing in an
   // overflow-hidden column that cannot yield.
@@ -48,7 +68,7 @@ test('the dock yields instead of clipping, and the composer never gives', () => 
 })
 
 test('every docked surface that can grow without limit sits inside the scroller', () => {
-  const dockAt = SOURCE.search(DOCK)
+  const dockAt = findDock().at
   const panelsAt = SOURCE.indexOf(PANELS, dockAt)
   const activityAt = SOURCE.indexOf('<ActivityIndicator', dockAt)
   const composerAt = SOURCE.indexOf('aria-label="Composer"', dockAt)
@@ -58,20 +78,25 @@ test('every docked surface that can grow without limit sits inside the scroller'
 
   // The surfaces with no ceiling of their own, or a ceiling that a stack of
   // them defeats. A new one belongs in this list AND in the region.
-  for (const surface of [
-    '<AskQuestionFlow',
-    '<PermissionQueue',
-    'queuedPrompts.map',
-  ]) {
+  //
+  // Waiting messages are NOT on this list any more: they are not docked at all.
+  // The dock spends the transcript's height, so a block that exists only while
+  // a turn runs was buying a permanent full-width band with the reader's pane;
+  // it renders at the end of the scrolling transcript instead (App.tsx D1a,
+  // pinned by `App.test.tsx`).
+  let last = panelsAt
+  for (const surface of ['<AskQuestionFlow', '<PermissionQueue']) {
     const at = SOURCE.indexOf(surface, dockAt)
     expect(at).toBeGreaterThan(panelsAt)
     expect(at).toBeLessThan(activityAt)
+    last = Math.max(last, at)
   }
 
   // The region closes before the activity row: those last two are deliberately
   // outside it, being one fixed row each and the row that hugs the input.
   // Dock children sit at a six-space indent, so this is the region's own close.
-  const tail = SOURCE.slice(SOURCE.lastIndexOf('queuedPrompts.map'), activityAt)
-  expect(tail).toContain('\n      </div>\n')
+  const closeAt = SOURCE.indexOf('\n      </div>\n', last)
+  expect(closeAt).toBeGreaterThan(last)
+  expect(closeAt).toBeLessThan(activityAt)
   expect(activityAt).toBeLessThan(composerAt)
 })
