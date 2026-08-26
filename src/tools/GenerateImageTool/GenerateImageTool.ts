@@ -65,7 +65,9 @@ const inputSchema = lazySchema(() =>
     model: z
       .enum(['gpt-image-2', 'gpt-image-1.5', 'gpt-image-1', 'gpt-image-1-mini'])
       .optional()
-      .describe('GPT image model to use. Defaults to gpt-image-2.'),
+      .describe(
+        'GPT image model to use, on a direct OpenAI API key only. Defaults to gpt-image-2. A ChatGPT account pins its own image model and ignores this.',
+      ),
     size: z
       .enum(['1024x1024', '1536x1024', '1024x1536', 'auto'])
       .optional()
@@ -602,7 +604,7 @@ async function loadReferenceImage(input: Input): Promise<ReferenceImage | undefi
 function buildCodexImageGenerationBody(
   input: Input,
   outputFormat: OutputFormat,
-  model: string,
+  responseModel: string,
   referenceImage?: ReferenceImage,
 ) {
   const content = [
@@ -621,7 +623,7 @@ function buildCodexImageGenerationBody(
   ]
 
   return {
-    model,
+    model: responseModel,
     instructions: CODEX_IMAGE_GENERATION_INSTRUCTIONS,
     store: false,
     stream: true,
@@ -771,6 +773,43 @@ function summarizeCodexImageResponse(text: string): string {
   return parts.join(' ')
 }
 
+function isTransparentBackgroundRefusal(text: string): boolean {
+  try {
+    const parsed = JSON.parse(text) as { error?: { message?: string } }
+    return /transparent background/i.test(parsed.error?.message ?? '')
+  } catch {
+    return false
+  }
+}
+
+// The ChatGPT backend pins its own image model and overrides the tool spec's
+// `model` field, so the only truthful source for what rendered the image is the
+// resolved tool spec it echoes back on response.created.
+function extractCodexImageModel(text: string): string | undefined {
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed.startsWith('data: ')) continue
+    const data = trimmed.slice(6)
+    if (!data || data === '[DONE]') continue
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(data)
+    } catch {
+      continue
+    }
+    const response = (parsed as { response?: unknown })?.response
+    const tools = (response as { tools?: unknown })?.tools
+    if (!Array.isArray(tools)) continue
+    for (const tool of tools) {
+      if (!tool || typeof tool !== 'object') continue
+      const record = tool as Record<string, unknown>
+      if (record.type !== 'image_generation') continue
+      if (typeof record.model === 'string' && record.model) return record.model
+    }
+  }
+  return undefined
+}
+
 function parseCodexImageGenerationResponse(text: string): string {
   let image: CollectedImage = {}
 
@@ -901,6 +940,11 @@ async function generateWithCodexBackend(
     if (response.status === 401) {
       throw new CodexAccountAuthError(auth.accountId, 401)
     }
+    if (isTransparentBackgroundRefusal(responseText)) {
+      throw new Error(
+        'Codex image generation failed: a ChatGPT account pins its own image model, and that model cannot produce transparent backgrounds. It also ignores the model parameter, so retrying with a different image model will send the same request and fail the same way. Use background opaque or auto, or set OPENAI_API_KEY and CAT_CODE_IMAGE_BACKEND=openai-api to reach a backend where the model choice applies.',
+      )
+    }
     throw new Error(
       `Codex image generation failed (${response.status}): ${getOpenAIErrorMessage(response.status, responseText)}`,
     )
@@ -908,7 +952,7 @@ async function generateWithCodexBackend(
 
   return {
     b64: parseCodexImageGenerationResponse(responseText),
-    model: responseModel,
+    model: extractCodexImageModel(responseText) ?? 'unknown',
   }
 }
 
@@ -1251,4 +1295,6 @@ export const _generateImageToolInternalsForTest = {
   buildIterm2InlineImage,
   buildCodexImageGenerationBody,
   parseCodexImageGenerationResponse,
+  extractCodexImageModel,
+  isTransparentBackgroundRefusal,
 }

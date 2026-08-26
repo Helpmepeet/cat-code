@@ -331,6 +331,76 @@ describe('GenerateImageTool', () => {
     expect(tool.input_fidelity).toBe('high')
   })
 
+  test('omits the image model from the Codex tool spec, which the backend overrides anyway', () => {
+    const body =
+      _generateImageToolInternalsForTest.buildCodexImageGenerationBody(
+        {
+          prompt: 'a watercolor cat',
+          output_path: join(tempDir!, 'generated.png'),
+          model: 'gpt-image-1.5',
+          background: 'transparent',
+        },
+        'png',
+        'gpt-5.6-terra',
+      )
+    const tool = body.tools[0] as Record<string, unknown>
+
+    // Verified live 2026-08-26: the ChatGPT backend echoes back
+    // model gpt-image-2-codex no matter what the tool spec asks for.
+    expect(tool).not.toHaveProperty('model')
+    expect(tool.background).toBe('transparent')
+    expect(body.model).toBe('gpt-5.6-terra')
+  })
+
+  test('reports the image model the Codex backend actually resolved', () => {
+    const sse = [
+      'event: response.created',
+      `data: ${JSON.stringify({
+        type: 'response.created',
+        response: {
+          tools: [
+            { type: 'image_generation', background: 'opaque', model: 'gpt-image-2-codex' },
+          ],
+        },
+      })}`,
+      '',
+    ].join('\n')
+
+    expect(
+      _generateImageToolInternalsForTest.extractCodexImageModel(sse),
+    ).toBe('gpt-image-2-codex')
+  })
+
+  test('does not invent an image model when the Codex response omits one', () => {
+    expect(
+      _generateImageToolInternalsForTest.extractCodexImageModel(
+        'data: {"type":"response.created","response":{}}',
+      ),
+    ).toBeUndefined()
+  })
+
+  test('recognizes the Codex transparent-background refusal', () => {
+    expect(
+      _generateImageToolInternalsForTest.isTransparentBackgroundRefusal(
+        JSON.stringify({
+          error: {
+            message: 'Transparent background is not supported for this model.',
+            type: 'image_generation_user_error',
+            code: 'invalid_value',
+          },
+        }),
+      ),
+    ).toBe(true)
+    expect(
+      _generateImageToolInternalsForTest.isTransparentBackgroundRefusal(
+        JSON.stringify({ error: { message: 'Rate limit reached.' } }),
+      ),
+    ).toBe(false)
+    expect(
+      _generateImageToolInternalsForTest.isTransparentBackgroundRefusal('not json'),
+    ).toBe(false)
+  })
+
   test('defaults Codex action to auto without a reference image', () => {
     const body =
       _generateImageToolInternalsForTest.buildCodexImageGenerationBody(
