@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
+import { PNG } from 'pngjs'
 import { dirname, join } from 'path'
 import type { ToolPermissionContext, ToolUseContext } from '../../Tool.js'
 import {
@@ -26,8 +27,6 @@ import {
 } from './GenerateImageTool.js'
 
 const originalFetch = globalThis.fetch
-const originalOpenAIKey = process.env.OPENAI_API_KEY
-const originalImageBackend = process.env.CAT_CODE_IMAGE_BACKEND
 let tempDir: string | undefined
 
 function buildPoolAccount(accountId: string): PoolAccount {
@@ -77,22 +76,10 @@ beforeEach(async () => {
   resetCodexLeaseManagerForTest()
   resetCodexAccountPoolForTest()
   clearCodexOAuthTokensForTest()
-  process.env.OPENAI_API_KEY = 'test-openai-key'
-  process.env.CAT_CODE_IMAGE_BACKEND = 'openai-api'
 })
 
 afterEach(async () => {
   globalThis.fetch = originalFetch
-  if (originalOpenAIKey === undefined) {
-    delete process.env.OPENAI_API_KEY
-  } else {
-    process.env.OPENAI_API_KEY = originalOpenAIKey
-  }
-  if (originalImageBackend === undefined) {
-    delete process.env.CAT_CODE_IMAGE_BACKEND
-  } else {
-    process.env.CAT_CODE_IMAGE_BACKEND = originalImageBackend
-  }
   if (tempDir) {
     await rm(tempDir, { recursive: true, force: true })
     tempDir = undefined
@@ -103,99 +90,6 @@ afterEach(async () => {
 })
 
 describe('GenerateImageTool', () => {
-  test('uses OPENAI_API_KEY when openai-api backend is forced even if Codex pool accounts exist', async () => {
-    seedCodexAccountPoolForTest({
-      activeAccountId: 'main-account',
-      accounts: [
-        buildPoolAccount('main-account'),
-        buildPoolAccount('backup-account'),
-      ],
-    })
-
-    const imageBytes = Buffer.from('generated image')
-    let requestUrl: string | undefined
-    let requestBody: Record<string, unknown> | undefined
-    let authorization: string | null = null
-    let accountId: string | null = null
-
-    globalThis.fetch = (async (input, init) => {
-      requestUrl = String(input)
-      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>
-      const headers = new Headers(init?.headers)
-      authorization = headers.get('authorization')
-      accountId = headers.get('chatgpt-account-id')
-      return new Response(
-        JSON.stringify({
-          data: [{ b64_json: imageBytes.toString('base64') }],
-        }),
-        { status: 200 },
-      )
-    }) as typeof fetch
-
-    const outputPath = join(tempDir!, 'generated.png')
-    const result = await GenerateImageTool.call(
-      {
-        prompt: 'a watercolor cat',
-        output_path: outputPath,
-      },
-      {
-        abortController: new AbortController(),
-      } as ToolUseContext,
-    )
-
-    expect(requestUrl).toBe('https://api.openai.com/v1/images/generations')
-    expect(authorization).toBe('Bearer test-openai-key')
-    expect(accountId).toBeNull()
-    expect(requestBody).toMatchObject({
-      model: 'gpt-image-2',
-      prompt: 'a watercolor cat',
-      size: '1024x1024',
-      output_format: 'png',
-    })
-    expect(await readFile(outputPath)).toEqual(imageBytes)
-    expect(result.data.filePath).toBe(outputPath)
-    expect(result.data.outputFormat).toBe('png')
-  })
-
-  test('uses OPENAI_API_KEY fallback when no image backend is forced', async () => {
-    delete process.env.CAT_CODE_IMAGE_BACKEND
-
-    const imageBytes = Buffer.from('generated image')
-    let requestUrl: string | undefined
-    let authorization: string | null = null
-    let accountId: string | null = null
-
-    globalThis.fetch = (async (input, init) => {
-      requestUrl = String(input)
-      const headers = new Headers(init?.headers)
-      authorization = headers.get('authorization')
-      accountId = headers.get('chatgpt-account-id')
-      return new Response(
-        JSON.stringify({
-          data: [{ b64_json: imageBytes.toString('base64') }],
-        }),
-        { status: 200 },
-      )
-    }) as typeof fetch
-
-    const outputPath = join(tempDir!, 'generated.png')
-    const result = await GenerateImageTool.call(
-      {
-        prompt: 'a watercolor cat',
-        output_path: outputPath,
-      },
-      {
-        abortController: new AbortController(),
-      } as ToolUseContext,
-    )
-
-    expect(requestUrl).toBe('https://api.openai.com/v1/images/generations')
-    expect(authorization).toBe('Bearer test-openai-key')
-    expect(accountId).toBeNull()
-    expect(await readFile(outputPath)).toEqual(imageBytes)
-    expect(result.data.filePath).toBe(outputPath)
-  })
-
   test('rejects an existing output path unless overwrite is true', async () => {
     const outputPath = join(tempDir!, 'existing.png')
     await writeFile(outputPath, 'already here')
@@ -289,7 +183,6 @@ describe('GenerateImageTool', () => {
       tools: [
         {
           type: 'image_generation',
-          size: '1024x1024',
           quality: 'auto',
           output_format: 'png',
         },
@@ -305,7 +198,6 @@ describe('GenerateImageTool', () => {
       output_format: 'webp',
       output_compression: 80,
       action: 'generate',
-      input_fidelity: 'high',
     })
 
     expect(result.success).toBe(true)
@@ -319,7 +211,6 @@ describe('GenerateImageTool', () => {
           output_path: join(tempDir!, 'generated.webp'),
           output_compression: 80,
           action: 'generate',
-          input_fidelity: 'high',
         },
         'webp',
         'gpt-5.6-terra',
@@ -328,7 +219,6 @@ describe('GenerateImageTool', () => {
 
     expect(tool.output_compression).toBe(80)
     expect(tool.action).toBe('generate')
-    expect(tool.input_fidelity).toBe('high')
   })
 
   test('omits the image model from the Codex tool spec, which the backend overrides anyway', () => {
@@ -477,8 +367,6 @@ describe('GenerateImageTool', () => {
   })
 
   test('uses the subagent lease account for Codex image requests', async () => {
-    delete process.env.CAT_CODE_IMAGE_BACKEND
-    delete process.env.OPENAI_API_KEY
     seedCodexAccountPoolForTest({
       activeAccountId: 'main-account',
       accounts: [
@@ -536,8 +424,7 @@ describe('GenerateImageTool', () => {
     expect(result.data.filePath).toBe(outputPath)
   })
 
-  test('uses Codex auth when both Codex pool and OPENAI_API_KEY are available without forced backend', async () => {
-    delete process.env.CAT_CODE_IMAGE_BACKEND
+  test('uses Codex auth from the account pool', async () => {
     seedCodexAccountPoolForTest({
       activeAccountId: 'main-account',
       accounts: [
@@ -592,8 +479,6 @@ describe('GenerateImageTool', () => {
   })
 
   test('fails over the main lease after a Codex image endpoint 429', async () => {
-    delete process.env.CAT_CODE_IMAGE_BACKEND
-    delete process.env.OPENAI_API_KEY
     seedCodexAccountPoolForTest({
       activeAccountId: 'primary-account',
       accounts: [
@@ -655,8 +540,6 @@ describe('GenerateImageTool', () => {
   })
 
   test('fails over only the subagent lease after a Codex image endpoint 429', async () => {
-    delete process.env.CAT_CODE_IMAGE_BACKEND
-    delete process.env.OPENAI_API_KEY
     seedCodexAccountPoolForTest({
       activeAccountId: 'main-account',
       accounts: [
@@ -723,8 +606,6 @@ describe('GenerateImageTool', () => {
   })
 
   test('leases an account for a subagent that arrives without one, so a 429 does not rotate the pool', async () => {
-    delete process.env.CAT_CODE_IMAGE_BACKEND
-    delete process.env.OPENAI_API_KEY
     seedCodexAccountPoolForTest({
       activeAccountId: 'main-account',
       accounts: [
@@ -791,8 +672,6 @@ describe('GenerateImageTool', () => {
   })
 
   test('fails over the main lease after a Codex image endpoint 401 without a refresh token', async () => {
-    delete process.env.CAT_CODE_IMAGE_BACKEND
-    delete process.env.OPENAI_API_KEY
     seedCodexAccountPoolForTest({
       activeAccountId: 'primary-account',
       accounts: [
@@ -854,8 +733,6 @@ describe('GenerateImageTool', () => {
   })
 
   test('retries a Codex image request with the refreshed account token after a 401', async () => {
-    delete process.env.CAT_CODE_IMAGE_BACKEND
-    delete process.env.OPENAI_API_KEY
 
     const accountId = 'ca11ab1e-0000-4000-8000-00000000f102'
     const oldAccessToken = mintAccessJwt(accountId, 0)
@@ -961,42 +838,7 @@ describe('GenerateImageTool', () => {
     expect(await readFile(outputPath)).toEqual(generatedBytes)
   })
 
-  test('keeps API-key image endpoint 429 isolated from the Codex pool', async () => {
-    seedCodexAccountPoolForTest({
-      activeAccountId: 'primary-account',
-      accounts: [
-        buildPoolAccount('primary-account'),
-        buildPoolAccount('backup-account'),
-      ],
-    })
-    let requests = 0
-    globalThis.fetch = (async () => {
-      requests += 1
-      return new Response('rate limited', { status: 429 })
-    }) as typeof fetch
-
-    await expect(
-      GenerateImageTool.call(
-        {
-          prompt: 'do not retry API-key requests',
-          output_path: join(tempDir!, 'generated.png'),
-        },
-        {
-          abortController: new AbortController(),
-        } as ToolUseContext,
-      ),
-    ).rejects.toThrow('OpenAI image generation failed (429)')
-
-    expect(requests).toBe(1)
-    expect(getPoolStatus().accounts.map(account => account.status)).toEqual([
-      'healthy',
-      'healthy',
-    ])
-  })
-
   test('refreshes a near-expiry sole vault-backed Codex account through the vault for image auth', async () => {
-    delete process.env.CAT_CODE_IMAGE_BACKEND
-    delete process.env.OPENAI_API_KEY
 
     const accountId = 'ca11ab1e-0000-4000-8000-00000000f101'
     const oldAccessToken = mintAccessJwt(accountId, 0)
@@ -1129,8 +971,6 @@ describe('GenerateImageTool', () => {
   })
 
   test('uses the main-thread lease account for Codex image requests', async () => {
-    delete process.env.CAT_CODE_IMAGE_BACKEND
-    delete process.env.OPENAI_API_KEY
     seedCodexAccountPoolForTest({
       activeAccountId: 'main-account',
       accounts: [
@@ -1188,8 +1028,6 @@ describe('GenerateImageTool', () => {
   })
 
   test('sends reference image files through the Codex backend', async () => {
-    delete process.env.CAT_CODE_IMAGE_BACKEND
-    delete process.env.OPENAI_API_KEY
     seedCodexAccountPoolForTest({
       activeAccountId: 'main-account',
       accounts: [
@@ -1271,19 +1109,51 @@ describe('GenerateImageTool', () => {
     })
   })
 
-  test('prompt states the image model limits that always 400 on this backend', async () => {
+  test('reads back the dimensions the backend actually returned', () => {
+    // Verified live 2026-08-26: requesting 1024x1024 and 3840x2160 with the
+    // same prompt both returned 1254x1254, so size is not a control.
+    const png = PNG.sync.write(new PNG({ width: 1254, height: 1254 }))
+    expect(_generateImageToolInternalsForTest.readImageDimensions(png)).toBe(
+      '1254x1254',
+    )
+    expect(
+      _generateImageToolInternalsForTest.readImageDimensions(
+        Buffer.from('not an image at all'),
+      ),
+    ).toBeUndefined()
+  })
+
+  test('rejects the parameters the image backend always refuses', () => {
+    // Both verified live 2026-08-26: background=transparent returns
+    // "Transparent background is not supported for this model", and
+    // input_fidelity returns "The model 'gpt-image-2-codex' does not
+    // support the 'input_fidelity' parameter".
+    for (const rejected of [
+      { background: 'transparent' },
+      { input_fidelity: 'high' },
+      { model: 'gpt-image-1.5' },
+      { size: '1024x1024' },
+    ]) {
+      expect(
+        GenerateImageTool.inputSchema.safeParse({
+          prompt: 'a watercolor cat',
+          output_path: join(tempDir!, 'generated.png'),
+          ...rejected,
+        }).success,
+      ).toBe(false)
+    }
+  })
+
+  test('prompt states the image model limits', async () => {
     const prompt = await GenerateImageTool.prompt({
       getToolPermissionContext: async () => ({} as never),
       tools: [],
       agents: [],
     })
 
-    // Both verified live 2026-08-26 against the ChatGPT backend:
-    // background=transparent and input_fidelity each return a 400, and the
-    // model parameter is overridden to gpt-image-2-codex.
-    expect(prompt).toContain('Do not pass background=transparent')
-    expect(prompt).toContain('Do not pass input_fidelity')
-    expect(prompt).toContain('do NOT retry with a different model value')
+    expect(prompt).toContain('cannot produce transparent backgrounds')
+    expect(prompt).toContain('There is no model to choose')
+    expect(prompt).toContain('no parameter that unlocks it')
   })
 
   test('prompt instructs callers not to rewrite image prompts by default', async () => {

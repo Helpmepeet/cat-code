@@ -30,9 +30,7 @@ import { getDisplayPath } from '../../utils/file.js'
 import { formatFileSize } from '../../utils/format.js'
 
 const GENERATE_IMAGE_TOOL_NAME = 'GenerateImage'
-const OPENAI_IMAGES_GENERATIONS_URL = 'https://api.openai.com/v1/images/generations'
 const CODEX_IMAGE_GENERATIONS_URL = 'https://chatgpt.com/backend-api/codex/responses'
-const DEFAULT_IMAGE_MODEL = 'gpt-image-2'
 const DEFAULT_CODEX_RESPONSE_MODEL = 'gpt-5.6-terra'
 // Image generation is an auxiliary tool call, so keep retries bounded locally
 // instead of inheriting the main conversation's retry budget.
@@ -43,6 +41,40 @@ const TERMINAL_PREVIEW_WIDTH_COLUMNS = 48
 const TERMINAL_PREVIEW_HEIGHT_ROWS = 16
 const DEFAULT_GENERATED_IMAGE_DIR = 'generated-images'
 const ITERM2_FILE_PART_CHARS = 1_000_000
+
+// gpt-image-2-codex chooses its own dimensions and ignores any size asked for,
+// so the only truthful size is the one in the bytes it returned.
+function readImageDimensions(bytes: Buffer): string | undefined {
+  if (bytes.length > 24 && bytes.toString('ascii', 1, 4) === 'PNG') {
+    return `${bytes.readUInt32BE(16)}x${bytes.readUInt32BE(20)}`
+  }
+  if (bytes.length > 12 && bytes.toString('ascii', 8, 12) === 'WEBP') {
+    const chunk = bytes.toString('ascii', 12, 16)
+    if (chunk === 'VP8X' && bytes.length > 30) {
+      const width = 1 + bytes.readUIntLE(24, 3)
+      const height = 1 + bytes.readUIntLE(27, 3)
+      return `${width}x${height}`
+    }
+    if (chunk === 'VP8 ' && bytes.length > 30) {
+      return `${bytes.readUInt16LE(26) & 0x3fff}x${bytes.readUInt16LE(28) & 0x3fff}`
+    }
+    return undefined
+  }
+  if (bytes.length > 4 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    let offset = 2
+    while (offset + 9 < bytes.length) {
+      if (bytes[offset] !== 0xff) return undefined
+      const marker = bytes[offset + 1]!
+      const length = bytes.readUInt16BE(offset + 2)
+      // SOF0 through SOF15, skipping the non-frame DHT/JPG/DAC markers.
+      if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+        return `${bytes.readUInt16BE(offset + 7)}x${bytes.readUInt16BE(offset + 5)}`
+      }
+      offset += 2 + length
+    }
+  }
+  return undefined
+}
 
 const outputFormats = ['png', 'jpeg', 'webp'] as const
 type OutputFormat = (typeof outputFormats)[number]
@@ -62,24 +94,16 @@ const inputSchema = lazySchema(() =>
       .describe(
         'Optional local image path to use as a visual reference for the generated image. Supported formats: .png, .jpg/.jpeg, and .webp.',
       ),
-    model: z
-      .enum(['gpt-image-2', 'gpt-image-1.5', 'gpt-image-1', 'gpt-image-1-mini'])
-      .optional()
-      .describe(
-        'GPT image model to use. Defaults to gpt-image-2. A ChatGPT subscription pins its own image model and ignores this.',
-      ),
-    size: z
-      .enum(['1024x1024', '1536x1024', '1024x1536', 'auto'])
-      .optional()
-      .describe('Generated image size. Defaults to 1024x1024.'),
     quality: z
       .enum(['low', 'medium', 'high', 'auto'])
       .optional()
       .describe('Generated image quality. Defaults to auto.'),
     background: z
-      .enum(['transparent', 'opaque', 'auto'])
+      .enum(['opaque', 'auto'])
       .optional()
-      .describe('Background handling for GPT image models. Defaults to auto.'),
+      .describe(
+        'Background handling. Defaults to auto. The image model cannot produce transparent backgrounds.',
+      ),
     output_format: z
       .enum(outputFormats)
       .optional()
@@ -99,12 +123,6 @@ const inputSchema = lazySchema(() =>
       .describe(
         'Controls whether the model generates a new image or edits an existing one. Defaults to auto, or edit when reference_image_path is set.',
       ),
-    input_fidelity: z
-      .enum(['high', 'low'])
-      .optional()
-      .describe(
-        'Reference image fidelity to use when a reference_image_path is provided.',
-      ),
     moderation: z
       .enum(['low', 'auto'])
       .optional()
@@ -122,7 +140,7 @@ const outputSchema = lazySchema(() =>
   z.object({
     filePath: z.string().describe('Path where the generated image was saved'),
     model: z.string().describe('OpenAI image model used'),
-    size: z.string().describe('Requested image size'),
+    size: z.string().describe('Pixel dimensions of the image that was written'),
     outputFormat: z.enum(outputFormats).describe('Image format written'),
     bytes: z.number().describe('Number of bytes written'),
     revisedPrompt: z.string().optional().describe('Revised prompt returned by the API'),
@@ -132,19 +150,9 @@ const outputSchema = lazySchema(() =>
 type OutputSchema = ReturnType<typeof outputSchema>
 type Output = z.infer<OutputSchema>
 
-type ImageGenerationResponse = {
-  data?: Array<{
-    b64_json?: string
-    revised_prompt?: string
-    url?: string
-  }>
-  usage?: unknown
-}
-
 type ImageAuth = {
   token: string
   accountId?: string
-  backend: 'openai-api' | 'codex'
 }
 
 type ReferenceImage = {
@@ -530,13 +538,6 @@ function registerImageRequestCodexLease(agentId: string | undefined): void {
 }
 
 async function getImageAuth(context: ToolUseContext): Promise<ImageAuth> {
-  if (process.env.CAT_CODE_IMAGE_BACKEND === 'openai-api') {
-    const apiKey = process.env.OPENAI_API_KEY
-    if (apiKey) {
-      return { token: apiKey, backend: 'openai-api' }
-    }
-  }
-
   registerImageRequestCodexLease(context.agentId)
 
   // Image requests must resolve Codex auth at request time so subagents use
@@ -549,26 +550,10 @@ async function getImageAuth(context: ToolUseContext): Promise<ImageAuth> {
     return {
       token: codexTokens.accessToken,
       accountId: codexTokens.accountId,
-      backend: 'codex',
     }
   }
 
-  const apiKey = process.env.OPENAI_API_KEY
-  if (apiKey) {
-    return { token: apiKey, backend: 'openai-api' }
-  }
-
-  throw new Error(
-    'No OpenAI credentials found. Set OPENAI_API_KEY or log in to a Codex/OpenAI account.',
-  )
-}
-
-function parseImageGenerationResponse(text: string): ImageGenerationResponse {
-  try {
-    return JSON.parse(text) as ImageGenerationResponse
-  } catch {
-    throw new Error('OpenAI image generation returned invalid JSON.')
-  }
+  throw new Error('No ChatGPT account found. Log in to a Codex/ChatGPT account.')
 }
 
 function getOpenAIErrorMessage(status: number, text: string): string {
@@ -636,7 +621,6 @@ function buildCodexImageGenerationBody(
     tools: [
       {
         type: 'image_generation',
-        size: input.size ?? '1024x1024',
         quality: input.quality ?? 'auto',
         moderation: input.moderation ?? 'auto',
         output_format: outputFormat,
@@ -644,7 +628,6 @@ function buildCodexImageGenerationBody(
         ...(input.output_compression !== undefined
           ? { output_compression: input.output_compression }
           : {}),
-        ...(input.input_fidelity ? { input_fidelity: input.input_fidelity } : {}),
         ...(input.background ? { background: input.background } : {}),
       },
     ],
@@ -847,54 +830,6 @@ function parseCodexImageGenerationResponse(text: string): string {
   return b64
 }
 
-async function generateWithOpenAIImagesAPI(
-  input: Input,
-  outputFormat: OutputFormat,
-  signal: AbortSignal,
-  auth: ImageAuth,
-): Promise<{ b64: string; usage?: unknown; revisedPrompt?: string; model: string }> {
-  const model = input.model ?? DEFAULT_IMAGE_MODEL
-  const body: Record<string, unknown> = {
-    model,
-    prompt: input.prompt,
-    size: input.size ?? '1024x1024',
-    quality: input.quality ?? 'auto',
-    background: input.background ?? 'auto',
-    output_format: outputFormat,
-    moderation: input.moderation ?? 'auto',
-  }
-
-  const response = await fetch(OPENAI_IMAGES_GENERATIONS_URL, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${auth.token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-    signal,
-  })
-  const responseText = await response.text()
-
-  if (!response.ok) {
-    throw new Error(
-      `OpenAI image generation failed (${response.status}): ${getOpenAIErrorMessage(response.status, responseText)}`,
-    )
-  }
-
-  const parsed = parseImageGenerationResponse(responseText)
-  const image = parsed.data?.[0]
-  if (!image?.b64_json) {
-    throw new Error('OpenAI image generation did not return base64 image data.')
-  }
-
-  return {
-    b64: image.b64_json,
-    model,
-    ...(image.revised_prompt ? { revisedPrompt: image.revised_prompt } : {}),
-    ...(parsed.usage ? { usage: parsed.usage } : {}),
-  }
-}
-
 async function generateWithCodexBackend(
   input: Input,
   outputFormat: OutputFormat,
@@ -964,18 +899,14 @@ async function generateWithCodexRetries(
 ): Promise<{ b64: string; model: string }> {
   const generator = withRetry(
     () => getImageAuth(context),
-    async auth => {
-      if (auth.backend !== 'codex') {
-        throw new Error('Codex image generation requires a ChatGPT account.')
-      }
-      return generateWithCodexBackend(
+    async auth =>
+      generateWithCodexBackend(
         input,
         outputFormat,
         auth,
         responseModel,
         context.abortController.signal,
-      )
-    },
+      ),
     {
       maxRetries: MAX_CODEX_IMAGE_RETRIES,
       model: responseModel,
@@ -1034,11 +965,10 @@ Rules:
 - Do not overwrite existing files unless the user explicitly asks to replace them.
 
 Image model limits:
-- Images are generated on a ChatGPT subscription, which pins its own image model (currently gpt-image-2-codex).
-- That backend ignores the model parameter. Do not pass model, and after any failure do NOT retry with a different model value: the request sent is identical and fails the same way.
-- Transparent backgrounds are unavailable on this model. Do not pass background=transparent. If the user wants a cutout, generate the subject on a flat solid background, tell them the file is not transparent, and offer to key that color out afterwards.
-- Do not pass input_fidelity. This model always reads reference images at high fidelity and rejects the parameter.
-- These limits are the backend's, not the prompt's. Rewording the image prompt cannot work around them.
+- Images are generated on a ChatGPT subscription, which pins its own image model. There is no model to choose.
+- That model also picks its own dimensions from the prompt, so there is no size to request. Describe the framing you want in the prompt instead.
+- That model cannot produce transparent backgrounds. When the user asks for one, generate the subject on a flat solid background, tell them the file is not transparent, and offer to key that color out afterwards.
+- This limit is the backend's, not the prompt's. Rewording the image prompt cannot work around it, and there is no parameter that unlocks it.
 
 Prompt rewriting:
 - Only when the user explicitly asks you to rewrite, improve, expand, or polish the image prompt, first Read this file for guidance on structuring GPT Image 2 prompts: ${guidePath}
@@ -1232,25 +1162,12 @@ Prompt rewriting:
       throw new Error('output_path must end in .png, .jpg, .jpeg, or .webp.')
     }
 
-    const size = input.size ?? '1024x1024'
-    const auth = await getImageAuth(context)
-    if (auth.backend === 'openai-api' && input.reference_image_path) {
-      throw new Error('Reference images require a Codex/ChatGPT account.')
-    }
-    const generation =
-      auth.backend === 'openai-api'
-        ? await generateWithOpenAIImagesAPI(
-            input,
-            outputFormat,
-            context.abortController.signal,
-            auth,
-          )
-        : await generateWithCodexRetries(
-            input,
-            outputFormat,
-            context,
-            context.options?.mainLoopModel ?? DEFAULT_CODEX_RESPONSE_MODEL,
-          )
+    const generation = await generateWithCodexRetries(
+      input,
+      outputFormat,
+      context,
+      context.options?.mainLoopModel ?? DEFAULT_CODEX_RESPONSE_MODEL,
+    )
 
     const bytes = Buffer.from(generation.b64, 'base64')
     if (bytes.length === 0) {
@@ -1264,7 +1181,7 @@ Prompt rewriting:
       data: {
         filePath,
         model: generation.model,
-        size,
+        size: readImageDimensions(bytes) ?? 'unknown',
         outputFormat,
         bytes: bytes.length,
         ...(generation.revisedPrompt ? { revisedPrompt: generation.revisedPrompt } : {}),
@@ -1302,6 +1219,7 @@ export const _generateImageToolInternalsForTest = {
   buildIterm2InlineImage,
   buildCodexImageGenerationBody,
   parseCodexImageGenerationResponse,
+  readImageDimensions,
   extractCodexImageModel,
   isTransparentBackgroundRefusal,
 }
