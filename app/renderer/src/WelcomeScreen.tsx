@@ -57,10 +57,33 @@ import {
   usePopover,
 } from './composerPopover.js'
 import sleepingCat from './assets/sleeping-cat.png'
+import catCoding from './assets/welcome-cat-coding.png'
+import catEating from './assets/welcome-cat-eating.png'
+import catHunting from './assets/welcome-cat-hunting.png'
+import catScratching from './assets/welcome-cat-scratching.png'
+import catStretching from './assets/welcome-cat-stretching.png'
+import catThinking from './assets/welcome-cat-thinking.png'
+import catYarning from './assets/welcome-cat-yarn.png'
+import catYawning from './assets/welcome-cat-yawning.png'
 import { basename } from './pathUtils.js'
 import { resolveRecentOpenRoute } from './sessionsCatalogState.js'
 import type { RecentWorkspace } from './sessionsCatalogState.js'
 import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
+
+const welcomeCats = [
+  sleepingCat,
+  catCoding,
+  catEating,
+  catHunting,
+  catScratching,
+  catStretching,
+  catThinking,
+  catYarning,
+  catYawning,
+] as const
+
+// Pick once per renderer load so every Welcome surface in the window shares its cat.
+const welcomeCat = welcomeCats[Math.floor(Math.random() * welcomeCats.length)]!
 
 /**
  * `WelcomeScreen` serves two surfaces from ONE hero + Codex-table body (zero
@@ -134,7 +157,7 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
         <div className="mb-12 grid grid-cols-1 items-center gap-6 md:grid-cols-[minmax(200px,300px)_1fr]">
           <div className="flex justify-center">
             <img
-              src={sleepingCat}
+              src={welcomeCat}
               alt=""
               width={248}
               height={211}
