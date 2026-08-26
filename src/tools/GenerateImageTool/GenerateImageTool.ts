@@ -66,7 +66,7 @@ const inputSchema = lazySchema(() =>
       .enum(['gpt-image-2', 'gpt-image-1.5', 'gpt-image-1', 'gpt-image-1-mini'])
       .optional()
       .describe(
-        'GPT image model to use, on a direct OpenAI API key only. Defaults to gpt-image-2. A ChatGPT account pins its own image model and ignores this.',
+        'GPT image model to use. Defaults to gpt-image-2. A ChatGPT subscription pins its own image model and ignores this.',
       ),
     size: z
       .enum(['1024x1024', '1536x1024', '1024x1536', 'auto'])
@@ -942,7 +942,7 @@ async function generateWithCodexBackend(
     }
     if (isTransparentBackgroundRefusal(responseText)) {
       throw new Error(
-        'Codex image generation failed: a ChatGPT account pins its own image model, and that model cannot produce transparent backgrounds. It also ignores the model parameter, so retrying with a different image model will send the same request and fail the same way. Use background opaque or auto, or set OPENAI_API_KEY and CAT_CODE_IMAGE_BACKEND=openai-api to reach a backend where the model choice applies.',
+        'Codex image generation failed: a ChatGPT subscription pins its own image model, and that model cannot produce transparent backgrounds. It ignores the model parameter too, so retrying with a different image model sends the same request and fails the same way. Use background opaque or auto. For a cutout, generate the subject on a flat solid background and key that color out afterwards.',
       )
     }
     throw new Error(
