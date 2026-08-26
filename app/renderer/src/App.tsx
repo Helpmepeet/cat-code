@@ -257,6 +257,7 @@ import {
   createGoalMemoryState,
   reduceGoalMemoryState,
   selectMemorySnapshot,
+  selectThreadGoalRows,
   selectThreadGoalSnapshot,
 } from './goalMemoryState.js'
 import { selectComposerRail } from './composerRailModel.js'
@@ -4165,14 +4166,7 @@ export function App() {
               snapshot={selectSettingsSnapshot(settings, activeSessionId)}
             />
           ) : activeView === 'goals' ? (
-            <GoalsPage
-              sessionLabel={
-                activeSessionId
-                  ? tabDescriptorsById.get(activeSessionId)?.cwd ?? activeSessionId
-                  : undefined
-              }
-              snapshot={selectThreadGoalSnapshot(goalMemory, activeSessionId)}
-            />
+            <GoalsPage rows={selectThreadGoalRows(goalMemory, sessionCatalogRows)} />
           ) : activeView === 'accounts' ? (
             <AccountsPage
               snapshot={selectGlobalAccountsSnapshot(accounts)}

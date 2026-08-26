@@ -5,6 +5,7 @@ import type {
   SessionId,
   ThreadGoalSnapshot,
 } from '../../shared/protocol.js'
+import type { MergedSessionRow } from './sessionsCatalogState.js'
 
 export type GoalMemoryState = {
   goals: Record<SessionId, ThreadGoalSnapshot | null>
@@ -12,6 +13,13 @@ export type GoalMemoryState = {
 }
 
 export type GoalMemoryAction = { type: 'frame'; frame: ServerFrame }
+
+export type ThreadGoalRow = {
+  displayLabel: string
+  cwd: string
+  appSessionId: SessionId
+  goal: ThreadGoalSnapshot
+}
 
 export function createGoalMemoryState(): GoalMemoryState {
   return { goals: {}, memory: {} }
@@ -41,12 +49,31 @@ export function reduceGoalMemoryState(
     if (!(frame.sessionId in state.goals) && !(frame.sessionId in state.memory)) {
       return state
     }
-    const nextGoals = { ...state.goals, [frame.sessionId]: null }
+    if (!(frame.sessionId in state.memory)) return state
     const nextMemory = { ...state.memory, [frame.sessionId]: null }
-    return { goals: nextGoals, memory: nextMemory }
+    return { ...state, memory: nextMemory }
   }
 
   return state
+}
+
+export function selectThreadGoalRows(
+  state: GoalMemoryState,
+  roster: readonly Pick<MergedSessionRow, 'sessionId' | 'appSessionId' | 'cwd' | 'displayLabel'>[],
+): ThreadGoalRow[] {
+  const rows: ThreadGoalRow[] = []
+  for (const row of roster) {
+    if (row.appSessionId === null) continue
+    const goal = state.goals[row.appSessionId]
+    if (goal === undefined || goal === null) continue
+    rows.push({
+      displayLabel: row.displayLabel,
+      cwd: row.cwd,
+      appSessionId: row.appSessionId,
+      goal,
+    })
+  }
+  return rows
 }
 
 export function selectThreadGoalSnapshot(

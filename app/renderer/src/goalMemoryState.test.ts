@@ -11,8 +11,10 @@ import {
   selectInstructionFilesByType,
   selectMemoryInstructionCounts,
   selectMemorySnapshot,
+  selectThreadGoalRows,
   selectThreadGoalSnapshot,
 } from './goalMemoryState.js'
+import type { MergedSessionRow } from './sessionsCatalogState.js'
 
 const GOAL: ThreadGoalSnapshot = {
   threadId: 'thread-1',
@@ -96,7 +98,7 @@ test('reduces goal and memory snapshots by session id', () => {
   expect(selectMemorySnapshot(state, 'missing')).toBeNull()
 })
 
-test('clears known snapshots on lifecycle reset', () => {
+test('retains goals while clearing memory on lifecycle reset', () => {
   let state = reduceGoalMemoryState(createGoalMemoryState(), {
     type: 'frame',
     frame: goalFrame('a', GOAL),
@@ -110,8 +112,111 @@ test('clears known snapshots on lifecycle reset', () => {
     frame: lifecycleFrame('a'),
   })
 
-  expect(selectThreadGoalSnapshot(state, 'a')).toBeNull()
+  expect(selectThreadGoalSnapshot(state, 'a')).toEqual(GOAL)
   expect(selectMemorySnapshot(state, 'a')).toBeNull()
+})
+
+test('aggregates roster goals by appSessionId in catalog order', () => {
+  let state = reduceGoalMemoryState(createGoalMemoryState(), {
+    type: 'frame',
+    frame: goalFrame('app-a', GOAL),
+  })
+  const secondGoal = { ...GOAL, goalId: 'goal-2', objective: 'Review beta' }
+  state = reduceGoalMemoryState(state, {
+    type: 'frame',
+    frame: goalFrame('app-b', secondGoal),
+  })
+
+  const roster = [
+    {
+      sessionId: 'engine-a',
+      appSessionId: 'app-a',
+      cwd: '/workspace/alpha',
+      displayLabel: 'Alpha session',
+    },
+    {
+      sessionId: 'engine-b',
+      appSessionId: 'app-b',
+      cwd: '/workspace/beta',
+      displayLabel: 'Beta session',
+    },
+  ] satisfies Array<
+    Pick<MergedSessionRow, 'sessionId' | 'appSessionId' | 'cwd' | 'displayLabel'>
+  >
+
+  expect(selectThreadGoalRows(state, roster)).toEqual([
+    {
+      appSessionId: 'app-a',
+      cwd: '/workspace/alpha',
+      displayLabel: 'Alpha session',
+      goal: GOAL,
+    },
+    {
+      appSessionId: 'app-b',
+      cwd: '/workspace/beta',
+      displayLabel: 'Beta session',
+      goal: secondGoal,
+    },
+  ])
+})
+
+test('excludes stale goals, history rows, and roster rows with null goals', () => {
+  let state = reduceGoalMemoryState(createGoalMemoryState(), {
+    type: 'frame',
+    frame: goalFrame('stale', GOAL),
+  })
+  state = reduceGoalMemoryState(state, {
+    type: 'frame',
+    frame: goalFrame('cleared', null),
+  })
+  state = reduceGoalMemoryState(state, {
+    type: 'frame',
+    frame: goalFrame('visible', { ...GOAL, goalId: 'visible-goal' }),
+  })
+
+  const roster = [
+    {
+      sessionId: 'engine-cleared',
+      appSessionId: 'cleared',
+      cwd: '/workspace/cleared',
+      displayLabel: 'Cleared session',
+    },
+    {
+      sessionId: 'engine-history',
+      appSessionId: null,
+      cwd: '/workspace/history',
+      displayLabel: 'History session',
+    },
+    {
+      sessionId: 'engine-visible',
+      appSessionId: 'visible',
+      cwd: '/workspace/visible',
+      displayLabel: 'Visible session',
+    },
+  ] satisfies Array<
+    Pick<MergedSessionRow, 'sessionId' | 'appSessionId' | 'cwd' | 'displayLabel'>
+  >
+
+  expect(selectThreadGoalRows(state, roster).map(row => row.displayLabel)).toEqual([
+    'Visible session',
+  ])
+})
+
+test('a fresh null goal snapshot clears a retained goal', () => {
+  let state = reduceGoalMemoryState(createGoalMemoryState(), {
+    type: 'frame',
+    frame: goalFrame('a', GOAL),
+  })
+  state = reduceGoalMemoryState(state, {
+    type: 'frame',
+    frame: lifecycleFrame('a'),
+  })
+  state = reduceGoalMemoryState(state, {
+    type: 'frame',
+    frame: goalFrame('a', null),
+  })
+
+  expect(selectThreadGoalSnapshot(state, 'a')).toBeNull()
 })
 
 test('preserves state identity for an untracked lifecycle session', () => {

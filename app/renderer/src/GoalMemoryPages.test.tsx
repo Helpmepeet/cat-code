@@ -5,6 +5,7 @@ import type {
   MemorySnapshot,
   ThreadGoalSnapshot,
 } from '../../shared/protocol.js'
+import type { ThreadGoalRow } from './goalMemoryState.js'
 import { GoalsPage } from './GoalsPage.js'
 import { MemoryPage } from './MemoryPage.js'
 
@@ -28,8 +29,13 @@ const GOAL: ThreadGoalSnapshot = {
 
 const GOAL_BY_STATUS: ThreadGoalSnapshot[] = [
   { ...GOAL, status: 'active', summary: 'Goal: active' },
+  { ...GOAL, status: 'waiting', summary: 'Goal: waiting' },
   { ...GOAL, status: 'paused', summary: 'Goal: paused' },
+  { ...GOAL, status: 'blocked', summary: 'Goal: blocked' },
+  { ...GOAL, status: 'stalled', summary: 'Goal: stalled' },
   { ...GOAL, status: 'budget_limited', summary: 'Goal: limited by budget' },
+  { ...GOAL, status: 'usage_limited', summary: 'Goal: limited by usage' },
+  { ...GOAL, status: 'failed', summary: 'Goal: failed' },
   { ...GOAL, status: 'complete', summary: 'Goal: complete' },
 ]
 
@@ -66,30 +72,92 @@ const MEMORY: MemorySnapshot = {
   notes: ['Memory bodies stay engine-side.'],
 }
 
-test('renders the current thread goal snapshot', () => {
-  const html = renderToStaticMarkup(<GoalsPage snapshot={GOAL} />)
+function goalRow(
+  goal: ThreadGoalSnapshot,
+  appSessionId: string,
+  displayLabel: string,
+  cwd: string,
+): ThreadGoalRow {
+  return { appSessionId, cwd, displayLabel, goal }
+}
 
+test('renders two sessions with labels, workspaces, objectives, and counts', () => {
+  const html = renderToStaticMarkup(
+    <GoalsPage
+      rows={[
+        goalRow(GOAL, 'app-alpha', 'Alpha session', '/workspace/alpha'),
+        goalRow(
+          {
+            ...GOAL,
+            goalId: 'goal-2',
+            objective: 'Review beta workspace',
+            status: 'complete',
+            summary: 'Goal: complete\nObjective: Review beta workspace',
+          },
+          'app-beta',
+          'Beta session',
+          '/workspace/beta',
+        ),
+      ]}
+    />,
+  )
+
+  expect(html).toContain('One goal per session across all sessions')
+  expect(html).toContain('1 ongoing')
+  expect(html).toContain('1 complete')
+  expect(html).toContain('Alpha session')
+  expect(html).toContain('/workspace/alpha')
+  expect(html).toContain('Beta session')
+  expect(html).toContain('/workspace/beta')
   expect(html).toContain('Ship P4-10 Goals + Memory panels')
+  expect(html).toContain('Review beta workspace')
   expect(html).toContain('25,000')
   expect(html).toContain('1,250')
   expect(html).toContain('Read-only')
   expect(html).toContain('/goal')
+  expect(html).not.toContain('app-alpha')
+  expect(html).not.toContain('app-beta')
 })
 
 test('renders every thread-goal status label and summary', () => {
+  const labels: Record<ThreadGoalSnapshot['status'], string> = {
+    active: 'active',
+    waiting: 'waiting',
+    paused: 'paused',
+    blocked: 'blocked',
+    stalled: 'stalled',
+    budget_limited: 'budget limited',
+    usage_limited: 'usage limited',
+    failed: 'failed',
+    complete: 'complete',
+  }
   for (const goal of GOAL_BY_STATUS) {
-    const html = renderToStaticMarkup(<GoalsPage snapshot={goal} />)
-    const label = goal.status === 'budget_limited' ? 'budget limited' : goal.status
-    expect(html).toContain(label)
+    const html = renderToStaticMarkup(
+      <GoalsPage rows={[goalRow(goal, 'app-status', 'Status session', '/workspace/status')]} />,
+    )
+    expect(html).toContain(labels[goal.status])
     expect(html).toContain(goal.summary)
   }
 })
 
-test('renders the empty goal state without fixtures', () => {
-  const html = renderToStaticMarkup(<GoalsPage snapshot={null} />)
+test('renders the global empty goal state without fixtures', () => {
+  const html = renderToStaticMarkup(<GoalsPage rows={[]} />)
 
-  expect(html).toContain('No active thread goal')
+  expect(html).toContain('No session goals')
   expect(html).not.toContain('MOCK')
+})
+
+test('wires the Goals page to the roster selector and keeps MetadataInspector active-scoped', () => {
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const goalsStart = source.indexOf(": activeView === 'goals' ?")
+  const accountsStart = source.indexOf(": activeView === 'accounts' ?", goalsStart)
+  const goalsBranch = source.slice(goalsStart, accountsStart)
+
+  expect(goalsStart).toBeGreaterThanOrEqual(0)
+  expect(accountsStart).toBeGreaterThan(goalsStart)
+  expect(goalsBranch).toContain('selectThreadGoalRows(goalMemory, sessionCatalogRows)')
+  expect(goalsBranch).not.toContain('selectThreadGoalSnapshot')
+  expect(source).toContain('selectThreadGoalSnapshot(goalMemory, activeSessionId)')
 })
 
 test('renders memory metadata without file contents', () => {
