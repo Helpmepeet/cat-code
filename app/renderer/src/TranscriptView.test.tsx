@@ -114,8 +114,8 @@ const frameSource = {
   children: [] as NestedTranscriptRow[],
 }
 
-function render(row: NestedTranscriptRow): string {
-  return renderToStaticMarkup(<TranscriptRowsView rows={[row]} />)
+function render(row: NestedTranscriptRow, cwd: string | null = null): string {
+  return renderToStaticMarkup(<TranscriptRowsView rows={[row]} cwd={cwd} />)
 }
 
 /** Render rows under an explicit reasoning-display mode. No provider (the
@@ -478,7 +478,7 @@ function toolRow(fields: {
   }
 }
 
-test('P4-18b: a Read tool card renders the filename, not its full path', () => {
+test('P4-18b: a Read tool card renders a workspace-relative path', () => {
   const html = render(
     toolRow({
       toolName: 'Read',
@@ -486,14 +486,68 @@ test('P4-18b: a Read tool card renders the filename, not its full path', () => {
       input: { file_path: '/etc/hosts' },
       status: 'pending',
     }),
+    '/etc',
   )
 
   expect(html).toContain('Read') // family word
-  expect(html).toContain('hosts') // filename from input.file_path
+  expect(html).toContain('hosts') // workspace-relative path from input.file_path
   expect(html).not.toContain('/etc/hosts')
   // The state word is dropped from the header pill (operator call, 2026-08-05):
   // a colour-coded dot carries it, labelled for a11y rather than printed.
   expect(html).toContain('aria-label="running"')
+})
+
+test('file tool cards share a workspace-relative path label', () => {
+  const path = '/repo/src/shared.ts'
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      cwd="/repo"
+      rows={[
+        toolRow({
+          id: 'read-path',
+          toolName: 'Read',
+          toolFamily: 'read',
+          input: { file_path: path },
+          status: 'success',
+          result: { content: '', isError: false, diff: null },
+        }),
+        toolRow({
+          id: 'edit-path',
+          toolName: 'Edit',
+          toolFamily: 'edit',
+          input: { file_path: path },
+          status: 'success',
+          result: { content: '', isError: false, diff: null },
+        }),
+        toolRow({
+          id: 'write-path',
+          toolName: 'Write',
+          toolFamily: 'write',
+          input: { file_path: path },
+          status: 'success',
+          result: { content: '', isError: false, diff: null },
+        }),
+      ]}
+    />,
+  )
+
+  expect(occurrences(html, '>src/shared.ts<')).toBe(3)
+  expect(html).not.toContain(path)
+})
+
+test('a file tool card keeps an external path absolute', () => {
+  const html = render(
+    toolRow({
+      toolName: 'Read',
+      toolFamily: 'read',
+      input: { file_path: '/etc/hosts' },
+      status: 'success',
+      result: { content: '', isError: false, diff: null },
+    }),
+    '/repo',
+  )
+
+  expect(html).toContain('/etc/hosts')
 })
 
 test('renders a cancelled tool without its interruption body', () => {
@@ -4069,10 +4123,14 @@ test('a long written file still bands, and the band counts the FILE', () => {
 
 /** Render a row list, optionally with tool cards opened by default so a run's
  * member rows are on screen (a successful run is collapsed, like every card). */
-function renderMany(rows: NestedTranscriptRow[], expanded = false): string {
+function renderMany(
+  rows: NestedTranscriptRow[],
+  expanded = false,
+  cwd: string | null = null,
+): string {
   return renderToStaticMarkup(
     <ToolsExpandedContext.Provider value={{ expanded, setExpanded: () => {} }}>
-      <TranscriptRowsView rows={rows} />
+      <TranscriptRowsView rows={rows} cwd={cwd} />
     </ToolsExpandedContext.Provider>,
   )
 }
@@ -4130,12 +4188,13 @@ test('the run hoists the shared directory onto the head and shortens its rows', 
       runReadRow('r2', '/repo/app/sidecar/protocol.ts'),
     ],
     true,
+    '/repo',
   )
   const text = visibleText(html)
 
   // Stated once on the head, not repeated down every row.
-  expect(text).toContain('/repo/app/')
-  expect(occurrences(text, '/repo/app/')).toBe(1)
+  expect(text).toContain('app/')
+  expect(occurrences(text, 'app/')).toBe(1)
   // The whole point of the run: two files that share a basename stay distinct.
   expect(text).toContain('shared/protocol.ts')
   expect(text).toContain('sidecar/protocol.ts')
@@ -4209,12 +4268,16 @@ test('each member reports its own line count from the real numbered payload', ()
   expect(text).toContain('Read 1 line') // singular, not '1 lines'
 })
 
-test('a lone read is NOT grouped — it keeps the single-card basename framing', () => {
-  const html = renderMany([runReadRow('r1', '/repo/app/shared/protocol.ts')])
+test('a lone read is NOT grouped — it keeps the single-card relative-path framing', () => {
+  const html = renderMany(
+    [runReadRow('r1', '/repo/app/shared/protocol.ts')],
+    false,
+    '/repo',
+  )
 
   expect(html).not.toContain('1 files')
-  expect(visibleText(html)).toContain('protocol.ts')
-  expect(visibleText(html)).not.toContain('/repo/app/shared/')
+  expect(visibleText(html)).toContain('app/shared/protocol.ts')
+  expect(visibleText(html)).not.toContain('/repo/app/shared/protocol.ts')
 })
 
 test('one failed member fails the whole run and says so on the member too', () => {
@@ -5003,10 +5066,11 @@ test('a bash card whose description repeats the command reveals nothing', () => 
 function renderUnderCardStyle(
   row: NestedTranscriptRow,
   style: ToolCardStyle,
+  cwd: string | null = null,
 ): string {
   return renderToStaticMarkup(
     <ToolCardStyleContext.Provider value={{ style, setStyle: () => {} }}>
-      <TranscriptRowsView rows={[row]} />
+      <TranscriptRowsView rows={[row]} cwd={cwd} />
     </ToolCardStyleContext.Provider>,
   )
 }
@@ -5019,15 +5083,15 @@ test('a tool card draws its container under `cards` and drops it under `lines`',
     status: 'success',
     result: { content: 'export function load() {}', isError: false, diff: null },
   })
-  const cards = renderUnderCardStyle(row, 'cards')
-  const lines = renderUnderCardStyle(row, 'lines')
+  const cards = renderUnderCardStyle(row, 'cards', '/repo')
+  const lines = renderUnderCardStyle(row, 'lines', '/repo')
 
   expect(cards).toContain('rounded-md border border-shell-seam')
   expect(lines).not.toContain('rounded-md border border-shell-seam')
-  // Same row, same column: only the chrome is gone. `deriveTarget` shortens the
-  // path, so assert the label the card actually draws.
-  expect(lines).toContain('>index.ts<')
-  expect(cards).toContain('>index.ts<')
+  // Same row, same column: only the chrome is gone. The shared formatter keeps
+  // enough workspace-relative path to distinguish same-named files.
+  expect(lines).toContain('>src/loader/index.ts<')
+  expect(cards).toContain('>src/loader/index.ts<')
 })
 
 test('the open body swaps its filled panel for an indented rule', () => {

@@ -1965,7 +1965,10 @@ const STATE_STYLE: Record<
 }
 
 /** Family-specific one-line target framing derived from the REAL tool input. */
-function deriveTarget(row: ToolUseNestedRow): string {
+function deriveTarget(
+  row: ToolUseNestedRow,
+  cwd: string | null = null,
+): string {
   const input = row.input
   const str = (key: string): string | null => {
     const value = input[key]
@@ -1976,12 +1979,14 @@ function deriveTarget(row: ToolUseNestedRow): string {
       return str('command') ?? row.toolName
     case 'read': {
       const filePath = str('file_path')
-      return filePath === null ? row.toolName : basename(filePath) || filePath
+      return filePath === null ? row.toolName : displayFilePath(filePath, cwd)
     }
     case 'write':
-      return str('file_path') ?? row.toolName
-    case 'edit':
-      return str('file_path') ?? row.result?.diff?.filePath ?? row.toolName
+      return displayFilePath(str('file_path') ?? row.toolName, cwd)
+    case 'edit': {
+      const filePath = str('file_path') ?? row.result?.diff?.filePath
+      return filePath === undefined ? row.toolName : displayFilePath(filePath, cwd)
+    }
     case 'grep':
       return str('pattern') ?? str('path') ?? row.toolName
     case 'web':
@@ -2010,6 +2015,14 @@ function deriveTarget(row: ToolUseNestedRow): string {
     default:
       return row.toolName
   }
+}
+
+function displayFilePath(filePath: string, cwd: string | null): string {
+  if (cwd === null || cwd.length === 0) return filePath
+  const trimmedCwd = cwd.replace(/[/\\]+$/, '')
+  const separator = trimmedCwd.includes('\\') ? '\\' : '/'
+  const prefix = `${trimmedCwd}${separator}`
+  return filePath.startsWith(prefix) ? filePath.slice(prefix.length) : filePath
 }
 
 /** `mcp__server__tool` → `server › tool` (the prototype's MCP framing). */
@@ -2174,11 +2187,13 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
   // (`resolveToolCardExpanded`), and a failed or finished-image card still opens
   // itself, for reasons this preference knows nothing about.
   const { expanded: toolsExpanded } = useContext(ToolsExpandedContext)
+  const filePathContext = useContext(FilePathMenuContext)
+  const target = deriveTarget(row, filePathContext?.cwd ?? null)
   if (row.status === 'cancelled') {
     return (
       <ToolCardShell
         family={row.toolFamily}
-        target={deriveTarget(row)}
+        target={target}
         status={row.status}
         targetHover={deriveTargetHover(row)}
         expansionKey={row.toolUseId}
@@ -2215,7 +2230,7 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
     <div className="w-full">
       <ToolCardShell
         family={row.toolFamily}
-        target={deriveTarget(row)}
+        target={target}
         status={row.status}
         sub={deriveSub(row)}
         headerBadge={headerBadge}
@@ -2298,6 +2313,7 @@ function ToolRunCard({
   members: ToolRunMember[]
 }) {
   const { expanded: toolsExpanded } = useContext(ToolsExpandedContext)
+  const filePathContext = useContext(FilePathMenuContext)
   const status = deriveToolRunStatus(members)
   // A member the user opened while it was still a LONE card keeps its content on
   // screen through the regroup. Without this the head would be collapsed by
@@ -2318,7 +2334,7 @@ function ToolRunCard({
   // (`attachChildren` spreads, `transcriptProjector.ts:617`) so component memo
   // alone would not stop a collapsed run re-parsing whole files on every frame.
   const digests = members.map(member => toolRunDigest(family, member))
-  const head = toolRunHead(family, members)
+  const head = toolRunHead(family, members, filePathContext?.cwd ?? null)
   const memberKeys = useMemo(() => members.map(member => member.id), [members])
   return (
     <ToolCardShell
@@ -2373,6 +2389,7 @@ function ToolRunCard({
 function toolRunHead(
   family: ToolRunFamily,
   members: ToolRunMember[],
+  cwd: string | null,
 ): {
   target: string
   sub: string
@@ -2382,14 +2399,15 @@ function toolRunHead(
   if (family === 'read') {
     const target = `${members.length} ${members.length === 1 ? 'file' : 'files'}`
     const hoistedPrefix = commonDirPrefix(members.map(memberReadPath))
+    const displayPrefix = displayFilePath(hoistedPrefix, cwd)
     return {
       target,
       sub: `${target} read`,
       hoistedPrefix,
       badge:
-        hoistedPrefix.length > 0 ? (
+        displayPrefix.length > 0 ? (
           <span className="shrink-0 truncate font-mono text-[11px] text-text-faint">
-            {hoistedPrefix}
+            {displayPrefix}
           </span>
         ) : undefined,
     }
