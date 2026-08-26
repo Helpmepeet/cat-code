@@ -27,7 +27,7 @@ test('the sample renders through the transcript code block, not a copy of it', (
 
   // CodeBlock's own chrome: the copy control and compact top padding that
   // clears it. A parallel component would have to reproduce both.
-  expect(html).toContain('copy')
+  expect(html).toContain('aria-label="Copy code"')
   expect(html).toContain('pt-8')
   expect(html).not.toContain('&lt;/&gt;')
 

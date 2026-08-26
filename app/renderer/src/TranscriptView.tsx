@@ -1869,15 +1869,33 @@ export function CodeBlock({
         type="button"
         onClick={copy}
         disabled={streaming}
-        className={`absolute right-2.5 top-1.5 z-[1] font-mono text-[11px] transition-colors ${
+        title={streaming ? 'Code still writing' : copied ? 'Code copied' : 'Copy code'}
+        aria-label={streaming ? 'Code still writing' : copied ? 'Code copied' : 'Copy code'}
+        className={`absolute right-2 top-1 z-[1] inline-flex size-7 items-center justify-center rounded-md transition-colors ${
           streaming
             ? 'cursor-default text-text-ghost'
             : copied
               ? 'text-[#86efac]'
-              : 'text-text-subtle hover:text-text-primary'
+              : 'text-text-subtle hover:bg-white/[0.06] hover:text-text-primary'
         }`}
       >
-        {streaming ? 'writing' : copied ? 'copied' : 'copy'}
+        {copied ? (
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden
+          >
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+        ) : (
+          <ActionCopyIcon />
+        )}
       </button>
       <pre className="overflow-x-auto px-3.5 pb-3.5 pt-8 font-mono text-[12.5px] leading-[1.65]">
         <code className="hljs">{highlighted}</code>

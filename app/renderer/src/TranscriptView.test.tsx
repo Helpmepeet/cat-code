@@ -263,7 +263,7 @@ test('P4-18c: a fenced code block renders framed + copyable with syntax highligh
   // (so it is no longer one contiguous string), but every token still renders.
   expect(html).toContain('hljs-keyword') // `const` colored as a keyword token
   expect(html).toContain('const') // code content still present, tokenized
-  expect(html).toContain('copy') // per-block copy control
+  expect(html).toContain('aria-label="Copy code"') // floating copy control
   expect(html).not.toContain('&lt;/&gt;') // no language/type label
 })
 
@@ -301,7 +301,7 @@ test('CC-59: a long fence stays one card with one copy control while its lines a
   // One card: one framed <pre> and one copy control.
   expect(occurrences(html, 'pt-8')).toBe(1)
   expect(html).not.toContain('&lt;/&gt;')
-  expect(occurrences(html, '>copy</button>')).toBe(1)
+  expect(occurrences(html, 'aria-label="Copy code"')).toBe(1)
   expect(html).toContain('hljs-keyword')
 
   // Bounded: the window mounts a fraction of the 400 lines, and a spacer stands
@@ -378,7 +378,7 @@ test('a recognized alert renders as rich Markdown with its fenced code card inta
   expect(html).toContain('const')
   expect(html).toContain('pt-8')
   expect(html).not.toContain('&lt;/&gt;')
-  expect(html).toContain('>copy</button>')
+  expect(html).toContain('aria-label="Copy code"')
   expect(html).not.toContain('aria-label="Copy quote"')
 })
 
@@ -3256,7 +3256,7 @@ test('P4-18c: an unknown code language degrades to plain framed code, never thro
   const html = render0()
   // ignoreMissing → no highlight, so the body stays a contiguous, legible string.
   expect(html).toContain('some plain content')
-  expect(html).toContain('copy') // still framed + copyable
+  expect(html).toContain('aria-label="Copy code"') // still framed + copyable
   expect(html).not.toContain('&lt;/&gt;') // no language/type label
 })
 
@@ -3266,8 +3266,8 @@ test('a code fence still streaming gets its card frame as soon as it opens', () 
   // The frame the settled fence will keep is already up: copy control and the
   // body inside the card rather than beneath it.
   expect(html).toContain('def greet(name):')
-  // The control is present but says there is nothing finished to copy yet.
-  expect(html).toContain('writing')
+  // The control remains visible but disabled while the fence is unfinished.
+  expect(html).toContain('aria-label="Code still writing"')
   expect(html).toContain('disabled')
   expect(html).not.toContain('>copy<')
   // The opening delimiter names the card; it is never shown as body text.
@@ -3279,8 +3279,8 @@ test('a code fence still streaming gets its card frame as soon as it opens', () 
 test('the settled fence gets its copy control back', () => {
   const html = render(proseRow('Here:\n\n```python\ndef greet(name):\n    return name\n```\n', 'shutfence'))
 
-  expect(html).toContain('>copy<')
-  expect(html).not.toContain('writing')
+  expect(html).toContain('aria-label="Copy code"')
+  expect(html).not.toContain('Code still writing')
 })
 
 // ── Model-prose typography (`.md-prose`, theme.css)
