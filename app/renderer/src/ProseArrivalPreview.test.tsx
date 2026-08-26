@@ -25,8 +25,8 @@ test('the preview renders the settled sample before anything plays', () => {
   // frame: real text, not an empty box the operator would see flash on open.
   const html = render()
   const text = html.replace(/<[^>]*>/g, '')
-  expect(text).toContain('The loader resolves each entry')
-  expect(text).toContain('ist is consumed.'.trim().slice(-16))
+  expect(text).toContain('The loader resolves every entry')
+  expect(text).toContain('traversal.')
 })
 
 test('the settled frame carries no arrival marking', () => {
@@ -40,7 +40,7 @@ test('the settled frame carries no arrival marking', () => {
 test('the canvas is a fixed height, so playing does not move the picker', () => {
   // The sample grows while it plays. A canvas sized to its content would pump
   // every settings row below it up and down on each loop.
-  expect(render()).toContain('h-[92px]')
+  expect(render()).toContain('h-[152px]')
   expect(render()).toContain('overflow-hidden')
 })
 
