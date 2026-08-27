@@ -1861,8 +1861,19 @@ export function CodeBlock({
       })
       .catch(() => {})
   }
+  // `data-window-ground`: this frame repeats the page ground rather than painting
+  // a surface of its own, which is the whole grammar of a fenced block here
+  // (`theme.css`: code sits IN the page, not on a coloured slab). Opaque that is
+  // invisible, because `bg-app-bg` IS the page. Under glass the page goes
+  // translucent and this did not, so the block became the flat slab the grammar
+  // exists to avoid, whichever way the wallpaper pushed it. Marked so glass
+  // clears it and the toggle stops changing this block's relationship to the
+  // page it sits in.
   return (
-    <div className="relative my-3 overflow-hidden rounded-lg border border-shell-seam bg-app-bg">
+    <div
+      className="relative my-3 overflow-hidden rounded-lg border border-shell-seam bg-app-bg"
+      data-window-ground
+    >
       <button
         type="button"
         onClick={copy}

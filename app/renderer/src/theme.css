@@ -586,6 +586,19 @@ html[data-glass='on'] {
  * Opaque, that is invisible. With `html` translucent they are two further coats
  * that would hide the very thing this turns on, so only `html` may paint.
  *
+ * IT IS NOT ONLY THE FULL-AREA FRAMES. A fenced code block is `bg-app-bg` too,
+ * because this shell's grammar is that code sits IN the page rather than on a
+ * coloured slab, and painting the page's own colour is how that is expressed.
+ * Opaque against a translucent page it stops being invisible and becomes the
+ * slab the grammar exists to avoid, whichever way the wallpaper pushes it. So
+ * the marker means "repeats the page ground", not "fills the window", and small
+ * inset boxes that repeat it carry it too (`TranscriptView` CodeBlock,
+ * `GoalsPage`).
+ *
+ * Deliberately NOT carried by every `bg-app-bg`: a text input or a scroller
+ * inside an opaque dialog is a recess in a PANEL, not a repeat of the page, and
+ * clearing those would flatten them into the surface they sit on.
+ *
  * The crash screen (`RendererErrorBoundary`) keeps its own ground and is
  * deliberately NOT marked: a fault is the one surface that should stay solid.
  *

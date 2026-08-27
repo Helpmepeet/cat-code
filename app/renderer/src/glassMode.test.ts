@@ -168,6 +168,40 @@ test('the repeated page grounds are cleared so they cannot hide the ground', () 
 })
 
 /**
+ * The inset repeats, which the full-area sweep below deliberately does not see.
+ *
+ * A fenced code block paints `bg-app-bg` because this shell's grammar is that
+ * code sits IN the page rather than on a coloured slab; the colour IS the page,
+ * so opaque it is invisible. Against a translucent page it stops being invisible
+ * and becomes exactly the slab the grammar avoids. The sweep cannot catch these
+ * because it only looks at elements that FILL their container, and these are
+ * small boxes, so they are named.
+ */
+test('the inset boxes that repeat the page ground are cleared too', () => {
+  // Line comments are stripped as well as block ones. Without that this test
+  // passes on the PROSE: the paragraph explaining the marker contains the
+  // marker's name, so removing the real attribute left the suite green
+  // (verified by mutation, 2026-08-27).
+  const strip = (name: string) =>
+    readFileSync(new URL(`./${name}`, import.meta.url), 'utf8')
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^[ \t]*\/\/.*$/gm, '')
+
+  for (const file of ['TranscriptView.tsx', 'GoalsPage.tsx']) {
+    const source = strip(file)
+    // The attribute has to sit in the SAME opening tag as the ground class, not
+    // merely somewhere in the file.
+    const tags = source.match(/<[a-zA-Z][^<>]*border-shell-seam bg-app-bg[^<>]*>/g) ?? []
+    expect({ file, tags: tags.length }).toEqual({ file, tags: 1 })
+    expect({ file, marked: (tags[0] ?? '').includes('data-window-ground') }).toEqual({
+      file,
+      marked: true,
+    })
+  }
+})
+
+/**
  * The sweep that would have caught the session panel.
  *
  * Marking the app frame was not enough: `WorkspacePanels`' panel `<section>`

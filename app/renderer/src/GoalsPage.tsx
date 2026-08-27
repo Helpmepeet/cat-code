@@ -146,7 +146,9 @@ function GoalCard({ row }: { row: ThreadGoalRow }) {
         <Metric label="Time used" value={`${goal.timeUsedSeconds}s`} />
       </div>
 
-      <pre className="mt-5 whitespace-pre-wrap rounded-lg border border-shell-seam bg-app-bg p-4 font-mono text-[12px] leading-relaxed text-text-muted">
+      {/* Same page-ground repeat as the transcript's fenced blocks; glass
+       * clears it so it does not become a slab (`TranscriptView` CodeBlock). */}
+      <pre data-window-ground className="mt-5 whitespace-pre-wrap rounded-lg border border-shell-seam bg-app-bg p-4 font-mono text-[12px] leading-relaxed text-text-muted">
         {goal.summary}
       </pre>
     </section>
