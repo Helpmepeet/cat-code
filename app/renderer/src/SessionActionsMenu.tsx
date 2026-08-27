@@ -104,7 +104,7 @@ export function SessionActionsMenu({
         role="menu"
         aria-label="Session actions"
         onKeyDown={handleMenuRovingKeyDown}
-        className="animate-sa-pop fixed z-[71] w-[232px] rounded-[11px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[0_18px_44px_rgba(0,0,0,0.6)]"
+        className="animate-sa-pop fixed z-[71] w-[232px] rounded-[11px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[var(--elev-menu)]"
         style={
           placement.placeAbove
             ? { bottom: placement.bottom, left: placement.left }
@@ -200,7 +200,7 @@ export function SessionRenamePopover({
         ref={popoverRef}
         role="dialog"
         aria-label="Rename session"
-        className="animate-sa-pop fixed z-[71] w-[232px] rounded-[11px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[0_18px_44px_rgba(0,0,0,0.6)]"
+        className="animate-sa-pop fixed z-[71] w-[232px] rounded-[11px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[var(--elev-menu)]"
         style={
           placement.placeAbove
             ? { bottom: placement.bottom, left: placement.left }
@@ -297,7 +297,7 @@ function MenuFlyoutRow({
           role="menu"
           aria-label={item.label}
           onKeyDown={handleMenuRovingKeyDown}
-          className="animate-sa-pop absolute -top-[5px] left-full z-[72] ml-1 w-[190px] rounded-[10px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[0_18px_44px_rgba(0,0,0,0.6)]"
+          className="animate-sa-pop absolute -top-[5px] left-full z-[72] ml-1 w-[190px] rounded-[10px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[var(--elev-menu)]"
         >
           {item.flyout?.map(child => (
             <MenuRow

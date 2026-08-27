@@ -287,7 +287,7 @@ function OutputPanel({ text }: { text: string }) {
           title="Copy output"
           className={`h-7 shrink-0 rounded-lg border px-2 text-[11.5px] transition-colors ${
             copied
-              ? 'border-shell-seam text-[#86efac]'
+              ? 'border-shell-seam text-[light-dark(#15803d,#86efac)]'
               : 'border-shell-seam text-text-muted hover:text-text-primary'
           }`}
         >
@@ -328,7 +328,7 @@ function OutputPanel({ text }: { text: string }) {
                   segment.match ? (
                     <mark
                       key={segmentIndex}
-                      className="rounded-sm bg-tone-warn/25 px-px text-[#fde68a]"
+                      className="rounded-sm bg-tone-warn/25 px-px text-[light-dark(#92400e,#fde68a)]"
                     >
                       {segment.text}
                     </mark>

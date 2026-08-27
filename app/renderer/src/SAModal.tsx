@@ -76,7 +76,7 @@ export function SAModalFrame({
 }: SAModalProps & { dialogRef?: Ref<HTMLDivElement> }): ReactNode {
   return (
     <div
-      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/[0.62] p-6 backdrop-blur-[4px]"
+      className="fixed inset-0 z-[90] flex items-center justify-center bg-scrim p-6 backdrop-blur-[4px]"
       role="presentation"
       onMouseDown={onClose}
     >
@@ -87,7 +87,7 @@ export function SAModalFrame({
         aria-label={title}
         tabIndex={-1}
         className={
-          'animate-sa-pop flex max-h-[86vh] max-w-full flex-col overflow-hidden rounded-2xl border border-shell-seam bg-surface-raised shadow-[0_28px_70px_rgba(0,0,0,0.65)] ' +
+          'animate-sa-pop flex max-h-[86vh] max-w-full flex-col overflow-hidden rounded-2xl border border-shell-seam bg-surface-raised shadow-[var(--elev-modal)] ' +
           WIDTH_CLASS[width]
         }
         // The card is not the scrim: a click inside it must not dismiss.
@@ -141,9 +141,9 @@ export type SAButtonVariant = 'secondary' | 'primary' | 'danger' | 'danger-prima
 
 const BUTTON_CLASS: Record<SAButtonVariant, string> = {
   secondary: 'border-shell-seam bg-transparent text-text-muted hover:text-text-primary',
-  primary: 'border-transparent bg-accent text-app-bg hover:opacity-90',
+  primary: 'border-transparent bg-accent text-on-fill hover:opacity-90',
   danger: 'border-tone-danger/30 bg-transparent text-tone-danger hover:bg-tone-danger/10',
-  'danger-primary': 'border-transparent bg-tone-danger text-app-bg hover:opacity-90',
+  'danger-primary': 'border-transparent bg-tone-danger text-on-fill hover:opacity-90',
 }
 
 /**

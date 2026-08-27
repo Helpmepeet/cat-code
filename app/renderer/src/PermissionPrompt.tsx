@@ -33,8 +33,8 @@ import {
  * nothing but the three class strings would be common.
  */
 const PREVIEW_LINE_CLASS: Record<PermissionPreviewLine['kind'], string> = {
-  add: 'bg-[#22c55e]/10 text-[#86efac]',
-  del: 'bg-[#ef4444]/10 text-[#fca5a5]',
+  add: 'bg-[#22c55e]/10 text-[light-dark(#15803d,#86efac)]',
+  del: 'bg-[#ef4444]/10 text-[light-dark(#dc2626,#fca5a5)]',
   ctx: 'text-text-faint',
 }
 
@@ -523,7 +523,7 @@ function OptionRow({
       <span
         className={`flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded font-mono text-[9px] font-semibold ${
           active
-            ? 'bg-accent text-app-bg'
+            ? 'bg-accent text-on-fill'
             : 'bg-text-primary/[0.06] text-text-subtle'
         }`}
       >

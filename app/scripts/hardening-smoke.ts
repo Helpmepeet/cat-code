@@ -274,6 +274,19 @@ async function runProductionHardeningSmoke(
       'openLogsFolder',
       'reportRendererFault',
       'saveDiagnosticsBundle',
+      // Light/dark appearance (2026-08-27). Terminates in Electron main and adds
+      // no engine vocabulary: there is no frame kind for it and the sidecar never
+      // learns the app has an appearance. Its whole payload is a closed pair of
+      // two literals, re-validated in main because the preload is not the
+      // boundary, and main's only reaction is assigning nativeTheme.themeSource.
+      // It exists at all because macOS reads a window's vibrancy material off
+      // the process-wide NSAppearance, which no renderer can move (HC3;
+      // app/main/appearanceChannel.test.ts).
+      //
+      // Those two literals are deliberately not spelled with quotes above:
+      // `preloadSource.test.ts` scrapes this array for quoted words, so a quoted
+      // example in a comment reads as an allowlist entry.
+      'setAppearance',
       // Usage analytics — the renderer requests an engine-backed stats snapshot.
       // It authors no query: the `stats.query` frame carries a bounded range enum
       // and a request id, schema-validated AT THE SIDECAR (`statsQueryMessageSchema`)

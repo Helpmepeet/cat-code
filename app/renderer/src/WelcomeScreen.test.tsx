@@ -131,7 +131,7 @@ test('Codex usage meters follow the selected accent rather than a hard-coded col
   expect(source).toContain('from-accent-soft to-accent')
   expect(source).toContain("p >= 100 ? 'text-accent' : 'text-accent-soft'")
   expect(source).not.toContain('from-[#f9a8d4]')
-  expect(source).not.toContain('text-[#ec4899]')
+  expect(source).not.toContain('text-[light-dark(#be185d,#ec4899)]')
 })
 
 test('P4-55 renders a truthful retry in place of the false empty roster', () => {

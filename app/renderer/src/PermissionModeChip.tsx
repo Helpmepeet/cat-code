@@ -165,7 +165,7 @@ export function PermissionModeChip({
                     className={`block text-[12.5px] ${
                       active
                         ? 'font-semibold text-text-primary'
-                        : 'font-medium text-[#e4e4e7]'
+                        : 'font-medium text-[light-dark(#27272a,#e4e4e7)]'
                     }`}
                   >
                     {meta.title}

@@ -78,7 +78,7 @@ export function MentionPicker({
   if (!open) return null
   return (
     <div
-      className={`z-[60] w-80 overflow-hidden rounded-xl border border-white/10 bg-surface-raised shadow-[0_14px_40px_rgba(0,0,0,0.6)] ${className}`}
+      className={`z-[60] w-80 overflow-hidden rounded-xl border border-white/10 bg-surface-raised shadow-[var(--elev-popover)] ${className}`}
       id={MENTION_LISTBOX_ID}
       role="listbox"
       aria-label="Mentions"

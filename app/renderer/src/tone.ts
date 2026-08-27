@@ -49,7 +49,7 @@ export const TONE_CLASSES: Record<Tone, ToneClasses> = {
     softBg: 'bg-white/5',
     softBorder: 'border-white/10',
     hoverTint: 'hover:bg-white/5 hover:border-white/10',
-    badge: 'bg-text-muted text-app-bg',
+    badge: 'bg-text-muted text-on-fill',
   },
   accent: {
     text: 'text-accent',
@@ -58,7 +58,7 @@ export const TONE_CLASSES: Record<Tone, ToneClasses> = {
     softBg: 'bg-accent/10',
     softBorder: 'border-accent/25',
     hoverTint: 'hover:bg-accent/10 hover:border-accent/25',
-    badge: 'bg-accent text-app-bg',
+    badge: 'bg-accent text-on-fill',
   },
   warn: {
     text: 'text-tone-warn',
@@ -67,7 +67,7 @@ export const TONE_CLASSES: Record<Tone, ToneClasses> = {
     softBg: 'bg-tone-warn/10',
     softBorder: 'border-tone-warn/25',
     hoverTint: 'hover:bg-tone-warn/10 hover:border-tone-warn/25',
-    badge: 'bg-tone-warn text-app-bg',
+    badge: 'bg-tone-warn text-on-fill',
   },
   danger: {
     text: 'text-tone-danger',
@@ -76,7 +76,7 @@ export const TONE_CLASSES: Record<Tone, ToneClasses> = {
     softBg: 'bg-tone-danger/10',
     softBorder: 'border-tone-danger/25',
     hoverTint: 'hover:bg-tone-danger/10 hover:border-tone-danger/25',
-    badge: 'bg-tone-danger text-app-bg',
+    badge: 'bg-tone-danger text-on-fill',
   },
   good: {
     text: 'text-tone-good',
@@ -85,7 +85,7 @@ export const TONE_CLASSES: Record<Tone, ToneClasses> = {
     softBg: 'bg-tone-good/10',
     softBorder: 'border-tone-good/25',
     hoverTint: 'hover:bg-tone-good/10 hover:border-tone-good/25',
-    badge: 'bg-tone-good text-app-bg',
+    badge: 'bg-tone-good text-on-fill',
   },
   info: {
     text: 'text-tone-info',
@@ -94,7 +94,7 @@ export const TONE_CLASSES: Record<Tone, ToneClasses> = {
     softBg: 'bg-tone-info/10',
     softBorder: 'border-tone-info/25',
     hoverTint: 'hover:bg-tone-info/10 hover:border-tone-info/25',
-    badge: 'bg-tone-info text-app-bg',
+    badge: 'bg-tone-info text-on-fill',
   },
 }
 

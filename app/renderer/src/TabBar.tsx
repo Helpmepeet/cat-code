@@ -215,7 +215,7 @@ function UnsplitIcon() {
   return (
     <svg width="15" height="11" viewBox="0 0 15 11" fill="none" aria-hidden="true">
       <rect x="0" y="0" width="15" height="11" rx="1.5" fill="currentColor" opacity="0.6" />
-      <line x1="7.5" y1="1.5" x2="7.5" y2="9.5" stroke="#09090b" strokeWidth="1.5" strokeLinecap="round" />
+      <line x1="7.5" y1="1.5" x2="7.5" y2="9.5" stroke="var(--app-bg)" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
   )
 }
@@ -262,8 +262,8 @@ function Tab({
         // a handful of sessions read in full instead of every title clipping
         // against a fixed width with empty bar to the right. `shrink-0` keeps the
         // crowded case exactly as it was — natural width, then horizontal scroll.
-        'group relative flex min-w-[90px] max-w-[176px] grow shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-[rgba(255,255,255,0.05)] pl-3 pr-1.5 transition-colors ' +
-        (isActive ? 'bg-[rgba(255,255,255,0.05)]' : 'hover:bg-[rgba(255,255,255,0.025)]')
+        'group relative flex min-w-[90px] max-w-[176px] grow shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-white/[0.05] pl-3 pr-1.5 transition-colors ' +
+        (isActive ? 'bg-white/[0.05]' : 'hover:bg-white/[0.025]')
       }
       role="tab"
       aria-selected={isActive}

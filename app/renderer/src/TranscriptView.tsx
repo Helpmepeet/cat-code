@@ -611,7 +611,7 @@ export function ToolInspectorOverlay({
   return (
     <div className="fixed inset-0 z-[200] flex justify-end">
       <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-[1px]"
+        className="absolute inset-0 bg-scrim backdrop-blur-[1px]"
         onClick={onClose}
         aria-hidden
       />
@@ -1644,12 +1644,12 @@ const MARKDOWN_COMPONENTS = {
     </div>
   ),
   th: ({ children }: ComponentPropsWithoutRef<'th'>) => (
-    <th className="whitespace-nowrap border-b border-white/[0.12] bg-white/[0.03] px-3 py-[7px] text-left font-semibold text-[#e4e4e7]">
+    <th className="whitespace-nowrap border-b border-white/[0.12] bg-white/[0.03] px-3 py-[7px] text-left font-semibold text-[light-dark(#27272a,#e4e4e7)]">
       {children}
     </th>
   ),
   td: ({ children }: ComponentPropsWithoutRef<'td'>) => (
-    <td className="border-b border-white/[0.05] px-3 py-[7px] align-top text-[#c4c4c8]">
+    <td className="border-b border-white/[0.05] px-3 py-[7px] align-top text-[light-dark(#52525b,#c4c4c8)]">
       {children}
     </td>
   ),
@@ -1763,7 +1763,7 @@ function QuoteCopyChip({ text }: { text: string }) {
       title="Copy quote"
       className={`absolute -left-6 top-0 flex h-5 w-5 items-center justify-center rounded border transition-colors ${
         copied
-          ? 'border-[#86efac] text-[#86efac]'
+          ? 'border-[light-dark(#15803d,#86efac)] text-[light-dark(#15803d,#86efac)]'
           : 'border-accent/30 text-accent/55 hover:border-accent hover:text-accent'
       }`}
     >
@@ -1873,7 +1873,7 @@ export function CodeBlock({
           streaming
             ? 'cursor-default text-text-ghost'
             : copied
-              ? 'text-[#86efac]'
+              ? 'text-[light-dark(#15803d,#86efac)]'
               : 'text-text-subtle hover:bg-white/[0.06] hover:text-text-primary'
         }`}
       >
@@ -1921,16 +1921,16 @@ const FAMILY_STYLE: Record<
   ToolFamily,
   { mark: string; word: string; color: string }
 > = {
-  bash: { mark: '$', word: 'Bash', color: 'text-[#a3e635]' },
-  read: { mark: '≡', word: 'Read', color: 'text-[#60a5fa]' },
-  write: { mark: '+', word: 'Write', color: 'text-[#fb923c]' },
+  bash: { mark: '$', word: 'Bash', color: 'text-[light-dark(#4d7c0f,#a3e635)]' },
+  read: { mark: '≡', word: 'Read', color: 'text-[light-dark(#2563eb,#60a5fa)]' },
+  write: { mark: '+', word: 'Write', color: 'text-[light-dark(#c2410c,#fb923c)]' },
   edit: { mark: '±', word: 'Edit', color: 'text-accent' },
-  grep: { mark: '⌕', word: 'Search', color: 'text-[#fbbf24]' },
-  web: { mark: '↗', word: 'Web', color: 'text-[#22d3ee]' },
-  mcp: { mark: '⧉', word: 'MCP', color: 'text-[#c084fc]' },
-  notebook: { mark: '▣', word: 'Notebook', color: 'text-[#f97316]' },
-  lsp: { mark: '◈', word: 'LSP', color: 'text-[#f87171]' },
-  skill: { mark: '§', word: 'Skill', color: 'text-[#5eead4]' },
+  grep: { mark: '⌕', word: 'Search', color: 'text-[light-dark(#b45309,#fbbf24)]' },
+  web: { mark: '↗', word: 'Web', color: 'text-[light-dark(#0e7490,#22d3ee)]' },
+  mcp: { mark: '⧉', word: 'MCP', color: 'text-[light-dark(#7c3aed,#c084fc)]' },
+  notebook: { mark: '▣', word: 'Notebook', color: 'text-[light-dark(#c2410c,#f97316)]' },
+  lsp: { mark: '◈', word: 'LSP', color: 'text-[light-dark(#dc2626,#f87171)]' },
+  skill: { mark: '§', word: 'Skill', color: 'text-[light-dark(#0f766e,#5eead4)]' },
   agent: { mark: '◆', word: 'Agent', color: 'text-accent' },
   // Same WORD as the spawn family, hollow mark against its filled one: ◆ creates
   // an agent, ◇ acts on one that already exists. The hue is the prototype's own
@@ -1938,8 +1938,8 @@ const FAMILY_STYLE: Record<
   // app left unused by tokenizing its agent family to `text-accent` — an
   // existing palette hue, not a new one. Literal class string, never
   // interpolated (the dynamic-class trap this map's header documents).
-  'agent-control': { mark: '◇', word: 'Agent', color: 'text-[#a78bfa]' },
-  imagegen: { mark: '◰', word: 'Image', color: 'text-[#e879f9]' },
+  'agent-control': { mark: '◇', word: 'Agent', color: 'text-[light-dark(#6d28d9,#a78bfa)]' },
+  imagegen: { mark: '◰', word: 'Image', color: 'text-[light-dark(#a21caf,#e879f9)]' },
   other: { mark: '•', word: 'Tool', color: 'text-text-muted' },
 }
 
@@ -4263,8 +4263,8 @@ function CompletedGeneratedImageCard({ row }: { row: ToolUseNestedRow }) {
   return (
     <div className="w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.025]">
       <div className="flex items-center gap-2 px-3 py-2">
-        <span className="text-[#e879f9]" aria-hidden="true">◰</span>
-        <span className="text-[10.5px] font-bold uppercase tracking-[0.08em] text-[#e879f9]">
+        <span className="text-[light-dark(#a21caf,#e879f9)]" aria-hidden="true">◰</span>
+        <span className="text-[10.5px] font-bold uppercase tracking-[0.08em] text-[light-dark(#a21caf,#e879f9)]">
           Generate Image
         </span>
         <span className="min-w-0 flex-1 truncate font-mono text-xs text-text-primary">
@@ -4439,8 +4439,8 @@ function BubbleCopyChip({
       title={text.idle}
       className={`absolute bottom-1.5 right-2 inline-flex items-center justify-center rounded-md p-1 opacity-0 transition-[color,opacity] duration-150 focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 ${
         copied
-          ? 'text-[#86efac] opacity-100'
-          : 'text-text-subtle hover:text-[#d4d4d8]'
+          ? 'text-[light-dark(#15803d,#86efac)] opacity-100'
+          : 'text-text-subtle hover:text-[light-dark(#3f3f46,#d4d4d8)]'
       }`}
     >
       {copied ? (
@@ -5445,8 +5445,8 @@ function diffCountBadge(row: ToolUseNestedRow): ReactNode {
   if (counts === null || (counts.adds === 0 && counts.dels === 0)) return undefined
   return (
     <span className="flex shrink-0 items-center gap-1.5 font-mono text-[10.5px] tabular-nums">
-      {counts.adds > 0 ? <span className="text-[#86efac]">+{counts.adds}</span> : null}
-      {counts.dels > 0 ? <span className="text-[#fca5a5]">−{counts.dels}</span> : null}
+      {counts.adds > 0 ? <span className="text-[light-dark(#15803d,#86efac)]">+{counts.adds}</span> : null}
+      {counts.dels > 0 ? <span className="text-[light-dark(#dc2626,#fca5a5)]">−{counts.dels}</span> : null}
     </span>
   )
 }

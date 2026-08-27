@@ -104,7 +104,7 @@ function markerClass(
 ): string {
   const shape = multiSelect ? 'rounded-[5px]' : 'rounded-full'
   const tone = checked
-    ? 'border-accent bg-accent text-app-bg'
+    ? 'border-accent bg-accent text-on-fill'
     : active
       ? 'border-accent/60 bg-transparent'
       : 'border-text-primary/30 bg-transparent'
@@ -437,7 +437,7 @@ export function AskQuestionFlow({
   return (
     <section
       aria-labelledby={titleId}
-      className="overflow-hidden rounded-xl border border-accent/[0.22] bg-[#141416] shadow-[0_14px_38px_rgba(0,0,0,0.5),0_0_0_1px_rgba(0,0,0,0.4)] focus:outline-none"
+      className="overflow-hidden rounded-xl border border-accent/[0.22] bg-[light-dark(#ffffff,#141416)] shadow-[var(--elev-popover),0_0_0_1px_var(--shell-seam)] focus:outline-none"
       // Focus events bubble, so these fire for the card AND every control in
       // it — which is exactly the containment rule the key handler applies.
       onBlur={event =>
@@ -646,14 +646,14 @@ export function AskQuestionFlow({
       {/* Footer rail — advance/submit + key hints + cancel */}
       <div className="mt-2 flex items-center gap-3 border-t border-shell-seam pt-2">
         <button
-          className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1 text-xs font-semibold text-app-bg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:bg-text-primary/[0.06] disabled:text-text-faint"
+          className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1 text-xs font-semibold text-on-fill focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:bg-text-primary/[0.06] disabled:text-text-faint"
           disabled={!canAdvance || submitted}
           onClick={advance}
           type="button"
         >
           {isLast ? 'Submit' : 'Next question'}
           {keysAdvertised ? (
-            <span className="rounded border border-app-bg/35 px-1 font-mono text-[9px] leading-none">
+            <span className="rounded border border-on-fill/35 px-1 font-mono text-[9px] leading-none">
               ↵
             </span>
           ) : null}

@@ -133,7 +133,7 @@ function ToastViewport({
             type="button"
             onClick={() => onDismiss(toast.id)}
             className={
-              'animate-toast-in pointer-events-auto flex items-center gap-2.5 rounded-lg border bg-surface-raised px-[13px] py-2 text-left text-[12.5px] font-medium text-text-primary shadow-[0_12px_32px_rgba(0,0,0,0.4)] ' +
+              'animate-toast-in pointer-events-auto flex items-center gap-2.5 rounded-lg border bg-surface-raised px-[13px] py-2 text-left text-[12.5px] font-medium text-text-primary shadow-[var(--elev-toast)] ' +
               t.softBorder
             }
           >

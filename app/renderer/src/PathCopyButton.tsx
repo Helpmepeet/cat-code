@@ -28,7 +28,7 @@ export function PathCopyButton({ label, path }: { label: string; path: string })
       aria-label={copied ? `${label} copied` : `Copy ${label}`}
       className={`shrink-0 rounded-md border border-shell-seam px-2 py-0.5 text-[10.5px] transition-colors ${
         copied
-          ? 'text-[#86efac]'
+          ? 'text-[light-dark(#15803d,#86efac)]'
           : 'text-text-subtle hover:bg-shell-hover hover:text-text-primary'
       }`}
       onClick={copy}

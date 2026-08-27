@@ -242,7 +242,7 @@ export function AgentInspectDrawer({
     <>
       <button
         aria-label="Close agent details"
-        className="fixed inset-0 z-[80] cursor-default bg-black/50"
+        className="fixed inset-0 z-[80] cursor-default bg-scrim"
         onClick={onClose}
         type="button"
       />
@@ -252,7 +252,7 @@ export function AgentInspectDrawer({
         aria-modal="true"
         aria-label="Agent details"
         tabIndex={-1}
-        className="animate-toast-in fixed bottom-0 right-0 top-0 z-[81] flex w-[min(560px,92vw)] flex-col border-l border-shell-seam bg-surface-panel shadow-[-20px_0_60px_rgba(0,0,0,0.6)]"
+        className="animate-toast-in fixed bottom-0 right-0 top-0 z-[81] flex w-[min(560px,92vw)] flex-col border-l border-shell-seam bg-surface-panel shadow-[var(--elev-drawer)]"
       >
         <header className="flex shrink-0 items-center gap-2.5 border-b border-shell-seam px-5 py-4">
           <span

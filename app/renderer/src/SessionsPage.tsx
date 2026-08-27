@@ -312,7 +312,7 @@ export function SessionsPage({
                   role="menu"
                   aria-label="Sort sessions"
                   onKeyDown={handleMenuRovingKeyDown}
-                  className="absolute right-0 top-9 z-50 w-[176px] rounded-[10px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[0_12px_32px_rgba(0,0,0,0.5)]"
+                  className="absolute right-0 top-9 z-50 w-[176px] rounded-[10px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[var(--elev-menu)]"
                 >
                   {(Object.keys(SORT_LABELS) as SessionSort[]).map(option => (
                     <button
@@ -964,7 +964,7 @@ export function BulkBar({
         : undefined
   return (
     <div className="pointer-events-none fixed bottom-6 left-12 right-0 z-[60] flex justify-center px-4">
-      <div className="pointer-events-auto flex max-w-full flex-wrap items-center justify-center gap-2 rounded-xl border border-white/[0.12] bg-shell-chrome py-2 pl-3.5 pr-2 shadow-[0_16px_40px_rgba(0,0,0,0.55)]">
+      <div className="pointer-events-auto flex max-w-full flex-wrap items-center justify-center gap-2 rounded-xl border border-white/[0.12] bg-shell-chrome py-2 pl-3.5 pr-2 shadow-[var(--elev-menu)]">
         <span className="whitespace-nowrap text-[12.5px] font-semibold text-text-primary">
           {selectedCount} selected
         </span>
@@ -1068,7 +1068,7 @@ function TagPopover({
         ref={popoverRef}
         role="dialog"
         aria-label={bulk ? 'Tag selected sessions' : 'Set session tag'}
-        className="fixed z-[71] w-[216px] rounded-[10px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[0_16px_40px_rgba(0,0,0,0.55)]"
+        className="fixed z-[71] w-[216px] rounded-[10px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[var(--elev-menu)]"
         style={
           placement.placeAbove
             ? { bottom: placement.bottom, left: placement.left }

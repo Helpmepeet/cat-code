@@ -135,7 +135,7 @@ export function MetadataInspector({
   return (
     <>
       <div
-        className="fixed inset-0 z-[80] bg-black/50"
+        className="fixed inset-0 z-[80] bg-scrim"
         aria-hidden="true"
         onClick={onClose}
       />
@@ -145,7 +145,7 @@ export function MetadataInspector({
         aria-modal="true"
         aria-label="Session metadata"
         tabIndex={-1}
-        className="animate-toast-in fixed inset-y-0 right-0 z-[81] flex w-[min(520px,92vw)] flex-col border-l border-shell-seam bg-surface-panel shadow-[-20px_0_60px_rgba(0,0,0,0.6)]"
+        className="animate-toast-in fixed inset-y-0 right-0 z-[81] flex w-[min(520px,92vw)] flex-col border-l border-shell-seam bg-surface-panel shadow-[var(--elev-drawer)]"
       >
         <div className="flex items-center gap-2.5 border-b border-shell-seam px-5 py-4">
           <div className="min-w-0 flex-1">

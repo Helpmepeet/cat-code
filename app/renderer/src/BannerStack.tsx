@@ -53,10 +53,10 @@ const BANNER_TONE: Record<BannerTone, Tone> = {
  * No shared-token equivalent exists yet, so this is a literal per-tone map.
  */
 const BANNER_SOFT_TEXT: Record<BannerTone, string> = {
-  danger: 'text-[#fca5a5]',
-  warn: 'text-[#fde68a]',
-  info: 'text-[#bfdbfe]',
-  accent: 'text-[#fbcfe8]',
+  danger: 'text-[light-dark(#dc2626,#fca5a5)]',
+  warn: 'text-[light-dark(#92400e,#fde68a)]',
+  info: 'text-[light-dark(#1d4ed8,#bfdbfe)]',
+  accent: 'text-[light-dark(#9d174d,#fbcfe8)]',
 }
 
 export function BannerStack({

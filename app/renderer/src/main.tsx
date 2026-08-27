@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { AccentThemeProvider } from './AccentThemeProvider.js'
 import { App } from './App.js'
 import { CodeThemeProvider } from './CodeThemeProvider.js'
+import { ColorSchemeProvider } from './ColorSchemeProvider.js'
 import { GlassModeProvider } from './GlassModeProvider.js'
 import { ReasoningLayoutProvider } from './ReasoningLayoutProvider.js'
 import { ToastHost } from './ToastHost.js'
@@ -37,28 +38,36 @@ if (!root) {
 // `GlassModeProvider` renders no wrapper at all. Its target is the document
 // element, which is above `#root`, so unlike the accent it covers the tree from
 // wherever it sits and its position here carries no meaning.
+//
+// `ColorSchemeProvider` stamps that same document element, and ITS position does
+// carry meaning: it has to sit above glass. Glass reads its alphas out of
+// `light-dark()`, which resolves against the `color-scheme` the appearance sets,
+// so an appearance applied second would put the dark glass ground on a light
+// window for the first paint after every reload.
 createRoot(root).render(
   <StrictMode>
     <RendererErrorBoundary
       onFault={fault => reportFault(fault.kind, fault.message)}
     >
-      <GlassModeProvider>
-        <AccentThemeProvider>
-          <ToastHost>
-            <ReasoningLayoutProvider>
-              <CodeThemeProvider>
-                <ToolsExpandedProvider>
-                  <ToolCardStyleProvider>
-                    <ProseArrivalProvider>
-                      <App />
-                    </ProseArrivalProvider>
-                  </ToolCardStyleProvider>
-                </ToolsExpandedProvider>
-              </CodeThemeProvider>
-            </ReasoningLayoutProvider>
-          </ToastHost>
-        </AccentThemeProvider>
-      </GlassModeProvider>
+      <ColorSchemeProvider>
+        <GlassModeProvider>
+          <AccentThemeProvider>
+            <ToastHost>
+              <ReasoningLayoutProvider>
+                <CodeThemeProvider>
+                  <ToolsExpandedProvider>
+                    <ToolCardStyleProvider>
+                      <ProseArrivalProvider>
+                        <App />
+                      </ProseArrivalProvider>
+                    </ToolCardStyleProvider>
+                  </ToolsExpandedProvider>
+                </CodeThemeProvider>
+              </ReasoningLayoutProvider>
+            </ToastHost>
+          </AccentThemeProvider>
+        </GlassModeProvider>
+      </ColorSchemeProvider>
     </RendererErrorBoundary>
   </StrictMode>,
 )

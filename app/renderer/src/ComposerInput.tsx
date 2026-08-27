@@ -288,7 +288,7 @@ export function ComposerInput({
        * selectable. */}
       {preview ? (
         <div
-          className="absolute bottom-[calc(100%+6px)] left-2 z-40 max-h-[40vh] w-[min(560px,80vw)] overflow-auto rounded-[10px] border border-white/[0.12] bg-surface-raised p-3 shadow-[0_12px_32px_rgba(0,0,0,0.5)]"
+          className="absolute bottom-[calc(100%+6px)] left-2 z-40 max-h-[40vh] w-[min(560px,80vw)] overflow-auto rounded-[10px] border border-white/[0.12] bg-surface-raised p-3 shadow-[var(--elev-menu)]"
           onMouseEnter={() => openPreview(preview.id, 'hover')}
           onMouseLeave={closePreviewSoon}
           role="tooltip"

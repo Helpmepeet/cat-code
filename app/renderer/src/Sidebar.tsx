@@ -794,7 +794,7 @@ export function Sidebar({
         className={
           'fixed inset-y-0 left-0 z-50 flex flex-col overflow-hidden border-r border-white/[0.05] bg-surface-panel transition-[width,box-shadow] duration-200 ease-out ' +
           (open
-            ? 'sidebar-expanded shadow-[4px_0_24px_rgba(0,0,0,0.45)]'
+            ? 'sidebar-expanded shadow-[var(--elev-rail)]'
             : 'w-12') +
           (resizing ? ' transition-none' : '')
         }
@@ -865,7 +865,7 @@ export function Sidebar({
                   placeholder="Search sessions…"
                   value={search}
                   onChange={event => setSearch(event.target.value)}
-                  className="w-full rounded-lg border border-white/[0.07] bg-white/[0.04] py-1.5 pl-[26px] pr-2 text-xs text-[#d4d4d8] outline-none placeholder:text-text-subtle focus:border-accent/35"
+                  className="w-full rounded-lg border border-white/[0.07] bg-white/[0.04] py-1.5 pl-[26px] pr-2 text-xs text-[light-dark(#3f3f46,#d4d4d8)] outline-none placeholder:text-text-subtle focus:border-accent/35"
                 />
               </div>
             </div>
@@ -875,7 +875,7 @@ export function Sidebar({
               <button
                 type="button"
                 onClick={onNewChat}
-                className="mx-2 mb-2 flex shrink-0 items-center gap-[9px] rounded-md px-2 py-1.5 text-[12.5px] font-medium text-[#d4d4d8] transition-colors hover:bg-accent/10 hover:text-accent-soft"
+                className="mx-2 mb-2 flex shrink-0 items-center gap-[9px] rounded-md px-2 py-1.5 text-[12.5px] font-medium text-[light-dark(#3f3f46,#d4d4d8)] transition-colors hover:bg-accent/10 hover:text-accent-soft"
               >
                 <span
                   aria-hidden="true"
@@ -1275,7 +1275,7 @@ export function WorkspaceActionsMenu({
         ref={menuRef}
         role="menu"
         aria-label={`Project actions for ${workspaceName}`}
-        className="animate-sa-pop fixed z-[71] w-[232px] rounded-[11px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[0_18px_44px_rgba(0,0,0,0.6)]"
+        className="animate-sa-pop fixed z-[71] w-[232px] rounded-[11px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[var(--elev-menu)]"
         style={
           placement.placeAbove
             ? { bottom: placement.bottom, left: placement.left }
@@ -1521,7 +1521,7 @@ export function SessionGroup({
               {collapsed ? <FolderClosedIcon /> : <FolderOpenIcon />}
             </span>
           ) : null}
-          <span className="truncate text-[12.5px] font-medium text-text-muted group-hover/head:text-[#d4d4d8]">
+          <span className="truncate text-[12.5px] font-medium text-text-muted group-hover/head:text-[light-dark(#3f3f46,#d4d4d8)]">
             {group.name}
           </span>
         </button>
@@ -1866,9 +1866,9 @@ export function SidebarRowItem({
             className={
               'truncate text-[13px] font-medium ' +
               (isActive
-                ? 'text-[#fce7f3]'
+                ? 'text-[light-dark(#9d174d,#fce7f3)]'
                 : openable
-                  ? 'text-[#c4c4c8] group-hover:text-text-primary'
+                  ? 'text-[light-dark(#52525b,#c4c4c8)] group-hover:text-text-primary'
                   : 'text-text-subtle')
             }
           >
@@ -2027,7 +2027,7 @@ function NavItemExpanded({
         motion +
         (active
           ? ' bg-accent/[0.09] text-accent-soft'
-          : ' text-text-subtle hover:text-[#d4d4d8]')
+          : ' text-text-subtle hover:text-[light-dark(#3f3f46,#d4d4d8)]')
       }
     >
       <span className="flex h-5 w-8 shrink-0 items-center justify-center">
@@ -2094,7 +2094,7 @@ function NavItemRail({
         'relative flex h-8 w-8 items-center justify-center rounded-md ' +
         (active
           ? 'bg-accent/[0.12] text-accent-soft'
-          : 'text-text-subtle hover:text-[#d4d4d8]')
+          : 'text-text-subtle hover:text-[light-dark(#3f3f46,#d4d4d8)]')
       }
     >
       {item.icon}

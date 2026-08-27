@@ -61,7 +61,7 @@ export function SlashCommandPicker({
   if (!open || commands.length === 0) return null
 
   return (
-    <div className="absolute bottom-full left-0 right-0 z-30 mb-2 overflow-hidden rounded-xl border border-white/10 bg-surface-raised shadow-[0_20px_48px_rgba(0,0,0,0.7),0_0_0_1px_rgb(var(--accent-rgb)/0.06)]">
+    <div className="absolute bottom-full left-0 right-0 z-30 mb-2 overflow-hidden rounded-xl border border-white/10 bg-surface-raised shadow-[var(--elev-popover),0_0_0_1px_rgb(var(--accent-rgb)/0.06)]">
       <div className="flex items-center justify-between border-b border-shell-seam px-3 py-1.5">
         <div className="flex items-center gap-2">
           <span className="rounded bg-accent/15 px-1.5 font-mono text-[11px] font-semibold text-accent">

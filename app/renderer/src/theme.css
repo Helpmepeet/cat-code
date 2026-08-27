@@ -45,7 +45,11 @@
    * this near-black shell: a white scrollbar track down the side of every scroller
    * (visible whenever the OS is set to always-show scroll bars, or a mouse is
    * attached), plus light-mode focus rings and text-field chrome. `web/src/index.css`
-   * has carried this since it shipped; the desktop renderer never got it. */
+   * has carried this since it shipped; the desktop renderer never got it.
+   *
+   * It also decides every `light-dark()` in this file and in the ~90 arbitrary
+   * `text-[light-dark(a,b)]` classes the transcript paints its status ink with, so
+   * the light block below must move it or half the app stays on its dark values. */
   color-scheme: dark;
 
   --accent: #f472b6;
@@ -75,6 +79,106 @@
   --tone-warn: #fbbf24;
   --tone-danger: #f87171;
   --tone-info: #60a5fa;
+
+  /* Settings source badges. `user` is the muted text hue and `project`/`local`
+   * are the info/purple hues, so all three move with the appearance for the same
+   * reason those do: as TEXT on a near-white ground a 400-level hue is around
+   * 2.5:1. `flag` and `policy` reuse `--tone-warn` / `--tone-danger` and need no
+   * declaration of their own. */
+  --source-user: #a1a1aa;
+  --source-project: #60a5fa;
+  --source-local: #c084fc;
+
+  /*
+   * ── The appearance layer (`colorScheme.ts`) ───────────────────────────────
+   *
+   * Everything from here to `--elev-toast` exists so that ONE rule
+   * (`html[data-appearance='light']`, below the accents) can repaint the shell.
+   * The values here are the dark ones the app has always had, moved out of
+   * `@theme inline` and behind a plain var, because `@theme inline` compiles a
+   * token's VALUE into every utility it generates: with `--color-app-bg: #09090b`
+   * written inline, `bg-app-bg` is a hardcoded hex and no later rule can reach it.
+   * Verified by reading computed styles off the built stylesheet, not assumed:
+   * overriding `--color-app-bg` moved nothing, overriding `--app-bg` moves
+   * everything.
+   *
+   * Only tokens that DIFFER between the two appearances are routed this way. The
+   * accent and tone tokens already resolve through `--accent` / `--tone-*` and
+   * need no second indirection.
+   */
+
+  /* Window grounds. The shell's grammar is a step-relationship, not a set of
+   * absolute values: chrome sits one step BELOW the body, a drawer one step
+   * below that, and a floating surface one step ABOVE. Light keeps the same
+   * relationships with the steps pointing the other way, which is why the light
+   * `--surface-raised` is pure white and its `--shell-chrome` is grey. */
+  --app-bg: #09090b;
+  --shell-chrome: #070709;
+  --surface-raised: #111113;
+  --surface-panel: #0a0a0c;
+
+  /* Seams, hover and active are LIGHTENING washes on a dark ground. On a light
+   * one a white hairline is invisible, so light inverts them rather than
+   * lightening them further. 198 `border-shell-seam` call sites depend on it. */
+  --shell-seam: rgba(255, 255, 255, 0.06);
+  --shell-hover: rgba(255, 255, 255, 0.045);
+  --shell-active: rgba(255, 255, 255, 0.06);
+
+  /* The text ramp. Dark values are the operator's own (see the note in
+   * `@theme inline`); the light ones are derived the same way, by matching each
+   * step's CONTRAST against its ground rather than by inverting its hex:
+   *   dark   18.10 : 7.76 : 6.94 : 5.28 : 4.35  against #09090b
+   *   light  17.28 : 7.54 : 6.96 : 5.22 : 4.38  against #fcfcfd
+   * so `text-text-subtle` — the app's most-used text colour — carries the same
+   * legibility in both, and neither ramp is an arithmetic inversion of the other. */
+  --text-primary: #f4f4f5;
+  --text-muted: #a1a1aa;
+  --text-subtle: #98989f;
+  --text-faint: #838389;
+  --text-ghost: #75757b;
+
+  /*
+   * Ink on a SATURATED FILL, and the one token that fixes the app's oldest
+   * double meaning. `--color-app-bg` was carrying this role: all 24 `text-app-bg`
+   * call sites are the label on an accent or tone-filled button, a badge, or a
+   * toggle knob, and NONE of them mean the page ground. Repainting the ground
+   * without splitting this first would have taken the permission prompt's
+   * Allow/Deny label from 7.5:1 to 1.9:1 with nothing in the suite noticing.
+   *
+   * It is not simply the inverse of the ground, because the fills themselves
+   * change level: dark mode fills with 400-level hues and writes near-black on
+   * them (7.2-11.9:1), light mode fills with 600/700-level hues and writes white
+   * (4.6-6.0:1). Same role, opposite value, for the same reason.
+   */
+  --on-fill: #09090b;
+
+  /* Modal backdrops, split out of `bg-black/<alpha>` for the same reason. The
+   * 21 black washes carry two jobs — a scrim over the whole window, and a
+   * recessed well inside a card — and light mode wants them to diverge: the well
+   * turns into a barely-there grey, the scrim has to keep dimming. */
+  --scrim: rgba(0, 0, 0, 0.6);
+
+  /*
+   * Elevation. 22 floating surfaces hardcoded their own
+   * `shadow-[0_18px_44px_rgba(0,0,0,0.6)]`, which is correct on a near-black
+   * ground and reads as soot on a near-white one. Six tokens replace them.
+   *
+   * Light is not the dark shadow at a lower alpha: it is two layers, a wide soft
+   * one for the lift and a tight dark one for the contact edge, because on a
+   * light ground a single wide shadow reads as a smudge with no edge and the
+   * surface stops looking like it is above the page.
+   */
+  --elev-menu: 0 18px 44px rgba(0, 0, 0, 0.6);
+  --elev-modal: 0 30px 80px rgba(0, 0, 0, 0.6);
+  --elev-popover: 0 14px 38px rgba(0, 0, 0, 0.5);
+  --elev-drawer: -20px 0 60px rgba(0, 0, 0, 0.6);
+  --elev-rail: 4px 0 24px rgba(0, 0, 0, 0.45);
+  --elev-toast: 0 12px 32px rgba(0, 0, 0, 0.4);
+
+  /* The scrollbar thumb is painted in `@layer base` on every scroller in the
+   * app, and it is a white wash like the seams. */
+  --scrollbar-thumb: rgba(255, 255, 255, 0.1);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.2);
 
   /*
    * The session column: transcript rows, the restore skeleton, the composer dock
@@ -135,6 +239,144 @@
 }
 
 /*
+ * ── The light appearance (`colorScheme.ts`) ───────────────────────────────────
+ *
+ * OFF is the absence of the attribute, exactly like glass: with no
+ * `data-appearance='light'` on the document element none of this matches, and
+ * the app is the one that shipped. `colorScheme.ts` stamps `light` or `dark`,
+ * never nothing, but only `light` has rules; `dark` is stamped so that the
+ * attribute always states which appearance is live rather than leaving "dark"
+ * indistinguishable from "not applied yet".
+ *
+ * WHY THIS IS ON `html` AND NOT A WRAPPER, unlike the accent. `html` and `body`
+ * paint the page ground themselves and sit above `#root`, so a React wrapper
+ * cannot reach them, and the ground is the whole point (`glassMode.ts` made the
+ * same call for the same reason).
+ *
+ * `color-scheme: light` is load-bearing twice over. It gives Chromium its light
+ * form controls, focus rings and default scrollbars, and it is what every
+ * `light-dark()` in this file and in the transcript's ~90 status-ink classes
+ * resolves against. Without it half the app would keep its dark values on a
+ * white page.
+ */
+html[data-appearance='light'] {
+  color-scheme: light;
+
+  /* Grounds. The step relationships are the dark shell's, reflected: content is
+   * the brightest thing, chrome sits a step down from it, a drawer a step below
+   * that, and a floating surface goes UP, which on a light shell means pure
+   * white lifted off the page by its shadow rather than a lighter grey. */
+  --app-bg: #fcfcfd;
+  --shell-chrome: #f1f1f4;
+  --surface-raised: #ffffff;
+  --surface-panel: #f7f7f9;
+
+  /* Inverted, not lightened further. A white hairline on a white ground is
+   * nothing; these are the same washes turned around. */
+  --shell-seam: rgba(9, 9, 11, 0.1);
+  --shell-hover: rgba(9, 9, 11, 0.04);
+  --shell-active: rgba(9, 9, 11, 0.065);
+
+  /* Contrast-matched to the dark ramp step for step, not inverted; the ratios
+   * are in the `:root` note. */
+  --text-primary: #18181b;
+  --text-muted: #52525b;
+  --text-subtle: #575761;
+  --text-faint: #6a6a74;
+  --text-ghost: #767680;
+
+  /* White, because every fill this sits on is a 600/700-level hue here. */
+  --on-fill: #ffffff;
+
+  /* A scrim still has to dim, so it stays dark and only loosens. It is the one
+   * black wash that does NOT follow `--color-black` below. */
+  --scrim: rgba(24, 24, 27, 0.32);
+
+  /* Two layers each: a wide soft lift, plus a tight contact edge without which
+   * a light-on-light surface has no boundary and reads as a smudge. */
+  --elev-menu: 0 12px 32px rgba(24, 24, 27, 0.13), 0 2px 6px rgba(24, 24, 27, 0.09);
+  --elev-modal: 0 24px 60px rgba(24, 24, 27, 0.18), 0 4px 10px rgba(24, 24, 27, 0.09);
+  --elev-popover: 0 10px 26px rgba(24, 24, 27, 0.12), 0 2px 5px rgba(24, 24, 27, 0.08);
+  --elev-drawer: -16px 0 44px rgba(24, 24, 27, 0.13);
+  --elev-rail: 4px 0 20px rgba(24, 24, 27, 0.1);
+  --elev-toast: 0 10px 26px rgba(24, 24, 27, 0.13), 0 2px 5px rgba(24, 24, 27, 0.08);
+
+  --scrollbar-thumb: rgba(9, 9, 11, 0.18);
+  --scrollbar-thumb-hover: rgba(9, 9, 11, 0.32);
+
+  /*
+   * THE 195 HARDCODED ALPHAS, IN TWO DECLARATIONS.
+   *
+   * 174 `white/<alpha>` and 21 `black/<alpha>` utilities across 38 files all
+   * assume a dark ground, and none of them is reachable by a theme token. They
+   * do not need to be: Tailwind v4 emits `color-mix(in oklab, var(--color-white)
+   * 5%, transparent)` for every one of them, behind an `@supports color-mix(in
+   * lab, …)` that Chromium 130 satisfies, so the two names below ARE the two
+   * washes. Verified against the built stylesheet by reading computed styles,
+   * because the literal fallback that precedes each rule looks identical in
+   * source and would have hidden a failure.
+   *
+   * Read them as roles, not colours: `--color-white` is the wash that separates
+   * a surface FROM its ground, and on a light ground that separation is darker,
+   * not lighter. `--color-black` is the recessed wash — a code well, a tool
+   * output band — which stays a darkening in both appearances and only softens,
+   * so it is zinc rather than the inversion `--color-white` gets.
+   *
+   * The three bare `text-white` sites were converted to `text-on-fill` first;
+   * they were ink on a coloured button, which is a different role and would have
+   * inverted into unreadability here.
+   */
+  --color-white: #18181b;
+  --color-black: #3f3f46;
+
+  /* Tones and accents move from the 400 level to 600/700. A 400-level hue is a
+   * legible fill on black and roughly 2.5:1 as text on white, and these carry
+   * both roles: `text-tone-danger` (38 sites) and `bg-tone-danger` (30) are the
+   * same token. Every value below clears 4.5:1 as text on `--app-bg` AND 4.5:1
+   * for white ink laid on it, so one token can keep serving both. */
+  --tone-good: #15803d;
+  --tone-warn: #b45309;
+  --tone-danger: #dc2626;
+  --tone-info: #2563eb;
+
+  --source-user: #52525b;
+  --source-project: #2563eb;
+  --source-local: #7c3aed;
+
+  /* The default accent. The other four need their own rules below, because
+   * `AccentThemeProvider` declares them on a wrapper INSIDE `html` and a
+   * descendant's own declaration wins over an inherited one; pink alone has no
+   * `[data-accent]` rule, so it inherits this. */
+  --accent: #d21e6b;
+  --accent-soft: #be185d;
+  --accent-rgb: 210 30 107;
+}
+
+/* `--accent-soft` is "one step further into the accent" — brighter on a dark
+ * ground, deeper on a light one. It carries emphasis (active nav, the current
+ * session's title), so on white it has to go darker or emphasis reads as fade. */
+html[data-appearance='light'] [data-accent='blue'] {
+  --accent: #2563eb;
+  --accent-soft: #1d4ed8;
+  --accent-rgb: 37 99 235;
+}
+html[data-appearance='light'] [data-accent='green'] {
+  --accent: #15803d;
+  --accent-soft: #166534;
+  --accent-rgb: 21 128 61;
+}
+html[data-appearance='light'] [data-accent='purple'] {
+  --accent: #7c3aed;
+  --accent-soft: #6d28d9;
+  --accent-rgb: 124 58 237;
+}
+html[data-appearance='light'] [data-accent='amber'] {
+  --accent: #b45309;
+  --accent-soft: #92400e;
+  --accent-rgb: 180 83 9;
+}
+
+/*
  * Glass mode (`glassMode.ts`). OFF by default, and off means these two rules do
  * not match at all: nothing above is redeclared, so the app is byte-identical to
  * the one that shipped.
@@ -147,9 +389,11 @@
  * EXACTLY ONE ground goes translucent, and it is `html`'s. An earlier version
  * redeclared the four theme tokens instead, which was wrong: each of them carries
  * a second role that translucency breaks.
- *   `--color-app-bg` is also the INK on accent-filled buttons (`.text-app-bg`,
+ *   `--color-app-bg` was also the INK on accent-filled buttons (`.text-app-bg`,
  *     ~25 call sites), so glass took the permission prompt's Allow/Deny label
- *     from roughly 7.5:1 contrast to 3.8:1, under AA.
+ *     from roughly 7.5:1 contrast to 3.8:1, under AA. That particular double
+ *     meaning is gone — the light appearance had to split it out as
+ *     `--color-on-fill` — but the rule it taught still holds for the other two.
  *   `--color-shell-chrome` grounds nine floating menus, not just the rail, so a
  *     menu opened over the transcript let the text read through it.
  *   `--color-surface-panel` backs SVG separators and the sidebar fade masks,
@@ -170,9 +414,23 @@
  * (measured side by side against a transparent cell, 2026-08-27). 0 is pure
  * material and the most glass available; above roughly 0.35 there is nothing
  * left to see.
+ *
+ * THE LIGHT APPEARANCE GETS ITS OWN MATERIAL, not a lighter coat of paint over
+ * this one. `NSVisualEffectView` picks its material from the app's effective
+ * appearance, so `nativeTheme.themeSource` (set in main from the renderer's
+ * choice) is what swaps the blur behind the page from the dark material to the
+ * light one; all this rule does either way is decide how much of it survives.
+ * The light value is the same order of magnitude for the same reason — the
+ * ground is painting onto a bright blur, not onto the wallpaper — and it is the
+ * one number here still worth checking by eye against a wallpaper with strong
+ * colour in it.
+ *
+ * `light-dark()` rather than a second `[data-appearance]` rule because the whole
+ * declaration is one value; it resolves against the `color-scheme` the light
+ * block sets, which is why that property is not optional there.
  */
 html[data-glass='on'] {
-  background: rgba(9, 9, 11, 0.2);
+  background: light-dark(rgba(252, 252, 253, 0.22), rgba(9, 9, 11, 0.2));
 }
 
 /*
@@ -209,7 +467,7 @@ html[data-glass='on'] [data-window-ground] {
  * transcript through is not a menu.
  */
 html[data-glass='on'] [data-window-chrome] {
-  background: rgba(7, 7, 9, 0.12);
+  background: light-dark(rgba(232, 232, 238, 0.16), rgba(7, 7, 9, 0.12));
 }
 
 /*
@@ -229,29 +487,37 @@ html[data-glass='on'] [data-window-chrome] {
  * only has to supply tint.
  */
 html[data-glass='on'] [data-window-overlay] {
-  background: rgba(7, 7, 9, 0.12);
+  background: light-dark(rgba(232, 232, 238, 0.16), rgba(7, 7, 9, 0.12));
   backdrop-filter: blur(22px);
 }
 
 @theme inline {
-  --color-app-bg: #09090b;
+  /*
+   * EVERY VALUE BELOW THAT DIFFERS BETWEEN APPEARANCES IS `var(...)`, NOT A HEX.
+   * `@theme inline` compiles the value into each utility it generates, so a
+   * literal here is a literal in `bg-app-bg` and `html[data-appearance='light']`
+   * cannot reach it. The vars are declared in `:root` above with their dark
+   * values; only tokens that never change (the source badges' hues, the fonts)
+   * keep a literal here.
+   */
+  --color-app-bg: var(--app-bg);
   /* Shell chrome (P3-5a): the TabBar / sidebar rail sit one step darker than
    * the app body, with a faint top-light hairline — the prototype's shell
    * grammar (#070709 chrome, rgba(255,255,255,0.06) seams). 5b's Sidebar reuses
    * these so the two panels read as one frame. */
-  --color-shell-chrome: #070709;
-  --color-shell-seam: rgba(255, 255, 255, 0.06);
-  --color-shell-hover: rgba(255, 255, 255, 0.045);
-  --color-shell-active: rgba(255, 255, 255, 0.06);
+  --color-shell-chrome: var(--shell-chrome);
+  --color-shell-seam: var(--shell-seam);
+  --color-shell-hover: var(--shell-hover);
+  --color-shell-active: var(--shell-active);
   /* Raised floating surfaces (P4-1 shared primitives): a toast/popover sits one
    * step ABOVE the app body (#111113), a side drawer (ToolInspector, goal
    * drawer) one step below it (#0a0a0c). The prototype paints these exact shades
    * for its floating/overlay chrome; tokenised here so every W4 domain's
    * popovers/drawers read as one system instead of scattering raw hexes. */
-  --color-surface-raised: #111113;
-  --color-surface-panel: #0a0a0c;
-  --color-text-primary: #f4f4f5;
-  --color-text-muted: #a1a1aa;
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-panel: var(--surface-panel);
+  --color-text-primary: var(--text-primary);
+  --color-text-muted: var(--text-muted);
   /*
    * LIGHTENED 2026-08-07 (operator, settled on a live tuner). The prototype's
    * values were #71717a / #52525b / #3f3f46, and against this near-black body
@@ -269,9 +535,14 @@ html[data-glass='on'] [data-window-overlay] {
    * Meaning is unchanged: faint/ghost are for RESTING / ghost / disabled text,
    * never a swap for primary or muted.
    */
-  --color-text-subtle: #98989f;
-  --color-text-faint: #838389;
-  --color-text-ghost: #75757b;
+  --color-text-subtle: var(--text-subtle);
+  --color-text-faint: var(--text-faint);
+  --color-text-ghost: var(--text-ghost);
+  /* Ink on a saturated fill, and the modal scrim. Both are roles the four
+   * window grounds and `bg-black/<alpha>` used to carry between them; see the
+   * `--on-fill` and `--scrim` notes in `:root`. */
+  --color-on-fill: var(--on-fill);
+  --color-scrim: var(--scrim);
   --color-accent: var(--accent);
   --color-accent-soft: var(--accent-soft);
 
@@ -285,9 +556,9 @@ html[data-glass='on'] [data-window-overlay] {
    * SETTING_SOURCES palette (Settings.jsx) so the badges read as the prototype.
    * user=muted, project=blue, local=purple, flag reuses warn, policy reuses
    * danger. Same source-of-hex justification as the tone tokens above. */
-  --color-source-user: #a1a1aa;
-  --color-source-project: #60a5fa;
-  --color-source-local: #c084fc;
+  --color-source-user: var(--source-user);
+  --color-source-project: var(--source-project);
+  --color-source-local: var(--source-local);
   --color-source-flag: var(--tone-warn);
   --color-source-policy: var(--tone-danger);
 
@@ -337,12 +608,12 @@ html[data-glass='on'] [data-window-overlay] {
   }
 
   ::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--scrollbar-thumb);
     border-radius: 2px;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.2);
+    background: var(--scrollbar-thumb-hover);
   }
 
   /* The square where a vertical and a horizontal bar meet. Left alone it is the
@@ -876,13 +1147,29 @@ html[data-glass='on'] [data-window-overlay] {
  * block background stays page-black via `bg-app-bg` on the CodeBlock container,
  * so only the token/fg colors carry the theme. This UNSCOPED block IS the
  * `dracula` option of the Settings picker below, which is why that key has no
- * `[data-code-theme]` rules of its own. Unlayered so token colors win. */
+ * `[data-code-theme]` rules of its own. Unlayered so token colors win.
+ *
+ * LIGHT APPEARANCE. Because the block takes its ground from `bg-app-bg`, a light
+ * page turns every one of these palettes into pale ink on near-white. Each
+ * declaration therefore carries a `light-dark()` pair whose SECOND value is the
+ * dark hex unchanged, and whose first is that theme's own published light
+ * sibling: Alucard for Dracula, One Light for One Dark, Nord's Snow Storm
+ * inversion, GitHub Light, Monokai Light. A theme picked by name stays that
+ * theme in both appearances instead of being swapped for one generic light one.
+ *
+ * Two of One Light's own values (its comment grey and its green) are darkened a
+ * step to clear 3.5:1 on this ground; every other value is the published hex.
+ * Same kind of deviation, and the same reason, as the text ramp above.
+ *
+ * Written as pairs rather than a parallel `html[data-appearance='light']` block
+ * because a duplicated palette drifts: both halves of a token sit on one line,
+ * so an edit cannot change one appearance and silently forget the other. */
 .hljs {
-  color: #f8f8f2;
+  color: light-dark(#1f1f1f, #f8f8f2);
 }
 .hljs-comment,
 .hljs-quote {
-  color: #6272a4;
+  color: light-dark(#635d97, #6272a4);
   font-style: italic;
 }
 .hljs-keyword,
@@ -892,32 +1179,32 @@ html[data-glass='on'] [data-window-overlay] {
 .hljs-name,
 .hljs-meta,
 .hljs-meta-keyword {
-  color: #ff79c6;
+  color: light-dark(#a3144d, #ff79c6);
 }
 .hljs-string,
 .hljs-regexp,
 .hljs-meta .hljs-string,
 .hljs-char.escape_ {
-  color: #f1fa8c;
+  color: light-dark(#846e15, #f1fa8c);
 }
 .hljs-number,
 .hljs-literal,
 .hljs-symbol,
 .hljs-bullet {
-  color: #bd93f9;
+  color: light-dark(#644ac9, #bd93f9);
 }
 .hljs-title,
 .hljs-title.function_,
 .hljs-section,
 .hljs-doctag {
-  color: #50fa7b;
+  color: light-dark(#14710a, #50fa7b);
 }
 .hljs-built_in,
 .hljs-type,
 .hljs-title.class_,
 .hljs-class .hljs-title,
 .hljs-selector-class {
-  color: #8be9fd;
+  color: light-dark(#036a96, #8be9fd);
 }
 .hljs-attr,
 .hljs-attribute,
@@ -926,13 +1213,13 @@ html[data-glass='on'] [data-window-overlay] {
 .hljs-template-variable,
 .hljs-selector-attr,
 .hljs-selector-id {
-  color: #66d9ef;
+  color: light-dark(#0a6e8c, #66d9ef);
 }
 .hljs-addition {
-  color: #50fa7b;
+  color: light-dark(#14710a, #50fa7b);
 }
 .hljs-deletion {
-  color: #ff5555;
+  color: light-dark(#cb3a2a, #ff5555);
 }
 .hljs-emphasis {
   font-style: italic;
@@ -941,7 +1228,7 @@ html[data-glass='on'] [data-window-overlay] {
   font-weight: 600;
 }
 .hljs-link {
-  color: #8be9fd;
+  color: light-dark(#036a96, #8be9fd);
   text-decoration: underline;
 }
 
@@ -973,11 +1260,11 @@ html[data-glass='on'] [data-window-overlay] {
  * override outranks exactly the rule it replaces. */
 
 [data-code-theme="oneDark"] .hljs {
-  color: #abb2bf;
+  color: light-dark(#383a42, #abb2bf);
 }
 [data-code-theme="oneDark"] .hljs-comment,
 [data-code-theme="oneDark"] .hljs-quote {
-  color: #5c6370;
+  color: light-dark(#7e7f86, #5c6370);
 }
 [data-code-theme="oneDark"] .hljs-keyword,
 [data-code-theme="oneDark"] .hljs-selector-tag,
@@ -985,37 +1272,37 @@ html[data-glass='on'] [data-window-overlay] {
 [data-code-theme="oneDark"] .hljs-name,
 [data-code-theme="oneDark"] .hljs-meta,
 [data-code-theme="oneDark"] .hljs-meta-keyword {
-  color: #c678dd;
+  color: light-dark(#a626a4, #c678dd);
 }
 [data-code-theme="oneDark"] .hljs-operator {
-  color: #56b6c2;
+  color: light-dark(#0184bc, #56b6c2);
 }
 [data-code-theme="oneDark"] .hljs-string,
 [data-code-theme="oneDark"] .hljs-regexp,
 [data-code-theme="oneDark"] .hljs-meta .hljs-string,
 [data-code-theme="oneDark"] .hljs-char.escape_ {
-  color: #98c379;
+  color: light-dark(#468a45, #98c379);
 }
 [data-code-theme="oneDark"] .hljs-number,
 [data-code-theme="oneDark"] .hljs-literal,
 [data-code-theme="oneDark"] .hljs-symbol,
 [data-code-theme="oneDark"] .hljs-bullet {
-  color: #d19a66;
+  color: light-dark(#986801, #d19a66);
 }
 [data-code-theme="oneDark"] .hljs-title,
 [data-code-theme="oneDark"] .hljs-title.function_,
 [data-code-theme="oneDark"] .hljs-section,
 [data-code-theme="oneDark"] .hljs-doctag {
-  color: #61afef;
+  color: light-dark(#4078f2, #61afef);
 }
 [data-code-theme="oneDark"] .hljs-built_in {
-  color: #e5c07b;
+  color: light-dark(#b07d02, #e5c07b);
 }
 [data-code-theme="oneDark"] .hljs-type,
 [data-code-theme="oneDark"] .hljs-title.class_,
 [data-code-theme="oneDark"] .hljs-class .hljs-title,
 [data-code-theme="oneDark"] .hljs-selector-class {
-  color: #e5c07b;
+  color: light-dark(#b07d02, #e5c07b);
 }
 [data-code-theme="oneDark"] .hljs-attr,
 [data-code-theme="oneDark"] .hljs-attribute,
@@ -1024,18 +1311,18 @@ html[data-glass='on'] [data-window-overlay] {
 [data-code-theme="oneDark"] .hljs-template-variable,
 [data-code-theme="oneDark"] .hljs-selector-attr,
 [data-code-theme="oneDark"] .hljs-selector-id {
-  color: #e06c75;
+  color: light-dark(#d33b3b, #e06c75);
 }
 [data-code-theme="oneDark"] .hljs-link {
-  color: #e5c07b;
+  color: light-dark(#b07d02, #e5c07b);
 }
 
 [data-code-theme="nord"] .hljs {
-  color: #d8dee9;
+  color: light-dark(#2e3440, #d8dee9);
 }
 [data-code-theme="nord"] .hljs-comment,
 [data-code-theme="nord"] .hljs-quote {
-  color: #616e88;
+  color: light-dark(#6b7280, #616e88);
 }
 [data-code-theme="nord"] .hljs-keyword,
 [data-code-theme="nord"] .hljs-selector-tag,
@@ -1043,37 +1330,37 @@ html[data-glass='on'] [data-window-overlay] {
 [data-code-theme="nord"] .hljs-name,
 [data-code-theme="nord"] .hljs-meta,
 [data-code-theme="nord"] .hljs-meta-keyword {
-  color: #81a1c1;
+  color: light-dark(#2e6b8f, #81a1c1);
 }
 [data-code-theme="nord"] .hljs-operator {
-  color: #81a1c1;
+  color: light-dark(#2e6b8f, #81a1c1);
 }
 [data-code-theme="nord"] .hljs-string,
 [data-code-theme="nord"] .hljs-regexp,
 [data-code-theme="nord"] .hljs-meta .hljs-string,
 [data-code-theme="nord"] .hljs-char.escape_ {
-  color: #a3be8c;
+  color: light-dark(#4f7a3a, #a3be8c);
 }
 [data-code-theme="nord"] .hljs-number,
 [data-code-theme="nord"] .hljs-literal,
 [data-code-theme="nord"] .hljs-symbol,
 [data-code-theme="nord"] .hljs-bullet {
-  color: #b48ead;
+  color: light-dark(#8a5f86, #b48ead);
 }
 [data-code-theme="nord"] .hljs-title,
 [data-code-theme="nord"] .hljs-title.function_,
 [data-code-theme="nord"] .hljs-section,
 [data-code-theme="nord"] .hljs-doctag {
-  color: #88c0d0;
+  color: light-dark(#2f7d92, #88c0d0);
 }
 [data-code-theme="nord"] .hljs-built_in {
-  color: #8fbcbb;
+  color: light-dark(#35786f, #8fbcbb);
 }
 [data-code-theme="nord"] .hljs-type,
 [data-code-theme="nord"] .hljs-title.class_,
 [data-code-theme="nord"] .hljs-class .hljs-title,
 [data-code-theme="nord"] .hljs-selector-class {
-  color: #8fbcbb;
+  color: light-dark(#35786f, #8fbcbb);
 }
 [data-code-theme="nord"] .hljs-attr,
 [data-code-theme="nord"] .hljs-attribute,
@@ -1082,18 +1369,18 @@ html[data-glass='on'] [data-window-overlay] {
 [data-code-theme="nord"] .hljs-template-variable,
 [data-code-theme="nord"] .hljs-selector-attr,
 [data-code-theme="nord"] .hljs-selector-id {
-  color: #d8dee9;
+  color: light-dark(#2e3440, #d8dee9);
 }
 [data-code-theme="nord"] .hljs-link {
-  color: #8fbcbb;
+  color: light-dark(#35786f, #8fbcbb);
 }
 
 [data-code-theme="github"] .hljs {
-  color: #c9d1d9;
+  color: light-dark(#24292f, #c9d1d9);
 }
 [data-code-theme="github"] .hljs-comment,
 [data-code-theme="github"] .hljs-quote {
-  color: #8b949e;
+  color: light-dark(#6e7781, #8b949e);
 }
 [data-code-theme="github"] .hljs-keyword,
 [data-code-theme="github"] .hljs-selector-tag,
@@ -1101,37 +1388,37 @@ html[data-glass='on'] [data-window-overlay] {
 [data-code-theme="github"] .hljs-name,
 [data-code-theme="github"] .hljs-meta,
 [data-code-theme="github"] .hljs-meta-keyword {
-  color: #ff7b72;
+  color: light-dark(#cf222e, #ff7b72);
 }
 [data-code-theme="github"] .hljs-operator {
-  color: #ff7b72;
+  color: light-dark(#cf222e, #ff7b72);
 }
 [data-code-theme="github"] .hljs-string,
 [data-code-theme="github"] .hljs-regexp,
 [data-code-theme="github"] .hljs-meta .hljs-string,
 [data-code-theme="github"] .hljs-char.escape_ {
-  color: #a5d6ff;
+  color: light-dark(#0a3069, #a5d6ff);
 }
 [data-code-theme="github"] .hljs-number,
 [data-code-theme="github"] .hljs-literal,
 [data-code-theme="github"] .hljs-symbol,
 [data-code-theme="github"] .hljs-bullet {
-  color: #79c0ff;
+  color: light-dark(#0550ae, #79c0ff);
 }
 [data-code-theme="github"] .hljs-title,
 [data-code-theme="github"] .hljs-title.function_,
 [data-code-theme="github"] .hljs-section,
 [data-code-theme="github"] .hljs-doctag {
-  color: #d2a8ff;
+  color: light-dark(#8250df, #d2a8ff);
 }
 [data-code-theme="github"] .hljs-built_in {
-  color: #ffa657;
+  color: light-dark(#953800, #ffa657);
 }
 [data-code-theme="github"] .hljs-type,
 [data-code-theme="github"] .hljs-title.class_,
 [data-code-theme="github"] .hljs-class .hljs-title,
 [data-code-theme="github"] .hljs-selector-class {
-  color: #ffa657;
+  color: light-dark(#953800, #ffa657);
 }
 [data-code-theme="github"] .hljs-attr,
 [data-code-theme="github"] .hljs-attribute,
@@ -1140,18 +1427,18 @@ html[data-glass='on'] [data-window-overlay] {
 [data-code-theme="github"] .hljs-template-variable,
 [data-code-theme="github"] .hljs-selector-attr,
 [data-code-theme="github"] .hljs-selector-id {
-  color: #79c0ff;
+  color: light-dark(#0550ae, #79c0ff);
 }
 [data-code-theme="github"] .hljs-link {
-  color: #ffa657;
+  color: light-dark(#953800, #ffa657);
 }
 
 [data-code-theme="monokai"] .hljs {
-  color: #f8f8f2;
+  color: light-dark(#2c292d, #f8f8f2);
 }
 [data-code-theme="monokai"] .hljs-comment,
 [data-code-theme="monokai"] .hljs-quote {
-  color: #88846f;
+  color: light-dark(#726b5c, #88846f);
 }
 [data-code-theme="monokai"] .hljs-keyword,
 [data-code-theme="monokai"] .hljs-selector-tag,
@@ -1159,37 +1446,37 @@ html[data-glass='on'] [data-window-overlay] {
 [data-code-theme="monokai"] .hljs-name,
 [data-code-theme="monokai"] .hljs-meta,
 [data-code-theme="monokai"] .hljs-meta-keyword {
-  color: #f92672;
+  color: light-dark(#c02a5c, #f92672);
 }
 [data-code-theme="monokai"] .hljs-operator {
-  color: #f92672;
+  color: light-dark(#c02a5c, #f92672);
 }
 [data-code-theme="monokai"] .hljs-string,
 [data-code-theme="monokai"] .hljs-regexp,
 [data-code-theme="monokai"] .hljs-meta .hljs-string,
 [data-code-theme="monokai"] .hljs-char.escape_ {
-  color: #e6db74;
+  color: light-dark(#8a7d1f, #e6db74);
 }
 [data-code-theme="monokai"] .hljs-number,
 [data-code-theme="monokai"] .hljs-literal,
 [data-code-theme="monokai"] .hljs-symbol,
 [data-code-theme="monokai"] .hljs-bullet {
-  color: #ae81ff;
+  color: light-dark(#7a4bd1, #ae81ff);
 }
 [data-code-theme="monokai"] .hljs-title,
 [data-code-theme="monokai"] .hljs-title.function_,
 [data-code-theme="monokai"] .hljs-section,
 [data-code-theme="monokai"] .hljs-doctag {
-  color: #a6e22e;
+  color: light-dark(#4f7d0e, #a6e22e);
 }
 [data-code-theme="monokai"] .hljs-built_in {
-  color: #66d9ef;
+  color: light-dark(#0f7f92, #66d9ef);
 }
 [data-code-theme="monokai"] .hljs-type,
 [data-code-theme="monokai"] .hljs-title.class_,
 [data-code-theme="monokai"] .hljs-class .hljs-title,
 [data-code-theme="monokai"] .hljs-selector-class {
-  color: #a6e22e;
+  color: light-dark(#4f7d0e, #a6e22e);
 }
 [data-code-theme="monokai"] .hljs-attr,
 [data-code-theme="monokai"] .hljs-attribute,
@@ -1198,8 +1485,8 @@ html[data-glass='on'] [data-window-overlay] {
 [data-code-theme="monokai"] .hljs-template-variable,
 [data-code-theme="monokai"] .hljs-selector-attr,
 [data-code-theme="monokai"] .hljs-selector-id {
-  color: #fd971f;
+  color: light-dark(#9c5a06, #fd971f);
 }
 [data-code-theme="monokai"] .hljs-link {
-  color: #a6e22e;
+  color: light-dark(#4f7d0e, #a6e22e);
 }

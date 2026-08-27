@@ -104,7 +104,12 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
     "const CH_HOST_VISIBLE_SESSIONS = 'catcode:host:visible-sessions'",
   )
   expect(source).toContain('reportVisibleSessions(sessionIds: SessionId[]): void')
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(39)
+  // The light/dark appearance sender (2026-08-27). Fixed and one-way like the
+  // rest, narrowed here to a two-value union and re-validated at main, which is
+  // the boundary (`app/main/appearanceChannel.test.ts`).
+  expect(source).toContain("const CH_SET_APPEARANCE = 'catcode:set-appearance'")
+  expect(source).toContain("setAppearance(appearance: 'light' | 'dark'): void")
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(40)
   // D1b — the recall sender is fixed and one-way like the rest (HC3).
   expect(source).toContain("const CH_PROMPT_RECALL = 'catcode:prompt-recall'")
   expect(source).toContain(

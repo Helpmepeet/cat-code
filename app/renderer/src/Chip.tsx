@@ -49,7 +49,7 @@ export function Chip({
   // text/badge; its active/hover background+border tint stays the saturated
   // accent (Surfaces.jsx:43 `bg`/`border` are still rgba(244,114,182,...)).
   const chipText = tone === 'accent' ? 'text-accent-soft' : t.text
-  const chipBadge = tone === 'accent' ? 'bg-accent-soft text-app-bg' : t.badge
+  const chipBadge = tone === 'accent' ? 'bg-accent-soft text-on-fill' : t.badge
   const className =
     'inline-flex h-[22px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2 text-[11px] font-medium transition-colors ' +
     `${chipText} ` +

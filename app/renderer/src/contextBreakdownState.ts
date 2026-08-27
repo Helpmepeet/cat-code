@@ -137,17 +137,18 @@ const CATEGORY_COLOR_HEX: Record<string, string> = {
  * {@link CATEGORY_COLOR_HEX} is: `bg-` → `text-` string surgery on a Tailwind
  * literal is fragile, and the source hex is right here. */
 const CATEGORY_TEXT: Record<string, string> = {
-  promptBorder: 'text-[#a1a1aa]',
-  inactive: 'text-[#60a5fa]',
-  purple_FOR_SUBAGENTS_ONLY: 'text-[#f472b6]',
-  claude: 'text-[#c084fc]',
-  cyan_FOR_SUBAGENTS_ONLY: 'text-[#22d3ee]',
-  permission: 'text-[#5eead4]',
-  warning: 'text-[#fbbf24]',
+  promptBorder: 'text-[light-dark(#52525b,#a1a1aa)]',
+  inactive: 'text-[light-dark(#2563eb,#60a5fa)]',
+  purple_FOR_SUBAGENTS_ONLY: 'text-[light-dark(#be185d,#f472b6)]',
+  claude: 'text-[light-dark(#7c3aed,#c084fc)]',
+  cyan_FOR_SUBAGENTS_ONLY: 'text-[light-dark(#0e7490,#22d3ee)]',
+  permission: 'text-[light-dark(#0f766e,#5eead4)]',
+  warning: 'text-[light-dark(#b45309,#fbbf24)]',
 }
 
 const FALLBACK_SWATCH = 'bg-white/25'
-const FALLBACK_COLOR_HEX = 'rgba(255,255,255,0.25)'
+const FALLBACK_COLOR_HEX =
+  'light-dark(rgba(9,9,11,0.28), rgba(255,255,255,0.25))'
 const FALLBACK_TEXT = 'text-white/25'
 
 /**

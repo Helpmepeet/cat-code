@@ -58,6 +58,13 @@ import {
   DEFAULT_GLASS_ENABLED,
   GlassModeContext,
 } from './glassMode.js'
+import {
+  COLOR_SCHEME_KEYS,
+  COLOR_SCHEME_LABELS,
+  ColorSchemeContext,
+  DEFAULT_COLOR_SCHEME,
+  isColorSchemeKey,
+} from './colorScheme.js'
 import { AgentsPage } from './AgentsPage.js'
 import {
   CODE_THEME_KEYS,
@@ -806,8 +813,32 @@ function AppScopeBody({
 function AppearanceSection() {
   const { accent, setAccent } = useContext(AccentThemeContext)
   const { glass, setGlass } = useContext(GlassModeContext)
+  const { scheme, appearance, setScheme } = useContext(ColorSchemeContext)
   return (
     <PaneSection title="Appearance">
+      <Field
+        desc={
+          // §7 "say only what is surprising": the two forced choices describe
+          // themselves, so only "Match system" gets a second sentence, and only
+          // because the label alone does not say which way it currently lands.
+          scheme === 'system'
+            ? `Light or dark for the whole window, the frosted blur included. Your system is ${appearance} right now.`
+            : 'Light or dark for the whole window, the frosted blur included.'
+        }
+        label="Appearance"
+        modified={scheme !== DEFAULT_COLOR_SCHEME}
+        onReset={() => setScheme(DEFAULT_COLOR_SCHEME)}
+      >
+        <SelectControl
+          label="Appearance"
+          onChange={next => {
+            if (isColorSchemeKey(next)) setScheme(next)
+          }}
+          optionLabels={COLOR_SCHEME_LABELS}
+          options={COLOR_SCHEME_KEYS}
+          value={scheme}
+        />
+      </Field>
       <Field
         desc="Let the desktop show through the window as a blur, instead of a solid background. macOS only."
         label="Frosted window"

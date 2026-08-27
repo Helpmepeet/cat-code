@@ -59,7 +59,7 @@ export class RendererErrorBoundary extends Component<
             Try again. If the problem continues, reload the window.
           </p>
           <button
-            className="mt-4 rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-white"
+            className="mt-4 rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-on-fill"
             type="button"
             onClick={this.recover}
           >

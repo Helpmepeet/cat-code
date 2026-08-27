@@ -248,7 +248,7 @@ test('hovering a category emphasises its arc and dims the others', () => {
 // answers a different question: "how much of what's used is this."
 test('hovering swaps the center to that category\'s share of the accounted total, in its own colour', () => {
   const view = selectDonutView(selectBreakdownRows(BREAKDOWN), 1)
-  expect(view.centerClass).toBe('text-[#60a5fa]')
+  expect(view.centerClass).toBe('text-[light-dark(#2563eb,#60a5fa)]')
   expect(view.centerPercent).toBeCloseTo((8_600 / 14_500) * 100, 6)
 })
 

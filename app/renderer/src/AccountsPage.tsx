@@ -103,7 +103,7 @@ function PrimaryBtn({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="rounded-lg bg-accent px-3.5 py-2 text-[13px] font-semibold text-app-bg transition-opacity disabled:opacity-50"
+      className="rounded-lg bg-accent px-3.5 py-2 text-[13px] font-semibold text-on-fill transition-opacity disabled:opacity-50"
     >
       {children}
     </button>
@@ -142,7 +142,7 @@ function DangerBtn({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="rounded-lg bg-[#ef4444] px-3.5 py-2 text-[13px] font-semibold text-white disabled:opacity-50"
+      className="rounded-lg bg-tone-danger px-3.5 py-2 text-[13px] font-semibold text-on-fill disabled:opacity-50"
     >
       {children}
     </button>
@@ -211,7 +211,7 @@ function ALDialog({
     <div
       role="presentation"
       onClick={onClose}
-      className="absolute inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      className="absolute inset-0 z-[60] flex items-center justify-center bg-scrim backdrop-blur-sm"
     >
       <div
         ref={dialogRef}
@@ -220,7 +220,7 @@ function ALDialog({
         aria-label={title}
         tabIndex={-1}
         onClick={e => e.stopPropagation()}
-        className="animate-toast-in w-[460px] max-w-[calc(100%-48px)] overflow-hidden rounded-[14px] border border-white/10 bg-[#0c0c0e] shadow-[0_30px_80px_rgba(0,0,0,0.6)]"
+        className="animate-toast-in w-[460px] max-w-[calc(100%-48px)] overflow-hidden rounded-[14px] border border-white/10 bg-[light-dark(#ffffff,#0c0c0e)] shadow-[var(--elev-modal)]"
       >
         <div className="border-b border-shell-seam px-[18px] py-4">
           <div className="text-[14.5px] font-semibold text-text-primary">
@@ -369,7 +369,7 @@ function RenameAccountDialog({
         }`}
       />
       {err && value ? (
-        <div className="mt-[7px] text-[11px] text-[#fca5a5]">{err}</div>
+        <div className="mt-[7px] text-[11px] text-[light-dark(#dc2626,#fca5a5)]">{err}</div>
       ) : null}
     </ALDialog>
   )
@@ -565,7 +565,7 @@ function AccountRowMenu({
           role="menu"
           aria-label="Account actions"
           onKeyDown={handleMenuRovingKeyDown}
-          className="absolute right-0 top-8 z-[20] min-w-[180px] rounded-[10px] border border-white/[0.12] bg-[#141417] p-[5px] shadow-[0_16px_40px_rgba(0,0,0,0.55)]"
+          className="absolute right-0 top-8 z-[20] min-w-[180px] rounded-[10px] border border-white/[0.12] bg-[light-dark(#ffffff,#141417)] p-[5px] shadow-[var(--elev-menu)]"
         >
           {items.map(it => (
             <button
@@ -844,7 +844,7 @@ export function AccountsPage({
           <div className="mb-[18px] flex items-center gap-3 rounded-[10px] border border-tone-danger/[0.28] bg-tone-danger/[0.07] px-3.5 py-3">
             <span className="h-[7px] w-[7px] shrink-0 animate-pulse rounded-full bg-tone-danger" />
             <div className="min-w-0 flex-1">
-              <div className="text-[13px] font-semibold text-[#fca5a5]">
+              <div className="text-[13px] font-semibold text-[light-dark(#dc2626,#fca5a5)]">
                 {(capAccount.alias ?? capAccount.id)}: usage limit reached
               </div>
               <div className="mt-[1px] text-[11.5px] text-text-muted">
@@ -857,7 +857,7 @@ export function AccountsPage({
                 <button
                   type="button"
                   onClick={() => submit(switchVerb(capSwitchTarget.id))}
-                  className="rounded-[7px] bg-accent px-3 py-1.5 text-[12px] font-semibold text-app-bg"
+                  className="rounded-[7px] bg-accent px-3 py-1.5 text-[12px] font-semibold text-on-fill"
                 >
                   Switch
                 </button>
@@ -901,7 +901,7 @@ export function AccountsPage({
               <button
                 type="button"
                 onClick={() => submit(loginVerb('anthropic'), 'info')}
-                className="rounded-[7px] bg-accent px-3 py-1.5 text-[12px] font-semibold text-app-bg"
+                className="rounded-[7px] bg-accent px-3 py-1.5 text-[12px] font-semibold text-on-fill"
               >
                 + Add Anthropic
               </button>
@@ -986,7 +986,7 @@ export function AccountsPage({
                 <button
                   type="button"
                   onClick={() => setDialog({ kind: 'add' })}
-                  className="rounded-[7px] bg-accent px-3 py-1.5 text-[12px] font-semibold text-app-bg"
+                  className="rounded-[7px] bg-accent px-3 py-1.5 text-[12px] font-semibold text-on-fill"
                 >
                   + Add account
                 </button>

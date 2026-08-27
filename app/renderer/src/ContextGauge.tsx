@@ -108,7 +108,7 @@ export function ContextGauge({ usage }: { usage: ContextUsage }) {
           cy="8"
           r={RADIUS}
           fill="none"
-          stroke="rgba(255,255,255,0.1)"
+          stroke="light-dark(rgba(9,9,11,0.14), rgba(255,255,255,0.1))"
           strokeWidth={STROKE_WIDTH}
         />
         <circle
@@ -127,7 +127,7 @@ export function ContextGauge({ usage }: { usage: ContextUsage }) {
             y1={tick.y1}
             x2={tick.x2}
             y2={tick.y2}
-            stroke="rgba(255,255,255,0.75)"
+            stroke="light-dark(rgba(9,9,11,0.7), rgba(255,255,255,0.75))"
             strokeWidth="1.2"
             strokeLinecap="round"
           />

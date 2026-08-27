@@ -176,7 +176,7 @@ export function PermissionRulesEditor({
                         aria-pressed={context.mode === mode}
                         className={
                           context.mode === mode
-                            ? 'rounded bg-accent px-2 py-1 font-medium text-app-bg'
+                            ? 'rounded bg-accent px-2 py-1 font-medium text-on-fill'
                             : 'rounded border border-text-subtle px-2 py-1 text-text-primary disabled:cursor-not-allowed disabled:opacity-40'
                         }
                         disabled={unavailable}

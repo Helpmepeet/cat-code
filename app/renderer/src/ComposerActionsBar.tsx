@@ -78,7 +78,7 @@ import type {
  *
  * Tailwind discipline: the account tone rides a STATIC class map (no interpolated
  * `text-[…]` — the v4 dynamic-class trap); the model's cyan echo is a STATIC
- * arbitrary class (`text-[#22d3ee]`, allowed — only interpolation no-ops).
+ * arbitrary class (`text-[light-dark(#0e7490,#22d3ee)]`, allowed — only interpolation no-ops).
  */
 
 /**
@@ -254,7 +254,7 @@ function ModelChip({
         aria-expanded={open}
         title={face ? `Model: ${face}` : 'Select model'}
         onClick={() => setOpen(value => !value)}
-        className={`${RAIL_FACE} text-[#22d3ee] hover:text-text-primary`}
+        className={`${RAIL_FACE} text-[light-dark(#0e7490,#22d3ee)] hover:text-text-primary`}
       >
         {face ?? 'Model'}
       </button>
@@ -289,7 +289,7 @@ function ModelChip({
                 }`}
               >
                 <span
-                  className={`min-w-0 truncate text-xs ${active ? 'text-[#22d3ee]' : 'text-text-primary'}`}
+                  className={`min-w-0 truncate text-xs ${active ? 'text-[light-dark(#0e7490,#22d3ee)]' : 'text-text-primary'}`}
                 >
                   {option.label}
                 </span>
@@ -434,7 +434,7 @@ function FastChip({
       title={title}
       disabled={disabled}
       onClick={() => onToggle(!active)}
-      className={`${FAST_FACE} border ${active ? 'border-tone-warn/30 bg-tone-warn/10 text-tone-warn hover:bg-tone-warn/15 hover:text-[#fde68a]' : 'border-transparent text-text-ghost hover:text-text-subtle'} disabled:opacity-40`}
+      className={`${FAST_FACE} border ${active ? 'border-tone-warn/30 bg-tone-warn/10 text-tone-warn hover:bg-tone-warn/15 hover:text-[light-dark(#92400e,#fde68a)]' : 'border-transparent text-text-ghost hover:text-text-subtle'} disabled:opacity-40`}
     >
       <FastGlyph active={active} />
     </button>
@@ -715,7 +715,7 @@ function ContextBreakdownDonut({
           cy="38"
           r={radius}
           fill="none"
-          stroke="rgba(255,255,255,0.06)"
+          stroke="light-dark(rgba(9,9,11,0.1), rgba(255,255,255,0.06))"
           strokeWidth="6"
         />
         {view.segments.map((segment, index) => (
@@ -1391,7 +1391,7 @@ export function ComposerActionsBar({
               * `claude-sonnet-4-5-20250929` the moment a session parked — the
               * same defect `ModelChip` fixed for the live face above. */}
             <span
-              className={`${RAIL_FACE} text-[#22d3ee]`}
+              className={`${RAIL_FACE} text-[light-dark(#0e7490,#22d3ee)]`}
               title={`Model: ${modelLabel ?? model}`}
             >
               {modelLabel ?? model}

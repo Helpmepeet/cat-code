@@ -4441,7 +4441,7 @@ export function TasksStrip({
   if (!pill && backgroundTasks.length === 0) return null
   return (
     <button
-      className="absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-full border border-shell-seam bg-shell-chrome px-3 py-1.5 text-xs text-text-muted shadow-[0_10px_30px_rgba(0,0,0,0.5)] hover:text-text-primary"
+      className="absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-full border border-shell-seam bg-shell-chrome px-3 py-1.5 text-xs text-text-muted shadow-[var(--elev-popover)] hover:text-text-primary"
       onClick={onOpen}
       type="button"
     >
@@ -5680,7 +5680,7 @@ export function SessionPane({
                 />
                 <button
                   aria-label={`Remove ${image.name}`}
-                  className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-black/70 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                  className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-shell-chrome/85 text-xs text-text-primary opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
                   onClick={() => onRemoveImage?.(image.id)}
                   type="button"
                 >

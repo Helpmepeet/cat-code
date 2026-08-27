@@ -79,6 +79,7 @@ const CH_SERVER_FRAME = 'catcode:server-frame'
 const CH_RENDERER_READY = 'catcode:renderer-ready'
 const CH_DELIVERY_ACK = 'catcode:delivery-ack'
 const CH_RENDERER_FAULT = 'catcode:renderer-fault'
+const CH_SET_APPEARANCE = 'catcode:set-appearance'
 const CH_OPEN_LOGS = 'catcode:open-logs'
 const CH_SAVE_DIAGNOSTICS = 'catcode:save-diagnostics'
 const CH_DELIVERY_HEALTH_PROBE = 'catcode:delivery-health-probe'
@@ -449,6 +450,16 @@ const bridge: CatCodeBridge = {
     } catch {
       // Diagnostics only. Never surfaces to the caller.
     }
+  },
+  setAppearance(appearance: 'light' | 'dark'): void {
+    // Narrowed HERE as well as in main, even though main is the trust boundary
+    // and re-checks it. This one is cheap and it keeps the preload's promise
+    // that nothing leaves this file whose shape it has not stated: the renderer
+    // is compiled against a two-value union, and a bundle that drifted off that
+    // union should stop here rather than reach an `ipcMain` handler.
+    if (appearance !== 'light' && appearance !== 'dark') return
+    sendGuard.assertAllowed({ appearance })
+    ipcRenderer.send(CH_SET_APPEARANCE, appearance)
   },
   openLogsFolder(): void {
     sendGuard.assertAllowed({ openLogs: true })

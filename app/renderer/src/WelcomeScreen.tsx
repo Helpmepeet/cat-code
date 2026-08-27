@@ -346,7 +346,7 @@ function ProjectPicker({
           role="menu"
           aria-label="Recent projects"
           onKeyDown={handleMenuRovingKeyDown}
-          className="absolute left-0 top-[calc(100%+4px)] z-30 w-[288px] rounded-xl border border-shell-seam bg-surface-raised p-1.5 shadow-[0_18px_50px_rgba(0,0,0,0.6)]"
+          className="absolute left-0 top-[calc(100%+4px)] z-30 w-[288px] rounded-xl border border-shell-seam bg-surface-raised p-1.5 shadow-[var(--elev-menu)]"
         >
           {recents.length > 0 ? (
             <>

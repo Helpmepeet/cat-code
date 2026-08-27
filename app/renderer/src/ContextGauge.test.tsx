@@ -61,7 +61,11 @@ test('draws the reference tick on a window bigger than the reference', () => {
   // 372,000 / 980,000 = 0.37959…, so the tick sits at that fraction of a turn
   // from 12 o'clock. Endpoints are computed attributes, never a style object.
   expect(html).toContain('<line')
-  expect(html).toContain('stroke="rgba(255,255,255,0.75)"')
+  // A presentation attribute, not a class, so the tick carries its own pair for
+  // the light appearance; verified to resolve in Chromium 130 (2026-08-27).
+  expect(html).toContain(
+    'stroke="light-dark(rgba(9,9,11,0.7), rgba(255,255,255,0.75))"',
+  )
   expect(html).not.toContain('style=')
 })
 

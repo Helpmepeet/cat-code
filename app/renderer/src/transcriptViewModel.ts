@@ -38,7 +38,7 @@ export function resolveToolCardExpanded(
  * ordinary lines in every other tool body, so the token keeps a plain bash line
  * the same weight as a plain grep line and keeps the theme in one place. The
  * `#9b9ba3` one-off looks like prototype-local drift rather than intent. Swap to
- * `text-[#9b9ba3]` if the operator rules the other way; nothing else depends on it.
+ * `text-[light-dark(#5b5b63,#9b9ba3)]` if the operator rules the other way; nothing else depends on it.
  *
  * The hues are the prototype's own, and they are deliberately the 300-level
  * pastels — NOT the `--tone-*` tokens this once returned. The prototype runs a
@@ -67,9 +67,9 @@ const PEEK_MAX_LINES = 5
  * extend the peek would grow the card for the least informative lines there are.
  */
 const OUTCOME_CLASSES: ReadonlySet<string> = new Set([
-  'text-[#fca5a5]',
-  'text-[#fcd34d]',
-  'text-[#86efac]',
+  'text-[light-dark(#dc2626,#fca5a5)]',
+  'text-[light-dark(#b45309,#fcd34d)]',
+  'text-[light-dark(#15803d,#86efac)]',
 ])
 
 /**
@@ -212,16 +212,16 @@ export function logLineClass(line: string): string {
   if (count !== null) {
     const total = Number(count[1])
     if (total === 0) return 'text-text-muted'
-    return /^pass/i.test(count[2]) ? 'text-[#86efac]' : 'text-[#fca5a5]'
+    return /^pass/i.test(count[2]) ? 'text-[light-dark(#15803d,#86efac)]' : 'text-[light-dark(#dc2626,#fca5a5)]'
   }
   if (/(^\s*FAIL\b|\bERROR\b|\berror\b|npm ERR!|✕|✘|UnhandledPromise|failed)/.test(line)) {
-    return 'text-[#fca5a5]'
+    return 'text-[light-dark(#dc2626,#fca5a5)]'
   }
   if (/(^\s*WARNING\b|\bwarn(ing)?\b|exceed|collision|not wrapped)/i.test(line)) {
-    return 'text-[#fcd34d]'
+    return 'text-[light-dark(#b45309,#fcd34d)]'
   }
   if (/(^\s*PASS\b|✓|compiled|succeeded|\bpassed\b)/.test(line)) {
-    return 'text-[#86efac]'
+    return 'text-[light-dark(#15803d,#86efac)]'
   }
   if (/^\s*(>|@ |at )/.test(line)) return 'text-text-faint'
   return 'text-text-muted'

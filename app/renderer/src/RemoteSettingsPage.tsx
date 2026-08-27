@@ -296,7 +296,7 @@ function DirectConnectSection({
           value={serverUrl}
         />
         <button
-          className="rounded-lg bg-accent px-3.5 py-2 text-[12.5px] font-semibold text-app-bg transition-opacity disabled:opacity-50"
+          className="rounded-lg bg-accent px-3.5 py-2 text-[12.5px] font-semibold text-on-fill transition-opacity disabled:opacity-50"
           disabled={connecting || !serverUrl.trim()}
           type="submit"
         >

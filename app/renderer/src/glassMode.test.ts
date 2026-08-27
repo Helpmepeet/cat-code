@@ -41,6 +41,27 @@ function themeCss(): string {
   return readFileSync(new URL('./theme.css', import.meta.url), 'utf8')
 }
 
+/**
+ * Reads a glass `background: light-dark(light, dark)` and reports whether EACH
+ * half is actually translucent.
+ *
+ * Alpha is the whole mechanism: the material is behind the page either way, and
+ * these declarations only decide how much of it survives. So a hex, an
+ * `rgb(...)`, or an `rgba(..., 1)` on either side is glass that silently does
+ * nothing in that appearance. A missing half reports `false` for that half
+ * rather than throwing, so the assertion names which one broke.
+ */
+function translucentPair(body: string): { light: boolean; dark: boolean } {
+  const pair = /background:\s*light-dark\(\s*(.+?)\s*,\s*(rgba?\([^)]*\)|#[0-9a-fA-F]+)\s*\)\s*;/.exec(
+    body,
+  )
+  const translucent = (value: string | undefined) => {
+    const alpha = /rgba\([^)]*,\s*([0-9.]+)\s*\)/.exec(value ?? '')
+    return alpha !== null && Number(alpha[1]) < 1
+  }
+  return { light: translucent(pair?.[1]), dark: translucent(pair?.[2]) }
+}
+
 test('the shipped default is solid', () => {
   expect(DEFAULT_GLASS_ENABLED).toBe(false)
 })
@@ -99,12 +120,17 @@ test('the stamp is present only while glass is on', () => {
 /**
  * The attribute is only half the mechanism: without a matching rule the toggle
  * silently does nothing, and no render assertion can see that.
+ *
+ * Both halves of the pair are checked, not just that a pair is present. macOS
+ * swaps the vibrancy material with the appearance, so glass has a light ground
+ * and a dark one, and an opaque value on either side is a toggle that does
+ * nothing in that appearance while still passing a shape check.
  */
 test('the stylesheet paints exactly one translucent ground under the stamp', () => {
   const css = themeCss()
   const block = css.match(/html\[data-glass='on'\]\s*\{([^}]*)\}/)
   expect(block).not.toBeNull()
-  expect(block?.[1]).toMatch(/background:\s*rgba\(/)
+  expect(translucentPair(block?.[1] ?? '')).toEqual({ light: true, dark: true })
   // Off is the absence of the attribute, so no rule may describe it.
   expect(css).not.toContain("data-glass='off'")
 })
@@ -114,12 +140,13 @@ test('the stylesheet paints exactly one translucent ground under the stamp', () 
  *
  * Redeclaring the four theme tokens under the stamp looks like the obvious way
  * to make the app translucent, and it is wrong: each token carries a second role
- * that alpha breaks. `--color-app-bg` is the INK on accent-filled buttons
- * (`.text-app-bg`), `--color-shell-chrome` grounds nine floating menus, and
- * `--color-surface-panel` backs SVG separators and the sidebar fade masks. Glass
- * dropped the permission prompt's Allow/Deny label to about 3.8:1 contrast
- * before this was narrowed to the page ground. Separate those roles first if the
- * rail and the drawers should ever be glass too.
+ * that alpha breaks. `--color-app-bg` WAS the INK on accent-filled buttons, and
+ * glass dropped the permission prompt's Allow/Deny label to about 3.8:1 contrast
+ * before this was narrowed to the page ground. That one is now genuinely fixed:
+ * the light appearance had to split the role out as `--color-on-fill`. The other
+ * two stand — `--color-shell-chrome` grounds nine floating menus, and
+ * `--color-surface-panel` backs SVG separators and the sidebar fade masks — so
+ * separate those first if the rail and the drawers should ever be glass too.
  */
 test('glass never redeclares a theme token', () => {
   const css = themeCss()
@@ -188,7 +215,7 @@ test('the sidebar and tab bar are thinned, and no floating menu is', () => {
   const css = themeCss()
   const rule = css.match(/html\[data-glass='on'\] \[data-window-chrome\]\s*\{([^}]*)\}/)
   expect(rule).not.toBeNull()
-  expect(rule?.[1]).toMatch(/background:\s*rgba\(/)
+  expect(translucentPair(rule?.[1] ?? '')).toEqual({ light: true, dark: true })
 
   // Comments become blank lines rather than vanishing, so reported line numbers
   // still match the file a reader will open.

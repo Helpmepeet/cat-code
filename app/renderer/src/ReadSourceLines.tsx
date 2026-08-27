@@ -109,7 +109,7 @@ export function GrepSourceRow({
 }
 
 /** The prototype's `+` gutter: 14px wide, add-green, one marker per line. */
-const ADDITION_GUTTER_CLASS = 'w-3.5 shrink-0 select-none text-[#86efac]'
+const ADDITION_GUTTER_CLASS = 'w-3.5 shrink-0 select-none text-[light-dark(#15803d,#86efac)]'
 
 /**
  * One `+`-prefixed, syntax-coloured line of a file-WRITE card's body (prototype

@@ -43,7 +43,7 @@ import { toneClasses, type Tone } from './tone.js'
 
 function PawLogo(): ReactNode {
   return (
-    <span className="inline-flex h-[22px] w-[22px] items-center justify-center rounded-[5px] bg-accent text-app-bg">
+    <span className="inline-flex h-[22px] w-[22px] items-center justify-center rounded-[5px] bg-accent text-on-fill">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
         <ellipse cx="6.5" cy="5.5" rx="1.8" ry="2.5" opacity=".7" />
         <ellipse cx="11.5" cy="4" rx="1.8" ry="2.5" opacity=".7" />
@@ -81,7 +81,7 @@ function PrimaryButton({
       // eslint-disable-next-line jsx-a11y/no-autofocus
       autoFocus={autoFocus}
       onClick={onClick}
-      className="rounded-lg bg-accent px-[18px] py-2.5 text-[12.5px] font-semibold text-app-bg"
+      className="rounded-lg bg-accent px-[18px] py-2.5 text-[12.5px] font-semibold text-on-fill"
     >
       {children}
     </button>
@@ -150,7 +150,7 @@ export function StartupShell({
         />
         <span>Sign in</span>
       </div>
-      <div className="w-full max-w-[500px] rounded-2xl border border-shell-seam bg-surface-panel px-9 pb-8 pt-9 shadow-[0_24px_80px_rgba(0,0,0,0.6)]">
+      <div className="w-full max-w-[500px] rounded-2xl border border-shell-seam bg-surface-panel px-9 pb-8 pt-9 shadow-[var(--elev-modal)]">
         {children}
       </div>
     </div>
@@ -380,7 +380,7 @@ function AliasForm({
         />
         <button
           type="submit"
-          className="rounded-lg bg-accent px-[18px] py-2.5 text-[12.5px] font-semibold text-app-bg"
+          className="rounded-lg bg-accent px-[18px] py-2.5 text-[12.5px] font-semibold text-on-fill"
         >
           Continue <span className="ml-1.5 text-[11px] opacity-60">↵</span>
         </button>

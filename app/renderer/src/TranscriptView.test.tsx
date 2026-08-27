@@ -1921,7 +1921,7 @@ test('a finish row the engine worded differently still draws, with no face claim
 
   expect(html).toContain('sweep the renderer')
   expect(html).toContain('shape-rendering') // featureless stamp, still drawn
-  expect(html).not.toContain('font-mono text-[#e4e4e7]') // nothing claimed as a handle
+  expect(html).not.toContain('font-mono text-[light-dark(#27272a,#e4e4e7)]') // nothing claimed as a handle
 })
 
 test('a worker card names the Codex account its lease holds', () => {
@@ -2789,11 +2789,11 @@ test('dequote returns empty text when the node carries no position', () => {
 // sign), so painting body text with them read muddy against `#09090b`.
 
 test('output lines take the prototype logLineColor pastel for their own semantics', () => {
-  expect(logLineClass('ERROR: boom')).toBe('text-[#fca5a5]')
-  expect(logLineClass('npm ERR! install failed')).toBe('text-[#fca5a5]')
-  expect(logLineClass('WARNING: cache exceeded')).toBe('text-[#fcd34d]')
-  expect(logLineClass('PASS src/thing.test.ts')).toBe('text-[#86efac]')
-  expect(logLineClass('✓ 100 pass')).toBe('text-[#86efac]')
+  expect(logLineClass('ERROR: boom')).toBe('text-[light-dark(#dc2626,#fca5a5)]')
+  expect(logLineClass('npm ERR! install failed')).toBe('text-[light-dark(#dc2626,#fca5a5)]')
+  expect(logLineClass('WARNING: cache exceeded')).toBe('text-[light-dark(#b45309,#fcd34d)]')
+  expect(logLineClass('PASS src/thing.test.ts')).toBe('text-[light-dark(#15803d,#86efac)]')
+  expect(logLineClass('✓ 100 pass')).toBe('text-[light-dark(#15803d,#86efac)]')
   // Stack/trace continuation lines recede rather than reading as ordinary output.
   expect(logLineClass('    at Object.<anonymous>')).toBe('text-text-faint')
   expect(logLineClass('  > bun run build')).toBe('text-text-faint')
@@ -2829,11 +2829,11 @@ test('splitGrepLine takes both separators and leaves everything else alone', () 
 // missed the summary every real runner ends with. These are verbatim `bun test`
 // lines — the exact case the operator reported as "still looks the same".
 test('a real test summary is colored: counts, not keywords', () => {
-  expect(logLineClass(' 18 pass')).toBe('text-[#86efac]')
-  expect(logLineClass(' 3 fail')).toBe('text-[#fca5a5]')
-  expect(logLineClass('2 passed')).toBe('text-[#86efac]')
-  expect(logLineClass('1 failure')).toBe('text-[#fca5a5]')
-  expect(logLineClass('4 errors')).toBe('text-[#fca5a5]')
+  expect(logLineClass(' 18 pass')).toBe('text-[light-dark(#15803d,#86efac)]')
+  expect(logLineClass(' 3 fail')).toBe('text-[light-dark(#dc2626,#fca5a5)]')
+  expect(logLineClass('2 passed')).toBe('text-[light-dark(#15803d,#86efac)]')
+  expect(logLineClass('1 failure')).toBe('text-[light-dark(#dc2626,#fca5a5)]')
+  expect(logLineClass('4 errors')).toBe('text-[light-dark(#dc2626,#fca5a5)]')
 })
 
 test('a ZERO count is good news and must never read as a failure', () => {
@@ -2855,7 +2855,7 @@ test('count matching does not swallow ordinary lines that merely start with a nu
 test('output-line tint keeps the prototype branch ORDER, so a failed pass reads failed', () => {
   // Both the error and the pass branch match this line; the prototype tests
   // error FIRST, and a line saying a test suite failed must not read green.
-  expect(logLineClass('1 failed, 3 passed')).toBe('text-[#fca5a5]')
+  expect(logLineClass('1 failed, 3 passed')).toBe('text-[light-dark(#dc2626,#fca5a5)]')
 })
 
 test('output-line tint anchors the bare FAIL/PASS words, so prose is not a status line', () => {
@@ -2867,20 +2867,20 @@ test('output-line tint anchors the bare FAIL/PASS words, so prose is not a statu
   expect(logLineClass('Tests: 1 FAIL out of 40')).toBe('text-text-muted')
   // Anchored still means leading whitespace is fine — that is how real output
   // indents its status lines.
-  expect(logLineClass('  FAIL src/thing.test.ts')).toBe('text-[#fca5a5]')
+  expect(logLineClass('  FAIL src/thing.test.ts')).toBe('text-[light-dark(#dc2626,#fca5a5)]')
 })
 
 test('output-line tint carries `not wrapped`, the one warn term the first port dropped', () => {
   // Only this one: the parent branch was `/\bWARN(ING)?\b|…/i`, so a lowercase
   // `warn` ALREADY matched. Without `not wrapped`, React's act() warning read as
   // ordinary output, which is the case that motivated re-checking the port.
-  expect(logLineClass('An update was not wrapped in act(...)')).toBe('text-[#fcd34d]')
-  expect(logLineClass('warn: peer dependency')).toBe('text-[#fcd34d]')
+  expect(logLineClass('An update was not wrapped in act(...)')).toBe('text-[light-dark(#b45309,#fcd34d)]')
+  expect(logLineClass('warn: peer dependency')).toBe('text-[light-dark(#b45309,#fcd34d)]')
   // `WARNING` carries a `^\s*` anchor in the prototype, but that alternative is
   // unreachable: the branch's `\bwarn(ing)?\b` is unanchored and the whole regex
   // is case-insensitive, so a mid-line `WARNING` still matches. Ported verbatim
   // rather than "cleaned up", and pinned here so the quirk is not read as a bug.
-  expect(logLineClass('emitted a WARNING during the run')).toBe('text-[#fcd34d]')
+  expect(logLineClass('emitted a WARNING during the run')).toBe('text-[light-dark(#b45309,#fcd34d)]')
 })
 
 test('a bash body tints each line by its own semantics, not one flat wash', () => {
@@ -2900,9 +2900,9 @@ test('a bash body tints each line by its own semantics, not one flat wash', () =
     }),
   )
 
-  expect(html).toContain('text-[#fcd34d]') // the warn line
-  expect(html).toContain('text-[#fca5a5]') // the error line
-  expect(html).toContain('text-[#86efac]') // the passing line
+  expect(html).toContain('text-[light-dark(#b45309,#fcd34d)]') // the warn line
+  expect(html).toContain('text-[light-dark(#dc2626,#fca5a5)]') // the error line
+  expect(html).toContain('text-[light-dark(#15803d,#86efac)]') // the passing line
   expect(html).toContain('text-text-muted') // the unclassified first line
 })
 
@@ -2956,7 +2956,7 @@ test('an errored bash body stays one danger tone rather than tinting its trace',
   )
 
   expect(html).toContain('text-tone-danger')
-  expect(html).not.toContain('text-[#fca5a5]') // no per-line heuristic on a known failure
+  expect(html).not.toContain('text-[light-dark(#dc2626,#fca5a5)]') // no per-line heuristic on a known failure
 })
 
 test('"Tools open by default" opens a card that would otherwise be closed', () => {
@@ -3060,8 +3060,8 @@ test('the COLLAPSED bash peek tints too, since that is the default view', () => 
   )
 
   expect(html).not.toContain('864 lines hidden') // sanity: this is the peek
-  expect(html).toContain('text-[#fcd34d]') // warn line, in the closed card
-  expect(html).toContain('text-[#86efac]') // pass line, in the closed card
+  expect(html).toContain('text-[light-dark(#b45309,#fcd34d)]') // warn line, in the closed card
+  expect(html).toContain('text-[light-dark(#15803d,#86efac)]') // pass line, in the closed card
 })
 
 test('search results are syntax-colored, with the locator receding beside them', () => {
@@ -3157,8 +3157,8 @@ test('a NON-bash body keeps the prototype flat base, NOT the bash line heuristic
   )
 
   expect(html).toContain('text-text-muted')
-  expect(html).not.toContain('text-[#fcd34d]')
-  expect(html).not.toContain('text-[#86efac]')
+  expect(html).not.toContain('text-[light-dark(#b45309,#fcd34d)]')
+  expect(html).not.toContain('text-[light-dark(#15803d,#86efac)]')
 })
 
 test('a written file is syntax-colored while its gutter remains additions-green', () => {
@@ -3171,7 +3171,7 @@ test('a written file is syntax-colored while its gutter remains additions-green'
 
   expect(html).toContain('hljs-keyword') // `const` tokenized
   expect(html).toContain('hljs-string') // the quoted literal tokenized
-  expect(html).toContain('text-[#86efac]') // the + gutter
+  expect(html).toContain('text-[light-dark(#15803d,#86efac)]') // the + gutter
   expect(html).toMatch(/class="[^"]*\bhljs\b(?!-)/) // theme base foreground
 })
 
@@ -3186,7 +3186,7 @@ test('a written file whose extension names no language uses the theme base', () 
   )
 
   expect(visibleText(html)).toContain('const greeting = &quot;hi&quot;')
-  expect(html).toContain('text-[#86efac]') // the + gutter
+  expect(html).toContain('text-[light-dark(#15803d,#86efac)]') // the + gutter
   expect(html).toMatch(/class="[^"]*\bhljs\b(?!-)/)
   expect(html).not.toContain('hljs-keyword')
 })
@@ -3199,7 +3199,7 @@ test('a written file uses add-green only for its + gutter', () => {
     ),
   )
 
-  expect(html).toContain('text-[#86efac]')
+  expect(html).toContain('text-[light-dark(#15803d,#86efac)]')
   expect(html).not.toContain('text-tone-success')
 })
 
@@ -3463,7 +3463,7 @@ test('P4-1: the inspector overlay renders the REAL projected row (drawer + backd
   expect(html).toContain('echo hi') // real input summary, from the projected row
   expect(html).not.toContain('Tool inspector')
   expect(html).toContain('hi from the shell') // real correlated result output
-  expect(html).toContain('bg-black/60') // the dimmed dismiss backdrop
+  expect(html).toContain('bg-scrim') // the dimmed dismiss backdrop
 })
 
 test('P4-1: the inspector overlay renders nothing when closed (null row)', () => {
@@ -4073,7 +4073,7 @@ test('a write shows the file it wrote, not the engine sentence about it', () => 
   expect(visibleText(html)).toContain('const greeting = &quot;hi&quot;')
   expect(visibleText(html)).toContain('export default greeting')
   // Painted as additions, which is now true of what it is painting.
-  expect(html).toContain('text-[#86efac]')
+  expect(html).toContain('text-[light-dark(#15803d,#86efac)]')
   // The ack never reaches the body; the card's own status already reports it.
   expect(html).not.toContain('File created successfully at')
 })
@@ -4090,7 +4090,7 @@ test('a failed write reports the failure instead of claiming additions', () => {
   expect(html).toContain('text-tone-danger')
   // Nothing was written, so nothing is painted as an addition.
   expect(html).not.toContain('const greeting')
-  expect(html).not.toContain('text-[#86efac]')
+  expect(html).not.toContain('text-[light-dark(#15803d,#86efac)]')
 })
 
 test('a write whose input carries no content falls back to the result text', () => {
@@ -4100,7 +4100,7 @@ test('a write whose input carries no content falls back to the result text', () 
 
   expect(html).toContain('File created successfully at')
   // …as plain text, never as a green added line.
-  expect(html).not.toContain('text-[#86efac]')
+  expect(html).not.toContain('text-[light-dark(#15803d,#86efac)]')
 })
 
 test('a long written file still bands, and the band counts the FILE', () => {

@@ -361,7 +361,7 @@ export function ToggleSwitch({
     >
       <span
         className={`inline-block h-[16px] w-[16px] rounded-full shadow-sm transition-transform ${
-          value ? 'bg-app-bg translate-x-[18px]' : 'bg-text-subtle translate-x-[3px]'
+          value ? 'bg-on-fill translate-x-[18px]' : 'bg-text-subtle translate-x-[3px]'
         }`}
       />
     </button>

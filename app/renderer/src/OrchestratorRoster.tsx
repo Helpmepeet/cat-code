@@ -88,7 +88,7 @@ export function OrchestratorRoster({
        * (the prototype is hover-only, so its popover is unreachable by keyboard);
        * always in the DOM so it costs nothing to open. */}
       <div className="absolute inset-x-1 bottom-full z-40 hidden pb-1.5 group-hover:block group-focus-within:block">
-        <div className="rounded-[10px] border border-white/[0.08] bg-surface-panel px-1 pb-[5px] pt-1 shadow-[0_14px_34px_rgba(0,0,0,0.5)]">
+        <div className="rounded-[10px] border border-white/[0.08] bg-surface-panel px-1 pb-[5px] pt-1 shadow-[var(--elev-popover)]">
           <div className="px-2 pb-[3px] pt-[5px] font-mono text-[9px] tracking-[0.1em] text-text-faint">
             {workers.length} SUBAGENTS
           </div>

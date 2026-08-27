@@ -3573,6 +3573,25 @@ export type CatCodeBridge = {
   recordRenderCommit(): void
   /** Fixed, bounded renderer fault signal; never a console/log forwarding API. */
   reportRendererFault(kind: 'javascript' | 'promise' | 'component', message: string): void
+  /**
+   * The one main-side consequence of the appearance preference
+   * (`app/renderer/src/colorScheme.ts`).
+   *
+   * macOS picks a window's vibrancy material from the app's effective
+   * `NSAppearance`, which is process-global and settable only from main
+   * (`nativeTheme.themeSource`). A renderer that forces light while main still
+   * says dark gets a white page over the dark blur, so the appearance and glass
+   * mode cannot both be renderer-local the way glass alone could be. This is the
+   * smallest message that closes that gap.
+   *
+   * The weakest sender on this plane, by construction. Its whole vocabulary is
+   * `'light' | 'dark'` — a closed pair re-validated in main, not a colour, not a
+   * settings key, not a path. It starts nothing, addresses no session, reaches no
+   * engine object, and never becomes sidecar vocabulary: there is no inbound
+   * frame kind for it and the sidecar never learns the app has an appearance.
+   * Main's only reaction is to assign `nativeTheme.themeSource`.
+   */
+  setAppearance(appearance: 'light' | 'dark'): void
   /** Main-owned local diagnostics retrieval; the renderer never supplies a path. */
   openLogsFolder(): void
   saveDiagnosticsBundle(): Promise<boolean>

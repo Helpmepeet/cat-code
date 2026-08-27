@@ -18,6 +18,7 @@ import {
   dialog,
   ipcMain,
   nativeImage,
+  nativeTheme,
   session,
   shell,
   type WebContents,
@@ -209,6 +210,7 @@ const CH_SERVER_FRAME = 'catcode:server-frame'
 const CH_RENDERER_READY = 'catcode:renderer-ready'
 const CH_DELIVERY_ACK = 'catcode:delivery-ack'
 const CH_RENDERER_FAULT = 'catcode:renderer-fault'
+const CH_SET_APPEARANCE = 'catcode:set-appearance'
 const CH_OPEN_LOGS = 'catcode:open-logs'
 const CH_SAVE_DIAGNOSTICS = 'catcode:save-diagnostics'
 const CH_DELIVERY_HEALTH_PROBE = 'catcode:delivery-health-probe'
@@ -2239,6 +2241,31 @@ function registerIpcHandlers(): void {
       'error',
       { source: 'renderer', reason: 'fault_reported' },
     )
+  })
+
+  /**
+   * The appearance preference's only main-side effect
+   * (`app/renderer/src/colorScheme.ts`, `protocol.ts` `setAppearance`).
+   *
+   * macOS chooses a window's vibrancy material from the app's effective
+   * `NSAppearance`, and only main can move it. Verified rather than assumed:
+   * assigning `themeSource` flips `systemPreferences.getEffectiveAppearance()`
+   * on a window that already exists, so this needs no persistence and no
+   * involvement in window creation.
+   *
+   * FAIL CLOSED on the vocabulary, like every other inbound handler here. The
+   * renderer sends one of two literals; anything else is dropped rather than
+   * coerced, because `themeSource` also accepts `'system'` and a sloppy cast
+   * would let a malformed payload hand the window back to the OS.
+   *
+   * `'system'` is never sent. The renderer resolves that choice itself against
+   * `prefers-color-scheme` — which Chromium keeps in step with `nativeTheme` in
+   * both directions — so main only ever hears the appearance actually being
+   * painted. Which keeps this handler total: two inputs, two outcomes.
+   */
+  ipcMain.on(CH_SET_APPEARANCE, (_event, appearance: unknown) => {
+    if (appearance !== 'light' && appearance !== 'dark') return
+    nativeTheme.themeSource = appearance
   })
 
   ipcMain.on(CH_OPEN_LOGS, () => {

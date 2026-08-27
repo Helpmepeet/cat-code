@@ -224,13 +224,13 @@ export function TasksDialog({
 
   return (
     <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/55 backdrop-blur-sm"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-scrim backdrop-blur-sm"
       onMouseDown={onClose}
       role="presentation"
     >
       <div
         ref={dialogRef}
-        className="animate-toast-in flex max-h-[74vh] w-[640px] max-w-[calc(100%-48px)] flex-col overflow-hidden rounded-[14px] border border-shell-seam bg-surface-panel shadow-[0_30px_80px_rgba(0,0,0,0.6)]"
+        className="animate-toast-in flex max-h-[74vh] w-[640px] max-w-[calc(100%-48px)] flex-col overflow-hidden rounded-[14px] border border-shell-seam bg-surface-panel shadow-[var(--elev-modal)]"
         role="dialog"
         aria-modal="true"
         aria-label="Background tasks"
@@ -878,7 +878,7 @@ function TaskRow({ item, isSelected }: { item: TaskSnapshotItem; isSelected: boo
       <span
         className={
           'min-w-0 flex-1 truncate text-[12.5px] text-text-primary ' +
-          (isMonoLabel ? 'font-mono text-[#c4c4c8]' : '')
+          (isMonoLabel ? 'font-mono text-[light-dark(#52525b,#c4c4c8)]' : '')
         }
       >
         {item.label}

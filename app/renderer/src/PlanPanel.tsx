@@ -135,7 +135,7 @@ export function PlanPanel({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim backdrop-blur-sm"
       onClick={onClose}
     >
       <div
@@ -254,7 +254,7 @@ export function PlanPanel({
               />
               <div className="mt-2 flex items-center gap-2">
                 <button
-                  className="rounded-md bg-accent px-3 py-1.5 text-[11.5px] font-semibold text-app-bg disabled:opacity-40"
+                  className="rounded-md bg-accent px-3 py-1.5 text-[11.5px] font-semibold text-on-fill disabled:opacity-40"
                   disabled={revisionText.trim().length === 0}
                   onClick={sendRevision}
                   type="button"
@@ -282,7 +282,7 @@ export function PlanPanel({
                 <ApproveMenu onClose={() => setShowApprove(false)} onPick={pickApprove} />
               ) : null}
               <button
-                className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3.5 py-1.5 text-[12px] font-semibold text-app-bg"
+                className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3.5 py-1.5 text-[12px] font-semibold text-on-fill"
                 onClick={() => setShowApprove(current => !current)}
                 onMouseDown={event => event.stopPropagation()}
                 type="button"
@@ -372,7 +372,7 @@ function ApproveMenu({
         >
           <span
             className={`mt-0.5 flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded font-mono text-[9px] font-bold ${
-              cursor === index ? 'bg-accent text-app-bg' : 'bg-white/[0.06] text-text-subtle'
+              cursor === index ? 'bg-accent text-on-fill' : 'bg-white/[0.06] text-text-subtle'
             }`}
           >
             {index + 1}
