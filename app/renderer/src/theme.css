@@ -545,22 +545,38 @@ html[data-appearance='light'] [data-accent='amber'] {
  * as visibly translucent in light, and it is a grey heads-up surface that would
  * fight the whole light text ramp, so it was not taken.
  *
- * The light value is therefore as low as it is useful to go: since the coat buys
- * nothing, spending less of it keeps the little the material gives. Legibility
- * does not pay for that, for the same reason the effect is small: the light
- * material stays near-white even over a dark wallpaper, so the text ramp is not
- * sitting on an unpredictable ground.
+ * THE LIGHT VALUE IS A TASTE DIAL AND IT IS THE ONLY ONE THERE IS, so it took
+ * three readings to place. What it trades is not blur against sharpness: the
+ * frost is macOS's own material and its radius is exposed by neither Electron
+ * nor AppKit. All this decides is how much of that fixed blur survives, so
+ * "too blurred" and "too much material" are the same complaint.
  *
- * The first attempt at this shipped 0.22, the mirror of the dark value, on the
- * assumption that light needed a heavier coat. That was backwards and the app
- * showed it: with glass on, nothing changed but the tab strip.
+ *   0.22, the mirror of the dark value, on the assumption light needed a
+ *     heavier coat. Backwards, and the app showed it: with glass on, nothing
+ *     changed but the tab strip.
+ *   0.06, from the six-material sweep where alpha barely moved the result. Too
+ *     far the other way once the material was correct: the blur became the
+ *     dominant thing on screen and the desktop stopped being readable through
+ *     it (operator, 2026-08-27).
+ *   0.14, between the operator's own two rejections rather than a fresh guess.
+ *
+ * Legibility does not constrain this dial, which is why it can be spent on
+ * taste: the light material stays near-white even over a dark wallpaper, so the
+ * text ramp is never sitting on an unpredictable ground.
+ *
+ * If it still reads as too much frost, the dial is not the answer and the
+ * material is: seeing the actual desktop rather than a wash means dropping
+ * vibrancy for `transparent: true` plus a `backdrop-filter` whose radius we set.
+ * That was tried and backed out (4c0b9ad7) because it costs the title bar, but
+ * it was backed out for buying NOTHING, and control over the radius would be
+ * something. Reopen it deliberately, not by nudging this number again.
  *
  * `light-dark()` rather than a second `[data-appearance]` rule because the whole
  * declaration is one value; it resolves against the `color-scheme` the light
  * block sets, which is why that property is not optional there.
  */
 html[data-glass='on'] {
-  background: light-dark(rgba(252, 252, 253, 0.06), rgba(9, 9, 11, 0.2));
+  background: light-dark(rgba(252, 252, 253, 0.14), rgba(9, 9, 11, 0.2));
 }
 
 /*
