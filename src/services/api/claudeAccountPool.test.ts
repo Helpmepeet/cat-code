@@ -381,3 +381,86 @@ describe('loadClaudePoolForObservation vs initClaudeAccountPool (disk-write boun
     expect(statSync(filePath).mode & 0o777).toBe(0o600)
   })
 })
+
+describe('Claude vault cross-process mutations', () => {
+  for (const action of ['save', 'alias', 'delete'] as const) {
+    test(`${action} waits for the terminal profile lock`, async () => {
+      const dir = mkdtempSync(join(tmpdir(), `claude-vault-${action}-`))
+      const accountsDir = join(dir, 'accounts')
+      mkdirSync(accountsDir, { recursive: true })
+      const vaultPath = join(accountsDir, 'synthetic-account.json')
+      const readyPath = join(dir, 'terminal-ready')
+      writeFileSync(
+        vaultPath,
+        JSON.stringify({
+          tokens: {
+            access_token: 'old-access',
+            refresh_token: 'old-refresh',
+            expires_at: Date.now() + 60_000,
+          },
+          profile: {
+            account_uuid: 'synthetic-account',
+            email_address: 'synthetic@example.com',
+          },
+        }),
+        { mode: 0o600 },
+      )
+      const childPath = join(
+        import.meta.dir,
+        'claudeAccountPool.probe.child.ts',
+      )
+      const children = ['terminal-holder', 'desktop-mutator'].map(role =>
+        Bun.spawn(
+          [process.execPath, childPath, role, action, vaultPath, readyPath],
+          { stdout: 'pipe', stderr: 'pipe' },
+        ),
+      )
+      const recordedPids = children.map(child => child.pid)
+
+      try {
+        const exits = await Promise.race([
+          Promise.all(children.map(child => child.exited)),
+          new Promise<never>((_, reject) => {
+            setTimeout(() => {
+              for (const child of children) child.kill()
+              reject(
+                new Error(
+                  `timed out waiting for exact child PIDs ${recordedPids.join(', ')}`,
+                ),
+              )
+            }, 10_000).unref()
+          }),
+        ])
+        const [stdout, stderr] = await Promise.all([
+          Promise.all(
+            children.map(child => new Response(child.stdout).text()),
+          ),
+          Promise.all(
+            children.map(child => new Response(child.stderr).text()),
+          ),
+        ])
+        expect(exits, stderr.join('\n')).toEqual([0, 0])
+        expect(
+          stdout
+            .map(value => (JSON.parse(value) as { pid: number }).pid)
+            .sort(),
+        ).toEqual(recordedPids.sort())
+
+        if (action === 'delete') {
+          expect(existsSync(vaultPath)).toBe(false)
+        } else {
+          const value = JSON.parse(readFileSync(vaultPath, 'utf8'))
+          expect(value.terminal_marker).toBe(action)
+          if (action === 'save') {
+            expect(value.tokens.access_token).toBe('desktop-access')
+          } else {
+            expect(value.alias).toBe('desktop-alias')
+          }
+        }
+      } finally {
+        await Promise.all(children.map(child => child.exited))
+        rmSync(dir, { recursive: true, force: true })
+      }
+    })
+  }
+})

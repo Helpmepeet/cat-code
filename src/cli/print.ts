@@ -217,6 +217,10 @@ import {
   saveAiGeneratedTitle,
   restoreSessionMetadata,
 } from 'src/utils/sessionStorage.js'
+import {
+  activateTranscriptLease,
+  TranscriptInUseError,
+} from 'src/utils/transcriptLease.js'
 import { incrementPromptCount } from 'src/utils/commitAttribution.js'
 import {
   setupSdkMcpClients,
@@ -750,6 +754,7 @@ export async function runHeadless(
     outputFormat: options.outputFormat,
     sessionStartHooksPromise: options.sessionStartHooksPromise,
     restoredWorkerState: structuredIO.restoredWorkerState,
+    deferredWorker: Boolean(options.deferredJobId),
   })
 
   // Nothing is appended before this point, so exiting here leaves no trace.
@@ -5087,6 +5092,7 @@ async function loadInitialMessages(
     outputFormat: string | undefined
     sessionStartHooksPromise?: ReturnType<typeof processSessionStartHooks>
     restoredWorkerState: Promise<SessionExternalMetadata | null>
+    deferredWorker?: boolean
   },
 ): Promise<LoadInitialMessagesResult> {
   const persistSession = !isSessionPersistenceDisabled()
@@ -5131,6 +5137,9 @@ async function loadInitialMessages(
         // Reuse the resumed session's ID
         if (!options.forkSession) {
           if (result.sessionId) {
+            if (persistSession) {
+              await activateTranscriptLease(result.sessionId)
+            }
             switchSession(
               asSessionId(result.sessionId),
               result.fullPath ? dirname(result.fullPath) : null,
@@ -5162,6 +5171,12 @@ async function loadInitialMessages(
         }
       }
     } catch (error) {
+      if (options.deferredWorker && error instanceof TranscriptInUseError) {
+        throw error
+      }
+      if (error instanceof TranscriptInUseError) {
+        process.stderr.write(`${error.message}\n`)
+      }
       logError(error)
       gracefulShutdownSync(1)
       return { messages: [] }
@@ -5329,6 +5344,9 @@ async function loadInitialMessages(
 
       // Reuse the resumed session's ID
       if (!options.forkSession && result.sessionId) {
+        if (persistSession) {
+          await activateTranscriptLease(result.sessionId)
+        }
         switchSession(
           asSessionId(result.sessionId),
           result.fullPath ? dirname(result.fullPath) : null,
@@ -5352,6 +5370,11 @@ async function loadInitialMessages(
         agentSetting: result.agentSetting,
       }
     } catch (error) {
+      if (error instanceof TranscriptInUseError) {
+        emitLoadError(error.message, options.outputFormat)
+        gracefulShutdownSync(1)
+        return { messages: [] }
+      }
       logError(error)
       const errorMessage =
         error instanceof Error

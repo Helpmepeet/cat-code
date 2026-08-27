@@ -27,6 +27,7 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs
 import { getSessionId } from '../../src/bootstrap/state.js'
 import { loadConversationForResume } from '../../src/utils/conversationRecovery.js'
 import { processResumedConversation } from '../../src/utils/sessionRestore.js'
+import { TranscriptInUseError } from '../../src/utils/transcriptLease.js'
 import {
   getSessionQueueOperations,
   type SessionQueueOperation,
@@ -46,6 +47,14 @@ export class SidecarResumeError extends Error {
     )
     this.name = 'SidecarResumeError'
     this.resumeEngineSessionId = resumeEngineSessionId
+  }
+}
+
+/** A retryable resume refusal while another process owns the transcript. */
+export class SidecarResumeBusyError extends SidecarResumeError {
+  constructor(resumeEngineSessionId: string, detail: string) {
+    super(resumeEngineSessionId, detail)
+    this.name = 'SidecarResumeBusyError'
   }
 }
 
@@ -236,26 +245,34 @@ export async function resumeEngineSession(
   const queueState = await getSessionQueueOperations(resumeEngineSessionId)
   const undelivered = selectUndeliveredPrompts(queueState)
 
-  const processed = await processResumedConversation(
-    loaded,
-    {
-      forkSession: false,
-      // Pin the adopted id to the requested one, not merely what the log walk
-      // inferred — the registry addressed us by this exact engine session id.
-      sessionIdOverride: resumeEngineSessionId,
-    },
-    {
-      // Use the same real definitions that configure the subsequent
-      // QueryEngine. restoreAgentFromSession needs this catalog to preserve a
-      // recorded custom agent (and its model) instead of silently defaulting.
-      modeApi: null,
-      mainThreadAgentDefinition: undefined,
-      agentDefinitions,
-      currentCwd: cwd,
-      cliAgents: [],
-      initialState: getDefaultAppState(),
-    },
-  )
+  let processed: Awaited<ReturnType<typeof processResumedConversation>>
+  try {
+    processed = await processResumedConversation(
+      loaded,
+      {
+        forkSession: false,
+        // Pin the adopted id to the requested one, not merely what the log walk
+        // inferred — the registry addressed us by this exact engine session id.
+        sessionIdOverride: resumeEngineSessionId,
+      },
+      {
+        // Use the same real definitions that configure the subsequent
+        // QueryEngine. restoreAgentFromSession needs this catalog to preserve a
+        // recorded custom agent (and its model) instead of silently defaulting.
+        modeApi: null,
+        mainThreadAgentDefinition: undefined,
+        agentDefinitions,
+        currentCwd: cwd,
+        cliAgents: [],
+        initialState: getDefaultAppState(),
+      },
+    )
+  } catch (error) {
+    if (error instanceof TranscriptInUseError) {
+      throw new SidecarResumeBusyError(resumeEngineSessionId, error.message)
+    }
+    throw error
+  }
 
   const engineSessionId = getSessionId()
   if (engineSessionId !== resumeEngineSessionId) {

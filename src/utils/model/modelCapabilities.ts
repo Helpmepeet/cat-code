@@ -1,5 +1,5 @@
 import { readFileSync } from 'fs'
-import { mkdir, writeFile } from 'fs/promises'
+import { mkdir } from 'fs/promises'
 import isEqual from 'lodash-es/isEqual.js'
 import memoize from 'lodash-es/memoize.js'
 import { join } from 'path'
@@ -13,6 +13,7 @@ import { safeParseJSON } from '../json.js'
 import { lazySchema } from '../lazySchema.js'
 import { isEssentialTrafficOnly } from '../privacyLevel.js'
 import { jsonStringify } from '../slowOperations.js'
+import { writeFileAtomicDurable } from '../atomicFile.js'
 import { getAPIProvider, isFirstPartyAnthropicBaseUrl } from './providers.js'
 
 // .strip() — don't persist internal-only fields (mycro_deployments etc.) to disk
@@ -104,10 +105,14 @@ export async function refreshModelCapabilities(): Promise<void> {
     }
 
     await mkdir(getCacheDir(), { recursive: true })
-    await writeFile(path, jsonStringify({ models, timestamp: Date.now() }), {
+    await writeFileAtomicDurable(
+      path,
+      jsonStringify({ models, timestamp: Date.now() }),
+      {
       encoding: 'utf-8',
       mode: 0o600,
-    })
+      },
+    )
     loadCache.cache.delete(path)
     logForDebugging(`[modelCapabilities] cached ${models.length} models`)
   } catch (error) {

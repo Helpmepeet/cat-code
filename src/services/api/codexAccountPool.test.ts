@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { createHash } from 'crypto'
-import { chmodSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
@@ -1776,6 +1776,83 @@ describe('quota belief reconciler directional semantics', () => {
     })
     expect(getCodexAccountAvailability(exactlyStale, now)).toEqual({ kind: 'available' })
   })
+})
+
+describe('Codex vault cross-process mutations', () => {
+  for (const action of ['save', 'alias', 'delete'] as const) {
+    test(`${action} shares the terminal refresh lock`, async () => {
+      const dir = mkdtempSync(join(tmpdir(), `codex-vault-${action}-`))
+      const vaultPath = join(dir, 'synthetic-account.json')
+      const readyPath = join(dir, 'terminal-ready')
+      writeFileSync(
+        vaultPath,
+        JSON.stringify({
+          tokens: {
+            access_token: 'old-access',
+            refresh_token: 'old-refresh',
+            account_id: 'synthetic-account',
+          },
+        }),
+        { mode: 0o600 },
+      )
+      const childPath = join(
+        import.meta.dir,
+        'codexAccountPool.probe.child.ts',
+      )
+      const children = ['terminal-holder', 'desktop-mutator'].map(role =>
+        Bun.spawn(
+          [process.execPath, childPath, role, action, vaultPath, readyPath],
+          { stdout: 'pipe', stderr: 'pipe' },
+        ),
+      )
+      const recordedPids = children.map(child => child.pid)
+
+      try {
+        const exits = await Promise.race([
+          Promise.all(children.map(child => child.exited)),
+          new Promise<never>((_, reject) => {
+            setTimeout(() => {
+              for (const child of children) child.kill()
+              reject(
+                new Error(
+                  `timed out waiting for exact child PIDs ${recordedPids.join(', ')}`,
+                ),
+              )
+            }, 10_000).unref()
+          }),
+        ])
+        const [stdout, stderr] = await Promise.all([
+          Promise.all(
+            children.map(child => new Response(child.stdout).text()),
+          ),
+          Promise.all(
+            children.map(child => new Response(child.stderr).text()),
+          ),
+        ])
+        expect(exits, stderr.join('\n')).toEqual([0, 0])
+        expect(
+          stdout
+            .map(value => (JSON.parse(value) as { pid: number }).pid)
+            .sort(),
+        ).toEqual(recordedPids.sort())
+
+        if (action === 'delete') {
+          expect(existsSync(vaultPath)).toBe(false)
+        } else {
+          const value = JSON.parse(readFileSync(vaultPath, 'utf8'))
+          expect(value.terminal_marker).toBe(action)
+          if (action === 'save') {
+            expect(value.tokens.access_token).toBe('desktop-access')
+          } else {
+            expect(value.alias).toBe('desktop-alias')
+          }
+        }
+      } finally {
+        await Promise.all(children.map(child => child.exited))
+        rmSync(dir, { recursive: true, force: true })
+      }
+    })
+  }
 })
 
 // ── Slice 2: applyRedeemedUsageReset ──────────────────────────────────────

@@ -14,7 +14,7 @@
  */
 
 import { feature } from 'bun:bundle'
-import { basename } from 'path'
+import { basename, join } from 'path'
 import { getIsRemoteMode } from '../../bootstrap/state.js'
 import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
 import { ENTRYPOINT_NAME } from '../../memdir/memdir.js'
@@ -44,6 +44,7 @@ import type {
 import { createAbortController } from '../../utils/abortController.js'
 import { count, uniq } from '../../utils/array.js'
 import { logForDebugging } from '../../utils/debug.js'
+import { acquireFileMutationLock } from '../../utils/atomicFile.js'
 import {
   createCacheSafeParams,
   runForkedAgent,
@@ -387,9 +388,13 @@ export function initExtractMemories(): void {
 
     inProgress = true
     const startTime = Date.now()
+    let releaseMemoryMutationLock: (() => Promise<void>) | undefined
     try {
       logForDebugging(
         `[extractMemories] starting — ${newMessageCount} new messages, memoryDir=${memoryDir}`,
+      )
+      releaseMemoryMutationLock = await acquireFileMutationLock(
+        join(memoryDir, '.memory-mutation'),
       )
 
       // Pre-inject the memory directory manifest so the agent doesn't spend
@@ -507,6 +512,15 @@ export function initExtractMemories(): void {
         duration_ms: Date.now() - startTime,
       })
     } finally {
+      try {
+        await releaseMemoryMutationLock?.()
+      } catch (error) {
+        // Releasing a completed extraction must not strand the inProgress
+        // guard or turn a best-effort hook into an unhandled rejection.
+        logForDebugging(`[extractMemories] lock release error: ${error}`, {
+          level: 'warn',
+        })
+      }
       inProgress = false
 
       // If a call arrived while we were running, run a trailing extraction

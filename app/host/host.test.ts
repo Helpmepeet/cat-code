@@ -27,7 +27,11 @@ import {
   MAX_SPAWNS_PER_WINDOW,
   SPAWN_RATE_WINDOW_MS,
 } from '../shared/hostApi.js'
-import { PARKED_EXIT_CODE, RESUME_FAILED_EXIT_CODE } from '../shared/limits.js'
+import {
+  PARKED_EXIT_CODE,
+  RESUME_BUSY_EXIT_CODE,
+  RESUME_FAILED_EXIT_CODE,
+} from '../shared/limits.js'
 import { createShellState, reduceShellState } from '../renderer/src/shellState.js'
 
 /* ------------------------------------------------------------------------- *
@@ -226,6 +230,18 @@ class FakeSupervisor {
       type: 'exit',
       sessionId,
       code: RESUME_FAILED_EXIT_CODE,
+      signal: null,
+    })
+    this.emit({ type: 'status', sessionId, status: 'exited' })
+  }
+
+  emitResumeBusy(sessionId: SessionId): void {
+    const record = this.records.get(sessionId)
+    if (record) record.status = 'exited'
+    this.emit({
+      type: 'exit',
+      sessionId,
+      code: RESUME_BUSY_EXIT_CODE,
       signal: null,
     })
     this.emit({ type: 'status', sessionId, status: 'exited' })
@@ -1458,6 +1474,37 @@ test('a RESUME_FAILED_EXIT_CODE exit retires an id whose transcript FILE exists 
   expect(restored.ok).toBe(false)
   if (!restored.ok) expect(restored.error.code).toBe('session_not_found')
   expect(h.supervisor.records.get(appSessionId)?.status).toBe('exited')
+})
+
+test('a busy resume exit is clean and remains a retryable restore offer', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  expect(created.ok).toBe(true)
+  if (!created.ok) return
+  const { appSessionId } = created.value
+  h.supervisor.emitReady(appSessionId, 'engine-busy')
+  await settle(
+    () => h.registry.findSession(appSessionId)?.engineSessionId === 'engine-busy',
+  )
+  writeTranscript(h.storageDir, 'engine-busy')
+
+  h.supervisor.emitResumeBusy(appSessionId)
+  await settle(
+    () =>
+      h.registry.findSession(appSessionId)?.shutdown === 'clean' &&
+      h.logs.some(line => line.includes('resume_busy')),
+  )
+
+  expect(h.registry.findSession(appSessionId)?.shutdown).toBe('clean')
+  expect(
+    h.host.listSessions().find(s => s.appSessionId === appSessionId)?.restorable,
+  ).toBe(true)
+  expect(h.logs.some(line => line.includes('resume_busy'))).toBe(true)
+  // `canResume` consults the private resume-failed verdict set. Remaining true
+  // proves a busy refusal did not permanently retire the transcript.
+  expect(h.host.canResume(appSessionId)).toBe(true)
+  expect(h.host.canPreview(appSessionId)).toBe(true)
+  expect((await h.host.restoreSession(appSessionId)).ok).toBe(true)
 })
 
 /* ------------------------------------------------------------------------- *

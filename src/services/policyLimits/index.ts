@@ -15,7 +15,7 @@
 import axios from 'axios'
 import { createHash } from 'crypto'
 import { readFileSync as fsReadFileSync } from 'fs'
-import { unlink, writeFile } from 'fs/promises'
+import { unlink } from 'fs/promises'
 import { join } from 'path'
 import {
   CLAUDE_AI_INFERENCE_SCOPE,
@@ -39,6 +39,7 @@ import {
 import { isEssentialTrafficOnly } from '../../utils/privacyLevel.js'
 import { sleep } from '../../utils/sleep.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
+import { writeFileAtomicDurable } from '../../utils/atomicFile.js'
 import { getClaudeCodeUserAgent } from '../../utils/userAgent.js'
 import { getRetryDelay } from '../api/withRetry.js'
 import {
@@ -413,7 +414,7 @@ async function saveCachedRestrictions(
   try {
     const path = getCachePath()
     const data: PolicyLimitsResponse = { restrictions }
-    await writeFile(path, jsonStringify(data, null, 2), {
+    await writeFileAtomicDurable(path, jsonStringify(data, null, 2), {
       encoding: 'utf-8',
       mode: 0o600,
     })

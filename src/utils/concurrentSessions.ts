@@ -48,10 +48,10 @@ export function isBgSession(): boolean {
 /**
  * Write a PID file for this session and register cleanup.
  *
- * Registers all top-level sessions — interactive CLI, SDK (vscode, desktop,
- * typescript, python, -p), bg/daemon spawns — so `claude ps` sees everything
- * the user might be running. Skips only teammates/subagents, which would
- * conflate swarm usage with genuine concurrency and pollute ps with noise.
+ * Called by the terminal REPL so terminal process-management views see only
+ * processes they own. Desktop sidecars remain under the desktop supervisor;
+ * transcript leases provide cross-product exclusion without coupling the two
+ * process registries. Teammates/subagents are also excluded.
  *
  * Returns true if registered, false if skipped.
  * Errors logged to debug, never thrown.

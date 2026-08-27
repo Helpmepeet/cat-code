@@ -227,3 +227,6 @@ export const PARKED_EXIT_CODE = 5
  * sides must never drift to two literals.
  */
 export const RESUME_FAILED_EXIT_CODE = 4
+
+/** Sidecar resume was refused because another process owns the transcript. */
+export const RESUME_BUSY_EXIT_CODE = 6

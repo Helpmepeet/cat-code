@@ -4,23 +4,31 @@ import { getGlobalConfig, saveGlobalConfig } from '../utils/config.js'
 import { getAPIProvider } from '../utils/model/providers.js'
 import { getSettings_DEPRECATED } from '../utils/settings/settings.js'
 
-export function resetProToOpusDefault(): void {
+export function resetProToOpusDefault(): Error | null {
   const config = getGlobalConfig()
 
   if (config.opusProMigrationComplete) {
-    return
+    return null
   }
 
   const apiProvider = getAPIProvider()
+  let proSubscriber = false
+  if (apiProvider === 'firstParty') {
+    try {
+      proSubscriber = isProSubscriber()
+    } catch (error) {
+      return error instanceof Error ? error : new Error(String(error))
+    }
+  }
 
   // Pro users on firstParty get auto-migrated to Opus 4.5 default
-  if (apiProvider !== 'firstParty' || !isProSubscriber()) {
+  if (apiProvider !== 'firstParty' || !proSubscriber) {
     saveGlobalConfig(current => ({
       ...current,
       opusProMigrationComplete: true,
     }))
     logEvent('tengu_reset_pro_to_opus_default', { skipped: true })
-    return
+    return null
   }
 
   const settings = getSettings_DEPRECATED()
@@ -48,4 +56,5 @@ export function resetProToOpusDefault(): void {
       had_custom_model: true,
     })
   }
+  return null
 }

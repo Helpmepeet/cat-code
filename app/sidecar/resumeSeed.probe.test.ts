@@ -16,7 +16,14 @@
  */
 
 import { afterEach, expect, test } from 'bun:test'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -42,29 +49,69 @@ function tmp(prefix: string): string {
   return dir
 }
 
-async function runChild(opts: {
+function startChild(opts: {
   entry: string
   args: string[]
   cwd: string
   configHome: string
   extraEnv?: Record<string, string>
-}): Promise<{ code: number; stdout: string; stderr: string }> {
+}): {
+  pid: number
+  result: Promise<{ pid: number; code: number; stdout: string; stderr: string }>
+} {
   const proc = Bun.spawn(['bun', 'run', opts.entry, ...opts.args], {
     cwd: opts.cwd,
     env: {
       ...process.env,
+      HOME: opts.configHome,
       CLAUDE_CONFIG_DIR: opts.configHome,
+      NODE_ENV: 'development',
       ...opts.extraEnv,
     },
     stdout: 'pipe',
     stderr: 'pipe',
   })
-  const [code, stdout, stderr] = await Promise.all([
-    proc.exited,
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ])
-  return { code, stdout, stderr }
+  const pid = proc.pid
+  const result = (async () => {
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    try {
+      const completed = Promise.all([
+        proc.exited,
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ])
+      const [code, stdout, stderr] = await Promise.race([
+        completed,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => {
+            proc.kill()
+            reject(new Error(`child PID ${pid} timed out`))
+          }, TEST_TIMEOUT_MS - 5_000)
+        }),
+      ])
+      return { pid, code, stdout, stderr }
+    } finally {
+      if (timeout) clearTimeout(timeout)
+    }
+  })()
+  return { pid, result }
+}
+
+async function runChild(
+  opts: Parameters<typeof startChild>[0],
+): Promise<{ pid: number; code: number; stdout: string; stderr: string }> {
+  return startChild(opts).result
+}
+
+async function waitForPidMarker(path: string, expectedPid: number): Promise<void> {
+  const startedAt = Date.now()
+  while (!existsSync(path)) {
+    if (Date.now() - startedAt > 30_000) {
+      throw new Error(`child PID ${expectedPid} did not publish readiness`)
+    }
+    await Bun.sleep(20)
+  }
+  expect(Number(readFileSync(path, 'utf8'))).toBe(expectedPid)
 }
 
 test('F1: the resumed transcript is the live turn context of the engine the sidecar serves', async () => {
@@ -126,6 +173,58 @@ test('F1: the resumed transcript is the live turn context of the engine the side
   // The visible replay may carry an archival prefix, but its aligned tail is
   // still the exact visible model seed; recovery sentinels stay internal.
   expect(result.replayMatchesVisibleEngineSeed).toBe(true)
+}, TEST_TIMEOUT_MS)
+
+test('P5-5c: a second sidecar cannot resume the same engine transcript', async () => {
+  const configHome = tmp('catcode-coexist-cfg-')
+  const cwd = tmp('catcode-coexist-wd-')
+  const engineSessionId = randomUUID()
+  const marker = `nonce-${randomUUID()}`
+  const readyFile = join(configHome, 'holder.ready')
+  const releaseFile = join(configHome, 'holder.release')
+
+  const mint = await runChild({
+    entry: minter,
+    args: [engineSessionId, marker],
+    cwd,
+    configHome,
+    extraEnv: { TEST_ENABLE_SESSION_PERSISTENCE: '1' },
+  })
+  expect(mint.code).toBe(0)
+
+  const holder = startChild({
+    entry: seedProbe,
+    args: [engineSessionId, marker, readyFile, releaseFile],
+    cwd,
+    configHome,
+  })
+  await waitForPidMarker(readyFile, holder.pid)
+  const terminalRegistryDir = join(configHome, 'sessions')
+  expect(
+    existsSync(terminalRegistryDir)
+      ? readdirSync(terminalRegistryDir).includes(`${holder.pid}.json`)
+      : false,
+  ).toBe(false)
+
+  const competing = await runChild({
+    entry: seedProbe,
+    args: [engineSessionId, marker],
+    cwd,
+    configHome,
+  })
+  expect(competing.code).not.toBe(0)
+  expect(competing.stderr).toContain('already open in another Cat Code process')
+
+  writeFileSync(releaseFile, 'release')
+  expect((await holder.result).code).toBe(0)
+
+  const afterExit = await runChild({
+    entry: seedProbe,
+    args: [engineSessionId, marker],
+    cwd,
+    configHome,
+  })
+  expect(afterExit.code).toBe(0)
 }, TEST_TIMEOUT_MS)
 
 test('F1/F2 projection wiring: archival display replay preserves the exact visible engine-seed tail', () => {

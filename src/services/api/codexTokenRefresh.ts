@@ -9,7 +9,6 @@
 import { readFileSync, writeFileSync, renameSync, unlinkSync, readdirSync, existsSync, openSync, closeSync, fsyncSync } from 'fs'
 import { join, dirname, basename } from 'path'
 import { createHash, randomUUID } from 'crypto'
-import { lock } from 'proper-lockfile'
 import {
   CODEX_CLIENT_ID,
   CODEX_TOKEN_URL,
@@ -19,6 +18,7 @@ import {
 import { logForDebugging } from '../../utils/debug.js'
 import { getInitialSettings } from '../../utils/settings/settings.js'
 import { registerCleanup } from '../../utils/cleanupRegistry.js'
+import { lock } from '../../utils/lockfile.js'
 import { extractCodexAccountId } from '../oauth/codex-client.js'
 import {
   appendAccount,
@@ -175,6 +175,26 @@ export function acquireCodexVaultFileLock(
     stale: 120_000,
     update: 30_000,
     onCompromised,
+  }).then(release => {
+    let released = false
+    return async () => {
+      if (released) return
+      released = true
+      try {
+        await release()
+      } catch (error) {
+        if (
+          !(
+            error &&
+            typeof error === 'object' &&
+            'code' in error &&
+            error.code === 'ERELEASED'
+          )
+        ) {
+          throw error
+        }
+      }
+    }
   })
 }
 
@@ -771,7 +791,12 @@ export function startPeriodicRefresh(): void {
 
   const intervalMs = hours * 60 * 60 * 1000
   refreshTimerId = setInterval(() => {
-    void touchAll()
+    void touchAll().catch(error => {
+      logForDebugging(
+        `[codex-refresh] Periodic refresh failed: ${error instanceof Error ? error.message : String(error)}`,
+        { level: 'error' },
+      )
+    })
   }, intervalMs)
 
   // Don't let the timer keep the process alive
@@ -805,7 +830,12 @@ export function startQuarantineProbe(): void {
   if (quarantineProbeTimerId !== null) return
 
   quarantineProbeTimerId = setInterval(() => {
-    void runQuarantineProbeOnce()
+    void runQuarantineProbeOnce().catch(error => {
+      logForDebugging(
+        `[codex-refresh] Quarantine probe failed: ${error instanceof Error ? error.message : String(error)}`,
+        { level: 'error' },
+      )
+    })
   }, QUARANTINE_PROBE_INTERVAL_MS)
 
   if (
@@ -854,7 +884,10 @@ export async function runQuarantineProbeOnce(): Promise<RefreshResult[]> {
       }
 
       try {
-        persistNextQuarantineProbe(vaultFilePath, 'quarantine probe in progress')
+        await persistNextQuarantineProbe(
+          vaultFilePath,
+          'quarantine probe in progress',
+        )
         const refreshed = await refreshAccountTokens(
           account.accountId,
           account.refreshToken,
@@ -879,7 +912,14 @@ export async function runQuarantineProbeOnce(): Promise<RefreshResult[]> {
 
         const detail = err instanceof Error ? err.message : String(err)
         markPoolAccountQuarantined(account.accountId, detail)
-        persistNextQuarantineProbe(vaultFilePath, detail)
+        try {
+          await persistNextQuarantineProbe(vaultFilePath, detail)
+        } catch (persistenceError) {
+          logForDebugging(
+            `[codex-refresh] Could not persist quarantine probe failure: ${persistenceError instanceof Error ? persistenceError.message : String(persistenceError)}`,
+            { level: 'error' },
+          )
+        }
         results.push({
           accountId: account.accountId,
           status: 'failed',
@@ -897,49 +937,66 @@ export async function runQuarantineProbeOnce(): Promise<RefreshResult[]> {
   }
 }
 
-function persistNextQuarantineProbe(vaultFilePath: string, reason: string): void {
-  const vault = readVault(vaultFilePath)
-  const refreshState = (vault.refresh ?? {}) as Record<string, unknown>
-  // Never touch a terminal verdict here. The write below is an unlocked
-  // read-modify-write that overwrites `state` and `reason`, so recording backoff
-  // for a reauth_required profile would downgrade the verdict to `unknown` and
-  // could clobber one a concurrent process wrote after this function's read.
-  // An uncorrelatable verdict therefore probes without a backoff reservation,
-  // which costs one extra probe: the first probe leaves the profile in some
-  // other state (idle, a correctly-hashed verdict, or unknown), and the normal
-  // backoff applies from then on.
-  if (refreshState.state === 'reauth_required') return
+export async function persistNextQuarantineProbe(
+  vaultFilePath: string,
+  reason: string,
+): Promise<void> {
+  let lockCompromised = false
+  const release = await acquireCodexVaultFileLock(vaultFilePath, error => {
+    lockCompromised = true
+    logForDebugging(
+      `[codex-refresh] Quarantine probe lock compromised: ${error.message}`,
+      { level: 'error' },
+    )
+  })
+  try {
+    const vault = readExistingVault(vaultFilePath)
+    const refreshState = (vault.refresh ?? {}) as Record<string, unknown>
+    if (refreshState.state === 'reauth_required') return
 
-  const previousFailures =
-    typeof refreshState.consecutive_failures === 'number' &&
-    Number.isFinite(refreshState.consecutive_failures)
-      ? refreshState.consecutive_failures
-      : 0
-  const existingNextProbeAt = typeof refreshState.next_probe_at === 'string'
-    ? Date.parse(refreshState.next_probe_at)
-    : Number.NaN
-  const hasFutureReservation =
-    Number.isFinite(existingNextProbeAt) && existingNextProbeAt > Date.now()
-  const consecutiveFailures = hasFutureReservation
-    ? previousFailures
-    : previousFailures + 1
-  const backoff =
-    QUARANTINE_PROBE_BACKOFF_MS[
-      Math.min(consecutiveFailures - 1, QUARANTINE_PROBE_BACKOFF_MS.length - 1)
-    ] ?? QUARANTINE_PROBE_BACKOFF_MS[QUARANTINE_PROBE_BACKOFF_MS.length - 1]
+    const previousFailures =
+      typeof refreshState.consecutive_failures === 'number' &&
+      Number.isFinite(refreshState.consecutive_failures)
+        ? refreshState.consecutive_failures
+        : 0
+    const existingNextProbeAt =
+      typeof refreshState.next_probe_at === 'string'
+        ? Date.parse(refreshState.next_probe_at)
+        : Number.NaN
+    const hasFutureReservation =
+      Number.isFinite(existingNextProbeAt) && existingNextProbeAt > Date.now()
+    const consecutiveFailures = hasFutureReservation
+      ? previousFailures
+      : previousFailures + 1
+    const backoff =
+      QUARANTINE_PROBE_BACKOFF_MS[
+        Math.min(
+          consecutiveFailures - 1,
+          QUARANTINE_PROBE_BACKOFF_MS.length - 1,
+        )
+      ] ??
+      QUARANTINE_PROBE_BACKOFF_MS[QUARANTINE_PROBE_BACKOFF_MS.length - 1]
 
-  vault.refresh = {
-    ...refreshState,
-    state: 'unknown',
-    failed_at: new Date().toISOString(),
-    reason,
-    consecutive_failures: consecutiveFailures,
-    next_probe_at: hasFutureReservation && typeof refreshState.next_probe_at === 'string'
-      ? refreshState.next_probe_at
-      : new Date(Date.now() + backoff).toISOString(),
+    vault.refresh = {
+      ...refreshState,
+      state: 'unknown',
+      failed_at: new Date().toISOString(),
+      reason,
+      consecutive_failures: consecutiveFailures,
+      next_probe_at:
+        hasFutureReservation &&
+        typeof refreshState.next_probe_at === 'string'
+          ? refreshState.next_probe_at
+          : new Date(Date.now() + backoff).toISOString(),
+    }
+    vault.version = (vault.version ?? 0) + 1
+    if (lockCompromised) {
+      throw new Error('Lock compromised; refusing to write vault')
+    }
+    atomicWriteJson(vaultFilePath, vault)
+  } finally {
+    await release()
   }
-  vault.version = (vault.version ?? 0) + 1
-  atomicWriteJson(vaultFilePath, vault)
 }
 
 function atomicWriteJson(filePath: string, data: unknown): void {

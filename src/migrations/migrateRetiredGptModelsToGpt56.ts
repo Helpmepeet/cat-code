@@ -3,10 +3,7 @@ import {
   setMainLoopModelOverride,
 } from '../bootstrap/state.js'
 import { remapRetiredGptModel } from '../utils/model/model.js'
-import {
-  getSettingsForSource,
-  updateSettingsForSource,
-} from '../utils/settings/settings.js'
+import { updateSettingsForSource } from '../utils/settings/settings.js'
 
 function remapModelList(models: string[]): string[] {
   return [...new Set(models.map(remapRetiredGptModel))]
@@ -20,8 +17,8 @@ function remapModelList(models: string[]): string[] {
  * legacy values without mutating configuration the user does not own here.
  */
 export function migrateRetiredGptModelsToGpt56(): Error | null {
-  const settings = getSettingsForSource('userSettings')
-  if (settings) {
+  const { error } = updateSettingsForSource('userSettings', settings => {
+    if (!settings) return null
     const model = settings.model
     const remappedModel = typeof model === 'string'
       ? remapRetiredGptModel(model)
@@ -30,7 +27,7 @@ export function migrateRetiredGptModelsToGpt56(): Error | null {
       ? remapModelList(settings.availableModels)
       : undefined
     const modelOverrides = settings.modelOverrides
-      ? { ...settings.modelOverrides } as Record<string, string | undefined>
+      ? { ...settings.modelOverrides }
       : undefined
     let changedOverrides = false
     if (modelOverrides) {
@@ -38,7 +35,7 @@ export function migrateRetiredGptModelsToGpt56(): Error | null {
         const replacement = remapRetiredGptModel(modelId)
         if (replacement !== modelId) {
           modelOverrides[replacement] ??= override
-          modelOverrides[modelId] = undefined
+          delete modelOverrides[modelId]
           changedOverrides = true
         }
       }
@@ -47,15 +44,16 @@ export function migrateRetiredGptModelsToGpt56(): Error | null {
     const changedAvailableModels = availableModels
       ? availableModels.join('\u0000') !== settings.availableModels?.join('\u0000')
       : false
-    if (remappedModel !== model || changedAvailableModels || changedOverrides) {
-      const { error } = updateSettingsForSource('userSettings', {
+    return remappedModel !== model || changedAvailableModels || changedOverrides
+      ? {
+        ...settings,
         ...(remappedModel !== model ? { model: remappedModel } : {}),
         ...(changedAvailableModels ? { availableModels } : {}),
         ...(changedOverrides ? { modelOverrides } : {}),
-      })
-      if (error) return error
-    }
-  }
+      }
+      : null
+  })
+  if (error) return error
 
   const override = getMainLoopModelOverride()
   if (typeof override === 'string') {

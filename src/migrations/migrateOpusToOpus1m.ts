@@ -21,23 +21,28 @@ import {
  *
  * Idempotent: only writes if userSettings.model is exactly 'opus'.
  */
-export function migrateOpusToOpus1m(): void {
-  if (!isOpus1mMergeEnabled()) {
-    return
-  }
-
+export function migrateOpusToOpus1m(): Error | null {
   const model = getSettingsForSource('userSettings')?.model
   if (model !== 'opus') {
-    return
+    return null
   }
 
-  const migrated = 'opus[1m]'
-  const modelToSet =
-    parseUserSpecifiedModel(migrated) ===
-    parseUserSpecifiedModel(getDefaultMainLoopModelSetting())
-      ? undefined
-      : migrated
-  updateSettingsForSource('userSettings', { model: modelToSet })
+  try {
+    if (!isOpus1mMergeEnabled()) {
+      return null
+    }
 
-  logEvent('tengu_opus_to_opus1m_migration', {})
+    const migrated = 'opus[1m]'
+    const modelToSet =
+      parseUserSpecifiedModel(migrated) ===
+      parseUserSpecifiedModel(getDefaultMainLoopModelSetting())
+        ? undefined
+        : migrated
+    updateSettingsForSource('userSettings', { model: modelToSet })
+
+    logEvent('tengu_opus_to_opus1m_migration', {})
+    return null
+  } catch (error) {
+    return error instanceof Error ? error : new Error(String(error))
+  }
 }

@@ -4,17 +4,14 @@ import {
   saveCurrentProjectConfig,
 } from '../utils/config.js'
 import { logError } from '../utils/log.js'
-import {
-  getSettingsForSource,
-  updateSettingsForSource,
-} from '../utils/settings/settings.js'
+import { updateSettingsForSource } from '../utils/settings/settings.js'
 
 /**
  * Migration: Move MCP server approval fields from project config to local settings
  * This migrates both enableAllProjectMcpServers and enabledMcpjsonServers to the
  * settings system for better management and consistency.
  */
-export function migrateEnableAllProjectMcpServersToSettings(): void {
+export function migrateEnableAllProjectMcpServersToSettings(): Error | null {
   const projectConfig = getCurrentProjectConfig()
 
   // Check if any field exists in project config
@@ -27,69 +24,74 @@ export function migrateEnableAllProjectMcpServersToSettings(): void {
     projectConfig.disabledMcpjsonServers.length > 0
 
   if (!hasEnableAll && !hasEnabledServers && !hasDisabledServers) {
-    return
+    return null
   }
 
   try {
-    const existingSettings = getSettingsForSource('localSettings') || {}
-    const updates: Partial<{
-      enableAllProjectMcpServers: boolean
-      enabledMcpjsonServers: string[]
-      disabledMcpjsonServers: string[]
-    }> = {}
     const fieldsToRemove: Array<
       | 'enableAllProjectMcpServers'
       | 'enabledMcpjsonServers'
       | 'disabledMcpjsonServers'
     > = []
 
-    // Migrate enableAllProjectMcpServers if it exists and hasn't been migrated
-    if (
-      hasEnableAll &&
-      existingSettings.enableAllProjectMcpServers === undefined
-    ) {
-      updates.enableAllProjectMcpServers =
-        projectConfig.enableAllProjectMcpServers
-      fieldsToRemove.push('enableAllProjectMcpServers')
-    } else if (hasEnableAll) {
-      // Already migrated, just mark for removal
+    if (hasEnableAll) {
       fieldsToRemove.push('enableAllProjectMcpServers')
     }
-
-    // Migrate enabledMcpjsonServers if it exists
     if (hasEnabledServers && projectConfig.enabledMcpjsonServers) {
-      const existingEnabledServers =
-        existingSettings.enabledMcpjsonServers || []
-      // Merge the servers (avoiding duplicates)
-      updates.enabledMcpjsonServers = [
-        ...new Set([
-          ...existingEnabledServers,
-          ...projectConfig.enabledMcpjsonServers,
-        ]),
-      ]
       fieldsToRemove.push('enabledMcpjsonServers')
     }
-
-    // Migrate disabledMcpjsonServers if it exists
     if (hasDisabledServers && projectConfig.disabledMcpjsonServers) {
-      const existingDisabledServers =
-        existingSettings.disabledMcpjsonServers || []
-      // Merge the servers (avoiding duplicates)
-      updates.disabledMcpjsonServers = [
-        ...new Set([
-          ...existingDisabledServers,
-          ...projectConfig.disabledMcpjsonServers,
-        ]),
-      ]
       fieldsToRemove.push('disabledMcpjsonServers')
     }
 
-    // Update settings if there are any updates
-    if (Object.keys(updates).length > 0) {
-      updateSettingsForSource('localSettings', updates)
-    }
+    const { error } = updateSettingsForSource('localSettings', current => {
+      const existingSettings = current ?? {}
+      const next = { ...existingSettings }
+      let changed = false
 
-    // Remove migrated fields from project config
+      if (
+        hasEnableAll &&
+        existingSettings.enableAllProjectMcpServers === undefined
+      ) {
+        next.enableAllProjectMcpServers =
+          projectConfig.enableAllProjectMcpServers
+        changed = true
+      }
+      if (hasEnabledServers && projectConfig.enabledMcpjsonServers) {
+        const enabledMcpjsonServers = [
+          ...new Set([
+            ...(existingSettings.enabledMcpjsonServers ?? []),
+            ...projectConfig.enabledMcpjsonServers,
+          ]),
+        ]
+        if (
+          enabledMcpjsonServers.join('\u0000') !==
+          existingSettings.enabledMcpjsonServers?.join('\u0000')
+        ) {
+          next.enabledMcpjsonServers = enabledMcpjsonServers
+          changed = true
+        }
+      }
+      if (hasDisabledServers && projectConfig.disabledMcpjsonServers) {
+        const disabledMcpjsonServers = [
+          ...new Set([
+            ...(existingSettings.disabledMcpjsonServers ?? []),
+            ...projectConfig.disabledMcpjsonServers,
+          ]),
+        ]
+        if (
+          disabledMcpjsonServers.join('\u0000') !==
+          existingSettings.disabledMcpjsonServers?.join('\u0000')
+        ) {
+          next.disabledMcpjsonServers = disabledMcpjsonServers
+          changed = true
+        }
+      }
+
+      return changed ? next : null
+    })
+    if (error) return error
+
     if (
       fieldsToRemove.includes('enableAllProjectMcpServers') ||
       fieldsToRemove.includes('enabledMcpjsonServers') ||
@@ -110,9 +112,10 @@ export function migrateEnableAllProjectMcpServersToSettings(): void {
     logEvent('tengu_migrate_mcp_approval_fields_success', {
       migratedCount: fieldsToRemove.length,
     })
+    return null
   } catch (e: unknown) {
-    // Log migration failure but don't throw to avoid breaking startup
     logError(e)
     logEvent('tengu_migrate_mcp_approval_fields_error', {})
+    return e instanceof Error ? e : new Error(String(e))
   }
 }

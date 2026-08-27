@@ -5,13 +5,14 @@ import {
   acquireDeferredContinuationLocks,
   createPendingDeferredContinuation,
   DEFERRED_LOCK_UPDATE_MS,
+  readPendingDeferredContinuation,
   type DeferredContinuationJobV1,
 } from './deferredContinuation.js'
 import {
   beginForegroundDeferredContinuation,
-  failPreparedBackgroundDeferredContinuation,
   getForegroundDeferredAbortSignal,
   prepareBackgroundDeferredContinuation,
+  requeuePreparedBackgroundDeferredContinuation,
   settleForegroundDeferredAttempt,
   _forTest as deferredRunnerForTest,
 } from './deferredContinuationRunner.js'
@@ -251,7 +252,15 @@ describe('deferred continuation process probes', () => {
       try {
         const prepared = await prepareBackgroundDeferredContinuation()
         expect(prepared?.jobId).toBe(pending.jobId)
-        await failPreparedBackgroundDeferredContinuation('unknown')
+        const requeuedAt = Date.now()
+        await requeuePreparedBackgroundDeferredContinuation(requeuedAt)
+        const requeued = await readPendingDeferredContinuation(pending.sessionId)
+        expect(requeued).toMatchObject({
+          state: 'pending',
+          notBefore: requeuedAt + 60_000,
+          attempt: pending.attempt,
+        })
+        expect(requeued?.attempt.submittedAt).toBeUndefined()
       } finally {
         await foregroundGuard.release()
       }

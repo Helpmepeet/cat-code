@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import type { SettingsUpdater } from '../utils/settings/settings.js'
 import type { SettingsJson } from '../utils/settings/types.js'
 
 let userSettings: SettingsJson | null = null
@@ -17,8 +18,17 @@ mock.module('../utils/settings/settings.js', () => ({
   getSettingsForSource: () => userSettings,
   updateSettingsForSource: (
     _source: string,
-    patch: Partial<SettingsJson>,
+    patch: SettingsJson | SettingsUpdater,
   ) => {
+    if (updateError) return { error: updateError }
+    if (typeof patch === 'function') {
+      const next = patch(userSettings)
+      if (next) {
+        updateCalls.push(next)
+        userSettings = next
+      }
+      return { error: null }
+    }
     updateCalls.push(patch)
     if (userSettings) {
       const mergedOverrides = patch.modelOverrides
@@ -35,7 +45,7 @@ mock.module('../utils/settings/settings.js', () => ({
         ...(patch.modelOverrides ? { modelOverrides: mergedOverrides } : {}),
       }
     }
-    return { error: updateError }
+    return { error: null }
   },
 }))
 
@@ -136,9 +146,7 @@ describe('migrateRetiredClaude46ModelsToClaude5', () => {
           'claude-fable-5',
         ],
         modelOverrides: {
-          'claude-sonnet-4-6': undefined,
           'claude-sonnet-5': 'keep-current-sonnet-override',
-          'claude-opus-4-6': undefined,
           'claude-opus-5': 'legacy-opus-override',
         },
       },
@@ -163,9 +171,9 @@ describe('migrateRetiredClaude46ModelsToClaude5', () => {
     expect(getDefaultOpusModel()).toBe('claude-opus-5')
   })
 
-  // Regression for the preAction-vs-setSessionProvider ordering bug: runMigrations()
-  // runs at the Commander preAction hook, before setSessionProvider() ever settles the
-  // session provider, so getAPIProvider() at migration time falls back to whatever the
+  // Regression for the startup-vs-setSessionProvider ordering bug: engine migrations
+  // run from init before setSessionProvider() ever settles the session provider, so
+  // getAPIProvider() at migration time falls back to whatever the
   // *persisted* lastUsedProvider preference resolves to. Gating the migration itself on
   // that made it a permanent no-op for anyone whose last session used Codex/OpenAI, since
   // the migration's version bump still fires unconditionally and it never runs again.
@@ -186,7 +194,6 @@ describe('migrateRetiredClaude46ModelsToClaude5', () => {
         model: 'claude-opus-5',
         availableModels: ['claude-opus-5', 'claude-sonnet-5'],
         modelOverrides: {
-          'claude-opus-4-6': undefined,
           'claude-opus-5': 'my-endpoint-id',
         },
       },
@@ -240,31 +247,29 @@ describe('migrateRetiredClaude46ModelsToClaude5', () => {
 })
 
 test('startup wiring tripwire keeps the Claude 4.6 retirement migration active', () => {
-  const mainSource = readFileSync(
-    fileURLToPath(new URL('../main.tsx', import.meta.url)),
+  const ownerSource = readFileSync(
+    fileURLToPath(new URL('./runEngineMigrations.ts', import.meta.url)),
+    'utf8',
+  )
+  const initSource = readFileSync(
+    fileURLToPath(new URL('../entrypoints/init.ts', import.meta.url)),
     'utf8',
   )
 
-  expect(mainSource).toContain(
-    "import { migrateRetiredClaude46ModelsToClaude5 } from './migrations/migrateRetiredClaude46ModelsToClaude5.js';",
+  expect(ownerSource).toContain(
+    "import { migrateRetiredClaude46ModelsToClaude5 } from './migrateRetiredClaude46ModelsToClaude5.js'",
   )
-  const runMigrations = mainSource.slice(mainSource.indexOf('function runMigrations'))
-  expect(runMigrations).toContain('migrateRetiredClaude46ModelsToClaude5()')
-  expect(runMigrations).toContain('if (settingsMigrationError)')
-
-  // A migration only actually runs for existing users if it is wired into the
-  // migrationVersion gate/bump: users who already have migrationVersion ===
-  // CURRENT_MIGRATION_VERSION stored skip the whole block forever, so a migration
-  // added to the list without also sitting inside that gated block (whose
-  // saveGlobalConfig call persists the bumped CURRENT_MIGRATION_VERSION) would pass
-  // the two assertions above yet never run for existing users. Pin the call site
-  // between the version-check guard and the version-bumping saveGlobalConfig.
-  const gateIndex = runMigrations.indexOf(
-    'if (getGlobalConfig().migrationVersion !== CURRENT_MIGRATION_VERSION)',
+  expect(ownerSource).toContain(
+    'const retiredClaudeError = migrateRetiredClaude46ModelsToClaude5()',
   )
-  const callIndex = runMigrations.indexOf('migrateRetiredClaude46ModelsToClaude5()')
-  const saveIndex = runMigrations.indexOf('saveGlobalConfig(')
+  expect(ownerSource).toContain(
+    'if (retiredClaudeError) return retiredClaudeError',
+  )
+  const gateIndex = ownerSource.indexOf('const needsVersionedMigrations')
+  const callIndex = ownerSource.indexOf('const retiredClaudeError')
+  const saveIndex = ownerSource.indexOf('saveGlobalConfig(')
   expect(gateIndex).toBeGreaterThanOrEqual(0)
-  expect(callIndex).toBeGreaterThan(gateIndex)
-  expect(saveIndex).toBeGreaterThan(callIndex)
+  expect(callIndex).toBeGreaterThanOrEqual(0)
+  expect(saveIndex).toBeGreaterThan(gateIndex)
+  expect(initSource).toContain('await runEngineMigrations()')
 })

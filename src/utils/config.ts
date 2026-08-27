@@ -599,8 +599,7 @@ export type GlobalConfig = {
   }
 
   // Version of the last-applied migration set. When equal to
-  // CURRENT_MIGRATION_VERSION, runMigrations() skips all sync migrations
-  // (avoiding 11× saveGlobalConfig lock+re-read on every startup).
+  // CURRENT_MIGRATION_VERSION, runEngineMigrations() skips the versioned set.
   migrationVersion?: number
 
   // OpenAI OAuth tokens for Codex API access
@@ -831,15 +830,15 @@ function wouldLoseAuthState(fresh: {
 
 export function saveGlobalConfig(
   updater: (currentConfig: GlobalConfig) => GlobalConfig,
-): void {
+): boolean {
   if (process.env.NODE_ENV === 'test') {
     const config = updater(TEST_GLOBAL_CONFIG_FOR_TESTING)
     // Skip if no changes (same reference returned)
     if (config === TEST_GLOBAL_CONFIG_FOR_TESTING) {
-      return
+      return false
     }
     Object.assign(TEST_GLOBAL_CONFIG_FOR_TESTING, config)
-    return
+    return true
   }
 
   let written: GlobalConfig | null = null
@@ -866,37 +865,13 @@ export function saveGlobalConfig(
     if (didWrite && written) {
       writeThroughGlobalConfigCache(written)
     }
+    return didWrite
   } catch (error) {
     logForDebugging(`Failed to save config with lock: ${error}`, {
       level: 'error',
     })
-    // Fall back to non-locked version on error. This fallback is a race
-    // window: if another process is mid-write (or the file got truncated),
-    // getConfig returns defaults. Refuse to write those over a good cached
-    // config to avoid wiping auth. See GH #3117.
-    const currentConfig = getConfig(
-      getGlobalClaudeFile(),
-      createDefaultGlobalConfig,
-    )
-    if (wouldLoseAuthState(currentConfig)) {
-      logForDebugging(
-        'saveGlobalConfig fallback: re-read config is missing auth that cache has; refusing to write. See GH #3117.',
-        { level: 'error' },
-      )
-      logEvent('tengu_config_auth_loss_prevented', {})
-      return
-    }
-    const config = updater(currentConfig)
-    // Skip if no changes (same reference returned)
-    if (config === currentConfig) {
-      return
-    }
-    written = {
-      ...config,
-      projects: removeProjectHistory(currentConfig.projects),
-    }
-    saveConfig(getGlobalClaudeFile(), written, DEFAULT_GLOBAL_CONFIG)
-    writeThroughGlobalConfigCache(written)
+    logEvent('tengu_config_save_failed', {})
+    return false
   }
 }
 
@@ -1201,15 +1176,27 @@ function saveConfigWithLock<A extends object>(
   try {
     const lockFilePath = `${file}.lock`
     const startTime = Date.now()
-    release = lockfile.lockSync(file, {
-      lockfilePath: lockFilePath,
-      onCompromised: err => {
-        // Default onCompromised throws from a setTimeout callback, which
-        // becomes an unhandled exception. Log instead -- the lock being
-        // stolen (e.g. after a 10s event-loop stall) is recoverable.
-        logForDebugging(`Config lock compromised: ${err}`, { level: 'error' })
-      },
-    })
+    const deadline = startTime + 10_000
+    for (;;) {
+      try {
+        release = lockfile.lockSync(file, {
+          lockfilePath: lockFilePath,
+          realpath: false,
+          onCompromised: err => {
+            // Default onCompromised throws from a setTimeout callback, which
+            // becomes an unhandled exception. Log instead -- the lock being
+            // stolen (e.g. after a 10s event-loop stall) is recoverable.
+            logForDebugging(`Config lock compromised: ${err}`, { level: 'error' })
+          },
+        })
+        break
+      } catch (error) {
+        if (getErrnoCode(error) !== 'ELOCKED' || Date.now() >= deadline) {
+          throw error
+        }
+        Bun.sleepSync(20)
+      }
+    }
     const lockTime = Date.now() - startTime
     if (lockTime > 100) {
       logForDebugging(

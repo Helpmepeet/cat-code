@@ -26,13 +26,9 @@ import {
  * wrote — project/local pins are left alone.
  * Idempotent: only writes if userSettings.model matches a Sonnet 4.5 string.
  */
-export function migrateSonnet45ToSonnet46(): void {
+export function migrateSonnet45ToSonnet46(): Error | null {
   if (getAPIProvider() !== 'firstParty') {
-    return
-  }
-
-  if (!isProSubscriber() && !isMaxSubscriber() && !isTeamPremiumSubscriber()) {
-    return
+    return null
   }
 
   const model = getSettingsForSource('userSettings')?.model
@@ -42,8 +38,17 @@ export function migrateSonnet45ToSonnet46(): void {
     model !== 'sonnet-4-5-20250929' &&
     model !== 'sonnet-4-5-20250929[1m]'
   ) {
-    return
+    return null
   }
+
+  let eligible = false
+  try {
+    eligible =
+      isProSubscriber() || isMaxSubscriber() || isTeamPremiumSubscriber()
+  } catch (error) {
+    return error instanceof Error ? error : new Error(String(error))
+  }
+  if (!eligible) return null
 
   const has1m = model.endsWith('[1m]')
   updateSettingsForSource('userSettings', {
@@ -64,4 +69,5 @@ export function migrateSonnet45ToSonnet46(): void {
       model as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
     has_1m: has1m,
   })
+  return null
 }

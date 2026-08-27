@@ -33,6 +33,7 @@ import { checkDeferredContinuationResume, computeStandaloneAgentContext, prepare
 import { adoptResumedSessionFile, enrichLogs, isCustomTitleEnabled, loadAllProjectsMessageLogsProgressive, loadSameRepoMessageLogsProgressive, recordContentReplacement, resetSessionFilePointer, restoreSessionMetadata, type SessionLogResult } from '../utils/sessionStorage.js';
 import type { ThinkingConfig } from '../utils/thinking.js';
 import type { ContentReplacementRecord } from '../utils/toolResultStorage.js';
+import { activateTranscriptLease, TranscriptInUseError } from '../utils/transcriptLease.js';
 import { REPL } from './REPL.js';
 function parsePrIdentifier(value: string): number | null {
   const directNumber = parseInt(value, 10);
@@ -239,6 +240,7 @@ export function ResumeConversation({
         }
       }
       if (result_3.sessionId && !forkSession) {
+        await activateTranscriptLease(result_3.sessionId);
         switchSession(asSessionId(result_3.sessionId), log_0.fullPath ? dirname(log_0.fullPath) : null);
         await renameRecordingForSession();
         await resetSessionFilePointer();
@@ -318,6 +320,11 @@ export function ResumeConversation({
         success: false
       });
       logError(e as Error);
+      if (e instanceof TranscriptInUseError) {
+        setDeferredNotice(e.message);
+        setResuming(false);
+        return;
+      }
       throw e;
     }
   }

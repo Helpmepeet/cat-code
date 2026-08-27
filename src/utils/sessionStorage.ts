@@ -89,6 +89,10 @@ import { extractTag, isCompactBoundaryMessage } from './messages.js'
 import { sanitizePath } from './path.js'
 import { writeFileSyncAndFlush_DEPRECATED } from './file.js'
 import {
+  activateTranscriptLease,
+  assertActiveTranscriptLease,
+} from './transcriptLease.js'
+import {
   extractJsonStringField,
   extractLastJsonStringField,
   LITE_READ_BUF_SIZE,
@@ -541,6 +545,7 @@ export function recordCodexRequestStart(entry: {
   account_id_prefix: string | null
   model: string
 }): void {
+  assertActiveTranscriptLease(getSessionId())
   try {
     const transcriptPath = getOwnedTranscriptPath()
     if (transcriptPath === null) return
@@ -584,6 +589,7 @@ export function recordCodexSendPath(entry: {
   input_tokens?: number
   route_headers?: Record<string, string>
 }): void {
+  assertActiveTranscriptLease(getSessionId())
   try {
     const transcriptPath = getOwnedTranscriptPath()
     if (transcriptPath === null) return
@@ -633,6 +639,7 @@ export function recordCodexStreamSurface(entry: {
   error_name?: string
   fallback_error_name?: string
 }): void {
+  assertActiveTranscriptLease(getSessionId())
   try {
     const transcriptPath = getOwnedTranscriptPath()
     if (transcriptPath === null) return
@@ -705,6 +712,7 @@ export function recordRunFacts(entry: {
   effort: string | null
   contextWindow: number
 }): void {
+  assertActiveTranscriptLease(getSessionId())
   try {
     const transcriptPath = getOwnedTranscriptPath()
     if (transcriptPath === null) return
@@ -796,6 +804,7 @@ export function recordPromptCacheBreak(entry: {
   newEffortValue: string
   triggeringCommand?: string | null
 }): void {
+  assertActiveTranscriptLease(getSessionId())
   try {
     const transcriptPath = entry.agentId
       ? getOwnedAgentTranscriptPath(entry.agentId)
@@ -859,6 +868,7 @@ export function recordPostTurnStall(entry: {
   query_source: string
   agentId?: AgentId
 }): void {
+  assertActiveTranscriptLease(getSessionId())
   try {
     const transcriptPath = entry.agentId
       ? getOwnedAgentTranscriptPath(entry.agentId)
@@ -1252,6 +1262,9 @@ class Project {
       const batch = queue.splice(0)
 
       try {
+        if (filePath === this.sessionFile) {
+          assertActiveTranscriptLease(getSessionId())
+        }
         await this.serializeFileOperation(filePath, async () => {
           let content = ''
           const resolvers: Array<() => void> = []
@@ -1630,6 +1643,7 @@ class Project {
     // (not appendEntry) so it would bypass the per-entry persistence check
     // and create a metadata-only file despite --no-session-persistence.
     if (this.shouldSkipPersistence()) return
+    await activateTranscriptLease(getSessionId())
     this.ensureCurrentSessionFile()
     // mode/agentSetting are cache-only pre-materialization; write them now.
     this.reAppendSessionMetadata()
@@ -1779,6 +1793,7 @@ class Project {
 
   async markActiveConversationTip(tipUuid: UUID | null): Promise<void> {
     if (this.shouldSkipPersistence()) return
+    await activateTranscriptLease(getSessionId())
     this.ensureCurrentSessionFile()
     await this.appendEntry({
       type: ACTIVE_CONVERSATION_TIP_TYPE,
@@ -1803,6 +1818,7 @@ class Project {
         return
       }
       sessionFile = this.sessionFile
+      assertActiveTranscriptLease(currentSessionId)
     } else {
       const existing = await this.getExistingSessionFile(sessionId)
       if (!existing) {
@@ -3535,6 +3551,7 @@ function appendEntryToFile(
   fullPath: string,
   entry: Record<string, unknown>,
 ): void {
+  assertActiveTranscriptLease(getSessionId())
   const fs = getFsImplementation()
   const line = jsonStringify(entry) + '\n'
   try {

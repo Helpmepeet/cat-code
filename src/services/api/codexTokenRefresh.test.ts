@@ -1335,6 +1335,75 @@ describe('codexTokenRefresh security fixes (confirmed bugs)', () => {
       rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  test('desktop quarantine backoff preserves a concurrent terminal verdict', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-probe-contention-'))
+    const vaultPath = join(dir, 'account.json')
+    const readyPath = join(dir, 'terminal-ready')
+    writeFileSync(
+      vaultPath,
+      JSON.stringify({
+        version: 1,
+        tokens: {
+          access_token: 'synthetic-access',
+          refresh_token: 'synthetic-refresh',
+          account_id: 'synthetic-account',
+        },
+        refresh: { state: 'unknown' },
+      }),
+      { mode: 0o600 },
+    )
+    const childPath = join(
+      import.meta.dir,
+      'codexTokenRefresh.probe.child.ts',
+    )
+    const children = ['terminal-verdict', 'desktop-probe'].map(role =>
+      Bun.spawn([process.execPath, childPath, role, vaultPath, readyPath], {
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }),
+    )
+    const recordedPids = children.map(child => child.pid)
+
+    try {
+      const exits = await Promise.race([
+        Promise.all(children.map(child => child.exited)),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => {
+            for (const child of children) child.kill()
+            reject(
+              new Error(
+                `timed out waiting for exact child PIDs ${recordedPids.join(', ')}`,
+              ),
+            )
+          }, 10_000).unref()
+        }),
+      ])
+      const [stdout, stderr] = await Promise.all([
+        Promise.all(
+          children.map(child => new Response(child.stdout).text()),
+        ),
+        Promise.all(
+          children.map(child => new Response(child.stderr).text()),
+        ),
+      ])
+      expect(exits, stderr.join('\n')).toEqual([0, 0])
+      expect(
+        stdout
+          .map(value => (JSON.parse(value) as { pid: number }).pid)
+          .sort(),
+      ).toEqual(recordedPids.sort())
+      const vault = JSON.parse(readFileSync(vaultPath, 'utf8'))
+      expect(vault.refresh).toEqual({
+        state: 'reauth_required',
+        reason: 'terminal verdict',
+        refresh_token_hash: 'synthetic',
+      })
+    } finally {
+      await Promise.all(children.map(child => child.exited))
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('codexTokenRefresh touchAll refresh skew', () => {

@@ -16,7 +16,7 @@ wins. Companions: `SESSION-LIFETIME.md` (D6 — what "restore" may mean in v1),
 | **R4** | Crash recovery / liveness | PID-liveness is a **check, not state** (the `concurrentSessions.ts` lesson): on every launch the host sweeps rows, kills orphaned sidecars (D6 §2), marks `crashed`, and offers restore. Bounded rows; dead rows reaped. |
 | **R5** | Write discipline | **Single writer by construction** (Electron single-instance lock) **plus** an advisory lockfile + atomic temp-file-rename writes — the DR-2 lesson applied to our own new shared file on day one. |
 | **R6** | Identity model | **Two ids, one bridge.** `appSessionId` (supervisor-minted, the *address* on every frame) ↔ `engineSessionId` (engine-minted, the *durable* transcript key). The bridge crosses the wire once per attach via `ReadyFrame.engineSessionId` — the F3 addition (`PROTOCOL-ENVELOPE.md` E-5). |
-| **R7** | `concurrentSessions.ts` | **Liveness idiom only** — reconfirmed ephemeral per-PID JSON (write `<pid>.json` at `src/utils/concurrentSessions.ts:64,77`; dead-PID sweep `:186-201`). Not reused, not extended. Desktop sidecars are today invisible to `claude ps` (registration is TUI-only, `src/main.tsx:2583`) — coexistence carry-forward §9, not a registry concern. |
+| **R7** | `concurrentSessions.ts` | **Terminal PID registry only.** Its ephemeral per-PID JSON remains owned by the terminal REPL (`src/main.tsx:2567-2581`). Desktop sidecars intentionally stay absent because spawn/restart/park/termination authority belongs to the desktop supervisor. Engine-owned transcript leases provide cross-product same-transcript exclusion without coupling either process registry. The current build does not expose `cat-code ps` (`BG_SESSIONS` is not in `scripts/build.ts`, and `src/cli/bg.ts` is absent), so this records the ownership boundary rather than promising a live command surface. |
 
 ---
 
@@ -331,10 +331,6 @@ HC1–HC4) and summarized here for locality:
 
 ## 10. Carry-forwards (flagged, deliberately not solved here)
 
-- **`claude ps` coexistence:** desktop sidecars don't `registerSession()` (TUI-only,
-  `src/main.tsx:2583`), so the operator's TUI tooling can't see desktop sessions. Cheap to add
-  from the sidecar later (it *is* an engine process); decide at the dogfood gate whether it's
-  wanted — do not silently couple the two registries before then.
 - **DR-4 control plane on the wire:** v1 keeps create/close/list as host-API *calls* (window =
   client #1). If/when a remote client exists, those calls become versioned frames; design them
   off the host API surface (§6), not ad hoc — that is the standing DR-4 watch-item.

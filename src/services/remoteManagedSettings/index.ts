@@ -14,7 +14,7 @@
 
 import axios from 'axios'
 import { createHash } from 'crypto'
-import { open, unlink } from 'fs/promises'
+import { unlink } from 'fs/promises'
 import { getOauthConfig, OAUTH_BETA_HEADER } from '../../constants/oauth.js'
 import {
   checkAndRefreshOAuthTokenIfNeeded,
@@ -31,6 +31,7 @@ import {
 } from '../../utils/settings/types.js'
 import { sleep } from '../../utils/sleep.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
+import { writeFileAtomicDurable } from '../../utils/atomicFile.js'
 import { getClaudeCodeUserAgent } from '../../utils/userAgent.js'
 import { getRetryDelay } from '../api/withRetry.js'
 import {
@@ -367,15 +368,10 @@ async function fetchRemoteManagedSettings(
 async function saveSettings(settings: SettingsJson): Promise<void> {
   try {
     const path = getSettingsPath()
-    const handle = await open(path, 'w', 0o600)
-    try {
-      await handle.writeFile(jsonStringify(settings, null, 2), {
-        encoding: 'utf-8',
-      })
-      await handle.datasync()
-    } finally {
-      await handle.close()
-    }
+    await writeFileAtomicDurable(path, jsonStringify(settings, null, 2), {
+      encoding: 'utf-8',
+      mode: 0o600,
+    })
     logForDebugging(`Remote settings: Saved to ${path}`)
   } catch (error) {
     logForDebugging(

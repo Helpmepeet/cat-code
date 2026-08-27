@@ -11,7 +11,7 @@
  */
 
 import { createHash } from 'crypto'
-import { chmodSync, readFileSync, readdirSync, existsSync, mkdirSync, writeFileSync, renameSync, unlinkSync } from 'fs'
+import { chmodSync, readFileSync, readdirSync, existsSync, mkdirSync, unlinkSync } from 'fs'
 import { join, basename, dirname } from 'path'
 import { homedir } from 'os'
 import { hostname } from 'os'
@@ -24,8 +24,11 @@ import {
 import { logForDebugging } from '../../utils/debug.js'
 import { clearCodexOAuthTokens, getCodexOAuthTokens, saveCodexOAuthTokens } from '../../utils/auth.js'
 import { getGlobalConfig, saveGlobalConfig } from '../../utils/config.js'
+import { getErrnoCode } from '../../utils/errors.js'
 import { resetUserCache } from '../../utils/user.js'
 import { emitAccountDiagnostic } from './accountDiagnostics.js'
+import { lockSync } from '../../utils/lockfile.js'
+import { writeFileAtomicDurableSync } from '../../utils/atomicFile.js'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -90,6 +93,46 @@ export type MarkPoolAccountCappedOptions = MarkPoolAccountStatusOptions & {
 const LOCK_STALE_MS = 2 * 60 * 60 * 1000 // 2 hours, matching codex-nootp
 const DEFAULT_VAULT_PATH = join(homedir(), 'codex-vault')
 const CODEX_NOOTP_CONFIG = join(homedir(), '.codex-nootp', 'config.toml')
+const VAULT_LOCK_WAIT_MS = 10_000
+
+function acquireVaultMutationLockSync(filePath: string): () => void {
+  const deadline = Date.now() + VAULT_LOCK_WAIT_MS
+  for (;;) {
+    try {
+      const release = lockSync(filePath, {
+        realpath: false,
+        stale: 120_000,
+        update: 30_000,
+        onCompromised: error => {
+          logForDebugging(
+            `[codex-pool] Vault lock compromised: ${error.message}`,
+            { level: 'error' },
+          )
+        },
+      })
+      let released = false
+      return () => {
+        if (released) return
+        released = true
+        try {
+          release()
+        } catch (error) {
+          if (getErrnoCode(error) !== 'ERELEASED') throw error
+        }
+      }
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        !('code' in error) ||
+        error.code !== 'ELOCKED' ||
+        Date.now() >= deadline
+      ) {
+        throw error
+      }
+      Bun.sleepSync(20)
+    }
+  }
+}
 
 // ── Singleton state ────────────────────────────────────────────────────────
 
@@ -764,6 +807,7 @@ export function saveCodexTokenToVault(tokens: {
   metadataAction: 'created' | 'preserved' | 'replaced'
   accountChanged: boolean
 } | null {
+  let releaseLock: (() => void) | undefined
   try {
     const vaultPath = readVaultPath() ?? DEFAULT_VAULT_PATH
     const accountsDir = join(vaultPath, 'accounts')
@@ -776,6 +820,7 @@ export function saveCodexTokenToVault(tokens: {
     // An explicit target may be a broader user-owned directory, but the normal
     // vault accounts directory is entirely credential-private.
     if (targetDir === accountsDir) chmodSync(targetDir, 0o700)
+    releaseLock = acquireVaultMutationLockSync(filePath)
 
     const existed = existsSync(filePath)
     const existing = existed
@@ -818,12 +863,10 @@ export function saveCodexTokenToVault(tokens: {
       delete data.alias
     }
 
-    const tmpPath = join(targetDir, `.${Date.now()}.${process.pid}.tmp`)
-    writeFileSync(tmpPath, JSON.stringify(data, null, 2) + '\n', {
+    writeFileAtomicDurableSync(filePath, JSON.stringify(data, null, 2) + '\n', {
       encoding: 'utf-8',
       mode: 0o600,
     })
-    renameSync(tmpPath, filePath)
     chmodSync(filePath, 0o600)
 
     const metadataAction: 'created' | 'preserved' | 'replaced' = !existed
@@ -837,19 +880,22 @@ export function saveCodexTokenToVault(tokens: {
       { level: accountChanged ? 'warn' : 'debug' },
     )
 
-    return {
+    const result = {
       filePath,
       existed,
       previousAccountId,
       metadataAction,
       accountChanged,
     }
+    return result
   } catch (err) {
     logForDebugging(
       `[codex-profile] profile-save-failed writer=${options.writer ?? 'saveCodexTokenToVault'} account=${tokens.accountId} error=${err instanceof Error ? err.message : String(err)}`,
       { level: 'warn' },
     )
     return null
+  } finally {
+    releaseLock?.()
   }
 }
 
@@ -861,17 +907,19 @@ export function setAccountAlias(accountId: string, alias: string, writer = 'rena
   const acct = pool.accounts.find((a) => a.accountId === accountId)
   if (!acct?.vaultFilePath) return false
 
+  let releaseLock: (() => void) | undefined
   try {
+    releaseLock = acquireVaultMutationLockSync(acct.vaultFilePath)
     const existing = JSON.parse(readFileSync(acct.vaultFilePath, 'utf-8')) as Record<string, unknown>
     existing.alias = alias
-    // atomic write via temp+rename
-    const dir = acct.vaultFilePath.split('/').slice(0, -1).join('/')
-    const tmp = `${dir}/.${Date.now()}.${process.pid}.tmp`
-    writeFileSync(tmp, JSON.stringify(existing, null, 2) + '\n', {
+    writeFileAtomicDurableSync(
+      acct.vaultFilePath,
+      JSON.stringify(existing, null, 2) + '\n',
+      {
       encoding: 'utf-8',
       mode: 0o600,
-    })
-    renameSync(tmp, acct.vaultFilePath)
+      },
+    )
     chmodSync(acct.vaultFilePath, 0o600)
     const oldAlias = acct.alias
     acct.alias = alias
@@ -885,6 +933,25 @@ export function setAccountAlias(accountId: string, alias: string, writer = 'rena
       { level: 'warn' },
     )
     return false
+  } finally {
+    releaseLock?.()
+  }
+}
+
+export function deleteCodexVaultFile(filePath: string): boolean {
+  let releaseLock: (() => void) | undefined
+  try {
+    releaseLock = acquireVaultMutationLockSync(filePath)
+    unlinkSync(filePath)
+    return true
+  } catch (err) {
+    logForDebugging(
+      `[codex-pool] Failed to delete vault file: ${err instanceof Error ? err.message : String(err)}`,
+      { level: 'warn' },
+    )
+    return false
+  } finally {
+    releaseLock?.()
   }
 }
 
@@ -896,15 +963,7 @@ export function removeCodexAccount(accountId: string): boolean {
   const previousActiveAccountId = pool.accounts[pool.activeIndex]?.accountId
 
   if (acct.vaultFilePath && existsSync(acct.vaultFilePath)) {
-    try {
-      unlinkSync(acct.vaultFilePath)
-    } catch (err) {
-      logForDebugging(
-        `[codex-pool] Failed to delete vault file: ${err instanceof Error ? err.message : String(err)}`,
-        { level: 'warn' },
-      )
-      return false
-    }
+    if (!deleteCodexVaultFile(acct.vaultFilePath)) return false
   }
 
   pool.accounts.splice(idx, 1)

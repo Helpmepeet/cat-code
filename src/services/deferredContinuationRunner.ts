@@ -310,6 +310,35 @@ export function getPreparedBackgroundDeferredAbortSignal(): AbortSignal | undefi
   return preparedBackgroundAttempt?.guard.signal
 }
 
+/**
+ * Return a background attempt to the pending state when resume could not acquire
+ * the foreground transcript lease. The deferred locks remain the authority for
+ * this transition, so the job is never exposed as runnable while this process
+ * still owns its attempt locks.
+ */
+export async function requeuePreparedBackgroundDeferredContinuation(
+  now = Date.now(),
+): Promise<void> {
+  const prepared = preparedBackgroundAttempt
+  if (!prepared || prepared.completed) return
+  prepared.completed = true
+  try {
+    prepared.guard.assertHealthy()
+    await writePendingDeferredContinuation({
+      ...prepared.job,
+      state: 'pending',
+      notBefore: now + NETWORK_RETRY_DELAYS[0]!,
+      attempt: {
+        number: prepared.job.attempt.number,
+        messageUuid: prepared.job.attempt.messageUuid,
+      },
+    })
+  } finally {
+    preparedBackgroundAttempt = null
+    await prepared.guard.release()
+  }
+}
+
 export async function completePreparedBackgroundDeferredContinuation(
   messages: readonly Message[],
   result: DeferredHeadlessResult | undefined,

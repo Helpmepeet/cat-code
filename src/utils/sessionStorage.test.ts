@@ -10,6 +10,7 @@ import { asAgentId, asSessionId } from '../types/ids.js'
 import type { AssistantMessage } from '../types/message.js'
 import { registerActiveSubagent, unregisterActiveSubagent } from './cleanupRegistry.js'
 import { createUserMessage } from './messages.js'
+import { releaseActiveTranscriptLease } from './transcriptLease.js'
 import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, flushSessionStorage, getAgentTranscriptPath, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, loadDisplayTranscriptFromJsonlPath, loadTranscriptFromFile, markActiveConversationTip, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordPostTurnStall, recordPromptCacheBreak, recordRunFacts, recordTranscript, removeTranscriptMessage, resetProjectForTesting, resetRunFactsDedupeForTest, setSessionFileForTesting } from './sessionStorage.js'
 
 describe('session storage', () => {
@@ -20,17 +21,19 @@ describe('session storage', () => {
   let tempDir: string
   let sessionId: string
 
-  beforeEach(() => {
+  beforeEach(async () => {
     process.env.TEST_ENABLE_SESSION_PERSISTENCE = '1'
+    await releaseActiveTranscriptLease()
     resetProjectForTesting()
     tempDir = mkdtempSync(join(tmpdir(), 'session-storage-'))
     sessionId = randomUUID()
     switchSession(asSessionId(sessionId), tempDir)
   })
 
-  afterEach(() => {
+  afterEach(async () => {
     clearSessionMessagesCache()
     resetProjectForTesting()
+    await releaseActiveTranscriptLease()
     switchSession(asSessionId(originalSessionId), originalProjectDir)
     if (originalTestPersistence === undefined) {
       delete process.env.TEST_ENABLE_SESSION_PERSISTENCE
@@ -1240,6 +1243,28 @@ describe('session storage', () => {
     // never the drifted mtime — the days-off value can no longer leak through.
     expect(logs[0]!.modified.toISOString()).toBe(snapshotTs)
     expect(logs[0]!.modified.getTime()).toBeLessThan(driftedMtime.getTime())
+  })
+
+  test('enrichment retains the transcript entrypoint for catalog eligibility', async () => {
+    const transcript = {
+      type: 'user',
+      uuid: randomUUID(),
+      parentUuid: null,
+      isSidechain: false,
+      sessionId,
+      cwd: tempDir,
+      userType: 'external',
+      entrypoint: 'sdk-cli',
+      version: 'test',
+      timestamp: '2026-08-26T13:17:28.345Z',
+      message: { role: 'user', content: 'generate an image' },
+    }
+    const path = getTranscriptPathForSession(sessionId)
+    await writeFile(path, `${JSON.stringify(transcript)}\n`)
+
+    const { logs } = await enrichLogs(await getSessionFilesLite(tempDir), 0, 1)
+    expect(logs).toHaveLength(1)
+    expect(logs[0]?.entrypoint).toBe('sdk-cli')
   })
 
   test('durable transcript barrier requires the accepted UUID to be readable', async () => {

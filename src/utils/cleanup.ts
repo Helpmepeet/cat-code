@@ -18,6 +18,8 @@ import {
   rawSettingsContainsKey,
 } from './settings/settings.js'
 import { TOOL_RESULTS_SUBDIR } from './toolResultStorage.js'
+import { withUnownedTranscriptLease } from './transcriptLease.js'
+import { validateUuid } from './uuid.js'
 import { cleanupStaleAgentWorktrees } from './worktree.js'
 
 const DEFAULT_CLEANUP_PERIOD_DAYS = 30
@@ -146,6 +148,15 @@ async function unlinkIfOld(
   return false
 }
 
+async function isOld(
+  filePath: string,
+  cutoffDate: Date,
+  fsImpl: FsOperations,
+): Promise<boolean> {
+  const stats = await fsImpl.stat(filePath)
+  return stats.mtime < cutoffDate
+}
+
 async function tryRmdir(dirPath: string, fsImpl: FsOperations): Promise<void> {
   try {
     await fsImpl.rmdir(dirPath)
@@ -185,71 +196,90 @@ export async function cleanupOldSessionFiles(): Promise<CleanupResult> {
         if (!entry.name.endsWith('.jsonl') && !entry.name.endsWith('.cast')) {
           continue
         }
+        const sessionId = validateUuid(
+          entry.name.endsWith('.cast')
+            ? entry.name.match(
+                /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})-/i,
+              )?.[1] ?? ''
+            : entry.name.replace(/\.jsonl$/, ''),
+        )
+        if (!sessionId) continue
         try {
-          if (
-            await unlinkIfOld(join(projectDir, entry.name), cutoffDate, fsImpl)
-          ) {
+          // Avoid probing the transcript lease for fresh files. The callback
+          // restats under the lease before deleting to close the age race.
+          if (!(await isOld(join(projectDir, entry.name), cutoffDate, fsImpl))) {
+            continue
+          }
+          const cleanup = await withUnownedTranscriptLease(sessionId, () =>
+            unlinkIfOld(join(projectDir, entry.name), cutoffDate, fsImpl),
+          )
+          if (cleanup.acquired && cleanup.value) {
             result.messages++
           }
         } catch {
           result.errors++
         }
       } else if (entry.isDirectory()) {
+        const sessionId = validateUuid(entry.name)
+        if (!sessionId) continue
         // Session directory — clean up tool-results/<toolDir>/* beneath it
         const sessionDir = join(projectDir, entry.name)
-        const toolResultsDir = join(sessionDir, TOOL_RESULTS_SUBDIR)
-        let toolDirs
         try {
-          toolDirs = await fsImpl.readdir(toolResultsDir)
-        } catch {
-          // No tool-results dir — still try to remove an empty session dir
-          await tryRmdir(sessionDir, fsImpl)
-          continue
-        }
-        for (const toolEntry of toolDirs) {
-          if (toolEntry.isFile()) {
-            try {
-              if (
-                await unlinkIfOld(
-                  join(toolResultsDir, toolEntry.name),
-                  cutoffDate,
-                  fsImpl,
-                )
-              ) {
-                result.messages++
-              }
-            } catch {
-              result.errors++
-            }
-          } else if (toolEntry.isDirectory()) {
-            const toolDirPath = join(toolResultsDir, toolEntry.name)
-            let toolFiles
-            try {
-              toolFiles = await fsImpl.readdir(toolDirPath)
-            } catch {
-              continue
-            }
-            for (const tf of toolFiles) {
-              if (!tf.isFile()) continue
+          const cleanup = await withUnownedTranscriptLease(
+            sessionId,
+            async () => {
+              const toolResultsDir = join(sessionDir, TOOL_RESULTS_SUBDIR)
+              let toolDirs
               try {
-                if (
-                  await unlinkIfOld(
-                    join(toolDirPath, tf.name),
-                    cutoffDate,
-                    fsImpl,
-                  )
-                ) {
-                  result.messages++
-                }
+                toolDirs = await fsImpl.readdir(toolResultsDir)
               } catch {
-                result.errors++
+                await tryRmdir(sessionDir, fsImpl)
+                return 0
               }
-            }
-            await tryRmdir(toolDirPath, fsImpl)
-          }
+              let removed = 0
+              for (const toolEntry of toolDirs) {
+                if (toolEntry.isFile()) {
+                  if (
+                    await unlinkIfOld(
+                      join(toolResultsDir, toolEntry.name),
+                      cutoffDate,
+                      fsImpl,
+                    )
+                  ) {
+                    removed++
+                  }
+                } else if (toolEntry.isDirectory()) {
+                  const toolDirPath = join(toolResultsDir, toolEntry.name)
+                  let toolFiles
+                  try {
+                    toolFiles = await fsImpl.readdir(toolDirPath)
+                  } catch {
+                    continue
+                  }
+                  for (const tf of toolFiles) {
+                    if (!tf.isFile()) continue
+                    if (
+                      await unlinkIfOld(
+                        join(toolDirPath, tf.name),
+                        cutoffDate,
+                        fsImpl,
+                      )
+                    ) {
+                      removed++
+                    }
+                  }
+                  await tryRmdir(toolDirPath, fsImpl)
+                }
+              }
+              await tryRmdir(toolResultsDir, fsImpl)
+              await tryRmdir(sessionDir, fsImpl)
+              return removed
+            },
+          )
+          if (cleanup.acquired) result.messages += cleanup.value
+        } catch {
+          result.errors++
         }
-        await tryRmdir(toolResultsDir, fsImpl)
-        await tryRmdir(sessionDir, fsImpl)
       }
     }
 
@@ -618,7 +648,7 @@ export async function cleanupOldMessageFilesInBackground(): Promise<void> {
   await cleanupOldFileHistoryBackups()
   await cleanupOldSessionEnvDirs()
   await cleanupOldDebugLogs()
-  await cleanupOldImageCaches()
+  await cleanupOldImageCaches(getCutoffDate())
   await cleanupOldPastes(getCutoffDate())
   const removedWorktrees = await cleanupStaleAgentWorktrees(getCutoffDate())
   if (removedWorktrees > 0) {

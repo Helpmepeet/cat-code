@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import * as fsModule from 'node:fs'
 import * as codexPoolModule from '../../src/services/api/codexAccountPool.js'
-import * as codexTokenRefreshModule from '../../src/services/api/codexTokenRefresh.js'
 import * as leaseManagerModule from '../../src/services/api/codexAccountLeaseManager.js'
 import * as codexFetchAdapterModule from '../../src/services/api/codex-fetch-adapter.js'
 import * as logoutModule from '../../src/commands/logout/logout.js'
@@ -258,16 +257,6 @@ describe('real Codex delete executor cleanup', () => {
     })
 
     const order: string[] = []
-    const releaseLock = mock(async () => {
-      order.push('unlock')
-    })
-    const lock = spyOn(
-      codexTokenRefreshModule,
-      'acquireCodexVaultFileLock',
-    ).mockImplementation(async () => {
-      order.push('lock')
-      return releaseLock
-    })
     spyOn(codexPoolModule, 'removeCodexAccount').mockImplementation(accountId => {
       order.push(`remove:${accountId}`)
       seedCodexAccountPoolForTest({
@@ -308,19 +297,13 @@ describe('real Codex delete executor cleanup', () => {
     const result = await createRealAccountsExecutor().delete(deleted.accountId)
 
     expect(result).toEqual({ ok: true, message: 'Account deleted.' })
-    expect(lock).toHaveBeenCalledWith(
-      deleted.vaultFilePath,
-      expect.any(Function),
-    )
     expect(repair).toHaveBeenCalledWith(deleted.accountId)
     expect(reassign).toHaveBeenCalledWith('main-thread')
     expect(releaseLease).not.toHaveBeenCalled()
     expect(resetCache).toHaveBeenCalledTimes(1)
     expect(clearCaches).toHaveBeenCalledTimes(1)
     expect(order).toEqual([
-      'lock',
       `remove:${deleted.accountId}`,
-      'unlock',
       `repair:${deleted.accountId}`,
       'reassign:main-thread',
       'reset-cache',
@@ -338,10 +321,6 @@ describe('real Codex delete executor cleanup', () => {
       activeAccountId: deleted.accountId,
     })
 
-    spyOn(
-      codexTokenRefreshModule,
-      'acquireCodexVaultFileLock',
-    ).mockResolvedValue(async () => {})
     spyOn(codexPoolModule, 'removeCodexAccount').mockImplementation(() => {
       seedCodexAccountPoolForTest({ accounts: [] })
       return true

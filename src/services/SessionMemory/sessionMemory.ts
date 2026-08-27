@@ -4,7 +4,6 @@
  * without interrupting the main conversation flow.
  */
 
-import { writeFile } from 'fs/promises'
 import memoize from 'lodash-es/memoize.js'
 import { getIsRemoteMode } from '../../bootstrap/state.js'
 import { getSystemPrompt } from '../../constants/prompts.js'
@@ -40,6 +39,7 @@ import {
 import { sequential } from '../../utils/sequential.js'
 import { asSystemPrompt } from '../../utils/systemPromptType.js'
 import { getTokenUsage, tokenCountWithEstimation } from '../../utils/tokens.js'
+import { writeFileAtomicDurableIfAbsent } from '../../utils/atomicFile.js'
 import { logEvent } from '../analytics/index.js'
 import { isAutoCompactEnabled } from '../compact/autoCompact.js'
 import {
@@ -68,7 +68,7 @@ import {
 // These functions return cached values from disk immediately without blocking
 // on GrowthBook initialization. Values may be stale but are updated in background.
 
-import { errorMessage, getErrnoCode } from '../../utils/errors.js'
+import { errorMessage } from '../../utils/errors.js'
 import {
   getDynamicConfig_CACHED_MAY_BE_STALE,
   getFeatureValue_CACHED_MAY_BE_STALE,
@@ -192,25 +192,11 @@ async function setupSessionMemoryFile(
 
   const memoryPath = getSessionMemoryPath()
 
-  // Create the memory file if it doesn't exist (wx = O_CREAT|O_EXCL)
-  try {
-    await writeFile(memoryPath, '', {
-      encoding: 'utf-8',
-      mode: 0o600,
-      flag: 'wx',
-    })
-    // Only load template if file was just created
-    const template = await loadSessionMemoryTemplate()
-    await writeFile(memoryPath, template, {
-      encoding: 'utf-8',
-      mode: 0o600,
-    })
-  } catch (e: unknown) {
-    const code = getErrnoCode(e)
-    if (code !== 'EEXIST') {
-      throw e
-    }
-  }
+  const template = await loadSessionMemoryTemplate()
+  await writeFileAtomicDurableIfAbsent(memoryPath, template, {
+    encoding: 'utf-8',
+    mode: 0o600,
+  })
 
   // Drop any cached entry so FileReadTool's dedup doesn't return a
   // file_unchanged stub — we need the actual content. The Read repopulates it.

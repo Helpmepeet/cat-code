@@ -29,6 +29,7 @@ import {
 import { setCwd } from './Shell.js'
 import type { ThreadGoal } from './threadGoal.js'
 import { createThreadGoal } from './threadGoal.js'
+import { releaseActiveTranscriptLease } from './transcriptLease.js'
 
 const cleanup: string[] = []
 const originalCwd = process.cwd()
@@ -37,6 +38,7 @@ afterEach(async () => {
   process.chdir(originalCwd)
   setCwd(originalCwd)
   resetProjectForTesting()
+  await releaseActiveTranscriptLease()
   await Promise.all(cleanup.splice(0).map(path => rm(path, { recursive: true, force: true })))
 })
 

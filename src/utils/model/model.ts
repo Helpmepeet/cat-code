@@ -121,13 +121,11 @@ export function remapRetiredClaude46Model(model: ModelName): ModelName {
  * Provider-agnostic variant used only by the on-disk settings migration
  * (migrateRetiredClaude46ModelsToClaude5.ts). A config-file migration is
  * about what is stored on disk, not about which provider the current
- * process happens to be routed through: runMigrations() runs at the
- * Commander preAction hook, before setSessionProvider() ever settles the
- * session provider for this launch, so getAPIProvider() at that point falls
- * back to the *persisted* lastUsedProvider preference. Gating the migration
- * on that made it a permanent no-op for anyone whose last session used
- * Codex/OpenAI, since the migration's version bump still fires unconditionally
- * and it never runs again.
+ * process happens to be routed through: runEngineMigrations() runs from
+ * shared init before setSessionProvider() settles the session provider for
+ * this launch, so getAPIProvider() can still reflect the persisted
+ * lastUsedProvider preference. Gating the on-disk rewrite on that preference
+ * would skip Claude migrations after a Codex/OpenAI session.
  *
  * This still skips genuinely third-party-configured environments via
  * getConfiguredAnthropicProvider(), which reads only the literal

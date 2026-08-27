@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import type { SettingsUpdater } from '../utils/settings/settings.js'
 import type { SettingsJson } from '../utils/settings/types.js'
 
 /**
@@ -8,8 +9,8 @@ import type { SettingsJson } from '../utils/settings/types.js'
  * - Claim: every user-owned retired GPT setting and runtime override migrates
  *   without clobbering current/colliding values, and a second run is a no-op.
  * - Exact pre-fix failure: an early return left all legacy model surfaces stale.
- * - Production entry point: `migrateRetiredGptModelsToGpt56`; `runMigrations`
- *   is covered only by the explicitly limited source-string tripwire below.
+ * - Production entry point: `migrateRetiredGptModelsToGpt56`;
+ *   `runEngineMigrations` is covered by the source-string tripwire below.
  * - Test path: `src/migrations/migrateRetiredGptModelsToGpt56.test.ts`.
  * - Proof layer: helper/module-boundary functional; wiring tripwire is not it.
  * - Red/mutation evidence: an early-return mutation made three functional cases
@@ -33,8 +34,17 @@ mock.module('../utils/settings/settings.js', () => ({
   getSettingsForSource: () => userSettings,
   updateSettingsForSource: (
     _source: string,
-    patch: Partial<SettingsJson>,
+    patch: SettingsJson | SettingsUpdater,
   ) => {
+    if (updateError) return { error: updateError }
+    if (typeof patch === 'function') {
+      const next = patch(userSettings)
+      if (next) {
+        updateCalls.push(next)
+        userSettings = next
+      }
+      return { error: null }
+    }
     updateCalls.push(patch)
     if (userSettings) {
       const mergedOverrides = patch.modelOverrides
@@ -51,7 +61,7 @@ mock.module('../utils/settings/settings.js', () => ({
         ...(patch.modelOverrides ? { modelOverrides: mergedOverrides } : {}),
       }
     }
-    return { error: updateError }
+    return { error: null }
   },
 }))
 
@@ -116,8 +126,6 @@ describe('migrateRetiredGptModelsToGpt56', () => {
         model: 'gpt-5.6-luna',
         availableModels: ['gpt-5.6-luna', 'gpt-5.6-terra', 'custom-model'],
         modelOverrides: {
-          'gpt-5.4': undefined,
-          'gpt-5.5': undefined,
           'gpt-5.6-luna': 'legacy-luna-override',
           'gpt-5.6-terra': 'existing-terra-override',
           'custom-model': 'custom-override',
@@ -150,10 +158,10 @@ describe('migrateRetiredGptModelsToGpt56', () => {
 
     expect(updateCalls).toEqual([
       {
+        model: 'gpt-5.6-terra',
         availableModels: ['gpt-5.6-terra', 'gpt-5.6-luna'],
         modelOverrides: {
           'gpt-5.6-luna': 'keep-current-luna',
-          'gpt-5.4-mini': undefined,
           'custom-model': 'keep-custom',
         },
       },
@@ -184,7 +192,6 @@ describe('migrateRetiredGptModelsToGpt56', () => {
         model: 'gpt-5.6-terra',
         availableModels: ['gpt-5.6-terra'],
         modelOverrides: {
-          'gpt-5.5': undefined,
           'gpt-5.6-terra': 'legacy-terra-override',
         },
       },
@@ -194,16 +201,20 @@ describe('migrateRetiredGptModelsToGpt56', () => {
   })
 })
 
-test('startup wiring tripwire keeps the migration imported and invoked by runMigrations', () => {
-  const mainSource = readFileSync(
-    fileURLToPath(new URL('../main.tsx', import.meta.url)),
+test('startup wiring tripwire keeps the migration owned by init', () => {
+  const ownerSource = readFileSync(
+    fileURLToPath(new URL('./runEngineMigrations.ts', import.meta.url)),
+    'utf8',
+  )
+  const initSource = readFileSync(
+    fileURLToPath(new URL('../entrypoints/init.ts', import.meta.url)),
     'utf8',
   )
 
-  expect(mainSource).toContain(
-    "import { migrateRetiredGptModelsToGpt56 } from './migrations/migrateRetiredGptModelsToGpt56.js';",
+  expect(ownerSource).toContain(
+    "import { migrateRetiredGptModelsToGpt56 } from './migrateRetiredGptModelsToGpt56.js'",
   )
-  const runMigrations = mainSource.slice(mainSource.indexOf('function runMigrations'))
-  expect(runMigrations).toContain('migrateRetiredGptModelsToGpt56()')
-  expect(runMigrations).toContain('if (settingsMigrationError)')
+  expect(ownerSource).toContain('const retiredGptError = migrateRetiredGptModelsToGpt56()')
+  expect(ownerSource).toContain('if (retiredGptError) return retiredGptError')
+  expect(initSource).toContain('await runEngineMigrations()')
 })

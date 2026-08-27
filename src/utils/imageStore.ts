@@ -5,6 +5,12 @@ import type { PastedContent } from './config.js'
 import { logForDebugging } from './debug.js'
 import { getClaudeConfigHomeDir } from './envUtils.js'
 import { getFsImplementation } from './fsOperations.js'
+import {
+  activateTranscriptLease,
+  TranscriptInUseError,
+  withUnownedTranscriptLease,
+} from './transcriptLease.js'
+import { validateUuid } from './uuid.js'
 
 const IMAGE_STORE_DIR = 'image-cache'
 const MAX_STORED_IMAGE_PATHS = 200
@@ -59,6 +65,7 @@ export async function storeImage(
   }
 
   try {
+    await activateTranscriptLease(getSessionId())
     await ensureImageStoreDir()
     const imagePath = getImagePath(content.id, content.mediaType || 'image/png')
     const fh = await open(imagePath, 'w', 0o600)
@@ -73,6 +80,15 @@ export async function storeImage(
     logForDebugging(`Stored image ${content.id} to ${imagePath}`)
     return imagePath
   } catch (error) {
+    if (
+      error instanceof TranscriptInUseError ||
+      (typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        error.code === 'ECOMPROMISED')
+    ) {
+      throw error
+    }
     logForDebugging(`Failed to store image: ${error}`)
     return null
   }
@@ -126,7 +142,7 @@ function evictOldestIfAtCap(): void {
 /**
  * Clean up old image cache directories from previous sessions.
  */
-export async function cleanupOldImageCaches(): Promise<void> {
+export async function cleanupOldImageCaches(cutoffDate: Date): Promise<void> {
   const fsImpl = getFsImplementation()
   const baseDir = join(getClaudeConfigHomeDir(), IMAGE_STORE_DIR)
   const currentSessionId = getSessionId()
@@ -144,10 +160,18 @@ export async function cleanupOldImageCaches(): Promise<void> {
         continue
       }
 
+      const sessionId = validateUuid(sessionDir.name)
+      if (!sessionId) continue
       const sessionPath = join(baseDir, sessionDir.name)
       try {
-        await fsImpl.rm(sessionPath, { recursive: true, force: true })
-        logForDebugging(`Cleaned up old image cache: ${sessionPath}`)
+        const info = await fsImpl.stat(sessionPath)
+        if (info.mtime >= cutoffDate) continue
+        await withUnownedTranscriptLease(sessionId, async () => {
+          const fresh = await fsImpl.stat(sessionPath)
+          if (fresh.mtime >= cutoffDate) return
+          await fsImpl.rm(sessionPath, { recursive: true, force: true })
+          logForDebugging(`Cleaned up old image cache: ${sessionPath}`)
+        })
       } catch {
         // Ignore errors for individual directories
       }

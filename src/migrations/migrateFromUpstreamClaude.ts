@@ -15,10 +15,12 @@
  * - CLAUDE_CONFIG_DIR override is always respected (set before init)
  */
 
-import { copyFile, cp, mkdir, readdir, stat, writeFile } from 'fs/promises'
+import { writeFileSync } from 'fs'
+import { copyFile, cp, mkdir, stat } from 'fs/promises'
 import { homedir } from 'os'
 import { join } from 'path'
 import { getClaudeConfigHomeDir } from '../utils/envUtils.js'
+import * as lockfile from '../utils/lockfile.js'
 
 /** Legacy source families in priority order */
 const LEGACY_SOURCES = [
@@ -35,6 +37,8 @@ const LEGACY_SOURCES = [
 ]
 
 const MIGRATION_STAMP = '.migrated-to-cat-code'
+const MIGRATION_LOCK_STALE_MS = 5_000
+const MIGRATION_LOCK_UPDATE_MS = 1_000
 
 /** Files to copy from legacy dir → ~/.cat-code/ */
 const FILES_TO_COPY: string[] = [
@@ -111,12 +115,7 @@ async function copyKeychainEntry(
   }
 }
 
-export function migrateFromUpstreamClaude(): void {
-  // Run async but don't block init
-  void _runMigration()
-}
-
-async function _runMigration(): Promise<void> {
+export async function migrateFromUpstreamClaude(): Promise<void> {
   const destDir = getClaudeConfigHomeDir()
 
   // Skip if CLAUDE_CONFIG_DIR was overridden to something other than ~/.cat-code
@@ -124,6 +123,67 @@ async function _runMigration(): Promise<void> {
     return
   }
 
+  await migrateFromPaths(destDir, LEGACY_SOURCES)
+}
+
+type LegacySource = (typeof LEGACY_SOURCES)[number]
+
+async function acquireMigrationLock(
+  destDir: string,
+  onCompromised: (error: Error) => void,
+): Promise<() => Promise<void>> {
+  const lockTarget = `${destDir}.migration`
+  return lockfile.lock(lockTarget, {
+    lockfilePath: `${lockTarget}.lock`,
+    realpath: false,
+    retries: {
+      retries: 40,
+      factor: 1.2,
+      minTimeout: 25,
+      maxTimeout: 250,
+      randomize: true,
+    },
+    stale: MIGRATION_LOCK_STALE_MS,
+    update: MIGRATION_LOCK_UPDATE_MS,
+    onCompromised,
+  })
+}
+
+async function migrationIsCompleteOrDestinationExists(
+  destDir: string,
+): Promise<boolean> {
+  return (
+    (await exists(join(destDir, MIGRATION_STAMP))) || (await exists(destDir))
+  )
+}
+
+async function migrateFromPaths(
+  destDir: string,
+  legacySources: readonly LegacySource[],
+): Promise<void> {
+  // These are terminal skip conditions. Avoid contending on the migration lock
+  // during every normal startup, then repeat them under lock for race safety.
+  if (await migrationIsCompleteOrDestinationExists(destDir)) return
+
+  let compromised: Error | null = null
+  const release = await acquireMigrationLock(destDir, error => {
+    compromised = error
+  })
+
+  try {
+    await _runMigration(destDir, legacySources, () => {
+      if (compromised) throw compromised
+    })
+  } finally {
+    await release()
+  }
+}
+
+async function _runMigration(
+  destDir: string,
+  legacySources: readonly LegacySource[],
+  assertLockOwned: () => void,
+): Promise<void> {
   // Skip if migration stamp exists
   if (await exists(join(destDir, MIGRATION_STAMP))) return
 
@@ -132,7 +192,7 @@ async function _runMigration(): Promise<void> {
 
   // Find the first existing legacy source
   let source = null
-  for (const candidate of LEGACY_SOURCES) {
+  for (const candidate of legacySources) {
     if (await exists(candidate.dir)) {
       source = candidate
       break
@@ -200,9 +260,11 @@ async function _runMigration(): Promise<void> {
     await copyKeychainEntry(legacyService, targetService)
   }
 
+  assertLockOwned()
+
   // Write migration stamp
   try {
-    await writeFile(
+    writeFileSync(
       join(destDir, MIGRATION_STAMP),
       `migrated-from: ${source.dir}\ndate: ${new Date().toISOString()}\n`,
     )
@@ -216,4 +278,9 @@ async function _runMigration(): Promise<void> {
   } else {
     log('Migration completed successfully.')
   }
+}
+
+export const _forTest = {
+  acquireMigrationLock,
+  migrateFromPaths,
 }

@@ -180,6 +180,20 @@ function makeSupervisor(configHome: string): SidecarSupervisor {
   return sup
 }
 
+async function waitForPidExit(pid: number): Promise<void> {
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return
+      throw error
+    }
+    await Bun.sleep(25)
+  }
+  throw new Error(`sidecar pid ${pid} survived shutdown`)
+}
+
 test('(b) a resumed sidecar echoes the id in ready AND replays the restored history as replay:true event frames', async () => {
   const configHome = freshConfigHome()
   const cwd = tmp('catcode-p31-wd-')
@@ -304,6 +318,12 @@ test('(b) compacted resume replays archival prefix plus seam while the model see
 
   // The engine's ordinary resume projection remains post-boundary only. This
   // independently guards against feeding the archival prefix back to the model.
+  // Stop and reconcile the current owner before another process resumes the
+  // same transcript; P5-5c deliberately rejects concurrent ownership.
+  const ownerPid = sup.getSessionProcessId('p31-compact-replay')
+  expect(ownerPid).toBeNumber()
+  sup.shutdown()
+  await waitForPidExit(ownerPid!)
   const probe = Bun.spawn(
     ['bun', 'run', resumeProbe, engineSessionId, marker],
     {

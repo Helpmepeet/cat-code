@@ -1,6 +1,6 @@
 # Build, Release, And Testing Routing Map
 
-Last refreshed: 2026-07-11 against `CLAUDE.md`,
+Last refreshed: 2026-08-27 against `CLAUDE.md`,
 `docs/maps/WORKSPACE_MAP.md`, `package.json`, `scripts/build.ts`,
 `scripts/test-codex-*.ts`,
 `scripts/typecheck/renderer-engine-types/`, `renderer-theme/`,
@@ -93,14 +93,14 @@ commands, tools, tasks, and components.
 
 ## Migration Routing
 
-Startup migrations are registered in `src/main.tsx` under
-`CURRENT_MIGRATION_VERSION` and `runMigrations()`. The current sync migration
-version is `11`; bump it when adding a new sync migration that existing users
-must rerun.
+Startup migrations are owned by `src/migrations/runEngineMigrations.ts` under
+`CURRENT_MIGRATION_VERSION`. The current version is `15`. Shared `init()` calls
+this owner after enabling configs, so terminal and desktop-first launches use
+the same cross-process-locked sequence.
 
 | Migration area | Owner file | Routing notes |
 |---|---|---|
-| Migration order and version gate | `src/main.tsx` | Runs sync migrations only when global config `migrationVersion` differs. `migrateChangelogFromConfig()` is async fire-and-forget every startup. |
+| Migration order and version gate | `src/migrations/runEngineMigrations.ts` | Fresh-reads the global migration version under one config-home lock, runs versioned migrations, persists the version only after success, and awaits the separately retryable changelog migration. |
 | Auto-updates config to settings env | `src/migrations/migrateAutoUpdatesToSettings.ts` | Moves explicit user-disabled auto-updates to user settings `env.DISABLE_AUTOUPDATER = "1"` unless native protection set the old flag. |
 | Bypass-permission prompt acceptance | `src/migrations/migrateBypassPermissionsAcceptedToSettings.ts` | Moves global config `bypassPermissionsModeAccepted` to user settings `skipDangerousModePermissionPrompt`. |
 | Project MCP approval fields | `src/migrations/migrateEnableAllProjectMcpServersToSettings.ts` | Moves old project config MCP approval fields into local settings and removes old project config keys. |
@@ -112,7 +112,7 @@ must rerun.
 | Bridge config rename | `src/migrations/migrateReplBridgeEnabledToRemoteControlAtStartup.ts` | Copies old global `replBridgeEnabled` to `remoteControlAtStartup` only when new key is unset. |
 | Auto-mode prompt reset | `src/migrations/resetAutoModeOptInForDefaultOffer.ts` | Feature-gated by `TRANSCRIPT_CLASSIFIER`; clears old skip prompt only for enabled auto-mode users not defaulting to auto. |
 | Fennec to Opus | `src/migrations/migrateFennecToOpus.ts` | Ant-only in source intent, but current external build dead-code condition means it does not run in normal external builds. |
-| Upstream/fork data copy | `src/migrations/migrateFromUpstreamClaude.ts` | Exists but is not in the current `runMigrations()` order. Check `src/entrypoints/init.ts` before assuming it runs. |
+| Upstream/fork data copy | `src/migrations/migrateFromUpstreamClaude.ts` | Shared `init()` awaits this copy-only migration before enabling configs. Its destination check and copy run under a lock beside the destination directory. |
 
 ## Release Notes
 
@@ -183,6 +183,7 @@ paths.
 | Compact/context behavior | `bun test src/services/compact/*.test.ts` |
 | App runtime | `bun test src/app-runtime/*.test.ts` |
 | Browser app/runtime | `bun test src/web/*.test.ts src/app-runtime/*.test.ts` plus `bun run --cwd web test` |
+| P5-5c cross-process contention probes | `src/utils/atomicFile.probe.test.ts`, `src/utils/transcriptLease.probe.test.ts`, `src/migrations/runEngineMigrations.probe.test.ts`, `src/codex-core/accountRefreshContention.probe.test.ts`, `src/utils/secureStorage/crossProcessStorage.probe.test.ts`, `src/services/autoDream/consolidationLock.probe.test.ts`, `src/services/teamMemorySync/teamMemorySync.probe.test.ts` | Run `bun test src/utils/atomicFile.probe.test.ts src/utils/transcriptLease.probe.test.ts src/migrations/runEngineMigrations.probe.test.ts src/codex-core/accountRefreshContention.probe.test.ts src/utils/secureStorage/crossProcessStorage.probe.test.ts src/services/autoDream/consolidationLock.probe.test.ts src/services/teamMemorySync/teamMemorySync.probe.test.ts` with synthetic isolated files and no live account/network access. |
 | Commands | Run the specific command test, for example `bun test src/commands/goal/goal.test.ts src/commands/agent/agent.test.ts`. |
 | Components/helpers | Use colocated tests such as `src/components/ConsoleOAuthFlow.test.ts` or `src/tools/*/*.test.tsx`. |
 
@@ -231,7 +232,7 @@ actual command expansion before trusting a clean lint result.
   `userSettings`. Do not switch them to merged settings unless you want to
   promote project/local/policy values globally.
 - Adding a migration file is not enough. It must be imported, ordered in
-  `runMigrations()`, and the migration version must be bumped when existing
+  `runEngineMigrations.ts`, and the migration version must be bumped when existing
   users need it.
 - Release-note code still references upstream Claude changelog URLs. Verify
   source before assuming Cat Code has a separate release directory or bundled

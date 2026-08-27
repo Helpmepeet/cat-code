@@ -30,10 +30,12 @@
  */
 
 import { init } from '../../src/entrypoints/init.js'
+import { existsSync, writeFileSync } from 'fs'
 import { QueryEngine } from '../../src/QueryEngine.js'
 import { createQueryEngineAppSession } from '../../src/app-runtime/createQueryEngineAppSession.js'
 import type { Message } from '../../src/types/message.js'
 import { isInternalNoResponseSentinel } from '../../src/utils/messages.js'
+import { releaseActiveTranscriptLease } from '../../src/utils/transcriptLease.js'
 import { projectResumedHistory } from './historyProjection.js'
 import { resumeEngineSession } from './sessionResume.js'
 import {
@@ -45,6 +47,8 @@ import {
 async function main(): Promise<void> {
   const engineSessionId = process.argv[2]
   const marker = process.argv[3] ?? ''
+  const readyFile = process.argv[4]
+  const releaseFile = process.argv[5]
   if (!engineSessionId) {
     throw new Error('usage: resumeSeedProbe.fixture.ts <engineSessionId> [marker]')
   }
@@ -116,10 +120,21 @@ async function main(): Promise<void> {
       replayUuids.every((uuid, i) => uuid === visibleHeld[i]?.uuid),
   }
   process.stdout.write(`SEED_RESULT=${JSON.stringify(payload)}\n`)
+  if (readyFile) writeFileSync(readyFile, String(process.pid))
+  if (releaseFile) {
+    const startedAt = Date.now()
+    while (!existsSync(releaseFile)) {
+      if (Date.now() - startedAt > 30_000) {
+        throw new Error('timed out waiting for resume probe release')
+      }
+      await Bun.sleep(20)
+    }
+  }
   await new Promise<void>(resolve => {
     if (process.stdout.write('')) resolve()
     else process.stdout.once('drain', () => resolve())
   })
+  await releaseActiveTranscriptLease()
   process.exit(0)
 }
 

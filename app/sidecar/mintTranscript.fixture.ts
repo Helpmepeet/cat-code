@@ -36,6 +36,7 @@ import {
   recordTranscript,
   writeAgentMetadata,
 } from '../../src/utils/sessionStorage.js'
+import { releaseActiveTranscriptLease } from '../../src/utils/transcriptLease.js'
 
 async function main(): Promise<void> {
   const sessionId = process.argv[2]
@@ -242,6 +243,7 @@ async function main(): Promise<void> {
       `MINTED_SIDECHAIN_PATH=${getAgentTranscriptPath(asAgentId('restore-probe-sidechain'))}\n`,
     )
   }
+  await releaseActiveTranscriptLease()
   process.exit(0)
 }
 

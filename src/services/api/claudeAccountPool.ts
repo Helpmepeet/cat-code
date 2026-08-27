@@ -9,13 +9,16 @@
  * Switching is manual only via /switch-account.
  */
 
-import { chmodSync, readFileSync, readdirSync, existsSync, mkdirSync, writeFileSync, renameSync, unlinkSync, openSync, closeSync, fsyncSync } from 'fs'
-import { join, dirname, basename } from 'path'
+import { chmodSync, readFileSync, readdirSync, existsSync, mkdirSync, unlinkSync } from 'fs'
+import { join } from 'path'
 import { homedir } from 'os'
 
 import { logForDebugging } from '../../utils/debug.js'
 import { getSecureStorage } from '../../utils/secureStorage/index.js'
 import { saveGlobalConfig, getGlobalConfig } from '../../utils/config.js'
+import { getErrnoCode } from '../../utils/errors.js'
+import { writeFileAtomicDurableSync } from '../../utils/atomicFile.js'
+import { lockSync } from '../../utils/lockfile.js'
 // storeOAuthAccountInfo is intentionally NOT used here because it drops
 // organizationName/organizationRole/workspaceRole. syncClaudeAccountToStorage
 // writes oauthAccount directly to GlobalConfig instead.
@@ -56,6 +59,46 @@ export type ClaudeAccountResolutionMatchType = 'exact' | 'prefix'
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const DEFAULT_VAULT_PATH = join(homedir(), 'claude-vault')
+const VAULT_LOCK_WAIT_MS = 10_000
+
+function acquireVaultMutationLockSync(filePath: string): () => void {
+  const deadline = Date.now() + VAULT_LOCK_WAIT_MS
+  for (;;) {
+    try {
+      const release = lockSync(filePath, {
+        realpath: false,
+        stale: 120_000,
+        update: 30_000,
+        onCompromised: error => {
+          logForDebugging(
+            `[claude-pool] Vault lock compromised: ${error.message}`,
+            { level: 'error' },
+          )
+        },
+      })
+      let released = false
+      return () => {
+        if (released) return
+        released = true
+        try {
+          release()
+        } catch (error) {
+          if (getErrnoCode(error) !== 'ERELEASED') throw error
+        }
+      }
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        !('code' in error) ||
+        error.code !== 'ELOCKED' ||
+        Date.now() >= deadline
+      ) {
+        throw error
+      }
+      Bun.sleepSync(20)
+    }
+  }
+}
 
 // ── Singleton state ────────────────────────────────────────────────────────
 
@@ -540,6 +583,23 @@ export function updateClaudeAccountTokens(
   logForDebugging(`[claude-pool] Updated account tokens after refresh`)
 }
 
+export function deleteClaudeVaultFile(filePath: string): boolean {
+  let releaseLock: (() => void) | undefined
+  try {
+    releaseLock = acquireVaultMutationLockSync(filePath)
+    unlinkSync(filePath)
+    return true
+  } catch (err) {
+    logForDebugging(
+      `[claude-pool] Failed to delete vault file: ${err instanceof Error ? err.message : String(err)}`,
+      { level: 'warn' },
+    )
+    return false
+  } finally {
+    releaseLock?.()
+  }
+}
+
 /**
  * Remove a Claude account from the pool and vault.
  * If the removed account was active, switches to the next healthy one.
@@ -552,14 +612,7 @@ export function removeClaudeAccount(accountUuid: string): boolean {
 
   // Delete vault file
   if (acct.vaultFilePath && existsSync(acct.vaultFilePath)) {
-    try {
-      unlinkSync(acct.vaultFilePath)
-    } catch (err) {
-      logForDebugging(
-        `[claude-pool] Failed to delete vault file: ${err instanceof Error ? err.message : String(err)}`,
-        { level: 'warn' },
-      )
-    }
+    if (!deleteClaudeVaultFile(acct.vaultFilePath)) return false
   }
 
   // Remove from pool
@@ -596,16 +649,19 @@ export function setClaudeAccountAlias(accountUuid: string, alias: string): boole
   const acct = pool.accounts.find((a) => a.accountUuid === accountUuid)
   if (!acct?.vaultFilePath) return false
 
+  let releaseLock: (() => void) | undefined
   try {
+    releaseLock = acquireVaultMutationLockSync(acct.vaultFilePath)
     const existing = JSON.parse(readFileSync(acct.vaultFilePath, 'utf-8')) as Record<string, unknown>
     existing.alias = alias
-    const dir = acct.vaultFilePath.split('/').slice(0, -1).join('/')
-    const tmp = `${dir}/.${Date.now()}.${process.pid}.tmp`
-    writeFileSync(tmp, JSON.stringify(existing, null, 2) + '\n', {
+    writeFileAtomicDurableSync(
+      acct.vaultFilePath,
+      JSON.stringify(existing, null, 2) + '\n',
+      {
       encoding: 'utf-8',
       mode: 0o600,
-    })
-    renameSync(tmp, acct.vaultFilePath)
+      },
+    )
     chmodSync(acct.vaultFilePath, 0o600)
     acct.alias = alias
     logForDebugging(`[claude-pool] Set alias "${alias}" for ${acct.emailAddress}`)
@@ -616,6 +672,8 @@ export function setClaudeAccountAlias(accountUuid: string, alias: string): boole
       { level: 'warn' },
     )
     return false
+  } finally {
+    releaseLock?.()
   }
 }
 
@@ -630,14 +688,19 @@ function getVaultAccountsDir(): string {
 }
 
 function saveClaudeTokenToVault(account: ClaudePoolAccount): string | null {
-  let tmpPath: string | undefined
+  let releaseLock: (() => void) | undefined
   try {
     const accountsDir = getVaultAccountsDir()
     mkdirSync(accountsDir, { recursive: true, mode: 0o700 })
     chmodSync(accountsDir, 0o700)
 
     const filePath = join(accountsDir, `${account.accountUuid}.json`)
+    releaseLock = acquireVaultMutationLockSync(filePath)
+    const existing = existsSync(filePath)
+      ? (JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>)
+      : {}
     const data: Record<string, unknown> = {
+      ...existing,
       tokens: {
         access_token: account.accessToken,
         refresh_token: account.refreshToken,
@@ -662,45 +725,20 @@ function saveClaudeTokenToVault(account: ClaudePoolAccount): string | null {
       last_refresh: new Date().toISOString(),
     }
     if (account.alias) data.alias = account.alias
-    // Credentials must never be visible as a truncated JSON file. Write and
-    // flush a sibling temp file, then publish it with one atomic rename.
-    tmpPath = join(
-      accountsDir,
-      `.${basename(filePath)}.${process.pid}.${Date.now()}.tmp`,
-    )
-    const fd = openSync(tmpPath, 'w', 0o600)
-    try {
-      writeFileSync(fd, JSON.stringify(data, null, 2) + '\n', 'utf-8')
-      fsyncSync(fd)
-    } finally {
-      closeSync(fd)
-    }
-    renameSync(tmpPath, filePath)
-    tmpPath = undefined
-
-    // Persist the directory entry as well; without this, a power failure can
-    // lose a just-renamed credential even though its file data was flushed.
-    let dirFd: number | undefined
-    try {
-      dirFd = openSync(dirname(filePath), 'r')
-      fsyncSync(dirFd)
-    } catch {
-      // Some filesystems cannot fsync directory handles. The atomic rename is
-      // still the essential no-truncation guarantee on those filesystems.
-    } finally {
-      if (dirFd !== undefined) closeSync(dirFd)
-    }
+    writeFileAtomicDurableSync(filePath, JSON.stringify(data, null, 2) + '\n', {
+      encoding: 'utf-8',
+      mode: 0o600,
+    })
     logForDebugging(`[claude-pool] Saved account ${account.emailAddress} to vault`)
     return filePath
   } catch (err) {
-    if (tmpPath) {
-      try { unlinkSync(tmpPath) } catch {}
-    }
     logForDebugging(
       `[claude-pool] Failed to save account to vault: ${err instanceof Error ? err.message : String(err)}`,
       { level: 'warn' },
     )
     return null
+  } finally {
+    releaseLock?.()
   }
 }
 

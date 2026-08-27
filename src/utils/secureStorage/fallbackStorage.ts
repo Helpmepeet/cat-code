@@ -1,4 +1,5 @@
 import type { SecureStorage, SecureStorageData } from './types.js'
+import type { FreshReadResult } from './crossProcessStorage.js'
 
 /**
  * Creates a fallback storage that tries to use the primary storage first,
@@ -8,6 +9,12 @@ export function createFallbackStorage(
   primary: SecureStorage,
   secondary: SecureStorage,
 ): SecureStorage {
+  const primaryFresh = primary as SecureStorage & {
+    readFresh?: () => FreshReadResult
+  }
+  const secondaryFresh = secondary as SecureStorage & {
+    readFresh?: () => FreshReadResult
+  }
   return {
     name: `${primary.name}-with-${secondary.name}-fallback`,
     read(): SecureStorageData {
@@ -23,6 +30,26 @@ export function createFallbackStorage(
         return result
       }
       return (await secondary.readAsync()) || {}
+    },
+    readFresh(): FreshReadResult {
+      const primaryResult = primaryFresh.readFresh?.() ?? {
+        status: 'unavailable' as const,
+        data: null,
+      }
+      if (primaryResult.status === 'present') return primaryResult
+
+      const secondaryResult = secondaryFresh.readFresh?.() ?? {
+        status: 'unavailable' as const,
+        data: null,
+      }
+      if (secondaryResult.status === 'present') return secondaryResult
+      if (
+        primaryResult.status === 'missing' &&
+        secondaryResult.status === 'missing'
+      ) {
+        return { status: 'missing', data: null }
+      }
+      return { status: 'unavailable', data: null }
     },
     update(data: SecureStorageData): { success: boolean; warning?: string } {
       // Capture state before update

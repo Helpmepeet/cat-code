@@ -70,6 +70,7 @@ import type { TodoList } from './todo/types.js'
 import { TodoListSchema } from './todo/types.js'
 import type { ContentReplacementRecord } from './toolResultStorage.js'
 import type { ThreadGoal } from './threadGoal.js'
+import { activateTranscriptLease } from './transcriptLease.js'
 import {
   getCurrentWorktreeSession,
   restoreWorktreeSession,
@@ -708,6 +709,7 @@ export async function processResumedConversation(
   if (!opts.forkSession) {
     const sid = opts.sessionIdOverride ?? result.sessionId
     if (sid) {
+      await activateTranscriptLease(sid)
       // When resuming from a different project directory (git worktrees,
       // cross-project), transcriptPath points to the actual file; its dirname
       // is the project dir. Otherwise the session lives in the current project.

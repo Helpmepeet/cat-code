@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { mkdir, readFile, writeFile } from 'fs/promises'
+import { mkdir, readFile } from 'fs/promises'
 import { dirname, join } from 'path'
 import { coerce } from 'semver'
 import { getIsNonInteractiveSession } from '../bootstrap/state.js'
@@ -9,6 +9,10 @@ import { toError } from './errors.js'
 import { logError } from './log.js'
 import { isEssentialTrafficOnly } from './privacyLevel.js'
 import { gt } from './semver.js'
+import {
+  writeFileAtomicDurable,
+  writeFileAtomicDurableIfAbsent,
+} from './atomicFile.js'
 
 const MAX_RELEASE_NOTES_SHOWN = 5
 
@@ -63,9 +67,8 @@ export async function migrateChangelogFromConfig(): Promise<void> {
   // If cache file doesn't exist, create it from old config
   try {
     await mkdir(dirname(cachePath), { recursive: true })
-    await writeFile(cachePath, config.cachedChangelog, {
+    await writeFileAtomicDurableIfAbsent(cachePath, config.cachedChangelog, {
       encoding: 'utf-8',
-      flag: 'wx', // Write only if file doesn't exist
     })
   } catch {
     // File already exists, which is fine - skip silently
@@ -106,7 +109,9 @@ export async function fetchAndStoreChangelog(): Promise<void> {
     await mkdir(dirname(cachePath), { recursive: true })
 
     // Write changelog to cache file
-    await writeFile(cachePath, changelogContent, { encoding: 'utf-8' })
+    await writeFileAtomicDurable(cachePath, changelogContent, {
+      encoding: 'utf-8',
+    })
     changelogMemoryCache = changelogContent
 
     // Update timestamp in config

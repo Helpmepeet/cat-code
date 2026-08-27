@@ -12,6 +12,7 @@ import {
   keychainCacheState,
 } from './macOsKeychainHelpers.js'
 import type { SecureStorage, SecureStorageData } from './types.js'
+import type { FreshReadResult } from './crossProcessStorage.js'
 
 // `security -i` reads stdin with a 4096-byte fgets() buffer (BUFSIZ on darwin).
 // A command line longer than this is truncated mid-argument: the first 4096
@@ -93,6 +94,36 @@ export const macOsKeychainStorage = {
     })
     keychainCacheState.readInFlight = promise
     return promise
+  },
+  readFresh(): FreshReadResult {
+    try {
+      const storageServiceName = getMacOsKeychainStorageServiceName(
+        CREDENTIALS_SERVICE_SUFFIX,
+      )
+      const username = getUsername()
+      const result = execaSync(
+        'security',
+        ['find-generic-password', '-a', username, '-w', '-s', storageServiceName],
+        {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          reject: false,
+        },
+      )
+      if (result.exitCode === 0 && result.stdout) {
+        const data = jsonParse(result.stdout.trim())
+        keychainCacheState.cache = { data, cachedAt: Date.now() }
+        return { status: 'present', data }
+      }
+      // `security` uses 44 for a missing generic password. Other failures,
+      // including a locked keychain, are not evidence that the store is empty.
+      if (result.exitCode === 44) {
+        keychainCacheState.cache = { data: null, cachedAt: Date.now() }
+        return { status: 'missing', data: null }
+      }
+    } catch (_e) {
+      // fall through: a failed keychain read is not an empty store
+    }
+    return { status: 'unavailable', data: null }
   },
   update(data: SecureStorageData): { success: boolean; warning?: string } {
     // Invalidate cache before update

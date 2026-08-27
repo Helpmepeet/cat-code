@@ -31,7 +31,11 @@ import type {
   SupervisorEvent,
 } from '../supervisor/supervisor.js'
 import type { SessionId } from '../shared/protocol.js'
-import { PARKED_EXIT_CODE, RESUME_FAILED_EXIT_CODE } from '../shared/limits.js'
+import {
+  PARKED_EXIT_CODE,
+  RESUME_BUSY_EXIT_CODE,
+  RESUME_FAILED_EXIT_CODE,
+} from '../shared/limits.js'
 import {
   MAX_LIVE_SESSIONS,
   MAX_SESSION_TITLE_CHARS,
@@ -214,6 +218,13 @@ export class Host implements HostApi {
         // the shutdownAll mark-clean-then-kill ordering is unaffected.
         if (event.code === PARKED_EXIT_CODE) {
           await this.registry.markParked(appSessionId)
+        } else if (event.code === RESUME_BUSY_EXIT_CODE) {
+          // A different process owns the transcript. This is retryable, not a
+          // crashed engine and not evidence that the transcript is unusable.
+          await this.registry.markClean(appSessionId)
+          this.log(
+            `[host] resume_busy: ${appSessionId} remains restorable until the other owner exits`,
+          )
         } else {
           // A `RESUME_FAILED_EXIT_CODE` exit is the engine reporting that this
           // row's `engineSessionId` has no loadable transcript — the sidecar

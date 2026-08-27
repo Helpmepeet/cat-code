@@ -8,6 +8,7 @@ import {
   jsonStringify,
 } from '../slowOperations.js'
 import type { SecureStorage, SecureStorageData } from './types.js'
+import type { FreshReadResult } from './crossProcessStorage.js'
 
 function getStoragePath(): { storageDir: string; storagePath: string } {
   const storageDir = getClaudeConfigHomeDir()
@@ -38,6 +39,20 @@ export const plainTextStorage = {
       return jsonParse(data)
     } catch {
       return null
+    }
+  },
+  readFresh(): FreshReadResult {
+    const { storagePath } = getStoragePath()
+    try {
+      const data = getFsImplementation().readFileSync(storagePath, {
+        encoding: 'utf8',
+      })
+      return { status: 'present', data: jsonParse(data) }
+    } catch (error) {
+      if (getErrnoCode(error) === 'ENOENT') {
+        return { status: 'missing', data: null }
+      }
+      return { status: 'unavailable', data: null }
     }
   },
   update(data: SecureStorageData): { success: boolean; warning?: string } {

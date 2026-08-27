@@ -48,12 +48,16 @@ export const init = memoize(async (): Promise<void> => {
   const { migrateFromUpstreamClaude } = await import(
     '../migrations/migrateFromUpstreamClaude.js'
   )
-  migrateFromUpstreamClaude()
+  await migrateFromUpstreamClaude()
 
   // Validate configs are valid and enable configuration system
   try {
     const configsStart = Date.now()
     enableConfigs()
+    const { runEngineMigrations } = await import(
+      '../migrations/runEngineMigrations.js'
+    )
+    await runEngineMigrations()
     logForDiagnosticsNoPII('info', 'init_configs_enabled', {
       duration_ms: Date.now() - configsStart,
     })

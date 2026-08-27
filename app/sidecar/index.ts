@@ -23,6 +23,7 @@ import {
   MAX_HISTORY_REPLAY_BYTES,
   MAX_HISTORY_REPLAY_FRAMES,
   PARKED_EXIT_CODE,
+  RESUME_BUSY_EXIT_CODE,
   RESUME_FAILED_EXIT_CODE,
 } from '../shared/limits.js'
 import { getSessionId } from '../../src/bootstrap/state.js'
@@ -32,6 +33,7 @@ import {
   getTranscriptPath,
   loadDisplayTranscriptFromJsonlPath,
 } from '../../src/utils/sessionStorage.js'
+import { releaseActiveTranscriptLease } from '../../src/utils/transcriptLease.js'
 import {
   mergeDisplayHistoryWithSeed,
   projectUndeliveredPrompts,
@@ -43,7 +45,11 @@ import {
   loadAgentDefinitionsForRuntime,
 } from './sessionController.js'
 import { withRestoredSubagentHistory } from './subagentHistory.js'
-import { resumeEngineSession, SidecarResumeError } from './sessionResume.js'
+import {
+  resumeEngineSession,
+  SidecarResumeBusyError,
+  SidecarResumeError,
+} from './sessionResume.js'
 import { SidecarServer } from './sidecarServer.js'
 import { createBackpressuredSocket } from './backpressuredSocket.js'
 import { createSidecarOperationalLogger } from './operationalLogger.js'
@@ -74,18 +80,29 @@ function exitAfterFatal(error: unknown): void {
   if (fatalExitStarted) return
   fatalExitStarted = true
   const isResumeFailure = error instanceof SidecarResumeError
+  const isResumeBusy = error instanceof SidecarResumeBusyError
   activeOperationalLogger?.write({
     level: 'fatal',
     event: isResumeFailure ? 'session.restore.failed' : 'app.fatal',
     ...(activeAppSessionId ? { appSessionId: activeAppSessionId } : {}),
     ...(activeEngineSessionId ? { engineSessionId: activeEngineSessionId } : {}),
-    fields: { reason: isResumeFailure ? 'resume_failure' : 'uncaught_failure' },
+    fields: {
+      reason: isResumeBusy
+        ? 'resume_busy'
+        : isResumeFailure
+          ? 'resume_failure'
+          : 'uncaught_failure',
+    },
   })
   // Retain raw stderr for an attached development terminal only. It is never
   // copied into the desktop operational descriptor.
   if (isResumeFailure) {
-    process.stderr.write(`[sidecar] resume-failed: ${error instanceof Error ? error.message : 'unknown'}\n`)
-    process.exit(RESUME_FAILED_EXIT_CODE)
+    process.stderr.write(
+      `[sidecar] ${isResumeBusy ? 'resume-busy' : 'resume-failed'}: ${
+        error instanceof Error ? error.message : 'unknown'
+      }\n`,
+    )
+    process.exit(isResumeBusy ? RESUME_BUSY_EXIT_CODE : RESUME_FAILED_EXIT_CODE)
   }
   process.stderr.write(`[sidecar] fatal: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`)
   process.exit(1)
@@ -402,8 +419,7 @@ async function main(): Promise<void> {
     // only invoked here asynchronously by the timer, so it is initialized by the
     // time this fires.
     onIdle: () => {
-      cleanup()
-      process.exit(0)
+      void exitCleanly(0)
     },
     // IDLE-PARK (decisions/IDLE-PARK.md §2/§3) — the gated park exit. The sidecar
     // owns the gate + latch; when it decides to park it flushes the socket and
@@ -412,8 +428,7 @@ async function main(): Promise<void> {
     // `cleanup` closure the SIGTERM/onIdle paths use (defined just below and only
     // invoked here asynchronously, so it is initialized by the time this fires).
     onPark: () => {
-      cleanup()
-      process.exit(PARKED_EXIT_CODE)
+      void exitCleanly(PARKED_EXIT_CODE)
     },
   })
 
@@ -541,13 +556,27 @@ async function main(): Promise<void> {
       // best-effort
     }
   }
-  process.on('SIGTERM', () => {
+  let cleanExitStarted = false
+  const exitCleanly = async (code: number): Promise<void> => {
+    if (cleanExitStarted) return
+    cleanExitStarted = true
     cleanup()
-    process.exit(0)
+    await releaseActiveTranscriptLease().catch(error => {
+      const detail = (error instanceof Error ? error.message : String(error)).slice(
+        0,
+        512,
+      )
+      process.stderr.write(
+        `[sidecar] transcript lease release failed during clean exit: ${detail}\n`,
+      )
+    })
+    process.exit(code)
+  }
+  process.on('SIGTERM', () => {
+    void exitCleanly(0)
   })
   process.on('SIGINT', () => {
-    cleanup()
-    process.exit(0)
+    void exitCleanly(0)
   })
 }
 

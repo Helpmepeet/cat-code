@@ -64,10 +64,7 @@ import {
   syncClaudeAccountToStorage,
   type ClaudePoolAccount,
 } from '../../src/services/api/claudeAccountPool.js'
-import {
-  acquireCodexVaultFileLock,
-  touchAll,
-} from '../../src/services/api/codexTokenRefresh.js'
+import { touchAll } from '../../src/services/api/codexTokenRefresh.js'
 import { fetchPoolUsage } from '../../src/services/api/codexUsage.js'
 import {
   reassignCodexLeaseToActiveAccount,
@@ -90,7 +87,6 @@ import {
   validateForceLoginOrgForToken,
 } from '../../src/utils/auth.js'
 import { clearAuthRelatedCaches } from '../../src/commands/logout/logout.js'
-import { logForDebugging } from '../../src/utils/debug.js'
 import { getInitialSettings } from '../../src/utils/settings/settings.js'
 import type {
   AccountResultFrame,
@@ -551,32 +547,8 @@ export function createRealAccountsExecutor(): AccountsCommandExecutor {
         return { ok: false, message: 'Could not delete that account.' }
       }
 
-      let releaseLock: undefined | (() => Promise<void>)
-      let lockCompromised = false
-      try {
-        releaseLock = await acquireCodexVaultFileLock(
-          account.vaultFilePath,
-          error => {
-            lockCompromised = true
-            logForDebugging(
-              `[accounts-domain] Codex vault lock compromised during deletion: ${error.message}`,
-              { level: 'error' },
-            )
-          },
-        )
-        if (lockCompromised || !removeCodexAccount(accountId)) {
-          return { ok: false, message: 'Could not delete that account.' }
-        }
-      } catch (error) {
-        logForDebugging(
-          `[accounts-domain] Could not lock Codex profile for deletion: ${error instanceof Error ? error.message : String(error)}`,
-          { level: 'warn' },
-        )
+      if (!removeCodexAccount(accountId)) {
         return { ok: false, message: 'Could not delete that account.' }
-      } finally {
-        if (releaseLock) {
-          await releaseLock().catch(() => {})
-        }
       }
 
       repairLeasesForDeletedAccount(accountId)

@@ -12,7 +12,9 @@
  *   404 = no data exists yet
  *
  * Sync semantics:
- *   - Pull overwrites local files with server content (server wins per-key).
+ *   - Pull publishes server content only when the local snapshot is unchanged.
+ *     A local edit observed during publication is preserved and reported as a
+ *     conflict for a later retry.
  *   - Push uploads only keys whose content hash differs from serverChecksums
  *     (delta upload). Server uses upsert: keys not in the PUT are preserved.
  *   - File deletions do NOT propagate: deleting a local file won't remove it
@@ -26,7 +28,7 @@
 
 import axios from 'axios'
 import { createHash } from 'crypto'
-import { mkdir, readdir, readFile, stat, writeFile } from 'fs/promises'
+import { mkdir, readdir, readFile, stat } from 'fs/promises'
 import { join, relative, sep } from 'path'
 import {
   CLAUDE_AI_INFERENCE_SCOPE,
@@ -34,6 +36,7 @@ import {
   getOauthConfig,
   OAUTH_BETA_HEADER,
 } from '../../constants/oauth.js'
+import { getAutoMemPath } from '../../memdir/paths.js'
 import {
   getTeamMemPath,
   PathTraversalError,
@@ -54,6 +57,10 @@ import {
 import { sleep } from '../../utils/sleep.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { getClaudeCodeUserAgent } from '../../utils/userAgent.js'
+import {
+  acquireFileMutationLock,
+  writeFileAtomicDurableIfContentMatches,
+} from '../../utils/atomicFile.js'
 import { logEvent } from '../analytics/index.js'
 import type { AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS } from '../analytics/metadata.js'
 import { getRetryDelay } from '../api/withRetry.js'
@@ -186,7 +193,6 @@ function getAuthHeaders(): {
 // ─── Fetch (pull) ────────────────────────────────────────────
 
 async function fetchTeamMemoryOnce(
-  state: SyncState,
   repoSlug: string,
   etag?: string | null,
 ): Promise<TeamMemorySyncFetchResult> {
@@ -227,7 +233,6 @@ async function fetchTeamMemoryOnce(
       logForDebugging('team-memory-sync: no remote data (404)', {
         level: 'debug',
       })
-      state.lastKnownChecksum = null
       return { success: true, isEmpty: true }
     }
 
@@ -249,10 +254,6 @@ async function fetchTeamMemoryOnce(
       parsed.data.checksum ||
       response.headers['etag']?.replace(/^"|"$/g, '') ||
       undefined
-    if (responseChecksum) {
-      state.lastKnownChecksum = responseChecksum
-    }
-
     logForDebugging(
       `team-memory-sync: fetched successfully (checksum: ${responseChecksum ?? 'none'})`,
       { level: 'debug' },
@@ -385,14 +386,13 @@ async function fetchTeamMemoryHashes(
 }
 
 async function fetchTeamMemory(
-  state: SyncState,
   repoSlug: string,
   etag?: string | null,
 ): Promise<TeamMemorySyncFetchResult> {
   let lastResult: TeamMemorySyncFetchResult | null = null
 
   for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
-    lastResult = await fetchTeamMemoryOnce(state, repoSlug, etag)
+    lastResult = await fetchTeamMemoryOnce(repoSlug, etag)
     if (lastResult.success || lastResult.skipRetry) {
       return lastResult
     }
@@ -684,11 +684,16 @@ async function readLocalTeamMemory(maxEntries: number | null): Promise<{
  * recursive: true (EEXIST is swallowed). The initial pull is the long
  * pole in startTeamMemoryWatcher — p99 was ~22s serial at 50 entries.
  *
- * Returns the number of files actually written.
+ * expectedEntries is the fresh snapshot read under .memory-mutation. The
+ * caller must keep that lock for this compare-then-rename publication; the
+ * atomic helper alone is not a general filesystem CAS.
+ *
+ * Returns writes plus local-content conflicts that were preserved.
  */
 async function writeRemoteEntriesToLocal(
   entries: Record<string, string>,
-): Promise<number> {
+  expectedEntries: Record<string, string>,
+): Promise<{ filesWritten: number; conflicts: string[] }> {
   const results = await Promise.all(
     Object.entries(entries).map(async ([relPath, content]) => {
       let validatedPath: string
@@ -697,7 +702,7 @@ async function writeRemoteEntriesToLocal(
       } catch (e) {
         if (e instanceof PathTraversalError) {
           logForDebugging(`team-memory-sync: ${e.message}`, { level: 'warn' })
-          return false
+          return { written: false }
         }
         throw e
       }
@@ -708,7 +713,7 @@ async function writeRemoteEntriesToLocal(
           `team-memory-sync: skipping oversized remote entry "${relPath}"`,
           { level: 'info' },
         )
-        return false
+        return { written: false }
       }
 
       // Skip if on-disk content already matches. Handles the common case
@@ -717,7 +722,7 @@ async function writeRemoteEntriesToLocal(
       try {
         const existing = await readFile(validatedPath, 'utf8')
         if (existing === content) {
-          return false
+          return { written: false }
         }
       } catch (e) {
         if (
@@ -739,19 +744,46 @@ async function writeRemoteEntriesToLocal(
           validatedPath.lastIndexOf(sep),
         )
         await mkdir(parentDir, { recursive: true })
-        await writeFile(validatedPath, content, 'utf8')
-        return true
+        const expectedContent = Object.hasOwn(expectedEntries, relPath)
+          ? expectedEntries[relPath]!
+          : null
+        const publication = await writeFileAtomicDurableIfContentMatches(
+          validatedPath,
+          expectedContent,
+          content,
+          {
+            encoding: 'utf8',
+            // Keep utility temp files outside the team tree. readLocalTeamMemory
+            // intentionally includes legitimate user dotfiles.
+            tempDirectory: getAutoMemPath(),
+          },
+        )
+        return publication === 'written'
+          ? { written: true }
+          : { written: false, conflict: relPath }
       } catch (e) {
         logForDebugging(
           `team-memory-sync: failed to write "${relPath}": ${e}`,
           { level: 'warn' },
         )
-        return false
+        return { written: false }
       }
     }),
   )
 
-  return count(results, Boolean)
+  return {
+    filesWritten: count(results, result => result.written),
+    conflicts: results.flatMap(result =>
+      result.conflict ? [result.conflict] : [],
+    ),
+  }
+}
+
+export async function writeRemoteEntriesToLocalForTest(
+  entries: Record<string, string>,
+  expectedEntries: Record<string, string>,
+): Promise<{ filesWritten: number; conflicts: string[] }> {
+  return writeRemoteEntriesToLocal(entries, expectedEntries)
 }
 
 // ─── Public API ──────────────────────────────────────────────
@@ -764,8 +796,9 @@ export function isTeamMemorySyncAvailable(): boolean {
 }
 
 /**
- * Pull team memory from the server and write to local directory.
- * Returns true if any files were updated.
+ * Pull team memory from the server and publish it to the local directory.
+ * Local edits observed during publication are preserved and reported as a
+ * conflict instead of being overwritten.
  */
 export async function pullTeamMemory(
   state: SyncState,
@@ -803,7 +836,7 @@ export async function pullTeamMemory(
   }
 
   const etag = skipEtagCache ? null : state.lastKnownChecksum
-  const result = await fetchTeamMemory(state, repoSlug, etag)
+  const result = await fetchTeamMemory(repoSlug, etag)
   if (!result.success) {
     logPull(startTime, {
       success: false,
@@ -824,6 +857,7 @@ export async function pullTeamMemory(
   if (result.isEmpty || !result.data) {
     // Server has no data — clear stale serverChecksums so the next push
     // doesn't skip entries it thinks the server already has.
+    state.lastKnownChecksum = null
     state.serverChecksums.clear()
     logPull(startTime, { success: true })
     return { success: true, filesWritten: 0, entryCount: 0 }
@@ -832,14 +866,17 @@ export async function pullTeamMemory(
   const entries = result.data.content.entries
   const responseChecksums = result.data.content.entryChecksums
 
-  // Refresh serverChecksums from server-provided per-key hashes.
+  // Refresh serverChecksums from server-provided per-key hashes only after
+  // local publication succeeds. A conflict must leave both this map and the
+  // ETag pointing at the last fully published server snapshot so the next
+  // pull fetches the body again rather than accepting a misleading 304.
   // Requires anthropic/anthropic#283027 — if the response lacks entryChecksums
   // (pre-deploy server), serverChecksums stays empty and the next push uploads
   // everything; it self-corrects on push success.
-  state.serverChecksums.clear()
+  const nextServerChecksums = new Map<string, string>()
   if (responseChecksums) {
     for (const [key, hash] of Object.entries(responseChecksums)) {
-      state.serverChecksums.set(key, hash)
+      nextServerChecksums.set(key, hash)
     }
   } else {
     logForDebugging(
@@ -848,7 +885,19 @@ export async function pullTeamMemory(
     )
   }
 
-  const filesWritten = await writeRemoteEntriesToLocal(entries)
+  const releaseMemoryMutationLock = await acquireFileMutationLock(
+    join(getAutoMemPath(), '.memory-mutation'),
+  )
+  let publication: { filesWritten: number; conflicts: string[] }
+  try {
+    // Fetch first, then read the snapshot under the same lock used by
+    // extraction and other engine writers. Network I/O must stay outside it.
+    const localSnapshot = (await readLocalTeamMemory(null)).entries
+    publication = await writeRemoteEntriesToLocal(entries, localSnapshot)
+  } finally {
+    await releaseMemoryMutationLock()
+  }
+  const { filesWritten, conflicts } = publication
   if (filesWritten > 0) {
     const { clearMemoryFileCaches } = await import('../../utils/claudemd.js')
     clearMemoryFileCaches()
@@ -856,6 +905,25 @@ export async function pullTeamMemory(
   logForDebugging(`team-memory-sync: pulled ${filesWritten} files`, {
     level: 'info',
   })
+
+  if (conflicts.length > 0) {
+    const error = `Local team memory changed during pull: ${conflicts.join(', ')}`
+    logPull(startTime, { success: false, filesWritten })
+    return {
+      success: false,
+      filesWritten,
+      entryCount: Object.keys(entries).length,
+      error,
+    }
+  }
+
+  state.serverChecksums.clear()
+  for (const [key, hash] of nextServerChecksums) {
+    state.serverChecksums.set(key, hash)
+  }
+  if (result.checksum) {
+    state.lastKnownChecksum = result.checksum
+  }
 
   logPull(startTime, { success: true, filesWritten })
 
