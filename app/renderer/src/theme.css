@@ -77,6 +77,21 @@
   --tone-info: #60a5fa;
 
   /*
+   * The window grounds: the four opaque fills standing between the app and
+   * whatever is behind the window. Their values are unchanged from the literals
+   * they replace in `@theme inline` below, and they are declared here as raw
+   * tokens for one reason: `inline` means Tailwind compiles the VALUE into every
+   * utility it generates, so `--color-app-bg: #09090b` would leave `bg-app-bg`
+   * carrying a hardcoded hex that no later rule could reach. Routed through a
+   * var (exactly as `--color-accent: var(--accent)` already is) they stay
+   * overridable, which is the entire mechanism behind glass mode below.
+   */
+  --app-bg: #09090b;
+  --shell-chrome: #070709;
+  --surface-raised: #111113;
+  --surface-panel: #0a0a0c;
+
+  /*
    * The session column: transcript rows, the restore skeleton, the composer dock
    * and the dock's banner. All four MUST carry the same value — it is what makes
    * a transcript row's edges line up with the input below it — so they read this
@@ -134,13 +149,60 @@
   --accent-rgb: 251 191 36;
 }
 
+/*
+ * Glass mode (`glassMode.ts`). OFF by default, and off is the app unchanged:
+ * with no attribute stamped, none of these rules match and the grounds keep the
+ * opaque values declared above.
+ *
+ * The window carries macOS vibrancy from the moment it is created
+ * (`app/main/main.ts`), so the blurred backdrop is behind the page whether or
+ * not this is on. All this decides is whether the app's own grounds are opaque
+ * enough to hide it, which is why flipping it needs no IPC.
+ *
+ * `html` is the target, not the wrapper the accent stamps: `html` and `body`
+ * paint the page ground themselves (`@layer base` below) and sit above anything
+ * React can render, so a token redeclared on a wrapper would repaint the
+ * components and leave the page behind them solid.
+ *
+ * The alphas are graded by what each ground sits ON, not by taste. Body and
+ * chrome are siblings over the desktop, so both can be genuinely transparent. A
+ * drawer sits over the body and a popover over everything, so their alpha
+ * COMPOUNDS with the body's: left equal they would read as murk rather than as
+ * glass, and a popover has to stay readable over an arbitrary wallpaper. Hence
+ * the climb. Tune these four by eye; nothing else here is a taste value.
+ */
+html[data-glass='on'] {
+  --app-bg: rgba(9, 9, 11, 0.62);
+  --shell-chrome: rgba(7, 7, 9, 0.58);
+  --surface-panel: rgba(10, 10, 12, 0.74);
+  --surface-raised: rgba(17, 17, 19, 0.88);
+}
+
+/*
+ * The three elements that all paint the SAME page ground, stacked. Opaque that
+ * is invisible; translucent it is not, because 0.62 three deep composites to
+ * about 0.95 and the glass turns back into a wall. `html` is the one that keeps
+ * painting, since its background propagates to the canvas and therefore covers
+ * the window whatever the app above it is doing.
+ *
+ * Only the full-viewport repeats are cleared. A code block or a text input also
+ * paints `bg-app-bg`, and there the compounding is the point: a denser patch of
+ * the same glass is exactly how those read against the surface holding them.
+ *
+ * Unlayered on purpose, so it outranks the `@layer base` declarations it undoes.
+ */
+html[data-glass='on'] body,
+html[data-glass='on'] [data-window-ground] {
+  background: transparent;
+}
+
 @theme inline {
-  --color-app-bg: #09090b;
+  --color-app-bg: var(--app-bg);
   /* Shell chrome (P3-5a): the TabBar / sidebar rail sit one step darker than
    * the app body, with a faint top-light hairline — the prototype's shell
    * grammar (#070709 chrome, rgba(255,255,255,0.06) seams). 5b's Sidebar reuses
    * these so the two panels read as one frame. */
-  --color-shell-chrome: #070709;
+  --color-shell-chrome: var(--shell-chrome);
   --color-shell-seam: rgba(255, 255, 255, 0.06);
   --color-shell-hover: rgba(255, 255, 255, 0.045);
   --color-shell-active: rgba(255, 255, 255, 0.06);
@@ -149,8 +211,8 @@
    * drawer) one step below it (#0a0a0c). The prototype paints these exact shades
    * for its floating/overlay chrome; tokenised here so every W4 domain's
    * popovers/drawers read as one system instead of scattering raw hexes. */
-  --color-surface-raised: #111113;
-  --color-surface-panel: #0a0a0c;
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-panel: var(--surface-panel);
   --color-text-primary: #f4f4f5;
   --color-text-muted: #a1a1aa;
   /*

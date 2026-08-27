@@ -54,6 +54,10 @@ import {
   AccentThemeContext,
   DEFAULT_ACCENT,
 } from './accentTheme.js'
+import {
+  DEFAULT_GLASS_ENABLED,
+  GlassModeContext,
+} from './glassMode.js'
 import { AgentsPage } from './AgentsPage.js'
 import {
   CODE_THEME_KEYS,
@@ -801,8 +805,17 @@ function AppScopeBody({
  */
 function AppearanceSection() {
   const { accent, setAccent } = useContext(AccentThemeContext)
+  const { glass, setGlass } = useContext(GlassModeContext)
   return (
     <PaneSection title="Appearance">
+      <Field
+        desc="Let the desktop show through the window as a blur, instead of a solid background. macOS only. Stored in this app, not in your settings files."
+        label="Frosted window"
+        modified={glass !== DEFAULT_GLASS_ENABLED}
+        onReset={() => setGlass(DEFAULT_GLASS_ENABLED)}
+      >
+        <ToggleSwitch label="Frosted window" onChange={setGlass} value={glass} />
+      </Field>
       <Field
         desc="Used for active states, the live indicator, and toggles. Stored in this app, not in your settings files."
         label="Accent color"

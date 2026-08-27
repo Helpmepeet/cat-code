@@ -1292,7 +1292,26 @@ function createWindow(): void {
     // scrolls nor clamps its own height.
     minWidth: 852,
     minHeight: 495,
-    backgroundColor: '#09090b',
+    // Glass mode (`app/renderer/src/glassMode.ts`) is a RENDERER preference, and
+    // these two lines are the reason it needs no channel to reach us: the OS
+    // material is mounted once, here, and the renderer decides whether its own
+    // grounds are opaque enough to hide it. Off, the page paints #09090b over
+    // this and the window is pixel-identical to before; on, the page goes
+    // translucent and the blur that was always behind it shows through.
+    //
+    // Mounted once rather than toggled: `setVibrancy(null)` does not reliably
+    // clear on macOS, so a runtime toggle is the one version of this that can
+    // strand a window in a state it cannot leave.
+    //
+    // The cost of an always-transparent ground is that any moment the renderer
+    // is not painting shows the desktop instead of black. `ready-to-show` below
+    // covers launch; a reload or a renderer crash will flicker through.
+    //
+    // Non-darwin keeps the solid ground: `vibrancy` is a macOS material, and
+    // without it a transparent window is just a transparent window.
+    ...(process.platform === 'darwin'
+      ? { vibrancy: 'under-window' as const, backgroundColor: '#00000000' }
+      : { backgroundColor: '#09090b' }),
     show: false,
     icon: APP_ICON_PATH,
     webPreferences: {

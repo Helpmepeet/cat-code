@@ -3822,7 +3822,13 @@ export function App() {
   return (
     <AgentFaceRegistryStoreContext.Provider value={faceRegistries}>
     <AgentFaceRegistryContext.Provider value={faceRegistry}>
-      <div className="flex h-screen bg-app-bg font-sans text-text-primary">
+      {/* `data-window-ground`: this frame repeats the page ground that `html`
+       * and `body` already paint. Harmless while they are opaque, and marked so
+       * glass mode can stop the three from compounding (`theme.css`). */}
+      <div
+        className="flex h-screen bg-app-bg font-sans text-text-primary"
+        data-window-ground
+      >
         {/* Sidebar rail (P3-5b): the full roster (live ∪ restorable) + the
          * restore-offer, alongside the TabBar's live ∪ preview view. */}
         <Sidebar

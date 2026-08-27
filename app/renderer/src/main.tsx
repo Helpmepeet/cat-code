@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { AccentThemeProvider } from './AccentThemeProvider.js'
 import { App } from './App.js'
 import { CodeThemeProvider } from './CodeThemeProvider.js'
+import { GlassModeProvider } from './GlassModeProvider.js'
 import { ReasoningLayoutProvider } from './ReasoningLayoutProvider.js'
 import { ToastHost } from './ToastHost.js'
 import { ProseArrivalProvider } from './ProseArrivalProvider.js'
@@ -32,26 +33,32 @@ if (!root) {
 // preferences, because its wrapper is what carries `data-accent`: anything
 // rendered outside it keeps the default pink no matter what the user picked, and
 // a toast is exactly the kind of chrome that would silently miss the accent.
+//
+// `GlassModeProvider` sits outermost and renders no wrapper at all: it stamps the
+// document element, which is above `#root`, so its position here buys ordering
+// rather than coverage.
 createRoot(root).render(
   <StrictMode>
     <RendererErrorBoundary
       onFault={fault => reportFault(fault.kind, fault.message)}
     >
-      <AccentThemeProvider>
-        <ToastHost>
-          <ReasoningLayoutProvider>
-            <CodeThemeProvider>
-              <ToolsExpandedProvider>
-                <ToolCardStyleProvider>
-                  <ProseArrivalProvider>
-                    <App />
-                  </ProseArrivalProvider>
-                </ToolCardStyleProvider>
-              </ToolsExpandedProvider>
-            </CodeThemeProvider>
-          </ReasoningLayoutProvider>
-        </ToastHost>
-      </AccentThemeProvider>
+      <GlassModeProvider>
+        <AccentThemeProvider>
+          <ToastHost>
+            <ReasoningLayoutProvider>
+              <CodeThemeProvider>
+                <ToolsExpandedProvider>
+                  <ToolCardStyleProvider>
+                    <ProseArrivalProvider>
+                      <App />
+                    </ProseArrivalProvider>
+                  </ToolCardStyleProvider>
+                </ToolsExpandedProvider>
+              </CodeThemeProvider>
+            </ReasoningLayoutProvider>
+          </ToastHost>
+        </AccentThemeProvider>
+      </GlassModeProvider>
     </RendererErrorBoundary>
   </StrictMode>,
 )
