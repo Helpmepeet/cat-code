@@ -399,18 +399,37 @@ html[data-appearance='light'] {
    * are the dimmest marks in the set; moving them would flatten the ramp. */
 
   --color-white: #18181b;
-  /* A mid grey, not the zinc-700 this first shipped with. The recessed wash
-   * serves alphas from 0.20 up to 0.40 (`toolCardStyle.ts`, `PermissionPrompt`'s
-   * diff wells, `ToolInspector`'s output pane), and at the deep end a darker
-   * value put `text-text-muted` under 4.5:1 on the very surfaces the light
-   * palette was reserved for.
+  /*
+   * THE RECESSED WASH IS A HAIRLINE'S JOB HERE, not a fill, and this value is
+   * set by matching the dark appearance rather than by taste.
    *
-   * MEASURED IN THE BROWSER, not computed. `color-mix(in oklab, X 40%,
-   * transparent)` composited over the panel is not a naive sRGB blend of the two,
-   * and an sRGB estimate said 4.45:1 where a canvas rasterisation of the real
-   * rule said 2.55:1 for the same value. At this one the range reads 4.78:1 at
-   * `/40` up to 5.92:1 at `/20`, so a single token still covers it. */
-  --color-black: #8a8a93;
+   * Rasterised at every alpha this token serves (`toolCardStyle.ts` /20 and
+   * /[0.28], `PermissionPrompt`'s diff wells /30, `ToolInspector`'s output pane
+   * /40), the dark ground moves by 0 or 1 level at ALL FOUR: a tool output band
+   * in dark is the page, and its border is the whole of what draws it. That is
+   * the grammar the fenced-code rule states in words further up — code sits IN
+   * the page, not on a coloured slab.
+   *
+   * At #8a8a93, the value this first shipped with, light moved by 25 to 50
+   * levels for the same alphas, so the same component was a hairline in one
+   * appearance and a grey slab in the other (operator, 2026-08-28, reading
+   * #e7e6e8 off a collapsed Bash card). #e6e6ea brings that to 5 to 10, which is
+   * a recess you can see without it reading as a fill.
+   *
+   * IT ALSO FIXES A CONTRAST MISS. #8a8a93 put `--text-faint` at 4.1:1 on the
+   * shallowest of these wells and 3.3:1 on the deepest, i.e. under the app's own
+   * bar on every one of them; the earlier note here only ever checked
+   * `--text-muted`, which passed and hid it. Lightening the wash raises both,
+   * since the ink is dark: the range is now 7.2:1 down to 6.9:1 for muted and
+   * 5.0:1 down to 4.8:1 for faint.
+   *
+   * MEASURED IN THE BROWSER, not computed, and this is the one place that
+   * matters most: `color-mix(in oklab, X 40%, transparent)` composited over the
+   * page is not a naive sRGB blend, and an sRGB estimate once said 4.45:1 where
+   * a real rasterisation of the same rule said 2.55:1. Every number above is a
+   * pixel read back out of `capturePage`.
+   */
+  --color-black: #e6e6ea;
 
   /* Tones and accents move from the 400 level to 600/700. A 400-level hue is a
    * legible fill on black and roughly 2.5:1 as text on white, and these carry

@@ -252,6 +252,39 @@ test('the light appearance turns the two hardcoded washes around', () => {
 })
 
 /**
+ * The recessed wash has to stay NEAR the ground it recesses into, which is the
+ * one thing a presence check above cannot see.
+ *
+ * `--color-black` backs a tool output band, a diff well and the inspector's
+ * output pane, at alphas from 0.20 to 0.40. Rasterised, the DARK appearance
+ * moves its ground by 0 or 1 level at every one of those: the well is drawn by
+ * its hairline, which is the same grammar the fenced-code rule states in words.
+ * The light appearance shipped at `#8a8a93` and moved by 25 to 50 levels for the
+ * identical component, and put `--text-faint` under 4.5:1 on all four wells
+ * while `--text-muted` passed and hid it.
+ *
+ * Asserted as a distance from `--app-bg` rather than as a fixed hex, because the
+ * value is not the point and a future ground would move it. 24 levels is well
+ * inside the 25 the old value failed at and well outside the 10 the current one
+ * uses, so it fails on a regression without pinning taste.
+ */
+test('the light recessed wash stays near the ground it recesses into', () => {
+  const block = themeCss().match(/html\[data-appearance='light'\]\s*\{([^}]*)\}/)
+  const read = (token: string): number[] => {
+    const hex = new RegExp(`${token}:\\s*#([0-9a-fA-F]{6})`).exec(block?.[1] ?? '')
+    expect(hex).not.toBeNull()
+    const value = hex?.[1] ?? ''
+    return [0, 2, 4].map(i => parseInt(value.slice(i, i + 2), 16))
+  }
+  const ground = read('--app-bg')
+  const wash = read('--color-black')
+  const distance = Math.max(...ground.map((c, i) => Math.abs(c - (wash[i] ?? 0))))
+  expect(distance).toBeLessThanOrEqual(24)
+  // A darkening, never a lightening: the role is a RECESS in both appearances.
+  expect(wash[0]).toBeLessThan(ground[0] ?? 0)
+})
+
+/**
  * `--accent` is declared on a wrapper INSIDE `html` by `AccentThemeProvider`, and
  * a descendant's own declaration beats an inherited one. So the four non-default
  * accents need their own light rules; without them, picking blue on a light shell
