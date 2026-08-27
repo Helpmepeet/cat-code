@@ -153,10 +153,11 @@ tears down all three (`app/scripts/dev.ts`). Facts that follow from that:
   surface), and Vite runs unused. `prepare-dev-electron.ts` rebrands via the
   Info.plist display keys ONLY, and keeps the executable named `electron`, for
   exactly this reason — do not "tidy" that. Symptom when it breaks: renderer
-  edits do not appear no matter how many times you relaunch. Checks: the window
-  title is `Cat Code Dev` (`app.setName` runs only under `IS_DEV`), and main
-  logs a loud warning when `CATCODE_RENDERER_URL` is set but the packaged branch
-  wins. Cost the first time this happened, undiagnosed: hours (2026-07-28).
+  edits do not appear no matter how many times you relaunch. Checks: the app
+  name is `Cat Code Dev` (`app.setName` runs only under `IS_DEV`) in the menu bar
+  and in AX discovery — NOT on screen, since 2026-08-28 the window has no title
+  bar to print it in (`titleBarStyle: 'hiddenInset'`, CC-77) — and main logs a
+  loud warning when `CATCODE_RENDERER_URL` is set but the packaged branch wins. Cost the first time this happened, undiagnosed: hours (2026-07-28).
 - Launching it is a **GUI action on the operator's machine** (§8): give them the
   command, don't run it yourself without authorization for that run. It steals
   focus and it is often already open with their live work.

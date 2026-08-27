@@ -3,8 +3,11 @@
 This process is for agent-driven GUI rows after P3-H. The harness helps locate
 and cross-check state; it does not replace observing the live app.
 
-The dev desktop app presents as **Cat Code Dev** in the window title and AX app
-discovery. GUI-driving agents should use that string to find the right window.
+The dev desktop app presents as **Cat Code Dev** in AX app discovery and the
+menu bar. GUI-driving agents should use that string to find the right window.
+It is not painted anywhere on screen: since CC-77 the window has no title bar
+(`titleBarStyle: 'hiddenInset'`), and the traffic lights sit in the app's own
+tab bar.
 
 ## Dev Harness Launch
 
