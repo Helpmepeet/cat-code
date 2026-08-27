@@ -212,6 +212,27 @@ html[data-glass='on'] [data-window-chrome] {
   background: rgba(7, 7, 9, 0.12);
 }
 
+/*
+ * An OVERLAY, which is a different thing from flow chrome and was briefly
+ * confused with it. The sidebar is `fixed inset-y-0 z-50` and expands OVER the
+ * tab bar and the transcript, so alpha alone let the session titles underneath
+ * read straight through the ones on top of them.
+ *
+ * `backdrop-filter` is the fix and is what a native translucent sidebar does:
+ * what is behind becomes an unreadable wash instead of legible text, and the
+ * ambient tone of the wallpaper survives, which a denser flat alpha would kill.
+ * Measured side by side against alpha .55 before choosing it (2026-08-27); the
+ * risk it was checked against is that a backdrop filter over a translucent root
+ * has nothing to sample and composites BLACK. It does not here.
+ *
+ * The alpha stays at the chrome value: the blur is doing the occluding, so this
+ * only has to supply tint.
+ */
+html[data-glass='on'] [data-window-overlay] {
+  background: rgba(7, 7, 9, 0.12);
+  backdrop-filter: blur(22px);
+}
+
 @theme inline {
   --color-app-bg: #09090b;
   /* Shell chrome (P3-5a): the TabBar / sidebar rail sit one step darker than

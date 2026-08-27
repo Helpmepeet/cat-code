@@ -197,9 +197,17 @@ test('the sidebar and tab bar are thinned, and no floating menu is', () => {
     readFileSync(new URL(`./${name}`, import.meta.url), 'utf8')
       .replace(/\{\/\*[\s\S]*?\*\/\}/g, blankOut)
       .replace(/\/\*[\s\S]*?\*\//g, blankOut)
-  for (const file of ['TabBar.tsx', 'Sidebar.tsx']) {
-    expect(strip(file)).toContain('data-window-chrome')
-  }
+  expect(strip('TabBar.tsx')).toContain('data-window-chrome')
+
+  // The sidebar is an OVERLAY, and the distinction is the whole finding: it
+  // expands over the tab bar and the transcript, so thinning it without blurring
+  // let the titles underneath read through the ones on top (operator,
+  // 2026-08-27). The blur is what occludes; alpha alone is not enough.
+  expect(strip('Sidebar.tsx')).toContain('data-window-overlay')
+  expect(strip('Sidebar.tsx')).not.toContain('data-window-chrome')
+  const overlay = css.match(/html\[data-glass='on'\] \[data-window-overlay\]\s*\{([^}]*)\}/)
+  expect(overlay).not.toBeNull()
+  expect(overlay?.[1]).toMatch(/backdrop-filter:\s*blur\(/)
 
   // A `fixed`/`absolute` element on the chrome token is a floating menu, and
   // must stay opaque over the transcript.
@@ -212,7 +220,7 @@ test('the sidebar and tab bar are thinned, and no floating menu is', () => {
       if (!line.includes('bg-shell-chrome')) return
       if (!/\b(fixed|absolute)\b/.test(line)) return
       const chunk = lines.slice(Math.max(0, i - 6), i + 7).join('\n')
-      if (chunk.includes('data-window-chrome')) leaking.push(`${file}:${i + 1}`)
+      if (/data-window-(chrome|overlay)/.test(chunk)) leaking.push(`${file}:${i + 1}`)
     })
   }
   expect(leaking).toEqual([])

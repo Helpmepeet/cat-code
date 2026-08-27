@@ -787,8 +787,10 @@ export function Sidebar({
           setFocusWithin(false)
         }}
         aria-label="Primary"
-        /* Flow chrome, thinned by glass (`theme.css`), same as the tab bar. */
-        data-window-chrome
+        /* An OVERLAY, not flow chrome: this expands over the tab bar and the
+         * transcript, so glass has to blur what is behind it, not just thin it
+         * (`theme.css`). */
+        data-window-overlay
         className={
           'fixed inset-y-0 left-0 z-50 flex flex-col overflow-hidden border-r border-white/[0.05] bg-surface-panel transition-[width,box-shadow] duration-200 ease-out ' +
           (open
