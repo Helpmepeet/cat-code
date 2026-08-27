@@ -1930,7 +1930,7 @@ const FAMILY_STYLE: Record<
   mcp: { mark: '⧉', word: 'MCP', color: 'text-[#c084fc]' },
   notebook: { mark: '▣', word: 'Notebook', color: 'text-[#f97316]' },
   lsp: { mark: '◈', word: 'LSP', color: 'text-[#f87171]' },
-  skill: { mark: '✦', word: 'Skill', color: 'text-[#5eead4]' },
+  skill: { mark: '§', word: 'Skill', color: 'text-[#5eead4]' },
   agent: { mark: '◆', word: 'Agent', color: 'text-accent' },
   // Same WORD as the spawn family, hollow mark against its filled one: ◆ creates
   // an agent, ◇ acts on one that already exists. The hue is the prototype's own
