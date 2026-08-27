@@ -109,30 +109,36 @@ export type ContextBreakdownRow = {
  * category the engine adds later must still be visible and still counted.
  */
 const CATEGORY_SWATCH: Record<string, string> = {
-  promptBorder: 'bg-[#a1a1aa]', // System prompt
-  inactive: 'bg-[#60a5fa]', // System tools (the prototype's "Tool definitions")
-  purple_FOR_SUBAGENTS_ONLY: 'bg-[#f472b6]', // Messages
-  claude: 'bg-[#c084fc]', // Memory files
-  cyan_FOR_SUBAGENTS_ONLY: 'bg-[#22d3ee]', // MCP tools
-  permission: 'bg-[#5eead4]', // Custom agents
-  warning: 'bg-[#fbbf24]', // Skills
+  promptBorder: 'bg-[light-dark(#52525b,#a1a1aa)]', // System prompt
+  inactive: 'bg-[light-dark(#2563eb,#60a5fa)]', // System tools (the prototype's "Tool definitions")
+  purple_FOR_SUBAGENTS_ONLY: 'bg-[light-dark(#be185d,#f472b6)]', // Messages
+  claude: 'bg-[light-dark(#7c3aed,#c084fc)]', // Memory files
+  cyan_FOR_SUBAGENTS_ONLY: 'bg-[light-dark(#0e7490,#22d3ee)]', // MCP tools
+  permission: 'bg-[light-dark(#0f766e,#5eead4)]', // Custom agents
+  warning: 'bg-[light-dark(#b45309,#fbbf24)]', // Skills
 }
 
 /** The same hues as {@link CATEGORY_SWATCH}, as raw values for the donut
  * chart's SVG `stroke` (never derived from the class string — that would
  * mean parsing a Tailwind literal back apart, fragile for no reason when the
- * source hex is right here). */
+ * source hex is right here).
+ *
+ * ALL THREE TABLES CARRY THE SAME PAIR PER KEY, and that is the point: the
+ * legend dot, the donut arc and the label are one row of one legend, so a table
+ * that moved to light values without the others would draw a dot in a different
+ * colour from its own text. The light halves step the 400-level dark hues to
+ * 600/700, because a 400 measures around 2.5:1 on a near-white ground. */
 const CATEGORY_COLOR_HEX: Record<string, string> = {
-  promptBorder: '#a1a1aa',
-  inactive: '#60a5fa',
-  purple_FOR_SUBAGENTS_ONLY: '#f472b6',
-  claude: '#c084fc',
-  cyan_FOR_SUBAGENTS_ONLY: '#22d3ee',
-  permission: '#5eead4',
-  warning: '#fbbf24',
+  promptBorder: 'light-dark(#52525b, #a1a1aa)',
+  inactive: 'light-dark(#2563eb, #60a5fa)',
+  purple_FOR_SUBAGENTS_ONLY: 'light-dark(#be185d, #f472b6)',
+  claude: 'light-dark(#7c3aed, #c084fc)',
+  cyan_FOR_SUBAGENTS_ONLY: 'light-dark(#0e7490, #22d3ee)',
+  permission: 'light-dark(#0f766e, #5eead4)',
+  warning: 'light-dark(#b45309, #fbbf24)',
 }
 
-/** The same hues once more as static `text-*` classes (see `textClass`). Written
+/** The same pairs once more as static `text-*` classes (see `textClass`). Written
  * out rather than derived from {@link CATEGORY_SWATCH} for the same reason
  * {@link CATEGORY_COLOR_HEX} is: `bg-` → `text-` string surgery on a Tailwind
  * literal is fragile, and the source hex is right here. */

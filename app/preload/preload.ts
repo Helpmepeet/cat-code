@@ -451,15 +451,15 @@ const bridge: CatCodeBridge = {
       // Diagnostics only. Never surfaces to the caller.
     }
   },
-  setAppearance(appearance: 'light' | 'dark'): void {
+  setAppearance(scheme: 'system' | 'light' | 'dark'): void {
     // Narrowed HERE as well as in main, even though main is the trust boundary
     // and re-checks it. This one is cheap and it keeps the preload's promise
     // that nothing leaves this file whose shape it has not stated: the renderer
-    // is compiled against a two-value union, and a bundle that drifted off that
-    // union should stop here rather than reach an `ipcMain` handler.
-    if (appearance !== 'light' && appearance !== 'dark') return
-    sendGuard.assertAllowed({ appearance })
-    ipcRenderer.send(CH_SET_APPEARANCE, appearance)
+    // is compiled against a three-value union, and a bundle that drifted off it
+    // should stop here rather than reach an `ipcMain` handler.
+    if (scheme !== 'system' && scheme !== 'light' && scheme !== 'dark') return
+    sendGuard.assertAllowed({ scheme })
+    ipcRenderer.send(CH_SET_APPEARANCE, scheme)
   },
   openLogsFolder(): void {
     sendGuard.assertAllowed({ openLogs: true })

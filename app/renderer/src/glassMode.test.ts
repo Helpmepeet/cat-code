@@ -235,6 +235,10 @@ test('the sidebar and tab bar are thinned, and no floating menu is', () => {
   const overlay = css.match(/html\[data-glass='on'\] \[data-window-overlay\]\s*\{([^}]*)\}/)
   expect(overlay).not.toBeNull()
   expect(overlay?.[1]).toMatch(/backdrop-filter:\s*blur\(/)
+  // The tint under the blur, both halves, for the same reason the other two
+  // rules check both: an opaque value on either side is an overlay that stops
+  // being glass in that appearance while still passing every shape check.
+  expect(translucentPair(overlay?.[1] ?? '')).toEqual({ light: true, dark: true })
 
   // A `fixed`/`absolute` element on the chrome token is a floating menu, and
   // must stay opaque over the transcript.

@@ -39,11 +39,13 @@ if (!root) {
 // element, which is above `#root`, so unlike the accent it covers the tree from
 // wherever it sits and its position here carries no meaning.
 //
-// `ColorSchemeProvider` stamps that same document element, and ITS position does
-// carry meaning: it has to sit above glass. Glass reads its alphas out of
-// `light-dark()`, which resolves against the `color-scheme` the appearance sets,
-// so an appearance applied second would put the dark glass ground on a light
-// window for the first paint after every reload.
+// `ColorSchemeProvider` stamps that same document element, and its position
+// carries no meaning either. Both stamp in the LAYOUT phase, and every layout
+// effect runs before the browser paints, so no frame can show one stamp without
+// the other whichever lands first. This comment previously claimed the nesting
+// order was what kept the dark glass ground off a light window; it never could
+// be, because the appearance stamp was a passive effect at the time and passive
+// effects run after paint. The phase is the guarantee, not the nesting.
 createRoot(root).render(
   <StrictMode>
     <RendererErrorBoundary

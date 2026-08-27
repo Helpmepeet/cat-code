@@ -668,9 +668,11 @@ test('ContextUsagePanel draws a per-category donut, legend and Free row', () => 
   // A deferred category occupies nothing, so it earns neither a row nor a segment.
   expect(html).not.toContain('MCP tools (deferred)')
   // The donut ring: one arc per category, coloured by its own hue, an SVG
-  // presentation attribute rather than a Tailwind class.
-  expect(html).toContain('stroke="#a1a1aa"') // System prompt
-  expect(html).toContain('stroke="#c084fc"') // Messages
+  // presentation attribute rather than a Tailwind class. It carries the SAME
+  // light/dark pair the legend swatch does, which is the invariant that keeps a
+  // dot from being a different colour than its own label.
+  expect(html).toContain('stroke="light-dark(#52525b, #a1a1aa)"') // System prompt
+  expect(html).toContain('stroke="light-dark(#7c3aed, #c084fc)"') // Messages
   // Segments are notched apart, not butted: the ring is drawn at the thinner
   // stroke that keeps the notches readable, and the first arc already starts a
   // half-gap in (nothing drawn before it, so the offset is the half-gap alone).

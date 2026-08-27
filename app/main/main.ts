@@ -2253,19 +2253,23 @@ function registerIpcHandlers(): void {
    * on a window that already exists, so this needs no persistence and no
    * involvement in window creation.
    *
-   * FAIL CLOSED on the vocabulary, like every other inbound handler here. The
-   * renderer sends one of two literals; anything else is dropped rather than
-   * coerced, because `themeSource` also accepts `'system'` and a sloppy cast
-   * would let a malformed payload hand the window back to the OS.
+   * IT RECEIVES THE USER'S CHOICE, NOT THE APPEARANCE BEING PAINTED, and
+   * `'system'` is the value that makes the feature work rather than a widening.
+   * `themeSource` is an OVERRIDE: assigning `light` or `dark` supersedes the OS
+   * and pins the renderer's own `prefers-color-scheme`, which is the query the
+   * renderer resolves `system` against. An earlier version sent the resolved
+   * appearance, so the first time anyone left the app on "Match system" main
+   * force-pinned that value and the OS could never move it again. `system`
+   * releases the override; the three values are exactly the state machine
+   * Electron's own `themeSource` documentation prescribes.
    *
-   * `'system'` is never sent. The renderer resolves that choice itself against
-   * `prefers-color-scheme` — which Chromium keeps in step with `nativeTheme` in
-   * both directions — so main only ever hears the appearance actually being
-   * painted. Which keeps this handler total: two inputs, two outcomes.
+   * FAIL CLOSED on the vocabulary, like every other inbound handler here: the
+   * set is closed and anything outside it is dropped rather than coerced, so a
+   * malformed payload can neither pin nor release the appearance.
    */
-  ipcMain.on(CH_SET_APPEARANCE, (_event, appearance: unknown) => {
-    if (appearance !== 'light' && appearance !== 'dark') return
-    nativeTheme.themeSource = appearance
+  ipcMain.on(CH_SET_APPEARANCE, (_event, scheme: unknown) => {
+    if (scheme !== 'system' && scheme !== 'light' && scheme !== 'dark') return
+    nativeTheme.themeSource = scheme
   })
 
   ipcMain.on(CH_OPEN_LOGS, () => {

@@ -159,14 +159,28 @@
   --scrim: rgba(0, 0, 0, 0.6);
 
   /*
-   * Elevation. 22 floating surfaces hardcoded their own
-   * `shadow-[0_18px_44px_rgba(0,0,0,0.6)]`, which is correct on a near-black
-   * ground and reads as soot on a near-white one. Six tokens replace them.
+   * Elevation. 22 floating surfaces hardcoded a black drop shadow, correct on a
+   * near-black ground and soot on a near-white one. Six role tokens replace them.
+   *
+   * THIS NORMALISED THE DARK APPEARANCE, it did not only add a light one. Those
+   * 22 sites carried 16 DISTINCT values, most of them a few px or 0.05 alpha
+   * apart with no rule behind the difference; 13 of them now render a slightly
+   * different dark shadow than before. Two are worth naming because they are the
+   * largest moves rather than rounding: the slash-command picker goes from
+   * `0 20px 48px/.7` to the popover token's `0 14px 38px/.5`, and the command
+   * palette from `0 28px 70px/.7` to the modal token's `0 30px 80px/.6`. Every
+   * other delta is under 6px of blur and 0.1 of alpha. Recorded rather than
+   * described as a no-op, because "the dark appearance is untouched" is true of
+   * every colour in this change and is NOT true of these.
    *
    * Light is not the dark shadow at a lower alpha: it is two layers, a wide soft
    * one for the lift and a tight dark one for the contact edge, because on a
    * light ground a single wide shadow reads as a smudge with no edge and the
    * surface stops looking like it is above the page.
+   *
+   * `--card-ring` is not elevation. It is the hairline one card draws INSIDE its
+   * shadow, kept separate so the ring can inherit the seam's job (separate a
+   * surface from its ground) while the shadow keeps its own.
    */
   --elev-menu: 0 18px 44px rgba(0, 0, 0, 0.6);
   --elev-modal: 0 30px 80px rgba(0, 0, 0, 0.6);
@@ -174,6 +188,7 @@
   --elev-drawer: -20px 0 60px rgba(0, 0, 0, 0.6);
   --elev-rail: 4px 0 24px rgba(0, 0, 0, 0.45);
   --elev-toast: 0 12px 32px rgba(0, 0, 0, 0.4);
+  --card-ring: rgba(0, 0, 0, 0.4);
 
   /* The scrollbar thumb is painted in `@layer base` on every scroller in the
    * app, and it is a white wash like the seams. */
@@ -300,6 +315,7 @@ html[data-appearance='light'] {
   --elev-drawer: -16px 0 44px rgba(24, 24, 27, 0.13);
   --elev-rail: 4px 0 20px rgba(24, 24, 27, 0.1);
   --elev-toast: 0 10px 26px rgba(24, 24, 27, 0.13), 0 2px 5px rgba(24, 24, 27, 0.08);
+  --card-ring: rgba(24, 24, 27, 0.1);
 
   --scrollbar-thumb: rgba(9, 9, 11, 0.18);
   --scrollbar-thumb-hover: rgba(9, 9, 11, 0.32);
@@ -326,8 +342,75 @@ html[data-appearance='light'] {
    * they were ink on a coloured button, which is a different role and would have
    * inverted into unreadability here.
    */
+  /*
+   * TAILWIND'S OWN PALETTE, for the 155 places the renderer reaches past this
+   * file's tokens and names a shade directly (`text-teal-300`, `bg-zinc-500`,
+   * `border-purple-400/30`) across 12 files: the subagent chrome, the task
+   * roster, the permission tone labels, the usage charts.
+   *
+   * They were missed by the pass that converted their ~90 arbitrary-hex
+   * siblings, because a sweep for `text-[#hex]` does not see `text-teal-300`.
+   * On a near-white ground the 200/300/400 shades measure between 1.34:1 and
+   * 2.82:1, i.e. illegible as text and nearly invisible as a dot.
+   *
+   * Reachable for the same reason `--color-white` is: these are ordinary theme
+   * tokens, so every utility Tailwind generates from them resolves through
+   * `var(--color-teal-300)`. Redeclaring the shade IS the repaint, and it costs
+   * one line each instead of 155 edits.
+   *
+   * Written as `var(--color-<hue>-700)` rather than a hex so the light value is
+   * Tailwind's own published shade, and so the step is legible as a step.
+   *
+   * SAFE ONLY BECAUSE EVERY USE IS A MARK, never a ground: dots, bars, hairlines,
+   * washes and text, all read against the page. Verified per token before this
+   * was written. A future `bg-zinc-800` used as a panel ground would NOT belong
+   * here, and would need its own token instead.
+   */
+  --color-amber-300: var(--color-amber-700);
+  --color-amber-400: var(--color-amber-700);
+  --color-amber-500: var(--color-amber-700);
+  --color-blue-300: var(--color-blue-700);
+  --color-blue-400: var(--color-blue-700);
+  --color-blue-500: var(--color-blue-700);
+  --color-cyan-400: var(--color-cyan-700);
+  --color-emerald-300: var(--color-emerald-700);
+  --color-emerald-400: var(--color-emerald-700);
+  --color-emerald-500: var(--color-emerald-700);
+  --color-fuchsia-300: var(--color-fuchsia-700);
+  --color-green-400: var(--color-green-700);
+  --color-lime-300: var(--color-lime-700);
+  --color-orange-300: var(--color-orange-700);
+  --color-orange-400: var(--color-orange-700);
+  --color-purple-200: var(--color-purple-700);
+  --color-purple-300: var(--color-purple-700);
+  --color-purple-400: var(--color-purple-700);
+  --color-red-300: var(--color-red-700);
+  --color-red-400: var(--color-red-700);
+  --color-rose-300: var(--color-rose-700);
+  --color-sky-300: var(--color-sky-700);
+  --color-sky-400: var(--color-sky-700);
+  --color-stone-400: var(--color-stone-600);
+  --color-teal-300: var(--color-teal-700);
+  --color-violet-300: var(--color-violet-700);
+  --color-violet-400: var(--color-violet-700);
+  --color-zinc-400: var(--color-zinc-600);
+  --color-zinc-500: var(--color-zinc-600);
+  /* zinc-600 and zinc-700 are already dark enough to read on a light ground and
+   * are the dimmest marks in the set; moving them would flatten the ramp. */
+
   --color-white: #18181b;
-  --color-black: #3f3f46;
+  /* A mid grey, not the zinc-700 this first shipped with. The recessed wash
+   * serves alphas from 0.20 up to 0.40 (`toolCardStyle.ts`, `PermissionPrompt`'s
+   * diff wells, `ToolInspector`'s output pane), and at the deep end a darker
+   * value put `text-text-muted` under 4.5:1 on the very surfaces the light
+   * palette was reserved for.
+   *
+   * MEASURED IN THE BROWSER, not computed. `color-mix(in oklab, X 40%,
+   * transparent)` composited over the panel is not a naive sRGB blend of the two,
+   * and an sRGB estimate said 4.45:1 where a canvas rasterisation of the real
+   * rule said 2.55:1 for the same value. At this one the range reads 4.78:1 at
+   * `/40` up to 5.92:1 at `/20`, so a single token still covers it. */
+  --color-black: #8a8a93;
 
   /* Tones and accents move from the 400 level to 600/700. A 400-level hue is a
    * legible fill on black and roughly 2.5:1 as text on white, and these carry
@@ -1153,13 +1236,17 @@ html[data-glass='on'] [data-window-overlay] {
  * page turns every one of these palettes into pale ink on near-white. Each
  * declaration therefore carries a `light-dark()` pair whose SECOND value is the
  * dark hex unchanged, and whose first is that theme's own published light
- * sibling: Alucard for Dracula, One Light for One Dark, Nord's Snow Storm
- * inversion, GitHub Light, Monokai Light. A theme picked by name stays that
- * theme in both appearances instead of being swapped for one generic light one.
+ * sibling WHERE ONE EXISTS. GitHub Light is exact. Alucard (Dracula's own light
+ * theme) and One Light are the published palettes, with four values adjusted:
+ * Alucard's comment and attr hues, and two of One Light's (its comment grey and
+ * its green) darkened a step to clear 3.5:1 on this ground.
  *
- * Two of One Light's own values (its comment grey and its green) are darkened a
- * step to clear 3.5:1 on this ground; every other value is the published hex.
- * Same kind of deviation, and the same reason, as the text ramp above.
+ * NORD AND MONOKAI HAVE NO PUBLISHED LIGHT SYNTAX SIBLING. Their light halves
+ * are derived here — Nord's own Snow Storm ground with its Frost and Aurora hues
+ * darkened, Monokai's palette darkened to the same contrast floor — so they are
+ * this file's work, not an upstream palette, and should be judged by eye rather
+ * than checked against a source. A theme picked by name still stays that theme
+ * in both appearances instead of being swapped for one generic light one.
  *
  * Written as pairs rather than a parallel `html[data-appearance='light']` block
  * because a duplicated palette drifts: both halves of a token sit on one line,

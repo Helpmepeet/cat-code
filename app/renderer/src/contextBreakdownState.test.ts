@@ -90,7 +90,7 @@ test('an unknown colour key falls back to a static swatch class', () => {
   const future = rows.find(r => r.label === 'Future thing')
   expect(future?.swatch).toBe('bg-white/25')
   // The prototype's per-category identity hue (data.js:3316), not a status tone.
-  expect(rows.find(r => r.label === 'System prompt')?.swatch).toBe('bg-[#a1a1aa]')
+  expect(rows.find(r => r.label === 'System prompt')?.swatch).toBe('bg-[light-dark(#52525b,#a1a1aa)]')
   for (const row of rows) {
     expect(row.swatch).not.toContain('${')
   }
@@ -180,7 +180,7 @@ test('reserved space does not borrow the System tools hue', () => {
       { label: 'Compact buffer', tokens: 3_000, colorKey: 'inactive', deferred: false },
     ],
   })
-  expect(rows.find(r => r.label === 'System tools')?.swatch).toBe('bg-[#60a5fa]')
+  expect(rows.find(r => r.label === 'System tools')?.swatch).toBe('bg-[light-dark(#2563eb,#60a5fa)]')
   expect(rows.find(r => r.label === 'Compact buffer')?.swatch).toBe('bg-white/25')
 })
 

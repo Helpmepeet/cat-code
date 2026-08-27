@@ -142,7 +142,7 @@ function DangerBtn({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="rounded-lg bg-tone-danger px-3.5 py-2 text-[13px] font-semibold text-on-fill disabled:opacity-50"
+      className="rounded-lg bg-[light-dark(#dc2626,#ef4444)] px-3.5 py-2 text-[13px] font-semibold text-[#fff] disabled:opacity-50"
     >
       {children}
     </button>

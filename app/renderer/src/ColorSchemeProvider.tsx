@@ -1,29 +1,34 @@
 /**
  * Owns the appearance preference, publishes it, stamps it, and tells main.
  *
- * Mounted at the composition root beside `GlassModeProvider` (`main.tsx`) and
- * ABOVE it in the tree, for one reason that matters: glass reads its alphas out
- * of `light-dark()`, so the appearance has to be on the document before glass
- * can mean anything. Both stamp the document element rather than a wrapper, so
- * neither renders anything of its own.
+ * Mounted at the composition root beside `GlassModeProvider` (`main.tsx`). Both
+ * stamp the document element rather than a wrapper, so neither renders anything
+ * of its own, and both stamp in the LAYOUT phase — which is what makes their
+ * relative order in the tree not matter. Every layout effect runs before the
+ * browser paints, so no frame can show one stamp without the other, whichever
+ * lands first. (An earlier version of this file put the appearance in a passive
+ * effect and then claimed the nesting order fixed the resulting flash. It could
+ * not: passive effects run after paint, so glass always won regardless.)
  *
- * THREE INPUTS, ONE OUTPUT. The stored choice and the OS's current answer
- * resolve to a single appearance (`resolveAppearance`), and that appearance is
- * what reaches both the document and main. The OS half is a live subscription,
- * not a one-time read: with `system` picked, flipping macOS between light and
- * dark has to repaint the window without a relaunch.
+ * TWO OUTPUTS, AND THEY CARRY DIFFERENT VALUES. The stored choice plus the OS's
+ * current answer resolve to one appearance (`resolveAppearance`), and that
+ * RESOLVED value is stamped on the document for the CSS. Main is told the CHOICE
+ * instead — see the note on the notify effect for why sending it the resolved
+ * value breaks "Match system" permanently.
  *
- * The `matchMedia` subscription stays mounted under `light` and `dark` too. It
- * costs nothing, and dropping it would mean the app stops tracking the OS the
- * moment someone forces a mode and never starts again if they switch back.
+ * The OS half is a live subscription, not a one-time read: with `system` picked,
+ * flipping macOS between light and dark has to repaint the window without a
+ * relaunch. The subscription stays mounted under `light` and `dark` too; it costs
+ * nothing, and dropping it would mean the app stops tracking the OS the moment
+ * someone forces a mode and never starts again if they switch back.
  *
- * `storage`, `root`, `media` and `setAppearance` are injectable so a test can
- * drive the real read/write, stamp and notify paths without touching globals;
- * they default to this renderer's own `localStorage`, `documentElement`,
+ * `storage`, `root`, `media` and `onScheme` are injectable so a test can drive
+ * the real read/write, stamp and notify paths without touching globals; they
+ * default to this renderer's own `localStorage`, `documentElement`,
  * `window.matchMedia` and the preload bridge.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   applyAppearance,
@@ -36,7 +41,6 @@ import {
   type AppearanceRoot,
   type ColorSchemeContextValue,
   type ColorSchemeKey,
-  type ResolvedAppearance,
 } from './colorScheme.js'
 import { getBridge } from './bridge.js'
 
@@ -74,8 +78,8 @@ function defaultMedia(): SchemeMediaQuery | null {
   }
 }
 
-function notifyMain(appearance: ResolvedAppearance): void {
-  getBridge().setAppearance(appearance)
+function notifyMain(scheme: ColorSchemeKey): void {
+  getBridge().setAppearance(scheme)
 }
 
 export function ColorSchemeProvider({
@@ -83,18 +87,23 @@ export function ColorSchemeProvider({
   storage,
   root,
   media,
-  onAppearance,
+  onScheme,
 }: {
   children: ReactNode
   storage?: ColorSchemeStorage | null
   root?: AppearanceRoot | null
   media?: SchemeMediaQuery | null
-  onAppearance?: (appearance: ResolvedAppearance) => void
+  onScheme?: (scheme: ColorSchemeKey) => void
 }) {
   const store = storage === undefined ? defaultStorage() : storage
   const target = root === undefined ? defaultRoot() : root
-  const query = media === undefined ? defaultMedia() : media
-  const notify = onAppearance ?? notifyMain
+  // `defaultMedia()` mints a NEW `MediaQueryList` on every call, so calling it in
+  // the render body would give `query` a fresh identity each render and make the
+  // subscribing effect below tear down and re-subscribe every time. Held in state
+  // so the subscription is created once.
+  const [defaultQuery] = useState<SchemeMediaQuery | null>(() => defaultMedia())
+  const query = media === undefined ? defaultQuery : media
+  const notify = onScheme ?? notifyMain
 
   const [scheme, setSchemeState] = useState<ColorSchemeKey>(
     () => readColorSchemeFromStorage(store) ?? DEFAULT_COLOR_SCHEME,
@@ -125,28 +134,47 @@ export function ColorSchemeProvider({
 
   const appearance = resolveAppearance(scheme, systemPrefersDark)
 
-  // Runs on mount as well as on change, which is what restores a stored choice:
-  // the stamp is on the document, so a reload starts it over.
-  useEffect(() => {
+  // BEFORE paint, not after, for the reason `GlassModeProvider` records: a
+  // passive effect runs once the browser has already painted, so every launch
+  // and every renderer reload would show one fully dark frame and then flip. The
+  // whole page ground, the text ramp and every `light-dark()` move at once here,
+  // so the flash is larger than the one that taught glass this. `useLayoutEffect`
+  // warns when there is no DOM to lay out and the renderer suites are
+  // `renderToStaticMarkup`, hence the swap.
+  const useStampEffect = typeof document === 'undefined' ? useEffect : useLayoutEffect
+  useStampEffect(() => {
     applyAppearance(target, appearance)
   }, [target, appearance])
 
-  // Separate from the stamp on purpose. The stamp is local and free; this one
-  // crosses a process boundary and swaps a native material, so it fires only
-  // when the resolved appearance actually changed, not on every render.
+  // MAIN IS TOLD THE CHOICE, NOT THE RESOLVED APPEARANCE, and this is the whole
+  // reason the preference works at all. `nativeTheme.themeSource` is an OVERRIDE:
+  // assigning it `light` or `dark` supersedes the OS and pins the renderer's own
+  // `prefers-color-scheme`, which is the query `system` resolves against. So
+  // sending the resolved value would have main force `dark` the moment a user on
+  // a dark Mac picks "Match system" — and from then on the query can never move,
+  // the subscription above can never fire, and "Match system" is frozen to
+  // whatever it happened to resolve to first. Measured, not reasoned: pick
+  // Match system, then Light, then Match system again, and a dark Mac ends up
+  // with a light window permanently (`nativeTheme.themeSource` reads `light`,
+  // and so does `systemPreferences.getEffectiveAppearance()`).
   //
-  // Best-effort, and the guard is HERE rather than inside the default notifier
-  // so that it holds for whatever is passed in. Telling main only selects a
-  // native material: the page has already painted the appearance the user chose
-  // by this point, the preload's own rate guard can legitimately refuse a send,
-  // and a taste preference must never be able to raise into the session.
+  // Passing the choice through gives Electron the three-state machine its own
+  // docs describe (Follow OS / Light / Dark), and `system` RELEASES the override
+  // rather than widening it. `resolveAppearance` still runs here, for the CSS
+  // stamp above; it just never decides what main is told.
+  //
+  // Best-effort, and the guard is HERE rather than inside the default notifier so
+  // it holds for whatever is passed in. Telling main only selects a native
+  // material: the page has already painted by this point, the preload's own rate
+  // guard can legitimately refuse a send, and a taste preference must never be
+  // able to raise into the session.
   useEffect(() => {
     try {
-      notify(appearance)
+      notify(scheme)
     } catch {
       // The window keeps the appearance it just painted either way.
     }
-  }, [notify, appearance])
+  }, [notify, scheme])
 
   const value = useMemo<ColorSchemeContextValue>(
     () => ({ scheme, appearance, setScheme }),

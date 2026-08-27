@@ -3584,14 +3584,23 @@ export type CatCodeBridge = {
    * mode cannot both be renderer-local the way glass alone could be. This is the
    * smallest message that closes that gap.
    *
+   * IT CARRIES THE USER'S CHOICE, NOT THE APPEARANCE BEING PAINTED, and the
+   * third value is the load-bearing one. `themeSource` is an override: set it to
+   * `light` or `dark` and it supersedes the OS and pins the renderer's own
+   * `prefers-color-scheme`, which is the query the `system` choice resolves
+   * against. Sending the resolved value therefore froze "Match system" the first
+   * time it was applied. `system` releases the override, and is exactly the
+   * three-state machine Electron's own documentation describes.
+   *
    * The weakest sender on this plane, by construction. Its whole vocabulary is
-   * `'light' | 'dark'` — a closed pair re-validated in main, not a colour, not a
-   * settings key, not a path. It starts nothing, addresses no session, reaches no
-   * engine object, and never becomes sidecar vocabulary: there is no inbound
-   * frame kind for it and the sidecar never learns the app has an appearance.
-   * Main's only reaction is to assign `nativeTheme.themeSource`.
+   * `'system' | 'light' | 'dark'` — a closed set re-validated in main, not a
+   * colour, not a settings key, not a path. It starts nothing, addresses no
+   * session, reaches no engine object, and never becomes sidecar vocabulary:
+   * there is no inbound frame kind for it and the sidecar never learns the app
+   * has an appearance. Main's only reaction is to assign
+   * `nativeTheme.themeSource`.
    */
-  setAppearance(appearance: 'light' | 'dark'): void
+  setAppearance(scheme: 'system' | 'light' | 'dark'): void
   /** Main-owned local diagnostics retrieval; the renderer never supplies a path. */
   openLogsFolder(): void
   saveDiagnosticsBundle(): Promise<boolean>

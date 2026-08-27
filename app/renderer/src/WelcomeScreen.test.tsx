@@ -130,8 +130,12 @@ test('Codex usage meters follow the selected accent rather than a hard-coded col
 
   expect(source).toContain('from-accent-soft to-accent')
   expect(source).toContain("p >= 100 ? 'text-accent' : 'text-accent-soft'")
-  expect(source).not.toContain('from-[#f9a8d4]')
-  expect(source).not.toContain('text-[light-dark(#be185d,#ec4899)]')
+  // Asserted as the HEX rather than a whole class. This guard exists for the
+  // historical regression of a hardcoded pink, and pinning the exact class
+  // string let the appearance pass rewrite it into a form that no longer
+  // matched the thing being guarded against.
+  expect(source).not.toContain('#f9a8d4')
+  expect(source).not.toContain('#ec4899')
 })
 
 test('P4-55 renders a truthful retry in place of the false empty roster', () => {

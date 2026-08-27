@@ -437,7 +437,7 @@ export function AskQuestionFlow({
   return (
     <section
       aria-labelledby={titleId}
-      className="overflow-hidden rounded-xl border border-accent/[0.22] bg-[light-dark(#ffffff,#141416)] shadow-[var(--elev-popover),0_0_0_1px_var(--shell-seam)] focus:outline-none"
+      className="overflow-hidden rounded-xl border border-accent/[0.22] bg-[light-dark(#ffffff,#141416)] shadow-[var(--elev-popover),0_0_0_1px_var(--card-ring)] focus:outline-none"
       // Focus events bubble, so these fire for the card AND every control in
       // it — which is exactly the containment rule the key handler applies.
       onBlur={event =>

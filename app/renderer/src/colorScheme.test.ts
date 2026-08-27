@@ -9,7 +9,7 @@
  * suite cannot tell a working provider from one that never stamps anything.
  */
 import { expect, test } from 'bun:test'
-import { readFileSync } from 'fs'
+import { readdirSync, readFileSync } from 'fs'
 import {
   APPEARANCE_ATTRIBUTE,
   applyAppearance,
@@ -124,28 +124,76 @@ test('the stamp always states which appearance is live', () => {
  * The attribute is only half the mechanism. Without matching rules the picker
  * silently does nothing, and no render assertion can see that.
  */
-test('the stylesheet repaints every window ground under the stamp', () => {
-  const block = themeCss().match(/html\[data-appearance='light'\]\s*\{([^}]*)\}/)
-  expect(block).not.toBeNull()
-  const body = block?.[1] ?? ''
-  for (const token of [
-    '--app-bg',
-    '--shell-chrome',
-    '--surface-raised',
-    '--surface-panel',
-    '--shell-seam',
-    '--shell-hover',
-    '--shell-active',
-    '--text-primary',
-    '--text-muted',
-    '--text-subtle',
-    '--text-faint',
-    '--text-ghost',
-    '--on-fill',
-    '--scrim',
-  ]) {
-    expect(body).toContain(`${token}:`)
+/**
+ * DERIVED FROM `:root`, NOT A HAND-WRITTEN LIST, and the difference is the whole
+ * value of the test. The first version named fourteen tokens; the appearance
+ * layer declares more than twice that, so dropping `--scrollbar-thumb`,
+ * `--tone-danger` or all six `--elev-*` from the light block left the suite green
+ * while the light shell inherited dark values (a token forgotten here does not
+ * fail, it silently keeps the `:root` value, which for `--elev-menu` means
+ * `rgba(0,0,0,0.6)` shadows on a white page).
+ *
+ * The appearance layer is everything from `--app-bg` onward in `:root`, which is
+ * where the block's own comment says it begins. `--transcript-width` is the one
+ * member that legitimately does not move: it is a length, not a colour.
+ */
+test('every appearance-layer token declared in :root is redeclared for light', () => {
+  const css = themeCss()
+  const root = /:root \{(.*?)\n\}/s.exec(css)?.[1] ?? ''
+  const light = /html\[data-appearance='light'\] \{(.*?)\n\}/s.exec(css)?.[1] ?? ''
+  expect(root).not.toBe('')
+  expect(light).not.toBe('')
+
+  const declared = (block: string) =>
+    [...block.matchAll(/^\s*(--[a-z0-9-]+):/gm)].map(match => match[1])
+  const rootTokens = declared(root)
+  const start = rootTokens.indexOf('--app-bg')
+  expect(start).toBeGreaterThanOrEqual(0)
+
+  const NOT_APPEARANCE_DEPENDENT = new Set(['--transcript-width'])
+  const lightTokens = new Set(declared(light))
+  const missing = rootTokens
+    .slice(start)
+    .filter(token => !NOT_APPEARANCE_DEPENDENT.has(token) && !lightTokens.has(token))
+  expect(missing).toEqual([])
+  // A floor, so the derivation cannot pass by finding nothing.
+  expect(rootTokens.length - start).toBeGreaterThan(20)
+})
+
+/**
+ * The renderer names Tailwind's own shades directly in 155 places across 12
+ * files (`text-teal-300`, `bg-zinc-500`, `border-purple-400/30`), and those are
+ * invisible to a sweep for this file's tokens or for `text-[#hex]` — which is
+ * exactly how they were missed the first time. On a near-white ground the
+ * 200/300/400 shades measure between 1.34:1 and 2.82:1.
+ *
+ * They repaint for the same reason `--color-white` does, so this asserts the
+ * shades the renderer actually uses are all redeclared. Derived from source, so
+ * a new `text-rose-300` in some future component fails here rather than shipping
+ * invisible.
+ */
+test('every Tailwind palette shade the renderer names is redeclared for light', () => {
+  const dir = new URL('.', import.meta.url)
+  const used = new Set<string>()
+  for (const file of readdirSync(dir)) {
+    if (!/\.(tsx?|ts)$/.test(file) || file.includes('.test.')) continue
+    const source = readFileSync(new URL(`./${file}`, import.meta.url), 'utf8')
+    for (const [, shade] of source.matchAll(
+      /\b(?:text|bg|border|fill|stroke|ring|from|to|via|decoration)-((?:slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-[0-9]{2,3})\b/g,
+    )) {
+      used.add(shade)
+    }
   }
+  expect(used.size).toBeGreaterThan(20)
+
+  const light = /html\[data-appearance='light'\] \{(.*?)\n\}/s.exec(themeCss())?.[1] ?? ''
+  // Already dark enough to read on a light ground; moving them would flatten the
+  // dimmest end of the ramp, and the stylesheet says so.
+  const KEPT = new Set(['zinc-600', 'zinc-700'])
+  const missing = [...used]
+    .filter(shade => !KEPT.has(shade) && !light.includes(`--color-${shade}:`))
+    .sort()
+  expect(missing).toEqual([])
 })
 
 /**
@@ -230,4 +278,59 @@ test('no code-theme colour is left without a light twin', () => {
   const bare = codeThemes.match(/^\s*color: #[0-9a-fA-F]{6};/gm)
   expect(bare).toBeNull()
   expect(codeThemes.match(/color: light-dark\(/g)?.length).toBe(55)
+})
+
+/**
+ * The one defect `light-dark()` invites and that nothing else here can see: a
+ * SWAPPED pair. The CSS order is `light-dark(light, dark)`, both halves are
+ * plausible hexes, and every other assertion in this file is satisfied by a pair
+ * whichever way round it is. A swap puts pale syntax ink on a white page, in one
+ * theme only, with the whole suite green.
+ *
+ * The check is legibility, not ordering. Ordering looked like the obvious
+ * invariant and is WRONG: a comment is deliberately the least contrasty scope in
+ * a syntax theme, so One Light's comment grey really is lighter than One Dark's,
+ * and two pairs here are legitimately "light half lighter". What does hold for
+ * all 55 is that each half must be readable against its OWN ground.
+ *
+ * At a 3:1 floor this discriminates 47 of the 55 possible swaps (measured). The
+ * 8 it cannot are pairs whose halves are both mid-tone greys, where the swap is
+ * genuinely hard to see by any rule; they are named as the residue rather than
+ * papered over. The floor itself is worth asserting on its own account: it is
+ * the WCAG non-text minimum, and the tightest real value is 3.29.
+ */
+test('every syntax colour is legible on the ground it is used against', () => {
+  const luminance = (hex: string): number => {
+    const channel = (raw: number) => {
+      const c = raw / 255
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+    }
+    const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16))
+    return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+  }
+  const contrast = (a: string, b: string): number => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x)
+    return (hi + 0.05) / (lo + 0.05)
+  }
+  // The two page grounds these are read against (`--app-bg`, both appearances).
+  const LIGHT_GROUND = '#fcfcfd'
+  const DARK_GROUND = '#09090b'
+  const FLOOR = 3
+
+  const css = themeCss()
+  const codeThemes = css.slice(css.indexOf('.hljs {'))
+  const pairs = [
+    ...codeThemes.matchAll(
+      /color: light-dark\((#[0-9a-fA-F]{6}),\s*(#[0-9a-fA-F]{6})\)/g,
+    ),
+  ]
+  expect(pairs.length).toBe(55)
+
+  const illegible = pairs
+    .filter(
+      ([, light, dark]) =>
+        contrast(light, LIGHT_GROUND) < FLOOR || contrast(dark, DARK_GROUND) < FLOOR,
+    )
+    .map(([whole]) => whole)
+  expect(illegible).toEqual([])
 })

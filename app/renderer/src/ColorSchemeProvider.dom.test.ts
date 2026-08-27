@@ -7,7 +7,14 @@
  * This file mounts the real provider against a real document, drives the real
  * media-query subscription, and asserts three things a source read cannot: the
  * stamp lands on the document element, the OS is followed LIVE rather than read
- * once, and main hears the resolved appearance rather than the raw choice.
+ * once, and main hears the user's CHOICE rather than the resolved appearance.
+ *
+ * ONE THING IT STRUCTURALLY CANNOT SEE, and the first version of this feature
+ * shipped broken because of it: `media` is injected, so the real `matchMedia` is
+ * never exercised, and the real one is the one `nativeTheme.themeSource` pins.
+ * A provider that forces the OS query and then subscribes to it looks perfect
+ * here. That gap is why the notify assertions below test the value crossing the
+ * boundary rather than the repaint it causes.
  *
  * No JSX and no component export: `renderer/src` `.tsx` files are governed by the
  * Fast Refresh component-boundary rule, which a test module has no business
@@ -24,7 +31,6 @@ import {
   COLOR_SCHEME_STORAGE_KEY,
   ColorSchemeContext,
   type ColorSchemeKey,
-  type ResolvedAppearance,
 } from './colorScheme.js'
 
 let harness: DomTestHarness
@@ -94,7 +100,7 @@ function stamp(): string | null {
 async function mount(options: {
   scheme?: ColorSchemeKey
   systemDark: boolean
-  onAppearance?: (appearance: ResolvedAppearance) => void
+  onScheme?: (scheme: ColorSchemeKey) => void
   children?: ReturnType<typeof createElement>
 }) {
   const store = storage(options.scheme ? stored(options.scheme) : {})
@@ -103,7 +109,7 @@ async function mount(options: {
     createElement(ColorSchemeProvider, {
       storage: store,
       media: media.query,
-      onAppearance: options.onAppearance ?? (() => {}),
+      onScheme: options.onScheme ?? (() => {}),
       children: options.children ?? createElement('div'),
     }),
   )
@@ -149,32 +155,120 @@ test('the subscription is released on unmount', async () => {
 })
 
 /**
- * Main is told the RESOLVED appearance, never the raw choice: `themeSource`
- * takes `'system'` too, and sending it would hand the vibrancy material back to
- * the OS while the page kept painting the forced one.
+ * THE REGRESSION GUARD FOR THIS FILE'S OWN BLIND SPOT.
+ *
+ * Main is told the user's CHOICE, never the resolved appearance. The first
+ * version sent the resolved value, and `themeSource` is an override: it pins the
+ * real `prefers-color-scheme`, so forcing `dark` the moment someone picks "Match
+ * system" freezes the query this provider subscribes to and the OS can never
+ * move the window again.
+ *
+ * Nothing above catches that, and this test cannot catch it either — `fakeMedia`
+ * is a stub, so it keeps emitting whatever the test says regardless of what main
+ * did. That is exactly why the assertion is on the VALUE CROSSING THE BOUNDARY
+ * rather than on a repaint: `'system'` reaching main is the whole mechanism, and
+ * it is the one thing observable from here.
  */
-test('main hears the resolved appearance, and only when it changes', async () => {
-  const seen: ResolvedAppearance[] = []
+test('main hears the choice, not the appearance, and only when the choice changes', async () => {
+  const seen: ColorSchemeKey[] = []
   const { media } = await mount({
     scheme: 'system',
     systemDark: true,
-    onAppearance: appearance => void seen.push(appearance),
+    onScheme: scheme => void seen.push(scheme),
   })
-  expect(seen).toEqual(['dark'])
+  // 'system', NOT 'dark' — sending 'dark' here is the bug.
+  expect(seen).toEqual(['system'])
+
+  // An OS flip repaints the document but must not re-cross the boundary: the
+  // choice did not change, and re-sending would be a no-op at best.
   await media.emit(false)
-  expect(seen).toEqual(['dark', 'light'])
-  // A flip that resolves to the same appearance must not re-cross the boundary.
-  await media.emit(false)
-  expect(seen).toEqual(['dark', 'light'])
+  expect(stamp()).toBe('light')
+  expect(seen).toEqual(['system'])
+})
+
+test('a forced choice crosses the boundary as itself', async () => {
+  const seen: ColorSchemeKey[] = []
+  let setScheme: ((next: ColorSchemeKey) => void) | null = null
+  await mount({
+    scheme: 'system',
+    systemDark: true,
+    onScheme: scheme => void seen.push(scheme),
+    children: createElement(Probe, {
+      onReady: (next: (value: ColorSchemeKey) => void) => {
+        setScheme = next
+      },
+    }),
+  })
+  await act(async () => {
+    setScheme?.('light')
+  })
+  await act(async () => {
+    setScheme?.('system')
+  })
+  expect(seen).toEqual(['system', 'light', 'system'])
+})
+
+/**
+ * THE DEFAULT NOTIFY PATH, which every other test in this file injects past.
+ *
+ * `onScheme` is injectable so the notify assertions above can observe it, and
+ * that convenience hid the one line that actually crosses into the preload:
+ * deleting `getBridge().setAppearance(...)` from `notifyMain` left the entire
+ * suite green. Here the prop is OMITTED, so the provider takes its real default
+ * and calls the real bridge accessor against a stub `window.catcode` — the same
+ * shape `contextBridge` exposes.
+ */
+test('with no injected notifier it calls the real bridge', async () => {
+  const calls: unknown[] = []
+  const globals = globalThis as { catcode?: unknown }
+  const previous = globals.catcode
+  globals.catcode = { setAppearance: (value: unknown) => void calls.push(value) }
+  try {
+    await harness.mount(
+      createElement(ColorSchemeProvider, {
+        storage: storage(stored('light')),
+        media: fakeMedia(true).query,
+        children: createElement('div'),
+      }),
+    )
+    expect(calls).toEqual(['light'])
+  } finally {
+    if (previous === undefined) delete globals.catcode
+    else globals.catcode = previous
+  }
+})
+
+/**
+ * And the same path when the bridge is not there at all. The preload injects
+ * `window.catcode` before any page script runs, so this is the defensive edge
+ * rather than the expected one; it matters because the guard around `notify`
+ * lives at the call site and a throw here would take the whole tree down.
+ */
+test('a missing bridge never breaks the paint', async () => {
+  const globals = globalThis as { catcode?: unknown }
+  const previous = globals.catcode
+  delete globals.catcode
+  try {
+    await harness.mount(
+      createElement(ColorSchemeProvider, {
+        storage: storage(stored('dark')),
+        media: fakeMedia(false).query,
+        children: createElement('div'),
+      }),
+    )
+    expect(stamp()).toBe('dark')
+  } finally {
+    if (previous !== undefined) globals.catcode = previous
+  }
 })
 
 test('choosing from Settings stamps the document, persists, and notifies main', async () => {
-  const seen: ResolvedAppearance[] = []
+  const seen: ColorSchemeKey[] = []
   let setScheme: ((next: ColorSchemeKey) => void) | null = null
   const { store } = await mount({
     scheme: 'system',
     systemDark: true,
-    onAppearance: appearance => void seen.push(appearance),
+    onScheme: scheme => void seen.push(scheme),
     children: createElement(Probe, {
       onReady: (next: (value: ColorSchemeKey) => void) => {
         setScheme = next
@@ -190,7 +284,7 @@ test('choosing from Settings stamps the document, persists, and notifies main', 
   expect(store.store.get(COLOR_SCHEME_STORAGE_KEY)).toBe(
     JSON.stringify({ version: 1, scheme: 'light' }),
   )
-  expect(seen).toEqual(['dark', 'light'])
+  expect(seen).toEqual(['system', 'light'])
 })
 
 /**
@@ -202,7 +296,7 @@ test('a failing notify never breaks the paint', async () => {
   await mount({
     scheme: 'light',
     systemDark: true,
-    onAppearance: () => {
+    onScheme: () => {
       throw new Error('rate limited')
     },
   }).catch(() => {
@@ -217,18 +311,38 @@ test('a failing notify never breaks the paint', async () => {
  * the only evidence available: without it, removing the provider from `main.tsx`
  * leaves every test in the repo green.
  *
- * The ORDER is asserted too, not just the presence. Glass reads its alphas out
- * of `light-dark()`, so an appearance applied after glass would paint the dark
- * glass ground onto a light window for the first frame after every reload.
+ * NESTING ORDER IS DELIBERATELY NOT ASSERTED. An earlier version pinned this
+ * provider above `GlassModeProvider` and claimed the order kept the dark glass
+ * ground off a light window. It never did: the appearance stamp was a passive
+ * effect then, and passive effects run after paint, so glass won regardless of
+ * nesting. Both stamps are layout effects now, and every layout effect runs
+ * before paint, so the guarantee is the PHASE. Pinning the order here would
+ * re-assert a mechanism that does not exist.
  */
-test('the composition root mounts the provider, above glass', () => {
+test('the composition root mounts the provider', () => {
   const main = readFileSync(new URL('./main.tsx', import.meta.url), 'utf8').replace(
     /^\s*\/\/.*$/gm,
     '',
   )
   expect(main).toContain("from './ColorSchemeProvider.js'")
-  expect(main.indexOf('<ColorSchemeProvider>')).toBeGreaterThanOrEqual(0)
-  expect(main.indexOf('<ColorSchemeProvider>')).toBeLessThan(
-    main.indexOf('<GlassModeProvider>'),
+  expect(main).toContain('<ColorSchemeProvider>')
+})
+
+/**
+ * The phase itself, asserted where it is actually decided. `applyAppearance` in
+ * a passive effect means one fully dark frame on every launch and every renderer
+ * reload before the flip; `GlassModeProvider` records the same lesson and the
+ * same swap. happy-dom does not paint, so no runtime assertion here can observe
+ * the flash: the source check is what is available.
+ */
+test('the appearance is stamped before paint, like glass', () => {
+  const source = readFileSync(
+    new URL('./ColorSchemeProvider.tsx', import.meta.url),
+    'utf8',
   )
+  expect(source).toContain(
+    "typeof document === 'undefined' ? useEffect : useLayoutEffect",
+  )
+  const stampIndex = source.indexOf('applyAppearance(target, appearance)')
+  expect(stampIndex).toBeGreaterThan(source.indexOf('useStampEffect(() => {'))
 })

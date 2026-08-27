@@ -14,10 +14,11 @@
  *   - main narrows the payload itself. The preload also checks, but the preload
  *     is not the trust boundary, and this is the check that has to hold if a
  *     renderer is ever compromised;
- *   - the narrowing is a CLOSED PAIR. `nativeTheme.themeSource` also accepts
- *     `'system'`, so a handler that coerced instead of rejecting would let a
- *     malformed payload hand the window's appearance back to the OS while the
- *     page went on painting the forced one;
+ *   - the narrowing is a CLOSED SET of three, and `'system'` is a REQUIRED
+ *     member rather than a widening: `themeSource` is an override, so a channel
+ *     carrying only `light`/`dark` pins the appearance the first time anyone
+ *     leaves the app on "Match system" and the OS can never move it again. An
+ *     earlier version of this file asserted the opposite and encoded that bug;
  *   - it never reaches the sidecar. The appearance is a property of this window;
  *     the engine has no opinion about it and must never gain one.
  */
@@ -39,11 +40,11 @@ test('the appearance channel is one literal, declared on both sides', () => {
   expect(preloadSource()).toContain(`const CH_SET_APPEARANCE = ${CHANNEL}`)
 })
 
-test('the preload exposes it as a two-value union and guards the send', () => {
+test('the preload exposes it as the three-value choice and guards the send', () => {
   const source = preloadSource()
-  expect(source).toContain("setAppearance(appearance: 'light' | 'dark'): void")
-  expect(source).toContain('sendGuard.assertAllowed({ appearance })')
-  expect(source).toContain('ipcRenderer.send(CH_SET_APPEARANCE, appearance)')
+  expect(source).toContain("setAppearance(scheme: 'system' | 'light' | 'dark'): void")
+  expect(source).toContain('sendGuard.assertAllowed({ scheme })')
+  expect(source).toContain('ipcRenderer.send(CH_SET_APPEARANCE, scheme)')
 })
 
 /**
@@ -52,21 +53,49 @@ test('the preload exposes it as a two-value union and guards the send', () => {
  * guard look redundant to a future reader and invite its removal, when the whole
  * point is that nothing across an IPC boundary is typed.
  */
-test('main re-validates the payload against the closed pair and drops the rest', () => {
+test('main re-validates the payload against the closed set and drops the rest', () => {
   const source = mainSource()
   const handler = source.slice(source.indexOf('ipcMain.on(CH_SET_APPEARANCE'))
   const body = handler.slice(0, handler.indexOf('\n  })'))
-  expect(body).toContain('appearance: unknown')
-  expect(body).toContain("if (appearance !== 'light' && appearance !== 'dark') return")
-  expect(body).toContain('nativeTheme.themeSource = appearance')
+  expect(body).toContain('scheme: unknown')
+  expect(body).toContain(
+    "if (scheme !== 'system' && scheme !== 'light' && scheme !== 'dark') return",
+  )
+  expect(body).toContain('nativeTheme.themeSource = scheme')
   // The rejection has to come first, or the assignment is reachable with junk.
   expect(body.indexOf('return')).toBeLessThan(body.indexOf('nativeTheme.themeSource'))
 })
 
-test('main never widens the appearance to the system value', () => {
+/**
+ * The regression guard for the defect this channel shipped with, and the reason
+ * `'system'` has to travel the whole way rather than being resolved away.
+ *
+ * `themeSource` is an OVERRIDE, and the renderer resolves the `system` choice
+ * against `prefers-color-scheme`, which that override PINS. A channel carrying
+ * only the resolved appearance therefore forced `light` or `dark` the moment
+ * anyone left the app on "Match system", after which the OS could never move it:
+ * measured as Match system, then Light, then Match system again leaving a dark
+ * Mac on a light window permanently, with `getEffectiveAppearance()` agreeing.
+ * `'system'` is the release, so it must be reachable from the bridge signature
+ * all the way to the assignment.
+ */
+test('the system choice reaches themeSource, because it is the release', () => {
+  const protocol = readFileSync(
+    new URL('../shared/protocol.ts', import.meta.url),
+    'utf8',
+  )
+  expect(protocol).toContain(
+    "setAppearance(scheme: 'system' | 'light' | 'dark'): void",
+  )
+  expect(preloadSource()).toContain("scheme !== 'system'")
+
   const source = mainSource()
   const handler = source.slice(source.indexOf('ipcMain.on(CH_SET_APPEARANCE'))
-  expect(handler.slice(0, handler.indexOf('\n  })'))).not.toContain("'system'")
+  const body = handler.slice(0, handler.indexOf('\n  })'))
+  // The guard lists what is ALLOWED, so `system` is proved reachable by its
+  // presence in the allow-list and the absence of any separate rejection.
+  expect(body).toContain("scheme !== 'system' &&")
+  expect(body).not.toMatch(/scheme === 'system'[^\n]*return/)
 })
 
 /**
@@ -79,7 +108,9 @@ test('the appearance never becomes sidecar vocabulary', () => {
     'utf8',
   )
   // Present as a bridge method on the control plane...
-  expect(protocol).toContain("setAppearance(appearance: 'light' | 'dark'): void")
+  expect(protocol).toContain(
+    "setAppearance(scheme: 'system' | 'light' | 'dark'): void",
+  )
   // ...and absent from the inbound frame vocabulary.
   expect(protocol).not.toContain("kind: 'setAppearance'")
   expect(protocol).not.toContain("'set-appearance'")
