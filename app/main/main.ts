@@ -1324,18 +1324,6 @@ function createWindow(): void {
       ? {
           vibrancy: 'under-window' as const,
           visualEffectState: 'active' as const,
-          // REQUIRED, and not obvious: without it Chromium draws the web
-          // contents onto an OPAQUE backing store, so a translucent `html`
-          // never reaches the vibrancy view underneath and the alpha on
-          // `backgroundColor` is dropped too (`getBackgroundColor()` reports
-          // `#000000`). Shipping without it produced a very convincing
-          // near-miss: glass on made the app fractionally DARKER
-          // (0.62 of #09090b over black is #060607) and nothing showed
-          // through, which reads as a tuning problem rather than an inert
-          // feature. Electron's own typings say as much at `electron.d.ts`
-          // ("Alpha in #AARRGGBB format is supported if `transparent` is set
-          // to `true`"); it cost one operator launch to believe them.
-          transparent: true,
           backgroundColor: '#00000000',
         }
       : { backgroundColor: '#09090b' }),
