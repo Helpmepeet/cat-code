@@ -122,3 +122,37 @@ test('the appearance never becomes sidecar vocabulary', () => {
     expect(body).not.toContain(forwarder)
   }
 })
+
+/**
+ * The half of the preference that lives outside the channel.
+ *
+ * Assigning `themeSource` is necessary and not sufficient: the vibrancy view is
+ * mounted once at window creation and macOS resolves its material then, so
+ * without a re-mint the window frame keeps the appearance it was born in while
+ * the page changes underneath it. Guarded here rather than beside `createWindow`
+ * because it is the same feature as the channel above, and because the failure
+ * it prevents is invisible to every headless suite in this repo.
+ *
+ * The material has to be the SHARED constant. Re-minting with a different one
+ * would change how the window looks on an appearance change instead of merely
+ * re-resolving it, and that drift is exactly what a second literal invites.
+ */
+test('an appearance change re-mints the window material, from one constant', () => {
+  const source = mainSource()
+  expect(source).toContain("const WINDOW_VIBRANCY = 'under-window' as const")
+  // The window is BORN with it...
+  expect(source).toContain('vibrancy: WINDOW_VIBRANCY,')
+  // ...and no second literal is left behind to drift from it.
+  expect(source).not.toContain("vibrancy: 'under-window'")
+
+  const listener = source.slice(source.indexOf("nativeTheme.on('updated'"))
+  const body = listener.slice(0, listener.indexOf('\n  })'))
+  expect(body).toContain('setVibrancy(WINDOW_VIBRANCY)')
+  // `nativeTheme`'s event, not the channel handler: an OS flip under "Match
+  // system" never passes through `CH_SET_APPEARANCE` and must be covered too.
+  expect(source.indexOf("nativeTheme.on('updated'")).toBeGreaterThan(
+    source.indexOf('ipcMain.on(CH_SET_APPEARANCE'),
+  )
+  // Clearing is the operation that does not reliably take on macOS.
+  expect(body).not.toContain('setVibrancy(null)')
+})

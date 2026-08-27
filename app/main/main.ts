@@ -211,6 +211,14 @@ const CH_RENDERER_READY = 'catcode:renderer-ready'
 const CH_DELIVERY_ACK = 'catcode:delivery-ack'
 const CH_RENDERER_FAULT = 'catcode:renderer-fault'
 const CH_SET_APPEARANCE = 'catcode:set-appearance'
+
+/**
+ * The macOS material `createWindow` mounts, and the value the `nativeTheme`
+ * listener re-asserts. One constant because the two must never drift: re-minting
+ * with a different material would change the window's look on an appearance
+ * change rather than just re-resolving it.
+ */
+const WINDOW_VIBRANCY = 'under-window' as const
 const CH_OPEN_LOGS = 'catcode:open-logs'
 const CH_SAVE_DIAGNOSTICS = 'catcode:save-diagnostics'
 const CH_DELIVERY_HEALTH_PROBE = 'catcode:delivery-health-probe'
@@ -1324,7 +1332,7 @@ function createWindow(): void {
     // without it a transparent window is just a transparent window.
     ...(process.platform === 'darwin'
       ? {
-          vibrancy: 'under-window' as const,
+          vibrancy: WINDOW_VIBRANCY,
           visualEffectState: 'active' as const,
           backgroundColor: '#00000000',
         }
@@ -2270,6 +2278,38 @@ function registerIpcHandlers(): void {
   ipcMain.on(CH_SET_APPEARANCE, (_event, scheme: unknown) => {
     if (scheme !== 'system' && scheme !== 'light' && scheme !== 'dark') return
     nativeTheme.themeSource = scheme
+  })
+
+  /**
+   * Re-mint the window material whenever the effective theme moves.
+   *
+   * WITHOUT THIS THE PREFERENCE IS HALF-APPLIED, and the half that is missing is
+   * the half the user sees first. `createWindow` mounts the `NSVisualEffectView`
+   * exactly once (the comment there says why a runtime toggle is worse), and
+   * macOS resolves that view's material when it is created. Moving `themeSource`
+   * afterwards moves the API answer, the renderer's `prefers-color-scheme` and
+   * the page, and leaves the mounted material in the appearance the window was
+   * BORN in — along with the titlebar, which a vibrant window draws over it.
+   * The result is a dark page inside a light window frame, with the light
+   * material showing through everywhere glass is on.
+   *
+   * This is the gap between what was measured for the channel above and what was
+   * claimed for it. `systemPreferences.getEffectiveAppearance()` was watched and
+   * it does follow `themeSource`; that is the MECHANISM, and the effect was
+   * inferred from it rather than looked at. The material does not follow.
+   *
+   * `nativeTheme`'s own event rather than the handler above, so an OS flip while
+   * the user is on "Match system" is covered by the same line as an explicit
+   * choice; both are the same event to AppKit. Assigning the SAME material is
+   * what re-resolves the view. Deliberately NOT `setVibrancy(null)` first:
+   * clearing is the operation that does not reliably take on macOS
+   * (`createWindow`), and re-asserting needs nothing cleared.
+   */
+  nativeTheme.on('updated', () => {
+    if (process.platform !== 'darwin') return
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.setVibrancy(WINDOW_VIBRANCY)
+    }
   })
 
   ipcMain.on(CH_OPEN_LOGS, () => {
