@@ -197,10 +197,11 @@ html[data-glass='on'] [data-window-ground] {
  * keep reading as a frame.
  *
  * The alpha is graded against the page ground, not chosen freely. Chrome paints
- * over `html`'s coat, so at 0.35 over a 0.2 ground its effective coverage is
- * about 0.48: still glass, still a step darker than the body, which is the
- * relationship the shell has always had (`--color-shell-chrome` sits below
- * `--color-app-bg`).
+ * over `html`'s coat, so its effective coverage is 1-(1-0.2)(1-a), NOT the value
+ * written here: 0.12 reads as about 0.30. That still leaves it a step darker
+ * than the body, which is the relationship the shell has always had
+ * (`--color-shell-chrome` sits below `--color-app-bg`). At 0 the chrome becomes
+ * the body exactly and only the seams divide them.
  *
  * Marked per ELEMENT, deliberately. Thinning `--color-shell-chrome` itself would
  * take nine floating menus with it (`SessionActionsMenu`, `SessionsPage`,
@@ -208,7 +209,7 @@ html[data-glass='on'] [data-window-ground] {
  * transcript through is not a menu.
  */
 html[data-glass='on'] [data-window-chrome] {
-  background: rgba(7, 7, 9, 0.35);
+  background: rgba(7, 7, 9, 0.12);
 }
 
 @theme inline {
