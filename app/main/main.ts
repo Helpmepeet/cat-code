@@ -1338,18 +1338,23 @@ function createWindow(): void {
     // `hiddenInset` drops the OS title strip and lets the page paint to the top
     // of the window, keeping the OS-drawn traffic lights. They are drawn ABOVE
     // web content, so their position is a layout constraint the renderer has to
-    // honour rather than a decoration: `x: 20, y: 14` centres the 12px buttons
-    // in the 40px tab bar (`TabBar.tsx:119` `h-10`), and that bar reserves the
-    // 84px well they sit in (`TabBar.tsx` `w-[84px]`, which is this inset plus
-    // the 52px of buttons plus clearance). Change one of those three numbers and
-    // you must change the others.
+    // honour rather than a decoration: `y: 14` centres the 12px buttons in the
+    // 40px tab bar (`TabBar.tsx:119` `h-10`), and that bar reserves the 84px
+    // well they sit in (`TabBar.tsx` `w-[84px]` = this inset + 52px of buttons +
+    // clearance). Change one of those three numbers and you must change the
+    // others.
+    //
+    // `x: 12` is Chrome's inset, adopted 2026-08-28 after the operator measured
+    // ours at 21 against Chrome's 12. macOS's own default for this style sits
+    // near 20, so this is deliberately tighter than the system, not a return to
+    // it.
     //
     // No `titleBarOverlay`: that is the Windows/Linux caption-button surface,
     // and this window keeps the native macOS buttons.
     ...(process.platform === 'darwin'
       ? {
           titleBarStyle: 'hiddenInset' as const,
-          trafficLightPosition: { x: 20, y: 14 },
+          trafficLightPosition: { x: 12, y: 14 },
           vibrancy: WINDOW_VIBRANCY,
           visualEffectState: 'active' as const,
           backgroundColor: '#00000000',

@@ -133,9 +133,10 @@ export function TabBar({
       aria-label="Sessions"
     >
       {/* The traffic lights are drawn by macOS on top of the page, so this is
-       * the one piece of the bar that has to be empty. 84 = 20 inset + 52
-       * buttons + 12 clearance, and the inset is `trafficLightPosition` in
-       * `main.ts` — the two numbers are one measurement written twice. */}
+       * the one piece of the bar that has to be empty. 84 = the 12px
+       * `trafficLightPosition` inset in `main.ts` + 52px of buttons + 20
+       * clearance before the first tab — one measurement written twice, so a
+       * change to that inset belongs here too. */}
       <div className="w-[84px] shrink-0" aria-hidden="true" />
 
       <div className="flex flex-1 items-stretch overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">

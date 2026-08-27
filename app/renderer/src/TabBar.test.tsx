@@ -273,7 +273,7 @@ test('the bar is the window drag region and every control opts out of it', () =>
 })
 
 test('the bar reserves the well the traffic lights are drawn into', () => {
-  // 84 = the 20px `trafficLightPosition` inset in `main.ts` + 52px of buttons +
+  // 84 = the 12px `trafficLightPosition` inset in `main.ts` + 52px of buttons +
   // clearance. The lights paint above the page, so anything here is covered.
   const html = render([tab('a')], 'a')
 
