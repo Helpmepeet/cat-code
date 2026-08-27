@@ -34,9 +34,9 @@ if (!root) {
 // rendered outside it keeps the default pink no matter what the user picked, and
 // a toast is exactly the kind of chrome that would silently miss the accent.
 //
-// `GlassModeProvider` sits outermost and renders no wrapper at all: it stamps the
-// document element, which is above `#root`, so its position here buys ordering
-// rather than coverage.
+// `GlassModeProvider` renders no wrapper at all. Its target is the document
+// element, which is above `#root`, so unlike the accent it covers the tree from
+// wherever it sits and its position here carries no meaning.
 createRoot(root).render(
   <StrictMode>
     <RendererErrorBoundary

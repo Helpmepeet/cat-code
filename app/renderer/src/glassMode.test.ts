@@ -3,8 +3,10 @@
  * stylesheet that gives the stamped attribute something to mean.
  *
  * The stamp path takes an injected root rather than a document
- * (`glassMode.ts` `GlassRoot`), so this stays an SSR-only suite like the rest of
- * the renderer's preference tests.
+ * (`glassMode.ts` `GlassRoot`), so this stays an SSR-only suite. Whether the
+ * PROVIDER actually reaches that path is a separate question, and a
+ * `renderToStaticMarkup` suite structurally cannot answer it: effects do not
+ * run. `GlassModeProvider.dom.test.ts` owns that half.
  */
 import { expect, test } from 'bun:test'
 import { readFileSync } from 'fs'
@@ -35,6 +37,10 @@ function fakeRoot() {
   }
 }
 
+function themeCss(): string {
+  return readFileSync(new URL('./theme.css', import.meta.url), 'utf8')
+}
+
 test('the shipped default is solid', () => {
   expect(DEFAULT_GLASS_ENABLED).toBe(false)
 })
@@ -51,7 +57,6 @@ test('an empty, unavailable or corrupt store reads as no preference', () => {
   expect(readGlassFromStorage(storage())).toBeNull()
   expect(readGlassFromStorage(null)).toBeNull()
   expect(readGlassFromStorage(storage({ [GLASS_STORAGE_KEY]: '{oops' }))).toBeNull()
-  // A future version, and a shape from neither version.
   expect(
     readGlassFromStorage(
       storage({ [GLASS_STORAGE_KEY]: JSON.stringify({ version: 2, enabled: true }) }),
@@ -78,9 +83,9 @@ test('a failing store never throws into the caller', () => {
 })
 
 /**
- * Off REMOVES the attribute rather than writing `off`. Asserted directly because
- * the stylesheet below has exactly one rule, and a document left carrying
- * `data-glass="off"` would be a state no CSS in the app describes.
+ * Off REMOVES the attribute rather than writing `off`, so a document with glass
+ * disabled is indistinguishable from one whose renderer never knew about the
+ * preference, and the stylesheet needs no rule for the off state.
  */
 test('the stamp is present only while glass is on', () => {
   const root = fakeRoot()
@@ -92,48 +97,59 @@ test('the stamp is present only while glass is on', () => {
 })
 
 /**
- * The attribute is only half the mechanism: without matching rules the toggle
+ * The attribute is only half the mechanism: without a matching rule the toggle
  * silently does nothing, and no render assertion can see that.
  */
-test('the stylesheet redeclares every window ground under the stamp', () => {
-  const css = readFileSync(new URL('./theme.css', import.meta.url), 'utf8')
+test('the stylesheet paints exactly one translucent ground under the stamp', () => {
+  const css = themeCss()
   const block = css.match(/html\[data-glass='on'\]\s*\{([^}]*)\}/)
   expect(block).not.toBeNull()
-  for (const token of ['--app-bg', '--shell-chrome', '--surface-panel', '--surface-raised']) {
-    expect(block?.[1]).toContain(`${token}: rgba(`)
-  }
+  expect(block?.[1]).toMatch(/background:\s*rgba\(/)
   // Off is the absence of the attribute, so no rule may describe it.
   expect(css).not.toContain("data-glass='off'")
 })
 
 /**
- * The indirection this whole mechanism rests on. `@theme inline` compiles the
- * VALUE into each utility it generates, so a literal here would leave `bg-app-bg`
- * carrying a hex that the rule above cannot reach: the toggle would flip, the
- * page ground would change, and every component would stay solid.
+ * The regression guard for the defect this mechanism replaced.
+ *
+ * Redeclaring the four theme tokens under the stamp looks like the obvious way
+ * to make the app translucent, and it is wrong: each token carries a second role
+ * that alpha breaks. `--color-app-bg` is the INK on accent-filled buttons
+ * (`.text-app-bg`), `--color-shell-chrome` grounds nine floating menus, and
+ * `--color-surface-panel` backs SVG separators and the sidebar fade masks. Glass
+ * dropped the permission prompt's Allow/Deny label to about 3.8:1 contrast
+ * before this was narrowed to the page ground. Separate those roles first if the
+ * rail and the drawers should ever be glass too.
  */
-test('the theme routes each window ground through an overridable var', () => {
-  const css = readFileSync(new URL('./theme.css', import.meta.url), 'utf8')
-  for (const [themed, raw] of [
-    ['--color-app-bg', '--app-bg'],
-    ['--color-shell-chrome', '--shell-chrome'],
-    ['--color-surface-panel', '--surface-panel'],
-    ['--color-surface-raised', '--surface-raised'],
-  ]) {
-    expect(css).toContain(`${themed}: var(${raw});`)
+test('glass never redeclares a theme token', () => {
+  const css = themeCss()
+  const scoped = css.matchAll(/html\[data-glass='on'\][^{]*\{([^}]*)\}/g)
+  for (const [, body] of scoped) {
+    expect(body).not.toMatch(/--(color-)?(app-bg|shell-chrome|surface-panel|surface-raised)\s*:/)
   }
 })
 
 /**
  * `html`, `body` and the app frame all paint the page ground. Opaque that is
- * invisible; translucent, three coats of 0.62 composite to about 0.95 and the
- * glass is a wall again.
+ * invisible; with `html` translucent, the other two would hide what the toggle
+ * just turned on.
  */
-test('the repeated page grounds are cleared so their alpha cannot compound', () => {
-  const css = readFileSync(new URL('./theme.css', import.meta.url), 'utf8')
-  expect(css).toMatch(
+test('the repeated page grounds are cleared so they cannot hide the ground', () => {
+  expect(themeCss()).toMatch(
     /html\[data-glass='on'\] body,\s*html\[data-glass='on'\] \[data-window-ground\]\s*\{\s*background: transparent;/,
   )
-  const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+})
+
+/**
+ * Asserted against the SOURCE with JSX comments stripped. The first version of
+ * this test was `expect(app).toContain('data-window-ground')`, which the comment
+ * ABOVE the element satisfied on its own: deleting the attribute from the frame
+ * left the suite fully green (demonstrated by mutation, 2026-08-27).
+ */
+test('the app frame is marked, on the element and not only in its comment', () => {
+  const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8').replace(
+    /\{\/\*[\s\S]*?\*\/\}/g,
+    '',
+  )
   expect(app).toContain('data-window-ground')
 })

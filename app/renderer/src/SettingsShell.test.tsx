@@ -28,6 +28,7 @@ import {
   AccentThemeContext,
   DEFAULT_ACCENT,
 } from './accentTheme.js'
+import { GlassModeContext } from './glassMode.js'
 import {
   CODE_THEME_KEYS,
   CODE_THEME_LABELS,
@@ -683,6 +684,24 @@ describe('This app scope', () => {
     ).toBe(true)
     expect((pane.match(/aria-checked="true"/g) ?? []).length).toBe(1)
     expect(decode(pane)).toContain('not in your settings files')
+  })
+
+  test('the frosted-window row reflects the live preference and can be reset', () => {
+    const pane = paneMarkup(
+      renderToStaticMarkup(
+        <GlassModeContext.Provider value={{ glass: true, setGlass: () => {} }}>
+          <SettingsShell initialScope="app" snapshot={SNAPSHOT} />
+        </GlassModeContext.Provider>,
+      ),
+    )
+    expect(decode(pane)).toContain('Frosted window')
+    // App-local, so no source badge and the same disclosure the siblings carry.
+    expect(decode(pane)).toContain('not in your settings files')
+    // The platform limit is disclosed rather than left for the user to discover.
+    expect(decode(pane)).toContain('macOS only')
+    // On differs from the shipped default, so the row offers the reset the
+    // accent and tool-card rows offer in the same state.
+    expect(decode(pane)).toContain('Reset')
   })
 
   test('the accent is above the transcript preferences, as in the prototype', () => {

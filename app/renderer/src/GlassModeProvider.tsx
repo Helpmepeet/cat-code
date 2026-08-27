@@ -14,7 +14,7 @@
  * `localStorage` and `document.documentElement`.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   applyGlassMode,
@@ -63,10 +63,15 @@ export function GlassModeProvider({
     },
     [store],
   )
-  // Runs on mount as well as on change, which is what restores a stored
-  // preference: the stamp is on the document, so it does not survive a reload
-  // the way React state inside the tree would not either.
-  useEffect(() => {
+  // BEFORE paint, not after. A passive effect runs once the browser has already
+  // painted, so a glass-on launch showed one solid frame and then flipped, and
+  // did it again on every renderer reload. The sibling this mirrors has no such
+  // gap because `AccentThemeProvider` stamps a wrapper element during render;
+  // this one's target is the document, above `#root`, so it needs the layout
+  // phase instead. `useLayoutEffect` warns when there is no DOM to lay out, and
+  // the renderer suites are `renderToStaticMarkup`, hence the swap.
+  const useStampEffect = typeof document === 'undefined' ? useEffect : useLayoutEffect
+  useStampEffect(() => {
     applyGlassMode(target, glass)
   }, [target, glass])
   const value = useMemo<GlassModeContextValue>(
