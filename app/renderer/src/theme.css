@@ -503,17 +503,32 @@ html[data-appearance='light'] [data-accent='amber'] {
  * appearance, so `nativeTheme.themeSource` (set in main from the renderer's
  * choice) is what swaps the blur behind the page from the dark material to the
  * light one; all this rule does either way is decide how much of it survives.
- * The light value is the same order of magnitude for the same reason — the
- * ground is painting onto a bright blur, not onto the wallpaper — and it is the
- * one number here still worth checking by eye against a wallpaper with strong
- * colour in it.
+ *
+ * THE TWO ALPHAS ARE NOT SYMMETRIC, AND THE LIGHT ONE BARELY MATTERS. Measured
+ * side by side (2026-08-27, six materials x four alphas over a real wallpaper):
+ * in the LIGHT appearance macOS clamps `under-window` close to white whatever
+ * sits behind it, so 0 and 0.22 are almost indistinguishable and the effect is
+ * subtle by nature rather than by tuning. It is real — dragged over a sunset
+ * band the ground does warm — just quiet. `hud` was the only material that reads
+ * as visibly translucent in light, and it is a grey heads-up surface that would
+ * fight the whole light text ramp, so it was not taken.
+ *
+ * The light value is therefore as low as it is useful to go: since the coat buys
+ * nothing, spending less of it keeps the little the material gives. Legibility
+ * does not pay for that, for the same reason the effect is small: the light
+ * material stays near-white even over a dark wallpaper, so the text ramp is not
+ * sitting on an unpredictable ground.
+ *
+ * The first attempt at this shipped 0.22, the mirror of the dark value, on the
+ * assumption that light needed a heavier coat. That was backwards and the app
+ * showed it: with glass on, nothing changed but the tab strip.
  *
  * `light-dark()` rather than a second `[data-appearance]` rule because the whole
  * declaration is one value; it resolves against the `color-scheme` the light
  * block sets, which is why that property is not optional there.
  */
 html[data-glass='on'] {
-  background: light-dark(rgba(252, 252, 253, 0.22), rgba(9, 9, 11, 0.2));
+  background: light-dark(rgba(252, 252, 253, 0.06), rgba(9, 9, 11, 0.2));
 }
 
 /*
