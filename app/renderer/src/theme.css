@@ -191,6 +191,26 @@ html[data-glass='on'] [data-window-ground] {
   background: transparent;
 }
 
+/*
+ * Flow chrome: the sidebar and the tab bar. They frame the content rather than
+ * repeating its ground, so glass THINS them instead of clearing them, and they
+ * keep reading as a frame.
+ *
+ * The alpha is graded against the page ground, not chosen freely. Chrome paints
+ * over `html`'s coat, so at 0.35 over a 0.2 ground its effective coverage is
+ * about 0.48: still glass, still a step darker than the body, which is the
+ * relationship the shell has always had (`--color-shell-chrome` sits below
+ * `--color-app-bg`).
+ *
+ * Marked per ELEMENT, deliberately. Thinning `--color-shell-chrome` itself would
+ * take nine floating menus with it (`SessionActionsMenu`, `SessionsPage`,
+ * `Sidebar`, the scroll-to-bottom pill), and a context menu you can read the
+ * transcript through is not a menu.
+ */
+html[data-glass='on'] [data-window-chrome] {
+  background: rgba(7, 7, 9, 0.35);
+}
+
 @theme inline {
   --color-app-bg: #09090b;
   /* Shell chrome (P3-5a): the TabBar / sidebar rail sit one step darker than

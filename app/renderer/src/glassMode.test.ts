@@ -176,6 +176,49 @@ test('every full-area page ground is marked for glass to clear', () => {
 })
 
 /**
+ * Flow chrome is thinned, not cleared, and the marker is per ELEMENT.
+ *
+ * The tempting version of this is to thin `--color-shell-chrome`. That token
+ * also grounds nine floating menus, so doing it makes an open context menu
+ * readable straight through to the transcript underneath. The last assertion is
+ * the one that matters: a floating consumer of that token must never carry the
+ * chrome marker.
+ */
+test('the sidebar and tab bar are thinned, and no floating menu is', () => {
+  const css = themeCss()
+  const rule = css.match(/html\[data-glass='on'\] \[data-window-chrome\]\s*\{([^}]*)\}/)
+  expect(rule).not.toBeNull()
+  expect(rule?.[1]).toMatch(/background:\s*rgba\(/)
+
+  // Comments become blank lines rather than vanishing, so reported line numbers
+  // still match the file a reader will open.
+  const blankOut = (m: string) => m.replace(/[^\n]/g, '')
+  const strip = (name: string) =>
+    readFileSync(new URL(`./${name}`, import.meta.url), 'utf8')
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, blankOut)
+      .replace(/\/\*[\s\S]*?\*\//g, blankOut)
+  for (const file of ['TabBar.tsx', 'Sidebar.tsx']) {
+    expect(strip(file)).toContain('data-window-chrome')
+  }
+
+  // A `fixed`/`absolute` element on the chrome token is a floating menu, and
+  // must stay opaque over the transcript.
+  const dir = new URL('.', import.meta.url)
+  const leaking: string[] = []
+  for (const file of readdirSync(dir)) {
+    if (!file.endsWith('.tsx') || file.includes('.test.')) continue
+    const lines = strip(file).split('\n')
+    lines.forEach((line, i) => {
+      if (!line.includes('bg-shell-chrome')) return
+      if (!/\b(fixed|absolute)\b/.test(line)) return
+      const chunk = lines.slice(Math.max(0, i - 6), i + 7).join('\n')
+      if (chunk.includes('data-window-chrome')) leaking.push(`${file}:${i + 1}`)
+    })
+  }
+  expect(leaking).toEqual([])
+})
+
+/**
  * Asserted against the SOURCE with JSX comments stripped. The first version of
  * this test was `expect(app).toContain('data-window-ground')`, which the comment
  * ABOVE the element satisfied on its own: deleting the attribute from the frame

@@ -118,6 +118,11 @@ export function TabBar({
   return (
     <div
       className="flex h-10 shrink-0 items-stretch overflow-hidden border-b border-shell-seam bg-shell-chrome"
+      /* Flow chrome, so glass thins it (`theme.css`). The marker is on the
+       * element rather than on `bg-shell-chrome`, because that token also
+       * grounds nine floating menus that must stay opaque over the
+       * transcript. */
+      data-window-chrome
       role="tablist"
       aria-label="Sessions"
     >

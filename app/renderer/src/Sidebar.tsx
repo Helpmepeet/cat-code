@@ -787,6 +787,8 @@ export function Sidebar({
           setFocusWithin(false)
         }}
         aria-label="Primary"
+        /* Flow chrome, thinned by glass (`theme.css`), same as the tab bar. */
+        data-window-chrome
         className={
           'fixed inset-y-0 left-0 z-50 flex flex-col overflow-hidden border-r border-white/[0.05] bg-surface-panel transition-[width,box-shadow] duration-200 ease-out ' +
           (open
