@@ -19,6 +19,10 @@ import { tabLabel } from './tabBarModel.js'
 import type { TabTone, TabVisualState } from './tabStatus.js'
 import { MAX_WORKSPACE_PANELS } from './workspaceLayout.js'
 import { ActionBranchIcon } from './SessionActionIcons.js'
+import {
+  useTrafficLightWell,
+  type FullscreenMediaQuery,
+} from './windowChrome.js'
 
 export type TabModel = {
   descriptor: SessionDescriptor
@@ -37,6 +41,7 @@ export function TabBar({
   canAddPanel = false,
   onAddPanel,
   onRemovePanel,
+  fullscreenMedia,
 }: {
   tabs: TabModel[]
   activeSessionId: SessionId | null
@@ -69,7 +74,13 @@ export function TabBar({
   canAddPanel?: boolean
   onAddPanel?: () => void
   onRemovePanel?: () => void
+  /** Injectable only so a test can drive the fullscreen subscription
+   * (`windowChrome.ts`); the app never passes it. */
+  fullscreenMedia?: FullscreenMediaQuery | null
 }) {
+  // macOS hides the traffic lights in fullscreen, and the well is dead chrome
+  // once they are gone.
+  const reserveWell = useTrafficLightWell(fullscreenMedia)
   // Roving-tabindex focus targets — one entry per tab, so arrow keys can move
   // DOM focus to the neighbouring tab.
   const tabRefs = useRef<Array<HTMLDivElement | null>>([])
@@ -136,8 +147,13 @@ export function TabBar({
        * the one piece of the bar that has to be empty. 84 = the 12px
        * `trafficLightPosition` inset in `main.ts` + 52px of buttons + 20
        * clearance before the first tab — one measurement written twice, so a
-       * change to that inset belongs here too. */}
-      <div className="w-[84px] shrink-0" aria-hidden="true" />
+       * change to that inset belongs here too. Two STATIC classes rather than an
+       * interpolated width: an arbitrary-value class built at runtime silently
+       * no-ops in this Tailwind setup (CLAUDE.md). */}
+      <div
+        className={reserveWell ? 'w-[84px] shrink-0' : 'w-0 shrink-0'}
+        aria-hidden="true"
+      />
 
       <div className="flex flex-1 items-stretch overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {tabs.map((tab, index) => (

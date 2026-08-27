@@ -280,3 +280,27 @@ test('the bar reserves the well the traffic lights are drawn into', () => {
   expect(html).toContain('w-[84px]')
   expect(html.indexOf('w-[84px]')).toBeLessThan(html.indexOf('role="tab"'))
 })
+
+test('a fullscreen window gets no well, because macOS has hidden the lights', () => {
+  // The live subscription is `windowChrome.dom.test.ts`; this is the seam
+  // between it and the bar.
+  const html = renderToStaticMarkup(
+    <TabBar
+      tabs={[tab('a')]}
+      activeSessionId="a"
+      onSelect={noop}
+      onClose={noop}
+      onRestart={noop}
+      onNewTab={noop}
+      fullscreenMedia={{
+        matches: true,
+        addEventListener: noop,
+        removeEventListener: noop,
+      }}
+    />,
+  )
+
+  expect(html).not.toContain('w-[84px]')
+  // Specifically the WELL: `w-0` alone would also match the hidden close button.
+  expect(html).toContain('<div class="w-0 shrink-0" aria-hidden="true">')
+})
