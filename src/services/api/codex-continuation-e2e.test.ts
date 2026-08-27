@@ -12,7 +12,11 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import { canonicalizeCodexItem, translateToCodexBody } from './codex-fetch-adapter.js'
+import {
+  canonicalizeCodexItem,
+  translateCodexStreamToAnthropic,
+  translateToCodexBody,
+} from './codex-fetch-adapter.js'
 import { reconcileCanonicalDelta } from './codex-websocket-transport.js'
 import { normalizeMessagesForAPI } from '../../utils/messages.js'
 
@@ -123,6 +127,47 @@ function simulateCanonicalState(
     sentInput,
     outputItems: raw.map(item => canonicalizeCodexItem(item)),
   }
+}
+
+/**
+ * Run raw Codex events through the REAL adapter and return the assistant text
+ * the transcript would persist. Using the adapter rather than a literal string
+ * is the point: it is what makes this file's reconciliation assertions depend
+ * on terminal-text recovery actually happening.
+ */
+async function assistantTextFromCodexEvents(
+  events: Array<Record<string, unknown>>,
+  responseId: string,
+): Promise<string> {
+  const codexResponse = new Response(
+    [
+      ...events.flatMap(event => [
+        `event: ${event.type as string}`,
+        `data: ${JSON.stringify(event)}`,
+        '',
+      ]),
+      'event: response.completed',
+      `data: ${JSON.stringify({
+        type: 'response.completed',
+        response: { id: responseId, usage: { input_tokens: 8, output_tokens: 4 } },
+      })}`,
+      '',
+    ].join('\n'),
+    { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+  )
+
+  const body = await (await translateCodexStreamToAnthropic(codexResponse, 'gpt-5.6-luna')).text()
+  let text = ''
+  for (const line of body.split('\n')) {
+    if (!line.startsWith('data: ')) continue
+    const payload = JSON.parse(line.slice(6)) as Record<string, unknown>
+    if (payload.type !== 'content_block_delta') continue
+    const delta = payload.delta as Record<string, unknown> | undefined
+    if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
+      text += delta.text
+    }
+  }
+  return text
 }
 
 // ── Helpers for checking canonical reconciliation ─────────────────────────────
@@ -333,6 +378,54 @@ describe('codex continuation e2e: normalization → translation → reconciliati
     const delta = canonicalDelta(turn2Input, sentInput, outputItems)
     expect(delta).not.toBeNull()
     expect(delta!).toEqual([{ role: 'user', content: 'next' }])
+  })
+
+  test('terminal-only assistant text still reconciles instead of forcing a full send', async () => {
+    // The transport records completed items from the raw response.output_item.done,
+    // independent of what the adapter emits downstream, so the baseline always
+    // held this message with its text. The local transcript did not: before
+    // terminal-text recovery the assistant turn was persisted empty, so the next
+    // turn's input could not line up with the baseline and every continuation
+    // after a delta-less response paid a full send. See
+    // docs/reports/2026-08-28-codex-adapter-terminal-text-drop.md.
+    const messageItem = {
+      type: 'message',
+      id: 'msg_terminal_continuation',
+      role: 'assistant',
+      status: 'completed',
+      content: [
+        { type: 'output_text', text: 'Recovered answer.', annotations: [], logprobs: [] },
+      ],
+    }
+
+    const recoveredText = await assistantTextFromCodexEvents([
+      {
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: { type: 'message', id: 'msg_terminal_continuation' },
+      },
+      {
+        type: 'response.output_text.done',
+        item_id: 'msg_terminal_continuation',
+        output_index: 0,
+        content_index: 0,
+        text: 'Recovered answer.',
+      },
+      { type: 'response.output_item.done', output_index: 0, item: messageItem },
+    ], 'resp_terminal_continuation')
+
+    const turn1Input = transcriptToCodexInput([userMsg('hello')])
+    const outputItems = [canonicalizeCodexItem(messageItem)]
+
+    const turn2Input = transcriptToCodexInput([
+      userMsg('hello'),
+      assistantMsg(recoveredText),
+      userMsg('next'),
+    ])
+
+    const result = reconcileCanonicalDelta(turn2Input, turn1Input, outputItems)
+    expect(result.mismatchReason).toBeNull()
+    expect(result.delta).toEqual([{ role: 'user', content: 'next' }])
   })
 
 })

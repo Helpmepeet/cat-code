@@ -1963,6 +1963,53 @@ describe('codex-fetch-adapter', () => {
     expect(body.content).toEqual([{ type: 'text', text: 'streamed part. terminal part.' }])
   })
 
+  // Third terminal source. Carries neither output_text.done nor a populated
+  // output_item.done, so the other two recovery paths cannot cover for it.
+  test('recovers assistant text delivered only via response.content_part.done', async () => {
+    const body = await runTerminalTextFetch('conv_terminal_part', [
+      {
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: { type: 'message', id: 'msg_part_only' },
+      },
+      {
+        type: 'response.content_part.done',
+        item_id: 'msg_part_only',
+        output_index: 0,
+        content_index: 0,
+        part: { type: 'output_text', text: 'part only', annotations: [] },
+      },
+    ])
+
+    expect(body.content).toEqual([{ type: 'text', text: 'part only' }])
+  })
+
+  test('does not re-emit a part output_text.done already recovered', async () => {
+    const body = await runTerminalTextFetch('conv_terminal_part_nodup', [
+      {
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: { type: 'message', id: 'msg_part_nodup' },
+      },
+      {
+        type: 'response.output_text.done',
+        item_id: 'msg_part_nodup',
+        output_index: 0,
+        content_index: 0,
+        text: 'recovered once',
+      },
+      {
+        type: 'response.content_part.done',
+        item_id: 'msg_part_nodup',
+        output_index: 0,
+        content_index: 0,
+        part: { type: 'output_text', text: 'recovered once', annotations: [] },
+      },
+    ])
+
+    expect(body.content).toEqual([{ type: 'text', text: 'recovered once' }])
+  })
+
   // The priming buffer holds events until it sees visible output. Before
   // terminal text counted, a done-only response stayed buffered until
   // response.completed, so it surfaced only when the whole stream finished.
@@ -2013,6 +2060,17 @@ describe('codex-fetch-adapter', () => {
         },
       ]),
     ).toBe(true)
+
+    expect(
+      await primeReleasesOn('part', [
+        {
+          type: 'response.content_part.done',
+          output_index: 0,
+          content_index: 0,
+          part: { type: 'output_text', text: 'terminal', annotations: [] },
+        },
+      ]),
+    ).toBe(true)
   })
 
   test('priming does not release on a completed message item carrying no text', async () => {
@@ -2035,6 +2093,17 @@ describe('codex-fetch-adapter', () => {
             type: 'message',
             content: [{ type: 'refusal', text: 'no' }],
           },
+        },
+      ]),
+    ).toBe(false)
+
+    expect(
+      await primeReleasesOn('refusalpart', [
+        {
+          type: 'response.content_part.done',
+          output_index: 0,
+          content_index: 0,
+          part: { type: 'refusal', text: 'no' },
         },
       ]),
     ).toBe(false)

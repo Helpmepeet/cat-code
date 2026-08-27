@@ -1938,8 +1938,9 @@ async function processCodexEvents(
 
   // Assistant text used to reach the transcript only through
   // response.output_text.delta. The server may instead deliver a message's text
-  // whole in terminal events (response.output_text.done, or a populated
-  // item.content on response.output_item.done) with no deltas at all, at which
+  // whole in terminal events (response.output_text.done,
+  // response.content_part.done, or a populated item.content on
+  // response.output_item.done) with no deltas at all, at which
   // point the text was silently discarded: the turn still reported
   // response.completed, so nothing surfaced the loss. See
   // docs/reports/2026-08-28-codex-adapter-terminal-text-drop.md.
@@ -2106,6 +2107,25 @@ async function processCodexEvents(
                 textPartsEmitted.add(partKey)
                 logForDebugging(
                   `${RECOVERED_TERMINAL_TEXT_PREFIX} source=output_text.done ` +
+                  `part=${partKey} chars=${text.length}`,
+                  { level: 'warn' },
+                )
+                emitAssistantText(text)
+              }
+            }
+
+            // Last of the three terminal sources. It arrives after
+            // output_text.done and before output_item.done, and carries the
+            // same item_id/content_index, so a part already emitted by a delta
+            // or by output_text.done is skipped on the shared key and this
+            // fires only for a server that carries the text here alone.
+            else if (eventType === 'response.content_part.done') {
+              const partKey = eventTextPartKey(event)
+              const text = outputTextOfPart(event.part)
+              if (!textPartsEmitted.has(partKey) && text) {
+                textPartsEmitted.add(partKey)
+                logForDebugging(
+                  `${RECOVERED_TERMINAL_TEXT_PREFIX} source=content_part.done ` +
                   `part=${partKey} chars=${text.length}`,
                   { level: 'warn' },
                 )
@@ -2905,6 +2925,10 @@ function codexEventBeginsVisibleOutput(event: Record<string, unknown>): boolean 
   // both delays it and collapses its timing diagnostics into a single tick.
   if (eventType === 'response.output_text.done') {
     return typeof event.text === 'string' && event.text.length > 0
+  }
+
+  if (eventType === 'response.content_part.done') {
+    return outputTextOfPart(event.part) !== undefined
   }
 
   if (eventType === 'response.output_item.done') {

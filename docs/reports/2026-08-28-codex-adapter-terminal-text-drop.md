@@ -175,6 +175,10 @@ Implemented in `src/services/api/codex-fetch-adapter.ts` on 2026-08-28.
   The delta handler was rewritten to call it, leaving a single emit path.
 - A `response.output_text.done` handler that recovers the part's text when that
   part produced no delta.
+- A `response.content_part.done` handler, added 2026-08-28 after the first two,
+  keyed identically so it fires only when neither a delta nor `output_text.done`
+  emitted that part. It reads the text through `outputTextOfPart`, so a payload
+  without a `part` object, or with a `refusal` part, is a no-op.
 - A fallback in the `output_item.done` message branch that walks `item.content`
   and recovers any part still unemitted, covering responses that carry a
   populated message item with no `output_text.done` at all.
@@ -199,19 +203,24 @@ fallback that `response.completed` overwrites with real `usage.output_tokens`, s
 recovery must not add estimates to it.
 
 Tests added to `codex-fetch-adapter.test.ts`: terminal-only via
-`output_text.done`, terminal-only via `output_item.done`, no duplication when
-deltas already delivered the part, and a multi-part case where one part streams
-and one does not. Three of the four fail with recovery disabled; the
-no-duplication test is a guard and passes either way, by design.
+`output_text.done`, terminal-only via `output_item.done`, terminal-only via
+`content_part.done`, no duplication when deltas already delivered the part, no
+re-emission when `output_text.done` already recovered the part, and a multi-part
+case where one part streams and one does not. The two no-duplication tests are
+guards and pass either way, by design; every other one fails when its own
+recovery branch is removed. The priming tests are mutation-checked the same way,
+including the negative case: widening `codexEventBeginsVisibleOutput` to read
+`part.text` without the `output_text` narrowing makes a `refusal`-only part
+release the buffer and fails the test.
 
-Verification: `codex-fetch-adapter` 83 pass, plus `codex-websocket-transport` and
-`codex-continuation-e2e` green (129 across the three suites). `bun test
-src/services/api/` is 424 pass / 1 fail, and that failure is
+Verification: `codex-fetch-adapter` 89 pass, plus `codex-websocket-transport` and
+`codex-continuation-e2e` green (136 across the three suites). `bun test
+src/services/api/` is 431 pass / 1 fail, and that failure is
 `accountRecoveryDiagnostics.test.ts`, which passes 17/17 file-isolated as the
 account suites are documented to require. `bun run build:dev:full` green.
 Typecheck shows one pre-existing TS2322 in this file at the `stop_sequence`
-assignment, in a region no diff hunk touches (HEAD line 2735, now 2789); zero new
-diagnostics.
+assignment, in a region no diff hunk touches (line 2833 as of the
+`content_part.done` change); zero new diagnostics.
 
 ## How the next occurrence gets recorded
 
@@ -258,18 +267,28 @@ an executing effect lens). What it changed, beyond the hardening listed above:
   module's rule that a turn is not replayed after visible output, so it is
   intended, but it was undocumented.
 
-Known deviations, stated rather than dropped silently:
+Both deviations were closed later the same day; what follows records how.
 
-- **`response.content_part.done` is still not handled** (spec item 2 named it as a
-  third recovery source). It costs nothing on all 13 observed records, every one of
-  which also carries `output_text.done`. The residual is a server that sends
-  `content_part.done` bearing text with neither of the other two terminal events.
-- **No websocket continuation regression test** (spec item 6). The mechanism was
-  verified sound by inspection and by the transport and continuation suites running
-  green: `completedOutputItems` is fed from the raw `output_item.done` independent
-  of what the adapter emits, so recovery cannot perturb it, and for the single-part
-  case recovery restores the canonical equality reconciliation wants. Unguarded
-  against future regression. Left open deliberately, not overlooked.
+- **`response.content_part.done` is now handled** (spec item 2's third recovery
+  source). It costs nothing on all 13 observed records, every one of which also
+  carries `output_text.done`; it exists for a server that sends `content_part.done`
+  bearing text with neither of the other two terminal events. No local record ever
+  captured the event's payload, so the handler was written to be inert on any shape
+  that does not carry an `output_text` part: it reads through `outputTextOfPart`,
+  and it shares `textPartsEmitted` with the other two sources, so precedence is
+  delta > `output_text.done` > `content_part.done` > `output_item.done` by stream
+  order alone. `codexEventBeginsVisibleOutput` recognizes it for the same reason it
+  recognizes `output_text.done`, so a content-part-only response does not buffer to
+  `response.completed`.
+- **The websocket continuation regression test exists** (spec item 6), in
+  `codex-continuation-e2e.test.ts`. It runs a terminal-only stream through the real
+  adapter, builds the baseline by canonicalizing the same raw `output_item.done`
+  item the transport records, and asserts `reconcileCanonicalDelta` returns the new
+  user item with no mismatch reason. Reverting the adapter to its pre-recovery
+  state fails it with `input shorter than canonical baseline: current=1 baseline=2`:
+  the empty assistant turn does not survive `normalizeMessagesForAPI`, so the
+  baseline cannot line up and every continuation after a delta-less response paid a
+  full send.
 - **Multi-part messages still force a websocket full send.** The adapter merges all
   content parts of one message into a single text block while the recorded baseline
   holds N parts. Pre-existing and identical for delta-fed responses; a cache cost,
@@ -285,7 +304,8 @@ subagent or compaction handler is implied, but a complete change needs:
 - Recovery keyed by output/content part, not one response-wide "saw a delta"
   flag. The multi-part candidates above are why.
 - A precedence order among `output_text.done`, `content_part.done`, and
-  `output_item.done`. All 13 records carry `content_part.done`, currently ignored.
+  `output_item.done`. All 13 records carry `content_part.done`, ignored at the
+  time this was written.
 - No duplication of terminal text when deltas did arrive, and preserved block
   ordering relative to reasoning and tool blocks.
 - `codexEventBeginsVisibleOutput` taught about recoverable terminal text.
