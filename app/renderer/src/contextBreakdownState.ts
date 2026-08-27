@@ -115,7 +115,7 @@ const CATEGORY_SWATCH: Record<string, string> = {
   claude: 'bg-[light-dark(#7c3aed,#c084fc)]', // Memory files
   cyan_FOR_SUBAGENTS_ONLY: 'bg-[light-dark(#0e7490,#22d3ee)]', // MCP tools
   permission: 'bg-[light-dark(#0f766e,#5eead4)]', // Custom agents
-  warning: 'bg-[light-dark(#b45309,#fbbf24)]', // Skills
+  warning: 'bg-[light-dark(#a35f00,#fbbf24)]', // Skills
 }
 
 /** The same hues as {@link CATEGORY_SWATCH}, as raw values for the donut
@@ -135,7 +135,7 @@ const CATEGORY_COLOR_HEX: Record<string, string> = {
   claude: 'light-dark(#7c3aed, #c084fc)',
   cyan_FOR_SUBAGENTS_ONLY: 'light-dark(#0e7490, #22d3ee)',
   permission: 'light-dark(#0f766e, #5eead4)',
-  warning: 'light-dark(#b45309, #fbbf24)',
+  warning: 'light-dark(#a35f00, #fbbf24)',
 }
 
 /** The same pairs once more as static `text-*` classes (see `textClass`). Written
@@ -149,7 +149,7 @@ const CATEGORY_TEXT: Record<string, string> = {
   claude: 'text-[light-dark(#7c3aed,#c084fc)]',
   cyan_FOR_SUBAGENTS_ONLY: 'text-[light-dark(#0e7490,#22d3ee)]',
   permission: 'text-[light-dark(#0f766e,#5eead4)]',
-  warning: 'text-[light-dark(#b45309,#fbbf24)]',
+  warning: 'text-[light-dark(#a35f00,#fbbf24)]',
 }
 
 const FALLBACK_SWATCH = 'bg-white/25'

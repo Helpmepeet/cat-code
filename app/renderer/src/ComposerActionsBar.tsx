@@ -434,7 +434,7 @@ function FastChip({
       title={title}
       disabled={disabled}
       onClick={() => onToggle(!active)}
-      className={`${FAST_FACE} border ${active ? 'border-tone-warn/30 bg-tone-warn/10 text-tone-warn hover:bg-tone-warn/15 hover:text-[light-dark(#92400e,#fde68a)]' : 'border-transparent text-text-ghost hover:text-text-subtle'} disabled:opacity-40`}
+      className={`${FAST_FACE} border ${active ? 'border-tone-warn/30 bg-tone-warn/10 text-tone-warn hover:bg-tone-warn/15 hover:text-[light-dark(#834a00,#fde68a)]' : 'border-transparent text-text-ghost hover:text-text-subtle'} disabled:opacity-40`}
     >
       <FastGlyph active={active} />
     </button>

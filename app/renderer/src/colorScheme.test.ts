@@ -396,22 +396,21 @@ test('every accent clears its contrast bar and none collides with the danger ton
    * floor constrains the light values without pinning either palette to today's
    * hexes.
    *
-   * AMBER IS EXEMPT AT ITS MEASURED VALUE, recorded rather than waived. It has
-   * pink's structural problem and the opposite resolution: amber is also a
-   * tint-named colour, so darkening it at constant hue gives an olive (#9a6900),
-   * and the palette instead rotates it toward orange-brown. That is the better
-   * of two bad options for the colour's identity, and it costs separation from
-   * danger, which fell from 62.2 degrees in dark to 21.7 in light. Nobody has
-   * complained about amber and it is not the default accent, so it was left
-   * alone; it is the next candidate if the light palette is revisited. Pinning
-   * the number here means it cannot quietly get worse.
+   * ONE FLOOR FOR ALL FIVE, after both offenders were fixed. Pink had rotated
+   * across into red (24.6 degrees from danger) and amber into orange (21.7, down
+   * from 62.2 in dark), each for its own reason: pink because contrast and
+   * identity are the same axis for a tint-named colour, amber because at the
+   * lightness white demands the sRGB gamut for yellows collapses, so its own hue
+   * only yields an olive. The warm sector is genuinely narrower in light, so the
+   * three warm hues are now spread evenly across it (37.7 and 36.6 degrees)
+   * rather than any one being shoved into another.
    */
   const DANGER_FLOOR: Record<string, number> = {
     pink: 30,
     blue: 30,
     green: 30,
     purple: 30,
-    amber: 21,
+    amber: 30,
   }
   const danger = readLight('tone-danger')
   expect(danger).not.toBeNull()

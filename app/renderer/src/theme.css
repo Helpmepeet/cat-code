@@ -417,8 +417,29 @@ html[data-appearance='light'] {
    * both roles: `text-tone-danger` (38 sites) and `bg-tone-danger` (30) are the
    * same token. Every value below clears 4.5:1 as text on `--app-bg` AND 4.5:1
    * for white ink laid on it, so one token can keep serving both. */
+  /*
+   * AMBER IS ROTATED, AND HOW FAR IS SET BY THE GAMUT, not by taste. It has
+   * pink's problem with the opposite resolution: at the lightness white demands
+   * (L around 0.55) the sRGB gamut for yellows collapses, so holding amber's own
+   * dark hue of 84 gives an olive (#8f6900) with a third less chroma. Rotating
+   * toward orange keeps it amber-looking and walks it into red: at #b45309 it
+   * sat 21.7 degrees from `--tone-danger`, down from 62.2 in dark, which put a
+   * warning and a destructive state next to each other in the one appearance
+   * where they are hardest to tell apart.
+   *
+   * The warm sector is simply narrower here, so the three warm hues are spread
+   * evenly across what is available rather than one being shoved: pink 349.6,
+   * danger 27.3, amber 63.9, i.e. 37.7 and 36.6 degrees apart, both wider than
+   * dark's own pink-to-danger 32.5. Danger does not move; pulling it back toward
+   * its dark hue was measured and rejected, because it buys amber 5 degrees by
+   * taking 5 from pink.
+   *
+   * 63.9 is the far edge of what still reads as amber. Past about 65 the drop in
+   * available chroma turns it olive, which is why this is not simply pushed
+   * further from red.
+   */
   --tone-good: #15803d;
-  --tone-warn: #b45309;
+  --tone-warn: #a35f00;
   --tone-danger: #dc2626;
   --tone-info: #2563eb;
 
@@ -486,9 +507,9 @@ html[data-appearance='light'] [data-accent='purple'] {
   --accent-rgb: 124 58 237;
 }
 html[data-appearance='light'] [data-accent='amber'] {
-  --accent: #b45309;
-  --accent-soft: #92400e;
-  --accent-rgb: 180 83 9;
+  --accent: #a35f00;
+  --accent-soft: #834b00;
+  --accent-rgb: 163 95 0;
 }
 
 /*

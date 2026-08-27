@@ -68,7 +68,7 @@ const PEEK_MAX_LINES = 5
  */
 const OUTCOME_CLASSES: ReadonlySet<string> = new Set([
   'text-[light-dark(#dc2626,#fca5a5)]',
-  'text-[light-dark(#b45309,#fcd34d)]',
+  'text-[light-dark(#a35f00,#fcd34d)]',
   'text-[light-dark(#15803d,#86efac)]',
 ])
 
@@ -218,7 +218,7 @@ export function logLineClass(line: string): string {
     return 'text-[light-dark(#dc2626,#fca5a5)]'
   }
   if (/(^\s*WARNING\b|\bwarn(ing)?\b|exceed|collision|not wrapped)/i.test(line)) {
-    return 'text-[light-dark(#b45309,#fcd34d)]'
+    return 'text-[light-dark(#a35f00,#fcd34d)]'
   }
   if (/(^\s*PASS\b|✓|compiled|succeeded|\bpassed\b)/.test(line)) {
     return 'text-[light-dark(#15803d,#86efac)]'

@@ -2791,7 +2791,7 @@ test('dequote returns empty text when the node carries no position', () => {
 test('output lines take the prototype logLineColor pastel for their own semantics', () => {
   expect(logLineClass('ERROR: boom')).toBe('text-[light-dark(#dc2626,#fca5a5)]')
   expect(logLineClass('npm ERR! install failed')).toBe('text-[light-dark(#dc2626,#fca5a5)]')
-  expect(logLineClass('WARNING: cache exceeded')).toBe('text-[light-dark(#b45309,#fcd34d)]')
+  expect(logLineClass('WARNING: cache exceeded')).toBe('text-[light-dark(#a35f00,#fcd34d)]')
   expect(logLineClass('PASS src/thing.test.ts')).toBe('text-[light-dark(#15803d,#86efac)]')
   expect(logLineClass('✓ 100 pass')).toBe('text-[light-dark(#15803d,#86efac)]')
   // Stack/trace continuation lines recede rather than reading as ordinary output.
@@ -2874,13 +2874,13 @@ test('output-line tint carries `not wrapped`, the one warn term the first port d
   // Only this one: the parent branch was `/\bWARN(ING)?\b|…/i`, so a lowercase
   // `warn` ALREADY matched. Without `not wrapped`, React's act() warning read as
   // ordinary output, which is the case that motivated re-checking the port.
-  expect(logLineClass('An update was not wrapped in act(...)')).toBe('text-[light-dark(#b45309,#fcd34d)]')
-  expect(logLineClass('warn: peer dependency')).toBe('text-[light-dark(#b45309,#fcd34d)]')
+  expect(logLineClass('An update was not wrapped in act(...)')).toBe('text-[light-dark(#a35f00,#fcd34d)]')
+  expect(logLineClass('warn: peer dependency')).toBe('text-[light-dark(#a35f00,#fcd34d)]')
   // `WARNING` carries a `^\s*` anchor in the prototype, but that alternative is
   // unreachable: the branch's `\bwarn(ing)?\b` is unanchored and the whole regex
   // is case-insensitive, so a mid-line `WARNING` still matches. Ported verbatim
   // rather than "cleaned up", and pinned here so the quirk is not read as a bug.
-  expect(logLineClass('emitted a WARNING during the run')).toBe('text-[light-dark(#b45309,#fcd34d)]')
+  expect(logLineClass('emitted a WARNING during the run')).toBe('text-[light-dark(#a35f00,#fcd34d)]')
 })
 
 test('a bash body tints each line by its own semantics, not one flat wash', () => {
@@ -2900,7 +2900,7 @@ test('a bash body tints each line by its own semantics, not one flat wash', () =
     }),
   )
 
-  expect(html).toContain('text-[light-dark(#b45309,#fcd34d)]') // the warn line
+  expect(html).toContain('text-[light-dark(#a35f00,#fcd34d)]') // the warn line
   expect(html).toContain('text-[light-dark(#dc2626,#fca5a5)]') // the error line
   expect(html).toContain('text-[light-dark(#15803d,#86efac)]') // the passing line
   expect(html).toContain('text-text-muted') // the unclassified first line
@@ -3060,7 +3060,7 @@ test('the COLLAPSED bash peek tints too, since that is the default view', () => 
   )
 
   expect(html).not.toContain('864 lines hidden') // sanity: this is the peek
-  expect(html).toContain('text-[light-dark(#b45309,#fcd34d)]') // warn line, in the closed card
+  expect(html).toContain('text-[light-dark(#a35f00,#fcd34d)]') // warn line, in the closed card
   expect(html).toContain('text-[light-dark(#15803d,#86efac)]') // pass line, in the closed card
 })
 
@@ -3157,7 +3157,7 @@ test('a NON-bash body keeps the prototype flat base, NOT the bash line heuristic
   )
 
   expect(html).toContain('text-text-muted')
-  expect(html).not.toContain('text-[light-dark(#b45309,#fcd34d)]')
+  expect(html).not.toContain('text-[light-dark(#a35f00,#fcd34d)]')
   expect(html).not.toContain('text-[light-dark(#15803d,#86efac)]')
 })
 

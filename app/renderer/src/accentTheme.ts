@@ -63,7 +63,7 @@ export const ACCENT_SWATCH_CLASS: Readonly<Record<AccentKey, string>> = {
   blue: 'bg-[light-dark(#2563eb,#60a5fa)]',
   green: 'bg-[light-dark(#15803d,#4ade80)]',
   purple: 'bg-[light-dark(#7c3aed,#c084fc)]',
-  amber: 'bg-[light-dark(#b45309,#fbbf24)]',
+  amber: 'bg-[light-dark(#a35f00,#fbbf24)]',
 }
 
 /** The accent the app has always shipped (`theme.css` `--accent: #f472b6`), and

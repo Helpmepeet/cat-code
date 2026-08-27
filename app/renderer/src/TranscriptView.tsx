@@ -1936,7 +1936,7 @@ const FAMILY_STYLE: Record<
   read: { mark: '≡', word: 'Read', color: 'text-[light-dark(#2563eb,#60a5fa)]' },
   write: { mark: '+', word: 'Write', color: 'text-[light-dark(#c2410c,#fb923c)]' },
   edit: { mark: '±', word: 'Edit', color: 'text-accent' },
-  grep: { mark: '⌕', word: 'Search', color: 'text-[light-dark(#b45309,#fbbf24)]' },
+  grep: { mark: '⌕', word: 'Search', color: 'text-[light-dark(#a35f00,#fbbf24)]' },
   web: { mark: '↗', word: 'Web', color: 'text-[light-dark(#0e7490,#22d3ee)]' },
   mcp: { mark: '⧉', word: 'MCP', color: 'text-[light-dark(#7c3aed,#c084fc)]' },
   notebook: { mark: '▣', word: 'Notebook', color: 'text-[light-dark(#c2410c,#f97316)]' },

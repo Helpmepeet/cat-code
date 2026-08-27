@@ -328,7 +328,7 @@ function OutputPanel({ text }: { text: string }) {
                   segment.match ? (
                     <mark
                       key={segmentIndex}
-                      className="rounded-sm bg-tone-warn/25 px-px text-[light-dark(#92400e,#fde68a)]"
+                      className="rounded-sm bg-tone-warn/25 px-px text-[light-dark(#834a00,#fde68a)]"
                     >
                       {segment.text}
                     </mark>
