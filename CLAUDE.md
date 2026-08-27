@@ -131,6 +131,20 @@ tears down all three (`app/scripts/dev.ts`). Facts that follow from that:
   source. Conversely, a dev app left open across your edits is showing HMR
   state, so send the operator to a fresh launch before they judge a layout or
   effect change.
+- **The renderer hot-reloads; main and preload do NOT.** `dev.ts:88` builds both
+  once with a `spawnSync` before Vite starts, and nothing watches them
+  (`grep -cE 'watch|chokidar' app/scripts/dev.ts` is 0). So a dev app left
+  running across a change under `app/main/**` or `app/preload/**` serves a
+  CURRENT renderer against a STALE main, and the two disagree silently: no
+  error, no warning, no log line. Symptom shape: the page reflects your change
+  and the window does not. Cost a full round trip on 2026-08-27, when a
+  light-appearance renderer hot-reloaded while the main process that sets
+  `nativeTheme.themeSource` was still the one built at launch — so the page went
+  light, the macOS vibrancy material and the title bar stayed dark, and the
+  operator reported the feature as broken when it was not. Before asking the
+  operator to judge ANYTHING main owns — window chrome, vibrancy, title bar,
+  `nativeTheme`, menus, IPC handlers — send them to a full Ctrl-C and relaunch,
+  not a reload.
 - **That whole paragraph is conditional on `IS_DEV = !app.isPackaged`, and
   `app.isPackaged` is derived from the EXECUTABLE'S NAME.** Electron reports
   packaged for any executable not named `electron`, so renaming the dev binary
