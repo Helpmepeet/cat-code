@@ -1,0 +1,827 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Shell transcript, subagent spawn</title>
+<style>
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:500;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMMono-Medium.woff2') format('woff2')}
+
+/* ══ tokens — app/renderer/src/theme.css ══════════════════════════════════ */
+:root{
+  --accent:#f472b6;
+  --accent-rgb:244 114 182;
+  --accent-soft:#f9a8d4;
+  --tone-good:#4ade80;
+  --tone-warn:#fbbf24;
+  --tone-danger:#f87171;
+  --tone-info:#60a5fa;
+  --app-bg:#09090b;
+  --shell-chrome:#070709;
+  --surface-panel:#0a0a0c;
+  --shell-seam:rgba(255,255,255,0.06);
+  --shell-hover:rgba(255,255,255,0.045);
+  --text-primary:#f4f4f5;
+  --text-muted:#a1a1aa;
+  --text-subtle:#98989f;
+  --text-faint:#838389;
+  --text-ghost:#75757b;
+  --transcript-width:900px;
+  --font-sans:"DM Sans",-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+  --font-mono:"DM Mono",ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;
+  /* compiled Tailwind palette entries the components reach for by class name */
+  --sky-300:oklch(82.8% .111 230.318);
+  --purple-200:oklch(90.2% .063 306.703);
+  --blue-400:oklch(70.7% .165 254.624);
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html{line-height:1.5}
+html,body{margin:0;height:100%}
+body{background:var(--app-bg);font-family:var(--font-sans);color:var(--text-primary);-webkit-font-smoothing:antialiased;overflow:hidden}
+button{font:inherit;color:inherit;border:0;background:none;padding:0;cursor:pointer}
+
+/* ══ window ═══════════════════════════════════════════════════════════════ */
+.win{display:flex;flex-direction:column;height:100vh;background:var(--app-bg)}
+/* macOS title bar: OS-drawn, 28px outer, app title from `app.setName` under IS_DEV */
+.tbar{position:relative;flex-shrink:0;height:28px;display:flex;align-items:center;padding:0 10px;background:#1c1c1e;border-bottom:1px solid #000}
+.lights{display:flex;gap:8px}
+.light{height:12px;width:12px;border-radius:9999px}
+.l-r{background:#ff5f57}.l-y{background:#febc2e}.l-g{background:#28c840}
+.tbar-t{position:absolute;left:0;right:0;text-align:center;font-size:13px;font-weight:600;color:#d8d8dc;pointer-events:none}
+
+.shell{position:relative;display:flex;min-height:0;flex:1;overflow:hidden}
+.pane{display:flex;min-width:0;flex:1;flex-direction:column;overflow:hidden}
+
+/* ══ TabBar — app/renderer/src/TabBar.tsx ════════════════════════════════ */
+.tabs{display:flex;height:40px;flex-shrink:0;align-items:stretch;overflow:hidden;border-bottom:1px solid var(--shell-seam);background:var(--shell-chrome)}
+.tabs-scroll{display:flex;flex:1;align-items:stretch;overflow:hidden}
+.tab{position:relative;display:flex;min-width:90px;max-width:176px;flex-grow:1;flex-shrink:0;cursor:pointer;user-select:none;align-items:center;gap:6px;border-right:1px solid rgba(255,255,255,0.05);padding-left:12px;padding-right:6px}
+.tab:hover{background:rgba(255,255,255,0.025)}
+.tab.is-active{background:rgba(255,255,255,0.05)}
+.tab-underline{position:absolute;left:0;right:0;bottom:0;height:1.5px;border-top-left-radius:2px;border-top-right-radius:2px;background:var(--accent)}
+.tab-dot{height:6px;width:6px;flex-shrink:0;border-radius:9999px}
+.d-good{background:var(--tone-good)}
+.d-accent{background:var(--accent)}
+.d-subtle{background:var(--text-subtle)}
+.tab-t{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--text-subtle)}
+.tab.is-active .tab-t{color:var(--text-primary)}
+.tab-kebab{display:flex;height:18px;width:18px;flex-shrink:0;align-items:center;justify-content:center;border-radius:4px;color:rgba(152,152,159,0.7)}
+.tab-kebab:hover{background:rgba(255,255,255,0.1);color:var(--text-primary)}
+.tab-x{display:flex;height:18px;width:0;flex-shrink:0;align-items:center;justify-content:center;overflow:hidden;border-radius:4px;font-size:14px;line-height:1;color:rgba(152,152,159,0.6);opacity:0;transition:all .15s}
+.tab:hover .tab-x{width:18px;opacity:1}
+.tab-new{display:flex;width:40px;flex-shrink:0;align-items:center;justify-content:center;font-size:20px;line-height:1;color:var(--text-ghost)}
+.tab-new:hover{color:var(--accent)}
+.tab-right{display:flex;flex-shrink:0;align-items:center;gap:4px;border-left:1px solid var(--shell-seam);padding:0 10px}
+.splitbtn{display:flex;align-items:center;gap:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.08);padding:3px 10px;font-size:11px;color:var(--text-faint)}
+.splitbtn:hover{border-color:rgba(244,114,182,0.35);color:var(--text-primary)}
+
+/* ══ Sidebar — app/renderer/src/Sidebar.tsx ══════════════════════════════ */
+.rail-spacer{width:48px;flex-shrink:0}
+.rail{position:absolute;top:0;bottom:0;left:0;z-index:50;display:flex;width:48px;flex-direction:column;overflow:hidden;border-right:1px solid rgba(255,255,255,0.05);background:var(--surface-panel);transition:width .2s ease-out,box-shadow .2s ease-out;user-select:none}
+.rail.is-open{width:240px;box-shadow:4px 0 24px rgba(0,0,0,0.45)}
+.sb-head{position:relative;display:flex;height:50px;flex-shrink:0;align-items:center;justify-content:center}
+.rail.is-open .sb-head{justify-content:space-between;padding-left:16px;padding-right:10px}
+.sb-brand{display:flex;min-width:0;align-items:center;gap:10px}
+.sb-brand svg{color:var(--accent);display:block}
+.sb-wordmark{font-size:13px;font-weight:600;letter-spacing:-0.025em;color:var(--text-primary)}
+.sb-headbtns{display:none;align-items:center;gap:4px}
+.rail.is-open .sb-headbtns{display:flex}
+.sb-hbtn{display:flex;height:22px;width:22px;align-items:center;justify-content:center;border-radius:4px;color:var(--text-faint)}
+.sb-hbtn:hover{color:var(--text-muted)}
+.sb-hbtn.is-pinned{background:rgba(244,114,182,0.12);color:var(--accent)}
+.rail:not(.is-open) .sb-only-open{display:none}
+.rail.is-open .sb-only-collapsed{display:none}
+
+.sb-searchwrap{flex-shrink:0;padding:0 10px 8px}
+.sb-search{position:relative}
+.sb-search>svg{position:absolute;left:8px;top:50%;transform:translateY(-50%);color:var(--text-faint);pointer-events:none}
+.sb-search input{width:100%;border-radius:8px;border:1px solid rgba(255,255,255,0.07);background:rgba(255,255,255,0.04);padding:6px 8px 6px 26px;font-family:inherit;font-size:12px;line-height:1.33333;color:#d4d4d8;outline:none}
+.sb-search input::placeholder{color:var(--text-subtle)}
+.sb-search input:focus{border-color:rgba(244,114,182,0.35)}
+.sb-newchat{margin:0 8px 8px;flex-shrink:0;display:flex;align-items:center;gap:9px;border-radius:6px;padding:6px 8px;font-size:12.5px;font-weight:500;color:#d4d4d8;text-align:left;width:calc(100% - 16px)}
+.sb-newchat:hover{background:rgba(244,114,182,0.10);color:var(--accent-soft)}
+.sb-scroll{min-height:0;flex:1;overflow-y:auto;overflow-x:hidden;padding:0 8px;scrollbar-width:none}
+.sb-scroll::-webkit-scrollbar{display:none}
+.sb-section{margin-bottom:10px}
+.sb-sectionhead{display:flex;align-items:center;gap:4px;padding:2px 4px 6px}
+.sb-sectiontitle{flex:1;min-width:0;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-faint)}
+.sb-iconbtn{display:flex;height:18px;width:18px;flex-shrink:0;align-items:center;justify-content:center;border-radius:4px;border:1px solid rgba(255,255,255,0.08);color:var(--text-faint)}
+.sb-iconbtn:hover{border-color:rgba(244,114,182,0.4);background:rgba(244,114,182,0.08);color:var(--accent)}
+.sb-group{position:relative;margin-bottom:4px}
+.sb-grouphead{display:flex;align-items:center;gap:5px;padding:2px 4px 4px;cursor:grab}
+.sb-groupbtn{display:flex;align-items:center;gap:4px;flex:1;min-width:0;text-align:left}
+.sb-groupicon{display:flex;height:13px;width:13px;flex-shrink:0;align-items:center;justify-content:center;color:var(--text-subtle)}
+.sb-grouphead:hover .sb-groupicon{color:var(--accent-soft)}
+.sb-groupname{font-size:12.5px;font-weight:500;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-grouphead:hover .sb-groupname{color:#d4d4d8}
+.sb-ghost{display:flex;height:18px;width:18px;flex-shrink:0;align-items:center;justify-content:center;border-radius:4px;color:var(--text-faint);opacity:0}
+.sb-grouphead:hover .sb-ghost{opacity:1}
+.sb-ghost:hover{background:rgba(244,114,182,0.12);color:var(--accent)}
+.sb-row{position:relative;display:flex;align-items:center;gap:8px;border-radius:6px;border:1px solid transparent;padding:6px 8px 6px 4px;cursor:pointer}
+.sb-row:hover{border-color:rgba(244,114,182,0.22);background:rgba(244,114,182,0.07)}
+.sb-row.is-active{border-color:rgba(244,114,182,0.18);background:rgba(244,114,182,0.09)}
+.sb-dotlane{display:flex;height:16px;width:6px;flex-shrink:0;align-items:center;align-self:flex-start;pointer-events:none}
+.sb-dot{height:6px;width:6px;border-radius:9999px;background:var(--tone-good)}
+.sb-rowbody{min-width:0;flex:1}
+.sb-title{display:block;font-size:13px;font-weight:500;color:#c4c4c8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-row:hover .sb-title{color:var(--text-primary)}
+.sb-row.is-active .sb-title{color:#fce7f3}
+.sb-sub{display:flex;align-items:center;gap:5px;min-width:0;font-size:10px;color:var(--text-faint)}
+.sb-sub .sb-sep{color:var(--text-ghost);flex-shrink:0}
+.sb-model{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-actions{position:absolute;top:0;bottom:0;right:4px;display:flex;align-items:center;gap:2px;padding-left:14px;opacity:0}
+.sb-row:hover .sb-actions{opacity:1;background-image:linear-gradient(90deg,rgb(244 114 182 / 0),rgb(244 114 182 / 0.07) 14px),linear-gradient(90deg,rgb(10 10 12 / 0),#0a0a0c 14px)}
+.sb-row.is-active:hover .sb-actions{background-image:linear-gradient(90deg,rgb(244 114 182 / 0),rgb(244 114 182 / 0.09) 14px),linear-gradient(90deg,rgb(10 10 12 / 0),#0a0a0c 14px)}
+.sb-actions.is-restvisible{opacity:1}
+.sb-actbtn{display:flex;height:22px;width:22px;flex-shrink:0;align-items:center;justify-content:center;border-radius:4px;color:var(--text-subtle)}
+.sb-actbtn:hover{background:rgba(244,114,182,0.16);color:var(--accent-soft)}
+.sb-actbtn.is-hiddenatrest{opacity:0}
+.sb-row:hover .sb-actbtn.is-hiddenatrest{opacity:1}
+.sb-actbtn.is-pinned{color:var(--accent)}
+.sb-actbtn.is-unpinned{color:var(--text-faint)}
+.sb-more{display:flex;align-items:center;gap:4px;width:100%;border-radius:6px;padding:4px 8px 4px 26px;font-size:11px;font-weight:500;color:var(--text-faint);text-align:left}
+.sb-more:hover{background:var(--shell-hover);color:var(--text-muted)}
+.sb-foot{flex-shrink:0;display:flex;flex-direction:column-reverse;align-items:stretch;border-top:1px solid var(--shell-seam);padding:6px 8px 8px}
+.sb-footrow{display:flex;align-items:center;gap:8px;flex-shrink:0}
+.sb-account{display:flex;align-items:center;gap:8px;min-width:0;flex:1;border-radius:6px;padding:2px 4px;color:var(--text-subtle);text-align:left}
+.sb-account:hover{background:var(--shell-hover);color:var(--text-muted)}
+.sb-avatar{display:flex;height:20px;width:20px;flex-shrink:0;align-items:center;justify-content:center;border-radius:9999px;background:rgba(244,114,182,0.16);font-size:10px;font-weight:600;letter-spacing:.02em;color:var(--accent-soft)}
+.sb-alias{font-size:11px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-navtoggle{margin-left:auto;display:flex;height:26px;width:26px;flex-shrink:0;align-items:center;justify-content:center;border-radius:6px;color:var(--text-faint)}
+.sb-navtoggle:hover{background:var(--shell-hover);color:var(--text-muted)}
+.sb-navtoggle.is-on{color:var(--accent-soft);transform:rotate(90deg)}
+.sb-navlist{display:flex;flex-direction:column;overflow:hidden;padding-bottom:6px}
+.sb-navlist[hidden]{display:none}
+.sb-navitem{display:flex;align-items:center;gap:4px;width:100%;border-radius:6px;padding:6px 0;color:var(--text-subtle);text-align:left}
+.sb-navitem:hover{color:#d4d4d8}
+.sb-navitem.is-current{background:rgba(244,114,182,0.09);color:var(--accent-soft)}
+.sb-navlane{display:flex;height:20px;width:32px;flex-shrink:0;align-items:center;justify-content:center}
+.sb-navlabel{font-size:13px}
+.sb-navitem.is-current .sb-navlabel{font-weight:500}
+.sb-railnav{margin-top:auto;display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 0 12px}
+.sb-railnav .sb-avatar{margin-bottom:4px}
+.sb-railbtn{display:flex;height:32px;width:32px;align-items:center;justify-content:center;border-radius:6px;color:var(--text-subtle)}
+.sb-railbtn:hover{color:#d4d4d8}
+.sb-railbtn.is-current{background:rgba(244,114,182,0.12);color:var(--accent-soft)}
+
+/* ══ chat pane — app/renderer/src/App.tsx ════════════════════════════════ */
+.chat{display:flex;min-height:0;flex:1;flex-direction:column;gap:16px;overflow:hidden;padding:0 32px 32px}
+.tsection{position:relative;display:flex;min-height:0;flex:1;flex-direction:column}
+.tscroll{min-height:0;flex:1;overflow:auto}
+.col{margin:0 auto;display:flex;width:100%;max-width:var(--transcript-width);flex-direction:column;gap:10px;padding:24px 32px 0}
+.jump{position:absolute;bottom:12px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:6px;border-radius:9999px;border:1px solid var(--shell-seam);background:rgba(7,7,9,0.9);padding:4px 12px;font-size:11px;color:var(--text-muted);box-shadow:0 10px 15px -3px rgba(0,0,0,.5);backdrop-filter:blur(4px)}
+.jump[hidden]{display:none}
+
+/* seam — TranscriptView.tsx Seam */
+.seam{display:flex;align-items:center;gap:12px;padding:4px 0}
+.seam-rule{height:1px;flex:1;background:rgb(var(--accent-rgb)/0.2)}
+.seam-mid{display:flex;align-items:center;gap:6px;white-space:nowrap;font-size:11px}
+.seam-glyph,.seam-label{color:var(--text-muted)}
+.seam-detail{color:rgba(152,152,159,0.7)}
+
+/* the user's own turn */
+.ubub-w{display:flex;justify-content:flex-end}
+.ubub{max-width:82%;white-space:pre-wrap;overflow-wrap:break-word;border-radius:16px;border-bottom-right-radius:4px;border:1px solid rgb(var(--accent-rgb)/0.2);background:rgb(var(--accent-rgb)/0.1);padding:10px 16px;font-size:14px;line-height:1.625;color:var(--text-primary)}
+
+/* model prose — `.md-prose` in theme.css over `font-sans font-medium text-sm leading-relaxed` */
+.prose{font-family:var(--font-sans);font-weight:500;font-size:14px;line-height:1.625;overflow-wrap:break-word}
+.prose>*{margin:0}
+.prose>*+*{margin-top:.85em}
+.prose ul,.prose ol{padding-left:1.5em}
+.prose ul{list-style-type:disc}
+.prose ol{list-style-type:decimal}
+.prose li::marker{color:var(--text-muted)}
+.prose li+li{margin-top:.3em}
+.prose :not(pre)>code{font-family:var(--font-mono);font-size:.9em;color:var(--accent-soft);overflow-wrap:anywhere}
+/* linkified file path: mono, accent, leading file glyph */
+.fp{display:inline-flex;align-items:center;gap:2px;border-radius:2px;vertical-align:baseline;font-family:var(--font-mono);color:var(--accent)}
+.fp:hover{color:var(--accent-soft)}
+.fp svg{display:block}
+
+/* reasoning run (trail mode) */
+.rr{display:flex;flex-direction:column}
+.rr-h{display:flex;width:100%;align-items:center;gap:10px;padding:1px 0;text-align:left}
+.rr-c{display:inline-block;width:16px;flex-shrink:0;text-align:center;font-size:9px;line-height:1;color:var(--text-ghost);transition:transform .1s ease-out,color .1s ease-out}
+.rr.is-collapsed .rr-c{transform:rotate(-90deg)}
+.rr-h:hover .rr-c{color:var(--text-subtle)}
+.rr-w{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-subtle)}
+.rr-h:hover .rr-w{color:var(--text-muted)}
+.rr-n{font-size:10.5px;color:var(--text-faint)}
+.rr-h:hover .rr-n{color:var(--text-subtle)}
+.rr-l{margin:2px 0 0 8px;padding-left:17px;border-left:1px solid rgba(255,255,255,0.1);list-style:none;transition:border-color .1s ease-out}
+.rr:hover .rr-l{border-color:rgba(255,255,255,0.16)}
+.rr.is-collapsed .rr-l{display:none}
+.rr-s{position:relative;padding:2px 0;font-size:12.5px;line-height:normal;color:var(--text-subtle)}
+.rr-d{position:absolute;top:9px;left:-20px;height:5px;width:5px;border-radius:9999px;background:var(--text-ghost)}
+
+/* the shell every tool card shares, agent cards included */
+.card{width:100%;overflow:hidden;border-radius:6px;border:1px solid var(--shell-seam);background:rgba(255,255,255,0.025);font-family:var(--font-sans)}
+.hdr{display:flex;width:100%;align-items:center;gap:10px;padding:8px 12px;text-align:left}
+.mark{width:16px;flex-shrink:0;text-align:center;font-size:13px}
+.word{flex-shrink:0;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}
+.target{min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-mono);font-size:12px;line-height:16px;color:var(--text-primary)}
+.badge{min-width:0;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-mono);font-size:10px;color:var(--text-subtle)}
+.runbadge{flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-mono);font-size:11px;color:var(--text-faint)}
+.sdot{height:6px;width:6px;flex-shrink:0;border-radius:9999px}
+
+/* identity strip: always visible, never collapses */
+.strip{display:flex;flex-wrap:wrap;align-items:center;gap:8px;border-top:1px solid var(--shell-seam);padding:6px 12px}
+.roledot{display:inline-block;height:6px;width:6px;flex-shrink:0;border-radius:9999px}
+.handle{flex-shrink:0;white-space:nowrap;font-family:var(--font-mono);font-size:12.5px;font-weight:600;color:var(--purple-200)}
+.wtype{flex-shrink:0;font-size:12.5px;font-weight:600}
+.state{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;font-size:11px;font-weight:500}
+.pip{display:inline-block;height:8px;width:8px;flex-shrink:0;border-radius:9999px}
+.pip.fill{background:currentColor}
+
+/* expanded body */
+.body{border-top:1px solid var(--shell-seam);background:rgba(0,0,0,0.28)}
+.card.is-collapsed .body{display:none}
+.body-in{padding:4px 12px 10px}
+.col2{display:flex;flex-direction:column;gap:8px}
+.kids{display:flex;flex-direction:column;gap:8px;border-left:1px solid rgb(var(--accent-rgb)/0.2);padding-left:12px}
+
+/* member rows inside a grouped run of reads or searches */
+.runrows{display:flex;flex-direction:column}
+.runrow{display:flex;width:100%;align-items:center;gap:10px;border-radius:4px;padding:2px 0;text-align:left}
+.rcar{width:10px;flex-shrink:0;font-size:9px;line-height:1;color:var(--text-ghost)}
+.rmark{width:14px;flex-shrink:0;text-align:center;font-size:13px}
+.rp{display:flex;min-width:0;flex:1 1 0%;font-family:var(--font-mono);font-size:12px;line-height:16px;color:var(--text-primary)}
+.rd{flex-shrink:0;font-family:var(--font-mono);font-size:11px;color:var(--text-subtle)}
+
+/* wrapper for agents spawned together in one turn */
+.grp{width:100%;overflow:hidden;border-radius:6px;border:1px solid var(--shell-seam);background:rgba(255,255,255,0.02)}
+.grp-h{display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--shell-seam);padding:6px 12px}
+.grp-w{flex-shrink:0;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--accent)}
+.grp-l{font-size:11px}
+.grp-b{display:flex;flex-direction:column;gap:8px;padding:8px}
+
+/* family + tone classes */
+.c-accent{color:var(--accent)}
+.c-read{color:#60a5fa}
+.c-grep{color:#fbbf24}
+.c-bash{color:#a3e635}
+.c-good{color:var(--tone-good)}
+.c-sky{color:var(--sky-300)}
+.b-good{background:var(--tone-good)}
+.b-sky{background:var(--sky-300)}
+
+/* ══ composer dock — App.tsx + ComposerActionsBar.tsx ════════════════════ */
+.dock{margin:0 auto;display:flex;width:100%;max-width:var(--transcript-width);flex-shrink:0;flex-direction:column;gap:16px}
+.cform{display:flex;flex-direction:column}
+.crow{position:relative;display:flex;align-items:flex-end;gap:14px;padding:0 4px}
+.cfield-wrap{position:relative;min-width:0;flex:1}
+.cph{position:absolute;left:0;top:6px;pointer-events:none;font-size:15px;font-weight:500;line-height:normal;color:var(--text-faint)}
+.cfield{display:block;min-height:24px;max-height:38vh;width:100%;overflow-y:auto;white-space:pre-wrap;overflow-wrap:break-word;padding:6px 0;font-size:15px;font-weight:500;line-height:normal;color:var(--text-primary);caret-color:var(--accent);outline:none}
+.csend{display:flex;height:30px;width:30px;flex-shrink:0;align-items:center;justify-content:center;align-self:flex-end;border-radius:8px;color:var(--accent)}
+.crule{height:2px;border-radius:2px;background:rgba(255,255,255,0.08);transition:background .15s}
+.crow:focus-within~.crule{background:linear-gradient(to right,var(--accent),rgb(var(--accent-rgb)/0.12))}
+.cbar{margin-top:12px;display:flex;align-items:center;gap:16px;padding:0 4px}
+.cattach{display:flex;height:22px;width:22px;flex-shrink:0;align-items:center;justify-content:center;border-radius:5px;color:var(--text-ghost)}
+.cattach:hover{color:var(--text-muted)}
+.cleft{display:flex;min-width:0;flex:1;align-items:center;gap:7px}
+.face{display:inline-flex;max-width:170px;flex-shrink:0;align-items:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:6px;padding:3px 5px;font-size:12.5px;font-weight:500}
+.face:hover{color:var(--text-primary)}
+.f-model{color:#22d3ee}
+.f-effort{color:var(--tone-warn)}
+.f-mode{color:var(--accent)}
+.f-account{gap:6px;color:var(--text-muted)}
+.sep{flex-shrink:0;user-select:none;font-size:12px;color:rgba(255,255,255,0.2)}
+.fastface{display:inline-flex;height:22px;width:22px;flex-shrink:0;align-items:center;justify-content:center;border-radius:5px;border:1px solid transparent;color:var(--text-ghost)}
+.cright{margin-left:auto;display:flex;min-width:0;align-items:center;gap:7px}
+.acctdot{height:7px;width:7px;flex-shrink:0;border-radius:9999px;background:var(--accent)}
+.gauge{display:flex;flex-shrink:0;align-items:center;gap:6px;align-self:center;color:var(--accent)}
+.gauge svg{transform:rotate(-90deg)}
+.gauge-n{font-size:12.5px;font-weight:600;font-variant-numeric:tabular-nums}
+/* dev-only debug line, App.tsx:5129 (`import.meta.env.DEV`) */
+.devline{margin-top:8px;user-select:all;border-radius:4px;background:rgba(255,255,255,0.04);padding:4px 8px;font-family:var(--font-mono);font-size:11px;line-height:1.25;color:#a1a1aa}
+</style>
+</head>
+<body>
+
+<!--
+═══════════════════════════════════════════════════════════════════════════════
+ WHAT THIS IS
+ The Cat Code desktop shell as it renders today, one session, one turn in which
+ three subagents were co-spawned. Sidebar hover-expands (120ms in / 200ms out)
+ and pins, exactly as `Sidebar.tsx` does. Reasoning run and the agent cards
+ fold from their own headers. The jump-to-bottom pill appears only when the
+ transcript is scrolled off the bottom, as in `App.tsx`.
+
+ SOURCES
+   shell + composer + jump pill   app/renderer/src/App.tsx
+   tab strip                      app/renderer/src/TabBar.tsx
+   rail                           app/renderer/src/Sidebar.tsx
+   rows, seams, reasoning, cards  app/renderer/src/TranscriptView.tsx
+   chip rail                      app/renderer/src/ComposerActionsBar.tsx
+   donut                          app/renderer/src/ContextGauge.tsx
+   tokens, .md-prose              app/renderer/src/theme.css
+ Nothing on the page is page chrome: every pixel below the OS title bar claims
+ the app draws it.
+═══════════════════════════════════════════════════════════════════════════════
+-->
+
+<div class="win">
+
+  <div class="tbar">
+    <div class="lights"><span class="light l-r"></span><span class="light l-y"></span><span class="light l-g"></span></div>
+    <div class="tbar-t">Cat Code Dev</div>
+  </div>
+
+  <div class="shell">
+    <div class="rail-spacer" aria-hidden="true"></div>
+
+    <aside class="rail" id="rail" aria-label="Primary">
+      <div class="sb-head">
+        <div class="sb-brand">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><ellipse cx="6.5" cy="5.5" rx="1.8" ry="2.5" opacity=".65"/><ellipse cx="11.5" cy="4" rx="1.8" ry="2.5" opacity=".65"/><ellipse cx="16.5" cy="5.5" rx="1.8" ry="2.5" opacity=".65"/><ellipse cx="4" cy="9.5" rx="1.4" ry="2" opacity=".45"/><path d="M12 21.5c-4.2 0-7.5-2.3-7.5-6 0-1.9 1.1-3.6 2.8-4.6.75-.45 1.6-.65 2.3-.65h.8c.7 0 1.55.2 2.3.65 1.7.95 2.8 2.7 2.8 4.6 0 3.7-3.3 6-7.5 6z"/></svg>
+          <span class="sb-wordmark sb-only-open">Cat Code</span>
+        </div>
+        <div class="sb-headbtns">
+          <button class="sb-hbtn" title="Collapse sidebar" aria-label="Collapse sidebar">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="9" y1="4" x2="9" y2="20"/></svg>
+          </button>
+          <button class="sb-hbtn" id="pin" title="Pin sidebar open" aria-label="Pin sidebar open" aria-pressed="false">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1V4H8v2h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24z"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="sb-only-open">
+        <div class="sb-searchwrap">
+          <div class="sb-search">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" placeholder="Search sessions…" />
+          </div>
+        </div>
+        <button class="sb-newchat">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+          <span>New chat</span>
+        </button>
+      </div>
+
+      <div class="sb-scroll sb-only-open">
+        <div class="sb-section">
+          <div class="sb-sectionhead"><span class="sb-sectiontitle">Pinned</span></div>
+          <div class="sb-row">
+            <span class="sb-dotlane"></span>
+            <div class="sb-rowbody">
+              <span class="sb-title">Transcript leaf virtualization</span>
+              <div class="sb-sub"><span>3h</span><span class="sb-sep">·</span><span class="sb-model">Opus 5</span></div>
+            </div>
+            <div class="sb-actions is-restvisible">
+              <button class="sb-actbtn is-hiddenatrest" title="Session actions"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></button>
+              <button class="sb-actbtn is-pinned" title="Unpin"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M9 4V3h6v1h-1v6.76a2 2 0 0 0 1.11 1.79l1.78.9A2 2 0 0 1 19 15.24V17h-6v5h-2v-5H5v-1.76a2 2 0 0 1 1.11-1.79l1.78-.9A2 2 0 0 0 9 10.76z"/></svg></button>
+            </div>
+          </div>
+        </div>
+
+        <div class="sb-section">
+          <div class="sb-sectionhead">
+            <span class="sb-sectiontitle">Projects</span>
+            <button class="sb-iconbtn" title="Add project: choose a folder"><svg width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="1" x2="5" y2="9"/><line x1="1" y1="5" x2="9" y2="5"/></svg></button>
+          </div>
+
+          <div class="sb-group">
+            <div class="sb-grouphead">
+              <button class="sb-groupbtn">
+                <span class="sb-groupicon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4l2 2.5h6a2 2 0 0 1 2 2V9"/><path d="M2 12h18.5a1.5 1.5 0 0 1 1.45 1.9l-1.3 4.8A2 2 0 0 1 18.7 20H4"/></svg></span>
+                <span class="sb-groupname">cat-code</span>
+              </button>
+              <button class="sb-ghost" title="New session in this workspace"><svg width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="1" x2="5" y2="9"/><line x1="1" y1="5" x2="9" y2="5"/></svg></button>
+              <button class="sb-ghost" title="Project actions"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></button>
+            </div>
+
+            <div class="sb-row is-active">
+              <span class="sb-dotlane"><span class="sb-dot"></span></span>
+              <div class="sb-rowbody">
+                <span class="sb-title">Agent card surface</span>
+                <div class="sb-sub"><span>now</span><span class="sb-sep">·</span><span class="sb-model">GPT-5.6 Luna</span></div>
+              </div>
+              <div class="sb-actions">
+                <button class="sb-actbtn" title="Session actions"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></button>
+                <button class="sb-actbtn is-unpinned" title="Pin to top"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1V4H8v2h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24z"/></svg></button>
+              </div>
+            </div>
+
+            <div class="sb-row">
+              <span class="sb-dotlane"><span class="sb-dot"></span></span>
+              <div class="sb-rowbody">
+                <span class="sb-title">Composer dock parity</span>
+                <div class="sb-sub"><span>18m</span><span class="sb-sep">·</span><span class="sb-model">Opus 5</span></div>
+              </div>
+              <div class="sb-actions">
+                <button class="sb-actbtn" title="Session actions"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></button>
+                <button class="sb-actbtn is-unpinned" title="Pin to top"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1V4H8v2h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24z"/></svg></button>
+              </div>
+            </div>
+
+            <div class="sb-row">
+              <span class="sb-dotlane"></span>
+              <div class="sb-rowbody">
+                <span class="sb-title">Reasoning trail steps</span>
+                <div class="sb-sub"><span>2h</span><span class="sb-sep">·</span><span class="sb-model">Sonnet 5</span></div>
+              </div>
+              <div class="sb-actions">
+                <button class="sb-actbtn" title="Session actions"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></button>
+                <button class="sb-actbtn is-unpinned" title="Pin to top"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1V4H8v2h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24z"/></svg></button>
+              </div>
+            </div>
+
+            <div class="sb-row">
+              <span class="sb-dotlane"></span>
+              <div class="sb-rowbody">
+                <span class="sb-title">Token count audit</span>
+                <div class="sb-sub"><span>1d</span></div>
+              </div>
+              <div class="sb-actions">
+                <button class="sb-actbtn" title="Session actions"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></button>
+                <button class="sb-actbtn is-unpinned" title="Pin to top"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1V4H8v2h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24z"/></svg></button>
+              </div>
+            </div>
+
+            <button class="sb-more">Show 6 more</button>
+          </div>
+
+          <div class="sb-group">
+            <div class="sb-grouphead">
+              <button class="sb-groupbtn">
+                <span class="sb-groupicon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 19V6a2 2 0 0 1 2-2h3.6l2 2.5H19a2 2 0 0 1 2 2V19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/></svg></span>
+                <span class="sb-groupname">catcode_prototype</span>
+              </button>
+              <button class="sb-ghost" title="New session in this workspace"><svg width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="1" x2="5" y2="9"/><line x1="1" y1="5" x2="9" y2="5"/></svg></button>
+              <button class="sb-ghost" title="Project actions"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></button>
+            </div>
+            <div class="sb-row">
+              <span class="sb-dotlane"></span>
+              <div class="sb-rowbody">
+                <span class="sb-title">Surface inventory</span>
+                <div class="sb-sub"><span>5d</span></div>
+              </div>
+              <div class="sb-actions">
+                <button class="sb-actbtn" title="Session actions"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg></button>
+                <button class="sb-actbtn is-unpinned" title="Pin to top"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1V4H8v2h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24z"/></svg></button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sb-foot sb-only-open">
+        <div class="sb-footrow">
+          <button class="sb-account">
+            <span class="sb-avatar">B</span>
+            <span class="sb-alias">bluesky</span>
+          </button>
+          <button class="sb-navtoggle" id="navtoggle" title="Show destinations">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/></svg>
+          </button>
+        </div>
+        <div class="sb-navlist" id="navlist" hidden>
+          <button class="sb-navitem is-current"><span class="sb-navlane"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span><span class="sb-navlabel">Chat</span></button>
+          <button class="sb-navitem"><span class="sb-navlane"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></span><span class="sb-navlabel">Sessions</span></button>
+          <button class="sb-navitem"><span class="sb-navlane"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg></span><span class="sb-navlabel">Goals</span></button>
+          <button class="sb-navitem"><span class="sb-navlane"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg></span><span class="sb-navlabel">Accounts</span></button>
+          <button class="sb-navitem"><span class="sb-navlane"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span><span class="sb-navlabel">Settings</span></button>
+        </div>
+      </div>
+
+      <div class="sb-railnav sb-only-collapsed">
+        <span class="sb-avatar">B</span>
+        <button class="sb-railbtn is-current" title="Chat"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></button>
+        <button class="sb-railbtn" title="Sessions"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></button>
+        <button class="sb-railbtn" title="Goals"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg></button>
+        <button class="sb-railbtn" title="Accounts"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg></button>
+        <button class="sb-railbtn" title="Settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+      </div>
+    </aside>
+
+    <div class="pane">
+
+      <div class="tabs" role="tablist">
+        <div class="tabs-scroll">
+          <div class="tab is-active" role="tab" aria-selected="true">
+            <span class="tab-underline" aria-hidden="true"></span>
+            <span class="tab-dot d-good"></span>
+            <span class="tab-t">Agent card surface</span>
+            <button class="tab-kebab" title="Session actions"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></svg></button>
+            <button class="tab-x" title="Close session">×</button>
+          </div>
+          <div class="tab" role="tab" aria-selected="false">
+            <span class="tab-dot d-accent"></span>
+            <span class="tab-t">Composer dock parity</span>
+            <button class="tab-x" title="Close session">×</button>
+          </div>
+          <div class="tab" role="tab" aria-selected="false">
+            <span class="tab-dot d-subtle"></span>
+            <span class="tab-t">Token count audit</span>
+            <button class="tab-x" title="Close session">×</button>
+          </div>
+          <button class="tab-new" title="New session">+</button>
+        </div>
+        <div class="tab-right">
+          <button class="splitbtn" title="Split view" aria-label="Split view">
+            <svg width="15" height="11" viewBox="0 0 15 11" fill="none" aria-hidden="true"><rect x="0" y="0" width="6.5" height="11" rx="1.5" fill="currentColor" opacity="0.45"/><rect x="8.5" y="0" width="6.5" height="11" rx="1.5" fill="currentColor" opacity="1"/></svg>
+            <span>Split</span>
+          </button>
+        </div>
+      </div>
+
+      <main class="chat">
+        <section class="tsection">
+          <div class="tscroll" id="tscroll">
+            <div class="col">
+
+              <div class="seam">
+                <div class="seam-rule"></div>
+                <div class="seam-mid">
+                  <span class="seam-glyph" aria-hidden>✻</span>
+                  <span class="seam-label">Conversation compacted</span>
+                  <span class="seam-detail">· manual · 250,039 tokens</span>
+                </div>
+                <div class="seam-rule"></div>
+              </div>
+
+              <div class="ubub-w">
+                <div class="ubub">Spawn 3 subagents in parallel, one per surface: the reasoning trail, the agent and delegate cards, the composer dock. I want the owner files and the state each one derives, not a summary.</div>
+              </div>
+
+              <div class="rr">
+                <button class="rr-h" type="button" aria-expanded="true" title="Short summary headings the model exposes about its reasoning, not the reasoning itself.">
+                  <span class="rr-c" aria-hidden>▾</span>
+                  <span class="rr-w">Reasoning</span>
+                  <span class="rr-n">6 steps</span>
+                </button>
+                <ol class="rr-l">
+                  <li class="rr-s"><span class="rr-d"></span><strong>Splitting the surface into three independent reads</strong></li>
+                  <li class="rr-s"><span class="rr-d"></span><strong>Choosing Explore for all three, since none of them writes</strong></li>
+                  <li class="rr-s"><span class="rr-d"></span><strong>Checking the three file sets do not overlap</strong></li>
+                  <li class="rr-s"><span class="rr-d"></span><strong>Launching them in one turn so they group</strong></li>
+                  <li class="rr-s"><span class="rr-d"></span><strong>Deciding what each worker has to return</strong></li>
+                  <li class="rr-s"><span class="rr-d"></span><strong>Planning the merge once all three land</strong></li>
+                </ol>
+              </div>
+
+              <div class="prose">
+                <p>Three reads with no shared files, so they go out together in one turn and come back as one group.</p>
+              </div>
+
+              <div class="grp">
+                <div class="grp-h">
+                  <span class="sdot b-good"></span>
+                  <span class="grp-w">Delegate</span>
+                  <span class="grp-l c-good">3 Explore agents finished</span>
+                </div>
+                <div class="grp-b">
+
+                  <div class="card is-collapsed">
+                    <button class="hdr" type="button" aria-expanded="false">
+                      <span class="mark c-accent">◆</span>
+                      <span class="word c-accent">Agent</span>
+                      <span class="target">Map how the reasoning trail is rendered</span>
+                      <span class="badge">11 tool calls · 24.1k tokens</span>
+                    </button>
+                    <div class="strip">
+                      <span class="roledot b-sky"></span>
+                      <span class="handle">Marlow</span>
+                      <span class="wtype c-sky">Explore</span>
+                      <span class="state c-good"><span class="pip fill"></span>Completed</span>
+                    </div>
+                    <div class="body"><div class="body-in"><div class="col2"><div class="kids">
+                      <div class="prose"><p>The trail is a read-time derivation, not a frame kind. Steps come from the row, the run comes from adjacent rows.</p></div>
+                      <div class="card">
+                        <div class="hdr">
+                          <span class="mark c-read">≡</span>
+                          <span class="word c-read">Read</span>
+                          <span class="target">3 files</span>
+                          <span class="runbadge">app/renderer/src/</span>
+                        </div>
+                        <div class="body"><div class="body-in"><div class="runrows">
+                          <div class="runrow"><span class="rcar">▸</span><span class="rmark c-read">≡</span><span class="rp">reasoningLayout.ts</span><span class="rd">240 lines</span></div>
+                          <div class="runrow"><span class="rcar">▸</span><span class="rmark c-read">≡</span><span class="rp">TranscriptView.tsx</span><span class="rd">3482-3720</span></div>
+                          <div class="runrow"><span class="rcar">▸</span><span class="rmark c-read">≡</span><span class="rp">ReasoningLayoutProvider.tsx</span><span class="rd">64 lines</span></div>
+                        </div></div></div>
+                      </div>
+                    </div></div></div></div>
+                  </div>
+
+                  <div class="card">
+                    <button class="hdr" type="button" aria-expanded="true">
+                      <span class="mark c-accent">◆</span>
+                      <span class="word c-accent">Agent</span>
+                      <span class="target">Map the agent and delegate cards</span>
+                      <span class="badge">9 tool calls · 18.6k tokens</span>
+                    </button>
+                    <div class="strip">
+                      <span class="roledot b-sky"></span>
+                      <span class="handle">Vesper</span>
+                      <span class="wtype c-sky">Explore</span>
+                      <span class="state c-good"><span class="pip fill"></span>Completed</span>
+                    </div>
+                    <div class="body"><div class="body-in"><div class="col2"><div class="kids">
+                      <div class="prose"><p>Co-spawned agents coalesce at read time by shared message id, so the group is never a frame of its own.</p></div>
+                      <div class="card">
+                        <div class="hdr">
+                          <span class="mark c-grep">⌕</span>
+                          <span class="word c-grep">Search</span>
+                          <span class="target">3 patterns</span>
+                          <span class="sdot b-good"></span>
+                        </div>
+                      </div>
+                      <div class="card">
+                        <div class="hdr">
+                          <span class="mark c-read">≡</span>
+                          <span class="word c-read">Read</span>
+                          <span class="target">2 files</span>
+                          <span class="runbadge">app/renderer/src/</span>
+                        </div>
+                      </div>
+                      <div class="card">
+                        <div class="hdr">
+                          <span class="mark c-bash">$</span>
+                          <span class="word c-bash">Run</span>
+                          <span class="target">bun test app/renderer/src/transcriptProjector.test.ts</span>
+                          <span class="sdot b-good"></span>
+                        </div>
+                      </div>
+                      <div class="prose"><p>State is derived from the member cards, so a backgrounded member keeps the group off the finished wording.</p></div>
+                    </div></div></div></div>
+                  </div>
+
+                  <div class="card is-collapsed">
+                    <button class="hdr" type="button" aria-expanded="false">
+                      <span class="mark c-accent">◆</span>
+                      <span class="word c-accent">Agent</span>
+                      <span class="target">Map the composer dock and its chip rail</span>
+                      <span class="badge">7 tool calls · 12.3k tokens</span>
+                    </button>
+                    <div class="strip">
+                      <span class="roledot b-sky"></span>
+                      <span class="handle">Quill</span>
+                      <span class="wtype c-sky">Explore</span>
+                      <span class="state c-good"><span class="pip fill"></span>Completed</span>
+                    </div>
+                    <div class="body"><div class="body-in"><div class="col2"><div class="kids">
+                      <div class="prose"><p>Every chip on the rail reads a live value. Nothing there is placeholder text.</p></div>
+                    </div></div></div></div>
+                  </div>
+
+                </div>
+              </div>
+
+              <div class="prose">
+                <p>All three landed. The owner files:</p>
+                <ul>
+                  <li><button class="fp" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>app/renderer/src/TranscriptView.tsx</button> draws every row: seams, reasoning runs, tool cards, agent cards.</li>
+                  <li><button class="fp" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>app/renderer/src/reasoningLayout.ts</button> owns the wire shapes the trail is derived from.</li>
+                  <li><button class="fp" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>app/renderer/src/transcriptProjector.ts</button> groups co-spawned agents at read time.</li>
+                  <li><button class="fp" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>app/renderer/src/ComposerActionsBar.tsx</button> and <button class="fp" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>app/renderer/src/ContextGauge.tsx</button> back the chip rail.</li>
+                </ul>
+                <p>Three things they agree on, and they matter for anything built on top:</p>
+                <ol>
+                  <li>Grouping is derived when the transcript is read, so a group is never stored and never a new message type.</li>
+                  <li>A row is never rewritten once it is in the transcript. A background worker&rsquo;s answer arrives later, as its own row.</li>
+                  <li>State on an agent card is derived from the worker, not from the tool result. A launch that succeeded only means it started.</li>
+                </ol>
+                <p>The one place they disagree is the empty case. The trail drops a step with nothing in it, while a card with nothing to expand still keeps its header, so a fold affordance points at an empty body. Worth settling before either surface changes.</p>
+              </div>
+
+            </div>
+          </div>
+          <button class="jump" id="jump" type="button" hidden><span>↓ Latest</span></button>
+        </section>
+
+        <div class="dock">
+          <form class="cform" aria-label="Composer" onsubmit="return false">
+            <div class="crow">
+              <div class="cfield-wrap">
+                <span class="cph" id="cph">Ask Cat Code anything or describe a task…</span>
+                <div class="cfield" id="cfield" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Prompt"></div>
+              </div>
+              <button class="csend" type="submit" title="Send" aria-label="Send prompt">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+              </button>
+            </div>
+            <div class="crule" aria-hidden="true"></div>
+            <div class="cbar" role="toolbar" aria-label="Composer actions">
+              <button class="cattach" type="button" title="Add image" aria-label="Add attachment">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              </button>
+              <div class="cleft">
+                <button class="face f-model" type="button" title="Model: GPT-5.6 Luna">GPT-5.6 Luna</button>
+                <span class="sep" aria-hidden>·</span>
+                <button class="face f-effort" type="button" title="Reasoning effort: high">High</button>
+                <span class="sep" aria-hidden>·</span>
+                <button class="face f-mode" type="button" title="Permission mode: Auto">Auto</button>
+                <span class="fastface" title="Fast mode off" aria-label="Fast mode off">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12z"/></svg>
+                </span>
+                <div class="cright">
+                  <button class="face f-account" type="button" title="Active account: bluesky · default">
+                    <span class="acctdot" aria-hidden></span>bluesky
+                  </button>
+                  <span class="sep" aria-hidden>·</span>
+                  <button class="gauge" type="button" title="Context: 132,000 / 500,000 tokens (26% used)" aria-label="Context 26% used, open usage">
+                    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden>
+                      <circle cx="8" cy="8" r="6.5" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="3"/>
+                      <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-dasharray="10.618 40.841"/>
+                    </svg>
+                    <span class="gauge-n">26%</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="devline">app ff167187-fdc2-4015-8922-0426ff5e1353 · engine 916cb065-0cb7-4a46-8d58-74d53a84b514</div>
+          </form>
+        </div>
+      </main>
+    </div>
+  </div>
+</div>
+
+<script>
+// Sidebar: hover-expand with the app's own 120ms show / 200ms hide delays, plus
+// the pin (Sidebar.tsx:170-171, 428-435).
+(function () {
+  var rail = document.getElementById('rail')
+  var pin = document.getElementById('pin')
+  var showTimer = null
+  var hideTimer = null
+  var pinned = false
+  function open() { rail.classList.add('is-open') }
+  function close() { if (!pinned) rail.classList.remove('is-open') }
+  rail.addEventListener('mouseenter', function () {
+    if (hideTimer) { clearTimeout(hideTimer); hideTimer = null }
+    showTimer = setTimeout(open, 120)
+  })
+  rail.addEventListener('mouseleave', function () {
+    if (showTimer) { clearTimeout(showTimer); showTimer = null }
+    hideTimer = setTimeout(close, 200)
+  })
+  pin.addEventListener('click', function (event) {
+    event.stopPropagation()
+    pinned = !pinned
+    pin.classList.toggle('is-pinned', pinned)
+    pin.setAttribute('aria-pressed', String(pinned))
+    pin.title = pinned ? 'Unpin sidebar' : 'Pin sidebar open'
+    if (pinned) open()
+  })
+
+  var navToggle = document.getElementById('navtoggle')
+  var navList = document.getElementById('navlist')
+  navToggle.addEventListener('click', function () {
+    var next = navList.hidden
+    navList.hidden = !next
+    navToggle.classList.toggle('is-on', next)
+  })
+})()
+
+// Jump-to-bottom pill: mounted only while the transcript is off the bottom
+// (App.tsx `atBottom`).
+;(function () {
+  var scroller = document.getElementById('tscroll')
+  var jump = document.getElementById('jump')
+  function sync() {
+    var atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 8
+    jump.hidden = atBottom
+  }
+  scroller.addEventListener('scroll', sync)
+  window.addEventListener('resize', sync)
+  jump.addEventListener('click', function () {
+    scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' })
+  })
+  scroller.scrollTop = scroller.scrollHeight
+  sync()
+})()
+
+// Reasoning run and agent cards fold from their own headers.
+;(function () {
+  var run = document.querySelector('.rr')
+  var runHead = run.querySelector('.rr-h')
+  runHead.addEventListener('click', function () {
+    var collapsed = run.classList.toggle('is-collapsed')
+    runHead.setAttribute('aria-expanded', String(!collapsed))
+  })
+  document.querySelectorAll('.card > .hdr').forEach(function (head) {
+    if (head.tagName !== 'BUTTON') return
+    head.addEventListener('click', function () {
+      var card = head.closest('.card')
+      var collapsed = card.classList.toggle('is-collapsed')
+      head.setAttribute('aria-expanded', String(!collapsed))
+    })
+  })
+})()
+
+// Composer placeholder is a sibling overlay, since a contentEditable has none
+// of its own (ComposerInput.tsx:305).
+;(function () {
+  var field = document.getElementById('cfield')
+  var ph = document.getElementById('cph')
+  field.addEventListener('input', function () {
+    ph.style.display = field.textContent.length > 0 ? 'none' : ''
+  })
+})()
+</script>
+</body>
+</html>

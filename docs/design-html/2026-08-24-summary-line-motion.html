@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Summary line motion</title>
+<style>
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;font-display:swap;
+  src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2');}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:swap;
+  src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2');}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:#09090b}
+body{font-family:'DM Sans',-apple-system,sans-serif}
+
+/* chrome */
+.x-bar{position:fixed;right:14px;top:12px;z-index:10;display:flex;gap:8px}
+.x-btn{font-family:'DM Mono',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+  color:#8a8a90;background:transparent;cursor:pointer;border:1px solid rgba(255,255,255,.18);
+  border-radius:2px;padding:3px 9px;line-height:1.4}
+.x-btn:hover{color:#d4d4d8;border-color:rgba(255,255,255,.4)}
+.x-tag{font-family:'DM Mono',monospace;font-size:9px;letter-spacing:.16em;text-transform:uppercase;
+  color:#6e6e75;padding-bottom:7px;border-bottom:1px solid rgba(255,255,255,.09);margin-bottom:14px}
+.x-slot{margin:0 0 40px}
+
+.page{margin:0 auto;max-width:900px;padding:52px 32px 80px}
+
+/* ── specimen: the settled/live summary line ──────────────────── */
+.line{display:flex;width:100%;align-items:center;gap:10px;padding:2px 0;
+  text-align:left;background:transparent;border:0;font:inherit;cursor:pointer}
+.sum{min-width:0;overflow:hidden;white-space:nowrap;font-size:13px;color:#a1a1aa}
+.car{width:10px;flex-shrink:0;font-size:9px;line-height:1;color:#75757b;margin-left:4px}
+
+/* A crossfade */
+.mA .sum{transition:opacity 200ms linear}
+.mA .sum.out{opacity:0}
+
+/* B roll. The incoming layer stays IN FLOW so it still sets the line's width;
+   only the outgoing ghost is absolute. Otherwise both layers are absolute, the
+   container collapses to zero width, and B's chevron drifts to the far right. */
+.mB .sum{position:relative;height:1.45em;overflow:hidden}
+.mB .rl{display:block;white-space:nowrap;
+  transition:transform 340ms cubic-bezier(.2,.7,.3,1),opacity 340ms cubic-bezier(.2,.7,.3,1)}
+.mB .rl.ghost{position:absolute;left:0;top:0}
+.mB .rl.enter{transform:translateY(100%);opacity:0}
+.mB .rl.exit{transform:translateY(-100%);opacity:0}
+
+/* C changed words only */
+@keyframes wordin{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+.mC .w{display:inline-block;white-space:pre}
+.mC .w.chg{animation:wordin 340ms cubic-bezier(.2,.7,.3,1) both}
+
+/* D blur swap */
+.mD .sum{transition:opacity 240ms linear,filter 240ms linear}
+.mD .sum.out{opacity:0;filter:blur(3px)}
+
+/* E live shimmer, text swaps underneath */
+@keyframes breathe{0%,100%{opacity:1}50%{opacity:.42}}
+.mE .sum.live{animation:breathe 2.4s ease-in-out infinite}
+</style>
+</head>
+<body>
+
+<div class="x-bar"><button class="x-btn" id="play">Play</button></div>
+
+<div class="page">
+  <div class="x-slot"><div class="x-tag">A</div>
+    <div class="line mA"><span class="sum" id="sA"></span><span class="car">▸</span></div></div>
+  <div class="x-slot"><div class="x-tag">B</div>
+    <div class="line mB"><span class="sum" id="sB"></span><span class="car">▸</span></div></div>
+  <div class="x-slot"><div class="x-tag">C</div>
+    <div class="line mC"><span class="sum" id="sC"></span><span class="car">▸</span></div></div>
+  <div class="x-slot"><div class="x-tag">D</div>
+    <div class="line mD"><span class="sum" id="sD"></span><span class="car">▸</span></div></div>
+  <div class="x-slot"><div class="x-tag">E</div>
+    <div class="line mE"><span class="sum" id="sE"></span><span class="car">▸</span></div></div>
+</div>
+
+<script>
+// Paced like real work: ~1.4s per file read, ~3.2s for a test run.
+var SEQ = [
+  [600,  'Reading 1 file…'],
+  [2000, 'Reading 2 files…'],
+  [3400, 'Reading 3 files…'],
+  [4800, 'Reading 4 files…'],
+  [6200, 'Reading 4 files, running 1 bash command…'],
+  [9400, 'Read 4 files, ran 1 bash command']
+];
+var FIRST = SEQ[0][1], LAST = SEQ[SEQ.length-1][1];
+
+var A=document.getElementById('sA'), B=document.getElementById('sB'),
+    C=document.getElementById('sC'), D=document.getElementById('sD'),
+    E=document.getElementById('sE');
+
+function setA(host, text){
+  host.classList.add('out');
+  setTimeout(function(){ host.textContent = text; host.classList.remove('out'); }, 200);
+}
+function setB(host, text){
+  var cur = host.querySelector('.rl');
+  if (!cur){
+    cur = document.createElement('span'); cur.className = 'rl';
+    cur.textContent = text; host.appendChild(cur); return;
+  }
+  var ghost = cur.cloneNode(true);
+  ghost.classList.add('ghost');
+  host.appendChild(ghost);
+  cur.textContent = text;
+  cur.classList.add('enter');
+  requestAnimationFrame(function(){
+    requestAnimationFrame(function(){
+      cur.classList.remove('enter');
+      ghost.classList.add('exit');
+    });
+  });
+  setTimeout(function(){ if (ghost.parentElement) ghost.parentElement.removeChild(ghost); }, 380);
+}
+function setC(host, text){
+  var next = text.split(' ');
+  var prev = host.__w || [];
+  host.textContent = '';
+  next.forEach(function(w, i){
+    var s = document.createElement('span');
+    s.className = 'w';
+    s.textContent = w + (i < next.length - 1 ? ' ' : '');
+    if (prev[i] !== w) s.classList.add('chg');
+    host.appendChild(s);
+  });
+  host.__w = next;
+}
+function setD(host, text){
+  host.classList.add('out');
+  setTimeout(function(){ host.textContent = text; host.classList.remove('out'); }, 240);
+}
+function setE(host, text, done){
+  host.textContent = text;
+  if (done) host.classList.remove('live'); else host.classList.add('live');
+}
+
+function seed(){
+  A.textContent = LAST;
+  B.textContent = ''; var r = document.createElement('span'); r.className='rl'; r.textContent = LAST; B.appendChild(r);
+  C.__w = null; setC(C, LAST); C.querySelectorAll('.w').forEach(function(w){ w.classList.remove('chg'); });
+  D.textContent = LAST;
+  E.classList.remove('live'); E.textContent = LAST;
+}
+
+var timers = [];
+function play(){
+  timers.forEach(clearTimeout); timers = [];
+  A.textContent = ''; A.classList.remove('out');
+  B.textContent = '';
+  C.textContent = ''; C.__w = null;
+  D.textContent = ''; D.classList.remove('out');
+  E.textContent = ''; E.classList.remove('live');
+
+  SEQ.forEach(function(step, i){
+    var ms = step[0], text = step[1], last = i === SEQ.length - 1;
+    timers.push(setTimeout(function(){
+      if (i === 0){
+        A.textContent = text;
+        setB(B, text);
+        setC(C, text);
+        D.textContent = text;
+        setE(E, text, false);
+        return;
+      }
+      setA(A, text); setB(B, text); setC(C, text); setD(D, text); setE(E, text, last);
+    }, ms));
+  });
+}
+
+document.getElementById('play').addEventListener('click', play);
+seed();
+</script>
+</body>
+</html>

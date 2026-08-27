@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Summary line liveness</title>
+<style>
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;font-display:swap;
+  src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2');}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:swap;
+  src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2');}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:#09090b}
+body{font-family:'DM Sans',-apple-system,sans-serif}
+
+.x-bar{position:fixed;right:14px;top:12px;z-index:10;display:flex;gap:8px}
+.x-btn{font-family:'DM Mono',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+  color:#8a8a90;background:transparent;cursor:pointer;border:1px solid rgba(255,255,255,.18);
+  border-radius:2px;padding:3px 9px;line-height:1.4}
+.x-btn:hover{color:#d4d4d8;border-color:rgba(255,255,255,.4)}
+.x-tag{font-family:'DM Mono',monospace;font-size:9px;letter-spacing:.16em;text-transform:uppercase;
+  color:#6e6e75;padding-bottom:7px;border-bottom:1px solid rgba(255,255,255,.09);margin-bottom:14px}
+.x-slot{margin:0 0 40px}
+.page{margin:0 auto;max-width:900px;padding:52px 32px 80px}
+
+/* ── specimen ──────────────────────────────────────────────────── */
+.line{display:flex;width:100%;align-items:center;padding:2px 0;background:transparent;border:0}
+.sum{min-width:0;white-space:nowrap;font-size:13px;color:#a1a1aa}
+.ind{flex-shrink:0;display:none;align-items:center;line-height:1}
+.live .ind{display:inline-flex}
+.car{width:10px;flex-shrink:0;font-size:9px;line-height:1;color:#75757b;margin-left:8px}
+
+/* transition held constant across all five: only changed words animate */
+@keyframes wordin{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+.w{display:inline-block;white-space:pre}
+.w.chg{animation:wordin 340ms cubic-bezier(.2,.7,.3,1) both}
+
+/* A breathe */
+@keyframes breathe{0%,100%{opacity:1}50%{opacity:.42}}
+.mA.live .sum{animation:breathe 2.4s ease-in-out infinite}
+
+/* B shimmer sweep. NOT background-clip:text on .sum: that cannot paint through a
+   descendant with its own stacking context, and the word-diff animation uses
+   transform, so every CHANGED word renders invisible. An overlay sweep is
+   independent of whatever the text transition does. */
+@keyframes sweep{from{background-position:-55% 0}to{background-position:165% 0}}
+.mB .sum{position:relative}
+.mB.live .sum::after{content:'';position:absolute;inset:-2px -6px;pointer-events:none;
+  background:linear-gradient(90deg,transparent 0%,rgba(255,255,255,.13) 45%,
+    rgba(255,255,255,.20) 50%,rgba(255,255,255,.13) 55%,transparent 100%);
+  background-size:55% 100%;background-repeat:no-repeat;
+  animation:sweep 2.8s linear infinite}
+
+/* C pulsing dot */
+@keyframes dotpulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.3;transform:scale(.78)}}
+.mC .dot{width:5px;height:5px;border-radius:9999px;background:#f472b6;margin-left:8px}
+.mC.live .dot{animation:dotpulse 1.4s ease-in-out infinite}
+
+/* D terminal caret */
+@keyframes blink{0%,49.9%{opacity:1}50%,100%{opacity:0}}
+.mD .caret{width:6px;height:1.05em;background:#a1a1aa;margin-left:5px}
+.mD.live .caret{animation:blink 1.1s steps(1,end) infinite}
+
+/* E cycling ellipsis */
+.mE .dots{font-size:13px;color:#a1a1aa;width:14px;text-align:left}
+</style>
+</head>
+<body>
+
+<div class="x-bar"><button class="x-btn" id="play">Play</button></div>
+
+<div class="page">
+  <div class="x-slot"><div class="x-tag">A</div>
+    <div class="line mA"><span class="sum"></span><span class="ind"></span><span class="car">▸</span></div></div>
+  <div class="x-slot"><div class="x-tag">B</div>
+    <div class="line mB"><span class="sum"></span><span class="ind"></span><span class="car">▸</span></div></div>
+  <div class="x-slot"><div class="x-tag">C</div>
+    <div class="line mC"><span class="sum"></span><span class="ind"><span class="dot"></span></span><span class="car">▸</span></div></div>
+  <div class="x-slot"><div class="x-tag">D</div>
+    <div class="line mD"><span class="sum"></span><span class="ind"><span class="caret"></span></span><span class="car">▸</span></div></div>
+  <div class="x-slot"><div class="x-tag">E</div>
+    <div class="line mE"><span class="sum"></span><span class="ind"><span class="dots"></span></span><span class="car">▸</span></div></div>
+</div>
+
+<script>
+var SEQ = [
+  [600,  'Reading 1 file…'],
+  [2000, 'Reading 2 files…'],
+  [3400, 'Reading 3 files…'],
+  [4800, 'Reading 4 files…'],
+  [6200, 'Reading 4 files, running 1 bash command…'],
+  [9400, 'Read 4 files, ran 1 bash command']
+];
+var KEYS = ['A','B','C','D','E'];
+var LINES = {};
+KEYS.forEach(function(k){ LINES[k] = document.querySelector('.m' + k); });
+
+// E owns its own animated dots, so its label never carries the ellipsis.
+function labelFor(key, text){
+  return key === 'E' ? text.replace(/…$/, '') : text;
+}
+
+function setWords(host, text){
+  var next = text.split(' ');
+  var prev = host.__w || [];
+  host.textContent = '';
+  next.forEach(function(w, i){
+    var s = document.createElement('span');
+    s.className = 'w';
+    s.textContent = w + (i < next.length - 1 ? ' ' : '');
+    if (prev[i] !== w) s.classList.add('chg');
+    host.appendChild(s);
+  });
+  host.__w = next;
+}
+
+var dotTimer = null;
+function startDots(){
+  var host = LINES.E.querySelector('.dots');
+  var frames = ['.', '..', '…'], i = 0;
+  host.textContent = frames[0];
+  stopDots();
+  dotTimer = setInterval(function(){ i = (i + 1) % 3; host.textContent = frames[i]; }, 520);
+}
+function stopDots(){ if (dotTimer){ clearInterval(dotTimer); dotTimer = null; } }
+
+function apply(text, live){
+  KEYS.forEach(function(k){
+    var line = LINES[k];
+    setWords(line.querySelector('.sum'), labelFor(k, text));
+    if (live) line.classList.add('live'); else line.classList.remove('live');
+  });
+  if (live) startDots(); else stopDots();
+}
+
+function seed(){
+  var last = SEQ[SEQ.length - 1][1];
+  KEYS.forEach(function(k){
+    var line = LINES[k];
+    var host = line.querySelector('.sum');
+    host.__w = null;
+    setWords(host, labelFor(k, last));
+    host.querySelectorAll('.w').forEach(function(w){ w.classList.remove('chg'); });
+    line.classList.remove('live');
+  });
+  stopDots();
+}
+
+var timers = [];
+function play(){
+  timers.forEach(clearTimeout); timers = [];
+  stopDots();
+  KEYS.forEach(function(k){
+    var line = LINES[k];
+    line.classList.remove('live');
+    var host = line.querySelector('.sum');
+    host.textContent = ''; host.__w = null;
+  });
+  SEQ.forEach(function(step, i){
+    var last = i === SEQ.length - 1;
+    timers.push(setTimeout(function(){ apply(step[1], !last); }, step[0]));
+  });
+}
+
+document.getElementById('play').addEventListener('click', play);
+seed();
+</script>
+</body>
+</html>

@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tool display setting</title>
+<style>
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;font-display:swap;
+  src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2');}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:swap;
+  src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2');}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:#09090b}
+body{font-family:'DM Sans',-apple-system,sans-serif}
+
+.x-tag{font-family:'DM Mono',monospace;font-size:9px;letter-spacing:.16em;text-transform:uppercase;
+  color:#6e6e75;padding-bottom:7px;border-bottom:1px solid rgba(255,255,255,.09);margin-bottom:16px}
+.x-slot{margin:0 0 46px}
+.page{margin:0 auto;max-width:720px;padding:44px 32px 90px}
+
+/* ── settings primitives, from SettingsField.tsx / SettingsEditors.tsx ── */
+.sec{margin-bottom:24px}
+.sec-t{margin-bottom:4px;font-size:10px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.12em;color:#98989f}
+.field{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;
+  border-bottom:1px solid rgba(255,255,255,.06);padding:13px 0}
+.f-l{min-width:0;flex:1}
+.f-lab{font-size:13px;font-weight:500;color:#f4f4f5}
+.f-desc{margin-top:2px;font-size:11.5px;line-height:1.625;color:#98989f}
+.f-r{display:flex;flex-shrink:0;flex-direction:column;align-items:flex-end;gap:6px}
+.f-reset{font-size:11px;color:#98989f;background:none;border:0;cursor:pointer;padding:0}
+.f-reset:hover{color:#a1a1aa}
+
+.sel{min-width:128px;border-radius:8px;border:1px solid rgba(255,255,255,.06);
+  background:rgba(255,255,255,.045);padding:6px 10px;font-size:12.5px;color:#f4f4f5;
+  outline:none;font-family:inherit}
+.tog{position:relative;display:inline-flex;height:22px;width:38px;flex-shrink:0;align-items:center;
+  border-radius:9999px;border:0;cursor:pointer;background:rgba(255,255,255,.1);transition:background-color 140ms}
+.tog[data-on=y]{background:#f472b6}
+.tog i{display:inline-block;height:16px;width:16px;border-radius:9999px;background:#98989f;
+  transform:translateX(3px);transition:transform 140ms}
+.tog[data-on=y] i{background:#09090b;transform:translateX(18px)}
+
+/* B segmented */
+.seg{display:inline-flex;gap:2px;border-radius:8px;border:1px solid rgba(255,255,255,.06);
+  background:rgba(255,255,255,.045);padding:2px}
+.seg button{font:inherit;font-size:12px;padding:4px 9px;border-radius:6px;border:0;cursor:pointer;
+  background:transparent;color:#98989f}
+.seg button[aria-pressed=true]{background:rgba(255,255,255,.1);color:#f4f4f5}
+
+/* E radio rows */
+.radios{display:flex;flex-direction:column;width:100%}
+.radio{display:flex;align-items:flex-start;gap:10px;padding:9px 0;border:0;background:none;
+  cursor:pointer;text-align:left;font:inherit;width:100%}
+.radio + .radio{border-top:1px solid rgba(255,255,255,.06)}
+.rmark{margin-top:2px;height:14px;width:14px;flex-shrink:0;border-radius:9999px;
+  border:1px solid rgba(255,255,255,.22)}
+.radio[aria-checked=true] .rmark{border-color:#f472b6;box-shadow:inset 0 0 0 3.5px #f472b6}
+.rname{font-size:12.5px;color:#f4f4f5}
+.radio[aria-checked=true] .rname{color:#f4f4f5}
+.rdesc{margin-top:1px;font-size:11.5px;line-height:1.55;color:#98989f}
+
+/* D preview: the transcript, form D */
+.prev{margin-top:10px;width:100%;border-top:1px solid rgba(255,255,255,.06);padding-top:10px}
+.pline{display:flex;align-items:center;gap:10px;padding:2px 0}
+.pmark{width:16px;text-align:center;font-size:13px;flex-shrink:0}
+.pfam{flex-shrink:0;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}
+.ptgt{font-family:'DM Mono',monospace;font-size:12px;color:#f4f4f5;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.psum{font-size:13px;color:#a1a1aa}
+.pcar{font-size:9px;color:#75757b;margin-left:4px}
+.pbody{margin-left:26px;padding:0 12px 6px;border-left:1px solid rgba(255,255,255,.06);
+  font-family:'DM Mono',monospace;font-size:11.5px;line-height:1.6;color:#a1a1aa;white-space:pre}
+.pdot{width:6px;height:6px;border-radius:9999px;background:#4ade80;flex-shrink:0;margin-left:auto}
+</style>
+</head>
+<body>
+<div class="page" id="page"></div>
+
+<script>
+var MODES = ['summarized','listed','expanded'];
+var LABEL = { summarized:'Summarized', listed:'Listed', expanded:'Expanded' };
+var BLURB = {
+  summarized:'One line for a run of calls. Click it to see them.',
+  listed:'Every call on its own line, with output hidden until you open it.',
+  expanded:'Every call open as it arrives.'
+};
+var ROW_DESC = 'How tool calls appear while a turn runs. Stored in this app, not in your settings files.';
+
+function el(t,c,x){ var n=document.createElement(t); if(c)n.className=c; if(x!=null)n.textContent=x; return n; }
+
+/* the real neighbour row, so each variant is judged in place */
+function reasoningRow(){
+  var f = el('div','field');
+  var l = el('div','f-l');
+  l.appendChild(el('div','f-lab','Reasoning layout'));
+  l.appendChild(el('div','f-desc','How reasoning summaries are laid out. Stored in this app, not in your settings files.'));
+  var r = el('div','f-r');
+  var s = el('select','sel');
+  ['Trail','Blocks'].forEach(function(o){ s.appendChild(el('option',null,o)); });
+  r.appendChild(s);
+  f.appendChild(l); f.appendChild(r);
+  return f;
+}
+
+function preview(mode){
+  var p = el('div','prev');
+  function toolLine(fam,color,mark,target,body){
+    var line = el('div','pline');
+    var m = el('span','pmark',mark); m.style.color = color;
+    var w = el('span','pfam',fam);   w.style.color = color;
+    line.appendChild(m); line.appendChild(w);
+    line.appendChild(el('span','ptgt',target));
+    line.appendChild(el('span','pdot'));
+    p.appendChild(line);
+    if (body) p.appendChild(el('div','pbody',body));
+  }
+  if (mode === 'summarized'){
+    var s = el('div','pline');
+    s.appendChild(el('span','psum','Read 4 files, ran 1 bash command'));
+    s.appendChild(el('span','pcar','▸'));
+    p.appendChild(s);
+    return p;
+  }
+  toolLine('Read','#60a5fa','≡','src/loader/index.ts', mode === 'expanded' ? 'export function load(entry) {' : null);
+  toolLine('Read','#60a5fa','≡','src/loader/graph.ts', mode === 'expanded' ? 'export function walk(entry) {' : null);
+  toolLine('Bash','#a3e635','$','bun test src/loader', mode === 'expanded' ? '12 pass\n0 fail' : null);
+  return p;
+}
+
+function field(label, desc, control, modified){
+  var f = el('div','field');
+  var l = el('div','f-l');
+  l.appendChild(el('div','f-lab',label));
+  if (desc) l.appendChild(el('div','f-desc',desc));
+  var r = el('div','f-r');
+  r.appendChild(control);
+  if (modified) r.appendChild(el('button','f-reset','Reset to default'));
+  f.appendChild(l); f.appendChild(r);
+  return f;
+}
+
+function section(tag, rows){
+  var slot = el('div','x-slot');
+  slot.appendChild(el('div','x-tag',tag));
+  var sec = el('div','sec');
+  sec.appendChild(el('div','sec-t','Transcript'));
+  rows.forEach(function(r){ sec.appendChild(r); });
+  slot.appendChild(sec);
+  return slot;
+}
+
+var page = document.getElementById('page');
+
+/* A: select, exactly the Reasoning layout pattern */
+(function(){
+  var s = el('select','sel');
+  MODES.forEach(function(m){ s.appendChild(el('option',null,LABEL[m])); });
+  s.selectedIndex = 0;
+  page.appendChild(section('A', [field('Tool calls', ROW_DESC, s, true), reasoningRow()]));
+})();
+
+/* B: segmented */
+(function(){
+  var g = el('div','seg'), cur = 'summarized';
+  MODES.forEach(function(m){
+    var b = el('button',null,LABEL[m]);
+    b.type = 'button';
+    b.setAttribute('aria-pressed', String(m === cur));
+    b.addEventListener('click', function(){
+      cur = m;
+      g.querySelectorAll('button').forEach(function(o,i){
+        o.setAttribute('aria-pressed', String(MODES[i] === cur));
+      });
+    });
+    g.appendChild(b);
+  });
+  page.appendChild(section('B', [field('Tool calls', ROW_DESC, g, true), reasoningRow()]));
+})();
+
+/* C: two booleans, the minimal-change option */
+(function(){
+  function toggle(on){
+    var t = el('button','tog'); t.type='button';
+    t.setAttribute('data-on', on ? 'y' : 'n');
+    t.appendChild(el('i'));
+    t.addEventListener('click', function(){
+      t.setAttribute('data-on', t.getAttribute('data-on') === 'y' ? 'n' : 'y');
+    });
+    return t;
+  }
+  page.appendChild(section('C', [
+    field('Summarize tool runs', 'Collapse a run of calls into one line.', toggle(true), true),
+    field('Tools open by default', 'Open every tool card as it arrives, instead of showing a preview you click to expand.', toggle(false), false),
+    reasoningRow()
+  ]));
+})();
+
+/* D: select with a preview of the chosen value. The preview spans the whole
+   row, not the label column: a one-line summary that wraps is a lie about it. */
+(function(){
+  var f = el('div','field');
+  var l = el('div','f-l');
+  l.appendChild(el('div','f-lab','Tool calls'));
+  l.appendChild(el('div','f-desc',ROW_DESC));
+  var r = el('div','f-r');
+  var s = el('select','sel');
+  MODES.forEach(function(m){ s.appendChild(el('option',null,LABEL[m])); });
+  r.appendChild(s); r.appendChild(el('button','f-reset','Reset to default'));
+  f.appendChild(l); f.appendChild(r);
+
+  var host = el('div','field');
+  host.style.display = 'block';
+  var pv = preview('summarized');
+  host.appendChild(pv);
+  s.addEventListener('change', function(){
+    var next = preview(MODES[s.selectedIndex]);
+    host.replaceChild(next, pv); pv = next;
+  });
+
+  page.appendChild(section('D', [f, host, reasoningRow()]));
+})();
+
+/* E: radio rows carrying their own descriptions */
+(function(){
+  var wrapRow = el('div','field');
+  var l = el('div','f-l');
+  l.appendChild(el('div','f-lab','Tool calls'));
+  l.appendChild(el('div','f-desc','How tool calls appear while a turn runs.'));
+  var box = el('div','radios');
+  var cur = 'summarized';
+  MODES.forEach(function(m){
+    var b = el('button','radio'); b.type='button';
+    b.setAttribute('aria-checked', String(m === cur));
+    b.appendChild(el('span','rmark'));
+    var t = el('span');
+    t.appendChild(el('span','rname',LABEL[m]));
+    t.appendChild(el('span','rdesc',BLURB[m]));
+    t.querySelector('.rname').style.display = 'block';
+    b.appendChild(t);
+    b.addEventListener('click', function(){
+      cur = m;
+      box.querySelectorAll('.radio').forEach(function(o,i){
+        o.setAttribute('aria-checked', String(MODES[i] === cur));
+      });
+    });
+    box.appendChild(b);
+  });
+  l.appendChild(box);
+  wrapRow.appendChild(l);
+  page.appendChild(section('E', [wrapRow, reasoningRow()]));
+})();
+</script>
+</body>
+</html>

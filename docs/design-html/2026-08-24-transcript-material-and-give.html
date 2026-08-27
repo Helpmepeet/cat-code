@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Transcript design</title>
+<style>
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;font-display:swap;
+  src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2');}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:swap;
+  src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2');}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:500;font-display:swap;
+  src:url('../../app/renderer/src/assets/fonts/DMMono-Medium.woff2') format('woff2');}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:#09090b}
+body{font-family:'DM Sans',-apple-system,sans-serif}
+
+/* chrome */
+.x-bar{position:fixed;right:14px;top:12px;z-index:10;display:flex;gap:8px}
+.x-btn{font-family:'DM Mono',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+  color:#8a8a90;background:transparent;cursor:pointer;border:1px solid rgba(255,255,255,.18);
+  border-radius:2px;padding:3px 9px;line-height:1.4}
+.x-btn:hover{color:#d4d4d8;border-color:rgba(255,255,255,.4)}
+
+/* ── locked tokens: material 0 ─────────────────────────────────── */
+:root{
+  --bg:#09090b; --text:#f4f4f5; --muted:#a1a1aa; --subtle:#98989f; --ghost:#75757b;
+  --seam:rgba(255,255,255,.06); --hover-bg:rgba(255,255,255,.04);
+  --accent:#f472b6; --good:#4ade80;
+  /* give 0: no arrival travel, no hover lift */
+  --caret:100ms;
+  /* expand stays animated: the line removes and reveals content */
+  --exp:240ms; --ease:cubic-bezier(.2,.7,.3,1);
+  /* space 3 */
+  --hd-py:2px;
+}
+
+.spec{background:var(--bg);padding:24px 0 64px;min-height:100%}
+.wrap{margin:0 auto;width:100%;max-width:900px;display:flex;flex-direction:column;padding:0 32px}
+.row + .row{margin-top:10px}
+.row.tool + .row.tool{margin-top:0}
+
+/* user bubble */
+.bub-out{display:flex;justify-content:flex-end}
+.bub{max-width:82%;white-space:pre-wrap;overflow-wrap:break-word;
+  border-radius:16px 16px 4px 16px;border:1px solid rgba(244,114,182,.2);
+  background:rgba(244,114,182,.1);padding:10px 16px;font-size:14px;line-height:1.625;color:var(--text)}
+
+/* assistant prose */
+.prose{font-size:14px;font-weight:500;line-height:1.625;color:var(--text)}
+.prose>*+*{margin-top:.85em}
+.prose ul{padding-left:1.35em;list-style:disc}
+.prose li+li{margin-top:.3em}
+.prose li::marker{color:var(--ghost)}
+
+/* ── form D: no container ──────────────────────────────────────── */
+.card{width:100%;background:transparent;border:0;border-radius:0;box-shadow:none}
+.hd{display:flex;width:100%;align-items:center;gap:10px;padding:var(--hd-py) 0;
+  text-align:left;background:transparent;border:0;cursor:pointer;font:inherit}
+.hd:hover .tgt,.hd:hover .sum{color:var(--text)}
+.mark{width:16px;flex-shrink:0;text-align:center;font-size:13px}
+.fam{flex-shrink:0;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}
+.tgt{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:'DM Mono',monospace;font-size:12px;color:var(--text)}
+.dot{width:6px;height:6px;flex-shrink:0;border-radius:9999px}
+@keyframes livepulse{0%,100%{opacity:1}50%{opacity:.3}}
+.dot.pulse{animation:livepulse 1.2s ease-in-out infinite}
+
+.body-slot{display:grid;grid-template-rows:0fr;transition:grid-template-rows var(--exp) var(--ease)}
+.card[data-open=on] > .body-slot{grid-template-rows:1fr}
+.body-in{overflow:hidden}
+.body{margin-left:26px;padding:0 12px 10px;border-left:1px solid var(--seam);
+  background:transparent;font-family:'DM Mono',monospace;font-size:11.5px;line-height:1.6;
+  color:var(--muted);white-space:pre-wrap}
+
+/* summary line */
+.sum{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:13px;color:var(--muted)}
+.car{width:10px;flex-shrink:0;font-size:9px;line-height:1;color:var(--ghost);
+  transition:transform var(--caret) ease-out}
+.sum + .car{margin-left:4px}
+.sumkids{padding:6px 0 2px 26px;border-left:1px solid var(--seam);margin-left:0}
+
+/* seam */
+.seam{display:flex;align-items:center;gap:12px;padding:4px 0}
+.rule{height:1px;flex:1;background:var(--seam)}
+.slab{white-space:nowrap;font-size:11px;color:var(--subtle)}
+</style>
+</head>
+<body>
+
+<div class="x-bar">
+  <button class="x-btn" id="play">Play</button>
+  <button class="x-btn" id="reset">Reset</button>
+</div>
+
+<div class="spec"><div class="wrap" id="wrap"></div></div>
+
+<script>
+var FAM = {
+  read: {mark:'≡', word:'Read', color:'#60a5fa'},
+  bash: {mark:'$',      word:'Bash', color:'#a3e635'},
+  edit: {mark:'±', word:'Edit', color:'#f472b6'}
+};
+var READ_FILES = [
+  ['src/loader/index.ts',  'export function load(entry) {\n  const graph = walk(entry)\n  return resolve(graph)\n}'],
+  ['src/loader/graph.ts',  'export function walk(entry) {\n  const seen = new Set()\n  return crawl(entry, seen)\n}'],
+  ['src/loader/resolve.ts','export function resolve(graph) {\n  return graph.map(toModule)\n}'],
+  ['src/loader/cache.ts',  'export const cache = new Map()']
+];
+var BASH_BODY = '12 pass\n0 fail\nRan 12 tests across 3 files. [1.42s]';
+
+function el(tag, cls, txt){
+  var n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (txt != null) n.textContent = txt;
+  return n;
+}
+function bubble(text){
+  var o = el('div','row bub-out'); o.appendChild(el('div','bub',text)); return o;
+}
+function prose(parts){
+  var o = el('div','row prose');
+  parts.forEach(function(p){
+    if (typeof p === 'string'){ o.appendChild(el('p',null,p)); return; }
+    var ul = el('ul'); p.forEach(function(li){ ul.appendChild(el('li',null,li)); });
+    o.appendChild(ul);
+  });
+  return o;
+}
+function seam(label){
+  var s = el('div','row seam');
+  s.appendChild(el('div','rule')); s.appendChild(el('div','slab',label)); s.appendChild(el('div','rule'));
+  return s;
+}
+function card(fam, target, state, bodyText, open){
+  var f = FAM[fam];
+  var wrap = el('div','row tool');
+  var c = el('div','card');
+  c.setAttribute('data-open', open ? 'on' : 'off');
+  var hd = el('button','hd'); hd.type = 'button';
+  var m = el('span','mark', f.mark); m.style.color = f.color;
+  var w = el('span','fam', f.word);  w.style.color = f.color;
+  var t = el('span','tgt', target);
+  var d = el('span','dot');
+  d.style.background = state === 'run' ? '#f472b6' : (state === 'err' ? '#f87171' : '#4ade80');
+  if (state === 'run') d.classList.add('pulse');
+  hd.appendChild(m); hd.appendChild(w); hd.appendChild(t); hd.appendChild(d);
+  var slot = el('div','body-slot'), inn = el('div','body-in');
+  inn.appendChild(el('div','body', bodyText));
+  slot.appendChild(inn);
+  hd.addEventListener('click', function(){
+    c.setAttribute('data-open', c.getAttribute('data-open') === 'on' ? 'off' : 'on');
+  });
+  c.appendChild(hd); c.appendChild(slot); wrap.appendChild(c);
+  return wrap;
+}
+function setStatus(row, st){
+  var d = row.querySelector('.dot');
+  d.style.background = st === 'run' ? '#f472b6' : (st === 'err' ? '#f87171' : '#4ade80');
+  if (st === 'run') d.classList.add('pulse'); else d.classList.remove('pulse');
+}
+function setBody(row, text){ row.querySelector('.body').textContent = text; }
+
+function liveSummary(label){
+  var wrap = el('div','row tool');
+  var c = el('div','card'); c.setAttribute('data-open','off');
+  var hd = el('button','hd'); hd.type = 'button';
+  var s = el('span','sum', label), car = el('span','car','▸');
+  hd.appendChild(s); hd.appendChild(car);
+  var slot = el('div','body-slot'), inn = el('div','body-in'), box = el('div','sumkids');
+  inn.appendChild(box); slot.appendChild(inn);
+  hd.addEventListener('click', function(){
+    var on = c.getAttribute('data-open') === 'on';
+    c.setAttribute('data-open', on ? 'off' : 'on');
+    car.style.transform = on ? 'none' : 'rotate(90deg)';
+  });
+  c.appendChild(hd); c.appendChild(slot); wrap.appendChild(c);
+  return { row: wrap, label: function(t){ s.textContent = t; }, add: function(k){ box.appendChild(k); } };
+}
+
+var wrap = document.getElementById('wrap');
+var timers = [];
+function at(ms, fn){ timers.push(setTimeout(fn, ms)); }
+function clearTimers(){ timers.forEach(clearTimeout); timers = []; }
+
+function settled(){
+  var reads = READ_FILES.map(function(f){ return card('read', f[0], 'ok', f[1], false); });
+  var bash  = card('bash','bun test src/loader','ok',BASH_BODY,false);
+  var live  = liveSummary('Read 4 files, ran 1 bash command');
+  reads.concat([bash]).forEach(live.add);
+  return live;
+}
+
+function reset(){
+  clearTimers();
+  wrap.textContent = '';
+  wrap.appendChild(bubble('why is the loader slow'));
+  wrap.appendChild(prose([
+    'The delay is in the module graph walk, not in disk reads. Each entry is resolved twice: once to build the dependency list and once when the list is consumed.',
+    ['The first pass builds the graph and discards it.','The second pass rebuilds the same graph from scratch.','Nothing between them invalidates it.']
+  ]));
+  wrap.appendChild(settled().row);
+  wrap.appendChild(prose(['Removing the first pass drops the walk to a single traversal.']));
+  wrap.appendChild(seam('Stopped'));
+}
+
+function play(){
+  clearTimers();
+  wrap.textContent = '';
+  var reads = READ_FILES.map(function(f){ return card('read', f[0], 'run', f[1], false); });
+  var bash  = card('bash','bun test src/loader','run','',false);
+  wrap.appendChild(bubble('why is the loader slow'));
+
+  var live = liveSummary('Reading 1 file…');
+  at(600, function(){ wrap.appendChild(live.row); live.add(reads[0]); });
+  // ~1.4s per read, ~3.2s for the test run: the cadence of real work.
+  var t = 2000;
+  for (var i = 1; i < reads.length; i++){
+    (function(i, when){
+      at(when, function(){
+        setStatus(reads[i-1], 'ok');
+        live.label('Reading ' + (i+1) + ' files…');
+        live.add(reads[i]);
+      });
+    })(i, t);
+    t += 1400;
+  }
+  at(t, function(){
+    setStatus(reads[reads.length-1], 'ok');
+    live.label('Reading 4 files, running 1 bash command…');
+    live.add(bash);
+  });
+  at(t + 900,  function(){ setBody(bash, '12 pass'); });
+  at(t + 1800, function(){ setBody(bash, '12 pass\n0 fail'); });
+  at(t + 3200, function(){
+    setBody(bash, BASH_BODY); setStatus(bash, 'ok');
+    live.label('Read 4 files, ran 1 bash command');
+  });
+  at(t + 3700, function(){
+    wrap.appendChild(prose([
+      'The delay is in the module graph walk, not in disk reads. Each entry is resolved twice: once to build the dependency list and once when the list is consumed.',
+      ['The first pass builds the graph and discards it.','The second pass rebuilds the same graph from scratch.','Nothing between them invalidates it.']
+    ]));
+  });
+  at(t + 4000, function(){ wrap.appendChild(seam('Stopped')); });
+}
+
+document.getElementById('play').addEventListener('click', play);
+document.getElementById('reset').addEventListener('click', reset);
+reset();
+</script>
+</body>
+</html>

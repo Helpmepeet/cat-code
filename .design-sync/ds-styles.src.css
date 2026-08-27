@@ -1,0 +1,53 @@
+/* Design-sync stylesheet source (NOT app code — never imported by the renderer).
+ *
+ * Why this file exists: Tailwind v4 emits only the utility classes it can find
+ * in the scanned sources. Compiling the app alone yields a stylesheet limited to
+ * cat-code's existing vocabulary, so any class the Claude Design agent writes
+ * that the app happens not to use would silently no-op. This widens the emitted
+ * set with a safelist while keeping the real theme as the single source of the
+ * tokens and fonts.
+ *
+ * Output must land in a directory containing `assets/fonts/`, because theme.css
+ * declares its @font-face `url()`s relative to itself. See cfg.buildCmd. */
+
+@import '../app/renderer/src/theme.css';
+
+/* Real usage, so every class the app already relies on keeps working. */
+@source '../app/renderer/src/**/*.tsx';
+/* Authored preview cards. */
+@source './previews/*.tsx';
+
+/* Safelist: the ordinary layout and type vocabulary a designer reaches for. */
+@source inline('{flex,inline-flex,grid,block,inline-block,contents,hidden}');
+@source inline('flex-{row,col,wrap,nowrap,1,none,auto}');
+@source inline('grid-cols-{1..6}');
+@source inline('{items,self}-{start,center,end,baseline,stretch}');
+@source inline('justify-{start,center,end,between,around,evenly}');
+@source inline('gap-{0..16}');
+@source inline('gap-{x,y}-{0..16}');
+@source inline('{p,px,py,pt,pr,pb,pl}-{0..16}');
+@source inline('{m,mx,my,mt,mr,mb,ml}-{0..16}');
+@source inline('{w,h}-{0..16}');
+@source inline('{w,h}-{full,auto,fit,px}');
+@source inline('{min,max}-w-{0,full,fit,none}');
+@source inline('text-{xs,sm,base,lg,xl,2xl}');
+@source inline('font-{sans,mono,normal,medium,semibold,bold}');
+@source inline('{uppercase,lowercase,capitalize,truncate,italic}');
+@source inline('text-{left,center,right}');
+@source inline('leading-{none,tight,snug,normal,relaxed}');
+@source inline('tracking-{tight,normal,wide,wider,widest}');
+@source inline('rounded{,-sm,-md,-lg,-xl,-2xl,-full,-none}');
+@source inline('border{,-0,-2,-4}');
+@source inline('border-{t,r,b,l}');
+@source inline('opacity-{0,10,20,30,40,50,60,70,80,90,100}');
+@source inline('{relative,absolute,fixed,sticky,static}');
+@source inline('overflow-{hidden,auto,visible,x-auto,y-auto}');
+@source inline('shrink-0 grow-0 whitespace-nowrap');
+@source inline('{animate-pulse,animate-spin,transition-colors,cursor-pointer}');
+
+/* Theme colours across the properties that actually take them. */
+@source inline('{text,bg,border}-{app-bg,shell-chrome,shell-seam,shell-hover,shell-active}');
+@source inline('{text,bg,border}-{surface-raised,surface-panel}');
+@source inline('{text,bg,border}-{text-primary,text-muted,text-subtle,text-faint,text-ghost}');
+@source inline('{text,bg,border}-{accent,accent-soft}');
+@source inline('{text,bg,border}-{tone-good,tone-warn,tone-danger,tone-info,tone-success}');

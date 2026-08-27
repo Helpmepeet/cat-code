@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Streaming prose arrival</title>
+<style>
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;font-display:swap;
+  src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2');}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:swap;
+  src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2');}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:#09090b}
+body{font-family:'DM Sans',-apple-system,sans-serif}
+
+/* ── chrome ─────────────────────────────────────────────────── */
+.x-bar{position:fixed;right:14px;top:12px;z-index:10;display:flex;gap:8px}
+.x-btn{font-family:'DM Mono',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+  color:#8a8a90;background:#09090b;cursor:pointer;border:1px solid rgba(255,255,255,.18);
+  border-radius:2px;padding:3px 9px;line-height:1.4}
+.x-btn:hover{color:#d4d4d8;border-color:rgba(255,255,255,.4)}
+.x-tag{display:flex;align-items:baseline;justify-content:space-between;
+  font-family:'DM Mono',monospace;font-size:9px;letter-spacing:.16em;text-transform:uppercase;
+  color:#6e6e75;padding-bottom:7px;border-bottom:1px solid rgba(255,255,255,.09);margin-bottom:16px}
+.x-rep{font-family:'DM Mono',monospace;font-size:9px;letter-spacing:.12em;text-transform:uppercase;
+  color:#6e6e75;background:transparent;border:0;cursor:pointer;padding:0 2px}
+.x-rep:hover{color:#d4d4d8}
+.x-slot{margin:0 0 56px}
+
+.page{margin:0 auto;max-width:900px;padding:52px 32px 120px}
+
+/* ── specimen: assistant prose column, values from md-prose ──── */
+.spec{font-family:'DM Sans',-apple-system,sans-serif;font-size:14px;font-weight:500;
+  line-height:1.625;color:#f4f4f5;overflow-wrap:break-word}
+.spec>*+*{margin-top:.85em}
+.spec>:first-child{margin-top:0}
+.spec p{text-wrap:pretty}
+.spec h3{font-size:1.05em;font-weight:600;line-height:1.3;text-wrap:balance}
+.spec>*+h3{margin-top:1.35em}
+.spec>h3+*{margin-top:.5em}
+.spec ul{padding-left:1.5em;list-style-type:disc}
+.spec li::marker{color:#a1a1aa}
+.spec li+li{margin-top:.3em}
+.spec :not(pre)>code{font-family:'DM Mono',monospace;font-size:.9em;color:#f9a8d4;overflow-wrap:anywhere}
+.spec blockquote{border-left:2px solid rgba(255,255,255,.06);padding-left:.9em;color:#a1a1aa}
+
+/* GFM table (MARKDOWN_COMPONENTS table/th/td values) */
+.spec .tblwrap{margin:12px 0;overflow-x:auto;border-radius:8px;border:1px solid rgba(255,255,255,.08)}
+.spec table{width:100%;border-collapse:collapse;font-size:13px}
+.spec th{white-space:nowrap;border-bottom:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.03);
+  padding:7px 12px;text-align:left;font-weight:600;color:#e4e4e7}
+.spec td{border-bottom:1px solid rgba(255,255,255,.05);padding:7px 12px;vertical-align:top;color:#c4c4c8}
+
+/* fenced-code card (CodeBlock values, dracula tokens) */
+.spec .codecard{position:relative;margin:12px 0;overflow:hidden;border-radius:8px;
+  border:1px solid rgba(255,255,255,.06);background:#09090b}
+.spec .codelang{position:absolute;left:14px;top:8px;z-index:1;display:inline-flex;align-items:center;gap:6px;
+  font-family:'DM Mono',monospace;font-size:10px;font-weight:600;letter-spacing:.06em;color:#f472b6}
+.spec .codelang .g{opacity:.7}
+.spec .codecopy{position:absolute;right:10px;top:6px;z-index:1;
+  font-family:'DM Mono',monospace;font-size:11px;color:#98989f;background:none;border:0}
+.spec pre{overflow-x:auto;padding:38px 14px 14px;font-family:'DM Mono',monospace;
+  font-size:12.5px;line-height:1.65;color:#f8f8f2}
+.spec .hlk{color:#ff79c6}
+.spec .hlt{color:#50fa7b}
+.spec .hll{color:#bd93f9}
+.spec .hlc{color:#6272a4;font-style:italic}
+.spec .hls{color:#f1fa8c}
+.spec .hlb{color:#8be9fd}
+
+/* streaming machinery: unrevealed words and empty blocks take no space */
+.armed .w:not(.on){display:none}
+.armed .blk.boff{display:none}
+
+/* arrival animations, all chunk-timed */
+@keyframes fwin{from{opacity:0}to{opacity:1}}
+@keyframes fblur{from{opacity:0;filter:blur(3px)}to{opacity:1;filter:blur(0)}}
+@keyframes frise{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+.fB .w.on{animation:fwin 220ms linear both}
+/* E: same fade, engine adds a small per-word animation-delay inside each chunk */
+.fE .w.on{animation:fwin 160ms linear both}
+.fF .w.on{animation:fblur 240ms ease-out both}
+/* G: transforms need a box; words go inline-block EXCEPT in code, where an
+   inline-block span would break folded newlines and long-token wrapping, so
+   code words stay inline and the transform half degrades to plain fade */
+.fG .w{display:inline-block}
+.fG code .w{display:inline}
+.fG .w.on{animation:frise 240ms cubic-bezier(.2,.7,.3,1) both}
+</style>
+</head>
+<body>
+
+<div class="x-bar">
+  <button class="x-btn" id="speed">1x</button>
+  <button class="x-btn" id="playall">Play all</button>
+</div>
+
+<div class="page">
+
+  <div class="x-slot">
+    <div class="x-tag"><span>A &middot; current, raw chunks</span><button class="x-rep" data-id="sA">replay</button></div>
+    <div class="spec" id="sA"></div>
+  </div>
+  <div class="x-slot">
+    <div class="x-tag"><span>B &middot; chunk fade</span><button class="x-rep" data-id="sB">replay</button></div>
+    <div class="spec fB" id="sB"></div>
+  </div>
+  <div class="x-slot">
+    <div class="x-tag"><span>E &middot; staggered fade</span><button class="x-rep" data-id="sE">replay</button></div>
+    <div class="spec fE" id="sE"></div>
+  </div>
+  <div class="x-slot">
+    <div class="x-tag"><span>F &middot; blur in</span><button class="x-rep" data-id="sF">replay</button></div>
+    <div class="spec fF" id="sF"></div>
+  </div>
+  <div class="x-slot">
+    <div class="x-tag"><span>G &middot; rise in</span><button class="x-rep" data-id="sG">replay</button></div>
+    <div class="spec fG" id="sG"></div>
+  </div>
+
+</div>
+
+<template id="msg">
+<p>The flaky test came from shared state, not timing. <code>loadConfig</code> memoizes its result at module scope, so the second case always saw whatever the first case wrote, and the failure moved around depending on run order. The regression is pinned by <code>packages/config/src/internal/loaders/resolveWorkspaceConfig.integration.test.ts</code>, which fails only when it runs second.</p>
+<h3>What changed</h3>
+<p>Three small edits, all inside the test seam:</p>
+<ul>
+<li>Memoization is skipped when <code>NODE_ENV</code> is <code>test</code>, so each case parses its own copy of the config.</li>
+<li>The shared fixture moved from module scope into a builder that each test calls.</li>
+<li>A reset helper clears the cache, wired into <code>afterEach</code> next to the existing cleanup.</li>
+</ul>
+<p>Run order stops mattering once the cache resets between cases:</p>
+<div class="tblwrap"><table>
+<thead><tr><th>Case</th><th>Before</th><th>After</th></tr></thead>
+<tbody>
+<tr><td>first run</td><td>passes</td><td>passes</td></tr>
+<tr><td>second run</td><td>fails on the cached copy</td><td>passes</td></tr>
+<tr><td>full suite</td><td>9 of 12</td><td>12 of 12</td></tr>
+</tbody>
+</table></div>
+<p>The whole seam fits in the loader module:</p>
+<div class="codecard"><span class="codelang co"><span class="g">&lt;/&gt;</span>ts</span><button class="codecopy co" type="button">copy</button><pre><code><span class="hlk">type</span> <span class="hlb">ConfigCache</span> = {
+  value: <span class="hlb">WorkspaceConfig</span> | <span class="hll">null</span>
+  loadedAt: <span class="hlb">number</span> | <span class="hll">null</span>
+}
+
+<span class="hlk">const</span> cache: <span class="hlb">ConfigCache</span> = { value: <span class="hll">null</span>, loadedAt: <span class="hll">null</span> }
+
+<span class="hlk">export</span> <span class="hlk">function</span> <span class="hlt">loadConfig</span>(root: <span class="hlb">string</span>): <span class="hlb">WorkspaceConfig</span> {
+  <span class="hlk">if</span> (cache.value !== <span class="hll">null</span> &amp;&amp; process.env.NODE_ENV !== <span class="hls">'test'</span>) {
+    <span class="hlk">return</span> cache.value
+  }
+  <span class="hlk">const</span> raw = readFileSync(join(root, <span class="hls">'workspace.json'</span>), <span class="hls">'utf8'</span>)
+  <span class="hlk">const</span> parsed = parseWorkspaceConfig(<span class="hlb">JSON</span>.parse(raw))
+  cache.value = parsed
+  cache.loadedAt = <span class="hlb">Date</span>.now()
+  <span class="hlk">return</span> parsed
+}
+
+<span class="hlc">// Test-only escape hatch: each case starts from a cold cache,</span>
+<span class="hlc">// so run order can never leak one case's config into the next.</span>
+<span class="hlk">export</span> <span class="hlk">function</span> <span class="hlt">resetConfigCache</span>(): <span class="hlk">void</span> {
+  cache.value = <span class="hll">null</span>
+  cache.loadedAt = <span class="hll">null</span>
+}
+
+afterEach(() =&gt; {
+  <span class="hlt">resetConfigCache</span>()
+})</code></pre></div>
+<p>The module doc still says:</p>
+<blockquote><p>Config is parsed once per process and shared by every caller.</p></blockquote>
+<p>That stays true in production: memoization applies everywhere outside the test environment, and nothing about the config shape moved. The whole suite passes twelve of twelve now, and run order no longer matters.</p>
+</template>
+
+<script>
+'use strict';
+
+// ── deterministic delivery schedule, shared by every specimen ──
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+
+let RATE=1;
+let EV=[];      // [{t, n}] cumulative word count delivered at time t
+let W=0;        // total words
+
+function buildSchedule(total){
+  const r=mulberry32(7);
+  const ev=[];let t=250,n=0,i=0;
+  while(n<total){
+    const c=Math.min(total-n,2+Math.floor(r()*7));
+    n+=c;i++;ev.push({t,n});
+    let gap=50+r()*180;
+    if(i===6||i===14||i===26||i===40)gap+=650;
+    t+=gap;
+  }
+  return ev;
+}
+
+// ── word wrapping ──
+// Inside <pre>, whitespace (incl. newlines/indent) is folded into the previous
+// word span so hidden code keeps exact layout and reveals without a skeleton.
+function wrapWords(root){
+  const words=[];
+  const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
+  const texts=[];
+  while(walker.nextNode())texts.push(walker.currentNode);
+  let lastWord=null;
+  for(const tn of texts){
+    const pre=tn.parentElement.closest('pre');
+    const parts=tn.textContent.split(/(\s+)/);
+    const frag=document.createDocumentFragment();
+    for(const p of parts){
+      if(!p)continue;
+      if(/^\s+$/.test(p)){
+        if(pre&&lastWord&&lastWord.closest('pre')===pre)lastWord.textContent+=p;
+        else frag.appendChild(document.createTextNode(p));
+      }else{
+        const s=document.createElement('span');
+        s.className='w';s.textContent=p;
+        frag.appendChild(s);words.push(s);lastWord=s;
+      }
+    }
+    tn.parentNode.replaceChild(frag,tn);
+  }
+  return words;
+}
+
+// ── playback ──
+const active=new Set();
+let rafOn=false;
+function ensureRaf(){if(!rafOn){rafOn=true;requestAnimationFrame(frame)}}
+function frame(now){
+  for(const s of[...active])s.tick(now);
+  if(active.size)requestAnimationFrame(frame);else rafOn=false;
+}
+
+class Spec{
+  constructor(id,opts){
+    this.stagger=!!(opts&&opts.stagger);
+    this.spec=document.getElementById(id);
+    this.spec.innerHTML=document.getElementById('msg').innerHTML;
+    this.blocks=[...this.spec.querySelectorAll('*')];
+    this.blocks.forEach(b=>b.classList.add('blk'));
+    this.words=wrapWords(this.spec);
+    this.revealed=this.words.length;this.done=true;
+  }
+  reset(){
+    for(const w of this.words){w.classList.remove('on');w.style.animationDelay=''}
+    this.blocks.forEach(b=>b.classList.add('boff'));
+    this.revealed=0;this.evPtr=0;this.delivered=0;this.done=false;
+    this.spec.classList.add('armed');
+  }
+  play(){
+    this.reset();
+    this.last=performance.now();this.vt=0;
+    active.add(this);ensureRaf();
+  }
+  tick(now){
+    this.vt+=Math.min(now-this.last,100)*RATE;this.last=now;
+    while(this.evPtr<EV.length&&EV[this.evPtr].t<=this.vt){this.delivered=EV[this.evPtr].n;this.evPtr++}
+    this.revealTo(this.delivered);
+  }
+  revealTo(k){
+    if(k>this.revealed){
+      const base=this.revealed;
+      for(let i=base;i<k;i++){
+        const w=this.words[i];
+        if(this.stagger)w.style.animationDelay=((i-base)*25)+'ms';
+        w.classList.add('on');
+        let e=w.parentElement;
+        while(e&&e!==this.spec){
+          if(e.classList.contains('boff')){
+            e.classList.remove('boff');
+            // companions: elements owned by a container but holding no words
+            // of their own (code card lang chip, copy button)
+            for(const c of e.children)if(c.classList.contains('co'))c.classList.remove('boff');
+          }
+          e=e.parentElement;
+        }
+      }
+      this.revealed=k;
+    }
+    if(this.evPtr>=EV.length&&this.revealed>=W&&!this.done){
+      this.done=true;active.delete(this);
+      this.spec.classList.remove('armed');
+    }
+  }
+}
+
+const specs={
+  sA:new Spec('sA'),
+  sB:new Spec('sB'),
+  sE:new Spec('sE',{stagger:true}),
+  sF:new Spec('sF'),
+  sG:new Spec('sG'),
+};
+
+W=specs.sA.words.length;
+EV=buildSchedule(W);
+
+// reserve settled height so playback does not shift the page
+document.fonts.ready.then(()=>{
+  for(const k in specs){
+    const s=specs[k].spec;
+    s.style.minHeight=s.offsetHeight+'px';
+  }
+});
+
+document.getElementById('playall').addEventListener('click',()=>{
+  for(const k in specs)specs[k].play();
+});
+document.querySelectorAll('.x-rep').forEach(b=>{
+  b.addEventListener('click',()=>specs[b.dataset.id].play());
+});
+const speedBtn=document.getElementById('speed');
+speedBtn.addEventListener('click',()=>{
+  RATE=RATE===1?0.4:1;
+  speedBtn.textContent=RATE===1?'1x':'0.4x';
+});
+</script>
+</body>
+</html>

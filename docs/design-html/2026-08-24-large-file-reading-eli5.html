@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Large-file reading: the difference</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --x-paper: #fffdf7;
+      --x-page: #fff6cf;
+      --x-ink: #14213d;
+      --x-muted: #667085;
+      --x-line: #d8dde7;
+      --x-red: #ef6a5b;
+      --x-orange: #f5a442;
+      --x-blue: #5b8def;
+      --x-green: #42aa78;
+      --x-purple: #8b6ee8;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background: var(--x-paper);
+      color: var(--x-ink);
+      font-family: ui-rounded, "SF Pro Rounded", "Avenir Next", system-ui, sans-serif;
+    }
+
+    .x-page {
+      width: min(1500px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 46px 0 64px;
+    }
+
+    .x-kicker,
+    .x-label,
+    .x-mini-label,
+    .x-versus {
+      font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .17em;
+      text-transform: uppercase;
+      color: var(--x-muted);
+    }
+
+    .x-title {
+      margin: 8px 0 36px;
+      font-size: clamp(36px, 6vw, 78px);
+      line-height: .98;
+      letter-spacing: -.055em;
+      max-width: 900px;
+    }
+
+    .x-problem {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      min-height: 260px;
+      padding: 26px clamp(18px, 4vw, 60px);
+      border-top: 1px solid var(--x-line);
+      border-bottom: 1px solid var(--x-line);
+      margin-bottom: 42px;
+    }
+
+    .x-stack-wrap,
+    .x-door-wrap {
+      display: grid;
+      place-items: center;
+      gap: 14px;
+    }
+
+    .x-stack {
+      position: relative;
+      width: 180px;
+      height: 128px;
+    }
+
+    .x-sheet {
+      position: absolute;
+      inset: 0;
+      border: 4px solid var(--x-ink);
+      border-radius: 10px;
+      background: var(--x-page);
+    }
+
+    .x-sheet:nth-child(1) { transform: translate(-18px, 16px) rotate(-4deg); }
+    .x-sheet:nth-child(2) { transform: translate(0, 8px) rotate(2deg); }
+    .x-sheet:nth-child(3) { transform: translate(15px, -5px) rotate(-1deg); }
+
+    .x-sheet-lines,
+    .x-page-lines {
+      position: absolute;
+      left: 22px;
+      right: 22px;
+      top: 27px;
+      height: 55px;
+      background: repeating-linear-gradient(
+        to bottom,
+        var(--x-blue) 0 4px,
+        transparent 4px 15px
+      );
+      opacity: .7;
+    }
+
+    .x-door {
+      width: 92px;
+      height: 150px;
+      border: 9px solid var(--x-ink);
+      border-bottom: 0;
+      border-radius: 48px 48px 0 0;
+      background: white;
+      box-shadow: inset 0 0 0 7px var(--x-red);
+    }
+
+    .x-count {
+      font-size: clamp(30px, 4vw, 56px);
+      font-weight: 900;
+      letter-spacing: -.05em;
+    }
+
+    .x-versus {
+      padding: 0 clamp(14px, 3vw, 48px);
+      font-size: 20px;
+    }
+
+    .x-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 34px 46px;
+    }
+
+    .x-card {
+      min-width: 0;
+      padding-top: 14px;
+      border-top: 1px solid var(--x-line);
+    }
+
+    .x-card-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+
+    .x-card-name {
+      margin: 0;
+      font-size: clamp(25px, 3vw, 42px);
+      letter-spacing: -.04em;
+    }
+
+    .x-scene {
+      min-height: 330px;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .x-flow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: clamp(8px, 2vw, 23px);
+      width: 100%;
+    }
+
+    .x-book-page {
+      position: relative;
+      flex: 0 0 auto;
+      width: clamp(82px, 12vw, 150px);
+      height: clamp(112px, 16vw, 205px);
+      border: 4px solid var(--x-ink);
+      border-radius: 8px;
+      background: var(--x-page);
+      box-shadow: 7px 7px 0 rgba(20, 33, 61, .11);
+    }
+
+    .x-book-page.x-small {
+      width: clamp(68px, 9vw, 108px);
+      height: clamp(96px, 13vw, 150px);
+    }
+
+    .x-page-no {
+      position: absolute;
+      right: 10px;
+      bottom: 8px;
+      font: 800 18px/1 ui-monospace, monospace;
+    }
+
+    .x-gap {
+      display: grid;
+      place-items: center;
+      width: clamp(72px, 10vw, 130px);
+      height: 180px;
+      color: var(--x-red);
+      font-size: clamp(42px, 6vw, 80px);
+      font-weight: 900;
+      border-left: 4px dashed var(--x-red);
+      border-right: 4px dashed var(--x-red);
+    }
+
+    .x-arrow {
+      color: var(--x-blue);
+      font-size: clamp(38px, 5vw, 72px);
+      line-height: 1;
+      font-weight: 900;
+    }
+
+    .x-stop {
+      display: grid;
+      place-items: center;
+      width: clamp(116px, 18vw, 205px);
+      aspect-ratio: 1;
+      background: var(--x-red);
+      color: white;
+      border: 7px solid var(--x-ink);
+      border-radius: 50%;
+      font-size: clamp(45px, 7vw, 84px);
+      font-weight: 900;
+    }
+
+    .x-retry {
+      font-size: clamp(44px, 7vw, 88px);
+      color: var(--x-orange);
+      font-weight: 1000;
+      transform: rotate(12deg);
+    }
+
+    .x-cursor {
+      position: absolute;
+      right: -12px;
+      top: 48%;
+      width: 25px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--x-purple);
+      box-shadow: 0 0 0 6px var(--x-paper);
+    }
+
+    .x-long-page {
+      position: relative;
+      width: min(450px, 75vw);
+      height: 150px;
+      border: 4px solid var(--x-ink);
+      border-radius: 8px;
+      background: var(--x-page);
+      overflow: hidden;
+    }
+
+    .x-long-line {
+      position: absolute;
+      left: 20px;
+      top: 57px;
+      width: 760px;
+      height: 12px;
+      border-radius: 999px;
+      background: repeating-linear-gradient(90deg, var(--x-blue) 0 32px, transparent 32px 42px);
+    }
+
+    .x-cut {
+      position: absolute;
+      right: 38px;
+      top: 34px;
+      font-size: 56px;
+      transform: rotate(-10deg);
+    }
+
+    .x-guard-row {
+      position: absolute;
+      bottom: 24px;
+      display: flex;
+      gap: 12px;
+    }
+
+    .x-guard {
+      display: grid;
+      place-items: center;
+      width: 58px;
+      height: 58px;
+      border: 3px solid var(--x-ink);
+      border-radius: 50%;
+      background: white;
+      font-size: 28px;
+    }
+
+    .x-best {
+      grid-column: 1 / -1;
+      margin-top: 4px;
+    }
+
+    .x-best .x-scene {
+      min-height: 400px;
+    }
+
+    .x-best-flow {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) auto minmax(220px, 1fr);
+      align-items: center;
+      gap: clamp(20px, 5vw, 80px);
+      width: min(1050px, 100%);
+    }
+
+    .x-sequence {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .x-tiny-page {
+      position: relative;
+      width: clamp(58px, 7vw, 90px);
+      height: clamp(78px, 10vw, 120px);
+      border: 3px solid var(--x-ink);
+      border-radius: 6px;
+      background: var(--x-page);
+    }
+
+    .x-tiny-page::after {
+      content: "";
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      top: 19px;
+      height: 42px;
+      background: repeating-linear-gradient(to bottom, var(--x-blue) 0 3px, transparent 3px 11px);
+    }
+
+    .x-lock {
+      display: grid;
+      place-items: center;
+      width: clamp(105px, 12vw, 150px);
+      aspect-ratio: 1;
+      border: 6px solid var(--x-ink);
+      border-radius: 50%;
+      background: white;
+      font-size: clamp(55px, 7vw, 86px);
+    }
+
+    .x-ledger {
+      width: min(310px, 100%);
+      padding: 22px;
+      border: 4px solid var(--x-ink);
+      border-radius: 10px;
+      background: white;
+      box-shadow: 8px 8px 0 rgba(20, 33, 61, .11);
+    }
+
+    .x-check {
+      display: grid;
+      grid-template-columns: 34px 1fr;
+      align-items: center;
+      gap: 10px;
+      margin: 10px 0;
+    }
+
+    .x-tick {
+      color: var(--x-green);
+      font-size: 28px;
+      font-weight: 1000;
+    }
+
+    .x-check-line {
+      height: 9px;
+      border-radius: 999px;
+      background: var(--x-green);
+    }
+
+    .x-check:last-child .x-check-line { width: 72%; }
+
+    .x-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    .x-tag {
+      padding: 7px 9px;
+      border: 1px solid var(--x-line);
+      border-radius: 999px;
+      color: var(--x-muted);
+      font: 700 9px/1 ui-monospace, monospace;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    @media (max-width: 820px) {
+      .x-page { width: min(100% - 24px, 680px); padding-top: 28px; }
+      .x-problem { grid-template-columns: 1fr; gap: 24px; }
+      .x-versus { transform: rotate(90deg); }
+      .x-grid { grid-template-columns: 1fr; }
+      .x-best { grid-column: auto; }
+      .x-best-flow { grid-template-columns: 1fr; }
+      .x-scene { min-height: 290px; }
+      .x-best .x-scene { min-height: 660px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="x-page">
+    <div class="x-kicker">ELI5 · LARGE FILES</div>
+    <h1 class="x-title">Big book.<br>Small doorway.</h1>
+
+    <section class="x-problem" aria-label="A 48 thousand token file and a 25 thousand token limit">
+      <div class="x-stack-wrap">
+        <div class="x-stack" aria-hidden="true">
+          <div class="x-sheet"></div>
+          <div class="x-sheet"></div>
+          <div class="x-sheet"><div class="x-sheet-lines"></div></div>
+        </div>
+        <div class="x-count">48K</div>
+        <div class="x-mini-label">BIG FILE</div>
+      </div>
+      <div class="x-versus">VS</div>
+      <div class="x-door-wrap">
+        <div class="x-door" aria-hidden="true"></div>
+        <div class="x-count">25K</div>
+        <div class="x-mini-label">HARD LIMIT</div>
+      </div>
+    </section>
+
+    <div class="x-grid">
+      <section class="x-card">
+        <header class="x-card-head">
+          <h2 class="x-card-name">Current guard</h2>
+          <span class="x-label">EMPTY RETRY</span>
+        </header>
+        <div class="x-scene">
+          <div class="x-flow">
+            <div class="x-stop">0</div>
+            <div class="x-retry">↻?</div>
+          </div>
+        </div>
+        <div class="x-tags">
+          <span class="x-tag">SAFE</span>
+          <span class="x-tag">NO PAGES</span>
+          <span class="x-tag">OFFSET 405?</span>
+        </div>
+      </section>
+
+      <section class="x-card">
+        <header class="x-card-head">
+          <h2 class="x-card-name">Codex</h2>
+          <span class="x-label">HEAD + TAIL</span>
+        </header>
+        <div class="x-scene">
+          <div class="x-flow">
+            <div class="x-book-page x-small">
+              <div class="x-page-lines"></div>
+              <span class="x-page-no">1</span>
+            </div>
+            <div class="x-gap">?</div>
+            <div class="x-book-page x-small">
+              <div class="x-page-lines"></div>
+              <span class="x-page-no">9</span>
+            </div>
+          </div>
+        </div>
+        <div class="x-tags">
+          <span class="x-tag">FLEXIBLE</span>
+          <span class="x-tag">MISSING MIDDLE</span>
+          <span class="x-tag">NO CURSOR</span>
+        </div>
+      </section>
+
+      <section class="x-card">
+        <header class="x-card-head">
+          <h2 class="x-card-name">OpenClaw</h2>
+          <span class="x-label">EXACT CURSOR</span>
+        </header>
+        <div class="x-scene">
+          <div class="x-flow">
+            <div class="x-book-page x-small">
+              <div class="x-page-lines"></div>
+              <span class="x-page-no">1</span>
+            </div>
+            <div class="x-arrow">›</div>
+            <div class="x-book-page x-small">
+              <div class="x-page-lines"></div>
+              <div class="x-cursor"></div>
+              <span class="x-page-no">2½</span>
+            </div>
+            <div class="x-arrow">›</div>
+            <div class="x-book-page x-small">
+              <div class="x-page-lines"></div>
+              <span class="x-page-no">3</span>
+            </div>
+          </div>
+        </div>
+        <div class="x-tags">
+          <span class="x-tag">USEFUL PAGE</span>
+          <span class="x-tag">INSIDE-LINE CURSOR</span>
+          <span class="x-tag">NO EOF PROMISE</span>
+        </div>
+      </section>
+
+      <section class="x-card">
+        <header class="x-card-head">
+          <h2 class="x-card-name">Hermes</h2>
+          <span class="x-label">NEXT LINE</span>
+        </header>
+        <div class="x-scene">
+          <div class="x-long-page">
+            <div class="x-long-line"></div>
+            <div class="x-cut" aria-hidden="true">✂</div>
+          </div>
+          <div class="x-guard-row" aria-label="File-state and loop guards">
+            <div class="x-guard">🛡</div>
+            <div class="x-guard">↻</div>
+          </div>
+        </div>
+        <div class="x-tags">
+          <span class="x-tag">USEFUL PAGE</span>
+          <span class="x-tag">LOOP GUARDS</span>
+          <span class="x-tag">LONG-LINE HOLE</span>
+        </div>
+      </section>
+
+      <section class="x-card x-best">
+        <header class="x-card-head">
+          <h2 class="x-card-name">Strongest design</h2>
+          <span class="x-label">PAGES + LOCK + CHECKLIST</span>
+        </header>
+        <div class="x-scene">
+          <div class="x-best-flow">
+            <div class="x-sequence" aria-label="Every page in order">
+              <div class="x-tiny-page"></div>
+              <div class="x-arrow">›</div>
+              <div class="x-tiny-page"><div class="x-cursor"></div></div>
+              <div class="x-arrow">›</div>
+              <div class="x-tiny-page"></div>
+            </div>
+            <div class="x-lock" aria-label="Cursor locked to one file version">🔒</div>
+            <div class="x-ledger" aria-label="Runtime coverage checklist">
+              <div class="x-check"><span class="x-tick">✓</span><span class="x-check-line"></span></div>
+              <div class="x-check"><span class="x-tick">✓</span><span class="x-check-line"></span></div>
+              <div class="x-check"><span class="x-tick">✓</span><span class="x-check-line"></span></div>
+              <div class="x-check"><span class="x-tick">✓</span><span class="x-check-line"></span></div>
+            </div>
+          </div>
+        </div>
+        <div class="x-tags">
+          <span class="x-tag">8K PAGES</span>
+          <span class="x-tag">EXACT CURSOR</span>
+          <span class="x-tag">SAME VERSION</span>
+          <span class="x-tag">FULL COVERAGE</span>
+          <span class="x-tag">EOF RECEIPT</span>
+        </div>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

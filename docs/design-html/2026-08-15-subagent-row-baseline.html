@@ -1,0 +1,1080 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Subagent row baseline</title>
+<style>
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:500;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMMono-Medium.woff2') format('woff2')}
+
+/* ══ tokens (theme.css) ═══════════════════════════════════════════════════ */
+:root{
+  --accent:#f472b6;
+  --accent-rgb:244 114 182;
+  --accent-soft:#f9a8d4;
+  --tone-good:#4ade80;
+  --tone-warn:#fbbf24;
+  --tone-danger:#f87171;
+  --app-bg:#09090b;
+  --shell-seam:rgba(255,255,255,0.06);
+  --text-primary:#f4f4f5;
+  --text-muted:#a1a1aa;
+  --text-subtle:#98989f;
+  --text-faint:#838389;
+  --text-ghost:#75757b;
+  --transcript-width:900px;
+  --font-sans:"DM Sans",-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+  --font-mono:"DM Mono",ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;
+  color-scheme:dark;
+}
+/* compiled Tailwind palette entries the components reach for by class name */
+:root{
+  --blue-400:oklch(70.7% .165 254.624);
+  --blue-300:oklch(80.9% .105 251.813);
+  --sky-300:oklch(82.8% .111 230.318);
+  --teal-300:oklch(85.5% .138 181.071);
+  --violet-300:oklch(81.1% .111 293.571);
+  --purple-200:oklch(90.2% .063 306.703);
+  --purple-400:oklch(71.4% .203 305.504);
+  --zinc-400:oklch(70.5% .015 286.067);
+}
+*{box-sizing:border-box}
+html{line-height:1.5}
+html,body{background:var(--app-bg);margin:0}
+body{font-family:var(--font-sans);color:var(--text-primary);-webkit-font-smoothing:antialiased;display:flex;height:100vh;overflow:hidden}
+
+/* ══ page chrome — never the app ══════════════════════════════════════════ */
+.x-pane{flex:1 1 0;min-width:0;height:100vh;overflow-y:auto;overflow-x:hidden}
+.x-left{order:1}
+.x-right{order:2;border-left:1px solid #26262a}
+.x-bar{position:sticky;top:0;z-index:2;background:var(--app-bg);border-bottom:1px solid #26262a;padding:15px 32px 11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:#8a8a90}
+.x-top{max-width:var(--transcript-width);margin:0 auto;padding:30px 32px 0}
+.x-h{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:#6e6e73;padding-bottom:7px;border-bottom:1px solid #26262a;margin:0}
+.x-i{max-width:var(--transcript-width);margin:0 auto;padding:26px 32px 7px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:#5b5b60}
+.x-gap{height:44px}
+.x-end{height:96px}
+
+/* ══ specimen — the transcript column itself ═════════════════════════════ */
+.col{max-width:var(--transcript-width);margin:0 auto;display:flex;flex-direction:column;gap:10px;padding:24px 32px 0}
+.col.tight{padding-top:0}
+
+/* the user's own turn */
+.ubub-w{display:flex;justify-content:flex-end}
+.ubub{max-width:82%;white-space:pre-wrap;overflow-wrap:break-word;border-radius:16px;border-bottom-right-radius:4px;border:1px solid rgb(var(--accent-rgb)/0.2);background:rgb(var(--accent-rgb)/0.1);padding:10px 16px;font-size:14px;line-height:1.625;color:var(--text-primary)}
+
+/* model prose, one grammar for every markdown body */
+.prose{font-family:var(--font-sans);font-weight:500;font-size:14px;line-height:1.625}
+.prose p{margin:0}
+.prose p + p{margin-top:.85em}
+.prose code{font-family:var(--font-mono);font-size:.9em;color:var(--accent-soft)}
+
+/* reasoning run: a head plus a rail of steps, open by default */
+.rr{display:flex;flex-direction:column}
+.rr-h{display:flex;width:100%;align-items:center;gap:10px;padding:1px 0}
+.rr-c{display:inline-block;width:16px;flex-shrink:0;text-align:center;font-size:9px;line-height:1;color:var(--text-ghost)}
+.rr-w{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-subtle)}
+.rr-n{font-size:10.5px;color:var(--text-faint)}
+.rr-l{margin:2px 0 0 8px;padding-left:17px;border-left:1px solid rgba(255,255,255,0.1);list-style:none}
+.rr-s{position:relative;padding:2px 0;font-size:12.5px;line-height:normal;color:var(--text-subtle)}
+.rr-d{position:absolute;top:9px;left:-20px;height:5px;width:5px;border-radius:9999px;background:var(--text-ghost)}
+
+/* the shell every tool card shares, agent cards included */
+.card{width:100%;overflow:hidden;border-radius:6px;border:1px solid var(--shell-seam);background:rgba(255,255,255,0.025);font-family:var(--font-sans)}
+.hdr{display:flex;width:100%;align-items:center;gap:10px;padding:8px 12px;text-align:left}
+.mark{width:16px;flex-shrink:0;text-align:center;font-size:13px}
+.word{flex-shrink:0;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}
+.target{min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-mono);font-size:12px;line-height:16px;color:var(--text-primary)}
+.badge{min-width:0;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-mono);font-size:10px;color:var(--text-subtle)}
+.badge.live{color:var(--blue-400)}
+.runbadge{flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-mono);font-size:11px;color:var(--text-faint)}
+.diffb{display:flex;flex-shrink:0;align-items:center;gap:6px;font-family:var(--font-mono);font-size:10.5px;font-variant-numeric:tabular-nums}
+.adds{color:#86efac}
+.sdot{height:6px;width:6px;flex-shrink:0;border-radius:9999px}
+.pulse{animation:p 2s cubic-bezier(.4,0,.6,1) infinite}
+@keyframes p{50%{opacity:.5}}
+
+/* identity strip: always visible, never collapses */
+.strip{display:flex;flex-wrap:wrap;align-items:center;gap:8px;border-top:1px solid var(--shell-seam);padding:6px 12px}
+.roledot{display:inline-block;height:6px;width:6px;flex-shrink:0;border-radius:9999px}
+.handle{flex-shrink:0;white-space:nowrap;font-family:var(--font-mono);font-size:12.5px;font-weight:600;color:var(--purple-200)}
+.wtype{flex-shrink:0;font-size:12.5px;font-weight:600}
+.state{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;font-size:11px;font-weight:500}
+.pip{display:inline-block;height:8px;width:8px;flex-shrink:0;border-radius:9999px}
+.pip.ring{background:transparent;border:1.6px solid currentColor}
+.pip.fill{background:currentColor}
+
+/* one-line peek shown under a COLLAPSED card */
+.peek{border-top:1px solid var(--shell-seam);background:rgba(0,0,0,0.2);padding:6px 12px}
+.peek-t{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-mono);font-size:11px;line-height:1.625}
+
+/* expanded body */
+.body{border-top:1px solid var(--shell-seam);background:rgba(0,0,0,0.28)}
+.sub{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:6px 12px 0;font-family:var(--font-mono);font-size:9.5px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--text-subtle)}
+.body-in{padding:4px 12px 10px}
+.col2{display:flex;flex-direction:column;gap:8px}
+.kids{display:flex;flex-direction:column;gap:8px;border-left:1px solid rgb(var(--accent-rgb)/0.2);padding-left:12px}
+
+/* a resumed run's answer and stats */
+.comp{display:flex;flex-direction:column;gap:6px}
+.reslabel{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--text-subtle)}
+.restext{white-space:pre-wrap;overflow-wrap:break-word;font-size:12px;line-height:1.625;color:var(--text-muted)}
+.stats{font-family:var(--font-mono);font-size:10px;color:var(--text-subtle)}
+
+/* member rows inside a grouped run of reads or searches */
+.runrows{display:flex;flex-direction:column}
+.runrow{display:flex;width:100%;align-items:center;gap:10px;border-radius:4px;padding:2px 0;text-align:left}
+.rcar{width:10px;flex-shrink:0;font-size:9px;line-height:1;color:var(--text-ghost)}
+.rmark{width:14px;flex-shrink:0;text-align:center;font-size:13px}
+.rp{display:flex;min-width:0;flex:1 1 0%;font-family:var(--font-mono);font-size:12px;line-height:16px;color:var(--text-primary)}
+.rd{flex-shrink:0;font-family:var(--font-mono);font-size:11px;color:var(--text-subtle)}
+
+/* command output: numbered, no wrap, height-capped */
+.log{max-height:340px;overflow:auto;white-space:pre;font-family:var(--font-mono);font-size:11.5px;line-height:1.625;color:var(--text-muted)}
+.logline{display:flex}
+.gut{position:sticky;left:0;width:48px;flex-shrink:0;text-align:right;padding-right:11px;font-variant-numeric:tabular-nums;color:var(--text-ghost);user-select:none;background:inherit}
+.ok{color:#86efac}
+
+/* wrapper for agents spawned together in one turn */
+.grp{width:100%;overflow:hidden;border-radius:6px;border:1px solid var(--shell-seam);background:rgba(255,255,255,0.02)}
+.grp-h{display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--shell-seam);padding:6px 12px}
+.grp-w{flex-shrink:0;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--accent)}
+.grp-l{font-size:11px}
+.grp-b{display:flex;flex-direction:column;gap:8px;padding:8px}
+
+/* a background worker finishing, as its own row */
+.notice{display:flex;align-items:center;gap:10px;border-radius:8px;border:1px solid var(--shell-seam);background:rgba(255,255,255,0.018);padding:6px 12px}
+.notice-t{min-width:0;flex:1 1 0%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:16px;color:var(--text-muted)}
+
+/* family + tone classes */
+.c-accent{color:var(--accent)}
+.c-ctl{color:#a78bfa}
+.c-read{color:#60a5fa}
+.c-bash{color:#a3e635}
+.c-grep{color:#fbbf24}
+.c-edit{color:var(--accent)}
+.c-info{color:var(--blue-400)}
+.c-good{color:var(--tone-good)}
+.c-danger{color:var(--tone-danger)}
+.c-warn{color:var(--tone-warn)}
+.c-sky{color:var(--sky-300)}
+.c-violet{color:var(--violet-300)}
+.c-teal{color:var(--teal-300)}
+.c-zinc{color:var(--zinc-400)}
+.b-accent{background:var(--accent)}
+.b-good{background:var(--tone-good)}
+.b-danger{background:var(--tone-danger)}
+.b-info{background:var(--blue-400)}
+.b-sky{background:var(--sky-300)}
+.b-teal{background:var(--teal-300)}
+.b-violet{background:var(--violet-300)}
+.b-zinc{background:var(--zinc-400)}
+</style>
+</head>
+<body>
+
+<!--
+═══════════════════════════════════════════════════════════════════════════════
+ HOW THE SUBAGENT ROW WORKS
+ Context for redesigning it. Everything below is behaviour the current row
+ already has to satisfy, not preference. If a proposal breaks one of these,
+ that is a decision worth making on purpose rather than by accident.
+═══════════════════════════════════════════════════════════════════════════════
+
+ THE CARD IS THREE BANDS
+   1. Header      clickable, collapses the card. Mark, family word, the task,
+                  and one right-hand slot.
+   2. Identity    who is doing it and what state they are in. ALWAYS visible,
+                  never collapses. This is what the row answers at rest.
+   3. Body        collapses. Holds the worker's own rows.
+
+ IT DELIBERATELY DROPS THE STATUS DOT EVERY OTHER TOOL CARD HAS
+   Ordinary tool cards carry a coarse three-state dot: running, done, failed.
+   An agent has a richer lifecycle than that, and the identity strip already
+   spells it out in words. Showing both would print two different answers to
+   the same question, and for a backgrounded worker the coarse one would be
+   wrong outright (see below). So the agent header has no state dot; the
+   nested tool cards inside its body still do.
+
+ STATE IS DERIVED, AND "SUCCESS" DOES NOT MEAN "FINISHED"
+   When a worker is launched into the background, the immediate result only
+   confirms it STARTED. That is an acknowledgement, not an answer. So:
+     - a background launch reads as still running, never as done;
+     - a pure launch record shows NO lifecycle word at all, because any word
+       would be a claim the transcript cannot support yet;
+     - the real outcome arrives later, separately, and maps: failed to Failed,
+       killed to Stopped, anything else to Completed.
+
+ IDENTITY ARRIVES LATE
+   The worker's name is not known when the card first appears. It shows up
+   once the worker emits its first nested frame. Until then the card has a
+   type and no name, so the type has to be able to stand on its own. Design
+   for a nameless card; it is the first thing anyone sees.
+
+ THE RIGHT-HAND SLOT MEANS THREE DIFFERENT THINGS OVER ONE CARD'S LIFE
+     while running   the worker's most recent nested tool call, live, in blue
+     before that     the word "starting", because nothing has happened yet
+     once settled    a digest: tool calls, tokens
+     backgrounded    the fixed word "backgrounded", and nothing else ever
+   It can also be absent entirely. One slot, four behaviours, one width.
+
+ ZERO IS NOT A NUMBER HERE
+   A missing token count is stored as a literal zero. Printing it would turn
+   "we never received usage" into the claim "this worker used none", so zero
+   counts are dropped instead of shown. A worker that died early therefore has
+   tool calls and no token figure, which is a real and common shape.
+
+ CHILDREN NEST INSIDE THE BODY, COLLAPSED
+   The worker's rows live inside the card, never interleaved into the main
+   transcript. They are ORDINARY transcript rows: prose, tool cards, grouped
+   runs of reads or searches. So whatever you do to a tool card also happens
+   one level deeper inside an agent card, and can nest again from there.
+
+ A CARD CAN HAVE NO BODY AT ALL
+   No children and no separate completion means there is nothing to expand to.
+   Clicking does nothing. Do not give it an affordance that promises content.
+
+ AGENTS SPAWNED TOGETHER COLLAPSE INTO ONE GROUP
+   Workers launched in the same turn render as a single group instead of N
+   sibling cards. The group's header tracks the members' REAL state, so it
+   cannot say "finished" while a background member is still going. Each member
+   is still a full card and expands in place. One launch is always exactly one
+   card: a member never also appears on its own elsewhere.
+
+ A BACKGROUND WORKER'S ANSWER NEVER COMES BACK TO ITS CARD
+   It arrives lower down as its own one-line row, in the order it landed. The
+   launch card stays a launch record forever. This is the single most load-
+   bearing rule on the surface:
+
+     A TRANSCRIPT ROW IS NEVER REWRITTEN AFTER THE FACT.
+
+   It is why the launch card does not become a result card, why resuming a
+   worker mints a NEW card instead of reusing or renumbering the old one, and
+   why nothing folds back upward into an earlier row. Every proposal that
+   "updates the card when the answer arrives" dies here. Test any new idea
+   against this rule first.
+
+ RESUME IS ITS OWN CARD FAMILY
+   Hollow mark instead of filled: one creates a worker, the other acts on a
+   worker that already exists. Its title line is the resume PROMPT, not the
+   original task. It is also the only card that can carry a Result block.
+   A rejected resume is structurally different again: no identity strip at
+   all, just an error line under the header. Note its header dot is still the
+   success colour, because the CALL succeeded; only its answer was a refusal.
+
+ ORDERING IN A REAL SESSION
+   Settled work sits above, live work sits at the tail. A foreground worker
+   blocks, so it cannot be mid-run while later turns exist below it. Anything
+   still moving is at the bottom of the page.
+
+═══════════════════════════════════════════════════════════════════════════════
+ HOW THIS PAGE WORKS
+   Left  the catalogue: every state the row can be in, one per label.
+   Right the same components inside a session, so context is visible too.
+   ONE stylesheet drives both panes. Edit a rule and both repaint together;
+   that is the point of the split. The CSS is grouped by the component each
+   block belongs to.
+   Page chrome is prefixed x- and is never allowed inside a specimen, so
+   nothing you see inside a card is the page talking.
+   Caveat: the mix of open and closed cards on the right is FOUR user clicks,
+   not a default. Every card there opens collapsed on its own.
+═══════════════════════════════════════════════════════════════════════════════
+-->
+
+<div class="x-pane x-right">
+<div class="x-bar">In a transcript</div>
+
+<div class="col">
+
+  <div class="ubub-w">
+    <div class="ubub">Find where a permission response id gets validated, and check the sibling paths do the same thing.</div>
+  </div>
+
+  <div class="rr">
+    <div class="rr-h">
+      <span class="rr-c">▾</span>
+      <span class="rr-w">Reasoning</span>
+      <span class="rr-n">4 steps</span>
+    </div>
+    <ol class="rr-l">
+      <li class="rr-s"><span class="rr-d"></span>Three surfaces could own this check</li>
+      <li class="rr-s"><span class="rr-d"></span>The sidecar is the trust boundary, so start there</li>
+      <li class="rr-s"><span class="rr-d"></span>The preload cannot be the only gate</li>
+      <li class="rr-s"><span class="rr-d"></span>Fan out rather than guess which one</li>
+    </ol>
+  </div>
+
+  <div class="prose">
+    <p>Three places could own this, so I'll look at all three at once rather than guess.</p>
+  </div>
+
+  <!-- Co-spawned group, settled. Header tone follows the members: one failed,
+       so it is not green. The failed member has tool calls and no token count,
+       which is what a worker that dies early actually reports. -->
+  <div class="grp">
+    <div class="grp-h">
+      <span class="sdot b-danger"></span>
+      <span class="grp-w">Delegate</span>
+      <span class="grp-l c-danger">3 Explore agents finished</span>
+    </div>
+    <div class="grp-b">
+      <div class="card">
+        <div class="hdr">
+          <span class="mark c-accent">◆</span>
+          <span class="word c-accent">Agent</span>
+          <span class="target">Find the sidecar validation of permission response ids</span>
+          <span class="badge">9 tool calls · 21.4k tokens</span>
+        </div>
+        <div class="strip">
+          <span class="roledot b-sky"></span>
+          <span class="handle">Scout</span>
+          <span class="wtype c-sky">Explore</span>
+          <span class="state c-good"><span class="pip fill"></span>Completed</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="hdr">
+          <span class="mark c-accent">◆</span>
+          <span class="word c-accent">Agent</span>
+          <span class="target">Find the preload channel allowlist</span>
+          <span class="badge">7 tool calls · 12.8k tokens</span>
+        </div>
+        <div class="strip">
+          <span class="roledot b-sky"></span>
+          <span class="handle">Wick</span>
+          <span class="wtype c-sky">Explore</span>
+          <span class="state c-good"><span class="pip fill"></span>Completed</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="hdr">
+          <span class="mark c-accent">◆</span>
+          <span class="word c-accent">Agent</span>
+          <span class="target">Find the engine side that mints the id</span>
+          <span class="badge">3 tool calls</span>
+        </div>
+        <div class="strip">
+          <span class="roledot b-sky"></span>
+          <span class="handle">Bly</span>
+          <span class="wtype c-sky">Explore</span>
+          <span class="state c-danger"><span class="pip fill"></span>Failed</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="prose">
+    <p>Two came back with the boundary. The third died on a bad path, so I'll take the siblings myself.</p>
+  </div>
+
+  <div class="card">
+    <div class="hdr">
+      <span class="mark c-accent">◆</span>
+      <span class="word c-accent">Agent</span>
+      <span class="target">Check the two sibling paths reuse the same guard</span>
+      <span class="badge">6 tool calls · 15.2k tokens</span>
+    </div>
+    <div class="strip">
+      <span class="roledot b-sky"></span>
+      <span class="handle">Pell</span>
+      <span class="wtype c-sky">Explore</span>
+      <span class="state c-good"><span class="pip fill"></span>Completed</span>
+    </div>
+    <div class="body"><div class="body-in">
+      <div class="col2">
+        <div class="kids">
+          <div class="prose">I started at the socket handler, then followed the id back to whoever minted it.</div>
+          <div class="card">
+            <div class="hdr">
+              <span class="mark c-grep">⌕</span>
+              <span class="word c-grep">Search</span>
+              <span class="target">2 patterns</span>
+              <span class="sdot b-good"></span>
+            </div>
+          </div>
+          <div class="card">
+            <div class="hdr">
+              <span class="mark c-read">≡</span>
+              <span class="word c-read">Read</span>
+              <span class="target">4 files</span>
+              <span class="runbadge">/Users/pt/cat-code/app/sidecar/</span>
+              <span class="sdot b-good"></span>
+            </div>
+            <div class="body">
+              <div class="sub">4 files read</div>
+              <div class="body-in">
+                <div class="runrows">
+                  <div class="runrow"><span class="rcar">▸</span><span class="rmark c-read">≡</span><span class="rp">sidecarServer.ts</span><span class="rd">Read 240 lines</span></div>
+                  <div class="runrow"><span class="rcar">▸</span><span class="rmark c-read">≡</span><span class="rp">permissionDomain.ts</span><span class="rd">Read 118 lines</span></div>
+                  <div class="runrow"><span class="rcar">▸</span><span class="rmark c-read">≡</span><span class="rp">frameGuards.ts</span><span class="rd">Read 96 lines</span></div>
+                  <div class="runrow"><span class="rcar">▸</span><span class="rmark c-read">≡</span><span class="rp">secretGuard.ts</span><span class="rd">Read 61 lines</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="prose">The check is one branch, and it rejects before the payload is read.</div>
+          <div class="card">
+            <div class="hdr">
+              <span class="mark c-bash">$</span>
+              <span class="word c-bash">Bash</span>
+              <span class="target">bun test app/sidecar/sidecarServer.test.ts</span>
+              <span class="sdot b-good"></span>
+            </div>
+            <div class="body"><div class="body-in">
+              <div class="log">
+                <div class="logline"><span class="gut">1</span><span>bun test v1.2.4</span></div>
+                <div class="logline"><span class="gut">2</span><span> </span></div>
+                <div class="logline"><span class="gut">3</span><span class="ok">✓ rejects a response id the engine never minted</span></div>
+                <div class="logline"><span class="gut">4</span><span class="ok">✓ strips renderer-authored rules</span></div>
+                <div class="logline"><span class="gut">5</span><span> </span></div>
+                <div class="logline"><span class="gut">6</span><span class="ok">2 pass, 0 fail</span></div>
+              </div>
+            </div></div>
+          </div>
+        </div>
+      </div>
+    </div></div>
+  </div>
+
+  <div class="prose">
+    <p>The id is checked in one place, at the socket boundary, before anything reads the body. The two sibling paths do not repeat the check, they reuse it.</p>
+  </div>
+
+  <div class="ubub-w">
+    <div class="ubub">Good. Kick off the background checks while I read that.</div>
+  </div>
+
+  <!-- Launch records. No lifecycle word, because all the transcript knows so
+       far is that they started. Their answers land further down as their own
+       rows; these three cards never change again. -->
+  <div class="card">
+    <div class="hdr">
+      <span class="mark c-accent">◆</span>
+      <span class="word c-accent">Agent</span>
+      <span class="target">Sweep the renderer for stale references to the removed helper</span>
+      <span class="badge">backgrounded</span>
+    </div>
+    <div class="strip">
+      <span class="roledot b-teal"></span>
+      <span class="wtype c-teal">Verification</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="hdr">
+      <span class="mark c-accent">◆</span>
+      <span class="word c-accent">Agent</span>
+      <span class="target">Run the sidecar typecheck wrapper and report owned errors</span>
+      <span class="badge">backgrounded</span>
+    </div>
+    <div class="strip">
+      <span class="roledot b-violet"></span>
+      <span class="wtype c-violet">Coding worker</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="hdr">
+      <span class="mark c-accent">◆</span>
+      <span class="word c-accent">Agent</span>
+      <span class="target">Cross-check the docs for the same helper</span>
+      <span class="badge">backgrounded</span>
+    </div>
+    <div class="strip">
+      <span class="roledot b-teal"></span>
+      <span class="wtype c-teal">Verification</span>
+    </div>
+  </div>
+
+  <div class="prose">
+    <p>Three are running. While they work I'll pin the boundary with a test.</p>
+  </div>
+
+  <div class="card">
+    <div class="hdr">
+      <span class="mark c-edit">±</span>
+      <span class="word c-edit">Edit</span>
+      <span class="target">/Users/pt/cat-code/app/sidecar/sidecarServer.test.ts</span>
+      <span class="diffb"><span class="adds">+18</span></span>
+      <span class="sdot b-good"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="hdr">
+      <span class="mark c-accent">◆</span>
+      <span class="word c-accent">Agent</span>
+      <span class="target">Name the owner of the retry ledger</span>
+      <span class="badge">4.4k tokens</span>
+    </div>
+    <div class="strip">
+      <span class="roledot b-zinc"></span>
+      <span class="handle">Odo</span>
+      <span class="wtype c-zinc">Agent</span>
+      <span class="state c-good"><span class="pip fill"></span>Completed</span>
+    </div>
+  </div>
+
+  <!-- The three launches above finishing. Each is its own row at the point it
+       landed, not an update to its card. The text is the engine's own summary
+       printed verbatim, so the wording is fixed: no result body, no detail
+       beyond a failure reason. A stopped worker reads in the failure colour. -->
+  <div class="notice">
+    <span class="sdot b-good"></span>
+    <span class="notice-t">Agent @Wren completed</span>
+  </div>
+
+  <div class="notice">
+    <span class="sdot b-danger"></span>
+    <span class="notice-t">Agent @Ash failed: the sidecar typecheck wrapper reported 2 owned errors</span>
+  </div>
+
+  <div class="notice">
+    <span class="sdot b-danger"></span>
+    <span class="notice-t">Agent @Marn was stopped</span>
+  </div>
+
+  <div class="prose">
+    <p>Wren found four stale imports. Ash died on the typecheck wrapper, and I stopped Marn once Wren had already answered the same question.</p>
+  </div>
+
+  <div class="ubub-w">
+    <div class="ubub">Summarize the delivery trace sink too, and pick Scout back up on the siblings.</div>
+  </div>
+
+  <div class="card">
+    <div class="hdr">
+      <span class="mark c-accent">◆</span>
+      <span class="word c-accent">Agent</span>
+      <span class="target">Summarize the delivery trace sink</span>
+      <span class="badge">6 tool calls · 9.1k tokens</span>
+    </div>
+    <div class="strip">
+      <span class="roledot b-zinc"></span>
+      <span class="handle">Nim</span>
+      <span class="wtype c-zinc">statusline-setup</span>
+      <span class="state c-good"><span class="pip fill"></span>Completed</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="hdr">
+      <span class="mark c-ctl">◇</span>
+      <span class="word c-ctl">Agent</span>
+      <span class="target">Also check the two sibling paths and report back</span>
+      <span class="sdot b-good"></span>
+    </div>
+    <!-- Rejected resume: no identity strip, because there is no worker to
+         describe. The dot stays green on purpose, the call worked and its
+         answer was a refusal. The error rides the line below instead. -->
+    <div class="peek"><span class="peek-t c-danger">No agent found with id agent_01H9Z4</span></div>
+  </div>
+
+  <div class="prose">
+    <p>Scout's run is gone, so there is nothing to pick up there. Wick covered the same ground, so I resumed that one instead.</p>
+  </div>
+
+  <div class="card">
+    <div class="hdr">
+      <span class="mark c-ctl">◇</span>
+      <span class="word c-ctl">Agent</span>
+      <span class="target">Also check the two sibling paths and report back</span>
+    </div>
+    <div class="strip">
+      <span class="roledot b-zinc"></span>
+      <span class="handle">Wick</span>
+      <span class="wtype c-zinc">Agent</span>
+      <span class="state c-good"><span class="pip fill"></span>Completed</span>
+    </div>
+    <div class="body"><div class="body-in">
+      <div class="col2">
+        <div class="comp">
+          <span class="reslabel">Result</span>
+          <div class="restext">Both siblings call the same guard. Neither re-implements it, and neither reads the body before the id check returns.</div>
+          <span class="stats">~18.2k tokens · 9 tools · 1m 12s</span>
+        </div>
+      </div>
+    </div></div>
+  </div>
+
+  <div class="card">
+    <div class="hdr">
+      <span class="mark c-ctl">◇</span>
+      <span class="word c-ctl">Agent</span>
+      <span class="target">Take another pass over the docs snippet</span>
+    </div>
+    <div class="strip">
+      <span class="roledot b-zinc"></span>
+      <span class="handle">Nim</span>
+      <span class="wtype c-zinc">Agent</span>
+      <span class="state c-warn"><span class="pip ring"></span>Stopped</span>
+    </div>
+    <div class="body"><div class="body-in">
+      <div class="col2">
+        <div class="comp">
+          <span class="stats">4 tools · 38s</span>
+        </div>
+      </div>
+    </div></div>
+  </div>
+
+  <div class="prose">
+    <p>Wick confirms it. I stopped Nim partway once that answer landed, so its pass is incomplete.</p>
+  </div>
+
+  <div class="ubub-w">
+    <div class="ubub">Now sweep the renderer for those four imports.</div>
+  </div>
+
+  <div class="prose">
+    <p>Two workers on it, one per half of the tree.</p>
+  </div>
+
+  <!-- The live tail. Everything still moving is here, at the bottom, because a
+       foreground worker blocks the turn: nothing settled can appear below it.
+       The second worker has emitted no frame yet, so its slot reads "starting"
+       and it has no name to show. -->
+  <div class="grp">
+    <div class="grp-h">
+      <span class="sdot b-info pulse"></span>
+      <span class="grp-w">Delegate</span>
+      <span class="grp-l c-info">Running 2 Coding worker agents…</span>
+    </div>
+    <div class="grp-b">
+      <div class="card">
+        <div class="hdr">
+          <span class="mark c-accent">◆</span>
+          <span class="word c-accent">Agent</span>
+          <span class="target">Replace the stale imports under app/renderer</span>
+          <span class="badge live">Edit deliveryTraceSink.ts</span>
+        </div>
+        <div class="strip">
+          <span class="roledot b-violet"></span>
+          <span class="handle">Ash</span>
+          <span class="wtype c-violet">Coding worker</span>
+          <span class="state c-info"><span class="pip fill pulse"></span>Running</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="hdr">
+          <span class="mark c-accent">◆</span>
+          <span class="word c-accent">Agent</span>
+          <span class="target">Replace the stale imports under app/scripts</span>
+          <span class="badge live">starting</span>
+        </div>
+        <div class="strip">
+          <span class="roledot b-violet"></span>
+          <span class="wtype c-violet">Coding worker</span>
+          <span class="state c-info"><span class="pip fill pulse"></span>Running</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Resuming a stopped worker mints a NEW card rather than reopening the one
+       above. Its title is the follow-up prompt, not the original task. -->
+  <div class="card">
+    <div class="hdr">
+      <span class="mark c-ctl">◇</span>
+      <span class="word c-ctl">Agent</span>
+      <span class="target">Pick the doc snippet back up while the sweep runs</span>
+    </div>
+    <div class="strip">
+      <span class="roledot b-zinc"></span>
+      <span class="wtype c-zinc">Agent</span>
+      <span class="state c-info"><span class="pip ring"></span>In background</span>
+    </div>
+  </div>
+
+</div>
+<div class="x-end"></div>
+</div>
+
+<div class="x-pane x-left">
+<div class="x-bar">Baseline</div>
+<div class="x-top"><div class="x-h">Collapsed</div></div>
+
+<div class="x-i">Running</div>
+<div class="col tight">
+  <div class="card">
+    <div class="hdr">
+      <span class="mark c-accent">◆</span>
+      <span class="word c-accent">Agent</span>
+      <span class="target">Trace the permission response path</span>
+      <span class="badge live">Read sidecarServer.ts</span>
+    </div>
+    <div class="strip">
+      <span class="roledot b-sky"></span>
+      <span class="handle">Scout</span>
+      <span class="wtype c-sky">Explore</span>
+      <span class="state c-info"><span class="pip fill pulse"></span>Running</span>
+    </div>
+  </div>
+</div>
+
+<div class="x-i">Running, no nested frame yet</div>
+<div class="col tight">
+  <div class="card">
+    <div class="hdr">
+      <span class="mark c-accent">◆</span>
+      <span class="word c-accent">Agent</span>
+      <span class="target">Trace the permission response path</span>
+      <span class="badge live">starting</span>
+    </div>
+    <div class="strip">
+      <span class="roledot b-sky"></span>
+      <span class="wtype c-sky">Explore</span>
+      <span class="state c-info"><span class="pip fill pulse"></span>Running</span>
+    </div>
+  </div>
+</div>
+
+<div class="x-i">Completed</div>
+<div class="col tight">
+  <div class="card">
+    <div class="hdr">
+      <span class="mark c-accent">◆</span>
+      <span class="word c-accent">Agent</span>
+      <span class="target">Trace the permission response path</span>
+      <span class="badge">12 tool calls · 34.5k tokens</span>
+    </div>
+    <div class="strip">
+      <span class="roledot b-sky"></span>
+      <span class="handle">Scout</span>
+      <span class="wtype c-sky">Explore</span>
+      <span class="state c-good"><span class="pip fill"></span>Completed</span>
+    </div>
+  </div>
+</div>
+
+<div class="x-i">Failed</div>
+<div class="col tight">
+  <div class="card">
+    <div class="hdr">
+      <span class="mark c-accent">◆</span>
+      <span class="word c-accent">Agent</span>
+      <span class="target">Trace the permission response path</span>
+      <span class="badge">3 tool calls</span>
+    </div>
+    <div class="strip">
+      <span class="roledot b-violet"></span>
+      <span class="handle">Ash</span>
+      <span class="wtype c-violet">Coding worker</span>
+      <span class="state c-danger"><span class="pip fill"></span>Failed</span>
+    </div>
+  </div>
+</div>
+
+<div class="x-i">Backgrounded launch record</div>
+<div class="col tight">
+  <div class="card">
+    <div class="hdr">
+      <span class="mark c-accent">◆</span>
+      <span class="word c-accent">Agent</span>
+      <span class="target">Sweep the renderer for stale references</span>
+      <span class="badge">backgrounded</span>
+    </div>
+    <div class="strip">
+      <span class="roledot b-teal"></span>
+      <span class="wtype c-teal">Verification</span>
+    </div>
+  </div>
+</div>
+
+<div class="x-i">Unknown subagent type</div>
+<div class="col tight">
+  <div class="card">
+    <div class="hdr">
+      <span class="mark c-accent">◆</span>
+      <span class="word c-accent">Agent</span>
+      <span class="target">Summarize the delivery trace sink</span>
+      <span class="badge">6 tool calls · 9.1k tokens</span>
+    </div>
+    <div class="strip">
+      <span class="roledot b-zinc"></span>
+      <span class="handle">Wren</span>
+      <span class="wtype c-zinc">statusline-setup</span>
+      <span class="state c-good"><span class="pip fill"></span>Completed</span>
+    </div>
+  </div>
+</div>
+
+<div class="x-i">Resume</div>
+<div class="col tight">
+  <div class="card">
+    <div class="hdr">
+      <span class="mark c-ctl">◇</span>
+      <span class="word c-ctl">Agent</span>
+      <span class="target">Also check the two sibling paths and report back</span>
+    </div>
+    <div class="strip">
+      <span class="roledot b-zinc"></span>
+      <span class="wtype c-zinc">Agent</span>
+      <span class="state c-info"><span class="pip ring"></span>In background</span>
+    </div>
+  </div>
+</div>
+
+<div class="x-i">Resume, stopped</div>
+<div class="col tight">
+  <div class="card">
+    <div class="hdr">
+      <span class="mark c-ctl">◇</span>
+      <span class="word c-ctl">Agent</span>
+      <span class="target">Also check the two sibling paths and report back</span>
+    </div>
+    <div class="strip">
+      <span class="roledot b-zinc"></span>
+      <span class="handle">Scout</span>
+      <span class="wtype c-zinc">Agent</span>
+      <span class="state c-warn"><span class="pip ring"></span>Stopped</span>
+    </div>
+    <div class="body"><div class="body-in">
+      <div class="col2">
+        <div class="comp">
+          <span class="stats">4 tools · 38s</span>
+        </div>
+      </div>
+    </div></div>
+  </div>
+</div>
+
+<div class="x-i">Resume, rejected</div>
+<div class="col tight">
+  <div class="card">
+    <div class="hdr">
+      <span class="mark c-ctl">◇</span>
+      <span class="word c-ctl">Agent</span>
+      <span class="target">Also check the two sibling paths and report back</span>
+      <span class="sdot b-good"></span>
+    </div>
+    <div class="peek"><span class="peek-t c-danger">No agent found with id agent_01H9Z4</span></div>
+  </div>
+</div>
+
+<div class="x-gap"></div>
+<div class="x-top"><div class="x-h">Expanded</div></div>
+
+<div class="x-i">Nested rows</div>
+<div class="col tight">
+  <div class="card">
+    <div class="hdr">
+      <span class="mark c-accent">◆</span>
+      <span class="word c-accent">Agent</span>
+      <span class="target">Trace the permission response path</span>
+      <span class="badge">12 tool calls · 34.5k tokens</span>
+    </div>
+    <div class="strip">
+      <span class="roledot b-sky"></span>
+      <span class="handle">Scout</span>
+      <span class="wtype c-sky">Explore</span>
+      <span class="state c-good"><span class="pip fill"></span>Completed</span>
+    </div>
+    <div class="body"><div class="body-in">
+      <div class="col2">
+        <div class="kids">
+          <div class="prose">I looked at the sidecar boundary first, then followed the response id back to the engine.</div>
+          <div class="card">
+            <div class="hdr">
+              <span class="mark c-grep">⌕</span>
+              <span class="word c-grep">Search</span>
+              <span class="target">permission_response</span>
+              <span class="sdot b-good"></span>
+            </div>
+          </div>
+          <div class="card">
+            <div class="hdr">
+              <span class="mark c-read">≡</span>
+              <span class="word c-read">Read</span>
+              <span class="target">3 files</span>
+              <span class="runbadge">/Users/pt/cat-code/app/sidecar/</span>
+              <span class="sdot b-good"></span>
+            </div>
+          </div>
+          <div class="card">
+            <div class="hdr">
+              <span class="mark c-bash">$</span>
+              <span class="word c-bash">Bash</span>
+              <span class="target">bun test app/sidecar</span>
+              <span class="sdot b-accent pulse"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div></div>
+  </div>
+</div>
+
+<div class="x-i">Nested row opened inside the card</div>
+<div class="col tight">
+  <div class="card">
+    <div class="hdr">
+      <span class="mark c-accent">◆</span>
+      <span class="word c-accent">Agent</span>
+      <span class="target">Trace the permission response path</span>
+      <span class="badge">12 tool calls · 34.5k tokens</span>
+    </div>
+    <div class="strip">
+      <span class="roledot b-sky"></span>
+      <span class="handle">Scout</span>
+      <span class="wtype c-sky">Explore</span>
+      <span class="state c-good"><span class="pip fill"></span>Completed</span>
+    </div>
+    <div class="body"><div class="body-in">
+      <div class="col2">
+        <div class="kids">
+          <div class="card">
+            <div class="hdr">
+              <span class="mark c-bash">$</span>
+              <span class="word c-bash">Bash</span>
+              <span class="target">bun test app/sidecar</span>
+              <span class="sdot b-good"></span>
+            </div>
+            <div class="body"><div class="body-in">
+              <div class="log">
+                <div class="logline"><span class="gut">1</span><span>bun test v1.2.4</span></div>
+                <div class="logline"><span class="gut">2</span><span> </span></div>
+                <div class="logline"><span class="gut">3</span><span>sidecarServer.test.ts:</span></div>
+                <div class="logline"><span class="gut">4</span><span class="ok">✓ rejects a response id the engine never minted</span></div>
+                <div class="logline"><span class="gut">5</span><span class="ok">✓ strips renderer-authored rules</span></div>
+                <div class="logline"><span class="gut">6</span><span> </span></div>
+                <div class="logline"><span class="gut">7</span><span class="ok">2 pass, 0 fail</span></div>
+              </div>
+            </div></div>
+          </div>
+          <div class="card">
+            <div class="hdr">
+              <span class="mark c-read">≡</span>
+              <span class="word c-read">Read</span>
+              <span class="target">protocol.ts</span>
+              <span class="sdot b-good"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div></div>
+  </div>
+</div>
+
+<div class="x-i">Completion joined back</div>
+<div class="col tight">
+  <div class="card">
+    <div class="hdr">
+      <span class="mark c-ctl">◇</span>
+      <span class="word c-ctl">Agent</span>
+      <span class="target">Also check the two sibling paths and report back</span>
+    </div>
+    <div class="strip">
+      <span class="roledot b-zinc"></span>
+      <span class="handle">Scout</span>
+      <span class="wtype c-zinc">Agent</span>
+      <span class="state c-good"><span class="pip fill"></span>Completed</span>
+    </div>
+    <div class="body"><div class="body-in">
+      <div class="col2">
+        <div class="comp">
+          <span class="reslabel">Result</span>
+          <div class="restext">Four call sites still import the removed helper. Two are in tests, one in a script, one in a doc snippet.</div>
+          <span class="stats">~18.2k tokens · 9 tools · 1m 12s</span>
+        </div>
+      </div>
+    </div></div>
+  </div>
+</div>
+
+<div class="x-i">No nested rows, no completion</div>
+<div class="col tight">
+  <div class="card">
+    <div class="hdr">
+      <span class="mark c-accent">◆</span>
+      <span class="word c-accent">Agent</span>
+      <span class="target">Name the owner of the retry ledger</span>
+      <span class="badge">4.4k tokens</span>
+    </div>
+    <div class="strip">
+      <span class="roledot b-zinc"></span>
+      <span class="handle">Pell</span>
+      <span class="wtype c-zinc">Agent</span>
+      <span class="state c-good"><span class="pip fill"></span>Completed</span>
+    </div>
+  </div>
+</div>
+
+<div class="x-gap"></div>
+<div class="x-top"><div class="x-h">Co-spawned in one turn</div></div>
+<div class="col">
+  <div class="grp">
+    <div class="grp-h">
+      <span class="sdot b-info pulse"></span>
+      <span class="grp-w">Delegate</span>
+      <span class="grp-l c-info">Running 3 Explore agents…</span>
+    </div>
+    <div class="grp-b">
+      <div class="card">
+        <div class="hdr">
+          <span class="mark c-accent">◆</span>
+          <span class="word c-accent">Agent</span>
+          <span class="target">Map the host control plane</span>
+          <span class="badge live">Grep hostApi</span>
+        </div>
+        <div class="strip">
+          <span class="roledot b-sky"></span>
+          <span class="handle">Scout</span>
+          <span class="wtype c-sky">Explore</span>
+          <span class="state c-info"><span class="pip fill pulse"></span>Running</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="hdr">
+          <span class="mark c-accent">◆</span>
+          <span class="word c-accent">Agent</span>
+          <span class="target">Map the supervisor lifetime</span>
+          <span class="badge">7 tool calls · 12.8k tokens</span>
+        </div>
+        <div class="strip">
+          <span class="roledot b-sky"></span>
+          <span class="handle">Wick</span>
+          <span class="wtype c-sky">Explore</span>
+          <span class="state c-good"><span class="pip fill"></span>Completed</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="hdr">
+          <span class="mark c-accent">◆</span>
+          <span class="word c-accent">Agent</span>
+          <span class="target">Map the preload allowlist</span>
+          <span class="badge live">Read preload.ts</span>
+        </div>
+        <div class="strip">
+          <span class="roledot b-sky"></span>
+          <span class="handle">Bly</span>
+          <span class="wtype c-sky">Explore</span>
+          <span class="state c-info"><span class="pip fill pulse"></span>Running</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="x-gap"></div>
+<div class="x-top"><div class="x-h">Finish row for a backgrounded agent</div></div>
+<div class="col">
+  <div class="notice">
+    <span class="sdot b-good"></span>
+    <span class="notice-t">Agent @Wren completed</span>
+  </div>
+  <div class="notice">
+    <span class="sdot b-danger"></span>
+    <span class="notice-t">Agent @Ash failed: the sidecar typecheck wrapper reported 2 owned errors</span>
+  </div>
+  <div class="notice">
+    <span class="sdot b-danger"></span>
+    <span class="notice-t">Agent @Pell was stopped</span>
+  </div>
+</div>
+
+<div class="x-end"></div>
+</div>
+
+</body>
+</html>

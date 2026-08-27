@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Context donut threshold marker</title>
+<style>
+@font-face {
+  font-family: "DM Sans";
+  src: url("../../app/renderer/src/assets/fonts/DMSans-Variable.woff2") format("woff2");
+  font-weight: 100 1000;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --app-bg: #09090b;
+  --surface-raised: #111113;
+  --shell-seam: rgba(255, 255, 255, 0.06);
+  --text-primary: #f4f4f5;
+  --text-muted: #a1a1aa;
+  --text-subtle: #98989f;
+  --text-faint: #838389;
+  --text-ghost: #75757b;
+  --accent: #f472b6;
+  --tone-good: #4ade80;
+  --tone-warn: #fbbf24;
+  --tone-danger: #f87171;
+  --model-cyan: #22d3ee;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--app-bg);
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------------------------------------------------------------- *
+ * x- = page chrome. Never applied to, or inside, a specimen.
+ * ---------------------------------------------------------------- */
+.x-page { max-width: 1120px; margin: 0 auto; padding: 56px 40px 120px; }
+
+.x-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #66666d;
+}
+
+.x-rule { height: 1px; background: rgba(255, 255, 255, 0.05); border: 0; margin: 0; }
+
+.x-section { margin-top: 52px; }
+.x-section > .x-label { display: block; margin-bottom: 18px; }
+
+.x-variant { margin-top: 46px; }
+.x-variant > .x-label { display: block; margin-bottom: 20px; }
+
+.x-states { display: flex; align-items: flex-start; gap: 46px; flex-wrap: wrap; }
+.x-state { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.x-state > .x-label { display: block; }
+
+.x-rail-strip { margin-top: 30px; }
+.x-rail-strip > .x-label { display: block; margin-bottom: 10px; }
+
+.x-scroll { overflow-x: auto; }
+
+/* ---------------------------------------------------------------- *
+ * Specimen. Values taken from ContextGauge.tsx, ComposerActionsBar.tsx,
+ * ComposerInput.tsx, App.tsx and theme.css.
+ * ---------------------------------------------------------------- */
+.composer { width: 720px; }
+
+.composer-field {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+  padding: 0 4px;
+}
+
+.composer-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 0;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: normal;
+  color: var(--text-faint);
+}
+
+.composer-send {
+  display: flex;
+  height: 30px;
+  width: 30px;
+  flex-shrink: 0;
+  align-self: flex-end;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: var(--text-ghost);
+}
+
+.composer-focus-rule {
+  height: 2px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.rail {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 4px;
+}
+
+.rail-attach {
+  display: flex;
+  height: 22px;
+  width: 22px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  color: var(--text-ghost);
+}
+
+.rail-row {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 7px;
+}
+
+.rail-right { margin-left: auto; display: flex; min-width: 0; align-items: center; gap: 7px; }
+
+.face {
+  display: inline-flex;
+  max-width: 170px;
+  flex-shrink: 0;
+  align-items: center;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  border-radius: 6px;
+  padding: 3px 5px;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.face-model { color: var(--model-cyan); }
+.face-effort { color: var(--tone-warn); }
+.face-mode { color: var(--text-muted); }
+.face-account { gap: 6px; color: var(--text-muted); }
+
+.account-dot {
+  height: 7px;
+  width: 7px;
+  flex-shrink: 0;
+  border-radius: 9999px;
+  background: var(--tone-good);
+}
+
+.sep {
+  flex-shrink: 0;
+  user-select: none;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.2);
+}
+
+.warn-glyph {
+  display: flex;
+  height: 22px;
+  width: 22px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  color: var(--tone-warn);
+}
+
+.gauge {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  align-self: center;
+}
+
+.gauge svg { transform: rotate(-90deg); }
+
+.gauge-pct {
+  font-size: 12.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.gauge-zoom { display: flex; align-items: center; gap: 6px; }
+.gauge-zoom svg { transform: rotate(-90deg); }
+.gauge-zoom .gauge-pct { font-size: 50px; }
+
+.tone-accent { color: var(--accent); }
+.tone-warn { color: var(--tone-warn); }
+.tone-danger { color: var(--tone-danger); }
+</style>
+</head>
+<body>
+<div class="x-page">
+
+  <div class="x-section">
+    <span class="x-label">Composer</span>
+    <div class="x-scroll">
+      <div class="composer">
+        <div class="composer-field">
+          <div class="composer-input">Message</div>
+          <div class="composer-send">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="19" x2="12" y2="5" />
+              <polyline points="5 12 12 5 19 12" />
+            </svg>
+          </div>
+        </div>
+        <div class="composer-focus-rule"></div>
+        <div class="rail">
+          <div class="rail-attach">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+          </div>
+          <div class="rail-row">
+            <span class="face face-model">GPT-5.6 Sol</span>
+            <span class="sep">·</span>
+            <span class="face face-effort">Medium</span>
+            <span class="sep">·</span>
+            <span class="face face-mode">Ask</span>
+            <div class="rail-right">
+              <span class="face face-account"><span class="account-dot"></span>primary</span>
+              <span class="sep">·</span>
+              <span class="warn-glyph" data-warn-slot></span>
+              <span data-gauge-slot="today"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <hr class="x-rule" style="margin-top:52px" />
+
+  <div id="x-variants"></div>
+
+</div>
+
+<script>
+// ContextGauge.tsx: R = 6.5, stroke 3, 16x16 box, -90deg start.
+var RADIUS = 6.5;
+var CIRCUM = 2 * Math.PI * RADIUS;
+var STROKE = 3;
+var TRACK = "rgba(255,255,255,0.1)";
+
+// Effective window 980,000 (1M native minus the 20,000 summary reservation).
+// The line marks 372,000 of that.
+var MARK = 372000 / 980000;
+
+var STATES = [22, 36, 45, 88];
+
+function tone(pct) {
+  if (pct >= 90) return "tone-danger";
+  if (pct >= 70) return "tone-warn";
+  return "tone-accent";
+}
+
+function toneHex(pct) {
+  if (pct >= 90) return "#f87171";
+  if (pct >= 70) return "#fbbf24";
+  return "#f472b6";
+}
+
+function svgEl(name, attrs) {
+  var el = document.createElementNS("http://www.w3.org/2000/svg", name);
+  for (var key in attrs) {
+    if (attrs[key] !== null && attrs[key] !== undefined) el.setAttribute(key, String(attrs[key]));
+  }
+  return el;
+}
+
+function radial(cx, cy, fraction, from, to) {
+  var angle = fraction * 2 * Math.PI;
+  return {
+    x1: cx + from * Math.cos(angle),
+    y1: cy + from * Math.sin(angle),
+    x2: cx + to * Math.cos(angle),
+    y2: cy + to * Math.sin(angle)
+  };
+}
+
+// Each builder returns the marker nodes for one variant. `box` is the svg
+// viewBox edge; `c` is the ring centre inside it.
+var VARIANTS = [
+  {
+    key: "notch",
+    label: "A  Notch",
+    box: 16,
+    marker: function (c, pct) {
+      var p = radial(c, c, MARK, RADIUS - STROKE / 2 - 0.6, RADIUS + STROKE / 2 + 0.6);
+      return [svgEl("line", {
+        x1: p.x1, y1: p.y1, x2: p.x2, y2: p.y2,
+        stroke: "#09090b", "stroke-width": 1.5, "stroke-linecap": "butt"
+      })];
+    }
+  },
+  {
+    key: "outer",
+    label: "B  Outer tick",
+    box: 20,
+    marker: function (c, pct) {
+      var p = radial(c, c, MARK, RADIUS + STROKE / 2 + 0.8, RADIUS + STROKE / 2 + 2.4);
+      return [svgEl("line", {
+        x1: p.x1, y1: p.y1, x2: p.x2, y2: p.y2,
+        stroke: "rgba(255,255,255,0.55)", "stroke-width": 1.2, "stroke-linecap": "round"
+      })];
+    }
+  },
+  {
+    key: "crossing",
+    label: "C  Crossing tick",
+    box: 16,
+    marker: function (c, pct) {
+      var p = radial(c, c, MARK, RADIUS - STROKE / 2 - 0.4, RADIUS + STROKE / 2 + 0.4);
+      return [svgEl("line", {
+        x1: p.x1, y1: p.y1, x2: p.x2, y2: p.y2,
+        stroke: "rgba(255,255,255,0.75)", "stroke-width": 1.2, "stroke-linecap": "round"
+      })];
+    }
+  },
+  {
+    key: "inner",
+    label: "D  Inner tick",
+    box: 16,
+    marker: function (c, pct) {
+      var p = radial(c, c, MARK, RADIUS - STROKE / 2 - 2.2, RADIUS - STROKE / 2 - 0.7);
+      return [svgEl("line", {
+        x1: p.x1, y1: p.y1, x2: p.x2, y2: p.y2,
+        stroke: "rgba(255,255,255,0.5)", "stroke-width": 1.2, "stroke-linecap": "round"
+      })];
+    }
+  }
+];
+
+function buildSvg(variant, pct, size) {
+  var box = variant.box;
+  var c = box / 2;
+  var svg = svgEl("svg", { width: size, height: size, viewBox: "0 0 " + box + " " + box, "aria-hidden": "true" });
+  var track = svgEl("circle", { cx: c, cy: c, r: RADIUS, fill: "none", stroke: TRACK, "stroke-width": STROKE });
+  var arc = svgEl("circle", {
+    cx: c, cy: c, r: RADIUS, fill: "none",
+    stroke: "currentColor", "stroke-width": STROKE, "stroke-linecap": "round",
+    "stroke-dasharray": (pct / 100) * CIRCUM + " " + CIRCUM
+  });
+  svg.appendChild(track);
+  var marks = variant.marker ? variant.marker(c, pct) : [];
+  if (variant.under) {
+    marks.forEach(function (node) { svg.appendChild(node); });
+    svg.appendChild(arc);
+  } else {
+    svg.appendChild(arc);
+    marks.forEach(function (node) { svg.appendChild(node); });
+  }
+  return svg;
+}
+
+function buildGauge(variant, pct, size, zoom) {
+  var wrap = document.createElement("span");
+  wrap.className = (zoom ? "gauge-zoom " : "gauge ") + tone(pct);
+  wrap.appendChild(buildSvg(variant, pct, size));
+  var text = document.createElement("span");
+  text.className = "gauge-pct";
+  text.textContent = pct + "%";
+  wrap.appendChild(text);
+  return wrap;
+}
+
+var TODAY = { key: "today", box: 16, marker: null };
+
+// The composer specimen at the top renders today's gauge, unmarked.
+var todaySlot = document.querySelector('[data-gauge-slot="today"]');
+todaySlot.replaceWith(buildGauge(TODAY, 45, 16, false));
+
+// The rail's warning glyph mounts only above the engine's warning threshold, so
+// it is absent at every level on this page.
+var warnSlot = document.querySelector("[data-warn-slot]");
+warnSlot.remove();
+
+function railStrip(variant, pct) {
+  var strip = document.createElement("div");
+  strip.className = "rail-right";
+  strip.style.marginLeft = "0";
+
+  var account = document.createElement("span");
+  account.className = "face face-account";
+  var dot = document.createElement("span");
+  dot.className = "account-dot";
+  account.appendChild(dot);
+  account.appendChild(document.createTextNode("primary"));
+
+  var sep = document.createElement("span");
+  sep.className = "sep";
+  sep.textContent = "·";
+
+  strip.appendChild(account);
+  strip.appendChild(sep);
+  strip.appendChild(buildGauge(variant, pct, 16, false));
+  return strip;
+}
+
+var host = document.getElementById("x-variants");
+
+VARIANTS.forEach(function (variant) {
+  var section = document.createElement("div");
+  section.className = "x-variant";
+
+  var label = document.createElement("span");
+  label.className = "x-label";
+  label.textContent = variant.label;
+  section.appendChild(label);
+
+  var states = document.createElement("div");
+  states.className = "x-states";
+
+  STATES.forEach(function (pct) {
+    var cell = document.createElement("div");
+    cell.className = "x-state";
+    var cellLabel = document.createElement("span");
+    cellLabel.className = "x-label";
+    cellLabel.textContent = pct + "%";
+    cell.appendChild(cellLabel);
+    cell.appendChild(buildGauge(variant, pct, 16, false));
+    states.appendChild(cell);
+  });
+
+  var zoomCell = document.createElement("div");
+  zoomCell.className = "x-state";
+  var zoomLabel = document.createElement("span");
+  zoomLabel.className = "x-label";
+  zoomLabel.textContent = "4x  36% / 45%";
+  zoomCell.appendChild(zoomLabel);
+  var zoomRow = document.createElement("div");
+  zoomRow.style.display = "flex";
+  zoomRow.style.alignItems = "center";
+  zoomRow.style.gap = "28px";
+  zoomRow.appendChild(buildGauge(variant, 36, 64, true));
+  zoomRow.appendChild(buildGauge(variant, 45, 64, true));
+  zoomCell.appendChild(zoomRow);
+  states.appendChild(zoomCell);
+
+  section.appendChild(states);
+
+  var stripWrap = document.createElement("div");
+  stripWrap.className = "x-rail-strip";
+  var stripLabel = document.createElement("span");
+  stripLabel.className = "x-label";
+  stripLabel.textContent = "In rail";
+  stripWrap.appendChild(stripLabel);
+  stripWrap.appendChild(railStrip(variant, 45));
+  section.appendChild(stripWrap);
+
+  host.appendChild(section);
+});
+</script>
+</body>
+</html>

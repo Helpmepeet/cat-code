@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tool card style setting</title>
+<style>
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;font-display:swap;
+  src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2');}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:swap;
+  src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2');}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:#09090b}
+body{font-family:'DM Sans',-apple-system,sans-serif}
+.page{margin:0 auto;max-width:720px;padding:56px 32px 90px}
+
+/* settings primitives, from SettingsField.tsx / SettingsEditors.tsx */
+.sec{margin-bottom:24px}
+.sec-t{margin-bottom:4px;font-size:10px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.12em;color:#98989f}
+.field{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;
+  border-bottom:1px solid rgba(255,255,255,.06);padding:13px 0}
+.f-l{min-width:0;flex:1}
+.f-lab{font-size:13px;font-weight:500;color:#f4f4f5}
+.f-desc{margin-top:2px;font-size:11.5px;line-height:1.625;color:#98989f}
+.f-r{display:flex;flex-shrink:0;flex-direction:column;align-items:flex-end;gap:6px}
+.sel{min-width:128px;border-radius:8px;border:1px solid rgba(255,255,255,.06);
+  background:rgba(255,255,255,.045);padding:6px 10px;font-size:12.5px;color:#f4f4f5;
+  outline:none;font-family:inherit}
+.f-reset{font-size:11px;color:#98989f;background:none;border:0;cursor:pointer;padding:0}
+
+/* preview canvas. Fixed height on purpose: the two styles are different heights
+   for the same calls, and a growing canvas shoves the control you just used. */
+.canvas{border-radius:10px;border:1px solid rgba(255,255,255,.06);background:#09090b;
+  padding:14px 16px;margin-bottom:14px;height:220px;overflow:hidden}
+
+/* ── shared row internals ─────────────────────────────────────── */
+.mark{width:16px;flex-shrink:0;text-align:center;font-size:13px}
+.fam{flex-shrink:0;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}
+.tgt{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:'DM Mono',monospace;font-size:12px;color:#f4f4f5}
+.dot{width:6px;height:6px;flex-shrink:0;border-radius:9999px;background:#4ade80}
+.hd{display:flex;width:100%;align-items:center;gap:10px;text-align:left;
+  background:transparent;border:0;font:inherit}
+
+/* ── style: cards (today) ─────────────────────────────────────── */
+.stack[data-style=cards]{display:flex;flex-direction:column;gap:10px}
+[data-style=cards] .card{width:100%;overflow:hidden;border-radius:6px;
+  border:1px solid rgba(255,255,255,.06);background:rgba(255,255,255,.025)}
+[data-style=cards] .hd{padding:8px 12px}
+[data-style=cards] .body{border-top:1px solid rgba(255,255,255,.06);background:rgba(0,0,0,.28);
+  padding:4px 12px 10px;font-family:'DM Mono',monospace;font-size:11.5px;line-height:1.6;
+  color:#a1a1aa;white-space:pre}
+
+/* ── style: lines (new) ───────────────────────────────────────── */
+.stack[data-style=lines]{display:flex;flex-direction:column;gap:0}
+[data-style=lines] .card{width:100%;background:transparent;border:0;border-radius:0}
+[data-style=lines] .hd{padding:2px 0}
+[data-style=lines] .body{margin-left:26px;padding:0 12px 8px;
+  border-left:1px solid rgba(255,255,255,.06);background:transparent;
+  font-family:'DM Mono',monospace;font-size:11.5px;line-height:1.6;color:#a1a1aa;white-space:pre}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="sec">
+    <div class="sec-t">Transcript</div>
+    <div class="canvas"><div class="stack" id="stack" data-style="cards"></div></div>
+    <div class="field">
+      <div class="f-l">
+        <div class="f-lab">Tool calls</div>
+        <div class="f-desc">How each tool call is drawn in the transcript. Stored in this app, not in your settings files.</div>
+      </div>
+      <div class="f-r">
+        <select class="sel" id="pick">
+          <option>Cards</option>
+          <option>Lines</option>
+        </select>
+        <button class="f-reset" id="reset" type="button">Reset to default</button>
+      </div>
+    </div>
+    <div class="field">
+      <div class="f-l">
+        <div class="f-lab">Reasoning layout</div>
+        <div class="f-desc">How reasoning summaries are laid out. Stored in this app, not in your settings files.</div>
+      </div>
+      <div class="f-r">
+        <select class="sel"><option>Trail</option><option>Blocks</option></select>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+var SAMPLE = [
+  ['Read','#60a5fa','≡','src/loader/index.ts', null],
+  ['Read','#60a5fa','≡','src/loader/graph.ts', null],
+  ['Bash','#a3e635','$','bun test src/loader', '12 pass\n0 fail\nRan 12 tests across 3 files. [1.42s]']
+];
+
+function el(t,c,x){ var n=document.createElement(t); if(c)n.className=c; if(x!=null)n.textContent=x; return n; }
+
+function row(fam,color,mark,target,body){
+  var c = el('div','card');
+  var hd = el('div','hd');
+  var m = el('span','mark',mark); m.style.color = color;
+  var w = el('span','fam',fam);   w.style.color = color;
+  hd.appendChild(m); hd.appendChild(w);
+  hd.appendChild(el('span','tgt',target));
+  hd.appendChild(el('span','dot'));
+  c.appendChild(hd);
+  if (body) c.appendChild(el('div','body',body));
+  return c;
+}
+
+var stack = document.getElementById('stack');
+function render(){
+  stack.textContent = '';
+  SAMPLE.forEach(function(s){ stack.appendChild(row(s[0],s[1],s[2],s[3],s[4])); });
+}
+render();
+
+var pick = document.getElementById('pick');
+pick.addEventListener('change', function(){
+  stack.setAttribute('data-style', pick.selectedIndex === 0 ? 'cards' : 'lines');
+});
+document.getElementById('reset').addEventListener('click', function(){
+  pick.selectedIndex = 0;
+  stack.setAttribute('data-style','cards');
+});
+</script>
+</body>
+</html>

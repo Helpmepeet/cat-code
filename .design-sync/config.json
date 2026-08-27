@@ -1,0 +1,37 @@
+{
+  "projectId": "1536771c-164f-40a3-9a39-f0b9466a54ce",
+  "shape": "package",
+  "readmeHeader": ".design-sync/conventions.md",
+  "pkg": "@cat-code/desktop",
+  "globalName": "CatCode",
+  "srcDir": "renderer/src",
+  "tsconfig": "tsconfig.json",
+  "cssEntry": "renderer/dist/ds-styles.css",
+  "buildCmd": "mkdir -p app/renderer/dist/assets/fonts && cp app/renderer/src/assets/fonts/*.woff2 app/renderer/dist/assets/fonts/ && node .ds-sync/node_modules/@tailwindcss/cli/dist/index.mjs -i .design-sync/ds-styles.src.css -o app/renderer/dist/ds-styles.css",
+  "componentSrcMap": {
+    "AgentPip": "renderer/src/AgentChrome.tsx",
+    "AgentRoleDot": "renderer/src/AgentChrome.tsx",
+    "AgentTypeLabel": "renderer/src/AgentChrome.tsx",
+    "AgentTypeChip": "renderer/src/AgentChrome.tsx",
+    "AgentHandle": "renderer/src/AgentChrome.tsx",
+    "AgentStateLabel": "renderer/src/AgentChrome.tsx",
+    "AgentStateWord": "renderer/src/AgentChrome.tsx",
+    "AgentSectionLabel": "renderer/src/AgentChrome.tsx",
+    "AgentActionButton": "renderer/src/AgentChrome.tsx",
+    "OrchestratorBadge": "renderer/src/AgentChrome.tsx",
+    "Baton": "renderer/src/AgentChrome.tsx"
+  },
+  "dtsPropsFor": {
+    "AgentPip": "/** Lifecycle state. Drives colour and mark: pulsing dot (running), hollow ring (pending/idle), filled dot (terminal). */\n  state: 'running' | 'background' | 'completed' | 'failed' | 'stopped' | 'waiting' | 'needs-you' | 'paused' | 'result-ready' | 'reviewed' | 'attention' | 'resumable' | 'stale' | 'resumed';\n  /** 6px (xs) for dense count strips, 8px (sm) for rows. Default 'sm'. */\n  size?: 'xs' | 'sm';",
+    "AgentRoleDot": "/** Agent type / subagent role. Colours the dot by type family. Renders neutral grey when null. */\n  role: string | null;",
+    "AgentTypeLabel": "/** Agent type / subagent role. Renders the normalized display label in mono, toned by type. Renders nothing when null or empty. */\n  role: string | null;",
+    "AgentTypeChip": "/** Agent type / subagent role. Renders a soft-tinted uppercase pill. An unrecognised role still gets a neutral chip; only null or empty renders nothing. */\n  role: string | null;",
+    "AgentHandle": "/** The worker's display name, already stripped of any leading @ (e.g. \"Ada\", \"Turing\"). */\n  name: string;\n  /** Optional extra classes on the name span. */\n  className?: string;",
+    "AgentStateLabel": "/** Lifecycle state. Renders as a pip plus its full word, e.g. a purple \"Waiting on orchestrator\". */\n  state: 'running' | 'background' | 'completed' | 'failed' | 'stopped' | 'waiting' | 'needs-you' | 'paused' | 'result-ready' | 'reviewed' | 'attention' | 'resumable' | 'stale' | 'resumed';\n  /** Pip size. Default 'sm'. */\n  size?: 'xs' | 'sm';",
+    "AgentStateWord": "/** Lifecycle state. Renders the COMPRESSED word for crowded rows (running / needs input / done / failed), toned by the same vocabulary AgentStateLabel uses. No pip. */\n  state: 'running' | 'background' | 'completed' | 'failed' | 'stopped' | 'waiting' | 'needs-you' | 'paused' | 'result-ready' | 'reviewed' | 'attention' | 'resumable' | 'stale' | 'resumed';",
+    "AgentSectionLabel": "/** Caption text. Rendered uppercase with wide tracking. */\n  children: React.ReactNode;\n  /** Caption colour. Default 'muted'. */\n  tone?: 'muted' | 'accent' | 'lease' | 'warn';",
+    "AgentActionButton": "/** Button text. */\n  label: string;\n  /** Outline tone. 'danger' is the shipped case (worker Stop). Default 'neutral'. */\n  tone?: 'neutral' | 'accent' | 'danger';\n  /** Native title attribute. */\n  title?: string;\n  onClick: () => void;",
+    "OrchestratorBadge": "/** Is orchestrator mode on for this session? */\n  active: boolean;\n  /** Makes the badge the mode SWITCH. Omit for a passive marker, which renders nothing when inactive. */\n  onToggle?: (next: boolean) => void;\n  /** Session name, used only to build the accessible label. */\n  sessionLabel?: string;",
+    "Baton": "/** Who must act next. 'user' is the only amber case; 'none' renders nothing. */\n  owner: 'none' | 'orchestrator' | 'user';"
+  }
+}

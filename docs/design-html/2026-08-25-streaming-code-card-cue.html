@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Streaming code card cue</title>
+<style>
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;font-display:swap;
+  src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2');}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:swap;
+  src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2');}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:500;font-display:swap;
+  src:url('../../app/renderer/src/assets/fonts/DMMono-Medium.woff2') format('woff2');}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:#09090b}
+body{font-family:'DM Sans',-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;
+  padding:28px 32px 80px;max-width:860px}
+
+/* chrome */
+.x-bar{display:flex;align-items:center;justify-content:space-between;
+  border-bottom:1px solid rgba(255,255,255,.07);padding-bottom:9px;margin-bottom:4px}
+.x-id,.x-lab{font-family:'DM Mono',ui-monospace,monospace;font-size:9.5px;
+  letter-spacing:.16em;text-transform:uppercase;color:#6b6b73}
+.x-go{font-family:'DM Mono',ui-monospace,monospace;font-size:9.5px;letter-spacing:.16em;
+  text-transform:uppercase;color:#6b6b73;background:none;border:1px solid rgba(255,255,255,.1);
+  border-radius:3px;padding:4px 10px;cursor:pointer}
+.x-go:hover{color:#a9a9b2;border-color:rgba(255,255,255,.2)}
+.x-row{border-top:1px solid rgba(255,255,255,.07);margin-top:26px;padding-top:14px}
+.x-row:first-of-type{border-top:0}
+.x-lab{display:flex;gap:9px;align-items:baseline;margin-bottom:10px}
+.x-key{color:#c8c8d0;letter-spacing:.1em}
+
+/* specimen: CodeBlock (TranscriptView.tsx) + md-prose body (theme.css) */
+.mp{font-size:14px;font-weight:500;line-height:1.625;color:#f4f4f5}
+.cc{position:relative;margin:12px 0;overflow:hidden;border-radius:8px;
+  border:1px solid rgba(255,255,255,.06);background:#09090b}
+.cl{position:absolute;left:14px;top:8px;z-index:1;display:inline-flex;align-items:center;gap:6px;
+  font-family:'DM Mono',ui-monospace,monospace;font-size:10px;font-weight:600;
+  letter-spacing:.06em;color:#f472b6}
+.cl .g{opacity:.7}
+.cy{position:absolute;right:10px;top:6px;z-index:1;font-family:'DM Mono',ui-monospace,monospace;
+  font-size:11px;color:#98989f;background:none;border:0;cursor:pointer}
+.cy:hover{color:#f4f4f5}
+.cb{overflow-x:auto;padding:38px 14px 14px;font-family:'DM Mono',ui-monospace,monospace;
+  font-size:12.5px;line-height:1.65}
+.hljs{color:#f8f8f2;white-space:pre}
+.hk{color:#ff79c6}.ht{color:#50fa7b}.hn{color:#bd93f9}.hc{color:#6272a4;font-style:italic}
+.hs{color:#f1fa8c}.hb{color:#8be9fd}
+.cr{display:inline-block;width:6px;height:14px;margin-left:2px;background:#f472b6;
+  vertical-align:text-bottom;animation:pulse 2s cubic-bezier(.4,0,.6,1) infinite}
+@keyframes pulse{50%{opacity:.5}}
+
+/* state: the card exists only once the fence has opened */
+.spec:not(.open) .cc{display:none}
+.spec:not(.settled) .rich{display:none}
+.spec.settled .plain{display:none}
+
+/* copy control: settled label vs streaming label */
+.spec:not(.settled) .lbl-d{display:none}
+.spec.settled .lbl-s{display:none}
+.spec:not(.v-live):not(.settled) .cy{cursor:default}
+.spec:not(.v-live):not(.settled) .cy:hover{color:#98989f}
+
+/* B dim */
+.v-dim:not(.settled) .cy,.v-dim:not(.settled) .cy:hover{color:rgba(152,152,159,.32)}
+/* C dots */
+.v-dots:not(.settled) .lbl-s{font-size:12px;letter-spacing:.08em}
+/* D word */
+.v-word:not(.settled) .cy,.v-word:not(.settled) .cy:hover{color:#6b6b73}
+</style>
+</head>
+<body>
+
+<div class="x-bar">
+  <span class="x-id">streaming copy control</span>
+  <button class="x-go" id="go">replay</button>
+</div>
+<div class="x-row">
+  <div class="x-lab"><span class="x-key">A</span><span>live</span></div>
+  <div class="spec v-live">
+    <p class="mp">Here is the patch.</p>
+    <div class="cc">
+      <span class="cl"><span class="g">&lt;/&gt;</span>ts</span>
+      <button class="cy" type="button"><span class="lbl-s">copy</span><span class="lbl-d">copy</span></button>
+      <pre class="cb"><code class="hljs"><span class="plain"></span><span class="rich"><span class="hc">// keeps the first row of each id</span>
+<span class="hk">function</span> <span class="ht">collect</span>(rows) {
+  <span class="hk">const</span> seen = <span class="hk">new</span> <span class="hb">Map</span>()
+  <span class="hk">for</span> (<span class="hk">const</span> row <span class="hk">of</span> rows) {
+    <span class="hk">if</span> (!seen.<span class="ht">has</span>(row.id)) seen.<span class="ht">set</span>(row.id, row)
+  }
+  <span class="hk">return</span> seen
+}
+</span></code></pre>
+    </div>
+    <span class="cr below"></span>
+  </div>
+</div>
+<div class="x-row">
+  <div class="x-lab"><span class="x-key">B</span><span>dim</span></div>
+  <div class="spec v-dim">
+    <p class="mp">Here is the patch.</p>
+    <div class="cc">
+      <span class="cl"><span class="g">&lt;/&gt;</span>ts</span>
+      <button class="cy" type="button"><span class="lbl-s">copy</span><span class="lbl-d">copy</span></button>
+      <pre class="cb"><code class="hljs"><span class="plain"></span><span class="rich"><span class="hc">// keeps the first row of each id</span>
+<span class="hk">function</span> <span class="ht">collect</span>(rows) {
+  <span class="hk">const</span> seen = <span class="hk">new</span> <span class="hb">Map</span>()
+  <span class="hk">for</span> (<span class="hk">const</span> row <span class="hk">of</span> rows) {
+    <span class="hk">if</span> (!seen.<span class="ht">has</span>(row.id)) seen.<span class="ht">set</span>(row.id, row)
+  }
+  <span class="hk">return</span> seen
+}
+</span></code></pre>
+    </div>
+    <span class="cr below"></span>
+  </div>
+</div>
+<div class="x-row">
+  <div class="x-lab"><span class="x-key">C</span><span>dots</span></div>
+  <div class="spec v-dots">
+    <p class="mp">Here is the patch.</p>
+    <div class="cc">
+      <span class="cl"><span class="g">&lt;/&gt;</span>ts</span>
+      <button class="cy" type="button"><span class="lbl-s">⋯</span><span class="lbl-d">copy</span></button>
+      <pre class="cb"><code class="hljs"><span class="plain"></span><span class="rich"><span class="hc">// keeps the first row of each id</span>
+<span class="hk">function</span> <span class="ht">collect</span>(rows) {
+  <span class="hk">const</span> seen = <span class="hk">new</span> <span class="hb">Map</span>()
+  <span class="hk">for</span> (<span class="hk">const</span> row <span class="hk">of</span> rows) {
+    <span class="hk">if</span> (!seen.<span class="ht">has</span>(row.id)) seen.<span class="ht">set</span>(row.id, row)
+  }
+  <span class="hk">return</span> seen
+}
+</span></code></pre>
+    </div>
+    <span class="cr below"></span>
+  </div>
+</div>
+<div class="x-row">
+  <div class="x-lab"><span class="x-key">D</span><span>word</span></div>
+  <div class="spec v-word">
+    <p class="mp">Here is the patch.</p>
+    <div class="cc">
+      <span class="cl"><span class="g">&lt;/&gt;</span>ts</span>
+      <button class="cy" type="button"><span class="lbl-s">writing</span><span class="lbl-d">copy</span></button>
+      <pre class="cb"><code class="hljs"><span class="plain"></span><span class="rich"><span class="hc">// keeps the first row of each id</span>
+<span class="hk">function</span> <span class="ht">collect</span>(rows) {
+  <span class="hk">const</span> seen = <span class="hk">new</span> <span class="hb">Map</span>()
+  <span class="hk">for</span> (<span class="hk">const</span> row <span class="hk">of</span> rows) {
+    <span class="hk">if</span> (!seen.<span class="ht">has</span>(row.id)) seen.<span class="ht">set</span>(row.id, row)
+  }
+  <span class="hk">return</span> seen
+}
+</span></code></pre>
+    </div>
+    <span class="cr below"></span>
+  </div>
+</div>
+
+<script>
+const CODE = '// keeps the first row of each id\n'
+  + 'function collect(rows) {\n'
+  + '  const seen = new Map()\n'
+  + '  for (const row of rows) {\n'
+  + '    if (!seen.has(row.id)) seen.set(row.id, row)\n'
+  + '  }\n'
+  + '  return seen\n'
+  + '}\n';
+const OPEN_AT = 700, RATE = 0.055, HOLD = 500;
+const specs = [].slice.call(document.querySelectorAll('.spec')).map(function (el) {
+  return { el: el, body: el.querySelector('.plain') };
+});
+let t0 = null, raf = 0;
+function frame(now) {
+  if (t0 === null) t0 = now;
+  const t = now - t0;
+  const open = t >= OPEN_AT;
+  const n = open ? Math.min(CODE.length, Math.floor((t - OPEN_AT) * RATE)) : 0;
+  const done = open && n >= CODE.length && t - OPEN_AT > CODE.length / RATE + HOLD;
+  for (const s of specs) {
+    s.el.classList.toggle('open', open);
+    s.el.classList.toggle('settled', done);
+    if (!done) s.body.textContent = CODE.slice(0, n);
+  }
+  if (done) { raf = 0; return; }
+  raf = requestAnimationFrame(frame);
+}
+function play() {
+  if (raf) cancelAnimationFrame(raf);
+  t0 = null;
+  for (const s of specs) { s.el.classList.remove('open', 'settled'); s.body.textContent = ''; }
+  raf = requestAnimationFrame(frame);
+}
+document.getElementById('go').addEventListener('click', play);
+play();
+</script>
+</body>
+</html>

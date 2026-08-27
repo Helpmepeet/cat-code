@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tool display preview</title>
+<style>
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;font-display:swap;
+  src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2');}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:swap;
+  src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2');}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:#09090b}
+body{font-family:'DM Sans',-apple-system,sans-serif}
+.x-tag{font-family:'DM Mono',monospace;font-size:9px;letter-spacing:.16em;text-transform:uppercase;
+  color:#6e6e75;padding-bottom:7px;border-bottom:1px solid rgba(255,255,255,.09);margin-bottom:18px}
+.x-slot{margin:0 0 54px}
+.page{margin:0 auto;max-width:720px;padding:44px 32px 90px}
+
+/* settings primitives */
+.sec{margin-bottom:24px}
+.sec-t{margin-bottom:4px;font-size:10px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.12em;color:#98989f}
+.field{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;
+  border-bottom:1px solid rgba(255,255,255,.06);padding:13px 0}
+.f-l{min-width:0;flex:1}
+.f-lab{font-size:13px;font-weight:500;color:#f4f4f5}
+.f-desc{margin-top:2px;font-size:11.5px;line-height:1.625;color:#98989f}
+.f-r{display:flex;flex-shrink:0;flex-direction:column;align-items:flex-end;gap:6px}
+.sel{min-width:128px;border-radius:8px;border:1px solid rgba(255,255,255,.06);
+  background:rgba(255,255,255,.045);padding:6px 10px;font-size:12.5px;color:#f4f4f5;
+  outline:none;font-family:inherit}
+
+/* preview canvas: a viewport onto the transcript, on the transcript's own ground */
+.canvas{border-radius:10px;border:1px solid rgba(255,255,255,.06);background:#09090b;
+  padding:14px 16px;margin-bottom:14px}
+.canvas.tight{padding:12px 14px}
+
+/* transcript specimen, form D / space 3 */
+.pline{display:flex;align-items:center;gap:10px;padding:2px 0}
+.pmark{width:16px;text-align:center;font-size:13px;flex-shrink:0}
+.pfam{flex-shrink:0;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}
+.ptgt{font-family:'DM Mono',monospace;font-size:12px;color:#f4f4f5;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.psum{font-size:13px;color:#a1a1aa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pcar{font-size:9px;color:#75757b;margin-left:4px;flex-shrink:0}
+.pdot{width:6px;height:6px;border-radius:9999px;background:#4ade80;flex-shrink:0;margin-left:auto}
+.pbody{margin-left:26px;padding:0 12px 6px;border-left:1px solid rgba(255,255,255,.06);
+  font-family:'DM Mono',monospace;font-size:11.5px;line-height:1.6;color:#a1a1aa;white-space:pre}
+.pprose{font-size:13px;font-weight:500;line-height:1.6;color:#f4f4f5;margin:8px 0}
+
+/* the real code block frame, for the combined hero */
+.cb{border-radius:8px;border:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.28);
+  overflow:hidden;margin-top:4px}
+.cb-h{font-family:'DM Mono',monospace;font-size:10px;font-weight:600;letter-spacing:.06em;
+  color:#f472b6;padding:6px 10px 0}
+.cb-b{font-family:'DM Mono',monospace;font-size:11.5px;line-height:1.65;padding:2px 10px 8px;
+  white-space:pre;color:#a1a1aa}
+.k{color:#c084fc}.s{color:#a3e635}.f{color:#60a5fa}
+
+/* C: three-up chooser */
+.trio{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;width:100%}
+.opt{border-radius:10px;border:1px solid rgba(255,255,255,.06);background:#09090b;
+  padding:10px;cursor:pointer;text-align:left;font:inherit;display:flex;flex-direction:column;gap:8px}
+.opt[aria-checked=true]{border-color:rgba(244,114,182,.5)}
+.opt-n{font-size:11.5px;color:#98989f}
+.opt[aria-checked=true] .opt-n{color:#f4f4f5}
+.mini{display:flex;flex-direction:column;gap:1px;min-height:52px}
+.mrow{height:5px;border-radius:2px;background:rgba(255,255,255,.13)}
+.mrow.w1{width:78%}.mrow.w2{width:58%}.mrow.w3{width:66%}.mrow.w4{width:44%}
+.mrow.body{background:rgba(255,255,255,.055);margin-left:10px}
+</style>
+</head>
+<body>
+<div class="page" id="page"></div>
+
+<script>
+var MODES = ['summarized','listed','expanded'];
+var LABEL = { summarized:'Summarized', listed:'Listed', expanded:'Expanded' };
+var ROW_DESC = 'How tool calls appear while a turn runs. Stored in this app, not in your settings files.';
+
+function el(t,c,x){ var n=document.createElement(t); if(c)n.className=c; if(x!=null)n.textContent=x; return n; }
+
+function toolLine(fam,color,mark,target,body,host){
+  var line = el('div','pline');
+  var m = el('span','pmark',mark); m.style.color=color;
+  var w = el('span','pfam',fam);   w.style.color=color;
+  line.appendChild(m); line.appendChild(w);
+  line.appendChild(el('span','ptgt',target));
+  line.appendChild(el('span','pdot'));
+  host.appendChild(line);
+  if (body) host.appendChild(el('div','pbody',body));
+}
+
+/* the transcript sample, rendered per mode */
+function sample(mode, withProse){
+  var host = document.createElement('div');
+  if (withProse) host.appendChild(el('div','pprose','The delay is in the module graph walk, not in disk reads.'));
+  if (mode === 'summarized'){
+    var s = el('div','pline');
+    s.appendChild(el('span','psum','Read 4 files, ran 1 bash command'));
+    s.appendChild(el('span','pcar','▸'));
+    host.appendChild(s);
+  } else {
+    var open = mode === 'expanded';
+    toolLine('Read','#60a5fa','≡','src/loader/index.ts', open ? 'export function load(entry) {\n  const graph = walk(entry)' : null, host);
+    toolLine('Read','#60a5fa','≡','src/loader/graph.ts', open ? 'export function walk(entry) {' : null, host);
+    toolLine('Bash','#a3e635','$','bun test src/loader', open ? '12 pass\n0 fail' : null, host);
+  }
+  if (withProse) host.appendChild(el('div','pprose','Removing the first pass drops it to a single traversal.'));
+  return host;
+}
+
+function field(label, desc, control){
+  var f = el('div','field'), l = el('div','f-l'), r = el('div','f-r');
+  l.appendChild(el('div','f-lab',label));
+  if (desc) l.appendChild(el('div','f-desc',desc));
+  r.appendChild(control);
+  f.appendChild(l); f.appendChild(r);
+  return f;
+}
+function modeSelect(onChange){
+  var s = el('select','sel');
+  MODES.forEach(function(m){ s.appendChild(el('option',null,LABEL[m])); });
+  s.addEventListener('change', function(){ onChange(MODES[s.selectedIndex]); });
+  return s;
+}
+function reasoningRow(){
+  var s = el('select','sel');
+  ['Trail','Blocks'].forEach(function(o){ s.appendChild(el('option',null,o)); });
+  return field('Reasoning layout','How reasoning summaries are laid out. Stored in this app, not in your settings files.', s);
+}
+function slot(tag, node){
+  var w = el('div','x-slot');
+  w.appendChild(el('div','x-tag',tag));
+  w.appendChild(node);
+  return w;
+}
+
+var page = document.getElementById('page');
+
+/* A: preview heads the Transcript section, above its own controls */
+(function(){
+  var sec = el('div','sec');
+  sec.appendChild(el('div','sec-t','Transcript'));
+  var canvas = el('div','canvas');
+  var body = sample('summarized', false);
+  canvas.appendChild(body);
+  sec.appendChild(canvas);
+  sec.appendChild(field('Tool calls', ROW_DESC, modeSelect(function(m){
+    var next = sample(m, false); canvas.replaceChild(next, body); body = next;
+  })));
+  sec.appendChild(reasoningRow());
+  page.appendChild(slot('A', sec));
+})();
+
+/* B: one hero at the top of the pane, previewing every transcript setting at once */
+(function(){
+  var wrap = document.createElement('div');
+  var canvas = el('div','canvas');
+  var body = sample('summarized', true);
+  canvas.appendChild(body);
+  var cb = el('div','cb');
+  cb.appendChild(el('div','cb-h','TS'));
+  var b = el('div','cb-b');
+  b.innerHTML = '<span class="k">export function</span> <span class="f">load</span>(entry) {\n  <span class="k">return</span> <span class="s">resolve</span>(entry)\n}';
+  cb.appendChild(b);
+  canvas.appendChild(cb);
+  wrap.appendChild(canvas);
+
+  var sec = el('div','sec');
+  sec.appendChild(el('div','sec-t','Transcript'));
+  sec.appendChild(field('Tool calls', ROW_DESC, modeSelect(function(m){
+    var next = sample(m, true); canvas.replaceChild(next, body); body = next;
+  })));
+  var ct = el('select','sel');
+  ['One Dark','Nord','Monokai'].forEach(function(o){ ct.appendChild(el('option',null,o)); });
+  sec.appendChild(field('Code theme','Colours for fenced code in the transcript.', ct));
+  wrap.appendChild(sec);
+  page.appendChild(slot('B', wrap));
+})();
+
+/* C: the preview IS the control, all three shown at once */
+(function(){
+  var sec = el('div','sec');
+  sec.appendChild(el('div','sec-t','Transcript'));
+  var f = el('div','field'), l = el('div','f-l');
+  l.appendChild(el('div','f-lab','Tool calls'));
+  l.appendChild(el('div','f-desc','How tool calls appear while a turn runs.'));
+  var trio = el('div','trio');
+  trio.style.marginTop = '10px';
+  var cur = 'summarized';
+  var shapes = {
+    summarized: [['w1',0]],
+    listed:     [['w1',0],['w2',0],['w3',0]],
+    expanded:   [['w1',0],['w4',1],['w4',1],['w2',0],['w4',1]]
+  };
+  MODES.forEach(function(m){
+    var b = el('button','opt'); b.type='button';
+    b.setAttribute('aria-checked', String(m===cur));
+    var mini = el('div','mini');
+    shapes[m].forEach(function(sh){
+      var r = el('div','mrow ' + sh[0] + (sh[1] ? ' body' : ''));
+      mini.appendChild(r);
+    });
+    b.appendChild(mini);
+    b.appendChild(el('span','opt-n',LABEL[m]));
+    b.addEventListener('click', function(){
+      cur = m;
+      trio.querySelectorAll('.opt').forEach(function(o,i){
+        o.setAttribute('aria-checked', String(MODES[i]===cur));
+      });
+    });
+    trio.appendChild(b);
+  });
+  l.appendChild(trio);
+  f.appendChild(l);
+  sec.appendChild(f);
+  sec.appendChild(reasoningRow());
+  page.appendChild(slot('C', sec));
+})();
+</script>
+</body>
+</html>

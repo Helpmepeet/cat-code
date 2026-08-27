@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AskUserQuestion redesign</title>
+<style>
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;font-display:block;src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:block;src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:500;font-display:block;src:url('../../app/renderer/src/assets/fonts/DMMono-Medium.woff2') format('woff2')}
+
+:root{
+  --accent:#f472b6; --accent-soft:#f9a8d4; --app-bg:#09090b;
+  --text-primary:#f4f4f5; --text-muted:#a1a1aa; --text-subtle:#98989f;
+  --text-faint:#838389; --text-ghost:#75757b;
+  --tone-info:#60a5fa; --seam:rgba(255,255,255,0.06);
+  --sans:'DM Sans',-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;
+  --mono:'DM Mono',ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--app-bg);color:var(--text-primary);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+
+/* ---------- chrome (x-) : never inside a specimen ---------- */
+.x-bar{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:18px;padding:10px 28px;background:#09090b;border-bottom:1px solid rgba(255,255,255,.08)}
+.x-name{font-family:var(--mono);font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:#5f5f66}
+.x-tabs{display:flex;gap:2px;margin-left:auto}
+.x-tab{font-family:var(--mono);font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:#5f5f66;background:none;border:none;border-bottom:1px solid transparent;padding:4px 9px;cursor:pointer}
+.x-tab[aria-pressed="true"]{color:#b4b4bb;border-bottom-color:#b4b4bb}
+.x-wrap{max-width:1360px;margin:0 auto;padding:0 28px 120px}
+.x-sec{padding-top:44px}
+.x-sechead{display:flex;align-items:baseline;gap:14px;border-top:1px solid rgba(255,255,255,.08);padding-top:9px;margin-bottom:26px}
+.x-id{font-family:var(--mono);font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:#8a8a92}
+.x-note{font-family:var(--mono);font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:#5f5f66}
+.x-pose{font-family:var(--mono);font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:#5f5f66;margin:0 0 9px}
+.x-slot{margin-bottom:34px}
+.x-stage{width:900px}
+</style>
+</head>
+<body>
+
+<div class="x-bar">
+  <span class="x-name">AskUserQuestion &middot; desktop renderer</span>
+  <span class="x-tabs">
+    <button aria-pressed="true" class="x-tab" data-f="all" type="button">All</button>
+    <button aria-pressed="false" class="x-tab" data-f="cur" type="button">Current</button>
+    <button aria-pressed="false" class="x-tab" data-f="d" type="button">D</button>
+    <button aria-pressed="false" class="x-tab" data-f="a" type="button">A</button>
+    <button aria-pressed="false" class="x-tab" data-f="b" type="button">B</button>
+    <button aria-pressed="false" class="x-tab" data-f="c" type="button">C</button>
+  </span>
+</div>
+
+<div class="x-wrap" id="wrap"></div>
+
+<style>
+/* ================= CURRENT — source-accurate port ================= */
+.cur{border-left:2px solid var(--accent);background:rgba(244,244,245,.04);padding:12px 16px}
+.cur-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.cur-chip{border-radius:4px;border:1px solid rgba(244,114,182,.3);background:rgba(244,114,182,.1);padding:2px 6px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.025em;color:var(--accent)}
+.cur-multi{border-radius:4px;background:rgba(244,244,245,.05);padding:2px 6px;font-size:9px;font-weight:600;color:var(--text-muted)}
+.cur-step{margin-left:auto;display:flex;align-items:center;gap:4px}
+.cur-dot{width:6px;height:6px;border-radius:50%;background:rgba(244,244,245,.15)}
+.cur-dot.on{background:var(--accent)}
+.cur-dot.done{background:rgba(244,114,182,.4)}
+.cur-cnt{margin-left:4px;font-family:var(--mono);font-size:10px;color:var(--text-faint)}
+.cur-q{margin:8px 0 0;font-size:14px;font-weight:600;line-height:1.375;color:var(--text-primary)}
+.cur-list{margin-top:8px;display:flex;flex-direction:column;gap:4px}
+.cur-row{display:flex;align-items:flex-start;gap:8px;width:100%;text-align:left;border-radius:8px;padding:6px 10px;border:1px solid transparent;background:none;font:inherit;color:inherit}
+.cur-row.f{border-color:rgba(244,114,182,.45);background:rgba(244,114,182,.1)}
+.cur-row.s{border-color:rgba(244,114,182,.25);background:rgba(244,114,182,.05)}
+.cur-mk{margin-top:2px;width:16px;height:16px;flex:none;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:9px;font-weight:600;border-radius:50%;background:rgba(244,244,245,.06);color:var(--text-subtle)}
+.cur-mk.sq{border-radius:4px}
+.cur-mk.f{background:rgba(244,114,182,.5);color:var(--app-bg)}
+.cur-mk.s{background:var(--accent);color:var(--app-bg)}
+.cur-body{min-width:0;flex:1}
+.cur-lb{display:block;font-size:12px;font-weight:500;line-height:1.375;color:var(--text-primary)}
+.cur-ds{display:block;margin-top:2px;font-size:11px;line-height:1.375;color:var(--text-subtle)}
+.cur-pv{margin-top:2px;flex:none;border-radius:4px;background:rgba(96,165,250,.1);padding:0 6px;font-size:9px;font-weight:600;color:var(--tone-info)}
+.cur-other{display:flex;align-items:center;gap:8px;border-radius:8px;padding:6px 10px;border:1px solid transparent}
+.cur-other.f{border-color:rgba(244,114,182,.45);background:rgba(244,114,182,.1)}
+.cur-in{flex:1;min-width:0;font-size:12px;color:var(--text-primary)}
+.cur-in.ph{color:var(--text-muted)}
+.cur-prev{margin-top:8px;border-radius:8px;border:1px solid rgba(96,165,250,.2);background:rgba(0,0,0,.3);padding:8px 12px}
+.cur-prev-t{margin-bottom:4px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--tone-info)}
+.cur-prev-b{margin:0;white-space:pre-wrap;font-family:var(--mono);font-size:11px;line-height:1.625;color:var(--text-muted)}
+.cur-foot{margin-top:12px;display:flex;align-items:center;gap:12px;border-top:1px solid var(--seam);padding-top:10px}
+.cur-go{display:inline-flex;align-items:center;gap:6px;border-radius:6px;background:var(--accent);padding:4px 12px;font-size:12px;font-weight:600;color:var(--app-bg);border:none;font-family:inherit}
+.cur-kb{border-radius:4px;border:1px solid rgba(9,9,11,.35);padding:0 4px;font-family:var(--mono);font-size:9px;line-height:1}
+.cur-hint{font-family:var(--mono);font-size:10px;color:var(--text-faint)}
+.cur-cancel{margin-left:auto;display:inline-flex;align-items:center;gap:6px;background:none;border:none;font-family:inherit;font-size:11px;color:var(--text-subtle)}
+.cur-kb2{border-radius:4px;border:1px solid var(--text-ghost);padding:0 4px;font-family:var(--mono);font-size:9px;line-height:1;color:var(--text-faint)}
+
+/* ================= shared proposal grammar (A and C) ================= */
+.v-card{background:#0c0c0f;border:1px solid rgba(255,255,255,.07);border-left:3px solid var(--accent);border-radius:12px;padding:15px 18px 13px}
+.v-kick{display:flex;align-items:center;gap:9px}
+.v-kick-l{font-size:9.5px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;color:var(--accent)}
+.v-pill{border-radius:999px;background:rgba(244,244,245,.05);padding:2px 8px;font-size:9.5px;font-weight:600;letter-spacing:.02em;color:var(--text-muted)}
+.v-step{margin-left:auto;display:flex;align-items:center;gap:5px}
+.v-sd{width:5px;height:5px;border-radius:50%;background:rgba(244,244,245,.14)}
+.v-sd.on{background:var(--accent)}
+.v-sd.done{background:rgba(244,114,182,.45)}
+.v-sc{margin-left:4px;font-family:var(--mono);font-size:10px;color:var(--text-ghost)}
+.v-q{margin:8px 0 0;font-size:15px;font-weight:600;line-height:1.45;letter-spacing:-.004em;color:var(--text-primary)}
+.v-list{margin-top:13px;display:flex;flex-direction:column;gap:6px}
+.v-row{display:flex;align-items:flex-start;gap:11px;width:100%;text-align:left;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.06);background:rgba(255,255,255,.022);font:inherit;color:inherit}
+.v-row.f{border-color:rgba(244,114,182,.5);background:rgba(244,114,182,.06);box-shadow:0 0 0 3px rgba(244,114,182,.1)}
+.v-row.s{border-color:rgba(244,114,182,.55);background:rgba(244,114,182,.1)}
+.v-row.s.f{border-color:var(--accent);background:rgba(244,114,182,.14);box-shadow:0 0 0 3px rgba(244,114,182,.14)}
+.v-mk{margin-top:1px;width:17px;height:17px;flex:none;border-radius:50%;border:1.5px solid rgba(255,255,255,.22);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:transparent}
+.v-mk.sq{border-radius:5px}
+.v-row.f .v-mk{border-color:rgba(244,114,182,.6)}
+.v-mk.on{background:var(--accent);border-color:var(--accent);color:var(--app-bg)}
+.v-body{min-width:0;flex:1}
+.v-lb{display:block;font-size:13px;font-weight:500;line-height:1.35;color:var(--text-primary)}
+.v-row.s .v-lb{font-weight:650}
+.v-ds{display:block;margin-top:3px;font-size:11.5px;line-height:1.45;color:var(--text-subtle)}
+.v-right{display:flex;align-items:center;gap:7px;margin-top:1px;flex:none}
+.v-eye{font-size:9px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--text-ghost)}
+.v-row.f .v-eye{color:var(--accent-soft)}
+.v-key{font-family:var(--mono);font-size:9.5px;line-height:1.4;color:var(--text-ghost);border:1px solid rgba(255,255,255,.12);border-radius:4px;padding:1px 5px}
+.v-row.f .v-key,.v-orow.f .v-key{color:var(--accent-soft);border-color:rgba(244,114,182,.4)}
+.v-orow{margin-top:6px;display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.06);background:rgba(255,255,255,.012)}
+.v-orow.f{border-color:rgba(244,114,182,.5);background:rgba(244,114,182,.05);box-shadow:0 0 0 3px rgba(244,114,182,.1)}
+.v-omk{width:17px;height:17px;flex:none;border-radius:5px;border:1.5px dotted rgba(255,255,255,.25);display:flex;align-items:center;justify-content:center}
+.v-orow.f .v-omk{border-color:rgba(244,114,182,.55)}
+.v-otext{flex:1;min-width:0;font-size:13px;color:var(--text-primary)}
+.v-otext.ph{color:var(--text-ghost)}
+.v-caret{display:inline-block;width:1px;height:14px;background:var(--accent);vertical-align:-2px;margin-left:1px}
+.v-prev{margin-top:11px;border-radius:9px;border:1px solid rgba(255,255,255,.07);background:rgba(0,0,0,.32);overflow:hidden}
+.v-prev-h{display:flex;align-items:center;gap:8px;padding:6px 11px;border-bottom:1px solid rgba(255,255,255,.05)}
+.v-prev-k{font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--text-faint)}
+.v-prev-n{font-size:11px;color:var(--text-subtle)}
+.v-prev-b{margin:0;padding:9px 11px;font-family:var(--mono);font-size:11.5px;line-height:1.6;color:var(--text-muted);white-space:pre-wrap;min-height:54px}
+.v-foot{margin-top:13px;padding-top:11px;border-top:1px solid rgba(255,255,255,.07);display:flex;align-items:center;gap:9px}
+.v-go{display:inline-flex;align-items:center;gap:8px;background:var(--accent);color:var(--app-bg);font-size:12.5px;font-weight:650;padding:7px 14px;border-radius:8px;border:none;font-family:inherit}
+.v-go.off{background:rgba(255,255,255,.05);color:var(--text-ghost)}
+.v-gokb{border-radius:4px;border:1px solid rgba(9,9,11,.35);padding:0 4px;font-family:var(--mono);font-size:9.5px;line-height:1.5}
+.v-go.off .v-gokb{border-color:rgba(255,255,255,.14)}
+.v-cancel{display:inline-flex;align-items:center;gap:7px;color:var(--text-subtle);font-size:12px;padding:6px 12px;border-radius:8px;border:1px solid rgba(255,255,255,.09);background:none;font-family:inherit}
+.v-cankb{border-radius:4px;border:1px solid rgba(255,255,255,.14);padding:0 4px;font-family:var(--mono);font-size:9.5px;line-height:1.5;color:var(--text-ghost)}
+.v-hint{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--text-ghost)}
+
+/* ================= C — split canvas ================= */
+.c-split{margin-top:13px;display:grid;grid-template-columns:1fr 330px;gap:12px;align-items:start}
+.c-split .v-list{margin-top:0}
+.c-split .v-prev{margin-top:0;height:100%}
+.c-split .v-prev-b{min-height:150px}
+
+/* ================= B — quiet rules ================= */
+.b-card{border-left:2px solid var(--accent);padding:13px 0 11px 18px}
+.b-kick{display:flex;align-items:center;gap:9px}
+.b-kick-l{font-size:9.5px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;color:var(--accent)}
+.b-pill{font-size:9.5px;font-weight:600;letter-spacing:.02em;color:var(--text-faint)}
+.b-step{margin-left:auto;display:flex;align-items:center;gap:5px}
+.b-sd{width:5px;height:5px;border-radius:50%;background:rgba(244,244,245,.14)}
+.b-sd.on{background:var(--accent)}
+.b-sd.done{background:rgba(244,114,182,.45)}
+.b-sc{margin-left:4px;font-family:var(--mono);font-size:10px;color:var(--text-ghost)}
+.b-q{margin:7px 0 0;font-size:16px;font-weight:600;line-height:1.4;letter-spacing:-.008em;color:var(--text-primary)}
+.b-list{margin-top:13px;border-top:1px solid rgba(255,255,255,.05)}
+.b-row{position:relative;display:flex;align-items:flex-start;gap:12px;width:100%;text-align:left;padding:11px 12px 11px 12px;border:none;border-bottom:1px solid rgba(255,255,255,.05);background:none;font:inherit;color:inherit}
+.b-row.f{background:rgba(255,255,255,.035)}
+.b-row.f::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--accent)}
+.b-mk{margin-top:2px;width:15px;height:15px;flex:none;border-radius:50%;border:1.5px solid rgba(255,255,255,.2);display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:transparent}
+.b-mk.sq{border-radius:4px}
+.b-row.f .b-mk{border-color:rgba(244,114,182,.55)}
+.b-mk.on{background:var(--accent);border-color:var(--accent);color:var(--app-bg)}
+.b-body{min-width:0;flex:1}
+.b-lb{display:block;font-size:13px;font-weight:500;line-height:1.35;color:var(--text-muted)}
+.b-row.s .b-lb,.b-row.f .b-lb{color:var(--text-primary)}
+.b-row.s .b-lb{font-weight:650}
+.b-ds{display:block;margin-top:3px;font-size:11.5px;line-height:1.45;color:var(--text-faint)}
+.b-right{display:flex;align-items:center;gap:8px;margin-top:2px;flex:none}
+.b-eye{font-size:9px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--text-ghost)}
+.b-key{font-family:var(--mono);font-size:10px;color:#5f5f66}
+.b-row.f .b-key{color:var(--accent-soft)}
+.b-prev{padding:10px 12px 12px 39px;border-bottom:1px solid rgba(255,255,255,.05);background:rgba(255,255,255,.02)}
+.b-prev-k{font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--text-ghost);margin-bottom:5px}
+.b-prev-b{margin:0;font-family:var(--mono);font-size:11.5px;line-height:1.6;color:var(--text-muted);white-space:pre-wrap;border-left:1px solid rgba(255,255,255,.1);padding-left:11px}
+.b-orow{position:relative;display:flex;align-items:center;gap:12px;padding:11px 12px;border-bottom:1px solid rgba(255,255,255,.05)}
+.b-orow.f{background:rgba(255,255,255,.035)}
+.b-orow.f::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--accent)}
+.b-omk{width:15px;height:15px;flex:none;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:11px;color:var(--text-ghost)}
+.b-orow.f .b-omk{color:var(--accent)}
+.b-otext{flex:1;min-width:0;font-size:13px;color:var(--text-primary)}
+.b-otext.ph{color:var(--text-ghost)}
+.b-foot{margin-top:13px;display:flex;align-items:center;gap:14px}
+.b-go{display:inline-flex;align-items:center;gap:8px;background:var(--accent);color:var(--app-bg);font-size:12.5px;font-weight:650;padding:7px 15px;border-radius:999px;border:none;font-family:inherit}
+.b-go.off{background:rgba(255,255,255,.05);color:var(--text-ghost)}
+.b-gokb{border-radius:4px;border:1px solid rgba(9,9,11,.35);padding:0 4px;font-family:var(--mono);font-size:9.5px;line-height:1.5}
+.b-cancel{display:inline-flex;align-items:center;gap:7px;background:none;border:none;font-family:inherit;font-size:12px;color:var(--text-subtle)}
+.b-cankb{font-family:var(--mono);font-size:10px;color:#5f5f66}
+.b-hint{margin-left:auto;font-family:var(--mono);font-size:10px;color:#5f5f66}
+
+/* ================= D — prototype host restored, current internals ================= */
+.d-card{border-radius:12px;border:1px solid rgba(244,114,182,.22);background:#141416;box-shadow:0 14px 38px rgba(0,0,0,.5),0 0 0 1px rgba(0,0,0,.4);overflow:hidden}
+.d-body{padding:10px 13px 4px}
+.d-kick{display:flex;align-items:center;gap:7px;margin-bottom:8px}
+.d-ico{display:flex;color:var(--accent)}
+.d-kick-l{font-size:9.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);white-space:nowrap}
+.d-pend{margin-left:auto;font-family:var(--mono);font-size:10px;color:#5f5f66;font-variant-numeric:tabular-nums}
+.d-pend b{color:var(--text-muted)}
+.d-strip{display:flex;justify-content:space-between;align-items:center;padding:7px 13px;border-top:1px solid rgba(255,255,255,.06);background:#0d0d0f;font-family:var(--mono);font-size:10px;color:#5f5f66}
+.d-strip-r{display:flex;align-items:center;gap:11px}
+.d-link{background:none;border:none;padding:0;font-family:var(--mono);font-size:10px;color:var(--text-ghost)}
+</style>
+
+<script>
+var Q1 = {
+  header: 'Auth method',
+  question: 'Which authentication approach should the new endpoint use?',
+  options: [
+    { label: 'Session cookie', desc: 'Reuse the signed cookie and CSRF token the web app already sends.' },
+    { label: 'Bearer token', desc: 'Issue a short-lived token at login and send it in the header.',
+      preview: 'Authorization: Bearer <token>\nexpires_in: 900\nrefresh:    rotating' },
+    { label: 'Both', desc: 'Cookie for the browser, token for the command line.' }
+  ]
+};
+var Q2 = {
+  header: 'Coverage',
+  question: 'Which surfaces should this change cover?',
+  options: [
+    { label: 'Renderer', desc: 'The window and its components.' },
+    { label: 'Sidecar', desc: 'The engine process behind the socket.' },
+    { label: 'Host API', desc: 'The typed control plane.' },
+    { label: 'Docs', desc: 'Maps and the migration status file.' }
+  ]
+};
+var OTHER_TEXT = 'Only the preload allowlist';
+
+function el(tag, cls, text) {
+  var n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+}
+
+/* ---------------- CURRENT ---------------- */
+function current(pose) {
+  var root = el('section', 'cur');
+  root.appendChild(curBody(pose));
+  return root;
+}
+
+function curBody(pose) {
+  var multi = pose === 2, q = multi ? Q2 : Q1;
+  var root = document.createDocumentFragment();
+  var head = el('div', 'cur-head');
+  head.appendChild(el('span', 'cur-chip', q.header));
+  if (multi) head.appendChild(el('span', 'cur-multi', 'multi-select'));
+  if (multi) {
+    var st = el('span', 'cur-step');
+    ['done', 'on', ''].forEach(function (k) { st.appendChild(el('span', 'cur-dot ' + k)); });
+    st.appendChild(el('span', 'cur-cnt', '2/3'));
+    head.appendChild(st);
+  }
+  root.appendChild(head);
+  root.appendChild(el('h2', 'cur-q', q.question));
+
+  var list = el('div', 'cur-list');
+  q.options.forEach(function (o, i) {
+    var sel = multi ? (i < 2) : (i === 0);
+    var foc = !multi && i === 1;
+    var row = el('button', 'cur-row' + (foc ? ' f' : sel ? ' s' : ''));
+    row.type = 'button';
+    row.appendChild(el('span', 'cur-mk' + (multi ? ' sq' : '') + (sel ? ' s' : foc ? ' f' : ''), sel ? '✓' : String(i + 1)));
+    var b = el('span', 'cur-body');
+    b.appendChild(el('span', 'cur-lb', o.label));
+    if (o.desc) b.appendChild(el('span', 'cur-ds', o.desc));
+    row.appendChild(b);
+    if (o.preview) row.appendChild(el('span', 'cur-pv', 'preview'));
+    list.appendChild(row);
+  });
+  var orow = el('div', 'cur-other' + (multi ? ' f' : ''));
+  orow.appendChild(el('span', 'cur-mk' + (multi ? ' sq' : '') + (multi ? ' f' : ''), String(q.options.length + 1)));
+  orow.appendChild(el('span', 'cur-in' + (multi ? '' : ' ph'), multi ? OTHER_TEXT : 'Other…'));
+  list.appendChild(orow);
+  root.appendChild(list);
+
+  if (!multi) {
+    var pv = el('div', 'cur-prev');
+    pv.appendChild(el('div', 'cur-prev-t', 'Preview'));
+    pv.appendChild(el('pre', 'cur-prev-b', Q1.options[1].preview));
+    root.appendChild(pv);
+  }
+
+  var foot = el('div', 'cur-foot');
+  var go = el('button', 'cur-go');
+  go.type = 'button';
+  go.appendChild(document.createTextNode(multi ? 'Next question' : 'Submit'));
+  go.appendChild(el('span', 'cur-kb', '↵'));
+  foot.appendChild(go);
+  var shortcut = q.options.length < 9 ? '1–' + (q.options.length + 1) : '1–9 · o';
+  foot.appendChild(el('span', 'cur-hint', multi ? shortcut + ' / space toggle · ↑↓ move' : shortcut + ' pick · ↑↓ move'));
+  var cx = el('button', 'cur-cancel');
+  cx.type = 'button';
+  cx.appendChild(document.createTextNode('Cancel'));
+  cx.appendChild(el('span', 'cur-kb2', 'esc'));
+  foot.appendChild(cx);
+  root.appendChild(foot);
+  return root;
+}
+
+/* ---------------- shared bits for A / C ---------------- */
+function vHead(q, multi) {
+  var k = el('div', 'v-kick');
+  k.appendChild(el('span', 'v-kick-l', q.header));
+  if (multi) k.appendChild(el('span', 'v-pill', 'Choose any'));
+  if (multi) {
+    var st = el('span', 'v-step');
+    ['done', 'on', ''].forEach(function (c) { st.appendChild(el('span', 'v-sd ' + c)); });
+    st.appendChild(el('span', 'v-sc', '2/3'));
+    k.appendChild(st);
+  }
+  return k;
+}
+function vList(q, multi) {
+  var list = el('div', 'v-list');
+  q.options.forEach(function (o, i) {
+    var sel = multi ? (i < 2) : (i === 0);
+    var foc = !multi && i === 1;
+    var row = el('button', 'v-row' + (sel ? ' s' : '') + (foc ? ' f' : ''));
+    row.type = 'button';
+    row.appendChild(el('span', 'v-mk' + (multi ? ' sq' : '') + (sel ? ' on' : ''), '✓'));
+    var b = el('span', 'v-body');
+    b.appendChild(el('span', 'v-lb', o.label));
+    if (o.desc) b.appendChild(el('span', 'v-ds', o.desc));
+    row.appendChild(b);
+    var r = el('span', 'v-right');
+    if (o.preview) r.appendChild(el('span', 'v-eye', 'preview'));
+    r.appendChild(el('span', 'v-key', String(i + 1)));
+    row.appendChild(r);
+    list.appendChild(row);
+  });
+  var orow = el('div', 'v-orow' + (multi ? ' f' : ''));
+  orow.appendChild(el('span', 'v-omk'));
+  var ot = el('span', 'v-otext' + (multi ? '' : ' ph'));
+  ot.appendChild(document.createTextNode(multi ? OTHER_TEXT : 'Other answer'));
+  if (multi) ot.appendChild(el('span', 'v-caret'));
+  orow.appendChild(ot);
+  var orr = el('span', 'v-right');
+  orr.appendChild(el('span', 'v-key', String(q.options.length + 1)));
+  orow.appendChild(orr);
+  list.appendChild(orow);
+  return list;
+}
+function vPreview() {
+  var pv = el('div', 'v-prev');
+  var h = el('div', 'v-prev-h');
+  h.appendChild(el('span', 'v-prev-k', 'Preview'));
+  h.appendChild(el('span', 'v-prev-n', Q1.options[1].label));
+  pv.appendChild(h);
+  pv.appendChild(el('pre', 'v-prev-b', Q1.options[1].preview));
+  return pv;
+}
+function vFoot(multi) {
+  var foot = el('div', 'v-foot');
+  var go = el('button', 'v-go');
+  go.type = 'button';
+  go.appendChild(document.createTextNode(multi ? 'Next question' : 'Submit answer'));
+  go.appendChild(el('span', 'v-gokb', '↵'));
+  foot.appendChild(go);
+  var cx = el('button', 'v-cancel');
+  cx.type = 'button';
+  cx.appendChild(document.createTextNode('Cancel'));
+  cx.appendChild(el('span', 'v-cankb', 'esc'));
+  foot.appendChild(cx);
+  foot.appendChild(el('span', 'v-hint', multi ? 'space toggle · ↑↓ move' : '↑↓ move'));
+  return foot;
+}
+
+/* ---------------- A ---------------- */
+function variantA(pose) {
+  var multi = pose === 2, q = multi ? Q2 : Q1;
+  var root = el('section', 'v-card');
+  root.appendChild(vHead(q, multi));
+  root.appendChild(el('h2', 'v-q', q.question));
+  root.appendChild(vList(q, multi));
+  if (!multi) root.appendChild(vPreview());
+  root.appendChild(vFoot(multi));
+  return root;
+}
+
+/* ---------------- C ---------------- */
+function variantC(pose) {
+  var multi = pose === 2, q = multi ? Q2 : Q1;
+  var root = el('section', 'v-card');
+  root.appendChild(vHead(q, multi));
+  root.appendChild(el('h2', 'v-q', q.question));
+  if (multi) {
+    root.appendChild(vList(q, multi));
+  } else {
+    var split = el('div', 'c-split');
+    split.appendChild(vList(q, multi));
+    split.appendChild(vPreview());
+    root.appendChild(split);
+  }
+  root.appendChild(vFoot(multi));
+  return root;
+}
+
+/* ---------------- B ---------------- */
+function variantB(pose) {
+  var multi = pose === 2, q = multi ? Q2 : Q1;
+  var root = el('section', 'b-card');
+  var k = el('div', 'b-kick');
+  k.appendChild(el('span', 'b-kick-l', q.header));
+  if (multi) k.appendChild(el('span', 'b-pill', 'Choose any'));
+  if (multi) {
+    var st = el('span', 'b-step');
+    ['done', 'on', ''].forEach(function (c) { st.appendChild(el('span', 'b-sd ' + c)); });
+    st.appendChild(el('span', 'b-sc', '2/3'));
+    k.appendChild(st);
+  }
+  root.appendChild(k);
+  root.appendChild(el('h2', 'b-q', q.question));
+
+  var list = el('div', 'b-list');
+  q.options.forEach(function (o, i) {
+    var sel = multi ? (i < 2) : (i === 0);
+    var foc = !multi && i === 1;
+    var row = el('button', 'b-row' + (sel ? ' s' : '') + (foc ? ' f' : ''));
+    row.type = 'button';
+    row.appendChild(el('span', 'b-mk' + (multi ? ' sq' : '') + (sel ? ' on' : ''), '✓'));
+    var b = el('span', 'b-body');
+    b.appendChild(el('span', 'b-lb', o.label));
+    if (o.desc) b.appendChild(el('span', 'b-ds', o.desc));
+    row.appendChild(b);
+    var r = el('span', 'b-right');
+    if (o.preview) r.appendChild(el('span', 'b-eye', 'preview'));
+    r.appendChild(el('span', 'b-key', String(i + 1)));
+    row.appendChild(r);
+    list.appendChild(row);
+    if (foc && o.preview) {
+      var pv = el('div', 'b-prev');
+      pv.appendChild(el('div', 'b-prev-k', 'Preview'));
+      pv.appendChild(el('pre', 'b-prev-b', o.preview));
+      list.appendChild(pv);
+    }
+  });
+  var orow = el('div', 'b-orow' + (multi ? ' f' : ''));
+  orow.appendChild(el('span', 'b-omk', '›'));
+  var ot = el('span', 'b-otext' + (multi ? '' : ' ph'));
+  ot.appendChild(document.createTextNode(multi ? OTHER_TEXT : 'Other answer'));
+  if (multi) ot.appendChild(el('span', 'v-caret'));
+  orow.appendChild(ot);
+  var orr = el('span', 'b-right');
+  orr.appendChild(el('span', 'b-key', String(q.options.length + 1)));
+  orow.appendChild(orr);
+  list.appendChild(orow);
+  root.appendChild(list);
+
+  var foot = el('div', 'b-foot');
+  var go = el('button', 'b-go');
+  go.type = 'button';
+  go.appendChild(document.createTextNode(multi ? 'Next question' : 'Submit answer'));
+  go.appendChild(el('span', 'b-gokb', '↵'));
+  foot.appendChild(go);
+  var cx = el('button', 'b-cancel');
+  cx.type = 'button';
+  cx.appendChild(document.createTextNode('Cancel'));
+  cx.appendChild(el('span', 'b-cankb', 'esc'));
+  foot.appendChild(cx);
+  foot.appendChild(el('span', 'b-hint', multi ? 'space toggle · ↑↓ move' : '↑↓ move'));
+  root.appendChild(foot);
+  return root;
+}
+
+/* ---------------- D — prototype host restored, current internals ---------------- */
+var QUESTION_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
+  + ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/>'
+  + '<path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
+
+function variantD(pose) {
+  var multi = pose === 2;
+  var root = el('section', 'd-card');
+  var body = el('div', 'd-body');
+  var kick = el('div', 'd-kick');
+  var ico = el('span', 'd-ico');
+  ico.innerHTML = QUESTION_ICON;
+  kick.appendChild(ico);
+  kick.appendChild(el('span', 'd-kick-l', 'Question'));
+  if (multi) {
+    var pend = el('span', 'd-pend');
+    pend.appendChild(el('b', null, '2'));
+    pend.appendChild(document.createTextNode(' pending'));
+    kick.appendChild(pend);
+  }
+  body.appendChild(kick);
+  body.appendChild(curBody(pose));
+  root.appendChild(body);
+  var strip = el('div', 'd-strip');
+  strip.appendChild(el('span', null, '↑↓ · 1–9 · ↵ · esc'));
+  var right = el('div', 'd-strip-r');
+  var mr = el('button', 'd-link', 'Manage rules →');
+  mr.type = 'button';
+  right.appendChild(mr);
+  var kp = el('button', 'd-link', 'Keep pending →');
+  kp.type = 'button';
+  right.appendChild(kp);
+  strip.appendChild(right);
+  root.appendChild(strip);
+  return root;
+}
+
+var SECTIONS = [
+  { id: 'cur', label: 'Current', note: 'shipped', build: current },
+  { id: 'd', label: 'D', note: 'prototype host', build: variantD },
+  { id: 'a', label: 'A', note: 'framed rows', build: variantA },
+  { id: 'b', label: 'B', note: 'quiet rules', build: variantB },
+  { id: 'c', label: 'C', note: 'split canvas', build: variantC }
+];
+var POSES = [
+  { n: 1, label: 'Single select · one chosen · one focused · preview' },
+  { n: 2, label: 'Multi select · two chosen · other active · step 2 of 3' }
+];
+
+var wrap = document.getElementById('wrap');
+SECTIONS.forEach(function (s) {
+  var sec = el('section', 'x-sec');
+  sec.setAttribute('data-sec', s.id);
+  var h = el('div', 'x-sechead');
+  h.appendChild(el('span', 'x-id', s.label));
+  h.appendChild(el('span', 'x-note', s.note));
+  sec.appendChild(h);
+  POSES.forEach(function (p) {
+    var slot = el('div', 'x-slot');
+    slot.appendChild(el('div', 'x-pose', p.label));
+    var stage = el('div', 'x-stage');
+    stage.appendChild(s.build(p.n));
+    slot.appendChild(stage);
+    sec.appendChild(slot);
+  });
+  wrap.appendChild(sec);
+});
+
+var tabs = document.querySelectorAll('.x-tab');
+Array.prototype.forEach.call(tabs, function (t) {
+  t.addEventListener('click', function () {
+    var f = t.getAttribute('data-f');
+    Array.prototype.forEach.call(tabs, function (o) {
+      o.setAttribute('aria-pressed', String(o === t));
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-sec]'), function (sec) {
+      sec.style.display = (f === 'all' || sec.getAttribute('data-sec') === f) ? '' : 'none';
+    });
+  });
+});
+</script>
+</body>
+</html>
