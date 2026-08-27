@@ -683,7 +683,14 @@ describe('This app scope', () => {
         /aria-label="Blue"[^>]*aria-checked="true"/.test(pane),
     ).toBe(true)
     expect((pane.match(/aria-checked="true"/g) ?? []).length).toBe(1)
-    expect(decode(pane)).toContain('not in your settings files')
+    // App-local, proven by what is NOT claimed rather than by boilerplate: the
+    // Appearance rows dropped the "stored in this app" sentence (operator,
+    // 2026-08-27, it reads as noise inside Settings itself). Asserted on this
+    // row's own sentence, because the Transcript rows below still carry it and
+    // a pane-wide check would pass for the wrong reason.
+    expect(decode(pane)).toContain('Used for active states, the live indicator, and toggles.')
+    expect(decode(pane)).not.toContain('toggles. Stored in this app')
+    expect(pane).not.toContain('Edits here write to')
   })
 
   test('the frosted-window row reflects the live preference and can be reset', () => {
@@ -695,8 +702,11 @@ describe('This app scope', () => {
       ),
     )
     expect(decode(pane)).toContain('Frosted window')
-    // App-local, so no source badge and the same disclosure the siblings carry.
-    expect(decode(pane)).toContain('not in your settings files')
+    // App-local, and silent about it: no engine destination is claimed, and no
+    // "stored in this app" boilerplate. Scoped to this row's own sentence: the
+    // Transcript rows below still carry that phrase.
+    expect(decode(pane)).not.toContain('macOS only. Stored in this app')
+    expect(pane).not.toContain('Edits here write to')
     // The platform limit is disclosed rather than left for the user to discover.
     expect(decode(pane)).toContain('macOS only')
     // On differs from the shipped default, so the row offers the reset the

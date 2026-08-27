@@ -809,7 +809,7 @@ function AppearanceSection() {
   return (
     <PaneSection title="Appearance">
       <Field
-        desc="Let the desktop show through the window as a blur, instead of a solid background. macOS only. Stored in this app, not in your settings files."
+        desc="Let the desktop show through the window as a blur, instead of a solid background. macOS only."
         label="Frosted window"
         modified={glass !== DEFAULT_GLASS_ENABLED}
         onReset={() => setGlass(DEFAULT_GLASS_ENABLED)}
@@ -817,7 +817,7 @@ function AppearanceSection() {
         <ToggleSwitch label="Frosted window" onChange={setGlass} value={glass} />
       </Field>
       <Field
-        desc="Used for active states, the live indicator, and toggles. Stored in this app, not in your settings files."
+        desc="Used for active states, the live indicator, and toggles."
         label="Accent color"
         modified={accent !== DEFAULT_ACCENT}
         onReset={() => setAccent(DEFAULT_ACCENT)}
