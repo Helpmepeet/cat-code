@@ -50,11 +50,16 @@ function themeCss(): string {
  * `rgb(...)`, or an `rgba(..., 1)` on either side is glass that silently does
  * nothing in that appearance. A missing half reports `false` for that half
  * rather than throwing, so the assertion names which one broke.
+ *
+ * `var(...)` counts as opaque, which is exact rather than a shortcut: the only
+ * var this declaration may name is the page ground itself, and the assertion
+ * below pins it to that.
  */
 function translucentPair(body: string): { light: boolean; dark: boolean } {
-  const pair = /background:\s*light-dark\(\s*(.+?)\s*,\s*(rgba?\([^)]*\)|#[0-9a-fA-F]+)\s*\)\s*;/.exec(
-    body,
-  )
+  const pair =
+    /background:\s*light-dark\(\s*(.+?)\s*,\s*(rgba?\([^)]*\)|#[0-9a-fA-F]+|var\(--[\w-]+\))\s*\)\s*;/.exec(
+      body,
+    )
   const translucent = (value: string | undefined) => {
     const alpha = /rgba\([^)]*,\s*([0-9.]+)\s*\)/.exec(value ?? '')
     return alpha !== null && Number(alpha[1]) < 1
@@ -121,16 +126,23 @@ test('the stamp is present only while glass is on', () => {
  * The attribute is only half the mechanism: without a matching rule the toggle
  * silently does nothing, and no render assertion can see that.
  *
- * Both halves of the pair are checked, not just that a pair is present. macOS
- * swaps the vibrancy material with the appearance, so glass has a light ground
- * and a dark one, and an opaque value on either side is a toggle that does
- * nothing in that appearance while still passing a shape check.
+ * The two halves are asserted SEPARATELY and to opposite values, because they
+ * mean opposite things here. Dark must be translucent: an opaque value there is
+ * a toggle that does nothing while still passing a shape check. Light must be
+ * the page ground, named through the token rather than restated as a hex, and
+ * that is not a bug to be fixed later — macOS's light material composites to
+ * about #c2c2c2 over a real desktop, so a coat heavy enough to keep the light
+ * text ramp legible leaves no material to see, and glass in light was made
+ * deliberately inert (`theme.css`). Restoring an alpha here would restore a
+ * ground measured at 2.9:1 for `--text-faint`.
  */
-test('the stylesheet paints exactly one translucent ground under the stamp', () => {
+test('glass is translucent in dark and is the plain page ground in light', () => {
   const css = themeCss()
   const block = css.match(/html\[data-glass='on'\]\s*\{([^}]*)\}/)
   expect(block).not.toBeNull()
-  expect(translucentPair(block?.[1] ?? '')).toEqual({ light: true, dark: true })
+  expect(translucentPair(block?.[1] ?? '')).toEqual({ light: false, dark: true })
+  // Named through the token, so it cannot drift from the ground it must equal.
+  expect(block?.[1]).toContain('light-dark(var(--app-bg),')
   // Off is the absence of the attribute, so no rule may describe it.
   expect(css).not.toContain("data-glass='off'")
 })
@@ -306,36 +318,28 @@ test('the app frame is marked, on the element and not only in its comment', () =
 })
 
 /**
- * The tone filter, which is the half of the ground a coat cannot do.
+ * The filter that was tried for light glass and removed, guarded so it is not
+ * re-added here without the finding that killed it.
  *
- * A coat only ever trades translucency for identity: enough white to make a
- * light page read as light leaves nothing of the desktop showing. The filter
- * moves the backdrop itself toward the appearance's own ground, so both survive.
- * Deleting it would not fail any other test here — the coats alone still parse
- * as translucent — it would just quietly return the light appearance to the
- * mid-grey ground that measured under its own contrast bar (`theme.css`).
- *
- * Both appearances must carry one, and they must pull in OPPOSITE directions:
- * one filter serving both is the shape of the bug, since the same brightness
- * cannot push a backdrop toward white and toward black at once.
+ * Toning the backdrop toward the appearance's own ground is the one lever that
+ * escapes the coat's trade, and it does not work from this element: Chromium
+ * declines `backdrop-filter` on the ROOT, and the operator's window was
+ * pixel-identical to the coat alone with it shipped. The sidebar overlay below
+ * proves the filter can sample the native material, so this is about `html`
+ * being the wrong element, not about the technique (`theme.css`).
  */
-test('the ground is toned per appearance, in opposite directions', () => {
+test('the root rule carries no backdrop filter, because it is inert there', () => {
   const css = themeCss()
-  const brightness = (selector: string): number => {
-    const block = css.match(
-      new RegExp(`${selector}\\s*\\{([^}]*)\\}`),
-    )
-    expect(block).not.toBeNull()
-    const value = /backdrop-filter:[^;]*brightness\(\s*([0-9.]+)\s*\)/.exec(
-      block?.[1] ?? '',
-    )
-    expect(value).not.toBeNull()
-    return Number(value?.[1])
+  for (const selector of [
+    /html\[data-glass='on'\]\s*\{([^}]*)\}/,
+    /html\[data-appearance='light'\]\[data-glass='on'\]\s*\{([^}]*)\}/,
+  ]) {
+    const block = css.match(selector)
+    if (block) expect(block[1]).not.toContain('backdrop-filter')
   }
-  const dark = brightness("html\\[data-glass='on'\\]")
-  const light = brightness(
-    "html\\[data-appearance='light'\\]\\[data-glass='on'\\]",
+  // The overlay's own blur is a different element and must survive untouched.
+  const overlay = css.match(
+    /html\[data-glass='on'\] \[data-window-overlay\]\s*\{([^}]*)\}/,
   )
-  expect(dark).toBeLessThan(1)
-  expect(light).toBeGreaterThan(1)
+  expect(overlay?.[1]).toContain('backdrop-filter: blur(')
 })
