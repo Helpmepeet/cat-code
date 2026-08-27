@@ -1957,9 +1957,29 @@ async function processCodexEvents(
     itemRef: string | number | undefined,
     contentIndex: number | undefined,
   ): string => `${itemRef ?? 'noitem'}:${contentIndex ?? 'nopart'}`
+
+  // One identity per item, resolved the same way from every event kind.
+  // Deriving it from whichever optional field a given event happens to carry
+  // made the four emitters disagree: a delta without item_id and an
+  // output_text.done with one keyed the same part differently and emitted its
+  // text twice. output_index is the field all four carry, so it wins; the map
+  // recovers an identity for an event that has only item_id. Mirrors the
+  // dual-lookup resolveOpenToolCall already uses for tool calls below.
+  const outputIndexByItemId = new Map<string, number>()
+  const resolveItemRef = (
+    itemId: string | undefined,
+    outputIndex: number | undefined,
+  ): string | number | undefined => {
+    if (itemId !== undefined && outputIndex !== undefined) {
+      outputIndexByItemId.set(itemId, outputIndex)
+    }
+    if (outputIndex !== undefined) return outputIndex
+    if (itemId !== undefined) return outputIndexByItemId.get(itemId) ?? itemId
+    return undefined
+  }
   const eventTextPartKey = (event: Record<string, unknown>): string =>
     textPartKey(
-      readString(event.item_id) ?? readNumber(event.output_index),
+      resolveItemRef(readString(event.item_id), readNumber(event.output_index)),
       readNumber(event.content_index),
     )
 
@@ -2271,7 +2291,10 @@ async function processCodexEvents(
                 // Last chance to recover text: the completed item carries the
                 // authoritative content, and some responses deliver a populated
                 // message here without ever emitting output_text.done for it.
-                const itemRef = readString(item.id) ?? readNumber(event.output_index)
+                const itemRef = resolveItemRef(
+                  readString(item.id),
+                  readNumber(event.output_index),
+                )
                 const parts = Array.isArray(item.content) ? item.content : []
                 for (const [contentIndex, part] of parts.entries()) {
                   const partKey = textPartKey(itemRef, contentIndex)
@@ -2285,6 +2308,22 @@ async function processCodexEvents(
                     { level: 'warn' },
                   )
                   emitAssistantText(text)
+                }
+                // A message whose parts carry no renderable text still ends the
+                // turn with an empty assistant message and completed:true, which
+                // is the signature this whole path exists to make legible. A
+                // refusal-only message is the known case: it must not be emitted
+                // as assistant prose, but it must not vanish without a trace
+                // either. Logged, never rendered.
+                if (!currentTextBlockStarted && parts.length > 0) {
+                  const partTypes = parts
+                    .map(part => (isRecord(part) ? readString(part.type) ?? 'unknown' : 'unknown'))
+                    .join(',')
+                  logForDebugging(
+                    `${RECOVERED_TERMINAL_TEXT_PREFIX} source=output_item.done ` +
+                    `part=${textPartKey(itemRef, undefined)} chars=0 dropped_parts=${partTypes}`,
+                    { level: 'warn' },
+                  )
                 }
                 if (currentTextBlockStarted) {
                   noteVisibleOutput()

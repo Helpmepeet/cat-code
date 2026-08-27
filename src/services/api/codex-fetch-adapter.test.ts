@@ -2109,6 +2109,63 @@ describe('codex-fetch-adapter', () => {
     ).toBe(false)
   })
 
+  // Every emitter must resolve the same identity for one part. Deriving it from
+  // whichever optional field an event happened to carry emitted the text twice.
+  test('does not duplicate when a delta omits item_id and the terminal event carries it', async () => {
+    const body = await runTerminalTextFetch('conv_key_mixed_a', [
+      {
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: { type: 'message', id: 'msg_mixed_a' },
+      },
+      { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'HELLO' },
+      {
+        type: 'response.output_text.done',
+        item_id: 'msg_mixed_a',
+        output_index: 0,
+        content_index: 0,
+        text: 'HELLO',
+      },
+    ])
+
+    expect(body.content).toEqual([{ type: 'text', text: 'HELLO' }])
+  })
+
+  test('does not duplicate when a delta carries item_id and the completed item omits id', async () => {
+    const body = await runTerminalTextFetch('conv_key_mixed_b', [
+      {
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: { type: 'message', id: 'msg_mixed_b' },
+      },
+      {
+        type: 'response.output_text.delta',
+        item_id: 'msg_mixed_b',
+        output_index: 0,
+        content_index: 0,
+        delta: 'WORLD',
+      },
+      {
+        type: 'response.output_item.done',
+        output_index: 0,
+        item: { type: 'message', content: [{ type: 'output_text', text: 'WORLD' }] },
+      },
+    ])
+
+    expect(body.content).toEqual([{ type: 'text', text: 'WORLD' }])
+  })
+
+  test('an index-less terminal part does not collide with the part at index 0', async () => {
+    const body = await runTerminalTextFetch('conv_key_sentinel', [
+      { type: 'response.output_item.added', output_index: 0, item: { type: 'message' } },
+      { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'first. ' },
+      { type: 'response.output_text.done', output_index: 0, content_index: 0, text: 'first. ' },
+      { type: 'response.output_text.done', output_index: 0, text: 'second.' },
+    ])
+
+    expect(body.content).toEqual([{ type: 'text', text: 'first. second.' }])
+  })
+
   test('createCodexFetch fails visibly for empty non-streaming HTTP responses', async () => {
     const accessToken = createAccessToken('acct_test_nonstream_empty')
     const originalFetch = globalThis.fetch

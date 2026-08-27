@@ -9,13 +9,13 @@ gpt-5.6-sol that refuted three of the original claims.
 ## The confirmed defect
 
 The Codex stream adapter surfaces assistant text from exactly one event:
-`response.output_text.delta` at
-[codex-fetch-adapter.ts:2090](../../src/services/api/codex-fetch-adapter.ts:2090),
+`response.output_text.delta` (the delta handler in `processCodexEvents`,
+[codex-fetch-adapter.ts:2111](../../src/services/api/codex-fetch-adapter.ts:2111),
 and only when the delta is a non-empty string.
 
 `response.output_text.done` has no handler anywhere in the adapter. The
 `item?.type === 'message'` branch of the `response.output_item.done` handler at
-[codex-fetch-adapter.ts:2250](../../src/services/api/codex-fetch-adapter.ts:2250)
+[codex-fetch-adapter.ts:2290](../../src/services/api/codex-fetch-adapter.ts:2290)
 only closes an already-open block, guarded by `if (currentTextBlockStarted)`; it
 never reads `item.content`. `response.content_part.done` is likewise ignored.
 
@@ -31,7 +31,7 @@ rather than returning a blank turn.
 
 The same file already implements this exact recovery for a different item type:
 the `item?.type === 'reasoning'` branch at
-[codex-fetch-adapter.ts:2282](../../src/services/api/codex-fetch-adapter.ts:2282)
+[codex-fetch-adapter.ts:2341](../../src/services/api/codex-fetch-adapter.ts:2341)
 reads `item.encrypted_content` straight off the done event. Message
 canonicalization also extracts `item.content[].text`
 ([codex-fetch-adapter.ts:895](../../src/services/api/codex-fetch-adapter.ts:895),
@@ -54,11 +54,11 @@ an artifact of our own code.**
 
 `primeCodexEvents` buffers every event until `codexEventBeginsVisibleOutput`
 returns true or `response.completed` arrives
-([codex-fetch-adapter.ts:3249](../../src/services/api/codex-fetch-adapter.ts:3249)),
+([codex-fetch-adapter.ts:3312](../../src/services/api/codex-fetch-adapter.ts:3312)),
 then replays the entire buffer synchronously
-([:3271](../../src/services/api/codex-fetch-adapter.ts:3271)).
+([:3312](../../src/services/api/codex-fetch-adapter.ts:3312)).
 `codexEventBeginsVisibleOutput` does not recognize `response.output_text.done`
-([:2882](../../src/services/api/codex-fetch-adapter.ts:2882)). A done-only
+([:2941](../../src/services/api/codex-fetch-adapter.ts:2941)). A done-only
 response is therefore held to completion and released in one tick, making
 `first_raw_event_ms == completed_ms` by construction. The comparison against
 delta-bearing responses, which release the buffer at their first delta and then
@@ -94,7 +94,7 @@ The detector is a detector for **at-risk responses**, not confirmed loss. Known
 limitations, all raised by the review and accepted:
 
 - A `response.output_text.delta` with an empty or non-string `delta` is discarded
-  by the handler at [:2091](../../src/services/api/codex-fetch-adapter.ts:2091)
+  by the handler at [:2111](../../src/services/api/codex-fetch-adapter.ts:2111)
   but still appears in the histogram as a delta, hiding an affected response.
 - Multi-part responses can lose one part while another streams. Two current
   candidates have two `output_text.done` events and one delta event:
@@ -126,7 +126,7 @@ output tokens, two output items, four kinds of reasoning event, one text part wi
 only a 92-character thinking block. **The earlier reading, "approximately 200
 tokens of answer destroyed", is withdrawn.** The adapter copies aggregate
 `usage.output_tokens` at
-[:2371](../../src/services/api/codex-fetch-adapter.ts:2371) with no content-level
+[:2430](../../src/services/api/codex-fetch-adapter.ts:2430) with no content-level
 attribution, so the total cannot be split between hidden reasoning, the rendered
 summary, and terminal text. A large lost answer and a near-empty text part are
 both compatible with what was retained.
@@ -166,9 +166,14 @@ the model then denied text that was plainly in its input.
 
 Implemented in `src/services/api/codex-fetch-adapter.ts` on 2026-08-28.
 
-- `textPartsEmitted`, a per-content-part key (`output_index:content_index`)
-  recording which parts have produced text. Per part, not per response, so a
-  multi-part message can stream one part and recover another.
+- `textPartsEmitted`, a per-content-part record of which parts have produced
+  text. Per part, not per response, so a multi-part message can stream one part
+  and recover another. Identity is resolved once by `resolveItemRef`
+  ([codex-fetch-adapter.ts:1969](../../src/services/api/codex-fetch-adapter.ts:1969)),
+  preferring `output_index` because it is the field every event kind carries,
+  with a map back from `item_id`. Deriving it per event from whichever optional
+  field that event happened to carry made the emitters disagree and emit the
+  same text twice; see the review section.
 - `emitAssistantText`, one helper shared by the delta path and both recovery
   paths, so recovered text merges into an open text block exactly as a
   consecutive delta would and block ordering against reasoning is unchanged.
@@ -185,8 +190,8 @@ Implemented in `src/services/api/codex-fetch-adapter.ts` on 2026-08-28.
 - `codexEventBeginsVisibleOutput` now recognizes terminal text, so a done-only
   response no longer buffers to `response.completed`. This also retires the
   artifact that produced the withdrawn timing claim above.
-- Both recovery paths log `recovered_terminal_text` at warn level with the source,
-  part key, and character count, composed from `RECOVERED_TERMINAL_TEXT_PREFIX`
+- All three recovery paths log `recovered_terminal_text` at warn level with the
+  source, part key, and character count, composed from `RECOVERED_TERMINAL_TEXT_PREFIX`
   (`src/utils/debug.ts`) which is on the always-log allowlist. It was initially a
   plain `[codex-fetch]` line, which `shouldLogDebugMessage` suppresses for
   non-ant users outside debug mode: the log existed but would have been written
@@ -234,8 +239,12 @@ third, which was also the weakest.
    `src/utils/sessionStorage.ts`), written to the transcript unconditionally.
    Its `raw_event_types` histogram is what produced the 13-record corpus above,
    so the at-risk signature stays detectable after the fix.
-3. **The `recovered_terminal_text` debug line**, now always-logged, carrying the
-   recovered character count. Useful when a debug log exists for the session.
+3. **The `recovered_terminal_text` debug line**, carrying the recovered character
+   count, and now on the always-log allowlist so it survives outside debug mode.
+   Two qualifiers: `logForDebugging` applies the minimum-level check before the
+   allowlist, and `shouldLogDebugMessage` returns false outright under
+   `NODE_ENV=test`, so no in-process suite can observe this routing. That is why
+   `src/utils/alwaysLogPrefix.probe.test.ts` spawns a real process.
 
 Together 1 and 2 answer the open question the original report could not: a future
 sweep can find a done-without-delta response and read whether its assistant
@@ -268,6 +277,47 @@ an executing effect lens). What it changed, beyond the hardening listed above:
   intended, but it was undocumented.
 
 Both deviations were closed later the same day; what follows records how.
+
+A second review round (two lenses, one reading and one executing, over all three
+commits) then found the following, all since fixed:
+
+- **Part-key identity was derived inconsistently across the emitters**, and the
+  executing lens demonstrated the consequence rather than inferring it: a delta
+  lacking `item_id` followed by an `output_text.done` carrying one emitted the
+  text twice. The pre-fix code had no duplication failure mode at all, so this
+  one was introduced here. `resolveItemRef` now resolves one identity for every
+  event kind, preferring `output_index` because every event carries it, and two
+  tests pin the mixed-field classes. A third pins the absent-index sentinel,
+  which nothing had covered: collapsing it back to `0` left every suite green.
+- **A message whose parts carry no renderable text is now logged.** A
+  refusal-only message must not be rendered as assistant prose, but dropping it
+  silently reproduced the exact signature this report opens with. It is logged,
+  never emitted.
+- **The always-log routing had no coverage and structurally could not have any**
+  under `bun test`, since `shouldLogDebugMessage` short-circuits when
+  `NODE_ENV=test`. Removing the prefix from the allowlist left all 136 tests
+  green: the same class of defect as the original, a fix whose whole value lives
+  where the gates cannot see. `src/utils/alwaysLogPrefix.probe.test.ts` spawns a
+  real process to close it.
+- **Confirmed, not changed:** the new onset predicate is a strict superset of the
+  old one. Run over a 24-shape corpus against both adapters, exactly three classes
+  flip to release and none flips the other way, so no output that used to surface
+  now stalls. Nothing in the suite asserts this property.
+- **A second undocumented consequence of `emittedVisibleOutput`:** besides the
+  cap/auth reclassification above, `canFallbackToHttp` requires
+  `!emittedVisibleOutput`, so a recoverable websocket error arriving after
+  terminal-text recovery surfaces a replay-skipped error instead of falling back
+  to HTTP. Correct by the module's own rule and identical to the delta path, but
+  it belongs on the record.
+- **Two tests remain satisfied by a redundant source.** The multi-part test and
+  the continuation test each supply both an `output_text.done` and a populated
+  `output_item.done`, so neither fails when one branch alone is removed. Not
+  fatal, since four other tests close each branch individually, but it is a
+  milder form of the coverage defect the first round found.
+- **`outputTokens` asymmetry when usage is absent:** a terminal-only response
+  reports 0 where a delta-fed one reports the delta count. Both are junk and real
+  responses carry usage; recorded because it makes a usage-less terminal-only turn
+  indistinguishable from a no-output turn.
 
 - **`response.content_part.done` is now handled** (spec item 2's third recovery
   source). It costs nothing on all 13 observed records, every one of which also
