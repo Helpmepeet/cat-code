@@ -1,7 +1,8 @@
 # Codex adapter discards assistant text delivered without deltas
 
-Status: loss path CONFIRMED and FIXED 2026-08-28. Trigger still UNKNOWN. Impact
-partially unsettled, and now instrumented so the next occurrence is evidence.
+Status: loss path CONFIRMED and FIXED 2026-08-28, then reviewed and hardened the
+same day. Trigger still UNKNOWN. Impact partially unsettled; see "How the next
+occurrence gets recorded" for what will and will not capture it.
 Investigated 2026-08-27, corrected 2026-08-28 after an adversarial review by
 gpt-5.6-sol that refuted three of the original claims.
 
@@ -9,12 +10,12 @@ gpt-5.6-sol that refuted three of the original claims.
 
 The Codex stream adapter surfaces assistant text from exactly one event:
 `response.output_text.delta` at
-[codex-fetch-adapter.ts:2023](../../src/services/api/codex-fetch-adapter.ts:2023),
+[codex-fetch-adapter.ts:2090](../../src/services/api/codex-fetch-adapter.ts:2090),
 and only when the delta is a non-empty string.
 
 `response.output_text.done` has no handler anywhere in the adapter. The
 `item?.type === 'message'` branch of the `response.output_item.done` handler at
-[codex-fetch-adapter.ts:2190](../../src/services/api/codex-fetch-adapter.ts:2190)
+[codex-fetch-adapter.ts:2250](../../src/services/api/codex-fetch-adapter.ts:2250)
 only closes an already-open block, guarded by `if (currentTextBlockStarted)`; it
 never reads `item.content`. `response.content_part.done` is likewise ignored.
 
@@ -22,12 +23,18 @@ So when a message item's text arrives only in terminal events, the adapter emits
 no text and the assistant message is persisted without it. The turn still
 reports `completed: true`. No error, no warning, no log line.
 
+Scope correction from review: this silence is specific to the **streaming** path.
+On the non-streaming path `materializeAnthropicMessageFromSse` throws
+`Codex non-streaming fallback produced an empty or invalid assistant message`
+when the assembled content is empty, so a done-only response failed loudly there
+rather than returning a blank turn.
+
 The same file already implements this exact recovery for a different item type:
 the `item?.type === 'reasoning'` branch at
-[codex-fetch-adapter.ts:2204](../../src/services/api/codex-fetch-adapter.ts:2204)
+[codex-fetch-adapter.ts:2282](../../src/services/api/codex-fetch-adapter.ts:2282)
 reads `item.encrypted_content` straight off the done event. Message
 canonicalization also extracts `item.content[].text`
-([codex-fetch-adapter.ts:884](../../src/services/api/codex-fetch-adapter.ts:884),
+([codex-fetch-adapter.ts:895](../../src/services/api/codex-fetch-adapter.ts:895),
 with a transport-local fallback at
 [codex-websocket-transport.ts:847](../../src/services/api/codex-websocket-transport.ts:847)).
 The knowledge exists in the file; it was never applied to `message` items on the
@@ -47,11 +54,11 @@ an artifact of our own code.**
 
 `primeCodexEvents` buffers every event until `codexEventBeginsVisibleOutput`
 returns true or `response.completed` arrives
-([codex-fetch-adapter.ts:3155](../../src/services/api/codex-fetch-adapter.ts:3155)),
+([codex-fetch-adapter.ts:3249](../../src/services/api/codex-fetch-adapter.ts:3249)),
 then replays the entire buffer synchronously
-([:3179](../../src/services/api/codex-fetch-adapter.ts:3179)).
+([:3271](../../src/services/api/codex-fetch-adapter.ts:3271)).
 `codexEventBeginsVisibleOutput` does not recognize `response.output_text.done`
-([:2804](../../src/services/api/codex-fetch-adapter.ts:2804)). A done-only
+([:2882](../../src/services/api/codex-fetch-adapter.ts:2882)). A done-only
 response is therefore held to completion and released in one tick, making
 `first_raw_event_ms == completed_ms` by construction. The comparison against
 delta-bearing responses, which release the buffer at their first delta and then
@@ -87,7 +94,7 @@ The detector is a detector for **at-risk responses**, not confirmed loss. Known
 limitations, all raised by the review and accepted:
 
 - A `response.output_text.delta` with an empty or non-string `delta` is discarded
-  by the handler at [:2024](../../src/services/api/codex-fetch-adapter.ts:2024)
+  by the handler at [:2091](../../src/services/api/codex-fetch-adapter.ts:2091)
   but still appears in the histogram as a delta, hiding an affected response.
 - Multi-part responses can lose one part while another streams. Two current
   candidates have two `output_text.done` events and one delta event:
@@ -119,7 +126,7 @@ output tokens, two output items, four kinds of reasoning event, one text part wi
 only a 92-character thinking block. **The earlier reading, "approximately 200
 tokens of answer destroyed", is withdrawn.** The adapter copies aggregate
 `usage.output_tokens` at
-[:2288](../../src/services/api/codex-fetch-adapter.ts:2288) with no content-level
+[:2371](../../src/services/api/codex-fetch-adapter.ts:2371) with no content-level
 attribution, so the total cannot be split between hidden reasoning, the rendered
 summary, and terminal text. A large lost answer and a near-empty text part are
 both compatible with what was retained.
@@ -174,9 +181,18 @@ Implemented in `src/services/api/codex-fetch-adapter.ts` on 2026-08-28.
 - `codexEventBeginsVisibleOutput` now recognizes terminal text, so a done-only
   response no longer buffers to `response.completed`. This also retires the
   artifact that produced the withdrawn timing claim above.
-- Both recovery paths log `[codex-fetch] recovered_terminal_text` at warn level
-  with the source, part key, and character count. This is the instrumentation the
-  open questions below depend on.
+- Both recovery paths log `recovered_terminal_text` at warn level with the source,
+  part key, and character count, composed from `RECOVERED_TERMINAL_TEXT_PREFIX`
+  (`src/utils/debug.ts`) which is on the always-log allowlist. It was initially a
+  plain `[codex-fetch]` line, which `shouldLogDebugMessage` suppresses for
+  non-ant users outside debug mode: the log existed but would have been written
+  nowhere in an ordinary session.
+- Part keys prefer `item_id`, the identity all three event kinds carry for the
+  same item, and give absent values sentinels instead of collapsing them to `0`.
+  Aliasing "no index" with "index 0" let one part suppress another part's
+  recovery, which is the same silent loss this path exists to prevent.
+- `outputTextOfPart` narrows on `part.type === 'output_text'`, so a `refusal`
+  part is never emitted as assistant prose.
 
 Token accounting was deliberately left alone: `outputTokens` is a delta-counting
 fallback that `response.completed` overwrites with real `usage.output_tokens`, so
@@ -197,15 +213,73 @@ Typecheck shows one pre-existing TS2322 in this file at the `stop_sequence`
 assignment, in a region no diff hunk touches (HEAD line 2735, now 2789); zero new
 diagnostics.
 
+## How the next occurrence gets recorded
+
+Three sinks, in descending durability. The report originally credited only the
+third, which was also the weakest.
+
+1. **The persisted assistant message.** Recovered text now lands in the
+   transcript as ordinary message content. This is the strongest evidence and it
+   is unconditional.
+2. **The `codex_stream_surface` record** (`recordCodexStreamSurface`,
+   `src/utils/sessionStorage.ts`), written to the transcript unconditionally.
+   Its `raw_event_types` histogram is what produced the 13-record corpus above,
+   so the at-risk signature stays detectable after the fix.
+3. **The `recovered_terminal_text` debug line**, now always-logged, carrying the
+   recovered character count. Useful when a debug log exists for the session.
+
+Together 1 and 2 answer the open question the original report could not: a future
+sweep can find a done-without-delta response and read whether its assistant
+message has text.
+
 Not verified: no occurrence has been observed since the fix, because the trigger
-cannot be reproduced on demand. The recovery log line is what will confirm it in
-the wild.
+cannot be reproduced on demand.
+
+## Review findings and known deviations
+
+Reviewed 2026-08-28 by four lenses (correctness/lifecycle, contracts, spec, and
+an executing effect lens). What it changed, beyond the hardening listed above:
+
+- **The first cut's tests did not cover the primary branch.** Every test supplied
+  both a populated `output_item.done` and an `output_text.done`, so the item-level
+  fallback covered for the `output_text.done` handler: that handler could be
+  deleted outright with all 129 tests green. The first test now carries no
+  `output_item.done` at all, and per-branch mutation runs confirm each recovery
+  path and the priming change now have a test that fails without them.
+- **`codexEventBeginsVisibleOutput` had no coverage either**, and reverting it left
+  every suite green. Two priming tests now assert release-before-`response.completed`
+  against a stalled source.
+- **Behavior change not previously recorded:** recovered text sets
+  `emittedVisibleOutput`, which also gates cap/auth classification of a later
+  `response.failed`. A `usage_limit_reached` failure arriving after terminal-only
+  text now yields `CodexResponseFailedError` (no account rotation, user keeps the
+  recovered text) where it previously yielded `CodexAccountCapError` (rotation and
+  replay). This matches what the delta path has always done and follows the
+  module's rule that a turn is not replayed after visible output, so it is
+  intended, but it was undocumented.
+
+Known deviations, stated rather than dropped silently:
+
+- **`response.content_part.done` is still not handled** (spec item 2 named it as a
+  third recovery source). It costs nothing on all 13 observed records, every one of
+  which also carries `output_text.done`. The residual is a server that sends
+  `content_part.done` bearing text with neither of the other two terminal events.
+- **No websocket continuation regression test** (spec item 6). The mechanism was
+  verified sound by inspection and by the transport and continuation suites running
+  green: `completedOutputItems` is fed from the raw `output_item.done` independent
+  of what the adapter emits, so recovery cannot perturb it, and for the single-part
+  case recovery restores the canonical equality reconciliation wants. Unguarded
+  against future regression. Left open deliberately, not overlooked.
+- **Multi-part messages still force a websocket full send.** The adapter merges all
+  content parts of one message into a single text block while the recorded baseline
+  holds N parts. Pre-existing and identical for delta-fed responses; a cache cost,
+  not a correctness one. The multi-part test now pins the merged shape.
 
 ## Fix scope as originally assessed
 
 Honest sizing, revised upward from an earlier "~30 lines, one file". Both
 transports converge on `processCodexEvents`
-([:1645](../../src/services/api/codex-fetch-adapter.ts:1645)), so no separate
+([:1661](../../src/services/api/codex-fetch-adapter.ts:1661)), so no separate
 subagent or compaction handler is implied, but a complete change needs:
 
 - Recovery keyed by output/content part, not one response-wide "saw a delta"

@@ -17,7 +17,7 @@
 
 import { APIConnectionError } from '@anthropic-ai/sdk'
 import { createHash, randomUUID } from 'crypto'
-import { logForDebugging } from '../../utils/debug.js'
+import { logForDebugging, RECOVERED_TERMINAL_TEXT_PREFIX } from '../../utils/debug.js'
 import { logEvent } from '../analytics/index.js'
 import { getCurrentCodexLease } from './codexAccountLeaseManager.js'
 import { extractConnectionErrorDetails } from './errorUtils.js'
@@ -393,6 +393,17 @@ const CODEX_ACCOUNT_AUTH_ERROR_CODES = new Set([
   'token_revoked',
   'invalid_token',
 ])
+
+/**
+ * Text of a Codex message content part, or undefined when the part carries none.
+ * Narrows on the part type: a `refusal` part is not assistant prose and must not
+ * be emitted as if it were.
+ */
+function outputTextOfPart(part: unknown): string | undefined {
+  if (!isRecord(part)) return undefined
+  if (part.type !== 'output_text') return undefined
+  return typeof part.text === 'string' && part.text.length > 0 ? part.text : undefined
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -1930,13 +1941,26 @@ async function processCodexEvents(
   // whole in terminal events (response.output_text.done, or a populated
   // item.content on response.output_item.done) with no deltas at all, at which
   // point the text was silently discarded: the turn still reported
-  // response.completed, so nothing surfaced the loss. Observed 13 times across
-  // the local corpus; see docs/reports/2026-08-28-codex-adapter-terminal-text-drop.md.
+  // response.completed, so nothing surfaced the loss. See
+  // docs/reports/2026-08-28-codex-adapter-terminal-text-drop.md.
   // Keyed per content part rather than per response because a multi-part message
   // can stream one part and deliver another whole.
+  //
+  // item_id is preferred over output_index because it is the identity the delta,
+  // output_text.done, and output_item.done events all carry for the same item.
+  // Absent values get sentinels rather than collapsing to 0: aliasing "no index"
+  // with "index 0" lets one part suppress another part's recovery, which is the
+  // silent loss this whole path exists to prevent.
   const textPartsEmitted = new Set<string>()
-  const textPartKey = (event: Record<string, unknown>): string =>
-    `${readNumber(event.output_index) ?? 0}:${readNumber(event.content_index) ?? 0}`
+  const textPartKey = (
+    itemRef: string | number | undefined,
+    contentIndex: number | undefined,
+  ): string => `${itemRef ?? 'noitem'}:${contentIndex ?? 'nopart'}`
+  const eventTextPartKey = (event: Record<string, unknown>): string =>
+    textPartKey(
+      readString(event.item_id) ?? readNumber(event.output_index),
+      readNumber(event.content_index),
+    )
 
   // Appends into the open text block when one exists so recovered text merges
   // with streamed text exactly as consecutive deltas would. The block is closed
@@ -2066,7 +2090,7 @@ async function processCodexEvents(
             else if (eventType === 'response.output_text.delta') {
               const text = event.delta as string
               if (typeof text === 'string' && text.length > 0) {
-                textPartsEmitted.add(textPartKey(event))
+                textPartsEmitted.add(eventTextPartKey(event))
                 emitAssistantText(text)
                 outputTokens += 1
               }
@@ -2076,12 +2100,12 @@ async function processCodexEvents(
             // produced no delta; a delta-fed part already emitted its text and
             // re-emitting here would duplicate it.
             else if (eventType === 'response.output_text.done') {
-              const partKey = textPartKey(event)
+              const partKey = eventTextPartKey(event)
               const text = readString(event.text)
               if (!textPartsEmitted.has(partKey) && text) {
                 textPartsEmitted.add(partKey)
                 logForDebugging(
-                  `[codex-fetch] recovered_terminal_text source=output_text.done ` +
+                  `${RECOVERED_TERMINAL_TEXT_PREFIX} source=output_text.done ` +
                   `part=${partKey} chars=${text.length}`,
                   { level: 'warn' },
                 )
@@ -2227,16 +2251,16 @@ async function processCodexEvents(
                 // Last chance to recover text: the completed item carries the
                 // authoritative content, and some responses deliver a populated
                 // message here without ever emitting output_text.done for it.
-                const outputIndex = readNumber(event.output_index) ?? 0
+                const itemRef = readString(item.id) ?? readNumber(event.output_index)
                 const parts = Array.isArray(item.content) ? item.content : []
                 for (const [contentIndex, part] of parts.entries()) {
-                  const partKey = `${outputIndex}:${contentIndex}`
+                  const partKey = textPartKey(itemRef, contentIndex)
                   if (textPartsEmitted.has(partKey)) continue
-                  const text = isRecord(part) ? readString(part.text) : undefined
+                  const text = outputTextOfPart(part)
                   if (!text) continue
                   textPartsEmitted.add(partKey)
                   logForDebugging(
-                    `[codex-fetch] recovered_terminal_text source=output_item.done ` +
+                    `${RECOVERED_TERMINAL_TEXT_PREFIX} source=output_item.done ` +
                     `part=${partKey} chars=${text.length}`,
                     { level: 'warn' },
                   )
@@ -2890,9 +2914,7 @@ function codexEventBeginsVisibleOutput(event: Record<string, unknown>): boolean 
     }
     if (item?.type === 'message') {
       const parts = Array.isArray(item.content) ? item.content : []
-      return parts.some(
-        part => isRecord(part) && typeof part.text === 'string' && part.text.length > 0,
-      )
+      return parts.some(part => outputTextOfPart(part) !== undefined)
     }
     return false
   }

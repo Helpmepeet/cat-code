@@ -1815,26 +1815,77 @@ describe('codex-fetch-adapter', () => {
     }
   }
 
+  // Deliberately carries NO response.output_item.done: with one, the item-level
+  // fallback covers for this branch and the test passes even when the
+  // output_text.done handler is deleted outright.
   test('recovers assistant text delivered only via response.output_text.done', async () => {
     const body = await runTerminalTextFetch('conv_terminal_done', [
-      { type: 'response.output_item.added', output_index: 0, item: { type: 'message' } },
+      {
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: { type: 'message', id: 'msg_terminal_done' },
+      },
       { type: 'response.content_part.added', output_index: 0, content_index: 0 },
       {
         type: 'response.output_text.done',
+        item_id: 'msg_terminal_done',
         output_index: 0,
         content_index: 0,
         text: 'terminal only',
       },
       { type: 'response.content_part.done', output_index: 0, content_index: 0 },
-      {
-        type: 'response.output_item.done',
-        output_index: 0,
-        item: { type: 'message', content: [{ type: 'output_text', text: 'terminal only' }] },
-      },
     ])
 
     expect(body.content).toEqual([{ type: 'text', text: 'terminal only' }])
     expect(body.stop_reason).toBe('end_turn')
+  })
+
+  test('recovers output_text.done even when the completed item reports no parts', async () => {
+    const body = await runTerminalTextFetch('conv_terminal_emptyitem', [
+      {
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: { type: 'message', id: 'msg_empty_item' },
+      },
+      {
+        type: 'response.output_text.done',
+        item_id: 'msg_empty_item',
+        output_index: 0,
+        content_index: 0,
+        text: 'survives empty item',
+      },
+      {
+        type: 'response.output_item.done',
+        output_index: 0,
+        item: { type: 'message', id: 'msg_empty_item', content: [] },
+      },
+    ])
+
+    expect(body.content).toEqual([{ type: 'text', text: 'survives empty item' }])
+  })
+
+  test('ignores a refusal part rather than emitting it as assistant text', async () => {
+    const body = await runTerminalTextFetch('conv_terminal_refusal', [
+      {
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: { type: 'message', id: 'msg_refusal' },
+      },
+      {
+        type: 'response.output_item.done',
+        output_index: 0,
+        item: {
+          type: 'message',
+          id: 'msg_refusal',
+          content: [
+            { type: 'refusal', text: 'I cannot help with that' },
+            { type: 'output_text', text: 'but here is a note' },
+          ],
+        },
+      },
+    ])
+
+    expect(body.content).toEqual([{ type: 'text', text: 'but here is a note' }])
   })
 
   test('recovers assistant text from a completed message item with no text events', async () => {
@@ -1910,6 +1961,83 @@ describe('codex-fetch-adapter', () => {
     ])
 
     expect(body.content).toEqual([{ type: 'text', text: 'streamed part. terminal part.' }])
+  })
+
+  // The priming buffer holds events until it sees visible output. Before
+  // terminal text counted, a done-only response stayed buffered until
+  // response.completed, so it surfaced only when the whole stream finished.
+  const primeReleasesOn = async (
+    label: string,
+    events: Array<Record<string, unknown>>,
+  ): Promise<boolean> => {
+    let release!: () => void
+    const stalled = new Promise<void>(resolve => {
+      release = resolve
+    })
+    const source = {
+      async *[Symbol.asyncIterator]() {
+        for (const event of events) yield event
+        await stalled
+        yield { type: 'response.completed', response: { id: `resp_${label}` } }
+      },
+    }
+    const primed = _primeCodexEventsForTest(source, undefined, 'http')
+    const outcome = await Promise.race([
+      primed.then(() => 'released' as const),
+      new Promise<'stalled'>(resolve => setTimeout(() => resolve('stalled'), 150)),
+    ])
+    release()
+    await primed.catch(() => undefined)
+    return outcome === 'released'
+  }
+
+  test('priming releases on terminal text instead of waiting for response.completed', async () => {
+    expect(
+      await primeReleasesOn('done', [
+        { type: 'response.output_item.added', output_index: 0, item: { type: 'message' } },
+        {
+          type: 'response.output_text.done',
+          output_index: 0,
+          content_index: 0,
+          text: 'terminal',
+        },
+      ]),
+    ).toBe(true)
+
+    expect(
+      await primeReleasesOn('item', [
+        {
+          type: 'response.output_item.done',
+          output_index: 0,
+          item: { type: 'message', content: [{ type: 'output_text', text: 'terminal' }] },
+        },
+      ]),
+    ).toBe(true)
+  })
+
+  test('priming does not release on a completed message item carrying no text', async () => {
+    expect(
+      await primeReleasesOn('emptyitem', [
+        {
+          type: 'response.output_item.done',
+          output_index: 0,
+          item: { type: 'message', content: [] },
+        },
+      ]),
+    ).toBe(false)
+
+    expect(
+      await primeReleasesOn('refusalonly', [
+        {
+          type: 'response.output_item.done',
+          output_index: 0,
+          item: {
+            type: 'message',
+            content: [{ type: 'refusal', text: 'no' }],
+          },
+        },
+      ]),
+    ).toBe(false)
   })
 
   test('createCodexFetch fails visibly for empty non-streaming HTTP responses', async () => {

@@ -115,7 +115,21 @@ export const getDebugFilter = memoize((): DebugFilter | null => {
  */
 export const TURN_LOCK_STALL_PREFIX = '[codex-ws] turn_lock_stall'
 
-const ALWAYS_LOG_PREFIXES = ['[codex-cache]', TURN_LOCK_STALL_PREFIX]
+/**
+ * Exported for the same reason as TURN_LOCK_STALL_PREFIX: the producer composes
+ * its message from this literal so a reformat cannot silently re-gate it.
+ * Un-gated because it records assistant text that would otherwise have been
+ * dropped, and a record only ants and debug-mode runs can see cannot answer
+ * whether the drop is still happening.
+ * See docs/reports/2026-08-28-codex-adapter-terminal-text-drop.md.
+ */
+export const RECOVERED_TERMINAL_TEXT_PREFIX = '[codex-fetch] recovered_terminal_text'
+
+const ALWAYS_LOG_PREFIXES = [
+  '[codex-cache]',
+  TURN_LOCK_STALL_PREFIX,
+  RECOVERED_TERMINAL_TEXT_PREFIX,
+]
 
 function shouldLogDebugMessage(message: string): boolean {
   if (process.env.NODE_ENV === 'test' && !isDebugToStdErr()) {
