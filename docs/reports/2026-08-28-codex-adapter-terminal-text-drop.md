@@ -1,6 +1,7 @@
 # Codex adapter discards assistant text delivered without deltas
 
-Status: loss path CONFIRMED in source. Trigger UNKNOWN. Impact partially unsettled.
+Status: loss path CONFIRMED and FIXED 2026-08-28. Trigger still UNKNOWN. Impact
+partially unsettled, and now instrumented so the next occurrence is evidence.
 Investigated 2026-08-27, corrected 2026-08-28 after an adversarial review by
 gpt-5.6-sol that refuted three of the original claims.
 
@@ -154,7 +155,53 @@ generous.** The literal string was present in the merged user item. Correct
 attribution is two separable failures: the harness erased the turn boundary, and
 the model then denied text that was plainly in its input.
 
-## Fix scope
+## What landed
+
+Implemented in `src/services/api/codex-fetch-adapter.ts` on 2026-08-28.
+
+- `textPartsEmitted`, a per-content-part key (`output_index:content_index`)
+  recording which parts have produced text. Per part, not per response, so a
+  multi-part message can stream one part and recover another.
+- `emitAssistantText`, one helper shared by the delta path and both recovery
+  paths, so recovered text merges into an open text block exactly as a
+  consecutive delta would and block ordering against reasoning is unchanged.
+  The delta handler was rewritten to call it, leaving a single emit path.
+- A `response.output_text.done` handler that recovers the part's text when that
+  part produced no delta.
+- A fallback in the `output_item.done` message branch that walks `item.content`
+  and recovers any part still unemitted, covering responses that carry a
+  populated message item with no `output_text.done` at all.
+- `codexEventBeginsVisibleOutput` now recognizes terminal text, so a done-only
+  response no longer buffers to `response.completed`. This also retires the
+  artifact that produced the withdrawn timing claim above.
+- Both recovery paths log `[codex-fetch] recovered_terminal_text` at warn level
+  with the source, part key, and character count. This is the instrumentation the
+  open questions below depend on.
+
+Token accounting was deliberately left alone: `outputTokens` is a delta-counting
+fallback that `response.completed` overwrites with real `usage.output_tokens`, so
+recovery must not add estimates to it.
+
+Tests added to `codex-fetch-adapter.test.ts`: terminal-only via
+`output_text.done`, terminal-only via `output_item.done`, no duplication when
+deltas already delivered the part, and a multi-part case where one part streams
+and one does not. Three of the four fail with recovery disabled; the
+no-duplication test is a guard and passes either way, by design.
+
+Verification: `codex-fetch-adapter` 83 pass, plus `codex-websocket-transport` and
+`codex-continuation-e2e` green (129 across the three suites). `bun test
+src/services/api/` is 424 pass / 1 fail, and that failure is
+`accountRecoveryDiagnostics.test.ts`, which passes 17/17 file-isolated as the
+account suites are documented to require. `bun run build:dev:full` green.
+Typecheck shows one pre-existing TS2322 in this file at the `stop_sequence`
+assignment, in a region no diff hunk touches (HEAD line 2735, now 2789); zero new
+diagnostics.
+
+Not verified: no occurrence has been observed since the fix, because the trigger
+cannot be reproduced on demand. The recovery log line is what will confirm it in
+the wild.
+
+## Fix scope as originally assessed
 
 Honest sizing, revised upward from an earlier "~30 lines, one file". Both
 transports converge on `processCodexEvents`

@@ -1925,6 +1925,49 @@ async function processCodexEvents(
     }
   }
 
+  // Assistant text used to reach the transcript only through
+  // response.output_text.delta. The server may instead deliver a message's text
+  // whole in terminal events (response.output_text.done, or a populated
+  // item.content on response.output_item.done) with no deltas at all, at which
+  // point the text was silently discarded: the turn still reported
+  // response.completed, so nothing surfaced the loss. Observed 13 times across
+  // the local corpus; see docs/reports/2026-08-28-codex-adapter-terminal-text-drop.md.
+  // Keyed per content part rather than per response because a multi-part message
+  // can stream one part and deliver another whole.
+  const textPartsEmitted = new Set<string>()
+  const textPartKey = (event: Record<string, unknown>): string =>
+    `${readNumber(event.output_index) ?? 0}:${readNumber(event.content_index) ?? 0}`
+
+  // Appends into the open text block when one exists so recovered text merges
+  // with streamed text exactly as consecutive deltas would. The block is closed
+  // by the same paths that close a delta-fed one.
+  const emitAssistantText = (text: string) => {
+    closeAllOpenReasoningBlocks()
+    if (!currentTextBlockStarted) {
+      noteVisibleOutput()
+      controller.enqueue(
+        encoder.encode(
+          formatSSE('content_block_start', JSON.stringify({
+            type: 'content_block_start',
+            index: contentBlockIndex,
+            content_block: { type: 'text', text: '' },
+          })),
+        ),
+      )
+      currentTextBlockStarted = true
+    }
+    noteVisibleOutput()
+    controller.enqueue(
+      encoder.encode(
+        formatSSE('content_block_delta', JSON.stringify({
+          type: 'content_block_delta',
+          index: contentBlockIndex,
+          delta: { type: 'text_delta', text },
+        })),
+      ),
+    )
+  }
+
   stream_loop: while (true) {
     try {
       for await (const event of currentEvents) {
@@ -2023,33 +2066,26 @@ async function processCodexEvents(
             else if (eventType === 'response.output_text.delta') {
               const text = event.delta as string
               if (typeof text === 'string' && text.length > 0) {
-                // Close any open reasoning blocks before opening a text block.
-                closeAllOpenReasoningBlocks()
-                if (!currentTextBlockStarted) {
-                  // Start a new text content block
-                  noteVisibleOutput()
-                  controller.enqueue(
-                    encoder.encode(
-                      formatSSE('content_block_start', JSON.stringify({
-                        type: 'content_block_start',
-                        index: contentBlockIndex,
-                        content_block: { type: 'text', text: '' },
-                      })),
-                    ),
-                  )
-                  currentTextBlockStarted = true
-                }
-                noteVisibleOutput()
-                controller.enqueue(
-                  encoder.encode(
-                    formatSSE('content_block_delta', JSON.stringify({
-                      type: 'content_block_delta',
-                      index: contentBlockIndex,
-                      delta: { type: 'text_delta', text },
-                    })),
-                  ),
-                )
+                textPartsEmitted.add(textPartKey(event))
+                emitAssistantText(text)
                 outputTokens += 1
+              }
+            }
+
+            // Terminal text for one content part. Only recovers when that part
+            // produced no delta; a delta-fed part already emitted its text and
+            // re-emitting here would duplicate it.
+            else if (eventType === 'response.output_text.done') {
+              const partKey = textPartKey(event)
+              const text = readString(event.text)
+              if (!textPartsEmitted.has(partKey) && text) {
+                textPartsEmitted.add(partKey)
+                logForDebugging(
+                  `[codex-fetch] recovered_terminal_text source=output_text.done ` +
+                  `part=${partKey} chars=${text.length}`,
+                  { level: 'warn' },
+                )
+                emitAssistantText(text)
               }
             }
 
@@ -2188,6 +2224,24 @@ async function processCodexEvents(
                   item,
                 )
               } else if (item?.type === 'message') {
+                // Last chance to recover text: the completed item carries the
+                // authoritative content, and some responses deliver a populated
+                // message here without ever emitting output_text.done for it.
+                const outputIndex = readNumber(event.output_index) ?? 0
+                const parts = Array.isArray(item.content) ? item.content : []
+                for (const [contentIndex, part] of parts.entries()) {
+                  const partKey = `${outputIndex}:${contentIndex}`
+                  if (textPartsEmitted.has(partKey)) continue
+                  const text = isRecord(part) ? readString(part.text) : undefined
+                  if (!text) continue
+                  textPartsEmitted.add(partKey)
+                  logForDebugging(
+                    `[codex-fetch] recovered_terminal_text source=output_item.done ` +
+                    `part=${partKey} chars=${text.length}`,
+                    { level: 'warn' },
+                  )
+                  emitAssistantText(text)
+                }
                 if (currentTextBlockStarted) {
                   noteVisibleOutput()
                   controller.enqueue(
@@ -2822,9 +2876,25 @@ function codexEventBeginsVisibleOutput(event: Record<string, unknown>): boolean 
     return item?.type === 'function_call' || item?.type === 'custom_tool_call'
   }
 
+  // Terminal text counts as visible output now that it is recovered. Without
+  // this a delta-less response stays buffered until response.completed, which
+  // both delays it and collapses its timing diagnostics into a single tick.
+  if (eventType === 'response.output_text.done') {
+    return typeof event.text === 'string' && event.text.length > 0
+  }
+
   if (eventType === 'response.output_item.done') {
     const item = isRecord(event.item) ? event.item : undefined
-    return item?.type === 'web_search_call' || item?.type === 'reasoning'
+    if (item?.type === 'web_search_call' || item?.type === 'reasoning') {
+      return true
+    }
+    if (item?.type === 'message') {
+      const parts = Array.isArray(item.content) ? item.content : []
+      return parts.some(
+        part => isRecord(part) && typeof part.text === 'string' && part.text.length > 0,
+      )
+    }
+    return false
   }
 
   return false

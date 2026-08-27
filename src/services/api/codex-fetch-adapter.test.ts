@@ -1762,6 +1762,156 @@ describe('codex-fetch-adapter', () => {
     }
   })
 
+  // The adapter used to surface assistant text only from
+  // response.output_text.delta. A response whose message text arrives whole in
+  // terminal events was silently discarded while still reporting
+  // response.completed. See
+  // docs/reports/2026-08-28-codex-adapter-terminal-text-drop.md.
+  const terminalTextResponse = (events: Array<Record<string, unknown>>, id: string) =>
+    new Response(
+      [
+        ...events.flatMap(event => [
+          `event: ${event.type as string}`,
+          `data: ${JSON.stringify(event)}`,
+          '',
+        ]),
+        'event: response.completed',
+        `data: ${JSON.stringify({
+          type: 'response.completed',
+          response: { id, usage: { input_tokens: 8, output_tokens: 4 } },
+        })}`,
+        '',
+      ].join('\n'),
+      { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+    )
+
+  const runTerminalTextFetch = async (
+    conversationId: string,
+    events: Array<Record<string, unknown>>,
+  ) => {
+    const accessToken = createAccessToken(`acct_${conversationId}`)
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      terminalTextResponse(events, `resp_${conversationId}`)) as unknown as typeof globalThis.fetch
+    try {
+      _markStickyHttpFallbackForTest(conversationId, 'test')
+      const response = await createCodexFetch(accessToken, conversationId)(
+        'https://api.anthropic.com/v1/messages',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            model: 'claude-sonnet-4-6',
+            _openaiInstructionAssembly: {
+              instructions: 'Be precise.',
+              inputMessages: [{ role: 'user', content: 'say hello' }],
+            },
+          }),
+        },
+      )
+      return await response.json()
+    } finally {
+      globalThis.fetch = originalFetch
+      resetCodexCacheContext()
+    }
+  }
+
+  test('recovers assistant text delivered only via response.output_text.done', async () => {
+    const body = await runTerminalTextFetch('conv_terminal_done', [
+      { type: 'response.output_item.added', output_index: 0, item: { type: 'message' } },
+      { type: 'response.content_part.added', output_index: 0, content_index: 0 },
+      {
+        type: 'response.output_text.done',
+        output_index: 0,
+        content_index: 0,
+        text: 'terminal only',
+      },
+      { type: 'response.content_part.done', output_index: 0, content_index: 0 },
+      {
+        type: 'response.output_item.done',
+        output_index: 0,
+        item: { type: 'message', content: [{ type: 'output_text', text: 'terminal only' }] },
+      },
+    ])
+
+    expect(body.content).toEqual([{ type: 'text', text: 'terminal only' }])
+    expect(body.stop_reason).toBe('end_turn')
+  })
+
+  test('recovers assistant text from a completed message item with no text events', async () => {
+    const body = await runTerminalTextFetch('conv_terminal_item', [
+      { type: 'response.output_item.added', output_index: 0, item: { type: 'message' } },
+      {
+        type: 'response.output_item.done',
+        output_index: 0,
+        item: { type: 'message', content: [{ type: 'output_text', text: 'item only' }] },
+      },
+    ])
+
+    expect(body.content).toEqual([{ type: 'text', text: 'item only' }])
+  })
+
+  test('does not duplicate text when deltas already delivered the part', async () => {
+    const body = await runTerminalTextFetch('conv_terminal_nodup', [
+      { type: 'response.output_item.added', output_index: 0, item: { type: 'message' } },
+      {
+        type: 'response.output_text.delta',
+        output_index: 0,
+        content_index: 0,
+        delta: 'streamed',
+      },
+      {
+        type: 'response.output_text.done',
+        output_index: 0,
+        content_index: 0,
+        text: 'streamed',
+      },
+      {
+        type: 'response.output_item.done',
+        output_index: 0,
+        item: { type: 'message', content: [{ type: 'output_text', text: 'streamed' }] },
+      },
+    ])
+
+    expect(body.content).toEqual([{ type: 'text', text: 'streamed' }])
+  })
+
+  test('recovers only the multi-part content part that produced no deltas', async () => {
+    const body = await runTerminalTextFetch('conv_terminal_multipart', [
+      { type: 'response.output_item.added', output_index: 0, item: { type: 'message' } },
+      {
+        type: 'response.output_text.delta',
+        output_index: 0,
+        content_index: 0,
+        delta: 'streamed part. ',
+      },
+      {
+        type: 'response.output_text.done',
+        output_index: 0,
+        content_index: 0,
+        text: 'streamed part. ',
+      },
+      {
+        type: 'response.output_text.done',
+        output_index: 0,
+        content_index: 1,
+        text: 'terminal part.',
+      },
+      {
+        type: 'response.output_item.done',
+        output_index: 0,
+        item: {
+          type: 'message',
+          content: [
+            { type: 'output_text', text: 'streamed part. ' },
+            { type: 'output_text', text: 'terminal part.' },
+          ],
+        },
+      },
+    ])
+
+    expect(body.content).toEqual([{ type: 'text', text: 'streamed part. terminal part.' }])
+  })
+
   test('createCodexFetch fails visibly for empty non-streaming HTTP responses', async () => {
     const accessToken = createAccessToken('acct_test_nonstream_empty')
     const originalFetch = globalThis.fetch
