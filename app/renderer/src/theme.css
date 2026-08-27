@@ -162,10 +162,17 @@
  * covers the window whatever the app above it is doing, and it sits above
  * anything React can render.
  *
- * The alpha is the one taste value here. Tune it by eye.
+ * KEEP THE ALPHA LOW. macOS's dark material is already dark, so this ground is
+ * not painting onto the wallpaper, it is painting onto the blur. At 0.62 the
+ * material is crushed to within a few levels of the solid app and the effect is
+ * invisible: the first two operator launches read as "vibrancy is not working"
+ * when the window was correct all along and only this number was wrong
+ * (measured side by side against a transparent cell, 2026-08-27). 0 is pure
+ * material and the most glass available; above roughly 0.35 there is nothing
+ * left to see.
  */
 html[data-glass='on'] {
-  background: rgba(9, 9, 11, 0.62);
+  background: rgba(9, 9, 11, 0.2);
 }
 
 /*
