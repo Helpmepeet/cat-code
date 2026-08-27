@@ -569,7 +569,6 @@ describe('This app scope', () => {
     expect(pane).toContain(REASONING_LAYOUT_LABELS.trail)
     expect(pane).toContain(REASONING_LAYOUT_LABELS.blocks)
     expect(pane).toContain('value="blocks"')
-    expect(decode(pane)).toContain('not in your settings files')
     // No engine destination is claimed for a preference with no settings layer.
     expect(pane).not.toContain('Edits here write to')
   })
@@ -601,9 +600,8 @@ describe('This app scope', () => {
       expect(pane).toContain(`value="${theme}"`)
       expect(decode(pane)).toContain(CODE_THEME_LABELS[theme])
     }
-    // Selected, not merely offered — and app-local, like its neighbour.
+    // Selected, not merely offered.
     expect(pane).toContain('value="nord"')
-    expect(decode(pane)).toContain('not in your settings files')
     // Off the default, so the prototype's reset affordance is reachable.
     expect(pane).toContain('Reset to default')
   })
@@ -683,14 +681,29 @@ describe('This app scope', () => {
         /aria-label="Blue"[^>]*aria-checked="true"/.test(pane),
     ).toBe(true)
     expect((pane.match(/aria-checked="true"/g) ?? []).length).toBe(1)
-    // App-local, proven by what is NOT claimed rather than by boilerplate: the
-    // Appearance rows dropped the "stored in this app" sentence (operator,
-    // 2026-08-27, it reads as noise inside Settings itself). Asserted on this
-    // row's own sentence, because the Transcript rows below still carry it and
-    // a pane-wide check would pass for the wrong reason.
+    // App-local, proven by what is NOT claimed rather than by boilerplate.
     expect(decode(pane)).toContain('Used for active states, the live indicator, and toggles.')
-    expect(decode(pane)).not.toContain('toggles. Stored in this app')
     expect(pane).not.toContain('Edits here write to')
+  })
+
+  /**
+   * Every row in this scope is a renderer preference, and none of them says so
+   * any more: "Stored in this app, not in your settings files." read as noise
+   * inside Settings itself (operator, 2026-08-27). The app-local claim is
+   * carried by the absence of a source badge and of an engine destination, which
+   * the per-row tests assert. This is the sweep that keeps the sentence from
+   * creeping back one row at a time.
+   */
+  test('no row claims where its preference is stored', () => {
+    const pane = decode(
+      paneMarkup(renderToStaticMarkup(<SettingsShell initialScope="app" snapshot={SNAPSHOT} />)),
+    )
+    expect(pane).not.toContain('Stored in this app')
+    expect(pane).not.toContain('not in your settings files')
+    // The rows are still there; the sweep must fail loudly, not vacuously.
+    expect(pane).toContain('Frosted window')
+    expect(pane).toContain('Code theme')
+    expect(pane).toContain('Reasoning layout')
   })
 
   test('the frosted-window row reflects the live preference and can be reset', () => {
@@ -702,10 +715,7 @@ describe('This app scope', () => {
       ),
     )
     expect(decode(pane)).toContain('Frosted window')
-    // App-local, and silent about it: no engine destination is claimed, and no
-    // "stored in this app" boilerplate. Scoped to this row's own sentence: the
-    // Transcript rows below still carry that phrase.
-    expect(decode(pane)).not.toContain('macOS only. Stored in this app')
+    // App-local, and silent about it: no engine destination is claimed.
     expect(pane).not.toContain('Edits here write to')
     // The platform limit is disclosed rather than left for the user to discover.
     expect(decode(pane)).toContain('macOS only')

@@ -846,7 +846,7 @@ function AppearanceSection() {
 }
 
 const CODE_THEME_DESC =
-  'Color theme for fenced code blocks in the transcript. Stored in this app, not in your settings files.'
+  'Color theme for fenced code blocks in the transcript.'
 
 /**
  * The APP-LOCAL editors: how each tool call is drawn (`toolCardStyle.ts`),
@@ -885,7 +885,7 @@ function TranscriptDisplaySection({
       <ToolCardStylePreview />
       <ProseArrivalPreview />
       <Field
-        desc="How a reply appears as it arrives. Every option shows text the moment it is delivered. Stored in this app, not in your settings files."
+        desc="How a reply appears as it arrives. Every option shows text the moment it is delivered."
         label="Text arrival"
         modified={arrival !== DEFAULT_PROSE_ARRIVAL}
         onReset={() => setArrival(DEFAULT_PROSE_ARRIVAL)}
@@ -901,7 +901,7 @@ function TranscriptDisplaySection({
         />
       </Field>
       <Field
-        desc="How each tool call is drawn in the transcript. Stored in this app, not in your settings files."
+        desc="How each tool call is drawn in the transcript."
         label="Tool calls"
         modified={toolCardStyle !== DEFAULT_TOOL_CARD_STYLE}
         onReset={() => setToolCardStyle(DEFAULT_TOOL_CARD_STYLE)}
@@ -917,7 +917,7 @@ function TranscriptDisplaySection({
         />
       </Field>
       <Field
-        desc="Open every tool card as it arrives, instead of showing a preview you click to expand. Stored in this app, not in your settings files."
+        desc="Open every tool card as it arrives, instead of showing a preview you click to expand."
         label="Tools open by default"
         modified={toolsExpanded !== DEFAULT_TOOLS_EXPANDED}
         onReset={() => setToolsExpanded(DEFAULT_TOOLS_EXPANDED)}
@@ -929,7 +929,7 @@ function TranscriptDisplaySection({
         />
       </Field>
       <Field
-        desc="How reasoning summaries are laid out. Stored in this app, not in your settings files."
+        desc="How reasoning summaries are laid out."
         label="Reasoning layout"
       >
         <SelectControl
