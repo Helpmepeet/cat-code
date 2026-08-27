@@ -46,13 +46,24 @@ export const ACCENT_LABELS: Readonly<Record<AccentKey, string>> = {
  * `theme.css` because Tailwind scans source text: a class assembled at runtime
  * is never generated, and the swatch renders colourless with nothing to see in a
  * headless test.
+ *
+ * Each is a `light-dark()` PAIR carrying that accent's value in both
+ * appearances, and the second half of each pair is the literal this shipped with.
+ * Before that, the picker painted the dark hex in both, so a swatch in the light
+ * appearance advertised a colour the app never used anywhere — furthest apart for
+ * pink, whose light value is a different hue family entirely (`theme.css`).
+ * A pair is still one static string, so Tailwind scans it exactly as before.
+ *
+ * These duplicate `theme.css` rather than reading `--accent`, and must: the
+ * swatch has to show what each choice WOULD paint while a different one is
+ * active, so it cannot resolve through the token that is currently live.
  */
 export const ACCENT_SWATCH_CLASS: Readonly<Record<AccentKey, string>> = {
-  pink: 'bg-[#f472b6]',
-  blue: 'bg-[#60a5fa]',
-  green: 'bg-[#4ade80]',
-  purple: 'bg-[#c084fc]',
-  amber: 'bg-[#fbbf24]',
+  pink: 'bg-[light-dark(#bb3e84,#f472b6)]',
+  blue: 'bg-[light-dark(#2563eb,#60a5fa)]',
+  green: 'bg-[light-dark(#15803d,#4ade80)]',
+  purple: 'bg-[light-dark(#7c3aed,#c084fc)]',
+  amber: 'bg-[light-dark(#b45309,#fbbf24)]',
 }
 
 /** The accent the app has always shipped (`theme.css` `--accent: #f472b6`), and

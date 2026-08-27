@@ -426,13 +426,45 @@ html[data-appearance='light'] {
   --source-project: #2563eb;
   --source-local: #7c3aed;
 
-  /* The default accent. The other four need their own rules below, because
+  /*
+   * The default accent. The other four need their own rules below, because
    * `AccentThemeProvider` declares them on a wrapper INSIDE `html` and a
    * descendant's own declaration wins over an inherited one; pink alone has no
-   * `[data-accent]` rule, so it inherits this. */
-  --accent: #d21e6b;
-  --accent-soft: #be185d;
-  --accent-rgb: 210 30 107;
+   * `[data-accent]` rule, so it inherits this.
+   *
+   * PINK IS DERIVED DIFFERENTLY FROM THE OTHER FOUR, and it has to be. The rule
+   * everywhere else in this file is "match the step's contrast against its own
+   * ground"; applied to pink it produced #d21e6b, which passes every contrast
+   * check (4.95:1 on the ground, 5.07:1 under white ink) and still looked wrong.
+   *
+   * What it actually did was cross hues. In OKLCH the dark pink sits at 349.8
+   * and #d21e6b landed at 2.7 — over the far side of red — which closed the gap
+   * to `--tone-danger` from 32.5 degrees in dark to 24.6 in light. The colour
+   * most of the app is painted with had drifted toward the colour that means
+   * destructive. Purple rotates as far and amber three times as far without
+   * anyone noticing, because they rotate into empty space; pink rotates into
+   * something already in the palette. That is the whole defect, and no contrast
+   * assertion can see it.
+   *
+   * So this value keeps the dark pink's hue AND its chroma and moves only
+   * lightness: it is literally #f472b6 darkened until it clears the ground.
+   * Separation from danger comes back to 37.7 degrees, wider than dark's.
+   *
+   * NOT a chroma problem, though an outside reading proposed it as one and
+   * arrived at nearly this same hex. Pink's chroma rise from dark to light was
+   * the SMALLEST of the three that rise (+0.039 against blue's +0.072 and
+   * purple's +0.070) and its absolute chroma sits below purple's. Correcting the
+   * hue is what lowers the achievable chroma at this lightness; the chroma was
+   * never the cause.
+   *
+   * Chosen from four candidates rendered in the token's real roles, with a
+   * danger button beside the accent button in each, since a swatch grid cannot
+   * show a hue collision (operator, 2026-08-27). The three hue-corrected options
+   * were indistinguishable to the eye, so the most defensible one was taken.
+   */
+  --accent: #bb3e84;
+  --accent-soft: #ad3078;
+  --accent-rgb: 187 62 132;
 }
 
 /* `--accent-soft` is "one step further into the accent" — brighter on a dark

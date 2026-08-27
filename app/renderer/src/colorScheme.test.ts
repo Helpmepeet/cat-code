@@ -334,3 +334,131 @@ test('every syntax colour is legible on the ground it is used against', () => {
     .map(([whole]) => whole)
   expect(illegible).toEqual([])
 })
+
+/**
+ * The accents, which nothing guarded until the light pink shipped wrong.
+ *
+ * CONTRAST ALONE WOULD NOT HAVE CAUGHT IT. The bad value measured 4.95:1 on the
+ * ground and 5.07:1 under white ink, i.e. it passed every floor this file
+ * otherwise asserts, and still read as the wrong colour. What it did was cross
+ * hues: in OKLCH the light pink landed at 2.7 degrees, over the far side of red,
+ * closing the gap to `--tone-danger` from 32.5 degrees in dark to 24.6 in light.
+ * The colour most of the app is painted with had drifted toward the colour that
+ * means destructive.
+ *
+ * So this asserts both: every accent clears the bar in both of its roles, AND no
+ * accent sits close enough to the danger tone to be read as it. The 30 degree
+ * floor is below dark's own 32.5, so it constrains the light values without
+ * pinning either palette to today's hexes.
+ *
+ * OKLCH rather than sRGB hue because that is the space the drift was measured in
+ * and the space Tailwind mixes in; sRGB hue angles are not perceptually spaced
+ * and would put a different, wrong number on the same colours.
+ */
+test('every accent clears its contrast bar and none collides with the danger tone', () => {
+  const srgbToLinear = (channel: number) => {
+    const c = channel / 255
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+  }
+  const parse = (hex: string) =>
+    [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)) as [number, number, number]
+  const luminance = (hex: string) => {
+    const [r, g, b] = parse(hex).map(srgbToLinear)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+  }
+  const contrast = (a: string, b: string) => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x)
+    return (hi + 0.05) / (lo + 0.05)
+  }
+  const oklchHue = (hex: string) => {
+    const [r, g, b] = parse(hex).map(srgbToLinear)
+    const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b)
+    const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b)
+    const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b)
+    const A = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s
+    const B = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s
+    return ((Math.atan2(B, A) * 180) / Math.PI + 360) % 360
+  }
+  const apart = (a: string, b: string) => {
+    const d = Math.abs(oklchHue(a) - oklchHue(b)) % 360
+    return Math.min(d, 360 - d)
+  }
+
+  const css = themeCss()
+  const light = /html\[data-appearance='light'\] \{(.*?)\n\}/s.exec(css)?.[1] ?? ''
+  const readLight = (token: string, block = light) =>
+    new RegExp(`--${token}:\\s*(#[0-9a-fA-F]{6})`).exec(block)?.[1] ?? null
+
+  const LIGHT_GROUND = '#fcfcfd'
+  const WHITE_INK = '#ffffff'
+  /*
+   * 30 degrees, which sits just under dark's own pink-to-danger 32.5, so the
+   * floor constrains the light values without pinning either palette to today's
+   * hexes.
+   *
+   * AMBER IS EXEMPT AT ITS MEASURED VALUE, recorded rather than waived. It has
+   * pink's structural problem and the opposite resolution: amber is also a
+   * tint-named colour, so darkening it at constant hue gives an olive (#9a6900),
+   * and the palette instead rotates it toward orange-brown. That is the better
+   * of two bad options for the colour's identity, and it costs separation from
+   * danger, which fell from 62.2 degrees in dark to 21.7 in light. Nobody has
+   * complained about amber and it is not the default accent, so it was left
+   * alone; it is the next candidate if the light palette is revisited. Pinning
+   * the number here means it cannot quietly get worse.
+   */
+  const DANGER_FLOOR: Record<string, number> = {
+    pink: 30,
+    blue: 30,
+    green: 30,
+    purple: 30,
+    amber: 21,
+  }
+  const danger = readLight('tone-danger')
+  expect(danger).not.toBeNull()
+
+  // The default accent lives in the light block; the other four have their own.
+  const accents: Array<[string, string, string]> = [['pink', ...([readLight('accent'), readLight('accent-soft')] as [string, string])]]
+  for (const key of ['blue', 'green', 'purple', 'amber']) {
+    const rule = new RegExp(
+      `html\\[data-appearance='light'\\] \\[data-accent='${key}'\\] \\{(.*?)\\n\\}`,
+      's',
+    ).exec(css)?.[1]
+    expect(rule).toBeDefined()
+    accents.push([key, readLight('accent', rule ?? '')!, readLight('accent-soft', rule ?? '')!])
+  }
+  expect(accents).toHaveLength(5)
+
+  const failures: string[] = []
+  for (const [name, base, soft] of accents) {
+    expect(base).toMatch(/^#[0-9a-f]{6}$/)
+    expect(soft).toMatch(/^#[0-9a-f]{6}$/)
+    // Both roles: emphasis text on the page ground, and white ink on the fill.
+    if (contrast(base, LIGHT_GROUND) < 4.5) failures.push(`${name} base on ground`)
+    if (contrast(WHITE_INK, base) < 4.5) failures.push(`${name} base under white ink`)
+    if (contrast(soft, LIGHT_GROUND) < 4.5) failures.push(`${name} soft on ground`)
+    if (contrast(WHITE_INK, soft) < 4.5) failures.push(`${name} soft under white ink`)
+    // The hue collision, which contrast is blind to.
+    if (apart(base, danger!) < DANGER_FLOOR[name]) {
+      failures.push(
+        `${name} base is ${apart(base, danger!).toFixed(1)}deg from danger, floor ${DANGER_FLOOR[name]}`,
+      )
+    }
+  }
+  expect(failures).toEqual([])
+
+  // And the accent-rgb channels must be the base, or the ~10 glow and ring
+  // sites that read `rgb(var(--accent-rgb) / a)` silently paint a stale colour.
+  for (const [name, base] of accents) {
+    const block =
+      name === 'pink'
+        ? light
+        : new RegExp(
+            `html\\[data-appearance='light'\\] \\[data-accent='${name}'\\] \\{(.*?)\\n\\}`,
+            's',
+          ).exec(css)?.[1] ?? ''
+    const rgb = /--accent-rgb:\s*([0-9]+) ([0-9]+) ([0-9]+)/.exec(block)
+    expect(rgb).not.toBeNull()
+    const channels = [rgb![1], rgb![2], rgb![3]].map(Number)
+    expect({ name, channels }).toEqual({ name, channels: parse(base) })
+  }
+})

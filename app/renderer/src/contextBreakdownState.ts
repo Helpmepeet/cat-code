@@ -111,7 +111,7 @@ export type ContextBreakdownRow = {
 const CATEGORY_SWATCH: Record<string, string> = {
   promptBorder: 'bg-[light-dark(#52525b,#a1a1aa)]', // System prompt
   inactive: 'bg-[light-dark(#2563eb,#60a5fa)]', // System tools (the prototype's "Tool definitions")
-  purple_FOR_SUBAGENTS_ONLY: 'bg-[light-dark(#be185d,#f472b6)]', // Messages
+  purple_FOR_SUBAGENTS_ONLY: 'bg-[light-dark(#bb3e84,#f472b6)]', // Messages
   claude: 'bg-[light-dark(#7c3aed,#c084fc)]', // Memory files
   cyan_FOR_SUBAGENTS_ONLY: 'bg-[light-dark(#0e7490,#22d3ee)]', // MCP tools
   permission: 'bg-[light-dark(#0f766e,#5eead4)]', // Custom agents
@@ -131,7 +131,7 @@ const CATEGORY_SWATCH: Record<string, string> = {
 const CATEGORY_COLOR_HEX: Record<string, string> = {
   promptBorder: 'light-dark(#52525b, #a1a1aa)',
   inactive: 'light-dark(#2563eb, #60a5fa)',
-  purple_FOR_SUBAGENTS_ONLY: 'light-dark(#be185d, #f472b6)',
+  purple_FOR_SUBAGENTS_ONLY: 'light-dark(#bb3e84, #f472b6)',
   claude: 'light-dark(#7c3aed, #c084fc)',
   cyan_FOR_SUBAGENTS_ONLY: 'light-dark(#0e7490, #22d3ee)',
   permission: 'light-dark(#0f766e, #5eead4)',
@@ -145,7 +145,7 @@ const CATEGORY_COLOR_HEX: Record<string, string> = {
 const CATEGORY_TEXT: Record<string, string> = {
   promptBorder: 'text-[light-dark(#52525b,#a1a1aa)]',
   inactive: 'text-[light-dark(#2563eb,#60a5fa)]',
-  purple_FOR_SUBAGENTS_ONLY: 'text-[light-dark(#be185d,#f472b6)]',
+  purple_FOR_SUBAGENTS_ONLY: 'text-[light-dark(#bb3e84,#f472b6)]',
   claude: 'text-[light-dark(#7c3aed,#c084fc)]',
   cyan_FOR_SUBAGENTS_ONLY: 'text-[light-dark(#0e7490,#22d3ee)]',
   permission: 'text-[light-dark(#0f766e,#5eead4)]',
