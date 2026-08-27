@@ -3826,9 +3826,32 @@ export function App() {
        * and `body` already paint. Harmless while they are opaque, and marked so
        * glass mode can stop the three from compounding (`theme.css`). */}
       <div
-        className="flex h-screen bg-app-bg font-sans text-text-primary"
+        className="flex h-screen flex-col bg-app-bg font-sans text-text-primary"
         data-window-ground
       >
+        {/* The window's top row, and the app's title bar: `hiddenInset`
+         * (`main.ts` `createWindow`) removes the OS strip, so the tab bar spans
+         * the full width at y=0 and reserves the well the traffic lights are
+         * drawn into. It sits ABOVE the rail rather than beside it for that
+         * reason alone — the lights own the top-left corner, which the rail
+         * cannot yield while it is also a full-height column. */}
+        <TabBar
+          tabs={tabs}
+          activeSessionId={activeSessionId}
+          onSelect={selectTab}
+          onClose={closeTab}
+          onRestart={restartTab}
+          onNewTab={newSession}
+          onOpenActions={(sessionId, anchor) =>
+            setSessionActionsTarget({ sessionId, anchor, origin: 'tab' })
+          }
+          panelCount={workspaceLayout.panels.length}
+          canAddPanel={paneSessionIds.length > workspaceLayout.panels.length}
+          onAddPanel={addWorkspacePanel}
+          onRemovePanel={removeWorkspacePanel}
+        />
+
+        <div className="flex min-h-0 flex-1">
         {/* Sidebar rail (P3-5b): the full roster (live ∪ restorable) + the
          * restore-offer, alongside the TabBar's live ∪ preview view. */}
         <Sidebar
@@ -3893,22 +3916,6 @@ export function App() {
         />
 
         <div className="relative flex min-w-0 flex-1 flex-col">
-          <TabBar
-            tabs={tabs}
-            activeSessionId={activeSessionId}
-            onSelect={selectTab}
-            onClose={closeTab}
-            onRestart={restartTab}
-            onNewTab={newSession}
-            onOpenActions={(sessionId, anchor) =>
-              setSessionActionsTarget({ sessionId, anchor, origin: 'tab' })
-            }
-            panelCount={workspaceLayout.panels.length}
-            canAddPanel={paneSessionIds.length > workspaceLayout.panels.length}
-            onAddPanel={addWorkspacePanel}
-            onRemovePanel={removeWorkspacePanel}
-          />
-
           {/* P4-6b — the tab ⋯ actions overflow + its MetadataInspector drawer +
            * inline rename editor. The menu resolves and acts against the row it was
            * OPENED for (`sessionActionsTarget.sessionId`), never the active tab.
@@ -4367,6 +4374,7 @@ export function App() {
               onOpen={() => setTasksOpen(true)}
             />
           ) : null}
+        </div>
         </div>
 
         {/* ⌘K command palette (P3-7): a fixed overlay above the whole shell. */}

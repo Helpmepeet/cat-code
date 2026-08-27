@@ -1292,16 +1292,20 @@ function createWindow(): void {
     // `w-[240px] shrink-0` rail (`SettingsShell.tsx:294,356`), and Accounts' 1000
     // (`AccountsPage.tsx:768`), which already reflows at the 1100 default above.
     //
-    // Height 495 = 28 macOS title bar (Electron's min* are OUTER-window measures;
-    // every other term here is CSS px) + 40 tab bar (`TabBar.tsx:119` `h-10`)
-    // + 64 chat-pane padding + 16 dock gap (`App.tsx:3567` `gap-4`) + 83 composer
-    // dock at rest (36 textarea + 11 pad + 2 focus rule + 12 + 22 actions bar)
-    // + 264 for the transcript, which must never be shorter than the tallest
-    // panel the shell opens over it: the 7-item session actions menu
-    // (`sessionActions.ts:320` `estimateSessionActionsMenuHeight`), which neither
-    // scrolls nor clamps its own height.
+    // Height 467 = 40 tab bar (`TabBar.tsx:119` `h-10`) + 64 chat-pane padding
+    // + 16 dock gap (`App.tsx:3567` `gap-4`) + 83 composer dock at rest (36
+    // textarea + 11 pad + 2 focus rule + 12 + 22 actions bar) + 264 for the
+    // transcript, which must never be shorter than the tallest panel the shell
+    // opens over it: the 7-item session actions menu (`sessionActions.ts:320`
+    // `estimateSessionActionsMenuHeight`), which neither scrolls nor clamps its
+    // own height.
+    //
+    // Electron's min* are OUTER-window measures, and this used to carry a 28
+    // term for the macOS title bar on top of the CSS px below it. `titleBarStyle:
+    // 'hiddenInset'` removes that strip: the page now paints to the top of the
+    // window, so outer and content height are the same measure again.
     minWidth: 852,
-    minHeight: 495,
+    minHeight: 467,
     // Glass mode (`app/renderer/src/glassMode.ts`) is a RENDERER preference, and
     // these lines are the reason it needs no channel to reach us: the OS material
     // is mounted once, here, and the renderer decides whether its own ground is
@@ -1330,8 +1334,22 @@ function createWindow(): void {
     //
     // Non-darwin keeps the solid ground: `vibrancy` is a macOS material, and
     // without it a transparent window is just a transparent window.
+    //
+    // `hiddenInset` drops the OS title strip and lets the page paint to the top
+    // of the window, keeping the OS-drawn traffic lights. They are drawn ABOVE
+    // web content, so their position is a layout constraint the renderer has to
+    // honour rather than a decoration: `x: 20, y: 14` centres the 12px buttons
+    // in the 40px tab bar (`TabBar.tsx:119` `h-10`), and that bar reserves the
+    // 84px well they sit in (`TabBar.tsx` `w-[84px]`, which is this inset plus
+    // the 52px of buttons plus clearance). Change one of those three numbers and
+    // you must change the others.
+    //
+    // No `titleBarOverlay`: that is the Windows/Linux caption-button surface,
+    // and this window keeps the native macOS buttons.
     ...(process.platform === 'darwin'
       ? {
+          titleBarStyle: 'hiddenInset' as const,
+          trafficLightPosition: { x: 20, y: 14 },
           vibrancy: WINDOW_VIBRANCY,
           visualEffectState: 'active' as const,
           backgroundColor: '#00000000',

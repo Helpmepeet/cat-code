@@ -204,12 +204,12 @@ One section per prototype surface, in prototype-load order. Each row is one elem
 
 | Element / UX-state | Cat | Disposition | Evidence | Notes |
 |---|---|---|---|---|
-| PawLogo (pink paw SVG glyph) | chrome | ✅ built | `app/renderer/src/Sidebar.tsx:603` def, rendered `:140` | SVG ported attribute-for-attribute; `text-accent` (pink). |
+| PawLogo (pink paw SVG glyph) | chrome | ✂️ cut | Removed from the rail 2026-08-28 (operator ruling, integrated-title-bar work); the glyph survives only in `app/renderer/src/StartupSurfaces.tsx:44` (row 1866). | The rail's top-left is the macOS traffic-light well now (`main.ts` `titleBarStyle: 'hiddenInset'`), and a brand glyph cannot share it. Cut, not moved: the collapsed rail carries no mark. |
 | Rail geometry: 48px collapsed → 192–420px expanded | chrome | 🔁 adapted | `app/renderer/src/Sidebar.tsx:172-174,456-460,776` + `app/renderer/src/theme.css:96-98` | The original 240px expanded width remains the default, but the operator can now drag the right edge between 192px and 420px. |
 | Hover-expand timing (120ms show / 200ms hide) | ux-state | ✅ built | `app/renderer/src/Sidebar.tsx:36` `HOVER_DELAY`/`HIDE_DELAY`; timers `:86-93` | |
 | Spacer div reserving rail footprint in flex flow | chrome | ✅ built | `app/renderer/src/Sidebar.tsx:121` `<div className="w-12 shrink-0" aria-hidden>` | |
-| Floating fixed rail: bg, border-right, shadow-when-open, width easing | chrome | ✅ built | `app/renderer/src/Sidebar.tsx:123-130` `fixed inset-y-0 z-40 bg-shell-chrome border-r border-shell-seam shadow[…] transition-[width,box-shadow]` | Raw `#0a0a0c`/rgba tokens → `shell-chrome`/`shell-seam` design tokens (P3-5a grammar). |
-| Logo + pin header row (height 50) | chrome | ✅ built | `app/renderer/src/Sidebar.tsx:133-137` `h-[50px]`, justify-between when open else center | |
+| Floating fixed rail: bg, border-right, shadow-when-open, width easing | chrome | 🔁 adapted | `app/renderer/src/Sidebar.tsx` `fixed bottom-0 left-0 top-10 z-50 bg-surface-panel border-r shadow[…] transition-[width,box-shadow]` | Raw `#0a0a0c`/rgba tokens → design tokens (P3-5a grammar). `top-10`, not `inset-y-0`, since 2026-08-28: the tab bar is the window's title bar and the OS draws the traffic lights over anything reaching y=0. |
+| Logo + pin header row (height 50) | chrome | 🔁 adapted | `app/renderer/src/Sidebar.tsx` `h-[50px]`, justify-between when open else center | Since 2026-08-28 the row is EMPTY while collapsed (paw cut above); it survives because the pin stays mounted as the rail's stable keyboard entry target. |
 | "Cat Code" wordmark (shown only when open) | chrome | ✅ built | `app/renderer/src/Sidebar.tsx:143-147` `truncate text-[13px] font-semibold`, gated on `open` | |
 | Pin button (toggle pinned-open) + pin icon + active pink bg | control | ✅ built | `app/renderer/src/Sidebar.tsx:816-829`; `PinIcon` `:2214` | Pinned → `bg-accent/15 text-accent`; real adds `aria-pressed`+`aria-label`. |
 | Pinned-open state (pin overrides hover collapse) | ux-state | ✅ built | `app/renderer/src/Sidebar.tsx:416-423` | The pin keeps the rail open until the explicit collapse control is used. |
@@ -264,7 +264,7 @@ One section per prototype surface, in prototype-load order. Each row is one elem
 
 | Element / UX-state | Cat | Disposition | Evidence | Notes |
 |---|---|---|---|---|
-| Outer TabBar container (40px height, chrome bg, bottom seam, overflow hidden) | chrome | 🔁 adapted | `app/renderer/src/TabBar.tsx:102-106` | Prototype hard-coded `#070709`/rgba border → `shell-chrome`/`shell-seam` tokens; `role="tablist"` added. |
+| Outer TabBar container (40px height, chrome bg, bottom seam, overflow hidden) | chrome | 🔁 adapted | `app/renderer/src/TabBar.tsx` | Prototype hard-coded `#070709`/rgba border → `shell-chrome`/`shell-seam` tokens; `role="tablist"` added. Since 2026-08-28 it also spans the FULL window width above the rail (the prototype's browser mock has an OS title bar above it and starts beside the rail), carries `-webkit-app-region: drag` as the window's title bar, and reserves an 84px traffic-light well before the first tab. |
 | Scrollable tab list (flex-1, horizontal scroll, hidden scrollbar) | chrome | ✅ built | `app/renderer/src/TabBar.tsx:107` | Direct port incl. `[scrollbar-width:none]` no-scrollbar treatment. |
 | Per-tab container (90/176px clamp, right seam, draggable, cursor-pointer, select-none) | chrome | ✅ built | `app/renderer/src/TabBar.tsx:229-251` | Same `min-w-[90px] max-w-[176px]` clamp, `pl-3 pr-1.5` grammar. |
 | Active-tab background fill | state | ✅ built | `app/renderer/src/TabBar.tsx:234` | Prototype `rgba(255,255,255,0.05)` → `bg-shell-active`. |

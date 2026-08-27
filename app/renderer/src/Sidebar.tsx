@@ -787,20 +787,26 @@ export function Sidebar({
           setFocusWithin(false)
         }}
         aria-label="Primary"
-        /* An OVERLAY, not flow chrome: this expands over the tab bar and the
-         * transcript, so glass has to blur what is behind it, not just thin it
+        /* An OVERLAY, not flow chrome: this expands over the transcript, so
+         * glass has to blur what is behind it, not just thin it
          * (`theme.css`). */
         data-window-overlay
         className={
-          'fixed inset-y-0 left-0 z-50 flex flex-col overflow-hidden border-r border-white/[0.05] bg-surface-panel transition-[width,box-shadow] duration-200 ease-out ' +
+          /* `top-10`, not `inset-y-0`: the tab bar is the window's title bar now
+           * (`App.tsx`), and the traffic lights macOS draws into it are painted
+           * ABOVE the page. An expanded rail reaching y=0 would slide under
+           * them, putting three OS buttons on top of its own header. */
+          'fixed bottom-0 left-0 top-10 z-50 flex flex-col overflow-hidden border-r border-white/[0.05] bg-surface-panel transition-[width,box-shadow] duration-200 ease-out ' +
           (open
             ? 'sidebar-expanded shadow-[var(--elev-rail)]'
             : 'w-12') +
           (resizing ? ' transition-none' : '')
         }
       >
-        {/* Logo + pin. The pin stays mounted while collapsed so Tab has a stable
-         * first entry target; focus capture expands the rail before it paints. */}
+        {/* Name + pin. Nothing renders here while the rail is collapsed: the
+         * paw that used to mark the corner is gone, and this row survives only
+         * because the pin stays mounted so Tab has a stable first entry target;
+         * focus capture expands the rail before it paints. */}
         <div
           className={
             'relative flex h-[50px] shrink-0 items-center ' +
@@ -808,9 +814,6 @@ export function Sidebar({
           }
         >
           <div className="flex min-w-0 items-center gap-2.5">
-            <span className="flex text-accent">
-              <PawLogo />
-            </span>
             {open ? (
               <span className="truncate text-[13px] font-semibold tracking-tight text-text-primary">
                 Cat Code
@@ -2125,18 +2128,6 @@ function formatRecency(ms: number): string {
 }
 
 /* ── Icons (ported from the design source's inline SVGs; attribute-only, no CSS) ── */
-
-function PawLogo() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-      <ellipse cx="6.5" cy="5.5" rx="1.8" ry="2.5" opacity=".65" />
-      <ellipse cx="11.5" cy="4" rx="1.8" ry="2.5" opacity=".65" />
-      <ellipse cx="16.5" cy="5.5" rx="1.8" ry="2.5" opacity=".65" />
-      <ellipse cx="4" cy="9.5" rx="1.4" ry="2" opacity=".45" />
-      <path d="M12 21.5c-4.2 0-7.5-2.3-7.5-6 0-1.9 1.1-3.6 2.8-4.6.75-.45 1.6-.65 2.3-.65h.8c.7 0 1.55.2 2.3.65 1.7.95 2.8 2.7 2.8 4.6 0 3.7-3.3 6-7.5 6z" />
-    </svg>
-  )
-}
 
 function ChatIcon() {
   return (

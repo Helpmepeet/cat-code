@@ -247,3 +247,36 @@ test('tabs grow into spare bar width but never shrink below the crowded case', (
   expect(html).toContain('shrink-0') // crowded behaviour unchanged: scroll, not squeeze
   expect(html).toContain('max-w-[176px]')
 })
+
+test('the bar is the window drag region and every control opts out of it', () => {
+  // With `titleBarStyle: 'hiddenInset'` there is no OS strip left to drag the
+  // window by, so the bar carries `drag`. The failure this guards is invisible
+  // headlessly and total in the app: a control that forgets `no-drag` cannot be
+  // clicked at all, because the OS takes the press as a window move.
+  const html = renderToStaticMarkup(
+    <TabBar
+      tabs={[tab('a')]}
+      activeSessionId="a"
+      onSelect={noop}
+      onClose={noop}
+      onRestart={noop}
+      onNewTab={noop}
+      onAddPanel={noop}
+      canAddPanel
+    />,
+  )
+
+  expect(html).toContain('[-webkit-app-region:drag]')
+  // One region declared, then cleared on the tab, the new-session button and
+  // the split cluster.
+  expect(html.match(/\[-webkit-app-region:no-drag\]/g)).toHaveLength(3)
+})
+
+test('the bar reserves the well the traffic lights are drawn into', () => {
+  // 84 = the 20px `trafficLightPosition` inset in `main.ts` + 52px of buttons +
+  // clearance. The lights paint above the page, so anything here is covered.
+  const html = render([tab('a')], 'a')
+
+  expect(html).toContain('w-[84px]')
+  expect(html.indexOf('w-[84px]')).toBeLessThan(html.indexOf('role="tab"'))
+})

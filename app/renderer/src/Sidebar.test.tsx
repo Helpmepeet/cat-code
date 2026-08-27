@@ -937,3 +937,11 @@ test('the folded destination list carries its mark out to the toggle that opens 
   expect(healthy).not.toContain('data-sidebar-nav-badge="destinations"')
   expect(healthy).toContain('aria-label="Show destinations"')
 })
+
+test('the rail starts below the tab bar so the traffic lights are never covered', () => {
+  // macOS draws the lights on top of the page. A rail reaching y=0 would expand
+  // under them and put three OS buttons over its own header row.
+  const html = renderSidebar()
+  expect(html).toContain('top-10')
+  expect(html).not.toContain('inset-y-0')
+})

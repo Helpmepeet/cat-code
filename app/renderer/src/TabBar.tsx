@@ -117,7 +117,13 @@ export function TabBar({
 
   return (
     <div
-      className="flex h-10 shrink-0 items-stretch overflow-hidden border-b border-shell-seam bg-shell-chrome"
+      /* `drag` makes this row the window's title bar: with `hiddenInset`
+       * (`main.ts` `createWindow`) the OS strip is gone, so without a drag
+       * region the window cannot be moved or zoomed by its top edge at all.
+       * It is set HERE and cleared per control below, because the draggable
+       * area is everything the controls do not cover — the well, the gap after
+       * the last tab, the strip beside the split cluster. */
+      className="flex h-10 shrink-0 items-stretch overflow-hidden border-b border-shell-seam bg-shell-chrome [-webkit-app-region:drag]"
       /* Flow chrome, so glass thins it (`theme.css`). The marker is on the
        * element rather than on `bg-shell-chrome`, because that token also
        * grounds nine floating menus that must stay opaque over the
@@ -126,6 +132,12 @@ export function TabBar({
       role="tablist"
       aria-label="Sessions"
     >
+      {/* The traffic lights are drawn by macOS on top of the page, so this is
+       * the one piece of the bar that has to be empty. 84 = 20 inset + 52
+       * buttons + 12 clearance, and the inset is `trafficLightPosition` in
+       * `main.ts` — the two numbers are one measurement written twice. */}
+      <div className="w-[84px] shrink-0" aria-hidden="true" />
+
       <div className="flex flex-1 items-stretch overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {tabs.map((tab, index) => (
           <Tab
@@ -146,7 +158,7 @@ export function TabBar({
         ))}
 
         <button
-          className="flex w-10 shrink-0 items-center justify-center text-xl leading-none text-text-ghost transition-colors hover:text-accent"
+          className="flex w-10 shrink-0 items-center justify-center text-xl leading-none text-text-ghost transition-colors hover:text-accent [-webkit-app-region:no-drag]"
           onClick={onNewTab}
           title="New session  ⌘T"
           aria-label="New session"
@@ -157,7 +169,7 @@ export function TabBar({
       </div>
 
       {onAddPanel ? (
-        <div className="flex shrink-0 items-center gap-1 border-l border-shell-seam px-2.5">
+        <div className="flex shrink-0 items-center gap-1 border-l border-shell-seam px-2.5 [-webkit-app-region:no-drag]">
           {panelCount < MAX_WORKSPACE_PANELS ? (
             <button
               type="button"
@@ -262,7 +274,10 @@ function Tab({
         // a handful of sessions read in full instead of every title clipping
         // against a fixed width with empty bar to the right. `shrink-0` keeps the
         // crowded case exactly as it was — natural width, then horizontal scroll.
-        'group relative flex min-w-[90px] max-w-[176px] grow shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-white/[0.05] pl-3 pr-1.5 transition-colors ' +
+        // The bar is a window drag region, so a tab has to opt out of it or the
+        // OS swallows the pointer: no click to select, and no `draggable`
+        // drag-to-split (the tab's own `onDragStart` below).
+        'group relative flex min-w-[90px] max-w-[176px] grow shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-white/[0.05] pl-3 pr-1.5 transition-colors [-webkit-app-region:no-drag] ' +
         (isActive ? 'bg-white/[0.05]' : 'hover:bg-white/[0.025]')
       }
       role="tab"
