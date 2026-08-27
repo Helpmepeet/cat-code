@@ -9,7 +9,7 @@
  * run. `GlassModeProvider.dom.test.ts` owns that half.
  */
 import { expect, test } from 'bun:test'
-import { readFileSync } from 'fs'
+import { readdirSync, readFileSync } from 'fs'
 import {
   applyGlassMode,
   DEFAULT_GLASS_ENABLED,
@@ -138,6 +138,41 @@ test('the repeated page grounds are cleared so they cannot hide the ground', () 
   expect(themeCss()).toMatch(
     /html\[data-glass='on'\] body,\s*html\[data-glass='on'\] \[data-window-ground\]\s*\{\s*background: transparent;/,
   )
+})
+
+/**
+ * The sweep that would have caught the session panel.
+ *
+ * Marking the app frame was not enough: `WorkspacePanels`' panel `<section>`
+ * also fills the content area with `bg-app-bg`, so the shell was frosted until
+ * the first session opened and then went solid (operator, 2026-08-27). Any
+ * element that paints the page ground AND fills its container is a repeat of
+ * what `html` already paints, and glass has to clear it.
+ *
+ * Deliberate exceptions are listed with their reason, not silently skipped: a
+ * fault screen and a launch scrim SHOULD stay solid.
+ */
+test('every full-area page ground is marked for glass to clear', () => {
+  const dir = new URL('.', import.meta.url)
+  const EXEMPT = new Map([
+    ['RendererErrorBoundary.tsx', 'a fault screen stays solid on purpose'],
+    ['StartupSurfaces.tsx', 'the launch scrim covers the pane on purpose'],
+  ])
+  // Fills its container, as opposed to an input or a chip that merely flexes.
+  const FILLS = [/\bh-screen\b/, /\bmin-h-screen\b/, /\binset-0\b/, /min-h-0[\s\S]{0,40}flex-1/]
+  const offenders: string[] = []
+  for (const file of readdirSync(dir)) {
+    if (!file.endsWith('.tsx') || file.includes('.test.')) continue
+    if (EXEMPT.has(file)) continue
+    const lines = readFileSync(new URL(file, dir), 'utf8').split('\n')
+    lines.forEach((line, i) => {
+      if (!line.includes('bg-app-bg')) return
+      const chunk = lines.slice(Math.max(0, i - 8), i + 9).join('\n')
+      if (!FILLS.some(re => re.test(chunk))) return
+      if (!chunk.includes('data-window-ground')) offenders.push(`${file}:${i + 1}`)
+    })
+  }
+  expect(offenders).toEqual([])
 })
 
 /**

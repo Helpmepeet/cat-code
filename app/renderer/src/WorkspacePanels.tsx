@@ -162,6 +162,11 @@ export function WorkspaceLayout({
                       ? 'bg-app-bg ring-1 ring-inset ring-accent/35'
                       : 'bg-app-bg')
                   }
+                  /* Repeats the page ground `html` already paints, so glass mode
+                   * has to clear it (`theme.css`). Without this the shell was
+                   * frosted until the first session opened and then went solid,
+                   * because this section covers the whole content area. */
+                  data-window-ground
                   aria-label={panelAriaLabel(panel, index, active)}
                   onMouseDown={() => onFocusPanel(index, panel.sessionId)}
                 >
