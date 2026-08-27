@@ -558,7 +558,9 @@ html[data-appearance='light'] [data-accent='amber'] {
  *     far the other way once the material was correct: the blur became the
  *     dominant thing on screen and the desktop stopped being readable through
  *     it (operator, 2026-08-27).
- *   0.14, between the operator's own two rejections rather than a fresh guess.
+ *   0.14, between those two. Too little effect: back toward the 0.22 complaint.
+ *   0.10, bisecting the two live rejections. This is the last useful nudge; the
+ *     bracket is now narrower than the difference anyone can see.
  *
  * Legibility does not constrain this dial, which is why it can be spent on
  * taste: the light material stays near-white even over a dark wallpaper, so the
@@ -576,7 +578,7 @@ html[data-appearance='light'] [data-accent='amber'] {
  * block sets, which is why that property is not optional there.
  */
 html[data-glass='on'] {
-  background: light-dark(rgba(252, 252, 253, 0.14), rgba(9, 9, 11, 0.2));
+  background: light-dark(rgba(252, 252, 253, 0.1), rgba(9, 9, 11, 0.2));
 }
 
 /*
