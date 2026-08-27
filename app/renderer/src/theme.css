@@ -557,49 +557,63 @@ html[data-appearance='light'] [data-accent='amber'] {
  * choice) is what swaps the blur behind the page from the dark material to the
  * light one; all this rule does either way is decide how much of it survives.
  *
- * THE TWO ALPHAS ARE NOT SYMMETRIC, AND THE LIGHT ONE BARELY MATTERS. Measured
- * side by side (2026-08-27, six materials x four alphas over a real wallpaper):
- * in the LIGHT appearance macOS clamps `under-window` close to white whatever
- * sits behind it, so 0 and 0.22 are almost indistinguishable and the effect is
- * subtle by nature rather than by tuning. It is real — dragged over a sunset
- * band the ground does warm — just quiet. `hud` was the only material that reads
- * as visibly translucent in light, and it is a grey heads-up surface that would
- * fight the whole light text ramp, so it was not taken.
+ * EVERY LIGHT READING TAKEN BEFORE 2026-08-28 IS VOID, and the paragraph that
+ * used to sit here said the opposite of the truth. It claimed macOS clamps the
+ * light `under-window` material close to white whatever is behind it, so the
+ * light alpha was a taste dial that legibility never constrained. That was
+ * measured through the defect `ca260275` fixed: the material was still resolved
+ * to the appearance the window was BORN in, so a light page was being judged
+ * against a DARK material, and every reading in the ladder that followed
+ * (0.22 rejected, then 0.06, then 0.14, then 0.10) was taken against the wrong
+ * backdrop. The ladder is deleted rather than corrected; none of it measured
+ * what it claimed to.
  *
- * THE LIGHT VALUE IS A TASTE DIAL AND IT IS THE ONLY ONE THERE IS, so it took
- * three readings to place. What it trades is not blur against sharpness: the
- * frost is macOS's own material and its radius is exposed by neither Electron
- * nor AppKit. All this decides is how much of that fixed blur survives, so
- * "too blurred" and "too much material" are the same complaint.
+ * What the light material actually does, read back off the operator's own
+ * screenshot: it composites to about #c2c2c2 over a real desktop, mid-grey and
+ * nowhere near white. A 10% white coat over that lands the page ground at about
+ * #c8c8c8, which puts `--text-faint` at 2.9:1 and `--text-subtle` at 4.4:1. The
+ * light appearance was not merely quiet under glass, it was under its own
+ * contrast bar, and the fix is not a bigger number in the same place.
  *
- *   0.22, the mirror of the dark value, on the assumption light needed a
- *     heavier coat. Backwards, and the app showed it: with glass on, nothing
- *     changed but the tab strip.
- *   0.06, from the six-material sweep where alpha barely moved the result. Too
- *     far the other way once the material was correct: the blur became the
- *     dominant thing on screen and the desktop stopped being readable through
- *     it (operator, 2026-08-27).
- *   0.14, between those two. Too little effect: back toward the 0.22 complaint.
- *   0.10, bisecting the two live rejections. This is the last useful nudge; the
- *     bracket is now narrower than the difference anyone can see.
+ * SO THE MATERIAL IS TONED BEFORE THE COAT GOES ON, which is the one lever this
+ * rule was missing. A coat can only ever trade translucency for identity: enough
+ * white to make a light page read as light leaves nothing of the desktop, and
+ * that trade is what three rounds of alpha nudging kept re-discovering.
+ * `backdrop-filter` spends nothing, because it moves the backdrop itself toward
+ * the appearance's own ground instead of hiding it. Brightness carries the
+ * appearance; the saturation lift is what stops a toned blur reading as grey
+ * sludge, and is the reason the wallpaper still has a colour through it.
  *
- * Legibility does not constrain this dial, which is why it can be spent on
- * taste: the light material stays near-white even over a dark wallpaper, so the
- * text ramp is never sitting on an unpredictable ground.
+ * The result is more glass, not less, in both appearances. Light: the material
+ * lifts to roughly #f2f2f2 and a 30% coat lands the ground near #f5f5f5, so the
+ * page reads as light and 70% of what is on screen is still the desktop, where
+ * before 90% of it was and the page did not read as light at all. Dark: the coat
+ * comes DOWN from 0.2 to 0.14 and the filter does the darkening, which keeps the
+ * old warning below intact — above roughly 0.35 the dark material is crushed and
+ * the effect disappears, and this now sits further from that edge than it did.
  *
- * If it still reads as too much frost, the dial is not the answer and the
- * material is: seeing the actual desktop rather than a wash means dropping
- * vibrancy for `transparent: true` plus a `backdrop-filter` whose radius we set.
- * That was tried and backed out (4c0b9ad7) because it costs the title bar, but
- * it was backed out for buying NOTHING, and control over the radius would be
- * something. Reopen it deliberately, not by nudging this number again.
+ * That the filter samples the native material at all is not assumed: the sidebar
+ * overlay below already blurs it, and the risk it was checked against was a
+ * backdrop filter over a translucent root having nothing to sample and
+ * compositing BLACK. It does not here. If Chromium ever declines it on the root
+ * the failure is quiet and forward: the coats alone are still 0.30 and 0.14, and
+ * light is still better than the 0.10 it replaced.
+ *
+ * `light-dark()` cannot carry the filter — it is a `<color>` function, and a
+ * filter list is not a colour — so that half takes an explicit
+ * `[data-appearance='light']` rule and the colour half does not.
  *
  * `light-dark()` rather than a second `[data-appearance]` rule because the whole
  * declaration is one value; it resolves against the `color-scheme` the light
  * block sets, which is why that property is not optional there.
  */
 html[data-glass='on'] {
-  background: light-dark(rgba(252, 252, 253, 0.1), rgba(9, 9, 11, 0.2));
+  background: light-dark(rgba(252, 252, 253, 0.3), rgba(9, 9, 11, 0.14));
+  backdrop-filter: brightness(0.55) saturate(1.6);
+}
+
+html[data-appearance='light'][data-glass='on'] {
+  backdrop-filter: brightness(1.25) saturate(1.3);
 }
 
 /*

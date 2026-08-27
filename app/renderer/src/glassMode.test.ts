@@ -304,3 +304,38 @@ test('the app frame is marked, on the element and not only in its comment', () =
   )
   expect(app).toContain('data-window-ground')
 })
+
+/**
+ * The tone filter, which is the half of the ground a coat cannot do.
+ *
+ * A coat only ever trades translucency for identity: enough white to make a
+ * light page read as light leaves nothing of the desktop showing. The filter
+ * moves the backdrop itself toward the appearance's own ground, so both survive.
+ * Deleting it would not fail any other test here — the coats alone still parse
+ * as translucent — it would just quietly return the light appearance to the
+ * mid-grey ground that measured under its own contrast bar (`theme.css`).
+ *
+ * Both appearances must carry one, and they must pull in OPPOSITE directions:
+ * one filter serving both is the shape of the bug, since the same brightness
+ * cannot push a backdrop toward white and toward black at once.
+ */
+test('the ground is toned per appearance, in opposite directions', () => {
+  const css = themeCss()
+  const brightness = (selector: string): number => {
+    const block = css.match(
+      new RegExp(`${selector}\\s*\\{([^}]*)\\}`),
+    )
+    expect(block).not.toBeNull()
+    const value = /backdrop-filter:[^;]*brightness\(\s*([0-9.]+)\s*\)/.exec(
+      block?.[1] ?? '',
+    )
+    expect(value).not.toBeNull()
+    return Number(value?.[1])
+  }
+  const dark = brightness("html\\[data-glass='on'\\]")
+  const light = brightness(
+    "html\\[data-appearance='light'\\]\\[data-glass='on'\\]",
+  )
+  expect(dark).toBeLessThan(1)
+  expect(light).toBeGreaterThan(1)
+})
