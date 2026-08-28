@@ -41,8 +41,7 @@ test('diagnostics bundle exports only closed operational and trace schemas', () 
   }))
   expect(bundle.streams.operational).toHaveLength(1)
   expect(bundle.streams.deliveryTrace).toHaveLength(1)
-  expect(bundle.stuckSessions).toHaveLength(1)
-  expect(bundle.stuckSessions[0].lastProducedFrameKind).toBe('lifecycle')
+  expect(bundle.stuckSessions).toEqual([])
   expect(bundle.processInstances).toHaveLength(1)
   expect(bundle.processInstances[0]).toMatchObject({ pid: 123, status: 'observed' })
   // This asserted status 'incomplete' and an 'interrupted' launch only because
@@ -350,7 +349,7 @@ test('second-pass trace parser closes the quiescence record and its verdict', ()
   expect(parseDeliveryTraceRecord({ ...quiet, quietMs: -1 })).toBeNull()
 })
 
-test('a shed sidecar marker no longer leaves a delivered frame reported as stuck at the sidecar', () => {
+test('only an unresolved quiescent episode is exported as a stuck session', () => {
   const base = {
     schemaVersion: 1, recordKind: 'delivery.trace', wallTimestamp: '2026-08-06T00:00:00.000Z', monotonicTimestampMs: 1,
     launchId: 'launch', component: 'host', processName: 'electron-main', processInstanceId: 'process',
@@ -358,17 +357,65 @@ test('a shed sidecar marker no longer leaves a delivered frame reported as stuck
     traceId: '018f0000-0000-4000-8000-000000000002', deliveryAttempt: 1, replay: false, connectionEpoch: 1,
     frameKind: 'event',
   }
-  // Sequence 1 crossed every hop and was committed; only its `sidecar.socket.sent`
-  // marker was shed by the FD 3 queue. That is missing evidence, not a missing
-  // frame, and the export used to answer 'sidecar.socket.sent' for it.
   const records = [
     'engine.produced', 'host.received', 'main.ipc.sent', 'preload.received',
-    'renderer.state.applied', 'renderer.ui.committed',
+    'renderer.state.applied',
   ].map(stage => ({ ...base, sequence: 1, stage }))
-  expect(deriveStuckSessionSummaries(records)[0]).toMatchObject({ firstMissingStage: null })
+  expect(deriveStuckSessionSummaries(records)).toEqual([])
 
-  // A frame that genuinely never arrived is still reported, and the two upstream
-  // hops it could have died on are not told apart from an absent marker.
-  const lost = [...records, ...['engine.produced'].map(stage => ({ ...base, sequence: 2, stage }))]
-  expect(deriveStuckSessionSummaries(lost)[0]).toMatchObject({ firstMissingStage: 'unknown' })
+  const quiet = {
+    schemaVersion: 1, recordKind: 'trace.stream.quiescent', wallTimestamp: '2026-08-06T00:06:00.000Z',
+    monotonicTimestampMs: 360_000, launchId: 'launch', processName: 'electron-main', processInstanceId: 'process',
+    sessionId: 'session', streamEpoch: base.streamEpoch, sequence: 1, quietMs: 360_000,
+    lastMessageKind: 'assistant', deliveryStatus: 'complete',
+  }
+  expect(deriveStuckSessionSummaries([...records, quiet])[0]).toMatchObject({
+    firstMissingStage: null,
+    applied: 1,
+    committed: 0,
+  })
+
+  const result = {
+    ...base,
+    wallTimestamp: '2026-08-06T00:07:00.000Z',
+    sequence: 2,
+    stage: 'renderer.state.applied',
+    messageKind: 'result',
+  }
+  expect(deriveStuckSessionSummaries([...records, quiet, result])).toEqual([])
+})
+
+test('a host-only session title is not a downstream hole in an exported stuck summary', () => {
+  const base = {
+    schemaVersion: 1, recordKind: 'delivery.trace', wallTimestamp: '2026-08-06T00:00:00.000Z', monotonicTimestampMs: 1,
+    launchId: 'launch', component: 'host', processName: 'electron-main', processInstanceId: 'process',
+    sessionId: 'session', streamEpoch: '018f0000-0000-4000-8000-000000000001',
+    traceId: '018f0000-0000-4000-8000-000000000002', deliveryAttempt: 1, replay: false, connectionEpoch: 1,
+  }
+  const title = [
+    'engine.produced', 'sidecar.socket.sent', 'supervisor.socket.received', 'host.received',
+  ].map(stage => ({ ...base, sequence: 1, stage, frameKind: 'session-title' }))
+  const assistant = [
+    'engine.produced', 'sidecar.socket.sent', 'supervisor.socket.received', 'host.received',
+    'main.ipc.sent', 'preload.received', 'renderer.state.applied',
+  ].map(stage => ({ ...base, sequence: 2, stage, frameKind: 'event', messageKind: 'assistant' }))
+  const quiet = {
+    schemaVersion: 1, recordKind: 'trace.stream.quiescent', wallTimestamp: '2026-08-06T00:06:00.000Z',
+    monotonicTimestampMs: 360_000, launchId: 'launch', processName: 'electron-main', processInstanceId: 'process',
+    sessionId: 'session', streamEpoch: base.streamEpoch, sequence: 2, quietMs: 360_000,
+    lastMessageKind: 'assistant', deliveryStatus: 'complete',
+  }
+
+  expect(deriveStuckSessionSummaries([...title, ...assistant, quiet])[0]).toMatchObject({
+    firstMissingStage: null,
+    watermarks: {
+      produced: 2,
+      socketSent: 2,
+      hostReceived: 2,
+      ipcSent: 2,
+      preloadReceived: 2,
+      applied: 2,
+      committed: 0,
+    },
+  })
 })

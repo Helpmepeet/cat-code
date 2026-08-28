@@ -500,7 +500,9 @@ export function deriveStuckSessionSummaries(records: readonly TraceRecord[]): Ar
   const sessions = new Map<string, {
     sessionId: string; streamEpoch: string; produced: number; lastProducedFrameKind: string | null; socketSent: number; hostReceived: number;
     ipcSent: number; preloadReceived: number; applied: number; committed: number; anomalies: Record<string, number>;
-    traceLossCount: number; coverage: Map<number, Set<string>>;
+    traceLossCount: number; coverage: Map<number, Set<string>>; frameKinds: Map<number, string>;
+    latestDeliveryAt: string | null;
+    latestQuiescence: { at: string; deliveryStatus: string; stage: string | null } | null;
   }>()
   let unassociatedTraceLossCount = 0
   for (const record of records) {
@@ -510,7 +512,8 @@ export function deriveStuckSessionSummaries(records: readonly TraceRecord[]): Ar
         const key = `${record.sessionId}\u0000${record.streamEpoch}`
         const state = sessions.get(key) ?? {
           sessionId: record.sessionId, streamEpoch: record.streamEpoch, produced: 0, lastProducedFrameKind: null, socketSent: 0,
-          hostReceived: 0, ipcSent: 0, preloadReceived: 0, applied: 0, committed: 0, anomalies: {} as Record<string, number>, traceLossCount: 0, coverage: new Map(),
+          hostReceived: 0, ipcSent: 0, preloadReceived: 0, applied: 0, committed: 0, anomalies: {} as Record<string, number>, traceLossCount: 0,
+          coverage: new Map(), frameKinds: new Map(), latestDeliveryAt: null, latestQuiescence: null,
         }
         state.traceLossCount = (state.traceLossCount ?? 0) + droppedCount
         sessions.set(key, state)
@@ -523,11 +526,27 @@ export function deriveStuckSessionSummaries(records: readonly TraceRecord[]): Ar
     const key = `${record.sessionId}\u0000${record.streamEpoch}`
     const state = sessions.get(key) ?? {
       sessionId: record.sessionId, streamEpoch: record.streamEpoch, produced: 0, lastProducedFrameKind: null, socketSent: 0,
-      hostReceived: 0, ipcSent: 0, preloadReceived: 0, applied: 0, committed: 0, anomalies: {} as Record<string, number>, traceLossCount: 0, coverage: new Map(),
+      hostReceived: 0, ipcSent: 0, preloadReceived: 0, applied: 0, committed: 0, anomalies: {} as Record<string, number>, traceLossCount: 0,
+      coverage: new Map(), frameKinds: new Map(), latestDeliveryAt: null, latestQuiescence: null,
     }
     const recordKind = record.recordKind
     if (typeof recordKind !== 'string') continue
     if (recordKind !== 'delivery.trace') {
+      if (
+        recordKind === 'trace.stream.quiescent' &&
+        typeof record.wallTimestamp === 'string' &&
+        typeof record.deliveryStatus === 'string' &&
+        (
+          state.latestQuiescence === null ||
+          record.wallTimestamp > state.latestQuiescence.at
+        )
+      ) {
+        state.latestQuiescence = {
+          at: record.wallTimestamp,
+          deliveryStatus: record.deliveryStatus,
+          stage: typeof record.stage === 'string' ? record.stage : null,
+        }
+      }
       state.anomalies[recordKind] = (state.anomalies[recordKind] ?? 0) + 1
       sessions.set(key, state)
       continue
@@ -536,6 +555,13 @@ export function deriveStuckSessionSummaries(records: readonly TraceRecord[]): Ar
     const coverage = state.coverage.get(sequence) ?? new Set<string>()
     coverage.add(record.stage as string)
     state.coverage.set(sequence, coverage)
+    if (typeof record.frameKind === 'string') state.frameKinds.set(sequence, record.frameKind)
+    if (
+      typeof record.wallTimestamp === 'string' &&
+      (state.latestDeliveryAt === null || record.wallTimestamp > state.latestDeliveryAt)
+    ) {
+      state.latestDeliveryAt = record.wallTimestamp
+    }
     switch (record.stage) {
       case 'engine.produced':
         if (sequence >= state.produced) {
@@ -553,50 +579,60 @@ export function deriveStuckSessionSummaries(records: readonly TraceRecord[]): Ar
     }
     sessions.set(key, state)
   }
-  return [...sessions.values()].map(state => ({
-    ...withoutCoverage(state),
-    watermarks: contiguousBundleWatermarks(state.coverage),
-    traceLossCount: state.traceLossCount + unassociatedTraceLossCount,
-    firstMissingStage: firstMissingFromCoverage(state.coverage),
-  }))
+  return [...sessions.values()]
+    .filter(state =>
+      state.latestQuiescence !== null &&
+      (
+        state.latestDeliveryAt === null ||
+        state.latestQuiescence.at > state.latestDeliveryAt
+      ),
+    )
+    .map(state => ({
+      ...withoutDerivedState(state),
+      watermarks: contiguousBundleWatermarks(state.coverage, state.frameKinds),
+      traceLossCount: state.traceLossCount + unassociatedTraceLossCount,
+      firstMissingStage: state.latestQuiescence!.deliveryStatus === 'complete'
+        ? null
+        : state.latestQuiescence!.deliveryStatus === 'unknown'
+          ? 'unknown'
+          : state.latestQuiescence!.stage ?? 'unknown',
+    }))
 }
 
-function withoutCoverage<T extends { coverage: unknown }>(state: T): Omit<T, 'coverage'> {
-  const { coverage: _coverage, ...rest } = state
+function withoutDerivedState<T extends {
+  coverage: unknown
+  frameKinds: unknown
+  latestDeliveryAt: unknown
+  latestQuiescence: unknown
+}>(state: T): Omit<T, 'coverage' | 'frameKinds' | 'latestDeliveryAt' | 'latestQuiescence'> {
+  const {
+    coverage: _coverage,
+    frameKinds: _frameKinds,
+    latestDeliveryAt: _latestDeliveryAt,
+    latestQuiescence: _latestQuiescence,
+    ...rest
+  } = state
   return rest
 }
 
-function contiguousBundleWatermarks(coverage: ReadonlyMap<number, ReadonlySet<string>>): Record<string, number> {
-  const through = (stages: readonly string[]): number => {
+function contiguousBundleWatermarks(
+  coverage: ReadonlyMap<number, ReadonlySet<string>>,
+  frameKinds: ReadonlyMap<number, string>,
+): Record<string, number> {
+  const through = (stages: readonly string[], skipHostHandled = false): number => {
     let sequence = 1
-    while (stages.some(stage => coverage.get(sequence)?.has(stage))) sequence++
+    while (
+      stages.some(stage => coverage.get(sequence)?.has(stage)) ||
+      (skipHostHandled && frameKinds.get(sequence) === 'session-title')
+    ) sequence++
     return sequence - 1
   }
   return {
     produced: through(['engine.produced']), socketSent: through(['sidecar.socket.sent']),
-    hostReceived: through(['host.received']), ipcSent: through(['main.ipc.sent']),
-    preloadReceived: through(['preload.received', 'renderer.subscription.received']),
-    applied: through(['renderer.state.applied']), committed: through(['renderer.ui.committed']),
+    hostReceived: through(['host.received']), ipcSent: through(['main.ipc.sent'], true),
+    preloadReceived: through(['preload.received', 'renderer.subscription.received'], true),
+    applied: through(['renderer.state.applied'], true), committed: through(['renderer.ui.committed']),
   }
-}
-
-function firstMissingFromCoverage(coverage: ReadonlyMap<number, ReadonlySet<string>>): string | null {
-  const produced = contiguousBundleWatermarks(coverage).produced
-  for (let sequence = 1; sequence <= produced; sequence++) {
-    const stages = coverage.get(sequence) ?? new Set<string>()
-    // `sidecar.socket.sent` rides the lossy FD 3 descriptor, so its absence is
-    // missing evidence, never a missing frame: a fully delivered frame whose
-    // send marker was shed used to be reported as stuck at the sidecar. Arrival
-    // in main is the first trustworthy checkpoint, and when THAT is missing the
-    // two upstream hops cannot be told apart, so the verdict is unattributed
-    // rather than a guess (OBSERVABILITY-MINIMUM.md §4).
-    if (!stages.has('host.received') && !stages.has('supervisor.socket.received')) return 'unknown'
-    if (!stages.has('main.ipc.sent')) return 'main.ipc.sent'
-    if (!stages.has('preload.received') && !stages.has('renderer.subscription.received')) return 'preload.received'
-    if (!stages.has('renderer.state.applied')) return 'renderer.state.applied'
-    if (!stages.has('renderer.ui.committed')) return 'renderer.ui.committed'
-  }
-  return null
 }
 
 export function deriveProcessInstances(

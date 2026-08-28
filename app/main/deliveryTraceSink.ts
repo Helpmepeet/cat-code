@@ -711,7 +711,7 @@ export function createDeliveryTraceSink({
 function updateWatermarks(state: StreamState, watermarks: DeliveryWatermarks): DeliveryWatermarks {
   const contiguous = (stage: DeliveryStage, current: number): number => {
     let next = current + 1
-    while (hasStage(state, next, stage)) next++
+    while (stageCovered(state, next, stage)) next++
     return next - 1
   }
   const socketReceived = contiguous('supervisor.socket.received', watermarks.socketReceived)
@@ -741,8 +741,19 @@ function arrived(socketReceived: number, hostReceived: number): number {
 
 function contiguousEither(state: StreamState, stages: readonly DeliveryStage[], current: number): number {
   let next = current + 1
-  while (stages.some(stage => hasStage(state, next, stage))) next++
+  while (stages.some(stage => stageCovered(state, next, stage))) next++
   return next - 1
+}
+
+function stageCovered(state: StreamState, sequence: number, stage: DeliveryStage): boolean {
+  if (hasStage(state, sequence, stage)) return true
+  // `session-title` terminates in main by design: host persists it and publishes
+  // a HostEvent instead of forwarding the sidecar frame to the renderer.
+  if (state.frameKinds.get(sequence) !== 'session-title') return false
+  return stage === 'main.ipc.sent' ||
+    stage === 'preload.received' ||
+    stage === 'renderer.subscription.received' ||
+    stage === 'renderer.state.applied'
 }
 
 function hasStage(state: StreamState, sequence: number, stage: DeliveryStage): boolean {

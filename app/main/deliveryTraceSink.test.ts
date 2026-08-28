@@ -194,6 +194,42 @@ test('contiguous acknowledgements expose an earlier missing frame despite a late
   sink.close()
 })
 
+test('a host-only session title does not pin renderer delivery watermarks', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-host-only-'))
+  const sink = createDeliveryTraceSink({ configDir: root, launchId: 'launch', sweepIntervalMs: 0 })
+  const title = mintDeliveryTrace(1, 'stream')
+  for (const stage of ['engine.produced', 'sidecar.socket.sent', 'supervisor.socket.received', 'host.received'] as const) {
+    sink.mark({ sessionId: 'session', trace: title, stage, frameKind: 'session-title' })
+  }
+  const result = mintDeliveryTrace(2, 'stream')
+  for (const stage of [
+    'engine.produced', 'sidecar.socket.sent', 'supervisor.socket.received', 'host.received',
+    'main.ipc.sent', 'preload.received', 'renderer.state.applied',
+  ] as const) {
+    sink.mark({ sessionId: 'session', trace: result, stage, frameKind: 'event', messageKind: 'result' })
+  }
+
+  expect(sink.summary('session')).toMatchObject({
+    produced: 2,
+    hostReceived: 2,
+    ipcSent: 2,
+    preloadReceived: 2,
+    applied: 2,
+    committed: 0,
+  })
+  sink.emitStreamRollups()
+  expect(laneRecords(root, 'delivery-rollup-')[0]).toMatchObject({
+    deliveryStatus: 'complete',
+    produced: 2,
+    hostReceived: 2,
+    ipcSent: 2,
+    preloadReceived: 2,
+    applied: 2,
+    committed: 0,
+  })
+  sink.close()
+})
+
 /**
  * A frame the way main holds it at a trace site, carrying a real engine message
  * out of the exhaustive SDK fixture rather than an invented shape.
