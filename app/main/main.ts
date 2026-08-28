@@ -3260,3 +3260,23 @@ process.on('unhandledRejection', reason => {
   })
   app.exit(1)
 })
+  type IpcMainEvent,
+const CH_REFRESH_ACCOUNTS_POOL = 'catcode:refresh-accounts-pool'
+/**
+ * Re-read the pool now because a sign-in just wrote to the vault. No-op before
+ * the driver is armed (the first run is already pending) and after it stops.
+ */
+function refreshAccountsPoolNow(): void {
+  accountsPoolDriver?.refreshNow()
+}
+
+function isMainWindowSender(event: IpcMainEvent): boolean {
+  const contents = mainWindow?.webContents
+  return contents !== undefined && !contents.isDestroyed() && event.sender === contents
+}
+
+  ipcMain.on(CH_REFRESH_ACCOUNTS_POOL, event => {
+    if (!isMainWindowSender(event)) return
+    refreshAccountsPoolNow()
+  })
+

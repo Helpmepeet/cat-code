@@ -3774,3 +3774,8 @@ export type PermissionResponseInput =
       applySuggestions?: number[]
     }
   | { behavior: 'deny'; message: string }
+  /**
+   * Ask main's existing account-pool driver for one fresh global snapshot. This
+   * has no payload, starts no session, and never becomes sidecar vocabulary.
+   */
+  refreshAccountsPool(): void

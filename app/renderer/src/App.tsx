@@ -6323,3 +6323,8 @@ type SessionPaneProps = {
   transcript: TranscriptState
   transportError: string | null
 }
+            onOpenAccountSwitcher={() => getBridge().refreshAccountsPool()}
+  onOpenAccountSwitcher,
+          onOpenAccountSwitcher={onOpenAccountSwitcher}
+  /** Request a fresh host-owned account pool when the composer switcher opens. */
+  onOpenAccountSwitcher?: () => void

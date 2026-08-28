@@ -601,3 +601,8 @@ if (__CATCODE_DEV_HARNESS__) {
 }
 
 contextBridge.exposeInMainWorld('catcode', bridge)
+const CH_REFRESH_ACCOUNTS_POOL = 'catcode:refresh-accounts-pool'
+  refreshAccountsPool(): void {
+    sendGuard.assertAllowed({ refreshAccountsPool: true })
+    ipcRenderer.send(CH_REFRESH_ACCOUNTS_POOL)
+  },

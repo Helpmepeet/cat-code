@@ -360,6 +360,12 @@ import { removeTeammateFromTeamFile } from '../utils/swarm/teamHelpers.js'
 import { unassignTeammateTasks } from '../utils/tasks.js'
 import { getRunningTasks } from '../utils/task/framework.js'
 import { isBackgroundTask } from '../tasks/types.js'
+import { isTerminalTaskStatus, type TaskStateBase } from '../Task.js'
+import { formatHeadlessTextResult } from './headlessTextResult.js'
+import {
+  createPendingTaskNotifications,
+  type ObservedTask,
+} from './pendingTaskNotifications.js'
 import { stopTask } from '../tasks/stopTask.js'
 import { drainSdkEvents } from '../utils/sdkEventQueue.js'
 import { initializeGrowthBook } from '../services/analytics/growthbook.js'
@@ -1009,28 +1015,7 @@ export async function runHeadless(
       if (!lastMessage || lastMessage.type !== 'result') {
         throw new Error('No messages returned')
       }
-      switch (lastMessage.subtype) {
-        case 'success':
-          writeToStdout(
-            lastMessage.result.endsWith('\n')
-              ? lastMessage.result
-              : lastMessage.result + '\n',
-          )
-          break
-        case 'error_during_execution':
-          writeToStdout(`Execution error`)
-          break
-        case 'error_max_turns':
-          writeToStdout(`Error: Reached max turns (${options.maxTurns})`)
-          break
-        case 'error_max_budget_usd':
-          writeToStdout(`Error: Exceeded USD budget (${options.maxBudgetUsd})`)
-          break
-        case 'error_max_structured_output_retries':
-          writeToStdout(
-            `Error: Failed to provide valid structured output after maximum retries`,
-          )
-      }
+      writeToStdout(formatHeadlessTextResult(lastMessage, options))
   }
 
   // Log headless latency metrics for the final turn
@@ -1104,6 +1089,32 @@ function runHeadlessStreaming(
   let inputClosed = false
   let shutdownPromptInjected = false
   let heldBackResult: StdoutMessage | null = null
+  // A background agent's status goes terminal long before its notification is
+  // enqueued — AgentTool.tsx:1714 flips it, then a full classifyHandoffIfNeeded
+  // API call and worktree cleanup run, and only :1756 enqueues. The wait loop
+  // below reads that window as idle (isBackgroundTask() is already false,
+  // queue still empty) and would flush heldBackResult as the run's answer.
+  // 120s comfortably exceeds a classifier round trip plus git cleanup; the
+  // window observed in the 2026-08-27 incident was one in-flight API call.
+  const UNDELIVERED_NOTIFICATION_DEADLINE_MS = 120_000
+  const pendingTaskNotifications = createPendingTaskNotifications(
+    UNDELIVERED_NOTIFICATION_DEADLINE_MS,
+  )
+  const observeTasks = (state: AppState): ObservedTask[] =>
+    Object.values(state.tasks ?? {}).map((task): ObservedTask => {
+      // `TaskState` imports two modules that are not on disk, so it does not
+      // resolve to a usable shape here (see src/tasks/attention.ts:11).
+      // `TaskStateBase` is the real, checked declaration of every field read
+      // below; isBackgroundTask() still runs against the original value.
+      const base = task as TaskStateBase
+      return {
+        id: base.id,
+        isBackgroundWork:
+          isBackgroundTask(task) && base.type !== 'in_process_teammate',
+        isTerminal: isTerminalTaskStatus(base.status),
+        notified: Boolean(base.notified),
+      }
+    })
   let abortController: AbortController | undefined
   // Set once the goal loop exists (below). Held in a mutable slot rather than
   // closed over directly because SIGINT can land before that line runs.
@@ -2358,6 +2369,12 @@ function runHeadlessStreaming(
                   )
                 ) {
                   heldBackResult = message
+                  // Seed the tracker while those tasks are still running, so
+                  // their ids are known before any of them flips to terminal.
+                  pendingTaskNotifications.update(
+                    observeTasks(currentState),
+                    Date.now(),
+                  )
                 } else {
                   heldBackResult = null
                   output.enqueue(message)
@@ -2493,6 +2510,10 @@ function runHeadlessStreaming(
         }
       }
 
+      // Background work whose notification never arrived within the deadline.
+      // Non-empty means this turn cannot produce a truthful answer.
+      const undeliveredTaskIds: string[] = []
+
       // Use a do-while loop to drain commands and then wait for any
       // background agents that are still running. When agents complete,
       // their notifications are enqueued and the loop re-drains.
@@ -2520,6 +2541,15 @@ function runHeadlessStreaming(
           const hasRunningBg = getRunningTasks(state).some(
             t => isBackgroundTask(t) && t.type !== 'in_process_teammate',
           )
+          // Terminal-but-unnotified background work. Without this the handover
+          // window reads as idle: hasRunningBg is already false and the
+          // notification has not reached the queue yet.
+          const notificationSweep = pendingTaskNotifications.update(
+            observeTasks(state),
+            Date.now(),
+          )
+          undeliveredTaskIds.push(...notificationSweep.expired)
+          const hasPendingNotification = notificationSweep.pending.length > 0
           let hasMainThreadQueued = peek(isMainThread) !== undefined
 
           // Headless idle boundary: the queue has drained and nothing is
@@ -2532,6 +2562,9 @@ function runHeadlessStreaming(
           // turn instead of stopping.
           if (
             !hasRunningBg &&
+            // A continuation enqueued during the handover window would race
+            // the task notification that is about to arrive.
+            !hasPendingNotification &&
             !hasMainThreadQueued &&
             headlessGoalLoop &&
             !isShuttingDown()
@@ -2549,7 +2582,7 @@ function runHeadlessStreaming(
             }
           }
 
-          if (hasRunningBg || hasMainThreadQueued) {
+          if (hasRunningBg || hasPendingNotification || hasMainThreadQueued) {
             waitingForAgents = true
             if (!hasMainThreadQueued) {
               runPhase = 'waiting_for_agents'
@@ -2561,7 +2594,33 @@ function runHeadlessStreaming(
         }
       } while (waitingForAgents)
 
-      if (heldBackResult) {
+      if (undeliveredTaskIds.length > 0) {
+        // Fail closed. Resuming the normal flush here would emit the model's
+        // pre-wait holding message as the run's answer and exit 0 — the exact
+        // failure this patch exists to prevent. Drop it and report an error so
+        // the process exits non-zero.
+        heldBackResult = null
+        suggestionState.pendingSuggestion = null
+        suggestionState.pendingLastEmittedEntry = null
+        output.enqueue({
+          type: 'result',
+          subtype: 'error_during_execution',
+          duration_ms: 0,
+          duration_api_ms: 0,
+          is_error: true,
+          num_turns: 0,
+          stop_reason: null,
+          session_id: getSessionId(),
+          total_cost_usd: 0,
+          usage: EMPTY_USAGE,
+          modelUsage: {},
+          permission_denials: [],
+          uuid: randomUUID(),
+          errors: [
+            `Background task result was never delivered to the model: ${undeliveredTaskIds.join(', ')}`,
+          ],
+        })
+      } else if (heldBackResult) {
         output.enqueue(heldBackResult)
         heldBackResult = null
         if (suggestionState.pendingSuggestion) {
