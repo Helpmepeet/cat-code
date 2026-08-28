@@ -52,8 +52,8 @@ function themeCss(): string {
  * rather than throwing, so the assertion names which one broke.
  *
  * `var(...)` counts as opaque, which is exact rather than a shortcut: the only
- * var this declaration may name is the page ground itself, and the assertion
- * below pins it to that.
+ * var these declarations may name is a page ground token, and a ground token is
+ * the alpha-1 shape the light half is asserted never to return to.
  */
 function translucentPair(body: string): { light: boolean; dark: boolean } {
   const pair =
@@ -126,13 +126,15 @@ test('the stamp is present only while glass is on', () => {
  * The attribute is only half the mechanism: without a matching rule the toggle
  * silently does nothing, and no render assertion can see that.
  *
- * WHAT EACH HALF HAS TO BE. Dark must be translucent on the page ground: an
- * opaque value there is a toggle that does nothing while still passing a shape
- * check. Light must still read as the plain opaque page ground — glass in light
- * is deliberately inert, because macOS's light material composites to about
- * #c2c2c2 over a real desktop and a coat heavy enough to keep the light text
- * ramp legible leaves no material to see. That ruling stands (operator,
- * 2026-08-28). What moved on 2026-08-28, twice, is WHERE the ground is painted.
+ * WHAT EACH HALF HAS TO BE: translucent, both of them. An opaque value on
+ * either side is a toggle that does nothing in that appearance while still
+ * passing every shape check, and that is not a hypothetical — the light half was
+ * `var(--app-bg)` from `6a90d30f` until 2026-08-28, which is precisely why the
+ * operator reported light glass as dead: at alpha 1 no backdrop can reach the
+ * page, so a light window over black is pixel-identical to a light window over
+ * anything. Measured on the real material, the light ground went #FCFCFD (the
+ * material contributing nothing) to #E5E5E5 when this half became a coat. So the
+ * assertion is on ALPHA, and the bare token is the shape it must never return to.
  *
  * IT MAY NOT BE PAINTED ON `html` OR `body` IN ANY STATE. Their backgrounds
  * become the document CANVAS (`body`'s propagates up whenever `html`'s is
@@ -161,12 +163,12 @@ test('the canvas is never painted, and the ground rules mirror on body::before',
   expect(ground?.[1]).toContain('inset: 0')
   expect(ground?.[1]).toContain('background: var(--color-app-bg)')
 
-  // Glass retargets ONLY the pseudo-element: dark coat translucent, light the
-  // plain opaque ground through the token, so the inert-in-light ruling holds.
+  // Glass retargets ONLY the pseudo-element, and both halves are coats.
   const coat = css.match(/html\[data-glass='on'\] body::before\s*\{([^}]*)\}/)
   expect(coat).not.toBeNull()
-  expect(translucentPair(coat?.[1] ?? '')).toEqual({ light: false, dark: true })
-  expect(coat?.[1]).toContain('light-dark(var(--app-bg),')
+  expect(translucentPair(coat?.[1] ?? '')).toEqual({ light: true, dark: true })
+  // The inert shape, named so a revert to it fails here rather than on screen.
+  expect(coat?.[1]).not.toContain('light-dark(var(--app-bg),')
 
   // The old shape of the defect: no glass rule may put a background back on
   // `html` or `body` themselves. Every glass selector must aim past the canvas
@@ -175,11 +177,10 @@ test('the canvas is never painted, and the ground rules mirror on body::before',
     expect(match[0]).toMatch(/::before|\[data-window-/)
   }
 
-  // The frame still carries the light ground and dark clears it, so the coats
-  // do not compound.
+  // The frame clears in both appearances now, so the coats do not compound.
   const frame = css.match(/html\[data-glass='on'\] \[data-window-ground\]\s*\{([^}]*)\}/)
   expect(frame).not.toBeNull()
-  expect(frame?.[1]).toContain('light-dark(var(--app-bg), transparent)')
+  expect(frame?.[1]).toMatch(/background:\s*transparent;/)
 
   // Off is the absence of the attribute, so no rule may describe it.
   expect(css).not.toContain("data-glass='off'")
@@ -208,24 +209,25 @@ test('glass never redeclares a theme token', () => {
 
 /**
  * The app frame repeats the page ground `body::before` paints. Opaque that is
- * invisible; in DARK, where the pseudo-element carries the coat, the frame
- * would hide what the toggle just turned on, so it is cleared there.
+ * invisible; over a coat it is a SECOND coat, and it would hide exactly what the
+ * toggle just turned on.
  *
- * It is NOT cleared in light, and that asymmetry is deliberate: light glass is
- * inert, so the frame goes on painting the plain ground. `body` no longer
- * appears in this rule at all — the base layer keeps it transparent in every
- * state (its background would become the canvas; see the test above), so there
- * is nothing on it for glass to clear.
+ * It used to clear in dark only, and carry the plain ground in light, because
+ * light glass was inert. Both halves are coats now, so the asymmetry is gone and
+ * the rule is one unconditional `transparent` — an appearance-split here would be
+ * a frame painting over the material in whichever half kept the token. `body` no
+ * longer appears in this rule at all: the base layer keeps it transparent in
+ * every state (its background would become the canvas; see the test above), so
+ * there is nothing on it for glass to clear.
  */
-test('the repeated page ground is cleared in dark, and carries the ground in light', () => {
+test('the repeated page ground is cleared in both appearances', () => {
   const css = themeCss()
   const rule = css.match(
     /html\[data-glass='on'\] \[data-window-ground\]\s*\{([^}]*)\}/,
   )
   expect(rule).not.toBeNull()
-  // Dark half clears; light half paints the token.
-  expect(translucentPair(rule?.[1] ?? '')).toEqual({ light: false, dark: false })
-  expect(rule?.[1]).toContain('light-dark(var(--app-bg), transparent)')
+  expect(rule?.[1]).toMatch(/background:\s*transparent;/)
+  expect(rule?.[1]).not.toContain('light-dark')
 })
 
 /**
@@ -371,13 +373,17 @@ test('the app frame is marked, on the element and not only in its comment', () =
  * re-added here without the finding that killed it.
  *
  * Toning the backdrop toward the appearance's own ground is the one lever that
- * escapes the coat's trade, and it does not work from this element: Chromium
- * declines `backdrop-filter` on the ROOT, and the operator's window was
- * pixel-identical to the coat alone with it shipped. The sidebar overlay below
- * proves the filter can sample the native material, so this is about `html`
- * being the wrong element, not about the technique (`theme.css`).
+ * escapes the coat's trade, and it does not work from the page AT ALL. It was
+ * tried on the ROOT and the operator's window came back pixel-identical to the
+ * coat alone; the note left behind blamed the element and pointed at a full-area
+ * child as the thread to pull. Refuted 2026-08-28 by putting the filter on
+ * `body::before`, which IS that full-area child: `brightness(0.3)` moved not one
+ * level on any of twelve vibrancy materials. The web layer's backdrop is
+ * transparent black and a filter over transparent black stays transparent,
+ * wherever it hangs. The sidebar overlay is not a counter-example either — it
+ * samples the page behind it, never the native material.
  */
-test('the root rule carries no backdrop filter, because it is inert there', () => {
+test('no page-ground rule carries a backdrop filter, because it is inert there', () => {
   const css = themeCss()
   for (const selector of [
     /html\[data-glass='on'\]\s*\{([^}]*)\}/,

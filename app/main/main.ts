@@ -73,6 +73,7 @@ import {
   resolveSidecarLaunch,
   type SidecarLaunchPlan,
   selectTranscriptBackfillCandidates,
+  frameMutatedAccountsPool,
   supervisorEventToServerFrame,
   validateSaveTextRequest,
 } from './mainDecisions.js'
@@ -94,7 +95,7 @@ import {
   resolveOpenHistorySession,
   type TrustedOpenHistorySeed,
 } from './openHistorySession.js'
-import { openWorkspaceFile } from './openWorkspaceFile.js'
+import { openWorkspaceFile, type OpenWorkspaceFileTarget } from './openWorkspaceFile.js'
 import {
   persistTranscriptBackfillResult,
   runTranscriptBackfill,
@@ -1724,6 +1725,14 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
     if (frame.kind === 'session-action.result') {
       rememberBranchOpenSeed(event.sessionId, frame)
     }
+    // An account verb that landed, or a completed sign-in, changes the pool from
+    // outside this worker's cadence. The frame still forwards normally; the
+    // accounts owner stays main (decisions/ACCOUNTS-OWNERSHIP.md) rather than the
+    // session snapshot being promoted to drive these surfaces. The predicate is
+    // Electron-free so it can be unit-driven; nothing here can execute in a test.
+    if (frameMutatedAccountsPool(frame)) {
+      refreshAccountsPoolNow()
+    }
     const traced = traceFrame(frame, 'supervisor.socket.received')
     // Receipt is true whether the attachment gate forwards immediately or
     // buffers for replay; record that before deciding its outcome.
@@ -2345,9 +2354,14 @@ function registerIpcHandlers(): void {
    * ON THE SHIPPED APP it answers from the other side: a live window running this
    * renderer does not follow `themeSource` at all. Moved to `'light'`
    * (`shouldUseDarkColors` false, `getEffectiveAppearance()` `'light'`) its ground
-   * stayed #2F2F31, and a re-mint issued by hand left it at #2F2F31 too. It does
-   * not matter which way it lands: glass is a dark-appearance effect (6a90d30f),
-   * so in light the page ground is opaque and the material is never seen.
+   * stayed #2F2F31, and a re-mint issued by hand left it at #2F2F31 too. That
+   * reading was taken while light glass was still inert (`6a90d30f`), so an
+   * opaque light page ground could equally have explained it; it stopped being
+   * inert on 2026-08-28 and the light half is a coat now, which means this is the
+   * one claim here that a light session can finally contradict. If the window
+   * ever goes light and the ground does NOT move off `--app-bg`, the material is
+   * genuinely stuck in the appearance the window was born in, and a re-mint
+   * belongs back at this spot — with that measurement written down beside it.
    *
    * WHAT IS NOT ESTABLISHED, corrected 2026-08-28 after an independent review
    * inspected the native hierarchy that pixels cannot see. An earlier version of
@@ -2523,6 +2537,19 @@ function registerHostControlPlane(): void {
       if (!host) return Promise.resolve(noHost<SessionDescriptor>())
       // HC2 — the host validates id shape + membership; pass through as unknown.
       const sessionId = String(appSessionId)
+      const descriptor = host
+        .listSessions()
+        .find(candidate => candidate.appSessionId === sessionId)
+      if (descriptor?.engineSessionId) {
+        const eligibility = resolveOpenHistorySession(
+          descriptor.engineSessionId,
+          [descriptor],
+          readSessionsCatalogCache(defaultRegistryDir()),
+        )
+        if (eligibility.kind === 'reject') {
+          return Promise.resolve({ ok: false, error: eligibility.error })
+        }
+      }
       // IS-B/M4 — only a renderer-requested lazy restore enters bootstrap/replay
       // coalescing. Fresh create, restart, and ordinary live traffic keep their
       // existing delivery behavior.
@@ -2825,7 +2852,83 @@ function registerHostControlPlane(): void {
 
   ipcMain.handle(CH_HOST_OPEN_WORKSPACE_FILE, (_e, input: unknown): Promise<boolean> => {
     if (!host) return Promise.resolve(false)
-    return openWorkspaceFile(input, host.listSessions(), path => shell.openPath(path))
+    return openWorkspaceFile(input, host.listSessions(), (path, target) =>
+      launchTargetOpener(path, target),
+    )
+  })
+}
+
+function launchTargetOpener(
+  path: string,
+  target?: OpenWorkspaceFileTarget,
+): Promise<boolean | string> {
+  if (target === 'finder') {
+    shell.showItemInFolder(path)
+    return Promise.resolve(true)
+  }
+  if (target === 'vscode') {
+    return launchEditorApp(['Visual Studio Code'], ['code'], path)
+  }
+  if (target === 'zed') {
+    return launchEditorApp(['Zed'], ['zed'], path)
+  }
+  if (target === 'cursor') {
+    return launchEditorApp(['Cursor'], ['cursor'], path)
+  }
+  return shell.openPath(path)
+}
+
+function launchEditorApp(
+  appNames: readonly string[],
+  cliBinaries: readonly string[],
+  filePath: string,
+): Promise<boolean> {
+  return new Promise<boolean>(resolve => {
+    let resolved = false
+    const finish = (ok: boolean) => {
+      if (!resolved) {
+        resolved = true
+        resolve(ok)
+      }
+    }
+
+    if (process.platform === 'darwin' && appNames.length > 0) {
+      try {
+        const child = spawn('open', ['-a', appNames[0], filePath], {
+          stdio: 'ignore',
+        })
+        child.on('error', () => {
+          tryCliFallback()
+        })
+        child.on('exit', code => {
+          if (code === 0) finish(true)
+          else tryCliFallback()
+        })
+      } catch {
+        tryCliFallback()
+      }
+      return
+    }
+
+    tryCliFallback()
+
+    function tryCliFallback() {
+      if (cliBinaries.length === 0) {
+        finish(false)
+        return
+      }
+      try {
+        const child = spawn(cliBinaries[0], [filePath], {
+          detached: true,
+          stdio: 'ignore',
+        })
+        child.unref()
+        child.on('error', () => finish(false))
+        setTimeout(() => finish(true), 150)
+      } catch {
+        finish(false)
+      }
+    }
   })
 }
 

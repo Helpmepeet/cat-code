@@ -586,50 +586,58 @@ html[data-appearance='light'] [data-accent='amber'] {
  * choice) is what swaps the blur behind the page from the dark material to the
  * light one; all this rule does either way is decide how much of it survives.
  *
- * GLASS IS A DARK-APPEARANCE EFFECT. In light it is deliberately inert, and the
- * light half of this declaration paints the ordinary page ground: turning the
- * toggle on changes nothing you can see. That is a decision (operator,
- * 2026-08-28), and it is the decision the measurements had been pointing at for
- * three rounds without anyone reading them that way.
+ * ONE COAT, BOTH APPEARANCES, and only its colour flips. 0.2 either way: the
+ * light half is the light page ground at the same alpha the dark half has always
+ * used, so "how much material survives" is a single number a reader can move
+ * once. Light was OPAQUE here until 2026-08-28 (`6a90d30f` ruled it inert), which
+ * is the whole defect the operator reported: with alpha 1 nothing behind the
+ * window can reach the page, so a light window over a black background is
+ * pixel-identical to a light window over anything else, exactly as they saw.
  *
- * WHY IT CANNOT BE BOTH. macOS's light `under-window` material composites to
- * about #c2c2c2 over a real desktop — mid-grey, nowhere near white. A white coat
- * over that buys the page's identity back only by hiding the very thing it is
- * covering, so light glass is a straight trade with no middle: at a 10% coat the
- * ground lands near #c8c8c8, where `--text-faint` is 2.9:1 and `--text-subtle`
- * 4.4:1, i.e. under the app's own bar; at enough coat to read as light there is
- * no material left. The dark appearance has no such trade, because darkening a
- * dark blur costs almost nothing, which is why one alpha survives here and the
- * other does not.
+ * MEASURED, on the real material, with the probe rig in
+ * `docs/reports/2026-08-28-light-glass.md`. A window carrying this file's own
+ * shape reads #FCFCFD with the old opaque light half — the material contributing
+ * nothing — and #E5E5E5 with this one, i.e. the ground is a function of the
+ * material again. The dark control in the same run reads #3A3A39, which is the
+ * healthy dark number this feature has always been scored against.
  *
- * EVERY LIGHT READING TAKEN BEFORE 2026-08-28 WAS VOID, which is why it took so
- * long to land on that. A ladder of four values was recorded here (0.22 rejected,
- * then 0.06, then 0.14, then 0.10 "the last useful nudge") along with a claim
- * that macOS clamps this material near white so legibility never constrained the
- * light dial. All of it was measured through the defect `ca260275` fixed: the
- * material was still resolved to the appearance the window was BORN in, so a
- * light page was being judged against a DARK material every time. Deleted rather
- * than corrected; none of it measured what it claimed to.
+ * WHAT LIGHT COSTS, stated rather than designed away. macOS's light
+ * `under-window` material is far more transparent than its dark twin, so the
+ * light ground tracks the wallpaper instead of clamping: it lands near #E6E6E5
+ * over a pale desktop and around #BDBDBD over a black one. The ink ramp is tuned
+ * for #fcfcfd, so on that darker end `--text-faint` falls to about 2.9:1 and
+ * `--text-subtle` to 3.8:1, under the app's own bar. THE ALPHA IS NOT THE LEVER
+ * for that: across 0.15 to 0.30 the ground moves four levels and `--text-faint`
+ * moves 0.16, because the material dominates the mix at every value in that
+ * range. Anchoring the light ground would take a coat near 0.6, which leaves no
+ * material to see. So this is the same straight trade the dark appearance is
+ * exempt from, taken deliberately: a translucent light window IS grey over a
+ * dark desktop, the way every native one is.
  *
- * TONING THE BACKDROP WAS TRIED AND DOES NOT WORK FROM HERE. `backdrop-filter`
- * on this rule would move the material toward the appearance's own ground
- * instead of hiding it, which is the one lever that escapes the trade above.
- * Chromium declines it on the ROOT element: shipped as
- * `brightness(1.25) saturate(1.3)` for light and `brightness(0.55)` for dark,
- * and the operator's window was pixel-identical to the coat alone. It is not
- * that the filter cannot sample the native material — the sidebar overlay below
- * blurs it successfully — it is that `html` is the wrong element to hang it on.
- * If light glass is ever wanted for real, that is the thread: a full-area child
- * element carrying the filter, or `transparent: true` plus our own blur radius
- * (tried and backed out in 4c0b9ad7, and it costs the title bar). Not another
- * alpha.
+ * TONING THE BACKDROP DOES NOT WORK, and the element is not the reason.
+ * `backdrop-filter` here would move the material toward the appearance's own
+ * ground instead of hiding it, which is the one lever that escapes that trade.
+ * It was tried on `html` (shipped briefly as `brightness(1.25) saturate(1.3)`
+ * light / `brightness(0.55)` dark) and the window was pixel-identical to the coat
+ * alone; the note left behind blamed `html` and pointed at a full-area child as
+ * the thread to pull. That is now refuted: measured 2026-08-28 with the filter on
+ * THIS pseudo-element, a full-area child of `body`, `brightness(0.3)` moved not
+ * one level on any of twelve materials. The web layer's backdrop is transparent
+ * black, and a filter over transparent black stays transparent, whichever element
+ * carries it. The sidebar overlay below is not a counter-example: it samples the
+ * PAGE behind it, never the native material. If a toned light material is ever
+ * wanted, the remaining thread is the material itself — `setVibrancy` can move a
+ * vibrant window to a lighter one (`sheet`, `header` and `window` all read
+ * lighter than `under-window` in light) — or `transparent: true` plus our own
+ * blur radius (tried and backed out in 4c0b9ad7, and it costs the title bar).
+ * Not another alpha, and not another element.
  *
  * `light-dark()` rather than a second `[data-appearance]` rule because the whole
  * declaration is one value; it resolves against the `color-scheme` the light
  * block sets, which is why that property is not optional there.
  */
 html[data-glass='on'] body::before {
-  background: light-dark(var(--app-bg), rgba(9, 9, 11, 0.2));
+  background: light-dark(rgba(252, 252, 253, 0.2), rgba(9, 9, 11, 0.2));
 }
 
 /*
@@ -657,9 +665,14 @@ html[data-glass='on'] body::before {
  *
  * Unlayered on purpose, so it outranks both the `@layer base` declaration it
  * undoes and the `bg-app-bg` utility in `@layer utilities`.
+ *
+ * No `light-dark()` here any more. It carried the opaque ground in light for as
+ * long as light glass was inert; now that the light half of the coat above is
+ * translucent too, a frame repeating the ground in EITHER appearance would put a
+ * second coat over the material and hide what the toggle just turned on.
  */
 html[data-glass='on'] [data-window-ground] {
-  background: light-dark(var(--app-bg), transparent);
+  background: transparent;
 }
 
 /*
@@ -674,13 +687,27 @@ html[data-glass='on'] [data-window-ground] {
  * (`--color-shell-chrome` sits below `--color-app-bg`). At 0 the chrome becomes
  * the body exactly and only the seams divide them.
  *
+ * BOTH HALVES DARKEN, which is why the light one is a black wash rather than the
+ * fixed light colour it used to be. Chrome sits BELOW the body in this shell in
+ * either appearance (#f1f1f4 under #fcfcfd in light, #070709 under #09090b in
+ * dark). The old light half was `rgba(232, 232, 238, 0.16)`, a fixed tone that
+ * happened to sit under the OPAQUE #fcfcfd ground it was written against and sits
+ * OVER the translucent one: measured against the shipped coat it lands a level
+ * above the page, and roughly seven above it over a dark desktop, so the rail
+ * would float on top of the page it frames. A wash is proportional and cannot
+ * invert that way. The alpha is the shell's own step rather than a taste: 0.045
+ * of `#09090b` over `#fcfcfd` composites to #f1f1f2, i.e. `--shell-chrome`
+ * itself, so the rail keeps its relationship to the ground wherever the wallpaper
+ * drags it (measured #DCDCDC under a #E5E5E5 page, the same nine-level step the
+ * solid app has).
+ *
  * Marked per ELEMENT, deliberately. Thinning `--color-shell-chrome` itself would
  * take nine floating menus with it (`SessionActionsMenu`, `SessionsPage`,
  * `Sidebar`, the scroll-to-bottom pill), and a context menu you can read the
  * transcript through is not a menu.
  */
 html[data-glass='on'] [data-window-chrome] {
-  background: light-dark(rgba(232, 232, 238, 0.16), rgba(7, 7, 9, 0.12));
+  background: light-dark(rgba(9, 9, 11, 0.045), rgba(7, 7, 9, 0.12));
 }
 
 /*
@@ -700,7 +727,7 @@ html[data-glass='on'] [data-window-chrome] {
  * only has to supply tint.
  */
 html[data-glass='on'] [data-window-overlay] {
-  background: light-dark(rgba(232, 232, 238, 0.16), rgba(7, 7, 9, 0.12));
+  background: light-dark(rgba(9, 9, 11, 0.045), rgba(7, 7, 9, 0.12));
   backdrop-filter: blur(22px);
 }
 
