@@ -2018,6 +2018,182 @@ export const S1_STREAMING_REASONING_TURN: {
 }
 
 /**
+ * Codex can expose summary and raw reasoning concurrently. It closes raw first,
+ * so the second authoritative assistant frame must recover the still-live
+ * summary block's index instead of reusing raw's most recent index.
+ */
+export const S1_CONCURRENT_REASONING_TURN: {
+  readonly name: string
+  readonly expectFinalRows: number
+  readonly messages: readonly SDKMessage[]
+} = {
+  name: 'S1 concurrent reasoning turn: raw closes before summary',
+  expectFinalRows: 3,
+  messages: [
+    {
+      type: 'stream_event',
+      event: {
+        type: 'message_start',
+        message: {
+          id: 'msg_01S1ConcurrentReasoning',
+          type: 'message',
+          role: 'assistant',
+          model: 'gpt-5.6-terra',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 1200, output_tokens: 1, service_tier: null },
+        },
+      },
+      parent_tool_use_id: null,
+      session_id: SESSION,
+      uuid: '00000000-0000-4000-8000-00000000sc01',
+    },
+    {
+      type: 'stream_event',
+      event: {
+        type: 'content_block_start',
+        index: 0,
+        content_block: {
+          type: 'thinking',
+          thinking: '',
+          reasoning_kind: 'summary',
+        },
+      },
+      parent_tool_use_id: null,
+      session_id: SESSION,
+      uuid: '00000000-0000-4000-8000-00000000sc02',
+    },
+    {
+      type: 'stream_event',
+      event: {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'thinking_delta', thinking: 'Summary' },
+      },
+      parent_tool_use_id: null,
+      session_id: SESSION,
+      uuid: '00000000-0000-4000-8000-00000000sc03',
+    },
+    {
+      type: 'stream_event',
+      event: {
+        type: 'content_block_start',
+        index: 1,
+        content_block: {
+          type: 'thinking',
+          thinking: '',
+          reasoning_kind: 'raw',
+        },
+      },
+      parent_tool_use_id: null,
+      session_id: SESSION,
+      uuid: '00000000-0000-4000-8000-00000000sc04',
+    },
+    {
+      type: 'stream_event',
+      event: {
+        type: 'content_block_delta',
+        index: 1,
+        delta: { type: 'thinking_delta', thinking: 'Raw' },
+      },
+      parent_tool_use_id: null,
+      session_id: SESSION,
+      uuid: '00000000-0000-4000-8000-00000000sc05',
+    },
+    {
+      type: 'assistant',
+      message: {
+        id: 'msg_01S1ConcurrentReasoning',
+        model: 'gpt-5.6-terra',
+        role: 'assistant',
+        content: [{
+          type: 'thinking',
+          thinking: 'Raw',
+          signature: 'raw-signature',
+          reasoningKind: 'raw',
+        }],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 1200, output_tokens: 4, service_tier: null },
+      },
+      parent_tool_use_id: null,
+      session_id: SESSION,
+      uuid: '00000000-0000-4000-8000-00000000sc06',
+    },
+    {
+      type: 'stream_event',
+      event: { type: 'content_block_stop', index: 1 },
+      parent_tool_use_id: null,
+      session_id: SESSION,
+      uuid: '00000000-0000-4000-8000-00000000sc07',
+    },
+    {
+      type: 'assistant',
+      message: {
+        id: 'msg_01S1ConcurrentReasoning',
+        model: 'gpt-5.6-terra',
+        role: 'assistant',
+        content: [{
+          type: 'thinking',
+          thinking: 'Summary',
+          signature: 'summary-signature',
+          reasoningKind: 'summary',
+        }],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 1200, output_tokens: 8, service_tier: null },
+      },
+      parent_tool_use_id: null,
+      session_id: SESSION,
+      uuid: '00000000-0000-4000-8000-00000000sc08',
+    },
+    {
+      type: 'stream_event',
+      event: { type: 'content_block_stop', index: 0 },
+      parent_tool_use_id: null,
+      session_id: SESSION,
+      uuid: '00000000-0000-4000-8000-00000000sc09',
+    },
+    {
+      type: 'stream_event',
+      event: {
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn', stop_sequence: null },
+        usage: { output_tokens: 8 },
+      },
+      parent_tool_use_id: null,
+      session_id: SESSION,
+      uuid: '00000000-0000-4000-8000-00000000sc10',
+    },
+    {
+      type: 'stream_event',
+      event: { type: 'message_stop' },
+      parent_tool_use_id: null,
+      session_id: SESSION,
+      uuid: '00000000-0000-4000-8000-00000000sc11',
+    },
+    {
+      type: 'result',
+      subtype: 'success',
+      duration_ms: 10,
+      duration_api_ms: 8,
+      is_error: false,
+      num_turns: 1,
+      result: 'done',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 1, output_tokens: 8 },
+      modelUsage: {},
+      permission_denials: [],
+      fast_mode_state: 'off',
+      session_id: SESSION,
+      uuid: '00000000-0000-4000-8000-00000000sc12',
+    },
+  ],
+}
+
+/**
  * D2/C4 nested-subagent turn (P4-8c AgentToolCard fixture): a top-level Agent
  * tool_use (`subagent_type`/`description`/`prompt` — the real Agent-tool input
  * keys) whose subagent re-emits a full frame UNDER it (non-null

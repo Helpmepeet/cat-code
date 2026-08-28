@@ -21,6 +21,7 @@ import {
   allSdkMessageSamples,
   DRIFT_WIRE_SAMPLE_JSON,
   PARALLEL_AGENTS_TURN,
+  S1_CONCURRENT_REASONING_TURN,
   S1_STREAMING_REASONING_TURN,
   S1_STREAMING_TEXT_TURN,
   SDK_MESSAGE_FIXTURE,
@@ -519,6 +520,37 @@ test('projects thinking deltas immediately and reconciles their stable identity 
       .filter(row => row.kind === 'thinking' || row.kind === 'assistant-text')
       .map(row => row.kind),
   ).toEqual(['thinking', 'assistant-text'])
+})
+
+test('reconciles concurrent raw and summary reasoning against their own block indexes', () => {
+  const frames: ServerFrame[] = [
+    ready('session-1'),
+    ...S1_CONCURRENT_REASONING_TURN.messages.map(message =>
+      messageFrame('session-1', message),
+    ),
+  ]
+  const state = projectSequential(frames)
+  const reasoning = selectTranscriptRows(state, 'session-1').filter(
+    row => row.kind === 'thinking',
+  )
+
+  expect(reasoning).toMatchObject([
+    {
+      id: 'session-1:msg_01S1ConcurrentReasoning:0:thinking',
+      blockIndex: 0,
+      content: 'Summary',
+      signature: 'summary-signature',
+      reasoningKind: 'summary',
+    },
+    {
+      id: 'session-1:msg_01S1ConcurrentReasoning:1:thinking',
+      blockIndex: 1,
+      content: 'Raw',
+      signature: 'raw-signature',
+      reasoningKind: 'raw',
+    },
+  ])
+  expect(projectServerFrames(createTranscriptState(), frames)).toEqual(state)
 })
 
 test('thinking starts are idempotent and readable deltas remain distinct by block index', () => {
@@ -5017,18 +5049,20 @@ test('sequential transcript projection is invariant across replay delivery parti
 })
 
 test('batch projection matches the single-frame projector at every streaming reasoning prefix', () => {
-  const frames: ServerFrame[] = [
-    ready('session-1'),
-    ...S1_STREAMING_REASONING_TURN.messages.map(message =>
-      messageFrame('session-1', message),
-    ),
-  ]
-
-  for (let count = 1; count <= frames.length; count += 1) {
-    const prefix = frames.slice(0, count)
-    expect(projectServerFrames(createTranscriptState(), prefix)).toEqual(
-      projectSequential(prefix),
-    )
+  for (const fixture of [
+    S1_STREAMING_REASONING_TURN,
+    S1_CONCURRENT_REASONING_TURN,
+  ]) {
+    const frames: ServerFrame[] = [
+      ready('session-1'),
+      ...fixture.messages.map(message => messageFrame('session-1', message)),
+    ]
+    for (let count = 1; count <= frames.length; count += 1) {
+      const prefix = frames.slice(0, count)
+      expect(projectServerFrames(createTranscriptState(), prefix)).toEqual(
+        projectSequential(prefix),
+      )
+    }
   }
 })
 

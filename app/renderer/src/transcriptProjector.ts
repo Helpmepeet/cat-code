@@ -1838,7 +1838,15 @@ function projectBatchAssistant(
     draft.session.currentStreamBlockIndex !== null
       ? draft.session.currentStreamBlockIndex
       : fallbackIndex
-  const stableFrameId = frameId ?? `${messageId}:block-${firstBlockIndex}`
+  const blockIndexes = body.content.map((block, localIndex) =>
+    streamingThinkingBlockIndex(
+      messageId,
+      block,
+      draft.session.streamingThinkingBlocks,
+    ) ?? (firstBlockIndex + localIndex),
+  )
+  const stableFrameId =
+    frameId ?? `${messageId}:block-${blockIndexes[0] ?? firstBlockIndex}`
   const parentToolUseId = nonEmptyString(message.parent_tool_use_id)
   const agentName = normalizeAgentName(message.agent_name)
   const model = nonEmptyString(body.model)
@@ -1847,7 +1855,7 @@ function projectBatchAssistant(
       sessionId: draft.sessionId,
       messageId,
       frameId: stableFrameId,
-      blockIndex: firstBlockIndex + localIndex,
+      blockIndex: blockIndexes[localIndex]!,
       parentToolUseId,
       ...(agentName ? { agentName } : {}),
       ...(model !== null ? { model } : {}),
@@ -1870,7 +1878,7 @@ function projectBatchAssistant(
   ensureBatchNextBlockIndexes(draft)
   draft.session.nextBlockIndexByMessageId[messageId] = Math.max(
     fallbackIndex,
-    firstBlockIndex + body.content.length,
+    ...blockIndexes.map(blockIndex => blockIndex + 1),
   )
   if (frameId) markBatchFrameSeen(draft, frameId)
   changed = true
@@ -2371,9 +2379,17 @@ function projectAssistantFrame(
     state.currentStreamBlockIndex !== null
       ? state.currentStreamBlockIndex
       : fallbackIndex
-  const stableFrameId = frameId ?? `${messageId}:block-${firstBlockIndex}`
+  const blockIndexes = body.content.map((block, localIndex) =>
+    streamingThinkingBlockIndex(
+      messageId,
+      block,
+      state.streamingThinkingBlocks,
+    ) ?? (firstBlockIndex + localIndex),
+  )
+  const stableFrameId =
+    frameId ?? `${messageId}:block-${blockIndexes[0] ?? firstBlockIndex}`
   const rows = body.content.flatMap((block, localIndex) => {
-    const blockIndex = firstBlockIndex + localIndex
+    const blockIndex = blockIndexes[localIndex]!
     const row = projectAssistantContentBlock(block, {
       sessionId,
       messageId,
@@ -2387,7 +2403,7 @@ function projectAssistantFrame(
   })
   const nextBlockIndex = Math.max(
     fallbackIndex,
-    firstBlockIndex + body.content.length,
+    ...blockIndexes.map(blockIndex => blockIndex + 1),
   )
   const nextStreamingTextBlocks = { ...state.streamingTextBlocks }
   const nextStreamingThinkingBlocks = { ...state.streamingThinkingBlocks }
@@ -3199,9 +3215,10 @@ function deriveToolFamily(toolName: string): ToolFamily {
  * Grouping-position tracker over the six nested stream event types (S1 spec
  * §2: message_start / content_block_start / content_block_delta /
  * content_block_stop / message_delta / message_stop). Only the three that
- * carry grouping position or text deltas are read; the rest are documented
- * no-ops here. Per-message stop_reason/usage (message_delta) is read from the
- * stream/result layer — never projected from assistant frames (S1 §4 trap).
+ * carry grouping position or text/thinking deltas are read; the rest are
+ * documented no-ops here. Per-message stop_reason/usage (message_delta) is
+ * read from the stream/result layer — never projected from assistant frames
+ * (S1 §4 trap).
  * Unknown event types (e.g. citations_delta, connector_text_delta, future
  * additions) fall through as tolerated no-ops.
  */
@@ -3528,6 +3545,32 @@ function isMatchingStreamingRow(
 
 function streamBlockKey(messageId: string, blockIndex: number): string {
   return `${messageId}:${blockIndex}`
+}
+
+/**
+ * The engine publishes the completed assistant block before the corresponding
+ * content_block_stop. When Codex has both raw and summary reasoning open, the
+ * most recent stream index belongs to raw even as summary closes next. The
+ * remaining live block is the unambiguous source of the completed row's index.
+ */
+function streamingThinkingBlockIndex(
+  messageId: string,
+  block: unknown,
+  streamingBlocks: Record<string, StreamingThinkingBlock>,
+): number | null {
+  if (!isRecord(block) || block.type !== 'thinking') return null
+  const reasoningKind =
+    typeof block.reasoningKind === 'string'
+      ? block.reasoningKind
+      : typeof block.reasoning_kind === 'string'
+        ? block.reasoning_kind
+        : undefined
+  const matches = Object.values(streamingBlocks).filter(
+    streamingBlock =>
+      streamingBlock.messageId === messageId &&
+      streamingBlock.reasoningKind === reasoningKind,
+  )
+  return matches.length === 1 ? matches[0]!.blockIndex : null
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
