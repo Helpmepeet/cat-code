@@ -306,6 +306,7 @@ export type ThinkingRow = RowSource & {
   content: string
   signature?: string
   reasoningKind?: string
+  isStreaming?: true
 }
 
 export type RedactedThinkingRow = RowSource & {
@@ -467,11 +468,19 @@ type StreamingTextBlock = {
   content: string
 }
 
+type StreamingThinkingBlock = {
+  messageId: string
+  blockIndex: number
+  content: string
+  reasoningKind?: string
+}
+
 type TranscriptSessionState = {
   rows: TranscriptRow[]
   currentStreamMessageId: string | null
   currentStreamBlockIndex: number | null
   streamingTextBlocks: Record<string, StreamingTextBlock>
+  streamingThinkingBlocks: Record<string, StreamingThinkingBlock>
   nextBlockIndexByMessageId: Record<string, number>
   seenFrameIds: Record<string, true>
   /**
@@ -573,6 +582,7 @@ function createTranscriptSessionState(): TranscriptSessionState {
     currentStreamMessageId: null,
     currentStreamBlockIndex: null,
     streamingTextBlocks: {},
+    streamingThinkingBlocks: {},
     nextBlockIndexByMessageId: {},
     seenFrameIds: {},
     toolResultsByUseId: {},
@@ -1481,6 +1491,7 @@ type BatchSessionDraft = {
   rowsOwned: boolean
   seenFrameIdsOwned: boolean
   streamingTextBlocksOwned: boolean
+  streamingThinkingBlocksOwned: boolean
   nextBlockIndexByMessageIdOwned: boolean
   toolResultsByUseIdOwned: boolean
   generatedImagePreviewsOwned: boolean
@@ -1501,6 +1512,7 @@ function createBatchSessionDraft(
     rowsOwned: false,
     seenFrameIdsOwned: false,
     streamingTextBlocksOwned: false,
+    streamingThinkingBlocksOwned: false,
     nextBlockIndexByMessageIdOwned: false,
     toolResultsByUseIdOwned: false,
     generatedImagePreviewsOwned: false,
@@ -1517,6 +1529,7 @@ function createBatchReadyDraft(sessionId: SessionId): BatchSessionDraft {
   draft.rowsOwned = true
   draft.seenFrameIdsOwned = true
   draft.streamingTextBlocksOwned = true
+  draft.streamingThinkingBlocksOwned = true
   draft.nextBlockIndexByMessageIdOwned = true
   draft.toolResultsByUseIdOwned = true
   draft.generatedImagePreviewsOwned = true
@@ -1539,6 +1552,7 @@ function createBatchResetDraft(
   draft.rowsOwned = true
   draft.seenFrameIdsOwned = true
   draft.streamingTextBlocksOwned = true
+  draft.streamingThinkingBlocksOwned = true
   draft.nextBlockIndexByMessageIdOwned = true
   draft.toolResultsByUseIdOwned = true
   draft.generatedImagePreviewsOwned = true
@@ -1578,6 +1592,14 @@ function ensureBatchStreamingBlocks(draft: BatchSessionDraft): void {
   if (draft.streamingTextBlocksOwned) return
   draft.session.streamingTextBlocks = { ...draft.session.streamingTextBlocks }
   draft.streamingTextBlocksOwned = true
+}
+
+function ensureBatchStreamingThinkingBlocks(draft: BatchSessionDraft): void {
+  if (draft.streamingThinkingBlocksOwned) return
+  draft.session.streamingThinkingBlocks = {
+    ...draft.session.streamingThinkingBlocks,
+  }
+  draft.streamingThinkingBlocksOwned = true
 }
 
 function ensureBatchNextBlockIndexes(draft: BatchSessionDraft): void {
@@ -1690,7 +1712,7 @@ function upsertBatchRows(
 
 function upsertBatchStreamingRow(
   draft: BatchSessionDraft,
-  replacement: AssistantTextRow,
+  replacement: AssistantTextRow | ThinkingRow,
 ): void {
   ensureBatchRows(draft)
   const indexes = batchRowIndexes(draft)
@@ -1701,7 +1723,7 @@ function upsertBatchStreamingRow(
     return
   }
   const existing = draft.session.rows[index]
-  if (existing?.kind === 'assistant-text' && existing.isStreaming === true) {
+  if (existing && isMatchingStreamingRow(existing, replacement)) {
     draft.session.rows[index] = replacement
   }
 }
@@ -1839,6 +1861,10 @@ function projectBatchAssistant(
       ensureBatchStreamingBlocks(draft)
       delete draft.session.streamingTextBlocks[key]
     }
+    if (draft.session.streamingThinkingBlocks[key]) {
+      ensureBatchStreamingThinkingBlocks(draft)
+      delete draft.session.streamingThinkingBlocks[key]
+    }
   }
   upsertBatchRows(draft, rows, recoveryInsertAt)
   ensureBatchNextBlockIndexes(draft)
@@ -1873,11 +1899,34 @@ function projectBatchStreamEvent(
     const block = isRecord(event.content_block) ? event.content_block : null
     draft.session.currentStreamBlockIndex = event.index
     if (block?.type === 'text') {
-      ensureBatchStreamingBlocks(draft)
-      draft.session.streamingTextBlocks[key] = {
-        messageId: draft.session.currentStreamMessageId,
-        blockIndex: event.index,
-        content: '',
+      if (!draft.session.streamingTextBlocks[key]) {
+        ensureBatchStreamingBlocks(draft)
+        draft.session.streamingTextBlocks[key] = {
+          messageId: draft.session.currentStreamMessageId,
+          blockIndex: event.index,
+          content: '',
+        }
+      }
+      return true
+    }
+    if (block?.type === 'thinking') {
+      const reasoningKind =
+        typeof block.reasoning_kind === 'string'
+          ? block.reasoning_kind
+          : typeof block.reasoningKind === 'string'
+            ? block.reasoningKind
+            : undefined
+      const existing = draft.session.streamingThinkingBlocks[key]
+      if (!existing || (existing.reasoningKind === undefined && reasoningKind)) {
+        ensureBatchStreamingThinkingBlocks(draft)
+        draft.session.streamingThinkingBlocks[key] = existing
+          ? { ...existing, reasoningKind }
+          : {
+              messageId: draft.session.currentStreamMessageId,
+              blockIndex: event.index,
+              content: '',
+              ...(reasoningKind ? { reasoningKind } : {}),
+            }
       }
       return true
     }
@@ -1893,24 +1942,43 @@ function projectBatchStreamEvent(
     typeof event.index === 'number'
   ) {
     const delta = isRecord(event.delta) ? event.delta : null
-    if (delta?.type !== 'text_delta' || typeof delta.text !== 'string') {
-      return false
-    }
     const key = streamBlockKey(draft.session.currentStreamMessageId, event.index)
-    const existing = draft.session.streamingTextBlocks[key] ?? {
-      messageId: draft.session.currentStreamMessageId,
-      blockIndex: event.index,
-      content: '',
+    if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
+      const existing = draft.session.streamingTextBlocks[key] ?? {
+        messageId: draft.session.currentStreamMessageId,
+        blockIndex: event.index,
+        content: '',
+      }
+      const nextBlock = { ...existing, content: existing.content + delta.text }
+      ensureBatchStreamingBlocks(draft)
+      draft.session.streamingTextBlocks[key] = nextBlock
+      draft.session.currentStreamBlockIndex = event.index
+      upsertBatchStreamingRow(
+        draft,
+        createStreamingTextRow(draft.sessionId, nextBlock),
+      )
+      return true
     }
-    const nextBlock = { ...existing, content: existing.content + delta.text }
-    ensureBatchStreamingBlocks(draft)
-    draft.session.streamingTextBlocks[key] = nextBlock
-    draft.session.currentStreamBlockIndex = event.index
-    upsertBatchStreamingRow(
-      draft,
-      createStreamingTextRow(draft.sessionId, nextBlock),
-    )
-    return true
+    if (delta?.type === 'thinking_delta' && typeof delta.thinking === 'string') {
+      const existing = draft.session.streamingThinkingBlocks[key] ?? {
+        messageId: draft.session.currentStreamMessageId,
+        blockIndex: event.index,
+        content: '',
+      }
+      const nextBlock = {
+        ...existing,
+        content: existing.content + delta.thinking,
+      }
+      ensureBatchStreamingThinkingBlocks(draft)
+      draft.session.streamingThinkingBlocks[key] = nextBlock
+      draft.session.currentStreamBlockIndex = event.index
+      upsertBatchStreamingRow(
+        draft,
+        createStreamingThinkingRow(draft.sessionId, nextBlock),
+      )
+      return true
+    }
+    return false
   }
   if (event.type === 'message_stop') {
     draft.session.currentStreamMessageId = null
@@ -1995,18 +2063,19 @@ function projectBatchUser(
 
 function finalizeBatchStreamingTurn(draft: BatchSessionDraft): boolean {
   const hasStreamingRows = draft.session.rows.some(
-    row => row.kind === 'assistant-text' && row.isStreaming === true,
+    isStreamingProjectionRow,
   )
   const hasStreamingState =
     draft.session.currentStreamMessageId !== null ||
     draft.session.currentStreamBlockIndex !== null ||
-    Object.keys(draft.session.streamingTextBlocks).length > 0
+    Object.keys(draft.session.streamingTextBlocks).length > 0 ||
+    Object.keys(draft.session.streamingThinkingBlocks).length > 0
   if (!hasStreamingRows && !hasStreamingState) return false
   if (hasStreamingRows) {
     ensureBatchRows(draft)
     for (let index = 0; index < draft.session.rows.length; index += 1) {
       const row = draft.session.rows[index]!
-      if (row.kind === 'assistant-text' && row.isStreaming === true) {
+      if (isStreamingProjectionRow(row)) {
         const { isStreaming: _streaming, ...finalized } = row
         void _streaming
         draft.session.rows[index] = finalized
@@ -2017,6 +2086,8 @@ function finalizeBatchStreamingTurn(draft: BatchSessionDraft): boolean {
   draft.session.currentStreamBlockIndex = null
   ensureBatchStreamingBlocks(draft)
   draft.session.streamingTextBlocks = {}
+  ensureBatchStreamingThinkingBlocks(draft)
+  draft.session.streamingThinkingBlocks = {}
   return true
 }
 
@@ -2319,11 +2390,12 @@ function projectAssistantFrame(
     firstBlockIndex + body.content.length,
   )
   const nextStreamingTextBlocks = { ...state.streamingTextBlocks }
+  const nextStreamingThinkingBlocks = { ...state.streamingThinkingBlocks }
   for (const row of rows) {
     if ('messageId' in row && 'blockIndex' in row) {
-      delete nextStreamingTextBlocks[
-        streamBlockKey(row.messageId, row.blockIndex)
-      ]
+      const key = streamBlockKey(row.messageId, row.blockIndex)
+      delete nextStreamingTextBlocks[key]
+      delete nextStreamingThinkingBlocks[key]
     }
   }
   const streamingTextBlocks =
@@ -2331,6 +2403,11 @@ function projectAssistantFrame(
     Object.keys(state.streamingTextBlocks).length
       ? state.streamingTextBlocks
       : nextStreamingTextBlocks
+  const streamingThinkingBlocks =
+    Object.keys(nextStreamingThinkingBlocks).length ===
+    Object.keys(state.streamingThinkingBlocks).length
+      ? state.streamingThinkingBlocks
+      : nextStreamingThinkingBlocks
 
   const placed = upsertFrameRows(state, rows)
 
@@ -2339,6 +2416,7 @@ function projectAssistantFrame(
     rows: placed.rows,
     recoveryInsertAt: placed.recoveryInsertAt,
     streamingTextBlocks,
+    streamingThinkingBlocks,
     nextBlockIndexByMessageId: {
       ...state.nextBlockIndexByMessageId,
       [messageId]: nextBlockIndex,
@@ -3155,17 +3233,48 @@ function projectStreamEvent(
       ? event.content_block
       : null
     if (contentBlock?.type === 'text') {
+      const existing = state.streamingTextBlocks[key]
       return {
         ...state,
         currentStreamBlockIndex: event.index,
-        streamingTextBlocks: {
-          ...state.streamingTextBlocks,
-          [key]: {
-            messageId: state.currentStreamMessageId,
-            blockIndex: event.index,
-            content: '',
-          },
-        },
+        streamingTextBlocks: existing
+          ? state.streamingTextBlocks
+          : {
+              ...state.streamingTextBlocks,
+              [key]: {
+                messageId: state.currentStreamMessageId,
+                blockIndex: event.index,
+                content: '',
+              },
+            },
+      }
+    }
+    if (contentBlock?.type === 'thinking') {
+      const reasoningKind =
+        typeof contentBlock.reasoning_kind === 'string'
+          ? contentBlock.reasoning_kind
+          : typeof contentBlock.reasoningKind === 'string'
+            ? contentBlock.reasoningKind
+            : undefined
+      const existing = state.streamingThinkingBlocks[key]
+      const nextBlock =
+        existing && (existing.reasoningKind !== undefined || !reasoningKind)
+          ? existing
+          : {
+              ...(existing ?? {
+                messageId: state.currentStreamMessageId,
+                blockIndex: event.index,
+                content: '',
+              }),
+              ...(reasoningKind ? { reasoningKind } : {}),
+            }
+      return {
+        ...state,
+        currentStreamBlockIndex: event.index,
+        streamingThinkingBlocks:
+          nextBlock === existing
+            ? state.streamingThinkingBlocks
+            : { ...state.streamingThinkingBlocks, [key]: nextBlock },
       }
     }
     if (state.streamingTextBlocks[key]) {
@@ -3186,29 +3295,50 @@ function projectStreamEvent(
     typeof event.index === 'number'
   ) {
     const delta = isRecord(event.delta) ? event.delta : null
-    if (delta?.type !== 'text_delta' || typeof delta.text !== 'string') {
-      return state
-    }
     const key = streamBlockKey(state.currentStreamMessageId, event.index)
-    const existing = state.streamingTextBlocks[key] ?? {
-      messageId: state.currentStreamMessageId,
-      blockIndex: event.index,
-      content: '',
+    if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
+      const existing = state.streamingTextBlocks[key] ?? {
+        messageId: state.currentStreamMessageId,
+        blockIndex: event.index,
+        content: '',
+      }
+      const nextBlock = {
+        ...existing,
+        content: existing.content + delta.text,
+      }
+      const row = createStreamingTextRow(sessionId, nextBlock)
+      return {
+        ...state,
+        currentStreamBlockIndex: event.index,
+        streamingTextBlocks: {
+          ...state.streamingTextBlocks,
+          [key]: nextBlock,
+        },
+        rows: upsertStreamingRows(state.rows, [row]),
+      }
     }
-    const nextBlock = {
-      ...existing,
-      content: existing.content + delta.text,
+    if (delta?.type === 'thinking_delta' && typeof delta.thinking === 'string') {
+      const existing = state.streamingThinkingBlocks[key] ?? {
+        messageId: state.currentStreamMessageId,
+        blockIndex: event.index,
+        content: '',
+      }
+      const nextBlock = {
+        ...existing,
+        content: existing.content + delta.thinking,
+      }
+      const row = createStreamingThinkingRow(sessionId, nextBlock)
+      return {
+        ...state,
+        currentStreamBlockIndex: event.index,
+        streamingThinkingBlocks: {
+          ...state.streamingThinkingBlocks,
+          [key]: nextBlock,
+        },
+        rows: upsertStreamingRows(state.rows, [row]),
+      }
     }
-    const row = createStreamingTextRow(sessionId, nextBlock)
-    return {
-      ...state,
-      currentStreamBlockIndex: event.index,
-      streamingTextBlocks: {
-        ...state.streamingTextBlocks,
-        [key]: nextBlock,
-      },
-      rows: upsertStreamingRows(state.rows, [row]),
-    }
+    return state
   }
 
   if (event.type === 'message_stop') {
@@ -3243,23 +3373,45 @@ function createStreamingTextRow(
   }
 }
 
+function createStreamingThinkingRow(
+  sessionId: SessionId,
+  block: StreamingThinkingBlock,
+): ThinkingRow {
+  const source = {
+    sessionId,
+    messageId: block.messageId,
+    frameId: `${block.messageId}:stream:${block.blockIndex}`,
+    blockIndex: block.blockIndex,
+    parentToolUseId: null,
+  }
+  return {
+    ...source,
+    id: rowId(source, 'thinking'),
+    kind: 'thinking',
+    content: block.content,
+    ...(block.reasoningKind ? { reasoningKind: block.reasoningKind } : {}),
+    isStreaming: true,
+  }
+}
+
 function finalizeStreamingTurn(
   state: TranscriptSessionState,
 ): TranscriptSessionState {
   const hasStreamingRows = state.rows.some(
-    row => row.kind === 'assistant-text' && row.isStreaming === true,
+    isStreamingProjectionRow,
   )
   const hasStreamingState =
     state.currentStreamMessageId !== null ||
     state.currentStreamBlockIndex !== null ||
-    Object.keys(state.streamingTextBlocks).length > 0
+    Object.keys(state.streamingTextBlocks).length > 0 ||
+    Object.keys(state.streamingThinkingBlocks).length > 0
   if (!hasStreamingRows && !hasStreamingState) return state
 
   // A terminal result can arrive before a stopped assistant block's full frame.
-  // Keep its streamed text as final content rather than deleting the only
+  // Keep its finalized projected content rather than deleting the only
   // assistant response the transcript received.
   const rows = state.rows.map(row =>
-    row.kind === 'assistant-text' && row.isStreaming === true
+    isStreamingProjectionRow(row)
       ? (() => {
           const { isStreaming: _streaming, ...finalized } = row
           void _streaming
@@ -3273,6 +3425,7 @@ function finalizeStreamingTurn(
     currentStreamMessageId: null,
     currentStreamBlockIndex: null,
     streamingTextBlocks: {},
+    streamingThinkingBlocks: {},
   }
 }
 
@@ -3335,17 +3488,13 @@ function upsertFrameRows(
 
 function upsertStreamingRows(
   rows: TranscriptRow[],
-  replacements: AssistantTextRow[],
+  replacements: (AssistantTextRow | ThinkingRow)[],
 ): TranscriptRow[] {
   if (replacements.length === 0) return rows
   const byId = new Map(replacements.map(row => [row.id, row]))
   const nextRows = rows.map(row => {
     const replacement = byId.get(row.id)
-    if (
-      replacement &&
-      row.kind === 'assistant-text' &&
-      row.isStreaming === true
-    ) {
+    if (replacement && isMatchingStreamingRow(row, replacement)) {
       return replacement
     }
     return row
@@ -3355,6 +3504,26 @@ function upsertStreamingRows(
     if (!existingIds.has(row.id)) nextRows.push(row)
   }
   return nextRows
+}
+
+function isStreamingProjectionRow(
+  row: TranscriptRow,
+): row is AssistantTextRow | ThinkingRow {
+  return (
+    (row.kind === 'assistant-text' || row.kind === 'thinking') &&
+    row.isStreaming === true
+  )
+}
+
+function isMatchingStreamingRow(
+  row: TranscriptRow,
+  replacement: AssistantTextRow | ThinkingRow,
+): boolean {
+  return (
+    row.id === replacement.id &&
+    isStreamingProjectionRow(row) &&
+    row.kind === replacement.kind
+  )
 }
 
 function streamBlockKey(messageId: string, blockIndex: number): string {

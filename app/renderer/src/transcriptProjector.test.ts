@@ -21,6 +21,7 @@ import {
   allSdkMessageSamples,
   DRIFT_WIRE_SAMPLE_JSON,
   PARALLEL_AGENTS_TURN,
+  S1_STREAMING_REASONING_TURN,
   S1_STREAMING_TEXT_TURN,
   SDK_MESSAGE_FIXTURE,
 } from './sdkMessageFixtures.js'
@@ -463,6 +464,202 @@ test('accumulates text deltas into an in-progress assistant row and reconciles t
   ])
 })
 
+test('projects thinking deltas immediately and reconciles their stable identity before block stop', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  const frames = S1_STREAMING_REASONING_TURN.messages
+  const play = (message: SDKMessage) => {
+    state = projectServerFrame(state, messageFrame('session-1', message))
+  }
+
+  play(frames[0]!)
+  play(frames[1]!)
+  play(frames[2]!)
+  const streaming = selectTranscriptRows(state, 'session-1')
+  expect(streaming).toEqual([
+    expect.objectContaining({
+      kind: 'thinking',
+      content: 'Inspect configuration',
+      reasoningKind: 'summary',
+      isStreaming: true,
+    }),
+  ])
+  const streamingRow = streaming[0]!
+
+  play(frames[3]!)
+  expect(selectTranscriptRows(state, 'session-1')).toEqual([
+    expect.objectContaining({
+      id: streamingRow.id,
+      kind: 'thinking',
+      content: 'Inspect configuration\n\nCheck dependencies',
+      isStreaming: true,
+    }),
+  ])
+
+  // The completed assistant block, not content_block_stop, owns reconciliation.
+  play(frames[4]!)
+  const finalized = selectTranscriptRows(state, 'session-1')
+  expect(finalized).toHaveLength(1)
+  expect(finalized[0]).toMatchObject({
+    id: streamingRow.id,
+    kind: 'thinking',
+    content: 'Inspect configuration\n\nCheck dependencies',
+    signature: 'reasoning-signature',
+    reasoningKind: 'summary',
+  })
+  expect(finalized[0]).not.toHaveProperty('isStreaming')
+  expect(state.sessions['session-1']!.streamingThinkingBlocks).toEqual({})
+
+  play(frames[5]!)
+  play(frames[6]!)
+  play(frames[7]!)
+  play(frames[8]!)
+  expect(
+    selectTranscriptRows(state, 'session-1')
+      .filter(row => row.kind === 'thinking' || row.kind === 'assistant-text')
+      .map(row => row.kind),
+  ).toEqual(['thinking', 'assistant-text'])
+})
+
+test('thinking starts are idempotent and readable deltas remain distinct by block index', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  const play = (message: SDKMessage) => {
+    state = projectServerFrame(state, messageFrame('session-1', message))
+  }
+
+  play(S1_STREAMING_REASONING_TURN.messages[0]!)
+  play(S1_STREAMING_REASONING_TURN.messages[1]!)
+  play(S1_STREAMING_REASONING_TURN.messages[2]!)
+  play(S1_STREAMING_REASONING_TURN.messages[1]!)
+  play({
+    type: 'stream_event',
+    event: {
+      type: 'content_block_delta',
+      index: 0,
+      delta: { type: 'thinking_delta', thinking: ' second' },
+    },
+    uuid: '00000000-0000-4000-8000-000000000025',
+  })
+  play({
+    type: 'stream_event',
+    event: {
+      type: 'content_block_start',
+      index: 1,
+      content_block: { type: 'text', text: '' },
+    },
+    uuid: '00000000-0000-4000-8000-000000000026',
+  })
+  play({
+    type: 'stream_event',
+    event: {
+      type: 'content_block_delta',
+      index: 1,
+      delta: { type: 'text_delta', text: 'Answer' },
+    },
+    uuid: '00000000-0000-4000-8000-000000000027',
+  })
+  play({
+    type: 'stream_event',
+    event: {
+      type: 'content_block_start',
+      index: 2,
+      content_block: { type: 'thinking', thinking: '' },
+    },
+    uuid: '00000000-0000-4000-8000-000000000028',
+  })
+  play({
+    type: 'stream_event',
+    event: {
+      type: 'content_block_delta',
+      index: 2,
+      delta: { type: 'thinking_delta', thinking: 'Check result' },
+    },
+    uuid: '00000000-0000-4000-8000-000000000029',
+  })
+
+  const rows = selectTranscriptRows(state, 'session-1')
+  expect(rows.map(row => row.kind)).toEqual([
+    'thinking',
+    'assistant-text',
+    'thinking',
+  ])
+  expect(rows.filter(row => row.kind === 'thinking').map(row => row.content)).toEqual([
+    'Inspect configuration second',
+    'Check result',
+  ])
+  expect(new Set(rows.filter(row => row.kind === 'thinking').map(row => row.id)).size)
+    .toBe(2)
+})
+
+test('thinking stream failures retain finalized projected content and malformed deltas are no-ops', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  const play = (message: SDKMessage) => {
+    state = projectServerFrame(state, messageFrame('session-1', message))
+  }
+
+  play(S1_STREAMING_REASONING_TURN.messages[0]!)
+  for (const malformed of [
+    '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"missing index"}}}',
+    '{"type":"stream_event","event":{"type":"content_block_delta","index":"0","delta":{"type":"thinking_delta","thinking":"string index"}}}',
+    '{"type":"stream_event","event":{"type":"content_block_delta","index":0}}',
+    '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta"}}}',
+  ]) {
+    play(JSON.parse(malformed) as SDKMessage)
+  }
+  expect(selectTranscriptRows(state, 'session-1')).toEqual([])
+
+  play(S1_STREAMING_REASONING_TURN.messages[1]!)
+  play(S1_STREAMING_REASONING_TURN.messages[2]!)
+  play(S1_STREAMING_REASONING_TURN.messages.at(-1)!)
+  const session = state.sessions['session-1']!
+  expect(selectTranscriptRows(state, 'session-1').filter(row => row.kind === 'thinking')).toEqual([
+    expect.objectContaining({
+      kind: 'thinking',
+      content: 'Inspect configuration',
+    }),
+  ])
+  expect(selectTranscriptRows(state, 'session-1')[0]).not.toHaveProperty('isStreaming')
+  expect(session.currentStreamMessageId).toBeNull()
+  expect(session.currentStreamBlockIndex).toBeNull()
+  expect(session.streamingTextBlocks).toEqual({})
+  expect(session.streamingThinkingBlocks).toEqual({})
+})
+
+test('encrypted-only thinking and transcript reset never retain a temporary readable row', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  const play = (message: SDKMessage) => {
+    state = projectServerFrame(state, messageFrame('session-1', message))
+  }
+
+  play(S1_STREAMING_REASONING_TURN.messages[0]!)
+  play(S1_STREAMING_REASONING_TURN.messages[1]!)
+  play({
+    type: 'stream_event',
+    event: {
+      type: 'content_block_delta',
+      index: 0,
+      delta: { type: 'signature_delta', signature: 'encrypted-signature' },
+    },
+    uuid: '00000000-0000-4000-8000-000000000030',
+  })
+  expect(selectTranscriptRows(state, 'session-1')).toEqual([])
+
+  play(S1_STREAMING_REASONING_TURN.messages[2]!)
+  state = projectServerFrame(state, {
+    kind: 'transcript.reset',
+    protocolVersion: 1,
+    sessionId: 'session-1',
+  })
+  const session = state.sessions['session-1']!
+  expect(session.rows).toEqual([])
+  expect(session.streamingThinkingBlocks).toEqual({})
+  expect(session.currentStreamMessageId).toBeNull()
+  expect(session.currentStreamBlockIndex).toBeNull()
+})
+
 test('stream events are droppable garnish: final transcript matches with stream frames stripped', () => {
   const project = (messages: readonly SDKMessage[]) => {
     let state = createTranscriptState()
@@ -792,7 +989,7 @@ test('documented no-op variants leave state reference-equal (no half-applied wri
   }
 })
 
-test('one session survives the ENTIRE fixture in sequence with the documented row total', () => {
+test('one session survives the ENTIRE fixture sequence with its one live reasoning preview', () => {
   let state = createTranscriptState()
   state = projectServerFrame(state, ready('session-1'))
   let expectedRows = 0
@@ -800,7 +997,9 @@ test('one session survives the ENTIRE fixture in sequence with the documented ro
     state = projectServerFrame(state, messageFrame('session-1', sample.message))
     expectedRows += sample.expectRows
   }
-  expect(selectTranscriptRows(state, 'session-1')).toHaveLength(expectedRows)
+  // The individual thinking_delta sample has no message_start in isolation,
+  // but its ordered fixture sequence does. A readable delta is now one live row.
+  expect(selectTranscriptRows(state, 'session-1')).toHaveLength(expectedRows + 1)
 })
 
 test('subagent frames preserve parent_tool_use_id on their rows', () => {
@@ -4814,6 +5013,22 @@ test('sequential transcript projection is invariant across replay delivery parti
     deliveries.push(frames.slice(cursor))
     expect(projectSequentialDeliveries(deliveries)).toEqual(expected)
     expect(projectBatchDeliveries(deliveries)).toEqual(expected)
+  }
+})
+
+test('batch projection matches the single-frame projector at every streaming reasoning prefix', () => {
+  const frames: ServerFrame[] = [
+    ready('session-1'),
+    ...S1_STREAMING_REASONING_TURN.messages.map(message =>
+      messageFrame('session-1', message),
+    ),
+  ]
+
+  for (let count = 1; count <= frames.length; count += 1) {
+    const prefix = frames.slice(0, count)
+    expect(projectServerFrames(createTranscriptState(), prefix)).toEqual(
+      projectSequential(prefix),
+    )
   }
 })
 

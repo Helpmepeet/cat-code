@@ -2475,6 +2475,82 @@ test('trail mode: the adapter\'s "\\n\\n"-merged headings become one step each',
   expect(html).toContain('Planning a test run')
 })
 
+test('trail mode: a replaced streaming thinking row adds its new summary step', () => {
+  const streaming: NestedTranscriptRow = {
+    ...blockSource,
+    id: 's:m:0:thinking',
+    kind: 'thinking',
+    content: 'Locating the teardown path',
+    isStreaming: true,
+  }
+  const replacement: NestedTranscriptRow = {
+    ...blockSource,
+    id: 's:m:0:thinking',
+    kind: 'thinking',
+    content: 'Locating the teardown path\n\nChecking close-frame ordering',
+    isStreaming: true,
+  }
+
+  expect(renderRows([streaming], 'trail')).not.toContain(
+    'Checking close-frame ordering',
+  )
+
+  const html = renderRows([replacement], 'trail')
+  expect(html).toContain('2 steps')
+  expect(html).toContain('Locating the teardown path')
+  expect(html).toContain('Checking close-frame ordering')
+})
+
+test('blocks mode: a replaced streaming thinking row shows its new prose', () => {
+  const streaming: NestedTranscriptRow = {
+    ...blockSource,
+    id: 's:m:0:thinking',
+    kind: 'thinking',
+    content: 'Locating the teardown path',
+    isStreaming: true,
+  }
+  const replacement: NestedTranscriptRow = {
+    ...blockSource,
+    id: 's:m:0:thinking',
+    kind: 'thinking',
+    content:
+      'Locating the teardown path\n\nThe completed reasoning prose now explains why the close frame must preserve the row.',
+    isStreaming: true,
+  }
+
+  expect(renderRows([streaming], 'blocks')).not.toContain(
+    'The completed reasoning prose now explains why the close frame must preserve the row.',
+  )
+
+  const html = renderRows([replacement], 'blocks')
+  expect(html).toContain(
+    'The completed reasoning prose now explains why the close frame must preserve the row.',
+  )
+})
+
+test('a finalized thinking replacement renders one displayed item for its stable ID', () => {
+  const streaming: NestedTranscriptRow = {
+    ...blockSource,
+    id: 's:m:0:thinking',
+    kind: 'thinking',
+    content: 'Locating the teardown path',
+    isStreaming: true,
+  }
+  const finalized: NestedTranscriptRow = {
+    ...blockSource,
+    id: 's:m:0:thinking',
+    kind: 'thinking',
+    content: 'Locating the teardown path\n\nChecking close-frame ordering',
+  }
+
+  expect(renderRows([streaming], 'trail')).toContain('Locating the teardown path')
+
+  const html = renderRows([finalized], 'trail')
+  expect(occurrences(html, 'data-row-key="reasoning-run:s:m:0:thinking"')).toBe(1)
+  expect(occurrences(html, 'Locating the teardown path')).toBe(1)
+  expect(occurrences(html, 'Checking close-frame ordering')).toBe(1)
+})
+
 test('an empty-bodied thinking row renders nothing in trail, redacted in blocks', () => {
   // Encrypted-only reasoning reaches the app as `thinking` with an empty body
   // carrying the signature (codex-fetch-adapter.ts:2229). Trail has nothing
