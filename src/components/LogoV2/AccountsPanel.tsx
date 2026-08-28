@@ -324,7 +324,7 @@ function AccountsPanelContent({
     // Deliberate (F10): rendering this panel refreshes routing hints so the next
     // request routes on the freshest usage data. Display drives routing here on
     // purpose; keep in sync with the Usage tab's fetch.
-    fetchPoolUsage({ updateRoutingHints: true })
+    fetchPoolUsage({ forceRefresh: true, updateRoutingHints: true })
       .then((snapshot) => { if (!cancelled) setCodexUsageSnapshot(snapshot) })
       .catch(() => { if (!cancelled) setCodexUsageSnapshot(null) })
     return () => { cancelled = true }

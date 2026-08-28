@@ -91,7 +91,10 @@ const ACCOUNT_USAGE_WARNING_THRESHOLD_PERCENT = 80
 // ── Cache ──────────────────────────────────────────────────────────────────
 
 let cachedSnapshot: PoolUsageSnapshot | null = null
+let inFlightPoolUsage: Promise<PoolUsageSnapshot> | null = null
+let scheduledPoolUsageRefresh: ReturnType<typeof setTimeout> | null = null
 const CACHE_TTL_MS = 60_000 // 1 minute
+const POST_TURN_USAGE_REFRESH_DELAY_MS = 1_000
 const warnedNearCapAccountIds = new Set<string>()
 
 // ── Public API ─────────────────────────────────────────────────────────────
@@ -262,6 +265,15 @@ export async function fetchPoolUsage(
       ? { forceRefresh: forceRefreshOrOptions }
       : forceRefreshOrOptions
   const forceRefresh = options.forceRefresh === true
+  if (inFlightPoolUsage) {
+    const snapshot = await inFlightPoolUsage
+    if (options.updateRoutingHints === true) {
+      updateRoutingHintsFromUsage(snapshot.accounts)
+    }
+    emitUsageWarnings(snapshot.accounts)
+    return snapshot
+  }
+
   if (!forceRefresh && cachedSnapshot && Date.now() - cachedSnapshot.fetchedAt < CACHE_TTL_MS) {
     if (options.updateRoutingHints === true) {
       updateRoutingHintsFromUsage(cachedSnapshot.accounts)
@@ -270,6 +282,36 @@ export async function fetchPoolUsage(
     return cachedSnapshot
   }
 
+  const fetchPromise = fetchUncachedPoolUsage(options)
+  inFlightPoolUsage = fetchPromise
+  try {
+    return await fetchPromise
+  } finally {
+    if (inFlightPoolUsage === fetchPromise) {
+      inFlightPoolUsage = null
+    }
+  }
+}
+
+/**
+ * Refresh usage after a successful Codex turn without delaying its response.
+ * The usage service can lag the completed response briefly, so debounce the
+ * poll and give it one second to observe the new usage.
+ */
+export function schedulePoolUsageRefresh(): void {
+  if (scheduledPoolUsageRefresh !== null) {
+    clearTimeout(scheduledPoolUsageRefresh)
+  }
+  invalidateUsageCache()
+  scheduledPoolUsageRefresh = setTimeout(() => {
+    scheduledPoolUsageRefresh = null
+    void fetchPoolUsage({ forceRefresh: true, updateRoutingHints: true }).catch(() => {})
+  }, POST_TURN_USAGE_REFRESH_DELAY_MS)
+}
+
+async function fetchUncachedPoolUsage(
+  options: FetchPoolUsageOptions,
+): Promise<PoolUsageSnapshot> {
   const { accounts } = getPoolStatus()
   const results: AccountUsage[] = []
   const errors: Array<{ accountId: string; error: string }> = []
@@ -514,6 +556,10 @@ function usageUnavailableRow(error: string | null): string {
 /** Invalidate the usage cache (e.g., after account rotation). */
 export function invalidateUsageCache(): void {
   cachedSnapshot = null
+  if (scheduledPoolUsageRefresh !== null) {
+    clearTimeout(scheduledPoolUsageRefresh)
+    scheduledPoolUsageRefresh = null
+  }
 }
 
 // ── Internals ──────────────────────────────────────────────────────────────

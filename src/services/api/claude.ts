@@ -291,6 +291,7 @@ import {
   releaseCodexLease,
 } from './codexAccountLeaseManager.js'
 import { poolManagesCredentials } from './codexAccountPool.js'
+import { schedulePoolUsageRefresh } from './codexUsage.js'
 
 // Define a type that represents valid JSON values
 type JsonValue = string | number | boolean | null | JsonObject | JsonArray
@@ -3166,6 +3167,10 @@ async function* queryModel(
   // Mark all registered tools as sent to API so they become eligible for deletion
   if (feature('CACHED_MICROCOMPACT') && cachedMCEnabled) {
     markToolsSentToAPIState()
+  }
+
+  if (requestProvider === 'openai') {
+    schedulePoolUsageRefresh()
   }
 
   // Track the last requestId for the main conversation chain so shutdown

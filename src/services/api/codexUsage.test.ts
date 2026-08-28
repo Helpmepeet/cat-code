@@ -22,6 +22,7 @@ import {
   formatPoolUsage,
   invalidateUsageCache,
   consumeUsageLimitReset,
+  schedulePoolUsageRefresh,
   sortPoolUsageDisplayAccounts,
   type AccountUsage,
   type PoolUsageSnapshot,
@@ -792,6 +793,117 @@ describe('codexUsage display helpers', () => {
     expect(fetchCount).toBe(1)
     expect(account?.usageAllowed).toBe(false)
     expect(account?.usageLimitReached).toBe(true)
+  })
+
+  test('coalesces overlapping live usage fetches', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'main-account', alias: 'main' }),
+      ],
+    })
+
+    const originalFetch = globalThis.fetch
+    let fetchCount = 0
+    let resolveResponse: ((response: Response) => void) | undefined
+    globalThis.fetch = (() => {
+      fetchCount += 1
+      return new Promise<Response>(resolve => {
+        resolveResponse = resolve
+      })
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      const first = fetchPoolUsage({ forceRefresh: true })
+      const second = fetchPoolUsage({ forceRefresh: true, updateRoutingHints: true })
+
+      expect(fetchCount).toBe(1)
+      resolveResponse?.(
+        new Response(
+          JSON.stringify({
+            user_id: 'u',
+            email: 'main@example.com',
+            plan_type: 'plus',
+            rate_limit: {
+              allowed: false,
+              limit_reached: true,
+              primary_window: {
+                used_percent: 100,
+                limit_window_seconds: 18000,
+                reset_after_seconds: 60,
+                reset_at: 0,
+              },
+              secondary_window: {
+                used_percent: 0,
+                limit_window_seconds: 604800,
+                reset_after_seconds: 0,
+                reset_at: 0,
+              },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      )
+
+      await Promise.all([first, second])
+    } finally {
+      globalThis.fetch = originalFetch
+      invalidateUsageCache()
+    }
+
+    const account = getPoolStatus().accounts.find((entry) => entry.accountId === 'main-account')
+    expect(account?.usageLimitReached).toBe(true)
+  })
+
+  test('debounces a fresh usage poll after completed Codex turns', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [
+        buildPoolAccount({ accountId: 'main-account', alias: 'main' }),
+      ],
+    })
+
+    const originalFetch = globalThis.fetch
+    let fetchCount = 0
+    globalThis.fetch = (async () => {
+      fetchCount += 1
+      return new Response(
+        JSON.stringify({
+          user_id: 'u',
+          email: 'main@example.com',
+          plan_type: 'plus',
+          rate_limit: {
+            allowed: true,
+            limit_reached: false,
+            primary_window: {
+              used_percent: fetchCount * 10,
+              limit_window_seconds: 18000,
+              reset_after_seconds: 60,
+              reset_at: 0,
+            },
+            secondary_window: {
+              used_percent: 0,
+              limit_window_seconds: 604800,
+              reset_after_seconds: 0,
+              reset_at: 0,
+            },
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      await fetchPoolUsage()
+      schedulePoolUsageRefresh()
+      schedulePoolUsageRefresh()
+      await new Promise(resolve => setTimeout(resolve, 1_100))
+    } finally {
+      globalThis.fetch = originalFetch
+      invalidateUsageCache()
+    }
+
+    expect(fetchCount).toBe(2)
   })
 
   test('fetchPoolUsage clears only usage-derived capped status when live usage is allowed', async () => {

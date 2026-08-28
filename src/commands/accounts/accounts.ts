@@ -31,8 +31,8 @@ export const call: LocalCommandCall = async () => {
   if (initialized && accounts.length > 0) {
     if (lines.length > 0) lines.push('', '---', '')
 
-    // Fetch live usage from wham/usage
-    const snapshot = await fetchPoolUsage({ updateRoutingHints: true })
+    // /accounts is an explicit request for current usage, not a cached summary.
+    const snapshot = await fetchPoolUsage({ forceRefresh: true, updateRoutingHints: true })
 
     if (snapshot.accounts.length > 0) {
       lines.push(formatPoolUsage(snapshot))

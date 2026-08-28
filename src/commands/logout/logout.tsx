@@ -16,6 +16,7 @@ import { gracefulShutdownSync } from '../../utils/gracefulShutdown.js';
 import { getSecureStorage } from '../../utils/secureStorage/index.js';
 import { clearToolSchemaCache } from '../../utils/toolSchemaCache.js';
 import { resetUserCache } from '../../utils/user.js';
+import { invalidateUsageCache } from '../../services/api/codexUsage.js';
 export async function performLogout({
   clearOnboarding = false
 }): Promise<void> {
@@ -56,6 +57,7 @@ export async function performLogout({
 export async function clearAuthRelatedCaches(): Promise<void> {
   // Clear the OAuth token cache
   getClaudeAIOAuthTokens.cache?.clear?.();
+  invalidateUsageCache();
   clearTrustedDeviceTokenCache();
   clearBetasCaches();
   clearToolSchemaCache();

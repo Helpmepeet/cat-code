@@ -13,7 +13,7 @@ import {
   seedCodexAccountPoolForTest,
   type PoolAccount,
 } from '../../services/api/codexAccountPool.js'
-import { invalidateUsageCache } from '../../services/api/codexUsage.js'
+import { fetchPoolUsage, invalidateUsageCache } from '../../services/api/codexUsage.js'
 import { call } from './accounts.js'
 
 function createCodexAccount(
@@ -103,6 +103,25 @@ describe('/accounts', () => {
     expect(mainAccount?.usagePrimary).toBe(100)
     expect(mainAccount?.usageLimitReached).toBe(true)
     expect(mainAccount ? isCodexAccountSwitchable(mainAccount) : false).toBe(false)
+  })
+
+  test('bypasses a cached usage snapshot', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [createCodexAccount('main-account', 'main')],
+    })
+
+    let fetchCount = 0
+    globalThis.fetch = (async () => {
+      fetchCount += 1
+      return usageResponse('main-account', fetchCount === 1 ? 10 : 20)
+    }) as typeof globalThis.fetch
+
+    await fetchPoolUsage()
+    const result = await call('', {} as Parameters<typeof call>[1])
+
+    expect(fetchCount).toBe(2)
+    expect(result.value).toContain('20%')
   })
 
   test('usage display records availability for later spread lease selection', async () => {

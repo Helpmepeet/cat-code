@@ -358,7 +358,7 @@ function CodexPoolUsageSection({ maxWidth }: { maxWidth: number }): React.ReactN
         // Deliberate (F10): opening the Usage tab refreshes routing hints so the
         // next request routes on the freshest usage data. Display drives routing
         // here on purpose; keep in sync with the AccountsPanel fetch.
-        const data = await fetchPoolUsage({ updateRoutingHints: true });
+        const data = await fetchPoolUsage({ forceRefresh: true, updateRoutingHints: true });
         setSnapshot(data);
       } catch {
         // best-effort; silently skip on failure
