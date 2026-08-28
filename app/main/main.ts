@@ -2360,21 +2360,37 @@ function registerIpcHandlers(): void {
    * the alpha on a window not born transparent, so it stays `#000000`), which is
    * why the pixel never moved.
    *
-   * THE FAILURE THIS REPLACED, kept because it is unresolved rather than fixed.
-   * On 2026-08-28 the operator's window, in dark with glass on, showed no
-   * effective material: with the page's own coat forced to alpha 0 it composited
-   * to #FCFCFE, against #FFFFFF for a window drawing nothing and #424242 for a
-   * correct one created seconds later, same options, same display, same Space.
-   * Because `createWindow` clears the window's own background to hand the
-   * material the ground, that leaves a HOLE — the desktop composites through the
-   * 20% coat and the app is unreadable until relaunch. `setVibrancy` in every
-   * material did not bring it back, so "the view was dropped" is one explanation
-   * among several (present but not compositing, the web contents ordered above
-   * it, a stale internal appearance) and JS cannot tell them apart. Reproduction
-   * failed against re-mints, re-mints while hidden, maximize, fullscreen,
-   * hide/show, minimize/restore, a move across displays of differing backing
-   * scale, docked DevTools, and 100 reloads. Distinguishing those states needs a
-   * native diagnostic, not another pixel.
+   * THE FAILURE THIS REPLACED, kept because it is unresolved rather than fixed,
+   * and NOT a vibrancy fault at all. On 2026-08-28 the operator's window, in dark
+   * with glass on, showed no effective material: with the page's own coat forced
+   * to alpha 0 it composited to #FCFCFE, against #FFFFFF for a window drawing
+   * nothing and #424242 for a correct one created seconds later in the SAME
+   * process, same options, same display, same Space. `setVibrancy` in every
+   * material did not bring it back.
+   *
+   * THE NATIVE VIEW WAS FINE, which is the thing to remember. Read out of the
+   * live process before it was lost: exactly one `NSVisualEffectView` under the
+   * content view, `material` 21, `state` active, `blendingMode` behind-window,
+   * `alpha` 1, not hidden, `frame` {0,0,2560,1050} — an exact match for the
+   * window's bounds, so it tracked the operator's resize correctly too. Every
+   * "the view was dropped / stale / mis-sized" story is dead.
+   *
+   * SO SOMETHING ABOVE IT COMPOSITES OPAQUE. The corroborating measurement is
+   * accidental: setting this window's background to opaque RED during probing
+   * turned the ground #0F0F0F rather than red, which is Chromium repainting its
+   * own base from the `color-scheme: dark` default (#121212). The web layer owns
+   * a base colour and it responds; its default is white, and white under the 20%
+   * coat lands at about #CECECE against the #D3D3D3 that was measured. Two
+   * candidates remain and this JS cannot separate them: the window's own
+   * `opaque` flag flipped, or the render surface lost the transparency the
+   * `vibrancy` option gives it. The next read is one more native field —
+   * `NSWindow.opaque` and its `backgroundColor` — not another pixel.
+   *
+   * Reproduction failed against re-mints, re-mints while hidden, maximize,
+   * fullscreen, hide/show, minimize/restore, a move across displays of differing
+   * backing scale, docked DevTools, and 100 reloads — but every one of those was
+   * scored on the effect view, which we now know was never the casualty. They do
+   * not rule out the surface.
    */
 
   ipcMain.on(CH_REFRESH_ACCOUNTS_POOL, event => {
