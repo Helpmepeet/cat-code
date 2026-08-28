@@ -15,9 +15,10 @@ export function formatHeadlessTextResult(
 ): string {
   switch (result.subtype) {
     case 'success':
-      return result.result?.endsWith('\n')
-        ? result.result
-        : `${result.result ?? ''}\n`
+      // Faithful to the pre-extraction expression. `result` is required on the
+      // success variant, so optional chaining here would only convert a
+      // contract violation into a blank line.
+      return result.result.endsWith('\n') ? result.result : `${result.result}\n`
     case 'error_during_execution':
       return `Execution error`
     case 'error_max_turns':
@@ -33,11 +34,16 @@ export function formatHeadlessTextResult(
     default: {
       // Exhaustiveness tripwire. Verified to fire under this repo's
       // `strict: false`: removing any case above makes tsc reject the
-      // assignment. Never replace this with a silent fallthrough — silent
-      // output is the defect it exists to prevent.
+      // assignment.
       const unhandledSubtype: never = result.subtype
       void unhandledSubtype
-      return ''
+      // The tripwire alone is not enough. `subtype` is optional in the
+      // generated type, so this branch is reachable at runtime TODAY with an
+      // undefined subtype, and no gate compiles the tripwire anyway
+      // (build:dev:full runs no tsc, and root typecheck is known-red). A
+      // silent return here is the exact defect this function exists to
+      // prevent, so say something instead.
+      return `Error: Unrecognized result subtype (${String(result.subtype)})\n`
     }
   }
 }

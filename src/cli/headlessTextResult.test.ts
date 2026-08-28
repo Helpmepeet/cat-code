@@ -47,6 +47,17 @@ describe('formatHeadlessTextResult', () => {
     }
   })
 
+  // `subtype` is optional in the generated type, so this branch is reachable
+  // at runtime today, not only after a future union edit. The compile-time
+  // tripwire cannot see it, and no gate compiles the tripwire anyway.
+  test('an unrecognized subtype is loud, not silent', () => {
+    const text = formatHeadlessTextResult(
+      result(undefined as never, { result: 'answer' }),
+      LIMITS,
+    )
+    expect(text).toBe('Error: Unrecognized result subtype (undefined)\n')
+  })
+
   // Guards the pre-existing cases against the extraction that moved them out
   // of runHeadless. These pass either way; they exist to catch a bad move.
   test('existing subtypes are unchanged by the extraction', () => {
@@ -68,5 +79,13 @@ describe('formatHeadlessTextResult', () => {
     expect(
       formatHeadlessTextResult(result('error_max_budget_usd'), LIMITS),
     ).toBe('Error: Exceeded USD budget (5)')
+    expect(
+      formatHeadlessTextResult(
+        result('error_max_structured_output_retries'),
+        LIMITS,
+      ),
+    ).toBe(
+      'Error: Failed to provide valid structured output after maximum retries',
+    )
   })
 })

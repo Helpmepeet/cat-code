@@ -360,11 +360,12 @@ import { removeTeammateFromTeamFile } from '../utils/swarm/teamHelpers.js'
 import { unassignTeammateTasks } from '../utils/tasks.js'
 import { getRunningTasks } from '../utils/task/framework.js'
 import { isBackgroundTask } from '../tasks/types.js'
-import { isTerminalTaskStatus, type TaskStateBase } from '../Task.js'
 import { formatHeadlessTextResult } from './headlessTextResult.js'
 import {
   createPendingTaskNotifications,
+  type NotificationSweep,
   type ObservedTask,
+  toObservedTask,
 } from './pendingTaskNotifications.js'
 import { stopTask } from '../tasks/stopTask.js'
 import { drainSdkEvents } from '../utils/sdkEventQueue.js'
@@ -1100,21 +1101,20 @@ function runHeadlessStreaming(
   const pendingTaskNotifications = createPendingTaskNotifications(
     UNDELIVERED_NOTIFICATION_DEADLINE_MS,
   )
+  // Function-scoped, not per-turn: every `update()` can expire an entry, and
+  // an expiry dropped on the floor is unrecoverable (the id is deleted from
+  // the tracker, so no later poll can report it). Cleared when consumed.
+  const undeliveredTaskIds: string[] = []
+  const sweepTaskNotifications = (state: AppState): NotificationSweep => {
+    const sweep = pendingTaskNotifications.update(
+      observeTasks(state),
+      Date.now(),
+    )
+    undeliveredTaskIds.push(...sweep.expired)
+    return sweep
+  }
   const observeTasks = (state: AppState): ObservedTask[] =>
-    Object.values(state.tasks ?? {}).map((task): ObservedTask => {
-      // `TaskState` imports two modules that are not on disk, so it does not
-      // resolve to a usable shape here (see src/tasks/attention.ts:11).
-      // `TaskStateBase` is the real, checked declaration of every field read
-      // below; isBackgroundTask() still runs against the original value.
-      const base = task as TaskStateBase
-      return {
-        id: base.id,
-        isBackgroundWork:
-          isBackgroundTask(task) && base.type !== 'in_process_teammate',
-        isTerminal: isTerminalTaskStatus(base.status),
-        notified: Boolean(base.notified),
-      }
-    })
+    Object.values(state.tasks ?? {}).map(toObservedTask)
   let abortController: AbortController | undefined
   // Set once the goal loop exists (below). Held in a mutable slot rather than
   // closed over directly because SIGINT can land before that line runs.
@@ -2371,10 +2371,7 @@ function runHeadlessStreaming(
                   heldBackResult = message
                   // Seed the tracker while those tasks are still running, so
                   // their ids are known before any of them flips to terminal.
-                  pendingTaskNotifications.update(
-                    observeTasks(currentState),
-                    Date.now(),
-                  )
+                  sweepTaskNotifications(currentState)
                 } else {
                   heldBackResult = null
                   output.enqueue(message)
@@ -2385,6 +2382,11 @@ function runHeadlessStreaming(
                 for (const event of drainSdkEvents()) {
                   output.enqueue(event)
                 }
+                // Observe mid-turn. The wait loop only runs BETWEEN turns, so
+                // an agent that both starts and goes terminal inside one turn
+                // is never seen running by the seed above, and its handover
+                // window would be invisible.
+                sweepTaskNotifications(getAppState())
                 output.enqueue(message)
               }
             }
@@ -2510,10 +2512,6 @@ function runHeadlessStreaming(
         }
       }
 
-      // Background work whose notification never arrived within the deadline.
-      // Non-empty means this turn cannot produce a truthful answer.
-      const undeliveredTaskIds: string[] = []
-
       // Use a do-while loop to drain commands and then wait for any
       // background agents that are still running. When agents complete,
       // their notifications are enqueued and the loop re-drains.
@@ -2544,11 +2542,17 @@ function runHeadlessStreaming(
           // Terminal-but-unnotified background work. Without this the handover
           // window reads as idle: hasRunningBg is already false and the
           // notification has not reached the queue yet.
-          const notificationSweep = pendingTaskNotifications.update(
-            observeTasks(state),
-            Date.now(),
-          )
-          undeliveredTaskIds.push(...notificationSweep.expired)
+          const notificationSweep = sweepTaskNotifications(state)
+          if (undeliveredTaskIds.length > 0) {
+            // Stop here rather than at the bottom of the loop. Anything that
+            // runs after this decision (a goal continuation, or a turn on a
+            // late notification) spends quota producing an answer the
+            // fail-closed branch below is about to discard. Tested against the
+            // accumulator, not this sweep, so an expiry recorded mid-turn by
+            // the observation in the message handler also stops the loop.
+            waitingForAgents = false
+            break
+          }
           const hasPendingNotification = notificationSweep.pending.length > 0
           let hasMainThreadQueued = peek(isMainThread) !== undefined
 
@@ -2582,7 +2586,13 @@ function runHeadlessStreaming(
             }
           }
 
-          if (hasRunningBg || hasPendingNotification || hasMainThreadQueued) {
+          if (
+            hasRunningBg ||
+            // Not while shutting down: gracefulShutdown arms a force-exit, so
+            // waiting here just eats the interrupted result.
+            (hasPendingNotification && !isShuttingDown()) ||
+            hasMainThreadQueued
+          ) {
             waitingForAgents = true
             if (!hasMainThreadQueued) {
               runPhase = 'waiting_for_agents'
@@ -2620,6 +2630,7 @@ function runHeadlessStreaming(
             `Background task result was never delivered to the model: ${undeliveredTaskIds.join(', ')}`,
           ],
         })
+        undeliveredTaskIds.length = 0
       } else if (heldBackResult) {
         output.enqueue(heldBackResult)
         heldBackResult = null

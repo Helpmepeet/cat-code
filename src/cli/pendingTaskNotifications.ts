@@ -26,6 +26,9 @@
  * caller so it can fail the run.
  */
 
+import { isTerminalTaskStatus, type TaskStateBase } from '../Task.js'
+import { isBackgroundTask } from '../tasks/types.js'
+
 /** Narrow, caller-derived facts about one task. Deliberately not `TaskState`. */
 export type ObservedTask = {
   id: string
@@ -34,6 +37,30 @@ export type ObservedTask = {
   /** completed | failed | killed */
   isTerminal: boolean
   notified: boolean
+}
+
+/**
+ * Project one live task into the narrow facts the tracker consumes.
+ *
+ * Exported so the mapping is testable. It is the least type-protected line in
+ * this path: `TaskState` imports two modules that are not on disk, so it does
+ * not resolve to a usable shape (see `src/tasks/attention.ts:11`).
+ * `TaskStateBase` is the real, checked declaration of every field read here,
+ * while `isBackgroundTask` still runs against the original value.
+ *
+ * The `in_process_teammate` exclusion must stay identical to the one guarding
+ * `hasRunningBg` in the headless wait loop: teammates stay `running` for their
+ * whole lifetime, so waiting on one loops forever (gh-30008).
+ */
+export function toObservedTask(task: unknown): ObservedTask {
+  const base = task as TaskStateBase
+  return {
+    id: base.id,
+    isBackgroundWork:
+      isBackgroundTask(task as never) && base.type !== 'in_process_teammate',
+    isTerminal: isTerminalTaskStatus(base.status),
+    notified: Boolean(base.notified),
+  }
 }
 
 export type NotificationSweep = {

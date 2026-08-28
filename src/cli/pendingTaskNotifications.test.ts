@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   createPendingTaskNotifications,
   type ObservedTask,
+  toObservedTask,
 } from './pendingTaskNotifications.js'
 
 const DEADLINE_MS = 120_000
@@ -139,5 +140,71 @@ describe('pendingTaskNotifications', () => {
       T0 + 200,
     )
     expect(both.pending.sort()).toEqual(['a', 'b'])
+  })
+})
+
+// toObservedTask is the least type-protected step in this path: `TaskState`
+// does not resolve to a usable shape, so nothing checks these field reads.
+// The tracker tests inject ObservedTask literals and cannot see a wrong
+// mapping, which is exactly the "tests that inject the value never drive the
+// code that produces it" trap.
+describe('toObservedTask', () => {
+  const agent = {
+    id: 'agent-1',
+    type: 'local_agent',
+    status: 'running',
+    description: 'count things',
+    startTime: 0,
+    outputFile: '/tmp/out',
+    outputOffset: 0,
+    notified: false,
+  }
+
+  test('a running background agent counts as background work', () => {
+    expect(toObservedTask(agent)).toEqual({
+      id: 'agent-1',
+      isBackgroundWork: true,
+      isTerminal: false,
+      notified: false,
+    })
+  })
+
+  test('a completed agent is terminal and no longer background work', () => {
+    // This is the handover window: isBackgroundTask() is already false
+    // (tasks/types.ts:38) while the notification is still being prepared.
+    expect(toObservedTask({ ...agent, status: 'completed' })).toEqual({
+      id: 'agent-1',
+      isBackgroundWork: false,
+      isTerminal: true,
+      notified: false,
+    })
+  })
+
+  test('failed and killed are terminal too', () => {
+    expect(toObservedTask({ ...agent, status: 'failed' }).isTerminal).toBe(true)
+    expect(toObservedTask({ ...agent, status: 'killed' }).isTerminal).toBe(true)
+  })
+
+  test('a running teammate is excluded from background work', () => {
+    // Teammates stay `running` for their whole lifetime, so tracking one
+    // would wait forever (gh-30008). This must stay identical to the
+    // exclusion guarding hasRunningBg in the headless wait loop.
+    expect(
+      toObservedTask({ ...agent, id: 'teammate-1', type: 'in_process_teammate' })
+        .isBackgroundWork,
+    ).toBe(false)
+  })
+
+  test('a foregrounded agent is not background work', () => {
+    expect(
+      toObservedTask({ ...agent, isBackgrounded: false }).isBackgroundWork,
+    ).toBe(false)
+  })
+
+  test('notified is read, not assumed', () => {
+    expect(toObservedTask({ ...agent, notified: true }).notified).toBe(true)
+    expect(toObservedTask({ ...agent, notified: undefined }).notified).toBe(
+      false,
+    )
   })
 })
