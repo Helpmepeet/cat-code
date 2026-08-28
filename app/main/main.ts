@@ -2323,48 +2323,58 @@ function registerIpcHandlers(): void {
   /**
    * THERE IS DELIBERATELY NO RE-MINT HERE, and the assignment above is the whole
    * feature. A listener on `nativeTheme`'s `updated` event, calling `setVibrancy` on
-   * every window used to sit at this spot; it was removed after being measured,
-   * because it bought nothing and could only ever cost.
+   * every window, used to sit at this spot. It is removed as CLEANUP: it is not
+   * needed for an appearance change, and it was never shown to repair anything.
+   * It is NOT the fix for the failure described at the bottom of this comment,
+   * and nothing here should be read as claiming it was.
    *
-   * IT BOUGHT NOTHING. The claim it rested on — that macOS resolves the
-   * material once at window creation and leaves it in the appearance the window
-   * was BORN in — is false on Electron 33.4.11. Measured 2026-08-28 by
-   * capturing the composited window and reading the page ground's pixels, with
-   * no `setVibrancy` call anywhere in the probe: a window carrying this file's
-   * exact options and born while `themeSource` was still `'system'` reads
-   * #2E2E30 under dark, #929294 after an override to `'light'`, and #2E2E30
-   * again on the way back. A second window re-minted on every `updated` event was
-   * pixel-identical at all three points. The material follows `themeSource` on
-   * its own.
+   * IT IS NOT NEEDED FOR AN APPEARANCE CHANGE. The claim it rested on — that
+   * macOS resolves the material once at window creation and leaves it in the
+   * appearance the window was BORN in — does not hold on Electron 33.4.11.
+   * Measured 2026-08-28 by capturing the composited window and reading the page
+   * ground's pixels, with no `setVibrancy` call anywhere in the probe: a window
+   * carrying this file's exact options and born while `themeSource` was still
+   * `'system'` reads #2E2E30 under dark, #929294 after an override to `'light'`,
+   * and #2E2E30 again on the way back. A twin re-minted on every `updated` event
+   * matched it within capture variation (about one RGB level; the two windows sat
+   * at different screen positions, so they were never byte-identical). Confirmed
+   * independently against the native view: reasserting the same material twenty
+   * times leaves the SAME `NSVisualEffectView` pointer, material and active state,
+   * so a same-value re-mint does not even rebuild the view it was supposed to.
    *
-   * MEASURED AGAIN ON THE SHIPPED APP, where it answers from the other side. A
-   * live window running this renderer does not follow `themeSource` at all:
-   * moved to `'light'` (`shouldUseDarkColors` false, `getEffectiveAppearance()`
-   * `'light'`) its ground stayed #2F2F31, and a re-mint issued by hand left it
-   * at #2F2F31 too. Whatever pins it there — the page declares `color-scheme`
-   * itself, which the bare probe did not — the listener does not move it. It
-   * does not matter either way: glass is a dark-appearance effect (6a90d30f),
+   * ON THE SHIPPED APP it answers from the other side: a live window running this
+   * renderer does not follow `themeSource` at all. Moved to `'light'`
+   * (`shouldUseDarkColors` false, `getEffectiveAppearance()` `'light'`) its ground
+   * stayed #2F2F31, and a re-mint issued by hand left it at #2F2F31 too. It does
+   * not matter which way it lands: glass is a dark-appearance effect (6a90d30f),
    * so in light the page ground is opaque and the material is never seen.
    *
-   * IT COULD ONLY COST, because `setVibrancy` is not symmetric. It can change
-   * the material of a window that is currently vibrant, but it cannot make a
-   * window vibrant that is not: a window born without the `vibrancy` option
-   * stays on its opaque ground when `setVibrancy('under-window')` is called
-   * afterwards (measured #252525, unchanged). So a window that loses its
-   * `NSVisualEffectView` cannot be repaired from here at all — and since
-   * `createWindow` clears the window's own background to hand the material the
-   * ground, what is left is not a solid window but a HOLE: the desktop composites
-   * straight through the 20% coat that glass leaves on the page, and the app is
-   * unreadable until it is relaunched. That is the state the operator's window
-   * was found in on 2026-08-28, with this listener the only code in the repo
-   * that touches a live window's vibrancy.
+   * WHAT IS NOT ESTABLISHED, corrected 2026-08-28 after an independent review
+   * inspected the native hierarchy that pixels cannot see. An earlier version of
+   * this comment claimed `setVibrancy` is asymmetric — that it cannot make a
+   * window vibrant that is not — on the evidence that a window born WITHOUT the
+   * `vibrancy` option stayed at #252525 after a later `setVibrancy` call. The
+   * pixel was real and the inference was wrong: the call DOES create the
+   * `NSVisualEffectView`, and that window's opaque backing simply covered it.
+   * The backing cannot be cleared from JS afterwards (`setBackgroundColor` drops
+   * the alpha on a window not born transparent, so it stays `#000000`), which is
+   * why the pixel never moved.
    *
-   * The listener was never proved to be what dropped the view (a dozen
-   * reproductions — repeated re-mints, re-mints while hidden, maximize,
-   * fullscreen, hide/show, minimize/restore, a move across displays of differing
-   * backing scale, docked DevTools — all survived). It is removed on the
-   * asymmetry alone: no measurable upside, an unrecoverable downside, and it is
-   * the only suspect we own.
+   * THE FAILURE THIS REPLACED, kept because it is unresolved rather than fixed.
+   * On 2026-08-28 the operator's window, in dark with glass on, showed no
+   * effective material: with the page's own coat forced to alpha 0 it composited
+   * to #FCFCFE, against #FFFFFF for a window drawing nothing and #424242 for a
+   * correct one created seconds later, same options, same display, same Space.
+   * Because `createWindow` clears the window's own background to hand the
+   * material the ground, that leaves a HOLE — the desktop composites through the
+   * 20% coat and the app is unreadable until relaunch. `setVibrancy` in every
+   * material did not bring it back, so "the view was dropped" is one explanation
+   * among several (present but not compositing, the web contents ordered above
+   * it, a stale internal appearance) and JS cannot tell them apart. Reproduction
+   * failed against re-mints, re-mints while hidden, maximize, fullscreen,
+   * hide/show, minimize/restore, a move across displays of differing backing
+   * scale, docked DevTools, and 100 reloads. Distinguishing those states needs a
+   * native diagnostic, not another pixel.
    */
 
   ipcMain.on(CH_REFRESH_ACCOUNTS_POOL, event => {

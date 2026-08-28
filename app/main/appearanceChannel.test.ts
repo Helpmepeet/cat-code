@@ -127,26 +127,29 @@ test('the appearance never becomes sidecar vocabulary', () => {
  * The half of the preference that lives outside the channel, and the guard that
  * keeps a removed listener removed.
  *
- * A listener on `nativeTheme`'s `updated` event, calling `setVibrancy` on every window,
- * used to sit beside the channel, on the claim that macOS resolves a window's
- * material once at creation and leaves it in the appearance the window was BORN
- * in. That claim is false on Electron 33.4.11. Measured 2026-08-28 by capturing
- * the composited window and reading the page ground's pixels, with no
- * `setVibrancy` call anywhere in the probe: a window carrying `createWindow`'s
+ * A listener on `nativeTheme`'s `updated` event, calling `setVibrancy` on every
+ * window, used to sit beside the channel, on the claim that macOS resolves a
+ * window's material once at creation and leaves it in the appearance the window
+ * was BORN in. That claim does not hold on Electron 33.4.11. Measured 2026-08-28
+ * by capturing the composited window and reading the page ground's pixels, with
+ * no `setVibrancy` call anywhere in the probe: a window carrying `createWindow`'s
  * exact options, born while `themeSource` was still `'system'`, reads #2E2E30
  * under dark, #929294 after an override to `'light'`, and #2E2E30 again on the
- * way back. A second window re-minted on every `updated` event was pixel-identical
- * at all three points.
+ * way back. A twin re-minted on every `updated` event matched within capture
+ * variation. Independently, reasserting the same material twenty times leaves the
+ * same `NSVisualEffectView` pointer and state, so the re-mint does not rebuild
+ * the view it was meant to.
  *
- * It is guarded because re-adding it is the obvious "fix" for a symptom it does
- * not fix. `setVibrancy` cannot make a non-vibrant window vibrant (a window born
- * without the option stays on its opaque ground, measured #252525 unchanged), so
- * the listener has no repair value; and because `createWindow` clears the
- * window's own background to hand the material the ground, a window that loses
- * its `NSVisualEffectView` is a HOLE the desktop composites through, not a solid
- * window. One unrecoverable failure mode, no measured upside.
+ * WHAT THIS GUARD DOES NOT SAY, corrected 2026-08-28. It used to forbid every
+ * `.setVibrancy(` call in the file, on the belief that the call cannot make a
+ * non-vibrant window vibrant. That belief is false — the call does create the
+ * effect view; on the window it was measured against, an opaque backing covered
+ * the result — so a targeted repair using `setVibrancy` must stay POSSIBLE. What
+ * is guarded is only the shape that was removed: an unconditional, every-window
+ * re-mint hung off the appearance event. A future repair with a reason may call
+ * it; this listener may not come back.
  */
-test('the window material is set once at creation and never re-asserted', () => {
+test('an appearance change does not re-mint every window material', () => {
   const source = mainSource()
   expect(source).toContain("const WINDOW_VIBRANCY = 'under-window' as const")
   // The window is BORN with it...
@@ -154,8 +157,8 @@ test('the window material is set once at creation and never re-asserted', () => 
   // ...and no second literal is left behind to drift from it.
   expect(source).not.toContain("vibrancy: 'under-window'")
 
-  // Nothing calls it at runtime. Comments naming it are how the finding is kept,
-  // so the guard is on the call, not the word.
-  expect(source).not.toMatch(/\.setVibrancy\(/)
+  // The removed shape, not the API. Comments naming the event are how the
+  // finding is kept, so the guard is on the listener registration itself.
   expect(source).not.toContain("nativeTheme.on('updated'")
+  expect(source).not.toMatch(/getAllWindows\(\)[\s\S]{0,200}?\.setVibrancy\(/)
 })
