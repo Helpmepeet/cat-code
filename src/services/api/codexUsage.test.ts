@@ -121,7 +121,10 @@ describe('codexUsage display helpers', () => {
     resetCodexAccountPoolForTest()
     resetCodexLeaseManagerForTest()
     _resetAccountDiagnosticStreamJsonHookForTesting()
-    invalidateUsageCache()
+    // Also clears the poll's rate floor: without it a scheduler test that runs
+    // after one whose poll fired sees a ~30s delay, and its assertion that no
+    // fetch happened passes for the wrong reason.
+    resetPoolUsageSchedulerForTest()
   })
 
   afterEach(() => {
@@ -842,8 +845,10 @@ describe('codexUsage display helpers', () => {
     }) as unknown as typeof globalThis.fetch
 
     try {
-      const first = fetchPoolUsage({ forceRefresh: true })
-      const second = fetchPoolUsage({ forceRefresh: true, updateRoutingHints: true })
+      // Unforced: neither caller demanded an observation newer than the read
+      // already on the wire, so one endpoint request answers both.
+      const first = fetchPoolUsage()
+      const second = fetchPoolUsage({ updateRoutingHints: true })
 
       expect(fetchCount).toBe(1)
       resolveResponse?.(
@@ -883,7 +888,7 @@ describe('codexUsage display helpers', () => {
     expect(account?.usageLimitReached).toBe(true)
   })
 
-  test('debounces a fresh usage poll after completed Codex turns', async () => {
+  test('collapses repeated post-turn scheduling into one fresh usage poll', async () => {
     seedCodexAccountPoolForTest({
       activeAccountId: 'main-account',
       accounts: [
@@ -965,6 +970,102 @@ describe('codexUsage display helpers', () => {
 
       expect(fetchCount).toBe(2)
       expect(forcedSnapshot.accounts[0]?.primaryWindow.usedPercent).toBe(90)
+    } finally {
+      globalThis.fetch = originalFetch
+      resetPoolUsageSchedulerForTest()
+    }
+  })
+
+  test('a forced read issues its own request rather than sharing one in flight', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [buildPoolAccount({ accountId: 'main-account', alias: 'main' })],
+    })
+
+    const originalFetch = globalThis.fetch
+    let fetchCount = 0
+    let resolveFirst: ((response: Response) => void) | undefined
+    globalThis.fetch = (() => {
+      fetchCount += 1
+      if (fetchCount === 1) {
+        return new Promise<Response>(resolve => {
+          resolveFirst = resolve
+        })
+      }
+      return Promise.resolve(usageBody(90))
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      // No invalidation between the two: the forced caller must escape the
+      // shared read on its own, not because something else cleared it.
+      const background = fetchPoolUsage()
+      const forced = fetchPoolUsage({ forceRefresh: true })
+      resolveFirst?.(usageBody(10))
+      const [, forcedSnapshot] = await Promise.all([background, forced])
+
+      expect(fetchCount).toBe(2)
+      expect(forcedSnapshot.accounts[0]?.primaryWindow.usedPercent).toBe(90)
+    } finally {
+      globalThis.fetch = originalFetch
+      resetPoolUsageSchedulerForTest()
+    }
+  })
+
+  test('a warm cache answers an unforced read without waiting on one in flight', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [buildPoolAccount({ accountId: 'main-account', alias: 'main' })],
+    })
+
+    const originalFetch = globalThis.fetch
+    let fetchCount = 0
+    globalThis.fetch = (() => {
+      fetchCount += 1
+      if (fetchCount === 1) {
+        return Promise.resolve(usageBody(10))
+      }
+      // Never resolves: a caller that awaits this one hangs.
+      return new Promise<Response>(() => {})
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      await fetchPoolUsage()
+      const stuck = fetchPoolUsage({ forceRefresh: true })
+      void stuck.catch(() => {})
+
+      const cached = await fetchPoolUsage()
+      expect(cached.accounts[0]?.primaryWindow.usedPercent).toBe(10)
+      expect(fetchCount).toBe(2)
+    } finally {
+      globalThis.fetch = originalFetch
+      resetPoolUsageSchedulerForTest()
+    }
+  })
+
+  test('a post-turn poll already armed is not pushed back by later requests', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [buildPoolAccount({ accountId: 'main-account', alias: 'main' })],
+    })
+
+    const originalFetch = globalThis.fetch
+    let fetchCount = 0
+    globalThis.fetch = (() => {
+      fetchCount += 1
+      return Promise.resolve(usageBody(40))
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      // A tool loop: requests keep completing while a poll is pending. The poll
+      // must still land on schedule instead of being deferred by each one.
+      schedulePoolUsageRefresh()
+      for (let i = 0; i < 6; i += 1) {
+        await new Promise(resolve => setTimeout(resolve, 120))
+        schedulePoolUsageRefresh()
+      }
+      await new Promise(resolve => setTimeout(resolve, 400))
+
+      expect(fetchCount).toBe(1)
     } finally {
       globalThis.fetch = originalFetch
       resetPoolUsageSchedulerForTest()

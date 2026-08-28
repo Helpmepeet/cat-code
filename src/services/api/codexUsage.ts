@@ -268,9 +268,11 @@ async function fetchAccountUsageOnce(
  * Returns a snapshot with results and any errors.
  *
  * Unforced reads are served from a 1-minute cache, or join a read already in
- * flight, to avoid hammering the endpoint. `forceRefresh` opts out of both:
- * callers pass it when they need to observe state they just changed, so they
- * are never handed an observation issued before that change.
+ * flight, to avoid hammering the endpoint. `forceRefresh` opts out of both, so
+ * a caller that needs to observe state it just changed is never handed an
+ * observation issued before that change. Forced reads are user-initiated and
+ * rare (a panel opening, /accounts, a redeemed reset), so the coalescing they
+ * give up costs little next to returning a reading from before their own call.
  */
 export async function fetchPoolUsage(
   forceRefreshOrOptions: boolean | FetchPoolUsageOptions = false,
@@ -289,12 +291,12 @@ export async function fetchPoolUsage(
     return cachedSnapshot
   }
 
-  // Share an in-flight read only while it can still answer this caller. A read
-  // issued before the last invalidation predates whatever that invalidation
-  // marked as changed (a redeemed reset, a switched account, a completed turn),
-  // so invalidateUsageCache drops it here and the next caller issues its own.
-  // Otherwise forceRefresh silently returns the snapshot it was passed to avoid.
-  if (inFlightPoolUsage) {
+  // Share an in-flight read only with a caller that did not demand a new one.
+  // A read already on the wire was issued before this call, so it cannot answer
+  // "what is true now?" for a caller that asked precisely because it just
+  // changed something. Sharing it there is how forceRefresh silently returns
+  // the observation it was passed to avoid.
+  if (!forceRefresh && inFlightPoolUsage) {
     const generation = usageCacheGeneration
     const snapshot = await inFlightPoolUsage
     if (generation !== usageCacheGeneration) {
@@ -324,10 +326,16 @@ export async function fetchPoolUsage(
  * debounce the poll and give it a second to observe the new usage.
  *
  * Fires per request rather than per user-visible turn (every tool-loop
- * iteration and subagent request reaches it), so the poll is also floored to
- * one refresh per POST_TURN_USAGE_REFRESH_MIN_INTERVAL_MS; bursts inside that
- * window collapse into the trailing poll rather than each paying a fan-out
- * across every pool account.
+ * iteration and subagent request reaches it), so the poll is floored to one
+ * refresh per POST_TURN_USAGE_REFRESH_MIN_INTERVAL_MS and the first request to
+ * arm a poll wins: later ones inside the window ride it instead of pushing it
+ * back. Re-arming instead would starve the poll entirely during a long tool
+ * loop, which is the case this exists to cover.
+ *
+ * The trade is up to one interval of lag: a request completing just after a
+ * poll fires is not observed until the next one. Acceptable because the hints
+ * are advisory scoring inputs on a 5-hour window, and because one poll costs a
+ * GET per pool account.
  */
 export function schedulePoolUsageRefresh(): void {
   if (scheduledPoolUsageRefresh !== null) {

@@ -132,7 +132,9 @@ export type AccountsCommandExecutor = {
    * `fetchPoolUsage`). Read-only (GET, often live in this long-lived process:
    * the post-turn poll invalidates the 1-min cache), uses existing tokens, no
    * token refresh or completion burn. Resolves true when at least one account's
-   * usage landed, so the sidecar re-broadcasts the now-populated snapshot.
+   * usage landed, so the sidecar re-broadcasts. That is the read succeeding, not
+   * a guarantee the pool moved: a read overtaken by an account change applies no
+   * hints, and the 60s pool worker is what corrects the panel in that case.
    */
   refreshUsage(): Promise<boolean>
 }

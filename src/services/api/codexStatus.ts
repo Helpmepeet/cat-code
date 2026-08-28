@@ -156,7 +156,8 @@ export interface CodexStatus {
 export interface BuildCodexStatusOptions {
   /** Wall-clock reference for availability/reset math. Defaults to Date.now(). */
   now?: number
-  /** 'auto' (default) permits the cached, refresh-free usage GET; 'never' fetches nothing. */
+  /** 'auto' (default) permits the refresh-free usage GET (see the file header on
+   * what the cache does and does not bound); 'never' fetches nothing. */
   refresh?: CodexStatusRefreshMode
   /**
    * When true (default), populate the pool via the read-only `loadPoolForObservation`.

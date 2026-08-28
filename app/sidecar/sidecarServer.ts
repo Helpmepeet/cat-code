@@ -4679,8 +4679,10 @@ export class SidecarServer {
    * One-shot: populate the pool's usage hints (accounts domain `refreshUsage` →
    * engine `fetchPoolUsage`, read-only) and re-broadcast the snapshot when real
    * usage lands. Guarded so it runs once per sidecar; the fetch itself is
-   * 1-min-cached engine-side. Fire-and-forget: any failure is swallowed and the
-   * pre-fetch snapshot stands (never blocks attach or history replay).
+   * 1-min-cached engine-side, though the post-turn poll invalidates that cache,
+   * so in a busy session it is usually live. Fire-and-forget: any failure is
+   * swallowed and the pre-fetch snapshot stands (never blocks attach or history
+   * replay).
    */
   private refreshAccountsUsageOnce(): void {
     if (this.usageRefreshStarted || !this.accounts) {
