@@ -92,9 +92,20 @@ const ACCOUNT_USAGE_WARNING_THRESHOLD_PERCENT = 80
 
 let cachedSnapshot: PoolUsageSnapshot | null = null
 let inFlightPoolUsage: Promise<PoolUsageSnapshot> | null = null
+// Bumped by every invalidation. A read carries the generation it was issued
+// under, which is what makes "is this observation still about the current
+// accounts?" answerable after the fact: clearing a cache cannot reach back into
+// a request already on the wire, so the request has to check on the way out.
+let usageCacheGeneration = 0
 let scheduledPoolUsageRefresh: ReturnType<typeof setTimeout> | null = null
+let lastScheduledRefreshAt = 0
 const CACHE_TTL_MS = 60_000 // 1 minute
 const POST_TURN_USAGE_REFRESH_DELAY_MS = 1_000
+// Floor on the post-turn poll. queryModel completes once per API request, not
+// once per user-visible turn, so tool loops and subagents reach it repeatedly;
+// without a floor the cost is (requests x pool accounts) GETs. Usage is coarse
+// (percent buckets on a 5h window) and cannot meaningfully move inside this.
+const POST_TURN_USAGE_REFRESH_MIN_INTERVAL_MS = 30_000
 const warnedNearCapAccountIds = new Set<string>()
 
 // ── Public API ─────────────────────────────────────────────────────────────
@@ -255,7 +266,11 @@ async function fetchAccountUsageOnce(
 /**
  * Fetch usage for all pool accounts in parallel.
  * Returns a snapshot with results and any errors.
- * Caches for 1 minute to avoid hammering the endpoint.
+ *
+ * Unforced reads are served from a 1-minute cache, or join a read already in
+ * flight, to avoid hammering the endpoint. `forceRefresh` opts out of both:
+ * callers pass it when they need to observe state they just changed, so they
+ * are never handed an observation issued before that change.
  */
 export async function fetchPoolUsage(
   forceRefreshOrOptions: boolean | FetchPoolUsageOptions = false,
@@ -265,14 +280,6 @@ export async function fetchPoolUsage(
       ? { forceRefresh: forceRefreshOrOptions }
       : forceRefreshOrOptions
   const forceRefresh = options.forceRefresh === true
-  if (inFlightPoolUsage) {
-    const snapshot = await inFlightPoolUsage
-    if (options.updateRoutingHints === true) {
-      updateRoutingHintsFromUsage(snapshot.accounts)
-    }
-    emitUsageWarnings(snapshot.accounts)
-    return snapshot
-  }
 
   if (!forceRefresh && cachedSnapshot && Date.now() - cachedSnapshot.fetchedAt < CACHE_TTL_MS) {
     if (options.updateRoutingHints === true) {
@@ -280,6 +287,24 @@ export async function fetchPoolUsage(
     }
     emitCachedUsageWarningsForActiveSink()
     return cachedSnapshot
+  }
+
+  // Share an in-flight read only while it can still answer this caller. A read
+  // issued before the last invalidation predates whatever that invalidation
+  // marked as changed (a redeemed reset, a switched account, a completed turn),
+  // so invalidateUsageCache drops it here and the next caller issues its own.
+  // Otherwise forceRefresh silently returns the snapshot it was passed to avoid.
+  if (inFlightPoolUsage) {
+    const generation = usageCacheGeneration
+    const snapshot = await inFlightPoolUsage
+    if (generation !== usageCacheGeneration) {
+      return snapshot
+    }
+    if (options.updateRoutingHints === true) {
+      updateRoutingHintsFromUsage(snapshot.accounts)
+    }
+    emitUsageWarnings(snapshot.accounts)
+    return snapshot
   }
 
   const fetchPromise = fetchUncachedPoolUsage(options)
@@ -294,24 +319,50 @@ export async function fetchPoolUsage(
 }
 
 /**
- * Refresh usage after a successful Codex turn without delaying its response.
- * The usage service can lag the completed response briefly, so debounce the
- * poll and give it one second to observe the new usage.
+ * Refresh usage after a completed Codex API request, without delaying its
+ * response. The usage service can lag the completed response briefly, so
+ * debounce the poll and give it a second to observe the new usage.
+ *
+ * Fires per request rather than per user-visible turn (every tool-loop
+ * iteration and subagent request reaches it), so the poll is also floored to
+ * one refresh per POST_TURN_USAGE_REFRESH_MIN_INTERVAL_MS; bursts inside that
+ * window collapse into the trailing poll rather than each paying a fan-out
+ * across every pool account.
  */
 export function schedulePoolUsageRefresh(): void {
   if (scheduledPoolUsageRefresh !== null) {
-    clearTimeout(scheduledPoolUsageRefresh)
+    // A poll is already armed; the trailing one already covers this request.
+    return
   }
-  invalidateUsageCache()
+  const sinceLast = Date.now() - lastScheduledRefreshAt
+  const delay = Math.max(
+    POST_TURN_USAGE_REFRESH_DELAY_MS,
+    POST_TURN_USAGE_REFRESH_MIN_INTERVAL_MS - sinceLast,
+  )
   scheduledPoolUsageRefresh = setTimeout(() => {
     scheduledPoolUsageRefresh = null
+    lastScheduledRefreshAt = Date.now()
+    // Invalidate here rather than at schedule time: doing it per request would
+    // drop the cache on every tool-loop iteration and send unforced readers to
+    // the network in between, which is the cost the floor above exists to stop.
+    invalidateUsageCache()
     void fetchPoolUsage({ forceRefresh: true, updateRoutingHints: true }).catch(() => {})
-  }, POST_TURN_USAGE_REFRESH_DELAY_MS)
+  }, delay)
+  // Never hold a process open for a best-effort background poll; the sibling
+  // Codex timers (codexTokenRefresh.ts) do the same.
+  if (
+    scheduledPoolUsageRefresh &&
+    typeof scheduledPoolUsageRefresh === 'object' &&
+    'unref' in scheduledPoolUsageRefresh
+  ) {
+    scheduledPoolUsageRefresh.unref()
+  }
 }
 
 async function fetchUncachedPoolUsage(
   options: FetchPoolUsageOptions,
 ): Promise<PoolUsageSnapshot> {
+  const generation = usageCacheGeneration
   const { accounts } = getPoolStatus()
   const results: AccountUsage[] = []
   const errors: Array<{ accountId: string; error: string }> = []
@@ -334,6 +385,21 @@ async function fetchUncachedPoolUsage(
 
   await Promise.all(promises)
 
+  const snapshot: PoolUsageSnapshot = {
+    accounts: results,
+    fetchedAt: Date.now(),
+    errors,
+  }
+
+  // Something invalidated while these requests were on the wire, so they
+  // describe accounts that may already be gone (logout, switch, delete) or a
+  // state that has since moved. Hand the reading back to whoever asked for it,
+  // but keep it out of the shared cache and the routing hints: installing it
+  // would undo the invalidation and hold pre-change data for a full TTL.
+  if (generation !== usageCacheGeneration) {
+    return snapshot
+  }
+
   emitUsageWarnings(results)
 
   // Display calls stay non-rerolling, but callers may record live availability
@@ -342,11 +408,6 @@ async function fetchUncachedPoolUsage(
     updateRoutingHintsFromUsage(results)
   }
 
-  const snapshot: PoolUsageSnapshot = {
-    accounts: results,
-    fetchedAt: Date.now(),
-    errors,
-  }
   cachedSnapshot = snapshot
   return snapshot
 }
@@ -553,13 +614,32 @@ function usageUnavailableRow(error: string | null): string {
   return `  usage      unavailable (${error})`
 }
 
-/** Invalidate the usage cache (e.g., after account rotation). */
+/**
+ * Invalidate the usage cache (e.g., after account rotation).
+ *
+ * Also fences work already in progress: the generation bump makes any read
+ * currently on the wire unusable for later callers and stops it writing its
+ * result back on completion. Cancelling the pending timer alone is not enough,
+ * because the timer clears its own handle before it starts fetching.
+ */
 export function invalidateUsageCache(): void {
   cachedSnapshot = null
+  usageCacheGeneration += 1
+  inFlightPoolUsage = null
   if (scheduledPoolUsageRefresh !== null) {
     clearTimeout(scheduledPoolUsageRefresh)
     scheduledPoolUsageRefresh = null
   }
+}
+
+/**
+ * Clear the post-turn poll's rate floor. Production code must not call this:
+ * the floor deliberately survives invalidation, or the timer's own invalidate
+ * would reset it every time and there would be no floor at all.
+ */
+export function resetPoolUsageSchedulerForTest(): void {
+  invalidateUsageCache()
+  lastScheduledRefreshAt = 0
 }
 
 // ── Internals ──────────────────────────────────────────────────────────────

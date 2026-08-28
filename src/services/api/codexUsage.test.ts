@@ -22,6 +22,7 @@ import {
   formatPoolUsage,
   invalidateUsageCache,
   consumeUsageLimitReset,
+  resetPoolUsageSchedulerForTest,
   schedulePoolUsageRefresh,
   sortPoolUsageDisplayAccounts,
   type AccountUsage,
@@ -86,6 +87,33 @@ function buildUsage(
     fetchedAt: Date.now(),
     ...overrides,
   }
+}
+
+function usageBody(usedPercent: number, limitReached = false): Response {
+  return new Response(
+    JSON.stringify({
+      user_id: 'u',
+      email: 'main@example.com',
+      plan_type: 'plus',
+      rate_limit: {
+        allowed: !limitReached,
+        limit_reached: limitReached,
+        primary_window: {
+          used_percent: usedPercent,
+          limit_window_seconds: 18000,
+          reset_after_seconds: 60,
+          reset_at: 0,
+        },
+        secondary_window: {
+          used_percent: 0,
+          limit_window_seconds: 604800,
+          reset_after_seconds: 0,
+          reset_at: 0,
+        },
+      },
+    }),
+    { status: 200, headers: { 'content-type': 'application/json' } },
+  )
 }
 
 describe('codexUsage display helpers', () => {
@@ -904,6 +932,178 @@ describe('codexUsage display helpers', () => {
     }
 
     expect(fetchCount).toBe(2)
+  })
+
+  test('a forced read does not reuse a read issued before the cache was invalidated', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [buildPoolAccount({ accountId: 'main-account', alias: 'main' })],
+    })
+
+    const originalFetch = globalThis.fetch
+    let fetchCount = 0
+    let resolveFirst: ((response: Response) => void) | undefined
+    globalThis.fetch = (() => {
+      fetchCount += 1
+      if (fetchCount === 1) {
+        return new Promise<Response>(resolve => {
+          resolveFirst = resolve
+        })
+      }
+      return Promise.resolve(usageBody(90))
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      // A background read is on the wire, then something changes the state the
+      // forced caller needs to see (a redeemed reset, a completed turn).
+      const stale = fetchPoolUsage({ updateRoutingHints: true })
+      invalidateUsageCache()
+
+      const forced = fetchPoolUsage({ forceRefresh: true })
+      resolveFirst?.(usageBody(10))
+      const [, forcedSnapshot] = await Promise.all([stale, forced])
+
+      expect(fetchCount).toBe(2)
+      expect(forcedSnapshot.accounts[0]?.primaryWindow.usedPercent).toBe(90)
+    } finally {
+      globalThis.fetch = originalFetch
+      resetPoolUsageSchedulerForTest()
+    }
+  })
+
+  test('a read that outlived an invalidation cannot repopulate the cache or hints', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [buildPoolAccount({ accountId: 'main-account', alias: 'main' })],
+    })
+
+    const originalFetch = globalThis.fetch
+    let fetchCount = 0
+    let resolveFirst: ((response: Response) => void) | undefined
+    globalThis.fetch = (() => {
+      fetchCount += 1
+      if (fetchCount === 1) {
+        return new Promise<Response>(resolve => {
+          resolveFirst = resolve
+        })
+      }
+      return Promise.resolve(usageBody(20))
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      const stale = fetchPoolUsage({ updateRoutingHints: true })
+      invalidateUsageCache()
+      resolveFirst?.(usageBody(77))
+      await stale
+
+      // The pre-invalidation reading must not have become the shared cache: an
+      // unforced read afterwards has to go to the endpoint, not replay it.
+      const after = await fetchPoolUsage()
+      expect(fetchCount).toBe(2)
+      expect(after.accounts[0]?.primaryWindow.usedPercent).toBe(20)
+
+      const account = getPoolStatus().accounts.find(
+        entry => entry.accountId === 'main-account',
+      )
+      expect(account?.usagePrimary).not.toBe(77)
+    } finally {
+      globalThis.fetch = originalFetch
+      resetPoolUsageSchedulerForTest()
+    }
+  })
+
+  test('a caller sharing a read that outlived an invalidation applies no hints', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [buildPoolAccount({ accountId: 'main-account', alias: 'main' })],
+    })
+
+    const originalFetch = globalThis.fetch
+    let resolveFirst: ((response: Response) => void) | undefined
+    globalThis.fetch = (() =>
+      new Promise<Response>(resolve => {
+        resolveFirst = resolve
+      })) as unknown as typeof globalThis.fetch
+
+    try {
+      const owner = fetchPoolUsage()
+      // Rides the owner's request rather than issuing its own, so it is the
+      // sharer, not the fetch, that would write the hints here.
+      const sharer = fetchPoolUsage({ updateRoutingHints: true })
+      invalidateUsageCache()
+      resolveFirst?.(usageBody(88))
+      await Promise.all([owner, sharer])
+
+      const account = getPoolStatus().accounts.find(
+        entry => entry.accountId === 'main-account',
+      )
+      expect(account?.usagePrimary).not.toBe(88)
+    } finally {
+      globalThis.fetch = originalFetch
+      resetPoolUsageSchedulerForTest()
+    }
+  })
+
+  test('invalidating the cache cancels a scheduled post-turn poll', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [buildPoolAccount({ accountId: 'main-account', alias: 'main' })],
+    })
+
+    const originalFetch = globalThis.fetch
+    let fetchCount = 0
+    globalThis.fetch = (() => {
+      fetchCount += 1
+      return Promise.resolve(usageBody(50))
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      schedulePoolUsageRefresh()
+      invalidateUsageCache()
+      await new Promise(resolve => setTimeout(resolve, 1_200))
+      expect(fetchCount).toBe(0)
+    } finally {
+      globalThis.fetch = originalFetch
+      resetPoolUsageSchedulerForTest()
+    }
+  })
+
+  test('the post-turn poll forces a read, applies hints, and then holds off', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [buildPoolAccount({ accountId: 'main-account', alias: 'main' })],
+    })
+
+    const originalFetch = globalThis.fetch
+    let fetchCount = 0
+    globalThis.fetch = (() => {
+      fetchCount += 1
+      return Promise.resolve(fetchCount === 1 ? usageBody(10) : usageBody(100, true))
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      // Warm a cache the poll must ignore: only a forced read reaches the wire.
+      await fetchPoolUsage()
+      expect(fetchCount).toBe(1)
+
+      schedulePoolUsageRefresh()
+      await new Promise(resolve => setTimeout(resolve, 1_200))
+      expect(fetchCount).toBe(2)
+
+      const account = getPoolStatus().accounts.find(
+        entry => entry.accountId === 'main-account',
+      )
+      expect(account?.usageLimitReached).toBe(true)
+
+      // A second completed request inside the floor must not buy another
+      // all-account fan-out.
+      schedulePoolUsageRefresh()
+      await new Promise(resolve => setTimeout(resolve, 1_200))
+      expect(fetchCount).toBe(2)
+    } finally {
+      globalThis.fetch = originalFetch
+      resetPoolUsageSchedulerForTest()
+    }
   })
 
   test('fetchPoolUsage clears only usage-derived capped status when live usage is allowed', async () => {

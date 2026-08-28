@@ -129,7 +129,8 @@ export type AccountsCommandExecutor = {
    * Fetch soft usage hints (5h/weekly used-percent + reset) for every pool
    * account from the ChatGPT wham/usage endpoint and apply them to the live
    * pool — the same call the engine makes at startup (`initAccountPool` →
-   * `fetchPoolUsage`). Read-only (GET, 1-min cached), uses existing tokens, no
+   * `fetchPoolUsage`). Read-only (GET, often live in this long-lived process:
+   * the post-turn poll invalidates the 1-min cache), uses existing tokens, no
    * token refresh or completion burn. Resolves true when at least one account's
    * usage landed, so the sidecar re-broadcasts the now-populated snapshot.
    */

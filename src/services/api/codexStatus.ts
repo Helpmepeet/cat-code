@@ -8,12 +8,17 @@
  *
  * Hard safety contract (see the subcommand spec):
  *   - No OAuth token refresh, no rotation, no probe start, no periodic refresh.
- *   - No writes to cap state / routing hints / persisted active profile / leases.
+ *   - No writes of its own to cap state / routing hints / persisted active
+ *     profile / leases.
  *   - `refresh: 'never'` makes ZERO outbound network requests (reads only the
  *     usage hints already present on the pool accounts).
  *   - `refresh: 'auto'` may make a bounded, coalesced usage GET, but only via the
- *     existing refresh-free 60s-cached `fetchPoolUsage` path with
- *     `updateRoutingHints: false` (never mutates cap state).
+ *     existing refresh-free `fetchPoolUsage` path with
+ *     `updateRoutingHints: false`, so this call writes no cap state itself.
+ *     Two caveats follow from that path: coalescing means it can await a fetch
+ *     another caller started with hint updates enabled (that caller then writes
+ *     the hints), and the post-turn poll invalidates the 60s cache, so a cached
+ *     hit is not guaranteed in a long-lived process.
  *
  * Opacity: never emit raw accountId, alias, email, vault path, token, or raw
  * error strings. Profiles are keyed by a stable opaque `cp_<4hex>` hash of the
@@ -423,8 +428,10 @@ export async function buildCodexStatus(
     await loadPoolForObservation()
   }
 
-  // Usage refresh: 'never' touches no network; 'auto' uses the refresh-free,
-  // 60s-cached fetch with routing-hint mutation disabled.
+  // Usage refresh: 'never' touches no network; 'auto' uses the refresh-free
+  // fetch with routing-hint mutation disabled for this call. It may coalesce
+  // onto a fetch another caller started, and the post-turn poll invalidates the
+  // 60s cache, so a cached hit is not guaranteed here.
   let snapshot: PoolUsageSnapshot | null = null
   let usageRefresh: CodexStatusUsageRefresh = 'none'
   if (refresh === 'auto') {
