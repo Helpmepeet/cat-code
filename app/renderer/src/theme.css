@@ -532,18 +532,19 @@ html[data-appearance='light'] [data-accent='amber'] {
 }
 
 /*
- * Glass mode (`glassMode.ts`). OFF by default, and off means these two rules do
- * not match at all: nothing above is redeclared, so the app is byte-identical to
- * the one that shipped.
+ * Glass mode (`glassMode.ts`). OFF by default, and off means these rules do
+ * not match at all: nothing above is redeclared.
  *
  * The window carries macOS vibrancy from the moment it is created
  * (`app/main/main.ts`), so the blurred backdrop is behind the page whether or not
  * this is on. All this decides is whether the app's own ground is opaque enough
  * to hide it, which is why flipping it needs no IPC.
  *
- * EXACTLY ONE ground goes translucent, and it is `html`'s. An earlier version
- * redeclared the four theme tokens instead, which was wrong: each of them carries
- * a second role that translucency breaks.
+ * EXACTLY ONE ground goes translucent, and it is the page ground `body::before`
+ * paints (`@layer base` below — the reason the ground lives there and not on
+ * `html`/`body` is the render-surface latch documented on that rule). An earlier
+ * version redeclared the four theme tokens instead, which was wrong: each of
+ * them carries a second role that translucency breaks.
  *   `--color-app-bg` was also the INK on accent-filled buttons (`.text-app-bg`,
  *     ~25 call sites), so glass took the permission prompt's Allow/Deny label
  *     from roughly 7.5:1 contrast to 3.8:1, under AA. That particular double
@@ -557,9 +558,19 @@ html[data-appearance='light'] [data-accent='amber'] {
  * and the drawers glass too needs those roles separated first; it is not a matter
  * of picking different alphas.
  *
- * `html` is the target because its background propagates to the canvas, so it
- * covers the window whatever the app above it is doing, and it sits above
- * anything React can render.
+ * `body::before` is the target, and `html` MUST NOT be, although it was for
+ * three rounds of this feature. `html`'s background (or `body`'s, which
+ * propagates when `html` is transparent) becomes the document CANVAS, and the
+ * canvas is what arms the latch the base block documents: a document whose
+ * first composited frame has an opaque canvas keeps an opaque render surface
+ * until it navigates, so the dark coat sits on a stuck copy of the light page
+ * ground instead of on the material. Measured 2026-08-28: launch-in-light then
+ * switch-to-dark read #CDCDCD with the coat on `html`, #393939 — real material
+ * under the coat — with the identical colours on `body::before`, and the same
+ * probe showed the latch needs no appearance flip at all (an opaque-canvas
+ * birth in dark never showed material either). The pseudo-element covers the
+ * window exactly like the canvas did, but never participates in canvas
+ * propagation, so no state of this feature can re-arm the trap.
  *
  * KEEP THE ALPHA LOW. macOS's dark material is already dark, so this ground is
  * not painting onto the wallpaper, it is painting onto the blur. At 0.62 the
@@ -618,14 +629,16 @@ html[data-appearance='light'] [data-accent='amber'] {
  * declaration is one value; it resolves against the `color-scheme` the light
  * block sets, which is why that property is not optional there.
  */
-html[data-glass='on'] {
-  background: light-dark(transparent, rgba(9, 9, 11, 0.2));
+html[data-glass='on'] body::before {
+  background: light-dark(var(--app-bg), rgba(9, 9, 11, 0.2));
 }
 
 /*
- * `body` and the app frame each repeat the page ground `html` already paints.
- * Opaque, that is invisible. With `html` translucent they are two further coats
- * that would hide the very thing this turns on, so only `html` may paint.
+ * The app frame repeats the page ground `body::before` already paints.
+ * Opaque, that is invisible. With the ground translucent it is a further coat
+ * that would hide the very thing this turns on, so only `body::before` may
+ * paint. (`body` itself needs no clearing here: the base block keeps it
+ * transparent in every state, because its background would become the canvas.)
  *
  * IT IS NOT ONLY THE FULL-AREA FRAMES. A fenced code block is `bg-app-bg` too,
  * because this shell's grammar is that code sits IN the page rather than on a
@@ -646,7 +659,6 @@ html[data-glass='on'] {
  * Unlayered on purpose, so it outranks both the `@layer base` declaration it
  * undoes and the `bg-app-bg` utility in `@layer utilities`.
  */
-html[data-glass='on'] body,
 html[data-glass='on'] [data-window-ground] {
   background: light-dark(var(--app-bg), transparent);
 }
@@ -657,7 +669,7 @@ html[data-glass='on'] [data-window-ground] {
  * keep reading as a frame.
  *
  * The alpha is graded against the page ground, not chosen freely. Chrome paints
- * over `html`'s coat, so its effective coverage is 1-(1-0.2)(1-a), NOT the value
+ * over the ground's coat, so its effective coverage is 1-(1-0.2)(1-a), NOT the value
  * written here: 0.12 reads as about 0.30. That still leaves it a step darker
  * than the body, which is the relationship the shell has always had
  * (`--color-shell-chrome` sits below `--color-app-bg`). At 0 the chrome becomes
@@ -773,15 +785,50 @@ html[data-glass='on'] [data-window-overlay] {
 }
 
 @layer base {
+  /*
+   * THE CANVAS IS NEVER PAINTED. `html`'s background — or `body`'s, which
+   * propagates up whenever `html`'s is transparent — becomes the document
+   * canvas, and on this vibrant window (`app/main/main.ts`, darwin) the canvas
+   * arms a one-way latch: a document whose FIRST composited frame carries an
+   * opaque canvas keeps an opaque render surface for the rest of its life.
+   * Later transparency is composited over a stuck copy of that first ground —
+   * only a navigation resets it — which is how "launch light, switch dark"
+   * left the 20% glass coat on a washed-out #CDCDCD instead of the material,
+   * and why glass toggled on in a dark session showed a flat #09090b with no
+   * blur in it. A document born with a TRANSPARENT canvas has none of this:
+   * it can paint opaque and return to translucent freely (all four cells
+   * measured 2026-08-28, Electron 33.4.11).
+   *
+   * So the page ground lives on `body::before`, which covers the window
+   * exactly like the canvas did but never participates in canvas propagation.
+   * The glass rules above the base layer retarget ONLY this pseudo-element and
+   * the marked frame elements; nothing anywhere in this file may put a
+   * non-transparent background on `html` or `body` (`glassMode.test.ts` pins
+   * this).
+   *
+   * What this costs: nothing new. The frames before this stylesheet loads
+   * always had a transparent canvas (that gap is documented and accepted in
+   * `main.ts`); once it loads, the pseudo-element paints in the same frame the
+   * old `html`/`body` grounds did.
+   */
   html {
-    background: var(--color-app-bg);
+    background: transparent;
   }
 
   body {
-    background: var(--color-app-bg);
+    background: transparent;
     color: var(--color-text-primary);
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background: var(--color-app-bg);
   }
 
   button,

@@ -20,10 +20,12 @@
  * preload surface entirely, and it avoids `setVibrancy(null)`, which does not
  * reliably clear on macOS.
  *
- * PAINT TARGET is `document.documentElement`, not the wrapper `<div>` the accent
- * stamps. `html` and `body` paint the page ground themselves and sit above
- * anything React renders, so a token redeclared on a wrapper would repaint the
- * components and leave the page behind them solid.
+ * STAMP TARGET is `document.documentElement`, not the wrapper `<div>` the accent
+ * stamps. The page ground is painted outside React's tree (`theme.css` base
+ * layer, `body::before` — never `html`/`body` themselves, whose backgrounds
+ * would become the document canvas and arm the render-surface latch that rule
+ * documents), so a token redeclared on a wrapper would repaint the components
+ * and leave the page behind them solid.
  */
 
 import { createContext } from 'react'

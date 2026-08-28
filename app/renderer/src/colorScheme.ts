@@ -38,9 +38,9 @@
  * choices — follow `prefers-color-scheme` — and `system` is simply the choice
  * that sends main nothing to override. Main is a layer on top, not a fork.
  *
- * PAINT TARGET is `document.documentElement`, like glass and unlike the accent.
- * `html` and `body` paint the page ground themselves and sit above anything
- * React renders, and `color-scheme` has to reach the document for Chromium's
+ * STAMP TARGET is `document.documentElement`, like glass and unlike the accent.
+ * The page ground is painted outside React's tree (`theme.css` base layer,
+ * `body::before`), and `color-scheme` has to reach the document for Chromium's
  * form controls and for every `light-dark()` in `theme.css` to resolve.
  */
 
