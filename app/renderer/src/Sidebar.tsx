@@ -162,6 +162,12 @@ import {
   type WorkspaceOrder,
 } from './sidebarWorkspaceOrder.js'
 import {
+  clampSidebarWidth,
+  readSidebarWidthFromStorage,
+  SIDEBAR_DEFAULT_WIDTH,
+  writeSidebarWidthToStorage,
+} from './sidebarWidth.js'
+import {
   groupByWorkspace,
   type MergedSessionRow,
   type WorkspaceGroup,
@@ -170,9 +176,9 @@ import {
 // Rail geometry + hover timing, matching the design source (RAIL_W/FULL_W/delays).
 const HOVER_DELAY = 120
 const HIDE_DELAY = 200
-const SIDEBAR_MIN_WIDTH = 192
-const SIDEBAR_MAX_WIDTH = 420
-const SIDEBAR_DEFAULT_WIDTH = 240
+// Width bounds, the window-relative ceiling, and the persisted value live in
+// `sidebarWidth.ts` — a `.ts` module, so the Fast Refresh boundary keeps holding
+// for this file.
 
 /**
  * Max session rows a workspace group shows before a "Show N more" toggle
@@ -183,6 +189,12 @@ const SIDEBAR_DEFAULT_WIDTH = 240
 const SIDEBAR_GROUP_ROW_LIMIT = 6
 
 type OrderStorage = Pick<Storage, 'getItem' | 'setItem'>
+
+/** The window's inner width, or 0 under SSR — the "no window to measure" input
+ * `clampSidebarWidth` reads as "fixed bounds only". */
+function currentWindowWidth(): number {
+  return typeof window === 'undefined' ? 0 : window.innerWidth
+}
 
 /** The renderer's own `localStorage`, or `null` under SSR / a locked-down
  * renderer — the `ReasoningLayoutProvider.tsx:26-33` helper, verbatim. */
@@ -379,12 +391,14 @@ export function Sidebar({
     ? null
     : formatAccountsNeedingSignIn(accountsNeedingSignIn)
   const [dismissed, setDismissed] = useState(false)
-  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH)
   const [resizing, setResizing] = useState(false)
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(
     {},
   )
   const orderStore = storage === undefined ? defaultOrderStorage() : storage
+  const [sidebarWidth, setSidebarWidth] = useState(
+    () => readSidebarWidthFromStorage(orderStore) ?? SIDEBAR_DEFAULT_WIDTH,
+  )
   const [workspaceOrder, setWorkspaceOrder] = useState<WorkspaceOrder>(
     () => readWorkspaceOrderFromStorage(orderStore) ?? createWorkspaceOrder(),
   )
@@ -459,9 +473,7 @@ export function Sidebar({
     setDismissed(true)
   }
   const resizeSidebar = (clientX: number) => {
-    setSidebarWidth(
-      Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, clientX)),
-    )
+    setSidebarWidth(clampSidebarWidth(clientX, currentWindowWidth()))
   }
   useEffect(
     () => () => {
@@ -476,6 +488,22 @@ export function Sidebar({
       `${sidebarWidth}px`,
     )
   }, [sidebarWidth])
+
+  /**
+   * Shrinking the WINDOW lowers the ceiling under a width that was legal when it
+   * was set, so the rail is re-clamped here as well as on drag. Widening the
+   * window never restores the surrendered pixels: the clamped width becomes the
+   * operator's width, exactly as if they had dragged it there, and the stored
+   * value is left alone so a drag stays the only thing that rewrites it.
+   */
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onResize = () => {
+      setSidebarWidth(width => clampSidebarWidth(width, window.innerWidth))
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
 
   // When that overlay CLOSES, its full-screen backdrop swallowed the click, so
   // the pointer is wherever the menu was with no `onMouseLeave` to follow and
@@ -1209,6 +1237,9 @@ export function Sidebar({
                 event.currentTarget.releasePointerCapture(event.pointerId)
               }
               setResizing(false)
+              // Persist on RELEASE, not per move: a drag is hundreds of
+              // pointermove events and only the width it settles on is a choice.
+              writeSidebarWidthToStorage(orderStore, sidebarWidth)
             }}
             onPointerCancel={() => setResizing(false)}
             className="absolute inset-y-0 right-0 z-10 w-2 cursor-col-resize touch-none"
@@ -2180,9 +2211,11 @@ function GoalsIcon() {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <circle cx="12" cy="12" r="10" />
-      <circle cx="12" cy="12" r="6" />
-      <circle cx="12" cy="12" r="2" />
+      <circle cx="12" cy="12" r="8.5" />
+      <line x1="12" y1="2" x2="12" y2="6" />
+      <line x1="12" y1="18" x2="12" y2="22" />
+      <line x1="2" y1="12" x2="6" y2="12" />
+      <line x1="18" y1="12" x2="22" y2="12" />
     </svg>
   )
 }

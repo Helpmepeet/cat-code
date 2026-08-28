@@ -213,7 +213,7 @@
 }
 
 .sidebar-expanded {
-  width: var(--sidebar-expanded-width, 15rem);
+  width: var(--sidebar-expanded-width, 18rem);
 }
 
 /*
