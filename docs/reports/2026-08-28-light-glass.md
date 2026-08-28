@@ -1,6 +1,77 @@
-# Light glass was opaque, so nothing behind the window could reach the page
+# Light glass was opaque, and fixing that was not enough
 
-**Date:** 2026-08-28 · **Area:** `app/renderer` (desktop) · **Branch:** `migration`
+**Date:** 2026-08-28 · **Outcome recorded:** 2026-08-29 · **Area:** `app/renderer`
+(desktop) · **Branch:** `migration` · **Commit:** `89e5ed46`
+
+## OUTCOME: NOT FIXED. Parked as-is, not reverted.
+
+The operator looked at the shipped change and reported light glass still shows no visible
+frost. The commit stands: nothing was reverted, dark is untouched, and the light half is
+now a real coat rather than an opaque ground. But the effect they asked for is not there,
+and the rest of this document should be read with that first.
+
+**The claim that was wrong was "verified", not the diagnosis.** The alpha-1 defect below is
+real and is measured from several directions. What the measurements could NOT see is the
+one thing the operator was judging: whether a blurred backdrop is visible on screen. A
+per-window capture is structurally blind to the vibrancy backdrop, which is proved in this
+very document, and I shipped on that proxy anyway and called it verified. The honest
+summary of the change is "one necessary blocker removed, sufficiency unknown".
+
+### What the change did establish
+
+The light page ground stopped being a constant and became a function of the material:
+`#FCFBFD` (identical to glass off) → `#E5E5E5`, against the real built stylesheet. That is
+not nothing, and it is a precondition for any visible frost. It is simply not the same
+statement as "the frost is visible".
+
+### Live hypotheses for why it is still invisible, ranked
+
+1. **The light material's own tint is close to opaque, so almost no backdrop passes
+   through it whatever our coat does.** Light `under-window` reads `#E0E0DF` against the
+   capture's white flatten, and that reading cannot separate tint ALPHA from tint COLOUR
+   (the obvious trick for separating them, an opaque window `backgroundColor` to supply a
+   second equation, was tried and just turns the whole window that colour: all twelve
+   materials read `#FF0015`). If the tint is, say, 0.9 opaque near-white, light frost is
+   invisible by construction and no page-side value can rescue it. **Untested, and the
+   cheapest thing to test next.**
+2. **The window under test may not have been showing current code.** The operator's app
+   process started 22:03:26; the canvas-latch fix (`b06f54ec`) landed 22:06:35. A document
+   born before that fix keeps an opaque render surface for its whole life and only a
+   NAVIGATION resets it, so that particular window could not have shown light glass no
+   matter what CSS it loaded. Whether a reload or relaunch happened before the verdict is
+   not recorded. This must be ruled out before hypothesis 1 is trusted.
+3. **The shipped app's material may still be resolved to the appearance the window was born
+   in.** `app/main/main.ts` flags exactly this as the one claim a light session can finally
+   contradict, since the reading behind it was taken while light glass was inert and an
+   opaque light ground would have explained it equally well.
+4. **Something above the effect view composites opaque** — the unresolved 2026-08-28
+   failure already recorded in `main.ts`, where a window with a perfect
+   `NSVisualEffectView` showed no material at all.
+
+### What would actually settle it
+
+A full-display composite, which is not reachable from this machine as configured:
+`screencapture` reports "could not create image from display",
+`systemPreferences.getMediaAccessStatus('screen')` is `denied` for both the vanilla
+`app/node_modules/electron` binary and the `.dev-electron/Cat Code Dev.app` bundle, and
+cua-driver's `screenshot` requires a `window_id`. Unblocking it needs either a Screen
+Recording grant for a binary an agent can drive, or one side-by-side look by the operator
+with a dark window behind a light glass window.
+
+### The next lever, if this is picked up again
+
+Swap the vibrancy material in light appearance. `setVibrancy` CAN move an already-vibrant
+window to a different material, and `sheet`, `header` and `window` all read lighter and
+plausibly more transparent than `under-window` in the survey below. The cost is that it
+needs a `nativeTheme` listener that `appearanceChannel.test.ts` currently forbids, and that
+forbidding was itself justified by a measurement taken while light glass was inert. Read
+that test's rationale before assuming it still holds.
+
+---
+
+*Everything below is the original 2026-08-28 write-up, unedited apart from this block. Its
+"Verification" section is accurate about what the batteries did, and overstated about what
+they proved.*
 
 ## What the operator saw
 
