@@ -126,23 +126,45 @@ test('the stamp is present only while glass is on', () => {
  * The attribute is only half the mechanism: without a matching rule the toggle
  * silently does nothing, and no render assertion can see that.
  *
- * The two halves are asserted SEPARATELY and to opposite values, because they
- * mean opposite things here. Dark must be translucent: an opaque value there is
- * a toggle that does nothing while still passing a shape check. Light must be
- * the page ground, named through the token rather than restated as a hex, and
- * that is not a bug to be fixed later — macOS's light material composites to
- * about #c2c2c2 over a real desktop, so a coat heavy enough to keep the light
- * text ramp legible leaves no material to see, and glass in light was made
- * deliberately inert (`theme.css`). Restoring an alpha here would restore a
- * ground measured at 2.9:1 for `--text-faint`.
+ * WHAT EACH HALF HAS TO BE, and why the light half moved 2026-08-28. Dark must be
+ * translucent on the ROOT: an opaque value there is a toggle that does nothing
+ * while still passing a shape check. Light must still read as the plain opaque
+ * page ground — glass in light is deliberately inert, because macOS's light
+ * material composites to about #c2c2c2 over a real desktop and a coat heavy
+ * enough to keep the light text ramp legible leaves no material to see. That
+ * ruling stands. What changed is WHERE the light ground is painted.
+ *
+ * IT MAY NOT BE PAINTED ON THE ROOT. An opaque `html` is what broke the
+ * operator's window: measured 2026-08-28, a vibrant window whose page ground is
+ * opaque at first paint keeps an opaque render surface for life, so switching to
+ * dark afterwards leaves the 20% coat sitting on the stuck LIGHT base instead of
+ * on the material. Reproduced at #BDBCC1 against a healthy #2E2E30, and the
+ * operator's own window read #D3D3D3 over a base of #FCFCFE — which is
+ * `--app-bg` in light, exactly. Painting the same ground on the full-area frame
+ * instead (`[data-window-ground]`, `App.tsx`) renders identically and does not
+ * arm the trap: measured #2D2D2F through the same switch.
+ *
+ * So the root is never opaque, and the two ground rules are mirrors: the root
+ * carries the dark coat and nothing in light, the frame carries the light ground
+ * and nothing in dark.
  */
-test('glass is translucent in dark and is the plain page ground in light', () => {
+test('the root is never opaque, and light paints its ground on the frame', () => {
   const css = themeCss()
   const block = css.match(/html\[data-glass='on'\]\s*\{([^}]*)\}/)
   expect(block).not.toBeNull()
+  // Dark still translucent on the root; light paints nothing there.
   expect(translucentPair(block?.[1] ?? '')).toEqual({ light: false, dark: true })
-  // Named through the token, so it cannot drift from the ground it must equal.
-  expect(block?.[1]).toContain('light-dark(var(--app-bg),')
+  expect(block?.[1]).toContain('light-dark(transparent,')
+
+  // The light ground moved to the frame, named through the token so it cannot
+  // drift from the ground it must equal, and dark clears it so the coats do not
+  // compound.
+  const ground = css.match(
+    /html\[data-glass='on'\] \[data-window-ground\]\s*\{([^}]*)\}/,
+  )
+  expect(ground).not.toBeNull()
+  expect(ground?.[1]).toContain('light-dark(var(--app-bg), transparent)')
+
   // Off is the absence of the attribute, so no rule may describe it.
   expect(css).not.toContain("data-glass='off'")
 })
@@ -170,13 +192,24 @@ test('glass never redeclares a theme token', () => {
 
 /**
  * `html`, `body` and the app frame all paint the page ground. Opaque that is
- * invisible; with `html` translucent, the other two would hide what the toggle
- * just turned on.
+ * invisible; in DARK, where the root carries the coat, the other two would hide
+ * what the toggle just turned on, so both are cleared there.
+ *
+ * They are NOT cleared in light, and that asymmetry is the fix from 2026-08-28
+ * rather than an oversight: the light ground has to be painted by something, and
+ * it may not be the root (an opaque root at first paint strands the render
+ * surface opaque for the window's life). So light paints here and dark clears
+ * here — the exact mirror of the root rule above.
  */
-test('the repeated page grounds are cleared so they cannot hide the ground', () => {
-  expect(themeCss()).toMatch(
-    /html\[data-glass='on'\] body,\s*html\[data-glass='on'\] \[data-window-ground\]\s*\{\s*background: transparent;/,
+test('the repeated page grounds are cleared in dark, and carry the ground in light', () => {
+  const css = themeCss()
+  const rule = css.match(
+    /html\[data-glass='on'\] body,\s*html\[data-glass='on'\] \[data-window-ground\]\s*\{([^}]*)\}/,
   )
+  expect(rule).not.toBeNull()
+  // Dark half clears; light half paints the token.
+  expect(translucentPair(rule?.[1] ?? '')).toEqual({ light: false, dark: false })
+  expect(rule?.[1]).toContain('light-dark(var(--app-bg), transparent)')
 })
 
 /**

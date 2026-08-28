@@ -619,7 +619,7 @@ html[data-appearance='light'] [data-accent='amber'] {
  * block sets, which is why that property is not optional there.
  */
 html[data-glass='on'] {
-  background: light-dark(var(--app-bg), rgba(9, 9, 11, 0.2));
+  background: light-dark(transparent, rgba(9, 9, 11, 0.2));
 }
 
 /*
@@ -648,7 +648,7 @@ html[data-glass='on'] {
  */
 html[data-glass='on'] body,
 html[data-glass='on'] [data-window-ground] {
-  background: transparent;
+  background: light-dark(var(--app-bg), transparent);
 }
 
 /*
