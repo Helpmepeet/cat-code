@@ -72,8 +72,7 @@ export type NotificationSweep = {
 
 export type PendingTaskNotifications = {
   update(tasks: readonly ObservedTask[], nowMs: number): NotificationSweep
-  /** @internal test seam */
-  _trackedIdsForTest(): string[]
+  _forTest: { trackedIds(): string[] }
 }
 
 export function createPendingTaskNotifications(
@@ -122,8 +121,10 @@ export function createPendingTaskNotifications(
       return { pending, expired }
     },
 
-    _trackedIdsForTest() {
-      return [...tracked.keys()]
+    _forTest: {
+      trackedIds() {
+        return [...tracked.keys()]
+      },
     },
   }
 }

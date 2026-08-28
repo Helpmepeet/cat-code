@@ -52,7 +52,7 @@ describe('pendingTaskNotifications', () => {
     const delivered = tracker.update([terminalNotified], T0 + 400)
     expect(delivered.pending).toEqual([])
     expect(delivered.expired).toEqual([])
-    expect(tracker._trackedIdsForTest()).toEqual([])
+    expect(tracker._forTest.trackedIds()).toEqual([])
   })
 
   test('expires after the deadline instead of waiting forever', () => {
@@ -69,7 +69,7 @@ describe('pendingTaskNotifications', () => {
     expect(after.expired).toEqual(['agent-1'])
     expect(after.pending).toEqual([])
     // Untracked afterwards, so the loop cannot spin on it forever.
-    expect(tracker._trackedIdsForTest()).toEqual([])
+    expect(tracker._forTest.trackedIds()).toEqual([])
     expect(tracker.update([terminalUnnotified], T0 + 999_999).expired).toEqual(
       [],
     )
@@ -88,14 +88,14 @@ describe('pendingTaskNotifications', () => {
     const sweep = tracker.update([stranger], T0)
     expect(sweep.pending).toEqual([])
     expect(sweep.expired).toEqual([])
-    expect(tracker._trackedIdsForTest()).toEqual([])
+    expect(tracker._forTest.trackedIds()).toEqual([])
   })
 
   test('drops a task that disappears from AppState', () => {
     const tracker = createPendingTaskNotifications(DEADLINE_MS)
     tracker.update([running], T0)
     expect(tracker.update([], T0 + 100).pending).toEqual([])
-    expect(tracker._trackedIdsForTest()).toEqual([])
+    expect(tracker._forTest.trackedIds()).toEqual([])
   })
 
   test('a resumed task does not carry a stale deadline', () => {
@@ -116,7 +116,7 @@ describe('pendingTaskNotifications', () => {
     const tracker = createPendingTaskNotifications(DEADLINE_MS)
     const teammate = task({ id: 'teammate-1', isBackgroundWork: false })
     tracker.update([teammate], T0)
-    expect(tracker._trackedIdsForTest()).toEqual([])
+    expect(tracker._forTest.trackedIds()).toEqual([])
   })
 
   test('tracks several agents independently', () => {
