@@ -2337,6 +2337,15 @@ function registerIpcHandlers(): void {
    * pixel-identical at all three points. The material follows `themeSource` on
    * its own.
    *
+   * MEASURED AGAIN ON THE SHIPPED APP, where it answers from the other side. A
+   * live window running this renderer does not follow `themeSource` at all:
+   * moved to `'light'` (`shouldUseDarkColors` false, `getEffectiveAppearance()`
+   * `'light'`) its ground stayed #2F2F31, and a re-mint issued by hand left it
+   * at #2F2F31 too. Whatever pins it there — the page declares `color-scheme`
+   * itself, which the bare probe did not — the listener does not move it. It
+   * does not matter either way: glass is a dark-appearance effect (6a90d30f),
+   * so in light the page ground is opaque and the material is never seen.
+   *
    * IT COULD ONLY COST, because `setVibrancy` is not symmetric. It can change
    * the material of a window that is currently vibrant, but it cannot make a
    * window vibrant that is not: a window born without the `vibrancy` option
