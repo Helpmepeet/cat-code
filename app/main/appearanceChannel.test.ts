@@ -124,20 +124,29 @@ test('the appearance never becomes sidecar vocabulary', () => {
 })
 
 /**
- * The half of the preference that lives outside the channel.
+ * The half of the preference that lives outside the channel, and the guard that
+ * keeps a removed listener removed.
  *
- * Assigning `themeSource` is necessary and not sufficient: the vibrancy view is
- * mounted once at window creation and macOS resolves its material then, so
- * without a re-mint the window frame keeps the appearance it was born in while
- * the page changes underneath it. Guarded here rather than beside `createWindow`
- * because it is the same feature as the channel above, and because the failure
- * it prevents is invisible to every headless suite in this repo.
+ * A listener on `nativeTheme`'s `updated` event, calling `setVibrancy` on every window,
+ * used to sit beside the channel, on the claim that macOS resolves a window's
+ * material once at creation and leaves it in the appearance the window was BORN
+ * in. That claim is false on Electron 33.4.11. Measured 2026-08-28 by capturing
+ * the composited window and reading the page ground's pixels, with no
+ * `setVibrancy` call anywhere in the probe: a window carrying `createWindow`'s
+ * exact options, born while `themeSource` was still `'system'`, reads #2E2E30
+ * under dark, #929294 after an override to `'light'`, and #2E2E30 again on the
+ * way back. A second window re-minted on every `updated` event was pixel-identical
+ * at all three points.
  *
- * The material has to be the SHARED constant. Re-minting with a different one
- * would change how the window looks on an appearance change instead of merely
- * re-resolving it, and that drift is exactly what a second literal invites.
+ * It is guarded because re-adding it is the obvious "fix" for a symptom it does
+ * not fix. `setVibrancy` cannot make a non-vibrant window vibrant (a window born
+ * without the option stays on its opaque ground, measured #252525 unchanged), so
+ * the listener has no repair value; and because `createWindow` clears the
+ * window's own background to hand the material the ground, a window that loses
+ * its `NSVisualEffectView` is a HOLE the desktop composites through, not a solid
+ * window. One unrecoverable failure mode, no measured upside.
  */
-test('an appearance change re-mints the window material, from one constant', () => {
+test('the window material is set once at creation and never re-asserted', () => {
   const source = mainSource()
   expect(source).toContain("const WINDOW_VIBRANCY = 'under-window' as const")
   // The window is BORN with it...
@@ -145,14 +154,8 @@ test('an appearance change re-mints the window material, from one constant', () 
   // ...and no second literal is left behind to drift from it.
   expect(source).not.toContain("vibrancy: 'under-window'")
 
-  const listener = source.slice(source.indexOf("nativeTheme.on('updated'"))
-  const body = listener.slice(0, listener.indexOf('\n  })'))
-  expect(body).toContain('setVibrancy(WINDOW_VIBRANCY)')
-  // `nativeTheme`'s event, not the channel handler: an OS flip under "Match
-  // system" never passes through `CH_SET_APPEARANCE` and must be covered too.
-  expect(source.indexOf("nativeTheme.on('updated'")).toBeGreaterThan(
-    source.indexOf('ipcMain.on(CH_SET_APPEARANCE'),
-  )
-  // Clearing is the operation that does not reliably take on macOS.
-  expect(body).not.toContain('setVibrancy(null)')
+  // Nothing calls it at runtime. Comments naming it are how the finding is kept,
+  // so the guard is on the call, not the word.
+  expect(source).not.toMatch(/\.setVibrancy\(/)
+  expect(source).not.toContain("nativeTheme.on('updated'")
 })

@@ -214,10 +214,9 @@ const CH_RENDERER_FAULT = 'catcode:renderer-fault'
 const CH_SET_APPEARANCE = 'catcode:set-appearance'
 
 /**
- * The macOS material `createWindow` mounts, and the value the `nativeTheme`
- * listener re-asserts. One constant because the two must never drift: re-minting
- * with a different material would change the window's look on an appearance
- * change rather than just re-resolving it.
+ * The macOS material `createWindow` mounts, and the ONLY place it is ever set.
+ * Nothing re-asserts it at runtime, and the doc block beside the appearance
+ * channel records why that listener was removed rather than kept.
  */
 const WINDOW_VIBRANCY = 'under-window' as const
 const CH_OPEN_LOGS = 'catcode:open-logs'
@@ -1326,9 +1325,12 @@ function createWindow(): void {
     // is mounted once, here, and the renderer decides whether its own ground is
     // opaque enough to hide it. Nothing in main observes the flip.
     //
-    // Mounted once rather than toggled: `setVibrancy(null)` does not reliably
-    // clear on macOS, so a runtime toggle is the one version of this that can
-    // strand a window in a state it cannot leave.
+    // Mounted once and never touched again. `setVibrancy` is not symmetric: it
+    // can change the material of a window that is already vibrant, but it cannot
+    // make one vibrant that is not (measured 2026-08-28 on Electron 33.4.11), so
+    // a window that loses its `NSVisualEffectView` cannot be repaired from JS at
+    // all. Given the transparent ground below, that leaves a HOLE rather than a
+    // solid window. Nothing runs `setVibrancy` after this line, deliberately.
     //
     // `visualEffectState: 'active'` because the default (`followWindow`) swaps to
     // the inactive material on blur, which would shift the whole app ground every
@@ -2319,36 +2321,42 @@ function registerIpcHandlers(): void {
   })
 
   /**
-   * Re-mint the window material whenever the effective theme moves.
+   * THERE IS DELIBERATELY NO RE-MINT HERE, and the assignment above is the whole
+   * feature. A listener on `nativeTheme`'s `updated` event, calling `setVibrancy` on
+   * every window used to sit at this spot; it was removed after being measured,
+   * because it bought nothing and could only ever cost.
    *
-   * WITHOUT THIS THE PREFERENCE IS HALF-APPLIED, and the half that is missing is
-   * the half the user sees first. `createWindow` mounts the `NSVisualEffectView`
-   * exactly once (the comment there says why a runtime toggle is worse), and
-   * macOS resolves that view's material when it is created. Moving `themeSource`
-   * afterwards moves the API answer, the renderer's `prefers-color-scheme` and
-   * the page, and leaves the mounted material in the appearance the window was
-   * BORN in — along with the titlebar, which a vibrant window draws over it.
-   * The result is a dark page inside a light window frame, with the light
-   * material showing through everywhere glass is on.
+   * IT BOUGHT NOTHING. The claim it rested on — that macOS resolves the
+   * material once at window creation and leaves it in the appearance the window
+   * was BORN in — is false on Electron 33.4.11. Measured 2026-08-28 by
+   * capturing the composited window and reading the page ground's pixels, with
+   * no `setVibrancy` call anywhere in the probe: a window carrying this file's
+   * exact options and born while `themeSource` was still `'system'` reads
+   * #2E2E30 under dark, #929294 after an override to `'light'`, and #2E2E30
+   * again on the way back. A second window re-minted on every `updated` event was
+   * pixel-identical at all three points. The material follows `themeSource` on
+   * its own.
    *
-   * This is the gap between what was measured for the channel above and what was
-   * claimed for it. `systemPreferences.getEffectiveAppearance()` was watched and
-   * it does follow `themeSource`; that is the MECHANISM, and the effect was
-   * inferred from it rather than looked at. The material does not follow.
+   * IT COULD ONLY COST, because `setVibrancy` is not symmetric. It can change
+   * the material of a window that is currently vibrant, but it cannot make a
+   * window vibrant that is not: a window born without the `vibrancy` option
+   * stays on its opaque ground when `setVibrancy('under-window')` is called
+   * afterwards (measured #252525, unchanged). So a window that loses its
+   * `NSVisualEffectView` cannot be repaired from here at all — and since
+   * `createWindow` clears the window's own background to hand the material the
+   * ground, what is left is not a solid window but a HOLE: the desktop composites
+   * straight through the 20% coat that glass leaves on the page, and the app is
+   * unreadable until it is relaunched. That is the state the operator's window
+   * was found in on 2026-08-28, with this listener the only code in the repo
+   * that touches a live window's vibrancy.
    *
-   * `nativeTheme`'s own event rather than the handler above, so an OS flip while
-   * the user is on "Match system" is covered by the same line as an explicit
-   * choice; both are the same event to AppKit. Assigning the SAME material is
-   * what re-resolves the view. Deliberately NOT `setVibrancy(null)` first:
-   * clearing is the operation that does not reliably take on macOS
-   * (`createWindow`), and re-asserting needs nothing cleared.
+   * The listener was never proved to be what dropped the view (a dozen
+   * reproductions — repeated re-mints, re-mints while hidden, maximize,
+   * fullscreen, hide/show, minimize/restore, a move across displays of differing
+   * backing scale, docked DevTools — all survived). It is removed on the
+   * asymmetry alone: no measurable upside, an unrecoverable downside, and it is
+   * the only suspect we own.
    */
-  nativeTheme.on('updated', () => {
-    if (process.platform !== 'darwin') return
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (!win.isDestroyed()) win.setVibrancy(WINDOW_VIBRANCY)
-    }
-  })
 
   ipcMain.on(CH_REFRESH_ACCOUNTS_POOL, event => {
     if (!isMainWindowSender(event)) return
